@@ -9,6 +9,8 @@
   <p>Build with the integrated experience of Django/DRF,<br/>
   or compose only the pieces you need.</p>
 
+🌐 **English** | [日本語](docs/readmeLangs/README_JA.md) | [简体中文](docs/readmeLangs/README_ZH_CN.md) | [繁體中文](docs/readmeLangs/README_ZH_TW.md) | [Русский](docs/readmeLangs/README_RU.md) | [Українська](docs/readmeLangs/README_UK.md) | [فارسی](docs/readmeLangs/README_FA.md) | [العربية](docs/readmeLangs/README_AR.md)
+
 [![Crates.io](https://img.shields.io/crates/v/reinhardt-web.svg)](https://crates.io/crates/reinhardt-web)
 [![Documentation](https://docs.rs/reinhardt-web/badge.svg)](https://docs.rs/reinhardt-web)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)

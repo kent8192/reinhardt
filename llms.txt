@@ -1,0 +1,143 @@
+# kakebooR
+
+> Rust製の家計簿Webアプリケーション。Reinhardt Webフレームワークを使用したREST APIベースの収支管理システム。
+
+## Tech Stack
+
+- Language: Rust 2024 Edition
+- Framework: Reinhardt (Django-like Web Framework for Rust)
+- Database: PostgreSQL
+- ORM: Reinhardt ORM
+- API Style: RESTful
+
+## Project Structure
+
+- `src/`: Source code
+  - `src/config/`: Configuration (settings, urls, apps)
+  - `src/apps/transactions/`: Transaction management (income/expense records)
+  - `src/apps/categories/`: Category management
+  - `src/apps/reports/`: Reporting and aggregation
+- `docs/repos/reinhardt-web/`: Reinhardt framework documentation
+
+## Data Models
+
+### Transaction
+- id: i64 (Primary key)
+- amount: i64 (Amount in JPY)
+- category_id: i64 (Foreign key to Category)
+- description: String
+- transaction_date: NaiveDate
+- transaction_type: Enum (Income/Expense)
+- created_at/updated_at: DateTime
+
+### Category
+- id: i64 (Primary key)
+- name: String
+- category_type: Enum (Income/Expense)
+- icon: Option<String>
+- color: Option<String>
+
+## API Endpoints
+
+### Transactions
+- GET /api/transactions/ : List all transactions
+- POST /api/transactions/ : Create new transaction
+- GET /api/transactions/{id}/ : Get transaction detail
+- PUT /api/transactions/{id}/ : Update transaction
+- DELETE /api/transactions/{id}/ : Delete transaction
+
+### Categories
+- GET /api/categories/ : List all categories
+- POST /api/categories/ : Create new category
+- GET /api/categories/{id}/ : Get category detail
+- PUT /api/categories/{id}/ : Update category
+- DELETE /api/categories/{id}/ : Delete category
+
+### Reports
+- GET /api/reports/monthly/ : Monthly summary
+- GET /api/reports/yearly/ : Yearly summary
+- GET /api/reports/by-category/ : Category-wise aggregation
+
+## Documentation
+
+- [README](README.md): Project overview and setup instructions
+- [CLAUDE.md](CLAUDE.md): Development guidelines and coding standards
+
+## Reinhardt Framework Reference
+
+- [Getting Started](docs/repos/reinhardt-web/docs/GETTING_STARTED.md): Reinhardt setup guide
+- [REST Quickstart](docs/repos/reinhardt-web/docs/tutorials/en/rest/quickstart.md): REST API tutorial
+- [Serialization](docs/repos/reinhardt-web/docs/tutorials/en/rest/1-serialization.md): Data serialization
+- [Views](docs/repos/reinhardt-web/docs/tutorials/en/rest/3-class-based-views.md): Class-based views
+- [ViewSets & Routers](docs/repos/reinhardt-web/docs/tutorials/en/rest/6-viewsets-and-routers.md): ViewSet pattern
+- [Module System](docs/repos/reinhardt-web/docs/MODULE_SYSTEM.md): Rust 2024 module conventions
+- [Testing Standards](docs/repos/reinhardt-web/docs/TESTING_STANDARDS.md): Testing guidelines
+
+## Development Commands
+
+```bash
+# Build
+cargo build --all-features
+
+# Test
+cargo test --all-features
+
+# Run development server
+cargo run --bin runserver
+
+# Create new app
+cargo run --bin manage startapp <app_name> --template-type restful
+
+# Database migrations
+cargo run --bin manage makemigrations
+cargo run --bin manage migrate
+```
+
+## Code Patterns
+
+### Model Definition
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Transaction {
+    pub id: i64,
+    pub amount: i64,
+    pub category_id: i64,
+    pub description: String,
+    pub transaction_date: chrono::NaiveDate,
+    pub transaction_type: TransactionType,
+}
+```
+
+### View Definition (HTTP Decorators)
+```rust
+use reinhardt::prelude::*;
+use reinhardt::{get, post};
+
+#[get("/transactions", name = "list_transactions")]
+pub async fn list_transactions(
+    #[inject] conn: Arc<DatabaseConnection>,
+) -> Result<Response> {
+    // Implementation
+}
+```
+
+### URL Routing
+```rust
+use reinhardt::routers::UnifiedRouter;
+
+pub fn url_patterns() -> UnifiedRouter {
+    UnifiedRouter::new()
+        .with_namespace("transactions")
+        .endpoint(views::list_transactions)
+}
+```
+
+## Key Rules
+
+- Use Rust 2024 Edition module system (NO mod.rs)
+- Write all code comments in English
+- Use HTTP decorators for API endpoints
+- Use #[inject] for dependency injection
+- Follow Reinhardt patterns for models, views, serializers

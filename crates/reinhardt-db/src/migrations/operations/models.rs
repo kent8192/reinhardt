@@ -139,7 +139,7 @@ pub fn quote_identifier(identifier: &str, database_type: DatabaseType) -> String
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FieldDefinition {
 	pub name: String,
-	pub field_type: super::super::FieldType,
+	pub field_type: crate::migrations::FieldType,
 	pub primary_key: bool,
 	pub unique: bool,
 	pub default: Option<String>,
@@ -210,7 +210,7 @@ impl FieldDefinition {
 	/// ```
 	pub fn new(
 		name: impl Into<String>,
-		field_type: super::super::FieldType,
+		field_type: crate::migrations::FieldType,
 		primary_key: bool,
 		unique: bool,
 		default: Option<impl Into<String>>,
@@ -993,7 +993,7 @@ impl MoveModel {
 }
 
 // MigrationOperation trait implementation for Django-style naming
-use super::super::operation_trait::MigrationOperation;
+use crate::migrations::operation_trait::MigrationOperation;
 
 impl MigrationOperation for CreateModel {
 	fn migration_name_fragment(&self) -> Option<String> {

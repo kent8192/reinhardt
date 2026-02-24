@@ -2,8 +2,8 @@
 //!
 //! Loads migrations from `.rs` files on disk and extracts metadata using AST parsing.
 
-use super::super::ast_parser;
 use super::{Migration, MigrationError, MigrationSource, Result};
+use crate::migrations::ast_parser;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use syn::File;

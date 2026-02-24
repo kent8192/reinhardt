@@ -13,11 +13,11 @@
 //! - Decision table: Various grant conditions
 //! - Use case: SSO scenarios, multiple scopes
 
+use reinhardt_auth::AuthenticationBackend;
 use reinhardt_auth::oauth2::{
 	AccessToken, AuthorizationCode, GrantType, InMemoryOAuth2Store, OAuth2Application,
 	OAuth2Authentication, OAuth2TokenStore,
 };
-use reinhardt_auth::AuthenticationBackend;
 use rstest::*;
 use std::sync::Arc;
 
@@ -68,8 +68,21 @@ fn oauth2_with_app(
 	oauth2_auth: OAuth2Authentication,
 	test_application: OAuth2Application,
 ) -> OAuth2Authentication {
-	oauth2_auth.register_application(test_application);
-	oauth2_auth
+	// Run async registration in a separate thread to avoid blocking the tokio test runtime.
+	// rstest 0.23 does not properly handle async fixtures with sub-fixture parameters,
+	// so we use a sync fixture with an isolated tokio runtime.
+	std::thread::spawn(move || {
+		tokio::runtime::Builder::new_current_thread()
+			.enable_all()
+			.build()
+			.expect("failed to build runtime")
+			.block_on(async move {
+				oauth2_auth.register_application(test_application).await;
+				oauth2_auth
+			})
+	})
+	.join()
+	.expect("thread panicked")
 }
 
 // =============================================================================
@@ -207,19 +220,25 @@ async fn test_token_revocation(token_store: Arc<InMemoryOAuth2Store>) {
 async fn test_client_validation(oauth2_with_app: OAuth2Authentication) {
 	// Valid credentials
 	assert!(
-		oauth2_with_app.validate_client("test_client", "test_secret_12345"),
+		oauth2_with_app
+			.validate_client("test_client", "test_secret_12345")
+			.await,
 		"Valid credentials should be accepted"
 	);
 
 	// Invalid secret
 	assert!(
-		!oauth2_with_app.validate_client("test_client", "wrong_secret"),
+		!oauth2_with_app
+			.validate_client("test_client", "wrong_secret")
+			.await,
 		"Invalid secret should be rejected"
 	);
 
 	// Unknown client
 	assert!(
-		!oauth2_with_app.validate_client("unknown_client", "any_secret"),
+		!oauth2_with_app
+			.validate_client("unknown_client", "any_secret")
+			.await,
 		"Unknown client should be rejected"
 	);
 }
@@ -413,7 +432,9 @@ async fn test_token_lifecycle_states(oauth2_with_app: OAuth2Authentication) {
 async fn test_application_registration_state(oauth2_auth: OAuth2Authentication) {
 	// State 1: Unregistered client
 	assert!(
-		!oauth2_auth.validate_client("new_client", "new_secret"),
+		!oauth2_auth
+			.validate_client("new_client", "new_secret")
+			.await,
 		"Unregistered client should not validate"
 	);
 
@@ -424,11 +445,13 @@ async fn test_application_registration_state(oauth2_auth: OAuth2Authentication) 
 		redirect_uris: vec!["https://new.example.com/callback".to_string()],
 		grant_types: vec![GrantType::AuthorizationCode],
 	};
-	oauth2_auth.register_application(app);
+	oauth2_auth.register_application(app).await;
 
 	// State 2: Registered client
 	assert!(
-		oauth2_auth.validate_client("new_client", "new_secret"),
+		oauth2_auth
+			.validate_client("new_client", "new_secret")
+			.await,
 		"Registered client should validate"
 	);
 }
@@ -502,17 +525,17 @@ async fn test_multiple_applications(oauth2_auth: OAuth2Authentication) {
 	];
 
 	for app in apps {
-		oauth2_auth.register_application(app);
+		oauth2_auth.register_application(app).await;
 	}
 
 	// Each app should validate with its own credentials
-	assert!(oauth2_auth.validate_client("app_1", "secret_1"));
-	assert!(oauth2_auth.validate_client("app_2", "secret_2"));
-	assert!(oauth2_auth.validate_client("app_3", "secret_3"));
+	assert!(oauth2_auth.validate_client("app_1", "secret_1").await);
+	assert!(oauth2_auth.validate_client("app_2", "secret_2").await);
+	assert!(oauth2_auth.validate_client("app_3", "secret_3").await);
 
 	// Cross-validation should fail
-	assert!(!oauth2_auth.validate_client("app_1", "secret_2"));
-	assert!(!oauth2_auth.validate_client("app_2", "secret_3"));
+	assert!(!oauth2_auth.validate_client("app_1", "secret_2").await);
+	assert!(!oauth2_auth.validate_client("app_2", "secret_3").await);
 }
 
 #[rstest]
@@ -636,7 +659,7 @@ async fn test_exchange_decision_table(
 		redirect_uris: vec!["https://dt.example.com/callback".to_string()],
 		grant_types: vec![GrantType::AuthorizationCode],
 	};
-	auth.register_application(app);
+	auth.register_application(app).await;
 
 	// Generate valid code
 	let real_code = auth
@@ -739,7 +762,8 @@ async fn test_use_case_multiple_concurrent_authorizations() {
 			client_secret: secret.to_string(),
 			redirect_uris: vec![redirect.to_string()],
 			grant_types: vec![GrantType::AuthorizationCode],
-		});
+		})
+		.await;
 	}
 
 	// User authorizes both services
@@ -792,7 +816,7 @@ async fn test_use_case_refresh_token_presence() {
 		redirect_uris: vec!["https://refresh.example.com/callback".to_string()],
 		grant_types: vec![GrantType::AuthorizationCode, GrantType::RefreshToken],
 	};
-	auth.register_application(app);
+	auth.register_application(app).await;
 
 	let code = auth
 		.generate_authorization_code(

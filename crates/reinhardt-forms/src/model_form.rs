@@ -376,6 +376,8 @@ impl<T: FormModel> ModelForm<T> {
 	}
 	/// Save the form data to the model instance
 	///
+	/// Returns `FormError::NoInstance` if no model instance is available.
+	///
 	/// # Examples
 	///
 	/// ```ignore
@@ -383,19 +385,16 @@ impl<T: FormModel> ModelForm<T> {
 	///
 	/// let config = ModelFormConfig::new();
 	/// let mut form = ModelForm::<MyModel>::empty(config);
-	// Will panic without an instance, but shows the API
-	// let result = form.save();
+	/// // Returns Err(FormError::NoInstance) without an instance
+	/// assert!(form.save().is_err());
 	/// ```
 	pub fn save(&mut self) -> Result<T, FormError> {
 		if !self.is_valid() {
 			return Err(FormError::Validation("Form is not valid".to_string()));
 		}
 
-		// Get or create instance
-		let mut instance = self.instance.take().unwrap_or_else(|| {
-			// This would require Model to implement Default or have a constructor
-			panic!("Cannot create new instance without existing instance")
-		});
+		// Get existing instance or return error
+		let mut instance = self.instance.take().ok_or(FormError::NoInstance)?;
 
 		// Set field values from form's cleaned_data
 		let cleaned_data = self.form.cleaned_data();
@@ -415,6 +414,20 @@ impl<T: FormModel> ModelForm<T> {
 
 		Ok(instance)
 	}
+	/// Set a field value directly on the model instance.
+	///
+	/// This is used by `InlineFormSet` to set foreign key values on child
+	/// instances before saving.
+	///
+	/// If no instance exists, this method is a no-op.
+	pub fn set_field_value(&mut self, field_name: &str, value: Value) {
+		if let Some(ref mut instance) = self.instance {
+			// Silently ignore errors from set_field, as the field may not exist
+			// on all model types (defensive approach for inline formsets)
+			let _ = instance.set_field(field_name, value);
+		}
+	}
+
 	pub fn form(&self) -> &Form {
 		&self.form
 	}
@@ -484,8 +497,10 @@ impl<T: FormModel> Default for ModelFormBuilder<T> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	// Mock model for testing
+	#[derive(Debug)]
 	struct TestModel {
 		id: i32,
 		name: String,
@@ -553,12 +568,14 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn test_model_form_config() {
+		// Arrange
 		let config = ModelFormConfig::new()
 			.fields(vec!["name".to_string(), "email".to_string()])
 			.exclude(vec!["id".to_string()]);
 
+		// Assert
 		assert_eq!(
 			config.fields,
 			Some(vec!["name".to_string(), "email".to_string()])
@@ -566,27 +583,51 @@ mod tests {
 		assert_eq!(config.exclude, vec!["id".to_string()]);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_model_form_builder() {
+		// Arrange
 		let instance = TestModel {
 			id: 1,
 			name: "John".to_string(),
 			email: "john@example.com".to_string(),
 		};
 
+		// Act
 		let form = ModelFormBuilder::<TestModel>::new()
 			.fields(vec!["name".to_string(), "email".to_string()])
 			.build(Some(instance));
 
+		// Assert
 		assert!(form.instance().is_some());
 	}
 
-	#[test]
+	#[rstest]
 	fn test_model_field_names() {
+		// Act
 		let fields = TestModel::field_names();
+
+		// Assert
 		assert_eq!(
 			fields,
 			vec!["id".to_string(), "name".to_string(), "email".to_string()]
+		);
+	}
+
+	#[rstest]
+	fn test_save_without_instance_returns_no_instance_error() {
+		// Arrange
+		let config = ModelFormConfig::new();
+		let mut form = ModelForm::<TestModel>::empty(config);
+
+		// Act
+		let result = form.save();
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(
+			matches!(err, FormError::NoInstance),
+			"Expected FormError::NoInstance, got: {err}"
 		);
 	}
 }

@@ -205,7 +205,7 @@ async fn test_viewset_router_http_methods() {
 #[tokio::test]
 async fn test_extra_actions_with_router() {
 	use async_trait::async_trait;
-	use reinhardt_views::viewsets::{register_action, ActionMetadata, FunctionActionHandler};
+	use reinhardt_views::viewsets::{ActionMetadata, FunctionActionHandler, register_action};
 
 	// Define a custom ViewSet type
 	#[derive(Debug, Clone)]
@@ -298,7 +298,7 @@ async fn test_extra_actions_with_router() {
 #[tokio::test]
 async fn test_get_extra_actions() {
 	use async_trait::async_trait;
-	use reinhardt_views::viewsets::{register_action, ActionMetadata, FunctionActionHandler};
+	use reinhardt_views::viewsets::{ActionMetadata, FunctionActionHandler, register_action};
 
 	// Define a custom ViewSet type
 	#[derive(Debug, Clone)]
@@ -351,16 +351,18 @@ async fn test_get_extra_actions() {
 
 	assert_eq!(extra_actions.len(), 2);
 	assert!(extra_actions.iter().any(|a| a.name == "custom_list_action"));
-	assert!(extra_actions
-		.iter()
-		.any(|a| a.name == "custom_detail_action"));
+	assert!(
+		extra_actions
+			.iter()
+			.any(|a| a.name == "custom_detail_action")
+	);
 }
 
 /// Test extra action URL map generation
 #[tokio::test]
 async fn test_extra_action_url_map() {
 	use async_trait::async_trait;
-	use reinhardt_views::viewsets::{register_action, ActionMetadata, FunctionActionHandler};
+	use reinhardt_views::viewsets::{ActionMetadata, FunctionActionHandler, register_action};
 
 	// Define a custom ViewSet type
 	#[derive(Debug, Clone)]
@@ -419,7 +421,7 @@ async fn test_extra_action_url_map() {
 #[tokio::test]
 async fn test_action_names_with_kwargs() {
 	use async_trait::async_trait;
-	use reinhardt_views::viewsets::{register_action, ActionMetadata, FunctionActionHandler};
+	use reinhardt_views::viewsets::{ActionMetadata, FunctionActionHandler, register_action};
 
 	// Define a custom ViewSet type
 	#[derive(Debug, Clone)]

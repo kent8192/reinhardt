@@ -22,7 +22,7 @@ use sqlx::pool::PoolConnection;
 use sqlx::{MySql, MySqlPool, Row};
 use std::sync::Arc;
 
-use super::super::super::error::{DatabaseError, Result};
+use crate::backends::error::{DatabaseError, Result};
 
 /// XA transaction session in Started state
 ///

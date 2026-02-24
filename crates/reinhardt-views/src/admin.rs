@@ -10,6 +10,7 @@
 
 use async_trait::async_trait;
 use reinhardt_core::exception::{Error, Result};
+use reinhardt_core::security::xss::escape_html;
 use reinhardt_db::orm::Model;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -307,13 +308,13 @@ impl<T: Model + Serialize + for<'de> Deserialize<'de> + Clone> ModelAdmin<T> {
 		let count = objects.len();
 
 		let mut html = String::from("<div class=\"admin-list\">\n");
-		html.push_str(&format!("<h2>{} List</h2>\n", T::table_name()));
+		html.push_str(&format!("<h2>{} List</h2>\n", escape_html(T::table_name())));
 		html.push_str(&format!("<p>Total: {} items</p>\n", count));
 
 		// Table header
 		html.push_str("<table>\n<thead>\n<tr>\n");
 		for field in &self.list_display {
-			html.push_str(&format!("<th>{}</th>\n", field));
+			html.push_str(&format!("<th>{}</th>\n", escape_html(field)));
 		}
 		html.push_str("</tr>\n</thead>\n<tbody>\n");
 
@@ -328,7 +329,8 @@ impl<T: Model + Serialize + for<'de> Deserialize<'de> + Clone> ModelAdmin<T> {
 					.get(field)
 					.map(|v| v.to_string())
 					.unwrap_or_else(|| "-".to_string());
-				html.push_str(&format!("<td>{}</td>\n", value));
+				// Escape user-controlled values to prevent XSS
+				html.push_str(&format!("<td>{}</td>\n", escape_html(&value)));
 			}
 			html.push_str("</tr>\n");
 		}
@@ -421,172 +423,5 @@ impl<T: Model + Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync> Adm
 impl<T: Model + Serialize + for<'de> Deserialize<'de> + Clone> Default for ModelAdmin<T> {
 	fn default() -> Self {
 		Self::new()
-	}
-}
-
-#[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-	struct TestModel {
-		id: Option<i64>,
-		name: String,
-		active: bool,
-	}
-
-	reinhardt_test::impl_test_model!(TestModel, i64, "test_models");
-
-	#[test]
-	fn test_model_admin_creation() {
-		let admin = ModelAdmin::<TestModel>::new();
-		assert_eq!(admin.list_per_page(), 100);
-		assert!(admin.list_display().is_empty());
-		assert!(admin.list_filter().is_empty());
-		assert!(admin.search_fields().is_empty());
-	}
-
-	#[test]
-	fn test_model_admin_with_list_display() {
-		let admin = ModelAdmin::<TestModel>::new()
-			.with_list_display(vec!["id".to_string(), "name".to_string()]);
-
-		assert_eq!(admin.list_display().len(), 2);
-		assert_eq!(admin.list_display()[0], "id");
-		assert_eq!(admin.list_display()[1], "name");
-	}
-
-	#[test]
-	fn test_model_admin_with_filters() {
-		let admin = ModelAdmin::<TestModel>::new()
-			.with_list_filter(vec!["active".to_string()])
-			.with_search_fields(vec!["name".to_string()]);
-
-		assert_eq!(admin.list_filter().len(), 1);
-		assert_eq!(admin.search_fields().len(), 1);
-	}
-
-	#[test]
-	fn test_model_admin_search() {
-		let admin = ModelAdmin::<TestModel>::new().with_search_fields(vec!["name".to_string()]);
-
-		let objects = vec![
-			TestModel {
-				id: Some(1),
-				name: "Alice".to_string(),
-				active: true,
-			},
-			TestModel {
-				id: Some(2),
-				name: "Bob".to_string(),
-				active: false,
-			},
-			TestModel {
-				id: Some(3),
-				name: "Charlie".to_string(),
-				active: true,
-			},
-		];
-
-		let results = admin.search("ali", objects);
-		assert_eq!(results.len(), 1);
-		assert_eq!(results[0].name, "Alice");
-	}
-
-	#[test]
-	fn test_model_admin_filter() {
-		let admin = ModelAdmin::<TestModel>::new().with_list_filter(vec!["active".to_string()]);
-
-		let objects = vec![
-			TestModel {
-				id: Some(1),
-				name: "Alice".to_string(),
-				active: true,
-			},
-			TestModel {
-				id: Some(2),
-				name: "Bob".to_string(),
-				active: false,
-			},
-			TestModel {
-				id: Some(3),
-				name: "Charlie".to_string(),
-				active: true,
-			},
-		];
-
-		let mut filters = HashMap::new();
-		filters.insert("active".to_string(), "true".to_string());
-
-		let results = admin.filter(&filters, objects);
-		assert_eq!(results.len(), 2);
-		assert!(results.iter().all(|r| r.active));
-	}
-
-	#[tokio::test]
-	async fn test_model_admin_get_queryset() {
-		let objects = vec![TestModel {
-			id: Some(1),
-			name: "Test".to_string(),
-			active: true,
-		}];
-
-		let admin = ModelAdmin::<TestModel>::new().with_queryset(objects.clone());
-
-		let queryset = admin.get_queryset().await.unwrap();
-		assert_eq!(queryset.len(), 1);
-		assert_eq!(queryset[0].name, "Test");
-	}
-
-	#[tokio::test]
-	async fn test_model_admin_render_list() {
-		let objects = vec![
-			TestModel {
-				id: Some(1),
-				name: "Alice".to_string(),
-				active: true,
-			},
-			TestModel {
-				id: Some(2),
-				name: "Bob".to_string(),
-				active: false,
-			},
-		];
-
-		let admin = ModelAdmin::<TestModel>::new()
-			.with_queryset(objects)
-			.with_list_display(vec!["id".to_string(), "name".to_string()]);
-
-		let html = admin.render_list().await.unwrap();
-
-		assert!(html.contains("<div class=\"admin-list\">"));
-		assert!(html.contains("test_models List"));
-		assert!(html.contains("Total: 2 items"));
-		assert!(html.contains("<th>id</th>"));
-		assert!(html.contains("<th>name</th>"));
-	}
-
-	#[tokio::test]
-	async fn test_model_admin_render_via_trait() {
-		let objects = vec![TestModel {
-			id: Some(1),
-			name: "Test".to_string(),
-			active: true,
-		}];
-
-		let admin = ModelAdmin::<TestModel>::new().with_queryset(objects);
-
-		let html = admin.render().await.unwrap();
-		assert!(html.contains("<div class=\"admin-list\">"));
-	}
-
-	#[test]
-	fn test_model_admin_permissions() {
-		let admin = ModelAdmin::<TestModel>::new();
-
-		assert!(admin.has_view_permission());
-		assert!(admin.has_add_permission());
-		assert!(admin.has_change_permission());
-		assert!(admin.has_delete_permission());
 	}
 }

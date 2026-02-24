@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 //! Signal replay system for replaying past signals for debugging and testing
 //!
 //! This module provides functionality to replay previously stored signals,

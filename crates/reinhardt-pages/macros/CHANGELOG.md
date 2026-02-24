@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.1.0-alpha.9...reinhardt-pages-macros@v0.1.0-alpha.10) - 2026-02-23
+
+### Maintenance
+
+- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
+
+## [0.1.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.1.0-alpha.8...reinhardt-pages-macros@v0.1.0-alpha.9) - 2026-02-23
+
+### Maintenance
+
+- updated the following local packages: reinhardt-manouche
+
+## [0.1.0-alpha.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.1.0-alpha.7...reinhardt-pages-macros@v0.1.0-alpha.8) - 2026-02-21
+
+### Fixed
+
+- reject non-boolean values for disabled/readonly/autofocus
+- reject whitespace in server_fn endpoint paths
+- add missing input type image and form method dialog
+- replace direct indexing with safe .first() access
+- validate img src URLs and wrapper tag names
+- add tag name allowlist for wrapper and icon elements
+- validate img src against dangerous URL schemes
+- emit compile error for unknown codec instead of silent fallback
+- replace expect() panics with compile errors in head.rs
+- fix link tag as_ attribute code generation
+- emit compile error for unsupported form-level validators
+- add required attributes to allowed_attrs for track, param, data
+
+### Security
+
+- add URL scheme and path validation for forms and head
+
+### Changed
+
+- replace magic string with Option<Ident> for FormMacro name
+- extract duplicated form ID and action string generation
+- remove duplicate img required attribute validation
+
+### Styling
+
+- apply rustfmt to pre-existing unformatted files
+- apply formatting to files introduced by merge from main
+
+## [0.1.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.1.0-alpha.6...reinhardt-pages-macros@v0.1.0-alpha.7) - 2026-02-16
+
+### Changed
+
+- update references for flattened examples structure
+
+## [0.1.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.1.0-alpha.5...reinhardt-pages-macros@v0.1.0-alpha.6) - 2026-02-12
+
+### Changed
+
+- convert relative paths to absolute paths
+- restore single-level super:: paths preserved by convention
+
+### Reverted
+
+- undo unintended visibility and formatting changes
+
+## [0.1.0-alpha.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.1.0-alpha.4...reinhardt-pages-macros@v0.1.0-alpha.5) - 2026-02-05
+
+### Fixed
+
+- add reinhardt-manouche to workspace deps and address review comments
+
+### Other
+
+- Merge branch 'main' into refactor/extract-manouche-dsl
+
+## [0.1.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.1.0-alpha.3...reinhardt-pages-macros@v0.1.0-alpha.4) - 2026-02-03
+
+### Other
+
+- merge main into chore/release-plz-migration
+- add release-plz migration markers to CHANGELOGs
+
 <!-- release-plz-separator -->
 <!-- Entries below this line were created before release-plz adoption -->
 

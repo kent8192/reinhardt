@@ -6,6 +6,8 @@
 //! It prioritizes accessibility-based queries (role, label) over implementation
 //! details (test IDs, CSS selectors).
 //!
+//! Uses `escape_css_selector` from reinhardt-core for safe CSS selector escaping.
+//!
 //! # Query Priority (Recommended Order)
 //!
 //! 1. **Role-based** - `get_by_role()`, `get_by_role_with_name()`
@@ -32,6 +34,7 @@
 //! let loaded = screen.find_by_text("Loaded").await;
 //! ```
 
+use reinhardt_core::security::escape_css_selector;
 use web_sys::{Document, Element, NodeList, window};
 
 /// Result of a DOM query operation.
@@ -255,7 +258,7 @@ impl Screen {
 	/// let heading = screen.get_by_role("heading").get();
 	/// ```
 	pub fn get_by_role(&self, role: &str) -> QueryResult {
-		let selector = format!("[role=\"{}\"]", role);
+		let selector = format!("[role=\"{}\"]", escape_css_selector(role));
 		let mut elements = self.query_selector_all(&selector);
 
 		// Also include implicit roles from HTML elements
@@ -431,7 +434,10 @@ impl Screen {
 		}
 
 		// Also check aria-label and aria-labelledby
-		let aria_labeled = self.query_selector_all(&format!("[aria-label*=\"{}\" i]", label));
+		let aria_labeled = self.query_selector_all(&format!(
+			"[aria-label*=\"{}\" i]",
+			escape_css_selector(label)
+		));
 		for elem in aria_labeled {
 			if !elements.contains(&elem) {
 				elements.push(elem);
@@ -453,7 +459,7 @@ impl Screen {
 	/// let search = screen.get_by_placeholder_text("Search...").get();
 	/// ```
 	pub fn get_by_placeholder_text(&self, placeholder: &str) -> QueryResult {
-		let selector = format!("[placeholder*=\"{}\" i]", placeholder);
+		let selector = format!("[placeholder*=\"{}\" i]", escape_css_selector(placeholder));
 		let elements = self.query_selector_all(&selector);
 		QueryResult::new(elements, format!("placeholder=\"{}\"", placeholder))
 	}
@@ -475,7 +481,7 @@ impl Screen {
 	/// let modal = screen.get_by_test_id("confirmation-modal").get();
 	/// ```
 	pub fn get_by_test_id(&self, test_id: &str) -> QueryResult {
-		let selector = format!("[data-testid=\"{}\"]", test_id);
+		let selector = format!("[data-testid=\"{}\"]", escape_css_selector(test_id));
 		let elements = self.query_selector_all(&selector);
 		QueryResult::new(elements, format!("data-testid=\"{}\"", test_id))
 	}
@@ -492,7 +498,7 @@ impl Screen {
 	/// let logo = screen.get_by_alt_text("Company Logo").get();
 	/// ```
 	pub fn get_by_alt_text(&self, alt: &str) -> QueryResult {
-		let selector = format!("[alt*=\"{}\" i]", alt);
+		let selector = format!("[alt*=\"{}\" i]", escape_css_selector(alt));
 		let elements = self.query_selector_all(&selector);
 		QueryResult::new(elements, format!("alt=\"{}\"", alt))
 	}
@@ -509,7 +515,7 @@ impl Screen {
 	/// let tooltip = screen.get_by_title("More information").get();
 	/// ```
 	pub fn get_by_title(&self, title: &str) -> QueryResult {
-		let selector = format!("[title*=\"{}\" i]", title);
+		let selector = format!("[title*=\"{}\" i]", escape_css_selector(title));
 		let elements = self.query_selector_all(&selector);
 		QueryResult::new(elements, format!("title=\"{}\"", title))
 	}
@@ -779,5 +785,26 @@ mod tests {
 	fn test_screen_default() {
 		let screen = Screen::default();
 		assert!(screen.root.is_none());
+	}
+
+	#[test]
+	fn test_escape_css_selector_no_special_chars() {
+		assert_eq!(escape_css_selector("button"), "button");
+	}
+
+	#[test]
+	fn test_escape_css_selector_with_metacharacters() {
+		assert_eq!(
+			escape_css_selector("a\"] , body *{display:none}"),
+			r#"a\"\] \, body \*\{display\:none\}"#
+		);
+	}
+
+	#[test]
+	fn test_escape_css_selector_quotes() {
+		assert_eq!(
+			escape_css_selector(r#"it's "quoted""#),
+			r#"it\'s \"quoted\""#
+		);
 	}
 }

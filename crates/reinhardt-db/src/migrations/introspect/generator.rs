@@ -2,11 +2,11 @@
 //!
 //! Generates `#[model(...)]` annotated Rust structs from database schema.
 
-use super::super::introspection::{ColumnInfo, DatabaseSchema, TableInfo};
-use super::super::{MigrationError, Result};
 use super::config::IntrospectConfig;
 use super::naming::{column_to_field_name, sanitize_identifier, table_to_struct_name};
 use super::type_mapping::TypeMapper;
+use crate::migrations::introspection::{ColumnInfo, DatabaseSchema, TableInfo};
+use crate::migrations::{MigrationError, Result};
 use chrono::Utc;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -350,7 +350,7 @@ impl SchemaCodeGenerator {
 		}
 
 		// Max length for varchar
-		if let super::super::fields::FieldType::VarChar(len) = &column.column_type {
+		if let crate::migrations::fields::FieldType::VarChar(len) = &column.column_type {
 			let len = *len;
 			attrs.push(quote! { #[field(max_length = #len)] });
 		}
@@ -421,8 +421,8 @@ fn mask_password_in_url(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-	use super::super::super::fields::FieldType;
 	use super::*;
+	use crate::migrations::fields::FieldType;
 	use crate::migrations::introspection::{ColumnInfo, TableInfo, UniqueConstraintInfo};
 	use std::collections::HashMap;
 

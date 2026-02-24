@@ -190,7 +190,7 @@ Your report should include:
 
 2. **Input Validation**
    - Always validate user input
-   - Use parameterized queries (SeaQuery)
+   - Use parameterized queries (reinhardt-query)
    - Sanitize output to prevent XSS
 
 3. **Authentication & Authorization**
@@ -204,14 +204,14 @@ Your report should include:
    - Rotate secrets regularly
 
 5. **Database Security**
-   - Use prepared statements (SeaQuery)
+   - Use prepared statements (reinhardt-query)
    - Implement principle of least privilege
    - Enable database connection encryption
 
 ### For Developers
 
 1. **SQL Injection Prevention**
-   - Use SeaQuery for all SQL construction
+   - Use reinhardt-query for all SQL construction
    - Never concatenate SQL strings
    - Validate and sanitize all inputs
 

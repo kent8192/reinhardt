@@ -1,6 +1,6 @@
 use reinhardt_http::Handler;
 use reinhardt_http::{Request, Response};
-use reinhardt_server::{serve_with_shutdown, HttpServer, ShutdownCoordinator};
+use reinhardt_server::{HttpServer, ShutdownCoordinator, serve_with_shutdown};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;

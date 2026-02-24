@@ -552,23 +552,37 @@ impl MockTimers {
 		self.callbacks.borrow_mut().clear();
 	}
 
+	// Fixes #879
 	fn run_due_callbacks(&self) {
 		let current = *self.current_time.borrow();
-		let mut due_callbacks = Vec::new();
 
-		// Extract due callbacks
-		self.callbacks.borrow_mut().retain(|cb| {
+		// Drain all callbacks from the list, then partition into due and remaining
+		let all_callbacks: Vec<TimerCallback> = self.callbacks.borrow_mut().drain(..).collect();
+
+		let mut remaining = Vec::new();
+		let mut due = Vec::new();
+
+		for cb in all_callbacks {
 			if cb.scheduled_time <= current {
-				// Note: We can't easily move the callback out of the retain closure
-				// This is a simplified implementation
-				false
+				due.push(cb);
 			} else {
-				true
+				remaining.push(cb);
 			}
+		}
+
+		// Restore non-due callbacks
+		*self.callbacks.borrow_mut() = remaining;
+
+		// Execute due callbacks in scheduled order
+		due.sort_by(|a, b| {
+			a.scheduled_time
+				.partial_cmp(&b.scheduled_time)
+				.unwrap_or(std::cmp::Ordering::Equal)
 		});
 
-		// Note: In a real implementation, we would need to properly handle
-		// the callback execution. This is a simplified version for demonstration.
+		for cb in due {
+			(cb.callback)();
+		}
 	}
 }
 
@@ -599,11 +613,18 @@ pub struct MutationRecord {
 
 impl MutationTracker {
 	/// Create a new mutation tracker for the given element.
+	///
+	/// # Panics
+	///
+	/// Always panics because `MutationObserver` requires a live WASM runtime
+	/// with access to the browser DOM API. This type cannot be used outside
+	/// of an actual browser environment.
+	// Fixes #879
 	pub fn new(_element: &web_sys::Element) -> Self {
-		// Note: Full MutationObserver implementation would require more setup
-		Self {
-			mutations: Rc::new(RefCell::new(Vec::new())),
-		}
+		unimplemented!(
+			"MutationTracker requires a WASM runtime with browser DOM access. \
+			 MutationObserver cannot be set up outside of an actual browser environment."
+		)
 	}
 
 	/// Get all recorded mutations.

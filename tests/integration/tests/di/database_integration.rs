@@ -1,15 +1,17 @@
-//! Database integration tests (DI + DB + sea-query)
+//! Database integration tests (DI + DB + reinhardt-query)
 //!
 //! Tests dependency injection with database operations:
 //! 1. Database connection pool injection
 //! 2. Repository pattern with DI
 //! 3. Transaction scoped dependencies
-//! 4. sea-query builder injection
+//! 4. reinhardt-query builder injection
 
 use reinhardt_di::{DiResult, Injectable, InjectionContext, SingletonScope};
-use reinhardt_test::fixtures::testcontainers::{postgres_container, ContainerAsync, GenericImage};
+use reinhardt_query::prelude::{
+	Alias, ColumnDef, Expr, ExprTrait, PostgresQueryBuilder, Query, QueryStatementBuilder, Value,
+};
+use reinhardt_test::fixtures::testcontainers::{ContainerAsync, GenericImage, postgres_container};
 use rstest::*;
-use sea_query::{Alias, ColumnDef, Expr, ExprTrait, PostgresQueryBuilder, Query, Table};
 use sqlx::PgPool;
 use std::sync::Arc;
 
@@ -40,12 +42,13 @@ struct UserRepository {
 
 impl UserRepository {
 	async fn create_user(&self, name: &str) -> Result<i32, sqlx::Error> {
-		let query = Query::insert()
+		let mut insert_stmt = Query::insert();
+		let query = insert_stmt
 			.into_table(Alias::new("users"))
 			.columns([Alias::new("name")])
-			.values_panic([name.into()])
+			.values_panic([Value::from(name)])
 			.returning_col(Alias::new("id"))
-			.to_string(PostgresQueryBuilder);
+			.to_string(PostgresQueryBuilder::new());
 
 		let row: (i32,) = sqlx::query_as(&query)
 			.fetch_one(self.db.pool.as_ref())
@@ -55,11 +58,12 @@ impl UserRepository {
 	}
 
 	async fn get_user(&self, id: i32) -> Result<String, sqlx::Error> {
-		let query = Query::select()
+		let mut select_stmt = Query::select();
+		let query = select_stmt
 			.column(Alias::new("name"))
 			.from(Alias::new("users"))
 			.and_where(Expr::col(Alias::new("id")).eq(id))
-			.to_string(PostgresQueryBuilder);
+			.to_string(PostgresQueryBuilder::new());
 
 		let row: (String,) = sqlx::query_as(&query)
 			.fetch_one(self.db.pool.as_ref())
@@ -89,18 +93,19 @@ async fn test_inject_database_connection(
 	singleton.set(pool.clone());
 	let ctx = InjectionContext::builder(singleton).build();
 
-	// Create users table using sea-query
-	let create_table = Table::create()
+	// Create users table using reinhardt-query
+	let mut create_table_stmt = Query::create_table();
+	let create_table = create_table_stmt
 		.table(Alias::new("users"))
 		.col(
 			ColumnDef::new(Alias::new("id"))
 				.integer()
-				.not_null()
-				.auto_increment()
-				.primary_key(),
+				.not_null(true)
+				.auto_increment(true)
+				.primary_key(true),
 		)
-		.col(ColumnDef::new(Alias::new("name")).string().not_null())
-		.to_string(PostgresQueryBuilder);
+		.col(ColumnDef::new(Alias::new("name")).string().not_null(true))
+		.to_string(PostgresQueryBuilder::new());
 
 	sqlx::query(&create_table)
 		.execute(pool.as_ref())
@@ -127,17 +132,18 @@ async fn test_repository_pattern_with_di(
 	let ctx = InjectionContext::builder(singleton).build();
 
 	// Create users table
-	let create_table = Table::create()
+	let mut create_table_stmt = Query::create_table();
+	let create_table = create_table_stmt
 		.table(Alias::new("users"))
 		.col(
 			ColumnDef::new(Alias::new("id"))
 				.integer()
-				.not_null()
-				.auto_increment()
-				.primary_key(),
+				.not_null(true)
+				.auto_increment(true)
+				.primary_key(true),
 		)
-		.col(ColumnDef::new(Alias::new("name")).string().not_null())
-		.to_string(PostgresQueryBuilder);
+		.col(ColumnDef::new(Alias::new("name")).string().not_null(true))
+		.to_string(PostgresQueryBuilder::new());
 
 	sqlx::query(&create_table)
 		.execute(pool.as_ref())
@@ -164,17 +170,18 @@ async fn test_transaction_scope(
 	let (_container, pool, _port, _url) = postgres_container.await;
 
 	// Create users table
-	let create_table = Table::create()
+	let mut create_table_stmt = Query::create_table();
+	let create_table = create_table_stmt
 		.table(Alias::new("users"))
 		.col(
 			ColumnDef::new(Alias::new("id"))
 				.integer()
-				.not_null()
-				.auto_increment()
-				.primary_key(),
+				.not_null(true)
+				.auto_increment(true)
+				.primary_key(true),
 		)
-		.col(ColumnDef::new(Alias::new("name")).string().not_null())
-		.to_string(PostgresQueryBuilder);
+		.col(ColumnDef::new(Alias::new("name")).string().not_null(true))
+		.to_string(PostgresQueryBuilder::new());
 
 	sqlx::query(&create_table)
 		.execute(pool.as_ref())
@@ -185,11 +192,12 @@ async fn test_transaction_scope(
 	let mut tx = pool.begin().await.unwrap();
 
 	// Insert in transaction
-	let insert = Query::insert()
+	let mut insert_stmt = Query::insert();
+	let insert = insert_stmt
 		.into_table(Alias::new("users"))
 		.columns([Alias::new("name")])
-		.values_panic(["Bob".into()])
-		.to_string(PostgresQueryBuilder);
+		.values_panic([Value::from("Bob")])
+		.to_string(PostgresQueryBuilder::new());
 
 	sqlx::query(&insert).execute(&mut *tx).await.unwrap();
 
@@ -197,10 +205,11 @@ async fn test_transaction_scope(
 	tx.rollback().await.unwrap();
 
 	// Verify user not inserted
-	let select = Query::select()
+	let mut select_stmt = Query::select();
+	let select = select_stmt
 		.column(Alias::new("name"))
 		.from(Alias::new("users"))
-		.to_string(PostgresQueryBuilder);
+		.to_string(PostgresQueryBuilder::new());
 
 	let rows: Vec<(String,)> = sqlx::query_as(&select)
 		.fetch_all(pool.as_ref())
@@ -212,7 +221,7 @@ async fn test_transaction_scope(
 
 #[rstest]
 #[tokio::test]
-async fn test_sea_query_builder_injection(
+async fn test_reinhardt_query_builder_injection(
 	#[future] postgres_container: (ContainerAsync<GenericImage>, Arc<PgPool>, u16, String),
 ) {
 	let (_container, pool, _port, _url) = postgres_container.await;
@@ -223,17 +232,18 @@ async fn test_sea_query_builder_injection(
 	let ctx = InjectionContext::builder(singleton).build();
 
 	// Create users table
-	let create_table = Table::create()
+	let mut create_table_stmt = Query::create_table();
+	let create_table = create_table_stmt
 		.table(Alias::new("users"))
 		.col(
 			ColumnDef::new(Alias::new("id"))
 				.integer()
-				.not_null()
-				.auto_increment()
-				.primary_key(),
+				.not_null(true)
+				.auto_increment(true)
+				.primary_key(true),
 		)
-		.col(ColumnDef::new(Alias::new("name")).string().not_null())
-		.to_string(PostgresQueryBuilder);
+		.col(ColumnDef::new(Alias::new("name")).string().not_null(true))
+		.to_string(PostgresQueryBuilder::new());
 
 	sqlx::query(&create_table)
 		.execute(pool.as_ref())
@@ -243,12 +253,13 @@ async fn test_sea_query_builder_injection(
 	// Inject DatabaseService
 	let db_service = DatabaseService::inject(&ctx).await.unwrap();
 
-	// Use sea-query builder
-	let insert = Query::insert()
+	// Use reinhardt-query builder
+	let mut insert_stmt = Query::insert();
+	let insert = insert_stmt
 		.into_table(Alias::new("users"))
 		.columns([Alias::new("name")])
-		.values_panic(["Charlie".into()])
-		.to_string(PostgresQueryBuilder);
+		.values_panic([Value::from("Charlie")])
+		.to_string(PostgresQueryBuilder::new());
 
 	sqlx::query(&insert)
 		.execute(db_service.pool.as_ref())
@@ -256,11 +267,12 @@ async fn test_sea_query_builder_injection(
 		.unwrap();
 
 	// Verify insertion
-	let select = Query::select()
+	let mut select_stmt = Query::select();
+	let select = select_stmt
 		.column(Alias::new("name"))
 		.from(Alias::new("users"))
 		.and_where(Expr::col(Alias::new("name")).eq("Charlie"))
-		.to_string(PostgresQueryBuilder);
+		.to_string(PostgresQueryBuilder::new());
 
 	let row: (String,) = sqlx::query_as(&select)
 		.fetch_one(db_service.pool.as_ref())

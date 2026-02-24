@@ -156,7 +156,7 @@ mod tests {
 
 		let event = SessionEvent::Deleted {
 			session_key: "test_key".to_string(),
-			reason: super::super::DeletionReason::Explicit,
+			reason: crate::sessions::DeletionReason::Explicit,
 			timestamp: Utc::now(),
 		};
 

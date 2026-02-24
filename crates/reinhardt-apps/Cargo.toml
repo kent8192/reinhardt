@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-apps"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.12"
 description = "Application registry and management for Reinhardt framework"
 edition.workspace = true
 license.workspace = true

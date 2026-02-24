@@ -22,10 +22,10 @@ use bytes::Bytes;
 use hyper::{HeaderMap, Method, Version};
 use reinhardt_http::Request;
 use reinhardt_rest::filters::{
-	FilterBackend, FuzzyAlgorithm, FuzzySearchFilter, RangeFilter, SimpleOrderingBackend,
-	SimpleSearchBackend,
+	DatabaseDialect, FilterBackend, FuzzyAlgorithm, FuzzySearchFilter, RangeFilter,
+	SimpleOrderingBackend, SimpleSearchBackend,
 };
-use reinhardt_test::fixtures::testcontainers::{postgres_container, ContainerAsync, GenericImage};
+use reinhardt_test::fixtures::testcontainers::{ContainerAsync, GenericImage, postgres_container};
 use reinhardt_views::viewsets::{
 	FilterConfig, FilterableViewSet, ModelViewSet, OrderingConfig, ReadOnlyModelViewSet,
 };
@@ -377,10 +377,11 @@ async fn test_search_filter_orm_integration(
 ) {
 	let (_container, pool) = filter_test_db.await;
 
-	// Create search filter
+	// Create search filter with PostgreSQL dialect
 	let backend = SimpleSearchBackend::new("search")
 		.with_field("username")
-		.with_field("email");
+		.with_field("email")
+		.with_dialect(DatabaseDialect::PostgreSQL);
 
 	let mut params = HashMap::new();
 	params.insert("search".to_string(), "alice".to_string());
@@ -393,8 +394,9 @@ async fn test_search_filter_orm_integration(
 
 	// Verify SQL contains LIKE clauses for both fields with OR logic
 	assert!(filtered_sql.contains("WHERE"));
-	assert!(filtered_sql.contains("username LIKE '%alice%'"));
-	assert!(filtered_sql.contains("email LIKE '%alice%'"));
+	// PostgreSQL uses double quotes for identifiers
+	assert!(filtered_sql.contains("\"username\" LIKE '%alice%'"));
+	assert!(filtered_sql.contains("\"email\" LIKE '%alice%'"));
 	assert!(filtered_sql.contains("OR"));
 
 	// Execute query and verify results
@@ -697,7 +699,8 @@ async fn test_combined_filters_integration(
 	// Combine search + ordering + range filters
 	let search_backend = SimpleSearchBackend::new("search")
 		.with_field("username")
-		.with_field("email");
+		.with_field("email")
+		.with_dialect(DatabaseDialect::PostgreSQL);
 
 	let ordering_backend = SimpleOrderingBackend::new("ordering").allow_field("age");
 
@@ -719,8 +722,9 @@ async fn test_combined_filters_integration(
 	// Verify SQL contains all filter clauses
 	assert!(filtered_sql.contains("age >= 18"));
 	assert!(filtered_sql.contains("age <= 65"));
-	assert!(filtered_sql.contains("username LIKE '%example%'"));
-	assert!(filtered_sql.contains("email LIKE '%example%'"));
+	// PostgreSQL uses double quotes for identifiers
+	assert!(filtered_sql.contains("\"username\" LIKE '%example%'"));
+	assert!(filtered_sql.contains("\"email\" LIKE '%example%'"));
 	assert!(filtered_sql.contains("ORDER BY age DESC"));
 
 	// Execute query and verify results
@@ -780,7 +784,8 @@ async fn test_viewset_search_filter_orm_integration(
 	// Apply search filter to SQL
 	let search_backend = SimpleSearchBackend::new("search")
 		.with_field("username")
-		.with_field("email");
+		.with_field("email")
+		.with_dialect(DatabaseDialect::PostgreSQL);
 
 	let mut params = HashMap::new();
 	params.insert("search".to_string(), search_query.unwrap());
@@ -904,7 +909,8 @@ async fn test_viewset_multiple_filters_orm_integration(
 	// Apply filters
 	let search_backend = SimpleSearchBackend::new("search")
 		.with_field("username")
-		.with_field("email");
+		.with_field("email")
+		.with_dialect(DatabaseDialect::PostgreSQL);
 	let ordering_backend = SimpleOrderingBackend::new("ordering").allow_field("age");
 
 	let mut params = HashMap::new();

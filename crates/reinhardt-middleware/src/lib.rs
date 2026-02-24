@@ -99,6 +99,7 @@
 //! 9. `RateLimitMiddleware` - Apply rate limits
 //! 10. Application handlers
 
+pub mod allowed_hosts;
 pub mod auth;
 pub mod broken_link;
 #[cfg(feature = "compression")]
@@ -138,6 +139,7 @@ pub mod xss;
 // Re-export core middleware traits from reinhardt-http
 pub use reinhardt_http::{Handler, Middleware, MiddlewareChain};
 
+pub use allowed_hosts::{AllowedHostsConfig, AllowedHostsMiddleware};
 #[cfg(feature = "sessions")]
 pub use auth::AuthenticationMiddleware;
 pub use broken_link::{BrokenLinkConfig, BrokenLinkEmailsMiddleware};
@@ -216,11 +218,15 @@ mod tests {
 
 		let middleware = CorsMiddleware::new(config);
 		let handler = Arc::new(TestHandler);
+
+		let mut headers = HeaderMap::new();
+		headers.insert("origin", "http://example.com".parse().unwrap());
+
 		let request = Request::builder()
 			.method(Method::GET)
 			.uri("/test")
 			.version(Version::HTTP_11)
-			.headers(HeaderMap::new())
+			.headers(headers)
 			.body(Bytes::new())
 			.build()
 			.unwrap();
@@ -247,11 +253,15 @@ mod tests {
 
 		let middleware = CorsMiddleware::new(config);
 		let handler = Arc::new(TestHandler);
+
+		let mut headers = HeaderMap::new();
+		headers.insert("origin", "http://example.com".parse().unwrap());
+
 		let request = Request::builder()
 			.method(Method::OPTIONS)
 			.uri("/test")
 			.version(Version::HTTP_11)
-			.headers(HeaderMap::new())
+			.headers(headers)
 			.body(Bytes::new())
 			.build()
 			.unwrap();

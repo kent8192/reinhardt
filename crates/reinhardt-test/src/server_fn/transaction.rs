@@ -52,7 +52,7 @@ use async_trait::async_trait;
 #[derive(Debug)]
 pub struct TestTransaction<C> {
 	/// The underlying connection or transaction handle.
-	connection: C,
+	connection: Option<C>,
 	/// Whether to commit instead of rollback.
 	commit_on_drop: bool,
 	/// Whether the transaction has been explicitly completed.
@@ -63,7 +63,7 @@ impl<C> TestTransaction<C> {
 	/// Create a new test transaction wrapper.
 	pub fn new(connection: C) -> Self {
 		Self {
-			connection,
+			connection: Some(connection),
 			commit_on_drop: false,
 			completed: false,
 		}
@@ -79,12 +79,16 @@ impl<C> TestTransaction<C> {
 
 	/// Get a reference to the underlying connection.
 	pub fn connection(&self) -> &C {
-		&self.connection
+		self.connection
+			.as_ref()
+			.expect("connection already consumed")
 	}
 
 	/// Get a mutable reference to the underlying connection.
 	pub fn connection_mut(&mut self) -> &mut C {
-		&mut self.connection
+		self.connection
+			.as_mut()
+			.expect("connection already consumed")
 	}
 
 	/// Consume the transaction and return the underlying connection.
@@ -92,8 +96,7 @@ impl<C> TestTransaction<C> {
 	/// Note: This prevents automatic rollback/commit on drop.
 	pub fn into_inner(mut self) -> C {
 		self.completed = true;
-		// Use ManuallyDrop to prevent drop from running
-		let connection = std::mem::replace(&mut self.connection, unsafe { std::mem::zeroed() });
+		let connection = self.connection.take().expect("connection already consumed");
 		std::mem::forget(self);
 		connection
 	}
@@ -108,7 +111,9 @@ impl<C> Deref for TestTransaction<C> {
 	type Target = C;
 
 	fn deref(&self) -> &Self::Target {
-		&self.connection
+		self.connection
+			.as_ref()
+			.expect("connection already consumed")
 	}
 }
 
@@ -165,39 +170,71 @@ impl TestSavepoint {
 	}
 }
 
+// Fixes #872: Migrate SQL utility functions to use SeaQuery instead of raw
+// string interpolation to prevent SQL injection.
 /// Test database utilities for common operations.
 pub mod utils {
+	use sea_query::{Alias, Asterisk, Expr, PostgresQueryBuilder, Query};
+
 	/// Truncate all tables in the given list.
 	///
 	/// This is useful for cleaning up between tests when not using
 	/// transaction rollback.
+	///
+	/// Note: SeaQuery does not natively support TRUNCATE, so this uses
+	/// properly quoted identifiers via `sea_query::Alias`.
 	pub fn truncate_tables_sql(tables: &[&str]) -> String {
 		if tables.is_empty() {
 			return String::new();
 		}
 
+		let quoted_tables: Vec<String> = tables
+			.iter()
+			.map(|t| {
+				// Use a SELECT query to get the properly quoted identifier
+				let query = Query::select()
+					.column(Asterisk)
+					.from(Alias::new(*t))
+					.to_string(PostgresQueryBuilder);
+				// Extract quoted table name from "SELECT * FROM <table>"
+				query
+					.strip_prefix("SELECT * FROM ")
+					.unwrap_or(t)
+					.to_string()
+			})
+			.collect();
+
 		format!(
 			"TRUNCATE TABLE {} RESTART IDENTITY CASCADE",
-			tables.join(", ")
+			quoted_tables.join(", ")
 		)
 	}
 
 	/// Generate a DELETE statement for cleaning up a table.
 	pub fn delete_from_sql(table: &str, where_clause: Option<&str>) -> String {
-		match where_clause {
-			Some(clause) => format!("DELETE FROM {} WHERE {}", table, clause),
-			None => format!("DELETE FROM {}", table),
+		let mut query = Query::delete();
+		query.from_table(Alias::new(table));
+
+		if let Some(clause) = where_clause {
+			query.cond_where(Expr::cust(clause.to_string()));
 		}
+
+		query.to_string(PostgresQueryBuilder)
 	}
 
 	/// Generate an INSERT statement for test data.
 	pub fn insert_test_data_sql(table: &str, columns: &[&str], values: &[&str]) -> String {
-		format!(
-			"INSERT INTO {} ({}) VALUES ({})",
-			table,
-			columns.join(", "),
-			values.join(", ")
-		)
+		let mut query = Query::insert();
+		query.into_table(Alias::new(table));
+
+		let cols: Vec<Alias> = columns.iter().map(|c| Alias::new(*c)).collect();
+		query.columns(cols);
+
+		let exprs: Vec<sea_query::SimpleExpr> =
+			values.iter().map(|v| Expr::cust(v.to_string())).collect();
+		query.values_panic(exprs);
+
+		query.to_string(PostgresQueryBuilder)
 	}
 }
 
@@ -332,8 +369,8 @@ mod tests {
 	fn test_truncate_tables_sql() {
 		let sql = utils::truncate_tables_sql(&["users", "posts"]);
 		assert!(sql.contains("TRUNCATE TABLE"));
-		assert!(sql.contains("users"));
-		assert!(sql.contains("posts"));
+		assert!(sql.contains("\"users\""));
+		assert!(sql.contains("\"posts\""));
 		assert!(sql.contains("CASCADE"));
 	}
 
@@ -346,10 +383,10 @@ mod tests {
 	#[test]
 	fn test_delete_from_sql() {
 		let sql = utils::delete_from_sql("users", None);
-		assert_eq!(sql, "DELETE FROM users");
+		assert_eq!(sql, "DELETE FROM \"users\"");
 
 		let sql_with_where = utils::delete_from_sql("users", Some("id = 1"));
-		assert_eq!(sql_with_where, "DELETE FROM users WHERE id = 1");
+		assert_eq!(sql_with_where, "DELETE FROM \"users\" WHERE id = 1");
 	}
 
 	#[test]
@@ -359,8 +396,9 @@ mod tests {
 			&["name", "email"],
 			&["'Alice'", "'alice@example.com'"],
 		);
-		assert!(sql.contains("INSERT INTO users"));
-		assert!(sql.contains("name, email"));
+		assert!(sql.contains("INSERT INTO \"users\""));
+		assert!(sql.contains("\"name\""));
+		assert!(sql.contains("\"email\""));
 		assert!(sql.contains("'Alice'"));
 	}
 

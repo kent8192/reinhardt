@@ -220,8 +220,8 @@ async fn test_session_fixation_prevention() {
 	// 3. Old session ID is invalidated (removed from backend)
 	// 4. New session ID is valid and contains the same data
 
-	use reinhardt_auth::sessions::backends::{InMemorySessionBackend, SessionBackend};
 	use reinhardt_auth::sessions::Session;
+	use reinhardt_auth::sessions::backends::{InMemorySessionBackend, SessionBackend};
 
 	// 1. Create a session with initial session ID
 	let backend = InMemorySessionBackend::new();
@@ -304,8 +304,8 @@ async fn test_session_fixation_prevention() {
 #[tokio::test]
 async fn test_session_timeout_valid_before_expiry() {
 	// Test: Session should be valid before timeout
-	use reinhardt_auth::sessions::backends::InMemorySessionBackend;
 	use reinhardt_auth::sessions::Session;
+	use reinhardt_auth::sessions::backends::InMemorySessionBackend;
 
 	let backend = InMemorySessionBackend::new();
 	let mut session = Session::new(backend);
@@ -324,8 +324,8 @@ async fn test_session_timeout_valid_before_expiry() {
 #[tokio::test]
 async fn test_session_timeout_invalid_after_expiry() {
 	// Test: Session should be invalid after timeout
-	use reinhardt_auth::sessions::backends::InMemorySessionBackend;
 	use reinhardt_auth::sessions::Session;
+	use reinhardt_auth::sessions::backends::InMemorySessionBackend;
 	use std::time::Duration;
 
 	let backend = InMemorySessionBackend::new();
@@ -348,8 +348,8 @@ async fn test_session_timeout_invalid_after_expiry() {
 #[tokio::test]
 async fn test_session_last_activity_updates() {
 	// Test: Session last_activity timestamp updates on each access
-	use reinhardt_auth::sessions::backends::InMemorySessionBackend;
 	use reinhardt_auth::sessions::Session;
+	use reinhardt_auth::sessions::backends::InMemorySessionBackend;
 	use std::time::Duration;
 
 	let backend = InMemorySessionBackend::new();
@@ -377,8 +377,8 @@ async fn test_session_last_activity_updates() {
 #[tokio::test]
 async fn test_session_update_activity_manually() {
 	// Test: Manual update_activity() extends session lifetime
-	use reinhardt_auth::sessions::backends::InMemorySessionBackend;
 	use reinhardt_auth::sessions::Session;
+	use reinhardt_auth::sessions::backends::InMemorySessionBackend;
 	use std::time::Duration;
 
 	let backend = InMemorySessionBackend::new();
@@ -404,8 +404,8 @@ async fn test_session_update_activity_manually() {
 #[tokio::test]
 async fn test_session_timeout_configuration() {
 	// Test: Session timeout can be configured
-	use reinhardt_auth::sessions::backends::InMemorySessionBackend;
 	use reinhardt_auth::sessions::Session;
+	use reinhardt_auth::sessions::backends::InMemorySessionBackend;
 
 	let backend = InMemorySessionBackend::new();
 	let mut session = Session::new(backend);

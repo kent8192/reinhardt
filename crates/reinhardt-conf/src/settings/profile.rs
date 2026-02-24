@@ -213,18 +213,26 @@ mod tests {
 
 	#[test]
 	fn test_settings_profile_from_env() {
+		// SAFETY: Setting environment variables is unsafe in multi-threaded programs.
+		// This test uses #[serial] to ensure exclusive access to environment variables.
 		unsafe {
 			env::set_var("REINHARDT_ENV", "production");
 		}
 		assert_eq!(Profile::from_env().unwrap(), Profile::Production);
+		// SAFETY: Removing environment variables is unsafe in multi-threaded programs.
+		// This test uses #[serial] to ensure exclusive access to environment variables.
 		unsafe {
 			env::remove_var("REINHARDT_ENV");
 		}
 
+		// SAFETY: Setting environment variables is unsafe in multi-threaded programs.
+		// This test uses #[serial] to ensure exclusive access to environment variables.
 		unsafe {
 			env::set_var("ENVIRONMENT", "development");
 		}
 		assert_eq!(Profile::from_env().unwrap(), Profile::Development);
+		// SAFETY: Removing environment variables is unsafe in multi-threaded programs.
+		// This test uses #[serial] to ensure exclusive access to environment variables.
 		unsafe {
 			env::remove_var("ENVIRONMENT");
 		}

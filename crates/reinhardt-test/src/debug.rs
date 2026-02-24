@@ -1,3 +1,4 @@
+use reinhardt_core::security::escape_html_content;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -339,14 +340,19 @@ impl DebugToolbar {
 			timing.cache_misses,
 			queries
 				.iter()
-				.map(|q| format!("<li>{} ({:?})</li>", q.query, q.duration))
+				.map(|q| format!(
+					"<li>{} ({:?})</li>",
+					escape_html_content(&q.query),
+					q.duration
+				))
 				.collect::<Vec<_>>()
 				.join("\n"),
 			panels
 				.iter()
 				.map(|(id, panel)| format!(
 					"<div class='panel' id='{}'><h3>{}</h3></div>",
-					id, panel.title
+					escape_html_content(id),
+					escape_html_content(&panel.title)
 				))
 				.collect::<Vec<_>>()
 				.join("\n")
@@ -399,6 +405,53 @@ mod tests {
 		let panels = toolbar.get_panels().await;
 		assert_eq!(panels.len(), 1);
 		assert!(panels.contains_key("test"));
+	}
+
+	#[test]
+	fn test_escape_html_content() {
+		assert_eq!(escape_html_content("hello"), "hello");
+		assert_eq!(
+			escape_html_content("<script>alert('xss')</script>"),
+			"&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;"
+		);
+		assert_eq!(escape_html_content("a & b"), "a &amp; b");
+		assert_eq!(
+			escape_html_content(r#"key="value""#),
+			"key=&quot;value&quot;"
+		);
+	}
+
+	#[tokio::test]
+	async fn test_render_html_escapes_sql_queries() {
+		let toolbar = DebugToolbar::new();
+		toolbar
+			.record_sql_query(
+				"SELECT * FROM users WHERE name = '<script>alert(1)</script>'".to_string(),
+				Duration::from_millis(1),
+			)
+			.await;
+		toolbar.finalize().await;
+
+		let html = toolbar.render_html().await;
+		assert!(!html.contains("<script>"));
+		assert!(html.contains("&lt;script&gt;"));
+	}
+
+	#[tokio::test]
+	async fn test_render_html_escapes_panel_content() {
+		let toolbar = DebugToolbar::new();
+		let panel = DebugPanel {
+			title: "<img src=x onerror=alert(1)>".to_string(),
+			content: vec![],
+		};
+		toolbar.add_panel("<script>".to_string(), panel).await;
+		toolbar.finalize().await;
+
+		let html = toolbar.render_html().await;
+		assert!(!html.contains("<script>"));
+		assert!(!html.contains("<img src=x"));
+		assert!(html.contains("&lt;script&gt;"));
+		assert!(html.contains("&lt;img src=x onerror=alert(1)&gt;"));
 	}
 
 	#[tokio::test]

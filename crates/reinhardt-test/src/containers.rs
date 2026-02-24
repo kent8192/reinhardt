@@ -246,7 +246,10 @@ impl MySqlContainer {
 		let container = AsyncRunner::start(image)
 			.await
 			.expect("Failed to start MySQL container");
-		let port = container.get_host_port_ipv4(3306).await.unwrap();
+		let port = container
+			.get_host_port_ipv4(3306)
+			.await
+			.expect("MySQL container port should be available after startup");
 
 		Self {
 			container,
@@ -311,7 +314,10 @@ impl RedisContainer {
 		let container = AsyncRunner::start(image)
 			.await
 			.expect("Failed to start Redis container");
-		let port = container.get_host_port_ipv4(6379).await.unwrap();
+		let port = container
+			.get_host_port_ipv4(6379)
+			.await
+			.expect("Redis container port should be available after startup");
 
 		let redis_container = Self {
 			container,
@@ -429,7 +435,10 @@ impl MemcachedContainer {
 		let container = AsyncRunner::start(image)
 			.await
 			.expect("Failed to start Memcached container");
-		let port = container.get_host_port_ipv4(11211).await.unwrap();
+		let port = container
+			.get_host_port_ipv4(11211)
+			.await
+			.expect("Memcached container port should be available after startup");
 
 		let instance = Self {
 			container,
@@ -586,6 +595,8 @@ pub struct RabbitMQContainer {
 	host: String,
 	port: u16,
 	management_port: u16,
+	username: String,
+	password: String,
 }
 
 /// Helper function to start a RabbitMQ container
@@ -620,14 +631,22 @@ impl RabbitMQContainer {
 			.expect("Failed to start RabbitMQ container");
 
 		// RabbitMQ AMQP port (5672) and Management UI port (15672)
-		let port = container.get_host_port_ipv4(5672).await.unwrap();
-		let management_port = container.get_host_port_ipv4(15672).await.unwrap();
+		let port = container
+			.get_host_port_ipv4(5672)
+			.await
+			.expect("RabbitMQ AMQP container port should be available after startup");
+		let management_port = container
+			.get_host_port_ipv4(15672)
+			.await
+			.expect("RabbitMQ management container port should be available after startup");
 
 		let rabbitmq_container = Self {
 			container,
 			host: "localhost".to_string(),
 			port,
 			management_port,
+			username: username.to_string(),
+			password: password.to_string(),
 		};
 
 		// Wait for RabbitMQ to be ready
@@ -676,7 +695,10 @@ impl RabbitMQContainer {
 
 	/// Get the AMQP connection URL for RabbitMQ
 	pub fn connection_url(&self) -> String {
-		format!("amqp://guest:guest@{}:{}", self.host, self.port)
+		format!(
+			"amqp://{}:{}@{}:{}",
+			self.username, self.password, self.host, self.port
+		)
 	}
 
 	/// Get the Management UI URL for RabbitMQ
@@ -741,8 +763,14 @@ impl MailpitContainer {
 			.expect("Failed to start Mailpit container");
 
 		// Mailpit SMTP port (1025) and HTTP API/UI port (8025)
-		let smtp_port = container.get_host_port_ipv4(1025).await.unwrap();
-		let http_port = container.get_host_port_ipv4(8025).await.unwrap();
+		let smtp_port = container
+			.get_host_port_ipv4(1025)
+			.await
+			.expect("Mailpit SMTP container port should be available after startup");
+		let http_port = container
+			.get_host_port_ipv4(8025)
+			.await
+			.expect("Mailpit HTTP container port should be available after startup");
 
 		let mailpit_container = Self {
 			container,
@@ -865,6 +893,26 @@ pub mod sqlite {
 	/// // Use the database...
 	/// ```
 	pub fn temp_file_url(name: &str) -> String {
+		// Validate name to prevent path traversal attacks
+		assert!(!name.is_empty(), "temp_file_url: name must not be empty");
+		assert!(
+			!name.contains(".."),
+			"temp_file_url: name must not contain '..' (path traversal)"
+		);
+		assert!(
+			!name.contains('/') && !name.contains('\\'),
+			"temp_file_url: name must not contain path separators ('/' or '\\')"
+		);
+		assert!(
+			!name.contains('\0'),
+			"temp_file_url: name must not contain null bytes"
+		);
+		assert!(
+			name.chars()
+				.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'),
+			"temp_file_url: name must contain only alphanumeric characters, hyphens, underscores, or dots"
+		);
+
 		format!("sqlite:/tmp/{}.db", name)
 	}
 }
@@ -872,6 +920,33 @@ pub mod sqlite {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_rabbitmq_connection_url_uses_default_credentials() {
+		// Arrange
+		let container = RabbitMQContainer::new().await;
+
+		// Act
+		let url = container.connection_url();
+
+		// Assert
+		assert!(url.starts_with("amqp://guest:guest@"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_rabbitmq_connection_url_uses_custom_credentials() {
+		// Arrange
+		let container = RabbitMQContainer::with_credentials("admin", "secret_pass").await;
+
+		// Act
+		let url = container.connection_url();
+
+		// Assert
+		assert!(url.starts_with("amqp://admin:secret_pass@"));
+	}
 
 	#[tokio::test]
 	async fn test_postgres_container() {
@@ -906,5 +981,89 @@ mod tests {
 		})
 		.await
 		.unwrap();
+	}
+
+	#[rstest]
+	fn test_temp_file_url_accepts_valid_name() {
+		// Arrange
+		let name = "test_db";
+
+		// Act
+		let url = sqlite::temp_file_url(name);
+
+		// Assert
+		assert_eq!(url, "sqlite:/tmp/test_db.db");
+	}
+
+	#[rstest]
+	fn test_temp_file_url_accepts_name_with_dots_and_hyphens() {
+		// Arrange
+		let name = "my-test.db-v2";
+
+		// Act
+		let url = sqlite::temp_file_url(name);
+
+		// Assert
+		assert_eq!(url, "sqlite:/tmp/my-test.db-v2.db");
+	}
+
+	#[rstest]
+	#[should_panic(expected = "must not be empty")]
+	fn test_temp_file_url_rejects_empty_name() {
+		// Arrange
+		let name = "";
+
+		// Act
+		sqlite::temp_file_url(name);
+	}
+
+	#[rstest]
+	#[should_panic(expected = "path traversal")]
+	fn test_temp_file_url_rejects_path_traversal() {
+		// Arrange
+		let name = "../../etc/passwd";
+
+		// Act
+		sqlite::temp_file_url(name);
+	}
+
+	#[rstest]
+	#[should_panic(expected = "path separators")]
+	fn test_temp_file_url_rejects_forward_slash() {
+		// Arrange
+		let name = "foo/bar";
+
+		// Act
+		sqlite::temp_file_url(name);
+	}
+
+	#[rstest]
+	#[should_panic(expected = "path separators")]
+	fn test_temp_file_url_rejects_backslash() {
+		// Arrange
+		let name = "foo\\bar";
+
+		// Act
+		sqlite::temp_file_url(name);
+	}
+
+	#[rstest]
+	#[should_panic(expected = "null bytes")]
+	fn test_temp_file_url_rejects_null_bytes() {
+		// Arrange
+		let name = "test\0db";
+
+		// Act
+		sqlite::temp_file_url(name);
+	}
+
+	#[rstest]
+	#[should_panic(expected = "alphanumeric")]
+	fn test_temp_file_url_rejects_special_characters() {
+		// Arrange
+		let name = "test db!@#";
+
+		// Act
+		sqlite::temp_file_url(name);
 	}
 }

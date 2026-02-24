@@ -2,7 +2,7 @@
 //!
 //! This module contains integration tests for reinhardt-di with other Reinhardt components:
 //! - Cross-crate injection (DI + HTTP)
-//! - Database integration (DI + DB + sea-query)
+//! - Database integration (DI + DB + reinhardt-query)
 //! - Server integration (DI + Server)
 
 // Cross-crate integration tests

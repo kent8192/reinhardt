@@ -32,7 +32,7 @@ mod validator;
 use proc_macro::TokenStream;
 
 // Re-export PageMacro from the shared ast crate for external use
-pub(crate) use reinhardt_pages_ast::PageMacro;
+pub(crate) use reinhardt_manouche::core::PageMacro;
 
 /// Implementation of the page! macro.
 ///

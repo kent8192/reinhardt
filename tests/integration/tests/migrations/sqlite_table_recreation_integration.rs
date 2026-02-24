@@ -21,26 +21,28 @@
 
 use reinhardt_db::backends::connection::DatabaseConnection;
 use reinhardt_db::migrations::{
+	ColumnDefinition, FieldType, ForeignKeyAction, Migration,
 	executor::DatabaseMigrationExecutor,
 	operations::{Constraint, Operation},
-	ColumnDefinition, FieldType, ForeignKeyAction, Migration,
+};
+use reinhardt_query::prelude::{
+	Iden, IntoIden, Query, QueryStatementBuilder, SqliteQueryBuilder, Value,
 };
 use reinhardt_test::fixtures::postgres_container;
 use rstest::*;
-use sea_query::{Iden, Query, SqliteQueryBuilder};
 use sqlx::PgPool;
 use std::sync::Arc;
 use testcontainers::{ContainerAsync, GenericImage};
 
 // ============================================================================
-// Sea-Query Table Identifiers
+// reinhardt-query Table Identifiers
 // ============================================================================
 
-#[derive(Iden)]
+#[derive(Debug, Clone, Copy, Iden)]
 #[iden = "recreation_test"]
 struct RecreationTest;
 
-#[derive(Iden)]
+#[derive(Debug, Clone, Copy, Iden)]
 enum RecreationTestCol {
 	#[iden = "name"]
 	Name,
@@ -241,17 +243,26 @@ async fn test_drop_column_preserves_data(
 ) {
 	let (conn, mut executor) = sqlite_with_test_table.await;
 
-	// Insert test data using SeaQuery
-	let insert_sql = Query::insert()
-		.into_table(RecreationTest)
+	// Insert test data using reinhardt-query
+	let mut insert_stmt = Query::insert();
+	let insert_sql = insert_stmt
+		.into_table(RecreationTest.into_iden())
 		.columns([
 			RecreationTestCol::Name,
 			RecreationTestCol::Email,
 			RecreationTestCol::Age,
 		])
-		.values_panic(["Alice".into(), "alice@example.com".into(), 30i32.into()])
-		.values_panic(["Bob".into(), "bob@example.com".into(), 25i32.into()])
-		.to_string(SqliteQueryBuilder);
+		.values_panic([
+			Value::from("Alice"),
+			Value::from("alice@example.com"),
+			Value::from(30i32),
+		])
+		.values_panic([
+			Value::from("Bob"),
+			Value::from("bob@example.com"),
+			Value::from(25i32),
+		])
+		.to_string(SqliteQueryBuilder::new());
 
 	conn.execute(&insert_sql, vec![])
 		.await
@@ -352,15 +363,20 @@ async fn test_alter_column_type_preserves_data(
 	let (conn, mut executor) = sqlite_with_test_table.await;
 
 	// Insert test data
-	let insert_sql = Query::insert()
-		.into_table(RecreationTest)
+	let mut insert_stmt = Query::insert();
+	let insert_sql = insert_stmt
+		.into_table(RecreationTest.into_iden())
 		.columns([
 			RecreationTestCol::Name,
 			RecreationTestCol::Email,
 			RecreationTestCol::Age,
 		])
-		.values_panic(["Charlie".into(), "charlie@test.com".into(), 35i32.into()])
-		.to_string(SqliteQueryBuilder);
+		.values_panic([
+			Value::from("Charlie"),
+			Value::from("charlie@test.com"),
+			Value::from(35i32),
+		])
+		.to_string(SqliteQueryBuilder::new());
 
 	conn.execute(&insert_sql, vec![])
 		.await

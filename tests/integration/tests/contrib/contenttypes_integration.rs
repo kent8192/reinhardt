@@ -45,7 +45,7 @@ fn registry_guard() -> TeardownGuard<ContentTypeRegistryGuard> {
 
 mod multi_db_tests {
 	use super::*;
-	use reinhardt_db::contenttypes::{MultiDbContentTypeManager, CONTENT_TYPE_REGISTRY};
+	use reinhardt_db::contenttypes::{CONTENT_TYPE_REGISTRY, MultiDbContentTypeManager};
 
 	#[rstest]
 	#[serial(content_type_registry)]

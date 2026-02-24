@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="hero" aria-labelledby="hero-title">
+	<div class="hero-inner container">
+		<h1 id="hero-title" class="hero-title">
+			<img src="/logo.png" alt="Reinhardt logo" width="96" height="96" class="hero-logo"> Reinhardt&#8482;
+		</h1>
+		<p class="hero-tagline">Polylithic Batteries-Included Web Framework for Rust</p>
+		<p class="hero-sub">
+			Build with <em>all</em> the power of Django&rsquo;s batteries-included philosophy,<br>
+			or compose <em>only</em> what you need&mdash;your choice, your way.
+		</p>
+		<div class="hero-cta" role="group" aria-label="Get started">
+			<a href="/quickstart/" class="btn btn-primary">Get Started →</a>
+			<a href="{{ config.extra.github_repo }}"
+				 class="btn btn-secondary"
+				 target="_blank" rel="noopener noreferrer">
+				View on GitHub
+			</a>
+		</div>
+		<p class="hero-meta">
+			<code>v0.1.0-alpha</code>
+			&middot; BSD-3-Clause
+			&middot; <a href="{{ config.extra.crates_io }}" target="_blank" rel="noopener noreferrer">crates.io</a>
+		</p>
+	</div>
+</section>
+
+<section class="features" aria-labelledby="features-title">
+	<div class="container">
+		<h2 id="features-title" class="section-title">Why Reinhardt?</h2>
+		<div class="features-grid">
+			<article class="feature-card">
+				<h3>🧩 Polylithic</h3>
+				<p>Compose exactly the components you need. Use everything or just the HTTP core—your project, your rules.</p>
+			</article>
+			<article class="feature-card">
+				<h3>🔒 Type-Safe ORM</h3>
+				<p>Compile-time validated queries via SeaQuery. No runtime surprises, no SQL injection by construction.</p>
+			</article>
+			<article class="feature-card">
+				<h3>⚡ Batteries Included</h3>
+				<p>Auth, REST, Admin, GraphQL, WebSockets, i18n, Pagination—all available, none mandatory.</p>
+			</article>
+			<article class="feature-card">
+				<h3>🌐 Modern WASM Frontend</h3>
+				<p>Built-in SSR + hydration via reinhardt-pages. Fine-grained reactivity, server functions, and component-based UI—no separate JS framework needed.</p>
+			</article>
+			<article class="feature-card">
+				<h3>📱 One Source, Multi-Platform</h3>
+				<p>Write once, deploy everywhere. Web, desktop, and mobile from a single Rust codebase. <em>(Planned)</em></p>
+			</article>
+			<article class="feature-card">
+				<h3>🎛️ 70+ Feature Flags</h3>
+				<p>Fine-grained control over your build. Include only the features you use—minimal binary size, maximum flexibility.</p>
+			</article>
+			<article class="feature-card">
+				<h3>🛠️ Django-Style CLI</h3>
+				<p>Scaffold projects and apps with <code>reinhardt-admin</code>. Run dev server, execute migrations, collect static files—a familiar workflow for Django developers.</p>
+			</article>
+			<article class="feature-card">
+				<h3>💉 FastAPI-Style DI</h3>
+				<p>Automatic dependency injection via <code>#[inject]</code> and <code>Depends&lt;T&gt;</code>. Type-safe extraction of path params, query strings, headers, cookies, JSON, and form data.</p>
+			</article>
+			<article class="feature-card">
+				<h3>🔌 WASM Plugin System</h3>
+				<p>Extend your app with static compile-time plugins or dynamic WASM plugins loaded at runtime via wasmtime. Manage plugins from crates.io with built-in CLI.</p>
+			</article>
+			<article class="feature-card">
+				<h3>📖 Auto OpenAPI &amp; Browsable API</h3>
+				<p>Zero-config OpenAPI schema generation plus a DRF-inspired browsable API interface. Interactive API documentation out of the box.</p>
+			</article>
+			<article class="feature-card">
+				<h3>⚙️ Environment-Aware Config</h3>
+				<p>Layered TOML settings per environment (base, local, staging, production) with <code>REINHARDT_ENV</code> profile switching. No external config crates needed.</p>
+			</article>
+			<article class="feature-card">
+				<h3>🗄️ Multi-Database Support</h3>
+				<p>PostgreSQL, MySQL, SQLite, and CockroachDB via feature flags. Switch databases at compile time without changing application code.</p>
+			</article>
+		</div>
+	</div>
+</section>
+
+<section class="quickstart-preview" aria-labelledby="quickstart-title">
+	<div class="container">
+		<h2 id="quickstart-title" class="section-title">Get Started in Seconds</h2>
+		<div class="code-block-wrapper">
+			<pre><code class="language-toml">[dependencies]
+reinhardt = { version = "0.1.0-alpha", package = "reinhardt-web" }</code></pre>
+		</div>
+		<a href="/quickstart/" class="btn btn-primary">Full Quickstart Guide →</a>
+	</div>
+</section>
+
+<section class="comparison" aria-labelledby="comparison-title">
+	<div class="container">
+		<h2 id="comparison-title" class="section-title">Inspired by the Best</h2>
+		<div class="table-wrapper" role="region" aria-label="Framework comparison" tabindex="0">
+			<table>
+				<thead>
+					<tr>
+						<th scope="col">Inspiration</th>
+						<th scope="col">What We Borrowed</th>
+						<th scope="col">What We Improved</th>
+					</tr>
+				</thead>
+				<tbody>
+					<tr>
+						<td>🐍 Django</td>
+						<td>Batteries-included, ORM design, admin panel</td>
+						<td>Feature flags for composable builds, Rust type safety</td>
+					</tr>
+					<tr>
+						<td>🎯 Django REST</td>
+						<td>Serializers, ViewSets, permissions</td>
+						<td>Compile-time validation, zero-cost abstractions</td>
+					</tr>
+					<tr>
+						<td>⚡ FastAPI</td>
+						<td>DI system, automatic OpenAPI</td>
+						<td>Native Rust performance, no runtime overhead</td>
+					</tr>
+					<tr>
+						<td>🗄️ SQLAlchemy</td>
+						<td>QuerySet patterns, relationship handling</td>
+						<td>Type-safe query builder, compile-time validation</td>
+					</tr>
+				</tbody>
+			</table>
+		</div>
+	</div>
+</section>
+{% endblock content %}

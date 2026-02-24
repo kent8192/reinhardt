@@ -36,6 +36,9 @@ pub(crate) struct MacroArgs {
 	pub scope: Option<Scope>,
 }
 
+/// Known argument names for DI macros
+const KNOWN_ARGS: &[&str] = &["scope"];
+
 impl Parse for MacroArgs {
 	fn parse(input: syn::parse::ParseStream) -> Result<Self> {
 		let mut scope = None;
@@ -68,6 +71,20 @@ impl Parse for MacroArgs {
 						"Expected string literal for scope",
 					));
 				}
+			} else {
+				// Reject unknown arguments
+				let known_list = KNOWN_ARGS.join(", ");
+				return Err(syn::Error::new_spanned(
+					&pair.path,
+					format!(
+						"unknown argument `{}`. Valid arguments are: {}",
+						pair.path
+							.get_ident()
+							.map(|i| i.to_string())
+							.unwrap_or_else(|| "?".to_string()),
+						known_list,
+					),
+				));
 			}
 		}
 

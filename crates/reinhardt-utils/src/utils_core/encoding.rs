@@ -1,6 +1,8 @@
 //! Text encoding and decoding utilities
 
 use std::borrow::Cow;
+
+use crate::utils_core::html::escape;
 /// URL encode a string
 ///
 /// # Examples
@@ -176,11 +178,15 @@ pub fn truncate_chars(text: &str, max_length: usize) -> String {
 		return text.to_string();
 	}
 
+	// When max_length is too small to fit any characters plus "...",
+	// return just the ellipsis truncated to max_length.
+	let content_limit = max_length.saturating_sub(3);
+
 	let mut result = String::new();
 
 	for (char_count, ch) in text.chars().enumerate() {
-		if char_count >= max_length - 3 {
-			result.push_str("...");
+		if char_count >= content_limit {
+			result.push_str(&"..."[..max_length.min(3)]);
 			break;
 		}
 		result.push(ch);
@@ -250,7 +256,10 @@ pub fn wrap_text(text: &str, width: usize) -> Vec<String> {
 
 	lines
 }
-/// Line breaks to <br> tags
+/// Line breaks to `<br>` tags
+///
+/// Input text is HTML-escaped before injecting HTML structure tags
+/// to prevent XSS attacks.
 ///
 /// # Examples
 ///
@@ -261,8 +270,14 @@ pub fn wrap_text(text: &str, width: usize) -> Vec<String> {
 ///     linebreaks("Line 1\nLine 2\n\nLine 3"),
 ///     "Line 1<br>\nLine 2<br>\n</p>\n<p><br>\nLine 3"
 /// );
+/// assert_eq!(
+///     linebreaks("<script>alert('xss')</script>"),
+///     "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;"
+/// );
 /// ```
 pub fn linebreaks(text: &str) -> String {
+	// Fixes #798: Escape HTML entities before injecting HTML structure tags
+	let text = escape(text);
 	text.lines()
 		.map(|line| {
 			if line.trim().is_empty() {
@@ -276,6 +291,9 @@ pub fn linebreaks(text: &str) -> String {
 }
 /// Line breaks to `<br>` tags without wrapping in `<p>`
 ///
+/// Input text is HTML-escaped before injecting `<br>` tags
+/// to prevent XSS attacks.
+///
 /// # Examples
 ///
 /// ```
@@ -283,9 +301,14 @@ pub fn linebreaks(text: &str) -> String {
 ///
 /// assert_eq!(linebreaksbr("Line 1\nLine 2"), "Line 1<br>\nLine 2");
 /// assert_eq!(linebreaksbr("Single"), "Single");
+/// assert_eq!(
+///     linebreaksbr("<b>bold</b>"),
+///     "&lt;b&gt;bold&lt;/b&gt;"
+/// );
 /// ```
 pub fn linebreaksbr(text: &str) -> String {
-	text.replace('\n', "<br>\n")
+	// Fixes #798: Escape HTML entities before injecting <br> tags
+	escape(text).replace('\n', "<br>\n")
 }
 
 #[cfg(test)]
@@ -360,6 +383,18 @@ mod tests {
 	}
 
 	#[test]
+	fn test_linebreaksbr_escapes_html() {
+		assert_eq!(
+			linebreaksbr("<script>alert('xss')</script>"),
+			"&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;"
+		);
+		assert_eq!(
+			linebreaksbr("<b>bold</b>\nnormal"),
+			"&lt;b&gt;bold&lt;/b&gt;<br>\nnormal"
+		);
+	}
+
+	#[test]
 	fn test_force_str() {
 		let bytes = b"Hello, World!";
 		assert_eq!(force_str(bytes), "Hello, World!");
@@ -387,6 +422,20 @@ mod tests {
 	#[test]
 	fn test_linebreaks_single_line() {
 		assert_eq!(linebreaks("Single line"), "Single line");
+	}
+
+	#[test]
+	fn test_linebreaks_escapes_html() {
+		assert_eq!(
+			linebreaks("<script>alert('xss')</script>"),
+			"&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;"
+		);
+		assert_eq!(
+			linebreaks("<b>bold</b>\nnormal"),
+			"&lt;b&gt;bold&lt;/b&gt;<br>\nnormal"
+		);
+		// Verify HTML entities in input are double-escaped
+		assert_eq!(linebreaks("5 < 10 & 10 > 5"), "5 &lt; 10 &amp; 10 &gt; 5");
 	}
 
 	#[test]
@@ -472,6 +521,35 @@ mod tests {
 	fn test_force_str_empty() {
 		assert_eq!(force_str(b""), "");
 	}
+
+	#[test]
+	fn test_truncate_chars_zero_max_length_does_not_panic() {
+		// Fixes #764: saturating_sub prevents underflow when max_length < 3
+		assert_eq!(truncate_chars("Hello", 0), "");
+	}
+
+	#[test]
+	fn test_truncate_chars_max_length_one() {
+		// Fixes #764: max_length=1 should produce "."
+		assert_eq!(truncate_chars("Hello", 1), ".");
+	}
+
+	#[test]
+	fn test_truncate_chars_max_length_two() {
+		// Fixes #764: max_length=2 should produce ".."
+		assert_eq!(truncate_chars("Hello", 2), "..");
+	}
+
+	#[test]
+	fn test_truncate_chars_max_length_three() {
+		// Fixes #764: max_length=3 should produce "..."
+		assert_eq!(truncate_chars("Hello", 3), "...");
+	}
+
+	#[test]
+	fn test_truncate_chars_max_length_four() {
+		assert_eq!(truncate_chars("Hello World", 4), "H...");
+	}
 }
 
 #[cfg(test)]
@@ -490,7 +568,7 @@ mod proptests {
 		}
 
 		#[test]
-		fn prop_truncate_chars_length(s in "\\PC*", n in 5usize..100) {
+		fn prop_truncate_chars_length(s in "\\PC*", n in 0usize..100) {
 			let truncated = truncate_chars(&s, n);
 			assert!(truncated.chars().count() <= n);
 		}

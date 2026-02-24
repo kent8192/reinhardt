@@ -32,6 +32,7 @@ use super::backends::SessionBackend;
 use super::session::Session;
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
+use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 /// CSRF token data stored in session
@@ -200,7 +201,10 @@ impl CsrfSessionManager {
 		let stored_token = self.get_token(session)?;
 
 		match stored_token {
-			Some(token) => Ok(token == submitted_token),
+			Some(token) => {
+				// Use constant-time comparison to prevent timing attacks
+				Ok(token.as_bytes().ct_eq(submitted_token.as_bytes()).into())
+			}
 			None => Ok(false),
 		}
 	}

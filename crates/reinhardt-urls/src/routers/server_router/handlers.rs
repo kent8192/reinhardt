@@ -18,7 +18,7 @@ impl Handler for ViewSetHandler {
 		// Dependencies are injected once at ViewSet creation time using `ViewSet::inject(&ctx)`,
 		// and the `dispatch()` method uses those pre-injected dependencies.
 		// This pattern avoids runtime DI context lookups and provides better performance.
-		self.viewset.dispatch(req, self.action).await
+		self.viewset.dispatch(req, self.action.clone()).await
 	}
 }
 

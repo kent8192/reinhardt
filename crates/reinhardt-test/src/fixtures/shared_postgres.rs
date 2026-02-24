@@ -23,9 +23,10 @@
 //! }
 //! ```
 //!
-//! ## Environment Variables
+//! ## Configuration
 //!
-//! - `TESTCONTAINERS_RYUK_DISABLED`: Set to "true" to prevent container cleanup
+//! Ryuk sidecar is disabled via `.testcontainers.properties` (`ryuk.disabled=true`)
+//! to allow container reuse across test processes.
 
 use fs2::FileExt;
 use sqlx::{Executor, PgPool};
@@ -150,13 +151,9 @@ fn write_url_to_file(url: &str) -> std::io::Result<()> {
 
 /// Start a new PostgreSQL container
 async fn start_postgres_container() -> (ContainerAsync<GenericImage>, String) {
-	// Disable Ryuk to allow container reuse across processes
-	// Note: Containers will need manual cleanup or Docker's built-in cleanup mechanisms
-	// SAFETY: This is called during test initialization before any threads are spawned
-	// that might read this environment variable. The variable controls TestContainers behavior.
-	unsafe {
-		std::env::set_var("TESTCONTAINERS_RYUK_DISABLED", "true");
-	}
+	// Ryuk is disabled via .testcontainers.properties file (ryuk.disabled=true)
+	// to allow container reuse across processes. This avoids the thread-safety
+	// violation of calling std::env::set_var in an async context. (Fixes #873)
 
 	let container = GenericImage::new("postgres", "16-alpine")
 		.with_exposed_port(5432.tcp())

@@ -163,12 +163,24 @@ impl Default for WebSocketMetrics {
 
 impl MetricsCollector for WebSocketMetrics {
 	fn record_connection(&self) {
-		self.active_connections.fetch_add(1, Ordering::Relaxed);
+		// Use saturating_add for the gauge to prevent overflow in extreme cases
+		let _ = self
+			.active_connections
+			.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+				Some(v.saturating_add(1))
+			});
+		// Wrapping is acceptable for monotonic counters (overflow after ~584,942 years at 1M/s)
 		self.total_connections.fetch_add(1, Ordering::Relaxed);
 	}
 
 	fn record_disconnection(&self) {
-		self.active_connections.fetch_sub(1, Ordering::Relaxed);
+		// Use saturating_sub to prevent underflow when disconnection events
+		// exceed connection events (e.g., due to duplicate disconnect callbacks)
+		let _ = self
+			.active_connections
+			.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+				Some(v.saturating_sub(1))
+			});
 		self.disconnections.fetch_add(1, Ordering::Relaxed);
 	}
 
@@ -181,11 +193,20 @@ impl MetricsCollector for WebSocketMetrics {
 	}
 
 	fn record_bytes_sent(&self, bytes: u64) {
-		self.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
+		// Use saturating_add for byte counters to prevent wrapping on high-throughput servers
+		let _ = self
+			.bytes_sent
+			.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+				Some(v.saturating_add(bytes))
+			});
 	}
 
 	fn record_bytes_received(&self, bytes: u64) {
-		self.bytes_received.fetch_add(bytes, Ordering::Relaxed);
+		let _ = self
+			.bytes_received
+			.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+				Some(v.saturating_add(bytes))
+			});
 	}
 
 	fn record_error(&self) {
@@ -499,6 +520,34 @@ mod tests {
 		assert_eq!(snapshot.active_connections, 0);
 		assert_eq!(snapshot.messages_sent, 0);
 		assert_eq!(snapshot.errors, 0);
+	}
+
+	#[test]
+	fn test_disconnection_does_not_underflow() {
+		// Arrange - simulate more disconnections than connections
+		let metrics = WebSocketMetrics::new();
+
+		// Act - disconnect without prior connection
+		metrics.record_disconnection();
+
+		// Assert - should saturate at 0, not wrap to u64::MAX
+		let snapshot = metrics.snapshot();
+		assert_eq!(snapshot.active_connections, 0);
+		assert_eq!(snapshot.disconnections, 1);
+	}
+
+	#[test]
+	fn test_bytes_sent_saturates_instead_of_wrapping() {
+		// Arrange
+		let metrics = WebSocketMetrics::new();
+
+		// Act - set bytes_sent near max and add more
+		metrics.bytes_sent.store(u64::MAX - 10, Ordering::Relaxed);
+		metrics.record_bytes_sent(100);
+
+		// Assert - should saturate at u64::MAX
+		let snapshot = metrics.snapshot();
+		assert_eq!(snapshot.bytes_sent, u64::MAX);
 	}
 
 	#[test]

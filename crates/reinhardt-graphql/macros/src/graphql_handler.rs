@@ -194,8 +194,8 @@ pub(crate) fn expand_graphql_handler(input: ItemFn) -> Result<TokenStream> {
 	let context_pat = &context_param.pat;
 
 	// Get dynamic crate paths
-	let di_crate = get_reinhardt_di_crate();
-	let graphql_crate = get_reinhardt_graphql_crate();
+	let di_crate = get_reinhardt_di_crate()?;
+	let graphql_crate = get_reinhardt_graphql_crate()?;
 
 	// Generate DI extraction code
 	let di_context_extraction = quote! {

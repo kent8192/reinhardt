@@ -21,12 +21,12 @@
 
 use reinhardt_db::backends::DatabaseConnection;
 use reinhardt_db::migrations::{
+	ColumnDefinition, FieldType, ForeignKeyAction, Migration, Operation,
 	executor::DatabaseMigrationExecutor,
 	operations::{
 		AlterTableOptions, Constraint, DeferrableOption, IndexType, InterleaveSpec, MySqlAlgorithm,
 		MySqlLock, PartitionDef, PartitionOptions,
 	},
-	ColumnDefinition, FieldType, ForeignKeyAction, Migration, Operation,
 };
 use reinhardt_test::fixtures::{mysql_container, postgres_container};
 use rstest::*;
@@ -546,7 +546,9 @@ async fn test_postgres_gin_index(
 			index_type: Some(IndexType::Gin),
 			where_clause: None,
 			concurrently: false,
-			expressions: Some(vec![leak_str("to_tsvector('english', content)").to_string()]),
+			expressions: Some(vec![
+				leak_str("to_tsvector('english', content)").to_string(),
+			]),
 			mysql_options: None,
 			operator_class: None,
 		}],

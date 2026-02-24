@@ -1215,7 +1215,7 @@ The server functions pattern demonstrated in this tutorial provides:
 - Need seamless client-server integration
 - Want reactive UI with server-side data
 
-**Example:** See [examples/examples-twitter](../../../../examples/local/examples-twitter) for a complete implementation.
+**Example:** See [examples/examples-twitter](../../../../examples/examples-twitter) for a complete implementation.
 
 ### Recommendation
 

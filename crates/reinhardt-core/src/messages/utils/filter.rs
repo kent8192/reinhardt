@@ -2,8 +2,8 @@
 //!
 //! This module provides functions for filtering messages by level.
 
-use super::super::levels::Level;
-use super::super::message::Message;
+use crate::messages::levels::Level;
+use crate::messages::message::Message;
 
 /// Filter messages by minimum level
 ///

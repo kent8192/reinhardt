@@ -44,7 +44,7 @@ impl Extensions {
 	/// assert!(extensions.contains::<String>());
 	/// ```
 	pub fn insert<T: Send + Sync + 'static>(&self, value: T) {
-		let mut map = self.map.lock().unwrap();
+		let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
 		map.insert(TypeId::of::<T>(), Box::new(value));
 	}
 	/// Get a cloned value from extensions
@@ -64,7 +64,7 @@ impl Extensions {
 	where
 		T: Clone + Send + Sync + 'static,
 	{
-		let map = self.map.lock().unwrap();
+		let map = self.map.lock().unwrap_or_else(|e| e.into_inner());
 		map.get(&TypeId::of::<T>())
 			.and_then(|boxed| boxed.downcast_ref::<T>())
 			.cloned()
@@ -83,7 +83,7 @@ impl Extensions {
 	/// assert!(!extensions.contains::<u32>());
 	/// ```
 	pub fn contains<T: Send + Sync + 'static>(&self) -> bool {
-		let map = self.map.lock().unwrap();
+		let map = self.map.lock().unwrap_or_else(|e| e.into_inner());
 		map.contains_key(&TypeId::of::<T>())
 	}
 	/// Remove a value from extensions and return it
@@ -104,7 +104,7 @@ impl Extensions {
 	where
 		T: Clone + Send + Sync + 'static,
 	{
-		let mut map = self.map.lock().unwrap();
+		let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
 		map.remove(&TypeId::of::<T>())
 			.and_then(|boxed| boxed.downcast_ref::<T>().cloned())
 	}
@@ -128,7 +128,7 @@ impl Extensions {
 	/// assert!(!extensions.contains::<String>());
 	/// ```
 	pub fn clear(&self) {
-		let mut map = self.map.lock().unwrap();
+		let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
 		map.clear();
 	}
 }

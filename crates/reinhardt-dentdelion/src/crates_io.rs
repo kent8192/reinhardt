@@ -81,17 +81,37 @@ pub struct CratesIoClient {
 }
 
 impl CratesIoClient {
-	/// Create a new crates.io client.
+	/// Default User-Agent string for crates.io API requests.
+	///
+	/// Uses the project repository URL as contact information per
+	/// crates.io API policy requirements.
+	const DEFAULT_USER_AGENT: &str =
+		"reinhardt-dentdelion (https://github.com/kent8192/reinhardt-web)";
+
+	/// Create a new crates.io client with the default User-Agent.
 	///
 	/// # Errors
 	///
 	/// Returns an error if the client cannot be initialized.
 	pub fn new() -> PluginResult<Self> {
-		let client = AsyncClient::new(
-			"reinhardt-dentdelion (contact@example.com)",
-			std::time::Duration::from_millis(1000),
-		)
-		.map_err(|e| PluginError::Network(format!("Failed to create crates.io client: {e}")))?;
+		Self::with_user_agent(Self::DEFAULT_USER_AGENT)
+	}
+
+	/// Create a new crates.io client with a custom User-Agent string.
+	///
+	/// The User-Agent must include contact information (email or URL) per
+	/// [crates.io API policy](https://crates.io/policies).
+	///
+	/// # Arguments
+	///
+	/// * `user_agent` - User-Agent string including contact information
+	///
+	/// # Errors
+	///
+	/// Returns an error if the client cannot be initialized.
+	pub fn with_user_agent(user_agent: &str) -> PluginResult<Self> {
+		let client = AsyncClient::new(user_agent, std::time::Duration::from_millis(1000))
+			.map_err(|e| PluginError::Network(format!("Failed to create crates.io client: {e}")))?;
 
 		Ok(Self { client })
 	}

@@ -6,21 +6,34 @@
 //! # Capabilities
 //!
 //! Some host functions require specific capabilities:
-//! - HTTP functions: Require network access permission
-//! - Database functions: Require database access permission
+//! - HTTP functions: Require `NetworkAccess` capability
+//! - Database functions: Require `DatabaseAccess` capability
+//! - SSR rendering: Requires `Verified` or `Trusted` trust level
+//! - JavaScript execution: Requires `Trusted` trust level only
+//!
+//! The capability-based access control pattern ensures plugins can only access
+//! resources they have been explicitly granted. Capabilities are preserved
+//! across `Clone` operations so that WASM store creation does not lose state.
 
-use crate::capability::Capability;
+use crate::capability::{Capability, TrustLevel};
 use crate::error::PluginResult;
 
 use parking_lot::RwLock;
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use super::events::{Event, EventBus, SharedEventBus};
 use super::models::{ModelRegistry, ModelSchema, SharedModelRegistry, SqlMigration};
 use super::ssr::{RenderOptions, RenderResult, SharedSsrProxy, SsrError, SsrProxy};
 use super::types::{ConfigValue, WitHttpResponse, WitPluginError};
+
+/// Shared default HTTP client reused across all `HostState` instances.
+///
+/// Creating a `reqwest::Client` per `HostState` wastes connection pools and
+/// may lead to file descriptor exhaustion under high load. This shared client
+/// ensures connection pools are reused across all plugins.
+static DEFAULT_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 
 #[cfg(feature = "ts")]
 use super::ts_runtime::SharedTsRuntime;
@@ -33,12 +46,136 @@ use wasmtime::component::ResourceTable;
 #[cfg(feature = "wasm")]
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
+/// Validate a URL to prevent Server-Side Request Forgery (SSRF) attacks.
+///
+/// Performs the following checks:
+/// 1. Only allows `http://` and `https://` schemes
+/// 2. Resolves the hostname to an IP address
+/// 3. Rejects requests to private, loopback, and link-local IP addresses
+fn validate_url_for_ssrf(url: &str) -> Result<(), WitPluginError> {
+	use std::net::ToSocketAddrs;
+
+	// Parse the URL
+	let parsed = url::Url::parse(url)
+		.map_err(|e| WitPluginError::with_details(400, "Invalid URL", e.to_string()))?;
+
+	// Validate scheme: only http and https are allowed
+	match parsed.scheme() {
+		"http" | "https" => {}
+		scheme => {
+			return Err(WitPluginError::new(
+				403,
+				format!(
+					"URL scheme '{}' is not allowed; only http and https are permitted",
+					scheme
+				),
+			));
+		}
+	}
+
+	// Extract host
+	let host = parsed
+		.host_str()
+		.ok_or_else(|| WitPluginError::new(400, "URL must contain a host"))?;
+
+	// Determine port (default to 80 for http, 443 for https)
+	let port = parsed.port_or_known_default().unwrap_or(80);
+
+	// Resolve hostname to IP addresses for DNS rebinding protection
+	let socket_addrs: Vec<_> = format!("{}:{}", host, port)
+		.to_socket_addrs()
+		.map_err(|e| {
+			WitPluginError::with_details(400, "Failed to resolve hostname", e.to_string())
+		})?
+		.collect();
+
+	if socket_addrs.is_empty() {
+		return Err(WitPluginError::new(
+			400,
+			"Hostname resolved to no addresses",
+		));
+	}
+
+	// Check each resolved IP address against blocklists
+	for addr in &socket_addrs {
+		if is_private_ip(&addr.ip()) {
+			return Err(WitPluginError::new(
+				403,
+				format!(
+					"Requests to private/internal IP address {} are not allowed",
+					addr.ip()
+				),
+			));
+		}
+	}
+
+	Ok(())
+}
+
+/// Check if an IP address is private, loopback, or link-local.
+fn is_private_ip(ip: &std::net::IpAddr) -> bool {
+	use std::net::IpAddr;
+
+	match ip {
+		IpAddr::V4(ipv4) => {
+			// 127.0.0.0/8 - Loopback
+			ipv4.is_loopback()
+			// 10.0.0.0/8 - Private
+			|| ipv4.octets()[0] == 10
+			// 172.16.0.0/12 - Private
+			|| (ipv4.octets()[0] == 172 && (ipv4.octets()[1] & 0xf0) == 16)
+			// 192.168.0.0/16 - Private
+			|| (ipv4.octets()[0] == 192 && ipv4.octets()[1] == 168)
+			// 169.254.0.0/16 - Link-local
+			|| (ipv4.octets()[0] == 169 && ipv4.octets()[1] == 254)
+			// 0.0.0.0/8 - Current network
+			|| ipv4.octets()[0] == 0
+		}
+		IpAddr::V6(ipv6) => {
+			// ::1 - IPv6 loopback
+			ipv6.is_loopback()
+			// fc00::/7 - IPv6 unique local address (private)
+			|| (ipv6.segments()[0] & 0xfe00) == 0xfc00
+			// fe80::/10 - IPv6 link-local
+			|| (ipv6.segments()[0] & 0xffc0) == 0xfe80
+			// :: - IPv6 unspecified
+			|| ipv6.is_unspecified()
+			// ::ffff:0:0/96 - IPv4-mapped IPv6 (check the embedded IPv4)
+			|| is_ipv4_mapped_private(ipv6)
+		}
+	}
+}
+
+/// Check if an IPv4-mapped IPv6 address contains a private IPv4 address.
+fn is_ipv4_mapped_private(ipv6: &std::net::Ipv6Addr) -> bool {
+	// Check for ::ffff:x.x.x.x pattern (IPv4-mapped IPv6)
+	let segments = ipv6.segments();
+	if segments[0] == 0
+		&& segments[1] == 0
+		&& segments[2] == 0
+		&& segments[3] == 0
+		&& segments[4] == 0
+		&& segments[5] == 0xffff
+	{
+		let ipv4 = std::net::Ipv4Addr::new(
+			(segments[6] >> 8) as u8,
+			(segments[6] & 0xff) as u8,
+			(segments[7] >> 8) as u8,
+			(segments[7] & 0xff) as u8,
+		);
+		return is_private_ip(&std::net::IpAddr::V4(ipv4));
+	}
+	false
+}
+
 /// Host state that is passed to WASM instances.
 ///
 /// This struct contains all the state that plugins can access through host functions.
 pub struct HostState {
 	/// Plugin name (for logging context)
 	pub plugin_name: String,
+	/// Trust level for this plugin (determines security restrictions)
+	trust_level: TrustLevel,
 	/// Configuration values accessible to the plugin
 	config: RwLock<HashMap<String, ConfigValue>>,
 	/// Registered services (name -> MessagePack-serialized data)
@@ -107,11 +244,12 @@ impl HostState {
 	) -> Self {
 		Self {
 			plugin_name: plugin_name.into(),
+			trust_level: TrustLevel::default(),
 			config: RwLock::new(HashMap::new()),
 			services: RwLock::new(HashMap::new()),
 			typed_services: RwLock::new(HashMap::new()),
 			capabilities: HashSet::new(),
-			http_client: Some(reqwest::Client::new()),
+			http_client: Some(DEFAULT_HTTP_CLIENT.clone()),
 			db_connection: None,
 			event_bus,
 			model_registry,
@@ -223,6 +361,10 @@ impl HostState {
 	}
 
 	/// Perform an HTTP GET request.
+	///
+	/// Validates the URL against SSRF attacks before making the request.
+	/// Only `http://` and `https://` schemes are allowed, and requests to
+	/// private/loopback IP addresses are rejected.
 	pub async fn http_get(
 		&self,
 		url: &str,
@@ -231,6 +373,8 @@ impl HostState {
 		if !self.has_http_capability() {
 			return Err(WitPluginError::new(403, "HTTP access not permitted"));
 		}
+
+		validate_url_for_ssrf(url)?;
 
 		let client = self
 			.http_client
@@ -266,6 +410,10 @@ impl HostState {
 	}
 
 	/// Perform an HTTP POST request.
+	///
+	/// Validates the URL against SSRF attacks before making the request.
+	/// Only `http://` and `https://` schemes are allowed, and requests to
+	/// private/loopback IP addresses are rejected.
 	pub async fn http_post(
 		&self,
 		url: &str,
@@ -275,6 +423,8 @@ impl HostState {
 		if !self.has_http_capability() {
 			return Err(WitPluginError::new(403, "HTTP access not permitted"));
 		}
+
+		validate_url_for_ssrf(url)?;
 
 		let client = self
 			.http_client
@@ -325,6 +475,12 @@ impl HostState {
 			return Err(WitPluginError::new(403, "Database access not permitted"));
 		}
 
+		// Validate SQL statement to prevent SQL injection
+		use super::sql_validator::validate_sql;
+		validate_sql(sql).map_err(|e| {
+			WitPluginError::with_details(403, "SQL validation failed", e.to_string())
+		})?;
+
 		let conn = self
 			.db_connection
 			.as_ref()
@@ -369,6 +525,12 @@ impl HostState {
 			return Err(WitPluginError::new(403, "Database access not permitted"));
 		}
 
+		// Validate SQL statement to prevent SQL injection
+		use super::sql_validator::validate_sql;
+		validate_sql(sql).map_err(|e| {
+			WitPluginError::with_details(403, "SQL validation failed", e.to_string())
+		})?;
+
 		let conn = self
 			.db_connection
 			.as_ref()
@@ -397,6 +559,13 @@ impl HostState {
 			501,
 			"Database execution not available (wasm feature not enabled)",
 		))
+	}
+
+	// ===== Trust Level API =====
+
+	/// Get the trust level for this plugin.
+	pub fn trust_level(&self) -> TrustLevel {
+		self.trust_level
 	}
 
 	// ===== Capability Management =====
@@ -448,7 +617,14 @@ impl HostState {
 	/// # Returns
 	///
 	/// A unique subscription ID for polling and unsubscribing.
-	pub fn subscribe_events(&self, pattern: &str) -> u64 {
+	///
+	/// # Errors
+	///
+	/// Returns an error if the subscription limit has been reached.
+	pub fn subscribe_events(
+		&self,
+		pattern: &str,
+	) -> Result<u64, crate::wasm::events::EventBusError> {
 		self.event_bus.subscribe(pattern, &self.plugin_name)
 	}
 
@@ -540,13 +716,24 @@ impl HostState {
 	///
 	/// # Returns
 	///
-	/// Rendered HTML and optional extracted assets, or an error if SSR is not available.
+	/// Rendered HTML and optional extracted assets, or an error if SSR is not available
+	/// or the trust level is insufficient.
+	///
+	/// # Security
+	///
+	/// Only plugins with `Verified` or `Trusted` trust level can render components.
 	pub async fn render_react(
 		&self,
 		component_path: &str,
 		props: &[u8],
 		options: RenderOptions,
 	) -> Result<RenderResult, SsrError> {
+		if !self.trust_level.allows_ssr() {
+			return Err(SsrError::PermissionDenied(format!(
+				"SSR rendering requires at least Verified trust level, but plugin '{}' has {:?} trust level",
+				self.plugin_name, self.trust_level
+			)));
+		}
 		self.ssr_proxy
 			.render_react(component_path, props, options)
 			.await
@@ -560,13 +747,90 @@ impl HostState {
 	///
 	/// # Returns
 	///
-	/// The result as UTF-8 bytes, or an error if SSR is not available.
+	/// The result as UTF-8 bytes, or an error if the trust level is insufficient
+	/// or SSR is not available.
 	///
 	/// # Security
 	///
-	/// This function should only be available to plugins with elevated trust levels.
+	/// Only plugins with `Trusted` trust level can execute arbitrary JavaScript.
+	/// This prevents untrusted or verified plugins from accessing the JavaScript
+	/// runtime directly.
 	pub fn eval_js(&self, code: &str) -> Result<Vec<u8>, SsrError> {
+		if !self.trust_level.allows_js_execution() {
+			return Err(SsrError::PermissionDenied(format!(
+				"JavaScript execution requires Trusted trust level, but plugin '{}' has {:?} trust level",
+				self.plugin_name, self.trust_level
+			)));
+		}
 		self.ssr_proxy.eval_js(code).map(|s| s.into_bytes())
+	}
+
+	/// Render a component with trust level enforcement.
+	///
+	/// # Arguments
+	///
+	/// * `component_code` - JavaScript code defining the component
+	/// * `props_json` - JSON string representing component props
+	/// * `options` - Rendering options
+	///
+	/// # Security
+	///
+	/// Only plugins with `Verified` or `Trusted` trust level can render components.
+	/// `Untrusted` plugins cannot use SSR as it involves JavaScript execution.
+	/// Component code is also validated for dangerous patterns.
+	pub fn render_component(
+		&self,
+		component_code: &str,
+		props_json: &str,
+		options: RenderOptions,
+	) -> Result<RenderResult, SsrError> {
+		if !self.trust_level.allows_ssr() {
+			return Err(SsrError::PermissionDenied(format!(
+				"SSR rendering requires at least Verified trust level, but plugin '{}' has {:?} trust level",
+				self.plugin_name, self.trust_level
+			)));
+		}
+		self.ssr_proxy
+			.render_component(component_code, props_json, options)
+	}
+}
+
+// Clone implementation for HostState (needed for store creation).
+// Preserves all state (config, services, capabilities, shared resources).
+// WASI context and resource table are created fresh since each store
+// requires its own isolated WASI state.
+impl Clone for HostState {
+	fn clone(&self) -> Self {
+		let mut builder = HostStateBuilder::new(&self.plugin_name)
+			.config_all(self.config.read().clone())
+			.capabilities(self.capabilities.clone())
+			.event_bus(self.event_bus.clone())
+			.model_registry(self.model_registry.clone())
+			.ssr_proxy(self.ssr_proxy.clone());
+
+		if let Some(ref client) = self.http_client {
+			builder = builder.http_client(client.clone());
+		} else {
+			builder = builder.no_http_client();
+		}
+
+		#[cfg(feature = "wasm")]
+		if let Some(ref conn) = self.db_connection {
+			builder = builder.db_connection(conn.clone());
+		}
+
+		let state = builder.build();
+
+		// Clone serialized services
+		let services = self.services.read().clone();
+		for (name, data) in services {
+			let _ = state.register_service(&name, data);
+		}
+
+		// Clone typed services (Arc-based shared references)
+		*state.typed_services.write() = self.typed_services.read().clone();
+
+		state
 	}
 }
 
@@ -574,6 +838,7 @@ impl std::fmt::Debug for HostState {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		f.debug_struct("HostState")
 			.field("plugin_name", &self.plugin_name)
+			.field("trust_level", &self.trust_level)
 			.field("config_count", &self.config.read().len())
 			.field("service_count", &self.services.read().len())
 			.field("capabilities", &self.capabilities)
@@ -584,6 +849,7 @@ impl std::fmt::Debug for HostState {
 /// Builder for `HostState`.
 pub struct HostStateBuilder {
 	plugin_name: String,
+	trust_level: TrustLevel,
 	config: HashMap<String, ConfigValue>,
 	capabilities: HashSet<Capability>,
 	http_client: Option<reqwest::Client>,
@@ -598,17 +864,28 @@ pub struct HostStateBuilder {
 
 impl HostStateBuilder {
 	/// Create a new builder.
+	///
+	/// Uses the shared default HTTP client to avoid creating redundant connection pools.
 	pub fn new(plugin_name: impl Into<String>) -> Self {
 		Self {
 			plugin_name: plugin_name.into(),
+			trust_level: TrustLevel::default(),
 			config: HashMap::new(),
 			capabilities: HashSet::new(),
-			http_client: Some(reqwest::Client::new()),
+			http_client: Some(DEFAULT_HTTP_CLIENT.clone()),
 			db_connection: None,
 			event_bus: None,
 			model_registry: None,
 			ssr_proxy: None,
 		}
+	}
+
+	/// Set the trust level for this plugin.
+	///
+	/// Default is `TrustLevel::Untrusted`.
+	pub fn trust_level(mut self, trust_level: TrustLevel) -> Self {
+		self.trust_level = trust_level;
+		self
 	}
 
 	/// Add a configuration value.
@@ -711,6 +988,7 @@ impl HostStateBuilder {
 	pub fn build(self) -> HostState {
 		HostState {
 			plugin_name: self.plugin_name,
+			trust_level: self.trust_level,
 			config: RwLock::new(self.config),
 			services: RwLock::new(HashMap::new()),
 			typed_services: RwLock::new(HashMap::new()),
@@ -953,8 +1231,13 @@ impl crate::wasm::runtime::reinhardt::dentdelion::events::Host for HostState {
 		&mut self,
 		pattern: String,
 	) -> Result<Result<u64, GeneratedPluginError>, anyhow::Error> {
-		let subscription_id = self.subscribe_events(&pattern);
-		Ok(Ok(subscription_id))
+		match self.subscribe_events(&pattern) {
+			Ok(subscription_id) => Ok(Ok(subscription_id)),
+			Err(e) => Ok(Err(to_generated_error(WitPluginError::new(
+				429,
+				e.to_string(),
+			)))),
+		}
 	}
 
 	async fn unsubscribe(
@@ -1139,6 +1422,8 @@ fn ssr_error_to_plugin_error(err: SsrError) -> GeneratedPluginError {
 		SsrError::PropsSerialization(_) => 400,
 		SsrError::RenderFailed(_) => 500,
 		SsrError::EvalFailed(_) => 500,
+		SsrError::PermissionDenied(_) => 403,
+		SsrError::DangerousPattern(_) => 403,
 	};
 	GeneratedPluginError {
 		code,
@@ -1169,11 +1454,7 @@ impl crate::wasm::runtime::reinhardt::dentdelion::ssr::Host for HostState {
 		&mut self,
 		code: String,
 	) -> Result<Result<Vec<u8>, GeneratedPluginError>, anyhow::Error> {
-		let result = self
-			.ssr_proxy
-			.eval_js(&code)
-			.map(|s| s.into_bytes())
-			.map_err(ssr_error_to_plugin_error);
+		let result = Self::eval_js(self, &code).map_err(ssr_error_to_plugin_error);
 		Ok(result)
 	}
 
@@ -1256,7 +1537,7 @@ mod tests {
 			.build();
 
 		// Consumer subscribes to user events
-		let sub_id = consumer.subscribe_events("user.*");
+		let sub_id = consumer.subscribe_events("user.*").unwrap();
 
 		// Producer emits an event
 		let delivered = producer.emit_event("user.created", vec![1, 2, 3]);
@@ -1276,7 +1557,7 @@ mod tests {
 		let plugin_a = HostState::new("plugin-a");
 		let plugin_b = HostState::new("plugin-b");
 
-		let sub_id = plugin_b.subscribe_events("*");
+		let sub_id = plugin_b.subscribe_events("*").unwrap();
 		plugin_a.emit_event("test.event", vec![]);
 
 		// plugin_b won't see the event because they have different event buses
@@ -1288,7 +1569,7 @@ mod tests {
 	fn test_host_state_event_unsubscribe() {
 		let state = HostState::new("test-plugin");
 
-		let sub_id = state.subscribe_events("*");
+		let sub_id = state.subscribe_events("*").unwrap();
 		assert!(state.unsubscribe_events(sub_id));
 		assert!(!state.unsubscribe_events(sub_id)); // Already unsubscribed
 	}
@@ -1439,7 +1720,10 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_host_state_render_react_not_available() {
-		let state = HostState::new("test-plugin");
+		// Verified plugin without SSR runtime should return NotAvailable
+		let state = HostStateBuilder::new("test-plugin")
+			.trust_level(TrustLevel::Verified)
+			.build();
 
 		let result = state
 			.render_react("test.jsx", &[], RenderOptions::default())
@@ -1451,7 +1735,10 @@ mod tests {
 
 	#[test]
 	fn test_host_state_eval_js_not_available() {
-		let state = HostState::new("test-plugin");
+		// Trusted plugin without SSR runtime should return NotAvailable
+		let state = HostStateBuilder::new("test-plugin")
+			.trust_level(TrustLevel::Trusted)
+			.build();
 
 		let result = state.eval_js("console.log('test')");
 
@@ -1470,5 +1757,588 @@ mod tests {
 		// Verify the proxy is shared
 		assert!(Arc::ptr_eq(state.ssr_proxy(), &ssr_proxy));
 		assert!(state.is_ssr_available());
+	}
+
+	// =========================================================================
+	// Trust Level Enforcement Tests (Issue #675 + #677)
+	// =========================================================================
+
+	#[test]
+	fn test_host_state_default_trust_level() {
+		// Arrange
+		let state = HostState::new("test-plugin");
+
+		// Act & Assert
+		assert_eq!(state.trust_level(), TrustLevel::Untrusted);
+	}
+
+	#[test]
+	fn test_host_state_builder_trust_level() {
+		// Arrange & Act
+		let state = HostStateBuilder::new("test-plugin")
+			.trust_level(TrustLevel::Trusted)
+			.build();
+
+		// Assert
+		assert_eq!(state.trust_level(), TrustLevel::Trusted);
+	}
+
+	#[test]
+	fn test_eval_js_denied_for_untrusted() {
+		// Arrange
+		let state = HostStateBuilder::new("untrusted-plugin")
+			.trust_level(TrustLevel::Untrusted)
+			.build();
+
+		// Act
+		let result = state.eval_js("1 + 1");
+
+		// Assert
+		assert!(matches!(result, Err(SsrError::PermissionDenied(_))));
+	}
+
+	#[test]
+	fn test_eval_js_denied_for_verified() {
+		// Arrange
+		let state = HostStateBuilder::new("verified-plugin")
+			.trust_level(TrustLevel::Verified)
+			.build();
+
+		// Act
+		let result = state.eval_js("1 + 1");
+
+		// Assert
+		assert!(matches!(result, Err(SsrError::PermissionDenied(_))));
+	}
+
+	#[test]
+	fn test_eval_js_allowed_for_trusted_returns_not_available() {
+		// Arrange
+		let state = HostStateBuilder::new("trusted-plugin")
+			.trust_level(TrustLevel::Trusted)
+			.build();
+
+		// Act
+		let result = state.eval_js("1 + 1");
+
+		// Assert - passes trust check, fails with NotAvailable (no runtime)
+		assert!(matches!(result, Err(SsrError::NotAvailable)));
+	}
+
+	#[test]
+	fn test_render_component_denied_for_untrusted() {
+		// Arrange
+		let state = HostStateBuilder::new("untrusted-plugin")
+			.trust_level(TrustLevel::Untrusted)
+			.build();
+
+		// Act
+		let result = state.render_component(
+			"function Component() { return h('div', null, 'test'); }",
+			"{}",
+			RenderOptions::default(),
+		);
+
+		// Assert
+		assert!(matches!(result, Err(SsrError::PermissionDenied(_))));
+	}
+
+	#[test]
+	fn test_render_component_allowed_for_verified() {
+		// Arrange
+		let state = HostStateBuilder::new("verified-plugin")
+			.trust_level(TrustLevel::Verified)
+			.build();
+
+		// Act
+		let result = state.render_component(
+			"function Component() { return h('div', null, 'test'); }",
+			"{}",
+			RenderOptions::default(),
+		);
+
+		// Assert - passes trust check, fails with NotAvailable (no runtime)
+		assert!(matches!(result, Err(SsrError::NotAvailable)));
+	}
+
+	#[test]
+	fn test_render_component_allowed_for_trusted() {
+		// Arrange
+		let state = HostStateBuilder::new("trusted-plugin")
+			.trust_level(TrustLevel::Trusted)
+			.build();
+
+		// Act
+		let result = state.render_component(
+			"function Component() { return h('div', null, 'test'); }",
+			"{}",
+			RenderOptions::default(),
+		);
+
+		// Assert - passes trust check, fails with NotAvailable (no runtime)
+		assert!(matches!(result, Err(SsrError::NotAvailable)));
+	}
+
+	#[tokio::test]
+	async fn test_render_react_denied_for_untrusted() {
+		// Arrange
+		let state = HostStateBuilder::new("untrusted-plugin")
+			.trust_level(TrustLevel::Untrusted)
+			.build();
+
+		// Act
+		let result = state
+			.render_react("test.jsx", &[], RenderOptions::default())
+			.await;
+
+		// Assert
+		assert!(matches!(result, Err(SsrError::PermissionDenied(_))));
+	}
+
+	#[test]
+	fn test_render_component_rejects_dangerous_code_at_host_level() {
+		// Arrange - Verified plugin with SSR available
+		let ssr_proxy = Arc::new(SsrProxy::with_availability(true));
+		let state = HostStateBuilder::new("verified-plugin")
+			.trust_level(TrustLevel::Verified)
+			.ssr_proxy(ssr_proxy)
+			.build();
+
+		// Act - attempt to render with dangerous code
+		let result = state.render_component(
+			"var fs = require('fs'); function Component() { return h('div'); }",
+			"{}",
+			RenderOptions::default(),
+		);
+
+		// Assert - dangerous pattern detected by SsrProxy
+		assert!(matches!(result, Err(SsrError::DangerousPattern(_))));
+	}
+
+	// ===== SSRF Validation Tests =====
+
+	#[test]
+	fn test_ssrf_rejects_file_scheme() {
+		// Arrange
+		let url = "file:///etc/passwd";
+
+		// Act
+		let result = validate_url_for_ssrf(url);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert_eq!(err.code, 403);
+	}
+
+	#[test]
+	fn test_ssrf_rejects_gopher_scheme() {
+		// Arrange
+		let url = "gopher://evil.com/";
+
+		// Act
+		let result = validate_url_for_ssrf(url);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert_eq!(err.code, 403);
+	}
+
+	#[test]
+	fn test_ssrf_rejects_ftp_scheme() {
+		// Arrange
+		let url = "ftp://internal-server/data";
+
+		// Act
+		let result = validate_url_for_ssrf(url);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert_eq!(err.code, 403);
+	}
+
+	#[test]
+	fn test_ssrf_rejects_loopback_ipv4() {
+		// Arrange
+		let url = "http://127.0.0.1/admin";
+
+		// Act
+		let result = validate_url_for_ssrf(url);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert_eq!(err.code, 403);
+	}
+
+	#[test]
+	fn test_ssrf_rejects_loopback_ipv4_other() {
+		// Arrange
+		let url = "http://127.0.0.2:8080/internal";
+
+		// Act
+		let result = validate_url_for_ssrf(url);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert_eq!(err.code, 403);
+	}
+
+	#[test]
+	fn test_ssrf_rejects_private_10_network() {
+		// Arrange
+		let url = "http://10.0.0.1/";
+
+		// Act
+		let result = validate_url_for_ssrf(url);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert_eq!(err.code, 403);
+	}
+
+	#[test]
+	fn test_ssrf_rejects_private_172_network() {
+		// Arrange
+		let url = "http://172.16.0.1/";
+
+		// Act
+		let result = validate_url_for_ssrf(url);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert_eq!(err.code, 403);
+	}
+
+	#[test]
+	fn test_ssrf_rejects_private_192_168_network() {
+		// Arrange
+		let url = "http://192.168.1.1/";
+
+		// Act
+		let result = validate_url_for_ssrf(url);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert_eq!(err.code, 403);
+	}
+
+	#[test]
+	fn test_ssrf_rejects_link_local() {
+		// Arrange
+		let url = "http://169.254.169.254/latest/meta-data/";
+
+		// Act
+		let result = validate_url_for_ssrf(url);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert_eq!(err.code, 403);
+	}
+
+	#[test]
+	fn test_ssrf_rejects_ipv6_loopback() {
+		// Arrange
+		let url = "http://[::1]/admin";
+
+		// Act
+		let result = validate_url_for_ssrf(url);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert_eq!(err.code, 403);
+	}
+
+	#[test]
+	fn test_ssrf_rejects_localhost() {
+		// Arrange
+		let url = "http://localhost/admin";
+
+		// Act
+		let result = validate_url_for_ssrf(url);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert_eq!(err.code, 403);
+	}
+
+	#[test]
+	fn test_ssrf_rejects_zero_ip() {
+		// Arrange
+		let url = "http://0.0.0.0/";
+
+		// Act
+		let result = validate_url_for_ssrf(url);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert_eq!(err.code, 403);
+	}
+
+	#[test]
+	fn test_ssrf_rejects_invalid_url() {
+		// Arrange
+		let url = "not-a-valid-url";
+
+		// Act
+		let result = validate_url_for_ssrf(url);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert_eq!(err.code, 400);
+	}
+
+	#[test]
+	fn test_ssrf_allows_public_http() {
+		// Arrange
+		let url = "http://example.com/api/data";
+
+		// Act
+		let result = validate_url_for_ssrf(url);
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[test]
+	fn test_ssrf_allows_public_https() {
+		// Arrange
+		let url = "https://api.github.com/repos";
+
+		// Act
+		let result = validate_url_for_ssrf(url);
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[test]
+	fn test_is_private_ip_loopback_v4() {
+		// Arrange
+		let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1));
+
+		// Act & Assert
+		assert!(is_private_ip(&ip));
+	}
+
+	#[test]
+	fn test_is_private_ip_private_10() {
+		// Arrange
+		let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 1, 2, 3));
+
+		// Act & Assert
+		assert!(is_private_ip(&ip));
+	}
+
+	#[test]
+	fn test_is_private_ip_private_172() {
+		// Arrange
+		let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(172, 16, 0, 1));
+
+		// Act & Assert
+		assert!(is_private_ip(&ip));
+	}
+
+	#[test]
+	fn test_is_private_ip_private_192_168() {
+		// Arrange
+		let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 0, 1));
+
+		// Act & Assert
+		assert!(is_private_ip(&ip));
+	}
+
+	#[test]
+	fn test_is_private_ip_link_local() {
+		// Arrange
+		let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(169, 254, 1, 1));
+
+		// Act & Assert
+		assert!(is_private_ip(&ip));
+	}
+
+	#[test]
+	fn test_is_private_ip_public() {
+		// Arrange
+		let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(8, 8, 8, 8));
+
+		// Act & Assert
+		assert!(!is_private_ip(&ip));
+	}
+
+	#[test]
+	fn test_is_private_ip_ipv6_loopback() {
+		// Arrange
+		let ip = std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST);
+
+		// Act & Assert
+		assert!(is_private_ip(&ip));
+	}
+
+	#[test]
+	fn test_is_private_ip_ipv6_unique_local() {
+		// Arrange - fc00::/7
+		let ip = std::net::IpAddr::V6(std::net::Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 1));
+
+		// Act & Assert
+		assert!(is_private_ip(&ip));
+	}
+
+	#[test]
+	fn test_is_private_ip_ipv6_link_local() {
+		// Arrange - fe80::/10
+		let ip = std::net::IpAddr::V6(std::net::Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1));
+
+		// Act & Assert
+		assert!(is_private_ip(&ip));
+	}
+
+	#[test]
+	fn test_is_private_ip_172_not_in_range() {
+		// Arrange - 172.32.0.1 is NOT in 172.16.0.0/12 range
+		let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(172, 32, 0, 1));
+
+		// Act & Assert
+		assert!(!is_private_ip(&ip));
+	}
+
+	// ==========================================================================
+	// Clone Preservation Tests (#682)
+	// ==========================================================================
+
+	#[rstest::rstest]
+	fn test_clone_preserves_config() {
+		// Arrange
+		let state = HostState::new("test-plugin");
+		state
+			.set_config(
+				"db_url",
+				ConfigValue::StringVal("postgres://localhost".to_string()),
+			)
+			.unwrap();
+		state
+			.set_config("max_retries", ConfigValue::IntVal(3))
+			.unwrap();
+
+		// Act
+		let cloned = state.clone();
+
+		// Assert
+		assert_eq!(cloned.plugin_name, "test-plugin");
+		assert_eq!(
+			cloned.get_config("db_url"),
+			Some(ConfigValue::StringVal("postgres://localhost".to_string()))
+		);
+		assert_eq!(
+			cloned.get_config("max_retries"),
+			Some(ConfigValue::IntVal(3))
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_clone_preserves_capabilities() {
+		// Arrange
+		use crate::capability::PluginCapability;
+
+		let mut state = HostState::new("test-plugin");
+		let network_cap = Capability::Core(PluginCapability::NetworkAccess);
+		let db_cap = Capability::Core(PluginCapability::DatabaseAccess);
+		state.add_capability(network_cap.clone());
+		state.add_capability(db_cap.clone());
+
+		// Act
+		let cloned = state.clone();
+
+		// Assert
+		assert!(cloned.has_capability(&network_cap));
+		assert!(cloned.has_capability(&db_cap));
+		assert_eq!(cloned.capabilities().len(), 2);
+	}
+
+	#[rstest::rstest]
+	fn test_clone_preserves_services() {
+		// Arrange
+		let state = HostState::new("test-plugin");
+		let service_data = vec![10, 20, 30, 40];
+		state
+			.register_service("cache-service", service_data.clone())
+			.unwrap();
+
+		// Act
+		let cloned = state.clone();
+
+		// Assert
+		assert_eq!(cloned.get_service("cache-service"), Some(service_data));
+	}
+
+	#[rstest::rstest]
+	fn test_clone_shares_event_bus() {
+		// Arrange
+		let event_bus = Arc::new(EventBus::new());
+		let state = HostStateBuilder::new("test-plugin")
+			.event_bus(event_bus.clone())
+			.build();
+
+		// Act
+		let cloned = state.clone();
+
+		// Assert - shared event bus should be the same Arc
+		assert!(Arc::ptr_eq(state.event_bus(), cloned.event_bus()));
+	}
+
+	#[rstest::rstest]
+	fn test_clone_shares_model_registry() {
+		// Arrange
+		let model_registry = Arc::new(ModelRegistry::new());
+		let state = HostStateBuilder::new("test-plugin")
+			.model_registry(model_registry.clone())
+			.build();
+
+		// Act
+		let cloned = state.clone();
+
+		// Assert - shared model registry should be the same Arc
+		assert!(Arc::ptr_eq(state.model_registry(), cloned.model_registry()));
+	}
+
+	#[rstest::rstest]
+	fn test_clone_shares_ssr_proxy() {
+		// Arrange
+		let ssr_proxy = Arc::new(SsrProxy::with_availability(true));
+		let state = HostStateBuilder::new("test-plugin")
+			.ssr_proxy(ssr_proxy.clone())
+			.build();
+
+		// Act
+		let cloned = state.clone();
+
+		// Assert
+		assert!(Arc::ptr_eq(state.ssr_proxy(), cloned.ssr_proxy()));
+		assert!(cloned.is_ssr_available());
+	}
+
+	#[rstest::rstest]
+	fn test_clone_preserves_no_http_client() {
+		// Arrange
+		let state = HostStateBuilder::new("test-plugin")
+			.no_http_client()
+			.build();
+
+		// Act
+		let cloned = state.clone();
+
+		// Assert - http_client should remain None
+		assert!(!cloned.has_http_capability());
 	}
 }

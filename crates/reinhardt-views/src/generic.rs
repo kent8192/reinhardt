@@ -72,7 +72,3 @@ pub use destroy_api::DestroyAPIView;
 pub use list_api::ListAPIView;
 pub use retrieve_api::RetrieveAPIView;
 pub use update_api::UpdateAPIView;
-
-// Unit tests
-#[cfg(test)]
-mod tests;

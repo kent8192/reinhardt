@@ -11,9 +11,9 @@
 //! use reinhardt_shortcuts::{render_json, render_html, render_text};
 //! use serde_json::json;
 //!
-//! // Render JSON response
+//! // Render JSON response (returns Result to ensure atomic output on error)
 //! let data = json!({"status": "success"});
-//! let response = render_json(&data);
+//! let response = render_json(&data).unwrap();
 //!
 //! // Render HTML response
 //! let response = render_html("<h1>Hello</h1>");
@@ -26,12 +26,15 @@
 //!
 //! ```
 //! use reinhardt_shortcuts::{redirect, redirect_permanent};
+//! use std::collections::HashSet;
 //!
-//! // Temporary redirect (302)
-//! let response = redirect("/users/");
+//! let allowed_hosts: HashSet<String> = HashSet::new();
+//!
+//! // Temporary redirect (302) - validates URL against allowed hosts
+//! let response = redirect("/users/", &allowed_hosts).unwrap();
 //!
 //! // Permanent redirect (301)
-//! let response = redirect_permanent("/new-location/");
+//! let response = redirect_permanent("/new-location/", &allowed_hosts).unwrap();
 //! ```
 //!
 //! ### Database Shortcuts
@@ -63,17 +66,29 @@
 //! let html = renderer.render_page(&my_component);
 //! ```
 //!
+//! ### Security Headers
+//!
+//! ```
+//! use reinhardt_shortcuts::{render_html, security_headers};
+//!
+//! // Apply common security headers to any response
+//! let response = render_html("<h1>Hello</h1>");
+//! let response = security_headers(response);
+//! ```
+//!
 //! ## Implemented Features
 //!
 //! - ✅ JSON/HTML/Text response rendering
 //! - ✅ Redirect shortcuts (302, 301)
 //! - ✅ URL utilities
 //! - ✅ Database shortcuts (get_object_or_404, get_list_or_404)
+//! - ✅ Security headers helper (X-Content-Type-Options, X-Frame-Options, Referrer-Policy, X-XSS-Protection)
 
 pub mod context;
 pub mod get_or_404;
 pub mod redirect;
 pub mod render;
+pub mod security_headers;
 pub mod url;
 
 // ORM integration (feature-gated)
@@ -81,12 +96,16 @@ pub mod url;
 pub mod orm;
 
 // Re-export core functions
-pub use context::TemplateContext;
+pub use context::{ContextError, TemplateContext};
 pub use get_or_404::{
 	GetError, exists_or_404_response, get_list_or_404_response, get_or_404_response,
 };
 pub use redirect::{redirect, redirect_permanent, redirect_permanent_to, redirect_to};
-pub use render::{render_html, render_json, render_json_pretty, render_text};
+pub use reinhardt_core::security::redirect::RedirectValidationError;
+pub use render::{
+	escape_html, render_html, render_html_safe, render_json, render_json_pretty, render_text,
+};
+pub use security_headers::security_headers;
 pub use url::{Url, UrlError};
 
 // Re-export ORM functions (feature-gated)

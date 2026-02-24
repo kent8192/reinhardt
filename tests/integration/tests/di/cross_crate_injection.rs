@@ -11,8 +11,8 @@ use hyper::Method;
 use reinhardt_di::{DiResult, Injectable, InjectionContext, SingletonScope};
 use reinhardt_http::Request;
 use rstest::*;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 // Service that depends on HTTP Request
 #[derive(Clone)]

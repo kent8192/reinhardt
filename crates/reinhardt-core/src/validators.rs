@@ -94,25 +94,28 @@ pub use url::UrlValidator;
 
 /// Re-export commonly used types
 pub mod prelude {
-	pub use super::color::*;
-	pub use super::composition::*;
-	pub use super::conditional::*;
-	pub use super::credit_card::*;
-	pub use super::custom_regex::*;
-	pub use super::email::*;
-	pub use super::errors::*;
-	pub use super::existence::*;
-	pub use super::file_type::*;
-	pub use super::iban::*;
-	pub use super::identifier::*;
-	pub use super::image::*;
-	pub use super::ip_address::*;
-	pub use super::numeric::*;
-	pub use super::phone_number::*;
-	pub use super::postal_code::*;
-	pub use super::string::*;
-	pub use super::uniqueness::*;
-	pub use super::url::*;
+	pub use super::color::{ColorFormat, ColorValidator};
+	pub use super::composition::{AndValidator, OrValidator};
+	pub use super::conditional::ConditionalValidator;
+	pub use super::credit_card::{CardType, CreditCardValidator};
+	pub use super::custom_regex::CustomRegexValidator;
+	pub use super::email::EmailValidator;
+	pub use super::errors::{ValidationError, ValidationResult};
+	pub use super::existence::ExistsValidator;
+	pub use super::file_type::{FileSizeValidator, FileTypeValidator};
+	pub use super::iban::IBANValidator;
+	pub use super::identifier::{ConstraintName, FieldName, IdentifierValidationError, TableName};
+	pub use super::image::ImageDimensionValidator;
+	pub use super::ip_address::IPAddressValidator;
+	pub use super::numeric::{MaxValueValidator, MinValueValidator, RangeValidator};
+	pub use super::phone_number::PhoneNumberValidator;
+	pub use super::postal_code::{Country, PostalCodeValidator};
+	pub use super::string::{
+		DateTimeValidator, DateValidator, JSONValidator, MaxLengthValidator, MinLengthValidator,
+		RegexValidator, SlugValidator, TimeValidator, UUIDValidator,
+	};
+	pub use super::uniqueness::UniqueValidator;
+	pub use super::url::UrlValidator;
 }
 
 /// Trait for validators

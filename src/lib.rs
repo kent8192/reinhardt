@@ -42,13 +42,7 @@
 //! - `db-postgres` - PostgreSQL support
 //! - `db-mysql` - MySQL support
 //! - `db-sqlite` - SQLite support
-//! - `db-mongodb` - MongoDB support
 //! - `db-cockroachdb` - CockroachDB support (distributed transactions)
-//!
-//! #### Serialization ✅
-//! - `serialize-json` - JSON serialization (via `serde_json`)
-//! - `serialize-xml` - XML serialization (via `quick-xml` and `serde-xml-rs`)
-//! - `serialize-yaml` - YAML serialization (via `serde_yaml`)
 //!
 //! #### Middleware ✅
 //! - `middleware-cors` - CORS (Cross-Origin Resource Sharing) middleware
@@ -109,6 +103,7 @@ pub mod reinhardt_pages {
 
 #[doc(hidden)]
 pub mod reinhardt_types {
+	// Public API surface glob re-export requires allowing unused imports and unreachable pub
 	#[allow(unused_imports, unreachable_pub)]
 	pub use reinhardt_core::types::*;
 }
@@ -180,6 +175,8 @@ pub mod commands;
 pub mod conf;
 #[cfg(all(feature = "core", not(target_arch = "wasm32")))]
 pub mod core;
+#[cfg(all(feature = "dentdelion", not(target_arch = "wasm32")))]
+pub mod dentdelion;
 #[cfg(all(feature = "di", not(target_arch = "wasm32")))]
 pub mod di;
 #[cfg(all(feature = "forms", not(target_arch = "wasm32")))]

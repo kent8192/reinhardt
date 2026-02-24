@@ -21,9 +21,7 @@
 /// # Ok(())
 /// # }
 /// ```
-use super::super::super::schema::{
-	BaseDatabaseSchemaEditor, SchemaEditorError, SchemaEditorResult,
-};
+use crate::backends::schema::{BaseDatabaseSchemaEditor, SchemaEditorError, SchemaEditorResult};
 use sqlx::PgPool;
 use std::sync::Arc;
 
@@ -276,8 +274,8 @@ impl PostgreSQLSchemaEditor {
 
 #[async_trait::async_trait]
 impl BaseDatabaseSchemaEditor for PostgreSQLSchemaEditor {
-	fn database_type(&self) -> super::super::super::types::DatabaseType {
-		super::super::super::types::DatabaseType::Postgres
+	fn database_type(&self) -> crate::backends::types::DatabaseType {
+		crate::backends::types::DatabaseType::Postgres
 	}
 
 	async fn execute(&mut self, sql: &str) -> SchemaEditorResult<()> {

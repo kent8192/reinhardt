@@ -4,7 +4,7 @@
 
 use reinhardt_core::macros::model;
 use reinhardt_db::orm::manager::reinitialize_database;
-use reinhardt_test::fixtures::testcontainers::{postgres_container, ContainerAsync, GenericImage};
+use reinhardt_test::fixtures::testcontainers::{ContainerAsync, GenericImage, postgres_container};
 use rstest::*;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -497,7 +497,7 @@ async fn edge_safe_methods_csrf_handling() {
 #[tokio::test]
 async fn fuzz_random_csrf_token_validation() {
 	// Random CSRF token input (1000 times)
-	use rand::{distributions::Alphanumeric, thread_rng, Rng};
+	use rand::{Rng, distributions::Alphanumeric, thread_rng};
 
 	let valid_csrf_token = generate_csrf_token();
 

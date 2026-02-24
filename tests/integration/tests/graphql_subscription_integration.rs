@@ -3,7 +3,7 @@
 //! Tests GraphQL subscriptions (broadcaster/receiver model), multiple client subscriptions,
 //! event broadcasting, disconnection handling, and subscription lifecycle.
 
-use async_graphql::{Schema, ID};
+use async_graphql::{ID, Schema};
 use reinhardt_graphql::{EventBroadcaster, SubscriptionRoot, User, UserEvent, UserStorage};
 use std::time::Duration;
 use tokio::time::timeout;

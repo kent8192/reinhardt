@@ -47,14 +47,14 @@ use chrono::{DateTime, Duration, Utc};
 use reinhardt_core::macros::model;
 use reinhardt_db::DatabaseConnection;
 use reinhardt_db::orm::{DatabaseBackend, Filter, FilterOperator, FilterValue, Model};
-use sea_query::{
-	Alias, ColumnDef, Expr, ExprTrait, Index, MysqlQueryBuilder, OnConflict, PostgresQueryBuilder,
-	Query, SqliteQueryBuilder, Table,
+use reinhardt_query::prelude::{
+	Alias, ColumnDef, CreateIndexStatement, Expr, ExprTrait, IntoValue, MySqlQueryBuilder,
+	OnConflict, PostgresQueryBuilder, Query, QueryStatementBuilder, SqliteQueryBuilder,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use super::super::cleanup::{CleanupableBackend, SessionMetadata};
+use crate::sessions::cleanup::{CleanupableBackend, SessionMetadata};
 
 use super::cache::{SessionBackend, SessionError};
 
@@ -204,14 +204,14 @@ impl DatabaseSessionBackend {
 
 	/// Build SQL string for the current database backend
 	///
-	/// Uses sea-query to generate database-specific SQL syntax.
+	/// Uses reinhardt-query to generate database-specific SQL syntax.
 	fn build_sql<T>(&self, statement: T) -> String
 	where
-		T: sea_query::QueryStatementWriter,
+		T: QueryStatementBuilder,
 	{
 		match self.connection.backend() {
 			DatabaseBackend::Postgres => statement.to_string(PostgresQueryBuilder),
-			DatabaseBackend::MySql => statement.to_string(MysqlQueryBuilder),
+			DatabaseBackend::MySql => statement.to_string(MySqlQueryBuilder),
 			DatabaseBackend::Sqlite => statement.to_string(SqliteQueryBuilder),
 		}
 	}
@@ -219,20 +219,20 @@ impl DatabaseSessionBackend {
 	/// Build table SQL string for the current database backend
 	fn build_table_sql<T>(&self, statement: T) -> String
 	where
-		T: sea_query::SchemaStatementBuilder,
+		T: QueryStatementBuilder,
 	{
 		match self.connection.backend() {
 			DatabaseBackend::Postgres => statement.to_string(PostgresQueryBuilder),
-			DatabaseBackend::MySql => statement.to_string(MysqlQueryBuilder),
+			DatabaseBackend::MySql => statement.to_string(MySqlQueryBuilder),
 			DatabaseBackend::Sqlite => statement.to_string(SqliteQueryBuilder),
 		}
 	}
 
 	/// Build index SQL string for the current database backend
-	fn build_index_sql(&self, statement: &sea_query::IndexCreateStatement) -> String {
+	fn build_index_sql(&self, statement: &CreateIndexStatement) -> String {
 		match self.connection.backend() {
 			DatabaseBackend::Postgres => statement.to_string(PostgresQueryBuilder),
-			DatabaseBackend::MySql => statement.to_string(MysqlQueryBuilder),
+			DatabaseBackend::MySql => statement.to_string(MySqlQueryBuilder),
 			DatabaseBackend::Sqlite => statement.to_string(SqliteQueryBuilder),
 		}
 	}
@@ -261,7 +261,7 @@ impl DatabaseSessionBackend {
 	pub async fn cleanup_expired(&self) -> Result<u64, SessionError> {
 		let now_timestamp = Utc::now().timestamp_millis();
 
-		// Build DELETE query using sea-query
+		// Build DELETE query using reinhardt-query
 		let stmt = Query::delete()
 			.from_table(Alias::new("sessions"))
 			.and_where(Expr::col(Alias::new("expire_date")).lt(now_timestamp))
@@ -293,26 +293,30 @@ impl DatabaseSessionBackend {
 	/// # tokio::runtime::Runtime::new().unwrap().block_on(example());
 	/// ```
 	pub async fn create_table(&self) -> Result<(), SessionError> {
-		// Build CREATE TABLE statement using sea-query
-		let stmt = Table::create()
+		// Build CREATE TABLE statement using reinhardt-query
+		let stmt = Query::create_table()
 			.table(Alias::new("sessions"))
 			.if_not_exists()
 			.col(
 				ColumnDef::new(Alias::new("session_key"))
 					.string_len(255)
-					.not_null()
-					.primary_key(),
+					.not_null(true)
+					.primary_key(true),
 			)
-			.col(ColumnDef::new(Alias::new("session_data")).text().not_null())
+			.col(
+				ColumnDef::new(Alias::new("session_data"))
+					.text()
+					.not_null(true),
+			)
 			.col(
 				ColumnDef::new(Alias::new("expire_date"))
 					.big_integer()
-					.not_null(),
+					.not_null(true),
 			)
 			.col(
 				ColumnDef::new(Alias::new("created_at"))
 					.big_integer()
-					.not_null(),
+					.not_null(true),
 			)
 			.col(ColumnDef::new(Alias::new("last_accessed")).big_integer())
 			.to_owned();
@@ -322,8 +326,8 @@ impl DatabaseSessionBackend {
 			SessionError::CacheError(format!("Failed to create sessions table: {}", e))
 		})?;
 
-		// Create index for expire_date using sea-query
-		let index_stmt = Index::create()
+		// Create index for expire_date using reinhardt-query
+		let index_stmt = Query::create_index()
 			.if_not_exists()
 			.name("idx_sessions_expire_date")
 			.table(Alias::new("sessions"))
@@ -398,8 +402,8 @@ impl SessionBackend for DatabaseSessionBackend {
 		let now_timestamp = now.timestamp_millis();
 		let expire_timestamp = expire_date.timestamp_millis();
 
-		// Build UPSERT statement using sea-query
-		// sea-query handles database-specific UPSERT syntax (ON CONFLICT vs ON DUPLICATE KEY)
+		// Build UPSERT statement using reinhardt-query
+		// reinhardt-query handles database-specific UPSERT syntax (ON CONFLICT vs ON DUPLICATE KEY)
 		let stmt = Query::insert()
 			.into_table(Alias::new("sessions"))
 			.columns([
@@ -409,12 +413,12 @@ impl SessionBackend for DatabaseSessionBackend {
 				Alias::new("created_at"),
 				Alias::new("last_accessed"),
 			])
-			.values_panic([
-				session_key.into(),
-				session_data.into(),
-				expire_timestamp.into(),
-				now_timestamp.into(),
-				now_timestamp.into(),
+			.values_panic(vec![
+				session_key.into_value(),
+				session_data.into_value(),
+				expire_timestamp.into_value(),
+				now_timestamp.into_value(),
+				now_timestamp.into_value(),
 			])
 			.on_conflict(
 				OnConflict::column(Alias::new("session_key"))
@@ -437,7 +441,7 @@ impl SessionBackend for DatabaseSessionBackend {
 	}
 
 	async fn delete(&self, session_key: &str) -> Result<(), SessionError> {
-		// Build DELETE query using sea-query
+		// Build DELETE query using reinhardt-query
 		let stmt = Query::delete()
 			.from_table(Alias::new("sessions"))
 			.and_where(Expr::col(Alias::new("session_key")).eq(session_key))
@@ -561,11 +565,11 @@ impl CleanupableBackend for DatabaseSessionBackend {
 	}
 
 	async fn delete_keys_with_prefix(&self, prefix: &str) -> Result<usize, SessionError> {
-		// Build DELETE query with LIKE condition using sea-query
+		// Build DELETE query with LIKE condition using reinhardt-query
 		let pattern = format!("{}%", prefix);
 		let stmt = Query::delete()
 			.from_table(Alias::new("sessions"))
-			.and_where(Expr::col(Alias::new("session_key")).like(&pattern))
+			.and_where(Expr::col(Alias::new("session_key")).like(pattern.as_str()))
 			.to_owned();
 
 		let sql = self.build_sql(stmt);

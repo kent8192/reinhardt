@@ -93,6 +93,7 @@ impl PostgresSuiteResource {
 				match PgPoolOptions::new()
 					.max_connections(5)
 					.acquire_timeout(Duration::from_secs(3))
+					.test_before_acquire(false) // sqlx v0.7+ bug workaround (issue #2885, #3241)
 					.connect(&database_url)
 					.await
 				{
@@ -213,6 +214,7 @@ impl MySqlSuiteResource {
 				match MySqlPoolOptions::new()
 					.max_connections(5)
 					.acquire_timeout(Duration::from_secs(3))
+					.test_before_acquire(false) // sqlx v0.7+ bug workaround (issue #2885, #3241)
 					.connect(&database_url)
 					.await
 				{

@@ -1,0 +1,47 @@
+name: Release Dry-Run
+
+on:
+  workflow_call:
+
+jobs:
+  release-dry-run:
+    name: Release Dry-Run Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup branch tracking for release-plz
+        run: |
+          git checkout -B dry-run-check
+          git branch --set-upstream-to=origin/main dry-run-check
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Run release-plz release (dry-run)
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+          dry_run: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

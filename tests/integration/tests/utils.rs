@@ -19,6 +19,12 @@ mod utils_comprehensive_integration;
 #[path = "utils/cache_memcached_integration.rs"]
 mod cache_memcached_integration;
 
+#[path = "utils/cache_memcached_multiserver_integration.rs"]
+mod cache_memcached_multiserver_integration;
+
+#[path = "utils/cache_redis_backend_integration.rs"]
+mod cache_redis_backend_integration;
+
 #[path = "utils/cache_pubsub_integration.rs"]
 mod cache_pubsub_integration;
 

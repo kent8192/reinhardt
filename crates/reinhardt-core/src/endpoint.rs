@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 //! Endpoint metadata trait for HTTP Method Macros
 //!
 //! This module provides the `EndpointInfo` trait that HTTP Method Macros

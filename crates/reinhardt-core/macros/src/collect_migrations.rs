@@ -3,7 +3,7 @@
 //! This macro generates a `MigrationProvider` implementation and registers it
 //! with the global migration registry using `linkme::distributed_slice`.
 
-use crate::crate_paths::get_reinhardt_migrations_crate;
+use crate::crate_paths::{get_linkme_crate, get_reinhardt_migrations_crate};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
@@ -67,6 +67,8 @@ impl Parse for CollectMigrationsInput {
 /// Implementation of the `collect_migrations!` macro
 pub(crate) fn collect_migrations_impl(input: TokenStream) -> Result<TokenStream, syn::Error> {
 	let migrations_crate = get_reinhardt_migrations_crate();
+	// Fixes #793: Use dynamic crate path resolution instead of hardcoded ::linkme
+	let linkme = get_linkme_crate();
 
 	let input: CollectMigrationsInput = syn::parse2(input)?;
 
@@ -105,7 +107,7 @@ pub(crate) fn collect_migrations_impl(input: TokenStream) -> Result<TokenStream,
 
 		// Use linkme's distributed_slice attribute directly
 		// Note: The calling crate must have `linkme` in dependencies for this to work
-		#[::linkme::distributed_slice(#migrations_crate::registry::global::MIGRATION_PROVIDERS)]
+		#[#linkme::distributed_slice(#migrations_crate::registry::global::MIGRATION_PROVIDERS)]
 		static #static_name: #migrations_crate::registry::global::MigrationProvider =
 			<#struct_name as #migrations_crate::MigrationProvider>::migrations;
 	};

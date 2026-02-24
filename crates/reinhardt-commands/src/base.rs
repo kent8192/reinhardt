@@ -119,7 +119,11 @@ pub trait BaseCommand: Send + Sync {
 		// Run system checks if required and not skipped
 		if self.requires_system_checks() && !ctx.should_skip_checks() {
 			let registry = CheckRegistry::global();
-			let registry_guard = registry.lock().unwrap();
+			let registry_guard = registry.lock().unwrap_or_else(|poisoned| {
+				// Recover the inner value from a poisoned mutex.
+				// The check registry data is still usable even after a panic in another thread.
+				poisoned.into_inner()
+			});
 
 			let tags = self.check_tags();
 			let messages = registry_guard.run_checks(&tags);

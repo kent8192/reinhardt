@@ -1,9 +1,9 @@
 //! Query helper functions
 //!
-//! Common query patterns using SeaQuery for ORM operations.
+//! Common query patterns using reinhardt-query for ORM operations.
 
-use sea_query::{
-	Alias, Asterisk, DeleteStatement, Expr, ExprTrait, Func, InsertStatement, Query,
+use reinhardt_query::prelude::{
+	Alias, ColumnRef, DeleteStatement, Expr, ExprTrait, Func, InsertStatement, Query,
 	SelectStatement, UpdateStatement,
 };
 
@@ -14,7 +14,7 @@ use crate::orm::model::Model;
 /// # Example
 /// ```rust
 /// # use reinhardt_db::orm::Model;
-/// # use sea_query::{PostgresQueryBuilder, Query, Alias, Asterisk, Expr, ExprTrait, Func, SelectStatement};
+/// # use reinhardt_query::prelude::{QueryStatementBuilder, PostgresQueryBuilder, Query, Alias, ColumnRef, Expr, ExprTrait, Func, SelectStatement};
 /// # #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 /// # struct User { id: i64 }
 /// # #[derive(Clone)]
@@ -33,7 +33,7 @@ use crate::orm::model::Model;
 /// # }
 /// # fn build_count_query<M: Model>() -> SelectStatement {
 /// #     Query::select()
-/// #         .expr(Func::count(Expr::col(Asterisk)))
+/// #         .expr(Func::count(Expr::asterisk().into_simple_expr()))
 /// #         .from(Alias::new(M::table_name()))
 /// #         .to_owned()
 /// # }
@@ -44,7 +44,7 @@ use crate::orm::model::Model;
 /// ```
 pub fn build_count_query<M: Model>() -> SelectStatement {
 	Query::select()
-		.expr(Func::count(Expr::col(Asterisk)))
+		.expr(Func::count(Expr::asterisk().into_simple_expr()))
 		.from(Alias::new(M::table_name()))
 		.to_owned()
 }
@@ -54,7 +54,7 @@ pub fn build_count_query<M: Model>() -> SelectStatement {
 /// # Example
 /// ```rust
 /// # use reinhardt_db::orm::Model;
-/// # use sea_query::{PostgresQueryBuilder, Query, Alias, Asterisk, Expr, ExprTrait, SelectStatement};
+/// # use reinhardt_query::prelude::{QueryStatementBuilder, PostgresQueryBuilder, Query, Alias, ColumnRef, Expr, ExprTrait, SelectStatement};
 /// # #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 /// # struct User { id: i64 }
 /// # #[derive(Clone)]
@@ -73,11 +73,11 @@ pub fn build_count_query<M: Model>() -> SelectStatement {
 /// # }
 /// # fn build_get_query<M: Model, V>(pk: V) -> SelectStatement
 /// # where
-/// #     V: Into<sea_query::Value>,
+/// #     V: Into<reinhardt_query::value::Value>,
 /// # {
 /// #     Query::select()
 /// #         .from(Alias::new(M::table_name()))
-/// #         .columns([Asterisk])
+/// #         .column(ColumnRef::Asterisk)
 /// #         .and_where(Expr::col(Alias::new(M::primary_key_field())).eq(pk.into()))
 /// #         .limit(1)
 /// #         .to_owned()
@@ -90,11 +90,11 @@ pub fn build_count_query<M: Model>() -> SelectStatement {
 /// ```
 pub fn build_get_query<M: Model, V>(pk: V) -> SelectStatement
 where
-	V: Into<sea_query::Value>,
+	V: Into<reinhardt_query::value::Value>,
 {
 	Query::select()
 		.from(Alias::new(M::table_name()))
-		.columns([Asterisk])
+		.column(ColumnRef::Asterisk)
 		.and_where(Expr::col(Alias::new(M::primary_key_field())).eq(pk.into()))
 		.limit(1)
 		.to_owned()
@@ -105,7 +105,7 @@ where
 /// # Example
 /// ```rust
 /// # use reinhardt_db::orm::Model;
-/// # use sea_query::{PostgresQueryBuilder, Query, Alias, Expr, ExprTrait, DeleteStatement};
+/// # use reinhardt_query::prelude::{QueryStatementBuilder, PostgresQueryBuilder, Query, Alias, Expr, ExprTrait, DeleteStatement};
 /// # #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 /// # struct User { id: i64 }
 /// # #[derive(Clone)]
@@ -124,7 +124,7 @@ where
 /// # }
 /// # fn build_delete_query<M: Model, V>(pk: V) -> DeleteStatement
 /// # where
-/// #     V: Into<sea_query::Value>,
+/// #     V: Into<reinhardt_query::value::Value>,
 /// # {
 /// #     Query::delete()
 /// #         .from_table(Alias::new(M::table_name()))
@@ -139,7 +139,7 @@ where
 /// ```
 pub fn build_delete_query<M: Model, V>(pk: V) -> DeleteStatement
 where
-	V: Into<sea_query::Value>,
+	V: Into<reinhardt_query::value::Value>,
 {
 	Query::delete()
 		.from_table(Alias::new(M::table_name()))
@@ -152,7 +152,7 @@ where
 /// # Example
 /// ```rust
 /// # use reinhardt_db::orm::Model;
-/// # use sea_query::{PostgresQueryBuilder, Query, Alias, Expr, ExprTrait, InsertStatement};
+/// # use reinhardt_query::prelude::{QueryStatementBuilder, PostgresQueryBuilder, Query, Alias, Expr, ExprTrait, InsertStatement};
 /// # #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 /// # struct User { id: i64 }
 /// # #[derive(Clone)]
@@ -171,7 +171,7 @@ where
 /// # }
 /// # fn build_insert_query<M: Model>(
 /// #     columns: Vec<&str>,
-/// #     values: Vec<sea_query::Value>,
+/// #     values: Vec<reinhardt_query::value::Value>,
 /// # ) -> InsertStatement {
 /// #     let mut stmt = Query::insert()
 /// #         .into_table(Alias::new(M::table_name()))
@@ -195,7 +195,7 @@ where
 /// ```
 pub fn build_insert_query<M: Model>(
 	columns: Vec<&str>,
-	values: Vec<sea_query::Value>,
+	values: Vec<reinhardt_query::value::Value>,
 ) -> InsertStatement {
 	let mut stmt = Query::insert()
 		.into_table(Alias::new(M::table_name()))
@@ -220,7 +220,7 @@ pub fn build_insert_query<M: Model>(
 /// # Example
 /// ```rust
 /// # use reinhardt_db::orm::Model;
-/// # use sea_query::{PostgresQueryBuilder, Query, Alias, Expr, ExprTrait, UpdateStatement};
+/// # use reinhardt_query::prelude::{QueryStatementBuilder, PostgresQueryBuilder, Query, Alias, Expr, ExprTrait, UpdateStatement};
 /// # #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 /// # struct User { id: i64 }
 /// # #[derive(Clone)]
@@ -238,11 +238,11 @@ pub fn build_insert_query<M: Model>(
 /// #     fn primary_key_field() -> &'static str { "id" }
 /// # }
 /// # fn build_update_query<M: Model, V>(
-/// #     updates: Vec<(&str, sea_query::Value)>,
+/// #     updates: Vec<(&str, reinhardt_query::value::Value)>,
 /// #     pk: V,
 /// # ) -> UpdateStatement
 /// # where
-/// #     V: Into<sea_query::Value>,
+/// #     V: Into<reinhardt_query::value::Value>,
 /// # {
 /// #     let mut stmt = Query::update()
 /// #         .table(Alias::new(M::table_name()))
@@ -263,11 +263,11 @@ pub fn build_insert_query<M: Model>(
 /// assert_eq!(values.0.len(), 3); // 2 updates + 1 where condition
 /// ```
 pub fn build_update_query<M: Model, V>(
-	updates: Vec<(&str, sea_query::Value)>,
+	updates: Vec<(&str, reinhardt_query::value::Value)>,
 	pk: V,
 ) -> UpdateStatement
 where
-	V: Into<sea_query::Value>,
+	V: Into<reinhardt_query::value::Value>,
 {
 	let mut stmt = Query::update()
 		.table(Alias::new(M::table_name()))
@@ -285,7 +285,7 @@ where
 ///
 /// # Example
 /// ```rust
-/// # use sea_query::{PostgresQueryBuilder, Query, Alias, Expr, ExprTrait, SelectStatement};
+/// # use reinhardt_query::prelude::{QueryStatementBuilder, PostgresQueryBuilder, Query, Alias, Expr, ExprTrait, SelectStatement};
 /// # fn build_exists_query(inner: SelectStatement) -> SelectStatement {
 /// #     Query::select().expr(Expr::exists(inner)).to_owned()
 /// # }
@@ -307,7 +307,7 @@ pub fn build_exists_query(inner: SelectStatement) -> SelectStatement {
 /// # Example
 /// ```rust
 /// # use reinhardt_db::orm::Model;
-/// # use sea_query::{PostgresQueryBuilder, Query, Alias, Asterisk, Expr, ExprTrait, SelectStatement};
+/// # use reinhardt_query::prelude::{QueryStatementBuilder, PostgresQueryBuilder, Query, Alias, ColumnRef, Expr, ExprTrait, SelectStatement};
 /// # #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 /// # struct User { id: i64 }
 /// # #[derive(Clone)]
@@ -324,10 +324,10 @@ pub fn build_exists_query(inner: SelectStatement) -> SelectStatement {
 /// #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = value; }
 /// #     fn primary_key_field() -> &'static str { "id" }
 /// # }
-/// # fn build_in_query<M: Model>(column: &str, values: Vec<sea_query::Value>) -> SelectStatement {
+/// # fn build_in_query<M: Model>(column: &str, values: Vec<reinhardt_query::value::Value>) -> SelectStatement {
 /// #     Query::select()
 /// #         .from(Alias::new(M::table_name()))
-/// #         .columns([Asterisk])
+/// #         .column(ColumnRef::Asterisk)
 /// #         .and_where(Expr::col(Alias::new(column)).is_in(values))
 /// #         .to_owned()
 /// # }
@@ -338,10 +338,13 @@ pub fn build_exists_query(inner: SelectStatement) -> SelectStatement {
 /// assert!(sql.contains("IN"));
 /// assert_eq!(values.0.len(), 3);
 /// ```
-pub fn build_in_query<M: Model>(column: &str, values: Vec<sea_query::Value>) -> SelectStatement {
+pub fn build_in_query<M: Model>(
+	column: &str,
+	values: Vec<reinhardt_query::value::Value>,
+) -> SelectStatement {
 	Query::select()
 		.from(Alias::new(M::table_name()))
-		.columns([Asterisk])
+		.column(ColumnRef::Asterisk)
 		.and_where(Expr::col(Alias::new(column)).is_in(values))
 		.to_owned()
 }
@@ -349,7 +352,9 @@ pub fn build_in_query<M: Model>(column: &str, values: Vec<sea_query::Value>) -> 
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use sea_query::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
+	use reinhardt_query::prelude::{
+		MySqlQueryBuilder, PostgresQueryBuilder, QueryBuilder, SqliteQueryBuilder,
+	};
 	use serde::{Deserialize, Serialize};
 
 	// Mock Model for testing
@@ -394,7 +399,7 @@ mod tests {
 	#[test]
 	fn test_build_count_query() {
 		let stmt = build_count_query::<TestModel>();
-		let sql = stmt.to_string(PostgresQueryBuilder);
+		let (sql, _) = PostgresQueryBuilder::new().build_select(&stmt);
 		assert!(sql.contains("COUNT"));
 		assert!(sql.contains("test_table"));
 	}
@@ -402,19 +407,19 @@ mod tests {
 	#[test]
 	fn test_build_get_query() {
 		let stmt = build_get_query::<TestModel, _>(123);
-		let (sql, values) = stmt.build(PostgresQueryBuilder);
+		let (sql, values) = PostgresQueryBuilder::new().build_select(&stmt);
 		assert!(sql.contains("SELECT"));
 		assert!(sql.contains("test_table"));
 		assert!(sql.contains("id"));
 		assert!(sql.contains("LIMIT"));
-		// SeaQuery binds LIMIT value as a parameter, so we have 2 values: pk + limit
+		// reinhardt-query binds LIMIT value as a parameter, so we have 2 values: pk + limit
 		assert_eq!(values.0.len(), 2);
 	}
 
 	#[test]
 	fn test_build_delete_query() {
 		let stmt = build_delete_query::<TestModel, _>(456);
-		let (sql, values) = stmt.build(PostgresQueryBuilder);
+		let (sql, values) = PostgresQueryBuilder::new().build_delete(&stmt);
 		assert!(sql.contains("DELETE"));
 		assert!(sql.contains("test_table"));
 		assert!(sql.contains("id"));
@@ -427,7 +432,7 @@ mod tests {
 			vec!["name", "email"],
 			vec!["Alice".into(), "alice@example.com".into()],
 		);
-		let (sql, values) = stmt.build(PostgresQueryBuilder);
+		let (sql, values) = PostgresQueryBuilder::new().build_insert(&stmt);
 		assert!(sql.contains("INSERT"));
 		assert!(sql.contains("test_table"));
 		assert!(sql.contains("name"));
@@ -441,7 +446,7 @@ mod tests {
 			vec![("name", "Bob".into()), ("age", 30.into())],
 			789,
 		);
-		let (sql, values) = stmt.build(PostgresQueryBuilder);
+		let (sql, values) = PostgresQueryBuilder::new().build_update(&stmt);
 		assert!(sql.contains("UPDATE"));
 		assert!(sql.contains("test_table"));
 		assert!(sql.contains("name"));
@@ -453,7 +458,7 @@ mod tests {
 	#[test]
 	fn test_build_in_query() {
 		let stmt = build_in_query::<TestModel>("status", vec!["active".into(), "pending".into()]);
-		let (sql, values) = stmt.build(PostgresQueryBuilder);
+		let (sql, values) = PostgresQueryBuilder::new().build_select(&stmt);
 		assert!(sql.contains("SELECT"));
 		assert!(sql.contains("test_table"));
 		assert!(sql.contains("IN"));
@@ -465,15 +470,15 @@ mod tests {
 		let stmt = build_count_query::<TestModel>();
 
 		// PostgreSQL uses double quotes
-		let pg_sql = stmt.to_string(PostgresQueryBuilder);
+		let (pg_sql, _) = PostgresQueryBuilder::new().build_select(&stmt);
 		assert!(pg_sql.contains("\"test_table\""));
 
 		// MySQL uses backticks
-		let mysql_sql = stmt.to_string(MysqlQueryBuilder);
+		let (mysql_sql, _) = MySqlQueryBuilder::new().build_select(&stmt);
 		assert!(mysql_sql.contains("`test_table`"));
 
 		// SQLite uses double quotes
-		let sqlite_sql = stmt.to_string(SqliteQueryBuilder);
+		let (sqlite_sql, _) = SqliteQueryBuilder::new().build_select(&stmt);
 		assert!(sqlite_sql.contains("\"test_table\""));
 	}
 }

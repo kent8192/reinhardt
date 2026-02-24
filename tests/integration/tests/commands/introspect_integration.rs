@@ -2,7 +2,7 @@
 //!
 //! Tests for the introspect command that generates ORM models from existing database.
 
-use super::fixtures::{postgres_with_schema, PostgresWithSchema};
+use super::fixtures::{PostgresWithSchema, postgres_with_schema};
 use reinhardt_commands::CommandContext;
 use rstest::*;
 use tempfile::TempDir;

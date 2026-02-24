@@ -2,7 +2,7 @@
 //!
 //! Tests for CheckCommand, RunServerCommand, ShellCommand, and ShowUrlsCommand.
 
-use super::fixtures::{router_fixture, RouterFixture};
+use super::fixtures::{RouterFixture, router_fixture};
 use reinhardt_commands::{
 	BaseCommand, CheckCommand, CommandContext, RunServerCommand, ShellCommand,
 };

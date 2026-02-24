@@ -384,7 +384,7 @@ TOML files, use `EnvSource`:
 
 ```rust
 use reinhardt_conf::settings::prelude::*;
-use reinhardt_settings::Settings;
+use reinhardt_conf::settings::Settings;
 
 pub fn get_settings() -> Settings {
     SettingsBuilder::new()
@@ -407,7 +407,7 @@ pub fn get_settings() -> Settings {
 
 ```rust
 use reinhardt_conf::settings::prelude::*;
-use reinhardt_settings::Settings;
+use reinhardt_conf::settings::Settings;
 use std::env;
 use std::path::PathBuf;
 
@@ -510,7 +510,7 @@ export REINHARDT_DATABASE_PASSWORD="actual-db-password"
 #### Option 2: Secret Management Systems
 
 ```rust
-// TODO: Once the secrets module of reinhardt-settings is implemented,
+// TODO: Once the secrets module of reinhardt-conf is implemented,
 // add implementation examples for loading secrets from
 // AWS Secrets Manager, HashiCorp Vault, Azure Key Vault, etc.
 ```
@@ -605,7 +605,7 @@ pub fn get_settings() -> Settings {
 ### Implementing Custom Sources
 
 ```rust
-use reinhardt_settings::sources::{ConfigSource, SourceError};
+use reinhardt_conf::settings::sources::{ConfigSource, SourceError};
 use indexmap::IndexMap;
 use serde_json::Value;
 
@@ -916,9 +916,9 @@ Reinhardt's settings system is:
 
 - [Getting Started Guide](GETTING_STARTED.md) - Basic usage of Reinhardt
 - [Example Projects](../examples/) - Real project examples
-- [reinhardt-settings API Documentation](https://docs.rs/reinhardt-settings) -
+- [reinhardt-conf API Documentation](https://docs.rs/reinhardt-conf) -
   Detailed API specification
 
 ---
 
-**Questions or feedback:** https://github.com/kent8192/reinhardt-rs/issues
+**Questions or feedback:** https://github.com/kent8192/reinhardt-web/issues

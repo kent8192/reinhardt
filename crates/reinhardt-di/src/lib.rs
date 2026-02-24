@@ -205,7 +205,9 @@ pub mod scope;
 use thiserror::Error;
 
 pub use context::{InjectionContext, InjectionContextBuilder, RequestContext};
-pub use cycle_detection::{CycleError, ResolutionGuard, begin_resolution, register_type_name};
+pub use cycle_detection::{
+	CycleError, ResolutionGuard, begin_resolution, register_type_name, with_cycle_detection_scope,
+};
 pub use function_handle::FunctionHandle;
 pub use override_registry::OverrideRegistry;
 

@@ -6,8 +6,8 @@
 //! - Database-specific types (PostgreSQL, MySQL, SQLite)
 //! - Custom type overrides
 
-use super::super::fields::FieldType;
-use super::super::introspection::ColumnInfo;
+use crate::migrations::fields::FieldType;
+use crate::migrations::introspection::ColumnInfo;
 use proc_macro2::TokenStream;
 use quote::quote;
 use std::collections::HashMap;

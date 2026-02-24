@@ -41,6 +41,7 @@ impl MailpitAddress {
 }
 
 #[derive(Debug, serde::Deserialize)]
+// Struct fields used for JSON deserialization
 #[allow(dead_code)]
 struct MessagesResponse {
 	total: usize,
@@ -105,7 +106,8 @@ async fn test_smtp_basic_send(#[future] mailpit_container: MailpitContainer) {
 		.to(vec!["recipient@example.com".to_string()])
 		.subject("Test Email")
 		.body("This is a test email body.")
-		.build();
+		.build()
+		.unwrap();
 
 	let sent = backend
 		.send_messages(&[message])
@@ -148,7 +150,8 @@ async fn test_smtp_auth_plain(#[future] mailpit_container: MailpitContainer) {
 		.to(vec!["test@example.com".to_string()])
 		.subject("Auth Test")
 		.body("Testing SMTP authentication")
-		.build();
+		.build()
+		.unwrap();
 
 	let sent = backend
 		.send_messages(&[message])
@@ -180,7 +183,8 @@ async fn test_smtp_html_email(#[future] mailpit_container: MailpitContainer) {
 		.subject("HTML Email Test")
 		.body("Plain text body")
 		.html("<html><body><h1>HTML Body</h1><p>This is HTML content.</p></body></html>")
-		.build();
+		.build()
+		.unwrap();
 
 	let sent = backend
 		.send_messages(&[message])
@@ -222,7 +226,8 @@ async fn test_smtp_multiple_recipients(#[future] mailpit_container: MailpitConta
 		.cc(vec!["cc1@example.com".to_string()])
 		.subject("Multiple Recipients")
 		.body("Email to multiple recipients")
-		.build();
+		.build()
+		.unwrap();
 
 	let sent = backend
 		.send_messages(&[message])
@@ -264,7 +269,8 @@ async fn test_smtp_utf8_subject(#[future] mailpit_container: MailpitContainer) {
 		.to(vec!["test@example.com".to_string()])
 		.subject("日本語の件名")
 		.body("本文に日本語が含まれています。")
-		.build();
+		.build()
+		.unwrap();
 
 	let sent = backend
 		.send_messages(&[message])
@@ -308,13 +314,14 @@ async fn test_smtp_custom_headers(#[future] mailpit_container: MailpitContainer)
 		.body("Testing custom headers")
 		.header("X-Custom-Header", "CustomValue")
 		.header("X-Priority", "1")
-		.build();
+		.build()
+		.unwrap();
 
 	// Verify the message was built successfully with custom headers
-	assert_eq!(message.headers.len(), 2);
+	assert_eq!(message.headers().len(), 2);
 	assert!(
 		message
-			.headers
+			.headers()
 			.contains(&("X-Custom-Header".to_string(), "CustomValue".to_string()))
 	);
 
@@ -358,7 +365,8 @@ async fn test_smtp_reply_to(#[future] mailpit_container: MailpitContainer) {
 		.reply_to(vec!["reply@example.com".to_string()])
 		.subject("Reply-To Test")
 		.body("Testing Reply-To header")
-		.build();
+		.build()
+		.unwrap();
 
 	let sent = backend
 		.send_messages(&[message])
@@ -396,6 +404,7 @@ async fn test_smtp_batch_send(#[future] mailpit_container: MailpitContainer) {
 				.subject(format!("Batch Test {}", i))
 				.body(format!("Message number {}", i))
 				.build()
+				.unwrap()
 		})
 		.collect();
 
@@ -429,7 +438,8 @@ async fn test_smtp_send_timeout(#[future] mailpit_container: MailpitContainer) {
 		.to(vec!["test@example.com".to_string()])
 		.subject("Timeout Test")
 		.body("This might timeout")
-		.build();
+		.build()
+		.unwrap();
 
 	// This may or may not succeed due to timing
 	let result = backend.send_messages(&[message]).await;
@@ -481,7 +491,8 @@ async fn test_smtp_concurrent_sends(#[future] mailpit_container: MailpitContaine
 				.to(vec![format!("concurrent{}@example.com", i)])
 				.subject(format!("Concurrent Test {}", i))
 				.body(format!("Concurrent message {}", i))
-				.build();
+				.build()
+				.unwrap();
 
 			backend_clone.send_messages(&[message]).await
 		});
@@ -519,7 +530,8 @@ async fn test_smtp_bcc_recipients(#[future] mailpit_container: MailpitContainer)
 		.bcc(vec!["hidden@example.com".to_string()])
 		.subject("BCC Test")
 		.body("Testing BCC recipients")
-		.build();
+		.build()
+		.unwrap();
 
 	let sent = backend
 		.send_messages(&[message])

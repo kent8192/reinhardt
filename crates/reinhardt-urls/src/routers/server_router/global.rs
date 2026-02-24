@@ -3,6 +3,7 @@
 use crate::routers::server_router::ServerRouter;
 use once_cell::sync::OnceCell;
 use std::sync::Arc;
+use std::sync::PoisonError;
 use std::sync::RwLock as StdRwLock;
 
 /// Global router registry
@@ -40,7 +41,7 @@ pub fn register_router(router: ServerRouter) {
 /// In most cases, you should use `register_router()` instead.
 pub fn register_router_arc(router: Arc<ServerRouter>) {
 	let cell = GLOBAL_ROUTER.get_or_init(|| StdRwLock::new(None));
-	let mut guard = cell.write().unwrap();
+	let mut guard = cell.write().unwrap_or_else(PoisonError::into_inner);
 	*guard = Some(router);
 }
 
@@ -61,7 +62,7 @@ pub fn register_router_arc(router: Arc<ServerRouter>) {
 pub fn get_router() -> Option<Arc<ServerRouter>> {
 	GLOBAL_ROUTER
 		.get()
-		.and_then(|cell| cell.read().unwrap().clone())
+		.and_then(|cell| cell.read().unwrap_or_else(PoisonError::into_inner).clone())
 }
 
 /// Check if a router has been registered
@@ -78,7 +79,11 @@ pub fn get_router() -> Option<Arc<ServerRouter>> {
 pub fn is_router_registered() -> bool {
 	GLOBAL_ROUTER
 		.get()
-		.map(|cell| cell.read().unwrap().is_some())
+		.map(|cell| {
+			cell.read()
+				.unwrap_or_else(PoisonError::into_inner)
+				.is_some()
+		})
 		.unwrap_or(false)
 }
 
@@ -94,7 +99,7 @@ pub fn is_router_registered() -> bool {
 /// ```
 pub fn clear_router() {
 	if let Some(cell) = GLOBAL_ROUTER.get() {
-		let mut guard = cell.write().unwrap();
+		let mut guard = cell.write().unwrap_or_else(PoisonError::into_inner);
 		*guard = None;
 	}
 }

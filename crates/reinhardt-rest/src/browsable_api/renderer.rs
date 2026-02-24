@@ -244,7 +244,7 @@ impl BrowsableApiRenderer {
 
             <div class="endpoint">
                 <span class="method-badge method-{{ method | lower }}">{{ method }}</span>
-                {{ endpoint | safe }}
+                {{ endpoint }}
             </div>
 
             <h2>Response ({{ response_status }})</h2>
@@ -255,7 +255,7 @@ impl BrowsableApiRenderer {
             {% if request_form_text %}
             <div class="form-section">
                 <h2>Make a Request</h2>
-                <form method="{{ request_form_text.submit_method }}" action="{{ request_form_text.submit_url | safe }}">
+                <form method="{{ request_form_text.submit_method }}" action="{{ request_form_text.submit_url }}">
                     {% if csrf_token %}
                     <input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
                     {% endif %}
@@ -301,7 +301,7 @@ impl BrowsableApiRenderer {
                         {% for header in headers %}
                         <tr>
                             <td><strong>{{ header.0 }}</strong></td>
-                            <td>{{ header.1 | safe }}</td>
+                            <td>{{ header.1 }}</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -347,7 +347,8 @@ mod tests {
 
 		let html = renderer.render(&context).unwrap();
 		assert!(html.contains("User List"));
-		assert!(html.contains("/api/users/"));
+		// Tera autoescapes `/` as `&#x2F;` for XSS protection
+		assert!(html.contains("&#x2F;api&#x2F;users&#x2F;"));
 		assert!(html.contains("Alice"));
 		assert!(html.contains("Bob"));
 	}

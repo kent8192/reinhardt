@@ -24,8 +24,8 @@
 
 use bytes::Bytes;
 use hyper::{HeaderMap, Method, Version};
-use reinhardt_di::{Injectable, InjectionContext, SingletonScope};
 use reinhardt_core::exception::Result as ExceptionResult;
+use reinhardt_di::{Injectable, InjectionContext, SingletonScope};
 use reinhardt_http::Request;
 use reinhardt_macros::use_inject;
 use std::sync::Arc;
@@ -51,15 +51,36 @@ struct Database {
 	connection_string: String,
 }
 
+#[async_trait::async_trait]
+impl reinhardt_di::Injectable for Database {
+	async fn inject(_ctx: &reinhardt_di::InjectionContext) -> reinhardt_di::DiResult<Self> {
+		Ok(Self::default())
+	}
+}
+
 #[derive(Clone, Default, Debug)]
 struct Config {
 	api_key: String,
 	max_connections: usize,
 }
 
+#[async_trait::async_trait]
+impl reinhardt_di::Injectable for Config {
+	async fn inject(_ctx: &reinhardt_di::InjectionContext) -> reinhardt_di::DiResult<Self> {
+		Ok(Self::default())
+	}
+}
+
 #[derive(Clone, Default, Debug)]
 struct Logger {
 	level: String,
+}
+
+#[async_trait::async_trait]
+impl reinhardt_di::Injectable for Logger {
+	async fn inject(_ctx: &reinhardt_di::InjectionContext) -> reinhardt_di::DiResult<Self> {
+		Ok(Self::default())
+	}
 }
 
 #[derive(Clone)]

@@ -9,6 +9,7 @@
 
 use async_trait::async_trait;
 use hyper::Method;
+use reinhardt_conf::Settings;
 use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -41,7 +42,9 @@ impl Default for CsrfMiddlewareConfig {
 	fn default() -> Self {
 		Self {
 			csrf_config: CsrfConfig::default(),
-			trusted_origins: vec!["http://localhost".to_string()],
+			// No trusted origins by default. Developers should explicitly add
+			// origins they trust (e.g., "http://localhost" for development).
+			trusted_origins: Vec::new(),
 			exempt_paths: HashSet::new(),
 			check_referer_header: true,
 		}
@@ -73,6 +76,30 @@ impl CsrfMiddlewareConfig {
 	pub fn add_exempt_path(mut self, path: String) -> Self {
 		self.exempt_paths.insert(path);
 		self
+	}
+
+	/// Create from application `Settings`
+	///
+	/// Maps `Settings.csrf_cookie_secure` to `CsrfConfig.cookie_secure`.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_conf::Settings;
+	/// use reinhardt_middleware::csrf::CsrfMiddlewareConfig;
+	///
+	/// let settings = Settings::default();
+	/// let config = CsrfMiddlewareConfig::from_settings(&settings);
+	/// assert!(!config.csrf_config.cookie_secure);
+	/// ```
+	pub fn from_settings(settings: &Settings) -> Self {
+		Self {
+			csrf_config: CsrfConfig {
+				cookie_secure: settings.csrf_cookie_secure,
+				..CsrfConfig::default()
+			},
+			..Self::default()
+		}
 	}
 }
 
@@ -108,19 +135,14 @@ impl CsrfMiddleware {
 			}
 		}
 
-		// Fallback: generate from request metadata
-		// This is not ideal but ensures CSRF protection works without sessions
-		use sha2::{Digest, Sha256};
-		let mut hasher = Sha256::new();
-		hasher.update(request.uri.to_string().as_bytes());
-		hasher.update(
-			request
-				.headers
-				.get("User-Agent")
-				.map(|v| v.as_bytes())
-				.unwrap_or(b""),
-		);
-		hex::encode(hasher.finalize())
+		// Fallback: generate a cryptographically random session ID.
+		// Using a CSPRNG ensures the secret cannot be predicted by an attacker,
+		// unlike the previous approach of hashing request metadata (URI, User-Agent)
+		// which are attacker-controlled.
+		use rand::RngCore;
+		let mut random_bytes = [0u8; 32];
+		rand::thread_rng().fill_bytes(&mut random_bytes);
+		hex::encode(random_bytes)
 	}
 
 	/// Create new CSRF middleware with default configuration
@@ -181,6 +203,21 @@ impl CsrfMiddleware {
 			config: CsrfMiddlewareConfig::default(),
 			test_secret: Some(secret),
 		}
+	}
+
+	/// Create from application `Settings`
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_conf::Settings;
+	/// use reinhardt_middleware::csrf::CsrfMiddleware;
+	///
+	/// let settings = Settings::default();
+	/// let middleware = CsrfMiddleware::from_settings(&settings);
+	/// ```
+	pub fn from_settings(settings: &Settings) -> Self {
+		Self::with_config(CsrfMiddlewareConfig::from_settings(settings))
 	}
 
 	/// Extract CSRF token from request
@@ -802,5 +839,137 @@ mod tests {
 
 		assert!(config.exempt_paths.contains("/api/webhook"));
 		assert!(config.exempt_paths.contains("/health"));
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_csrf_config_from_settings_secure() {
+		// Arrange
+		let mut settings =
+			Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
+		settings.csrf_cookie_secure = true;
+
+		// Act
+		let config = CsrfMiddlewareConfig::from_settings(&settings);
+
+		// Assert
+		assert_eq!(config.csrf_config.cookie_secure, true);
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_csrf_config_from_settings_defaults() {
+		// Arrange
+		let settings = Settings::default();
+
+		// Act
+		let config = CsrfMiddlewareConfig::from_settings(&settings);
+
+		// Assert
+		assert_eq!(config.csrf_config.cookie_secure, false);
+		assert_eq!(config.csrf_config.cookie_name, "csrftoken");
+		assert_eq!(config.check_referer_header, true);
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_csrf_middleware_from_settings() {
+		// Arrange
+		let mut settings =
+			Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
+		settings.csrf_cookie_secure = true;
+		let middleware = CsrfMiddleware::from_settings(&settings);
+		let handler = Arc::new(TestHandler);
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, StatusCode::OK);
+		let cookie = response
+			.headers
+			.get("Set-Cookie")
+			.unwrap()
+			.to_str()
+			.unwrap();
+		assert!(cookie.contains("Secure"));
+	}
+
+	// =================================================================
+	// CSRF fallback secret hardening tests (Issue #361)
+	// =================================================================
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_csrf_fallback_secret_has_sufficient_entropy() {
+		// Arrange - request with no session ID in extensions or cookies
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let session_id = CsrfMiddleware::get_session_id(&request);
+
+		// Assert - should be 64 hex chars (32 bytes encoded)
+		assert_eq!(
+			session_id.len(),
+			64,
+			"Fallback session ID should be 64 hex characters (32 random bytes)"
+		);
+		assert!(
+			session_id.chars().all(|c| c.is_ascii_hexdigit()),
+			"Fallback session ID should only contain hex characters"
+		);
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_csrf_fallback_secret_is_not_deterministic() {
+		// Arrange - two identical requests with same URI and User-Agent
+		let mut headers = HeaderMap::new();
+		headers.insert("User-Agent", "Mozilla/5.0".parse().unwrap());
+
+		let request1 = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(headers.clone())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		let request2 = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(headers)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let session_id1 = CsrfMiddleware::get_session_id(&request1);
+		let session_id2 = CsrfMiddleware::get_session_id(&request2);
+
+		// Assert - two calls should produce different values since they use CSPRNG
+		assert_ne!(
+			session_id1, session_id2,
+			"Fallback session IDs should differ because they use random generation, \
+			not deterministic derivation from request metadata"
+		);
 	}
 }

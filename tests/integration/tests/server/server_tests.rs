@@ -5,8 +5,8 @@ use http::StatusCode;
 use reinhardt_di::params::Path;
 use reinhardt_http::{Request, Response, ViewResult};
 use reinhardt_macros::{get, post};
-use reinhardt_test::fixtures::*;
 use reinhardt_test::APIClient;
+use reinhardt_test::fixtures::*;
 use reinhardt_urls::routers::ServerRouter as Router;
 
 // Handler for basic request test

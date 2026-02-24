@@ -5,7 +5,7 @@
 
 use crate::prelude::*;
 use reinhardt_db::orm::Model;
-use sea_query::{Iden, PostgresQueryBuilder, Query};
+use reinhardt_query::prelude::{Iden, IntoIden, PostgresQueryBuilder, Query, QueryStatementBuilder};
 use serde_json::json;
 
 // Import model definitions from fixtures
@@ -33,10 +33,10 @@ async fn test_model_initialization() {
 	assert_eq!(post.author_id, 1);
 }
 
-/// Tests that SeaQuery table names are correctly defined.
+/// Tests that reinhardt-query table names are correctly defined.
 #[rstest]
 #[tokio::test]
-async fn test_seaquery_table_names() {
+async fn test_query_table_names() {
 	// Verify table name identifiers
 	let users_table = Tables::Users;
 	let posts_table = Tables::Posts;
@@ -51,17 +51,18 @@ async fn test_seaquery_table_names() {
 	assert_eq!(posts_name, "posts");
 }
 
-/// Tests SeaQuery SQL construction for model operations.
+/// Tests reinhardt-query SQL construction for model operations.
 #[rstest]
 #[tokio::test]
-async fn test_seaquery_sql_construction() {
+async fn test_query_sql_construction() {
 	// Test INSERT query construction for User model
-	let insert_user_query = Query::insert()
-		.into_table(Tables::Users)
+	let mut insert_stmt = Query::insert();
+	let insert_user_query = insert_stmt
+		.into_table(Tables::Users.into_iden())
 		.columns([User::name(), User::email(), User::is_active()])
 		.values(["Test User".into(), "test@example.com".into(), true.into()])
 		.unwrap()
-		.to_string(PostgresQueryBuilder);
+		.to_string(PostgresQueryBuilder::new());
 
 	// Verify the query contains expected SQL (not raw string matching)
 	assert!(insert_user_query.contains("INSERT INTO users"));
@@ -70,11 +71,12 @@ async fn test_seaquery_sql_construction() {
 	assert!(insert_user_query.contains("is_active"));
 
 	// Test SELECT query construction
-	let select_query = Query::select()
+	let mut select_stmt = Query::select();
+	let select_query = select_stmt
 		.columns([User::id(), User::name(), User::email()])
-		.from(Tables::Users)
+		.from(Tables::Users.into_iden())
 		.limit(10)
-		.to_string(PostgresQueryBuilder);
+		.to_string(PostgresQueryBuilder::new());
 
 	assert!(select_query.contains("SELECT id, name, email FROM users"));
 	assert!(select_query.contains("LIMIT 10"));

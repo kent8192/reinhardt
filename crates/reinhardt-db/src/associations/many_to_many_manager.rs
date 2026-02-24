@@ -5,14 +5,16 @@
 
 use crate::orm::{DatabaseConnection, QueryRow};
 use reinhardt_core::exception::Result;
-use sea_query::{Alias, Asterisk, Expr, ExprTrait, Func, PostgresQueryBuilder, Query};
+use reinhardt_query::prelude::{
+	Alias, Expr, ExprTrait, Func, OnConflict, PostgresQueryBuilder, Query, QueryBuilder,
+};
 use std::fmt::Display;
 use std::marker::PhantomData;
 
 /// Manager for ManyToMany relationship operations
 ///
 /// This type handles CRUD operations on junction tables for many-to-many relationships.
-/// It uses SeaQuery for type-safe SQL generation.
+/// It uses `reinhardt_query` for type-safe SQL generation.
 ///
 /// # Type Parameters
 ///
@@ -119,12 +121,9 @@ where
 				Alias::new(&self.source_field),
 				Alias::new(&self.target_field),
 			])
-			.values_panic([
-				self.source_pk.to_string().into(),
-				target_pk.to_string().into(),
-			])
+			.values_panic([self.source_pk.to_string(), target_pk.to_string()])
 			.on_conflict(
-				sea_query::OnConflict::columns([
+				OnConflict::columns([
 					Alias::new(&self.source_field),
 					Alias::new(&self.target_field),
 				])
@@ -132,10 +131,12 @@ where
 				.to_owned(),
 			);
 
-		let sql = stmt.to_string(PostgresQueryBuilder);
+		let pg = PostgresQueryBuilder::new();
+		let (sql, values) = pg.build_insert(&stmt);
+		let params = crate::orm::execution::convert_values(values);
 
 		// Execute SQL
-		conn.execute(&sql, vec![]).await?;
+		conn.execute(&sql, params).await?;
 		Ok(())
 	}
 
@@ -161,7 +162,8 @@ where
 			.and_where(Expr::col(Alias::new(&self.source_field)).eq(self.source_pk.to_string()))
 			.and_where(Expr::col(Alias::new(&self.target_field)).eq(target_pk.to_string()));
 
-		let sql = stmt.to_string(PostgresQueryBuilder);
+		let pg = PostgresQueryBuilder::new();
+		let (sql, _) = pg.build_delete(&stmt);
 
 		// Execute SQL
 		conn.execute(&sql, vec![]).await?;
@@ -190,11 +192,12 @@ where
 	{
 		let mut stmt = Query::select();
 		stmt.from(Alias::new(&self.through_table))
-			.column(Asterisk)
+			.expr(Expr::asterisk())
 			.and_where(Expr::col(Alias::new(&self.source_field)).eq(self.source_pk.to_string()))
 			.and_where(Expr::col(Alias::new(&self.target_field)).eq(target_pk.to_string()));
 
-		let sql = stmt.to_string(PostgresQueryBuilder);
+		let pg = PostgresQueryBuilder::new();
+		let (sql, _) = pg.build_select(&stmt);
 
 		// Execute SQL
 		let rows = conn.query(&sql, vec![]).await?;
@@ -229,13 +232,14 @@ where
 					.equals((Alias::new(target_table), Alias::new(target_pk_field))),
 			)
 			// Select all columns from target table
-			.columns([(Alias::new(target_table), Asterisk)])
+			.expr(Expr::asterisk())
 			.and_where(
 				Expr::col((Alias::new(&self.through_table), Alias::new(&self.source_field)))
 					.eq(self.source_pk.to_string()),
 			);
 
-		let sql = stmt.to_string(PostgresQueryBuilder);
+		let pg = PostgresQueryBuilder::new();
+		let (sql, _) = pg.build_select(&stmt);
 
 		// Execute SQL
 		conn.query(&sql, vec![])
@@ -260,7 +264,8 @@ where
 		stmt.from_table(Alias::new(&self.through_table))
 			.and_where(Expr::col(Alias::new(&self.source_field)).eq(self.source_pk.to_string()));
 
-		let sql = stmt.to_string(PostgresQueryBuilder);
+		let pg = PostgresQueryBuilder::new();
+		let (sql, _) = pg.build_delete(&stmt);
 
 		// Execute SQL
 		conn.execute(&sql, vec![]).await?;
@@ -280,10 +285,14 @@ where
 	pub async fn count_with_db(&self, conn: &DatabaseConnection) -> Result<usize> {
 		let mut stmt = Query::select();
 		stmt.from(Alias::new(&self.through_table))
-			.expr_as(Func::count(Expr::col(Asterisk)), Alias::new("count")) // AS count
+			.expr_as(
+				Func::count(Expr::asterisk().into_simple_expr()),
+				Alias::new("count"),
+			)
 			.and_where(Expr::col(Alias::new(&self.source_field)).eq(self.source_pk.to_string()));
 
-		let sql = stmt.to_string(PostgresQueryBuilder);
+		let pg = PostgresQueryBuilder::new();
+		let (sql, _) = pg.build_select(&stmt);
 
 		// Execute SQL
 		let row = conn.query_one(&sql, vec![]).await?;

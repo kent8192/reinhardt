@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 //! GraphQL Subscriptions - Signal-based GraphQL subscription support
 //!
 //! This module provides GraphQL subscription integration for signals,
@@ -278,8 +280,10 @@ impl GraphQLSubscriptionBridge {
 					.map_err(|e| SignalError::new(format!("Serialization error: {}", e)))?;
 
 				let streams_read = streams.read();
-				if let Some(stream) = streams_read.get(&subscription_name) {
-					let _ = stream.send(json);
+				if let Some(stream) = streams_read.get(&subscription_name)
+					&& let Err(e) = stream.send(json)
+				{
+					eprintln!("Failed to send GraphQL subscription event: {}", e);
 				}
 
 				Ok(())

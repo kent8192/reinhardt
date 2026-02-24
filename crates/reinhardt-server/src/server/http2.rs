@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
+use hyper::StatusCode;
 use hyper::body::Incoming;
 use hyper::server::conn::http2;
 use hyper::service::Service;
@@ -15,6 +16,11 @@ use tokio::net::{TcpListener, TcpStream};
 use crate::shutdown::ShutdownCoordinator;
 
 /// HTTP/2 Server
+///
+/// Note: HTTP/2 connections currently bypass the DI context and middleware
+/// pipeline. The handler is invoked directly without middleware composition
+/// or dependency injection integration. Full middleware and DI context
+/// integration is tracked separately.
 pub struct Http2Server {
 	handler: Arc<dyn Handler>,
 }
@@ -205,7 +211,10 @@ impl Http2Server {
 		handler: Arc<dyn Handler>,
 	) -> Result<(), Box<dyn std::error::Error>> {
 		let io = TokioIo::new(stream);
-		let service = RequestService { handler };
+		let service = RequestService {
+			handler,
+			max_body_size: DEFAULT_MAX_BODY_SIZE,
+		};
 
 		http2::Builder::new(hyper_util::rt::TokioExecutor::new())
 			.serve_connection(io, service)
@@ -215,9 +224,13 @@ impl Http2Server {
 	}
 }
 
+/// Default maximum request body size (10 MB)
+const DEFAULT_MAX_BODY_SIZE: u64 = 10 * 1024 * 1024;
+
 /// Service implementation for hyper
 struct RequestService {
 	handler: Arc<dyn Handler>,
+	max_body_size: u64,
 }
 
 impl Service<hyper::Request<Incoming>> for RequestService {
@@ -227,13 +240,35 @@ impl Service<hyper::Request<Incoming>> for RequestService {
 
 	fn call(&self, req: hyper::Request<Incoming>) -> Self::Future {
 		let handler = self.handler.clone();
+		let max_body_size = self.max_body_size;
 
 		Box::pin(async move {
+			// Check Content-Length before reading body
+			if let Some(content_length) = req.headers().get(hyper::header::CONTENT_LENGTH)
+				&& let Ok(len_str) = content_length.to_str()
+				&& let Ok(len) = len_str.parse::<u64>()
+				&& len > max_body_size
+			{
+				return Ok(hyper::Response::builder()
+					.status(StatusCode::PAYLOAD_TOO_LARGE)
+					.body(Full::new(Bytes::from("Request body too large")))
+					.expect("Failed to build 413 response"));
+			}
+
 			// Extract request parts
 			let (parts, body) = req.into_parts();
 
-			// Read body
-			let body_bytes = body.collect().await?.to_bytes();
+			// Read body with size limit
+			let body_bytes = http_body_util::Limited::new(body, max_body_size as usize)
+				.collect()
+				.await
+				.map_err(|_| {
+					Box::new(std::io::Error::new(
+						std::io::ErrorKind::InvalidData,
+						"Request body exceeds size limit",
+					)) as Box<dyn std::error::Error + Send + Sync>
+				})?
+				.to_bytes();
 
 			// Create reinhardt Request
 			let request = Request::builder()

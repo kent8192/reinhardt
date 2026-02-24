@@ -76,8 +76,15 @@ mock! {
 	}
 }
 
-// Mock backend is Send + Sync by design (all expectations are stored safely)
+// SAFETY: MockDatabaseBackend is Send-safe because all internal state
+// (mockall expectations) is stored in thread-safe containers. The mock
+// is designed for single-threaded test usage with tokio's async runtime,
+// and expectations are set before any concurrent access occurs.
 unsafe impl Send for MockDatabaseBackend {}
+// SAFETY: MockDatabaseBackend is Sync-safe because all expectation
+// matching in mockall uses internal synchronization. The mock backend
+// is accessed through Arc<MockDatabaseBackend> in test fixtures, and
+// concurrent read access to expectations is safe.
 unsafe impl Sync for MockDatabaseBackend {}
 
 // ============================================================================
@@ -158,7 +165,11 @@ pub fn mock_connection() -> DatabaseConnection {
 
 	mock.expect_fetch_all().returning(|_, _| Ok(Vec::new()));
 
-	mock.expect_fetch_one().returning(|_, _| Ok(Row::new()));
+	mock.expect_fetch_one().returning(|_, _| {
+		let mut row = Row::new();
+		row.data.insert("count".to_string(), QueryValue::Int(0));
+		Ok(row)
+	});
 
 	mock.expect_fetch_optional().returning(|_, _| Ok(None));
 

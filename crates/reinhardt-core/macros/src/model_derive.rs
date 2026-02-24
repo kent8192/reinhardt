@@ -32,8 +32,8 @@ use syn::{Data, DeriveInput, Fields, GenericArgument, PathArguments, Result, Typ
 use syn::{Ident, LitStr, bracketed, parenthesized};
 
 use crate::crate_paths::{
-	get_reinhardt_core_crate, get_reinhardt_crate, get_reinhardt_migrations_crate,
-	get_reinhardt_orm_crate,
+	get_linkme_crate, get_reinhardt_core_crate, get_reinhardt_crate,
+	get_reinhardt_migrations_crate, get_reinhardt_orm_crate,
 };
 use crate::rel::RelAttribute;
 
@@ -54,6 +54,69 @@ struct ModelAttributesParsed {
 	table_name: Option<String>,
 	constraints: Option<Vec<ConstraintSpec>>,
 	unique_together: Vec<Vec<String>>, // Multiple Django-style unique_together constraints
+}
+
+/// Validate a raw SQL expression to reject dangerous patterns.
+///
+/// This is a basic compile-time check that rejects obviously dangerous SQL
+/// keywords and patterns that should never appear in `check`, `generated`,
+/// or `condition` constraint attributes. It does not replace parameterized
+/// queries, but prevents accidental or malicious injection of DDL/DML
+/// statements in model attribute strings.
+fn validate_sql_expression(sql: &str, attr_name: &str) -> Result<()> {
+	let upper = sql.to_uppercase();
+
+	// Reject statement terminators that could allow statement chaining
+	if sql.contains(';') {
+		return Err(syn::Error::new(
+			proc_macro2::Span::call_site(),
+			format!(
+				"Semicolons are not allowed in {} expressions: {:?}",
+				attr_name, sql
+			),
+		));
+	}
+
+	// Reject DDL/DML keywords that should never appear in check/generated/condition
+	const BLOCKED_KEYWORDS: &[&str] = &[
+		"DROP ",
+		"DELETE ",
+		"INSERT ",
+		"UPDATE ",
+		"ALTER ",
+		"TRUNCATE ",
+		"EXEC ",
+		"EXECUTE ",
+		"CREATE ",
+		"GRANT ",
+		"REVOKE ",
+	];
+	for keyword in BLOCKED_KEYWORDS {
+		if upper.contains(keyword) {
+			return Err(syn::Error::new(
+				proc_macro2::Span::call_site(),
+				format!(
+					"Dangerous SQL keyword {:?} detected in {} expression: {:?}",
+					keyword.trim(),
+					attr_name,
+					sql
+				),
+			));
+		}
+	}
+
+	// Reject comment sequences that could hide injected SQL
+	if sql.contains("--") || sql.contains("/*") {
+		return Err(syn::Error::new(
+			proc_macro2::Span::call_site(),
+			format!(
+				"SQL comments are not allowed in {} expressions: {:?}",
+				attr_name, sql
+			),
+		));
+	}
+
+	Ok(())
 }
 
 /// Model configuration from `#[model(...)]` attribute
@@ -232,7 +295,9 @@ impl ModelConfig {
 			} else if param_name == "condition" {
 				// Parse string: "WHERE clause"
 				let value: LitStr = content.parse()?;
-				condition = Some(value.value());
+				let condition_str = value.value();
+				validate_sql_expression(&condition_str, "condition")?;
+				condition = Some(condition_str);
 			} else {
 				return Err(syn::Error::new_spanned(
 					param_name,
@@ -444,7 +509,9 @@ impl FieldConfig {
 					Ok(())
 				} else if meta.path.is_ident("check") {
 					let value: syn::LitStr = meta.value()?.parse()?;
-					config.check = Some(value.value());
+					let check_str = value.value();
+					validate_sql_expression(&check_str, "check")?;
+					config.check = Some(check_str);
 					Ok(())
 				} else if meta.path.is_ident("email") {
 					let value: syn::LitBool = meta.value()?.parse()?;
@@ -515,7 +582,9 @@ impl FieldConfig {
 				// Generated Columns
 				else if meta.path.is_ident("generated") {
 					let value: syn::LitStr = meta.value()?.parse()?;
-					config.generated = Some(value.value());
+					let gen_str = value.value();
+					validate_sql_expression(&gen_str, "generated")?;
+					config.generated = Some(gen_str);
 					Ok(())
 				} else if meta.path.is_ident("generated_stored") {
 					let value: syn::LitBool = meta.value()?.parse()?;
@@ -2694,6 +2763,8 @@ fn generate_relationship_registrations(
 ) -> TokenStream {
 	let reinhardt = get_reinhardt_crate();
 	let _orm_crate = get_reinhardt_orm_crate();
+	// Fixes #793: Use dynamic crate path resolution instead of hardcoded ::linkme
+	let linkme = get_linkme_crate();
 	let mut registrations = Vec::new();
 	let model_name = struct_name.to_string();
 
@@ -2752,7 +2823,7 @@ fn generate_relationship_registrations(
 
 		// Generate registration code for forward relationship
 		registrations.push(quote! {
-			#[::linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
+			#[#linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
 			static #static_var_name: #reinhardt::apps::registry::RelationshipMetadata =
 				#reinhardt::apps::registry::RelationshipMetadata {
 					from_model: concat!(#app_label, ".", #model_name),
@@ -2788,7 +2859,7 @@ fn generate_relationship_registrations(
 
 			// Generate registration code for reverse relationship
 			registrations.push(quote! {
-				#[::linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
+				#[#linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
 				static #reverse_static_var_name: #reinhardt::apps::registry::RelationshipMetadata =
 					#reinhardt::apps::registry::RelationshipMetadata {
 						from_model: #target_model_name,
@@ -2863,7 +2934,7 @@ fn generate_relationship_registrations(
 
 		// Generate registration code for forward M2M relationship
 		registrations.push(quote! {
-			#[::linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
+			#[#linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
 			static #static_var_name: #reinhardt::apps::registry::RelationshipMetadata =
 				#reinhardt::apps::registry::RelationshipMetadata {
 					from_model: concat!(#app_label, ".", #model_name),
@@ -2891,7 +2962,7 @@ fn generate_relationship_registrations(
 
 			// Generate registration code for reverse M2M relationship
 			registrations.push(quote! {
-				#[::linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
+				#[#linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
 				static #reverse_static_var_name: #reinhardt::apps::registry::RelationshipMetadata =
 					#reinhardt::apps::registry::RelationshipMetadata {
 						from_model: #target_model_name,

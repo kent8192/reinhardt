@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 //! Distributed Signals - Cross-service signal dispatch via message brokers
 //!
 //! This module provides distributed signal support, allowing signals to be

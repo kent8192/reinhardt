@@ -3,8 +3,8 @@
 //! Combines multiple CSS or JavaScript files into single bundles,
 //! resolving dependencies and maintaining proper order.
 
-use super::super::DependencyGraph;
 use super::ProcessingResult;
+use crate::staticfiles::DependencyGraph;
 use std::collections::HashMap;
 use std::path::PathBuf;
 

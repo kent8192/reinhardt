@@ -136,6 +136,7 @@ where
 	}
 
 	/// Promote a value from L2 to L1
+	// Reserved for future L2-to-L1 cache promotion logic
 	#[allow(dead_code)]
 	async fn promote<T>(&self, key: &str, value: &T, ttl: Option<Duration>) -> Result<()>
 	where

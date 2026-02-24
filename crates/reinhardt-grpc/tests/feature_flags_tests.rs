@@ -75,7 +75,9 @@ mod di_feature_disabled {
 	// ===== Mock implementations for compilation testing =====
 	struct MockAdapter;
 
+	// Allow: mock implementations for compilation testing only (never called)
 	#[async_trait]
+	#[allow(clippy::unimplemented)]
 	impl GrpcServiceAdapter for MockAdapter {
 		type Input = String;
 		type Output = String;
@@ -88,6 +90,8 @@ mod di_feature_disabled {
 
 	struct MockSubscriptionAdapter;
 
+	// Allow: mock implementations for compilation testing only (never called)
+	#[allow(clippy::unimplemented)]
 	impl GrpcSubscriptionAdapter for MockSubscriptionAdapter {
 		type Proto = String;
 		type GraphQL = String;

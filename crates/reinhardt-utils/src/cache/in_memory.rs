@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 use tokio::sync::RwLock;
+use tokio::task::AbortHandle;
 
 /// Cleanup strategy for in-memory cache
 #[derive(Clone, Copy, Debug)]
@@ -42,6 +43,8 @@ pub struct InMemoryCache {
 	hits: Arc<AtomicU64>,
 	misses: Arc<AtomicU64>,
 	cleanup_interval: Option<Duration>,
+	/// Handle for cancelling the background cleanup task
+	cleanup_handle: Arc<std::sync::Mutex<Option<AbortHandle>>>,
 }
 
 impl InMemoryCache {
@@ -67,6 +70,7 @@ impl InMemoryCache {
 			hits: Arc::new(AtomicU64::new(0)),
 			misses: Arc::new(AtomicU64::new(0)),
 			cleanup_interval: None,
+			cleanup_handle: Arc::new(std::sync::Mutex::new(None)),
 		}
 	}
 
@@ -100,6 +104,7 @@ impl InMemoryCache {
 			hits: Arc::new(AtomicU64::new(0)),
 			misses: Arc::new(AtomicU64::new(0)),
 			cleanup_interval: None,
+			cleanup_handle: Arc::new(std::sync::Mutex::new(None)),
 		}
 	}
 
@@ -127,6 +132,7 @@ impl InMemoryCache {
 			hits: Arc::new(AtomicU64::new(0)),
 			misses: Arc::new(AtomicU64::new(0)),
 			cleanup_interval: None,
+			cleanup_handle: Arc::new(std::sync::Mutex::new(None)),
 		}
 	}
 	/// Set a default TTL for all cache entries
@@ -450,14 +456,41 @@ impl InMemoryCache {
 	/// # }
 	/// ```
 	pub fn start_auto_cleanup(&self, interval: Duration) {
+		let mut handle_guard = self
+			.cleanup_handle
+			.lock()
+			.unwrap_or_else(|e| e.into_inner());
+
+		// Abort any previously running cleanup task to prevent duplicates
+		if let Some(existing) = handle_guard.take() {
+			existing.abort();
+		}
+
 		let cache = self.clone();
-		tokio::spawn(async move {
+		let abort_handle = tokio::spawn(async move {
 			let mut interval_timer = tokio::time::interval(interval);
 			loop {
 				interval_timer.tick().await;
 				cache.cleanup_expired().await;
 			}
-		});
+		})
+		.abort_handle();
+
+		*handle_guard = Some(abort_handle);
+	}
+
+	/// Stop the background auto-cleanup task if one is running.
+	///
+	/// After calling this method, no further automatic cleanup will occur
+	/// until `start_auto_cleanup` is called again.
+	pub fn stop_auto_cleanup(&self) {
+		let mut handle_guard = self
+			.cleanup_handle
+			.lock()
+			.unwrap_or_else(|e| e.into_inner());
+		if let Some(handle) = handle_guard.take() {
+			handle.abort();
+		}
 	}
 
 	/// Set cleanup interval and start automatic cleanup
@@ -624,6 +657,26 @@ impl Cache for InMemoryCache {
 mod tests {
 	use super::*;
 
+	/// Polls a condition until it returns true or timeout is reached.
+	async fn poll_until<F, Fut>(
+		timeout: std::time::Duration,
+		interval: std::time::Duration,
+		mut condition: F,
+	) -> std::result::Result<(), String>
+	where
+		F: FnMut() -> Fut,
+		Fut: std::future::Future<Output = bool>,
+	{
+		let start = std::time::Instant::now();
+		while start.elapsed() < timeout {
+			if condition().await {
+				return Ok(());
+			}
+			tokio::time::sleep(interval).await;
+		}
+		Err(format!("Timeout after {:?} waiting for condition", timeout))
+	}
+
 	#[tokio::test]
 	async fn test_in_memory_cache_basic() {
 		let cache = InMemoryCache::new();
@@ -658,7 +711,7 @@ mod tests {
 		assert_eq!(value, Some("value1".to_string()));
 
 		// Poll until key expires
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(200),
 			Duration::from_millis(10),
 			|| async {
@@ -735,7 +788,7 @@ mod tests {
 		cache.set("key2", &"value2", None).await.unwrap();
 
 		// Poll until first key expires
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(200),
 			Duration::from_millis(10),
 			|| async {
@@ -901,7 +954,7 @@ mod tests {
 		cache.set("valid_key", &"value", None).await.unwrap();
 
 		// Poll until first key expires
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(50),
 			Duration::from_millis(5),
 			|| async {
@@ -996,7 +1049,7 @@ mod tests {
 		assert!(info.is_some());
 
 		// Poll until key expires
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(50),
 			Duration::from_millis(5),
 			|| async {
@@ -1042,7 +1095,7 @@ mod tests {
 		assert!(cache.has_key("key2").await.unwrap());
 
 		// Poll until auto-cleanup removes expired keys
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(200),
 			Duration::from_millis(10),
 			|| async {
@@ -1076,7 +1129,7 @@ mod tests {
 		assert!(cache.has_key("key2").await.unwrap());
 
 		// Poll until auto-cleanup removes expired keys
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(200),
 			Duration::from_millis(10),
 			|| async {
@@ -1085,6 +1138,54 @@ mod tests {
 		)
 		.await
 		.expect("Keys should be auto-cleaned within 200ms");
+	}
+
+	#[tokio::test]
+	async fn test_stop_auto_cleanup() {
+		let cache = InMemoryCache::new();
+
+		// Start auto cleanup
+		cache.start_auto_cleanup(Duration::from_millis(30));
+
+		// Set a value with short TTL
+		cache
+			.set("key1", &"value1", Some(Duration::from_millis(50)))
+			.await
+			.unwrap();
+
+		// Stop cleanup before it can run
+		cache.stop_auto_cleanup();
+
+		// Wait long enough for cleanup to have run if it were still active
+		tokio::time::sleep(Duration::from_millis(150)).await;
+
+		// Key should be expired but not cleaned up from store (only passive expiration)
+		let value: Option<String> = cache.get("key1").await.unwrap();
+		assert!(value.is_none(), "Key should be expired");
+	}
+
+	#[tokio::test]
+	async fn test_start_auto_cleanup_replaces_previous() {
+		let cache = InMemoryCache::new();
+
+		// Start cleanup twice - should not spawn duplicate tasks
+		cache.start_auto_cleanup(Duration::from_millis(30));
+		cache.start_auto_cleanup(Duration::from_millis(30));
+
+		// Set a value with short TTL
+		cache
+			.set("key1", &"value1", Some(Duration::from_millis(50)))
+			.await
+			.unwrap();
+
+		// Wait for cleanup
+		poll_until(
+			Duration::from_millis(200),
+			Duration::from_millis(10),
+			|| async { !cache.has_key("key1").await.unwrap() },
+		)
+		.await
+		.expect("Key should be cleaned up");
 	}
 
 	#[tokio::test]
@@ -1106,7 +1207,7 @@ mod tests {
 		assert!(cache.has_key("long_lived").await.unwrap());
 
 		// Poll until auto-cleanup removes short_lived key
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(200),
 			Duration::from_millis(10),
 			|| async {
@@ -1154,7 +1255,7 @@ mod tests {
 		assert_eq!(value, Some("value1".to_string()));
 
 		// Poll until key expires (passive expiration on get)
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(200),
 			Duration::from_millis(10),
 			|| async {

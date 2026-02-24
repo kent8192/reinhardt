@@ -4,10 +4,12 @@
 //!
 //! This module provides execution methods similar to SQLAlchemy's Query class
 
-use super::super::backends::types::QueryValue;
+use crate::backends::types::QueryValue;
 use crate::orm::Model;
+use reinhardt_query::prelude::{
+	Alias, ColumnRef, Expr, ExprTrait, Func, Query, QueryStatementBuilder, SelectStatement,
+};
 use rust_decimal::prelude::ToPrimitive;
-use sea_query::{Alias, Expr, ExprTrait, Func, Query, SelectStatement};
 use std::marker::PhantomData;
 
 /// Query execution result types
@@ -53,9 +55,9 @@ pub enum ExecutionError {
 	Generic(#[from] anyhow::Error),
 }
 
-/// Convert sea_query::Value to QueryValue for parameter binding
-fn convert_value_to_query_value(value: sea_query::Value) -> QueryValue {
-	use sea_query::Value as SV;
+/// Convert reinhardt_query Value to QueryValue for parameter binding
+fn convert_value_to_query_value(value: reinhardt_query::value::Value) -> QueryValue {
+	use reinhardt_query::value::Value as SV;
 
 	match value {
 		// Null values
@@ -81,6 +83,7 @@ fn convert_value_to_query_value(value: sea_query::Value) -> QueryValue {
 		| SV::ChronoDateTime(None)
 		| SV::Json(None)
 		| SV::Decimal(None)
+		| SV::BigDecimal(None)
 		| SV::Uuid(None) => QueryValue::Null,
 
 		// Boolean
@@ -92,11 +95,18 @@ fn convert_value_to_query_value(value: sea_query::Value) -> QueryValue {
 		SV::Int(Some(v)) => QueryValue::Int(v as i64),
 		SV::BigInt(Some(v)) => QueryValue::Int(v),
 
-		// Unsigned integers (convert to i64, may overflow for large values)
+		// Unsigned integers (convert to i64 with checked conversion for large values)
 		SV::TinyUnsigned(Some(v)) => QueryValue::Int(v as i64),
 		SV::SmallUnsigned(Some(v)) => QueryValue::Int(v as i64),
 		SV::Unsigned(Some(v)) => QueryValue::Int(v as i64),
-		SV::BigUnsigned(Some(v)) => QueryValue::Int(v as i64),
+		SV::BigUnsigned(Some(v)) => QueryValue::Int(i64::try_from(v).unwrap_or_else(|_| {
+			tracing::warn!(
+				value = v,
+				"BigUnsigned value {} exceeds i64::MAX, clamping to i64::MAX",
+				v
+			);
+			i64::MAX
+		})),
 
 		// Floating point
 		SV::Float(Some(v)) => QueryValue::Float(v as f64),
@@ -110,12 +120,14 @@ fn convert_value_to_query_value(value: sea_query::Value) -> QueryValue {
 		SV::Bytes(Some(b)) => QueryValue::Bytes(b.to_vec()),
 
 		// Chrono datetime types
-		SV::ChronoDateTimeUtc(Some(dt)) => QueryValue::Timestamp(dt),
+		SV::ChronoDateTimeUtc(Some(dt)) => QueryValue::Timestamp(*dt),
 
 		// For other datetime types, convert to UTC if possible
-		SV::ChronoDateTimeLocal(Some(dt)) => QueryValue::Timestamp(dt.with_timezone(&chrono::Utc)),
+		SV::ChronoDateTimeLocal(Some(dt)) => {
+			QueryValue::Timestamp((*dt).with_timezone(&chrono::Utc))
+		}
 		SV::ChronoDateTimeWithTimeZone(Some(dt)) => {
-			QueryValue::Timestamp(dt.with_timezone(&chrono::Utc))
+			QueryValue::Timestamp((*dt).with_timezone(&chrono::Utc))
 		}
 
 		// Other datetime types that cannot be easily converted
@@ -127,20 +139,39 @@ fn convert_value_to_query_value(value: sea_query::Value) -> QueryValue {
 		// JSON - convert to string
 		SV::Json(_) => QueryValue::String(format!("{:?}", value)),
 
-		// Decimal - convert to f64
-		SV::Decimal(Some(d)) => QueryValue::Float(d.to_f64().unwrap_or(0.0)),
+		// Decimal - convert to f64 with fallback through string parsing
+		SV::Decimal(Some(d)) => {
+			let f = d.to_f64().unwrap_or_else(|| {
+				tracing::warn!(
+					decimal = %d,
+					"Decimal cannot be directly represented as f64, falling back to string parsing"
+				);
+				d.to_string().parse::<f64>().unwrap_or(0.0)
+			});
+			QueryValue::Float(f)
+		}
+		SV::BigDecimal(Some(d)) => {
+			let f = d.to_string().parse::<f64>().unwrap_or_else(|_| {
+				tracing::warn!(
+					big_decimal = %d,
+					"BigDecimal cannot be represented as f64"
+				);
+				0.0
+			});
+			QueryValue::Float(f)
+		}
 
 		// UUID
-		SV::Uuid(Some(u)) => QueryValue::Uuid(u),
+		SV::Uuid(Some(u)) => QueryValue::Uuid(*u),
 
 		// Arrays - convert to string
-		// For sea-query 1.0.0-rc.29+: Array(ArrayType, Option<Box<Vec<Value>>>)
+		// For reinhardt-query 1.0.0-rc.29+: Array(ArrayType, Option<Box<Vec<Value>>>)
 		SV::Array(_, arr) => QueryValue::String(format!("{:?}", arr)),
 	}
 }
 
-/// Convert sea_query::Values (`Vec<Value>`) to `Vec<QueryValue>`
-pub fn convert_values(values: sea_query::Values) -> Vec<QueryValue> {
+/// Convert reinhardt_query Values (`Vec<Value>`) to `Vec<QueryValue>`
+pub fn convert_values(values: reinhardt_query::prelude::Values) -> Vec<QueryValue> {
 	values
 		.0
 		.into_iter()
@@ -271,7 +302,7 @@ impl<T: Model> SelectExecution<T> {
 	/// ```rust,no_run
 	/// use reinhardt_db::orm::execution::SelectExecution;
 	/// use reinhardt_db::orm::Model;
-	/// use sea_query::{Alias, Query};
+	/// use reinhardt_query::prelude::{QueryStatementBuilder, Alias, Query};
 	/// use serde::{Serialize, Deserialize};
 	///
 	/// #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -313,7 +344,7 @@ impl<T: Model> SelectExecution<T> {
 	/// ```rust,ignore
 	/// use reinhardt_db::orm::execution::SelectExecution;
 	/// use reinhardt_db::orm::Model;
-	/// use sea_query::{Alias, Expr, Query};
+	/// use reinhardt_query::prelude::{QueryStatementBuilder, Alias, Expr, Query};
 	/// use serde::{Serialize, Deserialize};
 	///
 	/// #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -353,14 +384,16 @@ impl<T: Model> SelectExecution<T> {
 #[async_trait::async_trait]
 impl<T: Model> QueryExecution<T> for SelectExecution<T>
 where
-	T::PrimaryKey: Into<sea_query::Value> + Clone + Send + Sync,
+	T::PrimaryKey: Into<reinhardt_query::value::Value> + Clone + Send + Sync,
 	T: Send + Sync,
 {
 	fn get(&self, pk: &T::PrimaryKey) -> SelectStatement {
 		Query::select()
 			.from(Alias::new(T::table_name()))
-			.column(sea_query::Asterisk)
-			.and_where(Expr::col(Alias::new(T::primary_key_field())).eq(pk.clone()))
+			.column(ColumnRef::Asterisk)
+			.and_where(
+				Expr::col(Alias::new(T::primary_key_field())).eq(Expr::val(pk.clone().into())),
+			)
 			.limit(1)
 			.to_owned()
 	}
@@ -407,7 +440,7 @@ where
 		// Use the original statement as a subquery and count all rows from it
 		// This preserves all WHERE, JOIN, and other conditions
 		Query::select()
-			.expr(Func::count(Expr::col(sea_query::Asterisk)))
+			.expr(Func::count(Expr::asterisk().into_simple_expr()))
 			.from_subquery(self.stmt.clone(), Alias::new("subquery"))
 			.to_owned()
 	}
@@ -427,7 +460,7 @@ where
 		T: for<'de> serde::Deserialize<'de>,
 	{
 		let stmt = self.get(pk);
-		let (sql, values) = stmt.build_any(&sea_query::PostgresQueryBuilder);
+		let (sql, values) = stmt.build_any(&reinhardt_query::prelude::PostgresQueryBuilder);
 
 		let query_values = convert_values(values);
 		let row = db.query_one(&sql, query_values).await?;
@@ -444,7 +477,7 @@ where
 		T: for<'de> serde::Deserialize<'de>,
 	{
 		let stmt = self.all();
-		let (sql, values) = stmt.build_any(&sea_query::PostgresQueryBuilder);
+		let (sql, values) = stmt.build_any(&reinhardt_query::prelude::PostgresQueryBuilder);
 
 		let query_values = convert_values(values);
 		let rows = db.query(&sql, query_values).await?;
@@ -465,7 +498,7 @@ where
 		T: for<'de> serde::Deserialize<'de>,
 	{
 		let stmt = self.first();
-		let (sql, values) = stmt.build_any(&sea_query::PostgresQueryBuilder);
+		let (sql, values) = stmt.build_any(&reinhardt_query::prelude::PostgresQueryBuilder);
 
 		let query_values = convert_values(values);
 		let rows = db.query(&sql, query_values).await?;
@@ -487,7 +520,7 @@ where
 		T: for<'de> serde::Deserialize<'de>,
 	{
 		let stmt = self.one();
-		let (sql, values) = stmt.build_any(&sea_query::PostgresQueryBuilder);
+		let (sql, values) = stmt.build_any(&reinhardt_query::prelude::PostgresQueryBuilder);
 
 		let query_values = convert_values(values);
 		let rows = db.query(&sql, query_values).await?;
@@ -510,7 +543,7 @@ where
 		T: for<'de> serde::Deserialize<'de>,
 	{
 		let stmt = self.one_or_none();
-		let (sql, values) = stmt.build_any(&sea_query::PostgresQueryBuilder);
+		let (sql, values) = stmt.build_any(&reinhardt_query::prelude::PostgresQueryBuilder);
 
 		let query_values = convert_values(values);
 		let rows = db.query(&sql, query_values).await?;
@@ -533,7 +566,7 @@ where
 		S: for<'de> serde::Deserialize<'de>,
 	{
 		let stmt = self.scalar();
-		let (sql, values) = stmt.build_any(&sea_query::PostgresQueryBuilder);
+		let (sql, values) = stmt.build_any(&reinhardt_query::prelude::PostgresQueryBuilder);
 
 		let query_values = convert_values(values);
 		let rows = db.query(&sql, query_values).await?;
@@ -558,7 +591,7 @@ where
 		db: &super::connection::DatabaseConnection,
 	) -> Result<i64, ExecutionError> {
 		let stmt = self.count();
-		let (sql, values) = stmt.build_any(&sea_query::PostgresQueryBuilder);
+		let (sql, values) = stmt.build_any(&reinhardt_query::prelude::PostgresQueryBuilder);
 
 		let query_values = convert_values(values);
 		let row = db.query_one(&sql, query_values).await?;
@@ -582,7 +615,7 @@ where
 		db: &super::connection::DatabaseConnection,
 	) -> Result<bool, ExecutionError> {
 		let stmt = self.exists();
-		let (sql, values) = stmt.build_any(&sea_query::PostgresQueryBuilder);
+		let (sql, values) = stmt.build_any(&reinhardt_query::prelude::PostgresQueryBuilder);
 
 		let query_values = convert_values(values);
 		let row = db.query_one(&sql, query_values).await?;
@@ -748,6 +781,7 @@ impl Default for QueryOptions {
 mod tests {
 	use super::*;
 	use reinhardt_core::validators::TableName;
+	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 
 	#[derive(Debug, Clone, Serialize, Deserialize)]
@@ -789,11 +823,11 @@ mod tests {
 
 	#[test]
 	fn test_execution_get() {
-		use sea_query::{Alias, PostgresQueryBuilder, Query};
+		use reinhardt_query::prelude::{Alias, PostgresQueryBuilder, Query, QueryStatementBuilder};
 
 		let stmt = Query::select()
 			.from(Alias::new("users"))
-			.column(sea_query::Asterisk)
+			.column(ColumnRef::Asterisk)
 			.to_owned();
 		let exec = SelectExecution::<User>::new(stmt);
 		let result_stmt = exec.get(&123);
@@ -804,11 +838,11 @@ mod tests {
 
 	#[test]
 	fn test_all() {
-		use sea_query::{Alias, PostgresQueryBuilder, Query};
+		use reinhardt_query::prelude::{Alias, PostgresQueryBuilder, Query, QueryStatementBuilder};
 
 		let stmt = Query::select()
 			.from(Alias::new("users"))
-			.column(sea_query::Asterisk)
+			.column(ColumnRef::Asterisk)
 			.to_owned();
 		let exec = SelectExecution::<User>::new(stmt);
 		let result_stmt = exec.all();
@@ -819,11 +853,13 @@ mod tests {
 
 	#[test]
 	fn test_first() {
-		use sea_query::{Alias, Expr, PostgresQueryBuilder, Query};
+		use reinhardt_query::prelude::{
+			Alias, Expr, PostgresQueryBuilder, Query, QueryStatementBuilder,
+		};
 
 		let stmt = Query::select()
 			.from(Alias::new("users"))
-			.column(sea_query::Asterisk)
+			.column(ColumnRef::Asterisk)
 			.and_where(Expr::col(Alias::new("active")).eq(true))
 			.to_owned();
 		let exec = SelectExecution::<User>::new(stmt);
@@ -834,11 +870,13 @@ mod tests {
 
 	#[test]
 	fn test_execution_count() {
-		use sea_query::{Alias, Expr, PostgresQueryBuilder, Query};
+		use reinhardt_query::prelude::{
+			Alias, Expr, PostgresQueryBuilder, Query, QueryStatementBuilder,
+		};
 
 		let stmt = Query::select()
 			.from(Alias::new("users"))
-			.column(sea_query::Asterisk)
+			.column(ColumnRef::Asterisk)
 			.and_where(Expr::col(Alias::new("active")).eq(true))
 			.to_owned();
 		let exec = SelectExecution::<User>::new(stmt);
@@ -849,11 +887,13 @@ mod tests {
 
 	#[test]
 	fn test_execution_exists() {
-		use sea_query::{Alias, Expr, PostgresQueryBuilder, Query};
+		use reinhardt_query::prelude::{
+			Alias, Expr, PostgresQueryBuilder, Query, QueryStatementBuilder,
+		};
 
 		let stmt = Query::select()
 			.from(Alias::new("users"))
-			.column(sea_query::Asterisk)
+			.column(ColumnRef::Asterisk)
 			.and_where(Expr::col(Alias::new("name")).eq("Alice"))
 			.to_owned();
 		let exec = SelectExecution::<User>::new(stmt);
@@ -878,5 +918,49 @@ mod tests {
 		let option = LoadOption::LoadOnly(vec!["id".to_string(), "name".to_string()]);
 		let comment = option.to_sql_comment();
 		assert!(comment.contains("load_only(id, name)"));
+	}
+
+	#[rstest]
+	#[case::zero(0u64, 0i64)]
+	#[case::one(1u64, 1i64)]
+	#[case::i64_max(i64::MAX as u64, i64::MAX)]
+	#[test]
+	fn test_big_unsigned_to_query_value_within_range(#[case] input: u64, #[case] expected: i64) {
+		// Arrange
+		let value = reinhardt_query::value::Value::BigUnsigned(Some(input));
+
+		// Act
+		let result = convert_value_to_query_value(value);
+
+		// Assert
+		assert!(matches!(result, QueryValue::Int(v) if v == expected));
+	}
+
+	#[rstest]
+	#[case::i64_max_plus_one(i64::MAX as u64 + 1)]
+	#[case::u64_max(u64::MAX)]
+	#[test]
+	fn test_big_unsigned_overflow_clamps_to_i64_max(#[case] input: u64) {
+		// Arrange
+		let value = reinhardt_query::value::Value::BigUnsigned(Some(input));
+
+		// Act
+		let result = convert_value_to_query_value(value);
+
+		// Assert: Should clamp to i64::MAX instead of wrapping to negative
+		assert!(matches!(result, QueryValue::Int(v) if v == i64::MAX));
+	}
+
+	#[rstest]
+	#[test]
+	fn test_big_unsigned_none_converts_to_null() {
+		// Arrange
+		let value = reinhardt_query::value::Value::BigUnsigned(None);
+
+		// Act
+		let result = convert_value_to_query_value(value);
+
+		// Assert
+		assert!(matches!(result, QueryValue::Null));
 	}
 }

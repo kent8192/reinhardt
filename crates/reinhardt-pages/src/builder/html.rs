@@ -333,13 +333,29 @@ impl ElementBuilder {
 // ============================================================================
 
 /// Internal helper for creating element builders (DRY principle)
+///
+/// # Errors
+///
+/// Returns an error string if the DOM element cannot be created (e.g., invalid
+/// tag name or unavailable DOM environment).
+#[inline]
+fn try_create_element_builder(tag: &str) -> Result<ElementBuilder, String> {
+	let doc = Document::global();
+	let element = doc.create_element(tag)?;
+	Ok(ElementBuilder::new(element))
+}
+
+/// Internal helper for creating element builders (DRY principle)
+///
+/// # Panics
+///
+/// Panics if the DOM element cannot be created. This indicates the browser
+/// environment is unavailable or severely broken, as creating standard HTML
+/// elements should always succeed in a valid DOM context.
 #[inline]
 fn create_element_builder(tag: &str) -> ElementBuilder {
-	let doc = Document::global();
-	let element = doc
-		.create_element(tag)
-		.unwrap_or_else(|_| panic!("Failed to create {}", tag));
-	ElementBuilder::new(element)
+	try_create_element_builder(tag)
+		.unwrap_or_else(|e| panic!("failed to create <{tag}> element: {e}"))
 }
 
 /// Macro for defining HTML element creation functions

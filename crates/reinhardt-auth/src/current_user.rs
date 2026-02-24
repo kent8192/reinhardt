@@ -117,6 +117,24 @@ impl<U: BaseUser + Clone> CurrentUser<U> {
 	pub fn into_user(self) -> Result<U, AuthenticationError> {
 		self.user.ok_or(AuthenticationError::NotAuthenticated)
 	}
+
+	/// Returns the user as a trait object for permission checking.
+	///
+	/// This method is used to pass the user to `ModelAdmin` permission methods
+	/// that accept `&(dyn Any + Send + Sync)`.
+	///
+	/// # Returns
+	///
+	/// Returns `Some` with a reference to the user as a trait object if authenticated,
+	/// or `None` if the user is anonymous.
+	pub fn as_any(&self) -> Option<&(dyn std::any::Any + Send + Sync)>
+	where
+		U: 'static,
+	{
+		self.user
+			.as_ref()
+			.map(|u| u as &(dyn std::any::Any + Send + Sync))
+	}
 }
 
 #[async_trait]
@@ -148,13 +166,13 @@ where
 
 		// 3. Check if authenticated
 		#[cfg(feature = "params")]
-		if !auth_state.is_authenticated {
+		if !auth_state.is_authenticated() {
 			return Ok(Self::anonymous());
 		}
 
 		// 4. Parse user_id to PrimaryKey type
 		#[cfg(feature = "params")]
-		let base_pk: <U as BaseUser>::PrimaryKey = match auth_state.user_id.parse() {
+		let base_pk: <U as BaseUser>::PrimaryKey = match auth_state.user_id().parse() {
 			Ok(pk) => pk,
 			Err(_) => return Ok(Self::anonymous()),
 		};
@@ -179,7 +197,7 @@ where
 
 		// 7. Parse UUID for CurrentUser (Uuid is commonly used for user IDs)
 		#[cfg(feature = "params")]
-		let user_id = match Uuid::parse_str(&auth_state.user_id) {
+		let user_id = match Uuid::parse_str(auth_state.user_id()) {
 			Ok(id) => id,
 			Err(_) => Uuid::nil(),
 		};

@@ -6,8 +6,9 @@
 use super::ordering_field::OrderingField;
 use super::{FilterBackend, FilterResult};
 use async_trait::async_trait;
-use reinhardt_db::orm::{Lookup, Model, QueryFieldCompiler};
-use sea_query::{Cond, Expr, MysqlQueryBuilder, Query};
+use reinhardt_db::orm::{
+	Cond, Expr, Lookup, Model, MySqlQueryBuilder, Query, QueryFieldCompiler, QueryStatementBuilder,
+};
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
@@ -258,13 +259,13 @@ impl<M: Model> QueryFilter<M> {
 		&self.ordering
 	}
 
-	/// Compile lookups to SQL WHERE clause using SeaQuery
+	/// Compile lookups to SQL WHERE clause using reinhardt-query
 	fn compile_where_clause(&self) -> Option<String> {
 		if self.lookups.is_empty() && self.or_groups.is_empty() {
 			return None;
 		}
 
-		// Build the main AND condition using SeaQuery
+		// Build the main AND condition using reinhardt-query
 		let mut main_cond = Cond::all();
 
 		// Add regular AND conditions
@@ -295,7 +296,7 @@ impl<M: Model> QueryFilter<M> {
 		let query = Query::select()
 			.expr(Expr::val(1))
 			.cond_where(main_cond)
-			.to_string(MysqlQueryBuilder);
+			.to_string(MySqlQueryBuilder);
 
 		// Extract just the WHERE portion (after "WHERE ")
 		query.find("WHERE ").map(|idx| query[idx + 6..].to_string())
@@ -399,143 +400,5 @@ impl<M: Model> FilterBackend for QueryFilter<M> {
 		}
 
 		Ok(sql)
-	}
-}
-
-#[cfg(test)]
-mod tests {
-	use super::*;
-	use reinhardt_db::orm::Field;
-
-	#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-	struct TestPost {
-		id: Option<i64>,
-		title: String,
-		content: String,
-		age: i32,
-		created_at: String,
-	}
-
-	reinhardt_test::impl_test_model!(TestPost, i64, "test_posts");
-
-	#[tokio::test]
-	async fn test_single_lookup() {
-		let lookup = Field::<TestPost, String>::new(vec!["title"]).eq("Test".to_string());
-		let filter = QueryFilter::new().with_lookup(lookup);
-
-		let sql = "SELECT * FROM test_posts".to_string();
-		let result = filter.filter_queryset(&HashMap::new(), sql).await.unwrap();
-
-		assert!(result.contains("WHERE"));
-		assert!(result.contains("title = 'Test'"));
-	}
-
-	#[tokio::test]
-	async fn test_multiple_lookups() {
-		let filter = QueryFilter::new()
-			.with_lookup(Field::<TestPost, String>::new(vec!["title"]).icontains("rust"))
-			.with_lookup(Field::<TestPost, i32>::new(vec!["age"]).gte(18));
-
-		let sql = "SELECT * FROM test_posts".to_string();
-		let result = filter.filter_queryset(&HashMap::new(), sql).await.unwrap();
-
-		assert!(result.contains("WHERE"));
-		assert!(result.contains("title"));
-		assert!(result.contains("age >= 18"));
-		assert!(result.contains(" AND "));
-	}
-
-	#[tokio::test]
-	async fn test_ordering() {
-		use crate::filters::field_extensions::FieldOrderingExt;
-
-		let filter =
-			QueryFilter::new().order_by(Field::<TestPost, String>::new(vec!["title"]).asc());
-
-		let sql = "SELECT * FROM test_posts".to_string();
-		let result = filter.filter_queryset(&HashMap::new(), sql).await.unwrap();
-
-		assert!(result.contains("ORDER BY"));
-		assert!(result.contains("title ASC"));
-	}
-
-	#[tokio::test]
-	async fn test_lookup_and_ordering() {
-		use crate::filters::field_extensions::FieldOrderingExt;
-
-		let filter = QueryFilter::new()
-			.with_lookup(Field::<TestPost, String>::new(vec!["title"]).icontains("rust"))
-			.order_by(Field::<TestPost, String>::new(vec!["created_at"]).desc());
-
-		let sql = "SELECT * FROM test_posts".to_string();
-		let result = filter.filter_queryset(&HashMap::new(), sql).await.unwrap();
-
-		assert!(result.contains("WHERE"));
-		assert!(result.contains("ORDER BY"));
-		assert!(result.contains("created_at DESC"));
-	}
-
-	#[tokio::test]
-	async fn test_append_to_existing_order_by() {
-		use crate::filters::field_extensions::FieldOrderingExt;
-
-		let filter =
-			QueryFilter::new().order_by(Field::<TestPost, String>::new(vec!["title"]).asc());
-
-		let sql = "SELECT * FROM test_posts ORDER BY created_at DESC".to_string();
-		let result = filter.filter_queryset(&HashMap::new(), sql).await.unwrap();
-
-		assert!(result.contains("ORDER BY"));
-		assert!(result.contains("created_at DESC"));
-		assert!(result.contains("title ASC"));
-		assert!(result.contains("created_at DESC, title ASC"));
-	}
-
-	#[tokio::test]
-	async fn test_append_order_with_limit() {
-		use crate::filters::field_extensions::FieldOrderingExt;
-
-		let filter =
-			QueryFilter::new().order_by(Field::<TestPost, String>::new(vec!["title"]).asc());
-
-		let sql = "SELECT * FROM test_posts ORDER BY created_at DESC LIMIT 10".to_string();
-		let result = filter.filter_queryset(&HashMap::new(), sql).await.unwrap();
-
-		assert!(result.contains("ORDER BY"));
-		assert!(result.contains("created_at DESC, title ASC"));
-		assert!(result.contains("LIMIT 10"));
-		// Ensure LIMIT comes after ORDER BY
-		let order_pos = result.find("ORDER BY").unwrap();
-		let limit_pos = result.find("LIMIT").unwrap();
-		assert!(order_pos < limit_pos);
-	}
-
-	#[test]
-	fn test_append_order_clause_method() {
-		let filter = QueryFilter::<TestPost>::new();
-
-		// Test with existing ORDER BY
-		let sql = "SELECT * FROM test_posts ORDER BY created_at DESC";
-		let result = filter.append_order_clause(sql, "title ASC");
-		assert_eq!(
-			result,
-			"SELECT * FROM test_posts ORDER BY created_at DESC, title ASC"
-		);
-
-		// Test with LIMIT
-		let sql = "SELECT * FROM test_posts ORDER BY created_at DESC LIMIT 10";
-		let result = filter.append_order_clause(sql, "title ASC");
-		assert_eq!(
-			result,
-			"SELECT * FROM test_posts ORDER BY created_at DESC, title ASC LIMIT 10"
-		);
-
-		// Test with OFFSET
-		let sql = "SELECT * FROM test_posts ORDER BY created_at DESC OFFSET 5";
-		let result = filter.append_order_clause(sql, "title ASC");
-		assert_eq!(
-			result,
-			"SELECT * FROM test_posts ORDER BY created_at DESC, title ASC OFFSET 5"
-		);
 	}
 }

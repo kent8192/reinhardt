@@ -40,12 +40,18 @@ pub mod error;
 pub mod export;
 pub mod fields;
 pub mod import;
+pub mod limits;
 pub mod list;
 pub mod update;
+
+pub mod audit;
+pub mod security;
 
 // Server-side only modules
 #[cfg(not(target_arch = "wasm32"))]
 pub mod type_inference;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod validation;
 
 // Re-exports
 pub use create::*;

@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 //! Signal batching system for aggregating multiple signals into single dispatches
 //!
 //! This module provides functionality to batch multiple signal emissions into a single
@@ -346,6 +348,26 @@ mod tests {
 	use parking_lot::Mutex as ParkingLotMutex;
 	use std::sync::atomic::{AtomicUsize, Ordering};
 
+	/// Polls a condition until it returns true or timeout is reached.
+	async fn poll_until<F, Fut>(
+		timeout: std::time::Duration,
+		interval: std::time::Duration,
+		mut condition: F,
+	) -> Result<(), String>
+	where
+		F: FnMut() -> Fut,
+		Fut: std::future::Future<Output = bool>,
+	{
+		let start = std::time::Instant::now();
+		while start.elapsed() < timeout {
+			if condition().await {
+				return Ok(());
+			}
+			tokio::time::sleep(interval).await;
+		}
+		Err(format!("Timeout after {:?} waiting for condition", timeout))
+	}
+
 	#[test]
 	fn test_batch_config() {
 		let config = BatchConfig::new()
@@ -451,7 +473,7 @@ mod tests {
 		}
 
 		// Poll until time-based flush completes
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(400),
 			Duration::from_millis(20),
 			|| async { counter.load(Ordering::SeqCst) == 3 },

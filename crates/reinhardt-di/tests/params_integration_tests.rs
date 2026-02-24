@@ -1,6 +1,4 @@
-//! Tests for reinhardt-params integration with DI (params feature)
-
-#![cfg(feature = "params")]
+//! Tests for reinhardt-params integration with DI
 
 use reinhardt_di::{DiResult, Injectable, InjectionContext, SingletonScope};
 use rstest::*;

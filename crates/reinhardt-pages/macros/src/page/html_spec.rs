@@ -13,7 +13,7 @@
 
 use syn::Result;
 
-use reinhardt_pages_ast::TypedPageElement;
+use reinhardt_manouche::core::TypedPageElement;
 
 /// HTML element specification.
 #[derive(Debug, Clone)]
@@ -1025,7 +1025,8 @@ pub(super) static TRACK_SPEC: ElementSpec = ElementSpec {
 		expected_type: AttrType::String,
 		required: true,
 	}],
-	allowed_attrs: Some(&["kind", "label", "srclang", "default"]),
+	// Fixes #851: include required attribute "src" in allowed_attrs
+	allowed_attrs: Some(&["src", "kind", "label", "srclang", "default"]),
 	is_void: true,
 	is_interactive: false,
 	content_model: Some(ContentModel::Empty),
@@ -1110,7 +1111,8 @@ pub(super) static PARAM_SPEC: ElementSpec = ElementSpec {
 		expected_type: AttrType::String,
 		required: true,
 	}],
-	allowed_attrs: Some(&["value"]),
+	// Fixes #851: include required attribute "name" in allowed_attrs
+	allowed_attrs: Some(&["name", "value"]),
 	is_void: true,
 	is_interactive: false,
 	content_model: Some(ContentModel::Empty),
@@ -1226,7 +1228,8 @@ pub(super) static DATA_SPEC: ElementSpec = ElementSpec {
 		expected_type: AttrType::String,
 		required: true,
 	}],
-	allowed_attrs: Some(&[]),
+	// Fixes #851: include required attribute "value" in allowed_attrs
+	allowed_attrs: Some(&["value"]),
 	is_void: false,
 	is_interactive: false,
 	content_model: None,
@@ -1675,7 +1678,7 @@ fn validate_content_model(element: &TypedPageElement, spec: &ElementSpec) -> Res
 		Some(ContentModel::TextOnly) => {
 			// Text-only elements can have text and expressions, but not other elements
 			for child in &element.children {
-				if matches!(child, reinhardt_pages_ast::TypedPageNode::Element(_)) {
+				if matches!(child, reinhardt_manouche::core::TypedPageNode::Element(_)) {
 					return Err(syn::Error::new(
 						element.span,
 						format!(
@@ -1689,7 +1692,7 @@ fn validate_content_model(element: &TypedPageElement, spec: &ElementSpec) -> Res
 		Some(ContentModel::OnlyTags(allowed_tags)) => {
 			// Check that all child elements are in the allowed list
 			for child in &element.children {
-				if let reinhardt_pages_ast::TypedPageNode::Element(child_elem) = child {
+				if let reinhardt_manouche::core::TypedPageNode::Element(child_elem) = child {
 					let child_tag = child_elem.tag.to_string();
 					if !allowed_tags.contains(&child_tag.as_str()) {
 						return Err(syn::Error::new(
@@ -1765,6 +1768,7 @@ pub(super) static INPUT_ENUM_ATTRS: ElementEnumAttrs = ElementEnumAttrs {
 			"month",
 			"color",
 			"range",
+			"image",
 		],
 	}],
 };
@@ -1788,7 +1792,7 @@ pub(super) static FORM_ENUM_ATTRS: ElementEnumAttrs = ElementEnumAttrs {
 	attrs: &[
 		EnumAttrSpec {
 			name: "method",
-			valid_values: &["get", "post"],
+			valid_values: &["get", "post", "dialog"],
 		},
 		EnumAttrSpec {
 			name: "enctype",

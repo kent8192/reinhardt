@@ -4,6 +4,7 @@
 /// This module provides both string-based (runtime) and type-safe (compile-time)
 /// URL reversal mechanisms.
 // use crate::path;
+use super::pattern::validate_reverse_param;
 use super::{PathPattern, Route};
 use aho_corasick::AhoCorasick;
 use reinhardt_core::exception::{Error, Result};
@@ -57,6 +58,16 @@ pub fn reverse_with_aho_corasick(pattern: &str, params: &HashMap<String, String>
 
 	if param_names.is_empty() {
 		return pattern.to_string();
+	}
+
+	// Validate parameter values against injection attacks
+	for (name, value) in params {
+		if !validate_reverse_param(value) {
+			panic!(
+				"Invalid parameter value for '{}': contains dangerous characters (path separators, query delimiters, or encoded sequences)",
+				name
+			);
+		}
 	}
 
 	// Build patterns for Aho-Corasick: ["{id}", "{post_id}", ...]
@@ -158,6 +169,16 @@ pub fn extract_param_names(pattern: &str) -> Vec<String> {
 /// assert_eq!(url, "/users/123/posts/456/");
 /// ```
 pub fn reverse_single_pass(pattern: &str, params: &HashMap<String, String>) -> String {
+	// Validate parameter values against injection attacks
+	for (name, value) in params {
+		if !validate_reverse_param(value) {
+			panic!(
+				"Invalid parameter value for '{}': contains dangerous characters (path separators, query delimiters, or encoded sequences)",
+				name
+			);
+		}
+	}
+
 	let mut result = String::with_capacity(pattern.len());
 	let mut chars = pattern.chars().peekable();
 
@@ -316,6 +337,16 @@ impl UrlReverser {
 		for param_name in pattern.param_names() {
 			if !params.contains_key(param_name) {
 				return Err(Error::Validation(format!("missing param: {}", param_name)));
+			}
+		}
+
+		// Validate parameter values against injection attacks
+		for (name, value) in params {
+			if !validate_reverse_param(value) {
+				return Err(Error::Validation(format!(
+					"invalid param '{}': contains dangerous characters",
+					name
+				)));
 			}
 		}
 
@@ -501,6 +532,16 @@ pub fn reverse_typed_with_params<U: UrlPatternWithParams>(
 	for param_name in U::PARAMS {
 		if !params.contains_key(param_name) {
 			return Err(ReverseError::MissingParameter(param_name.to_string()));
+		}
+	}
+
+	// Validate parameter values against injection attacks
+	for (name, value) in params {
+		if !validate_reverse_param(value) {
+			return Err(ReverseError::Validation(format!(
+				"invalid param '{}': contains dangerous characters",
+				name
+			)));
 		}
 	}
 
@@ -1189,5 +1230,162 @@ mod tests {
 		println!("\nPerformance comparison (2 params, 10000 iterations):");
 		println!("  Single-pass: {:?}", single_pass_duration);
 		println!("  Aho-Corasick: {:?}", aho_corasick_duration);
+	}
+
+	// ===================================================================
+	// URL reversal parameter injection prevention tests (Issue #423)
+	// ===================================================================
+
+	#[test]
+	fn test_reverser_rejects_path_separator_injection() {
+		// Arrange
+		let mut reverser = UrlReverser::new();
+		let route =
+			Route::new(path!("/users/{id}/"), Arc::new(TestHandler)).with_name("users-detail");
+		reverser.register(route);
+
+		let mut params = HashMap::new();
+		params.insert("id".to_string(), "123/../../admin".to_string());
+
+		// Act
+		let result = reverser.reverse("users-detail", &params);
+
+		// Assert
+		assert!(
+			result.is_err(),
+			"Reverser should reject path separator injection"
+		);
+	}
+
+	#[test]
+	fn test_reverser_rejects_query_injection() {
+		// Arrange
+		let mut reverser = UrlReverser::new();
+		let route =
+			Route::new(path!("/users/{id}/"), Arc::new(TestHandler)).with_name("users-detail");
+		reverser.register(route);
+
+		let mut params = HashMap::new();
+		params.insert("id".to_string(), "123?admin=true".to_string());
+
+		// Act
+		let result = reverser.reverse("users-detail", &params);
+
+		// Assert
+		assert!(
+			result.is_err(),
+			"Reverser should reject query string injection"
+		);
+	}
+
+	#[test]
+	fn test_reverser_rejects_fragment_injection() {
+		// Arrange
+		let mut reverser = UrlReverser::new();
+		let route =
+			Route::new(path!("/users/{id}/"), Arc::new(TestHandler)).with_name("users-detail");
+		reverser.register(route);
+
+		let mut params = HashMap::new();
+		params.insert("id".to_string(), "123#admin".to_string());
+
+		// Act
+		let result = reverser.reverse("users-detail", &params);
+
+		// Assert
+		assert!(result.is_err(), "Reverser should reject fragment injection");
+	}
+
+	#[test]
+	fn test_reverser_rejects_encoded_injection() {
+		// Arrange
+		let mut reverser = UrlReverser::new();
+		let route =
+			Route::new(path!("/users/{id}/"), Arc::new(TestHandler)).with_name("users-detail");
+		reverser.register(route);
+
+		let mut params = HashMap::new();
+		params.insert("id".to_string(), "123%2f..%2fadmin".to_string());
+
+		// Act
+		let result = reverser.reverse("users-detail", &params);
+
+		// Assert
+		assert!(
+			result.is_err(),
+			"Reverser should reject percent-encoded injection"
+		);
+	}
+
+	#[test]
+	fn test_reverser_allows_safe_values() {
+		// Arrange
+		let mut reverser = UrlReverser::new();
+		let route =
+			Route::new(path!("/users/{id}/"), Arc::new(TestHandler)).with_name("users-detail");
+		reverser.register(route);
+
+		let mut params = HashMap::new();
+		params.insert("id".to_string(), "456".to_string());
+
+		// Act
+		let result = reverser.reverse("users-detail", &params);
+
+		// Assert
+		assert!(result.is_ok());
+		assert_eq!(result.unwrap(), "/users/456/");
+	}
+
+	#[test]
+	#[should_panic(expected = "contains dangerous characters")]
+	fn test_single_pass_rejects_path_separator() {
+		// Arrange
+		let mut params = HashMap::new();
+		params.insert("id".to_string(), "123/admin".to_string());
+
+		// Act - should panic
+		reverse_single_pass("/users/{id}/", &params);
+	}
+
+	#[test]
+	#[should_panic(expected = "contains dangerous characters")]
+	fn test_aho_corasick_rejects_path_separator() {
+		// Arrange
+		let mut params = HashMap::new();
+		params.insert("id".to_string(), "123/admin".to_string());
+
+		// Act - should panic
+		reverse_with_aho_corasick("/users/{id}/", &params);
+	}
+
+	#[test]
+	fn test_typed_reverse_rejects_injection() {
+		// Arrange
+		let mut params = HashMap::new();
+		params.insert("id", "123/admin");
+
+		// Act
+		let result = reverse_typed_with_params::<UserDetailUrl>(&params);
+
+		// Assert
+		assert!(result.is_err(), "Typed reverse should reject injection");
+	}
+
+	#[test]
+	fn test_reverse_with_helper_rejects_injection() {
+		// Arrange
+		let mut reverser = UrlReverser::new();
+		let route =
+			Route::new(path!("/users/{id}/"), Arc::new(TestHandler)).with_name("users-detail");
+		reverser.register(route);
+
+		// Act
+		let result = reverser.reverse_with("users-detail", &[("id", "123?admin=true")]);
+
+		// Assert
+		assert!(
+			result.is_err(),
+			"reverse_with should reject query injection"
+		);
 	}
 }

@@ -3,11 +3,11 @@
 //! Provides detail view operations for admin models.
 
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, DetailResponse};
-use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
-use super::error::MapServerFnError;
+use super::error::{AdminAuth, MapServerFnError};
 
 /// Get detail view data for a single model instance
 ///
@@ -18,6 +18,10 @@ use super::error::MapServerFnError;
 ///
 /// This function is automatically exposed as an HTTP endpoint by the `#[server_fn]` macro.
 /// AdminSite and AdminDatabase dependencies are automatically injected via the DI system.
+///
+/// # Authentication
+///
+/// Requires staff (admin) permission and view permission for the model.
 ///
 /// # Example
 ///
@@ -34,7 +38,12 @@ pub async fn get_detail(
 	id: String,
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
+	#[inject] http_request: ServerFnRequest,
 ) -> Result<DetailResponse, ServerFnError> {
+	// Authentication and authorization check
+	let auth = AdminAuth::from_request(&http_request);
+	auth.require_view_permission(&model_name)?;
+
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();

@@ -10,7 +10,7 @@ use crate::{
 use chrono::Utc;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::broadcast;
+use tokio::sync::{Semaphore, broadcast};
 
 /// Worker configuration
 ///
@@ -175,6 +175,8 @@ pub struct Worker {
 	task_lock: Option<Arc<dyn TaskLock>>,
 	result_backend: Option<Arc<dyn ResultBackend>>,
 	webhook_senders: Vec<Arc<dyn WebhookSender>>,
+	/// Semaphore that enforces the configured concurrency limit
+	concurrency_semaphore: Arc<Semaphore>,
 }
 
 impl Worker {
@@ -190,6 +192,7 @@ impl Worker {
 	/// ```
 	pub fn new(config: WorkerConfig) -> Self {
 		let (shutdown_tx, _) = broadcast::channel(1);
+		let concurrency_semaphore = Arc::new(Semaphore::new(config.concurrency));
 
 		// Create webhook senders from configuration
 		let webhook_senders: Vec<Arc<dyn WebhookSender>> = config
@@ -207,6 +210,7 @@ impl Worker {
 			task_lock: None,
 			result_backend: None,
 			webhook_senders,
+			concurrency_semaphore,
 		}
 	}
 
@@ -285,15 +289,16 @@ impl Worker {
 		let mut shutdown_rx = self.shutdown_tx.subscribe();
 		let mut poll_interval = interval(self.config.poll_interval);
 
-		println!(
-			"[{}] Worker started with concurrency {}",
-			self.config.name, self.config.concurrency
+		tracing::info!(
+			worker = %self.config.name,
+			concurrency = self.config.concurrency,
+			"Worker started"
 		);
 
 		loop {
 			tokio::select! {
 				_ = shutdown_rx.recv() => {
-					println!("[{}] Shutdown signal received", self.config.name);
+					tracing::info!(worker = %self.config.name, "Shutdown signal received");
 					break;
 				}
 				_ = poll_interval.tick() => {
@@ -302,46 +307,76 @@ impl Worker {
 			}
 		}
 
-		println!("[{}] Worker stopped", self.config.name);
+		tracing::info!(worker = %self.config.name, "Worker stopped");
 		Ok(())
 	}
 
-	/// Try to process a single task from the backend
+	/// Try to process a single task from the backend.
+	///
+	/// Acquires a concurrency permit before executing the task, ensuring the
+	/// configured concurrency limit is enforced. The permit is released
+	/// when the spawned task completes.
 	async fn try_process_task(&self, backend: Arc<dyn TaskBackend>) {
 		match backend.dequeue().await {
 			Ok(Some(task_id)) => {
-				println!("[{}] Processing task: {}", self.config.name, task_id);
+				// Acquire a concurrency permit before executing the task.
+				// This enforces the configured concurrency limit.
+				let permit = match self.concurrency_semaphore.clone().acquire_owned().await {
+					Ok(permit) => permit,
+					Err(_) => {
+						tracing::error!(
+							worker = %self.config.name,
+							"Concurrency semaphore closed unexpectedly"
+						);
+						return;
+					}
+				};
 
-				// Execute task
+				tracing::info!(worker = %self.config.name, task_id = %task_id, "Processing task");
+
+				// Execute task; permit is held for the duration
 				match self.execute_task(task_id, backend.clone()).await {
 					Ok(_) => {
-						println!(
-							"[{}] Task {} completed successfully",
-							self.config.name, task_id
+						tracing::info!(
+							worker = %self.config.name,
+							task_id = %task_id,
+							"Task completed successfully"
 						);
 						if let Err(e) = backend.update_status(task_id, TaskStatus::Success).await {
-							eprintln!(
-								"[{}] Failed to update task {} status: {}",
-								self.config.name, task_id, e
+							tracing::error!(
+								worker = %self.config.name,
+								task_id = %task_id,
+								error = %e,
+								"Failed to update task status"
 							);
 						}
 					}
 					Err(e) => {
-						eprintln!("[{}] Task {} failed: {}", self.config.name, task_id, e);
+						tracing::error!(
+							worker = %self.config.name,
+							task_id = %task_id,
+							error = %e,
+							"Task failed"
+						);
 						if let Err(e) = backend.update_status(task_id, TaskStatus::Failure).await {
-							eprintln!(
-								"[{}] Failed to update task {} status: {}",
-								self.config.name, task_id, e
+							tracing::error!(
+								worker = %self.config.name,
+								task_id = %task_id,
+								error = %e,
+								"Failed to update task status"
 							);
 						}
 					}
 				}
+
+				// Permit is dropped here, releasing the concurrency slot
+				drop(permit);
 			}
 			Ok(None) => {
 				// No tasks available - interval will automatically wait before next poll
 			}
 			Err(e) => {
-				eprintln!("[{}] Failed to dequeue task: {}", self.config.name, e);
+				tracing::error!(worker = %self.config.name, error = %e, "Failed to dequeue task");
 				// Error occurred - interval will automatically wait before next poll
 			}
 		}
@@ -353,7 +388,7 @@ impl Worker {
 		task_id: crate::TaskId,
 		backend: Arc<dyn TaskBackend>,
 	) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-		println!("[{}] Executing task: {}", self.config.name, task_id);
+		tracing::debug!(worker = %self.config.name, task_id = %task_id, "Executing task");
 
 		let started_at = Utc::now();
 
@@ -361,29 +396,31 @@ impl Worker {
 		if let Some(ref lock) = self.task_lock {
 			let acquired = lock.acquire(task_id, Duration::from_secs(300)).await?;
 			if !acquired {
-				println!(
-					"[{}] Task {} already locked by another worker",
-					self.config.name, task_id
+				tracing::info!(
+					worker = %self.config.name,
+					task_id = %task_id,
+					"Task already locked by another worker"
 				);
 				return Ok(());
 			}
 		}
 
-		// Get task name from backend
-		let task_name = match backend.get_task_data(task_id).await? {
-			Some(serialized_task) => serialized_task.name().to_string(),
-			None => "unknown_task".to_string(),
-		};
+		// Fetch task data once and reuse for both name extraction and execution
+		let serialized_task = backend.get_task_data(task_id).await?;
+		let task_name = serialized_task
+			.as_ref()
+			.map(|t| t.name().to_string())
+			.unwrap_or_else(|| "unknown_task".to_string());
 
 		// Execute task with registry if available
 		let result: Result<(), Box<dyn std::error::Error + Send + Sync>> =
 			if let Some(ref registry) = self.registry {
-				// Get serialized task data from backend
-				match backend.get_task_data(task_id).await? {
+				match serialized_task {
 					Some(serialized_task) => {
-						println!(
-							"[{}] Executing task {} with registry",
-							self.config.name, task_name
+						tracing::debug!(
+							worker = %self.config.name,
+							task_name = %task_name,
+							"Executing task with registry"
 						);
 
 						// Deserialize task using registry to get concrete task instance
@@ -395,48 +432,55 @@ impl Worker {
 								// Execute the deserialized task with its arguments
 								match task_executor.execute().await {
 									Ok(_) => {
-										println!(
-											"[{}] Task {} completed successfully",
-											self.config.name, task_name
+										tracing::info!(
+											worker = %self.config.name,
+											task_name = %task_name,
+											"Task completed successfully"
 										);
 										Ok(())
 									}
 									Err(e) => {
-										println!(
-											"[{}] Task {} failed: {}",
-											self.config.name, task_name, e
+										tracing::error!(
+											worker = %self.config.name,
+											task_name = %task_name,
+											error = %e,
+											"Task failed"
 										);
 										Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
 									}
 								}
 							}
 							Err(e) => {
-								println!(
-									"[{}] Failed to deserialize task {}: {}",
-									self.config.name, task_name, e
+								tracing::error!(
+									worker = %self.config.name,
+									task_name = %task_name,
+									error = %e,
+									"Failed to deserialize task"
 								);
 								Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
 							}
 						}
 					}
 					None => {
-						println!(
-							"[{}] Task {} not found in backend",
-							self.config.name, task_id
+						tracing::warn!(
+							worker = %self.config.name,
+							task_id = %task_id,
+							"Task not found in backend"
 						);
 						Err(format!("Task {} not found", task_id).into())
 					}
 				}
 			} else {
-				println!(
-					"[{}] Task execution without registry (basic mode)",
-					self.config.name
+				tracing::debug!(
+					worker = %self.config.name,
+					"Task execution without registry (basic mode)"
 				);
 				Ok(())
 			};
 
 		let completed_at = Utc::now();
-		let duration_ms = (completed_at - started_at).num_milliseconds() as u64;
+		// Use saturating conversion to prevent overflow on negative or very large durations
+		let duration_ms = (completed_at - started_at).num_milliseconds().max(0) as u64;
 
 		// Determine final task status
 		let (task_status, webhook_status) = match &result {
@@ -491,7 +535,7 @@ impl Worker {
 				let event_clone = webhook_event.clone();
 				tokio::spawn(async move {
 					if let Err(e) = sender_clone.send(&event_clone).await {
-						eprintln!("Failed to send webhook notification: {}", e);
+						tracing::error!(error = %e, "Failed to send webhook notification");
 					}
 				});
 			}
@@ -526,13 +570,16 @@ impl Worker {
 
 impl Default for Worker {
 	fn default() -> Self {
+		let config = WorkerConfig::default();
+		let concurrency_semaphore = Arc::new(Semaphore::new(config.concurrency));
 		Self {
-			config: WorkerConfig::default(),
+			config,
 			shutdown_tx: broadcast::channel(1).0,
 			registry: None,
 			task_lock: None,
 			result_backend: None,
 			webhook_senders: Vec::new(),
+			concurrency_semaphore,
 		}
 	}
 }
@@ -541,9 +588,11 @@ impl Default for Worker {
 mod tests {
 	use super::*;
 	use crate::{DummyBackend, Task, TaskId, TaskPriority};
+	use rstest::rstest;
 	use std::time::Duration;
 	use tokio::time::sleep;
 
+	// Fields are used indirectly through Task trait implementation in tests
 	#[allow(dead_code)]
 	struct TestTask {
 		id: TaskId,
@@ -564,25 +613,36 @@ mod tests {
 		}
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_worker_creation() {
+		// Arrange
 		let config = WorkerConfig::new("test-worker".to_string());
+
+		// Act
 		let worker = Worker::new(config);
+
+		// Assert
 		assert_eq!(worker.config.name, "test-worker");
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_worker_config_builder() {
+		// Arrange & Act
 		let config = WorkerConfig::new("test".to_string())
 			.with_concurrency(8)
 			.with_poll_interval(Duration::from_millis(100));
 
+		// Assert
 		assert_eq!(config.concurrency, 8);
 		assert_eq!(config.poll_interval, Duration::from_millis(100));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_worker_start_and_stop() {
+		// Arrange
 		let worker = Worker::new(WorkerConfig::default());
 		let backend = Arc::new(DummyBackend::new());
 		let worker_clone = Worker {
@@ -592,6 +652,7 @@ mod tests {
 			task_lock: None,
 			result_backend: None,
 			webhook_senders: Vec::new(),
+			concurrency_semaphore: worker.concurrency_semaphore.clone(),
 		};
 
 		let handle = tokio::spawn(async move { worker.run(backend).await });
@@ -599,41 +660,53 @@ mod tests {
 		// Give worker time to start
 		sleep(Duration::from_millis(100)).await;
 
-		// Stop worker
+		// Act
 		worker_clone.stop().await;
 
-		// Wait for worker to finish
+		// Assert - worker should finish within timeout
 		let result = tokio::time::timeout(Duration::from_secs(2), handle).await;
 		assert!(result.is_ok());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_worker_with_registry() {
+		// Arrange
 		use crate::registry::TaskRegistry;
-
 		let registry = Arc::new(TaskRegistry::new());
+
+		// Act
 		let worker = Worker::new(WorkerConfig::default()).with_registry(registry);
 
+		// Assert
 		assert!(worker.registry.is_some());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_worker_with_lock() {
+		// Arrange
 		use crate::locking::MemoryTaskLock;
-
 		let lock = Arc::new(MemoryTaskLock::new());
+
+		// Act
 		let worker = Worker::new(WorkerConfig::default()).with_lock(lock);
 
+		// Assert
 		assert!(worker.task_lock.is_some());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_worker_with_result_backend() {
+		// Arrange
 		use crate::result::MemoryResultBackend;
-
 		let backend = Arc::new(MemoryResultBackend::new());
+
+		// Act
 		let worker = Worker::new(WorkerConfig::default()).with_result_backend(backend);
 
+		// Assert
 		assert!(worker.result_backend.is_some());
 	}
 }

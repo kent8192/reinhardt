@@ -436,7 +436,7 @@ impl SynonymExpander {
 	///
 	/// Modified SQL with synonym expansion in WHERE clause
 	fn apply_expansion(&self, sql: String, search_terms: &str) -> FilterResult<String> {
-		use sea_query::{Cond, Expr, MysqlQueryBuilder};
+		use reinhardt_query::prelude::{Cond, Expr, MySqlQueryBuilder, QueryStatementBuilder};
 
 		// Expand search terms with synonyms
 		let expanded_terms = self.expand_query(search_terms);
@@ -445,7 +445,7 @@ impl SynonymExpander {
 			return Ok(sql);
 		}
 
-		// Build WHERE conditions using sea-query with Expr::cust() to avoid identifier quoting
+		// Build WHERE conditions using reinhardt-query with Expr::cust() to avoid identifier quoting
 		// This ensures database-agnostic SQL generation
 		let mut cond = Cond::any();
 		for term in &expanded_terms {
@@ -456,12 +456,12 @@ impl SynonymExpander {
 		}
 
 		// Convert the condition to SQL string
-		let dummy_query = sea_query::Query::select()
+		let dummy_query = reinhardt_query::prelude::Query::select()
 			.expr(Expr::val(1))
 			.cond_where(cond)
 			.to_owned();
 
-		let full_sql = dummy_query.to_string(MysqlQueryBuilder);
+		let full_sql = dummy_query.to_string(MySqlQueryBuilder);
 
 		// Extract the WHERE clause content from the dummy query
 		let where_idx = full_sql.find("WHERE").unwrap_or(0);
@@ -710,7 +710,7 @@ mod tests {
 		let where_clause = &result[where_start..];
 
 		// Validate structure: WHERE clause starts correctly
-		// SeaQuery may or may not wrap conditions in parentheses depending on the number of conditions
+		// reinhardt-query may or may not wrap conditions in parentheses depending on the number of conditions
 		assert!(
 			where_clause.starts_with("WHERE "),
 			"Expected WHERE clause to start with 'WHERE ', got: {}",

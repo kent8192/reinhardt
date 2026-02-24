@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-test"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.20"
 edition = "2024"
 description = "Testing utilities and helpers for Reinhardt framework"
 license.workspace = true
@@ -70,7 +70,7 @@ mime = "0.3"
 base64-simd = "0.8"
 uuid = { workspace = true }
 chrono = { workspace = true }
-sea-query = { version = "1.0.0-rc", features = ["derive", "postgres-array"] }
+reinhardt-query = { workspace = true, features = ["derive"] }
 env_logger = "0.11"
 reqwest = { version = "0.12", features = ["json", "cookies"] }
 urlencoding = "2.1"
@@ -113,6 +113,9 @@ reinhardt-core = { workspace = true, features = [
 ] }
 reinhardt-utils = { workspace = true, features = ["cache", "staticfiles"] }
 reinhardt-pages = { workspace = true }
+
+# SQL Query Builder (Fixes #872: replaces raw string interpolation)
+sea-query = { workspace = true }
 
 # Token pasting for macros
 paste = "1.0"
@@ -167,3 +170,4 @@ reinhardt-conf = {workspace = true, features = ["settings"]}
 tokio = { workspace = true, features = ["full"] }
 tokio-test = "0.4"
 scopeguard = "1.2"
+serial_test = "3.0"

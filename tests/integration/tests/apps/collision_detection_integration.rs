@@ -11,11 +11,11 @@
 
 use linkme::distributed_slice;
 use reinhardt_apps::registry::{
-	ModelMetadata, RelationshipMetadata, RelationshipType, MODELS, RELATIONSHIPS,
+	MODELS, ModelMetadata, RELATIONSHIPS, RelationshipMetadata, RelationshipType,
 };
 use reinhardt_apps::validation::{
-	check_circular_relationships, check_duplicate_model_names, check_duplicate_table_names,
-	validate_registry, ValidationError,
+	ValidationError, check_circular_relationships, check_duplicate_model_names,
+	check_duplicate_table_names, validate_registry,
 };
 use rstest::rstest;
 use serial_test::serial;

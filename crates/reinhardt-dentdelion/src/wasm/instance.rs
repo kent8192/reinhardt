@@ -284,12 +284,8 @@ impl WasmPluginInstance {
 	}
 }
 
-// Clone implementation for HostState (needed for store creation)
-impl Clone for HostState {
-	fn clone(&self) -> Self {
-		Self::new(&self.plugin_name)
-	}
-}
+// Clone implementation for HostState is defined in host.rs where it has
+// access to private fields.
 
 impl Plugin for WasmPluginInstance {
 	fn metadata(&self) -> &PluginMetadata {
@@ -322,7 +318,9 @@ impl PluginLifecycle for WasmPluginInstance {
 		let config = {
 			let host = self.host_state.read();
 			let config_map = host.get_config_all();
-			rmp_serde::to_vec(&config_map).unwrap_or_default()
+			rmp_serde::to_vec(&config_map).map_err(|e| {
+				PluginError::ConfigError(format!("failed to serialize plugin config: {}", e))
+			})?
 		};
 
 		// Call the plugin's on_load

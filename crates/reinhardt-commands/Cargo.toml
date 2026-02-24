@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-commands"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.21"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -14,7 +14,7 @@ reinhardt-conf = { workspace = true }
 reinhardt-dentdelion = { workspace = true, features = ["cli"], optional = true }
 reinhardt-urls = { workspace = true, features = ["routers", "database"], optional = true }
 reinhardt-db = { workspace = true, features = ["migrations", "backends-settings", "orm", "settings"], optional = true }
-reinhardt-test = { workspace = true, optional = true }
+reinhardt-test = { path = "../reinhardt-test", version = "0.1.0-alpha.20", optional = true }
 reinhardt-di = { workspace = true, optional = true }
 reinhardt-http = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
@@ -68,7 +68,6 @@ nix = { version = "0.29", features = ["signal"] }
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 tempfile = "3.13"
 regex = { workspace = true }
-reinhardt-i18n = { workspace = true }
 serial_test = { workspace = true }
 rstest = { workspace = true }
 proptest = { workspace = true }

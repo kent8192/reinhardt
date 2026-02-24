@@ -8,6 +8,34 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock;
 
+/// Mask the password in a database URL for safe display.
+///
+/// Handles standard URL formats like `scheme://user:password@host/db`
+/// and replaces the password portion with `***`.
+/// Correctly handles passwords containing `@` by using the last `@` as
+/// the user-info delimiter.
+pub(crate) fn mask_url_password(url: &str) -> String {
+	// Try to parse as a standard URL with scheme://user:pass@host format
+	if let Some(scheme_end) = url.find("://") {
+		let after_scheme = &url[scheme_end + 3..];
+
+		// Use the last @ as the user-info delimiter, since passwords may contain @
+		if let Some(at_pos) = after_scheme.rfind('@') {
+			let user_info = &after_scheme[..at_pos];
+
+			// Find the first colon separating user from password
+			if let Some(colon_pos) = user_info.find(':') {
+				let scheme_and_user = &url[..scheme_end + 3 + colon_pos + 1];
+				let rest = &url[scheme_end + 3 + at_pos..];
+				return format!("{}***{}", scheme_and_user, rest);
+			}
+		}
+	}
+
+	// No password found, return as-is
+	url.to_string()
+}
+
 /// A database connection pool
 pub struct ConnectionPool<DB: Database> {
 	pool: Pool<DB>,
@@ -232,9 +260,22 @@ where
 			// The pool will be forcefully closed when dropped
 		}
 	}
-	/// Get the database URL
+	/// Get the database URL with password masked for safe display
 	///
-	pub fn url(&self) -> &str {
+	/// Returns the database URL with any password replaced by `***`
+	/// to prevent credential exposure in logs and debug output.
+	/// Use `url_raw()` when the actual password is needed for reconnection.
+	pub fn url(&self) -> String {
+		mask_url_password(&self.url)
+	}
+
+	/// Get the raw database URL including credentials
+	///
+	/// This method returns the unmasked URL containing the actual password.
+	/// Use with caution - prefer `url()` for logging and display purposes.
+	// Allow dead_code: preserved for internal use by reconnection logic (e.g., `recreate()`)
+	#[allow(dead_code)]
+	pub(crate) fn url_raw(&self) -> &str {
 		&self.url
 	}
 }
@@ -442,5 +483,93 @@ impl<DB: sqlx::Database> Drop for PooledConnection<DB> {
 				.emit_event(PoolEvent::connection_returned(connection_id))
 				.await;
 		});
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	#[rstest]
+	#[case(
+		"postgresql://user:secret@localhost:5432/mydb",
+		"postgresql://user:***@localhost:5432/mydb"
+	)]
+	#[case(
+		"mysql://admin:p@ssw0rd@db.example.com/app",
+		"mysql://admin:***@db.example.com/app"
+	)]
+	#[case(
+		"postgres://user:pass@host:5432/db?sslmode=require",
+		"postgres://user:***@host:5432/db?sslmode=require"
+	)]
+	fn test_mask_url_password_with_credentials(#[case] input: &str, #[case] expected: &str) {
+		// Arrange
+		// (input provided by case parameters)
+
+		// Act
+		let masked = mask_url_password(input);
+
+		// Assert
+		assert_eq!(masked, expected);
+	}
+
+	#[rstest]
+	#[case("sqlite::memory:")]
+	#[case("sqlite:///path/to/db.sqlite")]
+	#[case("postgresql://user@localhost:5432/mydb")]
+	fn test_mask_url_password_without_password(#[case] input: &str) {
+		// Arrange
+		// (input provided by case parameter)
+
+		// Act
+		let masked = mask_url_password(input);
+
+		// Assert
+		assert_eq!(masked, input, "URL without password should be unchanged");
+	}
+
+	#[rstest]
+	fn test_mask_url_password_empty_password() {
+		// Arrange
+		let url = "postgresql://user:@localhost:5432/mydb";
+
+		// Act
+		let masked = mask_url_password(url);
+
+		// Assert
+		assert_eq!(masked, "postgresql://user:***@localhost:5432/mydb");
+	}
+
+	#[rstest]
+	fn test_mask_url_password_special_chars_in_password() {
+		// Arrange
+		let url = "postgresql://user:p%40ss%3Aw0rd@localhost:5432/mydb";
+
+		// Act
+		let masked = mask_url_password(url);
+
+		// Assert
+		assert_eq!(masked, "postgresql://user:***@localhost:5432/mydb");
+		assert!(
+			!masked.contains("p%40ss"),
+			"Password should be fully masked"
+		);
+	}
+
+	#[rstest]
+	fn test_mask_url_password_preserves_non_url() {
+		// Arrange
+		let non_url = "not-a-url-just-a-string";
+
+		// Act
+		let masked = mask_url_password(non_url);
+
+		// Assert
+		assert_eq!(
+			masked, non_url,
+			"Non-URL strings should pass through unchanged"
+		);
 	}
 }

@@ -17,7 +17,7 @@
 use super::fixtures::{empty_postgres_database, postgres_introspect_schema};
 use reinhardt_db::migrations::introspection::{DatabaseIntrospector, PostgresIntrospector};
 use reinhardt_db::migrations::{IntrospectConfig, SchemaCodeGenerator, TableFilterConfig};
-use reinhardt_test::fixtures::{postgres_container, ContainerAsync, GenericImage};
+use reinhardt_test::fixtures::{ContainerAsync, GenericImage, postgres_container};
 use rstest::*;
 use sqlx::PgPool;
 use std::sync::Arc;

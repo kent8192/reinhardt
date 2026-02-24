@@ -3,6 +3,7 @@
 use crate::{Task, TaskResult};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
 
 /// Type alias for priority queue map
@@ -80,9 +81,11 @@ impl Priority {
 /// # Ok(())
 /// # }
 /// ```
+// Fixes #785: counter is per-instance instead of global static
 pub struct PriorityTaskQueue {
 	queues: Arc<RwLock<PriorityQueueMap>>,
 	weights: HashMap<Priority, u32>,
+	counter: AtomicU64,
 }
 
 impl PriorityTaskQueue {
@@ -109,6 +112,7 @@ impl PriorityTaskQueue {
 		Self {
 			queues: Arc::new(RwLock::new(BTreeMap::new())),
 			weights,
+			counter: AtomicU64::new(0),
 		}
 	}
 
@@ -131,6 +135,7 @@ impl PriorityTaskQueue {
 		Self {
 			queues: Arc::new(RwLock::new(BTreeMap::new())),
 			weights,
+			counter: AtomicU64::new(0),
 		}
 	}
 
@@ -233,11 +238,10 @@ impl PriorityTaskQueue {
 		// and select based on accumulated weights
 		// This ensures FIFO within same priority and fair distribution
 
-		use std::sync::atomic::{AtomicU32, Ordering};
-		static COUNTER: AtomicU32 = AtomicU32::new(0);
-
-		let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
-		let target = counter % total_weight;
+		// Fixes #785: use instance counter instead of global static to avoid
+		// cross-instance interference between independent queue instances
+		let counter = self.counter.fetch_add(1, Ordering::Relaxed);
+		let target = (counter % total_weight as u64) as u32;
 
 		let mut accumulated = 0;
 		for (priority, weight) in priorities {

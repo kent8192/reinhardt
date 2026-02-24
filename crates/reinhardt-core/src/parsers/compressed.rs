@@ -54,29 +54,41 @@ impl CompressionEncoding {
 		}
 	}
 
-	/// Decompress data using this encoding
+	/// Default maximum decompressed output size (100 MB)
+	const DEFAULT_MAX_OUTPUT_SIZE: u64 = 100 * 1024 * 1024;
+
+	/// Decompress data using this encoding with a size limit to prevent
+	/// decompression bomb attacks.
 	fn decompress(&self, data: &[u8]) -> ParseResult<Vec<u8>> {
+		self.decompress_with_limit(data, Self::DEFAULT_MAX_OUTPUT_SIZE)
+	}
+
+	/// Decompress data with an explicit output size limit.
+	fn decompress_with_limit(&self, data: &[u8], max_output_size: u64) -> ParseResult<Vec<u8>> {
 		match self {
 			Self::Gzip => {
-				let mut decoder = GzDecoder::new(data);
+				let decoder = GzDecoder::new(data);
+				let mut limited = decoder.take(max_output_size);
 				let mut decompressed = Vec::new();
-				decoder
+				limited
 					.read_to_end(&mut decompressed)
 					.map_err(|e| Error::ParseError(format!("Gzip decompression error: {}", e)))?;
 				Ok(decompressed)
 			}
 			Self::Brotli => {
-				let mut decoder = Decompressor::new(data, 4096);
+				let decoder = Decompressor::new(data, 4096);
+				let mut limited = decoder.take(max_output_size);
 				let mut decompressed = Vec::new();
-				decoder
+				limited
 					.read_to_end(&mut decompressed)
 					.map_err(|e| Error::ParseError(format!("Brotli decompression error: {}", e)))?;
 				Ok(decompressed)
 			}
 			Self::Deflate => {
-				let mut decoder = DeflateDecoder::new(data);
+				let decoder = DeflateDecoder::new(data);
+				let mut limited = decoder.take(max_output_size);
 				let mut decompressed = Vec::new();
-				decoder.read_to_end(&mut decompressed).map_err(|e| {
+				limited.read_to_end(&mut decompressed).map_err(|e| {
 					Error::ParseError(format!("Deflate decompression error: {}", e))
 				})?;
 				Ok(decompressed)

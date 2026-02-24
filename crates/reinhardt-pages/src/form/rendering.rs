@@ -123,7 +123,11 @@ impl Widget for TextInput {
 	}
 
 	fn render(&self, name: &str, value: Option<&str>, attrs: &HashMap<String, String>) -> String {
-		let mut html = format!(r#"<input type="{}" name="{}""#, self.input_type, name);
+		let mut html = format!(
+			r#"<input type="{}" name="{}""#,
+			self.input_type,
+			html_escape(name)
+		);
 
 		if let Some(v) = value {
 			html.push_str(&format!(r#" value="{}""#, html_escape(v)));
@@ -161,7 +165,7 @@ impl Widget for DateInput {
 	}
 
 	fn render(&self, name: &str, value: Option<&str>, attrs: &HashMap<String, String>) -> String {
-		let mut html = format!(r#"<input type="date" name="{}""#, name);
+		let mut html = format!(r#"<input type="date" name="{}""#, html_escape(name));
 
 		if let Some(v) = value {
 			html.push_str(&format!(r#" value="{}""#, html_escape(v)));
@@ -199,7 +203,7 @@ impl Widget for CheckboxInput {
 	}
 
 	fn render(&self, name: &str, value: Option<&str>, attrs: &HashMap<String, String>) -> String {
-		let mut html = format!(r#"<input type="checkbox" name="{}""#, name);
+		let mut html = format!(r#"<input type="checkbox" name="{}""#, html_escape(name));
 
 		if value == Some("true") || value == Some("1") || value == Some("on") {
 			html.push_str(" checked");
@@ -247,7 +251,7 @@ impl Widget for Select {
 		attrs: &HashMap<String, String>,
 		choices: &[(String, String)],
 	) -> String {
-		let mut html = format!(r#"<select name="{}""#, name);
+		let mut html = format!(r#"<select name="{}""#, html_escape(name));
 
 		for (key, val) in attrs {
 			html.push_str(&format!(r#" {}="{}""#, key, html_escape(val)));
@@ -308,7 +312,7 @@ impl Widget for SelectMultiple {
 	) -> String {
 		let selected_values: Vec<&str> = value.map(|v| v.split(',').collect()).unwrap_or_default();
 
-		let mut html = format!(r#"<select name="{}" multiple"#, name);
+		let mut html = format!(r#"<select name="{}" multiple"#, html_escape(name));
 
 		for (key, val) in attrs {
 			html.push_str(&format!(r#" {}="{}""#, key, html_escape(val)));
@@ -368,14 +372,15 @@ impl Widget for RadioSelect {
 		choices: &[(String, String)],
 	) -> String {
 		let mut html = String::new();
+		let escaped_name = html_escape(name);
 
 		for (i, (choice_value, choice_label)) in choices.iter().enumerate() {
-			let input_id = format!("{}_{}", name, i);
+			let input_id = format!("{}_{}", escaped_name, i);
 
 			html.push_str(&format!(
 				r#"<label for="{}"><input type="radio" name="{}" id="{}" value="{}""#,
 				input_id,
-				name,
+				escaped_name,
 				input_id,
 				html_escape(choice_value)
 			));
@@ -433,14 +438,15 @@ impl Widget for CheckboxSelectMultiple {
 		let selected_values: Vec<&str> = value.map(|v| v.split(',').collect()).unwrap_or_default();
 
 		let mut html = String::new();
+		let escaped_name = html_escape(name);
 
 		for (i, (choice_value, choice_label)) in choices.iter().enumerate() {
-			let input_id = format!("{}_{}", name, i);
+			let input_id = format!("{}_{}", escaped_name, i);
 
 			html.push_str(&format!(
 				r#"<label for="{}"><input type="checkbox" name="{}" id="{}" value="{}""#,
 				input_id,
-				name,
+				escaped_name,
 				input_id,
 				html_escape(choice_value)
 			));
@@ -485,7 +491,7 @@ impl Widget for FileInput {
 	}
 
 	fn render(&self, name: &str, _value: Option<&str>, attrs: &HashMap<String, String>) -> String {
-		let mut html = format!(r#"<input type="file" name="{}""#, name);
+		let mut html = format!(r#"<input type="file" name="{}""#, html_escape(name));
 
 		for (key, val) in attrs {
 			html.push_str(&format!(r#" {}="{}""#, key, html_escape(val)));
@@ -522,11 +528,12 @@ impl Widget for SplitDateTimeWidget {
 		let (date_value, time_value) = value.and_then(|v| v.split_once('T')).unwrap_or(("", ""));
 
 		let mut html = String::new();
+		let escaped_name = html_escape(name);
 
 		// Date input
 		html.push_str(&format!(
 			r#"<input type="date" name="{}_0" value="{}""#,
-			name,
+			escaped_name,
 			html_escape(date_value)
 		));
 		for (key, val) in attrs {
@@ -540,7 +547,7 @@ impl Widget for SplitDateTimeWidget {
 		// Time input
 		html.push_str(&format!(
 			r#"<input type="time" name="{}_1" value="{}""#,
-			name,
+			escaped_name,
 			html_escape(time_value)
 		));
 		for (key, val) in attrs {
@@ -599,9 +606,10 @@ impl Widget for SelectDateWidget {
 			.unwrap_or(("", "", ""));
 
 		let mut html = String::new();
+		let escaped_name = html_escape(name);
 
 		// Year select
-		html.push_str(&format!(r#"<select name="{}_year""#, name));
+		html.push_str(&format!(r#"<select name="{}_year""#, escaped_name));
 		for (key, val) in attrs {
 			if key.starts_with("year_") {
 				let year_attr = key.strip_prefix("year_").unwrap();
@@ -621,7 +629,7 @@ impl Widget for SelectDateWidget {
 		html.push_str("</select> ");
 
 		// Month select
-		html.push_str(&format!(r#"<select name="{}_month""#, name));
+		html.push_str(&format!(r#"<select name="{}_month""#, escaped_name));
 		for (key, val) in attrs {
 			if key.starts_with("month_") {
 				let month_attr = key.strip_prefix("month_").unwrap();
@@ -641,7 +649,7 @@ impl Widget for SelectDateWidget {
 		html.push_str("</select> ");
 
 		// Day select
-		html.push_str(&format!(r#"<select name="{}_day""#, name));
+		html.push_str(&format!(r#"<select name="{}_day""#, escaped_name));
 		for (key, val) in attrs {
 			if key.starts_with("day_") {
 				let day_attr = key.strip_prefix("day_").unwrap();
@@ -1015,5 +1023,105 @@ mod tests {
 		assert!(html.contains(r#"<select name="birthday_month""#));
 		assert!(html.contains(r#"<select name="birthday_day""#));
 		assert!(html.contains(r#"<option value="1990" selected"#));
+	}
+
+	// ============================================================================
+	// XSS Prevention Tests (Issue #594)
+	// ============================================================================
+
+	#[test]
+	fn test_text_input_escapes_name() {
+		let widget = TextInput::new();
+		// Malicious name that could break out of the name attribute
+		let xss_name = "field\"><script>alert('xss')</script>";
+		let html = widget.render(xss_name, Some("value"), &HashMap::new());
+
+		// Should NOT contain raw script tag
+		assert!(!html.contains("<script>"));
+		// Should contain escaped version
+		assert!(html.contains("&lt;script&gt;"));
+		assert!(html.contains("&quot;"));
+	}
+
+	#[test]
+	fn test_date_input_escapes_name() {
+		let widget = DateInput::new();
+		let xss_name = "date\"><script>alert('xss')</script>";
+		let html = widget.render(xss_name, None, &HashMap::new());
+
+		assert!(!html.contains("<script>"));
+		assert!(html.contains("&lt;script&gt;"));
+	}
+
+	#[test]
+	fn test_checkbox_input_escapes_name() {
+		let widget = CheckboxInput::new();
+		let xss_name = "agree\"><script>alert('xss')</script>";
+		let html = widget.render(xss_name, Some("true"), &HashMap::new());
+
+		assert!(!html.contains("<script>"));
+		assert!(html.contains("&lt;script&gt;"));
+	}
+
+	#[test]
+	fn test_select_escapes_name() {
+		let widget = Select::new();
+		let choices = vec![("1".to_string(), "Option 1".to_string())];
+		let xss_name = "choice\"><script>alert('xss')</script>";
+		let html = widget.render_with_choices(xss_name, None, &HashMap::new(), &choices);
+
+		assert!(!html.contains("<script>"));
+		assert!(html.contains("&lt;script&gt;"));
+	}
+
+	#[test]
+	fn test_radio_select_escapes_name() {
+		let widget = RadioSelect::new();
+		let choices = vec![("male".to_string(), "Male".to_string())];
+		let xss_name = "gender\"><script>alert('xss')</script>";
+		let html = widget.render_with_choices(xss_name, None, &HashMap::new(), &choices);
+
+		assert!(!html.contains("<script>"));
+		assert!(html.contains("&lt;script&gt;"));
+	}
+
+	#[test]
+	fn test_file_input_escapes_name() {
+		let widget = FileInput::new();
+		let xss_name = "upload\"><script>alert('xss')</script>";
+		let html = widget.render(xss_name, None, &HashMap::new());
+
+		assert!(!html.contains("<script>"));
+		assert!(html.contains("&lt;script&gt;"));
+	}
+
+	#[test]
+	fn test_split_datetime_escapes_name() {
+		let widget = SplitDateTimeWidget::new();
+		let xss_name = "date\"><script>alert('xss')</script>";
+		let html = widget.render(xss_name, Some("2025-10-10T14:30:00"), &HashMap::new());
+
+		assert!(!html.contains("<script>"));
+		assert!(html.contains("&lt;script&gt;"));
+	}
+
+	#[test]
+	fn test_select_date_escapes_name() {
+		let widget = SelectDateWidget::new();
+		let xss_name = "birthday\"><script>alert('xss')</script>";
+		let html = widget.render(xss_name, Some("1990-05-15"), &HashMap::new());
+
+		assert!(!html.contains("<script>"));
+		assert!(html.contains("&lt;script&gt;"));
+	}
+
+	#[test]
+	fn test_normal_names_preserved() {
+		let widget = TextInput::new();
+		let html = widget.render("username", Some("john"), &HashMap::new());
+
+		// Normal names should work correctly
+		assert!(html.contains(r#"name="username""#));
+		assert!(html.contains(r#"value="john""#));
 	}
 }

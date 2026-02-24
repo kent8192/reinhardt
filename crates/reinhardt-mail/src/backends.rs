@@ -3,11 +3,13 @@ use crate::headers::{
 };
 use crate::message::EmailMessage;
 use crate::{EmailError, EmailResult};
+use lettre::message::header::{HeaderName, HeaderValue};
 use lettre::message::{Mailbox, MultiPart, SinglePart, header};
 use lettre::transport::smtp::authentication::{Credentials, Mechanism};
 use lettre::transport::smtp::client::{Tls, TlsParameters};
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use std::time::Duration;
+use zeroize::Zeroize;
 
 /// Trait for email backends
 #[async_trait::async_trait]
@@ -30,6 +32,11 @@ pub trait EmailBackend: Send + Sync {
 pub fn backend_from_settings(
 	settings: &reinhardt_conf::settings::EmailSettings,
 ) -> crate::EmailResult<Box<dyn EmailBackend>> {
+	// Validate from_email if configured
+	if !settings.from_email.is_empty() {
+		crate::validation::validate_email(&settings.from_email)?;
+	}
+
 	match settings.backend.to_lowercase().as_str() {
 		"smtp" => {
 			let security = match (settings.use_tls, settings.use_ssl) {
@@ -80,18 +87,29 @@ impl EmailBackend for ConsoleBackend {
 	async fn send_messages(&self, messages: &[EmailMessage]) -> EmailResult<usize> {
 		for (i, msg) in messages.iter().enumerate() {
 			println!("========== Email {} ==========", i + 1);
-			println!("From: {}", msg.from_email);
-			println!("To: {}", msg.to.join(", "));
-			if !msg.cc.is_empty() {
-				println!("Cc: {}", msg.cc.join(", "));
+			println!("From: {}", msg.from_email());
+			println!("To: {}", msg.to().join(", "));
+			if !msg.cc().is_empty() {
+				println!("Cc: {}", msg.cc().join(", "));
 			}
-			if !msg.bcc.is_empty() {
-				println!("Bcc: {}", msg.bcc.join(", "));
+			if !msg.bcc().is_empty() {
+				println!("Bcc: {}", msg.bcc().join(", "));
 			}
-			println!("Subject: {}", msg.subject);
-			println!("\n{}", msg.body);
-			if let Some(html) = &msg.html_body {
+			println!("Subject: {}", msg.subject());
+			for (name, value) in msg.headers() {
+				println!("{}: {}", name, value);
+			}
+			println!("\n{}", msg.body());
+			if let Some(html) = msg.html_body() {
 				println!("\n--- HTML ---\n{}", html);
+			}
+			for attachment in msg.attachments() {
+				println!(
+					"\n--- Attachment: {} (Content-Type: {}, {} bytes) ---",
+					attachment.filename(),
+					attachment.mime_type(),
+					attachment.content().len()
+				);
 			}
 			println!("==============================\n");
 		}
@@ -125,17 +143,33 @@ impl EmailBackend for FileBackend {
 			let path = self.directory.join(filename);
 
 			let mut content = format!(
-				"From: {}\nTo: {}\nSubject: {}\n\n{}",
-				msg.from_email,
-				msg.to.join(", "),
-				msg.subject,
-				msg.body
+				"From: {}\nTo: {}\nSubject: {}",
+				msg.from_email(),
+				msg.to().join(", "),
+				msg.subject()
 			);
 
+			// Include custom headers
+			for (name, value) in msg.headers() {
+				content.push_str(&format!("\n{}: {}", name, value));
+			}
+
+			content.push_str(&format!("\n\n{}", msg.body()));
+
 			// Include HTML body if present
-			if let Some(ref html) = msg.html_body {
+			if let Some(html) = msg.html_body() {
 				content.push_str("\n\n--- HTML Body ---\n");
 				content.push_str(html);
+			}
+
+			// Include attachment metadata
+			for attachment in msg.attachments() {
+				content.push_str(&format!(
+					"\n\n--- Attachment: {} ---\nContent-Type: {}\nSize: {} bytes\n",
+					attachment.filename(),
+					attachment.mime_type(),
+					attachment.content().len()
+				));
 			}
 
 			tokio::fs::write(path, content).await?;
@@ -238,7 +272,11 @@ impl SmtpConfig {
 		Self {
 			host: host.into(),
 			port,
-			..Default::default()
+			username: None,
+			password: None,
+			security: SmtpSecurity::None,
+			auth_mechanism: SmtpAuthMechanism::Auto,
+			timeout: Duration::from_secs(30),
 		}
 	}
 
@@ -261,6 +299,35 @@ impl SmtpConfig {
 	pub fn with_timeout(mut self, timeout: Duration) -> Self {
 		self.timeout = timeout;
 		self
+	}
+
+	/// Validate the SMTP configuration
+	///
+	/// Checks that email-formatted usernames (containing `@`) are valid email addresses.
+	pub fn validate(&self) -> EmailResult<()> {
+		// Validate username if it looks like an email address
+		if let Some(username) = &self.username
+			&& username.contains('@')
+		{
+			crate::validation::validate_email(username)?;
+		}
+		Ok(())
+	}
+}
+
+/// Zeroize SMTP credentials on drop to prevent sensitive data from lingering in memory.
+///
+/// This ensures that username and password fields are securely erased when
+/// the `SmtpConfig` is no longer needed, reducing the risk of credential
+/// exposure through memory inspection or core dumps.
+impl Drop for SmtpConfig {
+	fn drop(&mut self) {
+		if let Some(ref mut username) = self.username {
+			username.zeroize();
+		}
+		if let Some(ref mut password) = self.password {
+			password.zeroize();
+		}
 	}
 }
 
@@ -287,10 +354,63 @@ pub struct SmtpBackend {
 
 impl SmtpBackend {
 	pub fn new(config: SmtpConfig) -> EmailResult<Self> {
+		config.validate()?;
 		Ok(Self { config })
 	}
 
 	fn build_transport(&self) -> EmailResult<AsyncSmtpTransport<Tokio1Executor>> {
+		// Use lettre's recommended secure APIs for standard ports
+		// This ensures proper TLS hostname verification by default
+		match (&self.config.security, self.config.port) {
+			// Port 465 with TLS: use relay() for secure SMTPS
+			(SmtpSecurity::Tls, 465) => {
+				let builder = AsyncSmtpTransport::<Tokio1Executor>::relay(&self.config.host)
+					.map_err(|e| EmailError::SmtpError(format!("TLS relay error: {}", e)))?
+					.timeout(Some(self.config.timeout));
+				let builder = self.configure_auth(builder);
+				Ok(builder.build())
+			}
+			// Port 587 with STARTTLS: use starttls_relay() for secure STARTTLS
+			(SmtpSecurity::StartTls, 587) => {
+				let builder =
+					AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&self.config.host)
+						.map_err(|e| EmailError::SmtpError(format!("STARTTLS relay error: {}", e)))?
+						.timeout(Some(self.config.timeout));
+				let builder = self.configure_auth(builder);
+				Ok(builder.build())
+			}
+			// Custom port or no TLS: use builder_dangerous with manual TLS configuration
+			// This is needed for test environments and non-standard SMTP configurations
+			_ => self.build_transport_with_custom_port(),
+		}
+	}
+
+	/// Configure authentication on the transport builder
+	fn configure_auth(
+		&self,
+		mut builder: lettre::transport::smtp::AsyncSmtpTransportBuilder,
+	) -> lettre::transport::smtp::AsyncSmtpTransportBuilder {
+		if let (Some(username), Some(password)) = (&self.config.username, &self.config.password) {
+			let credentials = Credentials::new(username.clone(), password.clone());
+
+			builder = match &self.config.auth_mechanism {
+				SmtpAuthMechanism::Plain => builder
+					.credentials(credentials)
+					.authentication(vec![Mechanism::Plain]),
+				SmtpAuthMechanism::Login => builder
+					.credentials(credentials)
+					.authentication(vec![Mechanism::Login]),
+				SmtpAuthMechanism::Auto => builder.credentials(credentials),
+			};
+		}
+		builder
+	}
+
+	/// Build transport with custom port using builder_dangerous
+	///
+	/// This method is used for non-standard ports or when TLS is disabled.
+	/// For standard ports (465/587), prefer `relay()` or `starttls_relay()` instead.
+	fn build_transport_with_custom_port(&self) -> EmailResult<AsyncSmtpTransport<Tokio1Executor>> {
 		let mut builder =
 			AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&self.config.host)
 				.port(self.config.port)
@@ -299,7 +419,7 @@ impl SmtpBackend {
 		// Configure TLS/SSL
 		match &self.config.security {
 			SmtpSecurity::None => {
-				// No encryption
+				// No encryption - intended for test environments only
 			}
 			SmtpSecurity::StartTls => {
 				let tls_params = TlsParameters::builder(self.config.host.clone())
@@ -315,20 +435,7 @@ impl SmtpBackend {
 			}
 		}
 
-		// Configure authentication
-		if let (Some(username), Some(password)) = (&self.config.username, &self.config.password) {
-			let credentials = Credentials::new(username.clone(), password.clone());
-
-			builder = match &self.config.auth_mechanism {
-				SmtpAuthMechanism::Plain => builder
-					.credentials(credentials)
-					.authentication(vec![Mechanism::Plain]),
-				SmtpAuthMechanism::Login => builder
-					.credentials(credentials)
-					.authentication(vec![Mechanism::Login]),
-				SmtpAuthMechanism::Auto => builder.credentials(credentials),
-			};
-		}
+		builder = self.configure_auth(builder);
 
 		Ok(builder.build())
 	}
@@ -336,15 +443,15 @@ impl SmtpBackend {
 	fn build_message(&self, email: &EmailMessage) -> EmailResult<Message> {
 		// Parse from address
 		let from = email
-			.from_email
+			.from_email()
 			.parse::<Mailbox>()
 			.map_err(|e| EmailError::InvalidAddress(format!("Invalid from address: {}", e)))?;
 
 		// Start building the message
-		let mut builder = Message::builder().from(from).subject(&email.subject);
+		let mut builder = Message::builder().from(from).subject(email.subject());
 
 		// Add recipients
-		for to in &email.to {
+		for to in email.to() {
 			let mailbox = to
 				.parse::<Mailbox>()
 				.map_err(|e| EmailError::InvalidAddress(format!("Invalid to address: {}", e)))?;
@@ -352,7 +459,7 @@ impl SmtpBackend {
 		}
 
 		// Add CC recipients
-		for cc in &email.cc {
+		for cc in email.cc() {
 			let mailbox = cc
 				.parse::<Mailbox>()
 				.map_err(|e| EmailError::InvalidAddress(format!("Invalid cc address: {}", e)))?;
@@ -360,7 +467,7 @@ impl SmtpBackend {
 		}
 
 		// Add BCC recipients
-		for bcc in &email.bcc {
+		for bcc in email.bcc() {
 			let mailbox = bcc
 				.parse::<Mailbox>()
 				.map_err(|e| EmailError::InvalidAddress(format!("Invalid bcc address: {}", e)))?;
@@ -368,15 +475,18 @@ impl SmtpBackend {
 		}
 
 		// Add Reply-To
-		for reply_to in &email.reply_to {
+		for reply_to in email.reply_to() {
 			let mailbox = reply_to.parse::<Mailbox>().map_err(|e| {
 				EmailError::InvalidAddress(format!("Invalid reply-to address: {}", e))
 			})?;
 			builder = builder.reply_to(mailbox);
 		}
 
-		// Add custom headers (only supported headers can be added due to lettre's Header trait design)
-		for (name, value) in &email.headers {
+		// Add custom headers
+		// Known headers are added via typed lettre Header implementations.
+		// Unknown/arbitrary headers are injected via raw header insertion after message build.
+		let mut deferred_headers: Vec<(String, String)> = Vec::new();
+		for (name, value) in email.headers() {
 			let name_lower = name.to_lowercase();
 			match name_lower.as_str() {
 				"x-mailer" => {
@@ -398,43 +508,79 @@ impl SmtpBackend {
 					builder = builder.header(Precedence::new(value));
 				}
 				_ => {
-					// Unsupported headers are skipped due to lettre's Header trait design
-					// (the name() method is static, so arbitrary headers cannot be added dynamically)
-					#[cfg(debug_assertions)]
-					eprintln!(
-						"Warning: Skipping unsupported header '{}'. Supported headers: {:?}",
-						name,
-						crate::headers::SUPPORTED_HEADERS
-					);
+					// Defer arbitrary headers for raw insertion after build
+					deferred_headers.push((name.clone(), value.clone()));
 				}
 			}
 		}
 
-		// Build the body
-		let message = if let Some(html) = &email.html_body {
-			// HTML with plain text alternative
-			let multipart = MultiPart::alternative()
-				.singlepart(SinglePart::plain(email.body.clone()))
-				.singlepart(SinglePart::html(html.clone()));
+		// Build the body - convert body to String once to avoid repeated allocation
+		let has_html = email.html_body().is_some();
+		let has_attachments = !email.attachments().is_empty();
+		let body = email.body().to_string();
 
-			builder
-				.multipart(multipart)
-				.map_err(|e| EmailError::BackendError(format!("Failed to build message: {}", e)))?
-		} else if !email.attachments.is_empty() {
-			// Plain text with attachments
-			let mut multipart =
-				MultiPart::mixed().singlepart(SinglePart::plain(email.body.clone()));
+		let message = if has_html && has_attachments {
+			// HTML with plain text alternative AND attachments
+			// Structure: mixed( alternative(text, html), attachment1, attachment2, ... )
+			let alternative = MultiPart::alternative()
+				.singlepart(SinglePart::plain(body))
+				.singlepart(SinglePart::html(email.html_body().unwrap().to_string()));
 
-			for attachment in &email.attachments {
+			let mut mixed = MultiPart::mixed().multipart(alternative);
+
+			for attachment in email.attachments() {
+				let content_type = header::ContentType::parse(attachment.mime_type())
+					.unwrap_or(header::ContentType::parse("application/octet-stream").unwrap());
+
 				let part = if let Some(cid) = attachment.content_id() {
-					// Inline attachment with content ID
 					SinglePart::builder()
+						.header(content_type)
 						.header(header::ContentDisposition::inline())
 						.header(header::ContentId::from(cid.to_string()))
 						.body(attachment.content().to_vec())
 				} else {
-					// Regular attachment
 					SinglePart::builder()
+						.header(content_type)
+						.header(header::ContentDisposition::attachment(
+							attachment.filename(),
+						))
+						.body(attachment.content().to_vec())
+				};
+
+				mixed = mixed.singlepart(part);
+			}
+
+			builder
+				.multipart(mixed)
+				.map_err(|e| EmailError::BackendError(format!("Failed to build message: {}", e)))?
+		} else if has_html {
+			// HTML with plain text alternative (no attachments)
+			let multipart = MultiPart::alternative()
+				.singlepart(SinglePart::plain(body))
+				.singlepart(SinglePart::html(email.html_body().unwrap().to_string()));
+
+			builder
+				.multipart(multipart)
+				.map_err(|e| EmailError::BackendError(format!("Failed to build message: {}", e)))?
+		} else if has_attachments {
+			// Plain text with attachments
+			let mut multipart = MultiPart::mixed().singlepart(SinglePart::plain(body));
+
+			for attachment in email.attachments() {
+				let content_type = header::ContentType::parse(attachment.mime_type())
+					.unwrap_or(header::ContentType::parse("application/octet-stream").unwrap());
+
+				let part = if let Some(cid) = attachment.content_id() {
+					// Inline attachment with content ID and Content-Type
+					SinglePart::builder()
+						.header(content_type)
+						.header(header::ContentDisposition::inline())
+						.header(header::ContentId::from(cid.to_string()))
+						.body(attachment.content().to_vec())
+				} else {
+					// Regular attachment with Content-Type
+					SinglePart::builder()
+						.header(content_type)
 						.header(header::ContentDisposition::attachment(
 							attachment.filename(),
 						))
@@ -450,9 +596,26 @@ impl SmtpBackend {
 		} else {
 			// Plain text only
 			builder
-				.body(email.body.clone())
+				.body(body)
 				.map_err(|e| EmailError::BackendError(format!("Failed to build message: {}", e)))?
 		};
+
+		// Inject deferred arbitrary headers via raw insertion
+		let mut message = message;
+		for (name, value) in deferred_headers {
+			match HeaderName::new_from_ascii(name.clone()) {
+				Ok(header_name) => {
+					let header_value = HeaderValue::new(header_name, value);
+					message.headers_mut().insert_raw(header_value);
+				}
+				Err(_) => {
+					return Err(EmailError::InvalidHeader(format!(
+						"Invalid header name: '{}'",
+						name
+					)));
+				}
+			}
+		}
 
 		Ok(message)
 	}

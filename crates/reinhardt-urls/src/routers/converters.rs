@@ -377,21 +377,45 @@ impl Converter for DateConverter {
 pub struct PathConverter;
 
 impl PathConverter {
-	/// Check if a path contains directory traversal attempts
+	/// Check if a path contains directory traversal attempts.
+	///
+	/// Rejects:
+	/// - Null bytes (literal or percent-encoded `%00`)
+	/// - `..` segments (forward-slash or backslash separated)
+	/// - Percent-encoded traversal sequences (`%2e`, `%2f`, `%5c`)
+	/// - Backslash path separators
+	/// - Absolute paths starting with `/` or `\`
 	fn is_safe_path(path: &str) -> bool {
 		// Reject null bytes
 		if path.contains('\0') {
 			return false;
 		}
 
-		// Reject paths containing ../ or /../
-		if path.contains("../") || path.contains("/..") {
+		// Reject percent-encoded dangerous characters
+		let lower = path.to_ascii_lowercase();
+		if lower.contains("%2e")
+			|| lower.contains("%2f")
+			|| lower.contains("%5c")
+			|| lower.contains("%00")
+		{
 			return false;
 		}
 
-		// Reject paths starting or ending with ..
-		if path.starts_with("..") || path.ends_with("..") {
+		// Reject backslash path separators (Windows-style)
+		if path.contains('\\') {
 			return false;
+		}
+
+		// Reject absolute paths
+		if path.starts_with('/') {
+			return false;
+		}
+
+		// Check for `..` as a complete path segment
+		for segment in path.split('/') {
+			if segment == ".." {
+				return false;
+			}
 		}
 
 		true
@@ -839,5 +863,60 @@ mod tests {
 		assert_eq!(date_conv.pattern(), r"\d{4}-\d{2}-\d{2}");
 		assert_eq!(path_conv.pattern(), r"[^/\0]+(?:/[^/\0]+)*");
 		assert_eq!(float_conv.pattern(), r"-?\d+\.?\d*");
+	}
+
+	// ===================================================================
+	// PathConverter encoded traversal prevention tests (Issue #425)
+	// ===================================================================
+
+	#[test]
+	fn test_path_converter_rejects_encoded_traversal() {
+		// Arrange
+		let conv = PathConverter;
+
+		// Act & Assert - percent-encoded dot sequences
+		assert!(!conv.validate("%2e%2e/etc/passwd"));
+		assert!(!conv.validate("foo/%2e%2e/bar"));
+		assert!(!conv.validate("%2E%2E/secret"));
+
+		// Percent-encoded slash
+		assert!(!conv.validate("foo%2fbar"));
+		assert!(!conv.validate("..%2f..%2fetc%2fpasswd"));
+
+		// Percent-encoded backslash
+		assert!(!conv.validate("foo%5cbar"));
+
+		// Percent-encoded null byte
+		assert!(!conv.validate("file%00.txt"));
+	}
+
+	#[test]
+	fn test_path_converter_rejects_backslash() {
+		// Arrange
+		let conv = PathConverter;
+
+		// Act & Assert
+		assert!(!conv.validate("path\\to\\file"));
+		assert!(!conv.validate("..\\etc\\passwd"));
+	}
+
+	#[test]
+	fn test_path_converter_rejects_absolute_paths() {
+		// Arrange
+		let conv = PathConverter;
+
+		// Act & Assert
+		assert!(!conv.validate("/etc/passwd"));
+	}
+
+	#[test]
+	fn test_path_converter_convert_rejects_encoded() {
+		// Arrange
+		let conv = PathConverter;
+
+		// Act & Assert
+		assert!(conv.convert("%2e%2e/etc/passwd").is_err());
+		assert!(conv.convert("foo%2fbar").is_err());
+		assert!(conv.convert("foo%5cbar").is_err());
 	}
 }

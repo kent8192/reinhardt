@@ -5,9 +5,9 @@
 
 use async_trait::async_trait;
 
-use super::super::error::Result;
-use super::super::traits::NoSQLBackend;
-use super::super::types::{Document, FindOptions, UpdateResult};
+use crate::nosql::error::Result;
+use crate::nosql::traits::NoSQLBackend;
+use crate::nosql::types::{Document, FindOptions, UpdateResult};
 
 /// Trait for document-oriented NoSQL databases
 ///

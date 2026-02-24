@@ -19,9 +19,11 @@ use chrono::{DateTime, Utc};
 use hyper::{HeaderMap, Method, Version};
 use reinhardt_http::Request;
 use reinhardt_macros::model;
+use reinhardt_query::prelude::{
+	ColumnDef, Iden, IntoIden, PostgresQueryBuilder, Query, QueryStatementBuilder,
+};
 use reinhardt_test::fixtures::get_test_pool;
 use rstest::*;
-use sea_query::{Iden, PostgresQueryBuilder, Table};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use sqlx::{PgPool, Row};
@@ -49,7 +51,7 @@ struct PropertyItem {
 // Note: The #[model] macro automatically generates a new() function
 
 /// Iden enum for property_items table
-#[derive(Iden)]
+#[derive(Debug, Clone, Copy, Iden)]
 enum PropertyItems {
 	Table,
 	Id,
@@ -73,38 +75,35 @@ async fn setup_property() -> PgPool {
 	let pool = get_test_pool().await;
 
 	// Create property_items table
-	let create_table_sql = Table::create()
-		.table(PropertyItems::Table)
+	let mut stmt = Query::create_table();
+	let create_table_sql = stmt
+		.table(PropertyItems::Table.into_iden())
 		.if_not_exists()
 		.col(
-			sea_query::ColumnDef::new(PropertyItems::Id)
+			ColumnDef::new(PropertyItems::Id)
 				.big_integer()
-				.not_null()
-				.auto_increment()
-				.primary_key(),
+				.not_null(true)
+				.auto_increment(true)
+				.primary_key(true),
 		)
 		.col(
-			sea_query::ColumnDef::new(PropertyItems::Name)
+			ColumnDef::new(PropertyItems::Name)
 				.string_len(200)
-				.not_null(),
+				.not_null(true),
 		)
 		.col(
-			sea_query::ColumnDef::new(PropertyItems::Value)
+			ColumnDef::new(PropertyItems::Value)
 				.integer()
-				.not_null(),
+				.not_null(true),
 		)
+		.col(ColumnDef::new(PropertyItems::Score).double().not_null(true))
 		.col(
-			sea_query::ColumnDef::new(PropertyItems::Score)
-				.double()
-				.not_null(),
-		)
-		.col(
-			sea_query::ColumnDef::new(PropertyItems::Active)
+			ColumnDef::new(PropertyItems::Active)
 				.boolean()
-				.not_null(),
+				.not_null(true),
 		)
-		.col(sea_query::ColumnDef::new(PropertyItems::CreatedAt).timestamp())
-		.to_string(PostgresQueryBuilder);
+		.col(ColumnDef::new(PropertyItems::CreatedAt).timestamp())
+		.to_string(PostgresQueryBuilder::new());
 
 	sqlx::query(&create_table_sql).execute(&pool).await.unwrap();
 

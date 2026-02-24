@@ -7,31 +7,33 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  CARGO_TARGET_DIR: /tmp/cargo_target
   CARGO_INCREMENTAL: 0
   CARGO_BUILD_JOBS: 1
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  RUST_MIN_STACK: 8388608  # 8MB - prevent stack overflow in deep async fixture chains
 
 jobs:
   intra-crate-integration-test:
-    name: Intra-Crate Integration Tests (${{ matrix.partition }}/3)
+    name: Intra-Crate Integration Tests (${{ matrix.partition }}/6)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        partition: [1, 2, 3]
+        partition: [1, 2, 3, 4, 5, 6]
     steps:
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
         with:
-          root-reserve-mb: 4096
-          swap-size-mb: 1024
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
-          remove-docker-images: 'true'
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
 
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -65,7 +67,31 @@ jobs:
         with:
           tool: nextest
 
-      - name: Run intra-crate integration tests (partition ${{ matrix.partition }}/2)
+      - name: Additional disk cleanup before tests
+        run: |
+          echo "Disk usage before additional cleanup:"
+          df -h
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/* || true
+          docker system prune -af --volumes || true
+          docker builder prune -af || true
+          rm -rf ~/.cache/pip || true
+          rm -rf ~/.npm || true
+          rm -rf ~/.cache/yarn || true
+          rm -rf ~/.gradle || true
+          rm -rf ~/.m2 || true
+          # Cargo registry and git db cleanup
+          rm -rf ~/.cargo/registry/cache || true
+          rm -rf ~/.cargo/git/db || true
+          echo "Disk usage after additional cleanup:"
+          df -h
+
+      - name: Pull Docker images
+        uses: ./.github/actions/pull-docker-images
+        with:
+          images-file: .github/docker-images-intra-crate.txt
+
+      - name: Run intra-crate integration tests (partition ${{ matrix.partition }}/6)
         env:
           RUSTFLAGS: "-C linker=clang -C link-arg=-fuse-ld=mold"
         run: |
@@ -75,7 +101,7 @@ jobs:
             --exclude reinhardt-integration-tests \
             -E "not binary(/ui/)" \
             --all-features \
-            --partition hash:${{ matrix.partition }}/3 \
+            --partition hash:${{ matrix.partition }}/6 \
             --no-fail-fast \
             --status-level=none \
             --final-status-level=none

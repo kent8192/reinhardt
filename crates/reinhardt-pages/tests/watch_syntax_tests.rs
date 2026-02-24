@@ -475,7 +475,7 @@ fn test_watch_with_data_attributes(counter_signal: Signal<i32>) {
 	let view = page!(|signal: Signal<i32>| {
 		div {
 			watch {
-				if signal.get()>0 {
+				if signal.get()> 0 {
 					span {
 						data_count: signal.get().to_string(),
 						"Has data"

@@ -6,6 +6,7 @@ use crate::adapters::{
 	AdminDatabase, AdminRecord, AdminSite, ColumnInfo, FilterInfo, FilterType, ListQueryParams,
 	ListResponse, ModelAdmin,
 };
+use reinhardt_auth::{CurrentUser, DefaultUser};
 #[cfg(not(target_arch = "wasm32"))]
 use reinhardt_db::orm::{Filter, FilterCondition, FilterOperator, FilterValue};
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
@@ -13,6 +14,8 @@ use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::error::MapServerFnError;
+#[cfg(not(target_arch = "wasm32"))]
+use super::limits::MAX_PAGE_SIZE;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::server::type_inference::{
 	get_field_metadata, infer_admin_field_type, infer_filter_type,
@@ -69,6 +72,10 @@ fn build_columns(model_admin: &Arc<dyn ModelAdmin>) -> Vec<ColumnInfo> {
 /// This function is automatically exposed as an HTTP endpoint by the `#[server_fn]` macro.
 /// AdminSite and AdminDatabase dependencies are automatically injected via the DI system.
 ///
+/// # Authentication
+///
+/// Requires authentication and view permission for the model.
+///
 /// # Example
 ///
 /// ```ignore
@@ -93,8 +100,21 @@ pub async fn get_list(
 	params: ListQueryParams,
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
+	#[inject] current_user: CurrentUser<DefaultUser>,
 ) -> Result<ListResponse, ServerFnError> {
+	// Authentication check
+	let user = current_user
+		.user()
+		.map_err(|_| ServerFnError::server(401, "Authentication required"))?;
+
+	// Get model admin and check permission
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	if !model_admin
+		.has_view_permission(user as &(dyn std::any::Any + Send + Sync))
+		.await
+	{
+		return Err(ServerFnError::server(403, "Permission denied"));
+	}
 
 	// Build search condition (OR across search fields)
 	let mut filter_condition: Option<FilterCondition> = None;
@@ -119,8 +139,19 @@ pub async fn get_list(
 	}
 
 	// Build additional filters (AND logic)
+	// Only accept filter fields that are explicitly defined in model_admin.list_filter()
+	let allowed_filter_fields = model_admin.list_filter();
 	let mut additional_filters = Vec::new();
 	for (field, value) in params.filters.iter() {
+		if !allowed_filter_fields.contains(&field.as_str()) {
+			return Err(ServerFnError::server(
+				400,
+				format!(
+					"Unknown filter field '{}'. Allowed filter fields: {:?}",
+					field, allowed_filter_fields
+				),
+			));
+		}
 		additional_filters.push(Filter::new(
 			field.clone(),
 			FilterOperator::Eq,
@@ -134,11 +165,12 @@ pub async fn get_list(
 		.as_deref()
 		.or_else(|| model_admin.ordering().first().copied());
 
-	// Calculate pagination
+	// Calculate pagination with upper bound enforcement
 	let page = params.page.unwrap_or(1).max(1); // Ensure page is at least 1
 	let page_size = params
 		.page_size
-		.unwrap_or_else(|| model_admin.list_per_page().unwrap_or(25) as u64);
+		.unwrap_or_else(|| model_admin.list_per_page().unwrap_or(25) as u64)
+		.min(MAX_PAGE_SIZE); // Enforce maximum page size to prevent memory exhaustion
 	let offset = (page - 1) * page_size;
 
 	// Fetch data

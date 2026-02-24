@@ -1,0 +1,5 @@
+# Docker images for Examples Tests
+# These images are cached to avoid Docker Hub rate limits
+
+# Databases
+postgres:17-alpine

@@ -3,7 +3,6 @@
 //! This module provides the base handler for processing HTTP requests,
 //! similar to Django's `django.core.handlers.base.BaseHandler`.
 
-use bytes::Bytes;
 use hyper::StatusCode;
 use reinhardt_core::signals::{
 	RequestFinishedEvent, RequestStartedEvent, request_finished, request_started,
@@ -12,7 +11,7 @@ use reinhardt_http::Handler;
 use reinhardt_http::{Request, Response};
 use reinhardt_urls::routers::DefaultRouter;
 use std::sync::Arc;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 use crate::DispatchError;
 
@@ -21,6 +20,13 @@ use crate::DispatchError;
 /// Handles the complete request lifecycle including URL resolution,
 /// view execution, and signal emission.
 pub struct BaseHandler {
+	/// Whether the handler operates in async mode.
+	///
+	/// This flag mirrors Django's `BaseHandler._is_async` and is read by
+	/// `Dispatcher` to choose between sync and async code paths. When
+	/// `false`, async dispatch still works but callers may opt for a
+	/// blocking wrapper.
+	#[allow(dead_code)] // read via is_async() accessor; behavioral branching planned
 	is_async: bool,
 	router: Option<Arc<DefaultRouter>>,
 }
@@ -68,14 +74,18 @@ impl BaseHandler {
 
 		// Emit request_started signal
 		let event = RequestStartedEvent::new();
-		let _ = request_started().send(event).await;
+		if let Err(e) = request_started().send(event).await {
+			warn!("Failed to send request_started signal: {}", e);
+		}
 
 		// Get response with router
 		let response = Self::get_response_async(request, self.router.as_ref()).await;
 
 		// Emit request_finished signal
 		let event = RequestFinishedEvent::new();
-		let _ = request_finished().send(event).await;
+		if let Err(e) = request_finished().send(event).await {
+			warn!("Failed to send request_finished signal: {}", e);
+		}
 
 		response
 	}
@@ -115,19 +125,19 @@ impl BaseHandler {
 			}
 		}
 
-		// Fallback: router not configured
-		debug!("No router configured, returning default OK response");
-		Ok(Response::new(StatusCode::OK))
+		// Fallback: router not configured, return 404 since no routes can match
+		debug!("No router configured, returning 404 Not Found");
+		Ok(Response::new(StatusCode::NOT_FOUND))
 	}
 
-	/// Process an exception and convert it to a response
+	/// Process an exception and convert it to a response.
+	///
+	/// Error details are logged server-side but not included in the response
+	/// body to prevent information disclosure.
 	pub async fn handle_exception(&self, _request: &Request, error: DispatchError) -> Response {
 		error!("Handling exception: {}", error);
 
-		// Return a simple error response
-		let mut response = Response::new(StatusCode::INTERNAL_SERVER_ERROR);
-		response.body = Bytes::from(format!("Internal Server Error: {}", error));
-		response
+		crate::build_error_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
 	}
 
 	/// Check if handler is configured for async mode
@@ -153,11 +163,12 @@ impl Handler for BaseHandler {
 		match self.handle_request(request).await {
 			Ok(response) => Ok(response),
 			Err(e) => {
-				// Convert error to 500 response (similar to Django's behavior)
+				// Log the detailed error server-side; return generic message to client
 				error!("Handler error in BaseHandler::handle: {}", e);
-				let mut response = Response::new(StatusCode::INTERNAL_SERVER_ERROR);
-				response.body = Bytes::from(format!("Internal Server Error: {}", e));
-				Ok(response)
+				Ok(crate::build_error_response(
+					StatusCode::INTERNAL_SERVER_ERROR,
+					"Internal Server Error",
+				))
 			}
 		}
 	}
@@ -167,6 +178,7 @@ impl Handler for BaseHandler {
 mod tests {
 	use super::*;
 	use async_trait::async_trait;
+	use bytes::Bytes;
 	use hyper::{HeaderMap, Method, Version};
 	use reinhardt_urls::routers::{DefaultRouter, Router, path};
 
@@ -202,7 +214,8 @@ mod tests {
 
 		let response = handler.handle_request(request).await;
 		let resp = response.unwrap();
-		assert_eq!(resp.status, StatusCode::OK);
+		// Handler without router should return 404 Not Found
+		assert_eq!(resp.status, StatusCode::NOT_FOUND);
 	}
 
 	#[tokio::test]
@@ -220,6 +233,78 @@ mod tests {
 
 		let response = handler.handle_exception(&request, error).await;
 		assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+	}
+
+	// ==========================================================================
+	// Information Disclosure Prevention Tests (#439)
+	// ==========================================================================
+
+	#[tokio::test]
+	async fn test_handle_exception_does_not_expose_internal_details() {
+		// Arrange
+		let handler = BaseHandler::new();
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+		let sensitive_detail = "database connection refused at postgres://admin:secret@db:5432";
+		let error = DispatchError::Internal(sensitive_detail.to_string());
+
+		// Act
+		let response = handler.handle_exception(&request, error).await;
+
+		// Assert: response must not contain the sensitive detail
+		let body = String::from_utf8(response.body.to_vec()).unwrap();
+		assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+		assert!(!body.contains("database"));
+		assert!(!body.contains("postgres"));
+		assert!(!body.contains("secret"));
+		assert_eq!(body, "Internal Server Error");
+	}
+
+	#[tokio::test]
+	async fn test_handler_impl_does_not_expose_error_in_body() {
+		// Arrange: create a handler that returns a view error with internal paths
+		struct FailingHandler;
+
+		#[async_trait]
+		impl Handler for FailingHandler {
+			async fn handle(&self, _req: Request) -> reinhardt_core::exception::Result<Response> {
+				Err(reinhardt_core::exception::Error::Internal(
+					"module::secret_handler panicked at /src/app/handlers.rs:42".to_string(),
+				))
+			}
+		}
+
+		let mut router = DefaultRouter::new();
+		let failing = Arc::new(FailingHandler);
+		let route = path("/fail", failing).with_name("fail");
+		router.add_route(route);
+		let handler = BaseHandler::with_router(Arc::new(router));
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/fail")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = handler.handle(request).await.unwrap();
+
+		// Assert: internal details must not leak
+		let body = String::from_utf8(response.body.to_vec()).unwrap();
+		assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+		assert!(!body.contains("panicked"));
+		assert!(!body.contains("handlers.rs"));
+		assert!(!body.contains("secret_handler"));
+		assert_eq!(body, "Internal Server Error");
 	}
 
 	#[test]

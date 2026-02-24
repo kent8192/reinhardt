@@ -50,6 +50,14 @@ pub struct AdminRouter {
 	site: Arc<AdminSite>,
 }
 
+impl std::fmt::Debug for AdminRouter {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("AdminRouter")
+			.field("site_name", &self.site.name())
+			.finish()
+	}
+}
+
 impl AdminRouter {
 	/// Create a new admin router builder from Arc-wrapped site
 	pub fn from_arc(site: Arc<AdminSite>) -> Self {
@@ -57,6 +65,8 @@ impl AdminRouter {
 	}
 
 	/// Set favicon from file path
+	///
+	/// Returns an error if the file cannot be read.
 	///
 	/// # Examples
 	///
@@ -67,16 +77,20 @@ impl AdminRouter {
 	/// let site = Arc::new(AdminSite::new("Admin"));
 	/// let router = AdminRouter::from_arc(site)
 	///     .with_favicon_file("static/favicon.ico")
+	///     .expect("Failed to read favicon file")
 	///     .build();
 	/// ```
 	///
-	/// # Panics
+	/// # Errors
 	///
-	/// Panics if the file cannot be read.
-	pub fn with_favicon_file(self, path: impl AsRef<std::path::Path>) -> Self {
-		let data = std::fs::read(path.as_ref()).expect("Failed to read favicon file");
+	/// Returns `std::io::Error` if the file cannot be read.
+	pub fn with_favicon_file(
+		self,
+		path: impl AsRef<std::path::Path>,
+	) -> Result<Self, std::io::Error> {
+		let data = std::fs::read(path.as_ref())?;
 		self.site.set_favicon(data);
-		self
+		Ok(self)
 	}
 
 	/// Set favicon from raw bytes
@@ -125,20 +139,59 @@ impl AdminRouter {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	#[test]
+	#[rstest]
 	fn test_admin_routes_creates_router() {
+		// Arrange & Act
 		let router = admin_routes();
-		// Verify router is created with admin namespace
+
+		// Assert
 		assert_eq!(router.namespace(), Some("admin"));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_admin_router_backward_compat() {
+		// Arrange
 		let site = Arc::new(AdminSite::new("Test Admin"));
 		let router_builder = AdminRouter::from_arc(site);
+
+		// Act
 		let router = router_builder.routes();
-		// Verify router is created
+
+		// Assert
 		assert_eq!(router.namespace(), Some("admin"));
+	}
+
+	#[rstest]
+	fn test_with_favicon_file_returns_error_for_missing_file() {
+		// Arrange
+		let site = Arc::new(AdminSite::new("Test Admin"));
+		let router_builder = AdminRouter::from_arc(site);
+
+		// Act
+		let result = router_builder.with_favicon_file("/nonexistent/path/favicon.ico");
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+	}
+
+	#[rstest]
+	fn test_with_favicon_bytes_succeeds() {
+		// Arrange
+		let site = Arc::new(AdminSite::new("Test Admin"));
+		let router_builder = AdminRouter::from_arc(site.clone());
+		let favicon_data = vec![0x89, 0x50, 0x4E, 0x47]; // PNG magic bytes
+
+		// Act
+		let router_builder = router_builder.with_favicon_bytes(favicon_data.clone());
+		let _router = router_builder.build();
+
+		// Assert
+		let stored = site.favicon_data();
+		assert!(stored.is_some());
+		assert_eq!(stored.unwrap(), favicon_data);
 	}
 }

@@ -7,7 +7,7 @@ contact_links:
 		url: https://github.com/kent8192/reinhardt-web/discussions
 		about: Use GitHub Discussions for questions, ideas, and general discussion.
 	- name: Documentation
-		url: https://github.com/kent8192/reinhardt-web/blob/main/docs/ISSUE_GUIDELINES.md
+		url: https://github.com/kent8192/reinhardt-web/blob/main/instructions/ISSUE_GUIDELINES.md
 		about: Review issue guidelines for detailed information on creating issues.
 	- name: Security Vulnerability Report
 		url: https://github.com/kent8192/reinhardt-web/security/advisories

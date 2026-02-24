@@ -663,9 +663,13 @@ fn get_accessible_name(element: &Element) -> Option<String> {
 	if let Some(input) = element.dyn_ref::<HtmlInputElement>() {
 		// Check for label with matching 'for' attribute
 		let id = input.id();
+		// Fixes #878: Escape CSS selector value to prevent injection
 		if !id.is_empty() {
 			let document = get_document();
-			if let Ok(Some(label)) = document.query_selector(&format!("label[for='{}']", id)) {
+			if let Ok(Some(label)) = document.query_selector(&format!(
+				"label[for='{}']",
+				super::query::escape_css_selector(&id)
+			)) {
 				if let Some(text) = label.text_content() {
 					return Some(text.trim().to_string());
 				}

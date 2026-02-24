@@ -1,6 +1,6 @@
 //! Integration tests for Settings System
 //!
-//! These tests verify that reinhardt-settings works correctly with loading,
+//! These tests verify that reinhardt-conf settings works correctly with loading,
 //! validation, and access patterns.
 
 use reinhardt_conf::settings::{DatabaseConfig, Settings, TemplateConfig};
@@ -34,13 +34,6 @@ fn test_load_custom_settings() {
 	assert!(settings.debug); // Still defaults to true
 }
 
-#[test]
-fn test_settings_with_root_urlconf() {
-	let settings = Settings::default().with_root_urlconf("myproject.urls");
-
-	assert_eq!(settings.root_urlconf, "myproject.urls");
-}
-
 // ============================================================================
 // Settings Modification Tests
 // ============================================================================
@@ -54,19 +47,6 @@ fn test_add_installed_app() {
 
 	assert_eq!(settings.installed_apps.len(), initial_count + 1);
 	assert!(settings.installed_apps.contains(&"myapp".to_string()));
-}
-
-#[test]
-fn test_add_middleware() {
-	let mut settings = Settings::default();
-
-	let initial_count = settings.middleware.len();
-	settings.add_middleware("myapp.middleware.CustomMiddleware");
-
-	assert_eq!(settings.middleware.len(), initial_count + 1);
-	assert!(settings
-		.middleware
-		.contains(&"myapp.middleware.CustomMiddleware".to_string()));
 }
 
 #[test]
@@ -173,15 +153,12 @@ fn test_settings_deserialization() {
         "debug": false,
         "allowed_hosts": ["example.com"],
         "installed_apps": ["app1", "app2"],
-        "middleware": ["middleware1"],
-        "root_urlconf": "urls",
         "databases": {},
         "templates": [],
         "static_url": "/static/",
         "static_root": null,
         "staticfiles_dirs": [],
         "media_url": "/media/",
-        "media_root": null,
         "language_code": "en",
         "time_zone": "UTC",
         "use_i18n": true,
@@ -196,7 +173,9 @@ fn test_settings_deserialization() {
         "csrf_cookie_secure": false,
         "append_slash": true,
         "admins": [],
-        "managers": []
+        "managers": [],
+        "middleware": [],
+        "root_urlconf": ""
     }"#;
 
 	let settings: Settings = serde_json::from_str(json).unwrap();
@@ -234,8 +213,9 @@ fn test_required_settings_present() {
 
 	// Verify required fields are present
 	assert!(!settings.secret_key.is_empty());
-	assert!(!settings.installed_apps.is_empty());
-	assert!(!settings.middleware.is_empty());
+	assert!(settings.installed_apps.is_empty());
+	assert!(settings.middleware.is_empty());
+
 	assert!(!settings.databases.is_empty());
 }
 

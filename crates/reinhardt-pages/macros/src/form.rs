@@ -63,7 +63,7 @@ pub(crate) fn form_impl(input: TokenStream) -> TokenStream {
 	let input2 = TokenStream2::from(input);
 
 	// Stage 1: Parse untyped AST
-	let untyped_ast = match syn::parse2::<reinhardt_pages_ast::FormMacro>(input2) {
+	let untyped_ast = match syn::parse2::<reinhardt_manouche::core::FormMacro>(input2) {
 		Ok(ast) => ast,
 		Err(e) => return e.to_compile_error().into(),
 	};

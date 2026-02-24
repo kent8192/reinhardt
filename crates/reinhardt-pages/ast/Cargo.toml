@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-pages-ast"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.6"
 edition.workspace = true
 license.workspace = true
 description = "AST definitions for reinhardt-pages macro DSLs (shared between proc-macros and formatters)"
@@ -9,6 +9,9 @@ keywords = ["ast", "parser", "wasm"]
 categories = ["parser-implementations", "wasm"]
 
 [dependencies]
+# Re-export from reinhardt-manouche
+reinhardt-manouche = { workspace = true }
+
 # Documentation
 aquamarine = "0.5"
 

@@ -8,7 +8,7 @@
 //! - Multiple concurrent subscriptions
 //! - Proper cleanup and resource management
 
-use async_graphql::{Context, Object, Schema, Subscription, ID};
+use async_graphql::{Context, ID, Object, Schema, Subscription};
 use futures::StreamExt;
 use reinhardt_graphql::{EventBroadcaster, User, UserEvent};
 use rstest::*;
@@ -498,9 +498,11 @@ async fn test_subscription_authentication(
 	// Should receive error event
 	let event = stream.next().await.expect("Should receive error event");
 	assert!(!event.errors.is_empty());
-	assert!(event.errors[0]
-		.message
-		.contains("Unauthorized: Authentication required"));
+	assert!(
+		event.errors[0]
+			.message
+			.contains("Unauthorized: Authentication required")
+	);
 
 	// Create schema with authentication
 	let schema_authorized = Schema::build(OrmQuery, OrmMutation, OrmSubscriptionRoot)

@@ -15,6 +15,18 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct CspNonce(pub String);
 
+/// Validate that a nonce contains only base64 characters [A-Za-z0-9+/=].
+///
+/// Returns `true` if the nonce is non-empty and contains only valid base64
+/// characters. This prevents header injection via malicious nonce values
+/// containing characters like newlines, semicolons, or other special chars.
+fn is_valid_nonce(nonce: &str) -> bool {
+	!nonce.is_empty()
+		&& nonce
+			.bytes()
+			.all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=')
+}
+
 /// CSP directive configuration
 #[derive(Debug, Clone)]
 pub struct CspConfig {
@@ -235,31 +247,33 @@ impl CspMiddleware {
 
 	/// Generate a random nonce for CSP
 	fn generate_nonce(&self) -> String {
-		use std::time::{SystemTime, UNIX_EPOCH};
+		use base64::Engine;
+		use rand::RngCore;
 
-		let timestamp = SystemTime::now()
-			.duration_since(UNIX_EPOCH)
-			.unwrap()
-			.as_nanos();
-
-		// Simple nonce generation (in production, use cryptographically secure random)
-		let nonce = format!("{:x}", timestamp);
-		base64::encode(&nonce)
+		let mut bytes = [0u8; 16];
+		rand::rngs::OsRng.fill_bytes(&mut bytes);
+		base64::engine::general_purpose::STANDARD.encode(bytes)
 	}
 
 	/// Build CSP header value with optional nonce
+	///
+	/// Nonce values are validated to contain only base64 characters before
+	/// embedding in the header to prevent header injection attacks.
 	fn build_csp_header(&self, nonce: Option<&str>) -> String {
 		let mut parts = Vec::new();
+
+		// Only use the nonce if it passes validation
+		let validated_nonce = nonce.filter(|n| is_valid_nonce(n));
 
 		for (directive, values) in &self.config.directives {
 			let mut directive_values = values.clone();
 
 			// Add nonce to script-src and style-src if enabled
 			if self.config.include_nonce
-				&& nonce.is_some()
 				&& (directive == "script-src" || directive == "style-src")
+				&& let Some(n) = validated_nonce
 			{
-				directive_values.push(format!("'nonce-{}'", nonce.unwrap()));
+				directive_values.push(format!("'nonce-{}'", n));
 			}
 
 			parts.push(format!("{} {}", directive, directive_values.join(" ")));
@@ -310,63 +324,12 @@ impl Middleware for CspMiddleware {
 	}
 }
 
-// Simple base64 encoding for nonce
-pub mod base64 {
-	/// Encode a string to base64
-	///
-	/// This is a simple base64 encoding implementation used for generating nonces.
-	///
-	/// # Examples
-	///
-	/// ```
-	/// use reinhardt_middleware::csp::base64::encode;
-	///
-	/// let encoded = encode("hello");
-	/// assert!(encoded.len() > 0);
-	/// assert!(encoded.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='));
-	/// ```
-	pub fn encode(data: &str) -> String {
-		let bytes = data.as_bytes();
-		let mut result = String::new();
-
-		const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-		for chunk in bytes.chunks(3) {
-			let mut buf = [0u8; 3];
-			for (i, &byte) in chunk.iter().enumerate() {
-				buf[i] = byte;
-			}
-
-			let b1 = (buf[0] >> 2) as usize;
-			let b2 = (((buf[0] & 0x03) << 4) | (buf[1] >> 4)) as usize;
-			let b3 = (((buf[1] & 0x0f) << 2) | (buf[2] >> 6)) as usize;
-			let b4 = (buf[2] & 0x3f) as usize;
-
-			result.push(CHARS[b1] as char);
-			result.push(CHARS[b2] as char);
-
-			if chunk.len() > 1 {
-				result.push(CHARS[b3] as char);
-			} else {
-				result.push('=');
-			}
-
-			if chunk.len() > 2 {
-				result.push(CHARS[b4] as char);
-			} else {
-				result.push('=');
-			}
-		}
-
-		result
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method, StatusCode, Version};
+	use rstest::rstest;
 
 	struct TestHandler;
 
@@ -769,5 +732,104 @@ mod tests {
 
 		// Response body should be preserved exactly
 		assert_eq!(response.body, Bytes::from("custom response content"));
+	}
+
+	#[rstest]
+	fn test_nonce_is_valid_base64() {
+		// Arrange
+		use base64::Engine;
+		let middleware = CspMiddleware::new();
+
+		// Act
+		let nonce = middleware.generate_nonce();
+
+		// Assert
+		let decoded = base64::engine::general_purpose::STANDARD.decode(&nonce);
+		assert!(
+			decoded.is_ok(),
+			"Nonce should be valid base64, got: {}",
+			nonce
+		);
+	}
+
+	#[rstest]
+	fn test_nonce_length() {
+		// Arrange
+		use base64::Engine;
+		let middleware = CspMiddleware::new();
+
+		// Act
+		let nonce = middleware.generate_nonce();
+		let decoded = base64::engine::general_purpose::STANDARD
+			.decode(&nonce)
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			decoded.len(),
+			16,
+			"Nonce should be exactly 16 bytes (128 bits)"
+		);
+	}
+
+	#[rstest]
+	fn test_is_valid_nonce_accepts_base64() {
+		// Arrange & Act & Assert
+		assert!(is_valid_nonce("YWJjZGVmZw=="));
+		assert!(is_valid_nonce("abc123+/="));
+		assert!(is_valid_nonce("ABCDEFGHIJKLMNOP"));
+	}
+
+	#[rstest]
+	fn test_is_valid_nonce_rejects_invalid_chars() {
+		// Arrange & Act & Assert
+		assert!(!is_valid_nonce(""));
+		assert!(!is_valid_nonce("abc\ndef"));
+		assert!(!is_valid_nonce("abc;def"));
+		assert!(!is_valid_nonce("abc def"));
+		assert!(!is_valid_nonce("abc'def"));
+		assert!(!is_valid_nonce("abc\rdef"));
+	}
+
+	#[rstest]
+	fn test_build_csp_header_rejects_invalid_nonce() {
+		// Arrange
+		let mut directives = HashMap::new();
+		directives.insert("script-src".to_string(), vec!["'self'".to_string()]);
+		let config = CspConfig {
+			directives,
+			report_only: false,
+			include_nonce: true,
+		};
+		let middleware = CspMiddleware::with_config(config);
+
+		// Act - nonce with header injection attempt (newline + semicolon)
+		let csp = middleware.build_csp_header(Some("abc\r\ndef;injected"));
+
+		// Assert - invalid nonce should be silently dropped
+		assert!(
+			!csp.contains("nonce-"),
+			"Invalid nonce should not be embedded in header"
+		);
+		assert!(csp.contains("script-src 'self'"));
+	}
+
+	#[rstest]
+	fn test_nonce_entropy() {
+		// Arrange
+		let middleware = CspMiddleware::new();
+		let mut nonces = std::collections::HashSet::new();
+
+		// Act
+		for _ in 0..100 {
+			nonces.insert(middleware.generate_nonce());
+		}
+
+		// Assert
+		assert_eq!(
+			nonces.len(),
+			100,
+			"All 100 nonces should be unique (statistical randomness)"
+		);
 	}
 }

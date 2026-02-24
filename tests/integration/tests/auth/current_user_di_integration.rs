@@ -5,7 +5,7 @@
 //! **Test Coverage:**
 //! - CurrentUser injection via DI system
 //! - Authentication state management (authenticated/anonymous)
-//! - Database user loading with SeaQuery
+//! - Database user loading with reinhardt-query
 //! - State transitions (login/logout)
 //!
 //! **Fixtures Used:**
@@ -16,21 +16,24 @@
 use chrono::Utc;
 use reinhardt_auth::{BaseUser, CurrentUser, DefaultUser};
 use reinhardt_di::{InjectionContext, SingletonScope};
-use reinhardt_test::fixtures::auth::{test_user, TestUser};
+use reinhardt_query::prelude::{
+	ColumnDef, Expr, ExprTrait, Iden, IntoIden, PostgresQueryBuilder, Query, QueryStatementBuilder,
+	Value,
+};
+use reinhardt_test::fixtures::auth::{TestUser, test_user};
 use reinhardt_test::fixtures::singleton_scope;
-use reinhardt_test::fixtures::testcontainers::{postgres_container, ContainerAsync, GenericImage};
+use reinhardt_test::fixtures::testcontainers::{ContainerAsync, GenericImage, postgres_container};
 use rstest::*;
-use sea_query::{ColumnDef, Expr, ExprTrait, Iden, PostgresQueryBuilder, Query, Table};
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use uuid::Uuid;
 
 // ============================================================================
-// Sea-Query Table Definition
+// reinhardt-query Table Definition
 // ============================================================================
 
-/// AuthUser table identifier for SeaQuery
-#[derive(Iden)]
+/// AuthUser table identifier for reinhardt-query
+#[derive(Debug, Clone, Copy, Iden)]
 enum AuthUser {
 	Table,
 	Id,
@@ -62,57 +65,69 @@ fn create_default_user(test_user: &TestUser) -> DefaultUser {
 	}
 }
 
-/// Create auth_user table using SeaQuery
+/// Create auth_user table using reinhardt-query
 async fn create_auth_user_table(pool: &PgPool) {
-	let create_table = Table::create()
-		.table(AuthUser::Table)
+	let mut stmt = Query::create_table();
+	let create_table = stmt
+		.table(AuthUser::Table.into_iden())
 		.if_not_exists()
-		.col(ColumnDef::new(AuthUser::Id).uuid().primary_key())
+		.col(ColumnDef::new(AuthUser::Id).uuid().primary_key(true))
 		.col(
 			ColumnDef::new(AuthUser::Username)
 				.string_len(150)
-				.not_null(),
+				.not_null(true),
 		)
-		.col(ColumnDef::new(AuthUser::Email).string_len(254).not_null())
+		.col(
+			ColumnDef::new(AuthUser::Email)
+				.string_len(254)
+				.not_null(true),
+		)
 		.col(
 			ColumnDef::new(AuthUser::IsActive)
 				.boolean()
-				.not_null()
-				.default(true),
+				.not_null(true)
+				.default(true.into()),
 		)
-		.to_string(PostgresQueryBuilder);
+		.to_string(PostgresQueryBuilder::new());
 
 	sqlx::query(&create_table).execute(pool).await.unwrap();
 }
 
-/// Insert user into auth_user table using SeaQuery
+/// Insert user into auth_user table using reinhardt-query
 async fn insert_user(pool: &PgPool, id: Uuid, username: &str, email: &str) {
-	let insert = Query::insert()
-		.into_table(AuthUser::Table)
+	let mut insert_stmt = Query::insert();
+	let insert = insert_stmt
+		.into_table(AuthUser::Table.into_iden())
 		.columns([AuthUser::Id, AuthUser::Username, AuthUser::Email])
-		.values_panic([id.to_string().into(), username.into(), email.into()])
-		.to_string(PostgresQueryBuilder);
+		.values_panic([
+			Value::from(id.to_string()),
+			Value::from(username),
+			Value::from(email),
+		])
+		.to_string(PostgresQueryBuilder::new());
 
 	sqlx::query(&insert).execute(pool).await.unwrap();
 }
 
-/// Delete user from auth_user table using SeaQuery
+/// Delete user from auth_user table using reinhardt-query
 async fn delete_user(pool: &PgPool, id: Uuid) {
-	let delete = Query::delete()
-		.from_table(AuthUser::Table)
+	let mut delete_stmt = Query::delete();
+	let delete = delete_stmt
+		.from_table(AuthUser::Table.into_iden())
 		.and_where(Expr::col(AuthUser::Id).eq(Expr::value(id.to_string())))
-		.to_string(PostgresQueryBuilder);
+		.to_string(PostgresQueryBuilder::new());
 
 	sqlx::query(&delete).execute(pool).await.unwrap();
 }
 
-/// Select user by ID using SeaQuery
+/// Select user by ID using reinhardt-query
 async fn select_user_by_id(pool: &PgPool, id: Uuid) -> Option<(Uuid, String, String)> {
-	let select = Query::select()
-		.from(AuthUser::Table)
+	let mut select_stmt = Query::select();
+	let select = select_stmt
+		.from(AuthUser::Table.into_iden())
 		.columns([AuthUser::Id, AuthUser::Username, AuthUser::Email])
 		.and_where(Expr::col(AuthUser::Id).eq(Expr::value(id.to_string())))
-		.to_string(PostgresQueryBuilder);
+		.to_string(PostgresQueryBuilder::new());
 
 	sqlx::query(&select)
 		.fetch_optional(pool)
@@ -198,9 +213,9 @@ async fn sanity_current_user_di_basic(singleton_scope: Arc<SingletonScope>) {
 
 /// Test basic user load operation from database
 ///
-/// **Test Intent**: Verify user can be loaded from PostgreSQL using SeaQuery
+/// **Test Intent**: Verify user can be loaded from PostgreSQL using reinhardt-query
 ///
-/// **Integration Point**: SeaQuery → sqlx → PostgreSQL
+/// **Integration Point**: reinhardt-query → sqlx → PostgreSQL
 #[rstest]
 #[tokio::test]
 async fn sanity_database_user_load(
@@ -266,14 +281,14 @@ async fn normal_current_user_shared_across_endpoints(
 	);
 }
 
-/// Test CurrentUser combined with DB query (SeaQuery)
+/// Test CurrentUser combined with DB query (reinhardt-query)
 ///
 /// **Test Intent**: Verify CurrentUser works with database queries
 ///
-/// **Integration Point**: CurrentUser → SeaQuery → PostgreSQL
+/// **Integration Point**: CurrentUser → reinhardt-query → PostgreSQL
 #[rstest]
 #[tokio::test]
-async fn normal_current_user_db_query_seaquery(
+async fn normal_current_user_db_query(
 	#[future] db_with_test_user: (
 		ContainerAsync<GenericImage>,
 		Arc<PgPool>,
@@ -381,7 +396,7 @@ async fn abnormal_invalid_user_id_injection() {
 ///
 /// **Test Intent**: Verify user deletion from database
 ///
-/// **Integration Point**: SeaQuery DELETE → PostgreSQL
+/// **Integration Point**: reinhardt-query DELETE → PostgreSQL
 #[rstest]
 #[tokio::test]
 async fn abnormal_deleted_user_current_user(
@@ -473,7 +488,7 @@ async fn state_transition_logout_to_anonymous(test_user: TestUser) {
 ///
 /// **Test Intent**: Verify full integration of CurrentUser with DB operations
 ///
-/// **Integration Point**: PostgreSQL → SeaQuery → CurrentUser
+/// **Integration Point**: PostgreSQL → reinhardt-query → CurrentUser
 #[rstest]
 #[tokio::test]
 async fn combination_current_user_session_db(

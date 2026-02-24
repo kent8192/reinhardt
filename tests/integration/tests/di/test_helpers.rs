@@ -5,7 +5,8 @@
 //! circular dependency detection.
 
 use reinhardt_di::{
-	begin_resolution, register_type_name, DiError, DiResult, Injectable, InjectionContext,
+	DiError, DiResult, Injectable, InjectionContext, begin_resolution, register_type_name,
+	with_cycle_detection_scope,
 };
 use std::any::TypeId;
 use std::sync::Arc;
@@ -40,18 +41,21 @@ pub(crate) async fn resolve_injectable<T>(ctx: &InjectionContext) -> DiResult<Ar
 where
 	T: Injectable + Send + Sync + 'static,
 {
-	let type_id = TypeId::of::<T>();
-	let type_name = std::any::type_name::<T>();
+	with_cycle_detection_scope(async {
+		let type_id = TypeId::of::<T>();
+		let type_name = std::any::type_name::<T>();
 
-	// Register type name for better error messages
-	register_type_name::<T>(type_name);
+		// Register type name for better error messages
+		register_type_name::<T>(type_name);
 
-	// Begin circular dependency detection
-	let _guard = begin_resolution(type_id, type_name)
-		.map_err(|e| DiError::CircularDependency(e.to_string()))?;
+		// Begin circular dependency detection
+		let _guard = begin_resolution(type_id, type_name)
+			.map_err(|e| DiError::CircularDependency(e.to_string()))?;
 
-	// Call Injectable::inject()
-	let instance = T::inject(ctx).await?;
+		// Call Injectable::inject()
+		let instance = T::inject(ctx).await?;
 
-	Ok(Arc::new(instance))
+		Ok(Arc::new(instance))
+	})
+	.await
 }

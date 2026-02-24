@@ -4,11 +4,18 @@
 
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite};
 use crate::types::{MutationRequest, MutationResponse};
+use reinhardt_auth::{CurrentUser, DefaultUser};
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
+use super::audit;
+#[cfg(not(target_arch = "wasm32"))]
 use super::error::MapServerFnError;
+#[cfg(not(target_arch = "wasm32"))]
+use super::security::sanitize_mutation_values;
+#[cfg(not(target_arch = "wasm32"))]
+use super::validation::validate_mutation_data;
 
 /// Create a new model instance
 ///
@@ -19,6 +26,10 @@ use super::error::MapServerFnError;
 ///
 /// This function is automatically exposed as an HTTP endpoint by the `#[server_fn]` macro.
 /// AdminSite and AdminDatabase dependencies are automatically injected via the DI system.
+///
+/// # Authentication
+///
+/// Requires authentication and add permission for the model.
 ///
 /// # Example
 ///
@@ -42,14 +53,45 @@ pub async fn create_record(
 	request: MutationRequest,
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
+	#[inject] current_user: CurrentUser<DefaultUser>,
 ) -> Result<MutationResponse, ServerFnError> {
+	// Authentication check
+	let user = current_user
+		.user()
+		.map_err(|_| ServerFnError::server(401, "Authentication required"))?;
+
+	// Get model admin and check permission
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	if !model_admin
+		.has_add_permission(user as &(dyn std::any::Any + Send + Sync))
+		.await
+	{
+		return Err(ServerFnError::server(403, "Permission denied"));
+	}
+
 	let table_name = model_admin.table_name();
 
-	let affected = db
-		.create::<AdminRecord>(table_name, request.data)
+	// Validate input data before database operation
+	validate_mutation_data(&request.data, model_admin.as_ref(), false).map_server_fn_error()?;
+
+	// Sanitize string values to prevent stored XSS
+	let mut sanitized_data = request.data;
+	sanitize_mutation_values(&mut sanitized_data);
+
+	let user_id = current_user
+		.id()
+		.map(|id| id.to_string())
+		.unwrap_or_else(|_| "unknown".to_string());
+
+	let result = db
+		.create::<AdminRecord>(table_name, sanitized_data.clone())
 		.await
-		.map_server_fn_error()?;
+		.map_server_fn_error();
+
+	let success = result.is_ok();
+	audit::log_create(&user_id, &model_name, &sanitized_data, success);
+
+	let affected = result?;
 
 	Ok(MutationResponse {
 		success: true,

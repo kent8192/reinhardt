@@ -13,8 +13,8 @@ async fn test_request_throttling_multiple_throttles() {
 	// NOTE: Production applications chain multiple throttles together in middleware
 	// Test uses independent throttles to verify each throttle's counting behavior in isolation
 
-	let throttle_3_sec = UserRateThrottle::new(3, 1); // 3 per second
-	let throttle_6_min = UserRateThrottle::new(6, 60); // 6 per minute
+	let throttle_3_sec = UserRateThrottle::new(3, 1).unwrap(); // 3 per second
+	let throttle_6_min = UserRateThrottle::new(6, 60).unwrap(); // 6 per minute
 
 	let user_id = "test_user";
 
@@ -57,7 +57,7 @@ async fn test_throttle_rate_change_negative() {
 	let user_id = "test_user";
 
 	// Start with 3/sec rate
-	let throttle = UserRateThrottle::new(3, 1);
+	let throttle = UserRateThrottle::new(3, 1).unwrap();
 
 	for _ in 0..3 {
 		assert!(throttle.allow_request(user_id).await.unwrap());
@@ -69,7 +69,7 @@ async fn test_throttle_rate_change_negative() {
 	// Create new throttle with lower rate - 1/sec
 	// This simulates rate change (in practice would be configuration update)
 	// NOTE: New instance has fresh backend, so previous counts don't apply
-	let throttle_new = UserRateThrottle::new(1, 1);
+	let throttle_new = UserRateThrottle::new(1, 1).unwrap();
 
 	// New throttle instance with fresh backend
 	assert!(throttle_new.allow_request(user_id).await.unwrap());
@@ -82,7 +82,7 @@ async fn test_throttle_rate_change_negative() {
 async fn test_seconds_fields() {
 	// Ensure retry-after header is set properly for second-based throttles
 
-	let throttle = UserRateThrottle::new(3, 1); // 3 per second
+	let throttle = UserRateThrottle::new(3, 1).unwrap(); // 3 per second
 	let user_id = "test_user";
 
 	// First 3 requests should succeed
@@ -108,7 +108,7 @@ async fn test_seconds_fields() {
 async fn test_minutes_fields() {
 	// Ensure retry-after header is set properly for minute-based throttles
 
-	let throttle = UserRateThrottle::new(3, 60); // 3 per minute
+	let throttle = UserRateThrottle::new(3, 60).unwrap(); // 3 per minute
 	let user_id = "test_user";
 
 	// First 3 requests should succeed
@@ -134,7 +134,7 @@ async fn test_minutes_fields() {
 async fn test_next_rate_remains_constant_if_followed() {
 	// If a client follows the recommended next request rate, the throttling rate should stay constant
 
-	let throttle = UserRateThrottle::new(3, 60); // 3 per minute
+	let throttle = UserRateThrottle::new(3, 60).unwrap(); // 3 per minute
 	let user_id = "test_user";
 
 	// Make requests at 20-second intervals (60/3 = 20 seconds between requests)
@@ -226,7 +226,7 @@ async fn test_xff_spoofing_doesnt_change_machine_id_with_one_app_proxy() {
 		}
 	}
 
-	let throttle = AnonRateThrottle::new(1, 86400); // 1 per day
+	let throttle = AnonRateThrottle::new(1, 86400).unwrap(); // 1 per day
 
 	let xff_original = "0.0.0.0, 1.1.1.1, 2.2.2.2";
 	let client_ip = get_client_ip(xff_original, 1); // Should extract "1.1.1.1"
@@ -261,7 +261,7 @@ async fn test_xff_spoofing_doesnt_change_machine_id_with_two_app_proxies() {
 		}
 	}
 
-	let throttle = AnonRateThrottle::new(1, 86400);
+	let throttle = AnonRateThrottle::new(1, 86400).unwrap();
 
 	let xff_original = "0.0.0.0, 1.1.1.1, 2.2.2.2";
 	let client_ip = get_client_ip(xff_original, 2); // Should extract "0.0.0.0"
@@ -294,7 +294,7 @@ async fn test_unique_clients_are_counted_independently_with_one_proxy() {
 		}
 	}
 
-	let throttle = AnonRateThrottle::new(1, 86400);
+	let throttle = AnonRateThrottle::new(1, 86400).unwrap();
 
 	let xff1 = "0.0.0.0, 1.1.1.1, 2.2.2.2";
 	let client1 = get_client_ip(xff1, 1); // "1.1.1.1"
@@ -323,7 +323,7 @@ async fn test_unique_clients_are_counted_independently_with_two_proxies() {
 		}
 	}
 
-	let throttle = AnonRateThrottle::new(1, 86400);
+	let throttle = AnonRateThrottle::new(1, 86400).unwrap();
 
 	let xff1 = "0.0.0.0, 1.1.1.1, 2.2.2.2";
 	let client1 = get_client_ip(xff1, 2); // "0.0.0.0"
@@ -369,7 +369,7 @@ async fn test_throttle_raises_error_if_rate_is_missing() {
 	// We must provide rate at construction time
 
 	// This test verifies that construction requires valid parameters
-	let throttle = UserRateThrottle::new(10, 60);
+	let throttle = UserRateThrottle::new(10, 60).unwrap();
 	let (rate, window) = throttle.get_rate();
 	assert_eq!(rate, 10);
 	assert_eq!(window, 60);
@@ -382,7 +382,7 @@ async fn test_throttle_raises_error_if_rate_is_missing() {
 async fn test_parse_rate_returns_tuple_with_none_if_rate_not_provided() {
 	// Test that get_rate returns proper values
 
-	let throttle = UserRateThrottle::new(100, 3600);
+	let throttle = UserRateThrottle::new(100, 3600).unwrap();
 	let (rate, duration) = throttle.get_rate();
 
 	assert_eq!(rate, 100);
@@ -394,7 +394,7 @@ async fn test_allow_request_returns_true_if_rate_is_none() {
 	// In Rust implementation, rate is always required
 	// But we can test with very high limits
 
-	let throttle = UserRateThrottle::new(1000000, 1); // Effectively unlimited
+	let throttle = UserRateThrottle::new(1000000, 1).unwrap(); // Effectively unlimited
 
 	for _ in 0..100 {
 		let allowed = throttle.allow_request("user1").await.unwrap();
@@ -407,7 +407,7 @@ async fn test_get_cache_key_raises_not_implemented_error() {
 	// This tests the base Throttle trait
 	// Cache key generation is internal, but we can test that different keys work
 
-	let throttle = UserRateThrottle::new(3, 60);
+	let throttle = UserRateThrottle::new(3, 60).unwrap();
 
 	// Different user IDs should be tracked separately
 	assert!(throttle.allow_request("user1").await.unwrap());
@@ -427,15 +427,12 @@ async fn test_get_cache_key_raises_not_implemented_error() {
 }
 
 #[tokio::test]
-async fn test_allow_request_returns_true_if_key_is_none() {
-	// Test behavior with empty or None-like keys
+async fn test_allow_request_returns_error_if_key_is_empty() {
+	// Test behavior with empty key - should return error per key validation rules
 
-	let throttle = AnonRateThrottle::new(3, 60);
+	let throttle = AnonRateThrottle::new(3, 60).unwrap();
 
-	// Empty string key should still work
-	for _ in 0..3 {
-		assert!(throttle.allow_request("").await.unwrap());
-	}
-
-	assert!(!throttle.allow_request("").await.unwrap());
+	// Empty string key should return error (key component must not be empty)
+	let result = throttle.allow_request("").await;
+	assert!(result.is_err());
 }

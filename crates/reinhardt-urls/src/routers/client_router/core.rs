@@ -70,12 +70,18 @@ impl std::fmt::Debug for ClientRoute {
 
 impl ClientRoute {
 	/// Creates a new route.
+	///
+	/// # Panics
+	///
+	/// Panics if the pattern is invalid (exceeds length/segment limits or invalid regex).
+	/// Use [`ClientPathPattern::new`] directly for fallible construction.
 	pub fn new<F>(pattern: &str, component: F) -> Self
 	where
 		F: Fn() -> Page + Send + Sync + 'static,
 	{
 		Self {
-			pattern: ClientPathPattern::new(pattern),
+			pattern: ClientPathPattern::new(pattern)
+				.unwrap_or_else(|e| panic!("Invalid route pattern '{}': {}", pattern, e)),
 			name: None,
 			handler: no_params_handler(component),
 			guard: None,
@@ -83,12 +89,18 @@ impl ClientRoute {
 	}
 
 	/// Creates a named route.
+	///
+	/// # Panics
+	///
+	/// Panics if the pattern is invalid (exceeds length/segment limits or invalid regex).
+	/// Use [`ClientPathPattern::new`] directly for fallible construction.
 	pub fn named<F>(name: impl Into<String>, pattern: &str, component: F) -> Self
 	where
 		F: Fn() -> Page + Send + Sync + 'static,
 	{
 		Self {
-			pattern: ClientPathPattern::new(pattern),
+			pattern: ClientPathPattern::new(pattern)
+				.unwrap_or_else(|e| panic!("Invalid route pattern '{}': {}", pattern, e)),
 			name: Some(name.into()),
 			handler: no_params_handler(component),
 			guard: None,
@@ -199,7 +211,8 @@ impl ClientRouter {
 		T: FromPath + Send + Sync + 'static,
 	{
 		self.routes.push(ClientRoute {
-			pattern: ClientPathPattern::new(pattern),
+			pattern: ClientPathPattern::new(pattern)
+				.unwrap_or_else(|e| panic!("Invalid route pattern '{}': {}", pattern, e)),
 			name: None,
 			handler: with_params_handler(handler),
 			guard: None,
@@ -215,7 +228,8 @@ impl ClientRouter {
 	{
 		let index = self.routes.len();
 		self.routes.push(ClientRoute {
-			pattern: ClientPathPattern::new(pattern),
+			pattern: ClientPathPattern::new(pattern)
+				.unwrap_or_else(|e| panic!("Invalid route pattern '{}': {}", pattern, e)),
 			name: Some(name.to_string()),
 			handler: with_params_handler(handler),
 			guard: None,
@@ -232,7 +246,8 @@ impl ClientRouter {
 		E: Into<RouterError> + Send + Sync + 'static,
 	{
 		self.routes.push(ClientRoute {
-			pattern: ClientPathPattern::new(pattern),
+			pattern: ClientPathPattern::new(pattern)
+				.unwrap_or_else(|e| panic!("Invalid route pattern '{}': {}", pattern, e)),
 			name: None,
 			handler: result_handler(handler),
 			guard: None,
@@ -249,7 +264,8 @@ impl ClientRouter {
 	{
 		let index = self.routes.len();
 		self.routes.push(ClientRoute {
-			pattern: ClientPathPattern::new(pattern),
+			pattern: ClientPathPattern::new(pattern)
+				.unwrap_or_else(|e| panic!("Invalid route pattern '{}': {}", pattern, e)),
 			name: Some(name.to_string()),
 			handler: result_handler(handler),
 			guard: None,
@@ -285,7 +301,8 @@ impl ClientRouter {
 		T: SingleFromPath + Send + Sync + 'static,
 	{
 		self.routes.push(ClientRoute {
-			pattern: ClientPathPattern::new(pattern),
+			pattern: ClientPathPattern::new(pattern)
+				.unwrap_or_else(|e| panic!("Invalid route pattern '{}': {}", pattern, e)),
 			name: None,
 			handler: single_path_handler(handler),
 			guard: None,
@@ -301,7 +318,8 @@ impl ClientRouter {
 	{
 		let index = self.routes.len();
 		self.routes.push(ClientRoute {
-			pattern: ClientPathPattern::new(pattern),
+			pattern: ClientPathPattern::new(pattern)
+				.unwrap_or_else(|e| panic!("Invalid route pattern '{}': {}", pattern, e)),
 			name: Some(name.to_string()),
 			handler: single_path_handler(handler),
 			guard: None,
@@ -328,7 +346,8 @@ impl ClientRouter {
 		T2: SingleFromPath + Send + Sync + 'static,
 	{
 		self.routes.push(ClientRoute {
-			pattern: ClientPathPattern::new(pattern),
+			pattern: ClientPathPattern::new(pattern)
+				.unwrap_or_else(|e| panic!("Invalid route pattern '{}': {}", pattern, e)),
 			name: None,
 			handler: two_path_handler(handler),
 			guard: None,
@@ -345,7 +364,8 @@ impl ClientRouter {
 	{
 		let index = self.routes.len();
 		self.routes.push(ClientRoute {
-			pattern: ClientPathPattern::new(pattern),
+			pattern: ClientPathPattern::new(pattern)
+				.unwrap_or_else(|e| panic!("Invalid route pattern '{}': {}", pattern, e)),
 			name: Some(name.to_string()),
 			handler: two_path_handler(handler),
 			guard: None,
@@ -373,7 +393,8 @@ impl ClientRouter {
 		T3: SingleFromPath + Send + Sync + 'static,
 	{
 		self.routes.push(ClientRoute {
-			pattern: ClientPathPattern::new(pattern),
+			pattern: ClientPathPattern::new(pattern)
+				.unwrap_or_else(|e| panic!("Invalid route pattern '{}': {}", pattern, e)),
 			name: None,
 			handler: three_path_handler(handler),
 			guard: None,
@@ -391,7 +412,8 @@ impl ClientRouter {
 	{
 		let index = self.routes.len();
 		self.routes.push(ClientRoute {
-			pattern: ClientPathPattern::new(pattern),
+			pattern: ClientPathPattern::new(pattern)
+				.unwrap_or_else(|e| panic!("Invalid route pattern '{}': {}", pattern, e)),
 			name: Some(name.to_string()),
 			handler: three_path_handler(handler),
 			guard: None,

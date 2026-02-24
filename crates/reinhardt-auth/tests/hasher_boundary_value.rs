@@ -427,6 +427,10 @@ fn test_verify_modified_hash(argon2_hasher: Argon2Hasher) {
 	let mut hash = argon2_hasher.hash(password).unwrap();
 
 	// Modify one character in the hash
+	// SAFETY: We own the `hash` String exclusively. The modification only changes
+	// the last byte between two valid ASCII characters ('a' <-> 'b'), which
+	// preserves valid UTF-8 encoding. This is intentional corruption for testing
+	// that verification rejects tampered hashes.
 	let bytes = unsafe { hash.as_bytes_mut() };
 	if let Some(last) = bytes.last_mut() {
 		*last = if *last == b'a' { b'b' } else { b'a' };

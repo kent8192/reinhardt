@@ -1,11 +1,12 @@
 //! Query abstraction layer
 //!
-//! Type definitions for passing SeaQuery objects instead of SQL strings
+//! Type definitions for passing reinhardt-query objects instead of SQL strings
 
-use sea_query::{
-	DeleteStatement, IndexCreateStatement, IndexDropStatement, InsertStatement, MysqlQueryBuilder,
-	PostgresQueryBuilder, SelectStatement, SqliteQueryBuilder, TableAlterStatement,
-	TableCreateStatement, TableDropStatement, TableRenameStatement, UpdateStatement, Values,
+use reinhardt_query::prelude::{
+	AlterTableStatement, CreateIndexStatement, CreateTableStatement, DeleteStatement,
+	DropIndexStatement, DropTableStatement, InsertStatement, MySqlQueryBuilder,
+	PostgresQueryBuilder, QueryBuilder, SelectStatement, SqliteQueryBuilder, UpdateStatement,
+	Values,
 };
 
 /// Database backend type
@@ -18,18 +19,18 @@ pub enum DbBackend {
 
 impl DbBackend {
 	/// Get query builder for this backend
-	pub fn query_builder(&self) -> QueryBuilder {
+	pub fn query_builder(&self) -> DbQueryBuilder {
 		match self {
-			DbBackend::Postgres => QueryBuilder::Postgres,
-			DbBackend::Mysql => QueryBuilder::Mysql,
-			DbBackend::Sqlite => QueryBuilder::Sqlite,
+			DbBackend::Postgres => DbQueryBuilder::Postgres,
+			DbBackend::Mysql => DbQueryBuilder::Mysql,
+			DbBackend::Sqlite => DbQueryBuilder::Sqlite,
 		}
 	}
 }
 
 /// Query builder type
 #[derive(Debug, Clone, Copy)]
-pub enum QueryBuilder {
+pub enum DbQueryBuilder {
 	Postgres,
 	Mysql,
 	Sqlite,
@@ -37,211 +38,71 @@ pub enum QueryBuilder {
 
 /// Unified query statement enum
 ///
-/// Wraps SeaQuery objects for passing around instead of SQL strings
+/// Wraps reinhardt-query objects for passing around instead of SQL strings
 #[derive(Debug, Clone)]
 pub enum QueryStatement {
 	Select(SelectStatement),
 	Insert(InsertStatement),
 	Update(UpdateStatement),
 	Delete(DeleteStatement),
-	CreateTable(TableCreateStatement),
-	AlterTable(TableAlterStatement),
-	DropTable(TableDropStatement),
-	RenameTable(TableRenameStatement),
-	CreateIndex(IndexCreateStatement),
-	DropIndex(IndexDropStatement),
+	CreateTable(CreateTableStatement),
+	AlterTable(AlterTableStatement),
+	DropTable(DropTableStatement),
+	RenameTable(AlterTableStatement),
+	CreateIndex(CreateIndexStatement),
+	DropIndex(DropIndexStatement),
 }
 
 impl QueryStatement {
 	/// Build SQL string and bind values according to database backend
 	pub fn build(&self, backend: DbBackend) -> (String, Values) {
+		let pg = PostgresQueryBuilder::new();
+		let mysql = MySqlQueryBuilder::new();
+		let sqlite = SqliteQueryBuilder::new();
+
 		match (self, backend) {
-			(QueryStatement::Select(stmt), DbBackend::Postgres) => {
-				stmt.clone().build(PostgresQueryBuilder)
-			}
-			(QueryStatement::Select(stmt), DbBackend::Mysql) => {
-				stmt.clone().build(MysqlQueryBuilder)
-			}
-			(QueryStatement::Select(stmt), DbBackend::Sqlite) => {
-				stmt.clone().build(SqliteQueryBuilder)
-			}
-			(QueryStatement::Insert(stmt), DbBackend::Postgres) => {
-				stmt.clone().build(PostgresQueryBuilder)
-			}
-			(QueryStatement::Insert(stmt), DbBackend::Mysql) => {
-				stmt.clone().build(MysqlQueryBuilder)
-			}
-			(QueryStatement::Insert(stmt), DbBackend::Sqlite) => {
-				stmt.clone().build(SqliteQueryBuilder)
-			}
-			(QueryStatement::Update(stmt), DbBackend::Postgres) => {
-				stmt.clone().build(PostgresQueryBuilder)
-			}
-			(QueryStatement::Update(stmt), DbBackend::Mysql) => {
-				stmt.clone().build(MysqlQueryBuilder)
-			}
-			(QueryStatement::Update(stmt), DbBackend::Sqlite) => {
-				stmt.clone().build(SqliteQueryBuilder)
-			}
-			(QueryStatement::Delete(stmt), DbBackend::Postgres) => {
-				stmt.clone().build(PostgresQueryBuilder)
-			}
-			(QueryStatement::Delete(stmt), DbBackend::Mysql) => {
-				stmt.clone().build(MysqlQueryBuilder)
-			}
-			(QueryStatement::Delete(stmt), DbBackend::Sqlite) => {
-				stmt.clone().build(SqliteQueryBuilder)
-			}
-			(QueryStatement::CreateTable(stmt), DbBackend::Postgres) => {
-				(stmt.clone().build(PostgresQueryBuilder), Values(vec![]))
-			}
-			(QueryStatement::CreateTable(stmt), DbBackend::Mysql) => {
-				(stmt.clone().build(MysqlQueryBuilder), Values(vec![]))
-			}
+			(QueryStatement::Select(stmt), DbBackend::Postgres) => pg.build_select(stmt),
+			(QueryStatement::Select(stmt), DbBackend::Mysql) => mysql.build_select(stmt),
+			(QueryStatement::Select(stmt), DbBackend::Sqlite) => sqlite.build_select(stmt),
+			(QueryStatement::Insert(stmt), DbBackend::Postgres) => pg.build_insert(stmt),
+			(QueryStatement::Insert(stmt), DbBackend::Mysql) => mysql.build_insert(stmt),
+			(QueryStatement::Insert(stmt), DbBackend::Sqlite) => sqlite.build_insert(stmt),
+			(QueryStatement::Update(stmt), DbBackend::Postgres) => pg.build_update(stmt),
+			(QueryStatement::Update(stmt), DbBackend::Mysql) => mysql.build_update(stmt),
+			(QueryStatement::Update(stmt), DbBackend::Sqlite) => sqlite.build_update(stmt),
+			(QueryStatement::Delete(stmt), DbBackend::Postgres) => pg.build_delete(stmt),
+			(QueryStatement::Delete(stmt), DbBackend::Mysql) => mysql.build_delete(stmt),
+			(QueryStatement::Delete(stmt), DbBackend::Sqlite) => sqlite.build_delete(stmt),
+			(QueryStatement::CreateTable(stmt), DbBackend::Postgres) => pg.build_create_table(stmt),
+			(QueryStatement::CreateTable(stmt), DbBackend::Mysql) => mysql.build_create_table(stmt),
 			(QueryStatement::CreateTable(stmt), DbBackend::Sqlite) => {
-				(stmt.clone().build(SqliteQueryBuilder), Values(vec![]))
+				sqlite.build_create_table(stmt)
 			}
-			(QueryStatement::AlterTable(stmt), DbBackend::Postgres) => {
-				(stmt.clone().build(PostgresQueryBuilder), Values(vec![]))
-			}
-			(QueryStatement::AlterTable(stmt), DbBackend::Mysql) => {
-				(stmt.clone().build(MysqlQueryBuilder), Values(vec![]))
-			}
-			(QueryStatement::AlterTable(stmt), DbBackend::Sqlite) => {
-				(stmt.clone().build(SqliteQueryBuilder), Values(vec![]))
-			}
-			(QueryStatement::DropTable(stmt), DbBackend::Postgres) => {
-				(stmt.clone().build(PostgresQueryBuilder), Values(vec![]))
-			}
-			(QueryStatement::DropTable(stmt), DbBackend::Mysql) => {
-				(stmt.clone().build(MysqlQueryBuilder), Values(vec![]))
-			}
-			(QueryStatement::DropTable(stmt), DbBackend::Sqlite) => {
-				(stmt.clone().build(SqliteQueryBuilder), Values(vec![]))
-			}
-			(QueryStatement::RenameTable(stmt), DbBackend::Postgres) => {
-				(stmt.clone().build(PostgresQueryBuilder), Values(vec![]))
-			}
-			(QueryStatement::RenameTable(stmt), DbBackend::Mysql) => {
-				(stmt.clone().build(MysqlQueryBuilder), Values(vec![]))
-			}
+			(QueryStatement::AlterTable(stmt), DbBackend::Postgres) => pg.build_alter_table(stmt),
+			(QueryStatement::AlterTable(stmt), DbBackend::Mysql) => mysql.build_alter_table(stmt),
+			(QueryStatement::AlterTable(stmt), DbBackend::Sqlite) => sqlite.build_alter_table(stmt),
+			(QueryStatement::DropTable(stmt), DbBackend::Postgres) => pg.build_drop_table(stmt),
+			(QueryStatement::DropTable(stmt), DbBackend::Mysql) => mysql.build_drop_table(stmt),
+			(QueryStatement::DropTable(stmt), DbBackend::Sqlite) => sqlite.build_drop_table(stmt),
+			(QueryStatement::RenameTable(stmt), DbBackend::Postgres) => pg.build_alter_table(stmt),
+			(QueryStatement::RenameTable(stmt), DbBackend::Mysql) => mysql.build_alter_table(stmt),
 			(QueryStatement::RenameTable(stmt), DbBackend::Sqlite) => {
-				(stmt.clone().build(SqliteQueryBuilder), Values(vec![]))
+				sqlite.build_alter_table(stmt)
 			}
-			(QueryStatement::CreateIndex(stmt), DbBackend::Postgres) => {
-				(stmt.clone().build(PostgresQueryBuilder), Values(vec![]))
-			}
-			(QueryStatement::CreateIndex(stmt), DbBackend::Mysql) => {
-				(stmt.clone().build(MysqlQueryBuilder), Values(vec![]))
-			}
+			(QueryStatement::CreateIndex(stmt), DbBackend::Postgres) => pg.build_create_index(stmt),
+			(QueryStatement::CreateIndex(stmt), DbBackend::Mysql) => mysql.build_create_index(stmt),
 			(QueryStatement::CreateIndex(stmt), DbBackend::Sqlite) => {
-				(stmt.clone().build(SqliteQueryBuilder), Values(vec![]))
+				sqlite.build_create_index(stmt)
 			}
-			(QueryStatement::DropIndex(stmt), DbBackend::Postgres) => {
-				(stmt.clone().build(PostgresQueryBuilder), Values(vec![]))
-			}
-			(QueryStatement::DropIndex(stmt), DbBackend::Mysql) => {
-				(stmt.clone().build(MysqlQueryBuilder), Values(vec![]))
-			}
-			(QueryStatement::DropIndex(stmt), DbBackend::Sqlite) => {
-				(stmt.clone().build(SqliteQueryBuilder), Values(vec![]))
-			}
+			(QueryStatement::DropIndex(stmt), DbBackend::Postgres) => pg.build_drop_index(stmt),
+			(QueryStatement::DropIndex(stmt), DbBackend::Mysql) => mysql.build_drop_index(stmt),
+			(QueryStatement::DropIndex(stmt), DbBackend::Sqlite) => sqlite.build_drop_index(stmt),
 		}
 	}
 
 	/// Build SQL string only (without bind values)
 	pub fn to_string(&self, backend: DbBackend) -> String {
-		match (self, backend) {
-			(QueryStatement::Select(stmt), DbBackend::Postgres) => {
-				stmt.clone().to_string(PostgresQueryBuilder)
-			}
-			(QueryStatement::Select(stmt), DbBackend::Mysql) => {
-				stmt.clone().to_string(MysqlQueryBuilder)
-			}
-			(QueryStatement::Select(stmt), DbBackend::Sqlite) => {
-				stmt.clone().to_string(SqliteQueryBuilder)
-			}
-			(QueryStatement::Insert(stmt), DbBackend::Postgres) => {
-				stmt.clone().to_string(PostgresQueryBuilder)
-			}
-			(QueryStatement::Insert(stmt), DbBackend::Mysql) => {
-				stmt.clone().to_string(MysqlQueryBuilder)
-			}
-			(QueryStatement::Insert(stmt), DbBackend::Sqlite) => {
-				stmt.clone().to_string(SqliteQueryBuilder)
-			}
-			(QueryStatement::Update(stmt), DbBackend::Postgres) => {
-				stmt.clone().to_string(PostgresQueryBuilder)
-			}
-			(QueryStatement::Update(stmt), DbBackend::Mysql) => {
-				stmt.clone().to_string(MysqlQueryBuilder)
-			}
-			(QueryStatement::Update(stmt), DbBackend::Sqlite) => {
-				stmt.clone().to_string(SqliteQueryBuilder)
-			}
-			(QueryStatement::Delete(stmt), DbBackend::Postgres) => {
-				stmt.clone().to_string(PostgresQueryBuilder)
-			}
-			(QueryStatement::Delete(stmt), DbBackend::Mysql) => {
-				stmt.clone().to_string(MysqlQueryBuilder)
-			}
-			(QueryStatement::Delete(stmt), DbBackend::Sqlite) => {
-				stmt.clone().to_string(SqliteQueryBuilder)
-			}
-			(QueryStatement::CreateTable(stmt), DbBackend::Postgres) => {
-				stmt.clone().to_string(PostgresQueryBuilder)
-			}
-			(QueryStatement::CreateTable(stmt), DbBackend::Mysql) => {
-				stmt.clone().to_string(MysqlQueryBuilder)
-			}
-			(QueryStatement::CreateTable(stmt), DbBackend::Sqlite) => {
-				stmt.clone().to_string(SqliteQueryBuilder)
-			}
-			(QueryStatement::AlterTable(stmt), DbBackend::Postgres) => {
-				stmt.clone().to_string(PostgresQueryBuilder)
-			}
-			(QueryStatement::AlterTable(stmt), DbBackend::Mysql) => {
-				stmt.clone().to_string(MysqlQueryBuilder)
-			}
-			(QueryStatement::AlterTable(stmt), DbBackend::Sqlite) => {
-				stmt.clone().to_string(SqliteQueryBuilder)
-			}
-			(QueryStatement::DropTable(stmt), DbBackend::Postgres) => {
-				stmt.clone().to_string(PostgresQueryBuilder)
-			}
-			(QueryStatement::DropTable(stmt), DbBackend::Mysql) => {
-				stmt.clone().to_string(MysqlQueryBuilder)
-			}
-			(QueryStatement::DropTable(stmt), DbBackend::Sqlite) => {
-				stmt.clone().to_string(SqliteQueryBuilder)
-			}
-			(QueryStatement::RenameTable(stmt), DbBackend::Postgres) => {
-				stmt.clone().to_string(PostgresQueryBuilder)
-			}
-			(QueryStatement::RenameTable(stmt), DbBackend::Mysql) => {
-				stmt.clone().to_string(MysqlQueryBuilder)
-			}
-			(QueryStatement::RenameTable(stmt), DbBackend::Sqlite) => {
-				stmt.clone().to_string(SqliteQueryBuilder)
-			}
-			(QueryStatement::CreateIndex(stmt), DbBackend::Postgres) => {
-				stmt.clone().to_string(PostgresQueryBuilder)
-			}
-			(QueryStatement::CreateIndex(stmt), DbBackend::Mysql) => {
-				stmt.clone().to_string(MysqlQueryBuilder)
-			}
-			(QueryStatement::CreateIndex(stmt), DbBackend::Sqlite) => {
-				stmt.clone().to_string(SqliteQueryBuilder)
-			}
-			(QueryStatement::DropIndex(stmt), DbBackend::Postgres) => {
-				stmt.clone().to_string(PostgresQueryBuilder)
-			}
-			(QueryStatement::DropIndex(stmt), DbBackend::Mysql) => {
-				stmt.clone().to_string(MysqlQueryBuilder)
-			}
-			(QueryStatement::DropIndex(stmt), DbBackend::Sqlite) => {
-				stmt.clone().to_string(SqliteQueryBuilder)
-			}
-		}
+		let (sql, _) = self.build(backend);
+		sql
 	}
 }

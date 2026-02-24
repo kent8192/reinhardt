@@ -19,9 +19,11 @@ use chrono::{DateTime, Utc};
 use hyper::{HeaderMap, Method, Version};
 use reinhardt_http::Request;
 use reinhardt_macros::model;
+use reinhardt_query::prelude::{
+	ColumnDef, Iden, IntoIden, PostgresQueryBuilder, Query, QueryStatementBuilder,
+};
 use reinhardt_test::fixtures::get_test_pool;
 use rstest::*;
-use sea_query::{Iden, PostgresQueryBuilder, Table};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 
@@ -92,7 +94,7 @@ struct Task {
 // Iden Enums
 // ============================================================================
 
-#[derive(Iden)]
+#[derive(Debug, Clone, Copy, Iden)]
 enum BlogPosts {
 	Table,
 	Id,
@@ -104,7 +106,7 @@ enum BlogPosts {
 	CreatedAt,
 }
 
-#[derive(Iden)]
+#[derive(Debug, Clone, Copy, Iden)]
 enum Products {
 	Table,
 	Id,
@@ -116,7 +118,7 @@ enum Products {
 	Active,
 }
 
-#[derive(Iden)]
+#[derive(Debug, Clone, Copy, Iden)]
 enum Tasks {
 	Table,
 	Id,
@@ -141,35 +143,36 @@ async fn setup_blog() -> PgPool {
 	let pool = get_test_pool().await;
 
 	// Create blog_posts table
-	let create_table_sql = Table::create()
-		.table(BlogPosts::Table)
+	let mut stmt = Query::create_table();
+	let create_table_sql = stmt
+		.table(BlogPosts::Table.into_iden())
 		.if_not_exists()
 		.col(
-			sea_query::ColumnDef::new(BlogPosts::Id)
+			ColumnDef::new(BlogPosts::Id)
 				.big_integer()
-				.not_null()
-				.auto_increment()
-				.primary_key(),
+				.not_null(true)
+				.auto_increment(true)
+				.primary_key(true),
 		)
 		.col(
-			sea_query::ColumnDef::new(BlogPosts::Title)
+			ColumnDef::new(BlogPosts::Title)
 				.string_len(200)
-				.not_null(),
+				.not_null(true),
 		)
 		.col(
-			sea_query::ColumnDef::new(BlogPosts::Content)
+			ColumnDef::new(BlogPosts::Content)
 				.string_len(10000)
-				.not_null(),
+				.not_null(true),
 		)
 		.col(
-			sea_query::ColumnDef::new(BlogPosts::Status)
+			ColumnDef::new(BlogPosts::Status)
 				.string_len(50)
-				.not_null(),
+				.not_null(true),
 		)
-		.col(sea_query::ColumnDef::new(BlogPosts::AuthorId).big_integer())
-		.col(sea_query::ColumnDef::new(BlogPosts::PublishedAt).timestamp_with_time_zone())
-		.col(sea_query::ColumnDef::new(BlogPosts::CreatedAt).timestamp_with_time_zone())
-		.to_string(PostgresQueryBuilder);
+		.col(ColumnDef::new(BlogPosts::AuthorId).big_integer())
+		.col(ColumnDef::new(BlogPosts::PublishedAt).timestamp_with_time_zone())
+		.col(ColumnDef::new(BlogPosts::CreatedAt).timestamp_with_time_zone())
+		.to_string(PostgresQueryBuilder::new());
 
 	sqlx::query(&create_table_sql).execute(&pool).await.unwrap();
 
@@ -184,47 +187,36 @@ async fn setup_products() -> PgPool {
 	let pool = get_test_pool().await;
 
 	// Create products table
-	let create_table_sql = Table::create()
-		.table(Products::Table)
+	let mut stmt = Query::create_table();
+	let create_table_sql = stmt
+		.table(Products::Table.into_iden())
 		.if_not_exists()
 		.col(
-			sea_query::ColumnDef::new(Products::Id)
+			ColumnDef::new(Products::Id)
 				.big_integer()
-				.not_null()
-				.auto_increment()
-				.primary_key(),
+				.not_null(true)
+				.auto_increment(true)
+				.primary_key(true),
 		)
 		.col(
-			sea_query::ColumnDef::new(Products::Name)
+			ColumnDef::new(Products::Name)
 				.string_len(200)
-				.not_null(),
+				.not_null(true),
 		)
+		.col(ColumnDef::new(Products::Sku).string_len(100).not_null(true))
+		.col(ColumnDef::new(Products::Price).double().not_null(true))
 		.col(
-			sea_query::ColumnDef::new(Products::Sku)
-				.string_len(100)
-				.not_null(),
-		)
-		.col(
-			sea_query::ColumnDef::new(Products::Price)
-				.double()
-				.not_null(),
-		)
-		.col(
-			sea_query::ColumnDef::new(Products::StockQuantity)
+			ColumnDef::new(Products::StockQuantity)
 				.integer()
-				.not_null(),
+				.not_null(true),
 		)
 		.col(
-			sea_query::ColumnDef::new(Products::Category)
+			ColumnDef::new(Products::Category)
 				.string_len(100)
-				.not_null(),
+				.not_null(true),
 		)
-		.col(
-			sea_query::ColumnDef::new(Products::Active)
-				.boolean()
-				.not_null(),
-		)
-		.to_string(PostgresQueryBuilder);
+		.col(ColumnDef::new(Products::Active).boolean().not_null(true))
+		.to_string(PostgresQueryBuilder::new());
 
 	sqlx::query(&create_table_sql).execute(&pool).await.unwrap();
 
@@ -239,39 +231,28 @@ async fn setup_tasks() -> PgPool {
 	let pool = get_test_pool().await;
 
 	// Create tasks table
-	let create_table_sql = Table::create()
-		.table(Tasks::Table)
+	let mut stmt = Query::create_table();
+	let create_table_sql = stmt
+		.table(Tasks::Table.into_iden())
 		.if_not_exists()
 		.col(
-			sea_query::ColumnDef::new(Tasks::Id)
+			ColumnDef::new(Tasks::Id)
 				.big_integer()
-				.not_null()
-				.auto_increment()
-				.primary_key(),
+				.not_null(true)
+				.auto_increment(true)
+				.primary_key(true),
 		)
+		.col(ColumnDef::new(Tasks::Title).string_len(200).not_null(true))
 		.col(
-			sea_query::ColumnDef::new(Tasks::Title)
-				.string_len(200)
-				.not_null(),
-		)
-		.col(
-			sea_query::ColumnDef::new(Tasks::Description)
+			ColumnDef::new(Tasks::Description)
 				.string_len(5000)
-				.not_null(),
+				.not_null(true),
 		)
-		.col(
-			sea_query::ColumnDef::new(Tasks::Status)
-				.string_len(50)
-				.not_null(),
-		)
-		.col(
-			sea_query::ColumnDef::new(Tasks::Priority)
-				.integer()
-				.not_null(),
-		)
-		.col(sea_query::ColumnDef::new(Tasks::AssigneeId).big_integer())
-		.col(sea_query::ColumnDef::new(Tasks::DueDate).timestamp_with_time_zone())
-		.to_string(PostgresQueryBuilder);
+		.col(ColumnDef::new(Tasks::Status).string_len(50).not_null(true))
+		.col(ColumnDef::new(Tasks::Priority).integer().not_null(true))
+		.col(ColumnDef::new(Tasks::AssigneeId).big_integer())
+		.col(ColumnDef::new(Tasks::DueDate).timestamp_with_time_zone())
+		.to_string(PostgresQueryBuilder::new());
 
 	sqlx::query(&create_table_sql).execute(&pool).await.unwrap();
 

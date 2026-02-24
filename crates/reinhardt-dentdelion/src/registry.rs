@@ -281,14 +281,29 @@ impl PluginRegistry {
 				}
 
 				// Validate version requirement
-				let plugin_metadata = plugins.get(plugin_name).unwrap().plugin.metadata();
-				let dep_spec = plugin_metadata
+				// These lookups may fail if the dependency graph is inconsistent
+				// with the plugins map (e.g., due to concurrent modification).
+				let Some(plugin_entry) = plugins.get(plugin_name) else {
+					continue;
+				};
+				let plugin_metadata = plugin_entry.plugin.metadata();
+				let Some(dep_spec) = plugin_metadata
 					.dependencies
 					.iter()
 					.find(|d| &d.name == dep_name)
-					.unwrap();
+				else {
+					continue;
+				};
 
-				let actual_version = &plugins.get(dep_name).unwrap().plugin.metadata().version;
+				let actual_version = &plugins
+					.get(dep_name)
+					.ok_or_else(|| PluginError::MissingDependency {
+						plugin: plugin_name.clone(),
+						dependency: dep_name.clone(),
+					})?
+					.plugin
+					.metadata()
+					.version;
 				if !dep_spec.version_req.matches(actual_version) {
 					return Err(PluginError::IncompatibleVersion {
 						plugin: plugin_name.clone(),
@@ -306,8 +321,11 @@ impl PluginRegistry {
 	/// Gets the topological order for enabling plugins.
 	///
 	/// Returns plugins in an order where dependencies come before dependents.
+	/// Uses Kahn's algorithm: edges point from dependency to dependent,
+	/// so in-degree counts represent the number of unsatisfied dependencies.
 	pub fn get_enable_order(&self) -> PluginResult<Vec<String>> {
 		let deps = self.dependency_graph.read();
+		let reverse_deps = self.dependents.read();
 		let plugins = self.plugins.read();
 
 		// Kahn's algorithm for topological sort
@@ -318,16 +336,17 @@ impl PluginRegistry {
 			in_degree.insert(name.clone(), 0);
 		}
 
-		// Count incoming edges
-		for dependencies in deps.values() {
-			for dep in dependencies {
-				if let Some(degree) = in_degree.get_mut(dep) {
-					*degree += 1;
-				}
+		// Count incoming edges: for each plugin, in-degree = number of dependencies
+		for (plugin_name, dependencies) in deps.iter() {
+			if let Some(degree) = in_degree.get_mut(plugin_name) {
+				*degree = dependencies
+					.iter()
+					.filter(|d| plugins.contains_key(d.as_str()))
+					.count();
 			}
 		}
 
-		// Find nodes with no incoming edges
+		// Start with nodes that have no dependencies (in-degree = 0)
 		let mut queue: Vec<String> = in_degree
 			.iter()
 			.filter(|&(_, &degree)| degree == 0)
@@ -339,12 +358,13 @@ impl PluginRegistry {
 		while let Some(name) = queue.pop() {
 			result.push(name.clone());
 
-			if let Some(dependencies) = deps.get(&name) {
-				for dep in dependencies {
-					if let Some(degree) = in_degree.get_mut(dep) {
+			// For each plugin that depends on this one, decrement its in-degree
+			if let Some(dependents) = reverse_deps.get(&name) {
+				for dependent in dependents {
+					if let Some(degree) = in_degree.get_mut(dependent) {
 						*degree -= 1;
 						if *degree == 0 {
-							queue.push(dep.clone());
+							queue.push(dependent.clone());
 						}
 					}
 				}
@@ -355,8 +375,6 @@ impl PluginRegistry {
 			return Err(PluginError::CircularDependency);
 		}
 
-		// Reverse to get correct order (dependencies first)
-		result.reverse();
 		Ok(result)
 	}
 
@@ -438,23 +456,33 @@ impl PluginRegistry {
 
 	/// Enables a single plugin.
 	async fn enable_plugin(&self, name: &str, ctx: &PluginContext) -> PluginResult<()> {
-		// Check dependencies are enabled
-		for dep in self.get_dependencies(name) {
-			if !self.is_enabled(&dep) {
-				return Err(PluginError::MissingDependency {
-					plugin: name.to_string(),
-					dependency: dep,
-				});
-			}
-		}
-
-		// Get lifecycle reference
+		// Acquire all needed locks simultaneously to get a consistent snapshot
+		// and prevent TOCTOU issues between dependency check and lifecycle access
 		let lifecycle = {
 			let plugins = self.plugins.read();
+			let deps = self.dependency_graph.read();
+
+			// Check dependencies are enabled (using already-held plugins lock)
+			if let Some(dependencies) = deps.get(name) {
+				for dep in dependencies {
+					let is_dep_enabled = plugins
+						.get(dep)
+						.is_some_and(|e| e.state == PluginState::Enabled);
+					if !is_dep_enabled {
+						return Err(PluginError::MissingDependency {
+							plugin: name.to_string(),
+							dependency: dep.clone(),
+						});
+					}
+				}
+			}
+
+			// Get lifecycle reference while still holding the lock
 			plugins.get(name).and_then(|e| e.lifecycle.clone())
 		};
 
-		// Call lifecycle hook if available
+		// Call lifecycle hook if available (outside locks to avoid holding
+		// locks across async calls)
 		if let Some(lifecycle) = lifecycle {
 			lifecycle.on_enable(ctx).await?;
 		}
@@ -466,33 +494,89 @@ impl PluginRegistry {
 	}
 
 	/// Disables a plugin and all plugins that depend on it.
+	///
+	/// This method recursively disables dependent plugins. It tracks visited
+	/// nodes to prevent infinite recursion if a cycle exists in the dependents
+	/// graph, and enforces a maximum recursion depth as an additional safeguard.
 	pub async fn disable_plugin(&self, name: &str, ctx: &PluginContext) -> PluginResult<()> {
-		// First disable all dependents
-		let dependents = self.get_dependents(name);
-		for dep in dependents {
-			if self.is_enabled(&dep) {
-				Box::pin(self.disable_plugin(&dep, ctx)).await?;
-			}
+		use std::collections::HashSet;
+
+		/// Maximum recursion depth for disable_plugin to prevent stack overflow.
+		const MAX_DISABLE_DEPTH: usize = 64;
+
+		fn disable_inner<'a>(
+			registry: &'a PluginRegistry,
+			name: &'a str,
+			ctx: &'a PluginContext,
+			visited: &'a mut HashSet<String>,
+			depth: usize,
+		) -> std::pin::Pin<Box<dyn std::future::Future<Output = PluginResult<()>> + 'a>> {
+			Box::pin(async move {
+				// Guard against cycles and excessive depth
+				if !visited.insert(name.to_string()) {
+					tracing::warn!(
+						"Cycle detected in dependents graph while disabling '{}', skipping",
+						name
+					);
+					return Ok(());
+				}
+				if depth > MAX_DISABLE_DEPTH {
+					return Err(PluginError::Custom(format!(
+						"maximum recursion depth ({}) exceeded while disabling plugin '{}'",
+						MAX_DISABLE_DEPTH, name
+					)));
+				}
+
+				// Acquire both locks simultaneously to get a consistent snapshot
+				// of dependents and their enabled status, plus lifecycle reference
+				let (enabled_dependents, lifecycle) = {
+					let plugins = registry.plugins.read();
+					let reverse = registry.dependents.read();
+
+					let enabled_deps: Vec<String> = reverse
+						.get(name)
+						.map(|deps| {
+							deps.iter()
+								.filter(|dep| {
+									plugins
+										.get(dep.as_str())
+										.is_some_and(|e| e.state == PluginState::Enabled)
+								})
+								.cloned()
+								.collect()
+						})
+						.unwrap_or_default();
+
+					let lc = plugins.get(name).and_then(|e| e.lifecycle.clone());
+
+					(enabled_deps, lc)
+				};
+
+				// Disable all enabled dependents first
+				for dep in enabled_dependents {
+					disable_inner(registry, &dep, ctx, visited, depth + 1).await?;
+				}
+
+				// Use the lifecycle reference obtained from the consistent snapshot
+				let lifecycle = lifecycle;
+
+				// Call lifecycle hook if available
+				if let Some(lifecycle) = lifecycle {
+					// Log but don't fail if on_disable returns an error
+					if let Err(e) = lifecycle.on_disable(ctx).await {
+						tracing::warn!("Plugin {} on_disable hook returned error: {}", name, e);
+					}
+				}
+
+				registry.set_state(name, PluginState::Disabled)?;
+				tracing::info!("Disabled plugin: {}", name);
+
+				Ok(())
+			})
 		}
 
-		// Get lifecycle reference
-		let lifecycle = {
-			let plugins = self.plugins.read();
-			plugins.get(name).and_then(|e| e.lifecycle.clone())
-		};
-
-		// Call lifecycle hook if available
-		if let Some(lifecycle) = lifecycle {
-			// Log but don't fail if on_disable returns an error
-			if let Err(e) = lifecycle.on_disable(ctx).await {
-				tracing::warn!("Plugin {} on_disable hook returned error: {}", name, e);
-			}
-		}
-
-		self.set_state(name, PluginState::Disabled)?;
-		tracing::info!("Disabled plugin: {}", name);
-
-		Ok(())
+		let mut visited = HashSet::new();
+		disable_inner(self, name, ctx, &mut visited, 0).await
 	}
 
 	/// Unregisters a plugin.
@@ -604,11 +688,14 @@ mod tests {
 		}
 
 		fn with_dependency(mut self, dep_name: &str, version_req: &str) -> Self {
-			self.metadata =
-				PluginMetadata::builder(&self.metadata.name, &self.metadata.version.to_string())
-					.depends_on(dep_name, version_req)
-					.build()
-					.unwrap();
+			let mut builder =
+				PluginMetadata::builder(&self.metadata.name, &self.metadata.version.to_string());
+			// Preserve existing dependencies
+			for dep in &self.metadata.dependencies {
+				builder = builder.depends_on(&dep.name, &dep.version_req.to_string());
+			}
+			builder = builder.depends_on(dep_name, version_req);
+			self.metadata = builder.build().unwrap();
 			self
 		}
 	}
@@ -1207,5 +1294,140 @@ mod tests {
 
 		assert!(registry.is_enabled("core-delion"));
 		assert!(registry.is_enabled("auth-delion"));
+	}
+
+	// ==========================================================================
+	// Topological Sort Correctness Tests (#683)
+	// ==========================================================================
+
+	#[rstest::rstest]
+	fn test_enable_order_diamond_dependency() {
+		// Arrange: Diamond pattern A -> B, A -> C, B -> D, C -> D
+		let registry = PluginRegistry::new();
+
+		let d = Arc::new(TestPlugin::new("d-delion", "1.0.0"));
+		let b =
+			Arc::new(TestPlugin::new("b-delion", "1.0.0").with_dependency("d-delion", "^1.0.0"));
+		let c =
+			Arc::new(TestPlugin::new("c-delion", "1.0.0").with_dependency("d-delion", "^1.0.0"));
+		let a = Arc::new(
+			TestPlugin::new("a-delion", "1.0.0")
+				.with_dependency("b-delion", "^1.0.0")
+				.with_dependency("c-delion", "^1.0.0"),
+		);
+
+		registry.register(d).unwrap();
+		registry.register(b).unwrap();
+		registry.register(c).unwrap();
+		registry.register(a).unwrap();
+
+		// Act
+		let order = registry.get_enable_order().unwrap();
+
+		// Assert - dependencies must come before dependents
+		let pos = |name: &str| order.iter().position(|n| n == name).unwrap();
+		assert!(pos("d-delion") < pos("b-delion"));
+		assert!(pos("d-delion") < pos("c-delion"));
+		assert!(pos("b-delion") < pos("a-delion"));
+		assert!(pos("c-delion") < pos("a-delion"));
+	}
+
+	#[rstest::rstest]
+	fn test_enable_order_single_node() {
+		// Arrange
+		let registry = PluginRegistry::new();
+		let plugin = Arc::new(TestPlugin::new("solo-delion", "1.0.0"));
+		registry.register(plugin).unwrap();
+
+		// Act
+		let order = registry.get_enable_order().unwrap();
+
+		// Assert
+		assert_eq!(order.len(), 1);
+		assert_eq!(order[0], "solo-delion");
+	}
+
+	#[rstest::rstest]
+	fn test_enable_order_independent_plugins() {
+		// Arrange - three independent plugins with no dependencies
+		let registry = PluginRegistry::new();
+		registry
+			.register(Arc::new(TestPlugin::new("x-delion", "1.0.0")))
+			.unwrap();
+		registry
+			.register(Arc::new(TestPlugin::new("y-delion", "1.0.0")))
+			.unwrap();
+		registry
+			.register(Arc::new(TestPlugin::new("z-delion", "1.0.0")))
+			.unwrap();
+
+		// Act
+		let order = registry.get_enable_order().unwrap();
+
+		// Assert - all three should be present (any order is valid)
+		assert_eq!(order.len(), 3);
+		assert!(order.contains(&"x-delion".to_string()));
+		assert!(order.contains(&"y-delion".to_string()));
+		assert!(order.contains(&"z-delion".to_string()));
+	}
+
+	#[rstest::rstest]
+	fn test_enable_order_complex_graph() {
+		// Arrange: A -> B, B -> C, D -> C, E is independent
+		let registry = PluginRegistry::new();
+
+		let c = Arc::new(TestPlugin::new("c-delion", "1.0.0"));
+		let b =
+			Arc::new(TestPlugin::new("b-delion", "1.0.0").with_dependency("c-delion", "^1.0.0"));
+		let a =
+			Arc::new(TestPlugin::new("a-delion", "1.0.0").with_dependency("b-delion", "^1.0.0"));
+		let d =
+			Arc::new(TestPlugin::new("d-delion", "1.0.0").with_dependency("c-delion", "^1.0.0"));
+		let e = Arc::new(TestPlugin::new("e-delion", "1.0.0"));
+
+		registry.register(c).unwrap();
+		registry.register(b).unwrap();
+		registry.register(a).unwrap();
+		registry.register(d).unwrap();
+		registry.register(e).unwrap();
+
+		// Act
+		let order = registry.get_enable_order().unwrap();
+
+		// Assert
+		assert_eq!(order.len(), 5);
+		let pos = |name: &str| order.iter().position(|n| n == name).unwrap();
+		assert!(pos("c-delion") < pos("b-delion"));
+		assert!(pos("b-delion") < pos("a-delion"));
+		assert!(pos("c-delion") < pos("d-delion"));
+	}
+
+	#[rstest::rstest]
+	fn test_enable_order_no_false_circular_detection() {
+		// Arrange: A -> B, A -> C (fan-out, no cycle)
+		let registry = PluginRegistry::new();
+
+		let b = Arc::new(TestPlugin::new("b-delion", "1.0.0"));
+		let c = Arc::new(TestPlugin::new("c-delion", "1.0.0"));
+		let a = Arc::new(
+			TestPlugin::new("a-delion", "1.0.0")
+				.with_dependency("b-delion", "^1.0.0")
+				.with_dependency("c-delion", "^1.0.0"),
+		);
+
+		registry.register(b).unwrap();
+		registry.register(c).unwrap();
+		registry.register(a).unwrap();
+
+		// Act
+		let result = registry.get_enable_order();
+
+		// Assert - should succeed, not report false circular dependency
+		assert!(result.is_ok());
+		let order = result.unwrap();
+		assert_eq!(order.len(), 3);
+		let pos = |name: &str| order.iter().position(|n| n == name).unwrap();
+		assert!(pos("b-delion") < pos("a-delion"));
+		assert!(pos("c-delion") < pos("a-delion"));
 	}
 }

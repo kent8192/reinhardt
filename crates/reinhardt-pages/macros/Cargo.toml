@@ -1,9 +1,9 @@
 [package]
 name = "reinhardt-pages-macros"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.10"
 edition = "2024"
 authors = ["Reinhardt Contributors"]
-license = "MIT OR Apache-2.0"
+license = "BSD-3-Clause"
 description = "Procedural macros for reinhardt-pages (WASM frontend framework)"
 repository.workspace = true
 keywords = ["wasm", "macro", "server-functions", "rpc"]
@@ -16,8 +16,11 @@ proc-macro = true
 default = []
 
 [dependencies]
-# AST definitions shared with formatter
-reinhardt-pages-ast = { workspace = true }
+# DSL definitions (new canonical location)
+reinhardt-manouche = { workspace = true }
+
+# Security utilities for URL validation (Fixes #849)
+reinhardt-core = { workspace = true }
 
 # Procedural macro essentials
 syn = { version = "2.0", features = ["full", "extra-traits"] }

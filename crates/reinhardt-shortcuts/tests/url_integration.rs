@@ -121,28 +121,81 @@ fn test_url_into_string() {
 	assert_eq!(string, "/about");
 }
 
-/// Test: URL From<String> conversion (backward compatibility)
+/// Test: URL TryFrom<String> conversion with validation
 #[test]
-fn test_url_from_string() {
-	let string = String::from("/users");
-	let url: Url = string.into();
+fn test_url_try_from_string() {
+	// Arrange
+	let valid_string = String::from("/users");
+	let empty_string = String::from("");
+	let whitespace_string = String::from("   ");
+
+	// Act & Assert - valid string succeeds
+	let url = Url::try_from(valid_string).unwrap();
 	assert_eq!(url.as_str(), "/users");
 
-	// Even empty strings are allowed via From (no validation)
-	let empty = String::from("");
-	let url: Url = empty.into();
-	assert_eq!(url.as_str(), "");
+	// Act & Assert - empty string is rejected
+	let result = Url::try_from(empty_string);
+	assert_eq!(result.unwrap_err(), UrlError::Empty);
+
+	// Act & Assert - whitespace-only string is rejected
+	let result = Url::try_from(whitespace_string);
+	assert_eq!(result.unwrap_err(), UrlError::Whitespace);
 }
 
-/// Test: URL From<&str> conversion (backward compatibility)
+/// Test: URL TryFrom<&str> conversion with validation
 #[test]
-fn test_url_from_str() {
-	let url: Url = "/profile".into();
+fn test_url_try_from_str() {
+	// Arrange & Act & Assert - valid str succeeds
+	let url = Url::try_from("/profile").unwrap();
 	assert_eq!(url.as_str(), "/profile");
 
-	// Even whitespace-only strings are allowed via From (no validation)
-	let url: Url = "   ".into();
-	assert_eq!(url.as_str(), "   ");
+	// Act & Assert - empty str is rejected
+	let result = Url::try_from("");
+	assert_eq!(result.unwrap_err(), UrlError::Empty);
+
+	// Act & Assert - whitespace-only str is rejected
+	let result = Url::try_from("   ");
+	assert_eq!(result.unwrap_err(), UrlError::Whitespace);
+}
+
+/// Test: TryFrom validates identically to Url::new
+#[test]
+fn test_try_from_matches_new_validation() {
+	// Arrange
+	let test_cases = vec![
+		("/valid", true),
+		("https://example.com", true),
+		("", false),
+		("   ", false),
+		("\t\n", false),
+	];
+
+	for (input, should_succeed) in test_cases {
+		// Act
+		let new_result = Url::new(input);
+		let try_from_result = Url::try_from(input);
+
+		// Assert - both paths produce the same result
+		assert_eq!(
+			new_result.is_ok(),
+			should_succeed,
+			"Url::new for {:?}",
+			input
+		);
+		assert_eq!(
+			try_from_result.is_ok(),
+			should_succeed,
+			"TryFrom for {:?}",
+			input
+		);
+
+		if let (Ok(new_url), Ok(try_url)) = (&new_result, &try_from_result) {
+			assert_eq!(new_url, try_url);
+		}
+		if let (Err(new_err), Err(try_err)) = (&new_result, &try_from_result) {
+			assert_eq!(new_err, try_err);
+		}
+	}
 }
 
 /// Test: URL cloning

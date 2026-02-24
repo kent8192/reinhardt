@@ -106,7 +106,7 @@ Low-level database connectivity and connection management:
 - **`backends` module**: Low-level database drivers
   - PostgreSQL, MySQL, SQLite support
   - Query execution and schema operations
-  - SeaQuery integration for query building
+  - reinhardt-query integration for query building
   - **When to use**: Need direct database access or custom queries
 
 - **`pool` module**: Connection pooling implementation
@@ -392,7 +392,7 @@ async fn test_with_database(
 
 For comprehensive testing standards, see:
 - [Testing Standards](../../docs/TESTING_STANDARDS.md)
-- [Examples Database Integration](../../examples/local/examples-database-integration/README.md)
+- [Examples Database Integration](../../examples/examples-database-integration/README.md)
 
 ### Troubleshooting
 
@@ -894,4 +894,4 @@ Optimize how related objects are loaded:
 
 ## License
 
-Licensed under either of Apache License, Version 2.0 or MIT license at your option.
+Licensed under the BSD 3-Clause License.

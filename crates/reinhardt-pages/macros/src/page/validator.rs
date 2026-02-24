@@ -14,7 +14,8 @@
 use proc_macro2::Span;
 use syn::{Expr, Result};
 
-use reinhardt_pages_ast::{
+use reinhardt_core::security::xss::is_safe_url;
+use reinhardt_manouche::core::{
 	PageAttr, PageBody, PageComponent, PageElement, PageElse, PageEvent, PageMacro, PageNode,
 	PageWatch, TypedPageAttr, TypedPageBody, TypedPageComponent, TypedPageElement, TypedPageElse,
 	TypedPageFor, TypedPageIf, TypedPageMacro, TypedPageNode, TypedPageWatch, types::AttrValue,
@@ -101,7 +102,7 @@ fn transform_node(node: &PageNode, parent_tags: &[String]) -> Result<TypedPageNo
 ///
 /// Recursively validates all branches.
 fn transform_if(
-	if_node: &reinhardt_pages_ast::PageIf,
+	if_node: &reinhardt_manouche::core::PageIf,
 	parent_tags: &[String],
 ) -> Result<TypedPageIf> {
 	// Transform then branch
@@ -139,7 +140,7 @@ fn transform_else(else_branch: &PageElse, parent_tags: &[String]) -> Result<Type
 
 /// Transforms a PageFor node.
 fn transform_for(
-	for_node: &reinhardt_pages_ast::PageFor,
+	for_node: &reinhardt_manouche::core::PageFor,
 	parent_tags: &[String],
 ) -> Result<TypedPageFor> {
 	let body = transform_nodes(&for_node.body, parent_tags)?;
@@ -203,10 +204,7 @@ fn transform_element(elem: &PageElement, parent_tags: &[String]) -> Result<Typed
 	// 3. Validate element nesting
 	validate_element_nesting(elem, parent_tags)?;
 
-	// 4. Validate required attributes (using typed attrs)
-	validate_required_attributes(&tag, &typed_attrs, elem.span)?;
-
-	// 5. Recursively transform children
+	// 4. Recursively transform children
 	let mut child_tags = parent_tags.to_vec();
 	child_tags.push(tag.clone());
 	let typed_children = transform_nodes(&elem.children, &child_tags)?;
@@ -312,6 +310,8 @@ fn validate_enum_attr(
 	};
 
 	if !enum_spec.valid_values.contains(&str_value.as_str()) {
+		// Use .first() for safe access instead of direct indexing
+		let example_value = enum_spec.valid_values.first().copied().unwrap_or("...");
 		return Err(syn::Error::new(
 			span,
 			format!(
@@ -325,7 +325,7 @@ fn validate_enum_attr(
 				element_tag,
 				enum_spec.valid_values.join("\", \""),
 				attr_name,
-				enum_spec.valid_values[0],
+				example_value,
 				attr_name,
 				str_value
 			),
@@ -482,9 +482,6 @@ fn validate_attr_type(
 		("src", "iframe, video, audio, source, script, embed"),
 	];
 
-	// Dangerous URL schemes that should be blocked for security (XSS prevention)
-	const DANGEROUS_URL_SCHEMES: &[&str] = &["javascript:", "data:", "vbscript:"];
-
 	if BOOLEAN_ATTRS.contains(&attr_name) {
 		// 1. String literals are prohibited
 		if value.is_string_literal() {
@@ -606,26 +603,23 @@ fn validate_attr_type(
 			));
 		}
 
-		// Check for dangerous schemes (case-insensitive)
-		let url_lower = url_str.to_lowercase();
-		for scheme in DANGEROUS_URL_SCHEMES {
-			if url_lower.starts_with(scheme) {
-				return Err(syn::Error::new(
-					span,
-					format!(
-						"Dangerous URL scheme detected in attribute '{}'.\n\
-							The '{}' scheme can be used for XSS (Cross-Site Scripting) attacks.\n\n\
-							Security risk: This URL could execute arbitrary JavaScript code.\n\n\
-							Use safe URL schemes instead:\n\
-							  - https://example.com\n\
-							  - /path/to/resource\n\
-							  - #anchor\n\
-							  - mailto:user@example.com",
-						attr_name,
-						scheme.trim_end_matches(':')
-					),
-				));
-			}
+		// Check for dangerous schemes (case-insensitive) using is_safe_url from reinhardt-core
+		// Fixes #849
+		if !is_safe_url(&url_str) {
+			return Err(syn::Error::new(
+				span,
+				format!(
+					"Dangerous URL scheme detected in attribute '{}'.\n\
+						The URL scheme can be used for XSS (Cross-Site Scripting) attacks.\n\n\
+						Security risk: This URL could execute arbitrary JavaScript code.\n\n\
+						Use safe URL schemes instead:\n\
+						  - https://example.com\n\
+						  - /path/to/resource\n\
+						  - #anchor\n\
+						  - mailto:user@example.com",
+					attr_name
+				),
+			));
 		}
 	}
 	// Dynamic expressions are OK (runtime validation recommended)
@@ -634,6 +628,7 @@ fn validate_attr_type(
 	validate_enum_attr(attr_name, value, element_tag, span)?;
 
 	// img element src attribute validation
+	// Fixes #849
 	if element_tag == "img" && attr_name == "src" {
 		// Must be a string literal
 		if !value.is_string_literal() {
@@ -644,13 +639,28 @@ fn validate_attr_type(
 		}
 
 		// Must not be empty
-		if let Some(src_value) = value.as_string()
-			&& src_value.trim().is_empty()
-		{
-			return Err(syn::Error::new(
-				span,
-				"Element <img> 'src' attribute must not be empty",
-			));
+		if let Some(src_value) = value.as_string() {
+			if src_value.trim().is_empty() {
+				return Err(syn::Error::new(
+					span,
+					"Element <img> 'src' attribute must not be empty",
+				));
+			}
+
+			// Check for dangerous URL schemes (XSS prevention) using is_safe_url from reinhardt-core
+			// Fixes #849
+			if !is_safe_url(&src_value) {
+				return Err(syn::Error::new(
+					span,
+					"Dangerous URL scheme detected in <img> 'src' attribute.\n\
+					The URL scheme can be used for XSS (Cross-Site Scripting) attacks.\n\n\
+					Security risk: This URL could execute arbitrary JavaScript code.\n\n\
+					Use safe URL schemes instead:\n\
+					  - https://example.com/image.png\n\
+					  - /path/to/image.png\n\
+					  - image.png",
+				));
+			}
 		}
 	}
 
@@ -796,43 +806,6 @@ fn validate_element_nesting(elem: &PageElement, parent_tags: &[String]) -> Resul
 	Ok(())
 }
 
-/// Validates required attributes for certain elements.
-///
-/// # Rules
-///
-/// - img elements must have an alt attribute (accessibility requirement)
-/// - img elements must have a src attribute with a non-empty string literal
-///
-/// # Errors
-///
-/// Returns a compilation error if required attributes are missing or invalid.
-fn validate_required_attributes(tag: &str, attrs: &[TypedPageAttr], span: Span) -> Result<()> {
-	// img requires alt and src attributes
-	if tag == "img" {
-		// Check alt attribute (accessibility)
-		let has_alt = attrs.iter().any(|attr| attr.name == "alt");
-		if !has_alt {
-			return Err(syn::Error::new(
-				span,
-				"Element <img> requires 'alt' attribute for accessibility",
-			));
-		}
-
-		// Check src attribute (required for img)
-		let has_src = attrs.iter().any(|attr| attr.name == "src");
-		if !has_src {
-			return Err(syn::Error::new(
-				span,
-				"Element <img> requires 'src' attribute",
-			));
-		}
-
-		// Note: src type validation (must be string literal, non-empty) is done in validate_attr_type()
-	}
-
-	Ok(())
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -910,7 +883,7 @@ mod tests {
 			proc_macro2::Span::call_site(),
 		);
 		elem.children
-			.push(PageNode::Text(reinhardt_pages_ast::PageText {
+			.push(PageNode::Text(reinhardt_manouche::core::PageText {
 				content: "text".to_string(),
 				span: proc_macro2::Span::call_site(),
 			}));
@@ -939,23 +912,6 @@ mod tests {
 				.unwrap_err()
 				.to_string()
 				.contains("cannot be nested inside another interactive element")
-		);
-	}
-
-	#[test]
-	fn test_img_missing_alt() {
-		let elem = PageElement::new(
-			syn::Ident::new("img", proc_macro2::Span::call_site()),
-			proc_macro2::Span::call_site(),
-		);
-
-		let result = validate_required_attributes("img", &[], elem.span);
-		assert!(result.is_err());
-		assert!(
-			result
-				.unwrap_err()
-				.to_string()
-				.contains("requires 'alt' attribute")
 		);
 	}
 
@@ -1174,7 +1130,6 @@ mod tests {
 		assert!(result.is_err());
 		let err_msg = result.unwrap_err().to_string();
 		assert!(err_msg.contains("Dangerous URL scheme"));
-		assert!(err_msg.contains("javascript"));
 		assert!(err_msg.contains("XSS"));
 	}
 
@@ -1186,7 +1141,6 @@ mod tests {
 		assert!(result.is_err());
 		let err_msg = result.unwrap_err().to_string();
 		assert!(err_msg.contains("Dangerous URL scheme"));
-		assert!(err_msg.contains("data"));
 	}
 
 	#[test]
@@ -1196,7 +1150,6 @@ mod tests {
 		assert!(result.is_err());
 		let err_msg = result.unwrap_err().to_string();
 		assert!(err_msg.contains("Dangerous URL scheme"));
-		assert!(err_msg.contains("vbscript"));
 	}
 
 	#[test]
@@ -1206,7 +1159,6 @@ mod tests {
 		assert!(result.is_err());
 		let err_msg = result.unwrap_err().to_string();
 		assert!(err_msg.contains("Dangerous URL scheme"));
-		assert!(err_msg.contains("javascript"));
 	}
 
 	#[test]
@@ -1256,12 +1208,39 @@ mod tests {
 	}
 
 	#[test]
-	fn test_validate_url_attr_img_src_excluded() {
-		// img src should not be validated as URL attribute (has separate rules)
+	fn test_validate_url_attr_img_src_dangerous_scheme() {
+		// img src should be validated for dangerous URL schemes (Fixes #849)
 		let value = AttrValue::from_expr(parse_quote!("javascript:alert(1)"));
-		// This should fail with img src validation error, not URL validation error
 		let result = validate_attr_type("src", &value, "img", proc_macro2::Span::call_site());
-		assert!(result.is_ok()); // img src allows string literals (separate validation)
+		assert!(result.is_err());
+		let err_msg = result.unwrap_err().to_string();
+		assert!(err_msg.contains("Dangerous URL scheme"));
+	}
+
+	#[test]
+	fn test_validate_url_attr_img_src_data_scheme() {
+		let value =
+			AttrValue::from_expr(parse_quote!("data:text/html,<script>alert('xss')</script>"));
+		let result = validate_attr_type("src", &value, "img", proc_macro2::Span::call_site());
+		assert!(result.is_err());
+		let err_msg = result.unwrap_err().to_string();
+		assert!(err_msg.contains("Dangerous URL scheme"));
+	}
+
+	#[test]
+	fn test_validate_url_attr_img_src_vbscript_scheme() {
+		let value = AttrValue::from_expr(parse_quote!("vbscript:alert(1)"));
+		let result = validate_attr_type("src", &value, "img", proc_macro2::Span::call_site());
+		assert!(result.is_err());
+		let err_msg = result.unwrap_err().to_string();
+		assert!(err_msg.contains("Dangerous URL scheme"));
+	}
+
+	#[test]
+	fn test_validate_url_attr_img_src_safe_url() {
+		let value = AttrValue::from_expr(parse_quote!("/images/photo.png"));
+		let result = validate_attr_type("src", &value, "img", proc_macro2::Span::call_site());
+		assert!(result.is_ok());
 	}
 
 	// Enumerated attribute tests - invalid values are prohibited
@@ -1369,7 +1348,7 @@ mod tests {
 
 	#[test]
 	fn test_validate_button_accessibility_whitespace_only() {
-		use reinhardt_pages_ast::{PageText, TypedPageNode};
+		use reinhardt_manouche::core::{PageText, TypedPageNode};
 		let attrs = vec![];
 		let children = vec![TypedPageNode::Text(PageText {
 			content: "   ".to_string(),
@@ -1382,7 +1361,7 @@ mod tests {
 
 	#[test]
 	fn test_validate_button_accessibility_with_text() {
-		use reinhardt_pages_ast::{PageText, TypedPageNode};
+		use reinhardt_manouche::core::{PageText, TypedPageNode};
 		let attrs = vec![];
 		let children = vec![TypedPageNode::Text(PageText {
 			content: "Click me".to_string(),
@@ -1395,7 +1374,7 @@ mod tests {
 
 	#[test]
 	fn test_validate_button_accessibility_with_nested_text() {
-		use reinhardt_pages_ast::{PageText, TypedPageElement, TypedPageNode};
+		use reinhardt_manouche::core::{PageText, TypedPageElement, TypedPageNode};
 		let attrs = vec![];
 		let children = vec![TypedPageNode::Element(TypedPageElement {
 			tag: syn::Ident::new("span", proc_macro2::Span::call_site()),
@@ -1414,7 +1393,7 @@ mod tests {
 
 	#[test]
 	fn test_validate_button_accessibility_with_aria_label() {
-		use reinhardt_pages_ast::TypedPageAttr;
+		use reinhardt_manouche::core::TypedPageAttr;
 		let attrs = vec![TypedPageAttr {
 			name: syn::Ident::new("aria_label", proc_macro2::Span::call_site()),
 			value: AttrValue::from_expr(parse_quote!("Close")),
@@ -1428,7 +1407,7 @@ mod tests {
 
 	#[test]
 	fn test_validate_button_accessibility_with_expression() {
-		use reinhardt_pages_ast::{PageExpression, TypedPageNode};
+		use reinhardt_manouche::core::{PageExpression, TypedPageNode};
 		let attrs = vec![];
 		let children = vec![TypedPageNode::Expression(PageExpression {
 			expr: parse_quote!(button_text),

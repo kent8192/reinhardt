@@ -6,7 +6,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-use super::env::EnvError;
+use super::env::{EnvError, validate_env_var_name};
 
 /// Environment file loader
 pub struct EnvLoader {
@@ -94,6 +94,12 @@ impl EnvLoader {
 	}
 	/// Load environment variables from the .env file
 	///
+	/// # Thread Safety
+	///
+	/// This method calls `env::set_var` internally, which is not thread-safe.
+	/// It MUST only be called during single-threaded application startup,
+	/// before any worker threads are spawned.
+	///
 	/// # Examples
 	///
 	/// ```rust
@@ -130,6 +136,12 @@ impl EnvLoader {
 	}
 	/// Try to load the .env file, but don't fail if it doesn't exist
 	///
+	/// # Thread Safety
+	///
+	/// This method calls `env::set_var` internally, which is not thread-safe.
+	/// It MUST only be called during single-threaded application startup,
+	/// before any worker threads are spawned.
+	///
 	/// # Examples
 	///
 	/// ```
@@ -162,14 +174,41 @@ impl EnvLoader {
 		Ok(true)
 	}
 
-	/// Find the .env file in current or parent directories
+	/// Maximum number of parent directories to traverse when searching for .env files.
+	/// Prevents unbounded traversal to the filesystem root in deeply nested directories.
+	const MAX_TRAVERSAL_DEPTH: usize = 10;
+
+	/// Project root marker files that stop .env file traversal.
+	const ROOT_MARKERS: &[&str] = &[".git", "Cargo.toml", "Cargo.lock"];
+
+	/// Find the .env file in current or parent directories.
+	///
+	/// Traversal stops at:
+	/// - A directory containing a `.env` file (found)
+	/// - A project root marker (`.git`, `Cargo.toml`, `Cargo.lock`)
+	/// - The maximum traversal depth ([`Self::MAX_TRAVERSAL_DEPTH`])
+	/// - The filesystem root
 	fn find_env_file(&self) -> Result<PathBuf, EnvError> {
 		let mut current = env::current_dir()?;
 
-		loop {
+		for _depth in 0..Self::MAX_TRAVERSAL_DEPTH {
 			let env_path = current.join(".env");
 			if env_path.exists() {
 				return Ok(env_path);
+			}
+
+			// Stop at project root markers to avoid loading unintended .env files
+			if Self::ROOT_MARKERS
+				.iter()
+				.any(|marker| current.join(marker).exists())
+			{
+				return Err(EnvError::IoError(std::io::Error::new(
+					std::io::ErrorKind::NotFound,
+					format!(
+						".env file not found (stopped at project root: {})",
+						current.display()
+					),
+				)));
 			}
 
 			match current.parent() {
@@ -182,6 +221,14 @@ impl EnvLoader {
 				}
 			}
 		}
+
+		Err(EnvError::IoError(std::io::Error::new(
+			std::io::ErrorKind::NotFound,
+			format!(
+				".env file not found within {} parent directories",
+				Self::MAX_TRAVERSAL_DEPTH
+			),
+		)))
 	}
 
 	/// Parse .env file content and set environment variables
@@ -204,6 +251,7 @@ impl EnvLoader {
 			// Parse key=value
 			if let Some((key, value)) = line_content.split_once('=') {
 				let key = key.trim();
+				validate_env_var_name(key)?;
 				let mut value = value.trim().to_string();
 
 				// Remove quotes if present
@@ -223,8 +271,15 @@ impl EnvLoader {
 
 				// Set or skip based on overwrite setting
 				if self.overwrite || env::var(key).is_err() {
-					// SAFETY: This is safe within the context of loading environment configuration
-					// during application startup before multi-threading begins
+					// SAFETY: `env::set_var` is not thread-safe per POSIX and Rust 2024
+					// edition marks it as unsafe. This call is safe because:
+					// 1. EnvLoader is designed to run during single-threaded application
+					//    startup (before any worker threads are spawned).
+					// 2. Callers MUST NOT invoke `parse_and_set` from multi-threaded
+					//    contexts. The public API (`load`, `load_optional`) documents
+					//    this startup-only constraint.
+					// 3. If env mutation is needed after startup, callers should store
+					//    values in a thread-safe map (e.g., `RwLock<HashMap>`) instead.
 					unsafe {
 						env::set_var(key, value);
 					}
@@ -383,6 +438,8 @@ KEY2=value2
 		assert_eq!(env::var("KEY1").unwrap(), "value1");
 		assert_eq!(env::var("KEY2").unwrap(), "value2");
 
+		// SAFETY: Removing environment variables is unsafe in multi-threaded programs.
+		// This test uses #[serial] to ensure exclusive access to environment variables.
 		unsafe {
 			env::remove_var("KEY1");
 			env::remove_var("KEY2");
@@ -402,6 +459,8 @@ QUOTED_DOUBLE="double quoted"
 		assert_eq!(env::var("QUOTED_SINGLE").unwrap(), "single quoted");
 		assert_eq!(env::var("QUOTED_DOUBLE").unwrap(), "double quoted");
 
+		// SAFETY: Removing environment variables is unsafe in multi-threaded programs.
+		// This test uses #[serial] to ensure exclusive access to environment variables.
 		unsafe {
 			env::remove_var("QUOTED_SINGLE");
 			env::remove_var("QUOTED_DOUBLE");
@@ -419,6 +478,8 @@ export EXPORTED_VAR="exported value"
 
 		assert_eq!(env::var("EXPORTED_VAR").unwrap(), "exported value");
 
+		// SAFETY: Removing environment variables is unsafe in multi-threaded programs.
+		// This test uses #[serial] to ensure exclusive access to environment variables.
 		unsafe {
 			env::remove_var("EXPORTED_VAR");
 		}
@@ -426,6 +487,8 @@ export EXPORTED_VAR="exported value"
 
 	#[test]
 	fn test_variable_expansion() {
+		// SAFETY: Setting environment variables is unsafe in multi-threaded programs.
+		// This test uses #[serial] to ensure exclusive access to environment variables.
 		unsafe {
 			env::set_var("BASE_VAR", "base");
 		}
@@ -441,6 +504,8 @@ EXPANDED_BRACES=${BASE_VAR}/expanded
 		assert_eq!(env::var("EXPANDED").unwrap(), "base/expanded");
 		assert_eq!(env::var("EXPANDED_BRACES").unwrap(), "base/expanded");
 
+		// SAFETY: Removing environment variables is unsafe in multi-threaded programs.
+		// This test uses #[serial] to ensure exclusive access to environment variables.
 		unsafe {
 			env::remove_var("BASE_VAR");
 			env::remove_var("EXPANDED");
@@ -459,6 +524,8 @@ ESCAPED=\$not_expanded
 
 		assert_eq!(env::var("ESCAPED").unwrap(), "$not_expanded");
 
+		// SAFETY: Removing environment variables is unsafe in multi-threaded programs.
+		// This test uses #[serial] to ensure exclusive access to environment variables.
 		unsafe {
 			env::remove_var("ESCAPED");
 		}
@@ -477,6 +544,8 @@ ESCAPED=\$not_expanded
 
 		assert_eq!(env::var("FILE_VAR").unwrap(), "file_value");
 
+		// SAFETY: Removing environment variables is unsafe in multi-threaded programs.
+		// This test uses #[serial] to ensure exclusive access to environment variables.
 		unsafe {
 			env::remove_var("FILE_VAR");
 		}

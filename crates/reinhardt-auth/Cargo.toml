@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-auth"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.15"
 description = "Authentication and authorization system"
 edition.workspace = true
 license.workspace = true
@@ -18,9 +18,10 @@ sessions = []
 oauth = []
 token = []
 argon2-hasher = []
+social = ["p256"]
 
 # Database and session storage (ORM model support)
-database = ["ctor", "reinhardt-apps", "sea-query", "sqlx"]
+database = ["ctor", "reinhardt-apps", "reinhardt-query", "sqlx"]
 redis-sessions = ["redis"]
 
 # Rate limiting permission
@@ -67,6 +68,7 @@ argon2 = { workspace = true }
 password-hash = { workspace = true }
 rand = { workspace = true }
 jsonwebtoken = { workspace = true }
+p256 = { version = "0.13", optional = true }
 clap = { version = "4.5", features = ["derive"] }
 console = "0.16.1"
 dialoguer = "0.12.0"
@@ -80,17 +82,14 @@ base64 = "0.22"
 sha2 = { workspace = true }
 hmac = { workspace = true }
 hex = "0.4"
+subtle = { workspace = true }
 unicode-normalization = "0.1"
 reqwest = { version = "0.12", features = ["json"] }
+url = "2.5"
 totp-lite = "2.0"
 data-encoding = "2.6"
 sqlx = { workspace = true, optional = true, features = ["any", "runtime-tokio", "sqlite"]}
-sea-query = { version = "1.0.0-rc.29", features = [
-  "backend-postgres",
-  "backend-mysql",
-  "backend-sqlite",
-  "sqlx-utils",
-], optional = true }
+reinhardt-query = { workspace = true, optional = true }
 reinhardt-apps = { workspace = true, optional = true }
 ctor = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }
@@ -113,10 +112,11 @@ prometheus = { version = "0.14.0", optional = true }
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 tokio-test = { workspace = true }
 hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
 bytes = { workspace = true }
 rstest = "0.26.1"
 proptest = { workspace = true }
-reinhardt-test = { workspace = true, features = ["testcontainers", "property-based"] }
 trybuild = { workspace = true }
 serial_test = "3.2"
 sqlx = { workspace = true, features = ["any", "sqlite", "runtime-tokio"] }
@@ -124,9 +124,5 @@ testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 tempfile = { workspace = true }
 filetime = "0.2"
-sea-query = { version = "1.0.0-rc.29", features = [
-	"backend-postgres",
-	"backend-mysql",
-	"backend-sqlite",
-] }
+reinhardt-query = { workspace = true }
 reinhardt-db = {workspace = true, features = ["orm"]}

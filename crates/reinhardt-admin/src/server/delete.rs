@@ -6,11 +6,13 @@ use crate::adapters::{
 	AdminDatabase, AdminRecord, AdminSite, BulkDeleteRequest, BulkDeleteResponse,
 };
 use crate::types::MutationResponse;
-use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
-use super::error::MapServerFnError;
+use super::audit;
+#[cfg(not(target_arch = "wasm32"))]
+use super::error::{AdminAuth, MapServerFnError};
 
 /// Delete a single model instance by ID
 ///
@@ -21,6 +23,10 @@ use super::error::MapServerFnError;
 ///
 /// This function is automatically exposed as an HTTP endpoint by the `#[server_fn]` macro.
 /// AdminSite and AdminDatabase dependencies are automatically injected via the DI system.
+///
+/// # Authentication
+///
+/// Requires staff (admin) permission and delete permission for the model.
 ///
 /// # Example
 ///
@@ -37,15 +43,27 @@ pub async fn delete_record(
 	id: String,
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
+	#[inject] http_request: ServerFnRequest,
 ) -> Result<MutationResponse, ServerFnError> {
+	// Authentication and authorization check
+	let auth = AdminAuth::from_request(&http_request);
+	auth.require_delete_permission(&model_name)?;
+
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
 
-	let affected = db
+	let user_id = auth.user_id().unwrap_or("unknown").to_string();
+
+	let result = db
 		.delete::<AdminRecord>(table_name, pk_field, &id)
 		.await
-		.map_server_fn_error()?;
+		.map_server_fn_error();
+
+	let success = result.is_ok();
+	audit::log_delete(&user_id, &model_name, &id, success);
+
+	let affected = result?;
 
 	Ok(MutationResponse {
 		success: true,
@@ -64,6 +82,10 @@ pub async fn delete_record(
 ///
 /// This function is automatically exposed as an HTTP endpoint by the `#[server_fn]` macro.
 /// AdminSite and AdminDatabase dependencies are automatically injected via the DI system.
+///
+/// # Authentication
+///
+/// Requires staff (admin) permission and delete permission for the model.
 ///
 /// # Example
 ///
@@ -84,15 +106,29 @@ pub async fn bulk_delete_records(
 	request: BulkDeleteRequest,
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
+	#[inject] http_request: ServerFnRequest,
 ) -> Result<BulkDeleteResponse, ServerFnError> {
+	// Authentication and authorization check
+	let auth = AdminAuth::from_request(&http_request);
+	auth.require_delete_permission(&model_name)?;
+
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
 
-	let affected = db
-		.bulk_delete::<AdminRecord>(table_name, pk_field, request.ids)
+	let user_id = auth.user_id().unwrap_or("unknown").to_string();
+
+	let ids = request.ids;
+	let result = db
+		.bulk_delete::<AdminRecord>(table_name, pk_field, ids.clone())
 		.await
-		.map_server_fn_error()?;
+		.map_server_fn_error();
+
+	let success = result.is_ok();
+	let affected_count = result.as_ref().copied().unwrap_or(0);
+	audit::log_bulk_delete(&user_id, &model_name, &ids, affected_count, success);
+
+	let affected = result?;
 
 	Ok(BulkDeleteResponse {
 		success: true,

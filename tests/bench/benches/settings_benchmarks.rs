@@ -5,7 +5,7 @@
 //! - Profile parsing and detection
 //! - SettingsBuilder operations
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use reinhardt_conf::settings::builder::SettingsBuilder;
 use reinhardt_conf::settings::env_loader::EnvLoader;
 use reinhardt_conf::settings::profile::Profile;
@@ -65,9 +65,13 @@ fn benchmark_profile(c: &mut Criterion) {
 
 	// Profile from environment
 	c.bench_function("profile_from_env", |b| {
-		std::env::set_var("APP_ENVIRONMENT", "development");
+		// SAFETY: This benchmark runs in a single-threaded context.
+		// Setting APP_ENVIRONMENT is safe as it's only used for Profile::from_env()
+		// and is immediately removed after the benchmark iteration.
+		unsafe { std::env::set_var("APP_ENVIRONMENT", "development") };
 		b.iter(|| black_box(Profile::from_env()));
-		std::env::remove_var("APP_ENVIRONMENT");
+		// SAFETY: This is paired with the set_var above in the same single-threaded context.
+		unsafe { std::env::remove_var("APP_ENVIRONMENT") };
 	});
 
 	// Profile comparison

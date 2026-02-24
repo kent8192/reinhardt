@@ -204,7 +204,12 @@ impl SecretRotation {
 
 		if let Some(last_time) = last_rotation.get(secret_name) {
 			let elapsed = Utc::now() - *last_time;
-			let elapsed_duration = Duration::from_secs(elapsed.num_seconds() as u64);
+			// Use saturating conversion to prevent negative duration wrap on clock rollback.
+			// When the system clock goes backward (NTP adjustments, VM migration),
+			// num_seconds() returns a negative value. Clamping to 0 prevents
+			// wrapping to a very large u64 that would trigger unnecessary rotation.
+			let elapsed_secs = elapsed.num_seconds().max(0) as u64;
+			let elapsed_duration = Duration::from_secs(elapsed_secs);
 
 			// Check against max age first
 			if let Some(max_age) = self.policy.max_age
@@ -346,6 +351,7 @@ impl SecretRotation {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_rotation_policy_default() {
@@ -443,5 +449,54 @@ mod tests {
 
 		let key2_history = rotation.get_history_for_secret("key2");
 		assert_eq!(key2_history.len(), 1);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_should_rotate_negative_elapsed_does_not_trigger_rotation() {
+		// Arrange: Create rotation with a long interval and simulate a clock rollback
+		// by inserting a future timestamp as the last rotation time
+		let policy = RotationPolicy {
+			interval: Duration::from_secs(3600),
+			max_age: None,
+		};
+		let rotation = SecretRotation::new(policy);
+
+		// Simulate clock rollback: set last_rotation to a future timestamp
+		let future_time = Utc::now() + chrono::Duration::seconds(600);
+		rotation
+			.last_rotation
+			.write()
+			.insert("clock_test".to_string(), future_time);
+
+		// Act: Check if rotation is needed (elapsed will be negative)
+		let should_rotate = rotation.should_rotate("clock_test").await.unwrap();
+
+		// Assert: Negative elapsed time should NOT trigger rotation
+		assert_eq!(should_rotate, false);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_should_rotate_negative_elapsed_with_max_age_does_not_trigger() {
+		// Arrange: Create rotation with max_age and simulate a clock rollback
+		let policy = RotationPolicy {
+			interval: Duration::from_secs(3600),
+			max_age: Some(Duration::from_secs(7200)),
+		};
+		let rotation = SecretRotation::new(policy);
+
+		// Simulate clock rollback: set last_rotation to a future timestamp
+		let future_time = Utc::now() + chrono::Duration::seconds(600);
+		rotation
+			.last_rotation
+			.write()
+			.insert("clock_test".to_string(), future_time);
+
+		// Act: Check if rotation is needed (elapsed will be negative)
+		let should_rotate = rotation.should_rotate("clock_test").await.unwrap();
+
+		// Assert: Negative elapsed time should NOT trigger rotation even with max_age
+		assert_eq!(should_rotate, false);
 	}
 }

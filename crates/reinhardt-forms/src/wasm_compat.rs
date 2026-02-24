@@ -54,29 +54,103 @@ use std::collections::HashMap;
 ///
 /// Client-side validation is for UX enhancement only and MUST NOT
 /// be relied upon for security. Server-side validation is always required.
+///
+/// ## Design Principle
+///
+/// All validation rules are declarative and type-safe. We do NOT use
+/// JavaScript expressions to prevent arbitrary code execution vulnerabilities.
+/// Instead, each rule type has specific parameters that are validated in Rust.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ValidationRule {
-	/// Field-level validation using JavaScript expression
-	FieldValidator {
+	/// Minimum length validation for string fields
+	MinLength {
 		/// Field name to validate
 		field_name: String,
-		/// JavaScript evaluable expression (e.g., "value.length >= 8")
-		/// The expression should return a boolean (true = valid, false = invalid)
-		expression: String,
+		/// Minimum required length
+		min: usize,
 		/// Error message to display when validation fails
 		error_message: String,
 	},
-	/// Form-level cross-field validation using JavaScript expression
-	CrossFieldValidator {
-		/// Dependent field names involved in validation
+	/// Maximum length validation for string fields
+	MaxLength {
+		/// Field name to validate
+		field_name: String,
+		/// Maximum allowed length
+		max: usize,
+		/// Error message to display when validation fails
+		error_message: String,
+	},
+	/// Regex pattern validation for string fields
+	Pattern {
+		/// Field name to validate
+		field_name: String,
+		/// Regex pattern to match (must be valid regex)
+		pattern: String,
+		/// Error message to display when validation fails
+		error_message: String,
+	},
+	/// Minimum value validation for numeric fields
+	MinValue {
+		/// Field name to validate
+		field_name: String,
+		/// Minimum allowed value
+		min: f64,
+		/// Error message to display when validation fails
+		error_message: String,
+	},
+	/// Maximum value validation for numeric fields
+	MaxValue {
+		/// Field name to validate
+		field_name: String,
+		/// Maximum allowed value
+		max: f64,
+		/// Error message to display when validation fails
+		error_message: String,
+	},
+	/// Email format validation
+	Email {
+		/// Field name to validate
+		field_name: String,
+		/// Error message to display when validation fails
+		error_message: String,
+	},
+	/// URL format validation
+	Url {
+		/// Field name to validate
+		field_name: String,
+		/// Error message to display when validation fails
+		error_message: String,
+	},
+	/// Cross-field equality validation (e.g., password confirmation)
+	FieldsEqual {
+		/// Field names to compare for equality
 		field_names: Vec<String>,
-		/// JavaScript evaluable expression (e.g., "fields.password === fields.password_confirm")
-		/// The expression receives a `fields` object with field name -> value mapping
-		expression: String,
 		/// Error message to display when validation fails
 		error_message: String,
 		/// Target field for error display (None = non-field error)
+		target_field: Option<String>,
+	},
+	/// Date range validation (end_date >= start_date)
+	DateRange {
+		/// Start date field name
+		start_field: String,
+		/// End date field name
+		end_field: String,
+		/// Error message to display when validation fails
+		error_message: String,
+		/// Target field for error display
+		target_field: Option<String>,
+	},
+	/// Numeric range validation (max >= min)
+	NumericRange {
+		/// Minimum value field name
+		min_field: String,
+		/// Maximum value field name
+		max_field: String,
+		/// Error message to display when validation fails
+		error_message: String,
+		/// Target field for error display
 		target_field: Option<String>,
 	},
 	/// Reference to reinhardt-validators Validator

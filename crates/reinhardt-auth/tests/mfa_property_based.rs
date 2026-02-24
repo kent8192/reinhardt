@@ -13,6 +13,7 @@
 
 use proptest::prelude::*;
 use reinhardt_auth::mfa::MFAAuthentication as MfaManager;
+use tokio::runtime::Runtime;
 
 // =============================================================================
 // Strategy Definitions
@@ -72,12 +73,25 @@ fn generate_totp_for_secret(secret: &str, time_window: u64) -> Option<String> {
 		.as_secs();
 	let time_step = current_time / time_window;
 
-	Some(totp_lite::totp_custom::<totp_lite::Sha1>(
+	Some(totp_lite::totp_custom::<totp_lite::Sha256>(
 		time_window,
 		6,
 		&secret_bytes,
 		time_step,
 	))
+}
+
+/// Run async code in a tokio runtime for use in synchronous proptest tests
+/// Panics on TestCaseError::Fail or TestCaseError::Reject
+fn run_async<F>(future: F)
+where
+	F: std::future::Future<Output = Result<(), TestCaseError>>,
+{
+	match Runtime::new().unwrap().block_on(future) {
+		Ok(()) => {}
+		Err(TestCaseError::Fail(msg)) => panic!("Property test failed: {}", msg),
+		Err(TestCaseError::Reject(msg)) => panic!("Property test rejected: {}", msg),
+	}
 }
 
 // =============================================================================
@@ -176,7 +190,7 @@ proptest! {
 }
 
 // =============================================================================
-// Property Tests - Registration
+// Property Tests - Registration (Async via block_on)
 // =============================================================================
 
 proptest! {
@@ -186,17 +200,20 @@ proptest! {
 		username in username_strategy(),
 		secret in base32_secret_strategy(),
 	) {
-		let mfa = MfaManager::new("TestApp");
-		mfa.register_user(&username, &secret);
+		run_async(async {
+			let mfa = MfaManager::new("TestApp");
+			mfa.register_user(&username, &secret).await;
 
-		let stored = mfa.get_secret(&username);
+			let stored = mfa.get_secret(&username).await;
 
-		prop_assert!(stored.is_some(), "Secret should be stored for user '{}'", username);
-		prop_assert_eq!(
-			stored.unwrap(),
-			secret,
-			"Stored secret should match registered secret"
-		);
+			prop_assert!(stored.is_some(), "Secret should be stored for user '{}'", username);
+			prop_assert_eq!(
+				stored.unwrap(),
+				secret,
+				"Stored secret should match registered secret"
+			);
+			Ok(())
+		})
 	}
 
 	/// Property: Registration is idempotent for same username/secret
@@ -205,17 +222,20 @@ proptest! {
 		username in username_strategy(),
 		secret in base32_secret_strategy(),
 	) {
-		let mfa = MfaManager::new("TestApp");
+		run_async(async {
+			let mfa = MfaManager::new("TestApp");
 
-		// Register multiple times with same secret
-		mfa.register_user(&username, &secret);
-		mfa.register_user(&username, &secret);
-		mfa.register_user(&username, &secret);
+			// Register multiple times with same secret
+			mfa.register_user(&username, &secret).await;
+			mfa.register_user(&username, &secret).await;
+			mfa.register_user(&username, &secret).await;
 
-		let stored = mfa.get_secret(&username);
+			let stored = mfa.get_secret(&username).await;
 
-		prop_assert!(stored.is_some());
-		prop_assert_eq!(stored.unwrap(), secret);
+			prop_assert!(stored.is_some());
+			prop_assert_eq!(stored.unwrap(), secret);
+			Ok(())
+		})
 	}
 
 	/// Property: Re-registration overwrites previous secret
@@ -227,19 +247,22 @@ proptest! {
 	) {
 		prop_assume!(secret1 != secret2);
 
-		let mfa = MfaManager::new("TestApp");
+		run_async(async {
+			let mfa = MfaManager::new("TestApp");
 
-		mfa.register_user(&username, &secret1);
-		mfa.register_user(&username, &secret2);
+			mfa.register_user(&username, &secret1).await;
+			mfa.register_user(&username, &secret2).await;
 
-		let stored = mfa.get_secret(&username);
+			let stored = mfa.get_secret(&username).await;
 
-		prop_assert!(stored.is_some());
-		prop_assert_eq!(
-			stored.unwrap(),
-			secret2,
-			"Secret should be updated to latest value"
-		);
+			prop_assert!(stored.is_some());
+			prop_assert_eq!(
+				stored.unwrap(),
+				secret2,
+				"Secret should be updated to latest value"
+			);
+			Ok(())
+		})
 	}
 
 	/// Property: Different usernames have independent secrets
@@ -252,20 +275,23 @@ proptest! {
 	) {
 		prop_assume!(username1 != username2);
 
-		let mfa = MfaManager::new("TestApp");
-		mfa.register_user(&username1, &secret1);
-		mfa.register_user(&username2, &secret2);
+		run_async(async {
+			let mfa = MfaManager::new("TestApp");
+			mfa.register_user(&username1, &secret1).await;
+			mfa.register_user(&username2, &secret2).await;
 
-		let stored1 = mfa.get_secret(&username1);
-		let stored2 = mfa.get_secret(&username2);
+			let stored1 = mfa.get_secret(&username1).await;
+			let stored2 = mfa.get_secret(&username2).await;
 
-		prop_assert_eq!(stored1, Some(secret1));
-		prop_assert_eq!(stored2, Some(secret2));
+			prop_assert_eq!(stored1, Some(secret1));
+			prop_assert_eq!(stored2, Some(secret2));
+			Ok(())
+		})
 	}
 }
 
 // =============================================================================
-// Property Tests - Verification
+// Property Tests - Verification (Async via block_on)
 // =============================================================================
 
 proptest! {
@@ -276,16 +302,19 @@ proptest! {
 		secret in base32_secret_strategy(),
 		code in totp_code_strategy(),
 	) {
-		let mfa = MfaManager::new("TestApp");
-		mfa.register_user(&username, &secret);
+		run_async(async {
+			let mfa = MfaManager::new("TestApp");
+			mfa.register_user(&username, &secret).await;
 
-		let result = mfa.verify_totp(&username, &code);
+			let result = mfa.verify_totp(&username, &code).await;
 
-		// Should always return Ok, never Err for registered user with valid secret
-		prop_assert!(
-			result.is_ok(),
-			"Verification should return Ok for registered user"
-		);
+			// Should always return Ok, never Err for registered user with valid secret
+			prop_assert!(
+				result.is_ok(),
+				"Verification should return Ok for registered user"
+			);
+			Ok(())
+		})
 	}
 
 	/// Property: Verification fails with error for unregistered user
@@ -294,15 +323,18 @@ proptest! {
 		username in username_strategy(),
 		code in totp_code_strategy(),
 	) {
-		let mfa = MfaManager::new("TestApp");
-		// Don't register the user
+		run_async(async {
+			let mfa = MfaManager::new("TestApp");
+			// Don't register the user
 
-		let result = mfa.verify_totp(&username, &code);
+			let result = mfa.verify_totp(&username, &code).await;
 
-		prop_assert!(
-			result.is_err(),
-			"Verification should error for unregistered user"
-		);
+			prop_assert!(
+				result.is_err(),
+				"Verification should error for unregistered user"
+			);
+			Ok(())
+		})
 	}
 
 	/// Property: Self-generated code validates successfully
@@ -311,14 +343,17 @@ proptest! {
 		username in username_strategy(),
 		secret in base32_secret_strategy(),
 	) {
-		let mfa = MfaManager::new("TestApp").time_window(30);
-		mfa.register_user(&username, &secret);
+		run_async(async {
+			let mfa = MfaManager::new("TestApp").time_window(30);
+			mfa.register_user(&username, &secret).await;
 
-		if let Some(code) = generate_totp_for_secret(&secret, 30) {
-			let result = mfa.verify_totp(&username, &code);
-			prop_assert!(result.is_ok(), "Verification should not error");
-			prop_assert!(result.unwrap(), "Self-generated code should validate");
-		}
+			if let Some(code) = generate_totp_for_secret(&secret, 30) {
+				let result = mfa.verify_totp(&username, &code).await;
+				prop_assert!(result.is_ok(), "Verification should not error");
+				prop_assert!(result.unwrap(), "Self-generated code should validate");
+			}
+			Ok(())
+		})
 	}
 }
 
@@ -354,7 +389,7 @@ proptest! {
 }
 
 // =============================================================================
-// Property Tests - Time Window
+// Property Tests - Time Window (Async via block_on)
 // =============================================================================
 
 proptest! {
@@ -363,15 +398,18 @@ proptest! {
 	fn test_time_window_preserved(
 		time_window in time_window_strategy(),
 	) {
-		let mfa = MfaManager::new("TestApp").time_window(time_window);
-		mfa.register_user("testuser", "JBSWY3DPEHPK3PXP");
+		run_async(async {
+			let mfa = MfaManager::new("TestApp").time_window(time_window);
+			mfa.register_user("testuser", "JBSWY3DPEHPK3PXP").await;
 
-		// Generate code with same time window
-		if let Some(code) = generate_totp_for_secret("JBSWY3DPEHPK3PXP", time_window) {
-			let result = mfa.verify_totp("testuser", &code);
-			prop_assert!(result.is_ok());
-			prop_assert!(result.unwrap(), "Code generated with same time window should validate");
-		}
+			// Generate code with same time window
+			if let Some(code) = generate_totp_for_secret("JBSWY3DPEHPK3PXP", time_window) {
+				let result = mfa.verify_totp("testuser", &code).await;
+				prop_assert!(result.is_ok());
+				prop_assert!(result.unwrap(), "Code generated with same time window should validate");
+			}
+			Ok(())
+		})
 	}
 }
 
@@ -390,17 +428,19 @@ mod sanity_tests {
 	}
 
 	#[rstest]
-	fn test_basic_registration_and_retrieval(mfa_manager: MfaManager) {
-		mfa_manager.register_user("alice", "JBSWY3DPEHPK3PXP");
+	#[tokio::test]
+	async fn test_basic_registration_and_retrieval(mfa_manager: MfaManager) {
+		mfa_manager.register_user("alice", "JBSWY3DPEHPK3PXP").await;
 
-		let secret = mfa_manager.get_secret("alice");
+		let secret = mfa_manager.get_secret("alice").await;
 		assert!(secret.is_some());
 		assert_eq!(secret.unwrap(), "JBSWY3DPEHPK3PXP");
 	}
 
 	#[rstest]
-	fn test_unregistered_user_returns_none(mfa_manager: MfaManager) {
-		let secret = mfa_manager.get_secret("nonexistent");
+	#[tokio::test]
+	async fn test_unregistered_user_returns_none(mfa_manager: MfaManager) {
+		let secret = mfa_manager.get_secret("nonexistent").await;
 		assert!(secret.is_none());
 	}
 
@@ -415,11 +455,14 @@ mod sanity_tests {
 	}
 
 	#[rstest]
-	fn test_verification_with_invalid_secret_errors(mfa_manager: MfaManager) {
+	#[tokio::test]
+	async fn test_verification_with_invalid_secret_errors(mfa_manager: MfaManager) {
 		// Register with invalid base32
-		mfa_manager.register_user("alice", "NOT_VALID_BASE32!");
+		mfa_manager
+			.register_user("alice", "NOT_VALID_BASE32!")
+			.await;
 
-		let result = mfa_manager.verify_totp("alice", "123456");
+		let result = mfa_manager.verify_totp("alice", "123456").await;
 
 		assert!(result.is_err(), "Invalid base32 should cause error");
 	}

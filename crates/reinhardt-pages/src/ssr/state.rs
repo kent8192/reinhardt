@@ -6,6 +6,19 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Escapes JSON content for safe embedding inside HTML `<script>` tags.
+///
+/// This prevents XSS attacks by escaping characters that could break out of
+/// the script tag context:
+/// - `<` → `\u003c` (prevents `</script>` injection)
+/// - `>` → `\u003e` (prevents HTML context confusion)
+/// - `&` → `\u0026` (prevents entity-based attacks)
+fn escape_json_for_html(json: &str) -> String {
+	json.replace('<', "\\u003c")
+		.replace('>', "\\u003e")
+		.replace('&', "\\u0026")
+}
+
 /// The global JavaScript variable name for SSR state.
 pub(super) const SSR_STATE_VAR: &str = "__REINHARDT_SSR_STATE__";
 
@@ -88,11 +101,18 @@ impl SsrState {
 	}
 
 	/// Generates a `<script>` tag containing the serialized state.
+	///
+	/// The JSON content is escaped to prevent XSS attacks via `</script>`
+	/// injection. Both `<` and `>` characters are replaced with their Unicode
+	/// escape sequences (`\u003c` and `\u003e`) to prevent script tag injection
+	/// and HTML comment attacks.
 	pub fn to_script_tag(&self) -> String {
 		let json = self.to_json().unwrap_or_else(|_| "{}".to_string());
+		// Escape HTML-sensitive characters to prevent XSS via </script> injection
+		let escaped = escape_json_for_html(&json);
 		format!(
 			r#"<script id="ssr-state" type="application/json">window.{} = {};</script>"#,
-			SSR_STATE_VAR, json
+			SSR_STATE_VAR, escaped
 		)
 	}
 
@@ -236,5 +256,81 @@ mod tests {
 		let entry = StateEntry::props("rh-2", serde_json::json!({"x": 1})).unwrap();
 		assert_eq!(entry.id, "rh-2");
 		assert!(matches!(entry.entry_type, StateEntryType::Props));
+	}
+}
+
+#[cfg(test)]
+mod xss_prevention_tests {
+	use super::*;
+	use rstest::rstest;
+
+	#[rstest]
+	#[case::script_tag("</script>", "\\u003c/script\\u003e")]
+	#[case::script_tag_upper("</SCRIPT>", "\\u003c/SCRIPT\\u003e")]
+	#[case::opening_tag("<script>", "\\u003cscript\\u003e")]
+	#[case::html_comment("<!--", "\\u003c!--")]
+	#[case::ampersand("&", "\\u0026")]
+	#[case::mixed(
+		"<script>alert('xss')</script>",
+		"\\u003cscript\\u003ealert('xss')\\u003c/script\\u003e"
+	)]
+	fn test_escape_json_for_html_escapes_dangerous_sequences(
+		#[case] input: &str,
+		#[case] expected: &str,
+	) {
+		let escaped = escape_json_for_html(input);
+		assert_eq!(escaped, expected);
+	}
+
+	#[rstest]
+	fn test_to_script_tag_escapes_script_injection() {
+		// Arrange
+		let mut state = SsrState::new();
+		state.add_signal("malicious", "</script><script>alert('xss')</script>");
+
+		// Act
+		let script = state.to_script_tag();
+
+		// Assert: The escaped version should be present in the JSON content
+		assert!(script.contains("\\u003c/script\\u003e"));
+		// The script tag boundaries should be intact
+		assert!(script.starts_with("<script"));
+		assert!(script.ends_with("</script>"));
+		// Verify only one </script> exists (the closing tag at the end)
+		let closing_tag_count = script.matches("</script>").count();
+		assert_eq!(
+			closing_tag_count, 1,
+			"Only one closing </script> tag should exist"
+		);
+	}
+
+	#[rstest]
+	fn test_to_script_tag_escapes_html_comment() {
+		// Arrange
+		let mut state = SsrState::new();
+		state.add_signal("comment", "<!-- malicious comment -->");
+
+		// Act
+		let script = state.to_script_tag();
+
+		// Assert: HTML comment open/close should be escaped
+		assert!(!script.contains("<!--"));
+		assert!(script.contains("\\u003c!--"));
+	}
+
+	#[rstest]
+	fn test_to_script_tag_preserves_normal_data() {
+		// Arrange
+		let mut state = SsrState::new();
+		state.add_signal("name", "Alice");
+		state.add_signal("count", 42);
+
+		// Act
+		let script = state.to_script_tag();
+
+		// Assert: Normal data should be preserved
+		assert!(script.contains("Alice"));
+		assert!(script.contains("42"));
+		assert!(script.contains("__REINHARDT_SSR_STATE__"));
 	}
 }

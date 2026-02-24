@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-i18n"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.6"
 description = "Internationalization and localization support"
 edition.workspace = true
 license.workspace = true
@@ -8,17 +8,10 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-serde = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
-once_cell = "1.19"
-regex = { workspace = true }
-fluent-bundle = "0.16.0"
-fluent-syntax = "0.12.0"
-unic-langid = "0.9"
-http = "1.0"
 chrono = { workspace = true }
+reinhardt-utils = { workspace = true }
 
 # DI integration (optional)
 reinhardt-di = { workspace = true, optional = true }
@@ -36,3 +29,4 @@ rstest = { workspace = true }
 scopeguard = { workspace = true }
 reinhardt-test = { workspace = true }
 reinhardt-di = { workspace = true }
+unic-langid = "0.9"

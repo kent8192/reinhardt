@@ -1,7 +1,7 @@
 
 [package]
 name = "reinhardt-di"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.9"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -69,13 +69,7 @@ reinhardt-macros = { workspace = true }
 serde = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
-reinhardt-test = { workspace = true }
-testcontainers = { workspace = true }
-testcontainers-modules = { workspace = true }
-sea-query = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio"] }
-reinhardt-di = {workspace = true, features = ["params"]}
-
 [[bench]]
 name = "cache_performance"
 harness = false

@@ -91,7 +91,7 @@ my-app/
 - `cargo make wasm-build-dev` - Build WASM only (debug)
 - `cargo make wasm-build-release` - Build WASM only (release, with wasm-opt)
 
-See [examples/local/examples-twitter](../../../examples/local/examples-twitter) for a complete implementation.
+See [examples/examples-twitter](../../../examples/examples-twitter) for a complete implementation.
 
 **Note**: This tutorial focuses on the **reinhardt-pages (WASM + SSR)** architecture with server functions. For building RESTful APIs instead, see the [REST API Tutorial](../rest/0-http-macros.md).
 
@@ -151,7 +151,7 @@ If you're building backend APIs for separate frontends (React, Vue, mobile apps)
 
 For RESTful API development, see the [REST API Tutorial](../rest/0-http-macros.md).
 
-See [examples/local/examples-twitter](../../../examples/local/examples-twitter) for a complete WASM + SSR implementation.
+See [examples/examples-twitter](../../../examples/examples-twitter) for a complete WASM + SSR implementation.
 
 ## Understanding reinhardt-pages Architecture
 
@@ -1169,6 +1169,6 @@ In this tutorial, you learned:
 **Next Steps:**
 - Learn about **models and databases** in Part 2
 - Explore **forms** with the `form!` macro in Part 4
-- See **complete examples** in `examples/local/examples-tutorial-basis/`
+- See **complete examples** in `examples/examples-tutorial-basis/`
 
 You now have a solid foundation for building full-stack Rust applications with reinhardt-pages!

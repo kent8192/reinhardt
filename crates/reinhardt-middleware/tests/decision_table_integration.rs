@@ -131,14 +131,14 @@ impl Handler for ContentHandler {
 	Some("https://evil.com"),
 	"GET",
 	vec!["https://example.com"],
-	true,  // Current impl always adds CORS headers
+	false,  // Non-matching origin omits CORS headers per spec
 	false
 )]
 #[case::no_origin_header(
 	None,
 	"GET",
 	vec!["https://example.com"],
-	true,  // Current impl always adds CORS headers
+	false,  // No Origin header omits CORS headers per spec
 	false
 )]
 #[case::wildcard_any_origin(

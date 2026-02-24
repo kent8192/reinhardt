@@ -4,6 +4,7 @@
 //! when objects are not found, similar to Django's get_object_or_404.
 
 use reinhardt_http::Response;
+use tracing;
 
 /// Error type for get_or_404 operations
 #[derive(Debug, thiserror::Error)]
@@ -26,8 +27,11 @@ impl From<GetError> for Response {
 				response
 			}
 			GetError::DatabaseError(msg) => {
+				// Log the full error server-side for debugging
+				tracing::error!("Database error in get_or_404: {}", msg);
+				// Return generic message to client to avoid information disclosure
 				let mut response = Response::internal_server_error();
-				response.body = bytes::Bytes::from(format!("Database error: {}", msg));
+				response.body = bytes::Bytes::from("Internal server error");
 				response
 			}
 		}
@@ -179,7 +183,8 @@ mod tests {
 
 	#[test]
 	fn test_get_or_404_database_error() {
-		let result: Result<Option<User>, String> = Err("Connection failed".to_string());
+		let sensitive_error = "Connection failed: password for user 'admin' at db.example.com";
+		let result: Result<Option<User>, String> = Err(sensitive_error.to_string());
 
 		let response = get_or_404_response(result);
 		assert!(response.is_err());
@@ -187,6 +192,16 @@ mod tests {
 		let error = response.unwrap_err();
 		let error_response: Response = error.into();
 		assert_eq!(error_response.status, StatusCode::INTERNAL_SERVER_ERROR);
+
+		// Verify the response body contains generic message
+		let body = String::from_utf8_lossy(&error_response.body);
+		assert_eq!(body, "Internal server error");
+
+		// Verify the sensitive error message is NOT exposed in response
+		assert!(!body.contains("Connection failed"));
+		assert!(!body.contains("password"));
+		assert!(!body.contains("admin"));
+		assert!(!body.contains("db.example.com"));
 	}
 
 	#[test]
@@ -225,7 +240,8 @@ mod tests {
 
 	#[test]
 	fn test_get_list_or_404_database_error() {
-		let result: Result<Vec<User>, String> = Err("Query failed".to_string());
+		let sensitive_error = "Query failed: SELECT * FROM users WHERE id=1; connection timeout";
+		let result: Result<Vec<User>, String> = Err(sensitive_error.to_string());
 
 		let response = get_list_or_404_response(result);
 		assert!(response.is_err());
@@ -233,6 +249,15 @@ mod tests {
 		let error = response.unwrap_err();
 		let error_response: Response = error.into();
 		assert_eq!(error_response.status, StatusCode::INTERNAL_SERVER_ERROR);
+
+		// Verify the response body contains generic message
+		let body = String::from_utf8_lossy(&error_response.body);
+		assert_eq!(body, "Internal server error");
+
+		// Verify the sensitive error message is NOT exposed in response
+		assert!(!body.contains("Query failed"));
+		assert!(!body.contains("SELECT"));
+		assert!(!body.contains("users"));
 	}
 
 	#[test]

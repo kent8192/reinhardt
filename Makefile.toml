@@ -89,6 +89,30 @@ args = [
   "warnings",
 ]
 
+[tasks.clippy-todo-check]
+description = "Check for development-only code (todo!, unimplemented!, dbg!)"
+command = "cargo"
+args = [
+  "clippy",
+  "--workspace",
+  "--all",
+  "--all-features",
+  "--",
+  "-D", "clippy::todo",
+  "-D", "clippy::unimplemented",
+  "-D", "clippy::dbg_macro",
+]
+
+[tasks.placeholder-check]
+description = "Check for formatter placeholder macros left in source files"
+script_runner = "sh"
+script = '''
+set -e
+echo "Scanning for __reinhardt_placeholder__! in source files..."
+docker run --rm -v "$(pwd):/src" semgrep/semgrep \
+  semgrep scan --config /src/.semgrep/placeholder-check.yml --error --metrics off /src
+'''
+
 [tasks.fmt-page-only]
 description = "Format page! macro DSL only (without rustfmt)"
 command = "cargo"
@@ -201,35 +225,44 @@ description = "Run all integration tests (with Docker cleanup)"
 dependencies = ["docker-cleanup-force", "integration-test-only"]
 
 [tasks.local-examples-test]
-description = "Test local examples (now part of workspace)"
-command = "cargo"
-args = [
-  "nextest",
-  "run",
-  "-p", "examples-hello-world",
-  "-p", "examples-rest-api",
-  "-p", "examples-database-integration",
-  "-p", "examples-tutorial-basis",
-  "-p", "examples-tutorial-rest",
-  "-p", "examples-twitter",
-  "-p", "examples-github-issues",
-  "--verbose"
-]
-
-[tasks.local-examples-test-crate]
-description = "Test specific local example(s). Usage: cargo make local-examples-test-crate -- -p examples-hello-world -p examples-rest-api"
+description = "Test examples with local reinhardt"
 script = '''
 #!/bin/bash
+set -e
+cd examples
+cp .cargo/config.local.toml .cargo/config.toml
+cargo nextest run --workspace --verbose
+rm -f .cargo/config.toml
+'''
+
+[tasks.local-examples-test-crate]
+description = "Test specific local example(s). Usage: cargo make local-examples-test-crate -- -p examples-hello-world"
+script = '''
+#!/bin/bash
+set -e
 args="${CARGO_MAKE_TASK_ARGS#--}"
 args="${args//;/ }"
+cd examples
+cp .cargo/config.local.toml .cargo/config.toml
 cargo nextest run $args --verbose
+rm -f .cargo/config.toml
 '''
 
 [tasks.remote-examples-test]
-description = "Test remote examples (uses crates.io published versions)"
-cwd = "examples/remote"
-command = "cargo"
-args = ["nextest", "run", "--workspace", "--verbose"]
+description = "Test examples with published crates.io versions"
+script = '''
+#!/bin/bash
+set -e
+cd examples
+EXIT_CODE=0
+for example_dir in examples-*; do
+  if [ -d "$example_dir" ]; then
+    echo "Testing $example_dir..."
+    (cd "$example_dir" && cargo nextest run --all-features) || EXIT_CODE=1
+  fi
+done
+exit $EXIT_CODE
+'''
 
 [tasks.ui-test-only]
 description = "Run UI tests (trybuild) separately with serial execution without Docker cleanup"
@@ -250,11 +283,11 @@ description = "Run UI tests (trybuild) separately with serial execution (with Do
 dependencies = ["docker-cleanup-force", "ui-test-only"]
 
 [tasks.examples-test-only]
-description = "Test all examples (local + remote) without Docker cleanup"
-dependencies = ["local-examples-test", "remote-examples-test"]
+description = "Test all examples (local only) without Docker cleanup"
+dependencies = ["local-examples-test"]
 
 [tasks.examples-test]
-description = "Test all examples (local + remote) (with Docker cleanup)"
+description = "Test all examples (local only) (with Docker cleanup)"
 dependencies = ["docker-cleanup-force", "examples-test-only"]
 
 [tasks.test-only]
@@ -271,6 +304,25 @@ dependencies = [
 clear = true
 description = "Run all tests (with Docker cleanup)"
 dependencies = ["docker-cleanup-force", "test-only"]
+
+# ============================================================================
+# Coverage Tasks
+# ============================================================================
+
+[tasks.coverage-unit]
+description = "Run unit tests with coverage (generates LCOV report)"
+command = "cargo"
+args = ["llvm-cov", "nextest", "--workspace", "--lib", "--all-features", "--no-fail-fast", "--lcov", "--output-path", "/tmp/reinhardt-unit-lcov.info"]
+
+[tasks.coverage-html]
+description = "Run unit tests with coverage and open HTML report"
+command = "cargo"
+args = ["llvm-cov", "nextest", "--workspace", "--lib", "--all-features", "--no-fail-fast", "--html", "--open"]
+
+[tasks.coverage-summary]
+description = "Run unit tests with coverage and show summary in terminal"
+command = "cargo"
+args = ["llvm-cov", "nextest", "--workspace", "--lib", "--all-features", "--no-fail-fast"]
 
 # ============================================================================
 # CI Tasks
@@ -405,27 +457,23 @@ fi
 # ============================================================================
 
 [tasks.local-examples-build]
-description = "Build local examples (now part of workspace)"
-command = "cargo"
-args = [
-  "build",
-  "-p", "examples-hello-world",
-  "-p", "examples-rest-api",
-  "-p", "examples-database-integration",
-  "-p", "examples-tutorial-basis",
-  "-p", "examples-tutorial-rest",
-  "-p", "examples-twitter",
-  "-p", "examples-github-issues",
-  "--release"
-]
+description = "Build examples with local reinhardt"
+script = '''
+#!/bin/bash
+set -e
+cd examples
+cp .cargo/config.local.toml .cargo/config.toml
+cargo build --workspace --release
+rm -f .cargo/config.toml
+'''
 
 [tasks.remote-examples-build]
 description = "Build remote examples individually (auto-detect examples-* directories)"
 script = '''
 #!/bin/bash
 
-# Change to examples/remote directory
-cd examples/remote
+# Change to examples directory
+cd examples
 
 EXIT_CODE=0
 
@@ -475,22 +523,19 @@ description = "Build all examples (local + remote)"
 dependencies = ["local-examples-build", "remote-examples-build"]
 
 [tasks.local-examples-clean]
-description = "Clean local examples build artifacts (now part of workspace clean)"
-command = "cargo"
-args = [
-  "clean",
-  "-p", "examples-hello-world",
-  "-p", "examples-rest-api",
-  "-p", "examples-database-integration",
-  "-p", "examples-tutorial-basis",
-  "-p", "examples-tutorial-rest",
-  "-p", "examples-twitter",
-  "-p", "examples-github-issues"
-]
+description = "Clean local examples build artifacts"
+script = '''
+#!/bin/bash
+set -e
+cd examples
+cp .cargo/config.local.toml .cargo/config.toml
+cargo clean
+rm -f .cargo/config.toml
+'''
 
 [tasks.remote-examples-clean]
 description = "Clean remote examples build artifacts"
-cwd = "examples/remote"
+cwd = "examples"
 command = "cargo"
 args = ["clean"]
 

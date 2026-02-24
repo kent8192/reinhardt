@@ -497,7 +497,7 @@ div { class: "flex justify-center py-12",
 - **Dark mode**: Built-in support with `dark:` prefix
 - **Responsive**: Easy breakpoints (`md:`, `lg:`, etc.)
 
-For complete UnoCSS configuration examples, see [examples/local/examples-twitter/index.html](../../../examples/local/examples-twitter/index.html).
+For complete UnoCSS configuration examples, see [examples/examples-twitter/index.html](../../../examples/examples-twitter/index.html).
 
 ---
 

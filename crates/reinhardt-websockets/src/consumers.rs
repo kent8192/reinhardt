@@ -157,22 +157,15 @@ impl ConsumerContext {
 	where
 		T: Injectable + Clone + Send + Sync + 'static,
 	{
-		let ctx = self.di_context.as_ref().ok_or_else(|| {
-			WebSocketError::Internal(
-				"DI context not set. Ensure the WebSocket router is configured with DI".to_string(),
-			)
-		})?;
+		let ctx = self
+			.di_context
+			.as_ref()
+			.ok_or_else(|| WebSocketError::Internal("DI context not available".to_string()))?;
 
 		Injected::<T>::resolve(ctx)
 			.await
 			.map(|injected| injected.into_inner())
-			.map_err(|e| {
-				WebSocketError::Internal(format!(
-					"Dependency injection failed for {}: {:?}",
-					std::any::type_name::<T>(),
-					e
-				))
-			})
+			.map_err(|_| WebSocketError::Internal("dependency resolution failed".to_string()))
 	}
 
 	/// Resolve a dependency without caching
@@ -196,22 +189,15 @@ impl ConsumerContext {
 	where
 		T: Injectable + Clone + Send + Sync + 'static,
 	{
-		let ctx = self.di_context.as_ref().ok_or_else(|| {
-			WebSocketError::Internal(
-				"DI context not set. Ensure the WebSocket router is configured with DI".to_string(),
-			)
-		})?;
+		let ctx = self
+			.di_context
+			.as_ref()
+			.ok_or_else(|| WebSocketError::Internal("DI context not available".to_string()))?;
 
 		Injected::<T>::resolve_uncached(ctx)
 			.await
 			.map(|injected| injected.into_inner())
-			.map_err(|e| {
-				WebSocketError::Internal(format!(
-					"Dependency injection failed for {}: {:?}",
-					std::any::type_name::<T>(),
-					e
-				))
-			})
+			.map_err(|_| WebSocketError::Internal("dependency resolution failed".to_string()))
 	}
 
 	/// Try to resolve a dependency, returning None if DI context is not available
@@ -333,10 +319,31 @@ impl WebSocketConsumer for EchoConsumer {
 					.await
 			}
 			Message::Binary { data } => {
+				// Validate binary payload and attempt UTF-8 conversion
+				match String::from_utf8(data.clone()) {
+					Ok(text) => {
+						context
+							.connection
+							.send_text(format!("{}: {}", self.prefix, text))
+							.await
+					}
+					Err(_) => {
+						// Non-UTF-8 binary: echo back a summary with byte count
+						context
+							.connection
+							.send_text(format!("{}: binary({} bytes)", self.prefix, data.len()))
+							.await
+					}
+				}
+			}
+			Message::Close { code, reason } => {
+				// Acknowledge close and ensure cleanup
 				context
 					.connection
-					.send_text(format!("{}: {} bytes", self.prefix, data.len()))
+					.close_with_reason(code, reason)
 					.await
+					.ok();
+				Ok(())
 			}
 			_ => Ok(()),
 		}
@@ -412,18 +419,23 @@ impl WebSocketConsumer for BroadcastConsumer {
 		_context: &mut ConsumerContext,
 		message: Message,
 	) -> WebSocketResult<()> {
-		self.room.broadcast(message).await.map_err(|e| match e {
-			crate::room::RoomError::WebSocket(ws_err) => ws_err,
-			_ => crate::connection::WebSocketError::Send(e.to_string()),
-		})
+		let result = self.room.broadcast(message).await;
+		if result.is_complete_failure() {
+			return Err(crate::connection::WebSocketError::Send(
+				"broadcast failed for all clients".to_string(),
+			));
+		}
+		Ok(())
 	}
 
 	async fn on_disconnect(&self, context: &mut ConsumerContext) -> WebSocketResult<()> {
 		let client_id = context.connection.id();
-		self.room
-			.leave(client_id)
-			.await
-			.map_err(|e| crate::connection::WebSocketError::Connection(e.to_string()))?;
+		// Best-effort leave: the client may already have been removed by
+		// broadcast failure cleanup, so ignore ClientNotFound errors.
+		let _ = self.room.leave(client_id).await;
+
+		// Ensure the connection is marked as closed even on abnormal disconnect
+		context.connection.force_close().await;
 
 		Ok(())
 	}
@@ -503,6 +515,31 @@ impl WebSocketConsumer for JsonConsumer {
 				let response = serde_json::json!({
 					"type": "echo",
 					"data": json,
+					"timestamp": chrono::Utc::now().to_rfc3339()
+				});
+
+				context.connection.send_json(&response).await
+			}
+			Message::Binary { data } => {
+				// Validate that binary data is valid UTF-8 JSON
+				let text = String::from_utf8(data).map_err(|e| {
+					crate::connection::WebSocketError::BinaryPayload(format!(
+						"binary payload is not valid UTF-8: {}",
+						e
+					))
+				})?;
+
+				let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+					crate::connection::WebSocketError::BinaryPayload(format!(
+						"binary payload is not valid JSON: {}",
+						e
+					))
+				})?;
+
+				let response = serde_json::json!({
+					"type": "echo",
+					"data": json,
+					"source": "binary",
 					"timestamp": chrono::Utc::now().to_rfc3339()
 				});
 
@@ -593,36 +630,51 @@ impl WebSocketConsumer for ConsumerChain {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 	use tokio::sync::mpsc;
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_consumer_context_creation() {
+		// Arrange
 		let (tx, _rx) = mpsc::unbounded_channel();
 		let conn = Arc::new(WebSocketConnection::new("test".to_string(), tx));
+
+		// Act
 		let context = ConsumerContext::new(conn);
 
+		// Assert
 		assert_eq!(context.connection.id(), "test");
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_consumer_context_metadata() {
+		// Arrange
 		let (tx, _rx) = mpsc::unbounded_channel();
 		let conn = Arc::new(WebSocketConnection::new("test".to_string(), tx));
+
+		// Act
 		let context =
 			ConsumerContext::new(conn).with_metadata("user_id".to_string(), "123".to_string());
 
+		// Assert
 		assert_eq!(context.get_metadata("user_id").unwrap(), "123");
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_echo_consumer_connect() {
+		// Arrange
 		let consumer = EchoConsumer::new();
 		let (tx, mut rx) = mpsc::unbounded_channel();
 		let conn = Arc::new(WebSocketConnection::new("test".to_string(), tx));
 		let mut context = ConsumerContext::new(conn);
 
+		// Act
 		consumer.on_connect(&mut context).await.unwrap();
 
+		// Assert
 		let msg = rx.recv().await.unwrap();
 		match msg {
 			Message::Text { data } => assert!(data.contains("Connection established")),
@@ -630,16 +682,20 @@ mod tests {
 		}
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_echo_consumer_message() {
+		// Arrange
 		let consumer = EchoConsumer::new();
 		let (tx, mut rx) = mpsc::unbounded_channel();
 		let conn = Arc::new(WebSocketConnection::new("test".to_string(), tx));
 		let mut context = ConsumerContext::new(conn);
 
+		// Act
 		let msg = Message::text("Hello".to_string());
 		consumer.on_message(&mut context, msg).await.unwrap();
 
+		// Assert
 		let received = rx.recv().await.unwrap();
 		match received {
 			Message::Text { data } => assert_eq!(data, "Echo: Hello"),
@@ -647,15 +703,85 @@ mod tests {
 		}
 	}
 
+	#[rstest]
+	#[tokio::test]
+	async fn test_echo_consumer_binary_utf8_message() {
+		// Arrange
+		let consumer = EchoConsumer::new();
+		let (tx, mut rx) = mpsc::unbounded_channel();
+		let conn = Arc::new(WebSocketConnection::new("test".to_string(), tx));
+		let mut context = ConsumerContext::new(conn);
+
+		// Act - send a valid UTF-8 binary message
+		let msg = Message::binary(b"Hello binary".to_vec());
+		consumer.on_message(&mut context, msg).await.unwrap();
+
+		// Assert
+		let received = rx.recv().await.unwrap();
+		match received {
+			Message::Text { data } => assert_eq!(data, "Echo: Hello binary"),
+			_ => panic!("Expected text message"),
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_echo_consumer_binary_non_utf8_message() {
+		// Arrange
+		let consumer = EchoConsumer::new();
+		let (tx, mut rx) = mpsc::unbounded_channel();
+		let conn = Arc::new(WebSocketConnection::new("test".to_string(), tx));
+		let mut context = ConsumerContext::new(conn);
+
+		// Act - send a non-UTF-8 binary message
+		let msg = Message::binary(vec![0xFF, 0xFE, 0xFD]);
+		consumer.on_message(&mut context, msg).await.unwrap();
+
+		// Assert
+		let received = rx.recv().await.unwrap();
+		match received {
+			Message::Text { data } => assert_eq!(data, "Echo: binary(3 bytes)"),
+			_ => panic!("Expected text message"),
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_echo_consumer_handles_close_message() {
+		// Arrange
+		let consumer = EchoConsumer::new();
+		let (tx, mut rx) = mpsc::unbounded_channel();
+		let conn = Arc::new(WebSocketConnection::new("test".to_string(), tx));
+		let mut context = ConsumerContext::new(conn.clone());
+
+		// Act
+		let msg = Message::Close {
+			code: 1000,
+			reason: "Normal closure".to_string(),
+		};
+		consumer.on_message(&mut context, msg).await.unwrap();
+
+		// Assert - connection should be closed
+		assert!(conn.is_closed().await);
+
+		// The close frame should have been sent
+		let received = rx.recv().await.unwrap();
+		assert!(matches!(received, Message::Close { code: 1000, .. }));
+	}
+
+	#[rstest]
 	#[tokio::test]
 	async fn test_json_consumer_connect() {
+		// Arrange
 		let consumer = JsonConsumer::new();
 		let (tx, mut rx) = mpsc::unbounded_channel();
 		let conn = Arc::new(WebSocketConnection::new("test".to_string(), tx));
 		let mut context = ConsumerContext::new(conn);
 
+		// Act
 		consumer.on_connect(&mut context).await.unwrap();
 
+		// Assert
 		let msg = rx.recv().await.unwrap();
 		match msg {
 			Message::Text { data } => {
@@ -666,8 +792,112 @@ mod tests {
 		}
 	}
 
+	#[rstest]
+	#[tokio::test]
+	async fn test_json_consumer_binary_valid_json() {
+		// Arrange
+		let consumer = JsonConsumer::new();
+		let (tx, mut rx) = mpsc::unbounded_channel();
+		let conn = Arc::new(WebSocketConnection::new("test".to_string(), tx));
+		let mut context = ConsumerContext::new(conn);
+
+		// Act - send valid JSON as binary
+		let msg = Message::binary(br#"{"key":"value"}"#.to_vec());
+		consumer.on_message(&mut context, msg).await.unwrap();
+
+		// Assert
+		let received = rx.recv().await.unwrap();
+		match received {
+			Message::Text { data } => {
+				let json: serde_json::Value = serde_json::from_str(&data).unwrap();
+				assert_eq!(json["source"], "binary");
+				assert_eq!(json["data"]["key"], "value");
+			}
+			_ => panic!("Expected text message"),
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_json_consumer_binary_invalid_utf8_returns_error() {
+		// Arrange
+		let consumer = JsonConsumer::new();
+		let (tx, _rx) = mpsc::unbounded_channel();
+		let conn = Arc::new(WebSocketConnection::new("test".to_string(), tx));
+		let mut context = ConsumerContext::new(conn);
+
+		// Act - send non-UTF-8 binary
+		let msg = Message::binary(vec![0xFF, 0xFE]);
+		let result = consumer.on_message(&mut context, msg).await;
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(matches!(err, WebSocketError::BinaryPayload(_)));
+		assert!(err.to_string().contains("not valid UTF-8"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_json_consumer_binary_invalid_json_returns_error() {
+		// Arrange
+		let consumer = JsonConsumer::new();
+		let (tx, _rx) = mpsc::unbounded_channel();
+		let conn = Arc::new(WebSocketConnection::new("test".to_string(), tx));
+		let mut context = ConsumerContext::new(conn);
+
+		// Act - send valid UTF-8 but invalid JSON as binary
+		let msg = Message::binary(b"not json at all".to_vec());
+		let result = consumer.on_message(&mut context, msg).await;
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(matches!(err, WebSocketError::BinaryPayload(_)));
+		assert!(err.to_string().contains("not valid JSON"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_broadcast_consumer_disconnect_cleanup() {
+		// Arrange
+		let room = Arc::new(crate::room::Room::new("cleanup".to_string()));
+		let consumer = BroadcastConsumer::new(room.clone());
+		let (tx, _rx) = mpsc::unbounded_channel();
+		let conn = Arc::new(WebSocketConnection::new("user1".to_string(), tx));
+		room.join("user1".to_string(), conn.clone()).await.unwrap();
+		let mut context = ConsumerContext::new(conn.clone());
+
+		// Act
+		consumer.on_disconnect(&mut context).await.unwrap();
+
+		// Assert - connection is force-closed and removed from room
+		assert!(conn.is_closed().await);
+		assert!(!room.has_client("user1").await);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_broadcast_consumer_disconnect_tolerates_already_removed() {
+		// Arrange - client not in room (e.g., already removed by broadcast cleanup)
+		let room = Arc::new(crate::room::Room::new("tolerant".to_string()));
+		let consumer = BroadcastConsumer::new(room.clone());
+		let (tx, _rx) = mpsc::unbounded_channel();
+		let conn = Arc::new(WebSocketConnection::new("ghost".to_string(), tx));
+		let mut context = ConsumerContext::new(conn.clone());
+
+		// Act - should not error even though client is not in the room
+		let result = consumer.on_disconnect(&mut context).await;
+
+		// Assert
+		assert!(result.is_ok());
+		assert!(conn.is_closed().await);
+	}
+
+	#[rstest]
 	#[tokio::test]
 	async fn test_consumer_chain() {
+		// Arrange
 		let mut chain = ConsumerChain::new();
 		chain.add_consumer(Box::new(EchoConsumer::with_prefix("Consumer1".to_string())));
 
@@ -675,6 +905,7 @@ mod tests {
 		let conn = Arc::new(WebSocketConnection::new("test".to_string(), tx));
 		let mut context = ConsumerContext::new(conn);
 
+		// Act & Assert
 		assert!(chain.on_connect(&mut context).await.is_ok());
 	}
 }

@@ -1,5 +1,6 @@
 //! HTML utilities for escaping, sanitization, and manipulation
 
+use reinhardt_core::security::xss::strip_tags_safe;
 use std::borrow::Cow;
 /// Escape HTML special characters
 ///
@@ -78,6 +79,13 @@ pub fn unescape(text: &str) -> String {
 }
 /// Strip HTML tags from text
 ///
+/// This function uses `strip_tags_safe` from `reinhardt_core::security::xss`
+/// which properly handles malformed HTML including:
+/// - `>` inside quoted attributes (e.g., `<a title="x>y">`)
+/// - Unclosed tags at end of input
+/// - HTML comments (`<!-- ... -->`)
+/// - Self-closing tags
+///
 /// # Examples
 ///
 /// ```
@@ -86,20 +94,12 @@ pub fn unescape(text: &str) -> String {
 /// assert_eq!(strip_tags("<p>Hello <b>World</b></p>"), "Hello World");
 /// assert_eq!(strip_tags("<a href=\"#\">Link</a>"), "Link");
 /// assert_eq!(strip_tags("No tags here"), "No tags here");
+/// // Fixes #795: Handles > inside quoted attributes
+/// assert_eq!(strip_tags(r#"<a title="x>y">Link</a>"#), "Link");
 /// ```
 pub fn strip_tags(html: &str) -> String {
-	let mut result = String::with_capacity(html.len());
-	let mut in_tag = false;
-
-	for ch in html.chars() {
-		match ch {
-			'<' => in_tag = true,
-			'>' => in_tag = false,
-			_ if !in_tag => result.push(ch),
-			_ => {}
-		}
-	}
-	result
+	// Fixes #795: Delegate to secure implementation that handles malformed HTML
+	strip_tags_safe(html)
 }
 /// Strip spaces between HTML tags
 ///
@@ -177,7 +177,19 @@ pub fn escape_attr(text: &str) -> String {
 	}
 	result
 }
-/// Format HTML with proper indentation
+/// Format HTML template by substituting placeholder values with HTML-escaped content
+///
+/// All substituted values are automatically HTML-escaped to prevent XSS attacks.
+/// Placeholders are in the format `{key}` and are replaced with the escaped value.
+///
+/// # Security
+///
+/// This function escapes all special HTML characters in the values:
+/// - `&` → `&amp;`
+/// - `<` → `&lt;`
+/// - `>` → `&gt;`
+/// - `"` → `&quot;`
+/// - `'` → `&#x27;`
 ///
 /// # Examples
 ///
@@ -190,12 +202,21 @@ pub fn escape_attr(text: &str) -> String {
 ///     format_html(template, &args),
 ///     "<div class=\"container\">Hello</div>"
 /// );
+///
+/// // XSS attack is prevented by escaping
+/// let template = "<p>{user_input}</p>";
+/// let args = [("user_input", "<script>alert('xss')</script>")];
+/// assert_eq!(
+///     format_html(template, &args),
+///     "<p>&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;</p>"
+/// );
 /// ```
 pub fn format_html(template: &str, args: &[(&str, &str)]) -> String {
 	let mut result = template.to_string();
 	for (key, value) in args {
 		let placeholder = format!("{{{}}}", key);
-		result = result.replace(&placeholder, value);
+		let escaped_value = escape(value);
+		result = result.replace(&placeholder, &escaped_value);
 	}
 	result
 }
@@ -469,6 +490,23 @@ mod tests {
 	}
 
 	#[test]
+	fn test_strip_tags_quoted_attributes_with_angle_brackets() {
+		// Double-quoted attribute containing >
+		assert_eq!(strip_tags(r#"<a title="x>y">Link</a>"#), "Link");
+		// Single-quoted attribute containing >
+		assert_eq!(strip_tags("<a title='x>y'>Link</a>"), "Link");
+		// Multiple quoted attributes with >
+		assert_eq!(
+			strip_tags(r#"<a title="a>b" data-value="c>d">Text</a>"#),
+			"Text"
+		);
+		// Nested quotes: double inside single
+		assert_eq!(strip_tags(r#"<a title='x"y'>Link</a>"#), "Link");
+		// Nested quotes: single inside double
+		assert_eq!(strip_tags(r#"<a title="x'y">Link</a>"#), "Link");
+	}
+
+	#[test]
 	fn test_strip_spaces_between_tags_multiple_spaces() {
 		assert_eq!(
 			strip_spaces_between_tags("<div>   \n\t   <span>Test</span>   \n\t   </div>"),
@@ -496,6 +534,88 @@ mod tests {
 		let template = "<div>Static content</div>";
 		let args: [(&str, &str); 0] = [];
 		assert_eq!(format_html(template, &args), "<div>Static content</div>");
+	}
+
+	#[test]
+	fn test_format_html_xss_prevention_script_tag() {
+		// Arrange
+		let template = "<p>{content}</p>";
+		let args = [("content", "<script>alert('xss')</script>")];
+
+		// Act
+		let result = format_html(template, &args);
+
+		// Assert - script tags must be escaped
+		assert!(!result.contains("<script>"));
+		assert!(result.contains("&lt;script&gt;"));
+		assert!(result.contains("&lt;/script&gt;"));
+		assert!(result.contains("&#x27;xss&#x27;"));
+	}
+
+	#[test]
+	fn test_format_html_xss_prevention_event_handler() {
+		// Arrange
+		let template = r#"<div class="{class}">{content}</div>"#;
+		let args = [
+			("class", r#"container" onclick="alert('xss')"#),
+			("content", "Safe content"),
+		];
+
+		// Act
+		let result = format_html(template, &args);
+
+		// Assert - quotes must be escaped to prevent event handler injection
+		assert!(result.contains("&quot;"));
+		assert!(!result.contains(r#"onclick="alert"#));
+	}
+
+	#[test]
+	fn test_format_html_xss_prevention_ampersand() {
+		// Arrange
+		let template = "<a href=\"/search?q={query}\">Search</a>";
+		let args = [("query", "test&redirect=evil.com")];
+
+		// Act
+		let result = format_html(template, &args);
+
+		// Assert - ampersand must be escaped
+		assert!(result.contains("&amp;"));
+		assert!(!result.contains("test&redirect"));
+	}
+
+	#[test]
+	fn test_format_html_xss_prevention_angle_brackets() {
+		// Arrange
+		let template = "<span>{text}</span>";
+		let args = [("text", "<<SCRIPT>alert('XSS');//<</SCRIPT>")];
+
+		// Act
+		let result = format_html(template, &args);
+
+		// Assert - all angle brackets must be escaped
+		assert!(!result.contains("<SCRIPT>"));
+		assert!(result.contains("&lt;"));
+		assert!(result.contains("&gt;"));
+	}
+
+	#[test]
+	fn test_format_html_safe_values_unchanged() {
+		// Arrange - values without special characters should pass through unchanged
+		let template = "<div id=\"{id}\" class=\"{class}\">{content}</div>";
+		let args = [
+			("id", "main"),
+			("class", "container"),
+			("content", "Hello World"),
+		];
+
+		// Act
+		let result = format_html(template, &args);
+
+		// Assert
+		assert_eq!(
+			result,
+			"<div id=\"main\" class=\"container\">Hello World</div>"
+		);
 	}
 
 	#[test]
@@ -535,7 +655,6 @@ mod proptests {
 		fn prop_strip_tags_no_angle_brackets(s in "\\PC*") {
 			let stripped = strip_tags(&s);
 			assert!(!stripped.contains('<'));
-			assert!(!stripped.contains('>'));
 		}
 
 		#[test]

@@ -21,13 +21,6 @@ retries = 2
 filter = 'test(integration)'
 threads-required = 1
 
-# Database tests in examples must run serially due to global state
-# cargo-nextest runs tests in separate processes, so serial_test crate doesn't work
-# Instead, we force these tests to run one at a time via nextest configuration
-[[profile.default.overrides]]
-filter = 'binary(examples-database-integration) & test(test_)'
-threads-required = 1
-
 # Views tests must run serially to prevent connection pool exhaustion
 # Each test spawns independent PostgreSQL containers
 [[profile.default.overrides]]
@@ -58,6 +51,17 @@ threads-required = 1
 [[profile.default.overrides]]
 filter = 'test(database_integration)'
 threads-required = 1
+
+# DML integration tests require exclusive execution
+# Each test spawns independent PostgreSQL containers with limited connection pools
+# With test-threads=2 and threads-required=1, two tests could run in parallel,
+# causing Docker resource contention and PoolTimedOut errors on CI runners
+# Setting threads-required=2 ensures exclusive execution (consumes all thread slots)
+# Note: Cargo auto-detects top-level .rs files as separate test binaries,
+# so we need to match all DML-related binaries (insert_*, delete_*, update_*, select_*)
+[[profile.default.overrides]]
+filter = 'binary(/(dml|insert_|delete_|update_|select_)/)'
+threads-required = 2
 
 # Note: trybuild UI tests are now separated into a dedicated profile
 # Use `cargo make ui-test` to run UI tests with the ui-test profile

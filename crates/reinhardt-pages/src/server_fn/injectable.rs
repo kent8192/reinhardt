@@ -12,6 +12,7 @@ use std::sync::Arc;
 ///
 /// This allows server functions to access the HTTP request via dependency injection
 /// rather than receiving it as a direct parameter.
+#[derive(Clone)]
 pub struct ServerFnRequest(pub Arc<Request>);
 
 impl ServerFnRequest {

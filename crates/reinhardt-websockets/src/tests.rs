@@ -228,8 +228,7 @@ async fn test_websocket_multiple_clients_with_room() {
 	room.broadcast(Message::text(
 		"Client #1234 says: Hello from 1234".to_string(),
 	))
-	.await
-	.unwrap();
+	.await;
 
 	// Verify broadcast received by all clients
 	let result = timeout(Duration::from_millis(100), async {
@@ -268,8 +267,7 @@ async fn test_websocket_handle_disconnection() {
 
 	// Broadcast disconnect message
 	room.broadcast(Message::text("Client #5678 left the chat".to_string()))
-		.await
-		.unwrap();
+		.await;
 
 	// Verify disconnect message received
 	let msg = rx1.try_recv().unwrap();
@@ -382,7 +380,7 @@ async fn test_broadcast_to_all_rooms() {
 	let broadcast_msg = Message::text("Global announcement".to_string());
 	for room_id in manager.room_ids().await {
 		if let Some(room) = manager.get_room(&room_id).await {
-			room.broadcast(broadcast_msg.clone()).await.unwrap();
+			room.broadcast(broadcast_msg.clone()).await;
 		}
 	}
 

@@ -1,0 +1,49 @@
+[package]
+name = "examples-github-issues"
+version = "0.1.0-alpha.1"
+edition = "2024"
+publish = false
+default-run = "examples-github-issues"
+
+[[bin]]
+name = "examples-github-issues"
+path = "src/bin/manage.rs"
+
+[dependencies]
+reinhardt = { workspace = true, features = [
+	"minimal",        # Core HTTP/Routing/DI/Server
+	"graphql",        # GraphQL support
+	"auth-jwt",       # JWT authentication
+	"client-router",  # Client-side routing support (required for #[routes] macro)
+] }
+clap = { version = "4", features = ["derive"] }
+console = "0.16.1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }
+ctor = "0.6.3"
+# Required for #[model(...)] macro's automatic relationship registration
+linkme = "0.3"
+validator = { version = "0.20.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+inventory = "0.3"
+async-graphql = { version = "7.0", features = ["chrono"] }
+async-stream = "0.3"
+futures-util = "0.3"
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+rstest = "0.26.1"
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
+argon2 = { version = "0.5", features = ["std"] }
+
+# Use reinhardt with test feature (NOT reinhardt-test sub-crate)
+[dev-dependencies.reinhardt]
+workspace = true
+features = ["minimal", "graphql", "auth-jwt", "client-router", "test", "testcontainers"]
+
+[features]
+default = ["client-router"]
+# client-router: Enable client-side routing support (required for #[routes] macro with UnifiedRouter)
+client-router = []

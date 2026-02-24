@@ -23,7 +23,7 @@ use crate::{LazyString, get_active_translation};
 /// let mut ctx = TranslationContext::new("ja", "en-US");
 /// let mut catalog = MessageCatalog::new("ja");
 /// catalog.add_translation("Hello, world!", "こんにちは、世界！");
-/// ctx.add_catalog("ja", catalog);
+/// ctx.add_catalog("ja", catalog).unwrap();
 ///
 /// let _guard = set_active_translation(Arc::new(ctx));
 /// let msg = gettext("Hello, world!");
@@ -53,7 +53,7 @@ pub fn gettext(message: &str) -> String {
 /// let mut ctx = TranslationContext::new("de", "en-US");
 /// let mut catalog = MessageCatalog::new("de");
 /// catalog.add_plural_str("item", "items", vec!["Artikel", "Artikel"]);
-/// ctx.add_catalog("de", catalog);
+/// ctx.add_catalog("de", catalog).unwrap();
 ///
 /// let _guard = set_active_translation(Arc::new(ctx));
 ///
@@ -94,7 +94,7 @@ pub fn ngettext(singular: &str, plural: &str, count: usize) -> String {
 /// let mut catalog = MessageCatalog::new("ja");
 /// catalog.add_context("menu".to_string(), "File".to_string(), "ファイル".to_string());
 /// catalog.add_context("verb".to_string(), "File".to_string(), "提出する".to_string());
-/// ctx.add_catalog("ja", catalog);
+/// ctx.add_catalog("ja", catalog).unwrap();
 ///
 /// let _guard = set_active_translation(Arc::new(ctx));
 ///
@@ -130,7 +130,7 @@ pub fn pgettext(context: &str, message: &str) -> String {
 /// let mut catalog = MessageCatalog::new("es");
 /// catalog.add_context_plural("email", "message", "messages", vec!["mensaje", "mensajes"]);
 /// catalog.add_context_plural("notification", "message", "messages", vec!["notificación", "notificaciones"]);
-/// ctx.add_catalog("es", catalog);
+/// ctx.add_catalog("es", catalog).unwrap();
 ///
 /// let _guard = set_active_translation(Arc::new(ctx));
 ///
@@ -172,7 +172,7 @@ pub fn npgettext(context: &str, singular: &str, plural: &str, count: usize) -> S
 /// let mut ctx = TranslationContext::new("ko", "en-US");
 /// let mut catalog = MessageCatalog::new("ko");
 /// catalog.add_translation("Good morning", "좋은 아침");
-/// ctx.add_catalog("ko", catalog);
+/// ctx.add_catalog("ko", catalog).unwrap();
 ///
 /// let _guard = set_active_translation(Arc::new(ctx));
 ///
@@ -197,15 +197,16 @@ pub fn gettext_lazy(message: &str) -> LazyString {
 /// let lazy_msg = ngettext_lazy("apple", "apples", 7);
 ///
 /// // Set up catalog with plural forms
+/// // Polish requires 3 forms: form 0 (n==1), form 1 (n%10 in 2..4), form 2 (other)
 /// let mut ctx = TranslationContext::new("pl", "en-US");
 /// let mut catalog = MessageCatalog::new("pl");
-/// catalog.add_plural_str("apple", "apples", vec!["jabłko", "jabłka"]);
-/// ctx.add_catalog("pl", catalog);
+/// catalog.add_plural_str("apple", "apples", vec!["jabłko", "jabłka", "jabłek"]);
+/// ctx.add_catalog("pl", catalog).unwrap();
 ///
 /// let _guard = set_active_translation(Arc::new(ctx));
 ///
 /// // Translation happens when evaluated
-/// assert_eq!(lazy_msg.to_string(), "jabłka");
+/// assert_eq!(lazy_msg.to_string(), "jabłek");
 /// ```
 pub fn ngettext_lazy(singular: &str, plural: &str, count: usize) -> LazyString {
 	LazyString::new_plural(singular.to_string(), plural.to_string(), count, None)

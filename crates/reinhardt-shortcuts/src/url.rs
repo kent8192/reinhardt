@@ -118,15 +118,18 @@ impl AsRef<str> for Url {
 	}
 }
 
-// Skip validation for these conversions (for backward compatibility)
-impl From<String> for Url {
-	fn from(s: String) -> Self {
-		Self(s)
+impl TryFrom<String> for Url {
+	type Error = UrlError;
+
+	fn try_from(s: String) -> Result<Self, Self::Error> {
+		Self::new(s)
 	}
 }
 
-impl From<&str> for Url {
-	fn from(s: &str) -> Self {
-		Self(s.to_string())
+impl TryFrom<&str> for Url {
+	type Error = UrlError;
+
+	fn try_from(s: &str) -> Result<Self, Self::Error> {
+		Self::new(s)
 	}
 }

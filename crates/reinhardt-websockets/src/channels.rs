@@ -26,6 +26,8 @@ pub enum ChannelError {
 	GroupNotFound(String),
 	#[error("Serialization error: {0}")]
 	SerializationError(String),
+	#[error("Authentication required for Redis connection")]
+	AuthenticationRequired,
 }
 
 /// Channel message for distributed communication

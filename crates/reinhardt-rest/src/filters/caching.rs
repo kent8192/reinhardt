@@ -344,7 +344,7 @@ mod tests {
 
 		assert_eq!(result1, result2);
 		assert!(result1.contains("WHERE"));
-		assert!(result1.contains("title LIKE '%rust%'"));
+		assert!(result1.contains("`title` LIKE '%rust%'"));
 	}
 
 	#[tokio::test]

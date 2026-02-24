@@ -215,6 +215,7 @@ pub struct DelayedHandler {
 #[async_trait::async_trait]
 impl Handler for DelayedHandler {
 	async fn handle(&self, _request: Request) -> reinhardt_core::exception::Result<Response> {
+		tokio::time::sleep(std::time::Duration::from_millis(self.delay_ms)).await;
 		Ok(Response::ok().with_body(self.response_body.clone()))
 	}
 }
@@ -313,5 +314,64 @@ impl Handler for RouterHandler {
 			"/notfound" => Ok(Response::not_found().with_body("Not Found")),
 			_ => Ok(Response::not_found().with_body("Unknown path")),
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	fn test_request() -> Request {
+		Request::builder().uri("/test").build().unwrap()
+	}
+
+	#[rstest]
+	#[case(100)]
+	#[case(200)]
+	#[tokio::test]
+	async fn delayed_handler_actually_delays(#[case] delay_ms: u64) {
+		// Arrange
+		let handler = DelayedHandler {
+			delay_ms,
+			response_body: "delayed".to_string(),
+		};
+
+		// Act
+		let start = tokio::time::Instant::now();
+		let response = handler.handle(test_request()).await.unwrap();
+		let elapsed = start.elapsed();
+
+		// Assert
+		assert!(
+			elapsed.as_millis() >= u128::from(delay_ms),
+			"Expected at least {}ms delay, but elapsed was {}ms",
+			delay_ms,
+			elapsed.as_millis()
+		);
+		assert_eq!(String::from_utf8_lossy(&response.body), "delayed");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn delayed_handler_zero_delay_returns_immediately() {
+		// Arrange
+		let handler = DelayedHandler {
+			delay_ms: 0,
+			response_body: "instant".to_string(),
+		};
+
+		// Act
+		let start = tokio::time::Instant::now();
+		let response = handler.handle(test_request()).await.unwrap();
+		let elapsed = start.elapsed();
+
+		// Assert
+		assert!(
+			elapsed.as_millis() < 50,
+			"Zero delay should return almost immediately, but took {}ms",
+			elapsed.as_millis()
+		);
+		assert_eq!(String::from_utf8_lossy(&response.body), "instant");
 	}
 }

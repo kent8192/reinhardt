@@ -5,47 +5,47 @@ use reinhardt_macros::installed_apps;
 #[test]
 fn test_installed_apps_basic() {
 	installed_apps! {
-		auth: "reinhardt.contrib.auth",
-		contenttypes: "reinhardt.contrib.contenttypes",
+		auth: "myproject.auth",
+		contenttypes: "myproject.contenttypes",
 	}
 
 	let apps = InstalledApp::all_apps();
 	assert_eq!(apps.len(), 2);
-	assert!(apps.contains(&"reinhardt.contrib.auth".to_string()));
-	assert!(apps.contains(&"reinhardt.contrib.contenttypes".to_string()));
+	assert!(apps.contains(&"myproject.auth".to_string()));
+	assert!(apps.contains(&"myproject.contenttypes".to_string()));
 }
 
 #[test]
 fn test_installed_apps_enum() {
 	installed_apps! {
-		auth: "reinhardt.contrib.auth",
-		sessions: "reinhardt.contrib.sessions",
+		auth: "myproject.auth",
+		sessions: "myproject.sessions",
 	}
 
-	assert_eq!(InstalledApp::auth.path(), "reinhardt.contrib.auth");
-	assert_eq!(InstalledApp::sessions.path(), "reinhardt.contrib.sessions");
+	assert_eq!(InstalledApp::auth.path(), "myproject.auth");
+	assert_eq!(InstalledApp::sessions.path(), "myproject.sessions");
 }
 
 #[test]
 fn test_installed_apps_display() {
 	installed_apps! {
-		auth: "reinhardt.contrib.auth",
+		auth: "myproject.auth",
 	}
 
 	let app = InstalledApp::auth;
-	assert_eq!(format!("{}", app), "reinhardt.contrib.auth");
+	assert_eq!(format!("{}", app), "myproject.auth");
 }
 
 #[test]
 fn test_installed_apps_from_str() {
 	installed_apps! {
-		auth: "reinhardt.contrib.auth",
-		sessions: "reinhardt.contrib.sessions",
+		auth: "myproject.auth",
+		sessions: "myproject.sessions",
 	}
 
 	use std::str::FromStr;
 
-	let auth = InstalledApp::from_str("reinhardt.contrib.auth");
+	let auth = InstalledApp::from_str("myproject.auth");
 	assert!(auth.is_ok());
 	assert_eq!(auth.unwrap(), InstalledApp::auth);
 
@@ -56,7 +56,7 @@ fn test_installed_apps_from_str() {
 #[test]
 fn test_installed_apps_with_user_apps() {
 	installed_apps! {
-		auth: "reinhardt.contrib.auth",
+		auth: "myproject.auth",
 		myapp: "apps.myapp",
 		another: "custom.another",
 	}
@@ -70,7 +70,7 @@ fn test_installed_apps_with_user_apps() {
 #[test]
 fn test_installed_apps_single_app() {
 	installed_apps! {
-		auth: "reinhardt.contrib.auth",
+		auth: "myproject.auth",
 	}
 
 	let apps = InstalledApp::all_apps();
@@ -80,8 +80,8 @@ fn test_installed_apps_single_app() {
 #[test]
 fn test_installed_apps_equality() {
 	installed_apps! {
-		auth: "reinhardt.contrib.auth",
-		sessions: "reinhardt.contrib.sessions",
+		auth: "myproject.auth",
+		sessions: "myproject.sessions",
 	}
 
 	let app1 = InstalledApp::auth;
@@ -95,7 +95,7 @@ fn test_installed_apps_equality() {
 #[test]
 fn test_installed_apps_debug() {
 	installed_apps! {
-		auth: "reinhardt.contrib.auth",
+		auth: "myproject.auth",
 	}
 
 	let app = InstalledApp::auth;

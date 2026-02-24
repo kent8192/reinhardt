@@ -474,15 +474,17 @@ pub async fn flush_effects() {
 ///
 /// This is useful for waiting for visual updates to be applied.
 pub async fn request_animation_frame() {
-	let window = get_window().expect("Window should be available");
+	let window = get_window().expect("window should be available in WASM environment");
 
 	let promise = js_sys::Promise::new(&mut |resolve, _reject| {
 		let closure = Closure::once_into_js(move || {
-			resolve.call0(&JsValue::UNDEFINED).unwrap();
+			resolve
+				.call0(&JsValue::UNDEFINED)
+				.expect("Promise resolve callback should not fail");
 		});
 		window
 			.request_animation_frame(closure.unchecked_ref())
-			.unwrap();
+			.expect("requestAnimationFrame should be available in browser environment");
 	});
 
 	let _ = JsFuture::from(promise).await;
@@ -619,6 +621,7 @@ impl ElementWaitExt for Element {
 			options: options.unwrap_or_default(),
 			started: false,
 			start_time: 0.0,
+			pending_closure: None,
 		}
 	}
 
@@ -628,16 +631,21 @@ impl ElementWaitExt for Element {
 			options: options.unwrap_or_default(),
 			started: false,
 			start_time: 0.0,
+			pending_closure: None,
 		}
 	}
 }
 
 /// Future for waiting until an element becomes visible.
+// Fixes #877
 pub struct WaitForVisibleFuture {
 	element: Element,
 	options: WaitOptions,
 	started: bool,
 	start_time: f64,
+	/// Stored closure to prevent memory leak from `Closure::forget()`.
+	/// The closure is kept alive until the timeout fires or the future completes.
+	pending_closure: Option<Closure<dyn FnMut()>>,
 }
 
 impl Future for WaitForVisibleFuture {
@@ -676,18 +684,24 @@ impl Future for WaitForVisibleFuture {
 			);
 		}
 
-		closure.forget(); // Prevent dropping the closure
+		// Store closure to keep it alive until the timeout fires,
+		// instead of leaking it with `forget()`.
+		self.pending_closure = Some(closure);
 
 		Poll::Pending
 	}
 }
 
 /// Future for waiting until an element becomes hidden.
+// Fixes #877
 pub struct WaitForHiddenFuture {
 	element: Element,
 	options: WaitOptions,
 	started: bool,
 	start_time: f64,
+	/// Stored closure to prevent memory leak from `Closure::forget()`.
+	/// The closure is kept alive until the timeout fires or the future completes.
+	pending_closure: Option<Closure<dyn FnMut()>>,
 }
 
 impl Future for WaitForHiddenFuture {
@@ -726,7 +740,9 @@ impl Future for WaitForHiddenFuture {
 			);
 		}
 
-		closure.forget();
+		// Store closure to keep it alive until the timeout fires,
+		// instead of leaking it with `forget()`.
+		self.pending_closure = Some(closure);
 
 		Poll::Pending
 	}

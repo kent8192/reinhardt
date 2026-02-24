@@ -126,7 +126,7 @@ pub use task::{
 };
 pub use webhook::{
 	HttpWebhookSender, RetryConfig, TaskStatus as WebhookTaskStatus, WebhookConfig, WebhookError,
-	WebhookEvent, WebhookSender,
+	WebhookEvent, WebhookSender, is_blocked_ip, validate_resolved_ips, validate_webhook_url,
 };
 pub use worker::{Worker, WorkerConfig};
 

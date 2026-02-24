@@ -1,0 +1,11 @@
+# Docker images for Intra-Crate Integration Tests
+# These images are cached to avoid Docker Hub rate limits
+
+# Databases
+postgres:17-alpine
+
+# Cache/Key-Value Stores
+redis:7-alpine
+
+# Message Queues
+rabbitmq:3-management-alpine

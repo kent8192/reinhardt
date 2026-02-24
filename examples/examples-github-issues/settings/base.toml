@@ -1,0 +1,13 @@
+# Base settings
+debug = false
+secret_key = "CHANGE_THIS_IN_PRODUCTION_MUST_BE_KEPT_SECRET"
+language_code = "en-us"
+time_zone = "UTC"
+
+[database]
+engine = "postgresql"
+host = "localhost"
+port = 5432
+name = "examples-github-issues_db"
+user = "postgres"
+password = "CHANGE_THIS"

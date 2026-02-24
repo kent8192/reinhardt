@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-admin"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.17"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -10,7 +10,7 @@ publish = true
 
 [dependencies]
 reinhardt-apps = { workspace = true }
-reinhardt-auth = { workspace = true }
+reinhardt-auth = { workspace = true, features = ["argon2-hasher", "params"] }
 reinhardt-core = { workspace = true, features = ["exception"]}
 reinhardt-db = { workspace = true, features = ["orm"] }
 reinhardt-di = { workspace = true }
@@ -27,11 +27,13 @@ anyhow = { workspace = true }
 parking_lot = { workspace = true }
 dashmap = "6.1.0"
 chrono = { workspace = true }
-sea-query = { workspace = true }
+reinhardt-query = { workspace = true }
 rayon = "1.10"
 csv = "1.3"
 uuid = { workspace = true }
 base64 = { workspace = true }
+getrandom = { workspace = true }
+tracing = { workspace = true }
 inventory = { workspace = true }
 reinhardt-pages = { workspace = true }
 wasm-bindgen = "0.2.106"
@@ -79,6 +81,7 @@ console_error_panic_hook = ["dep:console_error_panic_hook"]
 reinhardt-db = { workspace = true }
 tokio-test = { workspace = true }
 rstest = { workspace = true }
-reinhardt-test = { workspace = true, features = ["testcontainers", "admin"] }
 wasm-bindgen-test = "0.3.56"
 sqlx = { workspace = true, features = ["postgres", "runtime-tokio-native-tls"] }
+# Pin to avoid build failure in native-tls 0.2.17 (non-exhaustive pattern in openssl.rs)
+native-tls = { workspace = true }

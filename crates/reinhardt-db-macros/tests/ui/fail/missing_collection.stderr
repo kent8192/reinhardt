@@ -1,0 +1,7 @@
+error: missing required attribute `collection`
+ --> tests/ui/fail/missing_collection.rs:3:1
+  |
+3 | #[document(backend = "mongodb")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `document` (in Nightly builds, run with -Z macro-backtrace for more info)

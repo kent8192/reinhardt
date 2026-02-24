@@ -240,10 +240,10 @@ impl Default for GenericForeignKeyField {
 /// that GenericForeignKey references point to existing database records.
 #[cfg(feature = "database")]
 pub mod constraints {
-	use super::super::persistence::{
+	use super::*;
+	use crate::contenttypes::persistence::{
 		ContentTypePersistence, ContentTypePersistenceBackend, PersistenceError,
 	};
-	use super::*;
 
 	/// Trait for validating GenericForeignKey constraints
 	#[async_trait::async_trait]

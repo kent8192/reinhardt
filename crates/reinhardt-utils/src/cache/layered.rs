@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::RwLock;
+use tokio::task::AbortHandle;
 
 /// Active sampler configuration and state
 struct ActiveSampler {
@@ -74,6 +75,8 @@ pub struct LayeredCacheStore {
 	ttl_index: Arc<RwLock<TtlIndex>>,
 	/// Active sampler state (Layer 2)
 	active_sampler: ActiveSampler,
+	/// Handle for cancelling the background cleanup task
+	cleanup_handle: Arc<std::sync::Mutex<Option<AbortHandle>>>,
 }
 
 impl LayeredCacheStore {
@@ -83,6 +86,7 @@ impl LayeredCacheStore {
 			store: Arc::new(RwLock::new(HashMap::new())),
 			ttl_index: Arc::new(RwLock::new(HashMap::new())),
 			active_sampler: ActiveSampler::default(),
+			cleanup_handle: Arc::new(std::sync::Mutex::new(None)),
 		}
 	}
 
@@ -109,6 +113,7 @@ impl LayeredCacheStore {
 				sample_size,
 				threshold,
 			},
+			cleanup_handle: Arc::new(std::sync::Mutex::new(None)),
 		}
 	}
 
@@ -285,50 +290,53 @@ impl LayeredCacheStore {
 	/// # }
 	/// ```
 	pub async fn cleanup_active_sampling(&self) {
-		let keys = {
-			let store = self.store.read().await;
-			store.keys().cloned().collect::<Vec<_>>()
-		};
+		/// Maximum number of sampling rounds to prevent runaway iteration
+		const MAX_ROUNDS: usize = 100;
 
-		if keys.is_empty() {
-			return;
-		}
+		for _ in 0..MAX_ROUNDS {
+			let keys = {
+				let store = self.store.read().await;
+				store.keys().cloned().collect::<Vec<_>>()
+			};
 
-		// Sample random keys
-		let sample_size = self.active_sampler.sample_size.min(keys.len());
-		let sample: Vec<_> = {
-			let mut rng = rand::rng();
-			keys.choose_multiple(&mut rng, sample_size)
-				.cloned()
-				.collect()
-		};
+			if keys.is_empty() {
+				return;
+			}
 
-		// Count expired entries in sample
-		let mut expired_keys = Vec::new();
-		{
-			let store = self.store.read().await;
-			for key in &sample {
-				if let Some(entry) = store.get::<String>(key)
-					&& entry.is_expired()
-				{
-					expired_keys.push(key.clone());
+			// Sample random keys
+			let sample_size = self.active_sampler.sample_size.min(keys.len());
+			let sample: Vec<_> = {
+				let mut rng = rand::rng();
+				keys.choose_multiple(&mut rng, sample_size)
+					.cloned()
+					.collect()
+			};
+
+			// Count expired entries in sample
+			let mut expired_keys = Vec::new();
+			{
+				let store = self.store.read().await;
+				for key in &sample {
+					if let Some(entry) = store.get::<String>(key)
+						&& entry.is_expired()
+					{
+						expired_keys.push(key.clone());
+					}
 				}
 			}
-		}
 
-		let expired_count = expired_keys.len();
-		let expired_ratio = expired_count as f32 / sample.len() as f32;
+			let expired_ratio = expired_keys.len() as f32 / sample.len() as f32;
 
-		// If more than threshold are expired, delete them and repeat
-		if expired_ratio > self.active_sampler.threshold {
-			let mut store = self.store.write().await;
-			for key in expired_keys {
-				store.remove(&key);
+			if expired_ratio > self.active_sampler.threshold {
+				// Delete expired keys and continue to next sampling round
+				let mut store = self.store.write().await;
+				for key in expired_keys {
+					store.remove(&key);
+				}
+			} else {
+				// Below threshold, stop sampling
+				return;
 			}
-
-			// Recursively sample again if threshold exceeded
-			drop(store); // Release lock before recursion
-			Box::pin(self.cleanup_active_sampling()).await;
 		}
 	}
 
@@ -436,14 +444,41 @@ impl LayeredCacheStore {
 	where
 		Self: Clone,
 	{
+		let mut handle_guard = self
+			.cleanup_handle
+			.lock()
+			.unwrap_or_else(|e| e.into_inner());
+
+		// Abort any previously running cleanup task to prevent duplicates
+		if let Some(existing) = handle_guard.take() {
+			existing.abort();
+		}
+
 		let store = self.clone();
-		tokio::spawn(async move {
+		let abort_handle = tokio::spawn(async move {
 			let mut interval_timer = tokio::time::interval(interval);
 			loop {
 				interval_timer.tick().await;
 				store.cleanup().await;
 			}
-		});
+		})
+		.abort_handle();
+
+		*handle_guard = Some(abort_handle);
+	}
+
+	/// Stop the background auto-cleanup task if one is running.
+	///
+	/// After calling this method, no further automatic cleanup will occur
+	/// until `start_auto_cleanup` is called again.
+	pub fn stop_auto_cleanup(&self) {
+		let mut handle_guard = self
+			.cleanup_handle
+			.lock()
+			.unwrap_or_else(|e| e.into_inner());
+		if let Some(handle) = handle_guard.take() {
+			handle.abort();
+		}
 	}
 }
 
@@ -456,6 +491,7 @@ impl Clone for LayeredCacheStore {
 				sample_size: self.active_sampler.sample_size,
 				threshold: self.active_sampler.threshold,
 			},
+			cleanup_handle: Arc::clone(&self.cleanup_handle),
 		}
 	}
 }
@@ -470,6 +506,26 @@ impl Default for LayeredCacheStore {
 mod tests {
 	use super::*;
 	use std::time::Duration;
+
+	/// Polls a condition until it returns true or timeout is reached.
+	async fn poll_until<F, Fut>(
+		timeout: std::time::Duration,
+		interval: std::time::Duration,
+		mut condition: F,
+	) -> std::result::Result<(), String>
+	where
+		F: FnMut() -> Fut,
+		Fut: std::future::Future<Output = bool>,
+	{
+		let start = std::time::Instant::now();
+		while start.elapsed() < timeout {
+			if condition().await {
+				return Ok(());
+			}
+			tokio::time::sleep(interval).await;
+		}
+		Err(format!("Timeout after {:?} waiting for condition", timeout))
+	}
 
 	#[tokio::test]
 	async fn test_passive_expiration() {
@@ -488,7 +544,7 @@ mod tests {
 		assert!(store.get("key1").await.is_some());
 
 		// Poll until key expires and is deleted on access (passive expiration)
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(150),
 			Duration::from_millis(10),
 			|| async { store.get("key1").await.is_none() },
@@ -519,7 +575,7 @@ mod tests {
 		assert_eq!(store.len().await, 50);
 
 		// Poll until keys expire
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(150),
 			Duration::from_millis(10),
 			|| async {
@@ -558,7 +614,7 @@ mod tests {
 		}
 
 		// Poll until expired keys actually expire
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(150),
 			Duration::from_millis(10),
 			|| async { store.get("expired0").await.is_none() },
@@ -596,7 +652,7 @@ mod tests {
 		assert_eq!(store.len().await, 100);
 
 		// Poll until keys expire (1 second TTL + buffer)
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_secs(2),
 			Duration::from_millis(100),
 			|| async { store.get("key0").await.is_none() },

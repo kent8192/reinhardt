@@ -528,16 +528,16 @@ impl PostgresTableCreator {
 		&self.container
 	}
 
-	/// Insert data into a table using SeaQuery
+	/// Insert data into a table using reinhardt-query
 	///
 	/// This method provides a convenient way to insert test data using type-safe
-	/// SeaQuery builders instead of raw SQL strings.
+	/// reinhardt-query builders instead of raw SQL strings.
 	///
 	/// # Examples
 	///
 	/// ```rust,no_run
 	/// # use reinhardt_test::fixtures::*;
-	/// # use sea_query::Value;
+	/// # use reinhardt_query::prelude::Value;
 	/// # async fn example(creator: &PostgresTableCreator) {
 	/// creator.insert_data(
 	///     "users",
@@ -545,8 +545,8 @@ impl PostgresTableCreator {
 	///     vec![
 	///         vec![
 	///             Value::Int(Some(1)),
-	///             Value::String(Some("Alice".to_string())),
-	///             Value::String(Some("alice@example.com".to_string())),
+	///             Value::String(Some(Box::new("Alice".to_string()))),
+	///             Value::String(Some(Box::new("alice@example.com".to_string()))),
 	///         ],
 	///     ],
 	/// ).await.unwrap();
@@ -556,9 +556,9 @@ impl PostgresTableCreator {
 		&self,
 		table: &str,
 		columns: Vec<&str>,
-		values: Vec<Vec<sea_query::Value>>,
+		values: Vec<Vec<reinhardt_query::prelude::Value>>,
 	) -> Result<()> {
-		use sea_query::{Alias, PostgresQueryBuilder, Query};
+		use reinhardt_query::prelude::{Alias, PostgresQueryBuilder, Query, QueryStatementBuilder};
 
 		for row_values in values {
 			let mut query = Query::insert();
@@ -566,12 +566,10 @@ impl PostgresTableCreator {
 				.into_table(Alias::new(table))
 				.columns(columns.iter().map(|&c| Alias::new(c)));
 
-			let values_expr: Vec<sea_query::SimpleExpr> =
-				row_values.into_iter().map(|v| v.into()).collect();
-			query.values_panic(values_expr);
+			query.values_panic(row_values);
 
-			// Build SQL string without sqlx bindings (SeaQuery 1.0.0-rc)
-			let sql = query.to_string(PostgresQueryBuilder);
+			// Build SQL string
+			let sql = query.to_string(PostgresQueryBuilder::new());
 
 			sqlx::query(&sql)
 				.execute(self.pool.as_ref())
@@ -583,7 +581,7 @@ impl PostgresTableCreator {
 
 	/// Execute custom SQL (fallback for complex cases)
 	///
-	/// This method allows executing arbitrary SQL statements when SeaQuery
+	/// This method allows executing arbitrary SQL statements when reinhardt-query
 	/// is insufficient for complex schema operations or PostgreSQL-specific features.
 	///
 	/// # Examples
@@ -727,14 +725,14 @@ impl AdminTableCreator {
 		self.postgres_creator.container()
 	}
 
-	/// Insert data into a table using SeaQuery
+	/// Insert data into a table using reinhardt-query
 	///
 	/// Delegates to the underlying PostgresTableCreator.
 	pub async fn insert_data(
 		&self,
 		table: &str,
 		columns: Vec<&str>,
-		values: Vec<Vec<sea_query::Value>>,
+		values: Vec<Vec<reinhardt_query::prelude::Value>>,
 	) -> Result<()> {
 		self.postgres_creator
 			.insert_data(table, columns, values)

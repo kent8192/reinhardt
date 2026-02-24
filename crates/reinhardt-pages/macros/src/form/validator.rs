@@ -16,7 +16,7 @@ use proc_macro2::Span;
 use std::collections::HashSet;
 use syn::{Error, Result};
 
-use reinhardt_pages_ast::{
+use reinhardt_manouche::core::{
 	ClientValidator, ClientValidatorRule, FormAction, FormCallbacks, FormDerived, FormFieldDef,
 	FormFieldEntry, FormFieldGroup, FormFieldProperty, FormMacro, FormMethod, FormSlots, FormState,
 	FormValidator, FormWatch, IconPosition, TypedChoicesConfig, TypedClientValidator,
@@ -27,6 +27,89 @@ use reinhardt_pages_ast::{
 	TypedFormWatchItem, TypedIcon, TypedIconAttr, TypedIconChild, TypedIconPosition,
 	TypedValidatorRule, TypedWidget, TypedWrapper, TypedWrapperAttr, ValidatorRule,
 };
+
+/// Allowlist of safe HTML tag names for wrapper and icon child elements.
+///
+/// Rejects dangerous tags like `<script>`, `<iframe>`, etc. to prevent XSS attacks.
+///
+/// Fixes #850
+const ALLOWED_CHILD_TAGS: &[&str] = &[
+	"div",
+	"span",
+	"p",
+	"a",
+	"b",
+	"i",
+	"strong",
+	"em",
+	"section",
+	"article",
+	"header",
+	"footer",
+	"nav",
+	"aside",
+	"main",
+	"h1",
+	"h2",
+	"h3",
+	"h4",
+	"h5",
+	"h6",
+	"ul",
+	"ol",
+	"li",
+	"dl",
+	"dt",
+	"dd",
+	"table",
+	"thead",
+	"tbody",
+	"tfoot",
+	"tr",
+	"th",
+	"td",
+	"caption",
+	"figure",
+	"figcaption",
+	"blockquote",
+	"pre",
+	"code",
+	"svg",
+	"path",
+	"circle",
+	"rect",
+	"g",
+	"use",
+	"symbol",
+	"defs",
+	"line",
+	"polyline",
+	"polygon",
+	"text",
+	"tspan",
+];
+
+/// Validates that a tag name is in the allowlist of safe HTML tags.
+///
+/// Returns an error if the tag is not allowed (e.g., `<script>`, `<iframe>`).
+///
+/// Fixes #850
+fn validate_safe_tag(tag: &str, context: &str, span: Span) -> Result<()> {
+	if !ALLOWED_CHILD_TAGS.contains(&tag) {
+		return Err(Error::new(
+			span,
+			format!(
+				"Tag <{}> is not allowed in {}.\n\
+				Only safe HTML tags are permitted: {}.\n\n\
+				Dangerous tags like <script>, <iframe>, <object>, etc. are blocked for security.",
+				tag,
+				context,
+				ALLOWED_CHILD_TAGS.join(", "),
+			),
+		));
+	}
+	Ok(())
+}
 
 /// Validates and transforms the FormMacro AST into a typed AST.
 ///
@@ -81,8 +164,14 @@ pub(super) fn validate(ast: &FormMacro) -> Result<TypedFormMacro> {
 	// Transform client-side validators
 	let client_validators = transform_client_validators(&ast.client_validators, &ast.fields)?;
 
+	// The parser guarantees that `name` is Some after successful parsing.
+	let name = ast
+		.name
+		.clone()
+		.expect("form name must be set after parsing");
+
 	Ok(TypedFormMacro {
-		name: ast.name.clone(),
+		name,
 		action,
 		method,
 		styling,
@@ -335,11 +424,20 @@ fn transform_redirect(redirect: &Option<syn::LitStr>) -> Result<Option<String>> 
 		));
 	}
 
-	// Path must start with / or be a valid URL (http:// or https://)
-	if !path.starts_with('/') && !path.starts_with("http://") && !path.starts_with("https://") {
+	// Reject insecure HTTP URLs - redirect may leak credentials or session tokens
+	if path.starts_with("http://") {
 		return Err(Error::new(
 			redirect.span(),
-			"redirect_on_success path must start with '/' or be a full URL (http:// or https://)",
+			"redirect_on_success rejects insecure HTTP URLs to prevent credential leakage; \
+			 use HTTPS or a relative path instead",
+		));
+	}
+
+	// Path must start with / or be a valid HTTPS URL
+	if !path.starts_with('/') && !path.starts_with("https://") {
+		return Err(Error::new(
+			redirect.span(),
+			"redirect_on_success path must start with '/' or be a full HTTPS URL (https://)",
 		));
 	}
 
@@ -585,6 +683,11 @@ fn extract_display_properties(properties: &[FormFieldProperty]) -> Result<TypedF
 							&& let syn::Lit::Bool(b) = &lit.lit
 						{
 							disabled = b.value;
+						} else {
+							return Err(Error::new(
+								*span,
+								"'disabled' must be a boolean value (true or false), or use as a flag without a value",
+							));
 						}
 					}
 					"readonly" => {
@@ -592,6 +695,11 @@ fn extract_display_properties(properties: &[FormFieldProperty]) -> Result<TypedF
 							&& let syn::Lit::Bool(b) = &lit.lit
 						{
 							readonly = b.value;
+						} else {
+							return Err(Error::new(
+								*span,
+								"'readonly' must be a boolean value (true or false), or use as a flag without a value",
+							));
 						}
 					}
 					"autofocus" => {
@@ -599,6 +707,11 @@ fn extract_display_properties(properties: &[FormFieldProperty]) -> Result<TypedF
 							&& let syn::Lit::Bool(b) = &lit.lit
 						{
 							autofocus = b.value;
+						} else {
+							return Err(Error::new(
+								*span,
+								"'autofocus' must be a boolean value (true or false), or use as a flag without a value",
+							));
 						}
 					}
 					_ => {} // Ignore non-display properties
@@ -749,6 +862,9 @@ fn parse_widget(ident: &syn::Ident) -> Result<TypedWidget> {
 fn extract_wrapper(properties: &[FormFieldProperty]) -> Result<Option<TypedWrapper>> {
 	for prop in properties {
 		if let FormFieldProperty::Wrapper { element, span } = prop {
+			// Validate wrapper tag name against allowlist (Fixes #850)
+			validate_safe_tag(&element.tag.to_string(), "wrapper", *span)?;
+
 			// Transform wrapper attributes
 			let attrs = element
 				.attrs
@@ -848,7 +964,10 @@ fn extract_icon(properties: &[FormFieldProperty]) -> Result<Option<TypedIcon>> {
 }
 
 /// Transforms a single icon child element recursively.
-fn transform_icon_child(child: &reinhardt_pages_ast::IconChild) -> Result<TypedIconChild> {
+fn transform_icon_child(child: &reinhardt_manouche::core::IconChild) -> Result<TypedIconChild> {
+	// Validate icon child tag name against allowlist (Fixes #850)
+	validate_safe_tag(&child.tag.to_string(), "icon child", child.span)?;
+
 	let attrs = child
 		.attrs
 		.iter()
@@ -1061,11 +1180,13 @@ fn transform_validators(
 					span: *span,
 				});
 			}
-			FormValidator::Form { rules: _, span: _ } => {
-				// Form-level validators are not yet supported in TypedFormValidator.
-				// This feature requires design of validation API, error aggregation strategy,
-				// and macro code generation for cross-field validation rules.
-				// See: https://github.com/kent8192/reinhardt-web/issues/24
+			// Fixes #848: emit compile error instead of silently discarding
+			FormValidator::Form { rules: _, span } => {
+				return Err(Error::new(
+					*span,
+					"form-level validators (@form) are not yet supported. \
+					Use field-level validators instead",
+				));
 			}
 		}
 	}
@@ -3430,5 +3551,61 @@ mod tests {
 			status_field.choices_config.as_ref().unwrap().choices_from,
 			"statuses"
 		);
+	}
+
+	#[test]
+	fn test_transform_redirect_rejects_http_url() {
+		let lit = syn::LitStr::new("http://example.com/success", proc_macro2::Span::call_site());
+		let result = transform_redirect(&Some(lit));
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(err.contains("insecure HTTP"));
+	}
+
+	#[test]
+	fn test_transform_redirect_allows_https_url() {
+		let lit = syn::LitStr::new(
+			"https://example.com/success",
+			proc_macro2::Span::call_site(),
+		);
+		let result = transform_redirect(&Some(lit));
+		assert!(result.is_ok());
+		assert_eq!(
+			result.unwrap(),
+			Some("https://example.com/success".to_string())
+		);
+	}
+
+	#[test]
+	fn test_transform_redirect_allows_relative_path() {
+		let lit = syn::LitStr::new("/dashboard", proc_macro2::Span::call_site());
+		let result = transform_redirect(&Some(lit));
+		assert!(result.is_ok());
+		assert_eq!(result.unwrap(), Some("/dashboard".to_string()));
+	}
+
+	#[test]
+	fn test_transform_redirect_rejects_empty() {
+		let lit = syn::LitStr::new("", proc_macro2::Span::call_site());
+		let result = transform_redirect(&Some(lit));
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(err.contains("cannot be empty"));
+	}
+
+	#[test]
+	fn test_transform_redirect_rejects_invalid_scheme() {
+		let lit = syn::LitStr::new("ftp://example.com/file", proc_macro2::Span::call_site());
+		let result = transform_redirect(&Some(lit));
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(err.contains("must start with '/'"));
+	}
+
+	#[test]
+	fn test_transform_redirect_none() {
+		let result = transform_redirect(&None);
+		assert!(result.is_ok());
+		assert_eq!(result.unwrap(), None);
 	}
 }

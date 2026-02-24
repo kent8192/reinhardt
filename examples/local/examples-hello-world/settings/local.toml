@@ -1,5 +1,0 @@
-# Local development settings for examples-hello-world
-# These settings override base.toml for local development
-
-# ローカル開発環境の上書き設定
-debug = true

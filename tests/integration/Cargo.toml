@@ -1,7 +1,7 @@
 [package]
 name = "reinhardt-integration-tests"
 version = "0.1.0-alpha.1"
-edition = "2021"
+edition.workspace = true
 publish = false
 autotests = true
 
@@ -29,7 +29,8 @@ reinhardt-di = { workspace = true, features = ["macros", "params"] }
 reinhardt-middleware = { workspace = true }
 reinhardt-graphql = { workspace = true, features = ["full"] }
 reinhardt-grpc = { workspace = true }
-reinhardt-db = { workspace = true, features = ["backends", "contenttypes", "migrations", "orm"]}
+reinhardt-db = { workspace = true, features = ["backends", "contenttypes", "migrations", "orm", "mongodb", "nosql"] }
+reinhardt-db-macros = { workspace = true }
 reinhardt-websockets = { workspace = true, features = ["redis-channel"] }
 reinhardt-server = { workspace = true, features = ["websocket"] }
 reinhardt-mail = { workspace = true }
@@ -41,22 +42,28 @@ reinhardt-tasks = { workspace = true, features = [
   "rabbitmq-backend",
 ] }
 reinhardt-rest = { workspace = true, features = ["browsable-api", "filters", "metadata", "openapi", "serializers", "throttling", "versioning"]}
+reinhardt-openapi-macros = { workspace = true }
 reinhardt-throttling = { workspace = true }
 reinhardt-shortcuts = { workspace = true, features = ["database"] }
 reinhardt-forms = { workspace = true }
 reinhardt-utils = { workspace = true, features = ["cache", "logging", "staticfiles", "storage", "memcached-backend", "redis-backend", "redis-sentinel"] }
 reinhardt-test = { workspace = true, features = ["testcontainers"] }
+reinhardt-urls = { workspace = true }
+reinhardt-conf = { workspace = true }
+reinhardt-admin = { workspace = true, features = ["core"] }
 reinhardt-pages = { workspace = true }
-reinhardt-commands = { workspace = true, features = ["migrations"] }
+reinhardt-commands = { workspace = true }
 
-# Web framework (using reinhardt-apps)
-tokio = { version = "1.0", features = ["full"] }
-hyper = "1.0"
-http = "1.0"
-async-trait = "0.1"
+# HTTP primitives (used in lib.rs make_request helpers)
+bytes = { workspace = true }
+http = { workspace = true }
+hyper = { workspace = true }
+reqwest = { workspace = true, features = ["multipart"] }
+
+# WebSocket
+tokio-tungstenite = "0.28.0"
 
 # Database
-rust_decimal = { workspace = true }
 sqlx = { workspace = true, features = [
   "any",
   "postgres",
@@ -65,65 +72,62 @@ sqlx = { workspace = true, features = [
   "tls-rustls",
   "chrono",
 ] }
-sea-query = { workspace = true }
+reinhardt-query = { workspace = true, features = ["derive"] }
 
-# HTTP client for testing
-reqwest = { version = "0.12", features = ["cookies", "http2", "multipart"] }
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
 
 # Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-bytes = "1.0"
+bson = { version = "3.0", features = ["serde"] }
+mongodb = { version = "3.0", features = ["bson-3"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 
-# GraphQL
-async-graphql = "7.0.17"
-async-stream = "0.3"
-futures = "0.3"
-futures-util = "0.3"
+# Template engine
+tera = { workspace = true }
 
-# WebSocket
-tokio-tungstenite = "0.26"
-tokio-stream = "0.1"
+# OpenAPI
+utoipa = { version = "^5.4.0", features = ["url", "uuid", "yaml"] }
 
-# Utilities
-chrono = "0.4"
-uuid = { version = "1.0", features = ["v4"] }
-anyhow = "1.0"
-base64 = "0.22"
-percent-encoding = "2.3"
-unic-langid = "0.9"
-once_cell = "1.20"
-serial_test = "3.2"
-ctor = "0.6.0"
-rstest = "0.26.1"
-scopeguard = "1.2"
-linkme = "0.3"
-paste = "1.0"
-tera = "1.19"
-regex = "1.11"
-
-# TOTP/MFA testing
-data-encoding = "2.6"
-totp-lite = "2.0"
-
-# Cryptographic utilities
-rand = "0.8"
-subtle = "2.5"
-hex = "0.4"
-
-# Testing utilities
-tempfile = "3.14"
+# Testing framework
+rstest = { workspace = true }
+serial_test = { workspace = true }
 testcontainers = { workspace = true }
-testcontainers-modules = { workspace = true, features = ["redis", "postgres"] }
-image = { version = "0.25.9", default-features = false, features = ["png"] }
+testcontainers-modules = { workspace = true }
+proptest = { workspace = true, optional = true }
 
-# Macro runtime requirements
-inventory = "0.3"
-reinhardt-urls = {workspace = true, features = ["proxy"]}
-reinhardt-conf = {workspace = true, features = ["settings"]}
+# Required by #[model] macro
+ctor = { workspace = true }
+
+# Async traits (used in migration_duplicate.rs)
+async-trait = { workspace = true }
+
+# Temp files (used in migration_duplicate.rs)
+tempfile = { workspace = true }
+
+# Additional dependencies required by tests
+async-graphql = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+data-encoding = "2.7"
+futures = { workspace = true }
+futures-util = "0.3"
+hex = "0.4"
+rand = { workspace = true }
+subtle = "2.6"
+totp-lite = "2.0"
+uuid = { workspace = true }
+linkme = { workspace = true }
+inventory = { workspace = true }
+paste = "1.0"
+image = { workspace = true }
+url = { workspace = true }
+rust_decimal = { workspace = true }
+async-stream = "0.3"
+regex = { workspace = true }
 
 [features]
-default = ["postgres", "sqlite", "caching", "hot-reload"]
+default = ["postgres", "sqlite", "caching", "hot-reload", "dynamic-redis"]
 testcontainers = []
 postgres = ["reinhardt-db/postgres"]
 sqlite = ["reinhardt-db/sqlite"]
@@ -131,19 +135,10 @@ caching = ["reinhardt-conf/caching"]
 jwt = []
 argon2-hasher = []
 hot-reload = ["reinhardt-conf/hot-reload"]
+dynamic-redis = ["reinhardt-conf/dynamic-redis"]
 redis-backend = ["reinhardt-tasks/redis-backend"]
 rabbitmq-backend = ["reinhardt-tasks/rabbitmq-backend"]
 websocket = ["reinhardt-server/websocket"]
 graphql = ["reinhardt-server/graphql"]
 msgpack = ["reinhardt-pages/msgpack"]
-proptest = []
-
-[dev-dependencies]
-# Test utilities
-tokio-test = "0.4"
-trybuild = { workspace = true }
-url = { workspace = true }
-proptest = { workspace = true }
-arbitrary = { workspace = true }
-assert-json-diff = { workspace = true }
-predicates = { workspace = true }
+proptest = ["dep:proptest"]

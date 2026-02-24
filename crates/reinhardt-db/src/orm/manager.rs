@@ -1,8 +1,9 @@
 use super::connection::{DatabaseBackend, DatabaseConnection};
 use super::{Model, QuerySet};
-use sea_query::{
-	Alias, DeleteStatement, Expr, ExprTrait, InsertStatement, MysqlQueryBuilder,
-	PostgresQueryBuilder, Query, SelectStatement, SqliteQueryBuilder, UpdateStatement, Values,
+use reinhardt_query::prelude::{
+	Alias, ColumnRef, DeleteStatement, Expr, ExprTrait, Func, InsertStatement, MySqlQueryBuilder,
+	PostgresQueryBuilder, Query, QueryBuilder, SelectStatement, SqliteQueryBuilder,
+	UpdateStatement, Values,
 };
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -13,63 +14,46 @@ use uuid::Uuid;
 /// Build SQL with values from an INSERT statement based on database backend
 fn build_insert_sql(stmt: &InsertStatement, backend: DatabaseBackend) -> (String, Values) {
 	match backend {
-		DatabaseBackend::Postgres => stmt.build(PostgresQueryBuilder),
-		DatabaseBackend::MySql => stmt.build(MysqlQueryBuilder),
-		DatabaseBackend::Sqlite => stmt.build(SqliteQueryBuilder),
+		DatabaseBackend::Postgres => PostgresQueryBuilder.build_insert(stmt),
+		DatabaseBackend::MySql => MySqlQueryBuilder.build_insert(stmt),
+		DatabaseBackend::Sqlite => SqliteQueryBuilder.build_insert(stmt),
 	}
 }
 
 /// Build SQL with values from an UPDATE statement based on database backend
 fn build_update_sql(stmt: &UpdateStatement, backend: DatabaseBackend) -> (String, Values) {
 	match backend {
-		DatabaseBackend::Postgres => stmt.build(PostgresQueryBuilder),
-		DatabaseBackend::MySql => stmt.build(MysqlQueryBuilder),
-		DatabaseBackend::Sqlite => stmt.build(SqliteQueryBuilder),
+		DatabaseBackend::Postgres => PostgresQueryBuilder.build_update(stmt),
+		DatabaseBackend::MySql => MySqlQueryBuilder.build_update(stmt),
+		DatabaseBackend::Sqlite => SqliteQueryBuilder.build_update(stmt),
 	}
 }
 
 /// Build SQL with values from a SELECT statement based on database backend
 fn build_select_sql(stmt: &SelectStatement, backend: DatabaseBackend) -> (String, Values) {
 	match backend {
-		DatabaseBackend::Postgres => stmt.build(PostgresQueryBuilder),
-		DatabaseBackend::MySql => stmt.build(MysqlQueryBuilder),
-		DatabaseBackend::Sqlite => stmt.build(SqliteQueryBuilder),
+		DatabaseBackend::Postgres => PostgresQueryBuilder.build_select(stmt),
+		DatabaseBackend::MySql => MySqlQueryBuilder.build_select(stmt),
+		DatabaseBackend::Sqlite => SqliteQueryBuilder.build_select(stmt),
 	}
 }
 
 /// Convert a SELECT statement to SQL string based on database backend
 fn select_to_string(stmt: &SelectStatement, backend: DatabaseBackend) -> String {
-	match backend {
-		DatabaseBackend::Postgres => stmt.to_string(PostgresQueryBuilder),
-		DatabaseBackend::MySql => stmt.to_string(MysqlQueryBuilder),
-		DatabaseBackend::Sqlite => stmt.to_string(SqliteQueryBuilder),
-	}
+	build_select_sql(stmt, backend).0
 }
 
 /// Convert an INSERT statement to SQL string based on database backend
 fn insert_to_string(stmt: &InsertStatement, backend: DatabaseBackend) -> String {
-	match backend {
-		DatabaseBackend::Postgres => stmt.to_string(PostgresQueryBuilder),
-		DatabaseBackend::MySql => stmt.to_string(MysqlQueryBuilder),
-		DatabaseBackend::Sqlite => stmt.to_string(SqliteQueryBuilder),
-	}
+	build_insert_sql(stmt, backend).0
 }
 
 /// Build SQL with values from a DELETE statement based on database backend
 fn build_delete_sql(stmt: &DeleteStatement, backend: DatabaseBackend) -> (String, Values) {
 	match backend {
-		DatabaseBackend::Postgres => stmt.build(PostgresQueryBuilder),
-		DatabaseBackend::MySql => stmt.build(MysqlQueryBuilder),
-		DatabaseBackend::Sqlite => stmt.build(SqliteQueryBuilder),
-	}
-}
-
-/// Convert an UPDATE statement to SQL string based on database backend
-fn update_to_string(stmt: &UpdateStatement, backend: DatabaseBackend) -> String {
-	match backend {
-		DatabaseBackend::Postgres => stmt.to_string(PostgresQueryBuilder),
-		DatabaseBackend::MySql => stmt.to_string(MysqlQueryBuilder),
-		DatabaseBackend::Sqlite => stmt.to_string(SqliteQueryBuilder),
+		DatabaseBackend::Postgres => PostgresQueryBuilder.build_delete(stmt),
+		DatabaseBackend::MySql => MySqlQueryBuilder.build_delete(stmt),
+		DatabaseBackend::Sqlite => SqliteQueryBuilder.build_delete(stmt),
 	}
 }
 
@@ -677,7 +661,7 @@ impl<M: Model> Manager<M> {
 		QuerySet::new().get_composite(pk_values).await
 	}
 
-	/// Create a new record using SeaQuery for SQL injection protection
+	/// Create a new record using reinhardt-query for SQL injection protection
 	pub async fn create(&self, model: &M) -> reinhardt_core::exception::Result<M> {
 		let conn = get_connection().await?;
 		self.create_with_conn(&conn, model).await
@@ -724,7 +708,7 @@ impl<M: Model> Manager<M> {
 			reinhardt_core::exception::Error::Database("Model must serialize to object".to_string())
 		})?;
 
-		// Build SeaQuery INSERT statement
+		// Build reinhardt-query INSERT statement
 		let mut stmt = Query::insert();
 		stmt.into_table(Alias::new(M::table_name()));
 
@@ -760,11 +744,11 @@ impl<M: Model> Manager<M> {
 				true
 			})
 			.map(|(k, v)| {
-				// Convert null values to SQL NULL keyword for proper insertion
+				// Convert null values to SQL NULL for proper insertion
 				let value = if v.is_null() {
-					sea_query::SimpleExpr::Keyword(sea_query::Keyword::Null)
+					reinhardt_query::value::Value::Int(None)
 				} else {
-					Expr::value(Self::json_to_sea_value(v))
+					Self::json_to_sea_value(v)
 				};
 				(Alias::new(k.as_str()), value)
 			})
@@ -774,9 +758,9 @@ impl<M: Model> Manager<M> {
 		stmt.values_panic(values);
 
 		// Add RETURNING clause with explicit column names from JSON object
-		// Note: Using Asterisk in columns() may not work correctly with SeaQuery
+		// Note: Using Asterisk in columns() may not work correctly with reinhardt-query
 		let all_columns: Vec<_> = obj.keys().map(|k| Alias::new(k.as_str())).collect();
-		stmt.returning(Query::returning().columns(all_columns));
+		stmt.returning(all_columns);
 
 		let (sql, values) = build_insert_sql(&stmt, conn.backend());
 		let values: Vec<_> = values
@@ -792,25 +776,25 @@ impl<M: Model> Manager<M> {
 			.map_err(|e| reinhardt_core::exception::Error::Database(e.to_string()))
 	}
 
-	/// Convert serde_json::Value to sea_query::Value for parameter binding
-	fn json_to_sea_value(v: &serde_json::Value) -> sea_query::Value {
+	/// Convert serde_json::Value to reinhardt_query::value::Value for parameter binding
+	fn json_to_sea_value(v: &serde_json::Value) -> reinhardt_query::value::Value {
 		match v {
-			serde_json::Value::Null => sea_query::Value::Int(None),
-			serde_json::Value::Bool(b) => sea_query::Value::Bool(Some(*b)),
+			serde_json::Value::Null => reinhardt_query::value::Value::Int(None),
+			serde_json::Value::Bool(b) => reinhardt_query::value::Value::Bool(Some(*b)),
 			serde_json::Value::Number(n) => {
 				if let Some(i) = n.as_i64() {
-					sea_query::Value::BigInt(Some(i))
+					reinhardt_query::value::Value::BigInt(Some(i))
 				} else if let Some(f) = n.as_f64() {
-					sea_query::Value::Double(Some(f))
+					reinhardt_query::value::Value::Double(Some(f))
 				} else {
-					sea_query::Value::Int(None)
+					reinhardt_query::value::Value::Int(None)
 				}
 			}
 			serde_json::Value::String(s) => {
 				// 1. Try to parse as UUID (format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
 				//    UUIDs are often serialized as strings via serde
 				if let Ok(uuid) = Uuid::parse_str(s) {
-					return sea_query::Value::Uuid(Some(uuid));
+					return reinhardt_query::value::Value::Uuid(Some(Box::new(uuid)));
 				}
 
 				// 2. Try to parse as ISO 8601 datetime (chrono::DateTime<Utc>)
@@ -818,94 +802,101 @@ impl<M: Model> Manager<M> {
 
 				// 2.1 Try RFC3339 strict format first (e.g., "2024-01-01T00:00:00+00:00")
 				if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-					return sea_query::Value::ChronoDateTimeUtc(Some(
+					return reinhardt_query::value::Value::ChronoDateTimeUtc(Some(Box::new(
 						dt.with_timezone(&chrono::Utc),
-					));
+					)));
 				}
 
 				// 2.2 Try chrono's FromStr trait for DateTime<Utc>
 				//    This handles formats like "2024-01-01T00:00:00Z" with optional subseconds
 				if let Ok(dt) = s.parse::<chrono::DateTime<chrono::Utc>>() {
-					return sea_query::Value::ChronoDateTimeUtc(Some(dt));
+					return reinhardt_query::value::Value::ChronoDateTimeUtc(Some(Box::new(dt)));
 				}
 
 				// 2.3 Try parsing with FixedOffset timezone then convert to UTC
 				//    Handles formats like "2024-01-01T00:00:00.123456789+00:00"
 				if let Ok(dt) = s.parse::<chrono::DateTime<chrono::FixedOffset>>() {
-					return sea_query::Value::ChronoDateTimeUtc(Some(
+					return reinhardt_query::value::Value::ChronoDateTimeUtc(Some(Box::new(
 						dt.with_timezone(&chrono::Utc),
-					));
+					)));
 				}
 
 				// Fallback: treat as regular string (non-datetime, non-UUID values)
-				sea_query::Value::String(Some(s.clone()))
+				reinhardt_query::value::Value::String(Some(Box::new(s.clone())))
 			}
 			serde_json::Value::Array(arr) => {
-				// Convert JSON array to sea_query::Value array
-				// For sea-query 1.0.0-rc.29+: Array(ArrayType, Option<Box<Vec<Value>>>)
-				let values: Vec<sea_query::Value> =
+				// Convert JSON array to reinhardt_query::value::Value array
+				// Array(ArrayType, Option<Box<Vec<Value>>>)
+				let values: Vec<reinhardt_query::value::Value> =
 					arr.iter().map(|v| Self::json_to_sea_value(v)).collect();
-				sea_query::Value::Array(sea_query::ArrayType::String, Some(Box::new(values)))
+				reinhardt_query::value::Value::Array(
+					reinhardt_query::value::ArrayType::String,
+					Some(Box::new(values)),
+				)
 			}
 			serde_json::Value::Object(_obj) => {
-				// Use sea-query's Json type for PostgreSQL JSONB/JSON columns
-				// For sea-query 1.0.0-rc.29+: Json expects Box<serde_json::Value>
-				sea_query::Value::Json(Some(Box::new(v.clone())))
+				// Use reinhardt-query's Json type for PostgreSQL JSONB/JSON columns
+				// Json expects Box<serde_json::Value>
+				reinhardt_query::value::Value::Json(Some(Box::new(v.clone())))
 			}
 		}
 	}
 
-	/// Convert sea_query::Value to QueryValue for database parameter binding
-	fn sea_value_to_query_value(v: sea_query::Value) -> super::connection::QueryValue {
+	/// Convert reinhardt_query::value::Value to QueryValue for database parameter binding
+	fn sea_value_to_query_value(v: reinhardt_query::value::Value) -> super::connection::QueryValue {
 		use super::connection::QueryValue;
 
 		match v {
-			sea_query::Value::Bool(Some(b)) => QueryValue::Bool(b),
-			sea_query::Value::Bool(None) => QueryValue::Null,
+			reinhardt_query::value::Value::Bool(Some(b)) => QueryValue::Bool(b),
+			reinhardt_query::value::Value::Bool(None) => QueryValue::Null,
 
-			sea_query::Value::TinyInt(Some(i)) => QueryValue::Int(i as i64),
-			sea_query::Value::TinyInt(None) => QueryValue::Null,
-			sea_query::Value::SmallInt(Some(i)) => QueryValue::Int(i as i64),
-			sea_query::Value::SmallInt(None) => QueryValue::Null,
-			sea_query::Value::Int(Some(i)) => QueryValue::Int(i as i64),
-			sea_query::Value::Int(None) => QueryValue::Null,
-			sea_query::Value::BigInt(Some(i)) => QueryValue::Int(i),
-			sea_query::Value::BigInt(None) => QueryValue::Null,
+			reinhardt_query::value::Value::TinyInt(Some(i)) => QueryValue::Int(i as i64),
+			reinhardt_query::value::Value::TinyInt(None) => QueryValue::Null,
+			reinhardt_query::value::Value::SmallInt(Some(i)) => QueryValue::Int(i as i64),
+			reinhardt_query::value::Value::SmallInt(None) => QueryValue::Null,
+			reinhardt_query::value::Value::Int(Some(i)) => QueryValue::Int(i as i64),
+			reinhardt_query::value::Value::Int(None) => QueryValue::Null,
+			reinhardt_query::value::Value::BigInt(Some(i)) => QueryValue::Int(i),
+			reinhardt_query::value::Value::BigInt(None) => QueryValue::Null,
 
-			sea_query::Value::TinyUnsigned(Some(u)) => QueryValue::Int(u as i64),
-			sea_query::Value::TinyUnsigned(None) => QueryValue::Null,
-			sea_query::Value::SmallUnsigned(Some(u)) => QueryValue::Int(u as i64),
-			sea_query::Value::SmallUnsigned(None) => QueryValue::Null,
-			sea_query::Value::Unsigned(Some(u)) => QueryValue::Int(u as i64),
-			sea_query::Value::Unsigned(None) => QueryValue::Null,
-			sea_query::Value::BigUnsigned(Some(u)) => QueryValue::Int(u as i64),
-			sea_query::Value::BigUnsigned(None) => QueryValue::Null,
+			reinhardt_query::value::Value::TinyUnsigned(Some(u)) => QueryValue::Int(u as i64),
+			reinhardt_query::value::Value::TinyUnsigned(None) => QueryValue::Null,
+			reinhardt_query::value::Value::SmallUnsigned(Some(u)) => QueryValue::Int(u as i64),
+			reinhardt_query::value::Value::SmallUnsigned(None) => QueryValue::Null,
+			reinhardt_query::value::Value::Unsigned(Some(u)) => QueryValue::Int(u as i64),
+			reinhardt_query::value::Value::Unsigned(None) => QueryValue::Null,
+			reinhardt_query::value::Value::BigUnsigned(Some(u)) => QueryValue::Int(u as i64),
+			reinhardt_query::value::Value::BigUnsigned(None) => QueryValue::Null,
 
-			sea_query::Value::Float(Some(f)) => QueryValue::Float(f as f64),
-			sea_query::Value::Float(None) => QueryValue::Null,
-			sea_query::Value::Double(Some(f)) => QueryValue::Float(f),
-			sea_query::Value::Double(None) => QueryValue::Null,
+			reinhardt_query::value::Value::Float(Some(f)) => QueryValue::Float(f as f64),
+			reinhardt_query::value::Value::Float(None) => QueryValue::Null,
+			reinhardt_query::value::Value::Double(Some(f)) => QueryValue::Float(f),
+			reinhardt_query::value::Value::Double(None) => QueryValue::Null,
 
-			sea_query::Value::String(Some(s)) => QueryValue::String(s.to_string()),
-			sea_query::Value::String(None) => QueryValue::Null,
+			reinhardt_query::value::Value::String(Some(s)) => QueryValue::String((*s).clone()),
+			reinhardt_query::value::Value::String(None) => QueryValue::Null,
 
-			sea_query::Value::Bytes(Some(b)) => QueryValue::Bytes(b.to_vec()),
-			sea_query::Value::Bytes(None) => QueryValue::Null,
+			reinhardt_query::value::Value::Bytes(Some(b)) => QueryValue::Bytes((*b).clone()),
+			reinhardt_query::value::Value::Bytes(None) => QueryValue::Null,
 
 			// Timestamp handling
 			// ChronoDateTime contains NaiveDateTime, convert to UTC
-			sea_query::Value::ChronoDateTime(Some(dt)) => QueryValue::Timestamp(dt.and_utc()),
-			sea_query::Value::ChronoDateTime(None) => QueryValue::Null,
-			sea_query::Value::ChronoDateTimeUtc(Some(dt)) => QueryValue::Timestamp(dt),
-			sea_query::Value::ChronoDateTimeUtc(None) => QueryValue::Null,
+			reinhardt_query::value::Value::ChronoDateTime(Some(dt)) => {
+				QueryValue::Timestamp(dt.and_utc())
+			}
+			reinhardt_query::value::Value::ChronoDateTime(None) => QueryValue::Null,
+			reinhardt_query::value::Value::ChronoDateTimeUtc(Some(dt)) => {
+				QueryValue::Timestamp(*dt)
+			}
+			reinhardt_query::value::Value::ChronoDateTimeUtc(None) => QueryValue::Null,
 
 			// UUID handling
-			sea_query::Value::Uuid(Some(u)) => QueryValue::Uuid(u),
-			sea_query::Value::Uuid(None) => QueryValue::Null,
+			reinhardt_query::value::Value::Uuid(Some(u)) => QueryValue::Uuid(*u),
+			reinhardt_query::value::Value::Uuid(None) => QueryValue::Null,
 
 			// JSON types - serialize to string
-			sea_query::Value::Json(Some(json)) => QueryValue::String(json.to_string()),
-			sea_query::Value::Json(None) => QueryValue::Null,
+			reinhardt_query::value::Value::Json(Some(json)) => QueryValue::String(json.to_string()),
+			reinhardt_query::value::Value::Json(None) => QueryValue::Null,
 
 			// For complex types or unsupported types, convert to null
 			// This is a safe fallback that won't cause runtime errors
@@ -937,7 +928,7 @@ impl<M: Model> Manager<M> {
 		}
 	}
 
-	/// Update an existing record using SeaQuery for SQL injection protection
+	/// Update an existing record using reinhardt-query for SQL injection protection
 	pub async fn update(&self, model: &M) -> reinhardt_core::exception::Result<M> {
 		let conn = get_connection().await?;
 		self.update_with_conn(&conn, model).await
@@ -986,7 +977,7 @@ impl<M: Model> Manager<M> {
 			reinhardt_core::exception::Error::Database("Model must serialize to object".to_string())
 		})?;
 
-		// Build SeaQuery UPDATE statement
+		// Build reinhardt-query UPDATE statement
 		let mut stmt = Query::update();
 		stmt.table(Alias::new(M::table_name()));
 
@@ -998,7 +989,7 @@ impl<M: Model> Manager<M> {
 			if v.is_null() {
 				// Use untyped NULL to avoid PostgreSQL type mismatch errors
 				// (e.g., setting timestamp column to NULL would fail with Int(None))
-				stmt.value(Alias::new(k.as_str()), Expr::cust("NULL"));
+				stmt.value_expr(Alias::new(k.as_str()), Expr::cust("NULL"));
 			} else {
 				stmt.value(Alias::new(k.as_str()), Self::json_to_sea_value(v));
 			}
@@ -1008,18 +999,18 @@ impl<M: Model> Manager<M> {
 		// Try to parse as i64 first (common for primary keys), fallback to string
 		let pk_str = pk.to_string();
 		let pk_value = if let Ok(int_value) = pk_str.parse::<i64>() {
-			sea_query::Value::BigInt(Some(int_value))
+			reinhardt_query::value::Value::BigInt(Some(int_value))
 		} else if let Ok(uuid) = Uuid::parse_str(&pk_str) {
-			sea_query::Value::Uuid(Some(uuid))
+			reinhardt_query::value::Value::Uuid(Some(Box::new(uuid)))
 		} else {
-			sea_query::Value::String(Some(pk_str))
+			reinhardt_query::value::Value::String(Some(Box::new(pk_str)))
 		};
 		stmt.and_where(Expr::col(Alias::new(M::primary_key_field())).eq(pk_value));
 
 		// Add RETURNING clause with explicit column names from JSON object
-		// Note: Using Asterisk in columns() may not work correctly with SeaQuery
+		// Note: Using Asterisk in columns() may not work correctly with reinhardt-query
 		let all_columns: Vec<_> = obj.keys().map(|k| Alias::new(k.as_str())).collect();
-		stmt.returning(Query::returning().columns(all_columns));
+		stmt.returning(all_columns);
 
 		let (sql, values) = build_update_sql(&stmt, conn.backend());
 		let values: Vec<_> = values
@@ -1034,7 +1025,7 @@ impl<M: Model> Manager<M> {
 			.map_err(|e| reinhardt_core::exception::Error::Database(e.to_string()))
 	}
 
-	/// Delete a record using SeaQuery for SQL injection protection
+	/// Delete a record using reinhardt-query for SQL injection protection
 	pub async fn delete(&self, pk: M::PrimaryKey) -> reinhardt_core::exception::Result<()> {
 		let conn = get_connection().await?;
 		self.delete_with_conn(&conn, pk).await
@@ -1072,17 +1063,17 @@ impl<M: Model> Manager<M> {
 		conn: &DatabaseConnection,
 		pk: M::PrimaryKey,
 	) -> reinhardt_core::exception::Result<()> {
-		// Build SeaQuery DELETE statement
+		// Build reinhardt-query DELETE statement
 		let mut stmt = Query::delete();
 
 		// Try to parse as i64 first (common for primary keys), fallback to string
 		let pk_str = pk.to_string();
 		let pk_value = if let Ok(int_value) = pk_str.parse::<i64>() {
-			sea_query::Value::BigInt(Some(int_value))
+			reinhardt_query::value::Value::BigInt(Some(int_value))
 		} else if let Ok(uuid) = Uuid::parse_str(&pk_str) {
-			sea_query::Value::Uuid(Some(uuid))
+			reinhardt_query::value::Value::Uuid(Some(Box::new(uuid)))
 		} else {
-			sea_query::Value::String(Some(pk_str))
+			reinhardt_query::value::Value::String(Some(Box::new(pk_str)))
 		};
 
 		stmt.from_table(Alias::new(M::table_name()))
@@ -1099,7 +1090,7 @@ impl<M: Model> Manager<M> {
 		Ok(())
 	}
 
-	/// Count records using SeaQuery
+	/// Count records using reinhardt-query
 	pub async fn count(&self) -> reinhardt_core::exception::Result<i64> {
 		let conn = get_connection().await?;
 		self.count_with_conn(&conn).await
@@ -1135,13 +1126,10 @@ impl<M: Model> Manager<M> {
 		&self,
 		conn: &DatabaseConnection,
 	) -> reinhardt_core::exception::Result<i64> {
-		// Build SeaQuery SELECT COUNT(*) statement with explicit alias
+		// Build reinhardt-query SELECT COUNT(*) statement with explicit alias
 		let stmt = Query::select()
 			.from(Alias::new(M::table_name()))
-			.expr_as(
-				sea_query::Func::count(Expr::col(sea_query::Asterisk)),
-				Alias::new("count"),
-			)
+			.expr_as(Func::count(Expr::asterisk().into()), Alias::new("count"))
 			.to_owned();
 
 		let (sql, values) = build_select_sql(&stmt, conn.backend());
@@ -1157,7 +1145,7 @@ impl<M: Model> Manager<M> {
 		})
 	}
 
-	/// Bulk create multiple records using SeaQuery (similar to Django's bulk_create())
+	/// Bulk create multiple records using reinhardt-query (similar to Django's bulk_create())
 	pub fn bulk_create_query(&self, models: &[M]) -> Option<InsertStatement> {
 		if models.is_empty() {
 			return None;
@@ -1178,27 +1166,27 @@ impl<M: Model> Manager<M> {
 
 		let fields: Vec<_> = first_obj.keys().map(|k| Alias::new(k.as_str())).collect();
 
-		// Build SeaQuery INSERT statement
+		// Build reinhardt-query INSERT statement
 		let mut stmt = Query::insert();
 		stmt.into_table(Alias::new(M::table_name())).columns(fields);
 
 		// Add value rows for each model
 		for val in &json_values {
 			if let Some(obj) = val.as_object() {
-				let values: Vec<sea_query::SimpleExpr> = first_obj
+				let values: Vec<reinhardt_query::value::Value> = first_obj
 					.keys()
 					.map(|field| {
 						obj.get(field)
 							.map(|v| {
 								if v.is_null() {
 									// Use untyped NULL to avoid PostgreSQL type mismatch errors
-									Expr::cust("NULL")
+									reinhardt_query::value::Value::Int(None)
 								} else {
-									Expr::value(Self::json_to_sea_value(v))
+									Self::json_to_sea_value(v)
 								}
 							})
 							// Use untyped NULL for missing fields
-							.unwrap_or_else(|| Expr::cust("NULL"))
+							.unwrap_or(reinhardt_query::value::Value::Int(None))
 					})
 					.collect();
 				stmt.values_panic(values);
@@ -1439,23 +1427,23 @@ impl<M: Model> Manager<M> {
 		Ok(total_updated)
 	}
 
-	/// Get or create - SQL generation using SeaQuery (for testing)
+	/// Get or create - SQL generation using reinhardt-query (for testing)
 	pub fn get_or_create_queries(
 		&self,
 		lookup_fields: &HashMap<String, String>,
 		defaults: &HashMap<String, String>,
 	) -> (SelectStatement, InsertStatement) {
-		// Generate SELECT query with SeaQuery
+		// Generate SELECT query with reinhardt-query
 		let mut select_stmt = Query::select();
 		select_stmt
 			.from(Alias::new(M::table_name()))
-			.column(sea_query::Asterisk);
+			.column(ColumnRef::Asterisk);
 
 		for (k, v) in lookup_fields.iter() {
 			select_stmt.and_where(Expr::col(Alias::new(k.as_str())).eq(v.as_str()));
 		}
 
-		// Generate INSERT query with SeaQuery
+		// Generate INSERT query with reinhardt-query
 		let mut insert_fields = lookup_fields.clone();
 		insert_fields.extend(defaults.clone());
 
@@ -1466,7 +1454,7 @@ impl<M: Model> Manager<M> {
 			.keys()
 			.map(|k| Alias::new(k.as_str()))
 			.collect();
-		let values: Vec<sea_query::Expr> = insert_fields
+		let values: Vec<reinhardt_query::prelude::Expr> = insert_fields
 			.values()
 			.map(|v| Expr::val(v.clone()))
 			.collect();
@@ -1546,90 +1534,68 @@ impl<M: Model> Manager<M> {
 		sql
 	}
 
-	/// Bulk update using SeaQuery - SQL generation (for testing)
-	pub fn bulk_update_query_detailed(
-		&self,
-		updates: &[(M::PrimaryKey, HashMap<String, serde_json::Value>)],
-		fields: &[String],
-	) -> Option<UpdateStatement>
-	where
-		M::PrimaryKey: std::fmt::Display + Clone,
-	{
-		if updates.is_empty() || fields.is_empty() {
-			return None;
-		}
-
-		let mut stmt = Query::update();
-		stmt.table(Alias::new(M::table_name()));
-
-		// Generate CASE statements for each field
-		for field in fields {
-			// Build CASE expression for this field
-			let mut case_expr = sea_query::CaseStatement::new();
-
-			for (pk, field_map) in updates.iter() {
-				if let Some(value) = field_map.get(field) {
-					// WHEN id = pk THEN value
-					// Convert serde_json::Value to appropriate type for SeaQuery
-					let expr = match value {
-						serde_json::Value::Null => Expr::value(sea_query::Value::String(None)),
-						serde_json::Value::Bool(b) => Expr::value(*b),
-						serde_json::Value::Number(n) => {
-							if let Some(i) = n.as_i64() {
-								Expr::value(i)
-							} else if let Some(f) = n.as_f64() {
-								Expr::value(f)
-							} else {
-								Expr::value(n.to_string())
-							}
-						}
-						serde_json::Value::String(s) => Expr::value(s.clone()),
-						serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
-							Expr::value(value.to_string())
-						}
-					};
-					case_expr =
-						case_expr.case(Expr::col(Alias::new("id")).eq(pk.to_string()), expr);
-				}
-			}
-
-			// field = CASE ... END
-			let case_simple_expr: sea_query::SimpleExpr = case_expr.into();
-			stmt.value(Alias::new(field.as_str()), case_simple_expr);
-		}
-
-		// WHERE id IN (...)
-		let ids: Vec<sea_query::Value> = updates
-			.iter()
-			.map(|(pk, _)| sea_query::Value::String(Some(pk.to_string())))
-			.collect();
-
-		stmt.and_where(Expr::col(Alias::new("id")).is_in(ids));
-
-		Some(stmt.to_owned())
-	}
-
-	/// Bulk update - SQL generation (convenience method for testing)
+	/// Bulk update SQL generation using CASE expressions
 	///
-	/// # Arguments
-	///
-	/// * `updates` - List of (primary_key, field_values) tuples
-	/// * `fields` - Fields to update
-	/// * `backend` - Database backend to generate SQL for
+	/// Generates raw SQL because reinhardt-query's `UpdateStatement` does not support
+	/// expression-based SET values (e.g., CASE WHEN ... END).
 	pub fn bulk_update_sql_detailed(
 		&self,
 		updates: &[(M::PrimaryKey, HashMap<String, serde_json::Value>)],
 		fields: &[String],
-		backend: DatabaseBackend,
+		_backend: DatabaseBackend,
 	) -> String
 	where
 		M::PrimaryKey: std::fmt::Display + Clone,
 	{
-		if let Some(stmt) = self.bulk_update_query_detailed(updates, fields) {
-			update_to_string(&stmt, backend)
-		} else {
-			String::new()
+		if updates.is_empty() || fields.is_empty() {
+			return String::new();
 		}
+
+		let table_name = M::table_name();
+		let mut set_clauses = Vec::new();
+
+		for field in fields {
+			let mut when_clauses = Vec::new();
+
+			for (pk, field_map) in updates.iter() {
+				if let Some(value) = field_map.get(field) {
+					let val_str = match value {
+						serde_json::Value::Null => "NULL".to_string(),
+						serde_json::Value::Bool(b) => b.to_string().to_uppercase(),
+						serde_json::Value::Number(n) => n.to_string(),
+						serde_json::Value::String(s) => format!("'{}'", s.replace('\'', "''")),
+						serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+							format!("'{}'", value.to_string().replace('\'', "''"))
+						}
+					};
+					when_clauses.push(format!(
+						"WHEN \"id\" = '{}' THEN {}",
+						pk.to_string().replace('\'', "''"),
+						val_str
+					));
+				}
+			}
+
+			if !when_clauses.is_empty() {
+				set_clauses.push(format!(
+					"\"{}\" = CASE {} END",
+					field,
+					when_clauses.join(" ")
+				));
+			}
+		}
+
+		let ids: Vec<String> = updates
+			.iter()
+			.map(|(pk, _)| format!("'{}'", pk.to_string().replace('\'', "''")))
+			.collect();
+
+		format!(
+			"UPDATE \"{}\" SET {} WHERE \"id\" IN ({})",
+			table_name,
+			set_clauses.join(", "),
+			ids.join(", ")
+		)
 	}
 }
 
@@ -1711,11 +1677,12 @@ mod tests {
 		let (select_sql, insert_sql) =
 			manager.get_or_create_sql(&lookup, &defaults, DatabaseBackend::Postgres);
 
-		// SeaQuery uses quoted identifiers and TestUser table is "test_user"
+		// reinhardt-query uses quoted identifiers and TestUser table is "test_user"
 		assert!(select_sql.contains("SELECT") && select_sql.contains("FROM"));
 		assert!(select_sql.contains("test_user"));
 		assert!(select_sql.contains("email"));
-		assert!(select_sql.contains("test@example.com"));
+		// reinhardt-query produces parameterized SQL with $1 placeholder instead of inline values
+		assert!(select_sql.contains("$1"));
 		assert!(insert_sql.contains("INSERT"));
 		assert!(insert_sql.contains("test_user"));
 		assert!(insert_sql.contains("email"));
@@ -1734,7 +1701,7 @@ mod tests {
 
 		let sql = manager.bulk_create_sql_detailed(&fields, &values, false);
 
-		// SeaQuery uses quoted identifiers and TestUser table is "test_user"
+		// reinhardt-query uses quoted identifiers and TestUser table is "test_user"
 		assert!(sql.contains("INSERT"));
 		assert!(sql.contains("test_user"));
 		assert!(sql.contains("name"));
@@ -1776,7 +1743,7 @@ mod tests {
 		let fields = vec!["name".to_string(), "email".to_string()];
 		let sql = manager.bulk_update_sql_detailed(&updates, &fields, DatabaseBackend::Postgres);
 
-		// SeaQuery uses quoted identifiers and TestUser table is "test_user"
+		// reinhardt-query uses quoted identifiers and TestUser table is "test_user"
 		assert!(sql.contains("UPDATE"));
 		assert!(sql.contains("test_user"));
 		assert!(sql.contains("SET"));
@@ -1898,7 +1865,7 @@ mod tests {
 		let value = json!("hello");
 		let sea_value = super::Manager::<TestUser>::json_to_sea_value(&value);
 
-		// SeaQuery Value should contain the string
+		// reinhardt-query Value should contain the string
 		let debug_str = format!("{:?}", sea_value);
 		assert!(debug_str.contains("hello") || debug_str.contains("String"));
 	}

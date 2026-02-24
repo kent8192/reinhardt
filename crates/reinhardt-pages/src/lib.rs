@@ -135,6 +135,8 @@
 #![warn(missing_docs)]
 
 // Re-export AST definitions from reinhardt-pages-ast
+// This is deprecated but kept for backward compatibility
+#[allow(deprecated)] // Intentional: maintaining backward compatibility with existing code
 pub use reinhardt_pages_ast as ast;
 
 // Core modules

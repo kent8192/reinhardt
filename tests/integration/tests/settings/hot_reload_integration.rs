@@ -11,9 +11,9 @@ use reinhardt_conf::settings::hot_reload::HotReloadManager;
 #[cfg(feature = "hot-reload")]
 use std::fs;
 #[cfg(feature = "hot-reload")]
-use std::sync::atomic::{AtomicU32, Ordering};
-#[cfg(feature = "hot-reload")]
 use std::sync::Arc;
+#[cfg(feature = "hot-reload")]
+use std::sync::atomic::{AtomicU32, Ordering};
 #[cfg(feature = "hot-reload")]
 use std::time::Duration;
 #[cfg(feature = "hot-reload")]

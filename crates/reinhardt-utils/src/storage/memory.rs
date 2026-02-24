@@ -182,7 +182,7 @@ impl InMemoryStorage {
 #[async_trait]
 impl Storage for InMemoryStorage {
 	async fn save(&self, path: &str, content: &[u8]) -> StorageResult<FileMetadata> {
-		let mut files = self.files.write().unwrap();
+		let mut files = self.files.write().unwrap_or_else(|e| e.into_inner());
 
 		if let Some(existing) = files.get_mut(path) {
 			existing.update(content.to_vec());
@@ -195,7 +195,7 @@ impl Storage for InMemoryStorage {
 	}
 
 	async fn read(&self, path: &str) -> StorageResult<StoredFile> {
-		let mut files = self.files.write().unwrap();
+		let mut files = self.files.write().unwrap_or_else(|e| e.into_inner());
 
 		let file = files
 			.get_mut(path)
@@ -208,7 +208,7 @@ impl Storage for InMemoryStorage {
 	}
 
 	async fn delete(&self, path: &str) -> StorageResult<()> {
-		let mut files = self.files.write().unwrap();
+		let mut files = self.files.write().unwrap_or_else(|e| e.into_inner());
 
 		// Support directory deletion - remove all files with this prefix
 		if path.ends_with('/') || !files.contains_key(path) {
@@ -232,7 +232,7 @@ impl Storage for InMemoryStorage {
 	}
 
 	async fn exists(&self, path: &str) -> StorageResult<bool> {
-		let files = self.files.read().unwrap();
+		let files = self.files.read().unwrap_or_else(|e| e.into_inner());
 
 		// Check exact match
 		if files.contains_key(path) {
@@ -245,7 +245,7 @@ impl Storage for InMemoryStorage {
 	}
 
 	async fn metadata(&self, path: &str) -> StorageResult<FileMetadata> {
-		let files = self.files.read().unwrap();
+		let files = self.files.read().unwrap_or_else(|e| e.into_inner());
 
 		let file = files
 			.get(path)
@@ -258,7 +258,7 @@ impl Storage for InMemoryStorage {
 	}
 
 	async fn list(&self, path: &str) -> StorageResult<Vec<FileMetadata>> {
-		let files = self.files.read().unwrap();
+		let files = self.files.read().unwrap_or_else(|e| e.into_inner());
 
 		let prefix = if path.is_empty() {
 			String::new()
@@ -301,7 +301,7 @@ impl Storage for InMemoryStorage {
 	}
 
 	async fn get_accessed_time(&self, path: &str) -> StorageResult<DateTime<Utc>> {
-		let files = self.files.read().unwrap();
+		let files = self.files.read().unwrap_or_else(|e| e.into_inner());
 
 		let file = files
 			.get(path)
@@ -311,7 +311,7 @@ impl Storage for InMemoryStorage {
 	}
 
 	async fn get_created_time(&self, path: &str) -> StorageResult<DateTime<Utc>> {
-		let files = self.files.read().unwrap();
+		let files = self.files.read().unwrap_or_else(|e| e.into_inner());
 
 		let file = files
 			.get(path)
@@ -321,7 +321,7 @@ impl Storage for InMemoryStorage {
 	}
 
 	async fn get_modified_time(&self, path: &str) -> StorageResult<DateTime<Utc>> {
-		let files = self.files.read().unwrap();
+		let files = self.files.read().unwrap_or_else(|e| e.into_inner());
 
 		let file = files
 			.get(path)

@@ -32,13 +32,18 @@ use std::sync::{Arc, Mutex, OnceLock};
 /// They receive a reference to the AppConfig that triggered the signal.
 pub type SignalReceiver = Box<dyn Fn(&AppConfig) + Send + Sync>;
 
+/// Internal receiver type using Arc for cloneable snapshots.
+/// This allows the send method to release the lock before invoking callbacks,
+/// preventing lock contention when receivers call connect/disconnect.
+type InternalReceiver = Arc<dyn Fn(&AppConfig) + Send + Sync>;
+
 /// A signal that can be sent when application lifecycle events occur
 ///
 /// Signals maintain a list of receivers (callbacks) that are called when
 /// the signal is sent.
 #[derive(Default)]
 pub struct Signal {
-	receivers: Arc<Mutex<Vec<SignalReceiver>>>,
+	receivers: Arc<Mutex<Vec<InternalReceiver>>>,
 }
 
 impl Signal {
@@ -73,7 +78,8 @@ impl Signal {
 	/// }));
 	/// ```
 	pub fn connect(&self, receiver: SignalReceiver) {
-		self.receivers.lock().unwrap().push(receiver);
+		// Convert Box to Arc for cloneable internal storage
+		self.receivers.lock().unwrap().push(Arc::from(receiver));
 	}
 
 	/// Send the signal to all connected receivers
@@ -93,8 +99,14 @@ impl Signal {
 	/// signal.send(&config);
 	/// ```
 	pub fn send(&self, config: &AppConfig) {
-		let receivers = self.receivers.lock().unwrap();
-		for receiver in receivers.iter() {
+		// Clone the receiver list and release the lock before invoking callbacks.
+		// This prevents lock contention when receivers call connect/disconnect,
+		// and avoids holding the lock during potentially long-running handler execution.
+		let snapshot: Vec<InternalReceiver> = {
+			let guard = self.receivers.lock().unwrap();
+			guard.iter().map(Arc::clone).collect()
+		};
+		for receiver in &snapshot {
 			receiver(config);
 		}
 	}

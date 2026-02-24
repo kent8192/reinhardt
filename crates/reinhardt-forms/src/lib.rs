@@ -126,6 +126,7 @@ pub mod formset;
 pub mod formsets;
 pub mod model_form;
 pub mod model_formset;
+pub mod validators;
 pub mod wasm_compat;
 pub mod wizard;
 
@@ -137,13 +138,15 @@ pub use field::{
 	FormField as Field, // Alias for compatibility
 	FormField,
 	Widget,
+	escape_attribute,
+	html_escape,
 };
 pub use fields::{
 	BooleanField, CharField, ChoiceField, ColorField, ComboField, DateField, DateTimeField,
 	DecimalField, DurationField, EmailField, FileField, FloatField, GenericIPAddressField,
 	IPProtocol, ImageField, IntegerField, JSONField, ModelChoiceField, ModelMultipleChoiceField,
-	MultiValueField, MultipleChoiceField, PasswordField, RegexField, SlugField, SplitDateTimeField,
-	TimeField, URLField, UUIDField,
+	MultiValueField, MultipleChoiceField, PASSWORD_REDACTED, PasswordField, RegexField, SlugField,
+	SplitDateTimeField, TimeField, URLField, UUIDField,
 };
 pub use form::{Form, FormError, FormResult};
 pub use formset::FormSet;
@@ -154,4 +157,5 @@ pub use formsets::{
 };
 pub use model_form::{FieldType, FormModel, ModelForm, ModelFormBuilder, ModelFormConfig};
 pub use model_formset::{ModelFormSet, ModelFormSetBuilder, ModelFormSetConfig};
+pub use validators::{SlugValidator, UrlValidator};
 pub use wizard::{FormWizard, WizardStep};

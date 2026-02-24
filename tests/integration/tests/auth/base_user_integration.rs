@@ -32,9 +32,10 @@ async fn test_default_user_with_password() {
 	assert!(!user.check_password("wrongpass").unwrap());
 
 	// Test session auth hash
-	let hash1 = user.get_session_auth_hash();
+	let secret = "test-server-secret-key";
+	let hash1 = user.get_session_auth_hash(secret);
 	user.set_password("newpassword").unwrap();
-	let hash2 = user.get_session_auth_hash();
+	let hash2 = user.get_session_auth_hash(secret);
 	assert_ne!(hash1, hash2);
 }
 

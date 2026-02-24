@@ -31,9 +31,9 @@ use bson::{Bson, Document};
 use mongodb::{Client, ClientSession, Database};
 use std::sync::Arc;
 
-use super::super::super::error::{NoSQLError, Result};
-use super::super::super::traits::{DocumentBackend, NoSQLBackend};
-use super::super::super::types::{FindOptions, NoSQLBackendType, UpdateResult};
+use crate::nosql::error::{NoSQLError, Result};
+use crate::nosql::traits::{DocumentBackend, NoSQLBackend};
+use crate::nosql::types::{FindOptions, NoSQLBackendType, UpdateResult};
 
 /// MongoDB backend implementation
 ///

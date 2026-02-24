@@ -4,7 +4,6 @@
 
 use async_trait::async_trait;
 use reinhardt_http::Request;
-use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -118,28 +117,7 @@ impl<N: CookieName, T: Debug> Debug for CookieNamed<N, T> {
 	}
 }
 
-/// Parse Cookie header into a map
-/// Cookie header format: "name1=value1; name2=value2"
-fn parse_cookies(cookie_header: &str) -> HashMap<String, String> {
-	let mut result = HashMap::new();
-
-	for cookie in cookie_header.split(';') {
-		let cookie = cookie.trim();
-		if let Some((name, value)) = cookie.split_once('=') {
-			let name = name.trim().to_string();
-			let value = value.trim();
-
-			// URL-decode the value if it contains encoded characters
-			let decoded_value = urlencoding::decode(value)
-				.unwrap_or(std::borrow::Cow::Borrowed(value))
-				.into_owned();
-
-			result.insert(name, decoded_value);
-		}
-	}
-
-	result
-}
+use super::cookie_util::parse_cookies;
 
 #[async_trait]
 impl FromRequest for CookieNamed<SessionId, String> {

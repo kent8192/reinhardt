@@ -38,7 +38,6 @@ pub use crate::params::{ParamContext, Request};
 /// // Set override for testing
 /// ctx.dependency(create_database).override_with(Database::mock());
 /// ```
-#[derive(Clone)]
 pub struct InjectionContext {
 	request_scope: RequestScope,
 	singleton_scope: Arc<SingletonScope>,
@@ -164,6 +163,20 @@ impl InjectionContextBuilder {
 			request: self.request.map(Arc::new),
 			#[cfg(feature = "params")]
 			param_context: self.param_context.map(Arc::new),
+		}
+	}
+}
+
+impl Clone for InjectionContext {
+	fn clone(&self) -> Self {
+		Self {
+			request_scope: self.request_scope.deep_clone(),
+			singleton_scope: Arc::clone(&self.singleton_scope),
+			override_registry: Arc::clone(&self.override_registry),
+			#[cfg(feature = "params")]
+			request: self.request.clone(),
+			#[cfg(feature = "params")]
+			param_context: self.param_context.clone(),
 		}
 	}
 }
@@ -317,6 +330,14 @@ impl InjectionContext {
 	pub fn set_request<T: Any + Send + Sync>(&self, value: T) {
 		self.request_scope.set(value);
 	}
+
+	/// Stores a pre-wrapped `Arc<T>` in the request scope.
+	///
+	/// This avoids the need to unwrap and re-wrap Arc values that are
+	/// already in Arc form, such as those returned by factory functions.
+	fn set_request_arc<T: Any + Send + Sync>(&self, value: Arc<T>) {
+		self.request_scope.set_arc(value);
+	}
 	/// Retrieves a singleton value from the context.
 	///
 	/// Singleton values persist across all requests and are shared application-wide.
@@ -355,6 +376,14 @@ impl InjectionContext {
 	/// ```
 	pub fn set_singleton<T: Any + Send + Sync>(&self, value: T) {
 		self.singleton_scope.set(value);
+	}
+
+	/// Stores a pre-wrapped `Arc<T>` in the singleton scope.
+	///
+	/// This avoids the need to unwrap and re-wrap Arc values that are
+	/// already in Arc form, such as those returned by factory functions.
+	fn set_singleton_arc<T: Any + Send + Sync>(&self, value: Arc<T>) {
+		self.singleton_scope.set_arc(value);
 	}
 
 	/// Returns a reference to the singleton scope.
@@ -503,41 +532,48 @@ impl InjectionContext {
 	/// # }
 	/// ```
 	pub async fn resolve<T: Any + Send + Sync + 'static>(&self) -> crate::DiResult<Arc<T>> {
-		use crate::cycle_detection::{begin_resolution, register_type_name};
+		use crate::cycle_detection::{
+			begin_resolution, register_type_name, with_cycle_detection_scope,
+		};
 		use crate::registry::{DependencyScope, global_registry};
 
-		let type_id = std::any::TypeId::of::<T>();
-		let type_name = std::any::type_name::<T>();
-		let registry = global_registry();
+		with_cycle_detection_scope(async {
+			let type_id = std::any::TypeId::of::<T>();
+			let type_name = std::any::type_name::<T>();
+			let registry = global_registry();
 
-		// Register type name (for error messages)
-		register_type_name::<T>(type_name);
+			// Register type name (for error messages)
+			register_type_name::<T>(type_name);
 
-		// [Fast path] Skip circular detection on cache hit
-		let scope = registry
-			.get_scope::<T>()
-			.unwrap_or(DependencyScope::Singleton);
-		match scope {
-			DependencyScope::Singleton => {
-				if let Some(cached) = self.get_singleton::<T>() {
-					return Ok(cached); // ✓ < 5% overhead
+			// [Fast path] Skip circular detection on cache hit
+			let scope = registry.get_scope::<T>().ok_or_else(|| {
+				crate::DiError::DependencyNotRegistered {
+					type_name: type_name.to_string(),
 				}
-			}
-			DependencyScope::Request => {
-				if let Some(cached) = self.get_request::<T>() {
-					return Ok(cached); // ✓ < 5% overhead
+			})?;
+			match scope {
+				DependencyScope::Singleton => {
+					if let Some(cached) = self.get_singleton::<T>() {
+						return Ok(cached); // < 5% overhead
+					}
 				}
+				DependencyScope::Request => {
+					if let Some(cached) = self.get_request::<T>() {
+						return Ok(cached); // < 5% overhead
+					}
+				}
+				_ => {}
 			}
-			_ => {}
-		}
 
-		// [Slow path] Execute circular detection only on cache miss
-		let _guard = begin_resolution(type_id, type_name)
-			.map_err(|e| crate::DiError::CircularDependency(e.to_string()))?;
+			// [Slow path] Execute circular detection only on cache miss
+			let _guard = begin_resolution(type_id, type_name)
+				.map_err(|e| crate::DiError::CircularDependency(e.to_string()))?;
 
-		// Actual resolution processing (existing logic)
-		self.resolve_internal::<T>(scope).await
-		// Guard is automatically cleaned up when dropped
+			// Actual resolution processing (existing logic)
+			self.resolve_internal::<T>(scope).await
+			// Guard is automatically cleaned up when dropped
+		})
+		.await
 	}
 
 	async fn resolve_internal<T: Any + Send + Sync + 'static>(
@@ -553,43 +589,20 @@ impl InjectionContext {
 				// Create new instance
 				let instance = registry.create::<T>(self).await?;
 
-				// Cache in singleton scope
-				// Extract T from Arc<T> and store in scope's Arc
-				if let Ok(value) = Arc::try_unwrap(instance) {
-					self.set_singleton(value);
-					self.get_singleton::<T>()
-						.ok_or_else(|| crate::DiError::Internal {
-							message: "Failed to retrieve just-cached singleton".to_string(),
-						})
-				} else {
-					// Multiple references exist, cannot unwrap
-					Err(crate::DiError::Internal {
-						message: format!(
-							"Cannot cache singleton for {}: multiple Arc references exist",
-							std::any::type_name::<T>()
-						),
-					})
-				}
+				// Cache the Arc directly in singleton scope without unwrapping.
+				// This avoids panics when the factory retains an Arc clone,
+				// which causes Arc::try_unwrap to fail.
+				self.set_singleton_arc(Arc::clone(&instance));
+				Ok(instance)
 			}
 			DependencyScope::Request => {
 				// Create new instance
 				let instance = registry.create::<T>(self).await?;
 
-				// Cache in request scope
-				if let Ok(value) = Arc::try_unwrap(instance) {
-					self.set_request(value);
-					self.get_request::<T>()
-						.ok_or_else(|| crate::DiError::Internal {
-							message: "Failed to retrieve just-cached request value".to_string(),
-						})
-				} else {
-					Err(crate::DiError::Internal {
-						message: format!(
-							"Cannot cache request dependency for {}: multiple Arc references exist",
-							std::any::type_name::<T>()
-						),
-					})
-				}
+				// Cache the Arc directly in request scope without unwrapping.
+				// This avoids panics when the factory retains an Arc clone.
+				self.set_request_arc(Arc::clone(&instance));
+				Ok(instance)
 			}
 			DependencyScope::Transient => {
 				// Never cache, always create new

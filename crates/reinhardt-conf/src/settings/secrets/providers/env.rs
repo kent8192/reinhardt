@@ -1,6 +1,8 @@
 //! Environment variable secret provider
 
-use super::super::{SecretError, SecretMetadata, SecretProvider, SecretResult, SecretString};
+use crate::settings::secrets::{
+	SecretError, SecretMetadata, SecretProvider, SecretResult, SecretString,
+};
 use async_trait::async_trait;
 use std::env;
 
@@ -65,6 +67,8 @@ impl SecretProvider for EnvSecretProvider {
 
 	async fn set_secret(&self, key: &str, value: SecretString) -> SecretResult<()> {
 		let env_var = self.env_var_name(key);
+		// SAFETY: Setting environment variables is unsafe in multi-threaded programs.
+		// Environment loading occurs during application startup before spawning threads.
 		unsafe {
 			env::set_var(&env_var, value.expose_secret());
 		}
@@ -73,6 +77,8 @@ impl SecretProvider for EnvSecretProvider {
 
 	async fn delete_secret(&self, key: &str) -> SecretResult<()> {
 		let env_var = self.env_var_name(key);
+		// SAFETY: Removing environment variables is unsafe in multi-threaded programs.
+		// Environment loading occurs during application startup before spawning threads.
 		unsafe {
 			env::remove_var(&env_var);
 		}

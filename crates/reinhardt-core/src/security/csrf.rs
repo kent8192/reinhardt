@@ -407,7 +407,7 @@ pub fn is_same_domain(domain1: &str, domain2: &str) -> bool {
 pub fn get_token_timestamp() -> u64 {
 	std::time::SystemTime::now()
 		.duration_since(std::time::UNIX_EPOCH)
-		.unwrap()
+		.unwrap_or_default()
 		.as_secs()
 }
 
@@ -471,16 +471,53 @@ pub fn verify_token_with_timestamp(
 	secret_bytes: &[u8],
 	session_id: &str,
 ) -> Result<u64, RejectRequest> {
-	let parts: Vec<&str> = token_data.split(':').collect();
-	if parts.len() != 2 {
+	if token_data.is_empty() {
 		return Err(RejectRequest {
-			reason: "Invalid token format (missing timestamp)".to_string(),
+			reason: "Invalid token format (empty token)".to_string(),
 		});
 	}
 
-	let token = parts[0];
-	let timestamp: u64 = parts[1].parse().map_err(|_| RejectRequest {
-		reason: "Invalid timestamp format".to_string(),
+	// Use rsplitn to split from the right, ensuring the timestamp is always
+	// the last segment even if the token portion somehow contains ':'
+	let mut parts = token_data.rsplitn(2, ':');
+	let timestamp_str = parts.next().ok_or_else(|| RejectRequest {
+		reason: "Invalid token format (missing timestamp)".to_string(),
+	})?;
+	let token = parts.next().ok_or_else(|| RejectRequest {
+		reason: "Invalid token format (missing delimiter)".to_string(),
+	})?;
+
+	if token.is_empty() {
+		return Err(RejectRequest {
+			reason: "Invalid token format (empty token value)".to_string(),
+		});
+	}
+
+	if timestamp_str.is_empty() {
+		return Err(RejectRequest {
+			reason: "Invalid token format (empty timestamp)".to_string(),
+		});
+	}
+
+	// Validate that the token is a valid hex string of the expected length
+	if token.len() != CSRF_TOKEN_LENGTH {
+		return Err(RejectRequest {
+			reason: format!(
+				"Invalid token format (expected {} hex characters, got {})",
+				CSRF_TOKEN_LENGTH,
+				token.len()
+			),
+		});
+	}
+
+	if !token.chars().all(|c| c.is_ascii_hexdigit()) {
+		return Err(RejectRequest {
+			reason: "Invalid token format (token contains non-hex characters)".to_string(),
+		});
+	}
+
+	let timestamp: u64 = timestamp_str.parse().map_err(|_| RejectRequest {
+		reason: "Invalid token format (timestamp is not a valid number)".to_string(),
 	})?;
 
 	let message = format!("{}:{}", session_id, timestamp);
@@ -491,4 +528,211 @@ pub fn verify_token_with_timestamp(
 	}
 
 	Ok(timestamp)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	fn test_secret() -> Vec<u8> {
+		b"test-secret-key-at-least-32-bytes".to_vec()
+	}
+
+	#[rstest]
+	fn test_verify_token_with_timestamp_valid_token() {
+		// Arrange
+		let secret = test_secret();
+		let session_id = "user-session-12345";
+		let token_data = generate_token_with_timestamp(&secret, session_id);
+
+		// Act
+		let result = verify_token_with_timestamp(&token_data, &secret, session_id);
+
+		// Assert
+		assert!(result.is_ok(), "Expected valid token to pass verification");
+		assert!(result.unwrap() > 0, "Expected positive timestamp");
+	}
+
+	#[rstest]
+	fn test_verify_token_with_timestamp_rejects_empty_input() {
+		// Arrange
+		let secret = test_secret();
+
+		// Act
+		let result = verify_token_with_timestamp("", &secret, "session");
+
+		// Assert
+		assert!(result.is_err());
+		assert_eq!(
+			result.unwrap_err().reason,
+			"Invalid token format (empty token)"
+		);
+	}
+
+	#[rstest]
+	#[case("no-delimiter-at-all")]
+	#[case("abcdef")]
+	fn test_verify_token_with_timestamp_rejects_missing_delimiter(#[case] input: &str) {
+		// Arrange
+		let secret = test_secret();
+
+		// Act
+		let result = verify_token_with_timestamp(input, &secret, "session");
+
+		// Assert
+		assert!(result.is_err());
+		assert_eq!(
+			result.unwrap_err().reason,
+			"Invalid token format (missing delimiter)"
+		);
+	}
+
+	#[rstest]
+	fn test_verify_token_with_timestamp_rejects_empty_token_value() {
+		// Arrange
+		let secret = test_secret();
+
+		// Act
+		let result = verify_token_with_timestamp(":12345", &secret, "session");
+
+		// Assert
+		assert!(result.is_err());
+		assert_eq!(
+			result.unwrap_err().reason,
+			"Invalid token format (empty token value)"
+		);
+	}
+
+	#[rstest]
+	fn test_verify_token_with_timestamp_rejects_empty_timestamp() {
+		// Arrange
+		let secret = test_secret();
+
+		// Act
+		let result = verify_token_with_timestamp(
+			"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2:",
+			&secret,
+			"session",
+		);
+
+		// Assert
+		assert!(result.is_err());
+		assert_eq!(
+			result.unwrap_err().reason,
+			"Invalid token format (empty timestamp)"
+		);
+	}
+
+	#[rstest]
+	#[case("short:12345")]
+	#[case("ab:12345")]
+	fn test_verify_token_with_timestamp_rejects_wrong_token_length(#[case] input: &str) {
+		// Arrange
+		let secret = test_secret();
+
+		// Act
+		let result = verify_token_with_timestamp(input, &secret, "session");
+
+		// Assert
+		assert!(result.is_err());
+		assert!(
+			result
+				.unwrap_err()
+				.reason
+				.contains("expected 64 hex characters"),
+			"Expected token length error"
+		);
+	}
+
+	#[rstest]
+	fn test_verify_token_with_timestamp_rejects_non_hex_token() {
+		// Arrange
+		let secret = test_secret();
+		// 64 characters but contains non-hex 'g' and 'z'
+		let bad_token = "g1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6z1b2";
+		let input = format!("{}:12345", bad_token);
+
+		// Act
+		let result = verify_token_with_timestamp(&input, &secret, "session");
+
+		// Assert
+		assert!(result.is_err());
+		assert_eq!(
+			result.unwrap_err().reason,
+			"Invalid token format (token contains non-hex characters)"
+		);
+	}
+
+	#[rstest]
+	#[case("a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2:not_a_number")]
+	#[case("a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2:-1")]
+	#[case("a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2:12.34")]
+	fn test_verify_token_with_timestamp_rejects_invalid_timestamp(#[case] input: &str) {
+		// Arrange
+		let secret = test_secret();
+
+		// Act
+		let result = verify_token_with_timestamp(input, &secret, "session");
+
+		// Assert
+		assert!(result.is_err());
+		assert_eq!(
+			result.unwrap_err().reason,
+			"Invalid token format (timestamp is not a valid number)"
+		);
+	}
+
+	#[rstest]
+	fn test_verify_token_with_timestamp_rejects_tampered_token() {
+		// Arrange
+		let secret = test_secret();
+		let session_id = "user-session-12345";
+		let token_data = generate_token_with_timestamp(&secret, session_id);
+
+		// Act - verify with a different session ID
+		let result = verify_token_with_timestamp(&token_data, &secret, "different-session");
+
+		// Assert
+		assert!(result.is_err());
+		assert_eq!(
+			result.unwrap_err().reason,
+			"CSRF token mismatch (HMAC verification failed)"
+		);
+	}
+
+	#[rstest]
+	fn test_verify_token_with_timestamp_rejects_wrong_secret() {
+		// Arrange
+		let secret = test_secret();
+		let wrong_secret = b"wrong-secret-key-at-least-32-byte".to_vec();
+		let session_id = "user-session-12345";
+		let token_data = generate_token_with_timestamp(&secret, session_id);
+
+		// Act
+		let result = verify_token_with_timestamp(&token_data, &wrong_secret, session_id);
+
+		// Assert
+		assert!(result.is_err());
+		assert_eq!(
+			result.unwrap_err().reason,
+			"CSRF token mismatch (HMAC verification failed)"
+		);
+	}
+
+	#[rstest]
+	fn test_verify_token_with_timestamp_handles_extra_colons_in_crafted_input() {
+		// Arrange
+		let secret = test_secret();
+		// Attacker crafts a token with extra colons - rsplitn ensures only the
+		// last segment is treated as timestamp
+		let input = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2:extra:12345";
+
+		// Act
+		let result = verify_token_with_timestamp(input, &secret, "session");
+
+		// Assert - rsplitn splits "...a1b2:extra" as token and "12345" as timestamp.
+		// The token portion "...a1b2:extra" has wrong length, so it is rejected.
+		assert!(result.is_err());
+	}
 }

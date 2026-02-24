@@ -26,7 +26,7 @@
 //! # }
 //! ```
 
-use super::super::{SecretAccessEvent, SecretAccessFilter, SecretAuditBackend};
+use crate::settings::secrets::audit::{SecretAccessEvent, SecretAccessFilter, SecretAuditBackend};
 use parking_lot::RwLock;
 use std::sync::Arc;
 

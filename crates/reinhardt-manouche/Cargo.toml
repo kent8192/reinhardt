@@ -1,0 +1,27 @@
+[package]
+name = "reinhardt-manouche"
+version = "0.1.0-alpha.3"
+edition.workspace = true
+license.workspace = true
+description = "DSL definitions for reinhardt-pages macro (Manouche Jazz DSL)"
+repository.workspace = true
+keywords = ["ast", "parser", "dsl", "macro"]
+categories = ["parser-implementations", "development-tools::procedural-macro-helpers"]
+
+[dependencies]
+# Documentation
+aquamarine = "0.5"
+
+# Parsing and AST manipulation
+syn = { version = "2.0", features = ["full", "extra-traits", "visit-mut"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+
+# Diagnostic and error handling
+darling = "0.20"
+
+# Case conversion for identifiers
+convert_case = "0.6"
+
+[dev-dependencies]
+rstest = { workspace = true }

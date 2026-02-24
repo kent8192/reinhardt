@@ -1,4 +1,3 @@
-use super::super::super::schema::{BaseDatabaseSchemaEditor, SchemaEditorResult};
 /// CockroachDB-specific schema editor
 ///
 /// This module provides CockroachDB-specific DDL operations, including:
@@ -26,7 +25,8 @@ use super::super::super::schema::{BaseDatabaseSchemaEditor, SchemaEditorResult};
 /// );
 /// assert!(sql.contains("LOCALITY REGIONAL BY ROW"));
 /// ```
-use super::super::postgresql::schema::PostgreSQLSchemaEditor;
+use crate::backends::drivers::postgresql::schema::PostgreSQLSchemaEditor;
+use crate::backends::schema::{BaseDatabaseSchemaEditor, SchemaEditorResult};
 
 /// Quote an identifier with double quotes
 ///
@@ -324,9 +324,9 @@ impl CockroachDBSchemaEditor {
 
 #[async_trait::async_trait]
 impl BaseDatabaseSchemaEditor for CockroachDBSchemaEditor {
-	fn database_type(&self) -> super::super::super::types::DatabaseType {
+	fn database_type(&self) -> crate::backends::types::DatabaseType {
 		// CockroachDB is PostgreSQL-compatible
-		super::super::super::types::DatabaseType::Postgres
+		crate::backends::types::DatabaseType::Postgres
 	}
 
 	async fn execute(&mut self, sql: &str) -> SchemaEditorResult<()> {

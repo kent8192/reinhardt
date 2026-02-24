@@ -6,11 +6,16 @@
 changelog_update = true
 
 # PR settings
-pr_branch_prefix = "release/"
+# IMPORTANT: Branch prefix MUST start with "release-plz-" for native two-step release workflow.
+# When release_always = false, release-plz checks if the latest commit is from a PR
+# whose branch starts with "release-plz-" to determine if it should publish.
+# See: https://release-plz.ieni.dev/docs/config#the-release_always-field
+pr_branch_prefix = "release-plz-"
 pr_labels = ["release", "automated"]
+pr_name = "chore: release"
 
 # Git release settings
-git_release_enable = true
+git_release_enable = false
 git_tag_enable = true
 git_tag_name = "{{ package }}@v{{ version }}"
 git_release_type = "auto"
@@ -18,7 +23,27 @@ git_release_type = "auto"
 # Publish settings
 semver_check = false
 publish_timeout = "10m"
-dependencies_update = false
+dependencies_update = true
+
+# Two-stage release workflow (native release-plz control):
+# - Stage 1: Push to main → `release-plz release-pr` creates Release PR (branch: release-plz-*)
+# - Stage 2: Merge Release PR → `release-plz release` detects commit from release-plz-* branch and publishes
+#
+# With release_always = true:
+# - release-plz publishes ALL crates whose local version differs from crates.io
+# - This prevents phantom version bumps from `dependencies_update = true` (see KI-5 in RELEASE_PROCESS.md)
+# - Normal code pushes are unaffected since versions match crates.io
+# - Only after Release PR merge will version differences trigger publishing
+# See: https://release-plz.ieni.dev/docs/config#the-release_always-field
+release_always = true
+
+# Skip cargo publish verification (dev-dependencies may reference unpublished workspace crates)
+publish_no_verify = true
+
+# Main crate: only reinhardt-web gets GitHub Releases
+[[package]]
+name = "reinhardt-web"
+git_release_enable = true
 
 # Non-published packages (tests, examples, internal tools)
 [[package]]
@@ -36,45 +61,38 @@ name = "reinhardt-benchmarks"
 release = false
 publish = false
 
-[[package]]
-name = "examples-hello-world"
-release = false
-publish = false
-
-[[package]]
-name = "examples-rest-api"
-release = false
-publish = false
-
-[[package]]
-name = "examples-database-integration"
-release = false
-publish = false
-
-[[package]]
-name = "examples-tutorial-basis"
-release = false
-publish = false
-
-[[package]]
-name = "examples-tutorial-rest"
-release = false
-publish = false
-
-[[package]]
-name = "examples-twitter"
-release = false
-publish = false
-
-[[package]]
-name = "examples-github-issues"
-release = false
-publish = false
-
-[[package]]
-name = "reinhardt-settings-cli"
-release = false
-publish = false
-
 [changelog]
 protect_breaking_commits = true
+sort_commits = "oldest"
+
+# Commit parsers: evaluated in order, first match wins.
+# Skip rules come before mapping rules.
+# See docs/COMMIT_GUIDELINE.md "CG: CHANGELOG Generation Guidelines" section.
+commit_parsers = [
+  # Skip: automated commits not relevant to release notes
+  { message = "^chore: release", skip = true },
+  { message = "^Merge", skip = true },
+  { message = "^Revert \"", skip = true },
+  { message = "^Initial plan", skip = true },
+  # Map: commit types to Keep a Changelog sections
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^revert", group = "Reverted" },
+  { message = "^deprecated", group = "Deprecated" },
+  { message = "^security", group = "Security" },
+  { message = "^chore", group = "Maintenance" },
+  { message = "^ci", group = "Maintenance" },
+  { message = "^build", group = "Maintenance" },
+  { message = "^test", group = "Testing" },
+  { message = "^style", group = "Styling" },
+  # Catch-all
+  { message = "^.*", group = "Other" },
+]
+
+# Convert GitHub issue/PR references to clickable links
+commit_preprocessors = [
+  { pattern = '#(\d+)', replace = "[#${1}](https://github.com/kent8192/reinhardt-web/issues/${1})" },
+]

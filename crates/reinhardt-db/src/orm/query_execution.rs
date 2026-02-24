@@ -10,9 +10,9 @@ use super::engine::Engine;
 use super::types::DatabaseDialect;
 use crate::orm::Model;
 use crate::orm::expressions::{Q, QOperator};
-use sea_query::{
-	Alias, Condition, DeleteStatement, Expr, InsertStatement, Query, SelectStatement, SimpleExpr,
-	UpdateStatement,
+use reinhardt_query::prelude::{
+	Alias, ColumnRef, Condition, DeleteStatement, Expr, InsertStatement, Order, Query,
+	SelectStatement, SimpleExpr, UpdateStatement,
 };
 use serde::de::DeserializeOwned;
 use std::marker::PhantomData;
@@ -29,7 +29,7 @@ impl QueryCompiler {
 		Self { dialect }
 	}
 
-	/// Convert Q expression to SeaQuery Condition
+	/// Convert Q expression to reinhardt-query Condition
 	fn q_to_condition(q: &Q) -> Condition {
 		match q {
 			Q::Condition {
@@ -73,7 +73,7 @@ impl QueryCompiler {
 					QOperator::Not => {
 						if let Some(first) = conditions.first() {
 							// For NOT, we need to negate the inner condition
-							// Since sea-query doesn't have direct NOT support for Condition,
+							// Since reinhardt-query doesn't have direct NOT support for Condition,
 							// we convert the Q to SQL and wrap it with NOT
 							let sql = first.to_sql();
 							Condition::all().add(Expr::cust(format!("NOT ({})", sql)))
@@ -88,7 +88,7 @@ impl QueryCompiler {
 
 	/// Build condition expression from field, operator and value
 	fn build_condition_expr(field: &str, operator: &str, value: &str) -> SimpleExpr {
-		// For sea-query v1.0.0-rc.15, we use custom SQL expressions
+		// For reinhardt-query v1.0.0-rc.15, we use custom SQL expressions
 		// as the API for building complex conditions has changed
 		// This is a temporary solution until we can use the proper API
 
@@ -107,9 +107,11 @@ impl QueryCompiler {
 		};
 
 		match operator.to_uppercase().as_str() {
-			"IS NULL" => Expr::cust(format!("{} IS NULL", field)),
-			"IS NOT NULL" => Expr::cust(format!("{} IS NOT NULL", field)),
-			_ => Expr::cust(format!("{} {} {}", field, operator, formatted_value)),
+			"IS NULL" => Expr::cust(format!("{} IS NULL", field)).into_simple_expr(),
+			"IS NOT NULL" => Expr::cust(format!("{} IS NOT NULL", field)).into_simple_expr(),
+			_ => {
+				Expr::cust(format!("{} {} {}", field, operator, formatted_value)).into_simple_expr()
+			}
 		}
 	}
 
@@ -149,7 +151,7 @@ impl QueryCompiler {
 
 		// Add columns
 		if columns.is_empty() {
-			stmt.column(sea_query::Asterisk);
+			stmt.column(ColumnRef::Asterisk);
 		} else {
 			for col in columns {
 				stmt.column(Alias::new(*col));
@@ -164,7 +166,7 @@ impl QueryCompiler {
 
 		// Add ORDER BY
 		for col in order_by {
-			stmt.order_by(Alias::new(*col), sea_query::Order::Asc);
+			stmt.order_by(Alias::new(*col), Order::Asc);
 		}
 
 		// Add LIMIT
@@ -194,11 +196,13 @@ impl QueryCompiler {
 		let col_refs: Vec<_> = columns.iter().map(|c| Alias::new(*c)).collect();
 		stmt.columns(col_refs);
 
-		// Add values as expressions
-		// Note: values are passed as strings, so we use custom expressions
-		// Convert to owned strings to avoid lifetime issues
-		let exprs: Vec<_> = values.iter().map(|v| Expr::cust(v.to_string())).collect();
-		stmt.values_panic(exprs);
+		// Add values as parameterized values
+		// Values are passed as strings, wrapped in Value::String for parameterized binding
+		let vals: Vec<_> = values
+			.iter()
+			.map(|v| reinhardt_query::value::Value::String(Some(Box::new(v.to_string()))))
+			.collect();
+		stmt.values(vals).expect("Failed to add values");
 
 		stmt.to_owned()
 	}
@@ -215,9 +219,8 @@ impl QueryCompiler {
 
 		// Add SET clauses
 		for (col, val) in updates {
-			// Values are passed as strings, so use custom expressions
-			// Convert to owned strings to avoid lifetime issues
-			stmt.value(Alias::new(*col), Expr::cust(val.to_string()));
+			// Values are passed as strings, wrapped in Value::String for parameterized binding
+			stmt.value(Alias::new(*col), Expr::val(val.to_string()));
 		}
 
 		// Add WHERE clause
@@ -380,7 +383,7 @@ mod tests {
 
 	#[test]
 	fn test_compile_select() {
-		use sea_query::SqliteQueryBuilder;
+		use reinhardt_query::prelude::{QueryStatementBuilder, SqliteQueryBuilder};
 
 		let compiler = QueryCompiler::new(DatabaseDialect::SQLite);
 		let stmt = compiler.compile_select::<TestModel>(
@@ -401,7 +404,7 @@ mod tests {
 
 	#[test]
 	fn test_compile_select_with_where() {
-		use sea_query::SqliteQueryBuilder;
+		use reinhardt_query::prelude::{QueryStatementBuilder, SqliteQueryBuilder};
 
 		let compiler = QueryCompiler::new(DatabaseDialect::SQLite);
 		let q = Q::new("age", ">=", "18");
@@ -415,7 +418,7 @@ mod tests {
 
 	#[test]
 	fn test_compile_select_with_limit_offset() {
-		use sea_query::SqliteQueryBuilder;
+		use reinhardt_query::prelude::{QueryStatementBuilder, SqliteQueryBuilder};
 
 		let compiler = QueryCompiler::new(DatabaseDialect::SQLite);
 		let stmt = compiler.compile_select::<TestModel>(
@@ -435,7 +438,7 @@ mod tests {
 
 	#[test]
 	fn test_compile_insert() {
-		use sea_query::SqliteQueryBuilder;
+		use reinhardt_query::prelude::{QueryStatementBuilder, SqliteQueryBuilder};
 
 		let compiler = QueryCompiler::new(DatabaseDialect::SQLite);
 		let stmt =
@@ -450,7 +453,7 @@ mod tests {
 
 	#[test]
 	fn test_compile_update() {
-		use sea_query::SqliteQueryBuilder;
+		use reinhardt_query::prelude::{QueryStatementBuilder, SqliteQueryBuilder};
 
 		let compiler = QueryCompiler::new(DatabaseDialect::SQLite);
 		let q = Q::new("id", "=", "1");
@@ -469,7 +472,7 @@ mod tests {
 
 	#[test]
 	fn test_compile_delete() {
-		use sea_query::SqliteQueryBuilder;
+		use reinhardt_query::prelude::{QueryStatementBuilder, SqliteQueryBuilder};
 
 		let compiler = QueryCompiler::new(DatabaseDialect::SQLite);
 		let q = Q::new("active", "=", "0");

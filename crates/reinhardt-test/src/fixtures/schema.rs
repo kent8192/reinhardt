@@ -8,7 +8,7 @@
 //!
 //! The main goal is to bridge the gap between:
 //! - `#[model(...)]` macro definitions (which generate `Model` trait implementations)
-//! - Database table creation (previously done manually with SeaQuery)
+//! - Database table creation (previously done manually with reinhardt-query)
 //!
 //! ## Usage Example
 //!
@@ -188,7 +188,7 @@ pub fn resolve_table_name_for_model(
 	if let Some(infos) = model_infos {
 		for info in infos {
 			if info.name == model_name {
-				return info.table_name.to_string();
+				return info.table_name.clone();
 			}
 		}
 	}
@@ -452,13 +452,14 @@ pub fn resolve_model_order(models: &[(String, Vec<String>)]) -> Result<Vec<Strin
 }
 
 /// Model schema information for batch table creation
+// Fixes #871
 pub struct ModelSchemaInfo {
 	/// Model name (used for dependency resolution)
 	pub name: String,
 	/// Table name in the database
-	pub table_name: &'static str,
+	pub table_name: String,
 	/// App label for the model
-	pub app_label: &'static str,
+	pub app_label: String,
 	/// Field metadata from the model
 	pub fields: Vec<FieldInfo>,
 	/// Relationship metadata from the model
@@ -474,8 +475,8 @@ impl ModelSchemaInfo {
 				.last()
 				.unwrap_or("Unknown")
 				.to_string(),
-			table_name: Box::leak(M::table_name().to_string().into_boxed_str()),
-			app_label: Box::leak(M::app_label().to_string().into_boxed_str()),
+			table_name: M::table_name().to_string(),
+			app_label: M::app_label().to_string(),
 			fields: M::field_metadata(),
 			relationships: M::relationship_metadata(),
 		}
@@ -526,7 +527,7 @@ pub fn create_table_operation_from_model<M: Model>() -> Result<Operation, Schema
 pub fn create_table_operation_from_model_with_context<M: Model>(
 	model_infos: Option<&[ModelSchemaInfo]>,
 ) -> Result<Operation, SchemaError> {
-	let table_name: &'static str = Box::leak(M::table_name().to_string().into_boxed_str());
+	let table_name = M::table_name().to_string();
 
 	// Get field metadata for FK action extraction
 	let field_metadata = M::field_metadata();
@@ -541,12 +542,12 @@ pub fn create_table_operation_from_model_with_context<M: Model>(
 	let constraints: Vec<Constraint> = M::relationship_metadata()
 		.iter()
 		.filter_map(|rel| {
-			relation_info_to_constraint(rel, table_name, model_infos, Some(&field_metadata))
+			relation_info_to_constraint(rel, &table_name, model_infos, Some(&field_metadata))
 		})
 		.collect();
 
 	Ok(Operation::CreateTable {
-		name: table_name.to_string(),
+		name: table_name,
 		columns,
 		constraints,
 		without_rowid: None,
@@ -637,7 +638,7 @@ pub fn create_table_operations_from_models(
 				.filter_map(|rel| {
 					relation_info_to_constraint(
 						rel,
-						info.table_name,
+						&info.table_name,
 						Some(&model_infos),
 						Some(&info.fields),
 					)
@@ -645,7 +646,7 @@ pub fn create_table_operations_from_models(
 				.collect();
 
 			operations.push(Operation::CreateTable {
-				name: info.table_name.to_string(),
+				name: info.table_name.clone(),
 				columns,
 				constraints,
 				without_rowid: None,
@@ -815,8 +816,8 @@ mod tests {
 	fn test_resolve_table_name_for_model_with_model_infos() {
 		let model_infos = vec![ModelSchemaInfo {
 			name: "User".to_string(),
-			table_name: "custom_users",
-			app_label: "test",
+			table_name: "custom_users".to_string(),
+			app_label: "test".to_string(),
 			fields: vec![],
 			relationships: vec![],
 		}];
@@ -835,8 +836,8 @@ mod tests {
 	fn test_resolve_table_name_for_model_not_found_in_infos() {
 		let model_infos = vec![ModelSchemaInfo {
 			name: "User".to_string(),
-			table_name: "users",
-			app_label: "test",
+			table_name: "users".to_string(),
+			app_label: "test".to_string(),
 			fields: vec![],
 			relationships: vec![],
 		}];
@@ -944,8 +945,8 @@ mod tests {
 	fn test_relation_info_to_constraint_with_model_infos() {
 		let model_infos = vec![ModelSchemaInfo {
 			name: "User".to_string(),
-			table_name: "app_users",
-			app_label: "test",
+			table_name: "app_users".to_string(),
+			app_label: "test".to_string(),
 			fields: vec![],
 			relationships: vec![],
 		}];

@@ -1,0 +1,17 @@
+# Default owner for everything
+* @kent8192
+
+# Local examples
+/local/ @kent8192
+
+# Remote common utilities
+/remote/common/ @kent8192
+/remote/test-macros/ @kent8192
+
+# CI/CD
+/.github/workflows/ @kent8192
+
+# Documentation
+/README.md @kent8192
+/CONTRIBUTING.md @kent8192
+/SUBTREE_OPERATIONS.md @kent8192

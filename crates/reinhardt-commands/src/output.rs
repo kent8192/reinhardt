@@ -28,7 +28,7 @@ use std::io::{BufWriter, Result, Write};
 /// output.flush().unwrap();
 /// ```
 pub struct OutputWrapper<W: Write> {
-	writer: BufWriter<W>,
+	writer: Option<BufWriter<W>>,
 }
 
 impl<W: Write> OutputWrapper<W> {
@@ -45,7 +45,7 @@ impl<W: Write> OutputWrapper<W> {
 	/// ```
 	pub fn new(writer: W) -> Self {
 		Self {
-			writer: BufWriter::new(writer),
+			writer: Some(BufWriter::new(writer)),
 		}
 	}
 
@@ -56,13 +56,12 @@ impl<W: Write> OutputWrapper<W> {
 	/// # Errors
 	///
 	/// Returns an error if flushing fails.
-	pub fn into_inner(self) -> Result<W> {
-		// Manually drop to avoid double-drop
-		let writer = unsafe {
-			let output = std::mem::ManuallyDrop::new(self);
-			std::ptr::read(&output.writer as *const BufWriter<W>)
-		};
-		writer.into_inner().map_err(|e| e.into_error())
+	pub fn into_inner(mut self) -> Result<W> {
+		self.writer
+			.take()
+			.expect("writer already consumed by into_inner()")
+			.into_inner()
+			.map_err(|e| e.into_error())
 	}
 
 	/// Write a string to the output.
@@ -82,7 +81,10 @@ impl<W: Write> OutputWrapper<W> {
 	/// output.write("Hello").unwrap();
 	/// ```
 	pub fn write(&mut self, s: &str) -> Result<()> {
-		self.writer.write_all(s.as_bytes())
+		self.writer
+			.as_mut()
+			.expect("writer already consumed by into_inner()")
+			.write_all(s.as_bytes())
 	}
 
 	/// Write a string to the output followed by a newline.
@@ -102,8 +104,12 @@ impl<W: Write> OutputWrapper<W> {
 	/// output.writeln("Hello, world!").unwrap();
 	/// ```
 	pub fn writeln(&mut self, s: &str) -> Result<()> {
-		self.writer.write_all(s.as_bytes())?;
-		self.writer.write_all(b"\n")
+		let writer = self
+			.writer
+			.as_mut()
+			.expect("writer already consumed by into_inner()");
+		writer.write_all(s.as_bytes())?;
+		writer.write_all(b"\n")
 	}
 
 	/// Flush the output buffer.
@@ -126,7 +132,10 @@ impl<W: Write> OutputWrapper<W> {
 	/// output.flush().unwrap(); // Ensure the message is written immediately
 	/// ```
 	pub fn flush(&mut self) -> Result<()> {
-		self.writer.flush()
+		self.writer
+			.as_mut()
+			.expect("writer already consumed by into_inner()")
+			.flush()
 	}
 }
 
@@ -134,7 +143,9 @@ impl<W: Write> OutputWrapper<W> {
 impl<W: Write> Drop for OutputWrapper<W> {
 	fn drop(&mut self) {
 		// Best-effort flush - ignore errors in drop
-		let _ = self.writer.flush();
+		if let Some(ref mut writer) = self.writer {
+			writer.flush().ok();
+		}
 	}
 }
 

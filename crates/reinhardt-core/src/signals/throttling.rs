@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 //! Signal throttling system for rate-limiting signal emissions
 //!
 //! This module provides functionality to throttle signal emissions based on various strategies,
@@ -446,7 +448,9 @@ impl<T: Send + Sync + 'static> SignalThrottle<T> {
 					};
 
 					if let Some(item) = item {
-						let _ = signal.send(item).await;
+						if let Err(e) = signal.send(item).await {
+							eprintln!("Failed to send throttled signal: {}", e);
+						}
 					} else {
 						break;
 					}
@@ -472,6 +476,26 @@ mod tests {
 	use super::*;
 	use crate::signals::SignalName;
 	use std::sync::atomic::{AtomicUsize, Ordering};
+
+	/// Polls a condition until it returns true or timeout is reached.
+	async fn poll_until<F, Fut>(
+		timeout: std::time::Duration,
+		interval: std::time::Duration,
+		mut condition: F,
+	) -> Result<(), String>
+	where
+		F: FnMut() -> Fut,
+		Fut: std::future::Future<Output = bool>,
+	{
+		let start = std::time::Instant::now();
+		while start.elapsed() < timeout {
+			if condition().await {
+				return Ok(());
+			}
+			tokio::time::sleep(interval).await;
+		}
+		Err(format!("Timeout after {:?} waiting for condition", timeout))
+	}
 
 	#[test]
 	fn test_throttle_config() {
@@ -514,7 +538,7 @@ mod tests {
 		}
 
 		// Poll until signals are processed
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(100),
 			Duration::from_millis(10),
 			|| async { counter.load(Ordering::SeqCst) == 5 },
@@ -553,7 +577,7 @@ mod tests {
 		}
 
 		// Poll until initial 3 signals are processed
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(50),
 			Duration::from_millis(10),
 			|| async { counter.load(Ordering::SeqCst) == 3 },
@@ -568,7 +592,7 @@ mod tests {
 		throttle.send(99).await.unwrap();
 
 		// Poll until the new signal is processed
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(50),
 			Duration::from_millis(10),
 			|| async { counter.load(Ordering::SeqCst) == 4 },
@@ -603,7 +627,7 @@ mod tests {
 		}
 
 		// Poll until all 10 signals are processed
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(50),
 			Duration::from_millis(10),
 			|| async { counter.load(Ordering::SeqCst) == 10 },
@@ -615,7 +639,7 @@ mod tests {
 		throttle.send(100).await.unwrap();
 
 		// Poll until dropped count increments
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(50),
 			Duration::from_millis(10),
 			|| async { throttle.dropped_count() == 1 },
@@ -652,7 +676,7 @@ mod tests {
 		}
 
 		// Poll until initial 5 signals are processed
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(100),
 			Duration::from_millis(10),
 			|| async { counter.load(Ordering::SeqCst) == 5 },
@@ -665,7 +689,7 @@ mod tests {
 		assert!(throttle.queue_length() > 0);
 
 		// Poll until queue is processed (window is 300ms)
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(500),
 			Duration::from_millis(20),
 			|| async { counter.load(Ordering::SeqCst) >= 9 },

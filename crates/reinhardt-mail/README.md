@@ -61,7 +61,7 @@ use reinhardt::mail::backends::{SmtpBackend, ConsoleBackend};
 #### Settings Integration
 
 - **backend_from_settings**: Backend initialization from configuration
-- Integration with reinhardt-settings for email configuration
+- Integration with reinhardt-conf for email configuration
   - Admin and manager email lists
   - Subject prefix configuration
   - Server email and from email settings

@@ -3,6 +3,22 @@
 //! This module provides CSS and JavaScript asset management for form widgets.
 //! It allows forms to specify their required CSS and JavaScript resources.
 
+/// Escapes special HTML characters to prevent XSS attacks.
+///
+/// This function converts the following characters to their HTML entity equivalents:
+/// - `&` → `&amp;`
+/// - `<` → `&lt;`
+/// - `>` → `&gt;`
+/// - `"` → `&quot;`
+/// - `'` → `&#x27;`
+fn html_escape(s: &str) -> String {
+	s.replace('&', "&amp;")
+		.replace('<', "&lt;")
+		.replace('>', "&gt;")
+		.replace('"', "&quot;")
+		.replace('\'', "&#x27;")
+}
+
 /// Media assets for form widgets
 ///
 /// Contains CSS and JavaScript resources required by form widgets.
@@ -52,19 +68,23 @@ impl Media {
 	}
 
 	/// Render CSS link tags
+	///
+	/// All paths are HTML-escaped to prevent XSS attacks.
 	pub fn render_css(&self) -> String {
 		self.css
 			.iter()
-			.map(|path| format!(r#"<link rel="stylesheet" href="{}">"#, path))
+			.map(|path| format!(r#"<link rel="stylesheet" href="{}">"#, html_escape(path)))
 			.collect::<Vec<_>>()
 			.join("\n")
 	}
 
 	/// Render JavaScript script tags
+	///
+	/// All paths are HTML-escaped to prevent XSS attacks.
 	pub fn render_js(&self) -> String {
 		self.js
 			.iter()
-			.map(|path| format!(r#"<script src="{}"></script>"#, path))
+			.map(|path| format!(r#"<script src="{}"></script>"#, html_escape(path)))
 			.collect::<Vec<_>>()
 			.join("\n")
 	}
@@ -130,5 +150,59 @@ mod tests {
 
 		assert_eq!(media1.css().len(), 2);
 		assert_eq!(media1.js().len(), 1);
+	}
+
+	// ============================================================================
+	// XSS Prevention Tests (Issue #595)
+	// ============================================================================
+
+	#[test]
+	fn test_html_escape_basic() {
+		assert_eq!(html_escape("<script>"), "&lt;script&gt;");
+		assert_eq!(html_escape("a & b"), "a &amp; b");
+		assert_eq!(html_escape("\"quoted\""), "&quot;quoted&quot;");
+		assert_eq!(html_escape("'single'"), "&#x27;single&#x27;");
+	}
+
+	#[test]
+	fn test_media_render_css_escapes_path() {
+		let mut media = Media::new();
+		// Malicious path that could break out of the href attribute
+		media.add_css("\"><script>alert('xss')</script>");
+
+		let rendered = media.render_css();
+		// Should NOT contain raw script tag
+		assert!(!rendered.contains("<script>"));
+		// Should contain escaped version
+		assert!(rendered.contains("&lt;script&gt;"));
+		assert!(rendered.contains("&quot;"));
+	}
+
+	#[test]
+	fn test_media_render_js_escapes_path() {
+		let mut media = Media::new();
+		// Malicious path that could break out of the src attribute
+		media.add_js("\"><script>alert('xss')</script>");
+
+		let rendered = media.render_js();
+		// Should NOT contain raw script tag
+		assert!(!rendered.contains("<script>"));
+		// Should contain escaped version
+		assert!(rendered.contains("&lt;script&gt;"));
+		assert!(rendered.contains("&quot;"));
+	}
+
+	#[test]
+	fn test_media_render_normal_paths_preserved() {
+		let mut media = Media::new();
+		media.add_css("/static/css/forms.css");
+		media.add_js("/static/js/forms.js");
+
+		let css = media.render_css();
+		let js = media.render_js();
+
+		// Normal paths should work correctly
+		assert!(css.contains(r#"href="/static/css/forms.css""#));
+		assert!(js.contains(r#"src="/static/js/forms.js""#));
 	}
 }

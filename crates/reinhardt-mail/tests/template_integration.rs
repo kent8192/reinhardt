@@ -14,7 +14,7 @@ fn test_render_template_basic() {
 	context.insert("city".to_string(), json!("Tokyo"));
 
 	let template = "Hello {{name}}, welcome to {{city}}!";
-	let result = render_template(template, &context).expect("Failed to render template");
+	let result = render_template(template, &context, false).expect("Failed to render template");
 
 	assert_eq!(result, "Hello Alice, welcome to Tokyo!");
 }
@@ -27,7 +27,7 @@ fn test_render_template_numbers() {
 	context.insert("score".to_string(), json!(95.5));
 
 	let template = "Age: {{age}}, Score: {{score}}";
-	let result = render_template(template, &context).expect("Failed to render");
+	let result = render_template(template, &context, false).expect("Failed to render");
 
 	assert_eq!(result, "Age: 30, Score: 95.5");
 }
@@ -40,7 +40,7 @@ fn test_render_template_boolean() {
 	context.insert("verified".to_string(), json!(false));
 
 	let template = "Active: {{active}}, Verified: {{verified}}";
-	let result = render_template(template, &context).expect("Failed to render");
+	let result = render_template(template, &context, false).expect("Failed to render");
 
 	assert_eq!(result, "Active: true, Verified: false");
 }
@@ -52,7 +52,7 @@ fn test_render_template_null() {
 	context.insert("missing".to_string(), json!(null));
 
 	let template = "Value: {{missing}}";
-	let result = render_template(template, &context).expect("Failed to render");
+	let result = render_template(template, &context, false).expect("Failed to render");
 
 	assert_eq!(result, "Value: ");
 }
@@ -63,7 +63,7 @@ fn test_render_template_missing_variables() {
 	let context = TemplateContext::new();
 
 	let template = "Hello {{name}}, you have {{count}} messages.";
-	let result = render_template(template, &context).expect("Failed to render");
+	let result = render_template(template, &context, false).expect("Failed to render");
 
 	// Missing variables remain as-is
 	assert_eq!(result, "Hello {{name}}, you have {{count}} messages.");
@@ -85,10 +85,10 @@ fn test_template_email_builder_basic() {
 		.build()
 		.expect("Failed to build email");
 
-	assert_eq!(message.subject, "Order 12345 Confirmation");
-	assert_eq!(message.body, "Hello Bob, your order 12345 is confirmed.");
-	assert_eq!(message.from_email, "orders@example.com");
-	assert_eq!(message.to, vec!["customer@example.com"]);
+	assert_eq!(message.subject(), "Order 12345 Confirmation");
+	assert_eq!(message.body(), "Hello Bob, your order 12345 is confirmed.");
+	assert_eq!(message.from_email(), "orders@example.com");
+	assert_eq!(message.to(), vec!["customer@example.com"]);
 }
 
 /// Test: TemplateEmailBuilder with HTML template
@@ -111,13 +111,13 @@ fn test_template_email_builder_html() {
 		.build()
 		.expect("Failed to build HTML email");
 
-	assert_eq!(message.subject, "Password Reset for Charlie");
+	assert_eq!(message.subject(), "Password Reset for Charlie");
 	assert_eq!(
-		message.body,
+		message.body(),
 		"Click the link to reset your password: https://example.com/reset/abc123"
 	);
-	assert!(message.html_body.is_some());
-	let html = message.html_body.unwrap();
+	assert!(message.html_body().is_some());
+	let html = message.html_body().unwrap();
 	assert!(html.contains("Hello Charlie"));
 	assert!(html.contains("https://example.com/reset/abc123"));
 }
@@ -135,8 +135,8 @@ fn test_template_email_builder_add_context() {
 		.build()
 		.expect("Failed to build");
 
-	assert_eq!(message.subject, "Welcome David");
-	assert_eq!(message.body, "Your account number is 987654");
+	assert_eq!(message.subject(), "Welcome David");
+	assert_eq!(message.body(), "Your account number is 987654");
 }
 
 /// Test: TemplateEmailBuilder with CC and BCC
@@ -157,9 +157,9 @@ fn test_template_email_builder_cc_bcc() {
 		.build()
 		.expect("Failed to build");
 
-	assert_eq!(message.cc, vec!["cc@example.com"]);
-	assert_eq!(message.bcc, vec!["bcc@example.com"]);
-	assert_eq!(message.reply_to, vec!["support@example.com"]);
+	assert_eq!(message.cc(), vec!["cc@example.com"]);
+	assert_eq!(message.bcc(), vec!["bcc@example.com"]);
+	assert_eq!(message.reply_to(), vec!["support@example.com"]);
 }
 
 /// Test: Template rendering with complex nested content
@@ -172,7 +172,7 @@ fn test_template_complex_content() {
 	context.insert("position".to_string(), json!("Engineer"));
 
 	let template = "Dear {{first_name}} {{last_name}},\n\nCongratulations on your new position as {{position}} at {{company}}!";
-	let result = render_template(template, &context).expect("Failed to render");
+	let result = render_template(template, &context, false).expect("Failed to render");
 
 	assert!(result.contains("Dear Eve Johnson"));
 	assert!(result.contains("Engineer at TechCorp"));
@@ -186,7 +186,7 @@ fn test_template_utf8_content() {
 	context.insert("product".to_string(), json!("ノートパソコン"));
 
 	let template = "{{name}}様、{{product}}のご注文ありがとうございます。";
-	let result = render_template(template, &context).expect("Failed to render");
+	let result = render_template(template, &context, false).expect("Failed to render");
 
 	assert_eq!(
 		result,
@@ -205,8 +205,8 @@ fn test_template_email_builder_empty_templates() {
 		.build()
 		.expect("Failed to build");
 
-	assert_eq!(message.subject, "");
-	assert_eq!(message.body, "");
+	assert_eq!(message.subject(), "");
+	assert_eq!(message.body(), "");
 }
 
 /// Test: TemplateEmailBuilder with multiple variables in one field
@@ -226,8 +226,8 @@ fn test_template_multiple_variables() {
 		.build()
 		.expect("Failed to build");
 
-	assert_eq!(message.subject, "Hello World Test");
-	assert_eq!(message.body, "Hello, World! This is a Test.");
+	assert_eq!(message.subject(), "Hello World Test");
+	assert_eq!(message.body(), "Hello, World! This is a Test.");
 }
 
 /// Test: Template rendering with special characters
@@ -241,7 +241,7 @@ fn test_template_special_characters() {
 	);
 
 	let template = "Contact: {{email}}\nVisit: {{url}}";
-	let result = render_template(template, &context).expect("Failed to render");
+	let result = render_template(template, &context, false).expect("Failed to render");
 
 	assert!(result.contains("user@example.com"));
 	assert!(result.contains("https://example.com/path?query=value&other=123"));
@@ -253,8 +253,8 @@ fn test_template_email_builder_default() {
 	let builder = TemplateEmailBuilder::default();
 	let message = builder.build().expect("Failed to build default");
 
-	assert_eq!(message.subject, "");
-	assert_eq!(message.body, "");
-	assert_eq!(message.from_email, "");
-	assert!(message.to.is_empty());
+	assert_eq!(message.subject(), "");
+	assert_eq!(message.body(), "");
+	assert_eq!(message.from_email(), "");
+	assert!(message.to().is_empty());
 }

@@ -250,12 +250,12 @@ UnifiedRouter::new().register_viewset("/snippets-viewset", Arc::new(SnippetViewS
 ## Try it Yourself
 
 The complete working example is available in `examples-tutorial-rest`:
-- [examples-tutorial-rest](../../../examples/local/examples-tutorial-rest/)
+- [examples-tutorial-rest](../../../examples/examples-tutorial-rest/)
 
 ### Running the Example
 
 ```bash
-cd examples/local/examples-tutorial-rest
+cd examples/examples-tutorial-rest
 
 # Option 1: Function-based views (Tutorial 1-5)
 cargo run --bin manage runserver
@@ -316,5 +316,5 @@ You can now build production-ready RESTful APIs with this knowledge!
 - For more advanced topics, see the [API Reference](../../../api/README.md)
 - Learn about [Dependency Injection](../../07-dependency-injection.md)
 - Check out the [Feature Flags Guide](../../../FEATURE_FLAGS.md) for customization
-- Try the working example in [examples-tutorial-rest](../../../examples/local/examples-tutorial-rest/)
+- Try the working example in [examples-tutorial-rest](../../../examples/examples-tutorial-rest/)
 - Join the community to ask questions

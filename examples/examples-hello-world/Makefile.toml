@@ -1,0 +1,104 @@
+# Makefile.toml for examples-hello-world
+#
+# This file provides cargo-make task definitions for common development operations.
+# Install cargo-make: `cargo install cargo-make`
+# Usage: `cargo make <task>`
+
+[config]
+default_to_workspace = false
+skip_core_tasks = true
+
+# ============================================================================
+# Environment Variables
+# ============================================================================
+
+[env]
+# Use local target directory for each example (independent from workspace)
+CARGO_TARGET_DIR = { value = "target", condition = { env_not_set = ["CARGO_TARGET_DIR"] } }
+
+# ============================================================================
+# Development Server
+# ============================================================================
+
+[tasks.runserver]
+description = "Start the development server"
+command = "cargo"
+args = ["run", "--bin", "examples-hello-world", "runserver"]
+
+# ============================================================================
+# Testing
+# ============================================================================
+
+[tasks.test]
+description = "Run all tests"
+command = "cargo"
+args = ["nextest", "run", "--all-features"]
+
+[tasks.test-unit]
+description = "Run unit tests only"
+command = "cargo"
+args = ["nextest", "run", "--lib", "--all-features"]
+
+[tasks.test-integration]
+description = "Run integration tests only"
+command = "cargo"
+args = ["nextest", "run", "--test", "*", "--all-features"]
+
+# ============================================================================
+# Code Quality
+# ============================================================================
+
+[tasks.fmt-check]
+description = "Check code formatting (rustfmt + page! DSL)"
+command = "reinhardt-admin"
+args = ["fmt", ".", "--check"]
+
+[tasks.fmt-fix]
+description = "Fix code formatting (rustfmt + page! DSL)"
+command = "reinhardt-admin"
+args = ["fmt", "."]
+
+[tasks.clippy-check]
+description = "Check linting rules"
+command = "cargo"
+args = ["clippy", "--all-features", "--", "-D", "warnings"]
+
+[tasks.clippy-fix]
+description = "Fix linting issues automatically"
+command = "cargo"
+args = ["clippy", "--all-features", "--fix", "--allow-dirty", "--allow-staged"]
+
+[tasks.quality]
+description = "Run all code quality checks (format + lint)"
+dependencies = ["fmt-check", "clippy-check"]
+
+[tasks.quality-fix]
+description = "Fix all code quality issues automatically"
+dependencies = ["fmt-fix", "clippy-fix"]
+
+# ============================================================================
+# Build & Clean
+# ============================================================================
+
+[tasks.build]
+description = "Build the project in debug mode"
+command = "cargo"
+args = ["build", "--all-features"]
+
+[tasks.build-release]
+description = "Build the project in release mode"
+command = "cargo"
+args = ["build", "--release", "--all-features"]
+
+[tasks.clean]
+description = "Clean build artifacts"
+command = "cargo"
+args = ["clean"]
+
+# ============================================================================
+# CI/CD Workflow
+# ============================================================================
+
+[tasks.ci]
+description = "Run CI pipeline (format, lint, build, test)"
+dependencies = ["fmt-check", "clippy-check", "build", "test"]

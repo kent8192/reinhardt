@@ -7,7 +7,6 @@ use crate::proxy::ScalarValue;
 /// Collection operations for filtering and transforming
 #[derive(Debug, Clone)]
 pub struct CollectionOperations {
-	#[allow(dead_code)]
 	proxy: CollectionProxy,
 }
 
@@ -43,7 +42,7 @@ impl CollectionOperations {
 	/// ```
 	pub async fn filter<T, F>(&self, source: &T, predicate: F) -> ProxyResult<Vec<ScalarValue>>
 	where
-		T: super::super::reflection::Reflectable,
+		T: crate::proxy::reflection::Reflectable,
 		F: Fn(&ScalarValue) -> bool,
 	{
 		let values = self.proxy.get_values(source).await?;
@@ -69,7 +68,7 @@ impl CollectionOperations {
 	/// ```
 	pub async fn map<T, F, U>(&self, source: &T, mapper: F) -> ProxyResult<Vec<U>>
 	where
-		T: super::super::reflection::Reflectable,
+		T: crate::proxy::reflection::Reflectable,
 		F: Fn(&ScalarValue) -> U,
 	{
 		let values = self.proxy.get_values(source).await?;
@@ -92,7 +91,7 @@ impl CollectionOperations {
 	/// ```
 	pub async fn sort<T>(&self, source: &T) -> ProxyResult<Vec<ScalarValue>>
 	where
-		T: super::super::reflection::Reflectable,
+		T: crate::proxy::reflection::Reflectable,
 	{
 		let mut values = self.proxy.get_values(source).await?;
 		values.sort_by(|a, b| format!("{:?}", a).cmp(&format!("{:?}", b)));
@@ -115,7 +114,7 @@ impl CollectionOperations {
 	/// ```
 	pub async fn distinct<T>(&self, source: &T) -> ProxyResult<Vec<ScalarValue>>
 	where
-		T: super::super::reflection::Reflectable,
+		T: crate::proxy::reflection::Reflectable,
 	{
 		let mut values = self.proxy.get_values(source).await?;
 		values.sort_by(|a, b| format!("{:?}", a).cmp(&format!("{:?}", b)));

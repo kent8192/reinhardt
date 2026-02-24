@@ -98,6 +98,7 @@ pub async fn model_admin_config() -> ModelAdminConfig {
 		.list_filter(vec!["status"])
 		.search_fields(vec!["name", "description"])
 		.build()
+		.expect("model_admin_config fixture: model_name is set")
 }
 
 #[cfg(all(feature = "admin", feature = "testcontainers"))]
@@ -237,7 +238,9 @@ pub async fn export_import_test_context(
 ) -> (Arc<AdminSite>, Arc<AdminDatabase>, String, sqlx::PgPool) {
 	use reinhardt_db::backends::connection::DatabaseConnection as BackendsConnection;
 	use reinhardt_db::backends::dialect::PostgresBackend;
-	use sea_query::{Alias, ColumnDef, Expr, Iden, PostgresQueryBuilder, Query, Table};
+	use reinhardt_query::prelude::{
+		Alias, ColumnDef, Expr, Iden, PostgresQueryBuilder, Query, QueryStatementBuilder, Value,
+	};
 	use sqlx::Row;
 	use std::sync::Arc as StdArc;
 	use uuid::Uuid;
@@ -258,11 +261,11 @@ pub async fn export_import_test_context(
 	// Create AdminDatabase
 	let db = Arc::new(AdminDatabase::new(connection));
 
-	// ユニークなテーブル名生成
+	// Generate unique table name
 	let table_name = format!("test_exports_{}", Uuid::new_v4().simple());
 
-	// テーブル定義用Iden
-	#[derive(Iden)]
+	// Table definition identifiers
+	#[derive(Debug, Iden)]
 	enum TestExportsTable {
 		#[iden = "_"]
 		Table,
@@ -279,64 +282,63 @@ pub async fn export_import_test_context(
 		Metadata,
 	}
 
-	// SeaQueryでテーブル作成
-	let create_table = Table::create()
+	// Create table using reinhardt-query
+	let mut create_stmt = Query::create_table();
+	create_stmt
 		.table(Alias::new(&table_name))
 		.if_not_exists()
 		.col(
 			ColumnDef::new(TestExportsTable::Id)
 				.big_integer()
-				.not_null()
-				.auto_increment()
-				.primary_key(),
+				.not_null(true)
+				.auto_increment(true)
+				.primary_key(true),
 		)
 		.col(
 			ColumnDef::new(TestExportsTable::Name)
-				.string()
 				.string_len(255)
-				.not_null(),
+				.not_null(true),
 		)
 		.col(
 			ColumnDef::new(TestExportsTable::Email)
-				.string()
 				.string_len(255)
-				.not_null(),
+				.not_null(true),
 		)
 		.col(
 			ColumnDef::new(TestExportsTable::Status)
-				.string()
 				.string_len(50)
-				.default("active"),
+				.default("active".into()),
 		)
 		.col(ColumnDef::new(TestExportsTable::Age).integer())
 		.col(ColumnDef::new(TestExportsTable::Score).double())
 		.col(
 			ColumnDef::new(TestExportsTable::IsVerified)
 				.boolean()
-				.default(false),
+				.default(false.into()),
 		)
 		.col(ColumnDef::new(TestExportsTable::Bio).text())
 		.col(ColumnDef::new(TestExportsTable::BirthDate).date())
 		.col(
 			ColumnDef::new(TestExportsTable::CreatedAt)
 				.timestamp_with_time_zone()
-				.default(Expr::current_timestamp()),
+				.default(Expr::current_timestamp().into()),
 		)
-		.col(ColumnDef::new(TestExportsTable::Metadata).json_binary())
-		.build(PostgresQueryBuilder);
+		.col(ColumnDef::new(TestExportsTable::Metadata).json_binary());
 
-	sqlx::query(&create_table)
+	let create_table_sql = create_stmt.to_string(PostgresQueryBuilder::new());
+
+	sqlx::query(&create_table_sql)
 		.execute(&pool)
 		.await
 		.expect("Failed to create test table");
 
-	// 多様なテストデータ挿入（5パターン）
-	// パターン5用の長い文字列を事前に作成
+	// Insert diverse test data (5 patterns)
+	// Pre-create long strings for pattern 5
 	let long_name = format!("Eve Martinez{}", "x".repeat(240));
 	let long_bio = "Lorem ipsum dolor sit amet ".repeat(100);
 
 	let test_records = vec![
-		// パターン1: 標準データ
+		// Pattern 1: Standard data
 		(
 			"Alice Johnson",
 			"alice@example.com",
@@ -348,7 +350,7 @@ pub async fn export_import_test_context(
 			Some("1994-03-15"),
 			Some(r#"{"role": "admin", "department": "engineering"}"#),
 		),
-		// パターン2: NULL値
+		// Pattern 2: NULL values
 		(
 			"Bob Smith",
 			"bob@example.com",
@@ -360,7 +362,7 @@ pub async fn export_import_test_context(
 			None,
 			None,
 		),
-		// パターン3: 特殊文字とUnicode
+		// Pattern 3: Special characters and Unicode
 		(
 			"Charlie O'Brien",
 			"charlie+test@example.com",
@@ -372,7 +374,7 @@ pub async fn export_import_test_context(
 			Some("1999-01-01"),
 			Some(r#"{"tags": ["新規", "VIP"]}"#),
 		),
-		// パターン4: 境界値
+		// Pattern 4: Boundary values
 		(
 			"David Lee",
 			"david@example.com",
@@ -384,7 +386,7 @@ pub async fn export_import_test_context(
 			Some("1900-01-01"),
 			Some("{}"),
 		),
-		// パターン5: 最大長エッジケース
+		// Pattern 5: Maximum length edge case
 		(
 			long_name.as_str(),
 			"eve@example.com",
@@ -405,7 +407,7 @@ pub async fn export_import_test_context(
 			TestExportsTable::Status,
 			TestExportsTable::IsVerified,
 		];
-		let mut values: Vec<sea_query::Value> =
+		let mut values: Vec<Value> =
 			vec![name.into(), email.into(), status.into(), is_verified.into()];
 
 		if let Some(age_val) = age {
@@ -433,9 +435,9 @@ pub async fn export_import_test_context(
 		insert_stmt
 			.into_table(Alias::new(&table_name))
 			.columns(columns)
-			.values_panic(values.into_iter().map(|v| v.into()).collect::<Vec<_>>());
+			.values_panic(values);
 
-		let sql = insert_stmt.to_string(PostgresQueryBuilder);
+		let sql = insert_stmt.to_string(PostgresQueryBuilder::new());
 
 		sqlx::query(&sql)
 			.execute(&pool)
@@ -469,7 +471,8 @@ pub async fn export_import_test_context(
 			"is_verified",
 		])
 		.search_fields(vec!["name", "email", "bio"])
-		.build();
+		.build()
+		.expect("admin_with_database fixture: model_name is set");
 
 	site.register("TestModel", config)
 		.expect("Failed to register TestModel in AdminSite");

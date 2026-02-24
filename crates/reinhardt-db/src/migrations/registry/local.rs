@@ -3,8 +3,8 @@
 //! Test-specific registry using dynamic runtime registration.
 //! Provides complete isolation for unit tests without linkme's distributed_slice.
 
-use super::super::Migration;
 use super::traits::MigrationRegistry;
+use crate::migrations::Migration;
 use std::collections::HashSet;
 use std::sync::RwLock;
 

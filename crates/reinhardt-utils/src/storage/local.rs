@@ -121,6 +121,9 @@ impl Storage for LocalStorage {
 	}
 
 	async fn read(&self, path: &str) -> StorageResult<StoredFile> {
+		// Validate path to prevent directory traversal
+		Self::validate_path(path)?;
+
 		let full_path = self.full_path(path);
 
 		if !full_path.exists() {
@@ -136,6 +139,9 @@ impl Storage for LocalStorage {
 	}
 
 	async fn delete(&self, path: &str) -> StorageResult<()> {
+		// Validate path to prevent directory traversal
+		Self::validate_path(path)?;
+
 		let full_path = self.full_path(path);
 
 		if !full_path.exists() {
@@ -147,11 +153,17 @@ impl Storage for LocalStorage {
 	}
 
 	async fn exists(&self, path: &str) -> StorageResult<bool> {
+		// Validate path to prevent directory traversal
+		Self::validate_path(path)?;
+
 		let full_path = self.full_path(path);
 		Ok(full_path.exists())
 	}
 
 	async fn metadata(&self, path: &str) -> StorageResult<FileMetadata> {
+		// Validate path to prevent directory traversal
+		Self::validate_path(path)?;
+
 		let full_path = self.full_path(path);
 
 		if !full_path.exists() {
@@ -165,6 +177,12 @@ impl Storage for LocalStorage {
 	}
 
 	async fn list(&self, path: &str) -> StorageResult<Vec<FileMetadata>> {
+		// Validate path to prevent directory traversal
+		// Empty path is allowed to list the base directory
+		if !path.is_empty() {
+			Self::validate_path(path)?;
+		}
+
 		let full_path = self.full_path(path);
 		let mut entries = fs::read_dir(&full_path).await?;
 		let mut results = Vec::new();
@@ -197,6 +215,9 @@ impl Storage for LocalStorage {
 	}
 
 	async fn get_accessed_time(&self, path: &str) -> StorageResult<chrono::DateTime<chrono::Utc>> {
+		// Validate path to prevent directory traversal
+		Self::validate_path(path)?;
+
 		let full_path = self.full_path(path);
 
 		if !full_path.exists() {
@@ -210,6 +231,9 @@ impl Storage for LocalStorage {
 	}
 
 	async fn get_created_time(&self, path: &str) -> StorageResult<chrono::DateTime<chrono::Utc>> {
+		// Validate path to prevent directory traversal
+		Self::validate_path(path)?;
+
 		let full_path = self.full_path(path);
 
 		if !full_path.exists() {
@@ -223,6 +247,9 @@ impl Storage for LocalStorage {
 	}
 
 	async fn get_modified_time(&self, path: &str) -> StorageResult<chrono::DateTime<chrono::Utc>> {
+		// Validate path to prevent directory traversal
+		Self::validate_path(path)?;
+
 		let full_path = self.full_path(path);
 
 		if !full_path.exists() {
@@ -590,5 +617,105 @@ mod tests {
 		// This test documents current behavior
 		let url = storage.url("test file.txt");
 		assert!(url.contains("test file.txt"));
+	}
+
+	#[tokio::test]
+	async fn test_read_prevents_directory_traversal() {
+		let (storage, _temp_dir) = create_test_storage().await;
+
+		// Test parent directory traversal
+		let result = storage.read("../test.txt").await;
+		assert!(result.is_err());
+		assert!(matches!(result.unwrap_err(), StorageError::InvalidPath(_)));
+
+		// Test absolute path
+		let result = storage.read("/etc/passwd").await;
+		assert!(result.is_err());
+		assert!(matches!(result.unwrap_err(), StorageError::InvalidPath(_)));
+
+		// Test embedded parent directory
+		let result = storage.read("tmp/../test.txt").await;
+		assert!(result.is_err());
+		assert!(matches!(result.unwrap_err(), StorageError::InvalidPath(_)));
+	}
+
+	#[tokio::test]
+	async fn test_delete_prevents_directory_traversal() {
+		let (storage, _temp_dir) = create_test_storage().await;
+
+		// Test parent directory traversal
+		let result = storage.delete("../test.txt").await;
+		assert!(result.is_err());
+		assert!(matches!(result.unwrap_err(), StorageError::InvalidPath(_)));
+
+		// Test absolute path
+		let result = storage.delete("/etc/passwd").await;
+		assert!(result.is_err());
+		assert!(matches!(result.unwrap_err(), StorageError::InvalidPath(_)));
+	}
+
+	#[tokio::test]
+	async fn test_exists_prevents_directory_traversal() {
+		let (storage, _temp_dir) = create_test_storage().await;
+
+		// Test parent directory traversal
+		let result = storage.exists("../test.txt").await;
+		assert!(result.is_err());
+		assert!(matches!(result.unwrap_err(), StorageError::InvalidPath(_)));
+
+		// Test absolute path
+		let result = storage.exists("/etc/passwd").await;
+		assert!(result.is_err());
+		assert!(matches!(result.unwrap_err(), StorageError::InvalidPath(_)));
+	}
+
+	#[tokio::test]
+	async fn test_metadata_prevents_directory_traversal() {
+		let (storage, _temp_dir) = create_test_storage().await;
+
+		// Test parent directory traversal
+		let result = storage.metadata("../test.txt").await;
+		assert!(result.is_err());
+		assert!(matches!(result.unwrap_err(), StorageError::InvalidPath(_)));
+
+		// Test absolute path
+		let result = storage.metadata("/etc/passwd").await;
+		assert!(result.is_err());
+		assert!(matches!(result.unwrap_err(), StorageError::InvalidPath(_)));
+	}
+
+	#[tokio::test]
+	async fn test_list_prevents_directory_traversal() {
+		let (storage, _temp_dir) = create_test_storage().await;
+
+		// Test parent directory traversal
+		let result = storage.list("../test").await;
+		assert!(result.is_err());
+		assert!(matches!(result.unwrap_err(), StorageError::InvalidPath(_)));
+
+		// Test absolute path
+		let result = storage.list("/etc").await;
+		assert!(result.is_err());
+		assert!(matches!(result.unwrap_err(), StorageError::InvalidPath(_)));
+	}
+
+	#[tokio::test]
+	async fn test_get_time_operations_prevent_directory_traversal() {
+		let (storage, _temp_dir) = create_test_storage().await;
+
+		// Test get_accessed_time
+		let result = storage.get_accessed_time("../test.txt").await;
+		assert!(result.is_err());
+		assert!(matches!(result.unwrap_err(), StorageError::InvalidPath(_)));
+
+		// Test get_created_time
+		let result = storage.get_created_time("../test.txt").await;
+		assert!(result.is_err());
+		assert!(matches!(result.unwrap_err(), StorageError::InvalidPath(_)));
+
+		// Test get_modified_time
+		let result = storage.get_modified_time("../test.txt").await;
+		assert!(result.is_err());
+		assert!(matches!(result.unwrap_err(), StorageError::InvalidPath(_)));
 	}
 }

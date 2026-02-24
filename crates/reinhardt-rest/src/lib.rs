@@ -19,15 +19,12 @@
 //!
 //! ```rust
 //! use reinhardt_rest::parsers::JSONParser;
-//! use reinhardt_urls::routers::DefaultRouter;
 //!
 //! // Create a JSON parser
 //! let parser = JSONParser::new();
-//!
-//! // Create a router
-//! let router = DefaultRouter::new();
-//! // Note: ViewSet registration requires a type implementing the ViewSet trait
 //! ```
+//!
+//! For router integration, see [`reinhardt_urls::routers`](reinhardt_urls::routers) crate.
 //!
 //! ## Testing
 //!

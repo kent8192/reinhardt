@@ -4,9 +4,7 @@
 //!
 //! Note: SQLite has limited ALTER TABLE support. Some operations require table recreation.
 
-use super::super::super::schema::{
-	BaseDatabaseSchemaEditor, SchemaEditorError, SchemaEditorResult,
-};
+use crate::backends::schema::{BaseDatabaseSchemaEditor, SchemaEditorError, SchemaEditorResult};
 
 /// Quote SQLite identifier (double-quote escaping)
 fn quote_sqlite_identifier(name: &str) -> String {
@@ -93,8 +91,8 @@ impl SQLiteSchemaEditor {
 
 #[async_trait::async_trait]
 impl BaseDatabaseSchemaEditor for SQLiteSchemaEditor {
-	fn database_type(&self) -> super::super::super::types::DatabaseType {
-		super::super::super::types::DatabaseType::Sqlite
+	fn database_type(&self) -> crate::backends::types::DatabaseType {
+		crate::backends::types::DatabaseType::Sqlite
 	}
 
 	async fn execute(&mut self, _sql: &str) -> SchemaEditorResult<()> {

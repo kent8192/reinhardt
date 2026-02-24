@@ -345,7 +345,14 @@ pub trait BaseUser: Send + Sync + Serialize + for<'de> Deserialize<'de> {
 
 	/// Returns a hash of the session authentication credentials
 	///
-	/// This is used to invalidate sessions when password changes.
+	/// Uses HMAC-SHA256 with the provided secret as key material combined with the
+	/// password hash. The secret should be a server-side secret (e.g., `SECRET_KEY`
+	/// from settings) to prevent session forgery.
+	///
+	/// # Arguments
+	///
+	/// * `secret` - A server-side secret used as HMAC key material. This should be
+	///   the application's `SECRET_KEY` or equivalent cryptographic secret.
 	///
 	/// # Examples
 	///
@@ -383,25 +390,27 @@ pub trait BaseUser: Send + Sync + Serialize + for<'de> Deserialize<'de> {
 	///     is_active: true,
 	/// };
 	///
+	/// let secret = "my-server-secret-key";
 	/// user.set_password("password123").unwrap();
-	/// let hash1 = user.get_session_auth_hash();
+	/// let hash1 = user.get_session_auth_hash(secret);
 	///
 	/// user.set_password("new_password").unwrap();
-	/// let hash2 = user.get_session_auth_hash();
+	/// let hash2 = user.get_session_auth_hash(secret);
 	///
 	/// assert_ne!(hash1, hash2); // Hash changes when password changes
 	/// # }
 	/// ```
-	fn get_session_auth_hash(&self) -> String {
+	fn get_session_auth_hash(&self, secret: &str) -> String {
 		use hmac::{Hmac, Mac};
 		use sha2::Sha256;
 
-		let hash = self.password_hash().unwrap_or("");
-		let key = format!("{}:{}", Self::get_username_field(), self.get_username());
+		let password_hash = self.password_hash().unwrap_or("");
+		// Derive HMAC key from the server secret combined with a domain separator
+		let key = format!("reinhardt.auth.session_hash:{}", secret);
 
 		let mut mac =
 			Hmac::<Sha256>::new_from_slice(key.as_bytes()).expect("HMAC can take key of any size");
-		mac.update(hash.as_bytes());
+		mac.update(password_hash.as_bytes());
 
 		hex::encode(mac.finalize().into_bytes())
 	}

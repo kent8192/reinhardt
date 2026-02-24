@@ -15,8 +15,8 @@ use reinhardt_auth::{
 	Argon2Hasher, BaseUser, DefaultUser, PasswordHasher, StoredToken, TokenStorage,
 };
 use rstest::*;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Barrier;
 use uuid::Uuid;
 

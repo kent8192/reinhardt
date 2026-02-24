@@ -259,7 +259,7 @@ impl Mutation {
 - Built-in introspection
 - Field-level documentation
 
-**Example:** See [examples/examples-github-issues](../../../../examples/local/examples-github-issues)
+**Example:** See [examples/examples-github-issues](../../../../examples/examples-github-issues)
 for a complete GraphQL implementation with `InputObject`.
 
 ---

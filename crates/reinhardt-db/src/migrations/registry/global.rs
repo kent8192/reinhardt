@@ -3,8 +3,8 @@
 //! Production registry using linkme's distributed_slice for compile-time migration collection.
 //! Supports runtime registration for dynamic scenarios.
 
-use super::super::Migration;
 use super::traits::MigrationRegistry;
+use crate::migrations::Migration;
 use linkme::distributed_slice;
 use once_cell::sync::Lazy;
 use std::collections::HashSet;

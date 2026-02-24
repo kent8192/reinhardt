@@ -14,7 +14,10 @@ mod serde_attrs;
 
 use crate::crate_paths::get_reinhardt_openapi_crate;
 use schema::{FieldAttributes, extract_field_attributes};
-use serde_attrs::{TaggingStrategy, extract_serde_enum_attrs, extract_serde_variant_attrs};
+use serde_attrs::{
+	TaggingStrategy, extract_serde_enum_attrs, extract_serde_rename_all,
+	extract_serde_variant_attrs,
+};
 
 /// Derive macro for automatic OpenAPI schema generation.
 ///
@@ -94,9 +97,15 @@ fn derive_struct_schema(input: &DeriveInput, data: &syn::DataStruct) -> TokenStr
 	// Extract container-level attributes
 	let struct_name = name.to_string();
 
+	// Extract container-level rename_all for field name transformation
+	// Fixes #835
+	let rename_all = extract_serde_rename_all(&input.attrs);
+
 	// Generate schema for each field
 	let mut field_schemas = Vec::new();
 	let mut required_fields = Vec::new();
+	// Fixes #839: Track flattened fields for allOf generation
+	let mut flatten_schemas = Vec::new();
 
 	for field in fields {
 		let field_name = field.ident.as_ref().unwrap();
@@ -104,17 +113,44 @@ fn derive_struct_schema(input: &DeriveInput, data: &syn::DataStruct) -> TokenStr
 		let field_type = &field.ty;
 
 		// Extract field attributes
-		let attrs = extract_field_attributes(&field.attrs);
+		let attrs = match extract_field_attributes(&field.attrs) {
+			Ok(attrs) => attrs,
+			Err(err) => return err.to_compile_error().into(),
+		};
+
+		// Fixes #837: Validate mutual exclusion of read_only and write_only
+		if attrs.read_only && attrs.write_only {
+			return syn::Error::new_spanned(
+				field,
+				"A field cannot be both read_only and write_only",
+			)
+			.to_compile_error()
+			.into();
+		}
+
+		// Fixes #836: Skip fields with serde skip attributes
+		if attrs.skip || attrs.skip_serializing || attrs.skip_deserializing {
+			continue;
+		}
+
+		// Fixes #839: Handle flattened fields separately
+		if attrs.flatten {
+			let schema_builder = build_field_schema(field_type, &attrs);
+			flatten_schemas.push(schema_builder);
+			continue;
+		}
 
 		// Use renamed property name if available (from #[serde(rename)] or #[schema(rename)])
+		// Fixes #835: Apply rename_all if no explicit rename is set
 		let property_name = attrs
 			.rename
 			.clone()
-			.unwrap_or_else(|| field_name_str.clone());
+			.unwrap_or_else(|| apply_rename_all(&field_name_str, rename_all.as_deref()));
 
 		// Check if field is Option<T> (makes it optional)
+		// Fixes #838: Also consider default attribute for required fields
 		let is_option = is_option_type(field_type);
-		if !is_option {
+		if !is_option && !attrs.default {
 			required_fields.push(property_name.clone());
 		}
 
@@ -138,6 +174,43 @@ fn derive_struct_schema(input: &DeriveInput, data: &syn::DataStruct) -> TokenStr
 	// Get dynamic crate path
 	let openapi_crate = get_reinhardt_openapi_crate();
 
+	// Fixes #839: Generate allOf if there are flattened fields
+	let schema_body = if !flatten_schemas.is_empty() {
+		quote! {
+			use #openapi_crate::Schema;
+			use #openapi_crate::utoipa::openapi::schema::{AllOfBuilder, ObjectBuilder, SchemaType, Type};
+
+			// Build the main object schema with regular properties
+			let mut builder = ObjectBuilder::new()
+				.schema_type(SchemaType::Type(Type::Object));
+
+			#(#field_schemas)*
+			#required_builder
+
+			let main_schema = Schema::Object(builder.build());
+
+			// Combine with flattened schemas using allOf
+			let mut all_of_builder = AllOfBuilder::new();
+			all_of_builder = all_of_builder.item(#openapi_crate::RefOr::T(main_schema));
+			#(all_of_builder = all_of_builder.item(#openapi_crate::RefOr::T(#flatten_schemas));)*
+
+			Schema::AllOf(all_of_builder.build())
+		}
+	} else {
+		quote! {
+			use #openapi_crate::Schema;
+			use #openapi_crate::utoipa::openapi::schema::{ObjectBuilder, SchemaType, Type};
+
+			let mut builder = ObjectBuilder::new()
+				.schema_type(SchemaType::Type(Type::Object));
+
+			#(#field_schemas)*
+			#required_builder
+
+			Schema::Object(builder.build())
+		}
+	};
+
 	// Generate inventory registration only for non-generic types
 	// Generic types cannot be registered at compile time since they don't have a concrete type
 	let inventory_registration = if generics.params.is_empty() {
@@ -158,16 +231,7 @@ fn derive_struct_schema(input: &DeriveInput, data: &syn::DataStruct) -> TokenStr
 	let expanded = quote! {
 		impl #impl_generics #openapi_crate::ToSchema for #name #ty_generics #where_clause {
 			fn schema() -> #openapi_crate::Schema {
-				use #openapi_crate::Schema;
-				use #openapi_crate::utoipa::openapi::schema::{ObjectBuilder, SchemaType, Type};
-
-				let mut builder = ObjectBuilder::new()
-					.schema_type(SchemaType::Type(Type::Object));
-
-				#(#field_schemas)*
-				#required_builder
-
-				Schema::Object(builder.build())
+				#schema_body
 			}
 
 			fn schema_name() -> Option<String> {
@@ -391,7 +455,7 @@ fn generate_variant_schema(
 				let field_type = &field.ty;
 
 				// Check for serde rename on field
-				let field_attrs = extract_field_attributes(&field.attrs);
+				let field_attrs = extract_field_attributes(&field.attrs).unwrap_or_default();
 				let property_name = field_attrs.rename.unwrap_or(field_name_str);
 
 				// Check if required
@@ -453,16 +517,33 @@ fn to_camel_case(s: &str) -> String {
 }
 
 /// Convert PascalCase to snake_case
+/// Fixes #833: Handle consecutive uppercase correctly (e.g., "XMLParser" -> "xmlparser")
+///
+/// This follows serde's behavior where consecutive uppercase letters are treated
+/// as a single word (e.g., "XMLParser" -> "xmlparser", not "x_m_l_parser").
 fn to_snake_case(s: &str) -> String {
 	let mut result = String::new();
-	for (i, c) in s.chars().enumerate() {
+	let chars: Vec<char> = s.chars().collect();
+
+	for (i, c) in chars.iter().enumerate() {
 		if c.is_uppercase() {
+			// Only insert underscore before uppercase if:
+			// 1. Not the first character AND
+			// 2. Previous character is lowercase OR
+			// 3. (Not the last character AND next character is lowercase)
+			// This handles: "HttpRequest" -> "http_request"
+			// But not: "XMLParser" -> "x_m_l_parser" (becomes "xmlparser")
 			if i > 0 {
-				result.push('_');
+				let prev_is_lowercase = chars[i - 1].is_lowercase();
+				let next_is_lowercase = i + 1 < chars.len() && chars[i + 1].is_lowercase();
+
+				if prev_is_lowercase || next_is_lowercase {
+					result.push('_');
+				}
 			}
 			result.extend(c.to_lowercase());
 		} else {
-			result.push(c);
+			result.push(*c);
 		}
 	}
 	result

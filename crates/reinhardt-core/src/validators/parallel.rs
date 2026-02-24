@@ -26,7 +26,7 @@
 
 use super::Validator;
 use super::errors::{ValidationError, ValidationResult};
-use rayon::prelude::*;
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Result of parallel validation for multiple values.

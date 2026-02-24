@@ -6,6 +6,7 @@ use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
+use tracing;
 
 // Cloud storage backends
 #[cfg(feature = "s3")]
@@ -55,7 +56,19 @@ impl FileSystemStorage {
 
 	fn normalize_path(&self, name: &str) -> PathBuf {
 		let name = name.trim_start_matches('/');
-		self.location.join(name)
+		// Use safe_path_join to prevent directory traversal attacks.
+		// Falls back to simple join only if safe_path_join succeeds.
+		match crate::safe_path_join(&self.location, name) {
+			Ok(safe_path) => safe_path,
+			Err(_) => {
+				tracing::warn!(
+					"Path traversal attempt blocked in FileSystemStorage: {}",
+					name
+				);
+				// Return a path that won't resolve to anything valid outside base
+				self.location.join("__invalid_path__")
+			}
+		}
 	}
 
 	fn normalize_url(&self, base: &str, name: &str) -> String {
@@ -186,10 +199,22 @@ impl StaticFilesFinder {
 	}
 
 	pub fn find(&self, path: &str) -> Result<PathBuf, io::Error> {
+		let path = path.trim_start_matches('/');
 		for dir in &self.directories {
-			let file_path = dir.join(path);
-			if file_path.exists() {
-				return Ok(file_path);
+			// Use safe_path_join to prevent directory traversal attacks
+			match crate::safe_path_join(dir, path) {
+				Ok(file_path) => {
+					if file_path.exists() {
+						return Ok(file_path);
+					}
+				}
+				Err(_) => {
+					tracing::warn!(
+						"Path traversal attempt blocked in StaticFilesFinder: {}",
+						path
+					);
+					continue;
+				}
 			}
 		}
 		Err(io::Error::new(

@@ -2,6 +2,7 @@
 
 use http_body_util::Full;
 use hyper::{Response, StatusCode, body::Bytes};
+use reinhardt_core::security::xss::{escape_html, escape_javascript};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -180,9 +181,12 @@ impl InteractiveDocsRenderer {
 	pub fn render(&self) -> Result<String, String> {
 		let mut html = self.generate_header();
 
-		// API description
+		// API description - escape for HTML content
 		if let Some(desc) = &self.description {
-			html.push_str(&format!(r#"      <div class="description">{}</div>"#, desc));
+			html.push_str(&format!(
+				r#"      <div class="description">{}</div>"#,
+				escape_html(desc)
+			));
 			html.push('\n');
 		}
 
@@ -194,7 +198,7 @@ impl InteractiveDocsRenderer {
 				r#"      <div class="endpoint-group">
         <h2>{}</h2>
 "#,
-				group_name
+				escape_html(&group_name)
 			));
 
 			for endpoint in endpoints {
@@ -212,6 +216,7 @@ impl InteractiveDocsRenderer {
 	/// Render a single endpoint
 	fn render_endpoint(&self, endpoint: &ApiEndpoint) -> String {
 		let method_class = endpoint.method.to_lowercase();
+		// Escape all user-controlled values for HTML content
 		let mut html = format!(
 			r#"        <div class="endpoint">
           <div class="endpoint-header">
@@ -221,7 +226,10 @@ impl InteractiveDocsRenderer {
           <div class="endpoint-body">
             <p class="description">{}</p>
 "#,
-			method_class, endpoint.method, endpoint.path, endpoint.description
+			escape_html(&method_class),
+			escape_html(&endpoint.method),
+			escape_html(&endpoint.path),
+			escape_html(&endpoint.description)
 		);
 
 		// Parameters
@@ -234,10 +242,10 @@ impl InteractiveDocsRenderer {
 			for param in &endpoint.parameters {
 				html.push_str(&format!(
 					"                <tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
-					param.name,
-					param.param_type,
+					escape_html(&param.name),
+					escape_html(&param.param_type),
 					if param.required { "Yes" } else { "No" },
-					param.description.as_deref().unwrap_or("-")
+					escape_html(param.description.as_deref().unwrap_or("-"))
 				));
 			}
 
@@ -245,31 +253,32 @@ impl InteractiveDocsRenderer {
 			html.push_str("            </table>\n");
 		}
 
-		// Example request
+		// Example request - escape for HTML content
 		if let Some(example_req) = &endpoint.example_request {
 			html.push_str(&format!(
 				r#"            <h4>Example Request:</h4>
             <pre class="example">{}</pre>
 "#,
-				example_req
+				escape_html(example_req)
 			));
 		}
 
-		// Example response
+		// Example response - escape for HTML content
 		if let Some(example_resp) = &endpoint.example_response {
 			html.push_str(&format!(
 				r#"            <h4>Example Response:</h4>
             <pre class="example">{}</pre>
 "#,
-				example_resp
+				escape_html(example_resp)
 			));
 		}
 
-		// Try it out button
+		// Try it out button - CRITICAL: use escape_javascript for onclick handler
 		html.push_str(&format!(
 			r#"            <button class="try-it-btn" onclick="tryEndpoint('{}', '{}')">Try it out</button>
 "#,
-			endpoint.method, endpoint.path
+			escape_javascript(&endpoint.method),
+			escape_javascript(&endpoint.path)
 		));
 
 		html.push_str("          </div>\n");
@@ -280,6 +289,7 @@ impl InteractiveDocsRenderer {
 
 	/// Generate HTML header
 	fn generate_header(&self) -> String {
+		let escaped_title = escape_html(&self.title);
 		format!(
 			r#"<!doctype html>
 <html lang="en">
@@ -413,7 +423,7 @@ impl InteractiveDocsRenderer {
     <div class="container">
       <h1>{}</h1>
 "#,
-			self.title, self.title
+			escaped_title, escaped_title
 		)
 	}
 

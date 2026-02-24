@@ -534,3 +534,114 @@ async fn test_makemessages_po_file_structure() {
 	assert!(content.contains("Content-Type: text/plain; charset=UTF-8"));
 	assert!(content.contains("Language: ja_jp"));
 }
+
+// --- Regression tests for #378: PO format injection and MO integer overflow ---
+
+use rstest::rstest;
+
+#[rstest]
+#[tokio::test]
+#[serial]
+async fn test_makemessages_po_content_survives_compile() {
+	// Arrange: create locale dir and a source file with a translatable string
+	let temp_dir = TempDir::new().unwrap();
+	let locale_dir = temp_dir.path().join("locale");
+	fs::create_dir(&locale_dir).unwrap();
+
+	let src_dir = temp_dir.path().join("src");
+	fs::create_dir(&src_dir).unwrap();
+	let src_file = src_dir.join("lib.rs");
+	// Source contains a translatable string with a backslash sequence
+	fs::write(&src_file, "fn foo() { gettext!(\"hello world\"); }").unwrap();
+
+	// Act: extract messages to PO
+	let make_result = run_in_dir(temp_dir.path(), || async {
+		let cmd = MakeMessagesCommand;
+		let mut ctx = CommandContext::new(vec![]);
+		ctx.set_option_multi("locale".to_string(), vec!["en_us".to_string()]);
+		cmd.execute(&ctx).await
+	})
+	.await;
+
+	// Assert: PO file created and contains properly escaped msgid
+	assert!(
+		make_result.is_ok(),
+		"makemessages failed: {:?}",
+		make_result
+	);
+	let po_path = temp_dir
+		.path()
+		.join("locale/en_us/LC_MESSAGES/reinhardt.po");
+	assert!(po_path.exists());
+	let po_content = fs::read_to_string(&po_path).unwrap();
+	assert!(
+		po_content.contains("msgid \"hello world\""),
+		"expected msgid not found in PO:\n{po_content}"
+	);
+
+	// Act: compile PO to MO
+	let compile_result = run_in_dir(temp_dir.path(), || async {
+		let cmd = CompileMessagesCommand;
+		let mut ctx = CommandContext::new(vec![]);
+		ctx.set_option_multi("locale".to_string(), vec!["en_us".to_string()]);
+		cmd.execute(&ctx).await
+	})
+	.await;
+
+	// Assert: MO file produced (round-trip succeeds)
+	assert!(
+		compile_result.is_ok(),
+		"compilemessages failed: {:?}",
+		compile_result
+	);
+	let mo_path = temp_dir
+		.path()
+		.join("locale/en_us/LC_MESSAGES/reinhardt.mo");
+	assert!(mo_path.exists());
+	let mo_bytes = fs::read(&mo_path).unwrap();
+	// MO magic number: 0x950412de (little-endian)
+	assert_eq!(
+		&mo_bytes[0..4],
+		&0x950412de_u32.to_le_bytes(),
+		"invalid MO magic number"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial]
+async fn test_compilemessages_mo_byte_header_is_valid() {
+	// Arrange: a minimal PO file with one translated message
+	let temp_dir = TempDir::new().unwrap();
+	let locale_dir = temp_dir.path().join("locale/fr_fr/LC_MESSAGES");
+	fs::create_dir_all(&locale_dir).unwrap();
+
+	let po_content =
+		"# Test PO\nmsgid \"\"\nmsgstr \"\"\n\nmsgid \"Save\"\nmsgstr \"Enregistrer\"\n";
+	fs::write(locale_dir.join("reinhardt.po"), po_content).unwrap();
+
+	// Act
+	let result = run_in_dir(temp_dir.path(), || async {
+		let cmd = CompileMessagesCommand;
+		let mut ctx = CommandContext::new(vec![]);
+		ctx.set_option_multi("locale".to_string(), vec!["fr_fr".to_string()]);
+		cmd.execute(&ctx).await
+	})
+	.await;
+
+	// Assert: MO file has valid header (no integer overflow occurred)
+	assert!(result.is_ok(), "compilemessages failed: {:?}", result);
+	let mo_path = locale_dir.join("reinhardt.mo");
+	assert!(mo_path.exists());
+	let mo_bytes = fs::read(&mo_path).unwrap();
+	assert!(
+		mo_bytes.len() >= 28,
+		"MO file too short: {} bytes",
+		mo_bytes.len()
+	);
+	assert_eq!(
+		&mo_bytes[0..4],
+		&0x950412de_u32.to_le_bytes(),
+		"invalid MO magic number"
+	);
+}

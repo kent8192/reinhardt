@@ -1,0 +1,33 @@
+name: Pull Docker Images
+description: Pull Docker images to avoid Docker Hub rate limits (requires prior Docker Hub login)
+
+inputs:
+  images-file:
+    description: 'Path to the file listing Docker images to pull'
+    required: false
+    default: '.github/docker-images.txt'
+
+runs:
+  using: composite
+  steps:
+    - name: Pull Docker images
+      shell: bash
+      env:
+        IMAGES_FILE: ${{ inputs.images-file }}
+      run: |
+        if [ ! -f "$IMAGES_FILE" ]; then
+          echo "Warning: $IMAGES_FILE not found, skipping"
+          exit 0
+        fi
+
+        while IFS= read -r image || [ -n "$image" ]; do
+          [[ -z "$image" || "$image" =~ ^[[:space:]]*# ]] && continue
+          image=$(echo "$image" | xargs)
+
+          echo "Pulling $image..."
+          if docker pull "$image"; then
+            echo "Successfully pulled $image"
+          else
+            echo "Warning: Failed to pull $image"
+          fi
+        done < "$IMAGES_FILE"

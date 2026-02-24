@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 /// Action type for ViewSet operations
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActionType {
 	List,
 	Retrieve,
@@ -7,11 +9,11 @@ pub enum ActionType {
 	Update,
 	PartialUpdate,
 	Destroy,
-	Custom(&'static str),
+	Custom(Arc<str>),
 }
 
 /// Action metadata
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Action {
 	pub action_type: ActionType,
 	pub detail: bool, // Whether this action operates on a single object
@@ -67,9 +69,9 @@ impl Action {
 	}
 	/// Documentation for `custom`
 	///
-	pub fn custom(name: &'static str, detail: bool) -> Self {
+	pub fn custom(name: impl Into<Arc<str>>, detail: bool) -> Self {
 		Self {
-			action_type: ActionType::Custom(name),
+			action_type: ActionType::Custom(name.into()),
 			detail,
 		}
 	}
@@ -94,9 +96,7 @@ impl Action {
 			"partial_update" => Self::partial_update(),
 			"destroy" => Self::destroy(),
 			custom_name => Self {
-				action_type: ActionType::Custom(Box::leak(
-					custom_name.to_string().into_boxed_str(),
-				)),
+				action_type: ActionType::Custom(Arc::from(custom_name)),
 				detail: false, // Default to list-like action
 			},
 		}

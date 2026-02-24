@@ -141,7 +141,7 @@ pub fn parse_database_url(url_str: &str) -> Result<DatabaseUrl, String> {
 	let scheme = url.scheme();
 	let engine = match scheme {
 		"postgresql" | "postgres" => "reinhardt.db.backends.postgresql",
-		"mysql" => "reinhardt.db.backends.mysql",
+		"mysql" | "mariadb" => "reinhardt.db.backends.mysql",
 		"sqlite" => "reinhardt.db.backends.sqlite3",
 		other => return Err(format!("Unsupported database scheme: {}", other)),
 	};
@@ -337,6 +337,17 @@ mod tests {
 	#[test]
 	fn test_parse_mysql() {
 		let db = parse_database_url("mysql://root:secret@127.0.0.1:3306/testdb").unwrap();
+		assert_eq!(db.engine, "reinhardt.db.backends.mysql");
+		assert_eq!(db.name, "testdb");
+		assert_eq!(db.user.unwrap(), "root");
+		assert_eq!(db.password.unwrap(), "secret");
+		assert_eq!(db.host.unwrap(), "127.0.0.1");
+		assert_eq!(db.port.unwrap(), 3306);
+	}
+
+	#[test]
+	fn test_parse_mariadb() {
+		let db = parse_database_url("mariadb://root:secret@127.0.0.1:3306/testdb").unwrap();
 		assert_eq!(db.engine, "reinhardt.db.backends.mysql");
 		assert_eq!(db.name, "testdb");
 		assert_eq!(db.user.unwrap(), "root");

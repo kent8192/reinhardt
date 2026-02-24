@@ -5,8 +5,8 @@
 
 use async_trait::async_trait;
 
-use super::super::error::Result;
-use super::super::types::{NoSQLBackendType, NoSQLType};
+use crate::nosql::error::Result;
+use crate::nosql::types::{NoSQLBackendType, NoSQLType};
 
 #[cfg_attr(doc, aquamarine::aquamarine)]
 /// Base trait for all NoSQL database backends

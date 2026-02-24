@@ -94,7 +94,7 @@ Visit `http://127.0.0.1:8000/` in your browser.
 - `cargo make wasm-build-dev` - Build WASM only (debug)
 - `cargo make wasm-build-release` - Build WASM only (release, with wasm-opt)
 
-See [examples/local/examples-twitter](../examples/local/examples-twitter) for a complete implementation.
+See [examples/examples-twitter](../examples/examples-twitter) for a complete implementation.
 
 ### Step 3: Choose Your Flavor
 
@@ -340,8 +340,8 @@ Check out the [ORM documentation](api/README.md) for more details.
 ## Getting Help
 
 - 📖 [API Reference](https://docs.rs/reinhardt)
-- 💬 [GitHub Discussions](https://github.com/kent8192/reinhardt-rs/discussions)
-- 🐛 [Report Issues](https://github.com/kent8192/reinhardt-rs/issues)
+- 💬 [GitHub Discussions](https://github.com/kent8192/reinhardt-web/discussions)
+- 🐛 [Report Issues](https://github.com/kent8192/reinhardt-web/issues)
 
 ## Common Issues
 

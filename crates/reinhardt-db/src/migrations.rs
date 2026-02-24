@@ -64,6 +64,7 @@ pub mod state_loader;
 pub mod visualization;
 pub mod zero_downtime;
 
+pub use crate::contenttypes::migration::MigrationRecord;
 pub use autodetector::{
 	// Pattern Learning and Inference
 	ChangeTracker,
@@ -121,7 +122,7 @@ pub use operations::{
 	DropExtension, FieldDefinition, MoveModel, RemoveField, RenameField, RenameModel, RunCode,
 	RunSQL, StateOperation, special::DataMigration,
 };
-pub use recorder::{DatabaseMigrationRecorder, MigrationRecord, MigrationRecorder};
+pub use recorder::{DatabaseMigrationRecorder, MigrationRecorder};
 pub use repository::{MigrationRepository, filesystem::FilesystemRepository};
 pub use schema_diff::{
 	ColumnSchema, ConstraintSchema, DatabaseSchema, ForeignKeySchemaInfo, IndexSchema, SchemaDiff,
@@ -245,6 +246,14 @@ pub enum MigrationError {
 	/// be resolved before the migration can proceed.
 	#[error("Foreign key violation: {0}")]
 	ForeignKeyViolation(String),
+
+	/// Path traversal attempt detected in migration path components
+	///
+	/// This error occurs when an app label or migration name contains
+	/// path traversal sequences (e.g., `..`) that could escape the
+	/// migration root directory.
+	#[error("Path traversal detected: {0}")]
+	PathTraversal(String),
 }
 
 pub type Result<T> = std::result::Result<T, MigrationError>;

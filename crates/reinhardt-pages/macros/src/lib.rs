@@ -291,9 +291,9 @@ pub fn server_fn(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// | Element | Attribute | Allowed Values |
 /// |---------|-----------|----------------|
-/// | `input` | `type` | `text`, `password`, `email`, `number`, `tel`, `url`, `search`, `checkbox`, `radio`, `submit`, `button`, `reset`, `file`, `hidden`, `date`, `datetime-local`, `time`, `week`, `month`, `color`, `range` |
+/// | `input` | `type` | `text`, `password`, `email`, `number`, `tel`, `url`, `search`, `checkbox`, `radio`, `submit`, `button`, `reset`, `file`, `hidden`, `date`, `datetime-local`, `time`, `week`, `month`, `color`, `range`, `image` |
 /// | `button` | `type` | `submit`, `button`, `reset` |
-/// | `form` | `method` | `get`, `post` |
+/// | `form` | `method` | `get`, `post`, `dialog` |
 /// | `form` | `enctype` | `application/x-www-form-urlencoded`, `multipart/form-data`, `text/plain` |
 /// | `script` | `type` | `module`, `text/javascript`, `application/javascript` |
 ///
@@ -2040,7 +2040,7 @@ pub fn head(input: TokenStream) -> TokenStream {
 ///
 /// ### Real-World Example
 ///
-/// See `examples/local/examples-tutorial-basis` for a complete voting form implementation:
+/// See `examples/examples-tutorial-basis` for a complete voting form implementation:
 /// - Client: `src/client/components/polls.rs` - `polls_detail` function
 /// - Server: `src/server_fn/polls.rs` - `submit_vote` wrapper function
 ///

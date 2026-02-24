@@ -68,24 +68,46 @@ impl TestServerGuard {
 	/// * `router` - Router to use for handling requests
 	async fn new(router: Router) -> Self {
 		let shutdown_timeout = Duration::from_secs(5);
-		// Bind to random port
-		let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-		let listener = TcpListener::bind(addr).await.unwrap();
+		// Bind to random port and keep the listener to avoid TOCTOU race
+		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
 		let actual_addr = listener.local_addr().unwrap();
 		let url = format!("http://{}", actual_addr);
-		drop(listener);
 
 		// Create shutdown coordinator
 		let coordinator = Arc::new(ShutdownCoordinator::new(shutdown_timeout));
 
-		// Spawn server
+		// Spawn server using the already-bound listener to avoid port race
 		let server_coordinator = (*coordinator).clone();
-		let router = Arc::new(router);
+		let handler: Arc<dyn Handler> = Arc::new(router);
+		let server = HttpServer::new(handler);
+		let mut shutdown_rx = server_coordinator.subscribe();
 		let server_task = tokio::spawn(async move {
-			let server = HttpServer::new(router);
-			let _ = server
-				.listen_with_shutdown(actual_addr, server_coordinator)
-				.await;
+			loop {
+				tokio::select! {
+					result = listener.accept() => {
+						match result {
+							Ok((stream, socket_addr)) => {
+								let handler_clone = server.handler();
+								tokio::spawn(async move {
+									if let Err(e) =
+										HttpServer::handle_connection(stream, socket_addr, handler_clone, None)
+											.await
+									{
+										eprintln!("Error handling connection: {:?}", e);
+									}
+								});
+							}
+							Err(e) => {
+								eprintln!("Error accepting connection: {:?}", e);
+								break;
+							}
+						}
+					}
+					_ = shutdown_rx.recv() => {
+						break;
+					}
+				}
+			}
 		});
 
 		// Wait for server to start
@@ -580,12 +602,10 @@ impl TestServerBuilder {
 
 	/// Build the TestServer
 	pub async fn build(self) -> Result<TestServer, Box<dyn std::error::Error>> {
-		// Bind to random port
-		let addr: SocketAddr = "127.0.0.1:0".parse()?;
-		let listener = TcpListener::bind(addr).await?;
+		// Bind to random port and keep the listener to avoid TOCTOU race
+		let listener = TcpListener::bind("127.0.0.1:0").await?;
 		let actual_addr = listener.local_addr()?;
 		let url = format!("http://{}", actual_addr);
-		drop(listener);
 
 		// Create shutdown coordinator
 		let coordinator = Arc::new(ShutdownCoordinator::new(self.shutdown_timeout));
@@ -601,8 +621,12 @@ impl TestServerBuilder {
 		let http2 = self.http2;
 
 		let server_task = tokio::spawn(async move {
+			// For WebSocket and HTTP/2 servers, we must drop the listener and re-bind
+			// because their APIs only accept SocketAddr. This has a small TOCTOU window
+			// but these server types are rarely used in parallel tests.
 			#[cfg(feature = "websockets")]
 			if let Some(ws_handler) = websocket_handler {
+				drop(listener);
 				let server = WebSocketServer::from_arc(ws_handler);
 				let _ = server
 					.listen_with_shutdown(actual_addr, server_coordinator)
@@ -612,18 +636,42 @@ impl TestServerBuilder {
 
 			if let Some(h) = handler {
 				if http2 {
+					drop(listener);
 					let server = reinhardt_server::Http2Server::new(h);
 					let _ = server
 						.listen_with_shutdown(actual_addr, server_coordinator)
 						.await;
 				} else {
-					let mut server = HttpServer::new(h);
-					if let Some(ctx) = di_context {
-						server = server.with_di_context(ctx);
+					// Use the already-bound listener directly to avoid TOCTOU race
+					let server = HttpServer::new(h);
+					let mut shutdown_rx = server_coordinator.subscribe();
+					loop {
+						tokio::select! {
+							result = listener.accept() => {
+								match result {
+									Ok((stream, socket_addr)) => {
+										let handler_clone = server.handler();
+										let di_ctx = di_context.clone();
+										tokio::spawn(async move {
+											if let Err(e) =
+												HttpServer::handle_connection(stream, socket_addr, handler_clone, di_ctx)
+													.await
+											{
+												eprintln!("Error handling connection: {:?}", e);
+											}
+										});
+									}
+									Err(e) => {
+										eprintln!("Error accepting connection: {:?}", e);
+										break;
+									}
+								}
+							}
+							_ = shutdown_rx.recv() => {
+								break;
+							}
+						}
 					}
-					let _ = server
-						.listen_with_shutdown(actual_addr, server_coordinator)
-						.await;
 				}
 			}
 		});

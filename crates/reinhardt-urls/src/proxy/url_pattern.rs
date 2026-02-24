@@ -119,18 +119,35 @@ impl UrlPattern {
 	/// assert_eq!(url, "/users/123/");
 	/// ```
 	pub fn build_url(&self, kwargs: &HashMap<String, String>) -> Result<String, String> {
-		let mut result = self.template.clone();
-		let params = self.extract_parameters();
+		// Single-pass scan to avoid double substitution when a parameter value
+		// contains another parameter's placeholder pattern (e.g. "<id>").
+		let mut result = String::with_capacity(self.template.len());
+		let mut chars = self.template.chars().peekable();
 
-		for param in params {
-			let placeholder = format!("<{}>", param);
-			match kwargs.get(&param) {
-				Some(value) => {
-					result = result.replace(&placeholder, value);
+		while let Some(ch) = chars.next() {
+			if ch == '<' {
+				let mut param_name = String::new();
+				while let Some(&next_ch) = chars.peek() {
+					if next_ch == '>' {
+						chars.next(); // consume '>'
+						break;
+					}
+					param_name.push(chars.next().unwrap());
 				}
-				None => {
-					return Err(format!("Missing required parameter: {}", param));
+				if param_name.is_empty() {
+					// Bare '<>' — write it through unchanged
+					result.push('<');
+					result.push('>');
+				} else {
+					match kwargs.get(&param_name) {
+						Some(value) => result.push_str(value),
+						None => {
+							return Err(format!("Missing required parameter: {}", param_name));
+						}
+					}
 				}
+			} else {
+				result.push(ch);
 			}
 		}
 

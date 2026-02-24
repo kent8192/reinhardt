@@ -119,89 +119,395 @@ impl PostgresIntrospector {
 		Self { pool }
 	}
 
-	fn convert_column_type(col_type: &sea_schema::postgres::def::Type) -> super::FieldType {
-		col_type.into()
+	/// Maps PostgreSQL udt_name/data_type to FieldType
+	fn parse_pg_type(
+		udt_name: &str,
+		data_type: &str,
+		char_max_length: Option<i32>,
+		numeric_precision: Option<i32>,
+		numeric_scale: Option<i32>,
+		enum_values: Option<Vec<String>>,
+	) -> super::FieldType {
+		use super::FieldType;
+		match udt_name {
+			// Integer types
+			"int4" | "serial" => FieldType::Integer,
+			"int8" | "bigserial" => FieldType::BigInteger,
+			"int2" | "smallserial" => FieldType::SmallInteger,
+
+			// String types
+			"varchar" => FieldType::VarChar(char_max_length.unwrap_or(255) as u32),
+			"bpchar" => FieldType::Char(char_max_length.unwrap_or(1) as u32),
+			"text" => FieldType::Text,
+
+			// Boolean
+			"bool" => FieldType::Boolean,
+
+			// Floating point
+			"float4" => FieldType::Real,
+			"float8" => FieldType::Double,
+
+			// Numeric/Decimal
+			"numeric" => FieldType::Decimal {
+				precision: numeric_precision.unwrap_or(10) as u32,
+				scale: numeric_scale.unwrap_or(2) as u32,
+			},
+
+			// Date/Time types
+			"timestamp" => FieldType::DateTime,
+			"timestamptz" => FieldType::TimestampTz,
+			"date" => FieldType::Date,
+			"time" | "timetz" => FieldType::Time,
+
+			// Binary
+			"bytea" => FieldType::Bytea,
+
+			// JSON
+			"json" => FieldType::Json,
+			"jsonb" => FieldType::JsonBinary,
+
+			// UUID
+			"uuid" => FieldType::Uuid,
+
+			// Text search
+			"tsvector" => FieldType::TsVector,
+			"tsquery" => FieldType::TsQuery,
+
+			// Range types
+			"int4range" => FieldType::Int4Range,
+			"int8range" => FieldType::Int8Range,
+			"numrange" => FieldType::NumRange,
+			"tsrange" => FieldType::TsRange,
+			"tstzrange" => FieldType::TsTzRange,
+			"daterange" => FieldType::DateRange,
+
+			// Array types (udt_name starts with _)
+			name if name.starts_with('_') => {
+				let inner = Self::parse_pg_type(
+					&name[1..],
+					data_type,
+					char_max_length,
+					numeric_precision,
+					numeric_scale,
+					None,
+				);
+				FieldType::Array(Box::new(inner))
+			}
+
+			// Geometric types
+			"point" => FieldType::Custom("POINT".to_string()),
+			"line" => FieldType::Custom("LINE".to_string()),
+			"lseg" => FieldType::Custom("LSEG".to_string()),
+			"box" => FieldType::Custom("BOX".to_string()),
+			"path" => FieldType::Custom("PATH".to_string()),
+			"polygon" => FieldType::Custom("POLYGON".to_string()),
+			"circle" => FieldType::Custom("CIRCLE".to_string()),
+
+			// Network address types
+			"cidr" => FieldType::Custom("CIDR".to_string()),
+			"inet" => FieldType::Custom("INET".to_string()),
+			"macaddr" => FieldType::Custom("MACADDR".to_string()),
+			"macaddr8" => FieldType::Custom("MACADDR8".to_string()),
+
+			// Bit string types
+			"bit" => FieldType::Custom("BIT".to_string()),
+			"varbit" => FieldType::Custom("VARBIT".to_string()),
+
+			// XML
+			"xml" => FieldType::Custom("XML".to_string()),
+
+			// Money
+			"money" => FieldType::Custom("MONEY".to_string()),
+
+			// Interval
+			"interval" => FieldType::Custom("INTERVAL".to_string()),
+
+			// PG_LSN
+			"pg_lsn" => FieldType::Custom("PG_LSN".to_string()),
+
+			// User-defined types (enums)
+			_ if data_type == "USER-DEFINED" => {
+				if let Some(values) = enum_values {
+					FieldType::Enum { values }
+				} else {
+					FieldType::Custom(udt_name.to_string())
+				}
+			}
+
+			// Fallback
+			_ => FieldType::Custom(udt_name.to_string()),
+		}
 	}
 
-	fn convert_table_def(table_def: &sea_schema::postgres::def::TableDef) -> Result<TableInfo> {
-		use sea_schema::postgres::def::Type;
+	/// Fetches enum label values for a given PostgreSQL enum type name
+	async fn fetch_enum_values(&self, type_name: &str) -> Result<Vec<String>> {
+		use sqlx::Row;
+		let query = r#"
+			SELECT e.enumlabel
+			FROM pg_enum e
+			JOIN pg_type t ON e.enumtypid = t.oid
+			JOIN pg_namespace n ON t.typnamespace = n.oid
+			WHERE t.typname = $1 AND n.nspname = 'public'
+			ORDER BY e.enumsortorder
+		"#;
+		let rows = sqlx::query(query)
+			.bind(type_name)
+			.fetch_all(&self.pool)
+			.await
+			.map_err(|e| {
+				MigrationError::IntrospectionError(format!(
+					"Failed to fetch enum values for {}: {}",
+					type_name, e
+				))
+			})?;
+		Ok(rows
+			.iter()
+			.map(|r| r.try_get::<String, _>("enumlabel").unwrap_or_default())
+			.collect())
+	}
+
+	/// Introspects a single table using direct SQL queries against
+	/// information_schema and pg_catalog
+	async fn introspect_table(&self, table_name: &str) -> Result<TableInfo> {
+		use sqlx::Row;
+
+		// Fetch columns
+		let col_query = r#"
+			SELECT column_name, udt_name, data_type, is_nullable, column_default,
+			       character_maximum_length, numeric_precision, numeric_scale,
+			       is_identity, identity_generation
+			FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = $1
+			ORDER BY ordinal_position
+		"#;
+		let col_rows = sqlx::query(col_query)
+			.bind(table_name)
+			.fetch_all(&self.pool)
+			.await
+			.map_err(|e| {
+				MigrationError::IntrospectionError(format!(
+					"Failed to fetch columns for table {}: {}",
+					table_name, e
+				))
+			})?;
+
 		let mut columns = HashMap::new();
+		for row in &col_rows {
+			let column_name: String = row.try_get("column_name").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get column_name: {}", e))
+			})?;
+			let udt_name: String = row.try_get("udt_name").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get udt_name: {}", e))
+			})?;
+			let data_type: String = row.try_get("data_type").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get data_type: {}", e))
+			})?;
+			let is_nullable: String = row.try_get("is_nullable").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get is_nullable: {}", e))
+			})?;
+			let column_default: Option<String> = row.try_get("column_default").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get column_default: {}", e))
+			})?;
+			let char_max_length: Option<i32> =
+				row.try_get("character_maximum_length").map_err(|e| {
+					MigrationError::IntrospectionError(format!(
+						"Failed to get character_maximum_length: {}",
+						e
+					))
+				})?;
+			let numeric_precision: Option<i32> = row.try_get("numeric_precision").map_err(|e| {
+				MigrationError::IntrospectionError(format!(
+					"Failed to get numeric_precision: {}",
+					e
+				))
+			})?;
+			let numeric_scale: Option<i32> = row.try_get("numeric_scale").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get numeric_scale: {}", e))
+			})?;
+			let is_identity: String = row.try_get("is_identity").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get is_identity: {}", e))
+			})?;
 
-		// Extract primary key from constraints
-		let mut primary_key = Vec::new();
-		for pk_constraint in &table_def.primary_key_constraints {
-			primary_key.extend(pk_constraint.columns.clone());
-		}
+			// Detect auto-increment: nextval() in default or identity column
+			let is_auto = column_default
+				.as_ref()
+				.is_some_and(|d| d.starts_with("nextval("))
+				|| is_identity == "YES";
 
-		for column_def in &table_def.columns {
-			let is_auto = matches!(
-				column_def.col_type,
-				Type::Serial | Type::BigSerial | Type::SmallSerial
-			) || column_def.is_identity;
+			// Detect serial types (auto-increment integer)
+			let is_serial = matches!(udt_name.as_str(), "int4" | "int8" | "int2")
+				&& column_default
+					.as_ref()
+					.is_some_and(|d| d.starts_with("nextval("));
 
-			let default_str = column_def.default.as_ref().map(|expr| expr.0.clone());
+			// Fetch enum values for USER-DEFINED types
+			let enum_values = if data_type == "USER-DEFINED" {
+				let values = self.fetch_enum_values(&udt_name).await?;
+				if values.is_empty() {
+					None
+				} else {
+					Some(values)
+				}
+			} else {
+				None
+			};
+
+			let field_type = Self::parse_pg_type(
+				&udt_name,
+				&data_type,
+				char_max_length,
+				numeric_precision,
+				numeric_scale,
+				enum_values,
+			);
 
 			columns.insert(
-				column_def.name.clone(),
+				column_name.clone(),
 				ColumnInfo {
-					name: column_def.name.clone(),
-					column_type: Self::convert_column_type(&column_def.col_type),
-					nullable: column_def.not_null.is_none(),
-					default: default_str,
-					auto_increment: is_auto,
+					name: column_name,
+					column_type: field_type,
+					nullable: is_nullable == "YES",
+					default: column_default,
+					auto_increment: is_auto || is_serial,
 				},
 			);
 		}
 
-		// PostgreSQL doesn't have separate index information in TableDef
-		// Indexes would need to be queried separately
-		let indexes = HashMap::new();
-
-		// Extract foreign keys from reference_constraints
-		let foreign_keys = table_def
-			.reference_constraints
+		// Fetch primary key
+		let pk_query = r#"
+			SELECT kcu.column_name
+			FROM information_schema.table_constraints tc
+			JOIN information_schema.key_column_usage kcu
+			    ON tc.constraint_name = kcu.constraint_name
+			    AND tc.table_schema = kcu.table_schema
+			WHERE tc.table_schema = 'public' AND tc.table_name = $1
+			    AND tc.constraint_type = 'PRIMARY KEY'
+			ORDER BY kcu.ordinal_position
+		"#;
+		let pk_rows = sqlx::query(pk_query)
+			.bind(table_name)
+			.fetch_all(&self.pool)
+			.await
+			.map_err(|e| {
+				MigrationError::IntrospectionError(format!(
+					"Failed to fetch primary key for table {}: {}",
+					table_name, e
+				))
+			})?;
+		let primary_key: Vec<String> = pk_rows
 			.iter()
-			.map(|ref_constraint| {
-				use sea_schema::postgres::def::ForeignKeyAction;
-
-				let convert_action = |action: &Option<ForeignKeyAction>| -> Option<String> {
-					action.as_ref().map(|a| match a {
-						ForeignKeyAction::Cascade => "CASCADE".to_string(),
-						ForeignKeyAction::SetNull => "SET NULL".to_string(),
-						ForeignKeyAction::SetDefault => "SET DEFAULT".to_string(),
-						ForeignKeyAction::Restrict => "RESTRICT".to_string(),
-						ForeignKeyAction::NoAction => "NO ACTION".to_string(),
-					})
-				};
-
-				ForeignKeyInfo {
-					name: ref_constraint.name.clone(),
-					columns: ref_constraint.columns.clone(),
-					referenced_table: ref_constraint.table.clone(),
-					referenced_columns: ref_constraint.foreign_columns.clone(),
-					on_delete: convert_action(&ref_constraint.on_delete),
-					on_update: convert_action(&ref_constraint.on_update),
-				}
-			})
+			.map(|r| r.try_get::<String, _>("column_name").unwrap_or_default())
 			.collect();
 
-		// Extract unique constraints
-		let unique_constraints = table_def
-			.unique_constraints
-			.iter()
-			.map(|unique_constraint| UniqueConstraintInfo {
-				name: unique_constraint.name.clone(),
-				columns: unique_constraint.columns.clone(),
-			})
+		// Fetch foreign keys
+		let fk_query = r#"
+			SELECT tc.constraint_name, kcu.column_name,
+			       ccu.table_name AS referenced_table, ccu.column_name AS referenced_column,
+			       rc.update_rule, rc.delete_rule
+			FROM information_schema.table_constraints tc
+			JOIN information_schema.key_column_usage kcu
+			    ON tc.constraint_name = kcu.constraint_name
+			    AND tc.table_schema = kcu.table_schema
+			JOIN information_schema.constraint_column_usage ccu
+			    ON tc.constraint_name = ccu.constraint_name
+			    AND tc.table_schema = ccu.table_schema
+			JOIN information_schema.referential_constraints rc
+			    ON tc.constraint_name = rc.constraint_name
+			    AND tc.table_schema = rc.constraint_schema
+			WHERE tc.table_schema = 'public' AND tc.table_name = $1
+			    AND tc.constraint_type = 'FOREIGN KEY'
+			ORDER BY tc.constraint_name, kcu.ordinal_position
+		"#;
+		let fk_rows = sqlx::query(fk_query)
+			.bind(table_name)
+			.fetch_all(&self.pool)
+			.await
+			.map_err(|e| {
+				MigrationError::IntrospectionError(format!(
+					"Failed to fetch foreign keys for table {}: {}",
+					table_name, e
+				))
+			})?;
+
+		// Group FK rows by constraint name
+		let mut fk_map: HashMap<String, ForeignKeyInfo> = HashMap::new();
+		for row in &fk_rows {
+			let constraint_name: String = row.try_get("constraint_name").unwrap_or_default();
+			let column_name: String = row.try_get("column_name").unwrap_or_default();
+			let ref_table: String = row.try_get("referenced_table").unwrap_or_default();
+			let ref_column: String = row.try_get("referenced_column").unwrap_or_default();
+			let update_rule: String = row.try_get("update_rule").unwrap_or_default();
+			let delete_rule: String = row.try_get("delete_rule").unwrap_or_default();
+
+			let entry = fk_map
+				.entry(constraint_name.clone())
+				.or_insert_with(|| ForeignKeyInfo {
+					name: constraint_name,
+					columns: Vec::new(),
+					referenced_table: ref_table,
+					referenced_columns: Vec::new(),
+					on_delete: if delete_rule == "NO ACTION" {
+						None
+					} else {
+						Some(delete_rule)
+					},
+					on_update: if update_rule == "NO ACTION" {
+						None
+					} else {
+						Some(update_rule)
+					},
+				});
+			if !entry.columns.contains(&column_name) {
+				entry.columns.push(column_name);
+			}
+			if !entry.referenced_columns.contains(&ref_column) {
+				entry.referenced_columns.push(ref_column);
+			}
+		}
+
+		let foreign_keys: Vec<ForeignKeyInfo> = fk_map.into_values().collect();
+
+		// Fetch unique constraints
+		let uq_query = r#"
+			SELECT tc.constraint_name, kcu.column_name
+			FROM information_schema.table_constraints tc
+			JOIN information_schema.key_column_usage kcu
+			    ON tc.constraint_name = kcu.constraint_name
+			    AND tc.table_schema = kcu.table_schema
+			WHERE tc.table_schema = 'public' AND tc.table_name = $1
+			    AND tc.constraint_type = 'UNIQUE'
+			ORDER BY tc.constraint_name, kcu.ordinal_position
+		"#;
+		let uq_rows = sqlx::query(uq_query)
+			.bind(table_name)
+			.fetch_all(&self.pool)
+			.await
+			.map_err(|e| {
+				MigrationError::IntrospectionError(format!(
+					"Failed to fetch unique constraints for table {}: {}",
+					table_name, e
+				))
+			})?;
+
+		let mut uq_map: HashMap<String, Vec<String>> = HashMap::new();
+		for row in &uq_rows {
+			let constraint_name: String = row.try_get("constraint_name").unwrap_or_default();
+			let column_name: String = row.try_get("column_name").unwrap_or_default();
+			uq_map.entry(constraint_name).or_default().push(column_name);
+		}
+		let unique_constraints: Vec<UniqueConstraintInfo> = uq_map
+			.into_iter()
+			.map(|(name, columns)| UniqueConstraintInfo { name, columns })
 			.collect();
 
-		// PostgreSQL CHECK constraints extraction is not yet implemented.
-		// This is a non-critical feature that can be added when needed.
-		// Most common constraints (NOT NULL, UNIQUE, FK, PK) are already supported.
+		// Fetch indexes (reuse existing method)
+		let indexes = self.fetch_table_indexes(table_name).await?;
+
+		// CHECK constraints not yet implemented
 		let check_constraints: Vec<CheckConstraintInfo> = Vec::new();
 
 		Ok(TableInfo {
-			name: table_def.info.name.clone(),
+			name: table_name.to_string(),
 			columns,
 			indexes,
 			primary_key,
@@ -290,30 +596,51 @@ impl PostgresIntrospector {
 #[async_trait]
 impl DatabaseIntrospector for PostgresIntrospector {
 	async fn read_schema(&self) -> Result<DatabaseSchema> {
-		use sea_schema::postgres::discovery::SchemaDiscovery;
+		use sqlx::Row;
 
-		let discovery = SchemaDiscovery::new(self.pool.clone(), "public");
-		let schema = discovery
-			.discover()
+		let table_query = r#"
+			SELECT table_name FROM information_schema.tables
+			WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+		"#;
+		let table_rows = sqlx::query(table_query)
+			.fetch_all(&self.pool)
 			.await
-			.map_err(|e| MigrationError::IntrospectionError(e.to_string()))?;
+			.map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to fetch table list: {}", e))
+			})?;
 
 		let mut tables = HashMap::new();
-		for table_def in schema.tables {
-			let mut table_info = Self::convert_table_def(&table_def)?;
-
-			// Fetch index information separately for each table
-			table_info.indexes = self.fetch_table_indexes(&table_info.name).await?;
-
-			tables.insert(table_info.name.clone(), table_info);
+		for row in &table_rows {
+			let table_name: String = row.try_get("table_name").unwrap_or_default();
+			let table_info = self.introspect_table(&table_name).await?;
+			tables.insert(table_name, table_info);
 		}
 
 		Ok(DatabaseSchema { tables })
 	}
 
 	async fn read_table(&self, table_name: &str) -> Result<Option<TableInfo>> {
-		let schema = self.read_schema().await?;
-		Ok(schema.tables.get(table_name).cloned())
+		// Check if table exists
+		let exists_query = r#"
+			SELECT table_name FROM information_schema.tables
+			WHERE table_schema = 'public' AND table_type = 'BASE TABLE' AND table_name = $1
+		"#;
+		let exists = sqlx::query(exists_query)
+			.bind(table_name)
+			.fetch_optional(&self.pool)
+			.await
+			.map_err(|e| {
+				MigrationError::IntrospectionError(format!(
+					"Failed to check table existence: {}",
+					e
+				))
+			})?;
+
+		if exists.is_some() {
+			Ok(Some(self.introspect_table(table_name).await?))
+		} else {
+			Ok(None)
+		}
 	}
 }
 
@@ -329,112 +656,297 @@ impl MySQLIntrospector {
 		Self { pool }
 	}
 
-	fn convert_column_type(col_type: &sea_schema::mysql::def::Type) -> super::FieldType {
-		col_type.into()
-	}
+	fn parse_mysql_type(
+		data_type: &str,
+		column_type: &str,
+		char_max_length: Option<i64>,
+		numeric_precision: Option<i64>,
+		numeric_scale: Option<i64>,
+	) -> super::FieldType {
+		use super::FieldType;
+		let data_type_lower = data_type.to_lowercase();
+		match data_type_lower.as_str() {
+			"tinyint" => {
+				// MySQL uses tinyint(1) for boolean
+				if column_type.to_lowercase().starts_with("tinyint(1)") {
+					FieldType::Boolean
+				} else {
+					FieldType::TinyInt
+				}
+			}
+			"smallint" => FieldType::SmallInteger,
+			"mediumint" => FieldType::MediumInt,
+			"int" | "integer" => FieldType::Integer,
+			"bigint" => FieldType::BigInteger,
 
-	fn convert_foreign_key_action(action: &sea_schema::mysql::def::ForeignKeyAction) -> String {
-		use sea_schema::mysql::def::ForeignKeyAction;
-		match action {
-			ForeignKeyAction::Cascade => "CASCADE".to_string(),
-			ForeignKeyAction::SetNull => "SET NULL".to_string(),
-			ForeignKeyAction::Restrict => "RESTRICT".to_string(),
-			ForeignKeyAction::NoAction => "NO ACTION".to_string(),
-			ForeignKeyAction::SetDefault => "SET DEFAULT".to_string(),
+			"varchar" => FieldType::VarChar(char_max_length.unwrap_or(255) as u32),
+			"char" => FieldType::Char(char_max_length.unwrap_or(1) as u32),
+			"text" => FieldType::Text,
+			"tinytext" => FieldType::TinyText,
+			"mediumtext" => FieldType::MediumText,
+			"longtext" => FieldType::LongText,
+
+			"decimal" | "numeric" => FieldType::Decimal {
+				precision: numeric_precision.unwrap_or(10) as u32,
+				scale: numeric_scale.unwrap_or(2) as u32,
+			},
+			"float" => FieldType::Float,
+			"double" => FieldType::Double,
+
+			"date" => FieldType::Date,
+			"time" => FieldType::Time,
+			"datetime" => FieldType::DateTime,
+			"timestamp" => FieldType::DateTime,
+			"year" => FieldType::Year,
+
+			"binary" | "varbinary" => FieldType::Binary,
+			"blob" => FieldType::Blob,
+			"tinyblob" => FieldType::TinyBlob,
+			"mediumblob" => FieldType::MediumBlob,
+			"longblob" => FieldType::LongBlob,
+
+			"json" => FieldType::Json,
+			"bit" => FieldType::Boolean,
+
+			"enum" => {
+				// Parse enum values from column_type: enum('a','b','c')
+				let values = Self::parse_enum_or_set_values(column_type);
+				FieldType::Enum { values }
+			}
+			"set" => {
+				// Parse set values from column_type: set('a','b','c')
+				let values = Self::parse_enum_or_set_values(column_type);
+				FieldType::Set { values }
+			}
+
+			_ => FieldType::Custom(data_type.to_string()),
 		}
 	}
 
-	fn convert_index_type(idx_type: &sea_schema::mysql::def::IndexType) -> String {
-		use sea_schema::mysql::def::IndexType;
-		match idx_type {
-			IndexType::BTree => "BTREE".to_string(),
-			IndexType::Hash => "HASH".to_string(),
-			IndexType::FullText => "FULLTEXT".to_string(),
-			IndexType::Spatial => "SPATIAL".to_string(),
-			IndexType::RTree => "RTREE".to_string(),
+	/// Parse enum or set values from MySQL column_type string.
+	/// Input format: "enum('val1','val2','val3')" or "set('val1','val2')"
+	fn parse_enum_or_set_values(column_type: &str) -> Vec<String> {
+		// Find the opening parenthesis
+		if let Some(start) = column_type.find('(')
+			&& let Some(end) = column_type.rfind(')')
+		{
+			let inner = &column_type[start + 1..end];
+			return inner
+				.split(',')
+				.map(|s| s.trim().trim_matches('\'').to_string())
+				.collect();
 		}
+		Vec::new()
 	}
 
-	fn convert_table_def(table_def: &sea_schema::mysql::def::TableDef) -> Result<TableInfo> {
+	/// Introspects a single table using direct SQL queries against information_schema
+	async fn introspect_table(&self, table_name: &str) -> Result<TableInfo> {
+		use sqlx::Row;
+
+		// Fetch columns from information_schema
+		let col_query = r#"
+			SELECT column_name, data_type, column_type, is_nullable, column_default,
+			       column_key, extra, character_maximum_length, numeric_precision, numeric_scale
+			FROM information_schema.columns
+			WHERE table_schema = DATABASE() AND table_name = ?
+			ORDER BY ordinal_position
+		"#;
+		let col_rows = sqlx::query(col_query)
+			.bind(table_name)
+			.fetch_all(&self.pool)
+			.await
+			.map_err(|e| {
+				MigrationError::IntrospectionError(format!(
+					"Failed to fetch columns for table {}: {}",
+					table_name, e
+				))
+			})?;
+
 		let mut columns = HashMap::new();
 		let mut primary_key = Vec::new();
 
-		for column_def in &table_def.columns {
-			let is_auto = column_def.extra.auto_increment;
+		for row in &col_rows {
+			let column_name: String = row.try_get("column_name").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get column_name: {}", e))
+			})?;
+			let data_type: String = row.try_get("data_type").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get data_type: {}", e))
+			})?;
+			let column_type_str: String = row.try_get("column_type").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get column_type: {}", e))
+			})?;
+			let is_nullable: String = row.try_get("is_nullable").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get is_nullable: {}", e))
+			})?;
+			let column_default: Option<String> = row.try_get("column_default").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get column_default: {}", e))
+			})?;
+			let column_key: String = row.try_get("column_key").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get column_key: {}", e))
+			})?;
+			let extra: String = row.try_get("extra").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get extra: {}", e))
+			})?;
+			let char_max_length: Option<i64> =
+				row.try_get("character_maximum_length").map_err(|e| {
+					MigrationError::IntrospectionError(format!(
+						"Failed to get character_maximum_length: {}",
+						e
+					))
+				})?;
+			let numeric_precision: Option<i64> = row.try_get("numeric_precision").map_err(|e| {
+				MigrationError::IntrospectionError(format!(
+					"Failed to get numeric_precision: {}",
+					e
+				))
+			})?;
+			let numeric_scale: Option<i64> = row.try_get("numeric_scale").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get numeric_scale: {}", e))
+			})?;
 
-			if column_def.key == sea_schema::mysql::def::ColumnKey::Primary {
-				primary_key.push(column_def.name.clone());
+			// Primary key detection
+			if column_key == "PRI" {
+				primary_key.push(column_name.clone());
 			}
 
-			let default_str = column_def.default.as_ref().map(|def| {
-				use sea_schema::mysql::def::ColumnDefault;
-				match def {
-					ColumnDefault::Null => "NULL".to_string(),
-					ColumnDefault::Int(i) => i.to_string(),
-					ColumnDefault::Real(f) => f.to_string(),
-					ColumnDefault::String(s) => s.clone(),
-					ColumnDefault::CustomExpr(s) => s.clone(),
-					ColumnDefault::CurrentTimestamp => "CURRENT_TIMESTAMP".to_string(),
-				}
-			});
+			// Auto-increment detection
+			let is_auto = extra.to_lowercase().contains("auto_increment");
+
+			let field_type = Self::parse_mysql_type(
+				&data_type,
+				&column_type_str,
+				char_max_length,
+				numeric_precision,
+				numeric_scale,
+			);
 
 			columns.insert(
-				column_def.name.clone(),
+				column_name.clone(),
 				ColumnInfo {
-					name: column_def.name.clone(),
-					column_type: Self::convert_column_type(&column_def.col_type),
-					nullable: column_def.null,
-					default: default_str,
+					name: column_name,
+					column_type: field_type,
+					nullable: is_nullable == "YES",
+					default: column_default,
 					auto_increment: is_auto,
 				},
 			);
 		}
 
-		// Extract unique constraints from indexes
-		let mut unique_constraints = Vec::new();
-		let mut indexes = HashMap::new();
-		for index_def in &table_def.indexes {
-			let columns: Vec<String> = index_def.parts.iter().map(|p| p.column.clone()).collect();
+		// Fetch indexes from information_schema.statistics
+		let idx_query = r#"
+			SELECT index_name, column_name, non_unique, index_type
+			FROM information_schema.statistics
+			WHERE table_schema = DATABASE() AND table_name = ?
+			ORDER BY index_name, seq_in_index
+		"#;
+		let idx_rows = sqlx::query(idx_query)
+			.bind(table_name)
+			.fetch_all(&self.pool)
+			.await
+			.map_err(|e| {
+				MigrationError::IntrospectionError(format!(
+					"Failed to fetch indexes for table {}: {}",
+					table_name, e
+				))
+			})?;
 
-			if index_def.unique {
-				unique_constraints.push(UniqueConstraintInfo {
-					name: index_def.name.clone(),
-					columns: columns.clone(),
-				});
+		let mut idx_map: HashMap<String, (Vec<String>, bool, String)> = HashMap::new();
+		for row in &idx_rows {
+			let index_name: String = row.try_get("index_name").unwrap_or_default();
+			let column_name: String = row.try_get("column_name").unwrap_or_default();
+			let non_unique: i64 = row.try_get("non_unique").unwrap_or(1);
+			let index_type: String = row.try_get("index_type").unwrap_or_default();
+
+			let entry = idx_map
+				.entry(index_name)
+				.or_insert_with(|| (Vec::new(), non_unique == 0, index_type.clone()));
+			entry.0.push(column_name);
+		}
+
+		let mut indexes = HashMap::new();
+		let mut unique_constraints = Vec::new();
+		for (name, (cols, is_unique, idx_type)) in &idx_map {
+			// Skip PRIMARY key index - already handled
+			if name == "PRIMARY" {
+				continue;
 			}
 
 			indexes.insert(
-				index_def.name.clone(),
+				name.clone(),
 				IndexInfo {
-					name: index_def.name.clone(),
-					columns,
-					unique: index_def.unique,
-					index_type: Some(Self::convert_index_type(&index_def.idx_type)),
+					name: name.clone(),
+					columns: cols.clone(),
+					unique: *is_unique,
+					index_type: Some(idx_type.clone()),
 				},
 			);
+
+			if *is_unique {
+				unique_constraints.push(UniqueConstraintInfo {
+					name: name.clone(),
+					columns: cols.clone(),
+				});
+			}
 		}
 
-		// Extract foreign keys
-		let foreign_keys: Vec<ForeignKeyInfo> = table_def
-			.foreign_keys
-			.iter()
-			.map(|fk| ForeignKeyInfo {
-				name: fk.name.clone(),
-				columns: fk.columns.clone(),
-				referenced_table: fk.referenced_table.clone(),
-				referenced_columns: fk.referenced_columns.clone(),
-				on_delete: Some(Self::convert_foreign_key_action(&fk.on_delete)),
-				on_update: Some(Self::convert_foreign_key_action(&fk.on_update)),
-			})
-			.collect();
+		// Fetch foreign keys
+		let fk_query = r#"
+			SELECT rc.constraint_name, kcu.column_name,
+			       kcu.referenced_table_name, kcu.referenced_column_name,
+			       rc.update_rule, rc.delete_rule
+			FROM information_schema.referential_constraints rc
+			JOIN information_schema.key_column_usage kcu
+			    ON rc.constraint_name = kcu.constraint_name
+			    AND rc.constraint_schema = kcu.constraint_schema
+			WHERE rc.constraint_schema = DATABASE() AND kcu.table_name = ?
+			    AND kcu.referenced_table_name IS NOT NULL
+			ORDER BY rc.constraint_name, kcu.ordinal_position
+		"#;
+		let fk_rows = sqlx::query(fk_query)
+			.bind(table_name)
+			.fetch_all(&self.pool)
+			.await
+			.map_err(|e| {
+				MigrationError::IntrospectionError(format!(
+					"Failed to fetch foreign keys for table {}: {}",
+					table_name, e
+				))
+			})?;
 
-		// MySQL CHECK constraints extraction is not yet implemented.
-		// This is a non-critical feature that can be added when needed.
-		// Most common constraints (NOT NULL, UNIQUE, FK, PK) are already supported.
+		let mut fk_map: HashMap<String, ForeignKeyInfo> = HashMap::new();
+		for row in &fk_rows {
+			let constraint_name: String = row.try_get("constraint_name").unwrap_or_default();
+			let column_name: String = row.try_get("column_name").unwrap_or_default();
+			let ref_table: String = row.try_get("referenced_table_name").unwrap_or_default();
+			let ref_column: String = row.try_get("referenced_column_name").unwrap_or_default();
+			let update_rule: String = row.try_get("update_rule").unwrap_or_default();
+			let delete_rule: String = row.try_get("delete_rule").unwrap_or_default();
+
+			let entry = fk_map
+				.entry(constraint_name.clone())
+				.or_insert_with(|| ForeignKeyInfo {
+					name: constraint_name,
+					columns: Vec::new(),
+					referenced_table: ref_table,
+					referenced_columns: Vec::new(),
+					on_delete: Some(delete_rule),
+					on_update: Some(update_rule),
+				});
+			if !entry.columns.contains(&column_name) {
+				entry.columns.push(column_name);
+			}
+			if !entry.referenced_columns.contains(&ref_column) {
+				entry.referenced_columns.push(ref_column);
+			}
+		}
+
+		let foreign_keys: Vec<ForeignKeyInfo> = fk_map.into_values().collect();
+
+		// MySQL CHECK constraints not yet implemented
 		let check_constraints: Vec<CheckConstraintInfo> = Vec::new();
 
 		Ok(TableInfo {
-			name: table_def.info.name.clone(),
+			name: table_name.to_string(),
 			columns,
 			indexes,
 			primary_key,
@@ -449,28 +961,50 @@ impl MySQLIntrospector {
 #[async_trait]
 impl DatabaseIntrospector for MySQLIntrospector {
 	async fn read_schema(&self) -> Result<DatabaseSchema> {
-		use sea_schema::mysql::discovery::SchemaDiscovery;
+		use sqlx::Row;
 
-		// MySQL SchemaDiscovery::new requires a schema name (database name)
-		// We use empty string to discover the current database
-		let discovery = SchemaDiscovery::new(self.pool.clone(), "");
-		let schema = discovery
-			.discover()
+		let table_query = r#"
+			SELECT table_name FROM information_schema.tables
+			WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'
+		"#;
+		let table_rows = sqlx::query(table_query)
+			.fetch_all(&self.pool)
 			.await
-			.map_err(|e| MigrationError::IntrospectionError(e.to_string()))?;
+			.map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to fetch table list: {}", e))
+			})?;
 
 		let mut tables = HashMap::new();
-		for table_def in schema.tables {
-			let table_info = Self::convert_table_def(&table_def)?;
-			tables.insert(table_info.name.clone(), table_info);
+		for row in &table_rows {
+			let table_name: String = row.try_get("table_name").unwrap_or_default();
+			let table_info = self.introspect_table(&table_name).await?;
+			tables.insert(table_name, table_info);
 		}
 
 		Ok(DatabaseSchema { tables })
 	}
 
 	async fn read_table(&self, table_name: &str) -> Result<Option<TableInfo>> {
-		let schema = self.read_schema().await?;
-		Ok(schema.tables.get(table_name).cloned())
+		let exists_query = r#"
+			SELECT table_name FROM information_schema.tables
+			WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE' AND table_name = ?
+		"#;
+		let exists = sqlx::query(exists_query)
+			.bind(table_name)
+			.fetch_optional(&self.pool)
+			.await
+			.map_err(|e| {
+				MigrationError::IntrospectionError(format!(
+					"Failed to check table existence: {}",
+					e
+				))
+			})?;
+
+		if exists.is_some() {
+			Ok(Some(self.introspect_table(table_name).await?))
+		} else {
+			Ok(None)
+		}
 	}
 }
 
@@ -486,19 +1020,91 @@ impl SQLiteIntrospector {
 		Self { pool }
 	}
 
-	fn convert_column_type(col_type: &sea_schema::sea_query::ColumnType) -> super::FieldType {
-		col_type.into()
-	}
-
-	#[allow(dead_code)]
-	fn convert_foreign_key_action(action: &sea_schema::sqlite::def::ForeignKeyAction) -> String {
-		use sea_schema::sqlite::def::ForeignKeyAction;
-		match action {
-			ForeignKeyAction::Cascade => "CASCADE".to_string(),
-			ForeignKeyAction::SetNull => "SET NULL".to_string(),
-			ForeignKeyAction::SetDefault => "SET DEFAULT".to_string(),
-			ForeignKeyAction::Restrict => "RESTRICT".to_string(),
-			ForeignKeyAction::NoAction => "NO ACTION".to_string(),
+	fn parse_sqlite_type(type_str: &str) -> super::FieldType {
+		use super::FieldType;
+		let upper = type_str.to_uppercase();
+		let upper = upper.trim();
+		match upper {
+			"INTEGER" | "INT" => FieldType::Integer,
+			"BIGINT" => FieldType::BigInteger,
+			"SMALLINT" => FieldType::SmallInteger,
+			"TINYINT" => FieldType::TinyInt,
+			"TEXT" => FieldType::Text,
+			"REAL" => FieldType::Real,
+			"FLOAT" => FieldType::Float,
+			"DOUBLE" | "DOUBLE PRECISION" => FieldType::Double,
+			"BLOB" => FieldType::Blob,
+			"BOOLEAN" => FieldType::Boolean,
+			"DATE" => FieldType::Date,
+			"TIME" => FieldType::Time,
+			"DATETIME" => FieldType::DateTime,
+			"TIMESTAMP" => FieldType::DateTime,
+			"JSON" => FieldType::Json,
+			"JSONB" => FieldType::JsonBinary,
+			"UUID" => FieldType::Uuid,
+			"NUMERIC" => FieldType::Decimal {
+				precision: 10,
+				scale: 2,
+			},
+			_ => {
+				// Handle parameterized types: VARCHAR(n), CHAR(n), DECIMAL(p,s), etc.
+				if let Some(rest) = upper.strip_prefix("VARCHAR(") {
+					if let Some(len_str) = rest.strip_suffix(')')
+						&& let Ok(len) = len_str.trim().parse::<u32>()
+					{
+						return FieldType::VarChar(len);
+					}
+					return FieldType::VarChar(255);
+				}
+				if let Some(rest) = upper.strip_prefix("CHAR(") {
+					if let Some(len_str) = rest.strip_suffix(')')
+						&& let Ok(len) = len_str.trim().parse::<u32>()
+					{
+						return FieldType::Char(len);
+					}
+					return FieldType::Char(1);
+				}
+				if let Some(rest) = upper.strip_prefix("DECIMAL(") {
+					if let Some(params_str) = rest.strip_suffix(')') {
+						let parts: Vec<&str> = params_str.split(',').collect();
+						if parts.len() == 2
+							&& let (Ok(p), Ok(s)) = (
+								parts[0].trim().parse::<u32>(),
+								parts[1].trim().parse::<u32>(),
+							) {
+							return FieldType::Decimal {
+								precision: p,
+								scale: s,
+							};
+						}
+					}
+					return FieldType::Decimal {
+						precision: 10,
+						scale: 2,
+					};
+				}
+				if let Some(rest) = upper.strip_prefix("NUMERIC(") {
+					if let Some(params_str) = rest.strip_suffix(')') {
+						let parts: Vec<&str> = params_str.split(',').collect();
+						if parts.len() == 2
+							&& let (Ok(p), Ok(s)) = (
+								parts[0].trim().parse::<u32>(),
+								parts[1].trim().parse::<u32>(),
+							) {
+							return FieldType::Decimal {
+								precision: p,
+								scale: s,
+							};
+						}
+					}
+					return FieldType::Decimal {
+						precision: 10,
+						scale: 2,
+					};
+				}
+				// Default fallback for unknown types
+				FieldType::Custom(type_str.to_string())
+			}
 		}
 	}
 
@@ -595,9 +1201,6 @@ impl SQLiteIntrospector {
 	}
 
 	/// Extracts index information from SQLite using PRAGMA index_list and PRAGMA index_info.
-	///
-	/// Note: sea_schema doesn't detect regular (non-unique) indexes created with CREATE INDEX,
-	/// so we need to use PRAGMA commands to get complete index information.
 	async fn extract_indexes(
 		pool: &sqlx::SqlitePool,
 		table_name: &str,
@@ -829,81 +1432,152 @@ impl SQLiteIntrospector {
 		result
 	}
 
-	fn convert_table_def(table_def: &sea_schema::sqlite::def::TableDef) -> Result<TableInfo> {
-		let mut columns = HashMap::new();
-		let mut primary_key = Vec::new();
+	/// Extracts unique constraints from PRAGMA index_list where origin = 'u'.
+	async fn extract_unique_constraints(
+		&self,
+		table_name: &str,
+	) -> Result<Vec<UniqueConstraintInfo>> {
+		#[derive(sqlx::FromRow)]
+		struct IndexListRow {
+			#[allow(dead_code)]
+			// Column sequence number from PRAGMA index_list
+			seq: i64,
+			name: String,
+			#[allow(dead_code)]
+			// Whether the index enforces uniqueness
+			unique: i64,
+			origin: String,
+			#[allow(dead_code)]
+			// Whether this is a partial index
+			partial: i64,
+		}
 
-		for column_def in &table_def.columns {
-			let is_auto = table_def.auto_increment && column_def.primary_key;
+		#[derive(sqlx::FromRow)]
+		struct IndexInfoRow {
+			#[allow(dead_code)]
+			// Column sequence number within the index
+			seqno: i64,
+			#[allow(dead_code)]
+			// Column ID in the table
+			cid: i64,
+			name: Option<String>,
+		}
 
-			if column_def.primary_key {
-				primary_key.push(column_def.name.clone());
+		let query = format!("PRAGMA index_list({})", table_name);
+		let index_list: Vec<IndexListRow> = sqlx::query_as(&query)
+			.fetch_all(&self.pool)
+			.await
+			.map_err(|e| MigrationError::IntrospectionError(e.to_string()))?;
+
+		let mut constraints = Vec::new();
+		for index_row in index_list {
+			if index_row.origin == "u" {
+				let info_query = format!("PRAGMA index_info({})", index_row.name);
+				let index_info: Vec<IndexInfoRow> = sqlx::query_as(&info_query)
+					.fetch_all(&self.pool)
+					.await
+					.map_err(|e| MigrationError::IntrospectionError(e.to_string()))?;
+
+				let columns: Vec<String> = index_info
+					.into_iter()
+					.filter_map(|info| info.name)
+					.collect();
+
+				constraints.push(UniqueConstraintInfo {
+					name: index_row.name,
+					columns,
+				});
 			}
+		}
 
-			// In SQLite, PRIMARY KEY columns are implicitly NOT NULL
-			let is_nullable = if column_def.primary_key {
-				false
-			} else {
-				!column_def.not_null
-			};
+		Ok(constraints)
+	}
+
+	/// Introspects a single table using PRAGMA queries.
+	async fn introspect_table(&self, table_name: &str) -> Result<TableInfo> {
+		#[derive(sqlx::FromRow)]
+		struct TableInfoRow {
+			#[allow(dead_code)]
+			// Column index from PRAGMA table_info
+			cid: i64,
+			name: String,
+			r#type: String,
+			notnull: i64,
+			dflt_value: Option<String>,
+			pk: i64,
+		}
+
+		let query = format!("PRAGMA table_info({})", table_name);
+		let rows: Vec<TableInfoRow> = sqlx::query_as(&query)
+			.fetch_all(&self.pool)
+			.await
+			.map_err(|e| MigrationError::IntrospectionError(e.to_string()))?;
+
+		// Check AUTOINCREMENT by inspecting CREATE TABLE SQL
+		let create_sql = Self::get_create_table_sql(&self.pool, table_name).await?;
+		let has_autoincrement = create_sql
+			.as_ref()
+			.map(|sql| sql.to_uppercase().contains("AUTOINCREMENT"))
+			.unwrap_or(false);
+
+		let mut columns = HashMap::new();
+
+		// Build primary key ordered by pk field value
+		let mut pk_entries: Vec<(i64, String)> = rows
+			.iter()
+			.filter(|r| r.pk > 0)
+			.map(|r| (r.pk, r.name.clone()))
+			.collect();
+		pk_entries.sort_by_key(|(pk, _)| *pk);
+		let primary_key: Vec<String> = pk_entries.into_iter().map(|(_, name)| name).collect();
+
+		for row in &rows {
+			let is_pk = row.pk > 0;
+
+			// AUTOINCREMENT only applies to INTEGER PRIMARY KEY columns
+			let is_auto = is_pk && has_autoincrement;
+
+			// Primary key columns are implicitly NOT NULL in SQLite
+			let nullable = if is_pk { false } else { row.notnull == 0 };
+
+			// Parse default value - trim surrounding quotes for string defaults
+			let default = row.dflt_value.as_ref().map(|v| {
+				let trimmed = v.trim();
+				if (trimmed.starts_with('\'') && trimmed.ends_with('\''))
+					|| (trimmed.starts_with('"') && trimmed.ends_with('"'))
+				{
+					trimmed[1..trimmed.len() - 1].to_string()
+				} else {
+					trimmed.to_string()
+				}
+			});
 
 			columns.insert(
-				column_def.name.clone(),
+				row.name.clone(),
 				ColumnInfo {
-					name: column_def.name.clone(),
-					column_type: Self::convert_column_type(&column_def.r#type),
-					nullable: is_nullable,
-					default: match &column_def.default_value {
-						sea_schema::sqlite::def::DefaultType::String(s) => Some(s.clone()),
-						sea_schema::sqlite::def::DefaultType::Integer(i) => Some(i.to_string()),
-						sea_schema::sqlite::def::DefaultType::Float(f) => Some(f.to_string()),
-						sea_schema::sqlite::def::DefaultType::CurrentTimestamp => {
-							Some("CURRENT_TIMESTAMP".to_string())
-						}
-						sea_schema::sqlite::def::DefaultType::Null
-						| sea_schema::sqlite::def::DefaultType::Unspecified => None,
-					},
+					name: row.name.clone(),
+					column_type: Self::parse_sqlite_type(&row.r#type),
+					nullable,
+					default,
 					auto_increment: is_auto,
 				},
 			);
 		}
 
-		// Extract indexes from table_def (UNIQUE constraints detected by sea_schema)
-		// Note: Regular indexes will be extracted separately using PRAGMA index_list
-		let mut indexes = HashMap::new();
-		for index_def in &table_def.indexes {
-			indexes.insert(
-				index_def.index_name.clone(),
-				IndexInfo {
-					name: index_def.index_name.clone(),
-					columns: index_def.columns.clone(),
-					unique: index_def.unique,
-					index_type: None,
-				},
-			);
-		}
+		// Extract unique constraints from PRAGMA index_list where origin = 'u'
+		let unique_constraints = self.extract_unique_constraints(table_name).await?;
 
-		// Extract unique constraints from table_def.constraints
-		let mut unique_constraints = Vec::new();
-		for constraint_def in &table_def.constraints {
-			if constraint_def.unique {
-				unique_constraints.push(UniqueConstraintInfo {
-					name: constraint_def.index_name.clone(),
-					columns: constraint_def.columns.clone(),
-				});
-			}
-		}
+		// Extract indexes using existing method
+		let indexes = Self::extract_indexes(&self.pool, table_name).await?;
 
-		// Foreign keys will be extracted separately using PRAGMA foreign_key_list
-		// in the read_schema method
-		let foreign_keys: Vec<ForeignKeyInfo> = Vec::new();
+		// Extract foreign keys using existing method
+		let foreign_keys = Self::extract_foreign_keys(&self.pool, table_name).await?;
 
-		// CHECK constraints will be extracted separately using sqlite_master
-		// in the read_schema method
-		let check_constraints: Vec<CheckConstraintInfo> = Vec::new();
+		// Extract CHECK constraints using existing method
+		let check_constraints = Self::extract_check_constraints(&self.pool, table_name).await?;
 
 		Ok(TableInfo {
-			name: table_def.name.clone(),
+			name: table_name.to_string(),
 			columns,
 			indexes,
 			primary_key,
@@ -918,31 +1592,22 @@ impl SQLiteIntrospector {
 #[async_trait]
 impl DatabaseIntrospector for SQLiteIntrospector {
 	async fn read_schema(&self) -> Result<DatabaseSchema> {
-		use sea_schema::sqlite::discovery::SchemaDiscovery;
+		#[derive(sqlx::FromRow)]
+		struct TableRow {
+			name: String,
+		}
 
-		let discovery = SchemaDiscovery::new(self.pool.clone());
-		let schema = discovery
-			.discover()
+		// Get all user tables (exclude SQLite internal tables)
+		let query =
+			"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'";
+		let table_rows: Vec<TableRow> = sqlx::query_as(query)
+			.fetch_all(&self.pool)
 			.await
 			.map_err(|e| MigrationError::IntrospectionError(e.to_string()))?;
 
 		let mut tables = HashMap::new();
-		for table_def in schema.tables {
-			let mut table_info = Self::convert_table_def(&table_def)?;
-
-			// Extract foreign keys using PRAGMA foreign_key_list
-			let foreign_keys = Self::extract_foreign_keys(&self.pool, &table_info.name).await?;
-			table_info.foreign_keys = foreign_keys;
-
-			// Extract indexes using PRAGMA index_list (sea_schema doesn't detect regular indexes)
-			let indexes = Self::extract_indexes(&self.pool, &table_info.name).await?;
-			table_info.indexes = indexes;
-
-			// Extract CHECK constraints from sqlite_master
-			let check_constraints =
-				Self::extract_check_constraints(&self.pool, &table_info.name).await?;
-			table_info.check_constraints = check_constraints;
-
+		for table_row in table_rows {
+			let table_info = self.introspect_table(&table_row.name).await?;
 			tables.insert(table_info.name.clone(), table_info);
 		}
 
@@ -950,36 +1615,28 @@ impl DatabaseIntrospector for SQLiteIntrospector {
 	}
 
 	async fn read_table(&self, table_name: &str) -> Result<Option<TableInfo>> {
-		use sea_schema::sqlite::discovery::SchemaDiscovery;
+		#[derive(sqlx::FromRow)]
+		struct TableRow {
+			#[allow(dead_code)]
+			// Table name from sqlite_master
+			name: String,
+		}
 
-		let discovery = SchemaDiscovery::new(self.pool.clone());
-		let schema = discovery
-			.discover()
+		// Check if the table exists
+		let query = "SELECT name FROM sqlite_master WHERE type='table' AND name=?";
+		let result: Option<TableRow> = sqlx::query_as(query)
+			.bind(table_name)
+			.fetch_optional(&self.pool)
 			.await
 			.map_err(|e| MigrationError::IntrospectionError(e.to_string()))?;
 
-		for table_def in schema.tables {
-			if table_def.name == table_name {
-				let mut table_info = Self::convert_table_def(&table_def)?;
-
-				// Extract foreign keys using PRAGMA foreign_key_list
-				let foreign_keys = Self::extract_foreign_keys(&self.pool, &table_info.name).await?;
-				table_info.foreign_keys = foreign_keys;
-
-				// Extract indexes using PRAGMA index_list
-				let indexes = Self::extract_indexes(&self.pool, &table_info.name).await?;
-				table_info.indexes = indexes;
-
-				// Extract CHECK constraints from sqlite_master
-				let check_constraints =
-					Self::extract_check_constraints(&self.pool, &table_info.name).await?;
-				table_info.check_constraints = check_constraints;
-
-				return Ok(Some(table_info));
+		match result {
+			Some(_) => {
+				let table_info = self.introspect_table(table_name).await?;
+				Ok(Some(table_info))
 			}
+			None => Ok(None),
 		}
-
-		Ok(None)
 	}
 }
 

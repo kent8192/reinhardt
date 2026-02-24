@@ -37,12 +37,14 @@ reinhardt-rest = { workspace = true, features = [
     "filters",
     "metadata",
     "negotiation",
+    "openapi",
     "pagination",
     "parsers",
     "serializers",
     "throttling",
     "versioning",
 ] }
+reinhardt-openapi-macros = { workspace = true }
 reinhardt-urls = { workspace = true, features = ["proxy", "routers"] }
 reinhardt-server = { workspace = true }
 reinhardt-shortcuts = { workspace = true }
@@ -78,7 +80,8 @@ serial_test = { workspace = true }
 rstest = "0.26.1"
 sqlx = { workspace = true }
 reqwest = { version = "0.12", features = ["json"] }
-sea-query = { workspace = true }
+reinhardt-query = { workspace = true, features = ["derive"] }
+utoipa = { version = "^5.4.0", features = ["url", "uuid", "yaml"] }
 ctor = "0.6.0"
 linkme = "0.3"
 

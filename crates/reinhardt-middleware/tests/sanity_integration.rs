@@ -215,6 +215,7 @@ mod rate_limit_sanity {
 			strategy: RateLimitStrategy::PerIp,
 			exclude_paths: vec!["/health".to_string()],
 			error_message: Some("Rate limit exceeded".to_string()),
+			trusted_proxies: vec![],
 		};
 
 		let middleware = Arc::new(RateLimitMiddleware::new(config));
@@ -241,6 +242,7 @@ mod rate_limit_sanity {
 			strategy: RateLimitStrategy::PerIp,
 			exclude_paths: vec!["/health".to_string(), "/metrics".to_string()],
 			error_message: None,
+			trusted_proxies: vec![],
 		};
 
 		let middleware = Arc::new(RateLimitMiddleware::new(config));

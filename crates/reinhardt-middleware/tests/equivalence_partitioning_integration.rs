@@ -186,6 +186,7 @@ async fn test_rate_limit_strategy_partitions(#[case] strategy: RateLimitStrategy
 		strategy: strategy.clone(),
 		exclude_paths: vec![],
 		error_message: None,
+		trusted_proxies: vec![],
 	};
 
 	let middleware = Arc::new(RateLimitMiddleware::new(config));
@@ -220,7 +221,9 @@ async fn test_rate_limit_strategy_partitions(#[case] strategy: RateLimitStrategy
 	);
 }
 
-/// Test that different strategies isolate rate limiting properly
+/// Test that different strategies isolate rate limiting properly.
+/// Uses direct remote_addr instead of proxy headers to verify IP isolation
+/// without relying on trusted proxy configuration.
 #[cfg(feature = "rate-limit")]
 #[tokio::test]
 async fn test_rate_limit_strategy_isolation() {
@@ -228,6 +231,7 @@ async fn test_rate_limit_strategy_isolation() {
 	use reinhardt_middleware::rate_limit::{
 		RateLimitConfig, RateLimitMiddleware, RateLimitStrategy,
 	};
+	use std::net::SocketAddr;
 
 	let config = RateLimitConfig {
 		capacity: 1.0,
@@ -236,13 +240,18 @@ async fn test_rate_limit_strategy_isolation() {
 		strategy: RateLimitStrategy::PerIp,
 		exclude_paths: vec![],
 		error_message: None,
+		trusted_proxies: vec![],
 	};
 
 	let middleware = Arc::new(RateLimitMiddleware::new(config));
 	let handler = Arc::new(ConfigurableTestHandler::always_success());
 
+	let addr1: SocketAddr = "192.168.1.1:12345".parse().unwrap();
+	let addr2: SocketAddr = "192.168.2.2:12345".parse().unwrap();
+
 	// First IP exhausts its quota
-	let request1 = create_request_with_headers("GET", "/", &[("X-Forwarded-For", "192.168.1.1")]);
+	let mut request1 = create_test_request("GET", "/");
+	request1.remote_addr = Some(addr1);
 	let response1 = middleware.process(request1, handler.clone()).await.unwrap();
 	assert_eq!(
 		response1.status.as_u16(),
@@ -251,7 +260,8 @@ async fn test_rate_limit_strategy_isolation() {
 	);
 
 	// First IP should now be rate limited
-	let request2 = create_request_with_headers("GET", "/", &[("X-Forwarded-For", "192.168.1.1")]);
+	let mut request2 = create_test_request("GET", "/");
+	request2.remote_addr = Some(addr1);
 	let response2 = middleware.process(request2, handler.clone()).await.unwrap();
 	assert_eq!(
 		response2.status.as_u16(),
@@ -260,7 +270,8 @@ async fn test_rate_limit_strategy_isolation() {
 	);
 
 	// Second IP should still have its own quota
-	let request3 = create_request_with_headers("GET", "/", &[("X-Forwarded-For", "192.168.2.2")]);
+	let mut request3 = create_test_request("GET", "/");
+	request3.remote_addr = Some(addr2);
 	let response3 = middleware.process(request3, handler).await.unwrap();
 	assert_eq!(
 		response3.status.as_u16(),

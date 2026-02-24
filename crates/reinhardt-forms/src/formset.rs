@@ -65,7 +65,9 @@ impl FormSet {
 		self.min_num = min_num;
 		self
 	}
-	/// Add a form to the formset
+	/// Add a form to the formset.
+	///
+	/// Returns an error if adding the form would exceed `max_num`.
 	///
 	/// # Examples
 	///
@@ -74,11 +76,28 @@ impl FormSet {
 	///
 	/// let mut formset = FormSet::new("form".to_string());
 	/// let form = Form::new();
-	/// formset.add_form(form);
+	/// assert!(formset.add_form(form).is_ok());
 	/// assert_eq!(formset.forms().len(), 1);
 	/// ```
-	pub fn add_form(&mut self, form: Form) {
+	///
+	/// ```
+	/// use reinhardt_forms::{FormSet, Form};
+	///
+	/// let mut formset = FormSet::new("form".to_string()).with_max_num(Some(1));
+	/// assert!(formset.add_form(Form::new()).is_ok());
+	/// assert!(formset.add_form(Form::new()).is_err());
+	/// ```
+	pub fn add_form(&mut self, form: Form) -> Result<(), String> {
+		if let Some(max) = self.max_num
+			&& self.forms.len() >= max
+		{
+			return Err(format!(
+				"Cannot add form: maximum number of forms ({}) reached",
+				max
+			));
+		}
 		self.forms.push(form);
+		Ok(())
 	}
 	pub fn forms(&self) -> &[Form] {
 		&self.forms
@@ -100,7 +119,7 @@ impl FormSet {
 	/// use reinhardt_forms::{FormSet, Form};
 	///
 	/// let mut formset = FormSet::new("form".to_string());
-	/// formset.add_form(Form::new());
+	/// formset.add_form(Form::new()).unwrap();
 	// Note: is_valid() requires mutable reference
 	// let is_valid = formset.is_valid();
 	/// ```
@@ -169,7 +188,9 @@ impl FormSet {
 		}
 		data
 	}
-	/// Process bound data from HTML forms
+	/// Process bound data from HTML forms.
+	///
+	/// Respects `max_num` and silently stops adding forms once the limit is reached.
 	///
 	/// # Examples
 	///
@@ -193,6 +214,12 @@ impl FormSet {
 		// Each form should have a key like "form-0", "form-1", etc.
 		for (key, form_data) in data {
 			if key.starts_with(&self.prefix) {
+				// Enforce max_num limit during data processing
+				if let Some(max) = self.max_num
+					&& self.forms.len() >= max
+				{
+					break;
+				}
 				let mut form = Form::new();
 				form.bind(form_data.clone());
 				self.forms.push(form);
@@ -222,8 +249,8 @@ mod tests {
 		let mut form2 = Form::new();
 		form2.add_field(Box::new(CharField::new("name".to_string())));
 
-		formset.add_form(form1);
-		formset.add_form(form2);
+		formset.add_form(form1).unwrap();
+		formset.add_form(form2).unwrap();
 
 		assert_eq!(formset.form_count(), 2);
 	}
@@ -234,24 +261,30 @@ mod tests {
 
 		let mut form1 = Form::new();
 		form1.add_field(Box::new(CharField::new("name".to_string())));
-		formset.add_form(form1);
+		formset.add_form(form1).unwrap();
 
 		assert!(!formset.is_valid());
 		assert!(!formset.errors().is_empty());
 	}
 
 	#[test]
-	fn test_formset_max_num_validation() {
+	fn test_formset_max_num_enforced_on_add() {
 		let mut formset = FormSet::new("person".to_string()).with_max_num(Some(2));
 
-		for _ in 0..3 {
-			let mut form = Form::new();
-			form.add_field(Box::new(CharField::new("name".to_string())));
-			formset.add_form(form);
-		}
+		let mut form1 = Form::new();
+		form1.add_field(Box::new(CharField::new("name".to_string())));
+		assert!(formset.add_form(form1).is_ok());
 
-		assert!(!formset.is_valid());
-		assert!(!formset.errors().is_empty());
+		let mut form2 = Form::new();
+		form2.add_field(Box::new(CharField::new("name".to_string())));
+		assert!(formset.add_form(form2).is_ok());
+
+		// Third form should be rejected
+		let mut form3 = Form::new();
+		form3.add_field(Box::new(CharField::new("name".to_string())));
+		assert!(formset.add_form(form3).is_err());
+
+		assert_eq!(formset.form_count(), 2);
 	}
 
 	#[test]

@@ -5,16 +5,16 @@ use std::str::FromStr;
 
 fn main() {
 	installed_apps! {
-		auth: "reinhardt.contrib.auth",
-		sessions: "reinhardt.contrib.sessions",
+		auth: "myproject.auth",
+		sessions: "myproject.sessions",
 	}
 
 	// Test Display
 	let app = InstalledApp::auth;
-	assert_eq!(format!("{}", app), "reinhardt.contrib.auth");
+	assert_eq!(format!("{}", app), "myproject.auth");
 
 	// Test FromStr
-	let parsed = InstalledApp::from_str("reinhardt.contrib.auth").unwrap();
+	let parsed = InstalledApp::from_str("myproject.auth").unwrap();
 	assert_eq!(parsed, InstalledApp::auth);
 
 	// Test equality

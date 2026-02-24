@@ -12,7 +12,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::super::super::error::{DatabaseError, Result};
+use crate::backends::error::{DatabaseError, Result};
 
 /// Maximum number of transaction retry attempts
 const MAX_RETRIES: u32 = 5;

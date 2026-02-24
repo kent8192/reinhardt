@@ -5,9 +5,11 @@
 //! ContentType operations through the ORM are made possible.
 
 #[cfg(feature = "database")]
-use sea_query::{
-	Alias, BinOper, Condition, Expr, ExprTrait, Func, Order, Query as SeaQuery, SqliteQueryBuilder,
+use reinhardt_query::prelude::{
+	Alias, BinOper, Cond, Expr, Func, Order, Query, QueryStatementBuilder, SqliteQueryBuilder,
 };
+#[cfg(feature = "database")]
+use reinhardt_query::value::Values;
 #[cfg(feature = "database")]
 use sqlx::{AnyPool, Row};
 #[cfg(feature = "database")]
@@ -16,7 +18,7 @@ use std::sync::Arc;
 #[cfg(feature = "database")]
 use super::ContentType;
 #[cfg(feature = "database")]
-use super::persistence::PersistenceError;
+use super::persistence::{PersistenceError, bind_query_values};
 
 /// ORM-compatible ContentType query builder
 ///
@@ -184,9 +186,9 @@ impl ContentTypeQuery {
 		self
 	}
 
-	/// Build the query
-	fn build_query(&self) -> String {
-		let mut query = SeaQuery::select()
+	/// Build the query, returning parameterized SQL and bound values
+	fn build_query(&self) -> (String, Values) {
+		let mut query = Query::select()
 			.columns([
 				Alias::new("id"),
 				Alias::new("app_label"),
@@ -198,12 +200,14 @@ impl ContentTypeQuery {
 		// Apply filters
 		for filter in &self.filters {
 			let condition = match filter {
-				ContentTypeFilter::AppLabel(app_label) => Condition::all().add(
-					Expr::col(Alias::new("app_label")).binary(BinOper::Equal, Expr::val(app_label)),
+				ContentTypeFilter::AppLabel(app_label) => Cond::all().add(
+					Expr::col(Alias::new("app_label"))
+						.binary(BinOper::Equal, Expr::val(app_label.clone())),
 				),
-				ContentTypeFilter::Model(model) => Condition::all()
-					.add(Expr::col(Alias::new("model")).binary(BinOper::Equal, Expr::val(model))),
-				ContentTypeFilter::Id(id) => Condition::all()
+				ContentTypeFilter::Model(model) => Cond::all().add(
+					Expr::col(Alias::new("model")).binary(BinOper::Equal, Expr::val(model.clone())),
+				),
+				ContentTypeFilter::Id(id) => Cond::all()
 					.add(Expr::col(Alias::new("id")).binary(BinOper::Equal, Expr::val(*id))),
 			};
 			query.cond_where(condition);
@@ -250,7 +254,7 @@ impl ContentTypeQuery {
 			query.offset(offset);
 		}
 
-		query.to_string(SqliteQueryBuilder)
+		query.build(SqliteQueryBuilder)
 	}
 
 	/// Retrieve all results
@@ -271,9 +275,9 @@ impl ContentTypeQuery {
 	/// # }
 	/// ```
 	pub async fn all(&self) -> Result<Vec<ContentType>, PersistenceError> {
-		let sql = self.build_query();
+		let (sql, values) = self.build_query();
 		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
-		let rows = sqlx::query(sql_leaked)
+		let rows = bind_query_values(sqlx::query(sql_leaked), &values)
 			.fetch_all(&*self.pool)
 			.await
 			.map_err(|e| {
@@ -346,28 +350,30 @@ impl ContentTypeQuery {
 	/// # }
 	/// ```
 	pub async fn count(&self) -> Result<i64, PersistenceError> {
-		let mut count_query = SeaQuery::select()
-			.expr(Func::count(Expr::col(Alias::new("id"))))
+		let mut count_query = Query::select()
+			.expr(Func::count(Expr::col(Alias::new("id")).into()))
 			.from(Alias::new("django_content_type"))
 			.to_owned();
 
 		// Apply filters only (order and limit are unnecessary)
 		for filter in &self.filters {
 			let condition = match filter {
-				ContentTypeFilter::AppLabel(app_label) => Condition::all().add(
-					Expr::col(Alias::new("app_label")).binary(BinOper::Equal, Expr::val(app_label)),
+				ContentTypeFilter::AppLabel(app_label) => Cond::all().add(
+					Expr::col(Alias::new("app_label"))
+						.binary(BinOper::Equal, Expr::val(app_label.clone())),
 				),
-				ContentTypeFilter::Model(model) => Condition::all()
-					.add(Expr::col(Alias::new("model")).binary(BinOper::Equal, Expr::val(model))),
-				ContentTypeFilter::Id(id) => Condition::all()
+				ContentTypeFilter::Model(model) => Cond::all().add(
+					Expr::col(Alias::new("model")).binary(BinOper::Equal, Expr::val(model.clone())),
+				),
+				ContentTypeFilter::Id(id) => Cond::all()
 					.add(Expr::col(Alias::new("id")).binary(BinOper::Equal, Expr::val(*id))),
 			};
 			count_query.cond_where(condition);
 		}
 
-		let sql = count_query.to_string(SqliteQueryBuilder);
+		let (sql, values) = count_query.build(SqliteQueryBuilder);
 		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
-		let row = sqlx::query(sql_leaked)
+		let row = bind_query_values(sqlx::query(sql_leaked), &values)
 			.fetch_one(&*self.pool)
 			.await
 			.map_err(|e| PersistenceError::DatabaseError(format!("Failed to count: {}", e)))?;
@@ -432,16 +438,16 @@ impl ContentTypeTransaction {
 		let app_label = app_label.into();
 		let model = model.into();
 
-		let stmt = sea_query::Query::insert()
+		let stmt = Query::insert()
 			.into_table(Alias::new("django_content_type"))
 			.columns([Alias::new("app_label"), Alias::new("model")])
-			.values([app_label.clone().into(), model.clone().into()])
+			.values(vec![app_label.clone().into(), model.clone().into()])
 			.expect("Failed to build insert statement")
 			.to_owned();
-		let sql = stmt.to_string(SqliteQueryBuilder);
+		let (sql, values) = stmt.build(SqliteQueryBuilder);
 		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
 
-		sqlx::query(sql_leaked)
+		bind_query_values(sqlx::query(sql_leaked), &values)
 			.execute(&*self.pool)
 			.await
 			.map_err(|e| {
@@ -469,17 +475,16 @@ impl ContentTypeTransaction {
 
 	/// Delete ContentType (within transaction)
 	pub async fn delete(&self, id: i64) -> Result<(), PersistenceError> {
-		let stmt = sea_query::Query::delete()
+		let stmt = Query::delete()
 			.from_table(Alias::new("django_content_type"))
 			.cond_where(
-				Condition::all()
-					.add(Expr::col(Alias::new("id")).binary(BinOper::Equal, Expr::val(id))),
+				Cond::all().add(Expr::col(Alias::new("id")).binary(BinOper::Equal, Expr::val(id))),
 			)
 			.to_owned();
-		let sql = stmt.to_string(SqliteQueryBuilder);
+		let (sql, values) = stmt.build(SqliteQueryBuilder);
 		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
 
-		sqlx::query(sql_leaked)
+		bind_query_values(sqlx::query(sql_leaked), &values)
 			.execute(&*self.pool)
 			.await
 			.map_err(|e| {

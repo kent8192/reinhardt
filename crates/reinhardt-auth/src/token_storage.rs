@@ -316,11 +316,14 @@ impl TokenStorage for InMemoryTokenStorage {
 #[cfg(feature = "database")]
 mod database_storage {
 	use super::*;
-	use sea_query::{Alias, Expr, ExprTrait, Iden, Index, PostgresQueryBuilder, Query};
+	use reinhardt_query::prelude::{
+		Alias, Expr, ExprTrait, Iden, IntoIden, IntoValue, OnConflict, PostgresQueryBuilder, Query,
+		QueryStatementBuilder,
+	};
 	use sqlx::PgPool;
 
 	/// Table identifier for auth_tokens
-	#[derive(Iden)]
+	#[derive(Debug, Iden)]
 	// Some variants are used only for DDL but still needed for schema completeness
 	#[allow(dead_code)]
 	enum AuthTokens {
@@ -381,8 +384,8 @@ mod database_storage {
 				.await
 				.map_err(|e| TokenStorageError::StorageError(e.to_string()))?;
 
-			// Create indexes using SeaQuery for DB compatibility
-			let index_user_id_stmt = Index::create()
+			// Create indexes using reinhardt-query for DB compatibility
+			let index_user_id_stmt = Query::create_index()
 				.if_not_exists()
 				.name("idx_auth_tokens_user_id")
 				.table(Alias::new("auth_tokens"))
@@ -395,7 +398,7 @@ mod database_storage {
 				.await
 				.map_err(|e| TokenStorageError::StorageError(e.to_string()))?;
 
-			let index_expires_at_stmt = Index::create()
+			let index_expires_at_stmt = Query::create_index()
 				.if_not_exists()
 				.name("idx_auth_tokens_expires_at")
 				.table(Alias::new("auth_tokens"))
@@ -419,21 +422,21 @@ mod database_storage {
 				.map_err(|e| TokenStorageError::StorageError(e.to_string()))?;
 
 			let (sql, _values) = Query::insert()
-				.into_table(AuthTokens::Table)
+				.into_table(AuthTokens::Table.into_iden())
 				.columns([
 					AuthTokens::Token,
 					AuthTokens::UserId,
 					AuthTokens::ExpiresAt,
 					AuthTokens::Metadata,
 				])
-				.values_panic([
-					token.token.clone().into(),
-					token.user_id.into(),
-					token.expires_at.into(),
-					metadata_json.to_string().into(),
+				.values_panic(vec![
+					token.token.clone().into_value(),
+					token.user_id.into_value(),
+					token.expires_at.into_value(),
+					metadata_json.to_string().into_value(),
 				])
 				.on_conflict(
-					sea_query::OnConflict::column(AuthTokens::Token)
+					OnConflict::column(AuthTokens::Token)
 						.update_columns([AuthTokens::ExpiresAt, AuthTokens::Metadata])
 						.to_owned(),
 				)
@@ -450,13 +453,13 @@ mod database_storage {
 		async fn get(&self, token: &str) -> TokenStorageResult<StoredToken> {
 			let (sql, _) = Query::select()
 				.columns([
-					AuthTokens::Token,
-					AuthTokens::UserId,
-					AuthTokens::ExpiresAt,
-					AuthTokens::Metadata,
+					AuthTokens::Token.into_iden(),
+					AuthTokens::UserId.into_iden(),
+					AuthTokens::ExpiresAt.into_iden(),
+					AuthTokens::Metadata.into_iden(),
 				])
-				.from(AuthTokens::Table)
-				.and_where(Expr::col(AuthTokens::Token).eq(token))
+				.from(AuthTokens::Table.into_iden())
+				.and_where(Expr::col(AuthTokens::Token.into_iden()).eq(token))
 				.build(PostgresQueryBuilder);
 
 			let row: Option<(String, i64, Option<i64>, serde_json::Value)> = sqlx::query_as(&sql)
@@ -483,13 +486,13 @@ mod database_storage {
 		async fn get_user_tokens(&self, user_id: i64) -> TokenStorageResult<Vec<StoredToken>> {
 			let (sql, _) = Query::select()
 				.columns([
-					AuthTokens::Token,
-					AuthTokens::UserId,
-					AuthTokens::ExpiresAt,
-					AuthTokens::Metadata,
+					AuthTokens::Token.into_iden(),
+					AuthTokens::UserId.into_iden(),
+					AuthTokens::ExpiresAt.into_iden(),
+					AuthTokens::Metadata.into_iden(),
 				])
-				.from(AuthTokens::Table)
-				.and_where(Expr::col(AuthTokens::UserId).eq(user_id))
+				.from(AuthTokens::Table.into_iden())
+				.and_where(Expr::col(AuthTokens::UserId.into_iden()).eq(user_id))
 				.build(PostgresQueryBuilder);
 
 			let rows: Vec<(String, i64, Option<i64>, serde_json::Value)> = sqlx::query_as(&sql)
@@ -517,8 +520,8 @@ mod database_storage {
 
 		async fn delete(&self, token: &str) -> TokenStorageResult<()> {
 			let (sql, _) = Query::delete()
-				.from_table(AuthTokens::Table)
-				.and_where(Expr::col(AuthTokens::Token).eq(token))
+				.from_table(AuthTokens::Table.into_iden())
+				.and_where(Expr::col(AuthTokens::Token.into_iden()).eq(token))
 				.build(PostgresQueryBuilder);
 
 			let result = sqlx::query(&sql)
@@ -536,8 +539,8 @@ mod database_storage {
 
 		async fn delete_user_tokens(&self, user_id: i64) -> TokenStorageResult<()> {
 			let (sql, _) = Query::delete()
-				.from_table(AuthTokens::Table)
-				.and_where(Expr::col(AuthTokens::UserId).eq(user_id))
+				.from_table(AuthTokens::Table.into_iden())
+				.and_where(Expr::col(AuthTokens::UserId.into_iden()).eq(user_id))
 				.build(PostgresQueryBuilder);
 
 			sqlx::query(&sql)
@@ -551,9 +554,9 @@ mod database_storage {
 
 		async fn cleanup_expired(&self, current_time: i64) -> TokenStorageResult<usize> {
 			let (sql, _) = Query::delete()
-				.from_table(AuthTokens::Table)
-				.and_where(Expr::col(AuthTokens::ExpiresAt).is_not_null())
-				.and_where(Expr::col(AuthTokens::ExpiresAt).lt(current_time))
+				.from_table(AuthTokens::Table.into_iden())
+				.and_where(Expr::col(AuthTokens::ExpiresAt.into_iden()).is_not_null())
+				.and_where(Expr::col(AuthTokens::ExpiresAt.into_iden()).lt(current_time))
 				.build(PostgresQueryBuilder);
 
 			let result = sqlx::query(&sql)

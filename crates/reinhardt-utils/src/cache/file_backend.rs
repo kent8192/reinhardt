@@ -141,13 +141,14 @@ impl FileCache {
 
 	/// Get the file path for a cache key
 	fn get_file_path(&self, key: &str) -> PathBuf {
-		// Hash the key to create a safe filename
-		use md5::{Digest, Md5};
-		let hash = format!("{:x}", Md5::digest(key.as_bytes()));
+		// Hash the key to create a safe filename using SHA-256
+		use sha2::{Digest, Sha256};
+		let hash = format!("{:x}", Sha256::digest(key.as_bytes()));
 		self.cache_dir.join(hash)
 	}
 
 	/// Load the cache index from filesystem
+	// Reserved for future cache persistence recovery
 	#[allow(dead_code)]
 	async fn load_index(&self) -> Result<()> {
 		let mut index = self.index.write().await;
@@ -294,6 +295,26 @@ mod tests {
 	use super::*;
 	use std::time::Duration;
 
+	/// Polls a condition until it returns true or timeout is reached.
+	async fn poll_until<F, Fut>(
+		timeout: std::time::Duration,
+		interval: std::time::Duration,
+		mut condition: F,
+	) -> std::result::Result<(), String>
+	where
+		F: FnMut() -> Fut,
+		Fut: std::future::Future<Output = bool>,
+	{
+		let start = std::time::Instant::now();
+		while start.elapsed() < timeout {
+			if condition().await {
+				return Ok(());
+			}
+			tokio::time::sleep(interval).await;
+		}
+		Err(format!("Timeout after {:?} waiting for condition", timeout))
+	}
+
 	fn get_test_dir(name: &str) -> PathBuf {
 		PathBuf::from(format!("/tmp/reinhardt_file_cache_test_{}", name))
 	}
@@ -339,7 +360,7 @@ mod tests {
 		assert_eq!(value, Some("value1".to_string()));
 
 		// Poll until key expires
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(200),
 			Duration::from_millis(10),
 			|| async {
@@ -363,7 +384,7 @@ mod tests {
 		cache.set("key2", &"value2", None).await.unwrap();
 
 		// Poll until first key expires
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(200),
 			Duration::from_millis(10),
 			|| async {

@@ -1,0 +1,7 @@
+error: No primary key field found. Add #[field(primary_key)] to one field.
+ --> tests/ui/fail/missing_primary_key.rs:4:1
+  |
+4 | / struct User {
+5 | |     name: String,
+6 | | }
+  | |_^

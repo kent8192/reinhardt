@@ -5,7 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Token rotation configuration
 ///
@@ -275,18 +276,20 @@ impl AutoTokenRotationManager {
 	///
 	/// # Examples
 	///
-	/// ```
+	/// ```no_run
 	/// use reinhardt_auth::{AutoTokenRotationManager, TokenRotationConfig, TokenRotationRecord};
 	///
+	/// # async fn example() {
 	/// let config = TokenRotationConfig::new();
 	/// let manager = AutoTokenRotationManager::new(config);
 	///
 	/// let record = TokenRotationRecord::new("old", "new", 1234567890)
 	///     .with_user_id(42);
-	/// manager.record_rotation(record);
+	/// manager.record_rotation(record).await;
+	/// # }
 	/// ```
-	pub fn record_rotation(&self, record: TokenRotationRecord) {
-		let mut history = self.rotation_history.write().unwrap();
+	pub async fn record_rotation(&self, record: TokenRotationRecord) {
+		let mut history = self.rotation_history.write().await;
 		history.insert(record.old_token.clone(), record);
 	}
 
@@ -296,25 +299,27 @@ impl AutoTokenRotationManager {
 	///
 	/// # Examples
 	///
-	/// ```
+	/// ```no_run
 	/// use reinhardt_auth::{AutoTokenRotationManager, TokenRotationConfig, TokenRotationRecord};
 	///
+	/// # async fn example() {
 	/// let config = TokenRotationConfig::new()
 	///     .grace_period(300);
 	/// let manager = AutoTokenRotationManager::new(config);
 	///
 	/// let record = TokenRotationRecord::new("old", "new", 1000)
 	///     .with_user_id(42);
-	/// manager.record_rotation(record);
+	/// manager.record_rotation(record).await;
 	///
 	/// // Within grace period
-	/// assert_eq!(manager.get_rotated_token("old", 1200), Some("new".to_string()));
+	/// assert_eq!(manager.get_rotated_token("old", 1200).await, Some("new".to_string()));
 	///
 	/// // Beyond grace period
-	/// assert_eq!(manager.get_rotated_token("old", 2000), None);
+	/// assert_eq!(manager.get_rotated_token("old", 2000).await, None);
+	/// # }
 	/// ```
-	pub fn get_rotated_token(&self, old_token: &str, current_time: i64) -> Option<String> {
-		let history = self.rotation_history.read().unwrap();
+	pub async fn get_rotated_token(&self, old_token: &str, current_time: i64) -> Option<String> {
+		let history = self.rotation_history.read().await;
 		history.get(old_token).and_then(|record| {
 			if record.grace_period_expired(current_time, self.config.grace_period) {
 				None
@@ -328,22 +333,24 @@ impl AutoTokenRotationManager {
 	///
 	/// # Examples
 	///
-	/// ```
+	/// ```no_run
 	/// use reinhardt_auth::{AutoTokenRotationManager, TokenRotationConfig, TokenRotationRecord};
 	///
+	/// # async fn example() {
 	/// let config = TokenRotationConfig::new()
 	///     .grace_period(300);
 	/// let manager = AutoTokenRotationManager::new(config);
 	///
-	/// manager.record_rotation(TokenRotationRecord::new("old1", "new1", 1000));
-	/// manager.record_rotation(TokenRotationRecord::new("old2", "new2", 2000));
+	/// manager.record_rotation(TokenRotationRecord::new("old1", "new1", 1000)).await;
+	/// manager.record_rotation(TokenRotationRecord::new("old2", "new2", 2000)).await;
 	///
 	/// // Cleanup at time 2200: old1 (1000+300=1300) is expired, old2 (2000+300=2300) is not
-	/// let removed = manager.cleanup_expired(2200);
+	/// let removed = manager.cleanup_expired(2200).await;
 	/// assert_eq!(removed, 1); // Only old1 is expired
+	/// # }
 	/// ```
-	pub fn cleanup_expired(&self, current_time: i64) -> usize {
-		let mut history = self.rotation_history.write().unwrap();
+	pub async fn cleanup_expired(&self, current_time: i64) -> usize {
+		let mut history = self.rotation_history.write().await;
 		let before_count = history.len();
 		history.retain(|_, record| {
 			!record.grace_period_expired(current_time, self.config.grace_period)
@@ -357,17 +364,17 @@ impl AutoTokenRotationManager {
 	}
 
 	/// Get the number of rotation records
-	pub fn rotation_count(&self) -> usize {
-		self.rotation_history.read().unwrap().len()
+	pub async fn rotation_count(&self) -> usize {
+		self.rotation_history.read().await.len()
 	}
 
 	/// Get all rotation records (for testing purposes)
 	///
 	/// Returns a copy of all rotation records currently stored.
-	pub fn rotation_records(&self) -> Vec<TokenRotationRecord> {
+	pub async fn rotation_records(&self) -> Vec<TokenRotationRecord> {
 		self.rotation_history
 			.read()
-			.unwrap()
+			.await
 			.values()
 			.cloned()
 			.collect()
@@ -425,12 +432,12 @@ mod tests {
 		assert!(record.grace_period_expired(1301, 300)); // 301s elapsed, grace = 300s
 	}
 
-	#[test]
-	fn test_manager_creation() {
+	#[tokio::test]
+	async fn test_manager_creation() {
 		let config = TokenRotationConfig::new();
 		let manager = AutoTokenRotationManager::new(config.clone());
 		assert_eq!(manager.config().rotation_interval, config.rotation_interval);
-		assert_eq!(manager.rotation_count(), 0);
+		assert_eq!(manager.rotation_count().await, 0);
 	}
 
 	#[test]
@@ -444,62 +451,72 @@ mod tests {
 		assert!(manager.should_rotate(5000, 10000)); // 5000s elapsed > 3600s
 	}
 
-	#[test]
-	fn test_record_and_get_rotation() {
+	#[tokio::test]
+	async fn test_record_and_get_rotation() {
 		let config = TokenRotationConfig::new().grace_period(300);
 		let manager = AutoTokenRotationManager::new(config);
 
 		let record = TokenRotationRecord::new("old_token", "new_token", 1000).with_user_id(42);
-		manager.record_rotation(record);
+		manager.record_rotation(record).await;
 
 		// Within grace period
 		assert_eq!(
-			manager.get_rotated_token("old_token", 1200),
+			manager.get_rotated_token("old_token", 1200).await,
 			Some("new_token".to_string())
 		);
 
 		// Beyond grace period
-		assert_eq!(manager.get_rotated_token("old_token", 2000), None);
+		assert_eq!(manager.get_rotated_token("old_token", 2000).await, None);
 	}
 
-	#[test]
-	fn test_cleanup_expired() {
+	#[tokio::test]
+	async fn test_cleanup_expired() {
 		let config = TokenRotationConfig::new().grace_period(300);
 		let manager = AutoTokenRotationManager::new(config);
 
-		manager.record_rotation(TokenRotationRecord::new("old1", "new1", 1000));
-		manager.record_rotation(TokenRotationRecord::new("old2", "new2", 2000));
-		manager.record_rotation(TokenRotationRecord::new("old3", "new3", 3000));
+		manager
+			.record_rotation(TokenRotationRecord::new("old1", "new1", 1000))
+			.await;
+		manager
+			.record_rotation(TokenRotationRecord::new("old2", "new2", 2000))
+			.await;
+		manager
+			.record_rotation(TokenRotationRecord::new("old3", "new3", 3000))
+			.await;
 
-		assert_eq!(manager.rotation_count(), 3);
+		assert_eq!(manager.rotation_count().await, 3);
 
-		let removed = manager.cleanup_expired(2500);
+		let removed = manager.cleanup_expired(2500).await;
 		assert_eq!(removed, 2); // old1 (expires 1300) and old2 (expires 2300) are both expired at 2500
-		assert_eq!(manager.rotation_count(), 1);
+		assert_eq!(manager.rotation_count().await, 1);
 
-		let removed2 = manager.cleanup_expired(3500);
+		let removed2 = manager.cleanup_expired(3500).await;
 		assert_eq!(removed2, 1); // old3 is now expired (3000 + 300 = 3300 < 3500)
-		assert_eq!(manager.rotation_count(), 0);
+		assert_eq!(manager.rotation_count().await, 0);
 	}
 
-	#[test]
-	fn test_multiple_rotations() {
+	#[tokio::test]
+	async fn test_multiple_rotations() {
 		let config = TokenRotationConfig::new().grace_period(300);
 		let manager = AutoTokenRotationManager::new(config);
 
-		manager.record_rotation(
-			TokenRotationRecord::new("token1_v1", "token1_v2", 1000).with_user_id(1),
-		);
-		manager.record_rotation(
-			TokenRotationRecord::new("token2_v1", "token2_v2", 1100).with_user_id(2),
-		);
+		manager
+			.record_rotation(
+				TokenRotationRecord::new("token1_v1", "token1_v2", 1000).with_user_id(1),
+			)
+			.await;
+		manager
+			.record_rotation(
+				TokenRotationRecord::new("token2_v1", "token2_v2", 1100).with_user_id(2),
+			)
+			.await;
 
 		assert_eq!(
-			manager.get_rotated_token("token1_v1", 1200),
+			manager.get_rotated_token("token1_v1", 1200).await,
 			Some("token1_v2".to_string())
 		);
 		assert_eq!(
-			manager.get_rotated_token("token2_v1", 1200),
+			manager.get_rotated_token("token2_v1", 1200).await,
 			Some("token2_v2".to_string())
 		);
 	}

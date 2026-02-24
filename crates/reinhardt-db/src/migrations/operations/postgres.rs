@@ -19,8 +19,8 @@
 //! let collation = CreateCollation::new("german", "de_DE");
 //! ```
 
-use super::super::ProjectState;
 use crate::backends::schema::BaseDatabaseSchemaEditor;
+use crate::migrations::ProjectState;
 use pg_escape::quote_literal;
 use serde::{Deserialize, Serialize};
 
@@ -331,7 +331,7 @@ pub mod extensions {
 }
 
 // MigrationOperation trait implementation for Django-style naming
-use super::super::operation_trait::MigrationOperation;
+use crate::migrations::operation_trait::MigrationOperation;
 
 impl MigrationOperation for CreateExtension {
 	fn migration_name_fragment(&self) -> Option<String> {

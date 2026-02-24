@@ -39,7 +39,9 @@
 //! }
 //! ```
 
-use crate::{DiError, DiResult, Injectable, InjectionContext, begin_resolution};
+use crate::{
+	DiError, DiResult, Injectable, InjectionContext, begin_resolution, with_cycle_detection_scope,
+};
 use std::any::TypeId;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -175,39 +177,42 @@ where
 	/// * `ctx` - Injection context
 	/// * `use_cache` - Whether to use request-scoped cache
 	async fn resolve_with_cache(ctx: &InjectionContext, use_cache: bool) -> DiResult<Self> {
-		let value = if use_cache {
-			// Check request cache first
-			if let Some(cached) = ctx.get_request::<T>() {
-				Arc::try_unwrap(cached).unwrap_or_else(|arc| (*arc).clone())
+		with_cycle_detection_scope(async {
+			let value = if use_cache {
+				// Check request cache first
+				if let Some(cached) = ctx.get_request::<T>() {
+					Arc::try_unwrap(cached).unwrap_or_else(|arc| (*arc).clone())
+				} else {
+					// Begin circular dependency detection
+					let type_id = TypeId::of::<T>();
+					let type_name = std::any::type_name::<T>();
+					let _guard = begin_resolution(type_id, type_name)
+						.map_err(|e| DiError::CircularDependency(e.to_string()))?;
+
+					let v = T::inject(ctx).await?;
+					ctx.set_request(v.clone());
+					v
+				}
 			} else {
-				// Begin circular dependency detection
+				// Begin circular dependency detection (even for uncached)
 				let type_id = TypeId::of::<T>();
 				let type_name = std::any::type_name::<T>();
 				let _guard = begin_resolution(type_id, type_name)
 					.map_err(|e| DiError::CircularDependency(e.to_string()))?;
 
-				let v = T::inject(ctx).await?;
-				ctx.set_request(v.clone());
-				v
-			}
-		} else {
-			// Begin circular dependency detection (even for uncached)
-			let type_id = TypeId::of::<T>();
-			let type_name = std::any::type_name::<T>();
-			let _guard = begin_resolution(type_id, type_name)
-				.map_err(|e| DiError::CircularDependency(e.to_string()))?;
+				// Skip cache
+				T::inject_uncached(ctx).await?
+			};
 
-			// Skip cache
-			T::inject_uncached(ctx).await?
-		};
-
-		Ok(Self {
-			inner: Arc::new(value),
-			metadata: InjectionMetadata {
-				scope: DependencyScope::Request,
-				cached: use_cache,
-			},
+			Ok(Self {
+				inner: Arc::new(value),
+				metadata: InjectionMetadata {
+					scope: DependencyScope::Request,
+					cached: use_cache,
+				},
+			})
 		})
+		.await
 	}
 
 	/// Create from value for testing

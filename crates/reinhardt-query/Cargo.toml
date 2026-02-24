@@ -1,0 +1,65 @@
+[package]
+name = "reinhardt-query"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "SQL query builder for Reinhardt framework"
+
+[dependencies]
+# Core dependencies
+thiserror = { workspace = true }
+
+# Derive macros
+reinhardt-query-macros = { workspace = true, optional = true }
+
+# Feature-gated dependencies
+chrono = { workspace = true, optional = true }
+uuid = { version = "1.0", optional = true }
+serde_json = { workspace = true, optional = true }
+rust_decimal = { version = "1.0", optional = true }
+bigdecimal = { version = "0.4", optional = true }
+
+[features]
+default = []
+
+# Thread-safe mode (uses Arc instead of Rc)
+thread-safe = []
+
+# Derive macros
+derive = ["dep:reinhardt-query-macros"]
+
+# Optional type support
+with-chrono = ["dep:chrono"]
+with-uuid = ["dep:uuid"]
+with-json = ["dep:serde_json"]
+with-rust_decimal = ["dep:rust_decimal"]
+with-bigdecimal = ["dep:bigdecimal"]
+
+# All optional features
+full = [
+	"derive",
+	"with-chrono",
+	"with-uuid",
+	"with-json",
+	"with-rust_decimal",
+	"with-bigdecimal",
+]
+
+[dev-dependencies]
+# Test framework
+rstest = { workspace = true }
+pretty_assertions = "1.4"
+proptest = "1.4"
+
+# Async runtime
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+# Database testing (for DDL tests)
+sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "mysql", "chrono", "uuid", "json"] }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["postgres"] }
+
+# Additional dependencies (for DDL test fixtures)
+uuid = { workspace = true }

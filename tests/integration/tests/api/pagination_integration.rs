@@ -26,7 +26,7 @@ use reinhardt_core::pagination::{
 };
 use reinhardt_test::fixtures::postgres_container;
 use rstest::*;
-use sea_query::{Alias, Index, PostgresQueryBuilder};
+use reinhardt_query::prelude::{Alias, PostgresQueryBuilder, Query, QueryStatementBuilder};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -79,16 +79,16 @@ async fn setup_articles_table(pool: &PgPool) {
 	.await
 	.expect("Failed to create articles table");
 
-	// Create composite index for cursor pagination performance using SeaQuery
-	let index_stmt = Index::create()
+	// Create composite index for cursor pagination performance using reinhardt-query
+	let mut index_stmt = Query::create_index();
+	index_stmt
 		.if_not_exists()
 		.name("idx_articles_created_at")
 		.table(Alias::new("articles"))
 		.col(Alias::new("created_at"))
-		.col(Alias::new("id")) // Composite index
-		.to_owned();
+		.col(Alias::new("id")); // Composite index
 
-	let index_sql = index_stmt.to_string(PostgresQueryBuilder);
+	let index_sql = index_stmt.to_string(PostgresQueryBuilder::new());
 	sqlx::query(&index_sql)
 		.execute(pool)
 		.await

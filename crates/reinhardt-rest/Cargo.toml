@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-rest"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.18"
 description = "REST API framework aggregator for Reinhardt"
 edition.workspace = true
 license.workspace = true
@@ -98,7 +98,7 @@ regex = "1.10"
 geo-types = "0.7"
 sha2 = "0.10"
 hex = "0.4"
-sea-query = { workspace = true, features = ["backend-postgres"]}
+reinhardt-query = { workspace = true }
 log = "0.4"
 reinhardt-openapi-macros = { workspace = true }
 indexmap = { version = "2.0", features = ["serde"] }
@@ -130,15 +130,9 @@ rstest = { workspace = true }
 testcontainers = { workspace = true }
 sqlx = { workspace = true }
 tempfile = { workspace = true }
-reinhardt-test = { workspace = true, features = ["testcontainers"] }
 env_logger = "0.11"
 reinhardt-db = { workspace = true, features = ["orm"] }
 reinhardt-core = { workspace = true, features = ["exception"] }
 reinhardt-auth = { workspace = true, features = ["argon2-hasher"] }
-sea-orm = { workspace = true }
-reinhardt-pages = { workspace = true }
-reinhardt-server = { workspace = true }
 reqwest = { version = "0.12", features = ["json"] }
 serial_test = { workspace = true }
-# Router integration (causes circular dependency, only for testing)
-reinhardt-urls = { workspace = true, features = ["routers"] }

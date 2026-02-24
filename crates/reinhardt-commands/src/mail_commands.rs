@@ -81,7 +81,8 @@ impl BaseCommand for SendTestEmailCommand {
 			.body("This is a test email sent from the sendtestemail command.")
 			.from("noreply@example.com")
 			.to(recipients.clone())
-			.build();
+			.build()
+			.map_err(|e| CommandError::ExecutionError(e.to_string()))?;
 
 		// Select backend and send message
 		let sent_count = match backend_name {

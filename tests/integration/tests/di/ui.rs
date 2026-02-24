@@ -18,6 +18,12 @@ fn test_compile_fail_cases() {
 	// Test: Missing Clone trait should fail
 	t.compile_fail("tests/di/ui/fail/missing_clone_trait.rs");
 
+	// Test: Unknown macro argument should fail
+	t.compile_fail("tests/di/ui/fail/unknown_injectable_arg.rs");
+
+	// Test: scope attribute on struct injectable should fail (not yet supported)
+	t.compile_fail("tests/di/ui/fail/injectable_scope_unsupported.rs");
+
 	// Note: circular_dependency compiles but fails at runtime (tested in core_error_handling.rs)
 }
 

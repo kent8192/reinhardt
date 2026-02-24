@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-graphql"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.7"
 description = "GraphQL API support for Reinhardt (facade crate)"
 edition.workspace = true
 license.workspace = true
@@ -41,6 +41,7 @@ async-trait = { workspace = true }
 futures-util = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
 async-stream = "0.3"
+tracing = { workspace = true }
 uuid = { workspace = true }
 
 # gRPC support (optional)

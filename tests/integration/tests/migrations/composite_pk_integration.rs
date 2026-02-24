@@ -35,7 +35,7 @@ fn test_create_model_with_single_primary_key() {
 	println!("Generated SQL:\n{}", sql);
 
 	assert!(sql.contains("CREATE TABLE"));
-	// SeaQuery may quote identifiers, so accept both forms
+	// reinhardt-query may quote identifiers, so accept both forms
 	assert!(sql.contains("id INTEGER PRIMARY KEY") || sql.contains("\"id\" INTEGER PRIMARY KEY"));
 	assert!(sql.contains("name VARCHAR(100)") || sql.contains("\"name\" VARCHAR(100)"));
 }
@@ -76,7 +76,7 @@ fn test_create_model_with_composite_primary_key() {
 	);
 	assert!(sql.contains("tag_id INTEGER NOT NULL") || sql.contains("\"tag_id\" INTEGER NOT NULL"));
 	// Should have table-level PRIMARY KEY constraint
-	// SeaQuery may quote identifiers, so accept both forms
+	// reinhardt-query may quote identifiers, so accept both forms
 	assert!(
 		sql.contains("PRIMARY KEY (post_id, tag_id)")
 			|| sql.contains("PRIMARY KEY (\"post_id\", \"tag_id\")")
@@ -110,7 +110,7 @@ fn test_create_model_composite_pk_three_fields() {
 	let sql_statements = create.database_forwards(&schema_editor);
 
 	let sql = &sql_statements[0];
-	// SeaQuery may quote identifiers, so accept both forms
+	// reinhardt-query may quote identifiers, so accept both forms
 	assert!(
 		sql.contains("PRIMARY KEY (user_id, role_id, permission_id)")
 			|| sql.contains("PRIMARY KEY (\"user_id\", \"role_id\", \"permission_id\")")
@@ -144,7 +144,7 @@ fn test_create_model_composite_pk_with_additional_fields() {
 	let sql_statements = create.database_forwards(&schema_editor);
 
 	let sql = &sql_statements[0];
-	// SeaQuery may quote identifiers, so accept both forms
+	// reinhardt-query may quote identifiers, so accept both forms
 	assert!(
 		sql.contains("PRIMARY KEY (order_id, item_id)")
 			|| sql.contains("PRIMARY KEY (\"order_id\", \"item_id\")")

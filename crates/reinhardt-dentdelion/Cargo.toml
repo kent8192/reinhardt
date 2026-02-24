@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-dentdelion"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.14"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -20,6 +20,7 @@ wasm = [
 	"tokio/fs",
 	"dep:reqwest",
 	"dep:reinhardt-db",
+	"dep:sqlparser",
 ]
 
 # CLI support (for crates.io integration)
@@ -72,6 +73,8 @@ crates_io_api = { version = "0.12.0", optional = true }
 reqwest = { workspace = true, optional = true }
 
 # Database access (optional, for WASM plugins)
+# SQL parser for query validation (used with wasm feature)
+sqlparser = { version = "0.53", optional = true }
 
 # JavaScript runtime (optional, for SSR support)
 # Provides pure Rust JavaScript execution for React/Preact SSR
@@ -81,6 +84,9 @@ boa_engine = { version = "0.21", optional = true }
 # HTML parsing (optional, for CSS/Meta extraction in SSR)
 scraper = { version = "0.22", optional = true }
 
+# URL parsing (for SSRF validation)
+url = { workspace = true }
+
 # Documentation
 aquamarine = { workspace = true }
 reinhardt-db = {workspace = true, features = ["backends"], optional = true}
@@ -88,3 +94,4 @@ reinhardt-db = {workspace = true, features = ["backends"], optional = true}
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tempfile = { workspace = true }
+rstest = { workspace = true }

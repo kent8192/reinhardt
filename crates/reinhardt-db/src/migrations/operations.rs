@@ -54,10 +54,9 @@ pub use special::{RunCode, RunSQL, StateOperation};
 // These are maintained from the original operations.rs
 use super::{FieldState, FieldType, ModelState, ProjectState};
 use pg_escape::quote_identifier;
-use sea_query::{
-	Alias, ColumnDef, ForeignKey, Index, IndexCreateStatement, IndexDropStatement,
-	PostgresQueryBuilder, Table, TableAlterStatement, TableCreateStatement, TableDropStatement,
-	TableRenameStatement,
+use reinhardt_query::prelude::{
+	Alias, AlterTableStatement, ColumnDef, CreateIndexStatement, CreateTableStatement,
+	DropIndexStatement, DropTableStatement, Query, SimpleExpr, Value,
 };
 use serde::{Deserialize, Serialize};
 
@@ -2973,14 +2972,14 @@ impl Operation {
 // Re-export for convenience (legacy)
 pub use Operation::{AddColumn, AlterColumn, CreateTable, DropColumn};
 
-/// Operation statement types (SeaQuery or sanitized raw SQL)
+/// Operation statement types (reinhardt-query or sanitized raw SQL)
 pub enum OperationStatement {
-	TableCreate(TableCreateStatement),
-	TableDrop(TableDropStatement),
-	TableAlter(TableAlterStatement),
-	TableRename(TableRenameStatement),
-	IndexCreate(IndexCreateStatement),
-	IndexDrop(IndexDropStatement),
+	TableCreate(CreateTableStatement),
+	TableDrop(DropTableStatement),
+	TableAlter(AlterTableStatement),
+	TableRename(AlterTableStatement),
+	IndexCreate(CreateIndexStatement),
+	IndexDrop(DropIndexStatement),
 	/// Sanitized raw SQL (identifiers escaped with pg_escape::quote_identifier)
 	RawSql(String),
 }
@@ -2991,29 +2990,32 @@ impl OperationStatement {
 	where
 		E: sqlx::Executor<'c, Database = sqlx::Postgres>,
 	{
+		use crate::backends::sql_build_helpers;
+		use crate::backends::types::DatabaseType;
+		let db_type = DatabaseType::Postgres;
 		match self {
 			OperationStatement::TableCreate(stmt) => {
-				let sql = stmt.to_string(PostgresQueryBuilder);
+				let sql = sql_build_helpers::build_create_table_sql(db_type, stmt);
 				sqlx::query(&sql).execute(executor).await?;
 			}
 			OperationStatement::TableDrop(stmt) => {
-				let sql = stmt.to_string(PostgresQueryBuilder);
+				let sql = sql_build_helpers::build_drop_table_sql(db_type, stmt);
 				sqlx::query(&sql).execute(executor).await?;
 			}
 			OperationStatement::TableAlter(stmt) => {
-				let sql = stmt.to_string(PostgresQueryBuilder);
+				let sql = sql_build_helpers::build_alter_table_sql(db_type, stmt);
 				sqlx::query(&sql).execute(executor).await?;
 			}
 			OperationStatement::TableRename(stmt) => {
-				let sql = stmt.to_string(PostgresQueryBuilder);
+				let sql = sql_build_helpers::build_alter_table_sql(db_type, stmt);
 				sqlx::query(&sql).execute(executor).await?;
 			}
 			OperationStatement::IndexCreate(stmt) => {
-				let sql = stmt.to_string(PostgresQueryBuilder);
+				let sql = sql_build_helpers::build_create_index_sql(db_type, stmt);
 				sqlx::query(&sql).execute(executor).await?;
 			}
 			OperationStatement::IndexDrop(stmt) => {
-				let sql = stmt.to_string(PostgresQueryBuilder);
+				let sql = sql_build_helpers::build_drop_index_sql(db_type, stmt);
 				sqlx::query(&sql).execute(executor).await?;
 			}
 			OperationStatement::RawSql(sql) => {
@@ -3030,58 +3032,34 @@ impl OperationStatement {
 	///
 	/// * `db_type` - Database type to generate SQL for (PostgreSQL, MySQL, SQLite)
 	pub fn to_sql_string(&self, db_type: crate::backends::types::DatabaseType) -> String {
-		use sea_query::{MysqlQueryBuilder, SqliteQueryBuilder};
+		use crate::backends::sql_build_helpers;
 
 		match self {
-			OperationStatement::TableCreate(stmt) => match db_type {
-				crate::backends::types::DatabaseType::Postgres => {
-					stmt.to_string(PostgresQueryBuilder)
-				}
-				crate::backends::types::DatabaseType::Mysql => stmt.to_string(MysqlQueryBuilder),
-				crate::backends::types::DatabaseType::Sqlite => stmt.to_string(SqliteQueryBuilder),
-			},
-			OperationStatement::TableDrop(stmt) => match db_type {
-				crate::backends::types::DatabaseType::Postgres => {
-					stmt.to_string(PostgresQueryBuilder)
-				}
-				crate::backends::types::DatabaseType::Mysql => stmt.to_string(MysqlQueryBuilder),
-				crate::backends::types::DatabaseType::Sqlite => stmt.to_string(SqliteQueryBuilder),
-			},
-			OperationStatement::TableAlter(stmt) => match db_type {
-				crate::backends::types::DatabaseType::Postgres => {
-					stmt.to_string(PostgresQueryBuilder)
-				}
-				crate::backends::types::DatabaseType::Mysql => stmt.to_string(MysqlQueryBuilder),
-				crate::backends::types::DatabaseType::Sqlite => stmt.to_string(SqliteQueryBuilder),
-			},
-			OperationStatement::TableRename(stmt) => match db_type {
-				crate::backends::types::DatabaseType::Postgres => {
-					stmt.to_string(PostgresQueryBuilder)
-				}
-				crate::backends::types::DatabaseType::Mysql => stmt.to_string(MysqlQueryBuilder),
-				crate::backends::types::DatabaseType::Sqlite => stmt.to_string(SqliteQueryBuilder),
-			},
-			OperationStatement::IndexCreate(stmt) => match db_type {
-				crate::backends::types::DatabaseType::Postgres => {
-					stmt.to_string(PostgresQueryBuilder)
-				}
-				crate::backends::types::DatabaseType::Mysql => stmt.to_string(MysqlQueryBuilder),
-				crate::backends::types::DatabaseType::Sqlite => stmt.to_string(SqliteQueryBuilder),
-			},
-			OperationStatement::IndexDrop(stmt) => match db_type {
-				crate::backends::types::DatabaseType::Postgres => {
-					stmt.to_string(PostgresQueryBuilder)
-				}
-				crate::backends::types::DatabaseType::Mysql => stmt.to_string(MysqlQueryBuilder),
-				crate::backends::types::DatabaseType::Sqlite => stmt.to_string(SqliteQueryBuilder),
-			},
+			OperationStatement::TableCreate(stmt) => {
+				sql_build_helpers::build_create_table_sql(db_type, stmt)
+			}
+			OperationStatement::TableDrop(stmt) => {
+				sql_build_helpers::build_drop_table_sql(db_type, stmt)
+			}
+			OperationStatement::TableAlter(stmt) => {
+				sql_build_helpers::build_alter_table_sql(db_type, stmt)
+			}
+			OperationStatement::TableRename(stmt) => {
+				sql_build_helpers::build_alter_table_sql(db_type, stmt)
+			}
+			OperationStatement::IndexCreate(stmt) => {
+				sql_build_helpers::build_create_index_sql(db_type, stmt)
+			}
+			OperationStatement::IndexDrop(stmt) => {
+				sql_build_helpers::build_drop_index_sql(db_type, stmt)
+			}
 			OperationStatement::RawSql(sql) => sql.clone(),
 		}
 	}
 }
 
 impl Operation {
-	/// Convert Operation to SeaQuery statement or sanitized raw SQL
+	/// Convert Operation to reinhardt-query statement or sanitized raw SQL
 	pub fn to_statement(&self) -> OperationStatement {
 		match self {
 			Operation::CreateTable {
@@ -3114,7 +3092,7 @@ impl Operation {
 			Operation::RenameTable { old_name, new_name } => {
 				OperationStatement::TableRename(self.build_rename_table(old_name, new_name))
 			}
-			// SeaQuery does not support RENAME COLUMN, use sanitized raw SQL
+			// reinhardt-query does not support RENAME COLUMN, use sanitized raw SQL
 			Operation::RenameColumn {
 				table,
 				old_name,
@@ -3206,28 +3184,28 @@ impl Operation {
 				base_table,
 				join_column,
 			} => {
-				let mut stmt = Table::create();
+				let mut stmt = Query::create_table();
 				stmt.table(Alias::new(name.as_str())).if_not_exists();
 
 				// Add join column (foreign key to base table)
-				let mut join_col = ColumnDef::new(Alias::new(join_column.as_str()));
-				join_col.integer();
-				stmt.col(&mut join_col);
+				let join_col = ColumnDef::new(Alias::new(join_column.as_str()));
+				let join_col = join_col.integer();
+				stmt.col(join_col);
 
 				// Add other columns
 				for col in columns {
 					let mut column = ColumnDef::new(Alias::new(col.name.as_str()));
-					self.apply_column_type(&mut column, &col.type_definition);
-					stmt.col(&mut column);
+					column = self.apply_column_type(column, &col.type_definition);
+					stmt.col(column);
 				}
 
 				// Add foreign key
-				let mut fk = ForeignKey::create();
+				let mut fk = reinhardt_query::prelude::ForeignKey::create();
 				fk.from_tbl(Alias::new(name.as_str()))
 					.from_col(Alias::new(join_column.as_str()))
 					.to_tbl(Alias::new(base_table.as_str()))
 					.to_col(Alias::new("id"));
-				stmt.foreign_key(&mut fk);
+				stmt.foreign_key_from_builder(&mut fk);
 
 				OperationStatement::TableCreate(stmt.to_owned())
 			}
@@ -3236,12 +3214,14 @@ impl Operation {
 				column_name,
 				default_value,
 			} => {
-				let mut stmt = Table::alter();
+				let mut stmt = Query::alter_table();
 				stmt.table(Alias::new(table.as_str()));
 
 				let mut col = ColumnDef::new(Alias::new(column_name.as_str()));
-				col.string_len(50).default(default_value.to_string());
-				stmt.add_column(&mut col);
+				col = col
+					.string_len(50)
+					.default(SimpleExpr::from(default_value.to_string()));
+				stmt.add_column(col);
 
 				OperationStatement::TableAlter(stmt.to_owned())
 			}
@@ -3268,7 +3248,7 @@ impl Operation {
 				name,
 				if_not_exists,
 			} => {
-				// Use schema.rs helper (Sea-Query doesn't support CREATE SCHEMA)
+				// Use schema.rs helper (reinhardt-query doesn't support CREATE SCHEMA)
 				let sql = if *if_not_exists {
 					format!("CREATE SCHEMA IF NOT EXISTS {}", quote_identifier(name))
 				} else {
@@ -3281,7 +3261,7 @@ impl Operation {
 				cascade,
 				if_exists,
 			} => {
-				// Use schema.rs helper (Sea-Query doesn't support DROP SCHEMA)
+				// Use schema.rs helper (reinhardt-query doesn't support DROP SCHEMA)
 				let if_exists_clause = if *if_exists { " IF EXISTS" } else { "" };
 				let cascade_clause = if *cascade { " CASCADE" } else { "" };
 				let sql = format!(
@@ -3333,43 +3313,40 @@ impl Operation {
 		name: &str,
 		columns: &[ColumnDefinition],
 		constraints: &[Constraint],
-	) -> TableCreateStatement {
-		let mut stmt = Table::create();
+	) -> CreateTableStatement {
+		let mut stmt = Query::create_table();
 		stmt.table(Alias::new(name)).if_not_exists();
 
 		for col in columns {
 			let mut column = ColumnDef::new(Alias::new(col.name.as_str()));
-			self.apply_column_type(&mut column, &col.type_definition);
+			column = self.apply_column_type(column, &col.type_definition);
 
 			if col.not_null {
-				column.not_null();
+				column = column.not_null(true);
 			}
 			if col.unique {
-				column.unique_key();
+				column = column.unique(true);
 			}
 			if col.primary_key {
-				column.primary_key();
+				column = column.primary_key(true);
 			}
 			if col.auto_increment {
-				column.auto_increment();
+				column = column.auto_increment(true);
 			}
 			if let Some(default) = &col.default {
-				column.default(self.convert_default_value(default));
+				column = column.default(SimpleExpr::from(self.convert_default_value(default)));
 			}
 
-			stmt.col(&mut column);
+			stmt.col(column);
 		}
 
 		// Add table-level constraints
 		for constraint in constraints {
 			match constraint {
-				Constraint::PrimaryKey { name, columns } => {
-					let mut index = sea_query::Index::create();
-					index.name(name).table(Alias::new(name)).primary();
-					for col in columns {
-						index.col(Alias::new(col.as_str()));
-					}
-					stmt.primary_key(&mut index);
+				Constraint::PrimaryKey { columns, .. } => {
+					let col_idens: Vec<Alias> =
+						columns.iter().map(|c| Alias::new(c.as_str())).collect();
+					stmt.primary_key(col_idens);
 				}
 				Constraint::ForeignKey {
 					name,
@@ -3380,9 +3357,9 @@ impl Operation {
 					on_update,
 					..
 				} => {
-					let mut fk = sea_query::ForeignKey::create();
-					fk.name(name)
-						.from_tbl(Alias::new(name))
+					let mut fk = reinhardt_query::prelude::ForeignKey::create();
+					fk.name(Alias::new(name.as_str()))
+						.from_tbl(Alias::new(name.as_str()))
 						.to_tbl(Alias::new(referenced_table.as_str()));
 
 					for col in columns {
@@ -3395,19 +3372,15 @@ impl Operation {
 					fk.on_delete((*on_delete).into());
 					fk.on_update((*on_update).into());
 
-					stmt.foreign_key(&mut fk);
+					stmt.foreign_key_from_builder(&mut fk);
 				}
-				Constraint::Unique { name, columns } => {
-					let mut index = sea_query::Index::create();
-					index.name(name).table(Alias::new(name)).unique();
-					for col in columns {
-						index.col(Alias::new(col.as_str()));
-					}
-					// Note: SeaQuery doesn't support adding UNIQUE constraints directly in CREATE TABLE
-					// They should be added separately with CREATE INDEX or ALTER TABLE
+				Constraint::Unique { columns, .. } => {
+					let col_idens: Vec<Alias> =
+						columns.iter().map(|c| Alias::new(c.as_str())).collect();
+					stmt.unique(col_idens);
 				}
 				Constraint::Check { name, expression } => {
-					// Note: SeaQuery doesn't have direct CHECK constraint support
+					// Note: reinhardt-query doesn't have direct CHECK constraint support
 					// This would need to be handled with raw SQL if needed
 					let _ = (name, expression); // Suppress unused warnings
 				}
@@ -3421,16 +3394,16 @@ impl Operation {
 					..
 				} => {
 					// OneToOne is ForeignKey + Unique
-					let mut fk = sea_query::ForeignKey::create();
-					fk.name(name)
-						.from_tbl(Alias::new(name))
+					let mut fk = reinhardt_query::prelude::ForeignKey::create();
+					fk.name(Alias::new(name.as_str()))
+						.from_tbl(Alias::new(name.as_str()))
 						.to_tbl(Alias::new(referenced_table.as_str()))
 						.from_col(Alias::new(column.as_str()))
 						.to_col(Alias::new(referenced_column.as_str()))
 						.on_delete((*on_delete).into())
 						.on_update((*on_update).into());
 
-					stmt.foreign_key(&mut fk);
+					stmt.foreign_key_from_builder(&mut fk);
 
 					// Add UNIQUE constraint separately if needed
 					// Note: This should ideally be handled via UNIQUE column definition
@@ -3440,7 +3413,7 @@ impl Operation {
 					// The intermediate table handles the relationship
 				}
 				Constraint::Exclude { .. } => {
-					// Exclude constraints are PostgreSQL-specific and not directly supported by SeaQuery
+					// Exclude constraints are PostgreSQL-specific and not directly supported by reinhardt-query
 					// They need to be handled with raw SQL if needed
 				}
 			}
@@ -3450,8 +3423,8 @@ impl Operation {
 	}
 
 	/// Build DROP TABLE statement
-	fn build_drop_table(&self, name: &str) -> TableDropStatement {
-		Table::drop()
+	fn build_drop_table(&self, name: &str) -> DropTableStatement {
+		Query::drop_table()
 			.table(Alias::new(name))
 			.if_exists()
 			.cascade()
@@ -3459,27 +3432,27 @@ impl Operation {
 	}
 
 	/// Build ALTER TABLE ADD COLUMN statement
-	fn build_add_column(&self, table: &str, column: &ColumnDefinition) -> TableAlterStatement {
-		let mut stmt = Table::alter();
+	fn build_add_column(&self, table: &str, column: &ColumnDefinition) -> AlterTableStatement {
+		let mut stmt = Query::alter_table();
 		stmt.table(Alias::new(table));
 
 		let mut col_def = ColumnDef::new(Alias::new(column.name.as_str()));
-		self.apply_column_type(&mut col_def, &column.type_definition);
+		col_def = self.apply_column_type(col_def, &column.type_definition);
 
 		if column.not_null {
-			col_def.not_null();
+			col_def = col_def.not_null(true);
 		}
 		if let Some(default) = &column.default {
-			col_def.default(self.convert_default_value(default));
+			col_def = col_def.default(SimpleExpr::from(self.convert_default_value(default)));
 		}
 
-		stmt.add_column(&mut col_def);
+		stmt.add_column(col_def);
 		stmt.to_owned()
 	}
 
 	/// Build ALTER TABLE DROP COLUMN statement
-	fn build_drop_column(&self, table: &str, column: &str) -> TableAlterStatement {
-		Table::alter()
+	fn build_drop_column(&self, table: &str, column: &str) -> AlterTableStatement {
+		Query::alter_table()
 			.table(Alias::new(table))
 			.drop_column(Alias::new(column))
 			.to_owned()
@@ -3491,25 +3464,26 @@ impl Operation {
 		table: &str,
 		column: &str,
 		new_definition: &ColumnDefinition,
-	) -> TableAlterStatement {
-		let mut stmt = Table::alter();
+	) -> AlterTableStatement {
+		let mut stmt = Query::alter_table();
 		stmt.table(Alias::new(table));
 
 		let mut col_def = ColumnDef::new(Alias::new(column));
-		self.apply_column_type(&mut col_def, &new_definition.type_definition);
+		col_def = self.apply_column_type(col_def, &new_definition.type_definition);
 
 		if new_definition.not_null {
-			col_def.not_null();
+			col_def = col_def.not_null(true);
 		}
 
-		stmt.modify_column(&mut col_def);
+		stmt.modify_column(col_def);
 		stmt.to_owned()
 	}
 
 	/// Build ALTER TABLE RENAME statement
-	fn build_rename_table(&self, old_name: &str, new_name: &str) -> TableRenameStatement {
-		Table::rename()
-			.table(Alias::new(old_name), Alias::new(new_name))
+	fn build_rename_table(&self, old_name: &str, new_name: &str) -> AlterTableStatement {
+		Query::alter_table()
+			.table(Alias::new(old_name))
+			.rename_table(Alias::new(new_name))
 			.to_owned()
 	}
 
@@ -3520,9 +3494,9 @@ impl Operation {
 		table: &str,
 		columns: &[String],
 		unique: bool,
-	) -> IndexCreateStatement {
-		let mut stmt = Index::create();
-		stmt.name(name).table(Alias::new(table));
+	) -> CreateIndexStatement {
+		let mut stmt = Query::create_index();
+		stmt.name(Alias::new(name)).table(Alias::new(table));
 
 		for col in columns {
 			stmt.col(Alias::new(col));
@@ -3536,12 +3510,12 @@ impl Operation {
 	}
 
 	/// Build DROP INDEX statement
-	fn build_drop_index(&self, name: &str) -> IndexDropStatement {
-		Index::drop().name(name).to_owned()
+	fn build_drop_index(&self, name: &str) -> DropIndexStatement {
+		Query::drop_index().name(Alias::new(name)).to_owned()
 	}
 
-	/// Apply column type to ColumnDef using SeaQuery's fluent API
-	fn apply_column_type(&self, col_def: &mut ColumnDef, field_type: &FieldType) {
+	/// Apply column type to ColumnDef using `reinhardt_query`'s fluent API
+	fn apply_column_type(&self, col_def: ColumnDef, field_type: &FieldType) -> ColumnDef {
 		use FieldType;
 		match field_type {
 			FieldType::Integer => col_def.integer(),
@@ -3563,15 +3537,15 @@ impl Operation {
 			FieldType::TimestampTz => col_def.timestamp_with_time_zone(),
 			FieldType::Date => col_def.date(),
 			FieldType::Time => col_def.time(),
-			FieldType::Decimal { precision, scale } => col_def.decimal_len(*precision, *scale),
+			FieldType::Decimal { precision, scale } => col_def.decimal(*precision, *scale),
 			FieldType::Float => col_def.float(),
 			FieldType::Double | FieldType::Real => col_def.double(),
 			FieldType::Json => col_def.json(),
 			FieldType::JsonBinary => col_def.json_binary(),
 			FieldType::Uuid => col_def.uuid(),
-			FieldType::Binary | FieldType::Bytea => col_def.binary(),
+			FieldType::Binary | FieldType::Bytea => col_def.binary(0),
 			FieldType::Blob | FieldType::TinyBlob | FieldType::MediumBlob | FieldType::LongBlob => {
-				col_def.binary()
+				col_def.binary(0)
 			}
 			FieldType::MediumInt => col_def.integer(),
 			FieldType::Year => col_def.small_integer(),
@@ -3612,34 +3586,34 @@ impl Operation {
 			FieldType::TsVector => col_def.custom(Alias::new("TSVECTOR")),
 			FieldType::TsQuery => col_def.custom(Alias::new("TSQUERY")),
 			FieldType::Custom(custom_type) => col_def.custom(Alias::new(custom_type)),
-		};
+		}
 	}
 
-	/// Convert default value string to SeaQuery Value
-	fn convert_default_value(&self, default: &str) -> sea_query::Value {
+	/// Convert default value string to `reinhardt_query::prelude::Value`
+	fn convert_default_value(&self, default: &str) -> Value {
 		let trimmed = default.trim();
 
 		// NULL
 		if trimmed.eq_ignore_ascii_case("null") {
-			return sea_query::Value::String(None);
+			return Value::String(None);
 		}
 
 		// Boolean
 		if trimmed.eq_ignore_ascii_case("true") {
-			return sea_query::Value::Bool(Some(true));
+			return Value::Bool(Some(true));
 		}
 		if trimmed.eq_ignore_ascii_case("false") {
-			return sea_query::Value::Bool(Some(false));
+			return Value::Bool(Some(false));
 		}
 
 		// Integer
 		if let Ok(i) = trimmed.parse::<i64>() {
-			return sea_query::Value::BigInt(Some(i));
+			return Value::BigInt(Some(i));
 		}
 
 		// Float
 		if let Ok(f) = trimmed.parse::<f64>() {
-			return sea_query::Value::Double(Some(f));
+			return Value::Double(Some(f));
 		}
 
 		// String (quoted)
@@ -3647,7 +3621,7 @@ impl Operation {
 			|| (trimmed.starts_with('\'') && trimmed.ends_with('\''))
 		{
 			let unquoted = &trimmed[1..trimmed.len() - 1];
-			return sea_query::Value::String(Some(unquoted.to_string()));
+			return Value::String(Some(Box::new(unquoted.to_string())));
 		}
 
 		// JSON array/object
@@ -3661,32 +3635,32 @@ impl Operation {
 		// SQL function calls (e.g., NOW(), CURRENT_TIMESTAMP)
 		if trimmed.ends_with("()") || trimmed.contains('(') {
 			// Return as custom SQL expression
-			return sea_query::Value::String(Some(trimmed.to_string()));
+			return Value::String(Some(Box::new(trimmed.to_string())));
 		}
 
 		// Default: treat as string
-		sea_query::Value::String(Some(trimmed.to_string()))
+		Value::String(Some(Box::new(trimmed.to_string())))
 	}
 }
 
-/// Helper function to convert serde_json::Value to sea_query::Value
-fn json_to_sea_value(json: &serde_json::Value) -> sea_query::Value {
+/// Helper function to convert `serde_json::Value` to `reinhardt_query::prelude::Value`
+fn json_to_sea_value(json: &serde_json::Value) -> Value {
 	match json {
-		serde_json::Value::Null => sea_query::Value::String(None),
-		serde_json::Value::Bool(b) => sea_query::Value::Bool(Some(*b)),
+		serde_json::Value::Null => Value::String(None),
+		serde_json::Value::Bool(b) => Value::Bool(Some(*b)),
 		serde_json::Value::Number(n) => {
 			if let Some(i) = n.as_i64() {
-				sea_query::Value::BigInt(Some(i))
+				Value::BigInt(Some(i))
 			} else if let Some(f) = n.as_f64() {
-				sea_query::Value::Double(Some(f))
+				Value::Double(Some(f))
 			} else {
-				sea_query::Value::String(Some(n.to_string()))
+				Value::String(Some(Box::new(n.to_string())))
 			}
 		}
-		serde_json::Value::String(s) => sea_query::Value::String(Some(s.clone())),
+		serde_json::Value::String(s) => Value::String(Some(Box::new(s.clone()))),
 		serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
 			// Store as JSON string
-			sea_query::Value::String(Some(json.to_string()))
+			Value::String(Some(Box::new(json.to_string())))
 		}
 	}
 }
@@ -4916,8 +4890,8 @@ mod tests {
 		};
 		let value = op.convert_default_value("null");
 		assert!(
-			matches!(value, sea_query::Value::String(None)),
-			"NULL value should be converted to sea_query::Value::String(None)"
+			matches!(value, Value::String(None)),
+			"NULL value should be converted to Value::String(None)"
 		);
 	}
 
@@ -4933,14 +4907,14 @@ mod tests {
 		};
 		let value = op.convert_default_value("true");
 		assert!(
-			matches!(value, sea_query::Value::Bool(Some(true))),
-			"'true' should be converted to sea_query::Value::Bool(Some(true))"
+			matches!(value, Value::Bool(Some(true))),
+			"'true' should be converted to Value::Bool(Some(true))"
 		);
 
 		let value = op.convert_default_value("false");
 		assert!(
-			matches!(value, sea_query::Value::Bool(Some(false))),
-			"'false' should be converted to sea_query::Value::Bool(Some(false))"
+			matches!(value, Value::Bool(Some(false))),
+			"'false' should be converted to Value::Bool(Some(false))"
 		);
 	}
 
@@ -4956,8 +4930,8 @@ mod tests {
 		};
 		let value = op.convert_default_value("42");
 		assert!(
-			matches!(value, sea_query::Value::BigInt(Some(42))),
-			"Integer '42' should be converted to sea_query::Value::BigInt(Some(42))"
+			matches!(value, Value::BigInt(Some(42))),
+			"Integer '42' should be converted to Value::BigInt(Some(42))"
 		);
 	}
 
@@ -4973,8 +4947,8 @@ mod tests {
 		};
 		let value = op.convert_default_value("3.15");
 		assert!(
-			matches!(value, sea_query::Value::Double(_)),
-			"Float '3.15' should be converted to sea_query::Value::Double"
+			matches!(value, Value::Double(_)),
+			"Float '3.15' should be converted to Value::Double"
 		);
 	}
 
@@ -4990,12 +4964,12 @@ mod tests {
 		};
 		let value = op.convert_default_value("'hello'");
 		match value {
-			sea_query::Value::String(Some(s)) => assert_eq!(
-				s, "hello",
+			Value::String(Some(s)) => assert_eq!(
+				*s, "hello",
 				"Quoted string should be unquoted and stored as 'hello'"
 			),
 			_ => {
-				panic!("Expected sea_query::Value::String(Some(\"hello\")), got different variant")
+				panic!("Expected Value::String(Some(\"hello\")), got different variant")
 			}
 		}
 	}
@@ -5010,10 +4984,10 @@ mod tests {
 			partition: None,
 			interleave_in_parent: None,
 		};
-		let mut col = ColumnDef::new(Alias::new("id"));
-		op.apply_column_type(&mut col, &FieldType::Integer);
+		let col = ColumnDef::new(Alias::new("id"));
+		let _col = op.apply_column_type(col, &FieldType::Integer);
 		// This test verifies that INTEGER type application doesn't panic
-		// Internal state cannot be easily asserted with sea_query's ColumnDef API
+		// Internal state cannot be easily asserted with reinhardt_query's ColumnDef API
 	}
 
 	#[test]
@@ -5026,10 +5000,10 @@ mod tests {
 			partition: None,
 			interleave_in_parent: None,
 		};
-		let mut col = ColumnDef::new(Alias::new("name"));
-		op.apply_column_type(&mut col, &FieldType::VarChar(100));
+		let col = ColumnDef::new(Alias::new("name"));
+		let _col = op.apply_column_type(col, &FieldType::VarChar(100));
 		// This test verifies that VARCHAR(100) type application doesn't panic
-		// Internal state cannot be easily asserted with sea_query's ColumnDef API
+		// Internal state cannot be easily asserted with reinhardt_query's ColumnDef API
 	}
 
 	#[test]
@@ -5042,10 +5016,10 @@ mod tests {
 			partition: None,
 			interleave_in_parent: None,
 		};
-		let mut col = ColumnDef::new(Alias::new("data"));
-		op.apply_column_type(&mut col, &FieldType::Custom("CUSTOM_TYPE".to_string()));
+		let col = ColumnDef::new(Alias::new("data"));
+		let _col = op.apply_column_type(col, &FieldType::Custom("CUSTOM_TYPE".to_string()));
 		// This test verifies that custom type application doesn't panic
-		// Internal state cannot be easily asserted with sea_query's ColumnDef API
+		// Internal state cannot be easily asserted with reinhardt_query's ColumnDef API
 	}
 
 	#[test]

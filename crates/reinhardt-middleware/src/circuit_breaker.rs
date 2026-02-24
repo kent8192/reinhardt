@@ -20,15 +20,17 @@ pub enum CircuitState {
 	HalfOpen,
 }
 
-/// Circuit breaker statistics
+/// Circuit breaker statistics using a sliding window
+///
+/// Uses a time-bounded sliding window to track request outcomes, preventing
+/// a short burst of errors from permanently tripping the circuit breaker.
+/// Old entries are automatically pruned when calculating error rates.
 #[derive(Debug, Clone)]
 pub struct CircuitStats {
-	/// Total number of requests
-	total_requests: u64,
-	/// Number of failed requests
-	failed_requests: u64,
-	/// Number of successful requests
-	successful_requests: u64,
+	/// Timestamped request outcomes within the sliding window
+	outcomes: Vec<(Instant, bool)>,
+	/// Sliding window duration
+	window: Duration,
 	/// Last failure time
 	last_failure_time: Option<Instant>,
 	/// Last success time
@@ -36,45 +38,65 @@ pub struct CircuitStats {
 }
 
 impl CircuitStats {
-	/// Create new statistics
-	fn new() -> Self {
+	/// Create new statistics with the given sliding window duration
+	fn new(window: Duration) -> Self {
 		Self {
-			total_requests: 0,
-			failed_requests: 0,
-			successful_requests: 0,
+			outcomes: Vec::new(),
+			window,
 			last_failure_time: None,
 			last_success_time: None,
 		}
 	}
 
+	/// Prune entries outside the sliding window
+	fn prune(&mut self) {
+		let cutoff = Instant::now() - self.window;
+		self.outcomes.retain(|(time, _)| *time > cutoff);
+	}
+
+	/// Get total requests within the sliding window
+	pub fn total_requests(&self) -> u64 {
+		self.outcomes.len() as u64
+	}
+
+	/// Get failed requests within the sliding window
+	pub fn failed_requests(&self) -> u64 {
+		self.outcomes.iter().filter(|(_, success)| !success).count() as u64
+	}
+
+	/// Get successful requests within the sliding window
+	pub fn successful_requests(&self) -> u64 {
+		self.outcomes.iter().filter(|(_, success)| *success).count() as u64
+	}
+
 	/// Record a success
 	fn record_success(&mut self) {
-		self.total_requests += 1;
-		self.successful_requests += 1;
+		self.prune();
+		self.outcomes.push((Instant::now(), true));
 		self.last_success_time = Some(Instant::now());
 	}
 
 	/// Record a failure
 	fn record_failure(&mut self) {
-		self.total_requests += 1;
-		self.failed_requests += 1;
+		self.prune();
+		self.outcomes.push((Instant::now(), false));
 		self.last_failure_time = Some(Instant::now());
 	}
 
-	/// Calculate error rate
+	/// Calculate error rate within the sliding window
 	fn error_rate(&self) -> f64 {
-		if self.total_requests == 0 {
+		let total = self.outcomes.len();
+		if total == 0 {
 			0.0
 		} else {
-			self.failed_requests as f64 / self.total_requests as f64
+			let failed = self.outcomes.iter().filter(|(_, success)| !success).count();
+			failed as f64 / total as f64
 		}
 	}
 
 	/// Reset statistics
 	fn reset(&mut self) {
-		self.total_requests = 0;
-		self.failed_requests = 0;
-		self.successful_requests = 0;
+		self.outcomes.clear();
 	}
 }
 
@@ -90,11 +112,11 @@ struct CircuitBreakerState {
 }
 
 impl CircuitBreakerState {
-	/// Create new state
-	fn new() -> Self {
+	/// Create new state with the given sliding window duration
+	fn new(window: Duration) -> Self {
 		Self {
 			state: CircuitState::Closed,
-			stats: CircuitStats::new(),
+			stats: CircuitStats::new(window),
 			opened_at: None,
 		}
 	}
@@ -235,9 +257,10 @@ impl CircuitBreakerMiddleware {
 	/// let middleware = CircuitBreakerMiddleware::new(config);
 	/// ```
 	pub fn new(config: CircuitBreakerConfig) -> Self {
+		let window = config.timeout;
 		Self {
+			state: Arc::new(RwLock::new(CircuitBreakerState::new(window))),
 			config,
-			state: Arc::new(RwLock::new(CircuitBreakerState::new())),
 		}
 	}
 
@@ -313,7 +336,7 @@ impl CircuitBreakerMiddleware {
 		match current_state {
 			CircuitState::Closed => {
 				// Open the circuit if error rate exceeds threshold
-				if stats.total_requests >= self.config.min_requests
+				if stats.total_requests() >= self.config.min_requests
 					&& stats.error_rate() >= self.config.error_threshold
 				{
 					drop(state);
@@ -331,12 +354,12 @@ impl CircuitBreakerMiddleware {
 			}
 			CircuitState::HalfOpen => {
 				// Close the circuit if successes exceed threshold
-				if stats.successful_requests >= self.config.half_open_success_threshold {
+				if stats.successful_requests() >= self.config.half_open_success_threshold {
 					drop(state);
 					self.close_circuit();
 				}
 				// Re-open the circuit if there are failures
-				else if stats.failed_requests > 0 {
+				else if stats.failed_requests() > 0 {
 					drop(state);
 					self.open_circuit();
 				}
@@ -649,9 +672,9 @@ mod tests {
 		}
 
 		let stats = middleware.get_stats();
-		assert_eq!(stats.total_requests, 5);
-		assert_eq!(stats.successful_requests, 3);
-		assert_eq!(stats.failed_requests, 2);
+		assert_eq!(stats.total_requests(), 5);
+		assert_eq!(stats.successful_requests(), 3);
+		assert_eq!(stats.failed_requests(), 2);
 		assert_eq!(stats.error_rate(), 0.4);
 	}
 
@@ -681,6 +704,6 @@ mod tests {
 
 		assert_eq!(middleware.get_state(), CircuitState::Closed);
 		let stats = middleware.get_stats();
-		assert_eq!(stats.total_requests, 0);
+		assert_eq!(stats.total_requests(), 0);
 	}
 }

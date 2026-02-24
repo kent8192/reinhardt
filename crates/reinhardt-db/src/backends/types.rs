@@ -369,9 +369,9 @@ impl IsolationLevel {
 /// use reinhardt_db::backends::types::Savepoint;
 ///
 /// let sp = Savepoint::new("sp1");
-/// assert_eq!(sp.to_sql(), "SAVEPOINT sp1");
-/// assert_eq!(sp.release_sql(), "RELEASE SAVEPOINT sp1");
-/// assert_eq!(sp.rollback_sql(), "ROLLBACK TO SAVEPOINT sp1");
+/// assert_eq!(sp.to_sql(), "SAVEPOINT \"sp1\"");
+/// assert_eq!(sp.release_sql(), "RELEASE SAVEPOINT \"sp1\"");
+/// assert_eq!(sp.rollback_sql(), "ROLLBACK TO SAVEPOINT \"sp1\"");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Savepoint {
@@ -380,9 +380,16 @@ pub struct Savepoint {
 }
 
 impl Savepoint {
-	/// Create a new savepoint with the given name
+	/// Create a new savepoint with the given name.
+	///
+	/// # Panics
+	///
+	/// Panics if the name contains invalid characters. Only alphanumeric
+	/// characters and underscores are allowed (must not start with a digit).
 	pub fn new(name: impl Into<String>) -> Self {
-		Self { name: name.into() }
+		let name = name.into();
+		validate_savepoint_name(&name).unwrap_or_else(|e| panic!("Invalid savepoint name: {}", e));
+		Self { name }
 	}
 
 	/// Get the savepoint name
@@ -392,18 +399,49 @@ impl Savepoint {
 
 	/// Generate SQL to create this savepoint
 	pub fn to_sql(&self) -> String {
-		format!("SAVEPOINT {}", self.name)
+		format!("SAVEPOINT \"{}\"", self.name.replace('"', "\"\""))
 	}
 
 	/// Generate SQL to release (commit) this savepoint
 	pub fn release_sql(&self) -> String {
-		format!("RELEASE SAVEPOINT {}", self.name)
+		format!("RELEASE SAVEPOINT \"{}\"", self.name.replace('"', "\"\""))
 	}
 
 	/// Generate SQL to rollback to this savepoint
 	pub fn rollback_sql(&self) -> String {
-		format!("ROLLBACK TO SAVEPOINT {}", self.name)
+		format!(
+			"ROLLBACK TO SAVEPOINT \"{}\"",
+			self.name.replace('"', "\"\"")
+		)
 	}
+}
+
+/// Validate a savepoint name to prevent SQL injection.
+///
+/// Only alphanumeric characters and underscores are allowed.
+/// The name must not be empty and must not start with a digit.
+fn validate_savepoint_name(name: &str) -> Result<(), String> {
+	if name.is_empty() {
+		return Err("Savepoint name cannot be empty".to_string());
+	}
+
+	if !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+		return Err(format!(
+			"Savepoint name '{}' contains invalid characters. Only alphanumeric characters and underscores are allowed",
+			name
+		));
+	}
+
+	if let Some(first_char) = name.chars().next()
+		&& first_char.is_numeric()
+	{
+		return Err(format!(
+			"Savepoint name '{}' cannot start with a number",
+			name
+		));
+	}
+
+	Ok(())
 }
 
 /// Transaction executor trait for database-specific transaction handling
@@ -507,5 +545,86 @@ pub trait TransactionExecutor: Send + Sync {
 		Err(super::error::DatabaseError::NotSupported(
 			"Savepoints are not supported by this backend".to_string(),
 		))
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	// ==================== Savepoint name validation tests ====================
+
+	#[rstest]
+	fn test_savepoint_valid_name() {
+		// Arrange & Act
+		let sp = Savepoint::new("sp1");
+
+		// Assert
+		assert_eq!(sp.name(), "sp1");
+		assert_eq!(sp.to_sql(), "SAVEPOINT \"sp1\"");
+		assert_eq!(sp.release_sql(), "RELEASE SAVEPOINT \"sp1\"");
+		assert_eq!(sp.rollback_sql(), "ROLLBACK TO SAVEPOINT \"sp1\"");
+	}
+
+	#[rstest]
+	fn test_savepoint_valid_underscore_name() {
+		// Arrange & Act
+		let sp = Savepoint::new("my_savepoint_1");
+
+		// Assert
+		assert_eq!(sp.to_sql(), "SAVEPOINT \"my_savepoint_1\"");
+	}
+
+	#[rstest]
+	#[should_panic(expected = "Invalid savepoint name")]
+	fn test_savepoint_rejects_sql_injection_semicolon() {
+		// Arrange & Act: attacker tries SQL injection with semicolon
+		Savepoint::new("sp1; DROP TABLE users; --");
+	}
+
+	#[rstest]
+	#[should_panic(expected = "Invalid savepoint name")]
+	fn test_savepoint_rejects_sql_injection_quotes() {
+		// Arrange & Act: attacker tries to break out with quotes
+		Savepoint::new("sp1\" ; DROP TABLE users; --");
+	}
+
+	#[rstest]
+	#[should_panic(expected = "Invalid savepoint name")]
+	fn test_savepoint_rejects_empty_name() {
+		// Arrange & Act
+		Savepoint::new("");
+	}
+
+	#[rstest]
+	#[should_panic(expected = "Invalid savepoint name")]
+	fn test_savepoint_rejects_name_starting_with_number() {
+		// Arrange & Act
+		Savepoint::new("1invalid");
+	}
+
+	#[rstest]
+	#[should_panic(expected = "Invalid savepoint name")]
+	fn test_savepoint_rejects_spaces() {
+		// Arrange & Act
+		Savepoint::new("sp 1");
+	}
+
+	#[rstest]
+	fn test_validate_savepoint_name_valid() {
+		// Arrange & Act & Assert
+		assert!(validate_savepoint_name("sp1").is_ok());
+		assert!(validate_savepoint_name("my_savepoint").is_ok());
+		assert!(validate_savepoint_name("_internal").is_ok());
+	}
+
+	#[rstest]
+	fn test_validate_savepoint_name_rejects_injection() {
+		// Arrange & Act & Assert
+		assert!(validate_savepoint_name("sp; DROP TABLE").is_err());
+		assert!(validate_savepoint_name("sp\"injection").is_err());
+		assert!(validate_savepoint_name("sp' OR '1'='1").is_err());
+		assert!(validate_savepoint_name("").is_err());
 	}
 }

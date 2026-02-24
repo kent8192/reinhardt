@@ -55,7 +55,7 @@ fn test_template_context_default() {
 /// **Verifies**: String values can be inserted and rendered
 #[rstest]
 fn test_template_context_insert_string(mut empty_template_context: TemplateContext) {
-	empty_template_context.insert("name", "MyProject");
+	empty_template_context.insert("name", "MyProject").unwrap();
 
 	let tera_ctx: tera::Context = empty_template_context.into();
 	let mut tera = tera::Tera::default();
@@ -70,8 +70,8 @@ fn test_template_context_insert_string(mut empty_template_context: TemplateConte
 /// **Verifies**: Numeric values can be inserted and rendered
 #[rstest]
 fn test_template_context_insert_number(mut empty_template_context: TemplateContext) {
-	empty_template_context.insert("port", 8080);
-	empty_template_context.insert("version", 1.5f64);
+	empty_template_context.insert("port", 8080).unwrap();
+	empty_template_context.insert("version", 1.5f64).unwrap();
 
 	let tera_ctx: tera::Context = empty_template_context.into();
 	let mut tera = tera::Tera::default();
@@ -91,8 +91,8 @@ fn test_template_context_insert_number(mut empty_template_context: TemplateConte
 /// **Verifies**: Boolean values can be inserted and used in conditions
 #[rstest]
 fn test_template_context_insert_boolean(mut empty_template_context: TemplateContext) {
-	empty_template_context.insert("enabled", true);
-	empty_template_context.insert("debug", false);
+	empty_template_context.insert("enabled", true).unwrap();
+	empty_template_context.insert("debug", false).unwrap();
 
 	let tera_ctx: tera::Context = empty_template_context.into();
 	let mut tera = tera::Tera::default();
@@ -115,7 +115,7 @@ fn test_template_context_insert_boolean(mut empty_template_context: TemplateCont
 #[rstest]
 fn test_template_context_insert_vec(mut empty_template_context: TemplateContext) {
 	let features = vec!["auth", "admin", "api"];
-	empty_template_context.insert("features", features);
+	empty_template_context.insert("features", features).unwrap();
 
 	let tera_ctx: tera::Context = empty_template_context.into();
 	let mut tera = tera::Tera::default();
@@ -136,7 +136,7 @@ fn test_template_context_insert_map(mut empty_template_context: TemplateContext)
 	config.insert("host", "localhost");
 	config.insert("port", "5432");
 
-	empty_template_context.insert("config", config);
+	empty_template_context.insert("config", config).unwrap();
 
 	let tera_ctx: tera::Context = empty_template_context.into();
 	let mut tera = tera::Tera::default();
@@ -157,8 +157,8 @@ fn test_template_context_insert_map(mut empty_template_context: TemplateContext)
 /// **Verifies**: Inserting same key overwrites previous value
 #[rstest]
 fn test_template_context_overwrite(mut empty_template_context: TemplateContext) {
-	empty_template_context.insert("key", "first");
-	empty_template_context.insert("key", "second");
+	empty_template_context.insert("key", "first").unwrap();
+	empty_template_context.insert("key", "second").unwrap();
 
 	let tera_ctx: tera::Context = empty_template_context.into();
 	let mut tera = tera::Tera::default();
@@ -173,7 +173,7 @@ fn test_template_context_overwrite(mut empty_template_context: TemplateContext) 
 /// **Verifies**: Empty strings are handled correctly
 #[rstest]
 fn test_template_context_empty_string(mut empty_template_context: TemplateContext) {
-	empty_template_context.insert("empty", "");
+	empty_template_context.insert("empty", "").unwrap();
 
 	let tera_ctx: tera::Context = empty_template_context.into();
 	let mut tera = tera::Tera::default();
@@ -188,8 +188,10 @@ fn test_template_context_empty_string(mut empty_template_context: TemplateContex
 /// **Verifies**: Unicode values are preserved
 #[rstest]
 fn test_template_context_unicode(mut empty_template_context: TemplateContext) {
-	empty_template_context.insert("greeting", "こんにちは");
-	empty_template_context.insert("emoji", "🦀");
+	empty_template_context
+		.insert("greeting", "こんにちは")
+		.unwrap();
+	empty_template_context.insert("emoji", "🦀").unwrap();
 
 	let tera_ctx: tera::Context = empty_template_context.into();
 	let mut tera = tera::Tera::default();
@@ -206,7 +208,9 @@ fn test_template_context_unicode(mut empty_template_context: TemplateContext) {
 /// **Verifies**: Special characters are preserved (not HTML escaped by default)
 #[rstest]
 fn test_template_context_special_characters(mut empty_template_context: TemplateContext) {
-	empty_template_context.insert("special", "<script>alert('xss')</script>");
+	empty_template_context
+		.insert("special", "<script>alert('xss')</script>")
+		.unwrap();
 
 	let tera_ctx: tera::Context = empty_template_context.into();
 	let mut tera = tera::Tera::default();
@@ -226,7 +230,9 @@ fn test_template_context_special_characters(mut empty_template_context: Template
 #[rstest]
 fn test_template_context_null_value(mut empty_template_context: TemplateContext) {
 	let null_value: Option<String> = None;
-	empty_template_context.insert("nullable", null_value);
+	empty_template_context
+		.insert("nullable", null_value)
+		.unwrap();
 
 	let tera_ctx: tera::Context = empty_template_context.into();
 	let mut tera = tera::Tera::default();
@@ -251,7 +257,7 @@ fn test_template_context_null_value(mut empty_template_context: TemplateContext)
 /// **Verifies**: TemplateContext implements Clone
 #[rstest]
 fn test_template_context_clone(mut empty_template_context: TemplateContext) {
-	empty_template_context.insert("key", "value");
+	empty_template_context.insert("key", "value").unwrap();
 
 	let cloned = empty_template_context.clone();
 
@@ -268,7 +274,7 @@ fn test_template_context_clone(mut empty_template_context: TemplateContext) {
 /// **Verifies**: TemplateContext implements Debug
 #[rstest]
 fn test_template_context_debug(mut empty_template_context: TemplateContext) {
-	empty_template_context.insert("test", "value");
+	empty_template_context.insert("test", "value").unwrap();
 
 	let debug = format!("{:?}", empty_template_context);
 	assert!(
@@ -429,9 +435,9 @@ fn test_template_basic_sanity() {
 	let mut ctx = TemplateContext::new();
 
 	// Insert various types
-	ctx.insert("name", "Test");
-	ctx.insert("count", 42);
-	ctx.insert("enabled", true);
+	ctx.insert("name", "Test").unwrap();
+	ctx.insert("count", 42).unwrap();
+	ctx.insert("enabled", true).unwrap();
 
 	// Convert to tera context
 	let tera_ctx: tera::Context = ctx.into();

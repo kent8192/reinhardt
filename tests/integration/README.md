@@ -430,7 +430,7 @@ docker run -d \
   -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=reinhardt_test \
   -p 5432:5432 \
-  postgres:16
+  postgres:17
 ```
 
 **Using local PostgreSQL:**

@@ -1,0 +1,63 @@
+name: Publish Check
+
+on:
+  workflow_call:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  publish-check:
+    name: Publish Dry-Run Check
+    runs-on: ubuntu-latest
+    # Skip for release-plz branches and release-fix branches - versions may not yet be on crates.io
+    if: >-
+      ${{
+        !startsWith(github.head_ref || github.ref_name, 'release-plz-') &&
+        !startsWith(github.head_ref || github.ref_name, 'fix/release-plz')
+      }}
+    steps:
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          protoc --version
+
+      - name: Install Rust toolchain
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-binstall
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Verify no circular dev-dependencies
+        run: |
+          echo "=== Checking for circular dev-dependencies ==="
+          echo "Running cargo publish --workspace --dry-run..."
+          cargo publish --workspace --dry-run --no-verify --exclude reinhardt-web
+          echo ""
+          echo "=== All crates passed publish dry-run check ==="

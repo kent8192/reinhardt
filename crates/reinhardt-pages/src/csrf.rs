@@ -11,20 +11,40 @@
 //! 2. **Meta tag**: `<meta name="csrf-token" content="...">` in the HTML head
 //! 3. **Hidden input**: `<input name="csrfmiddlewaretoken">` in forms
 //!
+//! ## Server-side Verification
+//!
+//! CSRF tokens retrieved on the client must be verified on the server.
+//! This module provides [`verify_csrf_token`] for constant-time token comparison,
+//! which should be used in server-side middleware to validate tokens submitted
+//! with requests.
+//!
+//! The typical verification flow is:
+//!
+//! 1. Server generates a CSRF token and stores it in the session/cookie
+//! 2. Client retrieves the token via [`get_csrf_token`] or [`CsrfManager`]
+//! 3. Client includes the token in requests (header or form field)
+//! 4. Server-side middleware extracts the token from the request
+//! 5. Server calls [`verify_csrf_token`] to compare the request token against
+//!    the stored session token using constant-time comparison
+//!
+//! For HMAC-based token verification (recommended for production),
+//! see `reinhardt_core::security::csrf`.
+//!
 //! ## Usage
 //!
 //! ```ignore
-//! use reinhardt_pages::csrf::{get_csrf_token, CsrfManager};
+//! use reinhardt_pages::csrf::{get_csrf_token, CsrfManager, verify_csrf_token};
 //!
-//! // Simple retrieval
+//! // Client-side: retrieve token
 //! if let Some(token) = get_csrf_token() {
-//!     // Use token for API calls
+//!     // Include token in API calls via X-CSRFToken header
 //! }
 //!
-//! // Using CsrfManager for more control
-//! let manager = CsrfManager::new();
-//! let token = manager.get_or_fetch_token();
+//! // Server-side: verify token
+//! let is_valid = verify_csrf_token(&request_token, &session_token);
 //! ```
+
+use subtle::ConstantTimeEq;
 
 use crate::reactive::Signal;
 
@@ -259,6 +279,163 @@ pub fn csrf_headers() -> Option<(&'static str, String)> {
 	None
 }
 
+// ============================================================================
+// Server-side verification utilities
+// ============================================================================
+
+/// Error returned when CSRF token verification fails.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CsrfVerificationError {
+	/// The request token is empty.
+	EmptyRequestToken,
+	/// The session token is empty.
+	EmptySessionToken,
+	/// The tokens do not match.
+	TokenMismatch,
+}
+
+impl std::fmt::Display for CsrfVerificationError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::EmptyRequestToken => write!(f, "CSRF request token is empty"),
+			Self::EmptySessionToken => write!(f, "CSRF session token is empty"),
+			Self::TokenMismatch => write!(f, "CSRF token mismatch"),
+		}
+	}
+}
+
+impl std::error::Error for CsrfVerificationError {}
+
+/// Verifies a CSRF token using constant-time comparison.
+///
+/// This function compares the request token against the expected session token
+/// using constant-time equality to prevent timing side-channel attacks.
+///
+/// # Arguments
+///
+/// * `request_token` - The CSRF token submitted with the request
+/// * `session_token` - The expected CSRF token stored in the session/cookie
+///
+/// # Returns
+///
+/// `Ok(())` if the tokens match, or a [`CsrfVerificationError`] if verification fails.
+///
+/// # Security
+///
+/// This function uses the `subtle` crate's constant-time comparison to prevent
+/// timing attacks. It should be used in server-side middleware to validate
+/// CSRF tokens before processing state-changing requests.
+///
+/// For HMAC-based token verification (recommended for production), see
+/// `reinhardt_core::security::csrf::verify_token_hmac`.
+///
+/// # Example
+///
+/// ```
+/// use reinhardt_pages::csrf::{verify_csrf_token, CsrfVerificationError};
+///
+/// // Valid token
+/// let session_token = "abc123def456";
+/// let request_token = "abc123def456";
+/// assert!(verify_csrf_token(request_token, session_token).is_ok());
+///
+/// // Invalid token
+/// let bad_token = "wrong_token";
+/// assert_eq!(
+///     verify_csrf_token(bad_token, session_token),
+///     Err(CsrfVerificationError::TokenMismatch),
+/// );
+///
+/// // Empty token
+/// assert_eq!(
+///     verify_csrf_token("", session_token),
+///     Err(CsrfVerificationError::EmptyRequestToken),
+/// );
+/// ```
+pub fn verify_csrf_token(
+	request_token: &str,
+	session_token: &str,
+) -> Result<(), CsrfVerificationError> {
+	if request_token.is_empty() {
+		return Err(CsrfVerificationError::EmptyRequestToken);
+	}
+	if session_token.is_empty() {
+		return Err(CsrfVerificationError::EmptySessionToken);
+	}
+
+	// Use constant-time comparison to prevent timing attacks.
+	// Compare raw bytes of the token strings.
+	let request_bytes = request_token.as_bytes();
+	let session_bytes = session_token.as_bytes();
+
+	// Length difference alone leaks information, but checking length
+	// before constant-time comparison is acceptable because the token
+	// format (fixed-length hex) is public knowledge. For variable-length
+	// tokens, the length mismatch itself reveals mismatch.
+	if request_bytes.len() != session_bytes.len() {
+		return Err(CsrfVerificationError::TokenMismatch);
+	}
+
+	if request_bytes.ct_eq(session_bytes).into() {
+		Ok(())
+	} else {
+		Err(CsrfVerificationError::TokenMismatch)
+	}
+}
+
+/// Trait for server-side CSRF verification middleware integration.
+///
+/// Implement this trait in your server-side middleware to provide CSRF
+/// token extraction and verification. This bridges the client-side token
+/// management in `reinhardt-pages` with server-side verification.
+///
+/// # Example
+///
+/// ```ignore
+/// use reinhardt_pages::csrf::CsrfVerifier;
+///
+/// struct MyCsrfMiddleware;
+///
+/// impl CsrfVerifier for MyCsrfMiddleware {
+///     fn extract_request_token(&self, request: &Request) -> Option<String> {
+///         // Extract from X-CSRFToken header or form field
+///         request.headers().get("X-CSRFToken")
+///             .map(|v| v.to_str().ok().map(String::from))
+///             .flatten()
+///     }
+///
+///     fn extract_session_token(&self, request: &Request) -> Option<String> {
+///         // Extract from session or cookie
+///         request.cookies().get("csrftoken")
+///             .map(|c| c.value().to_string())
+///     }
+/// }
+/// ```
+pub trait CsrfVerifier {
+	/// Extracts the CSRF token from the incoming request.
+	///
+	/// Typically reads from the `X-CSRFToken` header or the
+	/// `csrfmiddlewaretoken` form field.
+	fn extract_request_token(&self, request: &[u8]) -> Option<String>;
+
+	/// Extracts the expected CSRF token from the session or cookie.
+	fn extract_session_token(&self, request: &[u8]) -> Option<String>;
+
+	/// Verifies the CSRF token for the given request.
+	///
+	/// Default implementation extracts both tokens and uses
+	/// [`verify_csrf_token`] for constant-time comparison.
+	fn verify(&self, request: &[u8]) -> Result<(), CsrfVerificationError> {
+		let request_token = self
+			.extract_request_token(request)
+			.ok_or(CsrfVerificationError::EmptyRequestToken)?;
+		let session_token = self
+			.extract_session_token(request)
+			.ok_or(CsrfVerificationError::EmptySessionToken)?;
+		verify_csrf_token(&request_token, &session_token)
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -311,5 +488,67 @@ mod tests {
 	fn test_csrf_manager_default() {
 		let manager = CsrfManager::default();
 		assert!(manager.cached_token().is_none());
+	}
+
+	#[test]
+	fn test_verify_csrf_token_valid() {
+		let token = "abc123def456";
+		assert!(verify_csrf_token(token, token).is_ok());
+	}
+
+	#[test]
+	fn test_verify_csrf_token_mismatch() {
+		assert_eq!(
+			verify_csrf_token("token_a", "token_b"),
+			Err(CsrfVerificationError::TokenMismatch),
+		);
+	}
+
+	#[test]
+	fn test_verify_csrf_token_different_length() {
+		assert_eq!(
+			verify_csrf_token("short", "much_longer_token"),
+			Err(CsrfVerificationError::TokenMismatch),
+		);
+	}
+
+	#[test]
+	fn test_verify_csrf_token_empty_request() {
+		assert_eq!(
+			verify_csrf_token("", "session_token"),
+			Err(CsrfVerificationError::EmptyRequestToken),
+		);
+	}
+
+	#[test]
+	fn test_verify_csrf_token_empty_session() {
+		assert_eq!(
+			verify_csrf_token("request_token", ""),
+			Err(CsrfVerificationError::EmptySessionToken),
+		);
+	}
+
+	#[test]
+	fn test_verify_csrf_token_both_empty() {
+		assert_eq!(
+			verify_csrf_token("", ""),
+			Err(CsrfVerificationError::EmptyRequestToken),
+		);
+	}
+
+	#[test]
+	fn test_csrf_verification_error_display() {
+		assert_eq!(
+			CsrfVerificationError::EmptyRequestToken.to_string(),
+			"CSRF request token is empty",
+		);
+		assert_eq!(
+			CsrfVerificationError::EmptySessionToken.to_string(),
+			"CSRF session token is empty",
+		);
+		assert_eq!(
+			CsrfVerificationError::TokenMismatch.to_string(),
+			"CSRF token mismatch",
+		);
 	}
 }

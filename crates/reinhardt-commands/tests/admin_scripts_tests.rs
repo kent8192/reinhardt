@@ -919,7 +919,7 @@ async fn test_template_rendering() {
 	.expect("Failed to write template");
 
 	let mut context = TemplateContext::new();
-	context.insert("project_name", "test_project");
+	context.insert("project_name", "test_project").unwrap();
 
 	let template_cmd = TemplateCommand::new();
 	let ctx = CommandContext::new(vec![]);

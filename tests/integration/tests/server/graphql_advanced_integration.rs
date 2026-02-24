@@ -1,9 +1,9 @@
 #![cfg(feature = "graphql")]
 
-use async_graphql::{self, EmptySubscription, Object, Schema, ID};
+use async_graphql::{self, EmptySubscription, ID, Object, Schema};
 use reinhardt_server::GraphQLHandler;
-use reinhardt_test::server::{shutdown_test_server, spawn_test_server};
 use reinhardt_test::APIClient;
+use reinhardt_test::server::{shutdown_test_server, spawn_test_server};
 use rstest::{fixture, rstest};
 use serde_json::Value;
 use std::collections::HashMap;

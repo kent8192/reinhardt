@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-websockets"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.16"
 description = "WebSocket support for real-time bidirectional communication"
 edition.workspace = true
 license.workspace = true
@@ -36,6 +36,9 @@ reinhardt-di = { workspace = true, optional = true }
 # Pages integration (optional)
 reinhardt-pages = { workspace = true, optional = true }
 
+# Auth integration (optional, for pages-integration)
+reinhardt-auth = { workspace = true, optional = true, features = ["sessions"] }
+
 # Compression
 flate2 = { version = "1.0", optional = true }
 brotli = { version = "8.0.2", optional = true }
@@ -49,6 +52,9 @@ redis = { version = "0.32.7", features = [
 # Metrics
 metrics = { version = "0.24", optional = true }
 
+# Logging
+tracing = { workspace = true }
+
 [dev-dependencies]
 tokio-test = "0.4"
 futures = { workspace = true }
@@ -61,5 +67,5 @@ di = ["reinhardt-di"]
 compression = ["flate2", "brotli"]
 redis-channel = ["redis"]
 metrics = ["dep:metrics"]
-pages-integration = ["reinhardt-pages"]
+pages-integration = ["reinhardt-pages", "reinhardt-auth"]
 full = ["compression", "redis-channel", "metrics", "di", "pages-integration"]

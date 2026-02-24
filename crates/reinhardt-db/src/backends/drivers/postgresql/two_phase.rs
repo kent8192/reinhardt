@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Row, pool::PoolConnection};
 use std::sync::Arc;
 
-use super::super::super::error::{DatabaseError, Result};
+use crate::backends::error::{DatabaseError, Result};
 
 /// Session for a PostgreSQL two-phase commit transaction
 ///

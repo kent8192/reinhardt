@@ -9,7 +9,8 @@
 
 use bytes::Bytes;
 use hyper::{HeaderMap, Method, Uri, Version};
-use reinhardt_http::Request;
+use reinhardt_http::{Request, TrustedProxies};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 
 /// Test: Request type initialization
@@ -236,7 +237,7 @@ fn test_secure_can_be_true() {
 	assert_eq!(request.scheme(), "https");
 }
 
-/// Test: X-Forwarded-Proto header detection
+/// Test: X-Forwarded-Proto header detection (only from trusted proxies)
 #[test]
 fn test_secure_via_forwarded_proto() {
 	let method = Method::GET;
@@ -246,16 +247,21 @@ fn test_secure_via_forwarded_proto() {
 	headers.insert("x-forwarded-proto", "https".parse().unwrap());
 	let body = Bytes::new();
 
+	let proxy_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
 	let request = Request::builder()
 		.method(method)
 		.uri(uri)
 		.version(version)
 		.headers(headers)
 		.body(body)
+		.remote_addr(SocketAddr::new(proxy_ip, 8080))
 		.build()
 		.unwrap();
 
-	// Should detect HTTPS via X-Forwarded-Proto header
+	// Configure trusted proxies so X-Forwarded-Proto is respected
+	request.set_trusted_proxies(TrustedProxies::new(vec![proxy_ip]));
+
+	// Should detect HTTPS via X-Forwarded-Proto header from trusted proxy
 	assert!(request.is_secure());
 	assert_eq!(request.scheme(), "https");
 }

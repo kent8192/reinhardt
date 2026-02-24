@@ -1,3 +1,14 @@
+// Copyright 2024-2025 the reinhardt-db authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+// this file except in compliance with the License. You may obtain a copy of the
+// License at
+//
+// Unless required by applicable law or agreed to in writing, software distributed under
+// the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied. See the License for the specific language governing
+// permissions and limitations under the License.
+
 //! ORM Session - SQLAlchemy-style database session with identity map and unit of work pattern
 //!
 //! This module provides a Session object that manages database operations with automatic
@@ -5,11 +16,12 @@
 
 use super::transaction::Transaction;
 use crate::orm::model::Model;
-use crate::orm::query::Query;
+use crate::orm::query::OrmQuery;
 use crate::orm::query_types::DbBackend;
-use sea_query::{
-	Alias, Expr, ExprTrait, MysqlQueryBuilder, PostgresQueryBuilder, Query as SeaQuery,
-	SqliteQueryBuilder,
+use reinhardt_query::value::Value as RValue;
+use reinhardt_query::{
+	Alias, Expr, ExprTrait, MySqlQueryBuilder, PostgresQueryBuilder, Query as RQuery,
+	QueryStatementBuilder, SqliteQueryBuilder,
 };
 use serde_json::Value;
 use sqlx::{AnyPool, Row};
@@ -288,9 +300,9 @@ impl Session {
 			return Ok(None);
 		}
 
-		// Build SELECT query using sea-query
+		// Build SELECT query using reinhardt_query
 		let pk_field = T::primary_key_field();
-		let mut select_query = SeaQuery::select();
+		let mut select_query = RQuery::select();
 		select_query.from(Alias::new(T::table_name()));
 
 		// Add all fields to SELECT
@@ -305,7 +317,7 @@ impl Session {
 		// Build SQL query based on backend
 		let sql = match self.db_backend {
 			DbBackend::Postgres => select_query.to_string(PostgresQueryBuilder),
-			DbBackend::Mysql => select_query.to_string(MysqlQueryBuilder),
+			DbBackend::Mysql => select_query.to_string(MySqlQueryBuilder),
 			DbBackend::Sqlite => select_query.to_string(SqliteQueryBuilder),
 		};
 
@@ -696,8 +708,8 @@ impl Session {
 	/// # Ok(())
 	/// # }
 	/// ```
-	pub fn query<T: Model>(&self) -> Query {
-		Query::new()
+	pub fn query<T: Model>(&self) -> OrmQuery {
+		OrmQuery::new()
 	}
 
 	/// Flush all pending changes to the database
@@ -747,7 +759,7 @@ impl Session {
 					if has_pk {
 						// UPDATE existing record
 						let mut update_stmt =
-							SeaQuery::update().table(Alias::new(table_name)).to_owned();
+							RQuery::update().table(Alias::new(table_name)).to_owned();
 
 						// Set all columns except primary key and auto-managed datetime fields
 						for (col_name, col_value) in obj {
@@ -770,33 +782,36 @@ impl Session {
 							{
 								continue;
 							}
-							update_stmt.value(Alias::new(col_name), json_to_sea_value(col_value));
+							update_stmt.value(
+								Alias::new(col_name),
+								json_to_reinhardt_query_value(col_value),
+							);
 						}
 
 						// Add WHERE clause for primary key
 						if let Some(pk_value) = obj.get("id") {
 							update_stmt.and_where(
 								Expr::col(Alias::new("id"))
-									.eq(Expr::val(json_to_sea_value(pk_value))),
+									.eq(Expr::val(json_to_reinhardt_query_value(pk_value))),
 							);
 						}
 
 						// Build and execute SQL
 						let (sql, values) = match backend {
 							DbBackend::Postgres => update_stmt.build(PostgresQueryBuilder),
-							DbBackend::Mysql => update_stmt.build(MysqlQueryBuilder),
+							DbBackend::Mysql => update_stmt.build(MySqlQueryBuilder),
 							DbBackend::Sqlite => update_stmt.build(SqliteQueryBuilder),
 						};
 
 						self.execute_with_values(&sql, &values).await?;
 					} else {
 						// INSERT new record
-						let mut insert_stmt = SeaQuery::insert()
+						let mut insert_stmt = RQuery::insert()
 							.into_table(Alias::new(table_name))
 							.to_owned();
 
 						let mut columns = Vec::new();
-						let mut values_vec = Vec::new();
+						let mut values_vec: Vec<RValue> = Vec::new();
 
 						for (col_name, col_value) in obj {
 							// Skip id/primary key column - auto-generated
@@ -814,12 +829,11 @@ impl Session {
 								continue;
 							}
 							columns.push(Alias::new(col_name));
-							// For NULL values, use SQL NULL keyword directly to avoid type inference issues
+							// For NULL values, use RValue::Int(None) to represent SQL NULL
 							if col_value.is_null() {
-								values_vec
-									.push(sea_query::SimpleExpr::Keyword(sea_query::Keyword::Null));
+								values_vec.push(RValue::Int(None));
 							} else {
-								values_vec.push(Expr::val(json_to_sea_value(col_value)));
+								values_vec.push(json_to_reinhardt_query_value(col_value));
 							}
 						}
 
@@ -831,14 +845,13 @@ impl Session {
 
 						// Add RETURNING clause for PostgreSQL to get generated ID
 						if backend == DbBackend::Postgres {
-							insert_stmt
-								.returning(sea_query::Query::returning().column(Alias::new("id")));
+							insert_stmt.returning_col(Alias::new("id"));
 						}
 
 						// Build and execute SQL
 						let (sql, values) = match backend {
 							DbBackend::Postgres => insert_stmt.build(PostgresQueryBuilder),
-							DbBackend::Mysql => insert_stmt.build(MysqlQueryBuilder),
+							DbBackend::Mysql => insert_stmt.build(MySqlQueryBuilder),
 							DbBackend::Sqlite => insert_stmt.build(SqliteQueryBuilder),
 						};
 
@@ -882,7 +895,7 @@ impl Session {
 			let pk_value_str = parts[1];
 
 			// Build DELETE statement
-			let mut delete_stmt = SeaQuery::delete()
+			let mut delete_stmt = RQuery::delete()
 				.from_table(Alias::new(table_name))
 				.to_owned();
 
@@ -897,7 +910,7 @@ impl Session {
 			// Build and execute SQL
 			let (sql, values) = match backend {
 				DbBackend::Postgres => delete_stmt.build(PostgresQueryBuilder),
-				DbBackend::Mysql => delete_stmt.build(MysqlQueryBuilder),
+				DbBackend::Mysql => delete_stmt.build(MySqlQueryBuilder),
 				DbBackend::Sqlite => delete_stmt.build(SqliteQueryBuilder),
 			};
 
@@ -983,17 +996,17 @@ impl Session {
 		&self.last_generated_ids
 	}
 
-	/// Execute SQL with sea_query values
+	/// Execute SQL with reinhardt_query values
 	async fn execute_with_values(
 		&self,
 		sql: &str,
-		values: &sea_query::Values,
+		values: &reinhardt_query::value::Values,
 	) -> Result<(), SessionError> {
 		let mut query = sqlx::query(sql);
 
-		// Bind all values from sea_query::Values
+		// Bind all values from reinhardt_query::value::Values
 		for value in &values.0 {
-			query = bind_sea_value(query, value);
+			query = bind_reinhardt_query_value(query, value);
 		}
 
 		query
@@ -1008,13 +1021,13 @@ impl Session {
 	async fn execute_returning(
 		&self,
 		sql: &str,
-		values: &sea_query::Values,
+		values: &reinhardt_query::value::Values,
 	) -> Result<sqlx::any::AnyRow, SessionError> {
 		let mut query = sqlx::query(sql);
 
-		// Bind all values from sea_query::Values
+		// Bind all values from reinhardt_query::value::Values
 		for value in &values.0 {
-			query = bind_sea_value(query, value);
+			query = bind_reinhardt_query_value(query, value);
 		}
 
 		query
@@ -1315,56 +1328,62 @@ impl Session {
 	}
 }
 
-/// Convert JSON value to sea_query Value
-fn json_to_sea_value(value: &Value) -> sea_query::Value {
+/// Convert JSON value to reinhardt_query Value
+fn json_to_reinhardt_query_value(value: &Value) -> RValue {
 	match value {
-		Value::Null => sea_query::Value::Int(None),
-		Value::Bool(b) => sea_query::Value::Bool(Some(*b)),
+		Value::Null => RValue::Int(None),
+		Value::Bool(b) => RValue::Bool(Some(*b)),
 		Value::Number(n) => {
 			if let Some(i) = n.as_i64() {
-				sea_query::Value::BigInt(Some(i))
+				RValue::BigInt(Some(i))
 			} else if let Some(f) = n.as_f64() {
-				sea_query::Value::Double(Some(f))
+				RValue::Double(Some(f))
 			} else {
-				sea_query::Value::Int(None)
+				RValue::Int(None)
 			}
 		}
 		Value::String(s) => {
 			// Try to parse as UUID first
 			if let Ok(uuid) = Uuid::parse_str(s) {
-				return sea_query::Value::Uuid(Some(uuid));
+				return RValue::Uuid(Some(Box::new(uuid)));
 			}
-			sea_query::Value::String(Some(s.clone()))
+			RValue::String(Some(Box::new(s.clone())))
 		}
 		Value::Array(_) | Value::Object(_) => {
 			// For complex types, serialize as JSON string
-			sea_query::Value::String(Some(value.to_string()))
+			RValue::String(Some(Box::new(value.to_string())))
 		}
 	}
 }
 
-/// Bind sea_query Value to sqlx Query
-fn bind_sea_value<'a>(
+/// Bind reinhardt_query Value to sqlx Query
+fn bind_reinhardt_query_value<'a>(
 	query: sqlx::query::Query<'a, sqlx::Any, sqlx::any::AnyArguments<'a>>,
-	value: &sea_query::Value,
+	value: &RValue,
 ) -> sqlx::query::Query<'a, sqlx::Any, sqlx::any::AnyArguments<'a>> {
 	match value {
-		sea_query::Value::Bool(Some(b)) => query.bind(*b),
-		sea_query::Value::TinyInt(Some(i)) => query.bind(*i as i32),
-		sea_query::Value::SmallInt(Some(i)) => query.bind(*i as i32),
-		sea_query::Value::Int(Some(i)) => query.bind(*i),
-		sea_query::Value::BigInt(Some(i)) => query.bind(*i),
-		sea_query::Value::TinyUnsigned(Some(i)) => query.bind(*i as i32),
-		sea_query::Value::SmallUnsigned(Some(i)) => query.bind(*i as i32),
-		sea_query::Value::Unsigned(Some(i)) => query.bind(*i as i64),
-		sea_query::Value::BigUnsigned(Some(i)) => query.bind(*i as i64),
-		sea_query::Value::Float(Some(f)) => query.bind(*f),
-		sea_query::Value::Double(Some(f)) => query.bind(*f),
-		sea_query::Value::String(Some(s)) => query.bind(s.clone()),
-		sea_query::Value::Bytes(Some(b)) => query.bind(b.clone()),
+		RValue::Bool(Some(b)) => query.bind(*b),
+		RValue::TinyInt(Some(i)) => query.bind(*i as i32),
+		RValue::SmallInt(Some(i)) => query.bind(*i as i32),
+		RValue::Int(Some(i)) => query.bind(*i),
+		RValue::BigInt(Some(i)) => query.bind(*i),
+		RValue::TinyUnsigned(Some(i)) => query.bind(*i as i32),
+		RValue::SmallUnsigned(Some(i)) => query.bind(*i as i32),
+		RValue::Unsigned(Some(i)) => query.bind(*i as i64),
+		RValue::BigUnsigned(Some(i)) => query.bind(*i as i64),
+		RValue::Float(Some(f)) => query.bind(*f),
+		RValue::Double(Some(f)) => query.bind(*f),
+		RValue::String(Some(s)) => query.bind(s.as_ref().clone()),
+		RValue::Bytes(Some(b)) => query.bind(b.as_ref().clone()),
 		// UUID: sqlx::Any doesn't natively support UUID, bind as string
-		sea_query::Value::Uuid(Some(u)) => query.bind(u.to_string()),
-		_ => query.bind(None::<i32>), // NULL values
+		RValue::Uuid(Some(u)) => query.bind(u.to_string()),
+		// Json variant is available because reinhardt-query is compiled with "with-json" feature
+		RValue::Json(Some(j)) => {
+			// Serialize JSON to string for sqlx::Any which doesn't support direct JSON binding
+			query.bind(j.to_string())
+		}
+		// All None/null variants bind as null
+		_ => query.bind(None::<i32>),
 	}
 }
 
@@ -1771,110 +1790,110 @@ mod tests {
 	}
 
 	// ──────────────────────────────────────────────────────────────
-	// json_to_sea_value tests
+	// json_to_reinhardt_query_value tests
 	// ──────────────────────────────────────────────────────────────
 
 	#[test]
-	fn test_json_to_sea_value_string() {
+	fn test_json_to_reinhardt_query_value_string() {
 		use serde_json::json;
 		let value = json!("hello world");
-		let sea_value = super::json_to_sea_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value);
 
-		let debug_str = format!("{:?}", sea_value);
+		let debug_str = format!("{:?}", rq_value);
 		assert!(debug_str.contains("hello world") || debug_str.contains("String"));
 	}
 
 	#[test]
-	fn test_json_to_sea_value_integer() {
+	fn test_json_to_reinhardt_query_value_integer() {
 		use serde_json::json;
 		let value = json!(42);
-		let sea_value = super::json_to_sea_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value);
 
-		let debug_str = format!("{:?}", sea_value);
+		let debug_str = format!("{:?}", rq_value);
 		assert!(debug_str.contains("42") || debug_str.contains("Int"));
 	}
 
 	#[test]
-	fn test_json_to_sea_value_float() {
+	fn test_json_to_reinhardt_query_value_float() {
 		use serde_json::json;
 		let value = json!(3.14159);
-		let sea_value = super::json_to_sea_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value);
 
-		let debug_str = format!("{:?}", sea_value);
+		let debug_str = format!("{:?}", rq_value);
 		assert!(debug_str.contains("3.14159") || debug_str.contains("Double"));
 	}
 
 	#[test]
-	fn test_json_to_sea_value_bool_true() {
+	fn test_json_to_reinhardt_query_value_bool_true() {
 		use serde_json::json;
 		let value = json!(true);
-		let sea_value = super::json_to_sea_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value);
 
-		let debug_str = format!("{:?}", sea_value);
+		let debug_str = format!("{:?}", rq_value);
 		assert!(debug_str.contains("true") || debug_str.contains("Bool"));
 	}
 
 	#[test]
-	fn test_json_to_sea_value_bool_false() {
+	fn test_json_to_reinhardt_query_value_bool_false() {
 		use serde_json::json;
 		let value = json!(false);
-		let sea_value = super::json_to_sea_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value);
 
-		let debug_str = format!("{:?}", sea_value);
+		let debug_str = format!("{:?}", rq_value);
 		assert!(debug_str.contains("false") || debug_str.contains("Bool"));
 	}
 
 	#[test]
-	fn test_json_to_sea_value_null() {
+	fn test_json_to_reinhardt_query_value_null() {
 		use serde_json::json;
 		let value = json!(null);
-		let sea_value = super::json_to_sea_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value);
 
 		// Should produce some value (null representation)
-		let debug_str = format!("{:?}", sea_value);
+		let debug_str = format!("{:?}", rq_value);
 		assert!(!debug_str.is_empty());
 	}
 
 	#[test]
-	fn test_json_to_sea_value_array() {
+	fn test_json_to_reinhardt_query_value_array() {
 		use serde_json::json;
 		let value = json!([1, 2, 3]);
-		let sea_value = super::json_to_sea_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value);
 
 		// Array should be serialized as JSON string
-		let debug_str = format!("{:?}", sea_value);
+		let debug_str = format!("{:?}", rq_value);
 		assert!(!debug_str.is_empty());
 	}
 
 	#[test]
-	fn test_json_to_sea_value_object() {
+	fn test_json_to_reinhardt_query_value_object() {
 		use serde_json::json;
 		let value = json!({"name": "test", "count": 42});
-		let sea_value = super::json_to_sea_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value);
 
 		// Object should be serialized as JSON string
-		let debug_str = format!("{:?}", sea_value);
+		let debug_str = format!("{:?}", rq_value);
 		assert!(!debug_str.is_empty());
 	}
 
 	#[test]
-	fn test_json_to_sea_value_negative_integer() {
+	fn test_json_to_reinhardt_query_value_negative_integer() {
 		use serde_json::json;
 		let value = json!(-100);
-		let sea_value = super::json_to_sea_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value);
 
-		let debug_str = format!("{:?}", sea_value);
+		let debug_str = format!("{:?}", rq_value);
 		assert!(debug_str.contains("-100") || debug_str.contains("Int"));
 	}
 
 	#[test]
-	fn test_json_to_sea_value_large_integer() {
+	fn test_json_to_reinhardt_query_value_large_integer() {
 		use serde_json::json;
 		let value = json!(9223372036854775807i64); // i64::MAX
-		let sea_value = super::json_to_sea_value(&value);
+		let rq_value = super::json_to_reinhardt_query_value(&value);
 
 		// Should handle large integers
-		let debug_str = format!("{:?}", sea_value);
+		let debug_str = format!("{:?}", rq_value);
 		assert!(!debug_str.is_empty());
 	}
 

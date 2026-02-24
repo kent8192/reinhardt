@@ -443,7 +443,7 @@ cargo run --bin manage runserver --with-pages --static-dir build
 cargo run --bin manage runserver --with-pages --no-spa
 ```
 
-See [examples/local/examples-twitter](../examples/local/examples-twitter) for a complete implementation.
+See [examples/examples-twitter](../examples/examples-twitter) for a complete implementation.
 
 ---
 

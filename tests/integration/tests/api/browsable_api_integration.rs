@@ -58,8 +58,10 @@ fn test_browsable_api_html_response() {
 		"HTML should contain description text, got: {}",
 		&html[..1200.min(html.len())]
 	);
+	// Check endpoint URL - Tera HTML-encodes forward slashes as &#x2F;
+	// so we check for either the raw or encoded version
 	assert!(
-		html.contains("/api/users/"),
+		html.contains("/api/users/") || html.contains("&#x2F;api&#x2F;users&#x2F;"),
 		"HTML should display endpoint URL, got: {}",
 		&html[..1200.min(html.len())]
 	);

@@ -129,8 +129,9 @@ impl WebSocketTestClient {
 	///     .unwrap();
 	/// }
 	/// ```
+	// Fixes #880: URL-encode token to prevent injection via query parameter
 	pub async fn connect_with_query_token(url: &str, token: &str) -> Result<Self, WsError> {
-		let url_with_token = format!("{}?token={}", url, token);
+		let url_with_token = format!("{}?token={}", url, urlencoding::encode(token));
 		Self::connect(&url_with_token).await
 	}
 
@@ -358,8 +359,19 @@ mod tests {
 		let token = "my-token";
 		let expected = "ws://localhost:8080/ws?token=my-token";
 
-		let url_with_token = format!("{}?token={}", url, token);
+		let url_with_token = format!("{}?token={}", url, urlencoding::encode(token));
 		assert_eq!(url_with_token, expected);
+	}
+
+	#[test]
+	fn test_url_with_query_token_special_chars() {
+		let url = "ws://localhost:8080/ws";
+		let token = "token with spaces&special=chars";
+		let url_with_token = format!("{}?token={}", url, urlencoding::encode(token));
+		assert_eq!(
+			url_with_token,
+			"ws://localhost:8080/ws?token=token%20with%20spaces%26special%3Dchars"
+		);
 	}
 
 	#[test]

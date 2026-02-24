@@ -1,5 +1,6 @@
 //! Permission decorator macro
 
+use crate::crate_paths::{get_reinhardt_auth_crate, get_reinhardt_core_crate};
 use crate::permission_macro;
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
@@ -67,7 +68,12 @@ pub(crate) fn permission_required_impl(args: TokenStream, input: ItemFn) -> Resu
 						}
 					}
 				}
-				_ => {}
+				_ => {
+					return Err(Error::new_spanned(
+						&meta,
+						"unknown attribute in permission_required macro",
+					));
+				}
 			}
 		}
 	}
@@ -111,32 +117,38 @@ pub(crate) fn permission_required_impl(args: TokenStream, input: ItemFn) -> Resu
 		})
 		.collect();
 
-	// Generate runtime permission checking code (only if Request parameter exists)
+	// Resolve crate paths dynamically to support different crate naming scenarios
+	let auth_crate = get_reinhardt_auth_crate();
+	let core_crate = get_reinhardt_core_crate();
+
+	// Generate runtime permission checking code (requires Request parameter)
 	let permission_check = if let Some(request_ident) = request_param {
 		quote! {
 			// Runtime permission check using Request parameter
 			// Extract user from request extensions (stored as Arc<dyn PermissionsMixin> by auth middleware)
-			let user = #request_ident.extensions.get::<std::sync::Arc<dyn reinhardt_auth::PermissionsMixin>>()
-				.ok_or_else(|| reinhardt_core::exception::Error::Authorization(
+			let user = #request_ident.extensions.get::<std::sync::Arc<dyn #auth_crate::PermissionsMixin>>()
+				.ok_or_else(|| #core_crate::exception::Error::Authorization(
 					"Authentication required. User not found in request context.".to_string()
 				))?;
 
 			// Check all required permissions
 			let required_permissions = &[#(#perm_checks),*];
 			if !user.has_perms(required_permissions) {
-				return Err(reinhardt_core::exception::Error::Authorization(
+				return Err(#core_crate::exception::Error::Authorization(
 					format!("Permission denied. Required permissions: {}", required_permissions.join(", "))
 				).into());
 			}
 		}
 	} else {
-		// No Request parameter: compile-time validation only
-		// Runtime checking should be performed by middleware or at call site
-		quote! {
-			// Note: Runtime permission checking requires a Request parameter.
-			// Current function has no Request parameter, so permissions are validated at compile-time only.
-			// Ensure authentication middleware is properly configured.
-		}
+		// No Request parameter: emit compile error to prevent silent permission bypass
+		// Security: Functions decorated with #[permission_required] MUST have a Request parameter
+		// for runtime permission enforcement
+		return Err(syn::Error::new_spanned(
+			&input.sig,
+			"#[permission_required] requires a Request parameter for runtime permission checking. \
+			 Add a `request: Request` parameter to this function, or remove the #[permission_required] attribute \
+			 if permission checking is handled elsewhere.",
+		));
 	};
 
 	// Inject permission check into function body

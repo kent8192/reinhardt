@@ -1,0 +1,78 @@
+{# Sidebar navigation macro — renders the full navigation tree for a root section.
+   Usage: {{ macros::sidebar(root_path=root_path, current_url=current_url) }}
+   root_path: Zola section path, e.g. "quickstart/_index.md" or "docs/_index.md"
+   current_url: The current page URL for active-page highlighting
+#}
+{% macro sidebar(root_path, current_url) %}
+{% set root = get_section(path=root_path) %}
+<aside class="sidebar" aria-label="{{ root.title }} navigation">
+	<nav aria-label="{{ root.title }} sections">
+		<ul role="list">
+			{# Weight-based ordering: interleave direct pages and subsections #}
+			{% for w in range(end=100, step_by=10) %}
+				{% for pg in root.pages %}
+					{% if pg.extra.sidebar_weight is defined and pg.extra.sidebar_weight == w %}
+					<li>
+						<a href="{{ pg.path | safe }}"
+							{% if pg.permalink == current_url %}aria-current="page"{% endif %}>
+							{{ pg.title }}
+						</a>
+					</li>
+					{% endif %}
+				{% endfor %}
+				{% for subsection in root.subsections %}
+					{% set sub = get_section(path=subsection) %}
+					{% if sub.extra.sidebar_weight is defined and sub.extra.sidebar_weight == w %}
+					<li>
+						<a href="{{ sub.path | safe }}"
+							{% if sub.permalink == current_url %}aria-current="page"{% endif %}>
+							{{ sub.title }}
+						</a>
+						{% if sub.pages or sub.subsections %}
+						<ul role="list">
+							{# Nested: interleave sub-pages and sub-subsections #}
+							{% for sw in range(end=100, step_by=10) %}
+								{% for subpage in sub.pages %}
+									{% if subpage.extra.sidebar_weight is defined and subpage.extra.sidebar_weight == sw %}
+									<li>
+										<a href="{{ subpage.path | safe }}"
+											{% if subpage.permalink == current_url %}aria-current="page"{% endif %}>
+											{{ subpage.title }}
+										</a>
+									</li>
+									{% endif %}
+								{% endfor %}
+								{% for subsubsection in sub.subsections %}
+									{% set subsub = get_section(path=subsubsection) %}
+									{% if subsub.extra.sidebar_weight is defined and subsub.extra.sidebar_weight == sw %}
+									<li>
+										<a href="{{ subsub.path | safe }}"
+											{% if subsub.permalink == current_url %}aria-current="page"{% endif %}>
+											{{ subsub.title }}
+										</a>
+										{% if subsub.pages %}
+										<ul role="list">
+											{% for ssp in subsub.pages | sort(attribute="extra.sidebar_weight") %}
+											<li>
+												<a href="{{ ssp.path | safe }}"
+													{% if ssp.permalink == current_url %}aria-current="page"{% endif %}>
+													{{ ssp.title }}
+												</a>
+											</li>
+											{% endfor %}
+										</ul>
+										{% endif %}
+									</li>
+									{% endif %}
+								{% endfor %}
+							{% endfor %}
+						</ul>
+						{% endif %}
+					</li>
+					{% endif %}
+				{% endfor %}
+			{% endfor %}
+		</ul>
+	</nav>
+</aside>
+{% endmacro sidebar %}

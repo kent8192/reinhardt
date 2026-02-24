@@ -2,8 +2,8 @@
 //!
 //! Loads migrations from the compile-time global registry using `linkme`.
 
-use super::super::registry::{MigrationRegistry, global_registry};
 use super::{Migration, MigrationError, MigrationSource, Result};
+use crate::migrations::registry::{MigrationRegistry, global_registry};
 use async_trait::async_trait;
 
 /// Migration source that loads from the global registry

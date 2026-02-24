@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="{{ lang | default(value='en') }}" data-theme="light">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>{% block title %}{{ config.title }}{% endblock %} — Reinhardt&#8482;</title>
+	<meta name="description" content="{% block description %}{{ config.description }}{% endblock %}">
+	<meta name="theme-color" content="#ce422b" id="meta-theme-color">
+	<link rel="canonical" href="{{ current_url | safe }}">
+
+	{# OGP #}
+	<meta property="og:type" content="website">
+	<meta property="og:site_name" content="Reinhardt&#8482;">
+	<meta property="og:title" content="{% block og_title %}{{ config.title }}{% endblock %} — Reinhardt&#8482;">
+	<meta property="og:description" content="{% block og_description %}{{ config.description }}{% endblock %}">
+	<meta property="og:image" content="{{ config.extra.og_image }}">
+	<meta property="og:url" content="{{ current_url | safe }}">
+	<meta property="og:locale" content="en_US">
+
+	{# Twitter Card #}
+	<meta name="twitter:card" content="summary_large_image">
+	<meta name="twitter:title" content="{% block twitter_title %}{{ config.title }}{% endblock %} — Reinhardt&#8482;">
+	<meta name="twitter:description" content="{% block twitter_description %}{{ config.description }}{% endblock %}">
+	<meta name="twitter:image" content="{{ config.extra.og_image }}">
+
+	<link rel="sitemap" type="application/xml" href="/sitemap.xml">
+	{# Favicon #}
+	<link rel="icon" href="/favicon.ico" sizes="any">
+	<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+	<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+	<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+	<link rel="stylesheet" href="/style.css">
+
+	{# Web Fonts #}
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+	{# highlight.js — light/dark themes #}
+	<link id="hljs-light" rel="stylesheet"
+				href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github.min.css"
+				integrity="sha384-eFTL69TLRZTkNfYZOLM+G04821K1qZao/4QLJbet1pP4tcF+fdXq/9CdqAbWRl/L"
+				crossorigin="anonymous">
+	<link id="hljs-dark" rel="stylesheet"
+				href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css"
+				integrity="sha384-wH75j6z1lH97ZOpMOInqhgKzFkAInZPPSPlZpYKYTOqsaizPvhQZmAtLcPKXpLyH"
+				crossorigin="anonymous"
+				disabled>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"
+					integrity="sha384-RH2xi4eIQ/gjtbs9fUXM68sLSi99C7ZWBRX1vDrVv6GQXRibxXLbwO2NGZB74MbU"
+					crossorigin="anonymous"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/languages/rust.min.js"
+					integrity="sha384-kENps59cKQW5DV3vOEzpSp6tfGzWGpPYKz748i4gGziVSjieRtupNNu/WEwG3s8n"
+					crossorigin="anonymous"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/languages/toml.min.js"
+					integrity="sha384-ZSs6LKr2GoUPDyHrN+rCQgyHL1yUyok5xMniSrgeRG7rUvA6vTmxronM1eZOfjgz"
+					crossorigin="anonymous"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/languages/bash.min.js"
+					integrity="sha384-BbT8tZtvkh8HPXIvL5RtzuljBwI3gR5KIdYxZyYSyI5C/+KNAGdzAiexvmxuroag"
+					crossorigin="anonymous"></script>
+
+	{# Prevent FOUC: apply saved/system theme before paint #}
+	<script>
+	(function(){
+		var s=localStorage.getItem('rw-theme');
+		var d=window.matchMedia('(prefers-color-scheme:dark)').matches;
+		if(s==='dark'||(!s&&d)){
+			document.documentElement.setAttribute('data-theme','dark');
+		}
+	})();
+	</script>
+</head>
+<body>
+	<a href="#main-content" class="skip-link">Skip to main content</a>
+
+	<header class="site-header" role="banner">
+		<nav class="nav-main" aria-label="Main navigation">
+			<a class="nav-brand" href="/" aria-label="Reinhardt home">
+				<img src="/logo.png" alt="" width="28" height="28" aria-hidden="true">
+				<span>Reinhardt&#8482;</span>
+			</a>
+			<button class="hamburger" type="button"
+							aria-expanded="false" aria-controls="nav-links"
+							aria-label="Toggle navigation">
+				<span class="hamburger-bar"></span>
+				<span class="hamburger-bar"></span>
+				<span class="hamburger-bar"></span>
+			</button>
+			<ul class="nav-links" id="nav-links" role="list">
+				<li><a href="/quickstart/">Quickstart</a></li>
+				<li><a href="/docs/">Docs</a></li>
+				<li><a href="/changelog/">Changelog</a></li>
+				<li>
+					<a href="{{ config.extra.github_repo }}"
+						 target="_blank" rel="noopener noreferrer"
+						 aria-label="View on GitHub (opens in new tab)">
+						GitHub ★
+					</a>
+				</li>
+			</ul>
+			<button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle dark mode">
+				<span aria-hidden="true">☾</span>
+			</button>
+		</nav>
+	</header>
+
+	<main id="main-content">
+		{% block content %}{% endblock %}
+	</main>
+
+	<footer class="site-footer" role="contentinfo">
+		<div class="footer-inner">
+			<p class="footer-legal">
+				&copy; 2025&ndash;2026 Reinhardt Contributors.
+				Reinhardt&trade; is an unregistered trademark of the Reinhardt project contributors.
+			</p>
+			<p class="footer-disclaimer">
+				This software is provided &ldquo;AS IS&rdquo;, without warranty of any kind,
+				express or implied. Not affiliated with the Django Software Foundation,
+				the FastAPI project, or any other referenced projects.
+			</p>
+			<p class="footer-security">
+				Security:
+				<a href="/security/">Report a vulnerability</a>
+				&middot;
+				<a href="{{ config.extra.github_repo }}/security/advisories/new"
+					 target="_blank" rel="noopener noreferrer">
+					GitHub Security Advisories
+				</a>
+			</p>
+			<p class="footer-links">
+				<a href="{{ config.extra.github_repo }}" target="_blank" rel="noopener noreferrer">GitHub</a>
+				&middot;
+				<a href="{{ config.extra.crates_io }}" target="_blank" rel="noopener noreferrer">crates.io</a>
+				&middot;
+				<a href="{{ config.extra.docs_rs }}" target="_blank" rel="noopener noreferrer">docs.rs</a>
+				&middot;
+				BSD-3-Clause
+			</p>
+		</div>
+	</footer>
+
+	<script>
+		(function() {
+			var toggle = document.getElementById('theme-toggle');
+			var html = document.documentElement;
+			var stored = localStorage.getItem('rw-theme');
+			var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+			var metaColor = document.getElementById('meta-theme-color');
+
+			function syncHljsTheme(isDark) {
+				var light = document.getElementById('hljs-light');
+				var dark = document.getElementById('hljs-dark');
+				if (light && dark) {
+					light.disabled = isDark;
+					dark.disabled = !isDark;
+				}
+			}
+
+			function syncToggleIcon(isDark) {
+				var icon = toggle.querySelector('span');
+				if (icon) icon.textContent = isDark ? '\u2600' : '\u263E';
+				toggle.setAttribute('aria-label', isDark ? 'Switch to light mode' : 'Switch to dark mode');
+				if (metaColor) metaColor.setAttribute('content', isDark ? '#0f0f0f' : '#ce422b');
+			}
+
+			var isDark = stored === 'dark' || (!stored && prefersDark);
+			if (isDark) {
+				html.setAttribute('data-theme', 'dark');
+			}
+			syncHljsTheme(isDark);
+			syncToggleIcon(isDark);
+
+			toggle.addEventListener('click', function() {
+				var wasDark = html.getAttribute('data-theme') === 'dark';
+				html.setAttribute('data-theme', wasDark ? 'light' : 'dark');
+				localStorage.setItem('rw-theme', wasDark ? 'light' : 'dark');
+				syncHljsTheme(!wasDark);
+				syncToggleIcon(!wasDark);
+			});
+		})();
+	</script>
+
+	{# highlight.js init + code block enhancements #}
+	<script>
+		document.addEventListener('DOMContentLoaded', function() {
+			document.querySelectorAll('pre code').forEach(function(block) {
+				var wrapper = block.closest('pre');
+				if (!wrapper) return;
+
+				// Detect language from data-lang attribute or class
+				var lang = block.getAttribute('data-lang') || '';
+				if (!lang) {
+					block.classList.forEach(function(cls) {
+						if (cls.startsWith('language-')) lang = cls.replace('language-', '');
+					});
+				}
+
+				// Strip Zola/giallo markup — replace with plain text for highlight.js
+				var plainText = block.textContent;
+				block.textContent = plainText;
+
+				// Remove giallo classes from pre and code
+				wrapper.classList.remove('giallo', 'z-code');
+				block.className = lang ? 'language-' + lang : '';
+
+				// Apply highlight.js
+				hljs.highlightElement(block);
+
+				// Language badge
+				if (lang) {
+					var badge = document.createElement('span');
+					badge.className = 'code-lang-badge';
+					badge.textContent = lang;
+					wrapper.appendChild(badge);
+				}
+
+				// Copy button
+				var copyBtn = document.createElement('button');
+				copyBtn.className = 'code-copy-btn';
+				copyBtn.textContent = 'Copy';
+				copyBtn.setAttribute('aria-label', 'Copy code to clipboard');
+				copyBtn.addEventListener('click', function() {
+					navigator.clipboard.writeText(block.textContent).then(function() {
+						copyBtn.textContent = 'Copied!';
+						setTimeout(function() { copyBtn.textContent = 'Copy'; }, 2000);
+					});
+				});
+				wrapper.appendChild(copyBtn);
+			});
+		});
+	</script>
+	<script>
+		(function() {
+			var btn = document.querySelector('.hamburger');
+			var nav = document.getElementById('nav-links');
+			if (!btn || !nav) return;
+			btn.addEventListener('click', function() {
+				var expanded = btn.getAttribute('aria-expanded') === 'true';
+				btn.setAttribute('aria-expanded', String(!expanded));
+				nav.classList.toggle('nav-open');
+			});
+			document.addEventListener('keydown', function(e) {
+				if (e.key === 'Escape' && nav.classList.contains('nav-open')) {
+					btn.setAttribute('aria-expanded', 'false');
+					nav.classList.remove('nav-open');
+					btn.focus();
+				}
+			});
+			document.addEventListener('click', function(e) {
+				if (!btn.contains(e.target) && !nav.contains(e.target)) {
+					btn.setAttribute('aria-expanded', 'false');
+					nav.classList.remove('nav-open');
+				}
+			});
+		})();
+	</script>
+</body>
+</html>

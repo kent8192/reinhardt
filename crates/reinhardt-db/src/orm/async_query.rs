@@ -11,7 +11,9 @@ use super::types::DatabaseDialect;
 use crate::orm::Model;
 use crate::orm::expressions::Q;
 use crate::orm::query_execution::QueryCompiler;
-use sea_query::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
+use reinhardt_query::prelude::{
+	MySqlQueryBuilder, PostgresQueryBuilder, QueryStatementBuilder, SqliteQueryBuilder,
+};
 use std::marker::PhantomData;
 
 /// Async query builder
@@ -151,9 +153,9 @@ impl<T: Model> AsyncQuery<T> {
 		// Convert statement to SQL string based on dialect
 		match self.compiler.dialect() {
 			DatabaseDialect::PostgreSQL => stmt.to_string(PostgresQueryBuilder),
-			DatabaseDialect::MySQL => stmt.to_string(MysqlQueryBuilder),
+			DatabaseDialect::MySQL => stmt.to_string(MySqlQueryBuilder),
 			DatabaseDialect::SQLite => stmt.to_string(SqliteQueryBuilder),
-			// MSSQL: PostgreSQL builder used as fallback since sea-query lacks MssqlQueryBuilder.
+			// MSSQL: PostgreSQL builder used as fallback since reinhardt-query lacks MssqlQueryBuilder.
 			// Some PostgreSQL-specific syntax may not be compatible with MSSQL.
 			DatabaseDialect::MSSQL => stmt.to_string(PostgresQueryBuilder),
 		}
@@ -345,7 +347,7 @@ mod tests {
 				None,
 			);
 
-			let sql = stmt.to_string(sea_query::SqliteQueryBuilder);
+			let sql = stmt.to_string(reinhardt_query::prelude::SqliteQueryBuilder);
 			assert!(sql.contains("test_model"));
 			assert!(sql.contains("ORDER BY"));
 

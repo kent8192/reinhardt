@@ -26,6 +26,7 @@
 //! For detailed implementation and usage information, see the individual
 //! crate documentation in `reinhardt-contrib`, `reinhardt-tasks`, `reinhardt-core/backends`.
 
+#[cfg(not(target_arch = "wasm32"))]
 pub mod endpoint;
 pub mod exception;
 pub mod messages;
@@ -53,6 +54,9 @@ pub use crate::rate_limit::RateLimitStrategy;
 
 // Re-export common external dependencies
 pub use async_trait::async_trait;
+
+// Re-export tokio only on non-WASM targets
+#[cfg(not(target_arch = "wasm32"))]
 pub use tokio;
 
 // Re-export serde with json as a submodule

@@ -51,6 +51,7 @@ pub use reverse::{
 	VersioningStrategy as ReverseVersioningStrategy,
 };
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 use thiserror::Error as ThisError;
 
 #[derive(Debug, ThisError)]
@@ -707,7 +708,7 @@ impl BaseVersioning for QueryParameterVersioning {
 ///
 /// Extracts version from URL namespace patterns (e.g., /v1/, /v2/)
 /// Now fully implemented with router namespace support
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct NamespaceVersioning {
 	pub default_version: Option<String>,
 	pub allowed_versions: HashSet<String>,
@@ -715,6 +716,21 @@ pub struct NamespaceVersioning {
 	pub pattern: String,
 	/// Namespace prefix (e.g., "api")
 	pub namespace_prefix: Option<String>,
+	/// Cached compiled regex for version extraction
+	compiled_regex: OnceLock<Option<Regex>>,
+}
+
+impl Clone for NamespaceVersioning {
+	fn clone(&self) -> Self {
+		Self {
+			default_version: self.default_version.clone(),
+			allowed_versions: self.allowed_versions.clone(),
+			pattern: self.pattern.clone(),
+			namespace_prefix: self.namespace_prefix.clone(),
+			// Reset compiled_regex so it will be recompiled on first use
+			compiled_regex: OnceLock::new(),
+		}
+	}
 }
 
 impl NamespaceVersioning {
@@ -735,6 +751,7 @@ impl NamespaceVersioning {
 			allowed_versions: HashSet::new(),
 			pattern: "/v{version}/".to_string(),
 			namespace_prefix: None,
+			compiled_regex: OnceLock::new(),
 		}
 	}
 	/// Set the default version to use when no version is found in namespace
@@ -804,6 +821,8 @@ impl NamespaceVersioning {
 	/// ```
 	pub fn with_pattern(mut self, pattern: &str) -> Self {
 		self.pattern = pattern.to_string();
+		// Reset cached regex since the pattern changed
+		self.compiled_regex = OnceLock::new();
 		self
 	}
 }
@@ -843,16 +862,23 @@ impl BaseVersioning for NamespaceVersioning {
 }
 
 impl NamespaceVersioning {
+	/// Get or compile the regex for version extraction from the configured pattern
+	fn get_compiled_regex(&self) -> Option<&Regex> {
+		self.compiled_regex
+			.get_or_init(|| {
+				let regex_pattern = self
+					.pattern
+					.replace("{version}", r"([^/]+)")
+					.replace("/", r"\/");
+				let full_pattern = format!("^{}", regex_pattern);
+				regex::Regex::new(&full_pattern).ok()
+			})
+			.as_ref()
+	}
+
 	/// Extract version from a path using the configured pattern
 	fn extract_version_from_path(&self, path: &str) -> Option<String> {
-		// Convert pattern like "/v{version}/" to regex with capture group
-		let regex_pattern = self
-			.pattern
-			.replace("{version}", r"([^/]+)")
-			.replace("/", r"\/");
-		let full_pattern = format!("^{}", regex_pattern);
-
-		if let Ok(regex) = regex::Regex::new(&full_pattern)
+		if let Some(regex) = self.get_compiled_regex()
 			&& let Some(captures) = regex.captures(path)
 			&& let Some(version_match) = captures.get(1)
 		{
@@ -1095,41 +1121,6 @@ mod tests {
 		assert_eq!(version, "1.0"); // Falls back to default
 	}
 
-	#[tokio::test]
-	#[ignore = "Router integration disabled due to circular dependency"]
-	async fn test_namespace_versioning_router_integration() {
-		use reinhardt_http::{Handler, Response};
-		use reinhardt_urls::routers::{DefaultRouter, Router, path};
-		use std::sync::Arc;
-
-		struct DummyHandler;
-		#[async_trait]
-		impl Handler for DummyHandler {
-			async fn handle(&self, _req: Request) -> Result<Response> {
-				Ok(Response::ok())
-			}
-		}
-
-		let versioning = NamespaceVersioning::new()
-			.with_pattern("/v{version}/")
-			.with_allowed_versions(vec!["1", "2"]);
-
-		let mut router = DefaultRouter::new();
-		let handler = Arc::new(DummyHandler);
-		router.add_route(path("/v1/users/", handler.clone()).with_namespace("v1"));
-		router.add_route(path("/v2/users/", handler).with_namespace("v2"));
-
-		// Test version extraction from router (stub implementation, test ignored)
-		let version = versioning.extract_version_from_router_stub(&(), "/v1/users/");
-		assert_eq!(version, Some("1".to_string()));
-
-		let version = versioning.extract_version_from_router_stub(&(), "/v2/users/");
-		assert_eq!(version, Some("2".to_string()));
-
-		// Test getting available versions (stub implementation, test ignored)
-		let versions = versioning.get_available_versions_from_router_stub(&());
-		assert!(versions.contains(&"1".to_string()));
-		assert!(versions.contains(&"2".to_string()));
-		assert_eq!(versions.len(), 2);
-	}
+	// Note: Router integration test removed to avoid circular dependency with reinhardt-urls.
+	// Router integration tests should be placed in /tests/integration crate.
 }

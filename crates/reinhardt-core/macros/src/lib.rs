@@ -377,7 +377,9 @@ pub fn use_inject(args: TokenStream, input: TokenStream) -> TokenStream {
 pub fn derive_query_fields(input: TokenStream) -> TokenStream {
 	let input = parse_macro_input!(input as syn::DeriveInput);
 
-	derive_query_fields_impl(input).into()
+	derive_query_fields_impl(input)
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
 }
 
 /// Derive macro for automatic OpenAPI schema generation

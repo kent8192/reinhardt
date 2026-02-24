@@ -137,9 +137,27 @@ impl FileSessionBackend {
 	}
 
 	/// Get the file path for a session key
-	fn session_file_path(&self, session_key: &str) -> PathBuf {
-		self.session_dir
-			.join(format!("session_{}.json", session_key))
+	///
+	/// Validates the session key to prevent path traversal attacks,
+	/// since session IDs originate from user-controlled cookies.
+	fn session_file_path(&self, session_key: &str) -> Result<PathBuf, SessionError> {
+		// Validate session key contains only safe characters (alphanumeric, hyphen, underscore)
+		if !session_key
+			.chars()
+			.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+		{
+			return Err(SessionError::CacheError(
+				"Invalid session key: contains unsafe characters".to_string(),
+			));
+		}
+		if session_key.is_empty() {
+			return Err(SessionError::CacheError(
+				"Invalid session key: empty".to_string(),
+			));
+		}
+		Ok(self
+			.session_dir
+			.join(format!("session_{}.json", session_key)))
 	}
 
 	/// Check if a session file has expired based on TTL
@@ -178,7 +196,7 @@ impl SessionBackend for FileSessionBackend {
 	where
 		T: for<'de> Deserialize<'de> + Send,
 	{
-		let file_path = self.session_file_path(session_key);
+		let file_path = self.session_file_path(session_key)?;
 
 		if !file_path.exists() {
 			return Ok(None);
@@ -227,7 +245,7 @@ impl SessionBackend for FileSessionBackend {
 	where
 		T: Serialize + Send + Sync,
 	{
-		let file_path = self.session_file_path(session_key);
+		let file_path = self.session_file_path(session_key)?;
 
 		// Serialize data to JSON value
 		let json_value = serde_json::to_value(data).map_err(|e| {
@@ -269,7 +287,7 @@ impl SessionBackend for FileSessionBackend {
 	}
 
 	async fn delete(&self, session_key: &str) -> Result<(), SessionError> {
-		let file_path = self.session_file_path(session_key);
+		let file_path = self.session_file_path(session_key)?;
 
 		if file_path.exists() {
 			fs::remove_file(&file_path).map_err(|e| {
@@ -281,7 +299,7 @@ impl SessionBackend for FileSessionBackend {
 	}
 
 	async fn exists(&self, session_key: &str) -> Result<bool, SessionError> {
-		let file_path = self.session_file_path(session_key);
+		let file_path = self.session_file_path(session_key)?;
 
 		if !file_path.exists() {
 			return Ok(false);
@@ -591,5 +609,67 @@ mod tests {
 			.delete("nonexistent_session")
 			.await
 			.expect("Failed to delete session");
+	}
+
+	// =================================================================
+	// Path traversal prevention tests (Issue #325)
+	// =================================================================
+
+	#[rstest::rstest]
+	#[case("../../../etc/passwd")]
+	#[case("..%2F..%2Fetc%2Fpasswd")]
+	#[case("foo/../../bar")]
+	#[case("/etc/passwd")]
+	#[case("session/../../../etc/shadow")]
+	#[tokio::test]
+	async fn test_file_backend_rejects_path_traversal_in_load(#[case] malicious_key: &str) {
+		// Arrange
+		let _guard = TestDirGuard::new();
+		let backend = FileSessionBackend::new(Some(_guard.path().to_path_buf()))
+			.expect("Failed to create backend");
+
+		// Act
+		let result: Result<Option<serde_json::Value>, _> = backend.load(malicious_key).await;
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[rstest::rstest]
+	#[case("../../../etc/passwd")]
+	#[case("foo/../bar")]
+	#[case("/absolute/path")]
+	#[tokio::test]
+	async fn test_file_backend_rejects_path_traversal_in_save(#[case] malicious_key: &str) {
+		// Arrange
+		let _guard = TestDirGuard::new();
+		let backend = FileSessionBackend::new(Some(_guard.path().to_path_buf()))
+			.expect("Failed to create backend");
+		let data = serde_json::json!({"malicious": true});
+
+		// Act
+		let result = backend.save(malicious_key, &data, None).await;
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[rstest::rstest]
+	#[case("valid_session_key")]
+	#[case("session-with-hyphens")]
+	#[case("session123")]
+	#[tokio::test]
+	async fn test_file_backend_allows_valid_session_keys(#[case] valid_key: &str) {
+		// Arrange
+		let _guard = TestDirGuard::new();
+		let backend = FileSessionBackend::new(Some(_guard.path().to_path_buf()))
+			.expect("Failed to create backend");
+		let data = serde_json::json!({"valid": true});
+
+		// Act
+		let save_result = backend.save(valid_key, &data, None).await;
+
+		// Assert
+		assert!(save_result.is_ok());
 	}
 }

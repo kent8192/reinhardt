@@ -197,8 +197,8 @@ impl DatabaseConnection {
 				))
 			})?;
 
-		// Create the database
-		let create_sql = format!("CREATE DATABASE \"{}\"", db_name);
+		// Create the database (escape double quotes to prevent SQL injection)
+		let create_sql = format!("CREATE DATABASE \"{}\"", db_name.replace('"', "\"\""));
 		sqlx::query(&create_sql)
 			.execute(&admin_pool)
 			.await
@@ -528,7 +528,7 @@ impl DatabaseConnection {
 								password: db_map
 									.get("password")
 									.and_then(|v| v.as_str())
-									.map(|s| s.to_string()),
+									.map(reinhardt_conf::settings::secret_types::SecretString::new),
 								host: db_map
 									.get("host")
 									.and_then(|v| v.as_str())
@@ -677,5 +677,69 @@ impl DatabaseConnection {
 			.as_any()
 			.downcast_ref::<super::dialect::MySqlBackend>()
 			.map(|backend| backend.pool().clone())
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use rstest::rstest;
+
+	/// Helper to build a CREATE DATABASE SQL statement with proper identifier escaping.
+	/// Mirrors the escaping logic used in `connect_postgres_or_create_with_pool_size`.
+	fn build_create_database_sql(db_name: &str) -> String {
+		format!("CREATE DATABASE \"{}\"", db_name.replace('"', "\"\""))
+	}
+
+	#[rstest]
+	fn test_create_database_sql_normal_name() {
+		// Arrange
+		let db_name = "my_database";
+
+		// Act
+		let sql = build_create_database_sql(db_name);
+
+		// Assert
+		assert_eq!(sql, "CREATE DATABASE \"my_database\"");
+	}
+
+	#[rstest]
+	fn test_create_database_sql_injection_with_double_quotes() {
+		// Arrange: attacker tries to break out with double quotes
+		let db_name = "test\"; DROP TABLE users; --";
+
+		// Act
+		let sql = build_create_database_sql(db_name);
+
+		// Assert: double quotes are escaped by doubling
+		assert_eq!(sql, "CREATE DATABASE \"test\"\"; DROP TABLE users; --\"");
+		// The escaped SQL treats the entire string as a single identifier,
+		// preventing the attacker from injecting additional SQL statements
+	}
+
+	#[rstest]
+	fn test_create_database_sql_injection_with_multiple_quotes() {
+		// Arrange: attacker uses multiple double-quote escape attempts
+		let db_name = "db\"\"injection";
+
+		// Act
+		let sql = build_create_database_sql(db_name);
+
+		// Assert: each quote is doubled
+		assert_eq!(sql, "CREATE DATABASE \"db\"\"\"\"injection\"");
+	}
+
+	#[cfg(feature = "postgres")]
+	#[rstest]
+	fn test_parse_postgres_url_extracts_db_name() {
+		// Arrange
+		let url = "postgres://user:pass@localhost:5432/testdb";
+
+		// Act
+		let (admin_url, db_name) =
+			super::DatabaseConnection::parse_postgres_url_for_creation(url).unwrap();
+
+		// Assert
+		assert_eq!(db_name, "testdb");
+		assert_eq!(admin_url, "postgres://user:pass@localhost:5432/postgres");
 	}
 }

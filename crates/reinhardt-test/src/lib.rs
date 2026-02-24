@@ -182,8 +182,11 @@ pub use debug::{DebugEntry, DebugPanel, DebugToolbar, SqlQuery, TimingInfo};
 pub use factory::{APIRequestFactory, RequestBuilder};
 pub use fixtures::{
 	Factory, FactoryBuilder, FixtureError, FixtureLoader, FixtureResult, api_client_from_url,
-	random_test_key, test_config_value,
+	random_test_key, test_config_value, test_server_guard,
 };
+
+// Re-export commonly used types for testing
+pub use reinhardt_urls::routers::ServerRouter;
 
 #[cfg(feature = "testcontainers")]
 pub use fixtures::{postgres_container, redis_container};

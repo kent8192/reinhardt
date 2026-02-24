@@ -261,8 +261,9 @@ pub fn attach_events_recursive(
 			for binding in bindings {
 				if binding.element_id == element_id {
 					if let Some(handler) = handlers.get(&binding.event_type) {
-						let event_type = event_type_from_string(&binding.event_type);
-						attach_event(element, &event_type, handler.clone(), registry)?;
+						if let Some(event_type) = event_type_from_string(&binding.event_type) {
+							attach_event(element, &event_type, handler.clone(), registry)?;
+						}
 					}
 				}
 			}
@@ -328,57 +329,67 @@ pub(super) fn attach_events(
 ) -> Result<(), EventAttachError> {
 	for binding in bindings {
 		if let Some(handler) = handlers.get(&binding.event_type) {
-			let event_type = event_type_from_string(&binding.event_type);
-			attach_event(element, &event_type, handler.clone(), registry)?;
+			if let Some(event_type) = event_type_from_string(&binding.event_type) {
+				attach_event(element, &event_type, handler.clone(), registry)?;
+			}
 		}
 	}
 	Ok(())
 }
 
 /// Converts a string to an EventType.
+///
+/// Returns `None` if the event type string is not recognized. Unknown event
+/// types are logged as warnings rather than silently falling back to a
+/// default value.
 #[cfg(target_arch = "wasm32")]
-fn event_type_from_string(s: &str) -> EventType {
+fn event_type_from_string(s: &str) -> Option<EventType> {
 	match s {
 		// Mouse events
-		"click" => EventType::Click,
-		"dblclick" => EventType::DblClick,
-		"mousedown" => EventType::MouseDown,
-		"mouseup" => EventType::MouseUp,
-		"mouseenter" => EventType::MouseEnter,
-		"mouseleave" => EventType::MouseLeave,
-		"mousemove" => EventType::MouseMove,
-		"mouseover" => EventType::MouseOver,
-		"mouseout" => EventType::MouseOut,
+		"click" => Some(EventType::Click),
+		"dblclick" => Some(EventType::DblClick),
+		"mousedown" => Some(EventType::MouseDown),
+		"mouseup" => Some(EventType::MouseUp),
+		"mouseenter" => Some(EventType::MouseEnter),
+		"mouseleave" => Some(EventType::MouseLeave),
+		"mousemove" => Some(EventType::MouseMove),
+		"mouseover" => Some(EventType::MouseOver),
+		"mouseout" => Some(EventType::MouseOut),
 		// Keyboard events
-		"keydown" => EventType::KeyDown,
-		"keyup" => EventType::KeyUp,
-		"keypress" => EventType::KeyPress,
+		"keydown" => Some(EventType::KeyDown),
+		"keyup" => Some(EventType::KeyUp),
+		"keypress" => Some(EventType::KeyPress),
 		// Form events
-		"input" => EventType::Input,
-		"change" => EventType::Change,
-		"submit" => EventType::Submit,
-		"focus" => EventType::Focus,
-		"blur" => EventType::Blur,
+		"input" => Some(EventType::Input),
+		"change" => Some(EventType::Change),
+		"submit" => Some(EventType::Submit),
+		"focus" => Some(EventType::Focus),
+		"blur" => Some(EventType::Blur),
 		// Touch events
-		"touchstart" => EventType::TouchStart,
-		"touchend" => EventType::TouchEnd,
-		"touchmove" => EventType::TouchMove,
-		"touchcancel" => EventType::TouchCancel,
+		"touchstart" => Some(EventType::TouchStart),
+		"touchend" => Some(EventType::TouchEnd),
+		"touchmove" => Some(EventType::TouchMove),
+		"touchcancel" => Some(EventType::TouchCancel),
 		// Drag events
-		"dragstart" => EventType::DragStart,
-		"drag" => EventType::Drag,
-		"drop" => EventType::Drop,
-		"dragenter" => EventType::DragEnter,
-		"dragleave" => EventType::DragLeave,
-		"dragover" => EventType::DragOver,
-		"dragend" => EventType::DragEnd,
+		"dragstart" => Some(EventType::DragStart),
+		"drag" => Some(EventType::Drag),
+		"drop" => Some(EventType::Drop),
+		"dragenter" => Some(EventType::DragEnter),
+		"dragleave" => Some(EventType::DragLeave),
+		"dragover" => Some(EventType::DragOver),
+		"dragend" => Some(EventType::DragEnd),
 		// Other events
-		"load" => EventType::Load,
-		"error" => EventType::Error,
-		"scroll" => EventType::Scroll,
-		"resize" => EventType::Resize,
-		// Unknown events default to Click (should not happen in practice)
-		_ => EventType::Click,
+		"load" => Some(EventType::Load),
+		"error" => Some(EventType::Error),
+		"scroll" => Some(EventType::Scroll),
+		"resize" => Some(EventType::Resize),
+		unknown => {
+			crate::warn_log!(
+				"Unknown event type '{}' encountered during hydration, skipping",
+				unknown
+			);
+			None
+		}
 	}
 }
 

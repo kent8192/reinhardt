@@ -135,14 +135,23 @@ pub enum TransactionState {
 }
 
 /// Savepoint for nested transactions
+///
+/// Savepoint names are validated at construction to prevent SQL injection.
+/// Only alphanumeric characters and underscores are allowed (must not start
+/// with a digit). SQL output uses quoted identifiers for defense-in-depth.
 #[derive(Debug, Clone)]
 pub struct Savepoint {
-	pub name: String,
+	name: String,
 	pub depth: usize,
 }
 
 impl Savepoint {
 	/// Create a new savepoint with name and depth
+	///
+	/// # Panics
+	///
+	/// Panics if the name contains invalid characters. Only alphanumeric
+	/// characters and underscores are allowed (must not start with a digit).
 	///
 	/// # Examples
 	///
@@ -150,15 +159,20 @@ impl Savepoint {
 	/// use reinhardt_db::orm::transaction::Savepoint;
 	///
 	/// let sp = Savepoint::new("my_savepoint", 1);
-	/// assert_eq!(sp.name, "my_savepoint");
+	/// assert_eq!(sp.name(), "my_savepoint");
 	/// assert_eq!(sp.depth, 1);
 	/// ```
 	pub fn new(name: impl Into<String>, depth: usize) -> Self {
-		Self {
-			name: name.into(),
-			depth,
-		}
+		let name = name.into();
+		validate_savepoint_name(&name).unwrap_or_else(|e| panic!("Invalid savepoint name: {}", e));
+		Self { name, depth }
 	}
+
+	/// Get the savepoint name
+	pub fn name(&self) -> &str {
+		&self.name
+	}
+
 	/// Generate SQL for creating this savepoint
 	///
 	/// # Examples
@@ -167,11 +181,12 @@ impl Savepoint {
 	/// use reinhardt_db::orm::transaction::Savepoint;
 	///
 	/// let sp = Savepoint::new("checkpoint_1", 2);
-	/// assert_eq!(sp.to_sql(), "SAVEPOINT checkpoint_1");
+	/// assert_eq!(sp.to_sql(), r#"SAVEPOINT "checkpoint_1""#);
 	/// ```
 	pub fn to_sql(&self) -> String {
-		format!("SAVEPOINT {}", self.name)
+		format!("SAVEPOINT \"{}\"", self.name.replace('"', "\"\""))
 	}
+
 	/// Generate SQL for releasing this savepoint
 	///
 	/// # Examples
@@ -180,11 +195,12 @@ impl Savepoint {
 	/// use reinhardt_db::orm::transaction::Savepoint;
 	///
 	/// let sp = Savepoint::new("checkpoint_1", 2);
-	/// assert_eq!(sp.release_sql(), "RELEASE SAVEPOINT checkpoint_1");
+	/// assert_eq!(sp.release_sql(), r#"RELEASE SAVEPOINT "checkpoint_1""#);
 	/// ```
 	pub fn release_sql(&self) -> String {
-		format!("RELEASE SAVEPOINT {}", self.name)
+		format!("RELEASE SAVEPOINT \"{}\"", self.name.replace('"', "\"\""))
 	}
+
 	/// Generate SQL for rolling back to this savepoint
 	///
 	/// # Examples
@@ -193,11 +209,42 @@ impl Savepoint {
 	/// use reinhardt_db::orm::transaction::Savepoint;
 	///
 	/// let sp = Savepoint::new("checkpoint_1", 2);
-	/// assert_eq!(sp.rollback_sql(), "ROLLBACK TO SAVEPOINT checkpoint_1");
+	/// assert_eq!(sp.rollback_sql(), r#"ROLLBACK TO SAVEPOINT "checkpoint_1""#);
 	/// ```
 	pub fn rollback_sql(&self) -> String {
-		format!("ROLLBACK TO SAVEPOINT {}", self.name)
+		format!(
+			"ROLLBACK TO SAVEPOINT \"{}\"",
+			self.name.replace('"', "\"\"")
+		)
 	}
+}
+
+/// Validate a savepoint name to prevent SQL injection.
+///
+/// Only alphanumeric characters and underscores are allowed.
+/// The name must not be empty and must not start with a digit.
+fn validate_savepoint_name(name: &str) -> Result<(), String> {
+	if name.is_empty() {
+		return Err("Savepoint name cannot be empty".to_string());
+	}
+
+	if !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+		return Err(format!(
+			"Savepoint name '{}' contains invalid characters. Only alphanumeric characters and underscores are allowed",
+			name
+		));
+	}
+
+	if let Some(first_char) = name.chars().next()
+		&& first_char.is_numeric()
+	{
+		return Err(format!(
+			"Savepoint name '{}' cannot start with a number",
+			name
+		));
+	}
+
+	Ok(())
 }
 
 /// Transaction manager
@@ -465,7 +512,7 @@ impl Transaction {
 	/// tx.begin().unwrap();
 	///
 	/// let sql = tx.savepoint("my_checkpoint").unwrap();
-	/// assert_eq!(sql, "SAVEPOINT my_checkpoint");
+	/// assert_eq!(sql, r#"SAVEPOINT "my_checkpoint""#);
 	/// ```
 	pub fn savepoint(&mut self, name: impl Into<String>) -> Result<String, String> {
 		let state = self.state.lock().map_err(|e| e.to_string())?;
@@ -498,12 +545,12 @@ impl Transaction {
 	/// tx.savepoint("my_checkpoint").unwrap();
 	///
 	/// let sql = tx.release_savepoint("my_checkpoint").unwrap();
-	/// assert_eq!(sql, "RELEASE SAVEPOINT my_checkpoint");
+	/// assert_eq!(sql, r#"RELEASE SAVEPOINT "my_checkpoint""#);
 	/// ```
 	pub fn release_savepoint(&mut self, name: &str) -> Result<String, String> {
 		let mut savepoints = self.savepoints.lock().map_err(|e| e.to_string())?;
 
-		if let Some(pos) = savepoints.iter().position(|sp| sp.name == name) {
+		if let Some(pos) = savepoints.iter().position(|sp| sp.name() == name) {
 			let savepoint = savepoints.remove(pos);
 			Ok(savepoint.release_sql())
 		} else {
@@ -522,12 +569,12 @@ impl Transaction {
 	/// tx.savepoint("my_checkpoint").unwrap();
 	///
 	/// let sql = tx.rollback_to_savepoint("my_checkpoint").unwrap();
-	/// assert_eq!(sql, "ROLLBACK TO SAVEPOINT my_checkpoint");
+	/// assert_eq!(sql, r#"ROLLBACK TO SAVEPOINT "my_checkpoint""#);
 	/// ```
 	pub fn rollback_to_savepoint(&mut self, name: &str) -> Result<String, String> {
 		let savepoints = self.savepoints.lock().map_err(|e| e.to_string())?;
 
-		if let Some(savepoint) = savepoints.iter().find(|sp| sp.name == name) {
+		if let Some(savepoint) = savepoints.iter().find(|sp| sp.name() == name) {
 			Ok(savepoint.rollback_sql())
 		} else {
 			Err(format!("Savepoint '{}' not found", name))
@@ -1465,7 +1512,7 @@ mod tests {
 		let mut tx = Transaction::new();
 		tx.begin().unwrap();
 		let sql = tx.begin().unwrap();
-		assert!(sql.contains("SAVEPOINT sp_2"));
+		assert!(sql.contains("SAVEPOINT \"sp_2\""));
 		assert_eq!(tx.depth(), 2);
 	}
 
@@ -1503,7 +1550,7 @@ mod tests {
 		let mut tx = Transaction::new();
 		tx.begin().unwrap();
 		let sql = tx.savepoint("my_savepoint").unwrap();
-		assert_eq!(sql, "SAVEPOINT my_savepoint");
+		assert_eq!(sql, r#"SAVEPOINT "my_savepoint""#);
 	}
 
 	#[test]
@@ -1512,7 +1559,7 @@ mod tests {
 		tx.begin().unwrap();
 		tx.savepoint("my_savepoint").unwrap();
 		let sql = tx.release_savepoint("my_savepoint").unwrap();
-		assert_eq!(sql, "RELEASE SAVEPOINT my_savepoint");
+		assert_eq!(sql, r#"RELEASE SAVEPOINT "my_savepoint""#);
 	}
 
 	#[test]
@@ -1521,7 +1568,7 @@ mod tests {
 		tx.begin().unwrap();
 		tx.savepoint("my_savepoint").unwrap();
 		let sql = tx.rollback_to_savepoint("my_savepoint").unwrap();
-		assert_eq!(sql, "ROLLBACK TO SAVEPOINT my_savepoint");
+		assert_eq!(sql, r#"ROLLBACK TO SAVEPOINT "my_savepoint""#);
 	}
 
 	#[test]
@@ -1722,7 +1769,7 @@ mod tests {
 
 		// Begin nested transaction (creates savepoint)
 		let savepoint_sql = tx.begin().unwrap();
-		assert!(savepoint_sql.contains("SAVEPOINT sp_2"));
+		assert!(savepoint_sql.contains("SAVEPOINT \"sp_2\""));
 		assert_eq!(tx.depth(), 2);
 
 		// Rollback to savepoint

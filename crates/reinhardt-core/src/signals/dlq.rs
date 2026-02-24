@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 //! Dead Letter Queue (DLQ) system for handling failed signals with retry logic
 //!
 //! This module provides functionality to handle failed signal emissions by queuing them
@@ -521,6 +523,26 @@ mod tests {
 	use crate::signals::SignalName;
 	use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+	/// Polls a condition until it returns true or timeout is reached.
+	async fn poll_until<F, Fut>(
+		timeout: std::time::Duration,
+		interval: std::time::Duration,
+		mut condition: F,
+	) -> Result<(), String>
+	where
+		F: FnMut() -> Fut,
+		Fut: std::future::Future<Output = bool>,
+	{
+		let start = std::time::Instant::now();
+		while start.elapsed() < timeout {
+			if condition().await {
+				return Ok(());
+			}
+			tokio::time::sleep(interval).await;
+		}
+		Err(format!("Timeout after {:?} waiting for condition", timeout))
+	}
+
 	#[derive(Debug, Clone, PartialEq)]
 	struct TestEvent {
 		id: i32,
@@ -614,7 +636,7 @@ mod tests {
 		.unwrap();
 
 		// Poll until initial attempt completes
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(100),
 			Duration::from_millis(10),
 			|| async { attempt_count.load(Ordering::SeqCst) >= 1 },
@@ -626,7 +648,7 @@ mod tests {
 		should_fail.store(false, Ordering::SeqCst);
 
 		// Poll until retry completes
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(300),
 			Duration::from_millis(20),
 			|| async { attempt_count.load(Ordering::SeqCst) >= 2 },
@@ -667,7 +689,7 @@ mod tests {
 		.unwrap();
 
 		// Poll until all retries complete (1 initial + 2 retries = 3 total)
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_secs(1),
 			Duration::from_millis(50),
 			|| async { attempt_count.load(Ordering::SeqCst) >= 3 },
@@ -676,7 +698,7 @@ mod tests {
 		.expect("All retries should complete within 1000ms");
 
 		// Wait for stats to be updated (background task updates stats after final retry)
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_secs(1),
 			Duration::from_millis(50),
 			|| async {

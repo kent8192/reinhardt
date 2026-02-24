@@ -8,7 +8,9 @@
 
 use crate::orm::Model;
 use crate::orm::loading::LoadingStrategy;
-use sea_query::{Alias, Expr, ExprTrait, Query, SelectStatement};
+use reinhardt_query::prelude::{
+	Alias, ColumnRef, Expr, ExprTrait, Order, Query, QueryStatementBuilder, SelectStatement,
+};
 use std::marker::PhantomData;
 
 /// Relationship type - defines cardinality
@@ -360,13 +362,13 @@ impl<P: Model, C: Model> Relationship<P, C> {
 	pub fn loading_strategy(&self) -> LoadingStrategy {
 		self.loading_strategy
 	}
-	/// Generate SeaQuery statement for loading related records
+	/// Generate reinhardt-query statement for loading related records
 	///
 	/// Returns a SelectStatement for Lazy/Selectin/Dynamic strategies,
 	/// or None for Joined (handled differently), NoLoad, WriteOnly strategies.
 	pub fn load_query<V>(&self, parent_id: V) -> Option<SelectStatement>
 	where
-		V: Into<sea_query::Value>,
+		V: Into<reinhardt_query::value::Value>,
 	{
 		let child_table = C::table_name();
 		let fk = self.foreign_key.as_deref().unwrap_or("id");
@@ -380,7 +382,7 @@ impl<P: Model, C: Model> Relationship<P, C> {
 			LoadingStrategy::Lazy | LoadingStrategy::Selectin | LoadingStrategy::Dynamic => {
 				let mut stmt = Query::select();
 				stmt.from(Alias::new(child_table))
-					.column(sea_query::Asterisk)
+					.column(ColumnRef::Asterisk)
 					.and_where(Expr::col(Alias::new(fk)).eq(parent_id.into()));
 
 				if let Some(order) = &self.order_by {
@@ -398,7 +400,7 @@ impl<P: Model, C: Model> Relationship<P, C> {
 				// IN-subquery that incorporates the parent's WHERE clause.
 				let mut stmt = Query::select();
 				stmt.from(Alias::new(child_table))
-					.column(sea_query::Asterisk);
+					.column(ColumnRef::Asterisk);
 				Some(stmt.to_owned())
 			}
 			LoadingStrategy::Raise => {
@@ -414,7 +416,7 @@ impl<P: Model, C: Model> Relationship<P, C> {
 	/// - "created_at" -> [(created_at, Asc)]
 	/// - "created_at DESC" -> [(created_at, Desc)]
 	/// - "name ASC, created_at DESC" -> [(name, Asc), (created_at, Desc)]
-	fn parse_order_by(order_by: &str) -> Vec<(String, sea_query::Order)> {
+	fn parse_order_by(order_by: &str) -> Vec<(String, Order)> {
 		order_by
 			.split(',')
 			.filter_map(|part| {
@@ -425,12 +427,12 @@ impl<P: Model, C: Model> Relationship<P, C> {
 
 				if trimmed.ends_with(" DESC") || trimmed.ends_with(" desc") {
 					let col = trimmed[..trimmed.len() - 5].trim();
-					Some((col.to_string(), sea_query::Order::Desc))
+					Some((col.to_string(), Order::Desc))
 				} else if trimmed.ends_with(" ASC") || trimmed.ends_with(" asc") {
 					let col = trimmed[..trimmed.len() - 4].trim();
-					Some((col.to_string(), sea_query::Order::Asc))
+					Some((col.to_string(), Order::Asc))
 				} else {
-					Some((trimmed.to_string(), sea_query::Order::Asc))
+					Some((trimmed.to_string(), Order::Asc))
 				}
 			})
 			.collect()
@@ -476,30 +478,32 @@ impl<P: Model, C: Model> Relationship<P, C> {
 		// Build main query: SELECT * FROM child_table WHERE foreign_key IN (subquery)
 		let mut stmt = Query::select();
 		stmt.from(Alias::new(child_table))
-			.column(sea_query::Asterisk)
-			.and_where(sea_query::Expr::col(Alias::new(fk)).in_subquery(parent_subquery));
+			.column(ColumnRef::Asterisk)
+			.and_where(Expr::col(Alias::new(fk)).in_subquery(parent_subquery));
 
 		// Convert to SQL string using PostgreSQL dialect (can be adjusted based on context)
-		use sea_query::PostgresQueryBuilder;
+		use reinhardt_query::prelude::PostgresQueryBuilder;
 		Some(stmt.to_string(PostgresQueryBuilder))
 	}
 
 	/// Generate SQL string for loading (convenience method)
 	///
-	/// This converts the SeaQuery statement to SQL string.
+	/// This converts the reinhardt-query statement to SQL string.
 	/// Use this only when you need the final SQL string.
 	pub fn load_sql<V>(&self, parent_id: V, dialect: super::types::DatabaseDialect) -> String
 	where
-		V: Into<sea_query::Value>,
+		V: Into<reinhardt_query::value::Value>,
 	{
-		use sea_query::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
+		use reinhardt_query::prelude::{
+			MySqlQueryBuilder, PostgresQueryBuilder, QueryStatementBuilder, SqliteQueryBuilder,
+		};
 
 		if let Some(stmt) = self.load_query(parent_id) {
 			match dialect {
 				super::types::DatabaseDialect::PostgreSQL => stmt.to_string(PostgresQueryBuilder),
-				super::types::DatabaseDialect::MySQL => stmt.to_string(MysqlQueryBuilder),
+				super::types::DatabaseDialect::MySQL => stmt.to_string(MySqlQueryBuilder),
 				super::types::DatabaseDialect::SQLite => stmt.to_string(SqliteQueryBuilder),
-				// MSSQL: PostgreSQL builder used as fallback since sea-query lacks MssqlQueryBuilder.
+				// MSSQL: PostgreSQL builder used as fallback since reinhardt-query lacks MssqlQueryBuilder.
 				// Some PostgreSQL-specific syntax may not be compatible with MSSQL.
 				super::types::DatabaseDialect::MSSQL => stmt.to_string(PostgresQueryBuilder),
 			}
@@ -691,7 +695,7 @@ mod tests {
 
 	#[test]
 	fn test_lazy_select_query() {
-		use sea_query::SqliteQueryBuilder;
+		use reinhardt_query::prelude::{QueryStatementBuilder, SqliteQueryBuilder};
 
 		let rel = Relationship::<User, Post>::new("posts", RelationshipType::OneToMany)
 			.with_foreign_key("user_id")
@@ -908,7 +912,7 @@ mod tests {
 		let parsed = Relationship::<User, Post>::parse_order_by("created_at");
 		assert_eq!(parsed.len(), 1);
 		assert_eq!(parsed[0].0, "created_at");
-		assert_eq!(parsed[0].1, sea_query::Order::Asc);
+		assert_eq!(parsed[0].1, Order::Asc);
 	}
 
 	#[test]
@@ -916,7 +920,7 @@ mod tests {
 		let parsed = Relationship::<User, Post>::parse_order_by("created_at DESC");
 		assert_eq!(parsed.len(), 1);
 		assert_eq!(parsed[0].0, "created_at");
-		assert_eq!(parsed[0].1, sea_query::Order::Desc);
+		assert_eq!(parsed[0].1, Order::Desc);
 	}
 
 	#[test]
@@ -924,7 +928,7 @@ mod tests {
 		let parsed = Relationship::<User, Post>::parse_order_by("name ASC");
 		assert_eq!(parsed.len(), 1);
 		assert_eq!(parsed[0].0, "name");
-		assert_eq!(parsed[0].1, sea_query::Order::Asc);
+		assert_eq!(parsed[0].1, Order::Asc);
 	}
 
 	#[test]
@@ -932,18 +936,18 @@ mod tests {
 		let parsed = Relationship::<User, Post>::parse_order_by("name ASC, created_at DESC");
 		assert_eq!(parsed.len(), 2);
 		assert_eq!(parsed[0].0, "name");
-		assert_eq!(parsed[0].1, sea_query::Order::Asc);
+		assert_eq!(parsed[0].1, Order::Asc);
 		assert_eq!(parsed[1].0, "created_at");
-		assert_eq!(parsed[1].1, sea_query::Order::Desc);
+		assert_eq!(parsed[1].1, Order::Desc);
 	}
 
 	#[test]
 	fn test_parse_order_by_case_insensitive() {
 		let parsed_upper = Relationship::<User, Post>::parse_order_by("name desc");
-		assert_eq!(parsed_upper[0].1, sea_query::Order::Desc);
+		assert_eq!(parsed_upper[0].1, Order::Desc);
 
 		let parsed_lower = Relationship::<User, Post>::parse_order_by("name asc");
-		assert_eq!(parsed_lower[0].1, sea_query::Order::Asc);
+		assert_eq!(parsed_lower[0].1, Order::Asc);
 	}
 
 	#[test]
@@ -1006,7 +1010,7 @@ mod tests {
 
 	#[test]
 	fn test_order_by_in_query() {
-		use sea_query::SqliteQueryBuilder;
+		use reinhardt_query::prelude::{QueryStatementBuilder, SqliteQueryBuilder};
 
 		let rel = Relationship::<User, Post>::new("posts", RelationshipType::OneToMany)
 			.with_foreign_key("user_id")

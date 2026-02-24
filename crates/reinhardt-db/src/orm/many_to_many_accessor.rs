@@ -12,46 +12,37 @@ use super::Manager;
 use super::connection::{DatabaseBackend, DatabaseConnection};
 use super::relationship::RelationshipType;
 use crate::orm::Model;
-use sea_query::{
-	Alias, Asterisk, BinOper, DeleteStatement, Expr, ExprTrait, Func, InsertStatement,
-	MysqlQueryBuilder, PostgresQueryBuilder, Query, SelectStatement, SqliteQueryBuilder,
+use reinhardt_query::prelude::{
+	Alias, BinOper, ColumnRef, DeleteStatement, Expr, Func, InsertStatement, MySqlQueryBuilder,
+	PostgresQueryBuilder, Query, QueryBuilder, SelectStatement, SqliteQueryBuilder, Values,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::marker::PhantomData;
 
 /// Build SELECT SQL using the appropriate QueryBuilder for the given backend.
-fn build_select_sql(
-	stmt: &SelectStatement,
-	backend: DatabaseBackend,
-) -> (String, sea_query::Values) {
+fn build_select_sql(stmt: &SelectStatement, backend: DatabaseBackend) -> (String, Values) {
 	match backend {
-		DatabaseBackend::Postgres => stmt.build(PostgresQueryBuilder),
-		DatabaseBackend::MySql => stmt.build(MysqlQueryBuilder),
-		DatabaseBackend::Sqlite => stmt.build(SqliteQueryBuilder),
+		DatabaseBackend::Postgres => PostgresQueryBuilder.build_select(stmt),
+		DatabaseBackend::MySql => MySqlQueryBuilder.build_select(stmt),
+		DatabaseBackend::Sqlite => SqliteQueryBuilder.build_select(stmt),
 	}
 }
 
 /// Build INSERT SQL using the appropriate QueryBuilder for the given backend.
-fn build_insert_sql(
-	stmt: &InsertStatement,
-	backend: DatabaseBackend,
-) -> (String, sea_query::Values) {
+fn build_insert_sql(stmt: &InsertStatement, backend: DatabaseBackend) -> (String, Values) {
 	match backend {
-		DatabaseBackend::Postgres => stmt.build(PostgresQueryBuilder),
-		DatabaseBackend::MySql => stmt.build(MysqlQueryBuilder),
-		DatabaseBackend::Sqlite => stmt.build(SqliteQueryBuilder),
+		DatabaseBackend::Postgres => PostgresQueryBuilder.build_insert(stmt),
+		DatabaseBackend::MySql => MySqlQueryBuilder.build_insert(stmt),
+		DatabaseBackend::Sqlite => SqliteQueryBuilder.build_insert(stmt),
 	}
 }
 
 /// Build DELETE SQL using the appropriate QueryBuilder for the given backend.
-fn build_delete_sql(
-	stmt: &DeleteStatement,
-	backend: DatabaseBackend,
-) -> (String, sea_query::Values) {
+fn build_delete_sql(stmt: &DeleteStatement, backend: DatabaseBackend) -> (String, Values) {
 	match backend {
-		DatabaseBackend::Postgres => stmt.build(PostgresQueryBuilder),
-		DatabaseBackend::MySql => stmt.build(MysqlQueryBuilder),
-		DatabaseBackend::Sqlite => stmt.build(SqliteQueryBuilder),
+		DatabaseBackend::Postgres => PostgresQueryBuilder.build_delete(stmt),
+		DatabaseBackend::MySql => MySqlQueryBuilder.build_delete(stmt),
+		DatabaseBackend::Sqlite => SqliteQueryBuilder.build_delete(stmt),
 	}
 }
 
@@ -329,7 +320,7 @@ where
 		let mut query = Query::select();
 		query
 			.from(Alias::new(&self.through_table))
-			.expr(Func::count(Expr::col(Asterisk)))
+			.expr(Func::count(Expr::asterisk().into_simple_expr()))
 			.and_where(
 				Expr::col(Alias::new(&self.source_field))
 					.binary(BinOper::Equal, Expr::val(self.source_id.to_string())),
@@ -379,7 +370,7 @@ where
 		let field_metadata = T::field_metadata();
 		if field_metadata.is_empty() {
 			// Fallback: if no field metadata is available, select all from target table only
-			query.column((Alias::new(T::table_name()), Asterisk));
+			query.column(ColumnRef::table_asterisk(Alias::new(T::table_name())));
 		} else {
 			// Explicitly select only target table columns
 			for field in field_metadata {
@@ -589,7 +580,7 @@ where
 		let source_field = format!("{}_id", Self::table_name_lower(S::table_name()));
 		let target_field = format!("{}_id", Self::table_name_lower(T::table_name()));
 
-		// Build JOIN query using SeaQuery
+		// Build JOIN query using reinhardt-query
 		let mut query = Query::select();
 		query.from(Alias::new(S::table_name()));
 
@@ -597,7 +588,7 @@ where
 		// with intermediate table columns in JOIN queries.
 		let field_metadata = S::field_metadata();
 		if field_metadata.is_empty() {
-			query.column((Alias::new(S::table_name()), Asterisk));
+			query.column(ColumnRef::table_asterisk(Alias::new(S::table_name())));
 		} else {
 			for field in field_metadata {
 				query.column((Alias::new(S::table_name()), Alias::new(&field.name)));
@@ -629,6 +620,7 @@ where
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use reinhardt_query::prelude::QueryStatementBuilder;
 
 	#[test]
 	fn test_table_name_lower() {
@@ -734,7 +726,7 @@ mod tests {
 		assert!(sql.contains("INNER JOIN"));
 		assert!(sql.contains("dm_room_members"));
 		assert!(sql.contains("user_id"));
-		// Note: SeaQuery uses parameterized queries, so the value may be in a parameter
+		// Note: reinhardt-query uses parameterized queries, so the value may be in a parameter
 		// instead of inline in the SQL string
 	}
 

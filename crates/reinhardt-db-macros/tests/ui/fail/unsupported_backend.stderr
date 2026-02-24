@@ -1,0 +1,7 @@
+error: unsupported backend `postgres`, expected `mongodb`
+ --> tests/ui/fail/unsupported_backend.rs:3:1
+  |
+3 | #[document(collection = "users", backend = "postgres")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `document` (in Nightly builds, run with -Z macro-backtrace for more info)

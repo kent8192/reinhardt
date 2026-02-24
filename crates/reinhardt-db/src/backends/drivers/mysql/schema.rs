@@ -2,9 +2,7 @@
 //!
 //! This module provides MySQL-specific DDL operations through the `MySQLSchemaEditor`.
 
-use super::super::super::schema::{
-	BaseDatabaseSchemaEditor, SchemaEditorError, SchemaEditorResult,
-};
+use crate::backends::schema::{BaseDatabaseSchemaEditor, SchemaEditorError, SchemaEditorResult};
 
 /// Quote MySQL identifier (backtick escaping)
 fn quote_mysql_identifier(name: &str) -> String {
@@ -84,8 +82,8 @@ impl MySQLSchemaEditor {
 
 #[async_trait::async_trait]
 impl BaseDatabaseSchemaEditor for MySQLSchemaEditor {
-	fn database_type(&self) -> super::super::super::types::DatabaseType {
-		super::super::super::types::DatabaseType::Mysql
+	fn database_type(&self) -> crate::backends::types::DatabaseType {
+		crate::backends::types::DatabaseType::Mysql
 	}
 
 	async fn execute(&mut self, _sql: &str) -> SchemaEditorResult<()> {

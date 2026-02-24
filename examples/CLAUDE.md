@@ -8,140 +8,55 @@ This file defines coding standards and dependency management rules specific to t
 
 ## Examples Directory Structure
 
-The `examples/` directory contains two types of example projects that serve different purposes:
+The `examples/` directory contains example projects and shared utilities in a flat structure:
 
-### Local Examples (`examples/local/`)
-
-**Purpose**: Development and testing with the latest workspace implementation
-
-**Key Characteristics**:
-- Always uses local workspace version via `[patch.crates-io]`
-- Build script always enables tests with `with-reinhardt` feature
-- For development, testing, and validating latest changes
-- Dependencies: workspace-local `reinhardt` crate
-
-**Dependency Resolution**:
-```toml
-[dependencies]
-# Default uses 'full' feature (all features enabled)
-reinhardt = { path = "../../..", package = "reinhardt-web" }
-
-# Or with explicit feature selection:
-# reinhardt = { path = "../../..", package = "reinhardt-web", features = ["standard"] }
-# reinhardt = { path = "../../..", package = "reinhardt-web", default-features = false, features = ["minimal"] }
-
-[patch.crates-io]
-reinhardt-web = { path = "../../.." }  # Always uses workspace version
+```
+examples/
+├── examples-hello-world/
+├── examples-rest-api/
+├── examples-database-integration/
+├── examples-tutorial-basis/
+├── examples-tutorial-rest/
+├── examples-github-issues/
+├── examples-twitter/
+├── .cargo/
+│   └── config.local.toml  # Template for local development
+├── Cargo.toml           # Workspace configuration
+└── README.md
 ```
 
-**Note**: ⚠️ Default feature changed from `standard` to `full`. Local examples now use all features by default for comprehensive testing.
+### Example Projects
 
-**Build Configuration**:
-```rust
-// build.rs
-fn main() {
-	// Always enable tests for local development
-	println!("cargo:rustc-cfg=with_reinhardt");
-}
-```
-
-**Use Cases**:
-- ✅ Testing new features during development
-- ✅ Validating API changes before publication
-- ✅ Internal framework development workflow
-- ❌ User onboarding (use `remote` instead)
-
----
-
-### Remote Examples (`examples/remote/`)
-
-**Purpose**: Validation and user onboarding with published crates.io versions
-
-**Key Characteristics**:
-- Uses published crates.io versions (no `[patch.crates-io]`)
-- Tests are enabled conditionally based on published version
-- For validating published versions and user learning
-- Dependencies: crates.io `reinhardt` crate
-
-**Dependency Resolution**:
-```toml
-[dependencies]
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", features = ["standard"] }
-
-# NO [patch.crates-io] section
-```
-
-**Build Configuration**:
-```rust
-// build.rs with #[example_test] macro support
-fn main() {
-	let current_version = "0.1.0-alpha.1";
-
-	// Check if the version exists on crates.io
-	if version_exists(current_version) {
-		println!("cargo:rustc-cfg=with_reinhardt");
-	}
-	// Tests are skipped if version not published
-}
-```
-
-**Version-Specific Testing**:
-```rust
-#[example_test(version = "0.1.0-alpha.1")]
-fn test_feature() {
-	// Only runs if version 0.1.0-alpha.1 is published
-}
-```
-
-**Use Cases**:
-- ✅ User onboarding and tutorials
-- ✅ Validating published releases
-- ✅ Testing compatibility with specific versions
-- ❌ Development of unreleased features (use `local` instead)
-
----
-
-### Shared Utilities
-
-Both local and remote examples share common utilities:
-
-**Location**: `examples/remote/common/` and `examples/remote/test-macros/`
-
-**Shared Components**:
-- `example-common`: Common test utilities and helpers
-- `example-test-macros`: Test macros (`#[example_test]` for version-specific tests)
-
-**Usage in Local Examples**:
-```toml
-[dev-dependencies]
-example-test-macros = { path = "../remote/test-macros" }
-example-common = { path = "../remote/common" }
-```
-
-**Usage in Remote Examples**:
-```toml
-[dev-dependencies]
-example-test-macros = { path = "../../remote/test-macros" }
-example-common = { path = "../../remote/common" }
-```
-
----
-
-### Comparison Table
-
-| Aspect | Local Examples | Remote Examples |
-|--------|---------------|-----------------|
-| **Dependency Source** | Workspace (`path = "../../.."`) | crates.io (`version = "..."`) |
-| **`[patch.crates-io]`** | ✅ Always uses workspace | ❌ No patching |
-| **Test Enablement** | Always enabled | Conditional (version-specific) |
-| **Build Config** | Unconditional `with_reinhardt` | Checks crates.io availability |
-| **Purpose** | Development & latest validation | User onboarding & version validation |
-| **Typical Users** | Framework developers | End users learning Reinhardt |
-| **Update Frequency** | With every workspace change | With new crate publications |
+Each `examples-*` directory is an independent Cargo project demonstrating specific Reinhardt features. By default, examples use published crates.io versions of Reinhardt.
 
 ---
 
 ## Dependency Management
+
+### Default Mode (crates.io)
+
+By default, examples use published versions from crates.io:
+
+```toml
+[dependencies]
+reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", features = ["standard"] }
+```
+
+### Local Development Mode
+
+For framework contributors testing against local Reinhardt code:
+
+1. Copy `.cargo/config.local.toml` to `.cargo/config.toml`
+2. This activates `[patch.crates-io]` overrides pointing to local workspace
+3. `.cargo/config.toml` is gitignored
+
+```bash
+# Activate local development mode
+cp .cargo/config.local.toml .cargo/config.toml
+
+# Deactivate (back to crates.io)
+rm -f .cargo/config.toml
+```
 
 ### DM-1 (MUST): Reinhardt Dependencies Only
 
@@ -157,7 +72,7 @@ example-common = { path = "../../remote/common" }
 ```toml
 [dependencies]
 # ✅ Main reinhardt crate only
-reinhardt = { path = "../../..", package = "reinhardt-web", features = ["core", "database"] }
+reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", features = ["core", "database"] }
 
 # ✅ External crates are fine
 tokio = { workspace = true }
@@ -166,14 +81,13 @@ serde = { workspace = true }
 [dev-dependencies]
 # ✅ External test crates are fine
 rstest = "0.23"
-example-test-macros = { path = "../../remote/test-macros" }
 ```
 
 #### ❌ INCORRECT Pattern
 
 ```toml
 [dependencies]
-reinhardt = { path = "../../..", package = "reinhardt-web", features = ["core"] }
+reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", features = ["core"] }
 reinhardt-http = { path = "../../../crates/reinhardt-http" }      # ❌ NEVER
 reinhardt-routers = { path = "../../../crates/reinhardt-urls/crates/routers" }  # ❌ NEVER
 reinhardt-di = { path = "../../../crates/reinhardt-di" }          # ❌ NEVER
@@ -365,14 +279,12 @@ use reinhardt_http::Response;  // ❌ Wrong crate!
 
 ### TS-1 (MUST): Test Dependencies
 
-**External test crates and shared utilities** can be used in `[dev-dependencies]`:
+**External test crates** can be used in `[dev-dependencies]`:
 
 ```toml
 [dev-dependencies]
 rstest = "0.23"
 tokio = { workspace = true, features = ["rt", "macros"] }
-example-test-macros = { path = "../remote/test-macros" }
-example-common = { path = "../remote/common" }
 ```
 
 ### TS-2 (MUST): Test Imports
@@ -422,7 +334,7 @@ Each mistake is paired with its correct alternative:
 
 **Mistake 5: Including sub-crates in dependencies**
 - ❌ `reinhardt-http = { path = "..." }` in `[dependencies]`
-- ✅ `reinhardt = { path = "...", features = [...] }`
+- ✅ `reinhardt = { version = "...", features = [...] }`
 
 ### Correct Patterns Summary
 

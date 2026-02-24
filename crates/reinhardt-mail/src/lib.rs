@@ -82,12 +82,14 @@
 //!     .subject("Monthly Report")
 //!     .body("Please find attached your monthly report.")
 //!     .attachment(attachment)
-//!     .build();
+//!     .build()?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
 //! ### HTML Email with Inline Images
 //!
 //! ```rust,no_run
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use reinhardt_mail::{EmailMessage, Attachment};
 //!
 //! let logo_data = b"PNG content".to_vec();
@@ -100,7 +102,9 @@
 //!     .body("Newsletter content")
 //!     .html(r#"<html><body><img src="cid:logo-cid"/><h1>Newsletter</h1></body></html>"#)
 //!     .attachment(logo)
-//!     .build();
+//!     .build()?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! ### Template-based Emails
@@ -145,7 +149,7 @@
 //!     .to(vec!["recipient@example.com".to_string()])
 //!     .subject("Test")
 //!     .body("Test message")
-//!     .build();
+//!     .build()?;
 //!
 //! email.send(&backend).await?;
 //! # Ok(())
@@ -171,7 +175,7 @@
 //!         .to(vec!["user1@example.com".to_string()])
 //!         .subject("Newsletter")
 //!         .body("Content")
-//!         .build(),
+//!         .build()?,
 //!     // ... more messages
 //! ];
 //!
@@ -195,6 +199,7 @@ pub use backends::{
 };
 pub use message::{Alternative, Attachment, EmailMessage, EmailMessageBuilder};
 pub use utils::{mail_admins, mail_managers, send_mail, send_mail_with_backend, send_mass_mail};
+pub use validation::MAX_EMAIL_LENGTH;
 
 #[derive(Debug, Error)]
 pub enum EmailError {
@@ -224,6 +229,18 @@ pub enum EmailError {
 
 	#[error("Header injection attempt detected: {0}")]
 	HeaderInjection(String),
+}
+
+impl EmailError {
+	/// Returns true if this is a transient error that can be safely suppressed
+	/// by fail_silently mode.
+	///
+	/// Configuration errors, authentication failures, and security errors
+	/// are never considered transient and will always propagate even when
+	/// fail_silently is enabled.
+	pub fn is_transient(&self) -> bool {
+		matches!(self, EmailError::IoError(_) | EmailError::SmtpError(_))
+	}
 }
 
 pub type EmailResult<T> = std::result::Result<T, EmailError>;

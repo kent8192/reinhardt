@@ -195,9 +195,9 @@ async fn handler(db: Depends<Database>) -> Result<Response> {
 
 ### reinhardt-db::orm
 
-ORM layer for database abstraction with SeaQuery v1.0.0-rc integration.
+ORM layer for database abstraction with reinhardt-query integration.
 
-> **Note**: `orm` is a sub-module of the `reinhardt-db` crate. Currently provides low-level API based on SeaQuery v1.0.0-rc.
+> **Note**: `orm` is a sub-module of the `reinhardt-db` crate. Currently provides low-level API based on reinhardt-query.
 
 **Key Components:**
 
@@ -209,7 +209,7 @@ ORM layer for database abstraction with SeaQuery v1.0.0-rc integration.
 
 **Current Implementation Status:**
 
-- ✅ SeaQuery-based query builder (implemented)
+- ✅ reinhardt-query-based query builder (implemented)
 - ✅ Basic CRUD operations (implemented)
 - ✅ Relationship definitions (implemented)
 - ✅ `#[model(...)]` attribute macro (implemented - automatically applies Model trait)
@@ -219,7 +219,7 @@ ORM layer for database abstraction with SeaQuery v1.0.0-rc integration.
 
 ```rust
 use reinhardt::db::orm::{Model, Manager};
-use sea_query::{Query, Expr, PostgresQueryBuilder};
+use reinhardt_query::prelude::{Query, Expr, PostgresQueryBuilder};
 
 // Model definition (currently manual implementation)
 struct User {
@@ -229,14 +229,14 @@ struct User {
     age: i32,
 }
 
-// Query using SeaQuery
+// Query using reinhardt-query
 let query = Query::select()
     .from(User::table_name())
     .column(User::id)
     .column(User::username)
     .column(User::email)
     .and_where(Expr::col(User::age).gte(18))
-    .order_by(User::created, sea_query::Order::Desc)
+    .order_by(User::created, reinhardt_query::prelude::Order::Desc)
     .limit(10)
     .to_owned();
 
@@ -270,7 +270,7 @@ let users = User::objects()
 
 - [Module documentation](https://docs.rs/reinhardt-db) (available after crates.io publish)
 - See `crates/reinhardt-db/crates/orm/src/lib.rs` for ORM documentation
-- [SeaQuery Documentation](https://docs.rs/sea-query/)
+- [reinhardt-query documentation](https://docs.rs/reinhardt-query/)
 
 ### reinhardt-db::migrations
 
@@ -960,14 +960,14 @@ fn validate_email(email: &str) -> ValidationResult {
 - [Getting Started Guide](../GETTING_STARTED.md)
 - [Tutorials](../tutorials/README.md)
 - [Feature Flags](../FEATURE_FLAGS.md)
-- [GitHub Repository](https://github.com/kent8192/reinhardt-rs)
+- [GitHub Repository](https://github.com/kent8192/reinhardt-web)
 
 ## Contributing
 
 Found an error in the documentation? Want to improve it?
 
-- [Report documentation issues](https://github.com/kent8192/reinhardt-rs/issues)
-- [Contribute to docs](https://github.com/kent8192/reinhardt-rs/blob/main/CONTRIBUTING.md)
+- [Report documentation issues](https://github.com/kent8192/reinhardt-web/issues)
+- [Contribute to docs](https://github.com/kent8192/reinhardt-web/blob/main/CONTRIBUTING.md)
 
 ---
 

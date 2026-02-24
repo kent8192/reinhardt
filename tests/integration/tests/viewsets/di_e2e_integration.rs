@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use hyper::{HeaderMap, Method, StatusCode, Version};
 use reinhardt_core::exception::Result;
-use reinhardt_di::{injectable, Injectable, Injected, InjectionContext, SingletonScope};
+use reinhardt_di::{Injectable, Injected, InjectionContext, SingletonScope, injectable};
 use reinhardt_http::{Request, Response};
 use reinhardt_views::viewsets::{Action, ActionType, ViewSet};
 use std::sync::Arc;
@@ -18,8 +18,8 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn test_complete_request_response_cycle() {
-	use std::sync::atomic::{AtomicUsize, Ordering};
 	use std::sync::LazyLock;
+	use std::sync::atomic::{AtomicUsize, Ordering};
 
 	static REQUEST_COUNTER: LazyLock<AtomicUsize> = LazyLock::new(|| AtomicUsize::new(0));
 
@@ -609,7 +609,7 @@ async fn test_custom_action_handling() {
 		.unwrap();
 
 	let custom_action = Action {
-		action_type: ActionType::Custom("special"),
+		action_type: ActionType::Custom("special".into()),
 		detail: false,
 	};
 

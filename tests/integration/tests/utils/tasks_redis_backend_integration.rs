@@ -11,9 +11,9 @@ use reinhardt_tasks::result::ResultBackend;
 use reinhardt_tasks::{Task, TaskExecutionError, TaskId, TaskPriority, TaskStatus};
 use serial_test::serial;
 use testcontainers::{
+	GenericImage,
 	core::{ContainerPort, WaitFor},
 	runners::AsyncRunner,
-	GenericImage,
 };
 
 struct TestTask {

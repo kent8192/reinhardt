@@ -151,7 +151,8 @@ impl RestAuthentication for CompositeAuthentication {
 				Ok(None) => continue,
 				Err(e) => {
 					// Log error but continue to next backend
-					eprintln!("Authentication backend error: {}", e);
+					tracing::warn!("Authentication backend error occurred");
+					tracing::debug!(error = %e, "Authentication backend error details");
 					continue;
 				}
 			}
@@ -178,7 +179,8 @@ impl AuthenticationBackend for CompositeAuthentication {
 				Ok(None) => continue,
 				Err(e) => {
 					// Log error but continue to next backend
-					eprintln!("get_user backend error: {}", e);
+					tracing::warn!("get_user backend error occurred");
+					tracing::debug!(error = %e, "get_user backend error details");
 					continue;
 				}
 			}
@@ -498,15 +500,15 @@ impl<B: SessionBackend> AuthenticationBackend for SessionAuthentication<B> {
 			.await
 			.map_err(|e| AuthenticationError::DatabaseError(e.to_string()))?;
 
-		// Build SQL query using sea-query for type-safe query construction
+		// Build SQL query using reinhardt-query for type-safe query construction
 		use reinhardt_db::orm::{
-			Alias, DatabaseBackend, Expr, ExprTrait, Model, MysqlQueryBuilder,
-			PostgresQueryBuilder, SeaQuery as Query, SqliteQueryBuilder,
+			Alias, DatabaseBackend, Expr, ExprTrait, Model, MySqlQueryBuilder,
+			PostgresQueryBuilder, Query, QueryStatementBuilder, SqliteQueryBuilder,
 		};
 
 		let table_name = DefaultUser::table_name();
 
-		// Build SELECT query using sea-query
+		// Build SELECT query using reinhardt-query
 		let stmt = Query::select()
 			.columns([
 				Alias::new("id"),
@@ -529,7 +531,7 @@ impl<B: SessionBackend> AuthenticationBackend for SessionAuthentication<B> {
 
 		let sql = match conn.backend() {
 			DatabaseBackend::Postgres => stmt.to_string(PostgresQueryBuilder),
-			DatabaseBackend::MySql => stmt.to_string(MysqlQueryBuilder),
+			DatabaseBackend::MySql => stmt.to_string(MySqlQueryBuilder),
 			DatabaseBackend::Sqlite => stmt.to_string(SqliteQueryBuilder),
 		};
 

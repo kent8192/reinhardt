@@ -12,6 +12,16 @@
 //! - **REST API Authentication**: Multiple authentication backends (JWT, Token, Session, OAuth2)
 //! - **Standard Permissions**: Permission classes for common authorization scenarios
 //! - **createsuperuser Command**: CLI tool for creating admin users
+//!
+//! ## Security Note: Client-Side vs Server-Side Checks
+//!
+//! Authentication state exposed via [`reinhardt_http::AuthState`] (e.g.,
+//! `is_authenticated()`, `is_admin()`) is populated by server-side
+//! middleware and stored in request extensions. When this state is
+//! forwarded to client-side code (e.g., via WASM or JSON responses),
+//! **it must only be used for UI display purposes** (showing/hiding
+//! elements). All authorization decisions must be enforced server-side
+//! through middleware and permission classes provided by this crate.
 
 pub mod sessions;
 
@@ -58,6 +68,8 @@ pub mod remote_user;
 pub mod rest_authentication;
 #[cfg(feature = "sessions")]
 pub mod session;
+#[cfg(feature = "social")]
+pub mod social;
 pub mod time_based_permission;
 #[cfg(any(feature = "jwt", feature = "token"))]
 pub mod token_blacklist;
@@ -93,6 +105,12 @@ pub use oauth2::{
 };
 pub use object_permissions::{ObjectPermission, ObjectPermissionChecker, ObjectPermissionManager};
 pub use permission_operators::{AndPermission, NotPermission, OrPermission};
+#[cfg(feature = "social")]
+pub use social::{
+	AppleProvider, GitHubProvider, GoogleProvider, IdToken, MicrosoftProvider, OAuthProvider,
+	OAuthToken, PkceFlow, ProviderConfig, SocialAuthBackend, SocialAuthError, StandardClaims,
+	StateStore, TokenResponse,
+};
 
 #[cfg(feature = "rate-limit")]
 pub use rate_limit_permission::{RateLimitPermission, RateLimitPermissionBuilder};

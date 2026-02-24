@@ -22,6 +22,10 @@ use crate::{
 	PageExpression, PageFor, PageIf, PageMacro, PageNode, PageParam, PageText, PageWatch,
 };
 
+/// Maximum nesting depth for page elements.
+/// Prevents stack overflow from deeply nested page structures. (Fixes #824)
+const MAX_NESTING_DEPTH: usize = 64;
+
 impl Parse for PageMacro {
 	fn parse(input: ParseStream) -> Result<Self> {
 		let span = input.span();
@@ -113,25 +117,36 @@ impl Parse for PageBody {
 		let content;
 		braced!(content in input);
 
-		let nodes = parse_nodes(&content)?;
+		let nodes = parse_nodes(&content, MAX_NESTING_DEPTH)?;
 
 		Ok(Self { nodes, span })
 	}
 }
 
 /// Parses multiple nodes from a ParseStream.
-fn parse_nodes(input: ParseStream) -> Result<Vec<PageNode>> {
+///
+/// The `depth` parameter limits recursion to prevent stack overflow. (Fixes #824)
+fn parse_nodes(input: ParseStream, depth: usize) -> Result<Vec<PageNode>> {
 	let mut nodes = Vec::new();
 
 	while !input.is_empty() {
-		nodes.push(parse_node(input)?);
+		nodes.push(parse_node(input, depth)?);
 	}
 
 	Ok(nodes)
 }
 
 /// Parses a single node from the input.
-fn parse_node(input: ParseStream) -> Result<PageNode> {
+///
+/// The `depth` parameter limits recursion to prevent stack overflow. (Fixes #824)
+fn parse_node(input: ParseStream, depth: usize) -> Result<PageNode> {
+	if depth == 0 {
+		return Err(syn::Error::new(
+			input.span(),
+			"page element nesting depth exceeded maximum limit",
+		));
+	}
+
 	// Check for string literal: "text"
 	if input.peek(syn::LitStr) {
 		return parse_text_node(input);
@@ -139,12 +154,12 @@ fn parse_node(input: ParseStream) -> Result<PageNode> {
 
 	// Check for if expression
 	if input.peek(Token![if]) {
-		return parse_if_node(input);
+		return parse_if_node(input, depth);
 	}
 
 	// Check for for loop
 	if input.peek(Token![for]) {
-		return parse_for_node(input);
+		return parse_for_node(input, depth);
 	}
 
 	// Check for braced expression: { expr }
@@ -160,15 +175,15 @@ fn parse_node(input: ParseStream) -> Result<PageNode> {
 
 		// Check for watch keyword: watch { ... }
 		if ident == "watch" && fork.peek(token::Brace) {
-			return parse_watch_node(input);
+			return parse_watch_node(input, depth);
 		}
 
 		if fork.peek(token::Brace) {
 			// It's an element: tag { ... }
-			return parse_element_node(input);
+			return parse_element_node(input, depth);
 		} else if fork.peek(token::Paren) {
 			// It's a component call: Component(args) or Component(args) { children }
-			return parse_component_node(input);
+			return parse_component_node(input, depth);
 		} else {
 			// It's an expression: variable or method call
 			return parse_expression_node(input);
@@ -189,7 +204,9 @@ fn parse_text_node(input: ParseStream) -> Result<PageNode> {
 }
 
 /// Parses an element node: tag { attrs, events, children }
-fn parse_element_node(input: ParseStream) -> Result<PageNode> {
+///
+/// The `depth` parameter limits recursion to prevent stack overflow. (Fixes #824)
+fn parse_element_node(input: ParseStream, depth: usize) -> Result<PageNode> {
 	let tag: Ident = input.parse()?;
 	let span = tag.span();
 
@@ -227,7 +244,7 @@ fn parse_element_node(input: ParseStream) -> Result<PageNode> {
 		}
 
 		// Otherwise, it's a child node
-		element.children.push(parse_node(&content)?);
+		element.children.push(parse_node(&content, depth - 1)?);
 	}
 
 	Ok(PageNode::Element(element))
@@ -298,7 +315,10 @@ fn parse_expression_node(input: ParseStream) -> Result<PageNode> {
 }
 
 /// Parses an if node: `if condition { ... } else { ... }`
-fn parse_if_node(input: ParseStream) -> Result<PageNode> {
+///
+/// The `depth` parameter limits recursion to prevent stack overflow
+/// from deeply nested if/else-if chains. (Fixes #824)
+fn parse_if_node(input: ParseStream, depth: usize) -> Result<PageNode> {
 	let span = input.span();
 	input.parse::<Token![if]>()?;
 
@@ -308,7 +328,7 @@ fn parse_if_node(input: ParseStream) -> Result<PageNode> {
 	// Parse then branch
 	let content;
 	braced!(content in input);
-	let then_branch = parse_nodes(&content)?;
+	let then_branch = parse_nodes(&content, depth - 1)?;
 
 	// Parse optional else branch
 	let else_branch = if input.peek(Token![else]) {
@@ -316,16 +336,21 @@ fn parse_if_node(input: ParseStream) -> Result<PageNode> {
 
 		if input.peek(Token![if]) {
 			// else if
-			let else_if = parse_if_node(input)?;
+			let else_if = parse_if_node(input, depth - 1)?;
 			match else_if {
 				PageNode::If(if_node) => Some(PageElse::If(Box::new(if_node))),
-				_ => unreachable!(),
+				_ => {
+					return Err(syn::Error::new(
+						input.span(),
+						"internal error: expected if node in else-if chain",
+					));
+				}
 			}
 		} else {
 			// else { ... }
 			let content;
 			braced!(content in input);
-			let else_nodes = parse_nodes(&content)?;
+			let else_nodes = parse_nodes(&content, depth - 1)?;
 			Some(PageElse::Block(else_nodes))
 		}
 	} else {
@@ -358,7 +383,9 @@ fn parse_condition(input: ParseStream) -> Result<Expr> {
 }
 
 /// Parses a for node: `for pat in iter { ... }`
-fn parse_for_node(input: ParseStream) -> Result<PageNode> {
+///
+/// The `depth` parameter limits recursion to prevent stack overflow. (Fixes #824)
+fn parse_for_node(input: ParseStream, depth: usize) -> Result<PageNode> {
 	let span = input.span();
 	input.parse::<Token![for]>()?;
 
@@ -373,7 +400,7 @@ fn parse_for_node(input: ParseStream) -> Result<PageNode> {
 	// Parse body
 	let content;
 	braced!(content in input);
-	let body = parse_nodes(&content)?;
+	let body = parse_nodes(&content, depth - 1)?;
 
 	Ok(PageNode::For(PageFor {
 		pat,
@@ -387,7 +414,9 @@ fn parse_for_node(input: ParseStream) -> Result<PageNode> {
 ///
 /// The watch block wraps an expression in a reactive context,
 /// allowing Signal dependencies to be automatically tracked.
-fn parse_watch_node(input: ParseStream) -> Result<PageNode> {
+///
+/// The `depth` parameter limits recursion to prevent stack overflow. (Fixes #824)
+fn parse_watch_node(input: ParseStream, depth: usize) -> Result<PageNode> {
 	let span = input.span();
 
 	// Consume the "watch" identifier
@@ -400,7 +429,7 @@ fn parse_watch_node(input: ParseStream) -> Result<PageNode> {
 
 	// Parse the inner expression as a single node
 	// The watch block must contain exactly one expression (if, match, etc.)
-	let inner_node = parse_node(&content)?;
+	let inner_node = parse_node(&content, depth - 1)?;
 
 	// Ensure there's nothing else in the block
 	if !content.is_empty() {
@@ -423,7 +452,7 @@ fn parse_watch_node(input: ParseStream) -> Result<PageNode> {
 ///     p { "Child content" }
 /// }
 /// ```
-fn parse_component_node(input: ParseStream) -> Result<PageNode> {
+fn parse_component_node(input: ParseStream, depth: usize) -> Result<PageNode> {
 	let name: Ident = input.parse()?;
 	let span = name.span();
 
@@ -436,7 +465,7 @@ fn parse_component_node(input: ParseStream) -> Result<PageNode> {
 	let children = if input.peek(token::Brace) {
 		let content;
 		braced!(content in input);
-		Some(parse_nodes(&content)?)
+		Some(parse_nodes(&content, depth - 1)?)
 	} else {
 		None
 	};

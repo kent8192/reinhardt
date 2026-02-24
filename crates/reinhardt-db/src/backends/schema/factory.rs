@@ -29,13 +29,13 @@
 use super::BaseDatabaseSchemaEditor;
 
 #[cfg(feature = "postgres")]
-use super::super::drivers::postgresql::schema::PostgreSQLSchemaEditor;
+use crate::backends::drivers::postgresql::schema::PostgreSQLSchemaEditor;
 
 #[cfg(feature = "mysql")]
-use super::super::drivers::mysql::schema::MySQLSchemaEditor;
+use crate::backends::drivers::mysql::schema::MySQLSchemaEditor;
 
 #[cfg(feature = "sqlite")]
-use super::super::drivers::sqlite::schema::SQLiteSchemaEditor;
+use crate::backends::drivers::sqlite::schema::SQLiteSchemaEditor;
 
 use std::sync::Arc;
 

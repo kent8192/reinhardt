@@ -2,8 +2,8 @@
 
 use async_graphql::*;
 use reinhardt_server::graphql_handler;
-use reinhardt_test::server::{shutdown_test_server, spawn_test_server};
 use reinhardt_test::APIClient;
+use reinhardt_test::server::{shutdown_test_server, spawn_test_server};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;

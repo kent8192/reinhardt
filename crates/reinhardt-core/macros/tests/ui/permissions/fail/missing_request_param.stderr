@@ -1,0 +1,5 @@
+error: #[permission_required] requires a Request parameter for runtime permission checking. Add a `request: Request` parameter to this function, or remove the #[permission_required] attribute if permission checking is handled elsewhere.
+ --> tests/ui/permissions/fail/missing_request_param.rs:4:1
+  |
+4 | async fn dangerous_operation() -> Result<(), ()> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

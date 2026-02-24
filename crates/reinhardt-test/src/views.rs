@@ -45,10 +45,11 @@ pub fn create_request(
 	headers: Option<HeaderMap>,
 	body: Option<Bytes>,
 ) -> Request {
+	// Fixes #880: URL-encode query parameter keys and values to prevent injection
 	let uri_str = if let Some(ref params) = query_params {
 		let query = params
 			.iter()
-			.map(|(k, v)| format!("{}={}", k, v))
+			.map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
 			.collect::<Vec<_>>()
 			.join("&");
 		format!("{}?{}", path, query)

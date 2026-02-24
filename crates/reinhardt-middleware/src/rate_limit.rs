@@ -116,8 +116,13 @@ impl RateLimitStore {
 		}
 	}
 
-	/// Clean up old request history
+	/// Clean up old request history and stale rate limit buckets
+	///
+	/// Removes request history entries older than `max_age` and evicts
+	/// rate limit buckets that have not been refilled within `max_age`,
+	/// preventing unbounded memory growth from accumulated stale entries.
 	pub fn cleanup(&self, max_age: Duration) {
+		// Prune old history entries
 		let mut history = self.history.write().unwrap();
 		let cutoff = Utc::now() - chrono::Duration::from_std(max_age).unwrap();
 
@@ -126,6 +131,12 @@ impl RateLimitStore {
 		}
 
 		history.retain(|_, requests| !requests.is_empty());
+		drop(history);
+
+		// Evict stale buckets that have not been accessed within max_age
+		let mut buckets = self.buckets.write().unwrap();
+		let now = Instant::now();
+		buckets.retain(|_, bucket| now.duration_since(bucket.last_refill) < max_age);
 	}
 
 	/// Reset the store
@@ -153,6 +164,10 @@ pub struct RateLimitConfig {
 	pub exclude_paths: Vec<String>,
 	/// Custom error message
 	pub error_message: Option<String>,
+	/// Trusted proxy IP addresses/CIDRs.
+	/// Only requests from these IPs will have their X-Forwarded-For/X-Real-IP headers trusted.
+	/// If empty, proxy headers are never trusted and remote_addr is always used.
+	pub trusted_proxies: Vec<String>,
 }
 
 impl RateLimitConfig {
@@ -175,6 +190,7 @@ impl RateLimitConfig {
 			cost_per_request: 1.0,
 			exclude_paths: Vec::new(),
 			error_message: None,
+			trusted_proxies: Vec::new(),
 		}
 	}
 
@@ -221,6 +237,25 @@ impl RateLimitConfig {
 	/// ```
 	pub fn with_error_message(mut self, message: String) -> Self {
 		self.error_message = Some(message);
+		self
+	}
+
+	/// Set trusted proxy addresses.
+	///
+	/// Only requests originating from these IP addresses will have their
+	/// `X-Forwarded-For` and `X-Real-IP` headers trusted for client IP extraction.
+	/// Supports both individual IPs (e.g., "10.0.0.1") and CIDR notation (e.g., "10.0.0.0/8").
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_middleware::rate_limit::{RateLimitConfig, RateLimitStrategy};
+	///
+	/// let config = RateLimitConfig::new(RateLimitStrategy::PerIp, 100.0, 10.0)
+	///     .with_trusted_proxies(vec!["10.0.0.0/8".to_string(), "172.16.0.0/12".to_string()]);
+	/// ```
+	pub fn with_trusted_proxies(mut self, proxies: Vec<String>) -> Self {
+		self.trusted_proxies = proxies;
 		self
 	}
 }
@@ -412,45 +447,67 @@ impl RateLimitMiddleware {
 
 	/// Extract client IP address from request
 	///
-	/// Extracts the client IP in the following order:
-	/// 1. X-Forwarded-For header (first IP in the list)
-	/// 2. X-Real-IP header
-	/// 3. remote_addr field from the request
-	/// 4. Falls back to 127.0.0.1 if none available
+	/// Only trusts proxy headers (X-Forwarded-For, X-Real-IP) when the request
+	/// originates from a configured trusted proxy address. Otherwise, uses the
+	/// direct connection IP (remote_addr).
+	///
+	/// Extraction order:
+	/// 1. If remote_addr is from a trusted proxy:
+	///    a. X-Forwarded-For header (first IP in the list)
+	///    b. X-Real-IP header
+	/// 2. remote_addr field from the request
+	/// 3. Falls back to 127.0.0.1 if none available
 	fn extract_client_ip(&self, request: &Request) -> String {
-		// 1. Check X-Forwarded-For header
-		if let Some(xff) = request.headers.get("X-Forwarded-For")
-			&& let Ok(xff_str) = xff.to_str()
-		{
-			// X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
-			// Take the first (leftmost) IP as the original client IP
-			if let Some(first_ip) = xff_str.split(',').next() {
+		let peer_ip = request.remote_addr.map(|addr| addr.ip());
+
+		// Only trust proxy headers if the direct connection is from a trusted proxy
+		let from_trusted_proxy = peer_ip.map(|ip| self.is_trusted_proxy(ip)).unwrap_or(false);
+
+		if from_trusted_proxy {
+			// 1a. Check X-Forwarded-For header
+			if let Some(xff) = request.headers.get("X-Forwarded-For")
+				&& let Ok(xff_str) = xff.to_str()
+				&& let Some(first_ip) = xff_str.split(',').next()
+			{
 				let trimmed = first_ip.trim();
-				// Validate IP format
+				if trimmed.parse::<std::net::IpAddr>().is_ok() {
+					return trimmed.to_string();
+				}
+			}
+
+			// 1b. Check X-Real-IP header
+			if let Some(xri) = request.headers.get("X-Real-IP")
+				&& let Ok(ip_str) = xri.to_str()
+			{
+				let trimmed = ip_str.trim();
 				if trimmed.parse::<std::net::IpAddr>().is_ok() {
 					return trimmed.to_string();
 				}
 			}
 		}
 
-		// 2. Check X-Real-IP header
-		if let Some(xri) = request.headers.get("X-Real-IP")
-			&& let Ok(ip_str) = xri.to_str()
-		{
-			let trimmed = ip_str.trim();
-			// Validate IP format
-			if trimmed.parse::<std::net::IpAddr>().is_ok() {
-				return trimmed.to_string();
-			}
+		// 2. Use remote_addr (direct connection IP)
+		if let Some(ip) = peer_ip {
+			return ip.to_string();
 		}
 
-		// 3. Check remote_addr field
-		if let Some(addr) = request.remote_addr {
-			return addr.ip().to_string();
-		}
-
-		// 4. Fallback to localhost
+		// 3. Fallback to localhost
 		"127.0.0.1".to_string()
+	}
+
+	/// Check if an IP address belongs to a trusted proxy
+	fn is_trusted_proxy(&self, ip: std::net::IpAddr) -> bool {
+		self.config.trusted_proxies.iter().any(|proxy| {
+			// Try parsing as CIDR network
+			if let Ok(network) = proxy.parse::<ipnet::IpNet>() {
+				return network.contains(&ip);
+			}
+			// Try parsing as single IP
+			if let Ok(proxy_ip) = proxy.parse::<std::net::IpAddr>() {
+				return proxy_ip == ip;
+			}
+			false
+		})
 	}
 
 	/// Create a rate limit error response
@@ -757,8 +814,10 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn test_extract_ip_from_x_forwarded_for() {
-		let config = RateLimitConfig::new(RateLimitStrategy::PerIp, 10.0, 1.0);
+	async fn test_extract_ip_from_x_forwarded_for_trusted_proxy() {
+		// Arrange
+		let config = RateLimitConfig::new(RateLimitStrategy::PerIp, 10.0, 1.0)
+			.with_trusted_proxies(vec!["10.0.0.1".to_string()]);
 		let middleware = RateLimitMiddleware::new(config);
 
 		let mut headers = HeaderMap::new();
@@ -769,7 +828,7 @@ mod tests {
 				.unwrap(),
 		);
 
-		let request = Request::builder()
+		let mut request = Request::builder()
 			.method(Method::GET)
 			.uri("/test")
 			.version(Version::HTTP_11)
@@ -777,20 +836,54 @@ mod tests {
 			.body(Bytes::new())
 			.build()
 			.unwrap();
+		request.remote_addr = Some("10.0.0.1:12345".parse().unwrap());
 
+		// Act
 		let ip = middleware.extract_client_ip(&request);
+
+		// Assert
 		assert_eq!(ip, "203.0.113.195");
 	}
 
 	#[tokio::test]
-	async fn test_extract_ip_from_x_real_ip() {
-		let config = RateLimitConfig::new(RateLimitStrategy::PerIp, 10.0, 1.0);
+	async fn test_extract_ip_ignores_xff_from_untrusted_source() {
+		// Arrange
+		let config = RateLimitConfig::new(RateLimitStrategy::PerIp, 10.0, 1.0)
+			.with_trusted_proxies(vec!["10.0.0.1".to_string()]);
+		let middleware = RateLimitMiddleware::new(config);
+
+		let mut headers = HeaderMap::new();
+		headers.insert("X-Forwarded-For", "203.0.113.195".parse().unwrap());
+
+		let mut request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(headers)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+		// Request comes from an untrusted IP
+		request.remote_addr = Some("192.168.1.100:54321".parse().unwrap());
+
+		// Act
+		let ip = middleware.extract_client_ip(&request);
+
+		// Assert - should use remote_addr, not X-Forwarded-For
+		assert_eq!(ip, "192.168.1.100");
+	}
+
+	#[tokio::test]
+	async fn test_extract_ip_from_x_real_ip_trusted_proxy() {
+		// Arrange
+		let config = RateLimitConfig::new(RateLimitStrategy::PerIp, 10.0, 1.0)
+			.with_trusted_proxies(vec!["10.0.0.0/8".to_string()]);
 		let middleware = RateLimitMiddleware::new(config);
 
 		let mut headers = HeaderMap::new();
 		headers.insert("X-Real-IP", "198.51.100.42".parse().unwrap());
 
-		let request = Request::builder()
+		let mut request = Request::builder()
 			.method(Method::GET)
 			.uri("/test")
 			.version(Version::HTTP_11)
@@ -798,13 +891,18 @@ mod tests {
 			.body(Bytes::new())
 			.build()
 			.unwrap();
+		request.remote_addr = Some("10.0.0.5:8080".parse().unwrap());
 
+		// Act
 		let ip = middleware.extract_client_ip(&request);
+
+		// Assert
 		assert_eq!(ip, "198.51.100.42");
 	}
 
 	#[tokio::test]
 	async fn test_extract_ip_from_remote_addr() {
+		// Arrange
 		let config = RateLimitConfig::new(RateLimitStrategy::PerIp, 10.0, 1.0);
 		let middleware = RateLimitMiddleware::new(config);
 
@@ -816,16 +914,18 @@ mod tests {
 			.body(Bytes::new())
 			.build()
 			.unwrap();
-
-		// Set remote_addr
 		request.remote_addr = Some("192.0.2.123:8080".parse().unwrap());
 
+		// Act
 		let ip = middleware.extract_client_ip(&request);
+
+		// Assert
 		assert_eq!(ip, "192.0.2.123");
 	}
 
 	#[tokio::test]
 	async fn test_extract_ip_fallback_to_localhost() {
+		// Arrange
 		let config = RateLimitConfig::new(RateLimitStrategy::PerIp, 10.0, 1.0);
 		let middleware = RateLimitMiddleware::new(config);
 
@@ -838,12 +938,16 @@ mod tests {
 			.build()
 			.unwrap();
 
+		// Act
 		let ip = middleware.extract_client_ip(&request);
+
+		// Assert
 		assert_eq!(ip, "127.0.0.1");
 	}
 
 	#[tokio::test]
-	async fn test_extract_ip_priority_x_forwarded_for_over_x_real_ip() {
+	async fn test_extract_ip_no_trusted_proxies_ignores_headers() {
+		// Arrange - no trusted proxies configured
 		let config = RateLimitConfig::new(RateLimitStrategy::PerIp, 10.0, 1.0);
 		let middleware = RateLimitMiddleware::new(config);
 
@@ -851,7 +955,7 @@ mod tests {
 		headers.insert("X-Forwarded-For", "203.0.113.195".parse().unwrap());
 		headers.insert("X-Real-IP", "198.51.100.42".parse().unwrap());
 
-		let request = Request::builder()
+		let mut request = Request::builder()
 			.method(Method::GET)
 			.uri("/test")
 			.version(Version::HTTP_11)
@@ -859,9 +963,40 @@ mod tests {
 			.body(Bytes::new())
 			.build()
 			.unwrap();
+		request.remote_addr = Some("192.168.1.1:8080".parse().unwrap());
 
+		// Act
 		let ip = middleware.extract_client_ip(&request);
-		assert_eq!(ip, "203.0.113.195"); // X-Forwarded-For takes priority
+
+		// Assert - should use remote_addr since no trusted proxies
+		assert_eq!(ip, "192.168.1.1");
+	}
+
+	#[tokio::test]
+	async fn test_trusted_proxy_cidr_range() {
+		// Arrange
+		let config = RateLimitConfig::new(RateLimitStrategy::PerIp, 10.0, 1.0)
+			.with_trusted_proxies(vec!["172.16.0.0/12".to_string()]);
+		let middleware = RateLimitMiddleware::new(config);
+
+		let mut headers = HeaderMap::new();
+		headers.insert("X-Forwarded-For", "203.0.113.195".parse().unwrap());
+
+		let mut request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(headers)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+		request.remote_addr = Some("172.16.5.10:8080".parse().unwrap());
+
+		// Act
+		let ip = middleware.extract_client_ip(&request);
+
+		// Assert - 172.16.5.10 is within 172.16.0.0/12
+		assert_eq!(ip, "203.0.113.195");
 	}
 
 	#[tokio::test]
@@ -964,13 +1099,15 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_generate_key_per_ip() {
-		let config = RateLimitConfig::new(RateLimitStrategy::PerIp, 10.0, 1.0);
+		// Arrange
+		let config = RateLimitConfig::new(RateLimitStrategy::PerIp, 10.0, 1.0)
+			.with_trusted_proxies(vec!["10.0.0.1".to_string()]);
 		let middleware = RateLimitMiddleware::new(config);
 
 		let mut headers = HeaderMap::new();
 		headers.insert("X-Forwarded-For", "203.0.113.195".parse().unwrap());
 
-		let request = Request::builder()
+		let mut request = Request::builder()
 			.method(Method::GET)
 			.uri("/test")
 			.version(Version::HTTP_11)
@@ -978,21 +1115,27 @@ mod tests {
 			.body(Bytes::new())
 			.build()
 			.unwrap();
+		request.remote_addr = Some("10.0.0.1:8080".parse().unwrap());
 
+		// Act
 		let key = middleware.generate_key(&request);
+
+		// Assert
 		assert_eq!(key, "ip:203.0.113.195");
 	}
 
 	#[tokio::test]
 	async fn test_rate_limit_per_ip_different_ips() {
-		let config = RateLimitConfig::new(RateLimitStrategy::PerIp, 1.0, 0.1);
+		// Arrange
+		let config = RateLimitConfig::new(RateLimitStrategy::PerIp, 1.0, 0.1)
+			.with_trusted_proxies(vec!["10.0.0.1".to_string()]);
 		let middleware = Arc::new(RateLimitMiddleware::new(config));
 		let handler = Arc::new(TestHandler::new(StatusCode::OK));
 
-		// First request from IP1
+		// Act - first request from IP1 via trusted proxy
 		let mut headers1 = HeaderMap::new();
 		headers1.insert("X-Forwarded-For", "203.0.113.1".parse().unwrap());
-		let request1 = Request::builder()
+		let mut request1 = Request::builder()
 			.method(Method::GET)
 			.uri("/test")
 			.version(Version::HTTP_11)
@@ -1000,13 +1143,16 @@ mod tests {
 			.body(Bytes::new())
 			.build()
 			.unwrap();
+		request1.remote_addr = Some("10.0.0.1:8080".parse().unwrap());
 		let response1 = middleware.process(request1, handler.clone()).await.unwrap();
+
+		// Assert
 		assert_eq!(response1.status, StatusCode::OK);
 
-		// First request from IP2 should also succeed (different bucket)
+		// Act - first request from IP2 via trusted proxy (different bucket)
 		let mut headers2 = HeaderMap::new();
 		headers2.insert("X-Forwarded-For", "203.0.113.2".parse().unwrap());
-		let request2 = Request::builder()
+		let mut request2 = Request::builder()
 			.method(Method::GET)
 			.uri("/test")
 			.version(Version::HTTP_11)
@@ -1014,7 +1160,10 @@ mod tests {
 			.body(Bytes::new())
 			.build()
 			.unwrap();
+		request2.remote_addr = Some("10.0.0.1:8080".parse().unwrap());
 		let response2 = middleware.process(request2, handler).await.unwrap();
+
+		// Assert
 		assert_eq!(response2.status, StatusCode::OK);
 	}
 

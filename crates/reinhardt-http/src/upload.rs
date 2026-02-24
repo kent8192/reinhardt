@@ -3,6 +3,7 @@
 //! This module provides file upload processing including handlers,
 //! temporary file management, and memory-based uploads.
 
+use percent_encoding::percent_decode_str;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, Write};
@@ -23,6 +24,45 @@ pub enum FileUploadError {
 	ChecksumMismatch,
 	#[error("MIME type detection failed")]
 	MimeDetectionFailed,
+	#[error("Path traversal detected in filename")]
+	PathTraversal,
+}
+
+/// Validate that a filename does not contain path traversal sequences
+/// or other unsafe characters that could escape the upload directory.
+///
+/// Checks both raw and URL-decoded forms of the filename to prevent
+/// bypasses via percent-encoding (e.g. `%2e%2e%2f`).
+pub fn validate_safe_filename(filename: &str) -> Result<(), FileUploadError> {
+	if filename.is_empty() {
+		return Err(FileUploadError::Upload("Empty filename".to_string()));
+	}
+
+	// Check both the raw filename and its URL-decoded form to prevent
+	// bypass via percent-encoded traversal sequences like %2e%2e%2f
+	let decoded = percent_decode_str(filename).decode_utf8_lossy();
+	for candidate in [filename, decoded.as_ref()] {
+		if candidate.contains('\0') {
+			return Err(FileUploadError::PathTraversal);
+		}
+		if candidate.contains("..") {
+			return Err(FileUploadError::PathTraversal);
+		}
+		if candidate.contains('/') || candidate.contains('\\') {
+			return Err(FileUploadError::PathTraversal);
+		}
+		// Reject absolute paths (Unix and Windows)
+		if candidate.starts_with('/') || candidate.starts_with('\\') {
+			return Err(FileUploadError::PathTraversal);
+		}
+		if candidate.len() >= 2
+			&& candidate.as_bytes()[0].is_ascii_alphabetic()
+			&& candidate.as_bytes()[1] == b':'
+		{
+			return Err(FileUploadError::PathTraversal);
+		}
+	}
+	Ok(())
 }
 
 /// FileUploadHandler processes file uploads
@@ -281,6 +321,9 @@ impl FileUploadHandler {
 		filename: &str,
 		content: &[u8],
 	) -> Result<String, FileUploadError> {
+		// Validate field_name to prevent path traversal via form field names
+		validate_safe_filename(field_name)?;
+
 		// Check file size
 		if content.len() > self.max_size {
 			return Err(FileUploadError::FileTooLarge(content.len(), self.max_size));
@@ -352,22 +395,30 @@ impl FileUploadHandler {
 		self.handle_upload(field_name, filename, content)
 	}
 
-	/// Generate a unique filename
+	/// Generate a unique filename using a cryptographically random UUID v4
+	///
+	/// Extracts only the file extension from the original filename,
+	/// discarding the original name to prevent path traversal.
+	/// Uses UUID v4 (CSPRNG-based) instead of timestamps to prevent
+	/// predictable filename enumeration.
 	fn generate_unique_filename(&self, field_name: &str, original_filename: &str) -> String {
-		let timestamp = std::time::SystemTime::now()
-			.duration_since(std::time::UNIX_EPOCH)
-			.unwrap()
-			.as_secs();
+		let unique_id = uuid::Uuid::new_v4();
 
-		let extension = Path::new(original_filename)
+		// Extract only the extension from the basename (strip any directory components)
+		let basename = Path::new(original_filename)
+			.file_name()
+			.and_then(|n| n.to_str())
+			.unwrap_or(original_filename);
+
+		let extension = Path::new(basename)
 			.extension()
 			.and_then(|e| e.to_str())
 			.unwrap_or("");
 
 		if extension.is_empty() {
-			format!("{}_{}", field_name, timestamp)
+			format!("{}_{}", field_name, unique_id)
 		} else {
-			format!("{}_{}.{}", field_name, timestamp, extension)
+			format!("{}_{}.{}", field_name, unique_id, extension)
 		}
 	}
 
@@ -384,6 +435,8 @@ impl FileUploadHandler {
 	/// assert!(result.is_ok());
 	/// ```
 	pub fn delete_upload(&self, filename: &str) -> Result<(), FileUploadError> {
+		// Validate filename to prevent path traversal attacks
+		validate_safe_filename(filename)?;
 		let file_path = self.upload_dir.join(filename);
 		fs::remove_file(file_path)?;
 		Ok(())
@@ -751,5 +804,110 @@ mod tests {
 		assert_eq!(content, vec![1, 2, 3, 4, 5]);
 
 		fs::remove_file(temp_path).unwrap();
+	}
+
+	// =================================================================
+	// Path traversal prevention tests (Issue #355)
+	// =================================================================
+
+	#[rstest::rstest]
+	#[case("../../../etc/passwd")]
+	#[case("foo/../../bar")]
+	#[case("/etc/passwd")]
+	#[case("test\0file.txt")]
+	#[case("..%2f..%2fetc%2fpasswd")]
+	#[case("%2e%2e/%2e%2e/etc/passwd")]
+	fn test_delete_upload_rejects_path_traversal(#[case] filename: &str) {
+		// Arrange
+		let handler = FileUploadHandler::new(PathBuf::from("/tmp/uploads"));
+
+		// Act
+		let result = handler.delete_upload(filename);
+
+		// Assert
+		assert!(
+			matches!(result, Err(FileUploadError::PathTraversal)),
+			"Expected PathTraversal error for filename: {}",
+			filename
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_delete_upload_allows_safe_filenames() {
+		// Arrange
+		let handler = FileUploadHandler::new(PathBuf::from("/tmp/uploads"));
+
+		// Act - these should not return PathTraversal error
+		// (they may return IO NotFound since files don't exist, which is expected)
+		let result = handler.delete_upload("safe_file.txt");
+
+		// Assert
+		assert!(
+			!matches!(result, Err(FileUploadError::PathTraversal)),
+			"Safe filename should not trigger path traversal error"
+		);
+	}
+
+	#[rstest::rstest]
+	#[case("normal.txt", true)]
+	#[case("my-file_123.jpg", true)]
+	#[case("report.pdf", true)]
+	#[case("image_2024.png", true)]
+	#[case("../../../etc/passwd", false)]
+	#[case("foo/../bar.txt", false)]
+	#[case("/absolute/path.txt", false)]
+	#[case("null\0byte.txt", false)]
+	#[case("", false)]
+	#[case("back\\slash.txt", false)]
+	#[case("C:\\Windows\\system32", false)]
+	#[case("..%2f..%2fetc%2fpasswd", false)]
+	#[case("%2e%2e%2f%2e%2e%2f", false)]
+	fn test_validate_safe_filename(#[case] filename: &str, #[case] should_pass: bool) {
+		// Act
+		let result = validate_safe_filename(filename);
+
+		// Assert
+		assert_eq!(
+			result.is_ok(),
+			should_pass,
+			"validate_safe_filename({:?}) expected {} but got {}",
+			filename,
+			if should_pass { "Ok" } else { "Err" },
+			if result.is_ok() { "Ok" } else { "Err" },
+		);
+	}
+
+	#[rstest::rstest]
+	#[case("../malicious")]
+	#[case("foo/../../bar")]
+	#[case("..%2fmalicious")]
+	fn test_handle_upload_rejects_traversal_in_field_name(#[case] field_name: &str) {
+		// Arrange
+		let handler = FileUploadHandler::new(PathBuf::from("/tmp/uploads"));
+
+		// Act
+		let result = handler.handle_upload(field_name, "safe.txt", b"content");
+
+		// Assert
+		assert!(
+			matches!(result, Err(FileUploadError::PathTraversal)),
+			"Expected PathTraversal error for field_name: {}",
+			field_name
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_handle_upload_accepts_safe_field_name() {
+		// Arrange
+		let handler = FileUploadHandler::new(PathBuf::from("/tmp/reinhardt_upload_test"));
+
+		// Act
+		let result = handler.handle_upload("avatar", "photo.jpg", b"image data");
+
+		// Assert
+		assert!(result.is_ok());
+
+		// Cleanup
+		let _ = fs::remove_dir_all("/tmp/reinhardt_upload_test");
 	}
 }

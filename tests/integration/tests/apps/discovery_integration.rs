@@ -5,7 +5,7 @@
 
 use linkme::distributed_slice;
 use reinhardt_apps::discovery::{discover_all_models, discover_models};
-use reinhardt_apps::registry::{ModelMetadata, MODELS};
+use reinhardt_apps::registry::{MODELS, ModelMetadata};
 use serial_test::serial;
 use std::collections::HashSet;
 
@@ -41,9 +41,11 @@ fn test_discover_all_models() {
 	// Should have at least our test models
 	assert!(models.len() >= 2);
 
-	assert!(models
-		.iter()
-		.any(|m| m.app_label == "discovery_test" && m.model_name == "User"));
+	assert!(
+		models
+			.iter()
+			.any(|m| m.app_label == "discovery_test" && m.model_name == "User")
+	);
 }
 
 #[test]

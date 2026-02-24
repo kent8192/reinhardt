@@ -23,7 +23,7 @@
 //! # }
 //! ```
 
-use super::super::{SecretAccessEvent, SecretAccessFilter, SecretAuditBackend};
+use crate::settings::secrets::audit::{SecretAccessEvent, SecretAccessFilter, SecretAuditBackend};
 use parking_lot::RwLock;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};

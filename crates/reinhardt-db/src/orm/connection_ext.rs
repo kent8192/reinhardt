@@ -1,10 +1,12 @@
-//! Connection trait extension for SeaQuery support
+//! Connection trait extension for reinhardt-query support
 //!
 //! This module provides extensions to the database connection trait
-//! to support executing SeaQuery statement objects directly.
+//! to support executing reinhardt-query statement objects directly.
 
 use async_trait::async_trait;
-use sea_query::{DeleteStatement, InsertStatement, SelectStatement, UpdateStatement};
+use reinhardt_query::prelude::{
+	DeleteStatement, InsertStatement, SelectStatement, UpdateStatement,
+};
 
 use crate::orm::query_types::{DbBackend, QueryStatement};
 
@@ -17,19 +19,19 @@ pub type Row = sqlx::any::AnyRow;
 /// Result type for database operations
 pub type DbResult<T> = Result<T, reinhardt_core::exception::Error>;
 
-/// Connection trait extension for SeaQuery support
+/// Connection trait extension for reinhardt-query support
 #[async_trait]
 pub trait ConnectionExt {
 	/// Get database backend type
 	fn backend(&self) -> DbBackend;
 
-	/// Execute a SeaQuery statement (INSERT, UPDATE, DELETE, DDL)
+	/// Execute a reinhardt-query statement (INSERT, UPDATE, DELETE, DDL)
 	async fn execute_statement(&self, stmt: &QueryStatement) -> DbResult<u64>;
 
-	/// Query multiple rows with SeaQuery SELECT statement
+	/// Query multiple rows with reinhardt-query SELECT statement
 	async fn query_statement(&self, stmt: &SelectStatement) -> DbResult<Vec<Row>>;
 
-	/// Query one row with SeaQuery SELECT statement
+	/// Query one row with reinhardt-query SELECT statement
 	async fn query_one_statement(&self, stmt: &SelectStatement) -> DbResult<Row>;
 
 	/// Execute a SELECT statement
@@ -50,41 +52,43 @@ pub trait ConnectionExt {
 /// Default implementation helper for building SQL from statements
 pub mod helpers {
 	use super::*;
-	use sea_query::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder, Values};
+	use reinhardt_query::prelude::{
+		MySqlQueryBuilder, PostgresQueryBuilder, QueryBuilder, SqliteQueryBuilder, Values,
+	};
 
 	/// Build SQL string and values from SelectStatement
 	pub fn build_select(stmt: &SelectStatement, backend: DbBackend) -> (String, Values) {
 		match backend {
-			DbBackend::Postgres => stmt.clone().build(PostgresQueryBuilder),
-			DbBackend::Mysql => stmt.clone().build(MysqlQueryBuilder),
-			DbBackend::Sqlite => stmt.clone().build(SqliteQueryBuilder),
+			DbBackend::Postgres => PostgresQueryBuilder::new().build_select(stmt),
+			DbBackend::Mysql => MySqlQueryBuilder::new().build_select(stmt),
+			DbBackend::Sqlite => SqliteQueryBuilder::new().build_select(stmt),
 		}
 	}
 
 	/// Build SQL string and values from InsertStatement
 	pub fn build_insert(stmt: &InsertStatement, backend: DbBackend) -> (String, Values) {
 		match backend {
-			DbBackend::Postgres => stmt.clone().build(PostgresQueryBuilder),
-			DbBackend::Mysql => stmt.clone().build(MysqlQueryBuilder),
-			DbBackend::Sqlite => stmt.clone().build(SqliteQueryBuilder),
+			DbBackend::Postgres => PostgresQueryBuilder::new().build_insert(stmt),
+			DbBackend::Mysql => MySqlQueryBuilder::new().build_insert(stmt),
+			DbBackend::Sqlite => SqliteQueryBuilder::new().build_insert(stmt),
 		}
 	}
 
 	/// Build SQL string and values from UpdateStatement
 	pub fn build_update(stmt: &UpdateStatement, backend: DbBackend) -> (String, Values) {
 		match backend {
-			DbBackend::Postgres => stmt.clone().build(PostgresQueryBuilder),
-			DbBackend::Mysql => stmt.clone().build(MysqlQueryBuilder),
-			DbBackend::Sqlite => stmt.clone().build(SqliteQueryBuilder),
+			DbBackend::Postgres => PostgresQueryBuilder::new().build_update(stmt),
+			DbBackend::Mysql => MySqlQueryBuilder::new().build_update(stmt),
+			DbBackend::Sqlite => SqliteQueryBuilder::new().build_update(stmt),
 		}
 	}
 
 	/// Build SQL string and values from DeleteStatement
 	pub fn build_delete(stmt: &DeleteStatement, backend: DbBackend) -> (String, Values) {
 		match backend {
-			DbBackend::Postgres => stmt.clone().build(PostgresQueryBuilder),
-			DbBackend::Mysql => stmt.clone().build(MysqlQueryBuilder),
-			DbBackend::Sqlite => stmt.clone().build(SqliteQueryBuilder),
+			DbBackend::Postgres => PostgresQueryBuilder::new().build_delete(stmt),
+			DbBackend::Mysql => MySqlQueryBuilder::new().build_delete(stmt),
+			DbBackend::Sqlite => SqliteQueryBuilder::new().build_delete(stmt),
 		}
 	}
 }
@@ -92,11 +96,11 @@ pub mod helpers {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use sea_query::{Alias, Expr, Query};
+	use reinhardt_query::prelude::{Alias, Expr, Query};
 
 	#[test]
 	fn test_build_select_postgres() {
-		use sea_query::ExprTrait;
+		use reinhardt_query::prelude::ExprTrait;
 
 		let stmt = Query::select()
 			.from(Alias::new("users"))

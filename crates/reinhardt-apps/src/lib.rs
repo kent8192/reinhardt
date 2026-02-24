@@ -74,7 +74,7 @@
 //! This crate re-exports commonly used types from other Reinhardt crates:
 //!
 //! - From `reinhardt-http`: [`Request`], [`Response`], [`StreamBody`]
-//! - From `reinhardt-settings`: [`Settings`], [`DatabaseConfig`], [`MiddlewareConfig`]
+//! - From `reinhardt-conf`: [`Settings`], [`DatabaseConfig`], [`MiddlewareConfig`]
 //! - From `reinhardt-exception`: [`Error`], [`Result`]
 //! - From `reinhardt-server`: [`HttpServer`], [`serve`]
 //! - From `reinhardt-types`: [`Handler`], [`Middleware`], [`MiddlewareChain`]
@@ -90,7 +90,7 @@ pub mod validation;
 // Re-export from reinhardt-http
 pub use reinhardt_http::{Request, Response, StreamBody, StreamingResponse};
 
-// Re-export from reinhardt-settings
+// Re-export from reinhardt-conf
 pub use reinhardt_conf::settings::{DatabaseConfig, MiddlewareConfig, Settings, TemplateConfig};
 
 // Re-export from reinhardt-exception

@@ -31,10 +31,10 @@
 //! - Caching strategies (covered in cache integration tests)
 
 use reinhardt_rest::filters::{
-	CustomFilterBackend, FilterBackend, FuzzySearchFilter, RangeFilter, SimpleOrderingBackend,
-	SimpleSearchBackend,
+	CustomFilterBackend, DatabaseDialect, FilterBackend, FuzzySearchFilter, RangeFilter,
+	SimpleOrderingBackend, SimpleSearchBackend,
 };
-use reinhardt_test::fixtures::testcontainers::{postgres_container, ContainerAsync, GenericImage};
+use reinhardt_test::fixtures::testcontainers::{ContainerAsync, GenericImage, postgres_container};
 use rstest::*;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -136,8 +136,10 @@ async fn test_simple_search_backend_with_orm_integration(
 ) {
 	let (_container, pool) = filter_test_db.await;
 
-	// Create SimpleSearchBackend
-	let backend = SimpleSearchBackend::new("search").with_field("name");
+	// Create SimpleSearchBackend with PostgreSQL dialect
+	let backend = SimpleSearchBackend::new("search")
+		.with_field("name")
+		.with_dialect(DatabaseDialect::PostgreSQL);
 
 	// Prepare query parameters
 	let mut params = HashMap::new();
@@ -152,7 +154,8 @@ async fn test_simple_search_backend_with_orm_integration(
 
 	// Verify WHERE clause is added
 	assert!(filtered_sql.contains("WHERE"));
-	assert!(filtered_sql.contains("name LIKE '%Laptop%'"));
+	// PostgreSQL uses double quotes for identifiers
+	assert!(filtered_sql.contains("\"name\" LIKE '%Laptop%'"));
 
 	// Execute generated SQL against database
 	let results = sqlx::query(&filtered_sql)
@@ -335,7 +338,9 @@ async fn test_custom_filter_backend_chaining(
 	// Create CustomFilterBackend with multiple filters
 	let mut backend = CustomFilterBackend::new();
 	backend.add_filter(Box::new(
-		SimpleSearchBackend::new("search").with_field("category"),
+		SimpleSearchBackend::new("search")
+			.with_field("category")
+			.with_dialect(DatabaseDialect::PostgreSQL),
 	));
 	backend.add_filter(Box::new(
 		SimpleOrderingBackend::new("ordering").allow_field("price"),
@@ -355,7 +360,8 @@ async fn test_custom_filter_backend_chaining(
 
 	// Verify both WHERE and ORDER BY are present
 	assert!(filtered_sql.contains("WHERE"));
-	assert!(filtered_sql.contains("category LIKE '%Electronics%'"));
+	// PostgreSQL uses double quotes for identifiers
+	assert!(filtered_sql.contains("\"category\" LIKE '%Electronics%'"));
 	assert!(filtered_sql.contains("ORDER BY price ASC"));
 
 	// Execute query
@@ -492,8 +498,10 @@ async fn test_filter_with_pagination_serialization(
 ) {
 	let (_container, pool) = filter_test_db.await;
 
-	// Create filter backend
-	let backend = SimpleSearchBackend::new("search").with_field("category");
+	// Create filter backend with PostgreSQL dialect
+	let backend = SimpleSearchBackend::new("search")
+		.with_field("category")
+		.with_dialect(DatabaseDialect::PostgreSQL);
 
 	// Prepare query parameters
 	let mut params = HashMap::new();

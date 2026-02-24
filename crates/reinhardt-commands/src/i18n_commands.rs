@@ -11,6 +11,22 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+/// Escapes a string for use as a PO file field value.
+///
+/// PO format requires special characters to be escaped:
+/// - Backslash → `\\`
+/// - Double quote → `\"`
+/// - Newline → `\n`
+/// - Carriage return → `\r`
+/// - Tab → `\t`
+fn escape_po_string(s: &str) -> String {
+	s.replace('\\', "\\\\")
+		.replace('"', "\\\"")
+		.replace('\n', "\\n")
+		.replace('\r', "\\r")
+		.replace('\t', "\\t")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TranslatableMessage {
 	msgid: String,
@@ -350,11 +366,14 @@ impl MakeMessagesCommand {
 		let mut new_content = header;
 
 		for msg in messages {
-			new_content.push_str(&format!("\nmsgid \"{}\"\n", msg.msgid));
+			new_content.push_str(&format!("\nmsgid \"{}\"\n", escape_po_string(&msg.msgid)));
 
 			// Use existing translation if available, otherwise empty
 			if let Some(existing_msgstr) = existing_translations.get(&msg.msgid) {
-				new_content.push_str(&format!("msgstr \"{}\"\n", existing_msgstr));
+				new_content.push_str(&format!(
+					"msgstr \"{}\"\n",
+					escape_po_string(existing_msgstr)
+				));
 			} else {
 				new_content.push_str("msgstr \"\"\n");
 			}
@@ -407,7 +426,7 @@ msgstr ""
 		);
 
 		for msg in messages {
-			content.push_str(&format!("\nmsgid \"{}\"\n", msg.msgid));
+			content.push_str(&format!("\nmsgid \"{}\"\n", escape_po_string(&msg.msgid)));
 			content.push_str("msgstr \"\"\n");
 		}
 
@@ -584,14 +603,23 @@ impl CompileMessagesCommand {
 		content.extend_from_slice(&0_u32.to_le_bytes());
 
 		// Number of strings
-		content.extend_from_slice(&(messages.len() as u32).to_le_bytes());
+		let n_strings: u32 = messages.len().try_into().map_err(|_| {
+			CommandError::ExecutionError("Too many messages for MO format".to_string())
+		})?;
+		content.extend_from_slice(&n_strings.to_le_bytes());
 
 		// Offset of table with original strings (after header)
 		let orig_table_offset: u32 = 28;
 		content.extend_from_slice(&orig_table_offset.to_le_bytes());
 
 		// Offset of table with translated strings
-		let trans_table_offset = orig_table_offset + (messages.len() * 8) as u32;
+		let trans_table_offset = orig_table_offset
+			.checked_add(n_strings.checked_mul(8).ok_or_else(|| {
+				CommandError::ExecutionError("Integer overflow in MO table offset".to_string())
+			})?)
+			.ok_or_else(|| {
+				CommandError::ExecutionError("Integer overflow in MO header".to_string())
+			})?;
 		content.extend_from_slice(&trans_table_offset.to_le_bytes());
 
 		// Hash table size (0 = no hash table in this simplified version)
@@ -601,27 +629,55 @@ impl CompileMessagesCommand {
 		content.extend_from_slice(&0_u32.to_le_bytes());
 
 		// Calculate string data offset
-		let string_data_offset = trans_table_offset + (messages.len() * 8) as u32;
+		let string_data_offset = trans_table_offset
+			.checked_add(n_strings.checked_mul(8).ok_or_else(|| {
+				CommandError::ExecutionError(
+					"Integer overflow in MO string data offset".to_string(),
+				)
+			})?)
+			.ok_or_else(|| {
+				CommandError::ExecutionError(
+					"Integer overflow computing string data offset".to_string(),
+				)
+			})?;
 		let mut current_offset = string_data_offset;
 
 		// Write original strings table
 		let mut orig_strings = Vec::new();
 		for (msgid, _) in messages {
 			let msgid_bytes = msgid.as_bytes();
-			content.extend_from_slice(&(msgid_bytes.len() as u32).to_le_bytes());
+			let msgid_len: u32 = msgid_bytes.len().try_into().map_err(|_| {
+				CommandError::ExecutionError("msgid too long for MO format".to_string())
+			})?;
+			content.extend_from_slice(&msgid_len.to_le_bytes());
 			content.extend_from_slice(&current_offset.to_le_bytes());
 			orig_strings.push(msgid_bytes);
-			current_offset += msgid_bytes.len() as u32 + 1; // +1 for null terminator
+			current_offset = current_offset
+				.checked_add(msgid_len)
+				.and_then(|v| v.checked_add(1))
+				.ok_or_else(|| {
+					CommandError::ExecutionError("Integer overflow in MO string offset".to_string())
+				})?;
 		}
 
 		// Write translated strings table
 		let mut trans_strings = Vec::new();
 		for (_, msgstr) in messages {
 			let msgstr_bytes = msgstr.as_bytes();
-			content.extend_from_slice(&(msgstr_bytes.len() as u32).to_le_bytes());
+			let msgstr_len: u32 = msgstr_bytes.len().try_into().map_err(|_| {
+				CommandError::ExecutionError("msgstr too long for MO format".to_string())
+			})?;
+			content.extend_from_slice(&msgstr_len.to_le_bytes());
 			content.extend_from_slice(&current_offset.to_le_bytes());
 			trans_strings.push(msgstr_bytes);
-			current_offset += msgstr_bytes.len() as u32 + 1;
+			current_offset = current_offset
+				.checked_add(msgstr_len)
+				.and_then(|v| v.checked_add(1))
+				.ok_or_else(|| {
+					CommandError::ExecutionError(
+						"Integer overflow in MO translated offset".to_string(),
+					)
+				})?;
 		}
 
 		// Write original strings
@@ -665,5 +721,50 @@ impl CompileMessagesCommand {
 		}
 
 		Ok(locales)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	#[rstest]
+	#[case("plain text", "plain text")]
+	#[case(r#"He said "hello""#, r#"He said \"hello\""#)]
+	#[case("path\\to\\file", "path\\\\to\\\\file")]
+	#[case("line1\nline2", "line1\\nline2")]
+	#[case("col1\tcol2", "col1\\tcol2")]
+	#[case("cr\rend", "cr\\rend")]
+	#[case("mixed\n\"value\"", "mixed\\n\\\"value\\\"")]
+	fn test_escape_po_string(#[case] input: &str, #[case] expected: &str) {
+		// Arrange: input string with special PO format characters
+		// Act
+		let result = escape_po_string(input);
+		// Assert: all special characters are properly escaped
+		assert_eq!(result, expected);
+	}
+
+	#[rstest]
+	fn test_generate_mo_content_empty_messages_succeeds() {
+		// Arrange
+		let messages: Vec<(String, String)> = vec![];
+		// Act
+		let result = CompileMessagesCommand::generate_mo_content(&messages);
+		// Assert: empty message list produces valid MO content (just header)
+		assert!(result.is_ok());
+		let data = result.unwrap();
+		// MO magic number at offset 0 (little-endian 0x950412de)
+		assert_eq!(&data[0..4], &0x950412de_u32.to_le_bytes());
+	}
+
+	#[rstest]
+	fn test_generate_mo_content_single_message_no_overflow() {
+		// Arrange: a single translated message
+		let messages = vec![("Hello".to_string(), "Bonjour".to_string())];
+		// Act
+		let result = CompileMessagesCommand::generate_mo_content(&messages);
+		// Assert: compiles without arithmetic errors
+		assert!(result.is_ok());
 	}
 }

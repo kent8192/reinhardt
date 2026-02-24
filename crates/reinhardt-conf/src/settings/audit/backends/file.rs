@@ -29,7 +29,7 @@
 //! # }
 //! ```
 
-use super::super::{AuditBackend, AuditEvent, EventFilter};
+use crate::settings::audit::{AuditBackend, AuditEvent, EventFilter};
 use parking_lot::RwLock;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};

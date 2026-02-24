@@ -18,9 +18,10 @@
 /// ```
 use std::fmt;
 
-use sea_query::{
-	Alias, ColumnDef, Index, IndexCreateStatement, IndexDropStatement, Table, TableAlterStatement,
-	TableCreateStatement, TableDropStatement,
+use reinhardt_query::prelude::{
+	Alias, AlterTableStatement, ColumnDef, CreateIndexStatement, CreateTableStatement,
+	DropIndexStatement, DropTableStatement, MySqlQueryBuilder, PostgresQueryBuilder, Query,
+	QueryBuilder, SqliteQueryBuilder,
 };
 
 /// DDL reference objects for schema operations
@@ -161,7 +162,7 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 	/// Execute a SQL statement
 	async fn execute(&mut self, sql: &str) -> SchemaEditorResult<()>;
 
-	/// Generate CREATE TABLE statement using SeaQuery
+	/// Generate CREATE TABLE statement using reinhardt-query
 	///
 	/// # Example
 	///
@@ -169,7 +170,7 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 	/// # use reinhardt_db::backends::schema::{BaseDatabaseSchemaEditor, SchemaEditorResult};
 	/// # use reinhardt_db::backends::DatabaseType;
 	/// # use async_trait::async_trait;
-	/// # use sea_query::PostgresQueryBuilder;
+	/// # use reinhardt_query::prelude::{PostgresQueryBuilder, QueryBuilder};
 	/// struct TestEditor;
 	///
 	/// #[async_trait]
@@ -188,7 +189,7 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 	///     ("id", "INTEGER PRIMARY KEY"),
 	///     ("name", "VARCHAR(100)"),
 	/// ]);
-	/// let sql = stmt.to_string(PostgresQueryBuilder);
+	/// let (sql, _) = PostgresQueryBuilder.build_create_table(&stmt);
 	/// assert!(sql.contains("CREATE TABLE"));
 	/// assert!(sql.contains("\"users\""));
 	/// ```
@@ -196,24 +197,22 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 		&self,
 		table: &str,
 		columns: &[(&str, &str)],
-	) -> TableCreateStatement {
-		let mut stmt = Table::create();
-		stmt.table(Alias::new(table)).if_not_exists();
+	) -> CreateTableStatement {
+		let mut binding = Query::create_table();
+		let stmt = binding.table(Alias::new(table)).if_not_exists();
 
 		for (name, definition) in columns {
-			let mut col = ColumnDef::new(Alias::new(*name));
 			// Use custom() for raw type definitions since we receive them as strings
-			col.custom(Alias::new(*definition));
-			stmt.col(&mut col);
+			stmt.col(ColumnDef::new(Alias::new(*name)).custom(*definition));
 		}
 
 		stmt.to_owned()
 	}
 
-	/// Generate DROP TABLE statement using SeaQuery
-	fn drop_table_statement(&self, table: &str, cascade: bool) -> TableDropStatement {
-		let mut stmt = Table::drop();
-		stmt.table(Alias::new(table)).if_exists();
+	/// Generate DROP TABLE statement using reinhardt-query
+	fn drop_table_statement(&self, table: &str, cascade: bool) -> DropTableStatement {
+		let mut binding = Query::drop_table();
+		let stmt = binding.table(Alias::new(table)).if_exists();
 
 		if cascade {
 			stmt.cascade();
@@ -222,37 +221,32 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 		stmt.to_owned()
 	}
 
-	/// Generate ALTER TABLE ADD COLUMN statement using SeaQuery
+	/// Generate ALTER TABLE ADD COLUMN statement using reinhardt-query
 	fn add_column_statement(
 		&self,
 		table: &str,
 		column: &str,
 		definition: &str,
-	) -> TableAlterStatement {
-		let mut stmt = Table::alter();
-		stmt.table(Alias::new(table));
-
-		let mut col = ColumnDef::new(Alias::new(column));
+	) -> AlterTableStatement {
 		// Use custom() for raw type definitions
-		col.custom(Alias::new(definition));
-		stmt.add_column(&mut col);
-
-		stmt.to_owned()
+		Query::alter_table()
+			.table(Alias::new(table))
+			.add_column(ColumnDef::new(Alias::new(column)).custom(Alias::new(definition)))
+			.to_owned()
 	}
 
-	/// Generate ALTER TABLE DROP COLUMN statement using SeaQuery
-	fn drop_column_statement(&self, table: &str, column: &str) -> TableAlterStatement {
-		let mut stmt = Table::alter();
-		stmt.table(Alias::new(table));
-		stmt.drop_column(Alias::new(column));
-
-		stmt.to_owned()
+	/// Generate ALTER TABLE DROP COLUMN statement using reinhardt-query
+	fn drop_column_statement(&self, table: &str, column: &str) -> AlterTableStatement {
+		Query::alter_table()
+			.table(Alias::new(table))
+			.drop_column(Alias::new(column))
+			.to_owned()
 	}
 
 	/// Generate ALTER TABLE RENAME COLUMN SQL
 	///
 	/// Always uses double quotes for PostgreSQL identifier safety.
-	/// Note: SeaQuery doesn't support RENAME COLUMN, so we use raw SQL.
+	/// Note: reinhardt-query doesn't support RENAME COLUMN, so we use raw SQL.
 	fn rename_column_statement(&self, table: &str, old_name: &str, new_name: &str) -> String {
 		format!(
 			"ALTER TABLE \"{}\" RENAME COLUMN \"{}\" TO \"{}\"",
@@ -263,7 +257,7 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 	/// Generate ALTER TABLE ALTER COLUMN TYPE SQL
 	///
 	/// Returns database-specific SQL for changing a column's type.
-	/// Note: SeaQuery doesn't support ALTER COLUMN TYPE, so we use raw SQL.
+	/// Note: reinhardt-query doesn't support ALTER COLUMN TYPE, so we use raw SQL.
 	///
 	/// Default implementation uses PostgreSQL syntax:
 	/// `ALTER TABLE table ALTER COLUMN column TYPE new_type`
@@ -279,9 +273,9 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 		)
 	}
 
-	/// Generate CREATE INDEX statement using SeaQuery (or pg_escape for partial indexes)
+	/// Generate CREATE INDEX statement using reinhardt-query (or raw SQL for partial indexes)
 	///
-	/// Note: SeaQuery doesn't support partial indexes (WHERE clause), so we use raw SQL with pg_escape for those cases
+	/// Note: reinhardt-query doesn't support partial indexes (WHERE clause), so we use raw SQL for those cases
 	fn create_index_statement(
 		&self,
 		name: &str,
@@ -289,12 +283,12 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 		columns: &[&str],
 		unique: bool,
 		condition: Option<&str>,
-	) -> Result<IndexCreateStatement, String> {
+	) -> Result<CreateIndexStatement, String> {
 		if condition.is_some() {
-			// SeaQuery doesn't support partial indexes, return error to indicate fallback needed
+			// reinhardt-query doesn't support partial indexes, return error to indicate fallback needed
 			// Always use double quotes for PostgreSQL identifier safety
 			return Err(format!(
-				"Partial indexes not supported by SeaQuery. Use raw SQL: CREATE {}INDEX \"{}\" ON \"{}\" ({}) WHERE {}",
+				"Partial indexes not supported by reinhardt-query. Use raw SQL: CREATE {}INDEX \"{}\" ON \"{}\" ({}) WHERE {}",
 				if unique { "UNIQUE " } else { "" },
 				name,
 				table,
@@ -307,8 +301,8 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 			));
 		}
 
-		let mut stmt = Index::create();
-		stmt.name(name).table(Alias::new(table));
+		let mut binding = Query::create_index();
+		let stmt = binding.name(Alias::new(name)).table(Alias::new(table));
 
 		if unique {
 			stmt.unique();
@@ -321,17 +315,15 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 		Ok(stmt.to_owned())
 	}
 
-	/// Generate DROP INDEX statement using SeaQuery
-	fn drop_index_statement(&self, name: &str) -> IndexDropStatement {
-		let mut stmt = Index::drop();
-		stmt.name(name).if_exists();
-
-		stmt.to_owned()
+	/// Generate DROP INDEX statement using reinhardt-query
+	fn drop_index_statement(&self, name: &str) -> DropIndexStatement {
+		let mut binding = Query::drop_index();
+		binding.name(Alias::new(name)).if_exists().to_owned()
 	}
 
 	/// Generate CREATE SCHEMA statement
 	///
-	/// Note: SeaQuery doesn't support CREATE SCHEMA, so we use raw SQL
+	/// Note: reinhardt-query doesn't support CREATE SCHEMA, so we use raw SQL
 	///
 	/// # Arguments
 	///
@@ -372,7 +364,7 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 
 	/// Generate DROP SCHEMA statement
 	///
-	/// Note: SeaQuery doesn't support DROP SCHEMA, so we use raw SQL
+	/// Note: reinhardt-query doesn't support DROP SCHEMA, so we use raw SQL
 	///
 	/// # Arguments
 	///
@@ -414,64 +406,64 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 		)
 	}
 
-	/// Build SQL string from TableCreateStatement using appropriate QueryBuilder
-	fn build_create_table_sql(&self, stmt: &TableCreateStatement) -> String {
+	/// Build SQL string from `CreateTableStatement` using appropriate QueryBuilder
+	fn build_create_table_sql(&self, stmt: &CreateTableStatement) -> String {
 		use super::types::DatabaseType;
-		use sea_query::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
 
-		match self.database_type() {
-			DatabaseType::Postgres => stmt.to_string(PostgresQueryBuilder),
-			DatabaseType::Mysql => stmt.to_string(MysqlQueryBuilder),
-			DatabaseType::Sqlite => stmt.to_string(SqliteQueryBuilder),
-		}
+		let (sql, _values) = match self.database_type() {
+			DatabaseType::Postgres => PostgresQueryBuilder.build_create_table(stmt),
+			DatabaseType::Mysql => MySqlQueryBuilder.build_create_table(stmt),
+			DatabaseType::Sqlite => SqliteQueryBuilder.build_create_table(stmt),
+		};
+		sql
 	}
 
-	/// Build SQL string from TableDropStatement using appropriate QueryBuilder
-	fn build_drop_table_sql(&self, stmt: &TableDropStatement) -> String {
+	/// Build SQL string from `DropTableStatement` using appropriate QueryBuilder
+	fn build_drop_table_sql(&self, stmt: &DropTableStatement) -> String {
 		use super::types::DatabaseType;
-		use sea_query::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
 
-		match self.database_type() {
-			DatabaseType::Postgres => stmt.to_string(PostgresQueryBuilder),
-			DatabaseType::Mysql => stmt.to_string(MysqlQueryBuilder),
-			DatabaseType::Sqlite => stmt.to_string(SqliteQueryBuilder),
-		}
+		let (sql, _values) = match self.database_type() {
+			DatabaseType::Postgres => PostgresQueryBuilder.build_drop_table(stmt),
+			DatabaseType::Mysql => MySqlQueryBuilder.build_drop_table(stmt),
+			DatabaseType::Sqlite => SqliteQueryBuilder.build_drop_table(stmt),
+		};
+		sql
 	}
 
-	/// Build SQL string from TableAlterStatement using appropriate QueryBuilder
-	fn build_alter_table_sql(&self, stmt: &TableAlterStatement) -> String {
+	/// Build SQL string from `AlterTableStatement` using appropriate QueryBuilder
+	fn build_alter_table_sql(&self, stmt: &AlterTableStatement) -> String {
 		use super::types::DatabaseType;
-		use sea_query::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
 
-		match self.database_type() {
-			DatabaseType::Postgres => stmt.to_string(PostgresQueryBuilder),
-			DatabaseType::Mysql => stmt.to_string(MysqlQueryBuilder),
-			DatabaseType::Sqlite => stmt.to_string(SqliteQueryBuilder),
-		}
+		let (sql, _values) = match self.database_type() {
+			DatabaseType::Postgres => PostgresQueryBuilder.build_alter_table(stmt),
+			DatabaseType::Mysql => MySqlQueryBuilder.build_alter_table(stmt),
+			DatabaseType::Sqlite => SqliteQueryBuilder.build_alter_table(stmt),
+		};
+		sql
 	}
 
-	/// Build SQL string from IndexCreateStatement using appropriate QueryBuilder
-	fn build_create_index_sql(&self, stmt: &IndexCreateStatement) -> String {
+	/// Build SQL string from `CreateIndexStatement` using appropriate QueryBuilder
+	fn build_create_index_sql(&self, stmt: &CreateIndexStatement) -> String {
 		use super::types::DatabaseType;
-		use sea_query::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
 
-		match self.database_type() {
-			DatabaseType::Postgres => stmt.to_string(PostgresQueryBuilder),
-			DatabaseType::Mysql => stmt.to_string(MysqlQueryBuilder),
-			DatabaseType::Sqlite => stmt.to_string(SqliteQueryBuilder),
-		}
+		let (sql, _values) = match self.database_type() {
+			DatabaseType::Postgres => PostgresQueryBuilder.build_create_index(stmt),
+			DatabaseType::Mysql => MySqlQueryBuilder.build_create_index(stmt),
+			DatabaseType::Sqlite => SqliteQueryBuilder.build_create_index(stmt),
+		};
+		sql
 	}
 
-	/// Build SQL string from IndexDropStatement using appropriate QueryBuilder
-	fn build_drop_index_sql(&self, stmt: &IndexDropStatement) -> String {
+	/// Build SQL string from `DropIndexStatement` using appropriate QueryBuilder
+	fn build_drop_index_sql(&self, stmt: &DropIndexStatement) -> String {
 		use super::types::DatabaseType;
-		use sea_query::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
 
-		match self.database_type() {
-			DatabaseType::Postgres => stmt.to_string(PostgresQueryBuilder),
-			DatabaseType::Mysql => stmt.to_string(MysqlQueryBuilder),
-			DatabaseType::Sqlite => stmt.to_string(SqliteQueryBuilder),
-		}
+		let (sql, _values) = match self.database_type() {
+			DatabaseType::Postgres => PostgresQueryBuilder.build_drop_index(stmt),
+			DatabaseType::Mysql => MySqlQueryBuilder.build_drop_index(stmt),
+			DatabaseType::Sqlite => SqliteQueryBuilder.build_drop_index(stmt),
+		};
+		sql
 	}
 }
 
@@ -522,14 +514,14 @@ mod tests {
 
 	#[test]
 	fn test_create_table_statement() {
-		use sea_query::PostgresQueryBuilder;
+		use reinhardt_query::prelude::{PostgresQueryBuilder, QueryBuilder};
 
 		let editor = TestSchemaEditor;
 		let stmt = editor.create_table_statement(
 			"users",
 			&[("id", "INTEGER PRIMARY KEY"), ("name", "VARCHAR(100)")],
 		);
-		let sql = stmt.to_string(PostgresQueryBuilder);
+		let (sql, _) = PostgresQueryBuilder.build_create_table(&stmt);
 
 		assert!(sql.contains("CREATE TABLE"));
 		assert!(sql.contains("\"users\""));
@@ -539,17 +531,17 @@ mod tests {
 
 	#[test]
 	fn test_drop_table_statement() {
-		use sea_query::PostgresQueryBuilder;
+		use reinhardt_query::prelude::{PostgresQueryBuilder, QueryBuilder};
 
 		let editor = TestSchemaEditor;
 
 		let stmt_no_cascade = editor.drop_table_statement("users", false);
-		let sql_no_cascade = stmt_no_cascade.to_string(PostgresQueryBuilder);
+		let (sql_no_cascade, _) = PostgresQueryBuilder.build_drop_table(&stmt_no_cascade);
 		assert!(sql_no_cascade.contains("DROP TABLE"));
 		assert!(sql_no_cascade.contains("\"users\""));
 
 		let stmt_cascade = editor.drop_table_statement("users", true);
-		let sql_cascade = stmt_cascade.to_string(PostgresQueryBuilder);
+		let (sql_cascade, _) = PostgresQueryBuilder.build_drop_table(&stmt_cascade);
 		assert!(sql_cascade.contains("DROP TABLE"));
 		assert!(sql_cascade.contains("\"users\""));
 		assert!(sql_cascade.contains("CASCADE"));
@@ -557,11 +549,11 @@ mod tests {
 
 	#[test]
 	fn test_add_column_statement() {
-		use sea_query::PostgresQueryBuilder;
+		use reinhardt_query::prelude::{PostgresQueryBuilder, QueryBuilder};
 
 		let editor = TestSchemaEditor;
 		let stmt = editor.add_column_statement("users", "email", "VARCHAR(255)");
-		let sql = stmt.to_string(PostgresQueryBuilder);
+		let (sql, _) = PostgresQueryBuilder.build_alter_table(&stmt);
 
 		assert!(sql.contains("ALTER TABLE"));
 		assert!(sql.contains("\"users\""));
@@ -572,13 +564,13 @@ mod tests {
 
 	#[test]
 	fn test_create_index_statement() {
-		use sea_query::PostgresQueryBuilder;
+		use reinhardt_query::prelude::{PostgresQueryBuilder, QueryBuilder};
 
 		let editor = TestSchemaEditor;
 
 		// Simple index
 		let stmt = editor.create_index_statement("idx_email", "users", &["email"], false, None);
-		let sql = stmt.unwrap().to_string(PostgresQueryBuilder);
+		let (sql, _) = PostgresQueryBuilder.build_create_index(&stmt.unwrap());
 		assert!(sql.contains("CREATE INDEX"));
 		assert!(sql.contains("idx_email"));
 		assert!(sql.contains("\"users\""));
@@ -586,10 +578,10 @@ mod tests {
 		// Unique index
 		let unique_stmt =
 			editor.create_index_statement("idx_email_uniq", "users", &["email"], true, None);
-		let unique_sql = unique_stmt.unwrap().to_string(PostgresQueryBuilder);
+		let (unique_sql, _) = PostgresQueryBuilder.build_create_index(&unique_stmt.unwrap());
 		assert!(unique_sql.contains("CREATE UNIQUE INDEX"));
 
-		// Partial index (not supported by SeaQuery, returns error with fallback SQL)
+		// Partial index (not supported by reinhardt-query, returns error with fallback SQL)
 		let partial_result = editor.create_index_statement(
 			"idx_active",
 			"users",

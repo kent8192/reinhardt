@@ -1,0 +1,90 @@
+codecov:
+  require_ci_to_pass: false
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+        if_ci_failed: success
+    patch:
+      default:
+        target: 80%
+        threshold: 5%
+        if_ci_failed: success
+
+  ignore:
+    # Proc-macro crates (compile-time only)
+    - "crates/reinhardt-core/macros/**"
+    - "crates/reinhardt-di/macros/**"
+    - "crates/reinhardt-query/macros/**"
+    - "crates/reinhardt-graphql/macros/**"
+    - "crates/reinhardt-grpc/macros/**"
+    - "crates/reinhardt-pages/macros/**"
+    - "crates/reinhardt-pages/ast/**"
+    - "crates/reinhardt-rest/openapi-macros/**"
+    - "crates/reinhardt-urls/routers-macros/**"
+    # CLI tools
+    - "crates/reinhardt-admin-cli/**"
+    # Test infrastructure
+    - "crates/reinhardt-test/**"
+    - "tests/**"
+    # Build scripts, examples, benchmarks
+    - "**/build.rs"
+    - "examples/**"
+    - "tests/bench/**"
+    # DSL definitions
+    - "crates/reinhardt-manouche/**"
+
+flags:
+  unit:
+    paths: ["crates/**", "src/**"]
+    carryforward: true
+  intra-crate-integration:
+    paths: ["crates/**", "src/**"]
+    carryforward: true
+  cross-crate-integration:
+    paths: ["crates/**", "src/**"]
+    carryforward: true
+
+component_management:
+  default_rules:
+    statuses:
+      - type: project
+        target: auto
+  individual_components:
+    - component_id: core
+      name: Core Framework
+      paths: [crates/reinhardt-core/src/**, crates/reinhardt-apps/src/**, crates/reinhardt-http/src/**, crates/reinhardt-conf/src/**, src/**]
+    - component_id: database
+      name: Database & ORM
+      paths: [crates/reinhardt-db/src/**, crates/reinhardt-query/src/**]
+    - component_id: rest
+      name: REST Framework
+      paths: [crates/reinhardt-rest/src/**, crates/reinhardt-views/src/**, crates/reinhardt-openapi/src/**, crates/reinhardt-throttling/src/**]
+    - component_id: auth
+      name: Authentication & Security
+      paths: [crates/reinhardt-auth/src/**, crates/reinhardt-middleware/src/**]
+    - component_id: di
+      name: Dependency Injection
+      paths: [crates/reinhardt-di/src/**]
+    - component_id: server
+      name: Server & Routing
+      paths: [crates/reinhardt-server/src/**, crates/reinhardt-urls/src/**]
+    - component_id: frontend
+      name: Frontend & Pages
+      paths: [crates/reinhardt-pages/src/**, crates/reinhardt-forms/src/**, crates/reinhardt-admin/src/**]
+    - component_id: communication
+      name: Communication
+      paths: [crates/reinhardt-mail/src/**, crates/reinhardt-graphql/src/**, crates/reinhardt-grpc/src/**, crates/reinhardt-websockets/src/**]
+    - component_id: utilities
+      name: Utilities & Infrastructure
+      paths: [crates/reinhardt-utils/src/**, crates/reinhardt-shortcuts/src/**, crates/reinhardt-dispatch/src/**, crates/reinhardt-commands/src/**, crates/reinhardt-tasks/src/**, crates/reinhardt-i18n/src/**, crates/reinhardt-deeplink/src/**, crates/reinhardt-dentdelion/src/**]
+
+comment:
+  layout: "condensed_header, condensed_files, condensed_footer"
+  require_changes: true
+  require_base: false
+  require_head: true
+  hide_comment_details: false

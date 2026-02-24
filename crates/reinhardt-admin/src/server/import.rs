@@ -3,13 +3,15 @@
 //! Provides import operations for admin models from various formats (JSON, CSV, TSV).
 
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, ImportFormat, ImportResponse};
-use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
-use super::error::MapServerFnError;
+use super::error::{AdminAuth, MapServerFnError};
+#[cfg(not(target_arch = "wasm32"))]
+use super::limits::{MAX_IMPORT_FILE_SIZE, MAX_IMPORT_RECORDS};
 
 /// Import model data from various formats
 ///
@@ -20,6 +22,10 @@ use super::error::MapServerFnError;
 ///
 /// This function is automatically exposed as an HTTP endpoint by the `#[server_fn]` macro.
 /// AdminSite and AdminDatabase dependencies are automatically injected via the DI system.
+///
+/// # Authentication
+///
+/// Requires staff (admin) permission and add permission for the model.
 ///
 /// # Example
 ///
@@ -43,19 +49,34 @@ pub async fn import_data(
 	data: Vec<u8>,
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
+	#[inject] http_request: ServerFnRequest,
 ) -> Result<ImportResponse, ServerFnError> {
+	// Authentication and authorization check
+	let auth = AdminAuth::from_request(&http_request);
+	auth.require_add_permission(&model_name)?;
+
+	// Validate import file size to prevent memory exhaustion
+	if data.len() > MAX_IMPORT_FILE_SIZE {
+		return Err(ServerFnError::application(format!(
+			"Import file size ({} bytes) exceeds maximum allowed size ({} bytes)",
+			data.len(),
+			MAX_IMPORT_FILE_SIZE
+		)));
+	}
+
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	let table_name = model_admin.table_name();
 
 	// Parse data based on format
+	// Sanitize error messages to avoid exposing internal details (schema, SQL, etc.)
 	let records: Vec<HashMap<String, serde_json::Value>> = match format {
 		ImportFormat::JSON => serde_json::from_slice(&data)
-			.map_err(|e| ServerFnError::deserialization(format!("JSON parse failed: {}", e)))?,
+			.map_err(|_| ServerFnError::deserialization("Invalid JSON format in import data"))?,
 		ImportFormat::CSV => {
 			let mut rdr = csv::Reader::from_reader(&data[..]);
 			rdr.deserialize()
 				.collect::<Result<Vec<_>, _>>()
-				.map_err(|e| ServerFnError::deserialization(format!("CSV parse failed: {}", e)))?
+				.map_err(|_| ServerFnError::deserialization("Invalid CSV format in import data"))?
 		}
 		ImportFormat::TSV => {
 			let mut rdr = csv::ReaderBuilder::new()
@@ -63,9 +84,18 @@ pub async fn import_data(
 				.from_reader(&data[..]);
 			rdr.deserialize()
 				.collect::<Result<Vec<_>, _>>()
-				.map_err(|e| ServerFnError::deserialization(format!("TSV parse failed: {}", e)))?
+				.map_err(|_| ServerFnError::deserialization("Invalid TSV format in import data"))?
 		}
 	};
+
+	// Validate record count to prevent database overload
+	if records.len() > MAX_IMPORT_RECORDS {
+		return Err(ServerFnError::application(format!(
+			"Import record count ({}) exceeds maximum allowed count ({})",
+			records.len(),
+			MAX_IMPORT_RECORDS
+		)));
+	}
 
 	// Import records
 	let mut imported = 0;
@@ -75,9 +105,11 @@ pub async fn import_data(
 	for (index, record) in records.into_iter().enumerate() {
 		match db.create::<AdminRecord>(table_name, record).await {
 			Ok(_) => imported += 1,
-			Err(e) => {
+			Err(_) => {
+				// Hide internal error details (SQL fragments, table structures, column names)
+				// to prevent information disclosure aiding reconnaissance attacks
 				failed += 1;
-				errors.push(format!("Record {}: {}", index + 1, e));
+				errors.push(format!("Record {}: import failed", index + 1));
 			}
 		}
 	}

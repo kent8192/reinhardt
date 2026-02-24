@@ -379,7 +379,7 @@ impl RenameField {
 }
 
 // MigrationOperation trait implementation for Django-style naming
-use super::super::operation_trait::MigrationOperation;
+use crate::migrations::operation_trait::MigrationOperation;
 
 impl MigrationOperation for AddField {
 	fn migration_name_fragment(&self) -> Option<String> {

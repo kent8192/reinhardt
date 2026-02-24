@@ -19,7 +19,6 @@ ignored_paths:
 - "**/dist/"
 - "**/dist-wasm/"
 - "**/*.splite3"
-
 include:
 - "**/.env*"
 - "**/*.rs"
@@ -28,6 +27,10 @@ include:
 - "**/*.json"
 - "**/*.yml"
 - "**/Dockerfile"
+
+# whether the project is in read-only mode
+# If set to true, all editing tools will be disabled and attempts to use them will result in an error
+# Added on 2025-04-18
 
 # whether the project is in read-only mode
 # If set to true, all editing tools will be disabled and attempts to use them will result in an error
@@ -80,11 +83,13 @@ recommended_modes:
 - "editing"
 
 # list of tools to include that would otherwise be disabled (particularly optional tools that are disabled by default)
+
+# list of tools to include that would otherwise be disabled (particularly optional tools that are disabled by default)
 included_optional_tools:
 - "switch_modes"
 web_dashboard: false
 web_dashboard_open_on_launch: false
-                                    # Set to false to disable auto-open on launch
+                                                                        # Set to false to disable auto-open on launch
 initial_prompt: |
   This is a Rust project using cargo.
   Common commands:
@@ -95,7 +100,6 @@ initial_prompt: |
   - Automatic Lint: cargo make clippy-fix
   - Check Format Rules: cargo make fmt-check
   - Check Lint Rules: cargo make clippy-check
-
 # list of mode names to that are always to be included in the set of active modes
 # The full set of modes to be activated is base_modes + default_modes.
 # If the setting is undefined, the base_modes from the global configuration (serena_config.yml) apply.
@@ -141,3 +145,7 @@ fixed_tools: []
 # Note that when using the JetBrains backend, language servers are not used and this list is correspondingly ignored.
 languages:
 - rust
+
+# override of the corresponding setting in serena_config.yml, see the documentation there.
+# If null or missing, the value from the global config is used.
+symbol_info_budget:

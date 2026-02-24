@@ -28,10 +28,10 @@ use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::LitStr;
 
-// Import AST types from reinhardt-pages-ast (re-exported via super)
+// Import AST types from reinhardt-manouche
 use crate::crate_paths::get_reinhardt_pages_crate_info;
-use reinhardt_pages_ast::types::AttrValue;
-use reinhardt_pages_ast::{
+use reinhardt_manouche::core::types::AttrValue;
+use reinhardt_manouche::core::{
 	PageEvent, PageExpression, PageParam, PageText, TypedPageAttr, TypedPageBody,
 	TypedPageComponent, TypedPageElement, TypedPageElse, TypedPageFor, TypedPageIf, TypedPageMacro,
 	TypedPageNode, TypedPageWatch,
@@ -630,7 +630,7 @@ mod tests {
 	use super::*;
 
 	fn parse_and_generate(input: TokenStream) -> TokenStream {
-		use reinhardt_pages_ast::PageMacro;
+		use reinhardt_manouche::core::PageMacro;
 
 		let untyped_ast: PageMacro = syn::parse2(input).unwrap();
 		// Transform to typed AST

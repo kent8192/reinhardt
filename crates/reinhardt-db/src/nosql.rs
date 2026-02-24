@@ -64,16 +64,26 @@
 //! ```
 
 pub mod backends;
+pub mod document;
 pub mod error;
+pub mod repository;
 pub mod traits;
 pub mod types;
 
 // Re-export commonly used types
-pub use error::{NoSQLError, Result};
+pub use error::{NoSQLError, OdmError, OdmResult, Result, ValidationError};
 pub use traits::{DocumentBackend, NoSQLBackend};
 pub use types::{
-	Document, FindOptions, NoSQLBackendType, NoSQLType, QueryValue, Ttl, UpdateResult,
+	Document as BsonDocument, FindOptions, NoSQLBackendType, NoSQLType, QueryValue, Ttl,
+	UpdateResult,
 };
+
+// Re-export ODM types
+pub use document::{Document, IndexKey, IndexModel, IndexModelBuilder, IndexOptions, IndexOrder};
+
+// Re-export Repository
+#[cfg(feature = "mongodb")]
+pub use repository::Repository;
 
 /// Prelude module for convenient imports
 ///
@@ -83,12 +93,18 @@ pub use types::{
 /// use reinhardt_db::nosql::prelude::*;
 /// ```
 pub mod prelude {
-	pub use super::error::{NoSQLError, Result};
+	pub use super::document::{
+		Document, IndexKey, IndexModel, IndexModelBuilder, IndexOptions, IndexOrder,
+	};
+	pub use super::error::{NoSQLError, OdmError, OdmResult, Result, ValidationError};
 	pub use super::traits::{DocumentBackend, NoSQLBackend};
 	pub use super::types::{
-		Document, FindOptions, NoSQLBackendType, NoSQLType, QueryValue, Ttl, UpdateResult,
+		Document as BsonDocument, FindOptions, NoSQLBackendType, NoSQLType, QueryValue, Ttl,
+		UpdateResult,
 	};
 
 	#[cfg(feature = "mongodb")]
 	pub use super::backends::mongodb;
+	#[cfg(feature = "mongodb")]
+	pub use super::repository::Repository;
 }

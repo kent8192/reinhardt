@@ -10,6 +10,7 @@ pub mod env_loader;
 pub mod env_parser;
 pub mod prelude;
 pub mod profile;
+pub mod secret_types;
 pub mod sources;
 pub mod validation;
 
@@ -105,9 +106,15 @@ pub struct Settings {
 	pub allowed_hosts: Vec<String>,
 
 	/// List of installed applications
+	///
+	/// Defaults to an empty vector. Use the `installed_apps!` macro
+	/// to register application modules with compile-time validation.
 	pub installed_apps: Vec<String>,
 
 	/// List of middleware classes
+	///
+	/// Defaults to an empty vector. Configure middleware as needed
+	/// for your application.
 	pub middleware: Vec<String>,
 
 	/// Root URL configuration module
@@ -116,7 +123,11 @@ pub struct Settings {
 	/// Database configurations
 	pub databases: HashMap<String, DatabaseConfig>,
 
-	/// Template configurations
+	/// Template engine configurations.
+	///
+	/// **Note:** Currently not consumed by the framework. Reserved for future
+	/// template engine integration. Setting this value has no effect on framework
+	/// behavior.
 	pub templates: Vec<TemplateConfig>,
 
 	/// Static files URL prefix
@@ -134,19 +145,37 @@ pub struct Settings {
 	/// Media files root directory
 	pub media_root: Option<PathBuf>,
 
-	/// Language code
+	/// Language code for internationalization.
+	///
+	/// **Note:** Currently not consumed by the framework. Reserved for future
+	/// i18n implementation. Setting this value has no effect on framework behavior.
 	pub language_code: String,
 
-	/// Time zone
+	/// Time zone for datetime handling.
+	///
+	/// **Note:** Currently not consumed by the framework. Reserved for future
+	/// timezone support implementation. Setting this value has no effect on
+	/// framework behavior.
 	pub time_zone: String,
 
-	/// Enable internationalization
+	/// Enable internationalization.
+	///
+	/// **Note:** Currently not consumed by the framework. Reserved for future
+	/// i18n implementation. Setting this value has no effect on framework behavior.
 	pub use_i18n: bool,
 
-	/// Use timezone-aware datetimes
+	/// Use timezone-aware datetimes.
+	///
+	/// **Note:** Currently not consumed by the framework. Reserved for future
+	/// timezone support implementation. Setting this value has no effect on
+	/// framework behavior.
 	pub use_tz: bool,
 
-	/// Default auto field for models
+	/// Default auto field type for models.
+	///
+	/// **Note:** Currently not consumed by the framework. Reserved for future
+	/// auto field configuration. Setting this value has no effect on framework
+	/// behavior.
 	pub default_auto_field: String,
 
 	/// HTTPS/Security settings
@@ -202,7 +231,7 @@ impl Settings {
 	/// assert_eq!(settings.secret_key, "my-secret-key-12345");
 	/// assert!(settings.debug);
 	/// assert_eq!(settings.time_zone, "UTC");
-	/// assert!(settings.installed_apps.contains(&"reinhardt.contrib.admin".to_string()));
+	/// assert!(settings.installed_apps.is_empty());
 	/// ```
 	pub fn new(base_dir: PathBuf, secret_key: String) -> Self {
 		Self {
@@ -210,24 +239,10 @@ impl Settings {
 			secret_key,
 			debug: true,
 			allowed_hosts: vec![],
-			installed_apps: vec![
-				"reinhardt.contrib.admin".to_string(),
-				"reinhardt.contrib.auth".to_string(),
-				"reinhardt.contrib.contenttypes".to_string(),
-				"reinhardt.contrib.sessions".to_string(),
-				"reinhardt.contrib.messages".to_string(),
-				"reinhardt.contrib.staticfiles".to_string(),
-			],
-			middleware: vec![
-				"reinhardt.middleware.security.SecurityMiddleware".to_string(),
-				"reinhardt.contrib.sessions.middleware.SessionMiddleware".to_string(),
-				"reinhardt.middleware.common.CommonMiddleware".to_string(),
-				"reinhardt.middleware.csrf.CsrfViewMiddleware".to_string(),
-				"reinhardt.contrib.auth.middleware.AuthenticationMiddleware".to_string(),
-				"reinhardt.contrib.messages.middleware.MessageMiddleware".to_string(),
-				"reinhardt.middleware.clickjacking.XFrameOptionsMiddleware".to_string(),
-			],
+			installed_apps: vec![],
+			middleware: vec![],
 			root_urlconf: String::new(),
+
 			databases: {
 				let mut dbs = HashMap::new();
 				dbs.insert("default".to_string(), DatabaseConfig::default());
@@ -255,25 +270,6 @@ impl Settings {
 			admins: vec![],
 			managers: vec![],
 		}
-	}
-	/// Set the root URL configuration
-	///
-	/// # Examples
-	///
-	/// ```
-	/// use reinhardt_conf::settings::Settings;
-	/// use std::path::PathBuf;
-	///
-	/// let settings = Settings::new(
-	///     PathBuf::from("/app"),
-	///     "secret".to_string()
-	/// ).with_root_urlconf("myapp.urls");
-	///
-	/// assert_eq!(settings.root_urlconf, "myapp.urls");
-	/// ```
-	pub fn with_root_urlconf(mut self, root_urlconf: impl Into<String>) -> Self {
-		self.root_urlconf = root_urlconf.into();
-		self
 	}
 	/// Add an installed app
 	///
@@ -318,24 +314,6 @@ impl Settings {
 		self.installed_apps = app_provider();
 		self
 	}
-	/// Add middleware
-	///
-	/// # Examples
-	///
-	/// ```
-	/// use reinhardt_conf::settings::Settings;
-	///
-	/// let mut settings = Settings::default();
-	/// let initial_count = settings.middleware.len();
-	/// settings.add_middleware("myapp.middleware.CustomMiddleware");
-	///
-	/// assert_eq!(settings.middleware.len(), initial_count + 1);
-	/// assert!(settings.middleware.contains(&"myapp.middleware.CustomMiddleware".to_string()));
-	/// ```
-	pub fn add_middleware(&mut self, middleware: impl Into<String>) {
-		self.middleware.push(middleware.into());
-	}
-
 	/// Add an administrator
 	///
 	/// # Examples

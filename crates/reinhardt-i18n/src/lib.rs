@@ -17,7 +17,7 @@
 //! let mut ctx = TranslationContext::new("ja", "en-US");
 //! let mut catalog = MessageCatalog::new("ja");
 //! catalog.add_translation("Hello", "こんにちは");
-//! ctx.add_catalog("ja", catalog);
+//! ctx.add_catalog("ja", catalog).unwrap();
 //!
 //! // Set as active translation context (scoped)
 //! let _guard = set_active_translation(Arc::new(ctx));
@@ -46,6 +46,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use reinhardt_utils::safe_path_join;
+
 /// Error types for i18n operations
 #[derive(Debug, thiserror::Error)]
 pub enum I18nError {
@@ -55,6 +57,8 @@ pub enum I18nError {
 	CatalogNotFound(String),
 	#[error("Failed to load catalog: {0}")]
 	LoadError(String),
+	#[error("Path traversal detected: {0}")]
+	PathTraversal(String),
 }
 
 mod catalog;
@@ -66,6 +70,7 @@ pub mod utils;
 
 pub use catalog::MessageCatalog;
 pub use lazy::LazyString;
+use locale::validate_locale;
 pub use locale::{activate, activate_with_catalog, deactivate, get_locale};
 pub use translation::{gettext, gettext_lazy, ngettext, ngettext_lazy, npgettext, pgettext};
 
@@ -115,16 +120,29 @@ impl CatalogLoader {
 	/// let catalog = loader.load("fr").unwrap();
 	/// ```
 	pub fn load(&self, locale: &str) -> Result<MessageCatalog, I18nError> {
+		// Validate locale name to prevent path traversal attacks.
+		// Locale names should only contain alphanumeric characters, hyphens, and underscores.
+		if locale.is_empty()
+			|| !locale
+				.chars()
+				.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+		{
+			return Err(I18nError::InvalidLocale(locale.to_string()));
+		}
+
+		// Defense in depth: use safe_path_join to verify the locale path stays
+		// within the base directory, even after the character validation above.
+		let safe_locale_dir = safe_path_join(&self.base_path, locale).map_err(|e| {
+			I18nError::PathTraversal(format!(
+				"Locale '{}' failed path safety check: {}",
+				locale, e
+			))
+		})?;
+
 		// Try multiple common .po file locations
 		let possible_paths = vec![
-			self.base_path
-				.join(locale)
-				.join("LC_MESSAGES")
-				.join("django.po"),
-			self.base_path
-				.join(locale)
-				.join("LC_MESSAGES")
-				.join("messages.po"),
+			safe_locale_dir.join("LC_MESSAGES").join("django.po"),
+			safe_locale_dir.join("LC_MESSAGES").join("messages.po"),
 		];
 
 		for path in possible_paths {
@@ -175,7 +193,14 @@ impl CatalogLoader {
 		path: P,
 		locale: &str,
 	) -> Result<MessageCatalog, String> {
-		let file = std::fs::File::open(path.as_ref())
+		// Validate the file path stays within the base directory
+		let path_str = path
+			.as_ref()
+			.to_str()
+			.ok_or_else(|| "Invalid path encoding".to_string())?;
+		let safe_path = safe_path_join(&self.base_path, path_str).map_err(|e| e.to_string())?;
+
+		let file = std::fs::File::open(&safe_path)
 			.map_err(|e| format!("Failed to open .po file: {}", e))?;
 
 		po_parser::parse_po_file(file, locale)
@@ -204,7 +229,7 @@ thread_local! {
 /// let mut ctx = TranslationContext::new("ja", "en-US");
 /// let mut catalog = MessageCatalog::new("ja");
 /// catalog.add_translation("Hello", "こんにちは");
-/// ctx.add_catalog("ja", catalog);
+/// ctx.add_catalog("ja", catalog).unwrap();
 ///
 /// let _guard = set_active_translation(Arc::new(ctx));
 /// assert_eq!(gettext("Hello"), "こんにちは");
@@ -260,18 +285,48 @@ impl TranslationContext {
 	}
 
 	/// Sets the current locale.
-	pub fn set_locale(&mut self, locale: impl Into<String>) {
-		self.current_locale = locale.into();
+	///
+	/// # Errors
+	///
+	/// Returns `I18nError::InvalidLocale` if the locale string format is invalid.
+	pub fn set_locale(&mut self, locale: impl Into<String>) -> Result<(), I18nError> {
+		let locale = locale.into();
+		// Allow empty string for deactivation (reset to default)
+		if !locale.is_empty() {
+			validate_locale(&locale)?;
+		}
+		self.current_locale = locale;
+		Ok(())
 	}
 
 	/// Sets the fallback locale.
-	pub fn set_fallback_locale(&mut self, locale: impl Into<String>) {
-		self.fallback_locale = locale.into();
+	///
+	/// # Errors
+	///
+	/// Returns `I18nError::InvalidLocale` if the locale string format is invalid.
+	pub fn set_fallback_locale(&mut self, locale: impl Into<String>) -> Result<(), I18nError> {
+		let locale = locale.into();
+		if !locale.is_empty() {
+			validate_locale(&locale)?;
+		}
+		self.fallback_locale = locale;
+		Ok(())
 	}
 
 	/// Adds a message catalog for the given locale.
-	pub fn add_catalog(&mut self, locale: impl Into<String>, catalog: MessageCatalog) {
-		self.catalogs.insert(locale.into(), catalog);
+	///
+	/// # Errors
+	///
+	/// Returns `I18nError::InvalidLocale` if the locale string format is invalid.
+	pub fn add_catalog(
+		&mut self,
+		locale: impl Into<String>,
+		catalog: MessageCatalog,
+	) -> Result<(), I18nError> {
+		let locale = locale.into();
+		validate_locale(&locale)?;
+		self.catalogs.insert(locale, catalog);
+		Ok(())
 	}
 
 	/// Translates a message using the current locale.
@@ -388,7 +443,12 @@ pub struct TranslationGuard {
 impl Drop for TranslationGuard {
 	fn drop(&mut self) {
 		ACTIVE_TRANSLATION.with(|t| {
-			*t.borrow_mut() = self.prev.take();
+			// Use try_borrow_mut to prevent panic on reentrant drop.
+			// If the RefCell is already borrowed (e.g., during a destructor chain),
+			// the translation will be cleaned up when the outer borrow is released.
+			if let Ok(mut guard) = t.try_borrow_mut() {
+				*guard = self.prev.take();
+			}
 		});
 	}
 }
@@ -406,7 +466,7 @@ impl Drop for TranslationGuard {
 /// let mut ctx = TranslationContext::new("de", "en-US");
 /// let mut catalog = MessageCatalog::new("de");
 /// catalog.add_translation("Hello", "Hallo");
-/// ctx.add_catalog("de", catalog);
+/// ctx.add_catalog("de", catalog).unwrap();
 ///
 /// {
 ///     let _guard = set_active_translation(Arc::new(ctx));
@@ -418,6 +478,40 @@ impl Drop for TranslationGuard {
 pub fn set_active_translation(ctx: Arc<TranslationContext>) -> TranslationGuard {
 	let prev = ACTIVE_TRANSLATION.with(|t| t.borrow_mut().replace(ctx));
 	TranslationGuard { prev }
+}
+
+/// Sets the active translation context permanently without returning a guard.
+///
+/// Unlike `set_active_translation()`, this function does not provide RAII semantics.
+/// The translation context remains active until explicitly changed or until the thread ends.
+/// Use this when you need permanent activation without scope-based cleanup.
+///
+/// # Memory Safety
+///
+/// This function is memory-safe and does not leak memory like `std::mem::forget` on the guard.
+/// The previous translation context (if any) is properly dropped.
+///
+/// # Example
+///
+/// ```
+/// use reinhardt_i18n::{TranslationContext, set_active_translation_permanent, gettext, MessageCatalog};
+/// use std::sync::Arc;
+///
+/// let mut ctx = TranslationContext::new("de", "en-US");
+/// let mut catalog = MessageCatalog::new("de");
+/// catalog.add_translation("Hello", "Hallo");
+/// ctx.add_catalog("de", catalog).unwrap();
+///
+/// set_active_translation_permanent(Arc::new(ctx));
+/// assert_eq!(gettext("Hello"), "Hallo");
+///
+/// // Context remains active (no guard to drop)
+/// assert_eq!(gettext("Hello"), "Hallo");
+/// ```
+pub fn set_active_translation_permanent(ctx: Arc<TranslationContext>) {
+	ACTIVE_TRANSLATION.with(|t| {
+		*t.borrow_mut() = Some(ctx);
+	});
 }
 
 /// Returns the currently active translation context, if any.

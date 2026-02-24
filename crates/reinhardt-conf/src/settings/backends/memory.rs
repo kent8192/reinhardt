@@ -39,7 +39,7 @@
 //! # }
 //! ```
 
-use super::super::dynamic::{DynamicBackend, DynamicResult};
+use crate::settings::dynamic::{DynamicBackend, DynamicResult};
 use async_trait::async_trait;
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -316,6 +316,26 @@ impl DynamicBackend for MemoryBackend {
 mod tests {
 	use super::*;
 
+	/// Poll a condition until it returns true or timeout expires
+	async fn poll_until<F, Fut>(
+		timeout: std::time::Duration,
+		interval: std::time::Duration,
+		mut condition: F,
+	) -> Result<(), String>
+	where
+		F: FnMut() -> Fut,
+		Fut: std::future::Future<Output = bool>,
+	{
+		let start = std::time::Instant::now();
+		while start.elapsed() < timeout {
+			if condition().await {
+				return Ok(());
+			}
+			tokio::time::sleep(interval).await;
+		}
+		Err(format!("Condition not met within {:?}", timeout))
+	}
+
 	#[tokio::test]
 	async fn test_basic_operations() {
 		let backend = MemoryBackend::new();
@@ -351,7 +371,7 @@ mod tests {
 		assert!(backend.exists("temp_key").await.unwrap());
 
 		// Poll until key expires (1 second TTL)
-		reinhardt_test::poll_until(
+		poll_until(
 			Duration::from_millis(1200),
 			Duration::from_millis(50),
 			|| async { !backend.exists("temp_key").await.unwrap() },

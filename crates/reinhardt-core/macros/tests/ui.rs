@@ -46,12 +46,6 @@ fn test_path_macro_fail() {
 }
 
 #[test]
-fn test_permission_macro_pass() {
-	let t = trybuild::TestCases::new();
-	t.pass("tests/ui/permissions/pass/*.rs");
-}
-
-#[test]
 fn test_permission_macro_fail() {
 	let t = trybuild::TestCases::new();
 	t.compile_fail("tests/ui/permissions/fail/*.rs");

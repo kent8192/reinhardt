@@ -492,10 +492,26 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 										"name must be a string literal",
 									));
 								}
+							} else {
+								return Err(Error::new_spanned(
+									&path_expr.path,
+									format!(
+										"unknown route option `{}`, expected `use_inject` or `name`",
+										path_expr.path.get_ident().map_or_else(
+											|| "unknown".to_string(),
+											|id| id.to_string()
+										)
+									),
+								));
 							}
 						}
 					}
-					_ => {}
+					_ => {
+						return Err(Error::new_spanned(
+							expr,
+							"unexpected argument in route macro, expected a path string or key = value option",
+						));
+					}
 				}
 			}
 		} else {
@@ -521,7 +537,12 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 							path = Some((path_str, lit.span()));
 						}
 					}
-					_ => {}
+					_ => {
+						return Err(Error::new_spanned(
+							&meta,
+							"unexpected meta argument in route macro",
+						));
+					}
 				}
 			}
 		}

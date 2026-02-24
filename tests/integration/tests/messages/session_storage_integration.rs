@@ -11,9 +11,11 @@ mod tests {
 
 		let result = storage.require_session();
 		assert!(result.is_err());
-		assert!(result
-			.unwrap_err()
-			.contains("SessionStorage requires session middleware"));
+		assert!(
+			result
+				.unwrap_err()
+				.contains("SessionStorage requires session middleware")
+		);
 	}
 
 	#[test]

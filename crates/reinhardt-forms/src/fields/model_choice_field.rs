@@ -181,7 +181,7 @@ impl<T: FormModel> FormField for ModelChoiceField<T> {
 					.get("required")
 					.cloned()
 					.unwrap_or_else(|| "This field is required.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 			return Ok(Value::Null);
 		}
@@ -198,7 +198,7 @@ impl<T: FormModel> FormField for ModelChoiceField<T> {
 					.get("invalid_choice")
 					.cloned()
 					.unwrap_or_else(|| "Select a valid choice.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 		};
 
@@ -209,7 +209,7 @@ impl<T: FormModel> FormField for ModelChoiceField<T> {
 					.get("required")
 					.cloned()
 					.unwrap_or_else(|| "This field is required.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 			return Ok(Value::Null);
 		}
@@ -226,7 +226,7 @@ impl<T: FormModel> FormField for ModelChoiceField<T> {
 				.get("invalid_choice")
 				.cloned()
 				.unwrap_or_else(|| "Select a valid choice.".to_string());
-			return Err(FieldError::validation(Some(&self.name), &error_msg));
+			return Err(FieldError::validation(None, &error_msg));
 		}
 
 		Ok(Value::String(s.to_string()))
@@ -413,7 +413,7 @@ impl<T: FormModel> FormField for ModelMultipleChoiceField<T> {
 					.get("required")
 					.cloned()
 					.unwrap_or_else(|| "This field is required.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 			return Ok(Value::Array(Vec::new()));
 		}
@@ -427,7 +427,7 @@ impl<T: FormModel> FormField for ModelMultipleChoiceField<T> {
 						.get("required")
 						.cloned()
 						.unwrap_or_else(|| "This field is required.".to_string());
-					return Err(FieldError::validation(Some(&self.name), &error_msg));
+					return Err(FieldError::validation(None, &error_msg));
 				}
 				return Ok(Value::Array(Vec::new()));
 			}
@@ -443,7 +443,7 @@ impl<T: FormModel> FormField for ModelMultipleChoiceField<T> {
 					.get("invalid_list")
 					.cloned()
 					.unwrap_or_else(|| "Enter a list of values.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 		};
 
@@ -453,7 +453,7 @@ impl<T: FormModel> FormField for ModelMultipleChoiceField<T> {
 				.get("required")
 				.cloned()
 				.unwrap_or_else(|| "This field is required.".to_string());
-			return Err(FieldError::validation(Some(&self.name), &error_msg));
+			return Err(FieldError::validation(None, &error_msg));
 		}
 
 		// Validate that all choices exist in queryset
@@ -470,7 +470,7 @@ impl<T: FormModel> FormField for ModelMultipleChoiceField<T> {
 						.get("invalid_choice")
 						.cloned()
 						.unwrap_or_else(|| format!("'{}' is not a valid choice.", value_str));
-					return Err(FieldError::validation(Some(&self.name), &error_msg));
+					return Err(FieldError::validation(None, &error_msg));
 				}
 			}
 		}

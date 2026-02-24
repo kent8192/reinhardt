@@ -2,6 +2,7 @@
 
 use http_body_util::Full;
 use hyper::{Response, StatusCode, body::Bytes};
+use reinhardt_core::security::xss::escape_html;
 use serde_json::Value;
 
 use super::{ColorScheme, FormGenerator, SyntaxHighlighter};
@@ -191,6 +192,7 @@ impl BrowsableApiRenderer {
 		status_class: &str,
 		status_text: &str,
 	) -> String {
+		let escaped_title = escape_html(&self.title);
 		format!(
 			r#"<!doctype html>
 <html lang="en">
@@ -316,7 +318,7 @@ impl BrowsableApiRenderer {
   </body>
 </html>
 "#,
-			self.title, self.title, status_class, status_text, content
+			escaped_title, escaped_title, status_class, status_text, content
 		)
 	}
 }

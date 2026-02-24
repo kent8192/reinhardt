@@ -13,9 +13,11 @@ use hyper_util::rt::TokioIo;
 use reinhardt_commands::WelcomePage;
 use reinhardt_pages::component::Component;
 use reinhardt_pages::ssr::SsrRenderer;
+use reinhardt_utils::safe_path_join;
 use rustls::ServerConfig;
 use rustls_pemfile::{certs, private_key};
 use std::convert::Infallible;
+use std::env;
 use std::fs::File;
 use std::io::BufReader;
 use std::net::SocketAddr;
@@ -25,6 +27,9 @@ use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 
 use reinhardt_conf::Settings;
+use reinhardt_conf::settings::builder::SettingsBuilder;
+use reinhardt_conf::settings::profile::Profile;
+use reinhardt_conf::settings::sources::{DefaultSource, LowPriorityEnvSource, TomlFileSource};
 
 #[derive(Parser, Debug)]
 #[command(name = "runserver")]
@@ -61,13 +66,6 @@ struct Args {
 	/// Generate and use a self-signed certificate for development (enables HTTPS)
 	#[arg(long)]
 	self_signed: bool,
-}
-
-/// Check if a path is safe (prevents directory traversal attacks)
-fn is_safe_path(path: &Path) -> bool {
-	// Convert to string and check for path traversal attempts
-	// Return true if path is safe (does NOT contain "..")
-	!path.to_string_lossy().contains("..")
 }
 
 /// Get MIME type based on file extension
@@ -126,11 +124,119 @@ async fn serve_static_file(file_path: &Path) -> Result<Response<Full<Bytes>>, In
 	}
 }
 
-async fn handle_request(req: Request<Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
-	// For this implementation, we'll use default settings
-	// In a full implementation, we'd load settings from file
-	let settings = Settings::default();
+/// Load settings from the settings directory
+///
+/// Settings are loaded from TOML files in the `settings/` directory:
+/// - `base.toml` - Common settings across all environments
+/// - `local.toml` / `production.toml` / `staging.toml` - Environment-specific settings
+///
+/// The environment is determined by the `REINHARDT_ENV` environment variable.
+/// If no settings files exist, falls back to default settings.
+fn load_settings() -> Settings {
+	let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| "local".to_string());
+	let profile = Profile::parse(&profile_str);
 
+	let base_dir = env::current_dir().expect("Failed to get current directory");
+	let settings_dir = base_dir.join("settings");
+
+	// Check if settings directory exists
+	if !settings_dir.exists() {
+		eprintln!(
+			"{}",
+			"Warning: settings/ directory not found, using default settings".yellow()
+		);
+		return Settings::default();
+	}
+
+	// Build settings with priority: Default < LowPriorityEnv < base.toml < {profile}.toml
+	let merged = SettingsBuilder::new()
+		.profile(profile)
+		.add_source(
+			DefaultSource::new()
+				// Core settings
+				.with_value(
+					"base_dir",
+					serde_json::json!(base_dir.to_string_lossy().to_string()),
+				)
+				.with_value("debug", serde_json::json!(true))
+				.with_value(
+					"secret_key",
+					serde_json::json!(generate_random_secret_key()),
+				)
+				.with_value("allowed_hosts", serde_json::json!([]))
+				.with_value("installed_apps", serde_json::json!([]))
+				.with_value("databases", serde_json::json!({}))
+				.with_value("templates", serde_json::json!([]))
+				// Static/Media files
+				.with_value("static_url", serde_json::json!("/static/"))
+				.with_value("static_root", serde_json::json!(null))
+				.with_value("staticfiles_dirs", serde_json::json!([]))
+				.with_value("media_url", serde_json::json!("/media/"))
+				// Internationalization
+				.with_value("language_code", serde_json::json!("en-us"))
+				.with_value("time_zone", serde_json::json!("UTC"))
+				.with_value("use_i18n", serde_json::json!(false))
+				.with_value("use_tz", serde_json::json!(false))
+				// Model settings
+				.with_value(
+					"default_auto_field",
+					serde_json::json!("reinhardt.db.models.BigAutoField"),
+				)
+				// Security settings
+				.with_value("secure_proxy_ssl_header", serde_json::json!(null))
+				.with_value("secure_ssl_redirect", serde_json::json!(false))
+				.with_value("secure_hsts_seconds", serde_json::json!(null))
+				.with_value("secure_hsts_include_subdomains", serde_json::json!(false))
+				.with_value("secure_hsts_preload", serde_json::json!(false))
+				.with_value("session_cookie_secure", serde_json::json!(false))
+				.with_value("csrf_cookie_secure", serde_json::json!(false))
+				.with_value("append_slash", serde_json::json!(true))
+				// Admin/Manager contacts
+				.with_value("admins", serde_json::json!([]))
+				.with_value("managers", serde_json::json!([])),
+		)
+		.add_source(LowPriorityEnvSource::new().with_prefix("REINHARDT_"))
+		.add_source(TomlFileSource::new(settings_dir.join("base.toml")))
+		.add_source(TomlFileSource::new(
+			settings_dir.join(format!("{}.toml", profile_str)),
+		))
+		.build();
+
+	match merged {
+		Ok(merged_settings) => match merged_settings.into_typed::<Settings>() {
+			Ok(settings) => {
+				println!(
+					"{}",
+					format!(
+						"Loaded settings from settings/ directory (profile: {})",
+						profile_str
+					)
+					.green()
+				);
+				settings
+			}
+			Err(e) => {
+				eprintln!(
+					"{}",
+					format!("Warning: Failed to parse settings: {}. Using defaults.", e).yellow()
+				);
+				Settings::default()
+			}
+		},
+		Err(e) => {
+			eprintln!(
+				"{}",
+				format!("Warning: Failed to build settings: {}. Using defaults.", e).yellow()
+			);
+			Settings::default()
+		}
+	}
+}
+
+async fn handle_request(
+	req: Request<Incoming>,
+	settings: Arc<Settings>,
+) -> Result<Response<Full<Bytes>>, Infallible> {
 	let path = req.uri().path();
 
 	// Serve static files in debug mode from staticfiles_dirs
@@ -151,8 +257,12 @@ async fn handle_request(req: Request<Incoming>) -> Result<Response<Full<Bytes>>,
 		let mut found_files: Vec<PathBuf> = Vec::new();
 
 		for dir in settings.staticfiles_dirs.iter().rev() {
-			let file_path = dir.join(relative_path);
-			if file_path.exists() && file_path.is_file() && is_safe_path(&file_path) {
+			// Use safe_path_join to prevent path traversal attacks
+			let file_path = match safe_path_join(dir, relative_path) {
+				Ok(p) => p,
+				Err(_) => continue,
+			};
+			if file_path.exists() && file_path.is_file() {
 				found_files.push(file_path);
 			}
 		}
@@ -259,6 +369,24 @@ fn generate_self_signed_cert() -> Result<
 	))
 }
 
+/// Generate a cryptographically random secret key for fallback use.
+///
+/// Produces a 50-character hex string (200 bits of entropy). This is used
+/// as the default `SECRET_KEY` when no explicit key is configured, ensuring
+/// that each process gets a unique key rather than a shared hardcoded value.
+fn generate_random_secret_key() -> String {
+	use rand::Rng;
+	use std::fmt::Write;
+
+	let mut rng = rand::thread_rng();
+	let bytes: [u8; 25] = rng.r#gen();
+	let mut hex_string = String::with_capacity(50);
+	for b in bytes {
+		let _ = write!(hex_string, "{:02x}", b);
+	}
+	hex_string
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args = Args::parse();
@@ -272,6 +400,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	}
 	if args.cert.is_some() && args.self_signed {
 		return Err("Cannot use both --cert/--key and --self-signed".into());
+	}
+
+	// Load settings at startup
+	let settings = Arc::new(load_settings());
+
+	// Display loaded settings info (debug mode only)
+	if settings.debug {
+		println!(
+			"{}",
+			format!(
+				"Static files: URL={}, Directories={:?}",
+				settings.static_url, settings.staticfiles_dirs
+			)
+			.dimmed()
+		);
 	}
 
 	// Parse the address
@@ -348,12 +491,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		if let Some(ref acceptor) = tls_acceptor {
 			// HTTPS connection
 			let acceptor = acceptor.clone();
+			let settings_clone = Arc::clone(&settings);
 			tokio::task::spawn(async move {
 				match acceptor.accept(stream).await {
 					Ok(tls_stream) => {
 						let io = TokioIo::new(tls_stream);
 						if let Err(err) = http1::Builder::new()
-							.serve_connection(io, service_fn(handle_request))
+							.serve_connection(
+								io,
+								service_fn(move |req| {
+									let settings = Arc::clone(&settings_clone);
+									async move { handle_request(req, settings).await }
+								}),
+							)
 							.await
 						{
 							eprintln!("Error serving HTTPS connection: {:?}", err);
@@ -366,10 +516,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			});
 		} else {
 			// HTTP connection
+			let settings_clone = Arc::clone(&settings);
 			let io = TokioIo::new(stream);
 			tokio::task::spawn(async move {
 				if let Err(err) = http1::Builder::new()
-					.serve_connection(io, service_fn(handle_request))
+					.serve_connection(
+						io,
+						service_fn(move |req| {
+							let settings = Arc::clone(&settings_clone);
+							async move { handle_request(req, settings).await }
+						}),
+					)
 					.await
 				{
 					eprintln!("Error serving HTTP connection: {:?}", err);

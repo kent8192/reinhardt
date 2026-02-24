@@ -768,7 +768,12 @@ impl BaseCommand for MakeMigrationsCommand {
 							Vec::new() // Initial migration has no dependencies
 						} else {
 							// Get previous migration number
-							let prev_number_int = migration_number.parse::<u32>().unwrap() - 1;
+							let prev_number_int = migration_number.parse::<u32>().map_err(|e| {
+								CommandError::ParseError(format!(
+									"invalid migration number '{}': {}",
+									migration_number, e
+								))
+							})? - 1;
 							let prev_number = format!("{:04}", prev_number_int);
 							// Find the previous migration by scanning the directory
 							let prev_migration_name = if let Ok(entries) =
@@ -1262,7 +1267,8 @@ impl RunServerCommand {
 		let router = if !no_docs {
 			use reinhardt_http::Handler;
 			use reinhardt_openapi::OpenApiRouter;
-			std::sync::Arc::new(OpenApiRouter::wrap(base_router)) as std::sync::Arc<dyn Handler>
+			let wrapped = OpenApiRouter::wrap(base_router);
+			std::sync::Arc::new(wrapped) as std::sync::Arc<dyn Handler>
 		} else {
 			base_router
 		};
@@ -1312,7 +1318,7 @@ impl RunServerCommand {
 									singleton_scope.set(db_conn);
 									ctx.info(&format!(
 										"💾 Database: {} (connected)",
-										&url[..url.len().min(30)]
+										sanitize_database_url(&url)
 									));
 								}
 								Err(e) => {
@@ -1977,6 +1983,24 @@ impl CheckCommand {
 
 		passed
 	}
+}
+
+/// Sanitizes a database URL for display, removing credentials.
+///
+/// Replaces `user:password@` with `***@` to prevent credential leakage
+/// in logs and startup banners.
+#[cfg(feature = "reinhardt-db")]
+fn sanitize_database_url(url: &str) -> String {
+	// Match scheme://user:pass@host pattern and redact credentials
+	if let Some(scheme_end) = url.find("://") {
+		let after_scheme = &url[scheme_end + 3..];
+		if let Some(at_pos) = after_scheme.find('@') {
+			let host_part = &after_scheme[at_pos..];
+			return format!("{}://***{}", &url[..scheme_end], host_part);
+		}
+	}
+	// For non-URL formats (e.g., sqlite:file.db), return as-is
+	url.to_string()
 }
 
 /// Helper function to get DATABASE_URL from environment or settings

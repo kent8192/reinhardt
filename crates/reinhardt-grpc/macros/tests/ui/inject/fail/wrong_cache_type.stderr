@@ -1,0 +1,5 @@
+error: `cache` option expects a boolean value (e.g., `cache = false`)
+  --> tests/ui/inject/fail/wrong_cache_type.rs:12:19
+   |
+12 |     #[inject(cache = "yes")] service: String,
+   |                      ^^^^^

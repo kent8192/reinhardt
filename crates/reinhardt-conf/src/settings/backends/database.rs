@@ -50,16 +50,20 @@
 #[cfg(feature = "dynamic-database")]
 use chrono::{DateTime, Duration, Utc};
 #[cfg(feature = "dynamic-database")]
-use sea_query::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
+use reinhardt_query::prelude::{
+	MySqlQueryBuilder, PostgresQueryBuilder, QueryStatementBuilder, SqliteQueryBuilder,
+};
 #[cfg(feature = "dynamic-database")]
 use sqlx::{AnyPool, Row};
 #[cfg(feature = "dynamic-database")]
 use std::sync::Arc;
 
 #[cfg(feature = "dynamic-database")]
-use super::super::dynamic::{DynamicBackend, DynamicError, DynamicResult};
+use crate::settings::dynamic::{DynamicBackend, DynamicError, DynamicResult};
 #[cfg(feature = "dynamic-database")]
 use async_trait::async_trait;
+
+use crate::settings::database_config::validate_database_url_scheme;
 
 /// Database backend for runtime configuration changes
 ///
@@ -126,6 +130,8 @@ impl DatabaseBackend {
 	/// ```
 	#[cfg(feature = "dynamic-database")]
 	pub async fn new(connection_url: &str) -> Result<Self, String> {
+		validate_database_url_scheme(connection_url)?;
+
 		let pool = AnyPool::connect(connection_url)
 			.await
 			.map_err(|e| format!("Database connection error: {}", e))?;
@@ -183,42 +189,45 @@ impl DatabaseBackend {
 
 	/// Build SQL string for the current database backend
 	///
-	/// Uses sea-query to generate database-specific SQL syntax for queries.
+	/// Uses reinhardt-query to generate database-specific SQL syntax for queries.
 	#[cfg(feature = "dynamic-database")]
 	fn build_sql<T>(&self, statement: T) -> String
 	where
-		T: sea_query::QueryStatementWriter,
+		T: QueryStatementBuilder,
 	{
 		match self.detect_backend() {
 			"postgres" => statement.to_string(PostgresQueryBuilder),
-			"mysql" => statement.to_string(MysqlQueryBuilder),
+			"mysql" => statement.to_string(MySqlQueryBuilder),
 			_ => statement.to_string(SqliteQueryBuilder),
 		}
 	}
 
 	/// Build table SQL string for the current database backend
 	///
-	/// Uses sea-query to generate database-specific SQL syntax for DDL operations.
+	/// Uses reinhardt-query to generate database-specific SQL syntax for DDL operations.
 	#[cfg(feature = "dynamic-database")]
 	fn build_table_sql<T>(&self, statement: T) -> String
 	where
-		T: sea_query::SchemaStatementBuilder,
+		T: QueryStatementBuilder,
 	{
 		match self.detect_backend() {
 			"postgres" => statement.to_string(PostgresQueryBuilder),
-			"mysql" => statement.to_string(MysqlQueryBuilder),
+			"mysql" => statement.to_string(MySqlQueryBuilder),
 			_ => statement.to_string(SqliteQueryBuilder),
 		}
 	}
 
 	/// Build index SQL string for the current database backend
 	///
-	/// Uses sea-query to generate database-specific SQL syntax for index creation.
+	/// Uses reinhardt-query to generate database-specific SQL syntax for index creation.
 	#[cfg(feature = "dynamic-database")]
-	fn build_index_sql(&self, statement: &sea_query::IndexCreateStatement) -> String {
+	fn build_index_sql(
+		&self,
+		statement: &reinhardt_query::prelude::CreateIndexStatement,
+	) -> String {
 		match self.detect_backend() {
 			"postgres" => statement.to_string(PostgresQueryBuilder),
-			"mysql" => statement.to_string(MysqlQueryBuilder),
+			"mysql" => statement.to_string(MySqlQueryBuilder),
 			_ => statement.to_string(SqliteQueryBuilder),
 		}
 	}
@@ -241,19 +250,19 @@ impl DatabaseBackend {
 	/// ```
 	#[cfg(feature = "dynamic-database")]
 	pub async fn create_table(&self) -> Result<(), String> {
-		use sea_query::{Alias, ColumnDef, Index, Table};
+		use reinhardt_query::prelude::{Alias, ColumnDef, Query};
 
-		// Build CREATE TABLE statement using sea-query
-		let stmt = Table::create()
+		// Build CREATE TABLE statement using reinhardt-query
+		let stmt = Query::create_table()
 			.table(Alias::new("settings"))
 			.if_not_exists()
 			.col(
 				ColumnDef::new(Alias::new("key"))
 					.string_len(255)
-					.not_null()
-					.primary_key(),
+					.not_null(true)
+					.primary_key(true),
 			)
-			.col(ColumnDef::new(Alias::new("value")).text().not_null())
+			.col(ColumnDef::new(Alias::new("value")).text().not_null(true))
 			.col(ColumnDef::new(Alias::new("expire_date")).text())
 			.to_owned();
 
@@ -264,8 +273,8 @@ impl DatabaseBackend {
 			.await
 			.map_err(|e| format!("Failed to create table: {}", e))?;
 
-		// Create index on expire_date for efficient cleanup using sea-query
-		let index_stmt = Index::create()
+		// Create index on expire_date for efficient cleanup using reinhardt-query
+		let index_stmt = Query::create_index()
 			.if_not_exists()
 			.name("idx_settings_expire_date")
 			.table(Alias::new("settings"))
@@ -305,9 +314,9 @@ impl DatabaseBackend {
 	/// ```
 	#[cfg(feature = "dynamic-database")]
 	pub async fn get(&self, key: &str) -> Result<Option<serde_json::Value>, String> {
-		use sea_query::{Alias, Expr, ExprTrait, Query};
+		use reinhardt_query::prelude::{Alias, Expr, ExprTrait, Query};
 
-		// Build SELECT query using sea-query
+		// Build SELECT query using reinhardt-query
 		let stmt = Query::select()
 			.columns([Alias::new("value"), Alias::new("expire_date")])
 			.from(Alias::new("settings"))
@@ -410,9 +419,9 @@ impl DatabaseBackend {
 		// Delete existing key first for simplicity (works across all databases)
 		let _ = self.delete(key).await;
 
-		use sea_query::{Alias, Query};
+		use reinhardt_query::prelude::{Alias, IntoValue, Query};
 
-		// Build INSERT query using sea-query
+		// Build INSERT query using reinhardt-query
 		let mut stmt = Query::insert()
 			.into_table(Alias::new("settings"))
 			.columns([
@@ -424,12 +433,16 @@ impl DatabaseBackend {
 
 		// Add values based on whether expire_date is set
 		if let Some(expire_str) = &expire_date_str {
-			stmt.values_panic([key.into(), value_str.into(), expire_str.clone().into()]);
+			stmt.values_panic(vec![
+				key.into_value(),
+				value_str.into_value(),
+				expire_str.clone().into_value(),
+			]);
 		} else {
-			stmt.values_panic([
-				key.into(),
-				value_str.into(),
-				sea_query::Value::String(None).into(),
+			stmt.values_panic(vec![
+				key.into_value(),
+				value_str.into_value(),
+				Option::<String>::None.into_value(),
 			]);
 		}
 
@@ -464,9 +477,9 @@ impl DatabaseBackend {
 	/// ```
 	#[cfg(feature = "dynamic-database")]
 	pub async fn delete(&self, key: &str) -> Result<(), String> {
-		use sea_query::{Alias, Expr, ExprTrait, Query};
+		use reinhardt_query::prelude::{Alias, Expr, ExprTrait, Query};
 
-		// Build DELETE query using sea-query
+		// Build DELETE query using reinhardt-query
 		let stmt = Query::delete()
 			.from_table(Alias::new("settings"))
 			.and_where(Expr::col(Alias::new("key")).eq(key))
@@ -504,11 +517,11 @@ impl DatabaseBackend {
 	/// ```
 	#[cfg(feature = "dynamic-database")]
 	pub async fn exists(&self, key: &str) -> Result<bool, String> {
-		use sea_query::{Alias, Cond, Expr, ExprTrait, Query};
+		use reinhardt_query::prelude::{Alias, Cond, Expr, ExprTrait, Query};
 
 		let now = Utc::now().to_rfc3339();
 
-		// Build SELECT query using sea-query
+		// Build SELECT query using reinhardt-query
 		// WHERE key = ? AND (expire_date IS NULL OR expire_date > ?)
 		let stmt = Query::select()
 			.expr(Expr::value(1))
@@ -517,8 +530,7 @@ impl DatabaseBackend {
 			.and_where(
 				Cond::any()
 					.add(Expr::col(Alias::new("expire_date")).is_null())
-					.add(Expr::col(Alias::new("expire_date")).gt(Expr::value(&now)))
-					.into(),
+					.add(Expr::col(Alias::new("expire_date")).gt(Expr::value(&now))),
 			)
 			.to_owned();
 
@@ -556,11 +568,11 @@ impl DatabaseBackend {
 	/// ```
 	#[cfg(feature = "dynamic-database")]
 	pub async fn cleanup_expired(&self) -> Result<u64, String> {
-		use sea_query::{Alias, Expr, ExprTrait, Query};
+		use reinhardt_query::prelude::{Alias, Expr, ExprTrait, Query};
 
 		let now = Utc::now().to_rfc3339();
 
-		// Build DELETE query using sea-query
+		// Build DELETE query using reinhardt-query
 		let stmt = Query::delete()
 			.from_table(Alias::new("settings"))
 			.and_where(Expr::col(Alias::new("expire_date")).lt(Expr::value(&now)))
@@ -601,11 +613,11 @@ impl DatabaseBackend {
 	/// ```
 	#[cfg(feature = "dynamic-database")]
 	pub async fn keys(&self) -> Result<Vec<String>, String> {
-		use sea_query::{Alias, Cond, Expr, ExprTrait, Query};
+		use reinhardt_query::prelude::{Alias, Cond, Expr, ExprTrait, Query};
 
 		let now = Utc::now().to_rfc3339();
 
-		// Build SELECT query using sea-query
+		// Build SELECT query using reinhardt-query
 		// WHERE expire_date IS NULL OR expire_date > ?
 		let stmt = Query::select()
 			.column(Alias::new("key"))
@@ -613,8 +625,7 @@ impl DatabaseBackend {
 			.and_where(
 				Cond::any()
 					.add(Expr::col(Alias::new("expire_date")).is_null())
-					.add(Expr::col(Alias::new("expire_date")).gt(Expr::value(&now)))
-					.into(),
+					.add(Expr::col(Alias::new("expire_date")).gt(Expr::value(&now))),
 			)
 			.to_owned();
 

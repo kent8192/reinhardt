@@ -269,39 +269,35 @@ impl DatabaseMigrationRecorder {
 	/// This is called by ensure_schema_table() after acquiring the lock.
 	async fn ensure_schema_table_internal(&self) -> super::Result<()> {
 		use crate::backends::types::DatabaseType;
-		use sea_query::{
-			Alias, ColumnDef, Expr, Index, MysqlQueryBuilder, PostgresQueryBuilder,
-			SqliteQueryBuilder, Table,
+		use reinhardt_query::prelude::{
+			Alias, ColumnDef, Expr, MySqlQueryBuilder, PostgresQueryBuilder, Query,
+			QueryStatementBuilder, SqliteQueryBuilder,
 		};
 
 		// Build SQL using appropriate query builder based on database type
 		// Scope stmt to ensure it's dropped before await
 		let (create_table_sql, create_index_sql) = {
-			let create_table_stmt = Table::create()
+			let create_table_stmt = Query::create_table()
 				.table(Alias::new("reinhardt_migrations"))
 				.if_not_exists()
 				.col(
-					ColumnDef::new(Alias::new("id"))
+					ColumnDef::new("id")
 						.integer()
-						.not_null()
-						.auto_increment()
-						.primary_key(),
+						.not_null(true)
+						.auto_increment(true)
+						.primary_key(true),
 				)
-				.col(ColumnDef::new(Alias::new("app")).string_len(255).not_null())
+				.col(ColumnDef::new("app").string_len(255).not_null(true))
+				.col(ColumnDef::new("name").string_len(255).not_null(true))
 				.col(
-					ColumnDef::new(Alias::new("name"))
-						.string_len(255)
-						.not_null(),
-				)
-				.col(
-					ColumnDef::new(Alias::new("applied"))
+					ColumnDef::new("applied")
 						.timestamp()
-						.not_null()
-						.default(Expr::current_timestamp()),
+						.not_null(true)
+						.default(Expr::current_timestamp().into_simple_expr()),
 				)
 				.to_owned();
 
-			let create_index_stmt = Index::create()
+			let create_index_stmt = Query::create_index()
 				.if_not_exists()
 				.name("reinhardt_migrations_app_name_unique")
 				.table(Alias::new("reinhardt_migrations"))
@@ -316,8 +312,8 @@ impl DatabaseMigrationRecorder {
 					create_index_stmt.to_string(PostgresQueryBuilder),
 				),
 				DatabaseType::Mysql => (
-					create_table_stmt.to_string(MysqlQueryBuilder),
-					create_index_stmt.to_string(MysqlQueryBuilder),
+					create_table_stmt.to_string(MySqlQueryBuilder),
+					create_index_stmt.to_string(MySqlQueryBuilder),
 				),
 				DatabaseType::Sqlite => (
 					create_table_stmt.to_string(SqliteQueryBuilder),
@@ -380,12 +376,12 @@ impl DatabaseMigrationRecorder {
 	/// ```
 	pub async fn is_applied(&self, app: &str, name: &str) -> super::Result<bool> {
 		use crate::backends::types::DatabaseType;
-		use sea_query::{
-			Alias, Expr, ExprTrait, MysqlQueryBuilder, PostgresQueryBuilder, Query,
-			SqliteQueryBuilder,
+		use reinhardt_query::prelude::{
+			Alias, Expr, ExprTrait, MySqlQueryBuilder, PostgresQueryBuilder, Query,
+			QueryStatementBuilder, SqliteQueryBuilder,
 		};
 
-		// Build SELECT EXISTS query using sea-query
+		// Build SELECT EXISTS query using reinhardt-query
 		let subquery = Query::select()
 			.expr(Expr::value(1))
 			.from(Alias::new("reinhardt_migrations"))
@@ -399,7 +395,7 @@ impl DatabaseMigrationRecorder {
 
 		let sql = match self.connection.database_type() {
 			DatabaseType::Postgres => stmt.to_string(PostgresQueryBuilder),
-			DatabaseType::Mysql => stmt.to_string(MysqlQueryBuilder),
+			DatabaseType::Mysql => stmt.to_string(MySqlQueryBuilder),
 			DatabaseType::Sqlite => stmt.to_string(SqliteQueryBuilder),
 		};
 
@@ -448,34 +444,36 @@ impl DatabaseMigrationRecorder {
 	/// ```
 	pub async fn record_applied(&self, app: &str, name: &str) -> super::Result<()> {
 		use crate::backends::types::DatabaseType;
-		use sea_query::{
-			Alias, Expr, MysqlQueryBuilder, PostgresQueryBuilder, Query, SqliteQueryBuilder,
+		use reinhardt_query::prelude::{
+			Alias, MySqlQueryBuilder, PostgresQueryBuilder, Query, QueryStatementBuilder,
+			SqliteQueryBuilder,
 		};
 
-		// Build INSERT query using sea-query
+		// Build INSERT query using reinhardt-query
+		let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
 		let stmt = Query::insert()
 			.into_table(Alias::new("reinhardt_migrations"))
 			.columns([Alias::new("app"), Alias::new("name"), Alias::new("applied")])
-			.values_panic([app.into(), name.into(), Expr::current_timestamp()])
+			.values_panic([app.to_string(), name.to_string(), now])
 			.to_owned();
 
-		// Add conflict resolution for concurrent execution
+		// Add conflict resolution for concurrent execution.
+		// Use to_string() to inline values directly into SQL, avoiding parameter
+		// binding since execute() is called with empty params.
 		let sql = match self.connection.database_type() {
 			DatabaseType::Postgres => {
 				// PostgreSQL: ON CONFLICT DO NOTHING
-				format!(
-					"{} ON CONFLICT (app, name) DO NOTHING",
-					stmt.to_string(PostgresQueryBuilder)
-				)
+				let base_sql = stmt.to_string(PostgresQueryBuilder::new());
+				format!("{} ON CONFLICT (app, name) DO NOTHING", base_sql)
 			}
 			DatabaseType::Mysql => {
 				// MySQL: INSERT IGNORE
-				let base_sql = stmt.to_string(MysqlQueryBuilder);
+				let base_sql = stmt.to_string(MySqlQueryBuilder::new());
 				base_sql.replacen("INSERT", "INSERT IGNORE", 1)
 			}
 			DatabaseType::Sqlite => {
 				// SQLite: INSERT OR IGNORE
-				let base_sql = stmt.to_string(SqliteQueryBuilder);
+				let base_sql = stmt.to_string(SqliteQueryBuilder::new());
 				base_sql.replacen("INSERT", "INSERT OR IGNORE", 1)
 			}
 		};
@@ -509,11 +507,12 @@ impl DatabaseMigrationRecorder {
 	/// ```
 	pub async fn get_applied_migrations(&self) -> super::Result<Vec<MigrationRecord>> {
 		use crate::backends::types::DatabaseType;
-		use sea_query::{
-			Alias, MysqlQueryBuilder, Order, PostgresQueryBuilder, Query, SqliteQueryBuilder,
+		use reinhardt_query::prelude::{
+			Alias, MySqlQueryBuilder, Order, PostgresQueryBuilder, Query, QueryStatementBuilder,
+			SqliteQueryBuilder,
 		};
 
-		// Build SELECT query using sea-query
+		// Build SELECT query using reinhardt-query
 		let stmt = Query::select()
 			.columns([Alias::new("app"), Alias::new("name"), Alias::new("applied")])
 			.from(Alias::new("reinhardt_migrations"))
@@ -522,7 +521,7 @@ impl DatabaseMigrationRecorder {
 
 		let sql = match self.connection.database_type() {
 			DatabaseType::Postgres => stmt.to_string(PostgresQueryBuilder),
-			DatabaseType::Mysql => stmt.to_string(MysqlQueryBuilder),
+			DatabaseType::Mysql => stmt.to_string(MySqlQueryBuilder),
 			DatabaseType::Sqlite => stmt.to_string(SqliteQueryBuilder),
 		};
 
@@ -578,12 +577,12 @@ impl DatabaseMigrationRecorder {
 	/// Used when rolling back migrations.
 	pub async fn unapply(&self, app: &str, name: &str) -> super::Result<()> {
 		use crate::backends::types::DatabaseType;
-		use sea_query::{
-			Alias, Expr, ExprTrait, MysqlQueryBuilder, PostgresQueryBuilder, Query,
-			SqliteQueryBuilder,
+		use reinhardt_query::prelude::{
+			Alias, Expr, ExprTrait, MySqlQueryBuilder, PostgresQueryBuilder, Query,
+			QueryStatementBuilder, SqliteQueryBuilder,
 		};
 
-		// Build DELETE query using sea-query
+		// Build DELETE query using reinhardt-query
 		let stmt = Query::delete()
 			.from_table(Alias::new("reinhardt_migrations"))
 			.and_where(Expr::col(Alias::new("app")).eq(app))
@@ -592,7 +591,7 @@ impl DatabaseMigrationRecorder {
 
 		let sql = match self.connection.database_type() {
 			DatabaseType::Postgres => stmt.to_string(PostgresQueryBuilder),
-			DatabaseType::Mysql => stmt.to_string(MysqlQueryBuilder),
+			DatabaseType::Mysql => stmt.to_string(MySqlQueryBuilder),
 			DatabaseType::Sqlite => stmt.to_string(SqliteQueryBuilder),
 		};
 
@@ -626,12 +625,12 @@ impl DatabaseMigrationRecorder {
 	/// ```
 	pub async fn get_applied_for_app(&self, app: &str) -> super::Result<Vec<MigrationRecord>> {
 		use crate::backends::types::DatabaseType;
-		use sea_query::{
-			Alias, Expr, ExprTrait, MysqlQueryBuilder, Order, PostgresQueryBuilder, Query,
-			SqliteQueryBuilder,
+		use reinhardt_query::prelude::{
+			Alias, Expr, ExprTrait, MySqlQueryBuilder, Order, PostgresQueryBuilder, Query,
+			QueryStatementBuilder, SqliteQueryBuilder,
 		};
 
-		// Build SELECT query using sea-query with app filter
+		// Build SELECT query using reinhardt-query with app filter
 		let stmt = Query::select()
 			.columns([Alias::new("app"), Alias::new("name"), Alias::new("applied")])
 			.from(Alias::new("reinhardt_migrations"))
@@ -641,7 +640,7 @@ impl DatabaseMigrationRecorder {
 
 		let sql = match self.connection.database_type() {
 			DatabaseType::Postgres => stmt.to_string(PostgresQueryBuilder),
-			DatabaseType::Mysql => stmt.to_string(MysqlQueryBuilder),
+			DatabaseType::Mysql => stmt.to_string(MySqlQueryBuilder),
 			DatabaseType::Sqlite => stmt.to_string(SqliteQueryBuilder),
 		};
 

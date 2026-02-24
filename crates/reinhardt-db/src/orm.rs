@@ -97,7 +97,7 @@ pub mod aggregation;
 pub mod annotation;
 pub mod bulk_update;
 pub mod connection;
-pub mod connection_ext; // SeaQuery connection support
+pub mod connection_ext; // reinhardt-query connection support
 pub mod constraints;
 pub mod expressions;
 pub mod fields;
@@ -108,8 +108,8 @@ pub mod inspection;
 pub mod into_primary_key;
 pub mod model;
 pub mod query_fields;
-pub mod query_helpers; // Common query patterns using SeaQuery
-pub mod query_types; // Type definitions for passing SeaQuery objects
+pub mod query_helpers; // Common query patterns using reinhardt-query
+pub mod query_types; // Type definitions for passing reinhardt-query objects
 pub mod set_operations;
 pub mod sql_condition_parser;
 pub mod transaction;
@@ -282,7 +282,7 @@ pub use reverse_accessor::ReverseAccessor;
 // Django ORM compatibility layer
 pub use manager::Manager;
 // Query types are always available
-pub use query::{Filter, FilterCondition, FilterOperator, FilterValue, Query, QuerySet};
+pub use query::{Filter, FilterCondition, FilterOperator, FilterValue, OrmQuery, QuerySet};
 
 // Advanced ORM features
 pub use absolute_url_overrides::{HasAbsoluteUrl, clear_url_overrides, register_url_override};
@@ -292,8 +292,8 @@ pub use lambda_stmt::{
 };
 pub use order_with_respect_to::{OrderError, OrderValue, OrderedModel};
 
-// SeaQuery re-exports for query building in client code
-pub use sea_query::{
-	Alias, Asterisk, Expr, ExprTrait, MysqlQueryBuilder, PostgresQueryBuilder, Query as SeaQuery,
-	SqliteQueryBuilder,
+// reinhardt-query re-exports for query building in client code
+pub use reinhardt_query::prelude::{
+	Alias, ColumnRef, Cond, Expr, ExprTrait, MySqlQueryBuilder, PostgresQueryBuilder, Query,
+	QueryStatementBuilder, QueryStatementWriter, SqliteQueryBuilder,
 };

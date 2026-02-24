@@ -5,7 +5,7 @@
 //! - Batch updates with optimized queries
 //! - Transaction batching
 
-use super::super::error::Result;
+use crate::backends::error::Result;
 use async_trait::async_trait;
 
 /// Batch operations trait

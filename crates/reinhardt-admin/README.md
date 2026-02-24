@@ -103,7 +103,7 @@ The admin panel is built on several key components:
 
 ### Database Layer
 
-Advanced filtering and query building with SeaQuery integration:
+Advanced filtering and query building with reinhardt-query integration:
 
 - **FilterOperator**: Eq, Ne, Gt, Gte, Lt, Lte, Contains, StartsWith, EndsWith, In, NotIn, Between, Regex
 - **FilterCondition**: AND/OR conditions for complex queries
@@ -225,7 +225,7 @@ The `ReorderHandler` validates reorder operations by:
 2. Detecting duplicate order values
 3. Ensuring order values are sequential (0, 1, 2, ...)
 
-All database updates are performed using SeaQuery v1.0.0-rc within a
+All database updates are performed using reinhardt-query within a
 transaction, ensuring atomicity.
 
 For a complete implementation example, see the [`core::database`](src/core/database.rs) module.
@@ -243,5 +243,4 @@ For a complete implementation example, see the [`core::database`](src/core/datab
 
 ## License
 
-Licensed under either of Apache License, Version 2.0 or MIT license at your
-option.
+Licensed under the BSD 3-Clause License.

@@ -4,12 +4,26 @@ use crate::wasm_compat::ValidationRule;
 use std::collections::HashMap;
 use std::ops::Index;
 
+/// Constant-time byte comparison to prevent timing attacks on CSRF tokens.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+	if a.len() != b.len() {
+		return false;
+	}
+	let mut result = 0u8;
+	for (x, y) in a.iter().zip(b.iter()) {
+		result |= x ^ y;
+	}
+	result == 0
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum FormError {
 	#[error("Field error in {field}: {error}")]
 	Field { field: String, error: FieldError },
 	#[error("Validation error: {0}")]
 	Validation(String),
+	#[error("No model instance available for save operation")]
+	NoInstance,
 }
 
 pub type FormResult<T> = Result<T, FormError>;
@@ -39,6 +53,10 @@ pub struct Form {
 	/// These rules are transmitted to the client for UX enhancement.
 	/// Server-side validation is still mandatory for security.
 	validation_rules: Vec<ValidationRule>,
+	/// Expected CSRF token for form validation
+	csrf_token: Option<String>,
+	/// Whether CSRF validation is enabled
+	csrf_enabled: bool,
 }
 
 impl Form {
@@ -64,6 +82,8 @@ impl Form {
 			field_clean_functions: HashMap::new(),
 			prefix: String::new(),
 			validation_rules: vec![],
+			csrf_token: None,
+			csrf_enabled: false,
 		}
 	}
 	/// Create a new form with initial data
@@ -92,6 +112,8 @@ impl Form {
 			field_clean_functions: HashMap::new(),
 			prefix: String::new(),
 			validation_rules: vec![],
+			csrf_token: None,
+			csrf_enabled: false,
 		}
 	}
 	/// Create a new form with a field prefix
@@ -116,6 +138,8 @@ impl Form {
 			field_clean_functions: HashMap::new(),
 			prefix,
 			validation_rules: vec![],
+			csrf_token: None,
+			csrf_enabled: false,
 		}
 	}
 	/// Add a field to the form
@@ -180,6 +204,15 @@ impl Form {
 
 		self.errors.clear();
 
+		// Validate CSRF token if enabled
+		if !self.validate_csrf() {
+			self.errors
+				.entry(ALL_FIELDS_KEY.to_string())
+				.or_default()
+				.push("CSRF token missing or incorrect.".to_string());
+			return false;
+		}
+
 		for field in &self.fields {
 			let value = self.data.get(field.name());
 
@@ -226,6 +259,12 @@ impl Form {
 							.entry(ALL_FIELDS_KEY.to_string())
 							.or_default()
 							.push(msg);
+					}
+					FormError::NoInstance => {
+						self.errors
+							.entry(ALL_FIELDS_KEY.to_string())
+							.or_default()
+							.push(e.to_string());
 					}
 				}
 			}
@@ -375,9 +414,9 @@ impl Form {
 		&self.validation_rules
 	}
 
-	/// Add a client-side field validator (Phase 2-A)
+	/// Add a minimum length validator (Phase 2-A)
 	///
-	/// Adds a JavaScript expression-based validator for a specific field.
+	/// Adds a validator that checks if a string field has at least `min` characters.
 	/// This validator is executed on the client-side for immediate feedback.
 	///
 	/// **Security Note**: Client-side validation is for UX enhancement only.
@@ -386,7 +425,7 @@ impl Form {
 	/// # Arguments
 	///
 	/// - `field_name`: Name of the field to validate
-	/// - `expression`: JavaScript expression (e.g., "value.length >= 8")
+	/// - `min`: Minimum required length
 	/// - `error_message`: Error message to display on validation failure
 	///
 	/// # Examples
@@ -395,37 +434,175 @@ impl Form {
 	/// use reinhardt_forms::Form;
 	///
 	/// let mut form = Form::new();
-	/// form.add_client_field_validator(
-	///     "password",
-	///     "value.length >= 8",
-	///     "Password must be at least 8 characters"
-	/// );
+	/// form.add_min_length_validator("password", 8, "Password must be at least 8 characters");
 	/// ```
-	pub fn add_client_field_validator(
+	pub fn add_min_length_validator(
 		&mut self,
 		field_name: impl Into<String>,
-		expression: impl Into<String>,
+		min: usize,
 		error_message: impl Into<String>,
 	) {
-		self.validation_rules.push(ValidationRule::FieldValidator {
+		self.validation_rules.push(ValidationRule::MinLength {
 			field_name: field_name.into(),
-			expression: expression.into(),
+			min,
 			error_message: error_message.into(),
 		});
 	}
 
-	/// Add a client-side cross-field validator (Phase 2-A)
+	/// Add a maximum length validator (Phase 2-A)
 	///
-	/// Adds a JavaScript expression-based validator that involves multiple fields.
-	/// This validator is executed on the client-side for immediate feedback.
+	/// Adds a validator that checks if a string field has at most `max` characters.
 	///
-	/// **Security Note**: Client-side validation is for UX enhancement only.
-	/// Server-side validation is still mandatory for security.
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_forms::Form;
+	///
+	/// let mut form = Form::new();
+	/// form.add_max_length_validator("username", 50, "Username must be at most 50 characters");
+	/// ```
+	pub fn add_max_length_validator(
+		&mut self,
+		field_name: impl Into<String>,
+		max: usize,
+		error_message: impl Into<String>,
+	) {
+		self.validation_rules.push(ValidationRule::MaxLength {
+			field_name: field_name.into(),
+			max,
+			error_message: error_message.into(),
+		});
+	}
+
+	/// Add a pattern validator (Phase 2-A)
+	///
+	/// Adds a validator that checks if a string field matches a regex pattern.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_forms::Form;
+	///
+	/// let mut form = Form::new();
+	/// form.add_pattern_validator("code", "^[A-Z]{3}$", "Code must be 3 uppercase letters");
+	/// ```
+	pub fn add_pattern_validator(
+		&mut self,
+		field_name: impl Into<String>,
+		pattern: impl Into<String>,
+		error_message: impl Into<String>,
+	) {
+		self.validation_rules.push(ValidationRule::Pattern {
+			field_name: field_name.into(),
+			pattern: pattern.into(),
+			error_message: error_message.into(),
+		});
+	}
+
+	/// Add a minimum value validator (Phase 2-A)
+	///
+	/// Adds a validator that checks if a numeric field is at least `min`.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_forms::Form;
+	///
+	/// let mut form = Form::new();
+	/// form.add_min_value_validator("age", 0.0, "Age must be non-negative");
+	/// ```
+	pub fn add_min_value_validator(
+		&mut self,
+		field_name: impl Into<String>,
+		min: f64,
+		error_message: impl Into<String>,
+	) {
+		self.validation_rules.push(ValidationRule::MinValue {
+			field_name: field_name.into(),
+			min,
+			error_message: error_message.into(),
+		});
+	}
+
+	/// Add a maximum value validator (Phase 2-A)
+	///
+	/// Adds a validator that checks if a numeric field is at most `max`.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_forms::Form;
+	///
+	/// let mut form = Form::new();
+	/// form.add_max_value_validator("age", 150.0, "Age must be at most 150");
+	/// ```
+	pub fn add_max_value_validator(
+		&mut self,
+		field_name: impl Into<String>,
+		max: f64,
+		error_message: impl Into<String>,
+	) {
+		self.validation_rules.push(ValidationRule::MaxValue {
+			field_name: field_name.into(),
+			max,
+			error_message: error_message.into(),
+		});
+	}
+
+	/// Add an email format validator (Phase 2-A)
+	///
+	/// Adds a validator that checks if a field contains a valid email format.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_forms::Form;
+	///
+	/// let mut form = Form::new();
+	/// form.add_email_validator("email", "Enter a valid email address");
+	/// ```
+	pub fn add_email_validator(
+		&mut self,
+		field_name: impl Into<String>,
+		error_message: impl Into<String>,
+	) {
+		self.validation_rules.push(ValidationRule::Email {
+			field_name: field_name.into(),
+			error_message: error_message.into(),
+		});
+	}
+
+	/// Add a URL format validator (Phase 2-A)
+	///
+	/// Adds a validator that checks if a field contains a valid URL format.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_forms::Form;
+	///
+	/// let mut form = Form::new();
+	/// form.add_url_validator("website", "Enter a valid URL");
+	/// ```
+	pub fn add_url_validator(
+		&mut self,
+		field_name: impl Into<String>,
+		error_message: impl Into<String>,
+	) {
+		self.validation_rules.push(ValidationRule::Url {
+			field_name: field_name.into(),
+			error_message: error_message.into(),
+		});
+	}
+
+	/// Add a fields equality validator (Phase 2-A)
+	///
+	/// Adds a validator that checks if multiple fields have equal values.
+	/// Commonly used for password confirmation.
 	///
 	/// # Arguments
 	///
-	/// - `field_names`: Names of fields involved in validation
-	/// - `expression`: JavaScript expression (e.g., "fields.password === fields.password_confirm")
+	/// - `field_names`: Names of fields to compare for equality
 	/// - `error_message`: Error message to display on validation failure
 	/// - `target_field`: Target field for error display (None = non-field error)
 	///
@@ -435,27 +612,23 @@ impl Form {
 	/// use reinhardt_forms::Form;
 	///
 	/// let mut form = Form::new();
-	/// form.add_cross_field_validator(
+	/// form.add_fields_equal_validator(
 	///     vec!["password".to_string(), "password_confirm".to_string()],
-	///     "fields.password === fields.password_confirm",
 	///     "Passwords do not match",
 	///     Some("password_confirm".to_string())
 	/// );
 	/// ```
-	pub fn add_cross_field_validator(
+	pub fn add_fields_equal_validator(
 		&mut self,
 		field_names: Vec<String>,
-		expression: impl Into<String>,
 		error_message: impl Into<String>,
 		target_field: Option<String>,
 	) {
-		self.validation_rules
-			.push(ValidationRule::CrossFieldValidator {
-				field_names,
-				expression: expression.into(),
-				error_message: error_message.into(),
-				target_field,
-			});
+		self.validation_rules.push(ValidationRule::FieldsEqual {
+			field_names,
+			error_message: error_message.into(),
+			target_field,
+		});
 	}
 
 	/// Add a client-side validator reference (Phase 2-A)
@@ -511,7 +684,7 @@ impl Form {
 
 	/// Helper: Add a date range validator (Phase 2-A)
 	///
-	/// Adds a cross-field validator that checks if end_date >= start_date.
+	/// Adds a validator that checks if end_date >= start_date.
 	///
 	/// # Arguments
 	///
@@ -538,20 +711,17 @@ impl Form {
 		let message = error_message
 			.unwrap_or_else(|| "End date must be after or equal to start date".to_string());
 
-		self.add_cross_field_validator(
-			vec![start.clone(), end.clone()],
-			format!(
-				"new Date(fields['{}']) <= new Date(fields['{}'])",
-				start, end
-			),
-			message,
-			Some(end),
-		);
+		self.validation_rules.push(ValidationRule::DateRange {
+			start_field: start,
+			end_field: end.clone(),
+			error_message: message,
+			target_field: Some(end),
+		});
 	}
 
 	/// Helper: Add a numeric range validator (Phase 2-A)
 	///
-	/// Adds a cross-field validator that checks if max >= min.
+	/// Adds a validator that checks if max >= min.
 	///
 	/// # Arguments
 	///
@@ -579,16 +749,73 @@ impl Form {
 			"Maximum value must be greater than or equal to minimum value".to_string()
 		});
 
-		self.add_cross_field_validator(
-			vec![min.clone(), max.clone()],
-			format!(
-				"parseFloat(fields['{}']) <= parseFloat(fields['{}'])",
-				min, max
-			),
-			message,
-			Some(max),
-		);
+		self.validation_rules.push(ValidationRule::NumericRange {
+			min_field: min,
+			max_field: max.clone(),
+			error_message: message,
+			target_field: Some(max),
+		});
 	}
+	/// Enable CSRF protection for this form.
+	///
+	/// When enabled, `is_valid()` will check that the submitted data
+	/// contains a matching CSRF token.
+	///
+	/// # Arguments
+	///
+	/// * `token` - The expected CSRF token for this form
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_forms::Form;
+	///
+	/// let mut form = Form::new();
+	/// form.set_csrf_token("abc123".to_string());
+	/// assert!(form.csrf_enabled());
+	/// ```
+	pub fn set_csrf_token(&mut self, token: String) {
+		self.csrf_token = Some(token);
+		self.csrf_enabled = true;
+	}
+
+	/// Check if CSRF protection is enabled
+	pub fn csrf_enabled(&self) -> bool {
+		self.csrf_enabled
+	}
+
+	/// Get the CSRF token, if set
+	pub fn csrf_token(&self) -> Option<&str> {
+		self.csrf_token.as_deref()
+	}
+
+	/// Validate the submitted CSRF token against the expected token.
+	///
+	/// Returns `true` if CSRF is disabled or the token matches.
+	fn validate_csrf(&self) -> bool {
+		if !self.csrf_enabled {
+			return true;
+		}
+
+		let expected = match &self.csrf_token {
+			Some(t) => t,
+			None => return false,
+		};
+
+		let submitted = self
+			.data
+			.get("csrfmiddlewaretoken")
+			.and_then(|v| v.as_str());
+
+		match submitted {
+			Some(token) => {
+				// Use constant-time comparison to prevent timing attacks
+				constant_time_eq(token.as_bytes(), expected.as_bytes())
+			}
+			None => false,
+		}
+	}
+
 	pub fn prefix(&self) -> &str {
 		&self.prefix
 	}
@@ -602,6 +829,66 @@ impl Form {
 			format!("{}-{}", self.prefix, field_name)
 		}
 	}
+	/// Render CSS `<link>` tags for form media with HTML-escaped paths.
+	///
+	/// All paths are escaped using `escape_attribute()` to prevent XSS
+	/// via malicious CSS file paths.
+	///
+	/// # Arguments
+	///
+	/// * `css_files` - Slice of CSS file paths to include
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_forms::Form;
+	///
+	/// let form = Form::new();
+	/// let html = form.render_css_media(&["/static/forms.css"]);
+	/// assert!(html.contains("href=\"/static/forms.css\""));
+	/// ```
+	pub fn render_css_media(&self, css_files: &[&str]) -> String {
+		use crate::field::escape_attribute;
+		let mut html = String::new();
+		for path in css_files {
+			html.push_str(&format!(
+				"<link rel=\"stylesheet\" href=\"{}\" />\n",
+				escape_attribute(path)
+			));
+		}
+		html
+	}
+
+	/// Render JS `<script>` tags for form media with HTML-escaped paths.
+	///
+	/// All paths are escaped using `escape_attribute()` to prevent XSS
+	/// via malicious JS file paths.
+	///
+	/// # Arguments
+	///
+	/// * `js_files` - Slice of JS file paths to include
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_forms::Form;
+	///
+	/// let form = Form::new();
+	/// let html = form.render_js_media(&["/static/forms.js"]);
+	/// assert!(html.contains("src=\"/static/forms.js\""));
+	/// ```
+	pub fn render_js_media(&self, js_files: &[&str]) -> String {
+		use crate::field::escape_attribute;
+		let mut html = String::new();
+		for path in js_files {
+			html.push_str(&format!(
+				"<script src=\"{}\"></script>\n",
+				escape_attribute(path)
+			));
+		}
+		html
+	}
+
 	pub fn get_bound_field<'a>(&'a self, name: &str) -> Option<BoundField<'a>> {
 		let field = self.get_field(name)?;
 		let data = self.data.get(name);
@@ -623,13 +910,34 @@ impl Default for Form {
 	}
 }
 
+/// Safe field access by name.
+///
+/// Returns `None` if the field is not found instead of panicking.
+///
+/// # Examples
+///
+/// ```
+/// use reinhardt_forms::{Form, CharField, Field};
+///
+/// let mut form = Form::new();
+/// form.add_field(Box::new(CharField::new("name".to_string())));
+///
+/// assert!(form.get("name").is_some());
+/// assert!(form.get("nonexistent").is_none());
+/// ```
+impl Form {
+	// Allow borrowed_box because Index trait impl requires &Box<dyn FormField>
+	#[allow(clippy::borrowed_box)]
+	pub fn get(&self, name: &str) -> Option<&Box<dyn FormField>> {
+		self.fields.iter().find(|f| f.name() == name)
+	}
+}
+
 impl Index<&str> for Form {
 	type Output = Box<dyn FormField>;
 
 	fn index(&self, name: &str) -> &Self::Output {
-		self.fields
-			.iter()
-			.find(|f| f.name() == name)
+		self.get(name)
 			.unwrap_or_else(|| panic!("Field '{}' not found", name))
 	}
 }

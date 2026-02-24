@@ -88,7 +88,8 @@ pub trait TaskLock: Send + Sync {
 /// # }
 /// ```
 pub struct MemoryTaskLock {
-	locks: Arc<RwLock<std::collections::HashMap<TaskId, i64>>>,
+	/// Map of task ID to expiry timestamp in milliseconds since epoch
+	locks: Arc<RwLock<std::collections::HashMap<TaskId, i128>>>,
 }
 
 impl MemoryTaskLock {
@@ -110,7 +111,7 @@ impl MemoryTaskLock {
 	/// Clean up expired locks
 	async fn cleanup_expired(&self) {
 		let mut locks = self.locks.write().await;
-		let now = chrono::Utc::now().timestamp();
+		let now = chrono::Utc::now().timestamp_millis() as i128;
 		locks.retain(|_, &mut expiry| expiry > now);
 	}
 }
@@ -127,8 +128,9 @@ impl TaskLock for MemoryTaskLock {
 		self.cleanup_expired().await;
 
 		let mut locks = self.locks.write().await;
-		let now = chrono::Utc::now().timestamp();
-		let expiry = now + ttl.as_secs() as i64;
+		let now = chrono::Utc::now().timestamp_millis() as i128;
+		// Use as_millis() instead of as_secs() to preserve sub-second durations
+		let expiry = now + ttl.as_millis() as i128;
 
 		if let Some(&existing_expiry) = locks.get(&task_id)
 			&& existing_expiry > now
@@ -150,7 +152,7 @@ impl TaskLock for MemoryTaskLock {
 		self.cleanup_expired().await;
 
 		let locks = self.locks.read().await;
-		let now = chrono::Utc::now().timestamp();
+		let now = chrono::Utc::now().timestamp_millis() as i128;
 
 		Ok(locks
 			.get(&task_id)
@@ -345,9 +347,12 @@ mod tests {
 		let lock = MemoryTaskLock::new();
 		let task_id = TaskId::new();
 
-		lock.acquire(task_id, Duration::from_millis(100))
+		lock.acquire(task_id, Duration::from_millis(50))
 			.await
 			.unwrap();
+
+		// Wait for TTL to expire
+		tokio::time::sleep(Duration::from_millis(100)).await;
 
 		let is_locked = lock.is_locked(task_id).await.unwrap();
 		assert!(!is_locked);

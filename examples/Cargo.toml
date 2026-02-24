@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = [
+	"examples-hello-world",
+	"examples-rest-api",
+	"examples-database-integration",
+	"examples-tutorial-basis",
+	"examples-tutorial-rest",
+	"examples-github-issues",
+	"examples-twitter",
+]
+
+# Note: Each example has a binary named "manage"
+# This is intentional - examples are meant to be run individually:
+#   cd examples-hello-world && cargo run
+#   cd examples-rest-api && cargo run
+#   cd examples-database-integration && cargo run
+#
+# Uses crates.io published versions by default.
+# For local development, copy .cargo/config.local.toml to .cargo/config.toml
+
+[workspace.dependencies]
+# Reinhardt framework (crates.io published versions)
+reinhardt = { version = "0.1.0-alpha.13", package = "reinhardt-web" }
+reinhardt-query = { version = "0.1.0-alpha.2" }
+reinhardt-websockets = { version = "0.1.0-alpha.10" }
+reinhardt-auth = { version = "0.1.0-alpha.10" }
+
+# Testing
+testcontainers = { version = "0.26.3", features = ["blocking"] }
+tokio = { version = "1.48.0", features = ["full"] }
+rstest = "0.26.1"
+reqwest = { version = "0.12", features = ["json"] }
+serial_test = "3.2"
+
+# Serialization
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+chrono = { version = "0.4.42", features = ["serde"] }
+validator = { version = "0.20.0", features = ["derive"] }

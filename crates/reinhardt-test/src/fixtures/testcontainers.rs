@@ -901,8 +901,9 @@ pub async fn redis_cluster(
 
 /// Lightweight Redis Cluster fixture
 ///
-/// Returns only cluster client and node URLs without the container reference.
-/// Use this to avoid stack overflow issues with complex container types.
+/// Returns cluster client, node URLs, and the container reference.
+/// The container must be kept alive for the duration of the test to prevent
+/// premature cleanup of the Redis cluster.
 ///
 /// # Examples
 ///
@@ -913,9 +914,13 @@ pub async fn redis_cluster(
 /// #[rstest]
 /// #[tokio::test]
 /// async fn test_redis(
-///     #[future] redis_cluster_client: (Arc<redis::cluster::ClusterClient>, Vec<String>)
+///     #[future] redis_cluster_client: (
+///         Arc<redis::cluster::ClusterClient>,
+///         Vec<String>,
+///         RedisClusterContainer,
+///     )
 /// ) {
-///     let (client, _nodes) = redis_cluster_client.await;
+///     let (client, _nodes, _container) = redis_cluster_client.await;
 ///     let mut conn = client.get_async_connection().await.unwrap();
 ///     redis::cmd("SET").arg("key").arg("value").query_async::<()>(&mut conn).await.unwrap();
 /// }
@@ -923,7 +928,11 @@ pub async fn redis_cluster(
 #[fixture]
 pub async fn redis_cluster_client(
 	#[future] redis_cluster_container: RedisClusterContainer,
-) -> (Arc<redis::cluster::ClusterClient>, Vec<String>) {
+) -> (
+	Arc<redis::cluster::ClusterClient>,
+	Vec<String>,
+	RedisClusterContainer,
+) {
 	let container = redis_cluster_container.await;
 
 	// Build cluster node URLs
@@ -951,10 +960,8 @@ pub async fn redis_cluster_client(
 
 	eprintln!("Redis cluster client created");
 
-	// Drop container to avoid stack overflow in Debug trait
-	std::mem::drop(container);
-
-	(Arc::new(client), cluster_nodes)
+	// Return container to keep it alive during the test
+	(Arc::new(client), cluster_nodes, container)
 }
 
 /// Ultra-lightweight Redis Cluster URLs fixture

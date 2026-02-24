@@ -10,7 +10,8 @@ impl Request {
 			.map(|q| {
 				q.split('&')
 					.filter_map(|pair| {
-						let mut parts = pair.split('=');
+						// Split on first '=' only to preserve '=' in values (e.g., Base64)
+						let mut parts = pair.splitn(2, '=');
 						Some((
 							parts.next()?.to_string(),
 							parts.next().unwrap_or("").to_string(),
@@ -261,18 +262,162 @@ impl Request {
 		self.headers
 			.get(COOKIE)
 			.and_then(|h| h.to_str().ok())
-			.and_then(|cookies| {
-				cookies.split(';').find_map(|cookie| {
-					let mut parts = cookie.trim().splitn(2, '=');
-					let name = parts.next()?.trim();
-					let value = parts.next()?.trim();
+			.and_then(Self::parse_cookies)
+			.and_then(|parsed| {
+				parsed.into_iter().find_map(|(name, value)| {
 					if name == cookie_name {
-						Some(value.to_string())
+						Some(value)
 					} else {
 						None
 					}
 				})
 			})
 			.filter(|lang| Self::is_valid_language_code(lang))
+	}
+
+	/// Parse cookie header with strict validation.
+	///
+	/// Rejects malformed cookies:
+	/// - Missing `=` separator
+	/// - Cookie name containing separators (`;`, `=`, whitespace, control chars)
+	/// - Empty cookie name
+	fn parse_cookies(header: &str) -> Option<Vec<(String, String)>> {
+		let mut cookies = Vec::new();
+		for cookie in header.split(';') {
+			let cookie = cookie.trim();
+			if cookie.is_empty() {
+				continue;
+			}
+			// Cookie must contain '=' separator
+			let mut parts = cookie.splitn(2, '=');
+			let name = parts.next()?.trim();
+			let value = match parts.next() {
+				Some(v) => v.trim(),
+				// Missing '=' means malformed cookie - skip it
+				None => continue,
+			};
+			// Validate cookie name: must not be empty or contain separators/control chars
+			if name.is_empty() || !Self::is_valid_cookie_name(name) {
+				continue;
+			}
+			cookies.push((name.to_string(), value.to_string()));
+		}
+		Some(cookies)
+	}
+
+	/// Validate cookie name per RFC 6265.
+	///
+	/// Cookie name must not contain separators, whitespace, or control characters.
+	fn is_valid_cookie_name(name: &str) -> bool {
+		name.chars().all(|c| {
+			// Must be a visible ASCII character (0x21-0x7E) excluding separators
+			let code = c as u32;
+			(0x21..=0x7E).contains(&code)
+				&& !matches!(
+					c,
+					'(' | ')'
+						| '<' | '>' | '@' | ','
+						| ';' | ':' | '\\' | '"'
+						| '/' | '[' | ']' | '?'
+						| '=' | '{' | '}' | ' '
+						| '\t'
+				)
+		})
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	// =================================================================
+	// Query parameter '=' preservation tests (Issue #362)
+	// =================================================================
+
+	#[rstest]
+	fn test_parse_query_params_preserves_equals_in_value() {
+		// Arrange
+		let uri: hyper::Uri = "/test?token=abc==".parse().unwrap();
+
+		// Act
+		let params = Request::parse_query_params(&uri);
+
+		// Assert
+		assert_eq!(params.get("token"), Some(&"abc==".to_string()));
+	}
+
+	#[rstest]
+	fn test_parse_query_params_base64_encoded_value() {
+		// Arrange
+		let uri: hyper::Uri = "/test?data=dGVzdA==".parse().unwrap();
+
+		// Act
+		let params = Request::parse_query_params(&uri);
+
+		// Assert
+		assert_eq!(params.get("data"), Some(&"dGVzdA==".to_string()));
+	}
+
+	#[rstest]
+	fn test_parse_query_params_multiple_equals_in_value() {
+		// Arrange
+		let uri: hyper::Uri = "/test?formula=a=b=c".parse().unwrap();
+
+		// Act
+		let params = Request::parse_query_params(&uri);
+
+		// Assert
+		assert_eq!(params.get("formula"), Some(&"a=b=c".to_string()));
+	}
+
+	#[rstest]
+	fn test_parse_query_params_simple_key_value() {
+		// Arrange
+		let uri: hyper::Uri = "/test?key=value".parse().unwrap();
+
+		// Act
+		let params = Request::parse_query_params(&uri);
+
+		// Assert
+		assert_eq!(params.get("key"), Some(&"value".to_string()));
+	}
+
+	#[rstest]
+	fn test_parse_query_params_key_without_value() {
+		// Arrange
+		let uri: hyper::Uri = "/test?key=".parse().unwrap();
+
+		// Act
+		let params = Request::parse_query_params(&uri);
+
+		// Assert
+		assert_eq!(params.get("key"), Some(&"".to_string()));
+	}
+
+	#[rstest]
+	fn test_parse_query_params_no_query_string() {
+		// Arrange
+		let uri: hyper::Uri = "/test".parse().unwrap();
+
+		// Act
+		let params = Request::parse_query_params(&uri);
+
+		// Assert
+		assert!(params.is_empty());
+	}
+
+	#[rstest]
+	fn test_parse_query_params_multiple_params_with_equals() {
+		// Arrange
+		let uri: hyper::Uri = "/test?a=1&b=x=y=z&c=3".parse().unwrap();
+
+		// Act
+		let params = Request::parse_query_params(&uri);
+
+		// Assert
+		assert_eq!(params.get("a"), Some(&"1".to_string()));
+		assert_eq!(params.get("b"), Some(&"x=y=z".to_string()));
+		assert_eq!(params.get("c"), Some(&"3".to_string()));
 	}
 }

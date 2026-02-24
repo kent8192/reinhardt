@@ -12,8 +12,8 @@
 //! - Edge cases: Boundary TOTP codes, special characters in usernames
 //! - Decision table: Verification outcomes based on conditions
 
-use reinhardt_auth::mfa::MFAAuthentication as MfaManager;
 use reinhardt_auth::AuthenticationError;
+use reinhardt_auth::mfa::MFAAuthentication as MfaManager;
 use reinhardt_test::fixtures::auth::TestUser;
 use rstest::*;
 use std::collections::HashSet;
@@ -59,7 +59,7 @@ fn generate_current_totp(secret: &str, time_window: u64) -> String {
 		.as_secs();
 	let time_step = current_time / time_window;
 
-	totp_lite::totp_custom::<totp_lite::Sha1>(time_window, 6, &secret_bytes, time_step)
+	totp_lite::totp_custom::<totp_lite::Sha256>(time_window, 6, &secret_bytes, time_step)
 }
 
 // =============================================================================
@@ -67,12 +67,15 @@ fn generate_current_totp(secret: &str, time_window: u64) -> String {
 // =============================================================================
 
 #[rstest]
-fn test_mfa_registration_stores_secret(mfa_manager: MfaManager, test_user: TestUser) {
+#[tokio::test]
+async fn test_mfa_registration_stores_secret(mfa_manager: MfaManager, test_user: TestUser) {
 	// Act
-	mfa_manager.register_user(&test_user.username, VALID_SECRET);
+	mfa_manager
+		.register_user(&test_user.username, VALID_SECRET)
+		.await;
 
 	// Assert
-	let stored_secret = mfa_manager.get_secret(&test_user.username);
+	let stored_secret = mfa_manager.get_secret(&test_user.username).await;
 	assert!(stored_secret.is_some(), "Secret should be stored");
 	assert_eq!(
 		stored_secret.unwrap(),
@@ -82,7 +85,8 @@ fn test_mfa_registration_stores_secret(mfa_manager: MfaManager, test_user: TestU
 }
 
 #[rstest]
-fn test_mfa_registration_multiple_users(mfa_manager: MfaManager) {
+#[tokio::test]
+async fn test_mfa_registration_multiple_users(mfa_manager: MfaManager) {
 	// Arrange
 	let users = vec![
 		("alice", VALID_SECRET),
@@ -92,13 +96,14 @@ fn test_mfa_registration_multiple_users(mfa_manager: MfaManager) {
 
 	// Act
 	for (username, secret) in &users {
-		mfa_manager.register_user(*username, *secret);
+		mfa_manager.register_user(*username, *secret).await;
 	}
 
 	// Assert - Each user should have their own secret
 	for (username, expected_secret) in &users {
 		let stored_secret = mfa_manager
 			.get_secret(username)
+			.await
 			.expect("Secret should exist");
 		assert_eq!(
 			&stored_secret, *expected_secret,
@@ -109,13 +114,18 @@ fn test_mfa_registration_multiple_users(mfa_manager: MfaManager) {
 }
 
 #[rstest]
-fn test_mfa_verification_with_valid_code(mfa_manager: MfaManager, test_user: TestUser) {
+#[tokio::test]
+async fn test_mfa_verification_with_valid_code(mfa_manager: MfaManager, test_user: TestUser) {
 	// Arrange
-	mfa_manager.register_user(&test_user.username, VALID_SECRET);
+	mfa_manager
+		.register_user(&test_user.username, VALID_SECRET)
+		.await;
 	let valid_code = generate_current_totp(VALID_SECRET, 30);
 
 	// Act
-	let result = mfa_manager.verify_totp(&test_user.username, &valid_code);
+	let result = mfa_manager
+		.verify_totp(&test_user.username, &valid_code)
+		.await;
 
 	// Assert
 	assert!(result.is_ok(), "Verification should succeed");
@@ -144,14 +154,15 @@ fn test_mfa_totp_url_generation(mfa_manager: MfaManager, test_user: TestUser) {
 }
 
 #[rstest]
-fn test_mfa_time_window_configuration() {
+#[tokio::test]
+async fn test_mfa_time_window_configuration() {
 	// Act
 	let mfa_60sec = MfaManager::new("Test").time_window(60);
 	let mfa_30sec = MfaManager::new("Test").time_window(30);
 
 	// Register and get codes
-	mfa_60sec.register_user("alice", VALID_SECRET);
-	mfa_30sec.register_user("alice", VALID_SECRET);
+	mfa_60sec.register_user("alice", VALID_SECRET).await;
+	mfa_30sec.register_user("alice", VALID_SECRET).await;
 
 	// Generate codes with different time windows
 	let code_60 = generate_current_totp(VALID_SECRET, 60);
@@ -161,11 +172,11 @@ fn test_mfa_time_window_configuration() {
 	// (depending on current time, they might be same or different)
 	// What matters is that each validates with its own time window
 	assert!(
-		mfa_60sec.verify_totp("alice", &code_60).unwrap(),
+		mfa_60sec.verify_totp("alice", &code_60).await.unwrap(),
 		"60-second window should validate its own code"
 	);
 	assert!(
-		mfa_30sec.verify_totp("alice", &code_30).unwrap(),
+		mfa_30sec.verify_totp("alice", &code_30).await.unwrap(),
 		"30-second window should validate its own code"
 	);
 }
@@ -175,9 +186,15 @@ fn test_mfa_time_window_configuration() {
 // =============================================================================
 
 #[rstest]
-fn test_mfa_verification_fails_with_invalid_code(mfa_manager: MfaManager, test_user: TestUser) {
+#[tokio::test]
+async fn test_mfa_verification_fails_with_invalid_code(
+	mfa_manager: MfaManager,
+	test_user: TestUser,
+) {
 	// Arrange
-	mfa_manager.register_user(&test_user.username, VALID_SECRET);
+	mfa_manager
+		.register_user(&test_user.username, VALID_SECRET)
+		.await;
 
 	// Act - Try obviously invalid codes
 	let invalid_codes = vec!["000000", "111111", "999999", "123456", "abcdef"];
@@ -189,7 +206,9 @@ fn test_mfa_verification_fails_with_invalid_code(mfa_manager: MfaManager, test_u
 			continue;
 		}
 
-		let result = mfa_manager.verify_totp(&test_user.username, invalid_code);
+		let result = mfa_manager
+			.verify_totp(&test_user.username, invalid_code)
+			.await;
 
 		// Assert
 		assert!(result.is_ok(), "Verification should not error");
@@ -202,9 +221,10 @@ fn test_mfa_verification_fails_with_invalid_code(mfa_manager: MfaManager, test_u
 }
 
 #[rstest]
-fn test_mfa_verification_fails_for_unregistered_user(mfa_manager: MfaManager) {
+#[tokio::test]
+async fn test_mfa_verification_fails_for_unregistered_user(mfa_manager: MfaManager) {
 	// Act - Try to verify for non-existent user
-	let result = mfa_manager.verify_totp("nonexistent_user", "123456");
+	let result = mfa_manager.verify_totp("nonexistent_user", "123456").await;
 
 	// Assert
 	assert!(result.is_err(), "Verification should fail for unknown user");
@@ -215,16 +235,17 @@ fn test_mfa_verification_fails_for_unregistered_user(mfa_manager: MfaManager) {
 }
 
 #[rstest]
-fn test_mfa_verification_fails_with_malformed_secret(mfa_manager: MfaManager) {
+#[tokio::test]
+async fn test_mfa_verification_fails_with_malformed_secret(mfa_manager: MfaManager) {
 	// Arrange - Register with invalid base32 secret
 	let invalid_secrets = vec!["not-base32!", "12345678", "!!!@@@###"];
 
 	for (i, invalid_secret) in invalid_secrets.iter().enumerate() {
 		let username = format!("user_{}", i);
-		mfa_manager.register_user(&username, *invalid_secret);
+		mfa_manager.register_user(&username, *invalid_secret).await;
 
 		// Act
-		let result = mfa_manager.verify_totp(&username, "123456");
+		let result = mfa_manager.verify_totp(&username, "123456").await;
 
 		// Assert - Should error due to invalid secret
 		assert!(
@@ -243,12 +264,15 @@ fn test_mfa_verification_fails_with_malformed_secret(mfa_manager: MfaManager) {
 }
 
 #[rstest]
-fn test_mfa_verification_empty_code(mfa_manager: MfaManager, test_user: TestUser) {
+#[tokio::test]
+async fn test_mfa_verification_empty_code(mfa_manager: MfaManager, test_user: TestUser) {
 	// Arrange
-	mfa_manager.register_user(&test_user.username, VALID_SECRET);
+	mfa_manager
+		.register_user(&test_user.username, VALID_SECRET)
+		.await;
 
 	// Act
-	let result = mfa_manager.verify_totp(&test_user.username, "");
+	let result = mfa_manager.verify_totp(&test_user.username, "").await;
 
 	// Assert
 	assert!(result.is_ok(), "Empty code should not cause error");
@@ -256,9 +280,10 @@ fn test_mfa_verification_empty_code(mfa_manager: MfaManager, test_user: TestUser
 }
 
 #[rstest]
-fn test_mfa_get_secret_returns_none_for_unregistered(mfa_manager: MfaManager) {
+#[tokio::test]
+async fn test_mfa_get_secret_returns_none_for_unregistered(mfa_manager: MfaManager) {
 	// Act
-	let result = mfa_manager.get_secret("unregistered_user");
+	let result = mfa_manager.get_secret("unregistered_user").await;
 
 	// Assert
 	assert!(result.is_none(), "Unregistered user should have no secret");
@@ -269,14 +294,22 @@ fn test_mfa_get_secret_returns_none_for_unregistered(mfa_manager: MfaManager) {
 // =============================================================================
 
 #[rstest]
-fn test_mfa_secret_update_overwrites_old_secret(mfa_manager: MfaManager, test_user: TestUser) {
+#[tokio::test]
+async fn test_mfa_secret_update_overwrites_old_secret(
+	mfa_manager: MfaManager,
+	test_user: TestUser,
+) {
 	// Arrange - Register with initial secret
-	mfa_manager.register_user(&test_user.username, VALID_SECRET);
-	let initial_secret = mfa_manager.get_secret(&test_user.username).unwrap();
+	mfa_manager
+		.register_user(&test_user.username, VALID_SECRET)
+		.await;
+	let initial_secret = mfa_manager.get_secret(&test_user.username).await.unwrap();
 
 	// Act - Register again with different secret
-	mfa_manager.register_user(&test_user.username, VALID_SECRET_2);
-	let updated_secret = mfa_manager.get_secret(&test_user.username).unwrap();
+	mfa_manager
+		.register_user(&test_user.username, VALID_SECRET_2)
+		.await;
+	let updated_secret = mfa_manager.get_secret(&test_user.username).await.unwrap();
 
 	// Assert
 	assert_ne!(initial_secret, updated_secret, "Secret should be updated");
@@ -287,21 +320,33 @@ fn test_mfa_secret_update_overwrites_old_secret(mfa_manager: MfaManager, test_us
 }
 
 #[rstest]
-fn test_mfa_old_codes_invalid_after_secret_change(mfa_manager: MfaManager, test_user: TestUser) {
+#[tokio::test]
+async fn test_mfa_old_codes_invalid_after_secret_change(
+	mfa_manager: MfaManager,
+	test_user: TestUser,
+) {
 	// Arrange - Register and generate code
-	mfa_manager.register_user(&test_user.username, VALID_SECRET);
+	mfa_manager
+		.register_user(&test_user.username, VALID_SECRET)
+		.await;
 	let old_code = generate_current_totp(VALID_SECRET, 30);
 
 	// Act - Update secret
-	mfa_manager.register_user(&test_user.username, VALID_SECRET_2);
+	mfa_manager
+		.register_user(&test_user.username, VALID_SECRET_2)
+		.await;
 
 	// Old code should no longer be valid
-	let result = mfa_manager.verify_totp(&test_user.username, &old_code);
+	let result = mfa_manager
+		.verify_totp(&test_user.username, &old_code)
+		.await;
 
 	// Assert (code might still be valid if it happens to match new secret, but unlikely)
 	// The key point is the new secret should generate different codes
 	let new_code = generate_current_totp(VALID_SECRET_2, 30);
-	let new_result = mfa_manager.verify_totp(&test_user.username, &new_code);
+	let new_result = mfa_manager
+		.verify_totp(&test_user.username, &new_code)
+		.await;
 
 	assert!(
 		new_result.is_ok() && new_result.unwrap(),
@@ -318,38 +363,42 @@ fn test_mfa_old_codes_invalid_after_secret_change(mfa_manager: MfaManager, test_
 }
 
 #[rstest]
-fn test_mfa_registration_state_transitions(mfa_manager: MfaManager) {
+#[tokio::test]
+async fn test_mfa_registration_state_transitions(mfa_manager: MfaManager) {
 	let username = "state_test_user";
 
 	// State 1: Unregistered
 	assert!(
-		mfa_manager.get_secret(username).is_none(),
+		mfa_manager.get_secret(username).await.is_none(),
 		"Initial state: no secret"
 	);
 	assert!(
-		mfa_manager.verify_totp(username, "123456").is_err(),
+		mfa_manager.verify_totp(username, "123456").await.is_err(),
 		"Unregistered: verification should fail"
 	);
 
 	// Transition: Register
-	mfa_manager.register_user(username, VALID_SECRET);
+	mfa_manager.register_user(username, VALID_SECRET).await;
 
 	// State 2: Registered
 	assert!(
-		mfa_manager.get_secret(username).is_some(),
+		mfa_manager.get_secret(username).await.is_some(),
 		"Registered state: has secret"
 	);
 	let valid_code = generate_current_totp(VALID_SECRET, 30);
 	assert!(
-		mfa_manager.verify_totp(username, &valid_code).unwrap(),
+		mfa_manager
+			.verify_totp(username, &valid_code)
+			.await
+			.unwrap(),
 		"Registered: valid code should work"
 	);
 
 	// Transition: Update secret
-	mfa_manager.register_user(username, VALID_SECRET_2);
+	mfa_manager.register_user(username, VALID_SECRET_2).await;
 
 	// State 3: Re-registered with new secret
-	let new_secret = mfa_manager.get_secret(username).unwrap();
+	let new_secret = mfa_manager.get_secret(username).await.unwrap();
 	assert_eq!(new_secret, VALID_SECRET_2, "Secret should be updated");
 }
 
@@ -362,16 +411,21 @@ fn test_mfa_registration_state_transitions(mfa_manager: MfaManager) {
 #[case("999999")]
 #[case("123456")]
 #[case("654321")]
-fn test_mfa_verification_with_boundary_codes(
+#[tokio::test]
+async fn test_mfa_verification_with_boundary_codes(
 	mfa_manager: MfaManager,
 	test_user: TestUser,
 	#[case] boundary_code: &str,
 ) {
 	// Arrange
-	mfa_manager.register_user(&test_user.username, VALID_SECRET);
+	mfa_manager
+		.register_user(&test_user.username, VALID_SECRET)
+		.await;
 
 	// Act
-	let result = mfa_manager.verify_totp(&test_user.username, boundary_code);
+	let result = mfa_manager
+		.verify_totp(&test_user.username, boundary_code)
+		.await;
 
 	// Assert - Should not error, just return valid/invalid
 	assert!(
@@ -396,12 +450,16 @@ fn test_mfa_verification_with_boundary_codes(
 #[case("user@example.com")]
 #[case("用户名")] // Chinese characters
 #[case("ユーザー")] // Japanese characters
-fn test_mfa_registration_with_special_usernames(mfa_manager: MfaManager, #[case] username: &str) {
+#[tokio::test]
+async fn test_mfa_registration_with_special_usernames(
+	mfa_manager: MfaManager,
+	#[case] username: &str,
+) {
 	// Act
-	mfa_manager.register_user(username, VALID_SECRET);
+	mfa_manager.register_user(username, VALID_SECRET).await;
 
 	// Assert
-	let stored_secret = mfa_manager.get_secret(username);
+	let stored_secret = mfa_manager.get_secret(username).await;
 	assert!(
 		stored_secret.is_some(),
 		"Username '{}' should be registered",
@@ -437,30 +495,33 @@ fn test_mfa_totp_codes_are_unique_for_different_secrets(_mfa_manager: MfaManager
 }
 
 #[rstest]
-fn test_mfa_concurrent_registrations(mfa_manager: MfaManager) {
+#[tokio::test]
+async fn test_mfa_concurrent_registrations(mfa_manager: MfaManager) {
 	use std::sync::Arc;
-	use std::thread;
+	use tokio::task::JoinSet;
 
 	let mfa = Arc::new(mfa_manager);
-	let mut handles = vec![];
+	let mut join_set = JoinSet::new();
 
-	// Spawn multiple threads registering different users
+	// Spawn multiple tasks registering different users
 	for i in 0..10 {
 		let mfa_clone = Arc::clone(&mfa);
-		let handle = thread::spawn(move || {
+		join_set.spawn(async move {
 			let username = format!("concurrent_user_{}", i);
-			mfa_clone.register_user(&username, VALID_SECRET);
+			mfa_clone.register_user(&username, VALID_SECRET).await;
 			username
 		});
-		handles.push(handle);
 	}
 
-	// Wait for all threads
-	let usernames: Vec<String> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+	// Wait for all tasks
+	let mut usernames = Vec::new();
+	while let Some(result) = join_set.join_next().await {
+		usernames.push(result.unwrap());
+	}
 
 	// Assert - All users should be registered
 	for username in usernames {
-		let secret = mfa.get_secret(&username);
+		let secret = mfa.get_secret(&username).await;
 		assert!(
 			secret.is_some(),
 			"User '{}' should be registered after concurrent registration",
@@ -476,7 +537,8 @@ fn test_mfa_concurrent_registrations(mfa_manager: MfaManager) {
 #[rstest]
 #[case(true, true, true)] // Registered + Valid code = Valid
 #[case(true, false, false)] // Registered + Invalid code = Invalid
-fn test_mfa_verification_decision_table(
+#[tokio::test]
+async fn test_mfa_verification_decision_table(
 	mfa_manager: MfaManager,
 	#[case] is_registered: bool,
 	#[case] is_code_valid: bool,
@@ -486,7 +548,7 @@ fn test_mfa_verification_decision_table(
 
 	// Setup based on conditions
 	if is_registered {
-		mfa_manager.register_user(username, VALID_SECRET);
+		mfa_manager.register_user(username, VALID_SECRET).await;
 	}
 
 	let code = if is_code_valid && is_registered {
@@ -496,7 +558,7 @@ fn test_mfa_verification_decision_table(
 	};
 
 	// Act
-	let result = mfa_manager.verify_totp(username, &code);
+	let result = mfa_manager.verify_totp(username, &code).await;
 
 	// Assert
 	if !is_registered {
@@ -519,7 +581,8 @@ fn test_mfa_verification_decision_table(
 // =============================================================================
 
 #[rstest]
-fn test_use_case_complete_mfa_enrollment_flow(mfa_manager: MfaManager, test_user: TestUser) {
+#[tokio::test]
+async fn test_use_case_complete_mfa_enrollment_flow(mfa_manager: MfaManager, test_user: TestUser) {
 	// Step 1: Generate secret and TOTP URL for QR code
 	let secret = VALID_SECRET;
 	let totp_url = mfa_manager.generate_totp_url(&test_user.username, secret);
@@ -529,16 +592,18 @@ fn test_use_case_complete_mfa_enrollment_flow(mfa_manager: MfaManager, test_user
 	assert!(totp_url.contains(&test_user.username));
 
 	// Step 2: Register user with secret
-	mfa_manager.register_user(&test_user.username, secret);
+	mfa_manager.register_user(&test_user.username, secret).await;
 
 	// Assert registration succeeded
-	assert!(mfa_manager.get_secret(&test_user.username).is_some());
+	assert!(mfa_manager.get_secret(&test_user.username).await.is_some());
 
 	// Step 3: User enters TOTP code from authenticator app
 	let totp_code = generate_current_totp(secret, 30);
 
 	// Step 4: Verify the code
-	let verification_result = mfa_manager.verify_totp(&test_user.username, &totp_code);
+	let verification_result = mfa_manager
+		.verify_totp(&test_user.username, &totp_code)
+		.await;
 
 	// Assert verification succeeded
 	assert!(verification_result.is_ok());
@@ -549,17 +614,18 @@ fn test_use_case_complete_mfa_enrollment_flow(mfa_manager: MfaManager, test_user
 }
 
 #[rstest]
-fn test_use_case_failed_verification_lockout_simulation(mfa_manager: MfaManager) {
+#[tokio::test]
+async fn test_use_case_failed_verification_lockout_simulation(mfa_manager: MfaManager) {
 	// Simulate multiple failed verification attempts
 	let username = "locked_user";
-	mfa_manager.register_user(username, VALID_SECRET);
+	mfa_manager.register_user(username, VALID_SECRET).await;
 
 	let mut failed_attempts = 0;
 	let max_attempts = 5;
 
 	// Try invalid codes
 	for _ in 0..max_attempts {
-		let result = mfa_manager.verify_totp(username, "000000");
+		let result = mfa_manager.verify_totp(username, "000000").await;
 		if result.is_ok() && !result.unwrap() {
 			failed_attempts += 1;
 		}
@@ -573,7 +639,7 @@ fn test_use_case_failed_verification_lockout_simulation(mfa_manager: MfaManager)
 
 	// Valid code should still work (no actual lockout in current implementation)
 	let valid_code = generate_current_totp(VALID_SECRET, 30);
-	let result = mfa_manager.verify_totp(username, &valid_code);
+	let result = mfa_manager.verify_totp(username, &valid_code).await;
 	assert!(
 		result.is_ok() && result.unwrap(),
 		"Valid code should work after failed attempts"
@@ -585,19 +651,20 @@ fn test_use_case_failed_verification_lockout_simulation(mfa_manager: MfaManager)
 // =============================================================================
 
 #[rstest]
-fn test_mfa_default_configuration() {
+#[tokio::test]
+async fn test_mfa_default_configuration() {
 	// Act
 	let mfa = MfaManager::default();
 
 	// Assert
 	assert!(
-		mfa.get_secret("nonexistent").is_none(),
+		mfa.get_secret("nonexistent").await.is_none(),
 		"Default MFA should have no registered users"
 	);
 
 	// Can register and verify
-	mfa.register_user("test", VALID_SECRET);
-	assert!(mfa.get_secret("test").is_some());
+	mfa.register_user("test", VALID_SECRET).await;
+	assert!(mfa.get_secret("test").await.is_some());
 }
 
 #[rstest]

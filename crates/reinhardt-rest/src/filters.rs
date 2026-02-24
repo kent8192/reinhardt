@@ -5,6 +5,20 @@
 // Core filter trait
 pub mod filter;
 
+/// Supported database dialects for query generation
+///
+/// Different databases use different identifier quoting styles:
+/// - MySQL uses backticks: \`column\`
+/// - PostgreSQL uses double quotes: "column"
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DatabaseDialect {
+	/// MySQL dialect (uses backticks for identifier quoting)
+	#[default]
+	MySQL,
+	/// PostgreSQL dialect (uses double quotes for identifier quoting)
+	PostgreSQL,
+}
+
 // Custom filter backends
 pub mod backend;
 

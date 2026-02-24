@@ -47,7 +47,7 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
 use crate::crate_paths::get_reinhardt_pages_crate_info;
-use reinhardt_pages_ast::{
+use reinhardt_manouche::core::{
 	FormMethod, TypedCustomAttr, TypedFieldType, TypedFormAction, TypedFormCallbacks,
 	TypedFormDerived, TypedFormFieldDef, TypedFormFieldEntry, TypedFormFieldGroup, TypedFormMacro,
 	TypedFormSlots, TypedFormState, TypedFormWatch, TypedIcon, TypedIconChild, TypedIconPosition,
@@ -539,17 +539,11 @@ fn generate_derived_methods(
 	quote! { #(#methods)* }
 }
 
-/// Generates the metadata function for SSR.
-fn generate_metadata_function(
-	macro_ast: &TypedFormMacro,
-	pages_crate: &TokenStream,
-) -> TokenStream {
-	// Generate form ID from struct name (convert to kebab-case)
-	// Generate form ID from struct name (convert to kebab-case)
-	// Example: RegisterForm -> register-form, LoginForm -> login-form
-	let form_id_str = macro_ast
-		.name
-		.to_string()
+/// Converts a struct name to kebab-case for use as form ID.
+///
+/// Example: `RegisterForm` -> `register-form`, `LoginForm` -> `login-form`
+fn form_id_kebab_case(name: &syn::Ident) -> String {
+	name.to_string()
 		.chars()
 		.enumerate()
 		.flat_map(|(i, c)| {
@@ -560,16 +554,25 @@ fn generate_metadata_function(
 			}
 		})
 		.collect::<String>()
-		.replace('_', "-");
+		.replace('_', "-")
+}
 
-	let action_str = match &macro_ast.action {
+/// Resolves the form action URL from the typed action.
+fn action_string(action: &TypedFormAction) -> String {
+	match action {
 		TypedFormAction::Url(url) => url.clone(),
-		TypedFormAction::ServerFn(path) => {
-			// Convert syn::Path to string for URL generation
-			format!("/api/{}", path.to_token_stream())
-		}
+		TypedFormAction::ServerFn(path) => format!("/api/{}", path.to_token_stream()),
 		TypedFormAction::None => String::new(),
-	};
+	}
+}
+
+/// Generates the metadata function for SSR.
+fn generate_metadata_function(
+	macro_ast: &TypedFormMacro,
+	pages_crate: &TokenStream,
+) -> TokenStream {
+	let form_id_str = form_id_kebab_case(&macro_ast.name);
+	let action_str = action_string(&macro_ast.action);
 
 	let method_str = match macro_ast.method {
 		FormMethod::Get => "GET",
@@ -671,28 +674,8 @@ fn generate_into_page(macro_ast: &TypedFormMacro, pages_crate: &TokenStream) -> 
 /// When a form has a server_fn action, this generates an onsubmit event handler
 /// that prevents default form submission and calls the server function instead.
 fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStream) -> TokenStream {
-	// Generate form ID from struct name (convert to kebab-case)
-	// Example: RegisterForm -> register-form, LoginForm -> login-form
-	let form_id_str = macro_ast
-		.name
-		.to_string()
-		.chars()
-		.enumerate()
-		.flat_map(|(i, c)| {
-			if c.is_uppercase() && i > 0 {
-				vec!['-', c.to_ascii_lowercase()]
-			} else {
-				vec![c.to_ascii_lowercase()]
-			}
-		})
-		.collect::<String>()
-		.replace('_', "-");
-
-	let action_str = match &macro_ast.action {
-		TypedFormAction::Url(url) => url.clone(),
-		TypedFormAction::ServerFn(path) => format!("/api/{}", path.to_token_stream()),
-		TypedFormAction::None => String::new(),
-	};
+	let form_id_str = form_id_kebab_case(&macro_ast.name);
+	let action_str = action_string(&macro_ast.action);
 
 	let method_str = match macro_ast.method {
 		FormMethod::Get => "get",
@@ -1292,7 +1275,7 @@ fn generate_icon_element(icon: &TypedIcon) -> TokenStream {
 }
 
 /// Generates attribute code for icon elements.
-fn generate_icon_attrs(attrs: &[reinhardt_pages_ast::TypedIconAttr]) -> TokenStream {
+fn generate_icon_attrs(attrs: &[reinhardt_manouche::core::TypedIconAttr]) -> TokenStream {
 	let mut result = TokenStream::new();
 	for attr in attrs {
 		let name = &attr.name;
@@ -1324,7 +1307,7 @@ fn generate_icon_children(children: &[TypedIconChild]) -> TokenStream {
 }
 
 /// Generates attribute code for icon child elements.
-fn generate_icon_child_attrs(attrs: &[reinhardt_pages_ast::TypedIconAttr]) -> TokenStream {
+fn generate_icon_child_attrs(attrs: &[reinhardt_manouche::core::TypedIconAttr]) -> TokenStream {
 	let mut result = TokenStream::new();
 	for attr in attrs {
 		let name = &attr.name;
@@ -2044,10 +2027,10 @@ mod tests {
 	use quote::quote;
 
 	fn parse_validate_generate(input: proc_macro2::TokenStream) -> TokenStream {
-		use reinhardt_pages_ast::FormMacro;
+		use reinhardt_manouche::core::FormMacro;
 
 		let untyped_ast: FormMacro = syn::parse2(input).unwrap();
-		let typed_ast = super::super::validator::validate(&untyped_ast).unwrap();
+		let typed_ast = crate::form::validator::validate(&untyped_ast).unwrap();
 		generate(&typed_ast)
 	}
 

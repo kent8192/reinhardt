@@ -3,6 +3,7 @@
 //! Tests based on Django's i18n catalog functionality
 
 use reinhardt_i18n::{CatalogLoader, I18nError, MessageCatalog};
+use rstest::rstest;
 use serial_test::serial;
 use std::fs;
 use tempfile::TempDir;
@@ -114,10 +115,12 @@ fn test_catalog_context_plural() {
 	let locale: LanguageIdentifier = "de-DE".parse().unwrap();
 	let mut catalog = MessageCatalog::new(&locale.to_string());
 
-	// Context plural uses "context:msgid" as key
-	catalog.add_plural(
-		"email:message".to_string(),
-		vec!["Nachricht".to_string(), "Nachrichten".to_string()],
+	// Use explicit add_context_plural() for context-qualified entries
+	catalog.add_context_plural(
+		"email",
+		"message",
+		"messages",
+		vec!["Nachricht", "Nachrichten"],
 	);
 
 	assert_eq!(
@@ -391,4 +394,120 @@ fn test_catalog_unicode_messages() {
 	assert_eq!(catalog.get("こんにちは"), Some(&"Hello".to_string()));
 	assert_eq!(catalog.get("Hello"), Some(&"こんにちは".to_string()));
 	assert_eq!(catalog.get("emoji"), Some(&"😀🎉🚀".to_string()));
+}
+
+// ===================================================================
+// Path traversal prevention tests
+// ===================================================================
+
+#[rstest]
+#[serial(i18n)]
+#[case("../../etc/passwd", "parent directory traversal")]
+#[case("../secret_config", "single parent traversal")]
+#[case("foo/../../bar", "embedded traversal")]
+fn test_catalog_loader_rejects_path_traversal(
+	#[case] malicious_locale: &str,
+	#[case] _description: &str,
+) {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let loader = CatalogLoader::new(temp_dir.path());
+
+	// Act
+	let result = loader.load(malicious_locale);
+
+	// Assert
+	assert!(result.is_err());
+	assert!(
+		matches!(
+			&result,
+			Err(I18nError::InvalidLocale(_)) | Err(I18nError::PathTraversal(_))
+		),
+		"Expected InvalidLocale or PathTraversal error for '{}', got: {:?}",
+		malicious_locale,
+		result
+	);
+}
+
+#[rstest]
+#[serial(i18n)]
+fn test_catalog_loader_rejects_absolute_path_locale() {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let loader = CatalogLoader::new(temp_dir.path());
+
+	// Act
+	let result = loader.load("/etc/passwd");
+
+	// Assert
+	assert!(result.is_err());
+	assert!(matches!(result, Err(I18nError::InvalidLocale(_))));
+}
+
+#[rstest]
+#[serial(i18n)]
+fn test_catalog_loader_rejects_empty_locale() {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let loader = CatalogLoader::new(temp_dir.path());
+
+	// Act
+	let result = loader.load("");
+
+	// Assert
+	assert!(result.is_err());
+	assert!(matches!(result, Err(I18nError::InvalidLocale(_))));
+}
+
+#[rstest]
+#[serial(i18n)]
+fn test_catalog_loader_rejects_dot_dot_locale() {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let loader = CatalogLoader::new(temp_dir.path());
+
+	// Act
+	let result = loader.load("..");
+
+	// Assert
+	assert!(result.is_err());
+	assert!(matches!(result, Err(I18nError::InvalidLocale(_))));
+}
+
+#[rstest]
+#[serial(i18n)]
+fn test_catalog_loader_accepts_valid_locale() {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let locale_dir = temp_dir.path().join("en-US").join("LC_MESSAGES");
+	fs::create_dir_all(&locale_dir).unwrap();
+	let po_content = "msgid \"Hello\"\nmsgstr \"Hello\"\n";
+	fs::write(locale_dir.join("django.po"), po_content).unwrap();
+	let loader = CatalogLoader::new(temp_dir.path());
+
+	// Act
+	let result = loader.load("en-US");
+
+	// Assert
+	assert!(result.is_ok());
+}
+
+#[rstest]
+#[serial(i18n)]
+fn test_catalog_load_from_file_rejects_traversal() {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let loader = CatalogLoader::new(temp_dir.path());
+
+	// Act
+	let result = loader.load_from_file("../../etc/passwd", "en");
+
+	// Assert
+	assert!(result.is_err());
+	let err_msg = result.unwrap_err();
+	assert!(
+		err_msg.contains("traversal") || err_msg.contains("parent"),
+		"Expected path traversal error, got: {}",
+		err_msg
+	);
 }

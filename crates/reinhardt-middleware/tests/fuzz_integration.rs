@@ -210,6 +210,7 @@ proptest! {
 				strategy: RateLimitStrategy::PerIp,
 				exclude_paths: vec![],
 				error_message: None,
+				trusted_proxies: vec![],
 			};
 
 			let middleware = Arc::new(RateLimitMiddleware::new(config));
@@ -240,6 +241,7 @@ proptest! {
 				strategy: RateLimitStrategy::PerIp,
 				exclude_paths: vec![],
 				error_message: None,
+				trusted_proxies: vec![],
 			};
 
 			let middleware = Arc::new(RateLimitMiddleware::new(config));

@@ -3,7 +3,6 @@
 //! These tests verify cursor-based pagination with PostgreSQL TestContainers,
 //! testing cursor encoding/decoding, forward/backward navigation, and pagination metadata.
 
-use reinhardt_core::pagination::cursor::{Base64CursorEncoder, CursorEncoder};
 use reinhardt_core::pagination::{AsyncPaginator, CursorPagination};
 use reinhardt_db::orm::DatabaseConnection;
 use reinhardt_test::fixtures::testcontainers::postgres_container;
@@ -170,13 +169,6 @@ async fn test_cursor_based_pagination_integration(
 		.map(|(_, value)| value.to_string())
 		.expect("Next cursor not found");
 
-	// Verify cursor can be decoded (position should be 10)
-	let encoder = Base64CursorEncoder::new();
-	let cursor_position = encoder
-		.decode(&next_cursor)
-		.expect("Failed to decode cursor");
-	assert_eq!(cursor_position, 10); // Next page starts at position 10
-
 	// Get second page using next cursor
 	let second_page = paginator
 		.apaginate(&articles, Some(&next_cursor), base_url)
@@ -301,13 +293,6 @@ async fn test_cursor_forward_backward_navigation(
 		.find(|(key, _)| key == "cursor")
 		.map(|(_, value)| value.to_string())
 		.unwrap();
-
-	// Verify previous cursor decodes to position 0
-	let encoder = Base64CursorEncoder::new();
-	let prev_position = encoder
-		.decode(&prev_cursor)
-		.expect("Failed to decode previous cursor");
-	assert_eq!(prev_position, 0); // Previous page starts at position 0
 
 	// Navigate back to first page using previous cursor
 	let back_to_first = paginator

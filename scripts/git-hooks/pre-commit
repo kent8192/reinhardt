@@ -1,0 +1,27 @@
+#!/bin/sh
+# Reinhardt pre-commit hook
+# Checks that formatter placeholder macros are not left in committed source files
+
+set -e
+
+# Check for __reinhardt_placeholder__! in staged Rust files (excluding reinhardt-admin-cli)
+STAGED_RS_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.rs$' | grep -v '^crates/reinhardt-admin-cli/' || true)
+
+if [ -n "$STAGED_RS_FILES" ]; then
+    PLACEHOLDER_FILES=$(echo "$STAGED_RS_FILES" | xargs grep -l "__reinhardt_placeholder__!" 2>/dev/null || true)
+    if [ -n "$PLACEHOLDER_FILES" ]; then
+        echo ""
+        echo "❌ Formatter placeholder macro found in staged files!"
+        echo ""
+        echo "The following files contain __reinhardt_placeholder__!(...):"
+        echo "$PLACEHOLDER_FILES" | sed 's/^/  /'
+        echo ""
+        echo "This is an internal marker used by reinhardt-admin-cli during page! macro formatting."
+        echo "The formatter should restore page!(...) calls before committing."
+        echo "Run \`cargo make fmt-page-only\` to restore the original macros."
+        echo ""
+        exit 1
+    fi
+fi
+
+exit 0

@@ -1,7 +1,21 @@
 use aho_corasick::AhoCorasick;
 use matchit::Router as MatchitRouter;
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+/// Maximum allowed length for a URL pattern string in bytes.
+/// Patterns exceeding this limit are rejected to prevent ReDoS attacks
+/// from excessively long or complex regex patterns.
+const MAX_PATTERN_LENGTH: usize = 1024;
+
+/// Maximum allowed number of path segments in a URL pattern.
+/// Patterns with more segments than this are rejected to prevent
+/// resource exhaustion from deeply nested URL structures.
+const MAX_PATH_SEGMENTS: usize = 32;
+
+/// Maximum allowed size for compiled regex (in bytes).
+/// This limits the compiled regex DFA size to prevent memory exhaustion.
+const MAX_REGEX_SIZE: usize = 1 << 20; // 1 MiB
 
 /// Convert a type specifier to its corresponding regex pattern
 ///
@@ -19,7 +33,7 @@ use std::collections::HashMap;
 /// | `str` | `[^/]+` | Any non-slash characters (default) |
 /// | `uuid` | UUID regex | UUID format |
 /// | `slug` | `[a-z0-9]+(?:-[a-z0-9]+)*` | Lowercase slug |
-/// | `path` | `.+` | Any characters including slashes |
+/// | `path` | `.+` | Any characters **including** path separators (`/`); `..` segments are rejected by post-match validation |
 /// | `bool` | `true\|false\|1\|0` | Boolean literals |
 /// | `email` | Email regex | Email format |
 /// | `date` | `[0-9]{4}-[0-9]{2}-[0-9]{2}` | ISO 8601 date |
@@ -30,6 +44,11 @@ fn type_spec_to_regex(type_spec: &str) -> &'static str {
 		"str" => r"[^/]+",
 		"uuid" => r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
 		"slug" => r"[a-z0-9]+(?:-[a-z0-9]+)*",
+		// Matches any characters including path separators (`/`).
+		// A pattern like `/files/{<path:filepath>}` will match
+		// `/files/a/b/c.txt`, capturing `a/b/c.txt` as a single value.
+		// Directory traversal (`..` segments) is rejected by post-match
+		// validation in extract_params() and match_path_linear().
 		"path" => r".+",
 		// Signed integers
 		"i8" | "i16" | "i32" | "i64" => r"-?[0-9]+",
@@ -46,9 +65,98 @@ fn type_spec_to_regex(type_spec: &str) -> &'static str {
 	}
 }
 
+/// Validate that a matched path value does not contain directory traversal sequences.
+///
+/// This provides defense-in-depth for `path` type parameters by checking
+/// extracted values for `..` segments that could enable path traversal.
+///
+/// Rejects:
+/// - `..` as a path segment (forward-slash or backslash separated)
+/// - Percent-encoded traversal sequences (`%2e`, `%2f`, `%2E`, `%2F`, `%5c`, `%5C`)
+/// - Null bytes (literal or encoded `%00`)
+/// - Absolute paths starting with `/` or `\`
+fn validate_path_param(value: &str) -> bool {
+	// Reject null bytes
+	if value.contains('\0') {
+		return false;
+	}
+
+	// Reject percent-encoded dangerous characters:
+	// %2e / %2E = '.', %2f / %2F = '/', %5c / %5C = '\', %00 = null
+	let lower = value.to_ascii_lowercase();
+	if lower.contains("%2e")
+		|| lower.contains("%2f")
+		|| lower.contains("%5c")
+		|| lower.contains("%00")
+	{
+		return false;
+	}
+
+	// Reject absolute paths
+	if value.starts_with('/') || value.starts_with('\\') {
+		return false;
+	}
+
+	// Check for `..` as a complete path segment (forward-slash separated)
+	for segment in value.split('/') {
+		if segment == ".." {
+			return false;
+		}
+	}
+	// Also reject backslash-separated `..` segments
+	for segment in value.split('\\') {
+		if segment == ".." {
+			return false;
+		}
+	}
+
+	true
+}
+
+/// Validate a parameter value for URL reversal against injection attacks.
+///
+/// Rejects values containing:
+/// - Path separators (`/`, `\`)
+/// - Query string delimiters (`?`)
+/// - Fragment identifiers (`#`)
+/// - Null bytes
+/// - Path traversal sequences (`..`)
+/// - Percent-encoded dangerous characters (`%2f`, `%2e`, `%5c`, `%3f`, `%23`, `%00`)
+pub(crate) fn validate_reverse_param(value: &str) -> bool {
+	// Reject null bytes
+	if value.contains('\0') {
+		return false;
+	}
+
+	// Reject path separators and URL-special characters
+	if value.contains('/') || value.contains('\\') || value.contains('?') || value.contains('#') {
+		return false;
+	}
+
+	// Reject path traversal
+	if value == ".." || value.starts_with("../") || value.ends_with("/..") || value.contains("/../")
+	{
+		return false;
+	}
+
+	// Reject percent-encoded dangerous characters
+	let lower = value.to_ascii_lowercase();
+	if lower.contains("%2f")
+		|| lower.contains("%2e")
+		|| lower.contains("%5c")
+		|| lower.contains("%3f")
+		|| lower.contains("%23")
+		|| lower.contains("%00")
+	{
+		return false;
+	}
+
+	true
+}
+
 /// Path pattern for URL matching
 /// Similar to Django's URL patterns but using composition
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PathPattern {
 	/// Original pattern string (may contain type specifiers)
 	pattern: String,
@@ -56,6 +164,9 @@ pub struct PathPattern {
 	normalized_pattern: String,
 	regex: Regex,
 	param_names: Vec<String>,
+	/// Parameter names that use the `path` type specifier.
+	/// These require post-match validation to reject directory traversal.
+	path_type_params: HashSet<String>,
 	/// Pre-built Aho-Corasick automaton for efficient URL reversal
 	/// This is constructed once during pattern creation for O(n+m+z) reversal
 	aho_corasick: Option<AhoCorasick>,
@@ -65,6 +176,8 @@ pub struct PathPattern {
 struct ParsePatternResult {
 	regex_str: String,
 	param_names: Vec<String>,
+	/// Parameter names that use the `path` type specifier
+	path_type_params: HashSet<String>,
 	/// Pattern normalized to `{name}` format for URL reversal
 	/// e.g., "/users/{<int:id>}/" -> "/users/{id}/"
 	normalized_pattern: String,
@@ -89,8 +202,32 @@ impl PathPattern {
 	/// ```
 	pub fn new(pattern: impl Into<String>) -> Result<Self, String> {
 		let pattern = pattern.into();
+
+		// Reject patterns exceeding the maximum length to prevent ReDoS
+		if pattern.len() > MAX_PATTERN_LENGTH {
+			return Err(format!(
+				"Pattern length {} exceeds maximum allowed length of {} bytes",
+				pattern.len(),
+				MAX_PATTERN_LENGTH
+			));
+		}
+
+		// Reject patterns with excessive path segments to prevent resource exhaustion
+		let segment_count = pattern.split('/').count();
+		if segment_count > MAX_PATH_SEGMENTS {
+			return Err(format!(
+				"Pattern has {} path segments, exceeding maximum of {}",
+				segment_count, MAX_PATH_SEGMENTS
+			));
+		}
+
 		let parse_result = Self::parse_pattern(&pattern)?;
-		let regex = Regex::new(&parse_result.regex_str).map_err(|e| e.to_string())?;
+
+		// Use RegexBuilder with size limits to prevent memory exhaustion
+		let regex = regex::RegexBuilder::new(&parse_result.regex_str)
+			.size_limit(MAX_REGEX_SIZE)
+			.build()
+			.map_err(|e| format!("Failed to compile pattern regex: {}", e))?;
 
 		// Build Aho-Corasick automaton for URL reversal if there are parameters
 		let aho_corasick = if !parse_result.param_names.is_empty() {
@@ -112,6 +249,7 @@ impl PathPattern {
 			normalized_pattern: parse_result.normalized_pattern,
 			regex,
 			param_names: parse_result.param_names,
+			path_type_params: parse_result.path_type_params,
 			aho_corasick,
 		})
 	}
@@ -119,6 +257,7 @@ impl PathPattern {
 	fn parse_pattern(pattern: &str) -> Result<ParsePatternResult, String> {
 		let mut regex_str = String::from("^");
 		let mut param_names = Vec::new();
+		let mut path_type_params = HashSet::new();
 		let mut normalized_pattern = String::new();
 		let mut chars = pattern.chars().peekable();
 
@@ -153,6 +292,9 @@ impl PathPattern {
 										type_spec
 									));
 								}
+								if type_spec == "path" {
+									path_type_params.insert(name.to_string());
+								}
 								(name.to_string(), type_spec_to_regex(type_spec))
 							} else {
 								return Err(format!(
@@ -186,6 +328,7 @@ impl PathPattern {
 		Ok(ParsePatternResult {
 			regex_str,
 			param_names,
+			path_type_params,
 			normalized_pattern,
 		})
 	}
@@ -243,14 +386,19 @@ impl PathPattern {
 	/// assert_eq!(params.get("id"), Some(&"123".to_string()));
 	/// ```
 	pub fn extract_params(&self, path: &str) -> Option<HashMap<String, String>> {
-		self.regex.captures(path).map(|captures| {
+		self.regex.captures(path).and_then(|captures| {
 			let mut params = HashMap::new();
 			for name in self.param_names() {
 				if let Some(value) = captures.name(name) {
-					params.insert(name.clone(), value.as_str().to_string());
+					let val = value.as_str();
+					// Validate path-type parameters against directory traversal
+					if self.path_type_params.contains(name) && !validate_path_param(val) {
+						return None;
+					}
+					params.insert(name.clone(), val.to_string());
 				}
 			}
-			params
+			Some(params)
 		})
 	}
 
@@ -291,6 +439,16 @@ impl PathPattern {
 		for param_name in &self.param_names {
 			if !params.contains_key(param_name) {
 				return Err(format!("Missing required parameter: {}", param_name));
+			}
+		}
+
+		// Validate parameter values against injection attacks
+		for (name, value) in params {
+			if !validate_reverse_param(value) {
+				return Err(format!(
+					"Invalid parameter value for '{}': contains dangerous characters",
+					name
+				));
 			}
 		}
 
@@ -502,13 +660,18 @@ impl PathMatcher {
 
 	/// Linear pattern matching (O(n))
 	fn match_path_linear(&self, path: &str) -> Option<(String, HashMap<String, String>)> {
-		for (pattern, handler_id) in &self.patterns {
+		'outer: for (pattern, handler_id) in &self.patterns {
 			if let Some(captures) = pattern.regex.captures(path) {
 				let mut params = HashMap::new();
 
 				for name in pattern.param_names() {
 					if let Some(value) = captures.name(name) {
-						params.insert(name.clone(), value.as_str().to_string());
+						let val = value.as_str();
+						// Validate path-type parameters against directory traversal
+						if pattern.path_type_params.contains(name) && !validate_path_param(val) {
+							continue 'outer;
+						}
+						params.insert(name.clone(), val.to_string());
 					}
 				}
 
@@ -551,7 +714,7 @@ pub enum RadixRouterError {
 /// Uses matchit's pattern syntax, compatible with Django-style patterns:
 /// - `/users/{id}` - Single parameter
 /// - `/posts/{post_id}/comments/{comment_id}` - Multiple parameters
-/// - `/files/*path` - Catch-all wildcard (matches remaining path)
+/// - `/files/{*path}` - Catch-all wildcard (matches remaining path including `/`)
 ///
 /// # Examples
 ///
@@ -1051,5 +1214,390 @@ mod tests {
 			assert_eq!(linear_result, radix_result);
 			assert!(linear_result.is_some());
 		}
+	}
+
+	// ===================================================================
+	// Path traversal prevention tests (Issue #425)
+	// ===================================================================
+
+	#[test]
+	fn test_path_type_rejects_traversal() {
+		// Arrange
+		let pattern = PathPattern::new("/files/{<path:filepath>}").unwrap();
+
+		// Act & Assert - should reject `..` segments
+		assert!(
+			pattern
+				.extract_params("/files/../../../etc/passwd")
+				.is_none(),
+			"Path type should reject directory traversal"
+		);
+		assert!(
+			pattern
+				.extract_params("/files/foo/../../etc/passwd")
+				.is_none(),
+			"Path type should reject embedded directory traversal"
+		);
+	}
+
+	#[test]
+	fn test_path_type_allows_valid_paths() {
+		// Arrange
+		let pattern = PathPattern::new("/files/{<path:filepath>}").unwrap();
+
+		// Act
+		let result = pattern.extract_params("/files/images/logo.png");
+
+		// Assert
+		assert!(result.is_some());
+		let params = result.unwrap();
+		assert_eq!(params.get("filepath"), Some(&"images/logo.png".to_string()));
+	}
+
+	#[test]
+	fn test_path_type_allows_dotfiles() {
+		// Arrange
+		let pattern = PathPattern::new("/files/{<path:filepath>}").unwrap();
+
+		// Act
+		let result = pattern.extract_params("/files/.gitignore");
+
+		// Assert
+		assert!(result.is_some());
+		let params = result.unwrap();
+		assert_eq!(params.get("filepath"), Some(&".gitignore".to_string()));
+	}
+
+	#[test]
+	fn test_path_type_matcher_rejects_traversal() {
+		// Arrange
+		let mut matcher = PathMatcher::new();
+		matcher.add_pattern(
+			PathPattern::new("/files/{<path:filepath>}").unwrap(),
+			"serve_file".to_string(),
+		);
+
+		// Act & Assert
+		assert!(
+			matcher.match_path("/files/../../../etc/passwd").is_none(),
+			"PathMatcher should reject directory traversal in path params"
+		);
+
+		// Valid path should work
+		let result = matcher.match_path("/files/css/style.css");
+		assert!(result.is_some());
+	}
+
+	#[test]
+	fn test_validate_path_param_function() {
+		// Normal paths should pass
+		assert!(validate_path_param("images/logo.png"));
+		assert!(validate_path_param("css/style.css"));
+		assert!(validate_path_param(".gitignore"));
+		assert!(validate_path_param("dir/.hidden"));
+
+		// Traversal attacks should fail
+		assert!(!validate_path_param("../etc/passwd"));
+		assert!(!validate_path_param("foo/../../bar"));
+		assert!(!validate_path_param(".."));
+		assert!(!validate_path_param("foo/.."));
+
+		// Null bytes should fail
+		assert!(!validate_path_param("foo\0bar"));
+	}
+
+	// ===================================================================
+	// Encoded path traversal prevention tests (Issue #425)
+	// ===================================================================
+
+	#[test]
+	fn test_validate_path_param_rejects_encoded_traversal() {
+		// Arrange & Act & Assert
+		// Percent-encoded dot sequences (%2e = '.')
+		assert!(!validate_path_param("%2e%2e/%2e%2e/etc/passwd"));
+		assert!(!validate_path_param("foo/%2e%2e/bar"));
+		assert!(!validate_path_param("%2E%2E/secret"));
+
+		// Percent-encoded slash (%2f = '/')
+		assert!(!validate_path_param("foo%2fbar"));
+		assert!(!validate_path_param("..%2f..%2fetc%2fpasswd"));
+		assert!(!validate_path_param("foo%2Fbar"));
+
+		// Percent-encoded backslash (%5c = '\')
+		assert!(!validate_path_param("foo%5cbar"));
+		assert!(!validate_path_param("..%5C..%5Csecret"));
+
+		// Percent-encoded null byte (%00)
+		assert!(!validate_path_param("file%00.txt"));
+	}
+
+	#[test]
+	fn test_validate_path_param_rejects_absolute_paths() {
+		// Arrange & Act & Assert
+		assert!(!validate_path_param("/etc/passwd"));
+		assert!(!validate_path_param("\\windows\\system32"));
+	}
+
+	#[test]
+	fn test_path_type_rejects_encoded_traversal() {
+		// Arrange
+		let pattern = PathPattern::new("/files/{<path:filepath>}").unwrap();
+
+		// Act & Assert - percent-encoded traversal
+		assert!(
+			pattern
+				.extract_params("/files/%2e%2e/%2e%2e/etc/passwd")
+				.is_none(),
+			"Path type should reject percent-encoded traversal"
+		);
+		assert!(
+			pattern
+				.extract_params("/files/..%2f..%2fetc%2fpasswd")
+				.is_none(),
+			"Path type should reject mixed encoded traversal"
+		);
+		assert!(
+			pattern.extract_params("/files/foo%00bar").is_none(),
+			"Path type should reject encoded null bytes"
+		);
+	}
+
+	#[test]
+	fn test_path_type_rejects_absolute_path_param() {
+		// Arrange
+		let pattern = PathPattern::new("/files/{<path:filepath>}").unwrap();
+
+		// Act & Assert - absolute paths in parameter value
+		// Note: the regex `.+` will match, but validation rejects absolute paths
+		assert!(
+			pattern.extract_params("/files//etc/passwd").is_none(),
+			"Path type should reject absolute path in parameter"
+		);
+	}
+
+	// ===================================================================
+	// URL reversal parameter injection prevention tests (Issue #423)
+	// ===================================================================
+
+	#[test]
+	fn test_reverse_rejects_path_separator_injection() {
+		// Arrange
+		let pattern = PathPattern::new(reinhardt_routers_macros::path!("/users/{id}/")).unwrap();
+		let mut params = HashMap::new();
+		params.insert("id".to_string(), "123/../../admin".to_string());
+
+		// Act
+		let result = pattern.reverse(&params);
+
+		// Assert
+		assert!(
+			result.is_err(),
+			"Reverse should reject path separators in parameter values"
+		);
+	}
+
+	#[test]
+	fn test_reverse_rejects_query_string_injection() {
+		// Arrange
+		let pattern = PathPattern::new(reinhardt_routers_macros::path!("/users/{id}/")).unwrap();
+		let mut params = HashMap::new();
+		params.insert("id".to_string(), "123?admin=true".to_string());
+
+		// Act
+		let result = pattern.reverse(&params);
+
+		// Assert
+		assert!(
+			result.is_err(),
+			"Reverse should reject query string delimiters in parameter values"
+		);
+	}
+
+	#[test]
+	fn test_reverse_rejects_fragment_injection() {
+		// Arrange
+		let pattern = PathPattern::new(reinhardt_routers_macros::path!("/users/{id}/")).unwrap();
+		let mut params = HashMap::new();
+		params.insert("id".to_string(), "123#fragment".to_string());
+
+		// Act
+		let result = pattern.reverse(&params);
+
+		// Assert
+		assert!(
+			result.is_err(),
+			"Reverse should reject fragment identifiers in parameter values"
+		);
+	}
+
+	#[test]
+	fn test_reverse_rejects_encoded_injection() {
+		// Arrange
+		let pattern = PathPattern::new(reinhardt_routers_macros::path!("/users/{id}/")).unwrap();
+		let mut params = HashMap::new();
+		params.insert("id".to_string(), "123%2f..%2f..%2fadmin".to_string());
+
+		// Act
+		let result = pattern.reverse(&params);
+
+		// Assert
+		assert!(
+			result.is_err(),
+			"Reverse should reject percent-encoded dangerous characters"
+		);
+	}
+
+	#[test]
+	fn test_reverse_allows_safe_values() {
+		// Arrange
+		let pattern =
+			PathPattern::new(reinhardt_routers_macros::path!("/users/{id}/posts/{slug}/")).unwrap();
+		let mut params = HashMap::new();
+		params.insert("id".to_string(), "123".to_string());
+		params.insert("slug".to_string(), "my-blog-post".to_string());
+
+		// Act
+		let result = pattern.reverse(&params);
+
+		// Assert
+		assert!(result.is_ok());
+		assert_eq!(result.unwrap(), "/users/123/posts/my-blog-post/");
+	}
+
+	#[test]
+	fn test_reverse_allows_unicode_values() {
+		// Arrange
+		let pattern = PathPattern::new(reinhardt_routers_macros::path!("/users/{name}/")).unwrap();
+		let mut params = HashMap::new();
+		params.insert("name".to_string(), "ユーザー".to_string());
+
+		// Act
+		let result = pattern.reverse(&params);
+
+		// Assert
+		assert!(result.is_ok());
+		assert_eq!(result.unwrap(), "/users/ユーザー/");
+	}
+
+	#[test]
+	fn test_validate_reverse_param_function() {
+		// Arrange & Act & Assert
+
+		// Safe values should pass
+		assert!(validate_reverse_param("123"));
+		assert!(validate_reverse_param("my-slug"));
+		assert!(validate_reverse_param("foo_bar"));
+		assert!(validate_reverse_param("ユーザー"));
+		assert!(validate_reverse_param("hello-world-123"));
+
+		// Path separators should fail
+		assert!(!validate_reverse_param("foo/bar"));
+		assert!(!validate_reverse_param("foo\\bar"));
+
+		// URL-special characters should fail
+		assert!(!validate_reverse_param("foo?bar=1"));
+		assert!(!validate_reverse_param("foo#bar"));
+
+		// Null bytes should fail
+		assert!(!validate_reverse_param("foo\0bar"));
+
+		// Encoded sequences should fail
+		assert!(!validate_reverse_param("foo%2fbar"));
+		assert!(!validate_reverse_param("foo%2ebar"));
+		assert!(!validate_reverse_param("foo%5cbar"));
+		assert!(!validate_reverse_param("foo%3fbar"));
+		assert!(!validate_reverse_param("foo%23bar"));
+		assert!(!validate_reverse_param("foo%00bar"));
+	}
+
+	// ===================================================================
+	// ReDoS prevention tests (Issue #430)
+	// ===================================================================
+
+	#[test]
+	fn test_pattern_rejects_excessive_length() {
+		// Arrange: a pattern exceeding MAX_PATTERN_LENGTH (1024 bytes)
+		let long_pattern = "/".to_string() + &"a".repeat(1025);
+
+		// Act
+		let result = PathPattern::new(long_pattern);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(
+			result
+				.unwrap_err()
+				.contains("exceeds maximum allowed length")
+		);
+	}
+
+	#[test]
+	fn test_pattern_accepts_within_length_limit() {
+		// Arrange: a pattern within the limit
+		let pattern = "/users/{id}/posts/{post_id}/";
+
+		// Act
+		let result = PathPattern::new(pattern);
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[test]
+	fn test_pattern_rejects_at_boundary() {
+		// Arrange: a pattern at exactly the boundary + 1
+		let pattern = "/".to_string() + &"a/".repeat(512) + "end";
+		if pattern.len() > MAX_PATTERN_LENGTH {
+			// Act
+			let result = PathPattern::new(pattern);
+
+			// Assert
+			assert!(result.is_err());
+		}
+	}
+
+	// ===================================================================
+	// Path segment count limit tests (Issue #431)
+	// ===================================================================
+
+	#[test]
+	fn test_pattern_rejects_excessive_segments() {
+		// Arrange: a pattern with more than MAX_PATH_SEGMENTS segments
+		let segments: Vec<&str> = (0..35).map(|_| "seg").collect();
+		let pattern = format!("/{}/", segments.join("/"));
+
+		// Act
+		let result = PathPattern::new(pattern);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(result.unwrap_err().contains("exceeding maximum"));
+	}
+
+	#[test]
+	fn test_pattern_accepts_within_segment_limit() {
+		// Arrange: a pattern with few segments
+		let pattern = "/a/b/c/d/e/";
+
+		// Act
+		let result = PathPattern::new(pattern);
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[test]
+	fn test_pattern_accepts_at_segment_boundary() {
+		// Arrange: a pattern at exactly the maximum segment count
+		let segments: Vec<String> = (0..MAX_PATH_SEGMENTS - 2)
+			.map(|i| format!("s{}", i))
+			.collect();
+		let pattern = format!("/{}/", segments.join("/"));
+
+		// Act
+		let result = PathPattern::new(&pattern);
+
+		// Assert
+		assert!(result.is_ok());
 	}
 }

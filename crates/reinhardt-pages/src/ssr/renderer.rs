@@ -308,12 +308,15 @@ impl SsrRenderer {
 		html.push_str("</div>\n");
 
 		// Auth data script (if provided)
+		// Note: We escape </script> sequences to prevent XSS attacks where
+		// user-controlled data (like username) could break out of the script context
 		if let Some(ref auth_data) = self.options.auth_data
 			&& let Ok(json) = serde_json::to_string(auth_data)
 		{
+			let safe_json = escape_json_for_script(&json);
 			html.push_str(&format!(
 				"<script id=\"auth-data\" type=\"application/json\">{}</script>\n",
-				json
+				safe_json
 			));
 		}
 
@@ -371,12 +374,15 @@ impl SsrRenderer {
 		html.push_str("</div>\n");
 
 		// Auth data script (if provided)
+		// Note: We escape </script> sequences to prevent XSS attacks where
+		// user-controlled data (like username) could break out of the script context
 		if let Some(ref auth_data) = self.options.auth_data
 			&& let Ok(json) = serde_json::to_string(auth_data)
 		{
+			let safe_json = escape_json_for_script(&json);
 			html.push_str(&format!(
 				"<script id=\"auth-data\" type=\"application/json\">{}</script>\n",
-				json
+				safe_json
 			));
 		}
 
@@ -419,20 +425,68 @@ fn html_escape(s: &str) -> String {
 		.replace('\'', "&#x27;")
 }
 
+/// Escapes JSON content for safe embedding in HTML script tags.
+///
+/// This function prevents XSS attacks by escaping `</script>` sequences
+/// that could break out of the script context. The escaping is done by
+/// replacing `</` with `<\/`, which is safe because:
+/// 1. JavaScript string literals interpret `<\/` as `</`
+/// 2. HTML parsers don't recognize `<\/script>` as a closing tag
+///
+/// # Security Note
+///
+/// When embedding JSON data in `<script>` tags, the `</script>` sequence
+/// must be escaped because HTML parsers don't understand JavaScript string
+/// context - they will see `</script>` and close the tag, allowing XSS.
+fn escape_json_for_script(json: &str) -> String {
+	json.replace("</", "<\\/")
+}
+
+/// Maximum input size for HTML minification (1 MiB).
+///
+/// Inputs exceeding this limit are returned unmodified to prevent
+/// denial-of-service via excessively large payloads.
+const MINIFY_HTML_MAX_INPUT_SIZE: usize = 1024 * 1024;
+
 /// Simple HTML minification (removes extra whitespace).
+///
+/// Returns the input unmodified when its byte length exceeds
+/// [`MINIFY_HTML_MAX_INPUT_SIZE`] to prevent denial-of-service attacks.
+///
+/// Whitespace inside `<pre>` blocks is preserved.
 fn minify_html(html: &str) -> String {
-	// Simple minification: collapse multiple whitespace and remove newlines
+	if html.len() > MINIFY_HTML_MAX_INPUT_SIZE {
+		return html.to_string();
+	}
+
 	let mut result = String::with_capacity(html.len());
 	let mut prev_was_whitespace = false;
 	let mut in_pre = false;
+	let mut chars = html.char_indices().peekable();
 
-	for c in html.chars() {
-		// Track <pre> tags to preserve whitespace inside them
-		if html.contains("<pre") {
+	while let Some((byte_pos, c)) = chars.next() {
+		let remaining = &html[byte_pos..];
+
+		// Detect opening <pre tag (e.g. <pre>, <pre class="...">)
+		if !in_pre
+			&& c == '<'
+			&& remaining.strip_prefix("<pre").is_some_and(|after| {
+				after.starts_with(|ch: char| ch == '>' || ch.is_ascii_whitespace())
+					|| after.is_empty()
+			}) {
 			in_pre = true;
 		}
-		if html.contains("</pre>") {
+
+		// Detect closing </pre> tag
+		if in_pre && c == '<' && remaining.starts_with("</pre>") {
+			result.push_str("</pre>");
+			// Skip the remaining 5 chars of "</pre>" (we already consumed '<')
+			for _ in 0..5 {
+				chars.next();
+			}
 			in_pre = false;
+			prev_was_whitespace = false;
+			continue;
 		}
 
 		if in_pre {
@@ -592,5 +646,83 @@ mod tests {
 		assert_eq!(html_escape("<script>"), "&lt;script&gt;");
 		assert_eq!(html_escape("a&b"), "a&amp;b");
 		assert_eq!(html_escape("\"quoted\""), "&quot;quoted&quot;");
+	}
+
+	#[test]
+	fn test_escape_json_for_script() {
+		// Verify that </script> is escaped to prevent XSS
+		assert_eq!(escape_json_for_script("</script>"), "<\\/script>");
+		// Verify that </ is escaped in any context
+		assert_eq!(
+			escape_json_for_script("</script><script>alert(1)</script>"),
+			"<\\/script><script>alert(1)<\\/script>"
+		);
+		// Normal JSON should not be modified
+		assert_eq!(
+			escape_json_for_script(r#"{"name":"test"}"#),
+			r#"{"name":"test"}"#
+		);
+	}
+
+	#[test]
+	fn test_ssr_renderer_with_auth_xss_prevention() {
+		// Test that auth data with </script> in username is properly escaped
+		let component = TestComponent {
+			message: "Auth".to_string(),
+		};
+		// Simulate a malicious username that contains </script>
+		let malicious_username = "</script><script>alert('xss')</script>";
+		let auth = AuthData::authenticated(1, malicious_username);
+		let opts = SsrOptions::new().auth(auth);
+		let mut renderer = SsrRenderer::with_options(opts);
+		let html = renderer.render_page(&component);
+
+		// Verify the auth-data script tag exists
+		assert!(html.contains("auth-data"));
+
+		// Verify that </script> sequences are escaped in the JSON
+		// The raw </script> should NOT appear in the HTML output
+		assert!(!html.contains("</script><script>alert"));
+
+		// The escaped version should be present
+		assert!(html.contains("<\\/script>"));
+	}
+
+	#[test]
+	fn test_ssr_renderer_with_auth_xss_prevention_wrap_in_html_with_head() {
+		use crate::component::PageElement;
+
+		// Test XSS prevention via wrap_in_html_with_head path
+		struct TestPage {
+			message: String,
+		}
+
+		impl Component for TestPage {
+			fn render(&self) -> Page {
+				PageElement::new("div")
+					.child(self.message.clone())
+					.into_page()
+			}
+
+			fn name() -> &'static str {
+				"TestPage"
+			}
+		}
+
+		let component = TestPage {
+			message: "Test".to_string(),
+		};
+		// Simulate a malicious username
+		let malicious_username = "</script><img src=x onerror=alert(1)>";
+		let auth = AuthData::authenticated(1, malicious_username);
+		let opts = SsrOptions::new().auth(auth);
+		let mut renderer = SsrRenderer::with_options(opts);
+		let view = component.render();
+		let html = renderer.render_page_with_view_head(view);
+
+		// Verify that raw </script> does not appear (it should be escaped)
+		assert!(!html.contains("</script><img"));
+		// The escaped version should be present
+		assert!(html.contains("<\\/script>"));
 	}
 }

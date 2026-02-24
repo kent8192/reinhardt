@@ -7,7 +7,7 @@ use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::super::super::error::{DatabaseError, Result};
+use crate::backends::error::{DatabaseError, Result};
 
 /// CockroachDB connection configuration
 #[derive(Debug, Clone)]

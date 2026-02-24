@@ -49,20 +49,21 @@
 //! use reinhardt_commands::TemplateContext;
 //!
 //! let mut context = TemplateContext::new();
-//! context.insert("project_name", "my_project");
-//! context.insert("version", "1.0.0");
-//! context.insert("features", vec!["auth", "admin"]);  // Any Serialize type
+//! context.insert("project_name", "my_project").unwrap();
+//! context.insert("version", "1.0.0").unwrap();
+//! context.insert("features", vec!["auth", "admin"]).unwrap();  // Any Serialize type
 //! ```
 //!
 //! ### Template Variables
 //!
-//! The `insert` method accepts any type implementing `serde::Serialize`:
+//! The `insert` method accepts any type implementing `serde::Serialize`
+//! and returns `Result<(), serde_json::Error>`:
 //!
-//! - Strings: `context.insert("name", "value")`
-//! - Numbers: `context.insert("count", 42)`
-//! - Booleans: `context.insert("enabled", true)`
-//! - Collections: `context.insert("items", vec!["a", "b"])`
-//! - Custom types: `context.insert("data", &my_struct)`
+//! - Strings: `context.insert("name", "value")?`
+//! - Numbers: `context.insert("count", 42)?`
+//! - Booleans: `context.insert("enabled", true)?`
+//! - Collections: `context.insert("items", vec!["a", "b"])?`
+//! - Custom types: `context.insert("data", &my_struct)?`
 //!
 //! ## AST-Based Code Generation
 //!
@@ -212,6 +213,12 @@ impl From<tera::Error> for CommandError {
 impl From<String> for CommandError {
 	fn from(err: String) -> Self {
 		CommandError::ExecutionError(err)
+	}
+}
+
+impl From<serde_json::Error> for CommandError {
+	fn from(err: serde_json::Error) -> Self {
+		CommandError::ExecutionError(format!("Serialization error: {}", err))
 	}
 }
 

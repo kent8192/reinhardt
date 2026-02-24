@@ -4,6 +4,7 @@
 //! Supports various backends including Cookie, Redis, and database.
 
 use async_trait::async_trait;
+use reinhardt_conf::Settings;
 use reinhardt_di::{DiError, DiResult, Injectable, InjectionContext};
 use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use serde::{Deserialize, Serialize};
@@ -91,17 +92,31 @@ impl SessionData {
 	}
 }
 
-/// Session store
+/// Session store with automatic lazy eviction of expired sessions
+///
+/// Performs periodic cleanup of expired sessions to prevent unbounded
+/// memory growth. Cleanup runs automatically when the session count
+/// exceeds a configurable threshold.
 #[derive(Debug, Default)]
 pub struct SessionStore {
 	/// Sessions
 	sessions: RwLock<HashMap<String, SessionData>>,
+	/// Maximum number of sessions before triggering automatic cleanup
+	max_sessions_before_cleanup: std::sync::atomic::AtomicUsize,
 }
 
 impl SessionStore {
+	/// Default cleanup threshold: trigger cleanup when session count exceeds 10,000
+	const DEFAULT_CLEANUP_THRESHOLD: usize = 10_000;
+
 	/// Create a new store
 	pub fn new() -> Self {
-		Self::default()
+		Self {
+			sessions: RwLock::new(HashMap::new()),
+			max_sessions_before_cleanup: std::sync::atomic::AtomicUsize::new(
+				Self::DEFAULT_CLEANUP_THRESHOLD,
+			),
+		}
 	}
 
 	/// Get a session
@@ -110,10 +125,18 @@ impl SessionStore {
 		sessions.get(id).cloned()
 	}
 
-	/// Save a session
+	/// Save a session, with automatic cleanup when threshold is exceeded
 	pub fn save(&self, session: SessionData) {
 		let mut sessions = self.sessions.write().unwrap();
 		sessions.insert(session.id.clone(), session);
+
+		// Lazy eviction: clean up expired sessions when threshold is exceeded
+		let threshold = self
+			.max_sessions_before_cleanup
+			.load(std::sync::atomic::Ordering::Relaxed);
+		if sessions.len() > threshold {
+			sessions.retain(|_, s| s.is_valid());
+		}
 	}
 
 	/// Delete a session
@@ -183,7 +206,7 @@ impl SessionConfig {
 		Self {
 			cookie_name,
 			ttl,
-			secure: false,
+			secure: true,
 			http_only: true,
 			same_site: Some("Lax".to_string()),
 			domain: None,
@@ -273,6 +296,27 @@ impl SessionConfig {
 		self.path = path;
 		self
 	}
+
+	/// Create a `SessionConfig` from application `Settings`
+	///
+	/// Maps `Settings.session_cookie_secure` to `SessionConfig.secure`.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_conf::Settings;
+	/// use reinhardt_middleware::session::SessionConfig;
+	///
+	/// let settings = Settings::default();
+	/// let config = SessionConfig::from_settings(&settings);
+	/// assert!(!config.secure);
+	/// ```
+	pub fn from_settings(settings: &Settings) -> Self {
+		Self {
+			secure: settings.session_cookie_secure,
+			..Self::default()
+		}
+	}
 }
 
 impl Default for SessionConfig {
@@ -342,6 +386,21 @@ impl SessionMiddleware {
 			config,
 			store: Arc::new(SessionStore::new()),
 		}
+	}
+
+	/// Create a `SessionMiddleware` from application `Settings`
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_conf::Settings;
+	/// use reinhardt_middleware::session::SessionMiddleware;
+	///
+	/// let settings = Settings::default();
+	/// let middleware = SessionMiddleware::from_settings(&settings);
+	/// ```
+	pub fn from_settings(settings: &Settings) -> Self {
+		Self::new(SessionConfig::from_settings(settings))
 	}
 
 	/// Create with default configuration
@@ -798,6 +857,69 @@ mod tests {
 		// Custom cookie name should be used
 		assert!(cookie.starts_with("my_session="));
 		assert!(!cookie.starts_with("sessionid="));
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_session_config_from_settings_secure_enabled() {
+		// Arrange
+		let mut settings =
+			Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
+		settings.session_cookie_secure = true;
+
+		// Act
+		let config = SessionConfig::from_settings(&settings);
+
+		// Assert
+		assert_eq!(config.secure, true);
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_session_config_from_settings_defaults() {
+		// Arrange
+		let settings = Settings::default();
+
+		// Act
+		let config = SessionConfig::from_settings(&settings);
+
+		// Assert
+		assert_eq!(config.secure, false);
+		assert_eq!(config.cookie_name, "sessionid");
+		assert_eq!(config.ttl, Duration::from_secs(3600));
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_session_middleware_from_settings() {
+		// Arrange
+		let mut settings =
+			Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
+		settings.session_cookie_secure = true;
+		let middleware = SessionMiddleware::from_settings(&settings);
+		let handler = Arc::new(TestHandler);
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, StatusCode::OK);
+		let cookie = response
+			.headers
+			.get("set-cookie")
+			.unwrap()
+			.to_str()
+			.unwrap();
+		assert!(cookie.contains("Secure"));
 	}
 }
 

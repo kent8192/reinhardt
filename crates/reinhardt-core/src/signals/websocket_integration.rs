@@ -348,8 +348,10 @@ impl WebSocketSignalBridge {
 
 				let clients_read = clients.read();
 				for client in clients_read.values() {
-					if client.is_connected() {
-						let _ = client.send_message(json.clone());
+					if client.is_connected()
+						&& let Err(e) = client.send_message(json.clone())
+					{
+						eprintln!("Failed to send WebSocket message: {}", e);
 					}
 				}
 

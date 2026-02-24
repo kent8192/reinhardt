@@ -88,7 +88,7 @@ impl<S: SessionStore, A: AuthenticationBackend> LoginHandler<S, A> {
 		self.session_store.save(&session_id, &session).await;
 
 		let cookie_str = format!(
-			"{}={}; HttpOnly; Path=/; SameSite=Lax",
+			"{}={}; HttpOnly; Secure; Path=/; SameSite=Lax",
 			SESSION_COOKIE_NAME, session_id
 		);
 
@@ -262,6 +262,18 @@ mod tests {
 		let response = handler.handle(request).await.unwrap();
 		assert_eq!(response.status, reinhardt_http::Response::ok().status);
 		assert!(response.headers.contains_key("set-cookie"));
+
+		// Verify Secure flag is present in session cookie
+		let cookie_value = response
+			.headers
+			.get("set-cookie")
+			.unwrap()
+			.to_str()
+			.unwrap();
+		assert!(
+			cookie_value.contains("Secure"),
+			"Session cookie must include Secure flag"
+		);
 	}
 
 	#[tokio::test]

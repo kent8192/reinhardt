@@ -23,6 +23,7 @@ pub mod anon;
 pub mod backend;
 pub mod burst;
 pub mod geo;
+pub mod key_validation;
 pub mod leaky_bucket;
 pub mod scoped;
 pub mod throttle;

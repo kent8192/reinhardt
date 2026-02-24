@@ -24,7 +24,8 @@
 //!     .model_name("User")
 //!     .table_name("users")
 //!     .list_display(vec!["id", "username", "email"])
-//!     .build();
+//!     .build()
+//!     .unwrap();
 //! site.register("User", user_admin);
 //! ```
 //!

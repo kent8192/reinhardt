@@ -5,14 +5,14 @@
 
 #![cfg(feature = "redis-backend")]
 
-use reinhardt_tasks::locking::{RedisTaskLock, TaskLock};
 use reinhardt_tasks::TaskId;
+use reinhardt_tasks::locking::{RedisTaskLock, TaskLock};
 use serial_test::serial;
 use std::time::Duration;
 use testcontainers::{
+	GenericImage,
 	core::{ContainerPort, WaitFor},
 	runners::AsyncRunner,
-	GenericImage,
 };
 
 async fn setup_redis() -> testcontainers::ContainerAsync<GenericImage> {

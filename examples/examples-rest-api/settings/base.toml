@@ -1,0 +1,5 @@
+# Base settings
+debug = false
+secret_key = "CHANGE_THIS_IN_PRODUCTION"
+language_code = "en-us"
+time_zone = "UTC"

@@ -2,7 +2,7 @@
 //!
 //! Provides a unified interface for migration registries (global and local).
 
-use super::super::Migration;
+use crate::migrations::Migration;
 
 /// Common interface for migration registries.
 ///

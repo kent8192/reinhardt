@@ -85,9 +85,14 @@ impl WorkerInfo {
 		self.active_tasks.fetch_add(1, Ordering::SeqCst);
 	}
 
-	/// Decrement active task count
+	/// Decrement active task count (saturates at 0 to prevent underflow wrap)
 	pub fn decrement_tasks(&self) {
-		self.active_tasks.fetch_sub(1, Ordering::SeqCst);
+		// Use fetch_update with saturating_sub to prevent wrapping to usize::MAX
+		let _ = self
+			.active_tasks
+			.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+				Some(current.saturating_sub(1))
+			});
 	}
 
 	/// Get current active task count
@@ -148,16 +153,22 @@ impl WorkerMetrics {
 		}
 	}
 
-	/// Update average execution time with a new task duration
+	/// Update average execution time with a new task duration.
+	/// Uses checked/saturating arithmetic to prevent overflow on duration casting.
 	fn update_execution_time(&mut self, duration: Duration) {
-		let current_tasks = self.tasks_completed + self.tasks_failed;
+		let current_tasks = self.tasks_completed.saturating_add(self.tasks_failed);
 		if current_tasks == 0 {
 			self.average_execution_time = duration;
 		} else {
-			let total_time = self.average_execution_time.as_millis() * current_tasks as u128
-				+ duration.as_millis();
-			self.average_execution_time =
-				Duration::from_millis((total_time / (current_tasks + 1) as u128) as u64);
+			let avg_ms = self.average_execution_time.as_millis();
+			let dur_ms = duration.as_millis();
+			let total_time = avg_ms
+				.saturating_mul(current_tasks as u128)
+				.saturating_add(dur_ms);
+			let new_count = (current_tasks as u128).saturating_add(1);
+			let avg = total_time / new_count;
+			// Clamp to u64::MAX to prevent truncation panic
+			self.average_execution_time = Duration::from_millis(avg.min(u64::MAX as u128) as u64);
 		}
 	}
 
@@ -327,6 +338,11 @@ impl LoadBalancer {
 			.map(|w| weights.get(&w.id).copied().unwrap_or(w.weight))
 			.sum();
 
+		// Guard against zero total weight to prevent panic in gen_range(0..0)
+		if total_weight == 0 {
+			return workers[0].clone();
+		}
+
 		let mut rng = rand::thread_rng();
 		let mut random = rng.gen_range(0..total_weight);
 		for worker in workers {
@@ -441,19 +457,28 @@ impl LoadBalancer {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 	use std::time::Duration;
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_worker_info_creation() {
+		// Arrange
 		let worker = WorkerInfo::new("worker-1".to_string(), 2);
+
+		// Assert
 		assert_eq!(worker.id, "worker-1");
 		assert_eq!(worker.weight, 2);
 		assert_eq!(worker.active_task_count(), 0);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_worker_info_task_count() {
+		// Arrange
 		let worker = WorkerInfo::new("worker-1".to_string(), 1);
+
+		// Act & Assert
 		worker.increment_tasks();
 		assert_eq!(worker.active_task_count(), 1);
 		worker.increment_tasks();
@@ -462,63 +487,100 @@ mod tests {
 		assert_eq!(worker.active_task_count(), 1);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_worker_metrics_creation() {
+		// Arrange
 		let metrics = WorkerMetrics::new();
+
+		// Assert
 		assert_eq!(metrics.tasks_completed, 0);
 		assert_eq!(metrics.tasks_failed, 0);
 		assert_eq!(metrics.average_execution_time, Duration::from_secs(0));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_worker_metrics_record_success() {
+		// Arrange
 		let mut metrics = WorkerMetrics::new();
+
+		// Act
 		metrics.record_success(Duration::from_millis(100));
+
+		// Assert
 		assert_eq!(metrics.tasks_completed, 1);
 		assert_eq!(metrics.average_execution_time, Duration::from_millis(100));
 
+		// Act
 		metrics.record_success(Duration::from_millis(200));
+
+		// Assert
 		assert_eq!(metrics.tasks_completed, 2);
 		assert_eq!(metrics.average_execution_time, Duration::from_millis(150));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_worker_metrics_record_failure() {
+		// Arrange
 		let mut metrics = WorkerMetrics::new();
+
+		// Act
 		metrics.record_failure(Duration::from_millis(50));
+
+		// Assert
 		assert_eq!(metrics.tasks_failed, 1);
 		assert_eq!(metrics.average_execution_time, Duration::from_millis(50));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_load_balancer_creation() {
+		// Arrange
 		let balancer = LoadBalancer::new(LoadBalancingStrategy::RoundRobin);
+
+		// Assert
 		assert_eq!(balancer.worker_count().await, 0);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_load_balancer_register_worker() {
+		// Arrange
 		let balancer = LoadBalancer::new(LoadBalancingStrategy::RoundRobin);
+
+		// Act
 		balancer
 			.register_worker(WorkerInfo::new("worker-1".to_string(), 1))
 			.await
 			.unwrap();
+
+		// Assert
 		assert_eq!(balancer.worker_count().await, 1);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_load_balancer_unregister_worker() {
+		// Arrange
 		let balancer = LoadBalancer::new(LoadBalancingStrategy::RoundRobin);
 		balancer
 			.register_worker(WorkerInfo::new("worker-1".to_string(), 1))
 			.await
 			.unwrap();
+
+		// Act
 		balancer.unregister_worker("worker-1").await.unwrap();
+
+		// Assert
 		assert_eq!(balancer.worker_count().await, 0);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_round_robin_strategy() {
+		// Arrange
 		let balancer = LoadBalancer::new(LoadBalancingStrategy::RoundRobin);
 		balancer
 			.register_worker(WorkerInfo::new("worker-1".to_string(), 1))
@@ -529,17 +591,21 @@ mod tests {
 			.await
 			.unwrap();
 
+		// Act
 		let worker1 = balancer.select_worker().await.unwrap();
 		let worker2 = balancer.select_worker().await.unwrap();
 		let worker3 = balancer.select_worker().await.unwrap();
 
+		// Assert
 		assert_eq!(worker1, "worker-1");
 		assert_eq!(worker2, "worker-2");
 		assert_eq!(worker3, "worker-1");
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_least_connections_strategy() {
+		// Arrange
 		let balancer = LoadBalancer::new(LoadBalancingStrategy::LeastConnections);
 		let worker1 = WorkerInfo::new("worker-1".to_string(), 1);
 		let worker2 = WorkerInfo::new("worker-2".to_string(), 1);
@@ -551,13 +617,17 @@ mod tests {
 		balancer.register_worker(worker1).await.unwrap();
 		balancer.register_worker(worker2).await.unwrap();
 
-		// Should select worker-2 as it has fewer tasks
+		// Act - should select worker-2 as it has fewer tasks
 		let selected = balancer.select_worker().await.unwrap();
+
+		// Assert
 		assert_eq!(selected, "worker-2");
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_weighted_strategy() {
+		// Arrange
 		let mut weights = HashMap::new();
 		weights.insert("worker-1".to_string(), 3);
 		weights.insert("worker-2".to_string(), 1);
@@ -572,7 +642,7 @@ mod tests {
 			.await
 			.unwrap();
 
-		// Run multiple selections - worker-1 should be selected more often
+		// Act - run multiple selections
 		let mut worker1_count = 0;
 		let mut worker2_count = 0;
 
@@ -586,12 +656,14 @@ mod tests {
 			}
 		}
 
-		// Worker-1 should be selected approximately 3x more often
+		// Assert - worker-1 should be selected approximately 3x more often
 		assert!(worker1_count > worker2_count);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_random_strategy() {
+		// Arrange
 		let balancer = LoadBalancer::new(LoadBalancingStrategy::Random);
 		balancer
 			.register_worker(WorkerInfo::new("worker-1".to_string(), 1))
@@ -602,19 +674,30 @@ mod tests {
 			.await
 			.unwrap();
 
+		// Act
 		let worker = balancer.select_worker().await.unwrap();
+
+		// Assert
 		assert!(worker == "worker-1" || worker == "worker-2");
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_select_worker_no_workers() {
+		// Arrange
 		let balancer = LoadBalancer::new(LoadBalancingStrategy::RoundRobin);
+
+		// Act
 		let result = balancer.select_worker().await;
+
+		// Assert
 		assert!(result.is_err());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_task_completed() {
+		// Arrange
 		let balancer = LoadBalancer::new(LoadBalancingStrategy::RoundRobin);
 		balancer
 			.register_worker(WorkerInfo::new("worker-1".to_string(), 1))
@@ -627,14 +710,19 @@ mod tests {
 		assert_eq!(worker.active_task_count(), 1);
 		drop(workers);
 
+		// Act
 		balancer.task_completed(&worker_id).await.unwrap();
+
+		// Assert
 		let workers = balancer.workers.read().await;
 		let worker = workers.iter().find(|w| w.id == worker_id).unwrap();
 		assert_eq!(worker.active_task_count(), 0);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_update_metrics() {
+		// Arrange
 		let balancer = LoadBalancer::new(LoadBalancingStrategy::RoundRobin);
 		balancer
 			.register_worker(WorkerInfo::new("worker-1".to_string(), 1))
@@ -642,11 +730,14 @@ mod tests {
 			.unwrap();
 
 		let metrics = WorkerMetrics::with_values(10, 2, Duration::from_millis(500));
+
+		// Act
 		balancer
 			.update_metrics("worker-1", metrics.clone())
 			.await
 			.unwrap();
 
+		// Assert
 		let stats = balancer.get_worker_stats().await;
 		let worker_metrics = stats.get("worker-1").unwrap();
 		assert_eq!(worker_metrics.tasks_completed, 10);
@@ -657,8 +748,10 @@ mod tests {
 		);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_get_worker_stats() {
+		// Arrange
 		let balancer = LoadBalancer::new(LoadBalancingStrategy::RoundRobin);
 		balancer
 			.register_worker(WorkerInfo::new("worker-1".to_string(), 1))
@@ -669,9 +762,103 @@ mod tests {
 			.await
 			.unwrap();
 
+		// Act
 		let stats = balancer.get_worker_stats().await;
+
+		// Assert
 		assert_eq!(stats.len(), 2);
 		assert!(stats.contains_key("worker-1"));
 		assert!(stats.contains_key("worker-2"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_decrement_tasks_at_zero_does_not_underflow() {
+		// Arrange
+		let worker = WorkerInfo::new("worker-1".to_string(), 1);
+		assert_eq!(worker.active_task_count(), 0);
+
+		// Act - decrement at 0 should saturate, not wrap to usize::MAX
+		worker.decrement_tasks();
+
+		// Assert
+		assert_eq!(worker.active_task_count(), 0);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_decrement_tasks_multiple_times_at_zero_stays_at_zero() {
+		// Arrange
+		let worker = WorkerInfo::new("worker-1".to_string(), 1);
+		worker.increment_tasks();
+		worker.decrement_tasks();
+		assert_eq!(worker.active_task_count(), 0);
+
+		// Act - multiple decrements below zero should all saturate at 0
+		worker.decrement_tasks();
+		worker.decrement_tasks();
+		worker.decrement_tasks();
+
+		// Assert
+		assert_eq!(worker.active_task_count(), 0);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_weighted_strategy_zero_total_weight_does_not_panic() {
+		// Arrange
+		let mut weights = HashMap::new();
+		weights.insert("worker-1".to_string(), 0);
+		weights.insert("worker-2".to_string(), 0);
+
+		let balancer = LoadBalancer::new(LoadBalancingStrategy::Weighted(weights));
+		balancer
+			.register_worker(WorkerInfo::new("worker-1".to_string(), 0))
+			.await
+			.unwrap();
+		balancer
+			.register_worker(WorkerInfo::new("worker-2".to_string(), 0))
+			.await
+			.unwrap();
+
+		// Act - should not panic, returns first worker as fallback
+		let selected = balancer.select_worker().await.unwrap();
+
+		// Assert
+		assert!(selected == "worker-1" || selected == "worker-2");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_update_execution_time_does_not_overflow() {
+		// Arrange
+		let mut metrics = WorkerMetrics::new();
+		metrics.tasks_completed = u64::MAX - 1;
+		metrics.average_execution_time = Duration::from_millis(u64::MAX);
+
+		// Act - should not overflow or panic
+		metrics.record_success(Duration::from_millis(1000));
+
+		// Assert - tasks_completed wraps via addition (that's expected for the counter)
+		// but the average_execution_time calculation should not panic
+		assert!(metrics.tasks_completed > 0);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_update_execution_time_saturates_at_u64_max() {
+		// Arrange
+		let mut metrics = WorkerMetrics::new();
+		metrics.tasks_completed = 1;
+		metrics.average_execution_time = Duration::from_millis(u64::MAX);
+
+		// Act - saturating arithmetic should clamp instead of overflowing
+		metrics.record_success(Duration::from_millis(u64::MAX));
+
+		// Assert - the result should be clamped to u64::MAX milliseconds
+		assert_eq!(
+			metrics.average_execution_time,
+			Duration::from_millis(u64::MAX)
+		);
 	}
 }

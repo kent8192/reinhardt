@@ -7,9 +7,9 @@
 //! Licensed under MIT License. See THIRD-PARTY-NOTICES for details.
 
 use crate::orm::Model;
-use sea_query::{
-	Alias, ColumnDef, ColumnType, DeleteStatement, Expr, ExprTrait, InsertStatement, IntoIden,
-	Query, SelectStatement, Table,
+use reinhardt_query::prelude::{
+	Alias, ColumnDef, ColumnRef, ColumnType, DeleteStatement, Expr, ExprTrait, InsertStatement,
+	Query, QueryStatementBuilder, SelectStatement,
 };
 use std::marker::PhantomData;
 
@@ -36,7 +36,7 @@ impl AssociationTable {
 	///
 	/// ```
 	/// use reinhardt_db::orm::many_to_many::AssociationTable;
-	/// use sea_query::PostgresQueryBuilder;
+	/// use reinhardt_query::prelude::PostgresQueryBuilder;
 	///
 	/// let table = AssociationTable::new("student_courses", "student_id", "course_id");
 	/// let sql = table.to_create_sql(PostgresQueryBuilder);
@@ -61,17 +61,15 @@ impl AssociationTable {
 
 	/// Parse type string to ColumnType enum
 	///
-	/// Converts common SQL type strings to sea-query ColumnType enum values.
+	/// Converts common SQL type strings to ColumnType enum values.
 	/// Falls back to Custom type for unrecognized types.
 	fn parse_column_type(type_str: &str) -> ColumnType {
-		use sea_query::StringLen;
-
 		match type_str.to_lowercase().as_str() {
 			"integer" | "int" => ColumnType::Integer,
 			"bigint" | "biginteger" => ColumnType::BigInteger,
 			"smallint" | "smallinteger" => ColumnType::SmallInteger,
 			"tinyint" | "tinyinteger" => ColumnType::TinyInteger,
-			"string" | "varchar" => ColumnType::String(StringLen::N(255)), // Default varchar length
+			"string" | "varchar" => ColumnType::String(Some(255)), // Default varchar length
 			"text" => ColumnType::Text,
 			"boolean" | "bool" => ColumnType::Boolean,
 			"float" | "real" => ColumnType::Float,
@@ -84,12 +82,12 @@ impl AssociationTable {
 			"json" => ColumnType::Json,
 			"jsonb" => ColumnType::JsonBinary,
 			"uuid" => ColumnType::Uuid,
-			"binary" | "blob" => ColumnType::Binary(255), // Default binary length
-			"varbinary" => ColumnType::VarBinary(StringLen::N(255)), // Default varbinary length
-			"char" => ColumnType::Char(Some(1)),          // Default char length
+			"binary" | "blob" => ColumnType::Binary(Some(255)), // Default binary length
+			"varbinary" => ColumnType::VarBinary(255),          // Default varbinary length
+			"char" => ColumnType::Char(Some(1)),                // Default char length
 			_ => {
 				// For VARCHAR(N), CHAR(N), DECIMAL(P,S) patterns, use custom
-				ColumnType::Custom(Alias::new(type_str).into_iden())
+				ColumnType::Custom(type_str.to_string())
 			}
 		}
 	}
@@ -99,7 +97,7 @@ impl AssociationTable {
 	///
 	/// ```
 	/// use reinhardt_db::orm::many_to_many::AssociationTable;
-	/// use sea_query::PostgresQueryBuilder;
+	/// use reinhardt_query::prelude::PostgresQueryBuilder;
 	///
 	/// let table = AssociationTable::new("student_courses", "student_id", "course_id")
 	///     .with_column("enrolled_at", "TIMESTAMP")
@@ -116,105 +114,101 @@ impl AssociationTable {
 	/// Apply ColumnType to ColumnDef
 	///
 	/// Helper function to apply the parsed column type to a ColumnDef.
+	/// reinhardt-query's ColumnDef uses owned builder pattern (returns Self).
 	fn apply_column_type(mut col_def: ColumnDef, column_type: ColumnType) -> ColumnDef {
-		use sea_query::StringLen;
-
 		match column_type {
 			ColumnType::Integer => {
-				col_def.integer();
+				col_def = col_def.integer();
 			}
 			ColumnType::BigInteger => {
-				col_def.big_integer();
+				col_def = col_def.big_integer();
 			}
 			ColumnType::SmallInteger => {
-				col_def.small_integer();
+				col_def = col_def.small_integer();
 			}
 			ColumnType::TinyInteger => {
-				col_def.tiny_integer();
+				col_def = col_def.tiny_integer();
 			}
-			ColumnType::String(StringLen::N(len)) => {
-				col_def.string_len(len);
+			ColumnType::String(Some(len)) => {
+				col_def = col_def.string_len(len);
 			}
-			ColumnType::String(_) => {
-				col_def.string();
+			ColumnType::String(None) => {
+				col_def = col_def.string();
 			}
 			ColumnType::Text => {
-				col_def.text();
+				col_def = col_def.text();
 			}
 			ColumnType::Boolean => {
-				col_def.boolean();
+				col_def = col_def.boolean();
 			}
 			ColumnType::Float => {
-				col_def.float();
+				col_def = col_def.float();
 			}
 			ColumnType::Double => {
-				col_def.double();
+				col_def = col_def.double();
 			}
 			ColumnType::Decimal(_) => {
-				col_def.decimal();
+				col_def = col_def.column_type(ColumnType::Decimal(None));
 			}
 			ColumnType::Date => {
-				col_def.date();
+				col_def = col_def.date();
 			}
 			ColumnType::Time => {
-				col_def.time();
+				col_def = col_def.time();
 			}
 			ColumnType::DateTime => {
-				col_def.date_time();
+				col_def = col_def.date_time();
 			}
 			ColumnType::TimestampWithTimeZone => {
-				col_def.timestamp_with_time_zone();
+				col_def = col_def.timestamp_with_time_zone();
 			}
 			ColumnType::Json => {
-				col_def.json();
+				col_def = col_def.json();
 			}
 			ColumnType::JsonBinary => {
-				col_def.json_binary();
+				col_def = col_def.json_binary();
 			}
 			ColumnType::Uuid => {
-				col_def.uuid();
+				col_def = col_def.uuid();
 			}
 			ColumnType::Binary(len) => {
-				col_def.binary_len(len);
+				col_def = col_def.column_type(ColumnType::Binary(len));
 			}
-			ColumnType::VarBinary(StringLen::N(len)) => {
-				col_def.var_binary(len);
+			ColumnType::VarBinary(len) => {
+				col_def = col_def.var_binary(len);
 			}
-			ColumnType::VarBinary(_) => {
-				col_def.var_binary(255);
-			} // Fallback
 			ColumnType::Char(Some(len)) => {
-				col_def.char_len(len);
+				col_def = col_def.char_len(len);
 			}
 			ColumnType::Char(None) => {
-				col_def.char_len(1);
-			} // Fallback
-			ColumnType::Custom(iden) => {
-				col_def.custom(iden);
+				col_def = col_def.char_len(1);
+			}
+			ColumnType::Custom(name) => {
+				col_def = col_def.custom(name);
 			}
 			_ => {
-				col_def.text();
-			} // Fallback to TEXT for unknown types
+				col_def = col_def.text();
+			}
 		}
 		col_def
 	}
 
-	/// Generate SeaQuery CREATE TABLE statement for the association table
+	/// Generate reinhardt-query CREATE TABLE statement for the association table
 	///
 	/// Returns a TableCreateStatement that can be converted to SQL.
-	pub fn to_create_statement(&self) -> sea_query::TableCreateStatement {
-		let mut stmt = Table::create();
+	pub fn to_create_statement(&self) -> reinhardt_query::prelude::CreateTableStatement {
+		let mut stmt = Query::create_table();
 		stmt.table(Alias::new(&self.table_name))
 			.if_not_exists()
 			.col(
 				ColumnDef::new(Alias::new(&self.left_column))
 					.integer()
-					.not_null(),
+					.not_null(true),
 			)
 			.col(
 				ColumnDef::new(Alias::new(&self.right_column))
 					.integer()
-					.not_null(),
+					.not_null(true),
 			);
 
 		// Add extra columns with parsed types
@@ -226,11 +220,10 @@ impl AssociationTable {
 		}
 
 		// Add composite primary key
-		stmt.primary_key(
-			sea_query::Index::create()
-				.col(Alias::new(&self.left_column))
-				.col(Alias::new(&self.right_column)),
-		);
+		stmt.primary_key(vec![
+			Alias::new(&self.left_column),
+			Alias::new(&self.right_column),
+		]);
 
 		stmt.to_owned()
 	}
@@ -241,7 +234,7 @@ impl AssociationTable {
 	///
 	/// ```
 	/// use reinhardt_db::orm::many_to_many::AssociationTable;
-	/// use sea_query::SqliteQueryBuilder;
+	/// use reinhardt_query::prelude::SqliteQueryBuilder;
 	///
 	/// let table = AssociationTable::new("user_roles", "user_id", "role_id");
 	/// let sql = table.to_create_sql(SqliteQueryBuilder);
@@ -249,8 +242,8 @@ impl AssociationTable {
 	/// assert!(sql.contains("CREATE TABLE"));
 	/// assert!(sql.contains("user_roles"));
 	/// ```
-	pub fn to_create_sql<T: sea_query::SchemaBuilder>(&self, builder: T) -> String {
-		self.to_create_statement().to_string(builder)
+	pub fn to_create_sql<T: reinhardt_query::prelude::QueryBuilder>(&self, builder: T) -> String {
+		builder.build_create_table(&self.to_create_statement()).0
 	}
 }
 
@@ -280,7 +273,7 @@ impl<L: Model, R: Model> ManyToMany<L, R> {
 	/// ```
 	/// use reinhardt_db::orm::many_to_many::{AssociationTable, ManyToMany};
 	/// use reinhardt_db::orm::Model;
-	/// use sea_query::PostgresQueryBuilder;
+	/// use reinhardt_query::prelude::PostgresQueryBuilder;
 	/// use serde::{Serialize, Deserialize};
 	///
 	/// #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -355,7 +348,7 @@ impl<L: Model, R: Model> ManyToMany<L, R> {
 		self.cascade.push(option.into());
 		self
 	}
-	/// Generate SeaQuery SELECT statement for joining through the association table
+	/// Generate reinhardt-query SELECT statement for joining through the association table
 	///
 	/// Returns a SelectStatement with JOINs through the association table.
 	pub fn join_query(&self) -> SelectStatement {
@@ -365,8 +358,8 @@ impl<L: Model, R: Model> ManyToMany<L, R> {
 
 		Query::select()
 			.from(Alias::new(left_table))
-			.column((Alias::new(left_table), sea_query::Asterisk))
-			.column((Alias::new(right_table), sea_query::Asterisk))
+			.column(ColumnRef::table_asterisk(Alias::new(left_table)))
+			.column(ColumnRef::table_asterisk(Alias::new(right_table)))
 			.inner_join(
 				Alias::new(assoc_table),
 				Expr::col((Alias::new(left_table), Alias::new("id"))).equals((
@@ -387,11 +380,11 @@ impl<L: Model, R: Model> ManyToMany<L, R> {
 
 	/// Generate SQL for joining (convenience method)
 	///
-	pub fn join_sql<T: sea_query::QueryBuilder>(&self, builder: T) -> String {
+	pub fn join_sql<T: reinhardt_query::prelude::QueryBuilderTrait>(&self, builder: T) -> String {
 		self.join_query().to_string(builder)
 	}
 
-	/// Generate SeaQuery INSERT statement for adding a relationship
+	/// Generate reinhardt-query INSERT statement for adding a relationship
 	///
 	pub fn add_query(&self, left_id: i64, right_id: i64) -> InsertStatement {
 		Query::insert()
@@ -406,16 +399,16 @@ impl<L: Model, R: Model> ManyToMany<L, R> {
 
 	/// Generate SQL for adding a relationship (convenience method)
 	///
-	pub fn add_sql<T: sea_query::QueryBuilder>(
+	pub fn add_sql<T: reinhardt_query::prelude::QueryBuilder>(
 		&self,
 		left_id: i64,
 		right_id: i64,
 		builder: T,
 	) -> String {
-		self.add_query(left_id, right_id).to_string(builder)
+		builder.build_insert(&self.add_query(left_id, right_id)).0
 	}
 
-	/// Generate SeaQuery DELETE statement for removing a relationship
+	/// Generate reinhardt-query DELETE statement for removing a relationship
 	///
 	pub fn remove_query(&self, left_id: i64, right_id: i64) -> DeleteStatement {
 		Query::delete()
@@ -427,13 +420,15 @@ impl<L: Model, R: Model> ManyToMany<L, R> {
 
 	/// Generate SQL for removing a relationship (convenience method)
 	///
-	pub fn remove_sql<T: sea_query::QueryBuilder>(
+	pub fn remove_sql<T: reinhardt_query::prelude::QueryBuilder>(
 		&self,
 		left_id: i64,
 		right_id: i64,
 		builder: T,
 	) -> String {
-		self.remove_query(left_id, right_id).to_string(builder)
+		builder
+			.build_delete(&self.remove_query(left_id, right_id))
+			.0
 	}
 	/// Get association table reference
 	///
@@ -533,14 +528,14 @@ mod tests {
 
 	#[test]
 	fn test_association_table() {
-		use sea_query::SqliteQueryBuilder;
+		use reinhardt_query::prelude::SqliteQueryBuilder;
 
 		let table = AssociationTable::new("student_courses", "student_id", "course_id");
 		let sql = table.to_create_sql(SqliteQueryBuilder);
 
 		assert_eq!(
 			sql,
-			"CREATE TABLE IF NOT EXISTS \"student_courses\" ( \"student_id\" integer NOT NULL, \"course_id\" integer NOT NULL, PRIMARY KEY (\"student_id\", \"course_id\") )",
+			"CREATE TABLE IF NOT EXISTS \"student_courses\" (\"student_id\" INTEGER NOT NULL, \"course_id\" INTEGER NOT NULL, PRIMARY KEY (\"student_id\", \"course_id\"))",
 			"Expected exact CREATE TABLE SQL, got: {}",
 			sql
 		);
@@ -548,17 +543,17 @@ mod tests {
 
 	#[test]
 	fn test_association_table_with_extra_columns() {
-		use sea_query::SqliteQueryBuilder;
+		use reinhardt_query::prelude::SqliteQueryBuilder;
 
 		let table = AssociationTable::new("student_courses", "student_id", "course_id")
 			.with_column("enrolled_at", "TIMESTAMP")
 			.with_column("grade", "VARCHAR(2)");
 
 		let sql = table.to_create_sql(SqliteQueryBuilder);
-		// SQLite uses datetime_text for TIMESTAMP/DATETIME columns
+		// reinhardt-query renders DateTime as TEXT in SQLite
 		assert_eq!(
 			sql,
-			"CREATE TABLE IF NOT EXISTS \"student_courses\" ( \"student_id\" integer NOT NULL, \"course_id\" integer NOT NULL, \"enrolled_at\" datetime_text, \"grade\" VARCHAR(2), PRIMARY KEY (\"student_id\", \"course_id\") )",
+			"CREATE TABLE IF NOT EXISTS \"student_courses\" (\"student_id\" INTEGER NOT NULL, \"course_id\" INTEGER NOT NULL, \"enrolled_at\" TEXT, \"grade\" VARCHAR(2), PRIMARY KEY (\"student_id\", \"course_id\"))",
 			"Expected exact CREATE TABLE with extra columns SQL, got: {}",
 			sql
 		);
@@ -566,7 +561,7 @@ mod tests {
 
 	#[test]
 	fn test_many_to_many_join() {
-		use sea_query::SqliteQueryBuilder;
+		use reinhardt_query::prelude::SqliteQueryBuilder;
 
 		let assoc = AssociationTable::new("student_courses", "student_id", "course_id");
 		let m2m = ManyToMany::<Student, Course>::new(assoc);
@@ -582,14 +577,15 @@ mod tests {
 
 	#[test]
 	fn test_many_to_many_add() {
-		use sea_query::SqliteQueryBuilder;
+		use reinhardt_query::prelude::SqliteQueryBuilder;
 
 		let assoc = AssociationTable::new("student_courses", "student_id", "course_id");
 		let m2m = ManyToMany::<Student, Course>::new(assoc);
 
 		let sql = m2m.add_sql(1, 10, SqliteQueryBuilder);
+		// reinhardt-query uses parameterized queries
 		assert_eq!(
-			sql, "INSERT INTO \"student_courses\" (\"student_id\", \"course_id\") VALUES (1, 10)",
+			sql, "INSERT INTO \"student_courses\" (\"student_id\", \"course_id\") VALUES (?, ?)",
 			"Expected exact INSERT SQL, got: {}",
 			sql
 		);
@@ -597,14 +593,15 @@ mod tests {
 
 	#[test]
 	fn test_many_to_many_remove() {
-		use sea_query::SqliteQueryBuilder;
+		use reinhardt_query::prelude::SqliteQueryBuilder;
 
 		let assoc = AssociationTable::new("student_courses", "student_id", "course_id");
 		let m2m = ManyToMany::<Student, Course>::new(assoc);
 
 		let sql = m2m.remove_sql(1, 10, SqliteQueryBuilder);
+		// reinhardt-query uses parameterized queries
 		assert_eq!(
-			sql, "DELETE FROM \"student_courses\" WHERE \"student_id\" = 1 AND \"course_id\" = 10",
+			sql, "DELETE FROM \"student_courses\" WHERE \"student_id\" = ? AND \"course_id\" = ?",
 			"Expected exact DELETE SQL, got: {}",
 			sql
 		);
@@ -696,7 +693,7 @@ mod tests {
 
 	#[test]
 	fn test_association_table_with_typed_columns() {
-		use sea_query::SqliteQueryBuilder;
+		use reinhardt_query::prelude::SqliteQueryBuilder;
 
 		let table = AssociationTable::new("enrollments", "student_id", "course_id")
 			.with_column("enrolled_at", "DATETIME")
@@ -705,10 +702,10 @@ mod tests {
 
 		let sql = table.to_create_sql(SqliteQueryBuilder);
 
-		// SQLite uses datetime_text for TIMESTAMP/DATETIME columns
+		// reinhardt-query renders DateTime as TEXT and uses uppercase type names
 		assert_eq!(
 			sql,
-			"CREATE TABLE IF NOT EXISTS \"enrollments\" ( \"student_id\" integer NOT NULL, \"course_id\" integer NOT NULL, \"enrolled_at\" datetime_text, \"grade\" integer, \"notes\" text, PRIMARY KEY (\"student_id\", \"course_id\") )",
+			"CREATE TABLE IF NOT EXISTS \"enrollments\" (\"student_id\" INTEGER NOT NULL, \"course_id\" INTEGER NOT NULL, \"enrolled_at\" TEXT, \"grade\" INTEGER, \"notes\" TEXT, PRIMARY KEY (\"student_id\", \"course_id\"))",
 			"Expected exact CREATE TABLE with typed columns SQL, got: {}",
 			sql
 		);

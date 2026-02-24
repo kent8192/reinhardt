@@ -589,15 +589,18 @@ impl<T: Send + Sync + 'static> Signal<T> {
 			results.push(result);
 		}
 
-		// Execute after_send middleware hooks (ignore errors)
+		// Execute after_send middleware hooks
 		for middleware in &middlewares {
-			let _ = middleware.after_send(&instance, &results).await;
+			if let Err(e) = middleware.after_send(&instance, &results).await {
+				eprintln!("Signal after_send middleware error: {}", e);
+			}
 		}
 
 		results
 	}
 
 	/// Send signal asynchronously (fire and forget)
+	#[cfg(not(target_arch = "wasm32"))]
 	pub fn send_async(&self, instance: T) {
 		let instance = Arc::new(instance);
 		let receivers = self.receivers.read().clone();

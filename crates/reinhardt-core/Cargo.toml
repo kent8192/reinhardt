@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-core"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.8"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -12,7 +12,6 @@ description = "Core components for Reinhardt framework"
 reinhardt-macros = { workspace = true, optional = true }
 
 # External dependencies for re-export
-tokio = { workspace = true, features = ["rt", "sync", "time"]}
 serde = { workspace = true, features = ["derive"], optional = true}
 serde_json = { workspace = true }
 async-trait = { workspace = true }
@@ -21,7 +20,6 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 serde_urlencoded = { workspace = true }
 http = { workspace = true }
-hyper = { workspace = true }
 validator = "0.20"
 base64 = "0.22"
 percent-encoding = "2.3"
@@ -53,9 +51,19 @@ parking_lot = "0.12"
 uuid = { version = "1.0", features = ["v4", "serde"] }
 fluent-bundle = { version = "0.15", optional = true }
 image = "0.25"
+
+# Server-side dependencies (not available on WASM)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+hyper = { workspace = true }
 jsonschema = { version = "0.26", optional = true }
 rayon = { version = "1.10", optional = true }
 unic-langid = { version = "0.9", optional = true }
+
+# WASM-specific dependencies
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["Event"] }
+wasm-bindgen = "0.2"
 
 [features]
 default = [
@@ -122,6 +130,4 @@ bytes = "1.0"
 hyper = "1.0"
 tokio-test = "0.4"
 serial_test = { workspace = true }
-reinhardt-http = { workspace = true }
-reinhardt-test = { workspace = true }
 rstest = { workspace = true }

@@ -133,9 +133,11 @@ macro_rules! impl_path_tuple2_from_str {
                         )));
                     }
 
-                    // Get values in order (HashMap iteration order is not guaranteed,
-                    // but we assume the router provides them in order)
-                    let values: Vec<_> = ctx.path_params.values().collect();
+                    // Sort by key name to ensure deterministic extraction order
+                    // regardless of HashMap iteration order
+                    let mut sorted_params: Vec<_> = ctx.path_params.iter().collect();
+                    sorted_params.sort_by_key(|(k, _)| k.clone());
+                    let values: Vec<_> = sorted_params.into_iter().map(|(_, v)| v).collect();
                     if values.len() != 2 {
                         return Err(ParamError::InvalidParameter(Box::new(
                             ParamErrorContext::new(

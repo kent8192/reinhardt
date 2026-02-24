@@ -39,27 +39,27 @@ impl ForeignKeyAction {
 	}
 }
 
-impl From<ForeignKeyAction> for sea_query::ForeignKeyAction {
+impl From<ForeignKeyAction> for reinhardt_query::prelude::ForeignKeyAction {
 	fn from(action: ForeignKeyAction) -> Self {
 		match action {
-			ForeignKeyAction::Restrict => sea_query::ForeignKeyAction::Restrict,
-			ForeignKeyAction::Cascade => sea_query::ForeignKeyAction::Cascade,
-			ForeignKeyAction::SetNull => sea_query::ForeignKeyAction::SetNull,
-			ForeignKeyAction::NoAction => sea_query::ForeignKeyAction::NoAction,
-			ForeignKeyAction::SetDefault => sea_query::ForeignKeyAction::SetDefault,
+			ForeignKeyAction::Restrict => reinhardt_query::prelude::ForeignKeyAction::Restrict,
+			ForeignKeyAction::Cascade => reinhardt_query::prelude::ForeignKeyAction::Cascade,
+			ForeignKeyAction::SetNull => reinhardt_query::prelude::ForeignKeyAction::SetNull,
+			ForeignKeyAction::NoAction => reinhardt_query::prelude::ForeignKeyAction::NoAction,
+			ForeignKeyAction::SetDefault => reinhardt_query::prelude::ForeignKeyAction::SetDefault,
 		}
 	}
 }
 
-impl From<sea_query::ForeignKeyAction> for ForeignKeyAction {
-	fn from(action: sea_query::ForeignKeyAction) -> Self {
+impl From<reinhardt_query::prelude::ForeignKeyAction> for ForeignKeyAction {
+	fn from(action: reinhardt_query::prelude::ForeignKeyAction) -> Self {
 		match action {
-			sea_query::ForeignKeyAction::Restrict => ForeignKeyAction::Restrict,
-			sea_query::ForeignKeyAction::Cascade => ForeignKeyAction::Cascade,
-			sea_query::ForeignKeyAction::SetNull => ForeignKeyAction::SetNull,
-			sea_query::ForeignKeyAction::NoAction => ForeignKeyAction::NoAction,
-			sea_query::ForeignKeyAction::SetDefault => ForeignKeyAction::SetDefault,
-			// sea-query is marked as non-exhaustive, so we need a catch-all
+			reinhardt_query::prelude::ForeignKeyAction::Restrict => ForeignKeyAction::Restrict,
+			reinhardt_query::prelude::ForeignKeyAction::Cascade => ForeignKeyAction::Cascade,
+			reinhardt_query::prelude::ForeignKeyAction::SetNull => ForeignKeyAction::SetNull,
+			reinhardt_query::prelude::ForeignKeyAction::NoAction => ForeignKeyAction::NoAction,
+			reinhardt_query::prelude::ForeignKeyAction::SetDefault => ForeignKeyAction::SetDefault,
+			// reinhardt-query's ForeignKeyAction is non-exhaustive, so we need a catch-all
 			_ => ForeignKeyAction::NoAction,
 		}
 	}

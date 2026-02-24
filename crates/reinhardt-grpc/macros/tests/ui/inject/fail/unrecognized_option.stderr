@@ -1,0 +1,5 @@
+error: unrecognized `inject` option `opitonal`. Valid options: `cache`
+  --> tests/ui/inject/fail/unrecognized_option.rs:12:11
+   |
+12 |     #[inject(opitonal = true)] service: String,
+   |              ^^^^^^^^

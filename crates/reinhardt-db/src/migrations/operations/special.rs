@@ -17,9 +17,9 @@
 //! assert_eq!(run_sql.sql, "INSERT INTO users (name, email) VALUES ('admin', 'admin@example.com')");
 //! ```
 
-use super::super::ProjectState;
 use crate::backends::connection::DatabaseConnection;
 use crate::backends::schema::BaseDatabaseSchemaEditor;
+use crate::migrations::ProjectState;
 use serde::{Deserialize, Serialize};
 
 /// Execute raw SQL
@@ -586,7 +586,7 @@ impl DataMigration {
 }
 
 // MigrationOperation trait implementation for Django-style naming
-use super::super::operation_trait::MigrationOperation;
+use crate::migrations::operation_trait::MigrationOperation;
 
 impl MigrationOperation for RunSQL {
 	fn migration_name_fragment(&self) -> Option<String> {

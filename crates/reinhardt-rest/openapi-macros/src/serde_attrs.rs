@@ -119,6 +119,45 @@ pub(crate) fn extract_serde_enum_attrs(attrs: &[Attribute]) -> SerdeEnumAttrs {
 	result
 }
 
+/// Extract container-level `#[serde(rename_all = "...")]` from attributes.
+///
+/// This is used for struct field name transformations.
+/// Fixes #835
+pub(crate) fn extract_serde_rename_all(attrs: &[Attribute]) -> Option<String> {
+	for attr in attrs {
+		if !attr.path().is_ident("serde") {
+			continue;
+		}
+
+		let Ok(meta_list) = attr.meta.require_list() else {
+			continue;
+		};
+
+		let Ok(nested_metas) = meta_list
+			.parse_args_with(syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+		else {
+			continue;
+		};
+
+		for nested_meta in nested_metas {
+			if let Meta::NameValue(MetaNameValue {
+				path,
+				value: syn::Expr::Lit(syn::ExprLit {
+					lit: Lit::Str(lit_str),
+					..
+				}),
+				..
+			}) = nested_meta
+				&& path.is_ident("rename_all")
+			{
+				return Some(lit_str.value());
+			}
+		}
+	}
+
+	None
+}
+
 /// Parsed serde variant attributes
 #[derive(Debug, Default, Clone)]
 pub(crate) struct SerdeVariantAttrs {

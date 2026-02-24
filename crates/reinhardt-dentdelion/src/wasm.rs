@@ -42,12 +42,13 @@ mod instance;
 mod loader;
 mod models;
 mod runtime;
-mod ssr;
+mod sql_validator;
+pub mod ssr;
 #[cfg(feature = "ts")]
 mod ts_runtime;
 mod types;
 
-pub use events::{Event, EventBus, SharedEventBus};
+pub use events::{Event, EventBus, EventBusError, SharedEventBus};
 pub use host::{HostState, HostStateBuilder};
 pub use instance::WasmPluginInstance;
 pub use loader::WasmPluginLoader;
@@ -55,15 +56,29 @@ pub use models::{
 	ColumnDef, ColumnType, IndexDef, ModelRegistry, ModelSchema, SharedModelRegistry, SqlMigration,
 };
 pub use runtime::{WasmRuntime, WasmRuntimeConfig, WasmRuntimeConfigBuilder};
-pub use ssr::{RenderOptions, RenderResult, SharedSsrProxy, SsrError, SsrProxy};
+pub use sql_validator::{
+	SqlStatementType, SqlValidationError, SqlValidator, default_validator, validate_sql,
+};
+pub use ssr::{RenderOptions, RenderResult, SharedSsrProxy, SsrError, SsrProxy, escape_for_script};
 #[cfg(feature = "ts")]
-pub use ts_runtime::{SharedTsRuntime, TsError, TsRuntime};
+pub use ts_runtime::{SharedTsRuntime, TsError, TsResourceLimits, TsRuntime};
 pub use types::{ConfigValue, WitCapability, WitPluginError, WitPluginMetadata};
 
-/// WASM binary magic bytes (\0asm)
+/// WASM binary magic bytes (`\0asm`).
+///
+/// Every valid WebAssembly binary starts with these four bytes as defined
+/// by the [WebAssembly specification](https://webassembly.github.io/spec/core/binary/modules.html#binary-magic).
 pub const WASM_MAGIC: [u8; 4] = [0x00, 0x61, 0x73, 0x6D];
 
-/// Validate that the given bytes represent a valid WASM binary.
+/// Validate that the given bytes represent a valid WASM binary by checking magic bytes.
+///
+/// This is a basic integrity check that verifies the WASM magic header (`\0asm`).
+/// It provides early rejection of obviously invalid files, reducing attack surface
+/// by preventing non-WASM files from reaching the WASM runtime.
+///
+/// **Note**: This is not a security boundary. It only checks the 4-byte magic header
+/// and does not validate the WASM version field (bytes 4-7) or module structure.
+/// Full validation is performed by the WASM runtime during compilation.
 ///
 /// # Arguments
 ///

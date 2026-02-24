@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-middleware"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.15"
 description = "Middleware system for request/response processing pipeline"
 edition.workspace = true
 license.workspace = true
@@ -42,16 +42,19 @@ flate2 = { workspace = true }
 brotli = "8.0.2"
 sha2 = { workspace = true }
 hex = "0.4"
+rand = { workspace = true }
 httpdate = "1.0"
 bytes = { workspace = true }
 sqlx = { workspace = true, optional = true }
 regex = "1.10"
+ipnet = "2.10"
 log = "0.4"
 thiserror = { workspace = true }
 url = "2.5"
 uuid = { workspace = true }
 tokio = { workspace = true }
 colored = "3.0"
+base64 = { workspace = true }
 
 [dev-dependencies]
 reinhardt-test = { workspace = true }

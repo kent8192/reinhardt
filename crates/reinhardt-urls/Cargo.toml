@@ -1,8 +1,8 @@
 [package]
 name = "reinhardt-urls"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.15"
 edition = "2024"
-license = "MIT OR Apache-2.0"
+license = "BSD-3-Clause"
 repository = "https://github.com/kent8192/reinhardt"
 authors = ["kent8192 <51869472+kent8192@users.noreply.github.com>"]
 description = "URL routing and proxy utilities for Reinhardt framework"
@@ -17,7 +17,7 @@ serde = { workspace = true }
 futures = { workspace = true }
 reinhardt-views = { workspace = true, features = ["viewsets"] }
 reinhardt-middleware = { workspace = true }
-reinhardt-core = { workspace = true, features = ["exception", "reactive", "types"] }
+reinhardt-core = { workspace = true, features = ["exception", "page", "reactive", "types"] }
 reinhardt-http = { workspace = true }
 reinhardt-di = { workspace = true }
 regex = { workspace = true }
@@ -48,3 +48,4 @@ unified-router = []
 tokio = { version = "1.41", features = ["full"] }
 bytes = { workspace = true }
 hyper = { workspace = true }
+rstest = { workspace = true }

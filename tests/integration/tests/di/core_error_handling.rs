@@ -184,10 +184,12 @@ async fn test_injectable_async_timeout() {
 
 	// Verify timeout occurred
 	assert!(result.is_err());
-	assert!(result
-		.unwrap_err()
-		.to_string()
-		.contains("deadline has elapsed"));
+	assert!(
+		result
+			.unwrap_err()
+			.to_string()
+			.contains("deadline has elapsed")
+	);
 
 	// Verify with longer timeout that injection succeeds
 	let longer_timeout = Duration::from_millis(2000);

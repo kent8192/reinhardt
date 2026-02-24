@@ -1,0 +1,12 @@
+# Local development override template
+# Copy to .cargo/config.toml to use local reinhardt workspace:
+#   cp .cargo/config.local.toml .cargo/config.toml
+#
+# Or use Makefile.toml task (from main repo):
+#   cargo make local-examples-test
+
+[patch.crates-io]
+reinhardt-web = { path = ".." }
+reinhardt-query = { path = "../crates/reinhardt-query" }
+reinhardt-websockets = { path = "../crates/reinhardt-websockets" }
+reinhardt-auth = { path = "../crates/reinhardt-auth" }

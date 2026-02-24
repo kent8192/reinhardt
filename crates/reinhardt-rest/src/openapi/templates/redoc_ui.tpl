@@ -14,6 +14,11 @@
   </head>
   <body>
     <redoc spec-url="{{ spec_url }}"></redoc>
-    <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
+    <!-- Fixes #826: Pin CDN version and add SRI hash -->
+    <script
+      src="https://cdn.redoc.ly/redoc/v2.5.2/bundles/redoc.standalone.js"
+      integrity="sha384-70P5pmIdaQdVbxvjhrcTDv1uKcKqalZ3OHi7S2J+uzDl0PW8dO6L+pHOpm9EEjGJ"
+      crossorigin="anonymous"
+    ></script>
   </body>
 </html>

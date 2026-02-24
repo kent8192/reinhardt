@@ -37,10 +37,10 @@ impl TaskQueue {
 
 	pub async fn enqueue(
 		&self,
-		_task: Box<dyn Task>,
-		_backend: &dyn TaskBackend,
+		task: Box<dyn Task>,
+		backend: &dyn TaskBackend,
 	) -> Result<TaskId, TaskExecutionError> {
-		Ok(TaskId::new())
+		backend.enqueue(task).await
 	}
 }
 

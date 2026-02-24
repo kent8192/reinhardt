@@ -47,11 +47,11 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Postgres, Row};
 use std::sync::Arc;
+use testcontainers::ImageExt;
 use testcontainers::core::{IntoContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::ImageExt;
 use testcontainers::{ContainerAsync, GenericImage};
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 // ============ ORM Model Definition ============
 

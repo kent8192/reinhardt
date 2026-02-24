@@ -213,15 +213,14 @@ impl RequestBuilder {
 		self.format = format.to_string();
 		self
 	}
-	pub fn header(mut self, name: &str, value: &str) -> Self {
+	// Fixes #865
+	pub fn header(mut self, name: &str, value: &str) -> Result<Self, ClientError> {
 		let header_name: http::header::HeaderName = name
 			.parse()
-			.unwrap_or_else(|_| panic!("Invalid header name: {}", name));
-		self.headers.insert(
-			header_name,
-			HeaderValue::from_str(value).expect("Invalid header value"),
-		);
-		self
+			.map_err(|_| ClientError::RequestFailed(format!("Invalid header name: {}", name)))?;
+		self.headers
+			.insert(header_name, HeaderValue::from_str(value)?);
+		Ok(self)
 	}
 	pub fn query(mut self, key: &str, value: &str) -> Self {
 		self.query_params.insert(key.to_string(), value.to_string());

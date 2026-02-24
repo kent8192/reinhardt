@@ -384,11 +384,11 @@ impl TaskBackend for RabbitMQBackend {
 				let queue_message: QueueMessage = serde_json::from_slice(&delivery.data)
 					.map_err(|e| TaskExecutionError::BackendError(e.to_string()))?;
 
-				// Update status to Running in metadata store
-				let _ = self
-					.metadata_store
+				// Fixes #784: Propagate metadata update error instead of silently discarding
+				self.metadata_store
 					.update_status(queue_message.id, TaskStatus::Running)
-					.await;
+					.await
+					.map_err(|e| TaskExecutionError::BackendError(e.to_string()))?;
 
 				// Acknowledge message
 				delivery
@@ -459,8 +459,10 @@ impl TaskBackend for RabbitMQBackend {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::backends::metadata_store::MetadataStoreError;
+	use rstest::rstest;
 
-	#[test]
+	#[rstest]
 	fn test_rabbitmq_config_new() {
 		let config = RabbitMQConfig::new("amqp://localhost:5672/%2f");
 		assert_eq!(config.url, "amqp://localhost:5672/%2f");
@@ -510,5 +512,62 @@ mod tests {
 		assert_eq!(deserialized.id, message.id);
 		assert_eq!(deserialized.name, message.name);
 		assert_eq!(deserialized.created_at, message.created_at);
+	}
+
+	#[rstest]
+	#[case::not_found_error(
+		MetadataStoreError::NotFound(TaskId::new()),
+		"not found in metadata store"
+	)]
+	#[case::storage_error(
+		MetadataStoreError::StorageError("connection refused".to_string()),
+		"connection refused"
+	)]
+	#[case::serialization_error(
+		MetadataStoreError::SerializationError("invalid JSON".to_string()),
+		"invalid JSON"
+	)]
+	fn test_metadata_store_error_converts_to_backend_error(
+		#[case] metadata_error: MetadataStoreError,
+		#[case] expected_substring: &str,
+	) {
+		// Arrange
+		let error_message = metadata_error.to_string();
+
+		// Act
+		let backend_error = TaskExecutionError::BackendError(error_message);
+
+		// Assert
+		let error_string = backend_error.to_string();
+		assert!(
+			error_string.contains(expected_substring),
+			"Expected error string '{}' to contain '{}'",
+			error_string,
+			expected_substring,
+		);
+		assert!(matches!(backend_error, TaskExecutionError::BackendError(_)));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_metadata_update_status_error_propagation_path() {
+		// Arrange
+		let store = InMemoryMetadataStore::new();
+		let nonexistent_id = TaskId::new();
+
+		// Act
+		let result = store
+			.update_status(nonexistent_id, TaskStatus::Running)
+			.await;
+
+		// Assert
+		// Verify that update_status for a nonexistent task produces an error
+		// that can be mapped to TaskExecutionError::BackendError via map_err
+		assert!(result.is_err());
+		let metadata_err = result.unwrap_err();
+		let backend_err = TaskExecutionError::BackendError(metadata_err.to_string());
+		assert!(
+			matches!(backend_err, TaskExecutionError::BackendError(msg) if msg.contains("not found"))
+		);
 	}
 }

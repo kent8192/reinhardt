@@ -122,6 +122,7 @@ async fn test_single_middleware_execution() {
 
 	let handler = MiddlewareChain::new(base_handler)
 		.add_middleware(middleware)
+		.expect("Failed to add middleware")
 		.build();
 
 	// Execute request
@@ -161,12 +162,15 @@ async fn test_multiple_middleware_execution_order() {
 		.add_middleware(Arc::new(CounterMiddleware {
 			counter: counter1.clone(),
 		}))
+		.expect("Failed to add middleware")
 		.add_middleware(Arc::new(CounterMiddleware {
 			counter: counter2.clone(),
 		}))
+		.expect("Failed to add middleware")
 		.add_middleware(Arc::new(CounterMiddleware {
 			counter: counter3.clone(),
 		}))
+		.expect("Failed to add middleware")
 		.build();
 
 	// Execute request
@@ -225,6 +229,7 @@ async fn test_middleware_can_modify_request() {
 
 	let handler = MiddlewareChain::new(base_handler)
 		.add_middleware(middleware)
+		.expect("Failed to add middleware")
 		.build();
 
 	// Execute request
@@ -260,6 +265,7 @@ async fn test_middleware_can_modify_response() {
 
 	let handler = MiddlewareChain::new(base_handler)
 		.add_middleware(middleware)
+		.expect("Failed to add middleware")
 		.build();
 
 	// Execute request
@@ -296,6 +302,7 @@ async fn test_middleware_error_propagates() {
 
 	let handler = MiddlewareChain::new(base_handler)
 		.add_middleware(middleware)
+		.expect("Failed to add middleware")
 		.build();
 
 	// Execute request
@@ -334,10 +341,13 @@ async fn test_middleware_chain_stops_on_error() {
 		.add_middleware(Arc::new(CounterMiddleware {
 			counter: counter1.clone(),
 		}))
+		.expect("Failed to add middleware")
 		.add_middleware(Arc::new(ErrorMiddleware))
+		.expect("Failed to add middleware")
 		.add_middleware(Arc::new(CounterMiddleware {
 			counter: counter2.clone(),
 		}))
+		.expect("Failed to add middleware")
 		.build();
 
 	// Execute request
@@ -393,4 +403,105 @@ async fn test_empty_middleware_chain() {
 	let response = response.expect("Failed to build request");
 	assert_eq!(response.status, StatusCode::OK);
 	assert_eq!(&response.body, &Bytes::from("OK"));
+}
+
+#[tokio::test]
+async fn test_middleware_chain_depth_limit() {
+	// Setup router and handler
+	let mut router = DefaultRouter::new();
+	let route = Route::from_handler("/test", Arc::new(TestHandler));
+	router.add_route(route);
+	let base_handler = Arc::new(router);
+
+	// Create a chain with max depth of 2
+	let chain = MiddlewareChain::new(base_handler).with_max_depth(2);
+
+	// Adding 2 middleware should succeed
+	let counter1 = Arc::new(AtomicUsize::new(0));
+	let counter2 = Arc::new(AtomicUsize::new(0));
+
+	let chain = chain
+		.add_middleware(Arc::new(CounterMiddleware {
+			counter: counter1.clone(),
+		}))
+		.expect("First middleware should be accepted");
+
+	let chain = chain
+		.add_middleware(Arc::new(CounterMiddleware {
+			counter: counter2.clone(),
+		}))
+		.expect("Second middleware should be accepted");
+
+	// Adding a 3rd middleware should fail
+	let counter3 = Arc::new(AtomicUsize::new(0));
+	let result = chain.add_middleware(Arc::new(CounterMiddleware {
+		counter: counter3.clone(),
+	}));
+
+	match result {
+		Err(err) => {
+			assert!(
+				err.to_string().contains("depth limit exceeded"),
+				"Error should mention depth limit, got: {}",
+				err
+			);
+		}
+		Ok(_) => panic!("Adding middleware beyond max depth should fail"),
+	}
+}
+
+#[tokio::test]
+async fn test_middleware_chain_default_depth_limit() {
+	// Setup router and handler
+	let mut router = DefaultRouter::new();
+	let route = Route::from_handler("/test", Arc::new(TestHandler));
+	router.add_route(route);
+	let base_handler = Arc::new(router);
+
+	// Default limit should allow at least 256 middleware
+	let mut chain = MiddlewareChain::new(base_handler);
+	for _ in 0..256 {
+		chain = chain
+			.add_middleware(Arc::new(CounterMiddleware {
+				counter: Arc::new(AtomicUsize::new(0)),
+			}))
+			.expect("Should be within default limit");
+	}
+
+	// The 257th should fail
+	let result = chain.add_middleware(Arc::new(CounterMiddleware {
+		counter: Arc::new(AtomicUsize::new(0)),
+	}));
+	assert!(
+		result.is_err(),
+		"257th middleware should exceed default limit of 256"
+	);
+}
+
+#[tokio::test]
+async fn test_middleware_chain_custom_depth_limit() {
+	// Setup router and handler
+	let mut router = DefaultRouter::new();
+	let route = Route::from_handler("/test", Arc::new(TestHandler));
+	router.add_route(route);
+	let base_handler = Arc::new(router);
+
+	// Create chain with custom depth limit of 1
+	let chain = MiddlewareChain::new(base_handler).with_max_depth(1);
+
+	// First middleware should succeed
+	let chain = chain
+		.add_middleware(Arc::new(CounterMiddleware {
+			counter: Arc::new(AtomicUsize::new(0)),
+		}))
+		.expect("First middleware within limit");
+
+	// Second should fail
+	let result = chain.add_middleware(Arc::new(CounterMiddleware {
+		counter: Arc::new(AtomicUsize::new(0)),
+	}));
+	assert!(
+		result.is_err(),
+		"Should reject middleware beyond limit of 1"
+	);
 }

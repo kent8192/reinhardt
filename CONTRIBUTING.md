@@ -34,7 +34,7 @@ Thank you for your interest in contributing to Reinhardt! This document provides
    ```
 3. Add the upstream repository:
    ```bash
-   git remote add upstream https://github.com/kent8192/reinhardt-rs.git
+   git remote add upstream https://github.com/kent8192/reinhardt-web.git
    ```
 
 ### Building the Project
@@ -148,7 +148,7 @@ pub mod routing;
 
 - **DELETE obsolete code immediately** - don't leave commented-out code
 - **NO comments documenting deleted code** - Git history is the record
-- Extract important notes to `docs/IMPLEMENTATION_NOTES.md` if needed
+- Extract important notes to `instructions/IMPLEMENTATION_NOTES.md` if needed
 
 ### TODO and Placeholder Policy
 
@@ -293,7 +293,7 @@ gh issue list --state closed --search "leak"
 
 **Check Documentation:**
 
-- [Issue Guidelines](docs/ISSUE_GUIDELINES.md) for detailed issue policies
+- [Issue Guidelines](instructions/ISSUE_GUIDELINES.md) for detailed issue policies
 - [Examples](examples/) for usage patterns
 - [CLAUDE.md](CLAUDE.md) for project-specific guidelines
 
@@ -397,7 +397,7 @@ gh issue create --title "Feature: Add MySQL support" \
   --label enhancement
 ```
 
-For detailed issue guidelines, see [docs/ISSUE_GUIDELINES.md](docs/ISSUE_GUIDELINES.md).
+For detailed issue guidelines, see [instructions/ISSUE_GUIDELINES.md](instructions/ISSUE_GUIDELINES.md).
 
 ---
 
@@ -477,7 +477,7 @@ Always examine recent commits before writing new ones:
 git log --pretty=format:"%s%n%b" -10
 ```
 
-For detailed commit guidelines, see [COMMIT_GUIDELINE.md](docs/COMMIT_GUIDELINE.md).
+For detailed commit guidelines, see [COMMIT_GUIDELINE.md](instructions/COMMIT_GUIDELINE.md).
 
 ---
 
@@ -552,7 +552,7 @@ For detailed commit guidelines, see [COMMIT_GUIDELINE.md](docs/COMMIT_GUIDELINE.
 
 - **README.md**: Project-level overview
 - **Crate README.md**: Individual crate documentation
-- **docs/** directory: Detailed guides and tutorials
+- **instructions/** directory: Detailed guides and standards
 
 ### Documentation Consistency
 
@@ -580,10 +580,10 @@ Update documentation for:
 
 ### Resources
 
-- [Getting Started Guide](docs/GETTING_STARTED.md)
-- [Feature Flags Guide](docs/FEATURE_FLAGS.md)
-- [Issue Guidelines](docs/ISSUE_GUIDELINES.md) - Issue creation and management
-- [Pull Request Guidelines](docs/PR_GUIDELINE.md) - PR policies and procedures
+- [Getting Started Guide](/quickstart/getting-started/)
+- [Feature Flags Guide](/docs/feature-flags/)
+- [Issue Guidelines](instructions/ISSUE_GUIDELINES.md) - Issue creation and management
+- [Pull Request Guidelines](instructions/PR_GUIDELINE.md) - PR policies and procedures
 - [Security Policy](SECURITY.md) - Security vulnerability reporting
 - [Code of Conduct](CODE_OF_CONDUCT.md) - Community standards
 - [Project Instructions](CLAUDE.md)
@@ -594,9 +594,9 @@ Update documentation for:
 
 Please check:
 
--  [Getting Started Guide](docs/GETTING_STARTED.md)
--  [Issue Guidelines](docs/ISSUE_GUIDELINES.md)
--  [Pull Request Guidelines](docs/PR_GUIDELINE.md)
+-  [Getting Started Guide](/quickstart/getting-started/)
+-  [Issue Guidelines](instructions/ISSUE_GUIDELINES.md)
+-  [Pull Request Guidelines](instructions/PR_GUIDELINE.md)
 -  [Examples](examples/)
 -  Existing GitHub Issues and Discussions
 -  [CLAUDE.md](CLAUDE.md) for project-specific guidelines
@@ -686,7 +686,7 @@ cargo make clippy-fix
 
 ## License
 
-By contributing to Reinhardt, you agree that your contributions will be licensed under both the MIT License and Apache License 2.0.
+By contributing to Reinhardt, you agree that your contributions will be licensed under the BSD 3-Clause License.
 
 ---
 

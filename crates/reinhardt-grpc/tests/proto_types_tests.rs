@@ -1,13 +1,13 @@
 //! Tests for Protobuf types in reinhardt-grpc
 //!
 //! These tests cover all required test categories for proto types:
-//! - Happy path (正常系)
-//! - Error path (異常系)
-//! - Edge cases (エッジケース)
-//! - Sanity tests (サニティテスト)
-//! - Equivalence partitioning (同値分割)
-//! - Boundary value analysis (境界値分析)
-//! - Property-based tests (Property-basedテスト)
+//! - Happy path
+//! - Error path
+//! - Edge cases
+//! - Sanity tests
+//! - Equivalence partitioning
+//! - Boundary value analysis
+//! - Property-based tests
 
 use prost::Message;
 use reinhardt_grpc::proto::{common, graphql};
@@ -62,7 +62,7 @@ fn valid_graphql_request() -> graphql::GraphQlRequest {
 }
 
 // ============================================================================
-// Happy path tests (正常系)
+// Happy path tests
 // ============================================================================
 
 #[rstest]
@@ -204,7 +204,7 @@ async fn test_graphql_request_response_cycle(valid_graphql_request: graphql::Gra
 }
 
 // ============================================================================
-// Edge cases tests (エッジケース)
+// Edge cases tests
 // ============================================================================
 
 #[rstest]
@@ -279,7 +279,7 @@ async fn test_page_info_edge_cases(
 }
 
 // ============================================================================
-// Sanity tests (サニティテスト)
+// Sanity tests
 // ============================================================================
 
 #[rstest]
@@ -347,9 +347,9 @@ async fn test_proto_types_sanity_check() {
 // ============================================================================
 
 // Note: The following test categories will be implemented:
-// - Property-based tests (Property-basedテスト) - using proptest
-// - Equivalence partitioning (同値分割) - using rstest case macro
-// - Boundary value analysis (境界値分析) - using rstest case macro
+// - Property-based tests - using proptest
+// - Equivalence partitioning - using rstest case macro
+// - Boundary value analysis - using rstest case macro
 
 // For property-based tests with proptest, we'll need to add proptest dependency
 // and implement strategies for generating proto types.

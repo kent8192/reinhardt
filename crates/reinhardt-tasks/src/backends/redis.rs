@@ -108,6 +108,7 @@ impl RedisTaskBackend {
 
 #[async_trait]
 impl crate::backend::TaskBackend for RedisTaskBackend {
+	// Fixes #790: use MULTI/EXEC transaction to atomically execute SET + RPUSH
 	async fn enqueue(&self, task: Box<dyn Task>) -> Result<TaskId, TaskExecutionError> {
 		let task_id = task.id();
 		let task_name = task.name().to_string();
@@ -125,15 +126,12 @@ impl crate::backend::TaskBackend for RedisTaskBackend {
 
 		let mut conn = (*self.connection).clone();
 
-		// Store task metadata
-		let _: () = conn
+		// Atomically store metadata and enqueue task ID using MULTI/EXEC
+		redis::pipe()
+			.atomic()
 			.set(self.task_key(task_id), metadata_json)
-			.await
-			.map_err(|e: RedisError| TaskExecutionError::BackendError(e.to_string()))?;
-
-		// Add to queue
-		let _: () = conn
 			.rpush(self.queue_key(), task_id.to_string())
+			.query_async::<()>(&mut conn)
 			.await
 			.map_err(|e: RedisError| TaskExecutionError::BackendError(e.to_string()))?;
 

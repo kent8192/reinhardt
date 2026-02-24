@@ -3,6 +3,8 @@
 //! Provides a way to declare and render CSS/JS dependencies for forms and widgets,
 //! similar to Django's Media class.
 
+use reinhardt_core::security::xss::escape_html_attr;
+
 /// Media assets (CSS and JavaScript) for forms and widgets
 ///
 /// Allows forms to declare their CSS and JavaScript dependencies,
@@ -131,7 +133,8 @@ impl Media {
 				for file in files {
 					output.push_str(&format!(
 						"<link rel=\"stylesheet\" href=\"{}\" media=\"{}\">\n",
-						file, media_type
+						escape_html_attr(file),
+						escape_html_attr(media_type)
 					));
 				}
 			}
@@ -158,7 +161,10 @@ impl Media {
 		let mut output = String::new();
 
 		for file in &self.js {
-			output.push_str(&format!("<script src=\"{}\"></script>\n", file));
+			output.push_str(&format!(
+				"<script src=\"{}\"></script>\n",
+				escape_html_attr(file)
+			));
 		}
 
 		output
@@ -329,5 +335,49 @@ mod tests {
 
 		let files = media.get_js_files();
 		assert_eq!(files, vec!["js/a.js", "js/b.js"]);
+	}
+
+	#[test]
+	fn test_render_css_escapes_xss_in_paths() {
+		// Arrange
+		let mut media = Media::new();
+		media.add_css("all", "\"><script>alert(1)</script><link href=\"");
+
+		// Act
+		let html = media.render_css();
+
+		// Assert
+		assert!(
+			!html.contains("<script>"),
+			"CSS rendering must not contain unescaped script tags. Got: {}",
+			html
+		);
+		assert!(
+			html.contains("&quot;"),
+			"CSS rendering should contain escaped quotes. Got: {}",
+			html
+		);
+	}
+
+	#[test]
+	fn test_render_js_escapes_xss_in_paths() {
+		// Arrange
+		let mut media = Media::new();
+		media.add_js("\"><script>alert(1)</script><script src=\"");
+
+		// Act
+		let html = media.render_js();
+
+		// Assert
+		assert!(
+			!html.contains("<script>alert(1)</script>"),
+			"JS rendering must not contain unescaped script tags. Got: {}",
+			html
+		);
+		assert!(
+			html.contains("&quot;"),
+			"JS rendering should contain escaped quotes. Got: {}",
+			html
+		);
 	}
 }

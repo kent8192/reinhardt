@@ -19,7 +19,7 @@ use std::fmt;
 /// let mut ctx = TranslationContext::new("fr", "en-US");
 /// let mut catalog = MessageCatalog::new("fr");
 /// catalog.add_translation("Welcome", "Bienvenue");
-/// ctx.add_catalog("fr", catalog);
+/// ctx.add_catalog("fr", catalog).unwrap();
 ///
 /// let _guard = set_active_translation(Arc::new(ctx));
 ///
@@ -100,7 +100,7 @@ mod tests {
 		let mut ctx = TranslationContext::new("zh", "en-US");
 		let mut catalog = MessageCatalog::new("zh");
 		catalog.add_translation("Hello", "你好");
-		ctx.add_catalog("zh", catalog);
+		ctx.add_catalog("zh", catalog).unwrap();
 
 		let _guard = set_active_translation(Arc::new(ctx));
 
@@ -115,7 +115,7 @@ mod tests {
 		let mut ctx = TranslationContext::new("ru", "en-US");
 		let mut catalog = MessageCatalog::new("ru");
 		catalog.add_plural_str("cat", "cats", vec!["кошка", "кошки"]);
-		ctx.add_catalog("ru", catalog);
+		ctx.add_catalog("ru", catalog).unwrap();
 
 		let _guard = set_active_translation(Arc::new(ctx));
 

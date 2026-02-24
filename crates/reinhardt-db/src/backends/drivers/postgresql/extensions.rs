@@ -1,7 +1,7 @@
 //! PostgreSQL-specific extension and advanced feature helpers
 //!
 //! This module provides helper functions for PostgreSQL-specific features that are not
-//! supported by SeaQuery or other database backends.
+//! supported by reinhardt-query or other database backends.
 
 /// PostgreSQL extension management helpers
 pub mod extension {

@@ -23,7 +23,7 @@ fn create_test_context(locale: &str) -> TranslationContext {
 			"%(count)d éléments".to_string(),
 		],
 	);
-	ctx.add_catalog("fr-FR", fr_catalog);
+	ctx.add_catalog("fr-FR", fr_catalog).unwrap();
 
 	// Setup German catalog
 	let mut de_catalog = MessageCatalog::new("de-DE");
@@ -39,13 +39,13 @@ fn create_test_context(locale: &str) -> TranslationContext {
 			"%(count)d Artikel".to_string(),
 		],
 	);
-	ctx.add_catalog("de-DE", de_catalog);
+	ctx.add_catalog("de-DE", de_catalog).unwrap();
 
 	// Setup Polish catalog
 	let mut pl_catalog = MessageCatalog::new("pl-PL");
 	pl_catalog.add("Add %(name)s".to_string(), "Dodaj %(name)s".to_string());
 	pl_catalog.add("Hello".to_string(), "Witaj".to_string());
-	ctx.add_catalog("pl-PL", pl_catalog);
+	ctx.add_catalog("pl-PL", pl_catalog).unwrap();
 
 	ctx
 }

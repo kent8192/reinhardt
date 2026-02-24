@@ -7,24 +7,68 @@ use crate::connection::{Message, WebSocketConnection, WebSocketError};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 /// Error types for room operations
 #[derive(Debug, thiserror::Error)]
 pub enum RoomError {
-	#[error("Client not found: {0}")]
+	#[error("Client not found")]
 	ClientNotFound(String),
-	#[error("Room not found: {0}")]
+	#[error("Room not found")]
 	RoomNotFound(String),
-	#[error("Client already exists: {0}")]
+	#[error("Client already exists")]
 	ClientAlreadyExists(String),
-	#[error("WebSocket error: {0}")]
+	#[error("WebSocket error")]
 	WebSocket(#[from] WebSocketError),
-	#[error("Metadata error: {0}")]
+	#[error("Metadata error")]
 	Metadata(String),
 }
 
 pub type RoomResult<T> = Result<T, RoomError>;
+
+/// Result of a broadcast operation that tracks individual send outcomes.
+///
+/// This provides detailed information about which clients received the message
+/// and which failed, enabling callers to take appropriate action (e.g., logging,
+/// notifying administrators, or retrying).
+///
+/// Dead connections that fail during broadcast are automatically removed from
+/// the room.
+#[derive(Debug)]
+pub struct BroadcastResult {
+	/// Client IDs that received the message successfully
+	pub successful: Vec<String>,
+	/// Client IDs that failed with their respective errors
+	pub failed: Vec<(String, WebSocketError)>,
+}
+
+impl BroadcastResult {
+	/// Returns `true` if all sends were successful (no failures).
+	pub fn is_complete_success(&self) -> bool {
+		self.failed.is_empty()
+	}
+
+	/// Returns `true` if at least one send was successful.
+	pub fn is_partial_success(&self) -> bool {
+		!self.successful.is_empty()
+	}
+
+	/// Returns `true` if all sends failed.
+	pub fn is_complete_failure(&self) -> bool {
+		self.successful.is_empty() && !self.failed.is_empty()
+	}
+
+	/// Returns the number of failed sends.
+	pub fn failure_count(&self) -> usize {
+		self.failed.len()
+	}
+
+	/// Returns the IDs of clients that failed to receive the message.
+	pub fn failed_client_ids(&self) -> Vec<&str> {
+		self.failed.iter().map(|(id, _)| id.as_str()).collect()
+	}
+}
 
 /// A WebSocket room that manages multiple client connections
 ///
@@ -151,41 +195,135 @@ impl Room {
 		Ok(())
 	}
 
-	pub async fn broadcast(&self, message: Message) -> RoomResult<()> {
+	/// Broadcast a message to all clients in the room.
+	///
+	/// Returns a [`BroadcastResult`] that reports which clients received the
+	/// message and which failed. Dead connections that fail during broadcast
+	/// are automatically removed from the room.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_websockets::room::Room;
+	/// use reinhardt_websockets::{WebSocketConnection, Message};
+	/// use tokio::sync::mpsc;
+	/// use std::sync::Arc;
+	///
+	/// # tokio_test::block_on(async {
+	/// let room = Room::new("chat".to_string());
+	///
+	/// let (tx1, _rx1) = mpsc::unbounded_channel();
+	/// let (tx2, _rx2) = mpsc::unbounded_channel();
+	/// let client1 = Arc::new(WebSocketConnection::new("user1".to_string(), tx1));
+	/// let client2 = Arc::new(WebSocketConnection::new("user2".to_string(), tx2));
+	///
+	/// room.join("user1".to_string(), client1).await.unwrap();
+	/// room.join("user2".to_string(), client2).await.unwrap();
+	///
+	/// let msg = Message::text("Hello everyone!".to_string());
+	/// let result = room.broadcast(msg).await;
+	///
+	/// assert!(result.is_complete_success());
+	/// assert_eq!(result.successful.len(), 2);
+	/// # });
+	/// ```
+	pub async fn broadcast(&self, message: Message) -> BroadcastResult {
 		let clients = self.clients.read().await;
 
-		let mut failed_clients = Vec::new();
-		let mut last_error = None;
+		let mut successful = Vec::new();
+		let mut failed = Vec::new();
 
 		for (client_id, client) in clients.iter() {
-			if let Err(e) = client.send(message.clone()).await {
-				// Record failed client but continue broadcasting to others
-				failed_clients.push(client_id.clone());
-				last_error = Some(e);
+			match client.send(message.clone()).await {
+				Ok(()) => successful.push(client_id.clone()),
+				Err(e) => failed.push((client_id.clone(), e)),
 			}
 		}
 
 		// Drop read lock before acquiring write lock
 		drop(clients);
 
-		// Remove failed clients from the room
-		if !failed_clients.is_empty() {
+		// Automatically remove dead connections from the room
+		if !failed.is_empty() {
 			let mut clients_write = self.clients.write().await;
-			for client_id in &failed_clients {
+			for (client_id, _) in &failed {
 				clients_write.remove(client_id);
 			}
 		}
 
-		// If all clients failed, return the last error
-		// Otherwise, consider it a success (partial delivery is acceptable)
-		if let Some(err) = last_error {
-			let total_clients = self.client_count().await + failed_clients.len();
-			if failed_clients.len() == total_clients {
-				return Err(err.into());
+		BroadcastResult { successful, failed }
+	}
+
+	/// Broadcasts a message to all clients with a per-client send timeout.
+	///
+	/// Slow consumers that do not accept the message within the given timeout
+	/// are treated as failed and automatically removed from the room, applying
+	/// backpressure to prevent slow receivers from blocking the entire broadcast.
+	///
+	/// # Arguments
+	///
+	/// * `message` - The message to broadcast
+	/// * `send_timeout` - Maximum time to wait for each client to accept the message
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_websockets::room::Room;
+	/// use reinhardt_websockets::{WebSocketConnection, Message};
+	/// use tokio::sync::mpsc;
+	/// use std::sync::Arc;
+	/// use std::time::Duration;
+	///
+	/// # tokio_test::block_on(async {
+	/// let room = Room::new("chat".to_string());
+	///
+	/// let (tx, _rx) = mpsc::unbounded_channel();
+	/// let client = Arc::new(WebSocketConnection::new("user1".to_string(), tx));
+	///
+	/// room.join("user1".to_string(), client).await.unwrap();
+	///
+	/// let msg = Message::text("Hello!".to_string());
+	/// let result = room.broadcast_with_timeout(msg, Duration::from_secs(5)).await;
+	///
+	/// assert!(result.is_complete_success());
+	/// # });
+	/// ```
+	pub async fn broadcast_with_timeout(
+		&self,
+		message: Message,
+		send_timeout: Duration,
+	) -> BroadcastResult {
+		let clients = self.clients.read().await;
+
+		let mut successful = Vec::new();
+		let mut failed = Vec::new();
+
+		for (client_id, client) in clients.iter() {
+			let send_future = client.send(message.clone());
+			match tokio::time::timeout(send_timeout, send_future).await {
+				Ok(Ok(())) => successful.push(client_id.clone()),
+				Ok(Err(e)) => failed.push((client_id.clone(), e)),
+				Err(_elapsed) => {
+					failed.push((
+						client_id.clone(),
+						WebSocketError::SlowConsumer(send_timeout),
+					));
+				}
 			}
 		}
 
-		Ok(())
+		// Drop read lock before acquiring write lock
+		drop(clients);
+
+		// Automatically remove failed connections from the room
+		if !failed.is_empty() {
+			let mut clients_write = self.clients.write().await;
+			for (client_id, _) in &failed {
+				clients_write.remove(client_id);
+			}
+		}
+
+		BroadcastResult { successful, failed }
 	}
 
 	/// Send a message to a specific client
@@ -538,6 +676,9 @@ impl RoomManager {
 
 	/// Get or create a room
 	///
+	/// This method uses a single write lock to avoid TOCTOU race conditions
+	/// that could occur with separate get and create operations.
+	///
 	/// # Examples
 	///
 	/// ```
@@ -553,11 +694,15 @@ impl RoomManager {
 	/// # });
 	/// ```
 	pub async fn get_or_create_room(&self, id: String) -> Arc<Room> {
-		if let Some(room) = self.get_room(&id).await {
-			return room;
+		let mut rooms = self.rooms.write().await;
+
+		if let Some(room) = rooms.get(&id) {
+			return room.clone();
 		}
 
-		self.create_room(id).await
+		let room = Arc::new(Room::new(id.clone()));
+		rooms.insert(id, room.clone());
+		room
 	}
 
 	/// Delete a room
@@ -789,7 +934,11 @@ impl RoomManager {
 		}
 	}
 
-	/// Broadcast a message to all clients in a specific room
+	/// Broadcast a message to all clients in a specific room.
+	///
+	/// Returns a [`BroadcastResult`] describing which clients received the
+	/// message and which failed. Returns [`RoomError::RoomNotFound`] if the
+	/// room does not exist.
 	///
 	/// # Examples
 	///
@@ -809,19 +958,74 @@ impl RoomManager {
 	/// manager.join_room("announcement".to_string(), conn).await.unwrap();
 	///
 	/// let msg = Message::text("Hello everyone!".to_string());
-	/// manager.broadcast_to_room("announcement", msg).await.unwrap();
+	/// let result = manager.broadcast_to_room("announcement", msg).await.unwrap();
+	/// assert!(result.is_complete_success());
 	/// # });
 	/// ```
-	pub async fn broadcast_to_room(&self, room_id: &str, message: Message) -> RoomResult<()> {
+	pub async fn broadcast_to_room(
+		&self,
+		room_id: &str,
+		message: Message,
+	) -> RoomResult<BroadcastResult> {
 		let room = self
 			.get_room(room_id)
 			.await
 			.ok_or_else(|| RoomError::RoomNotFound(room_id.to_string()))?;
 
-		room.broadcast(message).await
+		Ok(room.broadcast(message).await)
 	}
 
-	/// Broadcast a message to all clients in all rooms
+	/// Broadcasts a message to all clients in a room with a per-client timeout.
+	///
+	/// Slow consumers that do not accept the message within the given timeout
+	/// are treated as failed and removed from the room.
+	///
+	/// Returns [`RoomError::RoomNotFound`] if the room does not exist.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_websockets::room::RoomManager;
+	/// use reinhardt_websockets::{WebSocketConnection, Message};
+	/// use tokio::sync::mpsc;
+	/// use std::sync::Arc;
+	/// use std::time::Duration;
+	///
+	/// # tokio_test::block_on(async {
+	/// let manager = RoomManager::new();
+	/// manager.create_room("timeout_test".to_string()).await;
+	///
+	/// let (tx, _rx) = mpsc::unbounded_channel();
+	/// let conn = Arc::new(WebSocketConnection::new("user1".to_string(), tx));
+	///
+	/// manager.join_room("timeout_test".to_string(), conn).await.unwrap();
+	///
+	/// let msg = Message::text("Hello!".to_string());
+	/// let result = manager
+	///     .broadcast_to_room_with_timeout("timeout_test", msg, Duration::from_secs(5))
+	///     .await
+	///     .unwrap();
+	/// assert!(result.is_complete_success());
+	/// # });
+	/// ```
+	pub async fn broadcast_to_room_with_timeout(
+		&self,
+		room_id: &str,
+		message: Message,
+		send_timeout: Duration,
+	) -> RoomResult<BroadcastResult> {
+		let room = self
+			.get_room(room_id)
+			.await
+			.ok_or_else(|| RoomError::RoomNotFound(room_id.to_string()))?;
+
+		Ok(room.broadcast_with_timeout(message, send_timeout).await)
+	}
+
+	/// Broadcast a message to all clients in all rooms.
+	///
+	/// Returns a [`BroadcastResult`] aggregated across all rooms, reporting
+	/// which clients received the message and which failed.
 	///
 	/// # Examples
 	///
@@ -846,30 +1050,23 @@ impl RoomManager {
 	/// manager.join_room("room2".to_string(), conn2).await.unwrap();
 	///
 	/// let msg = Message::text("System message".to_string());
-	/// manager.broadcast_to_all(msg).await.unwrap();
+	/// let result = manager.broadcast_to_all(msg).await;
+	/// assert!(result.is_complete_success());
 	/// # });
 	/// ```
-	pub async fn broadcast_to_all(&self, message: Message) -> RoomResult<()> {
+	pub async fn broadcast_to_all(&self, message: Message) -> BroadcastResult {
 		let rooms = self.rooms.read().await;
 
-		let mut any_success = false;
-		let mut last_error = None;
+		let mut successful = Vec::new();
+		let mut failed = Vec::new();
 
 		for room in rooms.values() {
-			match room.broadcast(message.clone()).await {
-				Ok(_) => any_success = true,
-				Err(e) => last_error = Some(e),
-			}
+			let result = room.broadcast(message.clone()).await;
+			successful.extend(result.successful);
+			failed.extend(result.failed);
 		}
 
-		// If at least one room received the message successfully, consider it a success
-		if any_success || rooms.is_empty() {
-			Ok(())
-		} else if let Some(err) = last_error {
-			Err(err)
-		} else {
-			Ok(())
-		}
+		BroadcastResult { successful, failed }
 	}
 
 	/// Get all room IDs (alias for room_ids for compatibility)
@@ -904,8 +1101,10 @@ impl Default for RoomManager {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 	use tokio::sync::mpsc;
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_room_new() {
 		let room = Room::new("test_room".to_string());
@@ -967,8 +1166,10 @@ mod tests {
 		assert!(matches!(result.unwrap_err(), RoomError::ClientNotFound(_)));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_room_broadcast() {
+		// Arrange
 		let room = Room::new("broadcast_test".to_string());
 
 		let (tx1, mut rx1) = mpsc::unbounded_channel();
@@ -983,9 +1184,14 @@ mod tests {
 		room.join("user2".to_string(), client2).await.unwrap();
 		room.join("user3".to_string(), client3).await.unwrap();
 
+		// Act
 		let msg = Message::text("Broadcast message".to_string());
-		room.broadcast(msg).await.unwrap();
+		let result = room.broadcast(msg).await;
 
+		// Assert
+		assert!(result.is_complete_success());
+		assert_eq!(result.successful.len(), 3);
+		assert_eq!(result.failure_count(), 0);
 		assert!(matches!(rx1.try_recv(), Ok(Message::Text { .. })));
 		assert!(matches!(rx2.try_recv(), Ok(Message::Text { .. })));
 		assert!(matches!(rx3.try_recv(), Ok(Message::Text { .. })));
@@ -1212,5 +1418,308 @@ mod tests {
 		assert!(!manager.has_room("empty").await);
 		assert!(manager.has_room("occupied").await);
 		assert_eq!(manager.room_count().await, 1);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_broadcast_partial_failure_reports_failed_clients() {
+		// Arrange
+		let room = Room::new("partial_fail".to_string());
+
+		let (tx_alive, mut rx_alive) = mpsc::unbounded_channel();
+		let (tx_dead, _rx_dead) = mpsc::unbounded_channel::<Message>();
+
+		let alive_client = Arc::new(WebSocketConnection::new("alive".to_string(), tx_alive));
+		let dead_client = Arc::new(WebSocketConnection::new("dead".to_string(), tx_dead));
+
+		room.join("alive".to_string(), alive_client).await.unwrap();
+		room.join("dead".to_string(), dead_client).await.unwrap();
+
+		// Simulate dead connection by dropping the receiver
+		drop(_rx_dead);
+
+		// Act
+		let msg = Message::text("test message".to_string());
+		let result = room.broadcast(msg).await;
+
+		// Assert
+		assert!(!result.is_complete_success());
+		assert!(result.is_partial_success());
+		assert!(!result.is_complete_failure());
+		assert_eq!(result.successful.len(), 1);
+		assert!(result.successful.contains(&"alive".to_string()));
+		assert_eq!(result.failure_count(), 1);
+		assert!(result.failed_client_ids().contains(&"dead"));
+		assert!(matches!(rx_alive.try_recv(), Ok(Message::Text { .. })));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_broadcast_partial_failure_removes_dead_connections() {
+		// Arrange
+		let room = Room::new("cleanup".to_string());
+
+		let (tx_alive, _rx_alive) = mpsc::unbounded_channel();
+		let (tx_dead1, _rx_dead1) = mpsc::unbounded_channel::<Message>();
+		let (tx_dead2, _rx_dead2) = mpsc::unbounded_channel::<Message>();
+
+		let alive = Arc::new(WebSocketConnection::new("alive".to_string(), tx_alive));
+		let dead1 = Arc::new(WebSocketConnection::new("dead1".to_string(), tx_dead1));
+		let dead2 = Arc::new(WebSocketConnection::new("dead2".to_string(), tx_dead2));
+
+		room.join("alive".to_string(), alive).await.unwrap();
+		room.join("dead1".to_string(), dead1).await.unwrap();
+		room.join("dead2".to_string(), dead2).await.unwrap();
+		assert_eq!(room.client_count().await, 3);
+
+		// Simulate dead connections
+		drop(_rx_dead1);
+		drop(_rx_dead2);
+
+		// Act
+		let msg = Message::text("cleanup test".to_string());
+		let result = room.broadcast(msg).await;
+
+		// Assert - dead connections are automatically removed
+		assert_eq!(result.failure_count(), 2);
+		assert_eq!(room.client_count().await, 1);
+		assert!(room.has_client("alive").await);
+		assert!(!room.has_client("dead1").await);
+		assert!(!room.has_client("dead2").await);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_broadcast_complete_failure() {
+		// Arrange
+		let room = Room::new("all_dead".to_string());
+
+		let (tx1, _rx1) = mpsc::unbounded_channel::<Message>();
+		let (tx2, _rx2) = mpsc::unbounded_channel::<Message>();
+
+		let client1 = Arc::new(WebSocketConnection::new("c1".to_string(), tx1));
+		let client2 = Arc::new(WebSocketConnection::new("c2".to_string(), tx2));
+
+		room.join("c1".to_string(), client1).await.unwrap();
+		room.join("c2".to_string(), client2).await.unwrap();
+
+		// Simulate all dead connections
+		drop(_rx1);
+		drop(_rx2);
+
+		// Act
+		let msg = Message::text("nobody home".to_string());
+		let result = room.broadcast(msg).await;
+
+		// Assert
+		assert!(result.is_complete_failure());
+		assert!(!result.is_partial_success());
+		assert_eq!(result.failure_count(), 2);
+		assert!(result.successful.is_empty());
+		assert_eq!(room.client_count().await, 0);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_broadcast_empty_room() {
+		// Arrange
+		let room = Room::new("empty_broadcast".to_string());
+
+		// Act
+		let msg = Message::text("echo".to_string());
+		let result = room.broadcast(msg).await;
+
+		// Assert
+		assert!(result.is_complete_success());
+		assert!(result.successful.is_empty());
+		assert!(result.failed.is_empty());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_broadcast_to_room_returns_broadcast_result() {
+		// Arrange
+		let manager = RoomManager::new();
+		manager.create_room("results".to_string()).await;
+
+		let (tx1, _rx1) = mpsc::unbounded_channel();
+		let (tx2, _rx2) = mpsc::unbounded_channel::<Message>();
+		let conn1 = Arc::new(WebSocketConnection::new("ok".to_string(), tx1));
+		let conn2 = Arc::new(WebSocketConnection::new("dead".to_string(), tx2));
+
+		manager
+			.join_room("results".to_string(), conn1)
+			.await
+			.unwrap();
+		manager
+			.join_room("results".to_string(), conn2)
+			.await
+			.unwrap();
+
+		// Simulate dead connection
+		drop(_rx2);
+
+		// Act
+		let msg = Message::text("room broadcast".to_string());
+		let result = manager.broadcast_to_room("results", msg).await.unwrap();
+
+		// Assert
+		assert!(result.is_partial_success());
+		assert_eq!(result.successful.len(), 1);
+		assert_eq!(result.failure_count(), 1);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_broadcast_to_all_aggregates_results() {
+		// Arrange
+		let manager = RoomManager::new();
+		let room1 = manager.create_room("r1".to_string()).await;
+		let room2 = manager.create_room("r2".to_string()).await;
+
+		let (tx1, _rx1) = mpsc::unbounded_channel();
+		let (tx2, _rx2) = mpsc::unbounded_channel::<Message>();
+		let conn1 = Arc::new(WebSocketConnection::new("ok".to_string(), tx1));
+		let conn2 = Arc::new(WebSocketConnection::new("dead".to_string(), tx2));
+
+		room1.join("ok".to_string(), conn1).await.unwrap();
+		room2.join("dead".to_string(), conn2).await.unwrap();
+
+		// Simulate dead connection in room2
+		drop(_rx2);
+
+		// Act
+		let msg = Message::text("global".to_string());
+		let result = manager.broadcast_to_all(msg).await;
+
+		// Assert - aggregated results from both rooms
+		assert!(result.is_partial_success());
+		assert_eq!(result.successful.len(), 1);
+		assert_eq!(result.failure_count(), 1);
+		assert!(result.successful.contains(&"ok".to_string()));
+		assert!(result.failed_client_ids().contains(&"dead"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_broadcast_with_timeout_succeeds_for_responsive_clients() {
+		// Arrange
+		let room = Room::new("timeout_ok".to_string());
+
+		let (tx1, mut rx1) = mpsc::unbounded_channel();
+		let (tx2, mut rx2) = mpsc::unbounded_channel();
+
+		let client1 = Arc::new(WebSocketConnection::new("fast1".to_string(), tx1));
+		let client2 = Arc::new(WebSocketConnection::new("fast2".to_string(), tx2));
+
+		room.join("fast1".to_string(), client1).await.unwrap();
+		room.join("fast2".to_string(), client2).await.unwrap();
+
+		// Act
+		let msg = Message::text("hello with timeout".to_string());
+		let result = room
+			.broadcast_with_timeout(msg, Duration::from_secs(5))
+			.await;
+
+		// Assert
+		assert!(result.is_complete_success());
+		assert_eq!(result.successful.len(), 2);
+		assert!(matches!(rx1.try_recv(), Ok(Message::Text { .. })));
+		assert!(matches!(rx2.try_recv(), Ok(Message::Text { .. })));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_broadcast_with_timeout_removes_dead_connections() {
+		// Arrange
+		let room = Room::new("timeout_dead".to_string());
+
+		let (tx_alive, _rx_alive) = mpsc::unbounded_channel();
+		let (tx_dead, _rx_dead) = mpsc::unbounded_channel::<Message>();
+
+		let alive = Arc::new(WebSocketConnection::new("alive".to_string(), tx_alive));
+		let dead = Arc::new(WebSocketConnection::new("dead".to_string(), tx_dead));
+
+		room.join("alive".to_string(), alive).await.unwrap();
+		room.join("dead".to_string(), dead).await.unwrap();
+
+		// Simulate dead connection
+		drop(_rx_dead);
+
+		// Act
+		let msg = Message::text("test".to_string());
+		let result = room
+			.broadcast_with_timeout(msg, Duration::from_secs(5))
+			.await;
+
+		// Assert
+		assert!(result.is_partial_success());
+		assert_eq!(result.successful.len(), 1);
+		assert_eq!(result.failure_count(), 1);
+		assert_eq!(room.client_count().await, 1);
+		assert!(room.has_client("alive").await);
+		assert!(!room.has_client("dead").await);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_broadcast_with_timeout_empty_room() {
+		// Arrange
+		let room = Room::new("timeout_empty".to_string());
+
+		// Act
+		let msg = Message::text("nobody".to_string());
+		let result = room
+			.broadcast_with_timeout(msg, Duration::from_secs(1))
+			.await;
+
+		// Assert
+		assert!(result.is_complete_success());
+		assert!(result.successful.is_empty());
+		assert!(result.failed.is_empty());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_broadcast_to_room_with_timeout() {
+		// Arrange
+		let manager = RoomManager::new();
+		manager.create_room("timeout_room".to_string()).await;
+
+		let (tx, _rx) = mpsc::unbounded_channel();
+		let conn = Arc::new(WebSocketConnection::new("user1".to_string(), tx));
+
+		manager
+			.join_room("timeout_room".to_string(), conn)
+			.await
+			.unwrap();
+
+		// Act
+		let msg = Message::text("hello".to_string());
+		let result = manager
+			.broadcast_to_room_with_timeout("timeout_room", msg, Duration::from_secs(5))
+			.await
+			.unwrap();
+
+		// Assert
+		assert!(result.is_complete_success());
+		assert_eq!(result.successful.len(), 1);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_broadcast_to_room_with_timeout_nonexistent_room() {
+		// Arrange
+		let manager = RoomManager::new();
+
+		// Act
+		let msg = Message::text("hello".to_string());
+		let result = manager
+			.broadcast_to_room_with_timeout("missing", msg, Duration::from_secs(1))
+			.await;
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(result.unwrap_err(), RoomError::RoomNotFound(_)));
 	}
 }

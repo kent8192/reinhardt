@@ -13,8 +13,11 @@
 
 [![Crates.io](https://img.shields.io/crates/v/reinhardt-web.svg)](https://crates.io/crates/reinhardt-web)
 [![Documentation](https://docs.rs/reinhardt-web/badge.svg)](https://docs.rs/reinhardt-web)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
+[![codecov](https://codecov.io/gh/kent8192/reinhardt-web/graph/badge.svg)](https://codecov.io/gh/kent8192/reinhardt-web)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/kent8192/reinhardt-web)
+
+🌐 **English** | [日本語](docs/readme-langs/README_JA.md) | [简体中文](docs/readme-langs/README_ZH_CN.md) | [繁體中文](docs/readme-langs/README_ZH_TW.md) | [Русский](docs/readme-langs/README_RU.md) | [Українська](docs/readme-langs/README_UK.md) | [فارسی](docs/readme-langs/README_FA.md) | [العربية](docs/readme-langs/README_AR.md)
 
 </div>
 
@@ -49,7 +52,7 @@ Reinhardt brings together the best of three worlds:
 
 ## ✨ Key Features
 
-- **Type-Safe ORM** with compile-time validation (SeaQuery v1.0.0-rc)
+- **Type-Safe ORM** with compile-time validation (reinhardt-query)
 - **Powerful Serializers** with automatic validation (serde + validator)
 - **FastAPI-Style DI** with type-safe dependency injection and caching
 - **ViewSets** for rapid CRUD API development
@@ -538,7 +541,7 @@ async fn create_user_with_transaction(
 }
 ```
 
-**Note**: Reinhardt uses [SeaQuery v1.0.0-rc](https://crates.io/crates/sea-query) for SQL operations. The `#[derive(Model)]` macro automatically generates Model trait implementations, type-safe field accessors, and global model registry registration.
+**Note**: Reinhardt uses reinhardt-query for SQL operations. The `#[derive(Model)]` macro automatically generates Model trait implementations, type-safe field accessors, and global model registry registration.
 
 Register in `src/config/apps.rs`:
 
@@ -984,7 +987,7 @@ Reinhardt offers modular components you can mix and match:
 | Commands            | `reinhardt-commands`      | Management CLI tools (startproject, etc.)   |
 | Shortcuts           | `reinhardt-shortcuts`     | Common utility functions                    |
 | **Database**        |                           |                                             |
-| ORM                 | `reinhardt-db`            | SeaQuery v1.0.0-rc integration             |
+| ORM                 | `reinhardt-db`            | reinhardt-query integration                |
 | **Authentication**  |                           |                                             |
 | Auth                | `reinhardt-auth`          | JWT, Token, Session, Basic auth, User models|
 | **REST API**        |                           |                                             |
@@ -1019,8 +1022,8 @@ Reinhardt offers modular components you can mix and match:
 Reinhardt is a community-driven project. Here's where you can get help:
 
 - 💬 **Discord**: Join our Discord server for real-time chat (coming soon)
-- 💭 **GitHub Discussions**: [Ask questions and share ideas](https://github.com/kent8192/reinhardt-rs/discussions)
-- 🐛 **Issues**: [Report bugs](https://github.com/kent8192/reinhardt-rs/issues)
+- 💭 **GitHub Discussions**: [Ask questions and share ideas](https://github.com/kent8192/reinhardt-web/discussions)
+- 🐛 **Issues**: [Report bugs](https://github.com/kent8192/reinhardt-web/issues)
 - 📖 **Documentation**: [Read the guides](docs/)
 
 Before asking, please check:
@@ -1039,14 +1042,19 @@ We love contributions! Please read our [Contributing Guide](CONTRIBUTING.md) to 
 - [Testing Guidelines](CONTRIBUTING.md#testing-guidelines)
 - [Commit Guidelines](CONTRIBUTING.md#commit-guidelines)
 
+## ⭐ Star History
+
+<a href="https://star-history.com/#kent8192/reinhardt-web&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=kent8192/reinhardt-web&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=kent8192/reinhardt-web&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=kent8192/reinhardt-web&type=Date" width="600" />
+ </picture>
+</a>
+
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
+This project is licensed under the [BSD 3-Clause License](LICENSE).
 
 ### Third-Party Attribution
 

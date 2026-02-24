@@ -2,7 +2,7 @@
 //!
 //! This module provides Django-inspired aggregation functionality.
 
-use sea_query::{Alias, Iden};
+use reinhardt_query::prelude::{Alias, Iden};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -208,7 +208,7 @@ impl Aggregate {
 		self
 	}
 
-	/// Convert to SQL string using Sea-Query for safe identifier escaping
+	/// Convert to SQL string using reinhardt-query for safe identifier escaping
 	pub fn to_sql(&self) -> String {
 		let mut parts = Vec::new();
 
@@ -222,7 +222,7 @@ impl Aggregate {
 
 		match &self.field {
 			Some(field) => {
-				// Use Sea-Query's Alias to safely escape the identifier
+				// Use reinhardt-query's Alias to safely escape the identifier
 				let iden = Alias::new(field);
 				parts.push(iden.to_string());
 			}
@@ -242,7 +242,7 @@ impl Aggregate {
 	}
 
 	/// Convert to SQL string without alias (for use in SELECT expressions with expr_as)
-	/// Uses Sea-Query for safe identifier escaping
+	/// Uses reinhardt-query for safe identifier escaping
 	pub fn to_sql_expr(&self) -> String {
 		let mut parts = Vec::new();
 
@@ -255,7 +255,7 @@ impl Aggregate {
 
 		match &self.field {
 			Some(field) => {
-				// Use Sea-Query's Alias to safely escape the identifier
+				// Use reinhardt-query's Alias to safely escape the identifier
 				let iden = Alias::new(field);
 				parts.push(iden.to_string());
 			}
@@ -359,7 +359,7 @@ mod tests {
 
 	#[test]
 	fn test_aggregate_escapes_identifiers() {
-		// Test that identifiers are properly escaped using Sea-Query
+		// Test that identifiers are properly escaped using reinhardt-query
 		let agg = Aggregate::sum("user_id");
 		let sql = agg.to_sql();
 

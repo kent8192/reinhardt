@@ -5,9 +5,11 @@
 
 use reinhardt_commands::{CommandContext, MigrateCommand};
 use reinhardt_db::migrations::{Migration, Operation};
-use reinhardt_test::fixtures::{postgres_container, TestMigrationSource};
+use reinhardt_query::prelude::{
+	Alias, ColumnDef, PostgresQueryBuilder, Query, QueryStatementBuilder, Value,
+};
+use reinhardt_test::fixtures::{TestMigrationSource, postgres_container};
 use rstest::*;
-use sea_query::{Alias, ColumnDef, PostgresQueryBuilder, Table};
 use sqlx::PgPool;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -66,18 +68,19 @@ impl MigrateCommandFixture {
 		name: &str,
 		table_name: &str,
 	) {
-		// Create a simple table with id and name columns using SeaQuery
-		let create_table = Table::create()
+		// Create a simple table with id and name columns using reinhardt-query
+		let mut create_table_stmt = Query::create_table();
+		let create_table = create_table_stmt
 			.table(Alias::new(table_name))
 			.col(
 				ColumnDef::new(Alias::new("id"))
 					.integer()
-					.not_null()
-					.auto_increment()
-					.primary_key(),
+					.not_null(true)
+					.auto_increment(true)
+					.primary_key(true),
 			)
-			.col(ColumnDef::new(Alias::new("name")).string().not_null())
-			.to_string(PostgresQueryBuilder);
+			.col(ColumnDef::new(Alias::new("name")).string().not_null(true))
+			.to_string(PostgresQueryBuilder::new());
 
 		let operation = Operation::RunSQL {
 			sql: create_table,
@@ -151,51 +154,61 @@ pub(crate) struct PostgresWithSchema {
 }
 
 impl PostgresWithSchema {
-	/// Create tables for introspect testing using SeaQuery
+	/// Create tables for introspect testing using reinhardt-query
 	pub(crate) async fn create_test_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
 		// Create users table
-		let create_users = Table::create()
+		let mut create_users_stmt = Query::create_table();
+		let create_users = create_users_stmt
 			.table(Alias::new("users"))
 			.col(
 				ColumnDef::new(Alias::new("id"))
 					.integer()
-					.not_null()
-					.auto_increment()
-					.primary_key(),
+					.not_null(true)
+					.auto_increment(true)
+					.primary_key(true),
 			)
-			.col(ColumnDef::new(Alias::new("username")).string().not_null())
-			.col(ColumnDef::new(Alias::new("email")).string().not_null())
+			.col(
+				ColumnDef::new(Alias::new("username"))
+					.string()
+					.not_null(true),
+			)
+			.col(ColumnDef::new(Alias::new("email")).string().not_null(true))
 			.col(
 				ColumnDef::new(Alias::new("is_active"))
 					.boolean()
-					.not_null()
-					.default(true),
+					.not_null(true)
+					.default(true.into()),
 			)
 			.col(ColumnDef::new(Alias::new("created_at")).timestamp_with_time_zone())
-			.to_string(PostgresQueryBuilder);
+			.to_string(PostgresQueryBuilder::new());
 
 		sqlx::query(&create_users).execute(pool).await?;
 
 		// Create posts table with foreign key
-		let create_posts = Table::create()
+		let mut create_posts_stmt = Query::create_table();
+		let create_posts = create_posts_stmt
 			.table(Alias::new("posts"))
 			.col(
 				ColumnDef::new(Alias::new("id"))
 					.integer()
-					.not_null()
-					.auto_increment()
-					.primary_key(),
+					.not_null(true)
+					.auto_increment(true)
+					.primary_key(true),
 			)
-			.col(ColumnDef::new(Alias::new("title")).string().not_null())
+			.col(ColumnDef::new(Alias::new("title")).string().not_null(true))
 			.col(ColumnDef::new(Alias::new("content")).text())
-			.col(ColumnDef::new(Alias::new("author_id")).integer().not_null())
+			.col(
+				ColumnDef::new(Alias::new("author_id"))
+					.integer()
+					.not_null(true),
+			)
 			.col(
 				ColumnDef::new(Alias::new("published"))
 					.boolean()
-					.not_null()
-					.default(false),
+					.not_null(true)
+					.default(false.into()),
 			)
-			.to_string(PostgresQueryBuilder);
+			.to_string(PostgresQueryBuilder::new());
 
 		sqlx::query(&create_posts).execute(pool).await?;
 
@@ -207,19 +220,28 @@ impl PostgresWithSchema {
 		.await?;
 
 		// Create comments table
-		let create_comments = Table::create()
+		let mut create_comments_stmt = Query::create_table();
+		let create_comments = create_comments_stmt
 			.table(Alias::new("comments"))
 			.col(
 				ColumnDef::new(Alias::new("id"))
 					.integer()
-					.not_null()
-					.auto_increment()
-					.primary_key(),
+					.not_null(true)
+					.auto_increment(true)
+					.primary_key(true),
 			)
-			.col(ColumnDef::new(Alias::new("post_id")).integer().not_null())
-			.col(ColumnDef::new(Alias::new("user_id")).integer().not_null())
-			.col(ColumnDef::new(Alias::new("body")).text().not_null())
-			.to_string(PostgresQueryBuilder);
+			.col(
+				ColumnDef::new(Alias::new("post_id"))
+					.integer()
+					.not_null(true),
+			)
+			.col(
+				ColumnDef::new(Alias::new("user_id"))
+					.integer()
+					.not_null(true),
+			)
+			.col(ColumnDef::new(Alias::new("body")).text().not_null(true))
+			.to_string(PostgresQueryBuilder::new());
 
 		sqlx::query(&create_comments).execute(pool).await?;
 
@@ -610,11 +632,9 @@ pub fn plugin_manifest_with_plugins() -> PluginManifestFixture {
 // Test Data Injection Helpers
 // ============================================================================
 
-/// Helper to insert test data into a PostgreSQL database using SeaQuery
+/// Helper to insert test data into a PostgreSQL database using reinhardt-query
 #[allow(dead_code)] // May be used in future tests
 pub(crate) async fn insert_test_users(pool: &PgPool) -> Result<Vec<i32>, sqlx::Error> {
-	use sea_query::Query;
-
 	let mut user_ids = vec![];
 
 	// Insert test users
@@ -625,12 +645,13 @@ pub(crate) async fn insert_test_users(pool: &PgPool) -> Result<Vec<i32>, sqlx::E
 	];
 
 	for (username, email) in users {
-		let insert = Query::insert()
+		let mut insert_stmt = Query::insert();
+		let insert = insert_stmt
 			.into_table(Alias::new("users"))
 			.columns([Alias::new("username"), Alias::new("email")])
-			.values_panic([username.into(), email.into()])
+			.values_panic([Value::from(username), Value::from(email)])
 			.returning_col(Alias::new("id"))
-			.to_string(PostgresQueryBuilder);
+			.to_string(PostgresQueryBuilder::new());
 
 		let row: (i32,) = sqlx::query_as(&insert).fetch_one(pool).await?;
 		user_ids.push(row.0);
@@ -639,14 +660,12 @@ pub(crate) async fn insert_test_users(pool: &PgPool) -> Result<Vec<i32>, sqlx::E
 	Ok(user_ids)
 }
 
-/// Helper to insert test posts into a PostgreSQL database using SeaQuery
+/// Helper to insert test posts into a PostgreSQL database using reinhardt-query
 #[allow(dead_code)] // May be used in future tests
 pub(crate) async fn insert_test_posts(
 	pool: &PgPool,
 	author_ids: &[i32],
 ) -> Result<Vec<i32>, sqlx::Error> {
-	use sea_query::Query;
-
 	let mut post_ids = vec![];
 
 	let posts = [
@@ -658,7 +677,8 @@ pub(crate) async fn insert_test_posts(
 	for (i, (title, content, published)) in posts.iter().enumerate() {
 		let author_id = author_ids.get(i % author_ids.len()).copied().unwrap_or(1);
 
-		let insert = Query::insert()
+		let mut insert_stmt = Query::insert();
+		let insert = insert_stmt
 			.into_table(Alias::new("posts"))
 			.columns([
 				Alias::new("title"),
@@ -667,13 +687,13 @@ pub(crate) async fn insert_test_posts(
 				Alias::new("published"),
 			])
 			.values_panic([
-				(*title).into(),
-				(*content).into(),
-				author_id.into(),
-				(*published).into(),
+				Value::from(*title),
+				Value::from(*content),
+				Value::from(author_id),
+				Value::from(*published),
 			])
 			.returning_col(Alias::new("id"))
-			.to_string(PostgresQueryBuilder);
+			.to_string(PostgresQueryBuilder::new());
 
 		let row: (i32,) = sqlx::query_as(&insert).fetch_one(pool).await?;
 		post_ids.push(row.0);

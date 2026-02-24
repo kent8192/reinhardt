@@ -148,8 +148,13 @@ pub(crate) fn expand_derive(input: DeriveInput) -> Result<TokenStream> {
 		})?;
 		quote! {
 			.filter(move |item| {
-				let filter_fn = #filter_tokens;
-				filter_fn(item)
+				match item {
+					Ok(ref val) => {
+						let filter_fn = #filter_tokens;
+						filter_fn(val)
+					}
+					Err(_) => true,
+				}
 			})
 		}
 	} else {
@@ -164,41 +169,45 @@ pub(crate) fn expand_derive(input: DeriveInput) -> Result<TokenStream> {
 			async fn subscribe<'ctx>(
 				&self,
 				ctx: &async_graphql::Context<'ctx>,
-			) -> impl futures_util::Stream<Item = #graphql_type> + 'ctx {
+			) -> async_graphql::Result<impl futures_util::Stream<Item = Result<#graphql_type, async_graphql::Error>> + 'ctx> {
 				use tokio_stream::StreamExt;
 
 				// Get gRPC client from context
 				let client = ctx
 					.data::<#service_client_type<tonic::transport::Channel>>()
-					.expect("gRPC client not found in context")
+					.map_err(|_| async_graphql::Error::new(format!(
+						"Internal server error: {} not found in context",
+						stringify!(#service_client_type)
+					)))?
 					.clone();
 
 				// Call gRPC streaming method
 				let stream = match client.#method_name(Default::default()).await {
 					Ok(response) => response.into_inner(),
 					Err(e) => {
-						eprintln!("gRPC call failed: {:?}", e);
-						return Box::pin(tokio_stream::empty());
+						return Ok(Box::pin(tokio_stream::once(
+							Err(async_graphql::Error::new(format!("gRPC call failed: {:?}", e)))
+						)));
 					}
 				};
 
 				// Convert Proto events to GraphQL events
-				Box::pin(stream
-					.filter_map(move |result: Result<#proto_type, tonic::Status>| async move {
+				Ok(Box::pin(stream
+					.map(move |result: Result<#proto_type, tonic::Status>| {
 						match result {
 							Ok(proto_event) => {
 								// Convert proto to GraphQL type using Into trait
 								let graphql_event: #graphql_type = proto_event.into();
-								Some(graphql_event)
+								Ok(graphql_event)
 							}
-							Err(e) => {
-								eprintln!("Stream error: {:?}", e);
-								None
-							}
+							// Fixes #818
+							Err(e) => Err(async_graphql::Error::new(
+								format!("Stream error: {:?}", e)
+							)),
 						}
 					})
 					#filter_code
-				)
+				))
 			}
 		}
 	};
@@ -257,7 +266,7 @@ mod tests {
 		assert!(output_str.contains("User"));
 
 		// Check stream processing
-		assert!(output_str.contains("filter_map"));
+		assert!(output_str.contains(". map"));
 		assert!(output_str.contains("into_inner"));
 	}
 
@@ -338,5 +347,38 @@ mod tests {
 		let result = expand_derive(input);
 		assert!(result.is_err());
 		assert!(result.unwrap_err().to_string().contains("type = \"...\""));
+	}
+
+	#[test]
+	fn test_generated_code_uses_error_handling_not_expect() {
+		// Arrange
+		let input: DeriveInput = parse_quote! {
+			#[grpc(service = "proto::UserServiceClient", method = "subscribe_user_events", proto_type = "proto::UserEvent")]
+			#[graphql(type = "User")]
+			struct UserCreatedSubscription;
+		};
+
+		// Act
+		let result = expand_derive(input);
+		assert!(result.is_ok());
+		let output_str = result.unwrap().to_string();
+
+		// Assert - generated code must NOT contain .expect() (DoS risk via panic)
+		assert!(
+			!output_str.contains(".expect("),
+			"Generated code must not use .expect() - use map_err for graceful error handling"
+		);
+
+		// Assert - generated code must use map_err for proper error propagation
+		assert!(
+			output_str.contains("map_err"),
+			"Generated code must use map_err for error handling"
+		);
+
+		// Assert - return type must be async_graphql::Result (not bare Stream)
+		assert!(
+			output_str.contains("async_graphql :: Result"),
+			"Return type must be async_graphql::Result for proper error propagation"
+		);
 	}
 }

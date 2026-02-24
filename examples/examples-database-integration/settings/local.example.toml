@@ -1,0 +1,12 @@
+# Local development settings
+# Copy to local.toml: cp local.example.toml local.toml
+debug = true
+secret_key = "local-development-secret-key"
+
+[database]
+engine = "postgresql"
+host = "localhost"
+port = 5432
+name = "examples_database_integration_dev"
+user = "postgres"
+password = "postgres"

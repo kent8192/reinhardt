@@ -107,38 +107,44 @@ impl MockHttpRequest {
 	/// Set the request body as JSON.
 	///
 	/// This serializes the value to JSON and sets the appropriate Content-Type header.
+	///
+	/// # Panics
+	///
+	/// Panics if the value cannot be serialized to JSON. Since this is a test
+	/// utility, invalid input indicates a test setup error that should be
+	/// caught immediately.
+	// Fixes #876
 	pub fn with_json<T: Serialize>(mut self, body: &T) -> Self {
-		match serde_json::to_vec(body) {
-			Ok(bytes) => {
-				self.body = Bytes::from(bytes);
-				self.headers.insert(
-					http::header::CONTENT_TYPE,
-					HeaderValue::from_static("application/json"),
-				);
-			}
-			Err(_) => {
-				// Keep empty body on serialization error
-			}
-		}
+		let bytes = serde_json::to_vec(body).unwrap_or_else(|err| {
+			panic!("MockHttpRequest::with_json: failed to serialize body to JSON: {err}")
+		});
+		self.body = Bytes::from(bytes);
+		self.headers.insert(
+			http::header::CONTENT_TYPE,
+			HeaderValue::from_static("application/json"),
+		);
 		self
 	}
 
 	/// Set the request body as form data.
 	///
 	/// This serializes the value as URL-encoded form data.
+	///
+	/// # Panics
+	///
+	/// Panics if the value cannot be serialized as form data. Since this is a
+	/// test utility, invalid input indicates a test setup error that should be
+	/// caught immediately.
+	// Fixes #876
 	pub fn with_form<T: Serialize>(mut self, body: &T) -> Self {
-		match serde_urlencoded::to_string(body) {
-			Ok(encoded) => {
-				self.body = Bytes::from(encoded);
-				self.headers.insert(
-					http::header::CONTENT_TYPE,
-					HeaderValue::from_static("application/x-www-form-urlencoded"),
-				);
-			}
-			Err(_) => {
-				// Keep empty body on serialization error
-			}
-		}
+		let encoded = serde_urlencoded::to_string(body).unwrap_or_else(|err| {
+			panic!("MockHttpRequest::with_form: failed to serialize body as form data: {err}")
+		});
+		self.body = Bytes::from(encoded);
+		self.headers.insert(
+			http::header::CONTENT_TYPE,
+			HeaderValue::from_static("application/x-www-form-urlencoded"),
+		);
 		self
 	}
 

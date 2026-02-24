@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-throttling"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.3"
 description = "Throttling and rate limiting for Reinhardt framework"
 edition.workspace = true
 license.workspace = true
@@ -25,3 +25,4 @@ maxminddb = { version = "0.26", optional = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
 tokio-test = { workspace = true }
+rstest = { workspace = true }

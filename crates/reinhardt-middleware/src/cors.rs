@@ -72,11 +72,14 @@ impl CorsMiddleware {
 	/// let middleware = CorsMiddleware::new(config);
 	/// let handler = Arc::new(TestHandler);
 	///
+	/// let mut headers = HeaderMap::new();
+	/// headers.insert("origin", "https://example.com".parse().unwrap());
+	///
 	/// let request = Request::builder()
 	///     .method(Method::GET)
 	///     .uri("/api/data")
 	///     .version(Version::HTTP_11)
-	///     .headers(HeaderMap::new())
+	///     .headers(headers)
 	///     .body(Bytes::new())
 	///     .build()
 	///     .unwrap();
@@ -139,15 +142,27 @@ impl CorsMiddleware {
 #[async_trait]
 impl Middleware for CorsMiddleware {
 	async fn process(&self, request: Request, next: Arc<dyn Handler>) -> Result<Response> {
+		// Extract request Origin header for validation
+		let request_origin = request
+			.headers
+			.get(hyper::header::ORIGIN)
+			.and_then(|v| v.to_str().ok())
+			.map(|s| s.to_string());
+
+		// Determine the allowed origin value for this request
+		let allowed_origin = self.resolve_origin(request_origin.as_deref());
+
 		// Handle preflight OPTIONS request
 		if request.method.as_str() == "OPTIONS" {
 			let mut response = Response::no_content();
 
-			response.headers.insert(
-				hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN,
-				hyper::header::HeaderValue::from_str(&self.config.allow_origins.join(", "))
-					.unwrap_or_else(|_| hyper::header::HeaderValue::from_static("*")),
-			);
+			if let Some(origin) = &allowed_origin {
+				response.headers.insert(
+					hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+					hyper::header::HeaderValue::from_str(origin)
+						.unwrap_or_else(|_| hyper::header::HeaderValue::from_static("*")),
+				);
+			}
 
 			response.headers.insert(
 				hyper::header::ACCESS_CONTROL_ALLOW_METHODS,
@@ -176,17 +191,29 @@ impl Middleware for CorsMiddleware {
 				);
 			}
 
+			// Add Vary: Origin when origin depends on request
+			if self.config.allow_origins.len() > 1
+				|| !self.config.allow_origins.contains(&"*".to_string())
+			{
+				response.headers.insert(
+					hyper::header::VARY,
+					hyper::header::HeaderValue::from_static("Origin"),
+				);
+			}
+
 			return Ok(response);
 		}
 
 		// Process request and add CORS headers to response
 		let mut response = next.handle(request).await?;
 
-		response.headers.insert(
-			hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN,
-			hyper::header::HeaderValue::from_str(&self.config.allow_origins.join(", "))
-				.unwrap_or_else(|_| hyper::header::HeaderValue::from_static("*")),
-		);
+		if let Some(origin) = &allowed_origin {
+			response.headers.insert(
+				hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+				hyper::header::HeaderValue::from_str(origin)
+					.unwrap_or_else(|_| hyper::header::HeaderValue::from_static("*")),
+			);
+		}
 
 		if self.config.allow_credentials {
 			response.headers.insert(
@@ -195,7 +222,46 @@ impl Middleware for CorsMiddleware {
 			);
 		}
 
+		// Add Vary: Origin when origin depends on request
+		if self.config.allow_origins.len() > 1
+			|| !self.config.allow_origins.contains(&"*".to_string())
+		{
+			response.headers.insert(
+				hyper::header::VARY,
+				hyper::header::HeaderValue::from_static("Origin"),
+			);
+		}
+
 		Ok(response)
+	}
+}
+
+impl CorsMiddleware {
+	/// Resolve the origin to include in the response based on the request origin.
+	///
+	/// Per the CORS specification (Fetch Standard), `Access-Control-Allow-Origin`
+	/// must be either `*`, a single origin, or `null`. Multiple origins in a
+	/// single header value are not valid.
+	fn resolve_origin(&self, request_origin: Option<&str>) -> Option<String> {
+		// Wildcard: allow all origins
+		if self.config.allow_origins.contains(&"*".to_string()) {
+			// When credentials are enabled, wildcard is not allowed per spec;
+			// reflect the request origin instead
+			if self.config.allow_credentials {
+				return request_origin.map(|o| o.to_string());
+			}
+			return Some("*".to_string());
+		}
+
+		// Check if the request origin matches any allowed origin
+		if let Some(origin) = request_origin
+			&& self.config.allow_origins.iter().any(|o| o == origin)
+		{
+			return Some(origin.to_string());
+		}
+
+		// No match: omit the CORS origin header
+		None
 	}
 }
 
@@ -214,8 +280,27 @@ mod tests {
 		}
 	}
 
+	/// Helper to create a request with an Origin header
+	fn create_request_with_origin(method: Method, uri: &str, origin: &str) -> Request {
+		let mut headers = HeaderMap::new();
+		headers.insert(
+			hyper::header::ORIGIN,
+			hyper::header::HeaderValue::from_str(origin).unwrap(),
+		);
+
+		Request::builder()
+			.method(method)
+			.uri(uri)
+			.version(Version::HTTP_11)
+			.headers(headers)
+			.body(Bytes::new())
+			.build()
+			.unwrap()
+	}
+
 	#[tokio::test]
-	async fn test_preflight_request() {
+	async fn test_preflight_request_with_matching_origin() {
+		// Arrange
 		let config = CorsConfig {
 			allow_origins: vec!["https://example.com".to_string()],
 			allow_methods: vec!["GET".to_string(), "POST".to_string()],
@@ -226,26 +311,24 @@ mod tests {
 		let middleware = CorsMiddleware::new(config);
 		let handler = Arc::new(TestHandler);
 
-		let request = Request::builder()
-			.method(Method::OPTIONS)
-			.uri("/api/test")
-			.version(Version::HTTP_11)
-			.headers(HeaderMap::new())
-			.body(Bytes::new())
-			.build()
-			.unwrap();
+		let request =
+			create_request_with_origin(Method::OPTIONS, "/api/test", "https://example.com");
 
+		// Act
 		let response = middleware.process(request, handler).await.unwrap();
 
-		// Preflight returns 204 No Content
+		// Assert
 		assert_eq!(response.status, StatusCode::NO_CONTENT);
 
-		// CORS headers should be present
-		assert!(
+		// Origin header should reflect the matching origin (not multiple)
+		assert_eq!(
 			response
 				.headers
-				.contains_key(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+				.get(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+				.unwrap(),
+			"https://example.com"
 		);
+
 		assert!(
 			response
 				.headers
@@ -256,18 +339,6 @@ mod tests {
 				.headers
 				.contains_key(hyper::header::ACCESS_CONTROL_ALLOW_HEADERS)
 		);
-		assert!(
-			response
-				.headers
-				.contains_key(hyper::header::ACCESS_CONTROL_MAX_AGE)
-		);
-		assert!(
-			response
-				.headers
-				.contains_key(hyper::header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
-		);
-
-		// Check max age value
 		assert_eq!(
 			response
 				.headers
@@ -275,8 +346,6 @@ mod tests {
 				.unwrap(),
 			"7200"
 		);
-
-		// Check credentials header
 		assert_eq!(
 			response
 				.headers
@@ -284,10 +353,13 @@ mod tests {
 				.unwrap(),
 			"true"
 		);
+		// Vary: Origin should be present when origin list is not wildcard
+		assert_eq!(response.headers.get(hyper::header::VARY).unwrap(), "Origin");
 	}
 
 	#[tokio::test]
-	async fn test_regular_request_with_cors_headers() {
+	async fn test_regular_request_with_matching_origin() {
+		// Arrange
 		let config = CorsConfig {
 			allow_origins: vec!["https://app.example.com".to_string()],
 			allow_methods: vec!["GET".to_string()],
@@ -298,24 +370,16 @@ mod tests {
 		let middleware = CorsMiddleware::new(config);
 		let handler = Arc::new(TestHandler);
 
-		let request = Request::builder()
-			.method(Method::GET)
-			.uri("/api/data")
-			.version(Version::HTTP_11)
-			.headers(HeaderMap::new())
-			.body(Bytes::new())
-			.build()
-			.unwrap();
+		let request =
+			create_request_with_origin(Method::GET, "/api/data", "https://app.example.com");
 
+		// Act
 		let response = middleware.process(request, handler).await.unwrap();
 
-		// Regular request returns handler's status
+		// Assert
 		assert_eq!(response.status, StatusCode::OK);
-
-		// Response body should be preserved
 		assert_eq!(response.body, Bytes::from("test response"));
 
-		// CORS origin header should be present
 		assert_eq!(
 			response
 				.headers
@@ -324,20 +388,51 @@ mod tests {
 			"https://app.example.com"
 		);
 
-		// Credentials header should not be present (allow_credentials = false)
 		assert!(
 			!response
 				.headers
 				.contains_key(hyper::header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
 		);
+
+		// Vary: Origin should be present
+		assert_eq!(response.headers.get(hyper::header::VARY).unwrap(), "Origin");
 	}
 
 	#[tokio::test]
-	async fn test_permissive_mode() {
+	async fn test_request_with_non_matching_origin_omits_cors_headers() {
+		// Arrange
+		let config = CorsConfig {
+			allow_origins: vec!["https://allowed.example.com".to_string()],
+			allow_methods: vec!["GET".to_string()],
+			allow_headers: vec!["Content-Type".to_string()],
+			allow_credentials: false,
+			max_age: None,
+		};
+		let middleware = CorsMiddleware::new(config);
+		let handler = Arc::new(TestHandler);
+
+		let request =
+			create_request_with_origin(Method::GET, "/api/data", "https://evil.example.com");
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert: request is still processed, but no CORS origin header
+		assert_eq!(response.status, StatusCode::OK);
+		assert!(
+			response
+				.headers
+				.get(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+				.is_none()
+		);
+	}
+
+	#[tokio::test]
+	async fn test_permissive_mode_wildcard() {
+		// Arrange
 		let middleware = CorsMiddleware::permissive();
 		let handler = Arc::new(TestHandler);
 
-		// Test OPTIONS request
 		let request = Request::builder()
 			.method(Method::OPTIONS)
 			.uri("/test")
@@ -347,21 +442,22 @@ mod tests {
 			.build()
 			.unwrap();
 
+		// Act
 		let response = middleware.process(request, handler.clone()).await.unwrap();
 
+		// Assert
 		assert_eq!(response.status, StatusCode::NO_CONTENT);
-		assert!(
+
+		// Wildcard origin
+		assert_eq!(
 			response
 				.headers
-				.contains_key(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN)
-		);
-		assert!(
-			response
-				.headers
-				.contains_key(hyper::header::ACCESS_CONTROL_ALLOW_METHODS)
+				.get(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+				.unwrap(),
+			"*"
 		);
 
-		// Permissive mode should allow common methods
+		// Methods should be listed
 		let methods_header = response
 			.headers
 			.get(hyper::header::ACCESS_CONTROL_ALLOW_METHODS)
@@ -375,7 +471,8 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn test_multiple_origins() {
+	async fn test_multiple_allowed_origins_reflects_matching_one() {
+		// Arrange
 		let config = CorsConfig {
 			allow_origins: vec![
 				"https://app1.example.com".to_string(),
@@ -389,34 +486,137 @@ mod tests {
 		let middleware = CorsMiddleware::new(config);
 		let handler = Arc::new(TestHandler);
 
-		let request = Request::builder()
-			.method(Method::GET)
-			.uri("/api/resource")
-			.version(Version::HTTP_11)
-			.headers(HeaderMap::new())
-			.body(Bytes::new())
-			.build()
-			.unwrap();
+		let request =
+			create_request_with_origin(Method::GET, "/api/resource", "https://app2.example.com");
 
+		// Act
 		let response = middleware.process(request, handler).await.unwrap();
 
-		// Multiple origins should be joined with comma
-		let origin_header = response
-			.headers
-			.get(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN)
-			.unwrap()
-			.to_str()
-			.unwrap();
-		assert!(origin_header.contains("https://app1.example.com"));
-		assert!(origin_header.contains("https://app2.example.com"));
+		// Assert: only the matching origin is reflected (not both joined)
+		assert_eq!(
+			response
+				.headers
+				.get(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+				.unwrap(),
+			"https://app2.example.com"
+		);
 
-		// Credentials header should be present
 		assert_eq!(
 			response
 				.headers
 				.get(hyper::header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
 				.unwrap(),
 			"true"
+		);
+
+		// Vary: Origin must be present
+		assert_eq!(response.headers.get(hyper::header::VARY).unwrap(), "Origin");
+	}
+
+	#[tokio::test]
+	async fn test_multiple_origins_no_match_omits_origin_header() {
+		// Arrange
+		let config = CorsConfig {
+			allow_origins: vec![
+				"https://app1.example.com".to_string(),
+				"https://app2.example.com".to_string(),
+			],
+			allow_methods: vec!["GET".to_string()],
+			allow_headers: vec!["Content-Type".to_string()],
+			allow_credentials: false,
+			max_age: None,
+		};
+		let middleware = CorsMiddleware::new(config);
+		let handler = Arc::new(TestHandler);
+
+		let request = create_request_with_origin(
+			Method::GET,
+			"/api/resource",
+			"https://attacker.example.com",
+		);
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert: no origin header for non-matching origin
+		assert!(
+			response
+				.headers
+				.get(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+				.is_none()
+		);
+	}
+
+	#[tokio::test]
+	async fn test_wildcard_with_credentials_reflects_origin() {
+		// Arrange: wildcard + credentials requires reflecting origin per spec
+		let config = CorsConfig {
+			allow_origins: vec!["*".to_string()],
+			allow_methods: vec!["GET".to_string()],
+			allow_headers: vec!["Content-Type".to_string()],
+			allow_credentials: true,
+			max_age: None,
+		};
+		let middleware = CorsMiddleware::new(config);
+		let handler = Arc::new(TestHandler);
+
+		let request =
+			create_request_with_origin(Method::GET, "/api/data", "https://any-origin.example.com");
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert: should reflect the origin, not "*" (credentials mode)
+		assert_eq!(
+			response
+				.headers
+				.get(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+				.unwrap(),
+			"https://any-origin.example.com"
+		);
+
+		assert_eq!(
+			response
+				.headers
+				.get(hyper::header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+				.unwrap(),
+			"true"
+		);
+	}
+
+	#[tokio::test]
+	async fn test_request_without_origin_header() {
+		// Arrange
+		let config = CorsConfig {
+			allow_origins: vec!["https://example.com".to_string()],
+			allow_methods: vec!["GET".to_string()],
+			allow_headers: vec!["Content-Type".to_string()],
+			allow_credentials: false,
+			max_age: None,
+		};
+		let middleware = CorsMiddleware::new(config);
+		let handler = Arc::new(TestHandler);
+
+		// No Origin header (same-origin request)
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/api/data")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert: no origin header when no Origin in request
+		assert_eq!(response.status, StatusCode::OK);
+		assert!(
+			response
+				.headers
+				.get(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+				.is_none()
 		);
 	}
 }

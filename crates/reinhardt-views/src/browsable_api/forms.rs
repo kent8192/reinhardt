@@ -1,5 +1,6 @@
 //! Form generation for API endpoints
 
+use reinhardt_core::security::xss::{escape_html, escape_html_attr};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -169,18 +170,19 @@ impl FormGenerator {
 	pub fn generate(&self) -> Result<String, String> {
 		let mut html = String::new();
 
-		// Form opening tag
+		// Form opening tag - escape action and method for HTML attributes
 		html.push_str(&format!(
 			r#"<form action="{}" method="{}" class="api-form">"#,
-			self.action, self.method
+			escape_html_attr(&self.action),
+			escape_html_attr(&self.method)
 		));
 		html.push('\n');
 
-		// CSRF token
+		// CSRF token - escape for HTML attribute
 		if let Some(token) = &self.csrf_token {
 			html.push_str(&format!(
 				r#"  <input type="hidden" name="csrfmiddlewaretoken" value="{}">"#,
-				token
+				escape_html_attr(token)
 			));
 			html.push('\n');
 		}
@@ -189,7 +191,7 @@ impl FormGenerator {
 		for field in &self.fields {
 			html.push_str("  <div class=\"form-group\">\n");
 
-			// Label
+			// Label - escape for HTML content and attribute
 			let label = field
 				.label
 				.as_ref()
@@ -198,60 +200,66 @@ impl FormGenerator {
 			let required_marker = if field.required { " *" } else { "" };
 			html.push_str(&format!(
 				"    <label for=\"{}\">{}{}</label>\n",
-				field.name, label, required_marker
+				escape_html_attr(&field.name),
+				escape_html(&label),
+				required_marker
 			));
 
 			// Field input
 			match field.field_type.as_str() {
 				"textarea" => {
+					let placeholder_attr = field
+						.placeholder
+						.as_ref()
+						.map(|p| format!(" placeholder=\"{}\"", escape_html_attr(p)))
+						.unwrap_or_default();
+					let default_val = escape_html(field.default_value.as_deref().unwrap_or(""));
 					html.push_str(&format!(
 						"    <textarea id=\"{}\" name=\"{}\" class=\"form-control\"{}{}>{}</textarea>\n",
-						field.name,
-						field.name,
+						escape_html_attr(&field.name),
+						escape_html_attr(&field.name),
 						if field.required { " required" } else { "" },
-						field
-							.placeholder
-							.as_ref()
-							.map(|p| format!(" placeholder=\"{}\"", p))
-							.unwrap_or_default(),
-						field.default_value.as_deref().unwrap_or("")
+						placeholder_attr,
+						default_val
 					));
 				}
 				_ => {
+					let placeholder_attr = field
+						.placeholder
+						.as_ref()
+						.map(|p| format!(" placeholder=\"{}\"", escape_html_attr(p)))
+						.unwrap_or_default();
+					let value_attr = field
+						.default_value
+						.as_ref()
+						.map(|v| format!(" value=\"{}\"", escape_html_attr(v)))
+						.unwrap_or_default();
 					html.push_str(&format!(
 						"    <input type=\"{}\" id=\"{}\" name=\"{}\" class=\"form-control\"{}{}{}>\n",
-						field.field_type,
-						field.name,
-						field.name,
+						escape_html_attr(&field.field_type),
+						escape_html_attr(&field.name),
+						escape_html_attr(&field.name),
 						if field.required { " required" } else { "" },
-						field
-							.placeholder
-							.as_ref()
-							.map(|p| format!(" placeholder=\"{}\"", p))
-							.unwrap_or_default(),
-						field
-							.default_value
-							.as_ref()
-							.map(|v| format!(" value=\"{}\"", v))
-							.unwrap_or_default()
+						placeholder_attr,
+						value_attr
 					));
 				}
 			}
 
-			// Help text
+			// Help text - escape for HTML content
 			if let Some(help) = &field.help_text {
 				html.push_str(&format!(
 					"    <small class=\"form-text text-muted\">{}</small>\n",
-					help
+					escape_html(help)
 				));
 			}
 
-			// Errors
+			// Errors - escape for HTML content
 			if let Some(errors) = self.errors.get(&field.name) {
 				for error in errors {
 					html.push_str(&format!(
 						"    <div class=\"invalid-feedback d-block\">{}</div>\n",
-						error
+						escape_html(error)
 					));
 				}
 			}
@@ -259,7 +267,7 @@ impl FormGenerator {
 			html.push_str("  </div>\n");
 		}
 
-		// Submit button
+		// Submit button - method is safe as it's controlled by code
 		html.push_str("  <div class=\"form-group\">\n");
 		html.push_str(&format!(
 			"    <button type=\"submit\" class=\"btn btn-primary\">{}</button>\n",

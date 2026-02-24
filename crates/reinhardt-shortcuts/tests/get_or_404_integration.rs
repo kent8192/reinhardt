@@ -30,16 +30,21 @@ fn test_multiple_objects_error_to_response() {
 }
 
 /// Test: GetError::DatabaseError to Response conversion
+/// Verifies that database error messages are NOT exposed in HTTP responses
 #[test]
 fn test_database_error_to_response() {
-	let error = GetError::DatabaseError("Connection timeout".to_string());
+	let sensitive_msg = "Connection timeout: password=admin secret=12345";
+	let error = GetError::DatabaseError(sensitive_msg.to_string());
 	let response: Response = error.into();
 
 	assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
-	assert_eq!(
-		response.body,
-		bytes::Bytes::from("Database error: Connection timeout")
-	);
+	// Response must contain generic message, NOT the sensitive error details
+	let body = String::from_utf8_lossy(&response.body);
+	assert_eq!(body, "Internal server error");
+	// Verify sensitive information is NOT exposed
+	assert!(!body.contains("Connection timeout"));
+	assert!(!body.contains("password"));
+	assert!(!body.contains("admin"));
 }
 
 /// Test: GetError::NotFound error message
@@ -109,33 +114,43 @@ fn test_not_found_response_content_type() {
 	// Headers might have content-type
 }
 
-/// Test: Response from DatabaseError preserves error details
+/// Test: Response from DatabaseError does NOT expose error details
 #[test]
 fn test_database_error_response_preserves_details() {
-	let original_message = "Unique constraint violation on column 'email'";
-	let error = GetError::DatabaseError(original_message.to_string());
+	let sensitive_message = "Unique constraint violation on column 'email' in table 'users'";
+	let error = GetError::DatabaseError(sensitive_message.to_string());
 	let response: Response = error.into();
 
 	assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
+	// Response must contain generic message, NOT sensitive database details
 	let body_str = String::from_utf8_lossy(&response.body);
-	assert!(body_str.contains(original_message));
+	assert_eq!(body_str, "Internal server error");
+	// Verify sensitive database schema information is NOT exposed
+	assert!(!body_str.contains("Unique constraint"));
+	assert!(!body_str.contains("email"));
+	assert!(!body_str.contains("users"));
+	assert!(!body_str.contains("column"));
 }
 
-/// Test: Empty database error message
+/// Test: Empty database error message still returns generic response
 #[test]
 fn test_empty_database_error_message() {
 	let error = GetError::DatabaseError(String::new());
+	// The Display trait still shows the message format for logging/debugging
 	assert_eq!(error.to_string(), "Database error: ");
 
 	let response: Response = error.into();
 	assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR);
-	assert_eq!(response.body, bytes::Bytes::from("Database error: "));
+	// Response must be generic even for empty error messages
+	let body = String::from_utf8_lossy(&response.body);
+	assert_eq!(body, "Internal server error");
 }
 
-/// Test: UTF-8 database error message
+/// Test: UTF-8 database error message does NOT expose in response
 #[test]
 fn test_utf8_database_error_message() {
 	let error = GetError::DatabaseError("エラー: データベース接続失敗".to_string());
+	// The Display trait shows the message for logging/debugging
 	assert_eq!(
 		error.to_string(),
 		"Database error: エラー: データベース接続失敗"
@@ -143,10 +158,14 @@ fn test_utf8_database_error_message() {
 
 	let response: Response = error.into();
 	let body_str = String::from_utf8_lossy(&response.body);
-	assert!(body_str.contains("データベース接続失敗"));
+	// Response must be generic ASCII message, NOT UTF-8 error details
+	assert_eq!(body_str, "Internal server error");
+	// Verify Japanese error message is NOT exposed
+	assert!(!body_str.contains("エラー"));
+	assert!(!body_str.contains("データベース接続失敗"));
 }
 
-/// Test: Very long database error message
+/// Test: Very long database error message does NOT expose in response
 #[test]
 fn test_long_database_error_message() {
 	let long_message = "Error occurred while processing query: ".to_string()
@@ -157,6 +176,12 @@ fn test_long_database_error_message() {
 	let response: Response = error.into();
 
 	let body_str = String::from_utf8_lossy(&response.body);
-	assert!(body_str.contains("constraint violation"));
-	assert!(body_str.len() > 100);
+	// Response must be short generic message, NOT the long error
+	assert_eq!(body_str, "Internal server error");
+	// Verify SQL-related details are NOT exposed
+	assert!(!body_str.contains("constraint violation"));
+	assert!(!body_str.contains("SQL"));
+	assert!(!body_str.contains("query"));
+	// Generic message is short
+	assert_eq!(body_str.len(), "Internal server error".len());
 }

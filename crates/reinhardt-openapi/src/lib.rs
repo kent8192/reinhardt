@@ -14,17 +14,18 @@
 //! use reinhardt_openapi::OpenApiRouter;
 //! use reinhardt_urls::routers::BasicRouter;
 //!
-//! fn main() {
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     // Create your existing router
 //!     let router = BasicRouter::new();
 //!
 //!     // Wrap with OpenAPI endpoints
-//!     let wrapped = OpenApiRouter::wrap(router);
+//!     let wrapped = OpenApiRouter::wrap(router)?;
 //!
 //!     // The wrapped router now serves:
 //!     // - /api/openapi.json (OpenAPI spec)
 //!     // - /api/docs (Swagger UI)
 //!     // - /api/redoc (Redoc UI)
+//!     Ok(())
 //! }
 //! ```
 //!
@@ -48,4 +49,6 @@
 
 mod router_wrapper;
 
+pub use reinhardt_rest::openapi::SchemaError;
+pub use router_wrapper::AuthGuard;
 pub use router_wrapper::OpenApiRouter;

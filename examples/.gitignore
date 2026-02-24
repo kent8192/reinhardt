@@ -46,3 +46,6 @@ rust-project.json
 Thumbs.db
 
 db.sqlite3
+
+# Local development config (copied from .cargo/config.local.toml)
+.cargo/config.toml

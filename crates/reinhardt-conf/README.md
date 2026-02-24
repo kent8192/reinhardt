@@ -21,7 +21,6 @@ The `reinhardt-conf` crate provides a comprehensive configuration management fra
 This crate provides the following modules:
 
 - **`` `settings` ``**: Core settings management functionality
-- **`` `settings-cli` ``**: CLI tool for managing settings
 
 ## Installation
 
@@ -88,24 +87,58 @@ let settings = SettingsBuilder::new()
 let database_url = settings.get::<String>("DATABASE_URL")?;
 ```
 
-## CLI Tool
+## Field Status
 
-The `` `settings-cli` `` module provides a command-line tool for managing settings:
+The `Settings` struct contains fields that are either actively consumed by the framework or reserved for future implementation.
 
-```bash
-# Install the CLI tool
-cargo install --path crates/settings-cli
+### Active Fields
 
-# Use the tool
-reinhardt-settings --help
-```
+These fields are actively consumed by the framework and affect runtime behavior:
+
+| Field | Description |
+|-------|-------------|
+| `base_dir` | Base directory of the project |
+| `secret_key` | Secret key for cryptographic signing |
+| `debug` | Debug mode toggle |
+| `allowed_hosts` | List of allowed host/domain names |
+| `installed_apps` | List of installed applications |
+| `middleware` | List of middleware classes |
+| `root_urlconf` | Root URL configuration module |
+| `databases` | Database configurations |
+| `static_url` | Static files URL prefix |
+| `static_root` | Static files root directory |
+| `staticfiles_dirs` | Additional static files directories |
+| `media_url` | Media files URL prefix |
+| `media_root` | Media files root directory |
+| `secure_proxy_ssl_header` | Proxy SSL header configuration |
+| `secure_ssl_redirect` | HTTPS redirect toggle |
+| `secure_hsts_seconds` | HSTS max-age header value |
+| `secure_hsts_include_subdomains` | HSTS subdomain inclusion |
+| `secure_hsts_preload` | HSTS preload directive |
+| `session_cookie_secure` | Secure session cookie toggle |
+| `csrf_cookie_secure` | Secure CSRF cookie toggle |
+| `append_slash` | Trailing slash auto-append toggle |
+| `admins` | Administrator contact list |
+| `managers` | Manager contact list |
+
+### Reserved for Future Implementation
+
+These fields exist for Django settings compatibility but are **not yet consumed** by the framework. Setting these values currently has no effect on framework behavior:
+
+| Field | Description | Planned Feature |
+|-------|-------------|-----------------|
+| `language_code` | Language code (default: `"en-us"`) | i18n support |
+| `time_zone` | Time zone (default: `"UTC"`) | Timezone-aware datetime handling |
+| `use_i18n` | Enable i18n (default: `true`) | i18n support |
+| `use_tz` | Enable timezone-aware datetimes (default: `true`) | Timezone-aware datetime handling |
+| `templates` | Template engine configurations | Template engine integration |
+| `default_auto_field` | Default auto field type for models | Auto field configuration |
 
 ## Module Organization
 
 `` `reinhardt-conf` `` is organized into the following modules:
 
 - `` `settings` `` - Core settings management (builder, validation, encryption)
-- `` `settings-cli` `` - CLI tool for settings operations
 
 ### Using Modules
 
@@ -115,12 +148,7 @@ use reinhardt::conf::settings::{SettingsBuilder, SettingsConfig};
 
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](../../LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](../../LICENSE-MIT))
-
-at your option.
+Licensed under the BSD 3-Clause License.
 
 ## Contributing
 

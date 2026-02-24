@@ -11,12 +11,12 @@ use http::Version;
 use reinhardt_http::Handler;
 use reinhardt_http::{Request, Response};
 use reinhardt_server::{Http2Server, ShutdownCoordinator};
-use reinhardt_test::fixtures::*;
 use reinhardt_test::APIClient;
+use reinhardt_test::fixtures::*;
 use rstest::*;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use tokio::time::sleep;
 

@@ -191,24 +191,24 @@ impl FormField for EmailField {
 					return Ok(serde_json::Value::String(String::new()));
 				}
 
-				// Check length constraints
+				// Check length constraints using character count (not byte count)
+				// for correct multi-byte character handling
+				let char_count = s.chars().count();
 				if let Some(max) = self.max_length
-					&& s.len() > max
+					&& char_count > max
 				{
 					return Err(FieldError::Validation(format!(
 						"Ensure this value has at most {} characters (it has {})",
-						max,
-						s.len()
+						max, char_count
 					)));
 				}
 
 				if let Some(min) = self.min_length
-					&& s.len() < min
+					&& char_count < min
 				{
 					return Err(FieldError::Validation(format!(
 						"Ensure this value has at least {} characters (it has {})",
-						min,
-						s.len()
+						min, char_count
 					)));
 				}
 

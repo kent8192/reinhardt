@@ -34,7 +34,7 @@
 //! # }
 //! ```
 
-use super::super::{AuditBackend, AuditEvent, EventFilter};
+use crate::settings::audit::{AuditBackend, AuditEvent, EventFilter};
 use parking_lot::RwLock;
 use std::sync::Arc;
 

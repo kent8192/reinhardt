@@ -130,6 +130,9 @@ pub mod server_fn;
 #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
 pub mod wasm;
 
+// DCL (Data Control Language) test fixtures
+pub mod dcl;
+
 // Re-export commonly used items from submodules
 
 // From client module

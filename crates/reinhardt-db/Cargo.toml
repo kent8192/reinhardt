@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-db"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.16"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -25,17 +25,7 @@ sqlx = { version = "0.8", features = [
   "tls-rustls",
   "uuid",
 ] }
-sea-query = { version = "1.0.0-rc.29", features = [
-  "backend-mysql",
-  "backend-postgres",
-  "backend-sqlite",
-  "postgres-array",
-  "sqlx-utils",
-  "with-chrono",
-  "with-json",
-  "with-rust_decimal",
-  "with-uuid",
-] }
+reinhardt-query = { workspace = true, features = ["full", "thread-safe"] }
 
 # Async runtime
 tokio = { version = "1.41", features = ["full", "macros", "rt", "sync"] }
@@ -62,11 +52,6 @@ clap = { version = "4.5", features = ["derive"] }
 console = "0.16.1"
 dialoguer = "0.12.0"
 indicatif = "0.18.0"
-sea-schema = { version = "0.16.2", features = [
-  "sqlx-postgres",
-  "sqlx-mysql",
-  "sqlx-sqlite",
-] }
 aho-corasick = "1.1"
 petgraph = "0.8.3"
 regex = "1.11"
@@ -121,7 +106,7 @@ migrations = ["refinery"]
 hybrid = []
 associations = []
 contenttypes = []
-nosql = []
+nosql = ["dep:bson"]
 backends-settings = ["backends"]
 
 # DI integration - enables Injectable implementation for DatabaseConnection
@@ -163,7 +148,7 @@ database = []
 db-sqlite = []
 db-postgres = []
 db-mysql = []
-mongodb = ["dep:mongodb", "dep:bson"]
+mongodb = ["dep:mongodb", "nosql"]
 redis = ["dep:redis"]
 cassandra = ["dep:cassandra-cpp"]
 dynamodb = ["dep:aws-sdk-dynamodb", "dep:aws-config"]
@@ -178,7 +163,6 @@ integration-tests = []
 
 [dev-dependencies]
 tokio-test = "0.4"
-reinhardt-test = { workspace = true, features = ["testcontainers"] }
 rstest = { workspace = true }
 serial_test = { workspace = true }
 sqlx = { workspace = true, features = ["runtime-tokio", "postgres"] }
@@ -187,7 +171,6 @@ testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 uuid = { workspace = true }
 serde_json = "1.0"
-sea-query = { workspace = true }
 rust_decimal = { workspace = true }
 tempfile = { workspace = true }
 proptest = "1.5"

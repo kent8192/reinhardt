@@ -40,10 +40,12 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "database")]
 use async_trait::async_trait;
 #[cfg(feature = "database")]
-use sea_query::{
-	Alias, BinOper, ColumnDef, Condition, Expr, ExprTrait, Index, PostgresQueryBuilder, Query,
-	SqliteQueryBuilder, Table,
+use reinhardt_query::prelude::{
+	Alias, BinOper, ColumnDef, Cond, Expr, Order, PostgresQueryBuilder, Query,
+	QueryStatementBuilder, SqliteQueryBuilder,
 };
+#[cfg(feature = "database")]
+use reinhardt_query::value::{Value, Values};
 #[cfg(feature = "database")]
 use sqlx::{AnyPool, Row};
 #[cfg(feature = "database")]
@@ -301,26 +303,18 @@ impl ContentTypePersistence {
 			PersistenceError::DatabaseError(format!("Failed to acquire connection: {}", e))
 		})?;
 
-		let stmt = Table::create()
+		let stmt = Query::create_table()
 			.table(Alias::new("django_content_type"))
 			.if_not_exists()
 			.col(
-				ColumnDef::new(Alias::new("id"))
+				ColumnDef::new("id")
 					.integer()
-					.not_null()
-					.auto_increment()
-					.primary_key(),
+					.not_null(true)
+					.auto_increment(true)
+					.primary_key(true),
 			)
-			.col(
-				ColumnDef::new(Alias::new("app_label"))
-					.string_len(100)
-					.not_null(),
-			)
-			.col(
-				ColumnDef::new(Alias::new("model"))
-					.string_len(100)
-					.not_null(),
-			)
+			.col(ColumnDef::new("app_label").string_len(100).not_null(true))
+			.col(ColumnDef::new("model").string_len(100).not_null(true))
 			.to_owned();
 
 		// Select appropriate QueryBuilder based on database URL
@@ -339,7 +333,7 @@ impl ContentTypePersistence {
 			})?;
 
 		// Create unique index on (app_label, model)
-		let idx = Index::create()
+		let idx = Query::create_index()
 			.if_not_exists()
 			.unique()
 			.name("django_content_type_app_label_model_unique")
@@ -363,7 +357,7 @@ impl ContentTypePersistence {
 			})?;
 
 		// Create index on app_label
-		let idx = Index::create()
+		let idx = Query::create_index()
 			.if_not_exists()
 			.name("idx_content_type_app_label")
 			.table(Alias::new("django_content_type"))
@@ -385,7 +379,7 @@ impl ContentTypePersistence {
 			})?;
 
 		// Create index on model
-		let idx = Index::create()
+		let idx = Query::create_index()
 			.if_not_exists()
 			.name("idx_content_type_model")
 			.table(Alias::new("django_content_type"))
@@ -414,17 +408,55 @@ impl ContentTypePersistence {
 		self.database_url.starts_with("postgres")
 	}
 
-	/// Helper method to build SQL string with appropriate QueryBuilder
-	fn build_sql<T>(&self, builder: T) -> String
+	/// Helper method to build parameterized SQL with appropriate QueryBuilder
+	///
+	/// Returns a tuple of (SQL string with placeholders, bound values).
+	fn build_sql_with_values<T>(&self, builder: T) -> (String, Values)
 	where
-		T: sea_query::QueryStatementWriter,
+		T: QueryStatementBuilder,
 	{
 		if self.is_postgres() {
-			builder.to_string(PostgresQueryBuilder)
+			builder.build(PostgresQueryBuilder)
 		} else {
-			builder.to_string(SqliteQueryBuilder)
+			builder.build(SqliteQueryBuilder)
 		}
 	}
+}
+
+/// Bind a reinhardt-query Value to a sqlx Any query
+#[cfg(feature = "database")]
+pub(crate) fn bind_query_value<'a>(
+	query: sqlx::query::Query<'a, sqlx::Any, sqlx::any::AnyArguments<'a>>,
+	value: &Value,
+) -> sqlx::query::Query<'a, sqlx::Any, sqlx::any::AnyArguments<'a>> {
+	match value {
+		Value::Bool(Some(b)) => query.bind(*b),
+		Value::TinyInt(Some(i)) => query.bind(*i as i32),
+		Value::SmallInt(Some(i)) => query.bind(*i as i32),
+		Value::Int(Some(i)) => query.bind(*i),
+		Value::BigInt(Some(i)) => query.bind(*i),
+		Value::TinyUnsigned(Some(i)) => query.bind(*i as i32),
+		Value::SmallUnsigned(Some(i)) => query.bind(*i as i32),
+		Value::Unsigned(Some(i)) => query.bind(*i as i64),
+		Value::BigUnsigned(Some(i)) => query.bind(*i as i64),
+		Value::Float(Some(f)) => query.bind(*f),
+		Value::Double(Some(f)) => query.bind(*f),
+		Value::String(Some(s)) => query.bind(s.as_ref().clone()),
+		Value::Bytes(Some(b)) => query.bind(b.as_ref().clone()),
+		_ => query.bind(None::<i32>), // NULL values
+	}
+}
+
+/// Bind all values from a reinhardt-query Values collection to a sqlx Any query
+#[cfg(feature = "database")]
+pub(crate) fn bind_query_values<'a>(
+	mut query: sqlx::query::Query<'a, sqlx::Any, sqlx::any::AnyArguments<'a>>,
+	values: &Values,
+) -> sqlx::query::Query<'a, sqlx::Any, sqlx::any::AnyArguments<'a>> {
+	for value in values.iter() {
+		query = bind_query_value(query, value);
+	}
+	query
 }
 
 #[cfg(feature = "database")]
@@ -442,18 +474,18 @@ impl ContentTypePersistenceBackend for ContentTypePersistence {
 				Alias::new("model"),
 			])
 			.from(Alias::new("django_content_type"))
-			.cond_where(Condition::all().add(
+			.cond_where(Cond::all().add(
 				Expr::col(Alias::new("app_label")).binary(BinOper::Equal, Expr::val(app_label)),
 			))
 			.cond_where(
-				Condition::all()
+				Cond::all()
 					.add(Expr::col(Alias::new("model")).binary(BinOper::Equal, Expr::val(model))),
 			)
 			.to_owned();
-		let sql = self.build_sql(stmt);
+		let (sql, values) = self.build_sql_with_values(stmt);
 		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
 
-		let row = sqlx::query(sql_leaked)
+		let row = bind_query_values(sqlx::query(sql_leaked), &values)
 			.fetch_optional(&*self.pool)
 			.await
 			.map_err(|e| {
@@ -491,14 +523,13 @@ impl ContentTypePersistenceBackend for ContentTypePersistence {
 			])
 			.from(Alias::new("django_content_type"))
 			.cond_where(
-				Condition::all()
-					.add(Expr::col(Alias::new("id")).binary(BinOper::Equal, Expr::val(id))),
+				Cond::all().add(Expr::col(Alias::new("id")).binary(BinOper::Equal, Expr::val(id))),
 			)
 			.to_owned();
-		let sql = self.build_sql(stmt);
+		let (sql, values) = self.build_sql_with_values(stmt);
 		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
 
-		let row = sqlx::query(sql_leaked)
+		let row = bind_query_values(sqlx::query(sql_leaked), &values)
 			.fetch_optional(&*self.pool)
 			.await
 			.map_err(|e| {
@@ -550,13 +581,13 @@ impl ContentTypePersistenceBackend for ContentTypePersistence {
 				Alias::new("model"),
 			])
 			.from(Alias::new("django_content_type"))
-			.order_by(Alias::new("app_label"), sea_query::Order::Asc)
-			.order_by(Alias::new("model"), sea_query::Order::Asc)
+			.order_by(Alias::new("app_label"), Order::Asc)
+			.order_by(Alias::new("model"), Order::Asc)
 			.to_owned();
-		let sql = self.build_sql(stmt);
+		let (sql, values) = self.build_sql_with_values(stmt);
 		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
 
-		let rows = sqlx::query(sql_leaked)
+		let rows = bind_query_values(sqlx::query(sql_leaked), &values)
 			.fetch_all(&*self.pool)
 			.await
 			.map_err(|e| {
@@ -593,14 +624,14 @@ impl ContentTypePersistenceBackend for ContentTypePersistence {
 				.value(Alias::new("app_label"), ct.app_label.clone())
 				.value(Alias::new("model"), ct.model.clone())
 				.cond_where(
-					Condition::all()
+					Cond::all()
 						.add(Expr::col(Alias::new("id")).binary(BinOper::Equal, Expr::val(id))),
 				)
 				.to_owned();
-			let sql = self.build_sql(stmt);
+			let (sql, values) = self.build_sql_with_values(stmt);
 			let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
 
-			sqlx::query(sql_leaked)
+			bind_query_values(sqlx::query(sql_leaked), &values)
 				.execute(&*self.pool)
 				.await
 				.map_err(|e| {
@@ -615,14 +646,14 @@ impl ContentTypePersistenceBackend for ContentTypePersistence {
 				let stmt = Query::insert()
 					.into_table(Alias::new("django_content_type"))
 					.columns([Alias::new("app_label"), Alias::new("model")])
-					.values([ct.app_label.clone().into(), ct.model.clone().into()])
+					.values(vec![ct.app_label.clone().into(), ct.model.clone().into()])
 					.expect("Failed to build insert statement")
-					.returning(Query::returning().column(Alias::new("id")))
+					.returning([Alias::new("id")])
 					.to_owned();
-				let sql = self.build_sql(stmt);
+				let (sql, values) = self.build_sql_with_values(stmt);
 				let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
 
-				let id_row = sqlx::query(sql_leaked)
+				let id_row = bind_query_values(sqlx::query(sql_leaked), &values)
 					.fetch_one(&*self.pool)
 					.await
 					.map_err(|e| {
@@ -646,13 +677,13 @@ impl ContentTypePersistenceBackend for ContentTypePersistence {
 				let stmt = Query::insert()
 					.into_table(Alias::new("django_content_type"))
 					.columns([Alias::new("app_label"), Alias::new("model")])
-					.values([ct.app_label.clone().into(), ct.model.clone().into()])
+					.values(vec![ct.app_label.clone().into(), ct.model.clone().into()])
 					.expect("Failed to build insert statement")
 					.to_owned();
-				let sql = self.build_sql(stmt);
+				let (sql, values) = self.build_sql_with_values(stmt);
 				let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
 
-				sqlx::query(sql_leaked)
+				bind_query_values(sqlx::query(sql_leaked), &values)
 					.execute(&*self.pool)
 					.await
 					.map_err(|e| {
@@ -690,14 +721,13 @@ impl ContentTypePersistenceBackend for ContentTypePersistence {
 		let stmt = Query::delete()
 			.from_table(Alias::new("django_content_type"))
 			.cond_where(
-				Condition::all()
-					.add(Expr::col(Alias::new("id")).binary(BinOper::Equal, Expr::val(id))),
+				Cond::all().add(Expr::col(Alias::new("id")).binary(BinOper::Equal, Expr::val(id))),
 			)
 			.to_owned();
-		let sql = self.build_sql(stmt);
+		let (sql, values) = self.build_sql_with_values(stmt);
 		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
 
-		sqlx::query(sql_leaked)
+		bind_query_values(sqlx::query(sql_leaked), &values)
 			.execute(&*self.pool)
 			.await
 			.map_err(|e| {
@@ -711,18 +741,18 @@ impl ContentTypePersistenceBackend for ContentTypePersistence {
 		let stmt = Query::select()
 			.expr(Expr::val(1))
 			.from(Alias::new("django_content_type"))
-			.cond_where(Condition::all().add(
+			.cond_where(Cond::all().add(
 				Expr::col(Alias::new("app_label")).binary(BinOper::Equal, Expr::val(app_label)),
 			))
 			.cond_where(
-				Condition::all()
+				Cond::all()
 					.add(Expr::col(Alias::new("model")).binary(BinOper::Equal, Expr::val(model))),
 			)
 			.to_owned();
-		let sql = self.build_sql(stmt);
+		let (sql, values) = self.build_sql_with_values(stmt);
 		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
 
-		let row = sqlx::query(sql_leaked)
+		let row = bind_query_values(sqlx::query(sql_leaked), &values)
 			.fetch_optional(&*self.pool)
 			.await
 			.map_err(|e| {

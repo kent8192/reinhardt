@@ -6,7 +6,7 @@
 
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 
 /// Override registry for dependency injection.
 ///
@@ -78,7 +78,7 @@ impl OverrideRegistry {
 	pub fn set<O: Clone + Send + Sync + 'static>(&self, func_ptr: usize, value: O) {
 		self.overrides
 			.write()
-			.unwrap()
+			.unwrap_or_else(PoisonError::into_inner)
 			.insert(func_ptr, Arc::new(value));
 	}
 
@@ -105,7 +105,7 @@ impl OverrideRegistry {
 	pub fn get<O: Clone + 'static>(&self, func_ptr: usize) -> Option<O> {
 		self.overrides
 			.read()
-			.unwrap()
+			.unwrap_or_else(PoisonError::into_inner)
 			.get(&func_ptr)
 			.and_then(|arc| arc.downcast_ref::<O>().cloned())
 	}
@@ -130,7 +130,10 @@ impl OverrideRegistry {
 	/// assert!(value.is_none());
 	/// ```
 	pub fn remove(&self, func_ptr: usize) {
-		self.overrides.write().unwrap().remove(&func_ptr);
+		self.overrides
+			.write()
+			.unwrap_or_else(PoisonError::into_inner)
+			.remove(&func_ptr);
 	}
 
 	/// Clears all overrides from the registry.
@@ -154,7 +157,10 @@ impl OverrideRegistry {
 	/// assert!(v2.is_none());
 	/// ```
 	pub fn clear(&self) {
-		self.overrides.write().unwrap().clear();
+		self.overrides
+			.write()
+			.unwrap_or_else(PoisonError::into_inner)
+			.clear();
 	}
 
 	/// Checks if an override exists for the given function pointer.
@@ -176,7 +182,10 @@ impl OverrideRegistry {
 	/// assert!(registry.has(my_factory as usize));
 	/// ```
 	pub fn has(&self, func_ptr: usize) -> bool {
-		self.overrides.read().unwrap().contains_key(&func_ptr)
+		self.overrides
+			.read()
+			.unwrap_or_else(PoisonError::into_inner)
+			.contains_key(&func_ptr)
 	}
 
 	/// Returns the number of overrides in the registry.
@@ -194,7 +203,10 @@ impl OverrideRegistry {
 	/// assert_eq!(registry.len(), 1);
 	/// ```
 	pub fn len(&self) -> usize {
-		self.overrides.read().unwrap().len()
+		self.overrides
+			.read()
+			.unwrap_or_else(PoisonError::into_inner)
+			.len()
 	}
 
 	/// Returns true if the registry contains no overrides.
@@ -212,7 +224,10 @@ impl OverrideRegistry {
 	/// assert!(!registry.is_empty());
 	/// ```
 	pub fn is_empty(&self) -> bool {
-		self.overrides.read().unwrap().is_empty()
+		self.overrides
+			.read()
+			.unwrap_or_else(PoisonError::into_inner)
+			.is_empty()
 	}
 }
 

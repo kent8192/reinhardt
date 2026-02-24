@@ -50,9 +50,12 @@ impl Request {
 	/// }
 	///
 	/// let json_body = r#"{"name": "Alice", "age": 30}"#;
+	/// let mut headers = hyper::HeaderMap::new();
+	/// headers.insert(hyper::header::CONTENT_TYPE, "application/json".parse().unwrap());
 	/// let request = Request::builder()
 	///     .method(Method::POST)
 	///     .uri("/api/users")
+	///     .headers(headers)
 	///     .body(Bytes::from(json_body))
 	///     .build()
 	///     .unwrap();
@@ -63,6 +66,25 @@ impl Request {
 	/// ```
 	pub fn json<T: serde::de::DeserializeOwned>(&self) -> crate::Result<T> {
 		use crate::Error;
+
+		// Check Content-Type before parsing body
+		if let Some(content_type) = self
+			.headers
+			.get(hyper::header::CONTENT_TYPE)
+			.and_then(|h| h.to_str().ok())
+		{
+			if !content_type.starts_with("application/json") {
+				return Err(Error::Http(format!(
+					"Unsupported Media Type: expected 'application/json', got '{}'",
+					content_type
+				)));
+			}
+		} else if !self.body.is_empty() {
+			return Err(Error::Http(
+				"Missing Content-Type header: expected 'application/json'".to_string(),
+			));
+		}
+
 		serde_json::from_slice(&self.body).map_err(|e| Error::Serialization(e.to_string()))
 	}
 

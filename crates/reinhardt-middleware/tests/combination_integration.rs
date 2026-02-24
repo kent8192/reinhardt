@@ -100,6 +100,7 @@ async fn test_ratelimit_and_circuit_breaker_cascade() {
 		strategy: RateLimitStrategy::PerIp,
 		exclude_paths: vec![],
 		error_message: None,
+		trusted_proxies: vec![],
 	};
 
 	let circuit_config = CircuitBreakerConfig {

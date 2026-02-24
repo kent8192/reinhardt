@@ -1,9 +1,9 @@
 error[E0428]: the name `auth` is defined multiple times
   --> tests/ui/fail/duplicate_labels.rs:10:3
    |
- 9 |         auth: "reinhardt.contrib.auth",
+ 9 |         auth: "myproject.auth",
    |         ---- previous definition of the type `auth` here
-10 |         auth: "reinhardt.contrib.sessions",
+10 |         auth: "myproject.sessions",
    |         ^^^^ `auth` redefined here
    |
    = note: `auth` must be defined only once in the type namespace of this enum
@@ -12,8 +12,8 @@ error[E0004]: non-exhaustive patterns: `&InstalledApp::auth` not covered
   --> tests/ui/fail/duplicate_labels.rs:8:2
    |
  8 | /     installed_apps! {
- 9 | |         auth: "reinhardt.contrib.auth",
-10 | |         auth: "reinhardt.contrib.sessions",
+ 9 | |         auth: "myproject.auth",
+10 | |         auth: "myproject.sessions",
 11 | |     }
    | |_____^ pattern `&InstalledApp::auth` not covered
    |
@@ -21,8 +21,8 @@ note: `InstalledApp` defined here
   --> tests/ui/fail/duplicate_labels.rs:8:2
    |
  8 | /     installed_apps! {
- 9 | |         auth: "reinhardt.contrib.auth",
-10 | |         auth: "reinhardt.contrib.sessions",
+ 9 | |         auth: "myproject.auth",
+10 | |         auth: "myproject.sessions",
    | |         ---- not covered
 11 | |     }
    | |_____^
@@ -33,8 +33,8 @@ error[E0004]: non-exhaustive patterns: `&InstalledApp::auth` not covered
   --> tests/ui/fail/duplicate_labels.rs:8:2
    |
  8 | /     installed_apps! {
- 9 | |         auth: "reinhardt.contrib.auth",
-10 | |         auth: "reinhardt.contrib.sessions",
+ 9 | |         auth: "myproject.auth",
+10 | |         auth: "myproject.sessions",
 11 | |     }
    | |_____^ pattern `&InstalledApp::auth` not covered
    |
@@ -42,8 +42,8 @@ note: `InstalledApp` defined here
   --> tests/ui/fail/duplicate_labels.rs:8:2
    |
  8 | /     installed_apps! {
- 9 | |         auth: "reinhardt.contrib.auth",
-10 | |         auth: "reinhardt.contrib.sessions",
+ 9 | |         auth: "myproject.auth",
+10 | |         auth: "myproject.sessions",
    | |         ---- not covered
 11 | |     }
    | |_____^

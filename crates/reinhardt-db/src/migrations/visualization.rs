@@ -18,7 +18,8 @@
 //! let graph = visualizer.generate_dependency_graph(&migrations, OutputFormat::Text);
 //! ```
 
-use super::{Migration, MigrationRecord};
+use super::Migration;
+use super::recorder::MigrationRecord;
 use std::collections::{HashMap, HashSet};
 
 /// Output format for visualization

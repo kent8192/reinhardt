@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use sqlx::{Column, MySql, MySqlPool, Row as SqlxRow, Transaction, mysql::MySqlRow};
 use std::sync::Arc;
 
-use super::super::{
+use crate::backends::{
 	backend::DatabaseBackend,
 	error::Result,
 	types::{
@@ -238,7 +238,7 @@ impl MySqlTransactionExecutor {
 impl TransactionExecutor for MySqlTransactionExecutor {
 	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult> {
 		let tx = self.tx.as_mut().ok_or_else(|| {
-			super::super::error::DatabaseError::TransactionError(
+			crate::backends::error::DatabaseError::TransactionError(
 				"Transaction already consumed".to_string(),
 			)
 		})?;
@@ -255,7 +255,7 @@ impl TransactionExecutor for MySqlTransactionExecutor {
 
 	async fn fetch_one(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Row> {
 		let tx = self.tx.as_mut().ok_or_else(|| {
-			super::super::error::DatabaseError::TransactionError(
+			crate::backends::error::DatabaseError::TransactionError(
 				"Transaction already consumed".to_string(),
 			)
 		})?;
@@ -270,7 +270,7 @@ impl TransactionExecutor for MySqlTransactionExecutor {
 
 	async fn fetch_all(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Vec<Row>> {
 		let tx = self.tx.as_mut().ok_or_else(|| {
-			super::super::error::DatabaseError::TransactionError(
+			crate::backends::error::DatabaseError::TransactionError(
 				"Transaction already consumed".to_string(),
 			)
 		})?;
@@ -285,7 +285,7 @@ impl TransactionExecutor for MySqlTransactionExecutor {
 
 	async fn fetch_optional(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>> {
 		let tx = self.tx.as_mut().ok_or_else(|| {
-			super::super::error::DatabaseError::TransactionError(
+			crate::backends::error::DatabaseError::TransactionError(
 				"Transaction already consumed".to_string(),
 			)
 		})?;
@@ -300,7 +300,7 @@ impl TransactionExecutor for MySqlTransactionExecutor {
 
 	async fn commit(mut self: Box<Self>) -> Result<()> {
 		let tx = self.tx.take().ok_or_else(|| {
-			super::super::error::DatabaseError::TransactionError(
+			crate::backends::error::DatabaseError::TransactionError(
 				"Transaction already consumed".to_string(),
 			)
 		})?;
@@ -310,7 +310,7 @@ impl TransactionExecutor for MySqlTransactionExecutor {
 
 	async fn rollback(mut self: Box<Self>) -> Result<()> {
 		let tx = self.tx.take().ok_or_else(|| {
-			super::super::error::DatabaseError::TransactionError(
+			crate::backends::error::DatabaseError::TransactionError(
 				"Transaction already consumed".to_string(),
 			)
 		})?;
@@ -320,7 +320,7 @@ impl TransactionExecutor for MySqlTransactionExecutor {
 
 	async fn savepoint(&mut self, name: &str) -> Result<()> {
 		let tx = self.tx.as_mut().ok_or_else(|| {
-			super::super::error::DatabaseError::TransactionError(
+			crate::backends::error::DatabaseError::TransactionError(
 				"Transaction already consumed".to_string(),
 			)
 		})?;
@@ -332,7 +332,7 @@ impl TransactionExecutor for MySqlTransactionExecutor {
 
 	async fn release_savepoint(&mut self, name: &str) -> Result<()> {
 		let tx = self.tx.as_mut().ok_or_else(|| {
-			super::super::error::DatabaseError::TransactionError(
+			crate::backends::error::DatabaseError::TransactionError(
 				"Transaction already consumed".to_string(),
 			)
 		})?;
@@ -344,7 +344,7 @@ impl TransactionExecutor for MySqlTransactionExecutor {
 
 	async fn rollback_to_savepoint(&mut self, name: &str) -> Result<()> {
 		let tx = self.tx.as_mut().ok_or_else(|| {
-			super::super::error::DatabaseError::TransactionError(
+			crate::backends::error::DatabaseError::TransactionError(
 				"Transaction already consumed".to_string(),
 			)
 		})?;

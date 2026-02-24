@@ -151,7 +151,7 @@ impl Default for HttpSessionConfig {
 			cookie_name: "sessionid".to_string(),
 			cookie_path: "/".to_string(),
 			cookie_domain: None,
-			secure: false,
+			secure: true,
 			httponly: true,
 			samesite: SameSite::Lax,
 			max_age: None,
@@ -365,7 +365,7 @@ mod tests {
 		assert_eq!(config.cookie_name, "sessionid");
 		assert_eq!(config.cookie_path, "/");
 		assert!(config.cookie_domain.is_none());
-		assert!(!config.secure);
+		assert!(config.secure);
 		assert!(config.httponly);
 		assert_eq!(config.samesite, SameSite::Lax);
 		assert!(config.max_age.is_none());
@@ -396,7 +396,7 @@ mod tests {
 		assert!(cookie.contains("Path=/"));
 		assert!(cookie.contains("HttpOnly"));
 		assert!(cookie.contains("SameSite=Lax"));
-		assert!(!cookie.contains("Secure"));
+		assert!(cookie.contains("Secure"));
 	}
 
 	#[tokio::test]

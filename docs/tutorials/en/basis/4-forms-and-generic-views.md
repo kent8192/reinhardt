@@ -156,7 +156,7 @@ on_error: |error| {
 
 **Note**: If `on_error` is not specified, errors are automatically stored in `form.error()` Signal and can be displayed using `watch` blocks (see `error_display` in the example above).
 
-For complete implementation, see `examples/local/examples-tutorial-basis/src/client/components/polls.rs`.
+For complete implementation, see `examples/examples-tutorial-basis/src/client/components/polls.rs`.
 
 ### Understanding watch Blocks
 

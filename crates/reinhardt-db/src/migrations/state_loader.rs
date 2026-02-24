@@ -7,9 +7,10 @@
 //! this loader reconstructs the schema state by sequentially applying all migration
 //! operations from the migration history.
 
+use super::recorder::MigrationRecord;
 use super::{
-	DatabaseMigrationRecorder, Migration, MigrationGraph, MigrationKey, MigrationRecord,
-	MigrationSource, ProjectState, Result,
+	DatabaseMigrationRecorder, Migration, MigrationGraph, MigrationKey, MigrationSource,
+	ProjectState, Result,
 };
 
 /// Loader for building ProjectState from migration history.

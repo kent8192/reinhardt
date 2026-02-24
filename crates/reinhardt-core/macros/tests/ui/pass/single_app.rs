@@ -4,11 +4,11 @@ use reinhardt_macros::installed_apps;
 
 fn main() {
 	installed_apps! {
-		auth: "reinhardt.contrib.auth",
+		auth: "myproject.auth",
 	}
 
 	let app = InstalledApp::auth;
-	assert_eq!(app.path(), "reinhardt.contrib.auth");
+	assert_eq!(app.path(), "myproject.auth");
 
 	println!("Test passed!");
 }

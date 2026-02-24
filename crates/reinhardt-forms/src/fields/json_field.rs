@@ -29,6 +29,9 @@ use serde_json::{self, Value};
 /// let result = field.clean(Some(&json!(r#"{invalid}"#)));
 /// assert!(result.is_err());
 /// ```
+/// Default maximum nesting depth for JSON deserialization
+const DEFAULT_MAX_DEPTH: usize = 64;
+
 #[derive(Debug, Clone)]
 pub struct JSONField {
 	pub name: String,
@@ -43,6 +46,8 @@ pub struct JSONField {
 	pub require_array: bool,
 	/// Required keys for JSON objects
 	pub required_keys: Vec<String>,
+	/// Maximum nesting depth for JSON deserialization to prevent stack overflow
+	pub max_depth: usize,
 }
 
 impl JSONField {
@@ -80,6 +85,7 @@ impl JSONField {
 			require_object: false,
 			require_array: false,
 			required_keys: Vec::new(),
+			max_depth: DEFAULT_MAX_DEPTH,
 		}
 	}
 	pub fn required(mut self, required: bool) -> Self {
@@ -106,6 +112,14 @@ impl JSONField {
 		self.required_keys = keys;
 		self
 	}
+	/// Set the maximum nesting depth for JSON deserialization.
+	///
+	/// This prevents stack overflow attacks from deeply nested JSON payloads.
+	/// Default is 64.
+	pub fn max_depth(mut self, depth: usize) -> Self {
+		self.max_depth = depth;
+		self
+	}
 	pub fn error_message(
 		mut self,
 		error_type: impl Into<String>,
@@ -114,6 +128,26 @@ impl JSONField {
 		self.error_messages
 			.insert(error_type.into(), message.into());
 		self
+	}
+
+	/// Check if the parsed JSON exceeds the maximum nesting depth.
+	fn check_depth(value: &Value, max_depth: usize) -> bool {
+		Self::depth_check_recursive(value, 0, max_depth)
+	}
+
+	fn depth_check_recursive(value: &Value, current: usize, max: usize) -> bool {
+		if current > max {
+			return false;
+		}
+		match value {
+			Value::Array(arr) => arr
+				.iter()
+				.all(|v| Self::depth_check_recursive(v, current + 1, max)),
+			Value::Object(map) => map
+				.values()
+				.all(|v| Self::depth_check_recursive(v, current + 1, max)),
+			_ => true,
+		}
 	}
 
 	/// Validate that required keys are present in JSON object
@@ -133,8 +167,8 @@ impl JSONField {
 				.error_messages
 				.get("missing_keys")
 				.cloned()
-				.unwrap_or_else(|| format!("Missing required keys: {:?}", missing_keys));
-			return Err(FieldError::validation(Some(&self.name), &error_msg));
+				.unwrap_or_else(|| "Missing required keys.".to_string());
+			return Err(FieldError::validation(None, &error_msg));
 		}
 
 		Ok(())
@@ -179,7 +213,7 @@ impl FormField for JSONField {
 					.get("required")
 					.cloned()
 					.unwrap_or_else(|| "This field is required.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 			return Ok(Value::Null);
 		}
@@ -192,7 +226,7 @@ impl FormField for JSONField {
 					.get("invalid")
 					.cloned()
 					.unwrap_or_else(|| "Enter valid JSON.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 		};
 
@@ -204,7 +238,7 @@ impl FormField for JSONField {
 					.get("required")
 					.cloned()
 					.unwrap_or_else(|| "This field is required.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 			return Ok(Value::Null);
 		}
@@ -218,9 +252,17 @@ impl FormField for JSONField {
 					.get("invalid")
 					.cloned()
 					.unwrap_or_else(|| "Enter valid JSON.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 		};
+
+		// Check nesting depth to prevent stack overflow from deeply nested payloads
+		if !Self::check_depth(&parsed, self.max_depth) {
+			return Err(FieldError::validation(
+				None,
+				"JSON structure is too deeply nested.",
+			));
+		}
 
 		// Validate type constraints
 		if self.require_object && !parsed.is_object() {
@@ -229,7 +271,7 @@ impl FormField for JSONField {
 				.get("invalid_type")
 				.cloned()
 				.unwrap_or_else(|| "JSON must be an object.".to_string());
-			return Err(FieldError::validation(Some(&self.name), &error_msg));
+			return Err(FieldError::validation(None, &error_msg));
 		}
 
 		if self.require_array && !parsed.is_array() {
@@ -238,7 +280,7 @@ impl FormField for JSONField {
 				.get("invalid_type")
 				.cloned()
 				.unwrap_or_else(|| "JSON must be an array.".to_string());
-			return Err(FieldError::validation(Some(&self.name), &error_msg));
+			return Err(FieldError::validation(None, &error_msg));
 		}
 
 		// Validate required keys for objects

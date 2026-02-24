@@ -52,8 +52,11 @@ use syn::{Expr, ExprClosure, Ident, LitStr, Path};
 /// SSR and CSR rendering targets.
 #[derive(Debug, Clone)]
 pub struct FormMacro {
-	/// Form struct name (required, e.g., `name: LoginForm`)
-	pub name: Ident,
+	/// Form struct name (required, e.g., `name: LoginForm`).
+	///
+	/// `None` indicates the name has not been parsed yet. The parser
+	/// validates that a name is provided before returning.
+	pub name: Option<Ident>,
 	/// Form action configuration
 	pub action: FormAction,
 	/// HTTP method (defaults to Post)
@@ -485,43 +488,15 @@ impl IconChild {
 impl FormFieldProperty {
 	/// Returns the property name for named properties and flags.
 	///
-	/// # Panics
-	///
-	/// Panics if called on a Widget, Wrapper, Icon, IconPosition, Attrs, or Bind property.
-	pub fn name(&self) -> &Ident {
+	/// Returns `Some(&Ident)` for `Named` and `Flag` variants,
+	/// `None` for all other variants that have no direct name.
+	// Fixes #829
+	pub fn name(&self) -> Option<&Ident> {
 		match self {
-			FormFieldProperty::Named { name, .. } => name,
-			FormFieldProperty::Flag { name, .. } => name,
-			FormFieldProperty::Widget { .. } => {
-				panic!("Widget property has no direct name")
+			FormFieldProperty::Named { name, .. } | FormFieldProperty::Flag { name, .. } => {
+				Some(name)
 			}
-			FormFieldProperty::Wrapper { .. } => {
-				panic!("Wrapper property has no direct name")
-			}
-			FormFieldProperty::Icon { .. } => {
-				panic!("Icon property has no direct name")
-			}
-			FormFieldProperty::IconPosition { .. } => {
-				panic!("IconPosition property has no direct name")
-			}
-			FormFieldProperty::Attrs { .. } => {
-				panic!("Attrs property has no direct name")
-			}
-			FormFieldProperty::Bind { .. } => {
-				panic!("Bind property has no direct name")
-			}
-			FormFieldProperty::InitialFrom { .. } => {
-				panic!("InitialFrom property has no direct name")
-			}
-			FormFieldProperty::ChoicesFrom { .. } => {
-				panic!("ChoicesFrom property has no direct name")
-			}
-			FormFieldProperty::ChoiceValue { .. } => {
-				panic!("ChoiceValue property has no direct name")
-			}
-			FormFieldProperty::ChoiceLabel { .. } => {
-				panic!("ChoiceLabel property has no direct name")
-			}
+			_ => None,
 		}
 	}
 
@@ -919,7 +894,9 @@ impl FormSlots {
 
 impl FormMacro {
 	/// Creates a new FormMacro with the given name and span.
-	pub fn new(name: Ident, span: Span) -> Self {
+	///
+	/// Pass `None` for `name` when creating a placeholder before parsing.
+	pub fn new(name: Option<Ident>, span: Span) -> Self {
 		Self {
 			name,
 			action: FormAction::None,
@@ -1247,7 +1224,7 @@ mod tests {
 	#[test]
 	fn test_form_macro_uses_server_fn() {
 		let mut form = FormMacro::new(
-			Ident::new("LoginForm", Span::call_site()),
+			Some(Ident::new("LoginForm", Span::call_site())),
 			Span::call_site(),
 		);
 		assert!(!form.uses_server_fn());

@@ -1,7 +1,0 @@
-# Local development settings for tutorial-basis example
-# Override base settings for local development
-
-debug = true
-
-# Local development secret key (DO NOT use in production)
-secret_key = "local-dev-secret-key-change-this-in-production"

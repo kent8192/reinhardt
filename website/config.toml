@@ -1,0 +1,28 @@
+base_url = "https://reinhardt-web.dev"
+title = "Reinhardt"
+description = "A composable full-stack API framework for Rust. Polylithic batteries-included design inspired by Django and FastAPI. Build with all the power or compose only what you need."
+default_language = "en"
+compile_sass = true
+generate_sitemap = true
+minify_html = true
+
+[markdown]
+external_links_target_blank = true
+external_links_no_follow = false
+smart_punctuation = false
+
+[markdown.highlighting]
+theme = "github-dark"
+style = "class"
+
+[link_checker]
+skip_anchor_prefixes = ["#"]
+internal_level = "warn"
+
+[extra]
+og_image    = "https://reinhardt-web.dev/og-image.png"
+github_repo = "https://github.com/kent8192/reinhardt-web"
+crates_io   = "https://crates.io/crates/reinhardt-web"
+docs_rs     = "https://docs.rs/reinhardt-web"
+changelog   = "https://github.com/kent8192/reinhardt-web/blob/main/CHANGELOG.md"
+deepwiki    = "https://deepwiki.com/kent8192/reinhardt-web"

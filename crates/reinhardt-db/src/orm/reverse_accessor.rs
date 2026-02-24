@@ -41,9 +41,9 @@
 
 use super::connection::{DatabaseBackend, DatabaseConnection};
 use crate::orm::Model;
-use sea_query::{
-	Alias, Asterisk, BinOper, Expr, ExprTrait, Func, MysqlQueryBuilder, PostgresQueryBuilder,
-	Query, SelectStatement, SqliteQueryBuilder,
+use reinhardt_query::prelude::{
+	Alias, BinOper, ColumnRef, Expr, Func, MySqlQueryBuilder, PostgresQueryBuilder, Query,
+	QueryBuilder, SelectStatement, SqliteQueryBuilder,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::marker::PhantomData;
@@ -52,11 +52,11 @@ use std::marker::PhantomData;
 fn build_select_sql(
 	stmt: &SelectStatement,
 	backend: DatabaseBackend,
-) -> (String, sea_query::Values) {
+) -> (String, reinhardt_query::prelude::Values) {
 	match backend {
-		DatabaseBackend::Postgres => stmt.build(PostgresQueryBuilder),
-		DatabaseBackend::MySql => stmt.build(MysqlQueryBuilder),
-		DatabaseBackend::Sqlite => stmt.build(SqliteQueryBuilder),
+		DatabaseBackend::Postgres => PostgresQueryBuilder.build_select(stmt),
+		DatabaseBackend::MySql => MySqlQueryBuilder.build_select(stmt),
+		DatabaseBackend::Sqlite => SqliteQueryBuilder.build_select(stmt),
 	}
 }
 
@@ -168,7 +168,7 @@ where
 		let mut query = Query::select();
 		query
 			.from(Alias::new(T::table_name()))
-			.column((Alias::new(T::table_name()), Asterisk))
+			.column(ColumnRef::table_asterisk(Alias::new(T::table_name())))
 			.and_where(
 				Expr::col(Alias::new(&self.foreign_key_field))
 					.binary(BinOper::Equal, Expr::val(self.source_id.to_string())),
@@ -213,7 +213,7 @@ where
 	pub async fn count(&self) -> Result<usize, String> {
 		let query = Query::select()
 			.from(Alias::new(T::table_name()))
-			.expr(Func::count(Expr::col(Asterisk)))
+			.expr(Func::count(Expr::asterisk().into_simple_expr()))
 			.and_where(
 				Expr::col(Alias::new(&self.foreign_key_field))
 					.binary(BinOper::Equal, Expr::val(self.source_id.to_string())),
@@ -284,13 +284,14 @@ where
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use reinhardt_query::prelude::QueryStatementBuilder;
 
 	#[test]
 	fn test_sql_generation_all() {
 		// Test that SELECT SQL is generated correctly
 		let query = Query::select()
 			.from(Alias::new("tweets"))
-			.column((Alias::new("tweets"), Asterisk))
+			.column(ColumnRef::table_asterisk(Alias::new("tweets")))
 			.and_where(
 				Expr::col(Alias::new("user_id")).binary(BinOper::Equal, Expr::val("user-123")),
 			)
@@ -307,7 +308,7 @@ mod tests {
 		// Test that COUNT SQL is generated correctly
 		let query = Query::select()
 			.from(Alias::new("tweets"))
-			.expr(Func::count(Expr::col(Asterisk)))
+			.expr(Func::count(Expr::asterisk().into_simple_expr()))
 			.and_where(
 				Expr::col(Alias::new("user_id")).binary(BinOper::Equal, Expr::val("user-123")),
 			)
@@ -326,7 +327,7 @@ mod tests {
 		let mut query = Query::select();
 		query
 			.from(Alias::new("tweets"))
-			.column((Alias::new("tweets"), Asterisk))
+			.column(ColumnRef::table_asterisk(Alias::new("tweets")))
 			.and_where(
 				Expr::col(Alias::new("user_id")).binary(BinOper::Equal, Expr::val("user-123")),
 			)

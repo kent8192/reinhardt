@@ -3,11 +3,13 @@
 //! Provides export operations for admin models.
 
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, ExportFormat, ExportResponse};
-use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
-use super::error::MapServerFnError;
+use super::error::{AdminAuth, MapServerFnError};
+#[cfg(not(target_arch = "wasm32"))]
+use super::limits::MAX_EXPORT_RECORDS;
 
 /// Export model data in various formats
 ///
@@ -18,6 +20,10 @@ use super::error::MapServerFnError;
 ///
 /// This function is automatically exposed as an HTTP endpoint by the `#[server_fn]` macro.
 /// AdminSite and AdminDatabase dependencies are automatically injected via the DI system.
+///
+/// # Authentication
+///
+/// Requires staff (admin) permission and view permission for the model.
 ///
 /// # Example
 ///
@@ -35,13 +41,18 @@ pub async fn export_data(
 	format: ExportFormat,
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
+	#[inject] http_request: ServerFnRequest,
 ) -> Result<ExportResponse, ServerFnError> {
+	// Authentication and authorization check
+	let auth = AdminAuth::from_request(&http_request);
+	auth.require_view_permission(&model_name)?;
+
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	let table_name = model_admin.table_name();
 
-	// Fetch all records (no pagination for export)
+	// Fetch records with export limit to prevent memory exhaustion
 	let results = db
-		.list::<AdminRecord>(table_name, vec![], 0, u64::MAX)
+		.list::<AdminRecord>(table_name, vec![], 0, MAX_EXPORT_RECORDS)
 		.await
 		.map_server_fn_error()?;
 
@@ -100,10 +111,14 @@ pub async fn export_data(
 			)
 		}
 		ExportFormat::Excel => {
-			unimplemented!("Excel export is not yet implemented")
+			return Err(ServerFnError::application(
+				"Excel export format is not supported",
+			));
 		}
 		ExportFormat::XML => {
-			unimplemented!("XML export is not yet implemented")
+			return Err(ServerFnError::application(
+				"XML export format is not supported",
+			));
 		}
 	};
 

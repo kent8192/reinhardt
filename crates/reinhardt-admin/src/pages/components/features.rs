@@ -186,7 +186,7 @@ pub fn list_view(
 			data.total_count, data.model_name, data.current_page, data.total_pages
 		)))
 		.child(data_table(&data.columns, &data.records, &data.model_name))
-		.child(super::super::components::common::pagination(
+		.child(crate::pages::components::common::pagination(
 			current_page_signal,
 			data.total_pages,
 		))

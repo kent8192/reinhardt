@@ -210,6 +210,21 @@ mod tests {
 	}
 
 	#[test]
+	fn test_remove_wrong_type_preserves_value() {
+		// Arrange
+		let extensions = Extensions::new();
+		extensions.insert(42u32);
+
+		// Act - try to remove as wrong type
+		let removed = extensions.remove::<String>();
+
+		// Assert - removal fails and original value is preserved
+		assert_eq!(removed, None);
+		assert!(extensions.contains::<u32>());
+		assert_eq!(extensions.get::<u32>(), Some(42));
+	}
+
+	#[test]
 	fn test_multiple_types() {
 		let extensions = Extensions::new();
 		extensions.insert(TestData {

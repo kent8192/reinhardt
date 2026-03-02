@@ -452,7 +452,7 @@ impl CollectStaticCommand {
 
 			// Resolve from manifest
 			if let Some(hashed_path) = self.manifest.get(original_path) {
-				format!("/{}", hashed_path)
+				format!("{}{}", self.config.static_url, hashed_path)
 			} else {
 				if self.options.verbosity > 0 {
 					eprintln!(
@@ -460,7 +460,7 @@ impl CollectStaticCommand {
 						original_path
 					);
 				}
-				format!("/{}", original_path)
+				format!("{}{}", self.config.static_url, original_path)
 			}
 		});
 

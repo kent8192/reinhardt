@@ -16,6 +16,60 @@ use {
 	validator::Validate,
 };
 
+/// Internal helper for profile update logic
+///
+/// Validates the request, authenticates via session, fetches the profile,
+/// applies updates, and saves to the database. Returns the updated `Profile`.
+#[cfg(server)]
+async fn update_profile_internal(
+	request: &UpdateProfileRequest,
+	db: &DatabaseConnection,
+	session: &SessionData,
+) -> std::result::Result<Profile, ServerFnError> {
+	// Validate request
+	request
+		.validate()
+		.map_err(|e| ServerFnError::server(400, format!("Validation failed: {}", e)))?;
+
+	let user_id = session
+		.get::<Uuid>("user_id")
+		.ok_or_else(|| ServerFnError::server(401, "Not authenticated"))?;
+
+	// Find existing profile
+	let mut profile = Profile::objects()
+		.filter(
+			Profile::field_user_id(),
+			FilterOperator::Eq,
+			FilterValue::String(user_id.to_string()),
+		)
+		.first()
+		.await
+		.map_err(|e| ServerFnError::server(500, format!("Database error: {}", e)))?
+		.ok_or_else(|| ServerFnError::server(404, "Profile not found"))?;
+
+	// Update fields
+	if let Some(ref bio) = request.bio {
+		profile.set_bio(bio.clone());
+	}
+	if let Some(ref avatar_url) = request.avatar_url {
+		profile.set_avatar_url(avatar_url.clone());
+	}
+	if let Some(ref location) = request.location {
+		profile.set_location(Some(location.clone()));
+	}
+	if let Some(ref website) = request.website {
+		profile.set_website(Some(website.clone()));
+	}
+
+	// Save to database
+	Profile::objects()
+		.update_with_conn(db, &profile)
+		.await
+		.map_err(|e| ServerFnError::server(500, format!("Database error: {}", e)))?;
+
+	Ok(profile)
+}
+
 /// Fetch user profile
 #[server_fn(use_inject = true)]
 pub async fn fetch_profile(
@@ -43,47 +97,7 @@ pub async fn update_profile(
 	#[inject] db: DatabaseConnection,
 	#[inject] session: SessionData,
 ) -> std::result::Result<ProfileResponse, ServerFnError> {
-	// Validate request
-	request
-		.validate()
-		.map_err(|e| ServerFnError::server(400, format!("Validation failed: {}", e)))?;
-
-	let user_id = session
-		.get::<Uuid>("user_id")
-		.ok_or_else(|| ServerFnError::server(401, "Not authenticated"))?;
-
-	// Find existing profile
-	let mut profile = Profile::objects()
-		.filter(
-			Profile::field_user_id(),
-			FilterOperator::Eq,
-			FilterValue::String(user_id.to_string()),
-		)
-		.first()
-		.await
-		.map_err(|e| ServerFnError::server(500, format!("Database error: {}", e)))?
-		.ok_or_else(|| ServerFnError::server(404, "Profile not found"))?;
-
-	// Update fields
-	if let Some(bio) = request.bio {
-		profile.set_bio(bio);
-	}
-	if let Some(avatar_url) = request.avatar_url {
-		profile.set_avatar_url(avatar_url);
-	}
-	if let Some(location) = request.location {
-		profile.set_location(Some(location));
-	}
-	if let Some(website) = request.website {
-		profile.set_website(Some(website));
-	}
-
-	// Save to database
-	Profile::objects()
-		.update_with_conn(&db, &profile)
-		.await
-		.map_err(|e| ServerFnError::server(500, format!("Database error: {}", e)))?;
-
+	let profile = update_profile_internal(&request, &db, &session).await?;
 	Ok(ProfileResponse::from(profile))
 }
 
@@ -122,43 +136,6 @@ pub async fn update_profile_form(
 		},
 	};
 
-	// Call the main update_profile logic (inline to avoid async recursion issues)
-	request
-		.validate()
-		.map_err(|e| ServerFnError::server(400, format!("Validation failed: {}", e)))?;
-
-	let user_id = session
-		.get::<Uuid>("user_id")
-		.ok_or_else(|| ServerFnError::server(401, "Not authenticated"))?;
-
-	let mut profile = Profile::objects()
-		.filter(
-			Profile::field_user_id(),
-			FilterOperator::Eq,
-			FilterValue::String(user_id.to_string()),
-		)
-		.first()
-		.await
-		.map_err(|e| ServerFnError::server(500, format!("Database error: {}", e)))?
-		.ok_or_else(|| ServerFnError::server(404, "Profile not found"))?;
-
-	if let Some(bio) = request.bio {
-		profile.set_bio(bio);
-	}
-	if let Some(avatar_url) = request.avatar_url {
-		profile.set_avatar_url(avatar_url);
-	}
-	if let Some(location) = request.location {
-		profile.set_location(Some(location));
-	}
-	if let Some(website) = request.website {
-		profile.set_website(Some(website));
-	}
-
-	Profile::objects()
-		.update_with_conn(&db, &profile)
-		.await
-		.map_err(|e| ServerFnError::server(500, format!("Database error: {}", e)))?;
-
+	update_profile_internal(&request, &db, &session).await?;
 	Ok(())
 }

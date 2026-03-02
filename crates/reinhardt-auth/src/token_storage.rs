@@ -720,4 +720,94 @@ mod tests {
 		storage.clear().await;
 		assert!(storage.is_empty().await);
 	}
+
+	#[tokio::test]
+	async fn test_in_memory_storage_len_after_store() {
+		// Arrange
+		let storage = InMemoryTokenStorage::new();
+
+		// Act
+		storage.store(StoredToken::new("t1", 1)).await.unwrap();
+		storage.store(StoredToken::new("t2", 2)).await.unwrap();
+
+		// Assert
+		assert_eq!(storage.len().await, 2);
+		assert!(!storage.is_empty().await);
+	}
+
+	#[tokio::test]
+	async fn test_in_memory_storage_clear_removes_all() {
+		// Arrange
+		let storage = InMemoryTokenStorage::new();
+		storage.store(StoredToken::new("t1", 1)).await.unwrap();
+		storage.store(StoredToken::new("t2", 2)).await.unwrap();
+		assert_eq!(storage.len().await, 2);
+
+		// Act
+		storage.clear().await;
+
+		// Assert
+		assert_eq!(storage.len().await, 0);
+		assert!(storage.is_empty().await);
+	}
+
+	#[tokio::test]
+	async fn test_in_memory_storage_default_is_empty() {
+		// Arrange
+		let storage = InMemoryTokenStorage::default();
+
+		// Assert
+		assert!(storage.is_empty().await);
+	}
+
+	#[tokio::test]
+	async fn test_in_memory_storage_store_overwrites_existing() {
+		// Arrange
+		let storage = InMemoryTokenStorage::new();
+		storage
+			.store(StoredToken::new("token1", 1).with_expiration(100))
+			.await
+			.unwrap();
+
+		// Act - store with same token key but different user
+		storage
+			.store(StoredToken::new("token1", 2).with_expiration(200))
+			.await
+			.unwrap();
+
+		// Assert - should have updated
+		let retrieved = storage.get("token1").await.unwrap();
+		assert_eq!(retrieved.user_id(), 2);
+		assert_eq!(retrieved.expires_at(), Some(200));
+		assert_eq!(storage.len().await, 1);
+	}
+
+	#[tokio::test]
+	async fn test_in_memory_storage_cleanup_no_expiration() {
+		// Arrange
+		let storage = InMemoryTokenStorage::new();
+		storage.store(StoredToken::new("t1", 1)).await.unwrap(); // no expiration
+
+		// Act
+		let removed = storage.cleanup_expired(9999999).await.unwrap();
+
+		// Assert - token without expiration should not be removed
+		assert_eq!(removed, 0);
+		assert_eq!(storage.len().await, 1);
+	}
+
+	#[tokio::test]
+	async fn test_token_storage_error_display() {
+		// Assert
+		assert_eq!(TokenStorageError::NotFound.to_string(), "Token not found");
+		assert_eq!(TokenStorageError::Expired.to_string(), "Token expired");
+		assert_eq!(
+			TokenStorageError::StorageError("disk full".to_string()).to_string(),
+			"Storage error: disk full"
+		);
+		assert_eq!(
+			TokenStorageError::InvalidFormat.to_string(),
+			"Invalid token format"
+		);
+	}
 }

@@ -19,6 +19,7 @@ use {
 	reinhardt::DatabaseConnection,
 	reinhardt::db::orm::{Filter, FilterOperator, FilterValue, ManyToManyAccessor, Model},
 	reinhardt::middleware::session::SessionData,
+	std::collections::{HashMap, HashSet},
 };
 
 /// Helper to get current user from session
@@ -197,17 +198,59 @@ pub async fn list_rooms(
 		.await
 		.map_err(|e| ServerFnError::server(500, format!("Database error: {}", e)))?;
 
+	if rooms.is_empty() {
+		return Ok(Vec::new());
+	}
+
+	// Batch fetch last messages and unread counts for all rooms
+	let room_ids: Vec<String> = rooms.iter().map(|r| r.id().to_string()).collect();
+
+	// Fetch all messages for these rooms in one query, ordered by created_at desc
+	let all_messages = DMMessage::objects()
+		.filter(
+			"room_id",
+			FilterOperator::In,
+			FilterValue::Array(room_ids.clone()),
+		)
+		.order_by(&["-created_at"])
+		.all()
+		.await
+		.map_err(|e| ServerFnError::server(500, format!("Database error: {}", e)))?;
+
+	// Build per-room last message map
+	let mut last_message_map: HashMap<Uuid, &DMMessage> = HashMap::new();
+	for msg in &all_messages {
+		last_message_map.entry(*msg.room_id()).or_insert(msg);
+	}
+
+	// Build per-room unread count map
+	let mut unread_count_map: HashMap<Uuid, i32> = HashMap::new();
+	for msg in &all_messages {
+		if !msg.is_read() && *msg.sender_id() != current_user.id() {
+			*unread_count_map.entry(*msg.room_id()).or_insert(0) += 1;
+		}
+	}
+
 	let mut room_infos = Vec::new();
-	for room in rooms {
-		// Get members for each room
+	for room in &rooms {
+		// Get members for each room (M2M requires per-room query)
 		let members_accessor =
-			ManyToManyAccessor::<DMRoom, User>::new(&room, "members", db.clone());
+			ManyToManyAccessor::<DMRoom, User>::new(room, "members", db.clone());
 		let members = members_accessor
 			.all()
 			.await
 			.map_err(|e| ServerFnError::server(500, format!("Database error: {}", e)))?;
 
-		room_infos.push(build_room_info(&room, &members, &current_user, db.clone()).await?);
+		let last_msg = last_message_map.get(&room.id()).copied();
+		let unread = unread_count_map.get(&room.id()).copied().unwrap_or(0);
+
+		room_infos.push(build_room_info_with_prefetched(
+			room,
+			&members,
+			&current_user,
+			last_msg,
+			unread,
+		));
 	}
 
 	// Sort by last_activity (most recent first)
@@ -383,22 +426,35 @@ pub async fn list_messages(
 		.await
 		.map_err(|e| ServerFnError::server(500, format!("Database error: {}", e)))?;
 
-	// Build message infos with sender info
-	let mut message_infos = Vec::new();
-	for msg in messages {
-		// Get sender info
-		let sender = User::objects()
-			.filter(
-				User::field_id(),
-				FilterOperator::Eq,
-				FilterValue::String(msg.sender_id().to_string()),
-			)
-			.first()
-			.await
-			.map_err(|e| ServerFnError::server(500, format!("Database error: {}", e)))?;
+	// Batch fetch all unique senders in one query
+	let sender_ids: Vec<String> = messages
+		.iter()
+		.map(|m| m.sender_id().to_string())
+		.collect::<HashSet<_>>()
+		.into_iter()
+		.collect();
 
-		if let Some(sender_user) = sender {
-			message_infos.push(build_message_info(&msg, &sender_user));
+	let senders = if sender_ids.is_empty() {
+		Vec::new()
+	} else {
+		User::objects()
+			.filter(
+				"id",
+				FilterOperator::In,
+				FilterValue::Array(sender_ids),
+			)
+			.all()
+			.await
+			.map_err(|e| ServerFnError::server(500, format!("Database error: {}", e)))?
+	};
+
+	let sender_map: HashMap<Uuid, &User> = senders.iter().map(|u| (u.id(), u)).collect();
+
+	// Build message infos using pre-fetched sender map
+	let mut message_infos = Vec::new();
+	for msg in &messages {
+		if let Some(sender_user) = sender_map.get(msg.sender_id()) {
+			message_infos.push(build_message_info(msg, sender_user));
 		}
 	}
 
@@ -532,6 +588,38 @@ async fn build_room_info(
 		last_activity: last_message.map(|m| m.created_at().to_rfc3339()),
 		unread_count: unread_messages.len() as i32,
 	})
+}
+
+/// Helper to build RoomInfo using pre-fetched last message and unread count
+#[cfg(server)]
+fn build_room_info_with_prefetched(
+	room: &DMRoom,
+	members: &[User],
+	current_user: &User,
+	last_message: Option<&DMMessage>,
+	unread_count: i32,
+) -> RoomInfo {
+	let display_name = if room.is_group() {
+		room.name()
+			.clone()
+			.unwrap_or_else(|| "Group Chat".to_string())
+	} else {
+		members
+			.iter()
+			.find(|m| m.id() != current_user.id())
+			.map(|m| m.username().to_string())
+			.unwrap_or_else(|| room.name().clone().unwrap_or_else(|| "Chat".to_string()))
+	};
+
+	RoomInfo {
+		id: room.id(),
+		name: display_name,
+		is_group: room.is_group(),
+		participants: members.iter().map(|m| m.id()).collect(),
+		last_message: last_message.map(|m| truncate_message(m.content(), 50)),
+		last_activity: last_message.map(|m| m.created_at().to_rfc3339()),
+		unread_count,
+	}
 }
 
 /// Helper to build MessageInfo from DMMessage and sender

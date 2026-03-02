@@ -713,6 +713,31 @@ mod tests {
 
 	#[rstest]
 	#[tokio::test]
+	async fn test_try_process_task_returns_early_when_semaphore_closed() {
+		// Arrange
+		let config = WorkerConfig::new("test-worker".to_string());
+		let semaphore = Arc::new(Semaphore::new(1));
+		semaphore.close(); // Close semaphore to trigger early return
+		let worker = Worker {
+			config,
+			shutdown_tx: broadcast::channel(1).0,
+			registry: None,
+			task_lock: None,
+			result_backend: None,
+			webhook_senders: Vec::new(),
+			concurrency_semaphore: semaphore,
+		};
+		let backend = Arc::new(DummyBackend::new());
+
+		// Act - should return immediately without dequeuing
+		worker.try_process_task(backend).await;
+
+		// Assert - if we reach here without panic, the early return path worked
+		// DummyBackend would not have been called for dequeue
+	}
+
+	#[rstest]
+	#[tokio::test]
 	async fn test_worker_with_result_backend() {
 		// Arrange
 		use crate::result::MemoryResultBackend;

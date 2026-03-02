@@ -106,34 +106,56 @@ impl TraceStore {
 	pub fn start_span(&self, trace_id: String, operation_name: String) -> String {
 		let span = Span::new(trace_id, operation_name);
 		let span_id = span.span_id.clone();
-		self.spans.write().unwrap().insert(span_id.clone(), span);
+		self.spans
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.insert(span_id.clone(), span);
 		span_id
 	}
 
 	/// End a span
 	pub fn end_span(&self, span_id: &str) {
-		if let Some(span) = self.spans.write().unwrap().get_mut(span_id) {
+		if let Some(span) = self
+			.spans
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.get_mut(span_id)
+		{
 			span.end();
 		}
 	}
 
 	/// Mark span as error
 	pub fn mark_span_error(&self, span_id: &str) {
-		if let Some(span) = self.spans.write().unwrap().get_mut(span_id) {
+		if let Some(span) = self
+			.spans
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.get_mut(span_id)
+		{
 			span.mark_error();
 		}
 	}
 
 	/// Add tag to span
 	pub fn add_span_tag(&self, span_id: &str, key: String, value: String) {
-		if let Some(span) = self.spans.write().unwrap().get_mut(span_id) {
+		if let Some(span) = self
+			.spans
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.get_mut(span_id)
+		{
 			span.add_tag(key, value);
 		}
 	}
 
 	/// Get span
 	pub fn get_span(&self, span_id: &str) -> Option<Span> {
-		self.spans.read().unwrap().get(span_id).cloned()
+		self.spans
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.get(span_id)
+			.cloned()
 	}
 
 	/// Get all completed spans

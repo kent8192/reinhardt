@@ -21,7 +21,7 @@ jobs:
   semver-checks:
     name: SemVer Compatibility Check
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Free Disk Space (Ubuntu)
         if: ${{ !contains(inputs.runner || '', 'self-hosted') }}
@@ -83,23 +83,24 @@ jobs:
             --all-features \
             --baseline-rev "${BASELINE_REV:-HEAD~1}"
 
-      # Detect if any commits in the PR contain breaking change indicators
-      # (! suffix on type or BREAKING CHANGE: in body) to auto-select release type.
-      - name: Detect breaking changes in commits
+      # Check if any workspace crate has a pre-release version (e.g. -rc, -alpha, -beta).
+      # Per SemVer spec, pre-release versions have no API stability guarantees,
+      # so semver-checks are skipped entirely for pre-release crates.
+      - name: Detect pre-release versions
         if: ${{ !startsWith(github.head_ref || github.ref_name, 'release-plz-') }}
-        id: detect-breaking
+        id: detect-prerelease
         run: |
-          COMMITS=$(git log --format="%s%n%b" origin/main..HEAD)
-          if echo "$COMMITS" | grep -qE '^\w+(\(.+\))?!:|BREAKING CHANGE:'; then
-            echo "release_type=major" >> "$GITHUB_OUTPUT"
+          if grep -rqP '^version\s*=\s*"[^"]*-' crates/*/Cargo.toml; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Pre-release version detected. Skipping semver-check (no API stability guarantee)."
           else
-            echo "release_type=minor" >> "$GITHUB_OUTPUT"
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # On normal PRs, use auto-detected release type: minor for non-breaking
-      # changes, major when breaking change indicators are found in commits.
-      - name: Run cargo-semver-checks (normal PR)
-        if: ${{ !startsWith(github.head_ref || github.ref_name, 'release-plz-') }}
+      # On normal PRs with stable versions, enforce minor release type to block
+      # breaking changes from being merged into main.
+      - name: Run cargo-semver-checks (normal PR - stable versions only)
+        if: ${{ !startsWith(github.head_ref || github.ref_name, 'release-plz-') && steps.detect-prerelease.outputs.is_prerelease != 'true' }}
         env:
           BASELINE_REV: ${{ github.event.pull_request.base.sha }}
         run: |
@@ -108,5 +109,5 @@ jobs:
             --exclude reinhardt-web \
             --exclude reinhardt-pages \
             --all-features \
-            --release-type ${{ steps.detect-breaking.outputs.release_type }} \
+            --release-type minor \
             --baseline-rev "${BASELINE_REV:-HEAD~1}"

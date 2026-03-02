@@ -144,27 +144,45 @@ impl FlatpageStore {
 	/// ```
 	pub fn register(&self, page: Flatpage) {
 		let url = page.url.clone();
-		self.pages.write().unwrap().insert(url, page);
+		self.pages
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.insert(url, page);
 	}
 
 	/// Get flatpage by URL
 	pub fn get(&self, url: &str) -> Option<Flatpage> {
-		self.pages.read().unwrap().get(url).cloned()
+		self.pages
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.get(url)
+			.cloned()
 	}
 
 	/// Remove flatpage
 	pub fn remove(&self, url: &str) -> Option<Flatpage> {
-		self.pages.write().unwrap().remove(url)
+		self.pages
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.remove(url)
 	}
 
 	/// Get all flatpages
 	pub fn all(&self) -> Vec<Flatpage> {
-		self.pages.read().unwrap().values().cloned().collect()
+		self.pages
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.values()
+			.cloned()
+			.collect()
 	}
 
 	/// Clear all flatpages
 	pub fn clear(&self) {
-		self.pages.write().unwrap().clear();
+		self.pages
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.clear();
 	}
 }
 

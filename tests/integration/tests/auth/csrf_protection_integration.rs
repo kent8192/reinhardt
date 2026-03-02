@@ -497,13 +497,13 @@ async fn edge_safe_methods_csrf_handling() {
 #[tokio::test]
 async fn fuzz_random_csrf_token_validation() {
 	// Random CSRF token input (1000 times)
-	use rand::{Rng, distributions::Alphanumeric, thread_rng};
+	use rand::{Rng, distr::Alphanumeric, rng};
 
 	let valid_csrf_token = generate_csrf_token();
 
 	for _ in 0..1000 {
 		// Generate random token
-		let random_token: String = thread_rng()
+		let random_token: String = rng()
 			.sample_iter(&Alphanumeric)
 			.take(64)
 			.map(char::from)
@@ -525,7 +525,7 @@ async fn fuzz_random_csrf_token_validation() {
 /// Generate CSRF token (32 bytes of random data in Hex representation)
 fn generate_csrf_token() -> String {
 	use rand::Rng;
-	let mut rng = rand::thread_rng();
+	let mut rng = rand::rng();
 	let bytes: Vec<u8> = (0..32).map(|_| rng.r#gen()).collect();
 	hex::encode(bytes)
 }

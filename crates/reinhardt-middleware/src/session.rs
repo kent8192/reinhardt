@@ -121,13 +121,13 @@ impl SessionStore {
 
 	/// Get a session
 	pub fn get(&self, id: &str) -> Option<SessionData> {
-		let sessions = self.sessions.read().unwrap();
+		let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
 		sessions.get(id).cloned()
 	}
 
 	/// Save a session, with automatic cleanup when threshold is exceeded
 	pub fn save(&self, session: SessionData) {
-		let mut sessions = self.sessions.write().unwrap();
+		let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
 		sessions.insert(session.id.clone(), session);
 
 		// Lazy eviction: clean up expired sessions when threshold is exceeded
@@ -141,31 +141,31 @@ impl SessionStore {
 
 	/// Delete a session
 	pub fn delete(&self, id: &str) {
-		let mut sessions = self.sessions.write().unwrap();
+		let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
 		sessions.remove(id);
 	}
 
 	/// Clean up expired sessions
 	pub fn cleanup(&self) {
-		let mut sessions = self.sessions.write().unwrap();
+		let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
 		sessions.retain(|_, session| session.is_valid());
 	}
 
 	/// Clear the store
 	pub fn clear(&self) {
-		let mut sessions = self.sessions.write().unwrap();
+		let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
 		sessions.clear();
 	}
 
 	/// Get the number of sessions
 	pub fn len(&self) -> usize {
-		let sessions = self.sessions.read().unwrap();
+		let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
 		sessions.len()
 	}
 
 	/// Check if the store is empty
 	pub fn is_empty(&self) -> bool {
-		let sessions = self.sessions.read().unwrap();
+		let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
 		sessions.is_empty()
 	}
 }

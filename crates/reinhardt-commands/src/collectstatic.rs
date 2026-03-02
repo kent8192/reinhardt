@@ -402,7 +402,7 @@ impl CollectStaticCommand {
 
 		let manifest_data = serde_json::json!({
 			"version": "1.0",
-			"files": self.manifest
+			"paths": self.manifest
 		});
 
 		let json = serde_json::to_string_pretty(&manifest_data)?;

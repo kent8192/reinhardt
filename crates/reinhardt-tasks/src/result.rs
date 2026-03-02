@@ -393,6 +393,22 @@ mod tests {
 		assert_eq!(metadata.result(), None);
 	}
 
+	#[test]
+	fn test_set_error_preserves_result_and_status() {
+		// Arrange
+		let task_id = TaskId::new();
+		let mut metadata =
+			TaskResultMetadata::new(task_id, TaskStatus::Success, Some("my result".to_string()));
+
+		// Act
+		metadata.set_error("something went wrong".to_string());
+
+		// Assert
+		assert_eq!(metadata.status(), TaskStatus::Success);
+		assert_eq!(metadata.result(), Some("my result"));
+		assert_eq!(metadata.error(), Some("something went wrong"));
+	}
+
 	#[tokio::test]
 	async fn test_memory_result_backend() {
 		let backend = MemoryResultBackend::new();

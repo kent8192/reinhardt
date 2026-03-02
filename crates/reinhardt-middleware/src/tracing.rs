@@ -790,4 +790,59 @@ mod tests {
 
 		assert!(response.headers.contains_key(TRACE_ID_HEADER));
 	}
+
+	#[test]
+	fn test_trace_store_with_max_spans() {
+		// Arrange
+		let store = TraceStore::with_max_spans(3);
+
+		// Act
+		let id1 = store.start_span("t1".to_string(), "op1".to_string());
+		let id2 = store.start_span("t2".to_string(), "op2".to_string());
+		let id3 = store.start_span("t3".to_string(), "op3".to_string());
+
+		// Assert - all 3 spans should exist
+		assert!(store.get_span(&id1).is_some());
+		assert!(store.get_span(&id2).is_some());
+		assert!(store.get_span(&id3).is_some());
+	}
+
+	#[test]
+	fn test_trace_store_evicts_completed_spans_on_overflow() {
+		// Arrange
+		let store = TraceStore::with_max_spans(3);
+
+		// Add 3 spans and complete 2 of them
+		let id1 = store.start_span("t1".to_string(), "op1".to_string());
+		let id2 = store.start_span("t2".to_string(), "op2".to_string());
+		let id3 = store.start_span("t3".to_string(), "op3".to_string());
+
+		store.end_span(&id1);
+		store.end_span(&id2);
+		// id3 is still active
+
+		// Act - adding a 4th span exceeds max_spans, triggering eviction
+		let id4 = store.start_span("t4".to_string(), "op4".to_string());
+
+		// Assert - completed spans should be evicted, active ones remain
+		assert!(store.get_span(&id1).is_none());
+		assert!(store.get_span(&id2).is_none());
+		assert!(store.get_span(&id3).is_some());
+		assert!(store.get_span(&id4).is_some());
+	}
+
+	#[test]
+	fn test_trace_store_no_eviction_when_under_limit() {
+		// Arrange
+		let store = TraceStore::with_max_spans(10);
+
+		// Act
+		let id1 = store.start_span("t1".to_string(), "op1".to_string());
+		store.end_span(&id1);
+		let id2 = store.start_span("t2".to_string(), "op2".to_string());
+
+		// Assert - no eviction, both should exist
+		assert!(store.get_span(&id1).is_some());
+		assert!(store.get_span(&id2).is_some());
+	}
 }

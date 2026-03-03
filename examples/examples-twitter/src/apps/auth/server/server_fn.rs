@@ -69,6 +69,8 @@ pub async fn login(
 	session
 		.set("user_id".to_string(), user.id())
 		.map_err(|e| ServerFnError::application(format!("Session error: {}", e)))?;
+	// Regenerate session ID to prevent session fixation attacks
+	session.id = Uuid::new_v4().to_string();
 	store.inner().save(session);
 
 	Ok(UserInfo::from(user))

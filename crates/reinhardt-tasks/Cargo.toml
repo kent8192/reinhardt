@@ -42,6 +42,7 @@ lapin = { version = "3.7.2", optional = true }
 aquamarine = { workspace = true }
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["redis"] }

@@ -69,11 +69,11 @@ use reinhardt::routes;
 use std::sync::Arc;
 
 #[routes]
-pub fn routes() -> UnifiedRouter {
+pub fn routes() -> DefaultRouter {
     let snippet_viewset = ModelViewSet::<Snippet, SnippetSerializer>::new("snippet");
     let user_viewset = ReadOnlyModelViewSet::<User, UserSerializer>::new("user");
 
-    UnifiedRouter::new()
+    DefaultRouter::new()
         .register_viewset("/snippets", Arc::new(snippet_viewset))
         .register_viewset("/users", Arc::new(user_viewset))
 }
@@ -165,11 +165,11 @@ use reinhardt::routes;
 use std::sync::Arc;
 
 #[routes]
-pub fn routes() -> UnifiedRouter {
+pub fn routes() -> DefaultRouter {
     let snippet_viewset = ModelViewSet::<Snippet, SnippetSerializer>::new("snippet");
     let user_viewset = ReadOnlyModelViewSet::<User, UserSerializer>::new("user");
 
-    UnifiedRouter::new()
+    DefaultRouter::new()
         .register_viewset("/snippets", Arc::new(snippet_viewset))
         .register_viewset("/users", Arc::new(user_viewset))
 }
@@ -234,7 +234,7 @@ pub async fn delete(Path(snippet_id): Path<i64>) -> ViewResult<Response> {
 }
 
 // URL registration in urls.rs
-UnifiedRouter::new()
+DefaultRouter::new()
     .endpoint(views::list)
     .endpoint(views::create)
     .endpoint(views::retrieve)
@@ -257,14 +257,14 @@ impl SnippetViewSet {
         ModelViewSet::new("snippet")
             .with_pagination(PaginationConfig::page_number(10, Some(100)))
             .with_filters(FilterConfig::new()
-                .with_filterable_fields(vec!["language".to_string(), "title".to_string()]))
+                .with_filterable_fields(vec!["language", "title"]))
             .with_ordering(OrderingConfig::new()
-                .with_ordering_fields(vec!["created_at".to_string(), "title".to_string()]))
+                .with_ordering_fields(vec!["created_at", "title"]))
     }
 }
 
 // URL registration in urls.rs
-UnifiedRouter::new().register_viewset("/snippets-viewset", Arc::new(SnippetViewSet::new()))
+DefaultRouter::new().register_viewset("/snippets-viewset", Arc::new(SnippetViewSet::new()))
 ```
 
 **Total**: ~15 lines for full CRUD + pagination + filtering + ordering

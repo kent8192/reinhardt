@@ -141,6 +141,7 @@ async fn test_token_store_operations(token_store: Arc<InMemoryOAuth2Store>) {
 		redirect_uri: "https://example.com/callback".to_string(),
 		user_id: "user_456".to_string(),
 		scope: Some("read".to_string()),
+		created_at: std::time::Instant::now(),
 	};
 
 	token_store

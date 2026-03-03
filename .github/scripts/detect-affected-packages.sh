@@ -32,19 +32,33 @@ if [[ "$RUN_ALL" == "true" ]]; then
   exit 0
 fi
 
-# Map changed files -> workspace packages using cargo metadata
+# Map changed files -> workspace packages using cargo metadata.
+# Use explicit exit-code check because VAR=$(failing_cmd) does not trigger
+# set -e in bash — the assignment itself succeeds even when the subshell fails.
+# Fall back to a full test run if cargo metadata is unavailable or returns
+# empty output. # Issue #1819
 WORKSPACE_ROOT=$(pwd)
-METADATA=$(cargo metadata --format-version 1 --no-deps 2>/dev/null)
+if ! METADATA=$(cargo metadata --format-version 1 --no-deps 2>/dev/null) \
+    || [[ -z "$METADATA" ]]; then
+  echo "run-all=true" >> "$GITHUB_OUTPUT"
+  echo "has-affected=true" >> "$GITHUB_OUTPUT"
+  echo "nextest-filter=" >> "$GITHUB_OUTPUT"
+  echo "affected-packages=" >> "$GITHUB_OUTPUT"
+  exit 0
+fi
 
 declare -A AFFECTED_MAP
 while IFS= read -r file; do
   ABS_FILE="$WORKSPACE_ROOT/$file"
+  # Use try-catch in jq so that a single malformed package entry does not abort
+  # the entire scan. # Issue #1819
   PKG=$(echo "$METADATA" | jq -r --arg f "$ABS_FILE" '
     .packages[]
     | select(
-        ($f | startswith((.manifest_path | rtrimstr("/Cargo.toml"))))
+        try ($f | startswith((.manifest_path | rtrimstr("/Cargo.toml"))))
+        catch false
       )
-    | .name' | head -1)
+    | .name' 2>/dev/null | head -1 || true)
   if [[ -n "$PKG" && "$PKG" != "null" ]]; then
     AFFECTED_MAP["$PKG"]=1
   fi

@@ -11,7 +11,11 @@ pub struct SnippetSerializer {
 	))]
 	pub title: String,
 
-	#[validate(length(min = 1, message = "Code cannot be empty"))]
+	#[validate(length(
+		min = 1,
+		max = 65535,
+		message = "Code must be between 1 and 65535 characters"
+	))]
 	pub code: String,
 
 	#[validate(length(
@@ -47,8 +51,9 @@ impl SnippetResponse {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	#[test]
+	#[rstest]
 	fn test_snippet_serializer_validation() {
 		// Valid snippet
 		let valid = SnippetSerializer {

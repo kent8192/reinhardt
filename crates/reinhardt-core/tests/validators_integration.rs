@@ -15,7 +15,7 @@ use rstest::rstest;
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_and_validator_min_and_max_length_accepts_valid_input() {
+fn and_validator_min_and_max_length_accepts_valid_input() {
 	// Arrange
 	let validator = AndValidator::new(vec![
 		Box::new(MinLengthValidator::new(3)),
@@ -30,7 +30,7 @@ fn test_and_validator_min_and_max_length_accepts_valid_input() {
 }
 
 #[rstest]
-fn test_and_validator_rejects_too_short_input() {
+fn and_validator_rejects_too_short_input() {
 	// Arrange
 	let validator = AndValidator::new(vec![
 		Box::new(MinLengthValidator::new(3)),
@@ -49,7 +49,7 @@ fn test_and_validator_rejects_too_short_input() {
 }
 
 #[rstest]
-fn test_and_validator_rejects_too_long_input() {
+fn and_validator_rejects_too_long_input() {
 	// Arrange
 	let validator = AndValidator::new(vec![
 		Box::new(MinLengthValidator::new(3)),
@@ -68,28 +68,37 @@ fn test_and_validator_rejects_too_long_input() {
 }
 
 #[rstest]
-fn test_and_validator_boundary_values() {
+fn and_validator_boundary_values() {
 	// Arrange
 	let validator = AndValidator::new(vec![
 		Box::new(MinLengthValidator::new(3)),
 		Box::new(MaxLengthValidator::new(10)),
 	]);
 
-	// Act & Assert
-	assert!(validator.validate("abc").is_ok()); // exactly min
-	assert!(validator.validate("1234567890").is_ok()); // exactly max
+	// Act
+	let at_min = validator.validate("abc");
+	let at_max = validator.validate("1234567890");
+
+	// Assert
+	assert!(at_min.is_ok()); // exactly min
+	assert!(at_max.is_ok()); // exactly max
 }
 
 #[rstest]
-fn test_and_validator_with_builder_pattern() {
+fn and_validator_with_builder_pattern() {
 	// Arrange
 	let validator = AndValidator::new(vec![Box::new(MinLengthValidator::new(3))])
 		.with_validator(Box::new(MaxLengthValidator::new(10)));
 
-	// Act & Assert
-	assert!(validator.validate("hello").is_ok());
-	assert!(validator.validate("ab").is_err());
-	assert!(validator.validate("this is way too long").is_err());
+	// Act
+	let valid = validator.validate("hello");
+	let too_short = validator.validate("ab");
+	let too_long = validator.validate("this is way too long");
+
+	// Assert
+	assert!(valid.is_ok());
+	assert!(too_short.is_err());
+	assert!(too_long.is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -97,7 +106,7 @@ fn test_and_validator_with_builder_pattern() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_or_validator_email_or_url_accepts_valid_email() {
+fn or_validator_email_or_url_accepts_valid_email() {
 	// Arrange
 	let validator = OrValidator::new(vec![
 		Box::new(EmailValidator::new()),
@@ -112,7 +121,7 @@ fn test_or_validator_email_or_url_accepts_valid_email() {
 }
 
 #[rstest]
-fn test_or_validator_email_or_url_accepts_valid_url() {
+fn or_validator_email_or_url_accepts_valid_url() {
 	// Arrange
 	let validator = OrValidator::new(vec![
 		Box::new(EmailValidator::new()),
@@ -127,7 +136,7 @@ fn test_or_validator_email_or_url_accepts_valid_url() {
 }
 
 #[rstest]
-fn test_or_validator_email_or_url_rejects_invalid_input() {
+fn or_validator_email_or_url_rejects_invalid_input() {
 	// Arrange
 	let validator = OrValidator::new(vec![
 		Box::new(EmailValidator::new()),
@@ -146,7 +155,7 @@ fn test_or_validator_email_or_url_rejects_invalid_input() {
 }
 
 #[rstest]
-fn test_or_validator_with_error_collection_reports_all_failures() {
+fn or_validator_with_error_collection_reports_all_failures() {
 	// Arrange
 	let validator = OrValidator::new(vec![
 		Box::new(MinLengthValidator::new(100)),
@@ -176,7 +185,7 @@ fn test_or_validator_with_error_collection_reports_all_failures() {
 #[case("user_name@example.com")]
 #[case("a@b.co")]
 #[case("123@example.com")]
-fn test_email_validator_accepts_valid_emails(#[case] email: &str) {
+fn email_validator_accepts_valid_emails(#[case] email: &str) {
 	// Arrange
 	let validator = EmailValidator::new();
 
@@ -196,7 +205,7 @@ fn test_email_validator_accepts_valid_emails(#[case] email: &str) {
 #[case("user@example")]
 #[case("user name@example.com")]
 #[case("user@@example.com")]
-fn test_email_validator_rejects_invalid_emails(#[case] email: &str) {
+fn email_validator_rejects_invalid_emails(#[case] email: &str) {
 	// Arrange
 	let validator = EmailValidator::new();
 
@@ -208,7 +217,7 @@ fn test_email_validator_rejects_invalid_emails(#[case] email: &str) {
 }
 
 #[rstest]
-fn test_email_validator_returns_invalid_email_error_variant() {
+fn email_validator_returns_invalid_email_error_variant() {
 	// Arrange
 	let validator = EmailValidator::new();
 
@@ -229,7 +238,7 @@ fn test_email_validator_returns_invalid_email_error_variant() {
 #[case("127.0.0.1")]
 #[case("::1")]
 #[case("2001:db8::1")]
-fn test_ip_validator_default_accepts_both_versions(#[case] ip: &str) {
+fn ip_validator_default_accepts_both_versions(#[case] ip: &str) {
 	// Arrange
 	let validator = IPAddressValidator::new();
 
@@ -244,7 +253,7 @@ fn test_ip_validator_default_accepts_both_versions(#[case] ip: &str) {
 #[case("192.168.1.1")]
 #[case("10.0.0.1")]
 #[case("255.255.255.255")]
-fn test_ip_validator_ipv4_only_accepts_ipv4(#[case] ip: &str) {
+fn ip_validator_ipv4_only_accepts_ipv4(#[case] ip: &str) {
 	// Arrange
 	let validator = IPAddressValidator::ipv4_only();
 
@@ -259,7 +268,7 @@ fn test_ip_validator_ipv4_only_accepts_ipv4(#[case] ip: &str) {
 #[case("::1")]
 #[case("2001:db8::1")]
 #[case("fe80::1")]
-fn test_ip_validator_ipv4_only_rejects_ipv6(#[case] ip: &str) {
+fn ip_validator_ipv4_only_rejects_ipv6(#[case] ip: &str) {
 	// Arrange
 	let validator = IPAddressValidator::ipv4_only();
 
@@ -279,7 +288,7 @@ fn test_ip_validator_ipv4_only_rejects_ipv6(#[case] ip: &str) {
 #[case("::1")]
 #[case("2001:db8::1")]
 #[case("fe80::1")]
-fn test_ip_validator_ipv6_only_accepts_ipv6(#[case] ip: &str) {
+fn ip_validator_ipv6_only_accepts_ipv6(#[case] ip: &str) {
 	// Arrange
 	let validator = IPAddressValidator::ipv6_only();
 
@@ -293,7 +302,7 @@ fn test_ip_validator_ipv6_only_accepts_ipv6(#[case] ip: &str) {
 #[rstest]
 #[case("192.168.1.1")]
 #[case("10.0.0.1")]
-fn test_ip_validator_ipv6_only_rejects_ipv4(#[case] ip: &str) {
+fn ip_validator_ipv6_only_rejects_ipv4(#[case] ip: &str) {
 	// Arrange
 	let validator = IPAddressValidator::ipv6_only();
 
@@ -310,14 +319,19 @@ fn test_ip_validator_ipv6_only_rejects_ipv4(#[case] ip: &str) {
 }
 
 #[rstest]
-fn test_ip_validator_rejects_invalid_addresses() {
+fn ip_validator_rejects_invalid_addresses() {
 	// Arrange
 	let validator = IPAddressValidator::new();
 
-	// Act & Assert
-	assert!(validator.validate("invalid-ip").is_err());
-	assert!(validator.validate("256.1.1.1").is_err());
-	assert!(validator.validate("").is_err());
+	// Act
+	let invalid_text = validator.validate("invalid-ip");
+	let out_of_range = validator.validate("256.1.1.1");
+	let empty = validator.validate("");
+
+	// Assert
+	assert!(invalid_text.is_err());
+	assert!(out_of_range.is_err());
+	assert!(empty.is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -330,7 +344,7 @@ fn test_ip_validator_rejects_invalid_addresses() {
 #[case(100, true)]
 #[case(5, false)]
 #[case(0, false)]
-fn test_min_value_validator_i32(#[case] value: i32, #[case] expected_ok: bool) {
+fn min_value_validator_i32(#[case] value: i32, #[case] expected_ok: bool) {
 	// Arrange
 	let validator = MinValueValidator::new(10);
 
@@ -347,7 +361,7 @@ fn test_min_value_validator_i32(#[case] value: i32, #[case] expected_ok: bool) {
 #[case(0, true)]
 #[case(25, false)]
 #[case(100, false)]
-fn test_max_value_validator_i32(#[case] value: i32, #[case] expected_ok: bool) {
+fn max_value_validator_i32(#[case] value: i32, #[case] expected_ok: bool) {
 	// Arrange
 	let validator = MaxValueValidator::new(20);
 
@@ -359,7 +373,7 @@ fn test_max_value_validator_i32(#[case] value: i32, #[case] expected_ok: bool) {
 }
 
 #[rstest]
-fn test_min_value_validator_returns_too_small_error() {
+fn min_value_validator_returns_too_small_error() {
 	// Arrange
 	let validator = MinValueValidator::new(10);
 
@@ -377,7 +391,7 @@ fn test_min_value_validator_returns_too_small_error() {
 }
 
 #[rstest]
-fn test_max_value_validator_returns_too_large_error() {
+fn max_value_validator_returns_too_large_error() {
 	// Arrange
 	let validator = MaxValueValidator::new(20);
 
@@ -395,37 +409,52 @@ fn test_max_value_validator_returns_too_large_error() {
 }
 
 #[rstest]
-fn test_range_validator_within_range() {
+fn range_validator_within_range() {
 	// Arrange
 	let validator = RangeValidator::new(10, 20);
 
-	// Act & Assert
-	assert!(validator.validate(&10).is_ok());
-	assert!(validator.validate(&15).is_ok());
-	assert!(validator.validate(&20).is_ok());
+	// Act
+	let at_min = validator.validate(&10);
+	let in_middle = validator.validate(&15);
+	let at_max = validator.validate(&20);
+
+	// Assert
+	assert!(at_min.is_ok());
+	assert!(in_middle.is_ok());
+	assert!(at_max.is_ok());
 }
 
 #[rstest]
-fn test_range_validator_outside_range() {
+fn range_validator_outside_range() {
 	// Arrange
 	let validator = RangeValidator::new(10, 20);
 
-	// Act & Assert
-	assert!(validator.validate(&5).is_err());
-	assert!(validator.validate(&25).is_err());
+	// Act
+	let below = validator.validate(&5);
+	let above = validator.validate(&25);
+
+	// Assert
+	assert!(below.is_err());
+	assert!(above.is_err());
 }
 
 #[rstest]
-fn test_numeric_validators_with_f64() {
+fn numeric_validators_with_f64() {
 	// Arrange
 	let min_validator = MinValueValidator::new(0.0f64);
 	let max_validator = MaxValueValidator::new(1.0f64);
 
-	// Act & Assert
-	assert!(min_validator.validate(&0.5f64).is_ok());
-	assert!(min_validator.validate(&-0.1f64).is_err());
-	assert!(max_validator.validate(&0.5f64).is_ok());
-	assert!(max_validator.validate(&1.1f64).is_err());
+	// Act
+	let min_ok = min_validator.validate(&0.5f64);
+	let min_fail = min_validator.validate(&-0.1f64);
+	let max_ok = max_validator.validate(&0.5f64);
+	let max_fail = max_validator.validate(&1.1f64);
+
+	// Assert
+	assert!(min_ok.is_ok());
+	assert!(min_fail.is_err());
+	assert!(max_ok.is_ok());
+	assert!(max_fail.is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -433,39 +462,47 @@ fn test_numeric_validators_with_f64() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_min_length_validator_with_str_and_string() {
+fn min_length_validator_with_str_and_string() {
 	// Arrange
 	let validator = MinLengthValidator::new(3);
-
-	// Act & Assert (with &str)
-	assert!(validator.validate("hello").is_ok());
-	assert!(validator.validate("ab").is_err());
-
-	// Act & Assert (with String)
 	let s = String::from("hello");
-	assert!(validator.validate(&s).is_ok());
 	let s2 = String::from("ab");
-	assert!(validator.validate(&s2).is_err());
+
+	// Act
+	let str_ok = validator.validate("hello");
+	let str_err = validator.validate("ab");
+	let string_ok = validator.validate(&s);
+	let string_err = validator.validate(&s2);
+
+	// Assert
+	assert!(str_ok.is_ok());
+	assert!(str_err.is_err());
+	assert!(string_ok.is_ok());
+	assert!(string_err.is_err());
 }
 
 #[rstest]
-fn test_max_length_validator_with_str_and_string() {
+fn max_length_validator_with_str_and_string() {
 	// Arrange
 	let validator = MaxLengthValidator::new(5);
-
-	// Act & Assert (with &str)
-	assert!(validator.validate("hello").is_ok());
-	assert!(validator.validate("toolong").is_err());
-
-	// Act & Assert (with String)
 	let s = String::from("hi");
-	assert!(validator.validate(&s).is_ok());
 	let s2 = String::from("toolong");
-	assert!(validator.validate(&s2).is_err());
+
+	// Act
+	let str_ok = validator.validate("hello");
+	let str_err = validator.validate("toolong");
+	let string_ok = validator.validate(&s);
+	let string_err = validator.validate(&s2);
+
+	// Assert
+	assert!(str_ok.is_ok());
+	assert!(str_err.is_err());
+	assert!(string_ok.is_ok());
+	assert!(string_err.is_err());
 }
 
 #[rstest]
-fn test_min_length_returns_too_short_error_with_details() {
+fn min_length_returns_too_short_error_with_details() {
 	// Arrange
 	let validator = MinLengthValidator::new(10);
 
@@ -483,7 +520,7 @@ fn test_min_length_returns_too_short_error_with_details() {
 }
 
 #[rstest]
-fn test_max_length_returns_too_long_error_with_details() {
+fn max_length_returns_too_long_error_with_details() {
 	// Arrange
 	let validator = MaxLengthValidator::new(3);
 
@@ -511,7 +548,7 @@ fn test_max_length_returns_too_long_error_with_details() {
 #[case("invalid slug", false)]
 #[case("invalid!slug", false)]
 #[case("", false)]
-fn test_slug_validator(#[case] input: &str, #[case] expected_ok: bool) {
+fn slug_validator(#[case] input: &str, #[case] expected_ok: bool) {
 	// Arrange
 	let validator = SlugValidator::new();
 
@@ -529,7 +566,7 @@ fn test_slug_validator(#[case] input: &str, #[case] expected_ok: bool) {
 }
 
 #[rstest]
-fn test_slug_validator_returns_invalid_slug_error() {
+fn slug_validator_returns_invalid_slug_error() {
 	// Arrange
 	let validator = SlugValidator::new();
 
@@ -546,7 +583,7 @@ fn test_slug_validator_returns_invalid_slug_error() {
 #[case("not-a-uuid", false)]
 #[case("550e8400-e29b-41d4-a716", false)]
 #[case("", false)]
-fn test_uuid_validator(#[case] input: &str, #[case] expected_ok: bool) {
+fn uuid_validator(#[case] input: &str, #[case] expected_ok: bool) {
 	// Arrange
 	let validator = UUIDValidator::new();
 
@@ -564,7 +601,7 @@ fn test_uuid_validator(#[case] input: &str, #[case] expected_ok: bool) {
 }
 
 #[rstest]
-fn test_uuid_validator_returns_invalid_uuid_error() {
+fn uuid_validator_returns_invalid_uuid_error() {
 	// Arrange
 	let validator = UUIDValidator::new();
 
@@ -582,7 +619,7 @@ fn test_uuid_validator_returns_invalid_uuid_error() {
 #[case("not-a-date", false)]
 #[case("2024-13-01", false)] // invalid month
 #[case("2024-01-32", false)] // invalid day
-fn test_date_validator(#[case] input: &str, #[case] expected_ok: bool) {
+fn date_validator(#[case] input: &str, #[case] expected_ok: bool) {
 	// Arrange
 	let validator = DateValidator::new();
 
@@ -600,7 +637,7 @@ fn test_date_validator(#[case] input: &str, #[case] expected_ok: bool) {
 }
 
 #[rstest]
-fn test_date_validator_returns_invalid_date_error() {
+fn date_validator_returns_invalid_date_error() {
 	// Arrange
 	let validator = DateValidator::new();
 
@@ -612,13 +649,17 @@ fn test_date_validator_returns_invalid_date_error() {
 }
 
 #[rstest]
-fn test_date_validator_custom_format() {
+fn date_validator_custom_format() {
 	// Arrange
 	let validator = DateValidator::new().with_format("%d/%m/%Y");
 
-	// Act & Assert
-	assert!(validator.validate("15/01/2024").is_ok());
-	assert!(validator.validate("2024-01-15").is_err());
+	// Act
+	let custom_format_ok = validator.validate("15/01/2024");
+	let default_format_err = validator.validate("2024-01-15");
+
+	// Assert
+	assert!(custom_format_ok.is_ok());
+	assert!(default_format_err.is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -626,7 +667,7 @@ fn test_date_validator_custom_format() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_email_validator_custom_message() {
+fn email_validator_custom_message() {
 	// Arrange
 	let custom_msg = "Please enter a valid email address";
 	let validator = EmailValidator::new().with_message(custom_msg);
@@ -644,7 +685,7 @@ fn test_email_validator_custom_message() {
 }
 
 #[rstest]
-fn test_ip_address_validator_custom_message() {
+fn ip_address_validator_custom_message() {
 	// Arrange
 	let custom_msg = "Invalid IP address format";
 	let validator = IPAddressValidator::new().with_message(custom_msg);
@@ -662,7 +703,7 @@ fn test_ip_address_validator_custom_message() {
 }
 
 #[rstest]
-fn test_min_length_validator_custom_message() {
+fn min_length_validator_custom_message() {
 	// Arrange
 	let custom_msg = "Username must be at least 5 characters";
 	let validator = MinLengthValidator::new(5).with_message(custom_msg);
@@ -680,7 +721,7 @@ fn test_min_length_validator_custom_message() {
 }
 
 #[rstest]
-fn test_max_length_validator_custom_message() {
+fn max_length_validator_custom_message() {
 	// Arrange
 	let custom_msg = "Username must be at most 10 characters";
 	let validator = MaxLengthValidator::new(10).with_message(custom_msg);
@@ -698,7 +739,7 @@ fn test_max_length_validator_custom_message() {
 }
 
 #[rstest]
-fn test_min_value_validator_custom_message() {
+fn min_value_validator_custom_message() {
 	// Arrange
 	let custom_msg = "Age must be at least 18";
 	let validator = MinValueValidator::new(18).with_message(custom_msg);
@@ -716,7 +757,7 @@ fn test_min_value_validator_custom_message() {
 }
 
 #[rstest]
-fn test_max_value_validator_custom_message() {
+fn max_value_validator_custom_message() {
 	// Arrange
 	let custom_msg = "Quantity must be at most 100";
 	let validator = MaxValueValidator::new(100).with_message(custom_msg);
@@ -734,7 +775,7 @@ fn test_max_value_validator_custom_message() {
 }
 
 #[rstest]
-fn test_slug_validator_custom_message() {
+fn slug_validator_custom_message() {
 	// Arrange
 	let custom_msg = "Invalid URL slug format";
 	let validator = SlugValidator::new().with_message(custom_msg);
@@ -752,7 +793,7 @@ fn test_slug_validator_custom_message() {
 }
 
 #[rstest]
-fn test_date_validator_custom_message() {
+fn date_validator_custom_message() {
 	// Arrange
 	let custom_msg = "Please use YYYY-MM-DD format";
 	let validator = DateValidator::new().with_message(custom_msg);
@@ -774,9 +815,9 @@ fn test_date_validator_custom_message() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_validation_error_invalid_email_display() {
+fn validation_error_invalid_email_display() {
 	// Arrange
-	let error = ValidationError::InvalidEmail("bad@".to_string());
+	let error = ValidationError::InvalidEmail("bad@".into());
 
 	// Act
 	let display = error.to_string();
@@ -786,7 +827,7 @@ fn test_validation_error_invalid_email_display() {
 }
 
 #[rstest]
-fn test_validation_error_too_short_display() {
+fn validation_error_too_short_display() {
 	// Arrange
 	let error = ValidationError::TooShort { length: 3, min: 5 };
 
@@ -798,7 +839,7 @@ fn test_validation_error_too_short_display() {
 }
 
 #[rstest]
-fn test_validation_error_too_long_display() {
+fn validation_error_too_long_display() {
 	// Arrange
 	let error = ValidationError::TooLong {
 		length: 20,
@@ -813,11 +854,11 @@ fn test_validation_error_too_long_display() {
 }
 
 #[rstest]
-fn test_validation_error_too_small_display() {
+fn validation_error_too_small_display() {
 	// Arrange
 	let error = ValidationError::TooSmall {
-		value: "5".to_string(),
-		min: "10".to_string(),
+		value: "5".into(),
+		min: "10".into(),
 	};
 
 	// Act
@@ -828,11 +869,11 @@ fn test_validation_error_too_small_display() {
 }
 
 #[rstest]
-fn test_validation_error_too_large_display() {
+fn validation_error_too_large_display() {
 	// Arrange
 	let error = ValidationError::TooLarge {
-		value: "100".to_string(),
-		max: "50".to_string(),
+		value: "100".into(),
+		max: "50".into(),
 	};
 
 	// Act
@@ -843,9 +884,9 @@ fn test_validation_error_too_large_display() {
 }
 
 #[rstest]
-fn test_validation_error_invalid_ip_address_display() {
+fn validation_error_invalid_ip_address_display() {
 	// Arrange
-	let error = ValidationError::InvalidIPAddress("bad-ip".to_string());
+	let error = ValidationError::InvalidIPAddress("bad-ip".into());
 
 	// Act
 	let display = error.to_string();
@@ -855,9 +896,9 @@ fn test_validation_error_invalid_ip_address_display() {
 }
 
 #[rstest]
-fn test_validation_error_invalid_slug_display() {
+fn validation_error_invalid_slug_display() {
 	// Arrange
-	let error = ValidationError::InvalidSlug("bad slug".to_string());
+	let error = ValidationError::InvalidSlug("bad slug".into());
 
 	// Act
 	let display = error.to_string();
@@ -867,9 +908,9 @@ fn test_validation_error_invalid_slug_display() {
 }
 
 #[rstest]
-fn test_validation_error_invalid_uuid_display() {
+fn validation_error_invalid_uuid_display() {
 	// Arrange
-	let error = ValidationError::InvalidUUID("bad-uuid".to_string());
+	let error = ValidationError::InvalidUUID("bad-uuid".into());
 
 	// Act
 	let display = error.to_string();
@@ -879,9 +920,9 @@ fn test_validation_error_invalid_uuid_display() {
 }
 
 #[rstest]
-fn test_validation_error_custom_display() {
+fn validation_error_custom_display() {
 	// Arrange
-	let error = ValidationError::Custom("custom message".to_string());
+	let error = ValidationError::Custom("custom message".into());
 
 	// Act
 	let display = error.to_string();
@@ -891,9 +932,9 @@ fn test_validation_error_custom_display() {
 }
 
 #[rstest]
-fn test_validation_error_clone_and_eq() {
+fn validation_error_clone_and_eq() {
 	// Arrange
-	let error = ValidationError::InvalidEmail("test@".to_string());
+	let error = ValidationError::InvalidEmail("test@".into());
 
 	// Act
 	let cloned = error.clone();
@@ -903,9 +944,9 @@ fn test_validation_error_clone_and_eq() {
 }
 
 #[rstest]
-fn test_validation_error_composite_failed_display() {
+fn validation_error_composite_failed_display() {
 	// Arrange
-	let error = ValidationError::CompositeValidationFailed("All validators failed".to_string());
+	let error = ValidationError::CompositeValidationFailed("All validators failed".into());
 
 	// Act
 	let display = error.to_string();
@@ -915,10 +956,10 @@ fn test_validation_error_composite_failed_display() {
 }
 
 #[rstest]
-fn test_validation_error_all_validators_failed_display() {
+fn validation_error_all_validators_failed_display() {
 	// Arrange
 	let error = ValidationError::AllValidatorsFailed {
-		errors: "error1; error2".to_string(),
+		errors: "error1; error2".into(),
 	};
 
 	// Act
@@ -933,7 +974,7 @@ fn test_validation_error_all_validators_failed_display() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_nested_and_in_or_composition() {
+fn nested_and_in_or_composition() {
 	// Arrange: (3-10 chars) OR (20+ chars)
 	let short_range = AndValidator::new(vec![
 		Box::new(MinLengthValidator::new(3)),
@@ -944,18 +985,19 @@ fn test_nested_and_in_or_composition() {
 		Box::new(MinLengthValidator::new(20)),
 	]);
 
-	// Act & Assert
-	assert!(or_validator.validate("hello").is_ok()); // passes first (3-10 range)
-	assert!(
-		or_validator
-			.validate("this is a very long string indeed")
-			.is_ok()
-	); // passes second (20+)
-	assert!(or_validator.validate("ab").is_err()); // fails both
+	// Act
+	let short_valid = or_validator.validate("hello"); // passes first (3-10 range)
+	let long_valid = or_validator.validate("this is a very long string indeed"); // passes second (20+)
+	let fails_both = or_validator.validate("ab"); // fails both
+
+	// Assert
+	assert!(short_valid.is_ok());
+	assert!(long_valid.is_ok());
+	assert!(fails_both.is_err());
 }
 
 #[rstest]
-fn test_and_validator_with_mixed_validator_types() {
+fn and_validator_with_mixed_validator_types() {
 	// Arrange: string must be 3-50 chars AND a valid slug
 	let validator = AndValidator::new(vec![
 		Box::new(MinLengthValidator::new(3)),
@@ -963,8 +1005,13 @@ fn test_and_validator_with_mixed_validator_types() {
 		Box::new(SlugValidator::new()),
 	]);
 
-	// Act & Assert
-	assert!(validator.validate("valid-slug").is_ok());
-	assert!(validator.validate("ab").is_err()); // too short
-	assert!(validator.validate("invalid slug with spaces").is_err()); // not a slug
+	// Act
+	let valid = validator.validate("valid-slug");
+	let too_short = validator.validate("ab");
+	let not_a_slug = validator.validate("invalid slug with spaces");
+
+	// Assert
+	assert!(valid.is_ok());
+	assert!(too_short.is_err()); // too short
+	assert!(not_a_slug.is_err()); // not a slug
 }

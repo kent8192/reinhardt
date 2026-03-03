@@ -97,7 +97,7 @@ fn csrf_wrong_message_fails_verification() {
 
 #[rstest]
 fn csrf_get_secret_bytes_returns_correct_length() {
-	// Arrange & Act
+	// Act
 	let secret = get_secret_bytes();
 
 	// Assert
@@ -110,7 +110,7 @@ fn csrf_get_secret_bytes_returns_correct_length() {
 
 #[rstest]
 fn csrf_get_secret_bytes_is_random() {
-	// Arrange & Act
+	// Act
 	let secret_a = get_secret_bytes();
 	let secret_b = get_secret_bytes();
 
@@ -192,7 +192,7 @@ fn csrf_check_token_hmac_rejects_invalid_token() {
 
 #[rstest]
 fn csrf_config_default_settings() {
-	// Arrange & Act
+	// Act
 	let config = CsrfConfig::default();
 
 	// Assert
@@ -214,7 +214,7 @@ fn csrf_config_default_settings() {
 
 #[rstest]
 fn csrf_config_production_settings() {
-	// Arrange & Act
+	// Act
 	let config = CsrfConfig::production();
 
 	// Assert
@@ -251,7 +251,7 @@ fn csrf_config_with_token_rotation() {
 #[rstest]
 fn csrf_token_struct_roundtrip() {
 	// Arrange
-	let raw = "abcdef1234567890".to_string();
+	let raw: String = "abcdef1234567890".into();
 
 	// Act
 	let token = CsrfToken::new(raw.clone());
@@ -262,11 +262,37 @@ fn csrf_token_struct_roundtrip() {
 
 #[rstest]
 fn csrf_middleware_can_be_created() {
-	// Arrange & Act
-	let _mw_default = CsrfMiddleware::new();
-	let _mw_custom = CsrfMiddleware::with_config(CsrfConfig::production());
+	// Arrange
+	let production_config = CsrfConfig::production();
 
-	// Assert - no panic means successful creation
+	// Verify production config has security-hardened settings before middleware creation
+	assert!(
+		production_config.cookie_secure,
+		"Production config must require HTTPS"
+	);
+	assert!(
+		production_config.enable_token_rotation,
+		"Production config must enable token rotation"
+	);
+	assert!(
+		production_config.cookie_max_age.is_some(),
+		"Production config must set cookie max age"
+	);
+	assert!(
+		production_config.token_rotation_interval.is_some(),
+		"Production config must set rotation interval"
+	);
+	assert!(
+		!production_config.cookie_httponly,
+		"CSRF cookie must not be HttpOnly (JavaScript needs access)"
+	);
+
+	// Act
+	let _mw_default = CsrfMiddleware::new();
+	let _mw_custom = CsrfMiddleware::with_config(production_config);
+
+	// Assert
+	// Middleware construction from both default and production config must succeed
 }
 
 // ============================================================================
@@ -490,15 +516,13 @@ fn xss_escape_css_selector_escapes_special_chars() {
 
 #[rstest]
 fn xss_validate_css_selector_accepts_valid() {
-	// Arrange & Act & Assert
-	assert!(
-		validate_css_selector("my-class"),
-		"Simple class name should be valid"
-	);
-	assert!(
-		validate_css_selector("header-nav"),
-		"Hyphenated name should be valid"
-	);
+	// Act
+	let simple_valid = validate_css_selector("my-class");
+	let hyphenated_valid = validate_css_selector("header-nav");
+
+	// Assert
+	assert!(simple_valid, "Simple class name should be valid");
+	assert!(hyphenated_valid, "Hyphenated name should be valid");
 }
 
 // ============================================================================
@@ -612,10 +636,15 @@ fn is_safe_redirect_returns_true_for_safe_urls() {
 	// Arrange
 	let hosts = make_allowed_hosts(&["example.com"]);
 
-	// Act & Assert
-	assert!(is_safe_redirect("/dashboard", &hosts));
-	assert!(is_safe_redirect("https://example.com/page", &hosts));
-	assert!(is_safe_redirect("", &hosts));
+	// Act
+	let relative = is_safe_redirect("/dashboard", &hosts);
+	let absolute_trusted = is_safe_redirect("https://example.com/page", &hosts);
+	let empty = is_safe_redirect("", &hosts);
+
+	// Assert
+	assert!(relative);
+	assert!(absolute_trusted);
+	assert!(empty);
 }
 
 #[rstest]
@@ -623,10 +652,15 @@ fn is_safe_redirect_returns_false_for_unsafe_urls() {
 	// Arrange
 	let hosts = make_allowed_hosts(&["example.com"]);
 
-	// Act & Assert
-	assert!(!is_safe_redirect("https://evil.com", &hosts));
-	assert!(!is_safe_redirect("javascript:alert(1)", &hosts));
-	assert!(!is_safe_redirect("//evil.com/path", &hosts));
+	// Act
+	let untrusted = is_safe_redirect("https://evil.com", &hosts);
+	let javascript = is_safe_redirect("javascript:alert(1)", &hosts);
+	let protocol_relative = is_safe_redirect("//evil.com/path", &hosts);
+
+	// Assert
+	assert!(!untrusted);
+	assert!(!javascript);
+	assert!(!protocol_relative);
 }
 
 // ============================================================================
@@ -636,7 +670,7 @@ fn is_safe_redirect_returns_false_for_unsafe_urls() {
 #[rstest]
 fn security_error_csrf_validation_failed() {
 	// Arrange
-	let error = SecurityError::CsrfValidationFailed("token mismatch".to_string());
+	let error = SecurityError::CsrfValidationFailed("token mismatch".into());
 
 	// Act
 	let msg = error.to_string();
@@ -667,7 +701,7 @@ fn security_error_missing_csrf_token() {
 #[rstest]
 fn security_error_invalid_configuration() {
 	// Arrange
-	let error = SecurityError::InvalidConfiguration("bad setting".to_string());
+	let error = SecurityError::InvalidConfiguration("bad setting".into());
 
 	// Act
 	let msg = error.to_string();
@@ -686,7 +720,7 @@ fn security_error_invalid_configuration() {
 #[rstest]
 fn security_error_xss_detected() {
 	// Arrange
-	let error = SecurityError::XssDetected("script injection".to_string());
+	let error = SecurityError::XssDetected("script injection".into());
 
 	// Act
 	let msg = error.to_string();
@@ -703,15 +737,17 @@ fn security_error_xss_detected() {
 fn security_error_is_debug_printable() {
 	// Arrange
 	let errors = vec![
-		SecurityError::CsrfValidationFailed("test".to_string()),
+		SecurityError::CsrfValidationFailed("test".into()),
 		SecurityError::MissingCsrfToken,
-		SecurityError::InvalidConfiguration("test".to_string()),
-		SecurityError::XssDetected("test".to_string()),
+		SecurityError::InvalidConfiguration("test".into()),
+		SecurityError::XssDetected("test".into()),
 	];
 
-	// Act & Assert
-	for error in &errors {
-		let debug_str = format!("{:?}", error);
+	// Act
+	let debug_strings: Vec<String> = errors.iter().map(|e| format!("{:?}", e)).collect();
+
+	// Assert
+	for debug_str in &debug_strings {
 		assert!(
 			!debug_str.is_empty(),
 			"All SecurityError variants must be Debug-printable"

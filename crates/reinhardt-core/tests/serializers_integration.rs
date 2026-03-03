@@ -107,11 +107,11 @@ fn char_field_accepts_empty_string_when_blank_allowed() {
 
 #[rstest]
 fn char_field_default_value_is_stored() {
-	// Arrange & Act
-	let field = CharField::new().default("fallback".to_string());
+	// Act
+	let field = CharField::new().default("fallback".into());
 
 	// Assert
-	assert_eq!(field.default, Some("fallback".to_string()));
+	assert_eq!(field.default, Some("fallback".into()));
 }
 
 // ---------------------------------------------------------------------------
@@ -183,10 +183,15 @@ fn integer_field_accepts_any_value_without_constraints() {
 	// Arrange
 	let field = IntegerField::new();
 
-	// Act & Assert
-	assert!(field.validate(i64::MIN).is_ok());
-	assert!(field.validate(0).is_ok());
-	assert!(field.validate(i64::MAX).is_ok());
+	// Act
+	let min = field.validate(i64::MIN);
+	let zero = field.validate(0);
+	let max = field.validate(i64::MAX);
+
+	// Assert
+	assert!(min.is_ok());
+	assert!(zero.is_ok());
+	assert!(max.is_ok());
 }
 
 // ---------------------------------------------------------------------------
@@ -234,9 +239,13 @@ fn float_field_accepts_value_at_exact_boundary() {
 	// Arrange
 	let field = FloatField::new().min_value(0.0).max_value(1.0);
 
-	// Act & Assert
-	assert!(field.validate(0.0).is_ok());
-	assert!(field.validate(1.0).is_ok());
+	// Act
+	let at_min = field.validate(0.0);
+	let at_max = field.validate(1.0);
+
+	// Assert
+	assert!(at_min.is_ok());
+	assert!(at_max.is_ok());
 }
 
 // ---------------------------------------------------------------------------
@@ -286,7 +295,7 @@ fn json_serializer_roundtrip_preserves_data() {
 	// Arrange
 	let product = TestProduct {
 		id: 42,
-		name: "Widget".to_string(),
+		name: "Widget".into(),
 		price: 9.99,
 		in_stock: true,
 	};
@@ -305,7 +314,7 @@ fn json_serializer_serialize_produces_valid_json() {
 	// Arrange
 	let product = TestProduct {
 		id: 1,
-		name: "Gadget".to_string(),
+		name: "Gadget".into(),
 		price: 19.95,
 		in_stock: false,
 	};
@@ -323,7 +332,7 @@ fn json_serializer_serialize_produces_valid_json() {
 #[rstest]
 fn json_serializer_deserialize_rejects_invalid_json() {
 	// Arrange
-	let invalid = "{not valid json}".to_string();
+	let invalid = "{not valid json}".into();
 	let serializer = JsonSerializer::<TestProduct>::new();
 
 	// Act
@@ -506,11 +515,7 @@ fn datetime_field_rejects_invalid_datetime_string() {
 #[rstest]
 fn choice_field_accepts_valid_choice() {
 	// Arrange
-	let field = ChoiceField::new(vec![
-		"small".to_string(),
-		"medium".to_string(),
-		"large".to_string(),
-	]);
+	let field = ChoiceField::new(vec!["small".into(), "medium".into(), "large".into()]);
 
 	// Act
 	let result = field.validate("medium");
@@ -522,7 +527,7 @@ fn choice_field_accepts_valid_choice() {
 #[rstest]
 fn choice_field_rejects_invalid_choice() {
 	// Arrange
-	let field = ChoiceField::new(vec!["red".to_string(), "green".to_string()]);
+	let field = ChoiceField::new(vec!["red".into(), "green".into()]);
 
 	// Act
 	let result = field.validate("blue");
@@ -534,7 +539,7 @@ fn choice_field_rejects_invalid_choice() {
 #[rstest]
 fn choice_field_rejects_empty_when_blank_not_allowed() {
 	// Arrange
-	let field = ChoiceField::new(vec!["a".to_string()]);
+	let field = ChoiceField::new(vec!["a".into()]);
 
 	// Act
 	let result = field.validate("");
@@ -546,7 +551,7 @@ fn choice_field_rejects_empty_when_blank_not_allowed() {
 #[rstest]
 fn choice_field_allows_empty_when_blank_allowed() {
 	// Arrange
-	let field = ChoiceField::new(vec!["a".to_string()]).allow_blank(true);
+	let field = ChoiceField::new(vec!["a".into()]).allow_blank(true);
 
 	// Act
 	let result = field.validate("");
@@ -599,7 +604,7 @@ fn url_field_validates_protocol(#[case] input: &str, #[case] should_pass: bool) 
 
 #[rstest]
 fn integer_field_stores_default_value() {
-	// Arrange & Act
+	// Act
 	let field = IntegerField::new().default(42);
 
 	// Assert
@@ -608,7 +613,7 @@ fn integer_field_stores_default_value() {
 
 #[rstest]
 fn float_field_stores_default_value() {
-	// Arrange & Act
+	// Act
 	let field = FloatField::new().default(3.14);
 
 	// Assert
@@ -617,7 +622,7 @@ fn float_field_stores_default_value() {
 
 #[rstest]
 fn boolean_field_stores_default_value() {
-	// Arrange & Act
+	// Act
 	let field = BooleanField::new().default(true);
 
 	// Assert
@@ -626,7 +631,7 @@ fn boolean_field_stores_default_value() {
 
 #[rstest]
 fn char_field_required_defaults_to_true() {
-	// Arrange & Act
+	// Act
 	let field = CharField::new();
 
 	// Assert
@@ -635,7 +640,7 @@ fn char_field_required_defaults_to_true() {
 
 #[rstest]
 fn integer_field_can_be_set_optional() {
-	// Arrange & Act
+	// Act
 	let field = IntegerField::new().required(false);
 
 	// Assert
@@ -672,12 +677,12 @@ fn validate_fields_passes_with_valid_data() {
 	// Arrange
 	let mut validators: HashMap<String, Box<dyn FieldValidator>> = HashMap::new();
 	validators.insert(
-		"score".to_string(),
+		"score".into(),
 		Box::new(RangeValidator { min: 0, max: 100 }),
 	);
 
 	let mut data = HashMap::new();
-	data.insert("score".to_string(), json!(85));
+	data.insert("score".into(), json!(85));
 
 	// Act
 	let result = validate_fields(&data, &validators);
@@ -691,12 +696,12 @@ fn validate_fields_fails_with_out_of_range_value() {
 	// Arrange
 	let mut validators: HashMap<String, Box<dyn FieldValidator>> = HashMap::new();
 	validators.insert(
-		"score".to_string(),
+		"score".into(),
 		Box::new(RangeValidator { min: 0, max: 100 }),
 	);
 
 	let mut data = HashMap::new();
-	data.insert("score".to_string(), json!(150));
+	data.insert("score".into(), json!(150));
 
 	// Act
 	let result = validate_fields(&data, &validators);
@@ -711,8 +716,8 @@ fn validate_fields_fails_with_out_of_range_value() {
 
 #[rstest]
 fn serializer_error_required_field_is_validation_error() {
-	// Arrange & Act
-	let err = SerializerError::required_field("name".to_string(), "Name is required".to_string());
+	// Act
+	let err = SerializerError::required_field("name".into(), "Name is required".into());
 
 	// Assert
 	assert!(err.is_validation_error());
@@ -721,12 +726,12 @@ fn serializer_error_required_field_is_validation_error() {
 
 #[rstest]
 fn serializer_error_field_validation_contains_details() {
-	// Arrange & Act
+	// Act
 	let err = SerializerError::field_validation(
-		"age".to_string(),
-		"-5".to_string(),
-		"min_value".to_string(),
-		"Must be non-negative".to_string(),
+		"age".into(),
+		"-5".into(),
+		"min_value".into(),
+		"Must be non-negative".into(),
 	);
 
 	// Assert

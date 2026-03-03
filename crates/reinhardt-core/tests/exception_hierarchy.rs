@@ -255,7 +255,7 @@ fn param_error_context_with_expected_type() {
 
 #[rstest]
 fn param_error_context_all_param_types() {
-	// Arrange & Act & Assert
+	// Arrange
 	let types_and_labels = [
 		(ParamType::Json, "Json"),
 		(ParamType::Query, "Query"),
@@ -266,9 +266,17 @@ fn param_error_context_all_param_types() {
 		(ParamType::Body, "Body"),
 	];
 
-	for (param_type, label) in types_and_labels {
-		let ctx = ParamErrorContext::new(param_type, "test");
-		let formatted = ctx.format_error();
+	// Act
+	let results: Vec<(String, &str)> = types_and_labels
+		.iter()
+		.map(|(param_type, label)| {
+			let ctx = ParamErrorContext::new(*param_type, "test");
+			(ctx.format_error(), *label)
+		})
+		.collect();
+
+	// Assert
+	for (formatted, label) in &results {
 		assert!(
 			formatted.contains(&format!("{} parameter extraction failed", label)),
 			"Expected '{}' in formatted output: {}",
@@ -300,15 +308,17 @@ fn param_validation_error_display_uses_format_error() {
 #[rstest]
 fn conflict_error_status_and_message() {
 	// Arrange
-	let error = Error::Conflict("User with this email already exists".to_string());
+	let error = Error::Conflict("User with this email already exists".into());
 
-	// Act & Assert
-	assert_eq!(error.status_code(), 409);
-	assert_eq!(error.kind(), ErrorKind::Conflict);
-	assert_eq!(
-		error.to_string(),
-		"Conflict: User with this email already exists"
-	);
+	// Act
+	let status = error.status_code();
+	let kind = error.kind();
+	let display = error.to_string();
+
+	// Assert
+	assert_eq!(status, 409);
+	assert_eq!(kind, ErrorKind::Conflict);
+	assert_eq!(display, "Conflict: User with this email already exists");
 }
 
 // ---------------------------------------------------------------------------
@@ -318,37 +328,49 @@ fn conflict_error_status_and_message() {
 #[rstest]
 fn pagination_invalid_page() {
 	// Arrange
-	let error = Error::InvalidPage("page must be positive".to_string());
+	let error = Error::InvalidPage("page must be positive".into());
 
-	// Act & Assert
-	assert_eq!(error.status_code(), 400);
-	assert_eq!(error.kind(), ErrorKind::Validation);
-	assert_eq!(error.to_string(), "Invalid page: page must be positive");
+	// Act
+	let status = error.status_code();
+	let kind = error.kind();
+	let display = error.to_string();
+
+	// Assert
+	assert_eq!(status, 400);
+	assert_eq!(kind, ErrorKind::Validation);
+	assert_eq!(display, "Invalid page: page must be positive");
 }
 
 #[rstest]
 fn pagination_invalid_cursor() {
 	// Arrange
-	let error = Error::InvalidCursor("invalid base64 encoding".to_string());
+	let error = Error::InvalidCursor("invalid base64 encoding".into());
 
-	// Act & Assert
-	assert_eq!(error.status_code(), 400);
-	assert_eq!(error.kind(), ErrorKind::Validation);
-	assert_eq!(error.to_string(), "Invalid cursor: invalid base64 encoding");
+	// Act
+	let status = error.status_code();
+	let kind = error.kind();
+	let display = error.to_string();
+
+	// Assert
+	assert_eq!(status, 400);
+	assert_eq!(kind, ErrorKind::Validation);
+	assert_eq!(display, "Invalid cursor: invalid base64 encoding");
 }
 
 #[rstest]
 fn pagination_invalid_limit() {
 	// Arrange
-	let error = Error::InvalidLimit("limit must be between 1 and 100".to_string());
+	let error = Error::InvalidLimit("limit must be between 1 and 100".into());
 
-	// Act & Assert
-	assert_eq!(error.status_code(), 400);
-	assert_eq!(error.kind(), ErrorKind::Validation);
-	assert_eq!(
-		error.to_string(),
-		"Invalid limit: limit must be between 1 and 100"
-	);
+	// Act
+	let status = error.status_code();
+	let kind = error.kind();
+	let display = error.to_string();
+
+	// Assert
+	assert_eq!(status, 400);
+	assert_eq!(kind, ErrorKind::Validation);
+	assert_eq!(display, "Invalid limit: limit must be between 1 and 100");
 }
 
 // ---------------------------------------------------------------------------

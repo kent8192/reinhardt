@@ -286,9 +286,9 @@ fn page_number_custom_error_messages() {
 	// Arrange
 	let items = make_items(10);
 	let messages = ErrorMessages {
-		invalid_page: "Custom invalid page".to_string(),
-		min_page: "Custom min page".to_string(),
-		no_results: "Custom no results".to_string(),
+		invalid_page: "Custom invalid page".into(),
+		min_page: "Custom min page".into(),
+		no_results: "Custom no results".into(),
 	};
 	let paginator = PageNumberPagination::new()
 		.page_size(10)
@@ -341,12 +341,19 @@ fn page_has_next_and_previous() {
 	let items = vec![1, 2, 3];
 	let page = Page::new(items, 2, 5, 50, 10);
 
-	// Act & Assert
-	assert!(page.has_next());
-	assert!(page.has_previous());
-	assert!(page.has_other_pages());
-	assert_eq!(page.next_page_number().unwrap(), 3);
-	assert_eq!(page.previous_page_number().unwrap(), 1);
+	// Act
+	let has_next = page.has_next();
+	let has_previous = page.has_previous();
+	let has_other = page.has_other_pages();
+	let next_num = page.next_page_number().unwrap();
+	let prev_num = page.previous_page_number().unwrap();
+
+	// Assert
+	assert!(has_next);
+	assert!(has_previous);
+	assert!(has_other);
+	assert_eq!(next_num, 3);
+	assert_eq!(prev_num, 1);
 }
 
 #[rstest]
@@ -355,10 +362,15 @@ fn page_first_page_no_previous() {
 	let items = vec![1, 2, 3];
 	let page = Page::new(items, 1, 5, 50, 10);
 
-	// Act & Assert
-	assert!(page.has_next());
-	assert!(!page.has_previous());
-	assert!(page.previous_page_number().is_err());
+	// Act
+	let has_next = page.has_next();
+	let has_previous = page.has_previous();
+	let prev_result = page.previous_page_number();
+
+	// Assert
+	assert!(has_next);
+	assert!(!has_previous);
+	assert!(prev_result.is_err());
 }
 
 #[rstest]
@@ -367,10 +379,15 @@ fn page_last_page_no_next() {
 	let items = vec![1];
 	let page = Page::new(items, 5, 5, 50, 10);
 
-	// Act & Assert
-	assert!(!page.has_next());
-	assert!(page.has_previous());
-	assert!(page.next_page_number().is_err());
+	// Act
+	let has_next = page.has_next();
+	let has_previous = page.has_previous();
+	let next_result = page.next_page_number();
+
+	// Assert
+	assert!(!has_next);
+	assert!(has_previous);
+	assert!(next_result.is_err());
 }
 
 #[rstest]
@@ -379,10 +396,15 @@ fn page_single_page_no_other_pages() {
 	let items = vec![1];
 	let page = Page::new(items, 1, 1, 1, 10);
 
-	// Act & Assert
-	assert!(!page.has_next());
-	assert!(!page.has_previous());
-	assert!(!page.has_other_pages());
+	// Act
+	let has_next = page.has_next();
+	let has_previous = page.has_previous();
+	let has_other = page.has_other_pages();
+
+	// Assert
+	assert!(!has_next);
+	assert!(!has_previous);
+	assert!(!has_other);
 }
 
 #[rstest]
@@ -391,9 +413,13 @@ fn page_start_and_end_index() {
 	let items = vec!["a", "b", "c"];
 	let page = Page::new(items, 2, 5, 15, 3);
 
-	// Act & Assert
-	assert_eq!(page.start_index(), 4); // (2-1)*3 + 1 = 4
-	assert_eq!(page.end_index(), 6); // 4 + 3 - 1 = 6
+	// Act
+	let start = page.start_index();
+	let end = page.end_index();
+
+	// Assert
+	assert_eq!(start, 4); // (2-1)*3 + 1 = 4
+	assert_eq!(end, 6); // 4 + 3 - 1 = 6
 }
 
 #[rstest]
@@ -402,11 +428,17 @@ fn page_empty_page_indices() {
 	let items: Vec<i32> = vec![];
 	let page = Page::new(items, 1, 1, 0, 10);
 
-	// Act & Assert
-	assert_eq!(page.start_index(), 0);
-	assert_eq!(page.end_index(), 0);
-	assert!(page.is_empty());
-	assert_eq!(page.len(), 0);
+	// Act
+	let start = page.start_index();
+	let end = page.end_index();
+	let is_empty = page.is_empty();
+	let len = page.len();
+
+	// Assert
+	assert_eq!(start, 0);
+	assert_eq!(end, 0);
+	assert!(is_empty);
+	assert_eq!(len, 0);
 }
 
 #[rstest]
@@ -797,7 +829,7 @@ fn cursor_paginator_invalid_cursor_returns_error() {
 	let paginator = CursorPaginator::new(5);
 
 	// Act
-	let result = paginator.paginate(&records, Some("not_valid_cursor".to_string()));
+	let result = paginator.paginate(&records, Some("not_valid_cursor".into()));
 
 	// Assert
 	assert!(result.is_err());
@@ -810,17 +842,17 @@ fn cursor_paginator_tie_breaking_same_id() {
 		TestRecord {
 			id: 1,
 			created_at: 1000,
-			label: "first".to_string(),
+			label: "first".into(),
 		},
 		TestRecord {
 			id: 1,
 			created_at: 2000,
-			label: "second".to_string(),
+			label: "second".into(),
 		},
 		TestRecord {
 			id: 2,
 			created_at: 3000,
-			label: "third".to_string(),
+			label: "third".into(),
 		},
 	];
 	let paginator = CursorPaginator::new(1);
@@ -873,7 +905,7 @@ fn database_cursor_encode_decode_roundtrip() {
 
 #[rstest]
 fn database_cursor_invalid_decode() {
-	// Arrange & Act
+	// Act
 	let result = DatabaseCursor::decode("totally-invalid");
 
 	// Assert
@@ -967,7 +999,7 @@ fn paginated_response_new_with_metadata() {
 	// Arrange
 	let metadata = PaginationMetadata {
 		count: 100,
-		next: Some("/api/items?page=2".to_string()),
+		next: Some("/api/items?page=2".into()),
 		previous: None,
 	};
 	let results = vec![1, 2, 3, 4, 5];

@@ -167,6 +167,7 @@ tokio = { workspace = true }
 cfg_aliases = "0.2"
 
 [dev-dependencies]
+insta = { workspace = true }
 reinhardt-forms = { workspace = true }
 wasm-bindgen-test = "0.3.56"
 serial_test = "3"

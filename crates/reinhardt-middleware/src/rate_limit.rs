@@ -84,19 +84,30 @@ impl RateLimitStore {
 		Self::default()
 	}
 
-	/// Get or create a bucket
-	fn get_or_create_bucket(&self, key: &str, capacity: f64, refill_rate: f64) -> Bucket {
+	/// Atomically consume tokens from a bucket, creating it if necessary.
+	///
+	/// Performs get-or-create, refill, and consume within a single write lock
+	/// to prevent TOCTOU race conditions where concurrent requests could both
+	/// pass the rate limit check.
+	///
+	/// Returns `Ok(remaining_tokens)` on success,
+	/// or `Err(retry_after)` if insufficient tokens.
+	fn consume_token(
+		&self,
+		key: &str,
+		capacity: f64,
+		refill_rate: f64,
+		cost: f64,
+	) -> std::result::Result<f64, Duration> {
 		let mut buckets = self.buckets.write().unwrap_or_else(|e| e.into_inner());
-		buckets
+		let bucket = buckets
 			.entry(key.to_string())
-			.or_insert_with(|| Bucket::new(capacity, refill_rate))
-			.clone()
-	}
-
-	/// Update a bucket
-	fn update_bucket(&self, key: &str, bucket: Bucket) {
-		let mut buckets = self.buckets.write().unwrap_or_else(|e| e.into_inner());
-		buckets.insert(key.to_string(), bucket);
+			.or_insert_with(|| Bucket::new(capacity, refill_rate));
+		if bucket.consume(cost) {
+			Ok(bucket.tokens)
+		} else {
+			Err(bucket.time_until_next_token())
+		}
 	}
 
 	/// Record a request
@@ -552,39 +563,38 @@ impl Middleware for RateLimitMiddleware {
 		// Generate key
 		let key = self.generate_key(&request);
 
-		// Get bucket
-		let mut bucket =
-			self.store
-				.get_or_create_bucket(&key, self.config.capacity, self.config.refill_rate);
+		// Atomically consume tokens within a single lock to prevent TOCTOU
+		match self.store.consume_token(
+			&key,
+			self.config.capacity,
+			self.config.refill_rate,
+			self.config.cost_per_request,
+		) {
+			Ok(remaining) => {
+				// Record request
+				self.store.record_request(&key);
 
-		// Consume tokens
-		if bucket.consume(self.config.cost_per_request) {
-			// Record request
-			self.store.record_request(&key);
+				// Call handler
+				let mut response = handler.handle(request).await?;
 
-			// Update bucket
-			self.store.update_bucket(&key, bucket.clone());
+				// Add rate limiting headers
+				response.headers.insert(
+					hyper::header::HeaderName::from_static("x-ratelimit-limit"),
+					hyper::header::HeaderValue::from_str(&self.config.capacity.to_string())
+						.unwrap_or_else(|_| hyper::header::HeaderValue::from_static("100")),
+				);
+				response.headers.insert(
+					hyper::header::HeaderName::from_static("x-ratelimit-remaining"),
+					hyper::header::HeaderValue::from_str(&remaining.floor().to_string())
+						.unwrap_or_else(|_| hyper::header::HeaderValue::from_static("0")),
+				);
 
-			// Call handler
-			let mut response = handler.handle(request).await?;
-
-			// Add rate limiting headers
-			response.headers.insert(
-				hyper::header::HeaderName::from_static("x-ratelimit-limit"),
-				hyper::header::HeaderValue::from_str(&self.config.capacity.to_string())
-					.unwrap_or_else(|_| hyper::header::HeaderValue::from_static("100")),
-			);
-			response.headers.insert(
-				hyper::header::HeaderName::from_static("x-ratelimit-remaining"),
-				hyper::header::HeaderValue::from_str(&bucket.tokens.floor().to_string())
-					.unwrap_or_else(|_| hyper::header::HeaderValue::from_static("0")),
-			);
-
-			Ok(response)
-		} else {
-			// Rate limit exceeded
-			let retry_after = bucket.time_until_next_token();
-			Ok(self.rate_limit_error(retry_after))
+				Ok(response)
+			}
+			Err(retry_after) => {
+				// Rate limit exceeded
+				Ok(self.rate_limit_error(retry_after))
+			}
 		}
 	}
 }

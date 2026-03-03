@@ -24,6 +24,7 @@ pub mod messages_helpers;
 
 // New shared modules
 // pub mod flatpages_common;
+pub mod apply_update;
 pub mod db_transaction;
 pub mod migration_duplicate;
 pub mod migrations;

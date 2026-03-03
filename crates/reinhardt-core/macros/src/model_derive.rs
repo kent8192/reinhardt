@@ -1023,7 +1023,7 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 					quote! { #migrations_crate::FieldType::Boolean }
 				}
 				"DateTime" => {
-					quote! { #migrations_crate::FieldType::DateTime }
+					quote! { #migrations_crate::FieldType::TimestampTz }
 				}
 				"Date" => {
 					quote! { #migrations_crate::FieldType::Date }
@@ -2533,6 +2533,30 @@ fn generate_registration_code(
 		if config.primary_key {
 			params.push(quote! { .with_param("primary_key", "true") });
 		}
+
+		// auto_increment: default true for primary_key fields (Django-compatible)
+		if config.primary_key {
+			let auto_inc = config.auto_increment.unwrap_or(true);
+			if auto_inc {
+				params.push(quote! { .with_param("auto_increment", "true") });
+			}
+		} else if let Some(true) = config.auto_increment {
+			params.push(quote! { .with_param("auto_increment", "true") });
+		}
+
+		// not_null: infer from Rust Option type
+		let (is_option, _) = extract_option_type(&field_info.ty);
+		let is_not_null = if let Some(null) = config.null {
+			!null
+		} else if config.primary_key {
+			true
+		} else {
+			!is_option
+		};
+		if is_not_null {
+			params.push(quote! { .with_param("not_null", "true") });
+		}
+
 		if let Some(max_length) = config.max_length {
 			let ml_str = max_length.to_string();
 			params.push(quote! { .with_param("max_length", #ml_str) });

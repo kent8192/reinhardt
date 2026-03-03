@@ -200,6 +200,12 @@ impl FieldType {
 				SqlDialect::Postgres | SqlDialect::Cockroachdb => "TSQUERY".to_string(),
 				SqlDialect::Mysql | SqlDialect::Sqlite => "TEXT".to_string(),
 			},
+			// SQLite requires INTEGER (not BIGINT) for AUTOINCREMENT support.
+			// Only INTEGER PRIMARY KEY columns can use AUTOINCREMENT in SQLite.
+			FieldType::BigInteger => match dialect {
+				SqlDialect::Sqlite => "INTEGER".to_string(),
+				_ => self.to_sql_string(),
+			},
 			FieldType::Float => match dialect {
 				SqlDialect::Postgres | SqlDialect::Cockroachdb => "REAL".to_string(),
 				_ => self.to_sql_string(),

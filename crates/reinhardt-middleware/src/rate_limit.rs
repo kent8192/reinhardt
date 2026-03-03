@@ -1216,4 +1216,27 @@ mod tests {
 		let response2 = middleware.process(request2, handler).await.unwrap();
 		assert_eq!(response2.status, StatusCode::OK);
 	}
+
+	#[rstest::rstest]
+	fn test_rwlock_poison_recovery_rate_limit_store() {
+		// Arrange
+		let store = Arc::new(RateLimitStore::new());
+		store.record_request("pre_poison");
+
+		// Act - poison the RwLock by panicking while holding a write guard
+		let store_clone = Arc::clone(&store);
+		let _ = thread::spawn(move || {
+			let _guard = store_clone.buckets.write().unwrap();
+			panic!("intentional panic to poison lock");
+		})
+		.join();
+
+		// Assert - operations still work after poison recovery
+		store.record_request("post_poison");
+		let count = store.request_count("post_poison", Duration::from_secs(60));
+		assert_eq!(count, 1);
+
+		store.cleanup(Duration::from_secs(0));
+		store.reset();
+	}
 }

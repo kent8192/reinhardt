@@ -212,6 +212,7 @@ impl<T, K> ReverseRelationship for OneToMany<T, K> {
 mod tests {
 	use super::*;
 
+	// Allow dead_code: test model struct used for trait implementation verification
 	#[allow(dead_code)]
 	#[derive(Clone)]
 	struct User {
@@ -219,6 +220,7 @@ mod tests {
 		name: String,
 	}
 
+	// Allow dead_code: test model struct used for trait implementation verification
 	#[allow(dead_code)]
 	#[derive(Clone)]
 	struct Post {

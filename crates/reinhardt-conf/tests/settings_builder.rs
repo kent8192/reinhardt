@@ -12,6 +12,7 @@ use reinhardt_conf::settings::{DatabaseConfig, MiddlewareConfig, Settings, Templ
 use rstest::rstest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use serial_test::serial;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -116,7 +117,7 @@ fn builder_contains_key_returns_true_for_existing() {
 		.build()
 		.unwrap();
 
-	// Act / Assert
+	// Assert
 	assert!(settings.contains_key("exists"));
 }
 
@@ -125,7 +126,7 @@ fn builder_contains_key_returns_false_for_missing() {
 	// Arrange
 	let settings = SettingsBuilder::new().build().unwrap();
 
-	// Act / Assert
+	// Assert
 	assert!(!settings.contains_key("nonexistent"));
 }
 
@@ -217,7 +218,7 @@ fn builder_get_raw_returns_none_for_missing() {
 	// Arrange
 	let settings = SettingsBuilder::new().build().unwrap();
 
-	// Act / Assert
+	// Assert
 	assert!(settings.get_raw("missing").is_none());
 }
 
@@ -424,7 +425,7 @@ fn merged_settings_clone_is_independent() {
 
 #[rstest]
 fn settings_default_debug_is_true() {
-	// Arrange / Act
+	// Act
 	let settings = Settings::default();
 
 	// Assert
@@ -433,7 +434,7 @@ fn settings_default_debug_is_true() {
 
 #[rstest]
 fn settings_default_time_zone_is_utc() {
-	// Arrange / Act
+	// Act
 	let settings = Settings::default();
 
 	// Assert
@@ -442,7 +443,7 @@ fn settings_default_time_zone_is_utc() {
 
 #[rstest]
 fn settings_default_language_code_is_en_us() {
-	// Arrange / Act
+	// Act
 	let settings = Settings::default();
 
 	// Assert
@@ -451,7 +452,7 @@ fn settings_default_language_code_is_en_us() {
 
 #[rstest]
 fn settings_default_installed_apps_is_empty() {
-	// Arrange / Act
+	// Act
 	let settings = Settings::default();
 
 	// Assert
@@ -460,7 +461,7 @@ fn settings_default_installed_apps_is_empty() {
 
 #[rstest]
 fn settings_default_middleware_is_empty() {
-	// Arrange / Act
+	// Act
 	let settings = Settings::default();
 
 	// Assert
@@ -469,7 +470,7 @@ fn settings_default_middleware_is_empty() {
 
 #[rstest]
 fn settings_default_static_url() {
-	// Arrange / Act
+	// Act
 	let settings = Settings::default();
 
 	// Assert
@@ -478,7 +479,7 @@ fn settings_default_static_url() {
 
 #[rstest]
 fn settings_default_media_url() {
-	// Arrange / Act
+	// Act
 	let settings = Settings::default();
 
 	// Assert
@@ -487,7 +488,7 @@ fn settings_default_media_url() {
 
 #[rstest]
 fn settings_default_databases_has_default_entry() {
-	// Arrange / Act
+	// Act
 	let settings = Settings::default();
 
 	// Assert
@@ -496,7 +497,7 @@ fn settings_default_databases_has_default_entry() {
 
 #[rstest]
 fn settings_default_append_slash_is_true() {
-	// Arrange / Act
+	// Act
 	let settings = Settings::default();
 
 	// Assert
@@ -523,7 +524,7 @@ fn settings_new_sets_base_dir_and_secret_key() {
 
 #[rstest]
 fn settings_new_debug_defaults_to_true() {
-	// Arrange / Act
+	// Act
 	let settings = Settings::new(PathBuf::from("/app"), "some-key".to_string());
 
 	// Assert
@@ -644,7 +645,7 @@ fn settings_managers_from_admins_copies_all() {
 
 #[rstest]
 fn database_config_sqlite_factory() {
-	// Arrange / Act
+	// Act
 	let db = DatabaseConfig::sqlite("myapp.db");
 
 	// Assert
@@ -658,7 +659,7 @@ fn database_config_sqlite_factory() {
 
 #[rstest]
 fn database_config_postgresql_factory() {
-	// Arrange / Act
+	// Act
 	let db = DatabaseConfig::postgresql("appdb", "admin", "secret", "db.local", 5432);
 
 	// Assert
@@ -671,7 +672,7 @@ fn database_config_postgresql_factory() {
 
 #[rstest]
 fn database_config_mysql_factory() {
-	// Arrange / Act
+	// Act
 	let db = DatabaseConfig::mysql("appdb", "root", "rootpass", "mysql.local", 3306);
 
 	// Assert
@@ -707,7 +708,7 @@ fn database_config_to_url_postgresql() {
 
 #[rstest]
 fn database_config_builder_methods() {
-	// Arrange / Act
+	// Act
 	let db = DatabaseConfig::new("reinhardt.db.backends.postgresql", "testdb")
 		.with_user("dbuser")
 		.with_password("dbpass")
@@ -722,7 +723,7 @@ fn database_config_builder_methods() {
 
 #[rstest]
 fn database_config_default_is_sqlite() {
-	// Arrange / Act
+	// Act
 	let db = DatabaseConfig::default();
 
 	// Assert
@@ -735,7 +736,7 @@ fn database_config_default_is_sqlite() {
 
 #[rstest]
 fn middleware_config_new_has_empty_options() {
-	// Arrange / Act
+	// Act
 	let mw = MiddlewareConfig::new("myapp.middleware.Auth");
 
 	// Assert
@@ -745,7 +746,7 @@ fn middleware_config_new_has_empty_options() {
 
 #[rstest]
 fn middleware_config_with_option_stores_value() {
-	// Arrange / Act
+	// Act
 	let mw = MiddlewareConfig::new("myapp.middleware.Timeout")
 		.with_option("timeout_secs", serde_json::json!(60));
 
@@ -755,7 +756,7 @@ fn middleware_config_with_option_stores_value() {
 
 #[rstest]
 fn middleware_config_multiple_options() {
-	// Arrange / Act
+	// Act
 	let mw = MiddlewareConfig::new("myapp.middleware.Cors")
 		.with_option("allow_all", serde_json::json!(true))
 		.with_option("max_age", serde_json::json!(3600));
@@ -771,7 +772,7 @@ fn middleware_config_multiple_options() {
 
 #[rstest]
 fn template_config_default_backend() {
-	// Arrange / Act
+	// Act
 	let cfg = TemplateConfig::default();
 
 	// Assert
@@ -922,6 +923,7 @@ fn security_validator_fails_for_production_with_empty_allowed_hosts() {
 // ===========================================================================
 
 #[rstest]
+#[serial(env)]
 fn builder_with_env_no_prefix_loads_env_vars() {
 	// Arrange
 	let builder = SettingsBuilder::new().with_env(None);
@@ -934,6 +936,7 @@ fn builder_with_env_no_prefix_loads_env_vars() {
 }
 
 #[rstest]
+#[serial(env)]
 fn builder_with_env_prefix_loads_only_matching_vars() {
 	// Arrange – set a test-specific env var
 	// SAFETY: manipulating env vars is inherently racy in multi-threaded tests,

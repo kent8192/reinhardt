@@ -41,7 +41,7 @@ fn write_env_file(content: &str) -> (TempDir, std::path::PathBuf) {
 
 #[rstest]
 #[serial(env)]
-fn test_env_loader_loads_simple_key_value() {
+fn env_loader_loads_simple_key_value() {
 	// Arrange
 	let (_dir, path) = write_env_file("SIMPLE_KEY=simple_value\n");
 
@@ -60,7 +60,7 @@ fn test_env_loader_loads_simple_key_value() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_loader_skips_comment_lines() {
+fn env_loader_skips_comment_lines() {
 	// Arrange
 	let (_dir, path) = write_env_file("# This is a comment\nCOMMENT_TEST=ok\n");
 
@@ -79,7 +79,7 @@ fn test_env_loader_skips_comment_lines() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_loader_skips_empty_lines() {
+fn env_loader_skips_empty_lines() {
 	// Arrange
 	let (_dir, path) = write_env_file("\n\nEMPTY_LINE_TEST=val\n\n");
 
@@ -98,7 +98,7 @@ fn test_env_loader_skips_empty_lines() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_loader_single_quoted_value() {
+fn env_loader_single_quoted_value() {
 	// Arrange
 	let (_dir, path) = write_env_file("SQ_VAR='single quoted value'\n");
 
@@ -117,7 +117,7 @@ fn test_env_loader_single_quoted_value() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_loader_double_quoted_value() {
+fn env_loader_double_quoted_value() {
 	// Arrange
 	let (_dir, path) = write_env_file("DQ_VAR=\"double quoted value\"\n");
 
@@ -136,7 +136,7 @@ fn test_env_loader_double_quoted_value() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_loader_export_prefix() {
+fn env_loader_export_prefix() {
 	// Arrange
 	let (_dir, path) = write_env_file("export EXPORTED_KEY=exported_value\n");
 
@@ -155,7 +155,7 @@ fn test_env_loader_export_prefix() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_loader_does_not_overwrite_by_default() {
+fn env_loader_does_not_overwrite_by_default() {
 	// Arrange
 	unsafe { std::env::set_var("EXISTING_KEY", "original") };
 	let (_dir, path) = write_env_file("EXISTING_KEY=overwritten\n");
@@ -175,7 +175,7 @@ fn test_env_loader_does_not_overwrite_by_default() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_loader_overwrite_replaces_existing_value() {
+fn env_loader_overwrite_replaces_existing_value() {
 	// Arrange
 	unsafe { std::env::set_var("OVERWRITE_KEY", "original") };
 	let (_dir, path) = write_env_file("OVERWRITE_KEY=replaced\n");
@@ -196,7 +196,7 @@ fn test_env_loader_overwrite_replaces_existing_value() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_loader_variable_interpolation_dollar_syntax() {
+fn env_loader_variable_interpolation_dollar_syntax() {
 	// Arrange
 	unsafe { std::env::set_var("BASE_PATH", "/home/user") };
 	let (_dir, path) = write_env_file("FULL_PATH=$BASE_PATH/projects\n");
@@ -220,7 +220,7 @@ fn test_env_loader_variable_interpolation_dollar_syntax() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_loader_variable_interpolation_braces_syntax() {
+fn env_loader_variable_interpolation_braces_syntax() {
 	// Arrange
 	unsafe { std::env::set_var("APP_NAME", "reinhardt") };
 	let (_dir, path) = write_env_file("APP_LOG=${APP_NAME}.log\n");
@@ -244,7 +244,7 @@ fn test_env_loader_variable_interpolation_braces_syntax() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_loader_escaped_dollar_not_expanded() {
+fn env_loader_escaped_dollar_not_expanded() {
 	// Arrange
 	let (_dir, path) = write_env_file("LITERAL_DOLLAR=\\$not_a_var\n");
 
@@ -264,7 +264,7 @@ fn test_env_loader_escaped_dollar_not_expanded() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_loader_unescape_newline() {
+fn env_loader_unescape_newline() {
 	// Arrange
 	let (_dir, path) = write_env_file("MULTILINE_VAL=line1\\nline2\n");
 
@@ -283,7 +283,7 @@ fn test_env_loader_unescape_newline() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_loader_returns_error_for_missing_file() {
+fn env_loader_returns_error_for_missing_file() {
 	// Arrange
 	let path = std::path::PathBuf::from("/tmp/nonexistent_env_file_for_test.env");
 
@@ -296,7 +296,7 @@ fn test_env_loader_returns_error_for_missing_file() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_loader_load_optional_returns_false_for_missing_file() {
+fn env_loader_load_optional_returns_false_for_missing_file() {
 	// Arrange
 	let path = std::path::PathBuf::from("/tmp/nonexistent_optional.env");
 
@@ -312,7 +312,7 @@ fn test_env_loader_load_optional_returns_false_for_missing_file() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_loader_load_optional_returns_true_for_existing_file() {
+fn env_loader_load_optional_returns_true_for_existing_file() {
 	// Arrange
 	let (_dir, path) = write_env_file("OPTIONAL_KEY=optional_value\n");
 
@@ -336,7 +336,7 @@ fn test_env_loader_load_optional_returns_true_for_existing_file() {
 
 #[rstest]
 #[serial(env)]
-fn test_load_env_convenience_function() {
+fn load_env_convenience_function() {
 	// Arrange
 	let (_dir, path) = write_env_file("CONVENIENCE_KEY=conv_value\n");
 
@@ -352,7 +352,7 @@ fn test_load_env_convenience_function() {
 
 #[rstest]
 #[serial(env)]
-fn test_load_env_optional_convenience_function_missing() {
+fn load_env_optional_convenience_function_missing() {
 	// Arrange
 	let path = std::path::PathBuf::from("/tmp/does_not_exist_optional_conv.env");
 
@@ -370,7 +370,7 @@ fn test_load_env_optional_convenience_function_missing() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_str_reads_existing_variable() {
+fn env_str_reads_existing_variable() {
 	// Arrange
 	unsafe { std::env::set_var("ENV_STR_TEST", "hello_world") };
 	let env = Env::new();
@@ -387,7 +387,7 @@ fn test_env_str_reads_existing_variable() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_str_returns_error_for_missing_variable() {
+fn env_str_returns_error_for_missing_variable() {
 	// Arrange
 	let env = Env::new();
 
@@ -400,7 +400,7 @@ fn test_env_str_returns_error_for_missing_variable() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_str_with_default_uses_default_when_missing() {
+fn env_str_with_default_uses_default_when_missing() {
 	// Arrange
 	let env = Env::new();
 
@@ -419,7 +419,7 @@ fn test_env_str_with_default_uses_default_when_missing() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_int_reads_positive_integer() {
+fn env_int_reads_positive_integer() {
 	// Arrange
 	unsafe { std::env::set_var("ENV_INT_POS", "42") };
 	let env = Env::new();
@@ -436,7 +436,7 @@ fn test_env_int_reads_positive_integer() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_int_reads_negative_integer() {
+fn env_int_reads_negative_integer() {
 	// Arrange
 	unsafe { std::env::set_var("ENV_INT_NEG", "-7") };
 	let env = Env::new();
@@ -453,7 +453,7 @@ fn test_env_int_reads_negative_integer() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_int_returns_parse_error_for_non_numeric() {
+fn env_int_returns_parse_error_for_non_numeric() {
 	// Arrange
 	unsafe { std::env::set_var("ENV_INT_BAD", "not_a_number") };
 	let env = Env::new();
@@ -470,7 +470,7 @@ fn test_env_int_returns_parse_error_for_non_numeric() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_int_with_default_uses_default_when_missing() {
+fn env_int_with_default_uses_default_when_missing() {
 	// Arrange
 	let env = Env::new();
 
@@ -497,7 +497,7 @@ fn test_env_int_with_default_uses_default_when_missing() {
 #[case("0", false)]
 #[case("no", false)]
 #[case("off", false)]
-fn test_env_bool_various_truthy_falsy_values(#[case] raw: &str, #[case] expected: bool) {
+fn env_bool_various_truthy_falsy_values(#[case] raw: &str, #[case] expected: bool) {
 	// Arrange
 	unsafe { std::env::set_var("ENV_BOOL_CASE", raw) };
 	let env = Env::new();
@@ -514,7 +514,7 @@ fn test_env_bool_various_truthy_falsy_values(#[case] raw: &str, #[case] expected
 
 #[rstest]
 #[serial(env)]
-fn test_env_bool_returns_parse_error_for_invalid_value() {
+fn env_bool_returns_parse_error_for_invalid_value() {
 	// Arrange
 	unsafe { std::env::set_var("ENV_BOOL_INVALID", "maybe") };
 	let env = Env::new();
@@ -531,7 +531,7 @@ fn test_env_bool_returns_parse_error_for_invalid_value() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_bool_with_default_true_when_missing() {
+fn env_bool_with_default_true_when_missing() {
 	// Arrange
 	let env = Env::new();
 
@@ -550,7 +550,7 @@ fn test_env_bool_with_default_true_when_missing() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_list_reads_comma_separated_values() {
+fn env_list_reads_comma_separated_values() {
 	// Arrange
 	unsafe { std::env::set_var("ENV_LIST_TEST", "alpha,beta,gamma") };
 	let env = Env::new();
@@ -567,7 +567,7 @@ fn test_env_list_reads_comma_separated_values() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_list_trims_whitespace_around_items() {
+fn env_list_trims_whitespace_around_items() {
 	// Arrange
 	unsafe { std::env::set_var("ENV_LIST_SPACES", "  a , b , c  ") };
 	let env = Env::new();
@@ -584,7 +584,7 @@ fn test_env_list_trims_whitespace_around_items() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_list_with_default_when_missing() {
+fn env_list_with_default_when_missing() {
 	// Arrange
 	let env = Env::new();
 	let default = vec!["x".to_string(), "y".to_string()];
@@ -604,7 +604,7 @@ fn test_env_list_with_default_when_missing() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_path_reads_path_variable() {
+fn env_path_reads_path_variable() {
 	// Arrange
 	unsafe { std::env::set_var("ENV_PATH_TEST", "/tmp/my_project") };
 	let env = Env::new();
@@ -621,7 +621,7 @@ fn test_env_path_reads_path_variable() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_path_with_default_when_missing() {
+fn env_path_with_default_when_missing() {
 	// Arrange
 	let env = Env::new();
 	let default = std::path::PathBuf::from("/default/path");
@@ -641,7 +641,7 @@ fn test_env_path_with_default_when_missing() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_with_prefix_reads_prefixed_variable() {
+fn env_with_prefix_reads_prefixed_variable() {
 	// Arrange
 	unsafe { std::env::set_var("MYAPP_PORT", "8080") };
 	let env = Env::new().with_prefix("MYAPP_");
@@ -658,7 +658,7 @@ fn test_env_with_prefix_reads_prefixed_variable() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_with_prefix_missing_returns_missing_variable_error() {
+fn env_with_prefix_missing_returns_missing_variable_error() {
 	// Arrange
 	let env = Env::new().with_prefix("MYAPP_");
 
@@ -677,7 +677,7 @@ fn test_env_with_prefix_missing_returns_missing_variable_error() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_database_url_reads_postgresql_url() {
+fn env_database_url_reads_postgresql_url() {
 	// Arrange
 	unsafe {
 		std::env::set_var(
@@ -706,7 +706,7 @@ fn test_env_database_url_reads_postgresql_url() {
 
 #[rstest]
 #[serial(env)]
-fn test_env_database_url_with_default_sqlite_memory() {
+fn env_database_url_with_default_sqlite_memory() {
 	// Arrange
 	let env = Env::new();
 
@@ -728,8 +728,8 @@ fn test_env_database_url_with_default_sqlite_memory() {
 #[case("ok", true)]
 #[case("y", true)]
 #[case("n", false)]
-fn test_parse_bool_extended_truthy_falsy_values(#[case] input: &str, #[case] expected: bool) {
-	// Arrange & Act
+fn parse_bool_extended_truthy_falsy_values(#[case] input: &str, #[case] expected: bool) {
+	// Act
 	let result = parse_bool(input).expect("parse_bool should succeed");
 
 	// Assert
@@ -737,8 +737,8 @@ fn test_parse_bool_extended_truthy_falsy_values(#[case] input: &str, #[case] exp
 }
 
 #[rstest]
-fn test_parse_bool_returns_error_for_unknown_value() {
-	// Arrange & Act
+fn parse_bool_returns_error_for_unknown_value() {
+	// Act
 	let result = parse_bool("maybe");
 
 	// Assert
@@ -750,8 +750,8 @@ fn test_parse_bool_returns_error_for_unknown_value() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_parse_list_empty_string_returns_empty_vec() {
-	// Arrange & Act
+fn parse_list_empty_string_returns_empty_vec() {
+	// Act
 	let result = parse_list("");
 
 	// Assert
@@ -759,8 +759,8 @@ fn test_parse_list_empty_string_returns_empty_vec() {
 }
 
 #[rstest]
-fn test_parse_list_single_item_no_comma() {
-	// Arrange & Act
+fn parse_list_single_item_no_comma() {
+	// Act
 	let result = parse_list("only_item");
 
 	// Assert
@@ -768,11 +768,11 @@ fn test_parse_list_single_item_no_comma() {
 }
 
 #[rstest]
-fn test_parse_list_filters_empty_segments() {
+fn parse_list_filters_empty_segments() {
 	// Arrange – trailing comma produces empty segment
 	let result = parse_list("a,b,");
 
-	// Act & Assert
+	// Assert
 	assert_eq!(result, vec!["a", "b"]);
 }
 
@@ -781,8 +781,8 @@ fn test_parse_list_filters_empty_segments() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_parse_dict_basic_key_value_pairs() {
-	// Arrange & Act
+fn parse_dict_basic_key_value_pairs() {
+	// Act
 	let dict = parse_dict("host=localhost,port=5432,dbname=mydb");
 
 	// Assert
@@ -792,8 +792,8 @@ fn test_parse_dict_basic_key_value_pairs() {
 }
 
 #[rstest]
-fn test_parse_dict_trims_whitespace_from_keys_and_values() {
-	// Arrange & Act
+fn parse_dict_trims_whitespace_from_keys_and_values() {
+	// Act
 	let dict = parse_dict(" host = localhost , port = 5432 ");
 
 	// Assert
@@ -806,8 +806,8 @@ fn test_parse_dict_trims_whitespace_from_keys_and_values() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_parse_database_url_sqlite_memory() {
-	// Arrange & Act
+fn parse_database_url_sqlite_memory() {
+	// Act
 	let db = parse_database_url("sqlite::memory:").expect("parse should succeed");
 
 	// Assert
@@ -818,8 +818,8 @@ fn test_parse_database_url_sqlite_memory() {
 }
 
 #[rstest]
-fn test_parse_database_url_sqlite_file_path() {
-	// Arrange & Act
+fn parse_database_url_sqlite_file_path() {
+	// Act
 	let db = parse_database_url("sqlite:///var/data/app.db").expect("parse should succeed");
 
 	// Assert
@@ -828,8 +828,8 @@ fn test_parse_database_url_sqlite_file_path() {
 }
 
 #[rstest]
-fn test_parse_database_url_mysql() {
-	// Arrange & Act
+fn parse_database_url_mysql() {
+	// Act
 	let db =
 		parse_database_url("mysql://root:pass@127.0.0.1:3306/shop").expect("parse should succeed");
 
@@ -841,8 +841,8 @@ fn test_parse_database_url_mysql() {
 }
 
 #[rstest]
-fn test_parse_database_url_unsupported_scheme_returns_error() {
-	// Arrange & Act
+fn parse_database_url_unsupported_scheme_returns_error() {
+	// Act
 	let result = parse_database_url("ftp://localhost/dbname");
 
 	// Assert
@@ -854,8 +854,8 @@ fn test_parse_database_url_unsupported_scheme_returns_error() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_parse_cache_url_locmem() {
-	// Arrange & Act
+fn parse_cache_url_locmem() {
+	// Act
 	let cache = parse_cache_url("locmem://").expect("parse should succeed");
 
 	// Assert
@@ -864,8 +864,8 @@ fn test_parse_cache_url_locmem() {
 }
 
 #[rstest]
-fn test_parse_cache_url_redis() {
-	// Arrange & Act
+fn parse_cache_url_redis() {
+	// Act
 	let cache = parse_cache_url("redis://localhost:6379/1").expect("parse should succeed");
 
 	// Assert
@@ -877,8 +877,8 @@ fn test_parse_cache_url_redis() {
 }
 
 #[rstest]
-fn test_parse_cache_url_memcached() {
-	// Arrange & Act
+fn parse_cache_url_memcached() {
+	// Act
 	let cache = parse_cache_url("memcached://localhost:11211").expect("parse should succeed");
 
 	// Assert
@@ -890,8 +890,8 @@ fn test_parse_cache_url_memcached() {
 }
 
 #[rstest]
-fn test_parse_cache_url_unsupported_scheme_returns_error() {
-	// Arrange & Act
+fn parse_cache_url_unsupported_scheme_returns_error() {
+	// Act
 	let result = parse_cache_url("unknown://host");
 
 	// Assert

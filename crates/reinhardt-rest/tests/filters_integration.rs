@@ -75,7 +75,7 @@ impl SearchableModel for Article {
 
 #[rstest]
 #[tokio::test]
-async fn test_custom_filter_backend_starts_empty() {
+async fn custom_filter_backend_starts_empty() {
 	// Arrange
 	let backend = CustomFilterBackend::new();
 
@@ -88,7 +88,7 @@ async fn test_custom_filter_backend_starts_empty() {
 
 #[rstest]
 #[tokio::test]
-async fn test_custom_filter_backend_passes_sql_unchanged_when_no_filters() {
+async fn custom_filter_backend_passes_sql_unchanged_when_no_filters() {
 	// Arrange
 	let backend = CustomFilterBackend::new();
 	let params = HashMap::new();
@@ -103,7 +103,7 @@ async fn test_custom_filter_backend_passes_sql_unchanged_when_no_filters() {
 
 #[rstest]
 #[tokio::test]
-async fn test_custom_filter_backend_increments_count_on_add() {
+async fn custom_filter_backend_increments_count_on_add() {
 	// Arrange
 	let mut backend = CustomFilterBackend::new();
 
@@ -121,7 +121,7 @@ async fn test_custom_filter_backend_increments_count_on_add() {
 
 #[rstest]
 #[tokio::test]
-async fn test_custom_filter_backend_applies_filters_in_order() {
+async fn custom_filter_backend_applies_filters_in_order() {
 	// Arrange
 	let mut backend = CustomFilterBackend::new();
 	backend.add_filter(Box::new(
@@ -141,12 +141,12 @@ async fn test_custom_filter_backend_applies_filters_in_order() {
 
 	// Assert
 	assert!(result.contains("WHERE"));
-	assert!(result.contains("ORDER BY views ASC"));
+	assert!(result.ends_with("ORDER BY views ASC"));
 }
 
 #[rstest]
 #[tokio::test]
-async fn test_custom_filter_backend_propagates_filter_error() {
+async fn custom_filter_backend_propagates_filter_error() {
 	// Arrange
 	let mut backend = CustomFilterBackend::new();
 	// Search backend with no fields configured will fail when query param is present
@@ -169,7 +169,7 @@ async fn test_custom_filter_backend_propagates_filter_error() {
 
 #[rstest]
 #[tokio::test]
-async fn test_search_backend_adds_where_clause_for_single_field() {
+async fn search_backend_adds_where_clause_for_single_field() {
 	// Arrange
 	let backend = SimpleSearchBackend::new("search").with_field("title");
 	let mut params = HashMap::new();
@@ -180,14 +180,15 @@ async fn test_search_backend_adds_where_clause_for_single_field() {
 	let result = backend.filter_queryset(&params, sql).await.unwrap();
 
 	// Assert
-	assert!(result.contains("WHERE"));
-	assert!(result.contains("LIKE"));
-	assert!(result.contains("rust"));
+	assert_eq!(
+		result,
+		"SELECT * FROM articles WHERE (`title` LIKE '%rust%')"
+	);
 }
 
 #[rstest]
 #[tokio::test]
-async fn test_search_backend_generates_or_clause_for_multiple_fields() {
+async fn search_backend_generates_or_clause_for_multiple_fields() {
 	// Arrange
 	let backend = SimpleSearchBackend::new("search")
 		.with_field("title")
@@ -200,15 +201,15 @@ async fn test_search_backend_generates_or_clause_for_multiple_fields() {
 	let result = backend.filter_queryset(&params, sql).await.unwrap();
 
 	// Assert
-	assert!(result.contains("WHERE"));
-	assert!(result.contains("OR"));
-	assert!(result.contains("`title` LIKE '%web%'"));
-	assert!(result.contains("`content` LIKE '%web%'"));
+	assert_eq!(
+		result,
+		"SELECT * FROM articles WHERE ((`title` LIKE '%web%' OR `content` LIKE '%web%'))"
+	);
 }
 
 #[rstest]
 #[tokio::test]
-async fn test_search_backend_returns_original_sql_when_no_query_param() {
+async fn search_backend_returns_original_sql_when_no_query_param() {
 	// Arrange
 	let backend = SimpleSearchBackend::new("search").with_field("title");
 	let params = HashMap::new();
@@ -223,7 +224,7 @@ async fn test_search_backend_returns_original_sql_when_no_query_param() {
 
 #[rstest]
 #[tokio::test]
-async fn test_search_backend_returns_error_when_no_fields_configured() {
+async fn search_backend_returns_error_when_no_fields_configured() {
 	// Arrange
 	let backend = SimpleSearchBackend::new("search");
 	let mut params = HashMap::new();
@@ -245,7 +246,7 @@ async fn test_search_backend_returns_error_when_no_fields_configured() {
 
 #[rstest]
 #[tokio::test]
-async fn test_search_backend_uses_mysql_dialect_by_default() {
+async fn search_backend_uses_mysql_dialect_by_default() {
 	// Arrange
 	let backend = SimpleSearchBackend::new("q").with_field("name");
 	let mut params = HashMap::new();
@@ -256,13 +257,15 @@ async fn test_search_backend_uses_mysql_dialect_by_default() {
 	let result = backend.filter_queryset(&params, sql).await.unwrap();
 
 	// Assert
-	// MySQL uses backtick-quoted identifiers
-	assert!(result.contains("`name` LIKE '%test%'"));
+	assert_eq!(
+		result,
+		"SELECT * FROM products WHERE (`name` LIKE '%test%')"
+	);
 }
 
 #[rstest]
 #[tokio::test]
-async fn test_search_backend_uses_double_quotes_for_postgresql_dialect() {
+async fn search_backend_uses_double_quotes_for_postgresql_dialect() {
 	// Arrange
 	let backend = SimpleSearchBackend::new("q")
 		.with_field("name")
@@ -275,13 +278,15 @@ async fn test_search_backend_uses_double_quotes_for_postgresql_dialect() {
 	let result = backend.filter_queryset(&params, sql).await.unwrap();
 
 	// Assert
-	// PostgreSQL uses double-quote identifiers
-	assert!(result.contains("\"name\" LIKE '%test%'"));
+	assert_eq!(
+		result,
+		"SELECT * FROM products WHERE (\"name\" LIKE '%test%')"
+	);
 }
 
 #[rstest]
 #[tokio::test]
-async fn test_search_backend_escapes_percent_in_search_query() {
+async fn search_backend_escapes_percent_in_search_query() {
 	// Arrange
 	let backend = SimpleSearchBackend::new("search").with_field("title");
 	let mut params = HashMap::new();
@@ -300,7 +305,7 @@ async fn test_search_backend_escapes_percent_in_search_query() {
 
 #[rstest]
 #[tokio::test]
-async fn test_search_backend_sql_injection_produces_balanced_quotes() {
+async fn search_backend_sql_injection_produces_balanced_quotes() {
 	// Arrange
 	let backend = SimpleSearchBackend::new("search").with_field("title");
 	let mut params = HashMap::new();
@@ -326,7 +331,7 @@ async fn test_search_backend_sql_injection_produces_balanced_quotes() {
 
 #[rstest]
 #[tokio::test]
-async fn test_ordering_backend_adds_asc_order_by_clause() {
+async fn ordering_backend_adds_asc_order_by_clause() {
 	// Arrange
 	let backend = SimpleOrderingBackend::new("ordering").allow_field("title");
 	let mut params = HashMap::new();
@@ -337,12 +342,12 @@ async fn test_ordering_backend_adds_asc_order_by_clause() {
 	let result = backend.filter_queryset(&params, sql).await.unwrap();
 
 	// Assert
-	assert!(result.contains("ORDER BY title ASC"));
+	assert_eq!(result, "SELECT * FROM articles ORDER BY title ASC");
 }
 
 #[rstest]
 #[tokio::test]
-async fn test_ordering_backend_adds_desc_order_by_clause_with_dash_prefix() {
+async fn ordering_backend_adds_desc_order_by_clause_with_dash_prefix() {
 	// Arrange
 	let backend = SimpleOrderingBackend::new("ordering").allow_field("created_at");
 	let mut params = HashMap::new();
@@ -353,12 +358,12 @@ async fn test_ordering_backend_adds_desc_order_by_clause_with_dash_prefix() {
 	let result = backend.filter_queryset(&params, sql).await.unwrap();
 
 	// Assert
-	assert!(result.contains("ORDER BY created_at DESC"));
+	assert_eq!(result, "SELECT * FROM articles ORDER BY created_at DESC");
 }
 
 #[rstest]
 #[tokio::test]
-async fn test_ordering_backend_returns_error_for_disallowed_field() {
+async fn ordering_backend_returns_error_for_disallowed_field() {
 	// Arrange
 	let backend = SimpleOrderingBackend::new("ordering").allow_field("title");
 	let mut params = HashMap::new();
@@ -380,7 +385,7 @@ async fn test_ordering_backend_returns_error_for_disallowed_field() {
 
 #[rstest]
 #[tokio::test]
-async fn test_ordering_backend_returns_original_sql_when_no_ordering_param() {
+async fn ordering_backend_returns_original_sql_when_no_ordering_param() {
 	// Arrange
 	let backend = SimpleOrderingBackend::new("ordering").allow_field("title");
 	let params = HashMap::new();
@@ -395,7 +400,7 @@ async fn test_ordering_backend_returns_original_sql_when_no_ordering_param() {
 
 #[rstest]
 #[tokio::test]
-async fn test_ordering_backend_allows_multiple_fields() {
+async fn ordering_backend_allows_multiple_fields() {
 	// Arrange
 	let backend = SimpleOrderingBackend::new("ordering")
 		.allow_field("title")
@@ -409,7 +414,7 @@ async fn test_ordering_backend_allows_multiple_fields() {
 	let result = backend.filter_queryset(&params, sql).await.unwrap();
 
 	// Assert
-	assert!(result.contains("ORDER BY views DESC"));
+	assert_eq!(result, "SELECT * FROM articles ORDER BY views DESC");
 }
 
 // ---------------------------------------------------------------------------
@@ -417,8 +422,8 @@ async fn test_ordering_backend_allows_multiple_fields() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_range_filter_created_with_no_bounds() {
-	// Arrange + Act
+fn range_filter_created_with_no_bounds() {
+	// Act
 	let filter: RangeFilter<i32> = RangeFilter::new("price");
 
 	// Assert
@@ -427,8 +432,8 @@ fn test_range_filter_created_with_no_bounds() {
 }
 
 #[rstest]
-fn test_range_filter_gte_sets_inclusive_lower_bound() {
-	// Arrange + Act
+fn range_filter_gte_sets_inclusive_lower_bound() {
+	// Act
 	let filter: RangeFilter<i32> = RangeFilter::new("price").gte(100);
 
 	// Assert
@@ -437,8 +442,8 @@ fn test_range_filter_gte_sets_inclusive_lower_bound() {
 }
 
 #[rstest]
-fn test_range_filter_lte_sets_inclusive_upper_bound() {
-	// Arrange + Act
+fn range_filter_lte_sets_inclusive_upper_bound() {
+	// Act
 	let filter: RangeFilter<i32> = RangeFilter::new("price").lte(500);
 
 	// Assert
@@ -447,8 +452,8 @@ fn test_range_filter_lte_sets_inclusive_upper_bound() {
 }
 
 #[rstest]
-fn test_range_filter_between_sets_both_bounds() {
-	// Arrange + Act
+fn range_filter_between_sets_both_bounds() {
+	// Act
 	let filter: RangeFilter<i32> = RangeFilter::new("price").between(100, 500);
 
 	// Assert
@@ -458,8 +463,8 @@ fn test_range_filter_between_sets_both_bounds() {
 }
 
 #[rstest]
-fn test_range_filter_gt_sets_exclusive_lower_bound() {
-	// Arrange + Act
+fn range_filter_gt_sets_exclusive_lower_bound() {
+	// Act
 	let filter: RangeFilter<i32> = RangeFilter::new("age").gt(18);
 
 	// Assert
@@ -468,8 +473,8 @@ fn test_range_filter_gt_sets_exclusive_lower_bound() {
 }
 
 #[rstest]
-fn test_range_filter_lt_sets_exclusive_upper_bound() {
-	// Arrange + Act
+fn range_filter_lt_sets_exclusive_upper_bound() {
+	// Act
 	let filter: RangeFilter<i32> = RangeFilter::new("age").lt(65);
 
 	// Assert
@@ -478,8 +483,8 @@ fn test_range_filter_lt_sets_exclusive_upper_bound() {
 }
 
 #[rstest]
-fn test_range_filter_chained_gt_and_lt() {
-	// Arrange + Act
+fn range_filter_chained_gt_and_lt() {
+	// Act
 	let filter: RangeFilter<i32> = RangeFilter::new("age").gt(18).lt(65);
 
 	// Assert
@@ -492,8 +497,8 @@ fn test_range_filter_chained_gt_and_lt() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_date_range_filter_after_sets_gte() {
-	// Arrange + Act
+fn date_range_filter_after_sets_gte() {
+	// Act
 	let filter = DateRangeFilter::new("created_at").after("2024-01-01");
 
 	// Assert
@@ -501,8 +506,8 @@ fn test_date_range_filter_after_sets_gte() {
 }
 
 #[rstest]
-fn test_date_range_filter_before_sets_lte() {
-	// Arrange + Act
+fn date_range_filter_before_sets_lte() {
+	// Act
 	let filter = DateRangeFilter::new("created_at").before("2024-12-31");
 
 	// Assert
@@ -510,8 +515,8 @@ fn test_date_range_filter_before_sets_lte() {
 }
 
 #[rstest]
-fn test_date_range_filter_range_sets_both_bounds() {
-	// Arrange + Act
+fn date_range_filter_range_sets_both_bounds() {
+	// Act
 	let filter = DateRangeFilter::new("created_at").range("2024-01-01", "2024-12-31");
 
 	// Assert
@@ -520,8 +525,8 @@ fn test_date_range_filter_range_sets_both_bounds() {
 }
 
 #[rstest]
-fn test_date_range_filter_field_name_accessible() {
-	// Arrange + Act
+fn date_range_filter_field_name_accessible() {
+	// Act
 	let filter = DateRangeFilter::new("published_at");
 
 	// Assert
@@ -533,8 +538,8 @@ fn test_date_range_filter_field_name_accessible() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_numeric_range_filter_min_sets_gte() {
-	// Arrange + Act
+fn numeric_range_filter_min_sets_gte() {
+	// Act
 	let filter: NumericRangeFilter<i32> = NumericRangeFilter::new("stock").min(10);
 
 	// Assert
@@ -542,8 +547,8 @@ fn test_numeric_range_filter_min_sets_gte() {
 }
 
 #[rstest]
-fn test_numeric_range_filter_max_sets_lte() {
-	// Arrange + Act
+fn numeric_range_filter_max_sets_lte() {
+	// Act
 	let filter: NumericRangeFilter<i32> = NumericRangeFilter::new("stock").max(999);
 
 	// Assert
@@ -551,8 +556,8 @@ fn test_numeric_range_filter_max_sets_lte() {
 }
 
 #[rstest]
-fn test_numeric_range_filter_range_sets_both_bounds() {
-	// Arrange + Act
+fn numeric_range_filter_range_sets_both_bounds() {
+	// Act
 	let filter: NumericRangeFilter<f64> = NumericRangeFilter::new("price").range(9.99, 99.99);
 
 	// Assert
@@ -565,8 +570,8 @@ fn test_numeric_range_filter_range_sets_both_bounds() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_field_ordering_ext_asc_produces_asc_direction() {
-	// Arrange + Act
+fn field_ordering_ext_asc_produces_asc_direction() {
+	// Act
 	let order = Field::<Article, String>::new(vec!["title"]).asc();
 
 	// Assert
@@ -575,8 +580,8 @@ fn test_field_ordering_ext_asc_produces_asc_direction() {
 }
 
 #[rstest]
-fn test_field_ordering_ext_desc_produces_desc_direction() {
-	// Arrange + Act
+fn field_ordering_ext_desc_produces_desc_direction() {
+	// Act
 	let order = Field::<Article, String>::new(vec!["created_at"]).desc();
 
 	// Assert
@@ -585,8 +590,8 @@ fn test_field_ordering_ext_desc_produces_desc_direction() {
 }
 
 #[rstest]
-fn test_ordering_field_to_sql_asc() {
-	// Arrange + Act
+fn ordering_field_to_sql_asc() {
+	// Act
 	let order = Field::<Article, String>::new(vec!["title"]).asc();
 
 	// Assert
@@ -594,8 +599,8 @@ fn test_ordering_field_to_sql_asc() {
 }
 
 #[rstest]
-fn test_ordering_field_to_sql_desc() {
-	// Arrange + Act
+fn ordering_field_to_sql_desc() {
+	// Act
 	let order = Field::<Article, String>::new(vec!["created_at"]).desc();
 
 	// Assert
@@ -603,8 +608,8 @@ fn test_ordering_field_to_sql_desc() {
 }
 
 #[rstest]
-fn test_ordering_field_nested_path_joins_with_dot() {
-	// Arrange + Act
+fn ordering_field_nested_path_joins_with_dot() {
+	// Act
 	let order = Field::<Article, String>::new(vec!["author", "username"]).asc();
 
 	// Assert
@@ -616,8 +621,8 @@ fn test_ordering_field_nested_path_joins_with_dot() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_searchable_model_returns_configured_fields() {
-	// Arrange + Act
+fn searchable_model_returns_configured_fields() {
+	// Act
 	let fields = Article::searchable_fields();
 
 	// Assert
@@ -625,8 +630,8 @@ fn test_searchable_model_returns_configured_fields() {
 }
 
 #[rstest]
-fn test_searchable_model_field_names_accessible() {
-	// Arrange + Act
+fn searchable_model_field_names_accessible() {
+	// Act
 	let names = Article::searchable_field_names();
 
 	// Assert
@@ -636,8 +641,8 @@ fn test_searchable_model_field_names_accessible() {
 }
 
 #[rstest]
-fn test_searchable_model_default_ordering_returns_configured_fields() {
-	// Arrange + Act
+fn searchable_model_default_ordering_returns_configured_fields() {
+	// Act
 	let ordering = Article::default_ordering();
 
 	// Assert
@@ -651,7 +656,7 @@ fn test_searchable_model_default_ordering_returns_configured_fields() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_multi_term_search_creates_lookups_per_term_and_field() {
+fn multi_term_search_creates_lookups_per_term_and_field() {
 	// Arrange
 	let terms = vec!["rust", "programming"];
 
@@ -665,7 +670,7 @@ fn test_multi_term_search_creates_lookups_per_term_and_field() {
 }
 
 #[rstest]
-fn test_multi_term_search_empty_terms_returns_empty_vec() {
+fn multi_term_search_empty_terms_returns_empty_vec() {
 	// Arrange
 	let terms: Vec<&str> = vec![];
 
@@ -677,7 +682,7 @@ fn test_multi_term_search_empty_terms_returns_empty_vec() {
 }
 
 #[rstest]
-fn test_parse_search_terms_splits_by_comma() {
+fn parse_search_terms_splits_by_comma() {
 	// Arrange
 	let input = "rust, programming, web";
 
@@ -689,7 +694,7 @@ fn test_parse_search_terms_splits_by_comma() {
 }
 
 #[rstest]
-fn test_parse_search_terms_handles_quoted_phrases() {
+fn parse_search_terms_handles_quoted_phrases() {
 	// Arrange
 	let input = r#""machine learning", rust"#;
 
@@ -701,7 +706,7 @@ fn test_parse_search_terms_handles_quoted_phrases() {
 }
 
 #[rstest]
-fn test_parse_search_terms_single_term_without_comma() {
+fn parse_search_terms_single_term_without_comma() {
 	// Arrange
 	let input = "rust";
 
@@ -717,8 +722,8 @@ fn test_parse_search_terms_single_term_without_comma() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_query_filter_starts_empty() {
-	// Arrange + Act
+fn query_filter_starts_empty() {
+	// Act
 	let filter = QueryFilter::<Article>::new();
 
 	// Assert
@@ -728,7 +733,7 @@ fn test_query_filter_starts_empty() {
 }
 
 #[rstest]
-fn test_query_filter_with_lookup_adds_lookup() {
+fn query_filter_with_lookup_adds_lookup() {
 	// Arrange
 	let filter = QueryFilter::<Article>::new()
 		.with_lookup(Field::<Article, String>::new(vec!["title"]).icontains("rust"));
@@ -741,7 +746,7 @@ fn test_query_filter_with_lookup_adds_lookup() {
 }
 
 #[rstest]
-fn test_query_filter_order_by_adds_ordering() {
+fn query_filter_order_by_adds_ordering() {
 	// Arrange
 	let filter = QueryFilter::<Article>::new()
 		.order_by(Field::<Article, String>::new(vec!["created_at"]).desc());
@@ -755,8 +760,8 @@ fn test_query_filter_order_by_adds_ordering() {
 }
 
 #[rstest]
-fn test_query_filter_multiple_lookups_and_orderings() {
-	// Arrange + Act
+fn query_filter_multiple_lookups_and_orderings() {
+	// Act
 	let filter = QueryFilter::<Article>::new()
 		.with_lookup(Field::<Article, String>::new(vec!["title"]).icontains("rust"))
 		.with_lookup(Field::<Article, i32>::new(vec!["views"]).gte(100))
@@ -769,8 +774,8 @@ fn test_query_filter_multiple_lookups_and_orderings() {
 }
 
 #[rstest]
-fn test_query_filter_add_or_group_stores_group() {
-	// Arrange + Act
+fn query_filter_add_or_group_stores_group() {
+	// Act
 	let filter = QueryFilter::<Article>::new().add_or_group(vec![
 		Field::<Article, String>::new(vec!["title"]).icontains("rust"),
 		Field::<Article, String>::new(vec!["content"]).icontains("rust"),
@@ -782,8 +787,8 @@ fn test_query_filter_add_or_group_stores_group() {
 }
 
 #[rstest]
-fn test_query_filter_add_or_group_ignores_empty_group() {
-	// Arrange + Act
+fn query_filter_add_or_group_ignores_empty_group() {
+	// Act
 	let filter = QueryFilter::<Article>::new().add_or_group(vec![]);
 
 	// Assert
@@ -791,7 +796,7 @@ fn test_query_filter_add_or_group_ignores_empty_group() {
 }
 
 #[rstest]
-fn test_query_filter_add_multi_term_stores_multiple_groups() {
+fn query_filter_add_multi_term_stores_multiple_groups() {
 	// Arrange
 	let term_lookups = vec![
 		vec![Field::<Article, String>::new(vec!["title"]).icontains("rust")],
@@ -807,7 +812,7 @@ fn test_query_filter_add_multi_term_stores_multiple_groups() {
 
 #[rstest]
 #[tokio::test]
-async fn test_query_filter_generates_where_clause_from_lookups() {
+async fn query_filter_generates_where_clause_from_lookups() {
 	// Arrange
 	let filter = QueryFilter::<Article>::new()
 		.with_lookup(Field::<Article, String>::new(vec!["title"]).icontains("rust"));
@@ -824,7 +829,7 @@ async fn test_query_filter_generates_where_clause_from_lookups() {
 
 #[rstest]
 #[tokio::test]
-async fn test_query_filter_generates_order_by_clause_from_ordering() {
+async fn query_filter_generates_order_by_clause_from_ordering() {
 	// Arrange
 	let filter = QueryFilter::<Article>::new()
 		.order_by(Field::<Article, String>::new(vec!["created_at"]).desc());
@@ -835,12 +840,12 @@ async fn test_query_filter_generates_order_by_clause_from_ordering() {
 	let result = filter.filter_queryset(&params, sql).await.unwrap();
 
 	// Assert
-	assert!(result.contains("ORDER BY created_at DESC"));
+	assert_eq!(result, "SELECT * FROM articles ORDER BY created_at DESC");
 }
 
 #[rstest]
 #[tokio::test]
-async fn test_query_filter_passes_sql_unchanged_when_no_conditions() {
+async fn query_filter_passes_sql_unchanged_when_no_conditions() {
 	// Arrange
 	let filter = QueryFilter::<Article>::new();
 	let params = HashMap::new();
@@ -855,7 +860,7 @@ async fn test_query_filter_passes_sql_unchanged_when_no_conditions() {
 
 #[rstest]
 #[tokio::test]
-async fn test_query_filter_combines_where_and_order_by() {
+async fn query_filter_combines_where_and_order_by() {
 	// Arrange
 	let filter = QueryFilter::<Article>::new()
 		.with_lookup(Field::<Article, String>::new(vec!["author"]).icontains("alice"))
@@ -868,5 +873,5 @@ async fn test_query_filter_combines_where_and_order_by() {
 
 	// Assert
 	assert!(result.contains("WHERE"));
-	assert!(result.contains("ORDER BY title ASC"));
+	assert!(result.ends_with("ORDER BY title ASC"));
 }

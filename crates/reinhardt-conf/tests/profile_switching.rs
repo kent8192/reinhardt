@@ -17,31 +17,31 @@ use std::path::PathBuf;
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_profile_parse_development_aliases() {
-	// Arrange / Act / Assert
+fn profile_parse_development_aliases() {
+	// Assert
 	assert_eq!(Profile::parse("development"), Profile::Development);
 	assert_eq!(Profile::parse("dev"), Profile::Development);
 	assert_eq!(Profile::parse("develop"), Profile::Development);
 }
 
 #[rstest]
-fn test_profile_parse_staging_aliases() {
-	// Arrange / Act / Assert
+fn profile_parse_staging_aliases() {
+	// Assert
 	assert_eq!(Profile::parse("staging"), Profile::Staging);
 	assert_eq!(Profile::parse("stage"), Profile::Staging);
 	assert_eq!(Profile::parse("test"), Profile::Staging);
 }
 
 #[rstest]
-fn test_profile_parse_production_aliases() {
-	// Arrange / Act / Assert
+fn profile_parse_production_aliases() {
+	// Assert
 	assert_eq!(Profile::parse("production"), Profile::Production);
 	assert_eq!(Profile::parse("prod"), Profile::Production);
 }
 
 #[rstest]
-fn test_profile_parse_case_insensitive() {
-	// Arrange / Act / Assert
+fn profile_parse_case_insensitive() {
+	// Assert
 	assert_eq!(Profile::parse("DEVELOPMENT"), Profile::Development);
 	assert_eq!(Profile::parse("STAGING"), Profile::Staging);
 	assert_eq!(Profile::parse("PRODUCTION"), Profile::Production);
@@ -50,8 +50,8 @@ fn test_profile_parse_case_insensitive() {
 }
 
 #[rstest]
-fn test_profile_parse_unknown_returns_custom() {
-	// Arrange / Act / Assert
+fn profile_parse_unknown_returns_custom() {
+	// Assert
 	assert_eq!(Profile::parse("unknown"), Profile::Custom);
 	assert_eq!(Profile::parse(""), Profile::Custom);
 	assert_eq!(Profile::parse("local"), Profile::Custom);
@@ -62,7 +62,7 @@ fn test_profile_parse_unknown_returns_custom() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_profile_is_production() {
+fn profile_is_production() {
 	// Arrange
 	let prod = Profile::Production;
 	let dev = Profile::Development;
@@ -77,7 +77,7 @@ fn test_profile_is_production() {
 }
 
 #[rstest]
-fn test_profile_is_development() {
+fn profile_is_development() {
 	// Arrange
 	let dev = Profile::Development;
 	let prod = Profile::Production;
@@ -90,8 +90,8 @@ fn test_profile_is_development() {
 }
 
 #[rstest]
-fn test_profile_default_is_development() {
-	// Arrange / Act
+fn profile_default_is_development() {
+	// Act
 	let profile = Profile::default();
 
 	// Assert
@@ -104,7 +104,7 @@ fn test_profile_default_is_development() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_development_profile_enables_debug_by_default() {
+fn development_profile_enables_debug_by_default() {
 	// Arrange
 	let profile = Profile::Development;
 
@@ -116,7 +116,7 @@ fn test_development_profile_enables_debug_by_default() {
 }
 
 #[rstest]
-fn test_staging_profile_enables_debug_by_default() {
+fn staging_profile_enables_debug_by_default() {
 	// Arrange
 	let profile = Profile::Staging;
 
@@ -128,7 +128,7 @@ fn test_staging_profile_enables_debug_by_default() {
 }
 
 #[rstest]
-fn test_production_profile_disables_debug_by_default() {
+fn production_profile_disables_debug_by_default() {
 	// Arrange
 	let profile = Profile::Production;
 
@@ -140,7 +140,7 @@ fn test_production_profile_disables_debug_by_default() {
 }
 
 #[rstest]
-fn test_custom_profile_enables_debug_by_default() {
+fn custom_profile_enables_debug_by_default() {
 	// Arrange
 	let profile = Profile::Custom;
 
@@ -156,7 +156,7 @@ fn test_custom_profile_enables_debug_by_default() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_profile_as_str_values() {
+fn profile_as_str_values() {
 	// Assert
 	assert_eq!(Profile::Development.as_str(), "development");
 	assert_eq!(Profile::Staging.as_str(), "staging");
@@ -165,7 +165,7 @@ fn test_profile_as_str_values() {
 }
 
 #[rstest]
-fn test_profile_display_matches_as_str() {
+fn profile_display_matches_as_str() {
 	// Arrange
 	let profiles = [
 		Profile::Development,
@@ -174,7 +174,7 @@ fn test_profile_display_matches_as_str() {
 		Profile::Custom,
 	];
 
-	// Act / Assert
+	// Assert
 	for profile in &profiles {
 		assert_eq!(format!("{}", profile), profile.as_str());
 	}
@@ -185,7 +185,7 @@ fn test_profile_display_matches_as_str() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_env_file_name_development() {
+fn env_file_name_development() {
 	// Arrange
 	let profile = Profile::Development;
 
@@ -197,7 +197,7 @@ fn test_env_file_name_development() {
 }
 
 #[rstest]
-fn test_env_file_name_staging() {
+fn env_file_name_staging() {
 	// Arrange
 	let profile = Profile::Staging;
 
@@ -209,7 +209,7 @@ fn test_env_file_name_staging() {
 }
 
 #[rstest]
-fn test_env_file_name_production() {
+fn env_file_name_production() {
 	// Arrange
 	let profile = Profile::Production;
 
@@ -221,7 +221,7 @@ fn test_env_file_name_production() {
 }
 
 #[rstest]
-fn test_env_file_name_custom() {
+fn env_file_name_custom() {
 	// Arrange
 	let profile = Profile::Custom;
 
@@ -237,7 +237,7 @@ fn test_env_file_name_custom() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_settings_development_has_debug_true_by_default() {
+fn settings_development_has_debug_true_by_default() {
 	// Arrange
 	let settings = Settings::default();
 
@@ -246,7 +246,7 @@ fn test_settings_development_has_debug_true_by_default() {
 }
 
 #[rstest]
-fn test_settings_production_profile_should_disable_debug() {
+fn settings_production_profile_should_disable_debug() {
 	// Arrange
 	let mut settings = Settings::default();
 	let profile = Profile::Production;
@@ -259,7 +259,7 @@ fn test_settings_production_profile_should_disable_debug() {
 }
 
 #[rstest]
-fn test_settings_staging_profile_keeps_debug_enabled() {
+fn settings_staging_profile_keeps_debug_enabled() {
 	// Arrange
 	let mut settings = Settings::default();
 	let profile = Profile::Staging;
@@ -276,7 +276,7 @@ fn test_settings_staging_profile_keeps_debug_enabled() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_development_settings_allows_localhost() {
+fn development_settings_allows_localhost() {
 	// Arrange
 	let mut settings = Settings::new(PathBuf::from("."), "dev-secret".to_string());
 
@@ -289,7 +289,7 @@ fn test_development_settings_allows_localhost() {
 }
 
 #[rstest]
-fn test_production_settings_disallows_debug_and_restricts_hosts() {
+fn production_settings_disallows_debug_and_restricts_hosts() {
 	// Arrange
 	let mut settings = Settings::new(PathBuf::from("/app"), "prod-secret-key".to_string());
 
@@ -304,7 +304,7 @@ fn test_production_settings_disallows_debug_and_restricts_hosts() {
 }
 
 #[rstest]
-fn test_staging_settings_allows_staging_domain() {
+fn staging_settings_allows_staging_domain() {
 	// Arrange
 	let mut settings = Settings::new(PathBuf::from("/app"), "staging-secret".to_string());
 
@@ -323,7 +323,7 @@ fn test_staging_settings_allows_staging_domain() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_development_uses_sqlite_database() {
+fn development_uses_sqlite_database() {
 	// Arrange
 	let db = DatabaseConfig::sqlite("dev.sqlite3");
 
@@ -338,7 +338,7 @@ fn test_development_uses_sqlite_database() {
 }
 
 #[rstest]
-fn test_production_uses_postgresql_database() {
+fn production_uses_postgresql_database() {
 	// Arrange
 	let db = DatabaseConfig::postgresql(
 		"proddb",
@@ -360,7 +360,7 @@ fn test_production_uses_postgresql_database() {
 }
 
 #[rstest]
-fn test_staging_uses_postgresql_database_with_staging_host() {
+fn staging_uses_postgresql_database_with_staging_host() {
 	// Arrange
 	let db = DatabaseConfig::postgresql(
 		"stagingdb",
@@ -384,8 +384,8 @@ fn test_staging_uses_postgresql_database_with_staging_host() {
 // ---------------------------------------------------------------------------
 
 #[rstest]
-fn test_builder_with_development_profile() {
-	// Arrange / Act
+fn builder_with_development_profile() {
+	// Act
 	let merged = SettingsBuilder::new()
 		.profile(Profile::Development)
 		.add_source(
@@ -403,8 +403,8 @@ fn test_builder_with_development_profile() {
 }
 
 #[rstest]
-fn test_builder_with_production_profile() {
-	// Arrange / Act
+fn builder_with_production_profile() {
+	// Act
 	let merged = SettingsBuilder::new()
 		.profile(Profile::Production)
 		.add_source(
@@ -425,8 +425,8 @@ fn test_builder_with_production_profile() {
 }
 
 #[rstest]
-fn test_builder_with_staging_profile() {
-	// Arrange / Act
+fn builder_with_staging_profile() {
+	// Act
 	let merged = SettingsBuilder::new()
 		.profile(Profile::Staging)
 		.add_source(
@@ -446,8 +446,8 @@ fn test_builder_with_staging_profile() {
 }
 
 #[rstest]
-fn test_builder_without_profile_has_no_profile() {
-	// Arrange / Act
+fn builder_without_profile_has_no_profile() {
+	// Act
 	let merged = SettingsBuilder::new()
 		.add_source(DefaultSource::new().with_value("key", Value::String("value".to_string())))
 		.build()
@@ -458,7 +458,7 @@ fn test_builder_without_profile_has_no_profile() {
 }
 
 #[rstest]
-fn test_profile_switching_production_forbids_debug() {
+fn profile_switching_production_forbids_debug() {
 	// Arrange
 	let profile = Profile::Production;
 
@@ -473,11 +473,11 @@ fn test_profile_switching_production_forbids_debug() {
 }
 
 #[rstest]
-fn test_all_non_production_profiles_allow_debug() {
+fn all_non_production_profiles_allow_debug() {
 	// Arrange
 	let non_production = [Profile::Development, Profile::Staging, Profile::Custom];
 
-	// Act / Assert
+	// Assert
 	for profile in &non_production {
 		assert!(
 			profile.default_debug(),

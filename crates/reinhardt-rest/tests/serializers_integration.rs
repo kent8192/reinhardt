@@ -111,7 +111,7 @@ impl Model for TestPost {
 // ============================================================
 
 #[rstest]
-fn test_char_field_valid_string() {
+fn char_field_valid_string() {
 	// Arrange
 	let field = CharField::new().min_length(3).max_length(10);
 
@@ -119,11 +119,11 @@ fn test_char_field_valid_string() {
 	let result = field.validate("hello");
 
 	// Assert
-	assert!(result.is_ok());
+	assert_eq!(result, Ok(()));
 }
 
 #[rstest]
-fn test_char_field_too_short() {
+fn char_field_too_short() {
 	// Arrange
 	let field = CharField::new().min_length(5);
 
@@ -135,7 +135,7 @@ fn test_char_field_too_short() {
 }
 
 #[rstest]
-fn test_char_field_too_long() {
+fn char_field_too_long() {
 	// Arrange
 	let field = CharField::new().max_length(5);
 
@@ -147,7 +147,7 @@ fn test_char_field_too_long() {
 }
 
 #[rstest]
-fn test_char_field_blank_rejected_by_default() {
+fn char_field_blank_rejected_by_default() {
 	// Arrange
 	let field = CharField::new();
 
@@ -159,7 +159,7 @@ fn test_char_field_blank_rejected_by_default() {
 }
 
 #[rstest]
-fn test_char_field_blank_allowed_when_configured() {
+fn char_field_blank_allowed_when_configured() {
 	// Arrange
 	let field = CharField::new().allow_blank(true);
 
@@ -167,11 +167,11 @@ fn test_char_field_blank_allowed_when_configured() {
 	let result = field.validate("");
 
 	// Assert
-	assert!(result.is_ok());
+	assert_eq!(result, Ok(()));
 }
 
 #[rstest]
-fn test_char_field_at_min_boundary() {
+fn char_field_at_min_boundary() {
 	// Arrange
 	let field = CharField::new().min_length(3);
 
@@ -179,11 +179,11 @@ fn test_char_field_at_min_boundary() {
 	let result = field.validate("abc");
 
 	// Assert
-	assert!(result.is_ok());
+	assert_eq!(result, Ok(()));
 }
 
 #[rstest]
-fn test_char_field_at_max_boundary() {
+fn char_field_at_max_boundary() {
 	// Arrange
 	let field = CharField::new().max_length(5);
 
@@ -191,7 +191,7 @@ fn test_char_field_at_max_boundary() {
 	let result = field.validate("hello");
 
 	// Assert
-	assert!(result.is_ok());
+	assert_eq!(result, Ok(()));
 }
 
 // ============================================================
@@ -199,7 +199,7 @@ fn test_char_field_at_max_boundary() {
 // ============================================================
 
 #[rstest]
-fn test_integer_field_valid_value() {
+fn integer_field_valid_value() {
 	// Arrange
 	let field = IntegerField::new().min_value(0).max_value(100);
 
@@ -207,11 +207,11 @@ fn test_integer_field_valid_value() {
 	let result = field.validate(50);
 
 	// Assert
-	assert!(result.is_ok());
+	assert_eq!(result, Ok(()));
 }
 
 #[rstest]
-fn test_integer_field_below_min() {
+fn integer_field_below_min() {
 	// Arrange
 	let field = IntegerField::new().min_value(0);
 
@@ -223,7 +223,7 @@ fn test_integer_field_below_min() {
 }
 
 #[rstest]
-fn test_integer_field_above_max() {
+fn integer_field_above_max() {
 	// Arrange
 	let field = IntegerField::new().max_value(100);
 
@@ -235,11 +235,11 @@ fn test_integer_field_above_max() {
 }
 
 #[rstest]
-fn test_integer_field_at_boundary_values() {
+fn integer_field_at_boundary_values() {
 	// Arrange
 	let field = IntegerField::new().min_value(-10).max_value(10);
 
-	// Act & Assert
+	// Assert
 	assert!(field.validate(-10).is_ok());
 	assert!(field.validate(10).is_ok());
 	assert!(field.validate(-11).is_err());
@@ -251,7 +251,7 @@ fn test_integer_field_at_boundary_values() {
 // ============================================================
 
 #[rstest]
-fn test_float_field_valid_value() {
+fn float_field_valid_value() {
 	// Arrange
 	let field = FloatField::new().min_value(0.0).max_value(1.0);
 
@@ -259,11 +259,11 @@ fn test_float_field_valid_value() {
 	let result = field.validate(0.5);
 
 	// Assert
-	assert!(result.is_ok());
+	assert_eq!(result, Ok(()));
 }
 
 #[rstest]
-fn test_float_field_below_min() {
+fn float_field_below_min() {
 	// Arrange
 	let field = FloatField::new().min_value(0.0);
 
@@ -275,7 +275,7 @@ fn test_float_field_below_min() {
 }
 
 #[rstest]
-fn test_float_field_above_max() {
+fn float_field_above_max() {
 	// Arrange
 	let field = FloatField::new().max_value(1.0);
 
@@ -291,7 +291,7 @@ fn test_float_field_above_max() {
 // ============================================================
 
 #[rstest]
-fn test_email_field_valid_email() {
+fn email_field_valid_email() {
 	// Arrange
 	let field = EmailField::new();
 
@@ -299,11 +299,11 @@ fn test_email_field_valid_email() {
 	let result = field.validate("user@example.com");
 
 	// Assert
-	assert!(result.is_ok());
+	assert_eq!(result, Ok(()));
 }
 
 #[rstest]
-fn test_email_field_invalid_email() {
+fn email_field_invalid_email() {
 	// Arrange
 	let field = EmailField::new();
 
@@ -315,7 +315,7 @@ fn test_email_field_invalid_email() {
 }
 
 #[rstest]
-fn test_email_field_missing_domain() {
+fn email_field_missing_domain() {
 	// Arrange
 	let field = EmailField::new();
 
@@ -331,7 +331,7 @@ fn test_email_field_missing_domain() {
 // ============================================================
 
 #[rstest]
-fn test_url_field_valid_http_url() {
+fn url_field_valid_http_url() {
 	// Arrange
 	let field = URLField::new();
 
@@ -339,11 +339,11 @@ fn test_url_field_valid_http_url() {
 	let result = field.validate("http://example.com");
 
 	// Assert
-	assert!(result.is_ok());
+	assert_eq!(result, Ok(()));
 }
 
 #[rstest]
-fn test_url_field_valid_https_url() {
+fn url_field_valid_https_url() {
 	// Arrange
 	let field = URLField::new();
 
@@ -351,11 +351,11 @@ fn test_url_field_valid_https_url() {
 	let result = field.validate("https://example.com/path?query=1");
 
 	// Assert
-	assert!(result.is_ok());
+	assert_eq!(result, Ok(()));
 }
 
 #[rstest]
-fn test_url_field_invalid_url() {
+fn url_field_invalid_url() {
 	// Arrange
 	let field = URLField::new();
 
@@ -371,7 +371,7 @@ fn test_url_field_invalid_url() {
 // ============================================================
 
 #[rstest]
-fn test_boolean_field_true_value() {
+fn boolean_field_true_value() {
 	// Arrange
 	let field = BooleanField::new();
 
@@ -379,11 +379,11 @@ fn test_boolean_field_true_value() {
 	let result = field.validate(true);
 
 	// Assert
-	assert!(result.is_ok());
+	assert_eq!(result, Ok(()));
 }
 
 #[rstest]
-fn test_boolean_field_false_value() {
+fn boolean_field_false_value() {
 	// Arrange
 	let field = BooleanField::new();
 
@@ -391,7 +391,7 @@ fn test_boolean_field_false_value() {
 	let result = field.validate(false);
 
 	// Assert
-	assert!(result.is_ok());
+	assert_eq!(result, Ok(()));
 }
 
 // ============================================================
@@ -399,7 +399,7 @@ fn test_boolean_field_false_value() {
 // ============================================================
 
 #[rstest]
-fn test_json_serializer_serialize_struct() {
+fn json_serializer_serialize_struct() {
 	// Arrange
 	let user = TestUser {
 		id: Some(1),
@@ -412,12 +412,14 @@ fn test_json_serializer_serialize_struct() {
 	let json = serializer.serialize(&user).unwrap();
 
 	// Assert
-	assert!(json.contains("alice"));
-	assert!(json.contains("alice@example.com"));
+	let parsed: Value = serde_json::from_str(&json).unwrap();
+	assert_eq!(parsed["username"], "alice");
+	assert_eq!(parsed["email"], "alice@example.com");
+	assert_eq!(parsed["id"], 1);
 }
 
 #[rstest]
-fn test_json_serializer_deserialize_struct() {
+fn json_serializer_deserialize_struct() {
 	// Arrange
 	let json = r#"{"id":1,"username":"alice","email":"alice@example.com"}"#.to_string();
 	let serializer = JsonSerializer::<TestUser>::new();
@@ -432,7 +434,7 @@ fn test_json_serializer_deserialize_struct() {
 }
 
 #[rstest]
-fn test_json_serializer_roundtrip() {
+fn json_serializer_roundtrip() {
 	// Arrange
 	let original = TestUser {
 		id: Some(42),
@@ -450,7 +452,7 @@ fn test_json_serializer_roundtrip() {
 }
 
 #[rstest]
-fn test_json_serializer_invalid_json_returns_error() {
+fn json_serializer_invalid_json_returns_error() {
 	// Arrange
 	let invalid_json = "{invalid json}".to_string();
 	let serializer = JsonSerializer::<TestUser>::new();
@@ -468,7 +470,7 @@ fn test_json_serializer_invalid_json_returns_error() {
 // ============================================================
 
 #[rstest]
-fn test_serializer_error_unique_violation() {
+fn serializer_error_unique_violation() {
 	// Arrange
 	let error = SerializerError::unique_violation(
 		"email".to_string(),
@@ -484,7 +486,7 @@ fn test_serializer_error_unique_violation() {
 }
 
 #[rstest]
-fn test_serializer_error_required_field() {
+fn serializer_error_required_field() {
 	// Arrange
 	let error = SerializerError::required_field(
 		"username".to_string(),
@@ -503,50 +505,50 @@ fn test_serializer_error_required_field() {
 // ============================================================
 
 #[rstest]
-fn test_meta_config_includes_specified_fields() {
+fn meta_config_includes_specified_fields() {
 	// Arrange
 	let config = MetaConfig::new().with_fields(vec!["id".to_string(), "username".to_string()]);
 
-	// Act & Assert
+	// Assert
 	assert!(config.is_field_included("id"));
 	assert!(config.is_field_included("username"));
 	assert!(!config.is_field_included("email"));
 }
 
 #[rstest]
-fn test_meta_config_excludes_specified_fields() {
+fn meta_config_excludes_specified_fields() {
 	// Arrange
 	let config = MetaConfig::new().with_exclude(vec!["password_hash".to_string()]);
 
-	// Act & Assert
+	// Assert
 	assert!(config.is_field_included("username"));
 	assert!(!config.is_field_included("password_hash"));
 }
 
 #[rstest]
-fn test_meta_config_read_only_fields() {
+fn meta_config_read_only_fields() {
 	// Arrange
 	let config =
 		MetaConfig::new().with_read_only_fields(vec!["id".to_string(), "created_at".to_string()]);
 
-	// Act & Assert
+	// Assert
 	assert!(config.is_read_only("id"));
 	assert!(config.is_read_only("created_at"));
 	assert!(!config.is_read_only("username"));
 }
 
 #[rstest]
-fn test_meta_config_write_only_fields() {
+fn meta_config_write_only_fields() {
 	// Arrange
 	let config = MetaConfig::new().with_write_only_fields(vec!["password_hash".to_string()]);
 
-	// Act & Assert
+	// Assert
 	assert!(config.is_write_only("password_hash"));
 	assert!(!config.is_write_only("username"));
 }
 
 #[rstest]
-fn test_meta_config_effective_fields_with_exclude() {
+fn meta_config_effective_fields_with_exclude() {
 	// Arrange
 	let all_fields = vec![
 		"id".to_string(),
@@ -568,7 +570,7 @@ fn test_meta_config_effective_fields_with_exclude() {
 }
 
 #[rstest]
-fn test_default_meta_includes_all_fields() {
+fn default_meta_includes_all_fields() {
 	// Arrange
 	let all_fields = vec![
 		"id".to_string(),
@@ -591,11 +593,11 @@ fn test_default_meta_includes_all_fields() {
 // ============================================================
 
 #[rstest]
-fn test_nested_field_config_default_depth() {
+fn nested_field_config_default_depth() {
 	// Arrange
 	let config = NestedFieldConfig::new("author");
 
-	// Act & Assert
+	// Assert
 	assert_eq!(config.field_name, "author");
 	assert_eq!(config.depth, 1);
 	assert!(!config.read_only);
@@ -604,37 +606,37 @@ fn test_nested_field_config_default_depth() {
 }
 
 #[rstest]
-fn test_nested_field_config_custom_depth() {
+fn nested_field_config_custom_depth() {
 	// Arrange
 	let config = NestedFieldConfig::new("author").depth(3);
 
-	// Act & Assert
+	// Assert
 	assert_eq!(config.depth, 3);
 }
 
 #[rstest]
-fn test_nested_field_config_read_only() {
+fn nested_field_config_read_only() {
 	// Arrange
 	let config = NestedFieldConfig::new("author").read_only();
 
-	// Act & Assert
+	// Assert
 	assert!(config.read_only);
 	assert!(!config.allow_create);
 	assert!(!config.allow_update);
 }
 
 #[rstest]
-fn test_nested_field_config_writable() {
+fn nested_field_config_writable() {
 	// Arrange
 	let config = NestedFieldConfig::new("author").writable();
 
-	// Act & Assert
+	// Assert
 	assert!(config.allow_create);
 	assert!(config.allow_update);
 }
 
 #[rstest]
-fn test_nested_serializer_config_add_and_get() {
+fn nested_serializer_config_add_and_get() {
 	// Arrange
 	let mut config = NestedSerializerConfig::new();
 
@@ -649,7 +651,7 @@ fn test_nested_serializer_config_add_and_get() {
 }
 
 #[rstest]
-fn test_nested_serializer_config_multiple_fields() {
+fn nested_serializer_config_multiple_fields() {
 	// Arrange
 	let mut config = NestedSerializerConfig::new();
 
@@ -667,7 +669,7 @@ fn test_nested_serializer_config_multiple_fields() {
 }
 
 #[rstest]
-fn test_nested_serializer_config_remove_field() {
+fn nested_serializer_config_remove_field() {
 	// Arrange
 	let mut config = NestedSerializerConfig::new();
 	config.add_nested_field(NestedFieldConfig::new("author"));
@@ -682,12 +684,12 @@ fn test_nested_serializer_config_remove_field() {
 }
 
 #[rstest]
-fn test_nested_serializer_config_get_depth() {
+fn nested_serializer_config_get_depth() {
 	// Arrange
 	let mut config = NestedSerializerConfig::new();
 	config.add_nested_field(NestedFieldConfig::new("author").depth(3));
 
-	// Act & Assert
+	// Assert
 	assert_eq!(config.get_depth("author"), Some(3));
 	assert_eq!(config.get_depth("unknown"), None);
 }
@@ -697,7 +699,7 @@ fn test_nested_serializer_config_get_depth() {
 // ============================================================
 
 #[rstest]
-fn test_field_introspector_register_and_get() {
+fn field_introspector_register_and_get() {
 	// Arrange
 	let mut introspector = FieldIntrospector::new();
 
@@ -711,7 +713,7 @@ fn test_field_introspector_register_and_get() {
 }
 
 #[rstest]
-fn test_field_introspector_field_names() {
+fn field_introspector_field_names() {
 	// Arrange
 	let mut introspector = FieldIntrospector::new();
 	introspector.register_field(FieldInfo::new("id", "i64"));
@@ -731,8 +733,8 @@ fn test_field_introspector_field_names() {
 // ============================================================
 
 #[rstest]
-fn test_model_serializer_new() {
-	// Arrange & Act
+fn model_serializer_new() {
+	// Act
 	let serializer = ModelSerializer::<TestUser>::new();
 
 	// Assert
@@ -740,8 +742,8 @@ fn test_model_serializer_new() {
 }
 
 #[rstest]
-fn test_model_serializer_with_fields() {
-	// Arrange & Act
+fn model_serializer_with_fields() {
+	// Act
 	let serializer = ModelSerializer::<TestUser>::new()
 		.with_fields(vec!["id".to_string(), "username".to_string()]);
 
@@ -753,8 +755,8 @@ fn test_model_serializer_with_fields() {
 }
 
 #[rstest]
-fn test_model_serializer_with_exclude() {
-	// Arrange & Act
+fn model_serializer_with_exclude() {
+	// Act
 	let serializer = ModelSerializer::<TestUser>::new().with_exclude(vec!["email".to_string()]);
 
 	// Assert
@@ -764,8 +766,8 @@ fn test_model_serializer_with_exclude() {
 }
 
 #[rstest]
-fn test_model_serializer_with_read_only_fields() {
-	// Arrange & Act
+fn model_serializer_with_read_only_fields() {
+	// Act
 	let serializer =
 		ModelSerializer::<TestUser>::new().with_read_only_fields(vec!["id".to_string()]);
 
@@ -776,8 +778,8 @@ fn test_model_serializer_with_read_only_fields() {
 }
 
 #[rstest]
-fn test_model_serializer_with_nested_field() {
-	// Arrange & Act
+fn model_serializer_with_nested_field() {
+	// Act
 	let serializer = ModelSerializer::<TestPost>::new()
 		.with_nested_field(NestedFieldConfig::new("author").depth(2));
 
@@ -787,7 +789,7 @@ fn test_model_serializer_with_nested_field() {
 }
 
 #[rstest]
-fn test_model_serializer_field_names_from_introspector() {
+fn model_serializer_field_names_from_introspector() {
 	// Arrange
 	let mut introspector = FieldIntrospector::new();
 	introspector.register_field(FieldInfo::new("id", "i64").primary_key());
@@ -807,8 +809,8 @@ fn test_model_serializer_field_names_from_introspector() {
 // ============================================================
 
 #[rstest]
-fn test_unique_validator_new() {
-	// Arrange & Act
+fn unique_validator_new() {
+	// Act
 	let validator = UniqueValidator::<TestUser>::new("username");
 
 	// Assert
@@ -816,8 +818,8 @@ fn test_unique_validator_new() {
 }
 
 #[rstest]
-fn test_unique_validator_with_message() {
-	// Arrange & Act
+fn unique_validator_with_message() {
+	// Act
 	let validator = UniqueValidator::<TestUser>::new("username")
 		.with_message("Username must be unique across all users");
 
@@ -830,8 +832,8 @@ fn test_unique_validator_with_message() {
 // ============================================================
 
 #[rstest]
-fn test_unique_together_validator_new() {
-	// Arrange & Act
+fn unique_together_validator_new() {
+	// Act
 	let validator = UniqueTogetherValidator::<TestUser>::new(vec!["username", "email"]);
 
 	// Assert
@@ -842,8 +844,8 @@ fn test_unique_together_validator_new() {
 }
 
 #[rstest]
-fn test_unique_together_validator_single_field() {
-	// Arrange & Act
+fn unique_together_validator_single_field() {
+	// Act
 	let validator = UniqueTogetherValidator::<TestUser>::new(vec!["username"]);
 
 	// Assert
@@ -856,7 +858,7 @@ fn test_unique_together_validator_single_field() {
 // ============================================================
 
 #[rstest]
-fn test_database_validator_error_unique_constraint_display() {
+fn database_validator_error_unique_constraint_display() {
 	// Arrange
 	let error = DatabaseValidatorError::UniqueConstraintViolation {
 		field: "email".to_string(),
@@ -875,7 +877,7 @@ fn test_database_validator_error_unique_constraint_display() {
 }
 
 #[rstest]
-fn test_database_validator_error_unique_together_display() {
+fn database_validator_error_unique_together_display() {
 	// Arrange
 	let error = DatabaseValidatorError::UniqueTogetherViolation {
 		fields: vec!["username".to_string(), "email".to_string()],
@@ -893,7 +895,7 @@ fn test_database_validator_error_unique_together_display() {
 }
 
 #[rstest]
-fn test_database_validator_error_field_not_found() {
+fn database_validator_error_field_not_found() {
 	// Arrange
 	let error = DatabaseValidatorError::FieldNotFound {
 		field: "missing_field".to_string(),
@@ -907,7 +909,7 @@ fn test_database_validator_error_field_not_found() {
 }
 
 #[rstest]
-fn test_database_validator_error_converts_to_serializer_error() {
+fn database_validator_error_converts_to_serializer_error() {
 	// Arrange
 	let db_error = DatabaseValidatorError::UniqueConstraintViolation {
 		field: "email".to_string(),
@@ -928,8 +930,8 @@ fn test_database_validator_error_converts_to_serializer_error() {
 // ============================================================
 
 #[rstest]
-fn test_serializer_method_field_new() {
-	// Arrange & Act
+fn serializer_method_field_new() {
+	// Act
 	let field = SerializerMethodField::new("get_full_name");
 
 	// Assert
@@ -939,7 +941,7 @@ fn test_serializer_method_field_new() {
 }
 
 #[rstest]
-fn test_serializer_method_field_get_value_success() {
+fn serializer_method_field_get_value_success() {
 	// Arrange
 	let mut context = HashMap::new();
 	context.insert("full_name".to_string(), json!("Alice Smith"));
@@ -953,7 +955,7 @@ fn test_serializer_method_field_get_value_success() {
 }
 
 #[rstest]
-fn test_serializer_method_field_get_value_missing() {
+fn serializer_method_field_get_value_missing() {
 	// Arrange
 	let context: HashMap<String, Value> = HashMap::new();
 	let field = SerializerMethodField::new("missing_method");
@@ -970,7 +972,7 @@ fn test_serializer_method_field_get_value_missing() {
 }
 
 #[rstest]
-fn test_serializer_method_field_custom_method_name() {
+fn serializer_method_field_custom_method_name() {
 	// Arrange
 	let mut context = HashMap::new();
 	context.insert("compute_name".to_string(), json!("Bob Jones"));
@@ -985,7 +987,7 @@ fn test_serializer_method_field_custom_method_name() {
 }
 
 #[rstest]
-fn test_serializer_method_field_complex_value() {
+fn serializer_method_field_complex_value() {
 	// Arrange
 	let mut context = HashMap::new();
 	context.insert(
@@ -1012,7 +1014,7 @@ fn test_serializer_method_field_complex_value() {
 // ============================================================
 
 #[rstest]
-fn test_method_field_registry_register_and_get() {
+fn method_field_registry_register_and_get() {
 	// Arrange
 	let mut registry = MethodFieldRegistry::new();
 	let field = SerializerMethodField::new("full_name");
@@ -1027,17 +1029,17 @@ fn test_method_field_registry_register_and_get() {
 }
 
 #[rstest]
-fn test_method_field_registry_not_found() {
+fn method_field_registry_not_found() {
 	// Arrange
 	let registry = MethodFieldRegistry::new();
 
-	// Act & Assert
+	// Assert
 	assert!(!registry.contains("nonexistent"));
 	assert!(registry.get("nonexistent").is_none());
 }
 
 #[rstest]
-fn test_method_field_registry_multiple_fields() {
+fn method_field_registry_multiple_fields() {
 	// Arrange
 	let mut registry = MethodFieldRegistry::new();
 
@@ -1058,73 +1060,73 @@ fn test_method_field_registry_multiple_fields() {
 // ============================================================
 
 #[rstest]
-fn test_relation_field_new() {
-	// Arrange & Act
+fn relation_field_new() {
+	// Act
 	let field = RelationField::<TestUser>::new();
 
 	// Assert - field can be serialized
 	let json = serde_json::to_string(&field).unwrap();
-	assert!(!json.is_empty());
+	assert_eq!(json, r#"{"_phantom":null}"#);
 }
 
 #[rstest]
-fn test_primary_key_related_field_new() {
-	// Arrange & Act
+fn primary_key_related_field_new() {
+	// Act
 	let field = PrimaryKeyRelatedField::<TestUser>::new();
 
 	// Assert - type alias works, field is serializable
 	let json = serde_json::to_string(&field).unwrap();
-	assert!(!json.is_empty());
+	assert_eq!(json, r#"{"_phantom":null}"#);
 }
 
 #[rstest]
-fn test_slug_related_field_new() {
-	// Arrange & Act
+fn slug_related_field_new() {
+	// Act
 	let field = SlugRelatedField::<TestUser>::new();
 
 	// Assert
 	let json = serde_json::to_string(&field).unwrap();
-	assert!(!json.is_empty());
+	assert_eq!(json, r#"{"_phantom":null}"#);
 }
 
 #[rstest]
-fn test_string_related_field_new() {
-	// Arrange & Act
+fn string_related_field_new() {
+	// Act
 	let field = StringRelatedField::<TestUser>::new();
 
 	// Assert
 	let json = serde_json::to_string(&field).unwrap();
-	assert!(!json.is_empty());
+	assert_eq!(json, r#"{"_phantom":null}"#);
 }
 
 #[rstest]
-fn test_hyperlinked_related_field_new() {
-	// Arrange & Act
+fn hyperlinked_related_field_new() {
+	// Act
 	let field = HyperlinkedRelatedField::<TestUser>::new();
 
 	// Assert
 	let json = serde_json::to_string(&field).unwrap();
-	assert!(!json.is_empty());
+	assert_eq!(json, r#"{"_phantom":null}"#);
 }
 
 #[rstest]
-fn test_many_related_field_new() {
-	// Arrange & Act
+fn many_related_field_new() {
+	// Act
 	let field = ManyRelatedField::<TestUser>::new();
 
 	// Assert - field is serializable
 	let json = serde_json::to_string(&field).unwrap();
-	assert!(!json.is_empty());
+	assert_eq!(json, r#"{"_phantom":null}"#);
 }
 
 #[rstest]
-fn test_many_related_field_default() {
-	// Arrange & Act
+fn many_related_field_default() {
+	// Act
 	let field = ManyRelatedField::<TestUser>::default();
 
 	// Assert
 	let json = serde_json::to_string(&field).unwrap();
-	assert!(!json.is_empty());
+	assert_eq!(json, r#"{"_phantom":null}"#);
 }
 
 // ============================================================
@@ -1132,8 +1134,8 @@ fn test_many_related_field_default() {
 // ============================================================
 
 #[rstest]
-fn test_validation_error_field_error() {
-	// Arrange & Act
+fn validation_error_field_error() {
+	// Act
 	let error = ValidationError::field_error("email", "Invalid email format");
 
 	// Assert
@@ -1143,8 +1145,8 @@ fn test_validation_error_field_error() {
 }
 
 #[rstest]
-fn test_validation_error_object_error() {
-	// Arrange & Act
+fn validation_error_object_error() {
+	// Act
 	let error = ValidationError::object_error("Passwords do not match");
 
 	// Assert
@@ -1153,7 +1155,7 @@ fn test_validation_error_object_error() {
 }
 
 #[rstest]
-fn test_validation_error_multiple() {
+fn validation_error_multiple() {
 	// Arrange
 	let errors = vec![
 		ValidationError::field_error("email", "Required"),

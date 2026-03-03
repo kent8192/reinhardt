@@ -59,7 +59,7 @@ impl Handler for OkHandler {
 
 #[rstest]
 #[tokio::test]
-async fn test_url_path_versioning_extracts_v1() {
+async fn url_path_versioning_extracts_v1() {
 	// Arrange
 	let versioning = URLPathVersioning::new()
 		.with_default_version("1.0")
@@ -75,7 +75,7 @@ async fn test_url_path_versioning_extracts_v1() {
 
 #[rstest]
 #[tokio::test]
-async fn test_url_path_versioning_extracts_v2() {
+async fn url_path_versioning_extracts_v2() {
 	// Arrange
 	let versioning = URLPathVersioning::new()
 		.with_default_version("1.0")
@@ -91,7 +91,7 @@ async fn test_url_path_versioning_extracts_v2() {
 
 #[rstest]
 #[tokio::test]
-async fn test_url_path_versioning_returns_default_when_no_version_in_path() {
+async fn url_path_versioning_returns_default_when_no_version_in_path() {
 	// Arrange
 	let versioning = URLPathVersioning::new().with_default_version("1.0");
 	let request = build_request("/users/", vec![]);
@@ -105,7 +105,7 @@ async fn test_url_path_versioning_returns_default_when_no_version_in_path() {
 
 #[rstest]
 #[tokio::test]
-async fn test_url_path_versioning_rejects_disallowed_version() {
+async fn url_path_versioning_rejects_disallowed_version() {
 	// Arrange
 	let versioning = URLPathVersioning::new()
 		.with_default_version("1.0")
@@ -121,7 +121,7 @@ async fn test_url_path_versioning_rejects_disallowed_version() {
 
 #[rstest]
 #[tokio::test]
-async fn test_url_path_versioning_with_custom_pattern() {
+async fn url_path_versioning_with_custom_pattern() {
 	// Arrange
 	let versioning = URLPathVersioning::new()
 		.with_default_version("1.0")
@@ -140,7 +140,7 @@ async fn test_url_path_versioning_with_custom_pattern() {
 
 #[rstest]
 #[tokio::test]
-async fn test_accept_header_versioning_extracts_version_from_header() {
+async fn accept_header_versioning_extracts_version_from_header() {
 	// Arrange
 	let versioning = AcceptHeaderVersioning::new()
 		.with_default_version("1.0")
@@ -156,7 +156,7 @@ async fn test_accept_header_versioning_extracts_version_from_header() {
 
 #[rstest]
 #[tokio::test]
-async fn test_accept_header_versioning_returns_default_when_no_version_in_header() {
+async fn accept_header_versioning_returns_default_when_no_version_in_header() {
 	// Arrange
 	let versioning = AcceptHeaderVersioning::new()
 		.with_default_version("1.0")
@@ -172,7 +172,7 @@ async fn test_accept_header_versioning_returns_default_when_no_version_in_header
 
 #[rstest]
 #[tokio::test]
-async fn test_accept_header_versioning_rejects_disallowed_version() {
+async fn accept_header_versioning_rejects_disallowed_version() {
 	// Arrange
 	let versioning = AcceptHeaderVersioning::new()
 		.with_default_version("1.0")
@@ -188,7 +188,7 @@ async fn test_accept_header_versioning_rejects_disallowed_version() {
 
 #[rstest]
 #[tokio::test]
-async fn test_accept_header_versioning_custom_param_name() {
+async fn accept_header_versioning_custom_param_name() {
 	// Arrange
 	let versioning = AcceptHeaderVersioning::new()
 		.with_default_version("1.0")
@@ -210,7 +210,7 @@ async fn test_accept_header_versioning_custom_param_name() {
 
 #[rstest]
 #[tokio::test]
-async fn test_query_param_versioning_extracts_version_from_query() {
+async fn query_param_versioning_extracts_version_from_query() {
 	// Arrange
 	let versioning = QueryParameterVersioning::new()
 		.with_default_version("1.0")
@@ -226,7 +226,7 @@ async fn test_query_param_versioning_extracts_version_from_query() {
 
 #[rstest]
 #[tokio::test]
-async fn test_query_param_versioning_returns_default_when_param_absent() {
+async fn query_param_versioning_returns_default_when_param_absent() {
 	// Arrange
 	let versioning = QueryParameterVersioning::new().with_default_version("1.0");
 	let request = build_request("/users/", vec![]);
@@ -240,7 +240,7 @@ async fn test_query_param_versioning_returns_default_when_param_absent() {
 
 #[rstest]
 #[tokio::test]
-async fn test_query_param_versioning_rejects_disallowed_version() {
+async fn query_param_versioning_rejects_disallowed_version() {
 	// Arrange
 	let versioning = QueryParameterVersioning::new()
 		.with_default_version("1.0")
@@ -256,7 +256,7 @@ async fn test_query_param_versioning_rejects_disallowed_version() {
 
 #[rstest]
 #[tokio::test]
-async fn test_query_param_versioning_custom_param_name() {
+async fn query_param_versioning_custom_param_name() {
 	// Arrange
 	let versioning = QueryParameterVersioning::new()
 		.with_default_version("1.0")
@@ -275,7 +275,7 @@ async fn test_query_param_versioning_custom_param_name() {
 
 #[rstest]
 #[tokio::test]
-async fn test_namespace_versioning_extracts_version_from_path() {
+async fn namespace_versioning_extracts_version_from_path() {
 	// Arrange
 	let versioning = NamespaceVersioning::new()
 		.with_default_version("1.0")
@@ -291,7 +291,7 @@ async fn test_namespace_versioning_extracts_version_from_path() {
 
 #[rstest]
 #[tokio::test]
-async fn test_namespace_versioning_returns_default_when_no_match() {
+async fn namespace_versioning_returns_default_when_no_match() {
 	// Arrange
 	let versioning = NamespaceVersioning::new()
 		.with_default_version("1.0")
@@ -307,7 +307,7 @@ async fn test_namespace_versioning_returns_default_when_no_match() {
 
 #[rstest]
 #[tokio::test]
-async fn test_namespace_versioning_with_custom_pattern() {
+async fn namespace_versioning_with_custom_pattern() {
 	// Arrange
 	let versioning = NamespaceVersioning::new()
 		.with_default_version("1.0")
@@ -326,7 +326,7 @@ async fn test_namespace_versioning_with_custom_pattern() {
 
 #[rstest]
 #[tokio::test]
-async fn test_hostname_versioning_extracts_version_from_host_header() {
+async fn hostname_versioning_extracts_version_from_host_header() {
 	// Arrange
 	let versioning = HostNameVersioning::new()
 		.with_default_version("1.0")
@@ -342,7 +342,7 @@ async fn test_hostname_versioning_extracts_version_from_host_header() {
 
 #[rstest]
 #[tokio::test]
-async fn test_hostname_versioning_returns_default_when_no_host_header() {
+async fn hostname_versioning_returns_default_when_no_host_header() {
 	// Arrange
 	let versioning = HostNameVersioning::new().with_default_version("1.0");
 	let request = build_request("/users/", vec![]);
@@ -356,7 +356,7 @@ async fn test_hostname_versioning_returns_default_when_no_host_header() {
 
 #[rstest]
 #[tokio::test]
-async fn test_hostname_versioning_explicit_mapping_takes_precedence() {
+async fn hostname_versioning_explicit_mapping_takes_precedence() {
 	// Arrange
 	let versioning = HostNameVersioning::new()
 		.with_default_version("1.0")
@@ -374,7 +374,7 @@ async fn test_hostname_versioning_explicit_mapping_takes_precedence() {
 
 #[rstest]
 #[tokio::test]
-async fn test_versioning_middleware_sets_version_in_extensions() {
+async fn versioning_middleware_sets_version_in_extensions() {
 	// Arrange
 	let versioning = URLPathVersioning::new()
 		.with_default_version("1.0")
@@ -392,7 +392,7 @@ async fn test_versioning_middleware_sets_version_in_extensions() {
 
 #[rstest]
 #[tokio::test]
-async fn test_versioning_middleware_rejects_invalid_version() {
+async fn versioning_middleware_rejects_invalid_version() {
 	// Arrange
 	let versioning = URLPathVersioning::new()
 		.with_default_version("1.0")
@@ -411,7 +411,7 @@ async fn test_versioning_middleware_rejects_invalid_version() {
 // ── ApiVersion / RequestVersionExt ───────────────────────────────────────────
 
 #[rstest]
-fn test_api_version_as_str() {
+fn api_version_as_str() {
 	// Arrange
 	let version = ApiVersion::new("2.0".to_string());
 
@@ -423,7 +423,7 @@ fn test_api_version_as_str() {
 }
 
 #[rstest]
-fn test_api_version_display() {
+fn api_version_display() {
 	// Arrange
 	let version = ApiVersion::new("3.0".to_string());
 
@@ -435,7 +435,7 @@ fn test_api_version_display() {
 }
 
 #[rstest]
-fn test_request_version_ext_returns_none_when_not_set() {
+fn request_version_ext_returns_none_when_not_set() {
 	// Arrange
 	let request = build_request("/users/", vec![]);
 
@@ -447,7 +447,7 @@ fn test_request_version_ext_returns_none_when_not_set() {
 }
 
 #[rstest]
-fn test_request_version_ext_version_or_returns_default() {
+fn request_version_ext_version_or_returns_default() {
 	// Arrange
 	let request = build_request("/users/", vec![]);
 
@@ -461,13 +461,13 @@ fn test_request_version_ext_version_or_returns_default() {
 // ── SimpleVersionedHandler ───────────────────────────────────────────────────
 
 #[rstest]
-fn test_simple_versioned_handler_supports_version() {
+fn simple_versioned_handler_supports_version() {
 	// Arrange
 	let handler = SimpleVersionedHandler::new()
 		.with_version_response("1.0", r#"{"ok":true}"#)
 		.with_version_response("2.0", r#"{"ok":true}"#);
 
-	// Act / Assert
+	// Assert
 	assert!(handler.supports_version("1.0"));
 	assert!(handler.supports_version("2.0"));
 	assert!(!handler.supports_version("3.0"));
@@ -475,7 +475,7 @@ fn test_simple_versioned_handler_supports_version() {
 
 #[rstest]
 #[tokio::test]
-async fn test_simple_versioned_handler_returns_version_specific_body() {
+async fn simple_versioned_handler_returns_version_specific_body() {
 	// Arrange
 	let handler = SimpleVersionedHandler::new()
 		.with_version_response("1.0", r#"{"message":"v1"}"#)
@@ -494,7 +494,7 @@ async fn test_simple_versioned_handler_returns_version_specific_body() {
 
 #[rstest]
 #[tokio::test]
-async fn test_versioned_handler_wrapper_routes_by_url_version() {
+async fn versioned_handler_wrapper_routes_by_url_version() {
 	// Arrange
 	let versioning = Arc::new(
 		URLPathVersioning::new()
@@ -518,8 +518,8 @@ async fn test_versioned_handler_wrapper_routes_by_url_version() {
 // ── VersionResponseBuilder ───────────────────────────────────────────────────
 
 #[rstest]
-fn test_version_response_builder_includes_version_field() {
-	// Arrange / Act
+fn version_response_builder_includes_version_field() {
+	// Act
 	let response = VersionResponseBuilder::new("2.0")
 		.with_data(serde_json::json!({"key": "value"}))
 		.build();
@@ -531,8 +531,8 @@ fn test_version_response_builder_includes_version_field() {
 }
 
 #[rstest]
-fn test_version_response_builder_with_field() {
-	// Arrange / Act
+fn version_response_builder_with_field() {
+	// Act
 	let response = VersionResponseBuilder::new("1.0")
 		.with_field("count", serde_json::json!(42))
 		.build();
@@ -544,7 +544,7 @@ fn test_version_response_builder_with_field() {
 }
 
 #[rstest]
-fn test_version_response_builder_version_accessor() {
+fn version_response_builder_version_accessor() {
 	// Arrange
 	let builder = VersionResponseBuilder::new("3.0");
 
@@ -559,7 +559,7 @@ fn test_version_response_builder_version_accessor() {
 
 #[rstest]
 #[tokio::test]
-async fn test_configurable_versioned_handler_routes_to_correct_handler() {
+async fn configurable_versioned_handler_routes_to_correct_handler() {
 	// Arrange
 	struct EchoVersionHandler {
 		body: &'static str,
@@ -587,7 +587,7 @@ async fn test_configurable_versioned_handler_routes_to_correct_handler() {
 
 #[rstest]
 #[tokio::test]
-async fn test_configurable_versioned_handler_unknown_version_returns_error() {
+async fn configurable_versioned_handler_unknown_version_returns_error() {
 	// Arrange
 	let handler = ConfigurableVersionedHandler::new();
 	let request = build_request("/users/", vec![]);

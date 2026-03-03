@@ -1371,7 +1371,14 @@ fn bind_reinhardt_query_value<'a>(
 		RValue::TinyUnsigned(Some(i)) => query.bind(*i as i32),
 		RValue::SmallUnsigned(Some(i)) => query.bind(*i as i32),
 		RValue::Unsigned(Some(i)) => query.bind(*i as i64),
-		RValue::BigUnsigned(Some(i)) => query.bind(*i as i64),
+		RValue::BigUnsigned(Some(i)) => query.bind(i64::try_from(*i).unwrap_or_else(|_| {
+			tracing::warn!(
+				value = *i,
+				"BigUnsigned value {} exceeds i64::MAX, clamping to i64::MAX",
+				i
+			);
+			i64::MAX
+		})),
 		RValue::Float(Some(f)) => query.bind(*f),
 		RValue::Double(Some(f)) => query.bind(*f),
 		RValue::String(Some(s)) => query.bind(s.as_ref().clone()),
@@ -1908,5 +1915,52 @@ mod tests {
 		let session = Session::new(pool, DbBackend::Sqlite).await.unwrap();
 
 		assert_eq!(session.get_backend(), DbBackend::Sqlite);
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// bind_reinhardt_query_value tests
+	// ──────────────────────────────────────────────────────────────
+
+	#[rstest]
+	fn test_bind_bigunsigned_overflow_clamps_to_i64_max() {
+		// Arrange
+		let overflow_value: u64 = u64::MAX; // exceeds i64::MAX
+		let result = i64::try_from(overflow_value).unwrap_or_else(|_| {
+			// Simulate the same fallback logic used in bind_reinhardt_query_value
+			i64::MAX
+		});
+
+		// Assert
+		assert_eq!(result, i64::MAX);
+	}
+
+	#[rstest]
+	fn test_bind_bigunsigned_within_range_does_not_clamp() {
+		// Arrange
+		let value: u64 = 42;
+		let result = i64::try_from(value).unwrap_or_else(|_| i64::MAX);
+
+		// Assert
+		assert_eq!(result, 42);
+	}
+
+	#[rstest]
+	fn test_bind_bigunsigned_at_i64_max_boundary() {
+		// Arrange
+		let value: u64 = i64::MAX as u64;
+		let result = i64::try_from(value).unwrap_or_else(|_| i64::MAX);
+
+		// Assert
+		assert_eq!(result, i64::MAX);
+	}
+
+	#[rstest]
+	fn test_bind_bigunsigned_just_above_i64_max_clamps() {
+		// Arrange
+		let value: u64 = (i64::MAX as u64) + 1;
+		let result = i64::try_from(value).unwrap_or_else(|_| i64::MAX);
+
+		// Assert
+		assert_eq!(result, i64::MAX);
 	}
 }

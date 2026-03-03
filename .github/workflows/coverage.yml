@@ -11,6 +11,14 @@ on:
         description: "Parallel cargo build jobs (1=GitHub-hosted OOM safe, 8=self-hosted)"
         type: string
         default: "1"
+      nextest-filter:
+        description: "Nextest filter expression for affected packages"
+        type: string
+        default: ""
+      run-all:
+        description: "Whether to run all tests"
+        type: string
+        default: "true"
   workflow_dispatch:
 
 env:
@@ -93,13 +101,18 @@ jobs:
 
       - name: Run unit tests with coverage
         run: |
+          FILTER_ARGS=""
+          if [[ "${{ inputs.run-all }}" != "true" && -n "${{ inputs.nextest-filter }}" ]]; then
+            FILTER_ARGS="-E '${{ inputs.nextest-filter }}'"
+          fi
           cargo llvm-cov nextest \
             --workspace \
             --lib \
             --all-features \
             --no-fail-fast \
             --lcov \
-            --output-path /tmp/unit-lcov.info
+            --output-path /tmp/unit-lcov.info \
+            ${FILTER_ARGS}
 
       - name: Upload coverage to Codecov
         if: always()
@@ -197,11 +210,16 @@ jobs:
 
       - name: Run intra-crate integration tests with coverage
         run: |
+          if [[ "${{ inputs.run-all }}" != "true" && -n "${{ inputs.nextest-filter }}" ]]; then
+            FILTER_EXPR="(not binary(/ui/)) & (${{ inputs.nextest-filter }})"
+          else
+            FILTER_EXPR="not binary(/ui/)"
+          fi
           cargo llvm-cov nextest \
             --workspace \
             --test "*" \
             --exclude reinhardt-integration-tests \
-            -E "not binary(/ui/)" \
+            -E "$FILTER_EXPR" \
             --all-features \
             --no-fail-fast \
             --lcov \
@@ -303,12 +321,17 @@ jobs:
 
       - name: Run cross-crate integration tests with coverage
         run: |
+          FILTER_ARGS=""
+          if [[ "${{ inputs.run-all }}" != "true" && -n "${{ inputs.nextest-filter }}" ]]; then
+            FILTER_ARGS="-E '${{ inputs.nextest-filter }}'"
+          fi
           cargo llvm-cov nextest \
             --package reinhardt-integration-tests \
             --all-features \
             --no-fail-fast \
             --lcov \
-            --output-path /tmp/cross-crate-lcov.info
+            --output-path /tmp/cross-crate-lcov.info \
+            ${FILTER_ARGS}
 
       - name: Upload coverage to Codecov
         if: always()

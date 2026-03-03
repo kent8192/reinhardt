@@ -1621,6 +1621,7 @@ mod tests {
 	}
 
 	impl TestUser {
+		// Allow dead_code: test helper constructor for manager tests
 		#[allow(dead_code)]
 		fn new(name: String, email: String) -> Self {
 			Self {

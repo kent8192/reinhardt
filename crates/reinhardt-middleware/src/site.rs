@@ -649,4 +649,36 @@ mod tests {
 		let response = middleware.process(request, handler).await.unwrap();
 		assert_eq!(response.status, StatusCode::OK);
 	}
+
+	#[rstest::rstest]
+	fn test_rwlock_poison_recovery_site_registry() {
+		// Arrange
+		let registry = Arc::new(SiteRegistry::new());
+		registry.register(Site::new(
+			1,
+			"example.com".to_string(),
+			"Example".to_string(),
+		));
+
+		// Act - poison the RwLock by panicking while holding a write guard
+		let registry_clone = Arc::clone(&registry);
+		let _ = std::thread::spawn(move || {
+			let _guard = registry_clone.sites.write().unwrap();
+			panic!("intentional panic to poison lock");
+		})
+		.join();
+
+		// Assert - operations still work after poison recovery
+		registry.register(Site::new(2, "test.com".to_string(), "Test".to_string()));
+		assert!(registry.get_by_domain("example.com").is_some());
+		assert!(registry.get_by_domain("test.com").is_some());
+		assert_eq!(registry.all().len(), 2);
+
+		let default = Site::new(99, "default.com".to_string(), "Default".to_string());
+		registry.set_default(default);
+		assert!(registry.default_site().is_some());
+
+		registry.clear();
+		assert_eq!(registry.all().len(), 0);
+	}
 }

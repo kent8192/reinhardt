@@ -11,6 +11,14 @@ on:
         description: "Parallel cargo build jobs (1=GitHub-hosted OOM safe, 8=self-hosted)"
         type: string
         default: "1"
+      nextest-filter:
+        description: "Nextest filter expression for affected packages"
+        type: string
+        default: ""
+      run-all:
+        description: "Whether to run all tests"
+        type: string
+        default: "true"
   workflow_dispatch:
 
 env:
@@ -100,10 +108,15 @@ jobs:
         env:
           RUSTFLAGS: "-C linker=clang -C link-arg=-fuse-ld=mold"
         run: |
+          if [[ "${{ inputs.run-all }}" != "true" && -n "${{ inputs.nextest-filter }}" ]]; then
+            FILTER_EXPR="binary(/ui/) & (${{ inputs.nextest-filter }})"
+          else
+            FILTER_EXPR="binary(/ui/)"
+          fi
           cargo nextest run \
             --profile ui-test \
             --workspace \
-            -E "binary(/ui/)" \
+            -E "$FILTER_EXPR" \
             --partition hash:${{ matrix.partition }}/8 \
             --no-fail-fast \
             --status-level=none \

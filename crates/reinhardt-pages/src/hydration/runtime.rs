@@ -328,6 +328,7 @@ pub(crate) fn attach_events_recursive(
 
 /// Finds all elements with hydration markers in the given root.
 #[cfg(target_arch = "wasm32")]
+// Allow dead_code: WASM hydration helper reserved for future hydration runtime
 #[allow(dead_code)]
 pub(super) fn find_hydration_markers(root: &Element) -> Vec<(String, Element)> {
 	let mut markers = Vec::new();
@@ -348,6 +349,7 @@ fn find_markers_recursive(element: &Element, markers: &mut Vec<(String, Element)
 
 /// Non-WASM version for testing.
 #[cfg(not(target_arch = "wasm32"))]
+// Allow dead_code: non-WASM stub for hydration marker scanning
 #[allow(dead_code)]
 pub(super) fn find_hydration_markers(_root: &str) -> Vec<(String, String)> {
 	Vec::new()

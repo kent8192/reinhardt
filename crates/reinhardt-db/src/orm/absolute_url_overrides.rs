@@ -76,6 +76,7 @@ mod tests {
 	#[derive(Debug)]
 	struct TestA {
 		pk: i32,
+		// Allow dead_code: field used by derive macros for serialization
 		#[allow(dead_code)]
 		name: String,
 	}
@@ -102,6 +103,7 @@ mod tests {
 	#[derive(Debug)]
 	struct TestB {
 		pk: i32,
+		// Allow dead_code: field used by derive macros for serialization
 		#[allow(dead_code)]
 		name: String,
 	}
@@ -128,6 +130,7 @@ mod tests {
 	#[derive(Debug)]
 	struct TestC {
 		pk: i32,
+		// Allow dead_code: field used by derive macros for serialization
 		#[allow(dead_code)]
 		name: String,
 	}

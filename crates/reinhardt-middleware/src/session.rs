@@ -922,6 +922,30 @@ mod tests {
 			.unwrap();
 		assert!(cookie.contains("Secure"));
 	}
+
+	#[rstest::rstest]
+	fn test_rwlock_poison_recovery_session_store() {
+		// Arrange
+		let store = Arc::new(SessionStore::new());
+		let session = SessionData::new(Duration::from_secs(3600));
+		let session_id = session.id.clone();
+		store.save(session);
+
+		// Act - poison the RwLock by panicking while holding a write guard
+		let store_clone = Arc::clone(&store);
+		let _ = thread::spawn(move || {
+			let _guard = store_clone.sessions.write().unwrap();
+			panic!("intentional panic to poison lock");
+		})
+		.join();
+
+		// Assert - operations still work after poison recovery
+		assert!(store.get(&session_id).is_some());
+		assert_eq!(store.len(), 1);
+		assert!(!store.is_empty());
+		store.delete(&session_id);
+		assert_eq!(store.len(), 0);
+	}
 }
 
 // ============================================================================

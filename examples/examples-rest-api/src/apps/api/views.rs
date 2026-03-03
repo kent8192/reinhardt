@@ -10,7 +10,9 @@ use reinhardt::{delete, get, post, put};
 use validator::Validate;
 
 use super::models::Article;
-use super::serializers::{ArticleListResponse, ArticleResponse, CreateArticleRequest};
+use super::serializers::{
+	ArticleListResponse, ArticleResponse, CreateArticleRequest, UpdateArticleRequest,
+};
 use super::storage;
 
 /// List all articles
@@ -126,8 +128,11 @@ pub async fn get_article(Path(id): Path<i64>) -> ViewResult<Response> {
 #[put("/articles/{id}/", name = "articles_update")]
 pub async fn update_article(
 	Path(id): Path<i64>,
-	Json(update_data): Json<json::Value>,
+	Json(update_req): Json<UpdateArticleRequest>,
 ) -> ViewResult<Response> {
+	// Validate request
+	update_req.validate()?;
+
 	// Get existing article from storage
 	let mut article = match storage::get_article(id) {
 		Some(article) => article,
@@ -139,16 +144,16 @@ pub async fn update_article(
 	};
 
 	// Apply partial updates
-	if let Some(title) = update_data.get("title").and_then(|v| v.as_str()) {
-		article.title = title.to_string();
+	if let Some(title) = update_req.title {
+		article.title = title;
 	}
-	if let Some(content) = update_data.get("content").and_then(|v| v.as_str()) {
-		article.content = content.to_string();
+	if let Some(content) = update_req.content {
+		article.content = content;
 	}
-	if let Some(author) = update_data.get("author").and_then(|v| v.as_str()) {
-		article.author = author.to_string();
+	if let Some(author) = update_req.author {
+		article.author = author;
 	}
-	if let Some(published) = update_data.get("published").and_then(|v| v.as_bool()) {
+	if let Some(published) = update_req.published {
 		article.published = published;
 	}
 	article.updated_at = Utc::now();

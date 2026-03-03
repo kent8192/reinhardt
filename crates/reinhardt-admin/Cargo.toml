@@ -78,6 +78,7 @@ full = ["console_error_panic_hook", "file-uploads", "all"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]
 
 [dev-dependencies]
+insta = { workspace = true }
 reinhardt-db = { workspace = true }
 tokio-test = { workspace = true }
 rstest = { workspace = true }

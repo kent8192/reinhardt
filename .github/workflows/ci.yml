@@ -20,37 +20,20 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  # Check if PR branch is behind base branch.
-  # When out-of-date, skip all CI jobs to save runner costs.
-  # The PR author should update the branch before CI runs.
+  # Check if PR branch has merge conflicts.
+  # When conflicts exist, skip all CI jobs to save runner costs.
   check-branch-status:
     name: Check Branch Status
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
-      is-behind: ${{ steps.check.outputs.is-behind }}
       has-conflicts: ${{ steps.check.outputs.has-conflicts }}
     steps:
-      - name: Check if PR branch is behind base
+      - name: Check if PR has merge conflicts
         id: check
         uses: actions/github-script@v7
         with:
           script: |
-            const { data } = await github.rest.repos.compareCommitsWithBasehead({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              basehead: `${context.payload.pull_request.base.ref}...${context.payload.pull_request.head.ref}`,
-            });
-            const isBehind = data.behind_by > 0;
-            core.setOutput('is-behind', isBehind.toString());
-            if (isBehind) {
-              core.warning(
-                `PR branch is ${data.behind_by} commit(s) behind ` +
-                `${context.payload.pull_request.base.ref}. ` +
-                `Skipping CI — please update your branch.`
-              );
-            }
-
             const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -95,7 +78,7 @@ jobs:
   check:
     name: Check
     needs: [determine-runner, check-branch-status]
-    if: needs.check-branch-status.outputs.is-behind != 'true' && needs.check-branch-status.outputs.has-conflicts != 'true'
+    if: needs.check-branch-status.outputs.has-conflicts != 'true'
     uses: ./.github/workflows/check.yml
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
@@ -104,7 +87,7 @@ jobs:
   fmt:
     name: Format
     needs: [determine-runner, check-branch-status]
-    if: needs.check-branch-status.outputs.is-behind != 'true' && needs.check-branch-status.outputs.has-conflicts != 'true'
+    if: needs.check-branch-status.outputs.has-conflicts != 'true'
     uses: ./.github/workflows/fmt.yml
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
@@ -112,7 +95,7 @@ jobs:
   clippy:
     name: Clippy
     needs: [determine-runner, check-branch-status]
-    if: needs.check-branch-status.outputs.is-behind != 'true' && needs.check-branch-status.outputs.has-conflicts != 'true'
+    if: needs.check-branch-status.outputs.has-conflicts != 'true'
     uses: ./.github/workflows/clippy.yml
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
@@ -121,7 +104,7 @@ jobs:
   publish-check:
     name: Publish Check
     needs: [determine-runner, check-branch-status]
-    if: needs.check-branch-status.outputs.is-behind != 'true' && needs.check-branch-status.outputs.has-conflicts != 'true'
+    if: needs.check-branch-status.outputs.has-conflicts != 'true'
     uses: ./.github/workflows/publish-check.yml
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
@@ -130,7 +113,7 @@ jobs:
   todo-check:
     name: TODO Check
     needs: [determine-runner, check-branch-status]
-    if: needs.check-branch-status.outputs.is-behind != 'true' && needs.check-branch-status.outputs.has-conflicts != 'true'
+    if: needs.check-branch-status.outputs.has-conflicts != 'true'
     uses: ./.github/workflows/todo-check.yml
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
@@ -139,7 +122,7 @@ jobs:
   semver-check:
     name: SemVer Check
     needs: [determine-runner, check-branch-status]
-    if: needs.check-branch-status.outputs.is-behind != 'true' && needs.check-branch-status.outputs.has-conflicts != 'true'
+    if: needs.check-branch-status.outputs.has-conflicts != 'true'
     uses: ./.github/workflows/semver-check.yml
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
@@ -150,7 +133,6 @@ jobs:
     needs: [determine-runner, check-branch-status]
     if: >-
       ${{
-        needs.check-branch-status.outputs.is-behind != 'true' &&
         needs.check-branch-status.outputs.has-conflicts != 'true' &&
         !startsWith(github.head_ref || '', 'release-plz-')
       }}
@@ -278,16 +260,8 @@ jobs:
     steps:
       - name: Verify all required checks passed
         env:
-          IS_BEHIND: ${{ needs.check-branch-status.outputs.is-behind }}
           HAS_CONFLICTS: ${{ needs.check-branch-status.outputs.has-conflicts }}
         run: |
-          # If PR branch is behind base, all jobs are expected to be skipped
-          if [[ "$IS_BEHIND" == "true" ]]; then
-            echo "::error::PR branch is out-of-date with base branch. All CI checks were skipped."
-            echo "Please update your branch and push again to trigger CI."
-            exit 1
-          fi
-
           # If PR has merge conflicts, all jobs are expected to be skipped
           if [[ "$HAS_CONFLICTS" == "true" ]]; then
             echo "::error::PR has merge conflicts. All CI checks were skipped."
@@ -299,7 +273,6 @@ jobs:
             "${{ needs.check.result }}"
             "${{ needs.fmt.result }}"
             "${{ needs.clippy.result }}"
-            "${{ needs.publish-check.result }}"
             "${{ needs.todo-check.result }}"
             "${{ needs.semver-check.result }}"
             "${{ needs.unit-test.result }}"
@@ -319,6 +292,12 @@ jobs:
               exit 1
             fi
           done
+          # publish-check is skipped on release-plz and fix/release-plz branches (expected)
+          publish_check="${{ needs.publish-check.result }}"
+          if [[ "$publish_check" != "success" && "$publish_check" != "skipped" ]]; then
+            echo "::error::Publish check failed: $publish_check"
+            exit 1
+          fi
           # release-dry-run is skipped on release-plz branches (expected)
           dry_run="${{ needs.release-dry-run.result }}"
           if [[ "$dry_run" != "success" && "$dry_run" != "skipped" ]]; then

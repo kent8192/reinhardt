@@ -61,21 +61,32 @@ impl ContentTypeRegistry {
 		let key = ct.natural_key();
 
 		// Check if already exists
-		if let Some(existing) = self.types.read().unwrap().get(&key) {
+		if let Some(existing) = self
+			.types
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.get(&key)
+		{
 			return existing.clone();
 		}
 
 		// Assign ID if not present
 		if ct.id.is_none() {
-			let mut next_id = self.next_id.write().unwrap();
+			let mut next_id = self.next_id.write().unwrap_or_else(|e| e.into_inner());
 			ct.id = Some(*next_id);
 			*next_id += 1;
 		}
 
 		// Store in both maps
-		self.types.write().unwrap().insert(key, ct.clone());
+		self.types
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.insert(key, ct.clone());
 		if let Some(id) = ct.id {
-			self.by_id.write().unwrap().insert(id, ct.clone());
+			self.by_id
+				.write()
+				.unwrap_or_else(|e| e.into_inner())
+				.insert(id, ct.clone());
 		}
 
 		ct
@@ -84,12 +95,20 @@ impl ContentTypeRegistry {
 	/// Get content type by app label and model name
 	pub fn get(&self, app_label: &str, model: &str) -> Option<ContentType> {
 		let key = (app_label.to_string(), model.to_string());
-		self.types.read().unwrap().get(&key).cloned()
+		self.types
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.get(&key)
+			.cloned()
 	}
 
 	/// Get content type by ID
 	pub fn get_by_id(&self, id: i64) -> Option<ContentType> {
-		self.by_id.read().unwrap().get(&id).cloned()
+		self.by_id
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.get(&id)
+			.cloned()
 	}
 
 	/// Get or create a content type
@@ -103,14 +122,25 @@ impl ContentTypeRegistry {
 
 	/// List all registered content types
 	pub fn all(&self) -> Vec<ContentType> {
-		self.types.read().unwrap().values().cloned().collect()
+		self.types
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.values()
+			.cloned()
+			.collect()
 	}
 
 	/// Clear all registered types (mainly for testing)
 	pub fn clear(&self) {
-		self.types.write().unwrap().clear();
-		self.by_id.write().unwrap().clear();
-		*self.next_id.write().unwrap() = 1;
+		self.types
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.clear();
+		self.by_id
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.clear();
+		*self.next_id.write().unwrap_or_else(|e| e.into_inner()) = 1;
 	}
 }
 

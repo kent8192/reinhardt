@@ -153,6 +153,7 @@ pub(super) fn replace_state(_state: &HistoryState) -> Result<(), String> {
 
 /// Navigates back in the browser history.
 #[cfg(target_arch = "wasm32")]
+// Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn go_back() -> Result<(), String> {
 	let window = web_sys::window().ok_or("Window not available")?;
@@ -163,6 +164,7 @@ pub(super) fn go_back() -> Result<(), String> {
 
 /// Non-WASM version for testing.
 #[cfg(not(target_arch = "wasm32"))]
+// Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn go_back() -> Result<(), String> {
 	Ok(())
@@ -170,6 +172,7 @@ pub(super) fn go_back() -> Result<(), String> {
 
 /// Navigates forward in the browser history.
 #[cfg(target_arch = "wasm32")]
+// Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn go_forward() -> Result<(), String> {
 	let window = web_sys::window().ok_or("Window not available")?;
@@ -182,6 +185,7 @@ pub(super) fn go_forward() -> Result<(), String> {
 
 /// Non-WASM version for testing.
 #[cfg(not(target_arch = "wasm32"))]
+// Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn go_forward() -> Result<(), String> {
 	Ok(())
@@ -189,6 +193,7 @@ pub(super) fn go_forward() -> Result<(), String> {
 
 /// Navigates to a specific position in the history.
 #[cfg(target_arch = "wasm32")]
+// Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn go(delta: i32) -> Result<(), String> {
 	let window = web_sys::window().ok_or("Window not available")?;
@@ -201,6 +206,7 @@ pub(super) fn go(delta: i32) -> Result<(), String> {
 
 /// Non-WASM version for testing.
 #[cfg(not(target_arch = "wasm32"))]
+// Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn go(_delta: i32) -> Result<(), String> {
 	Ok(())
@@ -224,6 +230,7 @@ pub(super) fn current_path() -> Result<String, String> {
 
 /// Gets the current search query from the browser.
 #[cfg(target_arch = "wasm32")]
+// Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn current_search() -> Result<String, String> {
 	let window = web_sys::window().ok_or("Window not available")?;
@@ -235,6 +242,7 @@ pub(super) fn current_search() -> Result<String, String> {
 
 /// Non-WASM version for testing.
 #[cfg(not(target_arch = "wasm32"))]
+// Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn current_search() -> Result<String, String> {
 	Ok(String::new())
@@ -242,6 +250,7 @@ pub(super) fn current_search() -> Result<String, String> {
 
 /// Gets the current hash from the browser.
 #[cfg(target_arch = "wasm32")]
+// Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn current_hash() -> Result<String, String> {
 	let window = web_sys::window().ok_or("Window not available")?;
@@ -253,6 +262,7 @@ pub(super) fn current_hash() -> Result<String, String> {
 
 /// Non-WASM version for testing.
 #[cfg(not(target_arch = "wasm32"))]
+// Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn current_hash() -> Result<String, String> {
 	Ok(String::new())

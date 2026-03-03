@@ -231,7 +231,9 @@ async fn test_create_and_retrieve_question(
     assert!(question.id.is_some());
 
     // Retrieve it
-    let retrieved = Question::get(&conn, question.id.unwrap())
+    let retrieved = Question::objects()
+        .get(question.id.unwrap())
+        .first()
         .await
         .unwrap()
         .expect("Question not found");

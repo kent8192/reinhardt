@@ -360,6 +360,7 @@ impl<T> Default for JoinedLoader<T> {
 mod tests {
 	use super::*;
 
+	// Allow dead_code: test model struct used for trait implementation verification
 	#[allow(dead_code)]
 	#[derive(Clone)]
 	struct Post {

@@ -711,4 +711,26 @@ mod tests {
 		let stats = middleware.stats();
 		assert_eq!(stats.total_requests(), 0);
 	}
+
+	#[rstest::rstest]
+	fn test_rwlock_poison_recovery_circuit_breaker() {
+		// Arrange
+		let config = CircuitBreakerConfig::new(0.5, 10, Duration::from_secs(30));
+		let middleware = CircuitBreakerMiddleware::new(config);
+
+		// Act - poison the RwLock by panicking while holding a write guard
+		let state_clone = Arc::clone(&middleware.state);
+		let _ = thread::spawn(move || {
+			let _guard = state_clone.write().unwrap();
+			panic!("intentional panic to poison lock");
+		})
+		.join();
+
+		// Assert - operations still work after poison recovery
+		assert_eq!(middleware.state(), CircuitState::Closed);
+		let stats = middleware.stats();
+		assert_eq!(stats.total_requests(), 0);
+		middleware.reset();
+		assert_eq!(middleware.state(), CircuitState::Closed);
+	}
 }

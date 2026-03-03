@@ -15,7 +15,7 @@
 //!     let router = BasicRouter::new();
 //!
 //!     // Wrap with OpenAPI endpoints
-//!     let wrapped = OpenApiRouter::wrap(router);
+//!     let wrapped = OpenApiRouter::wrap(router)?;
 //!
 //!     // The wrapped router now serves:
 //!     // - /api/openapi.json (OpenAPI spec)
@@ -84,32 +84,30 @@ impl<H> OpenApiRouter<H> {
 	/// use reinhardt_urls::routers::BasicRouter;
 	///
 	/// let router = BasicRouter::new();
-	/// let wrapped = OpenApiRouter::wrap(router);
+	/// let wrapped = OpenApiRouter::wrap(router)?;
+	/// # Ok::<(), reinhardt_rest::openapi::SchemaError>(())
 	/// ```
-	pub fn wrap(handler: H) -> Self {
+	pub fn wrap(handler: H) -> std::result::Result<Self, reinhardt_rest::openapi::SchemaError> {
 		// Generate OpenAPI schema from global registry
 		let schema = generate_openapi_schema();
-		let openapi_json =
-			serde_json::to_string_pretty(&schema).expect("Failed to serialize OpenAPI schema");
+		let openapi_json = serde_json::to_string_pretty(&schema)?;
 
 		// Generate Swagger UI HTML
 		let swagger_ui = SwaggerUI::new(schema.clone());
-		let swagger_html = swagger_ui
-			.render_html()
-			.expect("Failed to render Swagger UI");
+		let swagger_html = swagger_ui.render_html()?;
 
 		// Generate Redoc UI HTML
 		let redoc_ui = RedocUI::new(schema);
-		let redoc_html = redoc_ui.render_html().expect("Failed to render Redoc UI");
+		let redoc_html = redoc_ui.render_html()?;
 
-		Self {
+		Ok(Self {
 			inner: handler,
 			openapi_json: Arc::new(openapi_json),
 			swagger_html: Arc::new(swagger_html),
 			redoc_html: Arc::new(redoc_html),
 			enabled: true,
 			auth_guard: None,
-		}
+		})
 	}
 
 	/// Set whether documentation endpoints are enabled
@@ -126,7 +124,7 @@ impl<H> OpenApiRouter<H> {
 	/// use reinhardt_urls::routers::BasicRouter;
 	///
 	/// let router = BasicRouter::new();
-	/// let wrapped = OpenApiRouter::wrap(router).enabled(false);
+	/// let wrapped = OpenApiRouter::wrap(router)?.enabled(false);
 	/// ```
 	// Fixes #828
 	pub fn enabled(mut self, enabled: bool) -> Self {
@@ -150,7 +148,7 @@ impl<H> OpenApiRouter<H> {
 	/// use reinhardt_urls::routers::BasicRouter;
 	///
 	/// let router = BasicRouter::new();
-	/// let wrapped = OpenApiRouter::wrap(router).auth_guard(|request| {
+	/// let wrapped = OpenApiRouter::wrap(router)?.auth_guard(|request| {
 	///     // Check for API key in header
 	///     request.headers().get("X-Api-Key")
 	///         .map(|v| v == "secret")
@@ -344,7 +342,7 @@ mod tests {
 	async fn test_openapi_json_endpoint() {
 		// Arrange
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler);
+		let wrapped = OpenApiRouter::wrap(handler).unwrap();
 
 		// Act
 		let request = Request::builder().uri("/api/openapi.json").build().unwrap();
@@ -362,7 +360,7 @@ mod tests {
 	async fn test_swagger_docs_endpoint() {
 		// Arrange
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler);
+		let wrapped = OpenApiRouter::wrap(handler).unwrap();
 
 		// Act
 		let request = Request::builder().uri("/api/docs").build().unwrap();
@@ -379,7 +377,7 @@ mod tests {
 	async fn test_redoc_docs_endpoint() {
 		// Arrange
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler);
+		let wrapped = OpenApiRouter::wrap(handler).unwrap();
 
 		// Act
 		let request = Request::builder().uri("/api/redoc").build().unwrap();
@@ -396,7 +394,7 @@ mod tests {
 	async fn test_delegation_to_inner_handler() {
 		// Arrange
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler);
+		let wrapped = OpenApiRouter::wrap(handler).unwrap();
 
 		// Act
 		let request = Request::builder().uri("/some/other/path").build().unwrap();
@@ -418,7 +416,7 @@ mod tests {
 	async fn test_disabled_endpoints_return_404(#[case] path: &str) {
 		// Arrange
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler).enabled(false);
+		let wrapped = OpenApiRouter::wrap(handler).unwrap().enabled(false);
 
 		// Act
 		let request = Request::builder().uri(path).build().unwrap();
@@ -433,7 +431,7 @@ mod tests {
 	async fn test_disabled_does_not_affect_other_routes() {
 		// Arrange
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler).enabled(false);
+		let wrapped = OpenApiRouter::wrap(handler).unwrap().enabled(false);
 
 		// Act
 		let request = Request::builder().uri("/some/other/path").build().unwrap();
@@ -453,7 +451,9 @@ mod tests {
 	async fn test_auth_guard_rejects_unauthorized(#[case] path: &str) {
 		// Arrange
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler).auth_guard(|_request| false);
+		let wrapped = OpenApiRouter::wrap(handler)
+			.unwrap()
+			.auth_guard(|_request| false);
 
 		// Act
 		let request = Request::builder().uri(path).build().unwrap();
@@ -471,7 +471,9 @@ mod tests {
 	async fn test_auth_guard_allows_authorized(#[case] path: &str) {
 		// Arrange
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler).auth_guard(|_request| true);
+		let wrapped = OpenApiRouter::wrap(handler)
+			.unwrap()
+			.auth_guard(|_request| true);
 
 		// Act
 		let request = Request::builder().uri(path).build().unwrap();
@@ -486,7 +488,9 @@ mod tests {
 	async fn test_auth_guard_does_not_affect_other_routes() {
 		// Arrange
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler).auth_guard(|_request| false);
+		let wrapped = OpenApiRouter::wrap(handler)
+			.unwrap()
+			.auth_guard(|_request| false);
 
 		// Act
 		let request = Request::builder().uri("/some/other/path").build().unwrap();
@@ -507,6 +511,7 @@ mod tests {
 		// Arrange: enabled=false should return 404 even with a passing auth guard
 		let handler = DummyHandler;
 		let wrapped = OpenApiRouter::wrap(handler)
+			.unwrap()
 			.enabled(false)
 			.auth_guard(|_request| true);
 
@@ -523,7 +528,7 @@ mod tests {
 	async fn test_auth_guard_inspects_request_headers() {
 		// Arrange: Guard checks for a specific header value
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler).auth_guard(|request| {
+		let wrapped = OpenApiRouter::wrap(handler).unwrap().auth_guard(|request| {
 			request
 				.headers
 				.get("X-Docs-Token")

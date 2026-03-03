@@ -125,6 +125,7 @@ url = { workspace = true }
 rust_decimal = { workspace = true }
 async-stream = "0.3"
 regex = { workspace = true }
+validator = { version = "0.20", features = ["derive"] }
 
 [features]
 default = ["postgres", "sqlite", "caching", "hot-reload", "dynamic-redis"]

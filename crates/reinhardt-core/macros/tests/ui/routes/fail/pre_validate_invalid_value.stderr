@@ -1,0 +1,5 @@
+error: pre_validate must be a boolean (true or false)
+ --> tests/ui/routes/fail/pre_validate_invalid_value.rs:5:31
+  |
+5 | #[get("/test", pre_validate = "yes")]
+  |                               ^^^^^

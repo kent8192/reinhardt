@@ -171,10 +171,8 @@ impl DMHandler {
 #[async_trait]
 impl WebSocketConsumer for DMHandler {
 	async fn on_connect(&self, context: &mut ConsumerContext) -> WebSocketResult<()> {
-		// Extract Cookie header from WebSocket handshake
-		// TODO: Extract cookies from WebSocket connection headers
-		// For now, this is a placeholder implementation
-		let cookies = ""; // Placeholder
+		// Extract Cookie header from WebSocket handshake headers
+		let cookies = context.cookie_header().unwrap_or("");
 
 		// Authenticate user using PagesAuthenticator
 		let user = self

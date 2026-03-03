@@ -35,6 +35,7 @@ server-full = ["server", "graphql", "websocket"]
 full = ["graphql", "websocket"]
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio-test = "0.4"
 anyhow = { workspace = true }
 reqwest = { version = "0.12", features = ["json"] }

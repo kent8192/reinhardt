@@ -21,7 +21,7 @@ pub enum SynchronizeStrategy {
 pub struct BulkUpdateBuilder {
 	table_name: String,
 	updates: HashMap<String, String>,
-	where_clause: Option<String>,
+	where_clause: Option<(String, String)>,
 	synchronize: SynchronizeStrategy,
 }
 
@@ -70,10 +70,11 @@ impl BulkUpdateBuilder {
 		}
 		self
 	}
-	/// Set WHERE clause
+	/// Set a parameterized WHERE clause using column equality.
 	///
-	pub fn where_clause(mut self, condition: &str) -> Self {
-		self.where_clause = Some(condition.to_string());
+	/// Uses `column = ?` with a bind parameter to prevent SQL injection.
+	pub fn where_clause(mut self, column: &str, value: &str) -> Self {
+		self.where_clause = Some((column.to_string(), value.to_string()));
 		self
 	}
 	/// Set synchronization strategy
@@ -88,16 +89,21 @@ impl BulkUpdateBuilder {
 		let mut set_clauses = Vec::new();
 		let mut params = Vec::new();
 
-		// Build SET clauses
+		// Build SET clauses with quoted column names
 		for (col, val) in &self.updates {
-			set_clauses.push(format!("{}=?", col));
+			set_clauses.push(format!("\"{}\"=?", col));
 			params.push(val.clone());
 		}
 
-		let mut sql = format!("UPDATE {} SET {}", self.table_name, set_clauses.join(", "));
+		let mut sql = format!(
+			"UPDATE \"{}\" SET {}",
+			self.table_name,
+			set_clauses.join(", ")
+		);
 
-		if let Some(where_clause) = &self.where_clause {
-			sql.push_str(&format!(" WHERE {}", where_clause));
+		if let Some((column, value)) = &self.where_clause {
+			sql.push_str(&format!(" WHERE \"{}\"=?", column));
+			params.push(value.clone());
 		}
 
 		(sql, params, self.synchronize)
@@ -113,8 +119,8 @@ mod tests {
 		let builder = BulkUpdateBuilder::new("person").set("first_name", "Dr.");
 
 		let (sql, params, _) = builder.build();
-		assert!(sql.contains("UPDATE person"));
-		assert!(sql.contains("SET first_name=?"));
+		assert!(sql.contains("UPDATE \"person\""));
+		assert!(sql.contains("\"first_name\"=?"));
 		assert_eq!(params, vec!["Dr."]);
 	}
 
@@ -122,11 +128,13 @@ mod tests {
 	fn test_bulk_update_with_where() {
 		let builder = BulkUpdateBuilder::new("person")
 			.set("first_name", "Dr.")
-			.where_clause("id = 3");
+			.where_clause("id", "3");
 
 		let (sql, params, _) = builder.build();
-		assert!(sql.contains("UPDATE person SET first_name=? WHERE id = 3"));
-		assert_eq!(params, vec!["Dr."]);
+		assert!(sql.contains("UPDATE \"person\""));
+		assert!(sql.contains("\"first_name\"=?"));
+		assert!(sql.contains("WHERE \"id\"=?"));
+		assert_eq!(params, vec!["Dr.", "3"]);
 	}
 
 	#[test]
@@ -135,9 +143,9 @@ mod tests {
 			.set_hybrid_expanded(vec![("first_name", "Dr."), ("last_name", "No")]);
 
 		let (sql, params, _) = builder.build();
-		assert!(sql.contains("UPDATE person SET"));
-		assert!(sql.contains("first_name=?"));
-		assert!(sql.contains("last_name=?"));
+		assert!(sql.contains("UPDATE \"person\" SET"));
+		assert!(sql.contains("\"first_name\"=?"));
+		assert!(sql.contains("\"last_name\"=?"));
 		assert_eq!(params.len(), 2);
 	}
 

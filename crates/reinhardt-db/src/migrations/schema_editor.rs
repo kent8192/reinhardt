@@ -122,6 +122,11 @@ impl SchemaEditor {
 	pub async fn execute(&mut self, sql: &str) -> Result<()> {
 		if let Some(ref mut tx) = self.executor {
 			tx.execute(sql, vec![]).await?;
+			// SQLite requires a schema cache refresh after DDL within a transaction
+			// to prevent SQLITE_SCHEMA (code 262) errors on subsequent DDL statements.
+			if self.db_type == DatabaseType::Sqlite {
+				tx.execute("SELECT 1", vec![]).await?;
+			}
 		} else {
 			self.connection.execute(sql, vec![]).await?;
 		}

@@ -45,6 +45,7 @@ full = ["database", "unified-router"]
 unified-router = []
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio = { version = "1.41", features = ["full"] }
 bytes = { workspace = true }
 hyper = { workspace = true }

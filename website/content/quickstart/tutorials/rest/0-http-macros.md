@@ -169,11 +169,10 @@ The `#[inject]` attribute enables automatic dependency injection:
 ```rust
 use reinhardt::get;
 use reinhardt::db::DatabaseConnection;
-use std::sync::Arc;
 
 #[get("/data", name = "get_data")]
 pub async fn get_data(
-    #[inject] db: Arc<DatabaseConnection>,
+    #[inject] db: DatabaseConnection,
 ) -> Result<Response> {
     // db is automatically injected by the framework
     let data = db.query("SELECT * FROM items").fetch_all().await?;
@@ -190,12 +189,11 @@ pub async fn get_data(
 use reinhardt::{get, Request};
 use reinhardt::db::DatabaseConnection;
 use reinhardt::cache::Cache;
-use std::sync::Arc;
 
 #[get("/users/{id}/", name = "get_user")]
 pub async fn get_user(
     req: Request,
-    #[inject] db: Arc<DatabaseConnection>,
+    #[inject] db: DatabaseConnection,
     #[inject(cache = true)] cache: Arc<Cache>,
 ) -> Result<Response> {
     // Extract path parameter
@@ -231,7 +229,7 @@ By default, dependencies are resolved per request. Use `cache = true` for single
 ```rust
 #[inject(cache = true)] config: Arc<AppConfig>,  // Singleton
 #[inject(cache = false)] request_id: RequestId,  // Per-request
-#[inject] db: Arc<DatabaseConnection>,           // Default: per-request
+#[inject] db: DatabaseConnection,           // Default: per-request
 ```
 
 ### How Dependency Injection Works
@@ -250,19 +248,19 @@ By default, dependencies are resolved per request. Use `cache = true` for single
 
 ---
 
-## UnifiedRouter Integration
+## DefaultRouter Integration
 
 ### High-Level API (Recommended)
 
-Use `UnifiedRouter::function()` for application routing:
+Use `DefaultRouter::function()` for application routing:
 
 ```rust
-use reinhardt::routers::UnifiedRouter;
+use reinhardt::routers::DefaultRouter;
 use hyper::Method;
 use crate::views;
 
-pub fn url_patterns() -> UnifiedRouter {
-    UnifiedRouter::new()
+pub fn url_patterns() -> DefaultRouter {
+    DefaultRouter::new()
         .endpoint(views::list_users)
         .endpoint(views::get_user)
         .endpoint(views::create_user)
@@ -277,8 +275,8 @@ pub fn url_patterns() -> UnifiedRouter {
 use reinhardt::routes;
 
 #[routes]
-pub fn routes() -> UnifiedRouter {
-    UnifiedRouter::new()
+pub fn routes() -> DefaultRouter {
+    DefaultRouter::new()
         .mount("/api/v1/users/", users::urls::url_patterns())
         .mount("/api/v1/posts/", posts::urls::url_patterns())
 }
@@ -303,7 +301,7 @@ pub fn url_patterns() -> Vec<Route> {
 
 ### Comparison
 
-| Feature | Route::from_handler | UnifiedRouter::function |
+| Feature | Route::from_handler | DefaultRouter::function |
 |---------|---------------------|------------------------|
 | **Level** | Low-level primitive | High-level API |
 | **Prefix Support** | Manual concatenation | Automatic via `.mount()` |
@@ -312,7 +310,7 @@ pub fn url_patterns() -> Vec<Route> {
 | **URL Parameters** | `{param}` syntax | `{param}` syntax (same) |
 | **Recommended For** | Library development | Application routing |
 
-**Recommendation**: Use `UnifiedRouter::function()` for better maintainability and explicit HTTP method handling.
+**Recommendation**: Use `DefaultRouter::function()` for better maintainability and explicit HTTP method handling.
 
 ---
 
@@ -323,7 +321,7 @@ pub fn url_patterns() -> Vec<Route> {
 Create custom extractors for common patterns:
 
 ```rust
-use reinhardt::http::FromRequest;
+use reinhardt::di::FromRequest;
 
 pub struct CurrentUser {
     pub id: i64,
@@ -387,7 +385,7 @@ impl std::error::Error for ApiError {}
 #[get("/users/{id}/", name = "get_user")]
 pub async fn get_user(
     Path(id): Path<i64>,
-    #[inject] db: Arc<DatabaseConnection>,
+    #[inject] db: DatabaseConnection,
 ) -> Result<Response, ApiError> {
     let user = User::get(&db, id)
         .await
@@ -421,7 +419,7 @@ impl Middleware for AuthMiddleware {
 }
 
 // Apply to routes
-let router = UnifiedRouter::new()
+let router = DefaultRouter::new()
     .function("/protected", Method::GET, protected_handler);
 
 let app = MiddlewareChain::new(Arc::new(router))
@@ -445,7 +443,7 @@ Named routes enable URL reversal and better debugging.
 
 ```rust
 // ✅ Good: Explicit method
-UnifiedRouter::new()
+DefaultRouter::new()
     .function("/users", Method::GET, list_users)
     .function("/users", Method::POST, create_user)
 
@@ -469,7 +467,7 @@ let user_id = req.path_params.get("id")?.parse::<i64>()?;
 // ✅ Good: Automatic injection
 #[get("/data", name = "get_data")]
 pub async fn get_data(
-    #[inject] db: Arc<DatabaseConnection>,
+    #[inject] db: DatabaseConnection,
 ) -> Result<Response> { /* ... */ }
 
 // ❌ Avoid: Manual threading
@@ -488,7 +486,7 @@ HTTP method decorators provide a powerful, type-safe way to build RESTful APIs i
 - **`#[get]`, `#[post]`, etc.** - FastAPI-inspired routing
 - **Path extractors** - Type-safe URL parameter parsing
 - **`#[inject]`** - Automatic dependency injection
-- **`UnifiedRouter`** - High-level routing API
+- **`DefaultRouter`** - High-level routing API
 - **Custom extractors** - Extend for your use cases
 
 **When to use:**

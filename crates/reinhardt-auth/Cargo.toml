@@ -7,8 +7,8 @@ categories = ["authentication", "web-programming"]
 readme = "README.md"
 documentation = "https://docs.rs/reinhardt-auth"
 edition.workspace = true
-license.workspace = true
 authors.workspace = true
+license.workspace = true
 repository.workspace = true
 
 [features]

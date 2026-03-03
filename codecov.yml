@@ -75,31 +75,62 @@ component_management:
   individual_components:
     - component_id: core
       name: Core Framework
-      paths: [crates/reinhardt-core/src/**, crates/reinhardt-apps/src/**, crates/reinhardt-http/src/**, crates/reinhardt-conf/src/**, src/**]
+      paths:
+        - "crates/reinhardt-core/src/**"
+        - "crates/reinhardt-apps/src/**"
+        - "crates/reinhardt-http/src/**"
+        - "crates/reinhardt-conf/src/**"
+        - "src/**"
     - component_id: database
       name: Database & ORM
-      paths: [crates/reinhardt-db/src/**, crates/reinhardt-query/src/**]
+      paths:
+        - "crates/reinhardt-db/src/**"
+        - "crates/reinhardt-query/src/**"
     - component_id: rest
       name: REST Framework
-      paths: [crates/reinhardt-rest/src/**, crates/reinhardt-views/src/**, crates/reinhardt-openapi/src/**, crates/reinhardt-throttling/src/**]
+      paths:
+        - "crates/reinhardt-rest/src/**"
+        - "crates/reinhardt-views/src/**"
+        - "crates/reinhardt-openapi/src/**"
+        - "crates/reinhardt-throttling/src/**"
     - component_id: auth
       name: Authentication & Security
-      paths: [crates/reinhardt-auth/src/**, crates/reinhardt-middleware/src/**]
+      paths:
+        - "crates/reinhardt-auth/src/**"
+        - "crates/reinhardt-middleware/src/**"
     - component_id: di
       name: Dependency Injection
-      paths: [crates/reinhardt-di/src/**]
+      paths:
+        - "crates/reinhardt-di/src/**"
     - component_id: server
       name: Server & Routing
-      paths: [crates/reinhardt-server/src/**, crates/reinhardt-urls/src/**]
+      paths:
+        - "crates/reinhardt-server/src/**"
+        - "crates/reinhardt-urls/src/**"
     - component_id: frontend
       name: Frontend & Pages
-      paths: [crates/reinhardt-pages/src/**, crates/reinhardt-forms/src/**, crates/reinhardt-admin/src/**]
+      paths:
+        - "crates/reinhardt-pages/src/**"
+        - "crates/reinhardt-forms/src/**"
+        - "crates/reinhardt-admin/src/**"
     - component_id: communication
       name: Communication
-      paths: [crates/reinhardt-mail/src/**, crates/reinhardt-graphql/src/**, crates/reinhardt-grpc/src/**, crates/reinhardt-websockets/src/**]
+      paths:
+        - "crates/reinhardt-mail/src/**"
+        - "crates/reinhardt-graphql/src/**"
+        - "crates/reinhardt-grpc/src/**"
+        - "crates/reinhardt-websockets/src/**"
     - component_id: utilities
       name: Utilities & Infrastructure
-      paths: [crates/reinhardt-utils/src/**, crates/reinhardt-shortcuts/src/**, crates/reinhardt-dispatch/src/**, crates/reinhardt-commands/src/**, crates/reinhardt-tasks/src/**, crates/reinhardt-i18n/src/**, crates/reinhardt-deeplink/src/**, crates/reinhardt-dentdelion/src/**]
+      paths:
+        - "crates/reinhardt-utils/src/**"
+        - "crates/reinhardt-shortcuts/src/**"
+        - "crates/reinhardt-dispatch/src/**"
+        - "crates/reinhardt-commands/src/**"
+        - "crates/reinhardt-tasks/src/**"
+        - "crates/reinhardt-i18n/src/**"
+        - "crates/reinhardt-deeplink/src/**"
+        - "crates/reinhardt-dentdelion/src/**"
 
 comment:
   layout: "condensed_header, condensed_files, condensed_footer"

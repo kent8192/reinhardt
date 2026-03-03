@@ -24,6 +24,7 @@ redis = { workspace = true, optional = true }
 maxminddb = { version = "0.26", optional = true }
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }
 tokio-test = { workspace = true }
 rstest = { workspace = true }

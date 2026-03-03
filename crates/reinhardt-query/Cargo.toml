@@ -48,6 +48,7 @@ full = [
 ]
 
 [dev-dependencies]
+insta = { workspace = true }
 # Test framework
 rstest = { workspace = true }
 pretty_assertions = "1.4"

@@ -5,17 +5,17 @@ on:
     - cron: '0 2 * * 1'
   workflow_dispatch:
     inputs:
-      phase:
-        description: 'Phase to run'
+      shard:
+        description: 'Shard to run (0 = all)'
         type: choice
         options:
-          - all
+          - "0"
           - "1"
           - "2"
           - "3"
           - "4"
           - "5"
-        default: all
+        default: "0"
 
 permissions:
   contents: read
@@ -24,32 +24,18 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   CARGO_TARGET_DIR: /tmp/cargo_target
+  TOTAL_SHARDS: 5
 
 jobs:
   mutation-test:
-    name: "Phase ${{ matrix.phase }}: ${{ matrix.name }}"
+    name: "Shard ${{ matrix.shard }}/${{ env.TOTAL_SHARDS }}"
     runs-on: ubuntu-latest
-    if: inputs.phase == 'all' || inputs.phase == matrix.phase
+    if: inputs.shard == '0' || inputs.shard == '' || inputs.shard == matrix.shard
     timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - phase: "1"
-            name: "Security"
-            packages: "-p reinhardt-auth -p reinhardt-db"
-          - phase: "2"
-            name: "API"
-            packages: "-p reinhardt-http -p reinhardt-rest -p reinhardt-urls -p reinhardt-views"
-          - phase: "3"
-            name: "Input/Flow"
-            packages: "-p reinhardt-forms -p reinhardt-middleware -p reinhardt-di -p reinhardt-conf"
-          - phase: "4"
-            name: "Communication"
-            packages: "-p reinhardt-graphql -p reinhardt-grpc -p reinhardt-websockets"
-          - phase: "5"
-            name: "Remaining"
-            packages: "-p reinhardt-query -p reinhardt-core -p reinhardt-apps -p reinhardt-server -p reinhardt-pages -p reinhardt-commands -p reinhardt-utils -p reinhardt-dispatch -p reinhardt-shortcuts -p reinhardt-tasks -p reinhardt-mail -p reinhardt-i18n -p reinhardt-openapi -p reinhardt-throttling -p reinhardt-admin -p reinhardt-deeplink -p reinhardt-dentdelion"
+        shard: [1, 2, 3, 4, 5]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -72,18 +58,17 @@ jobs:
 
       - name: Run mutation testing
         continue-on-error: true
-        run: cargo mutants ${{ matrix.packages }} --test-tool nextest --timeout-multiplier 2 --jobs 1 --output /tmp/mutants-phase-${{ matrix.phase }}
+        run: cargo mutants --shard ${{ matrix.shard }}/${{ env.TOTAL_SHARDS }} --test-tool nextest --timeout-multiplier 2 --jobs 1 --output /tmp/mutants-shard-${{ matrix.shard }}
 
       - name: Summary
         if: always()
         run: |
-          echo "## Mutation Testing Results - Phase ${{ matrix.phase }}: ${{ matrix.name }}" >> $GITHUB_STEP_SUMMARY
+          echo "## Mutation Testing Results - Shard ${{ matrix.shard }}/${{ env.TOTAL_SHARDS }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          if [ -f /tmp/mutants-phase-${{ matrix.phase }}/outcomes.json ]; then
-            total=$(jq 'length' /tmp/mutants-phase-${{ matrix.phase }}/outcomes.json)
-            caught=$(jq '[.[] | select(.scenario != "Baseline" and .summary == "CaughtMutant")] | length' /tmp/mutants-phase-${{ matrix.phase }}/outcomes.json)
-            missed=$(jq '[.[] | select(.scenario != "Baseline" and .summary == "MissedMutant")] | length' /tmp/mutants-phase-${{ matrix.phase }}/outcomes.json)
-            timeout=$(jq '[.[] | select(.scenario != "Baseline" and .summary == "Timeout")] | length' /tmp/mutants-phase-${{ matrix.phase }}/outcomes.json)
+          if [ -f /tmp/mutants-shard-${{ matrix.shard }}/outcomes.json ]; then
+            caught=$(jq '[.[] | select(.scenario != "Baseline" and .summary == "CaughtMutant")] | length' /tmp/mutants-shard-${{ matrix.shard }}/outcomes.json)
+            missed=$(jq '[.[] | select(.scenario != "Baseline" and .summary == "MissedMutant")] | length' /tmp/mutants-shard-${{ matrix.shard }}/outcomes.json)
+            timeout=$(jq '[.[] | select(.scenario != "Baseline" and .summary == "Timeout")] | length' /tmp/mutants-shard-${{ matrix.shard }}/outcomes.json)
             echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
             echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
             echo "| Caught | $caught |" >> $GITHUB_STEP_SUMMARY
@@ -97,6 +82,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mutants-phase-${{ matrix.phase }}
-          path: /tmp/mutants-phase-${{ matrix.phase }}/
+          name: mutants-shard-${{ matrix.shard }}
+          path: /tmp/mutants-shard-${{ matrix.shard }}/
           retention-days: 14

@@ -570,31 +570,12 @@ description = "Run mutation testing on a single crate (use CRATE env var)"
 command = "cargo"
 args = ["mutants", "-p", "${CRATE}", "--test-tool", "nextest", "--timeout-multiplier", "2", "--jobs", "1"]
 
-[tasks.mutants-phase1]
-description = "Run mutation testing Phase 1 (Security: auth, db)"
+[tasks.mutants-shard]
+description = "Run mutation testing for a shard (use SHARD and TOTAL_SHARDS env vars, e.g. SHARD=1 TOTAL_SHARDS=5)"
 command = "cargo"
-args = ["mutants", "-p", "reinhardt-auth", "-p", "reinhardt-db", "--test-tool", "nextest", "--timeout-multiplier", "2", "--jobs", "1"]
-
-[tasks.mutants-phase2]
-description = "Run mutation testing Phase 2 (API: http, rest, urls, views)"
-command = "cargo"
-args = ["mutants", "-p", "reinhardt-http", "-p", "reinhardt-rest", "-p", "reinhardt-urls", "-p", "reinhardt-views", "--test-tool", "nextest", "--timeout-multiplier", "2", "--jobs", "1"]
-
-[tasks.mutants-phase3]
-description = "Run mutation testing Phase 3 (Input/Flow: forms, middleware, di, conf)"
-command = "cargo"
-args = ["mutants", "-p", "reinhardt-forms", "-p", "reinhardt-middleware", "-p", "reinhardt-di", "-p", "reinhardt-conf", "--test-tool", "nextest", "--timeout-multiplier", "2", "--jobs", "1"]
-
-[tasks.mutants-phase4]
-description = "Run mutation testing Phase 4 (Communication: graphql, grpc, websockets)"
-command = "cargo"
-args = ["mutants", "-p", "reinhardt-graphql", "-p", "reinhardt-grpc", "-p", "reinhardt-websockets", "--test-tool", "nextest", "--timeout-multiplier", "2", "--jobs", "1"]
-
-[tasks.mutants-phase5]
-description = "Run mutation testing Phase 5 (Remaining crates)"
-command = "cargo"
-args = ["mutants", "-p", "reinhardt-query", "-p", "reinhardt-core", "-p", "reinhardt-apps", "-p", "reinhardt-server", "-p", "reinhardt-pages", "-p", "reinhardt-commands", "-p", "reinhardt-utils", "-p", "reinhardt-dispatch", "-p", "reinhardt-shortcuts", "-p", "reinhardt-tasks", "-p", "reinhardt-mail", "-p", "reinhardt-i18n", "-p", "reinhardt-openapi", "-p", "reinhardt-throttling", "-p", "reinhardt-admin", "-p", "reinhardt-deeplink", "-p", "reinhardt-dentdelion", "--test-tool", "nextest", "--timeout-multiplier", "2", "--jobs", "1"]
+args = ["mutants", "--shard", "${SHARD}/${TOTAL_SHARDS}", "--test-tool", "nextest", "--timeout-multiplier", "2", "--jobs", "1"]
 
 [tasks.mutants-all]
-description = "Run mutation testing for all phases sequentially"
-dependencies = ["mutants-phase1", "mutants-phase2", "mutants-phase3", "mutants-phase4", "mutants-phase5"]
+description = "Run mutation testing for all mutants (no sharding)"
+command = "cargo"
+args = ["mutants", "--test-tool", "nextest", "--timeout-multiplier", "2", "--jobs", "1"]

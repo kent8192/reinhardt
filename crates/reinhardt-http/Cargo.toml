@@ -2,8 +2,8 @@
 name = "reinhardt-http"
 version = "0.1.0-rc.1"
 edition.workspace = true
-license.workspace = true
 authors.workspace = true
+license.workspace = true
 description = "HTTP primitives, request and response handling for Reinhardt"
 keywords = ["http", "web", "request", "response", "framework"]
 categories = ["web-programming", "web-programming::http-server"]

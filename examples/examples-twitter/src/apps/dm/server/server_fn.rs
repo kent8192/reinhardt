@@ -383,36 +383,22 @@ pub async fn list_messages(
 		.await
 		.map_err(|e| ServerFnError::server(500, format!("Database error: {}", e)))?;
 
-	// Batch fetch all unique senders to avoid N+1 queries
-	let unique_sender_ids: Vec<Uuid> = messages
-		.iter()
-		.map(|m| *m.sender_id())
-		.collect::<std::collections::HashSet<_>>()
-		.into_iter()
-		.collect();
-
-	let mut sender_map: std::collections::HashMap<Uuid, User> =
-		std::collections::HashMap::new();
-	for sender_id in unique_sender_ids {
-		if let Some(user) = User::objects()
+	// Build message infos with sender info
+	let mut message_infos = Vec::new();
+	for msg in messages {
+		// Get sender info
+		let sender = User::objects()
 			.filter(
 				User::field_id(),
 				FilterOperator::Eq,
-				FilterValue::String(sender_id.to_string()),
+				FilterValue::String(msg.sender_id().to_string()),
 			)
 			.first()
 			.await
-			.map_err(|e| ServerFnError::server(500, format!("Database error: {}", e)))?
-		{
-			sender_map.insert(sender_id, user);
-		}
-	}
+			.map_err(|e| ServerFnError::server(500, format!("Database error: {}", e)))?;
 
-	// Build message infos using pre-fetched sender data
-	let mut message_infos = Vec::new();
-	for msg in messages {
-		if let Some(sender_user) = sender_map.get(msg.sender_id()) {
-			message_infos.push(build_message_info(&msg, sender_user));
+		if let Some(sender_user) = sender {
+			message_infos.push(build_message_info(&msg, &sender_user));
 		}
 	}
 

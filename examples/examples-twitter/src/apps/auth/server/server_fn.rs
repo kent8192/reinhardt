@@ -22,12 +22,9 @@ use {
 pub async fn login(
 	email: String,
 	password: String,
-	#[inject] db: DatabaseConnection,
+	#[inject] _db: DatabaseConnection,
 	#[inject] session: SessionData,
-	#[inject] store: SessionStoreRef,
 ) -> std::result::Result<UserInfo, ServerFnError> {
-	// Keep db binding for potential future use by ORM
-	let _ = &db;
 	let mut session = session;
 
 	// Construct request from parameters
@@ -65,11 +62,10 @@ pub async fn login(
 		return Err(ServerFnError::server(403, "User account is inactive"));
 	}
 
-	// Persist user ID in session for subsequent request identification
+	// Persist user ID in session
 	session
 		.set("user_id".to_string(), user.id())
 		.map_err(|e| ServerFnError::application(format!("Session error: {}", e)))?;
-	store.inner().save(session);
 
 	Ok(UserInfo::from(user))
 }

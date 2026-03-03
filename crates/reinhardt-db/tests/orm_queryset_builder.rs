@@ -666,7 +666,9 @@ fn test_filter_condition_and() {
 		)),
 	]);
 
-	// Act / Assert - verify the structure compiles and is constructed
+	// Act
+
+	// Assert - verify the structure compiles and is constructed
 	assert!(!condition.is_empty());
 }
 
@@ -686,7 +688,9 @@ fn test_filter_condition_or() {
 		)),
 	]);
 
-	// Act / Assert
+	// Act
+
+	// Assert
 	assert!(!condition.is_empty());
 }
 
@@ -699,7 +703,9 @@ fn test_filter_condition_not() {
 		FilterValue::Boolean(false),
 	)));
 
-	// Act / Assert
+	// Act
+
+	// Assert
 	assert!(!condition.is_empty());
 }
 
@@ -734,7 +740,9 @@ fn test_filter_condition_nested_and_or() {
 		]),
 	]);
 
-	// Act / Assert
+	// Act
+
+	// Assert
 	assert!(!condition.is_empty());
 }
 
@@ -743,7 +751,9 @@ fn test_filter_condition_empty_and_is_empty() {
 	// Arrange
 	let condition = FilterCondition::And(vec![]);
 
-	// Act / Assert
+	// Act
+
+	// Assert
 	assert!(condition.is_empty());
 }
 
@@ -789,7 +799,9 @@ fn test_filter_condition_and_filters_convenience() {
 
 #[rstest]
 fn test_full_query_chain() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let qs = QuerySet::<TestProduct>::new()
 		.filter(Filter::new(
 			"in_stock",
@@ -821,7 +833,9 @@ fn test_full_query_chain() {
 
 #[rstest]
 fn test_distinct_with_values_and_order() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let qs = QuerySet::<TestProduct>::new()
 		.distinct()
 		.values(&["category"])
@@ -849,7 +863,9 @@ fn test_distinct_with_values_and_order() {
 
 #[rstest]
 fn test_queryset_from_table() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let qs = QuerySet::<TestProduct>::new();
 	let sql = qs.to_sql();
 
@@ -1104,7 +1120,9 @@ fn test_filter_with_from_i32_value() {
 
 #[rstest]
 fn test_orm_query_new() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let query = OrmQuery::new();
 
 	// Assert - OrmQuery::new creates an empty query with no filters
@@ -1146,7 +1164,9 @@ fn test_orm_query_filter_chaining() {
 
 #[rstest]
 fn test_orm_query_default() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let query: OrmQuery = Default::default();
 
 	// Assert - Default should produce the same as new()
@@ -1219,7 +1239,9 @@ fn test_filter_condition_not_of_empty_is_empty() {
 
 #[rstest]
 fn test_filter_condition_or_of_empty_is_empty() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let condition = FilterCondition::Or(vec![]);
 
 	// Assert
@@ -1228,7 +1250,9 @@ fn test_filter_condition_or_of_empty_is_empty() {
 
 #[rstest]
 fn test_queryset_default_selects_all_columns() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let qs = QuerySet::<TestProduct>::new();
 	let sql = qs.to_sql();
 

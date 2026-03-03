@@ -100,7 +100,9 @@ impl DatabaseBackend for MockBackend {
 
 #[rstest]
 fn test_on_conflict_clause_columns_creates_column_target() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let clause = OnConflictClause::columns(vec!["email", "tenant_id"]);
 
 	// Assert
@@ -112,7 +114,9 @@ fn test_on_conflict_clause_columns_creates_column_target() {
 
 #[rstest]
 fn test_on_conflict_clause_constraint_creates_constraint_target() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let clause = OnConflictClause::constraint("users_email_key");
 
 	// Assert
@@ -123,7 +127,9 @@ fn test_on_conflict_clause_constraint_creates_constraint_target() {
 
 #[rstest]
 fn test_on_conflict_clause_any_creates_no_target() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let clause = OnConflictClause::any();
 
 	// Assert
@@ -161,7 +167,9 @@ fn test_on_conflict_clause_do_update_sets_action() {
 
 #[rstest]
 fn test_on_conflict_clause_where_clause_sets_condition() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let clause = OnConflictClause::columns(vec!["email"])
 		.do_update(vec!["name", "updated_at"])
 		.where_clause("users.updated_at < EXCLUDED.updated_at");
@@ -173,7 +181,9 @@ fn test_on_conflict_clause_where_clause_sets_condition() {
 
 #[rstest]
 fn test_on_conflict_clause_chaining() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let clause = OnConflictClause::columns(vec!["id"])
 		.do_update(vec!["data", "version"])
 		.where_clause("users.version < EXCLUDED.version");
@@ -190,7 +200,9 @@ fn test_on_conflict_clause_chaining() {
 
 #[rstest]
 fn test_conflict_target_columns_variant() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let target = ConflictTarget::Columns(vec!["email".to_string(), "tenant_id".to_string()]);
 
 	// Assert
@@ -206,7 +218,9 @@ fn test_conflict_target_columns_variant() {
 
 #[rstest]
 fn test_conflict_target_constraint_variant() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let target = ConflictTarget::Constraint("users_email_key".to_string());
 
 	// Assert
@@ -236,25 +250,41 @@ fn test_conflict_target_clone() {
 
 #[rstest]
 fn test_database_type_postgres_supports_transactional_ddl() {
-	// Arrange & Act & Assert
+	// Arrange
+
+	// Act
+
+	// Assert
 	assert!(DatabaseType::Postgres.supports_transactional_ddl());
 }
 
 #[rstest]
 fn test_database_type_sqlite_supports_transactional_ddl() {
-	// Arrange & Act & Assert
+	// Arrange
+
+	// Act
+
+	// Assert
 	assert!(DatabaseType::Sqlite.supports_transactional_ddl());
 }
 
 #[rstest]
 fn test_database_type_mysql_does_not_support_transactional_ddl() {
-	// Arrange & Act & Assert
+	// Arrange
+
+	// Act
+
+	// Assert
 	assert!(!DatabaseType::Mysql.supports_transactional_ddl());
 }
 
 #[rstest]
 fn test_database_type_equality() {
-	// Arrange & Act & Assert
+	// Arrange
+
+	// Act
+
+	// Assert
 	assert_eq!(DatabaseType::Postgres, DatabaseType::Postgres);
 	assert_eq!(DatabaseType::Mysql, DatabaseType::Mysql);
 	assert_eq!(DatabaseType::Sqlite, DatabaseType::Sqlite);
@@ -279,7 +309,9 @@ fn test_database_type_clone() {
 
 #[rstest]
 fn test_isolation_level_default_is_read_committed() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let level = IsolationLevel::default();
 
 	// Assert
@@ -292,7 +324,9 @@ fn test_isolation_level_default_is_read_committed() {
 #[case(IsolationLevel::RepeatableRead, "REPEATABLE READ")]
 #[case(IsolationLevel::Serializable, "SERIALIZABLE")]
 fn test_isolation_level_to_sql(#[case] level: IsolationLevel, #[case] expected: &str) {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let sql = level.to_sql(DatabaseType::Postgres);
 
 	// Assert
@@ -301,7 +335,9 @@ fn test_isolation_level_to_sql(#[case] level: IsolationLevel, #[case] expected: 
 
 #[rstest]
 fn test_isolation_level_begin_transaction_sql_postgres() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let sql = IsolationLevel::Serializable.begin_transaction_sql(DatabaseType::Postgres);
 
 	// Assert
@@ -310,7 +346,9 @@ fn test_isolation_level_begin_transaction_sql_postgres() {
 
 #[rstest]
 fn test_isolation_level_begin_transaction_sql_mysql() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let sql = IsolationLevel::RepeatableRead.begin_transaction_sql(DatabaseType::Mysql);
 
 	// Assert
@@ -322,7 +360,9 @@ fn test_isolation_level_begin_transaction_sql_mysql() {
 
 #[rstest]
 fn test_isolation_level_begin_transaction_sql_sqlite_serializable() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let sql = IsolationLevel::Serializable.begin_transaction_sql(DatabaseType::Sqlite);
 
 	// Assert
@@ -331,7 +371,9 @@ fn test_isolation_level_begin_transaction_sql_sqlite_serializable() {
 
 #[rstest]
 fn test_isolation_level_begin_transaction_sql_sqlite_default() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let sql = IsolationLevel::ReadCommitted.begin_transaction_sql(DatabaseType::Sqlite);
 
 	// Assert
@@ -340,7 +382,11 @@ fn test_isolation_level_begin_transaction_sql_sqlite_default() {
 
 #[rstest]
 fn test_isolation_level_all_variants_exist() {
-	// Arrange & Act & Assert
+	// Arrange
+
+	// Act
+
+	// Assert
 	let levels = [
 		IsolationLevel::ReadUncommitted,
 		IsolationLevel::ReadCommitted,
@@ -354,7 +400,9 @@ fn test_isolation_level_all_variants_exist() {
 
 #[rstest]
 fn test_query_value_null() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let val = QueryValue::Null;
 
 	// Assert
@@ -364,7 +412,9 @@ fn test_query_value_null() {
 
 #[rstest]
 fn test_query_value_bool() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let val_true = QueryValue::Bool(true);
 	let val_false = QueryValue::Bool(false);
 
@@ -376,7 +426,9 @@ fn test_query_value_bool() {
 
 #[rstest]
 fn test_query_value_int() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let val = QueryValue::Int(42);
 
 	// Assert
@@ -386,7 +438,9 @@ fn test_query_value_int() {
 
 #[rstest]
 fn test_query_value_float() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let val = QueryValue::Float(3.14);
 
 	// Assert
@@ -395,7 +449,9 @@ fn test_query_value_float() {
 
 #[rstest]
 fn test_query_value_string() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let val = QueryValue::String("hello".to_string());
 
 	// Assert
@@ -404,7 +460,9 @@ fn test_query_value_string() {
 
 #[rstest]
 fn test_query_value_bytes() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let val = QueryValue::Bytes(vec![1, 2, 3]);
 
 	// Assert
@@ -437,7 +495,9 @@ fn test_query_value_uuid() {
 
 #[rstest]
 fn test_query_value_now() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let val = QueryValue::Now;
 
 	// Assert
@@ -447,7 +507,9 @@ fn test_query_value_now() {
 
 #[rstest]
 fn test_query_value_from_str() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let val: QueryValue = "test".into();
 
 	// Assert
@@ -456,7 +518,9 @@ fn test_query_value_from_str() {
 
 #[rstest]
 fn test_query_value_from_string() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let val: QueryValue = String::from("test").into();
 
 	// Assert
@@ -465,7 +529,9 @@ fn test_query_value_from_string() {
 
 #[rstest]
 fn test_query_value_from_i64() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let val: QueryValue = 100i64.into();
 
 	// Assert
@@ -474,7 +540,9 @@ fn test_query_value_from_i64() {
 
 #[rstest]
 fn test_query_value_from_i32() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let val: QueryValue = 50i32.into();
 
 	// Assert
@@ -483,7 +551,9 @@ fn test_query_value_from_i32() {
 
 #[rstest]
 fn test_query_value_from_f64() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let val: QueryValue = 2.718f64.into();
 
 	// Assert
@@ -492,7 +562,9 @@ fn test_query_value_from_f64() {
 
 #[rstest]
 fn test_query_value_from_bool() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let val: QueryValue = true.into();
 
 	// Assert
@@ -527,7 +599,9 @@ fn test_query_value_from_uuid() {
 
 #[rstest]
 fn test_database_error_unsupported_feature() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let err = DatabaseError::UnsupportedFeature {
 		database: "MySQL".to_string(),
 		feature: "transactional DDL".to_string(),
@@ -541,7 +615,9 @@ fn test_database_error_unsupported_feature() {
 
 #[rstest]
 fn test_database_error_not_supported() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let err = DatabaseError::NotSupported("savepoints".to_string());
 
 	// Assert
@@ -550,7 +626,9 @@ fn test_database_error_not_supported() {
 
 #[rstest]
 fn test_database_error_syntax_error() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let err = DatabaseError::SyntaxError("unexpected token".to_string());
 
 	// Assert
@@ -559,7 +637,9 @@ fn test_database_error_syntax_error() {
 
 #[rstest]
 fn test_database_error_type_error() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let err = DatabaseError::TypeError("cannot convert".to_string());
 
 	// Assert
@@ -568,7 +648,9 @@ fn test_database_error_type_error() {
 
 #[rstest]
 fn test_database_error_connection_error() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let err = DatabaseError::ConnectionError("timeout".to_string());
 
 	// Assert
@@ -577,7 +659,9 @@ fn test_database_error_connection_error() {
 
 #[rstest]
 fn test_database_error_query_error() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let err = DatabaseError::QueryError("invalid column".to_string());
 
 	// Assert
@@ -586,7 +670,9 @@ fn test_database_error_query_error() {
 
 #[rstest]
 fn test_database_error_serialization_error() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let err = DatabaseError::SerializationError("invalid json".to_string());
 
 	// Assert
@@ -595,7 +681,9 @@ fn test_database_error_serialization_error() {
 
 #[rstest]
 fn test_database_error_config_error() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let err = DatabaseError::ConfigError("missing url".to_string());
 
 	// Assert
@@ -604,7 +692,9 @@ fn test_database_error_config_error() {
 
 #[rstest]
 fn test_database_error_column_not_found() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let err = DatabaseError::ColumnNotFound("user_id".to_string());
 
 	// Assert
@@ -613,7 +703,9 @@ fn test_database_error_column_not_found() {
 
 #[rstest]
 fn test_database_error_transaction_error() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let err = DatabaseError::TransactionError("deadlock detected".to_string());
 
 	// Assert
@@ -622,7 +714,9 @@ fn test_database_error_transaction_error() {
 
 #[rstest]
 fn test_database_error_other() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let err = DatabaseError::Other("unknown error".to_string());
 
 	// Assert
@@ -636,7 +730,9 @@ fn test_database_error_equality() {
 	let err2 = DatabaseError::QueryError("test".to_string());
 	let err3 = DatabaseError::QueryError("other".to_string());
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_eq!(err1, err2);
 	assert_ne!(err1, err3);
 }
@@ -645,7 +741,9 @@ fn test_database_error_equality() {
 
 #[rstest]
 fn test_query_cache_config_default() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let config = QueryCacheConfig::default();
 
 	// Assert
@@ -656,7 +754,9 @@ fn test_query_cache_config_default() {
 
 #[rstest]
 fn test_query_cache_config_custom() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let mut config = QueryCacheConfig::default();
 	config.max_size = 500;
 	config.ttl = Duration::from_secs(60);
@@ -1124,7 +1224,9 @@ fn test_update_builder_mysql() {
 
 #[rstest]
 fn test_query_result_rows_affected() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let result = QueryResult { rows_affected: 5 };
 
 	// Assert
@@ -1138,7 +1240,9 @@ fn test_query_result_equality() {
 	let r2 = QueryResult { rows_affected: 3 };
 	let r3 = QueryResult { rows_affected: 7 };
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_eq!(r1, r2);
 	assert_ne!(r1, r3);
 }
@@ -1147,7 +1251,9 @@ fn test_query_result_equality() {
 
 #[rstest]
 fn test_row_new_is_empty() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let row = Row::new();
 
 	// Assert
@@ -1184,7 +1290,9 @@ fn test_row_get_column_not_found() {
 
 #[rstest]
 fn test_row_default() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let row = Row::default();
 
 	// Assert
@@ -1198,7 +1306,9 @@ fn test_savepoint_to_sql() {
 	// Arrange
 	let sp = Savepoint::new("test_sp");
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_eq!(sp.to_sql(), "SAVEPOINT \"test_sp\"");
 	assert_eq!(sp.release_sql(), "RELEASE SAVEPOINT \"test_sp\"");
 	assert_eq!(sp.rollback_sql(), "ROLLBACK TO SAVEPOINT \"test_sp\"");
@@ -1206,7 +1316,9 @@ fn test_savepoint_to_sql() {
 
 #[rstest]
 fn test_savepoint_name() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let sp = Savepoint::new("my_sp");
 
 	// Assert
@@ -1253,7 +1365,9 @@ fn test_insert_builder_legacy_on_conflict_do_update() {
 
 #[rstest]
 fn test_on_conflict_clause_action_do_nothing_debug() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let action = OnConflictClauseAction::DoNothing;
 
 	// Assert
@@ -1263,7 +1377,9 @@ fn test_on_conflict_clause_action_do_nothing_debug() {
 
 #[rstest]
 fn test_on_conflict_clause_action_do_update_debug() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let action = OnConflictClauseAction::DoUpdate {
 		update_columns: vec!["name".to_string(), "email".to_string()],
 	};
@@ -1279,7 +1395,9 @@ fn test_on_conflict_clause_action_do_update_debug() {
 
 #[rstest]
 fn test_on_conflict_action_do_nothing_without_columns() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let action = reinhardt_db::backends::query_builder::OnConflictAction::DoNothing {
 		conflict_columns: None,
 	};
@@ -1292,7 +1410,9 @@ fn test_on_conflict_action_do_nothing_without_columns() {
 
 #[rstest]
 fn test_on_conflict_action_do_nothing_with_columns() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let action = reinhardt_db::backends::query_builder::OnConflictAction::DoNothing {
 		conflict_columns: Some(vec!["email".to_string(), "tenant_id".to_string()]),
 	};
@@ -1306,7 +1426,9 @@ fn test_on_conflict_action_do_nothing_with_columns() {
 
 #[rstest]
 fn test_on_conflict_action_do_update_with_columns() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let action = reinhardt_db::backends::query_builder::OnConflictAction::DoUpdate {
 		conflict_columns: Some(vec!["id".to_string()]),
 		update_columns: vec!["name".to_string(), "email".to_string()],
@@ -1322,7 +1444,9 @@ fn test_on_conflict_action_do_update_with_columns() {
 
 #[rstest]
 fn test_on_conflict_action_do_update_without_conflict_columns() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let action = reinhardt_db::backends::query_builder::OnConflictAction::DoUpdate {
 		conflict_columns: None,
 		update_columns: vec!["status".to_string()],
@@ -1355,7 +1479,9 @@ fn test_on_conflict_clause_clone() {
 
 #[rstest]
 fn test_on_conflict_clause_single_column() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let clause = OnConflictClause::columns(vec!["id"]);
 
 	// Assert
@@ -1366,7 +1492,9 @@ fn test_on_conflict_clause_single_column() {
 
 #[rstest]
 fn test_on_conflict_clause_many_columns() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let clause = OnConflictClause::columns(vec!["email", "tenant_id", "region"]);
 
 	// Assert
@@ -1393,7 +1521,9 @@ fn test_on_conflict_clause_override_action_do_update_then_do_nothing() {
 
 #[rstest]
 fn test_on_conflict_clause_where_clause_without_do_update() {
-	// Arrange & Act: where_clause can be called even with DoNothing action
+	// Arrange
+
+	// Act - where_clause can be called even with DoNothing action
 	let clause = OnConflictClause::columns(vec!["email"])
 		.do_nothing()
 		.where_clause("1 = 1");
@@ -1595,7 +1725,9 @@ fn test_row_equality() {
 	let mut row2 = Row::new();
 	row2.insert("id".to_string(), QueryValue::Int(1));
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_eq!(row1, row2);
 }
 
@@ -1659,7 +1791,9 @@ fn test_savepoint_equality() {
 	let sp2 = Savepoint::new("sp1");
 	let sp3 = Savepoint::new("sp2");
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_eq!(sp1, sp2);
 	assert_ne!(sp1, sp3);
 }
@@ -1725,7 +1859,11 @@ fn test_query_value_clone() {
 
 #[rstest]
 fn test_query_value_ne_different_variants() {
-	// Arrange & Act & Assert: different variants are never equal
+	// Arrange
+
+	// Act
+
+	// Assert - different variants are never equal
 	assert_ne!(QueryValue::Null, QueryValue::Bool(false));
 	assert_ne!(QueryValue::Int(0), QueryValue::Float(0.0));
 	assert_ne!(QueryValue::String("0".to_string()), QueryValue::Int(0));

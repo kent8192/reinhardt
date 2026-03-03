@@ -83,7 +83,9 @@ fn test_content_type_partial_eq_same() {
 	let ct1 = ContentType::new("app", "Model");
 	let ct2 = ContentType::new("app", "Model");
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_eq!(ct1, ct2);
 }
 
@@ -93,7 +95,9 @@ fn test_content_type_partial_eq_different_app() {
 	let ct1 = ContentType::new("app1", "Model");
 	let ct2 = ContentType::new("app2", "Model");
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_ne!(ct1, ct2);
 }
 
@@ -103,7 +107,9 @@ fn test_content_type_partial_eq_different_model() {
 	let ct1 = ContentType::new("app", "Model1");
 	let ct2 = ContentType::new("app", "Model2");
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_ne!(ct1, ct2);
 }
 
@@ -130,7 +136,9 @@ fn test_content_type_serialize_deserialize() {
 
 #[rstest]
 fn test_registry_new_creates_empty() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let registry = ContentTypeRegistry::new();
 
 	// Assert
@@ -297,7 +305,9 @@ fn test_registry_duplicate_registration_returns_existing() {
 
 #[rstest]
 fn test_generic_foreign_key_new() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let gfk = GenericForeignKey::new();
 
 	// Assert
@@ -326,7 +336,9 @@ fn test_generic_foreign_key_is_set_requires_both_fields() {
 	// Arrange
 	let mut gfk = GenericForeignKey::new();
 
-	// Act & Assert - neither field set
+	// Act
+
+	// Assert - neither field set
 	assert!(!gfk.is_set());
 
 	// Only content_type_id set

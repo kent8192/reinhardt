@@ -68,7 +68,9 @@ fn migration_key_equality() {
 	let key_b = MigrationKey::new("app", "name");
 	let key_c = MigrationKey::new("app", "other");
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_eq!(key_a, key_b);
 	assert_ne!(key_a, key_c);
 }
@@ -133,7 +135,9 @@ fn migration_node_with_replaces_stores_replaces() {
 
 #[rstest]
 fn graph_new_is_empty() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let graph = MigrationGraph::new();
 
 	// Assert
@@ -537,7 +541,9 @@ fn is_replaced_detects_replaced_migrations() {
 	let squashed = MigrationKey::new("auth", "0001_squashed");
 	graph.add_migration_with_replaces(squashed.clone(), vec![], vec![old.clone()]);
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(graph.is_replaced(&old));
 	assert!(!graph.is_replaced(&squashed));
 }

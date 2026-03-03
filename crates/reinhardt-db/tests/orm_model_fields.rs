@@ -56,7 +56,9 @@ fn f_expression_display() {
 #[case("user_name", "user_name")]
 #[case("created_at", "created_at")]
 fn f_expression_various_fields(#[case] field: &str, #[case] expected_sql: &str) {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let f = F::new(field);
 
 	// Assert
@@ -98,7 +100,9 @@ fn outer_ref_for_subquery_usage() {
 
 #[rstest]
 fn q_simple_condition() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let q = Q::new("age", ">=", "18");
 
 	// Assert
@@ -177,7 +181,9 @@ fn isolation_level_equality() {
 	let level2 = IsolationLevel::Serializable;
 	let level3 = IsolationLevel::ReadCommitted;
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_eq!(level1, level2);
 	assert_ne!(level1, level3);
 }
@@ -188,7 +194,9 @@ fn isolation_level_equality() {
 
 #[rstest]
 fn transaction_state_initial() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let tx = Transaction::new();
 
 	// Assert
@@ -301,7 +309,9 @@ fn transaction_begin_after_committed_fails() {
 
 #[rstest]
 fn savepoint_creation() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let sp = Savepoint::new("my_savepoint", 1);
 
 	// Assert
@@ -314,7 +324,9 @@ fn savepoint_to_sql() {
 	// Arrange
 	let sp = Savepoint::new("checkpoint_1", 2);
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_eq!(sp.to_sql(), r#"SAVEPOINT "checkpoint_1""#);
 	assert_eq!(sp.release_sql(), r#"RELEASE SAVEPOINT "checkpoint_1""#);
 	assert_eq!(sp.rollback_sql(), r#"ROLLBACK TO SAVEPOINT "checkpoint_1""#);
@@ -323,21 +335,27 @@ fn savepoint_to_sql() {
 #[rstest]
 #[should_panic(expected = "Invalid savepoint name")]
 fn savepoint_rejects_invalid_name() {
-	// Arrange & Act (should panic)
+	// Arrange
+
+	// Act
 	Savepoint::new("invalid; DROP TABLE", 1);
 }
 
 #[rstest]
 #[should_panic(expected = "Invalid savepoint name")]
 fn savepoint_rejects_empty_name() {
-	// Arrange & Act (should panic)
+	// Arrange
+
+	// Act
 	Savepoint::new("", 1);
 }
 
 #[rstest]
 #[should_panic(expected = "Invalid savepoint name")]
 fn savepoint_rejects_numeric_start() {
-	// Arrange & Act (should panic)
+	// Arrange
+
+	// Act
 	Savepoint::new("123savepoint", 1);
 }
 
@@ -368,7 +386,9 @@ fn aggregate_func_display(#[case] func: AggregateFunc, #[case] expected: &str) {
 
 #[rstest]
 fn aggregate_count_with_field() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let agg = Aggregate::count(Some("id"));
 
 	// Assert
@@ -377,7 +397,9 @@ fn aggregate_count_with_field() {
 
 #[rstest]
 fn aggregate_count_all() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let agg = Aggregate::count_all();
 
 	// Assert
@@ -386,7 +408,9 @@ fn aggregate_count_all() {
 
 #[rstest]
 fn aggregate_count_distinct() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let agg = Aggregate::count_distinct("user_id");
 
 	// Assert
@@ -396,7 +420,9 @@ fn aggregate_count_distinct() {
 
 #[rstest]
 fn aggregate_sum() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let agg = Aggregate::sum("amount");
 
 	// Assert
@@ -405,7 +431,9 @@ fn aggregate_sum() {
 
 #[rstest]
 fn aggregate_avg() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let agg = Aggregate::avg("score");
 
 	// Assert
@@ -414,7 +442,9 @@ fn aggregate_avg() {
 
 #[rstest]
 fn aggregate_max() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let agg = Aggregate::max("price");
 
 	// Assert
@@ -423,7 +453,9 @@ fn aggregate_max() {
 
 #[rstest]
 fn aggregate_min() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let agg = Aggregate::min("age");
 
 	// Assert
@@ -432,7 +464,9 @@ fn aggregate_min() {
 
 #[rstest]
 fn aggregate_with_alias() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let agg = Aggregate::sum("amount").with_alias("total_amount");
 
 	// Assert
@@ -454,14 +488,18 @@ fn aggregate_to_sql_expr_without_alias() {
 #[rstest]
 #[should_panic(expected = "Invalid field name")]
 fn aggregate_rejects_invalid_field() {
-	// Arrange & Act (should panic)
+	// Arrange
+
+	// Act
 	Aggregate::sum("amount; DROP TABLE users");
 }
 
 #[rstest]
 #[should_panic(expected = "Invalid alias")]
 fn aggregate_rejects_invalid_alias() {
-	// Arrange & Act (should panic)
+	// Arrange
+
+	// Act
 	Aggregate::sum("amount").with_alias("total; DROP TABLE");
 }
 
@@ -491,7 +529,9 @@ fn aggregate_result_insert_and_get() {
 
 #[rstest]
 fn aggregate_result_default() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let result = AggregateResult::default();
 
 	// Assert
@@ -563,7 +603,11 @@ fn annotation_value_string() {
 
 #[rstest]
 fn annotation_value_bool() {
-	// Arrange & Act & Assert
+	// Arrange
+
+	// Act
+
+	// Assert
 	assert_eq!(Value::Bool(true).to_sql(), "TRUE");
 	assert_eq!(Value::Bool(false).to_sql(), "FALSE");
 }
@@ -680,13 +724,19 @@ fn exists_to_sql() {
 fn frame_type_to_sql(#[case] frame_type: FrameType, #[case] expected: &str) {
 	// Arrange (provided by case parameters)
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_eq!(frame_type.to_sql(), expected);
 }
 
 #[rstest]
 fn frame_boundary_to_sql() {
-	// Arrange & Act & Assert
+	// Arrange
+
+	// Act
+
+	// Assert
 	assert_eq!(
 		FrameBoundary::UnboundedPreceding.to_sql(),
 		"UNBOUNDED PRECEDING"
@@ -762,7 +812,9 @@ fn window_empty() {
 	// Arrange
 	let window = Window::new();
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_eq!(window.to_sql(), "");
 }
 
@@ -771,7 +823,9 @@ fn window_partition_by() {
 	// Arrange
 	let window = Window::new().partition_by("department");
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_eq!(window.to_sql(), "PARTITION BY department");
 }
 
@@ -780,7 +834,9 @@ fn window_order_by() {
 	// Arrange
 	let window = Window::new().order_by("salary DESC");
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_eq!(window.to_sql(), "ORDER BY salary DESC");
 }
 
@@ -791,7 +847,9 @@ fn window_partition_and_order() {
 		.partition_by("department")
 		.order_by("salary DESC");
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_eq!(
 		window.to_sql(),
 		"PARTITION BY department ORDER BY salary DESC"
@@ -810,7 +868,9 @@ fn window_with_frame() {
 		.order_by("date")
 		.frame(frame);
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_eq!(
 		window.to_sql(),
 		"PARTITION BY department ORDER BY date ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING"
@@ -819,7 +879,9 @@ fn window_with_frame() {
 
 #[rstest]
 fn window_default() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let window = Window::default();
 
 	// Assert
@@ -995,7 +1057,9 @@ fn nth_value_to_sql() {
 
 #[rstest]
 fn row_number_default() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let row_num = RowNumber::default();
 
 	// Assert (verify it creates the same as new())
@@ -1012,7 +1076,9 @@ fn required_validator_accepts_non_empty() {
 	// Arrange
 	let validator = RequiredValidator::new();
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(validator.validate("some text").is_ok());
 }
 
@@ -1024,7 +1090,9 @@ fn required_validator_rejects_empty(#[case] input: &str) {
 	// Arrange
 	let validator = RequiredValidator::new();
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(validator.validate(input).is_err());
 }
 
@@ -1033,7 +1101,9 @@ fn required_validator_custom_message() {
 	// Arrange
 	let validator = RequiredValidator::with_message("Username is required");
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_eq!(validator.message(), "Username is required");
 }
 
@@ -1042,7 +1112,9 @@ fn max_length_validator_accepts_short_string() {
 	// Arrange
 	let validator = MaxLengthValidator::new(10);
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(validator.validate("hello").is_ok());
 	assert!(validator.validate("1234567890").is_ok());
 }
@@ -1052,7 +1124,9 @@ fn max_length_validator_rejects_long_string() {
 	// Arrange
 	let validator = MaxLengthValidator::new(10);
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(validator.validate("12345678901").is_err());
 }
 
@@ -1061,7 +1135,9 @@ fn min_length_validator_accepts_long_enough() {
 	// Arrange
 	let validator = MinLengthValidator::new(3);
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(validator.validate("hello").is_ok());
 	assert!(validator.validate("abc").is_ok());
 }
@@ -1071,7 +1147,9 @@ fn min_length_validator_rejects_too_short() {
 	// Arrange
 	let validator = MinLengthValidator::new(3);
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(validator.validate("hi").is_err());
 }
 
@@ -1080,7 +1158,9 @@ fn email_validator_valid_emails() {
 	// Arrange
 	let validator = EmailValidator::new();
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(validator.validate("user@example.com").is_ok());
 	assert!(validator.validate("user.name+tag@example.co.uk").is_ok());
 	assert!(validator.validate("first.last@sub.example.com").is_ok());
@@ -1095,7 +1175,9 @@ fn email_validator_invalid_emails(#[case] input: &str) {
 	// Arrange
 	let validator = EmailValidator::new();
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(validator.validate(input).is_err());
 }
 
@@ -1104,7 +1186,9 @@ fn url_validator_valid_urls() {
 	// Arrange
 	let validator = URLValidator::new();
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(validator.validate("https://example.com").is_ok());
 	assert!(validator.validate("http://example.com/path").is_ok());
 }
@@ -1117,7 +1201,9 @@ fn url_validator_invalid_urls(#[case] input: &str) {
 	// Arrange
 	let validator = URLValidator::new();
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(validator.validate(input).is_err());
 }
 
@@ -1126,14 +1212,18 @@ fn regex_validator_valid_pattern() {
 	// Arrange
 	let validator = RegexValidator::new(r"^\d{3}-\d{4}$");
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(validator.validate("123-4567").is_ok());
 	assert!(validator.validate("abc-defg").is_err());
 }
 
 #[rstest]
 fn regex_validator_try_new_valid() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let result = RegexValidator::try_new(r"^\d+$");
 
 	// Assert
@@ -1144,7 +1234,9 @@ fn regex_validator_try_new_valid() {
 
 #[rstest]
 fn regex_validator_try_new_invalid() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let result = RegexValidator::try_new(r"[invalid(regex");
 
 	// Assert
@@ -1156,7 +1248,9 @@ fn regex_validator_pattern_accessor() {
 	// Arrange
 	let validator = RegexValidator::new(r"^\d+$");
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_eq!(validator.pattern(), r"^\d+$");
 }
 
@@ -1165,7 +1259,9 @@ fn range_validator_within_range() {
 	// Arrange
 	let validator = RangeValidator::new(Some(0), Some(100));
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(validator.validate("50").is_ok());
 	assert!(validator.validate("0").is_ok());
 	assert!(validator.validate("100").is_ok());
@@ -1176,7 +1272,9 @@ fn range_validator_outside_range() {
 	// Arrange
 	let validator = RangeValidator::new(Some(0), Some(100));
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(validator.validate("-1").is_err());
 	assert!(validator.validate("101").is_err());
 }
@@ -1186,13 +1284,17 @@ fn range_validator_non_numeric_input() {
 	// Arrange
 	let validator = RangeValidator::new(Some(0), Some(100));
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(validator.validate("abc").is_err());
 }
 
 #[rstest]
 fn validation_error_creation() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let error = ValidationError::new("email", "Enter a valid email address", "invalid_email");
 
 	// Assert
@@ -1222,7 +1324,9 @@ fn field_validators_chain() {
 		.with_validator(Box::new(RequiredValidator::new()))
 		.with_validator(Box::new(MaxLengthValidator::new(10)));
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(validators.validate("hello").is_ok());
 	assert!(validators.validate("").is_err());
 	assert!(validators.validate("12345678901").is_err());
@@ -1235,7 +1339,9 @@ fn model_validators_validate_field() {
 	let email_validators = FieldValidators::new().with_validator(Box::new(EmailValidator::new()));
 	model_validators.add_field_validator("email".to_string(), email_validators);
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(
 		model_validators
 			.validate("email", "test@example.com")
@@ -1283,7 +1389,9 @@ fn model_validators_validate_unregistered_field_passes() {
 
 #[rstest]
 fn base_field_new_defaults() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = BaseField::new();
 
 	// Assert
@@ -1302,7 +1410,9 @@ fn base_field_new_defaults() {
 
 #[rstest]
 fn base_field_default_trait_matches_new() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let from_new = BaseField::new();
 	let from_default = BaseField::default();
 
@@ -1431,7 +1541,9 @@ fn base_field_get_kwargs_with_db_tablespace() {
 
 #[rstest]
 fn auto_field_new_is_primary_key() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = AutoField::new();
 
 	// Assert
@@ -1469,7 +1581,9 @@ fn auto_field_deconstruct() {
 
 #[rstest]
 fn auto_field_name_none_before_set() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = AutoField::new();
 
 	// Assert
@@ -1478,7 +1592,9 @@ fn auto_field_name_none_before_set() {
 
 #[rstest]
 fn auto_field_default_trait() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = AutoField::default();
 
 	// Assert
@@ -1491,7 +1607,9 @@ fn auto_field_default_trait() {
 
 #[rstest]
 fn char_field_new_with_max_length() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = CharField::new(255);
 
 	// Assert
@@ -1515,7 +1633,9 @@ fn char_field_deconstruct_includes_max_length() {
 
 #[rstest]
 fn char_field_with_null_blank() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = CharField::with_null_blank(100);
 
 	// Act
@@ -1568,7 +1688,9 @@ fn big_integer_field_new_and_deconstruct() {
 
 #[rstest]
 fn big_integer_field_default_trait() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = BigIntegerField::default();
 
 	// Assert
@@ -1582,7 +1704,9 @@ fn big_integer_field_default_trait() {
 
 #[rstest]
 fn boolean_field_new_and_deconstruct() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = BooleanField::new();
 	let dec = field.deconstruct();
 
@@ -1593,7 +1717,9 @@ fn boolean_field_new_and_deconstruct() {
 
 #[rstest]
 fn boolean_field_with_default_true() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = BooleanField::with_default(true);
 	let dec = field.deconstruct();
 
@@ -1603,7 +1729,9 @@ fn boolean_field_with_default_true() {
 
 #[rstest]
 fn boolean_field_with_default_false() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = BooleanField::with_default(false);
 	let dec = field.deconstruct();
 
@@ -1654,7 +1782,9 @@ fn text_field_new_and_deconstruct() {
 
 #[rstest]
 fn datetime_field_new_no_auto() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = DateTimeField::new();
 
 	// Assert
@@ -1664,7 +1794,9 @@ fn datetime_field_new_no_auto() {
 
 #[rstest]
 fn datetime_field_with_auto_now_add() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = DateTimeField::with_auto_now_add();
 	let dec = field.deconstruct();
 
@@ -1680,7 +1812,9 @@ fn datetime_field_with_auto_now_add() {
 
 #[rstest]
 fn datetime_field_with_both() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = DateTimeField::with_both();
 	let dec = field.deconstruct();
 
@@ -1696,7 +1830,9 @@ fn datetime_field_with_both() {
 
 #[rstest]
 fn datetime_field_deconstruct_path() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = DateTimeField::new();
 	let dec = field.deconstruct();
 
@@ -1710,7 +1846,9 @@ fn datetime_field_deconstruct_path() {
 
 #[rstest]
 fn decimal_field_new_with_precision() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = DecimalField::new(10, 2);
 
 	// Assert
@@ -1738,7 +1876,9 @@ fn decimal_field_deconstruct_includes_precision_kwargs() {
 
 #[rstest]
 fn slug_field_new_defaults() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = SlugField::new();
 
 	// Assert
@@ -1763,7 +1903,9 @@ fn slug_field_deconstruct_omits_defaults() {
 
 #[rstest]
 fn slug_field_with_custom_options() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = SlugField::with_options(100, false);
 	let dec = field.deconstruct();
 
@@ -1778,7 +1920,9 @@ fn slug_field_with_custom_options() {
 
 #[rstest]
 fn email_field_new_default_max_length() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = EmailField::new();
 
 	// Assert
@@ -1787,7 +1931,9 @@ fn email_field_new_default_max_length() {
 
 #[rstest]
 fn email_field_with_custom_max_length() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = EmailField::with_max_length(100);
 
 	// Assert
@@ -1813,7 +1959,9 @@ fn email_field_deconstruct() {
 
 #[rstest]
 fn url_field_new_default_max_length() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = URLField::new();
 
 	// Assert
@@ -1889,7 +2037,9 @@ fn integer_field_with_choices() {
 
 #[rstest]
 fn field_deconstruction_struct_fields() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let dec = FieldDeconstruction {
 		name: Some("test_field".to_string()),
 		path: "reinhardt.orm.models.CharField".to_string(),
@@ -1910,7 +2060,11 @@ fn field_deconstruction_struct_fields() {
 
 #[rstest]
 fn field_arg_variants() {
-	// Arrange & Act & Assert
+	// Arrange
+
+	// Act
+
+	// Assert
 	assert_eq!(
 		FieldArg::String("hello".to_string()),
 		FieldArg::String("hello".to_string())
@@ -1922,7 +2076,11 @@ fn field_arg_variants() {
 
 #[rstest]
 fn field_arg_inequality() {
-	// Arrange & Act & Assert
+	// Arrange
+
+	// Act
+
+	// Assert
 	assert_ne!(FieldArg::Int(1), FieldArg::Int(2));
 	assert_ne!(FieldArg::String("a".to_string()), FieldArg::Bool(true));
 }
@@ -1933,7 +2091,11 @@ fn field_arg_inequality() {
 
 #[rstest]
 fn field_kwarg_variants() {
-	// Arrange & Act & Assert
+	// Arrange
+
+	// Act
+
+	// Assert
 	assert_eq!(
 		FieldKwarg::String("test".to_string()),
 		FieldKwarg::String("test".to_string())
@@ -1953,7 +2115,9 @@ fn field_kwarg_choices_variant() {
 	// Arrange
 	let choices = vec![("a".to_string(), "Alpha".to_string())];
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert_eq!(
 		FieldKwarg::Choices(choices.clone()),
 		FieldKwarg::Choices(choices)
@@ -1969,7 +2133,9 @@ fn field_trait_is_null_default_false() {
 	// Arrange
 	let field = CharField::new(100);
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(!field.is_null());
 }
 
@@ -1978,7 +2144,9 @@ fn field_trait_is_blank_default_false() {
 	// Arrange
 	let field = IntegerField::new();
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(!field.is_blank());
 }
 
@@ -1987,7 +2155,9 @@ fn field_trait_is_primary_key_default_false() {
 	// Arrange
 	let field = CharField::new(100);
 
-	// Act & Assert
+	// Act
+
+	// Assert
 	assert!(!field.is_primary_key());
 }
 
@@ -1997,7 +2167,9 @@ fn field_trait_is_primary_key_default_false() {
 
 #[rstest]
 fn date_field_new_no_auto() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = DateField::new();
 
 	// Assert
@@ -2007,7 +2179,9 @@ fn date_field_new_no_auto() {
 
 #[rstest]
 fn date_field_with_auto_now() {
-	// Arrange & Act
+	// Arrange
+
+	// Act
 	let field = DateField::with_auto_now();
 	let dec = field.deconstruct();
 

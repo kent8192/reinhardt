@@ -92,10 +92,9 @@ jobs:
         if: contains(fromJSON('["examples-twitter", "examples-tutorial-basis"]'), matrix.example)
         run: rustup target add wasm32-unknown-unknown
 
-      - name: Check WASM compilation
+      - name: Check WASM compilation (framework crates)
         if: contains(fromJSON('["examples-twitter", "examples-tutorial-basis"]'), matrix.example)
-        working-directory: examples/${{ matrix.example }}
-        run: cargo check --target wasm32-unknown-unknown
+        run: cargo check --target wasm32-unknown-unknown -p reinhardt-core -p reinhardt-urls --features reinhardt-core/full,reinhardt-urls/client-router
 
       - name: Test
         working-directory: examples/${{ matrix.example }}

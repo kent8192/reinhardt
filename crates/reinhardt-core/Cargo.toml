@@ -129,6 +129,7 @@ parallel = ["dep:rayon"]
 i18n = ["dep:fluent-bundle", "dep:unic-langid"]
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio = { version = "1", features = ["full", "macros", "rt", "test-util"] }
 bytes = "1.0"
 hyper = "1.0"

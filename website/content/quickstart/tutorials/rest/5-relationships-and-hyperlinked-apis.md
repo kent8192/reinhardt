@@ -243,7 +243,7 @@ struct SnippetSerializer {
 }
 
 // In config/urls.rs
-pub fn url_patterns() -> UnifiedRouter {
+pub fn url_patterns() -> DefaultRouter {
     let mut router = DefaultRouter::new();
 
     // Register ViewSets

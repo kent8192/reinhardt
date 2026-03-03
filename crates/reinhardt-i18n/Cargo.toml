@@ -22,6 +22,7 @@ full = ["di"]
 di = ["dep:reinhardt-di"]
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio = { workspace = true }
 tempfile = "3.8"
 serial_test = { workspace = true }

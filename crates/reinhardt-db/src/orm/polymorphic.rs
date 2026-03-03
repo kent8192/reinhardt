@@ -8,6 +8,9 @@
 //! a type discriminator field that identifies which model type is referenced.
 
 use super::{Model, RelationshipType};
+use reinhardt_query::prelude::{
+	Alias, Condition, Expr, ExprTrait, Query, QueryStatementBuilder, SimpleExpr,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -283,7 +286,11 @@ impl<P: Model> PolymorphicRelation<P> {
 		self.relationship_type
 	}
 
-	/// Build SQL query for loading related object
+	/// Build a parameterized SQL query for loading a related object.
+	///
+	/// Returns `(sql, params)` where `sql` contains `$N` placeholders and
+	/// `params` holds the corresponding bind values. Returns `None` if the
+	/// `type_id` is not registered.
 	///
 	/// # Examples
 	///
@@ -315,34 +322,40 @@ impl<P: Model> PolymorphicRelation<P> {
 	/// let identity = PolymorphicIdentity::new("post", "posts", "id");
 	/// rel.register_type(identity);
 	///
-	/// let sql = rel.build_query("post", "123");
-	/// assert!(sql.is_some());
-	/// let sql = sql.unwrap();
-	/// assert!(sql.contains("SELECT * FROM posts"));
-	/// assert!(sql.contains("WHERE id = 123"));
+	/// let result = rel.build_query("post", "123");
+	/// assert!(result.is_some());
+	/// let (sql, params) = result.unwrap();
+	/// assert!(sql.contains("posts"));
+	/// assert!(sql.contains("$1"));
+	/// assert_eq!(params, vec!["123"]);
 	/// ```
-	pub fn build_query(&self, type_id: &str, object_id: &str) -> Option<String> {
+	pub fn build_query(&self, type_id: &str, object_id: &str) -> Option<(String, Vec<String>)> {
 		let identity = self.get_identity(type_id)?;
 
-		Some(format!(
-			"SELECT * FROM {} WHERE {} = {}",
+		let sql = format!(
+			"SELECT * FROM \"{}\" WHERE \"{}\" = $1",
 			identity.table_name(),
 			identity.pk_field(),
-			object_id
-		))
+		);
+		Some((sql, vec![object_id.to_string()]))
 	}
 
-	/// Generate WHERE clause for filtering by type
-	pub fn type_filter(&self, type_id: &str) -> String {
-		format!("{} = '{}'", self.config.type_field(), type_id)
+	/// Generate a `SimpleExpr` condition for filtering by type.
+	///
+	/// Returns a safe, parameterized expression suitable for use with
+	/// `reinhardt_query` condition builders.
+	pub fn type_filter(&self, type_id: &str) -> SimpleExpr {
+		Expr::col(Alias::new(self.config.type_field())).eq(type_id)
 	}
 
-	/// Generate JOIN clause for polymorphic relationship
+	/// Generate JOIN clause for polymorphic relationship.
+	///
+	/// Table and column names are properly quoted to prevent injection.
 	pub fn join_clause(&self, type_id: &str, parent_alias: &str) -> Option<String> {
 		let identity = self.get_identity(type_id)?;
 
 		Some(format!(
-			"LEFT JOIN {} ON {}.{} = {}.{}",
+			"LEFT JOIN \"{}\" ON \"{}\".\"{}\" = \"{}\".\"{}\"",
 			identity.table_name(),
 			parent_alias,
 			self.config.id_field(),
@@ -423,8 +436,8 @@ pub struct PolymorphicQuery<P: Model> {
 	/// Polymorphic relation being queried
 	relation: PolymorphicRelation<P>,
 
-	/// Active filters
-	filters: Vec<String>,
+	/// Active filters as type-safe expressions
+	filters: Vec<SimpleExpr>,
 
 	/// Selected type ID
 	selected_type: Option<String>,
@@ -480,23 +493,34 @@ impl<P: Model> PolymorphicQuery<P> {
 		self
 	}
 
-	/// Add custom filter
-	pub fn filter(mut self, condition: impl Into<String>) -> Self {
-		self.filters.push(condition.into());
+	/// Add a type-safe filter condition.
+	///
+	/// Accepts a `SimpleExpr` from `reinhardt_query` to ensure all conditions
+	/// are parameterized and safe from SQL injection.
+	pub fn filter(mut self, condition: SimpleExpr) -> Self {
+		self.filters.push(condition);
 		self
 	}
 
-	/// Build SQL query
-	pub fn build_sql(&self) -> String {
+	/// Build parameterized SQL query.
+	///
+	/// Returns `(sql, values)` where `sql` contains parameterized placeholders.
+	pub fn build_sql(&self) -> (String, reinhardt_query::value::Values) {
 		let base_table = P::table_name();
-		let mut sql = format!("SELECT * FROM {}", base_table);
+		let mut stmt = Query::select()
+			.column(Alias::new("*"))
+			.from(Alias::new(base_table))
+			.to_owned();
 
 		if !self.filters.is_empty() {
-			sql.push_str(" WHERE ");
-			sql.push_str(&self.filters.join(" AND "));
+			let mut cond = Condition::all();
+			for f in &self.filters {
+				cond = cond.add(f.clone());
+			}
+			stmt = stmt.cond_where(cond).to_owned();
 		}
 
-		sql
+		stmt.build_any(&reinhardt_query::prelude::PostgresQueryBuilder)
 	}
 
 	/// Get selected type ID
@@ -690,10 +714,11 @@ mod tests {
 
 		rel.register_type(PolymorphicIdentity::new("post", "posts", "id"));
 
-		let sql = rel.build_query("post", "123");
-		let sql = sql.unwrap();
-		assert!(sql.contains("SELECT * FROM posts"));
-		assert!(sql.contains("WHERE id = 123"));
+		let result = rel.build_query("post", "123");
+		let (sql, params) = result.unwrap();
+		assert!(sql.contains("posts"));
+		assert!(sql.contains("$1"));
+		assert_eq!(params, vec!["123"]);
 	}
 
 	#[test]
@@ -707,11 +732,21 @@ mod tests {
 
 	#[test]
 	fn test_polymorphic_relation_type_filter() {
+		use reinhardt_query::prelude::PostgresQueryBuilder;
+
 		let config = PolymorphicConfig::new("content_type", "object_id");
 		let rel = PolymorphicRelation::<Comment>::new("content_object", config);
 
+		// type_filter now returns a SimpleExpr; verify it builds correctly
 		let filter = rel.type_filter("post");
-		assert_eq!(filter, "content_type = 'post'");
+		let mut stmt = Query::select()
+			.column(Alias::new("*"))
+			.from(Alias::new("comments"))
+			.cond_where(Condition::all().add(filter))
+			.to_owned();
+		let (sql, _) = stmt.build_any(&PostgresQueryBuilder);
+		assert!(sql.contains("\"content_type\""));
+		assert!(sql.contains("$1"));
 	}
 
 	#[test]
@@ -723,8 +758,8 @@ mod tests {
 
 		let join = rel.join_clause("post", "comments");
 		let join = join.unwrap();
-		assert!(join.contains("LEFT JOIN posts"));
-		assert!(join.contains("comments.object_id = posts.id"));
+		assert!(join.contains("LEFT JOIN \"posts\""));
+		assert!(join.contains("\"comments\".\"object_id\" = \"posts\".\"id\""));
 	}
 
 	#[test]
@@ -793,9 +828,11 @@ mod tests {
 		let rel = PolymorphicRelation::<Comment>::new("content_object", config);
 		let query = PolymorphicQuery::new(rel).filter_type("post");
 
-		let sql = query.build_sql();
-		assert!(sql.contains("SELECT * FROM comments"));
-		assert!(sql.contains("WHERE content_type = 'post'"));
+		let (sql, values) = query.build_sql();
+		assert!(sql.contains("\"comments\""));
+		assert!(sql.contains("\"content_type\""));
+		assert!(sql.contains("$1"));
+		assert_eq!(values.0.len(), 1);
 	}
 
 	#[test]
@@ -804,12 +841,13 @@ mod tests {
 		let rel = PolymorphicRelation::<Comment>::new("content_object", config);
 		let query = PolymorphicQuery::new(rel)
 			.filter_type("post")
-			.filter("object_id > 100");
+			.filter(Expr::col(Alias::new("object_id")).gt(100));
 
-		let sql = query.build_sql();
-		assert!(sql.contains("content_type = 'post'"));
-		assert!(sql.contains("object_id > 100"));
-		assert!(sql.contains(" AND "));
+		let (sql, values) = query.build_sql();
+		assert!(sql.contains("\"content_type\""));
+		assert!(sql.contains("\"object_id\""));
+		assert!(sql.contains("AND"));
+		assert_eq!(values.0.len(), 2);
 	}
 
 	#[test]

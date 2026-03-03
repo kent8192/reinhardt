@@ -59,6 +59,7 @@ uuid = ["dep:uuid"]
 full = ["validation", "multi-value-arrays", "multipart", "uuid"]
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio = { workspace = true }
 futures = "0.3"
 bytes.workspace = true

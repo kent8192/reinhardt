@@ -62,7 +62,7 @@ regex = "1.11"
 strsim = "0.11"
 indexmap = "2.7"
 linkme = { workspace = true }
-toml = "0.8"
+toml = { workspace = true }
 syn = { version = "2.0", features = ["full", "parsing"] }
 quote = "1.0"
 proc-macro2 = "1.0"

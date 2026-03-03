@@ -1,9 +1,9 @@
 [package]
 name = "reinhardt-pages"
 version = "0.1.0-rc.1"
-edition = "2024"
-authors = ["Reinhardt Contributors"]
-license = "BSD-3-Clause"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
 description = "WASM-based frontend framework for Reinhardt with Django-like API"
 repository.workspace = true
 keywords = ["wasm", "web", "frontend", "reactive", "django"]

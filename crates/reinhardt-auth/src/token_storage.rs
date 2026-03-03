@@ -719,4 +719,62 @@ mod tests {
 		storage.clear();
 		assert!(storage.is_empty());
 	}
+
+	#[rstest::rstest]
+	fn test_rwlock_poison_recovery_in_memory_token_storage() {
+		// Arrange
+		let storage = InMemoryTokenStorage::new();
+
+		// Act - poison the RwLock by panicking while holding a write guard
+		let tokens_clone = Arc::clone(&storage.tokens);
+		let _ = std::thread::spawn(move || {
+			let _guard = tokens_clone.write().unwrap();
+			panic!("intentional panic to poison lock");
+		})
+		.join();
+
+		// Assert - operations still work after poison recovery
+		assert_eq!(storage.len(), 0);
+		assert!(storage.is_empty());
+		storage.clear();
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_rwlock_poison_recovery_in_memory_token_storage_async() {
+		// Arrange
+		let storage = InMemoryTokenStorage::new();
+
+		// Act - poison the RwLock by panicking while holding a write guard
+		let tokens_clone = Arc::clone(&storage.tokens);
+		let _ = std::thread::spawn(move || {
+			let _guard = tokens_clone.write().unwrap();
+			panic!("intentional panic to poison lock");
+		})
+		.join();
+
+		// Assert - async operations still work after poison recovery
+		let token = StoredToken::new("poison_test", 99);
+		storage.store(token).await.unwrap();
+		let retrieved = storage.get("poison_test").await.unwrap();
+		assert_eq!(retrieved.user_id(), 99);
+
+		let user_tokens = storage.get_user_tokens(99).await.unwrap();
+		assert_eq!(user_tokens.len(), 1);
+
+		storage.delete("poison_test").await.unwrap();
+		assert!(storage.get("poison_test").await.is_err());
+
+		storage
+			.store(StoredToken::new("t1", 1).with_expiration(100))
+			.await
+			.unwrap();
+		let removed = storage.cleanup_expired(200).await.unwrap();
+		assert_eq!(removed, 1);
+
+		storage.store(StoredToken::new("t2", 2)).await.unwrap();
+		storage.delete_user_tokens(2).await.unwrap();
+		let tokens = storage.get_user_tokens(2).await.unwrap();
+		assert_eq!(tokens.len(), 0);
+	}
 }

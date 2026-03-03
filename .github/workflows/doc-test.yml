@@ -11,6 +11,14 @@ on:
         description: "Parallel cargo build jobs (1=GitHub-hosted OOM safe, 8=self-hosted)"
         type: string
         default: "1"
+      affected-packages:
+        description: "Newline-separated list of affected package names"
+        type: string
+        default: ""
+      run-all:
+        description: "Whether to run all tests"
+        type: string
+        default: "true"
   workflow_dispatch:
 
 env:
@@ -75,7 +83,17 @@ jobs:
           df -h
 
       - name: Run doc tests
-        run: cargo make doc-test-only
+        run: |
+          if [[ "${{ inputs.run-all }}" != "true" && -n "${{ inputs.affected-packages }}" ]]; then
+            while IFS= read -r pkg; do
+              [[ -z "$pkg" ]] && continue
+              echo "::group::Doc tests for $pkg"
+              cargo test -p "$pkg" --doc --all-features --no-fail-fast
+              echo "::endgroup::"
+            done <<< "${{ inputs.affected-packages }}"
+          else
+            cargo make doc-test-only
+          fi
 
       - name: Docker cleanup after doc tests
         if: always()

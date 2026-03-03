@@ -445,9 +445,11 @@ impl CollectStaticCommand {
 		let content = fs::read_to_string(source)?;
 
 		// Detect {{ static_url("path") }} pattern
-		let re = regex::Regex::new(r#"\{\{\s*static_url\("([^"]+)"\)\s*\}\}"#).unwrap();
+		static STATIC_URL_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+			regex::Regex::new(r#"\{\{\s*static_url\("([^"]+)"\)\s*\}\}"#).unwrap()
+		});
 
-		let processed = re.replace_all(&content, |caps: &regex::Captures| {
+		let processed = STATIC_URL_RE.replace_all(&content, |caps: &regex::Captures| {
 			let original_path = &caps[1];
 
 			// Resolve from manifest

@@ -27,6 +27,7 @@ database = ["reinhardt-db", "reinhardt-db/backends", "reinhardt-db/pool", "reinh
 full = ["database"]
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio = { workspace = true }
 rstest = { workspace = true }
 reinhardt-test = { workspace = true, features = ["testcontainers"] }

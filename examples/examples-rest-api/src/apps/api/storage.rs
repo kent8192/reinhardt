@@ -36,21 +36,7 @@ pub fn get_all_articles() -> Vec<Article> {
 pub fn get_article(id: i64) -> Option<Article> {
 	ensure_initialized();
 	let storage = ARTICLES.read().unwrap();
-	let result = storage.as_ref().and_then(|map| {
-		eprintln!(
-			"[DEBUG storage::get_article] Looking for id={}, map.len()={}, keys={:?}",
-			id,
-			map.len(),
-			map.keys().collect::<Vec<_>>()
-		);
-		map.get(&id).cloned()
-	});
-	eprintln!(
-		"[DEBUG storage::get_article] Result for id={}: {:?}",
-		id,
-		result.is_some()
-	);
-	result
+	storage.as_ref().and_then(|map| map.get(&id).cloned())
 }
 
 /// Create a new article (assigns ID automatically)
@@ -62,11 +48,6 @@ pub fn create_article(mut article: Article) -> Article {
 	let mut storage = ARTICLES.write().unwrap();
 	if let Some(map) = storage.as_mut() {
 		map.insert(id, article.clone());
-		eprintln!(
-			"[DEBUG storage::create_article] Inserted article id={}, map.len()={}",
-			id,
-			map.len()
-		);
 	}
 
 	article
@@ -98,7 +79,6 @@ pub fn delete_article(id: i64) -> bool {
 /// Clear all articles (useful for tests)
 pub fn clear_articles() {
 	ensure_initialized();
-	eprintln!("[DEBUG storage::clear_articles] Clearing storage");
 	let mut storage = ARTICLES.write().unwrap();
 	if let Some(map) = storage.as_mut() {
 		map.clear();

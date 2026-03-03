@@ -55,6 +55,7 @@ argon2-hasher = ["reinhardt-auth/argon2-hasher"]
 full = ["argon2-hasher"]
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio = { workspace = true }
 tokio-test = { workspace = true }
 bytes = { workspace = true }

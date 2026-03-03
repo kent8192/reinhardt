@@ -189,22 +189,26 @@ impl WebSocketTestClient {
 	/// }
 	/// ```
 	pub async fn send_text(&mut self, text: &str) -> Result<(), WsError> {
-		self.stream.send(Message::Text(text.to_string())).await
+		self.stream.send(Message::text(text)).await
 	}
 
 	/// Send binary message to WebSocket server
 	pub async fn send_binary(&mut self, data: &[u8]) -> Result<(), WsError> {
-		self.stream.send(Message::Binary(data.to_vec())).await
+		self.stream.send(Message::binary(data.to_vec())).await
 	}
 
 	/// Send ping message to WebSocket server
 	pub async fn send_ping(&mut self, payload: &[u8]) -> Result<(), WsError> {
-		self.stream.send(Message::Ping(payload.to_vec())).await
+		self.stream
+			.send(Message::Ping(payload.to_vec().into()))
+			.await
 	}
 
 	/// Send pong message to WebSocket server
 	pub async fn send_pong(&mut self, payload: &[u8]) -> Result<(), WsError> {
-		self.stream.send(Message::Pong(payload.to_vec())).await
+		self.stream
+			.send(Message::Pong(payload.to_vec().into()))
+			.await
 	}
 
 	/// Receive next message from WebSocket server
@@ -239,7 +243,7 @@ impl WebSocketTestClient {
 		duration: Duration,
 	) -> Result<String, WsError> {
 		match timeout(duration, self.stream.next()).await {
-			Ok(Some(Ok(Message::Text(text)))) => Ok(text),
+			Ok(Some(Ok(Message::Text(text)))) => Ok(text.to_string()),
 			Ok(Some(Ok(msg))) => Err(WsError::Io(IoError::new(
 				ErrorKind::InvalidData,
 				format!("Expected text message, got {:?}", msg),
@@ -265,7 +269,7 @@ impl WebSocketTestClient {
 		duration: Duration,
 	) -> Result<Vec<u8>, WsError> {
 		match timeout(duration, self.stream.next()).await {
-			Ok(Some(Ok(Message::Binary(data)))) => Ok(data),
+			Ok(Some(Ok(Message::Binary(data)))) => Ok(data.to_vec()),
 			Ok(Some(Ok(msg))) => Err(WsError::Io(IoError::new(
 				ErrorKind::InvalidData,
 				format!("Expected binary message, got {:?}", msg),
@@ -301,12 +305,12 @@ pub mod assertions {
 	/// use reinhardt_test::websocket::assertions::assert_message_text;
 	/// use tokio_tungstenite::tungstenite::Message;
 	///
-	/// let msg = Message::Text("Hello".to_string());
+	/// let msg = Message::text("Hello");
 	/// assert_message_text(&msg, "Hello");
 	/// ```
 	pub fn assert_message_text(msg: &Message, expected: &str) {
 		match msg {
-			Message::Text(text) => assert_eq!(text, expected),
+			Message::Text(text) => assert_eq!(text.as_str(), expected),
 			_ => panic!("Expected text message, got {:?}", msg),
 		}
 	}
@@ -327,7 +331,7 @@ pub mod assertions {
 	/// Assert that WebSocket message is binary with expected data
 	pub fn assert_message_binary(msg: &Message, expected: &[u8]) {
 		match msg {
-			Message::Binary(data) => assert_eq!(data, expected),
+			Message::Binary(data) => assert_eq!(data.as_ref(), expected),
 			_ => panic!("Expected binary message, got {:?}", msg),
 		}
 	}
@@ -378,17 +382,17 @@ mod tests {
 	fn test_message_assertions() {
 		use assertions::*;
 
-		let text_msg = Message::Text("Hello".to_string());
+		let text_msg = Message::text("Hello");
 		assert_message_text(&text_msg, "Hello");
 		assert_message_contains(&text_msg, "ell");
 
-		let binary_msg = Message::Binary(vec![1, 2, 3]);
+		let binary_msg = Message::Binary(vec![1, 2, 3].into());
 		assert_message_binary(&binary_msg, &[1, 2, 3]);
 
-		let ping_msg = Message::Ping(vec![]);
+		let ping_msg = Message::Ping(vec![].into());
 		assert_message_ping(&ping_msg);
 
-		let pong_msg = Message::Pong(vec![]);
+		let pong_msg = Message::Pong(vec![].into());
 		assert_message_pong(&pong_msg);
 	}
 }

@@ -41,6 +41,7 @@ full = ["di"]
 di = ["dep:reinhardt-di"]
 
 [dev-dependencies]
+insta = { workspace = true }
 serial_test = { workspace = true }
 rstest = { workspace = true }
 reinhardt-test = { workspace = true }

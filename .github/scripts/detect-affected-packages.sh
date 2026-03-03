@@ -4,11 +4,18 @@ set -euo pipefail
 BASE_REF="${1:-origin/main}"
 
 # Collect changed files from non-merge commits unique to this branch.
-# Using 'git log --no-merges BASE_REF..HEAD' is more reliable than
-# 'git diff MERGE_BASE...HEAD' when the base branch has been merged into
-# the PR branch: in GitHub Actions' synthetic-merge-ref environment the
-# three-dot diff can return empty even when the PR has real changes. # Issue #1822
-CHANGED_FILES=$(git log --name-only --format="" --no-merges "$BASE_REF..HEAD" \
+# In a PR context, the HEAD_REF env var contains the PR branch name. We use
+# 'origin/$HEAD_REF' (the actual PR branch ref) rather than 'HEAD', because in
+# GitHub Actions the checkout ref is a synthetic merge commit (refs/pull/N/merge)
+# that makes 'git log BASE..HEAD' return empty even when the PR has real changes.
+# This is especially reproducible when the base branch has been merged into the
+# PR branch via update-branch. # Issue #1822
+if [[ -n "${HEAD_REF:-}" ]]; then
+  COMPARE_REF="origin/$HEAD_REF"
+else
+  COMPARE_REF="HEAD"
+fi
+CHANGED_FILES=$(git log --name-only --format="" --no-merges "$BASE_REF..$COMPARE_REF" \
   | grep -v '^$' | sort -u || true)
 
 if [[ -z "$CHANGED_FILES" ]]; then

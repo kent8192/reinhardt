@@ -5,7 +5,7 @@
 //! and this module handles router initialization and global access.
 
 use reinhardt::ClientRouter;
-use reinhardt::pages::component::Page;
+use reinhardt::pages::component::{Page, View};
 use reinhardt::pages::page;
 use std::cell::RefCell;
 use uuid::Uuid;
@@ -52,7 +52,10 @@ where
 
 /// Home page view
 pub fn home_page_view() -> Page {
-	__reinhardt_placeholder__!(/*0*/)()
+	use crate::apps::tweet::client::components::tweet_list;
+
+	// Show the global feed on the home page
+	tweet_list(None)
 }
 
 /// Login page view
@@ -89,7 +92,14 @@ pub fn timeline_page_view() -> Page {
 	let form_view = tweet_form();
 	let list_view = tweet_list(None);
 
-	__reinhardt_placeholder__!(/*1*/)(form_view, list_view)
+	// Combine tweet form and list into a single timeline page
+	page!(|form_view: View, list_view: View| {
+		div {
+			class: "flex flex-col gap-4",
+			{ form_view }
+			{ list_view }
+		}
+	})(form_view, list_view)
 }
 
 /// DM chat page view
@@ -101,5 +111,17 @@ pub fn dm_chat_page_view(room_id: String) -> Page {
 
 /// Not found page view
 pub fn not_found_page_view() -> Page {
-	__reinhardt_placeholder__!(/*2*/)()
+	page!(|| {
+		div {
+			class: "flex flex-col items-center justify-center min-h-50vh gap-4",
+			h1 {
+				class: "text-4xl font-bold",
+				"404"
+			}
+			p {
+				class: "text-lg text-content-secondary",
+				"Page not found"
+			}
+		}
+	})()
 }

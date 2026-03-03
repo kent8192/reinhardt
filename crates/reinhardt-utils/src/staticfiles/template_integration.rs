@@ -94,7 +94,6 @@ impl TemplateStaticConfig {
 	/// # }
 	/// ```
 	pub async fn from_storage(storage: &ManifestStaticFilesStorage) -> io::Result<Self> {
-		// Load manifest from disk
 		let manifest_path = storage.location.join(&storage.manifest_name);
 
 		if !manifest_path.exists() {
@@ -107,10 +106,31 @@ impl TemplateStaticConfig {
 
 		let manifest_content = tokio::fs::read_to_string(&manifest_path).await?;
 
-		// Parse manifest JSON
-		// The manifest is stored as a simple HashMap<String, String>
-		let manifest: HashMap<String, String> = serde_json::from_str(&manifest_content)
-			.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+		// Try parsing as structured format first: {"version": "...", "paths": {...}} or {"paths": {...}}
+		let manifest =
+			if let Ok(structured) = serde_json::from_str::<serde_json::Value>(&manifest_content) {
+				if let Some(paths) = structured.get("paths").and_then(|v| v.as_object()) {
+					paths
+						.iter()
+						.filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+						.collect()
+				} else if let Some(files) = structured.get("files").and_then(|v| v.as_object()) {
+					// Legacy format with "files" key
+					files
+						.iter()
+						.filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+						.collect()
+				} else {
+					// Try as simple HashMap (legacy flat format)
+					serde_json::from_str::<HashMap<String, String>>(&manifest_content)
+						.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+				}
+			} else {
+				return Err(io::Error::new(
+					io::ErrorKind::InvalidData,
+					"Invalid manifest JSON",
+				));
+			};
 
 		Ok(Self {
 			static_url: storage.base_url.clone(),
@@ -248,10 +268,13 @@ mod tests {
 		let temp_dir = tempdir().unwrap();
 		let static_root = temp_dir.path().to_path_buf();
 
-		// Create manifest file (simple HashMap format)
+		// Create manifest file (canonical format with version and paths)
 		let manifest_content = r#"{
-  "css/style.css": "css/style.abc123.css",
-  "js/app.js": "js/app.def456.js"
+  "version": "1.0",
+  "paths": {
+    "css/style.css": "css/style.abc123.css",
+    "js/app.js": "js/app.def456.js"
+  }
 }"#;
 
 		std::fs::write(static_root.join("staticfiles.json"), manifest_content).unwrap();
@@ -266,6 +289,64 @@ mod tests {
 			config.manifest.get("css/style.css"),
 			Some(&"css/style.abc123.css".to_string())
 		);
+		assert_eq!(
+			config.manifest.get("js/app.js"),
+			Some(&"js/app.def456.js".to_string())
+		);
+	}
+
+	#[tokio::test]
+	async fn test_from_storage_with_version_and_paths() {
+		use tempfile::tempdir;
+
+		let temp_dir = tempdir().unwrap();
+		let static_root = temp_dir.path().to_path_buf();
+
+		// Canonical format: {"version": "1.0", "paths": {...}}
+		let manifest_content = r#"{
+  "version": "1.0",
+  "paths": {
+    "css/style.css": "css/style.abc123.css"
+  }
+}"#;
+
+		std::fs::write(static_root.join("staticfiles.json"), manifest_content).unwrap();
+
+		let storage = ManifestStaticFilesStorage::new(static_root, "/static/");
+		let config = TemplateStaticConfig::from_storage(&storage).await.unwrap();
+
+		assert_eq!(config.static_url, "/static/");
+		assert!(config.use_manifest);
+		assert_eq!(config.manifest.len(), 1);
+		assert_eq!(
+			config.manifest.get("css/style.css"),
+			Some(&"css/style.abc123.css".to_string())
+		);
+	}
+
+	#[tokio::test]
+	async fn test_from_storage_with_legacy_files_key() {
+		use tempfile::tempdir;
+
+		let temp_dir = tempdir().unwrap();
+		let static_root = temp_dir.path().to_path_buf();
+
+		// Legacy format: {"version": "1.0", "files": {...}}
+		let manifest_content = r#"{
+  "version": "1.0",
+  "files": {
+    "js/app.js": "js/app.def456.js"
+  }
+}"#;
+
+		std::fs::write(static_root.join("staticfiles.json"), manifest_content).unwrap();
+
+		let storage = ManifestStaticFilesStorage::new(static_root, "/static/");
+		let config = TemplateStaticConfig::from_storage(&storage).await.unwrap();
+
+		assert_eq!(config.static_url, "/static/");
+		assert!(config.use_manifest);
+		assert_eq!(config.manifest.len(), 1);
 		assert_eq!(
 			config.manifest.get("js/app.js"),
 			Some(&"js/app.def456.js".to_string())

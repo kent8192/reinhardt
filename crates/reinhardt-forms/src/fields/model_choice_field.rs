@@ -125,6 +125,7 @@ impl<T: FormModel> ModelChoiceField<T> {
 
 	/// Get choices from queryset
 	/// Converts model instances to (value, label) pairs for display in select widget
+	// Allow dead_code: API reserved for future widget rendering integration
 	#[allow(dead_code)]
 	fn get_choices(&self) -> Vec<(String, String)> {
 		let mut choices = Vec::new();
@@ -361,6 +362,7 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 	}
 
 	/// Get choices from queryset
+	// Allow dead_code: API reserved for future widget rendering integration
 	#[allow(dead_code)]
 	fn get_choices(&self) -> Vec<(String, String)> {
 		let mut choices = Vec::new();

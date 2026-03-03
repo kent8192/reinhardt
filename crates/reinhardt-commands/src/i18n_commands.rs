@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use walkdir::WalkDir;
 
 /// Escapes a string for use as a PO file field value.
@@ -272,13 +273,16 @@ impl MakeMessagesCommand {
 
 		// Regex patterns for different gettext functions
 		// Matches: gettext!("message"), _("message"), t!("message")
-		let patterns = vec![
-			Regex::new(r#"gettext!\s*\(\s*"([^"]+)"\s*\)"#).unwrap(),
-			Regex::new(r#"_\s*\(\s*"([^"]+)"\s*\)"#).unwrap(),
-			Regex::new(r#"t!\s*\(\s*"([^"]+)"\s*\)"#).unwrap(),
-			// Template tags: {% trans "message" %}
-			Regex::new(r#"\{%\s*trans\s+"([^"]+)"\s*%\}"#).unwrap(),
-		];
+		static I18N_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+			vec![
+				Regex::new(r#"gettext!\s*\(\s*"([^"]+)"\s*\)"#).unwrap(),
+				Regex::new(r#"_\s*\(\s*"([^"]+)"\s*\)"#).unwrap(),
+				Regex::new(r#"t!\s*\(\s*"([^"]+)"\s*\)"#).unwrap(),
+				// Template tags: {% trans "message" %}
+				Regex::new(r#"\{%\s*trans\s+"([^"]+)"\s*%\}"#).unwrap(),
+			]
+		});
+		let patterns = &*I18N_PATTERNS;
 
 		for entry in WalkDir::new(base_path).into_iter().filter_map(|e| e.ok()) {
 			let path = entry.path();
@@ -315,7 +319,7 @@ impl MakeMessagesCommand {
 			};
 
 			// Extract messages using patterns
-			for pattern in &patterns {
+			for pattern in patterns {
 				for cap in pattern.captures_iter(&content) {
 					if let Some(msgid) = cap.get(1) {
 						let msgid_str = msgid.as_str().to_string();
@@ -346,9 +350,10 @@ impl MakeMessagesCommand {
 
 		// Extract existing translations (simple approach: keep msgstr values)
 		let mut existing_translations = std::collections::HashMap::new();
-		let msgid_pattern = Regex::new(r#"msgid "([^"]+)"\nmsgstr "([^"]*)""#).unwrap();
+		static MSGID_MERGE_RE: LazyLock<Regex> =
+			LazyLock::new(|| Regex::new(r#"msgid "([^"]+)"\nmsgstr "([^"]*)""#).unwrap());
 
-		for cap in msgid_pattern.captures_iter(&existing_content) {
+		for cap in MSGID_MERGE_RE.captures_iter(&existing_content) {
 			if let (Some(msgid), Some(msgstr)) = (cap.get(1), cap.get(2)) {
 				existing_translations
 					.insert(msgid.as_str().to_string(), msgstr.as_str().to_string());
@@ -568,9 +573,10 @@ impl CompileMessagesCommand {
 
 	fn parse_po_file(content: &str) -> CommandResult<Vec<(String, String)>> {
 		let mut messages = Vec::new();
-		let msgid_pattern = Regex::new(r#"msgid "([^"]*)"\s*msgstr "([^"]*)""#).unwrap();
+		static MSGID_PARSE_RE: LazyLock<Regex> =
+			LazyLock::new(|| Regex::new(r#"msgid "([^"]*)"\s*msgstr "([^"]*)""#).unwrap());
 
-		for cap in msgid_pattern.captures_iter(content) {
+		for cap in MSGID_PARSE_RE.captures_iter(content) {
 			if let (Some(msgid), Some(msgstr)) = (cap.get(1), cap.get(2)) {
 				let msgid_str = msgid.as_str();
 				let msgstr_str = msgstr.as_str();

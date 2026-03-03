@@ -855,7 +855,14 @@ pub use reinhardt_forms::{
 
 // Re-export DI and parameters (FastAPI-style parameter extraction)
 #[cfg(all(feature = "di", not(target_arch = "wasm32")))]
-pub use reinhardt_di::{Depends, DiError, DiResult, InjectionContext, RequestContext};
+pub use reinhardt_di::injected::{Injected, OptionalInjected};
+#[cfg(all(feature = "di", not(target_arch = "wasm32")))]
+pub use reinhardt_di::scope::{RequestScope, Scope, SingletonScope};
+#[cfg(all(feature = "di", not(target_arch = "wasm32")))]
+pub use reinhardt_di::{
+	Depends, DependsBuilder, DiError, DiResult, Injectable, InjectionContext,
+	InjectionContextBuilder, InjectionMetadata, RequestContext,
+};
 
 // Re-export DI params - available in minimal, standard, and di features
 #[cfg(all(

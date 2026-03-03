@@ -89,21 +89,19 @@ Implement API endpoints using HTTP method decorators. Add to `users/views.rs`:
 use reinhardt::prelude::*;
 use reinhardt::{get, post, Json};
 use reinhardt::db::DatabaseConnection;
-use std::sync::Arc;
 use crate::models::User;
 use crate::serializers::UserSerializer;
 
 #[get("/users", name = "list_users")]
 pub async fn list_users(
-    #[inject] conn: Arc<DatabaseConnection>,
+    #[inject] conn: DatabaseConnection,
 ) -> Result<Response> {
-    let users = User::all(&conn).await?;
+    let users = User::objects().all().all().await?;
     let serialized: Vec<UserSerializer> = users.into_iter()
         .map(|u| UserSerializer::from(u))
         .collect();
 
-    Response::ok()
-        .with_json(&serialized)
+    ApiResponse::success(serialized)
 }
 ```
 
@@ -113,14 +111,13 @@ pub async fn list_users(
 #[post("/users", name = "create_user")]
 pub async fn create_user(
     Json(data): Json<UserSerializer>,
-    #[inject] conn: Arc<DatabaseConnection>,
+    #[inject] conn: DatabaseConnection,
 ) -> Result<Response> {
     // Create user
-    let user = User::create(&conn, data.username, data.email).await?;
+    let user = User::objects().create(data.username, data.email).await?;
     let serialized = UserSerializer::from(user);
 
-    Response::new(201)
-        .with_json(&serialized)
+    ApiResponse::success(serialized)
 }
 ```
 
@@ -171,43 +168,42 @@ use reinhardt::prelude::*;
 use reinhardt::{get, post, Json};
 use reinhardt::http::Path;
 use reinhardt::db::DatabaseConnection;
-use std::sync::Arc;
 use crate::models::User;
 use crate::serializers::UserSerializer;
 
 #[get("/users", name = "list_users")]
 pub async fn list_users(
-    #[inject] conn: Arc<DatabaseConnection>,
+    #[inject] conn: DatabaseConnection,
 ) -> Result<Response> {
-    let users = User::all(&conn).await?;
+    let users = User::objects().all().all().await?;
     let serialized: Vec<UserSerializer> = users.into_iter()
         .map(|u| UserSerializer::from(u))
         .collect();
 
-    Response::ok().with_json(&serialized)
+    ApiResponse::success(serialized)
 }
 
 #[get("/users/{id}/", name = "retrieve_user")]
 pub async fn retrieve_user(
     Path(id): Path<i64>,
-    #[inject] conn: Arc<DatabaseConnection>,
+    #[inject] conn: DatabaseConnection,
 ) -> Result<Response> {
-    let user = User::get(&conn, id).await?
-        .ok_or_else(|| Response::not_found().with_body("User not found"))?;
+    let user = User::objects().get(id).first().await?
+        .ok_or("User not found")?;
 
     let serialized = UserSerializer::from(user);
-    Response::ok().with_json(&serialized)
+    ApiResponse::success(serialized)
 }
 
 #[post("/users", name = "create_user")]
 pub async fn create_user(
     Json(data): Json<UserSerializer>,
-    #[inject] conn: Arc<DatabaseConnection>,
+    #[inject] conn: DatabaseConnection,
 ) -> Result<Response> {
-    let user = User::create(&conn, data.username, data.email).await?;
+    let user = User::objects().create(data.username, data.email).await?;
     let serialized = UserSerializer::from(user);
 
-    Response::new(201).with_json(&serialized)
+    ApiResponse::success(serialized)
 }
 ```
 
@@ -216,12 +212,12 @@ pub async fn create_user(
 Edit `users/urls.rs` to register the view functions:
 
 ```rust
-use reinhardt::routers::UnifiedRouter;
+use reinhardt::routers::DefaultRouter;
 use hyper::Method;
 use crate::views;
 
-pub fn url_patterns() -> UnifiedRouter {
-    UnifiedRouter::new()
+pub fn url_patterns() -> DefaultRouter {
+    DefaultRouter::new()
         .with_namespace("users")
         .endpoint(views::list_users)
         .endpoint(views::retrieve_user)
@@ -243,8 +239,8 @@ use reinhardt::prelude::*;
 use reinhardt::routes;
 
 #[routes]
-pub fn routes() -> UnifiedRouter {
-    UnifiedRouter::new()
+pub fn routes() -> DefaultRouter {
+    DefaultRouter::new()
         .mount("/api/", users::urls::url_patterns())
 }
 ```

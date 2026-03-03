@@ -116,7 +116,11 @@ impl ModelMetadata {
 			let mut field_state = FieldState::new(
 				name.clone(),
 				field_meta.field_type.clone(),
-				false, // nullable - default to false
+				field_meta
+					.params
+					.get("null")
+					.and_then(|v| v.parse::<bool>().ok())
+					.unwrap_or(false),
 			);
 			for (key, value) in &field_meta.params {
 				field_state.params.insert(key.clone(), value.clone());

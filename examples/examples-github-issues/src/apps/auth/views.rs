@@ -37,6 +37,16 @@ impl UserStorage {
 		self.users.read().await.get(id).cloned()
 	}
 
+	/// Find a user by email
+	pub async fn find_by_email(&self, email: &str) -> Option<User> {
+		self.users
+			.read()
+			.await
+			.values()
+			.find(|u| u.email == email)
+			.cloned()
+	}
+
 	/// Find a user by username
 	pub async fn find_by_username(&self, username: &str) -> Option<User> {
 		self.users

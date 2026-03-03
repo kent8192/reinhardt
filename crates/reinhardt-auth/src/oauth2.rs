@@ -8,6 +8,7 @@ use reinhardt_http::Request;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -40,6 +41,9 @@ pub struct AccessToken {
 	pub scope: Option<String>,
 }
 
+/// Maximum lifetime of an authorization code per RFC 6749 Section 4.1.2
+const AUTHORIZATION_CODE_TTL: Duration = Duration::from_secs(600);
+
 /// OAuth2 authorization code
 #[derive(Debug, Clone)]
 pub struct AuthorizationCode {
@@ -53,6 +57,8 @@ pub struct AuthorizationCode {
 	pub user_id: String,
 	/// Scope
 	pub scope: Option<String>,
+	/// Timestamp when the code was created
+	pub created_at: Instant,
 }
 
 /// OAuth2 application/client
@@ -132,6 +138,7 @@ pub trait UserRepository: Send + Sync {
 ///         redirect_uri: "https://example.com/callback".to_string(),
 ///         user_id: "user_456".to_string(),
 ///         scope: Some("read write".to_string()),
+///         created_at: std::time::Instant::now(),
 ///     };
 ///
 ///     store.store_code(code).await.unwrap();
@@ -168,7 +175,12 @@ impl OAuth2TokenStore for InMemoryOAuth2Store {
 
 	async fn consume_code(&self, code: &str) -> Result<Option<AuthorizationCode>, String> {
 		let mut codes = self.codes.lock().await;
-		Ok(codes.remove(code))
+		match codes.remove(code) {
+			Some(auth_code) if auth_code.created_at.elapsed() > AUTHORIZATION_CODE_TTL => {
+				Err("authorization code has expired".to_string())
+			}
+			other => Ok(other),
+		}
 	}
 
 	async fn store_token(&self, user_id: &str, token: AccessToken) -> Result<(), String> {
@@ -348,6 +360,7 @@ impl OAuth2Authentication {
 			redirect_uri: redirect_uri.to_string(),
 			user_id: user_id.to_string(),
 			scope,
+			created_at: Instant::now(),
 		};
 
 		self.token_store.store_code(auth_code).await?;
@@ -514,6 +527,7 @@ mod tests {
 			redirect_uri: "https://example.com/callback".to_string(),
 			user_id: "user_123".to_string(),
 			scope: Some("read".to_string()),
+			created_at: Instant::now(),
 		};
 
 		store.store_code(code.clone()).await.unwrap();

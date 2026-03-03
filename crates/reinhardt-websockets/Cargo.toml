@@ -56,6 +56,7 @@ metrics = { version = "0.24", optional = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio-test = "0.4"
 futures = { workspace = true }
 rstest = { workspace = true }

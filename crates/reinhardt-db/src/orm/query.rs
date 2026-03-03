@@ -5523,6 +5523,7 @@ mod tests {
 	}
 
 	impl TestUser {
+		// Allow dead_code: test helper constructor for query tests
 		#[allow(dead_code)]
 		fn new(username: String, email: String) -> Self {
 			Self {

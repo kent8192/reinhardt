@@ -15,31 +15,41 @@ use rstest::rstest;
 // ===================================================================
 
 #[rstest]
-fn test_integer_converter_validate_valid_integers() {
+fn integer_converter_validate_valid_integers() {
 	// Arrange
 	let conv = IntegerConverter::new();
 
-	// Act & Assert
-	assert!(conv.validate("0"));
-	assert!(conv.validate("1"));
-	assert!(conv.validate("123"));
-	assert!(conv.validate("-1"));
-	assert!(conv.validate("-456"));
+	// Act
+	let results = [
+		conv.validate("0"),
+		conv.validate("1"),
+		conv.validate("123"),
+		conv.validate("-1"),
+		conv.validate("-456"),
+	];
+
+	// Assert
+	assert!(results.iter().all(|r| *r));
 }
 
 #[rstest]
-fn test_integer_converter_validate_invalid_inputs() {
+fn integer_converter_validate_invalid_inputs() {
 	// Arrange
 	let conv = IntegerConverter::new();
 
-	// Act & Assert
-	assert!(!conv.validate(""));
-	assert!(!conv.validate("abc"));
-	assert!(!conv.validate("12.5"));
-	assert!(!conv.validate("1.0"));
-	assert!(!conv.validate("1e5"));
-	assert!(!conv.validate(" 1"));
-	assert!(!conv.validate("1 "));
+	// Act
+	let results = [
+		conv.validate(""),
+		conv.validate("abc"),
+		conv.validate("12.5"),
+		conv.validate("1.0"),
+		conv.validate("1e5"),
+		conv.validate(" 1"),
+		conv.validate("1 "),
+	];
+
+	// Assert
+	assert!(results.iter().all(|r| !*r));
 }
 
 #[rstest]
@@ -48,7 +58,7 @@ fn test_integer_converter_validate_invalid_inputs() {
 #[case("-1", -1i64)]
 #[case("9999999", 9999999i64)]
 #[case("-9999999", -9999999i64)]
-fn test_integer_converter_convert_valid(#[case] input: &str, #[case] expected: i64) {
+fn integer_converter_convert_valid(#[case] input: &str, #[case] expected: i64) {
 	// Arrange
 	let conv = IntegerConverter::new();
 
@@ -60,7 +70,7 @@ fn test_integer_converter_convert_valid(#[case] input: &str, #[case] expected: i
 }
 
 #[rstest]
-fn test_integer_converter_convert_invalid_returns_error() {
+fn integer_converter_convert_invalid_returns_error() {
 	// Arrange
 	let conv = IntegerConverter::new();
 
@@ -74,29 +84,39 @@ fn test_integer_converter_convert_invalid_returns_error() {
 }
 
 #[rstest]
-fn test_integer_converter_with_range_valid() {
+fn integer_converter_with_range_valid() {
 	// Arrange
 	let conv = IntegerConverter::with_range(1, 100);
 
-	// Act & Assert
-	assert!(conv.validate("1"));
-	assert!(conv.validate("50"));
-	assert!(conv.validate("100"));
+	// Act
+	let results = [
+		conv.validate("1"),
+		conv.validate("50"),
+		conv.validate("100"),
+	];
+
+	// Assert
+	assert!(results.iter().all(|r| *r));
 }
 
 #[rstest]
-fn test_integer_converter_with_range_out_of_range() {
+fn integer_converter_with_range_out_of_range() {
 	// Arrange
 	let conv = IntegerConverter::with_range(1, 100);
 
-	// Act & Assert
-	assert!(!conv.validate("0"));
-	assert!(!conv.validate("101"));
-	assert!(!conv.validate("-10"));
+	// Act
+	let results = [
+		conv.validate("0"),
+		conv.validate("101"),
+		conv.validate("-10"),
+	];
+
+	// Assert
+	assert!(results.iter().all(|r| !*r));
 }
 
 #[rstest]
-fn test_integer_converter_with_range_convert_out_of_range_returns_error() {
+fn integer_converter_with_range_convert_out_of_range_returns_error() {
 	// Arrange
 	let conv = IntegerConverter::with_range(1, 100);
 
@@ -116,7 +136,7 @@ fn test_integer_converter_with_range_convert_out_of_range_returns_error() {
 }
 
 #[rstest]
-fn test_integer_converter_pattern() {
+fn integer_converter_pattern() {
 	// Arrange
 	let conv = IntegerConverter::new();
 
@@ -128,14 +148,18 @@ fn test_integer_converter_pattern() {
 }
 
 #[rstest]
-fn test_integer_converter_default_equals_new() {
+fn integer_converter_default_equals_new() {
 	// Arrange
 	let conv_default = IntegerConverter::default();
 	let conv_new = IntegerConverter::new();
 
-	// Act & Assert
-	assert!(conv_default.validate("42"));
-	assert!(conv_new.validate("42"));
+	// Act
+	let result_default = conv_default.validate("42");
+	let result_new = conv_new.validate("42");
+
+	// Assert
+	assert!(result_default);
+	assert!(result_new);
 }
 
 // ===================================================================
@@ -147,7 +171,7 @@ fn test_integer_converter_default_equals_new() {
 #[case("6ba7b810-9dad-11d1-80b4-00c04fd430c8")]
 #[case("00000000-0000-0000-0000-000000000000")]
 #[case("ffffffff-ffff-ffff-ffff-ffffffffffff")]
-fn test_uuid_converter_validate_valid(#[case] input: &str) {
+fn uuid_converter_validate_valid(#[case] input: &str) {
 	// Arrange
 	let conv = UuidConverter;
 
@@ -165,7 +189,7 @@ fn test_uuid_converter_validate_valid(#[case] input: &str) {
 #[case("550E8400-E29B-41D4-A716-446655440000")]
 #[case("")]
 #[case("550e8400e29b41d4a716446655440000")]
-fn test_uuid_converter_validate_invalid(#[case] input: &str) {
+fn uuid_converter_validate_invalid(#[case] input: &str) {
 	// Arrange
 	let conv = UuidConverter;
 
@@ -177,7 +201,7 @@ fn test_uuid_converter_validate_invalid(#[case] input: &str) {
 }
 
 #[rstest]
-fn test_uuid_converter_convert_valid() {
+fn uuid_converter_convert_valid() {
 	// Arrange
 	let conv = UuidConverter;
 	let uuid = "550e8400-e29b-41d4-a716-446655440000";
@@ -190,7 +214,7 @@ fn test_uuid_converter_convert_valid() {
 }
 
 #[rstest]
-fn test_uuid_converter_convert_invalid_returns_error() {
+fn uuid_converter_convert_invalid_returns_error() {
 	// Arrange
 	let conv = UuidConverter;
 
@@ -206,7 +230,7 @@ fn test_uuid_converter_convert_invalid_returns_error() {
 }
 
 #[rstest]
-fn test_uuid_converter_pattern() {
+fn uuid_converter_pattern() {
 	// Arrange
 	let conv = UuidConverter;
 
@@ -231,7 +255,7 @@ fn test_uuid_converter_pattern() {
 #[case("simple")]
 #[case("abc")]
 #[case("a1b2c3")]
-fn test_slug_converter_validate_valid(#[case] input: &str) {
+fn slug_converter_validate_valid(#[case] input: &str) {
 	// Arrange
 	let conv = SlugConverter;
 
@@ -251,7 +275,7 @@ fn test_slug_converter_validate_valid(#[case] input: &str) {
 #[case("double--hyphens")]
 #[case("")]
 #[case("has space")]
-fn test_slug_converter_validate_invalid(#[case] input: &str) {
+fn slug_converter_validate_invalid(#[case] input: &str) {
 	// Arrange
 	let conv = SlugConverter;
 
@@ -263,7 +287,7 @@ fn test_slug_converter_validate_invalid(#[case] input: &str) {
 }
 
 #[rstest]
-fn test_slug_converter_convert_valid() {
+fn slug_converter_convert_valid() {
 	// Arrange
 	let conv = SlugConverter;
 	let slug = "my-blog-post";
@@ -276,7 +300,7 @@ fn test_slug_converter_convert_valid() {
 }
 
 #[rstest]
-fn test_slug_converter_convert_invalid_returns_error() {
+fn slug_converter_convert_invalid_returns_error() {
 	// Arrange
 	let conv = SlugConverter;
 
@@ -292,7 +316,7 @@ fn test_slug_converter_convert_invalid_returns_error() {
 }
 
 #[rstest]
-fn test_slug_converter_pattern() {
+fn slug_converter_pattern() {
 	// Arrange
 	let conv = SlugConverter;
 
@@ -312,7 +336,7 @@ fn test_slug_converter_pattern() {
 #[case("2023-12-31")]
 #[case("2000-02-29")]
 #[case("1999-01-01")]
-fn test_date_converter_validate_valid(#[case] input: &str) {
+fn date_converter_validate_valid(#[case] input: &str) {
 	// Arrange
 	let conv = DateConverter;
 
@@ -332,7 +356,7 @@ fn test_date_converter_validate_valid(#[case] input: &str) {
 #[case("not-a-date")]
 #[case("")]
 #[case("2024-1-5")]
-fn test_date_converter_validate_invalid(#[case] input: &str) {
+fn date_converter_validate_invalid(#[case] input: &str) {
 	// Arrange
 	let conv = DateConverter;
 
@@ -344,7 +368,7 @@ fn test_date_converter_validate_invalid(#[case] input: &str) {
 }
 
 #[rstest]
-fn test_date_converter_convert_valid() {
+fn date_converter_convert_valid() {
 	// Arrange
 	let conv = DateConverter;
 
@@ -358,7 +382,7 @@ fn test_date_converter_convert_valid() {
 }
 
 #[rstest]
-fn test_date_converter_convert_end_of_year() {
+fn date_converter_convert_end_of_year() {
 	// Arrange
 	let conv = DateConverter;
 
@@ -372,7 +396,7 @@ fn test_date_converter_convert_end_of_year() {
 }
 
 #[rstest]
-fn test_date_converter_convert_invalid_returns_error() {
+fn date_converter_convert_invalid_returns_error() {
 	// Arrange
 	let conv = DateConverter;
 
@@ -388,7 +412,7 @@ fn test_date_converter_convert_invalid_returns_error() {
 }
 
 #[rstest]
-fn test_date_converter_pattern() {
+fn date_converter_pattern() {
 	// Arrange
 	let conv = DateConverter;
 
@@ -409,7 +433,7 @@ fn test_date_converter_pattern() {
 #[case("documents/2024/report.pdf")]
 #[case("simple.txt")]
 #[case("a/b/c/d/e.txt")]
-fn test_path_converter_validate_valid(#[case] input: &str) {
+fn path_converter_validate_valid(#[case] input: &str) {
 	// Arrange
 	let conv = PathConverter;
 
@@ -427,7 +451,7 @@ fn test_path_converter_validate_valid(#[case] input: &str) {
 #[case("..")]
 #[case("path/..")]
 #[case("../path")]
-fn test_path_converter_validate_directory_traversal(#[case] input: &str) {
+fn path_converter_validate_directory_traversal(#[case] input: &str) {
 	// Arrange
 	let conv = PathConverter;
 
@@ -443,7 +467,7 @@ fn test_path_converter_validate_directory_traversal(#[case] input: &str) {
 }
 
 #[rstest]
-fn test_path_converter_validate_empty_returns_false() {
+fn path_converter_validate_empty_returns_false() {
 	// Arrange
 	let conv = PathConverter;
 
@@ -455,7 +479,7 @@ fn test_path_converter_validate_empty_returns_false() {
 }
 
 #[rstest]
-fn test_path_converter_validate_null_byte_returns_false() {
+fn path_converter_validate_null_byte_returns_false() {
 	// Arrange
 	let conv = PathConverter;
 
@@ -467,7 +491,7 @@ fn test_path_converter_validate_null_byte_returns_false() {
 }
 
 #[rstest]
-fn test_path_converter_validate_absolute_path_returns_false() {
+fn path_converter_validate_absolute_path_returns_false() {
 	// Arrange
 	let conv = PathConverter;
 
@@ -479,13 +503,17 @@ fn test_path_converter_validate_absolute_path_returns_false() {
 }
 
 #[rstest]
-fn test_path_converter_validate_backslash_returns_false() {
+fn path_converter_validate_backslash_returns_false() {
 	// Arrange
 	let conv = PathConverter;
 
-	// Act & Assert
-	assert!(!conv.validate("path\\to\\file"));
-	assert!(!conv.validate("..\\etc\\passwd"));
+	// Act
+	let result_forward = conv.validate("path\\to\\file");
+	let result_traversal = conv.validate("..\\etc\\passwd");
+
+	// Assert
+	assert!(!result_forward);
+	assert!(!result_traversal);
 }
 
 #[rstest]
@@ -495,7 +523,7 @@ fn test_path_converter_validate_backslash_returns_false() {
 #[case("foo%2fbar")]
 #[case("foo%5cbar")]
 #[case("file%00.txt")]
-fn test_path_converter_validate_encoded_traversal_returns_false(#[case] input: &str) {
+fn path_converter_validate_encoded_traversal_returns_false(#[case] input: &str) {
 	// Arrange
 	let conv = PathConverter;
 
@@ -507,7 +535,7 @@ fn test_path_converter_validate_encoded_traversal_returns_false(#[case] input: &
 }
 
 #[rstest]
-fn test_path_converter_convert_valid() {
+fn path_converter_convert_valid() {
 	// Arrange
 	let conv = PathConverter;
 
@@ -519,7 +547,7 @@ fn test_path_converter_convert_valid() {
 }
 
 #[rstest]
-fn test_path_converter_convert_empty_returns_error() {
+fn path_converter_convert_empty_returns_error() {
 	// Arrange
 	let conv = PathConverter;
 
@@ -535,7 +563,7 @@ fn test_path_converter_convert_empty_returns_error() {
 }
 
 #[rstest]
-fn test_path_converter_convert_traversal_returns_error() {
+fn path_converter_convert_traversal_returns_error() {
 	// Arrange
 	let conv = PathConverter;
 
@@ -551,7 +579,7 @@ fn test_path_converter_convert_traversal_returns_error() {
 }
 
 #[rstest]
-fn test_path_converter_pattern() {
+fn path_converter_pattern() {
 	// Arrange
 	let conv = PathConverter;
 
@@ -574,7 +602,7 @@ fn test_path_converter_pattern() {
 #[case("100")]
 #[case("-200")]
 #[case("0")]
-fn test_float_converter_validate_valid(#[case] input: &str) {
+fn float_converter_validate_valid(#[case] input: &str) {
 	// Arrange
 	let conv = FloatConverter::new();
 
@@ -593,7 +621,7 @@ fn test_float_converter_validate_valid(#[case] input: &str) {
 #[case("nan")]
 #[case("NaN")]
 #[case("Inf")]
-fn test_float_converter_validate_invalid(#[case] input: &str) {
+fn float_converter_validate_invalid(#[case] input: &str) {
 	// Arrange
 	let conv = FloatConverter::new();
 
@@ -605,7 +633,7 @@ fn test_float_converter_validate_invalid(#[case] input: &str) {
 }
 
 #[rstest]
-fn test_float_converter_convert_valid() {
+fn float_converter_convert_valid() {
 	// Arrange
 	let conv = FloatConverter::new();
 
@@ -617,7 +645,7 @@ fn test_float_converter_convert_valid() {
 }
 
 #[rstest]
-fn test_float_converter_convert_negative() {
+fn float_converter_convert_negative() {
 	// Arrange
 	let conv = FloatConverter::new();
 
@@ -629,7 +657,7 @@ fn test_float_converter_convert_negative() {
 }
 
 #[rstest]
-fn test_float_converter_convert_integer_string() {
+fn float_converter_convert_integer_string() {
 	// Arrange
 	let conv = FloatConverter::new();
 
@@ -641,7 +669,7 @@ fn test_float_converter_convert_integer_string() {
 }
 
 #[rstest]
-fn test_float_converter_convert_invalid_returns_error() {
+fn float_converter_convert_invalid_returns_error() {
 	// Arrange
 	let conv = FloatConverter::new();
 
@@ -657,7 +685,7 @@ fn test_float_converter_convert_invalid_returns_error() {
 }
 
 #[rstest]
-fn test_float_converter_convert_inf_returns_error() {
+fn float_converter_convert_inf_returns_error() {
 	// Arrange
 	let conv = FloatConverter::new();
 
@@ -669,32 +697,42 @@ fn test_float_converter_convert_inf_returns_error() {
 }
 
 #[rstest]
-fn test_float_converter_with_range_valid() {
+fn float_converter_with_range_valid() {
 	// Arrange
 	let conv = FloatConverter::with_range(0.0, 100.0);
 
-	// Act & Assert
-	assert!(conv.validate("0.0"));
-	assert!(conv.validate("50.5"));
-	assert!(conv.validate("100.0"));
-	assert!(conv.validate("0.001"));
-	assert!(conv.validate("99.999"));
+	// Act
+	let results = [
+		conv.validate("0.0"),
+		conv.validate("50.5"),
+		conv.validate("100.0"),
+		conv.validate("0.001"),
+		conv.validate("99.999"),
+	];
+
+	// Assert
+	assert!(results.iter().all(|r| *r));
 }
 
 #[rstest]
-fn test_float_converter_with_range_out_of_range() {
+fn float_converter_with_range_out_of_range() {
 	// Arrange
 	let conv = FloatConverter::with_range(0.0, 100.0);
 
-	// Act & Assert
-	assert!(!conv.validate("150.5"));
-	assert!(!conv.validate("-10.0"));
-	assert!(!conv.validate("100.1"));
-	assert!(!conv.validate("-0.001"));
+	// Act
+	let results = [
+		conv.validate("150.5"),
+		conv.validate("-10.0"),
+		conv.validate("100.1"),
+		conv.validate("-0.001"),
+	];
+
+	// Assert
+	assert!(results.iter().all(|r| !*r));
 }
 
 #[rstest]
-fn test_float_converter_with_range_convert_out_of_range_returns_error() {
+fn float_converter_with_range_convert_out_of_range_returns_error() {
 	// Arrange
 	let conv = FloatConverter::with_range(0.0, 100.0);
 
@@ -714,7 +752,7 @@ fn test_float_converter_with_range_convert_out_of_range_returns_error() {
 }
 
 #[rstest]
-fn test_float_converter_pattern() {
+fn float_converter_pattern() {
 	// Arrange
 	let conv = FloatConverter::new();
 
@@ -726,14 +764,18 @@ fn test_float_converter_pattern() {
 }
 
 #[rstest]
-fn test_float_converter_default_equals_new() {
+fn float_converter_default_equals_new() {
 	// Arrange
 	let conv_default = FloatConverter::default();
 	let conv_new = FloatConverter::new();
 
-	// Act & Assert
-	assert!(conv_default.validate("42.0"));
-	assert!(conv_new.validate("42.0"));
+	// Act
+	let result_default = conv_default.validate("42.0");
+	let result_new = conv_new.validate("42.0");
+
+	// Assert
+	assert!(result_default);
+	assert!(result_new);
 }
 
 // ===================================================================
@@ -741,7 +783,7 @@ fn test_float_converter_default_equals_new() {
 // ===================================================================
 
 #[rstest]
-fn test_converter_error_invalid_format_display() {
+fn converter_error_invalid_format_display() {
 	// Arrange
 	let err = ConverterError::InvalidFormat("bad input".to_string());
 
@@ -753,7 +795,7 @@ fn test_converter_error_invalid_format_display() {
 }
 
 #[rstest]
-fn test_converter_error_out_of_range_display() {
+fn converter_error_out_of_range_display() {
 	// Arrange
 	let err = ConverterError::OutOfRange("value 200 exceeds max 100".to_string());
 
@@ -765,23 +807,30 @@ fn test_converter_error_out_of_range_display() {
 }
 
 #[rstest]
-fn test_converter_error_equality() {
+fn converter_error_equality() {
 	// Arrange
 	let err1 = ConverterError::InvalidFormat("same".to_string());
 	let err2 = ConverterError::InvalidFormat("same".to_string());
 	let err3 = ConverterError::InvalidFormat("different".to_string());
 
-	// Act & Assert
-	assert_eq!(err1, err2);
-	assert_ne!(err1, err3);
+	// Act
+	let eq_same = err1 == err2;
+	let eq_diff = err1 == err3;
+
+	// Assert
+	assert!(eq_same);
+	assert!(!eq_diff);
 }
 
 #[rstest]
-fn test_converter_error_different_variants_not_equal() {
+fn converter_error_different_variants_not_equal() {
 	// Arrange
 	let invalid_format = ConverterError::InvalidFormat("msg".to_string());
 	let out_of_range = ConverterError::OutOfRange("msg".to_string());
 
-	// Act & Assert
-	assert_ne!(invalid_format, out_of_range);
+	// Act
+	let result = invalid_format == out_of_range;
+
+	// Assert
+	assert!(!result);
 }

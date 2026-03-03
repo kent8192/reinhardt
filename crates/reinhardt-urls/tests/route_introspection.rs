@@ -8,8 +8,8 @@ use std::collections::HashMap;
 // ============================================================
 
 #[rstest]
-fn test_route_info_basic_path_stored() {
-	// Arrange / Act
+fn route_info_basic_path_stored() {
+	// Act
 	let info = RouteInfo::new("/users/", vec![Method::GET], None::<String>);
 
 	// Assert
@@ -17,18 +17,18 @@ fn test_route_info_basic_path_stored() {
 }
 
 #[rstest]
-fn test_route_info_methods_stored_as_strings() {
-	// Arrange / Act
+fn route_info_methods_stored_as_strings() {
+	// Act
 	let info = RouteInfo::new("/users/", vec![Method::GET, Method::POST], None::<String>);
 
 	// Assert
-	assert!(info.methods.contains(&"GET".to_string()));
-	assert!(info.methods.contains(&"POST".to_string()));
+	assert!(info.methods.iter().any(|m| m == "GET"));
+	assert!(info.methods.iter().any(|m| m == "POST"));
 }
 
 #[rstest]
-fn test_route_info_name_stored() {
-	// Arrange / Act
+fn route_info_name_stored() {
+	// Act
 	let info = RouteInfo::new("/users/", vec![Method::GET], Some("api:users:list"));
 
 	// Assert
@@ -36,8 +36,8 @@ fn test_route_info_name_stored() {
 }
 
 #[rstest]
-fn test_route_info_no_name() {
-	// Arrange / Act
+fn route_info_no_name() {
+	// Act
 	let info = RouteInfo::new("/users/", vec![Method::GET], None::<String>);
 
 	// Assert
@@ -47,8 +47,8 @@ fn test_route_info_no_name() {
 }
 
 #[rstest]
-fn test_route_info_single_part_name_has_no_namespace() {
-	// Arrange / Act
+fn route_info_single_part_name_has_no_namespace() {
+	// Act
 	let info = RouteInfo::new("/users/", vec![Method::GET], Some("list"));
 
 	// Assert
@@ -57,8 +57,8 @@ fn test_route_info_single_part_name_has_no_namespace() {
 }
 
 #[rstest]
-fn test_route_info_two_part_name_splits_namespace_and_route() {
-	// Arrange / Act
+fn route_info_two_part_name_splits_namespace_and_route() {
+	// Act
 	let info = RouteInfo::new("/users/", vec![Method::GET], Some("users:list"));
 
 	// Assert
@@ -67,8 +67,8 @@ fn test_route_info_two_part_name_splits_namespace_and_route() {
 }
 
 #[rstest]
-fn test_route_info_deep_namespace_splits_correctly() {
-	// Arrange / Act
+fn route_info_deep_namespace_splits_correctly() {
+	// Act
 	let info = RouteInfo::new(
 		"/users/{id}/",
 		vec![Method::GET],
@@ -81,8 +81,8 @@ fn test_route_info_deep_namespace_splits_correctly() {
 }
 
 #[rstest]
-fn test_route_info_params_extracted_from_path() {
-	// Arrange / Act
+fn route_info_params_extracted_from_path() {
+	// Act
 	let info = RouteInfo::new(
 		"/users/{id}/posts/{post_id}/",
 		vec![Method::GET],
@@ -90,13 +90,13 @@ fn test_route_info_params_extracted_from_path() {
 	);
 
 	// Assert
-	assert!(info.params.contains(&"id".to_string()));
-	assert!(info.params.contains(&"post_id".to_string()));
+	assert!(info.params.iter().any(|p| p == "id"));
+	assert!(info.params.iter().any(|p| p == "post_id"));
 }
 
 #[rstest]
-fn test_route_info_no_params_for_static_path() {
-	// Arrange / Act
+fn route_info_no_params_for_static_path() {
+	// Act
 	let info = RouteInfo::new("/users/", vec![Method::GET], None::<String>);
 
 	// Assert
@@ -104,8 +104,8 @@ fn test_route_info_no_params_for_static_path() {
 }
 
 #[rstest]
-fn test_route_info_metadata_empty_by_default() {
-	// Arrange / Act
+fn route_info_metadata_empty_by_default() {
+	// Act
 	let info = RouteInfo::new("/users/", vec![Method::GET], None::<String>);
 
 	// Assert
@@ -117,7 +117,7 @@ fn test_route_info_metadata_empty_by_default() {
 // ============================================================
 
 #[rstest]
-fn test_route_info_add_metadata_stores_key_value() {
+fn route_info_add_metadata_stores_key_value() {
 	// Arrange
 	let mut info = RouteInfo::new("/users/", vec![Method::GET], None::<String>);
 
@@ -132,7 +132,7 @@ fn test_route_info_add_metadata_stores_key_value() {
 }
 
 #[rstest]
-fn test_route_info_add_multiple_metadata_entries() {
+fn route_info_add_multiple_metadata_entries() {
 	// Arrange
 	let mut info = RouteInfo::new("/users/", vec![Method::GET], None::<String>);
 
@@ -156,7 +156,7 @@ fn test_route_info_add_multiple_metadata_entries() {
 #[case(Method::POST, true)]
 #[case(Method::DELETE, false)]
 #[case(Method::PUT, false)]
-fn test_route_info_supports_method(#[case] method: Method, #[case] expected: bool) {
+fn route_info_supports_method(#[case] method: Method, #[case] expected: bool) {
 	// Arrange
 	let info = RouteInfo::new("/users/", vec![Method::GET, Method::POST], None::<String>);
 
@@ -172,8 +172,8 @@ fn test_route_info_supports_method(#[case] method: Method, #[case] expected: boo
 // ============================================================
 
 #[rstest]
-fn test_inspector_new_has_zero_routes() {
-	// Arrange / Act
+fn inspector_new_has_zero_routes() {
+	// Act
 	let inspector = RouteInspector::new();
 
 	// Assert
@@ -181,8 +181,8 @@ fn test_inspector_new_has_zero_routes() {
 }
 
 #[rstest]
-fn test_inspector_default_has_zero_routes() {
-	// Arrange / Act
+fn inspector_default_has_zero_routes() {
+	// Act
 	let inspector = RouteInspector::default();
 
 	// Assert
@@ -190,8 +190,8 @@ fn test_inspector_default_has_zero_routes() {
 }
 
 #[rstest]
-fn test_inspector_all_routes_empty_on_new() {
-	// Arrange / Act
+fn inspector_all_routes_empty_on_new() {
+	// Act
 	let inspector = RouteInspector::new();
 
 	// Assert
@@ -203,7 +203,7 @@ fn test_inspector_all_routes_empty_on_new() {
 // ============================================================
 
 #[rstest]
-fn test_inspector_add_route_increments_count() {
+fn inspector_add_route_increments_count() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 
@@ -215,7 +215,7 @@ fn test_inspector_add_route_increments_count() {
 }
 
 #[rstest]
-fn test_inspector_add_multiple_routes_counts_all() {
+fn inspector_add_multiple_routes_counts_all() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 
@@ -229,7 +229,7 @@ fn test_inspector_add_multiple_routes_counts_all() {
 }
 
 #[rstest]
-fn test_inspector_add_route_with_metadata() {
+fn inspector_add_route_with_metadata() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	let mut meta = HashMap::new();
@@ -248,7 +248,7 @@ fn test_inspector_add_route_with_metadata() {
 // ============================================================
 
 #[rstest]
-fn test_inspector_all_routes_returns_all_registered() {
+fn inspector_all_routes_returns_all_registered() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route("/users/", vec![Method::GET], None::<String>, None);
@@ -266,7 +266,7 @@ fn test_inspector_all_routes_returns_all_registered() {
 // ============================================================
 
 #[rstest]
-fn test_inspector_find_by_path_returns_correct_route() {
+fn inspector_find_by_path_returns_correct_route() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route("/users/", vec![Method::GET], Some("users:list"), None);
@@ -280,7 +280,7 @@ fn test_inspector_find_by_path_returns_correct_route() {
 }
 
 #[rstest]
-fn test_inspector_find_by_path_returns_none_for_unknown_path() {
+fn inspector_find_by_path_returns_none_for_unknown_path() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route("/users/", vec![Method::GET], None::<String>, None);
@@ -293,7 +293,7 @@ fn test_inspector_find_by_path_returns_none_for_unknown_path() {
 }
 
 #[rstest]
-fn test_inspector_find_by_path_returns_none_on_empty_inspector() {
+fn inspector_find_by_path_returns_none_on_empty_inspector() {
 	// Arrange
 	let inspector = RouteInspector::new();
 
@@ -309,7 +309,7 @@ fn test_inspector_find_by_path_returns_none_on_empty_inspector() {
 // ============================================================
 
 #[rstest]
-fn test_inspector_find_by_name_returns_correct_route() {
+fn inspector_find_by_name_returns_correct_route() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route("/users/", vec![Method::GET], Some("users:list"), None);
@@ -323,7 +323,7 @@ fn test_inspector_find_by_name_returns_correct_route() {
 }
 
 #[rstest]
-fn test_inspector_find_by_name_returns_none_for_unknown_name() {
+fn inspector_find_by_name_returns_none_for_unknown_name() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route("/users/", vec![Method::GET], Some("users:list"), None);
@@ -336,7 +336,7 @@ fn test_inspector_find_by_name_returns_none_for_unknown_name() {
 }
 
 #[rstest]
-fn test_inspector_find_by_name_returns_none_for_unnamed_routes() {
+fn inspector_find_by_name_returns_none_for_unnamed_routes() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route("/users/", vec![Method::GET], None::<String>, None);
@@ -353,7 +353,7 @@ fn test_inspector_find_by_name_returns_none_for_unnamed_routes() {
 // ============================================================
 
 #[rstest]
-fn test_inspector_find_by_path_prefix_matches_multiple() {
+fn inspector_find_by_path_prefix_matches_multiple() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route("/api/v1/users/", vec![Method::GET], None::<String>, None);
@@ -368,7 +368,7 @@ fn test_inspector_find_by_path_prefix_matches_multiple() {
 }
 
 #[rstest]
-fn test_inspector_find_by_path_prefix_returns_empty_for_no_match() {
+fn inspector_find_by_path_prefix_returns_empty_for_no_match() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route("/users/", vec![Method::GET], None::<String>, None);
@@ -381,7 +381,7 @@ fn test_inspector_find_by_path_prefix_returns_empty_for_no_match() {
 }
 
 #[rstest]
-fn test_inspector_find_by_path_prefix_exact_match_included() {
+fn inspector_find_by_path_prefix_exact_match_included() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route("/api/", vec![Method::GET], None::<String>, None);
@@ -395,7 +395,7 @@ fn test_inspector_find_by_path_prefix_exact_match_included() {
 }
 
 #[rstest]
-fn test_inspector_find_by_path_prefix_empty_inspector_returns_empty() {
+fn inspector_find_by_path_prefix_empty_inspector_returns_empty() {
 	// Arrange
 	let inspector = RouteInspector::new();
 
@@ -411,7 +411,7 @@ fn test_inspector_find_by_path_prefix_empty_inspector_returns_empty() {
 // ============================================================
 
 #[rstest]
-fn test_inspector_find_by_namespace_exact_match() {
+fn inspector_find_by_namespace_exact_match() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route(
@@ -441,7 +441,7 @@ fn test_inspector_find_by_namespace_exact_match() {
 }
 
 #[rstest]
-fn test_inspector_find_by_namespace_returns_empty_for_unknown_namespace() {
+fn inspector_find_by_namespace_returns_empty_for_unknown_namespace() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route(
@@ -463,7 +463,7 @@ fn test_inspector_find_by_namespace_returns_empty_for_unknown_namespace() {
 // ============================================================
 
 #[rstest]
-fn test_inspector_find_by_method_returns_matching_routes() {
+fn inspector_find_by_method_returns_matching_routes() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route(
@@ -491,7 +491,7 @@ fn test_inspector_find_by_method_returns_matching_routes() {
 // ============================================================
 
 #[rstest]
-fn test_inspector_all_namespaces_returns_all_hierarchy_levels() {
+fn inspector_all_namespaces_returns_all_hierarchy_levels() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route(
@@ -511,16 +511,16 @@ fn test_inspector_all_namespaces_returns_all_hierarchy_levels() {
 	let namespaces = inspector.all_namespaces();
 
 	// Assert
-	assert!(namespaces.contains(&"api".to_string()));
-	assert!(namespaces.contains(&"api:v1".to_string()));
-	assert!(namespaces.contains(&"api:v1:users".to_string()));
-	assert!(namespaces.contains(&"api:v2".to_string()));
-	assert!(namespaces.contains(&"api:v2:posts".to_string()));
+	assert!(namespaces.iter().any(|n| n == "api"));
+	assert!(namespaces.iter().any(|n| n == "api:v1"));
+	assert!(namespaces.iter().any(|n| n == "api:v1:users"));
+	assert!(namespaces.iter().any(|n| n == "api:v2"));
+	assert!(namespaces.iter().any(|n| n == "api:v2:posts"));
 	assert_eq!(namespaces.len(), 5);
 }
 
 #[rstest]
-fn test_inspector_all_namespaces_empty_when_no_named_routes() {
+fn inspector_all_namespaces_empty_when_no_named_routes() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route("/users/", vec![Method::GET], None::<String>, None);
@@ -533,7 +533,7 @@ fn test_inspector_all_namespaces_empty_when_no_named_routes() {
 }
 
 #[rstest]
-fn test_inspector_all_namespaces_sorted() {
+fn inspector_all_namespaces_sorted() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route("/z/", vec![Method::GET], Some("zzz:route"), None);
@@ -552,7 +552,7 @@ fn test_inspector_all_namespaces_sorted() {
 // ============================================================
 
 #[rstest]
-fn test_inspector_all_methods_returns_unique_methods() {
+fn inspector_all_methods_returns_unique_methods() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route(
@@ -580,7 +580,7 @@ fn test_inspector_all_methods_returns_unique_methods() {
 }
 
 #[rstest]
-fn test_inspector_all_methods_empty_when_no_routes() {
+fn inspector_all_methods_empty_when_no_routes() {
 	// Arrange
 	let inspector = RouteInspector::new();
 
@@ -596,7 +596,7 @@ fn test_inspector_all_methods_empty_when_no_routes() {
 // ============================================================
 
 #[rstest]
-fn test_inspector_statistics_total_routes() {
+fn inspector_statistics_total_routes() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route("/users/", vec![Method::GET], Some("api:users:list"), None);
@@ -615,7 +615,7 @@ fn test_inspector_statistics_total_routes() {
 }
 
 #[rstest]
-fn test_inspector_statistics_routes_with_params() {
+fn inspector_statistics_routes_with_params() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route("/users/", vec![Method::GET], None::<String>, None);
@@ -635,7 +635,7 @@ fn test_inspector_statistics_routes_with_params() {
 }
 
 #[rstest]
-fn test_inspector_statistics_routes_with_names() {
+fn inspector_statistics_routes_with_names() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route("/users/", vec![Method::GET], Some("users:list"), None);
@@ -649,7 +649,7 @@ fn test_inspector_statistics_routes_with_names() {
 }
 
 #[rstest]
-fn test_inspector_statistics_zero_on_empty() {
+fn inspector_statistics_zero_on_empty() {
 	// Arrange
 	let inspector = RouteInspector::new();
 
@@ -669,54 +669,65 @@ fn test_inspector_statistics_zero_on_empty() {
 // ============================================================
 
 #[rstest]
-fn test_inspector_to_json_contains_route_name() {
+fn inspector_to_json_contains_route_name() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route("/users/", vec![Method::GET], Some("users:list"), None);
 
 	// Act
 	let json = inspector.to_json().unwrap();
+	let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
 
 	// Assert
-	assert!(json.contains("users:list"));
+	let routes = parsed.as_array().unwrap();
+	assert_eq!(routes.len(), 1);
+	assert_eq!(routes[0]["name"], "users:list");
 }
 
 #[rstest]
-fn test_inspector_to_json_contains_path() {
+fn inspector_to_json_contains_path() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route("/api/v1/users/", vec![Method::GET], None::<String>, None);
 
 	// Act
 	let json = inspector.to_json().unwrap();
+	let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
 
 	// Assert
-	assert!(json.contains("/api/v1/users/"));
+	let routes = parsed.as_array().unwrap();
+	assert_eq!(routes.len(), 1);
+	assert_eq!(routes[0]["path"], "/api/v1/users/");
 }
 
 #[rstest]
-fn test_inspector_to_json_empty_inspector_produces_empty_array() {
+fn inspector_to_json_empty_inspector_produces_empty_array() {
 	// Arrange
 	let inspector = RouteInspector::new();
 
 	// Act
 	let json = inspector.to_json().unwrap();
+	let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
 
 	// Assert
-	assert_eq!(json.trim(), "[]");
+	let routes = parsed.as_array().unwrap();
+	assert!(routes.is_empty());
 }
 
 #[rstest]
-fn test_inspector_to_yaml_contains_route_name() {
+fn inspector_to_yaml_contains_route_name() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route("/users/", vec![Method::GET], Some("users:list"), None);
 
 	// Act
 	let yaml = inspector.to_yaml().unwrap();
+	let parsed: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
 
 	// Assert
-	assert!(yaml.contains("users:list"));
+	let routes = parsed.as_sequence().unwrap();
+	assert_eq!(routes.len(), 1);
+	assert_eq!(routes[0]["name"].as_str().unwrap(), "users:list");
 }
 
 // ============================================================
@@ -724,7 +735,7 @@ fn test_inspector_to_yaml_contains_route_name() {
 // ============================================================
 
 #[rstest]
-fn test_inspector_duplicate_paths_last_write_wins_in_index() {
+fn inspector_duplicate_paths_last_write_wins_in_index() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 
@@ -740,7 +751,7 @@ fn test_inspector_duplicate_paths_last_write_wins_in_index() {
 }
 
 #[rstest]
-fn test_inspector_route_with_all_http_methods() {
+fn inspector_route_with_all_http_methods() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 
@@ -769,7 +780,7 @@ fn test_inspector_route_with_all_http_methods() {
 }
 
 #[rstest]
-fn test_inspector_find_by_path_prefix_with_root_prefix() {
+fn inspector_find_by_path_prefix_with_root_prefix() {
 	// Arrange
 	let mut inspector = RouteInspector::new();
 	inspector.add_route("/users/", vec![Method::GET], None::<String>, None);
@@ -783,7 +794,7 @@ fn test_inspector_find_by_path_prefix_with_root_prefix() {
 }
 
 #[rstest]
-fn test_inspector_route_info_namespace_object_present_when_namespace_set() {
+fn inspector_route_info_namespace_object_present_when_namespace_set() {
 	// Arrange
 	let info = RouteInfo::new("/users/", vec![Method::GET], Some("api:v1:users:list"));
 
@@ -795,7 +806,7 @@ fn test_inspector_route_info_namespace_object_present_when_namespace_set() {
 }
 
 #[rstest]
-fn test_inspector_route_info_namespace_object_absent_when_no_namespace() {
+fn inspector_route_info_namespace_object_absent_when_no_namespace() {
 	// Arrange
 	let info = RouteInfo::new("/users/", vec![Method::GET], None::<String>);
 
@@ -807,7 +818,7 @@ fn test_inspector_route_info_namespace_object_absent_when_no_namespace() {
 }
 
 #[rstest]
-fn test_inspector_route_info_namespace_object_absent_for_single_part_name() {
+fn inspector_route_info_namespace_object_absent_for_single_part_name() {
 	// Arrange
 	let info = RouteInfo::new("/users/", vec![Method::GET], Some("list"));
 

@@ -8,9 +8,12 @@ use rstest::rstest;
 // ============================================================================
 
 #[rstest]
-fn test_namespace_new_single_component() {
-	// Arrange + Act
-	let ns = Namespace::new("api");
+fn namespace_new_single_component() {
+	// Arrange
+	let path = "api";
+
+	// Act
+	let ns = Namespace::new(path);
 
 	// Assert
 	assert_eq!(ns.full_path(), "api");
@@ -18,9 +21,12 @@ fn test_namespace_new_single_component() {
 }
 
 #[rstest]
-fn test_namespace_new_multi_component() {
-	// Arrange + Act
-	let ns = Namespace::new("api:v1:users");
+fn namespace_new_multi_component() {
+	// Arrange
+	let path = "api:v1:users";
+
+	// Act
+	let ns = Namespace::new(path);
 
 	// Assert
 	assert_eq!(ns.full_path(), "api:v1:users");
@@ -28,9 +34,12 @@ fn test_namespace_new_multi_component() {
 }
 
 #[rstest]
-fn test_namespace_new_empty() {
-	// Arrange + Act
-	let ns = Namespace::new("");
+fn namespace_new_empty() {
+	// Arrange
+	let path = "";
+
+	// Act
+	let ns = Namespace::new(path);
 
 	// Assert
 	assert_eq!(ns.full_path(), "");
@@ -42,7 +51,7 @@ fn test_namespace_new_empty() {
 #[case("api:v1", Some("api"))]
 #[case("api:v1:users", Some("api"))]
 #[case("", None)]
-fn test_namespace_root(#[case] path: &str, #[case] expected: Option<&str>) {
+fn namespace_root(#[case] path: &str, #[case] expected: Option<&str>) {
 	// Arrange
 	let ns = Namespace::new(path);
 
@@ -58,7 +67,7 @@ fn test_namespace_root(#[case] path: &str, #[case] expected: Option<&str>) {
 #[case("api:v1", Some("v1"))]
 #[case("api", Some("api"))]
 #[case("", None)]
-fn test_namespace_leaf(#[case] path: &str, #[case] expected: Option<&str>) {
+fn namespace_leaf(#[case] path: &str, #[case] expected: Option<&str>) {
 	// Arrange
 	let ns = Namespace::new(path);
 
@@ -74,7 +83,7 @@ fn test_namespace_leaf(#[case] path: &str, #[case] expected: Option<&str>) {
 #[case("api:v1", 2)]
 #[case("api:v1:users", 3)]
 #[case("api:v1:users:detail", 4)]
-fn test_namespace_depth(#[case] path: &str, #[case] expected: usize) {
+fn namespace_depth(#[case] path: &str, #[case] expected: usize) {
 	// Arrange
 	let ns = Namespace::new(path);
 
@@ -86,7 +95,7 @@ fn test_namespace_depth(#[case] path: &str, #[case] expected: usize) {
 }
 
 #[rstest]
-fn test_namespace_parent_from_deep() {
+fn namespace_parent_from_deep() {
 	// Arrange
 	let ns = Namespace::new("api:v1:users");
 
@@ -99,7 +108,7 @@ fn test_namespace_parent_from_deep() {
 }
 
 #[rstest]
-fn test_namespace_parent_from_root_returns_none() {
+fn namespace_parent_from_root_returns_none() {
 	// Arrange
 	let ns = Namespace::new("api");
 
@@ -111,7 +120,7 @@ fn test_namespace_parent_from_root_returns_none() {
 }
 
 #[rstest]
-fn test_namespace_parent_chain() {
+fn namespace_parent_chain() {
 	// Arrange
 	let ns = Namespace::new("api:v1:users:detail");
 
@@ -128,7 +137,7 @@ fn test_namespace_parent_chain() {
 }
 
 #[rstest]
-fn test_namespace_append() {
+fn namespace_append() {
 	// Arrange
 	let ns = Namespace::new("api:v1");
 
@@ -141,7 +150,7 @@ fn test_namespace_append() {
 }
 
 #[rstest]
-fn test_namespace_append_to_empty() {
+fn namespace_append_to_empty() {
 	// Arrange
 	let ns = Namespace::new("");
 
@@ -153,57 +162,73 @@ fn test_namespace_append_to_empty() {
 }
 
 #[rstest]
-fn test_namespace_is_parent_of_direct_child() {
+fn namespace_is_parent_of_direct_child() {
 	// Arrange
 	let parent = Namespace::new("api:v1");
 	let child = Namespace::new("api:v1:users");
 
-	// Act + Assert
-	assert!(parent.is_parent_of(&child));
+	// Act
+	let result = parent.is_parent_of(&child);
+
+	// Assert
+	assert!(result);
 }
 
 #[rstest]
-fn test_namespace_is_parent_of_deep_descendant() {
+fn namespace_is_parent_of_deep_descendant() {
 	// Arrange
 	let ancestor = Namespace::new("api");
 	let descendant = Namespace::new("api:v1:users:detail");
 
-	// Act + Assert
-	assert!(ancestor.is_parent_of(&descendant));
+	// Act
+	let result = ancestor.is_parent_of(&descendant);
+
+	// Assert
+	assert!(result);
 }
 
 #[rstest]
-fn test_namespace_is_not_parent_of_sibling() {
+fn namespace_is_not_parent_of_sibling() {
 	// Arrange
 	let ns1 = Namespace::new("api:v1");
 	let ns2 = Namespace::new("api:v2");
 
-	// Act + Assert
-	assert!(!ns1.is_parent_of(&ns2));
+	// Act
+	let result = ns1.is_parent_of(&ns2);
+
+	// Assert
+	assert!(!result);
 }
 
 #[rstest]
-fn test_namespace_is_not_parent_of_itself() {
+fn namespace_is_not_parent_of_itself() {
 	// Arrange
 	let ns = Namespace::new("api:v1");
 
-	// Act + Assert
-	assert!(!ns.is_parent_of(&ns));
+	// Act
+	let result = ns.is_parent_of(&ns);
+
+	// Assert
+	assert!(!result);
 }
 
 #[rstest]
-fn test_namespace_is_child_of() {
+fn namespace_is_child_of() {
 	// Arrange
 	let parent = Namespace::new("api:v1");
 	let child = Namespace::new("api:v1:users");
 
-	// Act + Assert
-	assert!(child.is_child_of(&parent));
-	assert!(!parent.is_child_of(&child));
+	// Act
+	let child_is_child = child.is_child_of(&parent);
+	let parent_is_child = parent.is_child_of(&child);
+
+	// Assert
+	assert!(child_is_child);
+	assert!(!parent_is_child);
 }
 
 #[rstest]
-fn test_namespace_display() {
+fn namespace_display() {
 	// Arrange
 	let ns = Namespace::new("api:v1:users");
 
@@ -215,33 +240,43 @@ fn test_namespace_display() {
 }
 
 #[rstest]
-fn test_namespace_from_str() {
-	// Arrange + Act
-	let ns: Namespace = "api:v1:users".into();
+fn namespace_from_str() {
+	// Arrange
+	let input = "api:v1:users";
+
+	// Act
+	let ns: Namespace = input.into();
 
 	// Assert
 	assert_eq!(ns.full_path(), "api:v1:users");
 }
 
 #[rstest]
-fn test_namespace_from_string() {
-	// Arrange + Act
-	let ns: Namespace = String::from("api:v1:users").into();
+fn namespace_from_string() {
+	// Arrange
+	let input = String::from("api:v1:users");
+
+	// Act
+	let ns: Namespace = input.into();
 
 	// Assert
 	assert_eq!(ns.full_path(), "api:v1:users");
 }
 
 #[rstest]
-fn test_namespace_equality() {
+fn namespace_equality() {
 	// Arrange
 	let ns1 = Namespace::new("api:v1:users");
 	let ns2 = Namespace::new("api:v1:users");
 	let ns3 = Namespace::new("api:v2:users");
 
-	// Act + Assert
-	assert_eq!(ns1, ns2);
-	assert_ne!(ns1, ns3);
+	// Act
+	let eq_same = ns1 == ns2;
+	let eq_diff = ns1 == ns3;
+
+	// Assert
+	assert!(eq_same);
+	assert!(!eq_diff);
 }
 
 // ============================================================================
@@ -253,8 +288,8 @@ fn test_namespace_equality() {
 #[case("/users/{id}/", vec!["id"])]
 #[case("/users/{id}/posts/{post_id}/", vec!["id", "post_id"])]
 #[case("/{a}{b}/", vec!["a", "b"])]
-fn test_extract_param_names(#[case] pattern: &str, #[case] expected: Vec<&str>) {
-	// Arrange + Act
+fn extract_param_names_from_pattern(#[case] pattern: &str, #[case] expected: Vec<&str>) {
+	// Act
 	let params = extract_param_names(pattern);
 
 	// Assert
@@ -267,8 +302,8 @@ fn test_extract_param_names(#[case] pattern: &str, #[case] expected: Vec<&str>) 
 // ============================================================================
 
 #[rstest]
-fn test_namespaced_route_with_namespace_and_route_name() {
-	// Arrange + Act
+fn namespaced_route_with_namespace_and_route_name() {
+	// Act
 	let route = NamespacedRoute::new("api:v1:users:detail", "/api/v1/users/{id}/");
 
 	// Assert
@@ -280,8 +315,8 @@ fn test_namespaced_route_with_namespace_and_route_name() {
 }
 
 #[rstest]
-fn test_namespaced_route_single_component_no_namespace() {
-	// Arrange + Act
+fn namespaced_route_single_component_no_namespace() {
+	// Act
 	let route = NamespacedRoute::new("list", "/users/");
 
 	// Assert
@@ -292,7 +327,7 @@ fn test_namespaced_route_single_component_no_namespace() {
 }
 
 #[rstest]
-fn test_namespaced_route_resolve_single_param() {
+fn namespaced_route_resolve_single_param() {
 	// Arrange
 	let route = NamespacedRoute::new("api:users:detail", "/users/{id}/");
 
@@ -304,7 +339,7 @@ fn test_namespaced_route_resolve_single_param() {
 }
 
 #[rstest]
-fn test_namespaced_route_resolve_multiple_params() {
+fn namespaced_route_resolve_multiple_params() {
 	// Arrange
 	let route = NamespacedRoute::new("api:posts:detail", "/users/{user_id}/posts/{post_id}/");
 
@@ -318,7 +353,7 @@ fn test_namespaced_route_resolve_multiple_params() {
 }
 
 #[rstest]
-fn test_namespaced_route_resolve_no_params() {
+fn namespaced_route_resolve_no_params() {
 	// Arrange
 	let route = NamespacedRoute::new("api:users:list", "/api/users/");
 
@@ -330,7 +365,7 @@ fn test_namespaced_route_resolve_no_params() {
 }
 
 #[rstest]
-fn test_namespaced_route_resolve_missing_param_returns_error() {
+fn namespaced_route_resolve_missing_param_returns_error() {
 	// Arrange
 	let route = NamespacedRoute::new("api:users:detail", "/users/{id}/");
 
@@ -346,8 +381,8 @@ fn test_namespaced_route_resolve_missing_param_returns_error() {
 // ============================================================================
 
 #[rstest]
-fn test_resolver_new_is_empty() {
-	// Arrange + Act
+fn resolver_new_is_empty() {
+	// Act
 	let resolver = NamespaceResolver::new();
 
 	// Assert
@@ -356,8 +391,8 @@ fn test_resolver_new_is_empty() {
 }
 
 #[rstest]
-fn test_resolver_default_is_empty() {
-	// Arrange + Act
+fn resolver_default_is_empty() {
+	// Act
 	let resolver = NamespaceResolver::default();
 
 	// Assert
@@ -365,7 +400,7 @@ fn test_resolver_default_is_empty() {
 }
 
 #[rstest]
-fn test_resolver_register_and_resolve_with_param() {
+fn resolver_register_and_resolve_with_param() {
 	// Arrange
 	let mut resolver = NamespaceResolver::new();
 	resolver.register("api:v1:users:detail", "/api/v1/users/{id}/");
@@ -380,7 +415,7 @@ fn test_resolver_register_and_resolve_with_param() {
 }
 
 #[rstest]
-fn test_resolver_register_and_resolve_no_params() {
+fn resolver_register_and_resolve_no_params() {
 	// Arrange
 	let mut resolver = NamespaceResolver::new();
 	resolver.register("api:v1:users:list", "/api/v1/users/");
@@ -393,7 +428,7 @@ fn test_resolver_register_and_resolve_no_params() {
 }
 
 #[rstest]
-fn test_resolver_resolve_unknown_name_returns_error() {
+fn resolver_resolve_unknown_name_returns_error() {
 	// Arrange
 	let resolver = NamespaceResolver::new();
 
@@ -405,7 +440,7 @@ fn test_resolver_resolve_unknown_name_returns_error() {
 }
 
 #[rstest]
-fn test_resolver_resolve_missing_param_returns_error() {
+fn resolver_resolve_missing_param_returns_error() {
 	// Arrange
 	let mut resolver = NamespaceResolver::new();
 	resolver.register("api:users:detail", "/users/{id}/");
@@ -418,18 +453,22 @@ fn test_resolver_resolve_missing_param_returns_error() {
 }
 
 #[rstest]
-fn test_resolver_has_route_registered() {
+fn resolver_has_route_registered() {
 	// Arrange
 	let mut resolver = NamespaceResolver::new();
 	resolver.register("api:users:list", "/api/users/");
 
-	// Act + Assert
-	assert!(resolver.has_route("api:users:list"));
-	assert!(!resolver.has_route("api:users:detail"));
+	// Act
+	let has_list = resolver.has_route("api:users:list");
+	let has_detail = resolver.has_route("api:users:detail");
+
+	// Assert
+	assert!(has_list);
+	assert!(!has_detail);
 }
 
 #[rstest]
-fn test_resolver_route_count() {
+fn resolver_route_count() {
 	// Arrange
 	let mut resolver = NamespaceResolver::new();
 
@@ -447,7 +486,7 @@ fn test_resolver_route_count() {
 // ============================================================================
 
 #[rstest]
-fn test_resolver_list_routes_in_namespace_exact_match() {
+fn resolver_list_routes_in_namespace_exact_match() {
 	// Arrange
 	let mut resolver = NamespaceResolver::new();
 	resolver.register("api:v1:users:list", "/api/v1/users/");
@@ -462,7 +501,7 @@ fn test_resolver_list_routes_in_namespace_exact_match() {
 }
 
 #[rstest]
-fn test_resolver_list_routes_in_namespace_no_match() {
+fn resolver_list_routes_in_namespace_no_match() {
 	// Arrange
 	let mut resolver = NamespaceResolver::new();
 	resolver.register("api:v1:users:list", "/api/v1/users/");
@@ -476,7 +515,7 @@ fn test_resolver_list_routes_in_namespace_no_match() {
 }
 
 #[rstest]
-fn test_resolver_list_routes_in_namespace_empty_resolver() {
+fn resolver_list_routes_in_namespace_empty_resolver() {
 	// Arrange
 	let resolver = NamespaceResolver::new();
 
@@ -492,7 +531,7 @@ fn test_resolver_list_routes_in_namespace_empty_resolver() {
 // ============================================================================
 
 #[rstest]
-fn test_resolver_list_child_namespaces() {
+fn resolver_list_child_namespaces() {
 	// Arrange
 	let mut resolver = NamespaceResolver::new();
 	resolver.register("api:v1:users:list", "/api/v1/users/");
@@ -504,12 +543,12 @@ fn test_resolver_list_child_namespaces() {
 
 	// Assert
 	assert_eq!(children.len(), 2);
-	assert!(children.contains(&"users".to_string()));
-	assert!(children.contains(&"posts".to_string()));
+	assert!(children.iter().any(|s| s == "users"));
+	assert!(children.iter().any(|s| s == "posts"));
 }
 
 #[rstest]
-fn test_resolver_list_child_namespaces_returns_sorted() {
+fn resolver_list_child_namespaces_returns_sorted() {
 	// Arrange
 	let mut resolver = NamespaceResolver::new();
 	resolver.register("api:v1:zebra:list", "/api/v1/zebra/");
@@ -524,7 +563,7 @@ fn test_resolver_list_child_namespaces_returns_sorted() {
 }
 
 #[rstest]
-fn test_resolver_list_child_namespaces_top_level() {
+fn resolver_list_child_namespaces_top_level() {
 	// Arrange
 	let mut resolver = NamespaceResolver::new();
 	resolver.register("api:v1:users:list", "/api/v1/users/");
@@ -542,7 +581,7 @@ fn test_resolver_list_child_namespaces_top_level() {
 // ============================================================================
 
 #[rstest]
-fn test_resolver_list_all_namespaces() {
+fn resolver_list_all_namespaces() {
 	// Arrange
 	let mut resolver = NamespaceResolver::new();
 	resolver.register("api:v1:users:list", "/api/v1/users/");
@@ -552,12 +591,12 @@ fn test_resolver_list_all_namespaces() {
 	let namespaces = resolver.list_all_namespaces();
 
 	// Assert
-	assert!(namespaces.contains(&"api:v1:users".to_string()));
-	assert!(namespaces.contains(&"api:v2:posts".to_string()));
+	assert!(namespaces.iter().any(|s| s == "api:v1:users"));
+	assert!(namespaces.iter().any(|s| s == "api:v2:posts"));
 }
 
 #[rstest]
-fn test_resolver_all_routes() {
+fn resolver_all_routes() {
 	// Arrange
 	let mut resolver = NamespaceResolver::new();
 	resolver.register("api:v1:users:list", "/api/v1/users/");
@@ -575,7 +614,7 @@ fn test_resolver_all_routes() {
 // ============================================================================
 
 #[rstest]
-fn test_resolver_nested_namespace_three_levels() {
+fn resolver_nested_namespace_three_levels() {
 	// Arrange
 	let mut resolver = NamespaceResolver::new();
 	resolver.register("api:v1:users:list", "/api/v1/users/");
@@ -593,7 +632,7 @@ fn test_resolver_nested_namespace_three_levels() {
 }
 
 #[rstest]
-fn test_resolver_nested_namespace_child_list_isolated() {
+fn resolver_nested_namespace_child_list_isolated() {
 	// Arrange
 	let mut resolver = NamespaceResolver::new();
 	resolver.register("api:v1:users:list", "/api/v1/users/");

@@ -12,44 +12,57 @@ use std::collections::HashMap;
 // ===================================================================
 
 #[rstest]
-fn test_path_pattern_simple_static() {
-	// Arrange & Act
+fn path_pattern_simple_static() {
+	// Arrange
 	let pattern = PathPattern::new("/users/").unwrap();
 
+	// Act
+	let raw_pattern = pattern.pattern();
+	let param_names = pattern.param_names();
+
 	// Assert
-	assert_eq!(pattern.pattern(), "/users/");
-	assert!(pattern.param_names().is_empty());
+	assert_eq!(raw_pattern, "/users/");
+	assert!(param_names.is_empty());
 }
 
 #[rstest]
-fn test_path_pattern_with_simple_param() {
-	// Arrange & Act
+fn path_pattern_with_simple_param() {
+	// Arrange
 	let pattern = PathPattern::new("/users/{id}/").unwrap();
 
+	// Act
+	let names = pattern.param_names();
+
 	// Assert
-	assert_eq!(pattern.param_names(), &["id"]);
+	assert_eq!(names, &["id"]);
 }
 
 #[rstest]
-fn test_path_pattern_multiple_params() {
-	// Arrange & Act
+fn path_pattern_multiple_params() {
+	// Arrange
 	let pattern = PathPattern::new("/users/{user_id}/posts/{post_id}/").unwrap();
 
+	// Act
+	let names = pattern.param_names();
+
 	// Assert
-	assert_eq!(pattern.param_names(), &["user_id", "post_id"]);
+	assert_eq!(names, &["user_id", "post_id"]);
 }
 
 #[rstest]
-fn test_path_pattern_empty_param_name_is_error() {
-	// Arrange & Act
-	let result = PathPattern::new("/users/{}/");
+fn path_pattern_empty_param_name_is_error() {
+	// Arrange
+	let pattern = "/users/{}/";
+
+	// Act
+	let result = PathPattern::new(pattern);
 
 	// Assert
 	assert!(result.is_err());
 }
 
 #[rstest]
-fn test_path_pattern_too_long_is_error() {
+fn path_pattern_too_long_is_error() {
 	// Arrange
 	let long_pattern = "/".to_string() + &"a".repeat(1025);
 
@@ -61,7 +74,7 @@ fn test_path_pattern_too_long_is_error() {
 }
 
 #[rstest]
-fn test_path_pattern_too_many_segments_is_error() {
+fn path_pattern_too_many_segments_is_error() {
 	// Arrange - 33 slashes creates 34 segments, exceeding the limit of 32
 	let pattern = "/".to_string() + &"a/".repeat(33);
 
@@ -82,7 +95,7 @@ fn test_path_pattern_too_many_segments_is_error() {
 #[case("9999", true)]
 #[case("-1", false)]
 #[case("abc", false)]
-fn test_type_int_matching(#[case] value: &str, #[case] should_match: bool) {
+fn type_int_matching(#[case] value: &str, #[case] should_match: bool) {
 	// Arrange
 	let pattern = PathPattern::new(&format!("/items/{{<int:id>}}/")).unwrap();
 	let path = format!("/items/{}/", value);
@@ -107,7 +120,7 @@ fn test_type_int_matching(#[case] value: &str, #[case] should_match: bool) {
 #[case("hello-world", true)]
 #[case("123", true)]
 #[case("hello/world", false)]
-fn test_type_str_matching(#[case] value: &str, #[case] should_match: bool) {
+fn type_str_matching(#[case] value: &str, #[case] should_match: bool) {
 	// Arrange
 	let pattern = PathPattern::new(&format!("/items/{{<str:name>}}/")).unwrap();
 	let path = format!("/items/{}/", value);
@@ -129,10 +142,11 @@ fn test_type_str_matching(#[case] value: &str, #[case] should_match: bool) {
 
 #[rstest]
 #[case("550e8400-e29b-41d4-a716-446655440000", true)]
+// NOTE: Uppercase UUIDs accepted by type_spec_to_regex but rejected by UuidConverter (see #1818)
 #[case("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE", true)]
 #[case("not-a-uuid", false)]
 #[case("550e8400e29b41d4a716446655440000", false)]
-fn test_type_uuid_matching(#[case] value: &str, #[case] should_match: bool) {
+fn type_uuid_matching(#[case] value: &str, #[case] should_match: bool) {
 	// Arrange
 	let pattern = PathPattern::new(&format!("/items/{{<uuid:id>}}/")).unwrap();
 	let path = format!("/items/{}/", value);
@@ -159,7 +173,7 @@ fn test_type_uuid_matching(#[case] value: &str, #[case] should_match: bool) {
 #[case("HELLO", false)]
 #[case("hello world", false)]
 #[case("-leading-dash", false)]
-fn test_type_slug_matching(#[case] value: &str, #[case] should_match: bool) {
+fn type_slug_matching(#[case] value: &str, #[case] should_match: bool) {
 	// Arrange
 	let pattern = PathPattern::new(&format!("/items/{{<slug:name>}}/")).unwrap();
 	let path = format!("/items/{}/", value);
@@ -187,7 +201,7 @@ fn test_type_slug_matching(#[case] value: &str, #[case] should_match: bool) {
 #[case("yes", false)]
 #[case("no", false)]
 #[case("True", false)]
-fn test_type_bool_matching(#[case] value: &str, #[case] should_match: bool) {
+fn type_bool_matching(#[case] value: &str, #[case] should_match: bool) {
 	// Arrange
 	let pattern = PathPattern::new(&format!("/items/{{<bool:flag>}}/")).unwrap();
 	let path = format!("/items/{}/", value);
@@ -213,7 +227,7 @@ fn test_type_bool_matching(#[case] value: &str, #[case] should_match: bool) {
 #[case("2024-1-5", false)]
 #[case("20240115", false)]
 #[case("2024/01/15", false)]
-fn test_type_date_matching(#[case] value: &str, #[case] should_match: bool) {
+fn type_date_matching(#[case] value: &str, #[case] should_match: bool) {
 	// Arrange
 	let pattern = PathPattern::new(&format!("/items/{{<date:d>}}/")).unwrap();
 	let path = format!("/items/{}/", value);
@@ -239,7 +253,7 @@ fn test_type_date_matching(#[case] value: &str, #[case] should_match: bool) {
 #[case("not-an-email", false)]
 #[case("@example.com", false)]
 #[case("user@", false)]
-fn test_type_email_matching(#[case] value: &str, #[case] should_match: bool) {
+fn type_email_matching(#[case] value: &str, #[case] should_match: bool) {
 	// Arrange
 	let pattern = PathPattern::new(&format!("/items/{{<email:addr>}}/")).unwrap();
 	let path = format!("/items/{}/", value);
@@ -269,7 +283,7 @@ fn test_type_email_matching(#[case] value: &str, #[case] should_match: bool) {
 #[case("i64", "123456789", true)]
 #[case("i64", "-123456789", true)]
 #[case("i8", "abc", false)]
-fn test_type_signed_integers_matching(
+fn type_signed_integers_matching(
 	#[case] type_name: &str,
 	#[case] value: &str,
 	#[case] should_match: bool,
@@ -301,7 +315,7 @@ fn test_type_signed_integers_matching(
 #[case("u64", "18446744073709551615", true)]
 #[case("u8", "-1", false)]
 #[case("u16", "abc", false)]
-fn test_type_unsigned_integers_matching(
+fn type_unsigned_integers_matching(
 	#[case] type_name: &str,
 	#[case] value: &str,
 	#[case] should_match: bool,
@@ -333,11 +347,7 @@ fn test_type_unsigned_integers_matching(
 #[case("f64", "-0.001", true)]
 #[case("f32", "abc", false)]
 #[case("f64", "1.2.3", false)]
-fn test_type_float_matching(
-	#[case] type_name: &str,
-	#[case] value: &str,
-	#[case] should_match: bool,
-) {
+fn type_float_matching(#[case] type_name: &str, #[case] value: &str, #[case] should_match: bool) {
 	// Arrange
 	let pattern = PathPattern::new(&format!("/items/{{<{}:n>}}/", type_name)).unwrap();
 	let path = format!("/items/{}/", value);
@@ -361,7 +371,7 @@ fn test_type_float_matching(
 #[case("a/b/c.txt", true)]
 #[case("single", true)]
 #[case("deep/nested/file.json", true)]
-fn test_type_path_matching_valid(#[case] value: &str, #[case] should_match: bool) {
+fn type_path_matching_valid(#[case] value: &str, #[case] should_match: bool) {
 	// Arrange
 	let pattern = PathPattern::new("/files/{<path:filepath>}").unwrap();
 	let path = format!("/files/{}", value);
@@ -385,7 +395,7 @@ fn test_type_path_matching_valid(#[case] value: &str, #[case] should_match: bool
 #[case("../etc/passwd")]
 #[case("a/../etc/passwd")]
 #[case("a/..")]
-fn test_path_traversal_dot_dot_rejected(#[case] dangerous_value: &str) {
+fn path_traversal_dot_dot_rejected(#[case] dangerous_value: &str) {
 	// Arrange
 	let pattern = PathPattern::new("/files/{<path:filepath>}").unwrap();
 	let path = format!("/files/{}", dangerous_value);
@@ -406,7 +416,7 @@ fn test_path_traversal_dot_dot_rejected(#[case] dangerous_value: &str) {
 #[case("%2E%2E/secret")]
 #[case("a/%2f/b")]
 #[case("a/%2F/b")]
-fn test_path_traversal_encoded_rejected(#[case] dangerous_value: &str) {
+fn path_traversal_encoded_rejected(#[case] dangerous_value: &str) {
 	// Arrange
 	let pattern = PathPattern::new("/files/{<path:filepath>}").unwrap();
 	let path = format!("/files/{}", dangerous_value);
@@ -425,7 +435,7 @@ fn test_path_traversal_encoded_rejected(#[case] dangerous_value: &str) {
 #[rstest]
 #[case("%5c..%5c")]
 #[case("a%5cpasswd")]
-fn test_path_traversal_backslash_encoded_rejected(#[case] dangerous_value: &str) {
+fn path_traversal_backslash_encoded_rejected(#[case] dangerous_value: &str) {
 	// Arrange
 	let pattern = PathPattern::new("/files/{<path:filepath>}").unwrap();
 	let path = format!("/files/{}", dangerous_value);
@@ -442,7 +452,7 @@ fn test_path_traversal_backslash_encoded_rejected(#[case] dangerous_value: &str)
 }
 
 #[rstest]
-fn test_path_param_with_null_byte_rejected() {
+fn path_param_with_null_byte_rejected() {
 	// Arrange
 	let pattern = PathPattern::new("/files/{<path:filepath>}").unwrap();
 
@@ -451,15 +461,16 @@ fn test_path_param_with_null_byte_rejected() {
 	let params = pattern.extract_params(path);
 
 	// Assert
-	// The regex .+ won't match %00 as a null byte since it's URL-encoded,
-	// but if the value were to contain %00 it should be rejected.
-	// This test documents the behavior when the literal string contains %00
-	if let Some(params) = params {
-		let filepath = params.get("filepath").unwrap();
-		assert!(
-			!filepath.contains("%00"),
-			"null byte encoded path should be rejected"
-		);
+	match params {
+		Some(params) => {
+			let filepath = params.get("filepath").unwrap();
+			assert!(
+				!filepath.contains("%00"),
+				"null byte encoded path should be rejected"
+			);
+		}
+		// Path rejection at routing level is acceptable
+		None => {}
 	}
 }
 
@@ -468,7 +479,7 @@ fn test_path_param_with_null_byte_rejected() {
 // ===================================================================
 
 #[rstest]
-fn test_extract_params_single_param() {
+fn extract_params_single_param() {
 	// Arrange
 	let pattern = PathPattern::new("/users/{id}/").unwrap();
 
@@ -480,7 +491,7 @@ fn test_extract_params_single_param() {
 }
 
 #[rstest]
-fn test_extract_params_multiple_params() {
+fn extract_params_multiple_params() {
 	// Arrange
 	let pattern = PathPattern::new("/users/{user_id}/posts/{post_id}/").unwrap();
 
@@ -493,7 +504,7 @@ fn test_extract_params_multiple_params() {
 }
 
 #[rstest]
-fn test_extract_params_typed_int_param() {
+fn extract_params_typed_int_param() {
 	// Arrange
 	let pattern = PathPattern::new("/users/{<int:id>}/").unwrap();
 
@@ -505,7 +516,7 @@ fn test_extract_params_typed_int_param() {
 }
 
 #[rstest]
-fn test_extract_params_no_match_returns_none() {
+fn extract_params_no_match_returns_none() {
 	// Arrange
 	let pattern = PathPattern::new("/users/{id}/").unwrap();
 
@@ -517,7 +528,7 @@ fn test_extract_params_no_match_returns_none() {
 }
 
 #[rstest]
-fn test_extract_params_path_type_valid() {
+fn extract_params_path_type_valid() {
 	// Arrange
 	let pattern = PathPattern::new("/files/{<path:filepath>}").unwrap();
 
@@ -533,7 +544,7 @@ fn test_extract_params_path_type_valid() {
 // ===================================================================
 
 #[rstest]
-fn test_reverse_no_params() {
+fn reverse_no_params() {
 	// Arrange
 	let pattern = PathPattern::new("/users/").unwrap();
 	let params = HashMap::new();
@@ -546,7 +557,7 @@ fn test_reverse_no_params() {
 }
 
 #[rstest]
-fn test_reverse_single_param() {
+fn reverse_single_param() {
 	// Arrange
 	let pattern = PathPattern::new("/users/{id}/").unwrap();
 	let mut params = HashMap::new();
@@ -560,7 +571,7 @@ fn test_reverse_single_param() {
 }
 
 #[rstest]
-fn test_reverse_multiple_params() {
+fn reverse_multiple_params() {
 	// Arrange
 	let pattern = PathPattern::new("/users/{user_id}/posts/{post_id}/").unwrap();
 	let mut params = HashMap::new();
@@ -575,7 +586,7 @@ fn test_reverse_multiple_params() {
 }
 
 #[rstest]
-fn test_reverse_missing_param_returns_error() {
+fn reverse_missing_param_returns_error() {
 	// Arrange
 	let pattern = PathPattern::new("/users/{id}/").unwrap();
 	let params = HashMap::new();
@@ -588,7 +599,7 @@ fn test_reverse_missing_param_returns_error() {
 }
 
 #[rstest]
-fn test_reverse_param_with_slash_rejected() {
+fn reverse_param_with_slash_rejected() {
 	// Arrange
 	let pattern = PathPattern::new("/users/{id}/").unwrap();
 	let mut params = HashMap::new();
@@ -605,7 +616,7 @@ fn test_reverse_param_with_slash_rejected() {
 }
 
 #[rstest]
-fn test_reverse_param_with_traversal_rejected() {
+fn reverse_param_with_traversal_rejected() {
 	// Arrange
 	let pattern = PathPattern::new("/users/{id}/").unwrap();
 	let mut params = HashMap::new();
@@ -626,7 +637,7 @@ fn test_reverse_param_with_traversal_rejected() {
 // ===================================================================
 
 #[rstest]
-fn test_path_matcher_linear_no_match() {
+fn path_matcher_linear_no_match() {
 	// Arrange
 	let matcher = PathMatcher::new();
 
@@ -638,7 +649,7 @@ fn test_path_matcher_linear_no_match() {
 }
 
 #[rstest]
-fn test_path_matcher_linear_static_match() {
+fn path_matcher_linear_static_match() {
 	// Arrange
 	let mut matcher = PathMatcher::new();
 	let pattern = PathPattern::new("/users/").unwrap();
@@ -655,7 +666,7 @@ fn test_path_matcher_linear_static_match() {
 }
 
 #[rstest]
-fn test_path_matcher_linear_param_match() {
+fn path_matcher_linear_param_match() {
 	// Arrange
 	let mut matcher = PathMatcher::new();
 	let pattern = PathPattern::new("/users/{id}/").unwrap();
@@ -672,7 +683,7 @@ fn test_path_matcher_linear_param_match() {
 }
 
 #[rstest]
-fn test_path_matcher_linear_first_match_wins() {
+fn path_matcher_linear_first_match_wins() {
 	// Arrange
 	let mut matcher = PathMatcher::new();
 	let pattern1 = PathPattern::new("/items/{id}/").unwrap();
@@ -694,7 +705,7 @@ fn test_path_matcher_linear_first_match_wins() {
 // ===================================================================
 
 #[rstest]
-fn test_path_matcher_radix_mode() {
+fn path_matcher_radix_mode() {
 	// Arrange
 	let mut matcher = PathMatcher::with_mode(MatchingMode::RadixTree);
 	let pattern = PathPattern::new("/users/{id}/").unwrap();
@@ -711,7 +722,7 @@ fn test_path_matcher_radix_mode() {
 }
 
 #[rstest]
-fn test_path_matcher_enable_radix_tree() {
+fn path_matcher_enable_radix_tree() {
 	// Arrange
 	let mut matcher = PathMatcher::new();
 	assert_eq!(matcher.mode(), MatchingMode::Linear);
@@ -733,32 +744,43 @@ fn test_path_matcher_enable_radix_tree() {
 // ===================================================================
 
 #[rstest]
-fn test_is_match_true_for_matching_path() {
+fn is_match_true_for_matching_path() {
 	// Arrange
 	let pattern = PathPattern::new("/users/{id}/").unwrap();
 
-	// Act & Assert
-	assert!(pattern.is_match("/users/123/"));
+	// Act
+	let matched = pattern.is_match("/users/123/");
+
+	// Assert
+	assert!(matched);
 }
 
 #[rstest]
-fn test_is_match_false_for_non_matching_path() {
+fn is_match_false_for_non_matching_path() {
 	// Arrange
 	let pattern = PathPattern::new("/users/{id}/").unwrap();
 
-	// Act & Assert
-	assert!(!pattern.is_match("/users/"));
-	assert!(!pattern.is_match("/posts/123/"));
+	// Act
+	let match_no_id = pattern.is_match("/users/");
+	let match_wrong_prefix = pattern.is_match("/posts/123/");
+
+	// Assert
+	assert!(!match_no_id);
+	assert!(!match_wrong_prefix);
 }
 
 #[rstest]
-fn test_is_match_typed_uuid_pattern() {
+fn is_match_typed_uuid_pattern() {
 	// Arrange
 	let pattern = PathPattern::new("/users/{<uuid:id>}/").unwrap();
 
-	// Act & Assert
-	assert!(pattern.is_match("/users/550e8400-e29b-41d4-a716-446655440000/"));
-	assert!(!pattern.is_match("/users/not-a-uuid/"));
+	// Act
+	let match_valid = pattern.is_match("/users/550e8400-e29b-41d4-a716-446655440000/");
+	let match_invalid = pattern.is_match("/users/not-a-uuid/");
+
+	// Assert
+	assert!(match_valid);
+	assert!(!match_invalid);
 }
 
 // ===================================================================
@@ -766,27 +788,36 @@ fn test_is_match_typed_uuid_pattern() {
 // ===================================================================
 
 #[rstest]
-fn test_typed_param_name_extracted_correctly() {
-	// Arrange & Act
+fn typed_param_name_extracted_correctly() {
+	// Arrange
 	let pattern = PathPattern::new("/users/{<int:user_id>}/posts/{<uuid:post_uuid>}/").unwrap();
 
+	// Act
+	let names = pattern.param_names();
+
 	// Assert
-	assert_eq!(pattern.param_names(), &["user_id", "post_uuid"]);
+	assert_eq!(names, &["user_id", "post_uuid"]);
 }
 
 #[rstest]
-fn test_invalid_typed_param_no_colon_is_error() {
-	// Arrange & Act
-	let result = PathPattern::new("/users/{<intid>}/");
+fn invalid_typed_param_no_colon_is_error() {
+	// Arrange
+	let pattern = "/users/{<intid>}/";
+
+	// Act
+	let result = PathPattern::new(pattern);
 
 	// Assert
 	assert!(result.is_err());
 }
 
 #[rstest]
-fn test_invalid_typed_param_empty_name_is_error() {
-	// Arrange & Act
-	let result = PathPattern::new("/users/{<int:>}/");
+fn invalid_typed_param_empty_name_is_error() {
+	// Arrange
+	let pattern = "/users/{<int:>}/";
+
+	// Act
+	let result = PathPattern::new(pattern);
 
 	// Assert
 	assert!(result.is_err());
@@ -797,11 +828,15 @@ fn test_invalid_typed_param_empty_name_is_error() {
 // ===================================================================
 
 #[rstest]
-fn test_unknown_type_spec_falls_back_to_str() {
+fn unknown_type_spec_falls_back_to_str() {
 	// Arrange
 	let pattern = PathPattern::new("/items/{<unknowntype:val>}/").unwrap();
 
-	// Act & Assert - unknown type uses [^/]+ (same as str)
-	assert!(pattern.is_match("/items/hello/"));
-	assert!(!pattern.is_match("/items/hello/world/"));
+	// Act - unknown type uses [^/]+ (same as str)
+	let match_single = pattern.is_match("/items/hello/");
+	let match_nested = pattern.is_match("/items/hello/world/");
+
+	// Assert
+	assert!(match_single);
+	assert!(!match_nested);
 }

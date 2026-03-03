@@ -159,6 +159,7 @@ pub struct ReplicatedSessionBackend<P, S> {
 	primary: Arc<P>,
 	secondary: Arc<S>,
 	strategy: ReplicationStrategy,
+	// Allow dead_code: config stored for future replication strategy customization
 	#[allow(dead_code)]
 	config: ReplicationConfig,
 	replication_tx: Option<mpsc::UnboundedSender<ReplicationEvent>>,

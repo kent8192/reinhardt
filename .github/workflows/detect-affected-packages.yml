@@ -1,0 +1,72 @@
+name: Detect Affected Packages
+
+on:
+  workflow_call:
+    outputs:
+      run-all:
+        description: "Whether to run all tests (true when global files changed or release-plz branch)"
+        value: ${{ jobs.detect.outputs.run-all }}
+      has-affected:
+        description: "Whether any affected packages were detected"
+        value: ${{ jobs.detect.outputs.has-affected }}
+      nextest-filter:
+        description: "Nextest filter expression using rdeps() for affected packages"
+        value: ${{ jobs.detect.outputs.nextest-filter }}
+      affected-packages:
+        description: "Newline-separated list of affected package names"
+        value: ${{ jobs.detect.outputs.affected-packages }}
+
+jobs:
+  detect:
+    name: Detect Affected Packages
+    runs-on: ubuntu-latest
+    outputs:
+      run-all: ${{ steps.detect.outputs.run-all }}
+      has-affected: ${{ steps.detect.outputs.has-affected }}
+      nextest-filter: ${{ steps.detect.outputs.nextest-filter }}
+      affected-packages: ${{ steps.detect.outputs.affected-packages }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Detect affected packages
+        id: detect
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [[ "$HEAD_REF" == release-plz-* ]]; then
+            echo "Release PR detected — running all tests"
+            echo "run-all=true" >> "$GITHUB_OUTPUT"
+            echo "has-affected=true" >> "$GITHUB_OUTPUT"
+            echo "nextest-filter=" >> "$GITHUB_OUTPUT"
+            echo "affected-packages=" >> "$GITHUB_OUTPUT"
+          else
+            bash .github/scripts/detect-affected-packages.sh \
+              "origin/$BASE_REF"
+          fi
+
+      - name: Summary
+        env:
+          RUN_ALL: ${{ steps.detect.outputs.run-all }}
+          HAS_AFFECTED: ${{ steps.detect.outputs.has-affected }}
+          NEXTEST_FILTER: ${{ steps.detect.outputs.nextest-filter }}
+          AFFECTED_PACKAGES: ${{ steps.detect.outputs.affected-packages }}
+        run: |
+          echo "### Affected Package Detection" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Run all**: \`$RUN_ALL\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Has affected**: \`$HAS_AFFECTED\`" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -n "$NEXTEST_FILTER" ]]; then
+            echo "- **Nextest filter**: \`$NEXTEST_FILTER\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -n "$AFFECTED_PACKAGES" ]]; then
+            echo "- **Affected packages**:" >> "$GITHUB_STEP_SUMMARY"
+            while IFS= read -r pkg; do
+              [[ -z "$pkg" ]] && continue
+              echo "  - \`$pkg\`" >> "$GITHUB_STEP_SUMMARY"
+            done <<< "$AFFECTED_PACKAGES"
+          fi

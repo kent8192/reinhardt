@@ -1135,6 +1135,7 @@ impl SQLiteIntrospector {
 			to: String,
 			on_update: String,
 			on_delete: String,
+			// Allow dead_code: field required for SQLite PRAGMA row deserialization
 			#[allow(dead_code)]
 			r#match: String,
 		}
@@ -1207,20 +1208,25 @@ impl SQLiteIntrospector {
 	) -> Result<HashMap<String, IndexInfo>> {
 		#[derive(sqlx::FromRow)]
 		struct IndexListRow {
+			// Allow dead_code: field required for SQLite PRAGMA row deserialization
 			#[allow(dead_code)]
 			seq: i64,
 			name: String,
 			unique: i64,
+			// Allow dead_code: field required for SQLite PRAGMA row deserialization
 			#[allow(dead_code)]
 			origin: String,
+			// Allow dead_code: field required for SQLite PRAGMA row deserialization
 			#[allow(dead_code)]
 			partial: i64,
 		}
 
 		#[derive(sqlx::FromRow)]
 		struct IndexInfoRow {
+			// Allow dead_code: field required for SQLite PRAGMA row deserialization
 			#[allow(dead_code)]
 			seqno: i64,
+			// Allow dead_code: field required for SQLite PRAGMA row deserialization
 			#[allow(dead_code)]
 			cid: i64,
 			name: Option<String>,
@@ -1439,14 +1445,17 @@ impl SQLiteIntrospector {
 	) -> Result<Vec<UniqueConstraintInfo>> {
 		#[derive(sqlx::FromRow)]
 		struct IndexListRow {
+			// Allow dead_code: field required for SQLite PRAGMA row deserialization
 			#[allow(dead_code)]
 			// Column sequence number from PRAGMA index_list
 			seq: i64,
 			name: String,
+			// Allow dead_code: field required for SQLite PRAGMA row deserialization
 			#[allow(dead_code)]
 			// Whether the index enforces uniqueness
 			unique: i64,
 			origin: String,
+			// Allow dead_code: field required for SQLite PRAGMA row deserialization
 			#[allow(dead_code)]
 			// Whether this is a partial index
 			partial: i64,
@@ -1454,9 +1463,11 @@ impl SQLiteIntrospector {
 
 		#[derive(sqlx::FromRow)]
 		struct IndexInfoRow {
+			// Allow dead_code: field required for SQLite PRAGMA row deserialization
 			#[allow(dead_code)]
 			// Column sequence number within the index
 			seqno: i64,
+			// Allow dead_code: field required for SQLite PRAGMA row deserialization
 			#[allow(dead_code)]
 			// Column ID in the table
 			cid: i64,
@@ -1497,6 +1508,7 @@ impl SQLiteIntrospector {
 	async fn introspect_table(&self, table_name: &str) -> Result<TableInfo> {
 		#[derive(sqlx::FromRow)]
 		struct TableInfoRow {
+			// Allow dead_code: field required for SQLite PRAGMA row deserialization
 			#[allow(dead_code)]
 			// Column index from PRAGMA table_info
 			cid: i64,
@@ -1617,6 +1629,7 @@ impl DatabaseIntrospector for SQLiteIntrospector {
 	async fn read_table(&self, table_name: &str) -> Result<Option<TableInfo>> {
 		#[derive(sqlx::FromRow)]
 		struct TableRow {
+			// Allow dead_code: field required for SQLite PRAGMA row deserialization
 			#[allow(dead_code)]
 			// Table name from sqlite_master
 			name: String,

@@ -270,6 +270,7 @@ mod tests {
 	use reinhardt_core::validators::TableName;
 	use serde::{Deserialize, Serialize};
 
+	// Allow dead_code: test model struct for async query tests
 	#[allow(dead_code)]
 	#[derive(Debug, Clone, Serialize, Deserialize)]
 	struct TestModel {
@@ -285,6 +286,7 @@ mod tests {
 		}
 	}
 
+	// Allow dead_code: test constant for async query tests
 	#[allow(dead_code)]
 	const TEST_MODEL_TABLE: TableName = TableName::new_const("test_model");
 

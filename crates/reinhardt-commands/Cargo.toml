@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-commands"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -14,7 +14,7 @@ reinhardt-conf = { workspace = true }
 reinhardt-dentdelion = { workspace = true, features = ["cli"], optional = true }
 reinhardt-urls = { workspace = true, features = ["routers", "database"], optional = true }
 reinhardt-db = { workspace = true, features = ["migrations", "backends-settings", "orm", "settings"], optional = true }
-reinhardt-test = { path = "../reinhardt-test", version = "0.1.0-rc.1", optional = true }
+reinhardt-test = { path = "../reinhardt-test", version = "0.1.0-rc.2", optional = true }
 reinhardt-di = { workspace = true, optional = true }
 reinhardt-http = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }

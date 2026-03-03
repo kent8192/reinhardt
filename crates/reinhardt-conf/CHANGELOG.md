@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.1.0-rc.1...reinhardt-conf@v0.1.0-rc.2) - 2026-03-03
+
+### Fixed
+
+- *(conf)* replace parking_lot::Mutex with tokio::sync::Mutex in DynamicSettings hot-reload
+- *(deps)* align workspace dependency versions
+
+### Other
+
+- resolve conflict with main (criterion version)
+
 ## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.1.0-alpha.14...reinhardt-conf@v0.1.0-rc.1) - 2026-02-23
 
 ### Maintenance

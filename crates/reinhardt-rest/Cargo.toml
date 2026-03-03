@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-rest"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 description = "REST API framework aggregator for Reinhardt"
 keywords = ["rest", "api", "web", "framework", "django"]
 categories = ["web-programming", "web-programming::http-server"]

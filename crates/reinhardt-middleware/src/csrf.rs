@@ -142,7 +142,7 @@ impl CsrfMiddleware {
 		// which are attacker-controlled.
 		use rand::RngCore;
 		let mut random_bytes = [0u8; 32];
-		rand::thread_rng().fill_bytes(&mut random_bytes);
+		rand::rng().fill_bytes(&mut random_bytes);
 		hex::encode(random_bytes)
 	}
 

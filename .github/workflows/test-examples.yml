@@ -14,44 +14,9 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Check if PR branch is behind base branch.
-  # When out-of-date, skip all jobs to save runner costs.
-  # The PR author should update the branch before CI runs.
-  check-branch-status:
-    name: Check Branch Status
-    if: github.event_name == 'pull_request' && github.event.action != 'closed'
-    runs-on: ubuntu-latest
-    outputs:
-      is-behind: ${{ steps.check.outputs.is-behind }}
-    steps:
-      - name: Check if PR branch is behind base
-        id: check
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { data } = await github.rest.repos.compareCommitsWithBasehead({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              basehead: `${context.payload.pull_request.base.ref}...${context.payload.pull_request.head.ref}`,
-            });
-            const isBehind = data.behind_by > 0;
-            core.setOutput('is-behind', isBehind.toString());
-            if (isBehind) {
-              core.warning(
-                `PR branch is ${data.behind_by} commit(s) behind ` +
-                `${context.payload.pull_request.base.ref}. ` +
-                `Skipping CI — please update your branch.`
-              );
-            }
-
   test-local-examples:
     name: Test ${{ matrix.example }}
-    needs: [check-branch-status]
-    if: >-
-      ${{
-        github.event.action != 'closed' &&
-        (github.event_name != 'pull_request' || needs.check-branch-status.outputs.is-behind != 'true')
-      }}
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

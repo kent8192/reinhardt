@@ -22,7 +22,7 @@ pub enum LoadStrategy {
 #[async_trait]
 pub trait LazyLoadable: Send + Sync {
 	/// The type of the loaded data
-	type Data: Send + Sync;
+	type Data: Clone + Send + Sync;
 
 	/// Check if data is loaded
 	fn is_loaded(&self) -> bool;
@@ -31,16 +31,16 @@ pub trait LazyLoadable: Send + Sync {
 	async fn load(&mut self) -> ProxyResult<()>;
 
 	/// Get the loaded data, loading if necessary
-	async fn get(&mut self) -> ProxyResult<&Self::Data>;
+	async fn get(&mut self) -> ProxyResult<Self::Data>;
 
 	/// Get the loaded data without loading (returns None if not loaded)
-	fn get_if_loaded(&self) -> Option<&Self::Data>;
+	fn get_if_loaded(&self) -> Option<Self::Data>;
 }
 
 /// Lazy-loaded wrapper for relationship data
 pub struct LazyLoaded<T, F>
 where
-	T: Send + Sync,
+	T: Clone + Send + Sync,
 	F: Fn() -> futures::future::BoxFuture<'static, ProxyResult<T>> + Send + Sync,
 {
 	/// The cached data
@@ -51,7 +51,7 @@ where
 
 impl<T, F> LazyLoaded<T, F>
 where
-	T: Send + Sync,
+	T: Clone + Send + Sync,
 	F: Fn() -> futures::future::BoxFuture<'static, ProxyResult<T>> + Send + Sync,
 {
 	/// Create a new lazy-loaded value
@@ -122,17 +122,12 @@ where
 	}
 
 	/// Get the loaded data, loading if necessary
-	pub async fn get(&self) -> ProxyResult<&T> {
+	pub async fn get(&self) -> ProxyResult<T> {
 		// Ensure data is loaded
 		self.load().await?;
 
-		// This is safe because we just loaded the data
 		let guard = self.data.read().unwrap();
-		unsafe {
-			// SAFETY: We just ensured data is loaded above
-			let ptr = guard.as_ref().unwrap() as *const T;
-			Ok(&*ptr)
-		}
+		Ok(guard.as_ref().unwrap().clone())
 	}
 
 	/// Get the loaded data without loading (returns None if not loaded)
@@ -149,17 +144,9 @@ where
 	/// // Returns None since not loaded yet
 	/// assert!(lazy.get_if_loaded().is_none());
 	/// ```
-	pub fn get_if_loaded(&self) -> Option<&T> {
+	pub fn get_if_loaded(&self) -> Option<T> {
 		let guard = self.data.read().unwrap();
-		if guard.is_some() {
-			unsafe {
-				// SAFETY: We checked that it's Some
-				let ptr = guard.as_ref().unwrap() as *const T;
-				Some(&*ptr)
-			}
-		} else {
-			None
-		}
+		guard.as_ref().cloned()
 	}
 
 	/// Reset the lazy-loaded value, forcing a reload on next access
@@ -305,7 +292,7 @@ mod tests {
 		assert!(lazy.is_loaded());
 
 		let data = lazy.get_if_loaded().unwrap();
-		assert_eq!(data, &vec![1, 2, 3]);
+		assert_eq!(data, vec![1, 2, 3]);
 	}
 
 	#[tokio::test]
@@ -315,7 +302,7 @@ mod tests {
 		assert!(lazy.is_loaded());
 
 		let data = lazy.get_if_loaded().unwrap();
-		assert_eq!(data, &vec![1, 2, 3]);
+		assert_eq!(data, vec![1, 2, 3]);
 	}
 
 	#[test]
@@ -327,6 +314,63 @@ mod tests {
 
 		assert_eq!(config.max_depth, 5);
 		assert_eq!(config.relationships, vec!["posts", "comments"]);
+	}
+
+	#[tokio::test]
+	async fn test_lazy_loaded_get_returns_owned_clone() {
+		// Arrange
+		let lazy = LazyLoaded::new(|| Box::pin(async { Ok(vec![10, 20, 30]) }));
+
+		// Act - get() loads and returns owned T via clone
+		let data = lazy.get().await.unwrap();
+
+		// Assert
+		assert_eq!(data, vec![10, 20, 30]);
+		assert!(lazy.is_loaded());
+	}
+
+	#[tokio::test]
+	async fn test_lazy_loaded_get_if_loaded_returns_none_when_not_loaded() {
+		// Arrange
+		let lazy = LazyLoaded::new(|| Box::pin(async { Ok(42) }));
+
+		// Act
+		let result = lazy.get_if_loaded();
+
+		// Assert
+		assert_eq!(result, None);
+	}
+
+	#[tokio::test]
+	async fn test_lazy_loaded_get_if_loaded_returns_cloned_value() {
+		// Arrange
+		let lazy = LazyLoaded::preloaded(String::from("hello"), || {
+			Box::pin(async { Ok(String::from("world")) })
+		});
+
+		// Act
+		let result = lazy.get_if_loaded();
+
+		// Assert
+		assert_eq!(result, Some(String::from("hello")));
+	}
+
+	#[tokio::test]
+	async fn test_lazy_loaded_reset_forces_reload() {
+		// Arrange
+		let lazy = LazyLoaded::preloaded(vec![1], || Box::pin(async { Ok(vec![2]) }));
+		assert!(lazy.is_loaded());
+
+		// Act
+		lazy.reset();
+
+		// Assert
+		assert!(!lazy.is_loaded());
+		assert_eq!(lazy.get_if_loaded(), None);
+
+		// Reload
+		let data = lazy.get().await.unwrap();
+		assert_eq!(data, vec![2]);
 	}
 
 	#[test]

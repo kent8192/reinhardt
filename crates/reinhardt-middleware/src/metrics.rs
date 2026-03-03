@@ -32,26 +32,35 @@ impl MetricsStore {
 	/// Record a request
 	pub fn record_request(&self, method: &str, path: &str) {
 		let key = format!("{}:{}", method, path);
-		let mut counts = self.request_count.write().unwrap();
+		let mut counts = self
+			.request_count
+			.write()
+			.unwrap_or_else(|e| e.into_inner());
 		*counts.entry(key).or_insert(0) += 1;
 	}
 
 	/// Record response time
 	pub fn record_response_time(&self, method: &str, path: &str, duration_ms: f64) {
 		let key = format!("{}:{}", method, path);
-		let mut buckets = self.response_time_buckets.write().unwrap();
+		let mut buckets = self
+			.response_time_buckets
+			.write()
+			.unwrap_or_else(|e| e.into_inner());
 		buckets.entry(key).or_default().push(duration_ms);
 	}
 
 	/// Record status code
 	pub fn record_status_code(&self, status: u16) {
-		let mut codes = self.status_codes.write().unwrap();
+		let mut codes = self.status_codes.write().unwrap_or_else(|e| e.into_inner());
 		*codes.entry(status).or_insert(0) += 1;
 	}
 
 	/// Set a custom metric
 	pub fn set_custom_metric(&self, name: String, value: f64) {
-		let mut metrics = self.custom_metrics.write().unwrap();
+		let mut metrics = self
+			.custom_metrics
+			.write()
+			.unwrap_or_else(|e| e.into_inner());
 		metrics.insert(name, value);
 	}
 
@@ -62,7 +71,7 @@ impl MetricsStore {
 		// Request counts
 		output.push_str("# HELP http_requests_total Total number of HTTP requests\n");
 		output.push_str("# TYPE http_requests_total counter\n");
-		let counts = self.request_count.read().unwrap();
+		let counts = self.request_count.read().unwrap_or_else(|e| e.into_inner());
 		for (key, count) in counts.iter() {
 			let parts: Vec<&str> = key.split(':').collect();
 			if parts.len() == 2 {
@@ -76,7 +85,10 @@ impl MetricsStore {
 		// Response time summary
 		output.push_str("\n# HELP http_response_time_seconds HTTP response time in seconds\n");
 		output.push_str("# TYPE http_response_time_seconds summary\n");
-		let buckets = self.response_time_buckets.read().unwrap();
+		let buckets = self
+			.response_time_buckets
+			.read()
+			.unwrap_or_else(|e| e.into_inner());
 		for (key, times) in buckets.iter() {
 			let parts: Vec<&str> = key.split(':').collect();
 			if parts.len() == 2 && !times.is_empty() {
@@ -128,7 +140,7 @@ impl MetricsStore {
 			"\n# HELP http_responses_total Total number of HTTP responses by status code\n",
 		);
 		output.push_str("# TYPE http_responses_total counter\n");
-		let codes = self.status_codes.read().unwrap();
+		let codes = self.status_codes.read().unwrap_or_else(|e| e.into_inner());
 		for (code, count) in codes.iter() {
 			output.push_str(&format!(
 				"http_responses_total{{status=\"{}\"}} {}\n",
@@ -137,7 +149,10 @@ impl MetricsStore {
 		}
 
 		// Custom metrics
-		let custom = self.custom_metrics.read().unwrap();
+		let custom = self
+			.custom_metrics
+			.read()
+			.unwrap_or_else(|e| e.into_inner());
 		if !custom.is_empty() {
 			output.push_str("\n# Custom metrics\n");
 			for (name, value) in custom.iter() {
@@ -150,26 +165,52 @@ impl MetricsStore {
 
 	/// Reset all metrics
 	pub fn reset(&self) {
-		self.request_count.write().unwrap().clear();
-		self.response_time_buckets.write().unwrap().clear();
-		self.status_codes.write().unwrap().clear();
-		self.custom_metrics.write().unwrap().clear();
+		self.request_count
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.clear();
+		self.response_time_buckets
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.clear();
+		self.status_codes
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.clear();
+		self.custom_metrics
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.clear();
 	}
 
 	/// Get total request count
 	pub fn total_requests(&self) -> u64 {
-		self.request_count.read().unwrap().values().sum()
+		self.request_count
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.values()
+			.sum()
 	}
 
 	/// Get request count for specific method and path
 	pub fn request_count(&self, method: &str, path: &str) -> u64 {
 		let key = format!("{}:{}", method, path);
-		*self.request_count.read().unwrap().get(&key).unwrap_or(&0)
+		*self
+			.request_count
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.get(&key)
+			.unwrap_or(&0)
 	}
 
 	/// Get status code count
 	pub fn status_count(&self, status: u16) -> u64 {
-		*self.status_codes.read().unwrap().get(&status).unwrap_or(&0)
+		*self
+			.status_codes
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.get(&status)
+			.unwrap_or(&0)
 	}
 }
 

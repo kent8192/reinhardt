@@ -232,12 +232,12 @@ pub fn todo_viewset() -> ModelViewSet<Todo, TodoSerializer> {
 Register in `todos/urls.rs`:
 
 ```rust
-use reinhardt::routers::UnifiedRouter;
+use reinhardt::routers::DefaultRouter;
 use std::sync::Arc;
 use crate::views::todo_viewset;
 
-pub fn url_patterns() -> UnifiedRouter {
-    UnifiedRouter::new()
+pub fn url_patterns() -> DefaultRouter {
+    DefaultRouter::new()
         .register_viewset("/todos", Arc::new(todo_viewset()))
 }
 ```
@@ -249,8 +249,8 @@ use reinhardt::prelude::*;
 use reinhardt::routes;
 
 #[routes]
-pub fn routes() -> UnifiedRouter {
-    UnifiedRouter::new()
+pub fn routes() -> DefaultRouter {
+    DefaultRouter::new()
         .mount("/api/", todos::urls::url_patterns())
 }
 ```

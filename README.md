@@ -1051,6 +1051,12 @@ We love contributions! Please read our [Contributing Guide](CONTRIBUTING.md) to 
  </picture>
 </a>
 
+## Copyright
+
+Copyright © 2026 Tachyon Inc. All rights reserved.
+
+Developed by Tachyon Inc.
+
 ## License
 
 This project is licensed under the [BSD 3-Clause License](LICENSE).

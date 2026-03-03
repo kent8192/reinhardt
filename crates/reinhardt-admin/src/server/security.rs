@@ -237,7 +237,7 @@ pub fn generate_csrf_token() -> String {
 	use base64::Engine;
 	let mut bytes = vec![0u8; CSRF_TOKEN_BYTES];
 	// Use getrandom for cryptographically secure randomness
-	getrandom::getrandom(&mut bytes).expect("Failed to generate random bytes for CSRF token");
+	getrandom::fill(&mut bytes).expect("Failed to generate random bytes for CSRF token");
 	base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes)
 }
 

@@ -104,8 +104,8 @@ async-graphql = { workspace = true, optional = true }
 
 # Optional dependencies for websockets feature
 # Note: websockets feature uses top-level reinhardt-websockets crate
-tokio-tungstenite = "0.21"
-lapin = "2.3"
+tokio-tungstenite = "0.28.0"
+lapin = "3.7.2"
 reinhardt-rest = { workspace = true, features = ["serializers", "parsers"] }
 reinhardt-core = { workspace = true, features = [
   "types",

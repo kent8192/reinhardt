@@ -21,7 +21,7 @@ jobs:
   semver-checks:
     name: SemVer Compatibility Check
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Free Disk Space (Ubuntu)
         if: ${{ !contains(inputs.runner || '', 'self-hosted') }}
@@ -83,12 +83,24 @@ jobs:
             --all-features \
             --baseline-rev "${BASELINE_REV:-HEAD~1}"
 
-      # On normal PRs, fix the release type to minor to guarantee that no breaking
-      # changes (which require a major version bump) are merged into main.
-      # Any API-breaking change will cause this check to fail, enforcing that
-      # breaking changes must go through an explicit major-version release PR.
-      - name: Run cargo-semver-checks (normal PR - minor release type)
+      # Check if any workspace crate has a pre-release version (e.g. -rc, -alpha, -beta).
+      # Per SemVer spec, pre-release versions have no API stability guarantees,
+      # so semver-checks are skipped entirely for pre-release crates.
+      - name: Detect pre-release versions
         if: ${{ !startsWith(github.head_ref || github.ref_name, 'release-plz-') }}
+        id: detect-prerelease
+        run: |
+          if grep -rqP '^version\s*=\s*"[^"]*-' crates/*/Cargo.toml; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Pre-release version detected. Skipping semver-check (no API stability guarantee)."
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # On normal PRs with stable versions, enforce minor release type to block
+      # breaking changes from being merged into main.
+      - name: Run cargo-semver-checks (normal PR - stable versions only)
+        if: ${{ !startsWith(github.head_ref || github.ref_name, 'release-plz-') && steps.detect-prerelease.outputs.is_prerelease != 'true' }}
         env:
           BASELINE_REV: ${{ github.event.pull_request.base.sha }}
         run: |

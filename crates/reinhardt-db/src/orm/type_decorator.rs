@@ -78,7 +78,7 @@ impl EncryptedString {
 
 		// Generate a random 12-byte nonce
 		let mut nonce_bytes = [0u8; 12];
-		rand::thread_rng().fill_bytes(&mut nonce_bytes);
+		rand::rng().fill_bytes(&mut nonce_bytes);
 		let nonce = Nonce::from(nonce_bytes);
 
 		// Encrypt the data

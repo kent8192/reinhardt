@@ -44,7 +44,7 @@ aquamarine = { workspace = true }
 sha2 = "0.10"
 hmac = "0.12"
 hex = "0.4"
-rand = "0.9"
+rand = { workspace = true }
 ipnet = "2.10"
 regex = "1.11"
 chrono = { workspace = true }
@@ -129,6 +129,7 @@ parallel = ["dep:rayon"]
 i18n = ["dep:fluent-bundle", "dep:unic-langid"]
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio = { version = "1", features = ["full", "macros", "rt", "test-util"] }
 bytes = "1.0"
 hyper = "1.0"

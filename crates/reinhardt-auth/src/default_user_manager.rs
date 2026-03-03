@@ -112,19 +112,19 @@ impl DefaultUserManager {
 
 	/// Gets a user by ID (for internal use)
 	pub fn get_by_id(&self, id: Uuid) -> Option<DefaultUser> {
-		let users = self.users.read().unwrap();
+		let users = self.users.read().unwrap_or_else(|e| e.into_inner());
 		users.get(&id).cloned()
 	}
 
 	/// Gets a user by username (for internal use)
 	pub fn get_by_username(&self, username: &str) -> Option<DefaultUser> {
-		let users = self.users.read().unwrap();
+		let users = self.users.read().unwrap_or_else(|e| e.into_inner());
 		users.values().find(|u| u.username == username).cloned()
 	}
 
 	/// Lists all users (for internal use)
 	pub fn list_all(&self) -> Vec<DefaultUser> {
-		let users = self.users.read().unwrap();
+		let users = self.users.read().unwrap_or_else(|e| e.into_inner());
 		users.values().cloned().collect()
 	}
 }
@@ -201,7 +201,7 @@ impl BaseUserManager<DefaultUser> for DefaultUserManager {
 		}
 
 		// Store user
-		let mut users = self.users.write().unwrap();
+		let mut users = self.users.write().unwrap_or_else(|e| e.into_inner());
 		users.insert(user.id, user.clone());
 
 		Ok(user)
@@ -221,7 +221,7 @@ impl BaseUserManager<DefaultUser> for DefaultUserManager {
 		user.is_superuser = true;
 
 		// Update storage
-		let mut users = self.users.write().unwrap();
+		let mut users = self.users.write().unwrap_or_else(|e| e.into_inner());
 		users.insert(user.id, user.clone());
 
 		Ok(user)

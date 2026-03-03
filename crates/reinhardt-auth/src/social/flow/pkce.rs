@@ -3,7 +3,7 @@
 //! Implements RFC 7636 for secure authorization code flow.
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use rand::{Rng, distributions::Alphanumeric, thread_rng};
+use rand::{Rng, distr::Alphanumeric};
 use sha2::{Digest, Sha256};
 
 /// Code verifier for PKCE flow
@@ -94,7 +94,7 @@ impl PkceFlow {
 	/// ```
 	pub fn generate() -> (CodeVerifier, CodeChallenge) {
 		// Generate verifier: 128 random alphanumeric characters
-		let verifier_str: String = thread_rng()
+		let verifier_str: String = rand::rng()
 			.sample_iter(&Alphanumeric)
 			.take(128)
 			.map(char::from)

@@ -126,6 +126,7 @@ parking_lot = "0.12"
 maxminddb = { version = "0.26.0", optional = true }
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"]}
 tokio-test = "0.4"
 uuid = { version = "1.0", features = ["v4"] }

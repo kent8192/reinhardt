@@ -593,6 +593,7 @@ mod tests {
 		}
 	}
 
+	// Allow dead_code: test model struct for polymorphic query tests
 	#[allow(dead_code)]
 	#[derive(Debug, Clone, Serialize, Deserialize)]
 	struct Post {
@@ -600,6 +601,7 @@ mod tests {
 		title: String,
 	}
 
+	// Allow dead_code: test constant for polymorphic query tests
 	#[allow(dead_code)]
 	const POST_TABLE: TableName = TableName::new_const("posts");
 

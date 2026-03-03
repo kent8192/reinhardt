@@ -79,7 +79,10 @@ impl Signal {
 	/// ```
 	pub fn connect(&self, receiver: SignalReceiver) {
 		// Convert Box to Arc for cloneable internal storage
-		self.receivers.lock().unwrap().push(Arc::from(receiver));
+		self.receivers
+			.lock()
+			.unwrap_or_else(|e| e.into_inner())
+			.push(Arc::from(receiver));
 	}
 
 	/// Send the signal to all connected receivers
@@ -103,7 +106,7 @@ impl Signal {
 		// This prevents lock contention when receivers call connect/disconnect,
 		// and avoids holding the lock during potentially long-running handler execution.
 		let snapshot: Vec<InternalReceiver> = {
-			let guard = self.receivers.lock().unwrap();
+			let guard = self.receivers.lock().unwrap_or_else(|e| e.into_inner());
 			guard.iter().map(Arc::clone).collect()
 		};
 		for receiver in &snapshot {
@@ -126,7 +129,10 @@ impl Signal {
 	/// assert_eq!(signal.receiver_count(), 0);
 	/// ```
 	pub fn disconnect_all(&self) {
-		self.receivers.lock().unwrap().clear();
+		self.receivers
+			.lock()
+			.unwrap_or_else(|e| e.into_inner())
+			.clear();
 	}
 
 	/// Get the number of connected receivers
@@ -143,7 +149,10 @@ impl Signal {
 	/// assert_eq!(signal.receiver_count(), 1);
 	/// ```
 	pub fn receiver_count(&self) -> usize {
-		self.receivers.lock().unwrap().len()
+		self.receivers
+			.lock()
+			.unwrap_or_else(|e| e.into_inner())
+			.len()
 	}
 }
 

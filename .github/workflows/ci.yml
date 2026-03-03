@@ -20,37 +20,20 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  # Check if PR branch is behind base branch.
-  # When out-of-date, skip all CI jobs to save runner costs.
-  # The PR author should update the branch before CI runs.
+  # Check if PR branch has merge conflicts.
+  # When conflicts exist, skip all CI jobs to save runner costs.
   check-branch-status:
     name: Check Branch Status
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
-      is-behind: ${{ steps.check.outputs.is-behind }}
       has-conflicts: ${{ steps.check.outputs.has-conflicts }}
     steps:
-      - name: Check if PR branch is behind base
+      - name: Check if PR has merge conflicts
         id: check
         uses: actions/github-script@v7
         with:
           script: |
-            const { data } = await github.rest.repos.compareCommitsWithBasehead({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              basehead: `${context.payload.pull_request.base.ref}...${context.payload.pull_request.head.ref}`,
-            });
-            const isBehind = data.behind_by > 0;
-            core.setOutput('is-behind', isBehind.toString());
-            if (isBehind) {
-              core.warning(
-                `PR branch is ${data.behind_by} commit(s) behind ` +
-                `${context.payload.pull_request.base.ref}. ` +
-                `Skipping CI — please update your branch.`
-              );
-            }
-
             const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -91,11 +74,20 @@ jobs:
             echo 'cargo-build-jobs=1' >> "$GITHUB_OUTPUT"
           fi
 
+  # Detect which packages are affected by the PR changes.
+  # Runs in parallel with Phase 1 checks to minimize latency.
+  # On release-plz branches or global file changes, all tests run.
+  detect-affected:
+    name: Detect Affected Packages
+    needs: [check-branch-status]
+    if: needs.check-branch-status.outputs.has-conflicts != 'true'
+    uses: ./.github/workflows/detect-affected-packages.yml
+
   # Call all reusable workflows
   check:
     name: Check
     needs: [determine-runner, check-branch-status]
-    if: needs.check-branch-status.outputs.is-behind != 'true' && needs.check-branch-status.outputs.has-conflicts != 'true'
+    if: needs.check-branch-status.outputs.has-conflicts != 'true'
     uses: ./.github/workflows/check.yml
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
@@ -104,7 +96,7 @@ jobs:
   fmt:
     name: Format
     needs: [determine-runner, check-branch-status]
-    if: needs.check-branch-status.outputs.is-behind != 'true' && needs.check-branch-status.outputs.has-conflicts != 'true'
+    if: needs.check-branch-status.outputs.has-conflicts != 'true'
     uses: ./.github/workflows/fmt.yml
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
@@ -112,7 +104,7 @@ jobs:
   clippy:
     name: Clippy
     needs: [determine-runner, check-branch-status]
-    if: needs.check-branch-status.outputs.is-behind != 'true' && needs.check-branch-status.outputs.has-conflicts != 'true'
+    if: needs.check-branch-status.outputs.has-conflicts != 'true'
     uses: ./.github/workflows/clippy.yml
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
@@ -121,7 +113,7 @@ jobs:
   publish-check:
     name: Publish Check
     needs: [determine-runner, check-branch-status]
-    if: needs.check-branch-status.outputs.is-behind != 'true' && needs.check-branch-status.outputs.has-conflicts != 'true'
+    if: needs.check-branch-status.outputs.has-conflicts != 'true'
     uses: ./.github/workflows/publish-check.yml
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
@@ -130,7 +122,7 @@ jobs:
   todo-check:
     name: TODO Check
     needs: [determine-runner, check-branch-status]
-    if: needs.check-branch-status.outputs.is-behind != 'true' && needs.check-branch-status.outputs.has-conflicts != 'true'
+    if: needs.check-branch-status.outputs.has-conflicts != 'true'
     uses: ./.github/workflows/todo-check.yml
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
@@ -139,7 +131,7 @@ jobs:
   semver-check:
     name: SemVer Check
     needs: [determine-runner, check-branch-status]
-    if: needs.check-branch-status.outputs.is-behind != 'true' && needs.check-branch-status.outputs.has-conflicts != 'true'
+    if: needs.check-branch-status.outputs.has-conflicts != 'true'
     uses: ./.github/workflows/semver-check.yml
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
@@ -150,7 +142,6 @@ jobs:
     needs: [determine-runner, check-branch-status]
     if: >-
       ${{
-        needs.check-branch-status.outputs.is-behind != 'true' &&
         needs.check-branch-status.outputs.has-conflicts != 'true' &&
         !startsWith(github.head_ref || '', 'release-plz-')
       }}
@@ -166,38 +157,50 @@ jobs:
   unit-test:
     name: Unit Tests
     uses: ./.github/workflows/unit-test.yml
-    needs: [check, fmt, clippy, determine-runner]
+    needs: [check, fmt, clippy, determine-runner, detect-affected]
+    if: needs.detect-affected.outputs.has-affected == 'true'
     secrets: inherit
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
+      nextest-filter: ${{ needs.detect-affected.outputs.nextest-filter }}
+      run-all: ${{ needs.detect-affected.outputs.run-all }}
 
   intra-crate-integration-test:
     name: Intra-Crate Integration Tests
     uses: ./.github/workflows/intra-crate-integration-test.yml
-    needs: [check, fmt, clippy, determine-runner]
+    needs: [check, fmt, clippy, determine-runner, detect-affected]
+    if: needs.detect-affected.outputs.has-affected == 'true'
     secrets: inherit
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
+      nextest-filter: ${{ needs.detect-affected.outputs.nextest-filter }}
+      run-all: ${{ needs.detect-affected.outputs.run-all }}
 
   cross-crate-integration-test:
     name: Cross-Crate Integration Tests
     uses: ./.github/workflows/cross-crate-integration-test.yml
-    needs: [check, fmt, clippy, determine-runner]
+    needs: [check, fmt, clippy, determine-runner, detect-affected]
+    if: needs.detect-affected.outputs.has-affected == 'true'
     secrets: inherit
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
+      nextest-filter: ${{ needs.detect-affected.outputs.nextest-filter }}
+      run-all: ${{ needs.detect-affected.outputs.run-all }}
 
   doc-test:
     name: Documentation Tests
     uses: ./.github/workflows/doc-test.yml
-    needs: [check, fmt, clippy, determine-runner]
+    needs: [check, fmt, clippy, determine-runner, detect-affected]
+    if: needs.detect-affected.outputs.has-affected == 'true'
     secrets: inherit
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
+      affected-packages: ${{ needs.detect-affected.outputs.affected-packages }}
+      run-all: ${{ needs.detect-affected.outputs.run-all }}
 
   docs-rs-check:
     name: Docs.rs Build Check
@@ -210,11 +213,14 @@ jobs:
   coverage:
     name: Coverage
     uses: ./.github/workflows/coverage.yml
-    needs: [check, fmt, clippy, determine-runner]
+    needs: [check, fmt, clippy, determine-runner, detect-affected]
+    if: needs.detect-affected.outputs.has-affected == 'true'
     secrets: inherit
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
+      nextest-filter: ${{ needs.detect-affected.outputs.nextest-filter }}
+      run-all: ${{ needs.detect-affected.outputs.run-all }}
 
   cross-platform-check:
     name: Cross-Platform Check
@@ -227,11 +233,19 @@ jobs:
   ui-test:
     name: UI Tests
     uses: ./.github/workflows/ui-test.yml
-    needs: [unit-test, intra-crate-integration-test, cross-crate-integration-test, determine-runner]
+    needs: [unit-test, intra-crate-integration-test, cross-crate-integration-test, determine-runner, detect-affected]
+    if: |
+      always() &&
+      needs.detect-affected.outputs.has-affected == 'true' &&
+      !contains(needs.unit-test.result, 'failure') &&
+      !contains(needs.intra-crate-integration-test.result, 'failure') &&
+      !contains(needs.cross-crate-integration-test.result, 'failure')
     secrets: inherit
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
+      nextest-filter: ${{ needs.detect-affected.outputs.nextest-filter }}
+      run-all: ${{ needs.detect-affected.outputs.run-all }}
 
   examples-test:
     name: Examples Tests
@@ -258,6 +272,7 @@ jobs:
     needs:
       - check-branch-status
       - determine-runner
+      - detect-affected
       - check
       - fmt
       - clippy
@@ -278,16 +293,8 @@ jobs:
     steps:
       - name: Verify all required checks passed
         env:
-          IS_BEHIND: ${{ needs.check-branch-status.outputs.is-behind }}
           HAS_CONFLICTS: ${{ needs.check-branch-status.outputs.has-conflicts }}
         run: |
-          # If PR branch is behind base, all jobs are expected to be skipped
-          if [[ "$IS_BEHIND" == "true" ]]; then
-            echo "::error::PR branch is out-of-date with base branch. All CI checks were skipped."
-            echo "Please update your branch and push again to trigger CI."
-            exit 1
-          fi
-
           # If PR has merge conflicts, all jobs are expected to be skipped
           if [[ "$HAS_CONFLICTS" == "true" ]]; then
             echo "::error::PR has merge conflicts. All CI checks were skipped."
@@ -295,30 +302,51 @@ jobs:
             exit 1
           fi
 
-          required_results=(
-            "${{ needs.check.result }}"
-            "${{ needs.fmt.result }}"
-            "${{ needs.clippy.result }}"
-            "${{ needs.publish-check.result }}"
-            "${{ needs.todo-check.result }}"
-            "${{ needs.semver-check.result }}"
-            "${{ needs.unit-test.result }}"
-            "${{ needs.intra-crate-integration-test.result }}"
-            "${{ needs.cross-crate-integration-test.result }}"
-            "${{ needs.doc-test.result }}"
-            "${{ needs.docs-rs-check.result }}"
-            "${{ needs.examples-test.result }}"
-            "${{ needs.ui-test.result }}"
-            "${{ needs.coverage.result }}"
-            "${{ needs.cross-platform-check.result }}"
-            "${{ needs.msrv-test.result }}"
+          # Always-required checks (must be 'success')
+          always_required=(
+            "check:${{ needs.check.result }}"
+            "fmt:${{ needs.fmt.result }}"
+            "clippy:${{ needs.clippy.result }}"
+            "todo-check:${{ needs.todo-check.result }}"
+            "semver-check:${{ needs.semver-check.result }}"
+            "docs-rs-check:${{ needs.docs-rs-check.result }}"
+            "cross-platform-check:${{ needs.cross-platform-check.result }}"
+            "msrv-test:${{ needs.msrv-test.result }}"
           )
-          for result in "${required_results[@]}"; do
+          for entry in "${always_required[@]}"; do
+            name="${entry%%:*}"
+            result="${entry#*:}"
             if [[ "$result" != "success" ]]; then
-              echo "::error::Required CI check failed: $result"
+              echo "::error::Required check '$name' failed with result: $result"
               exit 1
             fi
           done
+
+          # Selectively-skippable checks (can be 'success' or 'skipped' when no affected packages)
+          selectively_skippable=(
+            "unit-test:${{ needs.unit-test.result }}"
+            "intra-crate-integration-test:${{ needs.intra-crate-integration-test.result }}"
+            "cross-crate-integration-test:${{ needs.cross-crate-integration-test.result }}"
+            "doc-test:${{ needs.doc-test.result }}"
+            "ui-test:${{ needs.ui-test.result }}"
+            "coverage:${{ needs.coverage.result }}"
+            "examples-test:${{ needs.examples-test.result }}"
+          )
+          for entry in "${selectively_skippable[@]}"; do
+            name="${entry%%:*}"
+            result="${entry#*:}"
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              echo "::error::Check '$name' failed with result: $result"
+              exit 1
+            fi
+          done
+
+          # publish-check is skipped on release-plz and fix/release-plz branches (expected)
+          publish_check="${{ needs.publish-check.result }}"
+          if [[ "$publish_check" != "success" && "$publish_check" != "skipped" ]]; then
+            echo "::error::Publish check failed: $publish_check"
+            exit 1
+          fi
           # release-dry-run is skipped on release-plz branches (expected)
           dry_run="${{ needs.release-dry-run.result }}"
           if [[ "$dry_run" != "success" && "$dry_run" != "skipped" ]]; then

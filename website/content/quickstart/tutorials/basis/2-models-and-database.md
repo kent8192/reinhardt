@@ -604,10 +604,10 @@ database connections.
 async fn index(req: Request) -> Result<Response> {
     // Manually extract from request extensions
     let conn = req.extensions
-        .get::<Arc<DatabaseConnection>>()
+        .get::<DatabaseConnection>()
         .ok_or("Database not configured")?;
 
-    let questions = Question::all(conn).await?;
+    let questions = Question::objects().all().all().await?;
     // ...
 }
 ```
@@ -617,9 +617,9 @@ async fn index(req: Request) -> Result<Response> {
 ```rust
 #[get("/", name = "index")]
 async fn index(
-    #[inject] conn: Arc<DatabaseConnection>,  // Automatically injected!
+    #[inject] conn: DatabaseConnection,  // Automatically injected!
 ) -> Result<Response> {
-    let questions = Question::all(&conn).await?;
+    let questions = Question::objects().all().all().await?;
     // ...
 }
 ```

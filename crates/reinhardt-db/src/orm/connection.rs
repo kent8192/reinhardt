@@ -20,6 +20,7 @@ pub enum DatabaseBackend {
 #[derive(serde::Serialize)]
 pub struct QueryRow {
 	pub data: serde_json::Value,
+	// Allow dead_code: field reserved for future connection metadata tracking
 	#[allow(dead_code)]
 	#[serde(skip)]
 	inner: Option<Row>,

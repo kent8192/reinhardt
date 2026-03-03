@@ -351,6 +351,7 @@ fn normalize_whitespace(s: &str) -> String {
 
 /// Checks if an element's structure matches the view.
 #[cfg(target_arch = "wasm32")]
+// Allow dead_code: WASM structure comparison reserved for future reconciliation
 #[allow(dead_code)]
 pub(super) fn structure_matches(element: &Element, view: &Page) -> bool {
 	reconcile(element, view).is_ok()
@@ -358,6 +359,7 @@ pub(super) fn structure_matches(element: &Element, view: &Page) -> bool {
 
 /// Non-WASM version for testing.
 #[cfg(not(target_arch = "wasm32"))]
+// Allow dead_code: non-WASM stub for structure comparison
 #[allow(dead_code)]
 pub(super) fn structure_matches(_element: &str, _view: &Page) -> bool {
 	true
@@ -365,6 +367,7 @@ pub(super) fn structure_matches(_element: &str, _view: &Page) -> bool {
 
 /// Detailed comparison result.
 #[derive(Debug, Clone)]
+// Allow dead_code: result type for DOM/view structure comparison
 #[allow(dead_code)]
 pub(super) struct CompareResult {
 	/// Whether the structures match.
@@ -373,6 +376,7 @@ pub(super) struct CompareResult {
 	pub differences: Vec<String>,
 }
 
+// Allow dead_code: impl block for CompareResult utility methods
 #[allow(dead_code)]
 impl CompareResult {
 	/// Creates a successful match result.
@@ -394,6 +398,7 @@ impl CompareResult {
 
 /// Compares DOM structure with view and returns detailed results.
 #[cfg(target_arch = "wasm32")]
+// Allow dead_code: WASM structure comparison reserved for future reconciliation
 #[allow(dead_code)]
 pub(super) fn compare_structure(element: &Element, view: &Page) -> CompareResult {
 	let mut differences = Vec::new();
@@ -477,6 +482,7 @@ fn compare_recursive(element: &Element, view: &Page, path: &str, differences: &m
 
 /// Non-WASM version for testing.
 #[cfg(not(target_arch = "wasm32"))]
+// Allow dead_code: non-WASM stub for structure comparison
 #[allow(dead_code)]
 pub(super) fn compare_structure(_element: &str, _view: &Page) -> CompareResult {
 	CompareResult::success()

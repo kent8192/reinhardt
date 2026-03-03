@@ -388,6 +388,7 @@ mod tests {
 		}
 	}
 
+	// Allow dead_code: test model struct for reverse accessor verification
 	#[allow(dead_code)]
 	#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 	struct TestTweet {

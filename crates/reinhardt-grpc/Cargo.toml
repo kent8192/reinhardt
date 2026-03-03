@@ -32,6 +32,7 @@ di = ["reinhardt-di", "reinhardt-grpc-macros"]
 tonic-prost-build = "0.14.2"
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio-test = { workspace = true }
 rstest = { workspace = true }
 tracing = { workspace = true }

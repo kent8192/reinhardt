@@ -239,12 +239,12 @@ middleware-rate-limit = [
 [dependencies]
 # WASM-compatible dependencies (always included)
 reinhardt-pages = { workspace = true, optional = true }
+reinhardt-urls = { workspace = true }
 
 # Server-side dependencies (NOT for WASM)
 reinhardt-core = {workspace = true, features = ["types"]}
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Core dependencies
-reinhardt-urls = { workspace = true }
 reinhardt-utils = { workspace = true }
 reinhardt-views = { workspace = true }
 reinhardt-http = { workspace = true }

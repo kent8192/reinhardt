@@ -1,10 +1,10 @@
 [package]
 name = "reinhardt-urls"
 version = "0.1.0-rc.1"
-edition = "2024"
-license = "BSD-3-Clause"
-repository = "https://github.com/kent8192/reinhardt"
-authors = ["kent8192 <51869472+kent8192@users.noreply.github.com>"]
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
 description = "URL routing and proxy utilities for Reinhardt framework"
 
 [dependencies]

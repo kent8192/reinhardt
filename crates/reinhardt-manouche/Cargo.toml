@@ -2,8 +2,8 @@
 name = "reinhardt-manouche"
 version = "0.1.0-rc.1"
 edition.workspace = true
-license.workspace = true
 authors.workspace = true
+license.workspace = true
 description = "DSL definitions for reinhardt-pages macro (Manouche Jazz DSL)"
 repository.workspace = true
 keywords = ["ast", "parser", "dsl", "macro"]

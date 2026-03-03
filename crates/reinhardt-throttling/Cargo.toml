@@ -3,8 +3,8 @@ name = "reinhardt-throttling"
 version = "0.1.0-rc.1"
 description = "Throttling and rate limiting for Reinhardt framework"
 edition.workspace = true
-license.workspace = true
 authors.workspace = true
+license.workspace = true
 repository.workspace = true
 
 [features]

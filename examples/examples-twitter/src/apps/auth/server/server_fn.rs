@@ -17,13 +17,19 @@ use {
 	validator::Validate,
 };
 
-/// Login user and return user info (stateless, no session management)
+/// Login user, persist session, and return user info
 #[server_fn(use_inject = true)]
 pub async fn login(
 	email: String,
 	password: String,
-	#[inject] _db: DatabaseConnection,
+	#[inject] db: DatabaseConnection,
+	#[inject] session: SessionData,
+	#[inject] store: SessionStoreRef,
 ) -> std::result::Result<UserInfo, ServerFnError> {
+	// Keep db binding for potential future use by ORM
+	let _ = &db;
+	let mut session = session;
+
 	// Construct request from parameters
 	let request = LoginRequest { email, password };
 
@@ -59,7 +65,12 @@ pub async fn login(
 		return Err(ServerFnError::server(403, "User account is inactive"));
 	}
 
-	// Return user info (client will manage state)
+	// Persist user ID in session for subsequent request identification
+	session
+		.set("user_id".to_string(), user.id())
+		.map_err(|e| ServerFnError::application(format!("Session error: {}", e)))?;
+	store.inner().save(session);
+
 	Ok(UserInfo::from(user))
 }
 

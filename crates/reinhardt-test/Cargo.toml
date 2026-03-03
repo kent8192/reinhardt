@@ -1,10 +1,10 @@
 [package]
 name = "reinhardt-test"
 version = "0.1.0-rc.1"
-edition = "2024"
+edition.workspace = true
+authors.workspace = true
 description = "Testing utilities and helpers for Reinhardt framework"
 license.workspace = true
-authors.workspace = true
 repository.workspace = true
 
 [features]

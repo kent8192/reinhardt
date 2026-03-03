@@ -598,9 +598,16 @@ mod proptests {
 		#[test]
 		fn prop_wrap_text_line_width(s in "[a-zA-Z0-9 ]+", width in 10usize..50) {
 			let lines = wrap_text(&s, width);
-			for line in lines {
-				// Allow more flexibility for word boundaries and Unicode handling
-				assert!(line.chars().count() <= width + 20);
+			for line in &lines {
+				// Single words longer than width are kept intact
+				let is_single_word = !line.contains(' ');
+				if !is_single_word {
+					assert!(
+						line.chars().count() <= width,
+						"multi-word line exceeds width {width}: {line:?} ({} chars)",
+						line.chars().count()
+					);
+				}
 			}
 		}
 	}

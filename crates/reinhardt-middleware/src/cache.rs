@@ -790,4 +790,28 @@ mod tests {
 		assert_eq!(response2.headers.get("x-cache").unwrap(), "MISS");
 		assert_eq!(handler2.get_call_count(), 1);
 	}
+
+	#[rstest::rstest]
+	fn test_rwlock_poison_recovery_cache_store() {
+		// Arrange
+		let store = Arc::new(CacheStore::new());
+
+		// Act - poison the RwLock by panicking while holding a write guard
+		let store_clone = Arc::clone(&store);
+		let _ = std::thread::spawn(move || {
+			let _guard = store_clone.entries.write().unwrap();
+			panic!("intentional panic to poison lock");
+		})
+		.join();
+
+		// Assert - operations still work after poison recovery
+		let response = Response::new(StatusCode::OK).with_body(Bytes::from("test"));
+		let entry = CacheEntry::new(&response, Duration::from_secs(60));
+		store.set("key1".to_string(), entry);
+		assert_eq!(store.len(), 1);
+		assert!(!store.is_empty());
+		assert!(store.get("key1").is_some());
+		store.delete("key1");
+		assert_eq!(store.len(), 0);
+	}
 }

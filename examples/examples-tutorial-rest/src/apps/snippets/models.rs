@@ -65,9 +65,10 @@ impl Snippet {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	/// Test that Snippet can be created with valid data
-	#[test]
+	#[rstest]
 	fn test_snippet_creation() {
 		let snippet = Snippet {
 			id: 1,
@@ -83,7 +84,7 @@ mod tests {
 	}
 
 	/// Test highlighted() method produces HTML with syntax highlighting for Rust
-	#[test]
+	#[rstest]
 	fn test_highlighted_rust_code() {
 		let snippet = Snippet {
 			id: 1,
@@ -106,7 +107,7 @@ mod tests {
 	}
 
 	/// Test highlighted() method works for Python language
-	#[test]
+	#[rstest]
 	fn test_highlighted_python_code() {
 		let snippet = Snippet {
 			id: 2,
@@ -127,7 +128,7 @@ mod tests {
 	}
 
 	/// Test highlighted() method falls back to plain text for unknown languages
-	#[test]
+	#[rstest]
 	fn test_highlighted_unknown_language() {
 		let snippet = Snippet {
 			id: 3,
@@ -151,7 +152,7 @@ mod tests {
 	}
 
 	/// Test highlighted() method handles empty code gracefully
-	#[test]
+	#[rstest]
 	fn test_highlighted_empty_code() {
 		let snippet = Snippet {
 			id: 4,
@@ -170,7 +171,7 @@ mod tests {
 	}
 
 	/// Test highlighted() method handles multiline code correctly
-	#[test]
+	#[rstest]
 	fn test_highlighted_multiline_code() {
 		let snippet = Snippet {
 			id: 5,

@@ -54,8 +54,9 @@ impl Choice {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	#[test]
+	#[rstest]
 	fn test_choice_vote() {
 		let mut choice = Choice::new(
 			"Choice 1".to_string(), // choice_text

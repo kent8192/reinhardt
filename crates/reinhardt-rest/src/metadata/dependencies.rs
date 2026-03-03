@@ -394,9 +394,10 @@ impl DependencyManager {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 	use std::collections::HashSet;
 
-	#[test]
+	#[rstest]
 	fn test_create_requires_dependency() {
 		let dep = FieldDependency::requires("country", vec!["address"]);
 		assert_eq!(dep.field_name, "country");
@@ -409,7 +410,7 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn test_create_one_of_dependency() {
 		let dep = FieldDependency::one_of("payment", vec!["credit_card", "paypal"]);
 		match dep.dependency_type {
@@ -422,7 +423,7 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn test_create_all_of_dependency() {
 		let dep = FieldDependency::all_of("shipping", vec!["address", "city", "zip"]);
 		match dep.dependency_type {
@@ -433,7 +434,7 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn test_create_conditional_dependency() {
 		let dep = FieldDependency::conditional("shipping_method", "express", vec!["express_fee"]);
 		match dep.dependency_type {
@@ -446,7 +447,7 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn test_dependency_manager_add_and_get() {
 		let mut manager = DependencyManager::new();
 		manager.add_dependency(FieldDependency::requires("country", vec!["address"]));
@@ -455,7 +456,7 @@ mod tests {
 		assert_eq!(manager.get_dependencies().len(), 2);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_get_field_dependencies() {
 		let mut manager = DependencyManager::new();
 		manager.add_dependency(FieldDependency::requires("country", vec!["address"]));
@@ -469,7 +470,7 @@ mod tests {
 		assert_eq!(city_deps.len(), 1);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_to_openapi_dependencies_requires() {
 		let mut manager = DependencyManager::new();
 		manager.add_dependency(FieldDependency::requires("country", vec!["address"]));
@@ -482,7 +483,7 @@ mod tests {
 		assert_eq!(country_deps.as_array().unwrap().len(), 1);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_validate_dependencies_success() {
 		let mut manager = DependencyManager::new();
 		manager.add_dependency(FieldDependency::requires("country", vec!["address"]));
@@ -495,7 +496,7 @@ mod tests {
 		assert!(errors.is_empty());
 	}
 
-	#[test]
+	#[rstest]
 	fn test_validate_dependencies_missing_required() {
 		let mut manager = DependencyManager::new();
 		manager.add_dependency(FieldDependency::requires("country", vec!["address"]));
@@ -509,7 +510,7 @@ mod tests {
 		assert!(errors[0].contains("requires"));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_validate_one_of_success() {
 		let mut manager = DependencyManager::new();
 		manager.add_dependency(FieldDependency::one_of(
@@ -525,7 +526,7 @@ mod tests {
 		assert!(errors.is_empty());
 	}
 
-	#[test]
+	#[rstest]
 	fn test_validate_one_of_multiple_present() {
 		let mut manager = DependencyManager::new();
 		manager.add_dependency(FieldDependency::one_of(
@@ -543,7 +544,7 @@ mod tests {
 		assert!(errors[0].contains("exactly one"));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_validate_all_of_success() {
 		let mut manager = DependencyManager::new();
 		manager.add_dependency(FieldDependency::all_of(
@@ -561,7 +562,7 @@ mod tests {
 		assert!(errors.is_empty());
 	}
 
-	#[test]
+	#[rstest]
 	fn test_validate_all_of_missing_some() {
 		let mut manager = DependencyManager::new();
 		manager.add_dependency(FieldDependency::all_of(
@@ -579,7 +580,7 @@ mod tests {
 		assert!(errors[0].contains("requires all of"));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_dependency_type_serialization() {
 		let dep = FieldDependency::requires("country", vec!["address"]);
 		let json = serde_json::to_string(&dep).unwrap();
@@ -602,7 +603,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_conditional_dependency_serialization() {
 		let dep = FieldDependency::conditional("shipping_method", "express", vec!["express_fee"]);
 		let json = serde_json::to_string(&dep).unwrap();

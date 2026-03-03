@@ -34,6 +34,7 @@ zeroize = "1.8"
 full = []
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio = { workspace = true, features = ["net", "io-util", "sync"] }
 tempfile = "3.8"
 testcontainers = { workspace = true }

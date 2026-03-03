@@ -7,8 +7,8 @@ categories = ["web-programming", "web-programming::http-server"]
 readme = "README.md"
 documentation = "https://docs.rs/reinhardt-middleware"
 edition.workspace = true
-license.workspace = true
 authors.workspace = true
+license.workspace = true
 repository.workspace = true
 
 [features]
@@ -62,11 +62,12 @@ colored = "3.0"
 base64 = { workspace = true }
 
 [dev-dependencies]
+insta = { workspace = true }
 reinhardt-test = { workspace = true }
 tokio-test = "0.4"
 tokio = { workspace = true }
 serial_test = { workspace = true }
 rstest = { workspace = true }
-proptest = "1.4"
+proptest = { workspace = true }
 trybuild = "1.0"
 http = { workspace = true }

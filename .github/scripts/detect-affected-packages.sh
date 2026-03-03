@@ -2,8 +2,14 @@
 set -euo pipefail
 
 BASE_REF="${1:-origin/main}"
-MERGE_BASE=$(git merge-base HEAD "$BASE_REF")
-CHANGED_FILES=$(git diff --name-only "$MERGE_BASE"...HEAD)
+
+# Collect changed files from non-merge commits unique to this branch.
+# Using 'git log --no-merges BASE_REF..HEAD' is more reliable than
+# 'git diff MERGE_BASE...HEAD' when the base branch has been merged into
+# the PR branch: in GitHub Actions' synthetic-merge-ref environment the
+# three-dot diff can return empty even when the PR has real changes. # Issue #1822
+CHANGED_FILES=$(git log --name-only --format="" --no-merges "$BASE_REF..HEAD" \
+  | grep -v '^$' | sort -u || true)
 
 if [[ -z "$CHANGED_FILES" ]]; then
   echo "run-all=false" >> "$GITHUB_OUTPUT"

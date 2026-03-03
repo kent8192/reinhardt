@@ -117,8 +117,9 @@ pub fn get_settings() -> Settings {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	#[test]
+	#[rstest]
 	fn test_get_settings() {
 		let settings = get_settings();
 		assert!(!settings.secret_key.is_empty());

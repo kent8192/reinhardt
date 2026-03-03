@@ -368,7 +368,7 @@ pub struct VoteRequest {
 #[server_fn(use_inject = true)]
 pub async fn vote(
 	request: VoteRequest,  // Automatically deserialized from JSON
-	#[inject] db: Arc<DatabaseConnection>,
+	#[inject] db: DatabaseConnection,
 ) -> Result<ChoiceInfo, ServerFnError> {
 	// Return value automatically serialized to JSON
 	Ok(ChoiceInfo { /* ... */ })
@@ -394,7 +394,7 @@ use reinhardt::pages::server_fn::ServerFnError;
 #[server_fn(use_inject = true)]
 pub async fn get_question(
 	id: i64,
-	#[inject] db: Arc<DatabaseConnection>,
+	#[inject] db: DatabaseConnection,
 ) -> Result<QuestionInfo, ServerFnError> {
 	// Database error → ServerFnError
 	let question = Question::find_by_id(&db, id).await
@@ -439,7 +439,7 @@ The `#[server_fn]` macro automatically handles conditional compilation. You only
 #[server_fn(use_inject = true)]
 pub async fn vote(
 	request: VoteRequest,
-	#[inject] db: Arc<DatabaseConnection>,
+	#[inject] db: DatabaseConnection,
 ) -> Result<ChoiceInfo, ServerFnError> {
 	// Server-side implementation only
 	let mut choice = Choice::find_by_id(&db, request.choice_id).await
@@ -1189,7 +1189,7 @@ The server functions pattern demonstrated in this tutorial provides:
 **For different project types:**
 
 - **WASM + SSR Apps** → reinhardt-pages (this tutorial)
-- **REST APIs** → UnifiedRouter with HTTP method decorators
+- **REST APIs** → DefaultRouter with HTTP method decorators
 - **GraphQL APIs** → async-graphql integration
 
 The examples mentioned above demonstrate production-ready patterns for each approach.

@@ -70,8 +70,9 @@ jobs:
             else
               COMPARE_REF="HEAD"
             fi
+            BASE_REF_VAL="${BASE_REF:-main}"
             CHANGED=$(git log --name-only --format="" --no-merges \
-              "origin/$BASE_REF..$COMPARE_REF" \
+              "origin/$BASE_REF_VAL..$COMPARE_REF" \
               | grep -v '^$' | grep '^examples/' | head -1 || true)
             if [[ -n "$CHANGED" ]]; then
               echo "run-examples=true" >> "$GITHUB_OUTPUT"

@@ -91,8 +91,6 @@ pub async fn create_article(Json(create_req): Json<CreateArticleRequest>) -> Vie
 /// - `id`: Article ID (e.g., `/articles/1`)
 #[get("/articles/{id}/", name = "articles_get")]
 pub async fn get_article(Path(id): Path<i64>) -> ViewResult<Response> {
-	eprintln!("[DEBUG views::get_article] Looking for article id={}", id);
-
 	// Get article from in-memory storage
 	let article = match storage::get_article(id) {
 		Some(article) => article,

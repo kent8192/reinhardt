@@ -243,8 +243,8 @@ Register the admin routes in `src/config/urls.rs`:
 ```rust
 use crate::config::apps::configure_admin;
 
-pub fn url_patterns() -> UnifiedRouter {
-    UnifiedRouter::new()
+pub fn url_patterns() -> DefaultRouter {
+    DefaultRouter::new()
         .mount("/admin/", configure_admin().urls())
         // ... other routes ...
 }

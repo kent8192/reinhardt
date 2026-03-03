@@ -227,3 +227,50 @@ impl BaseUserManager<DefaultUser> for DefaultUserManager {
 		Ok(user)
 	}
 }
+
+#[cfg(feature = "argon2-hasher")]
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+	use std::collections::HashMap;
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_rwlock_poison_recovery_default_user_manager() {
+		// Arrange
+		let mut manager = DefaultUserManager::new();
+		let user = manager
+			.create_user("pre_poison", Some("password123"), HashMap::new())
+			.await
+			.unwrap();
+		let user_id = user.id;
+
+		// Act - poison the RwLock by panicking while holding a write guard
+		let users_clone = Arc::clone(&manager.users);
+		let _ = std::thread::spawn(move || {
+			let _guard = users_clone.write().unwrap();
+			panic!("intentional panic to poison lock");
+		})
+		.join();
+
+		// Assert - operations still work after poison recovery
+		let found = manager.get_by_id(user_id);
+		assert!(found.is_some());
+		assert_eq!(found.unwrap().username, "pre_poison");
+
+		let found_by_name = manager.get_by_username("pre_poison");
+		assert!(found_by_name.is_some());
+
+		let all_users = manager.list_all();
+		assert_eq!(all_users.len(), 1);
+
+		// Create a new user after poison recovery
+		let new_user = manager
+			.create_user("post_poison", Some("password456"), HashMap::new())
+			.await
+			.unwrap();
+		assert_eq!(new_user.username, "post_poison");
+		assert_eq!(manager.list_all().len(), 2);
+	}
+}

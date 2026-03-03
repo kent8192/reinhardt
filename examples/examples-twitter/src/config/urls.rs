@@ -4,6 +4,7 @@
 //! Each app defines unified routes (server + client) in `urls.rs`, which are mounted here.
 
 use reinhardt::UnifiedRouter;
+use reinhardt::admin::admin_routes;
 use reinhardt::routes;
 
 // Import app URL modules
@@ -39,6 +40,8 @@ pub fn routes() -> UnifiedRouter {
 		.mount_unified("/", profile::urls::routes())
 		.mount_unified("/", relationship::urls::routes())
 		.mount_unified("/", dm::urls::routes())
+		// Mount admin panel routes
+		.mount("/admin/", admin_routes())
 		// Apply middleware stack (order matters for request processing)
 		.with_middleware(LoggingMiddleware::new())
 		.with_middleware(create_security_middleware())

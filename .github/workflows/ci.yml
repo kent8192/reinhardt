@@ -299,7 +299,6 @@ jobs:
             "${{ needs.check.result }}"
             "${{ needs.fmt.result }}"
             "${{ needs.clippy.result }}"
-            "${{ needs.publish-check.result }}"
             "${{ needs.todo-check.result }}"
             "${{ needs.semver-check.result }}"
             "${{ needs.unit-test.result }}"
@@ -319,6 +318,12 @@ jobs:
               exit 1
             fi
           done
+          # publish-check is skipped on release-plz and fix/release-plz branches (expected)
+          publish_check="${{ needs.publish-check.result }}"
+          if [[ "$publish_check" != "success" && "$publish_check" != "skipped" ]]; then
+            echo "::error::Publish check failed: $publish_check"
+            exit 1
+          fi
           # release-dry-run is skipped on release-plz branches (expected)
           dry_run="${{ needs.release-dry-run.result }}"
           if [[ "$dry_run" != "success" && "$dry_run" != "skipped" ]]; then

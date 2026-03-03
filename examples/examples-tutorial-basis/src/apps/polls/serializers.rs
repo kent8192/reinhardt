@@ -68,8 +68,9 @@ impl ChoiceResponse {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	#[test]
+	#[rstest]
 	fn test_question_serializer_valid() {
 		let serializer = QuestionSerializer {
 			question_text: "What's your favorite color?".to_string(),
@@ -77,7 +78,7 @@ mod tests {
 		assert!(serializer.validate().is_ok());
 	}
 
-	#[test]
+	#[rstest]
 	fn test_question_serializer_empty_text() {
 		let serializer = QuestionSerializer {
 			question_text: String::new(),
@@ -85,7 +86,7 @@ mod tests {
 		assert!(serializer.validate().is_err());
 	}
 
-	#[test]
+	#[rstest]
 	fn test_question_serializer_too_long() {
 		let serializer = QuestionSerializer {
 			question_text: "a".repeat(201),
@@ -93,7 +94,7 @@ mod tests {
 		assert!(serializer.validate().is_err());
 	}
 
-	#[test]
+	#[rstest]
 	fn test_choice_serializer_valid() {
 		let serializer = ChoiceSerializer {
 			question_id: 1,
@@ -102,7 +103,7 @@ mod tests {
 		assert!(serializer.validate().is_ok());
 	}
 
-	#[test]
+	#[rstest]
 	fn test_choice_serializer_empty_text() {
 		let serializer = ChoiceSerializer {
 			question_id: 1,

@@ -402,7 +402,7 @@ impl CollectStaticCommand {
 
 		let manifest_data = serde_json::json!({
 			"version": "1.0",
-			"files": self.manifest
+			"paths": self.manifest
 		});
 
 		let json = serde_json::to_string_pretty(&manifest_data)?;
@@ -445,14 +445,16 @@ impl CollectStaticCommand {
 		let content = fs::read_to_string(source)?;
 
 		// Detect {{ static_url("path") }} pattern
-		let re = regex::Regex::new(r#"\{\{\s*static_url\("([^"]+)"\)\s*\}\}"#).unwrap();
+		static STATIC_URL_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+			regex::Regex::new(r#"\{\{\s*static_url\("([^"]+)"\)\s*\}\}"#).unwrap()
+		});
 
-		let processed = re.replace_all(&content, |caps: &regex::Captures| {
+		let processed = STATIC_URL_RE.replace_all(&content, |caps: &regex::Captures| {
 			let original_path = &caps[1];
 
 			// Resolve from manifest
 			if let Some(hashed_path) = self.manifest.get(original_path) {
-				format!("/{}", hashed_path)
+				format!("{}{}", self.config.static_url, hashed_path)
 			} else {
 				if self.options.verbosity > 0 {
 					eprintln!(
@@ -460,7 +462,7 @@ impl CollectStaticCommand {
 						original_path
 					);
 				}
-				format!("/{}", original_path)
+				format!("{}{}", self.config.static_url, original_path)
 			}
 		});
 

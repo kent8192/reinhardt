@@ -32,8 +32,9 @@ chrono = { version = "0.4", features = ["serde"] }
 full = []
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio-test = "0.4"
 rstest = { workspace = true }
-proptest = "1.6"
+proptest = { workspace = true }
 tempfile = "3"
 reinhardt-test = { workspace = true }

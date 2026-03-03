@@ -764,4 +764,27 @@ mod tests {
 
 		assert!(response.headers.contains_key(TRACE_ID_HEADER));
 	}
+
+	#[rstest::rstest]
+	fn test_rwlock_poison_recovery_trace_store() {
+		// Arrange
+		let store = Arc::new(TraceStore::new());
+		let span_id = store.start_span("trace-1".to_string(), "GET /test".to_string());
+
+		// Act - poison the RwLock by panicking while holding a write guard
+		let store_clone = Arc::clone(&store);
+		let _ = std::thread::spawn(move || {
+			let _guard = store_clone.spans.write().unwrap();
+			panic!("intentional panic to poison lock");
+		})
+		.join();
+
+		// Assert - operations still work after poison recovery
+		store.add_span_tag(&span_id, "key".to_string(), "value".to_string());
+		store.mark_span_error(&span_id);
+		store.end_span(&span_id);
+		let span = store.get_span(&span_id);
+		assert!(span.is_some());
+		assert_eq!(span.unwrap().status, SpanStatus::Error);
+	}
 }

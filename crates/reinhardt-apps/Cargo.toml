@@ -3,8 +3,8 @@ name = "reinhardt-apps"
 version = "0.1.0-rc.1"
 description = "Application registry and management for Reinhardt framework"
 edition.workspace = true
-license.workspace = true
 authors.workspace = true
+license.workspace = true
 repository.workspace = true
 
 [dependencies]

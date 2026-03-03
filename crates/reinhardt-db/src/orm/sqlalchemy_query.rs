@@ -639,6 +639,7 @@ mod tests {
 		}
 	}
 
+	// Allow dead_code: test model struct for SQLAlchemy-style query tests
 	#[allow(dead_code)]
 	#[derive(Debug, Clone, Serialize, Deserialize)]
 	struct Post {

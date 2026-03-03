@@ -15,23 +15,8 @@ if [[ -n "${HEAD_REF:-}" ]]; then
 else
   COMPARE_REF="HEAD"
 fi
-
-# Debug: log refs and git state for diagnosing Issue #1822
-echo "[debug] BASE_REF=$BASE_REF" >&2
-echo "[debug] COMPARE_REF=$COMPARE_REF" >&2
-echo "[debug] HEAD=$(git rev-parse HEAD 2>/dev/null || echo 'unknown')" >&2
-echo "[debug] BASE_REF sha=$(git rev-parse "$BASE_REF" 2>/dev/null || echo 'unknown')" >&2
-echo "[debug] COMPARE_REF sha=$(git rev-parse "$COMPARE_REF" 2>/dev/null || echo 'unknown')" >&2
-RAW_LOG=$(git log --name-only --format="%H" --no-merges "$BASE_REF..$COMPARE_REF" 2>/dev/null || true)
-echo "[debug] RAW_LOG (first 20 lines):" >&2
-echo "$RAW_LOG" | head -20 >&2
-
 CHANGED_FILES=$(git log --name-only --format="" --no-merges "$BASE_REF..$COMPARE_REF" \
   | grep -v '^$' | sort -u || true)
-
-echo "[debug] CHANGED_FILES count=$(echo "$CHANGED_FILES" | grep -c . || echo 0)" >&2
-echo "[debug] CHANGED_FILES first 5:" >&2
-echo "$CHANGED_FILES" | head -5 >&2
 
 if [[ -z "$CHANGED_FILES" ]]; then
   echo "run-all=false" >> "$GITHUB_OUTPUT"

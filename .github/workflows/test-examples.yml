@@ -14,9 +14,50 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  detect-examples-changed:
+    name: Detect Examples Changes
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.detect.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect
+        id: detect
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # Issue #1828: Release PRs always run examples tests
+          if [[ "$HEAD_REF" == release-plz-* ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Normal PRs: run only when examples/** changed
+          if [[ -n "${HEAD_REF:-}" ]]; then
+            COMPARE_REF="origin/$HEAD_REF"
+          else
+            COMPARE_REF="HEAD"
+          fi
+          BASE_REF_VAL="${BASE_REF:-main}"
+          CHANGED=$(git log --name-only --format="" --no-merges \
+            "origin/$BASE_REF_VAL..$COMPARE_REF" \
+            | grep -v '^$' | grep '^examples/' | head -1 || true)
+          if [[ -n "$CHANGED" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   test-local-examples:
     name: Test ${{ matrix.example }}
-    if: github.event.action != 'closed'
+    needs: [detect-examples-changed]
+    # Issue #1828: Skip when no examples/** changes on non-release PRs
+    if: github.event.action != 'closed' && needs.detect-examples-changed.outputs.run == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

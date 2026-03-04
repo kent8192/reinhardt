@@ -15,6 +15,9 @@ on:
       affected-packages:
         description: "Newline-separated list of affected package names"
         value: ${{ jobs.detect.outputs.affected-packages }}
+      run-examples:
+        description: "Whether to run examples tests (true for release PRs, global changes, or examples/** changes)"
+        value: ${{ jobs.detect.outputs.run-examples }}
 
 jobs:
   detect:
@@ -25,6 +28,7 @@ jobs:
       has-affected: ${{ steps.detect.outputs.has-affected }}
       nextest-filter: ${{ steps.detect.outputs.nextest-filter }}
       affected-packages: ${{ steps.detect.outputs.affected-packages }}
+      run-examples: ${{ steps.detect-examples.outputs.run-examples }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -49,17 +53,47 @@ jobs:
               "origin/$BASE_REF"
           fi
 
+      - name: Detect examples changes
+        id: detect-examples
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+          RUN_ALL: ${{ steps.detect.outputs.run-all }}
+        run: |
+          # Issue #1828: run-examples is true when run-all is true (covers release-plz branches
+          # and global file changes), or when examples/** files changed in this PR
+          if [[ "$RUN_ALL" == "true" ]]; then
+            echo "run-examples=true" >> "$GITHUB_OUTPUT"
+          else
+            if [[ -n "${HEAD_REF:-}" ]]; then
+              COMPARE_REF="origin/$HEAD_REF"
+            else
+              COMPARE_REF="HEAD"
+            fi
+            BASE_REF_VAL="${BASE_REF:-main}"
+            CHANGED=$(git log --name-only --format="" --no-merges \
+              "origin/$BASE_REF_VAL..$COMPARE_REF" \
+              | grep -v '^$' | grep '^examples/' | head -1 || true)
+            if [[ -n "$CHANGED" ]]; then
+              echo "run-examples=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "run-examples=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
       - name: Summary
         env:
           RUN_ALL: ${{ steps.detect.outputs.run-all }}
           HAS_AFFECTED: ${{ steps.detect.outputs.has-affected }}
           NEXTEST_FILTER: ${{ steps.detect.outputs.nextest-filter }}
           AFFECTED_PACKAGES: ${{ steps.detect.outputs.affected-packages }}
+          RUN_EXAMPLES: ${{ steps.detect-examples.outputs.run-examples }}
         run: |
           echo "### Affected Package Detection" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Run all**: \`$RUN_ALL\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Has affected**: \`$HAS_AFFECTED\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Run examples**: \`$RUN_EXAMPLES\`" >> "$GITHUB_STEP_SUMMARY"
           if [[ -n "$NEXTEST_FILTER" ]]; then
             echo "- **Nextest filter**: \`$NEXTEST_FILTER\`" >> "$GITHUB_STEP_SUMMARY"
           fi

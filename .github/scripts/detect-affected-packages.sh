@@ -15,11 +15,14 @@ BASE_REF="${1:-origin/main}"
 # in GitHub Actions the checkout ref is a synthetic merge commit
 # (refs/pull/N/merge). Issue #1822.
 if [[ -n "${PR_NUMBER:-}" && -n "${GITHUB_REPOSITORY:-}" ]]; then
-  CHANGED_FILES=$(gh api \
-    "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
-    --paginate \
-    --jq '.[].filename' \
-    2>/dev/null | grep -v '^$' | sort -u || true)
+  if ! GH_OUT=$(gh api \
+      "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+      --paginate \
+      --jq '.[].filename'); then
+    echo "::error::gh api call failed: repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" >&2
+    exit 1
+  fi
+  CHANGED_FILES=$(echo "$GH_OUT" | grep -v '^$' | sort -u || true)
 else
   if [[ -n "${HEAD_REF:-}" ]]; then
     COMPARE_REF="origin/$HEAD_REF"
@@ -63,7 +66,7 @@ fi
 # Fall back to a full test run if cargo metadata is unavailable or returns
 # empty output. # Issue #1819
 WORKSPACE_ROOT=$(pwd)
-if ! METADATA=$(cargo metadata --format-version 1 --no-deps 2>/dev/null) \
+if ! METADATA=$(cargo metadata --format-version 1 --no-deps) \
     || [[ -z "$METADATA" ]]; then
   echo "run-all=true" >> "$GITHUB_OUTPUT"
   echo "has-affected=true" >> "$GITHUB_OUTPUT"

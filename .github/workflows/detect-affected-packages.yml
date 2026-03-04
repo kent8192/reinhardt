@@ -72,10 +72,13 @@ jobs:
             echo "run-examples=true" >> "$GITHUB_OUTPUT"
           else
             if [[ -n "${PR_NUMBER:-}" && -n "${GITHUB_REPOSITORY:-}" ]]; then
-              CHANGED=$(gh api \
-                "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
-                --paginate --jq '.[].filename' 2>/dev/null \
-                | grep '^examples/' | head -1 || true)
+              if \! GH_OUT=$(gh api \
+                  "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+                  --paginate --jq '.[].filename'); then
+                echo "::error::gh api call failed: repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" >&2
+                exit 1
+              fi
+              CHANGED=$(echo "$GH_OUT" | grep '^examples/' | head -1 || true)
             else
               if [[ -n "${HEAD_REF:-}" ]]; then
                 COMPARE_REF="origin/$HEAD_REF"

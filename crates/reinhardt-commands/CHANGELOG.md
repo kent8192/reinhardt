@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.1...reinhardt-commands@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(deps)* align dependency versions to workspace definitions
+- *(staticfiles)* unify manifest.json format to use "paths" key
+- *(staticfiles)* use STATIC_URL in HTML template processing
+
 ## [0.1.0-alpha.21](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-alpha.20...reinhardt-commands@v0.1.0-alpha.21) - 2026-02-24
 
 ### Maintenance

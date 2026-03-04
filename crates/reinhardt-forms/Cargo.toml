@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-forms"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 description = "Form handling and validation"
 edition.workspace = true
 license.workspace = true

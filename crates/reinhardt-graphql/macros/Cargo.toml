@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-graphql-macros"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 description = "Procedural macros for GraphQL schema generation"
 edition.workspace = true
 license.workspace = true

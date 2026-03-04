@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-utils"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 description = "Utility functions aggregator for Reinhardt"
 edition.workspace = true
 authors.workspace = true

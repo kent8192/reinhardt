@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-middleware"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 description = "Middleware system for request/response processing pipeline"
 keywords = ["middleware", "web", "cors", "security", "http"]
 categories = ["web-programming", "web-programming::http-server"]

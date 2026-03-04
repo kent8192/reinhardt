@@ -235,7 +235,7 @@ This project uses [release-plz](https://release-plz.ieni.dev/) for automated rel
 
 **Key Warnings (Lessons Learned):**
 - **NEVER** create circular publish dependency chains (functional crates must not dev-depend on other Reinhardt crates)
-- **NEVER** add `version` field to `reinhardt-test` workspace dependency (causes publish failure; see cargo#15151)
+- **MUST** include `version` field in `reinhardt-test` workspace dependency (same as other published crates)
 - **MUST** follow RP-1 recovery procedure for partial release failures (see instructions/RELEASE_PROCESS.md)
 - **NEVER** change `pr_branch_prefix` from `"release-plz-"` (breaks two-step release workflow)
 - `publish_no_verify = true` is required because dev-dependencies reference unpublished workspace crates
@@ -461,7 +461,7 @@ Before submitting code:
 - Use `deprecated` type for marking features/APIs as deprecated (dedicated CHANGELOG section)
 - Review Release PRs created by release-plz before merging
 - Verify no circular dev-dependency chains exist before publishing (functional crates must not dev-depend on other Reinhardt crates)
-- Keep `reinhardt-test` workspace dependency without `version` field (unpublished crate; cargo#15151)
+- Include `version` field in `reinhardt-test` workspace dependency (published crate, same as others)
 - Follow RP-1 procedure in instructions/RELEASE_PROCESS.md for partial release failures
 - Use GitHub CLI (`gh`) for all GitHub operations (PR, issues, releases)
 - Search existing issues before creating new ones
@@ -521,7 +521,7 @@ Before submitting code:
 - Create release tags manually (release-plz creates them automatically)
 - Skip reviewing Release PRs before merging
 - Add `reinhardt-test` to functional crate `[dev-dependencies]` (creates circular publish dependency)
-- Add `version` field to `reinhardt-test` workspace dependency (breaks cargo publish; cargo#15151)
+- Omit `version` field from `reinhardt-test` workspace dependency (causes publish failure for dependents)
 - Change `pr_branch_prefix` from `"release-plz-"` (breaks two-step release workflow)
 - Merge Release PR without rolling back unpublished crate versions after partial release failure
 - Write vague commit descriptions that are unclear as CHANGELOG entries (e.g., "fix issue", "update code")

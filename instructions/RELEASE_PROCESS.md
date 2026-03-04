@@ -273,9 +273,9 @@ Enables release-plz to automatically update explicit `version` fields in workspa
 
 Ensures `release-plz release` publishes ALL crates whose local version differs from crates.io, not just those with actual code changes. This prevents the phantom version issue described in [KI-5](#ki-5-phantom-version-bumps-from-dependencies_update): when `dependencies_update = true` bumps versions for dependency-only changes, `release_always = false` would skip publishing those crates, creating versions in git that don't exist on crates.io. Normal code pushes are unaffected since local versions match crates.io; only after a Release PR merge will version differences trigger publishing. (Ref: [#185](https://github.com/kent8192/reinhardt-web/pull/185), [#186](https://github.com/kent8192/reinhardt-web/pull/186), [#246](https://github.com/kent8192/reinhardt-web/issues/246))
 
-**`reinhardt-test` workspace dependency without `version` field**
+**`reinhardt-test` workspace dependency with `version` field**
 
-The `reinhardt-test` crate (`publish = false`) is used as a workspace dependency by publishable crates. Its workspace dependency entry in the root `Cargo.toml` intentionally omits the `version` field. Adding a `version` field would cause `cargo publish` to attempt resolving `reinhardt-test` from crates.io (where it does not exist), breaking the publish of any crate that depends on it via dev-dependencies. This is related to a Cargo regression tracked in [cargo#15151](https://github.com/rust-lang/cargo/issues/15151). (Ref: [#185](https://github.com/kent8192/reinhardt-web/pull/185), [#223](https://github.com/kent8192/reinhardt-web/pull/223))
+The `reinhardt-test` crate is published on crates.io and its workspace dependency entry in the root `Cargo.toml` **must** include the `version` field, same as all other published workspace crates. Previously, the `version` field was intentionally omitted as a workaround for [cargo#15151](https://github.com/rust-lang/cargo/issues/15151) when `reinhardt-test` was not yet published. Since `reinhardt-test` is now published on crates.io, the workaround is no longer needed and omitting the `version` field causes publish failures for crates that depend on it (e.g., `reinhardt-web`). (Ref: [#185](https://github.com/kent8192/reinhardt-web/pull/185), [#223](https://github.com/kent8192/reinhardt-web/pull/223))
 
 ---
 
@@ -293,11 +293,13 @@ The `reinhardt-test` crate (`publish = false`) is used as a workspace dependency
 
 (Ref: [#181](https://github.com/kent8192/reinhardt-web/pull/181), [#199](https://github.com/kent8192/reinhardt-web/pull/199), [#203](https://github.com/kent8192/reinhardt-web/pull/203), [#216](https://github.com/kent8192/reinhardt-web/pull/216))
 
-### KI-2: Cargo 1.84+ Dev-Dependency Resolution Regression
+### KI-2: Cargo 1.84+ Dev-Dependency Resolution Regression (Resolved)
 
 **Problem**: Starting with Cargo 1.84, `cargo publish` attempts to resolve workspace dev-dependencies from crates.io even when they are marked `publish = false`. If the workspace dependency entry includes a `version` field, Cargo tries to find that version on crates.io and fails when the crate does not exist there.
 
-**Workaround**: Ensure that unpublished workspace crates (e.g., `reinhardt-test`) do **not** have a `version` field in their `[workspace.dependencies]` entry. The `publish_no_verify = true` setting provides additional protection by skipping the verification build.
+**Previous Workaround**: Ensured that unpublished workspace crates (e.g., `reinhardt-test`) did **not** have a `version` field in their `[workspace.dependencies]` entry. The `publish_no_verify = true` setting provided additional protection by skipping the verification build.
+
+**Current Status**: This workaround is **no longer needed** for `reinhardt-test` because it is now published on crates.io (v0.1.0-rc.2). All workspace dependency entries, including `reinhardt-test`, should include a `version` field. The workaround remains relevant only for truly unpublished crates (those with `publish = false`).
 
 **Tracking**: [cargo#15151](https://github.com/rust-lang/cargo/issues/15151)
 
@@ -466,28 +468,24 @@ gh workflow run release-plz.yml
 
 (Ref: [#225](https://github.com/kent8192/reinhardt-web/pull/225))
 
-### RP-4: reinhardt-test Version Reintroduced
+### RP-4: reinhardt-test Version Missing (Obsolete)
 
-Use this procedure when a `version` field is accidentally added to the `reinhardt-test` workspace dependency.
+**Note**: This recovery procedure is **obsolete** as of March 2026. The `reinhardt-test` crate is now published on crates.io and **must** have a `version` field in its workspace dependency entry, same as all other published crates. The original workaround of omitting the `version` field was needed only when `reinhardt-test` was not published.
 
-**Detection**: `cargo publish --dry-run` fails for crates that dev-depend on `reinhardt-test`, with errors indicating that `reinhardt-test` cannot be found on crates.io.
-
-**Step 1: Remove the version field**
-
-In the root `Cargo.toml`, locate the `[workspace.dependencies]` section and remove the `version` field from the `reinhardt-test` entry:
+**If `version` is accidentally removed**, add it back:
 
 ```toml
-# Before (broken)
-reinhardt-test = { path = "crates/reinhardt-test", version = "0.1.0" }
+# Before (broken - missing version)
+reinhardt-test = { path = "crates/reinhardt-test" }
 
 # After (correct)
-reinhardt-test = { path = "crates/reinhardt-test" }
+reinhardt-test = { path = "crates/reinhardt-test", version = "0.1.0-rc.2" }
 ```
 
-**Step 2: Verify**
+**Verify:**
 
 ```bash
-cargo publish --dry-run -p reinhardt-orm  # or any crate that dev-depends on reinhardt-test
+cargo publish --dry-run -p reinhardt-web  # root crate depends on reinhardt-test
 ```
 
 (Ref: [#185](https://github.com/kent8192/reinhardt-web/pull/185), [#223](https://github.com/kent8192/reinhardt-web/pull/223))

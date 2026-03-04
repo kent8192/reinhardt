@@ -21,10 +21,10 @@ members = [
 
 [workspace.dependencies]
 # Reinhardt framework (crates.io published versions)
-reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web" }
-reinhardt-query = { version = "0.1.0-rc.1" }
-reinhardt-websockets = { version = "0.1.0-rc.1" }
-reinhardt-auth = { version = "0.1.0-rc.1" }
+reinhardt = { version = "0.1.0-rc.2", package = "reinhardt-web" }
+reinhardt-query = { version = "0.1.0-rc.2" }
+reinhardt-websockets = { version = "0.1.0-rc.2" }
+reinhardt-auth = { version = "0.1.0-rc.2" }
 
 # Testing
 testcontainers = { version = "0.26.3", features = ["blocking"] }

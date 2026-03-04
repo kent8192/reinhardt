@@ -258,7 +258,9 @@ jobs:
   examples-test:
     name: Examples Tests
     uses: ./.github/workflows/examples-test.yml
-    needs: [unit-test, intra-crate-integration-test, cross-crate-integration-test, determine-runner]
+    needs: [unit-test, intra-crate-integration-test, cross-crate-integration-test, determine-runner, detect-affected]
+    # Issue #1828: Skip when no examples/** changes on non-release PRs
+    if: needs.detect-affected.outputs.run-examples == 'true'
     secrets: inherit
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}

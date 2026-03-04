@@ -33,6 +33,9 @@ else
     | grep -v '^$' | sort -u || true)
 fi
 
+FILE_COUNT=$(echo "$CHANGED_FILES" | wc -l | tr -d ' ')
+echo "::notice::Changed files ($FILE_COUNT total): $(echo "$CHANGED_FILES" | head -5 | tr '\n' ', ')"
+
 if [[ -z "$CHANGED_FILES" ]]; then
   echo "run-all=false" >> "$GITHUB_OUTPUT"
   echo "has-affected=false" >> "$GITHUB_OUTPUT"
@@ -65,7 +68,10 @@ fi
 # set -e in bash — the assignment itself succeeds even when the subshell fails.
 # Fall back to a full test run if cargo metadata is unavailable or returns
 # empty output. # Issue #1819
-WORKSPACE_ROOT=$(pwd)
+# Resolve symlinks in workspace root so paths match cargo metadata's
+# manifest_path (which always uses the canonical path). This matters on
+# macOS where /tmp -> /private/tmp.
+WORKSPACE_ROOT=$(cd "$(pwd)" && pwd -P)
 if ! METADATA=$(cargo metadata --format-version 1 --no-deps) \
     || [[ -z "$METADATA" ]]; then
   echo "run-all=true" >> "$GITHUB_OUTPUT"
@@ -75,24 +81,35 @@ if ! METADATA=$(cargo metadata --format-version 1 --no-deps) \
   exit 0
 fi
 
+PKG_COUNT=$(echo "$METADATA" | jq '.packages | length')
+echo "::notice::Workspace packages: $PKG_COUNT"
+
 declare -A AFFECTED_MAP
 while IFS= read -r file; do
   ABS_FILE="$WORKSPACE_ROOT/$file"
-  # Use try-catch in jq so that a single malformed package entry does not abort
-  # the entire scan. # Issue #1819
+  # Map file to the most specific (longest path match) workspace package.
+  # Bind the package object to $pkg so that .manifest_path resolves correctly
+  # inside the startswith() call. Issue #1843
   PKG=$(echo "$METADATA" | jq -r --arg f "$ABS_FILE" '
-    .packages[]
+    [.packages[]
+    | . as $pkg
+    | ($pkg.manifest_path | rtrimstr("/Cargo.toml")) as $dir
     | select(
-        try ($f | startswith((.manifest_path | rtrimstr("/Cargo.toml"))))
+        try ($f | startswith($dir))
         catch false
       )
-    | .name' 2>/dev/null | head -1 || true)
+    | {name: $pkg.name, dirlen: ($dir | length)}]
+    | sort_by(-.dirlen)
+    | .[0].name // empty' || true)
+  echo "::notice::File mapping: $file -> ${PKG:-<no match>}"
   if [[ -n "$PKG" && "$PKG" != "null" ]]; then
     AFFECTED_MAP["$PKG"]=1
   fi
 done <<< "$CHANGED_FILES"
 
 AFFECTED_PKGS=(${!AFFECTED_MAP[@]})
+
+echo "::notice::Affected packages (${#AFFECTED_PKGS[@]}): ${AFFECTED_PKGS[*]}"
 
 if [[ ${#AFFECTED_PKGS[@]} -eq 0 ]]; then
   echo "run-all=false" >> "$GITHUB_OUTPUT"

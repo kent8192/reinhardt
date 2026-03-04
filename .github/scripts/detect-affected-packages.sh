@@ -3,19 +3,23 @@ set -euo pipefail
 
 BASE_REF="${1:-origin/main}"
 
-# Collect changed files from non-merge commits unique to this branch.
+# Collect changed files by comparing the merge base of BASE_REF and COMPARE_REF.
+# We use 'git diff --name-only BASE...COMPARE' (three-dot) so that only files
+# that differ in the final state are considered. This avoids false positives from
+# commits that add then revert a file within the same branch.
+#
 # In a PR context, the HEAD_REF env var contains the PR branch name. We use
 # 'origin/$HEAD_REF' (the actual PR branch ref) rather than 'HEAD', because in
-# GitHub Actions the checkout ref is a synthetic merge commit (refs/pull/N/merge)
-# that makes 'git log BASE..HEAD' return empty even when the PR has real changes.
-# This is especially reproducible when the base branch has been merged into the
-# PR branch via update-branch. # Issue #1822
+# GitHub Actions the checkout ref is a synthetic merge commit (refs/pull/N/merge).
+# The origin/$HEAD_REF approach (Issue #1822) makes git diff safe to use here;
+# previously git log was needed to work around the synthetic merge ref, but that
+# caused false RUN_ALL=true for add-then-revert patterns (Issue #1833).
 if [[ -n "${HEAD_REF:-}" ]]; then
   COMPARE_REF="origin/$HEAD_REF"
 else
   COMPARE_REF="HEAD"
 fi
-CHANGED_FILES=$(git log --name-only --format="" --no-merges "$BASE_REF..$COMPARE_REF" \
+CHANGED_FILES=$(git diff --name-only "$BASE_REF...$COMPARE_REF" \
   | grep -v '^$' | sort -u || true)
 
 if [[ -z "$CHANGED_FILES" ]]; then

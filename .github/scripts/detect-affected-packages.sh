@@ -3,24 +3,32 @@ set -euo pipefail
 
 BASE_REF="${1:-origin/main}"
 
-# Collect changed files by comparing the merge base of BASE_REF and COMPARE_REF.
-# We use 'git diff --name-only BASE...COMPARE' (three-dot) so that only files
-# that differ in the final state are considered. This avoids false positives from
-# commits that add then revert a file within the same branch.
+# In a PR context (PR_NUMBER and GITHUB_REPOSITORY are set), use the GitHub
+# REST API to get the list of changed files. This is immune to the issue where
+# git diff returns empty after update-branch has merged the base branch into
+# the PR branch, making the three-dot merge base equal to the current base
+# branch tip. Issue #1836.
 #
-# In a PR context, the HEAD_REF env var contains the PR branch name. We use
-# 'origin/$HEAD_REF' (the actual PR branch ref) rather than 'HEAD', because in
-# GitHub Actions the checkout ref is a synthetic merge commit (refs/pull/N/merge).
-# The origin/$HEAD_REF approach (Issue #1822) makes git diff safe to use here;
-# previously git log was needed to work around the synthetic merge ref, but that
-# caused false RUN_ALL=true for add-then-revert patterns (Issue #1833).
-if [[ -n "${HEAD_REF:-}" ]]; then
-  COMPARE_REF="origin/$HEAD_REF"
+# In a non-PR context (push to main, manual trigger, etc.), fall back to
+# git diff three-dot notation. The HEAD_REF env var contains the PR branch
+# name when available; we use 'origin/$HEAD_REF' rather than 'HEAD', because
+# in GitHub Actions the checkout ref is a synthetic merge commit
+# (refs/pull/N/merge). Issue #1822.
+if [[ -n "${PR_NUMBER:-}" && -n "${GITHUB_REPOSITORY:-}" ]]; then
+  CHANGED_FILES=$(gh api \
+    "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+    --paginate \
+    --jq '.[].filename' \
+    2>/dev/null | grep -v '^$' | sort -u || true)
 else
-  COMPARE_REF="HEAD"
+  if [[ -n "${HEAD_REF:-}" ]]; then
+    COMPARE_REF="origin/$HEAD_REF"
+  else
+    COMPARE_REF="HEAD"
+  fi
+  CHANGED_FILES=$(git diff --name-only "$BASE_REF...$COMPARE_REF" \
+    | grep -v '^$' | sort -u || true)
 fi
-CHANGED_FILES=$(git diff --name-only "$BASE_REF...$COMPARE_REF" \
-  | grep -v '^$' | sort -u || true)
 
 if [[ -z "$CHANGED_FILES" ]]; then
   echo "run-all=false" >> "$GITHUB_OUTPUT"

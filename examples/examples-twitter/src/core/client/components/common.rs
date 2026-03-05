@@ -124,7 +124,7 @@ pub fn button_with_size(
 		page!(|class: String, text: String, disabled: bool| {
 			button {
 				class: class,
-				r#type: "button",
+				type: "button",
 				disabled: disabled,
 				@click: {
 							let on_click = on_click_clone.clone();
@@ -143,7 +143,7 @@ pub fn button_with_size(
 		page!(|class: String, text: String, disabled: bool| {
 			button {
 				class: { class },
-				r#type: "button",
+				type: "button",
 				disabled: disabled,
 				data_reactive: "true",
 				{ text }
@@ -220,7 +220,7 @@ pub fn error_alert(message: &str, dismissible: bool) -> View {
 						{ message }
 					}
 					button {
-						r#type: "button",
+						type: "button",
 						class: "btn-icon text-danger hover:bg-red-100 dark:hover:bg-red-900/30 -mr-2 -mt-1",
 						aria_label: "Close",
 						svg {
@@ -357,13 +357,13 @@ pub fn text_input(
 			div {
 				class: "mb-4",
 				label {
-					r#for: id_owned.clone(),
+					for: id_owned.clone(),
 					class: "form-label",
 					{ label_owned }
 				}
 				watch {
 					input {
-						r#type: input_type_owned.clone(),
+						type: input_type_owned.clone(),
 						class: "form-input",
 						id: id_owned.clone(),
 						name: id_owned.clone(),
@@ -399,13 +399,13 @@ pub fn text_input(
 			div {
 				class: "mb-4",
 				label {
-					r#for: { id_owned.clone() },
+					for: { id_owned.clone() },
 					class: "form-label",
 					{ label_owned }
 				}
 				watch {
 					input {
-						r#type: { input_type_owned.clone() },
+						type: { input_type_owned.clone() },
 						class: "form-input",
 						id: { id_owned.clone() },
 						name: { id_owned.clone() },
@@ -470,7 +470,7 @@ pub fn textarea(
 			div {
 				class: "mb-4",
 				label {
-					r#for: id_owned.clone(),
+					for: id_owned.clone(),
 					class: "form-label",
 					{ label_owned }
 				}
@@ -526,7 +526,7 @@ pub fn textarea(
 			div {
 				class: "mb-4",
 				label {
-					r#for: { id_owned.clone() },
+					for: { id_owned.clone() },
 					class: "form-label",
 					{ label_owned }
 				}
@@ -661,7 +661,7 @@ pub fn theme_toggle() -> View {
 	page!(|| {
 		button {
 			class: "theme-toggle",
-			r#type: "button",
+			type: "button",
 			id: "theme-toggle-btn",
 			aria_label: "Toggle theme",
 			svg {

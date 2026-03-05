@@ -161,7 +161,7 @@ pub fn login_form() -> View {
 							label {
 								class: "flex items-center gap-2 cursor-pointer",
 								input {
-									r#type: "checkbox",
+									type: "checkbox",
 									class: "w-4 h-4 rounded border-border text-brand focus:ring-brand",
 								}
 								span {
@@ -180,7 +180,7 @@ pub fn login_form() -> View {
 							watch {
 								if loading_signal.get() {
 									button {
-										r#type: "submit",
+										type: "submit",
 										class: "btn-primary w-full opacity-50 cursor-not-allowed",
 										disabled: loading_signal.get(),
 										form: "login-form",
@@ -194,7 +194,7 @@ pub fn login_form() -> View {
 									}
 								} else {
 									button {
-										r#type: "submit",
+										type: "submit",
 										class: "btn-primary w-full",
 										form: "login-form",
 										"Sign in"
@@ -392,12 +392,12 @@ pub fn register_form() -> View {
 						div {
 							class: "flex items-start gap-2 mt-4",
 							input {
-								r#type: "checkbox",
+								type: "checkbox",
 								class: "w-4 h-4 mt-1 rounded border-border text-brand focus:ring-brand",
 								id: "terms",
 							}
 							label {
-								r#for: "terms",
+								for: "terms",
 								class: "text-sm text-content-secondary",
 								"I agree to the "
 								span {
@@ -416,7 +416,7 @@ pub fn register_form() -> View {
 							watch {
 								if loading_signal.get() {
 									button {
-										r#type: "submit",
+										type: "submit",
 										class: "btn-primary w-full opacity-50 cursor-not-allowed",
 										disabled: loading_signal.get(),
 										form: "register-form",
@@ -430,7 +430,7 @@ pub fn register_form() -> View {
 									}
 								} else {
 									button {
-										r#type: "submit",
+										type: "submit",
 										class: "btn-primary w-full",
 										form: "register-form",
 										"Create account"

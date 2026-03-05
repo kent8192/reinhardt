@@ -153,10 +153,11 @@ impl<B: ThrottleBackend> GeoRateThrottle<B> {
 	fn get_country_code(&self, ip: IpAddr) -> Option<String> {
 		let reader = self.geoip_reader.as_ref()?;
 
-		let country: geoip2::Country = reader.lookup(ip).ok()??;
+		let result = reader.lookup(ip).ok()?;
+		let country: geoip2::Country = result.decode().ok()??;
 		country
 			.country
-			.and_then(|c| c.iso_code)
+			.iso_code
 			.map(|s| s.to_string())
 	}
 

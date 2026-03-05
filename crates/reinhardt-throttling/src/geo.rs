@@ -147,16 +147,28 @@ impl<B: ThrottleBackend> GeoRateThrottle<B> {
 		})
 	}
 
+	/// Creates a new geo-based throttle with a pre-loaded reader (test only)
+	#[cfg(all(test, feature = "geo-limiting"))]
+	fn new_with_reader(
+		backend: Arc<B>,
+		config: GeoRateConfig,
+		reader: Arc<maxminddb::Reader<Vec<u8>>>,
+	) -> Self {
+		Self {
+			backend,
+			config,
+			geoip_reader: Some(reader),
+		}
+	}
+
 	#[cfg(feature = "geo-limiting")]
 	/// Get country code from IP address
 	fn get_country_code(&self, ip: IpAddr) -> Option<String> {
 		let reader = self.geoip_reader.as_ref()?;
 
-		let country: geoip2::Country = reader.lookup(ip).ok()??;
-		country
-			.country
-			.and_then(|c| c.iso_code)
-			.map(|s| s.to_string())
+		let result = reader.lookup(ip).ok()?;
+		let country: geoip2::Country = result.decode().ok()??;
+		country.country.iso_code.map(|s| s.to_string())
 	}
 
 	#[cfg(not(feature = "geo-limiting"))]
@@ -285,5 +297,80 @@ mod tests {
 		let throttle = GeoRateThrottle::new_without_geoip(backend, config);
 
 		assert_eq!(throttle.get_rate(), (50, 60));
+	}
+
+	#[cfg(feature = "geo-limiting")]
+	mod geo_limiting_tests {
+		use super::*;
+		use rstest::rstest;
+		use std::path::PathBuf;
+
+		fn test_mmdb_path() -> PathBuf {
+			PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+				.join("test-data")
+				.join("GeoIP2-Country-Test.mmdb")
+		}
+
+		fn create_test_reader() -> Arc<maxminddb::Reader<Vec<u8>>> {
+			Arc::new(
+				maxminddb::Reader::open_readfile(test_mmdb_path().to_str().unwrap())
+					.expect("Failed to open test mmdb file"),
+			)
+		}
+
+		#[rstest]
+		#[tokio::test]
+		async fn test_get_country_code_with_valid_ip() {
+			// Arrange
+			let backend = Arc::new(MemoryBackend::new());
+			let config = GeoRateConfig::new(HashMap::new(), (50, 60));
+			let reader = create_test_reader();
+			let throttle = GeoRateThrottle::new_with_reader(backend, config, reader);
+			let ip: IpAddr = "89.160.20.112".parse().unwrap();
+
+			// Act
+			let country_code = throttle.get_country_code(ip);
+
+			// Assert
+			assert_eq!(country_code, Some("SE".to_string()));
+		}
+
+		#[rstest]
+		#[tokio::test]
+		async fn test_get_country_code_with_unknown_ip() {
+			// Arrange
+			let backend = Arc::new(MemoryBackend::new());
+			let config = GeoRateConfig::new(HashMap::new(), (50, 60));
+			let reader = create_test_reader();
+			let throttle = GeoRateThrottle::new_with_reader(backend, config, reader);
+			let ip: IpAddr = "127.0.0.1".parse().unwrap();
+
+			// Act
+			let country_code = throttle.get_country_code(ip);
+
+			// Assert
+			assert_eq!(country_code, None);
+		}
+
+		#[rstest]
+		#[tokio::test]
+		async fn test_geo_rate_throttle_with_country_specific_rate() {
+			// Arrange
+			let backend = Arc::new(MemoryBackend::new());
+			let mut country_rates = HashMap::new();
+			// IP 89.160.20.112 maps to SE (Sweden) in the test database
+			country_rates.insert("SE".to_string(), (3, 60));
+			let config = GeoRateConfig::new(country_rates, (10, 60));
+			let reader = create_test_reader();
+			let throttle = GeoRateThrottle::new_with_reader(backend, config, reader);
+
+			// Act & Assert
+			// SE-specific rate is 3 requests per 60 seconds
+			for _ in 0..3 {
+				assert!(throttle.allow_request("ip:89.160.20.112").await.unwrap());
+			}
+			// 4th request should be denied (exceeds SE rate of 3)
+			assert!(!throttle.allow_request("ip:89.160.20.112").await.unwrap());
+		}
 	}
 }

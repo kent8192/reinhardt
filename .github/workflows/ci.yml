@@ -129,6 +129,14 @@ jobs:
       runner: ${{ needs.determine-runner.outputs.runner }}
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
 
+  security-audit:
+    name: Security Audit
+    needs: [determine-runner, check-branch-status]
+    if: needs.check-branch-status.outputs.is-behind != 'true' && needs.check-branch-status.outputs.has-conflicts != 'true'
+    uses: ./.github/workflows/security-audit.yml
+    with:
+      runner: ${{ needs.determine-runner.outputs.runner }}
+
   semver-check:
     name: SemVer Check
     needs: [determine-runner, check-branch-status]
@@ -281,6 +289,7 @@ jobs:
       - clippy
       - publish-check
       - todo-check
+      - security-audit
       - semver-check
       - release-dry-run
       - unit-test
@@ -311,6 +320,7 @@ jobs:
             "fmt:${{ needs.fmt.result }}"
             "clippy:${{ needs.clippy.result }}"
             "todo-check:${{ needs.todo-check.result }}"
+            "security-audit:${{ needs.security-audit.result }}"
             "semver-check:${{ needs.semver-check.result }}"
             "docs-rs-check:${{ needs.docs-rs-check.result }}"
             "cross-platform-check:${{ needs.cross-platform-check.result }}"

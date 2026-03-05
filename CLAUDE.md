@@ -304,6 +304,11 @@ docker run --rm -v "$(pwd):/src" semgrep/semgrep semgrep scan --config .semgrep/
 docker run --rm -v "$(pwd):/src" semgrep/semgrep semgrep scan --config .semgrep/ --baseline-commit origin/main --error --metrics off
 ```
 
+**Security Audit:**
+```bash
+cargo make audit  # Check for known vulnerabilities in dependencies
+```
+
 **Placeholder Check (formatter artifact detection):**
 ```bash
 # Check for __reinhardt_placeholder__! left in source files after page! macro formatting

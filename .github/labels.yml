@@ -172,3 +172,8 @@
 - name: automated
   color: "ededed"
   description: "Automated PR (release-plz)"
+
+# Automation Labels
+- name: auto-closed
+  color: c5def5
+  description: Automatically closed when all sub-issues were completed

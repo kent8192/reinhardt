@@ -349,6 +349,7 @@ members = [
   "crates/reinhardt-tables",                           # Data table rendering
   "crates/reinhardt-taggit",                           # Tagging functionality
   "crates/reinhardt-debug-toolbar",                    # Debug toolbar
+  "crates/reinhardt-cms",                              # Content management system
   # Integration tests
   "tests",
   "tests/integration",
@@ -436,6 +437,7 @@ reinhardt-payment-mocks = { path = "crates/reinhardt-payment-mocks", version = "
 reinhardt-tables = { path = "crates/reinhardt-tables", version = "0.1.0-alpha.1" }
 reinhardt-taggit = { path = "crates/reinhardt-taggit", version = "0.1.0" }
 reinhardt-debug-toolbar = { path = "crates/reinhardt-debug-toolbar", version = "0.1.0-alpha.1" }
+reinhardt-cms = { path = "crates/reinhardt-cms", version = "0.1.0-alpha.1" }
 
 # Query subcrates
 reinhardt-query-macros = { path = "crates/reinhardt-query/macros", version = "0.1.0-rc.4" }

@@ -92,9 +92,17 @@ impl<V: ViewSet + 'static> Handler for ViewSetHandler<V> {
 		}
 
 		// Resolve action from HTTP method
-		let action_name = self.action_map.get(&request.method).ok_or_else(|| {
-			reinhardt_core::exception::Error::Http(format!("Method {} not allowed", request.method))
-		})?;
+		let action_name = match self.action_map.get(&request.method) {
+			Some(name) => name,
+			None => {
+				let allowed: Vec<String> = self.action_map.keys().map(|m| m.to_string()).collect();
+				let mut response = Response::new(hyper::StatusCode::METHOD_NOT_ALLOWED);
+				response
+					.headers
+					.insert(hyper::header::ALLOW, allowed.join(", ").parse().unwrap());
+				return Ok(response);
+			}
+		};
 
 		// Create Action from name
 		let action = Action::from_name(action_name);
@@ -1295,5 +1303,127 @@ mod tests {
 		// Assert
 		assert_eq!(*guard1, "test_value");
 		assert_eq!(*guard2, "test_value");
+	}
+
+	/// Minimal ViewSet implementation for testing ViewSetHandler
+	struct MockViewSet;
+
+	#[async_trait]
+	impl ViewSet for MockViewSet {
+		fn get_basename(&self) -> &str {
+			"mock"
+		}
+
+		async fn dispatch(
+			&self,
+			_request: reinhardt_http::Request,
+			_action: crate::Action,
+		) -> reinhardt_http::Result<reinhardt_http::Response> {
+			Ok(reinhardt_http::Response::ok())
+		}
+	}
+
+	/// Helper to build a ViewSetHandler with a specific action_map
+	fn build_handler(methods: Vec<Method>) -> ViewSetHandler<MockViewSet> {
+		let mut action_map = HashMap::new();
+		for method in methods {
+			action_map.insert(method, "mock_action".to_string());
+		}
+		ViewSetHandler::new(Arc::new(MockViewSet), action_map, None, None)
+	}
+
+	/// Helper to build a minimal request with the given method
+	fn build_request(method: Method) -> reinhardt_http::Request {
+		reinhardt_http::Request::builder()
+			.method(method)
+			.uri("/mock/")
+			.version(hyper::Version::HTTP_11)
+			.headers(hyper::HeaderMap::new())
+			.body(bytes::Bytes::new())
+			.build()
+			.unwrap()
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_unregistered_method_returns_405() {
+		// Arrange
+		let handler = build_handler(vec![Method::GET]);
+		let request = build_request(Method::DELETE);
+
+		// Act
+		let response = Handler::handle(&handler, request).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, hyper::StatusCode::METHOD_NOT_ALLOWED);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_405_response_allow_header_contains_registered_methods() {
+		// Arrange
+		let handler = build_handler(vec![Method::GET, Method::POST]);
+		let request = build_request(Method::DELETE);
+
+		// Act
+		let response = Handler::handle(&handler, request).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, hyper::StatusCode::METHOD_NOT_ALLOWED);
+		let allow_header = response
+			.headers
+			.get(hyper::header::ALLOW)
+			.expect("Allow header must be present");
+		let allow_str = allow_header.to_str().unwrap();
+		// Both registered methods must appear in the Allow header
+		assert!(allow_str.contains("GET"), "Allow header must contain GET");
+		assert!(allow_str.contains("POST"), "Allow header must contain POST");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_405_response_allow_header_comma_separated_format() {
+		// Arrange
+		let handler = build_handler(vec![Method::GET, Method::PUT]);
+		let request = build_request(Method::PATCH);
+
+		// Act
+		let response = Handler::handle(&handler, request).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, hyper::StatusCode::METHOD_NOT_ALLOWED);
+		let allow_header = response
+			.headers
+			.get(hyper::header::ALLOW)
+			.expect("Allow header must be present");
+		let allow_str = allow_header.to_str().unwrap();
+		// Verify comma-separated format: each method is separated by ", "
+		let methods: Vec<&str> = allow_str.split(", ").collect();
+		assert_eq!(
+			methods.len(),
+			2,
+			"Allow header must contain exactly 2 methods"
+		);
+		for method in &methods {
+			assert!(
+				*method == "GET" || *method == "PUT",
+				"Unexpected method in Allow header: {}",
+				method
+			);
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_registered_method_does_not_return_405() {
+		// Arrange
+		let handler = build_handler(vec![Method::GET]);
+		let request = build_request(Method::GET);
+
+		// Act
+		let response = Handler::handle(&handler, request).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, hyper::StatusCode::OK);
 	}
 }

@@ -16,8 +16,8 @@ First, add Reinhardt to your project's `Cargo.toml`:
 
 {% versioned_code(lang="toml") %}
 [dependencies]
-reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web", features = ["standard", "serializers"] }
-# Or for minimal setup: reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web", default-features = false, features = ["minimal", "serializers"] }
+reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web", features = ["standard"] }
+# Or for minimal setup: reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
@@ -42,43 +42,52 @@ pub struct Snippet {
 }
 ```
 
-## Custom Validation with Serializer Trait
+## Custom Serialization with the Serializer Trait
 
-For custom validation logic, implement the `Serializer` trait:
+For custom serialization logic, implement the `Serializer` trait. Validation can be handled by a separate function:
 
 ```rust
 use reinhardt::prelude::*;
 
 pub struct SnippetSerializer;
 
-impl Serializer<Snippet> for SnippetSerializer {
-    fn validate(&self, instance: &Snippet) -> ValidationResult {
-        let mut errors = Vec::new();
+impl Serializer for SnippetSerializer {
+    type Input = Snippet;
+    type Output = Vec<u8>;
 
-        // Validate title length
-        if instance.title.is_empty() {
-            errors.push(ValidationError::new("title", "Title cannot be empty"));
-        }
+    fn serialize(&self, input: &Self::Input) -> Result<Self::Output, SerializerError> {
+        serde_json::to_vec(input).map_err(|e| SerializerError::SerializeError(e.to_string()))
+    }
 
-        // Validate code
-        if instance.code.is_empty() {
-            errors.push(ValidationError::new("code", "Code cannot be empty"));
-        }
+    fn deserialize(&self, output: &Self::Output) -> Result<Self::Input, SerializerError> {
+        serde_json::from_slice(output).map_err(|e| SerializerError::DeserializeError(e.to_string()))
+    }
+}
 
-        // Validate language
-        let valid_languages = ["python", "rust", "javascript"];
-        if !valid_languages.contains(&instance.language.as_str()) {
-            errors.push(ValidationError::new(
-                "language",
-                "Language must be python, rust, or javascript"
-            ));
-        }
+// For custom validation, use a separate validation function:
+fn validate_snippet(snippet: &Snippet) -> Result<(), Vec<ValidationError>> {
+    let mut errors = Vec::new();
 
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
+    if snippet.title.is_empty() {
+        errors.push(ValidationError::field_error("title", "Title cannot be empty"));
+    }
+
+    if snippet.code.is_empty() {
+        errors.push(ValidationError::field_error("code", "Code cannot be empty"));
+    }
+
+    let valid_languages = ["python", "rust", "javascript"];
+    if !valid_languages.contains(&snippet.language.as_str()) {
+        errors.push(ValidationError::field_error(
+            "language",
+            "Language must be python, rust, or javascript"
+        ));
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
     }
 }
 ```
@@ -177,41 +186,53 @@ request.validate()?;  // Validates all fields
 
 ---
 
-### Pattern 2: Custom `Serializer` Trait
+### Pattern 2: Custom `Serializer` Trait with Validation
 
-For complex validation logic or business rules:
+For custom serialization with complex validation logic or business rules:
 
 ```rust
 use reinhardt::prelude::*;
 
 pub struct UserSerializer;
 
-impl Serializer<User> for UserSerializer {
-    fn validate(&self, instance: &User) -> ValidationResult {
-        let mut errors = Vec::new();
+impl Serializer for UserSerializer {
+    type Input = User;
+    type Output = Vec<u8>;
 
-        // Complex business rule: username must not contain admin keywords
-        if instance.username.to_lowercase().contains("admin") {
-            errors.push(ValidationError::new(
-                "username",
-                "Username cannot contain 'admin'"
-            ));
-        }
+    fn serialize(&self, input: &Self::Input) -> Result<Self::Output, SerializerError> {
+        serde_json::to_vec(input).map_err(|e| SerializerError::SerializeError(e.to_string()))
+    }
 
-        // Database lookup validation (async)
-        // Check if username is already taken
-        if User::exists_by_username(&instance.username).await {
-            errors.push(ValidationError::new(
-                "username",
-                "Username already taken"
-            ));
-        }
+    fn deserialize(&self, output: &Self::Output) -> Result<Self::Input, SerializerError> {
+        serde_json::from_slice(output).map_err(|e| SerializerError::DeserializeError(e.to_string()))
+    }
+}
 
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
+// For complex business rules, use a separate validation function:
+async fn validate_user(user: &User) -> Result<(), Vec<ValidationError>> {
+    let mut errors = Vec::new();
+
+    // Complex business rule: username must not contain admin keywords
+    if user.username.to_lowercase().contains("admin") {
+        errors.push(ValidationError::field_error(
+            "username",
+            "Username cannot contain 'admin'"
+        ));
+    }
+
+    // Database lookup validation (async)
+    // Check if username is already taken
+    if User::exists_by_username(&user.username).await {
+        errors.push(ValidationError::field_error(
+            "username",
+            "Username already taken"
+        ));
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
     }
 }
 ```
@@ -307,18 +328,18 @@ pub struct User {
     pub age: i32,
 }
 
-let validator = |user: &User| -> ValidationResult {
+fn validate_user(user: &User) -> Result<(), Vec<ValidationError>> {
     let mut errors = Vec::new();
 
     if user.username.len() < 3 {
-        errors.push(ValidationError::new(
+        errors.push(ValidationError::field_error(
             "username",
             "Username must be at least 3 characters"
         ));
     }
 
     if user.age < 18 {
-        errors.push(ValidationError::new(
+        errors.push(ValidationError::field_error(
             "age",
             "User must be at least 18 years old"
         ));
@@ -329,9 +350,7 @@ let validator = |user: &User| -> ValidationResult {
     } else {
         Err(errors)
     }
-};
-
-let serializer = ModelSerializer::new(validator);
+}
 
 // Valid data
 let valid_user = User {
@@ -340,7 +359,7 @@ let valid_user = User {
     email: "alice@example.com".to_string(),
     age: 25,
 };
-assert!(serializer.validate(&valid_user).is_ok());
+assert!(validate_user(&valid_user).is_ok());
 
 // Invalid data
 let invalid_user = User {
@@ -349,7 +368,7 @@ let invalid_user = User {
     email: "bob@example.com".to_string(),
     age: 16,  // Too young
 };
-assert!(serializer.validate(&invalid_user).is_err());
+assert!(validate_user(&invalid_user).is_err());
 ```
 
 ## Nested Serializers
@@ -397,8 +416,7 @@ use reinhardt::{post, Json};
 #[post("/snippets", name = "create_snippet")]
 async fn create_snippet(Json(snippet): Json<Snippet>) -> Result<Response> {
     // 1. Validate the data
-    let validator = SnippetSerializer;
-    if let Err(errors) = validator.validate(&snippet) {
+    if let Err(errors) = validate_snippet(&snippet) {
         return Response::bad_request()
             .with_json(&errors);
     }

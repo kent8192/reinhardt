@@ -271,21 +271,18 @@ pub fn validate_csrf_token(provided: &str, expected: &str) -> bool {
 	constant_time_eq(provided.as_bytes(), expected.as_bytes())
 }
 
-/// Constant-time byte comparison to prevent timing attacks.
+/// Constant-time comparison to prevent timing attacks.
 ///
-/// Returns true only if both slices are equal in length and content.
-/// The comparison always examines all bytes regardless of where
-/// differences occur.
+/// Hashes both inputs with SHA-256 to produce fixed-length digests,
+/// then compares the digests in constant time using `subtle`. This
+/// prevents leaking the length of either input through timing.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-	if a.len() != b.len() {
-		return false;
-	}
+	use sha2::{Digest, Sha256};
+	use subtle::ConstantTimeEq;
 
-	let mut result = 0u8;
-	for (x, y) in a.iter().zip(b.iter()) {
-		result |= x ^ y;
-	}
-	result == 0
+	let hash_a = Sha256::digest(a);
+	let hash_b = Sha256::digest(b);
+	hash_a.ct_eq(&hash_b).into()
 }
 
 /// Sanitizes mutation data values to prevent stored XSS.

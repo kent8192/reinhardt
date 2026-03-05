@@ -434,10 +434,13 @@ impl StyleTag {
 			attrs.push(format!("nonce=\"{}\"", html_escape(nonce)));
 		}
 
+		// Escape "</", preventing content from closing the style tag (XSS mitigation)
+		let escaped_content = self.content.replace("</", "<\\/");
+
 		if attrs.is_empty() {
-			format!("<style>{}</style>", self.content)
+			format!("<style>{}</style>", escaped_content)
 		} else {
-			format!("<style {}>{}</style>", attrs.join(" "), self.content)
+			format!("<style {}>{}</style>", attrs.join(" "), escaped_content)
 		}
 	}
 }
@@ -792,6 +795,31 @@ mod tests {
 	fn test_style_tag() {
 		let style = StyleTag::new("body { margin: 0; }");
 		assert_eq!(style.to_html(), "<style>body { margin: 0; }</style>");
+	}
+
+	#[rstest]
+	fn test_style_tag_escapes_closing_tag_xss() {
+		// Arrange
+		let style = StyleTag::new("</style><script>alert(1)</script>");
+
+		// Act
+		let html = style.to_html();
+
+		// Assert
+		assert_eq!(html, "<style><\\/style><script>alert(1)<\\/script></style>");
+		assert!(!html.contains("</style><script>"));
+	}
+
+	#[rstest]
+	fn test_style_tag_escapes_multiple_closing_sequences() {
+		// Arrange
+		let style = StyleTag::new("a{} </style> b{} </style>");
+
+		// Act
+		let html = style.to_html();
+
+		// Assert
+		assert_eq!(html, "<style>a{} <\\/style> b{} <\\/style></style>");
 	}
 
 	#[rstest]

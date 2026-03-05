@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-forms"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.4"
 description = "Form handling and validation"
 edition.workspace = true
 license.workspace = true
@@ -22,6 +22,10 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 
+# Crypto
+subtle = "2"
+sha2 = "0.10"
+
 # Regex
 regex = "1.10"
 
@@ -37,4 +41,4 @@ tokio-test = "0.4"
 rstest = { workspace = true }
 proptest = { workspace = true }
 tempfile = "3"
-reinhardt-test = { workspace = true }
+reinhardt-test = { path = "../reinhardt-test" }

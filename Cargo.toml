@@ -338,6 +338,7 @@ members = [
   "crates/reinhardt-dentdelion",                        # Plugin system
   "crates/reinhardt-deeplink",                          # Mobile deep linking
   "crates/reinhardt-openapi",                           # OpenAPI router wrapper
+  "crates/reinhardt-deploy",                           # Deployment engine
   # Integration tests
   "tests",
   "tests/integration",
@@ -417,6 +418,7 @@ reinhardt-websockets = { path = "crates/reinhardt-websockets", version = "0.1.0-
 reinhardt-dentdelion = { path = "crates/reinhardt-dentdelion", version = "0.1.0-rc.4" }
 reinhardt-deeplink = { path = "crates/reinhardt-deeplink", version = "0.1.0-rc.4" }
 reinhardt-openapi = { path = "crates/reinhardt-openapi", version = "0.1.0-rc.4" }
+reinhardt-deploy = { path = "crates/reinhardt-deploy", version = "0.1.0-alpha.1" }
 
 # Query subcrates
 reinhardt-query-macros = { path = "crates/reinhardt-query/macros", version = "0.1.0-rc.4" }

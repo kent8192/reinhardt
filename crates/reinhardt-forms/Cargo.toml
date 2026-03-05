@@ -22,6 +22,10 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 
+# Crypto
+subtle = "2"
+sha2 = "0.10"
+
 # Regex
 regex = "1.10"
 

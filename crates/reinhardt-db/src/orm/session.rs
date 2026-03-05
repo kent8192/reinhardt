@@ -841,7 +841,12 @@ impl Session {
 						// If there are columns to insert, add them
 						if !columns.is_empty() {
 							insert_stmt.columns(columns);
-							insert_stmt.values(values_vec).unwrap();
+							insert_stmt.values(values_vec).map_err(|e| {
+								SessionError::FlushError(format!(
+									"Failed to build INSERT values: {}",
+									e
+								))
+							})?;
 						}
 
 						// Add RETURNING clause for PostgreSQL to get generated ID
@@ -1962,5 +1967,54 @@ mod tests {
 
 		// Assert
 		assert_eq!(result, i64::MAX);
+	}
+
+	#[rstest]
+	fn test_insert_values_error_maps_to_flush_error() {
+		// Arrange
+		// Create an InsertStatement with 2 columns but provide 1 value to trigger mismatch error
+		let mut insert_stmt = RQuery::insert()
+			.into_table(Alias::new("test_table"))
+			.to_owned();
+		insert_stmt.columns(vec![Alias::new("col_a"), Alias::new("col_b")]);
+		let mismatched_values = vec![RValue::String(Some(Box::new("only_one".to_string())))];
+
+		// Act
+		let result: Result<(), SessionError> = insert_stmt
+			.values(mismatched_values)
+			.map(|_| ())
+			.map_err(|e| SessionError::FlushError(format!("Failed to build INSERT values: {}", e)));
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(
+			matches!(err, SessionError::FlushError(ref msg) if msg.contains("Failed to build INSERT values"))
+		);
+		assert!(err.to_string().contains("Flush error:"));
+	}
+
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn test_session_flush_insert_new_object_without_pk(_init_drivers: ()) {
+		// Arrange
+		// Test flush with a new object (no primary key) to exercise the INSERT path
+		let pool = create_test_pool().await;
+		let mut session = Session::new(pool, DbBackend::Sqlite).await.unwrap();
+
+		let user = TestUser {
+			id: None,
+			name: "NewUser".to_string(),
+			email: "newuser@example.com".to_string(),
+		};
+
+		// Act
+		session.add(user).await.unwrap();
+		let flush_result = session.flush().await;
+
+		// Assert
+		assert!(flush_result.is_ok());
+		assert_eq!(session.dirty_count(), 0);
 	}
 }

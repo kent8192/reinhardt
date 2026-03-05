@@ -344,6 +344,8 @@ members = [
   "crates/reinhardt-deploy",                           # Deployment engine
   "crates/reinhardt-seeding",                          # Database seeding framework
   "crates/reinhardt-storages",                         # Cloud storage backends
+  "crates/reinhardt-payment",                          # Payment integration
+  "crates/reinhardt-payment-mocks",                    # Payment testing mocks
   # Integration tests
   "tests",
   "tests/integration",
@@ -426,6 +428,8 @@ reinhardt-openapi = { path = "crates/reinhardt-openapi", version = "0.1.0-rc.4" 
 reinhardt-deploy = { path = "crates/reinhardt-deploy", version = "0.1.0-alpha.1" }
 reinhardt-seeding = { path = "crates/reinhardt-seeding", version = "0.1.0-rc.4" }
 reinhardt-storages = { path = "crates/reinhardt-storages", version = "0.1.0" }
+reinhardt-payment = { path = "crates/reinhardt-payment", version = "0.1.0" }
+reinhardt-payment-mocks = { path = "crates/reinhardt-payment-mocks", version = "0.1.0" }
 
 # Query subcrates
 reinhardt-query-macros = { path = "crates/reinhardt-query/macros", version = "0.1.0-rc.4" }

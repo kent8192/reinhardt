@@ -14,7 +14,7 @@ Reinhardt uses [Semantic Versioning 2.0.0](https://semver.org/) for all publishe
 | Label | Description | Stability Guarantee |
 |-------|-------------|---------------------|
 | `alpha` (0.x.y) | Initial development | No guarantees; anything may change |
-| `rc` (x.y.z-rc.N) | Release candidate | Feature-complete; bug fixes only |
+| `rc` (x.y.z-rc.N) | Release candidate | API frozen; see [RC Phase Rules](#rc-phase-rules) |
 | `stable` (x.y.z) | General availability | Full SemVer guarantees apply |
 
 ### Version Bump Rules
@@ -61,6 +61,56 @@ Items marked with `#[doc(hidden)]`, starting with `__`, or not publicly accessib
 - `pub(crate)` and `pub(super)` items
 
 **Guarantee**: None. May change in any release.
+
+---
+
+## RC Phase Rules
+
+During the Release Candidate phase, the API surface is frozen to validate stability before
+the stable release. The following table summarizes what changes are permitted:
+
+| Change Type | Permitted? | Conditions |
+|-------------|-----------|------------|
+| Bug fixes (no API change) | Yes | Standard review process |
+| Critical bug fix with breaking API change | Yes | Explicit maintainer approval + migration guide |
+| Non-breaking feature additions | **No** | Deferred to next version cycle |
+| Renames via deprecation alias | Yes | Old name preserved as `#[deprecated]` alias |
+| Documentation / test additions | Yes | No API surface change |
+
+### Critical Bug Fixes with Breaking Changes
+
+When a critical bug (data corruption, security vulnerability, soundness issue) can only be
+fixed by modifying an existing public API, the breaking change is permitted with:
+
+1. Explicit maintainer approval via the API Change Proposal template
+2. A new RC version (`rc.N+1`) and stability timer reset
+3. A migration guide included in the PR
+
+### Why Non-Breaking Feature Additions Are Not Permitted
+
+New public APIs (functions, types, traits) introduced during RC have not undergone the
+stabilization validation period. Even though they do not break existing code, they enter the
+stable release as untested API surface. Feature additions should target the next version
+cycle (e.g., `0.2.0-alpha`).
+
+### Backward-Compatible Renames
+
+Naming issues discovered during RC validation may be fixed by renaming the item and
+preserving the old name as a deprecated alias:
+
+```rust
+// Improved name
+pub struct ConnectionConfig { ... }
+
+// Backward-compatible alias
+#[deprecated(since = "0.1.0-rc.2", note = "Renamed to `ConnectionConfig`. Will be removed in 0.2.0.")]
+pub type ConnectionParams = ConnectionConfig;
+```
+
+The deprecated alias must survive until the next major version.
+
+For the full stability policy with approval processes and timelines, see
+[Stability Policy](../instructions/STABILITY_POLICY.md).
 
 ---
 

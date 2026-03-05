@@ -31,7 +31,64 @@ You may be looking for:
 - 📚 [Getting Started Guide](https://reinhardt-web.dev/quickstart/getting-started/) - Step-by-step tutorial
 - 🎛️ [Feature Flags](https://reinhardt-web.dev/docs/feature-flags/) - Fine-tune your build
 - 📖 [API Documentation](https://docs.rs/reinhardt-web) - Complete API reference
+- 🎯 [Who is Reinhardt For?](#who-is-reinhardt-for) - Check if Reinhardt fits your needs
+- 🛤️ [Choose Your Path](#choose-your-path) - Find the right starting point for you
+- 🔒 [API Stability](#api-stability) - Our stability promise and release lifecycle
 - 💬 [Community & Support](#getting-help) - Get help from the community
+
+## Who is Reinhardt For?
+
+Reinhardt is designed for developers who:
+
+- **Know Django/DRF** and want the same productivity in Rust
+- **Use Axum/Actix** but miss Django's batteries (ORM, admin, auth, DI)
+- **Need a full-stack Rust framework** without adopting Leptos/Dioxus for the frontend
+- **Want incremental adoption** -- start with just DI or ORM, grow into a full stack later
+
+If you have written `ModelSerializer` or `Depends()` before, Reinhardt will feel like home.
+
+## Choose Your Path
+
+| Your Goal | Start Here | Time to First Request |
+|-----------|-----------|----------------------|
+| **Full-stack REST API** | [Quick Start](#quick-start) | ~5 min |
+| **Just DI for my Axum app** | [Minimal Installation](#minimal-micro-build) | ~2 min |
+| **Full-stack with Pages (WASM + SSR)** | [Twitter Demo](examples/examples-twitter/) | ~10 min |
+
+### Path A: Full-Stack REST API
+
+```bash
+cargo install reinhardt-admin
+reinhardt-admin startproject myproject
+cd myproject
+cargo make runserver
+# Visit http://127.0.0.1:8000
+```
+
+### Path B: Standalone DI
+
+```toml
+[dependencies]
+reinhardt = { version = "0.1.0-rc.2", package = "reinhardt-web", features = ["minimal"] }
+```
+
+```rust
+use reinhardt::{Json, Path, Query};
+
+#[reinhardt::endpoint(method = "GET", path = "/hello/:name")]
+async fn hello(Path(name): Path<String>) -> Json<String> {
+    Json(format!("Hello, {}!", name))
+}
+```
+
+### Path C: Full-Stack with Pages
+
+```bash
+reinhardt-admin startproject myproject --with-pages
+cd myproject
+cargo make dev
+# Frontend: http://127.0.0.1:8000
+```
 
 ## Why Reinhardt?
 
@@ -63,6 +120,27 @@ Reinhardt brings together the best of three worlds:
 - **Signals** for event-driven architecture
 
 See [Available Components](#available-components) for complete list and [Getting Started](https://reinhardt-web.dev/quickstart/getting-started/) for examples.
+
+## API Stability
+
+Reinhardt follows a **three-phase lifecycle** for every crate:
+
+| Phase | What to Expect |
+|-------|---------------|
+| **Alpha** (`0.x.0-alpha.N`) | APIs may change freely. Early adopters welcome. |
+| **RC** (`0.x.0-rc.N`) | API frozen. Bug fixes only. Safe to build against. |
+| **Stable** (`0.x.0`) | Full SemVer 2.0 guarantees. |
+
+**Current status:** All crates are at `0.1.0-rc` (Release Candidate).
+
+**What this means for you:**
+- Public APIs will only change to fix critical bugs -- no new features or additions
+- If a critical fix requires an API change, a migration guide is provided
+- Naming improvements use deprecation aliases (your existing code keeps compiling)
+- Bug fixes are shipped as `rc.2`, `rc.3`, etc.
+- Stable `0.1.0` will be released after a 2-week stability period with no critical issues
+
+For the full stability policy, see [API Stability Policy](docs/API_STABILITY.md).
 
 ## Installation
 

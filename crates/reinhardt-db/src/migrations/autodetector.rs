@@ -540,7 +540,7 @@ impl ProjectState {
 	pub fn to_database_schema(&self) -> super::schema_diff::DatabaseSchema {
 		let mut tables = BTreeMap::new();
 
-		for ((_app_label, _model_name), model_state) in &self.models {
+		for ((app_label, model_name), model_state) in &self.models {
 			let mut columns = BTreeMap::new();
 			for (field_name, field_state) in &model_state.fields {
 				// FieldType enum already contains all type information including length
@@ -582,12 +582,26 @@ impl ProjectState {
 				})
 				.collect();
 
+			// Convert indexes from ModelState to IndexSchema
+			let indexes: Vec<super::schema_diff::IndexSchema> = model_state
+				.indexes
+				.iter()
+				.map(|idx| super::schema_diff::IndexSchema {
+					name: idx.name.clone(),
+					columns: idx.fields.clone(),
+					unique: idx.unique,
+				})
+				.collect();
+
+			// Use app_label + model_name as table key to prevent collisions
+			// across apps (Django convention: app_label_modelname)
+			let table_key = format!("{}_{}", app_label, model_name.to_lowercase());
 			tables.insert(
-				model_state.table_name.clone(),
+				table_key.clone(),
 				super::schema_diff::TableSchema {
-					name: model_state.table_name.clone(),
+					name: table_key,
 					columns,
-					indexes: Vec::new(),
+					indexes,
 					constraints,
 				},
 			);
@@ -616,7 +630,7 @@ impl ProjectState {
 	) -> super::schema_diff::DatabaseSchema {
 		let mut tables = BTreeMap::new();
 
-		for ((this_app_label, _model_name), model_state) in &self.models {
+		for ((this_app_label, model_name), model_state) in &self.models {
 			// Filter by app_label
 			if this_app_label == app_label {
 				let mut columns = BTreeMap::new();
@@ -658,12 +672,26 @@ impl ProjectState {
 					})
 					.collect();
 
+				// Convert indexes from ModelState to IndexSchema
+				let indexes: Vec<super::schema_diff::IndexSchema> = model_state
+					.indexes
+					.iter()
+					.map(|idx| super::schema_diff::IndexSchema {
+						name: idx.name.clone(),
+						columns: idx.fields.clone(),
+						unique: idx.unique,
+					})
+					.collect();
+
+				// Use app_label + model_name as table key to prevent collisions
+				// across apps (Django convention: app_label_modelname)
+				let table_key = format!("{}_{}", this_app_label, model_name.to_lowercase());
 				tables.insert(
-					model_state.table_name.clone(),
+					table_key.clone(),
 					super::schema_diff::TableSchema {
-						name: model_state.table_name.clone(),
+						name: table_key,
 						columns,
-						indexes: Vec::new(),
+						indexes,
 						constraints,
 					},
 				);
@@ -5462,5 +5490,322 @@ impl ModelState {
 	/// ```
 	pub fn alter_field(&mut self, name: &str, new_field: FieldState) {
 		self.fields.insert(name.to_string(), new_field);
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	/// Helper to build a ProjectState with given models
+	fn build_project_state(models: Vec<((String, String), ModelState)>) -> ProjectState {
+		let mut state = ProjectState::new();
+		for (key, model) in models {
+			state.models.insert(key, model);
+		}
+		state
+	}
+
+	/// Helper to build a minimal ModelState
+	fn build_model_state(
+		app_label: &str,
+		name: &str,
+		fields: Vec<FieldState>,
+		indexes: Vec<IndexDefinition>,
+		constraints: Vec<ConstraintDefinition>,
+	) -> ModelState {
+		let mut field_map = std::collections::BTreeMap::new();
+		for f in fields {
+			field_map.insert(f.name.clone(), f);
+		}
+		ModelState {
+			app_label: app_label.to_string(),
+			name: name.to_string(),
+			table_name: format!("{}_{}", app_label, name.to_lowercase()),
+			fields: field_map,
+			options: std::collections::HashMap::new(),
+			base_model: None,
+			inheritance_type: None,
+			discriminator_column: None,
+			indexes,
+			constraints,
+			many_to_many_fields: Vec::new(),
+		}
+	}
+
+	#[rstest]
+	fn to_database_schema_uses_app_prefixed_table_key() {
+		// Arrange
+		let model = build_model_state(
+			"blog",
+			"Post",
+			vec![FieldState::new(
+				"id",
+				super::super::FieldType::Integer,
+				false,
+			)],
+			Vec::new(),
+			Vec::new(),
+		);
+		let state = build_project_state(vec![(("blog".to_string(), "Post".to_string()), model)]);
+
+		// Act
+		let schema = state.to_database_schema();
+
+		// Assert
+		assert_eq!(schema.tables.len(), 1);
+		assert!(
+			schema.tables.contains_key("blog_post"),
+			"table key should be app_label + '_' + lowercase model name"
+		);
+		let table = &schema.tables["blog_post"];
+		assert_eq!(table.name, "blog_post");
+	}
+
+	#[rstest]
+	fn to_database_schema_prevents_cross_app_collision() {
+		// Arrange
+		// Two different apps with identically named models
+		let blog_user = build_model_state(
+			"blog",
+			"User",
+			vec![FieldState::new(
+				"id",
+				super::super::FieldType::Integer,
+				false,
+			)],
+			Vec::new(),
+			Vec::new(),
+		);
+		let auth_user = build_model_state(
+			"auth",
+			"User",
+			vec![FieldState::new(
+				"id",
+				super::super::FieldType::Integer,
+				false,
+			)],
+			Vec::new(),
+			Vec::new(),
+		);
+		let state = build_project_state(vec![
+			(("blog".to_string(), "User".to_string()), blog_user),
+			(("auth".to_string(), "User".to_string()), auth_user),
+		]);
+
+		// Act
+		let schema = state.to_database_schema();
+
+		// Assert
+		assert_eq!(schema.tables.len(), 2);
+		assert!(schema.tables.contains_key("blog_user"));
+		assert!(schema.tables.contains_key("auth_user"));
+	}
+
+	#[rstest]
+	fn to_database_schema_propagates_indexes() {
+		// Arrange
+		let indexes = vec![
+			IndexDefinition {
+				name: "idx_title".to_string(),
+				fields: vec!["title".to_string()],
+				unique: false,
+			},
+			IndexDefinition {
+				name: "idx_slug_unique".to_string(),
+				fields: vec!["slug".to_string()],
+				unique: true,
+			},
+		];
+		let model = build_model_state(
+			"blog",
+			"Post",
+			vec![
+				FieldState::new("title", super::super::FieldType::VarChar(255), false),
+				FieldState::new("slug", super::super::FieldType::VarChar(100), false),
+			],
+			indexes,
+			Vec::new(),
+		);
+		let state = build_project_state(vec![(("blog".to_string(), "Post".to_string()), model)]);
+
+		// Act
+		let schema = state.to_database_schema();
+
+		// Assert
+		let table = &schema.tables["blog_post"];
+		assert_eq!(table.indexes.len(), 2);
+		assert_eq!(table.indexes[0].name, "idx_title");
+		assert_eq!(table.indexes[0].columns, vec!["title".to_string()]);
+		assert!(!table.indexes[0].unique);
+		assert_eq!(table.indexes[1].name, "idx_slug_unique");
+		assert!(table.indexes[1].unique);
+	}
+
+	#[rstest]
+	fn to_database_schema_propagates_constraints() {
+		// Arrange
+		let constraints = vec![ConstraintDefinition {
+			name: "uq_email".to_string(),
+			constraint_type: "unique".to_string(),
+			fields: vec!["email".to_string()],
+			expression: None,
+			foreign_key_info: None,
+		}];
+		let model = build_model_state(
+			"auth",
+			"Account",
+			vec![FieldState::new(
+				"email",
+				super::super::FieldType::VarChar(255),
+				false,
+			)],
+			Vec::new(),
+			constraints,
+		);
+		let state = build_project_state(vec![(("auth".to_string(), "Account".to_string()), model)]);
+
+		// Act
+		let schema = state.to_database_schema();
+
+		// Assert
+		let table = &schema.tables["auth_account"];
+		assert_eq!(table.constraints.len(), 1);
+		assert_eq!(table.constraints[0].name, "uq_email");
+		assert_eq!(table.constraints[0].constraint_type, "unique");
+		assert_eq!(table.constraints[0].definition, "email");
+	}
+
+	#[rstest]
+	fn to_database_schema_maps_field_params() {
+		// Arrange
+		let mut field = FieldState::new("id", super::super::FieldType::Integer, false);
+		field
+			.params
+			.insert("primary_key".to_string(), "true".to_string());
+		field
+			.params
+			.insert("auto_increment".to_string(), "true".to_string());
+		field.params.insert("default".to_string(), "0".to_string());
+
+		let mut nullable_field = FieldState::new("bio", super::super::FieldType::Text, true);
+		nullable_field
+			.params
+			.insert("default".to_string(), "''".to_string());
+
+		let model = build_model_state(
+			"users",
+			"Profile",
+			vec![field, nullable_field],
+			Vec::new(),
+			Vec::new(),
+		);
+		let state =
+			build_project_state(vec![(("users".to_string(), "Profile".to_string()), model)]);
+
+		// Act
+		let schema = state.to_database_schema();
+
+		// Assert
+		let table = &schema.tables["users_profile"];
+		let id_col = &table.columns["id"];
+		assert!(id_col.primary_key);
+		assert!(id_col.auto_increment);
+		assert_eq!(id_col.default, Some("0".to_string()));
+		assert!(!id_col.nullable);
+
+		let bio_col = &table.columns["bio"];
+		assert!(!bio_col.primary_key);
+		assert!(!bio_col.auto_increment);
+		assert!(bio_col.nullable);
+		assert_eq!(bio_col.default, Some("''".to_string()));
+	}
+
+	#[rstest]
+	fn to_database_schema_for_app_filters_by_app_label() {
+		// Arrange
+		let blog_post = build_model_state(
+			"blog",
+			"Post",
+			vec![FieldState::new(
+				"id",
+				super::super::FieldType::Integer,
+				false,
+			)],
+			Vec::new(),
+			Vec::new(),
+		);
+		let auth_user = build_model_state(
+			"auth",
+			"User",
+			vec![FieldState::new(
+				"id",
+				super::super::FieldType::Integer,
+				false,
+			)],
+			Vec::new(),
+			Vec::new(),
+		);
+		let state = build_project_state(vec![
+			(("blog".to_string(), "Post".to_string()), blog_post),
+			(("auth".to_string(), "User".to_string()), auth_user),
+		]);
+
+		// Act
+		let blog_schema = state.to_database_schema_for_app("blog");
+		let auth_schema = state.to_database_schema_for_app("auth");
+		let empty_schema = state.to_database_schema_for_app("nonexistent");
+
+		// Assert
+		assert_eq!(blog_schema.tables.len(), 1);
+		assert!(blog_schema.tables.contains_key("blog_post"));
+
+		assert_eq!(auth_schema.tables.len(), 1);
+		assert!(auth_schema.tables.contains_key("auth_user"));
+
+		assert_eq!(empty_schema.tables.len(), 0);
+	}
+
+	#[rstest]
+	fn to_database_schema_for_app_propagates_indexes_and_constraints() {
+		// Arrange
+		let indexes = vec![IndexDefinition {
+			name: "idx_created".to_string(),
+			fields: vec!["created_at".to_string()],
+			unique: false,
+		}];
+		let constraints = vec![ConstraintDefinition {
+			name: "ck_status".to_string(),
+			constraint_type: "check".to_string(),
+			fields: vec!["status".to_string()],
+			expression: Some("status IN ('draft', 'published')".to_string()),
+			foreign_key_info: None,
+		}];
+		let model = build_model_state(
+			"blog",
+			"Post",
+			vec![
+				FieldState::new("created_at", super::super::FieldType::DateTime, false),
+				FieldState::new("status", super::super::FieldType::VarChar(20), false),
+			],
+			indexes,
+			constraints,
+		);
+		let state = build_project_state(vec![(("blog".to_string(), "Post".to_string()), model)]);
+
+		// Act
+		let schema = state.to_database_schema_for_app("blog");
+
+		// Assert
+		let table = &schema.tables["blog_post"];
+		assert_eq!(table.indexes.len(), 1);
+		assert_eq!(table.indexes[0].name, "idx_created");
+		assert_eq!(table.indexes[0].columns, vec!["created_at".to_string()]);
+
+		assert_eq!(table.constraints.len(), 1);
+		assert_eq!(table.constraints[0].name, "ck_status");
+		assert_eq!(table.constraints[0].constraint_type, "check");
+		assert_eq!(table.constraints[0].definition, "status");
 	}
 }

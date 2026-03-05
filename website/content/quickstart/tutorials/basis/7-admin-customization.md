@@ -53,7 +53,7 @@ Reinhardt provides two approaches for registering models with the admin panel.
 
 ### Approach A: Declarative Configuration with #[admin(...)] (Recommended)
 
-The simplest way to configure admin for your models is using the `#[admin(...)]` attribute macro on a separate Admin struct. This approach provides compile-time validation and a clear separation between model definition and admin configuration.
+The simplest way to configure admin for your models is using the `#[admin(...)]` attribute macro on a **separate admin struct**. The `#[admin(...)]` macro is applied to a dedicated admin configuration struct, not directly to the model struct itself.
 
 **Example: Question Model and Admin Configuration**
 
@@ -62,6 +62,7 @@ The simplest way to configure admin for your models is using the `#[admin(...)]`
 use reinhardt::prelude::*;
 use chrono::{DateTime, Utc};
 
+// The model struct uses #[model(...)] only
 #[model(app_label = "polls", table_name = "polls_question")]
 pub struct Question {
     #[field(primary_key = true)]
@@ -83,7 +84,7 @@ impl Question {
     }
 }
 
-// Admin configuration is defined on a SEPARATE struct using #[admin(model, for = ...)]
+// A separate admin struct uses #[admin(model, for = ModelType, ...)]
 #[admin(model,
     for = Question,
     name = "Question",
@@ -106,7 +107,7 @@ pub struct Choice {
     #[field(primary_key = true)]
     pub id: i64,
 
-    // ⚠️ IMPORTANT: related_name is REQUIRED for #[rel(foreign_key)]
+    // related_name is REQUIRED for #[rel(foreign_key)]
     #[rel(foreign_key, related_name = "choices")]
     question: ForeignKeyField<Question>,
 
@@ -130,12 +131,14 @@ pub struct ChoiceAdmin;
 
 **Available #[admin(...)] Options:**
 
+The `#[admin(model, for = ModelType, ...)]` macro supports the following options:
+
 **Required:**
 - `model` - Marks this as a model admin struct
-- `for = ModelType` - Specifies which model this admin configures
-- `name = "Display Name"` - Human-readable name for the admin panel
+- `for = ModelType` - Specifies the model this admin configures
 
 **Display Options:**
+- `name = "Display Name"` - Human-readable name for the admin panel
 - `list_display = [field1, field2, ...]` - Columns to show in list view
 - `list_per_page = 25` - Number of items per page (default: 100)
 
@@ -153,7 +156,7 @@ pub struct ChoiceAdmin;
 
 **Benefits of #[admin(...)]:**
 
-1. **Declarative**: Configuration is defined as a separate admin struct
+1. **Declarative**: Configuration is defined as a dedicated admin struct
 2. **Type-safe**: Compile-time validation of field names
 3. **Less boilerplate**: No manual trait implementation needed
 4. **Consistent**: Same syntax across all models

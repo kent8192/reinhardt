@@ -75,7 +75,7 @@ See instructions/ANTI_PATTERNS.md for comprehensive anti-patterns guide.
 - Integration tests: Test integration points between components
   - Cross-crate integration: Place in `tests/` crate
   - Within-crate integration: Can place in functional crate
-- Functional crates MUST NOT include other Reinhardt crates in `dev-dependencies`
+- Functional crates MUST NOT use `{ workspace = true }` for `reinhardt-test` in `dev-dependencies` (use optional dependency or path-only dev-dependency; see KI-2)
 - ALL test artifacts MUST be cleaned up
 - Global state tests MUST use `#[serial(group_name)]`
 - Use strict assertions (`assert_eq!`) instead of loose matching (`contains`)
@@ -235,6 +235,7 @@ This project uses [release-plz](https://release-plz.ieni.dev/) for automated rel
 
 **Key Warnings (Lessons Learned):**
 - **NEVER** create circular publish dependency chains (functional crates must not dev-depend on other Reinhardt crates)
+- **MUST** declare `reinhardt-test` as an optional dependency (not dev-dependency) in functional crates for correct release-plz publish ordering (see KI-2 in instructions/RELEASE_PROCESS.md)
 - **MUST** include `version` field in `reinhardt-test` workspace dependency (same as other published crates)
 - **MUST** follow RP-1 recovery procedure for partial release failures (see instructions/RELEASE_PROCESS.md)
 - **NEVER** change `pr_branch_prefix` from `"release-plz-"` (breaks two-step release workflow)
@@ -520,7 +521,7 @@ Before submitting code:
 - Manually bump versions in feature branches (let release-plz handle it)
 - Create release tags manually (release-plz creates them automatically)
 - Skip reviewing Release PRs before merging
-- Add `reinhardt-test` to functional crate `[dev-dependencies]` (creates circular publish dependency)
+- Use `reinhardt-test = { workspace = true }` in functional crate `[dev-dependencies]` (workspace deps include version, causing publish failures; use optional dep or path-only dev-dep instead)
 - Omit `version` field from `reinhardt-test` workspace dependency (causes publish failure for dependents)
 - Change `pr_branch_prefix` from `"release-plz-"` (breaks two-step release workflow)
 - Merge Release PR without rolling back unpublished crate versions after partial release failure

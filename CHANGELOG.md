@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.3...reinhardt-web@v0.1.0-rc.4) - 2026-03-05
+
+### Documentation
+
+- *(website)* update admin customization tutorial to use separate admin struct pattern
+
 ## [0.1.0-rc.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.2...reinhardt-web@v0.1.0-rc.3) - 2026-03-04
 
 ### Fixed

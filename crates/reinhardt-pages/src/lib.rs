@@ -191,6 +191,9 @@ pub mod testing;
 // Static file URL resolver
 pub mod static_resolver;
 
+// Table utilities (django-tables2 equivalent)
+pub mod tables;
+
 // Re-export commonly used types
 pub use api::{ApiModel, ApiQuerySet, Filter, FilterOp};
 pub use auth::{AuthData, AuthError, AuthState, auth_state};

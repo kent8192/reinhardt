@@ -31,7 +31,19 @@ You may be looking for:
 - 📚 [Getting Started Guide](https://reinhardt-web.dev/quickstart/getting-started/) - Step-by-step tutorial
 - 🎛️ [Feature Flags](https://reinhardt-web.dev/docs/feature-flags/) - Fine-tune your build
 - 📖 [API Documentation](https://docs.rs/reinhardt-web) - Complete API reference
+- 🎯 [Who is Reinhardt For?](#who-is-reinhardt-for) - Check if Reinhardt fits your needs
 - 💬 [Community & Support](#getting-help) - Get help from the community
+
+## Who is Reinhardt For?
+
+Reinhardt is designed for developers who:
+
+- **Know Django/DRF** and want the same productivity in Rust
+- **Use Axum/Actix** but miss Django's batteries (ORM, admin, auth, DI)
+- **Need a full-stack Rust framework** without adopting Leptos/Dioxus for the frontend
+- **Want incremental adoption** -- start with just DI or ORM, grow into a full stack later
+
+If you have written `ModelSerializer` or `Depends()` before, Reinhardt will feel like home.
 
 ## Why Reinhardt?
 

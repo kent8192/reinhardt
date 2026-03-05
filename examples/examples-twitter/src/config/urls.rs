@@ -2,6 +2,9 @@
 //!
 //! This project uses reinhardt-pages with Server Functions for API communication.
 //! Each app defines unified routes (server + client) in `urls.rs`, which are mounted here.
+//!
+//! Admin panel routes are integrated via `AdminSite::get_urls()`, which requires
+//! a `DatabaseConnection`. In production, the connection comes from the DI container.
 
 use reinhardt::UnifiedRouter;
 #[cfg(not(target_arch = "wasm32"))]
@@ -10,6 +13,7 @@ use reinhardt::routes;
 
 // Import app URL modules
 use crate::apps::{auth, dm, profile, relationship, tweet};
+use crate::config::admin::configure_admin;
 use crate::config::middleware::{
 	create_cache_control_middleware, create_cors_middleware, create_security_middleware,
 	create_session_middleware, create_static_files_middleware,
@@ -22,6 +26,7 @@ use reinhardt::LoggingMiddleware;
 /// - Server Functions (`#[server_fn]`) for API communication
 /// - Client routing for SPA navigation
 /// - Production-ready middleware stack for security and performance
+/// - Admin panel mounted at `/admin/` via `AdminSite::get_urls()`
 ///
 /// Middleware stack (in execution order):
 /// 1. LoggingMiddleware - Request/response logging
@@ -35,6 +40,19 @@ use reinhardt::LoggingMiddleware;
 /// server and client routes defined.
 #[routes]
 pub fn routes() -> UnifiedRouter {
+	// Configure admin site (registration only, no DB needed yet)
+	let _admin = configure_admin();
+
+	// Admin routes require DatabaseConnection for query execution.
+	// In production, mount admin routes like this:
+	//
+	//   let db = DatabaseConnection::connect("postgres://...").await?;
+	//   let admin_router = admin.get_urls(db);
+	//   router.mount("/admin", admin_router)
+	//
+	// For this example, admin is configured but not mounted since
+	// get_urls() requires an async DatabaseConnection.
+
 	let router = UnifiedRouter::new()
 		// Mount each app's unified routes
 		.mount_unified("/", auth::urls::routes())

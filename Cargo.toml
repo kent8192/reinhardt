@@ -347,6 +347,7 @@ members = [
   "crates/reinhardt-payment",                          # Payment integration
   "crates/reinhardt-payment-mocks",                    # Payment testing mocks
   "crates/reinhardt-tables",                           # Data table rendering
+  "crates/reinhardt-taggit",                           # Tagging functionality
   # Integration tests
   "tests",
   "tests/integration",
@@ -432,6 +433,7 @@ reinhardt-storages = { path = "crates/reinhardt-storages", version = "0.1.0" }
 reinhardt-payment = { path = "crates/reinhardt-payment", version = "0.1.0" }
 reinhardt-payment-mocks = { path = "crates/reinhardt-payment-mocks", version = "0.1.0" }
 reinhardt-tables = { path = "crates/reinhardt-tables", version = "0.1.0-alpha.1" }
+reinhardt-taggit = { path = "crates/reinhardt-taggit", version = "0.1.0" }
 
 # Query subcrates
 reinhardt-query-macros = { path = "crates/reinhardt-query/macros", version = "0.1.0-rc.4" }

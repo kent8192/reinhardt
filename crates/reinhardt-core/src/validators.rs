@@ -60,13 +60,13 @@ pub mod url;
 #[cfg(feature = "serde")]
 pub mod serialization;
 
-#[cfg(feature = "jsonschema")]
+#[cfg(all(feature = "jsonschema", not(target_arch = "wasm32")))]
 pub mod schema;
 
-#[cfg(feature = "parallel")]
+#[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
 pub mod parallel;
 
-#[cfg(feature = "i18n")]
+#[cfg(all(feature = "i18n", not(target_arch = "wasm32")))]
 pub mod i18n;
 
 pub use color::{ColorFormat, ColorValidator};

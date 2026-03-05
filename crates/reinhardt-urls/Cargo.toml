@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-urls"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.4"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -10,24 +10,33 @@ description = "URL routing and proxy utilities for Reinhardt framework"
 [dependencies]
 # Re-export internal crates
 reinhardt-routers-macros = { workspace = true, optional = true }
-reinhardt-db = { workspace = true, features = ["orm"] }
-async-trait = { workspace = true }
+reinhardt-core = { workspace = true, features = ["exception", "page", "reactive", "types"] }
 thiserror = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+regex = { workspace = true }
+once_cell = "1.20"
+matchit = "0.9.0"
+
+# WASM-specific dependencies (for client-router)
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Event", "History", "Location", "PopStateEvent", "Url", "Window"] }
+js-sys = "0.3"
+
+# Server-only dependencies (not available on WASM)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reinhardt-db = { workspace = true, features = ["orm"] }
+async-trait = { workspace = true }
 futures = { workspace = true }
 reinhardt-views = { workspace = true, features = ["viewsets"] }
 reinhardt-middleware = { workspace = true }
-reinhardt-core = { workspace = true, features = ["exception", "page", "reactive", "types"] }
 reinhardt-http = { workspace = true }
 reinhardt-di = { workspace = true }
-regex = { workspace = true }
 nom = { workspace = true }
 hyper = { workspace = true }
 chrono = { workspace = true }
-once_cell = "1.20"
-serde_json = { workspace = true }
 serde_yaml = "0.9"
-matchit = "0.9.0"
 aho-corasick = "1.1"
 inventory = "0.3"
 

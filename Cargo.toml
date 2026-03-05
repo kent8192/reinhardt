@@ -340,6 +340,7 @@ members = [
   "crates/reinhardt-deeplink",                          # Mobile deep linking
   "crates/reinhardt-openapi",                           # OpenAPI router wrapper
   "crates/reinhardt-deploy",                           # Deployment engine
+  "crates/reinhardt-storages",                         # Cloud storage backends
   # Integration tests
   "tests",
   "tests/integration",
@@ -420,6 +421,7 @@ reinhardt-dentdelion = { path = "crates/reinhardt-dentdelion", version = "0.1.0-
 reinhardt-deeplink = { path = "crates/reinhardt-deeplink", version = "0.1.0-rc.4" }
 reinhardt-openapi = { path = "crates/reinhardt-openapi", version = "0.1.0-rc.4" }
 reinhardt-deploy = { path = "crates/reinhardt-deploy", version = "0.1.0-alpha.1" }
+reinhardt-storages = { path = "crates/reinhardt-storages", version = "0.1.0" }
 
 # Query subcrates
 reinhardt-query-macros = { path = "crates/reinhardt-query/macros", version = "0.1.0-rc.4" }

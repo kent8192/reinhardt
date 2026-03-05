@@ -1,10 +1,10 @@
 [package]
 name = "reinhardt-utils"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.4"
 description = "Utility functions aggregator for Reinhardt"
 edition.workspace = true
-license.workspace = true
 authors.workspace = true
+license.workspace = true
 repository.workspace = true
 
 [dependencies]
@@ -106,7 +106,7 @@ dev-server = ["dep:notify"]
 [dev-dependencies]
 insta = { workspace = true }
 tokio = { workspace = true }
-proptest = "1.8"
+proptest = { workspace = true }
 regex = "1.0"
 bytes = { workspace = true }
 rstest = { workspace = true }

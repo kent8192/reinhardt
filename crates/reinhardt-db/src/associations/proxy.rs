@@ -67,6 +67,7 @@ impl<S, A, T> AssociationProxy<S, A, T> {
 mod tests {
 	use super::*;
 
+	// Allow dead_code: test model struct used for trait implementation verification
 	#[allow(dead_code)]
 	#[derive(Clone)]
 	struct Address {
@@ -74,6 +75,7 @@ mod tests {
 		country: String,
 	}
 
+	// Allow dead_code: test model struct used for trait implementation verification
 	#[allow(dead_code)]
 	#[derive(Clone)]
 	struct User {

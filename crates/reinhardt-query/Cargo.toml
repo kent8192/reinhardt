@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-query"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.4"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -52,7 +52,7 @@ insta = { workspace = true }
 # Test framework
 rstest = { workspace = true }
 pretty_assertions = "1.4"
-proptest = "1.4"
+proptest = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

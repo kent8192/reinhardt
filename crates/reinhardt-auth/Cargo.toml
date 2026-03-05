@@ -1,14 +1,14 @@
 [package]
 name = "reinhardt-auth"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.4"
 description = "Authentication and authorization system"
 keywords = ["auth", "jwt", "authentication", "django", "web"]
 categories = ["authentication", "web-programming"]
 readme = "README.md"
 documentation = "https://docs.rs/reinhardt-auth"
 edition.workspace = true
-license.workspace = true
 authors.workspace = true
+license.workspace = true
 repository.workspace = true
 
 [features]
@@ -42,6 +42,7 @@ auth-full = [
   "argon2-hasher",
   "database",
   "redis-sessions",
+  "middleware",
 ]
 file = ["fs2"]
 cookie = ["aes-gcm"]

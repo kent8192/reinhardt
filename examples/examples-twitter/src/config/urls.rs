@@ -7,6 +7,8 @@
 //! a `DatabaseConnection`. In production, the connection comes from the DI container.
 
 use reinhardt::UnifiedRouter;
+#[cfg(not(target_arch = "wasm32"))]
+use reinhardt::admin::admin_routes;
 use reinhardt::routes;
 
 // Import app URL modules
@@ -14,7 +16,7 @@ use crate::apps::{auth, dm, profile, relationship, tweet};
 use crate::config::admin::configure_admin;
 use crate::config::middleware::{
 	create_cache_control_middleware, create_cors_middleware, create_security_middleware,
-	create_static_files_middleware,
+	create_session_middleware, create_static_files_middleware,
 };
 use reinhardt::LoggingMiddleware;
 
@@ -30,8 +32,9 @@ use reinhardt::LoggingMiddleware;
 /// 1. LoggingMiddleware - Request/response logging
 /// 2. SecurityMiddleware - Security headers (HSTS, X-Content-Type-Options)
 /// 3. CorsMiddleware - Cross-origin resource sharing
-/// 4. CacheControlMiddleware - HTTP cache headers
-/// 5. StaticFilesMiddleware - Static and media file serving
+/// 4. SessionMiddleware - Cookie-based session management
+/// 5. CacheControlMiddleware - HTTP cache headers
+/// 6. StaticFilesMiddleware - Static and media file serving
 ///
 /// Each app's `routes()` function returns a `UnifiedRouter` with both
 /// server and client routes defined.
@@ -50,17 +53,22 @@ pub fn routes() -> UnifiedRouter {
 	// For this example, admin is configured but not mounted since
 	// get_urls() requires an async DatabaseConnection.
 
-	UnifiedRouter::new()
+	let router = UnifiedRouter::new()
 		// Mount each app's unified routes
 		.mount_unified("/", auth::urls::routes())
 		.mount_unified("/", tweet::urls::routes())
 		.mount_unified("/", profile::urls::routes())
 		.mount_unified("/", relationship::urls::routes())
-		.mount_unified("/", dm::urls::routes())
+		.mount_unified("/", dm::urls::routes());
+	// Mount admin panel routes (server-only, not available on wasm32)
+	#[cfg(not(target_arch = "wasm32"))]
+	let router = router.mount("/admin/", admin_routes());
+	router
 		// Apply middleware stack (order matters for request processing)
 		.with_middleware(LoggingMiddleware::new())
 		.with_middleware(create_security_middleware())
 		.with_middleware(create_cors_middleware())
+		.with_middleware(create_session_middleware())
 		.with_middleware(create_cache_control_middleware())
 		.with_middleware(create_static_files_middleware())
 }

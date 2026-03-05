@@ -1,9 +1,9 @@
 [package]
 name = "reinhardt-conf"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.4"
 edition.workspace = true
-license.workspace = true
 authors.workspace = true
+license.workspace = true
 description = "Configuration management framework for Reinhardt - Django-inspired settings with encryption and secrets management"
 keywords = ["settings", "configuration", "secrets", "django", "reinhardt"]
 categories = ["config", "web-programming"]

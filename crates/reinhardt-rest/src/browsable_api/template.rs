@@ -1,12 +1,20 @@
 //! HTML templates for browsable API
 
+use reinhardt_core::security::escape_html;
+
 /// API template generator
 pub struct ApiTemplate;
 
 impl ApiTemplate {
 	/// Generate HTML for browsable API
 	///
+	/// All user-controlled values are HTML-escaped to prevent XSS.
 	pub fn render(title: &str, data: &str, method: &str, path: &str) -> String {
+		let escaped_title = escape_html(title);
+		let escaped_method = escape_html(method);
+		let escaped_path = escape_html(path);
+		let escaped_data = escape_html(data);
+
 		format!(
 			r#"<!DOCTYPE html>
 <html>
@@ -32,12 +40,15 @@ impl ApiTemplate {
     </div>
 </body>
 </html>"#,
-			title, title, method, path, data
+			escaped_title, escaped_title, escaped_method, escaped_path, escaped_data
 		)
 	}
 	/// Generate error page
 	///
+	/// The error message is HTML-escaped to prevent XSS.
 	pub fn render_error(status: u16, message: &str) -> String {
+		let escaped_message = escape_html(message);
+
 		format!(
 			r#"<!DOCTYPE html>
 <html>
@@ -55,7 +66,7 @@ impl ApiTemplate {
     </div>
 </body>
 </html>"#,
-			status, status, message
+			status, status, escaped_message
 		)
 	}
 }

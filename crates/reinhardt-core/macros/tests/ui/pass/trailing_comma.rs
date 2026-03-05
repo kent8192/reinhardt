@@ -5,8 +5,8 @@ use reinhardt_macros::installed_apps;
 fn main() {
 	// Trailing comma should be allowed
 	installed_apps! {
-		auth: "reinhardt.contrib.auth",
-		sessions: "reinhardt.contrib.sessions",
+		auth: "myproject.auth",
+		sessions: "myproject.sessions",
 	}
 
 	let apps = InstalledApp::all_apps();

@@ -204,4 +204,4 @@ After understanding this example:
 
 ## License
 
-This example is part of the Reinhardt project and is licensed under the same terms (MIT OR Apache-2.0).
+This example is part of the Reinhardt project and is licensed under the BSD 3-Clause License.

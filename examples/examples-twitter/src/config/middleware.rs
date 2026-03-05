@@ -4,6 +4,7 @@
 
 use reinhardt::middleware::cors::CorsConfig;
 use reinhardt::middleware::security_middleware::{SecurityConfig, SecurityMiddleware};
+use reinhardt::middleware::session::{SessionConfig, SessionMiddleware};
 use reinhardt::middleware::{CorsMiddleware, LoggingMiddleware};
 use reinhardt::prelude::*;
 use reinhardt::utils::staticfiles::caching::{
@@ -22,23 +23,22 @@ use std::time::Duration;
 /// - Supports all standard HTTP methods including OPTIONS
 /// - Includes CSRF token header for security
 pub fn create_cors_middleware() -> CorsMiddleware {
-	let config = CorsConfig {
-		allow_origins: vec!["*".to_string()], // Development
-		allow_methods: vec![
-			"GET".to_string(),
-			"POST".to_string(),
-			"PUT".to_string(),
-			"DELETE".to_string(),
-			"OPTIONS".to_string(),
-		],
-		allow_headers: vec![
-			"Content-Type".to_string(),
-			"Authorization".to_string(),
-			"X-CSRF-Token".to_string(),
-		],
-		allow_credentials: true,
-		max_age: Some(3600),
-	};
+	let mut config = CorsConfig::default();
+	config.allow_origins = vec!["*".to_string()]; // Development
+	config.allow_methods = vec![
+		"GET".to_string(),
+		"POST".to_string(),
+		"PUT".to_string(),
+		"DELETE".to_string(),
+		"OPTIONS".to_string(),
+	];
+	config.allow_headers = vec![
+		"Content-Type".to_string(),
+		"Authorization".to_string(),
+		"X-CSRF-Token".to_string(),
+	];
+	config.allow_credentials = true;
+	config.max_age = Some(3600);
 	CorsMiddleware::new(config)
 }
 
@@ -85,19 +85,36 @@ pub fn create_static_files_middleware() -> StaticFilesMiddleware {
 	StaticFilesMiddleware::new(config)
 }
 
+/// Create SessionMiddleware with default configuration.
+///
+/// Provides cookie-based session management:
+/// - Cookie name: "sessionid"
+/// - TTL: 2 weeks (1,209,600 seconds)
+/// - HttpOnly: enabled for security
+/// - SameSite: Lax
+pub fn create_session_middleware() -> SessionMiddleware {
+	let config = SessionConfig::new("sessionid".to_string(), Duration::from_secs(1_209_600))
+		.with_http_only(true)
+		.with_same_site("Lax".to_string())
+		.with_path("/".to_string());
+	SessionMiddleware::new(config)
+}
+
 /// Create a production-ready middleware stack for the Twitter clone.
 ///
 /// Stack order (execution order for requests):
 /// 1. LoggingMiddleware - Log all incoming requests
 /// 2. SecurityMiddleware - Apply security headers
 /// 3. CorsMiddleware - Handle cross-origin requests
-/// 4. CacheControlMiddleware - Set cache headers for responses
-/// 5. StaticFilesMiddleware - Serve static and media files
+/// 4. SessionMiddleware - Manage user sessions
+/// 5. CacheControlMiddleware - Set cache headers for responses
+/// 6. StaticFilesMiddleware - Serve static and media files
 pub fn create_middleware_stack() -> Vec<Arc<dyn Middleware>> {
 	vec![
 		Arc::new(LoggingMiddleware::new()),
 		Arc::new(create_security_middleware()),
 		Arc::new(create_cors_middleware()),
+		Arc::new(create_session_middleware()),
 		Arc::new(create_cache_control_middleware()),
 		Arc::new(create_static_files_middleware()),
 	]

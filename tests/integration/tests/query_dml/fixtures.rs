@@ -75,7 +75,7 @@ pub(crate) struct Orders {
 
 use rstest::*;
 use std::sync::Arc;
-use testcontainers::{core::WaitFor, runners::AsyncRunner, ContainerAsync, GenericImage, ImageExt};
+use testcontainers::{ContainerAsync, GenericImage, ImageExt, core::WaitFor, runners::AsyncRunner};
 
 /// Inline PostgreSQL container fixture (replaces reinhardt-test dependency)
 #[fixture]

@@ -174,7 +174,7 @@ impl CTEBuilder {
 	/// use reinhardt_db::orm::cte::CTEBuilder;
 	///
 	/// let builder = CTEBuilder::new("user_stats");
-	// Use builder to construct a CTE step by step
+	/// // Use builder to construct a CTE step by step
 	/// ```
 	pub fn new(name: impl Into<String>) -> Self {
 		Self {

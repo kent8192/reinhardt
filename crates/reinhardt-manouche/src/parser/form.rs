@@ -29,7 +29,7 @@ pub fn parse_form(input: TokenStream) -> syn::Result<FormMacro> {
 impl Parse for FormMacro {
 	fn parse(input: ParseStream) -> Result<Self> {
 		let span = input.span();
-		let mut form = FormMacro::new(Ident::new("_", Span::call_site()), span);
+		let mut form = FormMacro::new(None, span);
 
 		// Parse key-value pairs until we hit fields, validators, or client_validators
 		while !input.is_empty() {
@@ -38,7 +38,7 @@ impl Parse for FormMacro {
 
 			match key.to_string().as_str() {
 				"name" => {
-					form.name = input.parse()?;
+					form.name = Some(input.parse()?);
 					parse_optional_comma(input)?;
 				}
 				"action" => {
@@ -159,7 +159,7 @@ impl Parse for FormMacro {
 		}
 
 		// Validate required fields
-		if form.name == "_" {
+		if form.name.is_none() {
 			return Err(syn::Error::new(
 				span,
 				"form! macro requires 'name' property",
@@ -861,7 +861,7 @@ mod tests {
 		// Assert
 		assert!(result.is_ok());
 		let form = result.unwrap();
-		assert_eq!(form.name.to_string(), "LoginForm");
+		assert_eq!(form.name.as_ref().unwrap().to_string(), "LoginForm");
 		assert_eq!(form.fields.len(), 2);
 		assert!(matches!(form.action, FormAction::Url(_)));
 	}

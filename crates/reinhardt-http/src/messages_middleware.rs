@@ -90,7 +90,7 @@ impl<S: MessageStorage + 'static> Middleware for MessagesMiddleware<S> {
 	) -> reinhardt_core::exception::Result<Response> {
 		// Load existing messages from storage into the request extensions
 		let initial_messages = {
-			let storage = self.storage.lock().unwrap();
+			let storage = self.storage.lock().unwrap_or_else(|e| e.into_inner());
 			storage.peek().to_vec()
 		};
 		let initial_count = initial_messages.len();
@@ -104,7 +104,7 @@ impl<S: MessageStorage + 'static> Middleware for MessagesMiddleware<S> {
 
 		// Sync storage with container state after handler processing
 		{
-			let mut storage = self.storage.lock().unwrap();
+			let mut storage = self.storage.lock().unwrap_or_else(|e| e.into_inner());
 			let current_messages = container.get_messages();
 
 			// If messages were consumed/cleared during request processing, sync storage
@@ -202,7 +202,7 @@ mod tests {
 
 		// Check that the message was persisted to storage
 		let stored = {
-			let storage = middleware.storage.lock().unwrap();
+			let storage = middleware.storage.lock().unwrap_or_else(|e| e.into_inner());
 			storage.peek().to_vec()
 		};
 

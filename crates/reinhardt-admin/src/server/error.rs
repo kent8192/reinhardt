@@ -70,7 +70,7 @@ impl AdminAuth {
 		Self { auth_state }
 	}
 
-	/// Creates a new AdminAuth from an Arc<Request>.
+	/// Creates a new AdminAuth from an `Arc<Request>`.
 	///
 	/// # Arguments
 	///
@@ -95,7 +95,9 @@ impl AdminAuth {
 	///
 	/// `true` if the user is authenticated, `false` otherwise
 	pub fn is_authenticated(&self) -> bool {
-		self.auth_state.as_ref().is_some_and(|s| s.is_authenticated)
+		self.auth_state
+			.as_ref()
+			.is_some_and(|s| s.is_authenticated())
 	}
 
 	/// Checks if the user is a staff member (admin access).
@@ -104,7 +106,7 @@ impl AdminAuth {
 	///
 	/// `true` if the user is staff/admin, `false` otherwise
 	pub fn is_staff(&self) -> bool {
-		self.auth_state.as_ref().is_some_and(|s| s.is_admin)
+		self.auth_state.as_ref().is_some_and(|s| s.is_admin())
 	}
 
 	/// Checks if the user is active.
@@ -113,12 +115,12 @@ impl AdminAuth {
 	///
 	/// `true` if the user is active, `false` otherwise
 	pub fn is_active(&self) -> bool {
-		self.auth_state.as_ref().is_some_and(|s| s.is_active)
+		self.auth_state.as_ref().is_some_and(|s| s.is_active())
 	}
 
 	/// Returns the user ID if authenticated.
 	pub fn user_id(&self) -> Option<&str> {
-		self.auth_state.as_ref().map(|s| s.user_id.as_str())
+		self.auth_state.as_ref().map(|s| s.user_id())
 	}
 
 	/// Requires authentication, returning an error if not authenticated.

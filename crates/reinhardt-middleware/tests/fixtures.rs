@@ -473,7 +473,7 @@ pub async fn wait_for_circuit_state(
 ) -> bool {
 	let start = std::time::Instant::now();
 	while start.elapsed() < timeout {
-		if middleware.get_state() == expected_state {
+		if middleware.state() == expected_state {
 			return true;
 		}
 		tokio::time::sleep(Duration::from_millis(10)).await;

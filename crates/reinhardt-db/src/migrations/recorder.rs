@@ -4,7 +4,7 @@ use crate::backends::DatabaseConnection;
 use chrono::{DateTime, Utc};
 
 /// Migration record
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MigrationRecord {
 	pub app: String,
 	pub name: String,
@@ -124,7 +124,7 @@ impl DatabaseMigrationRecorder {
 	///
 	/// # async fn example() {
 	/// // For doctest purposes, using mock connection (URL is ignored in current implementation)
-	/// let connection = DatabaseConnection::connect_sqlite(":memory:").await.unwrap();
+	/// let connection = DatabaseConnection::connect_postgres("postgres://localhost/mydb").await.unwrap();
 	/// let recorder = DatabaseMigrationRecorder::new(connection);
 	/// // Verify recorder was created successfully
 	/// recorder.ensure_schema_table().await.unwrap();
@@ -365,7 +365,7 @@ impl DatabaseMigrationRecorder {
 	///
 	/// # async fn example() {
 	/// // For doctest purposes, using mock connection (URL is ignored in current implementation)
-	/// let connection = DatabaseConnection::connect_sqlite(":memory:").await.unwrap();
+	/// let connection = DatabaseConnection::connect_postgres("postgres://localhost/mydb").await.unwrap();
 	/// let recorder = DatabaseMigrationRecorder::new(connection);
 	/// recorder.ensure_schema_table().await.unwrap();
 	///
@@ -431,7 +431,7 @@ impl DatabaseMigrationRecorder {
 	///
 	/// # async fn example() {
 	/// // For doctest purposes, using mock connection (URL is ignored in current implementation)
-	/// let connection = DatabaseConnection::connect_sqlite(":memory:").await.unwrap();
+	/// let connection = DatabaseConnection::connect_postgres("postgres://localhost/mydb").await.unwrap();
 	/// let recorder = DatabaseMigrationRecorder::new(connection);
 	/// recorder.ensure_schema_table().await.unwrap();
 	///
@@ -496,7 +496,7 @@ impl DatabaseMigrationRecorder {
 	///
 	/// # async fn example() {
 	/// // For doctest purposes, using mock connection (URL is ignored in current implementation)
-	/// let connection = DatabaseConnection::connect_sqlite(":memory:").await.unwrap();
+	/// let connection = DatabaseConnection::connect_postgres("postgres://localhost/mydb").await.unwrap();
 	/// let recorder = DatabaseMigrationRecorder::new(connection);
 	/// recorder.ensure_schema_table().await.unwrap();
 	///
@@ -614,7 +614,7 @@ impl DatabaseMigrationRecorder {
 	/// use reinhardt_db::backends::DatabaseConnection;
 	///
 	/// # async fn example() {
-	/// let connection = DatabaseConnection::connect_sqlite(":memory:").await.unwrap();
+	/// let connection = DatabaseConnection::connect_postgres("postgres://localhost/mydb").await.unwrap();
 	/// let recorder = DatabaseMigrationRecorder::new(connection);
 	/// recorder.ensure_schema_table().await.unwrap();
 	///

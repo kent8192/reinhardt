@@ -99,7 +99,11 @@ fn mount_inner(page: Page, parent: &Element) -> Result<(), MountError> {
 					)
 					.expect("Failed to add event listener");
 
-				// Prevent the closure from being dropped (memory leak, but intentional for app lifetime)
+				// Intentional memory leak: the closure must outlive the element's DOM
+				// lifetime. Since mount_inner creates closures in a recursive loop
+				// with no parent struct to store them, forget() is the practical
+				// choice here. For components with frequent mount/unmount cycles,
+				// consider using a lifecycle-managed approach instead.
 				closure.forget();
 			}
 

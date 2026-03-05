@@ -1,6 +1,6 @@
 //! Integration tests for Settings System
 //!
-//! These tests verify that reinhardt-settings works correctly with loading,
+//! These tests verify that reinhardt-conf settings works correctly with loading,
 //! validation, and access patterns.
 
 use reinhardt_conf::settings::{DatabaseConfig, Settings, TemplateConfig};
@@ -51,16 +51,15 @@ fn test_add_installed_app() {
 
 #[test]
 fn test_modify_security_settings() {
-	let settings = Settings {
-		debug: false,
-		secure_ssl_redirect: true,
-		secure_hsts_seconds: Some(31536000),
-		session_cookie_secure: true,
-		csrf_cookie_secure: true,
-		..Default::default()
-	};
+	// Arrange - use field mutation because Settings is #[non_exhaustive]
+	let mut settings = Settings::default();
+	settings.debug = false;
+	settings.secure_ssl_redirect = true;
+	settings.secure_hsts_seconds = Some(31536000);
+	settings.session_cookie_secure = true;
+	settings.csrf_cookie_secure = true;
 
-	// Verify security configuration
+	// Assert - verify security configuration
 	assert!(!settings.debug);
 	assert!(settings.secure_ssl_redirect);
 	assert_eq!(settings.secure_hsts_seconds, Some(31536000));
@@ -173,7 +172,9 @@ fn test_settings_deserialization() {
         "csrf_cookie_secure": false,
         "append_slash": true,
         "admins": [],
-        "managers": []
+        "managers": [],
+        "middleware": [],
+        "root_urlconf": ""
     }"#;
 
 	let settings: Settings = serde_json::from_str(json).unwrap();
@@ -188,16 +189,15 @@ fn test_settings_deserialization() {
 
 #[test]
 fn test_production_settings_validation() {
-	let settings = Settings {
-		debug: false,
-		allowed_hosts: vec!["example.com".to_string(), "www.example.com".to_string()],
-		secure_ssl_redirect: true,
-		session_cookie_secure: true,
-		csrf_cookie_secure: true,
-		..Default::default()
-	};
+	// Arrange - use field mutation because Settings is #[non_exhaustive]
+	let mut settings = Settings::default();
+	settings.debug = false;
+	settings.allowed_hosts = vec!["example.com".to_string(), "www.example.com".to_string()];
+	settings.secure_ssl_redirect = true;
+	settings.session_cookie_secure = true;
+	settings.csrf_cookie_secure = true;
 
-	// Verify production settings
+	// Assert - verify production settings
 	assert!(!settings.debug);
 	assert!(!settings.allowed_hosts.is_empty());
 	assert!(settings.secure_ssl_redirect);

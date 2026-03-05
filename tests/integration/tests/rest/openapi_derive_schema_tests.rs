@@ -9,8 +9,8 @@ use reinhardt_rest::openapi::{Schema, ToSchema};
 use rstest::rstest;
 use serde::{Deserialize, Serialize};
 use utoipa::openapi::{
-	schema::{SchemaFormat, SchemaType, Type},
 	Deprecated,
+	schema::{SchemaFormat, SchemaType, Type},
 };
 
 // ============================================================================

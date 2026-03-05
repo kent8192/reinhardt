@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-websockets"
-version = "0.1.0-alpha.12"
+version = "0.1.0-rc.4"
 description = "WebSocket support for real-time bidirectional communication"
 edition.workspace = true
 license.workspace = true
@@ -52,7 +52,11 @@ redis = { version = "0.32.7", features = [
 # Metrics
 metrics = { version = "0.24", optional = true }
 
+# Logging
+tracing = { workspace = true }
+
 [dev-dependencies]
+insta = { workspace = true }
 tokio-test = "0.4"
 futures = { workspace = true }
 rstest = { workspace = true }

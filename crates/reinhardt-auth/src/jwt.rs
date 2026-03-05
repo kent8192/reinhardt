@@ -209,9 +209,12 @@ impl RestAuthentication for JwtAuth {
 				// Verify and decode token
 				match self.verify_token(token) {
 					Ok(claims) => {
+						// Parse user ID from claims, returning an error for malformed values
+						let id = Uuid::parse_str(&claims.sub)
+							.map_err(|_| AuthenticationError::InvalidToken)?;
 						// Create user from claims
 						return Ok(Some(Box::new(SimpleUser {
-							id: Uuid::parse_str(&claims.sub).unwrap_or_else(|_| Uuid::new_v4()),
+							id,
 							username: claims.username.clone(),
 							email: format!("{}@example.com", claims.username),
 							is_active: true,
@@ -247,5 +250,180 @@ impl AuthenticationBackend for JwtAuth {
 		// It only authenticates via token validation
 		// Return None to indicate this backend doesn't support user retrieval
 		Ok(None)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use bytes::Bytes;
+	use hyper::{HeaderMap, Method};
+	use reinhardt_http::Request;
+	use rstest::rstest;
+
+	/// Helper to create a request with a given Authorization header value.
+	fn create_request_with_bearer(token: &str) -> Request {
+		let mut headers = HeaderMap::new();
+		headers.insert(
+			"Authorization",
+			format!("Bearer {}", token).parse().unwrap(),
+		);
+		Request::builder()
+			.method(Method::GET)
+			.uri("/api/resource")
+			.headers(headers)
+			.body(Bytes::new())
+			.build()
+			.unwrap()
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_authenticate_with_valid_uuid_sub_claim() {
+		// Arrange
+		let jwt_auth = JwtAuth::new(b"test-secret-key-256bit!");
+		let user_id = "550e8400-e29b-41d4-a716-446655440000";
+		let username = "alice";
+		let token = jwt_auth
+			.generate_token(user_id.to_string(), username.to_string())
+			.unwrap();
+		let request = create_request_with_bearer(&token);
+
+		// Act
+		let result = RestAuthentication::authenticate(&jwt_auth, &request).await;
+
+		// Assert
+		let user = result.unwrap().unwrap();
+		assert_eq!(user.id(), user_id);
+		assert_eq!(user.username(), username);
+		assert!(user.is_authenticated());
+		assert!(user.is_active());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_authenticate_with_non_uuid_sub_claim_returns_invalid_token() {
+		// Arrange
+		let jwt_auth = JwtAuth::new(b"test-secret-key-256bit!");
+		// Encode a token with a non-UUID sub claim
+		let claims = Claims::new(
+			"not-a-valid-uuid".to_string(),
+			"bob".to_string(),
+			Duration::hours(1),
+		);
+		let token = jwt_auth.encode(&claims).unwrap();
+		let request = create_request_with_bearer(&token);
+
+		// Act
+		let result = RestAuthentication::authenticate(&jwt_auth, &request).await;
+
+		// Assert
+		assert!(
+			matches!(&result, Err(AuthenticationError::InvalidToken)),
+			"expected InvalidToken error for non-UUID sub claim"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_authenticate_with_empty_sub_claim_returns_invalid_token() {
+		// Arrange
+		let jwt_auth = JwtAuth::new(b"test-secret-key-256bit!");
+		let claims = Claims::new(String::new(), "charlie".to_string(), Duration::hours(1));
+		let token = jwt_auth.encode(&claims).unwrap();
+		let request = create_request_with_bearer(&token);
+
+		// Act
+		let result = RestAuthentication::authenticate(&jwt_auth, &request).await;
+
+		// Assert
+		assert!(
+			matches!(&result, Err(AuthenticationError::InvalidToken)),
+			"expected InvalidToken error for empty sub claim"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_authenticate_with_tampered_token_returns_invalid_token() {
+		// Arrange
+		let jwt_auth = JwtAuth::new(b"test-secret-key-256bit!");
+		let token = jwt_auth
+			.generate_token(
+				"550e8400-e29b-41d4-a716-446655440000".to_string(),
+				"dave".to_string(),
+			)
+			.unwrap();
+		// Tamper with the token by modifying characters in the signature
+		let tampered_token = format!("{}tampered", token);
+		let request = create_request_with_bearer(&tampered_token);
+
+		// Act
+		let result = RestAuthentication::authenticate(&jwt_auth, &request).await;
+
+		// Assert
+		assert!(matches!(&result, Err(AuthenticationError::InvalidToken)));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_authenticate_without_authorization_header_returns_none() {
+		// Arrange
+		let jwt_auth = JwtAuth::new(b"test-secret-key-256bit!");
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/api/resource")
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let result = RestAuthentication::authenticate(&jwt_auth, &request).await;
+
+		// Assert
+		assert!(result.unwrap().is_none());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_authenticate_with_non_bearer_prefix_returns_none() {
+		// Arrange
+		let jwt_auth = JwtAuth::new(b"test-secret-key-256bit!");
+		let mut headers = HeaderMap::new();
+		headers.insert("Authorization", "Token some-token-value".parse().unwrap());
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/api/resource")
+			.headers(headers)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let result = RestAuthentication::authenticate(&jwt_auth, &request).await;
+
+		// Assert
+		assert!(result.unwrap().is_none());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_authenticate_with_wrong_secret_returns_invalid_token() {
+		// Arrange
+		let jwt_auth_encode = JwtAuth::new(b"encoding-secret-key!!!");
+		let jwt_auth_decode = JwtAuth::new(b"different-secret-key!!");
+		let token = jwt_auth_encode
+			.generate_token(
+				"550e8400-e29b-41d4-a716-446655440000".to_string(),
+				"eve".to_string(),
+			)
+			.unwrap();
+		let request = create_request_with_bearer(&token);
+
+		// Act
+		let result = RestAuthentication::authenticate(&jwt_auth_decode, &request).await;
+
+		// Assert
+		assert!(matches!(&result, Err(AuthenticationError::InvalidToken)));
 	}
 }

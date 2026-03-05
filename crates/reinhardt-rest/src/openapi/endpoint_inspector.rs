@@ -18,6 +18,7 @@ use utoipa::openapi::{
 };
 
 /// Configuration for endpoint inspection
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct InspectorConfig {
 	/// Whether to include function names in summaries

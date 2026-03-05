@@ -14,19 +14,20 @@ pub use param_error::{ParamErrorContext, ParamType};
 /// ```
 /// use reinhardt_core::exception::Error;
 ///
-// Create an HTTP error
+/// // Create an HTTP error
 /// let http_err = Error::Http("Invalid request format".to_string());
 /// assert_eq!(http_err.to_string(), "HTTP error: Invalid request format");
 /// assert_eq!(http_err.status_code(), 400);
 ///
-// Create a database error
+/// // Create a database error
 /// let db_err = Error::Database("Connection timeout".to_string());
 /// assert_eq!(db_err.status_code(), 500);
 ///
-// Create an authentication error
+/// // Create an authentication error
 /// let auth_err = Error::Authentication("Invalid token".to_string());
 /// assert_eq!(auth_err.status_code(), 401);
 /// ```
+#[non_exhaustive]
 #[derive(Error, Debug)]
 pub enum Error {
 	/// HTTP-related errors (status code: 400)
@@ -300,10 +301,10 @@ pub enum Error {
 ///     }
 /// }
 ///
-// Successful validation
+/// // Successful validation
 /// assert!(validate_email("user@example.com").is_ok());
 ///
-// Failed validation
+/// // Failed validation
 /// let result = validate_email("invalid-email");
 /// assert!(result.is_err());
 /// match result {
@@ -314,7 +315,8 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Categorical classification of `Error` variants.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorKind {
 	Http,
 	Database,
@@ -354,19 +356,19 @@ impl Error {
 	/// ```
 	/// use reinhardt_core::exception::Error;
 	///
-	// Client errors (4xx)
+	/// // Client errors (4xx)
 	/// assert_eq!(Error::Http("Bad request".to_string()).status_code(), 400);
 	/// assert_eq!(Error::Validation("Invalid input".to_string()).status_code(), 400);
 	/// assert_eq!(Error::Authentication("No token".to_string()).status_code(), 401);
 	/// assert_eq!(Error::Authorization("No access".to_string()).status_code(), 403);
 	/// assert_eq!(Error::NotFound("Resource missing".to_string()).status_code(), 404);
 	///
-	// Server errors (5xx)
+	/// // Server errors (5xx)
 	/// assert_eq!(Error::Database("Connection failed".to_string()).status_code(), 500);
 	/// assert_eq!(Error::Internal("Crash".to_string()).status_code(), 500);
 	/// assert_eq!(Error::ImproperlyConfigured("Bad config".to_string()).status_code(), 500);
 	///
-	// Edge cases
+	/// // Edge cases
 	/// assert_eq!(Error::BodyAlreadyConsumed.status_code(), 400);
 	/// assert_eq!(Error::ParseError("Invalid data".to_string()).status_code(), 400);
 	/// ```

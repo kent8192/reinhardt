@@ -84,30 +84,41 @@ impl RateLimitStore {
 		Self::default()
 	}
 
-	/// Get or create a bucket
-	fn get_or_create_bucket(&self, key: &str, capacity: f64, refill_rate: f64) -> Bucket {
-		let mut buckets = self.buckets.write().unwrap();
-		buckets
+	/// Atomically consume tokens from a bucket, creating it if necessary.
+	///
+	/// Performs get-or-create, refill, and consume within a single write lock
+	/// to prevent TOCTOU race conditions where concurrent requests could both
+	/// pass the rate limit check.
+	///
+	/// Returns `Ok(remaining_tokens)` on success,
+	/// or `Err(retry_after)` if insufficient tokens.
+	fn consume_token(
+		&self,
+		key: &str,
+		capacity: f64,
+		refill_rate: f64,
+		cost: f64,
+	) -> std::result::Result<f64, Duration> {
+		let mut buckets = self.buckets.write().unwrap_or_else(|e| e.into_inner());
+		let bucket = buckets
 			.entry(key.to_string())
-			.or_insert_with(|| Bucket::new(capacity, refill_rate))
-			.clone()
-	}
-
-	/// Update a bucket
-	fn update_bucket(&self, key: &str, bucket: Bucket) {
-		let mut buckets = self.buckets.write().unwrap();
-		buckets.insert(key.to_string(), bucket);
+			.or_insert_with(|| Bucket::new(capacity, refill_rate));
+		if bucket.consume(cost) {
+			Ok(bucket.tokens)
+		} else {
+			Err(bucket.time_until_next_token())
+		}
 	}
 
 	/// Record a request
 	pub fn record_request(&self, key: &str) {
-		let mut history = self.history.write().unwrap();
+		let mut history = self.history.write().unwrap_or_else(|e| e.into_inner());
 		history.entry(key.to_string()).or_default().push(Utc::now());
 	}
 
 	/// Get the number of requests within a specified duration
-	pub fn get_request_count(&self, key: &str, duration: Duration) -> usize {
-		let history = self.history.read().unwrap();
+	pub fn request_count(&self, key: &str, duration: Duration) -> usize {
+		let history = self.history.read().unwrap_or_else(|e| e.into_inner());
 		if let Some(requests) = history.get(key) {
 			let cutoff = Utc::now() - chrono::Duration::from_std(duration).unwrap();
 			requests.iter().filter(|&&time| time > cutoff).count()
@@ -116,9 +127,14 @@ impl RateLimitStore {
 		}
 	}
 
-	/// Clean up old request history
+	/// Clean up old request history and stale rate limit buckets
+	///
+	/// Removes request history entries older than `max_age` and evicts
+	/// rate limit buckets that have not been refilled within `max_age`,
+	/// preventing unbounded memory growth from accumulated stale entries.
 	pub fn cleanup(&self, max_age: Duration) {
-		let mut history = self.history.write().unwrap();
+		// Prune old history entries
+		let mut history = self.history.write().unwrap_or_else(|e| e.into_inner());
 		let cutoff = Utc::now() - chrono::Duration::from_std(max_age).unwrap();
 
 		for requests in history.values_mut() {
@@ -126,12 +142,24 @@ impl RateLimitStore {
 		}
 
 		history.retain(|_, requests| !requests.is_empty());
+		drop(history);
+
+		// Evict stale buckets that have not been accessed within max_age
+		let mut buckets = self.buckets.write().unwrap_or_else(|e| e.into_inner());
+		let now = Instant::now();
+		buckets.retain(|_, bucket| now.duration_since(bucket.last_refill) < max_age);
 	}
 
 	/// Reset the store
 	pub fn reset(&self) {
-		self.buckets.write().unwrap().clear();
-		self.history.write().unwrap().clear();
+		self.buckets
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.clear();
+		self.history
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.clear();
 	}
 }
 
@@ -139,6 +167,7 @@ impl RateLimitStore {
 pub use reinhardt_core::RateLimitStrategy;
 
 /// Rate Limiting Configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct RateLimitConfig {
 	/// Strategy
@@ -353,7 +382,7 @@ impl RateLimitMiddleware {
 	/// let middleware = RateLimitMiddleware::new(
 	///     RateLimitConfig::new(RateLimitStrategy::PerRoute, 100.0, 10.0)
 	/// );
-	/// let count = middleware.store().get_request_count("route:/api/data", Duration::from_secs(60));
+	/// let count = middleware.store().request_count("route:/api/data", Duration::from_secs(60));
 	/// println!("Request count: {}", count);
 	/// ```
 	pub fn store(&self) -> &RateLimitStore {
@@ -534,39 +563,38 @@ impl Middleware for RateLimitMiddleware {
 		// Generate key
 		let key = self.generate_key(&request);
 
-		// Get bucket
-		let mut bucket =
-			self.store
-				.get_or_create_bucket(&key, self.config.capacity, self.config.refill_rate);
+		// Atomically consume tokens within a single lock to prevent TOCTOU
+		match self.store.consume_token(
+			&key,
+			self.config.capacity,
+			self.config.refill_rate,
+			self.config.cost_per_request,
+		) {
+			Ok(remaining) => {
+				// Record request
+				self.store.record_request(&key);
 
-		// Consume tokens
-		if bucket.consume(self.config.cost_per_request) {
-			// Record request
-			self.store.record_request(&key);
+				// Call handler
+				let mut response = handler.handle(request).await?;
 
-			// Update bucket
-			self.store.update_bucket(&key, bucket.clone());
+				// Add rate limiting headers
+				response.headers.insert(
+					hyper::header::HeaderName::from_static("x-ratelimit-limit"),
+					hyper::header::HeaderValue::from_str(&self.config.capacity.to_string())
+						.unwrap_or_else(|_| hyper::header::HeaderValue::from_static("100")),
+				);
+				response.headers.insert(
+					hyper::header::HeaderName::from_static("x-ratelimit-remaining"),
+					hyper::header::HeaderValue::from_str(&remaining.floor().to_string())
+						.unwrap_or_else(|_| hyper::header::HeaderValue::from_static("0")),
+				);
 
-			// Call handler
-			let mut response = handler.handle(request).await?;
-
-			// Add rate limiting headers
-			response.headers.insert(
-				hyper::header::HeaderName::from_static("x-ratelimit-limit"),
-				hyper::header::HeaderValue::from_str(&self.config.capacity.to_string())
-					.unwrap_or_else(|_| hyper::header::HeaderValue::from_static("100")),
-			);
-			response.headers.insert(
-				hyper::header::HeaderName::from_static("x-ratelimit-remaining"),
-				hyper::header::HeaderValue::from_str(&bucket.tokens.floor().to_string())
-					.unwrap_or_else(|_| hyper::header::HeaderValue::from_static("0")),
-			);
-
-			Ok(response)
-		} else {
-			// Rate limit exceeded
-			let retry_after = bucket.time_until_next_token();
-			Ok(self.rate_limit_error(retry_after))
+				Ok(response)
+			}
+			Err(retry_after) => {
+				// Rate limit exceeded
+				Ok(self.rate_limit_error(retry_after))
+			}
 		}
 	}
 }
@@ -785,7 +813,7 @@ mod tests {
 		store.record_request("test");
 		store.record_request("test");
 
-		let count = store.get_request_count("test", Duration::from_secs(60));
+		let count = store.request_count("test", Duration::from_secs(60));
 		assert_eq!(count, 3);
 	}
 
@@ -798,7 +826,7 @@ mod tests {
 
 		store.cleanup(Duration::from_millis(50));
 
-		let count = store.get_request_count("test", Duration::from_secs(60));
+		let count = store.request_count("test", Duration::from_secs(60));
 		assert_eq!(count, 0);
 	}
 
@@ -1187,5 +1215,28 @@ mod tests {
 		request2.extensions.insert("user2".to_string());
 		let response2 = middleware.process(request2, handler).await.unwrap();
 		assert_eq!(response2.status, StatusCode::OK);
+	}
+
+	#[rstest::rstest]
+	fn test_rwlock_poison_recovery_rate_limit_store() {
+		// Arrange
+		let store = Arc::new(RateLimitStore::new());
+		store.record_request("pre_poison");
+
+		// Act - poison the RwLock by panicking while holding a write guard
+		let store_clone = Arc::clone(&store);
+		let _ = thread::spawn(move || {
+			let _guard = store_clone.buckets.write().unwrap();
+			panic!("intentional panic to poison lock");
+		})
+		.join();
+
+		// Assert - operations still work after poison recovery
+		store.record_request("post_poison");
+		let count = store.request_count("post_poison", Duration::from_secs(60));
+		assert_eq!(count, 1);
+
+		store.cleanup(Duration::from_secs(0));
+		store.reset();
 	}
 }

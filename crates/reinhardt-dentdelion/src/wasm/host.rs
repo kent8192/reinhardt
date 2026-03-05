@@ -6,8 +6,14 @@
 //! # Capabilities
 //!
 //! Some host functions require specific capabilities:
-//! - HTTP functions: Require network access permission
-//! - Database functions: Require database access permission
+//! - HTTP functions: Require `NetworkAccess` capability
+//! - Database functions: Require `DatabaseAccess` capability
+//! - SSR rendering: Requires `Verified` or `Trusted` trust level
+//! - JavaScript execution: Requires `Trusted` trust level only
+//!
+//! The capability-based access control pattern ensures plugins can only access
+//! resources they have been explicitly granted. Capabilities are preserved
+//! across `Clone` operations so that WASM store creation does not lose state.
 
 use crate::capability::{Capability, TrustLevel};
 use crate::error::PluginResult;
@@ -15,12 +21,19 @@ use crate::error::PluginResult;
 use parking_lot::RwLock;
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use super::events::{Event, EventBus, SharedEventBus};
 use super::models::{ModelRegistry, ModelSchema, SharedModelRegistry, SqlMigration};
 use super::ssr::{RenderOptions, RenderResult, SharedSsrProxy, SsrError, SsrProxy};
 use super::types::{ConfigValue, WitHttpResponse, WitPluginError};
+
+/// Shared default HTTP client reused across all `HostState` instances.
+///
+/// Creating a `reqwest::Client` per `HostState` wastes connection pools and
+/// may lead to file descriptor exhaustion under high load. This shared client
+/// ensures connection pools are reused across all plugins.
+static DEFAULT_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 
 #[cfg(feature = "ts")]
 use super::ts_runtime::SharedTsRuntime;
@@ -236,7 +249,7 @@ impl HostState {
 			services: RwLock::new(HashMap::new()),
 			typed_services: RwLock::new(HashMap::new()),
 			capabilities: HashSet::new(),
-			http_client: Some(reqwest::Client::new()),
+			http_client: Some(DEFAULT_HTTP_CLIENT.clone()),
 			db_connection: None,
 			event_bus,
 			model_registry,
@@ -604,7 +617,14 @@ impl HostState {
 	/// # Returns
 	///
 	/// A unique subscription ID for polling and unsubscribing.
-	pub fn subscribe_events(&self, pattern: &str) -> u64 {
+	///
+	/// # Errors
+	///
+	/// Returns an error if the subscription limit has been reached.
+	pub fn subscribe_events(
+		&self,
+		pattern: &str,
+	) -> Result<u64, crate::wasm::events::EventBusError> {
 		self.event_bus.subscribe(pattern, &self.plugin_name)
 	}
 
@@ -844,13 +864,15 @@ pub struct HostStateBuilder {
 
 impl HostStateBuilder {
 	/// Create a new builder.
+	///
+	/// Uses the shared default HTTP client to avoid creating redundant connection pools.
 	pub fn new(plugin_name: impl Into<String>) -> Self {
 		Self {
 			plugin_name: plugin_name.into(),
 			trust_level: TrustLevel::default(),
 			config: HashMap::new(),
 			capabilities: HashSet::new(),
-			http_client: Some(reqwest::Client::new()),
+			http_client: Some(DEFAULT_HTTP_CLIENT.clone()),
 			db_connection: None,
 			event_bus: None,
 			model_registry: None,
@@ -933,7 +955,7 @@ impl HostStateBuilder {
 	///
 	/// If not set, a new SSR proxy will be created for this host state.
 	/// By default, the SSR proxy is unavailable (TypeScript runtime not enabled).
-	/// Use [`SsrProxy::with_availability(true)`] to enable SSR.
+	/// Use [`SsrProxy::with_availability`] with `true` to enable SSR.
 	pub fn ssr_proxy(mut self, ssr_proxy: SharedSsrProxy) -> Self {
 		self.ssr_proxy = Some(ssr_proxy);
 		self
@@ -1209,8 +1231,13 @@ impl crate::wasm::runtime::reinhardt::dentdelion::events::Host for HostState {
 		&mut self,
 		pattern: String,
 	) -> Result<Result<u64, GeneratedPluginError>, anyhow::Error> {
-		let subscription_id = self.subscribe_events(&pattern);
-		Ok(Ok(subscription_id))
+		match self.subscribe_events(&pattern) {
+			Ok(subscription_id) => Ok(Ok(subscription_id)),
+			Err(e) => Ok(Err(to_generated_error(WitPluginError::new(
+				429,
+				e.to_string(),
+			)))),
+		}
 	}
 
 	async fn unsubscribe(
@@ -1510,7 +1537,7 @@ mod tests {
 			.build();
 
 		// Consumer subscribes to user events
-		let sub_id = consumer.subscribe_events("user.*");
+		let sub_id = consumer.subscribe_events("user.*").unwrap();
 
 		// Producer emits an event
 		let delivered = producer.emit_event("user.created", vec![1, 2, 3]);
@@ -1530,7 +1557,7 @@ mod tests {
 		let plugin_a = HostState::new("plugin-a");
 		let plugin_b = HostState::new("plugin-b");
 
-		let sub_id = plugin_b.subscribe_events("*");
+		let sub_id = plugin_b.subscribe_events("*").unwrap();
 		plugin_a.emit_event("test.event", vec![]);
 
 		// plugin_b won't see the event because they have different event buses
@@ -1542,7 +1569,7 @@ mod tests {
 	fn test_host_state_event_unsubscribe() {
 		let state = HostState::new("test-plugin");
 
-		let sub_id = state.subscribe_events("*");
+		let sub_id = state.subscribe_events("*").unwrap();
 		assert!(state.unsubscribe_events(sub_id));
 		assert!(!state.unsubscribe_events(sub_id)); // Already unsubscribed
 	}

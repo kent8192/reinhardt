@@ -518,27 +518,33 @@ impl DatabaseConnection {
 								.map(|s| s.to_string())
 								.unwrap_or_else(|| "db.sqlite3".to_string());
 
-							Some(reinhardt_conf::settings::DatabaseConfig {
-								engine,
-								name,
-								user: db_map
-									.get("user")
-									.and_then(|v| v.as_str())
-									.map(|s| s.to_string()),
-								password: db_map
-									.get("password")
-									.and_then(|v| v.as_str())
-									.map(reinhardt_conf::settings::secret_types::SecretString::new),
-								host: db_map
-									.get("host")
-									.and_then(|v| v.as_str())
-									.map(|s| s.to_string()),
-								port: db_map
-									.get("port")
-									.and_then(|v| v.as_u64())
-									.map(|p| p as u16),
-								options: std::collections::HashMap::new(),
-							})
+							let mut config =
+								reinhardt_conf::settings::DatabaseConfig::new(engine, name);
+							if let Some(user) = db_map
+								.get("user")
+								.and_then(|v| v.as_str())
+							{
+								config = config.with_user(user);
+							}
+							if let Some(password) = db_map
+								.get("password")
+								.and_then(|v| v.as_str())
+							{
+								config = config.with_password(password);
+							}
+							if let Some(host) = db_map
+								.get("host")
+								.and_then(|v| v.as_str())
+							{
+								config = config.with_host(host);
+							}
+							if let Some(port) = db_map
+								.get("port")
+								.and_then(|v| v.as_u64())
+							{
+								config = config.with_port(port as u16);
+							}
+							Some(config)
 						} else {
 							None
 						}

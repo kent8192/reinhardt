@@ -7,20 +7,21 @@ use crate::connection::{Message, WebSocketConnection, WebSocketError};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 /// Error types for room operations
 #[derive(Debug, thiserror::Error)]
 pub enum RoomError {
-	#[error("Client not found: {0}")]
+	#[error("Client not found")]
 	ClientNotFound(String),
-	#[error("Room not found: {0}")]
+	#[error("Room not found")]
 	RoomNotFound(String),
-	#[error("Client already exists: {0}")]
+	#[error("Client already exists")]
 	ClientAlreadyExists(String),
-	#[error("WebSocket error: {0}")]
+	#[error("WebSocket error")]
 	WebSocket(#[from] WebSocketError),
-	#[error("Metadata error: {0}")]
+	#[error("Metadata error")]
 	Metadata(String),
 }
 
@@ -253,6 +254,78 @@ impl Room {
 		BroadcastResult { successful, failed }
 	}
 
+	/// Broadcasts a message to all clients with a per-client send timeout.
+	///
+	/// Slow consumers that do not accept the message within the given timeout
+	/// are treated as failed and automatically removed from the room, applying
+	/// backpressure to prevent slow receivers from blocking the entire broadcast.
+	///
+	/// # Arguments
+	///
+	/// * `message` - The message to broadcast
+	/// * `send_timeout` - Maximum time to wait for each client to accept the message
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_websockets::room::Room;
+	/// use reinhardt_websockets::{WebSocketConnection, Message};
+	/// use tokio::sync::mpsc;
+	/// use std::sync::Arc;
+	/// use std::time::Duration;
+	///
+	/// # tokio_test::block_on(async {
+	/// let room = Room::new("chat".to_string());
+	///
+	/// let (tx, _rx) = mpsc::unbounded_channel();
+	/// let client = Arc::new(WebSocketConnection::new("user1".to_string(), tx));
+	///
+	/// room.join("user1".to_string(), client).await.unwrap();
+	///
+	/// let msg = Message::text("Hello!".to_string());
+	/// let result = room.broadcast_with_timeout(msg, Duration::from_secs(5)).await;
+	///
+	/// assert!(result.is_complete_success());
+	/// # });
+	/// ```
+	pub async fn broadcast_with_timeout(
+		&self,
+		message: Message,
+		send_timeout: Duration,
+	) -> BroadcastResult {
+		let clients = self.clients.read().await;
+
+		let mut successful = Vec::new();
+		let mut failed = Vec::new();
+
+		for (client_id, client) in clients.iter() {
+			let send_future = client.send(message.clone());
+			match tokio::time::timeout(send_timeout, send_future).await {
+				Ok(Ok(())) => successful.push(client_id.clone()),
+				Ok(Err(e)) => failed.push((client_id.clone(), e)),
+				Err(_elapsed) => {
+					failed.push((
+						client_id.clone(),
+						WebSocketError::SlowConsumer(send_timeout),
+					));
+				}
+			}
+		}
+
+		// Drop read lock before acquiring write lock
+		drop(clients);
+
+		// Automatically remove failed connections from the room
+		if !failed.is_empty() {
+			let mut clients_write = self.clients.write().await;
+			for (client_id, _) in &failed {
+				clients_write.remove(client_id);
+			}
+		}
+
+		BroadcastResult { successful, failed }
+	}
+
 	/// Send a message to a specific client
 	///
 	/// # Examples
@@ -282,11 +355,13 @@ impl Room {
 	/// # });
 	/// ```
 	pub async fn send_to(&self, client_id: &str, message: Message) -> RoomResult<()> {
-		let clients = self.clients.read().await;
-
-		let client = clients
-			.get(client_id)
-			.ok_or_else(|| RoomError::ClientNotFound(client_id.to_string()))?;
+		let client = {
+			let clients = self.clients.read().await;
+			clients
+				.get(client_id)
+				.ok_or_else(|| RoomError::ClientNotFound(client_id.to_string()))?
+				.clone()
+		};
 
 		client.send(message).await?;
 
@@ -603,6 +678,9 @@ impl RoomManager {
 
 	/// Get or create a room
 	///
+	/// This method uses a single write lock to avoid TOCTOU race conditions
+	/// that could occur with separate get and create operations.
+	///
 	/// # Examples
 	///
 	/// ```
@@ -618,11 +696,15 @@ impl RoomManager {
 	/// # });
 	/// ```
 	pub async fn get_or_create_room(&self, id: String) -> Arc<Room> {
-		if let Some(room) = self.get_room(&id).await {
-			return room;
+		let mut rooms = self.rooms.write().await;
+
+		if let Some(room) = rooms.get(&id) {
+			return room.clone();
 		}
 
-		self.create_room(id).await
+		let room = Arc::new(Room::new(id.clone()));
+		rooms.insert(id, room.clone());
+		room
 	}
 
 	/// Delete a room
@@ -893,6 +975,53 @@ impl RoomManager {
 			.ok_or_else(|| RoomError::RoomNotFound(room_id.to_string()))?;
 
 		Ok(room.broadcast(message).await)
+	}
+
+	/// Broadcasts a message to all clients in a room with a per-client timeout.
+	///
+	/// Slow consumers that do not accept the message within the given timeout
+	/// are treated as failed and removed from the room.
+	///
+	/// Returns [`RoomError::RoomNotFound`] if the room does not exist.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_websockets::room::RoomManager;
+	/// use reinhardt_websockets::{WebSocketConnection, Message};
+	/// use tokio::sync::mpsc;
+	/// use std::sync::Arc;
+	/// use std::time::Duration;
+	///
+	/// # tokio_test::block_on(async {
+	/// let manager = RoomManager::new();
+	/// manager.create_room("timeout_test".to_string()).await;
+	///
+	/// let (tx, _rx) = mpsc::unbounded_channel();
+	/// let conn = Arc::new(WebSocketConnection::new("user1".to_string(), tx));
+	///
+	/// manager.join_room("timeout_test".to_string(), conn).await.unwrap();
+	///
+	/// let msg = Message::text("Hello!".to_string());
+	/// let result = manager
+	///     .broadcast_to_room_with_timeout("timeout_test", msg, Duration::from_secs(5))
+	///     .await
+	///     .unwrap();
+	/// assert!(result.is_complete_success());
+	/// # });
+	/// ```
+	pub async fn broadcast_to_room_with_timeout(
+		&self,
+		room_id: &str,
+		message: Message,
+		send_timeout: Duration,
+	) -> RoomResult<BroadcastResult> {
+		let room = self
+			.get_room(room_id)
+			.await
+			.ok_or_else(|| RoomError::RoomNotFound(room_id.to_string()))?;
+
+		Ok(room.broadcast_with_timeout(message, send_timeout).await)
 	}
 
 	/// Broadcast a message to all clients in all rooms.
@@ -1471,5 +1600,128 @@ mod tests {
 		assert_eq!(result.failure_count(), 1);
 		assert!(result.successful.contains(&"ok".to_string()));
 		assert!(result.failed_client_ids().contains(&"dead"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_broadcast_with_timeout_succeeds_for_responsive_clients() {
+		// Arrange
+		let room = Room::new("timeout_ok".to_string());
+
+		let (tx1, mut rx1) = mpsc::unbounded_channel();
+		let (tx2, mut rx2) = mpsc::unbounded_channel();
+
+		let client1 = Arc::new(WebSocketConnection::new("fast1".to_string(), tx1));
+		let client2 = Arc::new(WebSocketConnection::new("fast2".to_string(), tx2));
+
+		room.join("fast1".to_string(), client1).await.unwrap();
+		room.join("fast2".to_string(), client2).await.unwrap();
+
+		// Act
+		let msg = Message::text("hello with timeout".to_string());
+		let result = room
+			.broadcast_with_timeout(msg, Duration::from_secs(5))
+			.await;
+
+		// Assert
+		assert!(result.is_complete_success());
+		assert_eq!(result.successful.len(), 2);
+		assert!(matches!(rx1.try_recv(), Ok(Message::Text { .. })));
+		assert!(matches!(rx2.try_recv(), Ok(Message::Text { .. })));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_broadcast_with_timeout_removes_dead_connections() {
+		// Arrange
+		let room = Room::new("timeout_dead".to_string());
+
+		let (tx_alive, _rx_alive) = mpsc::unbounded_channel();
+		let (tx_dead, _rx_dead) = mpsc::unbounded_channel::<Message>();
+
+		let alive = Arc::new(WebSocketConnection::new("alive".to_string(), tx_alive));
+		let dead = Arc::new(WebSocketConnection::new("dead".to_string(), tx_dead));
+
+		room.join("alive".to_string(), alive).await.unwrap();
+		room.join("dead".to_string(), dead).await.unwrap();
+
+		// Simulate dead connection
+		drop(_rx_dead);
+
+		// Act
+		let msg = Message::text("test".to_string());
+		let result = room
+			.broadcast_with_timeout(msg, Duration::from_secs(5))
+			.await;
+
+		// Assert
+		assert!(result.is_partial_success());
+		assert_eq!(result.successful.len(), 1);
+		assert_eq!(result.failure_count(), 1);
+		assert_eq!(room.client_count().await, 1);
+		assert!(room.has_client("alive").await);
+		assert!(!room.has_client("dead").await);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_broadcast_with_timeout_empty_room() {
+		// Arrange
+		let room = Room::new("timeout_empty".to_string());
+
+		// Act
+		let msg = Message::text("nobody".to_string());
+		let result = room
+			.broadcast_with_timeout(msg, Duration::from_secs(1))
+			.await;
+
+		// Assert
+		assert!(result.is_complete_success());
+		assert!(result.successful.is_empty());
+		assert!(result.failed.is_empty());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_broadcast_to_room_with_timeout() {
+		// Arrange
+		let manager = RoomManager::new();
+		manager.create_room("timeout_room".to_string()).await;
+
+		let (tx, _rx) = mpsc::unbounded_channel();
+		let conn = Arc::new(WebSocketConnection::new("user1".to_string(), tx));
+
+		manager
+			.join_room("timeout_room".to_string(), conn)
+			.await
+			.unwrap();
+
+		// Act
+		let msg = Message::text("hello".to_string());
+		let result = manager
+			.broadcast_to_room_with_timeout("timeout_room", msg, Duration::from_secs(5))
+			.await
+			.unwrap();
+
+		// Assert
+		assert!(result.is_complete_success());
+		assert_eq!(result.successful.len(), 1);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_broadcast_to_room_with_timeout_nonexistent_room() {
+		// Arrange
+		let manager = RoomManager::new();
+
+		// Act
+		let msg = Message::text("hello".to_string());
+		let result = manager
+			.broadcast_to_room_with_timeout("missing", msg, Duration::from_secs(1))
+			.await;
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(result.unwrap_err(), RoomError::RoomNotFound(_)));
 	}
 }

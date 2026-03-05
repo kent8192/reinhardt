@@ -2,6 +2,7 @@
 //!
 //! This module defines how models are displayed and managed in the admin interface.
 
+use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
 
 /// Trait for configuring model administration
@@ -135,7 +136,8 @@ pub trait ModelAdmin: Send + Sync {
 ///     .list_display(vec!["id", "username", "email"])
 ///     .list_filter(vec!["is_active"])
 ///     .search_fields(vec!["username", "email"])
-///     .build();
+///     .build()
+///     .unwrap();
 ///
 /// assert_eq!(admin.model_name(), "User");
 /// ```
@@ -189,7 +191,8 @@ impl ModelAdminConfig {
 	/// let admin = ModelAdminConfig::builder()
 	///     .model_name("User")
 	///     .list_display(vec!["id", "username"])
-	///     .build();
+	///     .build()
+	///     .unwrap();
 	/// ```
 	pub fn builder() -> ModelAdminConfigBuilder {
 		ModelAdminConfigBuilder::default()
@@ -343,12 +346,16 @@ impl ModelAdminConfigBuilder {
 
 	/// Build the configuration
 	///
-	/// # Panics
+	/// # Errors
 	///
-	/// Panics if model_name is not set
-	pub fn build(self) -> ModelAdminConfig {
-		ModelAdminConfig {
-			model_name: self.model_name.expect("model_name is required"),
+	/// Returns `AdminError::ValidationError` if `model_name` is not set.
+	pub fn build(self) -> AdminResult<ModelAdminConfig> {
+		let model_name = self
+			.model_name
+			.ok_or_else(|| AdminError::ValidationError("model_name is required".to_string()))?;
+
+		Ok(ModelAdminConfig {
+			model_name,
 			table_name: self.table_name,
 			pk_field: self.pk_field.unwrap_or_else(|| "id".into()),
 			list_display: self.list_display.unwrap_or_else(|| vec!["id".into()]),
@@ -358,7 +365,7 @@ impl ModelAdminConfigBuilder {
 			readonly_fields: self.readonly_fields.unwrap_or_default(),
 			ordering: self.ordering.unwrap_or_else(|| vec!["-id".into()]),
 			list_per_page: self.list_per_page,
-		}
+		})
 	}
 }
 
@@ -383,7 +390,8 @@ mod tests {
 			.list_filter(vec!["is_active"])
 			.search_fields(vec!["username", "email"])
 			.list_per_page(50)
-			.build();
+			.build()
+			.unwrap();
 
 		assert_eq!(admin.model_name(), "User");
 		assert_eq!(admin.list_display(), vec!["id", "username", "email"]);
@@ -405,9 +413,14 @@ mod tests {
 	}
 
 	#[rstest]
-	#[should_panic(expected = "model_name is required")]
-	fn test_builder_without_model_name() {
-		ModelAdminConfig::builder().build();
+	fn test_builder_without_model_name_returns_error() {
+		// Arrange & Act
+		let result = ModelAdminConfig::builder().build();
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(err.to_string().contains("model_name is required"));
 	}
 
 	/// Helper struct for testing default trait permission behavior
@@ -573,7 +586,8 @@ mod tests {
 		let admin = ModelAdminConfig::builder()
 			.model_name("Post")
 			.list_display(vec!["id", "title"])
-			.build();
+			.build()
+			.unwrap();
 		let user = String::from("any_user");
 
 		// Act

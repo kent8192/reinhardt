@@ -19,13 +19,14 @@ use syn::{Error, Result};
 use crate::core::{
 	ClientValidator, ClientValidatorRule, FormAction, FormCallbacks, FormDerived, FormFieldDef,
 	FormFieldEntry, FormFieldGroup, FormFieldProperty, FormMacro, FormMethod, FormSlots, FormState,
-	FormValidator, FormWatch, IconChild, IconPosition, TypedChoicesConfig, TypedClientValidator,
-	TypedClientValidatorRule, TypedCustomAttr, TypedDerivedItem, TypedFieldDisplay,
-	TypedFieldStyling, TypedFieldType, TypedFieldValidation, TypedFormAction, TypedFormCallbacks,
-	TypedFormDerived, TypedFormFieldDef, TypedFormFieldEntry, TypedFormFieldGroup, TypedFormMacro,
-	TypedFormSlots, TypedFormState, TypedFormStyling, TypedFormValidator, TypedFormWatch,
-	TypedFormWatchItem, TypedIcon, TypedIconAttr, TypedIconChild, TypedIconPosition,
-	TypedValidatorRule, TypedWidget, TypedWrapper, TypedWrapperAttr, ValidatorRule,
+	FormValidator, FormWatch, IconAttr, IconChild, IconPosition, TypedChoicesConfig,
+	TypedClientValidator, TypedClientValidatorRule, TypedCustomAttr, TypedDerivedItem,
+	TypedFieldDisplay, TypedFieldStyling, TypedFieldType, TypedFieldValidation, TypedFormAction,
+	TypedFormCallbacks, TypedFormDerived, TypedFormFieldDef, TypedFormFieldEntry,
+	TypedFormFieldGroup, TypedFormMacro, TypedFormSlots, TypedFormState, TypedFormStyling,
+	TypedFormValidator, TypedFormWatch, TypedFormWatchItem, TypedIcon, TypedIconAttr,
+	TypedIconChild, TypedIconPosition, TypedValidatorRule, TypedWidget, TypedWrapper,
+	TypedWrapperAttr, ValidatorRule,
 };
 
 /// Validates and transforms the FormMacro AST into a typed AST.
@@ -81,8 +82,14 @@ pub fn validate_form(ast: &FormMacro) -> Result<TypedFormMacro> {
 	// Transform client-side validators
 	let client_validators = transform_client_validators(&ast.client_validators, &ast.fields)?;
 
+	// The parser guarantees that `name` is Some after successful parsing.
+	let name = ast
+		.name
+		.clone()
+		.expect("form name must be set after parsing");
+
 	Ok(TypedFormMacro {
-		name: ast.name.clone(),
+		name,
 		action,
 		method,
 		styling,
@@ -430,18 +437,31 @@ fn transform_field_group(group: &FormFieldGroup) -> Result<TypedFormFieldGroup> 
 }
 
 /// Transforms a single field definition.
+///
+/// All property extraction errors are annotated with the field name for context.
 fn transform_field(field: &FormFieldDef) -> Result<TypedFormFieldDef> {
+	let field_name = field.name.to_string();
+
+	// Annotate errors with the field name so the developer knows which field caused the problem
+	let annotate = |mut err: syn::Error| -> syn::Error {
+		err.combine(syn::Error::new(
+			field.name.span(),
+			format!("error occurred in field '{}'", field_name),
+		));
+		err
+	};
+
 	// Parse field type
-	let field_type = parse_field_type(&field.field_type)?;
+	let field_type = parse_field_type(&field.field_type).map_err(&annotate)?;
 
 	// Extract properties into categories
-	let validation = extract_validation_properties(&field.properties)?;
-	let display = extract_display_properties(&field.properties)?;
-	let styling = extract_styling_properties(&field.properties)?;
-	let widget = extract_widget(&field.properties, &field_type)?;
-	let wrapper = extract_wrapper(&field.properties)?;
-	let icon = extract_icon(&field.properties)?;
-	let custom_attrs = extract_custom_attrs(&field.properties)?;
+	let validation = extract_validation_properties(&field.properties).map_err(&annotate)?;
+	let display = extract_display_properties(&field.properties).map_err(&annotate)?;
+	let styling = extract_styling_properties(&field.properties).map_err(&annotate)?;
+	let widget = extract_widget(&field.properties, &field_type).map_err(&annotate)?;
+	let wrapper = extract_wrapper(&field.properties).map_err(&annotate)?;
+	let icon = extract_icon(&field.properties).map_err(&annotate)?;
+	let custom_attrs = extract_custom_attrs(&field.properties).map_err(&annotate)?;
 	let bind = extract_bind(&field.properties);
 	let initial_from = extract_initial_from(&field.properties);
 	let choices_config = extract_choices_config(&field.properties);
@@ -847,20 +867,8 @@ fn extract_icon(properties: &[FormFieldProperty]) -> Result<Option<TypedIcon>> {
 		None => return Ok(None),
 	};
 
-	// Transform icon attributes
-	let attrs = element
-		.attrs
-		.iter()
-		.map(|attr| {
-			let value =
-				extract_string_value_from_expr(&attr.value, &attr.name.to_string(), attr.span)?;
-			Ok(TypedIconAttr {
-				name: attr.name.to_string(),
-				value,
-				span: attr.span,
-			})
-		})
-		.collect::<Result<Vec<_>>>()?;
+	// Transform icon attributes using the shared helper
+	let attrs = transform_icon_attrs(&element.attrs)?;
 
 	// Transform children recursively
 	let children = element
@@ -879,19 +887,8 @@ fn extract_icon(properties: &[FormFieldProperty]) -> Result<Option<TypedIcon>> {
 
 /// Transforms a single icon child element recursively.
 fn transform_icon_child(child: &IconChild) -> Result<TypedIconChild> {
-	let attrs = child
-		.attrs
-		.iter()
-		.map(|attr| {
-			let value =
-				extract_string_value_from_expr(&attr.value, &attr.name.to_string(), attr.span)?;
-			Ok(TypedIconAttr {
-				name: attr.name.to_string(),
-				value,
-				span: attr.span,
-			})
-		})
-		.collect::<Result<Vec<_>>>()?;
+	// Transform attributes using the shared helper
+	let attrs = transform_icon_attrs(&child.attrs)?;
 
 	// Recursively transform nested children
 	let children = child
@@ -906,6 +903,27 @@ fn transform_icon_child(child: &IconChild) -> Result<TypedIconChild> {
 		children,
 		span: child.span,
 	})
+}
+
+/// Transforms a slice of SVG element attributes into `TypedIconAttr` values.
+///
+/// Each attribute must have a string literal value; returns an error with the
+/// attribute name as context if the expression is not a string literal.
+/// This helper eliminates duplicate attribute transformation logic between
+/// `extract_icon` and `transform_icon_child`.
+fn transform_icon_attrs(attrs: &[IconAttr]) -> Result<Vec<TypedIconAttr>> {
+	attrs
+		.iter()
+		.map(|attr| {
+			let name = attr.name.to_string();
+			let value = extract_string_value_from_expr(&attr.value, &name, attr.span)?;
+			Ok(TypedIconAttr {
+				name,
+				value,
+				span: attr.span,
+			})
+		})
+		.collect()
 }
 
 /// Converts untyped IconPosition to TypedIconPosition.
@@ -1091,11 +1109,13 @@ fn transform_validators(
 					span: *span,
 				});
 			}
-			FormValidator::Form { rules: _, span: _ } => {
-				// Form-level validators are not yet supported in TypedFormValidator.
-				// This feature requires design of validation API, error aggregation strategy,
-				// and macro code generation for cross-field validation rules.
-				// See: https://github.com/kent8192/reinhardt-web/issues/24
+			FormValidator::Form { rules: _, span } => {
+				return Err(Error::new(
+					*span,
+					"form-level validators (@form) are not yet supported; \
+					 use field-level validators instead \
+					 (see: https://github.com/kent8192/reinhardt-web/issues/24)",
+				));
 			}
 		}
 	}
@@ -1247,83 +1267,19 @@ fn validate_js_condition(js_condition: &str, span: Span) -> Result<()> {
 	Ok(())
 }
 
-/// Extracts an integer value from an optional expression.
-/// Reserved for future enhanced validation.
-#[allow(dead_code)] // Reserved for future enhanced validation
-fn extract_int_value(value: &Option<syn::Expr>, prop_name: &str, span: Span) -> Result<i64> {
-	match value {
-		Some(syn::Expr::Lit(lit)) => {
-			if let syn::Lit::Int(int_lit) = &lit.lit {
-				int_lit.base10_parse::<i64>().map_err(|_| {
-					Error::new(span, format!("'{}' must be a valid integer", prop_name))
-				})
-			} else {
-				Err(Error::new(
-					span,
-					format!("'{}' must be an integer value", prop_name),
-				))
-			}
-		}
-		Some(syn::Expr::Unary(unary)) => {
-			// Handle negative numbers like -10
-			if let syn::UnOp::Neg(_) = unary.op
-				&& let syn::Expr::Lit(lit) = &*unary.expr
-				&& let syn::Lit::Int(int_lit) = &lit.lit
-			{
-				let val = int_lit.base10_parse::<i64>().map_err(|_| {
-					Error::new(span, format!("'{}' must be a valid integer", prop_name))
-				})?;
-				return Ok(-val);
-			}
-			Err(Error::new(
-				span,
-				format!("'{}' must be an integer value", prop_name),
-			))
-		}
-		None => Err(Error::new(
-			span,
-			format!("'{}' requires a value", prop_name),
-		)),
-		_ => Err(Error::new(
-			span,
-			format!("'{}' must be an integer value", prop_name),
-		)),
-	}
-}
-
-/// Extracts a string value from an optional expression.
-/// Reserved for future enhanced validation.
-#[allow(dead_code)] // Reserved for future enhanced validation
-fn extract_string_value(value: &Option<syn::Expr>, prop_name: &str, span: Span) -> Result<String> {
-	match value {
-		Some(syn::Expr::Lit(lit)) => {
-			if let syn::Lit::Str(str_lit) = &lit.lit {
-				Ok(str_lit.value())
-			} else {
-				Err(Error::new(
-					span,
-					format!("'{}' must be a string value", prop_name),
-				))
-			}
-		}
-		None => Err(Error::new(
-			span,
-			format!("'{}' requires a value", prop_name),
-		)),
-		_ => Err(Error::new(
-			span,
-			format!("'{}' must be a string value", prop_name),
-		)),
-	}
-}
-
-/// Extracts an integer value from an expression (non-optional version).
+/// Extracts an integer value from an expression.
+///
+/// Supports integer literals and negated integer literals (e.g., `-10`).
+/// Returns a descriptive error including the property name for context.
 fn extract_int_value_from_expr(value: &syn::Expr, prop_name: &str, span: Span) -> Result<i64> {
 	match value {
 		syn::Expr::Lit(lit) => {
 			if let syn::Lit::Int(int_lit) = &lit.lit {
 				int_lit.base10_parse::<i64>().map_err(|_| {
-					Error::new(span, format!("'{}' must be a valid integer", prop_name))
+					Error::new(
+						span,
+						format!("'{}' must be a valid integer value", prop_name),
+					)
 				})
 			} else {
 				Err(Error::new(
@@ -1339,7 +1295,10 @@ fn extract_int_value_from_expr(value: &syn::Expr, prop_name: &str, span: Span) -
 				&& let syn::Lit::Int(int_lit) = &lit.lit
 			{
 				let val = int_lit.base10_parse::<i64>().map_err(|_| {
-					Error::new(span, format!("'{}' must be a valid integer", prop_name))
+					Error::new(
+						span,
+						format!("'{}' must be a valid integer value", prop_name),
+					)
 				})?;
 				return Ok(-val);
 			}
@@ -1355,7 +1314,11 @@ fn extract_int_value_from_expr(value: &syn::Expr, prop_name: &str, span: Span) -
 	}
 }
 
-/// Extracts a string value from an expression (non-optional version).
+/// Extracts a string value from an expression.
+///
+/// Returns the unquoted string value for string literals. Returns a descriptive
+/// error including the property name for context if the expression is not a
+/// string literal.
 fn extract_string_value_from_expr(
 	value: &syn::Expr,
 	prop_name: &str,
@@ -1368,13 +1331,13 @@ fn extract_string_value_from_expr(
 			} else {
 				Err(Error::new(
 					span,
-					format!("'{}' must be a string value", prop_name),
+					format!("'{}' must be a string literal value", prop_name),
 				))
 			}
 		}
 		_ => Err(Error::new(
 			span,
-			format!("'{}' must be a string value", prop_name),
+			format!("'{}' must be a string literal value", prop_name),
 		)),
 	}
 }

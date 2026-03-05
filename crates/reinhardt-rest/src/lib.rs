@@ -9,22 +9,46 @@
 //! - **Routers**: Automatic URL routing for ViewSets (from reinhardt-routers)
 //! - **Browsable API**: HTML interface for API exploration (from reinhardt-browsable-api)
 //!
-//! ## Features
-//!
-//! - **default**: Enables serializers and parsers
-//! - **serializers**: Data serialization and validation components
-//! - **parsers**: Request body parsing (JSON, Form, Multipart)
-//!
-//! ## Example
+//! ## Quick Start
 //!
 //! ```rust
 //! use reinhardt_rest::parsers::JSONParser;
 //!
-//! // Create a JSON parser
+//! // Create a JSON parser for handling JSON request bodies
 //! let parser = JSONParser::new();
 //! ```
 //!
-//! For router integration, see [`reinhardt_urls::routers`](reinhardt_urls::routers) crate.
+//! For router integration, see the `reinhardt_urls::routers` crate.
+//!
+//! ## Architecture
+//!
+//! Key modules in this crate:
+//!
+//! - [`browsable_api`]: HTML interface for interactive API exploration
+//! - [`filters`]: Query parameter filtering for list endpoints
+//! - [`metadata`]: API metadata and schema introspection utilities
+//! - [`serializers`]: Data serialization, deserialization, and validation
+//! - [`throttling`]: Request rate limiting and throttle policies
+//! - [`versioning`]: API versioning strategies (URL path, header, query)
+//! - [`authentication`]: REST authentication backends (JWT, Token, Session, Basic)
+//! - [`response`]: Typed API response wrappers and pagination support
+//! - [`schema`]: OpenAPI schema generation (requires `openapi` feature)
+//!
+//! ## Feature Flags
+//!
+//! | Feature | Default | Description |
+//! |---------|---------|-------------|
+//! | `serializers` | enabled | Data serialization and validation components |
+//! | `parsers` | enabled | Request body parsing (JSON, Form, Multipart) |
+//! | `jwt` | disabled | JWT authentication backend |
+//! | `filters` | disabled | Query parameter filtering for querysets |
+//! | `throttling` | disabled | Request rate limiting policies |
+//! | `versioning` | disabled | API versioning strategies |
+//! | `metadata` | disabled | API introspection and schema metadata |
+//! | `pagination` | disabled | Cursor and page-number pagination |
+//! | `browsable-api` | disabled | HTML browsable API interface |
+//! | `openapi` | disabled | OpenAPI/Swagger schema generation and UI |
+//! | `rest-full` | disabled | Enables all REST features |
 //!
 //! ## Testing
 //!

@@ -34,7 +34,7 @@ use reinhardt_rest::filters::{
 	CustomFilterBackend, DatabaseDialect, FilterBackend, FuzzySearchFilter, RangeFilter,
 	SimpleOrderingBackend, SimpleSearchBackend,
 };
-use reinhardt_test::fixtures::testcontainers::{postgres_container, ContainerAsync, GenericImage};
+use reinhardt_test::fixtures::testcontainers::{ContainerAsync, GenericImage, postgres_container};
 use rstest::*;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -280,8 +280,8 @@ async fn test_range_filter_with_database_query(
 	let range_sql = format!(
 		"{} WHERE price >= {} AND price <= {}",
 		base_sql,
-		range_filter.get_gte().unwrap(),
-		range_filter.get_lte().unwrap()
+		range_filter.gte.unwrap(),
+		range_filter.lte.unwrap()
 	);
 
 	// Execute query
@@ -449,9 +449,8 @@ async fn test_fuzzy_search_filter_integration(
 		.filter_map(|p| {
 			// Extract first word from product name (e.g., "Laptop" from "Laptop Pro")
 			let first_word = p.name.split_whitespace().next().unwrap_or(&p.name);
-			let similarity =
-				fuzzy_filter.calculate_similarity(fuzzy_filter.get_query(), first_word);
-			if similarity >= fuzzy_filter.get_threshold() {
+			let similarity = fuzzy_filter.calculate_similarity(&fuzzy_filter.query, first_word);
+			if similarity >= fuzzy_filter.threshold {
 				Some((p, similarity))
 			} else {
 				None

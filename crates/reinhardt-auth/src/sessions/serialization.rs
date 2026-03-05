@@ -57,6 +57,7 @@ mod bincode;
 pub use self::bincode::BincodeSerializer;
 
 /// Serialization errors
+#[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum SerializationError {
 	/// JSON serialization error

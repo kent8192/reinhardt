@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-admin-cli"
-version = "0.1.0-alpha.14"
+version = "0.1.0-rc.4"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -22,9 +22,15 @@ quote = "1.0"
 proc-macro2 = "1.0"
 prettyplease = "0.2"
 colored = "2.1"
+ctrlc = "3.4"
 regex = "1.10"
+reinhardt-deploy = { workspace = true }
 reinhardt-pages = {workspace = true, features = ["ast"]}
 zeroize = "1.8"
+
+[dev-dependencies]
+tempfile = "3.8"
+rstest = { workspace = true }
 
 [features]
 full = []

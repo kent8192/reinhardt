@@ -13,7 +13,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/reinhardt-web.svg)](https://crates.io/crates/reinhardt-web)
 [![Documentation](https://docs.rs/reinhardt-web/badge.svg)](https://docs.rs/reinhardt-web)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE.md)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](../../LICENSE)
 [![codecov](https://codecov.io/gh/kent8192/reinhardt-web/graph/badge.svg)](https://codecov.io/gh/kent8192/reinhardt-web)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/kent8192/reinhardt-web)
 
@@ -25,10 +25,11 @@
 
 قد تبحث عن:
 
+- 🌐 [الموقع الرسمي](https://reinhardt-web.dev) - الوثائق والدروس والأدلة
 - 🚀 [البداية السريعة](#البداية-السريعة) - ابدأ في 5 دقائق
 - 📦 [خيارات التثبيت](#التثبيت) - اختر نوعك: Micro أو Standard أو Full
-- 📚 [دليل البدء](../GETTING_STARTED.md) - دروس خطوة بخطوة
-- 🎛️ [أعلام الميزات](../FEATURE_FLAGS.md) - ضبط دقيق للبناء
+- 📚 [دليل البدء](https://reinhardt-web.dev/quickstart/getting-started/) - دروس خطوة بخطوة
+- 🎛️ [أعلام الميزات](https://reinhardt-web.dev/docs/feature-flags/) - ضبط دقيق للبناء
 - 📖 [وثائق API](https://docs.rs/reinhardt-web) - مرجع API الكامل
 - 💬 [المجتمع والدعم](#الحصول-على-المساعدة) - احصل على مساعدة من المجتمع
 
@@ -61,7 +62,7 @@ Reinhardt يجمع أفضل ما في ثلاثة عوالم:
 - **الترقيم، التصفية، تحديد المعدل** مدمج
 - **الإشارات** للبنية المعتمدة على الأحداث
 
-انظر القائمة الكاملة في [المكونات المتاحة](#المكونات-المتاحة) والأمثلة في [دليل البدء](../GETTING_STARTED.md).
+انظر القائمة الكاملة في [المكونات المتاحة](#المكونات-المتاحة) والأمثلة في [دليل البدء](https://reinhardt-web.dev/quickstart/getting-started/).
 
 ## التثبيت
 
@@ -78,7 +79,7 @@ Reinhardt إطار عمل معياري. اختر نقطة البداية:
 [dependencies]
 # يُستورد كـ 'reinhardt'، منشور كـ 'reinhardt-web'
 # الافتراضي يُفعّل كل الميزات (الحزمة الكاملة)
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web" }
+reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web" }
 ```
 
 **يشمل:** Database، Auth، REST API، Admin، GraphQL، WebSockets، Cache، i18n، Mail، Sessions، Static Files، Storage
@@ -97,7 +98,7 @@ use reinhardt::{Request, Response, StatusCode};
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-features = false, features = ["standard"] }
+reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web", default-features = false, features = ["standard"] }
 ```
 
 **يشمل:** Core، Database (PostgreSQL)، REST API، Auth، Middleware، Pages (واجهة WASM مع SSR)
@@ -110,7 +111,7 @@ reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-feat
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-features = false, features = ["minimal"] }
+reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 ```
 
 **يشمل:** HTTP، التوجيه، DI، استخراج المعاملات، الخادم
@@ -124,27 +125,27 @@ reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-feat
 ```toml
 [dependencies]
 # المكونات الأساسية
-reinhardt-http = "0.1.0-alpha.1"
-reinhardt-urls = "0.1.0-alpha.1"
+reinhardt-http = "0.1.0-rc.1"
+reinhardt-urls = "0.1.0-rc.1"
 
 # اختياري: قاعدة البيانات
-reinhardt-db = "0.1.0-alpha.1"
+reinhardt-db = "0.1.0-rc.1"
 
 # اختياري: المصادقة
-reinhardt-auth = "0.1.0-alpha.1"
+reinhardt-auth = "0.1.0-rc.1"
 
 # اختياري: ميزات REST API
-reinhardt-rest = "0.1.0-alpha.1"
+reinhardt-rest = "0.1.0-rc.1"
 
 # اختياري: لوحة الإدارة
-reinhardt-admin = "0.1.0-alpha.1"
+reinhardt-admin = "0.1.0-rc.1"
 
 # اختياري: الميزات المتقدمة
-reinhardt-graphql = "0.1.0-alpha.1"
-reinhardt-websockets = "0.1.0-alpha.1"
+reinhardt-graphql = "0.1.0-rc.1"
+reinhardt-websockets = "0.1.0-rc.1"
 ```
 
-**📖 للقائمة الكاملة للصناديق وأعلام الميزات المتاحة، انظر [دليل أعلام الميزات](../FEATURE_FLAGS.md).**
+**📖 للقائمة الكاملة للصناديق وأعلام الميزات المتاحة، انظر [دليل أعلام الميزات](https://reinhardt-web.dev/docs/feature-flags/).**
 
 ## البداية السريعة
 
@@ -309,9 +310,9 @@ pub fn routes() -> ServerRouter {
 - **ميزة `cache`**: `Cache`، `InMemoryCache`
 - **ميزة `sessions`**: `Session`، `AuthenticationMiddleware`
 
-انظر القائمة الكاملة في [دليل أعلام الميزات](../FEATURE_FLAGS.md).
+انظر القائمة الكاملة في [دليل أعلام الميزات](https://reinhardt-web.dev/docs/feature-flags/).
 
-للدليل الكامل خطوة بخطوة، انظر [دليل البدء](../GETTING_STARTED.md).
+للدليل الكامل خطوة بخطوة، انظر [دليل البدء](https://reinhardt-web.dev/quickstart/getting-started/).
 
 ## 🎓 تعلم بالأمثلة
 
@@ -390,7 +391,7 @@ Reinhardt يوفر نوعين من مصادر متغيرات البيئة بأو
 اختر `EnvSource` عندما يجب أن تكون متغيرات البيئة دائماً لها الأولوية (مثل نشر الإنتاج).
 اختر `LowPriorityEnvSource` عندما يجب أن تكون ملفات TOML المصدر الرئيسي للتهيئة (مثل التطوير).
 
-انظر [وثائق الإعدادات](../SETTINGS_DOCUMENT.md) للتفاصيل.
+انظر [وثائق الإعدادات](docs/SETTINGS_DOCUMENT.md) للتفاصيل.
 
 **استخدام DefaultUser المدمج:**
 
@@ -477,7 +478,7 @@ pub struct CustomUser {
 - `#[field(null = true)]` - السماح بقيم NULL
 - `#[field(unique = true)]` - فرض قيد التفرد
 
-للقائمة الكاملة لسمات الحقول، انظر [دليل سمات الحقول](../field_attributes.md).
+للقائمة الكاملة لسمات الحقول، انظر [دليل سمات الحقول](docs/field_attributes.md).
 
 موصلات الحقول المولدة تمكن الإشارة الآمنة للحقول في الاستعلامات:
 
@@ -1001,32 +1002,32 @@ Reinhardt يقدم مكونات معيارية قابلة للمزج:
 | **الاختبار**         |                           |                                             |
 | أدوات الاختبار      | `reinhardt-test`          | مساعدات الاختبار، التثبيتات، TestContainers |
 
-**لأعلام الميزات التفصيلية في كل صندوق، انظر [دليل أعلام الميزات](../FEATURE_FLAGS.md).**
+**لأعلام الميزات التفصيلية في كل صندوق، انظر [دليل أعلام الميزات](https://reinhardt-web.dev/docs/feature-flags/).**
 
 ---
 
 ## الوثائق
 
-- 📚 [دليل البدء](../GETTING_STARTED.md) - دروس خطوة بخطوة للمبتدئين
-- 🎛️ [دليل أعلام الميزات](../FEATURE_FLAGS.md) - تحسين البناء بالتحكم الدقيق بالميزات
+- 📚 [دليل البدء](https://reinhardt-web.dev/quickstart/getting-started/) - دروس خطوة بخطوة للمبتدئين
+- 🎛️ [دليل أعلام الميزات](https://reinhardt-web.dev/docs/feature-flags/) - تحسين البناء بالتحكم الدقيق بالميزات
 - 📖 [مرجع API](https://docs.rs/reinhardt) (قريباً)
-- 📝 [الدروس التعليمية](../tutorials/) - تعلم ببناء تطبيقات حقيقية
+- 📝 [الدروس التعليمية](https://reinhardt-web.dev/quickstart/tutorials/) - تعلم ببناء تطبيقات حقيقية
 
-**لمساعدي AI**: انظر [CLAUDE.md](../../CLAUDE.md) لمعايير البرمجة الخاصة بالمشروع وإرشادات الاختبار واتفاقيات التطوير.
+**لمساعدي AI**: انظر [CLAUDE.md](CLAUDE.md) لمعايير البرمجة الخاصة بالمشروع وإرشادات الاختبار واتفاقيات التطوير.
 
 ## 💬 الحصول على المساعدة
 
 Reinhardt مشروع يقوده المجتمع. إليك أين تحصل على المساعدة:
 
 - 💬 **Discord**: انضم إلى خادم Discord للدردشة الفورية (قريباً)
-- 💭 **GitHub Discussions**: [اطرح أسئلة وشارك الأفكار](https://github.com/kent8192/reinhardt-rs/discussions)
-- 🐛 **Issues**: [أبلغ عن الأخطاء](https://github.com/kent8192/reinhardt-rs/issues)
-- 📖 **الوثائق**: [اقرأ الأدلة](../)
+- 💭 **GitHub Discussions**: [اطرح أسئلة وشارك الأفكار](https://github.com/kent8192/reinhardt-web/discussions)
+- 🐛 **Issues**: [أبلغ عن الأخطاء](https://github.com/kent8192/reinhardt-web/issues)
+- 📖 **الوثائق**: [اقرأ الأدلة](https://reinhardt-web.dev/)
 
 قبل السؤال، يرجى التحقق من:
 
-- ✅ [دليل البدء](../GETTING_STARTED.md)
-- ✅ [الأمثلة](../../examples/)
+- ✅ [دليل البدء](https://reinhardt-web.dev/quickstart/getting-started/)
+- ✅ [الأمثلة](https://github.com/kent8192/reinhardt-web/tree/main/examples)
 - ✅ Issues و Discussions الموجودة على GitHub
 
 ## 🤝 المساهمة
@@ -1051,12 +1052,7 @@ Reinhardt مشروع يقوده المجتمع. إليك أين تحصل على 
 
 ## الترخيص
 
-مرخص بموجب أي من:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](../../LICENSE-APACHE) أو http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](../../LICENSE-MIT) أو http://opensource.org/licenses/MIT)
-
-باختيارك.
+هذا المشروع مرخص بموجب [BSD 3-Clause License](../../LICENSE).
 
 ### إسناد الطرف الثالث
 

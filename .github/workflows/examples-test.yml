@@ -2,6 +2,15 @@ name: Examples Tests
 
 on:
   workflow_call:
+    inputs:
+      runner:
+        description: 'Runner label JSON. Use "\"ubuntu-latest\"" for GitHub-hosted or "[\"self-hosted\",\"linux\",\"x64\",\"reinhardt-ci\"]" for self-hosted.'
+        type: string
+        default: '"ubuntu-latest"'
+      cargo-build-jobs:
+        description: "Parallel cargo build jobs (1=GitHub-hosted OOM safe, 8=self-hosted)"
+        type: string
+        default: "1"
   workflow_dispatch:
 
 env:
@@ -11,14 +20,16 @@ env:
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_DEV_DEBUG: 0
   CARGO_PROFILE_TEST_DEBUG: 0
+  CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
 
 jobs:
   examples-test:
     name: Examples Tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 40
     steps:
       - name: Free Disk Space (Ubuntu)
+        if: ${{ !contains(inputs.runner, 'self-hosted') }}
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: true
@@ -57,6 +68,7 @@ jobs:
           tool: nextest
 
       - name: Additional disk cleanup before tests
+        if: ${{ !contains(inputs.runner, 'self-hosted') }}
         run: |
           echo "Disk usage before additional cleanup:"
           df -h

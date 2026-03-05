@@ -179,7 +179,7 @@ impl SetOperationBuilder {
 	/// use reinhardt_db::orm::set_operations::SetOperationBuilder;
 	///
 	/// let builder = SetOperationBuilder::new("SELECT * FROM users");
-	// Can chain: .union().intersect().except()
+	/// // Can chain: .union().intersect().except()
 	/// ```
 	pub fn new(base_query: impl Into<String>) -> Self {
 		Self {

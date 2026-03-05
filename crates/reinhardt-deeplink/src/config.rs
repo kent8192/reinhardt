@@ -12,7 +12,7 @@ pub mod custom;
 pub mod ios;
 
 pub use android::{AndroidConfig, AndroidConfigBuilder, AssetStatement, AssetTarget};
-pub use custom::{CustomScheme, CustomSchemeConfig};
+pub use custom::{CustomScheme, CustomSchemeBuilder, CustomSchemeConfig};
 pub use ios::{
 	AppClipsConfig, AppLinkComponent, AppLinkDetail, AppLinksConfig, IosConfig, IosConfigBuilder,
 	WebCredentialsConfig,
@@ -40,6 +40,7 @@ pub use ios::{
 ///             .package_name("com.example.app")
 ///             .sha256_fingerprint("FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C")
 ///             .build()
+///             .unwrap()
 ///     )
 ///     .build();
 ///
@@ -130,6 +131,19 @@ impl DeeplinkConfigBuilder {
 		self
 	}
 
+	/// Validates all custom scheme names in the configuration.
+	///
+	/// # Errors
+	///
+	/// Returns an error if any custom scheme name is invalid per RFC 3986
+	/// or is a dangerous scheme.
+	pub fn validate_schemes(&self) -> Result<(), crate::error::DeeplinkError> {
+		for scheme in &self.custom_schemes {
+			crate::error::validate_scheme_name(&scheme.name)?;
+		}
+		Ok(())
+	}
+
 	/// Builds the deeplink configuration.
 	pub fn build(self) -> DeeplinkConfig {
 		DeeplinkConfig {
@@ -162,7 +176,7 @@ mod tests {
 		let config = DeeplinkConfig::builder()
 			.ios(
 				IosConfig::builder()
-					.app_id("TEAM.bundle")
+					.app_id("TEAM.com.example")
 					.paths(&["/"])
 					.build(),
 			)
@@ -180,7 +194,8 @@ mod tests {
 				AndroidConfig::builder()
 					.package_name("com.example.app")
 					.sha256_fingerprint(VALID_FINGERPRINT)
-					.build(),
+					.build()
+					.unwrap(),
 			)
 			.build();
 
@@ -194,7 +209,7 @@ mod tests {
 		let config = DeeplinkConfig::builder()
 			.ios(
 				IosConfig::builder()
-					.app_id("TEAM.bundle")
+					.app_id("TEAM.com.example")
 					.paths(&["/"])
 					.build(),
 			)
@@ -202,7 +217,8 @@ mod tests {
 				AndroidConfig::builder()
 					.package_name("com.example.app")
 					.sha256_fingerprint(VALID_FINGERPRINT)
-					.build(),
+					.build()
+					.unwrap(),
 			)
 			.custom_scheme("myapp")
 			.build();

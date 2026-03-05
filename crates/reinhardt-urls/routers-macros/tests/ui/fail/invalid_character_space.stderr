@@ -4,6 +4,8 @@ error: Invalid character ' ' at position 5
        - Hyphens (-)
        - Underscores (_)
        - Slashes (/)
+       - Dots (.)
+       - Wildcards (*)
        - Curly braces for parameters ({, })
  --> tests/ui/fail/invalid_character_space.rs:5:20
   |

@@ -10,6 +10,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 /// Errors that can occur during file upload operations
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum FileUploadError {
 	#[error("File too large: {0} bytes (max: {1} bytes)")]
@@ -395,15 +396,14 @@ impl FileUploadHandler {
 		self.handle_upload(field_name, filename, content)
 	}
 
-	/// Generate a unique filename
+	/// Generate a unique filename using a cryptographically random UUID v4
 	///
 	/// Extracts only the file extension from the original filename,
 	/// discarding the original name to prevent path traversal.
+	/// Uses UUID v4 (CSPRNG-based) instead of timestamps to prevent
+	/// predictable filename enumeration.
 	fn generate_unique_filename(&self, field_name: &str, original_filename: &str) -> String {
-		let timestamp = std::time::SystemTime::now()
-			.duration_since(std::time::UNIX_EPOCH)
-			.unwrap()
-			.as_secs();
+		let unique_id = uuid::Uuid::new_v4();
 
 		// Extract only the extension from the basename (strip any directory components)
 		let basename = Path::new(original_filename)
@@ -417,9 +417,9 @@ impl FileUploadHandler {
 			.unwrap_or("");
 
 		if extension.is_empty() {
-			format!("{}_{}", field_name, timestamp)
+			format!("{}_{}", field_name, unique_id)
 		} else {
-			format!("{}_{}.{}", field_name, timestamp, extension)
+			format!("{}_{}.{}", field_name, unique_id, extension)
 		}
 	}
 

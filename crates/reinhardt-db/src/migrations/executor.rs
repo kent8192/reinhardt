@@ -192,10 +192,10 @@ impl DatabaseMigrationExecutor {
 	/// use reinhardt_db::backends::DatabaseConnection;
 	///
 	/// # tokio::runtime::Runtime::new().unwrap().block_on(async {
-	/// // For doctest purposes, using SQLite in-memory
-	/// let db = DatabaseConnection::connect_sqlite(":memory:").await.unwrap();
+	/// // Example: connecting to a PostgreSQL database
+	/// let db = DatabaseConnection::connect_postgres("postgres://localhost/mydb").await.unwrap();
 	/// let executor = DatabaseMigrationExecutor::new(db.clone());
-	/// // Database type is automatically detected as Sqlite
+	/// // Database type is automatically detected as PostgreSQL
 	/// # });
 	/// ```
 	pub fn new(connection: DatabaseConnection) -> Self {
@@ -227,7 +227,7 @@ impl DatabaseMigrationExecutor {
 	/// use reinhardt_db::backends::DatabaseConnection;
 	///
 	/// # async fn example() {
-	/// let db = DatabaseConnection::connect_sqlite(":memory:").await.unwrap();
+	/// let db = DatabaseConnection::connect_postgres("postgres://localhost/mydb").await.unwrap();
 	/// let executor = DatabaseMigrationExecutor::new(db);
 	/// let exists = executor.table_exists("users").await.unwrap();
 	/// # }
@@ -375,7 +375,7 @@ impl DatabaseMigrationExecutor {
 	/// use reinhardt_db::backends::DatabaseConnection;
 	///
 	/// # async fn example() {
-	/// let connection = DatabaseConnection::connect_sqlite(":memory:").await.unwrap();
+	/// let connection = DatabaseConnection::connect_postgres("postgres://localhost/mydb").await.unwrap();
 	/// let mut executor = DatabaseMigrationExecutor::new(connection);
 	///
 	/// let migrations = vec![Migration::new("0001_initial", "myapp")];
@@ -621,8 +621,8 @@ impl DatabaseMigrationExecutor {
 	/// use reinhardt_db::backends::DatabaseConnection;
 	///
 	/// # tokio::runtime::Runtime::new().unwrap().block_on(async {
-	/// // For doctest purposes, using SQLite in-memory instead of PostgreSQL
-	/// let db = DatabaseConnection::connect_sqlite(":memory:").await.unwrap();
+	/// // Example: connecting to a PostgreSQL database
+	/// let db = DatabaseConnection::connect_postgres("postgres://localhost/mydb").await.unwrap();
 	/// let mut executor = DatabaseMigrationExecutor::new(db);
 	///
 	/// let plan = MigrationPlan::new();

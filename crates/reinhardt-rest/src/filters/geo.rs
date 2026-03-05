@@ -52,7 +52,7 @@ impl DistanceUnit {
 /// let center = Point::new(0.0, 0.0);
 /// let filter = DistanceFilter::<()>::new(center, 1000.0, DistanceUnit::Meters);
 ///
-/// assert_eq!(filter.get_distance(), 1000.0);
+/// assert_eq!(filter.distance(), 1000.0);
 /// ```
 pub struct DistanceFilter<M> {
 	center: Point<f64>,
@@ -91,17 +91,17 @@ impl<M> DistanceFilter<M> {
 	}
 
 	/// Get the center point
-	pub fn get_center(&self) -> Point<f64> {
+	pub fn center(&self) -> Point<f64> {
 		self.center
 	}
 
 	/// Get the distance
-	pub fn get_distance(&self) -> f64 {
+	pub fn distance(&self) -> f64 {
 		self.distance
 	}
 
 	/// Get the distance unit
-	pub fn get_unit(&self) -> DistanceUnit {
+	pub fn unit(&self) -> DistanceUnit {
 		self.unit
 	}
 
@@ -173,7 +173,7 @@ impl<M> BoundingBoxFilter<M> {
 	}
 
 	/// Get the bounding box
-	pub fn get_bbox(&self) -> Rect<f64> {
+	pub fn bbox(&self) -> Rect<f64> {
 		self.bbox
 	}
 
@@ -247,7 +247,7 @@ impl<M> PolygonFilter<M> {
 	}
 
 	/// Get the polygon
-	pub fn get_polygon(&self) -> &Polygon<f64> {
+	pub fn polygon(&self) -> &Polygon<f64> {
 		&self.polygon
 	}
 
@@ -284,7 +284,7 @@ impl<M> PolygonFilter<M> {
 /// let center = Point::new(0.0, 0.0);
 /// let filter = NearbyFilter::<()>::new(center, 10);
 ///
-/// assert_eq!(filter.get_limit(), 10);
+/// assert_eq!(filter.limit(), 10);
 /// ```
 pub struct NearbyFilter<M> {
 	center: Point<f64>,
@@ -332,12 +332,12 @@ impl<M> NearbyFilter<M> {
 	}
 
 	/// Get the center point
-	pub fn get_center(&self) -> Point<f64> {
+	pub fn center(&self) -> Point<f64> {
 		self.center
 	}
 
 	/// Get the limit
-	pub fn get_limit(&self) -> usize {
+	pub fn limit(&self) -> usize {
 		self.limit
 	}
 
@@ -382,9 +382,9 @@ mod tests {
 		let center = Point::new(0.0, 0.0);
 		let filter = DistanceFilter::<()>::new(center, 1000.0, DistanceUnit::Meters);
 
-		assert_eq!(filter.get_center(), center);
-		assert_eq!(filter.get_distance(), 1000.0);
-		assert_eq!(filter.get_unit(), DistanceUnit::Meters);
+		assert_eq!(filter.center(), center);
+		assert_eq!(filter.distance(), 1000.0);
+		assert_eq!(filter.unit(), DistanceUnit::Meters);
 	}
 
 	#[test]
@@ -485,8 +485,8 @@ mod tests {
 		let center = Point::new(37.7749, -122.4194);
 		let filter = NearbyFilter::<()>::new(center, 10);
 
-		assert_eq!(filter.get_center(), center);
-		assert_eq!(filter.get_limit(), 10);
+		assert_eq!(filter.center(), center);
+		assert_eq!(filter.limit(), 10);
 	}
 
 	#[test]
@@ -494,7 +494,7 @@ mod tests {
 		let center = Point::new(0.0, 0.0);
 		let filter = NearbyFilter::<()>::new(center, 5).max_distance(1000.0, DistanceUnit::Meters);
 
-		assert_eq!(filter.get_limit(), 5);
+		assert_eq!(filter.limit(), 5);
 		assert_eq!(filter.max_distance, Some(1000.0));
 		assert_eq!(filter.unit, DistanceUnit::Meters);
 	}

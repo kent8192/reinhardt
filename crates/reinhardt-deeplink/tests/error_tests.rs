@@ -6,7 +6,9 @@
 //!   MissingPackageName, MissingFingerprint, MissingIosConfig,
 //!   MissingAndroidConfig, Serialization
 
-use reinhardt_deeplink::{DeeplinkError, validate_app_id, validate_fingerprint};
+use reinhardt_deeplink::{
+	DeeplinkError, validate_app_id, validate_bundle_id, validate_fingerprint, validate_scheme_name,
+};
 use rstest::*;
 
 // ============================================================================
@@ -96,7 +98,8 @@ fn test_error_from_serde_json() {
 #[rstest]
 #[case("TEAM123456.com.example.app", true)]
 #[case("ABC123XYZ0.com.example.myapp", true)]
-#[case("TEAM.bundle", true)]
+#[case("TEAM.com.example", true)]
+#[case("TEAM.bundle", false)] // single-segment bundle ID (not reverse-domain)
 #[case("invalid", false)]
 #[case("", false)]
 #[case(".com.example", false)]
@@ -130,6 +133,66 @@ fn test_validate_fingerprint(#[case] fingerprint: &str, #[case] expected_valid: 
 		"fingerprint: {}",
 		fingerprint
 	);
+}
+
+// ============================================================================
+// New Error Display Tests (InvalidSchemeName, InvalidBundleId)
+// ============================================================================
+
+#[rstest]
+fn test_error_display_invalid_scheme_name() {
+	let error = DeeplinkError::InvalidSchemeName("javascript".to_string());
+	let message = error.to_string();
+	assert!(message.contains("invalid URL scheme name"));
+	assert!(message.contains("javascript"));
+}
+
+#[rstest]
+fn test_error_display_invalid_bundle_id() {
+	let error = DeeplinkError::InvalidBundleId("bad".to_string());
+	let message = error.to_string();
+	assert!(message.contains("invalid bundle ID format"));
+	assert!(message.contains("bad"));
+}
+
+// ============================================================================
+// validate_scheme_name Tests
+// ============================================================================
+
+#[rstest]
+#[case("myapp", true)]
+#[case("my-app", true)]
+#[case("my.app", true)]
+#[case("my+app", true)]
+#[case("a123", true)]
+#[case("", false)] // empty
+#[case("1app", false)] // starts with digit
+#[case("javascript", false)] // dangerous scheme
+#[case("data", false)] // dangerous scheme
+#[case("vbscript", false)] // dangerous scheme
+#[case("file", false)] // dangerous scheme
+fn test_validate_scheme_name(#[case] scheme: &str, #[case] expected_valid: bool) {
+	let result = validate_scheme_name(scheme);
+	assert_eq!(result.is_ok(), expected_valid, "scheme: {}", scheme);
+}
+
+// ============================================================================
+// validate_bundle_id Tests
+// ============================================================================
+
+#[rstest]
+#[case("com.example", true)]
+#[case("com.example.app", true)]
+#[case("io.github.user", true)]
+#[case("com.my-app.test", true)]
+#[case("", false)] // empty
+#[case("single", false)] // single segment
+#[case(".com.example", false)] // leading dot
+#[case("com..example", false)] // empty segment
+#[case("123.example", false)] // segment starting with digit
+fn test_validate_bundle_id(#[case] bundle_id: &str, #[case] expected_valid: bool) {
+	let result = validate_bundle_id(bundle_id);
+	assert_eq!(result.is_ok(), expected_valid, "bundle_id: {}", bundle_id);
 }
 
 // ============================================================================

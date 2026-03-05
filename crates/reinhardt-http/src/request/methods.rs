@@ -5,13 +5,14 @@ impl Request {
 	///
 	/// This can be determined either by:
 	/// 1. The actual connection being TLS (is_secure flag)
-	/// 2. X-Forwarded-Proto header indicating HTTPS (behind reverse proxy)
+	/// 2. X-Forwarded-Proto header indicating HTTPS (only from trusted proxies)
 	///
 	/// # Examples
 	///
 	/// ```
-	/// use reinhardt_http::Request;
+	/// use reinhardt_http::{Request, TrustedProxies};
 	/// use hyper::Method;
+	/// use std::net::{SocketAddr, IpAddr, Ipv4Addr};
 	///
 	/// // Direct HTTPS connection
 	/// let request = Request::builder()
@@ -22,15 +23,18 @@ impl Request {
 	///     .unwrap();
 	/// assert!(request.is_secure());
 	///
-	/// // Behind reverse proxy
+	/// // Behind trusted reverse proxy
+	/// let proxy_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
 	/// let mut headers = hyper::HeaderMap::new();
 	/// headers.insert("x-forwarded-proto", "https".parse().unwrap());
 	/// let request = Request::builder()
 	///     .method(Method::GET)
 	///     .uri("/")
 	///     .headers(headers)
+	///     .remote_addr(SocketAddr::new(proxy_ip, 8080))
 	///     .build()
 	///     .unwrap();
+	/// request.set_trusted_proxies(TrustedProxies::new(vec![proxy_ip]));
 	/// assert!(request.is_secure());
 	/// ```
 	pub fn is_secure(&self) -> bool {
@@ -38,12 +42,17 @@ impl Request {
 			return true;
 		}
 
-		// Check X-Forwarded-Proto header for reverse proxy scenarios
-		self.headers
-			.get("x-forwarded-proto")
-			.and_then(|h| h.to_str().ok())
-			.map(|proto| proto.eq_ignore_ascii_case("https"))
-			.unwrap_or(false)
+		// Only trust X-Forwarded-Proto header from configured trusted proxies
+		if self.is_from_trusted_proxy()
+			&& let Some(proto) = self
+				.headers
+				.get("x-forwarded-proto")
+				.and_then(|h| h.to_str().ok())
+		{
+			return proto.eq_ignore_ascii_case("https");
+		}
+
+		false
 	}
 
 	/// Returns the scheme of the request (http or https)

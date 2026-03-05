@@ -3,6 +3,8 @@
 //! This module provides the `Parse` trait implementation for `FormMacro`,
 //! allowing it to be parsed from a `TokenStream`.
 
+use std::collections::HashSet;
+
 use proc_macro2::Span;
 use syn::{
 	Expr, ExprClosure, Ident, LitStr, Path, Result, Token, braced,
@@ -24,7 +26,7 @@ const MAX_NESTING_DEPTH: usize = 64;
 impl Parse for FormMacro {
 	fn parse(input: ParseStream) -> Result<Self> {
 		let span = input.span();
-		let mut form = FormMacro::new(Ident::new("_", Span::call_site()), span);
+		let mut form = FormMacro::new(None, span);
 
 		// Parse key-value pairs until we hit fields, validators, or client_validators
 		while !input.is_empty() {
@@ -33,7 +35,7 @@ impl Parse for FormMacro {
 
 			match key.to_string().as_str() {
 				"name" => {
-					form.name = input.parse()?;
+					form.name = Some(input.parse()?);
 					parse_optional_comma(input)?;
 				}
 				"action" => {
@@ -154,7 +156,7 @@ impl Parse for FormMacro {
 		}
 
 		// Validate required fields
-		if form.name == "_" {
+		if form.name.is_none() {
 			return Err(syn::Error::new(
 				span,
 				"form! macro requires 'name' property",
@@ -307,6 +309,7 @@ fn parse_group_fields(input: ParseStream) -> Result<Vec<FormFieldDef>> {
 /// Parses field properties inside braces.
 fn parse_field_properties(input: ParseStream) -> Result<Vec<FormFieldProperty>> {
 	let mut properties = Vec::new();
+	let mut seen_properties: HashSet<String> = HashSet::new();
 
 	while !input.is_empty() {
 		let span = input.span();
@@ -314,6 +317,15 @@ fn parse_field_properties(input: ParseStream) -> Result<Vec<FormFieldProperty>> 
 		// Check for widget keyword
 		if input.peek(Ident) {
 			let name: Ident = input.parse()?;
+
+			// Check for duplicate property
+			let prop_name = name.to_string();
+			if !seen_properties.insert(prop_name.clone()) {
+				return Err(syn::Error::new(
+					name.span(),
+					format!("duplicate property '{}'", prop_name),
+				));
+			}
 
 			if name == "widget" {
 				// widget: WidgetType
@@ -862,7 +874,7 @@ mod tests {
 		assert!(result.is_ok());
 
 		let form = result.unwrap();
-		assert_eq!(form.name.to_string(), "LoginForm");
+		assert_eq!(form.name.as_ref().unwrap().to_string(), "LoginForm");
 		assert_eq!(form.fields.len(), 2);
 		assert!(matches!(form.action, FormAction::Url(_)));
 	}

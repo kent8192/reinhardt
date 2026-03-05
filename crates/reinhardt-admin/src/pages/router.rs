@@ -65,9 +65,30 @@ pub fn init_global_router() {
 
 /// Provides access to the global router instance
 ///
+/// Returns `None` if the router has not been initialized via `init_global_router()`.
+///
+/// # Example
+///
+/// ```ignore
+/// use reinhardt_admin::pages::router::try_with_router;
+///
+/// if let Some(count) = try_with_router(|router| router.route_count()) {
+///     println!("Routes: {}", count);
+/// }
+/// ```
+pub fn try_with_router<F, R>(f: F) -> Option<R>
+where
+	F: FnOnce(&Router) -> R,
+{
+	ROUTER.with(|r| r.borrow().as_ref().map(f))
+}
+
+/// Provides access to the global router instance
+///
 /// # Panics
 ///
 /// Panics if the router has not been initialized via `init_global_router()`.
+/// Prefer `try_with_router` for non-panicking access.
 ///
 /// # Example
 ///
@@ -83,11 +104,7 @@ pub fn with_router<F, R>(f: F) -> R
 where
 	F: FnOnce(&Router) -> R,
 {
-	ROUTER.with(|r| {
-		f(r.borrow()
-			.as_ref()
-			.expect("Router not initialized. Call init_global_router() first."))
-	})
+	try_with_router(f).expect("Router not initialized. Call init_global_router() first.")
 }
 
 /// Dashboard view component for router
@@ -687,6 +704,23 @@ mod tests {
 		ROUTER.with(|r| *r.borrow_mut() = None);
 
 		with_router(|_| {});
+	}
+
+	#[test]
+	fn test_try_with_router_returns_none_when_not_initialized() {
+		// Clear ROUTER to simulate uninitialized state
+		ROUTER.with(|r| *r.borrow_mut() = None);
+
+		let result = try_with_router(|router| router.route_count());
+		assert!(result.is_none());
+	}
+
+	#[test]
+	fn test_try_with_router_returns_some_when_initialized() {
+		init_global_router();
+
+		let result = try_with_router(|router| router.route_count());
+		assert_eq!(result, Some(5));
 	}
 
 	#[test]

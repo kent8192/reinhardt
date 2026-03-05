@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.1.0-rc.1...reinhardt-pages-macros@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(meta)* fix workspace inheritance and authors metadata
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.1.0-alpha.9...reinhardt-pages-macros@v0.1.0-rc.1) - 2026-02-23
+
+### Maintenance
+
+- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
+
+## [0.1.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.1.0-alpha.8...reinhardt-pages-macros@v0.1.0-alpha.9) - 2026-02-23
+
+### Maintenance
+
+- updated the following local packages: reinhardt-manouche
+
+## [0.1.0-alpha.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.1.0-alpha.7...reinhardt-pages-macros@v0.1.0-alpha.8) - 2026-02-21
+
+### Fixed
+
+- reject non-boolean values for disabled/readonly/autofocus
+- reject whitespace in server_fn endpoint paths
+- add missing input type image and form method dialog
+- replace direct indexing with safe .first() access
+- validate img src URLs and wrapper tag names
+- add tag name allowlist for wrapper and icon elements
+- validate img src against dangerous URL schemes
+- emit compile error for unknown codec instead of silent fallback
+- replace expect() panics with compile errors in head.rs
+- fix link tag as_ attribute code generation
+- emit compile error for unsupported form-level validators
+- add required attributes to allowed_attrs for track, param, data
+
+### Security
+
+- add URL scheme and path validation for forms and head
+
+### Changed
+
+- replace magic string with Option<Ident> for FormMacro name
+- extract duplicated form ID and action string generation
+- remove duplicate img required attribute validation
+
+### Styling
+
+- apply rustfmt to pre-existing unformatted files
+- apply formatting to files introduced by merge from main
+
 ## [0.1.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.1.0-alpha.6...reinhardt-pages-macros@v0.1.0-alpha.7) - 2026-02-16
 
 ### Changed

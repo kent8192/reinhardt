@@ -1,10 +1,10 @@
 //! Integration tests for reinhardt-graphql
 
-use async_graphql::{Schema, ID};
+use async_graphql::{ID, Schema};
 use futures::StreamExt;
 use reinhardt_graphql::{
-	create_schema, EventBroadcaster, Mutation, Query, SubscriptionRoot, User, UserEvent,
-	UserStorage,
+	EventBroadcaster, Mutation, Query, SubscriptionRoot, User, UserEvent, UserStorage,
+	create_schema,
 };
 
 #[tokio::test]
@@ -362,10 +362,12 @@ async fn test_subscription_lifecycle() {
 	assert!(event.errors.is_empty(), "Event should not have errors");
 	let data = event.data.into_json().unwrap();
 
-	assert!(data["userCreated"]["id"]
-		.as_str()
-		.unwrap()
-		.contains("sub-test-1"));
+	assert!(
+		data["userCreated"]["id"]
+			.as_str()
+			.unwrap()
+			.contains("sub-test-1")
+	);
 	assert_eq!(data["userCreated"]["name"], "Subscription Test");
 	assert_eq!(data["userCreated"]["email"], "sub@test.com");
 	assert!(data["userCreated"]["active"].as_bool().unwrap());
@@ -551,10 +553,12 @@ async fn test_multiple_subscriptions() {
 
 	assert!(event1.errors.is_empty());
 	let data1 = event1.data.into_json().unwrap();
-	assert!(data1["userCreated"]["id"]
-		.as_str()
-		.unwrap()
-		.contains("multi-1"));
+	assert!(
+		data1["userCreated"]["id"]
+			.as_str()
+			.unwrap()
+			.contains("multi-1")
+	);
 	assert_eq!(data1["userCreated"]["name"], "Created User");
 
 	// Wait for and verify Updated event on stream2
@@ -565,10 +569,12 @@ async fn test_multiple_subscriptions() {
 
 	assert!(event2.errors.is_empty());
 	let data2 = event2.data.into_json().unwrap();
-	assert!(data2["userUpdated"]["id"]
-		.as_str()
-		.unwrap()
-		.contains("multi-2"));
+	assert!(
+		data2["userUpdated"]["id"]
+			.as_str()
+			.unwrap()
+			.contains("multi-2")
+	);
 	assert_eq!(data2["userUpdated"]["name"], "Updated User");
 	assert!(!data2["userUpdated"]["active"].as_bool().unwrap());
 

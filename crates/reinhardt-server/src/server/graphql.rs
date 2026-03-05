@@ -145,7 +145,7 @@ where
 /// }
 ///
 /// let handler = graphql_handler(QueryRoot, MutationRoot);
-// handler can now be used with HttpServer or other handlers
+/// // handler can now be used with HttpServer or other handlers
 /// ```
 #[cfg(feature = "graphql")]
 pub fn graphql_handler<Query, Mutation>(

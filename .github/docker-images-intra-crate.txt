@@ -3,7 +3,6 @@
 
 # Databases
 postgres:17-alpine
-postgres:16-alpine
 
 # Cache/Key-Value Stores
 redis:7-alpine

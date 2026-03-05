@@ -225,24 +225,24 @@ impl FormField for CharField {
 			}
 		};
 
-		// Validate length
+		// Validate length using character count (not byte count) for correct
+		// multi-byte character handling (CJK, emoji, accented characters)
+		let char_count = processed_value.chars().count();
 		if let Some(max_length) = self.max_length
-			&& processed_value.len() > max_length
+			&& char_count > max_length
 		{
 			return Err(FieldError::Validation(format!(
 				"Ensure this value has at most {} characters (it has {})",
-				max_length,
-				processed_value.len()
+				max_length, char_count
 			)));
 		}
 
 		if let Some(min_length) = self.min_length
-			&& processed_value.len() < min_length
+			&& char_count < min_length
 		{
 			return Err(FieldError::Validation(format!(
 				"Ensure this value has at least {} characters (it has {})",
-				min_length,
-				processed_value.len()
+				min_length, char_count
 			)));
 		}
 
@@ -253,27 +253,78 @@ impl FormField for CharField {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 	use serde_json::json;
 
-	#[test]
+	#[rstest]
 	fn test_char_field_required() {
+		// Arrange
 		let field = CharField::new("test".to_string()).required();
+
+		// Act & Assert
 		assert!(field.clean(None).is_err());
 		assert!(field.clean(Some(&json!(""))).is_err());
 		assert!(field.clean(Some(&json!("  "))).is_err());
 	}
 
-	#[test]
+	#[rstest]
 	fn test_char_field_max_length() {
+		// Arrange
 		let field = CharField::new("test".to_string()).with_max_length(5);
+
+		// Act & Assert
 		assert!(field.clean(Some(&json!("12345"))).is_ok());
 		assert!(field.clean(Some(&json!("123456"))).is_err());
 	}
 
-	#[test]
+	#[rstest]
 	fn test_char_field_min_length() {
+		// Arrange
 		let field = CharField::new("test".to_string()).with_min_length(3);
+
+		// Act & Assert
 		assert!(field.clean(Some(&json!("123"))).is_ok());
 		assert!(field.clean(Some(&json!("12"))).is_err());
+	}
+
+	#[rstest]
+	fn test_char_field_length_uses_char_count_not_bytes() {
+		// Arrange: max_length=10 should allow 10 characters regardless of byte size
+		let field = CharField::new("test".to_string()).with_max_length(10);
+
+		// Act & Assert: CJK characters (3 bytes each in UTF-8, but 1 character each)
+		// 5 Japanese chars = 5 characters (15 bytes) - should pass
+		assert!(field.clean(Some(&json!("こんにちは"))).is_ok());
+
+		// 10 Japanese chars = 10 characters (30 bytes) - should pass (at limit)
+		assert!(field.clean(Some(&json!("こんにちはこんにちは"))).is_ok());
+
+		// 11 Japanese chars = 11 characters - should fail
+		assert!(field.clean(Some(&json!("こんにちはこんにちはX"))).is_err());
+	}
+
+	#[rstest]
+	fn test_char_field_length_with_emoji() {
+		// Arrange
+		let field = CharField::new("test".to_string()).with_max_length(5);
+
+		// Act & Assert: emoji characters (4 bytes each in UTF-8, but 1 character each)
+		// 5 emoji = 5 characters - should pass (at limit)
+		assert!(field.clean(Some(&json!("🎉🎊🎈🎁🎄"))).is_ok());
+
+		// 6 emoji = 6 characters - should fail
+		assert!(field.clean(Some(&json!("🎉🎊🎈🎁🎄🎃"))).is_err());
+	}
+
+	#[rstest]
+	fn test_char_field_min_length_with_multibyte() {
+		// Arrange
+		let field = CharField::new("test".to_string()).with_min_length(3);
+
+		// Act & Assert: 3 CJK characters should satisfy min_length=3
+		assert!(field.clean(Some(&json!("あいう"))).is_ok());
+
+		// 2 CJK characters should fail
+		assert!(field.clean(Some(&json!("あい"))).is_err());
 	}
 }

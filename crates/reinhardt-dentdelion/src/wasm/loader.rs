@@ -256,13 +256,29 @@ impl WasmPluginLoader {
 		let memory_limit_mb = wasm_section
 			.and_then(|v| v.get("memory_limit_mb"))
 			.and_then(|v| v.as_integer())
-			.map(|v| v as u32)
+			.map(|v| {
+				u32::try_from(v).map_err(|_| {
+					PluginError::ConfigError(format!(
+						"memory_limit_mb value {} is out of u32 range",
+						v
+					))
+				})
+			})
+			.transpose()?
 			.unwrap_or(128);
 
 		let timeout_secs = wasm_section
 			.and_then(|v| v.get("timeout_secs"))
 			.and_then(|v| v.as_integer())
-			.map(|v| v as u32)
+			.map(|v| {
+				u32::try_from(v).map_err(|_| {
+					PluginError::ConfigError(format!(
+						"timeout_secs value {} is out of u32 range",
+						v
+					))
+				})
+			})
+			.transpose()?
 			.unwrap_or(30);
 
 		let capabilities = wasm_section

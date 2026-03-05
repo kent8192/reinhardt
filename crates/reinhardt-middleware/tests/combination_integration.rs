@@ -93,23 +93,10 @@ async fn test_ratelimit_and_circuit_breaker_cascade() {
 	};
 	use std::time::Duration;
 
-	let rate_limit_config = RateLimitConfig {
-		capacity: 10.0,
-		refill_rate: 1.0,
-		cost_per_request: 1.0,
-		strategy: RateLimitStrategy::PerIp,
-		exclude_paths: vec![],
-		error_message: None,
-		trusted_proxies: vec![],
-	};
+	let rate_limit_config = RateLimitConfig::new(RateLimitStrategy::PerIp, 10.0, 1.0);
 
-	let circuit_config = CircuitBreakerConfig {
-		error_threshold: 0.5,
-		min_requests: 5,
-		timeout: Duration::from_secs(60),
-		half_open_success_threshold: 3,
-		error_message: None,
-	};
+	let circuit_config = CircuitBreakerConfig::new(0.5, 5, Duration::from_secs(60))
+		.with_half_open_success_threshold(3);
 
 	let rate_limit = Arc::new(RateLimitMiddleware::new(rate_limit_config));
 	let circuit_breaker = Arc::new(CircuitBreakerMiddleware::new(circuit_config));
@@ -232,17 +219,10 @@ async fn test_timeout_and_circuit_breaker_combination() {
 	use reinhardt_middleware::timeout::{TimeoutConfig, TimeoutMiddleware};
 	use std::time::Duration;
 
-	let timeout_config = TimeoutConfig {
-		duration: Duration::from_secs(5), // Long enough to not timeout
-	};
+	let timeout_config = TimeoutConfig::new(Duration::from_secs(5)); // Long enough to not timeout
 
-	let circuit_config = CircuitBreakerConfig {
-		error_threshold: 0.5,
-		min_requests: 10,
-		timeout: Duration::from_secs(60),
-		half_open_success_threshold: 3,
-		error_message: None,
-	};
+	let circuit_config = CircuitBreakerConfig::new(0.5, 10, Duration::from_secs(60))
+		.with_half_open_success_threshold(3);
 
 	let timeout = Arc::new(TimeoutMiddleware::new(timeout_config));
 	let circuit_breaker = Arc::new(CircuitBreakerMiddleware::new(circuit_config));
@@ -409,13 +389,12 @@ async fn test_request_id_uniqueness() {
 async fn test_cors_middleware_origin_handling() {
 	use reinhardt_middleware::cors::{CorsConfig, CorsMiddleware};
 
-	let config = CorsConfig {
-		allow_origins: vec!["https://example.com".to_string()],
-		allow_methods: vec!["GET".to_string(), "POST".to_string()],
-		allow_headers: vec!["Content-Type".to_string()],
-		allow_credentials: false,
-		max_age: Some(3600),
-	};
+	let mut config = CorsConfig::default();
+	config.allow_origins = vec!["https://example.com".to_string()];
+	config.allow_methods = vec!["GET".to_string(), "POST".to_string()];
+	config.allow_headers = vec!["Content-Type".to_string()];
+	config.allow_credentials = false;
+	config.max_age = Some(3600);
 
 	let cors = Arc::new(CorsMiddleware::new(config));
 	let handler = Arc::new(ConfigurableTestHandler::always_success());
@@ -436,13 +415,12 @@ async fn test_cors_middleware_origin_handling() {
 async fn test_cors_preflight_handling() {
 	use reinhardt_middleware::cors::{CorsConfig, CorsMiddleware};
 
-	let config = CorsConfig {
-		allow_origins: vec!["https://example.com".to_string()],
-		allow_methods: vec!["GET".to_string(), "POST".to_string(), "PUT".to_string()],
-		allow_headers: vec!["Content-Type".to_string(), "Authorization".to_string()],
-		allow_credentials: false,
-		max_age: Some(3600),
-	};
+	let mut config = CorsConfig::default();
+	config.allow_origins = vec!["https://example.com".to_string()];
+	config.allow_methods = vec!["GET".to_string(), "POST".to_string(), "PUT".to_string()];
+	config.allow_headers = vec!["Content-Type".to_string(), "Authorization".to_string()];
+	config.allow_credentials = false;
+	config.max_age = Some(3600);
 
 	let cors = Arc::new(CorsMiddleware::new(config));
 	let handler = Arc::new(ConfigurableTestHandler::always_success());

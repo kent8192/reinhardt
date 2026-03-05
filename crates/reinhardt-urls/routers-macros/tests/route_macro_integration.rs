@@ -184,23 +184,20 @@ mod wildcard_tests {
 	use super::*;
 
 	#[test]
-	fn test_paths_with_wildcards() {
-		// Paths containing wildcard characters
+	fn test_wildcard_at_end_of_path() {
+		// Wildcard at the end of a path is valid
 		let path1 = path!("/static/*");
 		assert_eq!(path1, "/static/*");
 
-		let path2 = path!("/files/*/download");
-		assert_eq!(path2, "/files/*/download");
+		let path2 = path!("/files/*/");
+		assert_eq!(path2, "/files/*/");
 	}
 
 	#[test]
-	fn test_wildcard_with_parameters() {
-		// Combining wildcards with parameters
+	fn test_wildcard_with_parameters_at_end() {
+		// Wildcard after parameters at end of path is valid
 		let path1 = path!("/users/{id}/*");
 		assert_eq!(path1, "/users/{id}/*");
-
-		let path2 = path!("/*/items/{item_id}/");
-		assert_eq!(path2, "/*/items/{item_id}/");
 	}
 }
 

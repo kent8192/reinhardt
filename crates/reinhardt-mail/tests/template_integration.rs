@@ -14,7 +14,7 @@ fn test_render_template_basic() {
 	context.insert("city".to_string(), json!("Tokyo"));
 
 	let template = "Hello {{name}}, welcome to {{city}}!";
-	let result = render_template(template, &context).expect("Failed to render template");
+	let result = render_template(template, &context, false).expect("Failed to render template");
 
 	assert_eq!(result, "Hello Alice, welcome to Tokyo!");
 }
@@ -27,7 +27,7 @@ fn test_render_template_numbers() {
 	context.insert("score".to_string(), json!(95.5));
 
 	let template = "Age: {{age}}, Score: {{score}}";
-	let result = render_template(template, &context).expect("Failed to render");
+	let result = render_template(template, &context, false).expect("Failed to render");
 
 	assert_eq!(result, "Age: 30, Score: 95.5");
 }
@@ -40,7 +40,7 @@ fn test_render_template_boolean() {
 	context.insert("verified".to_string(), json!(false));
 
 	let template = "Active: {{active}}, Verified: {{verified}}";
-	let result = render_template(template, &context).expect("Failed to render");
+	let result = render_template(template, &context, false).expect("Failed to render");
 
 	assert_eq!(result, "Active: true, Verified: false");
 }
@@ -52,7 +52,7 @@ fn test_render_template_null() {
 	context.insert("missing".to_string(), json!(null));
 
 	let template = "Value: {{missing}}";
-	let result = render_template(template, &context).expect("Failed to render");
+	let result = render_template(template, &context, false).expect("Failed to render");
 
 	assert_eq!(result, "Value: ");
 }
@@ -63,7 +63,7 @@ fn test_render_template_missing_variables() {
 	let context = TemplateContext::new();
 
 	let template = "Hello {{name}}, you have {{count}} messages.";
-	let result = render_template(template, &context).expect("Failed to render");
+	let result = render_template(template, &context, false).expect("Failed to render");
 
 	// Missing variables remain as-is
 	assert_eq!(result, "Hello {{name}}, you have {{count}} messages.");
@@ -172,7 +172,7 @@ fn test_template_complex_content() {
 	context.insert("position".to_string(), json!("Engineer"));
 
 	let template = "Dear {{first_name}} {{last_name}},\n\nCongratulations on your new position as {{position}} at {{company}}!";
-	let result = render_template(template, &context).expect("Failed to render");
+	let result = render_template(template, &context, false).expect("Failed to render");
 
 	assert!(result.contains("Dear Eve Johnson"));
 	assert!(result.contains("Engineer at TechCorp"));
@@ -186,7 +186,7 @@ fn test_template_utf8_content() {
 	context.insert("product".to_string(), json!("ノートパソコン"));
 
 	let template = "{{name}}様、{{product}}のご注文ありがとうございます。";
-	let result = render_template(template, &context).expect("Failed to render");
+	let result = render_template(template, &context, false).expect("Failed to render");
 
 	assert_eq!(
 		result,
@@ -241,7 +241,7 @@ fn test_template_special_characters() {
 	);
 
 	let template = "Contact: {{email}}\nVisit: {{url}}";
-	let result = render_template(template, &context).expect("Failed to render");
+	let result = render_template(template, &context, false).expect("Failed to render");
 
 	assert!(result.contains("user@example.com"));
 	assert!(result.contains("https://example.com/path?query=value&other=123"));

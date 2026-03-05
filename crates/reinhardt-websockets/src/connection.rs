@@ -4,6 +4,121 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 
+/// Ping/pong keepalive configuration for WebSocket connections.
+///
+/// Controls how frequently ping frames are sent and how long
+/// the server waits for a pong response before considering
+/// the connection dead.
+///
+/// # Examples
+///
+/// ```
+/// use reinhardt_websockets::connection::PingPongConfig;
+/// use std::time::Duration;
+///
+/// // Use defaults (30s ping interval, 10s pong timeout)
+/// let config = PingPongConfig::default();
+/// assert_eq!(config.ping_interval(), Duration::from_secs(30));
+/// assert_eq!(config.pong_timeout(), Duration::from_secs(10));
+///
+/// // Custom configuration
+/// let config = PingPongConfig::new(
+///     Duration::from_secs(15),
+///     Duration::from_secs(5),
+/// );
+/// assert_eq!(config.ping_interval(), Duration::from_secs(15));
+/// assert_eq!(config.pong_timeout(), Duration::from_secs(5));
+/// ```
+#[derive(Debug, Clone)]
+pub struct PingPongConfig {
+	/// Interval between ping frames sent to the client
+	ping_interval: Duration,
+	/// Maximum time to wait for a pong response before closing
+	pong_timeout: Duration,
+}
+
+impl Default for PingPongConfig {
+	fn default() -> Self {
+		Self {
+			ping_interval: Duration::from_secs(30),
+			pong_timeout: Duration::from_secs(10),
+		}
+	}
+}
+
+impl PingPongConfig {
+	/// Creates a new ping/pong configuration with the given intervals.
+	///
+	/// # Arguments
+	///
+	/// * `ping_interval` - How often to send ping frames
+	/// * `pong_timeout` - How long to wait for a pong response
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_websockets::connection::PingPongConfig;
+	/// use std::time::Duration;
+	///
+	/// let config = PingPongConfig::new(
+	///     Duration::from_secs(20),
+	///     Duration::from_secs(8),
+	/// );
+	/// assert_eq!(config.ping_interval(), Duration::from_secs(20));
+	/// assert_eq!(config.pong_timeout(), Duration::from_secs(8));
+	/// ```
+	pub fn new(ping_interval: Duration, pong_timeout: Duration) -> Self {
+		Self {
+			ping_interval,
+			pong_timeout,
+		}
+	}
+
+	/// Returns the ping interval duration.
+	pub fn ping_interval(&self) -> Duration {
+		self.ping_interval
+	}
+
+	/// Returns the pong timeout duration.
+	pub fn pong_timeout(&self) -> Duration {
+		self.pong_timeout
+	}
+
+	/// Sets the ping interval duration.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_websockets::connection::PingPongConfig;
+	/// use std::time::Duration;
+	///
+	/// let config = PingPongConfig::default()
+	///     .with_ping_interval(Duration::from_secs(60));
+	/// assert_eq!(config.ping_interval(), Duration::from_secs(60));
+	/// ```
+	pub fn with_ping_interval(mut self, interval: Duration) -> Self {
+		self.ping_interval = interval;
+		self
+	}
+
+	/// Sets the pong timeout duration.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_websockets::connection::PingPongConfig;
+	/// use std::time::Duration;
+	///
+	/// let config = PingPongConfig::default()
+	///     .with_pong_timeout(Duration::from_secs(15));
+	/// assert_eq!(config.pong_timeout(), Duration::from_secs(15));
+	/// ```
+	pub fn with_pong_timeout(mut self, timeout: Duration) -> Self {
+		self.pong_timeout = timeout;
+		self
+	}
+}
+
 /// Connection timeout configuration
 ///
 /// This struct defines the timeout settings for WebSocket connections
@@ -35,6 +150,10 @@ pub struct ConnectionConfig {
 	idle_timeout: Duration,
 	handshake_timeout: Duration,
 	cleanup_interval: Duration,
+	/// Maximum number of concurrent connections allowed (None for unlimited)
+	max_connections: Option<usize>,
+	/// Ping/pong keepalive configuration
+	ping_config: PingPongConfig,
 }
 
 impl Default for ConnectionConfig {
@@ -43,6 +162,8 @@ impl Default for ConnectionConfig {
 			idle_timeout: Duration::from_secs(300), // 5 minutes default
 			handshake_timeout: Duration::from_secs(10), // 10 seconds default
 			cleanup_interval: Duration::from_secs(30), // 30 seconds default
+			max_connections: None,                  // Unlimited by default
+			ping_config: PingPongConfig::default(),
 		}
 	}
 }
@@ -146,6 +267,64 @@ impl ConnectionConfig {
 		self.cleanup_interval
 	}
 
+	/// Set the maximum number of concurrent connections
+	///
+	/// # Arguments
+	///
+	/// * `max` - Maximum number of connections allowed. Use `None` for unlimited.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_websockets::connection::ConnectionConfig;
+	///
+	/// let config = ConnectionConfig::new()
+	///     .with_max_connections(Some(1000));
+	///
+	/// assert_eq!(config.max_connections(), Some(1000));
+	/// ```
+	pub fn with_max_connections(mut self, max: Option<usize>) -> Self {
+		self.max_connections = max;
+		self
+	}
+
+	/// Get the maximum number of concurrent connections
+	pub fn max_connections(&self) -> Option<usize> {
+		self.max_connections
+	}
+
+	/// Set the ping/pong keepalive configuration.
+	///
+	/// # Arguments
+	///
+	/// * `config` - The ping/pong configuration to use
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_websockets::connection::{ConnectionConfig, PingPongConfig};
+	/// use std::time::Duration;
+	///
+	/// let ping_config = PingPongConfig::new(
+	///     Duration::from_secs(15),
+	///     Duration::from_secs(5),
+	/// );
+	/// let config = ConnectionConfig::new()
+	///     .with_ping_config(ping_config);
+	///
+	/// assert_eq!(config.ping_config().ping_interval(), Duration::from_secs(15));
+	/// assert_eq!(config.ping_config().pong_timeout(), Duration::from_secs(5));
+	/// ```
+	pub fn with_ping_config(mut self, config: PingPongConfig) -> Self {
+		self.ping_config = config;
+		self
+	}
+
+	/// Get the ping/pong keepalive configuration.
+	pub fn ping_config(&self) -> &PingPongConfig {
+		&self.ping_config
+	}
+
 	/// Create a configuration with no idle timeout (connections never time out)
 	///
 	/// # Examples
@@ -162,6 +341,8 @@ impl ConnectionConfig {
 			idle_timeout: Duration::MAX,
 			handshake_timeout: Duration::MAX,
 			cleanup_interval: Duration::from_secs(30),
+			max_connections: None,
+			ping_config: PingPongConfig::default(),
 		}
 	}
 
@@ -187,6 +368,8 @@ impl ConnectionConfig {
 			idle_timeout: Duration::from_secs(30),
 			handshake_timeout: Duration::from_secs(5),
 			cleanup_interval: Duration::from_secs(10),
+			max_connections: None,
+			ping_config: PingPongConfig::new(Duration::from_secs(10), Duration::from_secs(5)),
 		}
 	}
 
@@ -212,24 +395,74 @@ impl ConnectionConfig {
 			idle_timeout: Duration::from_secs(3600),
 			handshake_timeout: Duration::from_secs(30),
 			cleanup_interval: Duration::from_secs(60),
+			max_connections: None,
+			ping_config: PingPongConfig::new(Duration::from_secs(60), Duration::from_secs(30)),
 		}
 	}
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum WebSocketError {
-	#[error("Connection error: {0}")]
+	#[error("Connection error")]
 	Connection(String),
-	#[error("Send error: {0}")]
+	#[error("Send failed")]
 	Send(String),
-	#[error("Receive error: {0}")]
+	#[error("Receive failed")]
 	Receive(String),
-	#[error("Protocol error: {0}")]
+	#[error("Protocol error")]
 	Protocol(String),
-	#[error("Internal error: {0}")]
+	#[error("Internal error")]
 	Internal(String),
-	#[error("Connection timeout: idle for {0:?}")]
+	#[error("Connection timed out")]
 	Timeout(Duration),
+	#[error("Reconnection failed")]
+	ReconnectFailed(u32),
+	#[error("Invalid binary payload: {0}")]
+	BinaryPayload(String),
+	#[error("Heartbeat timeout: no pong received within {0:?}")]
+	HeartbeatTimeout(Duration),
+	#[error("Slow consumer: send timed out after {0:?}")]
+	SlowConsumer(Duration),
+}
+
+impl WebSocketError {
+	/// Returns a sanitized error message safe for client-facing communication.
+	///
+	/// Internal details (buffer sizes, queue depths, connection state, type names)
+	/// are stripped to prevent information leakage.
+	pub fn client_message(&self) -> &'static str {
+		match self {
+			Self::Connection(_) => "Connection error",
+			Self::Send(_) => "Failed to send message",
+			Self::Receive(_) => "Failed to receive message",
+			Self::Protocol(_) => "Protocol error",
+			Self::Internal(_) => "Internal server error",
+			Self::Timeout(_) => "Connection timed out",
+			Self::ReconnectFailed(_) => "Reconnection failed",
+			Self::BinaryPayload(_) => "Invalid message format",
+			Self::HeartbeatTimeout(_) => "Connection timed out",
+			Self::SlowConsumer(_) => "Server overloaded",
+		}
+	}
+
+	/// Returns the internal detail message for logging purposes.
+	///
+	/// This MUST NOT be sent to clients as it may contain sensitive
+	/// internal state information.
+	pub fn internal_detail(&self) -> String {
+		match self {
+			Self::Connection(msg) => format!("Connection error: {}", msg),
+			Self::Send(msg) => format!("Send error: {}", msg),
+			Self::Receive(msg) => format!("Receive error: {}", msg),
+			Self::Protocol(msg) => format!("Protocol error: {}", msg),
+			Self::Internal(msg) => format!("Internal error: {}", msg),
+			Self::Timeout(d) => format!("Connection timeout: idle for {:?}", d),
+			Self::ReconnectFailed(n) => format!("Reconnection failed after {} attempts", n),
+			Self::BinaryPayload(msg) => format!("Invalid binary payload: {}", msg),
+			Self::HeartbeatTimeout(d) => format!("Heartbeat timeout: no pong within {:?}", d),
+			Self::SlowConsumer(d) => format!("Slow consumer: send timed out after {:?}", d),
+		}
+	}
 }
 
 pub type WebSocketResult<T> = Result<T, WebSocketError>;
@@ -671,6 +904,10 @@ impl WebSocketConnection {
 	}
 	/// Closes the WebSocket connection.
 	///
+	/// The connection is always marked as closed regardless of whether the
+	/// close frame could be sent. This ensures resource cleanup even when
+	/// the underlying channel is already broken.
+	///
 	/// # Examples
 	///
 	/// ```
@@ -686,21 +923,22 @@ impl WebSocketConnection {
 	/// # });
 	/// ```
 	pub async fn close(&self) -> WebSocketResult<()> {
-		// First send the close message
-		let result = self
-			.tx
+		// Mark as closed first to prevent new sends
+		*self.closed.write().await = true;
+
+		// Best-effort send of close frame; connection is closed regardless
+		self.tx
 			.send(Message::Close {
 				code: 1000,
 				reason: "Normal closure".to_string(),
 			})
-			.map_err(|e| WebSocketError::Send(e.to_string()));
-
-		// Then mark as closed
-		*self.closed.write().await = true;
-
-		result
+			.map_err(|e| WebSocketError::Send(e.to_string()))
 	}
 	/// Closes the connection with a custom close code and reason.
+	///
+	/// The connection is always marked as closed regardless of whether the
+	/// close frame could be sent. This ensures resource cleanup even when
+	/// the underlying channel is already broken.
 	///
 	/// # Examples
 	///
@@ -726,14 +964,36 @@ impl WebSocketConnection {
 	/// # });
 	/// ```
 	pub async fn close_with_reason(&self, code: u16, reason: String) -> WebSocketResult<()> {
-		let result = self
-			.tx
-			.send(Message::Close { code, reason })
-			.map_err(|e| WebSocketError::Send(e.to_string()));
-
+		// Mark as closed first to prevent new sends
 		*self.closed.write().await = true;
 
-		result
+		// Best-effort send of close frame; connection is closed regardless
+		self.tx
+			.send(Message::Close { code, reason })
+			.map_err(|e| WebSocketError::Send(e.to_string()))
+	}
+
+	/// Forces the connection closed without sending a close frame.
+	///
+	/// Use this for abnormal close paths where the underlying transport is
+	/// already broken and sending a close frame would fail.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_websockets::WebSocketConnection;
+	/// use tokio::sync::mpsc;
+	///
+	/// # tokio_test::block_on(async {
+	/// let (tx, _rx) = mpsc::unbounded_channel();
+	/// let conn = WebSocketConnection::new("test".to_string(), tx);
+	///
+	/// conn.force_close().await;
+	/// assert!(conn.is_closed().await);
+	/// # });
+	/// ```
+	pub async fn force_close(&self) {
+		*self.closed.write().await = true;
 	}
 
 	/// Checks if the WebSocket connection is closed.
@@ -780,7 +1040,7 @@ impl WebSocketConnection {
 ///
 /// let (tx, _rx) = mpsc::unbounded_channel();
 /// let conn = Arc::new(WebSocketConnection::new("conn_1".to_string(), tx));
-/// monitor.register(conn).await;
+/// monitor.register(conn).await.unwrap();
 ///
 /// assert_eq!(monitor.connection_count().await, 1);
 /// # });
@@ -800,11 +1060,26 @@ impl ConnectionTimeoutMonitor {
 	}
 
 	/// Registers a connection for timeout monitoring.
-	pub async fn register(&self, connection: Arc<WebSocketConnection>) {
-		self.connections
-			.write()
-			.await
-			.insert(connection.id().to_string(), connection);
+	///
+	/// Returns `Ok(())` if the connection was registered, or `Err` if the
+	/// maximum connection limit has been reached.
+	pub async fn register(
+		&self,
+		connection: Arc<WebSocketConnection>,
+	) -> Result<(), WebSocketError> {
+		let mut connections = self.connections.write().await;
+
+		if let Some(max) = self.config.max_connections
+			&& connections.len() >= max
+		{
+			return Err(WebSocketError::Connection(format!(
+				"maximum connection limit reached ({})",
+				max
+			)));
+		}
+
+		connections.insert(connection.id().to_string(), connection);
+		Ok(())
 	}
 
 	/// Unregisters a connection from timeout monitoring.
@@ -856,6 +1131,29 @@ impl ConnectionTimeoutMonitor {
 		timed_out
 	}
 
+	/// Gracefully shuts down all monitored connections.
+	///
+	/// Sends a Close frame (code 1001, "Going Away") to each active connection
+	/// and removes it from monitoring. Already-closed connections are silently
+	/// removed.
+	///
+	/// Returns the IDs of all connections that were shut down.
+	pub async fn shutdown_all(&self) -> Vec<String> {
+		let mut connections = self.connections.write().await;
+		let mut shut_down = Vec::with_capacity(connections.len());
+
+		for (id, conn) in connections.drain() {
+			if !conn.is_closed().await {
+				let _ = conn
+					.close_with_reason(1001, "Server shutting down".to_string())
+					.await;
+			}
+			shut_down.push(id);
+		}
+
+		shut_down
+	}
+
 	/// Starts the background monitoring task.
 	///
 	/// Returns a [`tokio::task::JoinHandle`] that can be used to abort the monitor.
@@ -888,6 +1186,198 @@ impl ConnectionTimeoutMonitor {
 			loop {
 				interval.tick().await;
 				monitor.check_idle_connections().await;
+			}
+		})
+	}
+}
+
+/// Configuration for heartbeat (ping/pong) monitoring.
+///
+/// Defines how often pings are sent and how long to wait for a pong
+/// response before considering the connection dead.
+///
+/// # Examples
+///
+/// ```
+/// use reinhardt_websockets::connection::HeartbeatConfig;
+/// use std::time::Duration;
+///
+/// let config = HeartbeatConfig::new(
+///     Duration::from_secs(30),
+///     Duration::from_secs(10),
+/// );
+///
+/// assert_eq!(config.ping_interval(), Duration::from_secs(30));
+/// assert_eq!(config.pong_timeout(), Duration::from_secs(10));
+/// ```
+#[derive(Debug, Clone)]
+pub struct HeartbeatConfig {
+	/// Interval between outgoing pings
+	ping_interval: Duration,
+	/// Maximum time to wait for a pong response before closing
+	pong_timeout: Duration,
+}
+
+impl HeartbeatConfig {
+	/// Creates a new heartbeat configuration.
+	pub fn new(ping_interval: Duration, pong_timeout: Duration) -> Self {
+		Self {
+			ping_interval,
+			pong_timeout,
+		}
+	}
+
+	/// Returns the ping interval.
+	pub fn ping_interval(&self) -> Duration {
+		self.ping_interval
+	}
+
+	/// Returns the pong timeout.
+	pub fn pong_timeout(&self) -> Duration {
+		self.pong_timeout
+	}
+}
+
+impl Default for HeartbeatConfig {
+	fn default() -> Self {
+		Self {
+			ping_interval: Duration::from_secs(30),
+			pong_timeout: Duration::from_secs(10),
+		}
+	}
+}
+
+/// Monitors a WebSocket connection's heartbeat via ping/pong.
+///
+/// Sends periodic pings and tracks when the last pong was received.
+/// When no pong arrives within the configured timeout, the connection
+/// is force-closed and the monitor signals a heartbeat failure.
+///
+/// # Examples
+///
+/// ```
+/// use reinhardt_websockets::connection::{HeartbeatConfig, HeartbeatMonitor};
+/// use reinhardt_websockets::WebSocketConnection;
+/// use tokio::sync::mpsc;
+/// use std::sync::Arc;
+/// use std::time::Duration;
+///
+/// # tokio_test::block_on(async {
+/// let (tx, _rx) = mpsc::unbounded_channel();
+/// let conn = Arc::new(WebSocketConnection::new("hb_test".to_string(), tx));
+/// let config = HeartbeatConfig::default();
+///
+/// let monitor = HeartbeatMonitor::new(conn, config);
+/// assert!(!monitor.is_timed_out().await);
+/// # });
+/// ```
+pub struct HeartbeatMonitor {
+	connection: Arc<WebSocketConnection>,
+	config: HeartbeatConfig,
+	last_pong: Arc<RwLock<Instant>>,
+	timed_out: Arc<RwLock<bool>>,
+	pong_notify: Arc<tokio::sync::Notify>,
+}
+
+impl HeartbeatMonitor {
+	/// Creates a new heartbeat monitor for the given connection.
+	pub fn new(connection: Arc<WebSocketConnection>, config: HeartbeatConfig) -> Self {
+		Self {
+			connection,
+			config,
+			last_pong: Arc::new(RwLock::new(Instant::now())),
+			timed_out: Arc::new(RwLock::new(false)),
+			pong_notify: Arc::new(tokio::sync::Notify::new()),
+		}
+	}
+
+	/// Records a pong response, resetting the timeout tracker.
+	///
+	/// This also wakes up the heartbeat monitor's sleep so it can
+	/// proceed immediately instead of waiting for the full pong timeout.
+	pub async fn record_pong(&self) {
+		*self.last_pong.write().await = Instant::now();
+		self.pong_notify.notify_one();
+	}
+
+	/// Returns the duration since the last pong was received.
+	pub async fn time_since_last_pong(&self) -> Duration {
+		self.last_pong.read().await.elapsed()
+	}
+
+	/// Returns whether the heartbeat has timed out.
+	pub async fn is_timed_out(&self) -> bool {
+		*self.timed_out.read().await
+	}
+
+	/// Checks whether the pong timeout has been exceeded.
+	///
+	/// If the timeout is exceeded, the connection is force-closed and
+	/// the method returns `true`.
+	pub async fn check_heartbeat(&self) -> bool {
+		let since_pong = self.time_since_last_pong().await;
+
+		if since_pong > self.config.pong_timeout {
+			self.connection.force_close().await;
+			*self.timed_out.write().await = true;
+			return true;
+		}
+
+		false
+	}
+
+	/// Sends a ping message through the connection.
+	///
+	/// Returns `Ok(())` if the ping was sent, or an error if the
+	/// connection is already closed.
+	pub async fn send_ping(&self) -> WebSocketResult<()> {
+		self.connection.send(Message::Ping).await
+	}
+
+	/// Returns a reference to the heartbeat configuration.
+	pub fn config(&self) -> &HeartbeatConfig {
+		&self.config
+	}
+
+	/// Returns a reference to the monitored connection.
+	pub fn connection(&self) -> &Arc<WebSocketConnection> {
+		&self.connection
+	}
+
+	/// Starts a background task that periodically sends pings and checks
+	/// for pong timeouts.
+	///
+	/// Returns a [`tokio::task::JoinHandle`] that can be aborted to stop
+	/// the monitor. The task ends automatically when a heartbeat timeout
+	/// occurs.
+	pub fn start(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+		let monitor = Arc::clone(self);
+		tokio::spawn(async move {
+			let mut interval = tokio::time::interval(monitor.config.ping_interval);
+			loop {
+				interval.tick().await;
+
+				if monitor.connection.is_closed().await {
+					break;
+				}
+
+				// Best-effort ping; if send fails, check_heartbeat will catch it
+				let _ = monitor.send_ping().await;
+
+				// Wait for pong or timeout, whichever comes first.
+				// If pong arrives early, we skip the remaining sleep and
+				// proceed to the next ping interval immediately.
+				tokio::select! {
+					() = tokio::time::sleep(monitor.config.pong_timeout) => {
+						// Timeout elapsed without pong notification
+						if monitor.check_heartbeat().await {
+							break;
+						}
+					}
+					() = monitor.pong_notify.notified() => {
+						// Pong received early; no need to wait further
+					}
+				}
 			}
 		})
 	}
@@ -1108,7 +1598,7 @@ mod tests {
 		let conn = Arc::new(WebSocketConnection::new("conn_1".to_string(), tx));
 
 		// Act
-		monitor.register(conn).await;
+		monitor.register(conn).await.unwrap();
 
 		// Assert
 		assert_eq!(monitor.connection_count().await, 1);
@@ -1122,7 +1612,7 @@ mod tests {
 		let monitor = ConnectionTimeoutMonitor::new(config);
 		let (tx, _rx) = mpsc::unbounded_channel();
 		let conn = Arc::new(WebSocketConnection::new("conn_1".to_string(), tx));
-		monitor.register(conn).await;
+		monitor.register(conn).await.unwrap();
 
 		// Act
 		monitor.unregister("conn_1").await;
@@ -1152,8 +1642,8 @@ mod tests {
 			ConnectionConfig::new().with_idle_timeout(Duration::from_secs(300)),
 		));
 
-		monitor.register(conn1).await;
-		monitor.register(conn2.clone()).await;
+		monitor.register(conn1).await.unwrap();
+		monitor.register(conn2.clone()).await.unwrap();
 
 		// Act - wait for idle timeout to expire
 		tokio::time::sleep(Duration::from_millis(60)).await;
@@ -1187,7 +1677,7 @@ mod tests {
 		let (tx, _rx) = mpsc::unbounded_channel();
 		let conn = Arc::new(WebSocketConnection::new("conn_1".to_string(), tx));
 		conn.close().await.unwrap();
-		monitor.register(conn).await;
+		monitor.register(conn).await.unwrap();
 
 		// Act
 		let timed_out = monitor.check_idle_connections().await;
@@ -1213,7 +1703,7 @@ mod tests {
 			tx,
 			ConnectionConfig::new().with_idle_timeout(Duration::from_millis(30)),
 		));
-		monitor.register(conn).await;
+		monitor.register(conn).await.unwrap();
 
 		// Act - start background monitor
 		let handle = monitor.start();
@@ -1230,5 +1720,363 @@ mod tests {
 
 		// Cleanup
 		handle.abort();
+	}
+
+	#[rstest]
+	fn test_ping_pong_config_default() {
+		// Arrange & Act
+		let config = PingPongConfig::default();
+
+		// Assert
+		assert_eq!(config.ping_interval(), Duration::from_secs(30));
+		assert_eq!(config.pong_timeout(), Duration::from_secs(10));
+	}
+
+	#[rstest]
+	fn test_ping_pong_config_custom() {
+		// Arrange & Act
+		let config = PingPongConfig::new(Duration::from_secs(15), Duration::from_secs(5));
+
+		// Assert
+		assert_eq!(config.ping_interval(), Duration::from_secs(15));
+		assert_eq!(config.pong_timeout(), Duration::from_secs(5));
+	}
+
+	#[rstest]
+	fn test_ping_pong_config_builder() {
+		// Arrange & Act
+		let config = PingPongConfig::default()
+			.with_ping_interval(Duration::from_secs(60))
+			.with_pong_timeout(Duration::from_secs(20));
+
+		// Assert
+		assert_eq!(config.ping_interval(), Duration::from_secs(60));
+		assert_eq!(config.pong_timeout(), Duration::from_secs(20));
+	}
+
+	#[rstest]
+	fn test_connection_config_has_default_ping_config() {
+		// Arrange & Act
+		let config = ConnectionConfig::new();
+
+		// Assert
+		assert_eq!(
+			config.ping_config().ping_interval(),
+			Duration::from_secs(30)
+		);
+		assert_eq!(config.ping_config().pong_timeout(), Duration::from_secs(10));
+	}
+
+	#[rstest]
+	fn test_connection_config_with_custom_ping_config() {
+		// Arrange
+		let ping_config = PingPongConfig::new(Duration::from_secs(15), Duration::from_secs(5));
+
+		// Act
+		let config = ConnectionConfig::new().with_ping_config(ping_config);
+
+		// Assert
+		assert_eq!(
+			config.ping_config().ping_interval(),
+			Duration::from_secs(15)
+		);
+		assert_eq!(config.ping_config().pong_timeout(), Duration::from_secs(5));
+	}
+
+	#[rstest]
+	fn test_strict_config_has_aggressive_ping() {
+		// Arrange & Act
+		let config = ConnectionConfig::strict();
+
+		// Assert
+		assert_eq!(
+			config.ping_config().ping_interval(),
+			Duration::from_secs(10)
+		);
+		assert_eq!(config.ping_config().pong_timeout(), Duration::from_secs(5));
+	}
+
+	#[rstest]
+	fn test_permissive_config_has_relaxed_ping() {
+		// Arrange & Act
+		let config = ConnectionConfig::permissive();
+
+		// Assert
+		assert_eq!(
+			config.ping_config().ping_interval(),
+			Duration::from_secs(60)
+		);
+		assert_eq!(config.ping_config().pong_timeout(), Duration::from_secs(30));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_timeout_monitor_rejects_when_max_connections_reached() {
+		// Arrange
+		let config = ConnectionConfig::new().with_max_connections(Some(1));
+		let monitor = ConnectionTimeoutMonitor::new(config);
+
+		let (tx1, _rx1) = mpsc::unbounded_channel();
+		let conn1 = Arc::new(WebSocketConnection::new("conn_1".to_string(), tx1));
+
+		let (tx2, _rx2) = mpsc::unbounded_channel();
+		let conn2 = Arc::new(WebSocketConnection::new("conn_2".to_string(), tx2));
+
+		// Act
+		monitor.register(conn1).await.unwrap();
+		let result = monitor.register(conn2).await;
+
+		// Assert
+		assert!(result.is_err());
+		assert_eq!(monitor.connection_count().await, 1);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_force_close_marks_connection_closed() {
+		// Arrange
+		let (tx, _rx) = mpsc::unbounded_channel();
+		let conn = WebSocketConnection::new("test".to_string(), tx);
+
+		// Act
+		conn.force_close().await;
+
+		// Assert
+		assert!(conn.is_closed().await);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_close_marks_closed_even_when_channel_dropped() {
+		// Arrange
+		let (tx, rx) = mpsc::unbounded_channel();
+		let conn = WebSocketConnection::new("test".to_string(), tx);
+
+		// Drop receiver to simulate broken channel
+		drop(rx);
+
+		// Act - close should still mark the connection as closed
+		let result = conn.close().await;
+
+		// Assert
+		assert!(result.is_err()); // send fails because receiver is dropped
+		assert!(conn.is_closed().await); // but connection is still marked closed
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_close_with_reason_marks_closed_even_when_channel_dropped() {
+		// Arrange
+		let (tx, rx) = mpsc::unbounded_channel();
+		let conn = WebSocketConnection::new("test".to_string(), tx);
+
+		// Drop receiver to simulate broken channel
+		drop(rx);
+
+		// Act
+		let result = conn
+			.close_with_reason(1006, "Abnormal close".to_string())
+			.await;
+
+		// Assert
+		assert!(result.is_err());
+		assert!(conn.is_closed().await);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_send_after_force_close_returns_error() {
+		// Arrange
+		let (tx, _rx) = mpsc::unbounded_channel();
+		let conn = WebSocketConnection::new("test".to_string(), tx);
+		conn.force_close().await;
+
+		// Act
+		let result = conn.send_text("should fail".to_string()).await;
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(result.unwrap_err(), WebSocketError::Send(_)));
+	}
+
+	#[rstest]
+	fn test_heartbeat_config_default() {
+		// Arrange & Act
+		let config = HeartbeatConfig::default();
+
+		// Assert
+		assert_eq!(config.ping_interval(), Duration::from_secs(30));
+		assert_eq!(config.pong_timeout(), Duration::from_secs(10));
+	}
+
+	#[rstest]
+	fn test_heartbeat_config_custom() {
+		// Arrange & Act
+		let config = HeartbeatConfig::new(Duration::from_secs(15), Duration::from_secs(5));
+
+		// Assert
+		assert_eq!(config.ping_interval(), Duration::from_secs(15));
+		assert_eq!(config.pong_timeout(), Duration::from_secs(5));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_heartbeat_monitor_initial_state() {
+		// Arrange
+		let (tx, _rx) = mpsc::unbounded_channel();
+		let conn = Arc::new(WebSocketConnection::new("hb_test".to_string(), tx));
+		let config = HeartbeatConfig::default();
+
+		// Act
+		let monitor = HeartbeatMonitor::new(conn, config);
+
+		// Assert
+		assert!(!monitor.is_timed_out().await);
+		assert!(monitor.time_since_last_pong().await < Duration::from_secs(1));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_heartbeat_monitor_record_pong_resets_timer() {
+		// Arrange
+		let (tx, _rx) = mpsc::unbounded_channel();
+		let conn = Arc::new(WebSocketConnection::new("hb_pong".to_string(), tx));
+		let config = HeartbeatConfig::new(Duration::from_millis(50), Duration::from_millis(30));
+		let monitor = HeartbeatMonitor::new(conn, config);
+
+		// Act - wait then record pong
+		tokio::time::sleep(Duration::from_millis(20)).await;
+		monitor.record_pong().await;
+
+		// Assert
+		assert!(monitor.time_since_last_pong().await < Duration::from_millis(10));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_heartbeat_monitor_timeout_closes_connection() {
+		// Arrange
+		let (tx, _rx) = mpsc::unbounded_channel();
+		let conn = Arc::new(WebSocketConnection::new("hb_timeout".to_string(), tx));
+		let config = HeartbeatConfig::new(Duration::from_millis(50), Duration::from_millis(30));
+		let monitor = HeartbeatMonitor::new(conn.clone(), config);
+
+		// Act - wait past the pong timeout
+		tokio::time::sleep(Duration::from_millis(40)).await;
+		let timed_out = monitor.check_heartbeat().await;
+
+		// Assert
+		assert!(timed_out);
+		assert!(monitor.is_timed_out().await);
+		assert!(conn.is_closed().await);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_heartbeat_monitor_no_timeout_when_pong_received() {
+		// Arrange
+		let (tx, _rx) = mpsc::unbounded_channel();
+		let conn = Arc::new(WebSocketConnection::new("hb_ok".to_string(), tx));
+		let config = HeartbeatConfig::new(Duration::from_millis(100), Duration::from_millis(50));
+		let monitor = HeartbeatMonitor::new(conn.clone(), config);
+
+		// Act - record pong within timeout window
+		tokio::time::sleep(Duration::from_millis(20)).await;
+		monitor.record_pong().await;
+		let timed_out = monitor.check_heartbeat().await;
+
+		// Assert
+		assert!(!timed_out);
+		assert!(!monitor.is_timed_out().await);
+		assert!(!conn.is_closed().await);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_heartbeat_monitor_send_ping() {
+		// Arrange
+		let (tx, mut rx) = mpsc::unbounded_channel();
+		let conn = Arc::new(WebSocketConnection::new("hb_ping".to_string(), tx));
+		let config = HeartbeatConfig::default();
+		let monitor = HeartbeatMonitor::new(conn, config);
+
+		// Act
+		monitor.send_ping().await.unwrap();
+
+		// Assert
+		let msg = rx.recv().await.unwrap();
+		assert!(matches!(msg, Message::Ping));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_heartbeat_monitor_early_pong_skips_full_sleep() {
+		// Arrange
+		let (tx, _rx) = mpsc::unbounded_channel();
+		let conn = Arc::new(WebSocketConnection::new("hb_early".to_string(), tx));
+		// Use a long pong_timeout to make the test obvious
+		let config = HeartbeatConfig {
+			ping_interval: Duration::from_secs(60),
+			pong_timeout: Duration::from_secs(10),
+		};
+		let monitor = Arc::new(HeartbeatMonitor::new(conn, config));
+
+		// Act: simulate pong arriving after a short delay
+		let monitor_clone = Arc::clone(&monitor);
+		tokio::spawn(async move {
+			tokio::time::sleep(Duration::from_millis(50)).await;
+			monitor_clone.record_pong().await;
+		});
+
+		// Send ping and wait for pong or timeout via select!
+		let _ = monitor.send_ping().await;
+		let start = Instant::now();
+
+		tokio::select! {
+			() = tokio::time::sleep(monitor.config.pong_timeout) => {
+				panic!("Should not reach full timeout");
+			}
+			() = monitor.pong_notify.notified() => {
+				// Pong received early
+			}
+		}
+
+		// Assert: should complete well before the 10s pong_timeout
+		let elapsed = start.elapsed();
+		assert!(
+			elapsed < Duration::from_secs(2),
+			"Expected early wakeup but elapsed {:?}",
+			elapsed
+		);
+	}
+
+	#[rstest]
+	fn test_websocket_error_binary_payload_variant() {
+		// Arrange & Act
+		let err = WebSocketError::BinaryPayload("invalid data".to_string());
+
+		// Assert
+		assert_eq!(err.to_string(), "Invalid binary payload: invalid data");
+	}
+
+	#[rstest]
+	fn test_websocket_error_heartbeat_timeout_variant() {
+		// Arrange & Act
+		let err = WebSocketError::HeartbeatTimeout(Duration::from_secs(10));
+
+		// Assert
+		assert_eq!(
+			err.to_string(),
+			"Heartbeat timeout: no pong received within 10s"
+		);
+	}
+
+	#[rstest]
+	fn test_websocket_error_slow_consumer_variant() {
+		// Arrange & Act
+		let err = WebSocketError::SlowConsumer(Duration::from_secs(5));
+
+		// Assert
+		assert_eq!(err.to_string(), "Slow consumer: send timed out after 5s");
 	}
 }

@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-rc.1...reinhardt-rest@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(rest)* use workspace redis dependency instead of pinned rc version
+- *(meta)* fix workspace inheritance and authors metadata
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-alpha.18...reinhardt-rest@v0.1.0-rc.1) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-db, reinhardt-db, reinhardt-auth, reinhardt-auth
+
+## [0.1.0-alpha.18](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-alpha.17...reinhardt-rest@v0.1.0-alpha.18) - 2026-02-23
+
+### Maintenance
+
+- updated the following local packages: reinhardt-query, reinhardt-core, reinhardt-core, reinhardt-http, reinhardt-db, reinhardt-db, reinhardt-auth, reinhardt-auth, reinhardt-utils
+
+## [0.1.0-alpha.17](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-alpha.16...reinhardt-rest@v0.1.0-alpha.17) - 2026-02-23
+
+### Maintenance
+
+- updated the following local packages: reinhardt-query, reinhardt-db, reinhardt-db, reinhardt-auth, reinhardt-auth
+
+## [0.1.0-alpha.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-alpha.15...reinhardt-rest@v0.1.0-alpha.16) - 2026-02-21
+
+### Fixed
+
+- propagate parse errors and validate min/max constraints
+- cache compiled regex in NamespaceVersioning for performance
+- replace expect() with safe get_ident() handling in attribute parsing
+- collapse nested if block in serde_attrs to satisfy clippy
+- pin CDN versions and add SRI integrity attributes
+- add database dialect support for PostgreSQL compatibility
+- handle serde attributes and improve validation
+- update filter test assertions to expect MySQL-style backtick quoting
+- use parameterized queries in SimpleSearchBackend
+
+### Security
+
+- harden XSS, CSRF, auth, and proxy trust
+
+### Styling
+
+- fix pre-existing clippy warnings and apply rustfmt
+- apply rustfmt to pre-existing unformatted files
+- apply rustfmt after clippy auto-fix
+- fix remaining clippy warnings across workspace
+
 ## [0.1.0-alpha.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-alpha.14...reinhardt-rest@v0.1.0-alpha.15) - 2026-02-16
 
 ### Maintenance

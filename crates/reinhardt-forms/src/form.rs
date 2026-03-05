@@ -4,6 +4,20 @@ use crate::wasm_compat::ValidationRule;
 use std::collections::HashMap;
 use std::ops::Index;
 
+/// Constant-time comparison to prevent timing attacks on CSRF tokens.
+///
+/// Hashes both inputs with SHA-256 to produce fixed-length digests,
+/// then compares the digests in constant time using `subtle`. This
+/// prevents leaking the length of either input through timing.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+	use sha2::{Digest, Sha256};
+	use subtle::ConstantTimeEq;
+
+	let hash_a = Sha256::digest(a);
+	let hash_b = Sha256::digest(b);
+	hash_a.ct_eq(&hash_b).into()
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum FormError {
 	#[error("Field error in {field}: {error}")]
@@ -41,6 +55,10 @@ pub struct Form {
 	/// These rules are transmitted to the client for UX enhancement.
 	/// Server-side validation is still mandatory for security.
 	validation_rules: Vec<ValidationRule>,
+	/// Expected CSRF token for form validation
+	csrf_token: Option<String>,
+	/// Whether CSRF validation is enabled
+	csrf_enabled: bool,
 }
 
 impl Form {
@@ -66,6 +84,8 @@ impl Form {
 			field_clean_functions: HashMap::new(),
 			prefix: String::new(),
 			validation_rules: vec![],
+			csrf_token: None,
+			csrf_enabled: false,
 		}
 	}
 	/// Create a new form with initial data
@@ -94,6 +114,8 @@ impl Form {
 			field_clean_functions: HashMap::new(),
 			prefix: String::new(),
 			validation_rules: vec![],
+			csrf_token: None,
+			csrf_enabled: false,
 		}
 	}
 	/// Create a new form with a field prefix
@@ -118,6 +140,8 @@ impl Form {
 			field_clean_functions: HashMap::new(),
 			prefix,
 			validation_rules: vec![],
+			csrf_token: None,
+			csrf_enabled: false,
 		}
 	}
 	/// Add a field to the form
@@ -181,6 +205,15 @@ impl Form {
 		}
 
 		self.errors.clear();
+
+		// Validate CSRF token if enabled
+		if !self.validate_csrf() {
+			self.errors
+				.entry(ALL_FIELDS_KEY.to_string())
+				.or_default()
+				.push("CSRF token missing or incorrect.".to_string());
+			return false;
+		}
 
 		for field in &self.fields {
 			let value = self.data.get(field.name());
@@ -725,6 +758,66 @@ impl Form {
 			target_field: Some(max),
 		});
 	}
+	/// Enable CSRF protection for this form.
+	///
+	/// When enabled, `is_valid()` will check that the submitted data
+	/// contains a matching CSRF token.
+	///
+	/// # Arguments
+	///
+	/// * `token` - The expected CSRF token for this form
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_forms::Form;
+	///
+	/// let mut form = Form::new();
+	/// form.set_csrf_token("abc123".to_string());
+	/// assert!(form.csrf_enabled());
+	/// ```
+	pub fn set_csrf_token(&mut self, token: String) {
+		self.csrf_token = Some(token);
+		self.csrf_enabled = true;
+	}
+
+	/// Check if CSRF protection is enabled
+	pub fn csrf_enabled(&self) -> bool {
+		self.csrf_enabled
+	}
+
+	/// Get the CSRF token, if set
+	pub fn csrf_token(&self) -> Option<&str> {
+		self.csrf_token.as_deref()
+	}
+
+	/// Validate the submitted CSRF token against the expected token.
+	///
+	/// Returns `true` if CSRF is disabled or the token matches.
+	fn validate_csrf(&self) -> bool {
+		if !self.csrf_enabled {
+			return true;
+		}
+
+		let expected = match &self.csrf_token {
+			Some(t) => t,
+			None => return false,
+		};
+
+		let submitted = self
+			.data
+			.get("csrfmiddlewaretoken")
+			.and_then(|v| v.as_str());
+
+		match submitted {
+			Some(token) => {
+				// Use constant-time comparison to prevent timing attacks
+				constant_time_eq(token.as_bytes(), expected.as_bytes())
+			}
+			None => false,
+		}
+	}
+
 	pub fn prefix(&self) -> &str {
 		&self.prefix
 	}
@@ -738,6 +831,66 @@ impl Form {
 			format!("{}-{}", self.prefix, field_name)
 		}
 	}
+	/// Render CSS `<link>` tags for form media with HTML-escaped paths.
+	///
+	/// All paths are escaped using `escape_attribute()` to prevent XSS
+	/// via malicious CSS file paths.
+	///
+	/// # Arguments
+	///
+	/// * `css_files` - Slice of CSS file paths to include
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_forms::Form;
+	///
+	/// let form = Form::new();
+	/// let html = form.render_css_media(&["/static/forms.css"]);
+	/// assert!(html.contains("href=\"/static/forms.css\""));
+	/// ```
+	pub fn render_css_media(&self, css_files: &[&str]) -> String {
+		use crate::field::escape_attribute;
+		let mut html = String::new();
+		for path in css_files {
+			html.push_str(&format!(
+				"<link rel=\"stylesheet\" href=\"{}\" />\n",
+				escape_attribute(path)
+			));
+		}
+		html
+	}
+
+	/// Render JS `<script>` tags for form media with HTML-escaped paths.
+	///
+	/// All paths are escaped using `escape_attribute()` to prevent XSS
+	/// via malicious JS file paths.
+	///
+	/// # Arguments
+	///
+	/// * `js_files` - Slice of JS file paths to include
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_forms::Form;
+	///
+	/// let form = Form::new();
+	/// let html = form.render_js_media(&["/static/forms.js"]);
+	/// assert!(html.contains("src=\"/static/forms.js\""));
+	/// ```
+	pub fn render_js_media(&self, js_files: &[&str]) -> String {
+		use crate::field::escape_attribute;
+		let mut html = String::new();
+		for path in js_files {
+			html.push_str(&format!(
+				"<script src=\"{}\"></script>\n",
+				escape_attribute(path)
+			));
+		}
+		html
+	}
+
 	pub fn get_bound_field<'a>(&'a self, name: &str) -> Option<BoundField<'a>> {
 		let field = self.get_field(name)?;
 		let data = self.data.get(name);
@@ -759,13 +912,34 @@ impl Default for Form {
 	}
 }
 
+/// Safe field access by name.
+///
+/// Returns `None` if the field is not found instead of panicking.
+///
+/// # Examples
+///
+/// ```
+/// use reinhardt_forms::{Form, CharField, Field};
+///
+/// let mut form = Form::new();
+/// form.add_field(Box::new(CharField::new("name".to_string())));
+///
+/// assert!(form.get("name").is_some());
+/// assert!(form.get("nonexistent").is_none());
+/// ```
+impl Form {
+	// Allow borrowed_box because Index trait impl requires &Box<dyn FormField>
+	#[allow(clippy::borrowed_box)]
+	pub fn get(&self, name: &str) -> Option<&Box<dyn FormField>> {
+		self.fields.iter().find(|f| f.name() == name)
+	}
+}
+
 impl Index<&str> for Form {
 	type Output = Box<dyn FormField>;
 
 	fn index(&self, name: &str) -> &Self::Output {
-		self.fields
-			.iter()
-			.find(|f| f.name() == name)
+		self.get(name)
 			.unwrap_or_else(|| panic!("Field '{}' not found", name))
 	}
 }

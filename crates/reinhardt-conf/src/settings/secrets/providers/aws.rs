@@ -51,10 +51,10 @@ impl AwsSecretsProvider {
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 	/// use reinhardt_conf::settings::secrets::providers::aws::AwsSecretsProvider;
 	///
-	// Without prefix
+	/// // Without prefix
 	/// let provider = AwsSecretsProvider::new(None).await?;
 	///
-	// With prefix
+	/// // With prefix
 	/// let provider = AwsSecretsProvider::new(Some("myapp/".to_string())).await?;
 	/// # Ok(())
 	/// # }

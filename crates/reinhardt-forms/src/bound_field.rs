@@ -2,6 +2,7 @@ use crate::field::{FormField, Widget};
 
 /// BoundField represents a field bound to form data
 pub struct BoundField<'a> {
+	// Allow dead_code: field stored for form-level operations and rendering context
 	#[allow(dead_code)]
 	form_name: String,
 	field: &'a dyn FormField,
@@ -64,11 +65,11 @@ impl<'a> BoundField<'a> {
 	///
 	/// let field: Box<dyn FormField> = Box::new(CharField::new("email".to_string()));
 	///
-	// Without prefix
+	/// // Without prefix
 	/// let bound = BoundField::new("form".to_string(), field.as_ref(), None, &[], "");
 	/// assert_eq!(bound.html_name(), "email");
 	///
-	// With prefix
+	/// // With prefix
 	/// let bound_prefixed = BoundField::new("form".to_string(), field.as_ref(), None, &[], "user");
 	/// assert_eq!(bound_prefixed.html_name(), "user-email");
 	/// ```
@@ -153,11 +154,11 @@ impl<'a> BoundField<'a> {
 	///
 	/// let field: Box<dyn FormField> = Box::new(CharField::new("username".to_string()));
 	///
-	// Without errors
+	/// // Without errors
 	/// let bound_ok = BoundField::new("form".to_string(), field.as_ref(), None, &[], "");
 	/// assert!(!bound_ok.has_errors());
 	///
-	// With errors
+	/// // With errors
 	/// let errors = vec!["Username is required".to_string()];
 	/// let bound_err = BoundField::new("form".to_string(), field.as_ref(), None, &errors, "");
 	/// assert!(bound_err.has_errors());

@@ -312,4 +312,4 @@ installed_apps! {
 
 ## License
 
-Licensed under either of Apache License, Version 2.0 or MIT license at your option.
+Licensed under the BSD 3-Clause License.

@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.2...reinhardt-middleware@v0.1.0-rc.3) - 2026-03-05
+
+### Fixed
+
+- *(release)* use path-only dev-dep for reinhardt-test in cyclic crates
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.1...reinhardt-middleware@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(middleware)* validate host header against allowed hosts in HTTPS redirect
+- *(middleware)* add missing import in HttpsRedirectMiddleware doc test
+- *(meta)* fix workspace inheritance and authors metadata
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+### Other
+
+- resolve conflict with main (criterion version)
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.15...reinhardt-middleware@v0.1.0-rc.1) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-auth
+
+## [0.1.0-alpha.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.14...reinhardt-middleware@v0.1.0-alpha.15) - 2026-02-23
+
+### Maintenance
+
+- updated the following local packages: reinhardt-core, reinhardt-http, reinhardt-conf, reinhardt-di, reinhardt-auth, reinhardt-mail
+
+## [0.1.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.13...reinhardt-middleware@v0.1.0-alpha.14) - 2026-02-23
+
+### Maintenance
+
+- updated the following local packages: reinhardt-conf, reinhardt-auth, reinhardt-mail
+
+## [0.1.0-alpha.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.12...reinhardt-middleware@v0.1.0-alpha.13) - 2026-02-21
+
+### Added
+
+- add security middleware components (Refs #292)
+
+### Fixed
+
+- apply permission checks uniformly to all HTTP methods
+- remove map_err on non-Result OpenApiRouter::wrap return value
+- resolve clippy collapsible_if warnings after merge with main
+- remove duplicate rand dependency entry
+- resolve post-merge build errors from main integration
+
+### Security
+
+- harden session cookie and add X-Frame-Options header
+- add lazy eviction for in-memory session store
+- add stale bucket eviction to rate limit store cleanup
+- add sliding window to circuit breaker statistics
+- fix CSP header sanitization and CSRF panic
+- harden XSS, CSRF, auth, and proxy trust
+- validate CORS origin against request per Fetch Standard
+- add trusted proxy validation for X-Forwarded-For
+- replace regex XSS sanitization with proper escaping
+- use cryptographic random for CSRF fallback secret
+- replace predictable CSP nonce with cryptographic random
+
+### Styling
+
+- fix import order in security_middleware
+- apply rustfmt after clippy auto-fix
+- fix remaining clippy warnings across workspace
+- apply rustfmt formatting to workspace files
+
 ## [0.1.0-alpha.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.11...reinhardt-middleware@v0.1.0-alpha.12) - 2026-02-16
 
 ### Maintenance

@@ -8,8 +8,8 @@
 //! django-rest-framework/tests/test_parsers.py
 
 use bytes::Bytes;
-use hyper::{header::CONTENT_TYPE, HeaderMap, Method, Version};
-use reinhardt_core::parsers::{parser::Parser, FormParser, JSONParser, MultiPartParser};
+use hyper::{HeaderMap, Method, Version, header::CONTENT_TYPE};
+use reinhardt_core::parsers::{FormParser, JSONParser, MultiPartParser, parser::Parser};
 use reinhardt_http::Request;
 
 /// Test POST data access after parsing with FormParser and MultiPartParser

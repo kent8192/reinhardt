@@ -1,0 +1,7 @@
+error: the `scope` attribute is not yet supported on #[injectable] structs. Scope configuration is only supported on #[injectable_factory] functions
+ --> tests/di/ui/fail/injectable_scope_unsupported.rs:4:1
+  |
+4 | #[injectable(scope = "singleton")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `injectable` (in Nightly builds, run with -Z macro-backtrace for more info)

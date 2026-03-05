@@ -139,7 +139,7 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 
 		match variant_name.as_str() {
 			"CreateTable" => {
-				let name = extract_static_str_field(&expr_struct.fields, "name")?;
+				let name = extract_string_field(&expr_struct.fields, "name")?;
 				let columns = extract_columns_field(&expr_struct.fields)?;
 				let constraints = extract_constraints_field(&expr_struct.fields);
 
@@ -153,11 +153,11 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 				});
 			}
 			"DropTable" => {
-				let name = extract_static_str_field(&expr_struct.fields, "name")?;
+				let name = extract_string_field(&expr_struct.fields, "name")?;
 				return Some(super::Operation::DropTable { name });
 			}
 			"AddColumn" => {
-				let table = extract_static_str_field(&expr_struct.fields, "table")?;
+				let table = extract_string_field(&expr_struct.fields, "table")?;
 				let column = extract_column_definition_field(&expr_struct.fields, "column")?;
 				return Some(super::Operation::AddColumn {
 					table,
@@ -166,13 +166,13 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 				});
 			}
 			"DropColumn" => {
-				let table = extract_static_str_field(&expr_struct.fields, "table")?;
-				let column = extract_static_str_field(&expr_struct.fields, "column")?;
+				let table = extract_string_field(&expr_struct.fields, "table")?;
+				let column = extract_string_field(&expr_struct.fields, "column")?;
 				return Some(super::Operation::DropColumn { table, column });
 			}
 			"AlterColumn" => {
-				let table = extract_static_str_field(&expr_struct.fields, "table")?;
-				let column = extract_static_str_field(&expr_struct.fields, "column")?;
+				let table = extract_string_field(&expr_struct.fields, "table")?;
+				let column = extract_string_field(&expr_struct.fields, "column")?;
 				let new_definition =
 					extract_column_definition_field(&expr_struct.fields, "new_definition")?;
 				return Some(super::Operation::AlterColumn {
@@ -184,14 +184,14 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 				});
 			}
 			"RenameTable" => {
-				let old_name = extract_static_str_field(&expr_struct.fields, "old_name")?;
-				let new_name = extract_static_str_field(&expr_struct.fields, "new_name")?;
+				let old_name = extract_string_field(&expr_struct.fields, "old_name")?;
+				let new_name = extract_string_field(&expr_struct.fields, "new_name")?;
 				return Some(super::Operation::RenameTable { old_name, new_name });
 			}
 			"RenameColumn" => {
-				let table = extract_static_str_field(&expr_struct.fields, "table")?;
-				let old_name = extract_static_str_field(&expr_struct.fields, "old_name")?;
-				let new_name = extract_static_str_field(&expr_struct.fields, "new_name")?;
+				let table = extract_string_field(&expr_struct.fields, "table")?;
+				let old_name = extract_string_field(&expr_struct.fields, "old_name")?;
+				let new_name = extract_string_field(&expr_struct.fields, "new_name")?;
 				return Some(super::Operation::RenameColumn {
 					table,
 					old_name,
@@ -199,7 +199,7 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 				});
 			}
 			"CreateIndex" => {
-				let table = extract_static_str_field(&expr_struct.fields, "table")?;
+				let table = extract_string_field(&expr_struct.fields, "table")?;
 				let columns = extract_string_vec_field(&expr_struct.fields, "columns");
 				let unique = extract_bool_field(&expr_struct.fields, "unique").unwrap_or(false);
 				let index_type = extract_index_type_field(&expr_struct.fields, "index_type");
@@ -220,12 +220,13 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 				});
 			}
 			"DropIndex" => {
-				let table = extract_static_str_field(&expr_struct.fields, "table")?;
+				let table = extract_string_field(&expr_struct.fields, "table")?;
 				let columns = extract_string_vec_field(&expr_struct.fields, "columns");
 				return Some(super::Operation::DropIndex { table, columns });
 			}
 			"RunSQL" => {
-				let sql = extract_static_str_field(&expr_struct.fields, "sql")?;
+				// Use extract_string_field to handle both literal and .to_string() patterns (#1336)
+				let sql = extract_string_field(&expr_struct.fields, "sql")?;
 				let reverse_sql = extract_optional_str_field(&expr_struct.fields, "reverse_sql");
 				return Some(super::Operation::RunSQL { sql, reverse_sql });
 			}
@@ -239,21 +240,6 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 		}
 	}
 
-	None
-}
-
-/// Extract a string field from struct fields
-fn extract_static_str_field(
-	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
-	field_name: &str,
-) -> Option<String> {
-	for field in fields {
-		if let syn::Member::Named(ident) = &field.member
-			&& ident == field_name
-		{
-			return extract_string_literal(&field.expr);
-		}
-	}
 	None
 }
 
@@ -295,6 +281,12 @@ fn extract_optional_str_field(
 				&& func_path.path.is_ident("Some")
 				&& !expr_call.args.is_empty()
 			{
+				// Handle Some("str".to_string()) pattern
+				if let Expr::MethodCall(method_call) = &expr_call.args[0]
+					&& method_call.method == "to_string"
+				{
+					return extract_string_literal(&method_call.receiver);
+				}
 				return extract_string_literal(&expr_call.args[0]);
 			}
 		}
@@ -694,7 +686,7 @@ fn parse_column_definition(expr: &Expr) -> Option<super::ColumnDefinition> {
 			return None;
 		}
 
-		let name = extract_static_str_field(&expr_struct.fields, "name")?;
+		let name = extract_string_field(&expr_struct.fields, "name")?;
 		let type_definition = extract_field_type(&expr_struct.fields)
 			.unwrap_or(super::FieldType::Custom("VARCHAR".to_string()));
 		let not_null = extract_bool_field(&expr_struct.fields, "not_null").unwrap_or(false);

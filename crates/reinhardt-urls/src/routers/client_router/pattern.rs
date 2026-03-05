@@ -21,7 +21,19 @@ pub(crate) struct PathParam {
 /// - `/users/` - Exact match
 /// - `/users/{id}/` - Single path parameter
 /// - `/users/{id}/posts/{post_id}/` - Multiple parameters
-/// - `/static/{path:*}/` - Wildcard matching (rest of path)
+/// - `/static/{path:*}` - Wildcard matching (rest of path)
+///
+/// # Wildcard Behavior
+///
+/// The `{name:*}` wildcard syntax compiles to `(.*)`, which matches **any
+/// character including path separators (`/`)**. This means a pattern like
+/// `/files/{path:*}` will match `/files/a/b/c/d`, capturing `a/b/c/d` as
+/// a single parameter value.
+///
+/// **Security warning:** If the captured wildcard value is used for file
+/// system access, callers must validate the value to prevent path traversal
+/// attacks (e.g., reject `..` segments, absolute paths, and encoded
+/// sequences like `%2e` or `%2f`).
 #[derive(Debug, Clone)]
 pub struct ClientPathPattern {
 	/// The original pattern string.
@@ -34,24 +46,66 @@ pub struct ClientPathPattern {
 	is_exact: bool,
 }
 
+/// Maximum allowed length for a client-side URL pattern string in bytes.
+const MAX_CLIENT_PATTERN_LENGTH: usize = 1024;
+
+/// Maximum allowed number of path segments in a client-side URL pattern.
+const MAX_CLIENT_PATH_SEGMENTS: usize = 32;
+
+/// Maximum allowed size for compiled regex in client-side patterns (in bytes).
+const MAX_CLIENT_REGEX_SIZE: usize = 1 << 20; // 1 MiB
+
 impl ClientPathPattern {
 	/// Creates a new path pattern from a Django-style pattern string.
+	///
+	/// Returns an error if the pattern is too long, has too many segments,
+	/// or contains an invalid regex.
 	///
 	/// # Pattern Syntax
 	///
 	/// - `{name}` - Captures a path segment (excludes `/`)
 	/// - `{name:*}` - Captures the rest of the path (includes `/`)
 	/// - Literal text is matched exactly
-	pub fn new(pattern: &str) -> Self {
-		let (regex_str, param_names) = Self::compile_pattern(pattern);
-		let regex = regex::Regex::new(&regex_str).expect("Invalid pattern");
+	///
+	/// # Errors
+	///
+	/// Returns `String` error if:
+	/// - Pattern exceeds maximum length (1024 bytes)
+	/// - Pattern has too many path segments (>32)
+	/// - Pattern compiles to an invalid regex
+	pub fn new(pattern: &str) -> Result<Self, String> {
+		// Reject patterns exceeding the maximum length to prevent ReDoS
+		if pattern.len() > MAX_CLIENT_PATTERN_LENGTH {
+			return Err(format!(
+				"Pattern length {} exceeds maximum allowed length of {} bytes",
+				pattern.len(),
+				MAX_CLIENT_PATTERN_LENGTH
+			));
+		}
 
-		Self {
+		// Reject patterns with excessive path segments
+		let segment_count = pattern.split('/').count();
+		if segment_count > MAX_CLIENT_PATH_SEGMENTS {
+			return Err(format!(
+				"Pattern has {} path segments, exceeding maximum of {}",
+				segment_count, MAX_CLIENT_PATH_SEGMENTS
+			));
+		}
+
+		let (regex_str, param_names) = Self::compile_pattern(pattern);
+
+		// Use RegexBuilder with size limits to prevent memory exhaustion
+		let regex = regex::RegexBuilder::new(&regex_str)
+			.size_limit(MAX_CLIENT_REGEX_SIZE)
+			.build()
+			.map_err(|e| format!("Failed to compile pattern regex: {}", e))?;
+
+		Ok(Self {
 			pattern: pattern.to_string(),
 			regex,
 			param_names,
 			is_exact: !pattern.contains('{'),
-		}
+		})
 	}
 
 	/// Compiles a pattern string into a regex and extracts parameter names.
@@ -86,7 +140,9 @@ impl ClientPathPattern {
 					param_names.push(param.clone());
 
 					if is_wildcard {
-						// Wildcard: match anything including slashes
+						// Wildcard: match anything including path separators (/).
+						// Callers must validate captured values to prevent path
+						// traversal when using them for file system access.
 						regex_str.push_str(&format!("(?P<{}>.*)", param));
 					} else {
 						// Normal: match anything except slashes
@@ -197,7 +253,7 @@ mod tests {
 
 	#[test]
 	fn test_exact_pattern() {
-		let pattern = ClientPathPattern::new("/users/");
+		let pattern = ClientPathPattern::new("/users/").unwrap();
 		assert!(pattern.is_exact());
 		assert!(pattern.is_match("/users/"));
 		assert!(!pattern.is_match("/users/123/"));
@@ -205,7 +261,7 @@ mod tests {
 
 	#[test]
 	fn test_single_param() {
-		let pattern = ClientPathPattern::new("/users/{id}/");
+		let pattern = ClientPathPattern::new("/users/{id}/").unwrap();
 		assert!(!pattern.is_exact());
 		assert!(pattern.is_match("/users/42/"));
 		assert!(pattern.is_match("/users/abc/"));
@@ -218,7 +274,7 @@ mod tests {
 
 	#[test]
 	fn test_multiple_params() {
-		let pattern = ClientPathPattern::new("/users/{user_id}/posts/{post_id}/");
+		let pattern = ClientPathPattern::new("/users/{user_id}/posts/{post_id}/").unwrap();
 		let (params, param_values) = pattern.matches("/users/42/posts/123/").unwrap();
 
 		assert_eq!(params.get("user_id"), Some(&"42".to_string()));
@@ -228,7 +284,7 @@ mod tests {
 
 	#[test]
 	fn test_wildcard_param() {
-		let pattern = ClientPathPattern::new("/static/{path:*}");
+		let pattern = ClientPathPattern::new("/static/{path:*}").unwrap();
 		let (params, param_values) = pattern.matches("/static/css/styles/main.css").unwrap();
 
 		assert_eq!(params.get("path"), Some(&"css/styles/main.css".to_string()));
@@ -237,7 +293,7 @@ mod tests {
 
 	#[test]
 	fn test_reverse_simple() {
-		let pattern = ClientPathPattern::new("/users/{id}/");
+		let pattern = ClientPathPattern::new("/users/{id}/").unwrap();
 		let mut params = HashMap::new();
 		params.insert("id".to_string(), "42".to_string());
 
@@ -246,7 +302,7 @@ mod tests {
 
 	#[test]
 	fn test_reverse_multiple_params() {
-		let pattern = ClientPathPattern::new("/users/{user_id}/posts/{post_id}/");
+		let pattern = ClientPathPattern::new("/users/{user_id}/posts/{post_id}/").unwrap();
 		let mut params = HashMap::new();
 		params.insert("user_id".to_string(), "42".to_string());
 		params.insert("post_id".to_string(), "123".to_string());
@@ -259,7 +315,7 @@ mod tests {
 
 	#[test]
 	fn test_reverse_missing_param() {
-		let pattern = ClientPathPattern::new("/users/{id}/");
+		let pattern = ClientPathPattern::new("/users/{id}/").unwrap();
 		let params = HashMap::new();
 
 		assert_eq!(pattern.reverse(&params), None);
@@ -267,30 +323,61 @@ mod tests {
 
 	#[test]
 	fn test_param_names() {
-		let pattern = ClientPathPattern::new("/a/{x}/b/{y}/c/{z}/");
+		let pattern = ClientPathPattern::new("/a/{x}/b/{y}/c/{z}/").unwrap();
 		assert_eq!(pattern.param_names(), &["x", "y", "z"]);
 	}
 
 	#[test]
 	fn test_special_chars_escaped() {
-		let pattern = ClientPathPattern::new("/api/v1.0/");
+		let pattern = ClientPathPattern::new("/api/v1.0/").unwrap();
 		assert!(pattern.is_match("/api/v1.0/"));
 		assert!(!pattern.is_match("/api/v1X0/"));
 	}
 
 	#[test]
 	fn test_pattern_display() {
-		let pattern = ClientPathPattern::new("/users/{id}/");
+		let pattern = ClientPathPattern::new("/users/{id}/").unwrap();
 		assert_eq!(format!("{}", pattern), "/users/{id}/");
 	}
 
 	#[test]
 	fn test_pattern_equality() {
-		let p1 = ClientPathPattern::new("/users/{id}/");
-		let p2 = ClientPathPattern::new("/users/{id}/");
-		let p3 = ClientPathPattern::new("/users/{user_id}/");
+		let p1 = ClientPathPattern::new("/users/{id}/").unwrap();
+		let p2 = ClientPathPattern::new("/users/{id}/").unwrap();
+		let p3 = ClientPathPattern::new("/users/{user_id}/").unwrap();
 
 		assert_eq!(p1, p2);
 		assert_ne!(p1, p3);
+	}
+
+	#[test]
+	fn test_pattern_rejects_excessive_length() {
+		// Arrange: a pattern exceeding 1024 bytes
+		let long_pattern = "/".to_string() + &"a".repeat(1025);
+
+		// Act
+		let result = ClientPathPattern::new(&long_pattern);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(
+			result
+				.unwrap_err()
+				.contains("exceeds maximum allowed length")
+		);
+	}
+
+	#[test]
+	fn test_pattern_rejects_excessive_segments() {
+		// Arrange: a pattern with more than 32 segments
+		let segments: Vec<&str> = (0..35).map(|_| "seg").collect();
+		let pattern = format!("/{}/", segments.join("/"));
+
+		// Act
+		let result = ClientPathPattern::new(&pattern);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(result.unwrap_err().contains("exceeding maximum"));
 	}
 }

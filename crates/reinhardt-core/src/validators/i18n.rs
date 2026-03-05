@@ -42,6 +42,7 @@ const EN_MESSAGES: &str = include_str!("../resources/validation_en.ftl");
 const JA_MESSAGES: &str = include_str!("../resources/validation_ja.ftl");
 
 /// Error type for i18n operations.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum I18nError {
 	/// The requested language is not supported.
@@ -498,7 +499,7 @@ where
 }
 
 /// A builder for creating LocalizedValidators with custom language settings.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LocalizedValidatorBuilder {
 	language: Language,
 	messages: Option<ValidationMessages>,

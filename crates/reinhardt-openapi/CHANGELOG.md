@@ -8,6 +8,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- release-plz-separator -->
 <!-- Entries below this line were created before release-plz adoption -->
 
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-openapi@v0.1.0-rc.1...reinhardt-openapi@v0.1.0-rc.2) - 2026-03-04
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-openapi@v0.1.0-alpha.16...reinhardt-openapi@v0.1.0-rc.1) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-rest, reinhardt-urls
+
+## [0.1.0-alpha.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-openapi@v0.1.0-alpha.15...reinhardt-openapi@v0.1.0-alpha.16) - 2026-02-23
+
+### Maintenance
+
+- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
+
+## [0.1.0-alpha.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-openapi@v0.1.0-alpha.14...reinhardt-openapi@v0.1.0-alpha.15) - 2026-02-23
+
+### Maintenance
+
+- updated the following local packages: reinhardt-rest, reinhardt-urls
+
+## [0.1.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-openapi@v0.1.0-alpha.13...reinhardt-openapi@v0.1.0-alpha.14) - 2026-02-21
+
+### Fixed
+
+- remove map_err on non-Result OpenApiRouter::wrap return value
+- resolve clippy collapsible_if warnings after merge with main
+- add enabled flag and optional auth guard for docs endpoints
+- return Result from OpenApiRouter::wrap instead of panicking
+
+### Security
+
+- add security headers to documentation endpoints
+
+### Changed
+
+- extract shared OpenAPI route handling logic
+
 ## [0.1.0-alpha.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-openapi@v0.1.0-alpha.12...reinhardt-openapi@v0.1.0-alpha.13) - 2026-02-16
 
 ### Maintenance

@@ -38,11 +38,11 @@ use std::marker::PhantomData;
 /// ```rust
 /// use reinhardt_db::orm::ArrayField;
 ///
-// Array of integers
+/// // Array of integers
 /// let scores = ArrayField::<i32>::new("INTEGER");
 /// assert_eq!(scores.base_type(), "INTEGER");
 ///
-// Array of strings with max length
+/// // Array of strings with max length
 /// let tags = ArrayField::<String>::new("VARCHAR(50)");
 /// assert_eq!(tags.base_type(), "VARCHAR(50)");
 /// ```

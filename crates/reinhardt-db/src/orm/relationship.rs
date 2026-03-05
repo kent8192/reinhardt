@@ -514,6 +514,7 @@ impl<P: Model, C: Model> Relationship<P, C> {
 }
 
 /// Join configuration for Joined loading strategy
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct JoinConfig {
 	/// Table to join

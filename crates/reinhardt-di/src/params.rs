@@ -39,6 +39,7 @@
 pub mod body;
 pub mod cookie;
 pub mod cookie_named;
+pub(crate) mod cookie_util;
 pub mod extract;
 pub mod form;
 pub mod header;
@@ -103,6 +104,9 @@ pub enum ParamError {
 
 	#[error("Request body error: {0}")]
 	BodyError(String),
+
+	#[error("Payload too large: {0}")]
+	PayloadTooLarge(String),
 
 	#[cfg(feature = "validation")]
 	#[error("{}", .0.format_error())]

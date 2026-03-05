@@ -1,6 +1,6 @@
 //! Unit tests for DependencyRegistry and AsyncFactory
 
-use reinhardt_di::registry::{global_registry, AsyncFactory, DependencyRegistry, DependencyScope};
+use reinhardt_di::registry::{AsyncFactory, DependencyRegistry, DependencyScope, global_registry};
 use reinhardt_di::{FactoryTrait, InjectionContext};
 use reinhardt_test::fixtures::*;
 use rstest::*;

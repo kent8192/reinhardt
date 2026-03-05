@@ -1,11 +1,24 @@
 name: Setup Protobuf Compiler
-description: Install protoc
+description: Install protoc on Linux, macOS, and Windows
 runs:
   using: composite
   steps:
-    - name: Install protoc
+    - name: Install protoc (Linux)
+      if: runner.os == 'Linux'
       shell: bash
       run: |
-        sudo apt-get update
+        sudo apt-get update -qq
         sudo apt-get install -y protobuf-compiler
+        protoc --version
+    - name: Install protoc (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        brew install protobuf
+        protoc --version
+    - name: Install protoc (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        choco install protoc --yes
         protoc --version

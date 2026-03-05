@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-tasks"
-version = "0.1.0-alpha.3"
+version = "0.1.0-rc.4"
 description = "Background task execution and scheduling"
 edition.workspace = true
 license.workspace = true
@@ -21,6 +21,7 @@ rand = { workspace = true }
 reqwest = { version = "0.12", features = ["json"] }
 url = { workspace = true }
 ipnet = "2.0"
+tracing = { workspace = true }
 
 # Redis backend (optional)
 redis = { workspace = true, optional = true }
@@ -41,6 +42,7 @@ lapin = { version = "3.7.2", optional = true }
 aquamarine = { workspace = true }
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["redis"] }
@@ -48,7 +50,7 @@ serial_test = { workspace = true }
 mockito = "1.5"
 tempfile = { workspace = true }
 rstest = { workspace = true }
-reinhardt-test = { workspace = true, features = ["testcontainers"] }
+reinhardt-testkit = { path = "../reinhardt-testkit", features = ["testcontainers"] }
 
 [features]
 default = []

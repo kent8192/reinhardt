@@ -188,6 +188,7 @@ impl std::fmt::Display for MySqlLock {
 }
 
 /// MySQL ALTER TABLE options
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub struct AlterTableOptions {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -305,6 +306,7 @@ pub struct InterleaveSpec {
 }
 
 /// Table partitioning options
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PartitionOptions {
 	pub partition_type: PartitionType,
@@ -613,6 +615,7 @@ impl std::fmt::Display for BulkLoadFormat {
 /// Options for bulk data loading
 ///
 /// Provides fine-grained control over how data is parsed during bulk loading.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BulkLoadOptions {
 	/// Field delimiter character (default: ',' for CSV, '\t' for TEXT)

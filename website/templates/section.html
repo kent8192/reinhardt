@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% import "macros/sidebar.html" as macros %}
+
+{% block title %}{{ section.title }}{% endblock %}
+{% block description %}{{ section.description | default(value=config.description) }}{% endblock %}
+
+{% block content %}
+{# Determine the root section path for the sidebar.
+   section.path has leading slash: "/quickstart/", "/docs/", "/quickstart/tutorials/", etc.
+   section.ancestors contains relative_paths: ["_index.md", "quickstart/_index.md", ...] #}
+{% set_global root_path = "" %}
+{% if section.path is starting_with("/quickstart") %}
+	{% set_global root_path = "quickstart/_index.md" %}
+{% elif section.path is starting_with("/docs") %}
+	{% set_global root_path = "docs/_index.md" %}
+{% endif %}
+
+{% if root_path %}
+<div class="section-layout container">
+	{{ macros::sidebar(root_path=root_path, current_url=current_url) }}
+	<div class="section-main">
+		{% if section.content %}
+		<div class="prose">
+			{{ section.content | safe }}
+		</div>
+		{% else %}
+		<h1>{{ section.title }}</h1>
+		{% if section.description %}
+		<p>{{ section.description }}</p>
+		{% endif %}
+		<ul class="page-list" role="list">
+			{% for page in section.pages %}
+			<li>
+				<a href="{{ page.path | safe }}">{{ page.title }}</a>
+				{% if page.description %}— {{ page.description }}{% endif %}
+			</li>
+			{% endfor %}
+		</ul>
+		{% endif %}
+	</div>
+</div>
+{% else %}
+{# Fallback for non-quickstart/docs sections (e.g. changelog, security) #}
+<div class="section-layout container">
+	<div class="section-main">
+		{% if section.content %}
+		<div class="prose">
+			{{ section.content | safe }}
+		</div>
+		{% else %}
+		<h1>{{ section.title }}</h1>
+		{% if section.description %}
+		<p>{{ section.description }}</p>
+		{% endif %}
+		{% endif %}
+	</div>
+</div>
+{% endif %}
+{% endblock content %}

@@ -281,14 +281,29 @@ impl PluginRegistry {
 				}
 
 				// Validate version requirement
-				let plugin_metadata = plugins.get(plugin_name).unwrap().plugin.metadata();
-				let dep_spec = plugin_metadata
+				// These lookups may fail if the dependency graph is inconsistent
+				// with the plugins map (e.g., due to concurrent modification).
+				let Some(plugin_entry) = plugins.get(plugin_name) else {
+					continue;
+				};
+				let plugin_metadata = plugin_entry.plugin.metadata();
+				let Some(dep_spec) = plugin_metadata
 					.dependencies
 					.iter()
 					.find(|d| &d.name == dep_name)
-					.unwrap();
+				else {
+					continue;
+				};
 
-				let actual_version = &plugins.get(dep_name).unwrap().plugin.metadata().version;
+				let actual_version = &plugins
+					.get(dep_name)
+					.ok_or_else(|| PluginError::MissingDependency {
+						plugin: plugin_name.clone(),
+						dependency: dep_name.clone(),
+					})?
+					.plugin
+					.metadata()
+					.version;
 				if !dep_spec.version_req.matches(actual_version) {
 					return Err(PluginError::IncompatibleVersion {
 						plugin: plugin_name.clone(),
@@ -441,23 +456,33 @@ impl PluginRegistry {
 
 	/// Enables a single plugin.
 	async fn enable_plugin(&self, name: &str, ctx: &PluginContext) -> PluginResult<()> {
-		// Check dependencies are enabled
-		for dep in self.get_dependencies(name) {
-			if !self.is_enabled(&dep) {
-				return Err(PluginError::MissingDependency {
-					plugin: name.to_string(),
-					dependency: dep,
-				});
-			}
-		}
-
-		// Get lifecycle reference
+		// Acquire all needed locks simultaneously to get a consistent snapshot
+		// and prevent TOCTOU issues between dependency check and lifecycle access
 		let lifecycle = {
 			let plugins = self.plugins.read();
+			let deps = self.dependency_graph.read();
+
+			// Check dependencies are enabled (using already-held plugins lock)
+			if let Some(dependencies) = deps.get(name) {
+				for dep in dependencies {
+					let is_dep_enabled = plugins
+						.get(dep)
+						.is_some_and(|e| e.state == PluginState::Enabled);
+					if !is_dep_enabled {
+						return Err(PluginError::MissingDependency {
+							plugin: name.to_string(),
+							dependency: dep.clone(),
+						});
+					}
+				}
+			}
+
+			// Get lifecycle reference while still holding the lock
 			plugins.get(name).and_then(|e| e.lifecycle.clone())
 		};
 
-		// Call lifecycle hook if available
+		// Call lifecycle hook if available (outside locks to avoid holding
+		// locks across async calls)
 		if let Some(lifecycle) = lifecycle {
 			lifecycle.on_enable(ctx).await?;
 		}
@@ -469,33 +494,89 @@ impl PluginRegistry {
 	}
 
 	/// Disables a plugin and all plugins that depend on it.
+	///
+	/// This method recursively disables dependent plugins. It tracks visited
+	/// nodes to prevent infinite recursion if a cycle exists in the dependents
+	/// graph, and enforces a maximum recursion depth as an additional safeguard.
 	pub async fn disable_plugin(&self, name: &str, ctx: &PluginContext) -> PluginResult<()> {
-		// First disable all dependents
-		let dependents = self.get_dependents(name);
-		for dep in dependents {
-			if self.is_enabled(&dep) {
-				Box::pin(self.disable_plugin(&dep, ctx)).await?;
-			}
+		use std::collections::HashSet;
+
+		/// Maximum recursion depth for disable_plugin to prevent stack overflow.
+		const MAX_DISABLE_DEPTH: usize = 64;
+
+		fn disable_inner<'a>(
+			registry: &'a PluginRegistry,
+			name: &'a str,
+			ctx: &'a PluginContext,
+			visited: &'a mut HashSet<String>,
+			depth: usize,
+		) -> std::pin::Pin<Box<dyn std::future::Future<Output = PluginResult<()>> + 'a>> {
+			Box::pin(async move {
+				// Guard against cycles and excessive depth
+				if !visited.insert(name.to_string()) {
+					tracing::warn!(
+						"Cycle detected in dependents graph while disabling '{}', skipping",
+						name
+					);
+					return Ok(());
+				}
+				if depth > MAX_DISABLE_DEPTH {
+					return Err(PluginError::Custom(format!(
+						"maximum recursion depth ({}) exceeded while disabling plugin '{}'",
+						MAX_DISABLE_DEPTH, name
+					)));
+				}
+
+				// Acquire both locks simultaneously to get a consistent snapshot
+				// of dependents and their enabled status, plus lifecycle reference
+				let (enabled_dependents, lifecycle) = {
+					let plugins = registry.plugins.read();
+					let reverse = registry.dependents.read();
+
+					let enabled_deps: Vec<String> = reverse
+						.get(name)
+						.map(|deps| {
+							deps.iter()
+								.filter(|dep| {
+									plugins
+										.get(dep.as_str())
+										.is_some_and(|e| e.state == PluginState::Enabled)
+								})
+								.cloned()
+								.collect()
+						})
+						.unwrap_or_default();
+
+					let lc = plugins.get(name).and_then(|e| e.lifecycle.clone());
+
+					(enabled_deps, lc)
+				};
+
+				// Disable all enabled dependents first
+				for dep in enabled_dependents {
+					disable_inner(registry, &dep, ctx, visited, depth + 1).await?;
+				}
+
+				// Use the lifecycle reference obtained from the consistent snapshot
+				let lifecycle = lifecycle;
+
+				// Call lifecycle hook if available
+				if let Some(lifecycle) = lifecycle {
+					// Log but don't fail if on_disable returns an error
+					if let Err(e) = lifecycle.on_disable(ctx).await {
+						tracing::warn!("Plugin {} on_disable hook returned error: {}", name, e);
+					}
+				}
+
+				registry.set_state(name, PluginState::Disabled)?;
+				tracing::info!("Disabled plugin: {}", name);
+
+				Ok(())
+			})
 		}
 
-		// Get lifecycle reference
-		let lifecycle = {
-			let plugins = self.plugins.read();
-			plugins.get(name).and_then(|e| e.lifecycle.clone())
-		};
-
-		// Call lifecycle hook if available
-		if let Some(lifecycle) = lifecycle {
-			// Log but don't fail if on_disable returns an error
-			if let Err(e) = lifecycle.on_disable(ctx).await {
-				tracing::warn!("Plugin {} on_disable hook returned error: {}", name, e);
-			}
-		}
-
-		self.set_state(name, PluginState::Disabled)?;
-		tracing::info!("Disabled plugin: {}", name);
-
-		Ok(())
+		let mut visited = HashSet::new();
+		disable_inner(self, name, ctx, &mut visited, 0).await
 	}
 
 	/// Unregisters a plugin.

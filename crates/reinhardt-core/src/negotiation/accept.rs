@@ -23,7 +23,7 @@ impl AcceptHeader {
 	///
 	/// let complex = AcceptHeader::parse("text/html, application/json; q=0.8, */*; q=0.1");
 	/// assert_eq!(complex.media_types.len(), 3);
-	// Sorted by quality
+	/// // Sorted by quality
 	/// assert_eq!(complex.media_types[0].subtype, "html");
 	/// ```
 	pub fn parse(header: &str) -> Self {

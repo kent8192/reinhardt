@@ -236,7 +236,7 @@ impl SignalGraph {
 		output.push_str("  rankdir=LR;\n");
 		output.push_str("  node [shape=box, style=rounded];\n\n");
 
-		// Define nodes
+		// Define nodes (escape labels to prevent DOT injection)
 		for (id, node) in &self.nodes {
 			let (shape, color) = match node.node_type {
 				NodeType::Signal => ("ellipse", "lightblue"),
@@ -250,15 +250,18 @@ impl SignalGraph {
 				.map(|p| format!("\\nPriority: {}", p))
 				.unwrap_or_default();
 
+			let escaped_id = escape_dot_label(id);
+			let escaped_desc = escape_dot_label(&node.description);
+
 			output.push_str(&format!(
 				"  \"{}\" [shape={}, fillcolor={}, style=\"filled,rounded\", color={}, label=\"{}{}\\n{}\"];\n",
-				id, shape, color, border_color, id, priority_label, node.description
+				escaped_id, shape, color, border_color, escaped_id, priority_label, escaped_desc
 			));
 		}
 
 		output.push('\n');
 
-		// Define edges
+		// Define edges (escape labels to prevent DOT injection)
 		for edge in &self.edges {
 			let style = if edge.is_conditional {
 				"style=dashed"
@@ -269,13 +272,13 @@ impl SignalGraph {
 			let label = edge
 				.label
 				.as_ref()
-				.map(|l| format!("label=\"{}\"", l))
+				.map(|l| format!("label=\"{}\"", escape_dot_label(l)))
 				.unwrap_or_default();
 
 			output.push_str(&format!(
 				"  \"{}\" -> \"{}\" [{}{}{}];\n",
-				edge.from,
-				edge.to,
+				escape_dot_label(&edge.from),
+				escape_dot_label(&edge.to),
 				style,
 				if label.is_empty() { "" } else { ", " },
 				label
@@ -512,6 +515,16 @@ impl Default for SignalGraph {
 	fn default() -> Self {
 		Self::new()
 	}
+}
+
+/// Escape special characters for DOT format labels.
+///
+/// Prevents content injection by escaping backslash, double-quote,
+/// and newline characters that have special meaning in DOT syntax.
+fn escape_dot_label(s: &str) -> String {
+	s.replace('\\', "\\\\")
+		.replace('"', "\\\"")
+		.replace('\n', "\\n")
 }
 
 #[cfg(test)]

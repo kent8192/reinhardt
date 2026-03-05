@@ -3,7 +3,8 @@
 use thiserror::Error;
 
 /// Database operation errors
-#[derive(Error, Debug)]
+#[non_exhaustive]
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum DatabaseError {
 	/// Feature not supported by this database
 	#[error("Feature '{feature}' is not supported by {database}")]

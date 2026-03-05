@@ -16,6 +16,11 @@ use tokio::net::{TcpListener, TcpStream};
 use crate::shutdown::ShutdownCoordinator;
 
 /// HTTP/2 Server
+///
+/// Note: HTTP/2 connections currently bypass the DI context and middleware
+/// pipeline. The handler is invoked directly without middleware composition
+/// or dependency injection integration. Full middleware and DI context
+/// integration is tracked separately.
 pub struct Http2Server {
 	handler: Arc<dyn Handler>,
 }

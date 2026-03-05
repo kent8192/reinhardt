@@ -9,6 +9,7 @@ use super::reserved::is_sql_reserved_word;
 const MAX_IDENTIFIER_LENGTH: usize = 63;
 
 /// Validation errors for database identifiers
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum IdentifierValidationError {
 	#[error("Identifier cannot be empty")]

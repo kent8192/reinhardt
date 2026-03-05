@@ -102,18 +102,33 @@
 //! # }
 //! ```
 //!
+//! ## Architecture
+//!
+//! Key modules in this crate:
+//!
+//! - [`backends`]: Low-level database operations, schema editor, DDL generation
+//! - [`backends_pool`]: Connection pool management with lifecycle hooks
+//! - [`pool`]: High-level pool abstraction for `ConnectionPool`
+//! - [`orm`]: Django-style model definitions, QuerySet, and field types
+//! - [`migrations`]: Schema migration system with auto-detection and rollback
+//! - [`hybrid`]: Cross-database compatible type system
+//! - [`associations`]: Relationship management (ForeignKey, ManyToMany)
+//! - [`contenttypes`]: Generic foreign key support
+//!
 //! ## Feature Flags
 //!
-//! - `backends` (default): Database backend abstractions
-//! - `pool` (default): Connection pooling support
-//! - `orm` (default): ORM functionality
-//! - `migrations` (default): Migration system
-//! - `hybrid` (default): Hybrid type system
-//! - `associations` (default): Association management
-//! - `postgres` (default): PostgreSQL support
-//! - `sqlite`: SQLite support
-//! - `mysql`: MySQL support
-//! - `all-databases`: Enable all database backends
+//! | Feature | Default | Description |
+//! |---------|---------|-------------|
+//! | `backends` | enabled | Database backend abstractions and schema editor |
+//! | `pool` | enabled | Connection pooling support |
+//! | `orm` | enabled | ORM model definitions and QuerySet API |
+//! | `migrations` | enabled | Database migration system |
+//! | `hybrid` | enabled | Cross-database hybrid type system |
+//! | `associations` | enabled | Model relationship management |
+//! | `postgres` | enabled | PostgreSQL backend |
+//! | `sqlite` | disabled | SQLite backend |
+//! | `mysql` | disabled | MySQL backend |
+//! | `all-databases` | disabled | Enable all database backends |
 
 pub mod associations;
 pub mod backends;

@@ -1,0 +1,139 @@
+name: Monitor RC Stability
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Daily at midnight UTC
+  workflow_dispatch:
+    inputs:
+      stability_days:
+        description: 'Number of days required for stability (default: 14)'
+        required: false
+        default: '14'
+
+permissions:
+  issues: read
+  contents: read
+
+jobs:
+  check-stability:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Get stability period
+        id: config
+        run: |
+          STABILITY_DAYS="${{ github.event.inputs.stability_days || '14' }}"
+          echo "stability_days=${STABILITY_DAYS}" >> "$GITHUB_OUTPUT"
+
+      - name: Find latest RC release tag
+        id: rc-tag
+        run: |
+          # Find the most recent RC tag across all crates
+          LATEST_RC_TAG=$(git tag --sort=-creatordate | grep -E '@v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' | head -1)
+
+          if [ -z "$LATEST_RC_TAG" ]; then
+            echo "No RC tags found"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "tag=${LATEST_RC_TAG}" >> "$GITHUB_OUTPUT"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+
+          # Get the tag date
+          TAG_DATE=$(git log -1 --format=%aI "$LATEST_RC_TAG")
+          echo "tag_date=${TAG_DATE}" >> "$GITHUB_OUTPUT"
+          echo "Latest RC tag: ${LATEST_RC_TAG} (${TAG_DATE})"
+
+      - name: Check for blocking issues (excluding agent-suspect)
+        if: steps.rc-tag.outputs.found == 'true'
+        id: issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Count critical issues that are NOT agent-suspect
+          CRITICAL_COUNT=$(gh issue list --state open --label critical --json labels,number \
+            | jq '[.[] | select(.labels | map(.name) | index("agent-suspect") | not)] | length')
+
+          # Count high issues that are NOT agent-suspect
+          HIGH_COUNT=$(gh issue list --state open --label high --json labels,number \
+            | jq '[.[] | select(.labels | map(.name) | index("agent-suspect") | not)] | length')
+
+          # Count agent-suspect issues (for reporting only)
+          AGENT_SUSPECT_COUNT=$(gh issue list --state open --label agent-suspect --json number | jq 'length')
+
+          echo "critical_count=${CRITICAL_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "high_count=${HIGH_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "agent_suspect_count=${AGENT_SUSPECT_COUNT}" >> "$GITHUB_OUTPUT"
+
+          BLOCKING_COUNT=$((CRITICAL_COUNT + HIGH_COUNT))
+          echo "blocking_count=${BLOCKING_COUNT}" >> "$GITHUB_OUTPUT"
+
+          echo "Blocking issues (critical: ${CRITICAL_COUNT}, high: ${HIGH_COUNT})"
+          echo "Agent-suspect issues (excluded from timer): ${AGENT_SUSPECT_COUNT}"
+
+      - name: Calculate stability period
+        if: steps.rc-tag.outputs.found == 'true'
+        id: stability
+        run: |
+          TAG_DATE="${{ steps.rc-tag.outputs.tag_date }}"
+          STABILITY_DAYS="${{ steps.config.outputs.stability_days }}"
+          BLOCKING_COUNT="${{ steps.issues.outputs.blocking_count }}"
+
+          # Calculate days since RC release
+          TAG_EPOCH=$(date -d "${TAG_DATE}" +%s 2>/dev/null || date -jf "%Y-%m-%dT%H:%M:%S%z" "${TAG_DATE}" +%s)
+          NOW_EPOCH=$(date +%s)
+          DAYS_ELAPSED=$(( (NOW_EPOCH - TAG_EPOCH) / 86400 ))
+
+          echo "days_elapsed=${DAYS_ELAPSED}" >> "$GITHUB_OUTPUT"
+          echo "Days since latest RC: ${DAYS_ELAPSED}"
+
+          # Determine readiness
+          if [ "${BLOCKING_COUNT}" -gt 0 ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "reason=blocking_issues" >> "$GITHUB_OUTPUT"
+            echo "Status: NOT READY - ${BLOCKING_COUNT} blocking issue(s) found"
+          elif [ "${DAYS_ELAPSED}" -lt "${STABILITY_DAYS}" ]; then
+            REMAINING=$((STABILITY_DAYS - DAYS_ELAPSED))
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "reason=timer_pending" >> "$GITHUB_OUTPUT"
+            echo "remaining_days=${REMAINING}" >> "$GITHUB_OUTPUT"
+            echo "Status: NOT READY - ${REMAINING} days remaining in stability period"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "reason=all_clear" >> "$GITHUB_OUTPUT"
+            echo "Status: READY for stable release"
+          fi
+
+      - name: Generate stability report
+        if: steps.rc-tag.outputs.found == 'true'
+        run: |
+          echo "## RC Stability Report"
+          echo ""
+          echo "| Metric | Value |"
+          echo "|--------|-------|"
+          echo "| Latest RC Tag | ${{ steps.rc-tag.outputs.tag }} |"
+          echo "| RC Release Date | ${{ steps.rc-tag.outputs.tag_date }} |"
+          echo "| Days Elapsed | ${{ steps.stability.outputs.days_elapsed }} |"
+          echo "| Required Stability | ${{ steps.config.outputs.stability_days }} days |"
+          echo "| Critical Issues | ${{ steps.issues.outputs.critical_count }} |"
+          echo "| High Issues | ${{ steps.issues.outputs.high_count }} |"
+          echo "| Agent-Suspect (excluded) | ${{ steps.issues.outputs.agent_suspect_count }} |"
+          echo "| Ready for Stable | ${{ steps.stability.outputs.ready }} |"
+          echo ""
+          if [ "${{ steps.stability.outputs.ready }}" = "true" ]; then
+            echo "✅ All criteria met. Ready for stable release."
+          else
+            echo "⏳ Not yet ready: ${{ steps.stability.outputs.reason }}"
+          fi
+
+      - name: No RC tags found
+        if: steps.rc-tag.outputs.found != 'true'
+        run: |
+          echo "No RC release tags found. Stability monitoring is not applicable."
+          echo "RC tags should follow the pattern: <crate-name>@v<version>-rc.<N>"

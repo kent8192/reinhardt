@@ -3,7 +3,7 @@
 //! Provides utilities for managing HSTS headers and policies.
 
 /// HSTS configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HstsConfig {
 	/// HSTS max-age in seconds
 	pub max_age: u64,
@@ -114,6 +114,7 @@ impl Default for HstsConfig {
 /// let middleware = HstsMiddleware::new(config);
 /// assert_eq!(middleware.config().max_age, 31536000);
 /// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HstsMiddleware {
 	config: HstsConfig,
 }

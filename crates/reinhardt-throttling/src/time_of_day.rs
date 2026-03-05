@@ -21,24 +21,41 @@ pub struct TimeRange {
 impl TimeRange {
 	/// Creates a new time range
 	///
+	/// # Errors
+	///
+	/// Returns `ThrottleError::InvalidConfig` if either hour is outside 0-23.
+	///
 	/// # Examples
 	///
 	/// ```
 	/// use reinhardt_throttling::time_of_day::TimeRange;
 	///
 	/// // Peak hours: 9 AM to 5 PM
-	/// let peak = TimeRange::new(9, 17);
+	/// let peak = TimeRange::new(9, 17).unwrap();
 	/// assert_eq!(peak.start_hour, 9);
 	/// assert_eq!(peak.end_hour, 17);
+	///
+	/// // Invalid hour returns error
+	/// assert!(TimeRange::new(24, 10).is_err());
 	/// ```
-	pub fn new(start_hour: u8, end_hour: u8) -> Self {
-		assert!(start_hour < 24, "start_hour must be 0-23");
-		assert!(end_hour < 24, "end_hour must be 0-23");
+	pub fn new(start_hour: u8, end_hour: u8) -> ThrottleResult<Self> {
+		if start_hour >= 24 {
+			return Err(ThrottleError::InvalidConfig(format!(
+				"start_hour must be 0-23, got {}",
+				start_hour
+			)));
+		}
+		if end_hour >= 24 {
+			return Err(ThrottleError::InvalidConfig(format!(
+				"end_hour must be 0-23, got {}",
+				end_hour
+			)));
+		}
 
-		Self {
+		Ok(Self {
 			start_hour,
 			end_hour,
-		}
+		})
 	}
 
 	/// Check if the given hour is within this range
@@ -75,7 +92,7 @@ impl TimeOfDayConfig {
 	/// // Peak hours: 9 AM to 5 PM, 50 req/min
 	/// // Off-peak: 100 req/min
 	/// let config = TimeOfDayConfig::new(
-	///     TimeRange::new(9, 17),
+	///     TimeRange::new(9, 17).unwrap(),
 	///     (50, 60),
 	///     (100, 60)
 	/// );
@@ -114,7 +131,7 @@ impl TimeOfDayConfig {
 /// # tokio_test::block_on(async {
 /// let backend = Arc::new(MemoryBackend::new());
 /// let config = TimeOfDayConfig::new(
-///     TimeRange::new(9, 17),
+///     TimeRange::new(9, 17).unwrap(),
 ///     (50, 60),
 ///     (100, 60)
 /// );
@@ -139,7 +156,7 @@ impl<B: ThrottleBackend> TimeOfDayThrottle<B, SystemTimeProvider> {
 	///
 	/// let backend = Arc::new(MemoryBackend::new());
 	/// let config = TimeOfDayConfig::new(
-	///     TimeRange::new(9, 17),
+	///     TimeRange::new(9, 17).unwrap(),
 	///     (50, 60),
 	///     (100, 60)
 	/// );
@@ -227,7 +244,7 @@ mod tests {
 	#[rstest]
 	fn test_time_range_normal() {
 		// Arrange
-		let range = TimeRange::new(9, 17);
+		let range = TimeRange::new(9, 17).unwrap();
 
 		// Assert
 		assert!(range.contains(9));
@@ -240,7 +257,7 @@ mod tests {
 	#[rstest]
 	fn test_time_range_wrapping() {
 		// Arrange
-		let range = TimeRange::new(22, 2);
+		let range = TimeRange::new(22, 2).unwrap();
 
 		// Assert
 		assert!(range.contains(22));
@@ -255,7 +272,7 @@ mod tests {
 	#[rstest]
 	fn test_time_of_day_config_get_rate() {
 		// Arrange
-		let config = TimeOfDayConfig::new(TimeRange::new(9, 17), (50, 60), (100, 60));
+		let config = TimeOfDayConfig::new(TimeRange::new(9, 17).unwrap(), (50, 60), (100, 60));
 
 		// Assert - peak hours
 		assert_eq!(config.get_rate(9), (50, 60));
@@ -273,7 +290,7 @@ mod tests {
 	async fn test_time_of_day_throttle_basic() {
 		// Arrange
 		let backend = Arc::new(MemoryBackend::new());
-		let config = TimeOfDayConfig::new(TimeRange::new(9, 17), (5, 60), (10, 60));
+		let config = TimeOfDayConfig::new(TimeRange::new(9, 17).unwrap(), (5, 60), (10, 60));
 		let throttle = TimeOfDayThrottle::new(backend, config);
 
 		// Act
@@ -295,7 +312,7 @@ mod tests {
 		// Arrange
 		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
 		let backend = Arc::new(MemoryBackend::with_time_provider(time_provider.clone()));
-		let config = TimeOfDayConfig::new(TimeRange::new(9, 17), (5, 60), (10, 60));
+		let config = TimeOfDayConfig::new(TimeRange::new(9, 17).unwrap(), (5, 60), (10, 60));
 		let throttle = TimeOfDayThrottle::with_time_provider(backend, config, time_provider);
 
 		// Act
@@ -313,7 +330,7 @@ mod tests {
 	async fn test_time_of_day_throttle_get_rate() {
 		// Arrange
 		let backend = Arc::new(MemoryBackend::new());
-		let config = TimeOfDayConfig::new(TimeRange::new(9, 17), (50, 60), (100, 60));
+		let config = TimeOfDayConfig::new(TimeRange::new(9, 17).unwrap(), (50, 60), (100, 60));
 		let throttle = TimeOfDayThrottle::new(backend, config);
 
 		// Assert - should return peak rate as default
@@ -321,15 +338,33 @@ mod tests {
 	}
 
 	#[rstest]
-	#[should_panic(expected = "start_hour must be 0-23")]
 	fn test_time_range_invalid_start() {
-		TimeRange::new(24, 10);
+		// Act
+		let result = TimeRange::new(24, 10);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(
+			result
+				.unwrap_err()
+				.to_string()
+				.contains("start_hour must be 0-23")
+		);
 	}
 
 	#[rstest]
-	#[should_panic(expected = "end_hour must be 0-23")]
 	fn test_time_range_invalid_end() {
-		TimeRange::new(10, 24);
+		// Act
+		let result = TimeRange::new(10, 24);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(
+			result
+				.unwrap_err()
+				.to_string()
+				.contains("end_hour must be 0-23")
+		);
 	}
 
 	#[rstest]
@@ -344,7 +379,7 @@ mod tests {
 		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
 		time_provider.set_wall_clock_hour(mock_hour);
 		let backend = Arc::new(MemoryBackend::with_time_provider(time_provider.clone()));
-		let config = TimeOfDayConfig::new(TimeRange::new(9, 17), (5, 60), (10, 60));
+		let config = TimeOfDayConfig::new(TimeRange::new(9, 17).unwrap(), (5, 60), (10, 60));
 		let throttle = TimeOfDayThrottle::with_time_provider(backend, config, time_provider);
 
 		// Act
@@ -361,7 +396,7 @@ mod tests {
 		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
 		time_provider.set_wall_clock_hour(12);
 		let backend = Arc::new(MemoryBackend::with_time_provider(time_provider.clone()));
-		let config = TimeOfDayConfig::new(TimeRange::new(9, 17), (3, 60), (10, 60));
+		let config = TimeOfDayConfig::new(TimeRange::new(9, 17).unwrap(), (3, 60), (10, 60));
 		let throttle = TimeOfDayThrottle::with_time_provider(backend, config, time_provider);
 
 		// Act - should allow 3 requests (peak limit)
@@ -380,7 +415,7 @@ mod tests {
 		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
 		time_provider.set_wall_clock_hour(3);
 		let backend = Arc::new(MemoryBackend::with_time_provider(time_provider.clone()));
-		let config = TimeOfDayConfig::new(TimeRange::new(9, 17), (3, 60), (10, 60));
+		let config = TimeOfDayConfig::new(TimeRange::new(9, 17).unwrap(), (3, 60), (10, 60));
 		let throttle = TimeOfDayThrottle::with_time_provider(backend, config, time_provider);
 
 		// Act - should allow 10 requests (off-peak limit)

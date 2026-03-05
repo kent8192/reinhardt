@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.1.0-alpha.19...reinhardt-admin-cli@v0.1.0-rc.1) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-commands
+
+## [0.1.0-alpha.19](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.1.0-alpha.18...reinhardt-admin-cli@v0.1.0-alpha.19) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-commands, reinhardt-pages, reinhardt-dentdelion
+
+## [0.1.0-alpha.18](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.1.0-alpha.17...reinhardt-admin-cli@v0.1.0-alpha.18) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-pages, reinhardt-commands
+
+## [0.1.0-alpha.17](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.1.0-alpha.16...reinhardt-admin-cli@v0.1.0-alpha.17) - 2026-02-23
+
+### Maintenance
+
+- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
+
+## [0.1.0-alpha.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.1.0-alpha.15...reinhardt-admin-cli@v0.1.0-alpha.16) - 2026-02-23
+
+### Maintenance
+
+- updated the following local packages: reinhardt-pages, reinhardt-dentdelion, reinhardt-commands
+
+## [0.1.0-alpha.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.1.0-alpha.14...reinhardt-admin-cli@v0.1.0-alpha.15) - 2026-02-21
+
+### Fixed
+
+- fix .env parsing, AST formatter, and file safety issues
+- atomic file writes, preserve permissions, cleanup backups
+- add recursion depth guard to AST formatter
+- remove unused utility functions from utils module
+- apply rustfmt formatting to utils module
+- apply clippy fixes to utils module
+- add error handling and type coercion safety
+- add missing OpenOptionsExt import for secure backup creation
+- fix key zeroing, file perms, and value redaction in admin-cli (#650, #656, #658)
+
+### Security
+
+- fix TOCTOU, silent errors, unsafe unwrap, backup file exposure, and DoS limits
+- sanitize error messages to prevent information leakage
+- add input validation, file size limits, and TOCTOU mitigations
+
+### Changed
+
+- add template_type validation and bound project root search
+
+### Styling
+
+- fix pre-existing clippy warnings and apply rustfmt
+- apply rustfmt to pre-existing unformatted files
+- fix clippy warnings and formatting in files merged from main
+- apply formatting to files introduced by merge from main
+- fix remaining clippy warnings across workspace
+- apply rustfmt formatting to workspace files
+
 ## [0.1.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.1.0-alpha.13...reinhardt-admin-cli@v0.1.0-alpha.14) - 2026-02-16
 
 ### Maintenance

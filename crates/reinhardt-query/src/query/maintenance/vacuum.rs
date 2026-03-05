@@ -197,7 +197,6 @@ impl QueryStatementBuilder for VacuumStatement {
 		}
 		panic!("Unsupported query builder type");
 	}
-
 }
 
 impl QueryStatementWriter for VacuumStatement {}

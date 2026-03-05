@@ -148,10 +148,9 @@ pub(crate) fn extract_serde_rename_all(attrs: &[Attribute]) -> Option<String> {
 				}),
 				..
 			}) = nested_meta
+				&& path.is_ident("rename_all")
 			{
-				if path.is_ident("rename_all") {
-					return Some(lit_str.value());
-				}
+				return Some(lit_str.value());
 			}
 		}
 	}

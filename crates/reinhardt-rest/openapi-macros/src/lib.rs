@@ -113,7 +113,10 @@ fn derive_struct_schema(input: &DeriveInput, data: &syn::DataStruct) -> TokenStr
 		let field_type = &field.ty;
 
 		// Extract field attributes
-		let attrs = extract_field_attributes(&field.attrs);
+		let attrs = match extract_field_attributes(&field.attrs) {
+			Ok(attrs) => attrs,
+			Err(err) => return err.to_compile_error().into(),
+		};
 
 		// Fixes #837: Validate mutual exclusion of read_only and write_only
 		if attrs.read_only && attrs.write_only {
@@ -452,7 +455,7 @@ fn generate_variant_schema(
 				let field_type = &field.ty;
 
 				// Check for serde rename on field
-				let field_attrs = extract_field_attributes(&field.attrs);
+				let field_attrs = extract_field_attributes(&field.attrs).unwrap_or_default();
 				let property_name = field_attrs.rename.unwrap_or(field_name_str);
 
 				// Check if required

@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 /// Represents pagination metadata
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaginationMetadata {
 	pub count: usize,
 	pub next: Option<String>,
@@ -13,7 +13,7 @@ pub struct PaginationMetadata {
 }
 
 /// Paginated response wrapper
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaginatedResponse<T> {
 	pub count: usize,
 	pub next: Option<String>,
@@ -292,10 +292,10 @@ impl<T: Clone> Page<T> {
 	/// ```
 	/// use reinhardt_core::pagination::Page;
 	///
-	// For a large page range, ellipsis (None) are added
+	/// // For a large page range, ellipsis (None) are added
 	/// let page = Page::new(vec![1], 10, 20, 200, 10);
 	/// let elided = page.get_elided_page_range(2, 2);
-	// Result like: [Some(1), Some(2), None, Some(8), Some(9), Some(10), Some(11), Some(12), None, Some(19), Some(20)]
+	/// // Result like: [Some(1), Some(2), None, Some(8), Some(9), Some(10), Some(11), Some(12), None, Some(19), Some(20)]
 	/// assert!(elided.contains(&None)); // Contains ellipsis
 	/// assert!(elided.contains(&Some(10))); // Contains current page
 	/// ```
@@ -408,7 +408,7 @@ impl<'a, T: Clone> IntoIterator for &'a Page<T> {
 }
 
 /// Schema parameter for OpenAPI/documentation
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SchemaParameter {
 	pub name: String,
 	pub required: bool,

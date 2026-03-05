@@ -1,0 +1,6 @@
+{%- set data = load_data(url="https://crates.io/api/v1/crates/reinhardt-web", format="json", headers=["User-Agent=reinhardt-web-site (zola)"], required=false) -%}
+{%- if data and data.crate -%}
+{{- data.crate.max_version -}}
+{%- else -%}
+{{- config.extra.reinhardt_version -}}
+{%- endif -%}

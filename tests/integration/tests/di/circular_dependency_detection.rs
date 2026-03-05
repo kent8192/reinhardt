@@ -3,7 +3,7 @@
 //! This test suite verifies the automatic circular dependency detection functionality
 //! of the DI system.
 
-use reinhardt_di::{injectable, DiError, Injected, InjectionContext, SingletonScope};
+use reinhardt_di::{DiError, Injected, InjectionContext, SingletonScope, injectable};
 use std::sync::Arc;
 
 /// Test fixture: ServiceA (depends on ServiceB)

@@ -157,7 +157,11 @@ impl BaseCommand for MigrateCommand {
 				all_migrations.into_iter().collect()
 			};
 			if migrations_to_apply.is_empty() {
-				ctx.info("No migrations to apply");
+				ctx.info(
+					"No migrations to apply. \
+					 (Migration files must be .rs files in the migrations/<app_label>/ directory. \
+					 Use `makemigrations` to generate them.)",
+				);
 				return Ok(());
 			}
 
@@ -768,7 +772,12 @@ impl BaseCommand for MakeMigrationsCommand {
 							Vec::new() // Initial migration has no dependencies
 						} else {
 							// Get previous migration number
-							let prev_number_int = migration_number.parse::<u32>().unwrap() - 1;
+							let prev_number_int = migration_number.parse::<u32>().map_err(|e| {
+								CommandError::ParseError(format!(
+									"invalid migration number '{}': {}",
+									migration_number, e
+								))
+							})? - 1;
 							let prev_number = format!("{:04}", prev_number_int);
 							// Find the previous migration by scanning the directory
 							let prev_migration_name = if let Ok(entries) =
@@ -1262,7 +1271,8 @@ impl RunServerCommand {
 		let router = if !no_docs {
 			use reinhardt_http::Handler;
 			use reinhardt_openapi::OpenApiRouter;
-			let wrapped = OpenApiRouter::wrap(base_router);
+			let wrapped = OpenApiRouter::wrap(base_router)
+				.map_err(|e| format!("Failed to initialize OpenAPI router: {}", e))?;
 			std::sync::Arc::new(wrapped) as std::sync::Arc<dyn Handler>
 		} else {
 			base_router
@@ -1298,9 +1308,17 @@ impl RunServerCommand {
 		// Register DatabaseConnection as singleton when database feature is enabled
 		#[cfg(feature = "reinhardt-db")]
 		{
+			// Check if DATABASE_URL was explicitly set in the environment before resolution
+			let env_database_url = std::env::var("DATABASE_URL").ok();
+
 			// Try to connect to database and register connection
 			match get_database_url() {
 				Ok(url) => {
+					// Sync DATABASE_URL to environment so all connection paths use the same URL.
+					// This prevents divergence where the ORM uses settings.toml but other code
+					// (e.g., sqlx::AnyPool, ModelViewSetHandler) reads DATABASE_URL directly.
+					sync_database_url_to_env(env_database_url.as_deref(), &url, ctx);
+
 					// Initialize ORM global database first, which also creates the connection pool
 					match reinhardt_db::orm::init_database(&url).await {
 						Ok(()) => {
@@ -1313,7 +1331,7 @@ impl RunServerCommand {
 									singleton_scope.set(db_conn);
 									ctx.info(&format!(
 										"💾 Database: {} (connected)",
-										&url[..url.len().min(30)]
+										sanitize_database_url(&url)
 									));
 								}
 								Err(e) => {
@@ -1980,6 +1998,57 @@ impl CheckCommand {
 	}
 }
 
+/// Syncs the `DATABASE_URL` environment variable from the resolved settings URL when
+/// it is not already set, or warns if the environment value differs from settings.
+///
+/// This ensures that all database connection paths (ORM, sqlx pools, etc.) use the
+/// same URL derived from a single configuration source.
+#[cfg(feature = "reinhardt-db")]
+fn sync_database_url_to_env(
+	env_database_url: Option<&str>,
+	resolved_url: &str,
+	ctx: &CommandContext,
+) {
+	if env_database_url.is_none() {
+		// SAFETY: Called before spawning server threads. The tokio runtime is
+		// running but no request-handling tasks have been spawned yet, so no
+		// concurrent reads of this env var are possible at this point.
+		unsafe {
+			std::env::set_var("DATABASE_URL", resolved_url);
+		}
+		ctx.verbose("Synced DATABASE_URL from settings configuration");
+	} else if let Some(env_url) = env_database_url {
+		// Both env var and settings exist - warn if they differ
+		if let Ok(settings_url) = get_database_url_from_settings()
+			&& env_url != settings_url
+		{
+			ctx.warning(&format!(
+				"⚠️ DATABASE_URL mismatch: env var ({}) differs from settings ({}). Using env var.",
+				sanitize_database_url(env_url),
+				sanitize_database_url(&settings_url),
+			));
+		}
+	}
+}
+
+/// Sanitizes a database URL for display, removing credentials.
+///
+/// Replaces `user:password@` with `***@` to prevent credential leakage
+/// in logs and startup banners.
+#[cfg(feature = "reinhardt-db")]
+fn sanitize_database_url(url: &str) -> String {
+	// Match scheme://user:pass@host pattern and redact credentials
+	if let Some(scheme_end) = url.find("://") {
+		let after_scheme = &url[scheme_end + 3..];
+		if let Some(at_pos) = after_scheme.find('@') {
+			let host_part = &after_scheme[at_pos..];
+			return format!("{}://***{}", &url[..scheme_end], host_part);
+		}
+	}
+	// For non-URL formats (e.g., sqlite:file.db), return as-is
+	url.to_string()
+}
+
 /// Helper function to get DATABASE_URL from environment or settings
 #[cfg(feature = "reinhardt-db")]
 fn get_database_url() -> Result<String, crate::CommandError> {
@@ -1989,6 +2058,92 @@ fn get_database_url() -> Result<String, crate::CommandError> {
 	DatabaseConnection::get_database_url_from_env_or_settings(base_dir).map_err(|e| {
 		crate::CommandError::ExecutionError(format!("Failed to get database URL: {}", e))
 	})
+}
+
+/// Helper function to get DATABASE_URL from settings files only (ignoring env var).
+///
+/// Used for startup validation to detect configuration mismatches between
+/// the `DATABASE_URL` environment variable and `settings/*.toml` files.
+#[cfg(feature = "reinhardt-db")]
+fn get_database_url_from_settings() -> Result<String, crate::CommandError> {
+	use std::env;
+
+	let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| "local".to_string());
+	let profile = reinhardt_conf::settings::profile::Profile::parse(&profile_str);
+
+	let base_dir = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+	let settings_dir = base_dir.join("settings");
+
+	let merged = reinhardt_conf::settings::builder::SettingsBuilder::new()
+		.profile(profile)
+		.add_source(
+			reinhardt_conf::settings::sources::DefaultSource::new()
+				.with_value("debug", serde_json::Value::Bool(false))
+				.with_value(
+					"language_code",
+					serde_json::Value::String("en-us".to_string()),
+				)
+				.with_value("time_zone", serde_json::Value::String("UTC".to_string())),
+		)
+		.add_source(
+			reinhardt_conf::settings::sources::LowPriorityEnvSource::new()
+				.with_prefix("REINHARDT_"),
+		)
+		.add_source(reinhardt_conf::settings::sources::TomlFileSource::new(
+			settings_dir.join("base.toml"),
+		))
+		.add_source(reinhardt_conf::settings::sources::TomlFileSource::new(
+			settings_dir.join(format!("{}.toml", profile_str)),
+		))
+		.build()
+		.map_err(|e| {
+			crate::CommandError::ExecutionError(format!("Failed to load settings: {}", e))
+		})?;
+
+	// Extract database configuration from settings
+	let db_config: reinhardt_conf::settings::DatabaseConfig =
+		if let Some(db_val) = merged.get_raw("database") {
+			serde_json::from_value(db_val.clone()).ok().or_else(|| {
+				if let serde_json::Value::Object(db_map) = db_val {
+					let engine = db_map
+						.get("engine")
+						.and_then(|v| v.as_str())
+						.unwrap_or("sqlite")
+						.to_string();
+					let name = db_map
+						.get("name")
+						.and_then(|v| v.as_str())
+						.map(|s| s.to_string())
+						.unwrap_or_else(|| "db.sqlite3".to_string());
+
+					let mut config = reinhardt_conf::settings::DatabaseConfig::new(engine, name);
+					if let Some(user) = db_map.get("user").and_then(|v| v.as_str()) {
+						config = config.with_user(user);
+					}
+					if let Some(password) = db_map.get("password").and_then(|v| v.as_str()) {
+						config = config.with_password(password);
+					}
+					if let Some(host) = db_map.get("host").and_then(|v| v.as_str()) {
+						config = config.with_host(host);
+					}
+					if let Some(port) = db_map.get("port").and_then(|v| v.as_u64()) {
+						config = config.with_port(port as u16);
+					}
+					Some(config)
+				} else {
+					None
+				}
+			})
+		} else {
+			None
+		}
+		.ok_or_else(|| {
+			crate::CommandError::ExecutionError(
+				"No database configuration found in settings files".to_string(),
+			)
+		})?;
+
+	Ok(db_config.to_url())
 }
 
 /// Helper function to connect to database
@@ -2699,6 +2854,229 @@ mod tests {
 
 		// Should succeed (command is processed and returned)
 		assert!(result.is_ok());
+	}
+
+	#[cfg(feature = "reinhardt-db")]
+	mod database_config_unification_tests {
+		use super::*;
+		use rstest::rstest;
+		use serial_test::serial;
+
+		#[rstest]
+		fn test_sanitize_database_url_redacts_credentials() {
+			// Arrange
+			let url = "postgresql://user:secret@localhost:5432/mydb";
+
+			// Act
+			let sanitized = sanitize_database_url(url);
+
+			// Assert
+			assert_eq!(sanitized, "postgresql://***@localhost:5432/mydb");
+		}
+
+		#[rstest]
+		fn test_sanitize_database_url_preserves_sqlite() {
+			// Arrange
+			let url = "sqlite:db.sqlite3";
+
+			// Act
+			let sanitized = sanitize_database_url(url);
+
+			// Assert
+			assert_eq!(sanitized, "sqlite:db.sqlite3");
+		}
+
+		#[rstest]
+		fn test_sanitize_database_url_memory_sqlite() {
+			// Arrange
+			let url = "sqlite::memory:";
+
+			// Act
+			let sanitized = sanitize_database_url(url);
+
+			// Assert
+			assert_eq!(sanitized, "sqlite::memory:");
+		}
+
+		#[rstest]
+		#[serial(env_database_url)]
+		fn test_get_database_url_from_settings_with_toml() {
+			// Arrange
+			let temp_dir = tempfile::TempDir::new().unwrap();
+			let settings_dir = temp_dir.path().join("settings");
+			std::fs::create_dir_all(&settings_dir).unwrap();
+
+			// Create a base.toml with database config
+			let toml_content = r#"
+[database]
+engine = "postgresql"
+name = "testdb"
+user = "testuser"
+password = "testpass"
+host = "localhost"
+port = 5432
+"#;
+			std::fs::write(settings_dir.join("base.toml"), toml_content).unwrap();
+			std::fs::write(settings_dir.join("local.toml"), "").unwrap();
+
+			// Change to the temp directory
+			let original_dir = std::env::current_dir().unwrap();
+			std::env::set_current_dir(temp_dir.path()).unwrap();
+
+			// Remove DATABASE_URL to ensure settings-only resolution
+			let original_db_url = std::env::var("DATABASE_URL").ok();
+			unsafe { std::env::remove_var("DATABASE_URL") };
+
+			// Act
+			let result = get_database_url_from_settings();
+
+			// Assert
+			assert!(
+				result.is_ok(),
+				"get_database_url_from_settings failed: {:?}",
+				result.err()
+			);
+			let url = result.unwrap();
+			assert!(
+				url.starts_with("postgresql://"),
+				"Expected postgresql:// URL, got: {}",
+				url
+			);
+			assert!(url.contains("testdb"), "URL should contain database name");
+
+			// Cleanup
+			if let Some(db_url) = original_db_url {
+				unsafe { std::env::set_var("DATABASE_URL", db_url) };
+			}
+			std::env::set_current_dir(original_dir).unwrap();
+		}
+
+		#[rstest]
+		#[serial(env_database_url)]
+		fn test_get_database_url_from_settings_returns_error_without_config() {
+			// Arrange
+			let temp_dir = tempfile::TempDir::new().unwrap();
+			let settings_dir = temp_dir.path().join("settings");
+			std::fs::create_dir_all(&settings_dir).unwrap();
+
+			// Create empty settings files (no database config)
+			std::fs::write(settings_dir.join("base.toml"), "").unwrap();
+			std::fs::write(settings_dir.join("local.toml"), "").unwrap();
+
+			let original_dir = std::env::current_dir().unwrap();
+			std::env::set_current_dir(temp_dir.path()).unwrap();
+
+			let original_db_url = std::env::var("DATABASE_URL").ok();
+			unsafe { std::env::remove_var("DATABASE_URL") };
+
+			// Act
+			let result = get_database_url_from_settings();
+
+			// Assert
+			assert!(
+				result.is_err(),
+				"Expected error when no database config exists"
+			);
+
+			// Cleanup
+			if let Some(db_url) = original_db_url {
+				unsafe { std::env::set_var("DATABASE_URL", db_url) };
+			}
+			std::env::set_current_dir(original_dir).unwrap();
+		}
+
+		#[rstest]
+		#[serial(env_database_url)]
+		fn test_get_database_url_prefers_env_var() {
+			// Arrange
+			let temp_dir = tempfile::TempDir::new().unwrap();
+			let settings_dir = temp_dir.path().join("settings");
+			std::fs::create_dir_all(&settings_dir).unwrap();
+
+			let toml_content = r#"
+[database]
+engine = "postgresql"
+name = "settings_db"
+user = "user"
+password = "pass"
+host = "localhost"
+port = 5432
+"#;
+			std::fs::write(settings_dir.join("base.toml"), toml_content).unwrap();
+			std::fs::write(settings_dir.join("local.toml"), "").unwrap();
+
+			let original_dir = std::env::current_dir().unwrap();
+			std::env::set_current_dir(temp_dir.path()).unwrap();
+
+			let env_url = "postgresql://envuser:envpass@envhost:5433/envdb";
+			unsafe { std::env::set_var("DATABASE_URL", env_url) };
+
+			// Act
+			let result = get_database_url();
+
+			// Assert
+			assert!(result.is_ok());
+			assert_eq!(result.unwrap(), env_url);
+
+			// Cleanup
+			unsafe { std::env::remove_var("DATABASE_URL") };
+			std::env::set_current_dir(original_dir).unwrap();
+		}
+
+		#[rstest]
+		#[serial(env_database_url)]
+		fn test_sync_database_url_to_env_sets_env_when_not_present() {
+			// Arrange: DATABASE_URL not set
+			let original_db_url = std::env::var("DATABASE_URL").ok();
+			unsafe { std::env::remove_var("DATABASE_URL") };
+
+			let resolved_url = "postgresql://user:pass@localhost:5432/testdb";
+			let ctx = CommandContext::default();
+
+			// Act
+			sync_database_url_to_env(None, resolved_url, &ctx);
+
+			// Assert: DATABASE_URL is now set to resolved_url
+			let result = std::env::var("DATABASE_URL");
+			assert!(result.is_ok(), "DATABASE_URL should be set after sync");
+			assert_eq!(result.unwrap(), resolved_url);
+
+			// Cleanup
+			unsafe { std::env::remove_var("DATABASE_URL") };
+			if let Some(url) = original_db_url {
+				unsafe { std::env::set_var("DATABASE_URL", url) };
+			}
+		}
+
+		#[rstest]
+		#[serial(env_database_url)]
+		fn test_sync_database_url_to_env_does_not_override_existing_env_var() {
+			// Arrange: DATABASE_URL already set - env var takes precedence
+			let original_db_url = std::env::var("DATABASE_URL").ok();
+			let existing_env_url = "postgresql://envuser:envpass@envhost:5433/envdb";
+			unsafe { std::env::set_var("DATABASE_URL", existing_env_url) };
+
+			let resolved_url = "postgresql://settingsuser:settingspass@localhost:5432/settingsdb";
+			let ctx = CommandContext::default();
+
+			// Act
+			sync_database_url_to_env(Some(existing_env_url), resolved_url, &ctx);
+
+			// Assert: DATABASE_URL remains unchanged (env var takes precedence)
+			let result = std::env::var("DATABASE_URL");
+			assert!(result.is_ok());
+			assert_eq!(
+				result.unwrap(),
+				existing_env_url,
+				"DATABASE_URL should not be changed when env var is already set"
+			);
+
+			// Cleanup
+			unsafe { std::env::remove_var("DATABASE_URL") };
+			if let Some(url) = original_db_url {
+				unsafe { std::env::set_var("DATABASE_URL", url) };
+			}
+		}
 	}
 
 	#[cfg(all(feature = "server", feature = "autoreload"))]

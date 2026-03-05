@@ -146,7 +146,7 @@ impl<M> FuzzySearchFilter<M> {
 	///
 	/// let filter: FuzzySearchFilter<User> = FuzzySearchFilter::new()
 	///     .query("Jon Doe");
-	/// assert_eq!(filter.get_query(), "Jon Doe");
+	/// assert_eq!(filter.query, "Jon Doe");
 	/// ```
 	pub fn query(mut self, query: impl Into<String>) -> Self {
 		self.query = query.into();
@@ -167,7 +167,7 @@ impl<M> FuzzySearchFilter<M> {
 	///
 	/// let filter: FuzzySearchFilter<User> = FuzzySearchFilter::new()
 	///     .field("name");
-	/// assert_eq!(filter.get_field(), "name");
+	/// assert_eq!(filter.field, "name");
 	/// ```
 	pub fn field(mut self, field: impl Into<String>) -> Self {
 		self.field = field.into();
@@ -188,7 +188,7 @@ impl<M> FuzzySearchFilter<M> {
 	///
 	/// let filter: FuzzySearchFilter<User> = FuzzySearchFilter::new()
 	///     .threshold(0.9);
-	/// assert_eq!(filter.get_threshold(), 0.9);
+	/// assert_eq!(filter.threshold, 0.9);
 	/// ```
 	pub fn threshold(mut self, threshold: f64) -> Self {
 		self.threshold = threshold.clamp(0.0, 1.0);
@@ -209,7 +209,7 @@ impl<M> FuzzySearchFilter<M> {
 	///
 	/// let filter: FuzzySearchFilter<User> = FuzzySearchFilter::new()
 	///     .algorithm(FuzzyAlgorithm::JaroWinkler);
-	/// assert_eq!(filter.get_algorithm(), FuzzyAlgorithm::JaroWinkler);
+	/// assert_eq!(filter.algorithm, FuzzyAlgorithm::JaroWinkler);
 	/// ```
 	pub fn algorithm(mut self, algorithm: FuzzyAlgorithm) -> Self {
 		self.algorithm = algorithm;
@@ -230,7 +230,7 @@ impl<M> FuzzySearchFilter<M> {
 	///
 	/// let filter: FuzzySearchFilter<User> = FuzzySearchFilter::new()
 	///     .max_distance(2);
-	/// assert_eq!(filter.get_max_distance(), Some(2));
+	/// assert_eq!(filter.max_distance, Some(2));
 	/// ```
 	pub fn max_distance(mut self, distance: usize) -> Self {
 		self.max_distance = Some(distance);
@@ -272,46 +272,16 @@ impl<M> FuzzySearchFilter<M> {
 	///
 	/// let filter: FuzzySearchFilter<User> = FuzzySearchFilter::new()
 	///     .prefix_length(6);
-	/// assert_eq!(filter.get_prefix_length(), 6);
+	/// assert_eq!(filter.prefix_length, 6);
 	/// ```
 	pub fn prefix_length(mut self, length: usize) -> Self {
 		self.prefix_length = length;
 		self
 	}
 
-	/// Get the search query
-	pub fn get_query(&self) -> &str {
-		&self.query
-	}
-
-	/// Get the field to search in
-	pub fn get_field(&self) -> &str {
-		&self.field
-	}
-
-	/// Get the similarity threshold
-	pub fn get_threshold(&self) -> f64 {
-		self.threshold
-	}
-
-	/// Get the fuzzy matching algorithm
-	pub fn get_algorithm(&self) -> FuzzyAlgorithm {
-		self.algorithm
-	}
-
-	/// Get the maximum edit distance
-	pub fn get_max_distance(&self) -> Option<usize> {
-		self.max_distance
-	}
-
 	/// Check if case sensitive
 	pub fn is_case_sensitive(&self) -> bool {
 		self.case_sensitive
-	}
-
-	/// Get the prefix length for Jaro-Winkler
-	pub fn get_prefix_length(&self) -> usize {
-		self.prefix_length
 	}
 
 	/// Calculate similarity between two strings
@@ -540,8 +510,8 @@ impl<M> FuzzySearchFilter<M> {
 	}
 
 	fn trigram_similarity(&self, a: &str, b: &str) -> f64 {
-		let a_trigrams = self.get_trigrams(a);
-		let b_trigrams = self.get_trigrams(b);
+		let a_trigrams = self.trigrams(a);
+		let b_trigrams = self.trigrams(b);
 
 		if a_trigrams.is_empty() && b_trigrams.is_empty() {
 			return 1.0;
@@ -556,7 +526,7 @@ impl<M> FuzzySearchFilter<M> {
 		(2.0 * common as f64) / total as f64
 	}
 
-	fn get_trigrams(&self, s: &str) -> Vec<String> {
+	fn trigrams(&self, s: &str) -> Vec<String> {
 		let chars: Vec<char> = s.chars().collect();
 		if chars.len() < 3 {
 			return vec![];
@@ -890,11 +860,11 @@ mod tests {
 	#[test]
 	fn test_filter_creation() {
 		let filter: FuzzySearchFilter<User> = FuzzySearchFilter::new();
-		assert_eq!(filter.get_query(), "");
-		assert_eq!(filter.get_field(), "");
-		assert_eq!(filter.get_threshold(), 0.8);
-		assert_eq!(filter.get_algorithm(), FuzzyAlgorithm::Levenshtein);
-		assert_eq!(filter.get_max_distance(), None);
+		assert_eq!(filter.query, "");
+		assert_eq!(filter.field, "");
+		assert_eq!(filter.threshold, 0.8);
+		assert_eq!(filter.algorithm, FuzzyAlgorithm::Levenshtein);
+		assert_eq!(filter.max_distance, None);
 		assert!(!filter.is_case_sensitive());
 	}
 
@@ -909,22 +879,22 @@ mod tests {
 			.case_sensitive(true)
 			.prefix_length(6);
 
-		assert_eq!(filter.get_query(), "Jon Doe");
-		assert_eq!(filter.get_field(), "name");
-		assert_eq!(filter.get_threshold(), 0.9);
-		assert_eq!(filter.get_algorithm(), FuzzyAlgorithm::JaroWinkler);
-		assert_eq!(filter.get_max_distance(), Some(2));
+		assert_eq!(filter.query, "Jon Doe");
+		assert_eq!(filter.field, "name");
+		assert_eq!(filter.threshold, 0.9);
+		assert_eq!(filter.algorithm, FuzzyAlgorithm::JaroWinkler);
+		assert_eq!(filter.max_distance, Some(2));
 		assert!(filter.is_case_sensitive());
-		assert_eq!(filter.get_prefix_length(), 6);
+		assert_eq!(filter.prefix_length, 6);
 	}
 
 	#[test]
 	fn test_threshold_clamping() {
 		let filter1: FuzzySearchFilter<User> = FuzzySearchFilter::new().threshold(1.5);
-		assert_eq!(filter1.get_threshold(), 1.0);
+		assert_eq!(filter1.threshold, 1.0);
 
 		let filter2: FuzzySearchFilter<User> = FuzzySearchFilter::new().threshold(-0.5);
-		assert_eq!(filter2.get_threshold(), 0.0);
+		assert_eq!(filter2.threshold, 0.0);
 	}
 
 	#[test]
@@ -1013,7 +983,7 @@ mod tests {
 	#[test]
 	fn test_get_trigrams() {
 		let filter: FuzzySearchFilter<User> = FuzzySearchFilter::new();
-		let trigrams = filter.get_trigrams("hello");
+		let trigrams = filter.trigrams("hello");
 		assert_eq!(trigrams.len(), 3);
 		assert!(trigrams.contains(&"hel".to_string()));
 		assert!(trigrams.contains(&"ell".to_string()));

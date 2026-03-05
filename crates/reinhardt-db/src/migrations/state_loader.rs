@@ -24,7 +24,7 @@ use super::{
 /// ```rust,no_run
 /// use reinhardt_db::migrations::{MigrationStateLoader, DatabaseMigrationRecorder, FilesystemSource};
 /// async fn example() -> reinhardt_db::migrations::Result<()> {
-///     let connection = reinhardt_db::backends::DatabaseConnection::connect_sqlite("sqlite::memory:").await.unwrap();
+///     let connection = reinhardt_db::backends::DatabaseConnection::connect_postgres("postgres://localhost/mydb").await.unwrap();
 ///     let recorder = DatabaseMigrationRecorder::new(connection);
 ///     let source = FilesystemSource::new("./migrations");
 ///     let loader = MigrationStateLoader::new(recorder, source);
@@ -244,6 +244,7 @@ impl<S: MigrationSource> MigrationStateLoader<S> {
 }
 
 #[cfg(test)]
+#[cfg(feature = "sqlite")]
 mod tests {
 	use super::*;
 	use crate::migrations::FieldType;

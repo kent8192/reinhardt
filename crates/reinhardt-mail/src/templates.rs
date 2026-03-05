@@ -4,6 +4,7 @@
 //! dynamic email content. It supports both plain text and HTML emails.
 
 use crate::{EmailMessage, EmailResult};
+use reinhardt_core::security::escape_html;
 use std::collections::HashMap;
 
 /// Context for template rendering
@@ -119,12 +120,13 @@ impl TemplateEmailBuilder {
 	/// Build the email message with rendered templates using simple string replacement
 	///
 	/// This is a simple implementation that replaces `{{key}}` with values from context.
+	/// Values in HTML templates are automatically HTML-escaped to prevent XSS.
 	/// For more advanced template rendering, integrate with a template engine like Tera.
 	pub fn build(self) -> EmailResult<EmailMessage> {
-		let subject = self.render_simple(&self.subject_template)?;
-		let body = self.render_simple(&self.body_template)?;
+		let subject = self.render_simple(&self.subject_template, false)?;
+		let body = self.render_simple(&self.body_template, false)?;
 		let html_body = if let Some(html_template) = &self.html_template {
-			Some(self.render_simple(html_template)?)
+			Some(self.render_simple(html_template, true)?)
 		} else {
 			None
 		};
@@ -157,18 +159,20 @@ impl TemplateEmailBuilder {
 	/// Simple template rendering using string replacement
 	///
 	/// Replaces `{{key}}` with the corresponding value from the context.
-	fn render_simple(&self, template: &str) -> EmailResult<String> {
+	/// When `html_escape` is true, dynamic values are HTML-escaped to prevent XSS.
+	fn render_simple(&self, template: &str, html_escape: bool) -> EmailResult<String> {
 		let mut result = template.to_string();
 
 		for (key, value) in &self.context {
 			let placeholder = format!("{{{{{}}}}}", key);
-			let replacement = match value {
+			let raw = match value {
 				serde_json::Value::String(s) => s.clone(),
 				serde_json::Value::Number(n) => n.to_string(),
 				serde_json::Value::Bool(b) => b.to_string(),
 				serde_json::Value::Null => String::new(),
 				_ => value.to_string(),
 			};
+			let replacement = if html_escape { escape_html(&raw) } else { raw };
 
 			result = result.replace(&placeholder, &replacement);
 		}
@@ -185,6 +189,8 @@ impl Default for TemplateEmailBuilder {
 
 /// Render a template string with context using simple string replacement
 ///
+/// When `html_escape` is true, dynamic values are HTML-escaped to prevent XSS.
+///
 /// # Examples
 ///
 /// ```
@@ -194,21 +200,26 @@ impl Default for TemplateEmailBuilder {
 /// context.insert("name".to_string(), "Alice".into());
 /// context.insert("age".to_string(), 30.into());
 ///
-/// let result = render_template("Hello {{name}}, you are {{age}} years old.", &context).unwrap();
+/// let result = render_template("Hello {{name}}, you are {{age}} years old.", &context, false).unwrap();
 /// assert_eq!(result, "Hello Alice, you are 30 years old.");
 /// ```
-pub fn render_template(template: &str, context: &TemplateContext) -> EmailResult<String> {
+pub fn render_template(
+	template: &str,
+	context: &TemplateContext,
+	html_escape: bool,
+) -> EmailResult<String> {
 	let mut result = template.to_string();
 
 	for (key, value) in context {
 		let placeholder = format!("{{{{{}}}}}", key);
-		let replacement = match value {
+		let raw = match value {
 			serde_json::Value::String(s) => s.clone(),
 			serde_json::Value::Number(n) => n.to_string(),
 			serde_json::Value::Bool(b) => b.to_string(),
 			serde_json::Value::Null => String::new(),
 			_ => value.to_string(),
 		};
+		let replacement = if html_escape { escape_html(&raw) } else { raw };
 
 		result = result.replace(&placeholder, &replacement);
 	}
@@ -219,33 +230,77 @@ pub fn render_template(template: &str, context: &TemplateContext) -> EmailResult
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	#[test]
+	#[rstest]
 	fn test_render_template() {
+		// Arrange
 		let mut context = TemplateContext::new();
 		context.insert("name".to_string(), "Alice".into());
 		context.insert("age".to_string(), 30.into());
 
-		let result =
-			render_template("Hello {{name}}, you are {{age}} years old.", &context).unwrap();
+		// Act
+		let result = render_template(
+			"Hello {{name}}, you are {{age}} years old.",
+			&context,
+			false,
+		)
+		.unwrap();
+
+		// Assert
 		assert_eq!(result, "Hello Alice, you are 30 years old.");
 	}
 
-	#[test]
+	#[rstest]
 	fn test_render_template_with_boolean() {
+		// Arrange
 		let mut context = TemplateContext::new();
 		context.insert("active".to_string(), true.into());
 
-		let result = render_template("Account active: {{active}}", &context).unwrap();
+		// Act
+		let result = render_template("Account active: {{active}}", &context, false).unwrap();
+
+		// Assert
 		assert_eq!(result, "Account active: true");
 	}
 
-	#[test]
+	#[rstest]
+	fn test_render_template_html_escaping() {
+		// Arrange
+		let mut context = TemplateContext::new();
+		context.insert("name".to_string(), "<script>alert('xss')</script>".into());
+
+		// Act
+		let result = render_template("<p>Hello {{name}}</p>", &context, true).unwrap();
+
+		// Assert
+		assert_eq!(
+			result,
+			"<p>Hello &lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;</p>"
+		);
+	}
+
+	#[rstest]
+	fn test_render_template_no_escape_when_disabled() {
+		// Arrange
+		let mut context = TemplateContext::new();
+		context.insert("name".to_string(), "<b>bold</b>".into());
+
+		// Act
+		let result = render_template("Hello {{name}}", &context, false).unwrap();
+
+		// Assert
+		assert_eq!(result, "Hello <b>bold</b>");
+	}
+
+	#[rstest]
 	fn test_template_email_builder() {
+		// Arrange
 		let mut context = TemplateContext::new();
 		context.insert("name".to_string(), "Bob".into());
 		context.insert("order_id".to_string(), "12345".into());
 
+		// Act
 		let email = TemplateEmailBuilder::new()
 			.from("orders@example.com")
 			.to(vec!["customer@example.com".to_string()])
@@ -255,15 +310,18 @@ mod tests {
 			.build()
 			.unwrap();
 
+		// Assert
 		assert_eq!(email.subject(), "Order 12345 Confirmation");
 		assert_eq!(email.body(), "Hello Bob, your order 12345 is confirmed.");
 	}
 
-	#[test]
+	#[rstest]
 	fn test_template_email_builder_with_html() {
+		// Arrange
 		let mut context = TemplateContext::new();
 		context.insert("name".to_string(), "Charlie".into());
 
+		// Act
 		let email = TemplateEmailBuilder::new()
 			.from("noreply@example.com")
 			.to(vec!["user@example.com".to_string()])
@@ -274,12 +332,39 @@ mod tests {
 			.build()
 			.unwrap();
 
+		// Assert
 		assert_eq!(email.subject(), "Welcome Charlie");
 		assert_eq!(email.html_body(), Some("<h1>Welcome Charlie</h1>"));
 	}
 
-	#[test]
+	#[rstest]
+	fn test_template_email_builder_html_escapes_xss() {
+		// Arrange
+		let mut context = TemplateContext::new();
+		context.insert("name".to_string(), "<script>alert('xss')</script>".into());
+
+		// Act
+		let email = TemplateEmailBuilder::new()
+			.from("noreply@example.com")
+			.to(vec!["user@example.com".to_string()])
+			.subject_template("Welcome")
+			.body_template("Hello {{name}}")
+			.html_template("<h1>Hello {{name}}</h1>")
+			.context(context)
+			.build()
+			.unwrap();
+
+		// Assert - HTML body should be escaped, plain text body should not
+		assert_eq!(email.body(), "Hello <script>alert('xss')</script>");
+		assert_eq!(
+			email.html_body(),
+			Some("<h1>Hello &lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;</h1>")
+		);
+	}
+
+	#[rstest]
 	fn test_add_context() {
+		// Arrange / Act
 		let email = TemplateEmailBuilder::new()
 			.from("test@example.com")
 			.to(vec!["user@example.com".to_string()])
@@ -290,6 +375,7 @@ mod tests {
 			.build()
 			.unwrap();
 
+		// Assert
 		assert_eq!(email.subject(), "Test Value1");
 		assert_eq!(email.body(), "Body Value2");
 	}

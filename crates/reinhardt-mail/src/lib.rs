@@ -199,6 +199,7 @@ pub use backends::{
 };
 pub use message::{Alternative, Attachment, EmailMessage, EmailMessageBuilder};
 pub use utils::{mail_admins, mail_managers, send_mail, send_mail_with_backend, send_mass_mail};
+pub use validation::MAX_EMAIL_LENGTH;
 
 #[derive(Debug, Error)]
 pub enum EmailError {
@@ -228,6 +229,18 @@ pub enum EmailError {
 
 	#[error("Header injection attempt detected: {0}")]
 	HeaderInjection(String),
+}
+
+impl EmailError {
+	/// Returns true if this is a transient error that can be safely suppressed
+	/// by fail_silently mode.
+	///
+	/// Configuration errors, authentication failures, and security errors
+	/// are never considered transient and will always propagate even when
+	/// fail_silently is enabled.
+	pub fn is_transient(&self) -> bool {
+		matches!(self, EmailError::IoError(_) | EmailError::SmtpError(_))
+	}
 }
 
 pub type EmailResult<T> = std::result::Result<T, EmailError>;

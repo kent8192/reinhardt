@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query-macros@v0.1.0-rc.1...reinhardt-query-macros@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(meta)* fix workspace inheritance and authors metadata
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query-macros@v0.1.0-alpha.4...reinhardt-query-macros@v0.1.0-rc.1) - 2026-02-23
+
+### Maintenance
+
+- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
+
+## [0.1.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query-macros@v0.1.0-alpha.3...reinhardt-query-macros@v0.1.0-alpha.4) - 2026-02-23
+
+### Fixed
+
+- *(release)* advance version to skip yanked alpha.3 and restore publish capability for dependents
+
+## [0.1.0-alpha.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query-macros@v0.1.0-alpha.2...reinhardt-query-macros@v0.1.0-alpha.3) - 2026-02-21 [YANKED]
+
+This release was yanked shortly after publication. Use v0.1.0-alpha.4 instead.
+
+### Fixed
+
+- add compile-time Debug assertion for derive(Iden)
+- emit errors for invalid #[iden] attribute arguments
+- replace write_str unwrap with expect documenting infallibility
+- validate identifier names and handle enum variants with data
+
 ## [0.1.0-alpha.1](https://github.com/kent8192/reinhardt-web/releases/tag/reinhardt-query-macros@v0.1.0-alpha.1) - 2026-02-14
 
 ### Added

@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 /// let mut state = ProjectState::new();
 /// let ext = CreateExtension::new("hstore");
 ///
-// Extensions don't modify project state
+/// // Extensions don't modify project state
 /// ext.state_forwards("myapp", &mut state);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]

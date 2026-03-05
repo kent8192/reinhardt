@@ -7,6 +7,183 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.3...reinhardt-web@v0.1.0-rc.4) - 2026-03-05
+
+### Documentation
+
+- *(website)* update admin customization tutorial to use separate admin struct pattern
+
+### Fixed
+
+- *(core)* add wasm32 platform gate to parallel and jsonschema validator modules
+
+## [0.1.0-rc.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.2...reinhardt-web@v0.1.0-rc.3) - 2026-03-04
+
+### Fixed
+
+- *(commands)* correct project template compilation errors
+- *(commands)* correct app template compilation errors
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.1...reinhardt-web@v0.1.0-rc.2) - 2026-03-04
+
+### Changed
+
+- *(ci)* remove redundant flags from cargo check task
+
+### Documentation
+
+- add agent-detected bug verification policy (SC-2a, IL-3)
+- *(rest)* align REST tutorial docs with actual API
+- *(basis)* align basis tutorial docs with actual API
+- align cookbook and quickstart docs with actual API
+
+### Fixed
+
+- *(ci)* change runner selection to opt-in for self-hosted runners
+- *(ci)* add 5-minute grace period for JIT runner scale-down
+- *(ci)* increase JIT runner minimum running time to 15 minutes
+- *(ci)* use ubuntu user for runner userdata and run_as configuration
+- *(ci)* add Ubuntu userdata template to replace Amazon Linux default
+- *(ci)* remove nounset flag from userdata to fix unbound variable error
+- *(ci)* use correct root device name for Ubuntu AMI (/dev/sda1)
+- *(ci)* install protoc v28 instead of system v3.12 for proto3 optional
+- *(ci)* add unzip to userdata package list for protoc installation
+- *(ci)* use .cargo/config.toml instead of RUSTFLAGS for mold in coverage
+- *(ci)* remove mold linker from coverage jobs to fix profraw generation
+- *(ci)* enable job_retry to prevent ephemeral runner scaling deadlock
+- *(ci)* add missing rust setup and gh cli for self-hosted runners
+- *(middleware)* validate host header against allowed hosts in HTTPS redirect
+- *(middleware)* add missing import in HttpsRedirectMiddleware doc test
+- *(auth)* use deterministic UUID for RemoteUserAuthentication
+- *(urls)* convert path-type parameters to matchit catch-all syntax in RadixTree mode
+- *(test)* update rand 0.9 API usage in csrf integration tests
+- *(ci)* allow publish-check to be skipped on release-plz branches
+- *(ci)* handle cargo metadata failure and jq errors in detect-affected-packages.sh
+- *(ci)* use git log to detect changed files in PR branches that contain main
+- *(ci)* use origin/HEAD_REF instead of HEAD to detect changed files in PRs
+- *(ci)* resolve permanent cache miss in setup-rust action
+- *(ci)* remove shell quoting bug in nextest filter expression passing
+
+### Maintenance
+
+- migrate remaining workflows to support self-hosted runners
+- phase test jobs to prevent spot vCPU quota exhaustion
+- skip CI for out-of-date PR branches
+- add branch status check to test-examples workflow
+- add agent-suspect and stable-migration labels to labels.yml
+- add RC stability timer monitoring workflow
+- *(semver)* auto-detect breaking changes from commit messages
+- increase semver-check timeout from 30 to 45 minutes
+- add Tachyon Inc. copyright notices
+- remove out-of-date branch skip from CI workflows
+- add run-examples output to detect-affected-packages workflow
+- fix BASE_REF fallback in detect-examples step
+- skip examples-test when no examples changes on non-release PRs
+- skip test-examples matrix when no examples changes on non-release PRs
+- switch detect-affected-packages from git log to git diff
+- use GitHub PR Files API to detect changed files in PR context
+- add pull-requests: read permission to CI workflow
+- fail explicitly on gh api errors instead of silently swallowing them
+
+### Other
+
+- resolve fields.rs conflict with main
+
+### Styling
+
+- *(urls)* apply project formatting to pattern module
+
+## [0.1.0-alpha.19](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-alpha.18...reinhardt-web@v0.1.0-alpha.19) - 2026-02-24
+
+### Documentation
+
+- add official website link to Quick Navigation
+- update internal documentation links to official website URLs
+- remove repository-hosted documentation migrated to reinhardt-web.dev
+
+### Fixed
+
+- *(website)* set cloudflare pages production branch to main before deploy
+- *(website)* add workflow_dispatch trigger for manual deployment
+- *(website)* add DNS records for custom domain resolution
+- *(infra)* add import blocks for existing Cloudflare resources
+- *(db)* gate sqlite-dependent tests with feature flag
+- *(db)* replace float test values to avoid clippy approx_constant lint
+
+### Testing
+
+- *(db)* add warning log test for .sql file detection
+
+## [0.1.0-alpha.18](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-alpha.17...reinhardt-web@v0.1.0-alpha.18) - 2026-02-24
+
+### Added
+
+- *(website)* add favicon generated from logo
+- *(website)* add WASM frontend and multiplatform cards to Why Reinhardt section
+- *(website)* add 6 additional feature cards to Why Reinhardt section
+- *(website)* expand color palette and add web font variables
+- *(website)* replace Zola inline syntax highlighting with highlight.js
+- *(website)* add sidebar navigation to standalone pages
+
+### Changed
+
+- *(website)* reorder header nav and implement unified weight-based sidebar
+- *(website)* move onboarding content into quickstart section
+- *(website)* switch docs to weight-based ordering for reference material
+
+### Documentation
+
+- *(website)* add sidebar_weight to tutorial pages
+- *(website)* add tutorials index page with card-based navigation
+- *(website)* audit and fix errors across docs pages
+
+### Fixed
+
+- *(website)* prevent visited link color from overriding button text
+- correct repository URLs from reinhardt-rs to reinhardt-web
+- *(website)* add security headers, SRI, FOUC prevention, accessibility, and optimize assets
+- *(website)* fix content links, fabricated APIs, and import paths
+- *(ci)* add branch flag and preview cleanup to deploy-website workflow
+- *(website)* replace cargo run commands with cargo make task equivalents
+- *(website)* unify sidebar navigation across quickstart and docs sections
+- *(website)* add package = "reinhardt-web" and update version to 0.1.0-alpha.18 in all examples
+- *(website)* correct docs.rs links to reinhardt-web crate
+- *(website)* update getting-started examples to use decorator and viewset patterns
+- *(website)* correct API patterns in serialization and rest quickstart tutorials
+- *(website)* restructure viewsets tutorial to use urls.rs pattern
+- *(website)* simplify server_fn definitions and use server_fn pattern in form macros
+- *(website)* add deepwiki reference to site configuration
+- *(website)* center standalone pages like changelog and security
+- *(website)* adjust logo size and spacing in navbar and hero section
+- *(website)* replace fn main() patterns with cargo make runserver convention across docs
+- *(website)* use root-relative paths instead of absolute permalinks in sidebar links
+
+### Maintenance
+
+- *(website)* update license references from MIT/Apache-2.0 to BSD-3-Clause
+- *(website)* add Cloudflare Pages deployment workflow
+- add terraform patterns to gitignore
+- *(infra)* add terraform configuration for cloudflare pages and github secrets
+- *(infra)* rename terraform template to conventional .example.tfvars format
+
+### Styling
+
+- *(website)* redesign visual components with modern aesthetics
+
+## [0.1.0-alpha.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-alpha.15...reinhardt-web@v0.1.0-alpha.16) - 2026-02-21
+
+### Fixed
+
+- add panic prevention and error handling for admin operations
+
+### Documentation
+
+- remove non-existent feature flags from lib.rs documentation
+
+### Maintenance
+
+- add explanatory comments to undocumented #[allow(...)] attributes
+
 ## [0.1.0-alpha.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-alpha.14...reinhardt-web@v0.1.0-alpha.15) - 2026-02-16
 
 ### Added

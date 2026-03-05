@@ -8,9 +8,48 @@ use hyper::{HeaderMap, Method, Uri, Version};
 #[cfg(feature = "parsers")]
 use reinhardt_core::parsers::parser::{ParsedData, Parser};
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::collections::HashSet;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+
+/// Configuration for trusted proxy IPs.
+///
+/// Only proxy headers (X-Forwarded-For, X-Real-IP, X-Forwarded-Proto) from
+/// these IP addresses will be trusted. By default, no proxies are trusted
+/// and the actual connection information is used.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TrustedProxies {
+	/// Set of trusted proxy IP addresses.
+	/// Only requests originating from these IPs will have their proxy headers honored.
+	trusted_ips: HashSet<IpAddr>,
+}
+
+impl TrustedProxies {
+	/// Create with no trusted proxies (default, most secure).
+	pub fn none() -> Self {
+		Self {
+			trusted_ips: HashSet::new(),
+		}
+	}
+
+	/// Create with a set of trusted proxy IPs.
+	pub fn new(ips: impl IntoIterator<Item = IpAddr>) -> Self {
+		Self {
+			trusted_ips: ips.into_iter().collect(),
+		}
+	}
+
+	/// Check if the given address is a trusted proxy.
+	pub fn is_trusted(&self, addr: &IpAddr) -> bool {
+		self.trusted_ips.contains(addr)
+	}
+
+	/// Check if any proxies are configured.
+	pub fn has_trusted_proxies(&self) -> bool {
+		!self.trusted_ips.is_empty()
+	}
+}
 
 /// HTTP Request representation
 pub struct Request {
@@ -66,6 +105,10 @@ pub struct RequestBuilder {
 	is_secure: bool,
 	remote_addr: Option<SocketAddr>,
 	path_params: HashMap<String, String>,
+	/// Captured error from invalid URI
+	uri_error: Option<String>,
+	/// Captured error from invalid header value
+	header_error: Option<String>,
 	#[cfg(feature = "parsers")]
 	parsers: Vec<Box<dyn Parser>>,
 }
@@ -81,6 +124,8 @@ impl Default for RequestBuilder {
 			is_secure: false,
 			remote_addr: None,
 			path_params: HashMap::new(),
+			uri_error: None,
+			header_error: None,
 			#[cfg(feature = "parsers")]
 			parsers: Vec::new(),
 		}
@@ -132,9 +177,15 @@ impl RequestBuilder {
 	pub fn uri<T>(mut self, uri: T) -> Self
 	where
 		T: TryInto<Uri>,
+		T::Error: std::fmt::Display,
 	{
-		if let Ok(uri) = uri.try_into() {
-			self.uri = Some(uri);
+		match uri.try_into() {
+			Ok(uri) => {
+				self.uri = Some(uri);
+			}
+			Err(e) => {
+				self.uri_error = Some(format!("Invalid URI: {}", e));
+			}
 		}
 		self
 	}
@@ -213,9 +264,15 @@ impl RequestBuilder {
 	where
 		K: hyper::header::IntoHeaderName,
 		V: TryInto<hyper::header::HeaderValue>,
+		V::Error: std::fmt::Display,
 	{
-		if let Ok(val) = value.try_into() {
-			self.headers.insert(key, val);
+		match value.try_into() {
+			Ok(val) => {
+				self.headers.insert(key, val);
+			}
+			Err(e) => {
+				self.header_error = Some(format!("Invalid header value: {}", e));
+			}
 		}
 		self
 	}
@@ -365,8 +422,15 @@ impl RequestBuilder {
 	/// assert_eq!(request.method, Method::GET);
 	/// assert_eq!(request.path(), "/api/users");
 	/// ```
-	pub fn build(self) -> Result<Request, &'static str> {
-		let uri = self.uri.ok_or("URI is required")?;
+	pub fn build(self) -> Result<Request, String> {
+		// Report captured errors from builder methods
+		if let Some(err) = self.uri_error {
+			return Err(err);
+		}
+		if let Some(err) = self.header_error {
+			return Err(err);
+		}
+		let uri = self.uri.ok_or_else(|| "URI is required".to_string())?;
 		let query_params = Request::parse_query_params(&uri);
 
 		Ok(Request {
@@ -583,16 +647,19 @@ impl Request {
 
 	/// Extract client IP address from the request
 	///
-	/// Attempts to extract the client IP address from the request headers
-	/// (X-Forwarded-For, X-Real-IP) or the remote address.
+	/// Only trusts proxy headers (X-Forwarded-For, X-Real-IP) when the request
+	/// originates from a configured trusted proxy. Without trusted proxies,
+	/// falls back to the actual connection address.
 	///
 	/// # Examples
 	///
 	/// ```
-	/// use reinhardt_http::Request;
+	/// use reinhardt_http::{Request, TrustedProxies};
 	/// use hyper::{Method, Version, HeaderMap, header};
 	/// use bytes::Bytes;
+	/// use std::net::{SocketAddr, IpAddr, Ipv4Addr};
 	///
+	/// let proxy_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
 	/// let mut headers = HeaderMap::new();
 	/// headers.insert(
 	///     header::HeaderName::from_static("x-forwarded-for"),
@@ -604,15 +671,19 @@ impl Request {
 	///     .uri("/")
 	///     .version(Version::HTTP_11)
 	///     .headers(headers)
+	///     .remote_addr(SocketAddr::new(proxy_ip, 8080))
 	///     .body(Bytes::new())
 	///     .build()
 	///     .unwrap();
+	///
+	/// // Configure trusted proxies to honor X-Forwarded-For
+	/// request.set_trusted_proxies(TrustedProxies::new(vec![proxy_ip]));
 	///
 	/// let ip = request.get_client_ip();
 	/// assert_eq!(ip, Some("203.0.113.1".parse().unwrap()));
 	/// ```
 	///
-	/// # No IP headers present, fallback to remote_addr
+	/// # No trusted proxy, fallback to remote_addr
 	///
 	/// ```
 	/// use reinhardt_http::Request;
@@ -635,25 +706,49 @@ impl Request {
 	/// assert_eq!(ip, Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
 	/// ```
 	pub fn get_client_ip(&self) -> Option<std::net::IpAddr> {
-		// Try X-Forwarded-For header first (common in proxy setups)
-		if let Some(forwarded) = self.get_header("x-forwarded-for") {
-			// X-Forwarded-For can contain multiple IPs, take the first one
-			if let Some(first_ip) = forwarded.split(',').next()
-				&& let Ok(ip) = first_ip.trim().parse()
+		// Only trust proxy headers if the request comes from a configured trusted proxy
+		if self.is_from_trusted_proxy() {
+			// Try X-Forwarded-For header first (common in proxy setups)
+			if let Some(forwarded) = self.get_header("x-forwarded-for") {
+				// X-Forwarded-For can contain multiple IPs, take the first one
+				if let Some(first_ip) = forwarded.split(',').next()
+					&& let Ok(ip) = first_ip.trim().parse()
+				{
+					return Some(ip);
+				}
+			}
+
+			// Try X-Real-IP header
+			if let Some(real_ip) = self.get_header("x-real-ip")
+				&& let Ok(ip) = real_ip.parse()
 			{
 				return Some(ip);
 			}
 		}
 
-		// Try X-Real-IP header
-		if let Some(real_ip) = self.get_header("x-real-ip")
-			&& let Ok(ip) = real_ip.parse()
-		{
-			return Some(ip);
-		}
-
-		// Fallback to remote_addr
+		// Fallback to remote_addr (actual connection info)
 		self.remote_addr.map(|addr| addr.ip())
+	}
+
+	/// Check if the request originates from a trusted proxy.
+	///
+	/// Returns `true` only if trusted proxies are configured AND the
+	/// remote address is in the trusted set.
+	fn is_from_trusted_proxy(&self) -> bool {
+		if let Some(trusted) = self.extensions.get::<TrustedProxies>()
+			&& let Some(addr) = self.remote_addr
+		{
+			return trusted.is_trusted(&addr.ip());
+		}
+		false
+	}
+
+	/// Set trusted proxy configuration for this request.
+	///
+	/// This is typically called by the server/middleware layer to configure
+	/// which proxy IPs are trusted for header forwarding.
+	pub fn set_trusted_proxies(&self, proxies: TrustedProxies) {
+		self.extensions.insert(proxies);
 	}
 
 	/// Validate Content-Type header
@@ -810,7 +905,9 @@ impl Request {
 			.map(|(k, v)| (k.clone(), v.clone()))
 			.collect();
 
-		serde_urlencoded::from_str(&serde_urlencoded::to_string(&params).unwrap())
+		let encoded = serde_urlencoded::to_string(&params)
+			.map_err(|e| crate::Error::Http(format!("Failed to encode query parameters: {}", e)))?;
+		serde_urlencoded::from_str(&encoded)
 			.map_err(|e| crate::Error::Http(format!("Failed to parse query parameters: {}", e)))
 	}
 }
@@ -892,7 +989,9 @@ mod tests {
 	}
 
 	#[rstest]
-	fn test_get_client_ip_forwarded_for() {
+	fn test_get_client_ip_forwarded_for_with_trusted_proxy() {
+		// Arrange
+		let proxy_ip: std::net::IpAddr = "10.0.0.254".parse().unwrap();
 		let mut headers = HeaderMap::new();
 		headers.insert(
 			header::HeaderName::from_static("x-forwarded-for"),
@@ -905,15 +1004,47 @@ mod tests {
 			.version(Version::HTTP_11)
 			.headers(headers)
 			.body(Bytes::new())
+			.remote_addr(std::net::SocketAddr::new(proxy_ip, 8080))
 			.build()
 			.unwrap();
 
+		// Configure trusted proxies
+		request.set_trusted_proxies(TrustedProxies::new(vec![proxy_ip]));
+
+		// Act & Assert
 		let ip = request.get_client_ip();
 		assert_eq!(ip, Some("192.168.1.1".parse().unwrap()));
 	}
 
 	#[rstest]
-	fn test_get_client_ip_real_ip() {
+	fn test_get_client_ip_forwarded_for_without_trusted_proxy() {
+		// Arrange - proxy headers present but no trusted proxy configured
+		let mut headers = HeaderMap::new();
+		headers.insert(
+			header::HeaderName::from_static("x-forwarded-for"),
+			"192.168.1.1, 10.0.0.1".parse().unwrap(),
+		);
+
+		let remote_ip: std::net::IpAddr = "10.0.0.254".parse().unwrap();
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.version(Version::HTTP_11)
+			.headers(headers)
+			.body(Bytes::new())
+			.remote_addr(std::net::SocketAddr::new(remote_ip, 8080))
+			.build()
+			.unwrap();
+
+		// Act - no trusted proxies, should use remote_addr
+		let ip = request.get_client_ip();
+		assert_eq!(ip, Some(remote_ip));
+	}
+
+	#[rstest]
+	fn test_get_client_ip_real_ip_with_trusted_proxy() {
+		// Arrange
+		let proxy_ip: std::net::IpAddr = "10.0.0.254".parse().unwrap();
 		let mut headers = HeaderMap::new();
 		headers.insert(
 			header::HeaderName::from_static("x-real-ip"),
@@ -926,9 +1057,13 @@ mod tests {
 			.version(Version::HTTP_11)
 			.headers(headers)
 			.body(Bytes::new())
+			.remote_addr(std::net::SocketAddr::new(proxy_ip, 8080))
 			.build()
 			.unwrap();
 
+		request.set_trusted_proxies(TrustedProxies::new(vec![proxy_ip]));
+
+		// Act & Assert
 		let ip = request.get_client_ip();
 		assert_eq!(ip, Some("203.0.113.5".parse().unwrap()));
 	}

@@ -8,7 +8,11 @@ use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
+use super::audit;
+#[cfg(not(target_arch = "wasm32"))]
 use super::error::{AdminAuth, MapServerFnError};
+#[cfg(not(target_arch = "wasm32"))]
+use super::security::sanitize_mutation_values;
 #[cfg(not(target_arch = "wasm32"))]
 use super::validation::validate_mutation_data;
 
@@ -61,10 +65,21 @@ pub async fn update_record(
 	// Validate input data before database operation
 	validate_mutation_data(&request.data, model_admin.as_ref(), true).map_server_fn_error()?;
 
-	let affected = db
-		.update::<AdminRecord>(table_name, pk_field, &id, request.data)
+	// Sanitize string values to prevent stored XSS
+	let mut sanitized_data = request.data;
+	sanitize_mutation_values(&mut sanitized_data);
+
+	let user_id = auth.user_id().unwrap_or("unknown").to_string();
+
+	let result = db
+		.update::<AdminRecord>(table_name, pk_field, &id, sanitized_data.clone())
 		.await
-		.map_server_fn_error()?;
+		.map_server_fn_error();
+
+	let success = result.is_ok();
+	audit::log_update(&user_id, &model_name, &id, &sanitized_data, success);
+
+	let affected = result?;
 
 	Ok(MutationResponse {
 		success: true,

@@ -3,7 +3,7 @@
 use std::fmt;
 
 /// Signal errors
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignalError {
 	pub message: String,
 }

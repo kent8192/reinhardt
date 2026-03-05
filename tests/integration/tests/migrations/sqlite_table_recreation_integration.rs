@@ -21,9 +21,9 @@
 
 use reinhardt_db::backends::connection::DatabaseConnection;
 use reinhardt_db::migrations::{
+	ColumnDefinition, FieldType, ForeignKeyAction, Migration,
 	executor::DatabaseMigrationExecutor,
 	operations::{Constraint, Operation},
-	ColumnDefinition, FieldType, ForeignKeyAction, Migration,
 };
 use reinhardt_query::prelude::{
 	Iden, IntoIden, Query, QueryStatementBuilder, SqliteQueryBuilder, Value,

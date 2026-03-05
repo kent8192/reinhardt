@@ -4,7 +4,7 @@
 
 use serde::Serialize;
 
-use crate::error::{DeeplinkError, validate_fingerprint};
+use crate::error::{DeeplinkError, validate_fingerprint, validate_package_name};
 
 /// Android App Links configuration.
 ///
@@ -20,7 +20,8 @@ use crate::error::{DeeplinkError, validate_fingerprint};
 /// let config = AndroidConfig::builder()
 ///     .package_name("com.example.app")
 ///     .sha256_fingerprint("FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C")
-///     .build();
+///     .build()
+///     .unwrap();
 /// ```
 #[derive(Debug, Clone)]
 pub struct AndroidConfig {
@@ -104,7 +105,8 @@ impl AndroidConfigBuilder {
 	/// let config = AndroidConfig::builder()
 	///     .package_name("com.example.app")
 	///     .sha256_fingerprint("FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C")
-	///     .build();
+	///     .build()
+	///     .unwrap();
 	/// ```
 	pub fn sha256_fingerprint(mut self, fingerprint: impl Into<String>) -> Self {
 		self.fingerprints.push(fingerprint.into());
@@ -135,11 +137,18 @@ impl AndroidConfigBuilder {
 	///
 	/// Returns an error if:
 	/// - No package name is set
+	/// - Package name has invalid format
 	/// - No fingerprints are provided
 	/// - Any fingerprint has an invalid format
+	/// - Any additional package has empty fingerprints
 	pub fn validate(&self) -> Result<(), DeeplinkError> {
 		if self.package_name.is_none() {
 			return Err(DeeplinkError::MissingPackageName);
+		}
+
+		// Validate package name format (Java package naming conventions)
+		if let Some(ref name) = self.package_name {
+			validate_package_name(name)?;
 		}
 
 		if self.fingerprints.is_empty() {
@@ -150,7 +159,15 @@ impl AndroidConfigBuilder {
 			validate_fingerprint(fingerprint)?;
 		}
 
-		for (_, fps) in &self.additional_packages {
+		// Validate additional package names and their fingerprints
+		for (pkg_name, fps) in &self.additional_packages {
+			validate_package_name(pkg_name)?;
+			// Each additional package must have at least one fingerprint;
+			// an empty fingerprints list produces a semantically invalid
+			// Asset Links entry that Android will never match.
+			if fps.is_empty() {
+				return Err(DeeplinkError::MissingFingerprint);
+			}
 			for fingerprint in fps {
 				validate_fingerprint(fingerprint)?;
 			}
@@ -159,11 +176,21 @@ impl AndroidConfigBuilder {
 		Ok(())
 	}
 
-	/// Builds the Android configuration.
+	/// Builds the Android configuration after validation.
 	///
-	/// This method does not validate the configuration. Use [`validate`](Self::validate)
-	/// before building if validation is needed.
-	pub fn build(self) -> AndroidConfig {
+	/// # Errors
+	///
+	/// Returns a `DeeplinkError` if validation fails.
+	pub fn build(self) -> Result<AndroidConfig, DeeplinkError> {
+		self.validate()?;
+		Ok(self.build_unchecked())
+	}
+
+	/// Builds the Android configuration without validation.
+	///
+	/// Use [`build`](Self::build) for validated builds. This method is intended
+	/// for advanced use cases where validation has already been performed.
+	pub fn build_unchecked(self) -> AndroidConfig {
 		let mut statements = Vec::new();
 
 		// Build primary statement
@@ -207,7 +234,8 @@ mod tests {
 		let config = AndroidConfig::builder()
 			.package_name("com.example.app")
 			.sha256_fingerprint(VALID_FINGERPRINT)
-			.build();
+			.build()
+			.unwrap();
 
 		let json = serde_json::to_string_pretty(&config).unwrap();
 		assert!(json.contains("delegate_permission/common.handle_all_urls"));
@@ -221,7 +249,8 @@ mod tests {
 		let config = AndroidConfig::builder()
 			.package_name("com.example.app")
 			.sha256_fingerprint(VALID_FINGERPRINT)
-			.build();
+			.build()
+			.unwrap();
 
 		let json = serde_json::to_string(&config).unwrap();
 		// Should be a JSON array
@@ -237,7 +266,8 @@ mod tests {
 		let config = AndroidConfig::builder()
 			.package_name("com.example.app")
 			.sha256_fingerprints(&[fp1, fp2])
-			.build();
+			.build()
+			.unwrap();
 
 		let json = serde_json::to_string_pretty(&config).unwrap();
 		assert!(json.contains(fp1));
@@ -250,7 +280,8 @@ mod tests {
 			.package_name("com.example.app")
 			.sha256_fingerprint(VALID_FINGERPRINT)
 			.additional_package("com.example.app2", &[VALID_FINGERPRINT])
-			.build();
+			.build()
+			.unwrap();
 
 		assert_eq!(config.statements.len(), 2);
 		let json = serde_json::to_string_pretty(&config).unwrap();
@@ -293,5 +324,23 @@ mod tests {
 			.package_name("com.example.app")
 			.sha256_fingerprint(VALID_FINGERPRINT);
 		assert!(builder.validate().is_ok());
+	}
+
+	#[rstest]
+	fn test_validation_additional_package_empty_fingerprints() {
+		// Arrange
+		let builder = AndroidConfigBuilder::new()
+			.package_name("com.example.app")
+			.sha256_fingerprint(VALID_FINGERPRINT)
+			.additional_package("com.example.app2", &[]);
+
+		// Act
+		let result = builder.validate();
+
+		// Assert
+		assert!(
+			matches!(result, Err(DeeplinkError::MissingFingerprint)),
+			"additional_package with empty fingerprints should be rejected"
+		);
 	}
 }

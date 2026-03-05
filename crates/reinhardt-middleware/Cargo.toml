@@ -1,8 +1,13 @@
 [package]
 name = "reinhardt-middleware"
-version = "0.1.0-alpha.12"
+version = "0.1.0-rc.4"
 description = "Middleware system for request/response processing pipeline"
+keywords = ["middleware", "web", "cors", "security", "http"]
+categories = ["web-programming", "web-programming::http-server"]
+readme = "README.md"
+documentation = "https://docs.rs/reinhardt-middleware"
 edition.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
@@ -57,11 +62,11 @@ colored = "3.0"
 base64 = { workspace = true }
 
 [dev-dependencies]
-reinhardt-test = { workspace = true }
+insta = { workspace = true }
 tokio-test = "0.4"
 tokio = { workspace = true }
 serial_test = { workspace = true }
 rstest = { workspace = true }
-proptest = "1.4"
+proptest = { workspace = true }
 trybuild = "1.0"
 http = { workspace = true }

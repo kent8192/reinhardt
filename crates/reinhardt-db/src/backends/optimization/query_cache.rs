@@ -10,6 +10,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 /// Query cache configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct QueryCacheConfig {
 	/// Maximum number of cached queries

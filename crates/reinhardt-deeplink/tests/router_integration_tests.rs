@@ -46,7 +46,8 @@ fn test_router_creation_android_only() {
 			AndroidConfig::builder()
 				.package_name("com.example.app")
 				.sha256_fingerprint(VALID_FINGERPRINT)
-				.build(),
+				.build()
+				.unwrap(),
 		)
 		.build();
 
@@ -68,7 +69,8 @@ fn test_router_creation_both() {
 			AndroidConfig::builder()
 				.package_name("com.example.app")
 				.sha256_fingerprint(VALID_FINGERPRINT)
-				.build(),
+				.build()
+				.unwrap(),
 		)
 		.build();
 
@@ -134,7 +136,8 @@ fn test_unified_router_with_deeplinks_android() {
 			AndroidConfig::builder()
 				.package_name("com.example.app")
 				.sha256_fingerprint(VALID_FINGERPRINT)
-				.build(),
+				.build()
+				.unwrap(),
 		)
 		.build();
 
@@ -155,7 +158,8 @@ fn test_unified_router_with_deeplinks_both() {
 			AndroidConfig::builder()
 				.package_name("com.example.app")
 				.sha256_fingerprint(VALID_FINGERPRINT)
-				.build(),
+				.build()
+				.unwrap(),
 		)
 		.build();
 
@@ -189,7 +193,8 @@ fn test_router_without_ios() {
 			AndroidConfig::builder()
 				.package_name("com.example.app")
 				.sha256_fingerprint(VALID_FINGERPRINT)
-				.build(),
+				.build()
+				.unwrap(),
 		)
 		.build();
 

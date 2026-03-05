@@ -70,16 +70,13 @@ pub async fn import_data(
 	// Parse data based on format
 	// Sanitize error messages to avoid exposing internal details (schema, SQL, etc.)
 	let records: Vec<HashMap<String, serde_json::Value>> = match format {
-		ImportFormat::JSON => serde_json::from_slice(&data).map_err(|_| {
-			ServerFnError::deserialization("Invalid JSON format in import data")
-		})?,
+		ImportFormat::JSON => serde_json::from_slice(&data)
+			.map_err(|_| ServerFnError::deserialization("Invalid JSON format in import data"))?,
 		ImportFormat::CSV => {
 			let mut rdr = csv::Reader::from_reader(&data[..]);
 			rdr.deserialize()
 				.collect::<Result<Vec<_>, _>>()
-				.map_err(|_| {
-					ServerFnError::deserialization("Invalid CSV format in import data")
-				})?
+				.map_err(|_| ServerFnError::deserialization("Invalid CSV format in import data"))?
 		}
 		ImportFormat::TSV => {
 			let mut rdr = csv::ReaderBuilder::new()
@@ -87,9 +84,7 @@ pub async fn import_data(
 				.from_reader(&data[..]);
 			rdr.deserialize()
 				.collect::<Result<Vec<_>, _>>()
-				.map_err(|_| {
-					ServerFnError::deserialization("Invalid TSV format in import data")
-				})?
+				.map_err(|_| ServerFnError::deserialization("Invalid TSV format in import data"))?
 		}
 	};
 

@@ -104,6 +104,12 @@ impl From<TsError> for SsrError {
 			TsError::EvalFailed(msg) => SsrError::EvalFailed(msg),
 			TsError::PropsSerialization(msg) => SsrError::PropsSerialization(msg),
 			TsError::RenderFailed(msg) => SsrError::RenderFailed(msg),
+			TsError::ExecutionTimeout { timeout } => {
+				SsrError::RenderFailed(format!("execution timed out after {timeout:?}"))
+			}
+			TsError::SourceTooLarge { size, max } => SsrError::RenderFailed(format!(
+				"source size ({size} bytes) exceeds limit ({max} bytes)"
+			)),
 		}
 	}
 }
@@ -612,7 +618,20 @@ fn validate_component_code(code: &str) -> Result<(), SsrError> {
 
 /// Validate component file path for security.
 ///
-/// This function prevents path traversal attacks and enforces extension whitelisting.
+/// This function implements a three-layer defense against path traversal attacks:
+///
+/// 1. **Extension whitelist** - Only `.js`, `.jsx`, `.ts`, `.tsx` files are accepted,
+///    preventing loading of arbitrary file types (e.g., `/etc/passwd`).
+///
+/// 2. **Path canonicalization** - `canonicalize()` resolves all `..` components and
+///    symlinks to produce an absolute path. This handles attacks like
+///    `../../etc/passwd.js` by resolving to the actual filesystem path. Note that
+///    `canonicalize()` also verifies the file exists, addressing TOCTOU concerns
+///    by performing the existence check and path resolution atomically.
+///
+/// 3. **Base directory containment** - `starts_with()` on the canonicalized path
+///    ensures the resolved file is within the allowed base directory, even if
+///    symlinks or `..` components were used in the original path.
 ///
 /// # Arguments
 ///
@@ -622,17 +641,11 @@ fn validate_component_code(code: &str) -> Result<(), SsrError> {
 /// # Returns
 ///
 /// Canonical absolute path to the component file, or an error if validation fails.
-///
-/// # Security
-///
-/// - Prevents path traversal attacks via canonicalization
-/// - Only allows `.js`, `.jsx`, `.ts`, `.tsx` extensions
-/// - Ensures resolved path is within base_dir
 fn validate_component_path(
 	base_dir: &std::path::Path,
 	component_path: &str,
 ) -> Result<std::path::PathBuf, SsrError> {
-	// Check extension whitelist
+	// Layer 1: Extension whitelist prevents loading arbitrary file types
 	let allowed_extensions = [".js", ".jsx", ".ts", ".tsx"];
 	let has_valid_extension = allowed_extensions
 		.iter()
@@ -648,12 +661,12 @@ fn validate_component_path(
 	// Construct full path
 	let full_path = base_dir.join(component_path);
 
-	// Canonicalize to resolve .. and symlinks (prevent path traversal attacks)
+	// Layer 2: Canonicalize resolves ".." and symlinks, also verifies file exists
 	let canonical_path = full_path
 		.canonicalize()
 		.map_err(|e| SsrError::ComponentNotFound(format!("Component file not found: {}", e)))?;
 
-	// Ensure the canonical path is still within base_dir
+	// Layer 3: Ensure canonical path is within base_dir (containment check)
 	let canonical_base = base_dir
 		.canonicalize()
 		.map_err(|e| SsrError::ComponentNotFound(format!("Base directory not found: {}", e)))?;

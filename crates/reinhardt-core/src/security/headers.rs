@@ -3,7 +3,7 @@
 use super::utils::generate_token;
 
 /// Content Security Policy configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentSecurityPolicy {
 	pub default_src: Vec<String>,
 	pub script_src: Vec<String>,
@@ -180,7 +180,7 @@ impl ContentSecurityPolicy {
 }
 
 /// Security headers configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecurityHeadersConfig {
 	pub x_content_type_options: bool,
 	pub x_frame_options: Option<String>,
@@ -257,6 +257,7 @@ impl SecurityHeadersConfig {
 }
 
 /// Security headers middleware
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecurityHeadersMiddleware {
 	config: SecurityHeadersConfig,
 }

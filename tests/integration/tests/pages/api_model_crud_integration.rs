@@ -537,9 +537,10 @@ fn test_api_queryset_ordering_fields_boundary() {
 
 	let qs3: ApiQuerySet<TestModel> =
 		ApiQuerySet::new("/api/posts/").order_by(&["-view_count", "title", "id"]);
-	assert!(qs3
-		.build_url()
-		.contains("ordering=-view_count%2Ctitle%2Cid"));
+	assert!(
+		qs3.build_url()
+			.contains("ordering=-view_count%2Ctitle%2Cid")
+	);
 }
 
 /// Tests boundary for field selection count

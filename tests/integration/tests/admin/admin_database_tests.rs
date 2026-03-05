@@ -4,11 +4,11 @@
 //! functions using mock database connections.
 
 use reinhardt_admin::core::database::{
-	build_composite_filter_condition, build_single_filter_expr, filter_value_to_sea_value,
-	AdminDatabase,
+	AdminDatabase, build_composite_filter_condition, build_single_filter_expr,
+	filter_value_to_sea_value,
 };
 use reinhardt_db::orm::annotation::Expression;
-use reinhardt_db::orm::expressions::{OuterRef, F};
+use reinhardt_db::orm::expressions::{F, OuterRef};
 use reinhardt_db::orm::{
 	DatabaseBackend, DatabaseConnection, Filter, FilterCondition, FilterOperator, FilterValue,
 };

@@ -159,7 +159,10 @@ impl<S: SessionStore, A: AuthenticationBackend> AuthenticationMiddleware<S, A> {
 		}
 	}
 
-	/// Extract session ID from cookies
+	/// Extract session ID from cookies.
+	///
+	/// Validates that the session ID is non-empty and well-formed
+	/// (UUID format) before returning it.
 	fn extract_session_id(&self, request: &Request) -> Option<String> {
 		const SESSION_COOKIE_NAME: &str = "sessionid";
 		request
@@ -176,6 +179,19 @@ impl<S: SessionStore, A: AuthenticationBackend> AuthenticationMiddleware<S, A> {
 					}
 				})
 			})
+			.filter(|id| Self::is_valid_session_id(id))
+	}
+
+	/// Validate that a session ID is non-empty and well-formed.
+	///
+	/// Session IDs are expected to be UUIDs (32 hex chars + 4 hyphens = 36 chars).
+	/// This prevents accepting arbitrary strings as session identifiers.
+	fn is_valid_session_id(id: &str) -> bool {
+		if id.is_empty() || id.len() > 128 {
+			return false;
+		}
+		// Validate UUID format (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+		uuid::Uuid::parse_str(id).is_ok()
 	}
 
 	/// Get user from session
@@ -362,21 +378,11 @@ mod tests {
 
 	#[test]
 	fn test_auth_state_is_anonymous() {
-		let anon_state = AuthState {
-			user_id: String::new(),
-			is_authenticated: false,
-			is_admin: false,
-			is_active: false,
-		};
+		let anon_state = AuthState::anonymous();
 
 		assert!(anon_state.is_anonymous());
 
-		let auth_state = AuthState {
-			user_id: "user123".to_string(),
-			is_authenticated: true,
-			is_admin: false,
-			is_active: true,
-		};
+		let auth_state = AuthState::authenticated("user123", false, true);
 
 		assert!(!auth_state.is_anonymous());
 	}

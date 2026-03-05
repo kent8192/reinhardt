@@ -320,7 +320,7 @@ impl AuthenticatedConnection {
 		policy
 			.authorize(self.user.as_ref(), "send_message", None)
 			.await
-			.map_err(|e| WebSocketError::Protocol(e.to_string()))?;
+			.map_err(|_| WebSocketError::Protocol("authorization failed".to_string()))?;
 
 		self.connection.send(message).await
 	}

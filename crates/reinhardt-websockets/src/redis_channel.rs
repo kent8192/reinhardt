@@ -31,6 +31,8 @@ use async_trait::async_trait;
 use redis::aio::ConnectionManager;
 #[cfg(feature = "redis-channel")]
 use redis::{AsyncCommands, Client};
+#[cfg(feature = "redis-channel")]
+use tracing::warn;
 
 /// Redis channel layer configuration
 #[cfg(feature = "redis-channel")]
@@ -44,6 +46,14 @@ pub struct RedisConfig {
 	pub group_prefix: String,
 	/// Message expiry time (seconds)
 	pub message_expiry: u64,
+	/// Redis password for authentication
+	pub password: Option<String>,
+	/// Redis username for authentication (Redis 6+ ACL)
+	pub username: Option<String>,
+	/// Enable TLS for secure connection
+	pub tls: bool,
+	/// Require authentication (warns if disabled without credentials)
+	pub require_auth: bool,
 }
 
 #[cfg(feature = "redis-channel")]
@@ -60,6 +70,10 @@ impl Default for RedisConfig {
 	/// assert_eq!(config.channel_prefix, "ws:channel:");
 	/// assert_eq!(config.group_prefix, "ws:group:");
 	/// assert_eq!(config.message_expiry, 60);
+	/// assert!(config.password.is_none());
+	/// assert!(config.username.is_none());
+	/// assert!(!config.tls);
+	/// assert!(config.require_auth);
 	/// ```
 	fn default() -> Self {
 		Self {
@@ -67,6 +81,10 @@ impl Default for RedisConfig {
 			channel_prefix: "ws:channel:".to_string(),
 			group_prefix: "ws:group:".to_string(),
 			message_expiry: 60, // 60 seconds
+			password: None,
+			username: None,
+			tls: false,
+			require_auth: true, // Security: require auth by default
 		}
 	}
 }
@@ -137,6 +155,96 @@ impl RedisConfig {
 		self.message_expiry = expiry;
 		self
 	}
+
+	/// Sets the Redis password for authentication.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_websockets::redis_channel::RedisConfig;
+	///
+	/// let config = RedisConfig::default()
+	///     .with_password("secret".to_string());
+	/// assert_eq!(config.password, Some("secret".to_string()));
+	/// ```
+	pub fn with_password(mut self, password: String) -> Self {
+		self.password = Some(password);
+		self
+	}
+
+	/// Sets the Redis username for authentication (Redis 6+ ACL).
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_websockets::redis_channel::RedisConfig;
+	///
+	/// let config = RedisConfig::default()
+	///     .with_username("app_user".to_string());
+	/// assert_eq!(config.username, Some("app_user".to_string()));
+	/// ```
+	pub fn with_username(mut self, username: String) -> Self {
+		self.username = Some(username);
+		self
+	}
+
+	/// Enables TLS for secure connection.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_websockets::redis_channel::RedisConfig;
+	///
+	/// let config = RedisConfig::default().with_tls();
+	/// assert!(config.tls);
+	/// ```
+	pub fn with_tls(mut self) -> Self {
+		self.tls = true;
+		self
+	}
+
+	/// Sets whether authentication is required.
+	///
+	/// By default, authentication is required for security.
+	/// Set to `false` only for local development or trusted networks.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_websockets::redis_channel::RedisConfig;
+	///
+	/// let config = RedisConfig::default().with_require_auth(false);
+	/// assert!(!config.require_auth);
+	/// ```
+	pub fn with_require_auth(mut self, require: bool) -> Self {
+		self.require_auth = require;
+		self
+	}
+
+	/// Validates authentication configuration and logs warnings.
+	///
+	/// Returns an error if authentication is required but not configured.
+	pub fn validate_auth(&self) -> Result<(), crate::channels::ChannelError> {
+		use crate::channels::ChannelError;
+
+		if self.require_auth && self.password.is_none() {
+			warn!(
+				"Redis authentication is required but no password is configured. \
+				 This is a security risk. Set a password using .with_password() or \
+				 disable auth requirement using .with_require_auth(false) for local development only."
+			);
+			return Err(ChannelError::AuthenticationRequired);
+		}
+
+		if self.password.is_none() && !self.require_auth {
+			warn!(
+				"Redis connection is configured without authentication. \
+				 This is not recommended for production environments."
+			);
+		}
+
+		Ok(())
+	}
 }
 
 /// Redis-backed channel layer
@@ -167,11 +275,15 @@ impl RedisChannelLayer {
 	/// use reinhardt_websockets::redis_channel::{RedisChannelLayer, RedisConfig};
 	///
 	/// # tokio_test::block_on(async {
-	/// let config = RedisConfig::default();
+	/// let config = RedisConfig::default()
+	///     .with_password("secret".to_string());
 	/// let layer = RedisChannelLayer::new(config).await.unwrap();
 	/// # });
 	/// ```
 	pub async fn new(config: RedisConfig) -> ChannelResult<Self> {
+		// Validate authentication configuration before connecting
+		config.validate_auth()?;
+
 		let client = Client::open(config.url.as_str())
 			.map_err(|e| ChannelError::SendError(format!("Redis client error: {}", e)))?;
 
@@ -473,6 +585,10 @@ mod tests {
 		assert_eq!(config.channel_prefix, "ws:channel:");
 		assert_eq!(config.group_prefix, "ws:group:");
 		assert_eq!(config.message_expiry, 60);
+		assert!(config.password.is_none());
+		assert!(config.username.is_none());
+		assert!(!config.tls);
+		assert!(config.require_auth); // Security: auth required by default
 	}
 
 	#[test]
@@ -480,12 +596,20 @@ mod tests {
 		let config = RedisConfig::new("redis://localhost:6379".to_string())
 			.with_channel_prefix("custom:channel:".to_string())
 			.with_group_prefix("custom:group:".to_string())
-			.with_message_expiry(120);
+			.with_message_expiry(120)
+			.with_password("secret".to_string())
+			.with_username("app_user".to_string())
+			.with_tls()
+			.with_require_auth(true);
 
 		assert_eq!(config.url, "redis://localhost:6379");
 		assert_eq!(config.channel_prefix, "custom:channel:");
 		assert_eq!(config.group_prefix, "custom:group:");
 		assert_eq!(config.message_expiry, 120);
+		assert_eq!(config.password, Some("secret".to_string()));
+		assert_eq!(config.username, Some("app_user".to_string()));
+		assert!(config.tls);
+		assert!(config.require_auth);
 	}
 
 	#[test]
@@ -652,5 +776,50 @@ mod tests {
 			}
 			_ => panic!("Expected GroupNotFound error"),
 		}
+	}
+
+	#[test]
+	fn test_auth_validation_fails_without_password() {
+		// Default config requires auth but has no password
+		let config = RedisConfig::default();
+		let result = config.validate_auth();
+		assert!(result.is_err());
+		match result {
+			Err(ChannelError::AuthenticationRequired) => {}
+			_ => panic!("Expected AuthenticationRequired error"),
+		}
+	}
+
+	#[test]
+	fn test_auth_validation_passes_with_password() {
+		let config = RedisConfig::default().with_password("secret".to_string());
+		let result = config.validate_auth();
+		assert!(result.is_ok());
+	}
+
+	#[test]
+	fn test_auth_validation_passes_when_disabled() {
+		// Auth disabled should not require password
+		let config = RedisConfig::default().with_require_auth(false);
+		let result = config.validate_auth();
+		assert!(result.is_ok());
+	}
+
+	#[test]
+	fn test_auth_config_with_all_fields() {
+		let config = RedisConfig::default()
+			.with_password("secret".to_string())
+			.with_username("admin".to_string())
+			.with_tls()
+			.with_require_auth(true);
+
+		assert_eq!(config.password, Some("secret".to_string()));
+		assert_eq!(config.username, Some("admin".to_string()));
+		assert!(config.tls);
+		assert!(config.require_auth);
+
+		// Should pass validation
+		let result = config.validate_auth();
+		assert!(result.is_ok());
 	}
 }

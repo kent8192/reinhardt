@@ -3,6 +3,7 @@
 //! Provides follow button and user list components for managing user relationships.
 
 use crate::apps::auth::shared::types::UserInfo;
+use crate::core::client::components::icons;
 use reinhardt::pages::Signal;
 use reinhardt::pages::component::View;
 use reinhardt::pages::page;
@@ -13,6 +14,8 @@ use {
 	crate::apps::relationship::server::server_fn::{
 		fetch_followers, fetch_following, follow_user, unfollow_user,
 	},
+	reinhardt::pages::create_resource,
+	reinhardt::pages::reactive::ResourceState,
 	reinhardt::pages::spawn::spawn_task,
 };
 
@@ -51,7 +54,7 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 				watch {
 					if loading_signal.get() {
 						button {
-							r#type: "button",
+							type: "button",
 							class: "btn-secondary opacity-50 cursor-not-allowed",
 							disabled: loading_signal.get(),
 							aria_label: "Loading",
@@ -94,7 +97,7 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 						}
 					} else if is_following_signal.get() {
 						button {
-							r#type: "button",
+							type: "button",
 							class: "btn-outline group",
 							@click: {
 										let is_following = is_following_clone.clone();
@@ -137,7 +140,7 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 						}
 					} else {
 						button {
-							r#type: "button",
+							type: "button",
 							class: "btn-primary",
 							@click: {
 										let is_following = is_following_clone.clone();
@@ -202,7 +205,7 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 		page!(|btn_class: &str, btn_text: &str| {
 			div {
 				button {
-					r#type: "button",
+					type: "button",
 					class: btn_class,
 					{ btn_text }
 				}
@@ -249,18 +252,7 @@ fn user_card(user: &UserInfo) -> View {
 						{ display_username }
 					}
 				}
-				svg {
-					class: "w-5 h-5 text-content-tertiary flex-shrink-0",
-					fill: "none",
-					stroke: "currentColor",
-					viewBox: "0 0 24 24",
-					path {
-						stroke_linecap: "round",
-						stroke_linejoin: "round",
-						stroke_width: "2",
-						d: "M9 5l7 7-7 7",
-					}
-				}
+				{ icons::chevron_right_icon() }
 			}
 		}
 	})(
@@ -284,26 +276,32 @@ pub fn user_list(user_id: Uuid, list_type: UserListType) -> View {
 
 	#[cfg(client)]
 	{
-		let users_clone = users.clone();
-		let loading_clone = loading.clone();
-		let error_clone = error.clone();
-
-		spawn_task(async move {
-			loading_clone.set(true);
-			error_clone.set(None);
-
+		let resource = create_resource(move || async move {
 			let result = match list_type {
 				UserListType::Followers => fetch_followers(user_id).await,
 				UserListType::Following => fetch_following(user_id).await,
 			};
+			result.map_err(|e| e.to_string())
+		});
 
-			match result {
-				Ok(user_list) => {
-					users_clone.set(user_list);
-					loading_clone.set(false);
+		let users_clone = users.clone();
+		let loading_clone = loading.clone();
+		let error_clone = error.clone();
+		let resource_for_effect = resource.clone();
+
+		reinhardt::pages::reactive::hooks::use_effect(move || {
+			match resource_for_effect.get() {
+				ResourceState::Loading => {
+					loading_clone.set(true);
+					error_clone.set(None);
 				}
-				Err(e) => {
-					error_clone.set(Some(e.to_string()));
+				ResourceState::Success(data) => {
+					users_clone.set(data);
+					loading_clone.set(false);
+					error_clone.set(None);
+				}
+				ResourceState::Error(err) => {
+					error_clone.set(Some(err));
 					loading_clone.set(false);
 				}
 			}
@@ -342,18 +340,7 @@ pub fn user_list(user_id: Uuid, list_type: UserListType) -> View {
 					href: "/",
 					class: "btn-icon",
 					aria_label: "Go back home",
-					svg {
-						class: "w-5 h-5",
-						fill: "none",
-						stroke: "currentColor",
-						viewBox: "0 0 24 24",
-						path {
-							stroke_linecap: "round",
-							stroke_linejoin: "round",
-							stroke_width: "2",
-							d: "M10 19l-7-7m0 0l7-7m-7 7h18",
-						}
-					}
+					{ icons::arrow_left_icon() }
 				}
 				h2 {
 					class: "text-xl font-bold text-content-primary",
@@ -377,15 +364,7 @@ pub fn user_list(user_id: Uuid, list_type: UserListType) -> View {
 						class: "alert-danger",
 						div {
 							class: "flex items-center gap-2",
-							svg {
-								class: "w-5 h-5 flex-shrink-0",
-								fill: "currentColor",
-								viewBox: "0 0 20 20",
-								path {
-									fill_rule: "evenodd",
-									d: "M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z",
-								}
-							}
+							{ icons::error_circle_icon() }
 							span {
 								{ error_signal.get().unwrap_or_default() }
 							}

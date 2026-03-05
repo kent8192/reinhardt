@@ -8,7 +8,9 @@
 //! with `UnifiedRouter::function()`. The `InjectionContext` is extracted from
 //! `Request.get_di_context()` which is set by the router before dispatching.
 
-use crate::crate_paths::{get_reinhardt_core_crate, get_reinhardt_di_crate};
+use crate::crate_paths::{
+	get_reinhardt_core_crate, get_reinhardt_di_crate, get_reinhardt_http_crate,
+};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Attribute, FnArg, ItemFn, Pat, PatType, Result, Type};
@@ -99,6 +101,7 @@ impl ProcessedArg {
 pub(crate) fn use_inject_impl(_args: TokenStream, input: ItemFn) -> Result<TokenStream> {
 	let di_crate = get_reinhardt_di_crate();
 	let core_crate = get_reinhardt_core_crate();
+	let http_crate = get_reinhardt_http_crate();
 
 	let ItemFn {
 		attrs,
@@ -216,9 +219,8 @@ pub(crate) fn use_inject_impl(_args: TokenStream, input: ItemFn) -> Result<Token
 				let #pat: #ty = #di_crate::Injected::<#ty>::resolve(&__di_ctx)
 					.await
 					.map_err(|e| {
-						eprintln!("Dependency injection failed for {}: {:?}", stringify!(#ty), e);
 						#core_crate::exception::Error::Internal(
-							format!("Dependency injection failed for {}: {:?}", stringify!(#ty), e)
+							format!("Dependency injection failed: {:?}", e)
 						)
 					})?
 					.into_inner();
@@ -228,9 +230,8 @@ pub(crate) fn use_inject_impl(_args: TokenStream, input: ItemFn) -> Result<Token
 				let #pat: #ty = #di_crate::Injected::<#ty>::resolve_uncached(&__di_ctx)
 					.await
 					.map_err(|e| {
-						eprintln!("Dependency injection failed for {}: {:?}", stringify!(#ty), e);
 						#core_crate::exception::Error::Internal(
-							format!("Dependency injection failed for {}: {:?}", stringify!(#ty), e)
+							format!("Dependency injection failed: {:?}", e)
 						)
 					})?
 					.into_inner();
@@ -277,31 +278,31 @@ pub(crate) fn use_inject_impl(_args: TokenStream, input: ItemFn) -> Result<Token
 		if has_request {
 			// Request was in original signature
 			if other_param_tokens.is_empty() {
-				quote! { #self_p, #request_pat: ::Request }
+				quote! { #self_p, #request_pat: #http_crate::Request }
 			} else {
-				quote! { #self_p, #request_pat: ::Request, #(#other_param_tokens),* }
+				quote! { #self_p, #request_pat: #http_crate::Request, #(#other_param_tokens),* }
 			}
 		} else {
 			// Request not in original, add it for DI
 			if other_param_tokens.is_empty() {
-				quote! { #self_p, #request_pat: ::Request }
+				quote! { #self_p, #request_pat: #http_crate::Request }
 			} else {
-				quote! { #self_p, #request_pat: ::Request, #(#other_param_tokens),* }
+				quote! { #self_p, #request_pat: #http_crate::Request, #(#other_param_tokens),* }
 			}
 		}
 	} else if has_request {
 		// Request was in original signature
 		if other_param_tokens.is_empty() {
-			quote! { #request_pat: ::Request }
+			quote! { #request_pat: #http_crate::Request }
 		} else {
-			quote! { #request_pat: ::Request, #(#other_param_tokens),* }
+			quote! { #request_pat: #http_crate::Request, #(#other_param_tokens),* }
 		}
 	} else {
 		// Request not in original, add it for DI
 		if other_param_tokens.is_empty() {
-			quote! { #request_pat: ::Request }
+			quote! { #request_pat: #http_crate::Request }
 		} else {
-			quote! { #request_pat: ::Request, #(#other_param_tokens),* }
+			quote! { #request_pat: #http_crate::Request, #(#other_param_tokens),* }
 		}
 	};
 

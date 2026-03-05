@@ -12,6 +12,7 @@ use std::fmt;
 // Re-export core secret types from the always-available module
 pub use crate::settings::secret_types::{SecretString, SecretValue};
 
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum SecretError {
 	NotFound(String),

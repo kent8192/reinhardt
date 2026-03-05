@@ -56,7 +56,8 @@ where
 
 	// Execute the query - await the async result
 	let results = queryset.all().await.map_err(|e| {
-		eprintln!("Database query error in get_object_or_404: {:?}", e);
+		// Log the full error server-side only; never expose it in the HTTP response
+		tracing::error!("Database query error in get_object_or_404: {:?}", e);
 		Response::internal_server_error()
 	})?;
 
@@ -111,7 +112,8 @@ where
 {
 	// Execute the query - await the async result
 	let results = queryset.all().await.map_err(|e| {
-		eprintln!("Database query error in get_list_or_404: {:?}", e);
+		// Log the full error server-side only; never expose it in the HTTP response
+		tracing::error!("Database query error in get_list_or_404: {:?}", e);
 		Response::internal_server_error()
 	})?;
 

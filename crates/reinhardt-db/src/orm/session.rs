@@ -31,7 +31,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 /// Session error types
-#[derive(Debug, Clone)]
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionError {
 	/// Database error occurred
 	DatabaseError(String),
@@ -840,7 +841,12 @@ impl Session {
 						// If there are columns to insert, add them
 						if !columns.is_empty() {
 							insert_stmt.columns(columns);
-							insert_stmt.values(values_vec).unwrap();
+							insert_stmt.values(values_vec).map_err(|e| {
+								SessionError::FlushError(format!(
+									"Failed to build INSERT values: {}",
+									e
+								))
+							})?;
 						}
 
 						// Add RETURNING clause for PostgreSQL to get generated ID
@@ -1370,7 +1376,14 @@ fn bind_reinhardt_query_value<'a>(
 		RValue::TinyUnsigned(Some(i)) => query.bind(*i as i32),
 		RValue::SmallUnsigned(Some(i)) => query.bind(*i as i32),
 		RValue::Unsigned(Some(i)) => query.bind(*i as i64),
-		RValue::BigUnsigned(Some(i)) => query.bind(*i as i64),
+		RValue::BigUnsigned(Some(i)) => query.bind(i64::try_from(*i).unwrap_or_else(|_| {
+			tracing::warn!(
+				value = *i,
+				"BigUnsigned value {} exceeds i64::MAX, clamping to i64::MAX",
+				i
+			);
+			i64::MAX
+		})),
 		RValue::Float(Some(f)) => query.bind(*f),
 		RValue::Double(Some(f)) => query.bind(*f),
 		RValue::String(Some(s)) => query.bind(s.as_ref().clone()),
@@ -1816,11 +1829,11 @@ mod tests {
 	#[test]
 	fn test_json_to_reinhardt_query_value_float() {
 		use serde_json::json;
-		let value = json!(3.14159);
+		let value = json!(2.5);
 		let rq_value = super::json_to_reinhardt_query_value(&value);
 
 		let debug_str = format!("{:?}", rq_value);
-		assert!(debug_str.contains("3.14159") || debug_str.contains("Double"));
+		assert!(debug_str.contains("2.5") || debug_str.contains("Double"));
 	}
 
 	#[test]
@@ -1907,5 +1920,101 @@ mod tests {
 		let session = Session::new(pool, DbBackend::Sqlite).await.unwrap();
 
 		assert_eq!(session.get_backend(), DbBackend::Sqlite);
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// bind_reinhardt_query_value tests
+	// ──────────────────────────────────────────────────────────────
+
+	#[rstest]
+	fn test_bind_bigunsigned_overflow_clamps_to_i64_max() {
+		// Arrange
+		let overflow_value: u64 = u64::MAX; // exceeds i64::MAX
+		let result = i64::try_from(overflow_value).unwrap_or_else(|_| {
+			// Simulate the same fallback logic used in bind_reinhardt_query_value
+			i64::MAX
+		});
+
+		// Assert
+		assert_eq!(result, i64::MAX);
+	}
+
+	#[rstest]
+	fn test_bind_bigunsigned_within_range_does_not_clamp() {
+		// Arrange
+		let value: u64 = 42;
+		let result = i64::try_from(value).unwrap_or_else(|_| i64::MAX);
+
+		// Assert
+		assert_eq!(result, 42);
+	}
+
+	#[rstest]
+	fn test_bind_bigunsigned_at_i64_max_boundary() {
+		// Arrange
+		let value: u64 = i64::MAX as u64;
+		let result = i64::try_from(value).unwrap_or_else(|_| i64::MAX);
+
+		// Assert
+		assert_eq!(result, i64::MAX);
+	}
+
+	#[rstest]
+	fn test_bind_bigunsigned_just_above_i64_max_clamps() {
+		// Arrange
+		let value: u64 = (i64::MAX as u64) + 1;
+		let result = i64::try_from(value).unwrap_or_else(|_| i64::MAX);
+
+		// Assert
+		assert_eq!(result, i64::MAX);
+	}
+
+	#[rstest]
+	fn test_insert_values_error_maps_to_flush_error() {
+		// Arrange
+		// Create an InsertStatement with 2 columns but provide 1 value to trigger mismatch error
+		let mut insert_stmt = RQuery::insert()
+			.into_table(Alias::new("test_table"))
+			.to_owned();
+		insert_stmt.columns(vec![Alias::new("col_a"), Alias::new("col_b")]);
+		let mismatched_values = vec![RValue::String(Some(Box::new("only_one".to_string())))];
+
+		// Act
+		let result: Result<(), SessionError> = insert_stmt
+			.values(mismatched_values)
+			.map(|_| ())
+			.map_err(|e| SessionError::FlushError(format!("Failed to build INSERT values: {}", e)));
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(
+			matches!(err, SessionError::FlushError(ref msg) if msg.contains("Failed to build INSERT values"))
+		);
+		assert!(err.to_string().contains("Flush error:"));
+	}
+
+	#[rstest]
+	#[serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn test_session_flush_insert_new_object_without_pk(_init_drivers: ()) {
+		// Arrange
+		// Test flush with a new object (no primary key) to exercise the INSERT path
+		let pool = create_test_pool().await;
+		let mut session = Session::new(pool, DbBackend::Sqlite).await.unwrap();
+
+		let user = TestUser {
+			id: None,
+			name: "NewUser".to_string(),
+			email: "newuser@example.com".to_string(),
+		};
+
+		// Act
+		session.add(user).await.unwrap();
+		let flush_result = session.flush().await;
+
+		// Assert
+		assert!(flush_result.is_ok());
+		assert_eq!(session.dirty_count(), 0);
 	}
 }

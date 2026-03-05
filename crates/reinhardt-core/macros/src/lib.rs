@@ -19,6 +19,8 @@ mod admin;
 mod api_view;
 mod app_config_attribute;
 mod app_config_derive;
+mod apply_update_attribute;
+mod apply_update_derive;
 mod collect_migrations;
 mod crate_paths;
 mod injectable_common;
@@ -43,6 +45,8 @@ use action::action_impl;
 use admin::admin_impl;
 use api_view::api_view_impl;
 use app_config_attribute::app_config_attribute_impl;
+use apply_update_attribute::apply_update_attribute_impl;
+use apply_update_derive::apply_update_derive_impl;
 use injectable_fn::injectable_fn_impl;
 use injectable_struct::injectable_struct_impl;
 use installed_apps::installed_apps_impl;
@@ -377,7 +381,9 @@ pub fn use_inject(args: TokenStream, input: TokenStream) -> TokenStream {
 pub fn derive_query_fields(input: TokenStream) -> TokenStream {
 	let input = parse_macro_input!(input as syn::DeriveInput);
 
-	derive_query_fields_impl(input).into()
+	derive_query_fields_impl(input)
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
 }
 
 /// Derive macro for automatic OpenAPI schema generation
@@ -684,6 +690,43 @@ pub fn admin(args: TokenStream, input: TokenStream) -> TokenStream {
 	let input = parse_macro_input!(input as ItemStruct);
 
 	admin_impl(args.into(), input)
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
+}
+
+/// Attribute macro for applying partial updates to target structs
+///
+/// Automatically adds `#[derive(ApplyUpdate)]` and creates a helper config attribute.
+/// This provides a cleaner syntax for defining update request structs.
+///
+/// # Attributes
+///
+/// - `target(Type1, Type2, ...)`: Target types to generate `ApplyUpdate` implementations for
+///
+/// # Field Attributes
+///
+/// - `#[apply_update(skip)]`: Skip this field during update application
+/// - `#[apply_update(rename = "field_name")]`: Use a different field name on the target
+///
+#[proc_macro_attribute]
+pub fn apply_update(args: TokenStream, input: TokenStream) -> TokenStream {
+	let input = parse_macro_input!(input as ItemStruct);
+
+	apply_update_attribute_impl(args.into(), input)
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
+}
+
+/// Derive macro for automatic `ApplyUpdate` trait implementation
+///
+/// **Note**: Do not use this derive macro directly. Use `#[apply_update(...)]`
+/// attribute macro instead.
+///
+#[proc_macro_derive(ApplyUpdate, attributes(apply_update, apply_update_config))]
+pub fn derive_apply_update(input: TokenStream) -> TokenStream {
+	let input = parse_macro_input!(input as syn::DeriveInput);
+
+	apply_update_derive_impl(input)
 		.unwrap_or_else(|e| e.to_compile_error())
 		.into()
 }

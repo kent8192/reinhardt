@@ -234,7 +234,14 @@ pub async fn mail_admins(
 	)
 	.await;
 
-	if fail_silently { Ok(()) } else { result }
+	match result {
+		Ok(()) => Ok(()),
+		Err(e) if fail_silently && e.is_transient() => {
+			eprintln!("Email to admins failed (fail_silently=true): {}", e);
+			Ok(())
+		}
+		Err(e) => Err(e),
+	}
 }
 /// Send an email to managers
 ///
@@ -316,7 +323,14 @@ pub async fn mail_managers(
 	)
 	.await;
 
-	if fail_silently { Ok(()) } else { result }
+	match result {
+		Ok(()) => Ok(()),
+		Err(e) if fail_silently && e.is_transient() => {
+			eprintln!("Email to managers failed (fail_silently=true): {}", e);
+			Ok(())
+		}
+		Err(e) => Err(e),
+	}
 }
 
 #[cfg(test)]

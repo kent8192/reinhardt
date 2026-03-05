@@ -328,8 +328,22 @@ impl SqliteQueryBuilder {
 			SimpleExpr::Asterisk => {
 				writer.push("*");
 			}
-			_ => {
-				writer.push("(EXPR)");
+			SimpleExpr::TableColumn(table, col) => {
+				writer.push_identifier(&table.to_string(), |s| self.escape_iden(s));
+				writer.push(".");
+				writer.push_identifier(&col.to_string(), |s| self.escape_iden(s));
+			}
+			SimpleExpr::AsEnum(_name, expr) => {
+				// SQLite does not support PostgreSQL-style enum casting (::type),
+				// so we render only the inner expression.
+				self.write_simple_expr(writer, expr);
+			}
+			SimpleExpr::Cast(expr, type_name) => {
+				writer.push("CAST(");
+				self.write_simple_expr(writer, expr);
+				writer.push(" AS ");
+				writer.push_identifier(&type_name.to_string(), |s| self.escape_iden(s));
+				writer.push(")");
 			}
 		}
 	}
@@ -760,6 +774,8 @@ impl QueryBuilder for SqliteQueryBuilder {
 	}
 
 	fn build_insert(&self, stmt: &InsertStatement) -> (String, Values) {
+		use crate::query::insert::InsertSource;
+
 		let mut writer = SqlWriter::new();
 
 		// INSERT INTO clause
@@ -783,18 +799,29 @@ impl QueryBuilder for SqliteQueryBuilder {
 			writer.push(")");
 		}
 
-		// VALUES clause
-		if !stmt.values.is_empty() {
-			writer.push_keyword("VALUES");
-			writer.push_space();
+		// VALUES clause or SELECT subquery
+		match &stmt.source {
+			InsertSource::Values(values) if !values.is_empty() => {
+				writer.push_keyword("VALUES");
+				writer.push_space();
 
-			writer.push_list(&stmt.values, ", ", |w, row| {
-				w.push("(");
-				w.push_list(row, ", ", |w2, value| {
-					w2.push_value(value.clone(), |_i| self.placeholder(0));
+				writer.push_list(values, ", ", |w, row| {
+					w.push("(");
+					w.push_list(row, ", ", |w2, value| {
+						w2.push_value(value.clone(), |_i| self.placeholder(0));
+					});
+					w.push(")");
 				});
-				w.push(")");
-			});
+			}
+			InsertSource::Subquery(select) => {
+				writer.push_space();
+				let (select_sql, select_values) = self.build_select(select);
+				writer.push(&select_sql);
+				writer.append_values(&select_values);
+			}
+			_ => {
+				// Empty values - this is valid SQL in some contexts
+			}
 		}
 
 		// ON CONFLICT clause
@@ -1661,44 +1688,44 @@ impl QueryBuilder for SqliteQueryBuilder {
 			"SQLite does not support DROP DATABASE. Database files are removed via filesystem operations."
 		);
 	}
-	//
-	// 	fn build_analyze(&self, _stmt: &crate::query::AnalyzeStatement) -> (String, Values) {
-	// 		panic!("SQLite ANALYZE has different syntax. Not supported via this builder.");
-	// 	}
 
-	// 	fn build_vacuum(&self, _stmt: &crate::query::VacuumStatement) -> (String, Values) {
-	// 		panic!(
-	// 			"SQLite VACUUM has different syntax (no table specification). Not supported via this builder."
-	// 		);
-	// 	}
+	fn build_analyze(&self, _stmt: &crate::query::AnalyzeStatement) -> (String, Values) {
+		panic!("SQLite ANALYZE has different syntax. Not supported via this builder.");
+	}
 
-	// 	fn build_create_materialized_view(
-	// 		&self,
-	// 		_stmt: &crate::query::CreateMaterializedViewStatement,
-	// 	) -> (String, Values) {
-	// 		panic!("SQLite does not support materialized views.");
-	// 	}
+	fn build_vacuum(&self, _stmt: &crate::query::VacuumStatement) -> (String, Values) {
+		panic!(
+			"SQLite VACUUM has different syntax (no table specification). Not supported via this builder."
+		);
+	}
 
-	// 	fn build_alter_materialized_view(
-	// 		&self,
-	// 		_stmt: &crate::query::AlterMaterializedViewStatement,
-	// 	) -> (String, Values) {
-	// 		panic!("SQLite does not support materialized views.");
-	// 	}
+	fn build_create_materialized_view(
+		&self,
+		_stmt: &crate::query::CreateMaterializedViewStatement,
+	) -> (String, Values) {
+		panic!("SQLite does not support materialized views.");
+	}
 
-	// 	fn build_drop_materialized_view(
-	// 		&self,
-	// 		_stmt: &crate::query::DropMaterializedViewStatement,
-	// 	) -> (String, Values) {
-	// 		panic!("SQLite does not support materialized views.");
-	// 	}
+	fn build_alter_materialized_view(
+		&self,
+		_stmt: &crate::query::AlterMaterializedViewStatement,
+	) -> (String, Values) {
+		panic!("SQLite does not support materialized views.");
+	}
 
-	// 	fn build_refresh_materialized_view(
-	// 		&self,
-	// 		_stmt: &crate::query::RefreshMaterializedViewStatement,
-	// 	) -> (String, Values) {
-	// 		panic!("SQLite does not support materialized views.");
-	// 	}
+	fn build_drop_materialized_view(
+		&self,
+		_stmt: &crate::query::DropMaterializedViewStatement,
+	) -> (String, Values) {
+		panic!("SQLite does not support materialized views.");
+	}
+
+	fn build_refresh_materialized_view(
+		&self,
+		_stmt: &crate::query::RefreshMaterializedViewStatement,
+	) -> (String, Values) {
+		panic!("SQLite does not support materialized views.");
+	}
 
 	fn build_create_procedure(
 		&self,
@@ -1919,6 +1946,7 @@ mod tests {
 		query::Query,
 		types::{Alias, IntoIden},
 	};
+	use rstest::rstest;
 
 	#[test]
 	fn test_escape_identifier() {
@@ -2055,6 +2083,57 @@ mod tests {
 		let (sql, values) = builder.build_insert(&stmt);
 		assert!(sql.contains("RETURNING *"));
 		assert_eq!(values.len(), 1);
+	}
+
+	#[test]
+	fn test_insert_from_subquery() {
+		let builder = SqliteQueryBuilder::new();
+
+		// Create a SELECT subquery
+		let select = Query::select()
+			.column("name")
+			.column("email")
+			.from("temp_users")
+			.to_owned();
+
+		// Create an INSERT with subquery
+		let mut stmt = Query::insert();
+		stmt.into_table("users")
+			.columns(["name", "email"])
+			.from_subquery(select);
+
+		let (sql, values) = builder.build_insert(&stmt);
+		assert!(sql.contains("INSERT INTO \"users\""));
+		assert!(sql.contains("\"name\", \"email\""));
+		assert!(sql.contains("SELECT \"name\", \"email\" FROM \"temp_users\""));
+		assert!(!sql.contains("VALUES"));
+		assert_eq!(values.len(), 0);
+	}
+
+	#[test]
+	fn test_insert_from_subquery_with_where() {
+		let builder = SqliteQueryBuilder::new();
+
+		// Create a SELECT subquery with WHERE clause
+		let select = Query::select()
+			.column("name")
+			.column("email")
+			.from("temp_users")
+			.and_where(Expr::col("active").eq(true))
+			.to_owned();
+
+		// Create an INSERT with subquery
+		let mut stmt = Query::insert();
+		stmt.into_table("users")
+			.columns(["name", "email"])
+			.from_subquery(select);
+
+		let (sql, values) = builder.build_insert(&stmt);
+		assert!(sql.contains("INSERT INTO \"users\""));
+		assert!(sql.contains("SELECT"));
+		assert!(sql.contains("FROM \"temp_users\""));
+		assert!(sql.contains("WHERE"));
+		assert_eq!(values.len(), 1); // true value from WHERE clause
 	}
 
 	#[test]
@@ -5217,6 +5296,100 @@ mod tests {
 			.user("app_user");
 
 		let _ = builder.build_set_default_role(&stmt);
+	}
+
+	// ==================== SimpleExpr variant handling tests ====================
+
+	#[rstest]
+	fn test_table_column_expr_renders_qualified_identifier() {
+		// Arrange
+		let builder = SqliteQueryBuilder::new();
+		let mut stmt = Query::select();
+		stmt.expr(Expr::tbl("users", "name")).from("users");
+
+		// Act
+		let (sql, _) = builder.build_select(&stmt);
+
+		// Assert
+		assert_eq!(sql, "SELECT \"users\".\"name\" FROM \"users\"");
+	}
+
+	#[rstest]
+	fn test_table_column_expr_escapes_special_characters() {
+		// Arrange
+		let builder = SqliteQueryBuilder::new();
+		let mut stmt = Query::select();
+		stmt.expr(Expr::tbl(Alias::new("my\"table"), Alias::new("my\"col")))
+			.from("t");
+
+		// Act
+		let (sql, _) = builder.build_select(&stmt);
+
+		// Assert
+		assert!(sql.contains("\"my\"\"table\".\"my\"\"col\""));
+	}
+
+	#[rstest]
+	fn test_as_enum_expr_renders_inner_expression_only() {
+		// Arrange
+		let builder = SqliteQueryBuilder::new();
+		let mut stmt = Query::select();
+		stmt.expr(Expr::val("active").as_enum(Alias::new("status")))
+			.from("users");
+
+		// Act
+		let (sql, values) = builder.build_select(&stmt);
+
+		// Assert: SQLite does not support ::type casting, only inner expression is rendered
+		assert_eq!(sql, "SELECT ? FROM \"users\"");
+		assert_eq!(values.len(), 1);
+	}
+
+	#[rstest]
+	fn test_cast_expr_renders_cast_syntax() {
+		// Arrange
+		let builder = SqliteQueryBuilder::new();
+		let mut stmt = Query::select();
+		stmt.expr(Expr::col("age").cast_as(Alias::new("INTEGER")))
+			.from("users");
+
+		// Act
+		let (sql, _) = builder.build_select(&stmt);
+
+		// Assert
+		assert_eq!(sql, "SELECT CAST(\"age\" AS \"INTEGER\") FROM \"users\"");
+	}
+
+	#[rstest]
+	fn test_cast_expr_escapes_type_name_with_special_characters() {
+		// Arrange
+		let builder = SqliteQueryBuilder::new();
+		let mut stmt = Query::select();
+		stmt.expr(Expr::col("age").cast_as(Alias::new("my\"type")))
+			.from("users");
+
+		// Act
+		let (sql, _) = builder.build_select(&stmt);
+
+		// Assert
+		assert!(sql.contains("CAST(\"age\" AS \"my\"\"type\")"));
+	}
+
+	#[rstest]
+	fn test_table_column_in_where_clause() {
+		// Arrange
+		let builder = SqliteQueryBuilder::new();
+		let mut stmt = Query::select();
+		stmt.column("id")
+			.from("orders")
+			.and_where(Expr::tbl("orders", "status").eq("shipped"));
+
+		// Act
+		let (sql, _) = builder.build_select(&stmt);
+
+		// Assert
+		assert!(sql.contains("\"orders\".\"status\""));
+		assert!(sql.contains("WHERE"));
 	}
 }
 

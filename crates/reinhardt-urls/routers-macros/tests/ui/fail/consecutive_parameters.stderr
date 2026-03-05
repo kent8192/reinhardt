@@ -1,0 +1,7 @@
+error: Consecutive parameters without separator at position 11
+       Parameters must be separated by a static segment (e.g., '/')
+       Example: /{id}/{name}/ instead of /{id}{name}/
+ --> tests/ui/fail/consecutive_parameters.rs:5:20
+  |
+5 |     let _path = path!("/users/{id}{name}/");
+  |                       ^^^^^^^^^^^^^^^^^^^^

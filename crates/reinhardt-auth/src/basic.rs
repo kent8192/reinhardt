@@ -69,7 +69,7 @@ impl BasicAuthentication {
 	/// # async fn example() {
 	/// let auth = HttpBasicAuth::new();
 	///
-	// Create a request without authentication header
+	/// // Create a request without authentication header
 	/// let request = Request::builder()
 	///     .method(Method::GET)
 	///     .uri("/")
@@ -77,7 +77,7 @@ impl BasicAuthentication {
 	///     .build()
 	///     .unwrap();
 	///
-	// Since no users are registered, authentication should return None
+	/// // Since no users are registered, authentication should return None
 	/// let result = auth.authenticate(&request).await.unwrap();
 	/// assert!(result.is_none());
 	/// # }

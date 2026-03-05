@@ -139,8 +139,19 @@ pub async fn get_list(
 	}
 
 	// Build additional filters (AND logic)
+	// Only accept filter fields that are explicitly defined in model_admin.list_filter()
+	let allowed_filter_fields = model_admin.list_filter();
 	let mut additional_filters = Vec::new();
 	for (field, value) in params.filters.iter() {
+		if !allowed_filter_fields.contains(&field.as_str()) {
+			return Err(ServerFnError::server(
+				400,
+				format!(
+					"Unknown filter field '{}'. Allowed filter fields: {:?}",
+					field, allowed_filter_fields
+				),
+			));
+		}
 		additional_filters.push(Filter::new(
 			field.clone(),
 			FilterOperator::Eq,

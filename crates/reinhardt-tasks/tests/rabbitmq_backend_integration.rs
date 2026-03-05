@@ -7,7 +7,7 @@
 use reinhardt_tasks::backend::TaskBackend;
 use reinhardt_tasks::backends::rabbitmq::RabbitMQBackend;
 use reinhardt_tasks::{RabbitMQConfig, Task, TaskId, TaskPriority, TaskStatus};
-use reinhardt_test::fixtures::rabbitmq_container;
+use reinhardt_testkit::fixtures::rabbitmq_container;
 use rstest::*;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

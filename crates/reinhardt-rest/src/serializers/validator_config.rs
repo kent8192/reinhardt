@@ -10,6 +10,7 @@ use serde::Serialize;
 use std::marker::PhantomData;
 
 /// Configuration for field validators
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct ValidatorConfig<M: Model> {
 	unique_validators: Vec<UniqueValidator<M>>,

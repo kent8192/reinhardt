@@ -1,6 +1,6 @@
 // Error path tests for INSERT statement
 
-use super::fixtures::{users_table, users_with_data, TestPool};
+use super::fixtures::{TestPool, users_table, users_with_data};
 use reinhardt_query::prelude::*;
 use rstest::*;
 

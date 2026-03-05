@@ -87,14 +87,15 @@ impl FormField for URLField {
 					return Ok(serde_json::Value::String(String::new()));
 				}
 
-				// Check length
+				// Check length using character count (not byte count)
+				// for correct multi-byte character handling
+				let char_count = s.chars().count();
 				if let Some(max) = self.max_length
-					&& s.len() > max
+					&& char_count > max
 				{
 					return Err(FieldError::Validation(format!(
 						"Ensure this value has at most {} characters (it has {})",
-						max,
-						s.len()
+						max, char_count
 					)));
 				}
 

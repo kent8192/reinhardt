@@ -195,7 +195,7 @@ pub fn mfa_with_registered_user(test_user: TestUser) -> (MfaManager, String) {
 	let mfa = MfaManager::new("ReinhardtTest").time_window(30);
 	// Use a valid base32 secret (RFC 4648)
 	let secret = "JBSWY3DPEHPK3PXP".to_string();
-	mfa.register_user(&test_user.username, &secret);
+	tokio::runtime::Handle::current().block_on(mfa.register_user(&test_user.username, &secret));
 	(mfa, secret)
 }
 

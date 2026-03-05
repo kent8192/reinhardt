@@ -10,6 +10,7 @@ use std::time::Duration;
 use crate::backends::error::{DatabaseError, Result};
 
 /// CockroachDB connection configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct CockroachDBConnectionConfig {
 	/// Connection URL

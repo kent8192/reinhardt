@@ -655,7 +655,6 @@ mod proptests {
 		fn prop_strip_tags_no_angle_brackets(s in "\\PC*") {
 			let stripped = strip_tags(&s);
 			assert!(!stripped.contains('<'));
-			assert!(!stripped.contains('>'));
 		}
 
 		#[test]

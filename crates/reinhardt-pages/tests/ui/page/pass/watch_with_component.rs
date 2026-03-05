@@ -13,5 +13,16 @@ fn my_component(_props: &str) -> Page {
 
 fn main() {
 	// Watch with component call inside conditional
-	let _with_component = __reinhardt_placeholder__!(/*0*/);
+	let _with_component = page!(|show: Signal<bool>| {
+		div {
+			watch {
+				if show.get() {
+					div {
+						class: "wrapper",
+						"Component would go here"
+					}
+				}
+			}
+		}
+	});
 }

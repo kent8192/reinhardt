@@ -1,6 +1,6 @@
 // Edge case tests for SELECT statement
 
-use super::fixtures::{users_with_data, TestPool};
+use super::fixtures::{TestPool, users_with_data};
 use reinhardt_query::prelude::*;
 use rstest::*;
 use sqlx::Row;

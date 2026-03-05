@@ -1,32 +1,65 @@
 //! gRPC server configuration
 //!
 //! This module provides server-level configuration for gRPC services,
-//! including message size limits to prevent denial of service attacks
-//! from oversized protobuf messages.
+//! including message size limits, request timeouts, and connection limits
+//! to prevent denial of service attacks.
 //!
-//! # Default Message Size Limits
+//! # Default Limits
 //!
-//! By default, [`GrpcServerConfig`] enforces a 4MB limit on both
-//! decoding (incoming) and encoding (outgoing) messages. This matches
-//! the default behavior of tonic when explicit limits are configured.
+//! [`GrpcServerConfig`] provides sensible defaults for DoS protection:
+//!
+//! - **Message size**: 4MB for both encoding and decoding
+//! - **Request timeout**: 30 seconds
+//! - **Max concurrent connections**: 1000
 //!
 //! # Example
 //!
 //! ```rust
 //! use reinhardt_grpc::server::GrpcServerConfig;
+//! use std::time::Duration;
 //!
-//! // Use defaults (4MB limits)
+//! // Use defaults
 //! let config = GrpcServerConfig::default();
 //! assert_eq!(config.max_decoding_message_size(), 4 * 1024 * 1024);
-//! assert_eq!(config.max_encoding_message_size(), 4 * 1024 * 1024);
+//! assert_eq!(config.request_timeout(), Duration::from_secs(30));
+//! assert_eq!(config.max_concurrent_connections(), 1000);
 //!
 //! // Custom limits
 //! let config = GrpcServerConfig::builder()
-//!     .max_decoding_message_size(8 * 1024 * 1024) // 8MB
-//!     .max_encoding_message_size(16 * 1024 * 1024) // 16MB
+//!     .max_decoding_message_size(8 * 1024 * 1024)
+//!     .request_timeout(Duration::from_secs(60))
+//!     .max_concurrent_connections(500)
 //!     .build();
-//! assert_eq!(config.max_decoding_message_size(), 8 * 1024 * 1024);
 //! ```
+//!
+//! # Tower Middleware Integration
+//!
+//! For rate limiting, use tower's middleware ecosystem with tonic. The
+//! [`GrpcServerConfig`] values can be applied to a tonic server through
+//! tower layers:
+//!
+//! ```rust,ignore
+//! use tonic::transport::Server;
+//! use tower::ServiceBuilder;
+//! use tower::timeout::TimeoutLayer;
+//! use tower::limit::ConcurrencyLimitLayer;
+//! use reinhardt_grpc::server::GrpcServerConfig;
+//!
+//! let config = GrpcServerConfig::default();
+//!
+//! Server::builder()
+//!     .layer(
+//!         ServiceBuilder::new()
+//!             .layer(TimeoutLayer::new(config.request_timeout()))
+//!             .layer(ConcurrencyLimitLayer::new(config.max_concurrent_connections()))
+//!             .into_inner(),
+//!     )
+//!     .add_service(my_service)
+//!     .serve(addr)
+//!     .await?;
+//! ```
+
+use std::time::Duration;
 
 /// Default maximum decoding (incoming) message size: 4MB
 const DEFAULT_MAX_DECODING_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
@@ -34,26 +67,53 @@ const DEFAULT_MAX_DECODING_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
 /// Default maximum encoding (outgoing) message size: 4MB
 const DEFAULT_MAX_ENCODING_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
 
-/// Configuration for gRPC server message size limits.
+/// Default request timeout: 30 seconds
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Default maximum concurrent connections: 1000
+const DEFAULT_MAX_CONCURRENT_CONNECTIONS: usize = 1000;
+
+/// Configuration for gRPC server DoS protection.
 ///
-/// This struct holds the configuration for maximum message sizes
-/// that the gRPC server will accept and send. Setting appropriate
-/// limits prevents denial of service attacks from oversized messages.
+/// This struct holds configuration for message size limits, request
+/// timeouts, and connection limits. Setting appropriate values prevents
+/// denial of service attacks from oversized messages, slow requests,
+/// and connection floods.
+///
+/// Use [`GrpcServerConfig::builder()`] to construct with custom values,
+/// or [`GrpcServerConfig::default()`] for sensible defaults.
+///
+/// # Defaults
+///
+/// | Setting | Default |
+/// |---------|---------|
+/// | `max_decoding_message_size` | 4 MB |
+/// | `max_encoding_message_size` | 4 MB |
+/// | `request_timeout` | 30 seconds |
+/// | `max_concurrent_connections` | 1000 |
 ///
 /// # Example
 ///
 /// ```rust
 /// use reinhardt_grpc::server::GrpcServerConfig;
+/// use std::time::Duration;
 ///
 /// let config = GrpcServerConfig::builder()
-///     .max_decoding_message_size(2 * 1024 * 1024) // 2MB for incoming
-///     .max_encoding_message_size(8 * 1024 * 1024) // 8MB for outgoing
+///     .max_decoding_message_size(2 * 1024 * 1024)
+///     .request_timeout(Duration::from_secs(60))
+///     .max_concurrent_connections(500)
 ///     .build();
+///
+/// assert_eq!(config.max_decoding_message_size(), 2 * 1024 * 1024);
+/// assert_eq!(config.request_timeout(), Duration::from_secs(60));
+/// assert_eq!(config.max_concurrent_connections(), 500);
 /// ```
 #[derive(Debug, Clone)]
 pub struct GrpcServerConfig {
 	max_decoding_message_size: usize,
 	max_encoding_message_size: usize,
+	request_timeout: Duration,
+	max_concurrent_connections: usize,
 }
 
 impl GrpcServerConfig {
@@ -71,6 +131,30 @@ impl GrpcServerConfig {
 	pub fn max_encoding_message_size(&self) -> usize {
 		self.max_encoding_message_size
 	}
+
+	/// Returns the maximum message size in bytes.
+	///
+	/// This is an alias for [`max_decoding_message_size`](Self::max_decoding_message_size),
+	/// representing the largest message the server will accept from clients.
+	pub fn max_message_size(&self) -> usize {
+		self.max_decoding_message_size
+	}
+
+	/// Returns the request timeout duration.
+	///
+	/// Requests exceeding this duration will be cancelled with a
+	/// `DeadlineExceeded` status. Apply this via tower's `TimeoutLayer`.
+	pub fn request_timeout(&self) -> Duration {
+		self.request_timeout
+	}
+
+	/// Returns the maximum number of concurrent connections allowed.
+	///
+	/// Apply this via tower's `ConcurrencyLimitLayer` to prevent
+	/// connection flood attacks.
+	pub fn max_concurrent_connections(&self) -> usize {
+		self.max_concurrent_connections
+	}
 }
 
 impl Default for GrpcServerConfig {
@@ -78,6 +162,8 @@ impl Default for GrpcServerConfig {
 		Self {
 			max_decoding_message_size: DEFAULT_MAX_DECODING_MESSAGE_SIZE,
 			max_encoding_message_size: DEFAULT_MAX_ENCODING_MESSAGE_SIZE,
+			request_timeout: DEFAULT_REQUEST_TIMEOUT,
+			max_concurrent_connections: DEFAULT_MAX_CONCURRENT_CONNECTIONS,
 		}
 	}
 }
@@ -85,12 +171,13 @@ impl Default for GrpcServerConfig {
 /// Builder for [`GrpcServerConfig`].
 ///
 /// Uses the builder pattern to construct a `GrpcServerConfig` with
-/// custom message size limits. If not explicitly set, limits default
-/// to 4MB each.
+/// custom limits. All values default to the same as `GrpcServerConfig::default()`.
 #[derive(Debug, Clone)]
 pub struct GrpcServerConfigBuilder {
 	max_decoding_message_size: usize,
 	max_encoding_message_size: usize,
+	request_timeout: Duration,
+	max_concurrent_connections: usize,
 }
 
 impl GrpcServerConfigBuilder {
@@ -113,11 +200,41 @@ impl GrpcServerConfigBuilder {
 		self
 	}
 
+	/// Set the maximum message size in bytes.
+	///
+	/// This is a convenience method that sets both decoding and encoding
+	/// limits to the same value.
+	pub fn max_message_size(mut self, size: usize) -> Self {
+		self.max_decoding_message_size = size;
+		self.max_encoding_message_size = size;
+		self
+	}
+
+	/// Set the request timeout duration.
+	///
+	/// Requests exceeding this duration will be cancelled. Apply this
+	/// via tower's `TimeoutLayer` when building the server.
+	pub fn request_timeout(mut self, timeout: Duration) -> Self {
+		self.request_timeout = timeout;
+		self
+	}
+
+	/// Set the maximum number of concurrent connections.
+	///
+	/// Apply this via tower's `ConcurrencyLimitLayer` when building
+	/// the server.
+	pub fn max_concurrent_connections(mut self, max: usize) -> Self {
+		self.max_concurrent_connections = max;
+		self
+	}
+
 	/// Build the `GrpcServerConfig`.
 	pub fn build(self) -> GrpcServerConfig {
 		GrpcServerConfig {
 			max_decoding_message_size: self.max_decoding_message_size,
 			max_encoding_message_size: self.max_encoding_message_size,
+			request_timeout: self.request_timeout,
+			max_concurrent_connections: self.max_concurrent_connections,
 		}
 	}
 }
@@ -127,6 +244,8 @@ impl Default for GrpcServerConfigBuilder {
 		Self {
 			max_decoding_message_size: DEFAULT_MAX_DECODING_MESSAGE_SIZE,
 			max_encoding_message_size: DEFAULT_MAX_ENCODING_MESSAGE_SIZE,
+			request_timeout: DEFAULT_REQUEST_TIMEOUT,
+			max_concurrent_connections: DEFAULT_MAX_CONCURRENT_CONNECTIONS,
 		}
 	}
 }
@@ -170,6 +289,39 @@ mod tests {
 	}
 
 	#[rstest]
+	fn default_config_has_30s_request_timeout() {
+		// Arrange & Act
+		let config = GrpcServerConfig::default();
+
+		// Assert
+		assert_eq!(config.request_timeout(), Duration::from_secs(30));
+	}
+
+	#[rstest]
+	fn default_config_has_1000_max_connections() {
+		// Arrange & Act
+		let config = GrpcServerConfig::default();
+
+		// Assert
+		assert_eq!(config.max_concurrent_connections(), 1000);
+	}
+
+	#[rstest]
+	fn max_message_size_returns_decoding_size() {
+		// Arrange
+		let config = GrpcServerConfig::builder()
+			.max_decoding_message_size(2 * 1024 * 1024)
+			.build();
+
+		// Act & Assert
+		assert_eq!(config.max_message_size(), 2 * 1024 * 1024);
+		assert_eq!(
+			config.max_message_size(),
+			config.max_decoding_message_size()
+		);
+	}
+
+	#[rstest]
 	fn builder_default_matches_default_config() {
 		// Arrange
 		let default_config = GrpcServerConfig::default();
@@ -185,6 +337,14 @@ mod tests {
 		assert_eq!(
 			builder_config.max_encoding_message_size(),
 			default_config.max_encoding_message_size()
+		);
+		assert_eq!(
+			builder_config.request_timeout(),
+			default_config.request_timeout()
+		);
+		assert_eq!(
+			builder_config.max_concurrent_connections(),
+			default_config.max_concurrent_connections()
 		);
 	}
 
@@ -243,11 +403,71 @@ mod tests {
 	}
 
 	#[rstest]
+	fn builder_sets_max_message_size_for_both() {
+		// Arrange
+		let size = 2 * 1024 * 1024; // 2MB
+
+		// Act
+		let config = GrpcServerConfig::builder().max_message_size(size).build();
+
+		// Assert
+		assert_eq!(config.max_decoding_message_size(), size);
+		assert_eq!(config.max_encoding_message_size(), size);
+	}
+
+	#[rstest]
+	fn builder_sets_custom_request_timeout() {
+		// Arrange & Act
+		let config = GrpcServerConfig::builder()
+			.request_timeout(Duration::from_secs(60))
+			.build();
+
+		// Assert
+		assert_eq!(config.request_timeout(), Duration::from_secs(60));
+	}
+
+	#[rstest]
+	fn builder_sets_custom_max_concurrent_connections() {
+		// Arrange & Act
+		let config = GrpcServerConfig::builder()
+			.max_concurrent_connections(500)
+			.build();
+
+		// Assert
+		assert_eq!(config.max_concurrent_connections(), 500);
+	}
+
+	#[rstest]
+	fn builder_sets_all_custom_values() {
+		// Arrange
+		let decoding = 2 * 1024 * 1024;
+		let encoding = 8 * 1024 * 1024;
+		let timeout = Duration::from_secs(60);
+		let max_conns = 500;
+
+		// Act
+		let config = GrpcServerConfig::builder()
+			.max_decoding_message_size(decoding)
+			.max_encoding_message_size(encoding)
+			.request_timeout(timeout)
+			.max_concurrent_connections(max_conns)
+			.build();
+
+		// Assert
+		assert_eq!(config.max_decoding_message_size(), decoding);
+		assert_eq!(config.max_encoding_message_size(), encoding);
+		assert_eq!(config.request_timeout(), timeout);
+		assert_eq!(config.max_concurrent_connections(), max_conns);
+	}
+
+	#[rstest]
 	fn config_clone_preserves_values() {
 		// Arrange
 		let config = GrpcServerConfig::builder()
 			.max_decoding_message_size(1024)
 			.max_encoding_message_size(2048)
+			.request_timeout(Duration::from_secs(45))
+			.max_concurrent_connections(200)
 			.build();
 
 		// Act
@@ -261,6 +481,11 @@ mod tests {
 		assert_eq!(
 			cloned.max_encoding_message_size(),
 			config.max_encoding_message_size()
+		);
+		assert_eq!(cloned.request_timeout(), config.request_timeout());
+		assert_eq!(
+			cloned.max_concurrent_connections(),
+			config.max_concurrent_connections()
 		);
 	}
 

@@ -114,6 +114,22 @@ pub(crate) struct ServerFnOptions {
 	/// }
 	/// ```
 	pub no_csrf: bool,
+
+	/// Enable automatic validation with `pre_validate = true`
+	///
+	/// When enabled, deserialized arguments implementing `validator::Validate`
+	/// are automatically validated before the server function is called.
+	/// Returns an error with validation details on failure.
+	///
+	/// # Example
+	///
+	/// ```ignore
+	/// #[server_fn(pre_validate = true)]
+	/// async fn create_user(req: CreateUserRequest) -> Result<User, ServerFnError> {
+	///     // req is already validated
+	/// }
+	/// ```
+	pub pre_validate: bool,
 }
 
 fn default_codec() -> String {
@@ -127,6 +143,7 @@ impl Default for ServerFnOptions {
 			endpoint: None,
 			codec: default_codec(),
 			no_csrf: false,
+			pre_validate: false,
 		}
 	}
 }
@@ -258,6 +275,11 @@ impl ServerFnInfo {
 		let nested: Vec<NestedMeta> = args.into_iter().map(NestedMeta::Meta).collect();
 		let options = ServerFnOptions::from_list(&nested)?;
 
+		// Validate endpoint path if explicitly specified
+		if let Some(ref endpoint) = options.endpoint {
+			validate_endpoint_path(endpoint)?;
+		}
+
 		Ok(Self { func, options })
 	}
 
@@ -290,6 +312,52 @@ impl ServerFnInfo {
 	fn use_inject(&self) -> bool {
 		self.options.use_inject
 	}
+}
+
+/// Validate server_fn endpoint path.
+///
+/// The endpoint path must:
+/// - Start with `/`
+/// - Not contain path traversal sequences (`..`)
+/// - Not contain query strings (`?`)
+/// - Not contain fragment identifiers (`#`)
+/// - Not be a full URL (e.g. `http://` or `https://`)
+fn validate_endpoint_path(path: &str) -> Result<(), darling::Error> {
+	if path.contains(char::is_whitespace) {
+		return Err(darling::Error::custom(
+			"endpoint path must not contain whitespace",
+		));
+	}
+
+	if path.starts_with("http://") || path.starts_with("https://") {
+		return Err(darling::Error::custom(
+			"endpoint must be a relative path starting with '/', not a full URL",
+		));
+	}
+
+	if !path.starts_with('/') {
+		return Err(darling::Error::custom("endpoint path must start with '/'"));
+	}
+
+	if path.contains("..") {
+		return Err(darling::Error::custom(
+			"endpoint path must not contain path traversal sequences ('..')",
+		));
+	}
+
+	if path.contains('?') {
+		return Err(darling::Error::custom(
+			"endpoint path must not contain query strings ('?')",
+		));
+	}
+
+	if path.contains('#') {
+		return Err(darling::Error::custom(
+			"endpoint path must not contain fragment identifiers ('#')",
+		));
+	}
+
+	Ok(())
 }
 
 /// Main entry point for `#[server_fn]` macro
@@ -598,6 +666,7 @@ fn generate_server_handler(
 	let name = info.name();
 	let endpoint = info.endpoint();
 	let codec = info.codec();
+	let pre_validate = info.options.pre_validate;
 	let func = &info.func;
 	let sig = &func.sig;
 
@@ -703,6 +772,16 @@ fn generate_server_handler(
 			);
 			return quote! { compile_error!(#msg); };
 		}
+	};
+
+	// Generate pre_validate validation code
+	let validation_code = if pre_validate {
+		quote! {
+			::validator::Validate::validate(&args)
+				.map_err(|e| ::serde_json::to_string(&e).unwrap_or_else(|_| format!("{:?}", e)))?;
+		}
+	} else {
+		quote! {}
 	};
 
 	// Generate codec-specific serialization code for server response
@@ -823,6 +902,9 @@ fn generate_server_handler(
 
 			// Deserialize request body based on codec
 			#deserialize_code
+
+			// Validate deserialized arguments (when pre_validate = true)
+			#validation_code
 
 			// Resolve #[inject] parameters via DI
 			#di_resolution
@@ -945,5 +1027,55 @@ mod tests {
 		assert_eq!(options.use_inject, true);
 		assert_eq!(options.endpoint, Some("/custom".to_string()));
 		assert_eq!(options.codec, "json");
+	}
+
+	#[test]
+	fn test_validate_endpoint_valid_path() {
+		assert!(validate_endpoint_path("/api/users").is_ok());
+		assert!(validate_endpoint_path("/api/server_fn/create_user").is_ok());
+		assert!(validate_endpoint_path("/").is_ok());
+	}
+
+	#[test]
+	fn test_validate_endpoint_rejects_no_leading_slash() {
+		let result = validate_endpoint_path("api/users");
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(err.contains("must start with '/'"));
+	}
+
+	#[test]
+	fn test_validate_endpoint_rejects_full_url() {
+		let result = validate_endpoint_path("http://example.com/api");
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(err.contains("not a full URL"));
+
+		let result = validate_endpoint_path("https://example.com/api");
+		assert!(result.is_err());
+	}
+
+	#[test]
+	fn test_validate_endpoint_rejects_traversal() {
+		let result = validate_endpoint_path("/api/../secret");
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(err.contains("path traversal"));
+	}
+
+	#[test]
+	fn test_validate_endpoint_rejects_query_string() {
+		let result = validate_endpoint_path("/api/users?admin=true");
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(err.contains("query strings"));
+	}
+
+	#[test]
+	fn test_validate_endpoint_rejects_fragment() {
+		let result = validate_endpoint_path("/api/users#section");
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(err.contains("fragment identifiers"));
 	}
 }

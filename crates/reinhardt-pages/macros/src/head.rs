@@ -262,6 +262,37 @@ fn generate_meta_call(attrs: &[HeadAttr], pages_crate: &TokenStream2) -> syn::Re
 	))
 }
 
+/// Dangerous URL schemes that must be rejected in link href and script src attributes.
+const DANGEROUS_URL_SCHEMES: &[&str] = &["javascript:", "data:", "vbscript:"];
+
+/// Validate a URL expression against dangerous schemes.
+///
+/// If the expression is a string literal, checks that it does not start with
+/// a dangerous URL scheme (`javascript:`, `data:`, `vbscript:`).
+/// Non-literal expressions cannot be validated at compile time and are allowed.
+fn validate_url_scheme(expr: &Expr, attr_name: &str, tag_name: &str) -> syn::Result<()> {
+	if let Expr::Lit(lit) = expr
+		&& let syn::Lit::Str(s) = &lit.lit
+	{
+		let value = s.value().to_ascii_lowercase();
+		let trimmed = value.trim_start();
+		for scheme in DANGEROUS_URL_SCHEMES {
+			if trimmed.starts_with(scheme) {
+				return Err(syn::Error::new(
+					s.span(),
+					format!(
+						"dangerous URL scheme '{}' is not allowed in {} {} attribute",
+						scheme.trim_end_matches(':'),
+						tag_name,
+						attr_name,
+					),
+				));
+			}
+		}
+	}
+	Ok(())
+}
+
 /// Generate a link tag builder call.
 ///
 /// Fixes #844: returns `syn::Result` instead of panicking via `expect()`.
@@ -294,6 +325,9 @@ fn generate_link_call(attrs: &[HeadAttr], pages_crate: &TokenStream2) -> syn::Re
 			"link tag requires 'href' attribute with a value",
 		)
 	})?;
+
+	// Reject dangerous URL schemes in href attribute
+	validate_url_scheme(href_value, "href", "link")?;
 
 	let mut chain = quote! {
 		#pages_crate::component::LinkTag::new(#rel_value, #href_value)
@@ -374,6 +408,9 @@ fn generate_script_call(
 			"script tag requires 'src' attribute for external scripts",
 		)
 	})?;
+
+	// Reject dangerous URL schemes in src attribute
+	validate_url_scheme(src_value, "src", "script")?;
 
 	// Check if it's a module
 	let is_module = type_attr
@@ -521,8 +558,127 @@ mod tests {
 	fn test_codegen_title() {
 		let input = quote!(|| { title { "Test Title" } });
 		let ast: HeadMacro = syn::parse2(input).unwrap();
-		let output = generate(&ast);
+		let output = generate(&ast).unwrap();
 		let output_str = output.to_string();
 		assert!(output_str.contains(". title"));
+	}
+
+	#[test]
+	fn test_link_rejects_javascript_scheme() {
+		let input = quote!(|| {
+			link {
+				rel: "stylesheet",
+				href: "javascript:alert(1)",
+			}
+		});
+		let ast: HeadMacro = syn::parse2(input).unwrap();
+		let result = generate(&ast);
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(err.contains("dangerous URL scheme"));
+		assert!(err.contains("javascript"));
+	}
+
+	#[test]
+	fn test_link_rejects_data_scheme() {
+		let input = quote!(|| {
+			link {
+				rel: "stylesheet",
+				href: "data:text/css,body{}",
+			}
+		});
+		let ast: HeadMacro = syn::parse2(input).unwrap();
+		let result = generate(&ast);
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(err.contains("dangerous URL scheme"));
+		assert!(err.contains("data"));
+	}
+
+	#[test]
+	fn test_link_rejects_vbscript_scheme() {
+		let input = quote!(|| {
+			link {
+				rel: "stylesheet",
+				href: "vbscript:MsgBox",
+			}
+		});
+		let ast: HeadMacro = syn::parse2(input).unwrap();
+		let result = generate(&ast);
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(err.contains("dangerous URL scheme"));
+		assert!(err.contains("vbscript"));
+	}
+
+	#[test]
+	fn test_script_rejects_javascript_scheme() {
+		let input = quote!(|| {
+			script {
+				src: "javascript:alert(1)",
+			}
+		});
+		let ast: HeadMacro = syn::parse2(input).unwrap();
+		let result = generate(&ast);
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(err.contains("dangerous URL scheme"));
+		assert!(err.contains("javascript"));
+	}
+
+	#[test]
+	fn test_script_rejects_data_scheme() {
+		let input = quote!(|| {
+			script {
+				src: "data:text/javascript,alert(1)",
+			}
+		});
+		let ast: HeadMacro = syn::parse2(input).unwrap();
+		let result = generate(&ast);
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(err.contains("dangerous URL scheme"));
+		assert!(err.contains("data"));
+	}
+
+	#[test]
+	fn test_link_allows_safe_urls() {
+		let input = quote!(|| {
+			link {
+				rel: "stylesheet",
+				href: "/static/style.css",
+			}
+		});
+		let ast: HeadMacro = syn::parse2(input).unwrap();
+		let result = generate(&ast);
+		assert!(result.is_ok());
+	}
+
+	#[test]
+	fn test_link_allows_https_urls() {
+		let input = quote!(|| {
+			link {
+				rel: "stylesheet",
+				href: "https://cdn.example.com/style.css",
+			}
+		});
+		let ast: HeadMacro = syn::parse2(input).unwrap();
+		let result = generate(&ast);
+		assert!(result.is_ok());
+	}
+
+	#[test]
+	fn test_link_rejects_case_insensitive_javascript() {
+		let input = quote!(|| {
+			link {
+				rel: "stylesheet",
+				href: "JavaScript:alert(1)",
+			}
+		});
+		let ast: HeadMacro = syn::parse2(input).unwrap();
+		let result = generate(&ast);
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(err.contains("dangerous URL scheme"));
 	}
 }

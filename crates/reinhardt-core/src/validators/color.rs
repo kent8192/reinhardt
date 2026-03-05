@@ -47,6 +47,7 @@ pub enum ColorFormat {
 /// assert!(rgb_validator.validate("rgb(255, 0, 0)").is_ok());
 /// assert!(rgb_validator.validate("#FF0000").is_err());
 /// ```
+#[derive(Debug, Clone)]
 pub struct ColorValidator {
 	allowed_formats: Vec<ColorFormat>,
 	message: Option<String>,

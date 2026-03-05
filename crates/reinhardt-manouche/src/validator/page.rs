@@ -682,6 +682,62 @@ fn validate_event_handler(event: &PageEvent) -> Result<()> {
 	Ok(())
 }
 
+/// Validates that a `data-*` attribute suffix is non-empty, starts with a
+/// lowercase letter, and contains only lowercase letters, digits, or hyphens.
+///
+/// Returns an error referencing `attr_name_token` with `html_name` in the message.
+fn validate_data_attr_suffix(
+	attr_name_token: &syn::Ident,
+	html_name: &str,
+	suffix: &str,
+) -> Result<()> {
+	if suffix.is_empty()
+		|| !suffix
+			.chars()
+			.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+	{
+		return Err(syn::Error::new_spanned(
+			attr_name_token,
+			format!(
+				"Invalid data attribute name '{}'. Must match pattern: data-[a-z][a-z0-9-]*",
+				html_name
+			),
+		));
+	}
+	// First character must be a lowercase letter
+	if !suffix.chars().next().unwrap().is_ascii_lowercase() {
+		return Err(syn::Error::new_spanned(
+			attr_name_token,
+			format!(
+				"Invalid data attribute name '{}'. Must start with a lowercase letter after 'data-'",
+				html_name
+			),
+		));
+	}
+	Ok(())
+}
+
+/// Validates that an `aria-*` attribute suffix is non-empty and contains only
+/// lowercase letters or hyphens.
+///
+/// Returns an error referencing `attr_name_token` with `html_name` in the message.
+fn validate_aria_attr_suffix(
+	attr_name_token: &syn::Ident,
+	html_name: &str,
+	suffix: &str,
+) -> Result<()> {
+	if suffix.is_empty() || !suffix.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
+		return Err(syn::Error::new_spanned(
+			attr_name_token,
+			format!(
+				"Invalid aria attribute name '{}'. Must match pattern: aria-[a-z-]+",
+				html_name
+			),
+		));
+	}
+	Ok(())
+}
+
 /// Validates attribute naming and values.
 ///
 /// # Rules
@@ -698,47 +754,15 @@ fn validate_attribute(attr: &PageAttr, _element_tag: &str) -> Result<()> {
 	// Validate data-* attributes
 	if attr_name.starts_with("data_") {
 		let html_name = attr.html_name();
-		// Check if all characters after "data-" are lowercase letters, digits, or hyphens
 		let suffix = &html_name[5..]; // Skip "data-"
-		if suffix.is_empty()
-			|| !suffix
-				.chars()
-				.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-		{
-			return Err(syn::Error::new_spanned(
-				&attr.name,
-				format!(
-					"Invalid data attribute name '{}'. Must match pattern: data-[a-z][a-z0-9-]*",
-					html_name
-				),
-			));
-		}
-		// Additionally check first character is lowercase letter
-		if !suffix.chars().next().unwrap().is_ascii_lowercase() {
-			return Err(syn::Error::new_spanned(
-				&attr.name,
-				format!(
-					"Invalid data attribute name '{}'. Must start with a lowercase letter after 'data-'",
-					html_name
-				),
-			));
-		}
+		validate_data_attr_suffix(&attr.name, &html_name, suffix)?;
 	}
 
 	// Validate aria-* attributes
 	if attr_name.starts_with("aria_") {
 		let html_name = attr.html_name();
-		// Check if all characters after "aria-" are lowercase letters or hyphens
 		let suffix = &html_name[5..]; // Skip "aria-"
-		if suffix.is_empty() || !suffix.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
-			return Err(syn::Error::new_spanned(
-				&attr.name,
-				format!(
-					"Invalid aria attribute name '{}'. Must match pattern: aria-[a-z-]+",
-					html_name
-				),
-			));
-		}
+		validate_aria_attr_suffix(&attr.name, &html_name, suffix)?;
 	}
 
 	Ok(())

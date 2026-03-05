@@ -141,13 +141,14 @@ impl FileCache {
 
 	/// Get the file path for a cache key
 	fn get_file_path(&self, key: &str) -> PathBuf {
-		// Hash the key to create a safe filename
-		use md5::{Digest, Md5};
-		let hash = format!("{:x}", Md5::digest(key.as_bytes()));
+		// Hash the key to create a safe filename using SHA-256
+		use sha2::{Digest, Sha256};
+		let hash = format!("{:x}", Sha256::digest(key.as_bytes()));
 		self.cache_dir.join(hash)
 	}
 
 	/// Load the cache index from filesystem
+	// Reserved for future cache persistence recovery
 	#[allow(dead_code)]
 	async fn load_index(&self) -> Result<()> {
 		let mut index = self.index.write().await;

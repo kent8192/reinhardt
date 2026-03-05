@@ -180,7 +180,6 @@ impl QueryStatementBuilder for DropMaterializedViewStatement {
 		}
 		panic!("Unsupported query builder type");
 	}
-
 }
 
 impl QueryStatementWriter for DropMaterializedViewStatement {}

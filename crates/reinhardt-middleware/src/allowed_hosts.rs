@@ -10,6 +10,7 @@ use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use std::sync::Arc;
 
 /// Configuration for allowed host validation
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct AllowedHostsConfig {
 	/// List of allowed host patterns.

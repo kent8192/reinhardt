@@ -8,7 +8,7 @@ use reinhardt_db::migrations::{Migration, Operation};
 use reinhardt_query::prelude::{
 	Alias, ColumnDef, PostgresQueryBuilder, Query, QueryStatementBuilder, Value,
 };
-use reinhardt_test::fixtures::{postgres_container, TestMigrationSource};
+use reinhardt_test::fixtures::{TestMigrationSource, postgres_container};
 use rstest::*;
 use sqlx::PgPool;
 use std::path::PathBuf;
@@ -700,4 +700,365 @@ pub(crate) async fn insert_test_posts(
 	}
 
 	Ok(post_ids)
+}
+
+// ============================================================================
+// Migration Edge Case Fixtures
+// ============================================================================
+
+/// Creates migrations with Unicode identifiers (Japanese, emoji)
+///
+/// This fixture tests the system's ability to handle non-ASCII identifiers
+/// in migration names and table/column names, including Japanese characters
+/// and emoji. All identifiers are properly quoted for PostgreSQL.
+#[allow(dead_code)]
+pub(crate) fn create_unicode_migrations() -> Vec<Migration> {
+	vec![
+		// Japanese table name migration
+		Migration {
+			app_label: "unicode".to_string(),
+			name: "0001_japanese_table".to_string(),
+			operations: vec![Operation::RunSQL {
+				// Create table with Japanese name using quoted identifier
+				sql: Query::create_table()
+					.table(Alias::new("\"ユーザー\""))
+					.col(
+						ColumnDef::new(Alias::new("id"))
+							.integer()
+							.not_null(true)
+							.auto_increment(true)
+							.primary_key(true),
+					)
+					.col(
+						ColumnDef::new(Alias::new("\"名前\""))
+							.string()
+							.not_null(true),
+					)
+					.col(
+						ColumnDef::new(Alias::new("\"メール\""))
+							.string()
+							.not_null(true),
+					)
+					.to_string(PostgresQueryBuilder::new()),
+				reverse_sql: Some("DROP TABLE IF EXISTS \"ユーザー\"".to_string()),
+			}],
+			dependencies: vec![],
+			..Default::default()
+		},
+		// Emoji column name migration
+		Migration {
+			app_label: "unicode".to_string(),
+			name: "0002_emoji_columns".to_string(),
+			operations: vec![Operation::RunSQL {
+				sql: Query::create_table()
+					.table(Alias::new("emoji_table"))
+					.col(
+						ColumnDef::new(Alias::new("id"))
+							.integer()
+							.not_null(true)
+							.auto_increment(true)
+							.primary_key(true),
+					)
+					.col(ColumnDef::new(Alias::new("\"😀\"")).string())
+					.col(ColumnDef::new(Alias::new("\"🚀\"")).string())
+					.col(ColumnDef::new(Alias::new("\"💡\"")).text())
+					.to_string(PostgresQueryBuilder::new()),
+				reverse_sql: Some("DROP TABLE IF EXISTS emoji_table".to_string()),
+			}],
+			dependencies: vec![("unicode".to_string(), "0001_japanese_table".to_string())],
+			..Default::default()
+		},
+		// Mixed Unicode identifiers
+		Migration {
+			app_label: "unicode".to_string(),
+			name: "0003_mixed_unicode".to_string(),
+			operations: vec![Operation::RunSQL {
+				sql: Query::create_table()
+					.table(Alias::new("\"製品\""))
+					.col(
+						ColumnDef::new(Alias::new("id"))
+							.integer()
+							.not_null(true)
+							.auto_increment(true)
+							.primary_key(true),
+					)
+					.col(ColumnDef::new(Alias::new("\"製品名\"")).string().not_null(true))
+					.col(ColumnDef::new(Alias::new("\"価格\"")).integer().not_null(true))
+					.col(ColumnDef::new(Alias::new("\"🏷️\"")).string()) // emoji tag
+					.to_string(PostgresQueryBuilder::new()),
+				reverse_sql: Some("DROP TABLE IF EXISTS \"製品\"".to_string()),
+			}],
+			dependencies: vec![("unicode".to_string(), "0002_emoji_columns".to_string())],
+			..Default::default()
+		},
+	]
+}
+
+/// Creates migrations for numbering overflow test (9998, 9999, 10000)
+///
+/// This fixture tests the 4-to-5 digit transition in migration numbering,
+/// which can expose sorting and ordering issues when dealing with
+/// numeric migration identifiers.
+#[allow(dead_code)]
+pub(crate) fn create_overflow_numbered_migrations() -> Vec<Migration> {
+	vec![
+		// Migration 9998
+		Migration {
+			app_label: "overflow".to_string(),
+			name: "9998_create_users".to_string(),
+			operations: vec![Operation::RunSQL {
+				sql: Query::create_table()
+					.table(Alias::new("overflow_users"))
+					.col(
+						ColumnDef::new(Alias::new("id"))
+							.integer()
+							.not_null(true)
+							.auto_increment(true)
+							.primary_key(true),
+					)
+					.col(
+						ColumnDef::new(Alias::new("username"))
+							.string()
+							.not_null(true),
+					)
+					.to_string(PostgresQueryBuilder::new()),
+				reverse_sql: Some("DROP TABLE IF EXISTS overflow_users".to_string()),
+			}],
+			dependencies: vec![],
+			..Default::default()
+		},
+		// Migration 9999
+		Migration {
+			app_label: "overflow".to_string(),
+			name: "9999_create_posts".to_string(),
+			operations: vec![Operation::RunSQL {
+				sql: Query::create_table()
+					.table(Alias::new("overflow_posts"))
+					.col(
+						ColumnDef::new(Alias::new("id"))
+							.integer()
+							.not_null(true)
+							.auto_increment(true)
+							.primary_key(true),
+					)
+					.col(ColumnDef::new(Alias::new("title")).string().not_null(true))
+					.col(
+						ColumnDef::new(Alias::new("user_id"))
+							.integer()
+							.not_null(true),
+					)
+					.to_string(PostgresQueryBuilder::new()),
+				reverse_sql: Some("DROP TABLE IF EXISTS overflow_posts".to_string()),
+			}],
+			dependencies: vec![("overflow".to_string(), "9998_create_users".to_string())],
+			..Default::default()
+		},
+		// Migration 10000 (5 digits - tests overflow)
+		Migration {
+			app_label: "overflow".to_string(),
+			name: "10000_create_comments".to_string(),
+			operations: vec![Operation::RunSQL {
+				sql: Query::create_table()
+					.table(Alias::new("overflow_comments"))
+					.col(
+						ColumnDef::new(Alias::new("id"))
+							.integer()
+							.not_null(true)
+							.auto_increment(true)
+							.primary_key(true),
+					)
+					.col(
+						ColumnDef::new(Alias::new("post_id"))
+							.integer()
+							.not_null(true),
+					)
+					.col(ColumnDef::new(Alias::new("body")).text().not_null(true))
+					.to_string(PostgresQueryBuilder::new()),
+				reverse_sql: Some("DROP TABLE IF EXISTS overflow_comments".to_string()),
+			}],
+			dependencies: vec![("overflow".to_string(), "9999_create_posts".to_string())],
+			..Default::default()
+		},
+	]
+}
+
+/// Creates circular dependency chain A → B → C → A
+///
+/// This fixture creates migrations with intentional circular dependencies
+/// to test how the system detects and handles dependency cycles.
+/// Circular dependencies should be detected and reported as errors.
+#[allow(dead_code)]
+pub(crate) fn create_circular_dependency_migrations() -> Vec<Migration> {
+	vec![
+		// Migration A depends on C
+		Migration {
+			app_label: "circular".to_string(),
+			name: "0001_migration_a".to_string(),
+			operations: vec![Operation::RunSQL {
+				sql: Query::create_table()
+					.table(Alias::new("table_a"))
+					.col(
+						ColumnDef::new(Alias::new("id"))
+							.integer()
+							.not_null(true)
+							.auto_increment(true)
+							.primary_key(true),
+					)
+					.col(ColumnDef::new(Alias::new("name")).string())
+					.to_string(PostgresQueryBuilder::new()),
+				reverse_sql: Some("DROP TABLE IF EXISTS table_a".to_string()),
+			}],
+			dependencies: vec![("circular".to_string(), "0003_migration_c".to_string())],
+			..Default::default()
+		},
+		// Migration B depends on A
+		Migration {
+			app_label: "circular".to_string(),
+			name: "0002_migration_b".to_string(),
+			operations: vec![Operation::RunSQL {
+				sql: Query::create_table()
+					.table(Alias::new("table_b"))
+					.col(
+						ColumnDef::new(Alias::new("id"))
+							.integer()
+							.not_null(true)
+							.auto_increment(true)
+							.primary_key(true),
+					)
+					.col(ColumnDef::new(Alias::new("a_id")).integer())
+					.to_string(PostgresQueryBuilder::new()),
+				reverse_sql: Some("DROP TABLE IF EXISTS table_b".to_string()),
+			}],
+			dependencies: vec![("circular".to_string(), "0001_migration_a".to_string())],
+			..Default::default()
+		},
+		// Migration C depends on B (completing the cycle)
+		Migration {
+			app_label: "circular".to_string(),
+			name: "0003_migration_c".to_string(),
+			operations: vec![Operation::RunSQL {
+				sql: Query::create_table()
+					.table(Alias::new("table_c"))
+					.col(
+						ColumnDef::new(Alias::new("id"))
+							.integer()
+							.not_null(true)
+							.auto_increment(true)
+							.primary_key(true),
+					)
+					.col(ColumnDef::new(Alias::new("b_id")).integer())
+					.to_string(PostgresQueryBuilder::new()),
+				reverse_sql: Some("DROP TABLE IF EXISTS table_c".to_string()),
+			}],
+			dependencies: vec![("circular".to_string(), "0002_migration_b".to_string())],
+			..Default::default()
+		},
+	]
+}
+
+/// Creates a large set of migrations for scale testing
+///
+/// This fixture generates N migrations with sequential dependencies,
+/// useful for testing performance and behavior with large migration sets.
+/// Each migration creates a simple table and depends on the previous one.
+#[allow(dead_code)]
+pub(crate) fn create_large_migration_set(count: usize) -> Vec<Migration> {
+	let mut migrations = Vec::with_capacity(count);
+
+	for i in 0..count {
+		let padded_num = format!("{:04}", i + 1);
+		let table_name = format!("large_scale_table_{}", i + 1);
+
+		let mut deps: Vec<(String, String)> = vec![];
+		if i > 0 {
+			let prev_num = format!("{:04}", i);
+			deps.push(("large".to_string(), format!("{}_initial", prev_num)));
+		}
+
+		migrations.push(Migration {
+			app_label: "large".to_string(),
+			name: format!("{}_initial", padded_num),
+			operations: vec![Operation::RunSQL {
+				sql: Query::create_table()
+					.table(Alias::new(&table_name))
+					.col(
+						ColumnDef::new(Alias::new("id"))
+							.integer()
+							.not_null(true)
+							.auto_increment(true)
+							.primary_key(true),
+					)
+					.col(ColumnDef::new(Alias::new("data")).text())
+					.to_string(PostgresQueryBuilder::new()),
+				reverse_sql: Some(format!("DROP TABLE IF EXISTS {}", table_name)),
+			}],
+			dependencies: deps,
+			..Default::default()
+		});
+	}
+
+	migrations
+}
+
+/// Creates a corrupted migration history table state
+///
+/// This fixture intentionally creates an inconsistent reinhardt_migrations table
+/// to test the system's ability to detect and recover from corruption scenarios.
+/// Corruption types include: wrong data types, duplicate entries, and NULL values
+/// in required columns.
+#[allow(dead_code)]
+pub(crate) async fn create_corrupted_migration_history(pool: &PgPool) -> Result<(), sqlx::Error> {
+	// Create the migrations table with standard structure first
+	let create_table = Query::create_table()
+		.table(Alias::new("reinhardt_migrations"))
+		.col(
+			ColumnDef::new(Alias::new("id"))
+				.integer()
+				.not_null(true)
+				.auto_increment(true)
+				.primary_key(true),
+		)
+		.col(
+			ColumnDef::new(Alias::new("app_label"))
+				.string()
+				.not_null(true),
+		)
+		.col(ColumnDef::new(Alias::new("name")).string().not_null(true))
+		.col(ColumnDef::new(Alias::new("applied")).timestamp_with_time_zone())
+		.to_string(PostgresQueryBuilder::new());
+
+	sqlx::query(&create_table).execute(pool).await?;
+
+	// Insert valid entry
+	sqlx::query("INSERT INTO reinhardt_migrations (app_label, name, applied) VALUES ($1, $2, $3)")
+		.bind("valid_app")
+		.bind("0001_valid")
+		.bind(chrono::Utc::now())
+		.execute(pool)
+		.await?;
+
+	// Insert duplicate entry (same app_label and name)
+	sqlx::query("INSERT INTO reinhardt_migrations (app_label, name, applied) VALUES ($1, $2, $3)")
+		.bind("valid_app")
+		.bind("0001_valid")
+		.bind(chrono::Utc::now())
+		.execute(pool)
+		.await?;
+
+	// Insert entry with NULL in applied column (should be set but testing corruption)
+	sqlx::query("INSERT INTO reinhardt_migrations (app_label, name, applied) VALUES ($1, $2, NULL")
+		.bind("corrupted_app")
+		.bind("0002_null_applied")
+		.execute(pool)
+		.await?;
+
+	// Insert entry with empty name (testing edge case)
+	sqlx::query("INSERT INTO reinhardt_migrations (app_label, name, applied) VALUES ($1, $2, $3)")
+		.bind("edge_case")
+		.bind("")
+		.bind(chrono::Utc::now())
+		.execute(pool)
+		.await?;
+
+	Ok(())
 }

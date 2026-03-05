@@ -3,7 +3,7 @@
 //! Tests for workflows that span multiple commands, such as
 //! makemigrations → migrate, or introspect → migrate → verify.
 
-use super::fixtures::{temp_migration_dir, TempMigrationDir};
+use super::fixtures::{TempMigrationDir, temp_migration_dir};
 use reinhardt_commands::{BaseCommand, CommandContext, MakeMigrationsCommand, MigrateCommand};
 use reinhardt_test::fixtures::postgres_container;
 use rstest::*;

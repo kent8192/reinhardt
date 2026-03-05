@@ -59,9 +59,9 @@
 //! The `#[routes]` macro automatically handles `inventory` registration,
 //! so you don't need any additional boilerplate code.
 //!
-//! [`UnifiedRouter`]: reinhardt_urls::UnifiedRouter
-//! [`ServerRouter`]: reinhardt_urls::routers::ServerRouter
-//! [`ClientRouter`]: reinhardt_urls::routers::ClientRouter
+//! [`UnifiedRouter`]: crate::routers::UnifiedRouter
+//! [`ServerRouter`]: crate::routers::ServerRouter
+//! [`ClientRouter`]: crate::routers::ClientRouter
 
 #[cfg(feature = "client-router")]
 use crate::routers::client_router::ClientRouter;
@@ -100,7 +100,7 @@ pub struct UrlPatternsRegistration {
 	/// The `#[routes]` macro extracts the server router from [`UnifiedRouter`]
 	/// using `into_server()` and wraps it in `Arc::new()` automatically.
 	///
-	/// [`UnifiedRouter`]: reinhardt_urls::UnifiedRouter
+	/// [`UnifiedRouter`]: crate::routers::UnifiedRouter
 	pub get_server_router: fn() -> Arc<ServerRouter>,
 
 	/// Function to get the client router
@@ -109,7 +109,7 @@ pub struct UrlPatternsRegistration {
 	/// The `#[routes]` macro extracts the client router from [`UnifiedRouter`]
 	/// using `into_client()` and wraps it in `Arc::new()` automatically.
 	///
-	/// [`UnifiedRouter`]: reinhardt_urls::UnifiedRouter
+	/// [`UnifiedRouter`]: crate::routers::UnifiedRouter
 	#[cfg(feature = "client-router")]
 	pub get_client_router: fn() -> Arc<ClientRouter>,
 }

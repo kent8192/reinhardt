@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-shortcuts@v0.1.0-rc.2...reinhardt-shortcuts@v0.1.0-rc.3) - 2026-03-05
+
+### Fixed
+
+- *(release)* move reinhardt-test to optional dep in non-cyclic crates
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-shortcuts@v0.1.0-rc.1...reinhardt-shortcuts@v0.1.0-rc.2) - 2026-03-04
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-shortcuts@v0.1.0-alpha.14...reinhardt-shortcuts@v0.1.0-rc.1) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-db, reinhardt-views, reinhardt-urls
+
+## [0.1.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-shortcuts@v0.1.0-alpha.13...reinhardt-shortcuts@v0.1.0-alpha.14) - 2026-02-24
+
+### Fixed
+
+- *(release)* roll back unpublished crate versions after partial release failure
+
+### Maintenance
+
+- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
+
+## [0.1.0-alpha.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-shortcuts@v0.1.0-alpha.12...reinhardt-shortcuts@v0.1.0-alpha.13) - 2026-02-23
+
+### Maintenance
+
+- updated the following local packages: reinhardt-db, reinhardt-views, reinhardt-urls
+
+## [0.1.0-alpha.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-shortcuts@v0.1.0-alpha.11...reinhardt-shortcuts@v0.1.0-alpha.12) - 2026-02-21
+
+### Fixed
+
+- use HeaderValue::from_static for hardcoded header values
+- fix data integrity in render_to_string and sanitize 404 errors
+- prevent database error message leakage in HTTP response
+- prevent URL validation bypass via From trait (#726)
+
+### Security
+
+- add XSS safety documentation and input sanitization for render_html
+- prevent open redirect attacks
+
+### Changed
+
+- add configurable capacity limit to TemplateContext
+- add security headers helper function
+
+### Styling
+
+- apply formatting to files introduced by merge from main
+
 ## [0.1.0-alpha.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-shortcuts@v0.1.0-alpha.10...reinhardt-shortcuts@v0.1.0-alpha.11) - 2026-02-16
 
 ### Maintenance

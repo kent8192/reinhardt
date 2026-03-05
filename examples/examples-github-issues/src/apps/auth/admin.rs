@@ -50,4 +50,5 @@ pub fn user_admin_config() -> ModelAdminConfig {
 		])
 		.list_per_page(25)
 		.build()
+		.expect("valid user admin config")
 }

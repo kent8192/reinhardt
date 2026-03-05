@@ -21,7 +21,7 @@ git_tag_name = "{{ package }}@v{{ version }}"
 git_release_type = "auto"
 
 # Publish settings
-semver_check = false
+semver_check = true
 publish_timeout = "10m"
 dependencies_update = true
 
@@ -44,6 +44,184 @@ publish_no_verify = true
 [[package]]
 name = "reinhardt-web"
 git_release_enable = true
+version_group = "reinhardt"
+
+# Publishable crates (alphabetical order)
+[[package]]
+name = "reinhardt-admin"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-admin-cli"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-apps"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-auth"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-commands"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-conf"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-core"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-db"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-db-macros"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-deeplink"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-dentdelion"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-di"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-di-macros"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-dispatch"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-forms"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-graphql"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-graphql-macros"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-grpc"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-grpc-macros"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-http"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-i18n"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-macros"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-mail"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-manouche"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-middleware"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-openapi"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-openapi-macros"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-pages"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-pages-ast"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-pages-macros"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-query"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-query-macros"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-rest"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-routers-macros"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-server"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-shortcuts"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-tasks"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-test"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-testkit"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-throttling"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-urls"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-utils"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-views"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-websockets"
+version_group = "reinhardt"
 
 # Non-published packages (tests, examples, internal tools)
 [[package]]
@@ -58,11 +236,6 @@ publish = false
 
 [[package]]
 name = "reinhardt-benchmarks"
-release = false
-publish = false
-
-[[package]]
-name = "reinhardt-settings-cli"
 release = false
 publish = false
 

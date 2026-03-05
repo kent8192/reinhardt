@@ -2,6 +2,8 @@
 //!
 //! This module provides configuration helpers for custom URL schemes (e.g., `myapp://`).
 
+use crate::error::{DeeplinkError, validate_scheme_name};
+
 /// Custom URL scheme configuration.
 ///
 /// Custom URL schemes allow apps to be opened via URLs like `myapp://path/to/content`.
@@ -120,6 +122,18 @@ impl CustomSchemeBuilder {
 		self
 	}
 
+	/// Validates the configuration.
+	///
+	/// # Errors
+	///
+	/// Returns an error if the scheme name is invalid per RFC 3986 or is a dangerous scheme.
+	pub fn validate(&self) -> Result<(), DeeplinkError> {
+		match &self.name {
+			Some(name) => validate_scheme_name(name),
+			None => Err(DeeplinkError::InvalidSchemeName(String::new())),
+		}
+	}
+
 	/// Builds the custom scheme configuration.
 	pub fn build(self) -> CustomSchemeConfig {
 		let scheme = CustomScheme {
@@ -142,48 +156,113 @@ mod tests {
 
 	#[rstest]
 	fn test_url_template_with_host_and_path() {
+		// Arrange
 		let scheme = CustomScheme {
 			name: "myapp".to_string(),
 			hosts: vec!["open".to_string()],
 			paths: vec!["/products/*".to_string()],
 		};
 
-		assert_eq!(scheme.url_template(), "myapp://open/products/*");
+		// Act
+		let result = scheme.url_template();
+
+		// Assert
+		assert_eq!(result, "myapp://open/products/*");
 	}
 
 	#[rstest]
 	fn test_url_template_without_host() {
+		// Arrange
 		let scheme = CustomScheme {
 			name: "myapp".to_string(),
 			hosts: Vec::new(),
 			paths: vec!["/products".to_string()],
 		};
 
-		assert_eq!(scheme.url_template(), "myapp:///products");
+		// Act
+		let result = scheme.url_template();
+
+		// Assert
+		assert_eq!(result, "myapp:///products");
 	}
 
 	#[rstest]
 	fn test_url_template_without_path() {
+		// Arrange
 		let scheme = CustomScheme {
 			name: "myapp".to_string(),
 			hosts: vec!["open".to_string()],
 			paths: Vec::new(),
 		};
 
-		assert_eq!(scheme.url_template(), "myapp://open");
+		// Act
+		let result = scheme.url_template();
+
+		// Assert
+		assert_eq!(result, "myapp://open");
 	}
 
 	#[rstest]
 	fn test_builder() {
+		// Arrange & Act
 		let config = CustomSchemeConfig::builder()
 			.scheme("myapp")
 			.host("open")
 			.paths(&["/products/*", "/users/*"])
 			.build();
 
+		// Assert
 		assert_eq!(config.schemes.len(), 1);
 		assert_eq!(config.schemes[0].name, "myapp");
 		assert_eq!(config.schemes[0].hosts, vec!["open"]);
 		assert_eq!(config.schemes[0].paths, vec!["/products/*", "/users/*"]);
+	}
+
+	#[rstest]
+	fn test_builder_validate_valid_scheme() {
+		// Arrange
+		let builder = CustomSchemeConfig::builder().scheme("myapp");
+
+		// Act
+		let result = builder.validate();
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	fn test_builder_validate_dangerous_scheme() {
+		// Arrange
+		let builder = CustomSchemeConfig::builder().scheme("javascript");
+
+		// Act
+		let result = builder.validate();
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_builder_validate_no_scheme_name() {
+		// Arrange
+		let builder = CustomSchemeConfig::builder();
+
+		// Act
+		let result = builder.validate();
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_builder_validate_invalid_scheme_name() {
+		// Arrange
+		let builder = CustomSchemeConfig::builder().scheme("1invalid");
+
+		// Act
+		let result = builder.validate();
+
+		// Assert
+		assert!(result.is_err());
 	}
 }

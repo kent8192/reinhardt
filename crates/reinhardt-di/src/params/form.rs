@@ -15,6 +15,9 @@ use futures_util::{future::ready, stream::once};
 #[cfg(feature = "multipart")]
 use serde_json::Value;
 
+/// Default maximum form body size: 2 MiB
+const DEFAULT_MAX_FORM_BODY_SIZE: usize = 2 * 1024 * 1024;
+
 /// Extract form data from request body
 pub struct Form<T>(pub T);
 
@@ -81,6 +84,15 @@ impl<T> Form<T> {
 		let body = req
 			.read_body()
 			.map_err(|e| ParamError::BodyError(format!("Failed to read body: {}", e)))?;
+
+		// Enforce body size limit to prevent memory exhaustion
+		if body.len() > DEFAULT_MAX_FORM_BODY_SIZE {
+			return Err(ParamError::PayloadTooLarge(format!(
+				"Multipart form body size {} bytes exceeds maximum allowed size of {} bytes",
+				body.len(),
+				DEFAULT_MAX_FORM_BODY_SIZE
+			)));
+		}
 
 		// Convert Bytes to Stream
 		let stream = once(ready(Ok::<_, std::io::Error>(body)));
@@ -177,6 +189,15 @@ where
 			let body_bytes = req
 				.read_body()
 				.map_err(|e| ParamError::BodyError(format!("Failed to read body: {}", e)))?;
+
+			// Enforce body size limit to prevent memory exhaustion
+			if body_bytes.len() > DEFAULT_MAX_FORM_BODY_SIZE {
+				return Err(ParamError::PayloadTooLarge(format!(
+					"Form body size {} bytes exceeds maximum allowed size of {} bytes",
+					body_bytes.len(),
+					DEFAULT_MAX_FORM_BODY_SIZE
+				)));
+			}
 
 			let body_str = std::str::from_utf8(&body_bytes)
 				.map_err(|e| ParamError::BodyError(format!("Invalid UTF-8 in body: {}", e)))?;

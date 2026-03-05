@@ -25,12 +25,12 @@
 
 use reinhardt_db::backends::DatabaseConnection;
 use reinhardt_db::migrations::{
+	ColumnDefinition, FieldType, Migration, Operation,
 	dependency::{
 		DependencyCondition, DependencyResolutionContext, OptionalDependency, SwappableDependency,
 	},
 	executor::DatabaseMigrationExecutor,
 	graph::{MigrationGraph, MigrationKey},
-	ColumnDefinition, FieldType, Migration, Operation,
 };
 use reinhardt_test::fixtures::postgres_container;
 use rstest::*;

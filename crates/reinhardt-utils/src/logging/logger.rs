@@ -96,17 +96,20 @@ impl Logger {
 	}
 
 	pub async fn add_handler(&self, handler: Arc<dyn LogHandler>) {
-		self.handlers.lock().unwrap().push(handler);
+		self.handlers
+			.lock()
+			.unwrap_or_else(|e| e.into_inner())
+			.push(handler);
 	}
 
 	pub async fn set_level(&self, level: LogLevel) {
-		*self.level.lock().unwrap() = level;
+		*self.level.lock().unwrap_or_else(|e| e.into_inner()) = level;
 	}
 
 	pub async fn log_record(&self, record: &LogRecord) {
 		// Clone Arc references to handlers before releasing the lock
 		let handlers: Vec<Arc<dyn LogHandler>> = {
-			let handlers_guard = self.handlers.lock().unwrap();
+			let handlers_guard = self.handlers.lock().unwrap_or_else(|e| e.into_inner());
 			handlers_guard.clone()
 		};
 
@@ -117,7 +120,7 @@ impl Logger {
 	}
 
 	async fn log(&self, level: LogLevel, message: impl Into<String>) {
-		let current_level = *self.level.lock().unwrap();
+		let current_level = *self.level.lock().unwrap_or_else(|e| e.into_inner());
 		if level < current_level {
 			return;
 		}
@@ -126,7 +129,7 @@ impl Logger {
 
 		// Clone Arc references to handlers before releasing the lock
 		let handlers: Vec<Arc<dyn LogHandler>> = {
-			let handlers_guard = self.handlers.lock().unwrap();
+			let handlers_guard = self.handlers.lock().unwrap_or_else(|e| e.into_inner());
 			handlers_guard.clone()
 		};
 
@@ -203,7 +206,7 @@ impl Logger {
 	}
 
 	fn log_sync(&self, level: LogLevel, message: impl Into<String>) {
-		let current_level = *self.level.lock().unwrap();
+		let current_level = *self.level.lock().unwrap_or_else(|e| e.into_inner());
 		if level < current_level {
 			return;
 		}
@@ -212,7 +215,7 @@ impl Logger {
 
 		// Clone Arc references to handlers before releasing the lock
 		let handlers: Vec<Arc<dyn LogHandler>> = {
-			let handlers_guard = self.handlers.lock().unwrap();
+			let handlers_guard = self.handlers.lock().unwrap_or_else(|e| e.into_inner());
 			handlers_guard.clone()
 		};
 

@@ -26,6 +26,7 @@ pub use reinhardt_core::security::csrf::{
 };
 
 /// CSRF middleware configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct CsrfMiddlewareConfig {
 	/// Base CSRF configuration
@@ -42,7 +43,9 @@ impl Default for CsrfMiddlewareConfig {
 	fn default() -> Self {
 		Self {
 			csrf_config: CsrfConfig::default(),
-			trusted_origins: vec!["http://localhost".to_string()],
+			// No trusted origins by default. Developers should explicitly add
+			// origins they trust (e.g., "http://localhost" for development).
+			trusted_origins: Vec::new(),
 			exempt_paths: HashSet::new(),
 			check_referer_header: true,
 		}
@@ -139,7 +142,7 @@ impl CsrfMiddleware {
 		// which are attacker-controlled.
 		use rand::RngCore;
 		let mut random_bytes = [0u8; 32];
-		rand::thread_rng().fill_bytes(&mut random_bytes);
+		rand::rng().fill_bytes(&mut random_bytes);
 		hex::encode(random_bytes)
 	}
 

@@ -7,7 +7,7 @@ use reinhardt_websockets::{Message, RoomManager, WebSocketConnection};
 use rstest::*;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 /// Fixture: Create a new WebSocket room manager for testing
 #[fixture]
@@ -72,9 +72,11 @@ async fn test_websocket_room_manager_integration(websocket_manager: Arc<RoomMana
 	assert!(matches!(msg2, Message::Text { .. }));
 
 	// room2 should not receive the message
-	assert!(timeout(Duration::from_millis(50), rx3.recv())
-		.await
-		.is_err());
+	assert!(
+		timeout(Duration::from_millis(50), rx3.recv())
+			.await
+			.is_err()
+	);
 }
 
 /// Integration test: WebSocket chat room with disconnect notifications
@@ -181,10 +183,8 @@ async fn test_websocket_global_broadcast_integration(websocket_manager: Arc<Room
 
 	// Global broadcast
 	let global_message = Message::text("Server maintenance in 5 minutes".to_string());
-	manager
-		.broadcast_to_all(global_message.clone())
-		.await
-		.unwrap();
+	let result = manager.broadcast_to_all(global_message.clone()).await;
+	assert!(result.is_complete_success(), "Broadcast should succeed");
 
 	// All users should receive the message
 	let msg1 = timeout(Duration::from_millis(100), rx1.recv())

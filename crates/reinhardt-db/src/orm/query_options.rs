@@ -17,6 +17,7 @@ use std::collections::HashMap;
 
 /// Query execution options
 /// Controls how queries are executed and results are processed
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct ExecutionOptions {
 	/// Compiled SQL cache options
@@ -119,6 +120,7 @@ impl IsolationLevel {
 }
 
 /// Query options combining load and execution options
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct QueryOptions {
 	/// Load options for relationships
@@ -247,6 +249,7 @@ impl ForUpdateMode {
 }
 
 /// Builder for query options with fluent API
+#[non_exhaustive]
 pub struct QueryOptionsBuilder {
 	options: QueryOptions,
 }

@@ -5,7 +5,7 @@
 //! - Spy concurrent recording
 //! - MockFunction concurrent calls
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use futures::future::join_all;
 use reinhardt_test::{APIClient, MockFunction, Spy};
 use std::hint::black_box;

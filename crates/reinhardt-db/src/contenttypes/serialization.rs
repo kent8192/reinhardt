@@ -39,6 +39,7 @@ pub enum SerializationFormat {
 }
 
 /// Error type for serialization operations
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SerializationError {
 	/// JSON serialization/deserialization error
@@ -169,6 +170,7 @@ impl ContentTypeExport {
 }
 
 /// Import options
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct ImportOptions {
 	/// Whether to skip existing entries instead of returning an error

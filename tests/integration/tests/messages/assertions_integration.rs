@@ -4,8 +4,8 @@
 
 use reinhardt_core::messages::{Level, Message};
 use reinhardt_test::messages::{
-	assert_message_count, assert_message_exists, assert_message_level, assert_message_tags,
-	assert_messages, MessagesTestMixin,
+	MessagesTestMixin, assert_message_count, assert_message_exists, assert_message_level,
+	assert_message_tags, assert_messages,
 };
 
 // These tests are based on Django's messages_tests/tests.py::AssertMessagesTest

@@ -8,6 +8,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- release-plz-separator -->
 <!-- Entries below this line were created before release-plz adoption -->
 
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.1.0-rc.1...reinhardt-admin@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(admin)* replace unwrap with error propagation in insert values call
+- *(deps)* align dependency versions to workspace definitions
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.1.0-alpha.17...reinhardt-admin@v0.1.0-rc.1) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-db, reinhardt-db, reinhardt-auth, reinhardt-urls, reinhardt-pages
+
+## [0.1.0-alpha.17](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.1.0-alpha.16...reinhardt-admin@v0.1.0-alpha.17) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-pages
+
+## [0.1.0-alpha.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.1.0-alpha.15...reinhardt-admin@v0.1.0-alpha.16) - 2026-02-23
+
+### Maintenance
+
+- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
+
+## [0.1.0-alpha.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.1.0-alpha.14...reinhardt-admin@v0.1.0-alpha.15) - 2026-02-23
+
+### Maintenance
+
+- updated the following local packages: reinhardt-query, reinhardt-apps, reinhardt-db, reinhardt-db, reinhardt-auth, reinhardt-urls, reinhardt-pages
+
+## [0.1.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.1.0-alpha.13...reinhardt-admin@v0.1.0-alpha.14) - 2026-02-21
+
+### Fixed
+
+- detect and report duplicate model registration
+- sort columns for deterministic INSERT order
+- apply clippy and fmt fixes to database module
+- add panic prevention and error handling for admin operations
+- pin native-tls to =0.2.14 to fix build failure
+- add resource limits to prevent DoS in reinhardt-admin (#622, #623, #625, #626)
+- fix raw SQL and info leakage in reinhardt-admin (#628, #630)
+- add authentication and authorization enforcement to all endpoints
+- use parameterized queries and escape identifiers to prevent SQL injection
+- add input validation for mutation endpoints
+
+### Security
+
+- add audit logging for all CRUD operations
+- add CSP headers, CSRF token generation, and XSS prevention
+- add input validation, file size limits, and TOCTOU mitigations
+- harden XSS, CSRF, auth, and proxy trust
+- change default ModelAdmin permissions to deny
+- use parameterized queries and escape LIKE patterns
+
+### Changed
+
+- clean up type naming, document intentional patterns
+
+### Styling
+
+- apply workspace-wide formatting fixes
+- apply rustfmt to pre-existing formatting violations in 16 files
+- apply code formatting to security fix files
+
+### Testing
+
+- add regression test for LIKE wildcard injection fix
+
+### Maintenance
+
+- fix contradictory unimplemented!() messages in export handler
+- fix misleading table_name() default implementation doc
+
 ## [0.1.0-alpha.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.1.0-alpha.12...reinhardt-admin@v0.1.0-alpha.13) - 2026-02-16
 
 ### Maintenance

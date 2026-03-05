@@ -58,7 +58,7 @@ impl<T, U> ProxyBuilder<T, U> {
 	/// use reinhardt_urls::proxy::ProxyBuilder;
 	///
 	/// let builder: ProxyBuilder<(), ()> = ProxyBuilder::new();
-	// Builder is ready to configure
+	/// // Builder is ready to configure
 	/// ```
 	pub fn new() -> Self {
 		Self {
@@ -107,7 +107,7 @@ impl<T, U> ProxyBuilder<T, U> {
 	///
 	/// let builder: ProxyBuilder<(), ()> = ProxyBuilder::new()
 	///     .relationship("posts");
-	// Builder now has relationship set
+	/// // Builder now has relationship set
 	/// ```
 	pub fn relationship(mut self, name: &str) -> Self {
 		self.relationship = Some(name.to_string());
@@ -123,7 +123,7 @@ impl<T, U> ProxyBuilder<T, U> {
 	/// let builder: ProxyBuilder<(), ()> = ProxyBuilder::new()
 	///     .relationship("posts")
 	///     .attribute("title");
-	// Builder now has both relationship and attribute set
+	/// // Builder now has both relationship and attribute set
 	/// ```
 	pub fn attribute(mut self, name: &str) -> Self {
 		self.attribute = Some(name.to_string());
@@ -142,7 +142,7 @@ impl<T, U> ProxyBuilder<T, U> {
 	///     .relationship("items")
 	///     .attribute("value")
 	///     .creator(create_item);
-	// Builder now has creator function set
+	/// // Builder now has creator function set
 	/// ```
 	pub fn creator(mut self, creator: fn(U) -> T) -> Self {
 		self.creator = Some(creator);
@@ -387,14 +387,14 @@ impl<T, U> ProxyBuilder<T, U> {
 	/// ```
 	/// use reinhardt_urls::proxy::ProxyBuilder;
 	///
-	// Complete configuration
+	/// // Complete configuration
 	/// let proxy: Option<reinhardt_urls::proxy::AssociationProxy<(), ()>> = ProxyBuilder::new()
 	///     .relationship("posts")
 	///     .attribute("title")
 	///     .try_build();
 	/// assert!(proxy.is_some());
 	///
-	// Incomplete configuration
+	/// // Incomplete configuration
 	/// let incomplete: Option<reinhardt_urls::proxy::AssociationProxy<(), ()>> = ProxyBuilder::new()
 	///     .relationship("posts")
 	///     .try_build();

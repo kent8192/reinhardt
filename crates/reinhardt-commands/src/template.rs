@@ -30,13 +30,14 @@ impl TemplateContext {
 		}
 	}
 
-	pub fn insert<K, V>(&mut self, key: K, value: V)
+	pub fn insert<K, V>(&mut self, key: K, value: V) -> Result<(), serde_json::Error>
 	where
 		K: Into<String>,
 		V: Serialize,
 	{
-		let json_value = serde_json::to_value(value).unwrap_or(JsonValue::Null);
+		let json_value = serde_json::to_value(value)?;
 		self.variables.insert(key.into(), json_value);
+		Ok(())
 	}
 }
 
@@ -352,10 +353,10 @@ pub fn generate_secret_key() -> String {
                              ABCDEFGHIJKLMNOPQRSTUVWXYZ\
                              0123456789\
                              !@#$%^&*(-_=+)";
-	let mut rng = rand::thread_rng();
+	let mut rng = rand::rng();
 	(0..50)
 		.map(|_| {
-			let idx = rng.gen_range(0..CHARSET.len());
+			let idx = rng.random_range(0..CHARSET.len());
 			CHARSET[idx] as char
 		})
 		.collect()
@@ -385,8 +386,8 @@ mod tests {
 	fn test_render_template_without_spaces() {
 		let template_cmd = TemplateCommand::new();
 		let mut context = TemplateContext::new();
-		context.insert("project_name", "my_project");
-		context.insert("version", "1.0.0");
+		context.insert("project_name", "my_project").unwrap();
+		context.insert("version", "1.0.0").unwrap();
 
 		let template = "name = \"{{project_name}}\"\nversion = \"{{version}}\"";
 		let result = template_cmd.render_template(template, &context).unwrap();
@@ -398,8 +399,8 @@ mod tests {
 	fn test_render_template_with_spaces() {
 		let template_cmd = TemplateCommand::new();
 		let mut context = TemplateContext::new();
-		context.insert("project_name", "my_project");
-		context.insert("version", "1.0.0");
+		context.insert("project_name", "my_project").unwrap();
+		context.insert("version", "1.0.0").unwrap();
 
 		let template = "name = \"{{ project_name }}\"\nversion = \"{{ version }}\"";
 		let result = template_cmd.render_template(template, &context).unwrap();
@@ -411,8 +412,8 @@ mod tests {
 	fn test_render_template_mixed_formats() {
 		let template_cmd = TemplateCommand::new();
 		let mut context = TemplateContext::new();
-		context.insert("project_name", "my_project");
-		context.insert("version", "1.0.0");
+		context.insert("project_name", "my_project").unwrap();
+		context.insert("version", "1.0.0").unwrap();
 
 		let template = "name = \"{{ project_name }}\"\nversion = \"{{version}}\"";
 		let result = template_cmd.render_template(template, &context).unwrap();

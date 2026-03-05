@@ -20,6 +20,7 @@ const USERINFO_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
 	.remove(b'~');
 
 /// Database configuration
+#[non_exhaustive]
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DatabaseConfig {
 	/// Database engine/backend
@@ -59,6 +60,53 @@ impl fmt::Debug for DatabaseConfig {
 }
 
 impl DatabaseConfig {
+	/// Create a new database configuration with the given engine and name
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_conf::settings::DatabaseConfig;
+	///
+	/// let db = DatabaseConfig::new("reinhardt.db.backends.sqlite3", "myapp.db");
+	/// assert_eq!(db.engine, "reinhardt.db.backends.sqlite3");
+	/// assert_eq!(db.name, "myapp.db");
+	/// ```
+	pub fn new(engine: impl Into<String>, name: impl Into<String>) -> Self {
+		Self {
+			engine: engine.into(),
+			name: name.into(),
+			user: None,
+			password: None,
+			host: None,
+			port: None,
+			options: HashMap::new(),
+		}
+	}
+
+	/// Set the user for this database configuration
+	pub fn with_user(mut self, user: impl Into<String>) -> Self {
+		self.user = Some(user.into());
+		self
+	}
+
+	/// Set the password for this database configuration
+	pub fn with_password(mut self, password: impl Into<String>) -> Self {
+		self.password = Some(SecretString::new(password.into()));
+		self
+	}
+
+	/// Set the host for this database configuration
+	pub fn with_host(mut self, host: impl Into<String>) -> Self {
+		self.host = Some(host.into());
+		self
+	}
+
+	/// Set the port for this database configuration
+	pub fn with_port(mut self, port: u16) -> Self {
+		self.port = Some(port);
+		self
+	}
+
 	/// Create a SQLite database configuration
 	///
 	/// # Examples
@@ -254,9 +302,66 @@ impl DatabaseConfig {
 	}
 }
 
+impl fmt::Display for DatabaseConfig {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		// Display a sanitized representation that never exposes credentials
+		let scheme = if self.engine.contains("sqlite") {
+			"sqlite"
+		} else if self.engine.contains("postgresql") || self.engine.contains("postgres") {
+			"postgresql"
+		} else if self.engine.contains("mysql") {
+			"mysql"
+		} else {
+			"unknown"
+		};
+
+		match scheme {
+			"sqlite" => write!(f, "sqlite:{}", self.name),
+			_ => {
+				write!(f, "{}://", scheme)?;
+				if self.user.is_some() || self.password.is_some() {
+					write!(f, "***@")?;
+				}
+				if let Some(host) = &self.host {
+					write!(f, "{}", host)?;
+				}
+				if let Some(port) = self.port {
+					write!(f, ":{}", port)?;
+				}
+				write!(f, "/{}", self.name)
+			}
+		}
+	}
+}
+
 impl Default for DatabaseConfig {
 	fn default() -> Self {
 		Self::sqlite("db.sqlite3".to_string())
+	}
+}
+
+/// Recognized database URL schemes for connection validation.
+pub(crate) const VALID_DATABASE_SCHEMES: &[&str] = &[
+	"postgres://",
+	"postgresql://",
+	"sqlite://",
+	"sqlite:",
+	"mysql://",
+	"mariadb://",
+];
+
+/// Validate that a database URL starts with a recognized scheme.
+///
+/// Returns `Ok(())` if the URL starts with one of the supported schemes,
+/// or `Err` with a descriptive message listing the accepted schemes.
+pub(crate) fn validate_database_url_scheme(url: &str) -> Result<(), String> {
+	if VALID_DATABASE_SCHEMES.iter().any(|s| url.starts_with(s)) {
+		Ok(())
+	} else {
+		Err(format!(
+			"Invalid database URL: unrecognized scheme. Expected one of: {}",
+			VALID_DATABASE_SCHEMES.join(", ")
+		))
 	}
 }
 
@@ -393,6 +498,34 @@ mod tests {
 	}
 
 	#[rstest]
+	fn test_display_output_masks_credentials() {
+		// Arrange
+		let db = DatabaseConfig::postgresql("mydb", "admin", "s3cr3t!", "db.example.com", 5432);
+
+		// Act
+		let display_output = format!("{}", db);
+
+		// Assert
+		assert!(!display_output.contains("admin"));
+		assert!(!display_output.contains("s3cr3t!"));
+		assert!(display_output.contains("***@"));
+		assert!(display_output.contains("db.example.com"));
+		assert!(display_output.contains("mydb"));
+	}
+
+	#[rstest]
+	fn test_display_output_sqlite() {
+		// Arrange
+		let db = DatabaseConfig::sqlite("app.db");
+
+		// Act
+		let display_output = format!("{}", db);
+
+		// Assert
+		assert_eq!(display_output, "sqlite:app.db");
+	}
+
+	#[rstest]
 	fn test_password_stored_as_secret_string() {
 		// Arrange
 		let db = DatabaseConfig::postgresql("mydb", "user", "my-secret-pw", "localhost", 5432);
@@ -404,5 +537,32 @@ mod tests {
 		assert_eq!(password.expose_secret(), "my-secret-pw");
 		// Display should not reveal the password
 		assert_eq!(format!("{}", password), "[REDACTED]");
+	}
+
+	#[rstest]
+	#[case("postgres://localhost/db")]
+	#[case("postgresql://user:pass@localhost:5432/db")]
+	#[case("sqlite::memory:")]
+	#[case("sqlite:///path/to/db")]
+	#[case("mysql://root@localhost/db")]
+	#[case("mariadb://root@localhost/db")]
+	fn test_valid_database_url_schemes(#[case] url: &str) {
+		// Act / Assert
+		assert!(validate_database_url_scheme(url).is_ok());
+	}
+
+	#[rstest]
+	#[case("http://localhost/db")]
+	#[case("ftp://localhost/db")]
+	#[case("redis://localhost")]
+	#[case("")]
+	#[case("not-a-url")]
+	fn test_invalid_database_url_schemes(#[case] url: &str) {
+		// Act
+		let result = validate_database_url_scheme(url);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(result.unwrap_err().contains("Invalid database URL"));
 	}
 }

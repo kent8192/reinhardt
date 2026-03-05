@@ -7,6 +7,7 @@ use std::io;
 use std::path::PathBuf;
 
 /// Error types for file field operations
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum FileFieldError {
 	IoError(io::Error),

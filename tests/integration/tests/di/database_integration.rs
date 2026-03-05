@@ -10,7 +10,7 @@ use reinhardt_di::{DiResult, Injectable, InjectionContext, SingletonScope};
 use reinhardt_query::prelude::{
 	Alias, ColumnDef, Expr, ExprTrait, PostgresQueryBuilder, Query, QueryStatementBuilder, Value,
 };
-use reinhardt_test::fixtures::testcontainers::{postgres_container, ContainerAsync, GenericImage};
+use reinhardt_test::fixtures::testcontainers::{ContainerAsync, GenericImage, postgres_container};
 use rstest::*;
 use sqlx::PgPool;
 use std::sync::Arc;

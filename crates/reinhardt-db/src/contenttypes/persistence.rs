@@ -54,6 +54,7 @@ use std::sync::Arc;
 use crate::contenttypes::ContentType;
 
 /// Error type for persistence operations
+#[non_exhaustive]
 #[cfg(feature = "database")]
 #[derive(Debug, thiserror::Error)]
 pub enum PersistenceError {
@@ -67,6 +68,7 @@ pub enum PersistenceError {
 	NotFound(String),
 }
 
+#[non_exhaustive]
 #[cfg(not(feature = "database"))]
 #[derive(Debug)]
 pub enum PersistenceError {

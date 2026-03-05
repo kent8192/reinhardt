@@ -43,4 +43,4 @@ let typed = validate_page(&untyped)?;
 
 ## License
 
-MIT OR Apache-2.0
+BSD 3-Clause License

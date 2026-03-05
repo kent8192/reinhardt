@@ -22,7 +22,10 @@
 //! - items(id SERIAL PRIMARY KEY, name TEXT NOT NULL, value INT NOT NULL)
 
 use bytes::Bytes;
-use hyper::{HeaderMap, Method, StatusCode, Version};
+use hyper::{
+	HeaderMap, Method, StatusCode, Version,
+	header::{CONTENT_TYPE, HeaderValue},
+};
 use reinhardt_core::macros::model;
 use reinhardt_http::Request;
 use reinhardt_query::prelude::{
@@ -148,11 +151,13 @@ fn create_get_request(uri: &str) -> Request {
 
 /// Helper: Create HTTP POST request with JSON body
 fn create_post_request(uri: &str, json_body: &str) -> Request {
+	let mut headers = HeaderMap::new();
+	headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 	Request::builder()
 		.method(Method::POST)
 		.uri(uri)
 		.version(Version::HTTP_11)
-		.headers(HeaderMap::new())
+		.headers(headers)
 		.body(Bytes::from(json_body.to_string()))
 		.build()
 		.expect("Failed to build request")
@@ -166,11 +171,14 @@ fn create_put_request_with_params(uri: &str, json_body: &str, id: &str) -> Reque
 	let mut params = HashMap::new();
 	params.insert("id".to_string(), id.to_string());
 
+	let mut headers = HeaderMap::new();
+	headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
 	Request::builder()
 		.method(Method::PUT)
 		.uri(uri)
 		.version(Version::HTTP_11)
-		.headers(HeaderMap::new())
+		.headers(headers)
 		.body(Bytes::from(json_body.to_string()))
 		.path_params(params)
 		.build()

@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.1.0-rc.2...reinhardt-forms@v0.1.0-rc.3) - 2026-03-05
+
+### Fixed
+
+- *(release)* use path-only dev-dep for reinhardt-test in cyclic crates
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.1.0-rc.1...reinhardt-forms@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(deps)* align workspace dependency versions
+
+### Maintenance
+
+- *(deps)* unify proptest versions to workspace dependency
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.1.0-alpha.7...reinhardt-forms@v0.1.0-rc.1) - 2026-02-23
+
+### Maintenance
+
+- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
+
+## [0.1.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.1.0-alpha.6...reinhardt-forms@v0.1.0-alpha.7) - 2026-02-21
+
+### Added
+
+- add UrlValidator and SlugValidator for page/URL fields
+
+### Fixed
+
+- enforce file size limits in form uploads (#558)
+- replace panic with error handling in ModelForm::save (#560)
+- escape user input in Widget::render_html to prevent XSS
+- replace js-based validation with type-safe declarative rules
+- remove SVG from default image extensions to prevent stored XSS
+
+### Security
+
+- sanitize validator errors and prevent password plaintext storage
+- fix decimal leading zeros, IPv6 validation, and date year ambiguity
+- fix input validation and resource limits across form fields
+- fix XSS escaping, CSRF protection, and panic prevention
+
+### Styling
+
+- apply rustfmt after clippy auto-fix
+- fix remaining clippy warnings across workspace
+- apply rustfmt formatting to workspace files
+
 ## [0.1.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.1.0-alpha.5...reinhardt-forms@v0.1.0-alpha.6) - 2026-02-12
 
 ### Maintenance

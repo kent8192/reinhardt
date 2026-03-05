@@ -15,7 +15,7 @@
 //!     let router = BasicRouter::new();
 //!
 //!     // Wrap with OpenAPI endpoints
-//!     let wrapped = OpenApiRouter::wrap(router);
+//!     let wrapped = OpenApiRouter::wrap(router)?;
 //!
 //!     // The wrapped router now serves:
 //!     // - /api/openapi.json (OpenAPI spec)
@@ -84,32 +84,30 @@ impl<H> OpenApiRouter<H> {
 	/// use reinhardt_urls::routers::BasicRouter;
 	///
 	/// let router = BasicRouter::new();
-	/// let wrapped = OpenApiRouter::wrap(router);
+	/// let wrapped = OpenApiRouter::wrap(router)?;
+	/// # Ok::<(), reinhardt_rest::openapi::SchemaError>(())
 	/// ```
-	pub fn wrap(handler: H) -> Self {
+	pub fn wrap(handler: H) -> std::result::Result<Self, reinhardt_rest::openapi::SchemaError> {
 		// Generate OpenAPI schema from global registry
 		let schema = generate_openapi_schema();
-		let openapi_json =
-			serde_json::to_string_pretty(&schema).expect("Failed to serialize OpenAPI schema");
+		let openapi_json = serde_json::to_string_pretty(&schema)?;
 
 		// Generate Swagger UI HTML
 		let swagger_ui = SwaggerUI::new(schema.clone());
-		let swagger_html = swagger_ui
-			.render_html()
-			.expect("Failed to render Swagger UI");
+		let swagger_html = swagger_ui.render_html()?;
 
 		// Generate Redoc UI HTML
 		let redoc_ui = RedocUI::new(schema);
-		let redoc_html = redoc_ui.render_html().expect("Failed to render Redoc UI");
+		let redoc_html = redoc_ui.render_html()?;
 
-		Self {
+		Ok(Self {
 			inner: handler,
 			openapi_json: Arc::new(openapi_json),
 			swagger_html: Arc::new(swagger_html),
 			redoc_html: Arc::new(redoc_html),
 			enabled: true,
 			auth_guard: None,
-		}
+		})
 	}
 
 	/// Set whether documentation endpoints are enabled
@@ -126,7 +124,7 @@ impl<H> OpenApiRouter<H> {
 	/// use reinhardt_urls::routers::BasicRouter;
 	///
 	/// let router = BasicRouter::new();
-	/// let wrapped = OpenApiRouter::wrap(router).enabled(false);
+	/// let wrapped = OpenApiRouter::wrap(router)?.enabled(false);
 	/// ```
 	// Fixes #828
 	pub fn enabled(mut self, enabled: bool) -> Self {
@@ -150,7 +148,7 @@ impl<H> OpenApiRouter<H> {
 	/// use reinhardt_urls::routers::BasicRouter;
 	///
 	/// let router = BasicRouter::new();
-	/// let wrapped = OpenApiRouter::wrap(router).auth_guard(|request| {
+	/// let wrapped = OpenApiRouter::wrap(router)?.auth_guard(|request| {
 	///     // Check for API key in header
 	///     request.headers().get("X-Api-Key")
 	///         .map(|v| v == "secret")
@@ -177,12 +175,76 @@ impl<H> OpenApiRouter<H> {
 		if !self.enabled {
 			return Some(Response::not_found());
 		}
-		if let Some(ref guard) = self.auth_guard {
-			if !guard(request) {
-				return Some(Response::forbidden());
-			}
+		if let Some(ref guard) = self.auth_guard
+			&& !guard(request)
+		{
+			return Some(Response::forbidden());
 		}
 		None
+	}
+
+	/// Try to serve an OpenAPI documentation endpoint.
+	///
+	/// Returns `Some(Ok(Response))` if the request path matches an OpenAPI
+	/// endpoint and access control checks pass, `Some(Ok(denied))` if access
+	/// is denied, or `None` if the path does not match any documentation
+	/// endpoint.
+	///
+	/// Fixes #831: Deduplicate route handling between Handler and Router.
+	fn try_serve_openapi(&self, request: &Request) -> Option<Result<Response>> {
+		match request.uri.path() {
+			"/api/openapi.json" | "/api/docs" | "/api/redoc" => {
+				if let Some(denied) = self.check_access(request) {
+					return Some(Ok(denied));
+				}
+				let response = match request.uri.path() {
+					"/api/openapi.json" => {
+						let json = (*self.openapi_json).clone();
+						Response::ok()
+							.with_header("Content-Type", "application/json; charset=utf-8")
+							.with_body(json)
+					}
+					"/api/docs" => {
+						let html = (*self.swagger_html).clone();
+						Response::ok()
+							.with_header("Content-Type", "text/html; charset=utf-8")
+							.with_body(html)
+					}
+					"/api/redoc" => {
+						let html = (*self.redoc_html).clone();
+						Response::ok()
+							.with_header("Content-Type", "text/html; charset=utf-8")
+							.with_body(html)
+					}
+					_ => unreachable!(),
+				};
+				Some(Ok(Self::apply_security_headers(response)))
+			}
+			_ => None,
+		}
+	}
+
+	/// Apply security headers to documentation endpoint responses.
+	///
+	/// Adds Content-Security-Policy, X-Frame-Options, X-Content-Type-Options,
+	/// and Cache-Control headers to prevent clickjacking, MIME sniffing,
+	/// and stale cache attacks on documentation pages.
+	// Fixes #830
+	fn apply_security_headers(response: Response) -> Response {
+		response
+			.with_header(
+				"Content-Security-Policy",
+				"default-src 'none'; \
+				 script-src 'unsafe-inline' https://unpkg.com https://cdn.redoc.ly; \
+				 style-src 'unsafe-inline' https://unpkg.com; \
+				 img-src 'self' data:; \
+				 connect-src 'self'; \
+				 font-src https://fonts.gstatic.com; \
+				 frame-ancestors 'none'",
+			)
+			.with_header("X-Frame-Options", "DENY")
+			.with_header("X-Content-Type-Options", "nosniff")
+			.with_header("Cache-Control", "no-store")
 	}
 }
 
@@ -198,40 +260,11 @@ impl<H: Handler> Handler for OpenApiRouter<H> {
 	/// auth guard. Disabled endpoints return 404, unauthorized requests
 	/// return 403.
 	async fn handle(&self, request: Request) -> Result<Response> {
-		// Match OpenAPI endpoints first
-		match request.uri.path() {
-			"/api/openapi.json" | "/api/docs" | "/api/redoc" => {
-				// Fixes #828: Check access control before serving docs
-				if let Some(denied) = self.check_access(&request) {
-					return Ok(denied);
-				}
-				match request.uri.path() {
-					"/api/openapi.json" => {
-						let json = (*self.openapi_json).clone();
-						Ok(Response::ok()
-							.with_header("Content-Type", "application/json; charset=utf-8")
-							.with_body(json))
-					}
-					"/api/docs" => {
-						let html = (*self.swagger_html).clone();
-						Ok(Response::ok()
-							.with_header("Content-Type", "text/html; charset=utf-8")
-							.with_body(html))
-					}
-					"/api/redoc" => {
-						let html = (*self.redoc_html).clone();
-						Ok(Response::ok()
-							.with_header("Content-Type", "text/html; charset=utf-8")
-							.with_body(html))
-					}
-					_ => unreachable!(),
-				}
-			}
-			_ => {
-				// Delegate to base handler
-				self.inner.handle(request).await
-			}
+		// Fixes #831: Use shared OpenAPI serving logic
+		if let Some(response) = self.try_serve_openapi(&request) {
+			return response;
 		}
+		self.inner.handle(request).await
 	}
 }
 
@@ -281,40 +314,11 @@ where
 	/// auth guard. Disabled endpoints return 404, unauthorized requests
 	/// return 403.
 	async fn route(&self, request: Request) -> Result<Response> {
-		// Match OpenAPI endpoints first
-		match request.uri.path() {
-			"/api/openapi.json" | "/api/docs" | "/api/redoc" => {
-				// Fixes #828: Check access control before serving docs
-				if let Some(denied) = self.check_access(&request) {
-					return Ok(denied);
-				}
-				match request.uri.path() {
-					"/api/openapi.json" => {
-						let json = (*self.openapi_json).clone();
-						Ok(Response::ok()
-							.with_header("Content-Type", "application/json; charset=utf-8")
-							.with_body(json))
-					}
-					"/api/docs" => {
-						let html = (*self.swagger_html).clone();
-						Ok(Response::ok()
-							.with_header("Content-Type", "text/html; charset=utf-8")
-							.with_body(html))
-					}
-					"/api/redoc" => {
-						let html = (*self.redoc_html).clone();
-						Ok(Response::ok()
-							.with_header("Content-Type", "text/html; charset=utf-8")
-							.with_body(html))
-					}
-					_ => unreachable!(),
-				}
-			}
-			_ => {
-				// Delegate to base router's route() method
-				self.inner.route(request).await
-			}
+		// Fixes #831: Use shared OpenAPI serving logic
+		if let Some(response) = self.try_serve_openapi(&request) {
+			return response;
 		}
+		self.inner.route(request).await
 	}
 }
 
@@ -338,7 +342,7 @@ mod tests {
 	async fn test_openapi_json_endpoint() {
 		// Arrange
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler);
+		let wrapped = OpenApiRouter::wrap(handler).unwrap();
 
 		// Act
 		let request = Request::builder().uri("/api/openapi.json").build().unwrap();
@@ -356,7 +360,7 @@ mod tests {
 	async fn test_swagger_docs_endpoint() {
 		// Arrange
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler);
+		let wrapped = OpenApiRouter::wrap(handler).unwrap();
 
 		// Act
 		let request = Request::builder().uri("/api/docs").build().unwrap();
@@ -373,7 +377,7 @@ mod tests {
 	async fn test_redoc_docs_endpoint() {
 		// Arrange
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler);
+		let wrapped = OpenApiRouter::wrap(handler).unwrap();
 
 		// Act
 		let request = Request::builder().uri("/api/redoc").build().unwrap();
@@ -390,7 +394,7 @@ mod tests {
 	async fn test_delegation_to_inner_handler() {
 		// Arrange
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler);
+		let wrapped = OpenApiRouter::wrap(handler).unwrap();
 
 		// Act
 		let request = Request::builder().uri("/some/other/path").build().unwrap();
@@ -412,7 +416,7 @@ mod tests {
 	async fn test_disabled_endpoints_return_404(#[case] path: &str) {
 		// Arrange
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler).enabled(false);
+		let wrapped = OpenApiRouter::wrap(handler).unwrap().enabled(false);
 
 		// Act
 		let request = Request::builder().uri(path).build().unwrap();
@@ -427,7 +431,7 @@ mod tests {
 	async fn test_disabled_does_not_affect_other_routes() {
 		// Arrange
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler).enabled(false);
+		let wrapped = OpenApiRouter::wrap(handler).unwrap().enabled(false);
 
 		// Act
 		let request = Request::builder().uri("/some/other/path").build().unwrap();
@@ -447,7 +451,9 @@ mod tests {
 	async fn test_auth_guard_rejects_unauthorized(#[case] path: &str) {
 		// Arrange
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler).auth_guard(|_request| false);
+		let wrapped = OpenApiRouter::wrap(handler)
+			.unwrap()
+			.auth_guard(|_request| false);
 
 		// Act
 		let request = Request::builder().uri(path).build().unwrap();
@@ -465,7 +471,9 @@ mod tests {
 	async fn test_auth_guard_allows_authorized(#[case] path: &str) {
 		// Arrange
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler).auth_guard(|_request| true);
+		let wrapped = OpenApiRouter::wrap(handler)
+			.unwrap()
+			.auth_guard(|_request| true);
 
 		// Act
 		let request = Request::builder().uri(path).build().unwrap();
@@ -480,7 +488,9 @@ mod tests {
 	async fn test_auth_guard_does_not_affect_other_routes() {
 		// Arrange
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler).auth_guard(|_request| false);
+		let wrapped = OpenApiRouter::wrap(handler)
+			.unwrap()
+			.auth_guard(|_request| false);
 
 		// Act
 		let request = Request::builder().uri("/some/other/path").build().unwrap();
@@ -501,6 +511,7 @@ mod tests {
 		// Arrange: enabled=false should return 404 even with a passing auth guard
 		let handler = DummyHandler;
 		let wrapped = OpenApiRouter::wrap(handler)
+			.unwrap()
 			.enabled(false)
 			.auth_guard(|_request| true);
 
@@ -517,7 +528,7 @@ mod tests {
 	async fn test_auth_guard_inspects_request_headers() {
 		// Arrange: Guard checks for a specific header value
 		let handler = DummyHandler;
-		let wrapped = OpenApiRouter::wrap(handler).auth_guard(|request| {
+		let wrapped = OpenApiRouter::wrap(handler).unwrap().auth_guard(|request| {
 			request
 				.headers
 				.get("X-Docs-Token")

@@ -230,19 +230,67 @@ fn find_matching_paren(source: &str, start: usize) -> Option<usize> {
 	let mut in_string = false;
 	let mut in_char = false;
 	let mut escape_next = false;
+	let chars: Vec<(usize, char)> = substring.char_indices().collect();
+	let mut i = 0;
 
-	for (offset, ch) in substring.char_indices() {
+	while i < chars.len() {
+		let (offset, ch) = chars[i];
+
 		if escape_next {
 			escape_next = false;
+			i += 1;
+			continue;
+		}
+
+		if in_string {
+			match ch {
+				'\\' => escape_next = true,
+				'"' => in_string = false,
+				_ => {}
+			}
+			i += 1;
+			continue;
+		}
+
+		if in_char {
+			match ch {
+				'\\' => escape_next = true,
+				'\'' => in_char = false,
+				_ => {}
+			}
+			i += 1;
 			continue;
 		}
 
 		match ch {
-			'\\' if in_string || in_char => escape_next = true,
-			'"' if !in_char => in_string = !in_string,
-			'\'' if !in_string => in_char = !in_char,
-			'(' if !in_string && !in_char => depth += 1,
-			')' if !in_string && !in_char => {
+			'"' => {
+				// Check for raw strings: r#"..."# or r"..."
+				// Look back to see if preceded by 'r' and optional '#'s
+				let raw_start = detect_raw_string_start(substring, offset);
+				if let Some(hash_count) = raw_start {
+					// Skip raw string content until closing "###
+					if let Some(end_offset) = skip_raw_string(substring, offset + 1, hash_count) {
+						// Find the index in chars that corresponds to end_offset
+						while i < chars.len() && chars[i].0 < end_offset {
+							i += 1;
+						}
+						i += 1; // skip past end
+						continue;
+					}
+				}
+				in_string = true;
+			}
+			'\'' => {
+				// Distinguish char literal from lifetime annotation:
+				// Char literal: 'a', '\n', '\\'
+				// Lifetime: 'a (letter not followed by closing quote in char-literal pattern)
+				if is_char_literal(&chars, i) {
+					in_char = true;
+				}
+				// Otherwise it's a lifetime, just skip the tick
+			}
+			'(' => depth += 1,
+			')' => {
 				depth -= 1;
 				if depth == 0 {
 					return Some(start + offset);
@@ -250,10 +298,76 @@ fn find_matching_paren(source: &str, start: usize) -> Option<usize> {
 			}
 			_ => {}
 		}
+		i += 1;
 	}
 
 	None
 }
+
+/// Detect if a '"' at the given offset is the start of a raw string.
+/// Returns Some(hash_count) if so (0 for r"...", 1 for r#"..."#, etc.).
+fn detect_raw_string_start(s: &str, quote_offset: usize) -> Option<usize> {
+	// Walk backwards from the quote to find r followed by optional #s
+	let before = &s[..quote_offset];
+	let trimmed = before.trim_end_matches('#');
+	let hash_count = before.len() - trimmed.len();
+	if trimmed.ends_with('r') {
+		// Verify the 'r' is not part of an identifier
+		let r_pos = trimmed.len() - 1;
+		if r_pos == 0 || !before.as_bytes()[r_pos - 1].is_ascii_alphanumeric() {
+			return Some(hash_count);
+		}
+	}
+	None
+}
+
+/// Skip past the contents of a raw string starting after the opening '"'.
+/// Returns the byte offset just past the closing '"' + hashes.
+fn skip_raw_string(s: &str, start_after_quote: usize, hash_count: usize) -> Option<usize> {
+	let closing_pattern: String = std::iter::once('"')
+		.chain(std::iter::repeat_n('#', hash_count))
+		.collect();
+	s[start_after_quote..]
+		.find(&closing_pattern)
+		.map(|pos| start_after_quote + pos + closing_pattern.len())
+}
+
+/// Check if a `'\''` at `chars\[idx\]` starts a char literal (not a lifetime).
+/// A char literal has the pattern: 'x' or '\x' or '\xx'
+fn is_char_literal(chars: &[(usize, char)], idx: usize) -> bool {
+	// After the opening quote, check if we see a closing quote pattern
+	let remaining = &chars[idx + 1..];
+
+	if remaining.is_empty() {
+		return false;
+	}
+
+	// Pattern: '\...' (escaped char literal)
+	if remaining[0].1 == '\\' {
+		// Look for closing quote within the next few chars
+		for item in remaining.iter().take(remaining.len().min(5)).skip(2) {
+			if item.1 == '\'' {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// Pattern: 'x' (single char literal) - must have closing quote at position +2
+	if remaining.len() >= 2 && remaining[1].1 == '\'' {
+		return true;
+	}
+
+	// Otherwise, it's a lifetime ('a in type position, no closing quote)
+	false
+}
+
+/// Maximum recursion depth for formatting nested nodes.
+///
+/// Prevents stack overflow from deeply nested or maliciously crafted
+/// page! macro content. 128 levels is far more than any realistic
+/// template would need.
+const MAX_FORMAT_DEPTH: usize = 128;
 
 /// AST-based page! macro formatter.
 pub(crate) struct AstPageFormatter {
@@ -576,7 +690,7 @@ impl AstPageFormatter {
 		} else {
 			// Multi-line format
 			output.push_str(" {\n");
-			self.format_body(&mut output, &macro_ast.body, base_indent + 1);
+			self.format_body(&mut output, &macro_ast.body, base_indent + 1, 0);
 			output.push_str(&self.make_indent(base_indent));
 			output.push('}');
 		}
@@ -612,27 +726,39 @@ impl AstPageFormatter {
 	}
 
 	/// Format the page body.
-	fn format_body(&self, output: &mut String, body: &PageBody, indent: usize) {
+	fn format_body(&self, output: &mut String, body: &PageBody, indent: usize, depth: usize) {
 		for node in &body.nodes {
-			self.format_node(output, node, indent);
+			self.format_node(output, node, indent, depth);
 		}
 	}
 
 	/// Format a single node.
-	fn format_node(&self, output: &mut String, node: &PageNode, indent: usize) {
+	///
+	/// The `depth` parameter tracks recursion depth to prevent stack overflow
+	/// from deeply nested templates. When the maximum depth is exceeded,
+	/// the node is rendered as a raw token stream instead.
+	fn format_node(&self, output: &mut String, node: &PageNode, indent: usize, depth: usize) {
+		if depth > MAX_FORMAT_DEPTH {
+			// Prevent stack overflow: emit a comment indicating depth limit
+			let ind = self.make_indent(indent);
+			output.push_str(&ind);
+			output.push_str("/* formatting depth limit exceeded */\n");
+			return;
+		}
+
 		match node {
-			PageNode::Element(elem) => self.format_element(output, elem, indent),
+			PageNode::Element(elem) => self.format_element(output, elem, indent, depth),
 			PageNode::Text(text) => self.format_text(output, text, indent),
 			PageNode::Expression(expr) => self.format_expression(output, expr, indent),
-			PageNode::If(if_node) => self.format_if(output, if_node, indent),
-			PageNode::For(for_node) => self.format_for(output, for_node, indent),
-			PageNode::Component(comp) => self.format_component(output, comp, indent),
-			PageNode::Watch(watch_node) => self.format_watch(output, watch_node, indent),
+			PageNode::If(if_node) => self.format_if(output, if_node, indent, depth),
+			PageNode::For(for_node) => self.format_for(output, for_node, indent, depth),
+			PageNode::Component(comp) => self.format_component(output, comp, indent, depth),
+			PageNode::Watch(watch_node) => self.format_watch(output, watch_node, indent, depth),
 		}
 	}
 
 	/// Format an element node.
-	fn format_element(&self, output: &mut String, elem: &PageElement, indent: usize) {
+	fn format_element(&self, output: &mut String, elem: &PageElement, indent: usize, depth: usize) {
 		let ind = self.make_indent(indent);
 
 		// Check if element is empty (no attrs, events, or children)
@@ -661,7 +787,7 @@ impl AstPageFormatter {
 
 			// Children
 			for child in &elem.children {
-				self.format_node(output, child, indent + 1);
+				self.format_node(output, child, indent + 1, depth + 1);
 			}
 
 			// Closing brace
@@ -721,9 +847,15 @@ impl AstPageFormatter {
 			Regex::new(r"([\w:]+) !").expect("Failed to compile IDENT_MACRO regex")
 		});
 		// Match generic type opening: Result <T> -> Result<T>
-		// This is safe because comparison operators like "x < 5" have different patterns
+		// Only matches when followed by an identifier (not =, <, > which indicate operators)
 		static IDENT_ANGLE: LazyLock<Regex> = LazyLock::new(|| {
-			Regex::new(r"([\w:>)]+) <").expect("Failed to compile IDENT_ANGLE regex")
+			Regex::new(r"([\w:>)]+) <([A-Za-z_&'\[(\*])")
+				.expect("Failed to compile IDENT_ANGLE regex")
+		});
+		// Match generic type closing: String > -> String>
+		// Only matches when preceded by an identifier/closing bracket and not followed by =, >, <
+		static ANGLE_CLOSE: LazyLock<Regex> = LazyLock::new(|| {
+			Regex::new(r"([\w>)]) >([\s,;)}\]>])").expect("Failed to compile ANGLE_CLOSE regex")
 		});
 
 		let s = s
@@ -737,10 +869,12 @@ impl AstPageFormatter {
 			.replace(" )", ")")
 			.replace(" ()", "()")
 
-			// New: Generic type angle brackets
-			.replace(" < ", "<")
-			.replace(" > ", ">")
+			// Generic type angle brackets: Vec < String > -> Vec<String>
+			// These handle spaces around < and > in generic type parameters
+			// Note: We don't use ".replace("> ", ">")" because it would incorrectly
+			// affect arrow operators like "-> Result" turning them into "->Result"
 			.replace("< ", "<")
+			.replace(" <", "<")
 			.replace(" >", ">")
 
 			// New: Path separator (std::vec::Vec)
@@ -779,7 +913,9 @@ impl AstPageFormatter {
 		// Apply regex replacements for identifier patterns
 		let s = IDENT_PAREN.replace_all(&s, "$1("); // identifier ( -> identifier(
 		let s = IDENT_MACRO.replace_all(&s, "$1!"); // identifier ! -> identifier!
-		let s = IDENT_ANGLE.replace_all(&s, "$1<"); // identifier < -> identifier< (for generics)
+		let s = IDENT_ANGLE.replace_all(&s, "$1<$2"); // identifier <T -> identifier<T (for generics)
+		// Apply closing angle bracket repeatedly for nested generics like Option<String >
+		let s = ANGLE_CLOSE.replace_all(&s, "$1>$2");
 
 		// Handle closure pipes: | x | -> |x|, | x, y | -> |x, y|, || -> ||
 		// This regex matches closure parameter lists between pipes
@@ -959,7 +1095,7 @@ impl AstPageFormatter {
 	}
 
 	/// Format an if node.
-	fn format_if(&self, output: &mut String, if_node: &PageIf, indent: usize) {
+	fn format_if(&self, output: &mut String, if_node: &PageIf, indent: usize, depth: usize) {
 		let ind = self.make_indent(indent);
 
 		// if condition {
@@ -972,7 +1108,7 @@ impl AstPageFormatter {
 
 		// then branch
 		for node in &if_node.then_branch {
-			self.format_node(output, node, indent + 1);
+			self.format_node(output, node, indent + 1, depth + 1);
 		}
 
 		// else branch
@@ -981,7 +1117,7 @@ impl AstPageFormatter {
 				output.push_str(&ind);
 				output.push_str("} else {\n");
 				for node in nodes {
-					self.format_node(output, node, indent + 1);
+					self.format_node(output, node, indent + 1, depth + 1);
 				}
 				output.push_str(&ind);
 				output.push_str("}\n");
@@ -990,7 +1126,7 @@ impl AstPageFormatter {
 				output.push_str(&ind);
 				output.push_str("} else ");
 				// Format the nested if without initial indent
-				self.format_if_inline(output, nested_if, indent);
+				self.format_if_inline(output, nested_if, indent, depth + 1);
 			}
 			None => {
 				output.push_str(&ind);
@@ -1000,7 +1136,12 @@ impl AstPageFormatter {
 	}
 
 	/// Format an if node inline (for else if chains).
-	fn format_if_inline(&self, output: &mut String, if_node: &PageIf, indent: usize) {
+	fn format_if_inline(&self, output: &mut String, if_node: &PageIf, indent: usize, depth: usize) {
+		if depth > MAX_FORMAT_DEPTH {
+			output.push_str("/* else-if chain depth limit exceeded */ {}\n");
+			return;
+		}
+
 		let ind = self.make_indent(indent);
 
 		output.push_str("if ");
@@ -1010,7 +1151,7 @@ impl AstPageFormatter {
 		output.push_str(" {\n");
 
 		for node in &if_node.then_branch {
-			self.format_node(output, node, indent + 1);
+			self.format_node(output, node, indent + 1, depth + 1);
 		}
 
 		match &if_node.else_branch {
@@ -1018,7 +1159,7 @@ impl AstPageFormatter {
 				output.push_str(&ind);
 				output.push_str("} else {\n");
 				for node in nodes {
-					self.format_node(output, node, indent + 1);
+					self.format_node(output, node, indent + 1, depth + 1);
 				}
 				output.push_str(&ind);
 				output.push_str("}\n");
@@ -1026,7 +1167,7 @@ impl AstPageFormatter {
 			Some(PageElse::If(nested_if)) => {
 				output.push_str(&ind);
 				output.push_str("} else ");
-				self.format_if_inline(output, nested_if, indent);
+				self.format_if_inline(output, nested_if, indent, depth + 1);
 			}
 			None => {
 				output.push_str(&ind);
@@ -1036,7 +1177,7 @@ impl AstPageFormatter {
 	}
 
 	/// Format a for node.
-	fn format_for(&self, output: &mut String, for_node: &PageFor, indent: usize) {
+	fn format_for(&self, output: &mut String, for_node: &PageFor, indent: usize, depth: usize) {
 		let ind = self.make_indent(indent);
 
 		output.push_str(&ind);
@@ -1051,7 +1192,7 @@ impl AstPageFormatter {
 		output.push_str(" {\n");
 
 		for node in &for_node.body {
-			self.format_node(output, node, indent + 1);
+			self.format_node(output, node, indent + 1, depth + 1);
 		}
 
 		output.push_str(&ind);
@@ -1064,20 +1205,27 @@ impl AstPageFormatter {
 		output: &mut String,
 		watch_node: &reinhardt_pages::ast::PageWatch,
 		indent: usize,
+		depth: usize,
 	) {
 		let ind = self.make_indent(indent);
 
 		output.push_str(&ind);
 		output.push_str("watch {\n");
 
-		self.format_node(output, &watch_node.expr, indent + 1);
+		self.format_node(output, &watch_node.expr, indent + 1, depth + 1);
 
 		output.push_str(&ind);
 		output.push_str("}\n");
 	}
 
 	/// Format a component call.
-	fn format_component(&self, output: &mut String, comp: &PageComponent, indent: usize) {
+	fn format_component(
+		&self,
+		output: &mut String,
+		comp: &PageComponent,
+		indent: usize,
+		depth: usize,
+	) {
 		let ind = self.make_indent(indent);
 
 		output.push_str(&ind);
@@ -1102,7 +1250,7 @@ impl AstPageFormatter {
 		if let Some(children) = &comp.children {
 			output.push_str(" {\n");
 			for child in children {
-				self.format_node(output, child, indent + 1);
+				self.format_node(output, child, indent + 1, depth + 1);
 			}
 			output.push_str(&ind);
 			output.push('}');

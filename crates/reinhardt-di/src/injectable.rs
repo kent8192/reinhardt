@@ -24,7 +24,7 @@ use crate::{DiResult, context::InjectionContext};
 /// use reinhardt_di::{Injectable, InjectionContext, DiResult, Depends};
 /// use async_trait::async_trait;
 ///
-// Automatic injection for types with Default + Clone
+/// // Automatic injection for types with Default + Clone
 /// #[derive(Default, Clone)]
 /// struct Config {
 ///     api_key: String,

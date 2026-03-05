@@ -1,8 +1,9 @@
 [package]
 name = "reinhardt-utils"
-version = "0.1.0-alpha.9"
+version = "0.1.0-rc.4"
 description = "Utility functions aggregator for Reinhardt"
 edition.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
@@ -30,8 +31,7 @@ redis = { version = "0.32.7", features = [
 deadpool-redis = { version = "0.22.0", optional = true }
 memcache-async = { version = "0.9.0", optional = true }
 tokio-util = { version = "0.7", features = ["compat"], optional = true }
-md5 = { version = "0.10", package = "md-5" }
-rand = "0.9.2"
+rand = { workspace = true }
 anyhow = { workspace = true }
 once_cell = { workspace = true, optional = false }
 http = "1.0"
@@ -39,7 +39,6 @@ mime_guess = "2.0"
 tracing = { workspace = true }
 sha2 = "0.10"
 hex = "0.4"
-md-5 = "0.10"
 regex = "1.10"
 walkdir = "2.4"
 glob = "0.3"
@@ -105,8 +104,9 @@ advanced-minification = [
 dev-server = ["dep:notify"]
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio = { workspace = true }
-proptest = "1.8"
+proptest = { workspace = true }
 regex = "1.0"
 bytes = { workspace = true }
 rstest = { workspace = true }

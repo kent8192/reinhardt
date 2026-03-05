@@ -1,10 +1,11 @@
 //! Unit tests for Provider and ProviderFn
 
-use reinhardt_di::provider::{Provider, ProviderFn};
 use reinhardt_di::InjectionContext;
+use reinhardt_di::provider::{Provider, ProviderFn};
 use reinhardt_test::fixtures::*;
 use rstest::*;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 // Test type definitions
 #[derive(Clone, Debug, PartialEq)]
@@ -84,12 +85,11 @@ async fn provider_returns_error() {
 #[tokio::test]
 async fn provider_cached(injection_context: InjectionContext) {
 	// Arrange
-	static mut CALL_COUNT: u32 = 0;
+	static CALL_COUNT: AtomicU32 = AtomicU32::new(0);
+	CALL_COUNT.store(0, Ordering::SeqCst);
 
 	let provider = || async {
-		unsafe {
-			CALL_COUNT += 1;
-		}
+		CALL_COUNT.fetch_add(1, Ordering::SeqCst);
 		Ok(TestValue {
 			data: "cached".to_string(),
 		})
@@ -108,7 +108,5 @@ async fn provider_cached(injection_context: InjectionContext) {
 	// Assert
 	assert!(cached.is_some());
 	assert_eq!(cached.unwrap().data, "cached");
-	unsafe {
-		assert_eq!(CALL_COUNT, 1);
-	}
+	assert_eq!(CALL_COUNT.load(Ordering::SeqCst), 1);
 }

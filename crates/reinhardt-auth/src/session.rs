@@ -5,7 +5,8 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 /// Session ID type
@@ -200,17 +201,17 @@ impl Default for InMemorySessionStore {
 #[async_trait]
 impl SessionStore for InMemorySessionStore {
 	async fn load(&self, session_id: &SessionId) -> Option<Session> {
-		let sessions = self.sessions.lock().unwrap();
+		let sessions = self.sessions.lock().await;
 		sessions.get(session_id).cloned()
 	}
 
 	async fn save(&self, session_id: &SessionId, session: &Session) {
-		let mut sessions = self.sessions.lock().unwrap();
+		let mut sessions = self.sessions.lock().await;
 		sessions.insert(session_id.clone(), session.clone());
 	}
 
 	async fn delete(&self, session_id: &SessionId) {
-		let mut sessions = self.sessions.lock().unwrap();
+		let mut sessions = self.sessions.lock().await;
 		sessions.remove(session_id);
 	}
 }

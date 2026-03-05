@@ -125,13 +125,18 @@ async fn edge_items_table(#[future] db_pool: Arc<PgPool>) -> Arc<PgPool> {
 // Helper Functions
 // ============================================================================
 
-/// Helper: Create HTTP POST request with JSON body
+//// Helper: Create HTTP POST request with JSON body
 fn create_post_request(uri: &str, json_body: &str) -> Request {
+	let mut headers = HeaderMap::new();
+	headers.insert(
+		hyper::header::CONTENT_TYPE,
+		"application/json".parse().unwrap(),
+	);
 	Request::builder()
 		.method(Method::POST)
 		.uri(uri)
 		.version(Version::HTTP_11)
-		.headers(HeaderMap::new())
+		.headers(headers)
 		.body(Bytes::from(json_body.to_string()))
 		.build()
 		.expect("Failed to build request")

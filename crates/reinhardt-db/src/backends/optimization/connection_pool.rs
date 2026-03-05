@@ -9,6 +9,7 @@ use sqlx::pool::PoolOptions;
 use std::time::Duration;
 
 /// Pool optimization configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct PoolOptimizationConfig {
 	/// Maximum number of connections in the pool

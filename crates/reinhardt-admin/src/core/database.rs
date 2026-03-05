@@ -216,8 +216,7 @@ fn annotation_expr_to_safe_expr(expr: &reinhardt_db::orm::annotation::Expression
 			SimpleExpr::from(case)
 		}
 		AnnotExpr::Coalesce(values) => {
-			let exprs: Vec<SimpleExpr> =
-				values.iter().map(annotation_value_to_safe_expr).collect();
+			let exprs: Vec<SimpleExpr> = values.iter().map(annotation_value_to_safe_expr).collect();
 			if exprs.is_empty() {
 				Expr::val(Option::<String>::None).into()
 			} else {
@@ -495,6 +494,10 @@ impl AdminDatabase {
 		offset: u64,
 		limit: u64,
 	) -> AdminResult<Vec<HashMap<String, serde_json::Value>>> {
+		// SELECT * is intentional: admin panel operates on dynamic schemas where
+		// the column set is not known at compile time. Each ModelAdmin defines
+		// list_display fields, and column filtering is applied at the application
+		// layer after fetching all columns.
 		let mut query = Query::select()
 			.from(Alias::new(table_name))
 			.column(ColumnRef::Asterisk)
@@ -556,6 +559,10 @@ impl AdminDatabase {
 		offset: u64,
 		limit: u64,
 	) -> AdminResult<Vec<HashMap<String, serde_json::Value>>> {
+		// SELECT * is intentional: admin panel operates on dynamic schemas where
+		// the column set is not known at compile time. Each ModelAdmin defines
+		// list_display fields, and column filtering is applied at the application
+		// layer after fetching all columns.
 		let mut query = Query::select()
 			.from(Alias::new(table_name))
 			.column(ColumnRef::Asterisk)
@@ -671,14 +678,8 @@ impl AdminDatabase {
 			.await
 			.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
 
-		// Extract count from result
-		let count = if let Some(count_value) = row.data.get("count") {
-			count_value.as_i64().unwrap_or(0) as u64
-		} else if let Some(obj) = row.data.as_object() {
-			obj.values().next().and_then(|v| v.as_i64()).unwrap_or(0) as u64
-		} else {
-			0
-		};
+		// Extract count from result, propagating errors for unexpected formats
+		let count = extract_count_from_row(&row.data)?;
 
 		Ok(count)
 	}
@@ -712,6 +713,9 @@ impl AdminDatabase {
 			Value::String(Some(Box::new(id.to_string())))
 		};
 
+		// SELECT * is intentional: admin detail view displays all fields from the
+		// model. The admin panel operates on dynamic schemas where the column set
+		// is determined by the ModelAdmin configuration at runtime.
 		let query = Query::select()
 			.from(Alias::new(table_name))
 			.column(ColumnRef::Asterisk)
@@ -769,11 +773,18 @@ impl AdminDatabase {
 			.into_table(Alias::new(table_name))
 			.to_owned();
 
-		// Build column and value lists
+		// Sort keys for deterministic column ordering in generated SQL.
+		// HashMap iteration order is non-deterministic, which causes
+		// flaky tests and non-reproducible query plans.
+		let mut sorted_keys: Vec<String> = data.keys().cloned().collect();
+		sorted_keys.sort();
+
+		// Build column and value lists in sorted order
 		let mut columns = Vec::new();
 		let mut values = Vec::new();
 
-		for (key, value) in data {
+		for key in sorted_keys {
+			let value = data.get(&key).cloned().unwrap_or(serde_json::Value::Null);
 			columns.push(Alias::new(&key));
 
 			let sea_value = match value {
@@ -795,7 +806,9 @@ impl AdminDatabase {
 		}
 
 		// Pass values directly for reinhardt-query
-		query.columns(columns).values(values).unwrap();
+		query.columns(columns).values(values).map_err(|e| {
+			AdminError::DatabaseError(format!("column/value count mismatch: {}", e))
+		})?;
 
 		// Add RETURNING clause to get the inserted ID
 		query.returning([Alias::new("id")]);
@@ -847,8 +860,13 @@ impl AdminDatabase {
 	) -> AdminResult<u64> {
 		let mut query = Query::update().table(Alias::new(table_name)).to_owned();
 
-		// Build SET clauses
-		for (key, value) in data {
+		// Sort keys for deterministic SET clause ordering in generated SQL
+		let mut sorted_keys: Vec<String> = data.keys().cloned().collect();
+		sorted_keys.sort();
+
+		// Build SET clauses in sorted order
+		for key in sorted_keys {
+			let value = data.get(&key).cloned().unwrap_or(serde_json::Value::Null);
 			let sea_value = match value {
 				serde_json::Value::String(s) => Value::String(Some(Box::new(s))),
 				serde_json::Value::Number(n) => {
@@ -1059,18 +1077,46 @@ impl AdminDatabase {
 			.await
 			.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
 
-		// Extract count from result
-		let count = if let Some(count_value) = row.data.get("count") {
-			count_value.as_i64().unwrap_or(0) as u64
-		} else if let Some(obj) = row.data.as_object() {
-			// COUNT(*) result may be in the first column
-			obj.values().next().and_then(|v| v.as_i64()).unwrap_or(0) as u64
-		} else {
-			0
-		};
+		// Extract count from result, propagating errors for unexpected formats
+		let count = extract_count_from_row(&row.data)?;
 
 		Ok(count)
 	}
+}
+
+/// Extract count value from a query result row
+///
+/// Attempts to extract an integer count from the query result in the following order:
+/// 1. Look for a "count" key in the JSON object
+/// 2. Take the first value from the JSON object
+///
+/// Returns an error if the data format is unexpected or the value cannot be
+/// interpreted as an integer.
+fn extract_count_from_row(data: &serde_json::Value) -> AdminResult<u64> {
+	if let Some(count_value) = data.get("count") {
+		return count_value.as_i64().map(|v| v as u64).ok_or_else(|| {
+			AdminError::DatabaseError(format!(
+				"COUNT query returned non-integer value: {}",
+				count_value
+			))
+		});
+	}
+
+	if let Some(obj) = data.as_object()
+		&& let Some(first_value) = obj.values().next()
+	{
+		return first_value.as_i64().map(|v| v as u64).ok_or_else(|| {
+			AdminError::DatabaseError(format!(
+				"COUNT query returned non-integer value: {}",
+				first_value
+			))
+		});
+	}
+
+	Err(AdminError::DatabaseError(format!(
+		"COUNT query returned unexpected data format: {}",
+		data
+	)))
 }
 
 /// Injectable trait implementation for AdminDatabase
@@ -1153,6 +1199,30 @@ mod tests {
 
 		// Assert
 		assert_eq!(result, "normal text");
+	}
+
+	// ==================== escape_like_pattern regression tests (#632) ====================
+
+	/// Regression tests for issue #632: LIKE wildcard injection via unescaped metacharacters.
+	/// Verifies that percent, underscore, and backslash in user input are always escaped
+	/// so they cannot be used as LIKE wildcards or escape prefix injections.
+	#[rstest]
+	#[case("%wildcard%", "\\%wildcard\\%")]
+	#[case("under_score", "under\\_score")]
+	#[case("back\\slash", "back\\\\slash")]
+	#[case("%_%", "\\%\\_\\%")]
+	fn test_escape_like_pattern_sanitizes_special_chars(
+		#[case] input: &str,
+		#[case] expected: &str,
+	) {
+		// Arrange: user-supplied string containing LIKE metacharacters
+		// Act
+		let escaped = escape_like_pattern(input);
+		// Assert: output exactly matches fully-escaped form with no unescaped metacharacters
+		assert_eq!(
+			escaped, expected,
+			"input={input:?} was not correctly escaped"
+		);
 	}
 
 	// ==================== build_composite_filter_condition tests ====================
@@ -1506,6 +1576,47 @@ mod tests {
 			}
 			_ => panic!("Expected String value"),
 		}
+	}
+
+	// ==================== insert values mismatch tests (#1551) ====================
+
+	#[rstest]
+	fn test_insert_values_mismatch_returns_error_not_panic() {
+		// Arrange
+		// Simulate the scenario where columns and values count mismatch
+		// by calling SeaQuery's values() with wrong number of values
+		let mut query = Query::insert()
+			.into_table(Alias::new("test_table"))
+			.to_owned();
+
+		let columns = vec![Alias::new("col1"), Alias::new("col2"), Alias::new("col3")];
+		let values = vec![Value::String(Some(Box::new("val1".to_string())))]; // Only 1 value for 3 columns
+
+		// Act
+		let result = query.columns(columns).values(values);
+
+		// Assert - should return Err, not panic
+		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_insert_values_matching_count_succeeds() {
+		// Arrange
+		let mut query = Query::insert()
+			.into_table(Alias::new("test_table"))
+			.to_owned();
+
+		let columns = vec![Alias::new("col1"), Alias::new("col2")];
+		let values = vec![
+			Value::String(Some(Box::new("val1".to_string()))),
+			Value::String(Some(Box::new("val2".to_string()))),
+		];
+
+		// Act
+		let result = query.columns(columns).values(values);
+
+		// Assert
+		assert!(result.is_ok());
 	}
 
 	// ==================== SQL injection prevention tests ====================

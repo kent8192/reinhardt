@@ -195,16 +195,16 @@ impl PageNumberPagination {
 	/// let paginator = PageNumberPagination::new().page_size(5);
 	/// let items: Vec<i32> = (1..=20).collect();
 	///
-	// Get page 2
+	/// // Get page 2
 	/// let page = paginator.get_page(&items, Some("2"));
 	/// assert_eq!(page.number, 2);
 	/// assert_eq!(page.len(), 5);
 	///
-	// Invalid page number defaults to page 1
+	/// // Invalid page number defaults to page 1
 	/// let page = paginator.get_page(&items, Some("invalid"));
 	/// assert_eq!(page.number, 1);
 	///
-	// Out of range page number returns last page
+	/// // Out of range page number returns last page
 	/// let page = paginator.get_page(&items, Some("100"));
 	/// assert_eq!(page.number, 4);
 	/// ```

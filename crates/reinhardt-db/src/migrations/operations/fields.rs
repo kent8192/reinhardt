@@ -49,14 +49,14 @@ pub use super::models::FieldDefinition;
 ///
 /// let mut state = ProjectState::new();
 ///
-// Create a model first
+/// // Create a model first
 /// let create = CreateModel::new(
 ///     "User",
 ///     vec![FieldDefinition::new("id", FieldType::Integer, true, false, Option::<&str>::None)],
 /// );
 /// create.state_forwards("myapp", &mut state);
 ///
-// Add a field
+/// // Add a field
 /// let add = AddField::new("User", FieldDefinition::new("email", FieldType::VarChar(255), false, false, Option::<&str>::None));
 /// add.state_forwards("myapp", &mut state);
 ///
@@ -139,7 +139,7 @@ impl AddField {
 ///
 /// let mut state = ProjectState::new();
 ///
-// Create a model with fields
+/// // Create a model with fields
 /// let create = CreateModel::new(
 ///     "User",
 ///     vec![
@@ -149,7 +149,7 @@ impl AddField {
 /// );
 /// create.state_forwards("myapp", &mut state);
 ///
-// Remove a field
+/// // Remove a field
 /// let remove = RemoveField::new("User", "email");
 /// remove.state_forwards("myapp", &mut state);
 ///
@@ -215,7 +215,7 @@ impl RemoveField {
 ///
 /// let mut state = ProjectState::new();
 ///
-// Create a model with a field
+/// // Create a model with a field
 /// let create = CreateModel::new(
 ///     "User",
 ///     vec![
@@ -225,7 +225,7 @@ impl RemoveField {
 /// );
 /// create.state_forwards("myapp", &mut state);
 ///
-// Alter the field to make it longer
+/// // Alter the field to make it longer
 /// let alter = AlterField::new("User", FieldDefinition::new("email", FieldType::VarChar(255), false, false, Option::<&str>::None));
 /// alter.state_forwards("myapp", &mut state);
 ///
@@ -304,7 +304,7 @@ impl AlterField {
 ///
 /// let mut state = ProjectState::new();
 ///
-// Create a model with a field
+/// // Create a model with a field
 /// let create = CreateModel::new(
 ///     "User",
 ///     vec![
@@ -314,7 +314,7 @@ impl AlterField {
 /// );
 /// create.state_forwards("myapp", &mut state);
 ///
-// Rename the field
+/// // Rename the field
 /// let rename = RenameField::new("User", "email", "email_address");
 /// rename.state_forwards("myapp", &mut state);
 ///

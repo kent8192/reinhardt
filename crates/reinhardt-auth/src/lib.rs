@@ -12,6 +12,50 @@
 //! - **REST API Authentication**: Multiple authentication backends (JWT, Token, Session, OAuth2)
 //! - **Standard Permissions**: Permission classes for common authorization scenarios
 //! - **createsuperuser Command**: CLI tool for creating admin users
+//!
+//! ## Quick Start
+//!
+//! ```rust
+//! use reinhardt_auth::core::{IsAuthenticated, PermissionContext};
+//!
+//! // Check if a permission is satisfied
+//! let permission = IsAuthenticated;
+//! // In actual usage, you would pass a real request context
+//! let _ = permission; // permission classes implement PermissionClass trait
+//! ```
+//!
+//! ## Architecture
+//!
+//! Key modules in this crate:
+//!
+//! - [`core`]: Authentication traits, user types, permission classes, and password hashing
+//! - [`sessions`]: Session backends (JWT, database, Redis, cookie, file)
+//! - [`current_user`]: Dependency-injectable `CurrentUser` extractor
+//! - `social` (feature-gated): OAuth2/OpenID Connect social authentication providers
+//! - `user_management`: CRUD operations for users and groups
+//!
+//! ## Feature Flags
+//!
+//! | Feature | Default | Description |
+//! |---------|---------|-------------|
+//! | `params` | enabled | `CurrentUser` parameter extraction via DI |
+//! | `jwt` | disabled | JWT-based authentication backend |
+//! | `sessions` | disabled | Session-based authentication |
+//! | `oauth` | disabled | OAuth2 authorization code flow |
+//! | `token` | disabled | Token-based authentication |
+//! | `argon2-hasher` | disabled | Argon2 password hashing (alternative to bcrypt) |
+//! | `social` | disabled | Social authentication (OAuth2/OIDC providers) |
+//! | `database` | disabled | Database-backed user/group storage via ORM |
+//!
+//! ## Security Note: Client-Side vs Server-Side Checks
+//!
+//! Authentication state exposed via `reinhardt_http::AuthState` (e.g.,
+//! `is_authenticated()`, `is_admin()`) is populated by server-side
+//! middleware and stored in request extensions. When this state is
+//! forwarded to client-side code (e.g., via WASM or JSON responses),
+//! **it must only be used for UI display purposes** (showing/hiding
+//! elements). All authorization decisions must be enforced server-side
+//! through middleware and permission classes provided by this crate.
 
 pub mod sessions;
 
@@ -130,7 +174,8 @@ pub use user_management::{
 };
 
 /// Authentication errors
-#[derive(Debug, Clone)]
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthenticationError {
 	InvalidCredentials,
 	UserNotFound,

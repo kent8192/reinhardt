@@ -92,7 +92,7 @@ pub trait User: Send + Sync {
 /// assert!(user.is_admin());
 /// assert!(user.is_staff());
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SimpleUser {
 	pub id: Uuid,
 	pub username: String,
@@ -151,6 +151,7 @@ impl User for SimpleUser {
 /// assert_eq!(anon.username(), "");
 /// assert_eq!(anon.id(), "");
 /// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnonymousUser;
 
 impl User for AnonymousUser {

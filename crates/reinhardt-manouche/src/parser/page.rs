@@ -13,7 +13,9 @@
 
 use proc_macro2::TokenStream;
 use syn::{
-	Expr, Ident, Pat, Result, Token, braced, parenthesized,
+	Expr, Ident, Pat, Result, Token, braced,
+	ext::IdentExt,
+	parenthesized,
 	parse::{Parse, ParseStream},
 	token,
 };
@@ -218,9 +220,10 @@ fn parse_element_node(input: ParseStream) -> Result<PageNode> {
 
 		// Check for attribute: key: value,
 		// Attributes are identified by: ident : expr ,
-		if content.peek(Ident) {
+		// Use peek_any to also match reserved keywords (type, for, etc.)
+		if content.peek(Ident::peek_any) {
 			let fork = content.fork();
-			let _ident: Ident = fork.parse()?;
+			let _ident = Ident::parse_any(&fork)?;
 
 			// If followed by :, it's an attribute
 			if fork.peek(Token![:]) {
@@ -245,7 +248,7 @@ fn parse_element_node(input: ParseStream) -> Result<PageNode> {
 
 /// Parses an attribute: `name: value,`
 fn parse_attr(input: ParseStream) -> Result<PageAttr> {
-	let name: Ident = input.parse()?;
+	let name = Ident::parse_any(input)?;
 	let span = name.span();
 	input.parse::<Token![:]>()?;
 
@@ -402,7 +405,10 @@ fn parse_watch_node(input: ParseStream) -> Result<PageNode> {
 
 	// Consume the "watch" identifier
 	let watch_ident: Ident = input.parse()?;
-	debug_assert_eq!(watch_ident, "watch");
+	assert_eq!(
+		watch_ident, "watch",
+		"parser in wrong state: expected 'watch' identifier"
+	);
 
 	// Parse the braced content
 	let content;
@@ -952,5 +958,25 @@ mod tests {
 		let page = result.unwrap();
 		assert!(page.params.is_empty());
 		assert_eq!(page.body.nodes.len(), 1);
+	}
+
+	#[rstest]
+	#[case("type")]
+	#[case("for")]
+	fn test_parse_reserved_keyword_as_attr_name(#[case] keyword: &str) {
+		// Arrange
+		let input_str = format!("|| {{ input {{ {keyword}: \"text\", }} }}",);
+
+		// Act
+		let result: PageMacro = syn::parse_str(&input_str).unwrap();
+
+		// Assert
+		match &result.body.nodes[0] {
+			PageNode::Element(elem) => {
+				assert_eq!(elem.attrs.len(), 1);
+				assert_eq!(elem.attrs[0].name.to_string(), keyword);
+			}
+			_ => panic!("expected Element"),
+		}
 	}
 }

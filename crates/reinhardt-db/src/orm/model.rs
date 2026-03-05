@@ -443,7 +443,7 @@ impl Timestamps {
 	/// let mut timestamps = Timestamps::now();
 	/// let old_updated = timestamps.updated_at;
 	///
-	// Wait a small amount to ensure time difference
+	/// // Wait a small amount to ensure time difference
 	/// std::thread::sleep(std::time::Duration::from_millis(1));
 	/// timestamps.touch();
 	///

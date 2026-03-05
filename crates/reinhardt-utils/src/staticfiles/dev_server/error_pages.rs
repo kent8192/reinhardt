@@ -3,6 +3,7 @@
 //! Provides detailed error pages during development with stack traces,
 //! source code context, and helpful debugging information.
 
+use reinhardt_core::security::xss::escape_html;
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::error::Error;
 use std::fmt;
@@ -88,7 +89,10 @@ impl DevelopmentErrorHandler {
 
 		// Main error message
 		html.push_str("    <div class=\"error-message\">\n");
-		html.push_str(&format!("      <p><strong>Error:</strong> {}</p>\n", error));
+		html.push_str(&format!(
+			"      <p><strong>Error:</strong> {}</p>\n",
+			escape_html(&error.to_string())
+		));
 		html.push_str("    </div>\n");
 
 		// Stack trace
@@ -104,7 +108,10 @@ impl DevelopmentErrorHandler {
 
 			let mut current = Some(source);
 			while let Some(err) = current {
-				html.push_str(&format!("        <li>{}</li>\n", err));
+				html.push_str(&format!(
+					"        <li>{}</li>\n",
+					escape_html(&err.to_string())
+				));
 				current = err.source();
 			}
 
@@ -161,7 +168,7 @@ impl DevelopmentErrorHandler {
 
 		let backtrace = Backtrace::capture();
 		if backtrace.status() == BacktraceStatus::Captured {
-			html.push_str(&format!("{}\n", backtrace));
+			html.push_str(&escape_html(&format!("{}\n", backtrace)));
 		} else {
 			html.push_str("Stack trace not available (compile with RUST_BACKTRACE=1)\n");
 		}
@@ -558,6 +565,57 @@ mod tests {
 		assert!(
 			handler.show_source,
 			"DevelopmentErrorHandler::default() should enable source context by default"
+		);
+	}
+
+	#[test]
+	fn test_format_error_html_escapes_xss() {
+		// Arrange
+		let handler = DevelopmentErrorHandler::new().with_stack_trace(false);
+		let xss_payload = "<script>alert('xss')</script>";
+		let error = io::Error::new(io::ErrorKind::Other, xss_payload);
+
+		// Act
+		let html = handler.format_error(&error);
+
+		// Assert
+		assert!(
+			!html.contains(xss_payload),
+			"HTML output must not contain unescaped script tags. Found raw payload in: {}",
+			html.split("<div class=\"error-message\">")
+				.nth(1)
+				.and_then(|s| s.split("</div>").next())
+				.unwrap_or("error-message div not found")
+		);
+		assert!(
+			html.contains("&lt;script&gt;"),
+			"HTML output should contain escaped script tag. Error section: {}",
+			html.split("<div class=\"error-message\">")
+				.nth(1)
+				.and_then(|s| s.split("</div>").next())
+				.unwrap_or("error-message div not found")
+		);
+	}
+
+	#[test]
+	fn test_format_error_html_escapes_xss_in_error_chain() {
+		// Arrange
+		let handler = DevelopmentErrorHandler::new().with_stack_trace(false);
+		let xss_payload = "<img src=x onerror=alert(1)>";
+		let source = io::Error::new(io::ErrorKind::Other, xss_payload);
+		let error = DevServerError::with_source("outer error", source);
+
+		// Act
+		let html = handler.format_error(&error);
+
+		// Assert
+		assert!(
+			!html.contains(xss_payload),
+			"HTML output must not contain unescaped XSS payload in error chain"
+		);
+		assert!(
+			html.contains("&lt;img"),
+			"HTML should contain escaped img tag in error chain"
 		);
 	}
 }

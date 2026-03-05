@@ -128,11 +128,11 @@ async fn test_gzip_content_type_partitions(
 	use reinhardt_middleware::Middleware;
 	use reinhardt_middleware::gzip::{GZipConfig, GZipMiddleware};
 
-	let config = GZipConfig {
-		min_length: 1,
-		compression_level: 6,
-		compressible_types: vec!["text/".to_string(), "application/json".to_string()],
-	};
+	let mut config = GZipConfig::default();
+	config.min_length = 1;
+	config.compression_level = 6;
+	config.compressible_types = vec!["text/".to_string(), "application/json".to_string()];
+
 	let middleware = Arc::new(GZipMiddleware::with_config(config));
 	let handler = Arc::new(ConfigurableTestHandler::with_content_type(content_type));
 
@@ -179,15 +179,7 @@ async fn test_rate_limit_strategy_partitions(#[case] strategy: RateLimitStrategy
 	use reinhardt_middleware::Middleware;
 	use reinhardt_middleware::rate_limit::{RateLimitConfig, RateLimitMiddleware};
 
-	let config = RateLimitConfig {
-		capacity: 100.0,
-		refill_rate: 10.0,
-		cost_per_request: 1.0,
-		strategy: strategy.clone(),
-		exclude_paths: vec![],
-		error_message: None,
-		trusted_proxies: vec![],
-	};
+	let config = RateLimitConfig::new(strategy.clone(), 100.0, 10.0);
 
 	let middleware = Arc::new(RateLimitMiddleware::new(config));
 	let handler = Arc::new(ConfigurableTestHandler::always_success());
@@ -233,15 +225,7 @@ async fn test_rate_limit_strategy_isolation() {
 	};
 	use std::net::SocketAddr;
 
-	let config = RateLimitConfig {
-		capacity: 1.0,
-		refill_rate: 0.0001, // Very slow refill (essentially no refill during test)
-		cost_per_request: 1.0,
-		strategy: RateLimitStrategy::PerIp,
-		exclude_paths: vec![],
-		error_message: None,
-		trusted_proxies: vec![],
-	};
+	let config = RateLimitConfig::new(RateLimitStrategy::PerIp, 1.0, 0.0001);
 
 	let middleware = Arc::new(RateLimitMiddleware::new(config));
 	let handler = Arc::new(ConfigurableTestHandler::always_success());
@@ -298,13 +282,12 @@ async fn test_cors_origin_partitions(#[case] origin: &str, #[case] allowed_origi
 	use reinhardt_middleware::Middleware;
 	use reinhardt_middleware::cors::{CorsConfig, CorsMiddleware};
 
-	let config = CorsConfig {
-		allow_origins: allowed_origins.into_iter().map(String::from).collect(),
-		allow_methods: vec!["GET".to_string(), "POST".to_string()],
-		allow_headers: vec!["Content-Type".to_string()],
-		allow_credentials: false,
-		max_age: Some(3600),
-	};
+	let mut config = CorsConfig::default();
+	config.allow_origins = allowed_origins.into_iter().map(String::from).collect();
+	config.allow_methods = vec!["GET".to_string(), "POST".to_string()];
+	config.allow_headers = vec!["Content-Type".to_string()];
+	config.allow_credentials = false;
+	config.max_age = Some(3600);
 
 	let middleware = Arc::new(CorsMiddleware::new(config));
 	let handler = Arc::new(ConfigurableTestHandler::always_success());
@@ -385,9 +368,7 @@ async fn test_timeout_duration_partitions(
 	use reinhardt_middleware::timeout::{TimeoutConfig, TimeoutMiddleware};
 	use std::time::Duration;
 
-	let config = TimeoutConfig {
-		duration: Duration::from_millis(timeout_ms),
-	};
+	let config = TimeoutConfig::new(Duration::from_millis(timeout_ms));
 	let middleware = Arc::new(TimeoutMiddleware::new(config));
 	let handler = Arc::new(
 		ConfigurableTestHandler::always_success()
@@ -428,13 +409,8 @@ async fn test_circuit_breaker_state_partitions(
 	use reinhardt_middleware::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerMiddleware};
 	use std::time::Duration;
 
-	let config = CircuitBreakerConfig {
-		error_threshold: 0.5,
-		min_requests: 10,
-		timeout: Duration::from_millis(100),
-		half_open_success_threshold: 3,
-		error_message: None,
-	};
+	let config = CircuitBreakerConfig::new(0.5, 10, Duration::from_millis(100))
+		.with_half_open_success_threshold(3);
 
 	let middleware = Arc::new(CircuitBreakerMiddleware::new(config));
 	let handler = Arc::new(ConfigurableTestHandler::always_success());
@@ -552,17 +528,16 @@ async fn test_locale_source_partitions(
 	use reinhardt_middleware::Middleware;
 	use reinhardt_middleware::locale::{LocaleConfig, LocaleMiddleware};
 
-	let config = LocaleConfig {
-		supported_locales: vec![
-			"en".to_string(),
-			"ja".to_string(),
-			"de".to_string(),
-			"fr".to_string(),
-		],
-		default_locale: "en".to_string(),
-		check_url_path: true,
-		cookie_name: "django_language".to_string(),
-	};
+	let mut config = LocaleConfig::new();
+	config.supported_locales = vec![
+		"en".to_string(),
+		"ja".to_string(),
+		"de".to_string(),
+		"fr".to_string(),
+	];
+	config.default_locale = "en".to_string();
+	config.check_url_path = true;
+	config.cookie_name = "django_language".to_string();
 
 	let middleware = Arc::new(LocaleMiddleware::with_config(config));
 	let handler = Arc::new(ConfigurableTestHandler::always_success());
@@ -604,11 +579,10 @@ async fn test_gzip_accept_encoding_partitions(
 	use reinhardt_middleware::Middleware;
 	use reinhardt_middleware::gzip::{GZipConfig, GZipMiddleware};
 
-	let config = GZipConfig {
-		min_length: 1,
-		compression_level: 6,
-		compressible_types: vec!["text/".to_string()],
-	};
+	let mut config = GZipConfig::default();
+	config.min_length = 1;
+	config.compression_level = 6;
+	config.compressible_types = vec!["text/".to_string()];
 
 	let middleware = Arc::new(GZipMiddleware::with_config(config));
 	let handler = Arc::new(ConfigurableTestHandler::with_content_type("text/plain"));

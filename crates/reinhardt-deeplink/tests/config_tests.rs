@@ -62,7 +62,8 @@ fn test_deeplink_config_full() {
 			AndroidConfig::builder()
 				.package_name("com.example.app")
 				.sha256_fingerprint(VALID_FINGERPRINT)
-				.build(),
+				.build()
+				.unwrap(),
 		)
 		.custom_scheme("myapp")
 		.build();
@@ -201,7 +202,8 @@ fn test_android_config_json_serialization() {
 	let config = AndroidConfig::builder()
 		.package_name("com.example.app")
 		.sha256_fingerprint(VALID_FINGERPRINT)
-		.build();
+		.build()
+		.unwrap();
 
 	let json = serde_json::to_string(&config).unwrap();
 	assert!(json.contains("android_app"));
@@ -225,7 +227,8 @@ fn test_config_all_platforms_enabled() {
 			AndroidConfig::builder()
 				.package_name("com.example.app")
 				.sha256_fingerprint(VALID_FINGERPRINT)
-				.build(),
+				.build()
+				.unwrap(),
 		)
 		.custom_scheme("myapp")
 		.build();
@@ -256,7 +259,8 @@ fn test_android_config_multiple_fingerprints() {
 		.package_name("com.example.app")
 		.sha256_fingerprint(VALID_FINGERPRINT)
 		.sha256_fingerprint(fp2)
-		.build();
+		.build()
+		.unwrap();
 
 	let json = serde_json::to_string(&config).unwrap();
 	assert!(json.contains(VALID_FINGERPRINT));

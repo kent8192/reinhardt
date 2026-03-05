@@ -56,6 +56,7 @@ use thiserror::Error;
 pub type SecurityResult<T> = Result<T, SecurityError>;
 
 /// Security-related errors
+#[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum SecurityError {
 	/// CSRF token validation failed

@@ -44,7 +44,7 @@ impl Extensions {
 	/// assert!(extensions.contains::<String>());
 	/// ```
 	pub fn insert<T: Send + Sync + 'static>(&self, value: T) {
-		let mut map = self.map.lock().unwrap();
+		let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
 		map.insert(TypeId::of::<T>(), Box::new(value));
 	}
 	/// Get a cloned value from extensions
@@ -64,7 +64,7 @@ impl Extensions {
 	where
 		T: Clone + Send + Sync + 'static,
 	{
-		let map = self.map.lock().unwrap();
+		let map = self.map.lock().unwrap_or_else(|e| e.into_inner());
 		map.get(&TypeId::of::<T>())
 			.and_then(|boxed| boxed.downcast_ref::<T>())
 			.cloned()
@@ -83,7 +83,7 @@ impl Extensions {
 	/// assert!(!extensions.contains::<u32>());
 	/// ```
 	pub fn contains<T: Send + Sync + 'static>(&self) -> bool {
-		let map = self.map.lock().unwrap();
+		let map = self.map.lock().unwrap_or_else(|e| e.into_inner());
 		map.contains_key(&TypeId::of::<T>())
 	}
 	/// Remove a value from extensions and return it
@@ -102,11 +102,18 @@ impl Extensions {
 	/// ```
 	pub fn remove<T>(&self) -> Option<T>
 	where
-		T: Clone + Send + Sync + 'static,
+		T: Send + Sync + 'static,
 	{
-		let mut map = self.map.lock().unwrap();
-		map.remove(&TypeId::of::<T>())
-			.and_then(|boxed| boxed.downcast_ref::<T>().cloned())
+		let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
+		let boxed = map.remove(&TypeId::of::<T>())?;
+		match boxed.downcast::<T>() {
+			Ok(val) => Some(*val),
+			Err(boxed) => {
+				// Re-insert to prevent value loss on type mismatch
+				map.insert(TypeId::of::<T>(), boxed);
+				None
+			}
+		}
 	}
 	/// Clear all extensions
 	///
@@ -128,7 +135,7 @@ impl Extensions {
 	/// assert!(!extensions.contains::<String>());
 	/// ```
 	pub fn clear(&self) {
-		let mut map = self.map.lock().unwrap();
+		let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
 		map.clear();
 	}
 }
@@ -200,6 +207,21 @@ mod tests {
 
 		assert!(!extensions.contains::<TestData>());
 		assert!(!extensions.contains::<String>());
+	}
+
+	#[test]
+	fn test_remove_wrong_type_preserves_value() {
+		// Arrange
+		let extensions = Extensions::new();
+		extensions.insert(42u32);
+
+		// Act - try to remove as wrong type
+		let removed = extensions.remove::<String>();
+
+		// Assert - removal fails and original value is preserved
+		assert_eq!(removed, None);
+		assert!(extensions.contains::<u32>());
+		assert_eq!(extensions.get::<u32>(), Some(42));
 	}
 
 	#[test]

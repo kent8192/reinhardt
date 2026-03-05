@@ -20,6 +20,7 @@ use tokio::time::timeout;
 ///
 /// let config = TimeoutConfig::new(Duration::from_secs(30));
 /// ```
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct TimeoutConfig {
 	/// Request timeout duration

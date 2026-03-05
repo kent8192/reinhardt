@@ -15,6 +15,7 @@ use std::fmt;
 use std::sync::Arc;
 
 /// Error type for ordering operations
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum OrderError {
 	InvalidOrder(String),

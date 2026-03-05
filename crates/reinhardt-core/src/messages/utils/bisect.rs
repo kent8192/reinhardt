@@ -75,7 +75,7 @@ where
 /// let count = bisect_keep_right(&items, 20, |items| {
 ///     serde_json::to_vec(items).unwrap()
 /// });
-// Keep the most recent messages that fit
+/// // Keep the most recent messages that fit
 /// assert!(count <= items.len());
 /// ```
 pub fn bisect_keep_right<T, F>(items: &[T], max_size: usize, serializer: F) -> usize

@@ -5,6 +5,7 @@ use reinhardt_di::{DiError, DiResult, Injectable, InjectionContext};
 use reinhardt_test::fixtures::*;
 use rstest::*;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 // Test type definitions
 #[derive(Clone, Debug, PartialEq)]
@@ -51,17 +52,13 @@ struct CachedService {
 	id: u32,
 }
 
-static mut CACHED_SERVICE_COUNTER: u32 = 0;
+static CACHED_SERVICE_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 #[async_trait]
 impl Injectable for CachedService {
 	async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
-		unsafe {
-			CACHED_SERVICE_COUNTER += 1;
-			Ok(CachedService {
-				id: CACHED_SERVICE_COUNTER,
-			})
-		}
+		let id = CACHED_SERVICE_COUNTER.fetch_add(1, Ordering::SeqCst) + 1;
+		Ok(CachedService { id })
 	}
 }
 
@@ -70,7 +67,7 @@ struct SingletonCachedService {
 	id: u32,
 }
 
-static mut SINGLETON_COUNTER: u32 = 0;
+static SINGLETON_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 #[async_trait]
 impl Injectable for SingletonCachedService {
@@ -81,14 +78,10 @@ impl Injectable for SingletonCachedService {
 		}
 
 		// Create new instance
-		unsafe {
-			SINGLETON_COUNTER += 1;
-			let service = SingletonCachedService {
-				id: SINGLETON_COUNTER,
-			};
-			ctx.set_singleton(service.clone());
-			Ok(service)
-		}
+		let id = SINGLETON_COUNTER.fetch_add(1, Ordering::SeqCst) + 1;
+		let service = SingletonCachedService { id };
+		ctx.set_singleton(service.clone());
+		Ok(service)
 	}
 }
 
@@ -137,9 +130,7 @@ async fn injectable_cached_in_request_scope() {
 	// Arrange
 	let singleton_scope = Arc::new(reinhardt_di::SingletonScope::new());
 	let injection_context = InjectionContext::builder(singleton_scope).build();
-	unsafe {
-		CACHED_SERVICE_COUNTER = 0;
-	}
+	CACHED_SERVICE_COUNTER.store(0, Ordering::SeqCst);
 
 	// Act - First injection
 	let service1 = CachedService::inject(&injection_context).await.unwrap();
@@ -151,9 +142,7 @@ async fn injectable_cached_in_request_scope() {
 	// Assert
 	assert!(cached.is_some());
 	assert_eq!(cached.unwrap().id, service1.id);
-	unsafe {
-		assert_eq!(CACHED_SERVICE_COUNTER, 1);
-	}
+	assert_eq!(CACHED_SERVICE_COUNTER.load(Ordering::SeqCst), 1);
 }
 
 #[serial_test::serial(singleton_counter)]
@@ -162,9 +151,7 @@ async fn injectable_singleton_cached() {
 	// Arrange
 	let singleton_scope = Arc::new(reinhardt_di::SingletonScope::new());
 	let injection_context = InjectionContext::builder(singleton_scope).build();
-	unsafe {
-		SINGLETON_COUNTER = 0;
-	}
+	SINGLETON_COUNTER.store(0, Ordering::SeqCst);
 
 	// Act - First injection
 	let service1 = SingletonCachedService::inject(&injection_context)
@@ -178,8 +165,6 @@ async fn injectable_singleton_cached() {
 
 	// Assert
 	assert_eq!(service1.id, service2.id);
-	unsafe {
-		// Counter is incremented only once
-		assert_eq!(SINGLETON_COUNTER, 1);
-	}
+	// Counter is incremented only once
+	assert_eq!(SINGLETON_COUNTER.load(Ordering::SeqCst), 1);
 }

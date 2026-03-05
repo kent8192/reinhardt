@@ -20,7 +20,7 @@ impl MemoryStorage {
 	/// use reinhardt_core::messages::storage::MemoryStorage;
 	///
 	/// let storage = MemoryStorage::new();
-	// Creates a new storage instance with defaults
+	/// // Creates a new storage instance with defaults
 	/// ```
 	pub fn new() -> Self {
 		Self {

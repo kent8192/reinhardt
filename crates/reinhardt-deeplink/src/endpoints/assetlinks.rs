@@ -25,9 +25,9 @@ use crate::error::DeeplinkError;
 /// # Response Headers
 ///
 /// - `Content-Type: application/json`
-/// - `Cache-Control: max-age=3600, public`
+/// - `Cache-Control: max-age=86400, public` (24 hours; Asset Links files are static config)
 /// - `X-Content-Type-Options: nosniff`
-/// - `Access-Control-Allow-Origin: *`
+/// - `Access-Control-Allow-Origin: *` (required by Google Digital Asset Links specification)
 ///
 /// # Example
 ///
@@ -37,7 +37,8 @@ use crate::error::DeeplinkError;
 /// let config = AndroidConfig::builder()
 ///     .package_name("com.example.app")
 ///     .sha256_fingerprint("FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C")
-///     .build();
+///     .build()
+///     .unwrap();
 ///
 /// let handler = AssetLinksHandler::new(config).unwrap();
 /// ```
@@ -68,17 +69,26 @@ impl AssetLinksHandler {
 
 	/// Returns the cached JSON content as a string slice.
 	pub fn json(&self) -> &str {
-		// SAFETY: JSON serialization always produces valid UTF-8
-		std::str::from_utf8(&self.cached_json).unwrap()
+		std::str::from_utf8(&self.cached_json).expect(
+			"cached_json was serialized from valid UTF-8 strings and cannot be invalid UTF-8",
+		)
 	}
 }
 
 #[async_trait]
 impl Handler for AssetLinksHandler {
+	/// Serves the pre-computed Asset Links JSON response.
+	///
+	/// This handler does not inspect the HTTP method because method enforcement
+	/// is handled by the router layer (GET-only route registration). If used
+	/// outside a router context, callers must ensure only GET requests are forwarded.
 	async fn handle(&self, _request: Request) -> Result<Response> {
+		// Access-Control-Allow-Origin: * is required per Google's Digital Asset
+		// Links specification. Asset Links files must be publicly accessible
+		// for Android to verify app-site associations.
 		Ok(Response::ok()
 			.with_header("Content-Type", "application/json")
-			.with_header("Cache-Control", "max-age=3600, public")
+			.with_header("Cache-Control", "max-age=86400, public")
 			.with_header("X-Content-Type-Options", "nosniff")
 			.with_header("Access-Control-Allow-Origin", "*")
 			.with_body(self.cached_json.clone()))
@@ -107,6 +117,7 @@ mod tests {
 			.package_name("com.example.app")
 			.sha256_fingerprint(VALID_FINGERPRINT)
 			.build()
+			.unwrap()
 	}
 
 	#[rstest]

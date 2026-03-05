@@ -482,6 +482,87 @@ Supported object types: Function, Procedure, Routine, Type, Domain, ForeignDataW
 |---------|-----------|-------|--------|-------------|
 | GRANT/REVOKE | ✅ | ✅ | ❌ | ✅ |
 
+## SQL Generation Notes
+
+### Identifier Quoting
+
+Each database backend uses different quoting styles for SQL identifiers (table names, column names, index names, etc.):
+
+| Backend | Quote Style | Example |
+|---------|-------------|---------|
+| PostgreSQL | Double quotes | `"table_name"` |
+| MySQL | Backticks | `` `table_name` `` |
+| SQLite | Double quotes | `"table_name"` |
+| CockroachDB | Double quotes | `"table_name"` |
+
+#### Quoting Behavior
+
+All backends automatically escape special characters within identifiers:
+
+- **PostgreSQL/SQLite/CockroachDB**: Double quotes within identifiers are escaped by doubling (`"` becomes `""`)
+- **MySQL**: Backticks within identifiers are escaped by doubling (`` ` `` becomes `` `` ``)
+
+#### Testing Generated SQL
+
+When writing tests for generated SQL, ensure you account for identifier quoting:
+
+```rust
+use reinhardt_query::backend::{PostgresQueryBuilder, QueryBuilder};
+use reinhardt_query::prelude::*;
+
+let builder = PostgresQueryBuilder::new();
+let stmt = Query::select().column("name").from("users");
+let (sql, _) = builder.build_select(&stmt);
+
+// PostgreSQL uses double quotes
+assert_eq!(sql, r#"SELECT "name" FROM "users""#);
+
+// MySQL would generate: SELECT `name` FROM `users`
+// SQLite would generate: SELECT "name" FROM "users"
+```
+
+#### Escape Methods
+
+Each query builder provides an `escape_identifier` method for manual escaping:
+
+```rust
+use reinhardt_query::backend::{PostgresQueryBuilder, QueryBuilder};
+
+let builder = PostgresQueryBuilder::new();
+let escaped = builder.escape_identifier("user");
+assert_eq!(escaped, "\"user\"");
+```
+
+### Parameter Placeholders
+
+Each backend uses different placeholder styles for parameterized queries:
+
+| Backend | Placeholder Style | Example |
+|---------|------------------|---------|
+| PostgreSQL | Numbered (`$1`, `$2`, ...) | `WHERE id = $1` |
+| MySQL | Question mark (`?`) | `WHERE id = ?` |
+| SQLite | Question mark (`?`) | `WHERE id = ?` |
+| CockroachDB | Numbered (`$1`, `$2`, ...) | `WHERE id = $1` |
+
+### Case Sensitivity
+
+When identifiers are quoted:
+- **Case is preserved** exactly as specified
+- PostgreSQL/MySQL/SQLite are case-sensitive for quoted identifiers
+- Unquoted identifiers may be case-folded (uppercased or lowercased) depending on the backend
+
+### Reserved Keywords
+
+All backends automatically quote identifiers, which allows using reserved keywords as identifiers:
+
+```rust
+use reinhardt_query::prelude::*;
+
+// "user" is a reserved keyword in PostgreSQL, but quoting allows its use
+let stmt = Query::select().column("name").from("user");
+// Generates: SELECT "name" FROM "user"
+```
+
 ## Feature Flags
 
 | Flag | Description |

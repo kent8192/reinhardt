@@ -54,3 +54,19 @@ mod migration_squashing_integration;
 // SQLite Table Recreation Tests
 #[path = "migrations/sqlite_table_recreation_integration.rs"]
 mod sqlite_table_recreation_integration;
+
+// MySQL Edge Cases Tests
+#[path = "migrations/mysql_edge_cases.rs"]
+mod mysql_edge_cases;
+
+// PostgreSQL ENUM Edge Cases Tests
+#[path = "migrations/postgres_enum_edge_cases.rs"]
+mod postgres_enum_edge_cases;
+
+// Field Mapping Integration Tests
+#[path = "migrations/field_mapping_integration.rs"]
+mod field_mapping_integration;
+
+// Makemigrations E2E Integration Tests
+#[path = "migrations/makemigrations_e2e_integration.rs"]
+mod makemigrations_e2e_integration;

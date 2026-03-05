@@ -146,6 +146,27 @@ fn detect_inject_params(inputs: &Punctuated<FnArg, Token![,]>) -> Result<Vec<Inj
 	Ok(inject_params)
 }
 
+/// Check if a type is `tonic::Request<T>` or `Request<T>` using AST inspection
+///
+/// This checks the type path segments rather than relying on string comparison,
+/// providing more robust type detection that handles both qualified and
+/// unqualified paths.
+fn is_request_type(ty: &Type) -> bool {
+	if let Type::Path(type_path) = ty {
+		let segments = &type_path.path.segments;
+		match segments.len() {
+			// Unqualified: `Request<T>`
+			1 => segments[0].ident == "Request",
+			// Qualified: `tonic::Request<T>`
+			2 => segments[0].ident == "tonic" && segments[1].ident == "Request",
+			// Fully qualified with more segments
+			_ => segments.last().is_some_and(|seg| seg.ident == "Request"),
+		}
+	} else {
+		false
+	}
+}
+
 /// Detect non-inject parameters (regular parameters)
 fn detect_regular_params(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<ParamInfo> {
 	let mut params = Vec::new();
@@ -173,6 +194,16 @@ fn detect_regular_params(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<ParamInfo
 	params
 }
 
+/// Detect if the function has a `&self` receiver parameter using `FnArg::Receiver`
+///
+/// This uses the proper AST node type rather than relying on pattern matching
+/// against `Pat::Verbatim`, providing more reliable self-parameter detection.
+fn has_self_receiver(inputs: &Punctuated<FnArg, Token![,]>) -> bool {
+	inputs
+		.first()
+		.is_some_and(|arg| matches!(arg, FnArg::Receiver(_)))
+}
+
 /// Strip `#[inject]` attributes from function parameters
 fn strip_inject_attrs(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<FnArg> {
 	inputs
@@ -191,6 +222,14 @@ fn strip_inject_attrs(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<FnArg> {
 
 /// Generate wrapper function with DI support
 pub(crate) fn expand_grpc_handler(input: ItemFn) -> Result<TokenStream> {
+	// Fixes #822: Validate that the function is async before proceeding
+	if input.sig.asyncness.is_none() {
+		return Err(Error::new_spanned(
+			input.sig.fn_token,
+			"#[grpc_handler] can only be applied to async functions",
+		));
+	}
+
 	let inject_params = detect_inject_params(&input.sig.inputs)?;
 
 	// If no #[inject] parameters, return the function as-is
@@ -203,8 +242,12 @@ pub(crate) fn expand_grpc_handler(input: ItemFn) -> Result<TokenStream> {
 	// Original function name
 	let original_fn_name = &input.sig.ident;
 
-	// Create new name for the original function
-	let impl_fn_name = syn::Ident::new(&format!("{}_impl", original_fn_name), Span::call_site());
+	// Fixes #823: Use less common prefix to avoid name collisions and use
+	// original span for better error diagnostics
+	let impl_fn_name = syn::Ident::new(
+		&format!("__reinhardt_grpc_impl_{}", original_fn_name),
+		original_fn_name.span(),
+	);
 
 	// Function visibility, attributes (excluding #[grpc_handler]), return type, etc.
 	let vis = &input.vis;
@@ -225,25 +268,14 @@ pub(crate) fn expand_grpc_handler(input: ItemFn) -> Result<TokenStream> {
 	let impl_inputs = Punctuated::<FnArg, Token![,]>::from_iter(impl_inputs);
 
 	// Generate DI context extraction
-	// We need to detect which parameter is tonic::Request<T>
+	// Use AST-based type inspection instead of string comparison
 	let request_param = regular_params
 		.iter()
-		.find(|p| {
-			if let Type::Path(type_path) = &*p.ty {
-				type_path
-					.path
-					.segments
-					.last()
-					.map(|seg| seg.ident == "Request")
-					.unwrap_or(false)
-			} else {
-				false
-			}
-		})
+		.find(|p| is_request_type(&p.ty))
 		.ok_or_else(|| {
 			Error::new(
 				Span::call_site(),
-				"#[grpc_handler] requires a tonic::Request parameter",
+				"#[grpc_handler] requires a tonic::Request<T> parameter",
 			)
 		})?;
 
@@ -264,6 +296,31 @@ pub(crate) fn expand_grpc_handler(input: ItemFn) -> Result<TokenStream> {
 			})?;
 	};
 
+	// Generate compile-time type assertions for injected types
+	// This ensures all #[inject] types implement Injectable at compile time
+	// rather than failing at runtime with confusing errors
+	// Use unique const names with function name prefix to avoid conflicts
+	// when multiple #[grpc_handler] functions are in the same impl block
+	let fn_name_str = original_fn_name.to_string();
+	let type_assertions: Vec<_> = inject_params
+		.iter()
+		.enumerate()
+		.map(|(idx, param)| {
+			let ty = &param.ty;
+			let const_name = syn::Ident::new(
+				&format!("__ASSERT_{}_INJECTABLE_{}", fn_name_str.to_uppercase(), idx),
+				Span::call_site(),
+			);
+			quote! {
+				const #const_name: () = {
+					// Compile-time assertion: #[inject] parameter type must implement Injectable
+					fn __assert_injectable<__T: #di_crate::Injectable>() {}
+					fn __check() { __assert_injectable::<#ty>() }
+				};
+			}
+		})
+		.collect();
+
 	// Generate injection calls
 	let injection_calls: Vec<_> = inject_params
 		.iter()
@@ -272,7 +329,6 @@ pub(crate) fn expand_grpc_handler(input: ItemFn) -> Result<TokenStream> {
 			let ty = &param.ty;
 			let use_cache = param.use_cache;
 
-			// Fixes #820
 			if use_cache {
 				quote! {
 					let #pat: #ty = #di_crate::Injected::<#ty>::resolve(&__di_ctx)
@@ -297,11 +353,8 @@ pub(crate) fn expand_grpc_handler(input: ItemFn) -> Result<TokenStream> {
 		})
 		.collect();
 
-	// Check if this is a method (has &self parameter)
-	let has_self = regular_params
-		.first()
-		.map(|p| matches!(*p.pat, Pat::Verbatim(_)))
-		.unwrap_or(false);
+	// Check if this is a method using proper AST receiver detection
+	let has_self = has_self_receiver(&input.sig.inputs);
 
 	// Collect parameter names for the original function call (excluding self)
 	let regular_args: Vec<_> = regular_params
@@ -312,14 +365,15 @@ pub(crate) fn expand_grpc_handler(input: ItemFn) -> Result<TokenStream> {
 	let inject_args: Vec<_> = inject_params.iter().map(|param| &param.pat).collect();
 
 	// Wrapper function inputs (only regular parameters, without #[inject])
+	// Use has_self flag from proper receiver detection instead of Pat::Verbatim matching
 	let wrapper_inputs: Vec<_> = regular_params
 		.iter()
 		.enumerate()
 		.map(|(i, p)| {
 			let pat = &p.pat;
 			let ty = &p.ty;
-			if i == 0 && matches!(*pat.as_ref(), Pat::Verbatim(_)) {
-				// &self parameter
+			if i == 0 && has_self {
+				// &self parameter detected via FnArg::Receiver
 				quote! { &self }
 			} else {
 				quote! { #pat: #ty }
@@ -337,6 +391,9 @@ pub(crate) fn expand_grpc_handler(input: ItemFn) -> Result<TokenStream> {
 
 	// Generate the wrapper function
 	let expanded = quote! {
+		// Compile-time type assertions for injected dependencies
+		#(#type_assertions)*
+
 		// Original function (renamed to {name}_impl)
 		#(#fn_attrs)*
 		#asyncness fn #impl_fn_name #generics(#impl_inputs) #return_type #body

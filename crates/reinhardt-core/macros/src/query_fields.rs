@@ -11,7 +11,7 @@ use syn::{Data, DeriveInput, Fields, Type};
 ///
 /// This function is used internally by the `#[derive(QueryFields)]` macro.
 /// Users should not call this function directly.
-pub(crate) fn derive_query_fields_impl(input: DeriveInput) -> TokenStream {
+pub(crate) fn derive_query_fields_impl(input: DeriveInput) -> syn::Result<TokenStream> {
 	let struct_name = &input.ident;
 	let orm_crate = get_reinhardt_orm_crate();
 
@@ -20,15 +20,17 @@ pub(crate) fn derive_query_fields_impl(input: DeriveInput) -> TokenStream {
 		Data::Struct(data) => match &data.fields {
 			Fields::Named(fields) => &fields.named,
 			_ => {
-				return quote! {
-					compile_error!("QueryFields can only be derived for structs with named fields");
-				};
+				return Err(syn::Error::new_spanned(
+					struct_name,
+					"QueryFields can only be derived for structs with named fields",
+				));
 			}
 		},
 		_ => {
-			return quote! {
-				compile_error!("QueryFields can only be derived for structs");
-			};
+			return Err(syn::Error::new_spanned(
+				struct_name,
+				"QueryFields can only be derived for structs",
+			));
 		}
 	};
 
@@ -36,28 +38,31 @@ pub(crate) fn derive_query_fields_impl(input: DeriveInput) -> TokenStream {
 	let field_methods: Vec<TokenStream> = fields
 		.iter()
 		.map(|field| {
-			let field_name = field.ident.as_ref().unwrap();
+			let field_name = field
+				.ident
+				.as_ref()
+				.ok_or_else(|| syn::Error::new_spanned(field, "expected named field"))?;
 			let field_name_str = field_name.to_string();
 			let field_type = &field.ty;
 
 			// Map Rust types to field lookup types
 			let lookup_type = map_type_to_lookup_type(field_type, &orm_crate);
 
-			quote! {
+			Ok(quote! {
 				#[doc = concat!("Field accessor for `", #field_name_str, "`")]
 				pub fn #field_name() -> #orm_crate::query_fields::Field<#struct_name, #lookup_type> {
 					#orm_crate::query_fields::Field::new(vec![#field_name_str])
 				}
-			}
+			})
 		})
-		.collect();
+		.collect::<syn::Result<Vec<_>>>()?;
 
 	// Generate the impl block
-	quote! {
+	Ok(quote! {
 		impl #struct_name {
 			#(#field_methods)*
 		}
-	}
+	})
 }
 
 /// Map Rust types to field lookup types
@@ -72,7 +77,10 @@ pub(crate) fn derive_query_fields_impl(input: DeriveInput) -> TokenStream {
 fn map_type_to_lookup_type(ty: &Type, orm_crate: &TokenStream) -> TokenStream {
 	match ty {
 		Type::Path(type_path) => {
-			let last_segment = type_path.path.segments.last().unwrap();
+			let Some(last_segment) = type_path.path.segments.last() else {
+				// Empty path segments - use type as-is
+				return quote! { #ty };
+			};
 			let type_ident = &last_segment.ident;
 			let type_name = type_ident.to_string();
 
@@ -317,7 +325,7 @@ mod tests {
 			}
 		};
 
-		let output = derive_query_fields_impl(input);
+		let output = derive_query_fields_impl(input).expect("derive should succeed");
 		let output_str = output.to_string();
 
 		// Verify that field accessor methods are generated

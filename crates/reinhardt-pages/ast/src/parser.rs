@@ -339,7 +339,12 @@ fn parse_if_node(input: ParseStream, depth: usize) -> Result<PageNode> {
 			let else_if = parse_if_node(input, depth - 1)?;
 			match else_if {
 				PageNode::If(if_node) => Some(PageElse::If(Box::new(if_node))),
-				_ => unreachable!(),
+				_ => {
+					return Err(syn::Error::new(
+						input.span(),
+						"internal error: expected if node in else-if chain",
+					));
+				}
 			}
 		} else {
 			// else { ... }

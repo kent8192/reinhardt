@@ -178,11 +178,15 @@ pub fn truncate_chars(text: &str, max_length: usize) -> String {
 		return text.to_string();
 	}
 
+	// When max_length is too small to fit any characters plus "...",
+	// return just the ellipsis truncated to max_length.
+	let content_limit = max_length.saturating_sub(3);
+
 	let mut result = String::new();
 
 	for (char_count, ch) in text.chars().enumerate() {
-		if char_count >= max_length - 3 {
-			result.push_str("...");
+		if char_count >= content_limit {
+			result.push_str(&"..."[..max_length.min(3)]);
 			break;
 		}
 		result.push(ch);
@@ -517,6 +521,35 @@ mod tests {
 	fn test_force_str_empty() {
 		assert_eq!(force_str(b""), "");
 	}
+
+	#[test]
+	fn test_truncate_chars_zero_max_length_does_not_panic() {
+		// Fixes #764: saturating_sub prevents underflow when max_length < 3
+		assert_eq!(truncate_chars("Hello", 0), "");
+	}
+
+	#[test]
+	fn test_truncate_chars_max_length_one() {
+		// Fixes #764: max_length=1 should produce "."
+		assert_eq!(truncate_chars("Hello", 1), ".");
+	}
+
+	#[test]
+	fn test_truncate_chars_max_length_two() {
+		// Fixes #764: max_length=2 should produce ".."
+		assert_eq!(truncate_chars("Hello", 2), "..");
+	}
+
+	#[test]
+	fn test_truncate_chars_max_length_three() {
+		// Fixes #764: max_length=3 should produce "..."
+		assert_eq!(truncate_chars("Hello", 3), "...");
+	}
+
+	#[test]
+	fn test_truncate_chars_max_length_four() {
+		assert_eq!(truncate_chars("Hello World", 4), "H...");
+	}
 }
 
 #[cfg(test)]
@@ -535,7 +568,7 @@ mod proptests {
 		}
 
 		#[test]
-		fn prop_truncate_chars_length(s in "\\PC*", n in 5usize..100) {
+		fn prop_truncate_chars_length(s in "\\PC*", n in 0usize..100) {
 			let truncated = truncate_chars(&s, n);
 			assert!(truncated.chars().count() <= n);
 		}
@@ -565,9 +598,16 @@ mod proptests {
 		#[test]
 		fn prop_wrap_text_line_width(s in "[a-zA-Z0-9 ]+", width in 10usize..50) {
 			let lines = wrap_text(&s, width);
-			for line in lines {
-				// Allow more flexibility for word boundaries and Unicode handling
-				assert!(line.chars().count() <= width + 20);
+			for line in &lines {
+				// Single words longer than width are kept intact
+				let is_single_word = !line.contains(' ');
+				if !is_single_word {
+					assert!(
+						line.chars().count() <= width,
+						"multi-word line exceeds width {width}: {line:?} ({} chars)",
+						line.chars().count()
+					);
+				}
 			}
 		}
 	}

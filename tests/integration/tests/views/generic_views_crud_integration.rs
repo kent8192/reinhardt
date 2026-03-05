@@ -196,11 +196,16 @@ fn create_get_request(uri: &str) -> Request {
 
 /// Helper: Create HTTP POST request with JSON body
 fn create_post_request(uri: &str, json_body: &str) -> Request {
+	let mut headers = HeaderMap::new();
+	headers.insert(
+		hyper::header::CONTENT_TYPE,
+		"application/json".parse().unwrap(),
+	);
 	Request::builder()
 		.method(Method::POST)
 		.uri(uri)
 		.version(Version::HTTP_11)
-		.headers(HeaderMap::new())
+		.headers(headers)
 		.body(Bytes::from(json_body.to_string()))
 		.build()
 		.expect("Failed to build request")
@@ -235,11 +240,16 @@ fn create_get_request_with_id(uri: &str, id: i64) -> Request {
 
 /// Helper: Create HTTP PUT request with path parameters (for detail views)
 fn create_put_request_with_id(uri: &str, json_body: &str, id: i64) -> Request {
+	let mut headers = HeaderMap::new();
+	headers.insert(
+		hyper::header::CONTENT_TYPE,
+		"application/json".parse().unwrap(),
+	);
 	Request::builder()
 		.method(Method::PUT)
 		.uri(uri)
 		.version(Version::HTTP_11)
-		.headers(HeaderMap::new())
+		.headers(headers)
 		.body(Bytes::from(json_body.to_string()))
 		.path_params(id_params(id))
 		.build()
@@ -248,11 +258,16 @@ fn create_put_request_with_id(uri: &str, json_body: &str, id: i64) -> Request {
 
 /// Helper: Create HTTP PATCH request with path parameters (for detail views)
 fn create_patch_request_with_id(uri: &str, json_body: &str, id: i64) -> Request {
+	let mut headers = HeaderMap::new();
+	headers.insert(
+		hyper::header::CONTENT_TYPE,
+		"application/json".parse().unwrap(),
+	);
 	Request::builder()
 		.method(Method::PATCH)
 		.uri(uri)
 		.version(Version::HTTP_11)
-		.headers(HeaderMap::new())
+		.headers(headers)
 		.body(Bytes::from(json_body.to_string()))
 		.path_params(id_params(id))
 		.build()

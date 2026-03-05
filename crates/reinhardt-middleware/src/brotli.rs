@@ -33,6 +33,7 @@ impl BrotliQuality {
 }
 
 /// Brotli compression middleware configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct BrotliConfig {
 	/// Minimum response size to compress (in bytes)

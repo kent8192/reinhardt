@@ -1,4 +1,4 @@
-use crate::crate_paths::get_reinhardt_signals_crate;
+use crate::crate_paths::{get_inventory_crate, get_reinhardt_signals_crate};
 use crate::injectable_common::{
 	detect_inject_params, generate_di_context_extraction_from_option,
 	generate_injection_calls_with_error, strip_inject_attrs,
@@ -68,6 +68,8 @@ fn parse_receiver_args(args: TokenStream) -> Result<ReceiverArgs> {
 pub(crate) fn receiver_impl(args: TokenStream, input: ItemFn) -> Result<TokenStream> {
 	let args = parse_receiver_args(args)?;
 	let signals_crate = get_reinhardt_signals_crate();
+	// Fixes #793: Use dynamic crate path resolution instead of hardcoded ::inventory
+	let inventory = get_inventory_crate();
 
 	let fn_name = &input.sig.ident;
 	let fn_vis = &input.vis;
@@ -203,7 +205,7 @@ pub(crate) fn receiver_impl(args: TokenStream, input: ItemFn) -> Result<TokenStr
 			}
 
 			// Generate static registration
-			::inventory::submit! {
+			#inventory::submit! {
 				#signals_crate::ReceiverRegistryEntry::new(
 					#signal_name,
 					#receiver_name,
@@ -240,7 +242,7 @@ pub(crate) fn receiver_impl(args: TokenStream, input: ItemFn) -> Result<TokenStr
 			}
 
 			// Generate static registration
-			::inventory::submit! {
+			#inventory::submit! {
 				#signals_crate::ReceiverRegistryEntry::new(
 					#signal_name,
 					#receiver_name,

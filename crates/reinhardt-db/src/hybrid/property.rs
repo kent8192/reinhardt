@@ -105,7 +105,7 @@ impl<T, R> HybridProperty<T, R> {
 	///
 	/// assert_eq!(lower_email.expression(), Some("LOWER(email)".to_string()));
 	///
-	// Without expression
+	/// // Without expression
 	/// let simple_prop = HybridProperty::new(|user: &User| user.email.clone());
 	/// assert_eq!(simple_prop.expression(), None);
 	/// ```
@@ -224,7 +224,7 @@ impl<T, A, R> HybridMethod<T, A, R> {
 	///
 	/// assert_eq!(passes_threshold.expression(50), Some("score >= 50".to_string()));
 	///
-	// Without expression
+	/// // Without expression
 	/// let simple_method = HybridMethod::new(|user: &User, threshold: i32| {
 	///     user.score >= threshold
 	/// });

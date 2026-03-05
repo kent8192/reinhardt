@@ -10,6 +10,12 @@ use std::io::{BufRead, BufReader};
 /// This covers all known natural languages according to CLDR plural rules
 const MAX_PLURAL_FORMS: usize = 6;
 
+/// Maximum number of translation entries allowed in a single PO file
+const MAX_PO_ENTRIES: usize = 100_000;
+
+/// Maximum PO file size in bytes (10 MB)
+const MAX_PO_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
 /// Errors that can occur during .po file parsing
 #[derive(Debug, thiserror::Error)]
 pub enum PoParseError {
@@ -21,6 +27,10 @@ pub enum PoParseError {
 	InvalidFormat(String),
 	#[error("Invalid plural index: {0} (maximum is 5)")]
 	InvalidPluralIndex(usize),
+	#[error("PO file too large: {0} bytes (maximum is {MAX_PO_FILE_SIZE} bytes)")]
+	FileTooLarge(u64),
+	#[error("Too many entries: {0} (maximum is {MAX_PO_ENTRIES})")]
+	TooManyEntries(usize),
 }
 
 /// Entry in a .po file
@@ -57,13 +67,23 @@ pub fn parse_po_file<R: std::io::Read>(
 	reader: R,
 	locale: &str,
 ) -> Result<MessageCatalog, PoParseError> {
-	let buf_reader = BufReader::new(reader);
+	// Limit reading to MAX_PO_FILE_SIZE to prevent resource exhaustion
+	let limited_reader = reader.take(MAX_PO_FILE_SIZE + 1);
+	let buf_reader = BufReader::new(limited_reader);
 	let mut catalog = MessageCatalog::new(locale);
 	let mut current_entry = PoEntry::new();
 	let mut current_msgstr_index: Option<usize> = None;
+	let mut entry_count: usize = 0;
+	let mut bytes_read: u64 = 0;
 
 	for line in buf_reader.lines() {
 		let line = line?;
+		// Track total bytes read (line length + newline)
+		bytes_read += line.len() as u64 + 1;
+		if bytes_read > MAX_PO_FILE_SIZE {
+			return Err(PoParseError::FileTooLarge(bytes_read));
+		}
+
 		let trimmed = line.trim();
 
 		// Skip empty lines and comments
@@ -74,6 +94,10 @@ pub fn parse_po_file<R: std::io::Read>(
 		// Parse msgctxt
 		if let Some(value) = parse_keyword(trimmed, "msgctxt") {
 			if !current_entry.is_empty() {
+				entry_count += 1;
+				if entry_count > MAX_PO_ENTRIES {
+					return Err(PoParseError::TooManyEntries(entry_count));
+				}
 				add_entry_to_catalog(&mut catalog, &current_entry);
 				current_entry = PoEntry::new();
 			}
@@ -83,6 +107,10 @@ pub fn parse_po_file<R: std::io::Read>(
 		// Parse msgid
 		else if let Some(value) = parse_keyword(trimmed, "msgid") {
 			if !current_entry.is_empty() {
+				entry_count += 1;
+				if entry_count > MAX_PO_ENTRIES {
+					return Err(PoParseError::TooManyEntries(entry_count));
+				}
 				add_entry_to_catalog(&mut catalog, &current_entry);
 				current_entry = PoEntry::new();
 			}
@@ -135,6 +163,10 @@ pub fn parse_po_file<R: std::io::Read>(
 
 	// Add the last entry
 	if !current_entry.is_empty() {
+		entry_count += 1;
+		if entry_count > MAX_PO_ENTRIES {
+			return Err(PoParseError::TooManyEntries(entry_count));
+		}
 		add_entry_to_catalog(&mut catalog, &current_entry);
 	}
 
@@ -382,6 +414,29 @@ msgstr[{}] "value"
 				assert_eq!(err_index, index);
 			}
 			_ => panic!("Expected InvalidPluralIndex error"),
+		}
+	}
+
+	/// Test that too many entries are rejected
+	#[rstest]
+	fn test_parse_rejects_too_many_entries() {
+		// Arrange: generate a PO file with more than MAX_PO_ENTRIES entries
+		let mut po_content = String::new();
+		for i in 0..=MAX_PO_ENTRIES {
+			po_content.push_str(&format!(
+				"msgid \"msg{}\"\nmsgstr \"translation{}\"\n\n",
+				i, i
+			));
+		}
+
+		// Act
+		let result = parse_po_file(po_content.as_bytes(), "fr");
+
+		// Assert
+		assert!(result.is_err());
+		match result {
+			Err(PoParseError::TooManyEntries(_)) => {}
+			_ => panic!("Expected TooManyEntries error"),
 		}
 	}
 

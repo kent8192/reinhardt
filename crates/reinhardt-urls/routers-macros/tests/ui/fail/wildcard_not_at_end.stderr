@@ -1,0 +1,7 @@
+error: Wildcard '*' at position 7 must appear only in the last path segment
+       Wildcards can only be used at the end of a path
+       Example: /static/* instead of /*/files
+ --> tests/ui/fail/wildcard_not_at_end.rs:5:20
+  |
+5 |     let _path = path!("/files/*/download");
+  |                       ^^^^^^^^^^^^^^^^^^^

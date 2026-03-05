@@ -25,7 +25,7 @@ use reinhardt_rest::filters::{
 	DatabaseDialect, FilterBackend, FuzzyAlgorithm, FuzzySearchFilter, RangeFilter,
 	SimpleOrderingBackend, SimpleSearchBackend,
 };
-use reinhardt_test::fixtures::testcontainers::{postgres_container, ContainerAsync, GenericImage};
+use reinhardt_test::fixtures::testcontainers::{ContainerAsync, GenericImage, postgres_container};
 use reinhardt_views::viewsets::{
 	FilterConfig, FilterableViewSet, ModelViewSet, OrderingConfig, ReadOnlyModelViewSet,
 };

@@ -19,9 +19,9 @@ use reinhardt_server::{RateLimitConfig, RateLimitHandler, RateLimitStrategy};
 use rstest::*;
 use std::net::SocketAddr;
 
+use std::sync::Arc;
 #[cfg(feature = "websocket")]
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 

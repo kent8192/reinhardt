@@ -27,11 +27,21 @@ pub(crate) fn model_attribute_impl(
 	let orm_crate = get_reinhardt_orm_crate();
 
 	// Check if #[derive(Model)] already exists (avoid double processing)
+	// Parse derive tokens properly instead of fragile string matching
 	let has_derive_model = input.attrs.iter().any(|attr| {
 		if attr.path().is_ident("derive")
 			&& let syn::Meta::List(meta_list) = &attr.meta
 		{
-			return meta_list.tokens.to_string().contains("Model");
+			// Parse the token stream as a punctuated list of paths
+			if let Ok(paths) = meta_list.parse_args_with(
+				syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+			) {
+				return paths.iter().any(|path| {
+					// Match exact "Model" or paths ending in "Model" (e.g., reinhardt::macros::Model)
+					path.segments.last().is_some_and(|seg| seg.ident == "Model")
+				});
+			}
+			return false;
 		}
 		false
 	});
@@ -48,12 +58,17 @@ pub(crate) fn model_attribute_impl(
 			if attr.path().is_ident("derive")
 				&& let syn::Meta::List(meta_list) = &attr.meta
 			{
-				// Parse tokens to extract individual trait names
-				let tokens_str = meta_list.tokens.to_string();
-				// Split by commas and check each identifier
-				return tokens_str
-					.split(',')
-					.any(|s| s.trim().split("::").last().unwrap_or("") == trait_name);
+				// Parse the token stream as a punctuated list of paths
+				if let Ok(paths) = meta_list.parse_args_with(
+					syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+				) {
+					return paths.iter().any(|path| {
+						path.segments
+							.last()
+							.is_some_and(|seg| seg.ident == trait_name)
+					});
+				}
+				return false;
 			}
 			false
 		})

@@ -28,7 +28,7 @@ impl SettingsBuilder {
 	/// let builder = SettingsBuilder::new();
 	/// let settings = builder.build().unwrap();
 	///
-	// Empty builder creates valid merged settings
+	/// // Empty builder creates valid merged settings
 	/// assert_eq!(settings.keys().count(), 0);
 	/// ```
 	pub fn new() -> Self {
@@ -86,7 +86,7 @@ impl SettingsBuilder {
 	/// let builder = SettingsBuilder::new()
 	///     .add_source(EnvSource::new());
 	/// let settings = builder.build().unwrap();
-	// Environment variables are now included in settings
+	/// // Environment variables are now included in settings
 	/// ```
 	pub fn add_source<S: ConfigSource + 'static>(mut self, source: S) -> Self {
 		self.sources.push(Box::new(source));
@@ -102,7 +102,7 @@ impl SettingsBuilder {
 	/// let builder = SettingsBuilder::new()
 	///     .with_env(Some("REINHARDT"));
 	/// let settings = builder.build().unwrap();
-	// Environment variables with REINHARDT_ prefix are included
+	/// // Environment variables with REINHARDT_ prefix are included
 	/// ```
 	pub fn with_env(self, prefix: Option<&str>) -> Self {
 		let mut source = EnvSource::new();
@@ -123,7 +123,7 @@ impl SettingsBuilder {
 	///     .profile(Profile::Development)
 	///     .with_dotenv();
 	/// let settings = builder.build().unwrap();
-	// .env.development file will be loaded if it exists
+	/// // .env.development file will be loaded if it exists
 	/// ```
 	pub fn with_dotenv(self) -> Self {
 		let mut source = DotEnvSource::new();
@@ -150,7 +150,7 @@ impl SettingsBuilder {
 	///     .build()
 	///     .unwrap();
 	///
-	// Environment variables override defaults
+	/// // Environment variables override defaults
 	/// assert!(settings.contains_key("port"));
 	/// ```
 	pub fn build(mut self) -> Result<MergedSettings, BuildError> {
@@ -230,7 +230,7 @@ impl MergedSettings {
 	/// # Examples
 	///
 	/// ```ignore
-	// Retrieve configuration value
+	/// // Retrieve configuration value
 	/// let value = settings.get_or("key", "default");
 	/// ```
 	pub fn get_or<T: DeserializeOwned>(&self, key: &str, default: T) -> T {
@@ -263,7 +263,7 @@ impl MergedSettings {
 	/// # Examples
 	///
 	/// ```ignore
-	// Retrieve configuration value
+	/// // Retrieve configuration value
 	/// let value = settings.get_raw("key");
 	/// ```
 	pub fn get_raw(&self, key: &str) -> Option<&Value> {
@@ -401,6 +401,7 @@ impl MergedSettings {
 }
 
 /// Error type for building settings
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
 	#[error("Source error in '{description}': {error}")]
@@ -414,6 +415,7 @@ pub enum BuildError {
 }
 
 /// Error type for getting values
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum GetError {
 	#[error("Missing required key: {0}")]

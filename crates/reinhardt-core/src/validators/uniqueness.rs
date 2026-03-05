@@ -24,7 +24,7 @@ pub type UniquenessCheckFn =
 /// use reinhardt_core::validators::UniqueValidator;
 ///
 /// # async fn example() {
-// Create a validator with a database check function
+/// // Create a validator with a database check function
 /// let validator = UniqueValidator::new(
 ///     "username",
 ///     Box::new(|value, exclude_id| {
@@ -36,11 +36,11 @@ pub type UniquenessCheckFn =
 ///     })
 /// );
 ///
-// Validate a new value (no instance to exclude)
+/// // Validate a new value (no instance to exclude)
 /// let result = validator.validate_async("newuser", None).await;
 /// assert!(result.is_ok());
 ///
-// Validate during update (exclude current instance)
+/// // Validate during update (exclude current instance)
 /// let result = validator.validate_async("existinguser", Some(42)).await;
 /// # }
 /// ```

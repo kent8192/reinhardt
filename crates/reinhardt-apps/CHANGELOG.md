@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-apps@v0.1.0-rc.2...reinhardt-apps@v0.1.0-rc.3) - 2026-03-05
+
+### Fixed
+
+- *(release)* use path-only dev-dep for reinhardt-test in cyclic crates
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-apps@v0.1.0-rc.1...reinhardt-apps@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(meta)* fix workspace inheritance and authors metadata
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-apps@v0.1.0-alpha.11...reinhardt-apps@v0.1.0-rc.1) - 2026-02-23
+
+### Maintenance
+
+- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
+- *(workspace)* remove unpublished reinhardt-settings-cli and fix stale references
+
+## [0.1.0-alpha.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-apps@v0.1.0-alpha.10...reinhardt-apps@v0.1.0-alpha.11) - 2026-02-23
+
+### Maintenance
+
+- updated the following local packages: reinhardt-conf, reinhardt-conf
+
+## [0.1.0-alpha.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-apps@v0.1.0-alpha.9...reinhardt-apps@v0.1.0-alpha.10) - 2026-02-21
+
+### Fixed
+
+- fix TOCTOU race in is_installed and add test isolation support
+- detect duplicate apps in populate() instead of silently overwriting
+- replace panic with Result in register_reverse_relation
+- handle Mutex poisoning gracefully in Apps registry
+- handle lock poisoning and remove Box::leak memory leak
+
+### Security
+
+- add regex pattern length limit and fix signal lock contention
+- add path validation in AppConfig::with_path
+
+### Styling
+
+- apply formatting to files introduced by merge from main
+
 ## [0.1.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-apps@v0.1.0-alpha.8...reinhardt-apps@v0.1.0-alpha.9) - 2026-02-15
 
 ### Maintenance

@@ -21,26 +21,21 @@ use std::sync::Arc;
 // Circuit Breaker API Sanity
 // =============================================================================
 
-/// Tests that CircuitBreaker::get_state returns a valid state.
+/// Tests that CircuitBreaker::state returns a valid state.
 #[test]
-fn sanity_circuit_breaker_get_state() {
+fn sanity_circuit_breaker_state() {
 	use reinhardt_middleware::circuit_breaker::{
 		CircuitBreakerConfig, CircuitBreakerMiddleware, CircuitState,
 	};
 	use std::time::Duration;
 
-	let config = CircuitBreakerConfig {
-		error_threshold: 0.5,
-		min_requests: 5,
-		timeout: Duration::from_secs(60),
-		half_open_success_threshold: 3,
-		error_message: None,
-	};
+	let config = CircuitBreakerConfig::new(0.5, 5, Duration::from_secs(60))
+		.with_half_open_success_threshold(3);
 
 	let middleware = CircuitBreakerMiddleware::new(config);
 
 	// Initial state should be Closed
-	let state = middleware.get_state();
+	let state = middleware.state();
 	assert!(
 		matches!(state, CircuitState::Closed),
 		"Initial state should be Closed"
@@ -55,20 +50,15 @@ fn sanity_circuit_breaker_reset() {
 	};
 	use std::time::Duration;
 
-	let config = CircuitBreakerConfig {
-		error_threshold: 0.5,
-		min_requests: 1,
-		timeout: Duration::from_secs(60),
-		half_open_success_threshold: 1,
-		error_message: None,
-	};
+	let config = CircuitBreakerConfig::new(0.5, 1, Duration::from_secs(60))
+		.with_half_open_success_threshold(1);
 
 	let middleware = CircuitBreakerMiddleware::new(config);
 
 	// Reset should ensure circuit is closed
 	middleware.reset();
 
-	let state = middleware.get_state();
+	let state = middleware.state();
 	assert!(
 		matches!(state, CircuitState::Closed),
 		"State after reset should be Closed"
@@ -208,15 +198,9 @@ mod rate_limit_sanity {
 			RateLimitConfig, RateLimitMiddleware, RateLimitStrategy,
 		};
 
-		let config = RateLimitConfig {
-			capacity: 100.0,
-			refill_rate: 10.0,
-			cost_per_request: 1.0,
-			strategy: RateLimitStrategy::PerIp,
-			exclude_paths: vec!["/health".to_string()],
-			error_message: Some("Rate limit exceeded".to_string()),
-			trusted_proxies: vec![],
-		};
+		let config = RateLimitConfig::new(RateLimitStrategy::PerIp, 100.0, 10.0)
+			.with_excluded_paths(vec!["/health".to_string()])
+			.with_error_message("Rate limit exceeded".to_string());
 
 		let middleware = Arc::new(RateLimitMiddleware::new(config));
 		let handler = Arc::new(ConfigurableTestHandler::always_success());
@@ -235,15 +219,8 @@ mod rate_limit_sanity {
 			RateLimitConfig, RateLimitMiddleware, RateLimitStrategy,
 		};
 
-		let config = RateLimitConfig {
-			capacity: 1.0,
-			refill_rate: 0.0001,
-			cost_per_request: 1.0,
-			strategy: RateLimitStrategy::PerIp,
-			exclude_paths: vec!["/health".to_string(), "/metrics".to_string()],
-			error_message: None,
-			trusted_proxies: vec![],
-		};
+		let config = RateLimitConfig::new(RateLimitStrategy::PerIp, 1.0, 0.0001)
+			.with_excluded_paths(vec!["/health".to_string(), "/metrics".to_string()]);
 
 		let middleware = Arc::new(RateLimitMiddleware::new(config));
 		let handler = Arc::new(ConfigurableTestHandler::always_success());
@@ -282,13 +259,12 @@ mod cors_sanity {
 	async fn sanity_cors_config_fields() {
 		use reinhardt_middleware::cors::{CorsConfig, CorsMiddleware};
 
-		let config = CorsConfig {
-			allow_origins: vec!["https://example.com".to_string()],
-			allow_methods: vec!["GET".to_string(), "POST".to_string()],
-			allow_headers: vec!["Content-Type".to_string(), "Authorization".to_string()],
-			allow_credentials: true,
-			max_age: Some(3600),
-		};
+		let mut config = CorsConfig::default();
+		config.allow_origins = vec!["https://example.com".to_string()];
+		config.allow_methods = vec!["GET".to_string(), "POST".to_string()];
+		config.allow_headers = vec!["Content-Type".to_string(), "Authorization".to_string()];
+		config.allow_credentials = true;
+		config.max_age = Some(3600);
 
 		let middleware = Arc::new(CorsMiddleware::new(config));
 		let handler = Arc::new(ConfigurableTestHandler::always_success());
@@ -306,13 +282,12 @@ mod cors_sanity {
 	async fn sanity_cors_empty_origins() {
 		use reinhardt_middleware::cors::{CorsConfig, CorsMiddleware};
 
-		let config = CorsConfig {
-			allow_origins: vec![],
-			allow_methods: vec!["GET".to_string()],
-			allow_headers: vec![],
-			allow_credentials: false,
-			max_age: None,
-		};
+		let mut config = CorsConfig::default();
+		config.allow_origins = vec![];
+		config.allow_methods = vec!["GET".to_string()];
+		config.allow_headers = vec![];
+		config.allow_credentials = false;
+		config.max_age = None;
 
 		let middleware = Arc::new(CorsMiddleware::new(config));
 		let handler = Arc::new(ConfigurableTestHandler::always_success());
@@ -354,11 +329,10 @@ mod compression_sanity {
 	async fn sanity_gzip_config() {
 		use reinhardt_middleware::gzip::{GZipConfig, GZipMiddleware};
 
-		let config = GZipConfig {
-			min_length: 100,
-			compression_level: 6,
-			compressible_types: vec!["text/".to_string(), "application/json".to_string()],
-		};
+		let mut config = GZipConfig::default();
+		config.min_length = 100;
+		config.compression_level = 6;
+		config.compressible_types = vec!["text/".to_string(), "application/json".to_string()];
 
 		let middleware = Arc::new(GZipMiddleware::with_config(config));
 		let handler = Arc::new(ConfigurableTestHandler::with_content_type("text/html"));
@@ -479,9 +453,7 @@ async fn sanity_timeout_config_durations() {
 
 	// Test with different timeout values
 	for ms in [100, 500, 1000, 5000] {
-		let config = TimeoutConfig {
-			duration: Duration::from_millis(ms),
-		};
+		let config = TimeoutConfig::new(Duration::from_millis(ms));
 
 		let middleware = Arc::new(TimeoutMiddleware::new(config));
 		let handler = Arc::new(ConfigurableTestHandler::always_success());

@@ -531,27 +531,17 @@ pub(crate) fn installed_apps_impl(input: TokenStream) -> Result<TokenStream> {
 
 		// For reinhardt.contrib.* apps, we validate they exist in the crate
 		if parts.first() == Some(&"reinhardt") {
-			let module_check =
-				parts[1..]
-					.iter()
-					.enumerate()
-					.fold(core_crate.clone(), |acc, (i, part)| {
-						let part_ident = syn::Ident::new(part, proc_macro2::Span::call_site());
-						if i == parts.len() - 2 {
-							// Last part - try to reference it to check existence
-							quote! { #acc::#part_ident }
-						} else {
-							quote! { #acc::#part_ident }
-						}
-					});
+			let module_check = parts[1..].iter().fold(core_crate.clone(), |acc, part| {
+				let part_ident = syn::Ident::new(part, proc_macro2::Span::call_site());
+				quote! { #acc::#part_ident }
+			});
 
 			quote! {
-				// Compile-time check that the module exists
+				// Compile-time check that the module path resolves
+				// Using `use` ensures the compiler verifies the path exists
 				const _: () = {
-					let _ = || {
-						// This will fail to compile if the module doesn't exist
-						let _ = std::stringify!(#module_check);
-					};
+					#[allow(unused_imports)]
+					use #module_check as _;
 				};
 			}
 		} else {

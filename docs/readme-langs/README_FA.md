@@ -13,7 +13,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/reinhardt-web.svg)](https://crates.io/crates/reinhardt-web)
 [![Documentation](https://docs.rs/reinhardt-web/badge.svg)](https://docs.rs/reinhardt-web)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE.md)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](../../LICENSE)
 [![codecov](https://codecov.io/gh/kent8192/reinhardt-web/graph/badge.svg)](https://codecov.io/gh/kent8192/reinhardt-web)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/kent8192/reinhardt-web)
 
@@ -25,10 +25,11 @@
 
 شاید به دنبال این موارد باشید:
 
+- 🌐 [وب‌سایت رسمی](https://reinhardt-web.dev) - مستندات، آموزش‌ها و راهنماها
 - 🚀 [شروع سریع](#شروع-سریع) - راه‌اندازی در ۵ دقیقه
 - 📦 [گزینه‌های نصب](#نصب) - نوع خود را انتخاب کنید: Micro، Standard یا Full
-- 📚 [راهنمای شروع کار](../GETTING_STARTED.md) - آموزش گام به گام
-- 🎛️ [پرچم‌های ویژگی](../FEATURE_FLAGS.md) - تنظیم دقیق ساخت
+- 📚 [راهنمای شروع کار](https://reinhardt-web.dev/quickstart/getting-started/) - آموزش گام به گام
+- 🎛️ [پرچم‌های ویژگی](https://reinhardt-web.dev/docs/feature-flags/) - تنظیم دقیق ساخت
 - 📖 [مستندات API](https://docs.rs/reinhardt-web) - مرجع کامل API
 - 💬 [انجمن و پشتیبانی](#دریافت-کمک) - از انجمن کمک بگیرید
 
@@ -61,7 +62,7 @@ Reinhardt بهترین‌ها را از سه دنیا گرد هم می‌آور�
 - **صفحه‌بندی، فیلتر، محدودیت نرخ** داخلی
 - **سیگنال‌ها** برای معماری رویداد‌محور
 
-لیست کامل را در [اجزای موجود](#اجزای-موجود) و نمونه‌ها را در [راهنمای شروع کار](../GETTING_STARTED.md) ببینید.
+لیست کامل را در [اجزای موجود](#اجزای-موجود) و نمونه‌ها را در [راهنمای شروع کار](https://reinhardt-web.dev/quickstart/getting-started/) ببینید.
 
 ## نصب
 
@@ -78,7 +79,7 @@ Reinhardt یک فریم‌ورک ماژولار است. نقطه شروع خود
 [dependencies]
 # به عنوان 'reinhardt' وارد می‌شود، با نام 'reinhardt-web' منتشر شده
 # پیش‌فرض همه ویژگی‌ها را فعال می‌کند (بسته کامل)
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web" }
+reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web" }
 ```
 
 **شامل:** Database، Auth، REST API، Admin، GraphQL، WebSockets، Cache، i18n، Mail، Sessions، Static Files، Storage
@@ -97,7 +98,7 @@ use reinhardt::{Request, Response, StatusCode};
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-features = false, features = ["standard"] }
+reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web", default-features = false, features = ["standard"] }
 ```
 
 **شامل:** Core، Database (PostgreSQL)، REST API، Auth، Middleware، Pages (فرانت‌اند WASM با SSR)
@@ -110,7 +111,7 @@ reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-feat
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-features = false, features = ["minimal"] }
+reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 ```
 
 **شامل:** HTTP، مسیریابی، DI، استخراج پارامتر، سرور
@@ -124,27 +125,27 @@ reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-feat
 ```toml
 [dependencies]
 # اجزای اصلی
-reinhardt-http = "0.1.0-alpha.1"
-reinhardt-urls = "0.1.0-alpha.1"
+reinhardt-http = "0.1.0-rc.1"
+reinhardt-urls = "0.1.0-rc.1"
 
 # اختیاری: پایگاه داده
-reinhardt-db = "0.1.0-alpha.1"
+reinhardt-db = "0.1.0-rc.1"
 
 # اختیاری: احراز هویت
-reinhardt-auth = "0.1.0-alpha.1"
+reinhardt-auth = "0.1.0-rc.1"
 
 # اختیاری: ویژگی‌های REST API
-reinhardt-rest = "0.1.0-alpha.1"
+reinhardt-rest = "0.1.0-rc.1"
 
 # اختیاری: پنل مدیریت
-reinhardt-admin = "0.1.0-alpha.1"
+reinhardt-admin = "0.1.0-rc.1"
 
 # اختیاری: ویژگی‌های پیشرفته
-reinhardt-graphql = "0.1.0-alpha.1"
-reinhardt-websockets = "0.1.0-alpha.1"
+reinhardt-graphql = "0.1.0-rc.1"
+reinhardt-websockets = "0.1.0-rc.1"
 ```
 
-**📖 برای لیست کامل کریت‌ها و پرچم‌های ویژگی موجود، [راهنمای پرچم‌های ویژگی](../FEATURE_FLAGS.md) را ببینید.**
+**📖 برای لیست کامل کریت‌ها و پرچم‌های ویژگی موجود، [راهنمای پرچم‌های ویژگی](https://reinhardt-web.dev/docs/feature-flags/) را ببینید.**
 
 ## شروع سریع
 
@@ -309,9 +310,9 @@ pub fn routes() -> ServerRouter {
 - **ویژگی `cache`**: `Cache`، `InMemoryCache`
 - **ویژگی `sessions`**: `Session`، `AuthenticationMiddleware`
 
-لیست کامل را در [راهنمای پرچم‌های ویژگی](../FEATURE_FLAGS.md) ببینید.
+لیست کامل را در [راهنمای پرچم‌های ویژگی](https://reinhardt-web.dev/docs/feature-flags/) ببینید.
 
-راهنمای کامل گام به گام را در [راهنمای شروع کار](../GETTING_STARTED.md) ببینید.
+راهنمای کامل گام به گام را در [راهنمای شروع کار](https://reinhardt-web.dev/quickstart/getting-started/) ببینید.
 
 ## 🎓 با مثال یاد بگیرید
 
@@ -390,7 +391,7 @@ Reinhardt دو نوع منبع متغیر محیطی با اولویت‌های 
 وقتی متغیرهای محیطی باید همیشه اولویت داشته باشند `EnvSource` را انتخاب کنید (مثلاً استقرار production).
 وقتی فایل‌های TOML باید منبع اصلی پیکربندی باشند `LowPriorityEnvSource` را انتخاب کنید (مثلاً توسعه).
 
-برای جزئیات بیشتر [مستندات تنظیمات](../SETTINGS_DOCUMENT.md) را ببینید.
+برای جزئیات بیشتر [مستندات تنظیمات](docs/SETTINGS_DOCUMENT.md) را ببینید.
 
 **استفاده از DefaultUser داخلی:**
 
@@ -477,7 +478,7 @@ pub struct CustomUser {
 - `#[field(null = true)]` - اجازه مقادیر NULL
 - `#[field(unique = true)]` - اعمال محدودیت یکتایی
 
-لیست کامل ویژگی‌های فیلد را در [راهنمای ویژگی‌های فیلد](../field_attributes.md) ببینید.
+لیست کامل ویژگی‌های فیلد را در [راهنمای ویژگی‌های فیلد](docs/field_attributes.md) ببینید.
 
 دسترسی‌دهنده‌های فیلد تولید شده امکان ارجاع ایمن از نظر نوع به فیلدها در کوئری‌ها را فراهم می‌کنند:
 
@@ -1001,31 +1002,31 @@ Reinhardt اجزای ماژولار قابل ترکیب ارائه می‌دهد
 | **تست**            |                           |                                             |
 | ابزارهای تست       | `reinhardt-test`          | کمک‌کننده‌های تست، فیکسچرها، TestContainers |
 
-**برای پرچم‌های ویژگی دقیق در هر کریت، [راهنمای پرچم‌های ویژگی](../FEATURE_FLAGS.md) را ببینید.**
+**برای پرچم‌های ویژگی دقیق در هر کریت، [راهنمای پرچم‌های ویژگی](https://reinhardt-web.dev/docs/feature-flags/) را ببینید.**
 
 ---
 
 ## مستندات
 
-- 📚 [راهنمای شروع کار](../GETTING_STARTED.md) - آموزش گام به گام برای مبتدیان
-- 🎛️ [راهنمای پرچم‌های ویژگی](../FEATURE_FLAGS.md) - بهینه‌سازی ساخت با کنترل دقیق ویژگی
+- 📚 [راهنمای شروع کار](https://reinhardt-web.dev/quickstart/getting-started/) - آموزش گام به گام برای مبتدیان
+- 🎛️ [راهنمای پرچم‌های ویژگی](https://reinhardt-web.dev/docs/feature-flags/) - بهینه‌سازی ساخت با کنترل دقیق ویژگی
 - 📖 [مرجع API](https://docs.rs/reinhardt) (به زودی)
-- 📝 [آموزش‌ها](../tutorials/) - یادگیری با ساخت برنامه‌های واقعی
+- 📝 [آموزش‌ها](https://reinhardt-web.dev/quickstart/tutorials/) - یادگیری با ساخت برنامه‌های واقعی
 
-**برای دستیاران AI**: [CLAUDE.md](../../CLAUDE.md) را برای استانداردهای کدنویسی خاص پروژه، راهنماهای تست و قراردادهای توسعه ببینید.
+**برای دستیاران AI**: [CLAUDE.md](CLAUDE.md) را برای استانداردهای کدنویسی خاص پروژه، راهنماهای تست و قراردادهای توسعه ببینید.
 
 ## 💬 دریافت کمک
 
 Reinhardt یک پروژه مبتنی بر انجمن است. اینجا می‌توانید کمک بگیرید:
 
 - 💬 **Discord**: به سرور Discord ما برای چت بلادرنگ بپیوندید (به زودی)
-- 💭 **GitHub Discussions**: [سوال بپرسید و ایده‌ها را به اشتراک بگذارید](https://github.com/kent8192/reinhardt-rs/discussions)
-- 🐛 **Issues**: [گزارش باگ](https://github.com/kent8192/reinhardt-rs/issues)
+- 💭 **GitHub Discussions**: [سوال بپرسید و ایده‌ها را به اشتراک بگذارید](https://github.com/kent8192/reinhardt-web/discussions)
+- 🐛 **Issues**: [گزارش باگ](https://github.com/kent8192/reinhardt-web/issues)
 - 📖 **مستندات**: [راهنماها را بخوانید](../)
 
 قبل از پرسیدن، لطفاً بررسی کنید:
 
-- ✅ [راهنمای شروع کار](../GETTING_STARTED.md)
+- ✅ [راهنمای شروع کار](https://reinhardt-web.dev/quickstart/getting-started/)
 - ✅ [مثال‌ها](../../examples/)
 - ✅ Issues و Discussions موجود در GitHub
 
@@ -1051,10 +1052,7 @@ Reinhardt یک پروژه مبتنی بر انجمن است. اینجا می‌�
 
 ## مجوز
 
-تحت یکی از مجوزهای زیر به انتخاب شما:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](../../LICENSE-APACHE) یا http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](../../LICENSE-MIT) یا http://opensource.org/licenses/MIT)
+این پروژه تحت مجوز [BSD 3-Clause License](../../LICENSE) منتشر شده است.
 
 ### اعتبار طرف سوم
 

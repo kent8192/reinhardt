@@ -1,5 +1,6 @@
 //! Schema attribute parsing and field metadata extraction
 
+use proc_macro2::Span;
 use syn::{Attribute, Lit, Meta, MetaNameValue};
 
 /// Field-level schema attributes
@@ -51,8 +52,13 @@ impl FieldAttributes {
 	}
 }
 
-/// Extract schema attributes from field attributes
-pub(crate) fn extract_field_attributes(attrs: &[Attribute]) -> FieldAttributes {
+/// Extract schema attributes from field attributes.
+///
+/// Returns `Ok(FieldAttributes)` on success, or `Err(syn::Error)` if attribute
+/// syntax is malformed.
+///
+/// Fixes #842: Propagate parse errors instead of silently ignoring them.
+pub(crate) fn extract_field_attributes(attrs: &[Attribute]) -> Result<FieldAttributes, syn::Error> {
 	let mut field_attrs = FieldAttributes::default();
 
 	for attr in attrs {
@@ -84,12 +90,11 @@ pub(crate) fn extract_field_attributes(attrs: &[Attribute]) -> FieldAttributes {
 		// Fixes #836 (skip), #838 (default), #839 (flatten)
 		if attr.path().is_ident("serde") {
 			if let Ok(meta_list) = attr.meta.require_list() {
-				for nested_meta in meta_list
-					.parse_args_with(
-						syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
-					)
-					.unwrap_or_default()
-				{
+				// Fixes #842: Propagate parse errors instead of using unwrap_or_default
+				let nested_metas = meta_list.parse_args_with(
+					syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
+				)?;
+				for nested_meta in nested_metas {
 					match nested_meta {
 						Meta::NameValue(nv) => {
 							if nv.path.is_ident("rename") {
@@ -136,19 +141,18 @@ pub(crate) fn extract_field_attributes(attrs: &[Attribute]) -> FieldAttributes {
 
 		// Parse nested meta items
 		if let Ok(meta_list) = attr.meta.require_list() {
-			for nested_meta in meta_list
-				.parse_args_with(
-					syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
-				)
-				.unwrap_or_default()
-			{
+			// Fixes #842: Propagate parse errors instead of using unwrap_or_default
+			let nested_metas = meta_list.parse_args_with(
+				syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
+			)?;
+			for nested_meta in nested_metas {
 				match nested_meta {
 					Meta::NameValue(nv) => {
-						let ident = nv
-							.path
-							.get_ident()
-							.expect("Expected identifier")
-							.to_string();
+						let Some(ident) = nv.path.get_ident() else {
+							// Non-identifier paths are silently skipped
+							continue;
+						};
+						let ident = ident.to_string();
 
 						match ident.as_str() {
 							"description" => {
@@ -185,7 +189,7 @@ pub(crate) fn extract_field_attributes(attrs: &[Attribute]) -> FieldAttributes {
 									..
 								}) = nv.value
 								{
-									field_attrs.minimum = lit_int.base10_parse().ok();
+									field_attrs.minimum = Some(lit_int.base10_parse()?);
 								}
 							}
 							"maximum" => {
@@ -194,7 +198,7 @@ pub(crate) fn extract_field_attributes(attrs: &[Attribute]) -> FieldAttributes {
 									..
 								}) = nv.value
 								{
-									field_attrs.maximum = lit_int.base10_parse().ok();
+									field_attrs.maximum = Some(lit_int.base10_parse()?);
 								}
 							}
 							"min_length" => {
@@ -203,7 +207,7 @@ pub(crate) fn extract_field_attributes(attrs: &[Attribute]) -> FieldAttributes {
 									..
 								}) = nv.value
 								{
-									field_attrs.min_length = lit_int.base10_parse().ok();
+									field_attrs.min_length = Some(lit_int.base10_parse()?);
 								}
 							}
 							"max_length" => {
@@ -212,7 +216,7 @@ pub(crate) fn extract_field_attributes(attrs: &[Attribute]) -> FieldAttributes {
 									..
 								}) = nv.value
 								{
-									field_attrs.max_length = lit_int.base10_parse().ok();
+									field_attrs.max_length = Some(lit_int.base10_parse()?);
 								}
 							}
 							"pattern" => {
@@ -254,5 +258,29 @@ pub(crate) fn extract_field_attributes(attrs: &[Attribute]) -> FieldAttributes {
 		}
 	}
 
-	field_attrs
+	// Fixes #841: Validate that constraints are not contradictory
+	if let (Some(min), Some(max)) = (field_attrs.minimum, field_attrs.maximum)
+		&& min > max
+	{
+		return Err(syn::Error::new(
+			Span::call_site(),
+			format!(
+				"contradictory constraints: minimum ({}) > maximum ({})",
+				min, max
+			),
+		));
+	}
+	if let (Some(min), Some(max)) = (field_attrs.min_length, field_attrs.max_length)
+		&& min > max
+	{
+		return Err(syn::Error::new(
+			Span::call_site(),
+			format!(
+				"contradictory constraints: min_length ({}) > max_length ({})",
+				min, max
+			),
+		));
+	}
+
+	Ok(field_attrs)
 }

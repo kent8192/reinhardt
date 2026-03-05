@@ -112,7 +112,10 @@ pub(crate) fn orm_reflectable_derive_impl(
 
 /// Classify a field as regular field, relationship, or ignored
 fn classify_field(field: &syn::Field) -> FieldInfo {
-	let field_name = field.ident.as_ref().unwrap().clone();
+	let Some(field_name) = field.ident.clone() else {
+		// Unnamed fields (e.g. tuple structs) are not supported
+		return FieldInfo::Ignored;
+	};
 
 	// 1. Check for #[orm_ignore] attribute
 	if has_attribute(&field.attrs, "orm_ignore") {

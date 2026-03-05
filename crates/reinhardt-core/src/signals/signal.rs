@@ -589,9 +589,11 @@ impl<T: Send + Sync + 'static> Signal<T> {
 			results.push(result);
 		}
 
-		// Execute after_send middleware hooks (ignore errors)
+		// Execute after_send middleware hooks
 		for middleware in &middlewares {
-			let _ = middleware.after_send(&instance, &results).await;
+			if let Err(e) = middleware.after_send(&instance, &results).await {
+				eprintln!("Signal after_send middleware error: {}", e);
+			}
 		}
 
 		results

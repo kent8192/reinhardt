@@ -10,7 +10,8 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 /// User management error
-#[derive(Debug, Clone)]
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UserManagementError {
 	/// User not found
 	UserNotFound,
@@ -65,7 +66,7 @@ pub type UserManagementResult<T> = Result<T, UserManagementError>;
 /// assert_eq!(user_data.username, "alice");
 /// assert_eq!(user_data.email, "alice@example.com");
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateUserData {
 	pub username: String,
 	pub email: String,
@@ -90,7 +91,7 @@ pub struct CreateUserData {
 /// assert_eq!(update_data.email, Some("newemail@example.com".to_string()));
 /// assert_eq!(update_data.is_active, Some(false));
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UpdateUserData {
 	pub email: Option<String>,
 	pub is_active: Option<bool>,
@@ -103,13 +104,22 @@ pub struct UpdateUserData {
 ///
 /// # Examples
 ///
-/// ```rust,no_run
+/// ```rust
+/// # use reinhardt_auth::PasswordHasher;
+/// # struct MockHasher;
+/// # impl PasswordHasher for MockHasher {
+/// #     fn hash(&self, p: &str) -> Result<String, reinhardt_core::exception::Error> {
+/// #         Ok(format!("hash:{p}"))
+/// #     }
+/// #     fn verify(&self, p: &str, h: &str) -> Result<bool, reinhardt_core::exception::Error> {
+/// #         Ok(h == format!("hash:{p}"))
+/// #     }
+/// # }
 /// use reinhardt_auth::user_management::{UserManager, CreateUserData};
-/// use reinhardt_auth::Argon2Hasher;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let hasher = Argon2Hasher::new();
+///     let hasher = MockHasher;
 ///     let mut manager = UserManager::new(hasher);
 ///
 ///     // Create user
@@ -146,12 +156,20 @@ impl<H: PasswordHasher> UserManager<H> {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```rust
+	/// # use reinhardt_auth::PasswordHasher;
+	/// # struct MockHasher;
+	/// # impl PasswordHasher for MockHasher {
+	/// #     fn hash(&self, p: &str) -> Result<String, reinhardt_core::exception::Error> {
+	/// #         Ok(format!("hash:{p}"))
+	/// #     }
+	/// #     fn verify(&self, p: &str, h: &str) -> Result<bool, reinhardt_core::exception::Error> {
+	/// #         Ok(h == format!("hash:{p}"))
+	/// #     }
+	/// # }
 	/// use reinhardt_auth::user_management::UserManager;
-	/// use reinhardt_auth::Argon2Hasher;
 	///
-	/// let hasher = Argon2Hasher::new();
-	/// let manager = UserManager::new(hasher);
+	/// let manager = UserManager::new(MockHasher);
 	/// ```
 	pub fn new(hasher: H) -> Self {
 		Self {
@@ -166,14 +184,22 @@ impl<H: PasswordHasher> UserManager<H> {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```rust
+	/// # use reinhardt_auth::PasswordHasher;
+	/// # struct MockHasher;
+	/// # impl PasswordHasher for MockHasher {
+	/// #     fn hash(&self, p: &str) -> Result<String, reinhardt_core::exception::Error> {
+	/// #         Ok(format!("hash:{p}"))
+	/// #     }
+	/// #     fn verify(&self, p: &str, h: &str) -> Result<bool, reinhardt_core::exception::Error> {
+	/// #         Ok(h == format!("hash:{p}"))
+	/// #     }
+	/// # }
 	/// use reinhardt_auth::user_management::{UserManager, CreateUserData};
-	/// use reinhardt_auth::Argon2Hasher;
 	///
 	/// #[tokio::main]
 	/// async fn main() {
-	///     let hasher = Argon2Hasher::new();
-	///     let mut manager = UserManager::new(hasher);
+	///     let mut manager = UserManager::new(MockHasher);
 	///
 	///     let user_data = CreateUserData {
 	///         username: "bob".to_string(),
@@ -243,14 +269,22 @@ impl<H: PasswordHasher> UserManager<H> {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```rust
+	/// # use reinhardt_auth::PasswordHasher;
+	/// # struct MockHasher;
+	/// # impl PasswordHasher for MockHasher {
+	/// #     fn hash(&self, p: &str) -> Result<String, reinhardt_core::exception::Error> {
+	/// #         Ok(format!("hash:{p}"))
+	/// #     }
+	/// #     fn verify(&self, p: &str, h: &str) -> Result<bool, reinhardt_core::exception::Error> {
+	/// #         Ok(h == format!("hash:{p}"))
+	/// #     }
+	/// # }
 	/// use reinhardt_auth::user_management::{UserManager, CreateUserData};
-	/// use reinhardt_auth::Argon2Hasher;
 	///
 	/// #[tokio::main]
 	/// async fn main() {
-	///     let hasher = Argon2Hasher::new();
-	///     let mut manager = UserManager::new(hasher);
+	///     let mut manager = UserManager::new(MockHasher);
 	///
 	///     let user_data = CreateUserData {
 	///         username: "charlie".to_string(),
@@ -280,14 +314,22 @@ impl<H: PasswordHasher> UserManager<H> {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```rust
+	/// # use reinhardt_auth::PasswordHasher;
+	/// # struct MockHasher;
+	/// # impl PasswordHasher for MockHasher {
+	/// #     fn hash(&self, p: &str) -> Result<String, reinhardt_core::exception::Error> {
+	/// #         Ok(format!("hash:{p}"))
+	/// #     }
+	/// #     fn verify(&self, p: &str, h: &str) -> Result<bool, reinhardt_core::exception::Error> {
+	/// #         Ok(h == format!("hash:{p}"))
+	/// #     }
+	/// # }
 	/// use reinhardt_auth::user_management::{UserManager, CreateUserData};
-	/// use reinhardt_auth::Argon2Hasher;
 	///
 	/// #[tokio::main]
 	/// async fn main() {
-	///     let hasher = Argon2Hasher::new();
-	///     let mut manager = UserManager::new(hasher);
+	///     let mut manager = UserManager::new(MockHasher);
 	///
 	///     let user_data = CreateUserData {
 	///         username: "diana".to_string(),
@@ -319,14 +361,22 @@ impl<H: PasswordHasher> UserManager<H> {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```rust
+	/// # use reinhardt_auth::PasswordHasher;
+	/// # struct MockHasher;
+	/// # impl PasswordHasher for MockHasher {
+	/// #     fn hash(&self, p: &str) -> Result<String, reinhardt_core::exception::Error> {
+	/// #         Ok(format!("hash:{p}"))
+	/// #     }
+	/// #     fn verify(&self, p: &str, h: &str) -> Result<bool, reinhardt_core::exception::Error> {
+	/// #         Ok(h == format!("hash:{p}"))
+	/// #     }
+	/// # }
 	/// use reinhardt_auth::user_management::{UserManager, CreateUserData, UpdateUserData};
-	/// use reinhardt_auth::Argon2Hasher;
 	///
 	/// #[tokio::main]
 	/// async fn main() {
-	///     let hasher = Argon2Hasher::new();
-	///     let mut manager = UserManager::new(hasher);
+	///     let mut manager = UserManager::new(MockHasher);
 	///
 	///     let user_data = CreateUserData {
 	///         username: "eve".to_string(),
@@ -384,14 +434,22 @@ impl<H: PasswordHasher> UserManager<H> {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```rust
+	/// # use reinhardt_auth::PasswordHasher;
+	/// # struct MockHasher;
+	/// # impl PasswordHasher for MockHasher {
+	/// #     fn hash(&self, p: &str) -> Result<String, reinhardt_core::exception::Error> {
+	/// #         Ok(format!("hash:{p}"))
+	/// #     }
+	/// #     fn verify(&self, p: &str, h: &str) -> Result<bool, reinhardt_core::exception::Error> {
+	/// #         Ok(h == format!("hash:{p}"))
+	/// #     }
+	/// # }
 	/// use reinhardt_auth::user_management::{UserManager, CreateUserData};
-	/// use reinhardt_auth::Argon2Hasher;
 	///
 	/// #[tokio::main]
 	/// async fn main() {
-	///     let hasher = Argon2Hasher::new();
-	///     let mut manager = UserManager::new(hasher);
+	///     let mut manager = UserManager::new(MockHasher);
 	///
 	///     let user_data = CreateUserData {
 	///         username: "frank".to_string(),
@@ -430,14 +488,22 @@ impl<H: PasswordHasher> UserManager<H> {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```rust
+	/// # use reinhardt_auth::PasswordHasher;
+	/// # struct MockHasher;
+	/// # impl PasswordHasher for MockHasher {
+	/// #     fn hash(&self, p: &str) -> Result<String, reinhardt_core::exception::Error> {
+	/// #         Ok(format!("hash:{p}"))
+	/// #     }
+	/// #     fn verify(&self, p: &str, h: &str) -> Result<bool, reinhardt_core::exception::Error> {
+	/// #         Ok(h == format!("hash:{p}"))
+	/// #     }
+	/// # }
 	/// use reinhardt_auth::user_management::{UserManager, CreateUserData};
-	/// use reinhardt_auth::Argon2Hasher;
 	///
 	/// #[tokio::main]
 	/// async fn main() {
-	///     let hasher = Argon2Hasher::new();
-	///     let mut manager = UserManager::new(hasher);
+	///     let mut manager = UserManager::new(MockHasher);
 	///
 	///     let user_data1 = CreateUserData {
 	///         username: "grace".to_string(),
@@ -471,14 +537,22 @@ impl<H: PasswordHasher> UserManager<H> {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```rust
+	/// # use reinhardt_auth::PasswordHasher;
+	/// # struct MockHasher;
+	/// # impl PasswordHasher for MockHasher {
+	/// #     fn hash(&self, p: &str) -> Result<String, reinhardt_core::exception::Error> {
+	/// #         Ok(format!("hash:{p}"))
+	/// #     }
+	/// #     fn verify(&self, p: &str, h: &str) -> Result<bool, reinhardt_core::exception::Error> {
+	/// #         Ok(h == format!("hash:{p}"))
+	/// #     }
+	/// # }
 	/// use reinhardt_auth::user_management::{UserManager, CreateUserData};
-	/// use reinhardt_auth::Argon2Hasher;
 	///
 	/// #[tokio::main]
 	/// async fn main() {
-	///     let hasher = Argon2Hasher::new();
-	///     let mut manager = UserManager::new(hasher);
+	///     let mut manager = UserManager::new(MockHasher);
 	///
 	///     let user_data = CreateUserData {
 	///         username: "iris".to_string(),

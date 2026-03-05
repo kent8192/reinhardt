@@ -19,14 +19,13 @@
 //! use reinhardt_rest::metadata::{BaseMetadata, SimpleMetadata, MetadataOptions};
 //!
 //! let metadata = SimpleMetadata::new();
-//! let options = MetadataOptions {
-//!     name: "User List".to_string(),
-//!     description: "List all users".to_string(),
-//!     allowed_methods: vec!["GET".to_string(), "POST".to_string()],
-//!     renders: vec!["application/json".to_string()],
-//!     parses: vec!["application/json".to_string()],
-//!     serializer_fields: None,
-//! };
+//! let mut options = MetadataOptions::default();
+//! options.name = "User List".to_string();
+//! options.description = "List all users".to_string();
+//! options.allowed_methods = vec!["GET".to_string(), "POST".to_string()];
+//! options.renders = vec!["application/json".to_string()];
+//! options.parses = vec!["application/json".to_string()];
+//! options.serializer_fields = None;
 //! ```
 //!
 //! ## OpenAPI Schema Generation Example

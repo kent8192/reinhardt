@@ -210,8 +210,8 @@ async fn test_nested_transaction_logging() {
 	let records = memory.get_records();
 	assert_eq!(records.len(), 3);
 	assert!(records[0].message.contains("BEGIN TRANSACTION"));
-	assert!(records[1].message.contains("SAVEPOINT sp_2"));
-	assert!(records[2].message.contains("SAVEPOINT sp_3"));
+	assert!(records[1].message.contains("SAVEPOINT \"sp_2\""));
+	assert!(records[2].message.contains("SAVEPOINT \"sp_3\""));
 }
 
 #[tokio::test]
@@ -291,8 +291,8 @@ async fn test_full_transaction_lifecycle() {
 	let records = memory.get_records();
 	assert_eq!(records.len(), 4);
 	assert!(records[0].message.contains("BEGIN TRANSACTION"));
-	assert!(records[1].message.contains("SAVEPOINT sp_2"));
-	assert!(records[2].message.contains("RELEASE SAVEPOINT sp_2"));
+	assert!(records[1].message.contains("SAVEPOINT \"sp_2\""));
+	assert!(records[2].message.contains("RELEASE SAVEPOINT \"sp_2\""));
 	assert!(records[3].message.contains("COMMIT"));
 }
 
@@ -301,11 +301,14 @@ async fn test_savepoint_object() {
 	// Test Savepoint utility functions
 	let savepoint = Savepoint::new("test_sp", 1);
 
-	assert_eq!(savepoint.name, "test_sp");
+	assert_eq!(savepoint.name(), "test_sp");
 	assert_eq!(savepoint.depth, 1);
-	assert_eq!(savepoint.to_sql(), "SAVEPOINT test_sp");
-	assert_eq!(savepoint.release_sql(), "RELEASE SAVEPOINT test_sp");
-	assert_eq!(savepoint.rollback_sql(), "ROLLBACK TO SAVEPOINT test_sp");
+	assert_eq!(savepoint.to_sql(), "SAVEPOINT \"test_sp\"");
+	assert_eq!(savepoint.release_sql(), "RELEASE SAVEPOINT \"test_sp\"");
+	assert_eq!(
+		savepoint.rollback_sql(),
+		"ROLLBACK TO SAVEPOINT \"test_sp\""
+	);
 }
 
 #[tokio::test]

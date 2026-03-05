@@ -8,6 +8,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 use std::fmt;
 
 /// Errors that can occur during field validation
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum FieldError {
 	/// Value is required but was not provided
@@ -75,13 +76,13 @@ impl std::error::Error for FieldError {}
 ///     .max_length(10)
 ///     .required(true);
 ///
-// Valid string
+/// // Valid string
 /// assert!(field.validate("hello").is_ok());
 ///
-// Too short
+/// // Too short
 /// assert!(field.validate("hi").is_err());
 ///
-// Too long
+/// // Too long
 /// assert!(field.validate("hello world").is_err());
 /// ```
 #[derive(Debug, Clone)]
@@ -201,14 +202,16 @@ impl CharField {
 			return Err(FieldError::Required);
 		}
 
+		let char_count = value.chars().count();
+
 		if let Some(min) = self.min_length
-			&& value.len() < min
+			&& char_count < min
 		{
 			return Err(FieldError::TooShort(min));
 		}
 
 		if let Some(max) = self.max_length
-			&& value.len() > max
+			&& char_count > max
 		{
 			return Err(FieldError::TooLong(max));
 		}
@@ -1136,6 +1139,7 @@ impl Default for DateTimeField {
 mod tests {
 	use super::*;
 	use chrono::{Datelike, Timelike};
+	use rstest::rstest;
 
 	#[test]
 	fn test_char_field_valid() {
@@ -1153,6 +1157,48 @@ mod tests {
 	fn test_char_field_too_long() {
 		let field = CharField::new().max_length(5);
 		assert_eq!(field.validate("hello world"), Err(FieldError::TooLong(5)));
+	}
+
+	#[rstest]
+	#[case::cjk_within_max("こんにちは世", 10, true)]
+	#[case::cjk_exceeding_max("こんにちはこんにちはあ", 10, false)]
+	#[case::emoji_within_max("🎉🎊🎈", 5, true)]
+	#[case::emoji_exceeding_max("🎉🎊🎈🎁🎀🎆", 5, false)]
+	#[case::mixed_ascii_cjk("hello世界", 10, true)]
+	#[case::boundary_exact_max("あいうえお", 5, true)]
+	#[case::boundary_one_over_max("あいうえおか", 5, false)]
+	fn test_char_field_unicode_max_length(
+		#[case] input: &str,
+		#[case] max_length: usize,
+		#[case] should_pass: bool,
+	) {
+		// Arrange
+		let field = CharField::new().max_length(max_length);
+
+		// Act
+		let result = field.validate(input);
+
+		// Assert
+		assert_eq!(result.is_ok(), should_pass);
+	}
+
+	#[rstest]
+	#[case::cjk_meets_min("こんにちは", 5, true)]
+	#[case::cjk_below_min("こん", 5, false)]
+	#[case::boundary_exact_min("あいう", 3, true)]
+	fn test_char_field_unicode_min_length(
+		#[case] input: &str,
+		#[case] min_length: usize,
+		#[case] should_pass: bool,
+	) {
+		// Arrange
+		let field = CharField::new().min_length(min_length);
+
+		// Act
+		let result = field.validate(input);
+
+		// Assert
+		assert_eq!(result.is_ok(), should_pass);
 	}
 
 	#[test]

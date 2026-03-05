@@ -183,6 +183,7 @@ impl Default for SerializationContext {
 pub type RecursiveResult<T> = Result<T, RecursiveError>;
 
 /// Errors that can occur during recursive serialization
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecursiveError {
 	/// Maximum depth exceeded

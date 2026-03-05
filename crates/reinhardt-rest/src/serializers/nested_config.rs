@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 /// Configuration for a single nested field
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct NestedFieldConfig {
 	/// Field name that contains the relationship
@@ -132,6 +133,7 @@ impl NestedFieldConfig {
 }
 
 /// Configuration manager for nested serializers
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct NestedSerializerConfig {
 	/// Map of field names to their nested configurations

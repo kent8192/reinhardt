@@ -570,12 +570,16 @@ fn test_validation_short_circuit_on_first_error() {
 
 	// Valid data should pass both strategies
 	let valid_data = RegistrationData::new("alice", "alice@example.com", "password123", Some(25));
-	assert!(valid_data
-		.validate(ValidationStrategy::ShortCircuit)
-		.is_ok());
-	assert!(valid_data
-		.validate(ValidationStrategy::Comprehensive)
-		.is_ok());
+	assert!(
+		valid_data
+			.validate(ValidationStrategy::ShortCircuit)
+			.is_ok()
+	);
+	assert!(
+		valid_data
+			.validate(ValidationStrategy::Comprehensive)
+			.is_ok()
+	);
 }
 
 /// Test list field item validation

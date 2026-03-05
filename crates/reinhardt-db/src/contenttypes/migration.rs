@@ -27,6 +27,7 @@ use super::{ContentType, ContentTypeRegistry};
 use std::collections::HashMap;
 
 /// Error type for migration operations
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MigrationError {
 	/// The source content type was not found

@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 /// Errors that can occur during type mapping.
+#[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum TypeMappingError {
 	#[error("Unsupported type: {0}")]

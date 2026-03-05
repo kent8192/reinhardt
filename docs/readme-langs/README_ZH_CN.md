@@ -13,7 +13,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/reinhardt-web.svg)](https://crates.io/crates/reinhardt-web)
 [![Documentation](https://docs.rs/reinhardt-web/badge.svg)](https://docs.rs/reinhardt-web)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE.md)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](../../LICENSE)
 [![codecov](https://codecov.io/gh/kent8192/reinhardt-web/graph/badge.svg)](https://codecov.io/gh/kent8192/reinhardt-web)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/kent8192/reinhardt-web)
 
@@ -25,10 +25,11 @@
 
 您可能在找:
 
+- 🌐 [官方网站](https://reinhardt-web.dev) - 文档、教程和指南
 - 🚀 [快速开始](#快速开始) - 5分钟启动运行
 - 📦 [安装选项](#安装) - 选择你的风格: Micro、Standard 或 Full
-- 📚 [入门指南](../GETTING_STARTED.md) - 分步教程
-- 🎛️ [功能标志](../FEATURE_FLAGS.md) - 微调你的构建
+- 📚 [入门指南](https://reinhardt-web.dev/quickstart/getting-started/) - 分步教程
+- 🎛️ [功能标志](https://reinhardt-web.dev/docs/feature-flags/) - 微调你的构建
 - 📖 [API文档](https://docs.rs/reinhardt-web) - 完整API参考
 - 💬 [社区与支持](#获取帮助) - 从社区获取帮助
 
@@ -61,7 +62,7 @@ Reinhardt汇集了三个世界的精华:
 - **分页、过滤、速率限制** 内置
 - **信号** 用于事件驱动架构
 
-完整列表请参阅[可用组件](#可用组件)，示例请参阅[入门指南](../GETTING_STARTED.md)。
+完整列表请参阅[可用组件](#可用组件)，示例请参阅[入门指南](https://reinhardt-web.dev/quickstart/getting-started/)。
 
 ## 安装
 
@@ -78,7 +79,7 @@ Reinhardt是一个模块化框架。选择你的起点:
 [dependencies]
 # 导入为'reinhardt'，发布为'reinhardt-web'
 # 默认启用所有功能（完整捆绑包）
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web" }
+reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web" }
 ```
 
 **包含:** Database、Auth、REST API、Admin、GraphQL、WebSockets、Cache、i18n、Mail、Sessions、Static Files、Storage
@@ -97,7 +98,7 @@ use reinhardt::{Request, Response, StatusCode};
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-features = false, features = ["standard"] }
+reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web", default-features = false, features = ["standard"] }
 ```
 
 **包含:** Core、Database（PostgreSQL）、REST API、Auth、Middleware、Pages（带SSR的WASM前端）
@@ -110,7 +111,7 @@ reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-feat
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-features = false, features = ["minimal"] }
+reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 ```
 
 **包含:** HTTP、路由、DI、参数提取、服务器
@@ -124,27 +125,27 @@ reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-feat
 ```toml
 [dependencies]
 # 核心组件
-reinhardt-http = "0.1.0-alpha.1"
-reinhardt-urls = "0.1.0-alpha.1"
+reinhardt-http = "0.1.0-rc.1"
+reinhardt-urls = "0.1.0-rc.1"
 
 # 可选: 数据库
-reinhardt-db = "0.1.0-alpha.1"
+reinhardt-db = "0.1.0-rc.1"
 
 # 可选: 认证
-reinhardt-auth = "0.1.0-alpha.1"
+reinhardt-auth = "0.1.0-rc.1"
 
 # 可选: REST API功能
-reinhardt-rest = "0.1.0-alpha.1"
+reinhardt-rest = "0.1.0-rc.1"
 
 # 可选: 管理面板
-reinhardt-admin = "0.1.0-alpha.1"
+reinhardt-admin = "0.1.0-rc.1"
 
 # 可选: 高级功能
-reinhardt-graphql = "0.1.0-alpha.1"
-reinhardt-websockets = "0.1.0-alpha.1"
+reinhardt-graphql = "0.1.0-rc.1"
+reinhardt-websockets = "0.1.0-rc.1"
 ```
 
-**📖 完整的可用crates和功能标志列表，请参阅[功能标志指南](../FEATURE_FLAGS.md)。**
+**📖 完整的可用crates和功能标志列表，请参阅[功能标志指南](https://reinhardt-web.dev/docs/feature-flags/)。**
 
 ## 快速开始
 
@@ -309,9 +310,9 @@ pub fn routes() -> ServerRouter {
 - **`cache`功能**: `Cache`、`InMemoryCache`
 - **`sessions`功能**: `Session`、`AuthenticationMiddleware`
 
-完整列表请参阅[功能标志指南](../FEATURE_FLAGS.md)。
+完整列表请参阅[功能标志指南](https://reinhardt-web.dev/docs/feature-flags/)。
 
-完整的分步指南请参阅[入门指南](../GETTING_STARTED.md)。
+完整的分步指南请参阅[入门指南](https://reinhardt-web.dev/quickstart/getting-started/)。
 
 ## 🎓 通过示例学习
 
@@ -390,7 +391,7 @@ Reinhardt提供两种具有不同优先级的环境变量源:
 当环境变量应始终优先时选择`EnvSource`（例如生产部署）。
 当TOML文件应为主要配置源时选择`LowPriorityEnvSource`（例如开发）。
 
-详情请参阅[设置文档](../SETTINGS_DOCUMENT.md)。
+详情请参阅[设置文档](docs/SETTINGS_DOCUMENT.md)。
 
 **使用内置DefaultUser:**
 
@@ -477,7 +478,7 @@ pub struct CustomUser {
 - `#[field(null = true)]` - 允许NULL值
 - `#[field(unique = true)]` - 强制唯一性约束
 
-完整的字段属性列表请参阅[字段属性指南](../field_attributes.md)。
+完整的字段属性列表请参阅[字段属性指南](docs/field_attributes.md)。
 
 生成的字段访问器在查询中启用类型安全的字段引用:
 
@@ -1001,32 +1002,32 @@ Reinhardt提供可混合搭配的模块化组件:
 | **测试**            |                           |                                             |
 | 测试工具            | `reinhardt-test`          | 测试助手、fixtures、TestContainers          |
 
-**各crate内的详细功能标志，请参阅[功能标志指南](../FEATURE_FLAGS.md)。**
+**各crate内的详细功能标志，请参阅[功能标志指南](https://reinhardt-web.dev/docs/feature-flags/)。**
 
 ---
 
 ## 文档
 
-- 📚 [入门指南](../GETTING_STARTED.md) - 初学者分步教程
-- 🎛️ [功能标志指南](../FEATURE_FLAGS.md) - 通过细粒度功能控制优化构建
+- 📚 [入门指南](https://reinhardt-web.dev/quickstart/getting-started/) - 初学者分步教程
+- 🎛️ [功能标志指南](https://reinhardt-web.dev/docs/feature-flags/) - 通过细粒度功能控制优化构建
 - 📖 [API参考](https://docs.rs/reinhardt)（即将推出）
-- 📝 [教程](../tutorials/) - 通过构建真实应用学习
+- 📝 [教程](https://reinhardt-web.dev/quickstart/tutorials/) - 通过构建真实应用学习
 
-**AI助手请参阅**: 项目特定的编码标准、测试指南和开发约定请参阅[CLAUDE.md](../../CLAUDE.md)。
+**AI助手请参阅**: 项目特定的编码标准、测试指南和开发约定请参阅[CLAUDE.md](CLAUDE.md)。
 
 ## 💬 获取帮助
 
 Reinhardt是一个社区驱动的项目。以下是获取帮助的途径:
 
 - 💬 **Discord**: 加入我们的Discord服务器进行实时聊天（即将推出）
-- 💭 **GitHub Discussions**: [提问和分享想法](https://github.com/kent8192/reinhardt-rs/discussions)
-- 🐛 **Issues**: [报告bug](https://github.com/kent8192/reinhardt-rs/issues)
-- 📖 **文档**: [阅读指南](../)
+- 💭 **GitHub Discussions**: [提问和分享想法](https://github.com/kent8192/reinhardt-web/discussions)
+- 🐛 **Issues**: [报告bug](https://github.com/kent8192/reinhardt-web/issues)
+- 📖 **文档**: [阅读指南](https://reinhardt-web.dev/)
 
 提问前，请查看:
 
-- ✅ [入门指南](../GETTING_STARTED.md)
-- ✅ [Examples](../../examples/)
+- ✅ [入门指南](https://reinhardt-web.dev/quickstart/getting-started/)
+- ✅ [Examples](https://github.com/kent8192/reinhardt-web/tree/main/examples/)
 - ✅ 现有的GitHub Issues和Discussions
 
 ## 🤝 贡献
@@ -1051,12 +1052,7 @@ Reinhardt是一个社区驱动的项目。以下是获取帮助的途径:
 
 ## 许可证
 
-双重许可，可选择以下之一:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](../../LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](../../LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-由您选择。
+本项目基于 [BSD 3-Clause License](../../LICENSE) 许可。
 
 ### 第三方归属
 

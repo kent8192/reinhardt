@@ -11,6 +11,9 @@ type PriorityQueueMap = BTreeMap<Priority, VecDeque<Box<dyn Task>>>;
 
 /// Priority level for tasks
 ///
+/// Ordering is based on weight values: `Low` (10) < `Normal` (50) < `High` (100).
+/// `Custom(w)` is ordered by its weight value relative to the standard priorities.
+///
 /// # Example
 ///
 /// ```rust
@@ -22,11 +25,15 @@ type PriorityQueueMap = BTreeMap<Priority, VecDeque<Box<dyn Task>>>;
 /// assert!(high > normal);
 /// assert!(normal > low);
 ///
-/// // Custom priority is ordered after all standard priorities
-/// let custom = Priority::Custom(75);
-/// assert!(custom > high);
+/// // Custom priority is ordered by weight value
+/// let custom_75 = Priority::Custom(75);
+/// assert!(custom_75 > normal);  // 75 > 50
+/// assert!(custom_75 < high);    // 75 < 100
+///
+/// let custom_200 = Priority::Custom(200);
+/// assert!(custom_200 > high);   // 200 > 100
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum Priority {
 	/// Low priority (weight: 10)
 	Low,
@@ -37,6 +44,32 @@ pub enum Priority {
 	High,
 	/// Custom priority with specified weight
 	Custom(u32),
+}
+
+impl PartialEq for Priority {
+	fn eq(&self, other: &Self) -> bool {
+		self.default_weight() == other.default_weight()
+	}
+}
+
+impl Eq for Priority {}
+
+impl std::hash::Hash for Priority {
+	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+		self.default_weight().hash(state);
+	}
+}
+
+impl PartialOrd for Priority {
+	fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+		Some(self.cmp(other))
+	}
+}
+
+impl Ord for Priority {
+	fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+		self.default_weight().cmp(&other.default_weight())
+	}
 }
 
 impl Priority {
@@ -611,11 +644,22 @@ mod tests {
 
 	#[test]
 	fn test_priority_comparison() {
-		// BTreeMap orders by variant first, then by value
-		// So the order is: Low < Normal < High < Custom(any)
+		use std::cmp::Ordering;
+
+		// Ordering is based on weight values
 		assert!(Priority::High > Priority::Normal);
 		assert!(Priority::Normal > Priority::Low);
-		assert!(Priority::Custom(75) > Priority::High); // Custom is always after standard priorities
+
+		// Custom priorities are ordered by their weight value
+		assert!(Priority::Custom(75) > Priority::Normal); // 75 > 50
+		assert!(Priority::Custom(75) < Priority::High); // 75 < 100
+		assert!(Priority::Custom(200) > Priority::High); // 200 > 100
+		assert!(Priority::Custom(0) < Priority::Low); // 0 < 10
+
+		// Custom with same weight as standard priority is equal
+		assert_eq!(Priority::Custom(100), Priority::High);
+		assert_eq!(Priority::Custom(50), Priority::Normal);
+		assert_eq!(Priority::Custom(10), Priority::Low);
 	}
 
 	#[test]

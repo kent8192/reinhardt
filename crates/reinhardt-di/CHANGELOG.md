@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di@v0.1.0-rc.1...reinhardt-di@v0.1.0-rc.2) - 2026-03-04
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di@v0.1.0-alpha.8...reinhardt-di@v0.1.0-rc.1) - 2026-02-23
+
+### Maintenance
+
+- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
+
+## [0.1.0-alpha.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di@v0.1.0-alpha.7...reinhardt-di@v0.1.0-alpha.8) - 2026-02-21
+
+### Fixed
+
+- add reset_global_registry to enable test isolation
+- return error for unregistered types instead of defaulting to Singleton
+- remove undeclared tracing dependency from injectable macro output
+- prevent Arc::try_unwrap panic and DependencyStream element consumption
+- handle RwLock poisoning gracefully in scope and override registry
+
+### Security
+
+- improve generated name hygiene, crate path diagnostics, and type path validation
+- reject unknown macro arguments and unsupported scope attribute
+- add regex pattern length limit to prevent ReDoS attacks
+- fix non-deterministic path tuple extraction order
+- add body size limits to parameter extractors
+- remove info leak and validate factory code generation
+- migrate cycle detection to task_local and remove sampling
+
+### Changed
+
+- extract shared parse_cookies into cookie_util module
+
+### Styling
+
+- apply workspace-wide formatting fixes
+
+### Testing
+
+- add DependencyStream::is_empty non-destructive regression tests for #453
+
+### Maintenance
+
+- remove sea-query and sea-schema from workspace dependencies
+
 ## [0.1.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di@v0.1.0-alpha.5...reinhardt-di@v0.1.0-alpha.6) - 2026-02-12
 
 ### Maintenance

@@ -3,8 +3,8 @@
 //! Tests for `OrderingField` and `OrderDirection` from reinhardt-rest.
 
 use reinhardt_db::orm::Field;
-use reinhardt_rest::filters::field_extensions::FieldOrderingExt;
 use reinhardt_rest::filters::OrderDirection;
+use reinhardt_rest::filters::field_extensions::FieldOrderingExt;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

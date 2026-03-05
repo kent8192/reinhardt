@@ -149,7 +149,6 @@ impl QueryStatementBuilder for RefreshMaterializedViewStatement {
 		}
 		panic!("Unsupported query builder type");
 	}
-
 }
 
 impl QueryStatementWriter for RefreshMaterializedViewStatement {}

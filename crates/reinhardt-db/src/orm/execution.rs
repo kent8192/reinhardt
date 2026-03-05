@@ -28,6 +28,7 @@ pub enum ExecutionResult<T> {
 }
 
 /// Errors that can occur during query execution
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutionError {
 	/// Database error
@@ -95,11 +96,18 @@ fn convert_value_to_query_value(value: reinhardt_query::value::Value) -> QueryVa
 		SV::Int(Some(v)) => QueryValue::Int(v as i64),
 		SV::BigInt(Some(v)) => QueryValue::Int(v),
 
-		// Unsigned integers (convert to i64, may overflow for large values)
+		// Unsigned integers (convert to i64 with checked conversion for large values)
 		SV::TinyUnsigned(Some(v)) => QueryValue::Int(v as i64),
 		SV::SmallUnsigned(Some(v)) => QueryValue::Int(v as i64),
 		SV::Unsigned(Some(v)) => QueryValue::Int(v as i64),
-		SV::BigUnsigned(Some(v)) => QueryValue::Int(v as i64),
+		SV::BigUnsigned(Some(v)) => QueryValue::Int(i64::try_from(v).unwrap_or_else(|_| {
+			tracing::warn!(
+				value = v,
+				"BigUnsigned value {} exceeds i64::MAX, clamping to i64::MAX",
+				v
+			);
+			i64::MAX
+		})),
 
 		// Floating point
 		SV::Float(Some(v)) => QueryValue::Float(v as f64),
@@ -132,11 +140,26 @@ fn convert_value_to_query_value(value: reinhardt_query::value::Value) -> QueryVa
 		// JSON - convert to string
 		SV::Json(_) => QueryValue::String(format!("{:?}", value)),
 
-		// Decimal - convert to f64
-		SV::Decimal(Some(d)) => QueryValue::Float(d.to_f64().unwrap_or(0.0)),
+		// Decimal - convert to f64 with fallback through string parsing
+		SV::Decimal(Some(d)) => {
+			let f = d.to_f64().unwrap_or_else(|| {
+				tracing::warn!(
+					decimal = %d,
+					"Decimal cannot be directly represented as f64, falling back to string parsing"
+				);
+				d.to_string().parse::<f64>().unwrap_or(0.0)
+			});
+			QueryValue::Float(f)
+		}
 		SV::BigDecimal(Some(d)) => {
-			// Convert BigDecimal to f64 via string parsing
-			QueryValue::Float(d.to_string().parse::<f64>().unwrap_or(0.0))
+			let f = d.to_string().parse::<f64>().unwrap_or_else(|_| {
+				tracing::warn!(
+					big_decimal = %d,
+					"BigDecimal cannot be represented as f64"
+				);
+				0.0
+			});
+			QueryValue::Float(f)
 		}
 
 		// UUID
@@ -682,6 +705,7 @@ impl LoadOption {
 }
 
 /// Query options container
+#[non_exhaustive]
 pub struct QueryOptions {
 	pub load_options: Vec<LoadOption>,
 }
@@ -759,6 +783,7 @@ impl Default for QueryOptions {
 mod tests {
 	use super::*;
 	use reinhardt_core::validators::TableName;
+	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 
 	#[derive(Debug, Clone, Serialize, Deserialize)]
@@ -895,5 +920,49 @@ mod tests {
 		let option = LoadOption::LoadOnly(vec!["id".to_string(), "name".to_string()]);
 		let comment = option.to_sql_comment();
 		assert!(comment.contains("load_only(id, name)"));
+	}
+
+	#[rstest]
+	#[case::zero(0u64, 0i64)]
+	#[case::one(1u64, 1i64)]
+	#[case::i64_max(i64::MAX as u64, i64::MAX)]
+	#[test]
+	fn test_big_unsigned_to_query_value_within_range(#[case] input: u64, #[case] expected: i64) {
+		// Arrange
+		let value = reinhardt_query::value::Value::BigUnsigned(Some(input));
+
+		// Act
+		let result = convert_value_to_query_value(value);
+
+		// Assert
+		assert!(matches!(result, QueryValue::Int(v) if v == expected));
+	}
+
+	#[rstest]
+	#[case::i64_max_plus_one(i64::MAX as u64 + 1)]
+	#[case::u64_max(u64::MAX)]
+	#[test]
+	fn test_big_unsigned_overflow_clamps_to_i64_max(#[case] input: u64) {
+		// Arrange
+		let value = reinhardt_query::value::Value::BigUnsigned(Some(input));
+
+		// Act
+		let result = convert_value_to_query_value(value);
+
+		// Assert: Should clamp to i64::MAX instead of wrapping to negative
+		assert!(matches!(result, QueryValue::Int(v) if v == i64::MAX));
+	}
+
+	#[rstest]
+	#[test]
+	fn test_big_unsigned_none_converts_to_null() {
+		// Arrange
+		let value = reinhardt_query::value::Value::BigUnsigned(None);
+
+		// Act
+		let result = convert_value_to_query_value(value);
+
+		// Assert
+		assert!(matches!(result, QueryValue::Null));
 	}
 }

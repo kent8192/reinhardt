@@ -4,6 +4,7 @@ pub mod checks;
 pub mod dateformat;
 pub mod encoding;
 pub mod html;
+pub mod input_validation;
 pub mod lock_recovery;
 pub mod path_safety;
 pub mod text;

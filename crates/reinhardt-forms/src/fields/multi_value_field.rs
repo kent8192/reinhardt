@@ -24,7 +24,7 @@ impl MultiValueField {
 	/// use reinhardt_forms::FormField;
 	/// use serde_json::json;
 	///
-	// Create a multi-value field combining name and age
+	/// // Create a multi-value field combining name and age
 	/// let fields: Vec<Box<dyn FormField>> = vec![
 	///     Box::new(CharField::new("name".to_string())),
 	///     Box::new(IntegerField::new("age".to_string())),
@@ -32,7 +32,7 @@ impl MultiValueField {
 	///
 	/// let field = MultiValueField::new("person".to_string(), fields);
 	///
-	// Valid: both values provided
+	/// // Valid: both values provided
 	/// let result = field.clean(Some(&json!(["John Doe", 30])));
 	/// assert!(result.is_ok());
 	/// ```

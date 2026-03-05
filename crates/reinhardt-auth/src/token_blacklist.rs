@@ -6,7 +6,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// Reason for blacklisting a token
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -119,7 +120,7 @@ impl TokenBlacklist for InMemoryTokenBlacklist {
 		expires_at: DateTime<Utc>,
 		reason: BlacklistReason,
 	) -> Result<(), String> {
-		let mut tokens = self.tokens.lock().unwrap();
+		let mut tokens = self.tokens.lock().await;
 		tokens.insert(
 			jti.to_string(),
 			BlacklistedToken {
@@ -133,12 +134,12 @@ impl TokenBlacklist for InMemoryTokenBlacklist {
 	}
 
 	async fn is_blacklisted(&self, jti: &str) -> Result<bool, String> {
-		let tokens = self.tokens.lock().unwrap();
+		let tokens = self.tokens.lock().await;
 		Ok(tokens.contains_key(jti))
 	}
 
 	async fn cleanup_expired(&self) -> Result<usize, String> {
-		let mut tokens = self.tokens.lock().unwrap();
+		let mut tokens = self.tokens.lock().await;
 		let now = Utc::now();
 		let before_count = tokens.len();
 
@@ -148,7 +149,7 @@ impl TokenBlacklist for InMemoryTokenBlacklist {
 	}
 
 	async fn get_stats(&self) -> Result<BlacklistStats, String> {
-		let tokens = self.tokens.lock().unwrap();
+		let tokens = self.tokens.lock().await;
 
 		let mut stats = BlacklistStats {
 			total_blacklisted: tokens.len(),
@@ -252,18 +253,18 @@ impl Default for InMemoryRefreshTokenStore {
 #[async_trait]
 impl RefreshTokenStore for InMemoryRefreshTokenStore {
 	async fn store(&self, token: RefreshToken) -> Result<(), String> {
-		let mut tokens = self.tokens.lock().unwrap();
+		let mut tokens = self.tokens.lock().await;
 		tokens.insert(token.jti.clone(), token);
 		Ok(())
 	}
 
 	async fn get(&self, jti: &str) -> Result<Option<RefreshToken>, String> {
-		let tokens = self.tokens.lock().unwrap();
+		let tokens = self.tokens.lock().await;
 		Ok(tokens.get(jti).cloned())
 	}
 
 	async fn mark_used(&self, jti: &str) -> Result<(), String> {
-		let mut tokens = self.tokens.lock().unwrap();
+		let mut tokens = self.tokens.lock().await;
 		if let Some(token) = tokens.get_mut(jti) {
 			token.is_used = true;
 			Ok(())
@@ -273,13 +274,13 @@ impl RefreshTokenStore for InMemoryRefreshTokenStore {
 	}
 
 	async fn delete(&self, jti: &str) -> Result<(), String> {
-		let mut tokens = self.tokens.lock().unwrap();
+		let mut tokens = self.tokens.lock().await;
 		tokens.remove(jti);
 		Ok(())
 	}
 
 	async fn cleanup_expired(&self) -> Result<usize, String> {
-		let mut tokens = self.tokens.lock().unwrap();
+		let mut tokens = self.tokens.lock().await;
 		let now = Utc::now();
 		let before_count = tokens.len();
 

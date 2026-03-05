@@ -1,6 +1,6 @@
 // Happy path tests for INSERT statement
 
-use super::fixtures::{users_table, TestPool};
+use super::fixtures::{TestPool, users_table};
 use reinhardt_query::prelude::*;
 use rstest::*;
 use sqlx::Row;

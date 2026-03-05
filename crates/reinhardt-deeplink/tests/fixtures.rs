@@ -27,6 +27,7 @@ pub fn android_config() -> reinhardt_deeplink::AndroidConfig {
 		.package_name("com.example.app")
 		.sha256_fingerprint(VALID_FINGERPRINT)
 		.build()
+		.unwrap()
 }
 
 /// Custom scheme configuration fixture.
@@ -130,6 +131,7 @@ fn android_config_default() -> reinhardt_deeplink::AndroidConfig {
 		.package_name("com.example.app")
 		.sha256_fingerprint(VALID_FINGERPRINT)
 		.build()
+		.unwrap()
 }
 
 /// Creates a default deeplink configuration with both platforms.

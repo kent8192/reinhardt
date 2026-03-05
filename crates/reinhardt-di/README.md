@@ -683,4 +683,4 @@ async fn create_service(
 
 ## License
 
-This crate is part of the Reinhardt project and follows the same dual-license structure (MIT or Apache-2.0).
+Licensed under the BSD 3-Clause License.

@@ -33,9 +33,10 @@ pub struct Event {
 impl Event {
 	/// Create a new event with the current timestamp.
 	pub fn new(name: impl Into<String>, payload: Vec<u8>, source: impl Into<String>) -> Self {
+		// Use unwrap_or_default to avoid panic when system clock precedes Unix epoch.
 		let timestamp = SystemTime::now()
 			.duration_since(UNIX_EPOCH)
-			.expect("System time before UNIX epoch")
+			.unwrap_or_default()
 			.as_millis() as u64;
 
 		Self {
@@ -73,10 +74,23 @@ struct Subscription {
 	owner: String,
 }
 
+/// Default maximum number of subscriptions per plugin.
+const DEFAULT_MAX_SUBSCRIPTIONS_PER_PLUGIN: usize = 100;
+
+/// Default maximum number of total subscriptions across all plugins.
+const DEFAULT_MAX_TOTAL_SUBSCRIPTIONS: usize = 10_000;
+
 /// Event bus for inter-plugin communication.
 ///
 /// The event bus provides a publish-subscribe mechanism that allows plugins
 /// to communicate without direct references to each other.
+///
+/// # Resource Limits
+///
+/// The event bus enforces subscription limits to prevent memory exhaustion:
+/// - Per-plugin subscription limit (default: 100)
+/// - Global total subscription limit (default: 10,000)
+/// - Per-subscription queue size limit (default: 10,000 events)
 ///
 /// # Example
 ///
@@ -86,7 +100,7 @@ struct Subscription {
 /// let bus = EventBus::new();
 ///
 /// // Subscribe to user events
-/// let sub_id = bus.subscribe("user.*", "my-plugin");
+/// let sub_id = bus.subscribe("user.*", "my-plugin")?;
 ///
 /// // Emit an event
 /// bus.emit("user.created", vec![1, 2, 3], "auth-plugin");
@@ -101,20 +115,69 @@ pub struct EventBus {
 	next_id: AtomicU64,
 	/// Maximum queue size per subscription (prevents memory exhaustion)
 	max_queue_size: usize,
+	/// Maximum number of subscriptions per plugin
+	max_subscriptions_per_plugin: usize,
+	/// Maximum total number of subscriptions across all plugins
+	max_total_subscriptions: usize,
+}
+
+/// Errors that can occur during event bus operations.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum EventBusError {
+	/// Per-plugin subscription limit exceeded
+	#[error("plugin '{plugin}' has reached subscription limit ({limit})")]
+	PerPluginLimitExceeded {
+		/// Plugin that attempted to subscribe
+		plugin: String,
+		/// Maximum allowed subscriptions per plugin
+		limit: usize,
+	},
+
+	/// Global subscription limit exceeded
+	#[error("total subscription limit reached ({limit})")]
+	TotalLimitExceeded {
+		/// Maximum allowed total subscriptions
+		limit: usize,
+	},
 }
 
 impl EventBus {
 	/// Create a new event bus with default settings.
 	pub fn new() -> Self {
-		Self::with_max_queue_size(10_000)
+		Self::with_limits(
+			10_000,
+			DEFAULT_MAX_SUBSCRIPTIONS_PER_PLUGIN,
+			DEFAULT_MAX_TOTAL_SUBSCRIPTIONS,
+		)
 	}
 
 	/// Create a new event bus with a custom maximum queue size.
 	pub fn with_max_queue_size(max_queue_size: usize) -> Self {
+		Self::with_limits(
+			max_queue_size,
+			DEFAULT_MAX_SUBSCRIPTIONS_PER_PLUGIN,
+			DEFAULT_MAX_TOTAL_SUBSCRIPTIONS,
+		)
+	}
+
+	/// Create a new event bus with custom resource limits.
+	///
+	/// # Arguments
+	///
+	/// * `max_queue_size` - Maximum number of events per subscription queue
+	/// * `max_subscriptions_per_plugin` - Maximum subscriptions a single plugin can create
+	/// * `max_total_subscriptions` - Maximum total subscriptions across all plugins
+	pub fn with_limits(
+		max_queue_size: usize,
+		max_subscriptions_per_plugin: usize,
+		max_total_subscriptions: usize,
+	) -> Self {
 		Self {
 			subscriptions: RwLock::new(HashMap::new()),
 			next_id: AtomicU64::new(1),
 			max_queue_size,
+			max_subscriptions_per_plugin,
+			max_total_subscriptions,
 		}
 	}
 
@@ -164,15 +227,43 @@ impl EventBus {
 	/// # Returns
 	///
 	/// A unique subscription ID that can be used for polling and unsubscribing.
-	pub fn subscribe(&self, pattern: &str, owner: &str) -> u64 {
-		let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+	///
+	/// # Errors
+	///
+	/// Returns an error if:
+	/// - The plugin has reached its per-plugin subscription limit
+	/// - The global total subscription limit has been reached
+	pub fn subscribe(&self, pattern: &str, owner: &str) -> Result<u64, EventBusError> {
+		let mut subs = self.subscriptions.write();
+
+		// Check global subscription limit
+		if subs.len() >= self.max_total_subscriptions {
+			return Err(EventBusError::TotalLimitExceeded {
+				limit: self.max_total_subscriptions,
+			});
+		}
+
+		// Check per-plugin subscription limit
+		let plugin_count = subs.values().filter(|s| s.owner == owner).count();
+		if plugin_count >= self.max_subscriptions_per_plugin {
+			return Err(EventBusError::PerPluginLimitExceeded {
+				plugin: owner.to_string(),
+				limit: self.max_subscriptions_per_plugin,
+			});
+		}
+
+		// Wrapping addition is the default behavior of AtomicU64::fetch_add.
+		// With u64 range (~1.8 * 10^19), overflow is practically unreachable.
+		// If it ever wraps, the subscription map insertion will overwrite any
+		// stale entry with the same ID, which is acceptable.
+		let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 		let subscription = Subscription {
 			pattern: pattern.to_string(),
 			queue: VecDeque::new(),
 			owner: owner.to_string(),
 		};
-		self.subscriptions.write().insert(id, subscription);
-		id
+		subs.insert(id, subscription);
+		Ok(id)
 	}
 
 	/// Unsubscribe from a subscription.
@@ -277,6 +368,11 @@ impl std::fmt::Debug for EventBus {
 		f.debug_struct("EventBus")
 			.field("subscription_count", &subs.len())
 			.field("max_queue_size", &self.max_queue_size)
+			.field(
+				"max_subscriptions_per_plugin",
+				&self.max_subscriptions_per_plugin,
+			)
+			.field("max_total_subscriptions", &self.max_total_subscriptions)
 			.finish()
 	}
 }
@@ -287,22 +383,29 @@ pub type SharedEventBus = Arc<EventBus>;
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	#[test]
+	#[rstest]
 	fn test_event_creation() {
+		// Arrange & Act
 		let event = Event::new("user.created", vec![1, 2, 3], "test-plugin");
 
+		// Assert
 		assert_eq!(event.name, "user.created");
 		assert_eq!(event.payload, vec![1, 2, 3]);
 		assert_eq!(event.source, "test-plugin");
 		assert!(event.timestamp > 0);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_subscribe_and_unsubscribe() {
+		// Arrange
 		let bus = EventBus::new();
 
-		let id = bus.subscribe("user.*", "test-plugin");
+		// Act
+		let id = bus.subscribe("user.*", "test-plugin").unwrap();
+
+		// Assert
 		assert!(bus.has_subscription(id));
 		assert_eq!(bus.subscription_count(), 1);
 
@@ -312,13 +415,13 @@ mod tests {
 		assert_eq!(bus.subscription_count(), 0);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_emit_and_poll() {
+		// Arrange
 		let bus = EventBus::new();
+		let sub_id = bus.subscribe("user.*", "consumer").unwrap();
 
-		let sub_id = bus.subscribe("user.*", "consumer");
-
-		// Emit some events
+		// Act - emit events
 		let delivered = bus.emit("user.created", vec![1], "producer");
 		assert_eq!(delivered, 1);
 
@@ -329,7 +432,7 @@ mod tests {
 		let delivered = bus.emit("order.created", vec![3], "producer");
 		assert_eq!(delivered, 0);
 
-		// Poll events
+		// Assert - poll events
 		let events = bus.poll(sub_id, 10);
 		assert_eq!(events.len(), 2);
 		assert_eq!(events[0].name, "user.created");
@@ -340,7 +443,7 @@ mod tests {
 		assert!(events.is_empty());
 	}
 
-	#[test]
+	#[rstest]
 	fn test_pattern_matching() {
 		// Wildcard matches all
 		assert!(EventBus::matches_pattern("*", "anything"));
@@ -358,39 +461,40 @@ mod tests {
 		assert!(!EventBus::matches_pattern("user.created", "user.deleted"));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_multiple_subscribers() {
+		// Arrange
 		let bus = EventBus::new();
+		let sub1 = bus.subscribe("user.*", "plugin-a").unwrap();
+		let sub2 = bus.subscribe("*", "plugin-b").unwrap();
+		let sub3 = bus.subscribe("order.*", "plugin-c").unwrap();
 
-		let sub1 = bus.subscribe("user.*", "plugin-a");
-		let sub2 = bus.subscribe("*", "plugin-b");
-		let sub3 = bus.subscribe("order.*", "plugin-c");
-
-		// Emit user event - should match sub1 and sub2
+		// Act - emit user event (matches sub1 and sub2)
 		let delivered = bus.emit("user.created", vec![1], "producer");
 		assert_eq!(delivered, 2);
 
-		// Emit order event - should match sub2 and sub3
+		// Emit order event (matches sub2 and sub3)
 		let delivered = bus.emit("order.created", vec![2], "producer");
 		assert_eq!(delivered, 2);
 
-		// Check individual queues
+		// Assert
 		assert_eq!(bus.pending_count(sub1), 1);
 		assert_eq!(bus.pending_count(sub2), 2);
 		assert_eq!(bus.pending_count(sub3), 1);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_queue_limit() {
+		// Arrange
 		let bus = EventBus::with_max_queue_size(3);
-		let sub_id = bus.subscribe("*", "test");
+		let sub_id = bus.subscribe("*", "test").unwrap();
 
-		// Emit 5 events
+		// Act - emit 5 events
 		for i in 0..5 {
 			bus.emit(&format!("event.{}", i), vec![i as u8], "producer");
 		}
 
-		// Only 3 should remain (oldest dropped)
+		// Assert - only 3 should remain (oldest dropped)
 		let events = bus.poll(sub_id, 10);
 		assert_eq!(events.len(), 3);
 		assert_eq!(events[0].name, "event.2");
@@ -398,43 +502,125 @@ mod tests {
 		assert_eq!(events[2].name, "event.4");
 	}
 
-	#[test]
+	#[rstest]
 	fn test_remove_plugin_subscriptions() {
+		// Arrange
 		let bus = EventBus::new();
-
-		bus.subscribe("a.*", "plugin-a");
-		bus.subscribe("b.*", "plugin-a");
-		bus.subscribe("c.*", "plugin-b");
-
+		bus.subscribe("a.*", "plugin-a").unwrap();
+		bus.subscribe("b.*", "plugin-a").unwrap();
+		bus.subscribe("c.*", "plugin-b").unwrap();
 		assert_eq!(bus.subscription_count(), 3);
 
+		// Act
 		let removed = bus.remove_plugin_subscriptions("plugin-a");
+
+		// Assert
 		assert_eq!(removed, 2);
 		assert_eq!(bus.subscription_count(), 1);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_poll_nonexistent_subscription() {
+		// Arrange
 		let bus = EventBus::new();
+
+		// Act
 		let events = bus.poll(999, 10);
+
+		// Assert
 		assert!(events.is_empty());
 	}
 
-	#[test]
+	#[rstest]
 	fn test_poll_limit() {
+		// Arrange
 		let bus = EventBus::new();
-		let sub_id = bus.subscribe("*", "test");
+		let sub_id = bus.subscribe("*", "test").unwrap();
 
 		// Emit 10 events
 		for i in 0..10 {
 			bus.emit(&format!("event.{}", i), vec![], "producer");
 		}
 
-		// Poll with limit of 3
+		// Act
 		let events = bus.poll(sub_id, 3);
-		assert_eq!(events.len(), 3);
 
-		// 7 remaining
+		// Assert
+		assert_eq!(events.len(), 3);
 		assert_eq!(bus.pending_count(sub_id), 7);
+	}
+
+	// ==========================================================================
+	// Subscription Limit Tests (#685)
+	// ==========================================================================
+
+	#[rstest]
+	fn test_per_plugin_subscription_limit() {
+		// Arrange: allow only 2 subscriptions per plugin
+		let bus = EventBus::with_limits(10_000, 2, 10_000);
+
+		// Act
+		bus.subscribe("a.*", "greedy-plugin").unwrap();
+		bus.subscribe("b.*", "greedy-plugin").unwrap();
+		let result = bus.subscribe("c.*", "greedy-plugin");
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(EventBusError::PerPluginLimitExceeded { limit: 2, .. })
+		));
+		assert_eq!(bus.subscription_count(), 2);
+	}
+
+	#[rstest]
+	fn test_per_plugin_limit_is_per_plugin() {
+		// Arrange: allow 2 subscriptions per plugin
+		let bus = EventBus::with_limits(10_000, 2, 10_000);
+
+		// Act - plugin-a can subscribe up to its limit
+		bus.subscribe("a.*", "plugin-a").unwrap();
+		bus.subscribe("b.*", "plugin-a").unwrap();
+
+		// plugin-b has its own separate limit
+		let result = bus.subscribe("c.*", "plugin-b");
+
+		// Assert
+		assert!(result.is_ok());
+		assert_eq!(bus.subscription_count(), 3);
+	}
+
+	#[rstest]
+	fn test_global_subscription_limit() {
+		// Arrange: allow only 3 total subscriptions
+		let bus = EventBus::with_limits(10_000, 100, 3);
+
+		// Act
+		bus.subscribe("a.*", "plugin-a").unwrap();
+		bus.subscribe("b.*", "plugin-b").unwrap();
+		bus.subscribe("c.*", "plugin-c").unwrap();
+		let result = bus.subscribe("d.*", "plugin-d");
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(EventBusError::TotalLimitExceeded { limit: 3 })
+		));
+		assert_eq!(bus.subscription_count(), 3);
+	}
+
+	#[rstest]
+	fn test_unsubscribe_frees_slot_for_new_subscription() {
+		// Arrange: allow only 2 subscriptions per plugin
+		let bus = EventBus::with_limits(10_000, 2, 10_000);
+		let id1 = bus.subscribe("a.*", "plugin-a").unwrap();
+		bus.subscribe("b.*", "plugin-a").unwrap();
+
+		// Act: unsubscribe to free a slot
+		bus.unsubscribe(id1);
+		let result = bus.subscribe("c.*", "plugin-a");
+
+		// Assert
+		assert!(result.is_ok());
+		assert_eq!(bus.subscription_count(), 2);
 	}
 }

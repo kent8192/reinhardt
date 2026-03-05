@@ -1,7 +1,8 @@
 //! Dependency injection support for migrations
 
 /// Migration configuration
-#[derive(Debug, Clone)]
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MigrationConfig {
 	pub migrations_dir: String,
 	pub auto_migrate: bool,

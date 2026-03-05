@@ -128,7 +128,7 @@ impl<M> FullTextSearchFilter<M> {
 	///
 	/// let filter: FullTextSearchFilter<Article> = FullTextSearchFilter::new()
 	///     .query("rust programming");
-	/// assert_eq!(filter.get_query(), "rust programming");
+	/// assert_eq!(filter.query, "rust programming");
 	/// ```
 	pub fn query(mut self, query: impl Into<String>) -> Self {
 		self.query = query.into();
@@ -150,7 +150,7 @@ impl<M> FullTextSearchFilter<M> {
 	/// let filter: FullTextSearchFilter<Article> = FullTextSearchFilter::new()
 	///     .add_field("title")
 	///     .add_field("content");
-	/// assert_eq!(filter.get_fields().len(), 2);
+	/// assert_eq!(filter.fields.len(), 2);
 	/// ```
 	pub fn add_field(mut self, field: impl Into<String>) -> Self {
 		self.fields.push(field.into());
@@ -194,7 +194,7 @@ impl<M> FullTextSearchFilter<M> {
 	///
 	/// let filter: FullTextSearchFilter<Article> = FullTextSearchFilter::new()
 	///     .mode(FullTextSearchMode::Boolean);
-	/// assert_eq!(filter.get_mode(), FullTextSearchMode::Boolean);
+	/// assert_eq!(filter.mode, FullTextSearchMode::Boolean);
 	/// ```
 	pub fn mode(mut self, mode: FullTextSearchMode) -> Self {
 		self.mode = mode;
@@ -215,7 +215,7 @@ impl<M> FullTextSearchFilter<M> {
 	///
 	/// let filter: FullTextSearchFilter<Article> = FullTextSearchFilter::new()
 	///     .min_score(0.5);
-	/// assert_eq!(filter.get_min_score(), Some(0.5));
+	/// assert_eq!(filter.min_score, Some(0.5));
 	/// ```
 	pub fn min_score(mut self, score: f64) -> Self {
 		self.min_score = Some(score);
@@ -236,41 +236,11 @@ impl<M> FullTextSearchFilter<M> {
 	///
 	/// let filter: FullTextSearchFilter<Article> = FullTextSearchFilter::new()
 	///     .language("english");
-	/// assert_eq!(filter.get_language(), Some("english"));
+	/// assert_eq!(filter.language.as_deref(), Some("english"));
 	/// ```
 	pub fn language(mut self, language: impl Into<String>) -> Self {
 		self.language = Some(language.into());
 		self
-	}
-
-	/// Get the search query
-	pub fn get_query(&self) -> &str {
-		&self.query
-	}
-
-	/// Get the fields to search in
-	pub fn get_fields(&self) -> &[String] {
-		&self.fields
-	}
-
-	/// Get the search mode
-	pub fn get_mode(&self) -> FullTextSearchMode {
-		self.mode
-	}
-
-	/// Get the minimum score
-	pub fn get_min_score(&self) -> Option<f64> {
-		self.min_score
-	}
-
-	/// Get the language
-	pub fn get_language(&self) -> Option<&str> {
-		self.language.as_deref()
-	}
-
-	/// Get the boost factors
-	pub fn get_boosts(&self) -> &[f64] {
-		&self.boosts
 	}
 
 	/// Get the boost for a specific field
@@ -319,18 +289,18 @@ mod tests {
 	#[test]
 	fn test_filter_creation() {
 		let filter: FullTextSearchFilter<Article> = FullTextSearchFilter::new();
-		assert_eq!(filter.get_query(), "");
-		assert_eq!(filter.get_fields().len(), 0);
-		assert_eq!(filter.get_mode(), FullTextSearchMode::Natural);
-		assert_eq!(filter.get_min_score(), None);
-		assert_eq!(filter.get_language(), None);
+		assert_eq!(filter.query, "");
+		assert_eq!(filter.fields.len(), 0);
+		assert_eq!(filter.mode, FullTextSearchMode::Natural);
+		assert_eq!(filter.min_score, None);
+		assert_eq!(filter.language, None);
 	}
 
 	#[test]
 	fn test_filter_query() {
 		let filter: FullTextSearchFilter<Article> =
 			FullTextSearchFilter::new().query("rust programming");
-		assert_eq!(filter.get_query(), "rust programming");
+		assert_eq!(filter.query, "rust programming");
 	}
 
 	#[test]
@@ -339,9 +309,9 @@ mod tests {
 			.add_field("title")
 			.add_field("content");
 
-		assert_eq!(filter.get_fields().len(), 2);
-		assert_eq!(filter.get_fields()[0], "title");
-		assert_eq!(filter.get_fields()[1], "content");
+		assert_eq!(filter.fields.len(), 2);
+		assert_eq!(filter.fields[0], "title");
+		assert_eq!(filter.fields[1], "content");
 	}
 
 	#[test]
@@ -350,7 +320,7 @@ mod tests {
 			.add_field_with_boost("title", 2.0)
 			.add_field_with_boost("content", 1.0);
 
-		assert_eq!(filter.get_fields().len(), 2);
+		assert_eq!(filter.fields.len(), 2);
 		assert_eq!(filter.get_boost(0), Some(2.0));
 		assert_eq!(filter.get_boost(1), Some(1.0));
 	}
@@ -359,27 +329,27 @@ mod tests {
 	fn test_filter_mode() {
 		let filter: FullTextSearchFilter<Article> =
 			FullTextSearchFilter::new().mode(FullTextSearchMode::Boolean);
-		assert_eq!(filter.get_mode(), FullTextSearchMode::Boolean);
+		assert_eq!(filter.mode, FullTextSearchMode::Boolean);
 
 		let filter2: FullTextSearchFilter<Article> =
 			FullTextSearchFilter::new().mode(FullTextSearchMode::Phrase);
-		assert_eq!(filter2.get_mode(), FullTextSearchMode::Phrase);
+		assert_eq!(filter2.mode, FullTextSearchMode::Phrase);
 	}
 
 	#[test]
 	fn test_filter_min_score() {
 		let filter: FullTextSearchFilter<Article> = FullTextSearchFilter::new().min_score(0.75);
-		assert_eq!(filter.get_min_score(), Some(0.75));
+		assert_eq!(filter.min_score, Some(0.75));
 	}
 
 	#[test]
 	fn test_filter_language() {
 		let filter: FullTextSearchFilter<Article> = FullTextSearchFilter::new().language("english");
-		assert_eq!(filter.get_language(), Some("english"));
+		assert_eq!(filter.language.as_deref(), Some("english"));
 
 		let filter2: FullTextSearchFilter<Article> =
 			FullTextSearchFilter::new().language("spanish");
-		assert_eq!(filter2.get_language(), Some("spanish"));
+		assert_eq!(filter2.language.as_deref(), Some("spanish"));
 	}
 
 	#[test]
@@ -392,11 +362,11 @@ mod tests {
 			.min_score(0.6)
 			.language("english");
 
-		assert_eq!(filter.get_query(), "rust web framework");
-		assert_eq!(filter.get_fields().len(), 2);
-		assert_eq!(filter.get_mode(), FullTextSearchMode::Boolean);
-		assert_eq!(filter.get_min_score(), Some(0.6));
-		assert_eq!(filter.get_language(), Some("english"));
+		assert_eq!(filter.query, "rust web framework");
+		assert_eq!(filter.fields.len(), 2);
+		assert_eq!(filter.mode, FullTextSearchMode::Boolean);
+		assert_eq!(filter.min_score, Some(0.6));
+		assert_eq!(filter.language.as_deref(), Some("english"));
 		assert_eq!(filter.get_boost(0), Some(2.0));
 		assert_eq!(filter.get_boost(1), Some(1.0));
 	}

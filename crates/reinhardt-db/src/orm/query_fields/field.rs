@@ -201,7 +201,7 @@ impl<M: Model> Field<M, String> {
 	///     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = value; }
 	/// }
 	///
-	// Lower case transformation for case-insensitive comparisons
+	/// // Lower case transformation for case-insensitive comparisons
 	/// let email_field = Field::<User, String>::new(vec!["email"]).lower();
 	/// assert_eq!(email_field.path(), &["email", "lower"]);
 	/// ```
@@ -241,7 +241,7 @@ impl<M: Model> Field<M, String> {
 	///     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = value; }
 	/// }
 	///
-	// Upper case transformation for normalization
+	/// // Upper case transformation for normalization
 	/// let code_field = Field::<Product, String>::new(vec!["code"]).upper();
 	/// assert_eq!(code_field.path(), &["code", "upper"]);
 	/// ```
@@ -281,7 +281,7 @@ impl<M: Model> Field<M, String> {
 	///     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = value; }
 	/// }
 	///
-	// Trim whitespace from both ends
+	/// // Trim whitespace from both ends
 	/// let text_field = Field::<Comment, String>::new(vec!["text"]).trim();
 	/// assert_eq!(text_field.path(), &["text", "trim"]);
 	/// ```
@@ -322,7 +322,7 @@ impl<M: Model> Field<M, String> {
 	///     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = value; }
 	/// }
 	///
-	// Get length of string field (returns Field<M, usize>)
+	/// // Get length of string field (returns Field<M, usize>)
 	/// let title_length = Field::<Post, String>::new(vec!["title"]).length();
 	/// assert_eq!(title_length.path(), &["title", "length"]);
 	/// ```

@@ -26,7 +26,9 @@ pub use email_field::EmailField;
 pub use integer_field::IntegerField;
 
 // Re-exports for advanced fields
-pub use advanced_fields::{ColorField, ComboField, DurationField, PasswordField, UUIDField};
+pub use advanced_fields::{
+	ColorField, ComboField, DurationField, PASSWORD_REDACTED, PasswordField, UUIDField,
+};
 pub use choice_field::{ChoiceField, MultipleChoiceField};
 pub use date_field::DateField;
 pub use datetime_field::DateTimeField;

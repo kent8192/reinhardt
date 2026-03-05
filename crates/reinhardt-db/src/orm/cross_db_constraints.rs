@@ -18,6 +18,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 /// Errors related to cross-database constraints
+#[non_exhaustive]
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum CrossDbError {
 	/// Foreign key relationship spans multiple databases

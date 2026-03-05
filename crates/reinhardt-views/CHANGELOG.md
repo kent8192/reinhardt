@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.1.0-rc.1...reinhardt-views@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(views)* replace std RwLock with parking_lot to prevent poisoning panics
+- *(views)* add RefUnwindSafe impl for ViewSetHandler
+- *(views)* remove unsafe keyword from RefUnwindSafe impl
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.1.0-alpha.15...reinhardt-views@v0.1.0-rc.1) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-db, reinhardt-auth, reinhardt-rest
+
+## [0.1.0-alpha.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.1.0-alpha.14...reinhardt-views@v0.1.0-alpha.15) - 2026-02-23
+
+### Maintenance
+
+- updated the following local packages: reinhardt-query, reinhardt-core, reinhardt-http, reinhardt-di, reinhardt-db, reinhardt-auth, reinhardt-utils, reinhardt-rest
+
+## [0.1.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.1.0-alpha.13...reinhardt-views@v0.1.0-alpha.14) - 2026-02-23
+
+### Maintenance
+
+- updated the following local packages: reinhardt-query, reinhardt-db, reinhardt-auth, reinhardt-rest
+
+## [0.1.0-alpha.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.1.0-alpha.12...reinhardt-views@v0.1.0-alpha.13) - 2026-02-21
+
+### Fixed
+
+- replace Box::leak with Arc to prevent memory leak
+- escape user input to prevent XSS
+
 ## [0.1.0-alpha.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.1.0-alpha.11...reinhardt-views@v0.1.0-alpha.12) - 2026-02-16
 
 ### Maintenance

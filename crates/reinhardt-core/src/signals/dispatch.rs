@@ -125,21 +125,35 @@ impl SyncSignal {
 	}
 
 	/// Send signal to all connected receivers
+	///
+	/// Receivers are collected under the lock, then the lock is released before
+	/// invoking callbacks to prevent deadlock if a callback tries to modify
+	/// the signal (connect/disconnect/send).
 	pub fn send(
 		&self,
 		sender: Option<Arc<dyn Any + Send + Sync>>,
 		kwargs: &HashMap<String, String>,
 	) -> Vec<(String, String)> {
 		self.clear_dead_receivers();
-		let receivers = self.receivers.read();
+
+		// Collect live receivers under the lock, then release it before invocation
+		let live_receivers: Vec<(Option<std::any::TypeId>, SyncReceiverFn)> = {
+			let receivers = self.receivers.read();
+			receivers
+				.iter()
+				.filter_map(|r| r.receiver.upgrade().map(|recv| (r.sender_type_id, recv)))
+				.collect()
+		};
+		// Lock is now released; safe to invoke callbacks without deadlock risk
+
 		let mut results = Vec::new();
 
-		for receiver_data in receivers.iter() {
+		for (sender_type_id, receiver) in &live_receivers {
 			// Check sender type match
-			if let Some(expected_type_id) = receiver_data.sender_type_id {
+			if let Some(expected_type_id) = sender_type_id {
 				if let Some(ref actual_sender) = sender {
 					// Must explicitly dereference Arc to get the underlying TypeId
-					if (**actual_sender).type_id() != expected_type_id {
+					if (**actual_sender).type_id() != *expected_type_id {
 						continue; // Type mismatch
 					}
 				} else {
@@ -147,35 +161,45 @@ impl SyncSignal {
 				}
 			}
 
-			if let Some(receiver) = receiver_data.receiver.upgrade() {
-				let result = receiver(sender.clone(), kwargs);
-				results.push(("receiver".to_string(), result));
-			}
+			let result = receiver(sender.clone(), kwargs);
+			results.push(("receiver".to_string(), result));
 		}
 
 		results
 	}
 
 	/// Send signal robustly (catching panics)
+	///
+	/// Receivers are collected under the lock, then the lock is released before
+	/// invoking callbacks to prevent deadlock if a callback tries to modify
+	/// the signal (connect/disconnect/send).
 	pub fn send_robust(
 		&self,
 		sender: Option<Arc<dyn Any + Send + Sync>>,
 		kwargs: &HashMap<String, String>,
 	) -> Vec<(String, Result<String, String>)> {
 		self.clear_dead_receivers();
-		let receivers = self.receivers.read();
+
+		// Collect live receivers under the lock, then release it before invocation
+		let live_receivers: Vec<SyncReceiverFn> = {
+			let receivers = self.receivers.read();
+			receivers
+				.iter()
+				.filter_map(|r| r.receiver.upgrade())
+				.collect()
+		};
+		// Lock is now released; safe to invoke callbacks without deadlock risk
+
 		let mut results = Vec::new();
 
-		for receiver_data in receivers.iter() {
-			if let Some(receiver) = receiver_data.receiver.upgrade() {
-				let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-					receiver(sender.clone(), kwargs)
-				}));
+		for receiver in &live_receivers {
+			let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				receiver(sender.clone(), kwargs)
+			}));
 
-				match result {
-					Ok(val) => results.push(("receiver".to_string(), Ok(val))),
-					Err(_) => results.push(("receiver".to_string(), Err("panic".to_string()))),
-				}
+			match result {
+				Ok(val) => results.push(("receiver".to_string(), Ok(val))),
+				Err(_) => results.push(("receiver".to_string(), Err("panic".to_string()))),
 			}
 		}
 

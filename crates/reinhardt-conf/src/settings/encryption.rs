@@ -6,6 +6,7 @@ use aes_gcm::{
 };
 use serde::{Deserialize, Serialize};
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncryptedConfig {
 	pub data: Vec<u8>,

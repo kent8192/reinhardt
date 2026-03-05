@@ -117,9 +117,13 @@ impl DMHandler {
 	async fn broadcast_to_room(&self, room_id: &str, message: Message) -> WebSocketResult<()> {
 		let manager = self.room_manager.read().await;
 		if let Some(room) = manager.get_room(room_id).await {
-			room.broadcast(message)
-				.await
-				.map_err(|e| WebSocketError::Internal(e.to_string()))?;
+			let result = room.broadcast(message).await;
+			if result.failure_count() > 0 {
+				return Err(WebSocketError::Internal(format!(
+					"broadcast failed for {} client(s)",
+					result.failure_count()
+				)));
+			}
 		}
 		Ok(())
 	}
@@ -167,10 +171,8 @@ impl DMHandler {
 #[async_trait]
 impl WebSocketConsumer for DMHandler {
 	async fn on_connect(&self, context: &mut ConsumerContext) -> WebSocketResult<()> {
-		// Extract Cookie header from WebSocket handshake
-		// TODO: Extract cookies from WebSocket connection headers
-		// For now, this is a placeholder implementation
-		let cookies = ""; // Placeholder
+		// Extract Cookie header from WebSocket handshake headers
+		let cookies = context.cookie_header().unwrap_or("");
 
 		// Authenticate user using PagesAuthenticator
 		let user = self

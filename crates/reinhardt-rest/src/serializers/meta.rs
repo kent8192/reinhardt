@@ -111,6 +111,7 @@ impl SerializerMeta for DefaultMeta {
 /// assert!(config.is_field_included("username"));
 /// assert!(config.is_read_only("id"));
 /// ```
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct MetaConfig {
 	fields: Option<Vec<String>>,

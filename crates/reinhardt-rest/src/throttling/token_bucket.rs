@@ -13,6 +13,7 @@ use tokio::sync::RwLock;
 use tokio::time::{Duration, Instant};
 
 /// Token bucket configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct TokenBucketConfig {
 	/// Maximum number of tokens in the bucket (burst capacity)

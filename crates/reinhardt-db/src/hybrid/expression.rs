@@ -11,6 +11,18 @@ pub struct SqlExpression {
 impl SqlExpression {
 	/// Creates a new SQL expression from a string
 	///
+	/// # Safety
+	///
+	/// This method embeds the `sql` string directly into generated SQL without
+	/// any escaping or parameterization. The caller **must** ensure that the
+	/// input is trusted and not derived from user-controlled data.
+	///
+	/// # SQL Injection Risk
+	///
+	/// Passing unsanitized user input to this method will result in a SQL
+	/// injection vulnerability. Always use hardcoded or application-controlled
+	/// expressions.
+	///
 	/// # Examples
 	///
 	/// ```
@@ -19,7 +31,7 @@ impl SqlExpression {
 	/// let expr = SqlExpression::new("SELECT * FROM users");
 	/// assert_eq!(expr.sql, "SELECT * FROM users");
 	///
-	// Also works with String
+	/// // Also works with String
 	/// let expr2 = SqlExpression::new(String::from("COUNT(*)"));
 	/// assert_eq!(expr2.sql, "COUNT(*)");
 	/// ```
@@ -27,6 +39,17 @@ impl SqlExpression {
 		Self { sql: sql.into() }
 	}
 	/// Creates a CONCAT SQL expression from multiple parts
+	///
+	/// # Safety
+	///
+	/// Each element in `parts` is embedded directly into the generated SQL
+	/// without escaping. The caller **must** ensure all parts are trusted
+	/// column names or SQL literals, not user-controlled data.
+	///
+	/// # SQL Injection Risk
+	///
+	/// Passing unsanitized user input in any element of `parts` will result
+	/// in a SQL injection vulnerability.
 	///
 	/// # Examples
 	///
@@ -36,7 +59,7 @@ impl SqlExpression {
 	/// let expr = SqlExpression::concat(&["first_name", "' '", "last_name"]);
 	/// assert_eq!(expr.sql, "CONCAT(first_name, ' ', last_name)");
 	///
-	// Single part
+	/// // Single part
 	/// let expr2 = SqlExpression::concat(&["column1"]);
 	/// assert_eq!(expr2.sql, "CONCAT(column1)");
 	/// ```
@@ -46,6 +69,17 @@ impl SqlExpression {
 		}
 	}
 	/// Creates a LOWER SQL expression for case-insensitive operations
+	///
+	/// # Safety
+	///
+	/// The `column` argument is embedded directly into the generated SQL
+	/// without escaping. The caller **must** ensure it is a trusted column
+	/// name, not user-controlled data.
+	///
+	/// # SQL Injection Risk
+	///
+	/// Passing unsanitized user input as `column` will result in a SQL
+	/// injection vulnerability.
 	///
 	/// # Examples
 	///
@@ -62,6 +96,17 @@ impl SqlExpression {
 	}
 	/// Creates an UPPER SQL expression for case-insensitive operations
 	///
+	/// # Safety
+	///
+	/// The `column` argument is embedded directly into the generated SQL
+	/// without escaping. The caller **must** ensure it is a trusted column
+	/// name, not user-controlled data.
+	///
+	/// # SQL Injection Risk
+	///
+	/// Passing unsanitized user input as `column` will result in a SQL
+	/// injection vulnerability.
+	///
 	/// # Examples
 	///
 	/// ```
@@ -76,6 +121,17 @@ impl SqlExpression {
 		}
 	}
 	/// Creates a COALESCE SQL expression to handle NULL values
+	///
+	/// # Safety
+	///
+	/// Both `column` and `default` are embedded directly into the generated SQL
+	/// without escaping. The caller **must** ensure both arguments are trusted
+	/// column names or SQL literals, not user-controlled data.
+	///
+	/// # SQL Injection Risk
+	///
+	/// Passing unsanitized user input as either argument will result in a SQL
+	/// injection vulnerability.
 	///
 	/// # Examples
 	///

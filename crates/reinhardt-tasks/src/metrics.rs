@@ -32,10 +32,14 @@
 //! ```
 
 use crate::{TaskId, TaskResult};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
+
+/// Maximum number of execution times to retain in the ring buffer.
+/// Prevents unbounded memory growth in long-running services.
+const MAX_EXECUTION_TIMES: usize = 10_000;
 
 /// Task count metrics
 ///
@@ -159,7 +163,7 @@ pub struct MetricsSnapshot {
 #[derive(Clone)]
 pub struct TaskMetrics {
 	task_counts: Arc<RwLock<TaskCounts>>,
-	execution_times: Arc<RwLock<Vec<Duration>>>,
+	execution_times: Arc<RwLock<VecDeque<Duration>>>,
 	queue_depths: Arc<RwLock<HashMap<String, usize>>>,
 	worker_stats: Arc<RwLock<HashMap<String, WorkerStats>>>,
 }
@@ -177,7 +181,7 @@ impl TaskMetrics {
 	pub fn new() -> Self {
 		Self {
 			task_counts: Arc::new(RwLock::new(TaskCounts::default())),
-			execution_times: Arc::new(RwLock::new(Vec::new())),
+			execution_times: Arc::new(RwLock::new(VecDeque::new())),
 			queue_depths: Arc::new(RwLock::new(HashMap::new())),
 			worker_stats: Arc::new(RwLock::new(HashMap::new())),
 		}
@@ -235,7 +239,10 @@ impl TaskMetrics {
 		counts.running = counts.running.saturating_sub(1);
 
 		let mut times = self.execution_times.write().await;
-		times.push(duration);
+		if times.len() >= MAX_EXECUTION_TIMES {
+			times.pop_front();
+		}
+		times.push_back(duration);
 
 		Ok(())
 	}
@@ -269,7 +276,10 @@ impl TaskMetrics {
 		counts.running = counts.running.saturating_sub(1);
 
 		let mut times = self.execution_times.write().await;
-		times.push(duration);
+		if times.len() >= MAX_EXECUTION_TIMES {
+			times.pop_front();
+		}
+		times.push_back(duration);
 
 		Ok(())
 	}
@@ -349,10 +359,11 @@ impl TaskMetrics {
 	/// ```
 	pub async fn snapshot(&self) -> MetricsSnapshot {
 		let counts = self.task_counts.read().await.clone();
-		let times = self.execution_times.read().await.clone();
+		let times_deque = self.execution_times.read().await.clone();
 		let depths = self.queue_depths.read().await.clone();
 		let workers = self.worker_stats.read().await.clone();
 
+		let times: Vec<Duration> = times_deque.into_iter().collect();
 		let (average, p50, p95, p99) = Self::calculate_percentiles(&times);
 
 		MetricsSnapshot {

@@ -8,6 +8,8 @@ use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::error::AdminAuth;
+#[cfg(not(target_arch = "wasm32"))]
+use super::security::generate_csrf_token;
 
 /// Get dashboard data
 ///
@@ -50,13 +52,13 @@ pub async fn get_dashboard(
 		})
 		.collect();
 
-	// Build dashboard response
-	// Note: csrf_token is None because reinhardt-pages handles CSRF automatically
+	// Build dashboard response with CSRF token for mutation requests
+	let csrf_token = generate_csrf_token();
 	Ok(DashboardResponse {
 		site_name: site.name().to_string(),
 		url_prefix: site.url_prefix().to_string(),
 		models,
-		csrf_token: None,
+		csrf_token: Some(csrf_token),
 	})
 }
 

@@ -8,9 +8,9 @@
 
 use linkme::distributed_slice;
 use reinhardt_apps::registry::{
-	find_model, get_models_for_app, get_registered_models, get_registered_relationships,
-	get_relationships_for_model, get_relationships_to_model, ModelMetadata, RelationshipMetadata,
-	RelationshipType, MODELS, RELATIONSHIPS,
+	MODELS, ModelMetadata, RELATIONSHIPS, RelationshipMetadata, RelationshipType, find_model,
+	get_models_for_app, get_registered_models, get_registered_relationships,
+	get_relationships_for_model, get_relationships_to_model,
 };
 use rstest::rstest;
 use serial_test::serial;
@@ -138,12 +138,16 @@ fn test_get_registered_relationships() {
 	assert!(relationships.len() >= 2);
 
 	// Check that our test relationships are present
-	assert!(relationships
-		.iter()
-		.any(|r| r.field_name == "author" && r.from_model == "blog.Post"));
-	assert!(relationships
-		.iter()
-		.any(|r| r.field_name == "tags" && r.from_model == "blog.Post"));
+	assert!(
+		relationships
+			.iter()
+			.any(|r| r.field_name == "author" && r.from_model == "blog.Post")
+	);
+	assert!(
+		relationships
+			.iter()
+			.any(|r| r.field_name == "tags" && r.from_model == "blog.Post")
+	);
 }
 
 #[rstest]
@@ -169,7 +173,9 @@ fn test_get_relationships_to_model() {
 	let user_rels = get_relationships_to_model("auth.User");
 	assert!(!user_rels.is_empty());
 
-	assert!(user_rels
-		.iter()
-		.any(|r| r.field_name == "author" && r.from_model == "blog.Post"));
+	assert!(
+		user_rels
+			.iter()
+			.any(|r| r.field_name == "author" && r.from_model == "blog.Post")
+	);
 }

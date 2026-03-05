@@ -189,7 +189,8 @@ async fn test_grpc_handler_missing_di_context() {
 	assert!(response.is_err());
 	let status = response.unwrap_err();
 	assert_eq!(status.code(), tonic::Code::Internal);
-	assert!(status.message().contains("DI context not set"));
+	// Security: error message should be generic, not exposing DI internals
+	assert_eq!(status.message(), "Internal server error");
 }
 
 #[tokio::test]

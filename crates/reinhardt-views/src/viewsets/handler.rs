@@ -2,6 +2,7 @@
 use crate::{Action, ViewSet};
 use async_trait::async_trait;
 use hyper::Method;
+use parking_lot::RwLock;
 use reinhardt_auth::{Permission, PermissionContext};
 use reinhardt_db::orm::{Model, query_types::DbBackend};
 use reinhardt_http::{Handler, Request, Response, Result};
@@ -11,7 +12,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 /// Handler implementation that wraps a ViewSet
 pub struct ViewSetHandler<V: ViewSet> {
@@ -28,6 +29,10 @@ pub struct ViewSetHandler<V: ViewSet> {
 	kwargs: RwLock<Option<HashMap<String, String>>>,
 	has_handled_request: RwLock<bool>,
 }
+
+// parking_lot::RwLock does not use poisoning, so ViewSetHandler
+// remains safe to use across unwind boundaries.
+impl<V: ViewSet> std::panic::RefUnwindSafe for ViewSetHandler<V> {}
 
 impl<V: ViewSet> ViewSetHandler<V> {
 	pub fn new(
@@ -49,17 +54,17 @@ impl<V: ViewSet> ViewSetHandler<V> {
 
 	/// Check if args attribute is set (for testing)
 	pub fn has_args(&self) -> bool {
-		self.args.read().unwrap().is_some()
+		self.args.read().is_some()
 	}
 
 	/// Check if kwargs attribute is set (for testing)
 	pub fn has_kwargs(&self) -> bool {
-		self.kwargs.read().unwrap().is_some()
+		self.kwargs.read().is_some()
 	}
 
 	/// Check if request attribute is set (for testing)
 	pub fn has_request(&self) -> bool {
-		*self.has_handled_request.read().unwrap()
+		*self.has_handled_request.read()
 	}
 
 	/// Check if action_map is set (for testing)
@@ -72,12 +77,12 @@ impl<V: ViewSet> ViewSetHandler<V> {
 impl<V: ViewSet + 'static> Handler for ViewSetHandler<V> {
 	async fn handle(&self, mut request: Request) -> Result<Response> {
 		// Set attributes when handling request (DRF behavior)
-		*self.has_handled_request.write().unwrap() = true;
-		*self.args.write().unwrap() = Some(Vec::new());
+		*self.has_handled_request.write() = true;
+		*self.args.write() = Some(Vec::new());
 
 		// Extract path parameters from URI
 		let kwargs = extract_path_params(&request);
-		*self.kwargs.write().unwrap() = Some(kwargs);
+		*self.kwargs.write() = Some(kwargs);
 
 		// Process middleware before ViewSet
 		if let Some(middleware) = self.viewset.get_middleware()
@@ -87,9 +92,17 @@ impl<V: ViewSet + 'static> Handler for ViewSetHandler<V> {
 		}
 
 		// Resolve action from HTTP method
-		let action_name = self.action_map.get(&request.method).ok_or_else(|| {
-			reinhardt_core::exception::Error::Http(format!("Method {} not allowed", request.method))
-		})?;
+		let action_name = match self.action_map.get(&request.method) {
+			Some(name) => name,
+			None => {
+				let allowed: Vec<String> = self.action_map.keys().map(|m| m.to_string()).collect();
+				let mut response = Response::new(hyper::StatusCode::METHOD_NOT_ALLOWED);
+				response
+					.headers
+					.insert(hyper::header::ALLOW, allowed.join(", ").parse().unwrap());
+				return Ok(response);
+			}
+		};
 
 		// Create Action from name
 		let action = Action::from_name(action_name);
@@ -115,7 +128,7 @@ fn extract_path_params(request: &Request) -> HashMap<String, String> {
 	// If we have at least 2 segments, assume second is an ID
 	if segments.len() >= 2 {
 		// Check if second segment looks like a numeric ID
-		if segments[1].parse::<i64>().is_ok() || !segments[1].is_empty() {
+		if segments[1].parse::<i64>().is_ok() {
 			params.insert("id".to_string(), segments[1].to_string());
 		}
 	}
@@ -1243,5 +1256,236 @@ where
 {
 	fn default() -> Self {
 		Self::new()
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use bytes::Bytes;
+	use hyper::{HeaderMap, Method, Version};
+	use reinhardt_http::Request;
+	use rstest::rstest;
+	use std::thread;
+
+	fn build_request(uri: &str) -> Request {
+		Request::builder()
+			.method(Method::GET)
+			.uri(uri)
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap()
+	}
+
+	#[rstest]
+	fn test_parking_lot_rwlock_does_not_poison_after_panic() {
+		// Arrange
+		// parking_lot::RwLock does not poison, so after a thread panics
+		// while holding the lock, subsequent access should succeed.
+		let lock = RwLock::new(42);
+
+		// Act - panic while holding write lock
+		let lock_ref = &lock;
+		let result = thread::scope(|s| {
+			let handle = s.spawn(|| {
+				let mut guard = lock_ref.write();
+				*guard = 100;
+				panic!("intentional panic while holding write lock");
+			});
+			let _ = handle.join(); // Thread panicked
+
+			// Assert - lock is still usable (no poisoning)
+			let value = *lock_ref.read();
+			value
+		});
+
+		// parking_lot recovers the lock after panic
+		assert!(result == 42 || result == 100);
+	}
+
+	#[rstest]
+	fn test_rwlock_concurrent_read_access() {
+		// Arrange
+		let lock = RwLock::new(String::from("test_value"));
+
+		// Act - multiple readers should not block each other
+		let guard1 = lock.read();
+		let guard2 = lock.read();
+
+		// Assert
+		assert_eq!(*guard1, "test_value");
+		assert_eq!(*guard2, "test_value");
+	}
+
+	#[rstest]
+	fn test_extract_path_params_numeric_segment_treated_as_id() {
+		// Arrange
+		let request = build_request("/resource/123/");
+
+		// Act
+		let params = extract_path_params(&request);
+
+		// Assert
+		assert_eq!(params.get("id"), Some(&"123".to_string()));
+	}
+
+	#[rstest]
+	fn test_extract_path_params_non_numeric_segment_not_treated_as_id() {
+		// Arrange
+		let request = build_request("/resource/username/");
+
+		// Act
+		let params = extract_path_params(&request);
+
+		// Assert
+		assert_eq!(params.get("id"), None);
+	}
+
+	#[rstest]
+	fn test_extract_path_params_slug_segment_not_treated_as_id() {
+		// Arrange
+		let request = build_request("/resource/my-slug/");
+
+		// Act
+		let params = extract_path_params(&request);
+
+		// Assert
+		assert_eq!(params.get("id"), None);
+	}
+
+	#[rstest]
+	fn test_extract_path_params_single_segment_no_id() {
+		// Arrange
+		let request = build_request("/resource/");
+
+		// Act
+		let params = extract_path_params(&request);
+
+		// Assert
+		assert_eq!(params.get("id"), None);
+	}
+
+	/// Minimal ViewSet implementation for testing ViewSetHandler
+	struct MockViewSet;
+
+	#[async_trait]
+	impl ViewSet for MockViewSet {
+		fn get_basename(&self) -> &str {
+			"mock"
+		}
+
+		async fn dispatch(
+			&self,
+			_request: reinhardt_http::Request,
+			_action: crate::Action,
+		) -> reinhardt_http::Result<reinhardt_http::Response> {
+			Ok(reinhardt_http::Response::ok())
+		}
+	}
+
+	/// Helper to build a ViewSetHandler with a specific action_map
+	fn build_handler(methods: Vec<Method>) -> ViewSetHandler<MockViewSet> {
+		let mut action_map = HashMap::new();
+		for method in methods {
+			action_map.insert(method, "mock_action".to_string());
+		}
+		ViewSetHandler::new(Arc::new(MockViewSet), action_map, None, None)
+	}
+
+	/// Helper to build a minimal request with the given method
+	fn build_method_request(method: Method) -> reinhardt_http::Request {
+		reinhardt_http::Request::builder()
+			.method(method)
+			.uri("/mock/")
+			.version(hyper::Version::HTTP_11)
+			.headers(hyper::HeaderMap::new())
+			.body(bytes::Bytes::new())
+			.build()
+			.unwrap()
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_unregistered_method_returns_405() {
+		// Arrange
+		let handler = build_handler(vec![Method::GET]);
+		let request = build_method_request(Method::DELETE);
+
+		// Act
+		let response = Handler::handle(&handler, request).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, hyper::StatusCode::METHOD_NOT_ALLOWED);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_405_response_allow_header_contains_registered_methods() {
+		// Arrange
+		let handler = build_handler(vec![Method::GET, Method::POST]);
+		let request = build_method_request(Method::DELETE);
+
+		// Act
+		let response = Handler::handle(&handler, request).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, hyper::StatusCode::METHOD_NOT_ALLOWED);
+		let allow_header = response
+			.headers
+			.get(hyper::header::ALLOW)
+			.expect("Allow header must be present");
+		let allow_str = allow_header.to_str().unwrap();
+		// Both registered methods must appear in the Allow header
+		assert!(allow_str.contains("GET"), "Allow header must contain GET");
+		assert!(allow_str.contains("POST"), "Allow header must contain POST");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_405_response_allow_header_comma_separated_format() {
+		// Arrange
+		let handler = build_handler(vec![Method::GET, Method::PUT]);
+		let request = build_method_request(Method::PATCH);
+
+		// Act
+		let response = Handler::handle(&handler, request).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, hyper::StatusCode::METHOD_NOT_ALLOWED);
+		let allow_header = response
+			.headers
+			.get(hyper::header::ALLOW)
+			.expect("Allow header must be present");
+		let allow_str = allow_header.to_str().unwrap();
+		// Verify comma-separated format: each method is separated by ", "
+		let methods: Vec<&str> = allow_str.split(", ").collect();
+		assert_eq!(
+			methods.len(),
+			2,
+			"Allow header must contain exactly 2 methods"
+		);
+		for method in &methods {
+			assert!(
+				*method == "GET" || *method == "PUT",
+				"Unexpected method in Allow header: {}",
+				method
+			);
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_registered_method_does_not_return_405() {
+		// Arrange
+		let handler = build_handler(vec![Method::GET]);
+		let request = build_method_request(Method::GET);
+
+		// Act
+		let response = Handler::handle(&handler, request).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, hyper::StatusCode::OK);
 	}
 }

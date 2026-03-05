@@ -1,8 +1,9 @@
 [package]
 name = "reinhardt-apps"
-version = "0.1.0-alpha.9"
+version = "0.1.0-rc.4"
 description = "Application registry and management for Reinhardt framework"
 edition.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
@@ -40,8 +41,8 @@ full = ["di"]
 di = ["dep:reinhardt-di"]
 
 [dev-dependencies]
+insta = { workspace = true }
 serial_test = { workspace = true }
 rstest = { workspace = true }
-reinhardt-test = { workspace = true }
 reinhardt-conf = { workspace = true, features = ["settings"] }
 reinhardt-core = {workspace = true, features = ["exception"]}

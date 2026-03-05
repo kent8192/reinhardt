@@ -13,8 +13,8 @@ use reinhardt_http::ViewResult;
 use reinhardt_http::{Request, Response};
 use reinhardt_macros::get;
 use reinhardt_server::{RateLimitConfig, RateLimitHandler, RateLimitStrategy};
-use reinhardt_test::fixtures::*;
 use reinhardt_test::APIClient;
+use reinhardt_test::fixtures::*;
 use reinhardt_urls::routers::ServerRouter as Router;
 use std::sync::Arc;
 use std::time::Duration;
@@ -106,8 +106,10 @@ async fn test_fixed_window_rate_limit() {
 #[tokio::test]
 async fn test_independent_client_rate_limits() {
 	// Configure rate limit: 2 requests per window
+	// Trust 127.0.0.1 (test server's loopback address) so X-Forwarded-For headers are honored
 	let router = Arc::new(Router::new().endpoint(test_handler));
-	let config = RateLimitConfig::new(2, Duration::from_secs(1), RateLimitStrategy::FixedWindow);
+	let config = RateLimitConfig::new(2, Duration::from_secs(1), RateLimitStrategy::FixedWindow)
+		.with_trusted_proxies(vec!["127.0.0.1".to_string()]);
 	let rate_limit_handler = Arc::new(RateLimitHandler::new(router, config));
 
 	let server = TestServer::builder()

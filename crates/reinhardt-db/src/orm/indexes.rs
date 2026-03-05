@@ -132,7 +132,7 @@ impl HashIndex {
 	///
 	/// let hash = HashIndex::new("user_email_hash", vec!["email".to_string()]);
 	/// assert_eq!(hash.index.name, "user_email_hash");
-	// Hash indexes are fast for equality but don't support range queries
+	/// // Hash indexes are fast for equality but don't support range queries
 	/// ```
 	pub fn new(name: impl Into<String>, fields: Vec<String>) -> Self {
 		let mut index = Index::new(name, fields);
@@ -167,7 +167,7 @@ impl GinIndex {
 	///
 	/// let gin = GinIndex::new("post_tags_gin", vec!["tags".to_string()]);
 	/// assert_eq!(gin.index.name, "post_tags_gin");
-	// GIN indexes are ideal for array and JSONB column searches
+	/// // GIN indexes are ideal for array and JSONB column searches
 	/// ```
 	pub fn new(name: impl Into<String>, fields: Vec<String>) -> Self {
 		let mut index = Index::new(name, fields);
@@ -202,7 +202,7 @@ impl GistIndex {
 	///
 	/// let gist = GistIndex::new("location_gist", vec!["coordinates".to_string()]);
 	/// assert_eq!(gist.index.name, "location_gist");
-	// GiST indexes support geometric and spatial queries
+	/// // GiST indexes support geometric and spatial queries
 	/// ```
 	pub fn new(name: impl Into<String>, fields: Vec<String>) -> Self {
 		let mut index = Index::new(name, fields);

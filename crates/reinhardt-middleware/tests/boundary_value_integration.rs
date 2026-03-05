@@ -238,11 +238,10 @@ async fn test_gzip_min_length_boundary(
 	#[case] min_length: usize,
 	#[case] should_compress: bool,
 ) {
-	let config = GZipConfig {
-		min_length,
-		compression_level: 6,
-		compressible_types: vec!["text/".to_string()],
-	};
+	let mut config = GZipConfig::default();
+	config.min_length = min_length;
+	config.compression_level = 6;
+	config.compressible_types = vec!["text/".to_string()];
 	let middleware = Arc::new(GZipMiddleware::with_config(config));
 	let handler = Arc::new(SizedResponseHandler::new(body_size, "text/html"));
 
@@ -280,11 +279,10 @@ async fn test_gzip_compression_level_boundary(
 	#[case] compression_level: u32,
 	#[case] should_compress: bool,
 ) {
-	let config = GZipConfig {
-		min_length: 100,
-		compression_level,
-		compressible_types: vec!["text/".to_string()],
-	};
+	let mut config = GZipConfig::default();
+	config.min_length = 100;
+	config.compression_level = compression_level;
+	config.compressible_types = vec!["text/".to_string()];
 	let middleware = Arc::new(GZipMiddleware::with_config(config));
 
 	// Create a compressible response larger than min_length
@@ -337,7 +335,7 @@ async fn test_circuit_breaker_error_threshold_boundary(
 	}
 
 	assert_eq!(
-		middleware.get_state(),
+		middleware.state(),
 		expected_state,
 		"CircuitBreaker should be in {:?} state after {}/{} failures (threshold: {})",
 		expected_state,
@@ -374,7 +372,7 @@ async fn test_circuit_breaker_min_requests_boundary(
 	}
 
 	assert_eq!(
-		middleware.get_state(),
+		middleware.state(),
 		expected_state,
 		"CircuitBreaker should be in {:?} state after {} requests (min_requests: {})",
 		expected_state,
@@ -409,7 +407,7 @@ async fn test_circuit_breaker_half_open_success_threshold_boundary(
 		let _ = middleware.process(request, failure_handler.clone()).await;
 	}
 	assert_eq!(
-		middleware.get_state(),
+		middleware.state(),
 		CircuitState::Open,
 		"Circuit should be open"
 	);
@@ -420,7 +418,7 @@ async fn test_circuit_breaker_half_open_success_threshold_boundary(
 	// Send success requests in HalfOpen state
 	let success_handler = Arc::new(ConfigurableTestHandler::always_success());
 	for _ in 0..success_count {
-		if middleware.get_state() == CircuitState::Closed {
+		if middleware.state() == CircuitState::Closed {
 			break; // Already closed, no need to send more
 		}
 		let request = create_test_request("GET", "/api/data");
@@ -428,7 +426,7 @@ async fn test_circuit_breaker_half_open_success_threshold_boundary(
 	}
 
 	assert_eq!(
-		middleware.get_state(),
+		middleware.state(),
 		expected_state,
 		"CircuitBreaker should be in {:?} state after {} successes (threshold: {})",
 		expected_state,
@@ -617,11 +615,10 @@ async fn test_cache_max_entries_boundary(#[case] entry_count: usize, #[case] max
 #[case::small_body(10)]
 #[tokio::test]
 async fn test_gzip_empty_body_boundary(#[case] body_size: usize) {
-	let config = GZipConfig {
-		min_length: 0, // Allow compression of any size
-		compression_level: 6,
-		compressible_types: vec!["text/".to_string()],
-	};
+	let mut config = GZipConfig::default();
+	config.min_length = 0; // Allow compression of any size
+	config.compression_level = 6;
+	config.compressible_types = vec!["text/".to_string()];
 	let middleware = Arc::new(GZipMiddleware::with_config(config));
 	let handler = Arc::new(SizedResponseHandler::new(body_size, "text/html"));
 
@@ -690,11 +687,10 @@ async fn test_rate_limit_large_capacity_boundary(#[case] capacity: usize) {
 #[cfg(feature = "compression")]
 #[tokio::test]
 async fn test_gzip_large_body_boundary() {
-	let config = GZipConfig {
-		min_length: 100,
-		compression_level: 6,
-		compressible_types: vec!["text/".to_string()],
-	};
+	let mut config = GZipConfig::default();
+	config.min_length = 100;
+	config.compression_level = 6;
+	config.compressible_types = vec!["text/".to_string()];
 	let middleware = Arc::new(GZipMiddleware::with_config(config));
 
 	// 1MB response body
@@ -806,7 +802,7 @@ async fn test_circuit_breaker_threshold_precision_boundary(
 	}
 
 	assert_eq!(
-		middleware.get_state(),
+		middleware.state(),
 		expected_state,
 		"CircuitBreaker with threshold {} should be {:?} after {}/{} failures",
 		error_threshold,

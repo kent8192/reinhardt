@@ -471,6 +471,7 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 pub type SchemaEditorResult<T> = Result<T, SchemaEditorError>;
 
 /// Errors that can occur during schema editing operations
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum SchemaEditorError {
 	/// SQL execution error

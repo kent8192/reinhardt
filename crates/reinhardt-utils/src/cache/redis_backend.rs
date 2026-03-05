@@ -240,19 +240,38 @@ impl Cache for RedisCache {
 				.await
 				.map_err(|e| Error::Http(format!("Failed to clear Redis cache: {}", e)))?;
 		} else {
-			// Delete all keys with the prefix
+			// Delete all keys with the prefix using SCAN (non-blocking) + UNLINK (async deletion)
 			let pattern = format!("{}:*", self.key_prefix);
-			let keys: Vec<String> = redis::cmd("KEYS")
-				.arg(&pattern)
-				.query_async(&mut *conn)
-				.await
-				.map_err(|e| Error::Http(format!("Failed to get keys matching pattern: {}", e)))?;
+			let mut cursor: u64 = 0;
+			/// Number of keys to scan per iteration
+			const SCAN_BATCH_SIZE: usize = 100;
 
-			if !keys.is_empty() {
-				let _: () = conn
-					.del(keys)
+			loop {
+				let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+					.arg(cursor)
+					.arg("MATCH")
+					.arg(&pattern)
+					.arg("COUNT")
+					.arg(SCAN_BATCH_SIZE)
+					.query_async(&mut *conn)
 					.await
-					.map_err(|e| Error::Http(format!("Failed to delete keys: {}", e)))?;
+					.map_err(|e| {
+						Error::Http(format!("Failed to scan keys matching pattern: {}", e))
+					})?;
+
+				if !keys.is_empty() {
+					// Use UNLINK for non-blocking asynchronous key deletion
+					let _: () = redis::cmd("UNLINK")
+						.arg(&keys)
+						.query_async(&mut *conn)
+						.await
+						.map_err(|e| Error::Http(format!("Failed to unlink keys: {}", e)))?;
+				}
+
+				cursor = next_cursor;
+				if cursor == 0 {
+					break;
+				}
 			}
 		}
 

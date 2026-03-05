@@ -115,10 +115,12 @@ fn test_catalog_context_plural() {
 	let locale: LanguageIdentifier = "de-DE".parse().unwrap();
 	let mut catalog = MessageCatalog::new(&locale.to_string());
 
-	// Context plural uses "context:msgid" as key
-	catalog.add_plural(
-		"email:message".to_string(),
-		vec!["Nachricht".to_string(), "Nachrichten".to_string()],
+	// Use explicit add_context_plural() for context-qualified entries
+	catalog.add_context_plural(
+		"email",
+		"message",
+		"messages",
+		vec!["Nachricht", "Nachrichten"],
 	);
 
 	assert_eq!(

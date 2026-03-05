@@ -10,6 +10,8 @@ use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
+use super::audit;
+#[cfg(not(target_arch = "wasm32"))]
 use super::error::{AdminAuth, MapServerFnError};
 
 /// Delete a single model instance by ID
@@ -51,10 +53,17 @@ pub async fn delete_record(
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
 
-	let affected = db
+	let user_id = auth.user_id().unwrap_or("unknown").to_string();
+
+	let result = db
 		.delete::<AdminRecord>(table_name, pk_field, &id)
 		.await
-		.map_server_fn_error()?;
+		.map_server_fn_error();
+
+	let success = result.is_ok();
+	audit::log_delete(&user_id, &model_name, &id, success);
+
+	let affected = result?;
 
 	Ok(MutationResponse {
 		success: true,
@@ -107,10 +116,19 @@ pub async fn bulk_delete_records(
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
 
-	let affected = db
-		.bulk_delete::<AdminRecord>(table_name, pk_field, request.ids)
+	let user_id = auth.user_id().unwrap_or("unknown").to_string();
+
+	let ids = request.ids;
+	let result = db
+		.bulk_delete::<AdminRecord>(table_name, pk_field, ids.clone())
 		.await
-		.map_server_fn_error()?;
+		.map_server_fn_error();
+
+	let success = result.is_ok();
+	let affected_count = result.as_ref().copied().unwrap_or(0);
+	audit::log_bulk_delete(&user_id, &model_name, &ids, affected_count, success);
+
+	let affected = result?;
 
 	Ok(BulkDeleteResponse {
 		success: true,

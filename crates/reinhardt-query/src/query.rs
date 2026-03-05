@@ -97,6 +97,7 @@ pub mod foreign_key;
 pub mod function;
 pub mod insert;
 pub mod maintenance;
+pub mod materialized_view;
 pub mod on_conflict;
 pub mod procedure;
 pub mod reindex;
@@ -129,8 +130,15 @@ pub use drop_view::DropViewStatement;
 pub use event::{AlterEventStatement, CreateEventStatement, DropEventStatement};
 pub use foreign_key::{ForeignKey, ForeignKeyCreateStatement};
 pub use function::{AlterFunctionStatement, CreateFunctionStatement, DropFunctionStatement};
-pub use insert::InsertStatement;
-pub use maintenance::{CheckTableStatement, OptimizeTableStatement, RepairTableStatement};
+pub use insert::{InsertSource, InsertStatement};
+pub use maintenance::{
+	AnalyzeStatement, CheckTableStatement, OptimizeTableStatement, RepairTableStatement,
+	VacuumStatement,
+};
+pub use materialized_view::{
+	AlterMaterializedViewStatement, CreateMaterializedViewStatement, DropMaterializedViewStatement,
+	RefreshMaterializedViewStatement,
+};
 pub use on_conflict::{OnConflict, OnConflictAction, OnConflictTarget};
 pub use procedure::{AlterProcedureStatement, CreateProcedureStatement, DropProcedureStatement};
 pub use reindex::{ReindexStatement, ReindexTarget};
@@ -808,6 +816,10 @@ impl Query {
 	///     .body("SELECT $1 + 1");
 	/// ```
 	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	/// use reinhardt_query::types::function::*;
+	///
 	/// // PL/pgSQL function with OR REPLACE and options:
 	///
 	/// let query = Query::create_function()
@@ -842,6 +854,9 @@ impl Query {
 	///     .rename_to("new_func");
 	/// ```
 	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	///
 	/// // Change function owner:
 	///
 	/// let query = Query::alter_function()
@@ -867,6 +882,9 @@ impl Query {
 	/// let query = Query::drop_function()
 	///     .name("my_func");
 	/// ```
+	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
 	///
 	/// // DROP FUNCTION with IF EXISTS and CASCADE:
 	///
@@ -898,6 +916,10 @@ impl Query {
 	///     .language(FunctionLanguage::Sql)
 	///     .body("INSERT INTO event_log (message) VALUES ($1)");
 	/// ```
+	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	/// use reinhardt_query::types::function::*;
 	///
 	/// // PL/pgSQL procedure with OR REPLACE and options:
 	///
@@ -932,6 +954,9 @@ impl Query {
 	///     .rename_to("new_proc");
 	/// ```
 	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	///
 	/// // Change procedure owner:
 	///
 	/// let query = Query::alter_procedure()
@@ -957,6 +982,9 @@ impl Query {
 	/// let query = Query::drop_procedure()
 	///     .name("my_proc");
 	/// ```
+	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
 	///
 	/// // DROP PROCEDURE with IF EXISTS and CASCADE:
 	///
@@ -985,6 +1013,9 @@ impl Query {
 	///     .name("mood")
 	///     .as_enum(vec!["happy".to_string(), "sad".to_string(), "neutral".to_string()]);
 	/// ```
+	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
 	///
 	/// // Create COMPOSITE type:
 	///
@@ -1056,6 +1087,9 @@ impl Query {
 	///     .name("mood");
 	/// ```
 	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	///
 	/// // DROP TYPE with IF EXISTS and CASCADE:
 	///
 	/// let query = Query::drop_type()
@@ -1065,6 +1099,163 @@ impl Query {
 	/// ```
 	pub fn drop_type() -> DropTypeStatement {
 		DropTypeStatement::new()
+	}
+
+	/// Construct a new [`VacuumStatement`]
+	///
+	/// **Backend support**: PostgreSQL, SQLite, CockroachDB only.
+	/// MySQL will panic with a helpful message (use `Query::optimize_table()` instead).
+	///
+	/// # Examples
+	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	///
+	/// // VACUUM (all tables)
+	/// let query = Query::vacuum();
+	///
+	/// // VACUUM users
+	/// let query = Query::vacuum()
+	///     .table("users");
+	///
+	/// // VACUUM FULL ANALYZE users
+	/// let query = Query::vacuum()
+	///     .table("users")
+	///     .full()
+	///     .analyze();
+	/// ```
+	pub fn vacuum() -> VacuumStatement {
+		VacuumStatement::new()
+	}
+
+	/// Construct a new [`AnalyzeStatement`]
+	///
+	/// **Backend support**: PostgreSQL, MySQL, SQLite, CockroachDB.
+	///
+	/// # Examples
+	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	///
+	/// // ANALYZE (all tables)
+	/// let query = Query::analyze();
+	///
+	/// // ANALYZE users
+	/// let query = Query::analyze()
+	///     .table("users");
+	///
+	/// // ANALYZE VERBOSE users
+	/// let query = Query::analyze()
+	///     .table("users")
+	///     .verbose();
+	///
+	/// // ANALYZE users (email, name)
+	/// let query = Query::analyze()
+	///     .table_columns("users", ["email", "name"]);
+	/// ```
+	pub fn analyze() -> AnalyzeStatement {
+		AnalyzeStatement::new()
+	}
+
+	/// Construct a new [`CreateMaterializedViewStatement`]
+	///
+	/// **Backend support**: PostgreSQL, CockroachDB only.
+	/// MySQL and SQLite will panic with a helpful message.
+	///
+	/// # Examples
+	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	///
+	/// let select = Query::select()
+	///     .column(Expr::col("id"))
+	///     .column(Expr::col("name"))
+	///     .from("users")
+	///     .and_where(Expr::col("active").eq(true));
+	///
+	/// let query = Query::create_materialized_view()
+	///     .name("active_users")
+	///     .as_select(select)
+	///     .if_not_exists();
+	/// ```
+	pub fn create_materialized_view() -> CreateMaterializedViewStatement {
+		CreateMaterializedViewStatement::new()
+	}
+
+	/// Construct a new [`AlterMaterializedViewStatement`]
+	///
+	/// **Backend support**: PostgreSQL, CockroachDB only.
+	/// MySQL and SQLite will panic with a helpful message.
+	///
+	/// # Examples
+	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	///
+	/// // ALTER MATERIALIZED VIEW old_mv RENAME TO new_mv
+	/// let query = Query::alter_materialized_view()
+	///     .name("old_mv")
+	///     .rename_to("new_mv");
+	///
+	/// // ALTER MATERIALIZED VIEW my_mv OWNER TO new_owner
+	/// let query = Query::alter_materialized_view()
+	///     .name("my_mv")
+	///     .owner_to("new_owner");
+	/// ```
+	pub fn alter_materialized_view() -> AlterMaterializedViewStatement {
+		AlterMaterializedViewStatement::new()
+	}
+
+	/// Construct a new [`DropMaterializedViewStatement`]
+	///
+	/// **Backend support**: PostgreSQL, CockroachDB only.
+	/// MySQL and SQLite will panic with a helpful message.
+	///
+	/// # Examples
+	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	///
+	/// // DROP MATERIALIZED VIEW my_mv
+	/// let query = Query::drop_materialized_view()
+	///     .name("my_mv");
+	///
+	/// // DROP MATERIALIZED VIEW IF EXISTS my_mv CASCADE
+	/// let query = Query::drop_materialized_view()
+	///     .name("my_mv")
+	///     .if_exists()
+	///     .cascade();
+	/// ```
+	pub fn drop_materialized_view() -> DropMaterializedViewStatement {
+		DropMaterializedViewStatement::new()
+	}
+
+	/// Construct a new [`RefreshMaterializedViewStatement`]
+	///
+	/// **Backend support**: PostgreSQL, CockroachDB only.
+	/// MySQL and SQLite will panic with a helpful message.
+	///
+	/// # Examples
+	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	///
+	/// // REFRESH MATERIALIZED VIEW my_mv
+	/// let query = Query::refresh_materialized_view()
+	///     .name("my_mv");
+	///
+	/// // REFRESH MATERIALIZED VIEW CONCURRENTLY my_mv
+	/// let query = Query::refresh_materialized_view()
+	///     .name("my_mv")
+	///     .concurrently();
+	///
+	/// // REFRESH MATERIALIZED VIEW my_mv WITH NO DATA
+	/// let query = Query::refresh_materialized_view()
+	///     .name("my_mv")
+	///     .with_data(false);
+	/// ```
+	pub fn refresh_materialized_view() -> RefreshMaterializedViewStatement {
+		RefreshMaterializedViewStatement::new()
 	}
 
 	/// Construct a new [`AttachDatabaseStatement`]
@@ -1154,6 +1345,10 @@ impl Query {
 	///     .attribute(RoleAttribute::Password("secret".to_string()));
 	/// ```
 	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	/// use reinhardt_query::dcl::*;
+	///
 	/// // MySQL CREATE ROLE:
 	///
 	/// let query = Query::create_role()
@@ -1195,6 +1390,10 @@ impl Query {
 	///     .role("developer")
 	///     .attribute(RoleAttribute::NoLogin);
 	/// ```
+	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	/// use reinhardt_query::dcl::*;
 	///
 	/// // MySQL:
 	///

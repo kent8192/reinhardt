@@ -199,11 +199,11 @@ impl Widget {
 				html.push_str(" />");
 			}
 			Widget::PasswordInput => {
+				// Security: Password fields NEVER render the value attribute
+				// to prevent password leakage in HTML source
 				html.push_str(&format!(
-					"<input type=\"password\" name=\"{}\" value=\"{}\"{}",
-					escaped_name,
-					escape_attribute(value.unwrap_or("")),
-					common_attrs
+					"<input type=\"password\" name=\"{}\"{}",
+					escaped_name, common_attrs
 				));
 				if !attrs.contains_key("id") {
 					html.push_str(&format!(" id=\"id_{}\"", escaped_name));
@@ -571,10 +571,9 @@ mod tests {
 	fn test_widget_render_html_all_widget_types_escape_value() {
 		let xss_payload = "\"><script>alert('xss')</script>";
 
-		// Test all widget types that accept a value
-		let widgets: Vec<Widget> = vec![
+		// Test widget types that render a value attribute
+		let widgets_with_value: Vec<Widget> = vec![
 			Widget::TextInput,
-			Widget::PasswordInput,
 			Widget::EmailInput,
 			Widget::NumberInput,
 			Widget::TextArea,
@@ -583,7 +582,7 @@ mod tests {
 			Widget::HiddenInput,
 		];
 
-		for widget in widgets {
+		for widget in widgets_with_value {
 			let html = widget.render_html("field", Some(xss_payload), None);
 			assert!(
 				!html.contains("<script>"),
@@ -596,6 +595,13 @@ mod tests {
 				widget
 			);
 		}
+
+		// PasswordInput intentionally does not render the value attribute
+		let password_html = Widget::PasswordInput.render_html("field", Some(xss_payload), None);
+		assert!(
+			!password_html.contains("value="),
+			"PasswordInput should never render the value attribute"
+		);
 	}
 
 	#[test]

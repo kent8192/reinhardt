@@ -54,6 +54,10 @@ impl PoolConfig {
 
 /// Email connection pool for bulk sending
 ///
+/// Concurrency control uses a `Semaphore` to atomically manage connection
+/// permits, avoiding TOCTOU race conditions that would occur with separate
+/// check-and-increment operations on an atomic counter.
+///
 /// # Examples
 ///
 /// ```rust,no_run
@@ -220,17 +224,25 @@ impl BatchSender {
 	}
 
 	/// Send emails in batches with rate limiting
+	///
+	/// Sends emails in batches of `batch_size`, applying `delay` between each batch
+	/// to avoid overwhelming the SMTP server.
 	pub async fn send_with_rate_limit(
 		&mut self,
 		messages: Vec<EmailMessage>,
 	) -> EmailResult<usize> {
 		let mut total_sent = 0;
+		let chunks: Vec<&[EmailMessage]> = messages.chunks(self.batch_size).collect();
+		let last_index = chunks.len().saturating_sub(1);
 
-		for batch in messages.chunks(self.batch_size) {
+		for (i, batch) in chunks.into_iter().enumerate() {
 			let sent = self.pool.send_bulk(batch.to_vec()).await?;
 			total_sent += sent;
 
-			if self.delay.as_millis() > 0 {}
+			// Apply rate limiting delay between batches (skip after the last batch)
+			if !self.delay.is_zero() && i < last_index {
+				tokio::time::sleep(self.delay).await;
+			}
 		}
 
 		Ok(total_sent)
@@ -240,24 +252,76 @@ impl BatchSender {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
+	use std::sync::atomic::{AtomicUsize, Ordering};
 
-	#[test]
+	#[rstest]
 	fn test_pool_config() {
+		// Arrange / Act
 		let config = PoolConfig::new()
 			.with_max_connections(20)
 			.with_min_idle(5)
 			.with_max_messages_per_connection(50);
 
+		// Assert
 		assert_eq!(config.max_connections, 20);
 		assert_eq!(config.min_idle, 5);
 		assert_eq!(config.max_messages_per_connection, 50);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_pool_config_default() {
+		// Arrange / Act
 		let config = PoolConfig::default();
+
+		// Assert
 		assert_eq!(config.max_connections, 10);
 		assert_eq!(config.min_idle, 2);
 		assert_eq!(config.max_messages_per_connection, 100);
+	}
+
+	#[tokio::test]
+	async fn test_semaphore_enforces_max_connections() {
+		// Arrange
+		let max_connections = 3;
+		let semaphore = Arc::new(Semaphore::new(max_connections));
+		let active_count = Arc::new(AtomicUsize::new(0));
+		let peak_count = Arc::new(AtomicUsize::new(0));
+		let total_tasks = 20;
+
+		// Act
+		let mut handles = Vec::new();
+		for _ in 0..total_tasks {
+			let sem = semaphore.clone();
+			let active = active_count.clone();
+			let peak = peak_count.clone();
+
+			handles.push(tokio::spawn(async move {
+				let _permit = sem.acquire().await.unwrap();
+
+				// Track the number of concurrently active tasks
+				let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+				// Update peak if this is the highest concurrency seen
+				peak.fetch_max(current, Ordering::SeqCst);
+
+				// Simulate work
+				tokio::task::yield_now().await;
+
+				active.fetch_sub(1, Ordering::SeqCst);
+			}));
+		}
+
+		for handle in handles {
+			handle.await.unwrap();
+		}
+
+		// Assert
+		let observed_peak = peak_count.load(Ordering::SeqCst);
+		assert!(
+			observed_peak <= max_connections,
+			"Peak concurrent count {} exceeded max_connections {}",
+			observed_peak,
+			max_connections
+		);
 	}
 }

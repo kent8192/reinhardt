@@ -2,7 +2,7 @@
 //!
 //! Tests for the makemigrations command execution.
 
-use super::fixtures::{temp_migration_dir, TempMigrationDir};
+use super::fixtures::{TempMigrationDir, temp_migration_dir};
 use reinhardt_commands::CommandContext;
 use rstest::*;
 use std::fs;

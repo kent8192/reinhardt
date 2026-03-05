@@ -98,7 +98,7 @@ impl<T: Model> SelectQuery<T> {
 	/// }
 	///
 	/// let query = SelectQuery::<User>::new();
-	// Query is ready for configuration
+	/// // Query is ready for configuration
 	/// ```
 	pub fn new() -> Self {
 		Self {
@@ -639,6 +639,7 @@ mod tests {
 		}
 	}
 
+	// Allow dead_code: test model struct for SQLAlchemy-style query tests
 	#[allow(dead_code)]
 	#[derive(Debug, Clone, Serialize, Deserialize)]
 	struct Post {

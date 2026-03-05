@@ -26,6 +26,7 @@ impl TestExecutor {
 		}
 	}
 
+	// Test helper method used only in specific test paths
 	#[allow(dead_code)]
 	fn execution_count(&self) -> usize {
 		*self.executed_count.lock().unwrap()
@@ -103,7 +104,7 @@ fn test_scheduler_new() {
 	// Scheduler creation should succeed (no panic)
 	assert_eq!(
 		std::mem::size_of_val(&scheduler),
-		std::mem::size_of::<Vec<()>>()
+		std::mem::size_of::<Scheduler>()
 	);
 }
 

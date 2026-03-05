@@ -14,7 +14,7 @@
 //! - **[`ReadOnlyModelViewSet`]**: Read-only operations (list and retrieve)
 //! - **[`GenericViewSet`]**: Base viewset for custom implementations
 //! - **Mixins**: Composable behaviors ([`ListMixin`], [`CreateMixin`], [`RetrieveMixin`], etc.)
-//! - **Custom Actions**: Define custom endpoints with [`@action`](crate::action) decorator
+//! - **Custom Actions**: Define custom endpoints with `@action` decorator
 //! - **Batch Operations**: Bulk create, update, and delete support
 //! - **Pagination**: Built-in pagination with configurable page sizes
 //! - **Filtering**: Field filtering and ordering support

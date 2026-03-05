@@ -126,7 +126,7 @@ impl<B: ThrottleBackend> TieredRateThrottle<B> {
 	/// assert_eq!(tier.name, "premium");
 	/// assert_eq!(tier.rate, 1000);
 	///
-	// Unknown tier returns default
+	/// // Unknown tier returns default
 	/// let unknown = throttle.get_tier("unknown");
 	/// assert_eq!(unknown.name, "free");
 	/// ```

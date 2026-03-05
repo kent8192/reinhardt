@@ -88,6 +88,8 @@
 //!     .with_middleware(Arc::new(CorsMiddleware::permissive()));
 //! ```
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 // Re-export external crates for macro support
 // Macro-generated code uses paths like `::reinhardt::reinhardt_apps::AppConfig`
 // These wrapper modules provide the namespace structure that macros expect.
@@ -103,6 +105,7 @@ pub mod reinhardt_pages {
 
 #[doc(hidden)]
 pub mod reinhardt_types {
+	// Public API surface glob re-export requires allowing unused imports and unreachable pub
 	#[allow(unused_imports, unreachable_pub)]
 	pub use reinhardt_core::types::*;
 }
@@ -270,6 +273,10 @@ pub use reinhardt_conf::settings::profile::Profile;
 pub use reinhardt_conf::settings::sources::{
 	DefaultSource, EnvSource, LowPriorityEnvSource, TomlFileSource,
 };
+
+// Re-export ApplyUpdate trait and macros
+pub use reinhardt_core::apply_update::ApplyUpdate;
+pub use reinhardt_macros::{ApplyUpdate as DeriveApplyUpdate, apply_update};
 
 // Re-export core types
 #[cfg(all(feature = "core", not(target_arch = "wasm32")))]
@@ -600,8 +607,12 @@ pub use reinhardt_auth::{
 	IsAdminUser, IsAuthenticated, PasswordHasher, Permission, PermissionsMixin, SimpleUser, User,
 };
 
-#[cfg(all(feature = "auth", not(target_arch = "wasm32")))]
-#[cfg_attr(docsrs, doc(cfg(feature = "argon2-hasher")))]
+#[cfg(all(
+	feature = "auth",
+	feature = "argon2-hasher",
+	not(target_arch = "wasm32")
+))]
+#[cfg_attr(docsrs, doc(cfg(all(feature = "auth", feature = "argon2-hasher"))))]
 pub use reinhardt_auth::Argon2Hasher;
 
 #[cfg(all(feature = "auth-jwt", not(target_arch = "wasm32")))]
@@ -848,7 +859,14 @@ pub use reinhardt_forms::{
 
 // Re-export DI and parameters (FastAPI-style parameter extraction)
 #[cfg(all(feature = "di", not(target_arch = "wasm32")))]
-pub use reinhardt_di::{Depends, DiError, DiResult, InjectionContext, RequestContext};
+pub use reinhardt_di::injected::{Injected, OptionalInjected};
+#[cfg(all(feature = "di", not(target_arch = "wasm32")))]
+pub use reinhardt_di::scope::{RequestScope, Scope, SingletonScope};
+#[cfg(all(feature = "di", not(target_arch = "wasm32")))]
+pub use reinhardt_di::{
+	Depends, DependsBuilder, DiError, DiResult, Injectable, InjectionContext,
+	InjectionContextBuilder, InjectionMetadata, RequestContext,
+};
 
 // Re-export DI params - available in minimal, standard, and di features
 #[cfg(all(

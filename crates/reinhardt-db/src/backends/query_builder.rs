@@ -217,6 +217,17 @@ impl OnConflictClause {
 	///
 	/// * `condition` - SQL condition expression
 	///
+	/// # Safety
+	///
+	/// This method embeds the `condition` string directly into the generated SQL
+	/// without any escaping or parameterization. The caller **must** ensure that
+	/// the input is trusted and not derived from user-controlled data.
+	///
+	/// # SQL Injection Risk
+	///
+	/// Passing unsanitized user input to this method will result in a SQL injection
+	/// vulnerability. Always use hardcoded or application-controlled expressions.
+	///
 	/// # Example
 	///
 	/// ```rust,ignore
@@ -353,7 +364,7 @@ impl InsertBuilder {
 		self
 	}
 
-	pub fn build(&self) -> (String, Vec<QueryValue>) {
+	pub fn build(&self) -> Result<(String, Vec<QueryValue>)> {
 		use super::types::DatabaseType;
 		use reinhardt_query::prelude::{
 			MySqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder,
@@ -370,7 +381,11 @@ impl InsertBuilder {
 		// Add values
 		if !self.values.is_empty() {
 			let sea_values: Vec<Value> = self.values.iter().map(query_value_to_sea_value).collect();
-			stmt.values(sea_values).unwrap();
+			stmt.values(sea_values).map_err(|e| {
+				super::error::DatabaseError::QueryError(format!(
+					"failed to set insert values (column/value count mismatch): {e}"
+				))
+			})?;
 		}
 
 		// Add RETURNING clause if supported
@@ -389,16 +404,20 @@ impl InsertBuilder {
 		// Add ON CONFLICT clause if specified
 		// Prefer the new OnConflictClause over the legacy OnConflictAction
 		if let Some(ref clause) = self.on_conflict_clause {
-			sql = self.apply_new_on_conflict_clause(sql, clause);
+			sql = self.apply_new_on_conflict_clause(sql, clause)?;
 		} else if let Some(ref on_conflict) = self.on_conflict {
-			sql = self.apply_on_conflict_clause(sql, on_conflict);
+			sql = self.apply_on_conflict_clause(sql, on_conflict)?;
 		}
 
-		(sql, self.values.clone())
+		Ok((sql, self.values.clone()))
 	}
 
 	/// Apply ON CONFLICT clause to SQL string based on database type
-	fn apply_on_conflict_clause(&self, mut sql: String, action: &OnConflictAction) -> String {
+	fn apply_on_conflict_clause(
+		&self,
+		mut sql: String,
+		action: &OnConflictAction,
+	) -> Result<String> {
 		use super::types::DatabaseType;
 
 		match self.backend.database_type() {
@@ -467,18 +486,21 @@ impl InsertBuilder {
 						// SQLite: ON CONFLICT DO UPDATE (SQLite 3.24.0+)
 						let conflict_str = if let Some(cols) = conflict_columns {
 							if cols.is_empty() {
-								panic!(
-									"SQLite ON CONFLICT requires non-empty conflict_columns for DO UPDATE"
-								);
+								return Err(super::error::DatabaseError::SyntaxError(
+									"SQLite ON CONFLICT requires non-empty conflict_columns for DO UPDATE".to_string(),
+								));
 							}
 							format!("({})", cols.join(", "))
 						} else {
 							// SQLite requires conflict target - skip ON CONFLICT clause
-							return sql;
+							return Ok(sql);
 						};
 
 						if update_columns.is_empty() {
-							panic!("update_columns cannot be empty for OnConflictAction::DoUpdate");
+							return Err(super::error::DatabaseError::SyntaxError(
+								"update_columns cannot be empty for OnConflictAction::DoUpdate"
+									.to_string(),
+							));
 						}
 
 						let update_str = update_columns
@@ -496,7 +518,7 @@ impl InsertBuilder {
 			}
 		}
 
-		sql
+		Ok(sql)
 	}
 
 	/// Apply new OnConflictClause to SQL string based on database type
@@ -505,7 +527,11 @@ impl InsertBuilder {
 	/// - Column-based conflict targets
 	/// - Constraint-based conflict targets (PostgreSQL only)
 	/// - WHERE clauses for conditional updates
-	fn apply_new_on_conflict_clause(&self, mut sql: String, clause: &OnConflictClause) -> String {
+	fn apply_new_on_conflict_clause(
+		&self,
+		mut sql: String,
+		clause: &OnConflictClause,
+	) -> Result<String> {
 		use super::types::DatabaseType;
 
 		match self.backend.database_type() {
@@ -583,26 +609,29 @@ impl InsertBuilder {
 						let conflict_str = match &clause.target {
 							Some(ConflictTarget::Columns(cols)) => {
 								if cols.is_empty() {
-									panic!(
-										"SQLite ON CONFLICT requires non-empty conflict_columns for DO UPDATE"
-									);
+									return Err(super::error::DatabaseError::SyntaxError(
+										"SQLite ON CONFLICT requires non-empty conflict_columns for DO UPDATE".to_string(),
+									));
 								}
 								format!("({})", cols.join(", "))
 							}
 							Some(ConflictTarget::Constraint(_)) => {
 								// SQLite doesn't support ON CONSTRAINT syntax
-								panic!("SQLite does not support ON CONFLICT ON CONSTRAINT syntax");
+								return Err(super::error::DatabaseError::NotSupported(
+									"SQLite does not support ON CONFLICT ON CONSTRAINT syntax"
+										.to_string(),
+								));
 							}
 							None => {
 								// SQLite requires conflict target for DO UPDATE
-								return sql;
+								return Ok(sql);
 							}
 						};
 
 						if update_columns.is_empty() {
-							panic!(
-								"update_columns cannot be empty for OnConflictClauseAction::DoUpdate"
-							);
+							return Err(super::error::DatabaseError::SyntaxError(
+								"update_columns cannot be empty for OnConflictClauseAction::DoUpdate".to_string(),
+							));
 						}
 
 						let update_str = update_columns
@@ -625,16 +654,16 @@ impl InsertBuilder {
 			}
 		}
 
-		sql
+		Ok(sql)
 	}
 
 	pub async fn execute(&self) -> Result<QueryResult> {
-		let (sql, params) = self.build();
+		let (sql, params) = self.build()?;
 		self.backend.execute(&sql, params).await
 	}
 
 	pub async fn fetch_one(&self) -> Result<Row> {
-		let (sql, params) = self.build();
+		let (sql, params) = self.build()?;
 		self.backend.fetch_one(&sql, params).await
 	}
 
@@ -1044,9 +1073,11 @@ impl SelectBuilder {
 			}
 		}
 
-		// Add LIMIT
-		if let Some(limit) = self.limit {
-			stmt.limit(limit as u64);
+		// Add LIMIT (only apply non-negative values)
+		if let Some(limit) = self.limit
+			&& let Ok(limit_u64) = u64::try_from(limit)
+		{
+			stmt.limit(limit_u64);
 		}
 
 		// Build SQL with inline values
@@ -1305,7 +1336,9 @@ impl AnalyzeBuilder {
 mod tests {
 	use super::*;
 	use crate::backends::backend::DatabaseBackend;
+	use crate::backends::error::DatabaseError;
 	use crate::backends::types::{DatabaseType, QueryResult, QueryValue, Row, TransactionExecutor};
+	use rstest::rstest;
 
 	// Mock transaction executor for testing
 	struct MockTransactionExecutor;
@@ -1542,7 +1575,7 @@ mod tests {
 		let builder = InsertBuilder::new(backend, "users")
 			.value("email", QueryValue::String("test@example.com".to_string()))
 			.on_conflict(OnConflictClause::columns(vec!["email"]).do_nothing());
-		let (sql, params) = builder.build();
+		let (sql, params) = builder.build().unwrap();
 
 		// Assert - verify exact SQL structure (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -1565,7 +1598,7 @@ mod tests {
 			.on_conflict(
 				OnConflictClause::columns(vec!["email"]).do_update(vec!["name", "updated_at"]),
 			);
-		let (sql, params) = builder.build();
+		let (sql, params) = builder.build().unwrap();
 
 		// Assert - verify exact SQL structure with EXCLUDED references (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -1589,7 +1622,7 @@ mod tests {
 					.do_update(vec!["version"])
 					.where_clause("users.version < EXCLUDED.version"),
 			);
-		let (sql, params) = builder.build();
+		let (sql, params) = builder.build().unwrap();
 
 		// Assert - verify WHERE clause is appended correctly (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -1608,7 +1641,7 @@ mod tests {
 		let builder = InsertBuilder::new(backend, "users")
 			.value("email", QueryValue::String("test@example.com".to_string()))
 			.on_conflict(OnConflictClause::constraint("users_email_key").do_update(vec!["name"]));
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - verify ON CONSTRAINT syntax (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -1626,7 +1659,7 @@ mod tests {
 		let builder = InsertBuilder::new(backend, "users")
 			.value("email", QueryValue::String("test@example.com".to_string()))
 			.on_conflict(OnConflictClause::any().do_nothing());
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - verify no conflict target specified (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -1647,7 +1680,7 @@ mod tests {
 			.on_conflict(
 				OnConflictClause::columns(vec!["tenant_id", "email"]).do_update(vec!["name"]),
 			);
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - verify multiple conflict columns (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -1670,7 +1703,7 @@ mod tests {
 				"updated_at",
 				"version",
 			]));
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - verify all update columns are included (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -1692,7 +1725,7 @@ mod tests {
 		let builder = InsertBuilder::new(backend, "users")
 			.value("email", QueryValue::String("test@example.com".to_string()))
 			.on_conflict(OnConflictClause::columns(vec!["email"]).do_nothing());
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - MySQL uses INSERT IGNORE syntax (reinhardt-query uses parameterized queries)
 		assert_eq!(sql, "INSERT IGNORE INTO `users` (`email`) VALUES (?)");
@@ -1707,7 +1740,7 @@ mod tests {
 		let builder = InsertBuilder::new(backend, "users")
 			.value("email", QueryValue::String("test@example.com".to_string()))
 			.on_conflict(OnConflictClause::columns(vec!["email"]).do_update(vec!["name"]));
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - MySQL uses ON DUPLICATE KEY UPDATE with VALUES() function (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -1729,7 +1762,7 @@ mod tests {
 				"email",
 				"updated_at",
 			]));
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - verify multiple update columns with VALUES() syntax (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -1751,7 +1784,7 @@ mod tests {
 					.do_update(vec!["name"])
 					.where_clause("users.version < VALUES(version)"),
 			);
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - WHERE clause is ignored for MySQL (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -1774,7 +1807,7 @@ mod tests {
 		let builder = InsertBuilder::new(backend, "users")
 			.value("email", QueryValue::String("test@example.com".to_string()))
 			.on_conflict(OnConflictClause::columns(vec!["email"]).do_nothing());
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - SQLite uses INSERT OR IGNORE syntax (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -1792,7 +1825,7 @@ mod tests {
 		let builder = InsertBuilder::new(backend, "users")
 			.value("email", QueryValue::String("test@example.com".to_string()))
 			.on_conflict(OnConflictClause::columns(vec!["email"]).do_update(vec!["name"]));
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - SQLite uses lowercase 'excluded' pseudo-table (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -1814,7 +1847,7 @@ mod tests {
 					.do_update(vec!["version"])
 					.where_clause("users.version < excluded.version"),
 			);
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - SQLite supports WHERE clause (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -1835,7 +1868,7 @@ mod tests {
 			.on_conflict(
 				OnConflictClause::columns(vec!["tenant_id", "email"]).do_update(vec!["name"]),
 			);
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - verify multiple conflict columns (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -1853,7 +1886,7 @@ mod tests {
 		let builder = InsertBuilder::new(backend, "users")
 			.value("email", QueryValue::String("test@example.com".to_string()))
 			.on_conflict(OnConflictClause::any().do_nothing());
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - SQLite uses INSERT OR IGNORE even with any() target (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -1875,7 +1908,7 @@ mod tests {
 		let builder = InsertBuilder::new(backend, "users")
 			.value("email", QueryValue::String("test@example.com".to_string()))
 			.on_conflict_do_nothing(Some(vec!["email".to_string()]));
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - legacy API should still work (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -1896,7 +1929,7 @@ mod tests {
 				Some(vec!["email".to_string()]),
 				vec!["name".to_string(), "updated_at".to_string()],
 			);
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - legacy API should still work (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -1915,7 +1948,7 @@ mod tests {
 			.value("email", QueryValue::String("test@example.com".to_string()))
 			.on_conflict_do_nothing(Some(vec!["email".to_string()])) // legacy
 			.on_conflict(OnConflictClause::columns(vec!["email"]).do_update(vec!["name"])); // new
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - new API should be used (DO UPDATE, not DO NOTHING)
 		assert!(sql.contains("DO UPDATE SET"));
@@ -1935,7 +1968,7 @@ mod tests {
 		let builder = InsertBuilder::new(backend, "users")
 			.value("id", QueryValue::Int(1))
 			.on_conflict(OnConflictClause::columns(vec!["id"]).do_update(vec!["name"]));
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -1954,7 +1987,7 @@ mod tests {
 			.value("email", QueryValue::String("test@example.com".to_string()))
 			.returning(vec!["id", "created_at"])
 			.on_conflict(OnConflictClause::columns(vec!["email"]).do_update(vec!["name"]));
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - RETURNING should come before ON CONFLICT in reinhardt-query output
 		assert!(sql.contains("RETURNING"));
@@ -1971,7 +2004,7 @@ mod tests {
 			.value("email", QueryValue::String("test@example.com".to_string()))
 			.value("name", QueryValue::Null)
 			.on_conflict(OnConflictClause::columns(vec!["email"]).do_update(vec!["name"]));
-		let (sql, params) = builder.build();
+		let (sql, params) = builder.build().unwrap();
 
 		// Assert
 		assert!(sql.contains("ON CONFLICT (email) DO UPDATE SET"));
@@ -1989,7 +2022,7 @@ mod tests {
 			.value("key", QueryValue::String("visits".to_string()))
 			.value("count", QueryValue::Int(1))
 			.on_conflict(OnConflictClause::columns(vec!["key"]).do_update(vec!["count"]));
-		let (sql, params) = builder.build();
+		let (sql, params) = builder.build().unwrap();
 
 		// Assert (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -2015,7 +2048,7 @@ mod tests {
 						"documents.version < EXCLUDED.version AND documents.locked = false",
 					),
 			);
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - complex WHERE with AND condition (reinhardt-query uses parameterized queries)
 		assert_eq!(
@@ -2040,7 +2073,7 @@ mod tests {
 		let builder = InsertBuilder::new(backend, "users")
 			.value("email", QueryValue::String("test@example.com".to_string()))
 			.on_conflict(clause);
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - last action (do_update) should be used
 		assert!(sql.contains("DO UPDATE SET"));
@@ -2059,7 +2092,7 @@ mod tests {
 		let builder = InsertBuilder::new(backend, "users")
 			.value("email", QueryValue::String("test@example.com".to_string()))
 			.on_conflict(clause);
-		let (sql, _) = builder.build();
+		let (sql, _) = builder.build().unwrap();
 
 		// Assert - last action (do_nothing) should be used
 		assert!(sql.contains("DO NOTHING"));
@@ -2091,21 +2124,21 @@ mod tests {
 		let builder1 = InsertBuilder::new(backend1, "t")
 			.value("x", QueryValue::Int(1))
 			.on_conflict(columns_clause.do_nothing());
-		let (sql1, _) = builder1.build();
+		let (sql1, _) = builder1.build().unwrap();
 		assert!(sql1.contains("ON CONFLICT (a, b) DO NOTHING"));
 
 		let backend2: Arc<dyn DatabaseBackend> = Arc::new(MockBackend);
 		let builder2 = InsertBuilder::new(backend2, "t")
 			.value("x", QueryValue::Int(1))
 			.on_conflict(constraint_clause.do_nothing());
-		let (sql2, _) = builder2.build();
+		let (sql2, _) = builder2.build().unwrap();
 		assert!(sql2.contains("ON CONFLICT ON CONSTRAINT my_constraint DO NOTHING"));
 
 		let backend3: Arc<dyn DatabaseBackend> = Arc::new(MockBackend);
 		let builder3 = InsertBuilder::new(backend3, "t")
 			.value("x", QueryValue::Int(1))
 			.on_conflict(any_clause.do_nothing());
-		let (sql3, _) = builder3.build();
+		let (sql3, _) = builder3.build().unwrap();
 		assert!(sql3.contains("ON CONFLICT DO NOTHING"));
 	}
 
@@ -2124,7 +2157,7 @@ mod tests {
 			.value("name", QueryValue::String("John".to_string()))
 			.value("active", QueryValue::Bool(true))
 			.on_conflict(OnConflictClause::columns(vec!["id"]).do_update(vec!["name", "active"]));
-		let (_, params) = builder.build();
+		let (_, params) = builder.build().unwrap();
 
 		// Assert - all parameters should be preserved in order
 		assert_eq!(params.len(), 3);
@@ -2478,5 +2511,162 @@ mod tests {
 
 		// Assert
 		assert!(sql.contains("ON CONFLICT (id) DO NOTHING"));
+	}
+
+	// ==========================================
+	// Error Handling Tests - Panics Replaced with Result Errors
+	// ==========================================
+
+	#[rstest]
+	#[test]
+	fn test_sqlite_empty_conflict_columns_returns_error() {
+		// Arrange
+		let backend: Arc<dyn DatabaseBackend> = Arc::new(MockSqliteBackend);
+		let builder = InsertBuilder::new(backend, "users")
+			.value("email", QueryValue::String("test@example.com".to_string()))
+			.on_conflict_do_update(
+				Some(vec![]), // empty conflict columns
+				vec!["name".to_string()],
+			);
+
+		// Act
+		let result = builder.build();
+
+		// Assert: Should return error instead of panicking
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(matches!(err, DatabaseError::SyntaxError(_)));
+	}
+
+	#[rstest]
+	#[test]
+	fn test_sqlite_empty_update_columns_returns_error() {
+		// Arrange
+		let backend: Arc<dyn DatabaseBackend> = Arc::new(MockSqliteBackend);
+		let builder = InsertBuilder::new(backend, "users")
+			.value("email", QueryValue::String("test@example.com".to_string()))
+			.on_conflict_do_update(
+				Some(vec!["email".to_string()]),
+				vec![], // empty update columns
+			);
+
+		// Act
+		let result = builder.build();
+
+		// Assert: Should return error instead of panicking
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(matches!(err, DatabaseError::SyntaxError(_)));
+	}
+
+	#[rstest]
+	#[test]
+	fn test_sqlite_constraint_target_returns_error() {
+		// Arrange
+		let backend: Arc<dyn DatabaseBackend> = Arc::new(MockSqliteBackend);
+		let builder = InsertBuilder::new(backend, "users")
+			.value("email", QueryValue::String("test@example.com".to_string()))
+			.on_conflict(OnConflictClause::constraint("users_email_key").do_update(vec!["name"]));
+
+		// Act
+		let result = builder.build();
+
+		// Assert: Should return NotSupported error instead of panicking
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(matches!(err, DatabaseError::NotSupported(_)));
+	}
+
+	#[rstest]
+	#[test]
+	fn test_sqlite_empty_conflict_columns_new_api_returns_error() {
+		// Arrange
+		let backend: Arc<dyn DatabaseBackend> = Arc::new(MockSqliteBackend);
+		let empty_cols: Vec<String> = vec![];
+		let builder = InsertBuilder::new(backend, "users")
+			.value("email", QueryValue::String("test@example.com".to_string()))
+			.on_conflict(OnConflictClause::columns(empty_cols).do_update(vec!["name"]));
+
+		// Act
+		let result = builder.build();
+
+		// Assert: Should return error instead of panicking
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(matches!(err, DatabaseError::SyntaxError(_)));
+	}
+
+	#[rstest]
+	#[test]
+	fn test_sqlite_empty_update_columns_new_api_returns_error() {
+		// Arrange
+		let backend: Arc<dyn DatabaseBackend> = Arc::new(MockSqliteBackend);
+		let empty_update: Vec<String> = vec![];
+		let builder = InsertBuilder::new(backend, "users")
+			.value("email", QueryValue::String("test@example.com".to_string()))
+			.on_conflict(OnConflictClause::columns(vec!["email"]).do_update(empty_update));
+
+		// Act
+		let result = builder.build();
+
+		// Assert: Should return error instead of panicking
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(matches!(err, DatabaseError::SyntaxError(_)));
+	}
+
+	#[rstest]
+	#[test]
+	fn test_postgres_build_succeeds_with_valid_input() {
+		// Arrange
+		let backend: Arc<dyn DatabaseBackend> = Arc::new(MockBackend);
+		let builder = InsertBuilder::new(backend, "users")
+			.value("email", QueryValue::String("test@example.com".to_string()))
+			.on_conflict(OnConflictClause::columns(vec!["email"]).do_update(vec!["name"]));
+
+		// Act
+		let result = builder.build();
+
+		// Assert: Should succeed for PostgreSQL
+		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	fn test_insert_build_succeeds_with_matching_columns_and_values() {
+		// Arrange
+		let backend: Arc<dyn DatabaseBackend> = Arc::new(MockBackend);
+		let builder = InsertBuilder::new(backend, "users")
+			.value("name", QueryValue::String("Alice".to_string()))
+			.value("email", QueryValue::String("alice@example.com".to_string()));
+
+		// Act
+		let result = builder.build();
+
+		// Assert
+		assert!(result.is_ok());
+		let (sql, params) = result.unwrap();
+		assert!(sql.contains("\"name\""));
+		assert!(sql.contains("\"email\""));
+		assert_eq!(params.len(), 2);
+	}
+
+	#[rstest]
+	fn test_insert_build_returns_error_on_column_value_mismatch() {
+		// Arrange: manually create a mismatch between columns and values
+		let backend: Arc<dyn DatabaseBackend> = Arc::new(MockBackend);
+		let mut builder = InsertBuilder::new(backend, "users");
+		builder.columns = vec!["name".to_string(), "email".to_string()];
+		// Only one value for two columns
+		builder.values = vec![QueryValue::String("Alice".to_string())];
+
+		// Act
+		let result = builder.build();
+
+		// Assert: should return an error, not panic
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(
+			matches!(err, DatabaseError::QueryError(ref msg) if msg.contains("column/value count mismatch"))
+		);
 	}
 }

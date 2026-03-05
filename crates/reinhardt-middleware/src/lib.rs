@@ -76,13 +76,39 @@
 //!     .with_middleware(csrf);
 //! ```
 //!
+//! ## Architecture
+//!
+//! Key modules in this crate:
+//!
+//! - [`allowed_hosts`]: Restrict requests to configured host names
+//! - [`auth`]: Session-based user authentication (requires `sessions` feature)
+//! - [`cache`]: HTTP response caching with configurable key strategies
+//! - [`circuit_breaker`]: Circuit breaker pattern for fault-tolerant backends
+//! - [`common`]: Common HTTP functionality (trailing slash, URL normalization)
+//! - [`cors`]: Cross-Origin Resource Sharing headers (requires `cors` feature)
+//! - [`csp`]: Content Security Policy header generation
+//! - [`csrf`]: CSRF token validation and protection
+//! - [`etag`]: ETag generation and conditional request handling
+//! - [`logging`]: Structured request/response logging
+//! - [`metrics`]: Performance metrics collection and export
+//! - [`rate_limit`]: API rate limiting (requires `rate-limit` feature)
+//! - [`request_id`]: Unique request ID generation and propagation
+//! - [`session`]: Session management with pluggable storage backends
+//! - [`timeout`]: Request timeout enforcement
+//! - [`tracing`]: Distributed tracing with trace/span ID propagation
+//! - [`xframe`]: X-Frame-Options clickjacking protection
+//!
 //! ## Feature Flags
 //!
-//! - **`cors`**: Enable CORS middleware
-//! - **`compression`**: Enable GZip and Brotli compression middleware
-//! - **`rate-limit`**: Enable rate limiting middleware
-//! - **`security`**: Enable combined security middleware
-//! - **`sessions`**: Enable session-based authentication middleware
+//! | Feature | Default | Description |
+//! |---------|---------|-------------|
+//! | `cors` | disabled | Cross-Origin Resource Sharing middleware |
+//! | `compression` | disabled | GZip and Brotli compression middleware |
+//! | `rate-limit` | disabled | API rate limiting middleware |
+//! | `security` | disabled | Combined security headers middleware |
+//! | `sessions` | disabled | Session-based authentication middleware |
+//! | `sqlx` | disabled | Database-backed session storage via SQLx |
+//! | `full` | disabled | Enables all middleware features |
 //!
 //! ## Middleware Ordering
 //!

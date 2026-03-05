@@ -4,7 +4,7 @@
 //! These tests use TestContainers for database isolation.
 
 use super::fixtures::{
-	migrate_command_fixture, migrate_command_with_migrations, MigrateCommandFixture,
+	MigrateCommandFixture, migrate_command_fixture, migrate_command_with_migrations,
 };
 use reinhardt_commands::{BaseCommand, CommandContext, MigrateCommand};
 use reinhardt_test::fixtures::postgres_container;

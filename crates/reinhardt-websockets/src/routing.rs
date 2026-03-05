@@ -16,11 +16,11 @@ pub type RouteResult = Result<(), RouteError>;
 /// Routing errors
 #[derive(Debug, thiserror::Error)]
 pub enum RouteError {
-	#[error("Route not found: {0}")]
+	#[error("Route not found")]
 	NotFound(String),
-	#[error("Route already exists: {0}")]
+	#[error("Route already exists")]
 	AlreadyExists(String),
-	#[error("Invalid route pattern: {0}")]
+	#[error("Invalid route pattern")]
 	InvalidPattern(String),
 }
 
@@ -80,6 +80,11 @@ impl WebSocketRoute {
 
 /// WebSocket router for managing routes
 ///
+/// Supports an optional middleware chain that is applied to all WebSocket
+/// upgrade requests before establishing the connection. This ensures that
+/// HTTP-level middleware (authentication, IP filtering, rate limiting) is
+/// not bypassed by WebSocket upgrades.
+///
 /// # Examples
 ///
 /// ```
@@ -103,6 +108,8 @@ impl WebSocketRoute {
 pub struct WebSocketRouter {
 	routes: Arc<RwLock<HashMap<String, WebSocketRoute>>>,
 	names: Arc<RwLock<HashMap<String, String>>>, // name -> path mapping
+	/// Middleware chain applied to upgrade requests before WebSocket handshake
+	middleware: Option<Arc<crate::middleware::MiddlewareChain>>,
 }
 
 impl WebSocketRouter {
@@ -111,7 +118,19 @@ impl WebSocketRouter {
 		Self {
 			routes: Arc::new(RwLock::new(HashMap::new())),
 			names: Arc::new(RwLock::new(HashMap::new())),
+			middleware: None,
 		}
+	}
+
+	/// Set the middleware chain applied to upgrade requests before WebSocket handshake
+	pub fn with_middleware(mut self, middleware: crate::middleware::MiddlewareChain) -> Self {
+		self.middleware = Some(Arc::new(middleware));
+		self
+	}
+
+	/// Get a reference to the middleware chain, if configured
+	pub fn middleware(&self) -> Option<&Arc<crate::middleware::MiddlewareChain>> {
+		self.middleware.as_ref()
 	}
 
 	/// Register a WebSocket route

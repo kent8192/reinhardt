@@ -225,9 +225,22 @@ where
 	pub async fn close(&self) {
 		self.pool.close().await;
 	}
-	/// Get the database URL
+	/// Get the database URL with password masked for safe display
 	///
-	pub fn url(&self) -> &str {
+	/// Returns the database URL with any password replaced by `***`
+	/// to prevent credential exposure in logs and debug output.
+	/// Use `url_raw()` when the actual password is needed for reconnection.
+	pub fn url(&self) -> String {
+		crate::pool::pool::mask_url_password(&self.url)
+	}
+
+	/// Get the raw database URL including credentials
+	///
+	/// This method returns the unmasked URL containing the actual password.
+	/// Use with caution - prefer `url()` for logging and display purposes.
+	// Allow dead_code: preserved for internal use by reconnection logic (e.g., `recreate()`)
+	#[allow(dead_code)]
+	pub(crate) fn url_raw(&self) -> &str {
 		&self.url
 	}
 }

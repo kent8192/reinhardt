@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.1.0-rc.1...reinhardt-websockets@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(websockets)* release connection slot on disconnect in RateLimitMiddleware
+- *(websockets)* add non_exhaustive to ConnectionContext
+- *(websockets)* release lock before send in Room::send_to
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.1.0-alpha.16...reinhardt-websockets@v0.1.0-rc.1) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-auth, reinhardt-pages
+
+## [0.1.0-alpha.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.1.0-alpha.15...reinhardt-websockets@v0.1.0-alpha.16) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-pages
+
+## [0.1.0-alpha.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.1.0-alpha.14...reinhardt-websockets@v0.1.0-alpha.15) - 2026-02-23
+
+### Maintenance
+
+- updated the following local packages: reinhardt-di, reinhardt-auth, reinhardt-pages
+
+## [0.1.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.1.0-alpha.13...reinhardt-websockets@v0.1.0-alpha.14) - 2026-02-23
+
+### Maintenance
+
+- updated the following local packages: reinhardt-auth, reinhardt-pages
+
+## [0.1.0-alpha.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.1.0-alpha.12...reinhardt-websockets@v0.1.0-alpha.13) - 2026-02-21
+
+### Added
+
+- add default rate limiting for websocket connections
+
+### Fixed
+
+- apply middleware to upgrade and add graceful shutdown
+- fix missing match arms in connection state machine
+- add match arms for BinaryPayload, HeartbeatTimeout, SlowConsumer
+- add error handling for connection, room, and consumer operations
+- resolve clippy warnings across workspace
+- implement auto-reconnect with exponential backoff
+- add connection timeout for WebSocket (#508)
+- handle partial failure in room broadcast (#511)
+
+### Security
+
+- add authentication support for Redis channel layer
+- add compression negotiation limits with size-bounded decompression
+- add configurable ping/pong keepalive intervals
+- sanitize error messages to prevent internal state leakage
+- fix concurrency races, overflow, and resource exhaustion vulnerabilities
+- enable default message size limits
+- add origin header validation
+
+### Styling
+
+- apply formatting to files introduced by merge from main
+- apply rustfmt to pre-existing formatting violations in 16 files
+- apply rustfmt after clippy auto-fix
+- fix remaining clippy warnings across workspace
+- apply rustfmt formatting to workspace files
+- apply rustfmt formatting to 146 files
+- apply rstest convention to new tests
+- fix rustfmt formatting in connection.rs
+
 ## [0.1.0-alpha.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.1.0-alpha.11...reinhardt-websockets@v0.1.0-alpha.12) - 2026-02-16
 
 ### Maintenance

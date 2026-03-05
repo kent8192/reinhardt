@@ -90,13 +90,12 @@ proptest! {
 		rt.block_on(async {
 			use reinhardt_middleware::cors::{CorsConfig, CorsMiddleware};
 
-			let config = CorsConfig {
-				allow_origins: vec!["https://example.com".to_string()],
-				allow_methods: vec!["GET".to_string(), "POST".to_string()],
-				allow_headers: vec!["Content-Type".to_string()],
-				allow_credentials: false,
-				max_age: Some(3600),
-			};
+			let mut config = CorsConfig::default();
+			config.allow_origins = vec!["https://example.com".to_string()];
+			config.allow_methods = vec!["GET".to_string(), "POST".to_string()];
+			config.allow_headers = vec!["Content-Type".to_string()];
+			config.allow_credentials = false;
+			config.max_age = Some(3600);
 
 			let middleware = Arc::new(CorsMiddleware::new(config));
 			let handler = Arc::new(ConfigurableTestHandler::always_success());
@@ -122,13 +121,12 @@ proptest! {
 
 			let origin = format!("{}{}{}", protocol, host, suffix);
 
-			let config = CorsConfig {
-				allow_origins: vec!["https://trusted.com".to_string()],
-				allow_methods: vec!["GET".to_string()],
-				allow_headers: vec![],
-				allow_credentials: false,
-				max_age: None,
-			};
+			let mut config = CorsConfig::default();
+			config.allow_origins = vec!["https://trusted.com".to_string()];
+			config.allow_methods = vec!["GET".to_string()];
+			config.allow_headers = vec![];
+			config.allow_credentials = false;
+			config.max_age = None;
 
 			let middleware = Arc::new(CorsMiddleware::new(config));
 			let handler = Arc::new(ConfigurableTestHandler::always_success());
@@ -203,15 +201,7 @@ proptest! {
 		rt.block_on(async {
 			use reinhardt_middleware::rate_limit::{RateLimitConfig, RateLimitMiddleware, RateLimitStrategy};
 
-			let config = RateLimitConfig {
-				capacity: 100.0,
-				refill_rate: 10.0,
-				cost_per_request: 1.0,
-				strategy: RateLimitStrategy::PerIp,
-				exclude_paths: vec![],
-				error_message: None,
-				trusted_proxies: vec![],
-			};
+			let config = RateLimitConfig::new(RateLimitStrategy::PerIp, 100.0, 10.0);
 
 			let middleware = Arc::new(RateLimitMiddleware::new(config));
 			let handler = Arc::new(ConfigurableTestHandler::always_success());
@@ -234,15 +224,7 @@ proptest! {
 		rt.block_on(async {
 			use reinhardt_middleware::rate_limit::{RateLimitConfig, RateLimitMiddleware, RateLimitStrategy};
 
-			let config = RateLimitConfig {
-				capacity: 100.0,
-				refill_rate: 10.0,
-				cost_per_request: 1.0,
-				strategy: RateLimitStrategy::PerIp,
-				exclude_paths: vec![],
-				error_message: None,
-				trusted_proxies: vec![],
-			};
+			let config = RateLimitConfig::new(RateLimitStrategy::PerIp, 100.0, 10.0);
 
 			let middleware = Arc::new(RateLimitMiddleware::new(config));
 			let handler = Arc::new(ConfigurableTestHandler::always_success());
@@ -422,9 +404,7 @@ proptest! {
 			use reinhardt_middleware::timeout::{TimeoutConfig, TimeoutMiddleware};
 			use std::time::Duration;
 
-			let config = TimeoutConfig {
-				duration: Duration::from_millis(ms),
-			};
+			let config = TimeoutConfig::new(Duration::from_millis(ms));
 
 			let middleware = Arc::new(TimeoutMiddleware::new(config));
 			let handler = Arc::new(ConfigurableTestHandler::always_success());

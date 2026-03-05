@@ -85,7 +85,7 @@ Related to: #
 <!-- Before submitting, verify that you have: -->
 
 - [ ] I have followed the [Contributing Guidelines](../blob/main/CONTRIBUTING.md)
-- [ ] I have followed the [Commit Guidelines](../blob/main/docs/COMMIT_GUIDELINE.md)
+- [ ] I have followed the [Commit Guidelines](../blob/main/instructions/COMMIT_GUIDELINE.md)
 - [ ] I have updated the documentation (if applicable)
 - [ ] My changes generate no new warnings
 - [ ] I have added tests that prove my fix is effective or that my feature works

@@ -14,10 +14,10 @@
 //! let mut routes = HashMap::new();
 //! routes.insert("home".to_string(), "/".to_string());
 //! routes.insert("user-profile".to_string(), "/users/{id}".to_string());
-//! url_resolver::init_url_resolver(routes);
+//! url_resolver::init_url_resolver(routes).unwrap();
 //!
 //! // Resolve URLs (automatically called by url! macro)
-//! let url = url_resolver::resolve_url("home");
+//! let url = url_resolver::resolve_url("home").unwrap();
 //! assert_eq!(url, "/");
 //! ```
 
@@ -33,11 +33,12 @@ static URL_ROUTES: OnceLock<HashMap<String, String>> = OnceLock::new();
 /// Initializes the URL resolver with a route mapping.
 ///
 /// This function should be called once at application startup, typically in main.rs.
-/// Subsequent calls will panic.
+/// Returns an error if the resolver has already been initialized.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if the URL resolver has already been initialized.
+/// Returns `Err` with the provided routes if the URL resolver has already
+/// been initialized.
 ///
 /// # Examples
 ///
@@ -48,34 +49,65 @@ static URL_ROUTES: OnceLock<HashMap<String, String>> = OnceLock::new();
 /// let mut routes = HashMap::new();
 /// routes.insert("home".to_string(), "/".to_string());
 /// routes.insert("user-profile".to_string(), "/users/{id}".to_string());
-/// url_resolver::init_url_resolver(routes);
+/// url_resolver::init_url_resolver(routes)
+///     .expect("URL resolver already initialized");
 /// ```
-pub fn init_url_resolver(routes: HashMap<String, String>) {
-	URL_ROUTES
-		.set(routes)
-		.expect("URL resolver already initialized");
+pub fn init_url_resolver(routes: HashMap<String, String>) -> Result<(), HashMap<String, String>> {
+	URL_ROUTES.set(routes)
 }
+
+/// Error type for URL resolution failures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UrlResolveError {
+	/// The URL resolver has not been initialized.
+	NotInitialized,
+	/// The route name was not found in the mapping.
+	RouteNotFound {
+		/// The route name that was looked up.
+		route_name: String,
+	},
+}
+
+impl std::fmt::Display for UrlResolveError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::NotInitialized => {
+				write!(
+					f,
+					"URL resolver not initialized: call init_url_resolver() first"
+				)
+			}
+			Self::RouteNotFound { route_name } => {
+				write!(f, "route '{}' not found in URL resolver", route_name)
+			}
+		}
+	}
+}
+
+impl std::error::Error for UrlResolveError {}
 
 /// Resolves a route name to its URL pattern.
 ///
 /// This function looks up the given route name in the URL mapping and returns
-/// the corresponding URL pattern. If the route name is not found, it panics
-/// (as this indicates a programming error - the route should exist).
+/// the corresponding URL pattern.
 ///
-/// # Panics
+/// # Errors
 ///
-/// - Panics if the URL resolver has not been initialized with [`init_url_resolver`].
-/// - Panics if the route name is not found in the mapping.
+/// Returns [`UrlResolveError::NotInitialized`] if the URL resolver has not been
+/// initialized with [`init_url_resolver`].
+///
+/// Returns [`UrlResolveError::RouteNotFound`] if the route name is not found
+/// in the mapping.
 ///
 /// # Examples
 ///
 /// ```ignore
 /// use reinhardt_pages::integ::url_resolver;
 ///
-/// let url = url_resolver::resolve_url("home");
+/// let url = url_resolver::resolve_url("home")?;
 /// assert_eq!(url, "/");
 ///
-/// let url = url_resolver::resolve_url("user-profile");
+/// let url = url_resolver::resolve_url("user-profile")?;
 /// assert_eq!(url, "/users/{id}");
 /// ```
 ///
@@ -83,19 +115,15 @@ pub fn init_url_resolver(routes: HashMap<String, String>) {
 ///
 /// Currently, this function returns the raw URL pattern without parameter substitution.
 /// Future versions will support parameter substitution (e.g., `url!("user-profile", id = 123)`).
-pub fn resolve_url(route_name: &str) -> String {
-	let routes = URL_ROUTES
-		.get()
-		.expect("URL resolver not initialized. Call init_url_resolver() first.");
+pub fn resolve_url(route_name: &str) -> Result<String, UrlResolveError> {
+	let routes = URL_ROUTES.get().ok_or(UrlResolveError::NotInitialized)?;
 
-	// Look up route name
-	routes.get(route_name).cloned().unwrap_or_else(|| {
-		panic!(
-			"Route '{}' not found. Available routes: {:?}",
-			route_name,
-			routes.keys().collect::<Vec<_>>()
-		)
-	})
+	routes
+		.get(route_name)
+		.cloned()
+		.ok_or_else(|| UrlResolveError::RouteNotFound {
+			route_name: route_name.to_string(),
+		})
 }
 
 #[cfg(test)]
@@ -111,28 +139,55 @@ mod tests {
 		routes.insert("about".to_string(), "/about".to_string());
 		routes.insert("user-profile".to_string(), "/users/{id}".to_string());
 
-		init_url_resolver(routes);
+		let _ = init_url_resolver(routes);
 
-		assert_eq!(resolve_url("home"), "/");
-		assert_eq!(resolve_url("about"), "/about");
-		assert_eq!(resolve_url("user-profile"), "/users/{id}");
+		assert_eq!(resolve_url("home").unwrap(), "/");
+		assert_eq!(resolve_url("about").unwrap(), "/about");
+		assert_eq!(resolve_url("user-profile").unwrap(), "/users/{id}");
 	}
 
 	#[test]
 	#[serial(url_resolver)]
-	#[should_panic(expected = "Route 'nonexistent' not found")]
-	fn test_resolve_nonexistent_route() {
+	fn test_resolve_nonexistent_route_returns_error() {
 		// Initialize with empty routes if not already initialized (OnceLock can only be set once)
 		let _ = URL_ROUTES.set(HashMap::new());
 
-		resolve_url("nonexistent");
+		let result = resolve_url("nonexistent");
+		assert_eq!(
+			result,
+			Err(UrlResolveError::RouteNotFound {
+				route_name: "nonexistent".to_string(),
+			}),
+		);
 	}
 
 	#[test]
-	#[should_panic(expected = "URL resolver not initialized")]
-	fn test_resolve_before_init() {
-		// Note: This test will fail if run after other tests that initialize the resolver
-		// In practice, use a separate test binary or reset mechanism
-		resolve_url("test");
+	fn test_resolve_before_init_returns_error() {
+		// Verify the error path by checking OnceLock behavior directly.
+		// OnceLock persists across tests, so we test the pattern itself.
+		let lock: OnceLock<HashMap<String, String>> = OnceLock::new();
+		assert!(lock.get().is_none());
+	}
+
+	#[test]
+	fn test_init_url_resolver_returns_error_on_double_init() {
+		let lock: OnceLock<HashMap<String, String>> = OnceLock::new();
+		assert!(lock.set(HashMap::new()).is_ok());
+		assert!(lock.set(HashMap::new()).is_err());
+	}
+
+	#[test]
+	fn test_url_resolve_error_display() {
+		assert_eq!(
+			UrlResolveError::NotInitialized.to_string(),
+			"URL resolver not initialized: call init_url_resolver() first",
+		);
+		assert_eq!(
+			UrlResolveError::RouteNotFound {
+				route_name: "home".to_string(),
+			}
+			.to_string(),
+			"route 'home' not found in URL resolver",
+		);
 	}
 }

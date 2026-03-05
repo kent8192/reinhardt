@@ -8,6 +8,9 @@ use std::ops::Deref;
 
 use super::{ParamContext, ParamError, ParamResult, extract::FromRequest};
 
+/// Default maximum JSON body size: 2 MiB
+const DEFAULT_MAX_JSON_BODY_SIZE: usize = 2 * 1024 * 1024;
+
 /// Extract and deserialize JSON from request body
 ///
 /// # Example
@@ -89,6 +92,15 @@ where
 		let body_bytes = req
 			.read_body()
 			.map_err(|e| ParamError::BodyError(format!("Failed to read body: {}", e)))?;
+
+		// Enforce body size limit to prevent memory exhaustion
+		if body_bytes.len() > DEFAULT_MAX_JSON_BODY_SIZE {
+			return Err(ParamError::PayloadTooLarge(format!(
+				"JSON body size {} bytes exceeds maximum allowed size of {} bytes",
+				body_bytes.len(),
+				DEFAULT_MAX_JSON_BODY_SIZE
+			)));
+		}
 
 		// Deserialize JSON from body bytes with detailed error context
 		serde_json::from_slice(&body_bytes).map(Json).map_err(|e| {

@@ -32,8 +32,8 @@ use syn::{Data, DeriveInput, Fields, GenericArgument, PathArguments, Result, Typ
 use syn::{Ident, LitStr, bracketed, parenthesized};
 
 use crate::crate_paths::{
-	get_reinhardt_core_crate, get_reinhardt_crate, get_reinhardt_migrations_crate,
-	get_reinhardt_orm_crate,
+	get_linkme_crate, get_reinhardt_core_crate, get_reinhardt_crate,
+	get_reinhardt_migrations_crate, get_reinhardt_orm_crate,
 };
 use crate::rel::RelAttribute;
 
@@ -54,6 +54,69 @@ struct ModelAttributesParsed {
 	table_name: Option<String>,
 	constraints: Option<Vec<ConstraintSpec>>,
 	unique_together: Vec<Vec<String>>, // Multiple Django-style unique_together constraints
+}
+
+/// Validate a raw SQL expression to reject dangerous patterns.
+///
+/// This is a basic compile-time check that rejects obviously dangerous SQL
+/// keywords and patterns that should never appear in `check`, `generated`,
+/// or `condition` constraint attributes. It does not replace parameterized
+/// queries, but prevents accidental or malicious injection of DDL/DML
+/// statements in model attribute strings.
+fn validate_sql_expression(sql: &str, attr_name: &str) -> Result<()> {
+	let upper = sql.to_uppercase();
+
+	// Reject statement terminators that could allow statement chaining
+	if sql.contains(';') {
+		return Err(syn::Error::new(
+			proc_macro2::Span::call_site(),
+			format!(
+				"Semicolons are not allowed in {} expressions: {:?}",
+				attr_name, sql
+			),
+		));
+	}
+
+	// Reject DDL/DML keywords that should never appear in check/generated/condition
+	const BLOCKED_KEYWORDS: &[&str] = &[
+		"DROP ",
+		"DELETE ",
+		"INSERT ",
+		"UPDATE ",
+		"ALTER ",
+		"TRUNCATE ",
+		"EXEC ",
+		"EXECUTE ",
+		"CREATE ",
+		"GRANT ",
+		"REVOKE ",
+	];
+	for keyword in BLOCKED_KEYWORDS {
+		if upper.contains(keyword) {
+			return Err(syn::Error::new(
+				proc_macro2::Span::call_site(),
+				format!(
+					"Dangerous SQL keyword {:?} detected in {} expression: {:?}",
+					keyword.trim(),
+					attr_name,
+					sql
+				),
+			));
+		}
+	}
+
+	// Reject comment sequences that could hide injected SQL
+	if sql.contains("--") || sql.contains("/*") {
+		return Err(syn::Error::new(
+			proc_macro2::Span::call_site(),
+			format!(
+				"SQL comments are not allowed in {} expressions: {:?}",
+				attr_name, sql
+			),
+		));
+	}
+
+	Ok(())
 }
 
 /// Model configuration from `#[model(...)]` attribute
@@ -232,7 +295,9 @@ impl ModelConfig {
 			} else if param_name == "condition" {
 				// Parse string: "WHERE clause"
 				let value: LitStr = content.parse()?;
-				condition = Some(value.value());
+				let condition_str = value.value();
+				validate_sql_expression(&condition_str, "condition")?;
+				condition = Some(condition_str);
 			} else {
 				return Err(syn::Error::new_spanned(
 					param_name,
@@ -444,7 +509,9 @@ impl FieldConfig {
 					Ok(())
 				} else if meta.path.is_ident("check") {
 					let value: syn::LitStr = meta.value()?.parse()?;
-					config.check = Some(value.value());
+					let check_str = value.value();
+					validate_sql_expression(&check_str, "check")?;
+					config.check = Some(check_str);
 					Ok(())
 				} else if meta.path.is_ident("email") {
 					let value: syn::LitBool = meta.value()?.parse()?;
@@ -515,7 +582,9 @@ impl FieldConfig {
 				// Generated Columns
 				else if meta.path.is_ident("generated") {
 					let value: syn::LitStr = meta.value()?.parse()?;
-					config.generated = Some(value.value());
+					let gen_str = value.value();
+					validate_sql_expression(&gen_str, "generated")?;
+					config.generated = Some(gen_str);
 					Ok(())
 				} else if meta.path.is_ident("generated_stored") {
 					let value: syn::LitBool = meta.value()?.parse()?;
@@ -954,7 +1023,7 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 					quote! { #migrations_crate::FieldType::Boolean }
 				}
 				"DateTime" => {
-					quote! { #migrations_crate::FieldType::DateTime }
+					quote! { #migrations_crate::FieldType::TimestampTz }
 				}
 				"Date" => {
 					quote! { #migrations_crate::FieldType::Date }
@@ -2464,6 +2533,30 @@ fn generate_registration_code(
 		if config.primary_key {
 			params.push(quote! { .with_param("primary_key", "true") });
 		}
+
+		// auto_increment: default true for primary_key fields (Django-compatible)
+		if config.primary_key {
+			let auto_inc = config.auto_increment.unwrap_or(true);
+			if auto_inc {
+				params.push(quote! { .with_param("auto_increment", "true") });
+			}
+		} else if let Some(true) = config.auto_increment {
+			params.push(quote! { .with_param("auto_increment", "true") });
+		}
+
+		// not_null: infer from Rust Option type
+		let (is_option, _) = extract_option_type(&field_info.ty);
+		let is_not_null = if let Some(null) = config.null {
+			!null
+		} else if config.primary_key {
+			true
+		} else {
+			!is_option
+		};
+		if is_not_null {
+			params.push(quote! { .with_param("not_null", "true") });
+		}
+
 		if let Some(max_length) = config.max_length {
 			let ml_str = max_length.to_string();
 			params.push(quote! { .with_param("max_length", #ml_str) });
@@ -2476,6 +2569,31 @@ fn generate_registration_code(
 			&& unique
 		{
 			params.push(quote! { .with_param("unique", "true") });
+		}
+		// Infer nullable from Rust type when not explicitly set
+		if config.null.is_none() {
+			let (is_option, _) = extract_option_type(&field_info.ty);
+			if is_option {
+				params.push(quote! { .with_param("null", "true") });
+			} else {
+				params.push(quote! { .with_param("null", "false") });
+			}
+		}
+		// auto_increment: explicit value or default true for integer PKs
+		if config.primary_key && is_integer_primary_key_type(&field_info.ty) {
+			let auto_inc = config.auto_increment.unwrap_or(true);
+			let auto_inc_str = auto_inc.to_string();
+			params.push(quote! { .with_param("auto_increment", #auto_inc_str) });
+		} else if let Some(auto_increment) = config.auto_increment {
+			let auto_inc_str = auto_increment.to_string();
+			params.push(quote! { .with_param("auto_increment", #auto_inc_str) });
+		}
+		// auto_now / auto_now_add params
+		if config.auto_now == Some(true) {
+			params.push(quote! { .with_param("auto_now", "true") });
+		}
+		if config.auto_now_add == Some(true) {
+			params.push(quote! { .with_param("auto_now_add", "true") });
 		}
 
 		// Generate ForeignKey information if present
@@ -2694,6 +2812,8 @@ fn generate_relationship_registrations(
 ) -> TokenStream {
 	let reinhardt = get_reinhardt_crate();
 	let _orm_crate = get_reinhardt_orm_crate();
+	// Fixes #793: Use dynamic crate path resolution instead of hardcoded ::linkme
+	let linkme = get_linkme_crate();
 	let mut registrations = Vec::new();
 	let model_name = struct_name.to_string();
 
@@ -2752,7 +2872,7 @@ fn generate_relationship_registrations(
 
 		// Generate registration code for forward relationship
 		registrations.push(quote! {
-			#[::linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
+			#[#linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
 			static #static_var_name: #reinhardt::apps::registry::RelationshipMetadata =
 				#reinhardt::apps::registry::RelationshipMetadata {
 					from_model: concat!(#app_label, ".", #model_name),
@@ -2788,7 +2908,7 @@ fn generate_relationship_registrations(
 
 			// Generate registration code for reverse relationship
 			registrations.push(quote! {
-				#[::linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
+				#[#linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
 				static #reverse_static_var_name: #reinhardt::apps::registry::RelationshipMetadata =
 					#reinhardt::apps::registry::RelationshipMetadata {
 						from_model: #target_model_name,
@@ -2863,7 +2983,7 @@ fn generate_relationship_registrations(
 
 		// Generate registration code for forward M2M relationship
 		registrations.push(quote! {
-			#[::linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
+			#[#linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
 			static #static_var_name: #reinhardt::apps::registry::RelationshipMetadata =
 				#reinhardt::apps::registry::RelationshipMetadata {
 					from_model: concat!(#app_label, ".", #model_name),
@@ -2891,7 +3011,7 @@ fn generate_relationship_registrations(
 
 			// Generate registration code for reverse M2M relationship
 			registrations.push(quote! {
-				#[::linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
+				#[#linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
 				static #reverse_static_var_name: #reinhardt::apps::registry::RelationshipMetadata =
 					#reinhardt::apps::registry::RelationshipMetadata {
 						from_model: #target_model_name,

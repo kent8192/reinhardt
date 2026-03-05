@@ -148,8 +148,13 @@ pub(crate) fn expand_derive(input: DeriveInput) -> Result<TokenStream> {
 		})?;
 		quote! {
 			.filter(move |item| {
-				let filter_fn = #filter_tokens;
-				filter_fn(item)
+				match item {
+					Ok(ref val) => {
+						let filter_fn = #filter_tokens;
+						filter_fn(val)
+					}
+					Err(_) => true,
+				}
 			})
 		}
 	} else {
@@ -164,7 +169,7 @@ pub(crate) fn expand_derive(input: DeriveInput) -> Result<TokenStream> {
 			async fn subscribe<'ctx>(
 				&self,
 				ctx: &async_graphql::Context<'ctx>,
-			) -> async_graphql::Result<impl futures_util::Stream<Item = #graphql_type> + 'ctx> {
+			) -> async_graphql::Result<impl futures_util::Stream<Item = Result<#graphql_type, async_graphql::Error>> + 'ctx> {
 				use tokio_stream::StreamExt;
 
 				// Get gRPC client from context
@@ -180,24 +185,25 @@ pub(crate) fn expand_derive(input: DeriveInput) -> Result<TokenStream> {
 				let stream = match client.#method_name(Default::default()).await {
 					Ok(response) => response.into_inner(),
 					Err(e) => {
-						eprintln!("gRPC call failed: {:?}", e);
-						return Ok(Box::pin(tokio_stream::empty()));
+						return Ok(Box::pin(tokio_stream::once(
+							Err(async_graphql::Error::new(format!("gRPC call failed: {:?}", e)))
+						)));
 					}
 				};
 
 				// Convert Proto events to GraphQL events
 				Ok(Box::pin(stream
-					.filter_map(move |result: Result<#proto_type, tonic::Status>| async move {
+					.map(move |result: Result<#proto_type, tonic::Status>| {
 						match result {
 							Ok(proto_event) => {
 								// Convert proto to GraphQL type using Into trait
 								let graphql_event: #graphql_type = proto_event.into();
-								Some(graphql_event)
+								Ok(graphql_event)
 							}
-							Err(e) => {
-								eprintln!("Stream error: {:?}", e);
-								None
-							}
+							// Fixes #818
+							Err(e) => Err(async_graphql::Error::new(
+								format!("Stream error: {:?}", e)
+							)),
 						}
 					})
 					#filter_code
@@ -260,7 +266,7 @@ mod tests {
 		assert!(output_str.contains("User"));
 
 		// Check stream processing
-		assert!(output_str.contains("filter_map"));
+		assert!(output_str.contains(". map"));
 		assert!(output_str.contains("into_inner"));
 	}
 

@@ -20,7 +20,7 @@ impl CollectionAggregations {
 	///
 	/// let proxy = CollectionProxy::new("sales", "amount");
 	/// let agg = CollectionAggregations::new(proxy);
-	// Aggregations wrapper is ready to use
+	/// // Aggregations wrapper is ready to use
 	/// ```
 	pub fn new(proxy: CollectionProxy) -> Self {
 		Self { proxy }

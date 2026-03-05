@@ -8,8 +8,41 @@ use reinhardt_pages::page;
 
 fn main() {
 	// Watch nested inside multiple elements
-	let _nested_in_element = __reinhardt_placeholder__!(/*0*/);
+	let _nested_in_element = page!(|active: Signal<bool>| {
+		div {
+			class: "container",
+			section {
+				article {
+					watch {
+						if active.get() {
+							p {
+								"Active content"
+							}
+						}
+					}
+				}
+			}
+		}
+	});
 
 	// Multiple watch blocks in same parent
-	let _multiple_watches = __reinhardt_placeholder__!(/*1*/);
+	let _multiple_watches = page!(|loading: Signal<bool>, error: Signal<Option<String>>| {
+		div {
+			watch {
+				if loading.get() {
+					div {
+						"Loading..."
+					}
+				}
+			}
+			watch {
+				if error.get().is_some() {
+					div {
+						class: "error",
+						{ error.get().unwrap_or_default() }
+					}
+				}
+			}
+		}
+	});
 }

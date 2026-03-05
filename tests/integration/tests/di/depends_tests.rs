@@ -5,6 +5,7 @@ use reinhardt_di::{Depends, DiResult, Injectable, InjectionContext};
 use reinhardt_test::fixtures::*;
 use rstest::*;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 // Test type definitions
 #[derive(Clone, Debug, PartialEq)]
@@ -26,17 +27,13 @@ struct UncachedConfig {
 	id: u32,
 }
 
-static mut UNCACHED_COUNTER: u32 = 0;
+static UNCACHED_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 #[async_trait]
 impl Injectable for UncachedConfig {
 	async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
-		unsafe {
-			UNCACHED_COUNTER += 1;
-			Ok(UncachedConfig {
-				id: UNCACHED_COUNTER,
-			})
-		}
+		let id = UNCACHED_COUNTER.fetch_add(1, Ordering::SeqCst) + 1;
+		Ok(UncachedConfig { id })
 	}
 
 	async fn inject_uncached(ctx: &InjectionContext) -> DiResult<Self> {
@@ -90,9 +87,7 @@ async fn depends_with_use_cache_true() {
 	// Arrange
 	let singleton_scope = Arc::new(reinhardt_di::SingletonScope::new());
 	let injection_context = InjectionContext::builder(singleton_scope).build();
-	unsafe {
-		UNCACHED_COUNTER = 0;
-	}
+	UNCACHED_COUNTER.store(0, Ordering::SeqCst);
 
 	// Act
 	let depends1 = Depends::<UncachedConfig>::builder()
@@ -107,10 +102,8 @@ async fn depends_with_use_cache_true() {
 
 	// Assert
 	assert_eq!(depends1.id, depends2.id);
-	unsafe {
-		// Cache is enabled, so called only once
-		assert_eq!(UNCACHED_COUNTER, 1);
-	}
+	// Cache is enabled, so called only once
+	assert_eq!(UNCACHED_COUNTER.load(Ordering::SeqCst), 1);
 }
 
 #[serial_test::serial(uncached_counter)]
@@ -119,9 +112,7 @@ async fn depends_with_use_cache_false() {
 	// Arrange
 	let singleton_scope = Arc::new(reinhardt_di::SingletonScope::new());
 	let injection_context = InjectionContext::builder(singleton_scope).build();
-	unsafe {
-		UNCACHED_COUNTER = 0;
-	}
+	UNCACHED_COUNTER.store(0, Ordering::SeqCst);
 
 	// Act
 	let depends1 = Depends::<UncachedConfig>::builder_no_cache()
@@ -136,10 +127,8 @@ async fn depends_with_use_cache_false() {
 
 	// Assert
 	assert_ne!(depends1.id, depends2.id);
-	unsafe {
-		// Cache is disabled, so called twice
-		assert_eq!(UNCACHED_COUNTER, 2);
-	}
+	// Cache is disabled, so called twice
+	assert_eq!(UNCACHED_COUNTER.load(Ordering::SeqCst), 2);
 }
 
 #[rstest]

@@ -4,7 +4,7 @@
 //! smoothing out bursts. Requests that exceed the bucket's capacity are rejected.
 
 use super::time_provider::{SystemTimeProvider, TimeProvider};
-use super::{Throttle, ThrottleResult};
+use super::{Throttle, ThrottleError, ThrottleResult};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -22,24 +22,44 @@ pub struct LeakyBucketConfig {
 impl LeakyBucketConfig {
 	/// Creates a new leaky bucket configuration
 	///
+	/// # Errors
+	///
+	/// Returns [`ThrottleError::InvalidConfig`] if `capacity` is zero or
+	/// `leak_rate` is not a positive finite number.
+	///
 	/// # Examples
 	///
 	/// ```
 	/// use reinhardt_throttling::leaky_bucket::LeakyBucketConfig;
 	///
 	/// // 10 requests per second with queue capacity of 20
-	/// let config = LeakyBucketConfig::new(20, 10.0);
+	/// let config = LeakyBucketConfig::new(20, 10.0).unwrap();
 	/// assert_eq!(config.capacity, 20);
 	/// assert_eq!(config.leak_rate, 10.0);
 	/// ```
-	pub fn new(capacity: usize, leak_rate: f64) -> Self {
-		Self {
+	pub fn new(capacity: usize, leak_rate: f64) -> ThrottleResult<Self> {
+		if capacity == 0 {
+			return Err(ThrottleError::InvalidConfig(
+				"capacity must be non-zero".to_string(),
+			));
+		}
+		if !leak_rate.is_finite() || leak_rate <= 0.0 {
+			return Err(ThrottleError::InvalidConfig(
+				"leak_rate must be a positive finite number".to_string(),
+			));
+		}
+		Ok(Self {
 			capacity,
 			leak_rate,
-		}
+		})
 	}
 
 	/// Create configuration for requests per second
+	///
+	/// # Errors
+	///
+	/// Returns [`ThrottleError::InvalidConfig`] if `capacity` is zero or
+	/// `rate` is not a positive finite number.
 	///
 	/// # Examples
 	///
@@ -47,18 +67,20 @@ impl LeakyBucketConfig {
 	/// use reinhardt_throttling::leaky_bucket::LeakyBucketConfig;
 	///
 	/// // 5 requests per second with queue of 10
-	/// let config = LeakyBucketConfig::per_second(5.0, 10);
+	/// let config = LeakyBucketConfig::per_second(5.0, 10).unwrap();
 	/// assert_eq!(config.leak_rate, 5.0);
 	/// assert_eq!(config.capacity, 10);
 	/// ```
-	pub fn per_second(rate: f64, capacity: usize) -> Self {
-		Self {
-			capacity,
-			leak_rate: rate,
-		}
+	pub fn per_second(rate: f64, capacity: usize) -> ThrottleResult<Self> {
+		Self::new(capacity, rate)
 	}
 
 	/// Create configuration for requests per minute
+	///
+	/// # Errors
+	///
+	/// Returns [`ThrottleError::InvalidConfig`] if `capacity` is zero or
+	/// `rate` is not a positive finite number.
 	///
 	/// # Examples
 	///
@@ -66,15 +88,17 @@ impl LeakyBucketConfig {
 	/// use reinhardt_throttling::leaky_bucket::LeakyBucketConfig;
 	///
 	/// // 60 requests per minute with queue of 100
-	/// let config = LeakyBucketConfig::per_minute(60.0, 100);
+	/// let config = LeakyBucketConfig::per_minute(60.0, 100).unwrap();
 	/// assert_eq!(config.leak_rate, 1.0);
 	/// assert_eq!(config.capacity, 100);
 	/// ```
-	pub fn per_minute(rate: f64, capacity: usize) -> Self {
-		Self {
-			capacity,
-			leak_rate: rate / 60.0,
+	pub fn per_minute(rate: f64, capacity: usize) -> ThrottleResult<Self> {
+		if !rate.is_finite() || rate <= 0.0 {
+			return Err(ThrottleError::InvalidConfig(
+				"rate must be a positive finite number".to_string(),
+			));
 		}
+		Self::new(capacity, rate / 60.0)
 	}
 }
 
@@ -96,7 +120,7 @@ struct BucketState {
 /// use reinhardt_throttling::Throttle;
 ///
 /// # tokio_test::block_on(async {
-/// let config = LeakyBucketConfig::per_second(10.0, 20);
+/// let config = LeakyBucketConfig::per_second(10.0, 20).unwrap();
 /// let throttle = LeakyBucketThrottle::new(config);
 ///
 /// // Requests are processed at constant rate
@@ -117,7 +141,7 @@ impl LeakyBucketThrottle<SystemTimeProvider> {
 	/// ```
 	/// use reinhardt_throttling::leaky_bucket::{LeakyBucketThrottle, LeakyBucketConfig};
 	///
-	/// let config = LeakyBucketConfig::per_second(5.0, 10);
+	/// let config = LeakyBucketConfig::per_second(5.0, 10).unwrap();
 	/// let throttle = LeakyBucketThrottle::new(config);
 	/// ```
 	pub fn new(config: LeakyBucketConfig) -> Self {
@@ -219,137 +243,253 @@ impl<T: TimeProvider> Throttle for LeakyBucketThrottle<T> {
 mod tests {
 	use super::*;
 	use crate::time_provider::MockTimeProvider;
+	use rstest::rstest;
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_leaky_bucket_basic() {
+		// Arrange
 		use tokio::time::Instant;
 		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
-		let config = LeakyBucketConfig::new(5, 1.0);
+		let config = LeakyBucketConfig::new(5, 1.0).unwrap();
 		let throttle = LeakyBucketThrottle::with_time_provider(config, time_provider);
 
-		// Should allow up to capacity
+		// Act & Assert - should allow up to capacity
 		for _ in 0..5 {
 			assert!(throttle.allow_request("user").await.unwrap());
 		}
 
-		// 6th request should fail
+		// Assert - 6th request should fail
 		assert!(!throttle.allow_request("user").await.unwrap());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_leaky_bucket_leak() {
+		// Arrange
 		use tokio::time::Instant;
 		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
-		let config = LeakyBucketConfig::new(10, 2.0); // 2 requests per second leak rate
+		let config = LeakyBucketConfig::new(10, 2.0).unwrap();
 		let throttle = LeakyBucketThrottle::with_time_provider(config, time_provider.clone());
 
-		// Fill the bucket
+		// Act - fill the bucket
 		for _ in 0..10 {
 			assert!(throttle.allow_request("user").await.unwrap());
 		}
 		assert!(!throttle.allow_request("user").await.unwrap());
 
-		// Advance time by 1 second (2 requests should leak)
+		// Act - advance time by 1 second (2 requests should leak)
 		time_provider.advance(std::time::Duration::from_secs(1));
 
-		// Should allow 2 more requests
+		// Assert - should allow 2 more requests
 		assert!(throttle.allow_request("user").await.unwrap());
 		assert!(throttle.allow_request("user").await.unwrap());
 		assert!(!throttle.allow_request("user").await.unwrap());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_leaky_bucket_smoothing() {
+		// Arrange
 		use tokio::time::Instant;
 		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
-		let config = LeakyBucketConfig::per_second(5.0, 10);
+		let config = LeakyBucketConfig::per_second(5.0, 10).unwrap();
 		let throttle = LeakyBucketThrottle::with_time_provider(config, time_provider.clone());
 
-		// Burst of requests
+		// Act - burst of requests
 		for _ in 0..10 {
 			assert!(throttle.allow_request("user").await.unwrap());
 		}
 
-		// Bucket full
+		// Assert - bucket full
 		assert!(!throttle.allow_request("user").await.unwrap());
 
-		// Advance time by 2 seconds (10 requests leak)
+		// Act - advance time by 2 seconds (10 requests leak)
 		time_provider.advance(std::time::Duration::from_secs(2));
 
-		// Bucket should be empty, allow full capacity again
+		// Assert - bucket should be empty, allow full capacity again
 		for _ in 0..10 {
 			assert!(throttle.allow_request("user").await.unwrap());
 		}
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_leaky_bucket_level() {
+		// Arrange
 		use tokio::time::Instant;
 		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
-		let config = LeakyBucketConfig::new(10, 2.0);
+		let config = LeakyBucketConfig::new(10, 2.0).unwrap();
 		let throttle = LeakyBucketThrottle::with_time_provider(config, time_provider.clone());
 
-		// Initial level should be 0
+		// Assert - initial level should be 0
 		assert_eq!(throttle.level().await, 0.0);
 
-		// Add 5 requests
+		// Act - add 5 requests
 		for _ in 0..5 {
 			throttle.allow_request("user").await.unwrap();
 		}
+
+		// Assert
 		assert_eq!(throttle.level().await, 5.0);
 
-		// Advance time by 1 second (2 requests leak)
+		// Act - advance time by 1 second (2 requests leak)
 		time_provider.advance(std::time::Duration::from_secs(1));
+
+		// Assert
 		assert_eq!(throttle.level().await, 3.0);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_leaky_bucket_reset() {
+		// Arrange
 		use tokio::time::Instant;
 		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
-		let config = LeakyBucketConfig::new(10, 1.0);
+		let config = LeakyBucketConfig::new(10, 1.0).unwrap();
 		let throttle = LeakyBucketThrottle::with_time_provider(config, time_provider);
 
-		// Fill bucket
+		// Act - fill bucket
 		for _ in 0..10 {
 			throttle.allow_request("user").await.unwrap();
 		}
 		assert!(throttle.level().await > 0.0);
 
-		// Reset
+		// Act - reset
 		throttle.reset().await;
+
+		// Assert
 		assert_eq!(throttle.level().await, 0.0);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_leaky_bucket_wait_time() {
+		// Arrange
 		use tokio::time::Instant;
 		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
-		let config = LeakyBucketConfig::new(5, 1.0);
+		let config = LeakyBucketConfig::new(5, 1.0).unwrap();
 		let throttle = LeakyBucketThrottle::with_time_provider(config, time_provider);
 
-		// Fill bucket
+		// Act - fill bucket
 		for _ in 0..5 {
 			throttle.allow_request("user").await.unwrap();
 		}
 
-		// Should have wait time
+		// Assert - should have wait time
 		let wait = throttle.wait_time("user").await.unwrap();
 		assert!(wait.is_some());
 		assert!(wait.unwrap() > 0);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_leaky_bucket_config_per_second() {
-		let config = LeakyBucketConfig::per_second(10.0, 20);
+		// Arrange & Act
+		let config = LeakyBucketConfig::per_second(10.0, 20).unwrap();
+
+		// Assert
 		assert_eq!(config.leak_rate, 10.0);
 		assert_eq!(config.capacity, 20);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_leaky_bucket_config_per_minute() {
-		let config = LeakyBucketConfig::per_minute(60.0, 100);
+		// Arrange & Act
+		let config = LeakyBucketConfig::per_minute(60.0, 100).unwrap();
+
+		// Assert
 		assert_eq!(config.leak_rate, 1.0);
 		assert_eq!(config.capacity, 100);
+	}
+
+	#[rstest]
+	fn test_new_rejects_zero_leak_rate() {
+		// Arrange & Act
+		let result = LeakyBucketConfig::new(10, 0.0);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(
+			result.unwrap_err(),
+			ThrottleError::InvalidConfig(_)
+		));
+	}
+
+	#[rstest]
+	fn test_new_rejects_negative_leak_rate() {
+		// Arrange & Act
+		let result = LeakyBucketConfig::new(10, -1.0);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(
+			result.unwrap_err(),
+			ThrottleError::InvalidConfig(_)
+		));
+	}
+
+	#[rstest]
+	fn test_new_rejects_infinite_leak_rate() {
+		// Arrange & Act
+		let result = LeakyBucketConfig::new(10, f64::INFINITY);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(
+			result.unwrap_err(),
+			ThrottleError::InvalidConfig(_)
+		));
+	}
+
+	#[rstest]
+	fn test_new_rejects_nan_leak_rate() {
+		// Arrange & Act
+		let result = LeakyBucketConfig::new(10, f64::NAN);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(
+			result.unwrap_err(),
+			ThrottleError::InvalidConfig(_)
+		));
+	}
+
+	#[rstest]
+	fn test_new_rejects_zero_capacity() {
+		// Arrange & Act
+		let result = LeakyBucketConfig::new(0, 1.0);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(
+			result.unwrap_err(),
+			ThrottleError::InvalidConfig(_)
+		));
+	}
+
+	#[rstest]
+	fn test_per_second_rejects_zero_rate() {
+		// Arrange & Act
+		let result = LeakyBucketConfig::per_second(0.0, 10);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(
+			result.unwrap_err(),
+			ThrottleError::InvalidConfig(_)
+		));
+	}
+
+	#[rstest]
+	fn test_per_minute_rejects_zero_rate() {
+		// Arrange & Act
+		let result = LeakyBucketConfig::per_minute(0.0, 10);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(
+			result.unwrap_err(),
+			ThrottleError::InvalidConfig(_)
+		));
 	}
 }

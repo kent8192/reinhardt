@@ -30,6 +30,7 @@ let config = DeeplinkConfig::builder()
             .package_name("com.example.app")
             .sha256_fingerprint("FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C")
             .build()
+            .unwrap()
     )
     .build();
 
@@ -113,7 +114,8 @@ use reinhardt_deeplink::AndroidConfig;
 let config = AndroidConfig::builder()
     .package_name("com.example.app")
     .sha256_fingerprint("FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C")
-    .build();
+    .build()
+    .unwrap();
 ```
 
 ### Multiple Fingerprints
@@ -127,7 +129,8 @@ let config = AndroidConfig::builder()
         "FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C",
         "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00",
     ])
-    .build();
+    .build()
+    .unwrap();
 ```
 
 ## Custom URL Schemes
@@ -146,4 +149,4 @@ let config = CustomSchemeConfig::builder()
 
 ## License
 
-This project is dual-licensed under MIT or Apache-2.0.
+Licensed under the BSD 3-Clause License.

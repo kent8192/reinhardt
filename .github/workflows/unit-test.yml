@@ -2,6 +2,23 @@ name: Unit Tests
 
 on:
   workflow_call:
+    inputs:
+      runner:
+        description: 'Runner label JSON. Use "\"ubuntu-latest\"" for GitHub-hosted or "[\"self-hosted\",\"linux\",\"x64\",\"reinhardt-ci\"]" for self-hosted.'
+        type: string
+        default: '"ubuntu-latest"'
+      cargo-build-jobs:
+        description: "Parallel cargo build jobs (1=GitHub-hosted OOM safe, 8=self-hosted)"
+        type: string
+        default: "1"
+      nextest-filter:
+        description: "Nextest filter expression for affected packages"
+        type: string
+        default: ""
+      run-all:
+        description: "Whether to run all tests"
+        type: string
+        default: "true"
   workflow_dispatch:
 
 env:
@@ -9,18 +26,20 @@ env:
   RUST_BACKTRACE: 1
   CARGO_TARGET_DIR: /tmp/cargo_target
   CARGO_INCREMENTAL: 0
+  CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
 
 jobs:
   unit-test:
     name: Unit Tests (${{ matrix.partition }}/4)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ${{ fromJSON(inputs.runner) }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         partition: [1, 2, 3, 4]
     steps:
       - name: Free Disk Space (Ubuntu)
+        if: ${{ !contains(inputs.runner, 'self-hosted') }}
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: true
@@ -57,6 +76,7 @@ jobs:
           tool: nextest
 
       - name: Additional disk cleanup before tests
+        if: ${{ !contains(inputs.runner, 'self-hosted') }}
         run: |
           echo "Disk usage before additional cleanup:"
           df -h
@@ -80,8 +100,26 @@ jobs:
           echo "Disk usage after additional cleanup:"
           df -h
 
-      - name: Run unit tests (partition ${{ matrix.partition }}/4)
+      - name: Pre-pull Docker images
         run: |
+          if [ -f .github/docker-images-unit-test.txt ]; then
+            while IFS= read -r image || [ -n "$image" ]; do
+              # Skip empty lines and comments
+              [[ -z "$image" || "$image" =~ ^# ]] && continue
+              echo "Pulling image: $image"
+              docker pull "$image" || echo "Warning: Failed to pull $image"
+            done < .github/docker-images-unit-test.txt
+          fi
+
+      - name: Run unit tests (partition ${{ matrix.partition }}/4)
+        env:
+          NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
+          RUN_ALL: ${{ inputs.run-all }}
+        run: |
+          FILTER_ARGS=()
+          if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
+            FILTER_ARGS+=(-E "$NEXTEST_FILTER_EXPR")
+          fi
           cargo nextest run \
             --workspace \
             --lib \
@@ -89,7 +127,8 @@ jobs:
             --partition hash:${{ matrix.partition }}/4 \
             --no-fail-fast \
             --status-level=none \
-            --final-status-level=none
+            --final-status-level=none \
+            "${FILTER_ARGS[@]}"
 
       - name: Docker cleanup after unit tests
         if: always()

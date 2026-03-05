@@ -21,7 +21,7 @@ impl UserRateThrottle<MemoryBackend> {
 	/// ```
 	/// use reinhardt_rest::throttling::UserRateThrottle;
 	///
-	// Allow 100 requests per 60 seconds per user
+	/// // Allow 100 requests per 60 seconds per user
 	/// let throttle = UserRateThrottle::new(100, 60);
 	/// assert_eq!(throttle.rate, 100);
 	/// assert_eq!(throttle.window_secs, 60);

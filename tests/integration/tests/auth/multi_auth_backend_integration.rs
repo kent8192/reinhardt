@@ -13,7 +13,7 @@
 
 use bytes::Bytes;
 use hyper::{HeaderMap, Method, Version};
-use reinhardt_auth::sessions::{backends::InMemorySessionBackend, Session};
+use reinhardt_auth::sessions::{Session, backends::InMemorySessionBackend};
 use reinhardt_auth::{
 	AuthenticationBackend, AuthenticationError, CompositeAuthentication, RestAuthentication,
 	SessionAuthentication, SimpleUser, TokenAuthentication, User,

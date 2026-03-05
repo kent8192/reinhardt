@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 /// ETag configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct ETagConfig {
 	/// Whether to use weak ETags

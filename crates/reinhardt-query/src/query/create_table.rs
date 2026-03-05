@@ -348,7 +348,7 @@ impl CreateTableStatement {
 		self
 	}
 
-	/// Add a foreign key constraint from a [`ForeignKeyCreateStatement`] builder.
+	/// Add a foreign key constraint from a `ForeignKeyCreateStatement` builder.
 	///
 	/// This method accepts the builder-pattern style used by
 	/// [`ForeignKey::create()`](super::ForeignKey::create).

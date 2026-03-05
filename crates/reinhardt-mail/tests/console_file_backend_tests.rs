@@ -4,7 +4,10 @@
 //! file storage, directory creation, permissions, concurrent writes, filename collision,
 //! and cleanup.
 
-use reinhardt_mail::{ConsoleBackend, EmailBackend, EmailMessage, FileBackend};
+use reinhardt_mail::{
+	Attachment, ConsoleBackend, EmailBackend, EmailMessage, FileBackend, MemoryBackend,
+};
+use rstest::rstest;
 use std::fs;
 use tempfile::TempDir;
 
@@ -331,5 +334,202 @@ async fn test_file_backend_utf8_content() {
 	assert!(
 		file_content.contains("日本語"),
 		"File should contain Japanese text"
+	);
+}
+
+// ===== Attachment Content-Type Tests (Issue #530) =====
+
+/// Test: Attachment auto-detects MIME type from filename extension
+#[rstest]
+fn test_attachment_mime_type_auto_detection() {
+	// Arrange & Act
+	let pdf = Attachment::new("report.pdf", b"pdf content".to_vec());
+	let png = Attachment::new("logo.png", b"png content".to_vec());
+	let txt = Attachment::new("readme.txt", b"text content".to_vec());
+	let html = Attachment::new("page.html", b"<html>".to_vec());
+	let unknown = Attachment::new("data.unknownext99", b"unknown".to_vec());
+
+	// Assert
+	assert_eq!(pdf.mime_type(), "application/pdf");
+	assert_eq!(png.mime_type(), "image/png");
+	assert_eq!(txt.mime_type(), "text/plain");
+	assert_eq!(html.mime_type(), "text/html");
+	assert_eq!(unknown.mime_type(), "application/octet-stream");
+}
+
+/// Test: Attachment custom MIME type override
+#[rstest]
+fn test_attachment_custom_mime_type() {
+	// Arrange
+	let mut attachment = Attachment::new("data.bin", b"binary content".to_vec());
+
+	// Act
+	attachment.with_mime_type("application/x-custom");
+
+	// Assert
+	assert_eq!(attachment.mime_type(), "application/x-custom");
+}
+
+/// Test: File backend includes attachment Content-Type in output
+#[rstest]
+#[tokio::test]
+async fn test_file_backend_attachment_content_type() {
+	// Arrange
+	let temp_dir = TempDir::with_prefix("mail_test_").expect("Failed to create temp dir");
+	let file_path = temp_dir.path().to_path_buf();
+	let backend = FileBackend::new(file_path.clone());
+
+	let attachment = Attachment::new("report.pdf", b"PDF content".to_vec());
+	let message = EmailMessage::builder()
+		.from("attach@example.com")
+		.to(vec!["test@example.com".to_string()])
+		.subject("Attachment Test")
+		.body("Email with attachment")
+		.attachment(attachment)
+		.build()
+		.unwrap();
+
+	// Act
+	backend.send_messages(&[message]).await.unwrap();
+
+	// Assert
+	let files: Vec<_> = fs::read_dir(&file_path)
+		.unwrap()
+		.filter_map(|e| e.ok())
+		.collect();
+	assert_eq!(files.len(), 1);
+
+	let content = fs::read_to_string(files[0].path()).unwrap();
+	assert!(
+		content.contains("Content-Type: application/pdf"),
+		"File output should include attachment Content-Type, got: {}",
+		content
+	);
+	assert!(
+		content.contains("report.pdf"),
+		"File output should include attachment filename"
+	);
+}
+
+/// Test: Memory backend preserves attachments with Content-Type
+#[rstest]
+#[tokio::test]
+async fn test_memory_backend_preserves_attachment_content_type() {
+	// Arrange
+	let backend = MemoryBackend::new();
+	let attachment = Attachment::new("image.jpg", b"JPEG data".to_vec());
+	let message = EmailMessage::builder()
+		.from("sender@example.com")
+		.to(vec!["test@example.com".to_string()])
+		.subject("Test")
+		.body("Body")
+		.attachment(attachment)
+		.build()
+		.unwrap();
+
+	// Act
+	backend.send_messages(&[message]).await.unwrap();
+
+	// Assert
+	let messages = backend.get_messages().await;
+	assert_eq!(messages.len(), 1);
+	assert_eq!(messages[0].attachments().len(), 1);
+	assert_eq!(messages[0].attachments()[0].filename(), "image.jpg");
+	assert_eq!(messages[0].attachments()[0].mime_type(), "image/jpeg");
+}
+
+// ===== Custom Header Propagation Tests (Issue #521) =====
+
+/// Test: Custom headers are preserved in MemoryBackend
+#[rstest]
+#[tokio::test]
+async fn test_memory_backend_preserves_custom_headers() {
+	// Arrange
+	let backend = MemoryBackend::new();
+	let message = EmailMessage::builder()
+		.from("sender@example.com")
+		.to(vec!["test@example.com".to_string()])
+		.subject("Header Test")
+		.body("Body")
+		.header("X-Custom-Auth", "signed-token-abc")
+		.header("X-Tracking-ID", "msg-12345")
+		.build()
+		.unwrap();
+
+	// Act
+	backend.send_messages(&[message]).await.unwrap();
+
+	// Assert
+	let messages = backend.get_messages().await;
+	assert_eq!(messages.len(), 1);
+	let headers = messages[0].headers();
+	assert_eq!(headers.len(), 2);
+	assert!(headers.contains(&("X-Custom-Auth".to_string(), "signed-token-abc".to_string())));
+	assert!(headers.contains(&("X-Tracking-ID".to_string(), "msg-12345".to_string())));
+}
+
+/// Test: Custom headers appear in ConsoleBackend output (does not panic)
+#[rstest]
+#[tokio::test]
+async fn test_console_backend_outputs_custom_headers() {
+	// Arrange
+	let backend = ConsoleBackend;
+	let message = EmailMessage::builder()
+		.from("sender@example.com")
+		.to(vec!["test@example.com".to_string()])
+		.subject("Header Test")
+		.body("Body")
+		.header("List-Unsubscribe", "<https://example.com/unsub>")
+		.header("X-Custom-Tag", "important")
+		.build()
+		.unwrap();
+
+	// Act
+	let result = backend.send_messages(&[message]).await;
+
+	// Assert
+	assert!(result.is_ok());
+	assert_eq!(result.unwrap(), 1);
+}
+
+/// Test: Custom headers are written in FileBackend output
+#[rstest]
+#[tokio::test]
+async fn test_file_backend_writes_custom_headers() {
+	// Arrange
+	let temp_dir = TempDir::with_prefix("mail_test_").expect("Failed to create temp dir");
+	let file_path = temp_dir.path().to_path_buf();
+	let backend = FileBackend::new(file_path.clone());
+
+	let message = EmailMessage::builder()
+		.from("sender@example.com")
+		.to(vec!["test@example.com".to_string()])
+		.subject("Header Test")
+		.body("Body with headers")
+		.header("X-Custom-Auth", "token-xyz")
+		.header("X-Campaign-ID", "campaign-2024")
+		.build()
+		.unwrap();
+
+	// Act
+	backend.send_messages(&[message]).await.unwrap();
+
+	// Assert
+	let files: Vec<_> = fs::read_dir(&file_path)
+		.unwrap()
+		.filter_map(|e| e.ok())
+		.collect();
+	assert_eq!(files.len(), 1);
+
+	let content = fs::read_to_string(files[0].path()).unwrap();
+	assert!(
+		content.contains("X-Custom-Auth: token-xyz"),
+		"File should contain custom auth header, got: {}",
+		content
+	);
+	assert!(
+		content.contains("X-Campaign-ID: campaign-2024"),
+		"File should contain campaign header, got: {}",
+		content
 	);
 }

@@ -1,0 +1,66 @@
+name: MSRV Test
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: 'Runner label JSON'
+        type: string
+        default: '"ubuntu-latest"'
+      cargo-build-jobs:
+        description: "Parallel cargo build jobs"
+        type: string
+        default: "1"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_TARGET_DIR: /tmp/cargo_target
+  CARGO_INCREMENTAL: 0
+  CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
+
+jobs:
+  msrv-check:
+    name: MSRV Check (${{ matrix.rust }})
+    runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Verify compilation on MSRV (pinned), stable, and beta channels
+        rust: ["1.91.1", "stable", "beta"]
+
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        if: ${{ !contains(inputs.runner || '', 'self-hosted') }}
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust ${{ matrix.rust }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> /tmp/cargo_target
+          key: msrv-${{ matrix.rust }}
+
+      - name: Setup protoc
+        uses: ./.github/actions/setup-protoc
+
+      - name: Run cargo check (Rust ${{ matrix.rust }})
+        run: cargo check --workspace --all --all-features

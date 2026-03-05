@@ -4,7 +4,7 @@ use reinhardt_macros::installed_apps;
 
 fn main() {
 	installed_apps! {
-		auth: "reinhardt.contrib.auth",
+		auth: "myproject.auth",
 		myapp: "apps.myapp",
 		custom: "custom.app",
 	}

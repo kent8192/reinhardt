@@ -54,7 +54,7 @@ docker run -d \
   -e POSTGRES_PASSWORD=reinhardt_dev \
   -e POSTGRES_DB=reinhardt_examples \
   -p 5432:5432 \
-  postgres:16
+  postgres:17
 ```
 
 #### MySQL
@@ -365,5 +365,4 @@ cargo run --bin manage migrate --fake-initial
 
 ## License
 
-This example is provided as part of the Reinhardt project under MIT/Apache-2.0
-license.
+This example is provided as part of the Reinhardt project under the BSD 3-Clause License.

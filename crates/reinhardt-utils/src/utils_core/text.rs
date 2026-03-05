@@ -1,31 +1,31 @@
 //! Text manipulation utilities
-/// Capitalize first letter of each word
+/// Capitalize the first character of the string
+///
+/// Only the first character is capitalized; the rest of the string
+/// is left unchanged. This matches Django's `capfirst` behavior.
 ///
 /// # Examples
 ///
 /// ```
 /// use reinhardt_utils::utils_core::text::capfirst;
 ///
-/// assert_eq!(capfirst("hello world"), "Hello World");
+/// assert_eq!(capfirst("hello world"), "Hello world");
 /// assert_eq!(capfirst("test"), "Test");
 /// assert_eq!(capfirst("HELLO"), "HELLO");
 /// ```
 pub fn capfirst(text: &str) -> String {
-	let mut result = String::with_capacity(text.len());
-	let mut capitalize_next = true;
-
-	for ch in text.chars() {
-		if capitalize_next && ch.is_alphabetic() {
-			result.extend(ch.to_uppercase());
-			capitalize_next = false;
-		} else {
-			result.push(ch);
-			if ch.is_whitespace() {
-				capitalize_next = true;
+	let mut chars = text.chars();
+	match chars.next() {
+		None => String::new(),
+		Some(first) => {
+			let mut result = String::with_capacity(text.len());
+			for c in first.to_uppercase() {
+				result.push(c);
 			}
+			result.push_str(chars.as_str());
+			result
 		}
 	}
-	result
 }
 /// Convert to title case
 ///
@@ -87,7 +87,8 @@ pub fn pluralize(count: i64, singular: &str, plural: Option<&str>) -> String {
 /// assert_eq!(ordinal(21), "21st");
 /// ```
 pub fn ordinal(n: i64) -> String {
-	let suffix = match (n % 10, n % 100) {
+	let abs_n = n.unsigned_abs();
+	let suffix = match (abs_n % 10, abs_n % 100) {
 		(1, 11) => "th",
 		(1, _) => "st",
 		(2, 12) => "th",
@@ -279,12 +280,26 @@ pub fn humanize_field_name(field_name: &str) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	#[test]
-	fn test_capfirst() {
-		assert_eq!(capfirst("hello world"), "Hello World");
-		assert_eq!(capfirst("HELLO"), "HELLO");
-		assert_eq!(capfirst("test"), "Test");
+	#[rstest]
+	#[case("hello world", "Hello world")]
+	#[case("test", "Test")]
+	#[case("HELLO", "HELLO")]
+	#[case("", "")]
+	#[case("a", "A")]
+	#[case("123abc", "123abc")]
+	#[case("über", "Über")]
+	#[case("こんにちは 世界", "こんにちは 世界")]
+	fn test_capfirst(#[case] input: &str, #[case] expected: &str) {
+		// Arrange
+		let text = input;
+
+		// Act
+		let result = capfirst(text);
+
+		// Assert
+		assert_eq!(result, expected);
 	}
 
 	#[test]
@@ -356,16 +371,6 @@ mod tests {
 		assert_eq!(phone_format("11234567890"), "+1 (123) 456-7890");
 		assert_eq!(phone_format("(123) 456-7890"), "(123) 456-7890");
 		assert_eq!(phone_format("123"), "123");
-	}
-
-	#[test]
-	fn test_capfirst_empty() {
-		assert_eq!(capfirst(""), "");
-	}
-
-	#[test]
-	fn test_capfirst_unicode() {
-		assert_eq!(capfirst("こんにちは 世界"), "こんにちは 世界");
 	}
 
 	#[test]
@@ -477,16 +482,27 @@ mod tests {
 
 	#[test]
 	fn test_ordinal_negative() {
-		// Negative numbers: the modulo operation in Rust gives negative results
-		// -1 % 10 = -1, -1 % 100 = -1, neither matches the patterns, so "th"
-		assert_eq!(ordinal(-1), "-1th");
-		assert_eq!(ordinal(-2), "-2th");
+		// Negative numbers should use the same suffix as their absolute value
+		assert_eq!(ordinal(-1), "-1st");
+		assert_eq!(ordinal(-2), "-2nd");
+		assert_eq!(ordinal(-3), "-3rd");
+		assert_eq!(ordinal(-4), "-4th");
 		assert_eq!(ordinal(-11), "-11th");
+		assert_eq!(ordinal(-12), "-12th");
+		assert_eq!(ordinal(-13), "-13th");
+		assert_eq!(ordinal(-21), "-21st");
 	}
 
-	#[test]
+	#[rstest]
 	fn test_capfirst_numbers() {
-		assert_eq!(capfirst("123 test"), "123 Test");
+		// Arrange
+		let text = "123 test";
+
+		// Act
+		let result = capfirst(text);
+
+		// Assert - only first char affected, "t" in "test" stays lowercase
+		assert_eq!(result, "123 test");
 	}
 
 	#[test]

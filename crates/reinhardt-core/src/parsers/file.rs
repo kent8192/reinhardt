@@ -27,7 +27,7 @@ impl FileUploadParser {
 	/// let filename = parser.get_filename(Some(disposition)).unwrap();
 	/// assert_eq!(filename, "document.txt");
 	///
-	// RFC2231 encoded filename
+	/// // RFC2231 encoded filename
 	/// let disposition_encoded = "inline; filename*=utf-8''%C3%A0.txt";
 	/// let filename_encoded = parser.get_filename(Some(disposition_encoded)).unwrap();
 	/// assert_eq!(filename_encoded, "à.txt");

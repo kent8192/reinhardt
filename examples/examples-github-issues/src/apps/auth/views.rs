@@ -37,6 +37,16 @@ impl UserStorage {
 		self.users.read().await.get(id).cloned()
 	}
 
+	/// Find a user by email
+	pub async fn find_by_email(&self, email: &str) -> Option<User> {
+		self.users
+			.read()
+			.await
+			.values()
+			.find(|u| u.email == email)
+			.cloned()
+	}
+
 	/// Find a user by username
 	pub async fn find_by_username(&self, username: &str) -> Option<User> {
 		self.users
@@ -44,6 +54,16 @@ impl UserStorage {
 			.await
 			.values()
 			.find(|u| u.username == username)
+			.cloned()
+	}
+
+	/// Find a user by email
+	pub async fn find_by_email(&self, email: &str) -> Option<User> {
+		self.users
+			.read()
+			.await
+			.values()
+			.find(|u| u.email == email)
 			.cloned()
 	}
 
@@ -62,13 +82,12 @@ impl AuthQuery {
 	/// Get current authenticated user
 	async fn me(&self, ctx: &Context<'_>) -> GqlResult<Option<UserType>> {
 		use reinhardt::Claims;
-		let claims = ctx.data_opt::<Claims>();
-		if let Some(claims) = claims {
-			let storage = ctx.data::<UserStorage>()?;
-			let user = storage.get_user(&claims.sub).await;
-			return Ok(user.map(UserType));
-		}
-		Ok(None)
+		let claims = ctx
+			.data_opt::<Claims>()
+			.ok_or_else(|| async_graphql::Error::new("Authentication required"))?;
+		let storage = ctx.data::<UserStorage>()?;
+		let user = storage.get_user(&claims.sub).await;
+		Ok(user.map(UserType))
 	}
 
 	/// List all users
@@ -126,6 +145,11 @@ impl AuthMutation {
 		// Check if username already exists
 		if storage.find_by_username(&input.username).await.is_some() {
 			return Err(async_graphql::Error::new("Username already taken"));
+		}
+
+		// Check if email already exists
+		if storage.find_by_email(&input.email).await.is_some() {
+			return Err(async_graphql::Error::new("Email already in use"));
 		}
 
 		// Create new user with struct initialization instead of field reassignment

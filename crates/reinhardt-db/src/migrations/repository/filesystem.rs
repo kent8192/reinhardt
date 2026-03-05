@@ -46,11 +46,73 @@ impl FilesystemRepository {
 		}
 	}
 
+	/// Validate that a path component does not contain traversal sequences.
+	///
+	/// Rejects components containing `..`, path separators, or null bytes
+	/// to prevent directory traversal attacks that could escape the
+	/// migration root directory.
+	fn validate_path_component(component: &str, label: &str) -> Result<()> {
+		if component.is_empty() {
+			return Err(MigrationError::PathTraversal(format!(
+				"{} cannot be empty",
+				label
+			)));
+		}
+
+		// Reject path traversal sequences
+		if component.contains("..") {
+			return Err(MigrationError::PathTraversal(format!(
+				"{} contains path traversal sequence '..': {}",
+				label, component
+			)));
+		}
+
+		// Reject path separators (both Unix and Windows)
+		if component.contains('/') || component.contains('\\') {
+			return Err(MigrationError::PathTraversal(format!(
+				"{} contains path separator: {}",
+				label, component
+			)));
+		}
+
+		// Reject null bytes
+		if component.contains('\0') {
+			return Err(MigrationError::PathTraversal(format!(
+				"{} contains null byte: {}",
+				label, component
+			)));
+		}
+
+		Ok(())
+	}
+
 	/// Get the path for a migration file
 	///
 	/// Returns: `<root_dir>/<app_label>/<name>.rs`
-	fn migration_path(&self, app_label: &str, name: &str) -> PathBuf {
-		self.root_dir.join(app_label).join(format!("{}.rs", name))
+	///
+	/// Validates that `app_label` and `name` do not contain path traversal
+	/// sequences before constructing the path.
+	fn migration_path(&self, app_label: &str, name: &str) -> Result<PathBuf> {
+		Self::validate_path_component(app_label, "App label")?;
+		Self::validate_path_component(name, "Migration name")?;
+
+		let path = self.root_dir.join(app_label).join(format!("{}.rs", name));
+
+		// Final safety check: if both paths can be canonicalized (i.e., exist on disk),
+		// verify the resolved path stays within root_dir.
+		// When directories don't exist yet (e.g., during save), the component-level
+		// validation above is sufficient to prevent traversal.
+		if let (Ok(canonical_root), Some(parent)) = (self.root_dir.canonicalize(), path.parent())
+			&& let Ok(canonical_parent) = parent.canonicalize()
+			&& !canonical_parent.starts_with(&canonical_root)
+		{
+			return Err(MigrationError::PathTraversal(format!(
+				"Resolved path escapes migration root directory: {}",
+				path.display()
+			)));
+		}
+
+		Ok(path)
 	}
 
 	/// Generate Rust code for a migration file
@@ -171,7 +233,7 @@ impl FilesystemRepository {
 #[async_trait]
 impl MigrationRepository for FilesystemRepository {
 	async fn save(&mut self, migration: &Migration) -> Result<()> {
-		let path = self.migration_path(&migration.app_label, &migration.name);
+		let path = self.migration_path(&migration.app_label, &migration.name)?;
 
 		// Check if migration file already exists to prevent overwriting
 		if tokio::fs::try_exists(&path).await.unwrap_or(false) {
@@ -223,7 +285,7 @@ impl MigrationRepository for FilesystemRepository {
 	}
 
 	async fn get(&self, app_label: &str, name: &str) -> Result<Migration> {
-		let path = self.migration_path(app_label, name);
+		let path = self.migration_path(app_label, name)?;
 
 		if !path.exists() {
 			return Err(MigrationError::NotFound(format!("{}.{}", app_label, name)));
@@ -248,6 +310,7 @@ impl MigrationRepository for FilesystemRepository {
 	}
 
 	async fn list(&self, app_label: &str) -> Result<Vec<Migration>> {
+		Self::validate_path_component(app_label, "App label")?;
 		let migrations_dir = self.root_dir.join(app_label);
 
 		if !migrations_dir.exists() {
@@ -294,7 +357,7 @@ impl MigrationRepository for FilesystemRepository {
 	}
 
 	async fn delete(&mut self, app_label: &str, name: &str) -> Result<()> {
-		let path = self.migration_path(app_label, name);
+		let path = self.migration_path(app_label, name)?;
 
 		if !path.exists() {
 			return Err(MigrationError::NotFound(format!("{}.{}", app_label, name)));
@@ -317,6 +380,7 @@ mod tests {
 	use super::*;
 	use crate::migrations::fields::FieldType;
 	use crate::migrations::operations::{ColumnDefinition, Operation};
+	use rstest::rstest;
 	use serial_test::serial;
 	use tempfile::TempDir;
 
@@ -339,68 +403,83 @@ mod tests {
 		migration
 	}
 
+	#[rstest]
 	#[tokio::test]
 	#[serial(filesystem_repository)]
 	async fn test_filesystem_repository_new() {
+		// Arrange
 		let temp_dir = TempDir::new().unwrap();
+
+		// Act
 		let repo = FilesystemRepository::new(temp_dir.path());
+
+		// Assert
 		assert_eq!(repo.root_dir, temp_dir.path());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	#[serial(filesystem_repository)]
 	async fn test_filesystem_repository_save() {
+		// Arrange
 		let temp_dir = TempDir::new().unwrap();
 		let mut repo = FilesystemRepository::new(temp_dir.path());
-
 		let migration = create_test_migration("polls", "0001_initial");
+
+		// Act
 		repo.save(&migration).await.unwrap();
 
-		// Verify file exists
-		let path = repo.migration_path("polls", "0001_initial");
+		// Assert
+		let path = repo.migration_path("polls", "0001_initial").unwrap();
 		assert!(tokio::fs::try_exists(&path).await.unwrap());
 
-		// Verify file content is valid Rust
 		let content = tokio::fs::read_to_string(&path).await.unwrap();
 		assert!(content.contains("pub fn migration() -> Migration"));
 		assert!(content.contains("app_label: \"polls\""));
 		assert!(content.contains("name: \"0001_initial\""));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	#[serial(filesystem_repository)]
 	async fn test_filesystem_repository_get() {
+		// Arrange
 		let temp_dir = TempDir::new().unwrap();
 		let mut repo = FilesystemRepository::new(temp_dir.path());
-
-		// Save a migration
 		let migration = create_test_migration("polls", "0001_initial");
 		repo.save(&migration).await.unwrap();
 
-		// Retrieve it
+		// Act
 		let retrieved = repo.get("polls", "0001_initial").await.unwrap();
+
+		// Assert
 		assert_eq!(retrieved.app_label, "polls");
 		assert_eq!(retrieved.name, "0001_initial");
 	}
 
+	#[rstest]
 	#[tokio::test]
 	#[serial(filesystem_repository)]
 	async fn test_filesystem_repository_get_not_found() {
+		// Arrange
 		let temp_dir = TempDir::new().unwrap();
 		let repo = FilesystemRepository::new(temp_dir.path());
 
+		// Act
 		let result = repo.get("polls", "0001_initial").await;
+
+		// Assert
 		assert!(result.is_err());
 		assert!(matches!(result.unwrap_err(), MigrationError::NotFound(_)));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	#[serial(filesystem_repository)]
 	async fn test_filesystem_repository_list() {
+		// Arrange
 		let temp_dir = TempDir::new().unwrap();
 		let mut repo = FilesystemRepository::new(temp_dir.path());
-
-		// Save multiple migrations
 		repo.save(&create_test_migration("polls", "0001_initial"))
 			.await
 			.unwrap();
@@ -408,94 +487,244 @@ mod tests {
 			.await
 			.unwrap();
 
-		// List them
+		// Act
 		let migrations = repo.list("polls").await.unwrap();
+
+		// Assert
 		assert_eq!(migrations.len(), 2);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	#[serial(filesystem_repository)]
 	async fn test_filesystem_repository_list_empty() {
+		// Arrange
 		let temp_dir = TempDir::new().unwrap();
 		let repo = FilesystemRepository::new(temp_dir.path());
 
+		// Act
 		let migrations = repo.list("polls").await.unwrap();
+
+		// Assert
 		assert_eq!(migrations.len(), 0);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	#[serial(filesystem_repository)]
 	async fn test_filesystem_repository_delete() {
+		// Arrange
 		let temp_dir = TempDir::new().unwrap();
 		let mut repo = FilesystemRepository::new(temp_dir.path());
-
-		// Save a migration
 		let migration = create_test_migration("polls", "0001_initial");
 		repo.save(&migration).await.unwrap();
-
-		// Verify it exists
-		let path = repo.migration_path("polls", "0001_initial");
+		let path = repo.migration_path("polls", "0001_initial").unwrap();
 		assert!(tokio::fs::try_exists(&path).await.unwrap());
 
-		// Delete it
+		// Act
 		repo.delete("polls", "0001_initial").await.unwrap();
 
-		// Verify it's gone
+		// Assert
 		assert!(!tokio::fs::try_exists(&path).await.unwrap());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	#[serial(filesystem_repository)]
 	async fn test_filesystem_repository_delete_not_found() {
+		// Arrange
 		let temp_dir = TempDir::new().unwrap();
 		let mut repo = FilesystemRepository::new(temp_dir.path());
 
+		// Act
 		let result = repo.delete("polls", "0001_initial").await;
+
+		// Assert
 		assert!(result.is_err());
 		assert!(matches!(result.unwrap_err(), MigrationError::NotFound(_)));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	#[serial(filesystem_repository)]
 	async fn test_filesystem_repository_save_with_dependencies() {
+		// Arrange
 		let temp_dir = TempDir::new().unwrap();
 		let mut repo = FilesystemRepository::new(temp_dir.path());
-
 		let migration =
 			Migration::new("0002_add_field", "polls").add_dependency("polls", "0001_initial");
 
+		// Act
 		repo.save(&migration).await.unwrap();
 
-		// Verify file contains dependencies
-		let path = repo.migration_path("polls", "0002_add_field");
+		// Assert
+		let path = repo.migration_path("polls", "0002_add_field").unwrap();
 		let content = tokio::fs::read_to_string(&path).await.unwrap();
 		assert!(content.contains("dependencies"));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	#[serial(filesystem_repository)]
 	async fn test_filesystem_repository_save_prevents_overwrite() {
+		// Arrange
 		let temp_dir = TempDir::new().unwrap();
 		let mut repo = FilesystemRepository::new(temp_dir.path());
-
-		// Save initial migration
 		let migration = create_test_migration("polls", "0001_initial");
 		repo.save(&migration).await.unwrap();
-
-		// Verify file exists
-		let path = repo.migration_path("polls", "0001_initial");
+		let path = repo.migration_path("polls", "0001_initial").unwrap();
 		assert!(tokio::fs::try_exists(&path).await.unwrap());
 
-		// Attempt to save again with same name should fail
+		// Act
 		let duplicate_migration = create_test_migration("polls", "0001_initial");
 		let result = repo.save(&duplicate_migration).await;
 
-		// Should return error
+		// Assert
 		assert!(result.is_err());
-
-		// Error message should indicate file exists
 		let err = result.unwrap_err();
 		assert!(matches!(err, MigrationError::IoError(_)));
 		assert!(err.to_string().contains("already exists"));
+	}
+
+	#[rstest]
+	#[case("../etc", "0001_initial", "App label")]
+	#[case("polls", "../secret", "Migration name")]
+	#[case("../../root", "0001_initial", "App label")]
+	#[case("polls", "../../etc/passwd", "Migration name")]
+	fn test_path_traversal_rejected(
+		#[case] app_label: &str,
+		#[case] name: &str,
+		#[case] expected_label: &str,
+	) {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let repo = FilesystemRepository::new(temp_dir.path());
+
+		// Act
+		let result = repo.migration_path(app_label, name);
+
+		// Assert
+		assert!(result.is_err(), "Path traversal should be rejected");
+		let err = result.unwrap_err();
+		assert!(matches!(err, MigrationError::PathTraversal(_)));
+		assert!(
+			err.to_string().contains(expected_label),
+			"Error should mention '{}', got: {}",
+			expected_label,
+			err
+		);
+	}
+
+	#[rstest]
+	#[case("polls/subdir", "0001_initial")]
+	#[case("polls\\subdir", "0001_initial")]
+	#[case("polls", "name/with/slashes")]
+	fn test_path_separator_rejected(#[case] app_label: &str, #[case] name: &str) {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let repo = FilesystemRepository::new(temp_dir.path());
+
+		// Act
+		let result = repo.migration_path(app_label, name);
+
+		// Assert
+		assert!(result.is_err(), "Path separators should be rejected");
+		assert!(matches!(
+			result.unwrap_err(),
+			MigrationError::PathTraversal(_)
+		));
+	}
+
+	#[rstest]
+	#[case("polls\0evil", "0001_initial")]
+	#[case("polls", "0001\0evil")]
+	fn test_null_byte_rejected(#[case] app_label: &str, #[case] name: &str) {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let repo = FilesystemRepository::new(temp_dir.path());
+
+		// Act
+		let result = repo.migration_path(app_label, name);
+
+		// Assert
+		assert!(result.is_err(), "Null bytes should be rejected");
+		assert!(matches!(
+			result.unwrap_err(),
+			MigrationError::PathTraversal(_)
+		));
+	}
+
+	#[rstest]
+	#[case("", "0001_initial")]
+	#[case("polls", "")]
+	fn test_empty_component_rejected(#[case] app_label: &str, #[case] name: &str) {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let repo = FilesystemRepository::new(temp_dir.path());
+
+		// Act
+		let result = repo.migration_path(app_label, name);
+
+		// Assert
+		assert!(result.is_err(), "Empty components should be rejected");
+		assert!(matches!(
+			result.unwrap_err(),
+			MigrationError::PathTraversal(_)
+		));
+	}
+
+	#[rstest]
+	fn test_valid_path_accepted() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let repo = FilesystemRepository::new(temp_dir.path());
+
+		// Act
+		let result = repo.migration_path("polls", "0001_initial");
+
+		// Assert
+		assert!(result.is_ok(), "Valid path should be accepted");
+		let path = result.unwrap();
+		assert!(path.starts_with(temp_dir.path()));
+		assert!(path.ends_with("0001_initial.rs"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_repository)]
+	async fn test_save_rejects_traversal_in_app_label() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let mut repo = FilesystemRepository::new(temp_dir.path());
+		let migration = create_test_migration("../etc", "0001_initial");
+
+		// Act
+		let result = repo.save(&migration).await;
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(
+			result.unwrap_err(),
+			MigrationError::PathTraversal(_)
+		));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_repository)]
+	async fn test_list_rejects_traversal_in_app_label() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let repo = FilesystemRepository::new(temp_dir.path());
+
+		// Act
+		let result = repo.list("../etc").await;
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(
+			result.unwrap_err(),
+			MigrationError::PathTraversal(_)
+		));
 	}
 }

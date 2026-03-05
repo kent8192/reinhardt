@@ -4,8 +4,8 @@ use reinhardt_macros::installed_apps;
 
 fn main() {
 	installed_apps! {
-		auth: "reinhardt.contrib.auth",
-		contenttypes: "reinhardt.contrib.contenttypes",
+		auth: "myproject.auth",
+		contenttypes: "myproject.contenttypes",
 	}
 
 	// Should be able to use the generated enum

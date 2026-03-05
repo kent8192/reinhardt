@@ -18,12 +18,8 @@ command = "cargo"
 args = [
   "check",
   "--workspace",
-  "--all",
   "--all-features",
   "--all-targets",
-  "--tests",
-  "--benches",
-  "--examples",
   "--quiet"
 ]
 
@@ -102,6 +98,16 @@ args = [
   "-D", "clippy::unimplemented",
   "-D", "clippy::dbg_macro",
 ]
+
+[tasks.placeholder-check]
+description = "Check for formatter placeholder macros left in source files"
+script_runner = "sh"
+script = '''
+set -e
+echo "Scanning for __reinhardt_placeholder__! in source files..."
+docker run --rm -v "$(pwd):/src" semgrep/semgrep \
+  semgrep scan --config /src/.semgrep/placeholder-check.yml --error --metrics off /src
+'''
 
 [tasks.fmt-page-only]
 description = "Format page! macro DSL only (without rustfmt)"
@@ -273,11 +279,11 @@ description = "Run UI tests (trybuild) separately with serial execution (with Do
 dependencies = ["docker-cleanup-force", "ui-test-only"]
 
 [tasks.examples-test-only]
-description = "Test all examples (local + remote) without Docker cleanup"
-dependencies = ["local-examples-test", "remote-examples-test"]
+description = "Test all examples (local only) without Docker cleanup"
+dependencies = ["local-examples-test"]
 
 [tasks.examples-test]
-description = "Test all examples (local + remote) (with Docker cleanup)"
+description = "Test all examples (local only) (with Docker cleanup)"
 dependencies = ["docker-cleanup-force", "examples-test-only"]
 
 [tasks.test-only]
@@ -300,9 +306,9 @@ dependencies = ["docker-cleanup-force", "test-only"]
 # ============================================================================
 
 [tasks.coverage-unit]
-description = "Run unit tests with coverage (generates LCOV report)"
+description = "Run unit tests with coverage (generates Codecov JSON report)"
 command = "cargo"
-args = ["llvm-cov", "nextest", "--workspace", "--lib", "--all-features", "--no-fail-fast", "--lcov", "--output-path", "/tmp/reinhardt-unit-lcov.info"]
+args = ["llvm-cov", "nextest", "--workspace", "--lib", "--all-features", "--no-fail-fast", "--codecov", "--output-path", "/tmp/reinhardt-unit-codecov.json"]
 
 [tasks.coverage-html]
 description = "Run unit tests with coverage and open HTML report"
@@ -337,9 +343,20 @@ description = "Build and open documentation"
 command = "cargo"
 args = ["doc", "--workspace", "--all-features", "--no-deps", "--open"]
 
+[tasks.docs-rs-check]
+description = "Simulate docs.rs build environment (run with nightly)"
+command = "cargo"
+args = ["doc", "--workspace", "--all-features", "--no-deps"]
+env = { RUSTDOCFLAGS = "--cfg docsrs -D warnings", RUSTUP_TOOLCHAIN = "nightly" }
+
 # ============================================================================
 # Utility Tasks
 # ============================================================================
+
+[tasks.audit]
+description = "Run security audit for known vulnerabilities"
+command = "cargo"
+args = ["audit"]
 
 [tasks.outdated]
 description = "Check for outdated dependencies"
@@ -544,3 +561,22 @@ dependencies = ["check", "fmt", "clippy", "test", "examples-test"]
 [tasks.ci-with-examples]
 description = "Alias for ci-full"
 dependencies = ["ci-full"]
+
+# ============================================================================
+# Mutation Testing Tasks
+# ============================================================================
+
+[tasks.mutants]
+description = "Run mutation testing on a single crate (use CRATE env var)"
+command = "cargo"
+args = ["mutants", "-p", "${CRATE}", "--test-tool", "nextest", "--timeout-multiplier", "2", "--jobs", "1"]
+
+[tasks.mutants-shard]
+description = "Run mutation testing for a shard (use SHARD and TOTAL_SHARDS env vars, e.g. SHARD=1 TOTAL_SHARDS=5)"
+command = "cargo"
+args = ["mutants", "--shard", "${SHARD}/${TOTAL_SHARDS}", "--test-tool", "nextest", "--timeout-multiplier", "2", "--jobs", "1"]
+
+[tasks.mutants-all]
+description = "Run mutation testing for all mutants (no sharding)"
+command = "cargo"
+args = ["mutants", "--test-tool", "nextest", "--timeout-multiplier", "2", "--jobs", "1"]

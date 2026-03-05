@@ -3,6 +3,7 @@
 //! This backend stores audit logs in a SQL database.
 
 use crate::settings::audit::{AuditBackend, AuditEvent, ChangeRecord, EventFilter, EventType};
+use crate::settings::database_config::validate_database_url_scheme;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reinhardt_query::prelude::{
@@ -40,6 +41,8 @@ impl DatabaseAuditBackend {
 	/// # }
 	/// ```
 	pub async fn new(database_url: &str) -> Result<Self, String> {
+		validate_database_url_scheme(database_url)?;
+
 		let pool = AnyPool::connect(database_url)
 			.await
 			.map_err(|e| format!("Database connection failed: {}", e))?;

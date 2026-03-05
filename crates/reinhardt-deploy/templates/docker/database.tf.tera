@@ -1,0 +1,30 @@
+resource "docker_image" "database" {
+  name = "{{ db_image }}:{{ db_version }}"
+}
+
+resource "docker_container" "database" {
+  name  = "{{ project_name }}_db"
+  image = docker_image.database.image_id
+
+  ports {
+    internal = {{ db_port }}
+    external = {{ db_port }}
+  }
+
+  networks_advanced {
+    name = docker_network.{{ project_name }}.name
+  }
+{% if db_engine == "postgresql" %}
+  env = [
+    "POSTGRES_DB={{ project_name }}",
+    "POSTGRES_USER={{ project_name }}",
+    "POSTGRES_PASSWORD=${var.db_password}"
+  ]
+{% elif db_engine == "mysql" %}
+  env = [
+    "MYSQL_DATABASE={{ project_name }}",
+    "MYSQL_USER={{ project_name }}",
+    "MYSQL_PASSWORD=${var.db_password}",
+    "MYSQL_ROOT_PASSWORD=${var.db_root_password}"
+  ]
+{% endif %}}

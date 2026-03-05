@@ -30,6 +30,8 @@ pub fn main() -> Result<(), JsValue> {
 	router::init_global_router();
 
 	// Initial render
+	// SAFETY(XSS): render_to_string() HTML-escapes all dynamic text content
+	// and attribute values via html_escape(), preventing XSS injection.
 	let view = router::with_router(|r| r.render_current());
 	app_element.set_inner_html(&view.render_to_string());
 
@@ -37,6 +39,8 @@ pub fn main() -> Result<(), JsValue> {
 	// Effect will automatically re-render when route changes
 	let app_clone = app_element.clone();
 	let _effect = Effect::new(move || {
+		// SAFETY(XSS): render_to_string() HTML-escapes all dynamic text content
+		// and attribute values via html_escape(), preventing XSS injection.
 		let view = router::with_router(|r| {
 			// Subscribe to current_params to trigger re-render on route change
 			let _ = r.current_params().get();
@@ -44,7 +48,10 @@ pub fn main() -> Result<(), JsValue> {
 		});
 		app_clone.set_inner_html(&view.render_to_string());
 	});
-	// Leak the effect - WASM apps don't terminate, so this is intentional
+	// Intentional memory leak: WASM entry points run for the entire application
+	// lifetime and never terminate. The Effect must persist to keep reactive
+	// re-renders working. Dropping it would disable route-change rendering.
+	// See: https://rustwasm.github.io/wasm-bindgen/reference/weak-references.html
 	std::mem::forget(_effect);
 
 	// Set up navigation event listeners

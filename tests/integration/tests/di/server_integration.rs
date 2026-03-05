@@ -8,8 +8,8 @@
 
 use reinhardt_di::{DiResult, Injectable, InjectionContext, SingletonScope};
 use rstest::*;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 // Application state service
 #[derive(Clone)]

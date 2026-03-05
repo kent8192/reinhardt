@@ -12,6 +12,7 @@ use tokio::sync::RwLock;
 use tokio::time::Instant;
 
 /// Configuration for leaky bucket algorithm
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct LeakyBucketConfig {
 	/// Maximum number of requests in the bucket (queue capacity)

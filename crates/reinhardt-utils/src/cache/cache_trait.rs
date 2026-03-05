@@ -62,7 +62,15 @@ pub trait Cache: Send + Sync {
 	}
 
 	/// Increment a numeric value
+	///
+	/// # Warning
+	///
+	/// Default implementation is not atomic. The get-modify-set sequence is
+	/// subject to race conditions under concurrent access. Override in backends
+	/// that support atomic operations (e.g., Redis INCRBY).
 	async fn incr(&self, key: &str, delta: i64) -> Result<i64> {
+		// WARNING: Default implementation is not atomic.
+		// Override in backends that support atomic operations.
 		let current: i64 = self.get(key).await?.unwrap_or(0);
 		let new_value = current + delta;
 		self.set(key, &new_value, None).await?;
@@ -70,6 +78,10 @@ pub trait Cache: Send + Sync {
 	}
 
 	/// Decrement a numeric value
+	///
+	/// # Warning
+	///
+	/// Default implementation is not atomic. See [`Cache::incr`] for details.
 	async fn decr(&self, key: &str, delta: i64) -> Result<i64> {
 		self.incr(key, -delta).await
 	}

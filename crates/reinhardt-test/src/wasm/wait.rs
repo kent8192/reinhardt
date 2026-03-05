@@ -474,15 +474,17 @@ pub async fn flush_effects() {
 ///
 /// This is useful for waiting for visual updates to be applied.
 pub async fn request_animation_frame() {
-	let window = get_window().expect("Window should be available");
+	let window = get_window().expect("window should be available in WASM environment");
 
 	let promise = js_sys::Promise::new(&mut |resolve, _reject| {
 		let closure = Closure::once_into_js(move || {
-			resolve.call0(&JsValue::UNDEFINED).unwrap();
+			resolve
+				.call0(&JsValue::UNDEFINED)
+				.expect("Promise resolve callback should not fail");
 		});
 		window
 			.request_animation_frame(closure.unchecked_ref())
-			.unwrap();
+			.expect("requestAnimationFrame should be available in browser environment");
 	});
 
 	let _ = JsFuture::from(promise).await;

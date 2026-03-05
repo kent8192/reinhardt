@@ -2,6 +2,15 @@ name: Check
 
 on:
   workflow_call:
+    inputs:
+      runner:
+        description: 'Runner label JSON'
+        type: string
+        default: '"ubuntu-latest"'
+      cargo-build-jobs:
+        description: "Parallel cargo build jobs"
+        type: string
+        default: "1"
   workflow_dispatch:
 
 env:
@@ -9,14 +18,33 @@ env:
   RUST_BACKTRACE: 1
   CARGO_TARGET_DIR: /tmp/cargo_target
   CARGO_INCREMENTAL: 0
+  CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
 
 jobs:
+  # Split cargo check by target type for parallel execution across runners.
+  # Each job keeps its own Swatinem/rust-cache entry (cache-key suffix per target)
+  # so subsequent pushes to the same PR only recompile changed files in parallel.
+  # Issue #1845
   check:
-    name: Cargo Check
-    runs-on: ubuntu-latest
+    name: Cargo Check (${{ matrix.target.name }})
+    runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          # Library crates: largest target; also recompiled by all other targets
+          - name: lib
+            flags: "--lib"
+          # Test targets: #[cfg(test)] blocks and integration test files
+          - name: tests
+            flags: "--tests"
+          # Binary, example, and benchmark targets
+          - name: bins-examples
+            flags: "--bins --examples --benches"
     steps:
       - name: Free Disk Space (Ubuntu)
+        if: ${{ !contains(inputs.runner || '', 'self-hosted') }}
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: true
@@ -32,6 +60,10 @@ jobs:
 
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
+        with:
+          # Differentiate cache entries per target type so each parallel job
+          # maintains its own warm cache independently. Issue #1845
+          cache-key: "check-${{ matrix.target.name }}"
 
       - name: Setup protoc
         uses: ./.github/actions/setup-protoc
@@ -41,5 +73,14 @@ jobs:
         with:
           tool: cargo-make
 
-      - name: Run cargo check
-        run: cargo make check
+      - name: Run cargo check (${{ matrix.target.name }})
+        env:
+          # Pass matrix flag through env to avoid direct shell injection.
+          # Values are workflow-defined constants (not user input). Issue #1845
+          TARGET_FLAGS: ${{ matrix.target.flags }}
+        run: |
+          cargo check \
+            --workspace \
+            --all-features \
+            ${TARGET_FLAGS} \
+            --quiet

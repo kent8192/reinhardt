@@ -12,7 +12,7 @@ For detailed standards, see documentation in `docs/` directory.
 
 See README.md for project details.
 
-**Repository URL**: https://github.com/kent8192/reinhardt-rs
+**Repository URL**: https://github.com/kent8192/reinhardt-web
 
 ---
 
@@ -32,7 +32,7 @@ See README.md for project details.
 **MUST use `module.rs` + `module/` directory structure (Rust 2024 Edition)**
 **NEVER use `mod.rs` files** (deprecated)
 
-See docs/MODULE_SYSTEM.md for comprehensive module system standards including:
+See instructions/MODULE_SYSTEM.md for comprehensive module system standards including:
 - Basic module patterns (small, medium, large)
 - Visibility control with `pub use`
 - Anti-patterns to avoid
@@ -47,7 +47,7 @@ See docs/MODULE_SYSTEM.md for comprehensive module system standards including:
 - NO deletion record comments in code
 - NO relative paths beyond `../` (use absolute paths)
 - Mark ALL placeholders with `todo!()` or `// TODO:` comment
-- Document ALL `#[allow(...)]` attributes with explanatory comments (see @docs/ANTI_PATTERNS.md)
+- Document ALL `#[allow(...)]` attributes with explanatory comments (see @instructions/ANTI_PATTERNS.md)
 
 **Unimplemented Features Notation:**
 - `todo!()` - Features that WILL be implemented
@@ -64,7 +64,7 @@ See docs/MODULE_SYSTEM.md for comprehensive module system standards including:
 - `cargo make clippy-todo-check` enforces `clippy::todo`, `clippy::unimplemented`, and `clippy::dbg_macro` as deny lints
 - Local pre-check: `semgrep scan --config .semgrep/ --error --metrics off`
 
-See docs/ANTI_PATTERNS.md for comprehensive anti-patterns guide.
+See instructions/ANTI_PATTERNS.md for comprehensive anti-patterns guide.
 
 ### Testing
 
@@ -75,13 +75,13 @@ See docs/ANTI_PATTERNS.md for comprehensive anti-patterns guide.
 - Integration tests: Test integration points between components
   - Cross-crate integration: Place in `tests/` crate
   - Within-crate integration: Can place in functional crate
-- Functional crates MUST NOT include other Reinhardt crates in `dev-dependencies`
+- Functional crates MUST NOT use `{ workspace = true }` for `reinhardt-test` in `dev-dependencies` (use optional dependency or path-only dev-dependency; see KI-2)
 - ALL test artifacts MUST be cleaned up
 - Global state tests MUST use `#[serial(group_name)]`
 - Use strict assertions (`assert_eq!`) instead of loose matching (`contains`)
 - Follow Arrange-Act-Assert (AAA) pattern for test structure
 
-See docs/TESTING_STANDARDS.md for comprehensive testing standards including:
+See instructions/TESTING_STANDARDS.md for comprehensive testing standards including:
 - Testing philosophy (TP-1, TP-2)
 - Test organization (TO-1, TO-2)
 - Test implementation (TI-1 ~ TI-6)
@@ -109,7 +109,7 @@ See docs/TESTING_STANDARDS.md for comprehensive testing standards including:
   - Avoid phrases like "User requested...", "As requested by...", "User asked..."
   - Focus on the "why" (technical rationale) not the "who asked"
 
-See docs/DOCUMENTATION_STANDARDS.md for comprehensive documentation standards.
+See instructions/DOCUMENTATION_STANDARDS.md for comprehensive documentation standards.
 
 ### Git Workflow
 
@@ -125,6 +125,22 @@ See docs/DOCUMENTATION_STANDARDS.md for comprehensive documentation standards.
 - Use `git apply <patchfile name>.patch` for partial file commits
 - **NEVER** execute batch commits without user confirmation
 
+**Branch Operations:**
+- When merging branches and resolving conflicts, execute immediately without entering Plan Mode
+- Before creating branches, verify names don't conflict with existing ones using `git worktree list` and `git branch -a`
+
+**PR Conflict Resolution:**
+- **MUST** use worktree-based merge strategy for resolving PR conflicts (NOT rebase or force-push)
+- Procedure:
+  1. Create a local worktree for the PR source branch
+  2. Merge the target branch (e.g., `main`) into the source branch within the worktree
+  3. Resolve conflicts in the worktree
+  4. Commit the merge resolution
+  5. Push the source branch to remote
+  6. Clean up the worktree
+- **NEVER** use `git rebase` or `git push --force` to resolve PR conflicts
+- This preserves commit history and avoids force-push risks
+
 **GitHub Integration:**
 - **MUST** use GitHub CLI (`gh`) for all GitHub operations
 - Use `gh pr create` for creating pull requests
@@ -132,7 +148,11 @@ See docs/DOCUMENTATION_STANDARDS.md for comprehensive documentation standards.
 - Use `gh issue create` for creating issues
 - Use `gh issue view` for viewing issue details
 - Use `gh api` for accessing GitHub API
+- Use `gh discussion list` for viewing discussions
+- Use `gh discussion create` for creating discussions
+- For usage questions, prefer GitHub Discussions over Issues
 - **NEVER** use raw `curl` or web browser for GitHub operations when `gh` is available
+- When GitHub MCP tools return errors (e.g., 404), immediately fall back to `gh` CLI instead of retrying
 
 **GitHub Comments & Interactions:**
 - **NEVER** post comments on PRs or Issues without authorization
@@ -142,13 +162,13 @@ See docs/DOCUMENTATION_STANDARDS.md for comprehensive documentation standards.
 - Comments MUST reference specific code locations with repository-relative paths
 - Comments MUST NOT contain user requests, AI interactions, or absolute local paths
 
-See docs/GITHUB_INTERACTION.md for comprehensive GitHub interaction guidelines including:
+See instructions/GITHUB_INTERACTION.md for comprehensive GitHub interaction guidelines including:
 - Posting authorization policy (PP-1 ~ PP-3)
 - PR review response format (RR-1 ~ RR-3)
 - Issue discussion guidelines (ID-1 ~ ID-2)
 - Agent context provision (AC-1 ~ AC-2)
 
-See docs/COMMIT_GUIDELINE.md for detailed commit guidelines including:
+See instructions/COMMIT_GUIDELINE.md for detailed commit guidelines including:
 - Commit execution policy (CE-1 ~ CE-5)
 - Commit message format (CM-1 ~ CM-3)
 - Commit message style guide
@@ -215,18 +235,20 @@ This project uses [release-plz](https://release-plz.ieni.dev/) for automated rel
 
 **Key Warnings (Lessons Learned):**
 - **NEVER** create circular publish dependency chains (functional crates must not dev-depend on other Reinhardt crates)
-- **NEVER** add `version` field to `reinhardt-test` workspace dependency (causes publish failure; see cargo#15151)
-- **MUST** follow RP-1 recovery procedure for partial release failures (see docs/RELEASE_PROCESS.md)
+- **MUST** declare `reinhardt-test` as an optional dependency (not dev-dependency) in functional crates for correct release-plz publish ordering (see KI-2 in instructions/RELEASE_PROCESS.md)
+- **MUST** include `version` field in `reinhardt-test` workspace dependency (same as other published crates)
+- **MUST** follow RP-1 recovery procedure for partial release failures (see instructions/RELEASE_PROCESS.md)
 - **NEVER** change `pr_branch_prefix` from `"release-plz-"` (breaks two-step release workflow)
 - `publish_no_verify = true` is required because dev-dependencies reference unpublished workspace crates
 
-See docs/RELEASE_PROCESS.md for detailed release procedures.
+See instructions/RELEASE_PROCESS.md for detailed release procedures.
 
 ### Workflow Best Practices
 
 - Run dry-run for ALL batch operations before actual execution
 - Use parallel agents for independent file edits
 - NO batch commits (create one at a time with user confirmation)
+- Execute straightforward operations (branch deletion, worktree cleanup) immediately without planning
 
 ### Issue Handling
 
@@ -241,7 +263,7 @@ See docs/RELEASE_PROCESS.md for detailed release procedures.
 - Same-crate related issues MAY be combined into a single PR (WU-2)
 - Cross-crate shared changes MUST be preceding PRs, merged before per-crate fix PRs (WU-3)
 
-See docs/ISSUE_HANDLING.md for comprehensive issue handling principles including:
+See instructions/ISSUE_HANDLING.md for comprehensive issue handling principles including:
 - Handling approach (HA-1 ~ HA-4)
 - Work unit principles (WU-1 ~ WU-3)
 - Workflow examples
@@ -282,6 +304,17 @@ docker run --rm -v "$(pwd):/src" semgrep/semgrep semgrep scan --config .semgrep/
 docker run --rm -v "$(pwd):/src" semgrep/semgrep semgrep scan --config .semgrep/ --baseline-commit origin/main --error --metrics off
 ```
 
+**Security Audit:**
+```bash
+cargo make audit  # Check for known vulnerabilities in dependencies
+```
+
+**Placeholder Check (formatter artifact detection):**
+```bash
+# Check for __reinhardt_placeholder__! left in source files after page! macro formatting
+cargo make placeholder-check
+```
+
 **Database Tests:**
 ```bash
 # Database tests use TestContainers automatically (no external database needed)
@@ -319,6 +352,18 @@ gh release create [tag] --title "Release v1.0.0" --notes "Release notes"
 gh repo view
 gh api repos/{owner}/{repo}/pulls
 ```
+
+**PR/Issue Template Compliance:**
+
+- **PR Template:** `.github/PULL_REQUEST_TEMPLATE.md` (see @instructions/PR_GUIDELINE.md for details)
+- **Issue Templates:** `.github/ISSUE_TEMPLATE/*.yml` (see @instructions/ISSUE_GUIDELINES.md for details)
+- **Note:** GitHub CLI does not auto-apply templates; include template structure in `--body`
+
+**Linking PRs to Issues:**
+
+Use keywords to auto-close issues on merge: `Fixes #N`, `Closes #N`, `Resolves #N`
+- Use `Refs #N` for related issues (no auto-close)
+- See [GitHub Docs](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue) for details
 
 **CRITICAL: This project uses Docker for TestContainers integration, NOT Podman.**
 
@@ -361,6 +406,14 @@ cat .testcontainers.properties
 
 ## Review Process
 
+**CI Failure Diagnosis (Known Patterns):**
+- Check these recurring patterns first:
+  1. rustdoc intra-doc link errors with `-D warnings`
+  2. docs.rs build issues from empty code blocks
+  3. SemVer compatibility with `cargo-semver-checks`
+  4. Windows CI-specific failures
+- Always run `cargo doc --no-deps` locally before pushing doc-related fixes
+
 Before submitting code:
 
 1. **Run all commands:**
@@ -373,13 +426,13 @@ Before submitting code:
 2. **Iterate until all issues resolved**
 
 3. **Review compliance with standards:**
-   - [ ] Module system (@docs/MODULE_SYSTEM.md)
-   - [ ] Testing standards (@docs/TESTING_STANDARDS.md)
-   - [ ] No anti-patterns (@docs/ANTI_PATTERNS.md)
-   - [ ] Documentation updated (@docs/DOCUMENTATION_STANDARDS.md)
-   - [ ] Git commit policy (@docs/COMMIT_GUIDELINE.md)
-   - [ ] GitHub interaction policy (@docs/GITHUB_INTERACTION.md)
-   - [ ] Issue handling principles (@docs/ISSUE_HANDLING.md)
+   - [ ] Module system (@instructions/MODULE_SYSTEM.md)
+   - [ ] Testing standards (@instructions/TESTING_STANDARDS.md)
+   - [ ] No anti-patterns (@instructions/ANTI_PATTERNS.md)
+   - [ ] Documentation updated (@instructions/DOCUMENTATION_STANDARDS.md)
+   - [ ] Git commit policy (@instructions/COMMIT_GUIDELINE.md)
+   - [ ] GitHub interaction policy (@instructions/GITHUB_INTERACTION.md)
+   - [ ] Issue handling principles (@instructions/ISSUE_HANDLING.md)
    - [ ] No unresolved TODO/FIXME comments in new code (TODO Check CI)
 
 ---
@@ -414,14 +467,15 @@ Before submitting code:
 - Use `deprecated` type for marking features/APIs as deprecated (dedicated CHANGELOG section)
 - Review Release PRs created by release-plz before merging
 - Verify no circular dev-dependency chains exist before publishing (functional crates must not dev-depend on other Reinhardt crates)
-- Keep `reinhardt-test` workspace dependency without `version` field (unpublished crate; cargo#15151)
-- Follow RP-1 procedure in docs/RELEASE_PROCESS.md for partial release failures
+- Include `version` field in `reinhardt-test` workspace dependency (published crate, same as others)
+- Follow RP-1 procedure in instructions/RELEASE_PROCESS.md for partial release failures
 - Use GitHub CLI (`gh`) for all GitHub operations (PR, issues, releases)
 - Search existing issues before creating new ones
 - Use appropriate issue templates for all issues
 - Apply at least one type label to every issue
 - Report security vulnerabilities privately via GitHub Security Advisories
 - Use `.github/labels.yml` as source of truth for label definitions
+- Follow PR/Issue template structure when creating via `gh` CLI
 - Use 1 PR = 1 crate x 1 fix pattern as the basic work unit for batch issue handling
 - Create preceding PRs for cross-crate shared changes before per-crate fix PRs
 - Organize batch work into phases by severity and parallelize across independent crates
@@ -443,6 +497,15 @@ Before submitting code:
 - Include Claude Code attribution footer on all GitHub comments
 - Use repository-relative paths (not absolute) in GitHub comments
 - Provide structured agent context using AC-2 template format
+- Fall back to `gh` CLI when GitHub MCP tools return errors
+- Verify branch name uniqueness before creation (`git worktree list` and `git branch -a`)
+- Check known CI failure patterns before deep investigation
+- Run `cargo doc --no-deps` locally before pushing doc-related fixes
+- Execute merge/conflict resolution and straightforward operations immediately without Plan Mode
+- Use worktree-based merge strategy for PR conflict resolution (NOT rebase/force-push)
+- Apply `agent-suspect` label to all agent-detected bug Issues
+- Verify agent-detected bugs independently before removing `agent-suspect` label
+- Use independent context (separate agent session) for agent re-evaluation of `agent-suspect` Issues
 
 ### ❌ NEVER DO
 - Use `mod.rs` files (deprecated pattern)
@@ -463,8 +526,8 @@ Before submitting code:
 - Manually bump versions in feature branches (let release-plz handle it)
 - Create release tags manually (release-plz creates them automatically)
 - Skip reviewing Release PRs before merging
-- Add `reinhardt-test` to functional crate `[dev-dependencies]` (creates circular publish dependency)
-- Add `version` field to `reinhardt-test` workspace dependency (breaks cargo publish; cargo#15151)
+- Use `reinhardt-test = { workspace = true }` in functional crate `[dev-dependencies]` (workspace deps include version, causing publish failures; use optional dep or path-only dev-dep instead)
+- Omit `version` field from `reinhardt-test` workspace dependency (causes publish failure for dependents)
 - Change `pr_branch_prefix` from `"release-plz-"` (breaks two-step release workflow)
 - Merge Release PR without rolling back unpublished crate versions after partial release failure
 - Write vague commit descriptions that are unclear as CHANGELOG entries (e.g., "fix issue", "update code")
@@ -495,19 +558,30 @@ Before submitting code:
 - Include absolute local paths in GitHub comments (`/Users/...`, `/home/...`)
 - Post vague or non-actionable GitHub comments
 - Skip Claude Code attribution footer on GitHub comments
+- Create PRs/Issues without following template structure
+- Enter Plan Mode for merge operations, branch deletion, or worktree cleanup
+- Retry GitHub MCP tools after errors instead of falling back to `gh` CLI
+- Create branches without checking for name conflicts
+- Use rebase or force-push to resolve PR conflicts (use worktree merge instead)
+- Remove `agent-suspect` label without independent verification (separate agent or human)
+- Count `agent-suspect` labeled Issues toward stability timer reset (SC-2a)
+- Use the same agent context for both detection and verification of a bug
 
 ### 📚 Detailed Standards
 
 For comprehensive guidelines, see:
-- **Module System**: docs/MODULE_SYSTEM.md
-- **Testing**: docs/TESTING_STANDARDS.md
-- **Anti-Patterns**: docs/ANTI_PATTERNS.md
-- **Documentation**: docs/DOCUMENTATION_STANDARDS.md
-- **Git Commits**: docs/COMMIT_GUIDELINE.md (includes CHANGELOG generation guidelines)
-- **Release Process**: docs/RELEASE_PROCESS.md
-- **Issues**: docs/ISSUE_GUIDELINES.md
-- **Issue Handling**: docs/ISSUE_HANDLING.md
-- **GitHub Interactions**: docs/GITHUB_INTERACTION.md
+- **Module System**: instructions/MODULE_SYSTEM.md
+- **Testing**: instructions/TESTING_STANDARDS.md
+- **Anti-Patterns**: instructions/ANTI_PATTERNS.md
+- **Documentation**: instructions/DOCUMENTATION_STANDARDS.md
+- **Git Commits**: instructions/COMMIT_GUIDELINE.md (includes CHANGELOG generation guidelines)
+- **Release Process**: instructions/RELEASE_PROCESS.md
+- **Stability Policy**: instructions/STABILITY_POLICY.md
+- **Agent Bug Discovery**: instructions/STABILITY_POLICY.md (SC-2a)
+- **Issues**: instructions/ISSUE_GUIDELINES.md
+- **Issue Handling**: instructions/ISSUE_HANDLING.md
+- **GitHub Interactions**: instructions/GITHUB_INTERACTION.md
+- **GitHub Discussions**: https://github.com/kent8192/reinhardt-web/discussions
 - **Security Policy**: SECURITY.md
 - **Code of Conduct**: CODE_OF_CONDUCT.md
 - **Label Definitions**: .github/labels.yml
@@ -515,4 +589,4 @@ For comprehensive guidelines, see:
 
 ---
 
-**Note**: This CLAUDE.md focuses on core rules and quick reference. All detailed standards, examples, and comprehensive guides are in the `docs/` directory. Always review CLAUDE.md before starting work, and consult detailed documentation as needed.
+**Note**: This CLAUDE.md focuses on core rules and quick reference. All detailed standards, examples, and comprehensive guides are in the `instructions/` directory. Always review CLAUDE.md before starting work, and consult detailed documentation as needed.

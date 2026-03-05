@@ -3,5 +3,10 @@
 use reinhardt_pages::page;
 
 fn main() {
-	let _invalid = __reinhardt_placeholder__!(/*0*/);
+	let _invalid = page!(|| {
+		input {
+			r#type: "text",
+			maxlength: "100",
+		}
+	});
 }

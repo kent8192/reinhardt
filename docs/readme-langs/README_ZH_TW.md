@@ -13,7 +13,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/reinhardt-web.svg)](https://crates.io/crates/reinhardt-web)
 [![Documentation](https://docs.rs/reinhardt-web/badge.svg)](https://docs.rs/reinhardt-web)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE.md)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](../../LICENSE)
 [![codecov](https://codecov.io/gh/kent8192/reinhardt-web/graph/badge.svg)](https://codecov.io/gh/kent8192/reinhardt-web)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/kent8192/reinhardt-web)
 
@@ -25,10 +25,11 @@
 
 您可能在找:
 
+- 🌐 [官方網站](https://reinhardt-web.dev) - 文件、教學和指南
 - 🚀 [快速開始](#快速開始) - 5分鐘啟動運行
 - 📦 [安裝選項](#安裝) - 選擇你的風格: Micro、Standard 或 Full
-- 📚 [入門指南](../GETTING_STARTED.md) - 分步教學
-- 🎛️ [功能旗標](../FEATURE_FLAGS.md) - 微調你的構建
+- 📚 [入門指南](https://reinhardt-web.dev/quickstart/getting-started/) - 分步教學
+- 🎛️ [功能旗標](https://reinhardt-web.dev/docs/feature-flags/) - 微調你的構建
 - 📖 [API文檔](https://docs.rs/reinhardt-web) - 完整API參考
 - 💬 [社群與支援](#取得幫助) - 從社群獲取幫助
 
@@ -61,7 +62,7 @@ Reinhardt匯集了三個世界的精華:
 - **分頁、過濾、速率限制** 內建
 - **訊號** 用於事件驅動架構
 
-完整列表請參閱[可用元件](#可用元件)，範例請參閱[入門指南](../GETTING_STARTED.md)。
+完整列表請參閱[可用元件](#可用元件)，範例請參閱[入門指南](https://reinhardt-web.dev/quickstart/getting-started/)。
 
 ## 安裝
 
@@ -78,7 +79,7 @@ Reinhardt是一個模組化框架。選擇你的起點:
 [dependencies]
 # 匯入為'reinhardt'，發布為'reinhardt-web'
 # 預設啟用所有功能（完整套裝）
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web" }
+reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web" }
 ```
 
 **包含:** Database、Auth、REST API、Admin、GraphQL、WebSockets、Cache、i18n、Mail、Sessions、Static Files、Storage
@@ -97,7 +98,7 @@ use reinhardt::{Request, Response, StatusCode};
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-features = false, features = ["standard"] }
+reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web", default-features = false, features = ["standard"] }
 ```
 
 **包含:** Core、Database（PostgreSQL）、REST API、Auth、Middleware、Pages（帶SSR的WASM前端）
@@ -110,7 +111,7 @@ reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-feat
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-features = false, features = ["minimal"] }
+reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 ```
 
 **包含:** HTTP、路由、DI、參數提取、伺服器
@@ -124,27 +125,27 @@ reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-feat
 ```toml
 [dependencies]
 # 核心元件
-reinhardt-http = "0.1.0-alpha.1"
-reinhardt-urls = "0.1.0-alpha.1"
+reinhardt-http = "0.1.0-rc.1"
+reinhardt-urls = "0.1.0-rc.1"
 
 # 可選: 資料庫
-reinhardt-db = "0.1.0-alpha.1"
+reinhardt-db = "0.1.0-rc.1"
 
 # 可選: 認證
-reinhardt-auth = "0.1.0-alpha.1"
+reinhardt-auth = "0.1.0-rc.1"
 
 # 可選: REST API功能
-reinhardt-rest = "0.1.0-alpha.1"
+reinhardt-rest = "0.1.0-rc.1"
 
 # 可選: 管理面板
-reinhardt-admin = "0.1.0-alpha.1"
+reinhardt-admin = "0.1.0-rc.1"
 
 # 可選: 進階功能
-reinhardt-graphql = "0.1.0-alpha.1"
-reinhardt-websockets = "0.1.0-alpha.1"
+reinhardt-graphql = "0.1.0-rc.1"
+reinhardt-websockets = "0.1.0-rc.1"
 ```
 
-**📖 完整的可用crates和功能旗標列表，請參閱[功能旗標指南](../FEATURE_FLAGS.md)。**
+**📖 完整的可用crates和功能旗標列表，請參閱[功能旗標指南](https://reinhardt-web.dev/docs/feature-flags/)。**
 
 ## 快速開始
 
@@ -309,9 +310,9 @@ pub fn routes() -> ServerRouter {
 - **`cache`功能**: `Cache`、`InMemoryCache`
 - **`sessions`功能**: `Session`、`AuthenticationMiddleware`
 
-完整列表請參閱[功能旗標指南](../FEATURE_FLAGS.md)。
+完整列表請參閱[功能旗標指南](https://reinhardt-web.dev/docs/feature-flags/)。
 
-完整的分步指南請參閱[入門指南](../GETTING_STARTED.md)。
+完整的分步指南請參閱[入門指南](https://reinhardt-web.dev/quickstart/getting-started/)。
 
 ## 🎓 透過範例學習
 
@@ -390,7 +391,7 @@ Reinhardt提供兩種具有不同優先級的環境變數來源:
 當環境變數應始終優先時選擇`EnvSource`（例如生產部署）。
 當TOML檔案應為主要配置來源時選擇`LowPriorityEnvSource`（例如開發）。
 
-詳情請參閱[設定文檔](../SETTINGS_DOCUMENT.md)。
+詳情請參閱[設定文檔](docs/SETTINGS_DOCUMENT.md)。
 
 **使用內建DefaultUser:**
 
@@ -477,7 +478,7 @@ pub struct CustomUser {
 - `#[field(null = true)]` - 允許NULL值
 - `#[field(unique = true)]` - 強制唯一性約束
 
-完整的欄位屬性列表請參閱[欄位屬性指南](../field_attributes.md)。
+完整的欄位屬性列表請參閱[欄位屬性指南](docs/field_attributes.md)。
 
 生成的欄位存取器在查詢中啟用型別安全的欄位引用:
 
@@ -1001,31 +1002,31 @@ Reinhardt提供可混合搭配的模組化元件:
 | **測試**            |                           |                                             |
 | 測試工具            | `reinhardt-test`          | 測試輔助、fixtures、TestContainers          |
 
-**各crate內的詳細功能旗標，請參閱[功能旗標指南](../FEATURE_FLAGS.md)。**
+**各crate內的詳細功能旗標，請參閱[功能旗標指南](https://reinhardt-web.dev/docs/feature-flags/)。**
 
 ---
 
 ## 文檔
 
-- 📚 [入門指南](../GETTING_STARTED.md) - 初學者分步教學
-- 🎛️ [功能旗標指南](../FEATURE_FLAGS.md) - 透過細粒度功能控制最佳化構建
+- 📚 [入門指南](https://reinhardt-web.dev/quickstart/getting-started/) - 初學者分步教學
+- 🎛️ [功能旗標指南](https://reinhardt-web.dev/docs/feature-flags/) - 透過細粒度功能控制最佳化構建
 - 📖 [API參考](https://docs.rs/reinhardt)（即將推出）
-- 📝 [教學](../tutorials/) - 透過構建真實應用學習
+- 📝 [教學](https://reinhardt-web.dev/quickstart/tutorials/) - 透過構建真實應用學習
 
-**AI助手請參閱**: 專案特定的編碼標準、測試指南和開發慣例請參閱[CLAUDE.md](../../CLAUDE.md)。
+**AI助手請參閱**: 專案特定的編碼標準、測試指南和開發慣例請參閱[CLAUDE.md](CLAUDE.md)。
 
 ## 💬 取得幫助
 
 Reinhardt是一個社群驅動的專案。以下是取得幫助的途徑:
 
 - 💬 **Discord**: 加入我們的Discord伺服器進行即時聊天（即將推出）
-- 💭 **GitHub Discussions**: [提問和分享想法](https://github.com/kent8192/reinhardt-rs/discussions)
-- 🐛 **Issues**: [報告bug](https://github.com/kent8192/reinhardt-rs/issues)
+- 💭 **GitHub Discussions**: [提問和分享想法](https://github.com/kent8192/reinhardt-web/discussions)
+- 🐛 **Issues**: [報告bug](https://github.com/kent8192/reinhardt-web/issues)
 - 📖 **文檔**: [閱讀指南](../)
 
 提問前，請查看:
 
-- ✅ [入門指南](../GETTING_STARTED.md)
+- ✅ [入門指南](https://reinhardt-web.dev/quickstart/getting-started/)
 - ✅ [Examples](../../examples/)
 - ✅ 現有的GitHub Issues和Discussions
 
@@ -1051,12 +1052,7 @@ Reinhardt是一個社群驅動的專案。以下是取得幫助的途徑:
 
 ## 授權
 
-雙重授權，可選擇以下之一:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](../../LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](../../LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-由您選擇。
+本專案基於 [BSD 3-Clause License](../../LICENSE) 授權。
 
 ### 第三方歸屬
 

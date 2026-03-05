@@ -34,6 +34,7 @@ use super::{ContentType, ContentTypeRegistry};
 use std::collections::{HashMap, HashSet};
 
 /// Options for inspection operations
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct InspectOptions {
 	/// Whether to include detailed information

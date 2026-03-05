@@ -230,6 +230,27 @@ pub fn global_registry() -> &'static Arc<DependencyRegistry> {
 	})
 }
 
+/// Resets the global dependency registry for test isolation.
+///
+/// This replaces the `GLOBAL_REGISTRY` `OnceLock` with a fresh instance so
+/// that the next call to `global_registry()` will re-initialize it.
+///
+/// # Safety
+///
+/// This function replaces a static `OnceLock` value using `std::ptr::write`.
+/// It is only safe to call from a single-threaded test context (e.g., with
+/// `#[serial]`) where no other thread is concurrently reading the registry.
+#[cfg(test)]
+pub fn reset_global_registry() {
+	// SAFETY: We replace the OnceLock in-place with a fresh instance.
+	// This is safe only when called from a single-threaded test context
+	// (enforced by #[serial]) where no concurrent readers exist.
+	unsafe {
+		let ptr = std::ptr::addr_of!(GLOBAL_REGISTRY) as *mut OnceLock<Arc<DependencyRegistry>>;
+		std::ptr::write(ptr, OnceLock::new());
+	}
+}
+
 /// Registration entry for inventory collection
 pub struct DependencyRegistration {
 	pub type_id: TypeId,

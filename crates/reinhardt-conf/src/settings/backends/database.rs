@@ -63,6 +63,8 @@ use crate::settings::dynamic::{DynamicBackend, DynamicError, DynamicResult};
 #[cfg(feature = "dynamic-database")]
 use async_trait::async_trait;
 
+use crate::settings::database_config::validate_database_url_scheme;
+
 /// Database backend for runtime configuration changes
 ///
 /// This backend allows dynamic settings to be stored in and retrieved from SQL databases,
@@ -128,6 +130,8 @@ impl DatabaseBackend {
 	/// ```
 	#[cfg(feature = "dynamic-database")]
 	pub async fn new(connection_url: &str) -> Result<Self, String> {
+		validate_database_url_scheme(connection_url)?;
+
 		let pool = AnyPool::connect(connection_url)
 			.await
 			.map_err(|e| format!("Database connection error: {}", e))?;

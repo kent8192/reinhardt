@@ -727,11 +727,11 @@ impl RegexValidator {
 	/// ```
 	/// use reinhardt_db::orm::validators::RegexValidator;
 	///
-	// Valid pattern
+	/// // Valid pattern
 	/// let result = RegexValidator::try_new(r"^\d+$");
 	/// assert!(result.is_ok());
 	///
-	// Invalid pattern
+	/// // Invalid pattern
 	/// let result = RegexValidator::try_new(r"[invalid(regex");
 	/// assert!(result.is_err());
 	/// ```

@@ -224,8 +224,8 @@ impl TestFixtures {
 	/// Generate random state string
 	pub fn random_state() -> String {
 		use rand::Rng;
-		rand::thread_rng()
-			.sample_iter(&rand::distributions::Alphanumeric)
+		rand::rng()
+			.sample_iter(&rand::distr::Alphanumeric)
 			.take(32)
 			.map(char::from)
 			.collect()
@@ -234,8 +234,8 @@ impl TestFixtures {
 	/// Generate random nonce string
 	pub fn random_nonce() -> String {
 		use rand::Rng;
-		rand::thread_rng()
-			.sample_iter(&rand::distributions::Alphanumeric)
+		rand::rng()
+			.sample_iter(&rand::distr::Alphanumeric)
 			.take(32)
 			.map(char::from)
 			.collect()

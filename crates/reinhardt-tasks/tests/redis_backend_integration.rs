@@ -7,7 +7,7 @@
 use reinhardt_tasks::backend::TaskBackend;
 use reinhardt_tasks::backends::redis::RedisTaskBackend;
 use reinhardt_tasks::{Task, TaskId, TaskPriority, TaskStatus};
-use reinhardt_test::fixtures::redis_container;
+use reinhardt_testkit::fixtures::redis_container;
 use rstest::*;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

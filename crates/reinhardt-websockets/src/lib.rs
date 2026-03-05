@@ -154,6 +154,7 @@ pub mod handler;
 pub mod integration;
 pub mod metrics;
 pub mod middleware;
+pub mod origin;
 pub mod protocol;
 pub mod reconnection;
 #[cfg(feature = "redis-channel")]
@@ -171,10 +172,13 @@ pub use channels::{
 	InMemoryChannelLayer,
 };
 #[cfg(feature = "compression")]
-pub use compression::{CompressionCodec, compress_message, decompress_message};
+pub use compression::{
+	CompressionCodec, CompressionConfig, compress_message, decompress_message,
+	decompress_message_with_config,
+};
 pub use connection::{
-	ConnectionConfig, ConnectionTimeoutMonitor, Message, WebSocketConnection, WebSocketError,
-	WebSocketResult,
+	ConnectionConfig, ConnectionTimeoutMonitor, HeartbeatConfig, HeartbeatMonitor, Message,
+	PingPongConfig, WebSocketConnection, WebSocketError, WebSocketResult,
 };
 pub use consumers::{
 	BroadcastConsumer, ConsumerChain, ConsumerContext, EchoConsumer, JsonConsumer,
@@ -191,11 +195,16 @@ pub use middleware::{
 	MessageMiddleware, MessageSizeLimitMiddleware, MiddlewareChain, MiddlewareError,
 	MiddlewareResult,
 };
+pub use origin::{
+	OriginPolicy, OriginValidationConfig, OriginValidationMiddleware, validate_origin,
+};
 pub use protocol::{
 	DEFAULT_MAX_FRAME_SIZE, DEFAULT_MAX_MESSAGE_SIZE, default_websocket_config,
 	websocket_config_with_limits,
 };
-pub use reconnection::{ReconnectionConfig, ReconnectionStrategy};
+pub use reconnection::{
+	AutoReconnectHandler, ReconnectionConfig, ReconnectionState, ReconnectionStrategy,
+};
 #[cfg(feature = "redis-channel")]
 pub use redis_channel::{RedisChannelLayer, RedisConfig};
 pub use room::{BroadcastResult, Room, RoomError, RoomManager, RoomResult};

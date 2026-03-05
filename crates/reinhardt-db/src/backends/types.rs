@@ -39,7 +39,7 @@ impl DatabaseType {
 }
 
 /// Query value types
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum QueryValue {
 	Null,
 	Bool(bool),
@@ -103,13 +103,13 @@ impl From<Uuid> for QueryValue {
 }
 
 /// Query result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryResult {
 	pub rows_affected: u64,
 }
 
 /// Row from query result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Row {
 	pub data: HashMap<String, QueryValue>,
 }

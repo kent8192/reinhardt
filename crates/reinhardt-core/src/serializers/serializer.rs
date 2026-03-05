@@ -36,6 +36,7 @@ pub trait Serializer {
 }
 
 /// Errors that can occur during validation
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidatorError {
 	/// Unique constraint violation
@@ -172,7 +173,8 @@ impl ValidatorError {
 }
 
 /// Errors that can occur during serialization
-#[derive(Debug, Clone)]
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SerializerError {
 	/// Validation error
 	Validation(ValidatorError),
@@ -314,6 +316,7 @@ impl SerializerError {
 /// let deserialized = serializer.deserialize(&json).unwrap();
 /// assert_eq!(user.id, deserialized.id);
 /// ```
+#[derive(Debug, Clone)]
 pub struct JsonSerializer<T> {
 	_phantom: std::marker::PhantomData<T>,
 }

@@ -26,6 +26,7 @@ impl CachedSecret {
 }
 
 /// HashiCorp Vault client configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct VaultConfig {
 	/// Vault server address (e.g., "http://127.0.0.1:8200")
@@ -221,7 +222,8 @@ impl SecretProvider for VaultSecretProvider {
 	async fn get_secret(&self, key: &str) -> SecretResult<SecretString> {
 		// Check cache first
 		{
-			let cache = self.cache.read().unwrap();
+			// Recover from poisoned lock to prevent cascading panics
+			let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
 			if let Some(cached) = cache.get(key)
 				&& cached.is_valid()
 			{
@@ -243,7 +245,8 @@ impl SecretProvider for VaultSecretProvider {
 
 		// Update cache
 		{
-			let mut cache = self.cache.write().unwrap();
+			// Recover from poisoned lock to prevent cascading panics
+			let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
 			cache.insert(
 				key.to_string(),
 				CachedSecret {
@@ -296,7 +299,8 @@ impl SecretProvider for VaultSecretProvider {
 
 		// Invalidate cache entry
 		{
-			let mut cache = self.cache.write().unwrap();
+			// Recover from poisoned lock to prevent cascading panics
+			let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
 			cache.remove(key);
 		}
 
@@ -311,7 +315,8 @@ impl SecretProvider for VaultSecretProvider {
 
 		// Invalidate cache entry
 		{
-			let mut cache = self.cache.write().unwrap();
+			// Recover from poisoned lock to prevent cascading panics
+			let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
 			cache.remove(key);
 		}
 
@@ -326,7 +331,8 @@ impl SecretProvider for VaultSecretProvider {
 
 	fn exists(&self, key: &str) -> bool {
 		// Check cached state (since this is a sync method, we can't make async calls)
-		let cache = self.cache.read().unwrap();
+		// Recover from poisoned lock to prevent cascading panics
+		let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
 		if let Some(cached) = cache.get(key) {
 			cached.is_valid()
 		} else {
@@ -342,6 +348,7 @@ impl SecretProvider for VaultSecretProvider {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[tokio::test]
 	async fn test_vault_provider_basic() {
@@ -408,5 +415,61 @@ mod tests {
 		// Verify secret was deleted by attempting to retrieve it
 		let result = provider.get_secret("test/password").await;
 		assert!(result.is_err());
+	}
+
+	#[rstest]
+	#[test]
+	fn test_poisoned_read_lock_does_not_panic() {
+		// Arrange: Create a provider and poison its cache RwLock
+		let config = VaultConfig::new("http://127.0.0.1:8200", "test-token");
+		let provider = VaultSecretProvider::new(config).unwrap();
+
+		// Poison the lock by panicking while holding a write guard
+		let cache_clone = Arc::clone(&provider.cache);
+		let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			let _guard = cache_clone.write().unwrap();
+			panic!("intentional panic to poison lock");
+		}));
+
+		// Act: Access the poisoned lock via exists() (uses read lock)
+		let result = provider.exists("any_key");
+
+		// Assert: Should not panic, returns false for non-existent key
+		assert_eq!(result, false);
+	}
+
+	#[rstest]
+	#[test]
+	fn test_poisoned_write_lock_does_not_panic_on_exists() {
+		// Arrange: Create a provider, insert a cached entry, then poison the lock
+		let config = VaultConfig::new("http://127.0.0.1:8200", "test-token").with_cache_ttl(
+			std::time::Duration::from_secs(3600), // Long TTL to ensure validity
+		);
+		let provider = VaultSecretProvider::new(config).unwrap();
+
+		// Insert a cached value before poisoning
+		{
+			let mut cache = provider.cache.write().unwrap();
+			cache.insert(
+				"cached_key".to_string(),
+				CachedSecret {
+					value: SecretString::new("cached_value"),
+					expires_at: std::time::Instant::now() + std::time::Duration::from_secs(3600),
+				},
+			);
+		}
+
+		// Poison the lock
+		let cache_clone = Arc::clone(&provider.cache);
+		let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			let _guard = cache_clone.write().unwrap();
+			panic!("intentional panic to poison lock");
+		}));
+
+		// Act: Access the poisoned lock via exists() (uses read lock)
+		let result = provider.exists("cached_key");
+
+		// Assert: Should recover from poisoned lock and find cached entry
+		assert_eq!(result, true);
 	}
 }

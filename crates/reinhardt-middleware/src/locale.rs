@@ -19,6 +19,7 @@ pub const LOCALE_HEADER: &str = "X-Locale";
 pub const LOCALE_COOKIE_NAME: &str = "django_language";
 
 /// Locale middleware configuration
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocaleConfig {
 	/// Default locale to use when none is detected

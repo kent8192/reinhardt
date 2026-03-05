@@ -12,6 +12,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 /// GZip compression middleware configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct GZipConfig {
 	/// Minimum response size to compress (in bytes)
@@ -128,11 +129,10 @@ impl GZipMiddleware {
 	/// }
 	///
 	/// # tokio_test::block_on(async {
-	/// let config = GZipConfig {
-	///     min_length: 1000,
-	///     compression_level: 9,
-	///     compressible_types: vec!["text/".to_string(), "application/json".to_string()],
-	/// };
+	/// let mut config = GZipConfig::default();
+	/// config.min_length = 1000;
+	/// config.compression_level = 9;
+	/// config.compressible_types = vec!["text/".to_string(), "application/json".to_string()];
 	///
 	/// let middleware = GZipMiddleware::with_config(config);
 	/// let handler = Arc::new(TestHandler);
@@ -150,7 +150,7 @@ impl GZipMiddleware {
 	///     .unwrap();
 	///
 	/// let response = middleware.process(request, handler).await.unwrap();
-	// Small response not compressed due to min_length=1000
+	/// // Small response not compressed due to min_length=1000
 	/// assert!(!response.headers.contains_key(hyper::header::CONTENT_ENCODING));
 	/// # });
 	/// ```

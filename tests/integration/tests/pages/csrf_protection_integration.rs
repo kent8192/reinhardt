@@ -26,7 +26,7 @@
 //! - Decision Table: 8 tests
 //! **Total: 35 tests**
 
-use reinhardt_pages::csrf::{parse_cookie_value, CsrfManager, CSRF_COOKIE_NAME, CSRF_HEADER_NAME};
+use reinhardt_pages::csrf::{CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CsrfManager, parse_cookie_value};
 use rstest::*;
 
 // ============================================================================

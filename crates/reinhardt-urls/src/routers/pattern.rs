@@ -3,6 +3,20 @@ use matchit::Router as MatchitRouter;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 
+/// Maximum allowed length for a URL pattern string in bytes.
+/// Patterns exceeding this limit are rejected to prevent ReDoS attacks
+/// from excessively long or complex regex patterns.
+const MAX_PATTERN_LENGTH: usize = 1024;
+
+/// Maximum allowed number of path segments in a URL pattern.
+/// Patterns with more segments than this are rejected to prevent
+/// resource exhaustion from deeply nested URL structures.
+const MAX_PATH_SEGMENTS: usize = 32;
+
+/// Maximum allowed size for compiled regex (in bytes).
+/// This limits the compiled regex DFA size to prevent memory exhaustion.
+const MAX_REGEX_SIZE: usize = 1 << 20; // 1 MiB
+
 /// Convert a type specifier to its corresponding regex pattern
 ///
 /// This function maps type specifiers from `{<type:name>}` syntax
@@ -19,7 +33,7 @@ use std::collections::{HashMap, HashSet};
 /// | `str` | `[^/]+` | Any non-slash characters (default) |
 /// | `uuid` | UUID regex | UUID format |
 /// | `slug` | `[a-z0-9]+(?:-[a-z0-9]+)*` | Lowercase slug |
-/// | `path` | `.+` | Any characters including slashes (excludes `..` segments) |
+/// | `path` | `.+` | Any characters **including** path separators (`/`); `..` segments are rejected by post-match validation |
 /// | `bool` | `true\|false\|1\|0` | Boolean literals |
 /// | `email` | Email regex | Email format |
 /// | `date` | `[0-9]{4}-[0-9]{2}-[0-9]{2}` | ISO 8601 date |
@@ -30,7 +44,9 @@ fn type_spec_to_regex(type_spec: &str) -> &'static str {
 		"str" => r"[^/]+",
 		"uuid" => r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
 		"slug" => r"[a-z0-9]+(?:-[a-z0-9]+)*",
-		// Matches any characters including slashes.
+		// Matches any characters including path separators (`/`).
+		// A pattern like `/files/{<path:filepath>}` will match
+		// `/files/a/b/c.txt`, capturing `a/b/c.txt` as a single value.
 		// Directory traversal (`..` segments) is rejected by post-match
 		// validation in extract_params() and match_path_linear().
 		"path" => r".+",
@@ -140,7 +156,7 @@ pub(crate) fn validate_reverse_param(value: &str) -> bool {
 
 /// Path pattern for URL matching
 /// Similar to Django's URL patterns but using composition
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PathPattern {
 	/// Original pattern string (may contain type specifiers)
 	pattern: String,
@@ -176,18 +192,42 @@ impl PathPattern {
 	/// ```
 	/// use reinhardt_urls::routers::{PathPattern, path};
 	///
-	// Create a simple pattern without parameters
+	/// // Create a simple pattern without parameters
 	/// let pattern = PathPattern::new(path!("/users/")).unwrap();
 	/// assert_eq!(pattern.pattern(), "/users/");
 	///
-	// Create a pattern with a parameter
+	/// // Create a pattern with a parameter
 	/// let pattern = PathPattern::new(path!("/users/{id}/")).unwrap();
 	/// assert_eq!(pattern.param_names(), &["id"]);
 	/// ```
 	pub fn new(pattern: impl Into<String>) -> Result<Self, String> {
 		let pattern = pattern.into();
+
+		// Reject patterns exceeding the maximum length to prevent ReDoS
+		if pattern.len() > MAX_PATTERN_LENGTH {
+			return Err(format!(
+				"Pattern length {} exceeds maximum allowed length of {} bytes",
+				pattern.len(),
+				MAX_PATTERN_LENGTH
+			));
+		}
+
+		// Reject patterns with excessive path segments to prevent resource exhaustion
+		let segment_count = pattern.split('/').count();
+		if segment_count > MAX_PATH_SEGMENTS {
+			return Err(format!(
+				"Pattern has {} path segments, exceeding maximum of {}",
+				segment_count, MAX_PATH_SEGMENTS
+			));
+		}
+
 		let parse_result = Self::parse_pattern(&pattern)?;
-		let regex = Regex::new(&parse_result.regex_str).map_err(|e| e.to_string())?;
+
+		// Use RegexBuilder with size limits to prevent memory exhaustion
+		let regex = regex::RegexBuilder::new(&parse_result.regex_str)
+			.size_limit(MAX_REGEX_SIZE)
+			.build()
+			.map_err(|e| format!("Failed to compile pattern regex: {}", e))?;
 
 		// Build Aho-Corasick automaton for URL reversal if there are parameters
 		let aho_corasick = if !parse_result.param_names.is_empty() {
@@ -304,6 +344,54 @@ impl PathPattern {
 	/// ```
 	pub fn pattern(&self) -> &str {
 		&self.pattern
+	}
+
+	/// Convert pattern to matchit-compatible format
+	///
+	/// Transforms path-type parameters from `{<path:name>}` to `{*name}`
+	/// for use with the matchit radix router. Non-path parameters remain
+	/// as `{name}`.
+	pub(crate) fn to_matchit_pattern(&self) -> String {
+		let mut result = String::new();
+		let mut chars = self.pattern.chars().peekable();
+
+		while let Some(ch) = chars.next() {
+			if ch == '{' {
+				let mut param_content = String::new();
+				while let Some(&next_ch) = chars.peek() {
+					if next_ch == '}' {
+						chars.next();
+						break;
+					}
+					param_content.push(chars.next().unwrap());
+				}
+
+				// Check for typed parameter: {<type:name>}
+				if param_content.starts_with('<') && param_content.ends_with('>') {
+					let inner = &param_content[1..param_content.len() - 1];
+					if let Some(colon_pos) = inner.find(':') {
+						let type_spec = &inner[..colon_pos];
+						let name = &inner[colon_pos + 1..];
+						if type_spec == "path" {
+							// Convert path type to matchit catch-all: {*name}
+							result.push_str(&format!("{{*{}}}", name));
+						} else {
+							// Other typed params use simple {name}
+							result.push_str(&format!("{{{}}}", name));
+						}
+					} else {
+						result.push_str(&format!("{{{}}}", param_content));
+					}
+				} else {
+					// Simple {name} parameter
+					result.push_str(&format!("{{{}}}", param_content));
+				}
+			} else {
+				result.push(ch);
+			}
+		}
+
+		result
 	}
 	/// Get the list of parameter names in the pattern
 	///
@@ -535,7 +623,7 @@ impl PathMatcher {
 
 		// Rebuild radix router from existing patterns
 		for (pattern, handler_id) in &self.patterns {
-			let _ = radix_router.add_route(pattern.pattern(), handler_id.clone());
+			let _ = radix_router.add_route(&pattern.to_matchit_pattern(), handler_id.clone());
 		}
 
 		self.radix_router = Some(radix_router);
@@ -562,12 +650,12 @@ impl PathMatcher {
 	/// assert!(result.is_some());
 	/// ```
 	pub fn add_pattern(&mut self, pattern: PathPattern, handler_id: String) {
-		let pattern_str = pattern.pattern().to_string();
+		let matchit_pattern = pattern.to_matchit_pattern();
 		self.patterns.push((pattern, handler_id.clone()));
 
 		// If radix tree mode is enabled, also add to radix router
 		if let Some(ref mut radix_router) = self.radix_router {
-			let _ = radix_router.add_route(&pattern_str, handler_id);
+			let _ = radix_router.add_route(&matchit_pattern, handler_id);
 		}
 	}
 	/// Match a path and extract parameters
@@ -605,7 +693,22 @@ impl PathMatcher {
 			MatchingMode::RadixTree => {
 				// Use radix tree for O(m) matching
 				if let Some(ref radix_router) = self.radix_router {
-					radix_router.match_path(path)
+					let (handler_id, params) = radix_router.match_path(path)?;
+
+					// Validate path-type parameters against directory traversal
+					if let Some((pattern, _)) =
+						self.patterns.iter().find(|(_, id)| *id == handler_id)
+					{
+						for (name, value) in &params {
+							if pattern.path_type_params.contains(name)
+								&& !validate_path_param(value)
+							{
+								return None;
+							}
+						}
+					}
+
+					Some((handler_id, params))
 				} else {
 					// Fallback to linear if radix router not initialized
 					self.match_path_linear(path)
@@ -674,7 +777,7 @@ pub enum RadixRouterError {
 /// Uses matchit's pattern syntax, compatible with Django-style patterns:
 /// - `/users/{id}` - Single parameter
 /// - `/posts/{post_id}/comments/{comment_id}` - Multiple parameters
-/// - `/files/*path` - Catch-all wildcard (matches remaining path)
+/// - `/files/{*path}` - Catch-all wildcard (matches remaining path including `/`)
 ///
 /// # Examples
 ///
@@ -1335,6 +1438,63 @@ mod tests {
 		);
 	}
 
+	#[test]
+	fn test_radix_tree_mode_rejects_traversal() {
+		// Arrange
+		let mut matcher = PathMatcher::with_mode(MatchingMode::RadixTree);
+		matcher.add_pattern(
+			PathPattern::new("/files/{<path:filepath>}").unwrap(),
+			"serve_file".to_string(),
+		);
+
+		// Act & Assert - should reject traversal in RadixTree mode
+		assert!(
+			matcher.match_path("/files/../../../etc/passwd").is_none(),
+			"RadixTree mode should reject directory traversal in path params"
+		);
+		assert!(
+			matcher.match_path("/files/foo/../../etc/passwd").is_none(),
+			"RadixTree mode should reject embedded directory traversal"
+		);
+
+		// Valid path should work
+		let result = matcher.match_path("/files/css/style.css");
+		assert!(result.is_some());
+		let (handler_id, params) = result.unwrap();
+		assert_eq!(handler_id, "serve_file");
+		assert_eq!(params.get("filepath"), Some(&"css/style.css".to_string()));
+	}
+
+	#[test]
+	fn test_radix_tree_mode_rejects_encoded_traversal() {
+		// Arrange
+		let mut matcher = PathMatcher::with_mode(MatchingMode::RadixTree);
+		matcher.add_pattern(
+			PathPattern::new("/files/{<path:filepath>}").unwrap(),
+			"serve_file".to_string(),
+		);
+
+		// Act & Assert - percent-encoded traversal
+		assert!(
+			matcher
+				.match_path("/files/%2e%2e/%2e%2e/etc/passwd")
+				.is_none(),
+			"RadixTree mode should reject percent-encoded traversal"
+		);
+		assert!(
+			matcher
+				.match_path("/files/..%2f..%2fetc%2fpasswd")
+				.is_none(),
+			"RadixTree mode should reject mixed encoded traversal"
+		);
+
+		// Null byte injection
+		assert!(
+			matcher.match_path("/files/foo%00bar").is_none(),
+			"RadixTree mode should reject encoded null bytes"
+		);
+	}
+
 	// ===================================================================
 	// URL reversal parameter injection prevention tests (Issue #423)
 	// ===================================================================
@@ -1468,5 +1628,96 @@ mod tests {
 		assert!(!validate_reverse_param("foo%3fbar"));
 		assert!(!validate_reverse_param("foo%23bar"));
 		assert!(!validate_reverse_param("foo%00bar"));
+	}
+
+	// ===================================================================
+	// ReDoS prevention tests (Issue #430)
+	// ===================================================================
+
+	#[test]
+	fn test_pattern_rejects_excessive_length() {
+		// Arrange: a pattern exceeding MAX_PATTERN_LENGTH (1024 bytes)
+		let long_pattern = "/".to_string() + &"a".repeat(1025);
+
+		// Act
+		let result = PathPattern::new(long_pattern);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(
+			result
+				.unwrap_err()
+				.contains("exceeds maximum allowed length")
+		);
+	}
+
+	#[test]
+	fn test_pattern_accepts_within_length_limit() {
+		// Arrange: a pattern within the limit
+		let pattern = "/users/{id}/posts/{post_id}/";
+
+		// Act
+		let result = PathPattern::new(pattern);
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[test]
+	fn test_pattern_rejects_at_boundary() {
+		// Arrange: a pattern at exactly the boundary + 1
+		let pattern = "/".to_string() + &"a/".repeat(512) + "end";
+		if pattern.len() > MAX_PATTERN_LENGTH {
+			// Act
+			let result = PathPattern::new(pattern);
+
+			// Assert
+			assert!(result.is_err());
+		}
+	}
+
+	// ===================================================================
+	// Path segment count limit tests (Issue #431)
+	// ===================================================================
+
+	#[test]
+	fn test_pattern_rejects_excessive_segments() {
+		// Arrange: a pattern with more than MAX_PATH_SEGMENTS segments
+		let segments: Vec<&str> = (0..35).map(|_| "seg").collect();
+		let pattern = format!("/{}/", segments.join("/"));
+
+		// Act
+		let result = PathPattern::new(pattern);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(result.unwrap_err().contains("exceeding maximum"));
+	}
+
+	#[test]
+	fn test_pattern_accepts_within_segment_limit() {
+		// Arrange: a pattern with few segments
+		let pattern = "/a/b/c/d/e/";
+
+		// Act
+		let result = PathPattern::new(pattern);
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[test]
+	fn test_pattern_accepts_at_segment_boundary() {
+		// Arrange: a pattern at exactly the maximum segment count
+		let segments: Vec<String> = (0..MAX_PATH_SEGMENTS - 2)
+			.map(|i| format!("s{}", i))
+			.collect();
+		let pattern = format!("/{}/", segments.join("/"));
+
+		// Act
+		let result = PathPattern::new(&pattern);
+
+		// Assert
+		assert!(result.is_ok());
 	}
 }

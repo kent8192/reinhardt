@@ -1,7 +1,12 @@
 use crate::field::{FieldError, FieldResult, FormField, Widget};
 use regex::Regex;
+use std::net::Ipv6Addr;
+use std::sync::OnceLock;
 
 /// RegexField for pattern-based validation
+///
+/// Compiled regex is cached using `OnceLock` to avoid repeated
+/// compilation which could lead to ReDoS via allocation overhead.
 pub struct RegexField {
 	pub name: String,
 	pub label: Option<String>,
@@ -9,7 +14,10 @@ pub struct RegexField {
 	pub help_text: Option<String>,
 	pub widget: Widget,
 	pub initial: Option<serde_json::Value>,
-	pub regex: Regex,
+	/// Cached compiled regex to prevent repeated compilation (ReDoS mitigation)
+	regex_cache: OnceLock<Regex>,
+	/// Raw pattern string stored for lazy compilation
+	pattern: String,
 	pub error_message: String,
 	pub max_length: Option<usize>,
 	pub min_length: Option<usize>,
@@ -17,6 +25,8 @@ pub struct RegexField {
 
 impl RegexField {
 	/// Create a new RegexField
+	///
+	/// The regex is compiled lazily on first use and cached for subsequent calls.
 	///
 	/// # Examples
 	///
@@ -27,6 +37,12 @@ impl RegexField {
 	/// assert_eq!(field.name, "pattern");
 	/// ```
 	pub fn new(name: String, pattern: &str) -> Result<Self, regex::Error> {
+		// Validate the pattern eagerly so callers get errors at construction time
+		let compiled = Regex::new(pattern)?;
+		let cache = OnceLock::new();
+		cache
+			.set(compiled)
+			.unwrap_or_else(|_| panic!("OnceLock should be empty at construction"));
 		Ok(Self {
 			name,
 			label: None,
@@ -34,10 +50,18 @@ impl RegexField {
 			help_text: None,
 			widget: Widget::TextInput,
 			initial: None,
-			regex: Regex::new(pattern)?,
+			regex_cache: cache,
+			pattern: pattern.to_string(),
 			error_message: "Enter a valid value".to_string(),
 			max_length: None,
 			min_length: None,
+		})
+	}
+
+	/// Get the cached compiled regex
+	fn regex(&self) -> &Regex {
+		self.regex_cache.get_or_init(|| {
+			Regex::new(&self.pattern).expect("Pattern was validated at construction")
 		})
 	}
 	pub fn with_error_message(mut self, message: String) -> Self {
@@ -87,9 +111,11 @@ impl FormField for RegexField {
 					return Ok(serde_json::Value::Null);
 				}
 
-				// Length validation
+				// Length validation using character count (not byte count)
+				// for correct multi-byte character handling
+				let char_count = s.chars().count();
 				if let Some(max) = self.max_length
-					&& s.len() > max
+					&& char_count > max
 				{
 					return Err(FieldError::validation(
 						None,
@@ -98,7 +124,7 @@ impl FormField for RegexField {
 				}
 
 				if let Some(min) = self.min_length
-					&& s.len() < min
+					&& char_count < min
 				{
 					return Err(FieldError::validation(
 						None,
@@ -106,8 +132,8 @@ impl FormField for RegexField {
 					));
 				}
 
-				// Regex validation
-				if !self.regex.is_match(s) {
+				// Regex validation (uses cached compiled regex)
+				if !self.regex().is_match(s) {
 					return Err(FieldError::validation(None, &self.error_message));
 				}
 
@@ -196,8 +222,9 @@ impl FormField for SlugField {
 					return Ok(serde_json::Value::Null);
 				}
 
+				// Use character count for correct multi-byte handling
 				if let Some(max) = self.max_length
-					&& s.len() > max
+					&& s.chars().count() > max
 				{
 					return Err(FieldError::validation(
 						None,
@@ -265,24 +292,10 @@ impl GenericIPAddressField {
 	}
 
 	fn is_valid_ipv6(&self, s: &str) -> bool {
-		// Basic IPv6 validation (simplified)
-		let parts: Vec<&str> = s.split(':').collect();
-		if parts.is_empty() || parts.len() > 8 {
-			return false;
-		}
-
-		let has_double_colon = s.contains("::");
-		if has_double_colon && s.matches("::").count() > 1 {
-			return false;
-		}
-
-		parts.iter().all(|part| {
-			if part.is_empty() {
-				has_double_colon
-			} else {
-				part.len() <= 4 && part.chars().all(|c| c.is_ascii_hexdigit())
-			}
-		})
+		// Use std::net::Ipv6Addr for comprehensive IPv6 validation,
+		// covering compressed (::1), IPv4-mapped (::ffff:192.0.2.1),
+		// and all other valid IPv6 address formats.
+		s.parse::<Ipv6Addr>().is_ok()
 	}
 }
 
@@ -346,6 +359,7 @@ impl FormField for GenericIPAddressField {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_regex_field() {
@@ -395,5 +409,44 @@ mod tests {
 				.is_ok()
 		);
 		assert!(field.clean(Some(&serde_json::json!("::1"))).is_ok());
+	}
+
+	#[rstest]
+	#[case("::1", true)]
+	#[case("::", true)]
+	#[case("::ffff:192.0.2.1", true)]
+	#[case("2001:db8::1", true)]
+	#[case("fe80::1%eth0", false)]
+	#[case("2001:db8:85a3::8a2e:370:7334", true)]
+	#[case("::ffff:10.0.0.1", true)]
+	#[case("2001:db8::", true)]
+	#[case("::192.168.1.1", true)]
+	#[case("not-an-ip", false)]
+	#[case("2001:db8::g1", false)]
+	#[case("12345::1", false)]
+	fn test_ipv6_comprehensive_validation(#[case] input: &str, #[case] should_accept: bool) {
+		// Arrange
+		let mut field = GenericIPAddressField::new("ip".to_string());
+		field.protocol = IPProtocol::IPv6;
+
+		// Act
+		let result = field.clean(Some(&serde_json::json!(input)));
+
+		// Assert
+		if should_accept {
+			assert!(
+				result.is_ok(),
+				"Expected valid IPv6 '{}' to be accepted, got: {:?}",
+				input,
+				result,
+			);
+		} else {
+			assert!(
+				result.is_err(),
+				"Expected invalid IPv6 '{}' to be rejected, got: {:?}",
+				input,
+				result,
+			);
+		}
 	}
 }

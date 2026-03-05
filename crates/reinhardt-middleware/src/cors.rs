@@ -3,6 +3,7 @@ use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use std::sync::Arc;
 
 /// CORS middleware configuration
+#[non_exhaustive]
 pub struct CorsConfig {
 	pub allow_origins: Vec<String>,
 	pub allow_methods: Vec<String>,
@@ -61,13 +62,12 @@ impl CorsMiddleware {
 	/// }
 	///
 	/// # tokio_test::block_on(async {
-	/// let config = CorsConfig {
-	///     allow_origins: vec!["https://example.com".to_string()],
-	///     allow_methods: vec!["GET".to_string(), "POST".to_string()],
-	///     allow_headers: vec!["Content-Type".to_string()],
-	///     allow_credentials: true,
-	///     max_age: Some(3600),
-	/// };
+	/// let mut config = CorsConfig::default();
+	/// config.allow_origins = vec!["https://example.com".to_string()];
+	/// config.allow_methods = vec!["GET".to_string(), "POST".to_string()];
+	/// config.allow_headers = vec!["Content-Type".to_string()];
+	/// config.allow_credentials = true;
+	/// config.max_age = Some(3600);
 	///
 	/// let middleware = CorsMiddleware::new(config);
 	/// let handler = Arc::new(TestHandler);
@@ -118,7 +118,7 @@ impl CorsMiddleware {
 	/// let middleware = CorsMiddleware::permissive();
 	/// let handler = Arc::new(TestHandler);
 	///
-	// Preflight request
+	/// // Preflight request
 	/// let request = Request::builder()
 	///     .method(Method::OPTIONS)
 	///     .uri("/api/users")

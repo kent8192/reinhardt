@@ -52,8 +52,12 @@ use syn::{Expr, ExprClosure, Ident, LitStr, Path};
 /// SSR and CSR rendering targets.
 #[derive(Debug, Clone)]
 pub struct FormMacro {
-	/// Form struct name (required, e.g., `name: LoginForm`)
-	pub name: Ident,
+	/// Form struct name (required, e.g., `name: LoginForm`).
+	///
+	/// `None` indicates the name has not been parsed yet. The parser
+	/// validates that a name is provided before returning, so downstream
+	/// consumers can safely unwrap this value.
+	pub name: Option<Ident>,
 	/// Form action configuration
 	pub action: FormAction,
 	/// HTTP method (defaults to Post)
@@ -891,7 +895,10 @@ impl FormSlots {
 
 impl FormMacro {
 	/// Creates a new FormMacro with the given name and span.
-	pub fn new(name: Ident, span: Span) -> Self {
+	///
+	/// Pass `None` for `name` when creating a placeholder before parsing.
+	/// The parser will set the name when the `name:` property is encountered.
+	pub fn new(name: Option<Ident>, span: Span) -> Self {
 		Self {
 			name,
 			action: FormAction::None,
@@ -1322,7 +1329,7 @@ mod tests {
 	fn test_form_macro_uses_server_fn() {
 		// Arrange
 		let mut form = FormMacro::new(
-			Ident::new("LoginForm", Span::call_site()),
+			Some(Ident::new("LoginForm", Span::call_site())),
 			Span::call_site(),
 		);
 

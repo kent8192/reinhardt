@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc@v0.1.0-rc.1...reinhardt-grpc@v0.1.0-rc.2) - 2026-03-04
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc@v0.1.0-alpha.6...reinhardt-grpc@v0.1.0-rc.1) - 2026-02-23
+
+### Maintenance
+
+- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
+
+## [0.1.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc@v0.1.0-alpha.5...reinhardt-grpc@v0.1.0-alpha.6) - 2026-02-21
+
+### Fixed
+
+- add async validation and fix impl name collision
+- return generic errors and log details server-side
+- emit compile error for unrecognized inject attribute options
+- roll back unpublished crate versions after partial release failure
+- roll back unpublished crate versions and enable release_always
+
+### Security
+
+- add request timeout, connection limits, and tower integration docs
+- strengthen type checking in macro-generated code
+- add protobuf depth limits and sanitize error messages
+- add default message size limit
+
+### Changed
+
+- use Cow<str> to reduce allocations and improve test messages
+
+### Styling
+
+- fix pre-existing clippy warnings and apply rustfmt
+- apply rustfmt to pre-existing formatting violations in 16 files
+
+### Maintenance
+
+- replace Japanese comments with English in proto type tests
+
 ## [0.1.0-alpha.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc@v0.1.0-alpha.4...reinhardt-grpc@v0.1.0-alpha.5) - 2026-02-10
 
 ### Maintenance

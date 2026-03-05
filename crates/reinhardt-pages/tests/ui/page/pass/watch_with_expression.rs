@@ -8,11 +8,32 @@ use reinhardt_pages::page;
 
 fn main() {
 	// Watch with expression node
-	let _with_expr = __reinhardt_placeholder__!(/*0*/);
+	let _with_expr = page!(|count: Signal<i32>| {
+		div {
+			watch {
+				{ format!("Count: {}", count.get()) }
+			}
+		}
+	});
 
 	// Watch with expression in element
-	let _expr_in_element = __reinhardt_placeholder__!(/*1*/);
+	let _expr_in_element = page!(|name: Signal<String>| {
+		div {
+			watch {
+				span {
+					class: "greeting",
+					{ format!("Hello, {}!", name.get()) }
+				}
+			}
+		}
+	});
 
 	// Watch with conditional expression
-	let _conditional_expr = __reinhardt_placeholder__!(/*2*/);
+	let _conditional_expr = page!(|value: Signal<Option<String>>| {
+		div {
+			watch {
+				{ value.get().unwrap_or_else(| | "Default".to_string()) }
+			}
+		}
+	});
 }

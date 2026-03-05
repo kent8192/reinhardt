@@ -1,16 +1,13 @@
 //! Application configuration for database-integration example
 //!
-//! This module defines the installed applications using compile-time validation.
+//! This module defines the installed applications.
+//! Framework features (auth, sessions, admin, etc.) are enabled via Cargo feature flags.
 
 use reinhardt::installed_apps;
 
-// Define installed applications with compile-time validation
-// The macro will fail to compile if any referenced reinhardt.contrib.* app doesn't exist
+// Define user-defined installed applications.
+// Framework features are enabled via Cargo feature flags, not through installed_apps!.
 installed_apps! {
-	auth: "reinhardt.contrib.auth",
-	contenttypes: "reinhardt.contrib.contenttypes",
-	sessions: "reinhardt.contrib.sessions",
-	drf: "reinhardt.drf",
 	todos: "todos",
 }
 

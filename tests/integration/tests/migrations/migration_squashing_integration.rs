@@ -24,9 +24,9 @@
 
 use reinhardt_db::backends::DatabaseConnection;
 use reinhardt_db::migrations::{
+	ColumnDefinition, FieldType, Migration, Operation,
 	executor::DatabaseMigrationExecutor,
 	squash::{MigrationSquasher, SquashOptions},
-	ColumnDefinition, FieldType, Migration, Operation,
 };
 use reinhardt_test::fixtures::postgres_container;
 use rstest::*;

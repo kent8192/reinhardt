@@ -13,7 +13,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/reinhardt-web.svg)](https://crates.io/crates/reinhardt-web)
 [![Documentation](https://docs.rs/reinhardt-web/badge.svg)](https://docs.rs/reinhardt-web)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE.md)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](../../LICENSE)
 [![codecov](https://codecov.io/gh/kent8192/reinhardt-web/graph/badge.svg)](https://codecov.io/gh/kent8192/reinhardt-web)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/kent8192/reinhardt-web)
 
@@ -25,10 +25,11 @@
 
 お探しの情報:
 
+- 🌐 [公式ウェブサイト](https://reinhardt-web.dev) - ドキュメント、チュートリアル、ガイド
 - 🚀 [クイックスタート](#クイックスタート) - 5分で起動
 - 📦 [インストールオプション](#インストール) - フレーバーを選択: Micro、Standard、Full
-- 📚 [はじめに](../GETTING_STARTED.md) - ステップバイステップチュートリアル
-- 🎛️ [機能フラグ](../FEATURE_FLAGS.md) - ビルドを最適化
+- 📚 [はじめに](https://reinhardt-web.dev/quickstart/getting-started/) - ステップバイステップチュートリアル
+- 🎛️ [機能フラグ](https://reinhardt-web.dev/docs/feature-flags/) - ビルドを最適化
 - 📖 [APIドキュメント](https://docs.rs/reinhardt-web) - 完全なAPIリファレンス
 - 💬 [コミュニティ＆サポート](#ヘルプを得る) - コミュニティからサポートを受ける
 
@@ -61,7 +62,7 @@ Reinhardtは3つの世界のベストを統合しています:
 - **ページネーション、フィルタリング、レート制限** 組み込み
 - **シグナル** イベント駆動アーキテクチャ用
 
-完全なリストは[利用可能なコンポーネント](#利用可能なコンポーネント)を、例は[はじめに](../GETTING_STARTED.md)を参照してください。
+完全なリストは[利用可能なコンポーネント](#利用可能なコンポーネント)を、例は[はじめに](https://reinhardt-web.dev/quickstart/getting-started/)を参照してください。
 
 ## インストール
 
@@ -78,7 +79,7 @@ Reinhardtはモジュラーフレームワークです。出発点を選択し�
 [dependencies]
 # 'reinhardt'としてインポート、'reinhardt-web'として公開
 # デフォルトですべての機能を有効化（フルバンドル）
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web" }
+reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web" }
 ```
 
 **含まれるもの:** Database、Auth、REST API、Admin、GraphQL、WebSockets、Cache、i18n、Mail、Sessions、Static Files、Storage
@@ -97,7 +98,7 @@ use reinhardt::{Request, Response, StatusCode};
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-features = false, features = ["standard"] }
+reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web", default-features = false, features = ["standard"] }
 ```
 
 **含まれるもの:** Core、Database（PostgreSQL）、REST API、Auth、Middleware、Pages（SSR付きWASMフロントエンド）
@@ -110,7 +111,7 @@ reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-feat
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-features = false, features = ["minimal"] }
+reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 ```
 
 **含まれるもの:** HTTP、ルーティング、DI、パラメータ抽出、サーバー
@@ -124,27 +125,27 @@ reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-feat
 ```toml
 [dependencies]
 # コアコンポーネント
-reinhardt-http = "0.1.0-alpha.1"
-reinhardt-urls = "0.1.0-alpha.1"
+reinhardt-http = "0.1.0-rc.1"
+reinhardt-urls = "0.1.0-rc.1"
 
 # オプション: データベース
-reinhardt-db = "0.1.0-alpha.1"
+reinhardt-db = "0.1.0-rc.1"
 
 # オプション: 認証
-reinhardt-auth = "0.1.0-alpha.1"
+reinhardt-auth = "0.1.0-rc.1"
 
 # オプション: REST API機能
-reinhardt-rest = "0.1.0-alpha.1"
+reinhardt-rest = "0.1.0-rc.1"
 
 # オプション: 管理パネル
-reinhardt-admin = "0.1.0-alpha.1"
+reinhardt-admin = "0.1.0-rc.1"
 
 # オプション: 高度な機能
-reinhardt-graphql = "0.1.0-alpha.1"
-reinhardt-websockets = "0.1.0-alpha.1"
+reinhardt-graphql = "0.1.0-rc.1"
+reinhardt-websockets = "0.1.0-rc.1"
 ```
 
-**📖 利用可能なクレートと機能フラグの完全なリストは、[機能フラグガイド](../FEATURE_FLAGS.md)を参照してください。**
+**📖 利用可能なクレートと機能フラグの完全なリストは、[機能フラグガイド](https://reinhardt-web.dev/docs/feature-flags/)を参照してください。**
 
 ## クイックスタート
 
@@ -309,9 +310,9 @@ pub fn routes() -> ServerRouter {
 - **`cache`機能**: `Cache`、`InMemoryCache`
 - **`sessions`機能**: `Session`、`AuthenticationMiddleware`
 
-完全なリストは[機能フラグガイド](../FEATURE_FLAGS.md)を参照してください。
+完全なリストは[機能フラグガイド](https://reinhardt-web.dev/docs/feature-flags/)を参照してください。
 
-完全なステップバイステップガイドは[はじめに](../GETTING_STARTED.md)を参照してください。
+完全なステップバイステップガイドは[はじめに](https://reinhardt-web.dev/quickstart/getting-started/)を参照してください。
 
 ## 🎓 例で学ぶ
 
@@ -390,7 +391,7 @@ Reinhardtは異なる優先度を持つ2種類の環境変数ソースを提供�
 環境変数を常に優先させたい場合（本番デプロイなど）は`EnvSource`を選択してください。
 TOMLファイルを主要な設定ソースにしたい場合（開発など）は`LowPriorityEnvSource`を選択してください。
 
-詳細は[設定ドキュメント](../SETTINGS_DOCUMENT.md)を参照してください。
+詳細は[設定ドキュメント](docs/SETTINGS_DOCUMENT.md)を参照してください。
 
 **組み込みDefaultUserの使用:**
 
@@ -477,7 +478,7 @@ pub struct CustomUser {
 - `#[field(null = true)]` - NULL値を許可
 - `#[field(unique = true)]` - 一意性制約を強制
 
-フィールド属性の完全なリストは[フィールド属性ガイド](../field_attributes.md)を参照してください。
+フィールド属性の完全なリストは[フィールド属性ガイド](docs/field_attributes.md)を参照してください。
 
 生成されたフィールドアクセサーにより、クエリで型安全なフィールド参照が可能になります:
 
@@ -1001,31 +1002,31 @@ Reinhardtは組み合わせ可能なモジュラーコンポーネントを提�
 | **テスト**          |                           |                                             |
 | テストユーティリティ | `reinhardt-test`         | テストヘルパー、フィクスチャ、TestContainers |
 
-**各クレート内の詳細な機能フラグについては、[機能フラグガイド](../FEATURE_FLAGS.md)を参照してください。**
+**各クレート内の詳細な機能フラグについては、[機能フラグガイド](https://reinhardt-web.dev/docs/feature-flags/)を参照してください。**
 
 ---
 
 ## ドキュメント
 
-- 📚 [はじめに](../GETTING_STARTED.md) - 初心者向けステップバイステップチュートリアル
-- 🎛️ [機能フラグガイド](../FEATURE_FLAGS.md) - 詳細な機能制御でビルドを最適化
+- 📚 [はじめに](https://reinhardt-web.dev/quickstart/getting-started/) - 初心者向けステップバイステップチュートリアル
+- 🎛️ [機能フラグガイド](https://reinhardt-web.dev/docs/feature-flags/) - 詳細な機能制御でビルドを最適化
 - 📖 [APIリファレンス](https://docs.rs/reinhardt)（近日公開）
-- 📝 [チュートリアル](../tutorials/) - 実際のアプリケーションを構築して学ぶ
+- 📝 [チュートリアル](https://reinhardt-web.dev/quickstart/tutorials/) - 実際のアプリケーションを構築して学ぶ
 
-**AIアシスタント向け**: プロジェクト固有のコーディング標準、テストガイドライン、開発規約については[CLAUDE.md](../../CLAUDE.md)を参照してください。
+**AIアシスタント向け**: プロジェクト固有のコーディング標準、テストガイドライン、開発規約については[CLAUDE.md](CLAUDE.md)を参照してください。
 
 ## 💬 ヘルプを得る
 
 Reinhardtはコミュニティ駆動のプロジェクトです。ヘルプが必要な場合:
 
 - 💬 **Discord**: Discordサーバーでリアルタイムチャット（近日公開）
-- 💭 **GitHub Discussions**: [質問やアイデアを共有](https://github.com/kent8192/reinhardt-rs/discussions)
-- 🐛 **Issues**: [バグを報告](https://github.com/kent8192/reinhardt-rs/issues)
+- 💭 **GitHub Discussions**: [質問やアイデアを共有](https://github.com/kent8192/reinhardt-web/discussions)
+- 🐛 **Issues**: [バグを報告](https://github.com/kent8192/reinhardt-web/issues)
 - 📖 **ドキュメント**: [ガイドを読む](../)
 
 質問する前に、以下を確認してください:
 
-- ✅ [はじめに](../GETTING_STARTED.md)
+- ✅ [はじめに](https://reinhardt-web.dev/quickstart/getting-started/)
 - ✅ [Examples](../../examples/)
 - ✅ 既存のGitHub IssuesとDiscussions
 
@@ -1051,12 +1052,7 @@ Reinhardtはコミュニティ駆動のプロジェクトです。ヘルプが�
 
 ## ライセンス
 
-以下のいずれかのライセンスの下でライセンスされています:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](../../LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](../../LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-お好みで選択できます。
+このプロジェクトは [BSD 3-Clause License](../../LICENSE) の下でライセンスされています。
 
 ### サードパーティ帰属
 

@@ -2,14 +2,24 @@ name: Release Dry-Run
 
 on:
   workflow_call:
+    inputs:
+      runner:
+        description: 'Runner label JSON'
+        type: string
+        default: '"ubuntu-latest"'
+      cargo-build-jobs:
+        description: "Parallel cargo build jobs"
+        type: string
+        default: "1"
 
 jobs:
   release-dry-run:
     name: Release Dry-Run Check
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
     timeout-minutes: 30
     steps:
       - name: Free Disk Space
+        if: ${{ !contains(inputs.runner || '', 'self-hosted') }}
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: false
@@ -21,7 +31,7 @@ jobs:
           swap-storage: true
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -30,13 +40,24 @@ jobs:
           git checkout -B dry-run-check
           git branch --set-upstream-to=origin/main dry-run-check
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
 
-      - name: Install protoc
+      - name: Setup protoc
+        uses: ./.github/actions/setup-protoc
+
+      - name: Install GitHub CLI (required by release-plz action)
+        if: ${{ contains(inputs.runner || '', 'self-hosted') }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
+          if ! command -v gh &>/dev/null; then
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+              | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+              | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+            sudo apt-get update -qq
+            sudo apt-get install -y gh
+          fi
 
       - name: Run release-plz release (dry-run)
         uses: release-plz/action@v0.5

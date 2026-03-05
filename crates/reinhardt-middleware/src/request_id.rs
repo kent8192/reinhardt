@@ -13,6 +13,7 @@ use uuid::Uuid;
 pub const REQUEST_ID_HEADER: &str = "X-Request-ID";
 
 /// Configuration for request ID generation
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct RequestIdConfig {
 	/// Generate new request ID if not present in request

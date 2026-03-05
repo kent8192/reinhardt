@@ -19,11 +19,11 @@ use std::collections::HashMap;
 ///
 /// let field = UUIDField::new("id");
 ///
-// Valid UUID v4
+/// // Valid UUID v4
 /// let result = field.clean(Some(&json!("550e8400-e29b-41d4-a716-446655440000")));
 /// assert!(result.is_ok());
 ///
-// Invalid UUID
+/// // Invalid UUID
 /// let result = field.clean(Some(&json!("not-a-uuid")));
 /// assert!(result.is_err());
 /// ```
@@ -146,7 +146,7 @@ impl FormField for UUIDField {
 					.get("required")
 					.cloned()
 					.unwrap_or_else(|| "This field is required.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 			return Ok(Value::Null);
 		}
@@ -159,7 +159,7 @@ impl FormField for UUIDField {
 					.get("invalid")
 					.cloned()
 					.unwrap_or_else(|| "Enter a valid UUID.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 		};
 
@@ -170,7 +170,7 @@ impl FormField for UUIDField {
 					.get("required")
 					.cloned()
 					.unwrap_or_else(|| "This field is required.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 			return Ok(Value::Null);
 		}
@@ -181,7 +181,7 @@ impl FormField for UUIDField {
 				.get("invalid")
 				.cloned()
 				.unwrap_or_else(|| "Enter a valid UUID.".to_string());
-			return Err(FieldError::validation(Some(&self.name), &error_msg));
+			return Err(FieldError::validation(None, &error_msg));
 		}
 
 		Ok(Value::String(s.to_lowercase()))
@@ -212,11 +212,11 @@ impl FormField for UUIDField {
 ///
 /// let field = DurationField::new("duration");
 ///
-// Valid duration
+/// // Valid duration
 /// let result = field.clean(Some(&json!("P1Y2M3DT4H5M6S")));
 /// assert!(result.is_ok());
 ///
-// Another valid duration (1 day)
+/// // Another valid duration (1 day)
 /// let result = field.clean(Some(&json!("P1D")));
 /// assert!(result.is_ok());
 /// ```
@@ -382,7 +382,7 @@ impl FormField for DurationField {
 					.get("required")
 					.cloned()
 					.unwrap_or_else(|| "This field is required.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 			return Ok(Value::Null);
 		}
@@ -395,7 +395,7 @@ impl FormField for DurationField {
 					.get("invalid")
 					.cloned()
 					.unwrap_or_else(|| "Enter a valid ISO 8601 duration.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 		};
 
@@ -406,7 +406,7 @@ impl FormField for DurationField {
 					.get("required")
 					.cloned()
 					.unwrap_or_else(|| "This field is required.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 			return Ok(Value::Null);
 		}
@@ -417,7 +417,7 @@ impl FormField for DurationField {
 				.get("invalid")
 				.cloned()
 				.unwrap_or_else(|| "Enter a valid ISO 8601 duration.".to_string());
-			return Err(FieldError::validation(Some(&self.name), &error_msg));
+			return Err(FieldError::validation(None, &error_msg));
 		}
 
 		Ok(Value::String(s.to_uppercase()))
@@ -446,26 +446,26 @@ impl FormField for DurationField {
 /// use reinhardt_forms::{Field, CharField, EmailField};
 /// use serde_json::json;
 ///
-// Create validators with constraints
+/// // Create validators with constraints
 /// let mut email_field = EmailField::new("email".to_string());
 /// let mut char_field = CharField::new("email".to_string());
 /// char_field.min_length = Some(5);
 /// char_field.max_length = Some(100);
 ///
-// Combine email validation with length validation
+/// // Combine email validation with length validation
 /// let field = ComboField::new("email")
 ///     .add_validator(Box::new(email_field))
 ///     .add_validator(Box::new(char_field));
 ///
-// Valid: passes both email and length checks
+/// // Valid: passes both email and length checks
 /// let result = field.clean(Some(&json!("user@example.com")));
 /// assert!(result.is_ok());
 ///
-// Invalid: fails email validation
+/// // Invalid: fails email validation
 /// let result = field.clean(Some(&json!("not-an-email")));
 /// assert!(result.is_err());
 ///
-// Invalid: too short (less than 5 characters)
+/// // Invalid: too short (less than 5 characters)
 /// let result = field.clean(Some(&json!("a@b")));
 /// assert!(result.is_err());
 /// ```
@@ -572,7 +572,7 @@ impl FormField for ComboField {
 					.get("required")
 					.cloned()
 					.unwrap_or_else(|| "This field is required.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 			return Ok(Value::Null);
 		}
@@ -719,7 +719,7 @@ impl FormField for ColorField {
 					.get("required")
 					.cloned()
 					.unwrap_or_else(|| "This field is required.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 			return Ok(Value::Null);
 		}
@@ -732,7 +732,7 @@ impl FormField for ColorField {
 					.get("invalid")
 					.cloned()
 					.unwrap_or_else(|| "Enter a valid hex color code.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 		};
 
@@ -743,7 +743,7 @@ impl FormField for ColorField {
 					.get("required")
 					.cloned()
 					.unwrap_or_else(|| "This field is required.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 			return Ok(Value::Null);
 		}
@@ -754,7 +754,7 @@ impl FormField for ColorField {
 				.get("invalid")
 				.cloned()
 				.unwrap_or_else(|| "Enter a valid hex color code.".to_string());
-			return Err(FieldError::validation(Some(&self.name), &error_msg));
+			return Err(FieldError::validation(None, &error_msg));
 		}
 
 		Ok(Value::String(s.to_uppercase()))
@@ -771,6 +771,12 @@ impl FormField for ColorField {
 		}
 	}
 }
+
+/// Redacted placeholder value stored in cleaned data for password fields.
+///
+/// Password fields store this constant instead of the plaintext password
+/// to prevent accidental exposure of credentials in cleaned form data.
+pub const PASSWORD_REDACTED: &str = "**********";
 
 /// A field for password validation with strength requirements
 ///
@@ -935,7 +941,7 @@ impl FormField for PasswordField {
 					.get("required")
 					.cloned()
 					.unwrap_or_else(|| "This field is required.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 			return Ok(Value::Null);
 		}
@@ -957,7 +963,7 @@ impl FormField for PasswordField {
 					.get("required")
 					.cloned()
 					.unwrap_or_else(|| "This field is required.".to_string());
-				return Err(FieldError::validation(Some(&self.name), &error_msg));
+				return Err(FieldError::validation(None, &error_msg));
 			}
 			return Ok(Value::Null);
 		}
@@ -971,7 +977,7 @@ impl FormField for PasswordField {
 				.unwrap_or_else(|| {
 					format!("Password must be at least {} characters.", self.min_length)
 				});
-			return Err(FieldError::validation(Some(&self.name), &error_msg));
+			return Err(FieldError::validation(None, &error_msg));
 		}
 
 		// Check uppercase requirement
@@ -983,7 +989,7 @@ impl FormField for PasswordField {
 				.unwrap_or_else(|| {
 					"Password must contain at least one uppercase letter.".to_string()
 				});
-			return Err(FieldError::validation(Some(&self.name), &error_msg));
+			return Err(FieldError::validation(None, &error_msg));
 		}
 
 		// Check lowercase requirement
@@ -995,7 +1001,7 @@ impl FormField for PasswordField {
 				.unwrap_or_else(|| {
 					"Password must contain at least one lowercase letter.".to_string()
 				});
-			return Err(FieldError::validation(Some(&self.name), &error_msg));
+			return Err(FieldError::validation(None, &error_msg));
 		}
 
 		// Check digit requirement
@@ -1005,7 +1011,7 @@ impl FormField for PasswordField {
 				.get("no_digit")
 				.cloned()
 				.unwrap_or_else(|| "Password must contain at least one digit.".to_string());
-			return Err(FieldError::validation(Some(&self.name), &error_msg));
+			return Err(FieldError::validation(None, &error_msg));
 		}
 
 		// Check special character requirement
@@ -1017,10 +1023,11 @@ impl FormField for PasswordField {
 				.unwrap_or_else(|| {
 					"Password must contain at least one special character.".to_string()
 				});
-			return Err(FieldError::validation(Some(&self.name), &error_msg));
+			return Err(FieldError::validation(None, &error_msg));
 		}
 
-		Ok(Value::String(s.to_string()))
+		// Redact password to prevent plaintext storage in cleaned data
+		Ok(Value::String(PASSWORD_REDACTED.to_string()))
 	}
 
 	fn has_changed(&self, initial: Option<&Value>, data: Option<&Value>) -> bool {

@@ -1,5 +1,5 @@
 use crate::field::{FieldError, FieldResult, FormField, Widget};
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 
 /// DateField for date input
 pub struct DateField {
@@ -37,7 +37,6 @@ impl DateField {
 			input_formats: vec![
 				"%Y-%m-%d".to_string(),  // 2025-01-15
 				"%m/%d/%Y".to_string(),  // 01/15/2025
-				"%m/%d/%y".to_string(),  // 01/15/25
 				"%b %d %Y".to_string(),  // Jan 15 2025
 				"%b %d, %Y".to_string(), // Jan 15, 2025
 				"%d %b %Y".to_string(),  // 15 Jan 2025
@@ -83,10 +82,16 @@ impl DateField {
 	fn parse_date(&self, s: &str) -> Result<NaiveDate, String> {
 		for format in &self.input_formats {
 			if let Ok(date) = NaiveDate::parse_from_str(s, format) {
+				// Reject dates with years outside the 4-digit range (1000-9999)
+				// to prevent ambiguous 2-digit year interpretations.
+				let year = date.year();
+				if !(1000..=9999).contains(&year) {
+					continue;
+				}
 				return Ok(date);
 			}
 		}
-		Err("Enter a valid date".to_string())
+		Err("Enter a valid date with a 4-digit year".to_string())
 	}
 }
 
@@ -145,6 +150,7 @@ impl FormField for DateField {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_date_field_required() {
@@ -189,10 +195,8 @@ mod tests {
 		let result = field.clean(Some(&serde_json::json!("01/15/2025"))).unwrap();
 		assert_eq!(result, serde_json::json!("2025-01-15"));
 
-		// Short year format (MM/DD/YY) - chrono interprets 2-digit years as 00-99 AD
-		// so 25 becomes year 25, not 2025
-		let result = field.clean(Some(&serde_json::json!("01/15/25"))).unwrap();
-		assert_eq!(result, serde_json::json!("0025-01-15"));
+		// 2-digit year format (MM/DD/YY) is rejected to avoid ambiguity
+		assert!(field.clean(Some(&serde_json::json!("01/15/25"))).is_err());
 	}
 
 	#[test]
@@ -310,5 +314,46 @@ mod tests {
 	fn test_date_field_name() {
 		let field = DateField::new("birth_date".to_string());
 		assert_eq!(field.name(), "birth_date");
+	}
+
+	#[rstest]
+	#[case("01/15/25")]
+	#[case("12/31/99")]
+	#[case("06/15/00")]
+	fn test_date_field_rejects_two_digit_years(#[case] input: &str) {
+		// Arrange
+		let field = DateField::new("date".to_string());
+
+		// Act
+		let result = field.clean(Some(&serde_json::json!(input)));
+
+		// Assert
+		assert!(
+			result.is_err(),
+			"Expected 2-digit year input '{}' to be rejected, got: {:?}",
+			input,
+			result,
+		);
+	}
+
+	#[rstest]
+	#[case("01/15/2025", "2025-01-15")]
+	#[case("12/31/1999", "1999-12-31")]
+	#[case("2024-02-29", "2024-02-29")]
+	fn test_date_field_accepts_four_digit_years(#[case] input: &str, #[case] expected: &str) {
+		// Arrange
+		let field = DateField::new("date".to_string());
+
+		// Act
+		let result = field.clean(Some(&serde_json::json!(input)));
+
+		// Assert
+		assert_eq!(
+			result.unwrap(),
+			serde_json::json!(expected),
+			"Expected 4-digit year input '{}' to parse as '{}'",
+			input,
+			expected,
+		);
 	}
 }

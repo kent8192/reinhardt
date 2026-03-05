@@ -240,7 +240,7 @@ impl StaticFilesFinder {
 	/// ]);
 	///
 	/// let files = finder.find_all();
-	// Returns: ["css/style.css", "js/app.js", "images/logo.png", ...]
+	/// // Returns: ["css/style.css", "js/app.js", "images/logo.png", ...]
 	/// ```
 	pub fn find_all(&self) -> Vec<String> {
 		let mut all_files = Vec::new();

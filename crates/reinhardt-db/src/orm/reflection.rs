@@ -66,6 +66,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 /// Error types for reflection operations
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReflectionError {
 	/// Model not found in registry

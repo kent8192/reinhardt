@@ -120,7 +120,7 @@ impl LateralJoinBuilder {
 	/// use reinhardt_db::orm::lateral_join::LateralJoinBuilder;
 	///
 	/// let builder = LateralJoinBuilder::new("latest");
-	// Builder methods can be chained: .subquery().left().on().build()
+	/// // Builder methods can be chained: .subquery().left().on().build()
 	/// ```
 	pub fn new(alias: impl Into<String>) -> Self {
 		Self {

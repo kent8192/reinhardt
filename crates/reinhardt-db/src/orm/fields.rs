@@ -491,7 +491,7 @@ impl IntegerField {
 	/// use reinhardt_db::orm::fields::IntegerField;
 	///
 	/// let field = IntegerField::with_callable_choices("get_status_choices");
-	// The callable name would be used to dynamically generate choices at runtime
+	/// // The callable name would be used to dynamically generate choices at runtime
 	/// assert!(field.base.choices.is_none()); // Callable choices are handled separately
 	/// ```
 	pub fn with_callable_choices(_callable_name: &str) -> Self {
@@ -715,7 +715,7 @@ impl DecimalField {
 	/// ```
 	/// use reinhardt_db::orm::fields::DecimalField;
 	///
-	// For monetary values: max 10 digits, 2 decimal places
+	/// // For monetary values: max 10 digits, 2 decimal places
 	/// let price_field = DecimalField::new(10, 2);
 	/// assert_eq!(price_field.max_digits, 10);
 	/// assert_eq!(price_field.decimal_places, 2);

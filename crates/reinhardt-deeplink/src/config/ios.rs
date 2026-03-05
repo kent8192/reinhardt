@@ -167,7 +167,7 @@ impl IosConfigBuilder {
 	/// use reinhardt_deeplink::IosConfig;
 	///
 	/// let config = IosConfig::builder()
-	///     .app_id("TEAM.bundle")
+	///     .app_id("TEAM.com.example")
 	///     .paths(&["/products/*", "/users/*"])
 	///     .build();
 	/// ```
@@ -203,7 +203,7 @@ impl IosConfigBuilder {
 	/// use reinhardt_deeplink::{IosConfig, AppLinkComponent};
 	///
 	/// let config = IosConfig::builder()
-	///     .app_id("TEAM.bundle")
+	///     .app_id("TEAM.com.example")
 	///     .component(AppLinkComponent {
 	///         path: "/products/*".to_string(),
 	///         query: Some("ref=*".to_string()),
@@ -358,7 +358,7 @@ mod tests {
 	#[rstest]
 	fn test_ios_config_with_exclude() {
 		let config = IosConfig::builder()
-			.app_id("TEAM.bundle")
+			.app_id("TEAM.com.example")
 			.paths(&["/products/*"])
 			.exclude_paths(&["/api/*"])
 			.build();
@@ -370,7 +370,7 @@ mod tests {
 	#[rstest]
 	fn test_ios_config_with_components() {
 		let config = IosConfig::builder()
-			.app_id("TEAM.bundle")
+			.app_id("TEAM.com.example")
 			.component(AppLinkComponent {
 				path: "/products/*".to_string(),
 				query: Some("ref=*".to_string()),
@@ -388,7 +388,7 @@ mod tests {
 	#[rstest]
 	fn test_ios_config_with_web_credentials() {
 		let config = IosConfig::builder()
-			.app_id("TEAM.bundle")
+			.app_id("TEAM.com.example")
 			.paths(&["/"])
 			.with_web_credentials()
 			.build();
@@ -400,9 +400,9 @@ mod tests {
 	#[rstest]
 	fn test_ios_config_with_app_clips() {
 		let config = IosConfig::builder()
-			.app_id("TEAM.bundle")
+			.app_id("TEAM.com.example")
 			.paths(&["/"])
-			.app_clip("TEAM.bundle.Clip")
+			.app_clip("TEAM.com.example.Clip")
 			.build();
 
 		let json = serde_json::to_string_pretty(&config).unwrap();
@@ -417,13 +417,15 @@ mod tests {
 
 	#[rstest]
 	fn test_validation_no_paths() {
-		let builder = IosConfigBuilder::new().app_id("TEAM.bundle");
+		let builder = IosConfigBuilder::new().app_id("TEAM.com.example");
 		assert!(builder.validate().is_err());
 	}
 
 	#[rstest]
 	fn test_validation_success() {
-		let builder = IosConfigBuilder::new().app_id("TEAM.bundle").paths(&["/"]);
+		let builder = IosConfigBuilder::new()
+			.app_id("TEAM.com.example")
+			.paths(&["/"]);
 		assert!(builder.validate().is_ok());
 	}
 }

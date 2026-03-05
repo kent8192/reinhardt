@@ -161,7 +161,6 @@ impl QueryStatementBuilder for AlterMaterializedViewStatement {
 		}
 		panic!("Unsupported query builder type");
 	}
-
 }
 
 impl QueryStatementWriter for AlterMaterializedViewStatement {}

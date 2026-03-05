@@ -45,6 +45,7 @@ pub enum EscapeContext {
 }
 
 /// Configuration for XSS protection
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct XssConfig {
 	/// Allow specific HTML tags (only used in permissive mode)
@@ -371,30 +372,30 @@ fn sanitize_with_allowlist(
 			// Try to parse a tag
 			if let Some((tag_str, end_idx)) = extract_tag(&chars, i) {
 				let tag_lower = tag_str.to_lowercase();
-				if let Some(tag_name) = parse_tag_name(&tag_lower) {
-					if allowed_tags.iter().any(|t| t == &tag_name) {
-						// Allowed tag: rebuild with only allowed attributes
-						let is_closing = tag_lower.starts_with("</");
-						let is_self_closing = tag_lower.ends_with("/>");
-						if is_closing {
-							output.push_str(&format!("</{}>", tag_name));
-						} else {
-							let attrs = filter_attributes(&tag_str, allowed_attributes, &tag_name);
-							if is_self_closing {
-								if attrs.is_empty() {
-									output.push_str(&format!("<{} />", tag_name));
-								} else {
-									output.push_str(&format!("<{} {} />", tag_name, attrs));
-								}
-							} else if attrs.is_empty() {
-								output.push_str(&format!("<{}>", tag_name));
+				if let Some(tag_name) = parse_tag_name(&tag_lower)
+					&& allowed_tags.iter().any(|t| t == &tag_name)
+				{
+					// Allowed tag: rebuild with only allowed attributes
+					let is_closing = tag_lower.starts_with("</");
+					let is_self_closing = tag_lower.ends_with("/>");
+					if is_closing {
+						output.push_str(&format!("</{}>", tag_name));
+					} else {
+						let attrs = filter_attributes(&tag_str, allowed_attributes, &tag_name);
+						if is_self_closing {
+							if attrs.is_empty() {
+								output.push_str(&format!("<{} />", tag_name));
 							} else {
-								output.push_str(&format!("<{} {}>", tag_name, attrs));
+								output.push_str(&format!("<{} {} />", tag_name, attrs));
 							}
+						} else if attrs.is_empty() {
+							output.push_str(&format!("<{}>", tag_name));
+						} else {
+							output.push_str(&format!("<{} {}>", tag_name, attrs));
 						}
-						i = end_idx + 1;
-						continue;
 					}
+					i = end_idx + 1;
+					continue;
 				}
 				// Not an allowed tag: escape it
 				for ch in tag_str.chars() {

@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 //! JSON Schema validation support
 //!
 //! This module provides JSON Schema-based validation using the `jsonschema` crate.
@@ -78,6 +80,7 @@ impl SchemaDraft {
 }
 
 /// Error type for schema validation operations
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum SchemaError {
 	/// The schema is invalid

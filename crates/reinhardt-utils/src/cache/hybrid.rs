@@ -136,6 +136,7 @@ where
 	}
 
 	/// Promote a value from L2 to L1
+	// Reserved for future L2-to-L1 cache promotion logic
 	#[allow(dead_code)]
 	async fn promote<T>(&self, key: &str, value: &T, ttl: Option<Duration>) -> Result<()>
 	where
@@ -309,7 +310,7 @@ mod tests {
 		let value: Option<String> = cache.get("key1").await.unwrap();
 		assert_eq!(value, Some("value1".to_string()));
 
-		// Verify promotion to L1
+		// Assert
 		let l1_value: Option<String> = l1.get("key1").await.unwrap();
 		assert_eq!(l1_value, Some("value1".to_string()));
 	}
@@ -334,7 +335,7 @@ mod tests {
 		// Set should write to both caches
 		cache.set("key1", &"value1", None).await.unwrap();
 
-		// Verify both caches have the value
+		// Assert
 		let l1_value: Option<String> = l1.get("key1").await.unwrap();
 		let l2_value: Option<String> = l2.get("key1").await.unwrap();
 		assert_eq!(l1_value, Some("value1".to_string()));
@@ -353,7 +354,7 @@ mod tests {
 		// Delete should remove from both caches
 		cache.delete("key1").await.unwrap();
 
-		// Verify both caches are empty
+		// Assert
 		let l1_value: Option<String> = l1.get("key1").await.unwrap();
 		let l2_value: Option<String> = l2.get("key1").await.unwrap();
 		assert_eq!(l1_value, None);
@@ -387,7 +388,7 @@ mod tests {
 		// Clear should remove all from both caches
 		cache.clear().await.unwrap();
 
-		// Verify both caches are empty
+		// Assert
 		let l1_value: Option<String> = l1.get("key1").await.unwrap();
 		let l2_value: Option<String> = l2.get("key1").await.unwrap();
 		assert_eq!(l1_value, None);
@@ -430,7 +431,7 @@ mod tests {
 		assert_eq!(results.get("key1"), Some(&"value1".to_string()));
 		assert_eq!(results.get("key2"), Some(&"value2".to_string()));
 
-		// Verify key2 was promoted to L1
+		// Assert
 		let l1_value: Option<String> = l1.get("key2").await.unwrap();
 		assert_eq!(l1_value, Some("value2".to_string()));
 	}
@@ -447,7 +448,7 @@ mod tests {
 		values.insert("key2".to_string(), "value2".to_string());
 		cache.set_many(values, None).await.unwrap();
 
-		// Verify both caches have the values
+		// Assert
 		let l1_value: Option<String> = l1.get("key1").await.unwrap();
 		let l2_value: Option<String> = l2.get("key1").await.unwrap();
 		assert_eq!(l1_value, Some("value1".to_string()));
@@ -467,7 +468,7 @@ mod tests {
 		// Delete many
 		cache.delete_many(&["key1", "key2"]).await.unwrap();
 
-		// Verify both caches are empty
+		// Assert
 		let l1_value: Option<String> = l1.get("key1").await.unwrap();
 		let l2_value: Option<String> = l2.get("key1").await.unwrap();
 		assert_eq!(l1_value, None);
@@ -484,7 +485,7 @@ mod tests {
 		let value = cache.incr("counter", 5).await.unwrap();
 		assert_eq!(value, 5);
 
-		// Verify both caches have the updated value
+		// Assert
 		let l1_value: Option<i64> = l1.get("counter").await.unwrap();
 		let l2_value: Option<i64> = l2.get("counter").await.unwrap();
 		assert_eq!(l1_value, Some(5));
@@ -504,7 +505,7 @@ mod tests {
 		let value = cache.decr("counter", 3).await.unwrap();
 		assert_eq!(value, 7);
 
-		// Verify both caches have the updated value
+		// Assert
 		let l1_value: Option<i64> = l1.get("counter").await.unwrap();
 		let l2_value: Option<i64> = l2.get("counter").await.unwrap();
 		assert_eq!(l1_value, Some(7));
@@ -527,7 +528,7 @@ mod tests {
 		let value: Option<String> = cache.get("key1").await.unwrap();
 		assert_eq!(value, Some("value1".to_string()));
 
-		// Verify promotion to L1
+		// Assert
 		let l1_value: Option<String> = cache.l1().get("key1").await.unwrap();
 		assert_eq!(l1_value, Some("value1".to_string()));
 	}

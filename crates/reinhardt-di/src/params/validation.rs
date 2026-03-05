@@ -236,6 +236,10 @@ impl<T> ValidationConstraints<T> {
 		self
 	}
 
+	/// Maximum allowed length for user-supplied regex patterns (in bytes).
+	/// Limits regex complexity to prevent ReDoS attacks via excessively large patterns.
+	const MAX_REGEX_PATTERN_LENGTH: usize = 1024;
+
 	/// Validate a string value against the constraints
 	pub fn validate_string(&self, value: &str) -> ValidationResult<()> {
 		// Length constraints
@@ -246,8 +250,17 @@ impl<T> ValidationConstraints<T> {
 			reinhardt_core::validators::MaxLengthValidator::new(max).validate(value)?;
 		}
 
-		// Regex constraint
+		// Regex constraint with pattern length limit to prevent ReDoS
 		if let Some(ref pattern) = self.regex {
+			if pattern.len() > Self::MAX_REGEX_PATTERN_LENGTH {
+				return Err(reinhardt_core::validators::ValidationError::Custom(
+					format!(
+						"Regex pattern length {} exceeds maximum allowed length {}",
+						pattern.len(),
+						Self::MAX_REGEX_PATTERN_LENGTH
+					),
+				));
+			}
 			reinhardt_core::validators::RegexValidator::new(pattern)
 				.map_err(|e| {
 					reinhardt_core::validators::ValidationError::Custom(format!(
@@ -434,7 +447,7 @@ pub trait WithValidation: Sized {
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// # let req = ();
 /// # let ctx = ();
-// In your handler:
+/// // In your handler:
 /// // async fn handler(
 /// //     // Extract path parameter "id" and validate it
 /// //     id: ValidatedPath<i32>,
@@ -521,6 +534,10 @@ impl<T> ValidationConstraints<T> {
 		self
 	}
 
+	/// Maximum allowed length for user-supplied regex patterns (in bytes).
+	/// Limits regex complexity to prevent ReDoS attacks via excessively large patterns.
+	const MAX_REGEX_PATTERN_LENGTH: usize = 1024;
+
 	pub fn validate_string(&self, value: &str) -> Result<(), String> {
 		if let Some(min) = self.min_length
 			&& value.len() < min
@@ -541,6 +558,13 @@ impl<T> ValidationConstraints<T> {
 			));
 		}
 		if let Some(ref pattern) = self.regex {
+			if pattern.len() > Self::MAX_REGEX_PATTERN_LENGTH {
+				return Err(format!(
+					"Regex pattern length {} exceeds maximum allowed length {}",
+					pattern.len(),
+					Self::MAX_REGEX_PATTERN_LENGTH
+				));
+			}
 			use regex::Regex;
 			let regex = Regex::new(pattern).map_err(|e| format!("Invalid regex: {}", e))?;
 			if !regex.is_match(value) {
@@ -712,24 +736,147 @@ pub trait WithValidation: Sized {
 mod tests {
 	use super::*;
 	use crate::params::Path;
+	use rstest::rstest;
 
-	#[test]
+	#[rstest]
 	fn test_validation_constraints_builder() {
+		// Arrange
 		let path = Path(42i32);
 		let constrained = path.min_value(0).max_value(100);
 
+		// Act & Assert
 		assert!(constrained.validate_number(&42).is_ok());
 		assert!(constrained.validate_number(&-1).is_err());
 		assert!(constrained.validate_number(&101).is_err());
 	}
 
-	#[test]
+	#[rstest]
 	fn test_string_validation_constraints() {
+		// Arrange
 		let path = Path("test".to_string());
 		let constrained = path.min_length(2).max_length(10);
 
+		// Act & Assert
 		assert!(constrained.validate_string("test").is_ok());
 		assert!(constrained.validate_string("a").is_err());
 		assert!(constrained.validate_string("this is too long").is_err());
+	}
+
+	#[rstest]
+	fn test_regex_pattern_length_limit_rejects_oversized_patterns() {
+		// Arrange
+		let path = Path("test".to_string());
+		let oversized_pattern = "a".repeat(2048);
+		let constrained = path.regex(oversized_pattern);
+
+		// Act
+		let result = constrained.validate_string("test");
+
+		// Assert
+		assert!(result.is_err());
+		let err_msg = format!("{}", result.unwrap_err());
+		assert!(
+			err_msg.contains("exceeds maximum allowed length"),
+			"Expected pattern length error, got: {}",
+			err_msg
+		);
+	}
+
+	#[rstest]
+	fn test_regex_pattern_within_limit_succeeds() {
+		// Arrange
+		let path = Path("hello123".to_string());
+		let valid_pattern = r"^[a-zA-Z0-9]+$";
+		let constrained = path.regex(valid_pattern);
+
+		// Act
+		let result = constrained.validate_string("hello123");
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	fn test_regex_pattern_just_over_limit_is_rejected() {
+		// Arrange
+		let path = Path("a".to_string());
+		let pattern_over_limit =
+			"a".repeat(ValidationConstraints::<Path<String>>::MAX_REGEX_PATTERN_LENGTH + 1);
+		let constrained = path.regex(pattern_over_limit);
+
+		// Act
+		let result = constrained.validate_string("a");
+
+		// Assert
+		assert!(result.is_err());
+		let err_msg = format!("{}", result.unwrap_err());
+		assert!(
+			err_msg.contains("exceeds maximum allowed length"),
+			"Expected pattern length error, got: {}",
+			err_msg
+		);
+	}
+}
+
+#[cfg(test)]
+#[cfg(not(feature = "validation"))]
+mod tests_non_validation {
+	use super::*;
+	use crate::params::Path;
+	use rstest::rstest;
+
+	#[rstest]
+	fn test_regex_pattern_length_limit_rejects_oversized_patterns() {
+		// Arrange
+		let path = Path("test".to_string());
+		let oversized_pattern = "a".repeat(2048);
+		let constrained = path.regex(oversized_pattern);
+
+		// Act
+		let result = constrained.validate_string("test");
+
+		// Assert
+		assert!(result.is_err());
+		let err_msg = result.unwrap_err();
+		assert!(
+			err_msg.contains("exceeds maximum allowed length"),
+			"Expected pattern length error, got: {}",
+			err_msg
+		);
+	}
+
+	#[rstest]
+	fn test_regex_pattern_within_limit_succeeds() {
+		// Arrange
+		let path = Path("hello123".to_string());
+		let valid_pattern = r"^[a-zA-Z0-9]+$";
+		let constrained = path.regex(valid_pattern);
+
+		// Act
+		let result = constrained.validate_string("hello123");
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	fn test_regex_pattern_just_over_limit_is_rejected() {
+		// Arrange
+		let path = Path("a".to_string());
+		let pattern_over_limit =
+			"a".repeat(ValidationConstraints::<Path<String>>::MAX_REGEX_PATTERN_LENGTH + 1);
+		let constrained = path.regex(pattern_over_limit);
+
+		// Act
+		let result = constrained.validate_string("a");
+
+		// Assert
+		assert!(result.is_err());
+		let err_msg = result.unwrap_err();
+		assert!(
+			err_msg.contains("exceeds maximum allowed length"),
+			"Expected pattern length error, got: {}",
+			err_msg
+		);
 	}
 }

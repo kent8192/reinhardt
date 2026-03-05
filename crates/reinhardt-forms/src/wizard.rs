@@ -198,31 +198,72 @@ impl FormWizard {
 
 		Err("No available previous step".to_string())
 	}
-	/// Go to a specific step by name
+	/// Go to a specific step by name.
+	///
+	/// Forward navigation (to a step after the current one) requires that all
+	/// previous steps have been completed (i.e., their data has been saved to
+	/// the session). This prevents attackers from skipping required validation
+	/// steps such as terms acceptance or payment details.
+	///
+	/// Backward navigation (to a step before the current one) is always allowed,
+	/// enabling users to review and edit previous answers.
 	///
 	/// # Examples
 	///
 	/// ```
 	/// use reinhardt_forms::{FormWizard, WizardStep, Form};
+	/// use std::collections::HashMap;
+	/// use serde_json::json;
 	///
 	/// let mut wizard = FormWizard::new("wizard".to_string());
 	/// let form1 = Form::new();
 	/// let form2 = Form::new();
+	/// let form3 = Form::new();
 	/// wizard.add_step(WizardStep::new("step1".to_string(), form1));
 	/// wizard.add_step(WizardStep::new("step2".to_string(), form2));
+	/// wizard.add_step(WizardStep::new("step3".to_string(), form3));
 	///
-	/// let result = wizard.goto_step("step2");
-	/// assert!(result.is_ok());
-	/// assert_eq!(wizard.current_step(), 1);
+	/// // Forward navigation without completing previous steps is rejected
+	/// assert!(wizard.goto_step("step3").is_err());
+	///
+	/// // Complete step1 and step2 first
+	/// let mut data = HashMap::new();
+	/// data.insert("field".to_string(), json!("value"));
+	/// wizard.save_step_data(data.clone()).unwrap();
+	/// wizard.next_step().unwrap();
+	/// wizard.save_step_data(data).unwrap();
+	///
+	/// // Now forward navigation to step3 succeeds
+	/// assert!(wizard.goto_step("step3").is_ok());
 	/// ```
 	pub fn goto_step(&mut self, name: &str) -> Result<(), String> {
-		for (i, step) in self.steps.iter().enumerate() {
-			if step.name == name && step.is_available(&self.session_data) {
-				self.current_step = i;
-				return Ok(());
+		// Find the target step index
+		let target_index = self
+			.steps
+			.iter()
+			.position(|step| step.name == name && step.is_available(&self.session_data))
+			.ok_or_else(|| format!("Step '{}' not found or not available", name))?;
+
+		// Backward navigation is always allowed
+		if target_index <= self.current_step {
+			self.current_step = target_index;
+			return Ok(());
+		}
+
+		// Forward navigation: verify all steps between current and target have
+		// been completed (data saved in session)
+		for i in self.current_step..target_index {
+			let step_name = &self.steps[i].name;
+			if !self.session_data.contains_key(step_name) {
+				return Err(format!(
+					"Cannot skip to step '{}': step '{}' has not been completed",
+					name, step_name
+				));
 			}
 		}
-		Err(format!("Step '{}' not found or not available", name))
+
+		self.current_step = target_index;
+		Ok(())
 	}
 	/// Save data for the current step
 	///
@@ -411,7 +452,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_wizard_goto_step() {
+	fn test_wizard_goto_step_backward_always_allowed() {
 		let mut wizard = FormWizard::new("test".to_string());
 
 		for i in 1..=3 {
@@ -420,6 +461,61 @@ mod tests {
 			wizard.add_step(WizardStep::new(format!("step{}", i), form));
 		}
 
+		// Complete steps to advance
+		let mut data = HashMap::new();
+		data.insert("field1".to_string(), serde_json::json!("value"));
+		wizard.save_step_data(data.clone()).unwrap();
+		wizard.next_step().unwrap();
+		data.clear();
+		data.insert("field2".to_string(), serde_json::json!("value"));
+		wizard.save_step_data(data).unwrap();
+		wizard.next_step().unwrap();
+		assert_eq!(wizard.current_step(), 2);
+
+		// Backward navigation is always allowed
+		wizard.goto_step("step1").unwrap();
+		assert_eq!(wizard.current_step(), 0);
+		assert_eq!(wizard.current_step_name(), Some("step1"));
+	}
+
+	#[test]
+	fn test_wizard_goto_step_forward_requires_completed_steps() {
+		let mut wizard = FormWizard::new("test".to_string());
+
+		for i in 1..=3 {
+			let mut form = Form::new();
+			form.add_field(Box::new(CharField::new(format!("field{}", i))));
+			wizard.add_step(WizardStep::new(format!("step{}", i), form));
+		}
+
+		// Forward navigation without completing prior steps should fail
+		let result = wizard.goto_step("step3");
+		assert!(result.is_err());
+		assert_eq!(wizard.current_step(), 0);
+	}
+
+	#[test]
+	fn test_wizard_goto_step_forward_after_completing_steps() {
+		let mut wizard = FormWizard::new("test".to_string());
+
+		for i in 1..=3 {
+			let mut form = Form::new();
+			form.add_field(Box::new(CharField::new(format!("field{}", i))));
+			wizard.add_step(WizardStep::new(format!("step{}", i), form));
+		}
+
+		// Complete step1
+		let mut data = HashMap::new();
+		data.insert("field1".to_string(), serde_json::json!("value1"));
+		wizard.save_step_data(data).unwrap();
+
+		// Move to step2 and complete it
+		wizard.next_step().unwrap();
+		let mut data2 = HashMap::new();
+		data2.insert("field2".to_string(), serde_json::json!("value2"));
+		wizard.save_step_data(data2).unwrap();
+
+		// Now forward navigation to step3 should succeed
 		wizard.goto_step("step3").unwrap();
 		assert_eq!(wizard.current_step(), 2);
 		assert_eq!(wizard.current_step_name(), Some("step3"));

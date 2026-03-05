@@ -7,6 +7,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.1...reinhardt-pages@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(pages)* add explanatory comments to #[allow(dead_code)]
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.19...reinhardt-pages@v0.1.0-rc.1) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-middleware, reinhardt-urls
+
+## [0.1.0-alpha.19](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.18...reinhardt-pages@v0.1.0-alpha.19) - 2026-02-24
+
+### Fixed
+
+- correct repository URLs from reinhardt-rs to reinhardt-web
+
+## [0.1.0-alpha.18](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.17...reinhardt-pages@v0.1.0-alpha.18) - 2026-02-23
+
+### Maintenance
+
+- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
+
+## [0.1.0-alpha.17](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.16...reinhardt-pages@v0.1.0-alpha.17) - 2026-02-23
+
+### Maintenance
+
+- updated the following local packages: reinhardt-pages-ast, reinhardt-pages-macros, reinhardt-middleware, reinhardt-urls
+
+## [0.1.0-alpha.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.15...reinhardt-pages@v0.1.0-alpha.16) - 2026-02-21
+
+### Fixed
+
+- store WebSocket closures in handle instead of leaking via forget()
+- replace unreachable!() with proper syn::Error in parse_if_node
+- reject non-boolean values for disabled/readonly/autofocus
+- reject whitespace in server_fn endpoint paths
+- add missing input type image and form method dialog
+- detect duplicate properties in form field parsing
+- replace direct indexing with safe .first() access
+- escape field names and media paths (#594, #595)
+- escape auth data in JSON output to prevent XSS (#586)
+- validate img src URLs and wrapper tag names
+- add tag name allowlist for wrapper and icon elements
+- validate img src against dangerous URL schemes
+- add max nesting depth to page parser
+- add max nesting depth to SVG icon parser
+- emit compile error for unknown codec instead of silent fallback
+- replace expect() panics with compile errors in head.rs
+- fix link tag as_ attribute code generation
+- emit compile error for unsupported form-level validators
+- add required attributes to allowed_attrs for track, param, data
+- return Option from FormFieldProperty::name instead of panicking
+- add authentication and authorization enforcement to all endpoints
+
+### Security
+
+- replace panicking unwrap calls with proper error handling
+- replace silent Click fallback for unknown event types
+- add constant-time CSRF token verification
+- add URL scheme and path validation for forms and head
+- add input size limit to HTML minification to prevent DoS
+- prevent open redirect attacks
+- escape HTML characters in SSR state JSON to prevent XSS
+
+### Changed
+
+- replace magic string with Option<Ident> for FormMacro name
+- extract duplicated form ID and action string generation
+- remove duplicate img required attribute validation
+
+### Styling
+
+- apply workspace-wide formatting fixes
+- apply formatting to files introduced by merge from main
+- fix rustfmt formatting in renderer.rs
+- fix formatting issues
+
 ## [0.1.0-alpha.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.14...reinhardt-pages@v0.1.0-alpha.15) - 2026-02-16
 
 ### Maintenance

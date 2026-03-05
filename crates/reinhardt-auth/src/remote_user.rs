@@ -114,7 +114,7 @@ impl AuthenticationBackend for RemoteUserAuthentication {
 			Some(username) if !username.is_empty() => {
 				// Create user from header
 				Ok(Some(Box::new(SimpleUser {
-					id: Uuid::new_v4(),
+					id: Uuid::new_v5(&Uuid::NAMESPACE_OID, username.as_bytes()),
 					username: username.to_string(),
 					email: format!("{}@example.com", username),
 					is_active: true,

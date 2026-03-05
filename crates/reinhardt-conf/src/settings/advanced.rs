@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Main application settings
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdvancedSettings {
 	/// Debug mode
@@ -180,6 +181,7 @@ impl AdvancedSettings {
 }
 
 /// Database settings
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseSettings {
 	pub url: String,
@@ -202,6 +204,7 @@ impl Default for DatabaseSettings {
 }
 
 /// Cache settings
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheSettings {
 	pub backend: String,
@@ -220,6 +223,7 @@ impl Default for CacheSettings {
 }
 
 /// Session settings
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSettings {
 	pub engine: String,
@@ -244,6 +248,7 @@ impl Default for SessionSettings {
 }
 
 /// CORS settings
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CorsSettings {
 	pub allow_origins: Vec<String>,
@@ -272,6 +277,7 @@ impl Default for CorsSettings {
 }
 
 /// Static files settings
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StaticSettings {
 	pub url: String,
@@ -288,6 +294,7 @@ impl Default for StaticSettings {
 }
 
 /// Media files settings
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaSettings {
 	pub url: String,
@@ -304,6 +311,7 @@ impl Default for MediaSettings {
 }
 
 /// Email settings
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailSettings {
 	pub backend: String,
@@ -380,6 +388,7 @@ impl Default for EmailSettings {
 }
 
 /// Logging settings
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingSettings {
 	pub level: String,
@@ -396,6 +405,7 @@ impl Default for LoggingSettings {
 }
 
 /// Settings error
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum SettingsError {
 	#[error("File error: {0}")]

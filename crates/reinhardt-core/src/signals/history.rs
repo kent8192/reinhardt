@@ -140,7 +140,7 @@ impl<T> HistoryEntry<T> {
 /// assert_eq!(config.max_entries(), 500);
 /// assert_eq!(config.ttl(), Some(Duration::from_secs(3600)));
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryConfig {
 	/// Maximum number of history entries to keep
 	max_entries: usize,

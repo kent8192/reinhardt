@@ -1768,6 +1768,7 @@ pub(super) static INPUT_ENUM_ATTRS: ElementEnumAttrs = ElementEnumAttrs {
 			"month",
 			"color",
 			"range",
+			"image",
 		],
 	}],
 };
@@ -1791,7 +1792,7 @@ pub(super) static FORM_ENUM_ATTRS: ElementEnumAttrs = ElementEnumAttrs {
 	attrs: &[
 		EnumAttrSpec {
 			name: "method",
-			valid_values: &["get", "post"],
+			valid_values: &["get", "post", "dialog"],
 		},
 		EnumAttrSpec {
 			name: "enctype",

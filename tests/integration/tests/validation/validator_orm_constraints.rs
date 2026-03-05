@@ -13,8 +13,8 @@
 use reinhardt_core::validators::{MinValueValidator, RangeValidator, Validator};
 use reinhardt_db::orm::manager::reinitialize_database;
 use reinhardt_db::{
-	orm::{Filter, FilterOperator, FilterValue, Model},
 	DatabaseConnection,
+	orm::{Filter, FilterOperator, FilterValue, Model},
 };
 use reinhardt_integration_tests::{
 	migrations::apply_constraint_test_migrations,
@@ -22,7 +22,7 @@ use reinhardt_integration_tests::{
 };
 use reinhardt_macros::model;
 use reinhardt_test::fixtures::postgres_container;
-use reinhardt_test::fixtures::validator::{validator_db_guard, ValidatorDbGuard};
+use reinhardt_test::fixtures::validator::{ValidatorDbGuard, validator_db_guard};
 use reinhardt_test::resource::TeardownGuard;
 use rstest::*;
 use serial_test::serial;

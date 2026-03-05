@@ -482,7 +482,7 @@ fn test_boolean_field_equivalence(#[case] input: serde_json::Value, #[case] _val
 
 #[rstest]
 #[case(true, Some(true), true)] // required=true, value=true → OK
-#[case(true, Some(false), true)] // required=true, value=false → OK
+#[case(true, Some(false), false)] // required=true, value=false → Error (Django behavior: consent required)
 #[case(true, None, false)] // required=true, value=None → Error
 #[case(false, None, true)] // required=false, value=None → OK
 fn test_boolean_field_decision_table(

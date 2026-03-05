@@ -166,13 +166,13 @@ where
 
 		// 3. Check if authenticated
 		#[cfg(feature = "params")]
-		if !auth_state.is_authenticated {
+		if !auth_state.is_authenticated() {
 			return Ok(Self::anonymous());
 		}
 
 		// 4. Parse user_id to PrimaryKey type
 		#[cfg(feature = "params")]
-		let base_pk: <U as BaseUser>::PrimaryKey = match auth_state.user_id.parse() {
+		let base_pk: <U as BaseUser>::PrimaryKey = match auth_state.user_id().parse() {
 			Ok(pk) => pk,
 			Err(_) => return Ok(Self::anonymous()),
 		};
@@ -197,7 +197,7 @@ where
 
 		// 7. Parse UUID for CurrentUser (Uuid is commonly used for user IDs)
 		#[cfg(feature = "params")]
-		let user_id = match Uuid::parse_str(&auth_state.user_id) {
+		let user_id = match Uuid::parse_str(auth_state.user_id()) {
 			Ok(id) => id,
 			Err(_) => Uuid::nil(),
 		};

@@ -232,11 +232,32 @@ pub enum Commands {
 /// }
 /// ```
 pub async fn execute_from_command_line() -> Result<(), Box<dyn std::error::Error>> {
-	// Automatically discover and register URL patterns
-	auto_register_router().await?;
-
 	let cli = Cli::parse();
+
+	// Only register router for commands that serve HTTP traffic.
+	// DB-only commands (migrate, makemigrations) and utility commands
+	// (shell, check, collectstatic) must not require route registration.
+	if requires_router(&cli.command) {
+		auto_register_router().await?;
+	}
+
 	run_command(cli.command, cli.verbosity).await
+}
+
+/// Returns `true` for commands that require HTTP route registration.
+///
+/// Only HTTP-serving commands (`runserver`, `showurls`, `generateopenapi`)
+/// need URL patterns registered. DB-only and utility commands work without
+/// a `#[routes]` function being present.
+fn requires_router(command: &Commands) -> bool {
+	match command {
+		Commands::Runserver { .. } => true,
+		#[cfg(feature = "routers")]
+		Commands::Showurls { .. } => true,
+		#[cfg(feature = "openapi")]
+		Commands::Generateopenapi { .. } => true,
+		_ => false,
+	}
 }
 
 /// Execute a command with the given verbosity level
@@ -507,8 +528,13 @@ async fn execute_collectstatic(
 	let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| "local".to_string());
 	let profile = Profile::parse(&profile_str);
 
-	let base_dir = env::current_dir().expect("Failed to get current directory");
+	let base_dir =
+		env::current_dir().map_err(|e| format!("Failed to get current directory: {e}"))?;
 	let settings_dir = base_dir.join("settings");
+
+	// Generate a random secret key for the default to avoid shipping a
+	// hardcoded value that could be reused across deployments.
+	let default_secret_key = generate_random_secret_key();
 
 	let merged = SettingsBuilder::new()
 		.profile(profile)
@@ -519,15 +545,14 @@ async fn execute_collectstatic(
 					Value::String(
 						base_dir
 							.to_str()
-							.expect("base_dir contains invalid UTF-8")
+							.ok_or_else(|| {
+								format!("base_dir contains invalid UTF-8: {}", base_dir.display())
+							})?
 							.to_string(),
 					),
 				)
 				.with_value("debug", Value::Bool(true))
-				.with_value(
-					"secret_key",
-					Value::String("insecure-dev-key-change-in-production".to_string()),
-				)
+				.with_value("secret_key", Value::String(default_secret_key))
 				.with_value("allowed_hosts", Value::Array(vec![]))
 				.with_value("installed_apps", Value::Array(vec![]))
 				.with_value("databases", serde_json::json!({}))
@@ -614,15 +639,10 @@ async fn execute_showurls(names: bool, verbosity: u8) -> Result<(), Box<dyn std:
 
 #[cfg(not(feature = "routers"))]
 async fn execute_showurls(_names: bool, _verbosity: u8) -> Result<(), Box<dyn std::error::Error>> {
-	use colored::Colorize;
-	eprintln!(
-		"{}",
-		"showurls command requires 'routers' feature".red().bold()
-	);
-	eprintln!("Enable it in your Cargo.toml:");
-	eprintln!("  [dependencies]");
-	eprintln!("  reinhardt-commands = {{ version = \"0.1.0\", features = [\"routers\"] }}");
-	std::process::exit(1);
+	Err("showurls command requires 'routers' feature. \
+		Enable it in your Cargo.toml: \
+		reinhardt-commands = { version = \"0.1.0\", features = [\"routers\"] }"
+		.into())
 }
 
 /// Execute the generateopenapi command
@@ -684,10 +704,10 @@ async fn execute_generateopenapi(
 			.status()?;
 
 		if !status.success() {
-			eprintln!("{}", "Failed to generate Postman Collection".red().bold());
-			eprintln!("Make sure Node.js and npx are installed:");
-			eprintln!("  npm install -g openapi-to-postmanv2");
-			std::process::exit(1);
+			return Err("Failed to generate Postman Collection. \
+				Make sure Node.js and npx are installed: \
+				npm install -g openapi-to-postmanv2"
+				.into());
 		}
 
 		if verbosity > 0 {
@@ -703,24 +723,17 @@ async fn execute_generateopenapi(
 }
 
 #[cfg(not(feature = "openapi"))]
-#[allow(dead_code)]
+#[allow(dead_code)] // Entry point when openapi feature is disabled
 async fn execute_generateopenapi(
 	_format: String,
 	_output: PathBuf,
 	_postman: bool,
 	_verbosity: u8,
 ) -> Result<(), Box<dyn std::error::Error>> {
-	use colored::Colorize;
-	eprintln!(
-		"{}",
-		"generateopenapi command requires 'openapi' feature"
-			.red()
-			.bold()
-	);
-	eprintln!("Enable it in your Cargo.toml:");
-	eprintln!("  [dependencies]");
-	eprintln!("  reinhardt-commands = {{ version = \"0.1.0\", features = [\"openapi\"] }}");
-	std::process::exit(1);
+	Err("generateopenapi command requires 'openapi' feature. \
+		Enable it in your Cargo.toml: \
+		reinhardt-commands = { version = \"0.1.0\", features = [\"openapi\"] }"
+		.into())
 }
 
 // ============================================================================
@@ -748,13 +761,17 @@ async fn auto_register_router() -> Result<(), Box<dyn std::error::Error>> {
 	match registrations.len() {
 		0 => {
 			return Err("No URL patterns registered.\n\
-				 Add the #[routes] attribute to your routes function in src/config/urls.rs:\n\n\
+				 Add the `#[routes]` attribute to your routes function in src/config/urls.rs:\n\n\
 				 #[routes]\n\
 				 pub fn routes() -> UnifiedRouter {\n\
 				     UnifiedRouter::new()\n\
-				 }"
-			.to_string()
-			.into());
+				 }\n\n\
+				 If your project uses a library/binary split (src/lib.rs + src/bin/manage.rs),\n\
+				 the linker may silently discard route registrations from the library crate.\n\
+				 Fix: add `use your_crate_name as _;` to src/bin/manage.rs to force-link\n\
+				 the library and preserve its side-effectful route registrations."
+				.to_string()
+				.into());
 		}
 		1 => {
 			// Expected case: exactly one registration
@@ -795,4 +812,191 @@ async fn auto_register_router() -> Result<(), Box<dyn std::error::Error>> {
 async fn auto_register_router() -> Result<(), Box<dyn std::error::Error>> {
 	// No router registration needed when routers feature is disabled
 	Ok(())
+}
+
+/// Generate a cryptographically random secret key for fallback use.
+///
+/// Produces a 50-character hex string (200 bits of entropy). This is used
+/// as the default `SECRET_KEY` when no explicit key is configured, ensuring
+/// that each process gets a unique key rather than a shared hardcoded value.
+fn generate_random_secret_key() -> String {
+	use rand::Rng;
+	use std::fmt::Write;
+
+	let mut rng = rand::rng();
+	let bytes: [u8; 25] = rng.random();
+	let mut hex_string = String::with_capacity(50);
+	for b in bytes {
+		let _ = write!(hex_string, "{:02x}", b);
+	}
+	hex_string
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	#[rstest]
+	fn test_requires_router_for_runserver() {
+		// Arrange
+		let command = Commands::Runserver {
+			address: "127.0.0.1:8000".to_string(),
+			noreload: false,
+			insecure: false,
+			no_docs: false,
+			with_pages: false,
+			static_dir: "dist".to_string(),
+			no_spa: false,
+		};
+
+		// Act
+		let result = requires_router(&command);
+
+		// Assert
+		assert!(result);
+	}
+
+	#[cfg(feature = "routers")]
+	#[rstest]
+	fn test_requires_router_for_showurls() {
+		// Arrange
+		let command = Commands::Showurls { names: false };
+
+		// Act
+		let result = requires_router(&command);
+
+		// Assert
+		assert!(result);
+	}
+
+	#[cfg(feature = "openapi")]
+	#[rstest]
+	fn test_requires_router_for_generateopenapi() {
+		// Arrange
+		let command = Commands::Generateopenapi {
+			format: "json".to_string(),
+			output: std::path::PathBuf::from("openapi.json"),
+			postman: false,
+		};
+
+		// Act
+		let result = requires_router(&command);
+
+		// Assert
+		assert!(result);
+	}
+
+	#[rstest]
+	fn test_does_not_require_router_for_migrate() {
+		// Arrange
+		let command = Commands::Migrate {
+			app_label: None,
+			migration_name: None,
+			database: None,
+			fake: false,
+			fake_initial: false,
+			plan: false,
+		};
+
+		// Act
+		let result = requires_router(&command);
+
+		// Assert
+		assert!(!result);
+	}
+
+	#[rstest]
+	fn test_does_not_require_router_for_shell() {
+		// Arrange
+		let command = Commands::Shell { command: None };
+
+		// Act
+		let result = requires_router(&command);
+
+		// Assert
+		assert!(!result);
+	}
+
+	#[rstest]
+	fn test_does_not_require_router_for_check() {
+		// Arrange
+		let command = Commands::Check {
+			app_label: None,
+			deploy: false,
+		};
+
+		// Act
+		let result = requires_router(&command);
+
+		// Assert
+		assert!(!result);
+	}
+
+	#[rstest]
+	fn test_does_not_require_router_for_collectstatic() {
+		// Arrange
+		let command = Commands::Collectstatic {
+			clear: false,
+			no_input: false,
+			dry_run: false,
+			link: false,
+			ignore: vec![],
+		};
+
+		// Act
+		let result = requires_router(&command);
+
+		// Assert
+		assert!(!result);
+	}
+
+	#[cfg(feature = "migrations")]
+	#[rstest]
+	fn test_does_not_require_router_for_makemigrations() {
+		// Arrange
+		let command = Commands::Makemigrations {
+			app_labels: vec![],
+			dry_run: false,
+			name: None,
+			check: false,
+			empty: false,
+			force_empty_state: false,
+			migration_dir: std::path::PathBuf::from("./migrations"),
+		};
+
+		// Act
+		let result = requires_router(&command);
+
+		// Assert
+		assert!(!result);
+	}
+
+	#[cfg(feature = "routers")]
+	#[rstest]
+	#[tokio::test]
+	async fn test_auto_register_router_returns_error_with_lib_bin_hint_when_no_routes() {
+		// Arrange: no #[routes] registered in test binary
+		// (test binaries do not include application inventory::submit! side effects)
+
+		// Act
+		let result = auto_register_router().await;
+
+		// Assert: must fail because no routes are registered
+		assert!(
+			result.is_err(),
+			"Expected error when no routes are registered"
+		);
+		let error_msg = result.unwrap_err().to_string();
+		assert!(
+			error_msg.contains("No URL patterns registered"),
+			"Expected 'No URL patterns registered' in error, got: {}",
+			error_msg
+		);
+		assert!(
+			error_msg.contains("library/binary split"),
+			"Expected lib+bin hint in error message, got: {}",
+			error_msg
+		);
+	}
 }

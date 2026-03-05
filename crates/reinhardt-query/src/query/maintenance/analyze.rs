@@ -147,7 +147,6 @@ impl QueryStatementBuilder for AnalyzeStatement {
 		}
 		panic!("Unsupported query builder type");
 	}
-
 }
 
 impl QueryStatementWriter for AnalyzeStatement {}

@@ -653,6 +653,7 @@ impl Application {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use serial_test::serial;
 
 	#[test]
 	fn test_route_config_creation() {
@@ -694,7 +695,11 @@ mod tests {
 	}
 
 	#[test]
+	#[serial(apps_registry)]
 	fn test_application_builder_basic() {
+		// Arrange - Reset global state before test
+		crate::registry::reset_global_registry();
+
 		let app = ApplicationBuilder::new().build().unwrap();
 
 		assert_eq!(app.apps().len(), 0);
@@ -704,7 +709,11 @@ mod tests {
 	}
 
 	#[test]
+	#[serial(apps_registry)]
 	fn test_application_builder_with_apps() {
+		// Arrange - Reset global state before test
+		crate::registry::reset_global_registry();
+
 		let app_config = AppConfig::new("myapp", "myapp");
 		let app = ApplicationBuilder::new()
 			.add_app(app_config)
@@ -717,7 +726,11 @@ mod tests {
 	}
 
 	#[test]
+	#[serial(apps_registry)]
 	fn test_application_builder_with_multiple_apps() {
+		// Arrange - Reset global state before test
+		crate::registry::reset_global_registry();
+
 		let apps = vec![
 			AppConfig::new("app1", "app1"),
 			AppConfig::new("app2", "app2"),
@@ -730,7 +743,11 @@ mod tests {
 	}
 
 	#[test]
+	#[serial(apps_registry)]
 	fn test_application_builder_with_middleware() {
+		// Arrange - Reset global state before test
+		crate::registry::reset_global_registry();
+
 		let app = ApplicationBuilder::new()
 			.add_middleware("CorsMiddleware")
 			.add_middleware("AuthMiddleware")
@@ -743,7 +760,11 @@ mod tests {
 	}
 
 	#[test]
+	#[serial(apps_registry)]
 	fn test_application_builder_with_middlewares() {
+		// Arrange - Reset global state before test
+		crate::registry::reset_global_registry();
+
 		let middleware = vec!["CorsMiddleware", "AuthMiddleware"];
 		let app = ApplicationBuilder::new()
 			.add_middlewares(middleware)
@@ -754,7 +775,11 @@ mod tests {
 	}
 
 	#[test]
+	#[serial(apps_registry)]
 	fn test_application_builder_with_url_patterns() {
+		// Arrange - Reset global state before test
+		crate::registry::reset_global_registry();
+
 		let route = RouteConfig::new("/users/", "UserListHandler");
 		let app = ApplicationBuilder::new()
 			.add_url_pattern(route)
@@ -766,7 +791,11 @@ mod tests {
 	}
 
 	#[test]
+	#[serial(apps_registry)]
 	fn test_application_builder_with_database() {
+		// Arrange - Reset global state before test
+		crate::registry::reset_global_registry();
+
 		let db_config = ApplicationDatabaseConfig::new("postgresql://localhost/mydb");
 		let app = ApplicationBuilder::new()
 			.database(db_config)
@@ -781,7 +810,11 @@ mod tests {
 	}
 
 	#[test]
+	#[serial(apps_registry)]
 	fn test_application_builder_with_settings() {
+		// Arrange - Reset global state before test
+		crate::registry::reset_global_registry();
+
 		let app = ApplicationBuilder::new()
 			.add_setting("DEBUG", "true")
 			.add_setting("SECRET_KEY", "secret")
@@ -796,7 +829,11 @@ mod tests {
 	}
 
 	#[test]
+	#[serial(apps_registry)]
 	fn test_application_builder_validation_duplicate_apps() {
+		// Arrange - Reset global state before test
+		crate::registry::reset_global_registry();
+
 		let result = ApplicationBuilder::new()
 			.add_app(AppConfig::new("myapp", "myapp"))
 			.add_app(AppConfig::new("another", "myapp"))
@@ -812,7 +849,11 @@ mod tests {
 	}
 
 	#[test]
+	#[serial(apps_registry)]
 	fn test_application_builder_validation_duplicate_routes() {
+		// Arrange - Reset global state before test
+		crate::registry::reset_global_registry();
+
 		let result = ApplicationBuilder::new()
 			.add_url_pattern(RouteConfig::new("/users/", "Handler1").with_name("users"))
 			.add_url_pattern(RouteConfig::new("/posts/", "Handler2").with_name("users"))
@@ -828,7 +869,11 @@ mod tests {
 	}
 
 	#[test]
+	#[serial(apps_registry)]
 	fn test_application_builder_method_chaining() {
+		// Arrange - Reset global state before test
+		crate::registry::reset_global_registry();
+
 		let app = ApplicationBuilder::new()
 			.add_app(AppConfig::new("app1", "app1"))
 			.add_middleware("CorsMiddleware")
@@ -846,7 +891,11 @@ mod tests {
 	}
 
 	#[test]
+	#[serial(apps_registry)]
 	fn test_application_builder_apps_registry_ready() {
+		// Arrange - Reset global state before test
+		crate::registry::reset_global_registry();
+
 		let app = ApplicationBuilder::new()
 			.add_app(AppConfig::new("myapp", "myapp"))
 			.build()
@@ -858,7 +907,11 @@ mod tests {
 	}
 
 	#[test]
+	#[serial(apps_registry)]
 	fn test_application_builder_invalid_app_label() {
+		// Arrange - Reset global state before test
+		crate::registry::reset_global_registry();
+
 		let result = ApplicationBuilder::new()
 			.add_app(AppConfig::new("myapp", "my-app"))
 			.build();
@@ -886,7 +939,11 @@ mod tests {
 	}
 
 	#[test]
+	#[serial(apps_registry)]
 	fn test_application_builder_empty_settings() {
+		// Arrange - Reset global state before test
+		crate::registry::reset_global_registry();
+
 		let app = ApplicationBuilder::new().build().unwrap();
 		assert!(app.settings().is_empty());
 	}

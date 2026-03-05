@@ -196,6 +196,10 @@ impl Component for RouterOutlet {
 }
 
 /// A redirect component that immediately navigates to another path.
+///
+/// The redirect URL is validated at construction time to prevent open redirect
+/// attacks. Relative URLs (starting with `/`) are always allowed. Absolute URLs
+/// must have their host in the provided `allowed_hosts` set.
 #[derive(Debug, Clone)]
 pub struct Redirect {
 	/// The destination path.
@@ -205,10 +209,42 @@ pub struct Redirect {
 }
 
 impl Redirect {
-	/// Creates a new redirect.
+	/// Creates a new redirect with URL validation.
+	///
+	/// Validates the redirect URL against the provided allowed hosts to prevent
+	/// open redirect attacks. Relative URLs (starting with `/`) are always safe.
+	///
+	/// # Errors
+	///
+	/// Returns `RedirectValidationError` if the URL fails validation.
+	pub fn validated(
+		to: impl Into<String>,
+		allowed_hosts: &std::collections::HashSet<String>,
+	) -> Result<Self, reinhardt_core::security::redirect::RedirectValidationError> {
+		let url = to.into();
+		reinhardt_core::security::redirect::validate_redirect_url(&url, allowed_hosts)?;
+		Ok(Self {
+			to: url,
+			replace: true,
+		})
+	}
+
+	/// Creates a new redirect without external URL validation.
+	///
+	/// Only allows relative URLs (starting with `/`). Rejects any URL that
+	/// could be an absolute URL or uses dangerous protocols.
+	///
+	/// # Panics
+	///
+	/// Panics if the URL does not start with `/` (use `validated` for absolute URLs).
 	pub fn new(to: impl Into<String>) -> Self {
+		let url = to.into();
+		assert!(
+			url.starts_with('/') && !url.starts_with("//"),
+			"Redirect::new only accepts relative URLs starting with '/'. Use Redirect::validated for absolute URLs."
+		);
 		Self {
-			to: to.into(),
+			to: url,
 			replace: true,
 		}
 	}
@@ -339,6 +375,33 @@ mod tests {
 		let html = redirect.render().render_to_string();
 		assert!(html.contains("url=/login/"));
 		assert!(html.contains("data-redirect=\"/login/\""));
+	}
+
+	#[test]
+	#[should_panic(expected = "Redirect::new only accepts relative URLs")]
+	fn test_redirect_rejects_absolute_url() {
+		Redirect::new("https://evil.com/phish");
+	}
+
+	#[test]
+	#[should_panic(expected = "Redirect::new only accepts relative URLs")]
+	fn test_redirect_rejects_protocol_relative() {
+		Redirect::new("//evil.com/path");
+	}
+
+	#[test]
+	fn test_redirect_validated_allows_trusted_host() {
+		let mut hosts = std::collections::HashSet::new();
+		hosts.insert("example.com".to_string());
+		let redirect = Redirect::validated("https://example.com/page", &hosts).unwrap();
+		assert_eq!(redirect.to(), "https://example.com/page");
+	}
+
+	#[test]
+	fn test_redirect_validated_rejects_untrusted_host() {
+		let hosts = std::collections::HashSet::new();
+		let result = Redirect::validated("https://evil.com/phish", &hosts);
+		assert!(result.is_err());
 	}
 
 	#[test]

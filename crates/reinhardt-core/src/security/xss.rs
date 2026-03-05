@@ -153,6 +153,12 @@ pub fn sanitize_html(input: &str) -> String {
 
 /// Validate URLs and allow only safe protocols
 ///
+/// Allows relative paths (`/path`, `./path`), anchor links (`#section`),
+/// and safe protocols (`http://`, `https://`, `mailto:`, `ftp://`, `ftps://`).
+///
+/// Rejects dangerous protocols (`javascript:`, `data:`, `vbscript:`) and
+/// path traversal prefixes (`../`).
+///
 /// # Examples
 ///
 /// ```
@@ -164,16 +170,13 @@ pub fn sanitize_html(input: &str) -> String {
 /// assert!(is_safe_url("mailto:user@example.com"));
 /// assert!(!is_safe_url("javascript:alert(1)"));
 /// assert!(!is_safe_url("data:text/html,<script>alert(1)</script>"));
+/// assert!(!is_safe_url("../parent/path"));
 /// ```
 pub fn is_safe_url(url: &str) -> bool {
 	let url_lower = url.to_lowercase();
 
-	// Allow relative URLs and anchor links
-	if url.starts_with('/')
-		|| url.starts_with("./")
-		|| url.starts_with("../")
-		|| url.starts_with('#')
-	{
+	// Allow relative URLs and anchor links (but NOT parent traversal)
+	if url.starts_with('/') || url.starts_with("./") || url.starts_with('#') {
 		return true;
 	}
 
@@ -429,7 +432,7 @@ mod tests {
 		assert!(is_safe_url("http://example.com"));
 		assert!(is_safe_url("/path/to/page"));
 		assert!(is_safe_url("./relative/path"));
-		assert!(is_safe_url("../parent/path"));
+		assert!(!is_safe_url("../parent/path")); // Path traversal is unsafe
 		assert!(is_safe_url("#section")); // Anchor links are safe
 		assert!(is_safe_url("mailto:user@example.com"));
 		assert!(!is_safe_url("javascript:alert(1)"));

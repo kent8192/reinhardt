@@ -9,8 +9,27 @@ use crate::{
 
 use super::{
 	returning::ReturningClause,
+	select::SelectStatement,
 	traits::{QueryBuilderTrait, QueryStatementBuilder, QueryStatementWriter},
 };
+
+/// Source of data for INSERT statement
+///
+/// This enum represents the data source for an INSERT statement.
+/// It can be either explicit values (VALUES clause) or a subquery (SELECT statement).
+#[derive(Debug, Clone)]
+pub enum InsertSource {
+	/// Explicit values for INSERT (VALUES clause)
+	Values(Vec<Vec<Value>>),
+	/// Subquery for INSERT FROM SELECT
+	Subquery(Box<SelectStatement>),
+}
+
+impl Default for InsertSource {
+	fn default() -> Self {
+		Self::Values(Vec::new())
+	}
+}
 
 /// INSERT statement builder
 ///
@@ -31,7 +50,7 @@ use super::{
 pub struct InsertStatement {
 	pub(crate) table: Option<TableRef>,
 	pub(crate) columns: Vec<DynIden>,
-	pub(crate) values: Vec<Vec<Value>>,
+	pub(crate) source: InsertSource,
 	pub(crate) returning: Option<ReturningClause>,
 	pub(crate) on_conflict: Option<super::on_conflict::OnConflict>,
 }
@@ -42,7 +61,7 @@ impl InsertStatement {
 		Self {
 			table: None,
 			columns: Vec::new(),
-			values: Vec::new(),
+			source: InsertSource::Values(Vec::new()),
 			returning: None,
 			on_conflict: None,
 		}
@@ -53,7 +72,7 @@ impl InsertStatement {
 		Self {
 			table: self.table.take(),
 			columns: std::mem::take(&mut self.columns),
-			values: std::mem::take(&mut self.values),
+			source: std::mem::replace(&mut self.source, InsertSource::Values(Vec::new())),
 			returning: self.returning.take(),
 			on_conflict: self.on_conflict.take(),
 		}
@@ -141,7 +160,12 @@ impl InsertStatement {
 				self.columns.len()
 			));
 		}
-		self.values.push(values);
+		match &mut self.source {
+			InsertSource::Values(vals) => vals.push(values),
+			InsertSource::Subquery(_) => {
+				self.source = InsertSource::Values(vec![values]);
+			}
+		}
 		Ok(self)
 	}
 
@@ -175,7 +199,12 @@ impl InsertStatement {
 				self.columns.len()
 			);
 		}
-		self.values.push(values);
+		match &mut self.source {
+			InsertSource::Values(vals) => vals.push(values),
+			InsertSource::Subquery(_) => {
+				self.source = InsertSource::Values(vec![values]);
+			}
+		}
 		self
 	}
 
@@ -258,6 +287,38 @@ impl InsertStatement {
 		self.returning = Some(ReturningClause::all());
 		self
 	}
+
+	/// Use a subquery as the data source for INSERT
+	///
+	/// # Examples
+	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	///
+	/// let select = Query::select()
+	///     .column("name")
+	///     .column("email")
+	///     .from("temp_users");
+	///
+	/// let query = Query::insert()
+	///     .into_table("users")
+	///     .columns(["name", "email"])
+	///     .from_subquery(select);
+	/// ```
+	pub fn from_subquery(&mut self, select: SelectStatement) -> &mut Self {
+		self.source = InsertSource::Subquery(Box::new(select));
+		self
+	}
+
+	/// Get the values if this is a VALUES source
+	///
+	/// Returns `None` if the source is a subquery.
+	pub fn get_values(&self) -> Option<&Vec<Vec<Value>>> {
+		match &self.source {
+			InsertSource::Values(vals) => Some(vals),
+			InsertSource::Subquery(_) => None,
+		}
+	}
 }
 
 impl Default for InsertStatement {
@@ -298,6 +359,7 @@ impl QueryStatementWriter for InsertStatement {}
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::Query;
 
 	#[test]
 	fn test_insert_basic() {
@@ -309,8 +371,9 @@ mod tests {
 
 		assert!(query.table.is_some());
 		assert_eq!(query.columns.len(), 2);
-		assert_eq!(query.values.len(), 1);
-		assert_eq!(query.values[0].len(), 2);
+		let values = query.get_values().expect("should have values");
+		assert_eq!(values.len(), 1);
+		assert_eq!(values[0].len(), 2);
 	}
 
 	#[test]
@@ -322,7 +385,8 @@ mod tests {
 			.values_panic(["Alice", "alice@example.com"])
 			.values_panic(["Bob", "bob@example.com"]);
 
-		assert_eq!(query.values.len(), 2);
+		let values = query.get_values().expect("should have values");
+		assert_eq!(values.len(), 2);
 	}
 
 	#[test]
@@ -374,5 +438,27 @@ mod tests {
 		let taken = query.take();
 		assert!(taken.table.is_some());
 		assert!(query.table.is_none());
+	}
+
+	#[test]
+	fn test_insert_from_subquery() {
+		let mut query = InsertStatement::new();
+		let select = Query::select()
+			.column("name")
+			.column("email")
+			.from("temp_users")
+			.to_owned();
+
+		query
+			.into_table("users")
+			.columns(["name", "email"])
+			.from_subquery(select);
+
+		assert!(query.table.is_some());
+		assert_eq!(query.columns.len(), 2);
+		assert!(
+			query.get_values().is_none(),
+			"should not have values when using subquery"
+		);
 	}
 }

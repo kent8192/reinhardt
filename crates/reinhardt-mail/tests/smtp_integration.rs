@@ -4,7 +4,7 @@
 //! TLS, attachments, HTML email, encoding, error handling, retry, queue, and BCC/CC.
 
 use reinhardt_mail::{EmailBackend, EmailMessage, SmtpBackend, SmtpConfig, SmtpSecurity};
-use reinhardt_test::containers::MailpitContainer;
+use reinhardt_testkit::containers::MailpitContainer;
 use rstest::*;
 use std::time::Duration;
 
@@ -41,6 +41,7 @@ impl MailpitAddress {
 }
 
 #[derive(Debug, serde::Deserialize)]
+// Struct fields used for JSON deserialization
 #[allow(dead_code)]
 struct MessagesResponse {
 	total: usize,

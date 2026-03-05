@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 use tokio::sync::RwLock;
+use tokio::task::AbortHandle;
 
 /// Cleanup strategy for in-memory cache
 #[derive(Clone, Copy, Debug)]
@@ -42,6 +43,8 @@ pub struct InMemoryCache {
 	hits: Arc<AtomicU64>,
 	misses: Arc<AtomicU64>,
 	cleanup_interval: Option<Duration>,
+	/// Handle for cancelling the background cleanup task
+	cleanup_handle: Arc<std::sync::Mutex<Option<AbortHandle>>>,
 }
 
 impl InMemoryCache {
@@ -56,7 +59,7 @@ impl InMemoryCache {
 	/// use reinhardt_utils::cache::InMemoryCache;
 	///
 	/// let cache = InMemoryCache::new();
-	// Cache is ready to use with no default TTL
+	/// // Cache is ready to use with no default TTL
 	/// ```
 	pub fn new() -> Self {
 		Self {
@@ -67,6 +70,7 @@ impl InMemoryCache {
 			hits: Arc::new(AtomicU64::new(0)),
 			misses: Arc::new(AtomicU64::new(0)),
 			cleanup_interval: None,
+			cleanup_handle: Arc::new(std::sync::Mutex::new(None)),
 		}
 	}
 
@@ -89,7 +93,7 @@ impl InMemoryCache {
 	/// use reinhardt_utils::cache::InMemoryCache;
 	///
 	/// let cache = InMemoryCache::with_layered_cleanup();
-	// Use layered cleanup for better performance
+	/// // Use layered cleanup for better performance
 	/// ```
 	pub fn with_layered_cleanup() -> Self {
 		Self {
@@ -100,6 +104,7 @@ impl InMemoryCache {
 			hits: Arc::new(AtomicU64::new(0)),
 			misses: Arc::new(AtomicU64::new(0)),
 			cleanup_interval: None,
+			cleanup_handle: Arc::new(std::sync::Mutex::new(None)),
 		}
 	}
 
@@ -127,6 +132,7 @@ impl InMemoryCache {
 			hits: Arc::new(AtomicU64::new(0)),
 			misses: Arc::new(AtomicU64::new(0)),
 			cleanup_interval: None,
+			cleanup_handle: Arc::new(std::sync::Mutex::new(None)),
 		}
 	}
 	/// Set a default TTL for all cache entries
@@ -141,12 +147,12 @@ impl InMemoryCache {
 	/// let cache = InMemoryCache::new()
 	///     .with_default_ttl(Duration::from_secs(1));
 	///
-	// Set a value without explicit TTL
+	/// // Set a value without explicit TTL
 	/// cache.set("key", &"value", None).await.unwrap();
 	///
-	// Wait for default TTL to expire
+	/// // Wait for default TTL to expire
 	///
-	// Value should be expired
+	/// // Value should be expired
 	/// let value: Option<String> = cache.get("key").await.unwrap();
 	/// assert_eq!(value, None);
 	/// # }
@@ -171,15 +177,15 @@ impl InMemoryCache {
 	/// // Naive cleanup
 	/// let cache = InMemoryCache::new();
 	///
-	// Set a value with short TTL
+	/// // Set a value with short TTL
 	/// cache.set("key1", &"value", Some(Duration::from_millis(10))).await.unwrap();
 	///
-	// Wait for expiration
+	/// // Wait for expiration
 	///
-	// Clean up expired entries (O(n) scan)
+	/// // Clean up expired entries (O(n) scan)
 	/// cache.cleanup_expired().await;
 	///
-	// Verify the key is gone
+	/// // Verify the key is gone
 	/// assert!(!cache.has_key("key1").await.unwrap());
 	///
 	/// // Layered cleanup (faster for large caches)
@@ -450,14 +456,41 @@ impl InMemoryCache {
 	/// # }
 	/// ```
 	pub fn start_auto_cleanup(&self, interval: Duration) {
+		let mut handle_guard = self
+			.cleanup_handle
+			.lock()
+			.unwrap_or_else(|e| e.into_inner());
+
+		// Abort any previously running cleanup task to prevent duplicates
+		if let Some(existing) = handle_guard.take() {
+			existing.abort();
+		}
+
 		let cache = self.clone();
-		tokio::spawn(async move {
+		let abort_handle = tokio::spawn(async move {
 			let mut interval_timer = tokio::time::interval(interval);
 			loop {
 				interval_timer.tick().await;
 				cache.cleanup_expired().await;
 			}
-		});
+		})
+		.abort_handle();
+
+		*handle_guard = Some(abort_handle);
+	}
+
+	/// Stop the background auto-cleanup task if one is running.
+	///
+	/// After calling this method, no further automatic cleanup will occur
+	/// until `start_auto_cleanup` is called again.
+	pub fn stop_auto_cleanup(&self) {
+		let mut handle_guard = self
+			.cleanup_handle
+			.lock()
+			.unwrap_or_else(|e| e.into_inner());
+		if let Some(handle) = handle_guard.take() {
+			handle.abort();
+		}
 	}
 
 	/// Set cleanup interval and start automatic cleanup
@@ -1105,6 +1138,54 @@ mod tests {
 		)
 		.await
 		.expect("Keys should be auto-cleaned within 200ms");
+	}
+
+	#[tokio::test]
+	async fn test_stop_auto_cleanup() {
+		let cache = InMemoryCache::new();
+
+		// Start auto cleanup
+		cache.start_auto_cleanup(Duration::from_millis(30));
+
+		// Set a value with short TTL
+		cache
+			.set("key1", &"value1", Some(Duration::from_millis(50)))
+			.await
+			.unwrap();
+
+		// Stop cleanup before it can run
+		cache.stop_auto_cleanup();
+
+		// Wait long enough for cleanup to have run if it were still active
+		tokio::time::sleep(Duration::from_millis(150)).await;
+
+		// Key should be expired but not cleaned up from store (only passive expiration)
+		let value: Option<String> = cache.get("key1").await.unwrap();
+		assert!(value.is_none(), "Key should be expired");
+	}
+
+	#[tokio::test]
+	async fn test_start_auto_cleanup_replaces_previous() {
+		let cache = InMemoryCache::new();
+
+		// Start cleanup twice - should not spawn duplicate tasks
+		cache.start_auto_cleanup(Duration::from_millis(30));
+		cache.start_auto_cleanup(Duration::from_millis(30));
+
+		// Set a value with short TTL
+		cache
+			.set("key1", &"value1", Some(Duration::from_millis(50)))
+			.await
+			.unwrap();
+
+		// Wait for cleanup
+		poll_until(
+			Duration::from_millis(200),
+			Duration::from_millis(10),
+			|| async { !cache.has_key("key1").await.unwrap() },
+		)
+		.await
+		.expect("Key should be cleaned up");
 	}
 
 	#[tokio::test]

@@ -13,18 +13,21 @@ pub type MiddlewareResult<T> = Result<T, MiddlewareError>;
 /// Middleware errors
 #[derive(Debug, thiserror::Error)]
 pub enum MiddlewareError {
-	#[error("Connection rejected: {0}")]
+	#[error("Connection rejected")]
 	ConnectionRejected(String),
-	#[error("Message rejected: {0}")]
+	#[error("Message rejected")]
 	MessageRejected(String),
-	#[error("Middleware error: {0}")]
+	#[error("Middleware error")]
 	Error(String),
 }
 
 /// WebSocket connection context for middleware
+#[non_exhaustive]
 pub struct ConnectionContext {
 	/// Client IP address
 	pub ip: String,
+	/// Connection ID (set by the server after connection creation)
+	pub connection_id: Option<String>,
 	/// Connection headers (if available)
 	pub headers: std::collections::HashMap<String, String>,
 	/// Custom metadata
@@ -45,6 +48,7 @@ impl ConnectionContext {
 	pub fn new(ip: String) -> Self {
 		Self {
 			ip,
+			connection_id: None,
 			headers: std::collections::HashMap::new(),
 			metadata: std::collections::HashMap::new(),
 		}

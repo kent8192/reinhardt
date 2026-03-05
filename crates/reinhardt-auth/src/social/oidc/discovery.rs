@@ -96,7 +96,7 @@ impl DiscoveryClient {
 	///
 	/// # Arguments
 	///
-	/// * `issuer_url` - The OIDC issuer URL (e.g., "https://accounts.google.com")
+	/// * `issuer_url` - The OIDC issuer URL (e.g., `<https://accounts.google.com>`)
 	///
 	/// # Returns
 	///

@@ -56,7 +56,7 @@ async fn test_circuit_closed_to_open_on_error_threshold() {
 
 	// Initial state should be Closed
 	assert_eq!(
-		middleware.get_state(),
+		middleware.state(),
 		CircuitState::Closed,
 		"Initial state should be Closed"
 	);
@@ -69,7 +69,7 @@ async fn test_circuit_closed_to_open_on_error_threshold() {
 		if i < 3 {
 			// Not enough requests yet
 			assert_eq!(
-				middleware.get_state(),
+				middleware.state(),
 				CircuitState::Closed,
 				"Should still be Closed at {} requests (min_requests=4)",
 				i + 1
@@ -79,7 +79,7 @@ async fn test_circuit_closed_to_open_on_error_threshold() {
 
 	// Circuit should now be Open
 	assert_eq!(
-		middleware.get_state(),
+		middleware.state(),
 		CircuitState::Open,
 		"Circuit should transition to Open after exceeding error threshold"
 	);
@@ -101,7 +101,7 @@ async fn test_circuit_open_to_halfopen_after_timeout() {
 		let request = create_test_request("GET", "/api/data");
 		let _ = middleware.process(request, failure_handler.clone()).await;
 	}
-	assert_eq!(middleware.get_state(), CircuitState::Open);
+	assert_eq!(middleware.state(), CircuitState::Open);
 
 	// Wait for timeout to elapse
 	tokio::time::sleep(Duration::from_millis(150)).await;
@@ -111,7 +111,7 @@ async fn test_circuit_open_to_halfopen_after_timeout() {
 	let _ = middleware.process(request, success_handler.clone()).await;
 
 	// State should now be HalfOpen or Closed (depending on if request succeeded)
-	let state = middleware.get_state();
+	let state = middleware.state();
 	assert!(
 		state == CircuitState::HalfOpen || state == CircuitState::Closed,
 		"State should be HalfOpen or Closed after timeout, got {:?}",
@@ -136,7 +136,7 @@ async fn test_circuit_halfopen_to_closed_on_success() {
 		let request = create_test_request("GET", "/api/data");
 		let _ = middleware.process(request, failure_handler.clone()).await;
 	}
-	assert_eq!(middleware.get_state(), CircuitState::Open);
+	assert_eq!(middleware.state(), CircuitState::Open);
 
 	// Wait for timeout
 	tokio::time::sleep(Duration::from_millis(100)).await;
@@ -149,7 +149,7 @@ async fn test_circuit_halfopen_to_closed_on_success() {
 
 	// Circuit should now be Closed
 	assert_eq!(
-		middleware.get_state(),
+		middleware.state(),
 		CircuitState::Closed,
 		"Circuit should transition to Closed after successful requests in HalfOpen"
 	);
@@ -172,7 +172,7 @@ async fn test_circuit_halfopen_to_open_on_failure() {
 		let request = create_test_request("GET", "/api/data");
 		let _ = middleware.process(request, failure_handler.clone()).await;
 	}
-	assert_eq!(middleware.get_state(), CircuitState::Open);
+	assert_eq!(middleware.state(), CircuitState::Open);
 
 	// Wait for timeout to enter HalfOpen
 	tokio::time::sleep(Duration::from_millis(100)).await;
@@ -187,7 +187,7 @@ async fn test_circuit_halfopen_to_open_on_failure() {
 
 	// Circuit should be back to Open
 	assert_eq!(
-		middleware.get_state(),
+		middleware.state(),
 		CircuitState::Open,
 		"Circuit should transition back to Open on failure in HalfOpen"
 	);
@@ -206,12 +206,12 @@ async fn test_circuit_full_recovery_cycle() {
 	let success_handler = Arc::new(ConfigurableTestHandler::always_success());
 
 	// Phase 1: Closed -> Open (failures)
-	assert_eq!(middleware.get_state(), CircuitState::Closed);
+	assert_eq!(middleware.state(), CircuitState::Closed);
 	for _ in 0..3 {
 		let request = create_test_request("GET", "/api/data");
 		let _ = middleware.process(request, failure_handler.clone()).await;
 	}
-	assert_eq!(middleware.get_state(), CircuitState::Open);
+	assert_eq!(middleware.state(), CircuitState::Open);
 
 	// Phase 2: Open -> HalfOpen (timeout)
 	tokio::time::sleep(Duration::from_millis(100)).await;
@@ -221,7 +221,7 @@ async fn test_circuit_full_recovery_cycle() {
 		let request = create_test_request("GET", "/api/data");
 		let _ = middleware.process(request, success_handler.clone()).await;
 	}
-	assert_eq!(middleware.get_state(), CircuitState::Closed);
+	assert_eq!(middleware.state(), CircuitState::Closed);
 
 	// Phase 4: Verify normal operation
 	let request = create_test_request("GET", "/api/data");
@@ -247,14 +247,14 @@ async fn test_circuit_manual_reset() {
 		let request = create_test_request("GET", "/api/data");
 		let _ = middleware.process(request, failure_handler.clone()).await;
 	}
-	assert_eq!(middleware.get_state(), CircuitState::Open);
+	assert_eq!(middleware.state(), CircuitState::Open);
 
 	// Manual reset
 	middleware.reset();
 
 	// Circuit should be Closed
 	assert_eq!(
-		middleware.get_state(),
+		middleware.state(),
 		CircuitState::Closed,
 		"Circuit should be Closed after manual reset"
 	);
@@ -281,7 +281,7 @@ async fn test_circuit_stays_closed_under_threshold() {
 
 	// Circuit should stay Closed
 	assert_eq!(
-		middleware.get_state(),
+		middleware.state(),
 		CircuitState::Closed,
 		"Circuit should stay Closed when error rate is under threshold"
 	);

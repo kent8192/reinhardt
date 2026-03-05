@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Main configuration for database introspection.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 #[derive(Default)]
@@ -134,6 +135,7 @@ impl IntrospectConfig {
 }
 
 /// Database connection configuration.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 #[derive(Default)]
@@ -162,6 +164,7 @@ impl DatabaseConfig {
 }
 
 /// Output configuration.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OutputConfig {
@@ -192,6 +195,7 @@ impl Default for OutputConfig {
 }
 
 /// Code generation configuration.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GenerationConfig {
@@ -280,6 +284,7 @@ impl NamingConventionConfig {
 }
 
 /// Table filtering configuration.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TableFilterConfig {
@@ -305,6 +310,7 @@ impl Default for TableFilterConfig {
 }
 
 /// Additional imports configuration.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ImportsConfig {
@@ -313,6 +319,7 @@ pub struct ImportsConfig {
 }
 
 /// CLI arguments that can override config file values.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct CliArgs {
 	pub database_url: Option<String>,
@@ -327,6 +334,7 @@ pub struct CliArgs {
 }
 
 /// Configuration errors.
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
 	#[error("IO error reading {path}: {source}")]

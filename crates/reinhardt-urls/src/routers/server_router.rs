@@ -33,7 +33,7 @@ use reinhardt_http::{Error, Handler, MiddlewareChain, Request, Response, Result}
 use reinhardt_middleware::Middleware;
 use reinhardt_views::viewsets::{Action, ViewSet};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 
 pub use self::global::{
 	clear_router, get_router, is_router_registered, register_router, register_router_arc,
@@ -892,19 +892,25 @@ impl ServerRouter {
 		self
 	}
 
-	/// Compile all routes into matchit routers
+	/// Compile all routes into matchit routers.
 	///
 	/// This should be called after all routes have been registered.
 	/// It converts patterns like "/users/{id}" to matchit format.
-	fn compile_routes(&self) {
-		// Check if already compiled (read lock)
+	///
+	/// Returns a list of route compilation errors (if any). Empty list means
+	/// all routes compiled successfully. RwLock poisoning is recovered from
+	/// via `PoisonError::into_inner` to prevent cascade failures.
+	fn compile_routes(&self) -> Vec<String> {
+		// Check if already compiled (read lock, recovers from poisoning)
 		if *self
 			.routes_compiled
 			.read()
-			.expect("RwLock poisoned: routes_compiled")
+			.unwrap_or_else(PoisonError::into_inner)
 		{
-			return;
+			return Vec::new();
 		}
+
+		let mut errors = Vec::new();
 
 		// Compile function routes
 		for func_route in &self.functions {
@@ -924,10 +930,16 @@ impl ServerRouter {
 				Method::OPTIONS => &self.options_router,
 				_ => &self.get_router,
 			};
-			let _ = router_lock
+			if let Err(e) = router_lock
 				.write()
-				.expect("RwLock poisoned")
-				.insert(&func_route.path, route_handler);
+				.unwrap_or_else(PoisonError::into_inner)
+				.insert(&func_route.path, route_handler)
+			{
+				errors.push(format!(
+					"Failed to compile route '{}' ({}): {}",
+					func_route.path, func_route.method, e
+				));
+			}
 		}
 
 		// Compile view routes (views handle all methods internally)
@@ -945,10 +957,16 @@ impl ServerRouter {
 				&self.delete_router,
 				&self.patch_router,
 			] {
-				let _ = router_lock
+				if let Err(e) = router_lock
 					.write()
-					.expect("RwLock poisoned")
-					.insert(&view_route.path, route_handler.clone());
+					.unwrap_or_else(PoisonError::into_inner)
+					.insert(&view_route.path, route_handler.clone())
+				{
+					errors.push(format!(
+						"Failed to compile view route '{}': {}",
+						view_route.path, e
+					));
+				}
 			}
 		}
 
@@ -967,10 +985,16 @@ impl ServerRouter {
 				&self.delete_router,
 				&self.patch_router,
 			] {
-				let _ = router_lock
+				if let Err(e) = router_lock
 					.write()
-					.expect("RwLock poisoned")
-					.insert(&route.path, route_handler.clone());
+					.unwrap_or_else(PoisonError::into_inner)
+					.insert(&route.path, route_handler.clone())
+				{
+					errors.push(format!(
+						"Failed to compile raw route '{}': {}",
+						route.path, e
+					));
+				}
 			}
 		}
 
@@ -993,11 +1017,17 @@ impl ServerRouter {
 				}),
 				middleware: Vec::new(),
 			};
-			let _ = self
+			if let Err(e) = self
 				.get_router
 				.write()
-				.expect("RwLock poisoned")
-				.insert(&collection_path, list_handler);
+				.unwrap_or_else(PoisonError::into_inner)
+				.insert(&collection_path, list_handler)
+			{
+				errors.push(format!(
+					"Failed to compile ViewSet list route '{}': {}",
+					collection_path, e
+				));
+			}
 
 			// Create action (POST)
 			let create_handler = RouteHandler {
@@ -1007,11 +1037,17 @@ impl ServerRouter {
 				}),
 				middleware: Vec::new(),
 			};
-			let _ = self
+			if let Err(e) = self
 				.post_router
 				.write()
-				.expect("RwLock poisoned")
-				.insert(&collection_path, create_handler);
+				.unwrap_or_else(PoisonError::into_inner)
+				.insert(&collection_path, create_handler)
+			{
+				errors.push(format!(
+					"Failed to compile ViewSet create route '{}': {}",
+					collection_path, e
+				));
+			}
 
 			// Detail routes: GET/PUT/DELETE /prefix/{id}/
 			let lookup_field = viewset.get_lookup_field();
@@ -1025,11 +1061,17 @@ impl ServerRouter {
 				}),
 				middleware: Vec::new(),
 			};
-			let _ = self
+			if let Err(e) = self
 				.get_router
 				.write()
-				.expect("RwLock poisoned")
-				.insert(&detail_path, retrieve_handler);
+				.unwrap_or_else(PoisonError::into_inner)
+				.insert(&detail_path, retrieve_handler)
+			{
+				errors.push(format!(
+					"Failed to compile ViewSet retrieve route '{}': {}",
+					detail_path, e
+				));
+			}
 
 			// Update action (PUT)
 			let update_handler = RouteHandler {
@@ -1039,11 +1081,17 @@ impl ServerRouter {
 				}),
 				middleware: Vec::new(),
 			};
-			let _ = self
+			if let Err(e) = self
 				.put_router
 				.write()
-				.expect("RwLock poisoned")
-				.insert(&detail_path, update_handler);
+				.unwrap_or_else(PoisonError::into_inner)
+				.insert(&detail_path, update_handler)
+			{
+				errors.push(format!(
+					"Failed to compile ViewSet update route '{}': {}",
+					detail_path, e
+				));
+			}
 
 			// Destroy action (DELETE)
 			let destroy_handler = RouteHandler {
@@ -1053,18 +1101,55 @@ impl ServerRouter {
 				}),
 				middleware: Vec::new(),
 			};
-			let _ = self
+			if let Err(e) = self
 				.delete_router
 				.write()
-				.expect("RwLock poisoned")
-				.insert(&detail_path, destroy_handler);
+				.unwrap_or_else(PoisonError::into_inner)
+				.insert(&detail_path, destroy_handler)
+			{
+				errors.push(format!(
+					"Failed to compile ViewSet destroy route '{}': {}",
+					detail_path, e
+				));
+			}
 		}
 
 		// Mark routes as compiled
 		*self
 			.routes_compiled
 			.write()
-			.expect("RwLock poisoned: routes_compiled") = true;
+			.unwrap_or_else(PoisonError::into_inner) = true;
+
+		errors
+	}
+
+	/// Validate all routes by compiling them and returning any errors.
+	///
+	/// Call this at application startup to detect invalid route patterns early.
+	/// Returns `Ok(())` if all routes compiled successfully, or `Err` with
+	/// a list of compilation error messages.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_urls::routers::ServerRouter;
+	/// use hyper::Method;
+	/// # use reinhardt_http::{Request, Response, Result};
+	///
+	/// # async fn handler(_req: Request) -> Result<Response> { Ok(Response::ok()) }
+	/// let router = ServerRouter::new()
+	///     .function("/users/{id}", Method::GET, handler);
+	///
+	/// // Validate routes at startup
+	/// assert!(router.validate_routes().is_ok());
+	/// ```
+	pub fn validate_routes(&self) -> std::result::Result<(), Vec<String>> {
+		let errors = self.compile_routes();
+		if errors.is_empty() {
+			Ok(())
+		} else {
+			Err(errors)
+		}
 	}
 
 	/// Get the prefix of this router
@@ -1480,7 +1565,7 @@ impl ServerRouter {
 			_ => &self.get_router,
 		};
 
-		let router = router_lock.read().expect("RwLock poisoned");
+		let router = router_lock.read().unwrap_or_else(PoisonError::into_inner);
 
 		// Try matching with the original path first
 		// If that fails, try with trailing slash toggled (Django-style APPEND_SLASH behavior)
@@ -1579,7 +1664,7 @@ impl ServerRouter {
 		];
 
 		for router_lock in method_routers {
-			let router = router_lock.read().expect("RwLock poisoned");
+			let router = router_lock.read().unwrap_or_else(PoisonError::into_inner);
 			for try_path in &paths_to_try {
 				if router.at(try_path).is_ok() {
 					return true;
@@ -1674,86 +1759,121 @@ impl reinhardt_views::viewsets::RegisterViewSet for ServerRouter {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	#[test]
+	#[rstest]
 	fn test_new_router() {
+		// Arrange & Act
 		let router = ServerRouter::new();
+
+		// Assert
 		assert_eq!(router.prefix(), "");
 		assert_eq!(router.namespace(), None);
 		assert_eq!(router.children_count(), 0);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_with_prefix() {
+		// Arrange & Act
 		let router = ServerRouter::new().with_prefix("/api/v1");
+
+		// Assert
 		assert_eq!(router.prefix(), "/api/v1");
 	}
 
-	#[test]
+	#[rstest]
 	fn test_with_namespace() {
+		// Arrange & Act
 		let router = ServerRouter::new().with_namespace("v1");
+
+		// Assert
 		assert_eq!(router.namespace(), Some("v1"));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_mount() {
+		// Arrange
 		let child = ServerRouter::new();
+
+		// Act
 		let router = ServerRouter::new().mount("/users/", child);
+
+		// Assert
 		assert_eq!(router.children_count(), 1);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_mount_inherits_di_context() {
+		// Arrange
 		let di_ctx = Arc::new(
 			InjectionContext::builder(Arc::new(reinhardt_di::SingletonScope::new())).build(),
 		);
-
 		let child = ServerRouter::new();
+
+		// Act
 		let router = ServerRouter::new()
 			.with_di_context(di_ctx.clone())
 			.mount("/users/", child);
 
+		// Assert
 		assert!(router.di_context.is_some());
 		assert_eq!(router.children_count(), 1);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_group() {
+		// Arrange
 		let users = ServerRouter::new().with_prefix("/users");
 		let posts = ServerRouter::new().with_prefix("/posts");
 
+		// Act
 		let router = ServerRouter::new().group(vec![users, posts]);
+
+		// Assert
 		assert_eq!(router.children_count(), 2);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_get_all_routes() {
+		// Arrange
 		let router = ServerRouter::new()
 			.with_prefix("/api")
 			.with_namespace("api");
 
+		// Act
 		let routes = router.get_all_routes();
-		assert_eq!(routes.len(), 0); // No routes added yet
+
+		// Assert
+		assert_eq!(routes.len(), 0);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_get_full_namespace_no_parent() {
+		// Arrange
 		let router = ServerRouter::new().with_namespace("users");
+
+		// Act & Assert
 		assert_eq!(router.get_full_namespace(None), Some("users".to_string()));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_get_full_namespace_with_parent() {
+		// Arrange
 		let router = ServerRouter::new().with_namespace("users");
+
+		// Act & Assert
 		assert_eq!(
 			router.get_full_namespace(Some("v1")),
 			Some("v1:users".to_string())
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_get_full_namespace_no_namespace() {
+		// Arrange
 		let router = ServerRouter::new();
+
+		// Act & Assert
 		assert_eq!(
 			router.get_full_namespace(Some("v1")),
 			Some("v1".to_string())
@@ -1761,19 +1881,22 @@ mod tests {
 		assert_eq!(router.get_full_namespace(None), None);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_hierarchical_namespace() {
+		// Arrange
 		let child = ServerRouter::new().with_namespace("users");
+
+		// Act
 		let parent = ServerRouter::new()
 			.with_namespace("v1")
 			.mount("/users/", child);
 
-		// Check that namespaces are properly nested
+		// Assert
 		assert_eq!(parent.namespace(), Some("v1"));
 		assert_eq!(parent.children_count(), 1);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_register_all_routes_with_namespace() {
 		use hyper::Method;
 
@@ -1781,6 +1904,7 @@ mod tests {
 			Ok(Response::ok())
 		}
 
+		// Arrange
 		let mut router = ServerRouter::new().with_namespace("api").function_named(
 			"/health",
 			Method::GET,
@@ -1788,15 +1912,16 @@ mod tests {
 			dummy_handler,
 		);
 
+		// Act
 		router.register_all_routes();
 
-		// Verify route is registered with namespace
+		// Assert
 		let url = router.reverse("api:health", &[]);
 		assert!(url.is_some());
 		assert_eq!(url.unwrap(), "/health");
 	}
 
-	#[test]
+	#[rstest]
 	fn test_nested_namespace_registration() {
 		use hyper::Method;
 
@@ -1804,6 +1929,7 @@ mod tests {
 			Ok(Response::ok())
 		}
 
+		// Arrange
 		let users = ServerRouter::new().with_namespace("users").function_named(
 			"/list",
 			Method::GET,
@@ -1816,47 +1942,57 @@ mod tests {
 			.with_prefix("/api/v1")
 			.mount("/users/", users);
 
+		// Act
 		api.register_all_routes();
 
-		// Should be able to reverse with full namespace
+		// Assert
 		let url = api.reverse("v1:users:list", &[]);
 		assert!(url.is_some());
 		assert_eq!(url.unwrap(), "/list");
 	}
 
-	#[test]
+	#[rstest]
 	fn test_mount_prefix_inheritance() {
+		// Arrange
 		let child = ServerRouter::new();
+
+		// Act
 		let parent = ServerRouter::new().with_prefix("/api").mount("/v1/", child);
 
+		// Assert
 		assert_eq!(parent.children_count(), 1);
-		// Child should inherit the mount path as its prefix
 	}
 
-	#[test]
+	#[rstest]
 	fn test_multiple_child_routers() {
+		// Arrange
 		let users = ServerRouter::new().with_namespace("users");
 		let posts = ServerRouter::new().with_namespace("posts");
 		let comments = ServerRouter::new().with_namespace("comments");
 
+		// Act
 		let router = ServerRouter::new()
 			.mount("/users/", users)
 			.mount("/posts/", posts)
 			.mount("/comments/", comments);
 
+		// Assert
 		assert_eq!(router.children_count(), 3);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_deep_nesting() {
+		// Arrange
 		let resource = ServerRouter::new().with_namespace("resource");
 		let v2 = ServerRouter::new()
 			.with_namespace("v2")
 			.mount("/resource/", resource);
 		let v1 = ServerRouter::new().with_namespace("v1").mount("/v2/", v2);
+
+		// Act
 		let api = ServerRouter::new().with_namespace("api").mount("/v1/", v1);
 
-		// Should support deep nesting
+		// Assert
 		assert_eq!(api.children_count(), 1);
 	}
 
@@ -1869,9 +2005,8 @@ mod tests {
 			Ok(Response::ok())
 		}
 
+		// Arrange
 		let mut router = ServerRouter::new();
-
-		// Register 1000 routes to test matchit performance
 		for i in 0..1000 {
 			router = router.function(
 				&format!("/api/resource{}/action", i),
@@ -1880,10 +2015,8 @@ mod tests {
 			);
 		}
 
-		// Compile routes (this happens once at startup)
+		// Act
 		router.compile_routes();
-
-		// Test matching performance (should be O(m) where m = path length)
 		let start = Instant::now();
 		for _ in 0..10000 {
 			let result = router.match_own_routes("/api/resource500/action", &Method::GET);
@@ -1891,8 +2024,7 @@ mod tests {
 		}
 		let elapsed = start.elapsed();
 
-		// 10000 lookups should be very fast with matchit (< 100ms expected)
-		println!("10000 route lookups in {:?}", elapsed);
+		// Assert
 		assert!(
 			elapsed.as_millis() < 100,
 			"Route matching too slow: {:?}",
@@ -1908,6 +2040,7 @@ mod tests {
 			Ok(Response::ok())
 		}
 
+		// Arrange
 		let router = ServerRouter::new()
 			.function("/users/{id}", Method::GET, dummy_handler)
 			.function("/users/{id}/posts", Method::GET, dummy_handler)
@@ -1916,27 +2049,25 @@ mod tests {
 				Method::GET,
 				dummy_handler,
 			);
-
-		// Compile routes
 		router.compile_routes();
 
-		// Test exact path matching
+		// Act & Assert - exact path matching
 		let result = router.match_own_routes("/users/123", &Method::GET);
 		assert!(result.is_some());
 		assert_eq!(result.unwrap().params.get("id"), Some(&"123".to_string()));
 
-		// Test nested path matching
+		// Act & Assert - nested path matching
 		let result = router.match_own_routes("/users/456/posts", &Method::GET);
 		assert!(result.is_some());
 		assert_eq!(result.unwrap().params.get("id"), Some(&"456".to_string()));
 
-		// Test multiple parameters
+		// Act & Assert - multiple parameters
 		let result = router.match_own_routes("/posts/789/comments/101", &Method::GET);
 		let params = result.unwrap().params;
 		assert_eq!(params.get("post_id"), Some(&"789".to_string()));
 		assert_eq!(params.get("comment_id"), Some(&"101".to_string()));
 
-		// Test non-matching route
+		// Act & Assert - non-matching route
 		let result = router.match_own_routes("/nonexistent", &Method::GET);
 		assert!(result.is_none());
 	}
@@ -1953,22 +2084,142 @@ mod tests {
 			Ok(Response::ok())
 		}
 
+		// Arrange
 		let router = ServerRouter::new()
 			.function("/users", Method::GET, get_handler)
 			.function("/users", Method::POST, post_handler);
-
 		router.compile_routes();
 
-		// Test GET method
+		// Act & Assert - GET method
 		let result = router.match_own_routes("/users", &Method::GET);
 		assert!(result.is_some());
 
-		// Test POST method
+		// Act & Assert - POST method
 		let result = router.match_own_routes("/users", &Method::POST);
 		assert!(result.is_some());
 
-		// Test unsupported method
+		// Act & Assert - unsupported method
 		let result = router.match_own_routes("/users", &Method::DELETE);
 		assert!(result.is_none());
+	}
+
+	#[rstest]
+	fn test_validate_routes_success() {
+		use hyper::Method;
+
+		async fn dummy_handler(_req: Request) -> Result<Response> {
+			Ok(Response::ok())
+		}
+
+		// Arrange
+		let router = ServerRouter::new()
+			.function("/users/{id}", Method::GET, dummy_handler)
+			.function("/posts", Method::POST, dummy_handler);
+
+		// Act
+		let result = router.validate_routes();
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	fn test_compile_routes_returns_errors_for_duplicate_routes() {
+		use hyper::Method;
+
+		async fn handler_a(_req: Request) -> Result<Response> {
+			Ok(Response::ok())
+		}
+		async fn handler_b(_req: Request) -> Result<Response> {
+			Ok(Response::ok())
+		}
+
+		// Arrange - register duplicate paths for the same method
+		let router = ServerRouter::new()
+			.function("/users", Method::GET, handler_a)
+			.function("/users", Method::GET, handler_b);
+
+		// Act
+		let errors = router.compile_routes();
+
+		// Assert - matchit should report a conflict for duplicate routes
+		assert!(!errors.is_empty());
+		assert!(errors[0].contains("Failed to compile route"));
+	}
+
+	#[rstest]
+	fn test_validate_routes_returns_errors_for_invalid_patterns() {
+		use hyper::Method;
+
+		async fn handler_a(_req: Request) -> Result<Response> {
+			Ok(Response::ok())
+		}
+		async fn handler_b(_req: Request) -> Result<Response> {
+			Ok(Response::ok())
+		}
+
+		// Arrange - duplicate routes cause matchit compilation errors
+		let router = ServerRouter::new()
+			.function("/items", Method::GET, handler_a)
+			.function("/items", Method::GET, handler_b);
+
+		// Act
+		let result = router.validate_routes();
+
+		// Assert
+		assert!(result.is_err());
+		let errors = result.unwrap_err();
+		assert!(!errors.is_empty());
+	}
+
+	#[rstest]
+	fn test_router_recovers_from_poisoned_rwlock() {
+		use hyper::Method;
+
+		async fn dummy_handler(_req: Request) -> Result<Response> {
+			Ok(Response::ok())
+		}
+
+		// Arrange
+		let router = ServerRouter::new().function("/health", Method::GET, dummy_handler);
+
+		// Poison the routes_compiled RwLock by panicking while holding write guard
+		let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			let _guard = router.routes_compiled.write().unwrap();
+			panic!("intentional panic to poison lock");
+		}));
+
+		// Act - compile_routes should recover from poisoned lock
+		let errors = router.compile_routes();
+
+		// Assert
+		assert!(errors.is_empty());
+		let result = router.match_own_routes("/health", &Method::GET);
+		assert!(result.is_some());
+	}
+
+	#[rstest]
+	fn test_route_matching_recovers_from_poisoned_method_router() {
+		use hyper::Method;
+
+		async fn dummy_handler(_req: Request) -> Result<Response> {
+			Ok(Response::ok())
+		}
+
+		// Arrange
+		let router = ServerRouter::new().function("/health", Method::GET, dummy_handler);
+		router.compile_routes();
+
+		// Poison the get_router RwLock
+		let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			let _guard = router.get_router.write().unwrap();
+			panic!("intentional panic to poison lock");
+		}));
+
+		// Act - match_own_routes should recover from poisoned lock
+		let result = router.match_own_routes("/health", &Method::GET);
+
+		// Assert - route matching should still work
+		assert!(result.is_some());
 	}
 }

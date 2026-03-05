@@ -60,6 +60,7 @@ impl Env {
 	///
 	pub fn str_with_default(&self, key: &str, default: Option<&str>) -> Result<String, EnvError> {
 		let full_key = self.get_key_name(key);
+		validate_env_var_name(&full_key)?;
 
 		match env::var(&full_key) {
 			Ok(val) => Ok(val),
@@ -78,11 +79,12 @@ impl Env {
 	///
 	pub fn bool_with_default(&self, key: &str, default: Option<bool>) -> Result<bool, EnvError> {
 		let full_key = self.get_key_name(key);
+		validate_env_var_name(&full_key)?;
 
 		match env::var(&full_key) {
 			Ok(val) => parse_bool(&val).map_err(|e| EnvError::ParseError {
 				key: full_key,
-				value: val,
+				value_len: val.len(),
 				error: e,
 			}),
 			Err(_) => match default {
@@ -100,11 +102,12 @@ impl Env {
 	///
 	pub fn int_with_default(&self, key: &str, default: Option<i64>) -> Result<i64, EnvError> {
 		let full_key = self.get_key_name(key);
+		validate_env_var_name(&full_key)?;
 
 		match env::var(&full_key) {
 			Ok(val) => val.parse::<i64>().map_err(|e| EnvError::ParseError {
 				key: full_key,
-				value: val,
+				value_len: val.len(),
 				error: e.to_string(),
 			}),
 			Err(_) => match default {
@@ -126,6 +129,7 @@ impl Env {
 		default: Option<Vec<String>>,
 	) -> Result<Vec<String>, EnvError> {
 		let full_key = self.get_key_name(key);
+		validate_env_var_name(&full_key)?;
 
 		match env::var(&full_key) {
 			Ok(val) => Ok(parse_list(&val)),
@@ -148,6 +152,7 @@ impl Env {
 		default: Option<&str>,
 	) -> Result<DatabaseUrl, EnvError> {
 		let full_key = self.get_key_name(key);
+		validate_env_var_name(&full_key)?;
 
 		let url_str = match env::var(&full_key) {
 			Ok(val) => val,
@@ -159,7 +164,7 @@ impl Env {
 
 		parse_database_url(&url_str).map_err(|e| EnvError::ParseError {
 			key: full_key,
-			value: url_str,
+			value_len: url_str.len(),
 			error: e,
 		})
 	}
@@ -176,6 +181,7 @@ impl Env {
 		default: Option<PathBuf>,
 	) -> Result<PathBuf, EnvError> {
 		let full_key = self.get_key_name(key);
+		validate_env_var_name(&full_key)?;
 
 		match env::var(&full_key) {
 			Ok(val) => Ok(PathBuf::from(val)),
@@ -193,16 +199,50 @@ impl Default for Env {
 	}
 }
 
+/// Validates an environment variable name.
+///
+/// Rejects names that are empty, contain control characters, or contain
+/// the `=` character (which is used as the key-value separator).
+pub fn validate_env_var_name(name: &str) -> Result<(), EnvError> {
+	if name.is_empty() {
+		return Err(EnvError::InvalidVariableName {
+			name: name.to_string(),
+			reason: "environment variable name must not be empty".to_string(),
+		});
+	}
+
+	if let Some(pos) = name.find(|c: char| c.is_control()) {
+		return Err(EnvError::InvalidVariableName {
+			name: name.to_string(),
+			reason: format!(
+				"environment variable name contains control character at position {}",
+				pos
+			),
+		});
+	}
+
+	if name.contains('=') {
+		return Err(EnvError::InvalidVariableName {
+			name: name.to_string(),
+			reason: "environment variable name must not contain '='".to_string(),
+		});
+	}
+
+	Ok(())
+}
+
 /// Environment variable errors
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum EnvError {
 	#[error("Missing environment variable: {0}")]
 	MissingVariable(String),
 
-	#[error("Failed to parse environment variable '{key}' with value '{value}': {error}")]
+	#[error("Failed to parse environment variable '{key}' (value length: {value_len}): {error}")]
 	ParseError {
 		key: String,
-		value: String,
+		/// Length of the original value (stored instead of the raw value to prevent secret leakage)
+		value_len: usize,
 		error: String,
 	},
 
@@ -211,13 +251,17 @@ pub enum EnvError {
 
 	#[error("Invalid format: {0}")]
 	InvalidFormat(String),
+
+	#[error("Invalid environment variable name '{name}': {reason}")]
+	InvalidVariableName { name: String, reason: String },
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	#[test]
+	#[rstest]
 	fn test_env_str() {
 		// SAFETY: Setting environment variables is unsafe in multi-threaded programs.
 		// This test uses #[serial] to ensure exclusive access to environment variables.
@@ -332,5 +376,90 @@ mod tests {
 		unsafe {
 			env::remove_var("TEST_PATH");
 		}
+	}
+
+	#[rstest]
+	fn test_validate_env_var_name_rejects_empty() {
+		// Arrange & Act
+		let result = validate_env_var_name("");
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(
+			result.unwrap_err(),
+			EnvError::InvalidVariableName { .. }
+		));
+	}
+
+	#[rstest]
+	fn test_validate_env_var_name_rejects_control_chars() {
+		// Arrange & Act
+		let result = validate_env_var_name("MY\x00VAR");
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		match &err {
+			EnvError::InvalidVariableName { reason, .. } => {
+				assert!(reason.contains("control character"));
+			}
+			_ => panic!("Expected InvalidVariableName error"),
+		}
+	}
+
+	#[rstest]
+	fn test_validate_env_var_name_rejects_equals_sign() {
+		// Arrange & Act
+		let result = validate_env_var_name("MY=VAR");
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		match &err {
+			EnvError::InvalidVariableName { reason, .. } => {
+				assert!(reason.contains("'='"));
+			}
+			_ => panic!("Expected InvalidVariableName error"),
+		}
+	}
+
+	#[rstest]
+	fn test_validate_env_var_name_accepts_valid_name() {
+		// Arrange & Act & Assert
+		assert!(validate_env_var_name("MY_VALID_VAR_123").is_ok());
+		assert!(validate_env_var_name("REINHARDT_DEBUG").is_ok());
+	}
+
+	#[rstest]
+	fn test_parse_error_does_not_leak_value() {
+		// Arrange
+		let err = EnvError::ParseError {
+			key: "SECRET_KEY".to_string(),
+			value_len: 32,
+			error: "invalid format".to_string(),
+		};
+
+		// Act
+		let error_msg = format!("{}", err);
+
+		// Assert - the error message must not contain the actual secret value
+		assert!(error_msg.contains("value length: 32"));
+		assert!(!error_msg.contains("secret"));
+	}
+
+	#[rstest]
+	fn test_env_rejects_empty_key_name() {
+		// Arrange
+		let env = Env::new();
+
+		// Act
+		let result = env.str("");
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(
+			result.unwrap_err(),
+			EnvError::InvalidVariableName { .. }
+		));
 	}
 }

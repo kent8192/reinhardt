@@ -60,15 +60,36 @@ impl Default for UseWebSocketOptions {
 	}
 }
 
+/// Stored event listener closures for proper lifecycle management.
+///
+/// On WASM targets, this holds the actual `Closure` instances so they remain
+/// alive as long as the `WebSocketHandle` exists, and are released when the
+/// handle is dropped (instead of being leaked via `forget()`).
+#[cfg(target_arch = "wasm32")]
+struct WsClosures {
+	_onopen: Closure<dyn FnMut(JsValue)>,
+	_onmessage: Closure<dyn FnMut(MessageEvent)>,
+	_onclose: Closure<dyn FnMut(CloseEvent)>,
+	_onerror: Closure<dyn FnMut(ErrorEvent)>,
+}
+
 /// Handle for controlling a WebSocket connection
 ///
 /// This struct provides methods to interact with the WebSocket connection,
 /// monitor its state, and send/receive messages reactively.
+///
+/// Event listener closures are stored in this handle instead of being leaked
+/// via `Closure::forget()`. When the handle is dropped, the closures are also
+/// dropped, preventing memory leaks in long-running single-page applications.
 pub struct WebSocketHandle {
 	connection_state: Signal<ConnectionState>,
 	latest_message: Signal<Option<WebSocketMessage>>,
 	send_fn: Rc<dyn Fn(WebSocketMessage) -> Result<(), String>>,
 	close_fn: Rc<dyn Fn()>,
+	/// Stored closures to keep event listeners alive without leaking memory.
+	/// When the last `WebSocketHandle` clone is dropped, the closures are cleaned up.
+	#[cfg(target_arch = "wasm32")]
+	_closures: Rc<RefCell<Option<WsClosures>>>,
 }
 
 impl WebSocketHandle {
@@ -130,6 +151,8 @@ impl Clone for WebSocketHandle {
 			latest_message: self.latest_message.clone(),
 			send_fn: Rc::clone(&self.send_fn),
 			close_fn: Rc::clone(&self.close_fn),
+			#[cfg(target_arch = "wasm32")]
+			_closures: Rc::clone(&self._closures),
 		}
 	}
 }
@@ -203,6 +226,7 @@ use {
 pub fn use_websocket(url: &str, options: UseWebSocketOptions) -> WebSocketHandle {
 	// WebSocket instance holder
 	let ws_ref: Rc<RefCell<Option<WebSocket>>> = Rc::new(RefCell::new(None));
+	let closures_ref: Rc<RefCell<Option<WsClosures>>> = Rc::new(RefCell::new(None));
 	let url = url.to_string();
 
 	// State signals
@@ -212,6 +236,7 @@ pub fn use_websocket(url: &str, options: UseWebSocketOptions) -> WebSocketHandle
 	// Connection function
 	let connect = {
 		let ws_ref = Rc::clone(&ws_ref);
+		let closures_ref = Rc::clone(&closures_ref);
 		let connection_state = connection_state.clone();
 		let latest_message = latest_message.clone();
 		let url = url.clone();
@@ -245,7 +270,6 @@ pub fn use_websocket(url: &str, options: UseWebSocketOptions) -> WebSocketHandle
 				}
 			}) as Box<dyn FnMut(JsValue)>);
 			ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
-			onopen.forget(); // Intentional leak for event listener
 
 			// onmessage handler
 			let latest_message_recv = latest_message.clone();
@@ -263,7 +287,6 @@ pub fn use_websocket(url: &str, options: UseWebSocketOptions) -> WebSocketHandle
 				}
 			}) as Box<dyn FnMut(MessageEvent)>);
 			ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
-			onmessage.forget(); // Intentional leak for event listener
 
 			// onclose handler
 			let connection_state_close = connection_state.clone();
@@ -275,7 +298,6 @@ pub fn use_websocket(url: &str, options: UseWebSocketOptions) -> WebSocketHandle
 				}
 			}) as Box<dyn FnMut(CloseEvent)>);
 			ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));
-			onclose.forget(); // Intentional leak for event listener
 
 			// onerror handler
 			let connection_state_error = connection_state.clone();
@@ -288,9 +310,16 @@ pub fn use_websocket(url: &str, options: UseWebSocketOptions) -> WebSocketHandle
 				}
 			}) as Box<dyn FnMut(ErrorEvent)>);
 			ws.set_onerror(Some(onerror.as_ref().unchecked_ref()));
-			onerror.forget(); // Intentional leak for event listener
 
 			*ws_ref.borrow_mut() = Some(ws);
+
+			// Store closures to keep event listeners alive without leaking memory
+			closures_ref.borrow_mut().replace(WsClosures {
+				_onopen: onopen,
+				_onmessage: onmessage,
+				_onclose: onclose,
+				_onerror: onerror,
+			});
 		}
 	};
 
@@ -330,6 +359,7 @@ pub fn use_websocket(url: &str, options: UseWebSocketOptions) -> WebSocketHandle
 		latest_message,
 		send_fn,
 		close_fn,
+		_closures: closures_ref,
 	}
 }
 

@@ -6,17 +6,45 @@ use std::collections::HashMap;
 
 use super::parser::{MediaType, ParseError, ParseResult, ParsedData, Parser, UploadedFile};
 
+/// Default maximum file size: 10 MB
+const DEFAULT_MAX_FILE_SIZE: usize = 10 * 1024 * 1024;
+
+/// Default maximum total upload size: 50 MB
+const DEFAULT_MAX_TOTAL_SIZE: usize = 50 * 1024 * 1024;
+
 /// MultiPart parser for multipart/form-data content type (file uploads)
-#[derive(Debug, Clone, Default)]
+///
+/// By default, enforces sensible size limits to prevent denial-of-service
+/// via large uploads:
+/// - Per-file limit: 10 MB
+/// - Total upload limit: 50 MB
+///
+/// Use the builder methods to override these limits, or
+/// [`MultiPartParser::unlimited()`] to remove all limits.
+#[derive(Debug, Clone)]
 pub struct MultiPartParser {
-	/// Maximum file size in bytes (None = unlimited)
+	/// Maximum file size in bytes (`None` = unlimited)
 	pub max_file_size: Option<usize>,
-	/// Maximum total size in bytes (None = unlimited)
+	/// Maximum total size in bytes (`None` = unlimited)
 	pub max_total_size: Option<usize>,
 }
 
+impl Default for MultiPartParser {
+	/// Creates a parser with default size limits (10 MB per file, 50 MB total).
+	fn default() -> Self {
+		Self {
+			max_file_size: Some(DEFAULT_MAX_FILE_SIZE),
+			max_total_size: Some(DEFAULT_MAX_TOTAL_SIZE),
+		}
+	}
+}
+
 impl MultiPartParser {
-	/// Create a new MultiPartParser with default settings.
+	/// Create a new MultiPartParser with default size limits.
+	///
+	/// Default limits:
+	/// - Per-file: 10 MB
+	/// - Total: 50 MB
 	///
 	/// # Examples
 	///
@@ -24,12 +52,36 @@ impl MultiPartParser {
 	/// use reinhardt_core::parsers::multipart::MultiPartParser;
 	///
 	/// let parser = MultiPartParser::new();
-	/// assert!(parser.max_file_size.is_none());
-	/// assert!(parser.max_total_size.is_none());
+	/// assert_eq!(parser.max_file_size, Some(10 * 1024 * 1024));
+	/// assert_eq!(parser.max_total_size, Some(50 * 1024 * 1024));
 	/// ```
 	pub fn new() -> Self {
 		Self::default()
 	}
+
+	/// Create a new MultiPartParser with no size limits.
+	///
+	/// # Safety Note
+	///
+	/// Using unlimited uploads without external size controls (e.g., reverse
+	/// proxy limits) may expose the server to denial-of-service attacks.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_core::parsers::multipart::MultiPartParser;
+	///
+	/// let parser = MultiPartParser::unlimited();
+	/// assert!(parser.max_file_size.is_none());
+	/// assert!(parser.max_total_size.is_none());
+	/// ```
+	pub fn unlimited() -> Self {
+		Self {
+			max_file_size: None,
+			max_total_size: None,
+		}
+	}
+
 	/// Set the maximum file size in bytes for individual files.
 	///
 	/// # Examples

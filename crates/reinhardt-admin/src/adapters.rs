@@ -22,10 +22,13 @@ pub use crate::types::{
 	ImportResult, ModelAdmin,
 };
 
-// Re-export shared types (DTOs) that are always from reinhardt-admin-types
+// Re-export shared types (DTOs) that are always from reinhardt-admin-types.
+// The types::ExportFormat is the DTO variant for HTTP request/response serialization,
+// re-exported as RequestExportFormat to distinguish from core::export::ExportFormat
+// which defines the full set of export formats with file I/O capabilities.
 pub use crate::types::{
 	AdminError, BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse,
-	DetailResponse, ExportFormat as ExportFormatRequest, ExportResponse, FieldInfo, FieldType,
+	DetailResponse, ExportFormat as RequestExportFormat, ExportResponse, FieldInfo, FieldType,
 	FieldsResponse, FilterChoice, FilterInfo, FilterType, ImportResponse, ListQueryParams,
 	ListResponse, ModelInfo, MutationRequest, MutationResponse,
 };

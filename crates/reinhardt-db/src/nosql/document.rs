@@ -93,6 +93,7 @@ pub struct IndexKey {
 }
 
 /// Options for an index definition.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IndexOptions {
 	/// If true, the index enforces uniqueness.

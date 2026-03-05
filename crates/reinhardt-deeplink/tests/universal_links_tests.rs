@@ -198,7 +198,8 @@ fn test_ios_config_additional_apps() {
 #[rstest]
 #[case("TEAM123456.com.example.app", true)]
 #[case("ABC123XYZ0.com.example.myapp", true)]
-#[case("TEAM.bundle", true)]
+#[case("TEAM.com.example", true)]
+#[case("TEAM.bundle", false)] // single-segment bundle ID (not reverse-domain)
 #[case("invalid", false)]
 #[case("", false)]
 #[case(".com.example", false)]

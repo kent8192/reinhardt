@@ -5,9 +5,9 @@
 
 use reinhardt_test::http::*;
 
-use base64::{engine::general_purpose, Engine as _};
-use hyper::header::{HeaderName, HeaderValue, AUTHORIZATION, WWW_AUTHENTICATE};
+use base64::{Engine as _, engine::general_purpose};
 use hyper::StatusCode;
+use hyper::header::{AUTHORIZATION, HeaderName, HeaderValue, WWW_AUTHENTICATE};
 
 /// Create Basic Auth header value
 fn create_basic_auth(username: &str, password: &str) -> String {
@@ -294,7 +294,7 @@ fn test_authorization_header_with_extra_spaces() {
 	// between scheme and credentials still starts with "Basic"
 	// Not intent: Whitespace normalization, parsing validation, error handling
 	let auth = "Basic  dXNlcjpwYXNz"; // Extra space
-								   // This should be invalid or handled gracefully
+	// This should be invalid or handled gracefully
 	assert!(auth.starts_with("Basic"));
 }
 

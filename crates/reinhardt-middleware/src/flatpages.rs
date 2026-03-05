@@ -3,6 +3,7 @@
 //! Provides static page fallback functionality. When a request results in a 404,
 //! the middleware attempts to serve content from a flatpages store.
 
+use crate::xss::XssProtector;
 use async_trait::async_trait;
 use bytes::Bytes;
 use hyper::StatusCode;
@@ -143,31 +144,50 @@ impl FlatpageStore {
 	/// ```
 	pub fn register(&self, page: Flatpage) {
 		let url = page.url.clone();
-		self.pages.write().unwrap().insert(url, page);
+		self.pages
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.insert(url, page);
 	}
 
 	/// Get flatpage by URL
 	pub fn get(&self, url: &str) -> Option<Flatpage> {
-		self.pages.read().unwrap().get(url).cloned()
+		self.pages
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.get(url)
+			.cloned()
 	}
 
 	/// Remove flatpage
 	pub fn remove(&self, url: &str) -> Option<Flatpage> {
-		self.pages.write().unwrap().remove(url)
+		self.pages
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.remove(url)
 	}
 
 	/// Get all flatpages
-	pub fn get_all(&self) -> Vec<Flatpage> {
-		self.pages.read().unwrap().values().cloned().collect()
+	pub fn all(&self) -> Vec<Flatpage> {
+		self.pages
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.values()
+			.cloned()
+			.collect()
 	}
 
 	/// Clear all flatpages
 	pub fn clear(&self) {
-		self.pages.write().unwrap().clear();
+		self.pages
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.clear();
 	}
 }
 
 /// Flatpages middleware configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct FlatpagesConfig {
 	/// Whether the middleware is enabled
@@ -335,7 +355,9 @@ impl Middleware for FlatpagesMiddleware {
 					.with_body(Bytes::from("Authentication required to view this page")));
 			}
 
-			// Render flatpage content
+			// Render flatpage content with HTML escaping to prevent stored XSS
+			let escaped_title = XssProtector::escape_for_html_body(&page.title);
+			let escaped_content = XssProtector::escape_for_html_body(&page.content);
 			let html = format!(
 				r#"<!DOCTYPE html>
 <html>
@@ -346,7 +368,7 @@ impl Middleware for FlatpagesMiddleware {
     {}
 </body>
 </html>"#,
-				page.title, page.content
+				escaped_title, escaped_content
 			);
 
 			return Ok(Response::new(StatusCode::OK).with_body(Bytes::from(html)));
@@ -362,6 +384,7 @@ mod tests {
 	use super::*;
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method, Version};
+	use rstest::rstest;
 
 	struct TestHandler {
 		status: StatusCode,
@@ -416,7 +439,8 @@ mod tests {
 		assert_eq!(response.status, StatusCode::OK);
 		let body = String::from_utf8_lossy(&response.body);
 		assert!(body.contains("About Us"));
-		assert!(body.contains("<h1>About Us</h1>"));
+		// Content is HTML-escaped to prevent XSS
+		assert!(body.contains("&lt;h1&gt;About Us&lt;/h1&gt;"));
 	}
 
 	#[tokio::test]
@@ -582,7 +606,7 @@ mod tests {
 		let retrieved = store.get("/page1/").unwrap();
 		assert_eq!(retrieved, page1);
 
-		// Test get_all
+		// Test all
 		let page2 = Flatpage::new(
 			"/page2/".to_string(),
 			"Page 2".to_string(),
@@ -590,7 +614,7 @@ mod tests {
 		);
 		store.register(page2);
 
-		let all = store.get_all();
+		let all = store.all();
 		assert_eq!(all.len(), 2);
 
 		// Test remove
@@ -600,7 +624,7 @@ mod tests {
 
 		// Test clear
 		store.clear();
-		assert_eq!(store.get_all().len(), 0);
+		assert_eq!(store.all().len(), 0);
 	}
 
 	#[tokio::test]
@@ -812,5 +836,103 @@ mod tests {
 		assert_eq!(response.status, StatusCode::OK);
 		let body = String::from_utf8_lossy(&response.body);
 		assert!(body.contains("Public Content"));
+	}
+
+	#[rstest]
+	#[case::script_tag_in_title("<script>alert('xss')</script>", "Safe content", "<script>", false)]
+	#[case::script_tag_in_content("Safe Title", "<script>alert('xss')</script>", "<script>", false)]
+	#[case::img_onerror_in_content(
+		"Safe Title",
+		r#"<img src=x onerror="alert('xss')">"#,
+		"<img",
+		false
+	)]
+	#[case::event_handler_in_title(
+		r#"" onmouseover="alert('xss')"#,
+		"Safe content",
+		r#"onmouseover=""#,
+		false
+	)]
+	#[case::ampersand_escaped("Tom & Jerry", "A & B", "&amp;", true)]
+	#[tokio::test]
+	async fn test_flatpage_xss_prevention(
+		#[case] title: &str,
+		#[case] content: &str,
+		#[case] pattern: &str,
+		#[case] should_contain: bool,
+	) {
+		// Arrange
+		let config = FlatpagesConfig::new();
+		let middleware = Arc::new(FlatpagesMiddleware::new(config));
+		let page = Flatpage::new(
+			"/xss-test/".to_string(),
+			title.to_string(),
+			content.to_string(),
+		);
+		middleware.store.register(page);
+		let handler = Arc::new(TestHandler::not_found());
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/xss-test/")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, StatusCode::OK);
+		let body = String::from_utf8_lossy(&response.body);
+		assert_eq!(
+			body.contains(pattern),
+			should_contain,
+			"Body should {} contain '{}'. Body: {}",
+			if should_contain { "" } else { "NOT" },
+			pattern,
+			body
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_flatpage_xss_full_escape_verification() {
+		// Arrange
+		let config = FlatpagesConfig::new();
+		let middleware = Arc::new(FlatpagesMiddleware::new(config));
+		let page = Flatpage::new(
+			"/escape-test/".to_string(),
+			"<b>Title</b> & 'quotes' \"double\"".to_string(),
+			"<script>alert(1)</script>".to_string(),
+		);
+		middleware.store.register(page);
+		let handler = Arc::new(TestHandler::not_found());
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/escape-test/")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, StatusCode::OK);
+		let body = String::from_utf8_lossy(&response.body);
+		// Verify title is escaped
+		assert!(body.contains("&lt;b&gt;Title&lt;/b&gt;"));
+		assert!(body.contains("&amp;"));
+		assert!(body.contains("&#x27;quotes&#x27;"));
+		assert!(body.contains("&quot;double&quot;"));
+		// Verify content is escaped
+		assert!(body.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+		// Verify no raw HTML tags in output
+		assert!(!body.contains("<script>"));
+		assert!(!body.contains("</script>"));
 	}
 }

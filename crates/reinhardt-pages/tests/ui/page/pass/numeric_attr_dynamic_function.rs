@@ -11,5 +11,17 @@ fn calculate_rows(base: i32) -> String {
 }
 
 fn main() {
-	let _valid = __reinhardt_placeholder__!(/*0*/);
+	let _valid = page!(|| {
+		div {
+			input {
+				r#type: "text",
+				maxlength: get_max_len(),
+			}
+			input {
+				r#type: "number",
+				min: 0,
+				max: calculate_rows(50),
+			}
+		}
+	});
 }

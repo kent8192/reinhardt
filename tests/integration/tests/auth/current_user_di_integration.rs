@@ -20,9 +20,9 @@ use reinhardt_query::prelude::{
 	ColumnDef, Expr, ExprTrait, Iden, IntoIden, PostgresQueryBuilder, Query, QueryStatementBuilder,
 	Value,
 };
-use reinhardt_test::fixtures::auth::{test_user, TestUser};
+use reinhardt_test::fixtures::auth::{TestUser, test_user};
 use reinhardt_test::fixtures::singleton_scope;
-use reinhardt_test::fixtures::testcontainers::{postgres_container, ContainerAsync, GenericImage};
+use reinhardt_test::fixtures::testcontainers::{ContainerAsync, GenericImage, postgres_container};
 use rstest::*;
 use sqlx::{PgPool, Row};
 use std::sync::Arc;

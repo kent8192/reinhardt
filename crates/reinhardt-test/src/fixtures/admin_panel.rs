@@ -32,7 +32,7 @@ use {
 
 // Import shared_db_pool fixture for testcontainers-based tests
 #[cfg(all(feature = "admin", feature = "testcontainers"))]
-use crate::fixtures::shared_postgres::shared_db_pool;
+use reinhardt_testkit::fixtures::shared_postgres::shared_db_pool;
 
 /// Fixture providing a basic AdminSite instance
 ///
@@ -98,6 +98,7 @@ pub async fn model_admin_config() -> ModelAdminConfig {
 		.list_filter(vec!["status"])
 		.search_fields(vec!["name", "description"])
 		.build()
+		.expect("model_admin_config fixture: model_name is set")
 }
 
 #[cfg(all(feature = "admin", feature = "testcontainers"))]
@@ -470,7 +471,8 @@ pub async fn export_import_test_context(
 			"is_verified",
 		])
 		.search_fields(vec!["name", "email", "bio"])
-		.build();
+		.build()
+		.expect("admin_with_database fixture: model_name is set");
 
 	site.register("TestModel", config)
 		.expect("Failed to register TestModel in AdminSite");

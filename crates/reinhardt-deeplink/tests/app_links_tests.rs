@@ -29,7 +29,8 @@ fn test_android_config_basic() {
 	let config = AndroidConfig::builder()
 		.package_name("com.example.app")
 		.sha256_fingerprint(VALID_FINGERPRINT)
-		.build();
+		.build()
+		.unwrap();
 
 	let json = serde_json::to_string_pretty(&config).unwrap();
 	assert!(json.contains("delegate_permission/common.handle_all_urls"));
@@ -45,7 +46,8 @@ fn test_android_config_multiple_fingerprints() {
 	let config = AndroidConfig::builder()
 		.package_name("com.example.app")
 		.sha256_fingerprints(&[VALID_FINGERPRINT, fp2])
-		.build();
+		.build()
+		.unwrap();
 
 	let json = serde_json::to_string_pretty(&config).unwrap();
 	assert!(json.contains(VALID_FINGERPRINT));
@@ -57,7 +59,8 @@ fn test_android_config_json_serialization() {
 	let config = AndroidConfig::builder()
 		.package_name("com.example.app")
 		.sha256_fingerprint(VALID_FINGERPRINT)
-		.build();
+		.build()
+		.unwrap();
 
 	let json = serde_json::to_string(&config);
 	assert!(json.is_ok());
@@ -72,7 +75,8 @@ fn test_android_config_additional_packages() {
 		.package_name("com.example.app")
 		.sha256_fingerprint(VALID_FINGERPRINT)
 		.additional_package("com.example.app2", &[VALID_FINGERPRINT])
-		.build();
+		.build()
+		.unwrap();
 
 	assert_eq!(config.statements.len(), 2);
 	let json = serde_json::to_string_pretty(&config).unwrap();
@@ -115,7 +119,8 @@ fn test_fingerprint_all_zeros() {
 	let config = AndroidConfig::builder()
 		.package_name("com.example.app")
 		.sha256_fingerprint(all_zeros)
-		.build();
+		.build()
+		.unwrap();
 
 	let json = serde_json::to_string(&config).unwrap();
 	assert!(json.contains(all_zeros));
@@ -138,7 +143,8 @@ fn test_package_name_valid_patterns() {
 		let config = AndroidConfig::builder()
 			.package_name(package_name)
 			.sha256_fingerprint(VALID_FINGERPRINT)
-			.build();
+			.build()
+			.unwrap();
 
 		assert_eq!(config.statements[0].target.package_name, package_name);
 	}
@@ -161,7 +167,8 @@ fn test_fingerprint_format_variants() {
 		let config = AndroidConfig::builder()
 			.package_name("com.example.app")
 			.sha256_fingerprint(&fingerprint)
-			.build();
+			.build()
+			.unwrap();
 
 		assert_eq!(
 			config.statements[0].target.sha256_cert_fingerprints[0],
@@ -179,7 +186,8 @@ fn test_dal_json_array_format() {
 	let config = AndroidConfig::builder()
 		.package_name("com.example.app")
 		.sha256_fingerprint(VALID_FINGERPRINT)
-		.build();
+		.build()
+		.unwrap();
 
 	let json = serde_json::to_string(&config).unwrap();
 	// Should be a JSON array
@@ -192,7 +200,8 @@ fn test_dal_json_structure_matches_spec() {
 	let config = AndroidConfig::builder()
 		.package_name("com.example.app")
 		.sha256_fingerprint(VALID_FINGERPRINT)
-		.build();
+		.build()
+		.unwrap();
 
 	let json = serde_json::to_value(&config).unwrap();
 
@@ -224,7 +233,8 @@ fn test_android_config_multiple_fingerprints_single_target() {
 	let config = AndroidConfig::builder()
 		.package_name("com.example.app")
 		.sha256_fingerprints(&[VALID_FINGERPRINT, fp2])
-		.build();
+		.build()
+		.unwrap();
 
 	assert_eq!(
 		config.statements[0].target.sha256_cert_fingerprints.len(),
@@ -238,7 +248,8 @@ fn test_android_config_multiple_targets_same_package() {
 		.package_name("com.example.app")
 		.sha256_fingerprint(VALID_FINGERPRINT)
 		.additional_package("com.example.app", &["11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00"])
-		.build();
+		.build()
+		.unwrap();
 
 	assert_eq!(config.statements.len(), 2);
 }
@@ -250,7 +261,8 @@ fn test_android_config_multiple_targets_different_packages() {
 		.sha256_fingerprint(VALID_FINGERPRINT)
 		.additional_package("com.example.app2", &[VALID_FINGERPRINT])
 		.additional_package("com.example.app3", &[VALID_FINGERPRINT])
-		.build();
+		.build()
+		.unwrap();
 
 	assert_eq!(config.statements.len(), 3);
 	assert_ne!(
@@ -268,7 +280,8 @@ fn test_assetlinks_handler_creation() {
 	let config = AndroidConfig::builder()
 		.package_name("com.example.app")
 		.sha256_fingerprint(VALID_FINGERPRINT)
-		.build();
+		.build()
+		.unwrap();
 
 	let handler = AssetLinksHandler::new(config);
 	assert!(handler.is_ok());
@@ -279,7 +292,8 @@ fn test_assetlinks_handler_json_content() {
 	let config = AndroidConfig::builder()
 		.package_name("com.example.app")
 		.sha256_fingerprint(VALID_FINGERPRINT)
-		.build();
+		.build()
+		.unwrap();
 
 	let handler = AssetLinksHandler::new(config).unwrap();
 	let json = handler.json();
@@ -292,7 +306,8 @@ fn test_assetlinks_handler_clone() {
 	let config = AndroidConfig::builder()
 		.package_name("com.example.app")
 		.sha256_fingerprint(VALID_FINGERPRINT)
-		.build();
+		.build()
+		.unwrap();
 
 	let handler = AssetLinksHandler::new(config).unwrap();
 	let cloned = handler.clone();

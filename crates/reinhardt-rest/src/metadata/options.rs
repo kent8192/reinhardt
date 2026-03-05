@@ -18,6 +18,7 @@ pub struct SerializerFieldInfo {
 }
 
 /// Options for configuring metadata
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct MetadataOptions {
 	pub name: String,

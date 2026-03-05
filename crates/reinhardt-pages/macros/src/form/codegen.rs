@@ -539,17 +539,11 @@ fn generate_derived_methods(
 	quote! { #(#methods)* }
 }
 
-/// Generates the metadata function for SSR.
-fn generate_metadata_function(
-	macro_ast: &TypedFormMacro,
-	pages_crate: &TokenStream,
-) -> TokenStream {
-	// Generate form ID from struct name (convert to kebab-case)
-	// Generate form ID from struct name (convert to kebab-case)
-	// Example: RegisterForm -> register-form, LoginForm -> login-form
-	let form_id_str = macro_ast
-		.name
-		.to_string()
+/// Converts a struct name to kebab-case for use as form ID.
+///
+/// Example: `RegisterForm` -> `register-form`, `LoginForm` -> `login-form`
+fn form_id_kebab_case(name: &syn::Ident) -> String {
+	name.to_string()
 		.chars()
 		.enumerate()
 		.flat_map(|(i, c)| {
@@ -560,16 +554,25 @@ fn generate_metadata_function(
 			}
 		})
 		.collect::<String>()
-		.replace('_', "-");
+		.replace('_', "-")
+}
 
-	let action_str = match &macro_ast.action {
+/// Resolves the form action URL from the typed action.
+fn action_string(action: &TypedFormAction) -> String {
+	match action {
 		TypedFormAction::Url(url) => url.clone(),
-		TypedFormAction::ServerFn(path) => {
-			// Convert syn::Path to string for URL generation
-			format!("/api/{}", path.to_token_stream())
-		}
+		TypedFormAction::ServerFn(path) => format!("/api/{}", path.to_token_stream()),
 		TypedFormAction::None => String::new(),
-	};
+	}
+}
+
+/// Generates the metadata function for SSR.
+fn generate_metadata_function(
+	macro_ast: &TypedFormMacro,
+	pages_crate: &TokenStream,
+) -> TokenStream {
+	let form_id_str = form_id_kebab_case(&macro_ast.name);
+	let action_str = action_string(&macro_ast.action);
 
 	let method_str = match macro_ast.method {
 		FormMethod::Get => "GET",
@@ -671,28 +674,8 @@ fn generate_into_page(macro_ast: &TypedFormMacro, pages_crate: &TokenStream) -> 
 /// When a form has a server_fn action, this generates an onsubmit event handler
 /// that prevents default form submission and calls the server function instead.
 fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStream) -> TokenStream {
-	// Generate form ID from struct name (convert to kebab-case)
-	// Example: RegisterForm -> register-form, LoginForm -> login-form
-	let form_id_str = macro_ast
-		.name
-		.to_string()
-		.chars()
-		.enumerate()
-		.flat_map(|(i, c)| {
-			if c.is_uppercase() && i > 0 {
-				vec!['-', c.to_ascii_lowercase()]
-			} else {
-				vec![c.to_ascii_lowercase()]
-			}
-		})
-		.collect::<String>()
-		.replace('_', "-");
-
-	let action_str = match &macro_ast.action {
-		TypedFormAction::Url(url) => url.clone(),
-		TypedFormAction::ServerFn(path) => format!("/api/{}", path.to_token_stream()),
-		TypedFormAction::None => String::new(),
-	};
+	let form_id_str = form_id_kebab_case(&macro_ast.name);
+	let action_str = action_string(&macro_ast.action);
 
 	let method_str = match macro_ast.method {
 		FormMethod::Get => "get",

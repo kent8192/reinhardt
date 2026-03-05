@@ -176,10 +176,10 @@ impl<C: Cache> CachedFilterBackend<C> {
 	///
 	/// let cache = InMemoryCache::new();
 	/// let backend = CachedFilterBackend::new(cache, Duration::from_secs(300));
-	/// let ttl = backend.get_ttl();
+	/// let ttl = backend.ttl();
 	/// assert_eq!(ttl, Duration::from_secs(300));
 	/// ```
-	pub fn get_ttl(&self) -> Duration {
+	pub fn ttl(&self) -> Duration {
 		self.ttl
 	}
 }
@@ -352,7 +352,7 @@ mod tests {
 		let cache = InMemoryCache::new();
 		let backend = CachedFilterBackend::new(cache, Duration::from_millis(100));
 
-		assert_eq!(backend.get_ttl(), Duration::from_millis(100));
+		assert_eq!(backend.ttl(), Duration::from_millis(100));
 	}
 
 	#[test]

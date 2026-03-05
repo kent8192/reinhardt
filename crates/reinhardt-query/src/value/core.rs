@@ -13,15 +13,58 @@ use super::ArrayType;
 /// All variants use `Option<T>` to represent nullable values. A `None` value
 /// will be rendered as SQL `NULL`.
 ///
+/// ## Variant Naming Convention
+///
+/// Variant names align with common SQL type names:
+///
+/// | Variant | SQL Type | Rust Type |
+/// |---------|----------|-----------|
+/// | `Value::Bool` | BOOLEAN | `bool` |
+/// | `Value::TinyInt` | TINYINT | `i8` |
+/// | `Value::SmallInt` | SMALLINT | `i16` |
+/// | `Value::Int` | INTEGER | `i32` |
+/// | `Value::BigInt` | BIGINT | `i64` |
+/// | `Value::TinyUnsigned` | TINYINT UNSIGNED | `u8` |
+/// | `Value::SmallUnsigned` | SMALLINT UNSIGNED | `u16` |
+/// | `Value::Unsigned` | INTEGER UNSIGNED | `u32` |
+/// | `Value::BigUnsigned` | BIGINT UNSIGNED | `u64` |
+/// | `Value::Float` | FLOAT | `f32` |
+/// | `Value::Double` | DOUBLE | `f64` |
+/// | `Value::Char` | CHAR | `char` |
+/// | `Value::String` | VARCHAR/TEXT | `String` |
+/// | `Value::Bytes` | BLOB/BINARY | `Vec<u8>` |
+///
 /// ## Example
 ///
 /// ```rust
 /// use reinhardt_query::Value;
 ///
+/// // Integer types
 /// let int_val = Value::Int(Some(42));
 /// let null_int = Value::Int(None);
+/// let bigint_val = Value::BigInt(Some(9223372036854775807i64));
+///
+/// // String type (boxed for size optimization)
 /// let string_val = Value::String(Some(Box::new("hello".to_string())));
+///
+/// // Check for null
+/// assert!(!int_val.is_null());
+/// assert!(null_int.is_null());
+///
+/// // Convert to SQL literal
+/// assert_eq!(int_val.to_sql_literal(), "42");
+/// assert_eq!(null_int.to_sql_literal(), "NULL");
 /// ```
+///
+/// ## Feature-Gated Types
+///
+/// Additional types are available with feature flags:
+///
+/// - `with-chrono`: Date/time types (`Value::ChronoDate`, `Value::ChronoTime`, etc.)
+/// - `with-uuid`: UUID type (`Value::Uuid`)
+/// - `with-json`: JSON type (`Value::Json`)
+/// - `with-rust_decimal`: Decimal type (`Value::Decimal`)
+/// - `with-bigdecimal`: BigDecimal type (`Value::BigDecimal`)
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
 	// -------------------------------------------------------------------------
@@ -221,7 +264,14 @@ impl Value {
 			Self::Float(None) => "NULL".to_string(),
 			Self::Double(Some(v)) => v.to_string(),
 			Self::Double(None) => "NULL".to_string(),
-			Self::Char(Some(v)) => format!("'{}'", v),
+			Self::Char(Some(v)) => {
+				// Escape single quotes by doubling them
+				if *v == '\'' {
+					"''''".to_string()
+				} else {
+					format!("'{}'", v)
+				}
+			}
 			Self::Char(None) => "NULL".to_string(),
 			Self::String(Some(v)) => {
 				// Escape single quotes by doubling them

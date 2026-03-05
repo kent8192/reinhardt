@@ -51,6 +51,7 @@ mod brotli;
 pub use self::brotli::BrotliCompressor;
 
 /// Compression errors
+#[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum CompressionError {
 	/// Compression failed

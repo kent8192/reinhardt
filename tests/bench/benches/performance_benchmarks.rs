@@ -5,7 +5,7 @@
 //! and other critical paths.
 
 use bytes::Bytes;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use http::{HeaderMap, StatusCode};
 use reinhardt_db::orm::{CascadeOption, LoadingStrategy, Relationship, RelationshipType};
 use reinhardt_rest::serializers::{CharField, EmailField, IntegerField, JsonSerializer};

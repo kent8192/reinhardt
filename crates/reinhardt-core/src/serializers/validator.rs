@@ -9,6 +9,7 @@ use std::collections::HashMap;
 pub type ValidationResult<T = ()> = Result<T, ValidationError>;
 
 /// Error type for validation failures
+#[non_exhaustive]
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ValidationError {
 	/// Single field validation error

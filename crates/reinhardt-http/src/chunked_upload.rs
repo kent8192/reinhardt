@@ -10,9 +10,14 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// Default session timeout for chunked uploads (1 hour).
+/// Sessions older than this are considered stale and eligible for cleanup.
+const UPLOAD_SESSION_TIMEOUT: Duration = Duration::from_secs(3600);
 
 /// Errors that can occur during chunked upload
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum ChunkedUploadError {
 	#[error("IO error: {0}")]
@@ -69,6 +74,14 @@ impl UploadProgress {
 	fn update(&mut self, chunk_size: usize) {
 		self.chunks_uploaded += 1;
 		self.bytes_uploaded += chunk_size;
+
+		// On the final chunk, update total_bytes to reflect actual cumulative
+		// byte count, which may differ from the declared total_size if the
+		// last chunk is smaller than chunk_size.
+		if self.chunks_uploaded >= self.total_chunks {
+			self.total_bytes = self.bytes_uploaded;
+		}
+
 		self.percentage = if self.total_bytes > 0 {
 			(self.bytes_uploaded as f64 / self.total_bytes as f64) * 100.0
 		} else {
@@ -142,19 +155,29 @@ pub struct ChunkedUploadSession {
 	pub completed: bool,
 	/// Upload progress tracker
 	progress: UploadProgress,
+	/// When the session was created, used for timeout-based cleanup
+	created_at: Instant,
 }
 
 impl ChunkedUploadSession {
 	/// Create a new upload session
+	///
+	/// Returns `ChunkedUploadError::InvalidChunk` if `chunk_size` is zero.
 	pub fn new(
 		session_id: String,
 		filename: String,
 		total_size: usize,
 		chunk_size: usize,
 		temp_dir: PathBuf,
-	) -> Self {
+	) -> Result<Self, ChunkedUploadError> {
+		if chunk_size == 0 {
+			return Err(ChunkedUploadError::InvalidChunk {
+				expected: 1,
+				actual: 0,
+			});
+		}
 		let total_chunks = total_size.div_ceil(chunk_size);
-		Self {
+		Ok(Self {
 			session_id,
 			filename,
 			total_size,
@@ -164,7 +187,8 @@ impl ChunkedUploadSession {
 			temp_dir,
 			completed: false,
 			progress: UploadProgress::new(total_size, total_chunks),
-		}
+			created_at: Instant::now(),
+		})
 	}
 
 	/// Get progress percentage
@@ -186,7 +210,7 @@ impl ChunkedUploadSession {
 	///     1000,
 	///     100,
 	///     PathBuf::from("/tmp")
-	/// );
+	/// ).unwrap();
 	/// let progress = session.get_progress();
 	/// assert_eq!(progress.percentage, 0.0);
 	/// ```
@@ -265,6 +289,9 @@ impl ChunkedUploadManager {
 		total_size: usize,
 		chunk_size: usize,
 	) -> Result<ChunkedUploadSession, ChunkedUploadError> {
+		// Lazily clean up expired sessions to prevent memory exhaustion
+		self.cleanup_expired_sessions();
+
 		// Validate session_id to prevent path traversal attacks.
 		// Session IDs are used to construct directory and file paths.
 		// Check both raw and URL-decoded forms to prevent bypass via
@@ -291,9 +318,9 @@ impl ChunkedUploadManager {
 			total_size,
 			chunk_size,
 			temp_dir,
-		);
+		)?;
 
-		let mut sessions = self.sessions.lock().unwrap();
+		let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
 		sessions.insert(session_id, session.clone());
 
 		Ok(session)
@@ -319,7 +346,10 @@ impl ChunkedUploadManager {
 		chunk_number: usize,
 		data: &[u8],
 	) -> Result<ChunkedUploadSession, ChunkedUploadError> {
-		let mut sessions = self.sessions.lock().unwrap();
+		// Lazily clean up expired sessions to prevent memory exhaustion
+		self.cleanup_expired_sessions();
+
+		let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
 		let session = sessions
 			.get_mut(session_id)
 			.ok_or_else(|| ChunkedUploadError::SessionNotFound(session_id.to_string()))?;
@@ -367,7 +397,7 @@ impl ChunkedUploadManager {
 		session_id: &str,
 		output_path: PathBuf,
 	) -> Result<PathBuf, ChunkedUploadError> {
-		let sessions = self.sessions.lock().unwrap();
+		let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
 		let session = sessions
 			.get(session_id)
 			.ok_or_else(|| ChunkedUploadError::SessionNotFound(session_id.to_string()))?;
@@ -404,7 +434,7 @@ impl ChunkedUploadManager {
 	/// manager.cleanup_session("session123").unwrap();
 	/// ```
 	pub fn cleanup_session(&self, session_id: &str) -> Result<(), ChunkedUploadError> {
-		let mut sessions = self.sessions.lock().unwrap();
+		let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
 		if let Some(session) = sessions.remove(session_id)
 			&& session.temp_dir.exists()
 		{
@@ -415,14 +445,30 @@ impl ChunkedUploadManager {
 
 	/// Get session information
 	pub fn get_session(&self, session_id: &str) -> Option<ChunkedUploadSession> {
-		let sessions = self.sessions.lock().unwrap();
+		let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
 		sessions.get(session_id).cloned()
 	}
 
 	/// List all active sessions
 	pub fn list_sessions(&self) -> Vec<ChunkedUploadSession> {
-		let sessions = self.sessions.lock().unwrap();
+		let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
 		sessions.values().cloned().collect()
+	}
+
+	/// Remove sessions that have exceeded the timeout.
+	///
+	/// Expired sessions have their temporary files cleaned up automatically.
+	/// This is called lazily on `start_session` and `upload_chunk` to prevent
+	/// unbounded memory growth from abandoned uploads.
+	pub fn cleanup_expired_sessions(&self) {
+		let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+		sessions.retain(|_, session| {
+			let expired = session.created_at.elapsed() >= UPLOAD_SESSION_TIMEOUT;
+			if expired && session.temp_dir.exists() {
+				let _ = fs::remove_dir_all(&session.temp_dir);
+			}
+			!expired
+		});
 	}
 }
 
@@ -438,7 +484,8 @@ mod tests {
 			1000,
 			100,
 			PathBuf::from("/tmp"),
-		);
+		)
+		.unwrap();
 
 		assert_eq!(session.session_id, "test123");
 		assert_eq!(session.filename, "file.bin");
@@ -457,7 +504,8 @@ mod tests {
 			1000,
 			100,
 			PathBuf::from("/tmp"),
-		);
+		)
+		.unwrap();
 
 		assert_eq!(session.progress(), 0.0);
 
@@ -619,5 +667,49 @@ mod tests {
 		// Assert
 		assert!(result.is_ok());
 		manager.cleanup_session("safe-session_123").unwrap();
+	}
+
+	// =================================================================
+	// Division by zero prevention tests (Issue #359)
+	// =================================================================
+
+	#[rstest::rstest]
+	fn test_chunked_upload_session_rejects_zero_chunk_size() {
+		// Arrange
+		let session_id = "test-zero".to_string();
+		let filename = "file.bin".to_string();
+		let total_size = 1000;
+		let chunk_size = 0;
+
+		// Act
+		let result = ChunkedUploadSession::new(
+			session_id,
+			filename,
+			total_size,
+			chunk_size,
+			PathBuf::from("/tmp"),
+		);
+
+		// Assert
+		assert!(result.is_err());
+		if let Err(ChunkedUploadError::InvalidChunk { expected, actual }) = result {
+			assert_eq!(expected, 1);
+			assert_eq!(actual, 0);
+		} else {
+			panic!("Expected InvalidChunk error for zero chunk_size");
+		}
+	}
+
+	#[rstest::rstest]
+	fn test_start_session_rejects_zero_chunk_size() {
+		// Arrange
+		let manager = ChunkedUploadManager::new(PathBuf::from("/tmp/test_chunks_zero"));
+
+		// Act
+		let result =
+			manager.start_session("session-zero".to_string(), "file.bin".to_string(), 1000, 0);
+
+		// Assert
+		assert!(result.is_err());
 	}
 }

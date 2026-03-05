@@ -13,16 +13,18 @@ use crate::{
 	},
 	query::{
 		AlterDatabaseStatement, AlterFunctionStatement, AlterIndexStatement,
-		AlterProcedureStatement, AlterSchemaStatement, AlterSequenceStatement, AlterTableStatement,
-		AlterTypeStatement, CheckTableStatement, CommentStatement, CreateDatabaseStatement,
-		CreateFunctionStatement, CreateIndexStatement, CreateProcedureStatement,
+		AlterMaterializedViewStatement, AlterProcedureStatement, AlterSchemaStatement,
+		AlterSequenceStatement, AlterTableStatement, AlterTypeStatement, AnalyzeStatement,
+		CheckTableStatement, CommentStatement, CreateDatabaseStatement, CreateFunctionStatement,
+		CreateIndexStatement, CreateMaterializedViewStatement, CreateProcedureStatement,
 		CreateSchemaStatement, CreateSequenceStatement, CreateTableStatement,
 		CreateTriggerStatement, CreateTypeStatement, CreateViewStatement, DeleteStatement,
-		DropDatabaseStatement, DropFunctionStatement, DropIndexStatement, DropProcedureStatement,
-		DropSchemaStatement, DropSequenceStatement, DropTableStatement, DropTriggerStatement,
-		DropTypeStatement, DropViewStatement, InsertStatement, OptimizeTableStatement,
-		ReindexStatement, RepairTableStatement, SelectStatement, TruncateTableStatement,
-		UpdateStatement,
+		DropDatabaseStatement, DropFunctionStatement, DropIndexStatement,
+		DropMaterializedViewStatement, DropProcedureStatement, DropSchemaStatement,
+		DropSequenceStatement, DropTableStatement, DropTriggerStatement, DropTypeStatement,
+		DropViewStatement, InsertStatement, OptimizeTableStatement,
+		RefreshMaterializedViewStatement, ReindexStatement, RepairTableStatement, SelectStatement,
+		TruncateTableStatement, UpdateStatement, VacuumStatement,
 	},
 	value::Values,
 };
@@ -305,6 +307,46 @@ impl QueryBuilder for CockroachDBQueryBuilder {
 
 	fn build_set_default_role(&self, stmt: &SetDefaultRoleStatement) -> (String, Values) {
 		self.postgres.build_set_default_role(stmt)
+	}
+
+	// Maintenance statements - CockroachDB delegates to PostgreSQL
+
+	fn build_vacuum(&self, stmt: &VacuumStatement) -> (String, Values) {
+		self.postgres.build_vacuum(stmt)
+	}
+
+	fn build_analyze(&self, stmt: &AnalyzeStatement) -> (String, Values) {
+		self.postgres.build_analyze(stmt)
+	}
+
+	// Materialized view statements - CockroachDB delegates to PostgreSQL
+
+	fn build_create_materialized_view(
+		&self,
+		stmt: &CreateMaterializedViewStatement,
+	) -> (String, Values) {
+		self.postgres.build_create_materialized_view(stmt)
+	}
+
+	fn build_alter_materialized_view(
+		&self,
+		stmt: &AlterMaterializedViewStatement,
+	) -> (String, Values) {
+		self.postgres.build_alter_materialized_view(stmt)
+	}
+
+	fn build_drop_materialized_view(
+		&self,
+		stmt: &DropMaterializedViewStatement,
+	) -> (String, Values) {
+		self.postgres.build_drop_materialized_view(stmt)
+	}
+
+	fn build_refresh_materialized_view(
+		&self,
+		stmt: &RefreshMaterializedViewStatement,
+	) -> (String, Values) {
+		self.postgres.build_refresh_materialized_view(stmt)
 	}
 }
 

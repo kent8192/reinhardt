@@ -12,16 +12,18 @@ use crate::{
 	},
 	query::{
 		AlterDatabaseStatement, AlterFunctionStatement, AlterIndexStatement,
-		AlterProcedureStatement, AlterSchemaStatement, AlterSequenceStatement, AlterTableStatement,
-		AlterTypeStatement, CheckTableStatement, CommentStatement, CreateDatabaseStatement,
-		CreateFunctionStatement, CreateIndexStatement, CreateProcedureStatement,
+		AlterMaterializedViewStatement, AlterProcedureStatement, AlterSchemaStatement,
+		AlterSequenceStatement, AlterTableStatement, AlterTypeStatement, AnalyzeStatement,
+		CheckTableStatement, CommentStatement, CreateDatabaseStatement, CreateFunctionStatement,
+		CreateIndexStatement, CreateMaterializedViewStatement, CreateProcedureStatement,
 		CreateSchemaStatement, CreateSequenceStatement, CreateTableStatement,
 		CreateTriggerStatement, CreateTypeStatement, CreateViewStatement, DeleteStatement,
-		DropDatabaseStatement, DropFunctionStatement, DropIndexStatement, DropProcedureStatement,
-		DropSchemaStatement, DropSequenceStatement, DropTableStatement, DropTriggerStatement,
-		DropTypeStatement, DropViewStatement, InsertStatement, OptimizeTableStatement,
-		ReindexStatement, RepairTableStatement, SelectStatement, TruncateTableStatement,
-		UpdateStatement,
+		DropDatabaseStatement, DropFunctionStatement, DropIndexStatement,
+		DropMaterializedViewStatement, DropProcedureStatement, DropSchemaStatement,
+		DropSequenceStatement, DropTableStatement, DropTriggerStatement, DropTypeStatement,
+		DropViewStatement, InsertStatement, OptimizeTableStatement,
+		RefreshMaterializedViewStatement, ReindexStatement, RepairTableStatement, SelectStatement,
+		TruncateTableStatement, UpdateStatement, VacuumStatement,
 	},
 	value::Values,
 };
@@ -784,4 +786,99 @@ pub trait QueryBuilder {
 	///
 	/// A tuple of (SQL string, parameter values)
 	fn build_drop_type(&self, stmt: &DropTypeStatement) -> (String, Values);
+
+	/// Build VACUUM statement
+	///
+	/// Generates SQL and parameter values for a VACUUM statement.
+	/// **PostgreSQL, SQLite, CockroachDB only**: MySQL will panic with a helpful message.
+	///
+	/// # Arguments
+	///
+	/// * `stmt` - The VACUUM statement to build
+	///
+	/// # Returns
+	///
+	/// A tuple of (SQL string, parameter values)
+	fn build_vacuum(&self, stmt: &VacuumStatement) -> (String, Values);
+
+	/// Build ANALYZE statement
+	///
+	/// Generates SQL and parameter values for an ANALYZE statement.
+	///
+	/// # Arguments
+	///
+	/// * `stmt` - The ANALYZE statement to build
+	///
+	/// # Returns
+	///
+	/// A tuple of (SQL string, parameter values)
+	fn build_analyze(&self, stmt: &AnalyzeStatement) -> (String, Values);
+
+	/// Build CREATE MATERIALIZED VIEW statement
+	///
+	/// Generates SQL and parameter values for a CREATE MATERIALIZED VIEW statement.
+	/// **PostgreSQL, CockroachDB only**: MySQL and SQLite will panic with a helpful message.
+	///
+	/// # Arguments
+	///
+	/// * `stmt` - The CREATE MATERIALIZED VIEW statement to build
+	///
+	/// # Returns
+	///
+	/// A tuple of (SQL string, parameter values)
+	fn build_create_materialized_view(
+		&self,
+		stmt: &CreateMaterializedViewStatement,
+	) -> (String, Values);
+
+	/// Build ALTER MATERIALIZED VIEW statement
+	///
+	/// Generates SQL and parameter values for an ALTER MATERIALIZED VIEW statement.
+	/// **PostgreSQL, CockroachDB only**: MySQL and SQLite will panic with a helpful message.
+	///
+	/// # Arguments
+	///
+	/// * `stmt` - The ALTER MATERIALIZED VIEW statement to build
+	///
+	/// # Returns
+	///
+	/// A tuple of (SQL string, parameter values)
+	fn build_alter_materialized_view(
+		&self,
+		stmt: &AlterMaterializedViewStatement,
+	) -> (String, Values);
+
+	/// Build DROP MATERIALIZED VIEW statement
+	///
+	/// Generates SQL and parameter values for a DROP MATERIALIZED VIEW statement.
+	/// **PostgreSQL, CockroachDB only**: MySQL and SQLite will panic with a helpful message.
+	///
+	/// # Arguments
+	///
+	/// * `stmt` - The DROP MATERIALIZED VIEW statement to build
+	///
+	/// # Returns
+	///
+	/// A tuple of (SQL string, parameter values)
+	fn build_drop_materialized_view(
+		&self,
+		stmt: &DropMaterializedViewStatement,
+	) -> (String, Values);
+
+	/// Build REFRESH MATERIALIZED VIEW statement
+	///
+	/// Generates SQL and parameter values for a REFRESH MATERIALIZED VIEW statement.
+	/// **PostgreSQL, CockroachDB only**: MySQL and SQLite will panic with a helpful message.
+	///
+	/// # Arguments
+	///
+	/// * `stmt` - The REFRESH MATERIALIZED VIEW statement to build
+	///
+	/// # Returns
+	///
+	/// A tuple of (SQL string, parameter values)
+	fn build_refresh_materialized_view(
+		&self,
+		stmt: &RefreshMaterializedViewStatement,
+	) -> (String, Values);
 }

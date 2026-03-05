@@ -32,14 +32,14 @@ use serde::{Deserialize, Serialize};
 /// ```rust
 /// use reinhardt_db::migrations::operations::special::RunSQL;
 ///
-// Simple SQL execution
+/// // Simple SQL execution
 /// let sql = RunSQL::new("CREATE INDEX idx_email ON users(email)");
 ///
-// With reverse SQL for rollback
+/// // With reverse SQL for rollback
 /// let sql_reversible = RunSQL::new("CREATE INDEX idx_email ON users(email)")
 ///     .with_reverse_sql("DROP INDEX idx_email");
 ///
-// Multiple statements
+/// // Multiple statements
 /// let multi_sql = RunSQL::new_multi(vec![
 ///     "INSERT INTO roles (name) VALUES ('admin')".to_string(),
 ///     "INSERT INTO roles (name) VALUES ('user')".to_string(),

@@ -365,7 +365,7 @@ impl CoordinateTransform {
 	/// let transform = CoordinateTransform::new(4326, 3857);
 	/// assert_eq!(transform.from_srid, 4326); // WGS 84
 	/// assert_eq!(transform.to_srid, 3857);   // Web Mercator
-	// Converts GPS coordinates to map projection
+	/// // Converts GPS coordinates to map projection
 	/// ```
 	pub fn new(from_srid: i32, to_srid: i32) -> Self {
 		Self { from_srid, to_srid }
@@ -460,7 +460,7 @@ impl GiSTIndex {
 	///
 	/// let index = GiSTIndex::new("location");
 	/// assert_eq!(index.column, "location");
-	// GiST indexes enable fast spatial queries
+	/// // GiST indexes enable fast spatial queries
 	/// ```
 	pub fn new(column: impl Into<String>) -> Self {
 		Self {
@@ -501,7 +501,7 @@ impl Distance {
 	/// use reinhardt_db::orm::gis::{Distance, DistanceUnit};
 	///
 	/// let distance = Distance::new(1500.0, DistanceUnit::Meters);
-	// Represents 1.5 kilometers
+	/// // Represents 1.5 kilometers
 	/// ```
 	pub fn new(value: f64, unit: DistanceUnit) -> Self {
 		Self { value, unit }

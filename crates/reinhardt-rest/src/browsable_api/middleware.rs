@@ -13,6 +13,7 @@ use std::sync::Arc;
 use super::renderer::{ApiContext, BrowsableApiRenderer};
 
 /// Middleware configuration for Browsable API
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct BrowsableApiConfig {
 	/// Enable browsable API (default: true)
@@ -70,11 +71,10 @@ impl BrowsableApiMiddleware {
 	/// ```
 	/// use reinhardt_rest::browsable_api::middleware::{BrowsableApiMiddleware, BrowsableApiConfig};
 	///
-	/// let config = BrowsableApiConfig {
-	///     enabled: true,
-	///     template_name: Some("custom_api.tpl".to_string()),
-	///     custom_css: Some("/static/api.css".to_string()),
-	/// };
+	/// let mut config = BrowsableApiConfig::default();
+	/// config.enabled = true;
+	/// config.template_name = Some("custom_api.tpl".to_string());
+	/// config.custom_css = Some("/static/api.css".to_string());
 	///
 	/// let middleware = BrowsableApiMiddleware::with_config(config);
 	/// ```
@@ -106,6 +106,29 @@ impl BrowsableApiMiddleware {
 		false
 	}
 
+	/// Extract CSRF token from response Set-Cookie header.
+	///
+	/// Parses the Set-Cookie header to find the csrftoken cookie value,
+	/// which is set by the CSRF middleware.
+	fn extract_csrf_token(response: &Response) -> Option<String> {
+		response
+			.headers
+			.get_all("set-cookie")
+			.iter()
+			.filter_map(|v| v.to_str().ok())
+			.find_map(|cookie| {
+				cookie.split(';').next().and_then(|kv| {
+					let (name, value) = kv.trim().split_once('=')?;
+
+					if name == "csrftoken" {
+						Some(value.to_string())
+					} else {
+						None
+					}
+				})
+			})
+	}
+
 	/// Convert JSON response to HTML with request info
 	fn convert_to_html_with_info(
 		&self,
@@ -117,6 +140,9 @@ impl BrowsableApiMiddleware {
 		let json_body: serde_json::Value = serde_json::from_slice(&response.body).map_err(|e| {
 			reinhardt_core::exception::Error::Other(anyhow::anyhow!("Failed to parse JSON: {}", e))
 		})?;
+
+		// Extract CSRF token from response cookies for form inclusion
+		let csrf_token = Self::extract_csrf_token(&response);
 
 		// Extract headers for display
 		let headers: Vec<(String, String)> = response
@@ -141,7 +167,7 @@ impl BrowsableApiMiddleware {
 			allowed_methods: vec!["GET".to_string()], // Default, should be extracted from response
 			request_form: None,                       // Could be populated from OPTIONS response
 			headers,
-			csrf_token: None, // Can be populated from CSRF middleware if available
+			csrf_token,
 		};
 
 		// Render HTML
@@ -149,10 +175,17 @@ impl BrowsableApiMiddleware {
 			reinhardt_core::exception::Error::Other(anyhow::anyhow!("Failed to render HTML: {}", e))
 		})?;
 
-		// Create new response with HTML body
-		Ok(Response::new(response.status)
+		// Create new response with HTML body, preserving Set-Cookie headers
+		let mut html_response = Response::new(response.status)
 			.with_body(html)
-			.with_header("content-type", "text/html; charset=utf-8"))
+			.with_header("content-type", "text/html; charset=utf-8");
+
+		// Copy Set-Cookie headers to HTML response so CSRF cookie is sent
+		for value in response.headers.get_all("set-cookie").iter() {
+			html_response.headers.append("set-cookie", value.clone());
+		}
+
+		Ok(html_response)
 	}
 }
 
@@ -233,7 +266,11 @@ mod tests {
 		let body = String::from_utf8(response.body.to_vec()).unwrap();
 		assert!(body.contains("<!DOCTYPE html>"), "Missing DOCTYPE");
 		assert!(body.contains("API Response"), "Missing 'API Response'");
-		assert!(body.contains("/api/test"), "Missing '/api/test'");
+		// Tera autoescapes `/` as `&#x2F;` for XSS protection
+		assert!(
+			body.contains("&#x2F;api&#x2F;test"),
+			"Missing '/api/test' (HTML-escaped)"
+		);
 		// The response data is rendered in pre-formatted JSON
 		assert!(body.contains("data"), "Missing 'data' in body: {}", body);
 		assert!(body.contains("test"), "Missing 'test' in body");

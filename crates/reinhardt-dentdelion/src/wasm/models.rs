@@ -19,8 +19,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Database column type.
+///
+/// This enum is marked `#[non_exhaustive]` to allow adding new column types
+/// in future minor versions without breaking downstream code. Match arms
+/// should include a wildcard pattern.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ColumnType {
 	/// Integer (4 bytes)
 	Integer,

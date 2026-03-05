@@ -401,7 +401,8 @@ impl WebSocketServer {
 		peer_addr: SocketAddr,
 		broadcast_manager: Option<BroadcastManager>,
 	) -> Result<(), Box<dyn std::error::Error>> {
-		println!("WebSocket connection from: {}", peer_addr);
+		#[cfg(debug_assertions)]
+		eprintln!("[ws:debug] new connection from: {}", peer_addr);
 
 		let ws_stream = accept_async(stream).await?;
 		let (write, mut read) = ws_stream.split();
@@ -431,7 +432,8 @@ impl WebSocketServer {
 						Some(Ok(msg)) => {
 							if msg.is_text() {
 								let text = msg.to_text()?;
-								println!("Received from {}: {}", peer_addr, text);
+								#[cfg(debug_assertions)]
+								eprintln!("[ws:trace] text message from peer ({} bytes)", text.len());
 
 								// Process message through handler
 								match handler.handle_message(text.to_string()).await {
@@ -462,7 +464,8 @@ impl WebSocketServer {
 								}
 							} else if msg.is_binary() {
 								let data = msg.into_data();
-								println!("Received binary message from {}: {} bytes", peer_addr, data.len());
+								#[cfg(debug_assertions)]
+								eprintln!("[ws:trace] binary message from peer ({} bytes)", data.len());
 
 								// Echo binary messages directly back to client
 								if use_broadcast {
@@ -477,7 +480,8 @@ impl WebSocketServer {
 									w.send(Message::Binary(data)).await?;
 								}
 							} else if msg.is_close() {
-								println!("Connection closing: {}", peer_addr);
+								#[cfg(debug_assertions)]
+								eprintln!("[ws:debug] connection closing for peer");
 								// Send close frame response before closing
 								if use_broadcast {
 									if let Some(ref manager) = broadcast_manager
@@ -516,7 +520,7 @@ impl WebSocketServer {
 							&& let Some(client) = manager.clients.read().await.get(&peer_addr) {
 								let mut sender = client.sender.lock().await;
 								if let Err(e) = sender.send(Message::Text(msg.into())).await {
-									eprintln!("Failed to send broadcast to {}: {}", peer_addr, e);
+									eprintln!("Failed to send broadcast message: {}", e);
 									break;
 								}
 							}
@@ -532,7 +536,8 @@ impl WebSocketServer {
 		// Notify handler of disconnection
 		handler.on_disconnect().await;
 
-		println!("WebSocket connection closed: {}", peer_addr);
+		#[cfg(debug_assertions)]
+		eprintln!("[ws:debug] connection closed for peer");
 		Ok(())
 	}
 }

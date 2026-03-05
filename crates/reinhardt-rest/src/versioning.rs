@@ -51,6 +51,7 @@ pub use reverse::{
 	VersioningStrategy as ReverseVersioningStrategy,
 };
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 use thiserror::Error as ThisError;
 
 #[derive(Debug, ThisError)]
@@ -324,7 +325,7 @@ impl URLPathVersioning {
 	/// let custom_regex = Regex::new(r"/api/v(\d+)").unwrap();
 	/// let versioning = URLPathVersioning::new()
 	///     .with_path_regex(custom_regex);
-	// The versioning will now match paths like /api/v1, /api/v2, etc.
+	/// // The versioning will now match paths like /api/v1, /api/v2, etc.
 	/// ```
 	pub fn with_path_regex(mut self, regex: Regex) -> Self {
 		self.path_regex = regex;
@@ -342,7 +343,7 @@ impl URLPathVersioning {
 	///
 	/// let versioning = URLPathVersioning::new()
 	///     .with_pattern("/v{version}/");
-	// The versioning will now match paths like /v1/, /v2/, etc.
+	/// // The versioning will now match paths like /v1/, /v2/, etc.
 	/// ```
 	pub fn with_pattern(mut self, pattern: &str) -> Self {
 		// Convert pattern like "/v{version}/" to regex "/v?([^/]+)"
@@ -473,7 +474,7 @@ impl HostNameVersioning {
 	/// let custom_regex = Regex::new(r"^v(\d+)-api\.").unwrap();
 	/// let versioning = HostNameVersioning::new()
 	///     .with_hostname_regex(custom_regex);
-	// The versioning will now match hostnames like v1-api.example.com
+	/// // The versioning will now match hostnames like v1-api.example.com
 	/// ```
 	pub fn with_hostname_regex(mut self, regex: Regex) -> Self {
 		self.hostname_regex = regex;
@@ -491,11 +492,15 @@ impl HostNameVersioning {
 	///
 	/// let versioning = HostNameVersioning::new()
 	///     .with_host_format("{version}.api.example.com");
-	// The versioning will match hostnames like v1.api.example.com
+	/// // The versioning will match hostnames like v1.api.example.com
 	/// ```
 	pub fn with_host_format(mut self, format: &str) -> Self {
 		// Convert format like "{version}.api.example.com" to regex "^([^.]+)\.api\.example\.com"
-		let pattern = format.replace("{version}", "([^.]+)").replace(".", "\\.");
+		// Escape dots first, then replace placeholder to prevent regex corruption
+		const PLACEHOLDER: &str = "__REINHARDT_VERSION_PLACEHOLDER__";
+		let pattern = format.replace("{version}", PLACEHOLDER);
+		let pattern = pattern.replace(".", "\\.");
+		let pattern = pattern.replace(PLACEHOLDER, "([^.]+)");
 		let pattern = format!("^{}", pattern);
 		if let Ok(regex) = Regex::new(&pattern) {
 			self.hostname_regex = regex;
@@ -649,7 +654,7 @@ impl QueryParameterVersioning {
 	/// let versioning = QueryParameterVersioning::new()
 	///     .with_version_param("v");
 	/// assert_eq!(versioning.version_param.as_str(), "v");
-	// This will now look for ?v=1.0 instead of ?version=1.0
+	/// // This will now look for ?v=1.0 instead of ?version=1.0
 	/// ```
 	pub fn with_version_param(mut self, param: impl Into<String>) -> Self {
 		self.version_param = param.into();
@@ -707,7 +712,7 @@ impl BaseVersioning for QueryParameterVersioning {
 ///
 /// Extracts version from URL namespace patterns (e.g., /v1/, /v2/)
 /// Now fully implemented with router namespace support
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct NamespaceVersioning {
 	pub default_version: Option<String>,
 	pub allowed_versions: HashSet<String>,
@@ -715,6 +720,21 @@ pub struct NamespaceVersioning {
 	pub pattern: String,
 	/// Namespace prefix (e.g., "api")
 	pub namespace_prefix: Option<String>,
+	/// Cached compiled regex for version extraction
+	compiled_regex: OnceLock<Option<Regex>>,
+}
+
+impl Clone for NamespaceVersioning {
+	fn clone(&self) -> Self {
+		Self {
+			default_version: self.default_version.clone(),
+			allowed_versions: self.allowed_versions.clone(),
+			pattern: self.pattern.clone(),
+			namespace_prefix: self.namespace_prefix.clone(),
+			// Reset compiled_regex so it will be recompiled on first use
+			compiled_regex: OnceLock::new(),
+		}
+	}
 }
 
 impl NamespaceVersioning {
@@ -735,6 +755,7 @@ impl NamespaceVersioning {
 			allowed_versions: HashSet::new(),
 			pattern: "/v{version}/".to_string(),
 			namespace_prefix: None,
+			compiled_regex: OnceLock::new(),
 		}
 	}
 	/// Set the default version to use when no version is found in namespace
@@ -804,6 +825,8 @@ impl NamespaceVersioning {
 	/// ```
 	pub fn with_pattern(mut self, pattern: &str) -> Self {
 		self.pattern = pattern.to_string();
+		// Reset cached regex since the pattern changed
+		self.compiled_regex = OnceLock::new();
 		self
 	}
 }
@@ -843,16 +866,23 @@ impl BaseVersioning for NamespaceVersioning {
 }
 
 impl NamespaceVersioning {
+	/// Get or compile the regex for version extraction from the configured pattern
+	fn get_compiled_regex(&self) -> Option<&Regex> {
+		self.compiled_regex
+			.get_or_init(|| {
+				let regex_pattern = self
+					.pattern
+					.replace("{version}", r"([^/]+)")
+					.replace("/", r"\/");
+				let full_pattern = format!("^{}", regex_pattern);
+				regex::Regex::new(&full_pattern).ok()
+			})
+			.as_ref()
+	}
+
 	/// Extract version from a path using the configured pattern
 	fn extract_version_from_path(&self, path: &str) -> Option<String> {
-		// Convert pattern like "/v{version}/" to regex with capture group
-		let regex_pattern = self
-			.pattern
-			.replace("{version}", r"([^/]+)")
-			.replace("/", r"\/");
-		let full_pattern = format!("^{}", regex_pattern);
-
-		if let Ok(regex) = regex::Regex::new(&full_pattern)
+		if let Some(regex) = self.get_compiled_regex()
 			&& let Some(captures) = regex.captures(path)
 			&& let Some(version_match) = captures.get(1)
 		{
@@ -1093,6 +1123,34 @@ mod tests {
 		let request = create_test_request("/v1/users/", vec![]);
 		let version = versioning.determine_version(&request).await.unwrap();
 		assert_eq!(version, "1.0"); // Falls back to default
+	}
+
+	#[tokio::test]
+	async fn test_hostname_versioning_with_host_format_dots_not_corrupted() {
+		// Arrange - format with dots that would be corrupted by the old implementation
+		let versioning = HostNameVersioning::new()
+			.with_host_format("{version}.api.v2.example.com")
+			.with_allowed_versions(vec!["v1", "v3"]);
+
+		// Act
+		let request = create_test_request(
+			"/users/",
+			vec![("host".to_string(), "v1.api.v2.example.com".to_string())],
+		);
+		let version = versioning.determine_version(&request).await.unwrap();
+
+		// Assert
+		assert_eq!(version, "v1");
+
+		// Act - different version
+		let request = create_test_request(
+			"/users/",
+			vec![("host".to_string(), "v3.api.v2.example.com".to_string())],
+		);
+		let version = versioning.determine_version(&request).await.unwrap();
+
+		// Assert
+		assert_eq!(version, "v3");
 	}
 
 	// Note: Router integration test removed to avoid circular dependency with reinhardt-urls.

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// Configuration for redirect fallback behavior
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RedirectResponseConfig {
 	/// The fallback URL to redirect to on 404 errors

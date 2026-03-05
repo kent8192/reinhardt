@@ -1,6 +1,6 @@
 use reinhardt_test::containers::RedisContainer;
-use reinhardt_utils::cache::redis_backend::RedisCache;
 use reinhardt_utils::cache::Cache;
+use reinhardt_utils::cache::redis_backend::RedisCache;
 use std::time::Duration;
 
 #[tokio::test]

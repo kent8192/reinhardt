@@ -91,6 +91,7 @@ pub use advanced::{
 };
 
 /// Main settings structure for a Reinhardt project
+#[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Settings {
 	/// Base directory of the project
@@ -462,6 +463,7 @@ impl Default for Settings {
 pub use database_config::DatabaseConfig;
 
 /// Template engine configuration
+#[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TemplateConfig {
 	/// Template backend/engine
@@ -541,6 +543,7 @@ impl Default for TemplateConfig {
 }
 
 /// Middleware configuration
+#[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MiddlewareConfig {
 	/// Full path to the middleware class

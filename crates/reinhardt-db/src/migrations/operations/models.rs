@@ -37,6 +37,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 /// Validation errors that can occur during migration operations
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ValidationError {
 	/// Composite primary key list is empty
@@ -540,7 +541,7 @@ impl CreateModel {
 	///     ],
 	/// );
 	///
-	// Convert to SQL - actual DB operations would use schema editor
+	/// // Convert to SQL - actual DB operations would use schema editor
 	/// let columns: Vec<(&str, String)> = create.fields
 	///     .iter()
 	///     .map(|f| (f.name.as_str(), f.to_sql_definition()))
@@ -667,7 +668,7 @@ impl CreateModel {
 ///
 /// let mut state = ProjectState::new();
 ///
-// First create a model
+/// // First create a model
 /// let create = CreateModel::new(
 ///     "User",
 ///     vec![FieldDefinition::new("id", FieldType::Integer, true, false, Option::<&str>::None)],
@@ -675,7 +676,7 @@ impl CreateModel {
 /// create.state_forwards("myapp", &mut state);
 /// assert!(state.get_model("myapp", "User").is_some());
 ///
-// Then delete it
+/// // Then delete it
 /// let delete = DeleteModel::new("User");
 /// delete.state_forwards("myapp", &mut state);
 /// assert!(state.get_model("myapp", "User").is_none());
@@ -730,14 +731,14 @@ impl DeleteModel {
 ///
 /// let mut state = ProjectState::new();
 ///
-// Create a model
+/// // Create a model
 /// let create = CreateModel::new(
 ///     "User",
 ///     vec![FieldDefinition::new("id", FieldType::Integer, true, false, Option::<&str>::None)],
 /// );
 /// create.state_forwards("myapp", &mut state);
 ///
-// Rename it
+/// // Rename it
 /// let rename = RenameModel::new("User", "Customer");
 /// rename.state_forwards("myapp", &mut state);
 ///

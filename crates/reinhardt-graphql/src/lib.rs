@@ -69,6 +69,7 @@
 //! ```
 
 pub mod context;
+pub mod resolvers;
 pub mod schema;
 pub mod subscription;
 pub mod types;
@@ -79,12 +80,12 @@ pub mod di;
 #[cfg(feature = "graphql-grpc")]
 pub mod grpc_service;
 
-pub use context::{DataLoader, GraphQLContext, LoaderError};
+pub use context::{ContextError, DataLoader, GraphQLContext, LoaderError};
 pub use schema::{
 	AppSchema, CreateUserInput, Mutation, Query, QueryLimits, User, UserStorage, create_schema,
-	create_schema_with_limits,
+	create_schema_with_limits, validate_query,
 };
-pub use subscription::{EventBroadcaster, SubscriptionRoot, UserEvent};
+pub use subscription::{DEFAULT_CHANNEL_CAPACITY, EventBroadcaster, SubscriptionRoot, UserEvent};
 
 #[cfg(feature = "graphql-grpc")]
 pub use grpc_service::GraphQLGrpcService;

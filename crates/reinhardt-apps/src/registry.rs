@@ -23,7 +23,7 @@
 
 use linkme::distributed_slice;
 use std::collections::HashMap;
-use std::sync::{OnceLock, RwLock};
+use std::sync::{OnceLock, PoisonError, RwLock};
 
 /// Metadata for a registered model
 ///
@@ -458,8 +458,7 @@ static REVERSE_RELATIONS: OnceLock<HashMap<String, Vec<ReverseRelationMetadata>>
 
 /// Registers a reverse relation during the initialization phase.
 ///
-/// Must be called before `finalize_reverse_relations()`. Panics if called
-/// after finalization.
+/// Must be called before `finalize_reverse_relations()`.
 ///
 /// # Examples
 ///
@@ -473,18 +472,24 @@ static REVERSE_RELATIONS: OnceLock<HashMap<String, Vec<ReverseRelationMetadata>>
 ///     ReverseRelationType::ReverseOneToMany,
 ///     "author",
 /// );
-/// register_reverse_relation(reverse_relation);
+/// register_reverse_relation(reverse_relation).unwrap();
 /// ```
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if called after `finalize_reverse_relations()` has been called.
-pub fn register_reverse_relation(relation: ReverseRelationMetadata) {
+/// Returns [`crate::AppError::RegistryState`] if called after `finalize_reverse_relations()`.
+pub fn register_reverse_relation(relation: ReverseRelationMetadata) -> Result<(), crate::AppError> {
 	if REVERSE_RELATIONS.get().is_some() {
-		panic!("Cannot register reverse relations after finalization");
+		return Err(crate::AppError::RegistryState(
+			"Cannot register reverse relations after finalization".to_string(),
+		));
 	}
-	let mut builder = REVERSE_RELATIONS_BUILDER.write().unwrap();
+	// Recover from poisoned lock to prevent cascading panics
+	let mut builder = REVERSE_RELATIONS_BUILDER
+		.write()
+		.unwrap_or_else(PoisonError::into_inner);
 	builder.push(relation);
+	Ok(())
 }
 
 /// Finalizes the reverse relations, making them immutable.
@@ -496,7 +501,10 @@ pub fn finalize_reverse_relations() {
 	if REVERSE_RELATIONS.get().is_some() {
 		return;
 	}
-	let builder = REVERSE_RELATIONS_BUILDER.read().unwrap();
+	// Recover from poisoned lock to prevent cascading panics
+	let builder = REVERSE_RELATIONS_BUILDER
+		.read()
+		.unwrap_or_else(PoisonError::into_inner);
 	let mut indexed = HashMap::new();
 	for relation in builder.iter() {
 		indexed
@@ -525,6 +533,46 @@ pub fn get_reverse_relations_for_model(model_name: &str) -> Vec<ReverseRelationM
 		.and_then(|m| m.get(model_name))
 		.cloned()
 		.unwrap_or_default()
+}
+
+/// Resets all global registry caches for test isolation.
+///
+/// This clears the `MODEL_CACHE`, `RELATIONSHIP_CACHE`, and `REVERSE_RELATIONS`
+/// `OnceLock` instances so that each test can start with a clean slate.
+/// Also clears the `REVERSE_RELATIONS_BUILDER` `RwLock` vec.
+///
+/// # Safety
+///
+/// This function replaces static `OnceLock` values using `std::ptr::write`.
+/// It is only safe to call from a single-threaded test context (e.g., with
+/// `#[serial]`) where no other thread is concurrently reading these statics.
+#[cfg(test)]
+pub fn reset_global_registry() {
+	use std::sync::PoisonError;
+
+	// Clear the builder vec
+	let mut builder = REVERSE_RELATIONS_BUILDER
+		.write()
+		.unwrap_or_else(PoisonError::into_inner);
+	builder.clear();
+	drop(builder);
+
+	// SAFETY: We replace each OnceLock in-place with a fresh instance.
+	// This is safe only when called from a single-threaded test context
+	// (enforced by #[serial]) where no concurrent readers exist.
+	unsafe {
+		let model_cache_ptr = std::ptr::addr_of!(MODEL_CACHE)
+			as *mut OnceLock<HashMap<&'static str, Vec<&'static ModelMetadata>>>;
+		std::ptr::write(model_cache_ptr, OnceLock::new());
+
+		let rel_cache_ptr = std::ptr::addr_of!(RELATIONSHIP_CACHE)
+			as *mut OnceLock<HashMap<&'static str, Vec<&'static RelationshipMetadata>>>;
+		std::ptr::write(rel_cache_ptr, OnceLock::new());
+
+		let rev_rel_ptr = std::ptr::addr_of!(REVERSE_RELATIONS)
+			as *mut OnceLock<HashMap<String, Vec<ReverseRelationMetadata>>>;
+		std::ptr::write(rev_rel_ptr, OnceLock::new());
+	}
 }
 
 #[cfg(test)]
@@ -729,5 +777,42 @@ mod tests {
 
 		assert_eq!(rel1, rel2);
 		assert_ne!(rel1, rel3);
+	}
+
+	#[rstest]
+	fn test_rwlock_poison_recovery_write() {
+		// Arrange
+		let lock = RwLock::new(vec![1, 2, 3]);
+
+		// Poison the lock by panicking inside a write guard
+		let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			let _guard = lock.write().unwrap();
+			panic!("intentional panic to poison the lock");
+		}));
+
+		// Act: recover from poisoned lock using PoisonError::into_inner
+		let mut guard = lock.write().unwrap_or_else(PoisonError::into_inner);
+		guard.push(4);
+
+		// Assert: data is accessible and intact after recovery
+		assert_eq!(*guard, vec![1, 2, 3, 4]);
+	}
+
+	#[rstest]
+	fn test_rwlock_poison_recovery_read() {
+		// Arrange
+		let lock = RwLock::new(vec![10, 20, 30]);
+
+		// Poison the lock by panicking inside a write guard
+		let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			let _guard = lock.write().unwrap();
+			panic!("intentional panic to poison the lock");
+		}));
+
+		// Act: recover from poisoned lock using PoisonError::into_inner
+		let guard = lock.read().unwrap_or_else(PoisonError::into_inner);
+
+		// Assert: data is readable after recovery
+		assert_eq!(*guard, vec![10, 20, 30]);
 	}
 }

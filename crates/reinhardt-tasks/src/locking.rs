@@ -52,7 +52,13 @@ pub trait TaskLock: Send + Sync {
 	async fn is_locked(&self, task_id: TaskId) -> TaskResult<bool>;
 
 	/// Extend the TTL of an existing lock
+	///
+	/// Implementors should override this with a backend-specific atomic operation
+	/// to avoid race conditions where another worker could steal the lock between
+	/// release and re-acquire.
 	async fn extend(&self, task_id: TaskId, ttl: Duration) -> TaskResult<bool> {
+		// Default: check-then-release-then-acquire is non-atomic.
+		// Concrete implementations should override with atomic operations.
 		if self.is_locked(task_id).await? {
 			self.release(task_id).await?;
 			self.acquire(task_id, ttl).await
@@ -88,7 +94,8 @@ pub trait TaskLock: Send + Sync {
 /// # }
 /// ```
 pub struct MemoryTaskLock {
-	locks: Arc<RwLock<std::collections::HashMap<TaskId, i64>>>,
+	/// Map of task ID to expiry timestamp in milliseconds since epoch
+	locks: Arc<RwLock<std::collections::HashMap<TaskId, i128>>>,
 }
 
 impl MemoryTaskLock {
@@ -110,7 +117,7 @@ impl MemoryTaskLock {
 	/// Clean up expired locks
 	async fn cleanup_expired(&self) {
 		let mut locks = self.locks.write().await;
-		let now = chrono::Utc::now().timestamp();
+		let now = chrono::Utc::now().timestamp_millis() as i128;
 		locks.retain(|_, &mut expiry| expiry > now);
 	}
 }
@@ -127,8 +134,9 @@ impl TaskLock for MemoryTaskLock {
 		self.cleanup_expired().await;
 
 		let mut locks = self.locks.write().await;
-		let now = chrono::Utc::now().timestamp();
-		let expiry = now + ttl.as_secs() as i64;
+		let now = chrono::Utc::now().timestamp_millis() as i128;
+		// Use as_millis() instead of as_secs() to preserve sub-second durations
+		let expiry = now + ttl.as_millis() as i128;
 
 		if let Some(&existing_expiry) = locks.get(&task_id)
 			&& existing_expiry > now
@@ -150,12 +158,32 @@ impl TaskLock for MemoryTaskLock {
 		self.cleanup_expired().await;
 
 		let locks = self.locks.read().await;
-		let now = chrono::Utc::now().timestamp();
+		let now = chrono::Utc::now().timestamp_millis() as i128;
 
 		Ok(locks
 			.get(&task_id)
 			.map(|&expiry| expiry > now)
 			.unwrap_or(false))
+	}
+
+	/// Atomically extend the TTL of an existing lock.
+	///
+	/// Unlike the default trait implementation which releases then re-acquires,
+	/// this holds the write lock throughout the operation to prevent another
+	/// worker from stealing the lock in between.
+	async fn extend(&self, task_id: TaskId, ttl: Duration) -> TaskResult<bool> {
+		let mut locks = self.locks.write().await;
+		let now = chrono::Utc::now().timestamp_millis() as i128;
+
+		if let Some(expiry) = locks.get_mut(&task_id)
+			&& *expiry > now
+		{
+			// Lock is still valid; atomically update its expiry
+			*expiry = now + ttl.as_millis() as i128;
+			return Ok(true);
+		}
+
+		Ok(false)
 	}
 }
 
@@ -292,83 +320,184 @@ impl TaskLock for RedisTaskLock {
 
 		result.map_err(|e| TaskError::ExecutionFailed(format!("Failed to check lock: {}", e)))
 	}
+
+	/// Atomically extend the TTL using Redis EXPIRE command.
+	///
+	/// This avoids the non-atomic release-then-acquire pattern in the default
+	/// implementation. If the key exists, its TTL is updated in a single command.
+	async fn extend(&self, task_id: TaskId, ttl: Duration) -> TaskResult<bool> {
+		use crate::TaskError;
+		use redis::AsyncCommands;
+
+		let mut conn = (*self.connection).clone();
+		let key = self.lock_key(task_id);
+
+		// EXPIRE returns true if the key exists and timeout was set
+		let result: Result<bool, redis::RedisError> = conn.expire(&key, ttl.as_secs() as i64).await;
+
+		result.map_err(|e| TaskError::ExecutionFailed(format!("Failed to extend lock: {}", e)))
+	}
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 	use std::time::Duration;
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_memory_lock_acquire() {
+		// Arrange
 		let lock = MemoryTaskLock::new();
 		let task_id = TaskId::new();
 
+		// Act
 		let acquired = lock
 			.acquire(task_id, Duration::from_secs(60))
 			.await
 			.unwrap();
+
+		// Assert
 		assert!(acquired);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_memory_lock_already_locked() {
+		// Arrange
 		let lock = MemoryTaskLock::new();
 		let task_id = TaskId::new();
-
 		lock.acquire(task_id, Duration::from_secs(60))
 			.await
 			.unwrap();
+
+		// Act
 		let acquired = lock
 			.acquire(task_id, Duration::from_secs(60))
 			.await
 			.unwrap();
+
+		// Assert
 		assert!(!acquired);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_memory_lock_release() {
+		// Arrange
 		let lock = MemoryTaskLock::new();
 		let task_id = TaskId::new();
-
 		lock.acquire(task_id, Duration::from_secs(60))
 			.await
 			.unwrap();
+
+		// Act
 		lock.release(task_id).await.unwrap();
 
+		// Assert
 		let is_locked = lock.is_locked(task_id).await.unwrap();
 		assert!(!is_locked);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_memory_lock_expiry() {
+		// Arrange
 		let lock = MemoryTaskLock::new();
 		let task_id = TaskId::new();
-
-		lock.acquire(task_id, Duration::from_millis(100))
+		lock.acquire(task_id, Duration::from_millis(50))
 			.await
 			.unwrap();
 
+		// Act
+		tokio::time::sleep(Duration::from_millis(100)).await;
+
+		// Assert
 		let is_locked = lock.is_locked(task_id).await.unwrap();
 		assert!(!is_locked);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_memory_lock_extend() {
+		// Arrange
 		let lock = MemoryTaskLock::new();
 		let task_id = TaskId::new();
-
 		lock.acquire(task_id, Duration::from_secs(60))
 			.await
 			.unwrap();
 
+		// Act
 		let extended = lock
 			.extend(task_id, Duration::from_secs(120))
 			.await
 			.unwrap();
-		assert!(extended);
 
+		// Assert
+		assert!(extended);
 		let is_locked = lock.is_locked(task_id).await.unwrap();
 		assert!(is_locked);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_memory_lock_extend_returns_false_for_unlocked_task() {
+		// Arrange
+		let lock = MemoryTaskLock::new();
+		let task_id = TaskId::new();
+
+		// Act - extend without acquiring first
+		let extended = lock
+			.extend(task_id, Duration::from_secs(120))
+			.await
+			.unwrap();
+
+		// Assert
+		assert!(!extended);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_memory_lock_extend_returns_false_for_expired_lock() {
+		// Arrange
+		let lock = MemoryTaskLock::new();
+		let task_id = TaskId::new();
+		lock.acquire(task_id, Duration::from_millis(50))
+			.await
+			.unwrap();
+		tokio::time::sleep(Duration::from_millis(100)).await;
+
+		// Act - extend an expired lock
+		let extended = lock
+			.extend(task_id, Duration::from_secs(120))
+			.await
+			.unwrap();
+
+		// Assert
+		assert!(!extended);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_memory_lock_extend_is_atomic() {
+		// Arrange - verify that extend does not release the lock at any point
+		let lock = Arc::new(MemoryTaskLock::new());
+		let task_id = TaskId::new();
+		lock.acquire(task_id, Duration::from_millis(200))
+			.await
+			.unwrap();
+
+		// Act - extend the lock
+		let extended = lock.extend(task_id, Duration::from_secs(60)).await.unwrap();
+
+		// Assert - lock should still be held and not have been released
+		assert!(extended);
+		// A second acquire should fail because the lock was never released
+		let second_acquire = lock
+			.acquire(task_id, Duration::from_secs(60))
+			.await
+			.unwrap();
+		assert!(!second_acquire);
 	}
 }

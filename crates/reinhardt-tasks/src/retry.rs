@@ -142,6 +142,14 @@ impl RetryStrategy {
 
 	/// Set the backoff multiplier
 	///
+	/// The multiplier must be greater than 0.0.
+	/// Values <= 0.0 or NaN/Infinity are rejected with a panic to prevent
+	/// infinite loops or nonsensical delay calculations.
+	///
+	/// # Panics
+	///
+	/// Panics if `multiplier` is <= 0.0, NaN, or Infinity.
+	///
 	/// # Examples
 	///
 	/// ```rust
@@ -151,6 +159,11 @@ impl RetryStrategy {
 	///     .with_multiplier(3.0);
 	/// ```
 	pub fn with_multiplier(mut self, multiplier: f64) -> Self {
+		assert!(
+			multiplier > 0.0 && multiplier.is_finite(),
+			"RetryStrategy multiplier must be a positive finite number, got {}",
+			multiplier
+		);
 		self.multiplier = multiplier;
 		self
 	}

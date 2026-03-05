@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 /// Error type for composite synonym operations
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum SynonymError {
 	FieldNotFound(String),

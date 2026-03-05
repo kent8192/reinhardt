@@ -11,7 +11,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/reinhardt-web.svg)](https://crates.io/crates/reinhardt-web)
 [![Documentation](https://docs.rs/reinhardt-web/badge.svg)](https://docs.rs/reinhardt-web)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![codecov](https://codecov.io/gh/kent8192/reinhardt-web/graph/badge.svg)](https://codecov.io/gh/kent8192/reinhardt-web)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/kent8192/reinhardt-web)
 
@@ -25,12 +25,70 @@
 
 You may be looking for:
 
+- 🌐 [Official Website](https://reinhardt-web.dev) - Documentation, tutorials, and guides
 - 🚀 [Quick Start](#quick-start) - Get up and running in 5 minutes
 - 📦 [Installation Options](#installation) - Choose your flavor: Micro, Standard, or Full
-- 📚 [Getting Started Guide](docs/GETTING_STARTED.md) - Step-by-step tutorial
-- 🎛️ [Feature Flags](docs/FEATURE_FLAGS.md) - Fine-tune your build
+- 📚 [Getting Started Guide](https://reinhardt-web.dev/quickstart/getting-started/) - Step-by-step tutorial
+- 🎛️ [Feature Flags](https://reinhardt-web.dev/docs/feature-flags/) - Fine-tune your build
 - 📖 [API Documentation](https://docs.rs/reinhardt-web) - Complete API reference
+- 🎯 [Who is Reinhardt For?](#who-is-reinhardt-for) - Check if Reinhardt fits your needs
+- 🛤️ [Choose Your Path](#choose-your-path) - Find the right starting point for you
+- 🔒 [API Stability](#api-stability) - Our stability promise and release lifecycle
 - 💬 [Community & Support](#getting-help) - Get help from the community
+
+## Who is Reinhardt For?
+
+Reinhardt is designed for developers who:
+
+- **Know Django/DRF** and want the same productivity in Rust
+- **Use Axum/Actix** but miss Django's batteries (ORM, admin, auth, DI)
+- **Need a full-stack Rust framework** without adopting Leptos/Dioxus for the frontend
+- **Want incremental adoption** -- start with just DI or ORM, grow into a full stack later
+
+If you have written `ModelSerializer` or `Depends()` before, Reinhardt will feel like home.
+
+## Choose Your Path
+
+| Your Goal | Start Here | Time to First Request |
+|-----------|-----------|----------------------|
+| **Full-stack REST API** | [Quick Start](#quick-start) | ~5 min |
+| **Just DI for my Axum app** | [Minimal Installation](#minimal-micro-build) | ~2 min |
+| **Full-stack with Pages (WASM + SSR)** | [Twitter Demo](examples/examples-twitter/) | ~10 min |
+
+### Path A: Full-Stack REST API
+
+```bash
+cargo install reinhardt-admin
+reinhardt-admin startproject myproject
+cd myproject
+cargo make runserver
+# Visit http://127.0.0.1:8000
+```
+
+### Path B: Standalone DI
+
+```toml
+[dependencies]
+reinhardt = { version = "0.1.0-rc.2", package = "reinhardt-web", features = ["minimal"] }
+```
+
+```rust
+use reinhardt::{Json, Path, Query};
+
+#[reinhardt::endpoint(method = "GET", path = "/hello/:name")]
+async fn hello(Path(name): Path<String>) -> Json<String> {
+    Json(format!("Hello, {}!", name))
+}
+```
+
+### Path C: Full-Stack with Pages
+
+```bash
+reinhardt-admin startproject myproject --with-pages
+cd myproject
+cargo make dev
+# Frontend: http://127.0.0.1:8000
+```
 
 ## Why Reinhardt?
 
@@ -61,7 +119,28 @@ Reinhardt brings together the best of three worlds:
 - **Pagination, Filtering, Rate Limiting** built-in
 - **Signals** for event-driven architecture
 
-See [Available Components](#available-components) for complete list and [Getting Started](docs/GETTING_STARTED.md) for examples.
+See [Available Components](#available-components) for complete list and [Getting Started](https://reinhardt-web.dev/quickstart/getting-started/) for examples.
+
+## API Stability
+
+Reinhardt follows a **three-phase lifecycle** for every crate:
+
+| Phase | What to Expect |
+|-------|---------------|
+| **Alpha** (`0.x.0-alpha.N`) | APIs may change freely. Early adopters welcome. |
+| **RC** (`0.x.0-rc.N`) | API frozen. Bug fixes only. Safe to build against. |
+| **Stable** (`0.x.0`) | Full SemVer 2.0 guarantees. |
+
+**Current status:** All crates are at `0.1.0-rc` (Release Candidate).
+
+**What this means for you:**
+- Public APIs will only change to fix critical bugs -- no new features or additions
+- If a critical fix requires an API change, a migration guide is provided
+- Naming improvements use deprecation aliases (your existing code keeps compiling)
+- Bug fixes are shipped as `rc.2`, `rc.3`, etc.
+- Stable `0.1.0` will be released after a 2-week stability period with no critical issues
+
+For the full stability policy, see [API Stability Policy](docs/API_STABILITY.md).
 
 ## Installation
 
@@ -78,7 +157,7 @@ Get all features with zero configuration:
 [dependencies]
 # Import as 'reinhardt', published as 'reinhardt-web'
 # Default enables ALL features (full bundle)
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web" }
+reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web" }
 ```
 
 **Includes:** Database, Auth, REST API, Admin, GraphQL, WebSockets, Cache, i18n, Mail, Sessions, Static Files, Storage
@@ -97,7 +176,7 @@ For most projects that don't need all features:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-features = false, features = ["standard"] }
+reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web", default-features = false, features = ["standard"] }
 ```
 
 **Includes:** Core, Database (PostgreSQL), REST API, Auth, Middleware, Pages (WASM Frontend with SSR)
@@ -110,7 +189,7 @@ Lightweight and fast, perfect for simple APIs:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", default-features = false, features = ["minimal"] }
+reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 ```
 
 **Includes:** HTTP, routing, DI, parameter extraction, server
@@ -124,27 +203,27 @@ Install only the components you need:
 ```toml
 [dependencies]
 # Core components
-reinhardt-http = "0.1.0-alpha.1"
-reinhardt-urls = "0.1.0-alpha.1"
+reinhardt-http = "0.1.0-rc.1"
+reinhardt-urls = "0.1.0-rc.1"
 
 # Optional: Database
-reinhardt-db = "0.1.0-alpha.1"
+reinhardt-db = "0.1.0-rc.1"
 
 # Optional: Authentication
-reinhardt-auth = "0.1.0-alpha.1"
+reinhardt-auth = "0.1.0-rc.1"
 
 # Optional: REST API features
-reinhardt-rest = "0.1.0-alpha.1"
+reinhardt-rest = "0.1.0-rc.1"
 
 # Optional: Admin panel
-reinhardt-admin = "0.1.0-alpha.1"
+reinhardt-admin = "0.1.0-rc.1"
 
 # Optional: Advanced features
-reinhardt-graphql = "0.1.0-alpha.1"
-reinhardt-websockets = "0.1.0-alpha.1"
+reinhardt-graphql = "0.1.0-rc.1"
+reinhardt-websockets = "0.1.0-rc.1"
 ```
 
-**📖 For a complete list of available crates and feature flags, see the [Feature Flags Guide](docs/FEATURE_FLAGS.md).**
+**📖 For a complete list of available crates and feature flags, see the [Feature Flags Guide](https://reinhardt-web.dev/docs/feature-flags/).**
 
 ## Quick Start
 
@@ -310,9 +389,9 @@ framework for discovery via the `inventory` crate.
 - **`cache` feature**: `Cache`, `InMemoryCache`
 - **`sessions` feature**: `Session`, `AuthenticationMiddleware`
 
-For a complete list, see [Feature Flags Guide](docs/FEATURE_FLAGS.md).
+For a complete list, see [Feature Flags Guide](https://reinhardt-web.dev/docs/feature-flags/).
 
-For a complete step-by-step guide, see [Getting Started](docs/GETTING_STARTED.md).
+For a complete step-by-step guide, see [Getting Started](https://reinhardt-web.dev/quickstart/getting-started/).
 
 ## 🎓 Learn by Example
 
@@ -1002,16 +1081,16 @@ Reinhardt offers modular components you can mix and match:
 | **Testing**         |                           |                                             |
 | Test Utilities      | `reinhardt-test`          | Testing helpers, fixtures, TestContainers   |
 
-**For detailed feature flags within each crate, see the [Feature Flags Guide](docs/FEATURE_FLAGS.md).**
+**For detailed feature flags within each crate, see the [Feature Flags Guide](https://reinhardt-web.dev/docs/feature-flags/).**
 
 ---
 
 ## Documentation
 
-- 📚 [Getting Started Guide](docs/GETTING_STARTED.md) - Step-by-step tutorial for beginners
-- 🎛️ [Feature Flags Guide](docs/FEATURE_FLAGS.md) - Optimize your build with granular feature control
+- 📚 [Getting Started Guide](https://reinhardt-web.dev/quickstart/getting-started/) - Step-by-step tutorial for beginners
+- 🎛️ [Feature Flags Guide](https://reinhardt-web.dev/docs/feature-flags/) - Optimize your build with granular feature control
 - 📖 [API Reference](https://docs.rs/reinhardt) (Coming soon)
-- 📝 [Tutorials](docs/tutorials/) - Learn by building real applications
+- 📝 [Tutorials](https://reinhardt-web.dev/quickstart/tutorials/) - Learn by building real applications
 
 **For AI Assistants**: See [CLAUDE.md](CLAUDE.md) for project-specific coding standards, testing guidelines, and development conventions.
 
@@ -1020,13 +1099,13 @@ Reinhardt offers modular components you can mix and match:
 Reinhardt is a community-driven project. Here's where you can get help:
 
 - 💬 **Discord**: Join our Discord server for real-time chat (coming soon)
-- 💭 **GitHub Discussions**: [Ask questions and share ideas](https://github.com/kent8192/reinhardt-rs/discussions)
-- 🐛 **Issues**: [Report bugs](https://github.com/kent8192/reinhardt-rs/issues)
+- 💭 **GitHub Discussions**: [Ask questions and share ideas](https://github.com/kent8192/reinhardt-web/discussions)
+- 🐛 **Issues**: [Report bugs](https://github.com/kent8192/reinhardt-web/issues)
 - 📖 **Documentation**: [Read the guides](docs/)
 
 Before asking, please check:
 
-- ✅ [Getting Started Guide](docs/GETTING_STARTED.md)
+- ✅ [Getting Started Guide](https://reinhardt-web.dev/quickstart/getting-started/)
 - ✅ [Examples](examples/)
 - ✅ Existing GitHub Issues and Discussions
 
@@ -1050,14 +1129,15 @@ We love contributions! Please read our [Contributing Guide](CONTRIBUTING.md) to 
  </picture>
 </a>
 
+## Copyright
+
+Copyright © 2026 Tachyon Inc. All rights reserved.
+
+Developed by Tachyon Inc.
+
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
+This project is licensed under the [BSD 3-Clause License](LICENSE).
 
 ### Third-Party Attribution
 

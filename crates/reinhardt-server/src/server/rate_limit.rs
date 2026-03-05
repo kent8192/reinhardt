@@ -110,11 +110,20 @@ impl RateLimitConfig {
 	}
 }
 
-/// Rate limit entry for tracking requests
+/// Rate limit entry for tracking requests (fixed window strategy)
 #[derive(Debug, Clone)]
 struct RateLimitEntry {
 	count: usize,
 	window_start: Instant,
+}
+
+/// Rate limit entry for tracking requests (sliding window strategy)
+///
+/// Stores individual request timestamps to enable true sliding window behavior,
+/// where only requests within the most recent `window_duration` are counted.
+#[derive(Debug, Clone)]
+struct SlidingWindowEntry {
+	timestamps: Vec<Instant>,
 }
 
 /// Middleware that implements rate limiting
@@ -149,6 +158,7 @@ pub struct RateLimitHandler {
 	inner: Arc<dyn Handler>,
 	config: RateLimitConfig,
 	limits: Arc<RwLock<HashMap<IpAddr, RateLimitEntry>>>,
+	sliding_limits: Arc<RwLock<HashMap<IpAddr, SlidingWindowEntry>>>,
 }
 
 impl RateLimitHandler {
@@ -185,13 +195,36 @@ impl RateLimitHandler {
 			inner,
 			config,
 			limits: Arc::new(RwLock::new(HashMap::new())),
+			sliding_limits: Arc::new(RwLock::new(HashMap::new())),
 		}
 	}
 
 	/// Check if a request is allowed for the given IP
+	///
+	/// Dispatches to the appropriate rate limiting algorithm based on the
+	/// configured strategy.
 	async fn is_allowed(&self, ip: IpAddr) -> bool {
+		match self.config.strategy {
+			RateLimitStrategy::FixedWindow => self.is_allowed_fixed_window(ip).await,
+			RateLimitStrategy::SlidingWindow => self.is_allowed_sliding_window(ip).await,
+		}
+	}
+
+	/// Fixed window rate limiting: resets the counter when the window expires.
+	///
+	/// Also performs periodic eviction of stale entries to prevent
+	/// unbounded memory growth from accumulated per-IP state.
+	async fn is_allowed_fixed_window(&self, ip: IpAddr) -> bool {
 		let now = Instant::now();
 		let mut limits = self.limits.write().await;
+
+		// Periodically evict stale entries (entries whose window has expired)
+		// to prevent unbounded memory growth.
+		if limits.len() > 1024 {
+			limits.retain(|_, entry| {
+				now.duration_since(entry.window_start) < self.config.window_duration * 2
+			});
+		}
 
 		let entry = limits.entry(ip).or_insert(RateLimitEntry {
 			count: 0,
@@ -208,6 +241,44 @@ impl RateLimitHandler {
 		// Check if under limit
 		if entry.count < self.config.max_requests {
 			entry.count += 1;
+			true
+		} else {
+			false
+		}
+	}
+
+	/// Sliding window rate limiting: counts requests within the most recent
+	/// `window_duration` period, allowing smoother rate distribution.
+	///
+	/// Unlike fixed window, this approach does not have boundary spikes where
+	/// `2 * max_requests` could be served across a window boundary.
+	async fn is_allowed_sliding_window(&self, ip: IpAddr) -> bool {
+		let now = Instant::now();
+		let window = self.config.window_duration;
+		let mut limits = self.sliding_limits.write().await;
+
+		// Periodically evict stale entries to prevent unbounded memory growth.
+		if limits.len() > 1024 {
+			limits.retain(|_, entry| {
+				entry
+					.timestamps
+					.last()
+					.is_some_and(|&last| now.duration_since(last) < window * 2)
+			});
+		}
+
+		let entry = limits.entry(ip).or_insert(SlidingWindowEntry {
+			timestamps: Vec::new(),
+		});
+
+		// Remove timestamps outside the current window
+		entry
+			.timestamps
+			.retain(|&ts| now.duration_since(ts) < window);
+
+		// Check if under limit
+		if entry.timestamps.len() < self.config.max_requests {
+			entry.timestamps.push(now);
 			true
 		} else {
 			false
@@ -446,6 +517,119 @@ mod tests {
 	}
 
 	// Client IP extraction tests
+
+	#[tokio::test]
+	async fn test_sliding_window_requests_within_limit() {
+		// Arrange
+		let handler = Arc::new(TestHandler);
+		let config = RateLimitConfig::new(
+			3,
+			Duration::from_millis(200),
+			RateLimitStrategy::SlidingWindow,
+		);
+		let rate_limit_handler = RateLimitHandler::new(handler, config);
+
+		// Act / Assert - first 3 requests should succeed
+		for _ in 0..3 {
+			let request = Request::builder()
+				.method(http::Method::GET)
+				.uri("/")
+				.version(http::Version::HTTP_11)
+				.headers(http::HeaderMap::new())
+				.body(bytes::Bytes::new())
+				.build()
+				.unwrap();
+
+			let response = rate_limit_handler.handle(request).await.unwrap();
+			assert_eq!(response.status, http::StatusCode::OK);
+		}
+	}
+
+	#[tokio::test]
+	async fn test_sliding_window_requests_exceed_limit() {
+		// Arrange
+		let handler = Arc::new(TestHandler);
+		let config = RateLimitConfig::new(
+			2,
+			Duration::from_millis(200),
+			RateLimitStrategy::SlidingWindow,
+		);
+		let rate_limit_handler = RateLimitHandler::new(handler, config);
+
+		// Act - first 2 requests should succeed
+		for _ in 0..2 {
+			let request = Request::builder()
+				.method(http::Method::GET)
+				.uri("/")
+				.version(http::Version::HTTP_11)
+				.headers(http::HeaderMap::new())
+				.body(bytes::Bytes::new())
+				.build()
+				.unwrap();
+			let response = rate_limit_handler.handle(request).await.unwrap();
+			assert_eq!(response.status, http::StatusCode::OK);
+		}
+
+		// 3rd request should be rate limited
+		let request = Request::builder()
+			.method(http::Method::GET)
+			.uri("/")
+			.version(http::Version::HTTP_11)
+			.headers(http::HeaderMap::new())
+			.body(bytes::Bytes::new())
+			.build()
+			.unwrap();
+		let response = rate_limit_handler.handle(request).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, http::StatusCode::TOO_MANY_REQUESTS);
+	}
+
+	#[tokio::test]
+	async fn test_sliding_window_expires_old_requests() {
+		// Arrange
+		let handler = Arc::new(TestHandler);
+		let config = RateLimitConfig::new(
+			2,
+			Duration::from_millis(100),
+			RateLimitStrategy::SlidingWindow,
+		);
+		let rate_limit_handler = RateLimitHandler::new(handler, config);
+
+		// Act - use up the limit
+		for _ in 0..2 {
+			let request = Request::builder()
+				.method(http::Method::GET)
+				.uri("/")
+				.version(http::Version::HTTP_11)
+				.headers(http::HeaderMap::new())
+				.body(bytes::Bytes::new())
+				.build()
+				.unwrap();
+			let response = rate_limit_handler.handle(request).await.unwrap();
+			assert_eq!(response.status, http::StatusCode::OK);
+		}
+
+		// Assert - poll until old timestamps expire (sliding window)
+		poll_until(
+			Duration::from_millis(200),
+			Duration::from_millis(10),
+			|| async {
+				let test_request = Request::builder()
+					.method(http::Method::GET)
+					.uri("/")
+					.version(http::Version::HTTP_11)
+					.headers(http::HeaderMap::new())
+					.body(bytes::Bytes::new())
+					.build()
+					.unwrap();
+				let test_response = rate_limit_handler.handle(test_request).await.unwrap();
+				test_response.status == http::StatusCode::OK
+			},
+		)
+		.await
+		.expect("Sliding window should allow requests after old timestamps expire");
+	}
 
 	#[test]
 	fn test_extract_client_ip_from_trusted_xff() {

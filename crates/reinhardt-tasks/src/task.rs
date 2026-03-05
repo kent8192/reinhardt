@@ -104,7 +104,7 @@ impl TaskPriority {
 	/// let p1 = TaskPriority::new(5);
 	/// assert_eq!(p1.value(), 5);
 	///
-	// Out of range values are clamped
+	/// // Out of range values are clamped
 	/// let p2 = TaskPriority::new(100);
 	/// assert_eq!(p2.value(), 9);
 	///

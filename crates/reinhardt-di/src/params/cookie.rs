@@ -3,7 +3,6 @@
 use async_trait::async_trait;
 use reinhardt_http::Request;
 use serde::de::DeserializeOwned;
-use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::ops::Deref;
 
@@ -106,29 +105,7 @@ impl<T: Debug> Debug for CookieStruct<T> {
 
 // Note: No internal trait; use concrete impls for T and Option<T> via FromRequest
 
-/// Parse Cookie header into a map
-/// Cookie header format: "name1=value1; name2=value2"
-/// Values are URL-decoded if they contain percent-encoded characters.
-fn parse_cookies(cookie_header: &str) -> HashMap<String, String> {
-	let mut result = HashMap::new();
-
-	for cookie in cookie_header.split(';') {
-		let cookie = cookie.trim();
-		if let Some((name, value)) = cookie.split_once('=') {
-			let name = name.trim().to_string();
-			let value = value.trim();
-
-			// URL-decode the value if it contains encoded characters
-			let decoded_value = urlencoding::decode(value)
-				.unwrap_or(std::borrow::Cow::Borrowed(value))
-				.into_owned();
-
-			result.insert(name, decoded_value);
-		}
-	}
-
-	result
-}
+use super::cookie_util::parse_cookies;
 
 #[async_trait]
 impl<T> FromRequest for CookieStruct<T>

@@ -39,7 +39,8 @@ use thiserror::Error;
 use crate::sessions::cleanup::{CleanupableBackend, SessionMetadata};
 
 /// Session backend errors
-#[derive(Debug, Error)]
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SessionError {
 	#[error("Cache error: {0}")]
 	CacheError(String),
@@ -88,7 +89,7 @@ pub trait SessionBackend: Send + Sync + Clone {
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let backend = InMemorySessionBackend::new();
 ///
-// Store shopping cart in session
+/// // Store shopping cart in session
 /// let cart_data = json!({
 ///     "items": ["item1", "item2"],
 ///     "total": 59.99,
@@ -96,7 +97,7 @@ pub trait SessionBackend: Send + Sync + Clone {
 ///
 /// backend.save("cart_session_456", &cart_data, Some(1800)).await?;
 ///
-// Check if session exists
+/// // Check if session exists
 /// assert!(backend.exists("cart_session_456").await?);
 /// # Ok(())
 /// # }
@@ -209,7 +210,7 @@ impl CleanupableBackend for InMemorySessionBackend {
 /// let cache = Arc::new(InMemoryCache::new());
 /// let backend = CacheSessionBackend::new(cache);
 ///
-// Store user preferences in session
+/// // Store user preferences in session
 /// let preferences = json!({
 ///     "theme": "dark",
 ///     "language": "en",
@@ -218,7 +219,7 @@ impl CleanupableBackend for InMemorySessionBackend {
 ///
 /// backend.save("pref_session_789", &preferences, Some(7200)).await?;
 ///
-// Load preferences
+/// // Load preferences
 /// let loaded: Option<serde_json::Value> = backend.load("pref_session_789").await?;
 /// assert_eq!(loaded.unwrap()["theme"], "dark");
 /// # Ok(())

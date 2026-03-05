@@ -19,11 +19,11 @@ impl F {
 	/// ```
 	/// use reinhardt_db::orm::expressions::F;
 	///
-	// Reference a field for comparisons or updates
+	/// // Reference a field for comparisons or updates
 	/// let price_ref = F::new("price");
 	/// assert_eq!(price_ref.to_sql(), "price");
 	///
-	// Can be used in queries like: WHERE price > F("cost") + 10
+	/// // Can be used in queries like: WHERE price > F("cost") + 10
 	/// ```
 	pub fn new(field: impl Into<String>) -> Self {
 		Self {
@@ -362,7 +362,7 @@ impl OuterRef {
 	/// ```
 	/// use reinhardt_db::orm::expressions::OuterRef;
 	///
-	// Reference parent query field in subquery
+	/// // Reference parent query field in subquery
 	/// let parent_id = OuterRef::new("parent_id");
 	/// assert_eq!(parent_id.to_sql(), "parent_id");
 	///
@@ -407,7 +407,7 @@ impl Subquery {
 	/// ```
 	/// use reinhardt_db::orm::expressions::Subquery;
 	///
-	// Create a subquery for filtering
+	/// // Create a subquery for filtering
 	/// let sq = Subquery::new("SELECT id FROM users WHERE active = 1");
 	/// let sql = sq.to_sql();
 	/// assert!(sql.contains("SELECT id FROM users"));
@@ -463,7 +463,7 @@ impl Exists {
 	/// ```
 	/// use reinhardt_db::orm::expressions::Exists;
 	///
-	// Check if related records exist
+	/// // Check if related records exist
 	/// let exists = Exists::new("SELECT 1 FROM orders WHERE user_id = 123");
 	/// let sql = exists.to_sql();
 	/// assert!(sql.starts_with("EXISTS("));
@@ -701,11 +701,11 @@ impl Q {
 	/// ```
 	/// use reinhardt_db::orm::expressions::Q;
 	///
-	// Create a simple condition
+	/// // Create a simple condition
 	/// let q = Q::new("age", ">=", "18");
 	/// assert_eq!(q.to_sql(), "age >= 18");
 	///
-	// Combine conditions
+	/// // Combine conditions
 	/// let q1 = Q::new("status", "=", "active");
 	/// let q2 = Q::new("verified", "=", "true");
 	/// let combined = q1.and(q2);

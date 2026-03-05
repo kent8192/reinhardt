@@ -210,7 +210,6 @@ impl QueryStatementBuilder for CreateMaterializedViewStatement {
 		}
 		panic!("Unsupported query builder type");
 	}
-
 }
 
 impl QueryStatementWriter for CreateMaterializedViewStatement {}

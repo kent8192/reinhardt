@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.1.0-rc.1...reinhardt-dentdelion@v0.1.0-rc.2) - 2026-03-04
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.1.0-alpha.14...reinhardt-dentdelion@v0.1.0-rc.1) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-db
+
+## [0.1.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.1.0-alpha.13...reinhardt-dentdelion@v0.1.0-alpha.14) - 2026-02-23
+
+### Maintenance
+
+- updated the following local packages: reinhardt-db
+
+## [0.1.0-alpha.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.1.0-alpha.12...reinhardt-dentdelion@v0.1.0-alpha.13) - 2026-02-23
+
+### Maintenance
+
+- updated the following local packages: reinhardt-db
+
+## [0.1.0-alpha.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.1.0-alpha.11...reinhardt-dentdelion@v0.1.0-alpha.12) - 2026-02-21
+
+### Fixed
+
+- acquire multiple locks simultaneously to prevent TOCTOU
+- prevent silent failures in WASM config and plugin metadata
+- replace hardcoded placeholder email in crates.io User-Agent
+- replace panicking unwrap/expect calls with safe alternatives
+- remove unsafe Send/Sync impl from TsRuntime
+- correct HostState clone and topological sort in dentdelion (#682, #683)
+- escape script tags in hydration to prevent XSS
+- add SQL validation for WASM plugin queries
+- add security controls to render_component
+- add SSRF prevention with URL validation in WASM host
+
+### Security
+
+- validate plugin names to prevent path traversal and log injection
+- add resource limits for JS execution, event subscriptions, and plugin disable
+
+### Changed
+
+- share reqwest::Client across HostState instances
+- add #[non_exhaustive] to ColumnType and TsError enums
+
+### Styling
+
+- apply formatting to files introduced by merge from main
+- apply rustfmt to crates_io module
+- fix remaining clippy warnings across workspace
+- apply rustfmt formatting to wasm module files
+- apply code formatting to security fix files
+
+### Documentation
+
+- document validate_component_path security rationale
+- document is_valid_wasm magic byte validation scope
+
+### Maintenance
+
+- upgrade remaining crates from edition 2021 to 2024
+
 ## [0.1.0-alpha.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.1.0-alpha.10...reinhardt-dentdelion@v0.1.0-alpha.11) - 2026-02-16
 
 ### Maintenance

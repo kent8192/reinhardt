@@ -427,12 +427,10 @@ async fn test_pool_connection_timeout_recovery(
 ) {
 	let (_container, _pool, _port, url) = postgres_container.await;
 
-	let config = PoolConfig {
-		max_connections: 2,
-		min_connections: 0,
-		acquire_timeout: Duration::from_millis(500),
-		..Default::default()
-	};
+	let mut config = PoolConfig::default();
+	config.max_connections = 2;
+	config.min_connections = 0;
+	config.acquire_timeout = Duration::from_millis(500);
 
 	let pool = ConnectionPool::new_postgres(&url, config)
 		.await
@@ -477,10 +475,8 @@ async fn test_pool_concurrent_crud_operations(
 ) {
 	let (_container, _pool, _port, url) = postgres_container.await;
 
-	let config = PoolConfig {
-		max_connections: 10,
-		..Default::default()
-	};
+	let mut config = PoolConfig::default();
+	config.max_connections = 10;
 
 	let pool = Arc::new(
 		ConnectionPool::new_postgres(&url, config)

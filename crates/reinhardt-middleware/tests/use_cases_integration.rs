@@ -281,15 +281,7 @@ async fn use_case_api_gateway_protection() {
 	let handler = Arc::new(ConfigurableTestHandler::always_success());
 
 	// Step 1: Rate limiting protects against floods
-	let rate_config = RateLimitConfig {
-		capacity: 100.0,
-		refill_rate: 10.0,
-		cost_per_request: 1.0,
-		strategy: RateLimitStrategy::PerIp,
-		exclude_paths: vec![],
-		error_message: None,
-		trusted_proxies: vec![],
-	};
+	let rate_config = RateLimitConfig::new(RateLimitStrategy::PerIp, 100.0, 10.0);
 	let rate_limit = Arc::new(RateLimitMiddleware::new(rate_config));
 
 	// Normal traffic should pass
@@ -304,13 +296,8 @@ async fn use_case_api_gateway_protection() {
 	}
 
 	// Step 2: Circuit breaker protects backend
-	let cb_config = CircuitBreakerConfig {
-		error_threshold: 0.5,
-		min_requests: 10,
-		timeout: Duration::from_secs(30),
-		half_open_success_threshold: 3,
-		error_message: None,
-	};
+	let cb_config = CircuitBreakerConfig::new(0.5, 10, Duration::from_secs(30))
+		.with_half_open_success_threshold(3);
 	let circuit_breaker = Arc::new(CircuitBreakerMiddleware::new(cb_config));
 
 	let cb_request = create_test_request("GET", "/api/backend");
@@ -339,13 +326,8 @@ async fn use_case_circuit_breaker_cascade_protection() {
 	// Simulate failing backend
 	let failing_handler = Arc::new(ConfigurableTestHandler::always_failure());
 
-	let cb_config = CircuitBreakerConfig {
-		error_threshold: 0.5,
-		min_requests: 3,
-		timeout: Duration::from_millis(100),
-		half_open_success_threshold: 1,
-		error_message: None,
-	};
+	let cb_config = CircuitBreakerConfig::new(0.5, 3, Duration::from_millis(100))
+		.with_half_open_success_threshold(1);
 	let circuit_breaker = CircuitBreakerMiddleware::new(cb_config);
 	let cb = Arc::new(circuit_breaker);
 
@@ -426,13 +408,12 @@ async fn use_case_cors_api_access() {
 
 	let handler = Arc::new(ConfigurableTestHandler::always_success());
 
-	let cors_config = CorsConfig {
-		allow_origins: vec!["https://frontend.example.com".to_string()],
-		allow_methods: vec!["GET".to_string(), "POST".to_string(), "OPTIONS".to_string()],
-		allow_headers: vec!["Content-Type".to_string(), "Authorization".to_string()],
-		allow_credentials: true,
-		max_age: Some(3600),
-	};
+	let mut cors_config = CorsConfig::default();
+	cors_config.allow_origins = vec!["https://frontend.example.com".to_string()];
+	cors_config.allow_methods = vec!["GET".to_string(), "POST".to_string(), "OPTIONS".to_string()];
+	cors_config.allow_headers = vec!["Content-Type".to_string(), "Authorization".to_string()];
+	cors_config.allow_credentials = true;
+	cors_config.max_age = Some(3600);
 	let cors = Arc::new(CorsMiddleware::new(cors_config));
 
 	// Simple request
@@ -486,15 +467,8 @@ async fn use_case_login_throttling() {
 	let handler = Arc::new(ConfigurableTestHandler::always_success());
 
 	// Strict rate limit for login
-	let login_rate_config = RateLimitConfig {
-		capacity: 5.0,    // Only 5 attempts
-		refill_rate: 0.1, // Slow refill
-		cost_per_request: 1.0,
-		strategy: RateLimitStrategy::PerIp,
-		exclude_paths: vec![],
-		error_message: Some("Too many login attempts. Please try again later.".to_string()),
-		trusted_proxies: vec![],
-	};
+	let login_rate_config = RateLimitConfig::new(RateLimitStrategy::PerIp, 5.0, 0.1)
+		.with_error_message("Too many login attempts. Please try again later.".to_string());
 	let rate_limit = Arc::new(RateLimitMiddleware::new(login_rate_config));
 
 	// First 5 attempts should succeed
@@ -675,9 +649,7 @@ async fn use_case_timeout_protection() {
 	// Fast handler that responds immediately
 	let fast_handler = Arc::new(ConfigurableTestHandler::always_success());
 
-	let timeout_config = TimeoutConfig {
-		duration: Duration::from_secs(5),
-	};
+	let timeout_config = TimeoutConfig::new(Duration::from_secs(5));
 	let timeout = Arc::new(TimeoutMiddleware::new(timeout_config));
 
 	let request = create_test_request("GET", "/api/fast");
@@ -695,9 +667,7 @@ async fn use_case_slow_request_timeout() {
 	let slow_handler =
 		Arc::new(ConfigurableTestHandler::always_success().with_delay(Duration::from_millis(200)));
 
-	let timeout_config = TimeoutConfig {
-		duration: Duration::from_millis(50), // 50ms timeout
-	};
+	let timeout_config = TimeoutConfig::new(Duration::from_millis(50));
 	let timeout = Arc::new(TimeoutMiddleware::new(timeout_config));
 
 	let request = create_test_request("GET", "/api/slow");
@@ -750,17 +720,24 @@ async fn use_case_flash_messages() {
 /// Scenario: Ensure all traffic uses HTTPS
 #[tokio::test]
 async fn use_case_https_redirect() {
+	use reinhardt_http::TrustedProxies;
 	use reinhardt_middleware::https_redirect::HttpsRedirectMiddleware;
+	use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 	let handler = Arc::new(ConfigurableTestHandler::always_success());
 
 	let https_redirect = Arc::new(HttpsRedirectMiddleware::default_config());
 
 	// HTTP request should be redirected (or processed if already HTTPS)
-	let request = create_request_with_headers("GET", "/secure", &[("X-Forwarded-Proto", "https")]);
+	let proxy_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+	let mut request =
+		create_request_with_headers("GET", "/secure", &[("X-Forwarded-Proto", "https")]);
+	request.remote_addr = Some(SocketAddr::new(proxy_ip, 8080));
+	request.set_trusted_proxies(TrustedProxies::new(vec![proxy_ip]));
+
 	let response = https_redirect.process(request, handler).await.unwrap();
 
-	// With X-Forwarded-Proto: https, should pass through
+	// With X-Forwarded-Proto: https from trusted proxy, should pass through
 	assert_eq!(response.status.as_u16(), 200);
 }
 

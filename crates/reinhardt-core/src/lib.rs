@@ -25,7 +25,48 @@
 //!
 //! For detailed implementation and usage information, see the individual
 //! crate documentation in `reinhardt-contrib`, `reinhardt-tasks`, `reinhardt-core/backends`.
+//!
+//! ## Quick Start
+//!
+//! ```rust
+//! use reinhardt_core::exception::{Error, ErrorKind};
+//!
+//! // Create a typed application error
+//! let err = Error::NotFound("Resource not found".to_string());
+//! assert_eq!(err.kind(), ErrorKind::NotFound);
+//! ```
+//!
+//! ## Architecture
+//!
+//! Key modules in this crate:
+//!
+//! - [`exception`]: Typed error hierarchy for HTTP and application-level errors
+//! - [`types`]: Fundamental types (URL, money, phone number, color, coordinates)
+//! - [`signals`]: Django-style signal/slot system for decoupled event handling
+//! - [`security`]: Password hashing, CSRF, XSS prevention, and security utilities
+//! - [`validators`]: Comprehensive input validation (IP, IBAN, phone, credit card)
+//! - [`serializers`]: Data serialization and deserialization framework
+//! - [`pagination`]: Cursor, page number, and limit-offset pagination strategies
+//! - [`parsers`]: Request body parsing (JSON, form, multipart)
+//! - [`negotiation`]: HTTP content negotiation utilities
+//!
+//! ## Feature Flags
+//!
+//! | Feature | Default | Description |
+//! |---------|---------|-------------|
+//! | `types` | enabled | Core type definitions |
+//! | `exception` | enabled | Error hierarchy and HTTP status mapping |
+//! | `signals` | enabled | Async signal/slot system |
+//! | `macros` | enabled | Procedural macros re-export |
+//! | `security` | enabled | Password hashing and security utilities |
+//! | `serializers` | enabled | Data serialization framework |
+//! | `parsers` | enabled | Request body parsers |
+//! | `pagination` | enabled | Pagination strategies |
+//! | `messages` | disabled | Flash message storage |
+//! | `page` | disabled | Server-side page rendering types |
 
+pub mod apply_update;
+pub use apply_update::ApplyUpdate;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod endpoint;
 pub mod exception;

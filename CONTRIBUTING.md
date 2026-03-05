@@ -34,7 +34,7 @@ Thank you for your interest in contributing to Reinhardt! This document provides
    ```
 3. Add the upstream repository:
    ```bash
-   git remote add upstream https://github.com/kent8192/reinhardt-rs.git
+   git remote add upstream https://github.com/kent8192/reinhardt-web.git
    ```
 
 ### Building the Project
@@ -148,7 +148,7 @@ pub mod routing;
 
 - **DELETE obsolete code immediately** - don't leave commented-out code
 - **NO comments documenting deleted code** - Git history is the record
-- Extract important notes to `docs/IMPLEMENTATION_NOTES.md` if needed
+- Extract important notes to `instructions/IMPLEMENTATION_NOTES.md` if needed
 
 ### TODO and Placeholder Policy
 
@@ -202,6 +202,36 @@ pub fn get_config() -> Config {
 - **DO NOT USE** relative paths going up more than one level (e.g., `../..`)
 - **PREFER** absolute paths or single-level relative paths (e.g., `../`)
 - Deep relative paths make code harder to understand
+
+### API Deprecation Policy
+
+When marking a public API as deprecated, follow these requirements:
+
+**Required attributes:**
+
+```rust
+#[deprecated(
+    since = "0.2.0",
+    note = "Use `new_function()` instead. Will be removed in 1.0.0."
+)]
+pub fn old_function() { ... }
+```
+
+**Requirements:**
+- `since`: Version when the item was deprecated (follow semantic versioning)
+- `note`: Concise migration path describing what to use instead and when removal is planned
+- Both `since` and `note` fields are **MANDATORY** — bare `#[deprecated]` is not allowed
+
+**Deprecation lifecycle:**
+1. Add `#[deprecated(since = "...", note = "...")]` to the item
+2. Keep the implementation functional until the planned removal version
+3. Add a `deprecated` commit type entry in CHANGELOG (triggers dedicated section)
+4. Remove the item in the version specified in `note`
+
+**Naming convention for commit messages:**
+```
+deprecated(auth): mark `old_session_token()` as deprecated in favor of `session_token()`
+```
 
 ---
 
@@ -293,7 +323,7 @@ gh issue list --state closed --search "leak"
 
 **Check Documentation:**
 
-- [Issue Guidelines](docs/ISSUE_GUIDELINES.md) for detailed issue policies
+- [Issue Guidelines](instructions/ISSUE_GUIDELINES.md) for detailed issue policies
 - [Examples](examples/) for usage patterns
 - [CLAUDE.md](CLAUDE.md) for project-specific guidelines
 
@@ -397,7 +427,7 @@ gh issue create --title "Feature: Add MySQL support" \
   --label enhancement
 ```
 
-For detailed issue guidelines, see [docs/ISSUE_GUIDELINES.md](docs/ISSUE_GUIDELINES.md).
+For detailed issue guidelines, see [instructions/ISSUE_GUIDELINES.md](instructions/ISSUE_GUIDELINES.md).
 
 ---
 
@@ -477,7 +507,7 @@ Always examine recent commits before writing new ones:
 git log --pretty=format:"%s%n%b" -10
 ```
 
-For detailed commit guidelines, see [COMMIT_GUIDELINE.md](docs/COMMIT_GUIDELINE.md).
+For detailed commit guidelines, see [COMMIT_GUIDELINE.md](instructions/COMMIT_GUIDELINE.md).
 
 ---
 
@@ -552,7 +582,7 @@ For detailed commit guidelines, see [COMMIT_GUIDELINE.md](docs/COMMIT_GUIDELINE.
 
 - **README.md**: Project-level overview
 - **Crate README.md**: Individual crate documentation
-- **docs/** directory: Detailed guides and tutorials
+- **instructions/** directory: Detailed guides and standards
 
 ### Documentation Consistency
 
@@ -576,14 +606,104 @@ Update documentation for:
 
 ---
 
+## API Stabilization Process
+
+### Final Comment Period (FCP)
+
+The **Final Comment Period** (FCP) is a structured process for reaching consensus on significant API changes before they are stabilized. FCP ensures that all stakeholders have an opportunity to review and comment on proposed changes before they become part of the stable API.
+
+### When FCP Applies
+
+FCP is required for:
+
+- **New public API additions** that affect the stable interface
+- **Modifications to existing public APIs** that are backward-incompatible
+- **Deprecation of stable APIs** that users depend on
+- **Removal of previously deprecated APIs**
+- **Significant behavioral changes** that affect the documented contract
+
+FCP is **not required** for:
+- Internal implementation changes
+- Documentation-only changes
+- Bug fixes that restore intended behavior
+- Additions to unstable/experimental API categories
+
+### FCP Process
+
+1. **Proposal Phase**: Open a GitHub Issue using the [API Change Proposal template](.github/ISSUE_TEMPLATE/8-api_change.yml)
+   - Describe the current API, proposed change, and rationale
+   - Classify the change (breaking/non-breaking)
+   - Provide a migration path for breaking changes
+
+2. **Discussion Phase** (minimum 7 days for non-breaking, 14 days for breaking):
+   - Community and maintainers review the proposal
+   - Alternative approaches are discussed
+   - Concerns and objections are raised and addressed
+
+3. **FCP Announcement**: A maintainer posts an FCP announcement comment on the issue
+   - States the proposed disposition (merge/postpone/close)
+   - Begins the final comment period countdown
+   - Labels the issue with `fcp-merge`, `fcp-postpone`, or `fcp-close`
+
+4. **Final Comment Period** (minimum 7 days):
+   - Community has a final opportunity to raise concerns
+   - Any new objections restart the discussion phase
+   - No new concerns → proceed to disposition
+
+5. **Resolution**: After FCP completes without new objections
+   - Issue is closed with final decision documented
+   - Implementation PR is opened referencing the stabilization issue
+   - API is marked as stable in the next minor/major release
+
+### API Stability Categories
+
+| Category | Description | FCP Required |
+|----------|-------------|--------------|
+| `Stable` | Fully supported, covered by SemVer | Yes (for changes) |
+| `Experimental` | Subject to change without major version bump | No |
+| `Internal` | Not part of the public API contract | No |
+
+### Marking API Stability
+
+Use `#[doc(cfg(...))]` and doc comments to communicate API status:
+
+```rust
+/// Stable API - covered by SemVer guarantees.
+pub fn stable_function() {}
+
+/// **Experimental**: This API is subject to change.
+///
+/// May be modified or removed in future minor versions.
+#[cfg_attr(docsrs, doc(cfg(feature = "experimental")))]
+pub fn experimental_function() {}
+```
+
+### Deprecation Policy
+
+When an API is deprecated:
+
+1. Add `#[deprecated(since = "x.y.z", note = "Use `new_function()` instead")]`
+2. Open a GitHub Issue documenting the deprecation timeline
+3. Provide a migration guide in the documentation
+4. Maintain the deprecated API for at least one minor version cycle
+5. Remove the API only after FCP and appropriate deprecation period
+
+### Resources
+
+- [API Stability Policy](docs/API_STABILITY.md) - Detailed stability guarantees
+- [API Change Proposal Template](.github/ISSUE_TEMPLATE/8-api_change.yml) - Template for API proposals
+- [SemVer specification](https://semver.org/) - Versioning guidelines
+
+---
+
 ## Getting Help
 
 ### Resources
 
-- [Getting Started Guide](docs/GETTING_STARTED.md)
-- [Feature Flags Guide](docs/FEATURE_FLAGS.md)
-- [Issue Guidelines](docs/ISSUE_GUIDELINES.md) - Issue creation and management
-- [Pull Request Guidelines](docs/PR_GUIDELINE.md) - PR policies and procedures
+- [Getting Started Guide](/quickstart/getting-started/)
+- [Feature Flags Guide](/docs/feature-flags/)
+- [Issue Guidelines](instructions/ISSUE_GUIDELINES.md) - Issue creation and management
+- [Pull Request Guidelines](instructions/PR_GUIDELINE.md) - PR policies and procedures
 - [Security Policy](SECURITY.md) - Security vulnerability reporting
 - [Code of Conduct](CODE_OF_CONDUCT.md) - Community standards
 - [Project Instructions](CLAUDE.md)
@@ -594,9 +714,9 @@ Update documentation for:
 
 Please check:
 
--  [Getting Started Guide](docs/GETTING_STARTED.md)
--  [Issue Guidelines](docs/ISSUE_GUIDELINES.md)
--  [Pull Request Guidelines](docs/PR_GUIDELINE.md)
+-  [Getting Started Guide](/quickstart/getting-started/)
+-  [Issue Guidelines](instructions/ISSUE_GUIDELINES.md)
+-  [Pull Request Guidelines](instructions/PR_GUIDELINE.md)
 -  [Examples](examples/)
 -  Existing GitHub Issues and Discussions
 -  [CLAUDE.md](CLAUDE.md) for project-specific guidelines
@@ -686,7 +806,7 @@ cargo make clippy-fix
 
 ## License
 
-By contributing to Reinhardt, you agree that your contributions will be licensed under both the MIT License and Apache License 2.0.
+By contributing to Reinhardt, you agree that your contributions will be licensed under the BSD 3-Clause License.
 
 ---
 

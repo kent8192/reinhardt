@@ -27,12 +27,12 @@ impl Default for ReprParamsConfig {
 /// use reinhardt_utils::logging::params::{repr_params, ReprParamsConfig};
 /// use serde_json::json;
 ///
-// Simple parameter representation
+/// // Simple parameter representation
 /// let params = json!({"user_id": 42, "email": "test@example.com"});
 /// let config = ReprParamsConfig::default();
 /// let output = repr_params(&params, &config);
 ///
-// Output includes the parameter values
+/// // Output includes the parameter values
 /// assert!(output.contains("user_id"));
 /// assert!(output.contains("42"));
 /// ```
@@ -152,11 +152,11 @@ fn repr_object(obj: &serde_json::Map<String, Value>, config: &ReprParamsConfig) 
 /// ```
 /// use reinhardt_utils::logging::params::truncate_param;
 ///
-// Short strings are returned unchanged
+/// // Short strings are returned unchanged
 /// let short_text = "Hello";
 /// assert_eq!(truncate_param(short_text, 100), "Hello");
 ///
-// Long strings are truncated with indication
+/// // Long strings are truncated with indication
 /// let long_text = "a".repeat(1000);
 /// let truncated = truncate_param(&long_text, 50);
 /// assert!(truncated.len() < 1000);
@@ -190,7 +190,7 @@ mod tests {
 	use rstest::rstest;
 	use serde_json::json;
 
-	#[test]
+	#[rstest]
 	fn test_repr_params_large_list_of_dict() {
 		let params: Vec<Value> = (0..100).map(|i| json!({"data": i.to_string()})).collect();
 
@@ -225,7 +225,7 @@ mod tests {
 		assert!(result.starts_with('[') && result.ends_with(']'));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_repr_params_positional_array() {
 		let params = json!([[1, 2, 3], 5]);
 
@@ -243,7 +243,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_repr_params_unknown_list() {
 		let large_array: Vec<i32> = (0..300).collect();
 		let params = json!([large_array, 5]);
@@ -275,7 +275,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_repr_params_named_dict() {
 		let mut params = serde_json::Map::new();
 		for i in 0..10 {
@@ -312,7 +312,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_repr_params_huge_named_dict() {
 		let mut params = serde_json::Map::new();
 		for i in 0..800 {
@@ -346,7 +346,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_repr_params_ismulti_named_dict() {
 		let param: serde_json::Map<String, Value> =
 			(0..10).map(|i| (format!("key_{}", i), json!(i))).collect();
@@ -374,7 +374,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_truncate_param() {
 		let large_param = "a".repeat(5000);
 		let result = truncate_param(&large_param, 298);
@@ -414,7 +414,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_truncate_param_small() {
 		let small_param = "small";
 		let result = truncate_param(small_param, 100);
@@ -529,5 +529,74 @@ mod tests {
 		assert_eq!(byte_index_at_char(s, 2), 6);
 		assert_eq!(byte_index_at_char(s, 3), 9);
 		assert_eq!(byte_index_at_char(s, 10), 9); // beyond end
+	}
+
+	// Regression test for #762: truncate_param must produce valid UTF-8 output when
+	// truncating strings containing multibyte characters. Previously, byte-level slicing
+	// could split in the middle of a multibyte sequence, causing a panic or corrupted output.
+	#[rstest]
+	#[case("あいうえお".repeat(30), 20, "あ", "お")] // 3-byte CJK chars (hiragana)
+	#[case("日本語テスト".repeat(30), 20, "日", "ト")] // 3-byte CJK chars (kanji + katakana)
+	#[case("中文测试".repeat(30), 20, "中", "试")] // 3-byte CJK chars (Chinese)
+	#[case("αβγδεζηθ".repeat(30), 20, "α", "θ")] // 2-byte Greek letters
+	fn test_truncate_param_multibyte_produces_valid_utf8_regression(
+		#[case] input: String,
+		#[case] max_chars: usize,
+		#[case] expected_start: &str,
+		#[case] expected_end: &str,
+	) {
+		// Arrange - input is longer than max_chars and contains only multibyte characters
+
+		// Act
+		let result = truncate_param(&input, max_chars);
+
+		// Assert - output must be valid UTF-8 (str is always valid UTF-8 in Rust,
+		// but byte-level slicing at non-char boundaries would have panicked before #762 fix)
+		assert!(
+			result.contains("characters truncated"),
+			"Regression #762: truncation message must be present, got: {}",
+			result
+		);
+		assert!(
+			result.starts_with(expected_start),
+			"Regression #762: result must start with a complete character '{}', got: {}",
+			expected_start,
+			result
+		);
+		assert!(
+			result.ends_with(expected_end),
+			"Regression #762: result must end with a complete character '{}', got: {}",
+			expected_end,
+			result
+		);
+		// Verify the split position is on a character boundary by checking char count
+		let prefix: &str = result.split(" ... ").next().unwrap_or("");
+		let prefix_char_count = prefix.chars().count();
+		assert_eq!(
+			prefix_char_count,
+			max_chars / 2,
+			"Regression #762: prefix must contain exactly half of max_chars characters, got {}",
+			prefix_char_count
+		);
+	}
+
+	// Regression test for #762: truncate_param with a string that starts with ASCII
+	// and transitions to multibyte. The split point may land at the transition boundary.
+	#[rstest]
+	fn test_truncate_param_ascii_then_multibyte_split_regression() {
+		// Arrange - 10 ASCII chars then many 3-byte CJK chars
+		let input = format!("{}{}", "abcdefghij", "あ".repeat(200));
+
+		// Act
+		let result = truncate_param(&input, 30);
+
+		// Assert - result must contain truncation message and be valid UTF-8
+		assert!(
+			result.contains("characters truncated"),
+			"Regression #762: truncation message expected, got: {}",
+			result
+		);
+		// Verify all slices are on valid char boundaries (no panic means the fix works)
+		let _ = result.chars().count(); // would panic if result contained invalid UTF-8
 	}
 }

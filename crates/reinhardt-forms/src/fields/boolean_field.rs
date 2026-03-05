@@ -1,4 +1,4 @@
-//! Boolean field
+//! Boolean field with Django-compatible required semantics
 
 use crate::field::{FieldError, FieldResult, FormField, Widget};
 
@@ -158,8 +158,119 @@ impl FormField for BooleanField {
 					}
 				};
 
+				// Django behavior: a required BooleanField must be True.
+				// This ensures consent checkboxes (e.g., "I agree to Terms")
+				// cannot be submitted unchecked.
+				if self.required && !b {
+					return Err(FieldError::Required(self.name.clone()));
+				}
+
 				Ok(serde_json::Value::Bool(b))
 			}
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+	use serde_json::json;
+
+	#[rstest]
+	fn test_required_boolean_rejects_false() {
+		// Arrange: required BooleanField should require true (Django behavior)
+		let field = BooleanField::new("terms".to_string()).required();
+
+		// Act & Assert: false should be rejected for required BooleanField
+		assert!(
+			field.clean(Some(&json!(false))).is_err(),
+			"required BooleanField should reject false"
+		);
+	}
+
+	#[rstest]
+	fn test_required_boolean_accepts_true() {
+		// Arrange
+		let field = BooleanField::new("terms".to_string()).required();
+
+		// Act
+		let result = field.clean(Some(&json!(true)));
+
+		// Assert
+		assert_eq!(result.unwrap(), json!(true));
+	}
+
+	#[rstest]
+	fn test_required_boolean_rejects_none() {
+		// Arrange
+		let field = BooleanField::new("terms".to_string()).required();
+
+		// Act & Assert
+		assert!(field.clean(None).is_err());
+	}
+
+	#[rstest]
+	fn test_required_boolean_rejects_false_string() {
+		// Arrange
+		let field = BooleanField::new("terms".to_string()).required();
+
+		// Act & Assert: "false" string converts to false, which should be rejected
+		assert!(field.clean(Some(&json!("false"))).is_err());
+		assert!(field.clean(Some(&json!("0"))).is_err());
+		assert!(field.clean(Some(&json!(""))).is_err());
+	}
+
+	#[rstest]
+	fn test_required_boolean_rejects_zero() {
+		// Arrange
+		let field = BooleanField::new("terms".to_string()).required();
+
+		// Act & Assert: numeric 0 converts to false, which should be rejected
+		assert!(field.clean(Some(&json!(0))).is_err());
+	}
+
+	#[rstest]
+	fn test_optional_boolean_accepts_false() {
+		// Arrange: optional BooleanField should accept false
+		let field = BooleanField::new("newsletter".to_string());
+
+		// Act
+		let result = field.clean(Some(&json!(false)));
+
+		// Assert
+		assert_eq!(result.unwrap(), json!(false));
+	}
+
+	#[rstest]
+	fn test_optional_boolean_accepts_none() {
+		// Arrange
+		let field = BooleanField::new("newsletter".to_string());
+
+		// Act
+		let result = field.clean(None);
+
+		// Assert
+		assert_eq!(result.unwrap(), json!(false));
+	}
+
+	#[rstest]
+	fn test_required_boolean_accepts_truthy_string() {
+		// Arrange
+		let field = BooleanField::new("terms".to_string()).required();
+
+		// Act & Assert: truthy strings should be accepted
+		assert_eq!(field.clean(Some(&json!("true"))).unwrap(), json!(true));
+		assert_eq!(field.clean(Some(&json!("yes"))).unwrap(), json!(true));
+		assert_eq!(field.clean(Some(&json!("1"))).unwrap(), json!(true));
+	}
+
+	#[rstest]
+	fn test_required_boolean_rejects_null() {
+		// Arrange
+		let field = BooleanField::new("terms".to_string()).required();
+
+		// Act & Assert: null converts to false, which should be rejected
+		assert!(field.clean(Some(&json!(null))).is_err());
 	}
 }

@@ -7,12 +7,12 @@
 
 mod integration_tests {
 	use reinhardt_db::orm::{
-		joinedload, lazyload, selectinload, subqueryload, LoadContext, LoadOptionBuilder,
-		LoadingStrategy,
+		LoadContext, LoadOptionBuilder, LoadingStrategy, joinedload, lazyload, selectinload,
+		subqueryload,
 	};
 	use rstest::{fixture, rstest};
 	use serde::{Deserialize, Serialize};
-	use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
+	use sqlx::{Row, SqlitePool, sqlite::SqlitePoolOptions};
 	use std::sync::Arc;
 	use tokio::sync::Mutex;
 

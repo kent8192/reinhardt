@@ -52,6 +52,7 @@ pub(super) struct DynComponent {
 	name: &'static str,
 }
 
+// Allow dead_code: impl block for DynComponent reserved for future dynamic dispatch
 #[allow(dead_code)]
 impl DynComponent {
 	/// Creates a new dynamic component.

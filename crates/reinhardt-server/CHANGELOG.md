@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-server@v0.1.0-rc.1...reinhardt-server@v0.1.0-rc.2) - 2026-03-04
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-server@v0.1.0-alpha.8...reinhardt-server@v0.1.0-rc.1) - 2026-02-23
+
+### Maintenance
+
+- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
+
+## [0.1.0-alpha.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-server@v0.1.0-alpha.7...reinhardt-server@v0.1.0-alpha.8) - 2026-02-21
+
+### Fixed
+
+- implement sliding window rate limiting and document HTTP/2 middleware gap
+
+### Security
+
+- reduce WebSocket log verbosity to prevent data exposure
+- add periodic eviction of stale rate limit entries
+- add request body size limits and decompression bomb prevention
+- add trusted proxy validation for X-Forwarded-For
+
+### Styling
+
+- apply rustfmt to pre-existing unformatted files
+
 ## [0.1.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-server@v0.1.0-alpha.6...reinhardt-server@v0.1.0-alpha.7) - 2026-02-14
 
 ### Maintenance

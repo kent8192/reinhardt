@@ -442,20 +442,51 @@ fn escape_json_for_script(json: &str) -> String {
 	json.replace("</", "<\\/")
 }
 
+/// Maximum input size for HTML minification (1 MiB).
+///
+/// Inputs exceeding this limit are returned unmodified to prevent
+/// denial-of-service via excessively large payloads.
+const MINIFY_HTML_MAX_INPUT_SIZE: usize = 1024 * 1024;
+
 /// Simple HTML minification (removes extra whitespace).
+///
+/// Returns the input unmodified when its byte length exceeds
+/// `MINIFY_HTML_MAX_INPUT_SIZE` (1MB) to prevent denial-of-service attacks.
+///
+/// Whitespace inside `<pre>` blocks is preserved.
 fn minify_html(html: &str) -> String {
-	// Simple minification: collapse multiple whitespace and remove newlines
+	if html.len() > MINIFY_HTML_MAX_INPUT_SIZE {
+		return html.to_string();
+	}
+
 	let mut result = String::with_capacity(html.len());
 	let mut prev_was_whitespace = false;
 	let mut in_pre = false;
+	let mut chars = html.char_indices().peekable();
 
-	for c in html.chars() {
-		// Track <pre> tags to preserve whitespace inside them
-		if html.contains("<pre") {
+	while let Some((byte_pos, c)) = chars.next() {
+		let remaining = &html[byte_pos..];
+
+		// Detect opening <pre tag (e.g. <pre>, <pre class="...">)
+		if !in_pre
+			&& c == '<'
+			&& remaining.strip_prefix("<pre").is_some_and(|after| {
+				after.starts_with(|ch: char| ch == '>' || ch.is_ascii_whitespace())
+					|| after.is_empty()
+			}) {
 			in_pre = true;
 		}
-		if html.contains("</pre>") {
+
+		// Detect closing </pre> tag
+		if in_pre && c == '<' && remaining.starts_with("</pre>") {
+			result.push_str("</pre>");
+			// Skip the remaining 5 chars of "</pre>" (we already consumed '<')
+			for _ in 0..5 {
+				chars.next();
+			}
 			in_pre = false;
+			prev_was_whitespace = false;
+			continue;
 		}
 
 		if in_pre {
@@ -475,6 +506,7 @@ fn minify_html(html: &str) -> String {
 }
 
 /// Helper function for simple component rendering.
+// Allow dead_code: convenience function for internal module use and tests
 #[allow(dead_code)]
 pub(super) fn render<C: Component>(component: &C) -> String {
 	let mut renderer = SsrRenderer::new();
@@ -482,6 +514,7 @@ pub(super) fn render<C: Component>(component: &C) -> String {
 }
 
 /// Helper function for rendering to a full HTML page.
+// Allow dead_code: convenience function for internal module use and tests
 #[allow(dead_code)]
 pub(super) fn render_page<C: Component>(component: &C, options: SsrOptions) -> String {
 	let mut renderer = SsrRenderer::with_options(options);

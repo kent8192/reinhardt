@@ -2,6 +2,7 @@
 
 use thiserror::Error;
 
+#[non_exhaustive]
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
 	#[error("Invalid email: {0}")]

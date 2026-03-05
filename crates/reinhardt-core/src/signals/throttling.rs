@@ -448,7 +448,9 @@ impl<T: Send + Sync + 'static> SignalThrottle<T> {
 					};
 
 					if let Some(item) = item {
-						let _ = signal.send(item).await;
+						if let Err(e) = signal.send(item).await {
+							eprintln!("Failed to send throttled signal: {}", e);
+						}
 					} else {
 						break;
 					}

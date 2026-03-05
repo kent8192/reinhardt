@@ -23,11 +23,14 @@ fn test_static_files_provider_default() {
 /// Verifies that the provider returns None when the path doesn't have a static directory
 #[rstest]
 fn test_static_files_provider_nonexistent_path() {
-	let config =
-		AppConfig::new("test_app", "myproject.test_app").with_path("/nonexistent/path/to/app");
+	// Arrange - set path directly to a non-existent relative path
+	let mut config = AppConfig::new("test_app", "myproject.test_app");
+	config.path = Some("nonexistent/path/to/app".to_string());
 
-	// Should return None because /nonexistent/path/to/app/static doesn't exist
+	// Act - should return None because nonexistent/path/to/app/static doesn't exist
 	let static_dir = config.static_dir();
+
+	// Assert
 	assert!(static_dir.is_none());
 }
 
@@ -109,17 +112,19 @@ fn test_get_app_media() {
 fn test_static_files_provider_with_existing_dir() {
 	use std::fs;
 
-	// Create temporary directory structure
+	// Arrange - create temporary directory structure
 	let temp_dir = std::env::temp_dir().join("reinhardt_test_app_discovery");
 	let static_dir = temp_dir.join("static");
 	fs::create_dir_all(&static_dir).unwrap();
 
-	// Create AppConfig with the temp path
-	let config =
-		AppConfig::new("test_app", "myproject.test_app").with_path(temp_dir.to_str().unwrap());
+	// Set the path field directly (absolute paths are used for filesystem lookup in tests)
+	let mut config = AppConfig::new("test_app", "myproject.test_app");
+	config.path = Some(temp_dir.to_str().unwrap().to_string());
 
-	// Should return Some with the static directory path
+	// Act
 	let result = config.static_dir();
+
+	// Assert
 	assert!(result.is_some());
 	assert_eq!(result.unwrap(), static_dir);
 
@@ -134,17 +139,19 @@ fn test_static_files_provider_with_existing_dir() {
 fn test_locale_provider_with_existing_dir() {
 	use std::fs;
 
-	// Create temporary directory structure
+	// Arrange - create temporary directory structure
 	let temp_dir = std::env::temp_dir().join("reinhardt_test_app_locale");
 	let locale_dir = temp_dir.join("locale");
 	fs::create_dir_all(&locale_dir).unwrap();
 
-	// Create AppConfig with the temp path
-	let config =
-		AppConfig::new("test_app", "myproject.test_app").with_path(temp_dir.to_str().unwrap());
+	// Set the path field directly (absolute paths are used for filesystem lookup in tests)
+	let mut config = AppConfig::new("test_app", "myproject.test_app");
+	config.path = Some(temp_dir.to_str().unwrap().to_string());
 
-	// Should return Some with the locale directory path
+	// Act
 	let result = config.locale_dir();
+
+	// Assert
 	assert!(result.is_some());
 	assert_eq!(result.unwrap(), locale_dir);
 
@@ -159,17 +166,19 @@ fn test_locale_provider_with_existing_dir() {
 fn test_media_provider_with_existing_dir() {
 	use std::fs;
 
-	// Create temporary directory structure
+	// Arrange - create temporary directory structure
 	let temp_dir = std::env::temp_dir().join("reinhardt_test_app_media");
 	let media_dir = temp_dir.join("media");
 	fs::create_dir_all(&media_dir).unwrap();
 
-	// Create AppConfig with the temp path
-	let config =
-		AppConfig::new("test_app", "myproject.test_app").with_path(temp_dir.to_str().unwrap());
+	// Set the path field directly (absolute paths are used for filesystem lookup in tests)
+	let mut config = AppConfig::new("test_app", "myproject.test_app");
+	config.path = Some(temp_dir.to_str().unwrap().to_string());
 
-	// Should return Some with the media directory path
+	// Act
 	let result = config.media_dir();
+
+	// Assert
 	assert!(result.is_some());
 	assert_eq!(result.unwrap(), media_dir);
 

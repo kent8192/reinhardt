@@ -10,7 +10,7 @@ use rstest::*;
 use serde::{Deserialize, Serialize};
 use serial_test::serial;
 use std::sync::Arc;
-use testcontainers::{runners::AsyncRunner, ContainerAsync};
+use testcontainers::{ContainerAsync, runners::AsyncRunner};
 use testcontainers_modules::postgres::Postgres;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

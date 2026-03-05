@@ -436,13 +436,25 @@ impl JsonImporter {
 			.as_array()
 			.ok_or_else(|| AdminError::ValidationError("JSON must be an array".to_string()))?;
 
+		// Validate all items are objects before processing.
+		// This ensures consistent error behavior regardless of array size.
+		for (idx, item) in array.iter().enumerate() {
+			if !item.is_object() {
+				return Err(AdminError::ValidationError(format!(
+					"Item {} is not an object",
+					idx
+				)));
+			}
+		}
+
 		// Use parallel processing for large JSON arrays (1000+ items)
 		let records: Vec<HashMap<String, String>> = if array.len() > 1000 {
-			// Parallel processing with rayon
+			// Parallel processing with rayon (all items are validated as objects above)
 			array
 				.par_iter()
-				.filter_map(|item| {
-					let obj = item.as_object()?;
+				.map(|item| {
+					// Safe: validated above that all items are objects
+					let obj = item.as_object().expect("validated as object above");
 
 					let mut record = HashMap::new();
 					for (key, value) in obj {
@@ -456,17 +468,16 @@ impl JsonImporter {
 						record.insert(key.clone(), value_str);
 					}
 
-					Some(record)
+					record
 				})
 				.collect()
 		} else {
-			// Sequential processing for small arrays
+			// Sequential processing for small arrays (all items validated above)
 			let mut records = Vec::new();
 
-			for (idx, item) in array.iter().enumerate() {
-				let obj = item.as_object().ok_or_else(|| {
-					AdminError::ValidationError(format!("Item {} is not an object", idx))
-				})?;
+			for item in array.iter() {
+				// Safe: validated above that all items are objects
+				let obj = item.as_object().expect("validated as object above");
 
 				let mut record = HashMap::new();
 				for (key, value) in obj {

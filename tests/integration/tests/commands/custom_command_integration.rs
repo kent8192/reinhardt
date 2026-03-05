@@ -7,8 +7,8 @@ use reinhardt_commands::{
 	BaseCommand, CommandArgument, CommandContext, CommandOption, CommandRegistry, CommandResult,
 };
 use rstest::rstest;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 // =============================================================================
 // Test Command Implementations

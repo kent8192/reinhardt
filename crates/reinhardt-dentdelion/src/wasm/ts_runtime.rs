@@ -47,8 +47,36 @@
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
+use std::time::Duration;
 
 use boa_engine::{Context, JsError, JsValue, Source};
+
+/// Default maximum JavaScript execution time per evaluation (5 seconds).
+const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Default maximum JavaScript source code size in bytes (1 MiB).
+const DEFAULT_MAX_SOURCE_SIZE: usize = 1024 * 1024;
+
+/// Resource limits for JavaScript execution.
+///
+/// Controls CPU and memory usage to prevent denial-of-service from
+/// malicious or buggy JavaScript code.
+#[derive(Debug, Clone)]
+pub struct TsResourceLimits {
+	/// Maximum execution time per evaluation.
+	pub execution_timeout: Duration,
+	/// Maximum source code size in bytes.
+	pub max_source_size: usize,
+}
+
+impl Default for TsResourceLimits {
+	fn default() -> Self {
+		Self {
+			execution_timeout: DEFAULT_EXECUTION_TIMEOUT,
+			max_source_size: DEFAULT_MAX_SOURCE_SIZE,
+		}
+	}
+}
 
 /// Preact core library (minified)
 const PREACT_CORE: &str = include_str!("js/preact.min.js");
@@ -99,10 +127,12 @@ pub struct TsRuntime {
 	command_tx: SyncSender<RuntimeCommand>,
 	/// Whether Preact has been initialized (set once during construction)
 	preact_initialized: bool,
+	/// Resource limits for JavaScript execution
+	limits: TsResourceLimits,
 }
 
 impl TsRuntime {
-	/// Create a new JavaScript runtime with Preact pre-loaded.
+	/// Create a new JavaScript runtime with Preact pre-loaded and default resource limits.
 	///
 	/// This spawns a dedicated thread that owns the `boa_engine::Context`
 	/// and initializes Preact libraries. The `Context` never leaves this
@@ -114,6 +144,21 @@ impl TsRuntime {
 	/// - Runtime thread creation fails
 	/// - Preact initialization fails
 	pub fn new() -> Result<Self, TsError> {
+		Self::with_limits(TsResourceLimits::default())
+	}
+
+	/// Create a new JavaScript runtime with custom resource limits.
+	///
+	/// # Arguments
+	///
+	/// * `limits` - Resource limits controlling execution timeout and source size
+	///
+	/// # Errors
+	///
+	/// Returns an error if:
+	/// - Runtime thread creation fails
+	/// - Preact initialization fails
+	pub fn with_limits(limits: TsResourceLimits) -> Result<Self, TsError> {
 		// Bounded channel for command passing (backpressure at 16 pending commands)
 		let (command_tx, command_rx) = mpsc::sync_channel::<RuntimeCommand>(16);
 
@@ -134,6 +179,7 @@ impl TsRuntime {
 		Ok(Self {
 			command_tx,
 			preact_initialized: true,
+			limits,
 		})
 	}
 
@@ -150,6 +196,8 @@ impl TsRuntime {
 	/// assert_eq!(result, "3");
 	/// ```
 	pub fn eval(&self, code: &str) -> Result<String, TsError> {
+		self.check_source_size(code)?;
+
 		let (response_tx, response_rx) = mpsc::channel();
 		self.command_tx
 			.send(RuntimeCommand::Eval {
@@ -158,15 +206,24 @@ impl TsRuntime {
 			})
 			.map_err(|_| TsError::EvalFailed("Runtime thread is not available".to_string()))?;
 
-		response_rx.recv().map_err(|_| {
-			TsError::EvalFailed("Runtime thread terminated during evaluation".to_string())
-		})?
+		response_rx
+			.recv_timeout(self.limits.execution_timeout)
+			.map_err(|e| match e {
+				mpsc::RecvTimeoutError::Timeout => TsError::ExecutionTimeout {
+					timeout: self.limits.execution_timeout,
+				},
+				mpsc::RecvTimeoutError::Disconnected => {
+					TsError::EvalFailed("Runtime thread terminated during evaluation".to_string())
+				}
+			})?
 	}
 
 	/// Evaluate JavaScript code without expecting a return value.
 	///
 	/// Useful for executing side-effect code like defining functions.
 	pub fn eval_void(&self, code: &str) -> Result<(), TsError> {
+		self.check_source_size(code)?;
+
 		let (response_tx, response_rx) = mpsc::channel();
 		self.command_tx
 			.send(RuntimeCommand::EvalVoid {
@@ -175,9 +232,16 @@ impl TsRuntime {
 			})
 			.map_err(|_| TsError::EvalFailed("Runtime thread is not available".to_string()))?;
 
-		response_rx.recv().map_err(|_| {
-			TsError::EvalFailed("Runtime thread terminated during evaluation".to_string())
-		})?
+		response_rx
+			.recv_timeout(self.limits.execution_timeout)
+			.map_err(|e| match e {
+				mpsc::RecvTimeoutError::Timeout => TsError::ExecutionTimeout {
+					timeout: self.limits.execution_timeout,
+				},
+				mpsc::RecvTimeoutError::Disconnected => {
+					TsError::EvalFailed("Runtime thread terminated during evaluation".to_string())
+				}
+			})?
 	}
 
 	/// Render a Preact/React component to HTML string.
@@ -221,6 +285,15 @@ impl TsRuntime {
 			return Err(TsError::InitFailed("Preact not initialized".to_string()));
 		}
 
+		// Check combined size of component code and props
+		let total_size = component_code.len().saturating_add(props_json.len());
+		if total_size > self.limits.max_source_size {
+			return Err(TsError::SourceTooLarge {
+				size: total_size,
+				max: self.limits.max_source_size,
+			});
+		}
+
 		let (response_tx, response_rx) = mpsc::channel();
 		self.command_tx
 			.send(RuntimeCommand::RenderComponent {
@@ -230,14 +303,37 @@ impl TsRuntime {
 			})
 			.map_err(|_| TsError::RenderFailed("Runtime thread is not available".to_string()))?;
 
-		response_rx.recv().map_err(|_| {
-			TsError::RenderFailed("Runtime thread terminated during rendering".to_string())
-		})?
+		response_rx
+			.recv_timeout(self.limits.execution_timeout)
+			.map_err(|e| match e {
+				mpsc::RecvTimeoutError::Timeout => TsError::ExecutionTimeout {
+					timeout: self.limits.execution_timeout,
+				},
+				mpsc::RecvTimeoutError::Disconnected => {
+					TsError::RenderFailed("Runtime thread terminated during rendering".to_string())
+				}
+			})?
 	}
 
 	/// Check if Preact is initialized and ready for SSR.
 	pub fn is_preact_ready(&self) -> bool {
 		self.preact_initialized
+	}
+
+	/// Get the current resource limits.
+	pub fn limits(&self) -> &TsResourceLimits {
+		&self.limits
+	}
+
+	/// Validate source code size against the configured limit.
+	fn check_source_size(&self, code: &str) -> Result<(), TsError> {
+		if code.len() > self.limits.max_source_size {
+			return Err(TsError::SourceTooLarge {
+				size: code.len(),
+				max: self.limits.max_source_size,
+			});
+		}
+		Ok(())
 	}
 }
 
@@ -392,7 +488,12 @@ fn js_error_to_string(error: &JsError, context: &mut Context) -> String {
 pub type SharedTsRuntime = Arc<TsRuntime>;
 
 /// JavaScript runtime errors.
+///
+/// This enum is marked `#[non_exhaustive]` to allow adding new error variants
+/// in future minor versions without breaking downstream code. Match arms
+/// should include a wildcard pattern.
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum TsError {
 	/// JavaScript runtime initialization failed
 	#[error("JavaScript runtime initialization failed: {0}")]
@@ -409,41 +510,75 @@ pub enum TsError {
 	/// Component rendering failed
 	#[error("Component rendering failed: {0}")]
 	RenderFailed(String),
+
+	/// JavaScript execution exceeded the configured timeout
+	#[error("JavaScript execution timed out after {timeout:?}")]
+	ExecutionTimeout {
+		/// The timeout duration that was exceeded
+		timeout: Duration,
+	},
+
+	/// JavaScript source code exceeded the configured size limit
+	#[error("JavaScript source size ({size} bytes) exceeds limit ({max} bytes)")]
+	SourceTooLarge {
+		/// Actual source size in bytes
+		size: usize,
+		/// Maximum allowed size in bytes
+		max: usize,
+	},
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	#[test]
+	#[rstest]
 	fn test_ts_runtime_creation() {
+		// Arrange & Act
 		let runtime = TsRuntime::new();
+
+		// Assert
 		assert!(runtime.is_ok());
 		assert!(runtime.unwrap().is_preact_ready());
 	}
 
-	#[test]
+	#[rstest]
 	fn test_eval_simple_expression() {
+		// Arrange
 		let runtime = TsRuntime::new().unwrap();
+
+		// Act
 		let result = runtime.eval("(1 + 2).toString()").unwrap();
+
+		// Assert
 		assert_eq!(result, "3");
 	}
 
-	#[test]
+	#[rstest]
 	fn test_eval_string_expression() {
+		// Arrange
 		let runtime = TsRuntime::new().unwrap();
+
+		// Act
 		let result = runtime.eval("'Hello, ' + 'World'").unwrap();
+
+		// Assert
 		assert_eq!(result, "Hello, World");
 	}
 
-	#[test]
+	#[rstest]
 	fn test_eval_void() {
+		// Arrange
 		let runtime = TsRuntime::new().unwrap();
+
+		// Act & Assert
 		runtime.eval_void("var x = 42;").unwrap();
 	}
 
-	#[test]
+	#[rstest]
 	fn test_render_simple_component() {
+		// Arrange
 		let runtime = TsRuntime::new().unwrap();
 		let component_code = r#"
 			function Component(props) {
@@ -452,15 +587,19 @@ mod tests {
 		"#;
 		let props = r#"{"name": "World"}"#;
 
+		// Act
 		let result = runtime.render_component(component_code, props);
+
+		// Assert
 		assert!(result.is_ok());
 		let html = result.unwrap();
 		assert!(html.contains("Hello, World"));
 		assert!(html.contains("<div>"));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_render_nested_component() {
+		// Arrange
 		let runtime = TsRuntime::new().unwrap();
 		let component_code = r#"
 			function Child(props) {
@@ -474,15 +613,19 @@ mod tests {
 		"#;
 		let props = r#"{"message": "Nested!"}"#;
 
+		// Act
 		let result = runtime.render_component(component_code, props);
+
+		// Assert
 		assert!(result.is_ok());
 		let html = result.unwrap();
 		assert!(html.contains("container"));
 		assert!(html.contains("Nested!"));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_render_with_attributes() {
+		// Arrange
 		let runtime = TsRuntime::new().unwrap();
 		let component_code = r#"
 			function Component(props) {
@@ -491,7 +634,10 @@ mod tests {
 		"#;
 		let props = r#"{"url": "https://example.com", "label": "Click me"}"#;
 
+		// Act
 		let result = runtime.render_component(component_code, props);
+
+		// Assert
 		assert!(result.is_ok());
 		let html = result.unwrap();
 		assert!(html.contains("href="));
@@ -504,7 +650,7 @@ mod tests {
 	/// is confined to a dedicated thread and `TsRuntime` only holds a
 	/// `SyncSender` (which is `Send + Sync`), the struct is naturally
 	/// thread-safe without `unsafe impl`.
-	#[rstest::rstest]
+	#[rstest]
 	fn test_ts_runtime_is_send_and_sync() {
 		fn assert_send<T: Send>() {}
 		fn assert_sync<T: Sync>() {}
@@ -513,7 +659,7 @@ mod tests {
 	}
 
 	/// Verify `SharedTsRuntime` (`Arc<TsRuntime>`) can be shared across threads.
-	#[rstest::rstest]
+	#[rstest]
 	fn test_shared_ts_runtime_across_threads() {
 		// Arrange
 		let runtime = Arc::new(TsRuntime::new().unwrap());
@@ -525,5 +671,124 @@ mod tests {
 		// Assert
 		let result = handle.join().unwrap();
 		assert_eq!(result, "5");
+	}
+
+	// ==========================================================================
+	// Resource Limits Tests (#690)
+	// ==========================================================================
+
+	#[rstest]
+	fn test_source_size_limit_rejects_oversized_code() {
+		// Arrange
+		let limits = TsResourceLimits {
+			max_source_size: 64,
+			..TsResourceLimits::default()
+		};
+		let runtime = TsRuntime::with_limits(limits).unwrap();
+		let oversized_code = "a".repeat(128);
+
+		// Act
+		let result = runtime.eval(&oversized_code);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(TsError::SourceTooLarge { size: 128, max: 64 })
+		));
+	}
+
+	#[rstest]
+	fn test_source_size_limit_allows_within_limit() {
+		// Arrange
+		let limits = TsResourceLimits {
+			max_source_size: 256,
+			..TsResourceLimits::default()
+		};
+		let runtime = TsRuntime::with_limits(limits).unwrap();
+
+		// Act
+		let result = runtime.eval("(1 + 1).toString()");
+
+		// Assert
+		assert!(result.is_ok());
+		assert_eq!(result.unwrap(), "2");
+	}
+
+	#[rstest]
+	fn test_eval_void_source_size_limit() {
+		// Arrange
+		let limits = TsResourceLimits {
+			max_source_size: 32,
+			..TsResourceLimits::default()
+		};
+		let runtime = TsRuntime::with_limits(limits).unwrap();
+		let oversized_code = "var x = ".to_string() + &"0".repeat(64);
+
+		// Act
+		let result = runtime.eval_void(&oversized_code);
+
+		// Assert
+		assert!(matches!(result, Err(TsError::SourceTooLarge { .. })));
+	}
+
+	#[rstest]
+	fn test_render_component_source_size_limit() {
+		// Arrange
+		let limits = TsResourceLimits {
+			max_source_size: 64,
+			..TsResourceLimits::default()
+		};
+		let runtime = TsRuntime::with_limits(limits).unwrap();
+		let oversized_component = "a".repeat(128);
+
+		// Act
+		let result = runtime.render_component(&oversized_component, "{}");
+
+		// Assert
+		assert!(matches!(result, Err(TsError::SourceTooLarge { .. })));
+	}
+
+	#[rstest]
+	fn test_execution_timeout_rejects_long_running_code() {
+		// Arrange: use a very short timeout
+		let limits = TsResourceLimits {
+			execution_timeout: Duration::from_millis(100),
+			max_source_size: DEFAULT_MAX_SOURCE_SIZE,
+		};
+		let runtime = TsRuntime::with_limits(limits).unwrap();
+		// Intentionally long-running JavaScript (busy loop)
+		let infinite_loop = "var i = 0; while(true) { i++; }";
+
+		// Act
+		let result = runtime.eval(infinite_loop);
+
+		// Assert
+		assert!(matches!(result, Err(TsError::ExecutionTimeout { .. })));
+	}
+
+	#[rstest]
+	fn test_custom_limits_are_preserved() {
+		// Arrange
+		let limits = TsResourceLimits {
+			execution_timeout: Duration::from_secs(10),
+			max_source_size: 512,
+		};
+
+		// Act
+		let runtime = TsRuntime::with_limits(limits).unwrap();
+
+		// Assert
+		assert_eq!(runtime.limits().execution_timeout, Duration::from_secs(10));
+		assert_eq!(runtime.limits().max_source_size, 512);
+	}
+
+	#[rstest]
+	fn test_default_limits() {
+		// Arrange & Act
+		let limits = TsResourceLimits::default();
+
+		// Assert
+		assert_eq!(limits.execution_timeout, DEFAULT_EXECUTION_TIMEOUT);
+		assert_eq!(limits.max_source_size, DEFAULT_MAX_SOURCE_SIZE);
 	}
 }

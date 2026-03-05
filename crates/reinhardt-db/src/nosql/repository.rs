@@ -1,7 +1,7 @@
 //! Type-safe ODM Repository for MongoDB documents.
 //!
 //! The [`Repository`] provides CRUD operations that work with typed documents
-//! implementing the [`Document`] trait, rather than raw BSON documents.
+//! implementing the `Document` trait, rather than raw BSON documents.
 
 #[cfg(feature = "mongodb")]
 mod mongodb_impl {

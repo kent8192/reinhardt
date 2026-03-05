@@ -4,6 +4,8 @@
 //! Each app defines unified routes (server + client) in `urls.rs`, which are mounted here.
 
 use reinhardt::UnifiedRouter;
+#[cfg(not(target_arch = "wasm32"))]
+use reinhardt::admin::admin_routes;
 use reinhardt::routes;
 
 // Import app URL modules
@@ -32,13 +34,17 @@ use reinhardt::LoggingMiddleware;
 /// server and client routes defined.
 #[routes]
 pub fn routes() -> UnifiedRouter {
-	UnifiedRouter::new()
+	let router = UnifiedRouter::new()
 		// Mount each app's unified routes
 		.mount_unified("/", auth::urls::routes())
 		.mount_unified("/", tweet::urls::routes())
 		.mount_unified("/", profile::urls::routes())
 		.mount_unified("/", relationship::urls::routes())
-		.mount_unified("/", dm::urls::routes())
+		.mount_unified("/", dm::urls::routes());
+	// Mount admin panel routes (server-only, not available on wasm32)
+	#[cfg(not(target_arch = "wasm32"))]
+	let router = router.mount("/admin/", admin_routes());
+	router
 		// Apply middleware stack (order matters for request processing)
 		.with_middleware(LoggingMiddleware::new())
 		.with_middleware(create_security_middleware())

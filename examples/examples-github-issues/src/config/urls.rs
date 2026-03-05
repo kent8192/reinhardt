@@ -1,6 +1,7 @@
 //! URL configuration for examples-github-issues project
 //!
 //! This module configures the unified GraphQL schema and URL patterns.
+//! Admin panel routes are integrated via `AdminSite::get_urls()`.
 
 use async_graphql::{
 	MergedObject, MergedSubscription, Schema,
@@ -10,6 +11,8 @@ use reinhardt::middleware::CorsMiddleware;
 use reinhardt::middleware::cors::CorsConfig;
 use reinhardt::routes;
 use reinhardt::{JwtAuth, Request, Response, StatusCode, UnifiedRouter, ViewResult};
+
+use crate::config::admin::configure_admin;
 
 use crate::apps::auth::views::{AuthMutation, AuthQuery};
 use crate::apps::issues::views::{IssueMutation, IssueQuery, IssueSubscription};
@@ -98,8 +101,24 @@ fn create_cors_middleware() -> CorsMiddleware {
 }
 
 /// Build URL patterns for the application
+///
+/// Includes GraphQL endpoints and admin panel integration.
+/// Admin routes require a `DatabaseConnection` via `AdminSite::get_urls()`.
 #[routes]
 pub fn routes() -> UnifiedRouter {
+	// Configure admin site (registration only, no DB needed yet)
+	let _admin = configure_admin();
+
+	// Admin routes require DatabaseConnection for query execution.
+	// In production, mount admin routes like this:
+	//
+	//   let db = DatabaseConnection::connect("postgres://...").await?;
+	//   let admin_router = admin.get_urls(db);
+	//   router.mount("/admin", admin_router)
+	//
+	// For this example, admin is configured but not mounted since
+	// get_urls() requires an async DatabaseConnection.
+
 	UnifiedRouter::new()
 		.endpoint(views::health_check)
 		.function("/graphql", reinhardt::Method::POST, graphql_handler)

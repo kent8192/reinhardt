@@ -311,6 +311,7 @@ members = [
   "crates/reinhardt-pages",                             # WASM frontend framework
   "crates/reinhardt-pages/macros",              # WASM frontend macros
   "crates/reinhardt-pages/ast",                        # WASM frontend AST
+  "crates/reinhardt-whitenoise",                       # Static file optimization
   "crates/reinhardt-manouche",                         # DSL definitions for pages macros
   "crates/reinhardt-testkit",
   "crates/reinhardt-test",

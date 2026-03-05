@@ -353,6 +353,11 @@ env = { RUSTDOCFLAGS = "--cfg docsrs -D warnings", RUSTUP_TOOLCHAIN = "nightly" 
 # Utility Tasks
 # ============================================================================
 
+[tasks.audit]
+description = "Run security audit for known vulnerabilities"
+command = "cargo"
+args = ["audit"]
+
 [tasks.outdated]
 description = "Check for outdated dependencies"
 command = "cargo"

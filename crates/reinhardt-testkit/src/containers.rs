@@ -91,7 +91,6 @@ use testcontainers::core::WaitFor;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 use testcontainers_modules::mysql::Mysql;
-use testcontainers_modules::redis::Redis as RedisImage;
 
 /// Test key used by Memcached container's `wait_ready()` method to verify readiness.
 ///
@@ -292,7 +291,7 @@ impl TestDatabase for MySqlContainer {
 /// Redis test container
 pub struct RedisContainer {
 	#[allow(dead_code)]
-	container: ContainerAsync<RedisImage>,
+	container: ContainerAsync<GenericImage>,
 	host: String,
 	port: u16,
 }
@@ -310,7 +309,14 @@ pub async fn start_redis() -> (RedisContainer, String) {
 impl RedisContainer {
 	/// Create a new Redis container
 	pub async fn new() -> Self {
-		let image = RedisImage::default();
+		use testcontainers::core::IntoContainerPort;
+
+		// Use redis:7-alpine instead of default (redis:5.0)
+		// to match the pre-pull configuration in .github/docker-images-unit-test.txt
+		let image = GenericImage::new("redis", "7-alpine")
+			.with_exposed_port(6379.tcp())
+			.with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"));
+
 		let container = AsyncRunner::start(image)
 			.await
 			.expect("Failed to start Redis container");

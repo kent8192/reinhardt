@@ -32,6 +32,7 @@ You may be looking for:
 - 🎛️ [Feature Flags](https://reinhardt-web.dev/docs/feature-flags/) - Fine-tune your build
 - 📖 [API Documentation](https://docs.rs/reinhardt-web) - Complete API reference
 - 🎯 [Who is Reinhardt For?](#who-is-reinhardt-for) - Check if Reinhardt fits your needs
+- 🛤️ [Choose Your Path](#choose-your-path) - Find the right starting point for you
 - 💬 [Community & Support](#getting-help) - Get help from the community
 
 ## Who is Reinhardt For?
@@ -44,6 +45,49 @@ Reinhardt is designed for developers who:
 - **Want incremental adoption** -- start with just DI or ORM, grow into a full stack later
 
 If you have written `ModelSerializer` or `Depends()` before, Reinhardt will feel like home.
+
+## Choose Your Path
+
+| Your Goal | Start Here | Time to First Request |
+|-----------|-----------|----------------------|
+| **Full-stack REST API** | [Quick Start](#quick-start) | ~5 min |
+| **Just DI for my Axum app** | [Minimal Installation](#minimal-micro-build) | ~2 min |
+| **Full-stack with Pages (WASM + SSR)** | [Twitter Demo](examples/examples-twitter/) | ~10 min |
+
+### Path A: Full-Stack REST API
+
+```bash
+cargo install reinhardt-admin
+reinhardt-admin startproject myproject
+cd myproject
+cargo make runserver
+# Visit http://127.0.0.1:8000
+```
+
+### Path B: Standalone DI
+
+```toml
+[dependencies]
+reinhardt = { version = "0.1.0-rc.2", package = "reinhardt-web", features = ["minimal"] }
+```
+
+```rust
+use reinhardt::{Json, Path, Query};
+
+#[reinhardt::endpoint(method = "GET", path = "/hello/:name")]
+async fn hello(Path(name): Path<String>) -> Json<String> {
+    Json(format!("Hello, {}!", name))
+}
+```
+
+### Path C: Full-Stack with Pages
+
+```bash
+reinhardt-admin startproject myproject --with-pages
+cd myproject
+cargo make dev
+# Frontend: http://127.0.0.1:8000
+```
 
 ## Why Reinhardt?
 

@@ -1,7 +1,8 @@
 [package]
 name = "reinhardt-conf"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.4"
 edition.workspace = true
+authors.workspace = true
 license.workspace = true
 description = "Configuration management framework for Reinhardt - Django-inspired settings with encryption and secrets management"
 keywords = ["settings", "configuration", "secrets", "django", "reinhardt"]
@@ -15,7 +16,7 @@ repository.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-toml = "0.9.8"
+toml = { workspace = true }
 reinhardt-core = { workspace = true, features = ["exception", "validators"] }
 dotenv = "0.15"
 url = "2.5"
@@ -37,7 +38,7 @@ redis = { version = "0.32.7", features = [
 sqlx = { workspace = true, features = ["any", "runtime-tokio", "tls-rustls", "postgres", "mysql"], optional = true }
 reinhardt-query = { workspace = true, optional = true }
 reqwest = { version = "0.12", features = ["json"], optional = true }
-rand = { version = "0.9.2", optional = true }
+rand = { workspace = true, optional = true }
 aws-config = { version = "1.5", optional = true }
 aws-sdk-secretsmanager = { version = "1.52", optional = true }
 aws-smithy-runtime = { version = "1.9", optional = true }
@@ -72,6 +73,7 @@ hot-reload = ["notify", "tokio", "async"]
 caching = ["moka", "async"]
 
 [dev-dependencies]
+insta = { workspace = true }
 futures = { workspace = true }
 tempfile = "3.8"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
@@ -80,7 +82,7 @@ anyhow = { workspace = true }
 hex = "0.4"
 colored = "3.0.0"
 mockito = "1.5"
-mockall = "0.13"
+mockall = { workspace = true }
 rstest = "0.26.1"
 wiremock = "0.6"
 serial_test = { workspace = true }

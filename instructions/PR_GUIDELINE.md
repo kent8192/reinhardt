@@ -390,6 +390,52 @@ cargo make clippy-check
 
 ---
 
+## PR Conflict Resolution
+
+### CR-1 (MUST): Worktree-Based Merge Strategy
+
+PR conflicts MUST be resolved using a worktree-based merge strategy. Rebase and force-push are NOT allowed for conflict resolution.
+
+**Procedure:**
+
+1. Create a worktree for the source branch:
+   ```bash
+   git worktree add /tmp/<worktree-name> <source-branch>
+   ```
+2. In the worktree, merge the target branch:
+   ```bash
+   cd /tmp/<worktree-name>
+   git merge <target-branch>
+   ```
+3. Resolve conflicts and commit:
+   ```bash
+   # Resolve conflicts in files
+   git add <resolved-files>
+   git commit
+   ```
+4. Push and clean up:
+   ```bash
+   git push origin <source-branch>
+   cd -
+   git worktree remove /tmp/<worktree-name>
+   ```
+
+**Rationale:**
+- Preserves complete commit history
+- Avoids force-push risks (overwriting upstream changes)
+- Merge commits clearly document conflict resolution
+- Worktree isolation prevents interference with current work
+
+### CR-2 (NEVER): Prohibited Approaches
+
+- **NEVER** use `git rebase` to resolve PR conflicts
+- **NEVER** use `git push --force` or `git push --force-with-lease` for conflict resolution
+- **NEVER** use `git reset --hard` as part of conflict resolution workflow
+
+**Exception:** Rebase may be used ONLY when explicitly requested by the user, with clear understanding of the implications.
+
+---
+
 ## PR Merge Policy
 
 ### MP-1 (MUST): Merge Requirements
@@ -522,6 +568,7 @@ docs(readme): add installation instructions
 - Merge with failing CI checks
 - Leave unresolved review comments
 - Force push after review has started (unless explicitly requested)
+- Use rebase or force-push to resolve PR conflicts (use worktree merge instead)
 
 ---
 

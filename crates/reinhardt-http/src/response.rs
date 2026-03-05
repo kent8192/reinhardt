@@ -176,9 +176,16 @@ pub fn truncate_for_log(input: &str, max_length: usize) -> String {
 	if input.len() <= max_length {
 		input.to_string()
 	} else {
+		// Find valid UTF-8 boundary at or before max_length
+		let truncate_at = input
+			.char_indices()
+			.take_while(|&(i, _)| i <= max_length)
+			.last()
+			.map(|(i, _)| i)
+			.unwrap_or(0);
 		format!(
 			"{}...[truncated, {} total bytes]",
-			&input[..max_length],
+			&input[..truncate_at],
 			input.len()
 		)
 	}
@@ -977,6 +984,59 @@ mod tests {
 
 		// Assert
 		assert_eq!(result, "abcde");
+	}
+
+	#[rstest]
+	fn test_truncate_for_log_multi_byte_utf8_does_not_panic() {
+		// Arrange
+		// Each CJK character is 3 bytes in UTF-8
+		let input = "日本語テスト文字列";
+
+		// Act - max_length falls in the middle of a multi-byte char
+		let result = truncate_for_log(input, 4);
+
+		// Assert - should truncate at valid char boundary (3 bytes = 1 char)
+		assert!(result.starts_with("日"));
+		assert!(result.contains("...[truncated"));
+	}
+
+	#[rstest]
+	fn test_truncate_for_log_emoji_boundary() {
+		// Arrange
+		// Each emoji is 4 bytes in UTF-8
+		let input = "🦀🐍🐹🐿️";
+
+		// Act - max_length 5 falls between first emoji (4 bytes) and second
+		let result = truncate_for_log(input, 5);
+
+		// Assert - should include only the first emoji (4 bytes)
+		assert!(result.starts_with("🦀"));
+		assert!(result.contains("...[truncated"));
+	}
+
+	#[rstest]
+	fn test_truncate_for_log_mixed_ascii_and_multibyte() {
+		// Arrange
+		let input = "abc日本語def";
+
+		// Act - max_length 5 falls inside second CJK char
+		let result = truncate_for_log(input, 5);
+
+		// Assert - "abc" (3 bytes) + "日" (3 bytes) = 6 bytes > 5, so only "abc"
+		assert!(result.starts_with("abc"));
+		assert!(result.contains("...[truncated"));
+	}
+
+	#[rstest]
+	fn test_truncate_for_log_zero_max_length() {
+		// Arrange
+		let input = "hello";
+
+		// Act
+		let result = truncate_for_log(input, 0);
+
+		// Assert - should produce empty prefix with truncation notice
+		assert!(result.starts_with("...[truncated"));
 	}
 
 	#[rstest]

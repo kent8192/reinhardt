@@ -345,6 +345,54 @@ impl PathPattern {
 	pub fn pattern(&self) -> &str {
 		&self.pattern
 	}
+
+	/// Convert pattern to matchit-compatible format
+	///
+	/// Transforms path-type parameters from `{<path:name>}` to `{*name}`
+	/// for use with the matchit radix router. Non-path parameters remain
+	/// as `{name}`.
+	pub(crate) fn to_matchit_pattern(&self) -> String {
+		let mut result = String::new();
+		let mut chars = self.pattern.chars().peekable();
+
+		while let Some(ch) = chars.next() {
+			if ch == '{' {
+				let mut param_content = String::new();
+				while let Some(&next_ch) = chars.peek() {
+					if next_ch == '}' {
+						chars.next();
+						break;
+					}
+					param_content.push(chars.next().unwrap());
+				}
+
+				// Check for typed parameter: {<type:name>}
+				if param_content.starts_with('<') && param_content.ends_with('>') {
+					let inner = &param_content[1..param_content.len() - 1];
+					if let Some(colon_pos) = inner.find(':') {
+						let type_spec = &inner[..colon_pos];
+						let name = &inner[colon_pos + 1..];
+						if type_spec == "path" {
+							// Convert path type to matchit catch-all: {*name}
+							result.push_str(&format!("{{*{}}}", name));
+						} else {
+							// Other typed params use simple {name}
+							result.push_str(&format!("{{{}}}", name));
+						}
+					} else {
+						result.push_str(&format!("{{{}}}", param_content));
+					}
+				} else {
+					// Simple {name} parameter
+					result.push_str(&format!("{{{}}}", param_content));
+				}
+			} else {
+				result.push(ch);
+			}
+		}
+
+		result
+	}
 	/// Get the list of parameter names in the pattern
 	///
 	/// # Examples
@@ -575,7 +623,7 @@ impl PathMatcher {
 
 		// Rebuild radix router from existing patterns
 		for (pattern, handler_id) in &self.patterns {
-			let _ = radix_router.add_route(pattern.pattern(), handler_id.clone());
+			let _ = radix_router.add_route(&pattern.to_matchit_pattern(), handler_id.clone());
 		}
 
 		self.radix_router = Some(radix_router);
@@ -602,12 +650,12 @@ impl PathMatcher {
 	/// assert!(result.is_some());
 	/// ```
 	pub fn add_pattern(&mut self, pattern: PathPattern, handler_id: String) {
-		let pattern_str = pattern.pattern().to_string();
+		let matchit_pattern = pattern.to_matchit_pattern();
 		self.patterns.push((pattern, handler_id.clone()));
 
 		// If radix tree mode is enabled, also add to radix router
 		if let Some(ref mut radix_router) = self.radix_router {
-			let _ = radix_router.add_route(&pattern_str, handler_id);
+			let _ = radix_router.add_route(&matchit_pattern, handler_id);
 		}
 	}
 	/// Match a path and extract parameters
@@ -645,7 +693,22 @@ impl PathMatcher {
 			MatchingMode::RadixTree => {
 				// Use radix tree for O(m) matching
 				if let Some(ref radix_router) = self.radix_router {
-					radix_router.match_path(path)
+					let (handler_id, params) = radix_router.match_path(path)?;
+
+					// Validate path-type parameters against directory traversal
+					if let Some((pattern, _)) =
+						self.patterns.iter().find(|(_, id)| *id == handler_id)
+					{
+						for (name, value) in &params {
+							if pattern.path_type_params.contains(name)
+								&& !validate_path_param(value)
+							{
+								return None;
+							}
+						}
+					}
+
+					Some((handler_id, params))
 				} else {
 					// Fallback to linear if radix router not initialized
 					self.match_path_linear(path)
@@ -1372,6 +1435,63 @@ mod tests {
 		assert!(
 			pattern.extract_params("/files//etc/passwd").is_none(),
 			"Path type should reject absolute path in parameter"
+		);
+	}
+
+	#[test]
+	fn test_radix_tree_mode_rejects_traversal() {
+		// Arrange
+		let mut matcher = PathMatcher::with_mode(MatchingMode::RadixTree);
+		matcher.add_pattern(
+			PathPattern::new("/files/{<path:filepath>}").unwrap(),
+			"serve_file".to_string(),
+		);
+
+		// Act & Assert - should reject traversal in RadixTree mode
+		assert!(
+			matcher.match_path("/files/../../../etc/passwd").is_none(),
+			"RadixTree mode should reject directory traversal in path params"
+		);
+		assert!(
+			matcher.match_path("/files/foo/../../etc/passwd").is_none(),
+			"RadixTree mode should reject embedded directory traversal"
+		);
+
+		// Valid path should work
+		let result = matcher.match_path("/files/css/style.css");
+		assert!(result.is_some());
+		let (handler_id, params) = result.unwrap();
+		assert_eq!(handler_id, "serve_file");
+		assert_eq!(params.get("filepath"), Some(&"css/style.css".to_string()));
+	}
+
+	#[test]
+	fn test_radix_tree_mode_rejects_encoded_traversal() {
+		// Arrange
+		let mut matcher = PathMatcher::with_mode(MatchingMode::RadixTree);
+		matcher.add_pattern(
+			PathPattern::new("/files/{<path:filepath>}").unwrap(),
+			"serve_file".to_string(),
+		);
+
+		// Act & Assert - percent-encoded traversal
+		assert!(
+			matcher
+				.match_path("/files/%2e%2e/%2e%2e/etc/passwd")
+				.is_none(),
+			"RadixTree mode should reject percent-encoded traversal"
+		);
+		assert!(
+			matcher
+				.match_path("/files/..%2f..%2fetc%2fpasswd")
+				.is_none(),
+			"RadixTree mode should reject mixed encoded traversal"
+		);
+
+		// Null byte injection
+		assert!(
+			matcher.match_path("/files/foo%00bar").is_none(),
+			"RadixTree mode should reject encoded null bytes"
 		);
 	}
 

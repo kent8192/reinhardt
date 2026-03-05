@@ -214,7 +214,7 @@ impl ClientValidator for UrlValidator {
 ///
 /// Registers built-in validators: email, min_length, max_length, url
 fn initialize_default_validators(registry: &Arc<Mutex<ValidatorRegistry>>) {
-	let mut registry = registry.lock().unwrap();
+	let mut registry = registry.lock().unwrap_or_else(|e| e.into_inner());
 
 	// Register built-in validators
 	registry.register("email", Arc::new(EmailValidator));
@@ -293,7 +293,7 @@ mod tests {
 		let registry = Arc::new(Mutex::new(ValidatorRegistry::new()));
 		initialize_default_validators(&registry);
 
-		let registry = registry.lock().unwrap();
+		let registry = registry.lock().unwrap_or_else(|e| e.into_inner());
 
 		// Test email validator
 		assert!(
@@ -339,7 +339,7 @@ mod tests {
 	#[test]
 	fn test_validator_registry_global() {
 		let registry = ValidatorRegistry::global();
-		let registry = registry.lock().unwrap();
+		let registry = registry.lock().unwrap_or_else(|e| e.into_inner());
 
 		// Global registry should have default validators
 		assert!(registry.get("email").is_some());

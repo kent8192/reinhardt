@@ -158,7 +158,7 @@ impl MessageCatalog {
 
 		match lang {
 			// East Asian and others with no plural forms (single form)
-			"ja" | "zh" | "ko" | "vi" | "th" | "id" | "ms" | "tr" | "fa" | "ka" | "hu" => 0,
+			"ja" | "zh" | "ko" | "vi" | "th" | "id" | "ms" | "tr" | "fa" | "ka" => 0,
 
 			// French: 0 and 1 are singular
 			"fr" => {

@@ -8,6 +8,7 @@ use reinhardt_http::Request;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -40,6 +41,9 @@ pub struct AccessToken {
 	pub scope: Option<String>,
 }
 
+/// Maximum lifetime of an authorization code per RFC 6749 Section 4.1.2
+const AUTHORIZATION_CODE_TTL: Duration = Duration::from_secs(600);
+
 /// OAuth2 authorization code
 #[derive(Debug, Clone)]
 pub struct AuthorizationCode {
@@ -53,6 +57,8 @@ pub struct AuthorizationCode {
 	pub user_id: String,
 	/// Scope
 	pub scope: Option<String>,
+	/// Timestamp when the code was created
+	pub created_at: Instant,
 }
 
 /// OAuth2 application/client
@@ -132,6 +138,7 @@ pub trait UserRepository: Send + Sync {
 ///         redirect_uri: "https://example.com/callback".to_string(),
 ///         user_id: "user_456".to_string(),
 ///         scope: Some("read write".to_string()),
+///         created_at: std::time::Instant::now(),
 ///     };
 ///
 ///     store.store_code(code).await.unwrap();
@@ -168,7 +175,12 @@ impl OAuth2TokenStore for InMemoryOAuth2Store {
 
 	async fn consume_code(&self, code: &str) -> Result<Option<AuthorizationCode>, String> {
 		let mut codes = self.codes.lock().await;
-		Ok(codes.remove(code))
+		match codes.remove(code) {
+			Some(auth_code) if auth_code.created_at.elapsed() > AUTHORIZATION_CODE_TTL => {
+				Err("authorization code has expired".to_string())
+			}
+			other => Ok(other),
+		}
 	}
 
 	async fn store_token(&self, user_id: &str, token: AccessToken) -> Result<(), String> {
@@ -348,6 +360,7 @@ impl OAuth2Authentication {
 			redirect_uri: redirect_uri.to_string(),
 			user_id: user_id.to_string(),
 			scope,
+			created_at: Instant::now(),
 		};
 
 		self.token_store.store_code(auth_code).await?;
@@ -372,6 +385,11 @@ impl OAuth2Authentication {
 			.consume_code(code)
 			.await?
 			.ok_or_else(|| "Invalid or expired authorization code".to_string())?;
+
+		// Verify the authorization code was issued to the requesting client
+		if auth_code.client_id != client_id {
+			return Err("Authorization code was not issued to this client".to_string());
+		}
 
 		// Generate access token
 		let token = AccessToken {
@@ -509,6 +527,7 @@ mod tests {
 			redirect_uri: "https://example.com/callback".to_string(),
 			user_id: "user_123".to_string(),
 			scope: Some("read".to_string()),
+			created_at: Instant::now(),
 		};
 
 		store.store_code(code.clone()).await.unwrap();
@@ -520,6 +539,48 @@ mod tests {
 		// Code should be consumed
 		let consumed = store.consume_code("test_code").await.unwrap();
 		assert!(consumed.is_none());
+	}
+
+	#[tokio::test]
+	async fn test_exchange_code_rejects_mismatched_client_id() {
+		// Arrange - register two clients
+		let app_a = OAuth2Application {
+			client_id: "client_a".to_string(),
+			client_secret: "secret_a".to_string(),
+			redirect_uris: vec!["https://a.example.com/callback".to_string()],
+			grant_types: vec![GrantType::AuthorizationCode],
+		};
+		let app_b = OAuth2Application {
+			client_id: "client_b".to_string(),
+			client_secret: "secret_b".to_string(),
+			redirect_uris: vec!["https://b.example.com/callback".to_string()],
+			grant_types: vec![GrantType::AuthorizationCode],
+		};
+
+		let auth = OAuth2Authentication::new();
+		auth.register_application(app_a).await;
+		auth.register_application(app_b).await;
+
+		// Generate code for client_a
+		let code = auth
+			.generate_authorization_code(
+				"client_a",
+				"https://a.example.com/callback",
+				"user_123",
+				None,
+			)
+			.await
+			.unwrap();
+
+		// Act - try to exchange code using client_b's credentials
+		let result = auth.exchange_code(&code, "client_b", "secret_b").await;
+
+		// Assert - should reject because code was issued to client_a
+		assert!(result.is_err());
+		assert_eq!(
+			result.unwrap_err(),
+			"Authorization code was not issued to this client"
+		);
 	}
 
 	#[tokio::test]

@@ -121,13 +121,13 @@ impl SessionStore {
 
 	/// Get a session
 	pub fn get(&self, id: &str) -> Option<SessionData> {
-		let sessions = self.sessions.read().unwrap();
+		let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
 		sessions.get(id).cloned()
 	}
 
 	/// Save a session, with automatic cleanup when threshold is exceeded
 	pub fn save(&self, session: SessionData) {
-		let mut sessions = self.sessions.write().unwrap();
+		let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
 		sessions.insert(session.id.clone(), session);
 
 		// Lazy eviction: clean up expired sessions when threshold is exceeded
@@ -141,31 +141,31 @@ impl SessionStore {
 
 	/// Delete a session
 	pub fn delete(&self, id: &str) {
-		let mut sessions = self.sessions.write().unwrap();
+		let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
 		sessions.remove(id);
 	}
 
 	/// Clean up expired sessions
 	pub fn cleanup(&self) {
-		let mut sessions = self.sessions.write().unwrap();
+		let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
 		sessions.retain(|_, session| session.is_valid());
 	}
 
 	/// Clear the store
 	pub fn clear(&self) {
-		let mut sessions = self.sessions.write().unwrap();
+		let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
 		sessions.clear();
 	}
 
 	/// Get the number of sessions
 	pub fn len(&self) -> usize {
-		let sessions = self.sessions.read().unwrap();
+		let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
 		sessions.len()
 	}
 
 	/// Check if the store is empty
 	pub fn is_empty(&self) -> bool {
-		let sessions = self.sessions.read().unwrap();
+		let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
 		sessions.is_empty()
 	}
 }
@@ -921,6 +921,30 @@ mod tests {
 			.to_str()
 			.unwrap();
 		assert!(cookie.contains("Secure"));
+	}
+
+	#[rstest::rstest]
+	fn test_rwlock_poison_recovery_session_store() {
+		// Arrange
+		let store = Arc::new(SessionStore::new());
+		let session = SessionData::new(Duration::from_secs(3600));
+		let session_id = session.id.clone();
+		store.save(session);
+
+		// Act - poison the RwLock by panicking while holding a write guard
+		let store_clone = Arc::clone(&store);
+		let _ = thread::spawn(move || {
+			let _guard = store_clone.sessions.write().unwrap();
+			panic!("intentional panic to poison lock");
+		})
+		.join();
+
+		// Assert - operations still work after poison recovery
+		assert!(store.get(&session_id).is_some());
+		assert_eq!(store.len(), 1);
+		assert!(!store.is_empty());
+		store.delete(&session_id);
+		assert_eq!(store.len(), 0);
 	}
 }
 

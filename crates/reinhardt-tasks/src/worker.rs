@@ -488,8 +488,9 @@ impl Worker {
 			Err(_) => (TaskStatus::Failure, crate::webhook::TaskStatus::Failed),
 		};
 
-		// Store result if result backend is available
-		if let Some(ref result_backend) = self.result_backend {
+		// Store result if result backend is available.
+		// Capture store_result error separately to ensure lock is always released.
+		let store_error = if let Some(ref result_backend) = self.result_backend {
 			let metadata = match result {
 				Ok(_) => TaskResultMetadata::new(
 					task_id,
@@ -501,8 +502,10 @@ impl Worker {
 				}
 			};
 
-			result_backend.store_result(metadata).await?;
-		}
+			result_backend.store_result(metadata).await.err()
+		} else {
+			None
+		};
 
 		// Send webhook notifications
 		if !self.webhook_senders.is_empty() {
@@ -541,9 +544,21 @@ impl Worker {
 			}
 		}
 
-		// Release lock if acquired
-		if let Some(ref lock) = self.task_lock {
-			lock.release(task_id).await?;
+		// Always release lock if acquired, regardless of store_result outcome
+		if let Some(ref lock) = self.task_lock
+			&& let Err(e) = lock.release(task_id).await
+		{
+			tracing::error!(
+				worker = %self.config.name,
+				task_id = %task_id,
+				error = %e,
+				"Failed to release task lock"
+			);
+		}
+
+		// Propagate store_result error after lock is released
+		if let Some(e) = store_error {
+			return Err(Box::new(e));
 		}
 
 		result

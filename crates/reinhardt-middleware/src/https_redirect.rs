@@ -18,6 +18,9 @@ pub struct HttpsRedirectConfig {
 	pub exempt_paths: Vec<String>,
 	/// Redirect status code (301 or 302)
 	pub status_code: StatusCode,
+	/// Allowed host names for redirect (prevents host header injection).
+	/// If empty, all requests without a valid allowed host are rejected with 400 Bad Request.
+	pub allowed_hosts: Vec<String>,
 }
 
 impl Default for HttpsRedirectConfig {
@@ -26,6 +29,7 @@ impl Default for HttpsRedirectConfig {
 			enabled: true,
 			exempt_paths: vec![],
 			status_code: StatusCode::MOVED_PERMANENTLY, // 301
+			allowed_hosts: vec![],
 		}
 	}
 }
@@ -65,6 +69,7 @@ impl HttpsRedirectMiddleware {
 	/// config.enabled = true;
 	/// config.exempt_paths = vec!["/health".to_string()];
 	/// config.status_code = StatusCode::MOVED_PERMANENTLY;
+	/// config.allowed_hosts = vec!["example.com".to_string()];
 	///
 	/// let middleware = HttpsRedirectMiddleware::new(config);
 	/// let handler = Arc::new(TestHandler);
@@ -97,7 +102,7 @@ impl HttpsRedirectMiddleware {
 	///
 	/// ```
 	/// use std::sync::Arc;
-	/// use reinhardt_middleware::HttpsRedirectMiddleware;
+	/// use reinhardt_middleware::{HttpsRedirectConfig, HttpsRedirectMiddleware};
 	/// use reinhardt_http::{Handler, Middleware, Request, Response};
 	/// use hyper::{StatusCode, Method, Version, HeaderMap};
 	/// use bytes::Bytes;
@@ -112,7 +117,9 @@ impl HttpsRedirectMiddleware {
 	/// }
 	///
 	/// # tokio_test::block_on(async {
-	/// let middleware = HttpsRedirectMiddleware::default_config();
+	/// let mut config = HttpsRedirectConfig::default();
+	/// config.allowed_hosts = vec!["api.example.com".to_string()];
+	/// let middleware = HttpsRedirectMiddleware::new(config);
 	/// let handler = Arc::new(TestHandler);
 	///
 	/// let mut headers = HeaderMap::new();
@@ -145,6 +152,34 @@ impl HttpsRedirectMiddleware {
 			.iter()
 			.any(|exempt| path.starts_with(exempt))
 	}
+
+	/// Validate host header against allowed hosts list.
+	/// Returns the validated host string if valid, or None if the host is not allowed.
+	fn validate_host<'a>(&self, host: Option<&'a str>) -> Option<&'a str> {
+		let host = host?;
+
+		// Reject hosts containing path separators or whitespace (injection attempts)
+		if host.contains('/') || host.contains('\\') || host.contains(char::is_whitespace) {
+			return None;
+		}
+
+		// If no allowed hosts configured, reject all (secure by default)
+		if self.config.allowed_hosts.is_empty() {
+			return None;
+		}
+
+		// Strip port for comparison (e.g., "example.com:8080" -> "example.com")
+		let host_without_port = host.split(':').next().unwrap_or(host);
+
+		// Check against allowed hosts list
+		let is_allowed = self.config.allowed_hosts.iter().any(|allowed| {
+			let allowed_lower = allowed.to_lowercase();
+			let host_lower = host_without_port.to_lowercase();
+			allowed_lower == host_lower
+		});
+
+		if is_allowed { Some(host) } else { None }
+	}
 }
 
 #[async_trait]
@@ -165,14 +200,24 @@ impl Middleware for HttpsRedirectMiddleware {
 			return handler.handle(request).await;
 		}
 
-		// Build HTTPS redirect URL
+		// Validate host header against allowed hosts to prevent host header injection
+		let host_value = request
+			.headers
+			.get(hyper::header::HOST)
+			.and_then(|h| h.to_str().ok());
+
+		let validated_host = match self.validate_host(host_value) {
+			Some(host) => host,
+			None => {
+				// Reject requests with invalid or disallowed host headers
+				return Ok(Response::new(StatusCode::BAD_REQUEST));
+			}
+		};
+
+		// Build HTTPS redirect URL with validated host
 		let https_url = format!(
 			"https://{}{}",
-			request
-				.headers
-				.get(hyper::header::HOST)
-				.and_then(|h| h.to_str().ok())
-				.unwrap_or("localhost"),
+			validated_host,
 			request
 				.uri
 				.path_and_query()
@@ -195,6 +240,7 @@ mod tests {
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method, StatusCode, Version};
 	use reinhardt_http::Request;
+	use rstest::rstest;
 
 	struct TestHandler;
 
@@ -205,9 +251,21 @@ mod tests {
 		}
 	}
 
+	fn config_with_allowed_hosts(hosts: Vec<&str>) -> HttpsRedirectConfig {
+		HttpsRedirectConfig {
+			enabled: true,
+			exempt_paths: vec![],
+			status_code: StatusCode::MOVED_PERMANENTLY,
+			allowed_hosts: hosts.into_iter().map(String::from).collect(),
+		}
+	}
+
+	#[rstest]
 	#[tokio::test]
-	async fn test_redirect_http_to_https() {
-		let middleware = HttpsRedirectMiddleware::default_config();
+	async fn test_redirect_http_to_https_with_allowed_host() {
+		// Arrange
+		let config = config_with_allowed_hosts(vec!["example.com"]);
+		let middleware = HttpsRedirectMiddleware::new(config);
 		let handler = Arc::new(TestHandler);
 
 		let mut headers = HeaderMap::new();
@@ -222,8 +280,10 @@ mod tests {
 			.build()
 			.unwrap();
 
+		// Act
 		let response = middleware.process(request, handler).await.unwrap();
 
+		// Assert
 		assert_eq!(response.status, StatusCode::MOVED_PERMANENTLY);
 		assert_eq!(
 			response.headers.get("Location").unwrap(),
@@ -231,9 +291,12 @@ mod tests {
 		);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_no_redirect_for_https() {
-		let middleware = HttpsRedirectMiddleware::default_config();
+		// Arrange
+		let config = config_with_allowed_hosts(vec!["example.com"]);
+		let middleware = HttpsRedirectMiddleware::new(config);
 		let handler = Arc::new(TestHandler);
 
 		let mut headers = HeaderMap::new();
@@ -249,17 +312,22 @@ mod tests {
 			.build()
 			.unwrap();
 
+		// Act
 		let response = middleware.process(request, handler).await.unwrap();
 
+		// Assert
 		assert_eq!(response.status, StatusCode::OK);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_exempt_paths() {
+		// Arrange
 		let config = HttpsRedirectConfig {
 			enabled: true,
 			exempt_paths: vec!["/health".to_string()],
 			status_code: StatusCode::MOVED_PERMANENTLY,
+			allowed_hosts: vec!["example.com".to_string()],
 		};
 		let middleware = HttpsRedirectMiddleware::new(config);
 		let handler = Arc::new(TestHandler);
@@ -276,9 +344,172 @@ mod tests {
 			.build()
 			.unwrap();
 
+		// Act
 		let response = middleware.process(request, handler).await.unwrap();
 
-		// Should not redirect exempt paths
+		// Assert - should not redirect exempt paths
 		assert_eq!(response.status, StatusCode::OK);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_reject_disallowed_host() {
+		// Arrange
+		let config = config_with_allowed_hosts(vec!["example.com"]);
+		let middleware = HttpsRedirectMiddleware::new(config);
+		let handler = Arc::new(TestHandler);
+
+		let mut headers = HeaderMap::new();
+		headers.insert(hyper::header::HOST, "evil.com".parse().unwrap());
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(headers)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert - should reject with 400 Bad Request
+		assert_eq!(response.status, StatusCode::BAD_REQUEST);
+		assert!(response.headers.get("Location").is_none());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_reject_host_with_path_separator() {
+		// Arrange - host header injection attempt with path separator
+		let config = config_with_allowed_hosts(vec!["example.com"]);
+		let middleware = HttpsRedirectMiddleware::new(config);
+		let handler = Arc::new(TestHandler);
+
+		let mut headers = HeaderMap::new();
+		headers.insert(hyper::header::HOST, "evil.com/redirect".parse().unwrap());
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(headers)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert - should reject host with path separator
+		assert_eq!(response.status, StatusCode::BAD_REQUEST);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_reject_missing_host_header() {
+		// Arrange - no host header at all
+		let config = config_with_allowed_hosts(vec!["example.com"]);
+		let middleware = HttpsRedirectMiddleware::new(config);
+		let handler = Arc::new(TestHandler);
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert - should reject when no host header present
+		assert_eq!(response.status, StatusCode::BAD_REQUEST);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_reject_empty_allowed_hosts() {
+		// Arrange - default config has empty allowed_hosts (secure by default)
+		let middleware = HttpsRedirectMiddleware::default_config();
+		let handler = Arc::new(TestHandler);
+
+		let mut headers = HeaderMap::new();
+		headers.insert(hyper::header::HOST, "example.com".parse().unwrap());
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(headers)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert - should reject when no allowed hosts configured
+		assert_eq!(response.status, StatusCode::BAD_REQUEST);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_allowed_host_with_port() {
+		// Arrange - host header includes port
+		let config = config_with_allowed_hosts(vec!["example.com"]);
+		let middleware = HttpsRedirectMiddleware::new(config);
+		let handler = Arc::new(TestHandler);
+
+		let mut headers = HeaderMap::new();
+		headers.insert(hyper::header::HOST, "example.com:8080".parse().unwrap());
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(headers)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert - should allow host with port when hostname matches
+		assert_eq!(response.status, StatusCode::MOVED_PERMANENTLY);
+		assert_eq!(
+			response.headers.get("Location").unwrap(),
+			"https://example.com:8080/test"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_case_insensitive_host_matching() {
+		// Arrange
+		let config = config_with_allowed_hosts(vec!["Example.COM"]);
+		let middleware = HttpsRedirectMiddleware::new(config);
+		let handler = Arc::new(TestHandler);
+
+		let mut headers = HeaderMap::new();
+		headers.insert(hyper::header::HOST, "example.com".parse().unwrap());
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(headers)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert - host matching should be case-insensitive
+		assert_eq!(response.status, StatusCode::MOVED_PERMANENTLY);
 	}
 }

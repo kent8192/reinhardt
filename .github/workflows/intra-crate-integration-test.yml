@@ -11,6 +11,14 @@ on:
         description: "Parallel cargo build jobs (1=GitHub-hosted OOM safe, 8=self-hosted)"
         type: string
         default: "1"
+      nextest-filter:
+        description: "Nextest filter expression for affected packages"
+        type: string
+        default: ""
+      run-all:
+        description: "Whether to run all tests"
+        type: string
+        default: "true"
   workflow_dispatch:
 
 env:
@@ -105,12 +113,19 @@ jobs:
       - name: Run intra-crate integration tests (partition ${{ matrix.partition }}/6)
         env:
           RUSTFLAGS: "-C linker=clang -C link-arg=-fuse-ld=mold"
+          NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
+          RUN_ALL: ${{ inputs.run-all }}
         run: |
+          if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
+            FILTER_EXPR="(not binary(/ui/)) & ($NEXTEST_FILTER_EXPR)"
+          else
+            FILTER_EXPR="not binary(/ui/)"
+          fi
           cargo nextest run \
             --workspace \
             --test "*" \
             --exclude reinhardt-integration-tests \
-            -E "not binary(/ui/)" \
+            -E "$FILTER_EXPR" \
             --all-features \
             --partition hash:${{ matrix.partition }}/6 \
             --no-fail-fast \

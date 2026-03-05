@@ -227,7 +227,7 @@ impl InMemoryTokenStorage {
 	/// assert_eq!(storage.len(), 0);
 	/// ```
 	pub fn len(&self) -> usize {
-		self.tokens.read().unwrap().len()
+		self.tokens.read().unwrap_or_else(|e| e.into_inner()).len()
 	}
 
 	/// Check if storage is empty
@@ -241,7 +241,10 @@ impl InMemoryTokenStorage {
 	/// assert!(storage.is_empty());
 	/// ```
 	pub fn is_empty(&self) -> bool {
-		self.tokens.read().unwrap().is_empty()
+		self.tokens
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.is_empty()
 	}
 
 	/// Clear all tokens
@@ -256,7 +259,10 @@ impl InMemoryTokenStorage {
 	/// assert!(storage.is_empty());
 	/// ```
 	pub fn clear(&self) {
-		self.tokens.write().unwrap().clear();
+		self.tokens
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.clear();
 	}
 }
 
@@ -269,13 +275,13 @@ impl Default for InMemoryTokenStorage {
 #[async_trait]
 impl TokenStorage for InMemoryTokenStorage {
 	async fn store(&self, token: StoredToken) -> TokenStorageResult<()> {
-		let mut tokens = self.tokens.write().unwrap();
+		let mut tokens = self.tokens.write().unwrap_or_else(|e| e.into_inner());
 		tokens.insert(token.token.clone(), token);
 		Ok(())
 	}
 
 	async fn get(&self, token: &str) -> TokenStorageResult<StoredToken> {
-		let tokens = self.tokens.read().unwrap();
+		let tokens = self.tokens.read().unwrap_or_else(|e| e.into_inner());
 		tokens
 			.get(token)
 			.cloned()
@@ -283,7 +289,7 @@ impl TokenStorage for InMemoryTokenStorage {
 	}
 
 	async fn get_user_tokens(&self, user_id: i64) -> TokenStorageResult<Vec<StoredToken>> {
-		let tokens = self.tokens.read().unwrap();
+		let tokens = self.tokens.read().unwrap_or_else(|e| e.into_inner());
 		let user_tokens: Vec<StoredToken> = tokens
 			.values()
 			.filter(|t| t.user_id == user_id)
@@ -293,19 +299,19 @@ impl TokenStorage for InMemoryTokenStorage {
 	}
 
 	async fn delete(&self, token: &str) -> TokenStorageResult<()> {
-		let mut tokens = self.tokens.write().unwrap();
+		let mut tokens = self.tokens.write().unwrap_or_else(|e| e.into_inner());
 		tokens.remove(token);
 		Ok(())
 	}
 
 	async fn delete_user_tokens(&self, user_id: i64) -> TokenStorageResult<()> {
-		let mut tokens = self.tokens.write().unwrap();
+		let mut tokens = self.tokens.write().unwrap_or_else(|e| e.into_inner());
 		tokens.retain(|_, t| t.user_id != user_id);
 		Ok(())
 	}
 
 	async fn cleanup_expired(&self, current_time: i64) -> TokenStorageResult<usize> {
-		let mut tokens = self.tokens.write().unwrap();
+		let mut tokens = self.tokens.write().unwrap_or_else(|e| e.into_inner());
 		let before_count = tokens.len();
 		tokens.retain(|_, t| !t.is_expired(current_time));
 		let removed = before_count - tokens.len();
@@ -712,5 +718,63 @@ mod tests {
 		let storage = InMemoryTokenStorage::new();
 		storage.clear();
 		assert!(storage.is_empty());
+	}
+
+	#[rstest::rstest]
+	fn test_rwlock_poison_recovery_in_memory_token_storage() {
+		// Arrange
+		let storage = InMemoryTokenStorage::new();
+
+		// Act - poison the RwLock by panicking while holding a write guard
+		let tokens_clone = Arc::clone(&storage.tokens);
+		let _ = std::thread::spawn(move || {
+			let _guard = tokens_clone.write().unwrap();
+			panic!("intentional panic to poison lock");
+		})
+		.join();
+
+		// Assert - operations still work after poison recovery
+		assert_eq!(storage.len(), 0);
+		assert!(storage.is_empty());
+		storage.clear();
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_rwlock_poison_recovery_in_memory_token_storage_async() {
+		// Arrange
+		let storage = InMemoryTokenStorage::new();
+
+		// Act - poison the RwLock by panicking while holding a write guard
+		let tokens_clone = Arc::clone(&storage.tokens);
+		let _ = std::thread::spawn(move || {
+			let _guard = tokens_clone.write().unwrap();
+			panic!("intentional panic to poison lock");
+		})
+		.join();
+
+		// Assert - async operations still work after poison recovery
+		let token = StoredToken::new("poison_test", 99);
+		storage.store(token).await.unwrap();
+		let retrieved = storage.get("poison_test").await.unwrap();
+		assert_eq!(retrieved.user_id(), 99);
+
+		let user_tokens = storage.get_user_tokens(99).await.unwrap();
+		assert_eq!(user_tokens.len(), 1);
+
+		storage.delete("poison_test").await.unwrap();
+		assert!(storage.get("poison_test").await.is_err());
+
+		storage
+			.store(StoredToken::new("t1", 1).with_expiration(100))
+			.await
+			.unwrap();
+		let removed = storage.cleanup_expired(200).await.unwrap();
+		assert_eq!(removed, 1);
+
+		storage.store(StoredToken::new("t2", 2)).await.unwrap();
+		storage.delete_user_tokens(2).await.unwrap();
+		let tokens = storage.get_user_tokens(2).await.unwrap();
+		assert_eq!(tokens.len(), 0);
 	}
 }

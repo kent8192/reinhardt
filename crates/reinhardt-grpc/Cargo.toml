@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-grpc"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.4"
 description = "gRPC support for building RPC services"
 edition.workspace = true
 license.workspace = true
@@ -32,6 +32,7 @@ di = ["reinhardt-di", "reinhardt-grpc-macros"]
 tonic-prost-build = "0.14.2"
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio-test = { workspace = true }
 rstest = { workspace = true }
 tracing = { workspace = true }

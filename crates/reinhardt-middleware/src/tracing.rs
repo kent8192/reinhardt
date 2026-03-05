@@ -106,34 +106,56 @@ impl TraceStore {
 	pub fn start_span(&self, trace_id: String, operation_name: String) -> String {
 		let span = Span::new(trace_id, operation_name);
 		let span_id = span.span_id.clone();
-		self.spans.write().unwrap().insert(span_id.clone(), span);
+		self.spans
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.insert(span_id.clone(), span);
 		span_id
 	}
 
 	/// End a span
 	pub fn end_span(&self, span_id: &str) {
-		if let Some(span) = self.spans.write().unwrap().get_mut(span_id) {
+		if let Some(span) = self
+			.spans
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.get_mut(span_id)
+		{
 			span.end();
 		}
 	}
 
 	/// Mark span as error
 	pub fn mark_span_error(&self, span_id: &str) {
-		if let Some(span) = self.spans.write().unwrap().get_mut(span_id) {
+		if let Some(span) = self
+			.spans
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.get_mut(span_id)
+		{
 			span.mark_error();
 		}
 	}
 
 	/// Add tag to span
 	pub fn add_span_tag(&self, span_id: &str, key: String, value: String) {
-		if let Some(span) = self.spans.write().unwrap().get_mut(span_id) {
+		if let Some(span) = self
+			.spans
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.get_mut(span_id)
+		{
 			span.add_tag(key, value);
 		}
 	}
 
 	/// Get span
 	pub fn get_span(&self, span_id: &str) -> Option<Span> {
-		self.spans.read().unwrap().get(span_id).cloned()
+		self.spans
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.get(span_id)
+			.cloned()
 	}
 
 	/// Get all completed spans
@@ -741,5 +763,28 @@ mod tests {
 		let response = middleware.process(request, handler).await.unwrap();
 
 		assert!(response.headers.contains_key(TRACE_ID_HEADER));
+	}
+
+	#[rstest::rstest]
+	fn test_rwlock_poison_recovery_trace_store() {
+		// Arrange
+		let store = Arc::new(TraceStore::new());
+		let span_id = store.start_span("trace-1".to_string(), "GET /test".to_string());
+
+		// Act - poison the RwLock by panicking while holding a write guard
+		let store_clone = Arc::clone(&store);
+		let _ = std::thread::spawn(move || {
+			let _guard = store_clone.spans.write().unwrap();
+			panic!("intentional panic to poison lock");
+		})
+		.join();
+
+		// Assert - operations still work after poison recovery
+		store.add_span_tag(&span_id, "key".to_string(), "value".to_string());
+		store.mark_span_error(&span_id);
+		store.end_span(&span_id);
+		let span = store.get_span(&span_id);
+		assert!(span.is_some());
+		assert_eq!(span.unwrap().status, SpanStatus::Error);
 	}
 }

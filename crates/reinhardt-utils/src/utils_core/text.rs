@@ -87,7 +87,8 @@ pub fn pluralize(count: i64, singular: &str, plural: Option<&str>) -> String {
 /// assert_eq!(ordinal(21), "21st");
 /// ```
 pub fn ordinal(n: i64) -> String {
-	let suffix = match (n % 10, n % 100) {
+	let abs_n = n.unsigned_abs();
+	let suffix = match (abs_n % 10, abs_n % 100) {
 		(1, 11) => "th",
 		(1, _) => "st",
 		(2, 12) => "th",
@@ -477,11 +478,15 @@ mod tests {
 
 	#[test]
 	fn test_ordinal_negative() {
-		// Negative numbers: the modulo operation in Rust gives negative results
-		// -1 % 10 = -1, -1 % 100 = -1, neither matches the patterns, so "th"
-		assert_eq!(ordinal(-1), "-1th");
-		assert_eq!(ordinal(-2), "-2th");
+		// Negative numbers should use the same suffix as their absolute value
+		assert_eq!(ordinal(-1), "-1st");
+		assert_eq!(ordinal(-2), "-2nd");
+		assert_eq!(ordinal(-3), "-3rd");
+		assert_eq!(ordinal(-4), "-4th");
 		assert_eq!(ordinal(-11), "-11th");
+		assert_eq!(ordinal(-12), "-12th");
+		assert_eq!(ordinal(-13), "-13th");
+		assert_eq!(ordinal(-21), "-21st");
 	}
 
 	#[test]

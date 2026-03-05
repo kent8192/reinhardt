@@ -355,11 +355,13 @@ impl Room {
 	/// # });
 	/// ```
 	pub async fn send_to(&self, client_id: &str, message: Message) -> RoomResult<()> {
-		let clients = self.clients.read().await;
-
-		let client = clients
-			.get(client_id)
-			.ok_or_else(|| RoomError::ClientNotFound(client_id.to_string()))?;
+		let client = {
+			let clients = self.clients.read().await;
+			clients
+				.get(client_id)
+				.ok_or_else(|| RoomError::ClientNotFound(client_id.to_string()))?
+				.clone()
+		};
 
 		client.send(message).await?;
 

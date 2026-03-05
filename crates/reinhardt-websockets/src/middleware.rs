@@ -22,9 +22,12 @@ pub enum MiddlewareError {
 }
 
 /// WebSocket connection context for middleware
+#[non_exhaustive]
 pub struct ConnectionContext {
 	/// Client IP address
 	pub ip: String,
+	/// Connection ID (set by the server after connection creation)
+	pub connection_id: Option<String>,
 	/// Connection headers (if available)
 	pub headers: std::collections::HashMap<String, String>,
 	/// Custom metadata
@@ -45,6 +48,7 @@ impl ConnectionContext {
 	pub fn new(ip: String) -> Self {
 		Self {
 			ip,
+			connection_id: None,
 			headers: std::collections::HashMap::new(),
 			metadata: std::collections::HashMap::new(),
 		}

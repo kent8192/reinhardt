@@ -11,6 +11,14 @@ on:
         description: "Parallel cargo build jobs (1=GitHub-hosted OOM safe, 8=self-hosted)"
         type: string
         default: "1"
+      nextest-filter:
+        description: "Nextest filter expression for affected packages"
+        type: string
+        default: ""
+      run-all:
+        description: "Whether to run all tests"
+        type: string
+        default: "true"
   workflow_dispatch:
 
 env:
@@ -93,7 +101,14 @@ jobs:
           df -h
 
       - name: Run unit tests (partition ${{ matrix.partition }}/4)
+        env:
+          NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
+          RUN_ALL: ${{ inputs.run-all }}
         run: |
+          FILTER_ARGS=()
+          if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
+            FILTER_ARGS+=(-E "$NEXTEST_FILTER_EXPR")
+          fi
           cargo nextest run \
             --workspace \
             --lib \
@@ -101,7 +116,8 @@ jobs:
             --partition hash:${{ matrix.partition }}/4 \
             --no-fail-fast \
             --status-level=none \
-            --final-status-level=none
+            --final-status-level=none \
+            "${FILTER_ARGS[@]}"
 
       - name: Docker cleanup after unit tests
         if: always()

@@ -806,7 +806,9 @@ impl AdminDatabase {
 		}
 
 		// Pass values directly for reinhardt-query
-		query.columns(columns).values(values).unwrap();
+		query.columns(columns).values(values).map_err(|e| {
+			AdminError::DatabaseError(format!("column/value count mismatch: {}", e))
+		})?;
 
 		// Add RETURNING clause to get the inserted ID
 		query.returning([Alias::new("id")]);
@@ -1574,6 +1576,47 @@ mod tests {
 			}
 			_ => panic!("Expected String value"),
 		}
+	}
+
+	// ==================== insert values mismatch tests (#1551) ====================
+
+	#[rstest]
+	fn test_insert_values_mismatch_returns_error_not_panic() {
+		// Arrange
+		// Simulate the scenario where columns and values count mismatch
+		// by calling SeaQuery's values() with wrong number of values
+		let mut query = Query::insert()
+			.into_table(Alias::new("test_table"))
+			.to_owned();
+
+		let columns = vec![Alias::new("col1"), Alias::new("col2"), Alias::new("col3")];
+		let values = vec![Value::String(Some(Box::new("val1".to_string())))]; // Only 1 value for 3 columns
+
+		// Act
+		let result = query.columns(columns).values(values);
+
+		// Assert - should return Err, not panic
+		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_insert_values_matching_count_succeeds() {
+		// Arrange
+		let mut query = Query::insert()
+			.into_table(Alias::new("test_table"))
+			.to_owned();
+
+		let columns = vec![Alias::new("col1"), Alias::new("col2")];
+		let values = vec![
+			Value::String(Some(Box::new("val1".to_string()))),
+			Value::String(Some(Box::new("val2".to_string()))),
+		];
+
+		// Act
+		let result = query.columns(columns).values(values);
+
+		// Assert
+		assert!(result.is_ok());
 	}
 
 	// ==================== SQL injection prevention tests ====================

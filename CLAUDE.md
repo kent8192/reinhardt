@@ -75,7 +75,7 @@ See instructions/ANTI_PATTERNS.md for comprehensive anti-patterns guide.
 - Integration tests: Test integration points between components
   - Cross-crate integration: Place in `tests/` crate
   - Within-crate integration: Can place in functional crate
-- Functional crates MUST NOT include other Reinhardt crates in `dev-dependencies`
+- Functional crates MUST NOT use `{ workspace = true }` for `reinhardt-test` in `dev-dependencies` (use optional dependency or path-only dev-dependency; see KI-2)
 - ALL test artifacts MUST be cleaned up
 - Global state tests MUST use `#[serial(group_name)]`
 - Use strict assertions (`assert_eq!`) instead of loose matching (`contains`)
@@ -129,6 +129,18 @@ See instructions/DOCUMENTATION_STANDARDS.md for comprehensive documentation stan
 - When merging branches and resolving conflicts, execute immediately without entering Plan Mode
 - Before creating branches, verify names don't conflict with existing ones using `git worktree list` and `git branch -a`
 
+**PR Conflict Resolution:**
+- **MUST** use worktree-based merge strategy for resolving PR conflicts (NOT rebase or force-push)
+- Procedure:
+  1. Create a local worktree for the PR source branch
+  2. Merge the target branch (e.g., `main`) into the source branch within the worktree
+  3. Resolve conflicts in the worktree
+  4. Commit the merge resolution
+  5. Push the source branch to remote
+  6. Clean up the worktree
+- **NEVER** use `git rebase` or `git push --force` to resolve PR conflicts
+- This preserves commit history and avoids force-push risks
+
 **GitHub Integration:**
 - **MUST** use GitHub CLI (`gh`) for all GitHub operations
 - Use `gh pr create` for creating pull requests
@@ -136,6 +148,9 @@ See instructions/DOCUMENTATION_STANDARDS.md for comprehensive documentation stan
 - Use `gh issue create` for creating issues
 - Use `gh issue view` for viewing issue details
 - Use `gh api` for accessing GitHub API
+- Use `gh discussion list` for viewing discussions
+- Use `gh discussion create` for creating discussions
+- For usage questions, prefer GitHub Discussions over Issues
 - **NEVER** use raw `curl` or web browser for GitHub operations when `gh` is available
 - When GitHub MCP tools return errors (e.g., 404), immediately fall back to `gh` CLI instead of retrying
 
@@ -220,7 +235,8 @@ This project uses [release-plz](https://release-plz.ieni.dev/) for automated rel
 
 **Key Warnings (Lessons Learned):**
 - **NEVER** create circular publish dependency chains (functional crates must not dev-depend on other Reinhardt crates)
-- **NEVER** add `version` field to `reinhardt-test` workspace dependency (causes publish failure; see cargo#15151)
+- **MUST** declare `reinhardt-test` as an optional dependency (not dev-dependency) in functional crates for correct release-plz publish ordering (see KI-2 in instructions/RELEASE_PROCESS.md)
+- **MUST** include `version` field in `reinhardt-test` workspace dependency (same as other published crates)
 - **MUST** follow RP-1 recovery procedure for partial release failures (see instructions/RELEASE_PROCESS.md)
 - **NEVER** change `pr_branch_prefix` from `"release-plz-"` (breaks two-step release workflow)
 - `publish_no_verify = true` is required because dev-dependencies reference unpublished workspace crates
@@ -446,7 +462,7 @@ Before submitting code:
 - Use `deprecated` type for marking features/APIs as deprecated (dedicated CHANGELOG section)
 - Review Release PRs created by release-plz before merging
 - Verify no circular dev-dependency chains exist before publishing (functional crates must not dev-depend on other Reinhardt crates)
-- Keep `reinhardt-test` workspace dependency without `version` field (unpublished crate; cargo#15151)
+- Include `version` field in `reinhardt-test` workspace dependency (published crate, same as others)
 - Follow RP-1 procedure in instructions/RELEASE_PROCESS.md for partial release failures
 - Use GitHub CLI (`gh`) for all GitHub operations (PR, issues, releases)
 - Search existing issues before creating new ones
@@ -481,6 +497,7 @@ Before submitting code:
 - Check known CI failure patterns before deep investigation
 - Run `cargo doc --no-deps` locally before pushing doc-related fixes
 - Execute merge/conflict resolution and straightforward operations immediately without Plan Mode
+- Use worktree-based merge strategy for PR conflict resolution (NOT rebase/force-push)
 - Apply `agent-suspect` label to all agent-detected bug Issues
 - Verify agent-detected bugs independently before removing `agent-suspect` label
 - Use independent context (separate agent session) for agent re-evaluation of `agent-suspect` Issues
@@ -504,8 +521,8 @@ Before submitting code:
 - Manually bump versions in feature branches (let release-plz handle it)
 - Create release tags manually (release-plz creates them automatically)
 - Skip reviewing Release PRs before merging
-- Add `reinhardt-test` to functional crate `[dev-dependencies]` (creates circular publish dependency)
-- Add `version` field to `reinhardt-test` workspace dependency (breaks cargo publish; cargo#15151)
+- Use `reinhardt-test = { workspace = true }` in functional crate `[dev-dependencies]` (workspace deps include version, causing publish failures; use optional dep or path-only dev-dep instead)
+- Omit `version` field from `reinhardt-test` workspace dependency (causes publish failure for dependents)
 - Change `pr_branch_prefix` from `"release-plz-"` (breaks two-step release workflow)
 - Merge Release PR without rolling back unpublished crate versions after partial release failure
 - Write vague commit descriptions that are unclear as CHANGELOG entries (e.g., "fix issue", "update code")
@@ -540,6 +557,7 @@ Before submitting code:
 - Enter Plan Mode for merge operations, branch deletion, or worktree cleanup
 - Retry GitHub MCP tools after errors instead of falling back to `gh` CLI
 - Create branches without checking for name conflicts
+- Use rebase or force-push to resolve PR conflicts (use worktree merge instead)
 - Remove `agent-suspect` label without independent verification (separate agent or human)
 - Count `agent-suspect` labeled Issues toward stability timer reset (SC-2a)
 - Use the same agent context for both detection and verification of a bug
@@ -558,6 +576,7 @@ For comprehensive guidelines, see:
 - **Issues**: instructions/ISSUE_GUIDELINES.md
 - **Issue Handling**: instructions/ISSUE_HANDLING.md
 - **GitHub Interactions**: instructions/GITHUB_INTERACTION.md
+- **GitHub Discussions**: https://github.com/kent8192/reinhardt-web/discussions
 - **Security Policy**: SECURITY.md
 - **Code of Conduct**: CODE_OF_CONDUCT.md
 - **Label Definitions**: .github/labels.yml

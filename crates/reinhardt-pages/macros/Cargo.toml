@@ -1,9 +1,9 @@
 [package]
 name = "reinhardt-pages-macros"
-version = "0.1.0-rc.1"
-edition = "2024"
-authors = ["Reinhardt Contributors"]
-license = "BSD-3-Clause"
+version = "0.1.0-rc.4"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
 description = "Procedural macros for reinhardt-pages (WASM frontend framework)"
 repository.workspace = true
 keywords = ["wasm", "macro", "server-functions", "rpc"]

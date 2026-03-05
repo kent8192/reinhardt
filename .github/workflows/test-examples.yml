@@ -14,44 +14,50 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Check if PR branch is behind base branch.
-  # When out-of-date, skip all jobs to save runner costs.
-  # The PR author should update the branch before CI runs.
-  check-branch-status:
-    name: Check Branch Status
-    if: github.event_name == 'pull_request' && github.event.action != 'closed'
+  detect-examples-changed:
+    name: Detect Examples Changes
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     outputs:
-      is-behind: ${{ steps.check.outputs.is-behind }}
+      run: ${{ steps.detect.outputs.run }}
     steps:
-      - name: Check if PR branch is behind base
-        id: check
-        uses: actions/github-script@v7
+      - name: Checkout
+        uses: actions/checkout@v6
         with:
-          script: |
-            const { data } = await github.rest.repos.compareCommitsWithBasehead({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              basehead: `${context.payload.pull_request.base.ref}...${context.payload.pull_request.head.ref}`,
-            });
-            const isBehind = data.behind_by > 0;
-            core.setOutput('is-behind', isBehind.toString());
-            if (isBehind) {
-              core.warning(
-                `PR branch is ${data.behind_by} commit(s) behind ` +
-                `${context.payload.pull_request.base.ref}. ` +
-                `Skipping CI — please update your branch.`
-              );
-            }
+          fetch-depth: 0
+
+      - name: Detect
+        id: detect
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # Issue #1828: Release PRs always run examples tests
+          if [[ "$HEAD_REF" == release-plz-* ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Normal PRs: run only when examples/** changed
+          if [[ -n "${HEAD_REF:-}" ]]; then
+            COMPARE_REF="origin/$HEAD_REF"
+          else
+            COMPARE_REF="HEAD"
+          fi
+          BASE_REF_VAL="${BASE_REF:-main}"
+          CHANGED=$(git log --name-only --format="" --no-merges \
+            "origin/$BASE_REF_VAL..$COMPARE_REF" \
+            | grep -v '^$' | grep '^examples/' | head -1 || true)
+          if [[ -n "$CHANGED" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
 
   test-local-examples:
     name: Test ${{ matrix.example }}
-    needs: [check-branch-status]
-    if: >-
-      ${{
-        github.event.action != 'closed' &&
-        (github.event_name != 'pull_request' || needs.check-branch-status.outputs.is-behind != 'true')
-      }}
+    needs: [detect-examples-changed]
+    # Issue #1828: Skip when no examples/** changes on non-release PRs
+    if: github.event.action != 'closed' && needs.detect-examples-changed.outputs.run == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

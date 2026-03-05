@@ -251,7 +251,7 @@ impl CspMiddleware {
 		use rand::RngCore;
 
 		let mut bytes = [0u8; 16];
-		rand::rngs::OsRng.fill_bytes(&mut bytes);
+		rand::rng().fill_bytes(&mut bytes);
 		base64::engine::general_purpose::STANDARD.encode(bytes)
 	}
 

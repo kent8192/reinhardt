@@ -116,10 +116,18 @@ impl ModelMetadata {
 			let mut field_state = FieldState::new(
 				name.clone(),
 				field_meta.field_type.clone(),
-				false, // nullable - default to false
+				field_meta
+					.params
+					.get("null")
+					.and_then(|v| v.parse::<bool>().ok())
+					.unwrap_or(false),
 			);
 			for (key, value) in &field_meta.params {
 				field_state.params.insert(key.clone(), value.clone());
+			}
+			// Override nullable from params if explicitly set
+			if let Some(null_value) = field_meta.params.get("null") {
+				field_state.nullable = null_value == "true";
 			}
 			// Set ForeignKey information if present
 			if let Some(ref fk_info) = field_meta.foreign_key {
@@ -497,6 +505,7 @@ pub fn global_registry() -> &'static ModelRegistry {
 mod tests {
 	use super::*;
 	use crate::migrations::FieldType;
+	use rstest::rstest;
 
 	#[test]
 	fn test_model_registry_new() {
@@ -591,5 +600,27 @@ mod tests {
 		assert_eq!(field.field_type, FieldType::Custom("CharField".to_string()));
 		assert_eq!(field.params.get("max_length").unwrap(), "100");
 		assert_eq!(field.params.get("null").unwrap(), "False");
+	}
+
+	#[rstest]
+	#[case("true", true)]
+	#[case("false", false)]
+	fn test_to_model_state_overrides_nullable_from_params(
+		#[case] null_param: &str,
+		#[case] expected_nullable: bool,
+	) {
+		// Arrange
+		let mut metadata = ModelMetadata::new("blog", "Post", "blog_post");
+		let field = FieldMetadata::new(FieldType::Custom("CharField".to_string()))
+			.with_param("max_length", "200")
+			.with_param("null", null_param);
+		metadata.add_field("description".to_string(), field);
+
+		// Act
+		let model_state = metadata.to_model_state();
+
+		// Assert
+		let field_state = model_state.fields.get("description").unwrap();
+		assert_eq!(field_state.nullable, expected_nullable);
 	}
 }

@@ -24,7 +24,7 @@ jobs:
   todo-check:
     name: Scan for unresolved TODO/FIXME
     if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
     container:
       image: semgrep/semgrep
     timeout-minutes: 10

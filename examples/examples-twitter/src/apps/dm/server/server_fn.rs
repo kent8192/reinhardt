@@ -554,6 +554,13 @@ fn truncate_message(content: &str, max_len: usize) -> String {
 	if content.len() <= max_len {
 		content.to_string()
 	} else {
-		format!("{}...", &content[..max_len])
+		// Find a valid UTF-8 char boundary at or before max_len
+		let end = content
+			.char_indices()
+			.map(|(i, _)| i)
+			.take_while(|&i| i <= max_len)
+			.last()
+			.unwrap_or(0);
+		format!("{}...", &content[..end])
 	}
 }

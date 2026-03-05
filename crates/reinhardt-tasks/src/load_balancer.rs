@@ -338,13 +338,13 @@ impl LoadBalancer {
 			.map(|w| weights.get(&w.id).copied().unwrap_or(w.weight))
 			.sum();
 
-		// Guard against zero total weight to prevent panic in gen_range(0..0)
+		// Guard against zero total weight to prevent panic in random_range(0..0)
 		if total_weight == 0 {
 			return workers[0].clone();
 		}
 
-		let mut rng = rand::thread_rng();
-		let mut random = rng.gen_range(0..total_weight);
+		let mut rng = rand::rng();
+		let mut random = rng.random_range(0..total_weight);
 		for worker in workers {
 			let weight = weights.get(&worker.id).copied().unwrap_or(worker.weight);
 			if random < weight {
@@ -359,8 +359,8 @@ impl LoadBalancer {
 	/// Random selection
 	fn select_random(&self, workers: &[Arc<WorkerInfo>]) -> Arc<WorkerInfo> {
 		use rand::Rng;
-		let mut rng = rand::thread_rng();
-		let index = rng.gen_range(0..workers.len());
+		let mut rng = rand::rng();
+		let index = rng.random_range(0..workers.len());
 		workers[index].clone()
 	}
 

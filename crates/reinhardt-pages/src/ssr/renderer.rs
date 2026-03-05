@@ -506,6 +506,7 @@ fn minify_html(html: &str) -> String {
 }
 
 /// Helper function for simple component rendering.
+// Allow dead_code: convenience function for internal module use and tests
 #[allow(dead_code)]
 pub(super) fn render<C: Component>(component: &C) -> String {
 	let mut renderer = SsrRenderer::new();
@@ -513,6 +514,7 @@ pub(super) fn render<C: Component>(component: &C) -> String {
 }
 
 /// Helper function for rendering to a full HTML page.
+// Allow dead_code: convenience function for internal module use and tests
 #[allow(dead_code)]
 pub(super) fn render_page<C: Component>(component: &C, options: SsrOptions) -> String {
 	let mut renderer = SsrRenderer::with_options(options);

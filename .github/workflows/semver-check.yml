@@ -21,7 +21,7 @@ jobs:
   semver-checks:
     name: SemVer Compatibility Check
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Free Disk Space (Ubuntu)
         if: ${{ !contains(inputs.runner || '', 'self-hosted') }}
@@ -83,12 +83,45 @@ jobs:
             --all-features \
             --baseline-rev "${BASELINE_REV:-HEAD~1}"
 
-      # On normal PRs, fix the release type to minor to guarantee that no breaking
-      # changes (which require a major version bump) are merged into main.
-      # Any API-breaking change will cause this check to fail, enforcing that
-      # breaking changes must go through an explicit major-version release PR.
-      - name: Run cargo-semver-checks (normal PR - minor release type)
+      # Detect pre-release phase to determine the appropriate semver-check behavior:
+      # - Alpha (0.x.y-alpha.N): No API stability guarantees → skip semver-check
+      # - RC (0.x.y-rc.N): API frozen, bug fixes only → enforce semver-check
+      # - Stable (0.x.y): Full SemVer guarantees → enforce semver-check
+      - name: Detect pre-release phase
         if: ${{ !startsWith(github.head_ref || github.ref_name, 'release-plz-') }}
+        id: detect-prerelease
+        run: |
+          if grep -rqP '^version\s*=\s*"[^"]*-alpha' crates/*/Cargo.toml; then
+            echo "phase=alpha" >> "$GITHUB_OUTPUT"
+            echo "::notice::Alpha version detected. Skipping semver-check (no API stability guarantee during alpha)."
+          elif grep -rqP '^version\s*=\s*"[^"]*-rc' crates/*/Cargo.toml; then
+            echo "phase=rc" >> "$GITHUB_OUTPUT"
+            echo "::notice::RC version detected. Enforcing semver-check (API frozen during RC phase)."
+          else
+            echo "phase=stable" >> "$GITHUB_OUTPUT"
+            echo "::notice::Stable version detected. Enforcing semver-check (full SemVer guarantees)."
+          fi
+
+      # On normal PRs with RC versions, enforce minor release type to block
+      # breaking changes. Per stability policy (SP-1), the API surface is frozen
+      # during RC -- only bug fixes and deprecation-alias renames are permitted.
+      - name: Run cargo-semver-checks (normal PR - RC versions)
+        if: ${{ !startsWith(github.head_ref || github.ref_name, 'release-plz-') && steps.detect-prerelease.outputs.phase == 'rc' }}
+        env:
+          BASELINE_REV: ${{ github.event.pull_request.base.sha }}
+        run: |
+          cargo semver-checks check-release \
+            --workspace \
+            --exclude reinhardt-web \
+            --exclude reinhardt-pages \
+            --all-features \
+            --release-type minor \
+            --baseline-rev "${BASELINE_REV:-HEAD~1}"
+
+      # On normal PRs with stable versions, enforce minor release type to block
+      # breaking changes from being merged into main.
+      - name: Run cargo-semver-checks (normal PR - stable versions)
+        if: ${{ !startsWith(github.head_ref || github.ref_name, 'release-plz-') && steps.detect-prerelease.outputs.phase == 'stable' }}
         env:
           BASELINE_REV: ${{ github.event.pull_request.base.sha }}
         run: |

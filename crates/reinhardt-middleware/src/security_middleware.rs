@@ -322,7 +322,7 @@ impl Middleware for SecurityMiddleware {
 		// SSL redirect for all HTTP methods
 		if self.config.ssl_redirect && !is_secure {
 			let redirect_url = self.build_https_url(&request);
-			let mut response = Response::new(StatusCode::MOVED_PERMANENTLY);
+			let mut response = Response::new(StatusCode::PERMANENT_REDIRECT);
 			response
 				.headers
 				.insert(LOCATION, redirect_url.parse().unwrap());
@@ -497,7 +497,7 @@ mod tests {
 
 		let response = middleware.process(request, handler).await.unwrap();
 
-		assert_eq!(response.status, StatusCode::MOVED_PERMANENTLY);
+		assert_eq!(response.status, StatusCode::PERMANENT_REDIRECT);
 		assert_eq!(
 			response.headers.get(LOCATION).unwrap(),
 			"https://example.com/test?key=value"
@@ -534,7 +534,7 @@ mod tests {
 			.build()
 			.unwrap();
 		let response = middleware.process(request, handler).await.unwrap();
-		assert_eq!(response.status, StatusCode::MOVED_PERMANENTLY);
+		assert_eq!(response.status, StatusCode::PERMANENT_REDIRECT);
 
 		// PUT should also be redirected to HTTPS
 		let handler = Arc::new(TestHandler);
@@ -547,7 +547,7 @@ mod tests {
 			.build()
 			.unwrap();
 		let response = middleware.process(request, handler).await.unwrap();
-		assert_eq!(response.status, StatusCode::MOVED_PERMANENTLY);
+		assert_eq!(response.status, StatusCode::PERMANENT_REDIRECT);
 
 		// DELETE should also be redirected to HTTPS
 		let handler = Arc::new(TestHandler);
@@ -560,7 +560,7 @@ mod tests {
 			.build()
 			.unwrap();
 		let response = middleware.process(request, handler).await.unwrap();
-		assert_eq!(response.status, StatusCode::MOVED_PERMANENTLY);
+		assert_eq!(response.status, StatusCode::PERMANENT_REDIRECT);
 	}
 
 	#[tokio::test]

@@ -1276,6 +1276,7 @@ pub struct HeartbeatMonitor {
 	config: HeartbeatConfig,
 	last_pong: Arc<RwLock<Instant>>,
 	timed_out: Arc<RwLock<bool>>,
+	pong_notify: Arc<tokio::sync::Notify>,
 }
 
 impl HeartbeatMonitor {
@@ -1286,12 +1287,17 @@ impl HeartbeatMonitor {
 			config,
 			last_pong: Arc::new(RwLock::new(Instant::now())),
 			timed_out: Arc::new(RwLock::new(false)),
+			pong_notify: Arc::new(tokio::sync::Notify::new()),
 		}
 	}
 
 	/// Records a pong response, resetting the timeout tracker.
+	///
+	/// This also wakes up the heartbeat monitor's sleep so it can
+	/// proceed immediately instead of waiting for the full pong timeout.
 	pub async fn record_pong(&self) {
 		*self.last_pong.write().await = Instant::now();
+		self.pong_notify.notify_one();
 	}
 
 	/// Returns the duration since the last pong was received.
@@ -1358,11 +1364,19 @@ impl HeartbeatMonitor {
 				// Best-effort ping; if send fails, check_heartbeat will catch it
 				let _ = monitor.send_ping().await;
 
-				// Wait for pong timeout period, then check
-				tokio::time::sleep(monitor.config.pong_timeout).await;
-
-				if monitor.check_heartbeat().await {
-					break;
+				// Wait for pong or timeout, whichever comes first.
+				// If pong arrives early, we skip the remaining sleep and
+				// proceed to the next ping interval immediately.
+				tokio::select! {
+					() = tokio::time::sleep(monitor.config.pong_timeout) => {
+						// Timeout elapsed without pong notification
+						if monitor.check_heartbeat().await {
+							break;
+						}
+					}
+					() = monitor.pong_notify.notified() => {
+						// Pong received early; no need to wait further
+					}
 				}
 			}
 		})
@@ -1992,6 +2006,48 @@ mod tests {
 		// Assert
 		let msg = rx.recv().await.unwrap();
 		assert!(matches!(msg, Message::Ping));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_heartbeat_monitor_early_pong_skips_full_sleep() {
+		// Arrange
+		let (tx, _rx) = mpsc::unbounded_channel();
+		let conn = Arc::new(WebSocketConnection::new("hb_early".to_string(), tx));
+		// Use a long pong_timeout to make the test obvious
+		let config = HeartbeatConfig {
+			ping_interval: Duration::from_secs(60),
+			pong_timeout: Duration::from_secs(10),
+		};
+		let monitor = Arc::new(HeartbeatMonitor::new(conn, config));
+
+		// Act: simulate pong arriving after a short delay
+		let monitor_clone = Arc::clone(&monitor);
+		tokio::spawn(async move {
+			tokio::time::sleep(Duration::from_millis(50)).await;
+			monitor_clone.record_pong().await;
+		});
+
+		// Send ping and wait for pong or timeout via select!
+		let _ = monitor.send_ping().await;
+		let start = Instant::now();
+
+		tokio::select! {
+			() = tokio::time::sleep(monitor.config.pong_timeout) => {
+				panic!("Should not reach full timeout");
+			}
+			() = monitor.pong_notify.notified() => {
+				// Pong received early
+			}
+		}
+
+		// Assert: should complete well before the 10s pong_timeout
+		let elapsed = start.elapsed();
+		assert!(
+			elapsed < Duration::from_secs(2),
+			"Expected early wakeup but elapsed {:?}",
+			elapsed
+		);
 	}
 
 	#[rstest]

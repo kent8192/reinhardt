@@ -9,6 +9,28 @@ use redis::{AsyncCommands, RedisError, aio::ConnectionManager};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+/// Lua script for atomic status update (read-modify-write).
+///
+/// Reads the current task metadata JSON from Redis, updates the `status` and
+/// `updated_at` fields, and writes it back in a single atomic operation.
+/// Returns 1 on success, nil if the key does not exist.
+///
+/// KEYS[1] - task metadata key
+/// ARGV[1] - JSON-encoded new status value
+/// ARGV[2] - updated_at timestamp (integer)
+const UPDATE_STATUS_SCRIPT: &str = r#"
+local current = redis.call('GET', KEYS[1])
+if not current then
+	return nil
+end
+local data = cjson.decode(current)
+data['status'] = cjson.decode(ARGV[1])
+data['updated_at'] = tonumber(ARGV[2])
+local updated = cjson.encode(data)
+redis.call('SET', KEYS[1], updated)
+return 1
+"#;
+
 /// Task metadata for Redis storage
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TaskMetadata {
@@ -181,30 +203,25 @@ impl crate::backend::TaskBackend for RedisTaskBackend {
 		status: TaskStatus,
 	) -> Result<(), TaskExecutionError> {
 		let mut conn = (*self.connection).clone();
+		let key = self.task_key(task_id);
 
-		let metadata_json: Option<String> = conn
-			.get(self.task_key(task_id))
+		// Use Lua script for atomic read-modify-write to prevent TOCTOU race condition.
+		let status_str = serde_json::to_string(&status)
+			.map_err(|e| TaskExecutionError::BackendError(e.to_string()))?;
+		let updated_at = chrono::Utc::now().timestamp();
+
+		let script = redis::Script::new(UPDATE_STATUS_SCRIPT);
+
+		let result: Option<i32> = script
+			.key(&key)
+			.arg(&status_str)
+			.arg(updated_at)
+			.invoke_async(&mut conn)
 			.await
 			.map_err(|e: RedisError| TaskExecutionError::BackendError(e.to_string()))?;
 
-		match metadata_json {
-			Some(json) => {
-				let mut metadata: TaskMetadata = serde_json::from_str(&json)
-					.map_err(|e| TaskExecutionError::BackendError(e.to_string()))?;
-
-				metadata.status = status;
-				metadata.updated_at = chrono::Utc::now().timestamp();
-
-				let updated_json = serde_json::to_string(&metadata)
-					.map_err(|e| TaskExecutionError::BackendError(e.to_string()))?;
-
-				let _: () = conn
-					.set(self.task_key(task_id), updated_json)
-					.await
-					.map_err(|e: RedisError| TaskExecutionError::BackendError(e.to_string()))?;
-
-				Ok(())
-			}
+		match result {
+			Some(_) => Ok(()),
 			None => Err(TaskExecutionError::NotFound(task_id)),
 		}
 	}

@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-views"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.4"
 description = "View layer aggregator for viewsets and views-core"
 edition.workspace = true
 license.workspace = true
@@ -55,6 +55,7 @@ argon2-hasher = ["reinhardt-auth/argon2-hasher"]
 full = ["argon2-hasher"]
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio = { workspace = true }
 tokio-test = { workspace = true }
 bytes = { workspace = true }

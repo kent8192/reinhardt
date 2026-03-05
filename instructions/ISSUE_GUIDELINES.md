@@ -302,7 +302,11 @@ Issues created by LLM agent bug discovery MUST include the `agent-suspect` label
 - Clarifying API behavior
 - General usage questions
 
-**Note:** For usage questions, consider GitHub Discussions first.
+**Note:** For usage questions, prefer GitHub Discussions first:
+https://github.com/kent8192/reinhardt-web/discussions
+
+Issues should be reserved for actionable items (bugs, feature requests, etc.).
+Questions posted as Issues may be redirected to Discussions.
 
 **Label Applied:** `question`
 

@@ -823,8 +823,8 @@ fn generate_random_secret_key() -> String {
 	use rand::Rng;
 	use std::fmt::Write;
 
-	let mut rng = rand::thread_rng();
-	let bytes: [u8; 25] = rng.r#gen();
+	let mut rng = rand::rng();
+	let bytes: [u8; 25] = rng.random();
 	let mut hex_string = String::with_capacity(50);
 	for b in bytes {
 		let _ = write!(hex_string, "{:02x}", b);

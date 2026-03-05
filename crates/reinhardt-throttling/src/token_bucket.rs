@@ -7,6 +7,7 @@
 use super::time_provider::{SystemTimeProvider, TimeProvider};
 use super::{Throttle, ThrottleError, ThrottleResult};
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{Duration, Instant};
@@ -232,7 +233,7 @@ struct BucketState {
 pub struct TokenBucket<T: TimeProvider = SystemTimeProvider> {
 	config: TokenBucketConfig,
 	time_provider: Arc<T>,
-	state: Arc<RwLock<BucketState>>,
+	buckets: Arc<RwLock<HashMap<String, BucketState>>>,
 }
 
 impl TokenBucket<SystemTimeProvider> {
@@ -247,15 +248,10 @@ impl TokenBucket<SystemTimeProvider> {
 	/// let throttle = TokenBucket::new(config);
 	/// ```
 	pub fn new(config: TokenBucketConfig) -> Self {
-		let initial_state = BucketState {
-			tokens: config.capacity,
-			last_refill: SystemTimeProvider::new().now(),
-		};
-
 		Self {
 			config,
 			time_provider: Arc::new(SystemTimeProvider::new()),
-			state: Arc::new(RwLock::new(initial_state)),
+			buckets: Arc::new(RwLock::new(HashMap::new())),
 		}
 	}
 }
@@ -263,15 +259,18 @@ impl TokenBucket<SystemTimeProvider> {
 impl<T: TimeProvider> TokenBucket<T> {
 	/// Creates a new token bucket with custom time provider
 	pub fn with_time_provider(config: TokenBucketConfig, time_provider: Arc<T>) -> Self {
-		let initial_state = BucketState {
-			tokens: config.capacity,
-			last_refill: time_provider.now(),
-		};
-
 		Self {
 			config,
 			time_provider,
-			state: Arc::new(RwLock::new(initial_state)),
+			buckets: Arc::new(RwLock::new(HashMap::new())),
+		}
+	}
+
+	/// Create a new bucket state initialized with full capacity
+	fn new_bucket_state(&self) -> BucketState {
+		BucketState {
+			tokens: self.config.capacity,
+			last_refill: self.time_provider.now(),
 		}
 	}
 
@@ -294,12 +293,14 @@ impl<T: TimeProvider> TokenBucket<T> {
 		}
 	}
 
-	/// Try to consume tokens from the bucket
-	async fn consume_tokens(&self, count: usize) -> ThrottleResult<bool> {
-		let mut state = self.state.write().await;
+	/// Try to consume tokens from the bucket for a given key
+	async fn consume_tokens(&self, key: &str, count: usize) -> ThrottleResult<bool> {
+		let mut buckets = self.buckets.write().await;
+		let new_state = self.new_bucket_state();
+		let state = buckets.entry(key.to_string()).or_insert(new_state);
 
 		// Refill tokens first
-		self.refill_tokens(&mut state);
+		self.refill_tokens(state);
 
 		// Check if we have enough tokens
 		if state.tokens >= count {
@@ -310,29 +311,47 @@ impl<T: TimeProvider> TokenBucket<T> {
 		}
 	}
 
-	/// Get current token count
-	pub async fn tokens(&self) -> usize {
-		let mut state = self.state.write().await;
-		self.refill_tokens(&mut state);
+	/// Get current token count for a given key
+	pub async fn tokens_for_key(&self, key: &str) -> usize {
+		let mut buckets = self.buckets.write().await;
+		let new_state = self.new_bucket_state();
+		let state = buckets.entry(key.to_string()).or_insert(new_state);
+		self.refill_tokens(state);
 		state.tokens
 	}
 
-	/// Reset the bucket to full capacity
+	/// Get current token count (uses default empty key for backward compatibility)
+	pub async fn tokens(&self) -> usize {
+		self.tokens_for_key("").await
+	}
+
+	/// Reset the bucket for a specific key
+	pub async fn reset_key(&self, key: &str) {
+		let mut buckets = self.buckets.write().await;
+		if let Some(state) = buckets.get_mut(key) {
+			state.tokens = self.config.capacity;
+			state.last_refill = self.time_provider.now();
+		}
+	}
+
+	/// Reset all buckets
 	pub async fn reset(&self) {
-		let mut state = self.state.write().await;
-		state.tokens = self.config.capacity;
-		state.last_refill = self.time_provider.now();
+		let mut buckets = self.buckets.write().await;
+		buckets.clear();
 	}
 }
 
 #[async_trait]
 impl<T: TimeProvider> Throttle for TokenBucket<T> {
-	async fn allow_request(&self, _key: &str) -> ThrottleResult<bool> {
-		self.consume_tokens(self.config.tokens_per_request).await
+	async fn allow_request(&self, key: &str) -> ThrottleResult<bool> {
+		self.consume_tokens(key, self.config.tokens_per_request)
+			.await
 	}
 
-	async fn wait_time(&self, _key: &str) -> ThrottleResult<Option<u64>> {
-		let state = self.state.read().await;
+	async fn wait_time(&self, key: &str) -> ThrottleResult<Option<u64>> {
+		let mut buckets = self.buckets.write().await;
+		let new_state = self.new_bucket_state();
+		let state = buckets.entry(key.to_string()).or_insert(new_state);
 
 		if state.tokens >= self.config.tokens_per_request {
 			return Ok(None);
@@ -443,7 +462,7 @@ mod tests {
 		let throttle = TokenBucket::new(config);
 
 		// Assert - initial tokens should equal capacity
-		assert_eq!(throttle.tokens().await, 10);
+		assert_eq!(throttle.tokens_for_key("user").await, 10);
 
 		// Act - consume 3 tokens
 		for _ in 0..3 {
@@ -451,7 +470,33 @@ mod tests {
 		}
 
 		// Assert
-		assert_eq!(throttle.tokens().await, 7);
+		assert_eq!(throttle.tokens_for_key("user").await, 7);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_token_bucket_per_key_isolation() {
+		// Arrange
+		let config = TokenBucketConfig::new(3, 3, 60, 1).unwrap();
+		let throttle = TokenBucket::new(config);
+
+		// Act - exhaust user_a's tokens
+		for _ in 0..3 {
+			assert!(throttle.allow_request("user_a").await.unwrap());
+		}
+
+		// Assert - user_a is throttled
+		assert!(!throttle.allow_request("user_a").await.unwrap());
+
+		// Assert - user_b still has full capacity (independent bucket)
+		for _ in 0..3 {
+			assert!(throttle.allow_request("user_b").await.unwrap());
+		}
+		assert!(!throttle.allow_request("user_b").await.unwrap());
+
+		// Assert - token counts are independent
+		assert_eq!(throttle.tokens_for_key("user_a").await, 0);
+		assert_eq!(throttle.tokens_for_key("user_b").await, 0);
 	}
 
 	#[rstest]
@@ -465,13 +510,13 @@ mod tests {
 		for _ in 0..10 {
 			throttle.allow_request("user").await.unwrap();
 		}
-		assert_eq!(throttle.tokens().await, 0);
+		assert_eq!(throttle.tokens_for_key("user").await, 0);
 
-		// Act - reset
+		// Act - reset all buckets
 		throttle.reset().await;
 
-		// Assert
-		assert_eq!(throttle.tokens().await, 10);
+		// Assert - after reset, a new bucket is created with full capacity
+		assert_eq!(throttle.tokens_for_key("user").await, 10);
 	}
 
 	#[rstest]

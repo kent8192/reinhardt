@@ -272,17 +272,21 @@ impl CircuitBreakerMiddleware {
 
 	/// Get the current state
 	pub fn state(&self) -> CircuitState {
-		self.state.read().unwrap().state
+		self.state.read().unwrap_or_else(|e| e.into_inner()).state
 	}
 
 	/// Get statistics
 	pub fn stats(&self) -> CircuitStats {
-		self.state.read().unwrap().stats.clone()
+		self.state
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.stats
+			.clone()
 	}
 
 	/// Reset the circuit breaker
 	pub fn reset(&self) {
-		let mut state = self.state.write().unwrap();
+		let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
 		state.state = CircuitState::Closed;
 		state.stats.reset();
 		state.opened_at = None;
@@ -290,14 +294,14 @@ impl CircuitBreakerMiddleware {
 
 	/// Open the circuit
 	fn open_circuit(&self) {
-		let mut state = self.state.write().unwrap();
+		let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
 		state.state = CircuitState::Open;
 		state.opened_at = Some(Instant::now());
 	}
 
 	/// Close the circuit
 	fn close_circuit(&self) {
-		let mut state = self.state.write().unwrap();
+		let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
 		state.state = CircuitState::Closed;
 		state.stats.reset();
 		state.opened_at = None;
@@ -305,7 +309,7 @@ impl CircuitBreakerMiddleware {
 
 	/// Transition to half-open state
 	fn transition_to_half_open(&self) {
-		let mut state = self.state.write().unwrap();
+		let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
 		state.state = CircuitState::HalfOpen;
 		state.stats.reset();
 	}
@@ -330,7 +334,7 @@ impl CircuitBreakerMiddleware {
 
 	/// Check and execute state transitions
 	fn check_and_update_state(&self) {
-		let state = self.state.read().unwrap();
+		let state = self.state.read().unwrap_or_else(|e| e.into_inner());
 		let current_state = state.state;
 		let stats = &state.stats;
 
@@ -402,7 +406,7 @@ impl Middleware for CircuitBreakerMiddleware {
 		// Record response
 		let is_failure = self.is_failure_response(response.status);
 		{
-			let mut state = self.state.write().unwrap();
+			let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
 			if is_failure {
 				state.stats.record_failure();
 			} else {
@@ -706,5 +710,27 @@ mod tests {
 		assert_eq!(middleware.state(), CircuitState::Closed);
 		let stats = middleware.stats();
 		assert_eq!(stats.total_requests(), 0);
+	}
+
+	#[rstest::rstest]
+	fn test_rwlock_poison_recovery_circuit_breaker() {
+		// Arrange
+		let config = CircuitBreakerConfig::new(0.5, 10, Duration::from_secs(30));
+		let middleware = CircuitBreakerMiddleware::new(config);
+
+		// Act - poison the RwLock by panicking while holding a write guard
+		let state_clone = Arc::clone(&middleware.state);
+		let _ = thread::spawn(move || {
+			let _guard = state_clone.write().unwrap();
+			panic!("intentional panic to poison lock");
+		})
+		.join();
+
+		// Assert - operations still work after poison recovery
+		assert_eq!(middleware.state(), CircuitState::Closed);
+		let stats = middleware.stats();
+		assert_eq!(stats.total_requests(), 0);
+		middleware.reset();
+		assert_eq!(middleware.state(), CircuitState::Closed);
 	}
 }

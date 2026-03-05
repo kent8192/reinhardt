@@ -241,6 +241,33 @@ When providing implementation context for issue discussion:
 
 ---
 
+## GitHub Discussions
+
+### GD-1 (SHOULD): Discussions vs Issues
+
+Use GitHub Discussions for:
+- Usage questions and how-to inquiries
+- Ideas and brainstorming
+- General community discussion
+- Show and tell (sharing projects built with Reinhardt)
+
+Use Issues for:
+- Bug reports with reproduction steps
+- Feature requests with clear requirements
+- Documentation errors
+- Performance issues with benchmarks
+
+**Discussion URL:** https://github.com/kent8192/reinhardt-web/discussions
+
+### GD-2 (SHOULD): Redirecting Questions
+
+When encountering question-type Issues that are better suited for Discussions:
+- Politely suggest GitHub Discussions as a more appropriate venue
+- Provide the Discussions URL
+- Follow PP-1 authorization policy before posting redirect comments
+
+---
+
 ## Agent Context Provision
 
 ### AC-1 (SHOULD): Structured Context for Coding Agents

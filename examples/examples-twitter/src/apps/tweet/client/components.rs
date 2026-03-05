@@ -5,6 +5,7 @@
 //! while tweet_card and tweet_list use page! macro with hooks-styled state management.
 
 use crate::apps::tweet::shared::types::TweetInfo;
+use crate::core::client::components::icons;
 use reinhardt::pages::Signal;
 use reinhardt::pages::component::View;
 use reinhardt::pages::form;
@@ -57,18 +58,7 @@ fn like_button(liked: Signal<bool>, like_count: Signal<i32>) -> View {
 									});
 								}
 							},
-					svg {
-						class: "w-5 h-5 animate-heart",
-						fill: "currentColor",
-						stroke: "currentColor",
-						viewBox: "0 0 24 24",
-						path {
-							stroke_linecap: "round",
-							stroke_linejoin: "round",
-							stroke_width: "1.5",
-							d: "M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z",
-						}
-					}
+					{ icons::heart_icon_filled() }
 					span {
 						{ format!("{}", like_count_signal.get()) }
 					}
@@ -92,18 +82,7 @@ fn like_button(liked: Signal<bool>, like_count: Signal<i32>) -> View {
 									});
 								}
 							},
-					svg {
-						class: "w-5 h-5",
-						fill: "none",
-						stroke: "currentColor",
-						viewBox: "0 0 24 24",
-						path {
-							stroke_linecap: "round",
-							stroke_linejoin: "round",
-							stroke_width: "1.5",
-							d: "M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z",
-						}
-					}
+					{ icons::heart_icon_outline() }
 					span {
 						{ format!("{}", like_count_signal_else.get()) }
 					}
@@ -234,18 +213,7 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 														}
 													}
 												},
-										svg {
-											class: "w-4 h-4",
-											fill: "none",
-											stroke: "currentColor",
-											viewBox: "0 0 24 24",
-											path {
-												stroke_linecap: "round",
-												stroke_linejoin: "round",
-												stroke_width: "2",
-												d: "M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16",
-											}
-										}
+										{ icons::trash_icon() }
 									}
 								}
 							}
@@ -259,18 +227,7 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 									class: "tweet-action-btn hover:text-brand",
 									r#type: "button",
 									aria_label: "Reply",
-									svg {
-										class: "w-5 h-5",
-										fill: "none",
-										stroke: "currentColor",
-										viewBox: "0 0 24 24",
-										path {
-											stroke_linecap: "round",
-											stroke_linejoin: "round",
-											stroke_width: "1.5",
-											d: "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z",
-										}
-									}
+									{ icons::chat_bubble_icon() }
 									span {
 										"0"
 									}
@@ -279,18 +236,7 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 									class: "tweet-action-btn hover:text-success",
 									r#type: "button",
 									aria_label: "Retweet",
-									svg {
-										class: "w-5 h-5",
-										fill: "none",
-										stroke: "currentColor",
-										viewBox: "0 0 24 24",
-										path {
-											stroke_linecap: "round",
-											stroke_linejoin: "round",
-											stroke_width: "1.5",
-											d: "M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15",
-										}
-									}
+									{ icons::retweet_icon() }
 									span {
 										"0"
 									}
@@ -300,18 +246,7 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 									class: "tweet-action-btn hover:text-brand",
 									r#type: "button",
 									aria_label: "Share",
-									svg {
-										class: "w-5 h-5",
-										fill: "none",
-										stroke: "currentColor",
-										viewBox: "0 0 24 24",
-										path {
-											stroke_linecap: "round",
-											stroke_linejoin: "round",
-											stroke_width: "1.5",
-											d: "M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12",
-										}
-									}
+									{ icons::share_icon() }
 								}
 							}
 						}
@@ -534,15 +469,7 @@ pub fn tweet_list(user_id: Option<Uuid>) -> View {
 						role: "alert",
 						div {
 							class: "flex items-center gap-2",
-							svg {
-								class: "w-5 h-5 flex-shrink-0",
-								fill: "currentColor",
-								viewBox: "0 0 20 20",
-								path {
-									fill_rule: "evenodd",
-									d: "M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z",
-								}
-							}
+							{ icons::error_circle_icon() }
 							span {
 								{ error_signal.get().unwrap_or_default() }
 							}
@@ -553,18 +480,7 @@ pub fn tweet_list(user_id: Option<Uuid>) -> View {
 						class: "flex flex-col items-center justify-center py-16 text-center",
 						div {
 							class: "w-16 h-16 rounded-full bg-surface-tertiary flex items-center justify-center mb-4",
-							svg {
-								class: "w-8 h-8 text-content-tertiary",
-								fill: "none",
-								stroke: "currentColor",
-								viewBox: "0 0 24 24",
-								path {
-									stroke_linecap: "round",
-									stroke_linejoin: "round",
-									stroke_width: "1.5",
-									d: "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z",
-								}
-							}
+							{ icons::chat_bubble_icon_lg() }
 						}
 						h3 {
 							class: "text-lg font-semibold text-content-primary mb-1",

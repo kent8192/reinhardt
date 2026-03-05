@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.3...reinhardt-db@v0.1.0-rc.4) - 2026-03-05
+
+### Fixed
+
+- *(db)* use extract_string_field in migration AST parser to handle .to_string() pattern
+
 ## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.1...reinhardt-db@v0.1.0-rc.2) - 2026-03-04
 
 ### Fixed

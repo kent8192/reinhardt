@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.3...reinhardt-auth@v0.1.0-rc.4) - 2026-03-05
+
+### Fixed
+
+- forward redis-backend and middleware features to sub-crates
+
 ## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.1...reinhardt-auth@v0.1.0-rc.2) - 2026-03-04
 
 ### Fixed

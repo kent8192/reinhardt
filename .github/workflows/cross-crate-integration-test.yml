@@ -112,10 +112,12 @@ jobs:
       - name: Run cross-crate integration tests (partition ${{ matrix.partition }}/3)
         env:
           RUSTFLAGS: "-C linker=clang -C link-arg=-fuse-ld=mold"
+          NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
+          RUN_ALL: ${{ inputs.run-all }}
         run: |
-          FILTER_ARGS=""
-          if [[ "${{ inputs.run-all }}" != "true" && -n "${{ inputs.nextest-filter }}" ]]; then
-            FILTER_ARGS="-E '${{ inputs.nextest-filter }}'"
+          FILTER_ARGS=()
+          if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
+            FILTER_ARGS+=(-E "$NEXTEST_FILTER_EXPR")
           fi
           cargo nextest run \
             --package reinhardt-integration-tests \
@@ -124,7 +126,7 @@ jobs:
             --no-fail-fast \
             --status-level=none \
             --final-status-level=none \
-            ${FILTER_ARGS}
+            "${FILTER_ARGS[@]}"
 
       - name: Docker cleanup after tests
         if: always()

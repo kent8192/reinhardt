@@ -101,10 +101,13 @@ jobs:
           df -h
 
       - name: Run unit tests (partition ${{ matrix.partition }}/4)
+        env:
+          NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
+          RUN_ALL: ${{ inputs.run-all }}
         run: |
-          FILTER_ARGS=""
-          if [[ "${{ inputs.run-all }}" != "true" && -n "${{ inputs.nextest-filter }}" ]]; then
-            FILTER_ARGS="-E '${{ inputs.nextest-filter }}'"
+          FILTER_ARGS=()
+          if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
+            FILTER_ARGS+=(-E "$NEXTEST_FILTER_EXPR")
           fi
           cargo nextest run \
             --workspace \
@@ -114,7 +117,7 @@ jobs:
             --no-fail-fast \
             --status-level=none \
             --final-status-level=none \
-            ${FILTER_ARGS}
+            "${FILTER_ARGS[@]}"
 
       - name: Docker cleanup after unit tests
         if: always()

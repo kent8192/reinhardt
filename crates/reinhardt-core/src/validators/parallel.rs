@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 //! # Parallel Validation
 //!
 //! This module provides parallel validation capabilities using rayon.

@@ -76,7 +76,28 @@ During the RC phase (`0.1.0-rc.N`):
 - **NO** new public re-exports
 - Private/internal APIs may still be modified if they do not affect the public surface
 
-**Rationale:** The RC phase validates the existing API surface. Adding new APIs during RC undermines this validation and introduces untested surface area.
+**Exception: Backward-Compatible Renames via Deprecation Alias**
+
+Renaming public API items is permitted during RC **only if** backward compatibility is preserved through a deprecation alias:
+
+```rust
+// Original (RC.1): poorly named type
+pub struct ConnectionParams { ... }
+
+// Renamed (RC.2): improved name + backward-compatible alias
+pub struct ConnectionConfig { ... }
+
+#[deprecated(since = "0.1.0-rc.2", note = "Renamed to `ConnectionConfig`. Will be removed in 0.2.0.")]
+pub type ConnectionParams = ConnectionConfig;
+```
+
+Requirements for deprecation-alias renames:
+- The old name MUST remain as a type alias or re-export with `#[deprecated]`
+- The alias MUST survive until the next major version (per SP-4)
+- Existing code using the old name MUST continue to compile without modification
+- The rename MUST be documented in the CHANGELOG
+
+**Rationale:** The RC phase validates the existing API surface. Adding new APIs during RC undermines this validation and introduces untested surface area. However, fixing naming issues discovered during RC validation improves API quality for the stable release, and deprecation aliases ensure no existing code breaks.
 
 ### SP-2 (MUST): Bug-Fix-Only Policy
 
@@ -89,21 +110,30 @@ Only the following changes are permitted during RC:
 | Test additions | Additional test coverage for existing functionality |
 | Performance fixes | Optimization of existing behavior (no API changes) |
 | Dependency updates | Security patches, bug fix versions only |
+| Deprecation-alias renames | Rename public items with backward-compatible aliases (see SP-1 exception) |
 
 | NOT Permitted | Examples |
 |---------------|----------|
 | New features | New API endpoints, new configuration options |
-| API additions | New public methods, new public types |
+| API additions | New public methods, new public types (even if non-breaking) |
 | Refactoring | Code restructuring that changes public interfaces |
 | New dependencies | Adding new crate dependencies |
+
+**Why non-breaking feature additions are not permitted:**
+Non-breaking API additions (new functions, types, traits) are safe from a SemVer perspective, but they undermine the purpose of the RC phase. New APIs introduced during RC have not been validated through the stabilization period, resulting in untested surface area entering the stable release. Feature additions should target the next version cycle (`0.2.0-alpha`).
 
 ### SP-3 (MUST): Breaking Changes Require Approval
 
 Breaking changes during RC are **strongly discouraged** and only permitted for:
 
-1. **Critical bugs** that cannot be fixed without an API change
-2. **Security vulnerabilities** that require API modification
-3. **Soundness issues** that make the existing API unsafe
+1. **Critical bugs** that cannot be fixed without an API change (e.g., data corruption, panics)
+2. **Security vulnerabilities** that require API modification (e.g., unsafe API surface)
+3. **Soundness issues** that make the existing API unsafe (e.g., memory safety violations)
+
+A breaking change during RC triggers:
+- A new RC version (`rc.N+1`)
+- A stability timer reset (per SC-2)
+- A mandatory migration guide
 
 **Approval Process:**
 
@@ -112,6 +142,7 @@ Breaking changes during RC are **strongly discouraged** and only permitted for:
 3. Document the technical justification for why a non-breaking fix is impossible
 4. Obtain explicit maintainer approval before implementing
 5. Update all affected documentation and migration guides
+6. Include a migration guide in the PR description
 
 ### SP-4 (MUST): Deprecation Policy
 
@@ -285,8 +316,9 @@ During the RC phase:
 
 ### MUST DO
 - Follow the monotonic lifecycle progression: alpha → RC → stable
-- Freeze public API surface during RC phase (no new APIs)
+- Freeze public API surface during RC phase (no new APIs, no new features)
 - Apply bug-fix-only policy during RC phase
+- Preserve backward compatibility when renaming APIs during RC (deprecation alias required)
 - Obtain explicit maintainer approval for any breaking change during RC
 - Use `#[deprecated]` with `since` and `note` fields for all deprecations
 - Keep APIs deprecated during RC until the next major version
@@ -299,8 +331,9 @@ During the RC phase:
 
 ### NEVER DO
 - Regress from RC back to alpha
-- Add new public APIs during the RC phase
+- Add new public APIs during the RC phase (even if non-breaking)
 - Add `feat:` commits during the RC phase
+- Rename public APIs during RC without a backward-compatible deprecation alias
 - Remove APIs deprecated during RC before the next major version
 - Apply breaking changes during RC without explicit maintainer approval
 - Transition to stable without meeting ALL SC-1 criteria

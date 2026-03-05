@@ -61,6 +61,7 @@ reinhardt = { workspace = true, features = [
 	"rest",                    # Required for reinhardt::rest module
 	"reinhardt-browsable-api", # Required for browsable API
 	"admin",                   # Admin panel functionality
+	"openapi",                 # OpenAPI schema generation and routing
 	"pages",                   # WASM-based reactive frontend with SSR (reinhardt::pages)
 	"forms",                   # Form validation and processing
 	"websockets",              # WebSocket support for real-time DM

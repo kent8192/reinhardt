@@ -3,24 +3,38 @@ set -euo pipefail
 
 BASE_REF="${1:-origin/main}"
 
-# Collect changed files by comparing the merge base of BASE_REF and COMPARE_REF.
-# We use 'git diff --name-only BASE...COMPARE' (three-dot) so that only files
-# that differ in the final state are considered. This avoids false positives from
-# commits that add then revert a file within the same branch.
+# In a PR context (PR_NUMBER and GITHUB_REPOSITORY are set), use the GitHub
+# REST API to get the list of changed files. This is immune to the issue where
+# git diff returns empty after update-branch has merged the base branch into
+# the PR branch, making the three-dot merge base equal to the current base
+# branch tip. Issue #1836.
 #
-# In a PR context, the HEAD_REF env var contains the PR branch name. We use
-# 'origin/$HEAD_REF' (the actual PR branch ref) rather than 'HEAD', because in
-# GitHub Actions the checkout ref is a synthetic merge commit (refs/pull/N/merge).
-# The origin/$HEAD_REF approach (Issue #1822) makes git diff safe to use here;
-# previously git log was needed to work around the synthetic merge ref, but that
-# caused false RUN_ALL=true for add-then-revert patterns (Issue #1833).
-if [[ -n "${HEAD_REF:-}" ]]; then
-  COMPARE_REF="origin/$HEAD_REF"
+# In a non-PR context (push to main, manual trigger, etc.), fall back to
+# git diff three-dot notation. The HEAD_REF env var contains the PR branch
+# name when available; we use 'origin/$HEAD_REF' rather than 'HEAD', because
+# in GitHub Actions the checkout ref is a synthetic merge commit
+# (refs/pull/N/merge). Issue #1822.
+if [[ -n "${PR_NUMBER:-}" && -n "${GITHUB_REPOSITORY:-}" ]]; then
+  if ! GH_OUT=$(gh api \
+      "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+      --paginate \
+      --jq '.[].filename'); then
+    echo "::error::gh api call failed: repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" >&2
+    exit 1
+  fi
+  CHANGED_FILES=$(echo "$GH_OUT" | grep -v '^$' | sort -u || true)
 else
-  COMPARE_REF="HEAD"
+  if [[ -n "${HEAD_REF:-}" ]]; then
+    COMPARE_REF="origin/$HEAD_REF"
+  else
+    COMPARE_REF="HEAD"
+  fi
+  CHANGED_FILES=$(git diff --name-only "$BASE_REF...$COMPARE_REF" \
+    | grep -v '^$' | sort -u || true)
 fi
-CHANGED_FILES=$(git diff --name-only "$BASE_REF...$COMPARE_REF" \
-  | grep -v '^$' | sort -u || true)
+
+FILE_COUNT=$(echo "$CHANGED_FILES" | wc -l | tr -d ' ')
+echo "::notice::Changed files ($FILE_COUNT total): $(echo "$CHANGED_FILES" | head -5 | tr '\n' ', ')"
 
 if [[ -z "$CHANGED_FILES" ]]; then
   echo "run-all=false" >> "$GITHUB_OUTPUT"
@@ -54,8 +68,11 @@ fi
 # set -e in bash — the assignment itself succeeds even when the subshell fails.
 # Fall back to a full test run if cargo metadata is unavailable or returns
 # empty output. # Issue #1819
-WORKSPACE_ROOT=$(pwd)
-if ! METADATA=$(cargo metadata --format-version 1 --no-deps 2>/dev/null) \
+# Resolve symlinks in workspace root so paths match cargo metadata's
+# manifest_path (which always uses the canonical path). This matters on
+# macOS where /tmp -> /private/tmp.
+WORKSPACE_ROOT=$(cd "$(pwd)" && pwd -P)
+if ! METADATA=$(cargo metadata --format-version 1 --no-deps) \
     || [[ -z "$METADATA" ]]; then
   echo "run-all=true" >> "$GITHUB_OUTPUT"
   echo "has-affected=true" >> "$GITHUB_OUTPUT"
@@ -64,24 +81,35 @@ if ! METADATA=$(cargo metadata --format-version 1 --no-deps 2>/dev/null) \
   exit 0
 fi
 
+PKG_COUNT=$(echo "$METADATA" | jq '.packages | length')
+echo "::notice::Workspace packages: $PKG_COUNT"
+
 declare -A AFFECTED_MAP
 while IFS= read -r file; do
   ABS_FILE="$WORKSPACE_ROOT/$file"
-  # Use try-catch in jq so that a single malformed package entry does not abort
-  # the entire scan. # Issue #1819
+  # Map file to the most specific (longest path match) workspace package.
+  # Bind the package object to $pkg so that .manifest_path resolves correctly
+  # inside the startswith() call. Issue #1843
   PKG=$(echo "$METADATA" | jq -r --arg f "$ABS_FILE" '
-    .packages[]
+    [.packages[]
+    | . as $pkg
+    | ($pkg.manifest_path | rtrimstr("/Cargo.toml")) as $dir
     | select(
-        try ($f | startswith((.manifest_path | rtrimstr("/Cargo.toml"))))
+        try ($f | startswith($dir))
         catch false
       )
-    | .name' 2>/dev/null | head -1 || true)
+    | {name: $pkg.name, dirlen: ($dir | length)}]
+    | sort_by(-.dirlen)
+    | .[0].name // empty' || true)
+  echo "::notice::File mapping: $file -> ${PKG:-<no match>}"
   if [[ -n "$PKG" && "$PKG" != "null" ]]; then
     AFFECTED_MAP["$PKG"]=1
   fi
 done <<< "$CHANGED_FILES"
 
 AFFECTED_PKGS=(${!AFFECTED_MAP[@]})
+
+echo "::notice::Affected packages (${#AFFECTED_PKGS[@]}): ${AFFECTED_PKGS[*]}"
 
 if [[ ${#AFFECTED_PKGS[@]} -eq 0 ]]; then
   echo "run-all=false" >> "$GITHUB_OUTPUT"

@@ -44,7 +44,7 @@ fn like_button(liked: Signal<bool>, like_count: Signal<i32>) -> View {
 			if liked_signal.get() {
 				button {
 					class: "tweet-action-btn text-danger",
-					r#type: "button",
+					type: "button",
 					aria_label: "Like",
 					@click: {
 								let liked_for_click = liked_for_click_if.clone();
@@ -68,7 +68,7 @@ fn like_button(liked: Signal<bool>, like_count: Signal<i32>) -> View {
 			} else {
 				button {
 					class: "tweet-action-btn hover:text-danger",
-					r#type: "button",
+					type: "button",
 					aria_label: "Like",
 					@click: {
 								let liked_for_click = liked_for_click_else.clone();
@@ -192,7 +192,7 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 								if show_delete {
 									button {
 										class: "btn-ghost btn-sm text-danger hover:bg-danger/10",
-										r#type: "button",
+										type: "button",
 										aria_label: "Delete tweet",
 										@click: {
 													let set_deleted = set_deleted.clone();
@@ -227,7 +227,7 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 								class: "tweet-actions",
 								button {
 									class: "tweet-action-btn hover:text-brand",
-									r#type: "button",
+									type: "button",
 									aria_label: "Reply",
 									{ icons::chat_bubble_icon() }
 									span {
@@ -236,7 +236,7 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 								}
 								button {
 									class: "tweet-action-btn hover:text-success",
-									r#type: "button",
+									type: "button",
 									aria_label: "Retweet",
 									{ icons::retweet_icon() }
 									span {
@@ -246,7 +246,7 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 								{ like_button(liked_signal.clone(), like_count_signal.clone()) }
 								button {
 									class: "tweet-action-btn hover:text-brand",
-									r#type: "button",
+									type: "button",
 									aria_label: "Share",
 									{ icons::share_icon() }
 								}
@@ -350,7 +350,7 @@ pub fn tweet_form() -> View {
 				page!(|is_loading: bool, is_disabled: bool| {
 					div {
 						button {
-							r#type: "submit",
+							type: "submit",
 							class: if is_disabled { "btn-primary opacity-50 cursor-not-allowed" } else { "btn-primary" },
 							disabled: is_disabled,
 							{ if is_loading { "Posting..." } else { "Post" } }

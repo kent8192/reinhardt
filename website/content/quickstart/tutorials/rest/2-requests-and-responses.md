@@ -65,7 +65,7 @@ let response = Response::ok()
     .with_json(&data)?;
 
 // Custom status code (201 Created)
-let response = Response::new(201)
+let response = Response::created()
     .with_body("Created");
 
 // Response with custom headers
@@ -84,11 +84,11 @@ Response::ok()
     .with_json(&data)?
 
 // 201 Created
-Response::new(201)
+Response::created()
     .with_json(&data)?
 
 // 204 No Content
-Response::new(204)
+Response::no_content()
 
 // 400 Bad Request
 Response::bad_request()
@@ -129,7 +129,7 @@ async fn create_snippet(request: Request) -> Result<Response> {
     println!("Title: {}", data.title);
     println!("Code: {}", data.code);
 
-    Response::new(201)
+    Response::created()
         .with_json(&data)
 }
 ```
@@ -191,7 +191,7 @@ async fn create_snippet_manual(request: Request) -> Result<Response> {
     let body_bytes = request.body();
     let data: CreateSnippet = serde_json::from_slice(body_bytes)?;
 
-    Response::new(201)
+    Response::created()
         .with_json(&data)
 }
 ```
@@ -264,7 +264,7 @@ async fn safe_view(request: Request) -> Result<Response> {
             .with_body("Title is required");
     }
 
-    Response::new(201)
+    Response::created()
         .with_json(&data)
 }
 ```
@@ -328,11 +328,11 @@ async fn snippet_list(mut request: Request) -> Result<Response> {
             // Assign ID and save
             snippet.id = Some(1);
 
-            Response::new(201)
+            Response::created()
                 .with_json(&snippet)
         }
         _ => {
-            Response::new(405)
+            Response::method_not_allowed()
                 .with_body("Method not allowed")
         }
     }

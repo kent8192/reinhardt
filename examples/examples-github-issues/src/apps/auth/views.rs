@@ -57,6 +57,16 @@ impl UserStorage {
 			.cloned()
 	}
 
+	/// Find a user by email
+	pub async fn find_by_email(&self, email: &str) -> Option<User> {
+		self.users
+			.read()
+			.await
+			.values()
+			.find(|u| u.email == email)
+			.cloned()
+	}
+
 	/// List all users
 	pub async fn list_users(&self) -> Vec<User> {
 		self.users.read().await.values().cloned().collect()
@@ -72,13 +82,12 @@ impl AuthQuery {
 	/// Get current authenticated user
 	async fn me(&self, ctx: &Context<'_>) -> GqlResult<Option<UserType>> {
 		use reinhardt::Claims;
-		let claims = ctx.data_opt::<Claims>();
-		if let Some(claims) = claims {
-			let storage = ctx.data::<UserStorage>()?;
-			let user = storage.get_user(&claims.sub).await;
-			return Ok(user.map(UserType));
-		}
-		Err(async_graphql::Error::new("Authentication required"))
+		let claims = ctx
+			.data_opt::<Claims>()
+			.ok_or_else(|| async_graphql::Error::new("Authentication required"))?;
+		let storage = ctx.data::<UserStorage>()?;
+		let user = storage.get_user(&claims.sub).await;
+		Ok(user.map(UserType))
 	}
 
 	/// List all users

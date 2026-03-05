@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.1.0-rc.1...reinhardt-views@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(views)* replace std RwLock with parking_lot to prevent poisoning panics
+- *(views)* add RefUnwindSafe impl for ViewSetHandler
+- *(views)* remove unsafe keyword from RefUnwindSafe impl
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
 ## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.1.0-alpha.15...reinhardt-views@v0.1.0-rc.1) - 2026-02-24
 
 ### Maintenance

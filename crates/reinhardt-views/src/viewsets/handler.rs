@@ -120,7 +120,7 @@ fn extract_path_params(request: &Request) -> HashMap<String, String> {
 	// If we have at least 2 segments, assume second is an ID
 	if segments.len() >= 2 {
 		// Check if second segment looks like a numeric ID
-		if segments[1].parse::<i64>().is_ok() || !segments[1].is_empty() {
+		if segments[1].parse::<i64>().is_ok() {
 			params.insert("id".to_string(), segments[1].to_string());
 		}
 	}
@@ -1254,8 +1254,22 @@ where
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use bytes::Bytes;
+	use hyper::{HeaderMap, Method, Version};
+	use reinhardt_http::Request;
 	use rstest::rstest;
 	use std::thread;
+
+	fn build_request(uri: &str) -> Request {
+		Request::builder()
+			.method(Method::GET)
+			.uri(uri)
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap()
+	}
 
 	#[rstest]
 	fn test_parking_lot_rwlock_does_not_poison_after_panic() {
@@ -1295,5 +1309,53 @@ mod tests {
 		// Assert
 		assert_eq!(*guard1, "test_value");
 		assert_eq!(*guard2, "test_value");
+	}
+
+	#[rstest]
+	fn test_extract_path_params_numeric_segment_treated_as_id() {
+		// Arrange
+		let request = build_request("/resource/123/");
+
+		// Act
+		let params = extract_path_params(&request);
+
+		// Assert
+		assert_eq!(params.get("id"), Some(&"123".to_string()));
+	}
+
+	#[rstest]
+	fn test_extract_path_params_non_numeric_segment_not_treated_as_id() {
+		// Arrange
+		let request = build_request("/resource/username/");
+
+		// Act
+		let params = extract_path_params(&request);
+
+		// Assert
+		assert_eq!(params.get("id"), None);
+	}
+
+	#[rstest]
+	fn test_extract_path_params_slug_segment_not_treated_as_id() {
+		// Arrange
+		let request = build_request("/resource/my-slug/");
+
+		// Act
+		let params = extract_path_params(&request);
+
+		// Assert
+		assert_eq!(params.get("id"), None);
+	}
+
+	#[rstest]
+	fn test_extract_path_params_single_segment_no_id() {
+		// Arrange
+		let request = build_request("/resource/");
+
+		// Act
+		let params = extract_path_params(&request);
+
+		// Assert
+		assert_eq!(params.get("id"), None);
 	}
 }

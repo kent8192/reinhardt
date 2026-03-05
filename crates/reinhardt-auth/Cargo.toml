@@ -42,6 +42,7 @@ auth-full = [
   "argon2-hasher",
   "database",
   "redis-sessions",
+  "middleware",
 ]
 file = ["fs2"]
 cookie = ["aes-gcm"]

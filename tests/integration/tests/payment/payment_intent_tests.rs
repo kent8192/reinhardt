@@ -36,10 +36,12 @@ async fn test_create_payment_intent_with_zero_amount_fails() {
 	let result = provider.create_payment_intent(params).await;
 
 	assert!(result.is_err());
-	assert!(result
-		.unwrap_err()
-		.to_string()
-		.contains("must be greater than zero"));
+	assert!(
+		result
+			.unwrap_err()
+			.to_string()
+			.contains("must be greater than zero")
+	);
 }
 
 /// Test creating a payment intent with confirm flag.
@@ -146,10 +148,12 @@ async fn test_cancel_payment_succeeded_intent_fails() {
 	let result = provider.cancel_payment(&intent.id).await;
 
 	assert!(result.is_err());
-	assert!(result
-		.unwrap_err()
-		.to_string()
-		.contains("Cannot cancel succeeded"));
+	assert!(
+		result
+			.unwrap_err()
+			.to_string()
+			.contains("Cannot cancel succeeded")
+	);
 }
 
 /// Test payment intent lifecycle: create -> confirm -> succeed.

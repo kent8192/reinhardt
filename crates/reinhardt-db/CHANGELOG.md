@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.1...reinhardt-db@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(db)* prevent SQL injection in BatchUpdateBuilder and QuerySet filters
+- *(db)* preserve backward compatibility for batch_ops API
+- *(deps)* align dependency versions to workspace definitions
+
+### Other
+
+- resolve fields.rs conflict with main
+
+### Styling
+
+- *(db)* apply formatter to batch_ops
+
+### Testing
+
+- *(db)* add coverage tests for BigUnsigned overflow clamping
+
 ## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-alpha.16...reinhardt-db@v0.1.0-rc.1) - 2026-02-24
 
 ### Fixed

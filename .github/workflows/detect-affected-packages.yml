@@ -41,6 +41,8 @@ jobs:
         env:
           HEAD_REF: ${{ github.head_ref }}
           BASE_REF: ${{ github.base_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [[ "$HEAD_REF" == release-plz-* ]]; then
             echo "Release PR detected — running all tests"
@@ -59,21 +61,35 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
           BASE_REF: ${{ github.base_ref }}
           RUN_ALL: ${{ steps.detect.outputs.run-all }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Issue #1828: run-examples is true when run-all is true (covers release-plz branches
-          # and global file changes), or when examples/** files changed in this PR
+          # and global file changes), or when examples/** files changed in this PR.
+          # In a PR context, use GitHub API for reliable file detection.
+          # git diff / git log may return empty after update-branch (Issue #1836).
           if [[ "$RUN_ALL" == "true" ]]; then
             echo "run-examples=true" >> "$GITHUB_OUTPUT"
           else
-            if [[ -n "${HEAD_REF:-}" ]]; then
-              COMPARE_REF="origin/$HEAD_REF"
+            if [[ -n "${PR_NUMBER:-}" && -n "${GITHUB_REPOSITORY:-}" ]]; then
+              if \! GH_OUT=$(gh api \
+                  "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+                  --paginate --jq '.[].filename'); then
+                echo "::error::gh api call failed: repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" >&2
+                exit 1
+              fi
+              CHANGED=$(echo "$GH_OUT" | grep '^examples/' | head -1 || true)
             else
-              COMPARE_REF="HEAD"
+              if [[ -n "${HEAD_REF:-}" ]]; then
+                COMPARE_REF="origin/$HEAD_REF"
+              else
+                COMPARE_REF="HEAD"
+              fi
+              BASE_REF_VAL="${BASE_REF:-main}"
+              CHANGED=$(git diff --name-only \
+                "origin/$BASE_REF_VAL...$COMPARE_REF" \
+                | grep -v '^$' | grep '^examples/' | head -1 || true)
             fi
-            BASE_REF_VAL="${BASE_REF:-main}"
-            CHANGED=$(git log --name-only --format="" --no-merges \
-              "origin/$BASE_REF_VAL..$COMPARE_REF" \
-              | grep -v '^$' | grep '^examples/' | head -1 || true)
             if [[ -n "$CHANGED" ]]; then
               echo "run-examples=true" >> "$GITHUB_OUTPUT"
             else

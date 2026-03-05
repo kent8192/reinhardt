@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-middleware"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.3"
 description = "Middleware system for request/response processing pipeline"
 keywords = ["middleware", "web", "cors", "security", "http"]
 categories = ["web-programming", "web-programming::http-server"]
@@ -63,7 +63,7 @@ base64 = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
-reinhardt-test = { workspace = true }
+reinhardt-test = { path = "../reinhardt-test" }
 tokio-test = "0.4"
 tokio = { workspace = true }
 serial_test = { workspace = true }

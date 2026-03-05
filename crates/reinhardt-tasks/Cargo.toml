@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-tasks"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.3"
 description = "Background task execution and scheduling"
 edition.workspace = true
 license.workspace = true
@@ -50,7 +50,7 @@ serial_test = { workspace = true }
 mockito = "1.5"
 tempfile = { workspace = true }
 rstest = { workspace = true }
-reinhardt-test = { workspace = true, features = ["testcontainers"] }
+reinhardt-test = { path = "../reinhardt-test", features = ["testcontainers"] }
 
 [features]
 default = []

@@ -281,7 +281,7 @@ features = ["database"]  # Includes: ORM, migrations, contenttypes
 **Workaround for subcrate-only features**:
 {% versioned_code(lang="toml") %}
 reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web", features = ["cache"] }
-reinhardt-cache = { version = "LATEST_VERSION", features = ["redis-cluster"] }
+reinhardt-utils = { version = "LATEST_VERSION", features = ["redis-cluster"] }
 {% end %}
 
 ---
@@ -350,17 +350,15 @@ async fn handler(
 | `storage` | Storage abstraction | reinhardt-utils/storage |
 | `tasks` | Background jobs | reinhardt-tasks |
 | `shortcuts` | Django-style helpers | reinhardt-shortcuts |
-| `plugin` | Plugin system | reinhardt-dentdelion |
+| `dentdelion` | Plugin system | reinhardt-dentdelion |
 
 ---
 
-### Plugin System
+### Plugin System (dentdelion)
 
 | Feature | Description | Key Features |
 |---------|-------------|--------------|
-| `plugin` | Plugin system foundation | Static plugin registration, plugin registry |
-| `plugin-wasm` | WASM plugin support | Dynamic plugin loading, wasmtime integration |
-| `plugin-cli` | CLI integration | crates.io integration, plugin management commands |
+| `dentdelion` | Plugin system (static + WASM + CLI) | Static plugin registration, plugin registry, WASM support, CLI integration |
 
 The plugin system allows extending Reinhardt applications through static and dynamic plugins:
 
@@ -495,13 +493,12 @@ See [Task Backends Documentation](https://github.com/kent8192/reinhardt-web/blob
 | `reinhardt-db` | `backends`, `pool`, `postgres`, `orm`, `migrations` | `sqlite`, `mysql`, `contenttypes` |
 | `reinhardt-auth` | None | `jwt`, `session`, `oauth`, `token`, `argon2-hasher` |
 | `reinhardt-rest` | `serializers`, `parsers`, `renderers` | `pagination`, `filters`, `throttling`, `versioning` |
-| `reinhardt-cache` | None | `redis-backend`, `redis-cluster`, `memcached-backend` |
+| `reinhardt-utils` (cache) | None | `redis-backend`, `redis-cluster`, `memcached-backend` |
 | `reinhardt-middleware` | None | `cors`, `compression`, `security`, `rate-limit` |
-| `reinhardt-sessions` | None | `database`, `file`, `cookie`, `jwt` |
+| `reinhardt-auth` (sessions) | None | `session-database`, `session-file`, `session-cookie`, `session-jwt` |
 | `reinhardt-test` | None | `testcontainers`, `static`, `websockets` |
 | `reinhardt-dentdelion` | None | `wasm`, `cli`, `full` |
 | `reinhardt-tasks` | None | `redis-backend`, `rabbitmq-backend`, `database-backend` |
-| `reinhardt-panel` | None | `templates`, `file-uploads`, `full` |
 
 **Auto-enabled dependencies**:
 - `di` feature → `reinhardt-di/params` (parameter extraction types)

@@ -55,37 +55,64 @@ mod tests {
 
 	#[rstest]
 	fn test_snippet_serializer_validation() {
-		// Valid snippet
+		// Arrange
 		let valid = SnippetSerializer {
 			title: "Valid".to_string(),
 			code: "fn main() {}".to_string(),
 			language: "rust".to_string(),
 		};
-		assert!(valid.validate().is_ok());
-
-		// Invalid: empty title
 		let invalid_title = SnippetSerializer {
 			title: "".to_string(),
 			code: "fn main() {}".to_string(),
 			language: "rust".to_string(),
 		};
-		assert!(invalid_title.validate().is_err());
-
-		// Invalid: empty code
 		let invalid_code = SnippetSerializer {
 			title: "Valid".to_string(),
 			code: "".to_string(),
 			language: "rust".to_string(),
 		};
-		assert!(invalid_code.validate().is_err());
-
-		// Invalid: title too long
-		let long_title = "x".repeat(101);
 		let invalid_long = SnippetSerializer {
-			title: long_title,
+			title: "x".repeat(101),
 			code: "fn main() {}".to_string(),
 			language: "rust".to_string(),
 		};
+
+		// Act & Assert
+		assert!(valid.validate().is_ok());
+		assert!(invalid_title.validate().is_err());
+		assert!(invalid_code.validate().is_err());
 		assert!(invalid_long.validate().is_err());
+	}
+
+	#[rstest]
+	fn test_snippet_serializer_code_max_length_boundary() {
+		// Arrange
+		let at_limit = SnippetSerializer {
+			title: "Valid".to_string(),
+			code: "x".repeat(65535),
+			language: "rust".to_string(),
+		};
+
+		// Act
+		let result = at_limit.validate();
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	fn test_snippet_serializer_code_exceeds_max_length() {
+		// Arrange
+		let over_limit = SnippetSerializer {
+			title: "Valid".to_string(),
+			code: "x".repeat(65536),
+			language: "rust".to_string(),
+		};
+
+		// Act
+		let result = over_limit.validate();
+
+		// Assert
+		assert!(result.is_err());
 	}
 }

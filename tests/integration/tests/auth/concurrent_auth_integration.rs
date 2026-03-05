@@ -160,7 +160,11 @@ async fn test_concurrent_token_creation(token_storage: Arc<InMemoryTokenStorage>
 	}
 
 	// Verify all tokens are stored
-	assert_eq!(token_storage.len(), 100, "All 100 tokens should be stored");
+	assert_eq!(
+		token_storage.len().await,
+		100,
+		"All 100 tokens should be stored"
+	);
 }
 
 #[rstest]
@@ -249,7 +253,7 @@ async fn test_concurrent_token_revocation(token_storage: Arc<InMemoryTokenStorag
 	futures::future::join_all(handles).await;
 
 	// All tokens should be revoked
-	assert_eq!(token_storage.len(), 0, "All tokens should be revoked");
+	assert_eq!(token_storage.len().await, 0, "All tokens should be revoked");
 
 	// Verify no tokens remain
 	for i in 0..100 {
@@ -602,7 +606,7 @@ async fn test_session_token_management_flow(token_storage: Arc<InMemoryTokenStor
 
 	// Each user should have their latest session
 	assert_eq!(
-		token_storage.len(),
+		token_storage.len().await,
 		num_users,
 		"Each user should have exactly one active session"
 	);

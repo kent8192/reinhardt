@@ -174,36 +174,42 @@ pub async fn submit_vote(
 #[cfg(server)]
 async fn vote_internal(
 	request: VoteRequest,
-	_db: reinhardt::DatabaseConnection,
+	db: reinhardt::DatabaseConnection,
 ) -> std::result::Result<ChoiceInfo, ServerFnError> {
 	use crate::apps::polls::models::Choice;
 	use reinhardt::Model;
+	use reinhardt::atomic;
 
-	let choice_manager = Choice::objects();
+	// Wrap read-modify-write in a transaction to prevent race conditions
+	let updated_choice = atomic(&db, || async {
+		let choice_manager = Choice::objects();
 
-	// Get the choice
-	let mut choice = choice_manager
-		.get(request.choice_id)
-		.first()
-		.await
-		.map_err(|e| ServerFnError::application(e.to_string()))?
-		.ok_or_else(|| ServerFnError::server(404, "Choice not found"))?;
+		// Get the choice
+		let mut choice = choice_manager
+			.get(request.choice_id)
+			.first()
+			.await
+			.map_err(|e| anyhow::anyhow!(e.to_string()))?
+			.ok_or_else(|| anyhow::anyhow!("Choice not found"))?;
 
-	// Verify the choice belongs to the question
-	if *choice.question_id() != request.question_id {
-		return Err(ServerFnError::application(
-			"Choice does not belong to this question",
-		));
-	}
+		// Verify the choice belongs to the question
+		if *choice.question_id() != request.question_id {
+			return Err(anyhow::anyhow!("Choice does not belong to this question"));
+		}
 
-	// Increment vote count
-	choice.vote();
+		// Increment vote count
+		choice.vote();
 
-	// Update in database
-	let updated_choice = choice_manager
-		.update(&choice)
-		.await
-		.map_err(|e| ServerFnError::application(e.to_string()))?;
+		// Update in database
+		let updated = choice_manager
+			.update(&choice)
+			.await
+			.map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+		Ok(updated)
+	})
+	.await
+	.map_err(|e| ServerFnError::application(e.to_string()))?;
 
 	Ok(ChoiceInfo::from(updated_choice))
 }

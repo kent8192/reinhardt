@@ -345,10 +345,18 @@ struct UserSerializer {
     email: String,
 }
 
-impl Serializer<User> for UserSerializer {
-    fn validate(&self, instance: &User) -> ValidationResult {
-        // Custom validation
-        Ok(())
+impl Serializer for UserSerializer {
+    type Input = User;
+    type Output = UserResponse;
+
+    fn serialize(&self, input: &Self::Input) -> Result<Self::Output, SerializerError> {
+        // Custom serialization
+        Ok(UserResponse { id: input.id, username: input.username.clone(), email: input.email.clone() })
+    }
+
+    fn deserialize(&self, output: &Self::Output) -> Result<Self::Input, SerializerError> {
+        // Custom deserialization
+        Ok(User { id: output.id, username: output.username.clone(), email: output.email.clone() })
     }
 }
 ```

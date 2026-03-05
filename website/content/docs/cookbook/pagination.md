@@ -24,7 +24,7 @@ Guide to paginating large datasets.
 Traditional page number-based pagination.
 
 ```rust
-use reinhardt::pagination::{PageNumberPagination, Page};
+use reinhardt::rest::pagination::{PageNumberPagination, Page};
 use reinhardt::{Query, Path};
 
 #[derive(serde::Deserialize)]
@@ -70,7 +70,7 @@ async fn list_users(
 ### Page Number Validation
 
 ```rust
-use reinhardt::pagination::PageNumberPagination;
+use reinhardt::rest::pagination::PageNumberPagination;
 
 let pagination = PageNumberPagination::new(page, page_size)
     .with_max_page_size(100); // Maximum 100 items
@@ -94,7 +94,7 @@ if let Err(e) = pagination.validate() {
 Flexible limit/offset-based pagination.
 
 ```rust
-use reinhardt::pagination::{LimitOffsetPagination, PaginatedResponse};
+use reinhardt::rest::pagination::{LimitOffsetPagination, PaginatedResponse};
 
 #[derive(serde::Deserialize)]
 struct OffsetQuery {
@@ -142,7 +142,7 @@ async fn list_items(
 Best for infinite scroll or real-time feeds.
 
 ```rust
-use reinhardt::pagination::{CursorPagination, Cursor};
+use reinhardt::rest::pagination::{CursorPagination, Cursor};
 
 #[derive(serde::Deserialize, Serialize)]
 struct ItemCursor {
@@ -180,7 +180,7 @@ async fn feed(
 ### Encoded Cursors
 
 ```rust
-use reinhardt::pagination::{Cursor, CursorPagination};
+use reinhardt::rest::pagination::{Cursor, CursorPagination};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
 // Encode cursor
@@ -201,7 +201,7 @@ let cursor_data = String::from_utf8(decoded).unwrap();
 Standard paginated response format.
 
 ```rust
-use reinhardt::pagination::{PaginatedResponse, PaginationMetadata};
+use reinhardt::rest::pagination::{PaginatedResponse, PaginationMetadata};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -231,7 +231,7 @@ let response = PaginatedResponse {
 Contains detailed page information.
 
 ```rust
-use reinhardt::pagination::Page;
+use reinhardt::rest::pagination::Page;
 
 let page = Page::new(
     items,

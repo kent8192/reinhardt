@@ -6,7 +6,8 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Token storage error
 #[non_exhaustive]
@@ -221,13 +222,15 @@ impl InMemoryTokenStorage {
 	/// # Examples
 	///
 	/// ```
+	/// # tokio_test::block_on(async {
 	/// use reinhardt_auth::InMemoryTokenStorage;
 	///
 	/// let storage = InMemoryTokenStorage::new();
-	/// assert_eq!(storage.len(), 0);
+	/// assert_eq!(storage.len().await, 0);
+	/// # });
 	/// ```
-	pub fn len(&self) -> usize {
-		self.tokens.read().unwrap_or_else(|e| e.into_inner()).len()
+	pub async fn len(&self) -> usize {
+		self.tokens.read().await.len()
 	}
 
 	/// Check if storage is empty
@@ -235,16 +238,15 @@ impl InMemoryTokenStorage {
 	/// # Examples
 	///
 	/// ```
+	/// # tokio_test::block_on(async {
 	/// use reinhardt_auth::InMemoryTokenStorage;
 	///
 	/// let storage = InMemoryTokenStorage::new();
-	/// assert!(storage.is_empty());
+	/// assert!(storage.is_empty().await);
+	/// # });
 	/// ```
-	pub fn is_empty(&self) -> bool {
-		self.tokens
-			.read()
-			.unwrap_or_else(|e| e.into_inner())
-			.is_empty()
+	pub async fn is_empty(&self) -> bool {
+		self.tokens.read().await.is_empty()
 	}
 
 	/// Clear all tokens
@@ -252,17 +254,16 @@ impl InMemoryTokenStorage {
 	/// # Examples
 	///
 	/// ```
+	/// # tokio_test::block_on(async {
 	/// use reinhardt_auth::InMemoryTokenStorage;
 	///
 	/// let storage = InMemoryTokenStorage::new();
-	/// storage.clear();
-	/// assert!(storage.is_empty());
+	/// storage.clear().await;
+	/// assert!(storage.is_empty().await);
+	/// # });
 	/// ```
-	pub fn clear(&self) {
-		self.tokens
-			.write()
-			.unwrap_or_else(|e| e.into_inner())
-			.clear();
+	pub async fn clear(&self) {
+		self.tokens.write().await.clear();
 	}
 }
 
@@ -275,13 +276,13 @@ impl Default for InMemoryTokenStorage {
 #[async_trait]
 impl TokenStorage for InMemoryTokenStorage {
 	async fn store(&self, token: StoredToken) -> TokenStorageResult<()> {
-		let mut tokens = self.tokens.write().unwrap_or_else(|e| e.into_inner());
+		let mut tokens = self.tokens.write().await;
 		tokens.insert(token.token.clone(), token);
 		Ok(())
 	}
 
 	async fn get(&self, token: &str) -> TokenStorageResult<StoredToken> {
-		let tokens = self.tokens.read().unwrap_or_else(|e| e.into_inner());
+		let tokens = self.tokens.read().await;
 		tokens
 			.get(token)
 			.cloned()
@@ -289,7 +290,7 @@ impl TokenStorage for InMemoryTokenStorage {
 	}
 
 	async fn get_user_tokens(&self, user_id: i64) -> TokenStorageResult<Vec<StoredToken>> {
-		let tokens = self.tokens.read().unwrap_or_else(|e| e.into_inner());
+		let tokens = self.tokens.read().await;
 		let user_tokens: Vec<StoredToken> = tokens
 			.values()
 			.filter(|t| t.user_id == user_id)
@@ -299,19 +300,19 @@ impl TokenStorage for InMemoryTokenStorage {
 	}
 
 	async fn delete(&self, token: &str) -> TokenStorageResult<()> {
-		let mut tokens = self.tokens.write().unwrap_or_else(|e| e.into_inner());
+		let mut tokens = self.tokens.write().await;
 		tokens.remove(token);
 		Ok(())
 	}
 
 	async fn delete_user_tokens(&self, user_id: i64) -> TokenStorageResult<()> {
-		let mut tokens = self.tokens.write().unwrap_or_else(|e| e.into_inner());
+		let mut tokens = self.tokens.write().await;
 		tokens.retain(|_, t| t.user_id != user_id);
 		Ok(())
 	}
 
 	async fn cleanup_expired(&self, current_time: i64) -> TokenStorageResult<usize> {
-		let mut tokens = self.tokens.write().unwrap_or_else(|e| e.into_inner());
+		let mut tokens = self.tokens.write().await;
 		let before_count = tokens.len();
 		tokens.retain(|_, t| !t.is_expired(current_time));
 		let removed = before_count - tokens.len();
@@ -706,18 +707,108 @@ mod tests {
 		assert!(storage.get("token3").await.is_ok());
 	}
 
-	#[test]
-	fn test_in_memory_storage_len_and_is_empty() {
+	#[tokio::test]
+	async fn test_in_memory_storage_len_and_is_empty() {
 		let storage = InMemoryTokenStorage::new();
-		assert_eq!(storage.len(), 0);
-		assert!(storage.is_empty());
+		assert_eq!(storage.len().await, 0);
+		assert!(storage.is_empty().await);
 	}
 
-	#[test]
-	fn test_in_memory_storage_clear() {
+	#[tokio::test]
+	async fn test_in_memory_storage_clear() {
 		let storage = InMemoryTokenStorage::new();
-		storage.clear();
-		assert!(storage.is_empty());
+		storage.clear().await;
+		assert!(storage.is_empty().await);
+	}
+
+	#[tokio::test]
+	async fn test_in_memory_storage_len_after_store() {
+		// Arrange
+		let storage = InMemoryTokenStorage::new();
+
+		// Act
+		storage.store(StoredToken::new("t1", 1)).await.unwrap();
+		storage.store(StoredToken::new("t2", 2)).await.unwrap();
+
+		// Assert
+		assert_eq!(storage.len().await, 2);
+		assert!(!storage.is_empty().await);
+	}
+
+	#[tokio::test]
+	async fn test_in_memory_storage_clear_removes_all() {
+		// Arrange
+		let storage = InMemoryTokenStorage::new();
+		storage.store(StoredToken::new("t1", 1)).await.unwrap();
+		storage.store(StoredToken::new("t2", 2)).await.unwrap();
+		assert_eq!(storage.len().await, 2);
+
+		// Act
+		storage.clear().await;
+
+		// Assert
+		assert_eq!(storage.len().await, 0);
+		assert!(storage.is_empty().await);
+	}
+
+	#[tokio::test]
+	async fn test_in_memory_storage_default_is_empty() {
+		// Arrange
+		let storage = InMemoryTokenStorage::default();
+
+		// Assert
+		assert!(storage.is_empty().await);
+	}
+
+	#[tokio::test]
+	async fn test_in_memory_storage_store_overwrites_existing() {
+		// Arrange
+		let storage = InMemoryTokenStorage::new();
+		storage
+			.store(StoredToken::new("token1", 1).with_expiration(100))
+			.await
+			.unwrap();
+
+		// Act - store with same token key but different user
+		storage
+			.store(StoredToken::new("token1", 2).with_expiration(200))
+			.await
+			.unwrap();
+
+		// Assert - should have updated
+		let retrieved = storage.get("token1").await.unwrap();
+		assert_eq!(retrieved.user_id(), 2);
+		assert_eq!(retrieved.expires_at(), Some(200));
+		assert_eq!(storage.len().await, 1);
+	}
+
+	#[tokio::test]
+	async fn test_in_memory_storage_cleanup_no_expiration() {
+		// Arrange
+		let storage = InMemoryTokenStorage::new();
+		storage.store(StoredToken::new("t1", 1)).await.unwrap(); // no expiration
+
+		// Act
+		let removed = storage.cleanup_expired(9999999).await.unwrap();
+
+		// Assert - token without expiration should not be removed
+		assert_eq!(removed, 0);
+		assert_eq!(storage.len().await, 1);
+	}
+
+	#[tokio::test]
+	async fn test_token_storage_error_display() {
+		// Assert
+		assert_eq!(TokenStorageError::NotFound.to_string(), "Token not found");
+		assert_eq!(TokenStorageError::Expired.to_string(), "Token expired");
+		assert_eq!(
+			TokenStorageError::StorageError("disk full".to_string()).to_string(),
+			"Storage error: disk full"
+		);
+		assert_eq!(
+			TokenStorageError::InvalidFormat.to_string(),
+			"Invalid token format"
+		);
 	}
 
 	#[rstest::rstest]

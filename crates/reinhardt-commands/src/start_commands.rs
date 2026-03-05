@@ -93,6 +93,7 @@ impl BaseCommand for StartProjectCommand {
 		// Prepare template context
 		let mut context = TemplateContext::new();
 		context.insert("project_name", &project_name)?;
+		context.insert("crate_name", project_name.replace('-', "_"))?;
 		context.insert("secret_key", &secret_key)?;
 		context.insert("camel_case_project_name", to_camel_case(&project_name))?;
 		context.insert("reinhardt_version", env!("CARGO_PKG_VERSION"))?;
@@ -522,7 +523,8 @@ fn update_apps_export(app_name: &str) -> CommandResult<()> {
 		ast.items.push(Item::Mod(mod_item));
 
 		// Add use declaration: pub use app_name::AppNameConfig;
-		let config_ident = syn::Ident::new(&camel_case_name, proc_macro2::Span::call_site());
+		let config_name = format!("{}Config", camel_case_name);
+		let config_ident = syn::Ident::new(&config_name, proc_macro2::Span::call_site());
 		let use_item: ItemUse = syn::parse_quote! {
 			pub use #app_ident::#config_ident;
 		};

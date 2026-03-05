@@ -50,7 +50,7 @@ serial_test = { workspace = true }
 mockito = "1.5"
 tempfile = { workspace = true }
 rstest = { workspace = true }
-reinhardt-test = { workspace = true, features = ["testcontainers"] }
+reinhardt-test = { path = "../reinhardt-test", features = ["testcontainers"] }
 
 [features]
 default = []

@@ -293,13 +293,36 @@ The `reinhardt-test` crate is published on crates.io and its workspace dependenc
 
 (Ref: [#181](https://github.com/kent8192/reinhardt-web/pull/181), [#199](https://github.com/kent8192/reinhardt-web/pull/199), [#203](https://github.com/kent8192/reinhardt-web/pull/203), [#216](https://github.com/kent8192/reinhardt-web/pull/216))
 
-### KI-2: Cargo 1.84+ Dev-Dependency Resolution Regression (Resolved)
+### KI-2: Cargo 1.84+ Dev-Dependency Resolution During Publish (Active)
 
-**Problem**: Starting with Cargo 1.84, `cargo publish` attempts to resolve workspace dev-dependencies from crates.io even when they are marked `publish = false`. If the workspace dependency entry includes a `version` field, Cargo tries to find that version on crates.io and fails when the crate does not exist there.
+**Problem**: Starting with Cargo 1.84, `cargo publish` resolves dev-dependencies during the packaging stage, even with `--no-verify` (`publish_no_verify = true`). This means that if crate A has `reinhardt-test` in `[dev-dependencies]` and `reinhardt-test` has not yet been published at the required version, `cargo publish` for crate A will fail — regardless of `publish_no_verify`.
 
-**Previous Workaround**: Ensured that unpublished workspace crates (e.g., `reinhardt-test`) did **not** have a `version` field in their `[workspace.dependencies]` entry. The `publish_no_verify = true` setting provided additional protection by skipping the verification build.
+**Impact**: release-plz determines publish order from regular dependencies only, ignoring dev-dependencies. When all crates in a version group are bumped simultaneously, crates with `reinhardt-test` in `[dev-dependencies]` may be published before `reinhardt-test` itself, causing failures like:
+```
+failed to select a version for the requirement `reinhardt-test = "^0.1.0-rc.3"`
+candidate versions found which didn't match: 0.1.0-rc.2, 0.1.0-rc.1, ...
+```
 
-**Current Status**: This workaround is **no longer needed** for `reinhardt-test` because it is now published on crates.io (v0.1.0-rc.2). All workspace dependency entries, including `reinhardt-test`, should include a `version` field. The workaround remains relevant only for truly unpublished crates (those with `publish = false`).
+**Solution (two strategies)**:
+
+1. **Optional dependency (preferred)**: Move `reinhardt-test` from `[dev-dependencies]` to `[dependencies]` as optional. This makes release-plz aware of the dependency and ensures correct publish ordering:
+```toml
+[dependencies]
+reinhardt-test = { workspace = true, optional = true }
+
+[features]
+test-utils = ["dep:reinhardt-test"]
+```
+
+2. **Path-only dev-dependency (fallback for cyclic cases)**: When moving to optional dependency would create a circular dependency (e.g., reinhardt-test → reinhardt-admin → reinhardt-apps), use a path-only dev-dependency without version. Cargo strips versionless path dev-dependencies from the published manifest, avoiding version resolution:
+```toml
+[dev-dependencies]
+reinhardt-test = { path = "../reinhardt-test" }
+```
+
+Tests continue to work because the project always runs tests with `--all-features`.
+
+**Rule**: Functional crates that depend on `reinhardt-test` **must** use either strategy above. Never use `reinhardt-test = { workspace = true }` in `[dev-dependencies]` (workspace deps include version, triggering Cargo resolution).
 
 **Tracking**: [cargo#15151](https://github.com/rust-lang/cargo/issues/15151)
 

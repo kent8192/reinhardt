@@ -37,4 +37,4 @@ tokio-test = "0.4"
 rstest = { workspace = true }
 proptest = { workspace = true }
 tempfile = "3"
-reinhardt-test = { workspace = true }
+reinhardt-test = { path = "../reinhardt-test" }

@@ -40,6 +40,6 @@ tempfile = "3.8"
 testcontainers = { workspace = true }
 once_cell = "1.20"
 rstest = { workspace = true }
-reinhardt-test = { workspace = true, features = ["testcontainers"] }
+reinhardt-test = { path = "../reinhardt-test", features = ["testcontainers"] }
 reqwest = { version = "0.12", features = ["json"] }
 futures = { workspace = true }

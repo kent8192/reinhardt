@@ -211,8 +211,12 @@ impl FormSet {
 	pub fn process_data(&mut self, data: &HashMap<String, HashMap<String, serde_json::Value>>) {
 		self.forms.clear();
 
+		// Sort keys for deterministic ordering when max_num limit is applied
+		let mut keys: Vec<&String> = data.keys().collect();
+		keys.sort();
+
 		// Each form should have a key like "form-0", "form-1", etc.
-		for (key, form_data) in data {
+		for key in keys {
 			if key.starts_with(&self.prefix) {
 				// Enforce max_num limit during data processing
 				if let Some(max) = self.max_num
@@ -220,9 +224,11 @@ impl FormSet {
 				{
 					break;
 				}
-				let mut form = Form::new();
-				form.bind(form_data.clone());
-				self.forms.push(form);
+				if let Some(form_data) = data.get(key) {
+					let mut form = Form::new();
+					form.bind(form_data.clone());
+					self.forms.push(form);
+				}
 			}
 		}
 	}
@@ -238,6 +244,7 @@ impl Default for FormSet {
 mod tests {
 	use super::*;
 	use crate::fields::CharField;
+	use rstest::rstest;
 
 	#[test]
 	fn test_formset_basic() {
@@ -285,6 +292,99 @@ mod tests {
 		assert!(formset.add_form(form3).is_err());
 
 		assert_eq!(formset.form_count(), 2);
+	}
+
+	#[rstest]
+	fn test_process_data_basic_two_forms() {
+		// Arrange
+		let mut formset = FormSet::new("form".to_string());
+		let mut data = HashMap::new();
+
+		let mut form0_data = HashMap::new();
+		form0_data.insert("name".to_string(), serde_json::json!("Alice"));
+		data.insert("form-0".to_string(), form0_data);
+
+		let mut form1_data = HashMap::new();
+		form1_data.insert("name".to_string(), serde_json::json!("Bob"));
+		data.insert("form-1".to_string(), form1_data);
+
+		// Act
+		formset.process_data(&data);
+
+		// Assert
+		assert_eq!(formset.form_count(), 2);
+	}
+
+	#[rstest]
+	fn test_process_data_deterministic_ordering() {
+		// Arrange
+		let mut formset = FormSet::new("form".to_string());
+		let mut data = HashMap::new();
+
+		// Insert in reverse order to verify sorting
+		let mut form2_data = HashMap::new();
+		form2_data.insert("name".to_string(), serde_json::json!("Charlie"));
+		data.insert("form-2".to_string(), form2_data);
+
+		let mut form0_data = HashMap::new();
+		form0_data.insert("name".to_string(), serde_json::json!("Alice"));
+		data.insert("form-0".to_string(), form0_data);
+
+		let mut form1_data = HashMap::new();
+		form1_data.insert("name".to_string(), serde_json::json!("Bob"));
+		data.insert("form-1".to_string(), form1_data);
+
+		// Act
+		formset.process_data(&data);
+
+		// Assert
+		assert_eq!(formset.form_count(), 3);
+		let cleaned: Vec<_> = formset.cleaned_data();
+		assert_eq!(cleaned[0].get("name"), Some(&serde_json::json!("Alice")));
+		assert_eq!(cleaned[1].get("name"), Some(&serde_json::json!("Bob")));
+		assert_eq!(cleaned[2].get("name"), Some(&serde_json::json!("Charlie")));
+	}
+
+	#[rstest]
+	fn test_process_data_max_num_constraint() {
+		// Arrange
+		let mut formset = FormSet::new("form".to_string()).with_max_num(Some(2));
+		let mut data = HashMap::new();
+
+		for i in 0..5 {
+			let mut form_data = HashMap::new();
+			form_data.insert("name".to_string(), serde_json::json!(format!("User{}", i)));
+			data.insert(format!("form-{}", i), form_data);
+		}
+
+		// Act
+		formset.process_data(&data);
+
+		// Assert
+		assert_eq!(formset.form_count(), 2);
+	}
+
+	#[rstest]
+	fn test_process_data_prefix_mismatch_keys_ignored() {
+		// Arrange
+		let mut formset = FormSet::new("person".to_string());
+		let mut data = HashMap::new();
+
+		let mut matching = HashMap::new();
+		matching.insert("name".to_string(), serde_json::json!("Alice"));
+		data.insert("person-0".to_string(), matching);
+
+		let mut mismatched = HashMap::new();
+		mismatched.insert("name".to_string(), serde_json::json!("Bob"));
+		data.insert("form-0".to_string(), mismatched);
+
+		// Act
+		formset.process_data(&data);
+
+		// Assert
+		assert_eq!(formset.form_count(), 1);
+		let cleaned = formset.cleaned_data();
+		assert_eq!(cleaned[0].get("name"), Some(&serde_json::json!("Alice")));
 	}
 
 	#[test]

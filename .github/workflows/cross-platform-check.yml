@@ -43,54 +43,21 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          # Install OpenSSL via chocolatey. The choco openssl package provides MSVC-compatible
-          # import libraries (.lib), which are required by openssl-sys for dynamic linking
-          # with the MSVC Rust toolchain. Static linking is not used because choco's package
-          # does not include full static libraries; dynamic import libs suffice for cargo check.
-          choco install openssl --yes --no-progress 2>&1 | Out-Null
+          # Install OpenSSL via vcpkg. The vcpkg package manager is pre-installed on
+          # GitHub-hosted Windows runners and provides MSVC-compatible OpenSSL libraries
+          # with a stable, predictable directory structure that openssl-sys can locate.
+          vcpkg install openssl:x64-windows
+          vcpkg integrate install
 
-          # Find the installed OpenSSL directory (choco may install to different paths)
-          $candidatePaths = @(
-            "C:\Program Files\OpenSSL-Win64",
-            "C:\Program Files\OpenSSL"
-          )
-          $opensslDir = $null
-          foreach ($path in $candidatePaths) {
-            if (Test-Path "$path\include\openssl\ssl.h") {
-              $opensslDir = $path
-              break
-            }
-          }
-          if (-not $opensslDir) {
-            Write-Error "OpenSSL not found after installation. Searched: $($candidatePaths -join ', ')"
+          # Set environment variables for openssl-sys crate to find the vcpkg-installed OpenSSL.
+          # vcpkg installs to $env:VCPKG_INSTALLATION_ROOT/installed/x64-windows by default.
+          $opensslDir = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
+          if (-not (Test-Path "$opensslDir\include\openssl\ssl.h")) {
+            Write-Error "OpenSSL headers not found at: $opensslDir\include\openssl\ssl.h"
             exit 1
           }
           Write-Host "Using OpenSSL at: $opensslDir"
           echo "OPENSSL_DIR=$opensslDir" >> $env:GITHUB_ENV
-
-          # Find the actual lib directory containing .lib files.
-          # Chocolatey may place them in a VC subdirectory (e.g. lib\VC\x64\MD)
-          # rather than the root lib\ directory that openssl-sys expects.
-          $libCandidates = @(
-            "$opensslDir\lib\VC\x64\MD",
-            "$opensslDir\lib\VC\x64\MTd",
-            "$opensslDir\lib\VC",
-            "$opensslDir\lib"
-          )
-          $opensslLibDir = $null
-          foreach ($path in $libCandidates) {
-            if ((Test-Path "$path\libssl.lib") -or (Test-Path "$path\ssleay32.lib") -or (Test-Path "$path\libssl_static.lib")) {
-              $opensslLibDir = $path
-              break
-            }
-          }
-          if ($opensslLibDir) {
-            Write-Host "Using OpenSSL lib dir at: $opensslLibDir"
-            echo "OPENSSL_LIB_DIR=$opensslLibDir" >> $env:GITHUB_ENV
-          } else {
-            Write-Host "Warning: Could not find OpenSSL .lib files in known subdirectories, using default lib dir"
-            echo "OPENSSL_LIB_DIR=$opensslDir\lib" >> $env:GITHUB_ENV
-          }
 
       - name: Run cargo check (${{ matrix.os }})
         run: cargo check --workspace --all --all-features

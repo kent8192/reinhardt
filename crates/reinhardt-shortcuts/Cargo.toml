@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-shortcuts"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.4"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -21,16 +21,20 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 hyper = { workspace = true }
 
+# Test utilities (optional)
+reinhardt-test = { workspace = true, optional = true }
+
 [features]
 default = []
 database = ["reinhardt-db", "reinhardt-db/backends", "reinhardt-db/pool", "reinhardt-db/orm", "reinhardt-db/postgres"]
 full = ["database"]
+# Test utilities
+test-utils = ["dep:reinhardt-test", "reinhardt-test/testcontainers"]
 
 [dev-dependencies]
 insta = { workspace = true }
 tokio = { workspace = true }
 rstest = { workspace = true }
-reinhardt-test = { workspace = true, features = ["testcontainers"] }
 sqlx = { workspace = true }
 serial_test = { workspace = true }
 testcontainers = { workspace = true }

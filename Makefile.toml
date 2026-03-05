@@ -556,3 +556,22 @@ dependencies = ["check", "fmt", "clippy", "test", "examples-test"]
 [tasks.ci-with-examples]
 description = "Alias for ci-full"
 dependencies = ["ci-full"]
+
+# ============================================================================
+# Mutation Testing Tasks
+# ============================================================================
+
+[tasks.mutants]
+description = "Run mutation testing on a single crate (use CRATE env var)"
+command = "cargo"
+args = ["mutants", "-p", "${CRATE}", "--test-tool", "nextest", "--timeout-multiplier", "2", "--jobs", "1"]
+
+[tasks.mutants-shard]
+description = "Run mutation testing for a shard (use SHARD and TOTAL_SHARDS env vars, e.g. SHARD=1 TOTAL_SHARDS=5)"
+command = "cargo"
+args = ["mutants", "--shard", "${SHARD}/${TOTAL_SHARDS}", "--test-tool", "nextest", "--timeout-multiplier", "2", "--jobs", "1"]
+
+[tasks.mutants-all]
+description = "Run mutation testing for all mutants (no sharding)"
+command = "cargo"
+args = ["mutants", "--test-tool", "nextest", "--timeout-multiplier", "2", "--jobs", "1"]

@@ -89,11 +89,25 @@ impl Span {
 	}
 }
 
+/// Default maximum number of spans before eviction triggers
+const DEFAULT_MAX_SPANS: usize = 10_000;
+
 /// Trace context storage
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TraceStore {
 	/// Active spans
 	spans: RwLock<HashMap<String, Span>>,
+	/// Maximum number of spans before completed spans are evicted
+	max_spans: usize,
+}
+
+impl Default for TraceStore {
+	fn default() -> Self {
+		Self {
+			spans: RwLock::new(HashMap::new()),
+			max_spans: DEFAULT_MAX_SPANS,
+		}
+	}
 }
 
 impl TraceStore {
@@ -102,14 +116,26 @@ impl TraceStore {
 		Self::default()
 	}
 
+	/// Create a new trace store with a custom maximum span limit
+	pub fn with_max_spans(max_spans: usize) -> Self {
+		Self {
+			spans: RwLock::new(HashMap::new()),
+			max_spans,
+		}
+	}
+
 	/// Start a new span
 	pub fn start_span(&self, trace_id: String, operation_name: String) -> String {
 		let span = Span::new(trace_id, operation_name);
 		let span_id = span.span_id.clone();
-		self.spans
-			.write()
-			.unwrap_or_else(|e| e.into_inner())
-			.insert(span_id.clone(), span);
+		let mut spans = self.spans.write().unwrap_or_else(|e| e.into_inner());
+		spans.insert(span_id.clone(), span);
+
+		// Evict completed spans when store exceeds capacity
+		if spans.len() > self.max_spans {
+			spans.retain(|_, s| s.end_time.is_none());
+		}
+		drop(spans);
 		span_id
 	}
 
@@ -763,6 +789,61 @@ mod tests {
 		let response = middleware.process(request, handler).await.unwrap();
 
 		assert!(response.headers.contains_key(TRACE_ID_HEADER));
+	}
+
+	#[test]
+	fn test_trace_store_with_max_spans() {
+		// Arrange
+		let store = TraceStore::with_max_spans(3);
+
+		// Act
+		let id1 = store.start_span("t1".to_string(), "op1".to_string());
+		let id2 = store.start_span("t2".to_string(), "op2".to_string());
+		let id3 = store.start_span("t3".to_string(), "op3".to_string());
+
+		// Assert - all 3 spans should exist
+		assert!(store.get_span(&id1).is_some());
+		assert!(store.get_span(&id2).is_some());
+		assert!(store.get_span(&id3).is_some());
+	}
+
+	#[test]
+	fn test_trace_store_evicts_completed_spans_on_overflow() {
+		// Arrange
+		let store = TraceStore::with_max_spans(3);
+
+		// Add 3 spans and complete 2 of them
+		let id1 = store.start_span("t1".to_string(), "op1".to_string());
+		let id2 = store.start_span("t2".to_string(), "op2".to_string());
+		let id3 = store.start_span("t3".to_string(), "op3".to_string());
+
+		store.end_span(&id1);
+		store.end_span(&id2);
+		// id3 is still active
+
+		// Act - adding a 4th span exceeds max_spans, triggering eviction
+		let id4 = store.start_span("t4".to_string(), "op4".to_string());
+
+		// Assert - completed spans should be evicted, active ones remain
+		assert!(store.get_span(&id1).is_none());
+		assert!(store.get_span(&id2).is_none());
+		assert!(store.get_span(&id3).is_some());
+		assert!(store.get_span(&id4).is_some());
+	}
+
+	#[test]
+	fn test_trace_store_no_eviction_when_under_limit() {
+		// Arrange
+		let store = TraceStore::with_max_spans(10);
+
+		// Act
+		let id1 = store.start_span("t1".to_string(), "op1".to_string());
+		store.end_span(&id1);
+		let id2 = store.start_span("t2".to_string(), "op2".to_string());
+
+		// Assert - no eviction, both should exist
+		assert!(store.get_span(&id1).is_some());
+		assert!(store.get_span(&id2).is_some());
 	}
 
 	#[rstest::rstest]

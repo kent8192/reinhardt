@@ -519,11 +519,11 @@ fn test_collectstatic_file_collision(temp_dir: TempDir) {
 
 	assert!(result.is_ok(), "Execute should succeed ");
 
-	// File should exist (content depends on implementation - later or earlier wins)
+	// File should exist with content from the later source directory
 	let content = fs::read_to_string(dest_dir.join("app.js")).expect("Failed to read app.js ");
-	assert!(
-		content.contains("source"),
-		"app.js should have content from one source"
+	assert_eq!(
+		content, "// source2 version",
+		"later source directory should override earlier one (Django-compatible behavior)"
 	);
 }
 

@@ -16,26 +16,17 @@ use {
 	validator::Validate,
 };
 
-/// Internal helper for profile update logic
-///
-/// Validates the request, authenticates via session, fetches the profile,
-/// applies updates, and saves to the database. Returns the updated `Profile`.
+/// Apply profile updates and save to database
 #[cfg(server)]
-async fn update_profile_internal(
+async fn apply_profile_update(
 	request: &UpdateProfileRequest,
 	db: &DatabaseConnection,
 	session: &SessionData,
-) -> std::result::Result<Profile, ServerFnError> {
-	// Validate request
-	request
-		.validate()
-		.map_err(|e| ServerFnError::server(400, format!("Validation failed: {}", e)))?;
-
+) -> Result<Profile, ServerFnError> {
 	let user_id = session
 		.get::<Uuid>("user_id")
 		.ok_or_else(|| ServerFnError::server(401, "Not authenticated"))?;
 
-	// Find existing profile
 	let mut profile = Profile::objects()
 		.filter(
 			Profile::field_user_id(),
@@ -47,21 +38,19 @@ async fn update_profile_internal(
 		.map_err(|e| ServerFnError::server(500, format!("Database error: {}", e)))?
 		.ok_or_else(|| ServerFnError::server(404, "Profile not found"))?;
 
-	// Update fields
-	if let Some(ref bio) = request.bio {
+	if let Some(bio) = &request.bio {
 		profile.set_bio(bio.clone());
 	}
-	if let Some(ref avatar_url) = request.avatar_url {
+	if let Some(avatar_url) = &request.avatar_url {
 		profile.set_avatar_url(avatar_url.clone());
 	}
-	if let Some(ref location) = request.location {
+	if let Some(location) = &request.location {
 		profile.set_location(Some(location.clone()));
 	}
-	if let Some(ref website) = request.website {
+	if let Some(website) = &request.website {
 		profile.set_website(Some(website.clone()));
 	}
 
-	// Save to database
 	Profile::objects()
 		.update_with_conn(db, &profile)
 		.await
@@ -97,14 +86,19 @@ pub async fn update_profile(
 	#[inject] db: DatabaseConnection,
 	#[inject] session: SessionData,
 ) -> std::result::Result<ProfileResponse, ServerFnError> {
-	let profile = update_profile_internal(&request, &db, &session).await?;
+	request
+		.validate()
+		.map_err(|e| ServerFnError::server(400, format!("Validation failed: {}", e)))?;
+
+	let profile = apply_profile_update(&request, &db, &session).await?;
+
 	Ok(ProfileResponse::from(profile))
 }
 
 /// Form-compatible wrapper for update_profile
 ///
 /// This wrapper accepts individual field arguments from form! macro's server_fn integration
-/// and converts them to UpdateProfileRequest. Returns `Result<(), ServerFnError>`
+/// and converts them to `UpdateProfileRequest`. Returns `Result<(), ServerFnError>`
 /// as expected by form! macro's submit() method.
 ///
 /// The argument order matches form! macro's field order: avatar_url, bio, location, website
@@ -136,6 +130,11 @@ pub async fn update_profile_form(
 		},
 	};
 
-	update_profile_internal(&request, &db, &session).await?;
+	request
+		.validate()
+		.map_err(|e| ServerFnError::server(400, format!("Validation failed: {}", e)))?;
+
+	apply_profile_update(&request, &db, &session).await?;
+
 	Ok(())
 }

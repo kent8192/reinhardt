@@ -274,6 +274,10 @@ pub use reinhardt_conf::settings::sources::{
 	DefaultSource, EnvSource, LowPriorityEnvSource, TomlFileSource,
 };
 
+// Re-export ApplyUpdate trait and macros
+pub use reinhardt_core::apply_update::ApplyUpdate;
+pub use reinhardt_macros::{ApplyUpdate as DeriveApplyUpdate, apply_update};
+
 // Re-export core types
 #[cfg(all(feature = "core", not(target_arch = "wasm32")))]
 pub use reinhardt_core::{

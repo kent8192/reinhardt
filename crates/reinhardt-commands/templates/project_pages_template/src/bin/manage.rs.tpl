@@ -8,6 +8,7 @@
 //! No manual registration is required - see `src/config/urls.rs` for the
 //! `#[routes]` attribute macro that enables this.
 
+use {{ crate_name }} as _;
 use reinhardt::commands::execute_from_command_line;
 use std::process;
 

@@ -50,6 +50,11 @@ pub mod adapters {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod core {
+	pub use reinhardt_admin::core::*;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub mod server {
 	pub use reinhardt_admin::server::*;
 }

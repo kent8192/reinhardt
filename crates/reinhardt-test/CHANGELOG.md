@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.1.0-rc.1...reinhardt-test@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(deps)* update reinhardt-test outdated deps
+- *(deps)* convert Vec to Bytes for tungstenite message types
+
 ## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.1.0-alpha.20...reinhardt-test@v0.1.0-rc.1) - 2026-02-24
 
 ### Maintenance

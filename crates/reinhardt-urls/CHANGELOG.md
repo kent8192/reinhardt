@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.1...reinhardt-urls@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(urls)* convert path-type parameters to matchit catch-all syntax in RadixTree mode
+
+### Styling
+
+- *(urls)* apply project formatting to pattern module
+
+### Testing
+
+- *(urls)* add coverage tests for LazyLoaded clone-based get and get_if_loaded
+
 ## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-alpha.15...reinhardt-urls@v0.1.0-rc.1) - 2026-02-24
 
 ### Maintenance

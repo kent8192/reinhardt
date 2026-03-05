@@ -128,6 +128,10 @@
   color: ededed
   description: Internationalization, localization
 
+- name: examples
+  color: ededed
+  description: Example projects and demo applications
+
 # Code Quality Labels
 - name: refactoring
   color: ededed

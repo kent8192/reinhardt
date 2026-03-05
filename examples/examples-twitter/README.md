@@ -153,13 +153,43 @@ examples-twitter/
 └── README.md
 ```
 
-## Setup
+## Quick Start
+
+Get the Twitter demo running with a single command:
+
+```bash
+cd examples/examples-twitter
+./quickstart.sh
+```
+
+### What You'll See
+
+| Service | URL | Description |
+|---------|-----|-------------|
+| Frontend | http://127.0.0.1:8000 | WASM-powered Twitter clone UI |
+| Admin | http://127.0.0.1:8000/admin/ | Auto-generated admin panel |
+| Swagger UI | http://127.0.0.1:8000/api/docs/ | Interactive API documentation |
+| Redoc | http://127.0.0.1:8000/api/redoc/ | Alternative API docs |
+
+### Try It Out
+
+1. **Register** - Visit the frontend and create a new account
+2. **Post a tweet** - Write your first tweet from the timeline
+3. **Follow users** - Search for other users and follow them
+4. **Send a DM** - Start a direct message conversation
+5. **Explore the Admin** - Visit `/admin/` to see all models and data
+
+## Setup (Manual)
+
+If you prefer to set up manually, or the quickstart script doesn't work for your environment:
 
 ### Prerequisites
 
 - Rust 1.91.1+ (2024 Edition required)
-- Docker (required for TestContainers-based integration tests)
-- PostgreSQL (optional - can use TestContainers instead)
+- Docker (required for PostgreSQL and TestContainers-based integration tests)
+- wasm-pack (for WASM frontend build)
+- cargo-make (`cargo install cargo-make`)
+- wasm32-unknown-unknown target (`rustup target add wasm32-unknown-unknown`)
 
 ### Installation
 
@@ -167,14 +197,20 @@ examples-twitter/
 # From project root
 cd examples/examples-twitter
 
+# Copy local settings
+cp settings/local.example.toml settings/local.toml
+
+# Start PostgreSQL
+docker compose up -d
+
 # Build the project
 cargo build
 
 # Run migrations
-cargo run --bin manage migrate
+cargo run --bin examples-twitter migrate
 
-# Start development server
-cargo run
+# Build WASM frontend and start development server
+cargo make dev
 ```
 
 ## Configuration

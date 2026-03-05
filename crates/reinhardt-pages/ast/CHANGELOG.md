@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-ast@v0.1.0-rc.1...reinhardt-pages-ast@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(meta)* fix workspace inheritance and authors metadata
+
 ## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-ast@v0.1.0-alpha.5...reinhardt-pages-ast@v0.1.0-rc.1) - 2026-02-23
 
 ### Maintenance

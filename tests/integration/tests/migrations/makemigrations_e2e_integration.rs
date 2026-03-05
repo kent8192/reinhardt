@@ -156,13 +156,14 @@ async fn nc_01_new_model_creates_create_table_migration() {
 
 	// Create Migration struct
 	let migration = Migration {
-		app_label: Box::leak(app_label.to_string().into_boxed_str()),
-		name: Box::leak(migration_name.clone().into_boxed_str()),
+		app_label: app_label.to_string(),
+		name: migration_name.clone(),
 		operations: result.operations.clone(),
 		dependencies: Vec::new(),
 		atomic: true,
 		replaces: Vec::new(),
 		initial: Some(true),
+		..Default::default()
 	};
 
 	// Save migration to filesystem
@@ -203,21 +204,210 @@ async fn nc_01_new_model_creates_create_table_migration() {
 #[serial(makemigrations_e2e)]
 async fn nc_02_field_addition_creates_add_column_migration() {
 	// Test: AddColumn generation from field addition (E2E)
-	todo!("Implement E2E field addition test")
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let migrations_dir = temp_dir.path().join("migrations");
+	let app_label = "todos";
+
+	let mut initial_schema = DatabaseSchema::default();
+	let mut table = TableSchema {
+		name: "todos".to_string(),
+		columns: BTreeMap::new(),
+		indexes: Vec::new(),
+		constraints: Vec::new(),
+	};
+	table.columns.insert(
+		"id".to_string(),
+		ColumnSchema {
+			name: "id".to_string(),
+			data_type: FieldType::Integer,
+			nullable: false,
+			default: None,
+			primary_key: true,
+			auto_increment: true,
+		},
+	);
+	table.columns.insert(
+		"title".to_string(),
+		ColumnSchema {
+			name: "title".to_string(),
+			data_type: FieldType::VarChar(255),
+			nullable: false,
+			default: None,
+			primary_key: false,
+			auto_increment: false,
+		},
+	);
+	initial_schema.tables.insert("todos".to_string(), table);
+
+	let mut target_schema = initial_schema.clone();
+	target_schema
+		.tables
+		.get_mut("todos")
+		.unwrap()
+		.columns
+		.insert(
+			"description".to_string(),
+			ColumnSchema {
+				name: "description".to_string(),
+				data_type: FieldType::Text,
+				nullable: true,
+				default: None,
+				primary_key: false,
+				auto_increment: false,
+			},
+		);
+
+	let source = Arc::new(FilesystemSource::new(migrations_dir.clone()));
+	let repository = Arc::new(Mutex::new(FilesystemRepository::new(
+		migrations_dir.clone(),
+	)));
+	let service = MigrationService::new(source.clone(), repository.clone());
+
+	// Act
+	let generator = AutoMigrationGenerator::new(target_schema, repository.clone());
+	let result = generator
+		.generate(app_label, initial_schema)
+		.await
+		.expect("Field addition makemigrations should succeed");
+
+	let migration_name = format!(
+		"{}_add_description",
+		MigrationNumbering::next_number(&migrations_dir, app_label)
+	);
+
+	let migration = Migration {
+		app_label: app_label.to_string(),
+		name: migration_name.clone(),
+		operations: result.operations.clone(),
+		dependencies: Vec::new(),
+		atomic: true,
+		replaces: Vec::new(),
+		initial: None,
+		..Default::default()
+	};
+
+	service
+		.save_migration(&migration)
+		.await
+		.expect("Failed to save migration");
+
+	// Assert
+	let migration_file_path = migrations_dir
+		.join(app_label)
+		.join(format!("{}.rs", migration_name));
+	let file_content =
+		std::fs::read_to_string(&migration_file_path).expect("Failed to read migration file");
+
+	assert!(
+		file_content.contains("AddColumn") || file_content.contains("add_column"),
+		"Migration file should contain AddColumn operation"
+	);
+	assert!(
+		file_content.contains("description"),
+		"Migration file should reference 'description' field"
+	);
 }
 
 #[tokio::test]
 #[serial(makemigrations_e2e)]
 async fn nc_03_field_deletion_creates_drop_column_migration() {
 	// Test: DropColumn generation from field deletion (E2E)
-	todo!("Implement E2E field deletion test")
+
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let migrations_dir = temp_dir.path().join("migrations");
+	let app_label = "todos";
+	let initial_schema = create_todos_schema();
+
+	let mut target_schema = DatabaseSchema::default();
+	let mut table = TableSchema {
+		name: "todos".to_string(),
+		columns: BTreeMap::new(),
+		indexes: Vec::new(),
+		constraints: Vec::new(),
+	};
+	table.columns.insert(
+		"id".to_string(),
+		ColumnSchema {
+			name: "id".to_string(),
+			data_type: FieldType::Integer,
+			nullable: false,
+			default: None,
+			primary_key: true,
+			auto_increment: true,
+		},
+	);
+	table.columns.insert(
+		"title".to_string(),
+		ColumnSchema {
+			name: "title".to_string(),
+			data_type: FieldType::VarChar(255),
+			nullable: false,
+			default: None,
+			primary_key: false,
+			auto_increment: false,
+		},
+	);
+	target_schema.tables.insert("todos".to_string(), table);
+
+	let source = Arc::new(FilesystemSource::new(migrations_dir.clone()));
+	let repository = Arc::new(Mutex::new(FilesystemRepository::new(
+		migrations_dir.clone(),
+	)));
+	let service = MigrationService::new(source.clone(), repository.clone());
+
+	// Act
+	let generator = AutoMigrationGenerator::new(target_schema, repository.clone());
+	let result = generator
+		.generate(app_label, initial_schema)
+		.await
+		.expect("Field deletion makemigrations should succeed");
+
+	let migration_name = format!(
+		"{}_remove_completed",
+		MigrationNumbering::next_number(&migrations_dir, app_label)
+	);
+
+	let migration = Migration {
+		app_label: app_label.to_string(),
+		name: migration_name.clone(),
+		operations: result.operations.clone(),
+		dependencies: Vec::new(),
+		atomic: true,
+		replaces: Vec::new(),
+		initial: None,
+		..Default::default()
+	};
+
+	service
+		.save_migration(&migration)
+		.await
+		.expect("Failed to save migration");
+
+	// Assert
+	let migration_file_path = migrations_dir
+		.join(app_label)
+		.join(format!("{}.rs", migration_name));
+	let file_content =
+		std::fs::read_to_string(&migration_file_path).expect("Failed to read migration file");
+
+	assert!(
+		file_content.contains("DropColumn") || file_content.contains("drop_column"),
+		"Migration file should contain DropColumn operation"
+	);
+	assert!(
+		file_content.contains("completed"),
+		"Migration file should reference 'completed' field"
+	);
 }
 
 #[tokio::test]
 #[serial(makemigrations_e2e)]
 async fn nc_04_field_type_change_creates_alter_column_migration() {
 	// Test: AlterColumn generation from field type change (E2E)
-	todo!("Implement E2E field type change test")
+	// Note: SchemaDiff does not yet support AlterColumn detection
+	todo!("Implement E2E field type change test (requires SchemaDiff AlterColumn support)")
 }
 
 #[tokio::test]
@@ -406,6 +596,7 @@ async fn ec_05_file_write_permission_error() {
 		atomic: true,
 		replaces: Vec::new(),
 		initial: Some(true),
+		..Default::default()
 	};
 
 	// Try to save migration (should fail with permission error)
@@ -413,6 +604,7 @@ async fn ec_05_file_write_permission_error() {
 
 	#[cfg(unix)]
 	{
+		use std::os::unix::fs::PermissionsExt;
 		assert!(save_result.is_err(), "Should fail with permission error");
 		// Cleanup: restore permissions
 		let metadata = std::fs::metadata(&app_dir).unwrap();

@@ -1,0 +1,23 @@
+resource "google_sql_database_instance" "main" {
+  name             = "{{ project_name }}-db"
+  database_version = "{{ db_version_string }}"
+  region           = "{{ region }}"
+
+  settings {
+    tier              = "{{ db_tier }}"
+    availability_type = "{{ db_availability }}"
+
+    disk_size = {{ db_storage_gb }}
+
+    ip_configuration {
+      ipv4_enabled = true
+    }
+  }
+
+  deletion_protection = false
+}
+
+resource "google_sql_database" "app" {
+  name     = "{{ project_name | replace(from="-", to="_") }}"
+  instance = google_sql_database_instance.main.name
+}

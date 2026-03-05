@@ -1,0 +1,3 @@
+resource "docker_network" "{{ project_name }}" {
+  name = "{{ project_name }}_network"
+}

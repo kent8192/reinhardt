@@ -429,7 +429,7 @@ pub fn should_rotate_token(
 	rotation_interval: Option<u64>,
 ) -> bool {
 	match rotation_interval {
-		Some(interval) => current_timestamp - token_timestamp >= interval,
+		Some(interval) => current_timestamp.saturating_sub(token_timestamp) >= interval,
 		None => false, // Always rotate when interval is not specified
 	}
 }
@@ -734,5 +734,55 @@ mod tests {
 		// Assert - rsplitn splits "...a1b2:extra" as token and "12345" as timestamp.
 		// The token portion "...a1b2:extra" has wrong length, so it is rejected.
 		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_should_rotate_token_normal_case() {
+		// Arrange
+		let token_timestamp = 1000u64;
+		let current_timestamp = 4700u64; // 3700 seconds later
+		let interval = 3600u64; // 1 hour
+
+		// Act
+		let result = should_rotate_token(token_timestamp, current_timestamp, Some(interval));
+
+		// Assert
+		assert_eq!(
+			result, true,
+			"Token older than interval should trigger rotation"
+		);
+	}
+
+	#[rstest]
+	fn test_should_rotate_token_future_timestamp_no_panic() {
+		// Arrange
+		let token_timestamp = 5000u64; // Future: token_timestamp > current_timestamp
+		let current_timestamp = 1000u64;
+		let interval = 3600u64;
+
+		// Act
+		let result = should_rotate_token(token_timestamp, current_timestamp, Some(interval));
+
+		// Assert
+		assert_eq!(
+			result, false,
+			"Future-dated token should not trigger rotation"
+		);
+	}
+
+	#[rstest]
+	fn test_should_rotate_token_equal_timestamps() {
+		// Arrange
+		let timestamp = 1000u64;
+		let interval = 3600u64;
+
+		// Act
+		let result = should_rotate_token(timestamp, timestamp, Some(interval));
+
+		// Assert
+		assert_eq!(
+			result, false,
+			"Equal timestamps (0 elapsed) should not trigger rotation"
+		);
 	}
 }

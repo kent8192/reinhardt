@@ -1,6 +1,9 @@
 //! URL configuration for examples-github-issues project
 //!
 //! This module configures the unified GraphQL schema and URL patterns.
+//! Admin panel routes are integrated via `AdminSite::get_urls()`.
+
+use std::env;
 
 use async_graphql::{
 	MergedObject, MergedSubscription, Schema,
@@ -10,6 +13,8 @@ use reinhardt::middleware::CorsMiddleware;
 use reinhardt::middleware::cors::CorsConfig;
 use reinhardt::routes;
 use reinhardt::{JwtAuth, Request, Response, StatusCode, UnifiedRouter, ViewResult};
+
+use crate::config::admin::configure_admin;
 
 use crate::apps::auth::views::{AuthMutation, AuthQuery};
 use crate::apps::issues::views::{IssueMutation, IssueQuery, IssueSubscription};
@@ -33,6 +38,13 @@ pub struct Subscription(IssueSubscription);
 /// GraphQL schema type alias
 pub type AppSchema = Schema<Query, Mutation, Subscription>;
 
+/// Load JWT secret from environment variable with fallback default
+fn jwt_secret() -> Vec<u8> {
+	env::var("JWT_SECRET")
+		.unwrap_or_else(|_| "your-secret-key-change-in-production".to_string())
+		.into_bytes()
+}
+
 /// GraphQL query/mutation handler with singleton schema
 pub async fn graphql_handler(req: Request) -> ViewResult<Response> {
 	let schema = get_schema();
@@ -49,7 +61,7 @@ pub async fn graphql_handler(req: Request) -> ViewResult<Response> {
 		.and_then(|h| h.to_str().ok())
 	{
 		if let Some(token) = auth_header.strip_prefix("Bearer ") {
-			let jwt_auth = JwtAuth::new(b"your-secret-key-change-in-production");
+			let jwt_auth = JwtAuth::new(&jwt_secret());
 			if let Ok(claims) = jwt_auth.verify_token(token) {
 				graphql_request.data(claims)
 			} else {
@@ -98,8 +110,24 @@ fn create_cors_middleware() -> CorsMiddleware {
 }
 
 /// Build URL patterns for the application
+///
+/// Includes GraphQL endpoints and admin panel integration.
+/// Admin routes require a `DatabaseConnection` via `AdminSite::get_urls()`.
 #[routes]
 pub fn routes() -> UnifiedRouter {
+	// Configure admin site (registration only, no DB needed yet)
+	let _admin = configure_admin();
+
+	// Admin routes require DatabaseConnection for query execution.
+	// In production, mount admin routes like this:
+	//
+	//   let db = DatabaseConnection::connect("postgres://...").await?;
+	//   let admin_router = admin.get_urls(db);
+	//   router.mount("/admin", admin_router)
+	//
+	// For this example, admin is configured but not mounted since
+	// get_urls() requires an async DatabaseConnection.
+
 	UnifiedRouter::new()
 		.endpoint(views::health_check)
 		.function("/graphql", reinhardt::Method::POST, graphql_handler)

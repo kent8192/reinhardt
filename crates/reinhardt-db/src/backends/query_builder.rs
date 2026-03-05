@@ -381,7 +381,11 @@ impl InsertBuilder {
 		// Add values
 		if !self.values.is_empty() {
 			let sea_values: Vec<Value> = self.values.iter().map(query_value_to_sea_value).collect();
-			stmt.values(sea_values).unwrap();
+			stmt.values(sea_values).map_err(|e| {
+				super::error::DatabaseError::QueryError(format!(
+					"failed to set insert values (column/value count mismatch): {e}"
+				))
+			})?;
 		}
 
 		// Add RETURNING clause if supported
@@ -2625,5 +2629,44 @@ mod tests {
 
 		// Assert: Should succeed for PostgreSQL
 		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	fn test_insert_build_succeeds_with_matching_columns_and_values() {
+		// Arrange
+		let backend: Arc<dyn DatabaseBackend> = Arc::new(MockBackend);
+		let builder = InsertBuilder::new(backend, "users")
+			.value("name", QueryValue::String("Alice".to_string()))
+			.value("email", QueryValue::String("alice@example.com".to_string()));
+
+		// Act
+		let result = builder.build();
+
+		// Assert
+		assert!(result.is_ok());
+		let (sql, params) = result.unwrap();
+		assert!(sql.contains("\"name\""));
+		assert!(sql.contains("\"email\""));
+		assert_eq!(params.len(), 2);
+	}
+
+	#[rstest]
+	fn test_insert_build_returns_error_on_column_value_mismatch() {
+		// Arrange: manually create a mismatch between columns and values
+		let backend: Arc<dyn DatabaseBackend> = Arc::new(MockBackend);
+		let mut builder = InsertBuilder::new(backend, "users");
+		builder.columns = vec!["name".to_string(), "email".to_string()];
+		// Only one value for two columns
+		builder.values = vec![QueryValue::String("Alice".to_string())];
+
+		// Act
+		let result = builder.build();
+
+		// Assert: should return an error, not panic
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(
+			matches!(err, DatabaseError::QueryError(ref msg) if msg.contains("column/value count mismatch"))
+		);
 	}
 }

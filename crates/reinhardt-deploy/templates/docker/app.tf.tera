@@ -1,0 +1,19 @@
+resource "docker_image" "app" {
+  name = "{{ project_name }}:latest"
+}
+
+resource "docker_container" "app" {
+  name  = "{{ project_name }}_app"
+  image = docker_image.app.image_id
+
+  ports {
+    internal = {{ app_port }}
+    external = {{ app_port }}
+  }
+
+  networks_advanced {
+    name = docker_network.{{ project_name }}.name
+  }
+
+  memory = {{ app_memory }}
+}

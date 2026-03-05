@@ -75,7 +75,7 @@ See instructions/ANTI_PATTERNS.md for comprehensive anti-patterns guide.
 - Integration tests: Test integration points between components
   - Cross-crate integration: Place in `tests/` crate
   - Within-crate integration: Can place in functional crate
-- Functional crates MUST NOT include other Reinhardt crates in `dev-dependencies`
+- Functional crates MUST NOT use `{ workspace = true }` for `reinhardt-test` in `dev-dependencies` (use optional dependency or path-only dev-dependency; see KI-2)
 - ALL test artifacts MUST be cleaned up
 - Global state tests MUST use `#[serial(group_name)]`
 - Use strict assertions (`assert_eq!`) instead of loose matching (`contains`)
@@ -235,7 +235,8 @@ This project uses [release-plz](https://release-plz.ieni.dev/) for automated rel
 
 **Key Warnings (Lessons Learned):**
 - **NEVER** create circular publish dependency chains (functional crates must not dev-depend on other Reinhardt crates)
-- **NEVER** add `version` field to `reinhardt-test` workspace dependency (causes publish failure; see cargo#15151)
+- **MUST** declare `reinhardt-test` as an optional dependency (not dev-dependency) in functional crates for correct release-plz publish ordering (see KI-2 in instructions/RELEASE_PROCESS.md)
+- **MUST** include `version` field in `reinhardt-test` workspace dependency (same as other published crates)
 - **MUST** follow RP-1 recovery procedure for partial release failures (see instructions/RELEASE_PROCESS.md)
 - **NEVER** change `pr_branch_prefix` from `"release-plz-"` (breaks two-step release workflow)
 - `publish_no_verify = true` is required because dev-dependencies reference unpublished workspace crates
@@ -301,6 +302,11 @@ docker run --rm -v "$(pwd):/src" semgrep/semgrep semgrep scan --config .semgrep/
 
 # Semgrep: diff-aware scan (compare against main branch)
 docker run --rm -v "$(pwd):/src" semgrep/semgrep semgrep scan --config .semgrep/ --baseline-commit origin/main --error --metrics off
+```
+
+**Security Audit:**
+```bash
+cargo make audit  # Check for known vulnerabilities in dependencies
 ```
 
 **Placeholder Check (formatter artifact detection):**
@@ -461,7 +467,7 @@ Before submitting code:
 - Use `deprecated` type for marking features/APIs as deprecated (dedicated CHANGELOG section)
 - Review Release PRs created by release-plz before merging
 - Verify no circular dev-dependency chains exist before publishing (functional crates must not dev-depend on other Reinhardt crates)
-- Keep `reinhardt-test` workspace dependency without `version` field (unpublished crate; cargo#15151)
+- Include `version` field in `reinhardt-test` workspace dependency (published crate, same as others)
 - Follow RP-1 procedure in instructions/RELEASE_PROCESS.md for partial release failures
 - Use GitHub CLI (`gh`) for all GitHub operations (PR, issues, releases)
 - Search existing issues before creating new ones
@@ -520,8 +526,8 @@ Before submitting code:
 - Manually bump versions in feature branches (let release-plz handle it)
 - Create release tags manually (release-plz creates them automatically)
 - Skip reviewing Release PRs before merging
-- Add `reinhardt-test` to functional crate `[dev-dependencies]` (creates circular publish dependency)
-- Add `version` field to `reinhardt-test` workspace dependency (breaks cargo publish; cargo#15151)
+- Use `reinhardt-test = { workspace = true }` in functional crate `[dev-dependencies]` (workspace deps include version, causing publish failures; use optional dep or path-only dev-dep instead)
+- Omit `version` field from `reinhardt-test` workspace dependency (causes publish failure for dependents)
 - Change `pr_branch_prefix` from `"release-plz-"` (breaks two-step release workflow)
 - Merge Release PR without rolling back unpublished crate versions after partial release failure
 - Write vague commit descriptions that are unclear as CHANGELOG entries (e.g., "fix issue", "update code")

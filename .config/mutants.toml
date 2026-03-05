@@ -1,0 +1,18 @@
+exclude_globs = [
+	"crates/reinhardt-core/macros/**",
+	"crates/reinhardt-di/macros/**",
+	"crates/reinhardt-query/macros/**",
+	"crates/reinhardt-graphql/macros/**",
+	"crates/reinhardt-grpc/macros/**",
+	"crates/reinhardt-pages/macros/**",
+	"crates/reinhardt-pages/ast/**",
+	"crates/reinhardt-rest/openapi-macros/**",
+	"crates/reinhardt-urls/routers-macros/**",
+	"crates/reinhardt-db-macros/**",
+	"crates/reinhardt-test/**",
+	"crates/reinhardt-manouche/**",
+	"crates/reinhardt-admin-cli/**",
+	"tests/**",
+	"**/build.rs",
+	"examples/**",
+]

@@ -113,9 +113,11 @@ jobs:
       - name: Run intra-crate integration tests (partition ${{ matrix.partition }}/6)
         env:
           RUSTFLAGS: "-C linker=clang -C link-arg=-fuse-ld=mold"
+          NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
+          RUN_ALL: ${{ inputs.run-all }}
         run: |
-          if [[ "${{ inputs.run-all }}" != "true" && -n "${{ inputs.nextest-filter }}" ]]; then
-            FILTER_EXPR="(not binary(/ui/)) & (${{ inputs.nextest-filter }})"
+          if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
+            FILTER_EXPR="(not binary(/ui/)) & ($NEXTEST_FILTER_EXPR)"
           else
             FILTER_EXPR="not binary(/ui/)"
           fi

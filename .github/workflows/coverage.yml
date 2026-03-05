@@ -100,25 +100,28 @@ jobs:
           df -h
 
       - name: Run unit tests with coverage
+        env:
+          NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
+          RUN_ALL: ${{ inputs.run-all }}
         run: |
-          FILTER_ARGS=""
-          if [[ "${{ inputs.run-all }}" != "true" && -n "${{ inputs.nextest-filter }}" ]]; then
-            FILTER_ARGS="-E '${{ inputs.nextest-filter }}'"
+          FILTER_ARGS=()
+          if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
+            FILTER_ARGS+=(-E "$NEXTEST_FILTER_EXPR")
           fi
           cargo llvm-cov nextest \
             --workspace \
             --lib \
             --all-features \
             --no-fail-fast \
-            --lcov \
-            --output-path /tmp/unit-lcov.info \
-            ${FILTER_ARGS}
+            --codecov \
+            --output-path /tmp/unit-codecov.json \
+            "${FILTER_ARGS[@]}"
 
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: /tmp/unit-lcov.info
+          files: /tmp/unit-codecov.json
           flags: unit
           fail_ci_if_error: false
           use_oidc: true
@@ -209,9 +212,12 @@ jobs:
           images-file: .github/docker-images-intra-crate.txt
 
       - name: Run intra-crate integration tests with coverage
+        env:
+          NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
+          RUN_ALL: ${{ inputs.run-all }}
         run: |
-          if [[ "${{ inputs.run-all }}" != "true" && -n "${{ inputs.nextest-filter }}" ]]; then
-            FILTER_EXPR="(not binary(/ui/)) & (${{ inputs.nextest-filter }})"
+          if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
+            FILTER_EXPR="(not binary(/ui/)) & ($NEXTEST_FILTER_EXPR)"
           else
             FILTER_EXPR="not binary(/ui/)"
           fi
@@ -222,14 +228,14 @@ jobs:
             -E "$FILTER_EXPR" \
             --all-features \
             --no-fail-fast \
-            --lcov \
-            --output-path /tmp/intra-crate-lcov.info
+            --codecov \
+            --output-path /tmp/intra-crate-codecov.json
 
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: /tmp/intra-crate-lcov.info
+          files: /tmp/intra-crate-codecov.json
           flags: intra-crate-integration
           fail_ci_if_error: false
           use_oidc: true
@@ -320,24 +326,27 @@ jobs:
           images-file: .github/docker-images-cross-crate.txt
 
       - name: Run cross-crate integration tests with coverage
+        env:
+          NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
+          RUN_ALL: ${{ inputs.run-all }}
         run: |
-          FILTER_ARGS=""
-          if [[ "${{ inputs.run-all }}" != "true" && -n "${{ inputs.nextest-filter }}" ]]; then
-            FILTER_ARGS="-E '${{ inputs.nextest-filter }}'"
+          FILTER_ARGS=()
+          if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
+            FILTER_ARGS+=(-E "$NEXTEST_FILTER_EXPR")
           fi
           cargo llvm-cov nextest \
             --package reinhardt-integration-tests \
             --all-features \
             --no-fail-fast \
-            --lcov \
-            --output-path /tmp/cross-crate-lcov.info \
-            ${FILTER_ARGS}
+            --codecov \
+            --output-path /tmp/cross-crate-codecov.json \
+            "${FILTER_ARGS[@]}"
 
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: /tmp/cross-crate-lcov.info
+          files: /tmp/cross-crate-codecov.json
           flags: cross-crate-integration
           fail_ci_if_error: false
           use_oidc: true

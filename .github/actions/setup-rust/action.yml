@@ -9,6 +9,10 @@ inputs:
     description: 'Enable Rust cache'
     required: false
     default: 'true'
+  cache-key:
+    description: 'Additional cache key suffix to differentiate caches between parallel jobs (e.g. check target type). Issue #1845'
+    required: false
+    default: ''
 runs:
   using: composite
   steps:
@@ -47,3 +51,6 @@ runs:
         # Cache the actual CARGO_TARGET_DIR path directly (absolute path preserved).
         cache-directories: ${{ steps.cargo-target-dir.outputs.path }}
         cache-on-failure: "true"
+        # Optional suffix to differentiate cache entries between parallel jobs
+        # that check different target types (e.g. lib vs tests). Issue #1845
+        key: ${{ inputs.cache-key }}

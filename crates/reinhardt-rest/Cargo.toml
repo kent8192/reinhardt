@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-rest"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.4"
 description = "REST API framework aggregator for Reinhardt"
 keywords = ["rest", "api", "web", "framework", "django"]
 categories = ["web-programming", "web-programming::http-server"]
@@ -123,7 +123,7 @@ redis = { workspace = true, features = [
   "connection-manager",
 ], optional = true }
 parking_lot = "0.12"
-maxminddb = { version = "0.26.0", optional = true }
+maxminddb = { version = "0.27.0", optional = true }
 
 [dev-dependencies]
 insta = { workspace = true }

@@ -61,8 +61,13 @@ async fn test_viewset_handler_action_mapping() {
 	let response = handler.handle(post_request).await;
 	assert!(response.is_ok());
 
-	// Test unsupported method fails
+	// Test unsupported method returns 405 Method Not Allowed with Allow header
 	let put_request = create_test_request(Method::PUT, "http://example.com/test/");
 	let response = handler.handle(put_request).await;
-	assert!(response.is_err());
+	assert!(response.is_ok());
+	let response = response.unwrap();
+	assert_eq!(response.status, hyper::StatusCode::METHOD_NOT_ALLOWED);
+	let allow_header = response.headers.get(hyper::header::ALLOW).unwrap();
+	let allow_value = allow_header.to_str().unwrap();
+	assert!(allow_value.contains("GET") || allow_value.contains("POST"));
 }

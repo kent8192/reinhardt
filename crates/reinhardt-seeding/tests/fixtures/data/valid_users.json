@@ -1,0 +1,32 @@
+[
+	{
+		"model": "auth.User",
+		"pk": 1,
+		"fields": {
+			"username": "john_doe",
+			"email": "john.doe@example.com",
+			"is_active": true,
+			"date_joined": "2024-01-01T00:00:00Z"
+		}
+	},
+	{
+		"model": "auth.User",
+		"pk": 2,
+		"fields": {
+			"username": "jane_smith",
+			"email": "jane.smith@example.com",
+			"is_active": false,
+			"date_joined": "2024-01-02T12:30:00Z"
+		}
+	},
+	{
+		"model": "auth.User",
+		"pk": 3,
+		"fields": {
+			"username": "bob_wilson",
+			"email": "bob.wilson@example.com",
+			"is_active": true,
+			"date_joined": "2024-01-03T08:15:00Z"
+		}
+	}
+]

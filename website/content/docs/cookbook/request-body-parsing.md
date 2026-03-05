@@ -24,7 +24,7 @@ Guide to extracting data from request bodies and converting to type-safe structs
 Extracts and deserializes JSON from request body.
 
 ```rust
-use reinhardt::Json;
+use reinhardt_di::params::Json;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -46,7 +46,7 @@ async fn create_user(Json(user): Json<CreateUser>) -> reinhardt::Response {
 ### Nested JSON
 
 ```rust
-use reinhardt::Json;
+use reinhardt_di::params::Json;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -75,7 +75,7 @@ async fn create_user(Json(user): Json<CreateUser>) -> reinhardt::Response {
 Extracts `application/x-www-form-urlencoded` data.
 
 ```rust
-use reinhardt::Form;
+use reinhardt_di::params::Form;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -97,7 +97,7 @@ async fn contact(Form(form): Form<ContactForm>) -> reinhardt::Response {
 ### Form Validation
 
 ```rust
-use reinhardt::{Form, Validation};
+use reinhardt_di::params::Form;
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
@@ -135,7 +135,7 @@ async fn contact(Form(form): Form<ContactForm>) -> reinhardt::Response {
 Extracts `multipart/form-data` (used for file uploads).
 
 ```rust
-use reinhardt::Body;
+use reinhardt_di::params::Body;
 use multer::Field;
 
 async fn upload_file(mut multipart: Multipart) -> reinhardt::Response {
@@ -162,7 +162,7 @@ async fn upload_file(mut multipart: Multipart) -> reinhardt::Response {
 ### Multiple Fields and Files
 
 ```rust
-use reinhardt::Multipart;
+use reinhardt_di::params::Multipart;
 
 async fn upload_with_metadata(mut multipart: Multipart) -> reinhardt::Response {
     let mut title = None;
@@ -202,7 +202,7 @@ async fn upload_with_metadata(mut multipart: Multipart) -> reinhardt::Response {
 Extracts raw request body as `Bytes`.
 
 ```rust
-use reinhardt::Body;
+use reinhardt_di::params::Body;
 use bytes::Bytes;
 
 async fn echo_raw(Body(body): Body) -> reinhardt::Response {
@@ -215,7 +215,7 @@ async fn echo_raw(Body(body): Body) -> reinhardt::Response {
 Extract the raw body and convert to `String`.
 
 ```rust
-use reinhardt::Body;
+use reinhardt_di::params::Body;
 
 async fn process_text(Body(body): Body) -> reinhardt::Response {
     let text = String::from_utf8_lossy(&body).to_uppercase();
@@ -232,7 +232,7 @@ async fn process_text(Body(body): Body) -> reinhardt::Response {
 JSON parse errors are automatically handled with detailed error messages.
 
 ```rust
-use reinhardt::Json;
+use reinhardt_di::params::Json;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -254,14 +254,14 @@ async fn create_user(Json(user): Json<User>) -> reinhardt::Response {
 ### Custom Error Handling
 
 ```rust
-use reinhardt::Json;
+use reinhardt_di::params::Json;
 use reinhardt::{Request, Response};
-use reinhardt::di::ParamContext;
+use reinhardt::RequestContext;
 
 async fn create_user_manual(req: Request) -> reinhardt::Result<Response> {
-    use reinhardt::extract::FromRequest;
+    use reinhardt_di::params::FromRequest;
 
-    let ctx = ParamContext::new();
+    let ctx = RequestContext::new();
 
     match Json::<User>::from_request(&req, &ctx).await {
         Ok(Json(user)) => {
@@ -286,7 +286,7 @@ async fn create_user_manual(req: Request) -> reinhardt::Result<Response> {
 ### Combining Multiple Extractors
 
 ```rust
-use reinhardt::{Json, Path, Query};
+use reinhardt_di::params::{Json, Path, Query};
 
 #[derive(serde::Deserialize)]
 struct UpdateUser {

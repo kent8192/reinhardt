@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-i18n@v0.1.0-rc.2...reinhardt-i18n@v0.1.0-rc.3) - 2026-03-05
+
+### Fixed
+
+- *(release)* move reinhardt-test to optional dep in non-cyclic crates
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-i18n@v0.1.0-rc.1...reinhardt-i18n@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(i18n)* remove Hungarian from no-plural language group
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
 ## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-i18n@v0.1.0-alpha.5...reinhardt-i18n@v0.1.0-rc.1) - 2026-02-21
 
 ### Fixed

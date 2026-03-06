@@ -191,9 +191,6 @@ pub mod testing;
 // Static file URL resolver
 pub mod static_resolver;
 
-// Table utilities (django-tables2 equivalent)
-pub mod tables;
-
 // Re-export commonly used types
 pub use api::{ApiModel, ApiQuerySet, Filter, FilterOp};
 pub use auth::{AuthData, AuthError, AuthState, auth_state};
@@ -225,8 +222,6 @@ pub use reactive::{
 	Context, ContextGuard, create_context, get_context, provide_context, remove_context,
 };
 // Re-export Hooks API
-pub use reactive::{Action, ActionPhase, use_action};
-#[allow(deprecated)] // Intentional: re-exporting deprecated items for backward compatibility
 pub use reactive::{
 	ActionState, Dispatch, OptimisticState, Ref, SetState, SharedSetState, SharedSignal,
 	TransitionState, use_action_state, use_callback, use_context, use_debug_value,

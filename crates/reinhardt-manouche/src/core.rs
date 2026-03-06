@@ -6,7 +6,6 @@
 //! - Reactive primitive traits (`Signal`, `Effect`, `Memo`)
 //! - Common types and utilities
 
-pub(crate) mod attr_utils;
 pub mod form_node;
 pub mod form_typed;
 pub mod head_node;

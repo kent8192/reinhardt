@@ -66,7 +66,7 @@ pub mod schema;
 #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
 pub mod parallel;
 
-#[cfg(all(feature = "i18n", not(target_arch = "wasm32")))]
+#[cfg(feature = "i18n")]
 pub mod i18n;
 
 pub use color::{ColorFormat, ColorValidator};

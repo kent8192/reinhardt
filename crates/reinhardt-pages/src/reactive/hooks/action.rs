@@ -1,22 +1,14 @@
-//! Action hooks: use_action_state (deprecated) and use_optimistic
+//! Action hooks: use_action_state and use_optimistic
 //!
 //! These hooks provide React-like form action and optimistic update support.
-//!
-//! **Note:** `use_action_state` and `ActionState` are deprecated.
-//! For synchronous state reduction, use [`use_reducer`](super::state::use_reducer).
-//! For async mutations, use [`use_action`](super::async_action::use_action).
 
 use std::rc::Rc;
 
 use crate::reactive::Signal;
 
-/// State returned by `use_action_state`.
+/// State returned by use_action_state.
 ///
 /// Contains the current state, the action function, and pending status.
-#[deprecated(
-	since = "0.2.0",
-	note = "use `(Signal<S>, Dispatch<A>)` from `use_reducer` instead"
-)]
 pub struct ActionState<S: 'static, P> {
 	/// The current state value.
 	pub state: Signal<S>,
@@ -26,7 +18,6 @@ pub struct ActionState<S: 'static, P> {
 	action: Rc<dyn Fn(P)>,
 }
 
-#[allow(deprecated)] // Intentional: implementing methods for deprecated struct
 impl<S: 'static, P> ActionState<S, P> {
 	/// Dispatches the action with the given payload.
 	pub fn dispatch(&self, payload: P) {
@@ -34,7 +25,6 @@ impl<S: 'static, P> ActionState<S, P> {
 	}
 }
 
-#[allow(deprecated)] // Intentional: implementing Clone for deprecated struct
 impl<S: Clone + 'static, P> Clone for ActionState<S, P> {
 	fn clone(&self) -> Self {
 		Self {
@@ -46,11 +36,6 @@ impl<S: Clone + 'static, P> Clone for ActionState<S, P> {
 }
 
 /// Manages state that updates based on form action results.
-///
-/// # Deprecated
-///
-/// This hook is deprecated. Use [`use_reducer`](super::state::use_reducer) for synchronous
-/// state reduction, or [`use_action`](super::async_action::use_action) for async mutations.
 ///
 /// This is the React-like equivalent of `useActionState` (formerly `useFormState`).
 /// It's designed for handling form submissions and their resulting state changes.
@@ -114,11 +99,6 @@ impl<S: Clone + 'static, P> Clone for ActionState<S, P> {
 ///     // ... show error message
 /// }
 /// ```
-#[deprecated(
-	since = "0.2.0",
-	note = "use `use_reducer` from `reinhardt_pages::reactive::hooks::state` instead"
-)]
-#[allow(deprecated)] // Intentional: deprecated function constructs deprecated ActionState
 pub fn use_action_state<S, P, F>(action: F, initial: S) -> ActionState<S, P>
 where
 	S: Clone + 'static,
@@ -268,7 +248,6 @@ mod tests {
 	use super::*;
 
 	#[test]
-	#[allow(deprecated)] // Intentional: testing deprecated API still functions correctly
 	fn test_use_action_state_basic() {
 		#[derive(Clone, Debug, PartialEq)]
 		struct State {

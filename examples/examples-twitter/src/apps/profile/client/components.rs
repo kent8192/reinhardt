@@ -52,19 +52,21 @@ pub fn profile_view(user_id: Uuid) -> View {
 		let error_setter = _set_error.clone();
 		let resource_for_effect = resource.clone();
 
-		use_effect(move || match resource_for_effect.get() {
-			ResourceState::Loading => {
-				loading_setter(true);
-				error_setter(None);
-			}
-			ResourceState::Success(data) => {
-				profile_setter(Some(data));
-				loading_setter(false);
-				error_setter(None);
-			}
-			ResourceState::Error(err) => {
-				error_setter(Some(err));
-				loading_setter(false);
+		use_effect(move || {
+			match resource_for_effect.get() {
+				ResourceState::Loading => {
+					loading_setter(true);
+					error_setter(None);
+				}
+				ResourceState::Success(data) => {
+					profile_setter(Some(data));
+					loading_setter(false);
+					error_setter(None);
+				}
+				ResourceState::Error(err) => {
+					error_setter(Some(err));
+					loading_setter(false);
+				}
 			}
 		});
 	}
@@ -397,7 +399,7 @@ pub fn profile_edit(user_id: Uuid) -> View {
 						watch {
 							if loading_signal.get() {
 								button {
-									type: "submit",
+									r#type: "submit",
 									class: "btn-primary opacity-50 cursor-not-allowed",
 									disabled: loading_signal.get(),
 									form: "profile-edit-form",
@@ -411,7 +413,7 @@ pub fn profile_edit(user_id: Uuid) -> View {
 								}
 							} else {
 								button {
-									type: "submit",
+									r#type: "submit",
 									class: "btn-primary",
 									form: "profile-edit-form",
 									"Save"

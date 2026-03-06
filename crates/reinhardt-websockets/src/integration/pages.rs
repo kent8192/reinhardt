@@ -18,7 +18,7 @@
 //!
 //! ```ignore
 //! use reinhardt_websockets::integration::pages::PagesAuthenticator;
-//! use reinhardt_websockets::{ConsumerContext, WebSocketConsumer, Message, WebSocketResult};
+//! use reinhardt_websockets::{WebSocketConsumer, WebSocketConnection, Message};
 //! use reinhardt_auth::sessions::InMemorySessionBackend;
 //! use async_trait::async_trait;
 //! use std::sync::Arc;
@@ -29,30 +29,25 @@
 //!
 //! #[async_trait]
 //! impl<B: SessionBackend + 'static> WebSocketConsumer for ChatHandler<B> {
-//!     async fn on_connect(&self, context: &mut ConsumerContext) -> WebSocketResult<()> {
-//!         // Extract cookies from WebSocket handshake headers
-//!         let cookies = context.cookie_header().unwrap_or("");
+//!     async fn on_connect(&self, connection: &Arc<WebSocketConnection>) -> WebSocketResult<()> {
+//!         // Extract cookies from handshake headers
+//!         let cookies = "sessionid=abc123; csrftoken=xyz789"; // From HTTP headers
 //!
 //!         // Authenticate using session cookies
 //!         let user = self.authenticator
 //!             .authenticate_from_cookies(cookies)
 //!             .await?;
 //!
-//!         // Store user info in metadata for later use
-//!         context.metadata.insert("user_id".to_string(), user.id().to_string());
+//!         log::info!("User {} connected", user.username());
 //!         Ok(())
 //!     }
 //!
 //!     async fn on_message(
 //!         &self,
-//!         context: &mut ConsumerContext,
+//!         connection: &Arc<WebSocketConnection>,
 //!         message: Message,
 //!     ) -> WebSocketResult<()> {
 //!         // Handle message
-//!         Ok(())
-//!     }
-//!
-//!     async fn on_disconnect(&self, _context: &mut ConsumerContext) -> WebSocketResult<()> {
 //!         Ok(())
 //!     }
 //! }

@@ -131,7 +131,10 @@ impl TypedPageAttr {
 	///
 	/// Also strips the `r#` prefix if present (for raw identifiers like `r#for`, `r#type`).
 	pub fn html_name(&self) -> String {
-		crate::core::attr_utils::ident_to_html_attr_name(&self.name.to_string())
+		let name = self.name.to_string();
+		// Remove r# prefix if present (raw identifiers in Rust)
+		let name = name.strip_prefix("r#").unwrap_or(&name);
+		name.replace('_', "-")
 	}
 }
 

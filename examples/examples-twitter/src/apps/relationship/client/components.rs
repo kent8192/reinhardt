@@ -54,7 +54,7 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 				watch {
 					if loading_signal.get() {
 						button {
-							type: "button",
+							r#type: "button",
 							class: "btn-secondary opacity-50 cursor-not-allowed",
 							disabled: loading_signal.get(),
 							aria_label: "Loading",
@@ -97,7 +97,7 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 						}
 					} else if is_following_signal.get() {
 						button {
-							type: "button",
+							r#type: "button",
 							class: "btn-outline group",
 							@click: {
 										let is_following = is_following_clone.clone();
@@ -140,7 +140,7 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 						}
 					} else {
 						button {
-							type: "button",
+							r#type: "button",
 							class: "btn-primary",
 							@click: {
 										let is_following = is_following_clone.clone();
@@ -205,7 +205,7 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 		page!(|btn_class: &str, btn_text: &str| {
 			div {
 				button {
-					type: "button",
+					r#type: "button",
 					class: btn_class,
 					{ btn_text }
 				}
@@ -289,19 +289,21 @@ pub fn user_list(user_id: Uuid, list_type: UserListType) -> View {
 		let error_clone = error.clone();
 		let resource_for_effect = resource.clone();
 
-		reinhardt::pages::reactive::hooks::use_effect(move || match resource_for_effect.get() {
-			ResourceState::Loading => {
-				loading_clone.set(true);
-				error_clone.set(None);
-			}
-			ResourceState::Success(data) => {
-				users_clone.set(data);
-				loading_clone.set(false);
-				error_clone.set(None);
-			}
-			ResourceState::Error(err) => {
-				error_clone.set(Some(err));
-				loading_clone.set(false);
+		reinhardt::pages::reactive::hooks::use_effect(move || {
+			match resource_for_effect.get() {
+				ResourceState::Loading => {
+					loading_clone.set(true);
+					error_clone.set(None);
+				}
+				ResourceState::Success(data) => {
+					users_clone.set(data);
+					loading_clone.set(false);
+					error_clone.set(None);
+				}
+				ResourceState::Error(err) => {
+					error_clone.set(Some(err));
+					loading_clone.set(false);
+				}
 			}
 		});
 	}

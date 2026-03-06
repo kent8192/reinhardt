@@ -27,7 +27,7 @@ fn message_input(
 		div {
 			class: "dm-input-container flex gap-2 p-4 border-t border-surface-tertiary",
 			input {
-				type: "text",
+				r#type: "text",
 				class: "form-control flex-1",
 				placeholder: "Type a message...",
 				value: input_for_display.get(),
@@ -44,7 +44,7 @@ fn message_input(
 			}
 			button {
 				class: "btn-primary",
-				type: "button",
+				r#type: "button",
 				@click: {
 							let input_signal = input_for_click.clone();
 							let send_callback = send_callback.clone();

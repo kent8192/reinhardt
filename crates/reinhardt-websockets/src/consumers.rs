@@ -50,32 +50,11 @@ use reinhardt_di::{Injectable, Injected, InjectionContext};
 ///
 /// This context is passed to WebSocket consumer methods and provides access to:
 /// - The WebSocket connection for sending messages
-/// - HTTP handshake headers (e.g., Cookie, Origin)
 /// - Metadata for storing request-scoped data
 /// - Dependency injection (when the `di` feature is enabled)
-///
-/// # HTTP Headers
-///
-/// Headers from the WebSocket HTTP handshake can be stored and retrieved:
-///
-/// ```
-/// # use reinhardt_websockets::consumers::ConsumerContext;
-/// # use reinhardt_websockets::WebSocketConnection;
-/// # use tokio::sync::mpsc;
-/// # use std::sync::Arc;
-/// #
-/// # let (tx, _rx) = mpsc::unbounded_channel();
-/// # let conn = Arc::new(WebSocketConnection::new("conn_1".to_string(), tx));
-/// let context = ConsumerContext::new(conn)
-///     .with_header("cookie".to_string(), "sessionid=abc123".to_string());
-///
-/// assert_eq!(context.cookie_header(), Some("sessionid=abc123"));
-/// ```
 pub struct ConsumerContext {
 	/// The WebSocket connection
 	pub connection: Arc<WebSocketConnection>,
-	/// HTTP handshake headers (e.g., Cookie, Origin)
-	pub headers: std::collections::HashMap<String, String>,
 	/// Additional metadata
 	pub metadata: std::collections::HashMap<String, String>,
 	/// DI context for dependency injection (when `di` feature is enabled)
@@ -101,7 +80,6 @@ impl ConsumerContext {
 	pub fn new(connection: Arc<WebSocketConnection>) -> Self {
 		Self {
 			connection,
-			headers: std::collections::HashMap::new(),
 			metadata: std::collections::HashMap::new(),
 			#[cfg(feature = "di")]
 			di_context: None,
@@ -130,31 +108,9 @@ impl ConsumerContext {
 	) -> Self {
 		Self {
 			connection,
-			headers: std::collections::HashMap::new(),
 			metadata: std::collections::HashMap::new(),
 			di_context: Some(di_context),
 		}
-	}
-
-	/// Add an HTTP handshake header to the context
-	///
-	/// Header names are stored as-is. For case-insensitive lookup,
-	/// callers should normalize keys to lowercase before insertion.
-	pub fn with_header(mut self, key: String, value: String) -> Self {
-		self.headers.insert(key, value);
-		self
-	}
-
-	/// Get an HTTP handshake header value
-	pub fn get_header(&self, key: &str) -> Option<&String> {
-		self.headers.get(key)
-	}
-
-	/// Get the Cookie header from the HTTP handshake
-	///
-	/// Convenience method equivalent to `get_header("cookie")`.
-	pub fn cookie_header(&self) -> Option<&str> {
-		self.headers.get("cookie").map(|s| s.as_str())
 	}
 
 	/// Add metadata to the context
@@ -936,71 +892,6 @@ mod tests {
 		// Assert
 		assert!(result.is_ok());
 		assert!(conn.is_closed().await);
-	}
-
-	#[rstest]
-	#[tokio::test]
-	async fn test_consumer_context_headers() {
-		// Arrange
-		let (tx, _rx) = mpsc::unbounded_channel();
-		let conn = Arc::new(WebSocketConnection::new("test".to_string(), tx));
-
-		// Act
-		let context = ConsumerContext::new(conn)
-			.with_header("cookie".to_string(), "sessionid=abc123".to_string())
-			.with_header("origin".to_string(), "https://example.com".to_string());
-
-		// Assert
-		assert_eq!(context.get_header("cookie").unwrap(), "sessionid=abc123");
-		assert_eq!(context.get_header("origin").unwrap(), "https://example.com");
-	}
-
-	#[rstest]
-	#[tokio::test]
-	async fn test_consumer_context_cookie_header() {
-		// Arrange
-		let (tx, _rx) = mpsc::unbounded_channel();
-		let conn = Arc::new(WebSocketConnection::new("test".to_string(), tx));
-
-		// Act
-		let context = ConsumerContext::new(conn).with_header(
-			"cookie".to_string(),
-			"sessionid=abc123; csrftoken=xyz".to_string(),
-		);
-
-		// Assert
-		assert_eq!(
-			context.cookie_header(),
-			Some("sessionid=abc123; csrftoken=xyz")
-		);
-	}
-
-	#[rstest]
-	#[tokio::test]
-	async fn test_consumer_context_cookie_header_missing() {
-		// Arrange
-		let (tx, _rx) = mpsc::unbounded_channel();
-		let conn = Arc::new(WebSocketConnection::new("test".to_string(), tx));
-
-		// Act
-		let context = ConsumerContext::new(conn);
-
-		// Assert
-		assert_eq!(context.cookie_header(), None);
-	}
-
-	#[rstest]
-	#[tokio::test]
-	async fn test_consumer_context_headers_default_empty() {
-		// Arrange
-		let (tx, _rx) = mpsc::unbounded_channel();
-		let conn = Arc::new(WebSocketConnection::new("test".to_string(), tx));
-
-		// Act
-		let context = ConsumerContext::new(conn);
-
-		// Assert
-		assert!(context.headers.is_empty());
 	}
 
 	#[rstest]

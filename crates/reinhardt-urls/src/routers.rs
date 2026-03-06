@@ -103,64 +103,37 @@
 //! let router = group.build();
 //! ```
 
-// Client router (WASM-compatible)
+pub mod cache;
 #[cfg(feature = "client-router")]
 pub mod client_router;
-
-// Server-only modules (not available on WASM)
-#[cfg(not(target_arch = "wasm32"))]
-pub mod cache;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod converters;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod helpers;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod introspection;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod namespace;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod openapi_integration;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod pattern;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod registration;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod reverse;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod route;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod route_group;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod router;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod script_prefix;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod server_router;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod simple;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod unified_router;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod visualization;
 
 // Re-export the path! macro for compile-time path validation
-#[cfg(not(target_arch = "wasm32"))]
 pub use reinhardt_routers_macros::path;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub use cache::RouteCache;
-#[cfg(not(target_arch = "wasm32"))]
 pub use converters::{
 	Converter, ConverterError, ConverterResult, DateConverter, FloatConverter, IntegerConverter,
 	PathConverter, SlugConverter, UuidConverter,
 };
-#[cfg(not(target_arch = "wasm32"))]
 pub use helpers::{IncludedRouter, include_routes, path, re_path};
-#[cfg(not(target_arch = "wasm32"))]
 pub use pattern::{MatchingMode, PathMatcher, PathPattern, RadixRouter, RadixRouterError};
-#[cfg(not(target_arch = "wasm32"))]
 pub use registration::UrlPatternsRegistration;
-#[cfg(not(target_arch = "wasm32"))]
 pub use reverse::{
 	ReverseError,
 	ReverseResult,
@@ -176,25 +149,18 @@ pub use reverse::{
 	reverse_typed_with_params,
 	reverse_with_aho_corasick,
 };
-#[cfg(not(target_arch = "wasm32"))]
 pub use route::Route;
-#[cfg(not(target_arch = "wasm32"))]
 pub use route_group::{RouteGroup, RouteInfo};
-#[cfg(not(target_arch = "wasm32"))]
 pub use router::{DefaultRouter, Router};
-#[cfg(not(target_arch = "wasm32"))]
 pub use script_prefix::{clear_script_prefix, get_script_prefix, set_script_prefix};
-#[cfg(not(target_arch = "wasm32"))]
 pub use simple::SimpleRouter;
 // Server router (full HTTP routing implementation)
-#[cfg(not(target_arch = "wasm32"))]
 pub use server_router::{
 	FunctionHandler, ServerRouter, clear_router, get_router, is_router_registered, register_router,
 	register_router_arc,
 };
 
 // Unified router (closure-based API combining server and client routers)
-#[cfg(not(target_arch = "wasm32"))]
 pub use unified_router::UnifiedRouter;
 
 // Client router re-exports

@@ -113,15 +113,15 @@ jobs:
             --lib \
             --all-features \
             --no-fail-fast \
-            --codecov \
-            --output-path /tmp/unit-codecov.json \
+            --lcov \
+            --output-path /tmp/unit-lcov.info \
             "${FILTER_ARGS[@]}"
 
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: /tmp/unit-codecov.json
+          files: /tmp/unit-lcov.info
           flags: unit
           fail_ci_if_error: false
           use_oidc: true
@@ -228,14 +228,14 @@ jobs:
             -E "$FILTER_EXPR" \
             --all-features \
             --no-fail-fast \
-            --codecov \
-            --output-path /tmp/intra-crate-codecov.json
+            --lcov \
+            --output-path /tmp/intra-crate-lcov.info
 
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: /tmp/intra-crate-codecov.json
+          files: /tmp/intra-crate-lcov.info
           flags: intra-crate-integration
           fail_ci_if_error: false
           use_oidc: true
@@ -338,15 +338,15 @@ jobs:
             --package reinhardt-integration-tests \
             --all-features \
             --no-fail-fast \
-            --codecov \
-            --output-path /tmp/cross-crate-codecov.json \
+            --lcov \
+            --output-path /tmp/cross-crate-lcov.info \
             "${FILTER_ARGS[@]}"
 
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: /tmp/cross-crate-codecov.json
+          files: /tmp/cross-crate-lcov.info
           flags: cross-crate-integration
           fail_ci_if_error: false
           use_oidc: true

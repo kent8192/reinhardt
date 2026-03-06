@@ -100,17 +100,6 @@ jobs:
           echo "Disk usage after additional cleanup:"
           df -h
 
-      - name: Pre-pull Docker images
-        run: |
-          if [ -f .github/docker-images-unit-test.txt ]; then
-            while IFS= read -r image || [ -n "$image" ]; do
-              # Skip empty lines and comments
-              [[ -z "$image" || "$image" =~ ^# ]] && continue
-              echo "Pulling image: $image"
-              docker pull "$image" || echo "Warning: Failed to pull $image"
-            done < .github/docker-images-unit-test.txt
-          fi
-
       - name: Run unit tests (partition ${{ matrix.partition }}/4)
         env:
           NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}

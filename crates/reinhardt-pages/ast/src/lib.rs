@@ -13,22 +13,19 @@
 pub use reinhardt_manouche::core::*;
 pub use reinhardt_manouche::parser::*;
 
-/// AST type definitions and enums.
+// Keep the old module structure for compatibility
 pub mod types {
 	pub use reinhardt_manouche::core::types::*;
 }
 
-/// Typed AST node representations.
 pub mod typed_node {
 	pub use reinhardt_manouche::core::typed_node::*;
 }
 
-/// Form-specific AST node types.
 pub mod form_node {
 	pub use reinhardt_manouche::core::form_node::*;
 }
 
-/// Typed form AST nodes with validation.
 pub mod form_typed {
 	pub use reinhardt_manouche::core::form_typed::*;
 }

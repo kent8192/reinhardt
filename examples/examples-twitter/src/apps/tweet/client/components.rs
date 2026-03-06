@@ -10,7 +10,7 @@ use reinhardt::pages::Signal;
 use reinhardt::pages::component::View;
 use reinhardt::pages::form;
 use reinhardt::pages::page;
-use reinhardt::pages::reactive::hooks::{use_effect, use_state};
+use reinhardt::pages::reactive::hooks::{use_action, use_effect, use_state, Action};
 use uuid::Uuid;
 
 #[cfg(client)]
@@ -18,11 +18,10 @@ use {
 	crate::apps::tweet::server::server_fn::{create_tweet, delete_tweet, list_tweets},
 	reinhardt::pages::create_resource,
 	reinhardt::pages::reactive::ResourceState,
-	reinhardt::pages::spawn::spawn_task,
 };
 
 #[cfg(server)]
-use crate::apps::tweet::server::server_fn::create_tweet;
+use crate::apps::tweet::server::server_fn::{create_tweet, delete_tweet};
 
 /// Like button component (extracted to avoid nested watch blocks)
 ///
@@ -130,15 +129,12 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 	let tweet_id = tweet.id;
 
 	// Hook-styled state management
-	let (deleted, set_deleted) = use_state(false);
-	let (error, set_error) = use_state(None::<String>);
+	let delete_action = use_action(move |tid: Uuid| async move {
+		delete_tweet(tid).await.map_err(|e| e.to_string())
+	});
 	let (liked, _set_liked) = use_state(false);
 	let (like_count, _set_like_count) = use_state(0i32);
 
-	// Clone signals for passing to page! macro
-	let deleted_signal = deleted.clone();
-	// Clone for error display component
-	let error_signal_for_display = error.clone();
 	// Clone liked/like_count signals so we can call like_button inside watch
 	let liked_signal = liked.clone();
 	let like_count_signal = like_count.clone();
@@ -148,9 +144,12 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 	let content = tweet.content.clone();
 	let created_at = tweet.created_at.clone();
 
-	page!(|deleted_signal: Signal<bool>, error_signal_for_display: Signal<Option<String>>, show_delete: bool, username: String, content: String, created_at: String, tweet_id: Uuid, liked_signal: Signal<bool>, like_count_signal: Signal<i32>| {
+	// Clone delete_action for the click handler closure
+	let delete_action_for_click = delete_action.clone();
+
+	page!(|delete_action: Action<(), String>, show_delete: bool, username: String, content: String, created_at: String, tweet_id: Uuid, liked_signal: Signal<bool>, like_count_signal: Signal<i32>, delete_action_for_click: Action<(), String>| {
 		watch {
-			if deleted_signal.get() {
+			if delete_action.is_success() {
 				div {
 					class: "hidden",
 				}
@@ -195,24 +194,9 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 										type: "button",
 										aria_label: "Delete tweet",
 										@click: {
-													let set_deleted = set_deleted.clone();
-													let set_error = set_error.clone();
+													let delete_action = delete_action_for_click.clone();
 													move |_event| {
-														#[cfg(client)]
-														{
-															let set_deleted = set_deleted.clone();
-															let set_error = set_error.clone();
-															spawn_task(async move {
-																match delete_tweet(tweet_id).await {
-																	Ok(()) => {
-																		set_deleted(true);
-																	}
-																	Err(e) => {
-																		set_error(Some(e.to_string()));
-																	}
-																}
-															});
-														}
+														delete_action.dispatch(tweet_id);
 													}
 												},
 										{ icons::trash_icon() }
@@ -253,13 +237,19 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 							}
 						}
 					}
-					{ error_display(error_signal_for_display.clone()) }
+					watch {
+						if delete_action.error().is_some() {
+							div {
+								class: "alert-danger mt-3",
+								{ delete_action.error().unwrap_or_default() }
+							}
+						}
+					}
 				}
 			}
 		}
 	})(
-		deleted_signal,
-		error_signal_for_display,
+		delete_action,
 		show_delete,
 		username,
 		content,
@@ -267,6 +257,7 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 		tweet_id,
 		liked_signal,
 		like_count_signal,
+		delete_action_for_click,
 	)
 }
 

@@ -86,6 +86,22 @@ chore/ci-github-actions-update
 
 **Exception:** Release branches follow the format `release/<crate>/vX.Y.Z` for compatibility with automated workflows.
 
+**RC Phase: Next-Version Feature Branches**
+
+During the RC phase, feature branches for the next version (breaking changes, new features) MUST target the `develop/0.x+1.0` branch instead of `main`:
+
+```
+# Feature branch targeting develop branch during RC
+feature/mysql-backend       → PR target: develop/0.2.0
+feat/new-query-builder      → PR target: develop/0.2.0
+refactor/trait-redesign     → PR target: develop/0.2.0
+
+# Bug fix branches still target main during RC
+fix/connection-pool-leak    → PR target: main
+```
+
+See instructions/STABILITY_POLICY.md § DB-2 for permitted changes on the develop branch.
+
 ### PC-4 (SHOULD): Draft PRs for Work in Progress
 
 - Use draft PRs for incomplete work

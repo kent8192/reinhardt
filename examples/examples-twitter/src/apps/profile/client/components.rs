@@ -15,9 +15,9 @@ use crate::core::client::components::icons;
 use reinhardt::pages::component::View;
 use reinhardt::pages::form;
 use reinhardt::pages::page;
+use reinhardt::pages::reactive::Action;
 use reinhardt::pages::reactive::Signal;
 use reinhardt::pages::reactive::hooks::{use_action, use_effect, use_state};
-use reinhardt::pages::reactive::Action;
 use uuid::Uuid;
 
 #[cfg(client)]
@@ -306,9 +306,10 @@ pub fn profile_edit(user_id: Uuid) -> View {
 	};
 
 	// Load current profile data into form fields using use_action
-	let load_profile = use_action(move |uid: Uuid| async move {
-		fetch_profile(uid).await.map_err(|e| e.to_string())
-	});
+	let load_profile =
+		use_action(
+			move |uid: Uuid| async move { fetch_profile(uid).await.map_err(|e| e.to_string()) },
+		);
 
 	// Bridge loaded profile data to form fields
 	{

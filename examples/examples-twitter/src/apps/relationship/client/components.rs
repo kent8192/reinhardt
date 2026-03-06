@@ -16,7 +16,7 @@ use {
 	},
 	reinhardt::pages::create_resource,
 	reinhardt::pages::reactive::ResourceState,
-	reinhardt::pages::reactive::hooks::{use_action, use_effect, Action},
+	reinhardt::pages::reactive::hooks::{Action, use_action, use_effect},
 };
 
 /// Type of user list to display
@@ -41,14 +41,16 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 
 	#[cfg(client)]
 	{
-		let toggle_follow = use_action(move |(target_id, currently_following): (Uuid, bool)| async move {
-			if currently_following {
-				unfollow_user(target_id).await
-			} else {
-				follow_user(target_id).await
-			}
-			.map_err(|e| e.to_string())
-		});
+		let toggle_follow = use_action(
+			move |(target_id, currently_following): (Uuid, bool)| async move {
+				if currently_following {
+					unfollow_user(target_id).await
+				} else {
+					follow_user(target_id).await
+				}
+				.map_err(|e| e.to_string())
+			},
+		);
 
 		// Toggle is_following on success and reset the action
 		{

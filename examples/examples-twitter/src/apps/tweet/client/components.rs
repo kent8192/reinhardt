@@ -10,7 +10,7 @@ use reinhardt::pages::Signal;
 use reinhardt::pages::component::View;
 use reinhardt::pages::form;
 use reinhardt::pages::page;
-use reinhardt::pages::reactive::hooks::{use_action, use_effect, use_state, Action};
+use reinhardt::pages::reactive::hooks::{Action, use_action, use_effect, use_state};
 use uuid::Uuid;
 
 #[cfg(client)]
@@ -129,9 +129,10 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 	let tweet_id = tweet.id;
 
 	// Hook-styled state management
-	let delete_action = use_action(move |tid: Uuid| async move {
-		delete_tweet(tid).await.map_err(|e| e.to_string())
-	});
+	let delete_action =
+		use_action(
+			move |tid: Uuid| async move { delete_tweet(tid).await.map_err(|e| e.to_string()) },
+		);
 	let (liked, _set_liked) = use_state(false);
 	let (like_count, _set_like_count) = use_state(0i32);
 

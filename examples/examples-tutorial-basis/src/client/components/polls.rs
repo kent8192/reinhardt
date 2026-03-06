@@ -7,7 +7,7 @@ use crate::shared::types::{ChoiceInfo, QuestionInfo};
 use reinhardt::pages::component::View;
 use reinhardt::pages::form;
 use reinhardt::pages::page;
-use reinhardt::pages::reactive::hooks::{use_action, use_effect, Action, ActionPhase};
+use reinhardt::pages::reactive::hooks::{Action, ActionPhase, use_action, use_effect};
 
 use crate::server_fn::polls::{
 	get_question_detail, get_question_results, get_questions, submit_vote,
@@ -18,9 +18,8 @@ use crate::server_fn::polls::{
 /// Displays a list of available polls with links to vote.
 /// Uses watch blocks for reactive UI updates when async data loads.
 pub fn polls_index() -> View {
-	let load_questions = use_action(|_: ()| async move {
-		get_questions().await.map_err(|e| e.to_string())
-	});
+	let load_questions =
+		use_action(|_: ()| async move { get_questions().await.map_err(|e| e.to_string()) });
 	load_questions.dispatch(());
 
 	let load_questions_signal = load_questions.clone();
@@ -61,7 +60,39 @@ pub fn polls_index() -> View {
 				} else {
 					div {
 						class: "space-y-2",
-						{ View::fragment(load_questions_signal.result().unwrap_or_default().iter().map(|question| { let href = format!("/polls/{}/", question.id); let question_text = question.question_text.clone(); let pub_date = question.pub_date.format("%Y-%m-%d %H:%M").to_string(); page!(|href : String, question_text : String, pub_date : String| { a { href : href, class : "block p-4 border rounded hover:bg-gray-50 transition-colors", div { class : "flex w-full justify-between", h5 { class : "mb-1", { question_text } } small { { pub_date } } } } }) (href, question_text, pub_date) }).collect ::<Vec<_>>()) }
+						{
+							View::fragment(
+								load_questions_signal
+									.result()
+									.unwrap_or_default()
+									.iter()
+									.map(|question| {
+										let href = format!("/polls/{}/", question.id);
+										let question_text = question.question_text.clone();
+										let pub_date = question
+											.pub_date
+											.format("%Y-%m-%d %H:%M")
+											.to_string();
+										page!(|href: String, question_text: String, pub_date: String| {
+											a {
+												href: href,
+												class: "block p-4 border rounded hover:bg-gray-50 transition-colors",
+												div {
+													class: "flex w-full justify-between",
+													h5 {
+														class: "mb-1",
+														{ question_text }
+													}
+													small {
+														{ pub_date }
+													}
+												}
+											}
+										})(href, question_text, pub_date)
+									})
+									.collect::<Vec<_>>(),
+							)
+						}
 					}
 				}
 			}
@@ -78,9 +109,10 @@ pub fn polls_detail(question_id: i64) -> View {
 	let qid = question_id;
 
 	// Create action for loading question detail
-	let load_detail = use_action(|qid: i64| async move {
-		get_question_detail(qid).await.map_err(|e| e.to_string())
-	});
+	let load_detail =
+		use_action(
+			|qid: i64| async move { get_question_detail(qid).await.map_err(|e| e.to_string()) },
+		);
 
 	// Create the voting form using form! macro
 	// - server_fn: submit_vote accepts (question_id: String, choice_id: String)
@@ -146,8 +178,24 @@ pub fn polls_detail(question_id: i64) -> View {
 				let err = form.error().get();
 				page!(|is_loading: bool, err: Option<String>| {
 					watch {
-						if ! is_loading &&err.is_none() {
-							# [cfg(target_arch = "wasm32")] { if let Some(window) = web_sys::window() { let pathname = window.location().pathname().ok(); if let Some(path) = pathname { let parts : Vec<&str> = path.split('/').collect(); if parts.len()>= 3 &&parts [1] == "polls" { if let Ok(question_id) = parts [2].parse ::<i64>() { let results_url = format!("/polls/{}/results/", question_id); let _ = window.location().set_href(&results_url); } } } } }
+						if !is_loading && err.is_none() {
+							#[cfg(target_arch = "wasm32")]
+							{
+								if let Some(window) = web_sys::window() {
+									let pathname = window.location().pathname().ok();
+									if let Some(path) = pathname {
+										let parts: Vec<&str> = path.split('/').collect();
+										if parts.len() >= 3 && parts[1] == "polls" {
+											if let Ok(question_id) = parts[2].parse::<i64>() {
+												let results_url =
+													format!("/polls/{}/results/", question_id);
+												let _ =
+													window.location().set_href(&results_url);
+											}
+										}
+									}
+								}
+							}
 						}
 					}
 				})(is_loading, err)
@@ -165,7 +213,9 @@ pub fn polls_detail(question_id: i64) -> View {
 					.iter()
 					.map(|c| (c.id.to_string(), c.choice_text.clone()))
 					.collect();
-				voting_form_for_effect.choice_id_choices().set(choice_options);
+				voting_form_for_effect
+					.choice_id_choices()
+					.set(choice_options);
 			}
 		});
 	}
@@ -254,9 +304,10 @@ pub fn polls_detail(question_id: i64) -> View {
 /// Displays the question with vote counts for each choice.
 /// Uses watch blocks for reactive UI updates when async data loads.
 pub fn polls_results(question_id: i64) -> View {
-	let load_results = use_action(|qid: i64| async move {
-		get_question_results(qid).await.map_err(|e| e.to_string())
-	});
+	let load_results =
+		use_action(
+			|qid: i64| async move { get_question_results(qid).await.map_err(|e| e.to_string()) },
+		);
 	load_results.dispatch(question_id);
 
 	let load_results_signal = load_results.clone();
@@ -306,7 +357,57 @@ pub fn polls_results(question_id: i64) -> View {
 								}
 								div {
 									class: "divide-y divide-gray-200",
-									{ View::fragment(load_results_signal.result().map(|(_, choices, total)| { choices.iter().map(|choice| { let percentage = if total> 0 { (choice.votes as f64 / total as f64 * 100.0) as i32 } else { 0 }; let choice_text = choice.choice_text.clone(); let votes = choice.votes; page!(|choice_text : String, votes : i32, percentage : i32| { div { class : "py-4", div { class : "flex justify-between items-center mb-2", strong { { choice_text } } span { class : "inline-flex items-center bg-brand rounded-full px-2.5 py-0.5 text-xs font-medium text-white", { format!("{} votes", votes) } } } div { class : "w-full bg-gray-200 rounded-full h-2.5", div { class : "bg-brand h-2.5 rounded-full", role : "progressbar", style : format!("width: {}%", percentage), aria_valuenow : percentage.to_string(), aria_valuemin : "0", aria_valuemax : "100", { format!("{}%", percentage) } } } } }) (choice_text, votes, percentage) }).collect ::<Vec<_>>() }).unwrap_or_default()) }
+									{
+										View::fragment(
+											load_results_signal
+												.result()
+												.map(|(_, choices, total)| {
+													choices
+														.iter()
+														.map(|choice| {
+															let percentage = if total > 0 {
+																(choice.votes as f64
+																	/ total as f64 * 100.0)
+																	as i32
+															} else {
+																0
+															};
+															let choice_text =
+																choice.choice_text.clone();
+															let votes = choice.votes;
+															page!(|choice_text: String, votes: i32, percentage: i32| {
+																div {
+																	class: "py-4",
+																	div {
+																		class: "flex justify-between items-center mb-2",
+																		strong {
+																			{ choice_text }
+																		}
+																		span {
+																			class: "inline-flex items-center bg-brand rounded-full px-2.5 py-0.5 text-xs font-medium text-white",
+																			{ format!("{} votes", votes) }
+																		}
+																	}
+																	div {
+																		class: "w-full bg-gray-200 rounded-full h-2.5",
+																		div {
+																			class: "bg-brand h-2.5 rounded-full",
+																			role: "progressbar",
+																			style: format!("width: {}%", percentage),
+																			aria_valuenow: percentage.to_string(),
+																			aria_valuemin: "0",
+																			aria_valuemax: "100",
+																			{ format!("{}%", percentage) }
+																		}
+																	}
+																}
+															})(choice_text, votes, percentage)
+														})
+														.collect::<Vec<_>>()
+												})
+												.unwrap_or_default(),
+										)
+									}
 								}
 								div {
 									class: "mt-3",
@@ -347,10 +448,7 @@ pub fn polls_results(question_id: i64) -> View {
 				}
 			}
 		}
-	})(
-		load_results_signal,
-		question_id,
-	)
+	})(load_results_signal, question_id)
 }
 
 /// Example component demonstrating static URL resolution
@@ -359,9 +457,8 @@ pub fn polls_results(question_id: i64) -> View {
 /// This function is identical to polls_index() but adds poll icons using
 /// static URL resolution.
 pub fn polls_index_with_logo() -> View {
-	let load_questions = use_action(|_: ()| async move {
-		get_questions().await.map_err(|e| e.to_string())
-	});
+	let load_questions =
+		use_action(|_: ()| async move { get_questions().await.map_err(|e| e.to_string()) });
 	load_questions.dispatch(());
 
 	let load_questions_signal = load_questions.clone();
@@ -410,7 +507,47 @@ pub fn polls_index_with_logo() -> View {
 				} else {
 					div {
 						class: "space-y-2",
-						{ View::fragment(load_questions_signal.result().unwrap_or_default().iter().map(|question| { let href = format!("/polls/{}/", question.id); let question_text = question.question_text.clone(); let pub_date = question.pub_date.format("%Y-%m-%d %H:%M").to_string(); page!(|href : String, question_text : String, pub_date : String| { a { href : href, class : "block p-4 border rounded hover:bg-gray-50 transition-colors", div { class : "flex w-full justify-between items-center", img { src : "/static/images/poll-icon.svg", alt : "Poll", class : "w-8 h-8 mr-3" } div { class : "flex-1", h5 { class : "mb-1", { question_text } } } small { { pub_date } } } } }) (href, question_text, pub_date) }).collect ::<Vec<_>>()) }
+						{
+							View::fragment(
+								load_questions_signal
+									.result()
+									.unwrap_or_default()
+									.iter()
+									.map(|question| {
+										let href = format!("/polls/{}/", question.id);
+										let question_text = question.question_text.clone();
+										let pub_date = question
+											.pub_date
+											.format("%Y-%m-%d %H:%M")
+											.to_string();
+										page!(|href: String, question_text: String, pub_date: String| {
+											a {
+												href: href,
+												class: "block p-4 border rounded hover:bg-gray-50 transition-colors",
+												div {
+													class: "flex w-full justify-between items-center",
+													img {
+														src: "/static/images/poll-icon.svg",
+														alt: "Poll",
+														class: "w-8 h-8 mr-3",
+													}
+													div {
+														class: "flex-1",
+														h5 {
+															class: "mb-1",
+															{ question_text }
+														}
+													}
+													small {
+														{ pub_date }
+													}
+												}
+											}
+										})(href, question_text, pub_date)
+									})
+									.collect::<Vec<_>>(),
+							)
+						}
 					}
 				}
 			}

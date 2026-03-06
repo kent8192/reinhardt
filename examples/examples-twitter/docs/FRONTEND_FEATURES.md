@@ -1,284 +1,284 @@
-# フロントエンド機能一覧
+# Frontend Features
 
-## プロジェクト概要
-このプロジェクトはRust/WASMを使用したTwitterクローンのフロントエンド実装です。Reinhardtフレームワークの`pages`モジュールを利用し、Reactライクなコンポーネントとリアクティブな状態管理を提供します。
+## Project Overview
+This project is a frontend implementation of a Twitter clone using Rust/WASM. It leverages the `pages` module of the Reinhardt framework to provide React-like components and reactive state management.
 
-## 技術スタック
-- **フレームワーク**: Reinhardt `pages` モジュール
-- **言語**: Rust (WASMターゲット)
-- **ビルドツール**: Trunk (WASMバンドラー)
-- **スタイリング**: UnoCSS (ユーティリティファーストCSS)
-- **ルーティング**: クライアントサイドルーティング
-- **状態管理**: リアクティブSignal + Context API
+## Tech Stack
+- **Framework**: Reinhardt `pages` module
+- **Language**: Rust (WASM target)
+- **Build Tool**: Trunk (WASM bundler)
+- **Styling**: UnoCSS (utility-first CSS)
+- **Routing**: Client-side routing
+- **State Management**: Reactive Signal + Context API
 
-## 1. 認証機能
-### 1.1 ログインフォーム
-- **説明**: メールアドレスとパスワードを使用したユーザーログイン機能
-- **コンポーネント**: `src/client/components/features/auth.rs` (`login_form`)
-- **ルート**: `/login`
-- **ユーザーインタラクション**: メール/パスワード入力、ログインボタン、登録ページへのリンク
-- **API連携**: `server_fn::auth::login`
-- **特徴**: 
-  - フォームバリデーション (メール形式、必須フィールド)
-  - ローディング状態表示
-  - エラーメッセージ表示
-  - 成功時自動リダイレクト (`/timeline`へ)
+## 1. Authentication
+### 1.1 Login Form
+- **Description**: User login functionality using email and password
+- **Component**: `src/client/components/features/auth.rs` (`login_form`)
+- **Route**: `/login`
+- **User Interaction**: Email/password input, login button, link to registration page
+- **API Integration**: `server_fn::auth::login`
+- **Features**:
+  - Form validation (email format, required fields)
+  - Loading state display
+  - Error message display
+  - Automatic redirect on success (to `/timeline`)
 
-### 1.2 登録フォーム
-- **説明**: 新規ユーザー登録機能
-- **コンポーネント**: `src/client/components/features/auth.rs` (`register_form`)
-- **ルート**: `/register`
-- **ユーザーインタラクション**: ユーザー名、メール、パスワード、パスワード確認入力、登録ボタン、ログインページへのリンク
-- **API連携**: `server_fn::auth::register`
-- **特徴**:
-  - パスワード一致検証
-  - ユーザー名/メールアドレス重複チェック (サーバーサイド)
-  - 成功時自動リダイレクト (`/login`へ)
+### 1.2 Registration Form
+- **Description**: New user registration functionality
+- **Component**: `src/client/components/features/auth.rs` (`register_form`)
+- **Route**: `/register`
+- **User Interaction**: Username, email, password, password confirmation input, register button, link to login page
+- **API Integration**: `server_fn::auth::register`
+- **Features**:
+  - Password match verification
+  - Username/email duplicate check (server-side)
+  - Automatic redirect on success (to `/login`)
 
-### 1.3 認証状態管理
-- **説明**: グローバルな認証状態の管理
-- **コンポーネント**: `src/client/state.rs`
-- **機能**:
-  - `init_auth_state()`: 認証状態の初期化
-  - `use_auth()`: 認証状態の取得フック
-  - `set_current_user()`: 現在のユーザー設定
-  - `is_authenticated()`: 認証状態チェック
-  - `clear_auth_state()`: 認証状態のクリア
+### 1.3 Authentication State Management
+- **Description**: Global authentication state management
+- **Component**: `src/client/state.rs`
+- **Functions**:
+  - `init_auth_state()`: Initialize authentication state
+  - `use_auth()`: Hook to retrieve authentication state
+  - `set_current_user()`: Set the current user
+  - `is_authenticated()`: Check authentication status
+  - `clear_auth_state()`: Clear authentication state
 
-## 2. ツイート機能
-### 2.1 ツイート作成フォーム
-- **説明**: 新しいツイートを投稿するフォーム
-- **コンポーネント**: `src/client/components/features/tweet.rs` (`tweet_form`)
-- **ルート**: `/timeline` (タイムラインページ内)
-- **ユーザーインタラクション**: テキストエリア入力、文字数カウンター、投稿ボタン
-- **API連携**: `server_fn::tweet::create_tweet`
-- **特徴**:
-  - 280文字制限
-  - リアルタイム文字数カウンター
-  - 文字数に応じた視覚的フィードバック (通常/警告/危険)
-  - 投稿成功時ページリロード
+## 2. Tweet Features
+### 2.1 Tweet Creation Form
+- **Description**: Form for posting new tweets
+- **Component**: `src/client/components/features/tweet.rs` (`tweet_form`)
+- **Route**: `/timeline` (within the timeline page)
+- **User Interaction**: Text area input, character counter, post button
+- **API Integration**: `server_fn::tweet::create_tweet`
+- **Features**:
+  - 280 character limit
+  - Real-time character counter
+  - Visual feedback based on character count (normal/warning/danger)
+  - Page reload on successful post
 
-### 2.2 ツイートカード
-- **説明**: 個々のツイートを表示するコンポーネント
-- **コンポーネント**: `src/client/components/features/tweet.rs` (`tweet_card`)
-- **表示場所**: タイムラインページ、プロフィールページ
-- **ユーザーインタラクション**: いいね、リツイート、返信、削除ボタン
-- **API連携**: `server_fn::tweet::delete_tweet`
-- **特徴**:
-  - ユーザー名とハンドル表示
-  - 作成日時表示
-  - いいね/リツイートカウント
-  - 削除ボタン (投稿者のみ表示)
-  - アバター表示
+### 2.2 Tweet Card
+- **Description**: Component for displaying individual tweets
+- **Component**: `src/client/components/features/tweet.rs` (`tweet_card`)
+- **Display Location**: Timeline page, profile page
+- **User Interaction**: Like, retweet, reply, and delete buttons
+- **API Integration**: `server_fn::tweet::delete_tweet`
+- **Features**:
+  - Username and handle display
+  - Creation date/time display
+  - Like/retweet count
+  - Delete button (visible only to the author)
+  - Avatar display
 
-### 2.3 ツイートリスト
-- **説明**: ツイートの一覧表示コンポーネント
-- **コンポーネント**: `src/client/components/features/tweet.rs` (`tweet_list`)
-- **ルート**: `/timeline` (タイムラインページ)
-- **ユーザーインタラクション**: スクロール、ツイートカード操作
-- **API連携**: `server_fn::tweet::list_tweets`
-- **特徴**:
-  - ローディング状態表示
-  - エラー表示
-  - 空状態表示
-  - ユーザー別フィルタリング (オプション)
+### 2.3 Tweet List
+- **Description**: Component for displaying a list of tweets
+- **Component**: `src/client/components/features/tweet.rs` (`tweet_list`)
+- **Route**: `/timeline` (timeline page)
+- **User Interaction**: Scroll, tweet card interactions
+- **API Integration**: `server_fn::tweet::list_tweets`
+- **Features**:
+  - Loading state display
+  - Error display
+  - Empty state display
+  - User-based filtering (optional)
 
-## 3. プロフィール機能
-### 3.1 プロフィール表示
-- **説明**: ユーザーのプロフィール情報を表示するコンポーネント
-- **コンポーネント**: `src/client/components/features/profile.rs` (`profile_view`)
-- **ルート**: `/profile/{user_id}`
-- **ユーザーインタラクション**: プロフィール編集ボタン、フォローボタン
-- **API連携**: `server_fn::profile::fetch_profile`
-- **特徴**:
-  - カバー画像表示エリア
-  - アバター表示
-  - ユーザー名とハンドル表示
-  - 自己紹介 (bio) 表示
-  - 場所とウェブサイト表示
-  - フォロー/フォロワー数表示
+## 3. Profile Features
+### 3.1 Profile View
+- **Description**: Component for displaying user profile information
+- **Component**: `src/client/components/features/profile.rs` (`profile_view`)
+- **Route**: `/profile/{user_id}`
+- **User Interaction**: Edit profile button, follow button
+- **API Integration**: `server_fn::profile::fetch_profile`
+- **Features**:
+  - Cover image display area
+  - Avatar display
+  - Username and handle display
+  - Bio display
+  - Location and website display
+  - Follower/following count display
 
-### 3.2 プロフィール編集フォーム
-- **説明**: プロフィール情報を編集するフォーム
-- **コンポーネント**: `src/client/components/features/profile.rs` (`profile_edit`)
-- **ルート**: `/profile/{user_id}/edit`
-- **ユーザーインタラクション**: アバターURL、自己紹介、場所、ウェブサイト入力、保存ボタン、キャンセルリンク
-- **API連携**: `server_fn::profile::update_profile_form`
-- **特徴**:
-  - 既存プロフィールデータの自動読み込み
-  - リアルタイムバリデーション
-  - 保存成功時成功メッセージ表示
-  - エラー処理
+### 3.2 Profile Edit Form
+- **Description**: Form for editing profile information
+- **Component**: `src/client/components/features/profile.rs` (`profile_edit`)
+- **Route**: `/profile/{user_id}/edit`
+- **User Interaction**: Avatar URL, bio, location, website input, save button, cancel link
+- **API Integration**: `server_fn::profile::update_profile_form`
+- **Features**:
+  - Auto-loading of existing profile data
+  - Real-time validation
+  - Success message on save
+  - Error handling
 
-## 4. DM機能
-### 4.1 DMチャットインターフェース
-- **説明**: ダイレクトメッセージのチャットインターフェース
-- **コンポーネント**: `src/client/components/features/dm.rs` (`dm_chat`)
-- **ルート**: `/dm/{room_id}`
-- **ユーザーインタラクション**: メッセージ入力、送信ボタン
-- **API連携**: WebSocket接続 (実装予定)
-- **特徴**:
-  - ルームIDに基づくチャットルーム
-  - リアルタイムメッセージ送受信 (予定)
-  - メッセージ履歴表示 (予定)
-  - 現在はプレースホルダー実装
+## 4. Direct Message Features
+### 4.1 DM Chat Interface
+- **Description**: Direct message chat interface
+- **Component**: `src/client/components/features/dm.rs` (`dm_chat`)
+- **Route**: `/dm/{room_id}`
+- **User Interaction**: Message input, send button
+- **API Integration**: WebSocket connection (planned)
+- **Features**:
+  - Chat room based on room ID
+  - Real-time message sending/receiving (planned)
+  - Message history display (planned)
+  - Currently a placeholder implementation
 
-## 5. フォロー機能
-### 5.1 フォローボタン
-- **説明**: ユーザーをフォロー/アンフォローするボタン
-- **コンポーネント**: `src/client/components/features/relationship.rs` (`follow_button`)
-- **表示場所**: プロフィールページ、ユーザーリスト
-- **ユーザーインタラクション**: クリックによるフォロー状態切り替え
-- **API連携**: `server_fn::relationship::follow_user`, `unfollow_user`
-- **特徴**:
-  - 現在のフォロー状態に応じた表示
-  - ホバー時の「アンフォロー」表示
-  - ローディング状態表示
-  - エラー処理
+## 5. Follow Features
+### 5.1 Follow Button
+- **Description**: Button to follow/unfollow a user
+- **Component**: `src/client/components/features/relationship.rs` (`follow_button`)
+- **Display Location**: Profile page, user list
+- **User Interaction**: Toggle follow state on click
+- **API Integration**: `server_fn::relationship::follow_user`, `unfollow_user`
+- **Features**:
+  - Display based on current follow state
+  - "Unfollow" display on hover
+  - Loading state display
+  - Error handling
 
-### 5.2 ユーザーリスト
-- **説明**: フォロワー/フォロー中ユーザーの一覧表示
-- **コンポーネント**: `src/client/components/features/relationship.rs` (`user_list`)
-- **ルート**: 専用ページなし (コンポーネントとして利用可能)
-- **ユーザーインタラクション**: ユーザーカードクリックでプロフィールページへ遷移
-- **API連携**: `server_fn::relationship::fetch_followers`, `fetch_following`
-- **特徴**:
-  - リストタイプ指定 (フォロワー/フォロー中)
-  - ローディング/エラー/空状態表示
-  - ユーザーカードコンポーネント
+### 5.2 User List
+- **Description**: List display of followers/following users
+- **Component**: `src/client/components/features/relationship.rs` (`user_list`)
+- **Route**: No dedicated page (available as a component)
+- **User Interaction**: Click user card to navigate to profile page
+- **API Integration**: `server_fn::relationship::fetch_followers`, `fetch_following`
+- **Features**:
+  - List type specification (followers/following)
+  - Loading/error/empty state display
+  - User card component
 
-## 6. ルーティングシステム
-### 6.1 クライアントサイドルーティング
-- **説明**: アプリケーションのナビゲーションを管理するルーター
-- **コンポーネント**: `src/client/router.rs`
-- **定義ルート**:
-  - `/` - ホームページ
-  - `/login` - ログインページ
-  - `/register` - 登録ページ
-  - `/profile/{user_id}` - プロフィールページ
-  - `/profile/{user_id}/edit` - プロフィール編集ページ
-  - `/timeline` - タイムラインページ
-  - `/dm/{room_id}` - DMチャットページ
-  - その他 - 404ページ
-- **特徴**:
-  - パラメータ付きルート (`{user_id}`, `{room_id}`)
-  - ブラウザ履歴統合 (popstateイベント)
-  - グローバルルーターインスタンス
-  - ページコンポーネントとルートの統合
+## 6. Routing System
+### 6.1 Client-Side Routing
+- **Description**: Router that manages application navigation
+- **Component**: `src/client/router.rs`
+- **Defined Routes**:
+  - `/` - Home page
+  - `/login` - Login page
+  - `/register` - Registration page
+  - `/profile/{user_id}` - Profile page
+  - `/profile/{user_id}/edit` - Profile edit page
+  - `/timeline` - Timeline page
+  - `/dm/{room_id}` - DM chat page
+  - Other - 404 page
+- **Features**:
+  - Parameterized routes (`{user_id}`, `{room_id}`)
+  - Browser history integration (popstate event)
+  - Global router instance
+  - Integration of page components and routes
 
-### 6.2 ページコンポーネント
-- **説明**: 各ルートに対応するページレベルのコンポーネント
-- **コンポーネント**: `src/client/pages.rs`
-- **提供ページ**:
-  - `home_page()` - ランディングページ
-  - `login_page()` - ログインページ
-  - `register_page()` - 登録ページ
-  - `profile_page(user_id)` - プロフィールページ
-  - `profile_edit_page(user_id)` - プロフィール編集ページ
-  - `timeline_page()` - タイムラインページ
-  - `dm_chat_page(room_id)` - DMチャットページ
-  - `not_found_page()` - 404ページ
+### 6.2 Page Components
+- **Description**: Page-level components corresponding to each route
+- **Component**: `src/client/pages.rs`
+- **Provided Pages**:
+  - `home_page()` - Landing page
+  - `login_page()` - Login page
+  - `register_page()` - Registration page
+  - `profile_page(user_id)` - Profile page
+  - `profile_edit_page(user_id)` - Profile edit page
+  - `timeline_page()` - Timeline page
+  - `dm_chat_page(room_id)` - DM chat page
+  - `not_found_page()` - 404 page
 
-## 7. 状態管理
-### 7.1 グローバル状態コンテキスト
-- **説明**: アプリケーション全体の状態を管理するコンテキストシステム
-- **コンポーネント**: `src/client/state.rs`
-- **管理状態**:
-  - 認証状態 (`Option<UserInfo>`)
-  - ルーティング状態 (ルーター内部)
-  - コンポーネントローカル状態 (Signalベース)
-- **特徴**:
-  - React hooks風API (`use_state`, `use_effect`)
-  - Context APIによる依存性注入
-  - リアクティブな状態更新
-  - サーバーサイドレンダリング対応
+## 7. State Management
+### 7.1 Global State Context
+- **Description**: Context system for managing application-wide state
+- **Component**: `src/client/state.rs`
+- **Managed State**:
+  - Authentication state (`Option<UserInfo>`)
+  - Routing state (internal to router)
+  - Component-local state (Signal-based)
+- **Features**:
+  - React hooks-style API (`use_state`, `use_effect`)
+  - Dependency injection via Context API
+  - Reactive state updates
+  - Server-side rendering support
 
-## 8. 共通コンポーネント
-### 8.1 UIプリミティブ
-- **説明**: 再利用可能な基本UIコンポーネント
-- **コンポーネント**: `src/client/components/common.rs`
-- **提供コンポーネント**:
-  - `button()` - 汎用ボタン (バリアント指定可能)
-  - `text_input()` - テキスト入力フィールド
-  - `textarea()` - テキストエリア (文字数カウンター付き)
-  - `loading_spinner()` - ローディングスピナー
-  - `error_alert()` - エラーアラート (閉じるボタン付き)
-  - `success_alert()` - 成功アラート
-  - `avatar()` - アバター画像表示
-  - `empty()` - 空状態プレースホルダー
+## 8. Common Components
+### 8.1 UI Primitives
+- **Description**: Reusable basic UI components
+- **Component**: `src/client/components/common.rs`
+- **Provided Components**:
+  - `button()` - General-purpose button (variant configurable)
+  - `text_input()` - Text input field
+  - `textarea()` - Text area (with character counter)
+  - `loading_spinner()` - Loading spinner
+  - `error_alert()` - Error alert (with close button)
+  - `success_alert()` - Success alert
+  - `avatar()` - Avatar image display
+  - `empty()` - Empty state placeholder
 
-### 8.2 レイアウトコンポーネント
-- **説明**: ページレイアウトを構成するコンポーネント
-- **コンポーネント**: `src/client/components/layout.rs`
-- **提供コンポーネント**:
-  - ナビゲーションバー (実装予定)
-  - サイドバー (実装予定)
-  - フッター (実装予定)
-  - コンテナレイアウト
+### 8.2 Layout Components
+- **Description**: Components that compose the page layout
+- **Component**: `src/client/components/layout.rs`
+- **Provided Components**:
+  - Navigation bar (planned)
+  - Sidebar (planned)
+  - Footer (planned)
+  - Container layout
 
-## 9. テストインフラストラクチャ
-### 9.1 WASMコンポーネントテスト
-- **場所**: `tests/wasm/`
-- **テストファイル**:
-  - `auth_mock_test.rs` - 認証コンポーネントのレンダリングテスト
-  - `tweet_mock_test.rs` - ツイートコンポーネントのレンダリングテスト
-  - `common_components_test.rs` - 共通コンポーネントのレンダリングテスト
-- **テストタイプ**:
-  - 純粋なレンダリングテスト (DOM構造検証)
-  - モックインフラストラクチャ統合テスト
-  - シリアライゼーションテスト
+## 9. Test Infrastructure
+### 9.1 WASM Component Tests
+- **Location**: `tests/wasm/`
+- **Test Files**:
+  - `auth_mock_test.rs` - Rendering tests for authentication components
+  - `tweet_mock_test.rs` - Rendering tests for tweet components
+  - `common_components_test.rs` - Rendering tests for common components
+- **Test Types**:
+  - Pure rendering tests (DOM structure verification)
+  - Mock infrastructure integration tests
+  - Serialization tests
 
-### 9.2 統合テスト
-- **場所**: `tests/integration.rs`, `tests/server_functions.rs`, `tests/e2e_tests.rs`
-- **テスト範囲**:
-  - サーバー関数の統合テスト
-  - データベース統合テスト
-  - E2Eテストシナリオ (実装予定)
+### 9.2 Integration Tests
+- **Location**: `tests/integration.rs`, `tests/server_functions.rs`, `tests/e2e_tests.rs`
+- **Test Scope**:
+  - Server function integration tests
+  - Database integration tests
+  - E2E test scenarios (planned)
 
-## 10. ビルドとデプロイメント
-### 10.1 WASMビルド設定
-- **設定ファイル**: `Cargo.toml` (ターゲット別依存関係)
-- **ビルドターゲット**: `wasm32-unknown-unknown`
-- **バンドラー**: Trunk (設定ファイルはプロジェクトルートに存在)
-- **出力先**: `dist-wasm/` ディレクトリ
-- **静的アセット**: `static/` ディレクトリ
+## 10. Build and Deployment
+### 10.1 WASM Build Configuration
+- **Configuration File**: `Cargo.toml` (target-specific dependencies)
+- **Build Target**: `wasm32-unknown-unknown`
+- **Bundler**: Trunk (configuration file located at project root)
+- **Output Directory**: `dist-wasm/`
+- **Static Assets**: `static/` directory
 
-### 10.2 サーバーサイドレンダリング
-- **サポート状況**: 部分的サポート (ハイドレーション対応)
-- **エントリーポイント**: `src/client/lib.rs` (`#[wasm_bindgen(start)]`)
-- **ハイドレーション**: `reinhardt::pages::hydration` モジュールを使用
+### 10.2 Server-Side Rendering
+- **Support Status**: Partial support (hydration-capable)
+- **Entry Point**: `src/client/lib.rs` (`#[wasm_bindgen(start)]`)
+- **Hydration**: Uses the `reinhardt::pages::hydration` module
 
-## 機能マトリックス
-| 機能 | 実装状況 | テスト状況 | 備考 |
-|------|----------|------------|------|
-| ログイン | ✅ 実装済み | ✅ テストあり | モックテスト完備 |
-| 登録 | ✅ 実装済み | ✅ テストあり | モックテスト完備 |
-| ツイート作成 | ✅ 実装済み | ✅ テストあり | 文字数制限付き |
-| ツイート表示 | ✅ 実装済み | ✅ テストあり | カードコンポーネント |
-| プロフィール表示 | ✅ 実装済み | ⚠️ 部分テスト | 基本的な表示機能 |
-| プロフィール編集 | ✅ 実装済み | ⚠️ 部分テスト | フォームバリデーション |
-| DMチャット | ⚠️ プレースホルダー | ❌ テストなし | WebSocket未実装 |
-| フォロー機能 | ✅ 実装済み | ⚠️ 部分テスト | 基本的な操作 |
-| ルーティング | ✅ 実装済み | ❌ テストなし | 機能実装済み |
-| 状態管理 | ✅ 実装済み | ❌ テストなし | Context API実装 |
+## Feature Matrix
+| Feature | Implementation Status | Test Status | Notes |
+|---------|----------------------|-------------|-------|
+| Login | Implemented | Tested | Full mock test coverage |
+| Registration | Implemented | Tested | Full mock test coverage |
+| Tweet Creation | Implemented | Tested | With character limit |
+| Tweet Display | Implemented | Tested | Card component |
+| Profile View | Implemented | Partially Tested | Basic display functionality |
+| Profile Edit | Implemented | Partially Tested | Form validation |
+| DM Chat | Placeholder | Not Tested | WebSocket not implemented |
+| Follow Feature | Implemented | Partially Tested | Basic operations |
+| Routing | Implemented | Not Tested | Fully functional |
+| State Management | Implemented | Not Tested | Context API implementation |
 
-## 既知の制限と今後の課題
-1. **DM機能**: WebSocket統合が未実装、現在はプレースホルダー
-2. **リアルタイム更新**: ツイートやメッセージのリアルタイム更新機能なし
-3. **画像アップロード**: アバターやツイート画像のアップロード機能なし
-4. **通知システム**: 通知機能未実装
-5. **検索機能**: ユーザーやツイートの検索機能なし
-6. **ページネーション**: 無限スクロールやページネーション未実装
-7. **レスポンシブデザイン**: 一部コンポーネントでモバイル対応が不完全
+## Known Limitations and Future Work
+1. **DM Feature**: WebSocket integration not implemented; currently a placeholder
+2. **Real-Time Updates**: No real-time update functionality for tweets or messages
+3. **Image Upload**: No upload functionality for avatars or tweet images
+4. **Notification System**: Notification feature not implemented
+5. **Search Feature**: No search functionality for users or tweets
+6. **Pagination**: Infinite scroll and pagination not implemented
+7. **Responsive Design**: Some components have incomplete mobile support
 
-## テストカバレッジ概要
-- **コンポーネントレンダリングテスト**: 主要コンポーネントのDOM構造検証
-- **モックインフラストラクチャ**: サーバー関数のモックテスト基盤
-- **シリアライゼーションテスト**: 共有型のシリアライゼーション検証
-- **統合テスト**: サーバー関数とデータベース統合
-- **E2Eテスト**: プレイリストテスト未実装 (今後の課題)
+## Test Coverage Overview
+- **Component Rendering Tests**: DOM structure verification for major components
+- **Mock Infrastructure**: Mock testing framework for server functions
+- **Serialization Tests**: Serialization verification for shared types
+- **Integration Tests**: Server function and database integration
+- **E2E Tests**: Playwright tests not implemented (future work)
 
 ---
 
-*最終更新日: 2026-01-09*  
-*分析対象バージョン: examples-twitter v0.1.0*
+*Last Updated: 2026-01-09*
+*Analyzed Version: examples-twitter v0.1.0*

@@ -19,12 +19,12 @@
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create JWT configuration
-//! let config = JwtConfig::new("your-secret-key".to_string())
+//! let config = JwtConfig::new("your-secret-key-must-be-at-least-32-bytes-long!!".to_string())
 //!     .with_algorithm(Algorithm::HS256)
 //!     .with_expiration(3600); // 1 hour
 //!
-//! // Create JWT session backend
-//! let backend = JwtSessionBackend::new(config);
+//! // Create JWT session backend (validates key length at construction time)
+//! let backend = JwtSessionBackend::new(config)?;
 //!
 //! // Store user session with login data
 //! let session_data = json!({
@@ -65,6 +65,38 @@ pub enum JwtSessionError {
 	TokenExpired,
 	#[error("Invalid token")]
 	InvalidToken,
+	#[error("Invalid HMAC key length: {algorithm:?} requires at least {required} bytes, but got {actual} bytes")]
+	InvalidKeyLength {
+		algorithm: Algorithm,
+		required: usize,
+		actual: usize,
+	},
+}
+
+/// Returns the minimum required key length in bytes for HMAC algorithms,
+/// or `None` for non-HMAC algorithms.
+fn min_hmac_key_length(algorithm: Algorithm) -> Option<usize> {
+	match algorithm {
+		Algorithm::HS256 => Some(32),
+		Algorithm::HS384 => Some(48),
+		Algorithm::HS512 => Some(64),
+		_ => None,
+	}
+}
+
+/// Validates that the secret key meets the minimum length requirement
+/// for the given HMAC algorithm per NIST SP 800-107 recommendations.
+fn validate_hmac_key_length(algorithm: Algorithm, secret: &str) -> Result<(), JwtSessionError> {
+	if let Some(min_len) = min_hmac_key_length(algorithm)
+		&& secret.len() < min_len
+	{
+		return Err(JwtSessionError::InvalidKeyLength {
+			algorithm,
+			required: min_len,
+			actual: secret.len(),
+		});
+	}
+	Ok(())
 }
 
 /// JWT session configuration
@@ -76,10 +108,10 @@ pub enum JwtSessionError {
 /// use jsonwebtoken::Algorithm;
 ///
 /// // Basic configuration with HS256
-/// let config = JwtConfig::new("my-secret-key".to_string());
+/// let config = JwtConfig::new("my-secret-key-for-jwt-at-least-32b!".to_string());
 ///
-/// // Advanced configuration
-/// let config = JwtConfig::new("my-secret-key".to_string())
+/// // Advanced configuration with HS512 (requires 64-byte key minimum)
+/// let config = JwtConfig::new("my-secret-key-for-jwt-at-least-64-bytes-long-for-hs512-algorithm!".to_string())
 ///     .with_algorithm(Algorithm::HS512)
 ///     .with_expiration(7200)
 ///     .with_issuer("my-app".to_string())
@@ -181,10 +213,10 @@ struct SessionClaims {
 /// use serde_json::json;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let config = JwtConfig::new("secret".to_string())
+/// let config = JwtConfig::new("secret-key-must-be-at-least-32-b!".to_string())
 ///     .with_algorithm(Algorithm::HS256);
 ///
-/// let backend = JwtSessionBackend::new(config);
+/// let backend = JwtSessionBackend::new(config)?;
 ///
 /// // Store session data as JWT token
 /// let session_data = json!({
@@ -200,7 +232,7 @@ struct SessionClaims {
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct JwtSessionBackend {
 	config: Arc<JwtConfig>,
 	// In-memory storage for session_key -> JWT token mapping
@@ -210,11 +242,15 @@ pub struct JwtSessionBackend {
 
 impl JwtSessionBackend {
 	/// Create a new JWT session backend with the given configuration
-	pub fn new(config: JwtConfig) -> Self {
-		Self {
+	///
+	/// Validates HMAC secret key length at construction time.
+	/// Returns an error if the key is too short for the configured algorithm.
+	pub fn new(config: JwtConfig) -> Result<Self, JwtSessionError> {
+		validate_hmac_key_length(config.algorithm, &config.secret)?;
+		Ok(Self {
 			config: Arc::new(config),
 			tokens: Arc::new(RwLock::new(HashMap::new())),
-		}
+		})
 	}
 
 	/// Encode session data into a JWT token
@@ -357,43 +393,46 @@ impl SessionBackend for JwtSessionBackend {
 mod tests {
 	use super::*;
 	use jsonwebtoken::{EncodingKey, Header, encode};
+	use rstest::rstest;
 	use serde_json::json;
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_jwt_session_save_and_load() {
-		let config = JwtConfig::new("test-secret".to_string());
-		let backend = JwtSessionBackend::new(config);
-
+		// Arrange
+		let config = JwtConfig::new("test-secret-key-for-jwt-testing!!".to_string());
+		let backend = JwtSessionBackend::new(config).unwrap();
 		let session_data = json!({
 			"user_id": 123,
 			"username": "test_user",
 		});
 
-		// Save session
+		// Act
 		backend
 			.save("test_session", &session_data, Some(3600))
 			.await
 			.unwrap();
-
-		// Load session
 		let loaded: Option<serde_json::Value> = backend.load("test_session").await.unwrap();
+
+		// Assert
 		assert!(loaded.is_some());
 		assert_eq!(loaded.unwrap()["user_id"], 123);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_jwt_session_expiration() {
-		let config = JwtConfig::new("test-secret".to_string());
-		let backend = JwtSessionBackend::new(config.clone());
+		// Arrange
+		let config = JwtConfig::new("test-secret-key-for-jwt-testing!!".to_string());
+		let backend = JwtSessionBackend::new(config.clone()).unwrap();
 
-		// Manually create an expired token by directly manipulating the tokens map
 		let now = chrono::Utc::now().timestamp() as usize;
 		let expired_claims = SessionClaims {
 			data: json!({
 				"user_id": 456,
 			}),
-			exp: now - 3600, // Expired 1 hour ago
-			iat: now - 7200, // Issued 2 hours ago
+			exp: now - 3600,
+			iat: now - 7200,
 			iss: None,
 			aud: None,
 		};
@@ -402,112 +441,120 @@ mod tests {
 		let encoding_key = EncodingKey::from_secret(config.secret.as_bytes());
 		let expired_token = encode(&header, &expired_claims, &encoding_key).unwrap();
 
-		// Insert expired token directly
 		backend
 			.tokens
 			.write()
 			.unwrap()
 			.insert("expired_session".to_string(), expired_token);
 
-		// Load should return None for expired token
+		// Act
 		let loaded: Option<serde_json::Value> = backend.load("expired_session").await.unwrap();
+
+		// Assert
 		assert!(loaded.is_none());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_jwt_session_delete() {
-		let config = JwtConfig::new("test-secret".to_string());
-		let backend = JwtSessionBackend::new(config);
-
+		// Arrange
+		let config = JwtConfig::new("test-secret-key-for-jwt-testing!!".to_string());
+		let backend = JwtSessionBackend::new(config).unwrap();
 		let session_data = json!({
 			"user_id": 789,
 		});
 
-		// Save session
 		backend
 			.save("delete_test", &session_data, Some(3600))
 			.await
 			.unwrap();
-
-		// Verify exists
 		assert!(backend.exists("delete_test").await.unwrap());
 
-		// Delete session
+		// Act
 		backend.delete("delete_test").await.unwrap();
 
-		// Verify deleted
+		// Assert
 		assert!(!backend.exists("delete_test").await.unwrap());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_jwt_session_exists() {
-		let config = JwtConfig::new("test-secret".to_string());
-		let backend = JwtSessionBackend::new(config);
-
-		// Non-existent session
-		assert!(!backend.exists("non_existent").await.unwrap());
-
+		// Arrange
+		let config = JwtConfig::new("test-secret-key-for-jwt-testing!!".to_string());
+		let backend = JwtSessionBackend::new(config).unwrap();
 		let session_data = json!({
 			"user_id": 999,
 		});
 
-		// Save session
+		// Assert - non-existent session
+		assert!(!backend.exists("non_existent").await.unwrap());
+
+		// Act
 		backend
 			.save("exists_test", &session_data, Some(3600))
 			.await
 			.unwrap();
 
-		// Verify exists
+		// Assert
 		assert!(backend.exists("exists_test").await.unwrap());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_jwt_with_different_algorithms() {
-		let config = JwtConfig::new("test-secret".to_string()).with_algorithm(Algorithm::HS512);
-
-		let backend = JwtSessionBackend::new(config);
-
+		// Arrange
+		let config = JwtConfig::new(
+			"test-secret-key-for-jwt-testing-hs512-algorithm-minimum-64-bytes!!".to_string(),
+		)
+		.with_algorithm(Algorithm::HS512);
+		let backend = JwtSessionBackend::new(config).unwrap();
 		let session_data = json!({
 			"user_id": 111,
 		});
 
+		// Act
 		backend
 			.save("hs512_test", &session_data, Some(3600))
 			.await
 			.unwrap();
-
 		let loaded: Option<serde_json::Value> = backend.load("hs512_test").await.unwrap();
+
+		// Assert
 		assert!(loaded.is_some());
 		assert_eq!(loaded.unwrap()["user_id"], 111);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_jwt_with_issuer_and_audience() {
-		let config = JwtConfig::new("test-secret".to_string())
+		// Arrange
+		let config = JwtConfig::new("test-secret-key-for-jwt-testing!!".to_string())
 			.with_issuer("test-app".to_string())
 			.with_audience("test-users".to_string());
-
-		let backend = JwtSessionBackend::new(config);
-
+		let backend = JwtSessionBackend::new(config).unwrap();
 		let session_data = json!({
 			"user_id": 222,
 		});
 
+		// Act
 		backend
 			.save("iss_aud_test", &session_data, Some(3600))
 			.await
 			.unwrap();
-
 		let loaded: Option<serde_json::Value> = backend.load("iss_aud_test").await.unwrap();
+
+		// Assert
 		assert!(loaded.is_some());
 		assert_eq!(loaded.unwrap()["user_id"], 222);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_jwt_session_complex_data() {
-		let config = JwtConfig::new("test-secret".to_string());
-		let backend = JwtSessionBackend::new(config);
-
+		// Arrange
+		let config = JwtConfig::new("test-secret-key-for-jwt-testing!!".to_string());
+		let backend = JwtSessionBackend::new(config).unwrap();
 		let session_data = json!({
 			"user_id": 333,
 			"username": "complex_user",
@@ -521,15 +568,68 @@ mod tests {
 			}
 		});
 
+		// Act
 		backend
 			.save("complex_test", &session_data, Some(3600))
 			.await
 			.unwrap();
-
 		let loaded: Option<serde_json::Value> = backend.load("complex_test").await.unwrap();
+
+		// Assert
 		let data = loaded.unwrap();
 		assert_eq!(data["user_id"], 333);
 		assert_eq!(data["roles"][0], "admin");
 		assert_eq!(data["metadata"]["preferences"]["theme"], "dark");
+	}
+
+	/// Parameterized test for HMAC key length rejection at construction time
+	#[rstest]
+	#[case::hs256_short_key(Algorithm::HS256, "short-key", 32)]
+	#[case::hs384_short_key(Algorithm::HS384, "this-key-is-only-32-bytes-long!!", 48)]
+	#[case::hs512_short_key(Algorithm::HS512, "this-key-is-32-bytes-but-not-64!", 64)]
+	fn test_jwt_rejects_short_hmac_key(
+		#[case] algorithm: Algorithm,
+		#[case] secret: &str,
+		#[case] expected_min_length: usize,
+	) {
+		// Arrange
+		let config = JwtConfig::new(secret.to_string()).with_algorithm(algorithm);
+
+		// Act
+		let result = JwtSessionBackend::new(config);
+
+		// Assert
+		assert_eq!(
+			result.unwrap_err(),
+			JwtSessionError::InvalidKeyLength {
+				algorithm,
+				required: expected_min_length,
+				actual: secret.len(),
+			}
+		);
+	}
+
+	/// Parameterized test for HMAC key acceptance at exact minimum length
+	#[rstest]
+	#[case::hs256_exact(Algorithm::HS256, "exactly-32-bytes-long-secret-key")]
+	#[case::hs384_exact(Algorithm::HS384, "exactly-48-bytes-long-secret-key-for-hs384-algo!")]
+	#[case::hs512_exact(Algorithm::HS512, "exactly-64-bytes-long-secret-key-for-hs512-algorithm-testing!!!!")]
+	fn test_jwt_accepts_minimum_length_hmac_key(
+		#[case] algorithm: Algorithm,
+		#[case] secret: &str,
+	) {
+		// Arrange
+		let config = JwtConfig::new(secret.to_string()).with_algorithm(algorithm);
+
+		// Act
+		let result = JwtSessionBackend::new(config);
+
+		// Assert
+		assert!(
+			result.is_ok(),
+			"{:?} should accept a {}-byte key",
+			algorithm,
+			secret.len()
+		);
 	}
 }

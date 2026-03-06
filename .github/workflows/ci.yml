@@ -10,6 +10,7 @@ permissions:
   contents: read
   id-token: write
   pull-requests: read
+  security-events: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -150,6 +151,14 @@ jobs:
     needs: [determine-runner, check-branch-status]
     if: needs.check-branch-status.outputs.is-behind != 'true' && needs.check-branch-status.outputs.has-conflicts != 'true'
     uses: ./.github/workflows/security-audit.yml
+    with:
+      runner: ${{ needs.determine-runner.outputs.runner }}
+
+  codeql:
+    name: CodeQL Analysis
+    needs: [determine-runner, check-branch-status]
+    if: needs.check-branch-status.outputs.has-conflicts != 'true'
+    uses: ./.github/workflows/codeql.yml
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
 
@@ -316,6 +325,7 @@ jobs:
       - publish-check
       - todo-check
       - security-audit
+      - codeql
       - terraform-check
       - semver-check
       - release-dry-run
@@ -348,6 +358,7 @@ jobs:
             "clippy:${{ needs.clippy.result }}"
             "todo-check:${{ needs.todo-check.result }}"
             "security-audit:${{ needs.security-audit.result }}"
+            "codeql:${{ needs.codeql.result }}"
             "semver-check:${{ needs.semver-check.result }}"
             "docs-rs-check:${{ needs.docs-rs-check.result }}"
             "cross-platform-check:${{ needs.cross-platform-check.result }}"

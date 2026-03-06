@@ -1,11 +1,18 @@
 //! Logging framework for Reinhardt
 
+/// Logging configuration and manager.
 pub mod config;
+/// Log record filters (debug mode, callback-based).
 pub mod filters;
+/// Log record formatters (standard, server, JSON).
 pub mod formatters;
+/// Log output handlers (console, file, JSON, in-memory).
 pub mod handlers;
+/// Core logger, log levels, and log records.
 pub mod logger;
+/// Logging parameters and configuration types.
 pub mod params;
+/// Security-sensitive log filtering.
 pub mod security;
 
 pub use config::{HandlerConfig, LoggerConfig, LoggingConfig, LoggingManager};

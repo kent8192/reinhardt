@@ -274,6 +274,10 @@ pub use reinhardt_conf::settings::sources::{
 	DefaultSource, EnvSource, LowPriorityEnvSource, TomlFileSource,
 };
 
+// Re-export ApplyUpdate trait and macros
+pub use reinhardt_core::apply_update::ApplyUpdate;
+pub use reinhardt_macros::{ApplyUpdate as DeriveApplyUpdate, apply_update};
+
 // Re-export core types
 #[cfg(all(feature = "core", not(target_arch = "wasm32")))]
 pub use reinhardt_core::{
@@ -561,6 +565,13 @@ pub use reinhardt_db::orm::{
 	OnUpdate,
 	UniqueConstraint,
 };
+
+// Re-export reinhardt-query prelude types (via reinhardt-db orm)
+// Query builder Query type is available as reinhardt::db::orm::Query
+// to avoid name conflict with reinhardt::Query (DI params extractor).
+// Value is re-exported as QueryBuilderValue to avoid conflicts with existing types.
+#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+pub use reinhardt_db::orm::{IntoValue, Order, QueryBuilderValue};
 
 // Re-export database pool
 #[cfg(all(feature = "database", not(target_arch = "wasm32")))]
@@ -855,7 +866,14 @@ pub use reinhardt_forms::{
 
 // Re-export DI and parameters (FastAPI-style parameter extraction)
 #[cfg(all(feature = "di", not(target_arch = "wasm32")))]
-pub use reinhardt_di::{Depends, DiError, DiResult, InjectionContext, RequestContext};
+pub use reinhardt_di::injected::{Injected, OptionalInjected};
+#[cfg(all(feature = "di", not(target_arch = "wasm32")))]
+pub use reinhardt_di::scope::{RequestScope, Scope, SingletonScope};
+#[cfg(all(feature = "di", not(target_arch = "wasm32")))]
+pub use reinhardt_di::{
+	Depends, DependsBuilder, DiError, DiResult, Injectable, InjectionContext,
+	InjectionContextBuilder, InjectionMetadata, RequestContext,
+};
 
 // Re-export DI params - available in minimal, standard, and di features
 #[cfg(all(
@@ -879,7 +897,7 @@ pub use reinhardt_test::{APIClient, APIRequestFactory, APITestCase, TestResponse
 #[cfg(all(feature = "storage", not(target_arch = "wasm32")))]
 pub use reinhardt_utils::storage::{InMemoryStorage, LocalStorage, Storage};
 
-// Server-side only prelude (NOT for WASM)
+/// Convenience re-exports of commonly used types (server-side only).
 #[cfg(not(target_arch = "wasm32"))]
 pub mod prelude {
 	// Core types - always available
@@ -1039,29 +1057,41 @@ pub mod prelude {
 	// Admin feature - use reinhardt-admin-api crate directly for admin functionality
 }
 
-// Re-export database modules for Model derive macro generated code
-// These must be available at `::reinhardt::db::*` for the macro to work correctly
+// Re-export WebSocket types
+#[cfg(all(feature = "websockets-pages", not(target_arch = "wasm32")))]
+pub use reinhardt_websockets::integration::pages::PagesAuthenticator;
+#[cfg(all(feature = "websockets", not(target_arch = "wasm32")))]
+pub use reinhardt_websockets::room::RoomManager;
+#[cfg(all(feature = "websockets", not(target_arch = "wasm32")))]
+pub use reinhardt_websockets::{
+	ConsumerContext, Message, WebSocketConsumer, WebSocketError, WebSocketResult,
+};
+
+/// Database re-exports for Model derive macro generated code.
+///
+/// These must be available at `::reinhardt::db::*` for the macro to work correctly.
 #[cfg(all(feature = "database", not(target_arch = "wasm32")))]
 pub mod db {
 	// Re-export commonly used types at module level for easier access
 	pub use reinhardt_db::DatabaseConnection;
 	pub use reinhardt_db::DatabaseError as Error;
 
-	// Explicitly re-export modules used by Model derive macro
+	/// Database migration types and utilities.
 	pub mod migrations {
 		pub use reinhardt_db::migrations::*;
 	}
 
+	/// ORM query building and model operations.
 	pub mod orm {
 		pub use reinhardt_db::orm::*;
 	}
 
-	// Re-export associations module for relationship definitions
+	/// Model relationship (association) definitions.
 	pub mod associations {
 		pub use reinhardt_db::associations::*;
 	}
 
-	// Re-export prelude for convenience
+	/// Convenience re-exports for database operations.
 	pub mod prelude {
 		pub use reinhardt_db::prelude::*;
 	}

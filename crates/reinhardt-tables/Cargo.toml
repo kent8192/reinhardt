@@ -1,0 +1,47 @@
+[package]
+name = "reinhardt-tables"
+version = "0.1.0-alpha.1"
+edition = "2024"
+authors = ["Reinhardt Contributors"]
+license = "MIT OR Apache-2.0"
+description = "Data table rendering utilities for Reinhardt (Django-tables2 equivalent)"
+repository.workspace = true
+keywords = ["web", "table", "data", "django", "utilities"]
+categories = ["web-programming"]
+
+[features]
+default = []
+chrono = ["dep:chrono"]
+uuid = ["dep:uuid"]
+export = ["csv", "serde_json"]
+pages-integration = ["reinhardt-pages"]
+
+[dependencies]
+# Documentation
+aquamarine = "0.5"
+
+# Core Reinhardt crates (optional for non-pages usage)
+reinhardt-pages = { workspace = true, optional = true }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", optional = true }
+
+# CSV export
+csv = { version = "1.3", optional = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Optional type support for columns
+chrono = { version = "0.4", optional = true, default-features = false, features = ["std"] }
+uuid = { version = "1.0", optional = true, features = ["std"] }
+
+[dev-dependencies]
+rstest = { workspace = true }
+reinhardt-test = { workspace = true }
+tempfile = { workspace = true }
+proptest = { workspace = true }
+
+[lib]
+crate-type = ["rlib"]

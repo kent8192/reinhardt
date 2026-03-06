@@ -231,31 +231,56 @@ pub use inventory;
 #[cfg(feature = "macros")]
 pub use reinhardt_di_macros::{injectable, injectable_factory};
 
+/// Errors that can occur during dependency injection resolution.
 #[derive(Debug, Error)]
 pub enum DiError {
+	/// The requested dependency was not found in the container.
 	#[error("Dependency not found: {0}")]
 	NotFound(String),
 
+	/// A circular dependency chain was detected during resolution.
 	#[error("Circular dependency detected: {0}")]
 	CircularDependency(String),
 
+	/// An error occurred in a dependency provider function.
 	#[error("Provider error: {0}")]
 	ProviderError(String),
 
+	/// The resolved type did not match the expected type.
 	#[error("Type mismatch: expected {expected}, got {actual}")]
-	TypeMismatch { expected: String, actual: String },
+	TypeMismatch {
+		/// The type that was expected.
+		expected: String,
+		/// The type that was actually resolved.
+		actual: String,
+	},
 
+	/// An error related to dependency scoping (request vs singleton).
 	#[error("Scope error: {0}")]
 	ScopeError(String),
 
+	/// The requested type was not registered in the dependency registry.
 	#[error("Type '{type_name}' not registered. {hint}")]
-	NotRegistered { type_name: String, hint: String },
+	NotRegistered {
+		/// The name of the unregistered type.
+		type_name: String,
+		/// A hint message suggesting how to register the type.
+		hint: String,
+	},
 
+	/// A required dependency was not registered.
 	#[error("Dependency not registered: {type_name}")]
-	DependencyNotRegistered { type_name: String },
+	DependencyNotRegistered {
+		/// The name of the unregistered dependency type.
+		type_name: String,
+	},
 
+	/// An internal error in the DI system.
 	#[error("Internal error: {message}")]
-	Internal { message: String },
+	Internal {
+		/// A description of the internal error.
+		message: String,
+	},
 }
 
 impl From<DiError> for reinhardt_core::exception::Error {
@@ -264,6 +289,7 @@ impl From<DiError> for reinhardt_core::exception::Error {
 	}
 }
 
+/// A specialized `Result` type for dependency injection operations.
 pub type DiResult<T> = std::result::Result<T, DiError>;
 
 // Generator support

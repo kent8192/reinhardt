@@ -1,0 +1,39 @@
+resource "aws_ecs_cluster" "main" {
+  name = "{{ project_name }}-cluster"
+}
+
+resource "aws_ecs_task_definition" "app" {
+  family                   = "{{ project_name }}-app"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "{{ app_cpu }}"
+  memory                   = "{{ app_memory }}"
+
+  container_definitions = jsonencode([
+    {
+      name      = "{{ project_name }}"
+      image     = aws_ecr_repository.app.repository_url
+      essential = true
+      portMappings = [
+        {
+          containerPort = {{ app_port }}
+          protocol      = "tcp"
+        }
+      ]
+    }
+  ])
+}
+
+resource "aws_ecs_service" "app" {
+  name            = "{{ project_name }}-service"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.app.arn
+  desired_count   = {{ app_instances }}
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = [aws_subnet.public_a.id, aws_subnet.public_b.id]
+    security_groups  = [aws_security_group.app.id]
+    assign_public_ip = true
+  }
+}

@@ -571,7 +571,15 @@ pub struct SelectDateWidget {
 impl SelectDateWidget {
 	/// Create a new select date widget with default year range
 	pub fn new() -> Self {
-		let current_year = 2025;
+		let current_year = {
+			use std::time::{SystemTime, UNIX_EPOCH};
+			let secs = SystemTime::now()
+				.duration_since(UNIX_EPOCH)
+				.expect("system clock is before UNIX epoch")
+				.as_secs();
+			// 365.25 days/year * 86400 secs/day = 31_557_600 secs/year
+			1970 + (secs / 31_557_600) as i32
+		};
 		let years = (current_year - 100..=current_year + 10).collect();
 		Self { years }
 	}

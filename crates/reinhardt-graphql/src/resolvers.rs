@@ -1,7 +1,7 @@
 //! GraphQL resolvers
 //!
 //! Provides traits for building GraphQL resolvers with proper error handling.
-//! Use [`ContextResolver`] for resolvers that need to access context data,
+//! Use `ContextResolver` for resolvers that need to access context data,
 //! as it returns GraphQL errors instead of panicking when context data is missing.
 
 use crate::context::GraphQLContext;

@@ -84,14 +84,20 @@
 //! - ✅ Database shortcuts (get_object_or_404, get_list_or_404)
 //! - ✅ Security headers helper (X-Content-Type-Options, X-Frame-Options, Referrer-Policy, X-XSS-Protection)
 
+/// Template context management for rendering.
 pub mod context;
+/// Database lookup shortcuts that return 404 on missing objects.
 pub mod get_or_404;
+/// HTTP redirect helpers (temporary and permanent).
 pub mod redirect;
+/// Response rendering utilities (JSON, HTML, text).
 pub mod render;
+/// Common security header helpers.
 pub mod security_headers;
+/// URL validation and manipulation utilities.
 pub mod url;
 
-// ORM integration (feature-gated)
+/// ORM integration for database shortcuts (feature-gated).
 #[cfg(feature = "database")]
 pub mod orm;
 

@@ -87,6 +87,9 @@ serde_urlencoded = "0.7"
 rmp-serde = { version = "1.3", optional = true }
 urlencoding = "2.1"
 
+# Error handling
+thiserror = { workspace = true }
+
 # Router pattern matching
 regex = "1.11"
 

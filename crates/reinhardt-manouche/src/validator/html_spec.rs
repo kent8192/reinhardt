@@ -1611,11 +1611,8 @@ fn validate_required_attributes(element: &TypedPageElement, spec: &ElementSpec) 
 		}
 
 		let attr_found = element.attrs.iter().any(|attr| {
-			let attr_name = attr.name.to_string();
-			// Remove raw identifier prefix (r#type -> type)
-			let attr_name = attr_name.strip_prefix("r#").unwrap_or(&attr_name);
-			// Handle underscore-to-hyphen conversion
-			let html_name = attr_name.replace('_', "-");
+			let html_name =
+				crate::core::attr_utils::ident_to_html_attr_name(&attr.name.to_string());
 			html_name == required_attr.name
 		});
 
@@ -1636,10 +1633,7 @@ fn validate_required_attributes(element: &TypedPageElement, spec: &ElementSpec) 
 /// Validates that all attributes are in the allowed list.
 fn validate_allowed_attributes(element: &TypedPageElement, allowed: &[&str]) -> Result<()> {
 	for attr in &element.attrs {
-		let attr_name = attr.name.to_string();
-		// Remove raw identifier prefix (r#type -> type)
-		let attr_name = attr_name.strip_prefix("r#").unwrap_or(&attr_name);
-		let html_name = attr_name.replace('_', "-");
+		let html_name = crate::core::attr_utils::ident_to_html_attr_name(&attr.name.to_string());
 
 		// Check if it's a global attribute
 		if is_global_attribute(&html_name) {

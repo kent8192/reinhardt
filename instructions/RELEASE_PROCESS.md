@@ -41,6 +41,14 @@ Reinhardt uses **release-plz** for fully automated release management:
 3. **Review Before Release**: Release PRs allow review before publishing
 4. **Per-Crate Releases**: Only changed crates are released
 
+### Develop Branch Lifecycle
+
+During the RC phase, a `develop/0.x+1.0` branch exists for next-version development (see instructions/STABILITY_POLICY.md § DB-1 ~ DB-7). This branch interacts with the release workflow as follows:
+
+- **During RC**: release-plz monitors `main` only. The develop branch is not affected by release-plz operations. No configuration changes are needed.
+- **After stable release**: Merging the develop branch into `main` introduces new features and breaking changes. release-plz detects these changes on the next push and generates Release PRs for the new version cycle (e.g., `0.2.0-alpha.1`).
+- **No manual version management**: `Cargo.toml` versions in the develop branch do not need manual updates. release-plz handles versioning after the branch is merged into `main`.
+
 ---
 
 ## How release-plz Works
@@ -303,9 +311,9 @@ failed to select a version for the requirement `reinhardt-test = "^0.1.0-rc.3"`
 candidate versions found which didn't match: 0.1.0-rc.2, 0.1.0-rc.1, ...
 ```
 
-**Solution (two strategies)**:
+**Solution (three strategies)**:
 
-1. **Optional dependency (preferred)**: Move `reinhardt-test` from `[dev-dependencies]` to `[dependencies]` as optional. This makes release-plz aware of the dependency and ensures correct publish ordering:
+1. **Optional dependency (preferred for non-cyclic cases)**: Move `reinhardt-test` from `[dev-dependencies]` to `[dependencies]` as optional. This makes release-plz aware of the dependency and ensures correct publish ordering:
 ```toml
 [dependencies]
 reinhardt-test = { workspace = true, optional = true }
@@ -314,7 +322,14 @@ reinhardt-test = { workspace = true, optional = true }
 test-utils = ["dep:reinhardt-test"]
 ```
 
-2. **Path-only dev-dependency (fallback for cyclic cases)**: When moving to optional dependency would create a circular dependency (e.g., reinhardt-test → reinhardt-admin → reinhardt-apps), use a path-only dev-dependency without version. Cargo strips versionless path dev-dependencies from the published manifest, avoiding version resolution:
+2. **Path-only dev-dependency on `reinhardt-testkit` (preferred for functional crates)**: The `reinhardt-testkit` crate provides core test infrastructure (assertions, client, containers, fixtures, etc.) without depending on functional crates like `reinhardt-auth`, `reinhardt-admin`, or `reinhardt-tasks`. Functional crates that need test utilities should use a path-only dev-dependency on `reinhardt-testkit`:
+```toml
+[dev-dependencies]
+reinhardt-testkit = { path = "../reinhardt-testkit", features = ["testcontainers"] }
+```
+This avoids circular dependency chains because `reinhardt-testkit` does not depend on the functional crates that consume it. Cargo strips versionless path dev-dependencies from the published manifest, avoiding version resolution issues.
+
+3. **Path-only dev-dependency on `reinhardt-test` (fallback)**: When a functional crate needs `reinhardt-test`-specific modules (e.g., auth fixtures, admin panel fixtures), use a path-only dev-dependency without version:
 ```toml
 [dev-dependencies]
 reinhardt-test = { path = "../reinhardt-test" }
@@ -322,11 +337,13 @@ reinhardt-test = { path = "../reinhardt-test" }
 
 Tests continue to work because the project always runs tests with `--all-features`.
 
-**Rule**: Functional crates that depend on `reinhardt-test` **must** use either strategy above. Never use `reinhardt-test = { workspace = true }` in `[dev-dependencies]` (workspace deps include version, triggering Cargo resolution).
+**`reinhardt-testkit` vs `reinhardt-test`**: The `reinhardt-testkit` crate was introduced to break the dependency chain. It contains all test modules that do NOT depend on functional crates (auth, admin, tasks, pages). The `reinhardt-test` crate re-exports everything from `reinhardt-testkit` and adds functional-crate-dependent modules (auth fixtures, admin panel fixtures, WASM test support). Functional crates should prefer `reinhardt-testkit` to minimize transitive dependencies.
+
+**Rule**: Functional crates that need test utilities **must** use one of the strategies above. Never use `reinhardt-test = { workspace = true }` or `reinhardt-testkit = { workspace = true }` in `[dev-dependencies]` (workspace deps include version, triggering Cargo resolution).
 
 **Tracking**: [cargo#15151](https://github.com/rust-lang/cargo/issues/15151)
 
-(Ref: [#185](https://github.com/kent8192/reinhardt-web/pull/185), [#207](https://github.com/kent8192/reinhardt-web/pull/207), [#223](https://github.com/kent8192/reinhardt-web/pull/223))
+(Ref: [#185](https://github.com/kent8192/reinhardt-web/pull/185), [#207](https://github.com/kent8192/reinhardt-web/pull/207), [#223](https://github.com/kent8192/reinhardt-web/pull/223), [#1869](https://github.com/kent8192/reinhardt-web/issues/1869))
 
 ### KI-3: Partial Release Failure Deadlock
 

@@ -1,19 +1,33 @@
 //! Static files and production utilities for Reinhardt
 
+/// Cache control configuration and middleware.
 pub mod caching;
+/// CDN integration for static file serving.
 pub mod cdn;
+/// Static file system health checks.
 pub mod checks;
+/// Static file dependency resolution (e.g., CSS imports).
 pub mod dependency_resolver;
+/// Static file request handler.
 pub mod handler;
+/// Health check endpoints.
 pub mod health;
+/// Media file handling and storage.
 pub mod media;
+/// Static file serving metrics.
 pub mod metrics;
+/// Static file middleware for request processing.
 pub mod middleware;
+/// Static file path resolution.
 pub mod path_resolver;
+/// Static file processing (minification, fingerprinting).
 pub mod processing;
+/// Static file storage backends.
 pub mod storage;
+/// Template engine integration for static file URLs.
 pub mod template_integration;
 
+/// Development static file server with live reload.
 #[cfg(feature = "dev-server")]
 pub mod dev_server;
 

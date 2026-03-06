@@ -24,7 +24,9 @@ struct RouteOptions {
 	///
 	/// When enabled, extracted parameters implementing `validator::Validate`
 	/// are automatically validated before the handler is called.
-	/// Returns HTTP 422 with JSON error details on validation failure.
+	/// Extractors used with this option must implement `Deref` to the inner type
+	/// (e.g., `Json<T>` derefs to `T`), as validation is performed on the dereferenced value.
+	/// Returns HTTP 400 with JSON error details on validation failure.
 	pre_validate: bool,
 }
 
@@ -311,7 +313,7 @@ fn generate_wrapper_with_both(
 			.map(|ext| {
 				let pat = &ext.pat;
 				quote! {
-					::validator::Validate::validate(&#pat)
+					::validator::Validate::validate(&*#pat)
 						.map_err(|e| #core_crate::exception::Error::Validation(
 							::serde_json::to_string(&e).unwrap_or_else(|_| format!("{:?}", e))
 						))?;

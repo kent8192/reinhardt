@@ -3,6 +3,7 @@
 #[cfg(test)]
 mod tests {
 	use reinhardt::post;
+	use reinhardt_core::endpoint::EndpointInfo;
 	use reinhardt_core::exception::Error;
 	use reinhardt_http::Response;
 	use rstest::rstest;
@@ -18,9 +19,7 @@ mod tests {
 		pub email: String,
 	}
 
-	// Test that pre_validate = true compiles correctly with extractor
-	// Note: This test verifies macro expansion, not runtime behavior.
-	// Runtime behavior requires a full HTTP pipeline which is tested via E2E tests.
+	// Handler with pre_validate = true
 	#[post("/users", pre_validate = true)]
 	async fn create_user_validated(
 		body: reinhardt::Json<CreateUserRequest>,
@@ -29,7 +28,7 @@ mod tests {
 		Ok(Response::new(hyper::StatusCode::CREATED))
 	}
 
-	// Test that pre_validate = false (default) compiles correctly
+	// Handler without pre_validate (default = false)
 	#[post("/users-no-validate")]
 	async fn create_user_no_validate(
 		body: reinhardt::Json<CreateUserRequest>,
@@ -38,7 +37,7 @@ mod tests {
 		Ok(Response::new(hyper::StatusCode::CREATED))
 	}
 
-	// Test that pre_validate = true compiles with use_inject
+	// Handler with pre_validate = true and use_inject = true
 	#[post("/users-inject", pre_validate = true, use_inject = true)]
 	async fn create_user_with_inject(
 		body: reinhardt::Json<CreateUserRequest>,
@@ -48,17 +47,116 @@ mod tests {
 	}
 
 	#[rstest]
-	fn test_pre_validate_macro_generates_view_types() {
+	fn test_pre_validate_view_has_correct_path() {
 		// Arrange & Act
-		// Verify that the macro generates the expected View types
-		let _validated = create_user_validated();
-		let _no_validate = create_user_no_validate();
-		let _with_inject = create_user_with_inject();
+		let path = CreateUserValidatedView::path();
 
-		// Assert - compilation success proves macro works correctly
-		assert!(
-			true,
-			"All pre_validate macro variants compiled successfully"
+		// Assert
+		assert_eq!(path, "/users");
+	}
+
+	#[rstest]
+	fn test_pre_validate_view_has_correct_method() {
+		// Arrange & Act
+		let method = CreateUserValidatedView::method();
+
+		// Assert
+		assert_eq!(method, reinhardt::Method::POST);
+	}
+
+	#[rstest]
+	fn test_no_validate_view_has_correct_path() {
+		// Arrange & Act
+		let path = CreateUserNoValidateView::path();
+
+		// Assert
+		assert_eq!(path, "/users-no-validate");
+	}
+
+	#[rstest]
+	fn test_inject_variant_view_has_correct_path() {
+		// Arrange & Act
+		let path = CreateUserWithInjectView::path();
+
+		// Assert
+		assert_eq!(path, "/users-inject");
+	}
+
+	#[rstest]
+	fn test_factory_function_returns_view_instance() {
+		// Arrange & Act
+		let _view: CreateUserValidatedView = create_user_validated();
+
+		// Assert - verify the factory function returns the correct View type
+		assert_eq!(CreateUserValidatedView::path(), "/users");
+	}
+
+	#[rstest]
+	fn test_validator_rejects_empty_name() {
+		// Arrange
+		let request = CreateUserRequest {
+			name: String::new(),
+			email: "user@example.com".to_string(),
+		};
+
+		// Act
+		let result = request.validate();
+
+		// Assert
+		assert!(result.is_err());
+		let errors = result.unwrap_err();
+		assert!(errors.field_errors().contains_key("name"));
+	}
+
+	#[rstest]
+	fn test_validator_rejects_invalid_email() {
+		// Arrange
+		let request = CreateUserRequest {
+			name: "Alice".to_string(),
+			email: "not-an-email".to_string(),
+		};
+
+		// Act
+		let result = request.validate();
+
+		// Assert
+		assert!(result.is_err());
+		let errors = result.unwrap_err();
+		assert!(errors.field_errors().contains_key("email"));
+	}
+
+	#[rstest]
+	fn test_validator_accepts_valid_request() {
+		// Arrange
+		let request = CreateUserRequest {
+			name: "Alice".to_string(),
+			email: "alice@example.com".to_string(),
+		};
+
+		// Act
+		let result = request.validate();
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	fn test_validation_error_converts_to_reinhardt_error() {
+		// Arrange
+		let request = CreateUserRequest {
+			name: String::new(),
+			email: "invalid".to_string(),
+		};
+		let validation_errors = request.validate().unwrap_err();
+
+		// Act
+		let error: Error = validation_errors.into();
+
+		// Assert
+		assert_eq!(error.status_code(), 400);
+		assert_eq!(
+			error.kind(),
+			reinhardt_core::exception::ErrorKind::Validation
 		);
 	}
 }

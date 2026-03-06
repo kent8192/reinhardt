@@ -359,7 +359,7 @@ impl ResultBackend for SqliteResultBackend {
 
 				let mut metadata = TaskResultMetadata::new(task_id, status, result);
 				if let Some(err) = error {
-					metadata = TaskResultMetadata::with_error(task_id, err);
+					metadata.set_error(err);
 				}
 
 				Ok(Some(metadata))

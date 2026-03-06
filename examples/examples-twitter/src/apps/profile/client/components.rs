@@ -11,16 +11,19 @@
 //! - Server function integration for form submission
 
 use crate::apps::profile::shared::types::ProfileResponse;
+use crate::core::client::components::icons;
 use reinhardt::pages::component::View;
 use reinhardt::pages::form;
 use reinhardt::pages::page;
 use reinhardt::pages::reactive::Signal;
-use reinhardt::pages::reactive::hooks::use_state;
+use reinhardt::pages::reactive::hooks::{use_effect, use_state};
 use uuid::Uuid;
 
 #[cfg(client)]
 use {
 	crate::apps::profile::server::server_fn::{fetch_profile, update_profile_form},
+	reinhardt::pages::create_resource,
+	reinhardt::pages::reactive::ResourceState,
 	reinhardt::pages::spawn::spawn_task,
 };
 
@@ -33,30 +36,36 @@ use crate::apps::profile::server::server_fn::fetch_profile;
 /// Features cover image, large avatar, bio, location, and website.
 /// Uses watch blocks for reactive UI updates when async data loads.
 pub fn profile_view(user_id: Uuid) -> View {
-	// Hook-styled state management
-	let (profile, set_profile) = use_state(None::<ProfileResponse>);
-	let (loading, set_loading) = use_state(true);
-	let (error, set_error) = use_state(None::<String>);
+	// Data fetching with create_resource on client, initial loading state on server
+	let (profile, _set_profile) = use_state(None::<ProfileResponse>);
+	let (loading, _set_loading) = use_state(true);
+	let (error, _set_error) = use_state(None::<String>);
 
 	#[cfg(client)]
 	{
-		// Clone setters for async use
-		let set_profile = set_profile.clone();
-		let set_loading = set_loading.clone();
-		let set_error = set_error.clone();
+		let resource = create_resource(move || async move {
+			fetch_profile(user_id).await.map_err(|e| e.to_string())
+		});
 
-		spawn_task(async move {
-			set_loading(true);
-			set_error(None);
+		let profile_setter = _set_profile.clone();
+		let loading_setter = _set_loading.clone();
+		let error_setter = _set_error.clone();
+		let resource_for_effect = resource.clone();
 
-			match fetch_profile(user_id).await {
-				Ok(profile_data) => {
-					set_profile(Some(profile_data));
-					set_loading(false);
+		use_effect(move || {
+			match resource_for_effect.get() {
+				ResourceState::Loading => {
+					loading_setter(true);
+					error_setter(None);
 				}
-				Err(e) => {
-					set_error(Some(e.to_string()));
-					set_loading(false);
+				ResourceState::Success(data) => {
+					profile_setter(Some(data));
+					loading_setter(false);
+					error_setter(None);
+				}
+				ResourceState::Error(err) => {
+					error_setter(Some(err));
+					loading_setter(false);
 				}
 			}
 		});
@@ -93,15 +102,7 @@ pub fn profile_view(user_id: Uuid) -> View {
 							role: "alert",
 							div {
 								class: "flex items-center gap-2",
-								svg {
-									class: "w-5 h-5 flex-shrink-0",
-									fill: "currentColor",
-									viewBox: "0 0 20 20",
-									path {
-										fill_rule: "evenodd",
-										d: "M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z",
-									}
-								}
+								{ icons::error_circle_icon() }
 								span {
 									{ error_signal.get().unwrap_or_default() }
 								}
@@ -151,24 +152,7 @@ pub fn profile_view(user_id: Uuid) -> View {
 									if data.location.is_some() {
 										div {
 											class: "flex items-center gap-1",
-											svg {
-												class: "w-4 h-4",
-												fill: "none",
-												stroke: "currentColor",
-												viewBox: "0 0 24 24",
-												path {
-													stroke_linecap: "round",
-													stroke_linejoin: "round",
-													stroke_width: "2",
-													d: "M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z",
-												}
-												path {
-													stroke_linecap: "round",
-													stroke_linejoin: "round",
-													stroke_width: "2",
-													d: "M15 11a3 3 0 11-6 0 3 3 0 016 0z",
-												}
-											}
+											{ icons::location_pin_icon() }
 											span {
 												{ data.location.clone().unwrap_or_default() }
 											}
@@ -180,18 +164,7 @@ pub fn profile_view(user_id: Uuid) -> View {
 											href: data.website.clone().unwrap_or_default(),
 											target: "_blank",
 											rel: "noopener noreferrer",
-											svg {
-												class: "w-4 h-4",
-												fill: "none",
-												stroke: "currentColor",
-												viewBox: "0 0 24 24",
-												path {
-													stroke_linecap: "round",
-													stroke_linejoin: "round",
-													stroke_width: "2",
-													d: "M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1",
-												}
-											}
+											{ icons::link_icon() }
 											span {
 												{ data.website.clone().unwrap_or_default() }
 											}
@@ -376,18 +349,7 @@ pub fn profile_edit(user_id: Uuid) -> View {
 					a {
 						href: format!("/profile/{}", user_id_str.clone()),
 						class: "btn-icon",
-						svg {
-							class: "w-5 h-5",
-							fill: "none",
-							stroke: "currentColor",
-							viewBox: "0 0 24 24",
-							path {
-								stroke_linecap: "round",
-								stroke_linejoin: "round",
-								stroke_width: "2",
-								d: "M10 19l-7-7m0 0l7-7m-7 7h18",
-							}
-						}
+						{ icons::arrow_left_icon() }
 					}
 					h1 {
 						class: "text-xl font-bold",
@@ -403,15 +365,7 @@ pub fn profile_edit(user_id: Uuid) -> View {
 								role: "alert",
 								div {
 									class: "flex items-center gap-2",
-									svg {
-										class: "w-5 h-5 flex-shrink-0",
-										fill: "currentColor",
-										viewBox: "0 0 20 20",
-										path {
-											fill_rule: "evenodd",
-											d: "M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z",
-										}
-									}
+									{ icons::success_check_icon() }
 									span {
 										"Profile updated successfully! Redirecting..."
 									}
@@ -426,15 +380,7 @@ pub fn profile_edit(user_id: Uuid) -> View {
 								role: "alert",
 								div {
 									class: "flex items-center gap-2",
-									svg {
-										class: "w-5 h-5 flex-shrink-0",
-										fill: "currentColor",
-										viewBox: "0 0 20 20",
-										path {
-											fill_rule: "evenodd",
-											d: "M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z",
-										}
-									}
+									{ icons::error_circle_icon() }
 									span {
 										{ error_signal.get().unwrap_or_default() }
 									}
@@ -453,7 +399,7 @@ pub fn profile_edit(user_id: Uuid) -> View {
 						watch {
 							if loading_signal.get() {
 								button {
-									r#type: "submit",
+									type: "submit",
 									class: "btn-primary opacity-50 cursor-not-allowed",
 									disabled: loading_signal.get(),
 									form: "profile-edit-form",
@@ -467,7 +413,7 @@ pub fn profile_edit(user_id: Uuid) -> View {
 								}
 							} else {
 								button {
-									r#type: "submit",
+									type: "submit",
 									class: "btn-primary",
 									form: "profile-edit-form",
 									"Save"

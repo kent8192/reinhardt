@@ -42,7 +42,7 @@ jobs:
     steps:
       - name: Free Disk Space (Ubuntu)
         if: ${{ !contains(inputs.runner, 'self-hosted') }}
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@v1.3.1
         with:
           tool-cache: true
           android: true
@@ -113,15 +113,15 @@ jobs:
             --lib \
             --all-features \
             --no-fail-fast \
-            --lcov \
-            --output-path /tmp/unit-lcov.info \
+            --codecov \
+            --output-path /tmp/unit-codecov.json \
             "${FILTER_ARGS[@]}"
 
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: /tmp/unit-lcov.info
+          files: /tmp/unit-codecov.json
           flags: unit
           fail_ci_if_error: false
           use_oidc: true
@@ -140,7 +140,7 @@ jobs:
     steps:
       - name: Free Disk Space (Ubuntu)
         if: ${{ !contains(inputs.runner, 'self-hosted') }}
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@v1.3.1
         with:
           tool-cache: true
           android: true
@@ -228,14 +228,14 @@ jobs:
             -E "$FILTER_EXPR" \
             --all-features \
             --no-fail-fast \
-            --lcov \
-            --output-path /tmp/intra-crate-lcov.info
+            --codecov \
+            --output-path /tmp/intra-crate-codecov.json
 
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: /tmp/intra-crate-lcov.info
+          files: /tmp/intra-crate-codecov.json
           flags: intra-crate-integration
           fail_ci_if_error: false
           use_oidc: true
@@ -254,7 +254,7 @@ jobs:
     steps:
       - name: Free Disk Space (Ubuntu)
         if: ${{ !contains(inputs.runner, 'self-hosted') }}
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@v1.3.1
         with:
           tool-cache: true
           android: true
@@ -338,15 +338,15 @@ jobs:
             --package reinhardt-integration-tests \
             --all-features \
             --no-fail-fast \
-            --lcov \
-            --output-path /tmp/cross-crate-lcov.info \
+            --codecov \
+            --output-path /tmp/cross-crate-codecov.json \
             "${FILTER_ARGS[@]}"
 
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: /tmp/cross-crate-lcov.info
+          files: /tmp/cross-crate-codecov.json
           flags: cross-crate-integration
           fail_ci_if_error: false
           use_oidc: true

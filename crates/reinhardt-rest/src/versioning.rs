@@ -496,7 +496,11 @@ impl HostNameVersioning {
 	/// ```
 	pub fn with_host_format(mut self, format: &str) -> Self {
 		// Convert format like "{version}.api.example.com" to regex "^([^.]+)\.api\.example\.com"
-		let pattern = format.replace("{version}", "([^.]+)").replace(".", "\\.");
+		// Escape dots first, then replace placeholder to prevent regex corruption
+		const PLACEHOLDER: &str = "__REINHARDT_VERSION_PLACEHOLDER__";
+		let pattern = format.replace("{version}", PLACEHOLDER);
+		let pattern = pattern.replace(".", "\\.");
+		let pattern = pattern.replace(PLACEHOLDER, "([^.]+)");
 		let pattern = format!("^{}", pattern);
 		if let Ok(regex) = Regex::new(&pattern) {
 			self.hostname_regex = regex;
@@ -1119,6 +1123,34 @@ mod tests {
 		let request = create_test_request("/v1/users/", vec![]);
 		let version = versioning.determine_version(&request).await.unwrap();
 		assert_eq!(version, "1.0"); // Falls back to default
+	}
+
+	#[tokio::test]
+	async fn test_hostname_versioning_with_host_format_dots_not_corrupted() {
+		// Arrange - format with dots that would be corrupted by the old implementation
+		let versioning = HostNameVersioning::new()
+			.with_host_format("{version}.api.v2.example.com")
+			.with_allowed_versions(vec!["v1", "v3"]);
+
+		// Act
+		let request = create_test_request(
+			"/users/",
+			vec![("host".to_string(), "v1.api.v2.example.com".to_string())],
+		);
+		let version = versioning.determine_version(&request).await.unwrap();
+
+		// Assert
+		assert_eq!(version, "v1");
+
+		// Act - different version
+		let request = create_test_request(
+			"/users/",
+			vec![("host".to_string(), "v3.api.v2.example.com".to_string())],
+		);
+		let version = versioning.determine_version(&request).await.unwrap();
+
+		// Assert
+		assert_eq!(version, "v3");
 	}
 
 	// Note: Router integration test removed to avoid circular dependency with reinhardt-urls.

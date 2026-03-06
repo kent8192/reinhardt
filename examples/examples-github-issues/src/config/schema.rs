@@ -3,6 +3,7 @@
 //! This module provides a singleton GraphQL schema that is created once
 //! and reused for all requests, improving performance and consistency.
 
+use std::env;
 use std::sync::{Arc, LazyLock};
 
 use crate::apps::auth::views::UserStorage;
@@ -19,8 +20,11 @@ fn create_schema_internal() -> AppSchema {
 	let member_storage = ProjectMemberStorage::new();
 	let broadcaster = IssueEventBroadcaster::new();
 
-	// JWT secret should be loaded from settings in production
-	let jwt_auth = reinhardt::JwtAuth::new(b"your-secret-key-change-in-production");
+	// Load JWT secret from environment variable with fallback default
+	let jwt_secret = env::var("JWT_SECRET")
+		.unwrap_or_else(|_| "your-secret-key-change-in-production".to_string())
+		.into_bytes();
+	let jwt_auth = reinhardt::JwtAuth::new(&jwt_secret);
 
 	async_graphql::Schema::build(
 		Query::default(),

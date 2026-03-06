@@ -1070,7 +1070,7 @@ impl TypedCustomAttr {
 	/// assert_eq!(attr.html_name(), "aria-label");
 	/// ```
 	pub fn html_name(&self) -> String {
-		self.name.replace('_', "-")
+		crate::core::attr_utils::ident_to_html_attr_name(&self.name)
 	}
 
 	/// Returns true if this is an aria-* attribute.

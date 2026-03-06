@@ -25,7 +25,7 @@ jobs:
     steps:
       - name: Free Disk Space (Ubuntu)
         if: ${{ !contains(inputs.runner || '', 'self-hosted') }}
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@v1.3.1
         with:
           tool-cache: true
           android: true
@@ -85,7 +85,7 @@ jobs:
 
       # Detect pre-release phase to determine the appropriate semver-check behavior:
       # - Alpha (0.x.y-alpha.N): No API stability guarantees → skip semver-check
-      # - RC (0.x.y-rc.N): API frozen, bug fixes only → enforce semver-check
+      # - RC (0.x.y-rc.N): No breaking changes permitted, approved additions allowed → enforce semver-check
       # - Stable (0.x.y): Full SemVer guarantees → enforce semver-check
       - name: Detect pre-release phase
         if: ${{ !startsWith(github.head_ref || github.ref_name, 'release-plz-') }}
@@ -96,13 +96,13 @@ jobs:
             echo "::notice::Alpha version detected. Skipping semver-check (no API stability guarantee during alpha)."
           elif grep -rqP '^version\s*=\s*"[^"]*-rc' crates/*/Cargo.toml; then
             echo "phase=rc" >> "$GITHUB_OUTPUT"
-            echo "::notice::RC version detected. Enforcing semver-check (API frozen during RC phase)."
+            echo "::notice::RC version detected. Enforcing semver-check (no breaking changes permitted during RC phase)."
           else
             echo "phase=stable" >> "$GITHUB_OUTPUT"
             echo "::notice::Stable version detected. Enforcing semver-check (full SemVer guarantees)."
           fi
 
-      # On normal PRs with RC versions, enforce minor release type to block
+      # On normal PRs with RC versions, enforce minor release type to block breaking
       # breaking changes. Per stability policy (SP-1), the API surface is frozen
       # during RC -- only bug fixes and deprecation-alias renames are permitted.
       - name: Run cargo-semver-checks (normal PR - RC versions)

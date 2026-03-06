@@ -1,0 +1,46 @@
+[package]
+name = "reinhardt-taggit"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Simple tagging system for Reinhardt framework - inspired by django-taggit"
+# Disable auto-detection of tests directory (tests/ contains a separate crate)
+autotests = false
+
+[dependencies]
+# Reinhardt ecosystem
+reinhardt-core = { workspace = true }
+reinhardt-db = { workspace = true, features = ["orm"] }
+
+# Macros
+reinhardt-taggit-macros = { path = "./macros", version = "0.1.0" }
+
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+async-trait = { workspace = true }
+
+# Database
+sea-query = { workspace = true, features = ["backend-postgres", "backend-mysql", "backend-sqlite"] }
+
+# Utilities
+chrono = { workspace = true, features = ["serde"] }
+ctor = { workspace = true }
+slug = "0.1"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+reinhardt-test = { workspace = true }
+rstest = { workspace = true }
+tokio-test = "0.4"
+testcontainers = { workspace = true }
+
+[features]
+default = []
+# Note: Database backend features are inherited from workspace

@@ -88,7 +88,7 @@ impl Question {
 #[admin(model,
     for = Question,
     name = "Question",
-    list_display = [question_text, pub_date],
+    list_display = [question_text, pub_date, was_published_recently],
     list_filter = [pub_date],
     search_fields = [question_text],
     ordering = [(pub_date, desc)],
@@ -121,7 +121,8 @@ pub struct Choice {
 #[admin(model,
     for = Choice,
     name = "Choice",
-    list_display = [choice_text, votes],
+    list_display = [choice_text, votes, question],
+    list_filter = [question],
     search_fields = [choice_text],
     ordering = [(votes, desc)]
 )]

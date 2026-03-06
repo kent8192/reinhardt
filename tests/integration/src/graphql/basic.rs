@@ -13,4 +13,4 @@ pub mod schema_validation;
 pub mod variables_aliases;
 
 // Re-export fixtures for convenience
-pub use super::fixtures::*;
+pub use crate::graphql::fixtures::*;

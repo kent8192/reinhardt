@@ -53,6 +53,8 @@ reinhardt-conf = { workspace = true }
 reinhardt-admin = { workspace = true, features = ["core"] }
 reinhardt-pages = { workspace = true }
 reinhardt-commands = { workspace = true }
+reinhardt-payment = { workspace = true }
+reinhardt-payment-mocks = { workspace = true }
 
 # HTTP primitives (used in lib.rs make_request helpers)
 bytes = { workspace = true }

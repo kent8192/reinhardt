@@ -306,9 +306,9 @@ dependencies = ["docker-cleanup-force", "test-only"]
 # ============================================================================
 
 [tasks.coverage-unit]
-description = "Run unit tests with coverage (generates LCOV report)"
+description = "Run unit tests with coverage (generates Codecov JSON report)"
 command = "cargo"
-args = ["llvm-cov", "nextest", "--workspace", "--lib", "--all-features", "--no-fail-fast", "--lcov", "--output-path", "/tmp/reinhardt-unit-lcov.info"]
+args = ["llvm-cov", "nextest", "--workspace", "--lib", "--all-features", "--no-fail-fast", "--codecov", "--output-path", "/tmp/reinhardt-unit-codecov.json"]
 
 [tasks.coverage-html]
 description = "Run unit tests with coverage and open HTML report"
@@ -352,6 +352,11 @@ env = { RUSTDOCFLAGS = "--cfg docsrs -D warnings", RUSTUP_TOOLCHAIN = "nightly" 
 # ============================================================================
 # Utility Tasks
 # ============================================================================
+
+[tasks.audit]
+description = "Run security audit for known vulnerabilities"
+command = "cargo"
+args = ["audit"]
 
 [tasks.outdated]
 description = "Check for outdated dependencies"
@@ -556,3 +561,22 @@ dependencies = ["check", "fmt", "clippy", "test", "examples-test"]
 [tasks.ci-with-examples]
 description = "Alias for ci-full"
 dependencies = ["ci-full"]
+
+# ============================================================================
+# Mutation Testing Tasks
+# ============================================================================
+
+[tasks.mutants]
+description = "Run mutation testing on a single crate (use CRATE env var)"
+command = "cargo"
+args = ["mutants", "-p", "${CRATE}", "--test-tool", "nextest", "--timeout-multiplier", "2", "--jobs", "1"]
+
+[tasks.mutants-shard]
+description = "Run mutation testing for a shard (use SHARD and TOTAL_SHARDS env vars, e.g. SHARD=1 TOTAL_SHARDS=5)"
+command = "cargo"
+args = ["mutants", "--shard", "${SHARD}/${TOTAL_SHARDS}", "--test-tool", "nextest", "--timeout-multiplier", "2", "--jobs", "1"]
+
+[tasks.mutants-all]
+description = "Run mutation testing for all mutants (no sharding)"
+command = "cargo"
+args = ["mutants", "--test-tool", "nextest", "--timeout-multiplier", "2", "--jobs", "1"]

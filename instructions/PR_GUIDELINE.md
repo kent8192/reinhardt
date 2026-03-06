@@ -390,7 +390,7 @@ cargo make clippy-check
 
 ### RP-5 (MUST): Use Three-Dot Diff for PR Verification
 
-PR の差分検証には three-dot diff を使用する。
+Use three-dot diff for verifying PR changes.
 
 - **MUST** use three-dot diff (`...`) to verify PR changes from the merge base
 - Three-dot diff excludes merge history noise and shows only changes introduced by the PR

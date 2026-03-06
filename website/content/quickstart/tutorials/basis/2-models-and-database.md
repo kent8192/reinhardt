@@ -9,7 +9,7 @@ sidebar_weight = 20
 # Part 2: Models and Database
 
 In this tutorial, we'll set up a database and create our first models using
-Reinhardt's ORM layer, which is built on reinhardt-query.
+Reinhardt's ORM layer, which is built on Reinhardt's own query builder (reinhardt-query).
 
 ## Database Setup
 

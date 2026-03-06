@@ -507,6 +507,7 @@ Before submitting code:
 - Apply `agent-suspect` label to all agent-detected bug Issues
 - Verify agent-detected bugs independently before removing `agent-suspect` label
 - Use independent context (separate agent session) for agent re-evaluation of `agent-suspect` Issues
+- Obtain SP-6 approval before adding non-breaking APIs during RC phase (`enhancement` + `rc-addition` labels + maintainer approval)
 
 ### ❌ NEVER DO
 - Use `mod.rs` files (deprecated pattern)

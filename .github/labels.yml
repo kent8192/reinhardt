@@ -173,6 +173,10 @@
   color: "1f883d"
   description: "Approved for develop branch merge into main (version transition)"
 
+- name: rc-addition
+  color: "7ee787"
+  description: "Approved non-breaking API addition during RC phase (SP-6)"
+
 # Process Labels
 - name: process
   color: "cfd3d7"

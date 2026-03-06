@@ -897,7 +897,7 @@ pub use reinhardt_test::{APIClient, APIRequestFactory, APITestCase, TestResponse
 #[cfg(all(feature = "storage", not(target_arch = "wasm32")))]
 pub use reinhardt_utils::storage::{InMemoryStorage, LocalStorage, Storage};
 
-// Server-side only prelude (NOT for WASM)
+/// Convenience re-exports of commonly used types (server-side only).
 #[cfg(not(target_arch = "wasm32"))]
 pub mod prelude {
 	// Core types - always available
@@ -1067,29 +1067,31 @@ pub use reinhardt_websockets::{
 	ConsumerContext, Message, WebSocketConsumer, WebSocketError, WebSocketResult,
 };
 
-// Re-export database modules for Model derive macro generated code
-// These must be available at `::reinhardt::db::*` for the macro to work correctly
+/// Database re-exports for Model derive macro generated code.
+///
+/// These must be available at `::reinhardt::db::*` for the macro to work correctly.
 #[cfg(all(feature = "database", not(target_arch = "wasm32")))]
 pub mod db {
 	// Re-export commonly used types at module level for easier access
 	pub use reinhardt_db::DatabaseConnection;
 	pub use reinhardt_db::DatabaseError as Error;
 
-	// Explicitly re-export modules used by Model derive macro
+	/// Database migration types and utilities.
 	pub mod migrations {
 		pub use reinhardt_db::migrations::*;
 	}
 
+	/// ORM query building and model operations.
 	pub mod orm {
 		pub use reinhardt_db::orm::*;
 	}
 
-	// Re-export associations module for relationship definitions
+	/// Model relationship (association) definitions.
 	pub mod associations {
 		pub use reinhardt_db::associations::*;
 	}
 
-	// Re-export prelude for convenience
+	/// Convenience re-exports for database operations.
 	pub mod prelude {
 		pub use reinhardt_db::prelude::*;
 	}

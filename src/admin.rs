@@ -44,16 +44,18 @@
 #[cfg(not(target_arch = "wasm32"))]
 extern crate reinhardt_admin;
 
-// Re-export submodules for structured access
+/// Admin interface adapter implementations.
 pub mod adapters {
 	pub use reinhardt_admin::adapters::*;
 }
 
+/// Core admin registration and configuration types.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod core {
 	pub use reinhardt_admin::core::*;
 }
 
+/// Server-side admin route handlers and views.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod server {
 	pub use reinhardt_admin::server::*;

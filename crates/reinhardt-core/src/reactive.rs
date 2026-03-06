@@ -6,9 +6,9 @@
 //!
 //! ## Core Primitives
 //!
-//! - [`Signal<T>`] - A reactive value that can change over time
-//! - [`Effect`] - A side effect that automatically reruns when dependencies change
-//! - [`Memo<T>`] - A cached computation that updates when dependencies change
+//! - `Signal<T>` - A reactive value that can change over time
+//! - `Effect` - A side effect that automatically reruns when dependencies change
+//! - `Memo<T>` - A cached computation that updates when dependencies change
 //!
 //! ## Architecture
 //!

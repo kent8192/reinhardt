@@ -67,19 +67,32 @@
 
 pub mod apply_update;
 pub use apply_update::ApplyUpdate;
+/// HTTP endpoint routing and handler registration.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod endpoint;
+/// Error types and exception handling.
 pub mod exception;
+/// Flash message storage framework.
 pub mod messages;
+/// Content negotiation for request/response formats.
 pub mod negotiation;
+/// Pagination strategies (page-based, cursor, limit-offset).
 pub mod pagination;
+/// Request body parsers (JSON, form, multipart, etc.).
 pub mod parsers;
+/// Rate limiting strategies.
 pub mod rate_limit;
+/// Reactive state management primitives.
 pub mod reactive;
+/// Security utilities (password hashing, CSRF, etc.).
 pub mod security;
+/// Data serialization framework.
 pub mod serializers;
+/// Signal/event dispatch system.
 pub mod signals;
+/// Core type definitions.
 pub mod types;
+/// Field and data validators.
 pub mod validators;
 
 // Re-export Page types when page feature is enabled
@@ -100,7 +113,7 @@ pub use async_trait::async_trait;
 #[cfg(not(target_arch = "wasm32"))]
 pub use tokio;
 
-// Re-export serde with json as a submodule
+/// Re-export of serde serialization types and serde_json.
 #[cfg(feature = "serde")]
 pub mod serde {
 	pub use ::serde::{Deserialize, Deserializer, Serialize, Serializer, de, ser};

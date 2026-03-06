@@ -39,18 +39,30 @@
 //! # }
 //! ```
 
+/// Compressed request body parser (gzip, deflate, brotli).
 pub mod compressed;
+/// File upload parser.
 pub mod file;
+/// URL-encoded form data parser.
 pub mod form;
+/// JSON request body parser.
 pub mod json;
+/// MessagePack binary format parser.
 pub mod msgpack;
+/// Multipart form data parser.
 pub mod multipart;
+/// Base parser trait definition.
 pub mod parser;
+/// Protocol Buffers parser.
 pub mod protobuf;
+/// Streaming request body parser.
 pub mod streaming;
+/// Parser input validation.
 pub mod validator;
+/// XML request body parser.
 #[cfg(feature = "xml")]
 pub mod xml;
+/// YAML request body parser.
 #[cfg(feature = "yaml")]
 pub mod yaml;
 

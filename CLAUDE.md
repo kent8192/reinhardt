@@ -511,6 +511,7 @@ Before submitting code:
 - Forward-merge `main` into develop branch regularly (DB-4)
 - Merge develop branch into `main` after stable release using merge commit, not squash (DB-5)
 - Use independent context (separate agent session) for agent re-evaluation of `agent-suspect` Issues
+- Obtain SP-6 approval before adding non-breaking APIs during RC phase (`enhancement` + `rc-addition` labels + maintainer approval)
 
 ### ❌ NEVER DO
 - Use `mod.rs` files (deprecated pattern)

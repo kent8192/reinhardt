@@ -57,16 +57,6 @@ impl UserStorage {
 			.cloned()
 	}
 
-	/// Find a user by email
-	pub async fn find_by_email(&self, email: &str) -> Option<User> {
-		self.users
-			.read()
-			.await
-			.values()
-			.find(|u| u.email == email)
-			.cloned()
-	}
-
 	/// List all users
 	pub async fn list_users(&self) -> Vec<User> {
 		self.users.read().await.values().cloned().collect()

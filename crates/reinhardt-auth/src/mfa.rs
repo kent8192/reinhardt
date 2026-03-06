@@ -10,6 +10,13 @@ use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+/// Project-specific UUID namespace for deterministic user ID generation.
+///
+/// Computed from `Uuid::new_v5(&Uuid::NAMESPACE_URL, b"https://reinhardt.rs/user-id")`.
+/// Using a project-specific namespace avoids semantic misuse of RFC 4122
+/// predefined namespaces (e.g. `NAMESPACE_OID` is intended for ISO OID strings).
+const USER_ID_NAMESPACE: Uuid = uuid::uuid!("c7a85537-073f-5092-8d10-774e109477c9");
+
 /// MFA authentication backend
 ///
 /// Provides Time-based One-Time Password (TOTP) authentication.
@@ -179,7 +186,7 @@ impl AuthenticationBackend for MFAAuthentication {
 			(Some(user), Some(mfa_code)) => {
 				if self.verify_totp(user, mfa_code).await? {
 					Ok(Some(Box::new(SimpleUser {
-						id: Uuid::new_v5(&Uuid::NAMESPACE_OID, user.as_bytes()),
+						id: Uuid::new_v5(&USER_ID_NAMESPACE, user.as_bytes()),
 						username: user.to_string(),
 						email: String::new(),
 						// Security defaults: privilege flags are set to restrictive values
@@ -203,7 +210,7 @@ impl AuthenticationBackend for MFAAuthentication {
 		let secrets = self.secrets.lock().await;
 		if secrets.contains_key(user_id) {
 			Ok(Some(Box::new(SimpleUser {
-				id: Uuid::new_v5(&Uuid::NAMESPACE_OID, user_id.as_bytes()),
+				id: Uuid::new_v5(&USER_ID_NAMESPACE, user_id.as_bytes()),
 				username: user_id.to_string(),
 				email: String::new(),
 				// Security defaults: privilege flags are set to restrictive values
@@ -450,29 +457,41 @@ mod tests {
 	}
 
 	#[rstest]
-	fn test_uuid_v5_same_username_produces_same_id() {
+	#[tokio::test]
+	async fn test_get_user_same_username_produces_same_id() {
 		// Arrange
-		let username = "alice";
+		let mfa = MFAAuthentication::new("TestApp");
+		mfa.register_user("alice", "JBSWY3DPEHPK3PXP").await;
 
 		// Act
-		let id1 = Uuid::new_v5(&Uuid::NAMESPACE_OID, username.as_bytes());
-		let id2 = Uuid::new_v5(&Uuid::NAMESPACE_OID, username.as_bytes());
+		let user1 = mfa.get_user("alice").await.unwrap().unwrap();
+		let user2 = mfa.get_user("alice").await.unwrap().unwrap();
 
 		// Assert
-		assert_eq!(id1, id2, "same username must produce the same UUID");
+		assert_eq!(
+			user1.id(),
+			user2.id(),
+			"same username must produce the same UUID"
+		);
 	}
 
 	#[rstest]
-	fn test_uuid_v5_different_usernames_produce_different_ids() {
+	#[tokio::test]
+	async fn test_get_user_different_usernames_produce_different_ids() {
 		// Arrange
-		let username_a = "alice";
-		let username_b = "bob";
+		let mfa = MFAAuthentication::new("TestApp");
+		mfa.register_user("alice", "JBSWY3DPEHPK3PXP").await;
+		mfa.register_user("bob", "KRSXG5CTMVRXEZLUKN").await;
 
 		// Act
-		let id_a = Uuid::new_v5(&Uuid::NAMESPACE_OID, username_a.as_bytes());
-		let id_b = Uuid::new_v5(&Uuid::NAMESPACE_OID, username_b.as_bytes());
+		let user_a = mfa.get_user("alice").await.unwrap().unwrap();
+		let user_b = mfa.get_user("bob").await.unwrap().unwrap();
 
 		// Assert
-		assert_ne!(id_a, id_b, "different usernames must produce different UUIDs");
+		assert_ne!(
+			user_a.id(),
+			user_b.id(),
+			"different usernames must produce different UUIDs"
+		);
 	}
 }

@@ -263,7 +263,6 @@ mod tests {
 	use hyper::{HeaderMap, Method};
 	use reinhardt_http::Request;
 	use rstest::rstest;
-
 	/// Helper to create a request with a given Authorization header value.
 	fn create_request_with_bearer(token: &str) -> Request {
 		let mut headers = HeaderMap::new();
@@ -453,7 +452,13 @@ mod tests {
 		assert!(user.is_active());
 		assert!(!user.is_admin(), "admin flag should default to false");
 		assert!(!user.is_staff(), "staff flag should default to false");
-		assert!(!user.is_superuser(), "superuser flag should default to false");
+		assert!(
+			!user.is_superuser(),
+			"superuser flag should default to false"
+		);
+		// Email emptiness is verified in test_jwt_claims_do_not_contain_email.
+		// The User trait does not expose email, so direct assertion is not
+		// possible through the trait object returned by authenticate().
 	}
 
 	/// Verifies that the JWT `authenticate` implementation constructs `SimpleUser`

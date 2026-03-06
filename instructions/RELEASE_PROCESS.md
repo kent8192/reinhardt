@@ -41,6 +41,14 @@ Reinhardt uses **release-plz** for fully automated release management:
 3. **Review Before Release**: Release PRs allow review before publishing
 4. **Per-Crate Releases**: Only changed crates are released
 
+### Develop Branch Lifecycle
+
+During the RC phase, a `develop/0.x+1.0` branch exists for next-version development (see instructions/STABILITY_POLICY.md § DB-1 ~ DB-7). This branch interacts with the release workflow as follows:
+
+- **During RC**: release-plz monitors `main` only. The develop branch is not affected by release-plz operations. No configuration changes are needed.
+- **After stable release**: Merging the develop branch into `main` introduces new features and breaking changes. release-plz detects these changes on the next push and generates Release PRs for the new version cycle (e.g., `0.2.0-alpha.1`).
+- **No manual version management**: `Cargo.toml` versions in the develop branch do not need manual updates. release-plz handles versioning after the branch is merged into `main`.
+
 ---
 
 ## How release-plz Works

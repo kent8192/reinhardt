@@ -11,6 +11,7 @@ This document defines the stability guarantees and versioning policies for the R
 - [Version Lifecycle](#version-lifecycle)
 - [Alpha Phase](#alpha-phase)
 - [RC Phase](#rc-phase)
+- [Develop Branch Strategy](#develop-branch-strategy)
 - [Stable Phase](#stable-phase)
 - [RC to Stable Criteria](#rc-to-stable-criteria)
 - [Version Bump Rules During RC](#version-bump-rules-during-rc)
@@ -178,6 +179,108 @@ Feature commits (`feat:`) are **NOT** permitted during RC (enforced by review).
 
 ---
 
+## Develop Branch Strategy
+
+During the RC phase, `main` is restricted to bug fixes only (SP-2). To continue development of features and breaking changes for the next version, a dedicated develop branch is used.
+
+### DB-1 (MUST): Branch Creation
+
+When the version group enters the RC phase (first `rc.1` tag is created), a `develop/0.x+1.0` branch MUST be created from `main`:
+
+```bash
+# Example: when 0.1.0-rc.1 is released, create develop branch for 0.2.0
+git checkout main
+git checkout -b develop/0.2.0
+git push origin develop/0.2.0
+```
+
+Since all crates follow a unified version group, only one develop branch exists per RC cycle.
+
+### DB-2 (MUST): Permitted Changes
+
+The `develop/0.x+1.0` branch accepts changes that are NOT permitted on `main` during RC:
+
+| Permitted on develop | Examples |
+|---------------------|----------|
+| Breaking changes | API modifications, trait signature changes |
+| New features (`feat:`) | New API endpoints, new configuration options |
+| New API additions | New public methods, types, traits, modules |
+| New dependencies | Adding new crate dependencies |
+| Interface-changing refactoring | Code restructuring that changes public interfaces |
+
+All changes MUST follow the same coding standards, testing requirements, and commit conventions as `main`.
+
+### DB-3 (MUST): Bug Fix Flow
+
+Bug fixes during the RC phase MUST be applied to `main` first, then propagated to the develop branch via forward-merge (DB-4). This ensures:
+
+- RC releases always contain the latest fixes
+- The develop branch inherits all stability improvements
+- No bug fix is lost when the develop branch is eventually merged back
+
+**NEVER** apply a bug fix only to the develop branch. If the bug exists in the RC version, it must be fixed on `main` first.
+
+### DB-4 (SHOULD): Forward-Merge from Main
+
+Bug fixes merged to `main` SHOULD be regularly forward-merged into the develop branch:
+
+- **Minimum frequency**: After each RC version bump (e.g., `rc.1` → `rc.2`)
+- **Recommended frequency**: Weekly, or after each significant bug fix merge
+- **Merge strategy**: Use the worktree-based merge strategy (per PR_GUIDELINE.md CR-1)
+
+```bash
+# Forward-merge main into develop branch using worktree
+git worktree add /tmp/reinhardt-develop develop/0.2.0
+cd /tmp/reinhardt-develop
+git merge main
+# Resolve conflicts if any
+git push origin develop/0.2.0
+cd -
+git worktree remove /tmp/reinhardt-develop
+```
+
+### DB-5 (MUST): Lifecycle End
+
+After the stable release (e.g., `0.1.0` is published):
+
+1. **Final forward-merge**: Merge `main` into the develop branch to incorporate the stable release
+2. **Merge into main**: Merge the develop branch into `main` using a merge commit (NOT squash)
+3. **Delete the branch**: Remove the develop branch after successful merge
+
+```bash
+# After 0.1.0 stable release
+git checkout develop/0.2.0
+git merge main                    # Final forward-merge
+git checkout main
+git merge --no-ff develop/0.2.0   # Merge commit preserves full history
+git push origin main
+git branch -d develop/0.2.0
+git push origin --delete develop/0.2.0
+```
+
+**NEVER** squash-merge the develop branch. A merge commit preserves the complete development history and makes it easier to trace the origin of changes.
+
+### DB-6 (MUST): release-plz Interaction
+
+release-plz is configured to monitor `main` only:
+
+- The develop branch is **NOT** monitored by release-plz
+- No Release PRs, publishing, or tag creation occurs for the develop branch
+- `Cargo.toml` versions in the develop branch do NOT need manual management
+- After the develop branch is merged into `main`, release-plz will detect the changes and generate appropriate Release PRs for the next version cycle
+
+**No changes to `release-plz.toml` are required** for the develop branch workflow.
+
+### DB-7 (SHOULD): CI Coverage
+
+The existing CI configuration (`ci.yml`) runs on all pull requests regardless of target branch:
+
+- PRs targeting `develop/0.x+1.0` are automatically covered by CI
+- `cargo-semver-checks` may report breaking changes on develop branch PRs — this is expected and informational, not blocking
+- All other CI checks (tests, clippy, fmt, docs) apply normally
+
+---
+
 ## Stable Phase
 
 ### ST-1 (MUST): SemVer Compliance
@@ -328,6 +431,11 @@ During the RC phase:
 - Use the API Change Proposal template for breaking changes during RC
 - Verify agent-detected bugs independently before removing `agent-suspect` label (SC-2a)
 - Exclude `agent-suspect` labeled issues from stability timer reset
+- Create `develop/0.x+1.0` branch when version group enters RC phase (DB-1)
+- Direct next-version features and breaking changes to `develop/0.x+1.0` during RC (DB-2)
+- Apply RC bug fixes to `main` first, then forward-merge to develop (DB-3)
+- Forward-merge `main` into develop branch regularly (DB-4)
+- Merge develop branch into `main` after stable release using merge commit (DB-5)
 
 ### NEVER DO
 - Regress from RC back to alpha
@@ -342,6 +450,11 @@ During the RC phase:
 - Introduce new pre-release identifiers during RC (e.g., `-beta`)
 - Remove `agent-suspect` label without independent verification (separate agent or human)
 - Count `agent-suspect` labeled issues toward stability timer reset
+- Merge next-version features or breaking changes directly into `main` during RC (use `develop/0.x+1.0`)
+- Apply bug fixes only to the develop branch without fixing on `main` first (DB-3)
+- Configure release-plz to monitor the develop branch (DB-6)
+- Delete the develop branch before merging into `main` (DB-5)
+- Squash-merge the develop branch into `main` (DB-5)
 
 ---
 

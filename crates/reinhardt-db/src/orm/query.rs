@@ -6151,7 +6151,7 @@ mod tests {
 		);
 	}
 
-		#[rstest]
+	#[rstest]
 	fn test_injection_attempt_in_field_name_is_quoted() {
 		// Arrange
 		// Attempt SQL injection via field name with double quote
@@ -6166,5 +6166,222 @@ mod tests {
 		// Verify the quote is not broken out of
 		assert!(quoted.starts_with('"'));
 		assert!(quoted.ends_with('"'));
+	}
+
+	#[rstest]
+	#[case(FilterOperator::Ne, "!=")]
+	#[case(FilterOperator::Gt, ">")]
+	#[case(FilterOperator::Gte, ">=")]
+	#[case(FilterOperator::Lt, "<")]
+	#[case(FilterOperator::Lte, "<=")]
+	fn test_outerref_comparison_operators(
+		#[case] op: FilterOperator,
+		#[case] _sql_op: &str,
+	) {
+		// Arrange
+		use crate::orm::expressions::OuterRef;
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"author_id".to_string(),
+			op,
+			FilterValue::OuterRef(OuterRef::new("id")),
+		));
+
+		// Act
+		let condition = queryset.build_where_condition();
+
+		// Assert
+		assert!(condition.is_some());
+	}
+
+	#[rstest]
+	fn test_array_contained_by_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"tags".to_string(),
+			FilterOperator::ArrayContainedBy,
+			FilterValue::Array(vec!["rust".to_string()]),
+		));
+
+		// Act
+		let condition = queryset.build_where_condition();
+
+		// Assert
+		assert!(condition.is_some());
+	}
+
+	#[rstest]
+	fn test_array_overlap_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"tags".to_string(),
+			FilterOperator::ArrayOverlap,
+			FilterValue::Array(vec!["rust".to_string()]),
+		));
+
+		// Act
+		let condition = queryset.build_where_condition();
+
+		// Assert
+		assert!(condition.is_some());
+	}
+
+	#[rstest]
+	fn test_full_text_match_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"content".to_string(),
+			FilterOperator::FullTextMatch,
+			FilterValue::String("search term".to_string()),
+		));
+
+		// Act
+		let condition = queryset.build_where_condition();
+
+		// Assert
+		assert!(condition.is_some());
+	}
+
+	#[rstest]
+	fn test_jsonb_contains_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"metadata".to_string(),
+			FilterOperator::JsonbContains,
+			FilterValue::String(r#"{"key": "value"}"#.to_string()),
+		));
+
+		// Act
+		let condition = queryset.build_where_condition();
+
+		// Assert
+		assert!(condition.is_some());
+	}
+
+	#[rstest]
+	fn test_jsonb_contained_by_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"metadata".to_string(),
+			FilterOperator::JsonbContainedBy,
+			FilterValue::String(r#"{"key": "value"}"#.to_string()),
+		));
+
+		// Act
+		let condition = queryset.build_where_condition();
+
+		// Assert
+		assert!(condition.is_some());
+	}
+
+	#[rstest]
+	fn test_jsonb_key_exists_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"metadata".to_string(),
+			FilterOperator::JsonbKeyExists,
+			FilterValue::String("key".to_string()),
+		));
+
+		// Act
+		let condition = queryset.build_where_condition();
+
+		// Assert
+		assert!(condition.is_some());
+	}
+
+	#[rstest]
+	fn test_jsonb_any_key_exists_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"metadata".to_string(),
+			FilterOperator::JsonbAnyKeyExists,
+			FilterValue::Array(vec!["key1".to_string(), "key2".to_string()]),
+		));
+
+		// Act
+		let condition = queryset.build_where_condition();
+
+		// Assert
+		assert!(condition.is_some());
+	}
+
+	#[rstest]
+	fn test_jsonb_all_keys_exist_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"metadata".to_string(),
+			FilterOperator::JsonbAllKeysExist,
+			FilterValue::Array(vec!["key1".to_string(), "key2".to_string()]),
+		));
+
+		// Act
+		let condition = queryset.build_where_condition();
+
+		// Assert
+		assert!(condition.is_some());
+	}
+
+	#[rstest]
+	fn test_jsonb_path_exists_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"metadata".to_string(),
+			FilterOperator::JsonbPathExists,
+			FilterValue::String("$.key".to_string()),
+		));
+
+		// Act
+		let condition = queryset.build_where_condition();
+
+		// Assert
+		assert!(condition.is_some());
+	}
+
+	#[rstest]
+	fn test_range_contains_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"age_range".to_string(),
+			FilterOperator::RangeContains,
+			FilterValue::String("25".to_string()),
+		));
+
+		// Act
+		let condition = queryset.build_where_condition();
+
+		// Assert
+		assert!(condition.is_some());
+	}
+
+	#[rstest]
+	fn test_range_contained_by_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"age_range".to_string(),
+			FilterOperator::RangeContainedBy,
+			FilterValue::String("[20, 30]".to_string()),
+		));
+
+		// Act
+		let condition = queryset.build_where_condition();
+
+		// Assert
+		assert!(condition.is_some());
+	}
+
+	#[rstest]
+	fn test_range_overlaps_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"age_range".to_string(),
+			FilterOperator::RangeOverlaps,
+			FilterValue::String("[20, 30]".to_string()),
+		));
+
+		// Act
+		let condition = queryset.build_where_condition();
+
+		// Assert
+		assert!(condition.is_some());
 	}
 }

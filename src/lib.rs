@@ -566,6 +566,13 @@ pub use reinhardt_db::orm::{
 	UniqueConstraint,
 };
 
+// Re-export reinhardt-query prelude types (via reinhardt-db orm)
+// Query builder Query type is available as reinhardt::db::orm::Query
+// to avoid name conflict with reinhardt::Query (DI params extractor).
+// Value is re-exported as QueryBuilderValue to avoid conflicts with existing types.
+#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+pub use reinhardt_db::orm::{IntoValue, Order, QueryBuilderValue};
+
 // Re-export database pool
 #[cfg(all(feature = "database", not(target_arch = "wasm32")))]
 pub use reinhardt_db::pool::{ConnectionPool, PoolConfig, PoolError};
@@ -1049,6 +1056,16 @@ pub mod prelude {
 
 	// Admin feature - use reinhardt-admin-api crate directly for admin functionality
 }
+
+// Re-export WebSocket types
+#[cfg(all(feature = "websockets-pages", not(target_arch = "wasm32")))]
+pub use reinhardt_websockets::integration::pages::PagesAuthenticator;
+#[cfg(all(feature = "websockets", not(target_arch = "wasm32")))]
+pub use reinhardt_websockets::room::RoomManager;
+#[cfg(all(feature = "websockets", not(target_arch = "wasm32")))]
+pub use reinhardt_websockets::{
+	ConsumerContext, Message, WebSocketConsumer, WebSocketError, WebSocketResult,
+};
 
 // Re-export database modules for Model derive macro generated code
 // These must be available at `::reinhardt::db::*` for the macro to work correctly

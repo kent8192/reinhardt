@@ -168,6 +168,10 @@
   color: "ff7b72"
   description: "Issues related to RC release migration"
 
+- name: rc-addition
+  color: "7ee787"
+  description: "Approved non-breaking API addition during RC phase (SP-6)"
+
 # Process Labels
 - name: process
   color: "cfd3d7"

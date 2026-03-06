@@ -71,9 +71,9 @@ The RC phase is a stabilization period. The primary goal is to validate the API 
 
 During the RC phase (`0.1.0-rc.N`):
 
-- **NO** new public API additions (structs, traits, functions, methods, modules)
+- **NO** new public API additions — **except** backward-compatible (non-breaking) additions approved through the RC Non-Breaking Addition Review process (see SP-6)
 - **NO** new feature flags
-- **NO** new public re-exports
+- **NO** new public re-exports (unless part of an SP-6-approved addition)
 - Private/internal APIs may still be modified if they do not affect the public surface
 
 **Exception: Backward-Compatible Renames via Deprecation Alias**
@@ -97,7 +97,7 @@ Requirements for deprecation-alias renames:
 - Existing code using the old name MUST continue to compile without modification
 - The rename MUST be documented in the CHANGELOG
 
-**Rationale:** The RC phase validates the existing API surface. Adding new APIs during RC undermines this validation and introduces untested surface area. However, fixing naming issues discovered during RC validation improves API quality for the stable release, and deprecation aliases ensure no existing code breaks.
+**Rationale:** The RC phase validates the existing API surface. Unrestricted API additions during RC could introduce untested surface area. However, non-breaking additions that have been reviewed and approved through SP-6 maintain quality while providing necessary flexibility. Deprecation aliases ensure no existing code breaks when renaming.
 
 ### SP-2 (MUST): Bug-Fix-Only Policy
 
@@ -111,16 +111,17 @@ Only the following changes are permitted during RC:
 | Performance fixes | Optimization of existing behavior (no API changes) |
 | Dependency updates | Security patches, bug fix versions only |
 | Deprecation-alias renames | Rename public items with backward-compatible aliases (see SP-1 exception) |
+| Approved non-breaking additions | New APIs approved through SP-6 review process |
 
 | NOT Permitted | Examples |
 |---------------|----------|
-| New features | New API endpoints, new configuration options |
-| API additions | New public methods, new public types (even if non-breaking) |
+| New features without SP-6 approval | New API endpoints, new configuration options |
+| Unapproved API additions | New public methods, new public types without SP-6 approval |
 | Refactoring | Code restructuring that changes public interfaces |
 | New dependencies | Adding new crate dependencies |
 
-**Why non-breaking feature additions are not permitted:**
-Non-breaking API additions (new functions, types, traits) are safe from a SemVer perspective, but they undermine the purpose of the RC phase. New APIs introduced during RC have not been validated through the stabilization period, resulting in untested surface area entering the stable release. Feature additions should target the next version cycle (`0.2.0-alpha`).
+**Non-breaking additions during RC:**
+Non-breaking API additions (new functions, types, traits) are permitted during RC only when approved through the SP-6 review process. This ensures that additions are intentional and reviewed, while avoiding unnecessary restrictions that conflict with SemVer conventions and industry practice.
 
 ### SP-3 (MUST): Breaking Changes Require Approval
 
@@ -174,7 +175,27 @@ fix(orm): resolve panic when empty query result is returned
 fix(auth): correct token expiration calculation off-by-one error
 ```
 
-Feature commits (`feat:`) are **NOT** permitted during RC (enforced by review).
+Feature commits (`feat:`) are **NOT** permitted during RC unless approved through SP-6 (enforced by review).
+
+### SP-6 (MUST): RC Non-Breaking Addition Review
+
+Non-breaking API additions during the RC phase require a lightweight approval process:
+
+1. Create a GitHub Issue documenting the technical justification for the addition
+2. Apply `enhancement` and `rc-addition` labels
+3. Obtain maintainer approval before implementation
+4. Migration guide is **not required** (the addition is non-breaking)
+
+**Permitted additions:**
+- New public functions, methods, structs, traits, or modules that do not affect existing API surface
+- Additions where all existing code compiles and behaves identically without modification
+
+**Not permitted (even with approval):**
+- New feature flags (remains prohibited under SP-1)
+- Additions that require changes to existing API signatures
+- Additions that alter the behavior of existing APIs
+
+**Rationale:** SemVer and industry practice (e.g., Bevy) permit non-breaking additions in pre-release versions. A lightweight approval process ensures quality without unnecessarily blocking improvements. The `cargo-semver-checks --release-type minor` CI check already validates that additions are non-breaking.
 
 ---
 
@@ -286,7 +307,7 @@ When a bug fix is applied during the RC phase:
 ```
 
 Each RC increment MUST:
-- Include only bug fixes (per SP-2)
+- Include bug fixes and/or approved non-breaking additions (per SP-2, SP-6)
 - Update the CHANGELOG with fix descriptions
 - Reset the stability timer (per SC-2)
 
@@ -307,7 +328,7 @@ The stable release MUST:
 
 During the RC phase:
 - **NEVER** bump to a new minor or major version
-- **NEVER** add `feat:` commits
+- **NEVER** add unapproved `feat:` commits (approved SP-6 additions may use `feat:`)
 - **NEVER** introduce new pre-release identifiers (e.g., `0.1.0-rc.1-beta.1`)
 
 ---
@@ -316,7 +337,7 @@ During the RC phase:
 
 ### MUST DO
 - Follow the monotonic lifecycle progression: alpha → RC → stable
-- Freeze public API surface during RC phase (no new APIs, no new features)
+- Freeze public API surface during RC phase (non-breaking additions require SP-6 approval)
 - Apply bug-fix-only policy during RC phase
 - Preserve backward compatibility when renaming APIs during RC (deprecation alias required)
 - Obtain explicit maintainer approval for any breaking change during RC
@@ -326,13 +347,14 @@ During the RC phase:
 - Meet ALL SC-1 criteria before transitioning to stable
 - Increment RC version for each bug fix release (`rc.1` → `rc.2`)
 - Use the API Change Proposal template for breaking changes during RC
+- Obtain SP-6 approval (issue + `rc-addition` label + maintainer sign-off) before adding non-breaking APIs during RC
 - Verify agent-detected bugs independently before removing `agent-suspect` label (SC-2a)
 - Exclude `agent-suspect` labeled issues from stability timer reset
 
 ### NEVER DO
 - Regress from RC back to alpha
-- Add new public APIs during the RC phase (even if non-breaking)
-- Add `feat:` commits during the RC phase
+- Add new public APIs during the RC phase without SP-6 approval
+- Add unapproved `feat:` commits during the RC phase (SP-6-approved additions may use `feat:`)
 - Rename public APIs during RC without a backward-compatible deprecation alias
 - Remove APIs deprecated during RC before the next major version
 - Apply breaking changes during RC without explicit maintainer approval

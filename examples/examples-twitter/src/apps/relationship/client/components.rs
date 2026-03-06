@@ -289,21 +289,19 @@ pub fn user_list(user_id: Uuid, list_type: UserListType) -> View {
 		let error_clone = error.clone();
 		let resource_for_effect = resource.clone();
 
-		reinhardt::pages::reactive::hooks::use_effect(move || {
-			match resource_for_effect.get() {
-				ResourceState::Loading => {
-					loading_clone.set(true);
-					error_clone.set(None);
-				}
-				ResourceState::Success(data) => {
-					users_clone.set(data);
-					loading_clone.set(false);
-					error_clone.set(None);
-				}
-				ResourceState::Error(err) => {
-					error_clone.set(Some(err));
-					loading_clone.set(false);
-				}
+		reinhardt::pages::reactive::hooks::use_effect(move || match resource_for_effect.get() {
+			ResourceState::Loading => {
+				loading_clone.set(true);
+				error_clone.set(None);
+			}
+			ResourceState::Success(data) => {
+				users_clone.set(data);
+				loading_clone.set(false);
+				error_clone.set(None);
+			}
+			ResourceState::Error(err) => {
+				error_clone.set(Some(err));
+				loading_clone.set(false);
 			}
 		});
 	}

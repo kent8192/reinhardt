@@ -52,21 +52,19 @@ pub fn profile_view(user_id: Uuid) -> View {
 		let error_setter = _set_error.clone();
 		let resource_for_effect = resource.clone();
 
-		use_effect(move || {
-			match resource_for_effect.get() {
-				ResourceState::Loading => {
-					loading_setter(true);
-					error_setter(None);
-				}
-				ResourceState::Success(data) => {
-					profile_setter(Some(data));
-					loading_setter(false);
-					error_setter(None);
-				}
-				ResourceState::Error(err) => {
-					error_setter(Some(err));
-					loading_setter(false);
-				}
+		use_effect(move || match resource_for_effect.get() {
+			ResourceState::Loading => {
+				loading_setter(true);
+				error_setter(None);
+			}
+			ResourceState::Success(data) => {
+				profile_setter(Some(data));
+				loading_setter(false);
+				error_setter(None);
+			}
+			ResourceState::Error(err) => {
+				error_setter(Some(err));
+				loading_setter(false);
 			}
 		});
 	}

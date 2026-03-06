@@ -116,20 +116,28 @@
 //! ```
 
 // Rust 2024 module system: use module.rs + module/ pattern
+/// Authentication backend trait and composite backend.
 #[path = "core/backend.rs"]
 pub mod backend;
+/// Base user trait defining minimal user identity.
 #[path = "core/base_user.rs"]
 pub mod base_user;
+/// Full user trait with extended profile fields.
 #[path = "core/full_user.rs"]
 pub mod full_user;
+/// Password hashing interface and implementations.
 #[path = "core/hasher.rs"]
 pub mod hasher;
+/// Permission trait and built-in permission classes.
 #[path = "core/permission.rs"]
 pub mod permission;
+/// Permission combinators (AND, OR, NOT).
 #[path = "core/permission_operators.rs"]
 pub mod permission_operators;
+/// Mixin for adding permission fields to user models.
 #[path = "core/permissions_mixin.rs"]
 pub mod permissions_mixin;
+/// Core user types (SimpleUser, AnonymousUser).
 #[path = "core/user.rs"]
 pub mod user;
 

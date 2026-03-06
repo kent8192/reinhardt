@@ -79,38 +79,63 @@ pub use core::Argon2Hasher;
 // Re-export permission operators from core
 pub use core::permission_operators;
 
-// Implementation-specific modules (kept in contrib)
+pub mod repository;
+pub use repository::{SimpleUserRepository, UserRepository};
+
+/// Advanced permission classes (role-based, object-level).
 pub mod advanced_permissions;
+/// Base user manager trait for CRUD operations.
 pub mod base_user_manager;
+/// HTTP Basic authentication backend.
 pub mod basic;
+/// Default user model with Argon2 password hashing.
 pub mod default_user;
+/// Default user manager implementation.
 pub mod default_user_manager;
+/// Group management (create, delete, assign users).
 pub mod group_management;
+/// Login/logout HTTP handlers.
 #[cfg(feature = "sessions")]
 pub mod handlers;
+/// IP-based permission classes (whitelist/blacklist with CIDR).
 pub mod ip_permission;
+/// JWT (JSON Web Token) authentication.
 #[cfg(feature = "jwt")]
 pub mod jwt;
+/// Multi-factor authentication support.
 pub mod mfa;
+/// Django-compatible model-level permissions.
 pub mod model_permissions;
+/// OAuth2 authentication provider.
 #[cfg(feature = "oauth")]
 pub mod oauth2;
+/// Object-level permission checking.
 pub mod object_permissions;
+/// Rate-limiting permission class.
 #[cfg(feature = "rate-limit")]
 pub mod rate_limit_permission;
+/// Remote user authentication (proxy-based).
 pub mod remote_user;
+/// REST API authentication backends.
 pub mod rest_authentication;
+/// Session-based authentication.
 #[cfg(feature = "sessions")]
 pub mod session;
+/// Social authentication providers (Google, GitHub, Apple, Microsoft).
 #[cfg(feature = "social")]
 pub mod social;
+/// Time-based permission class (time windows, date ranges).
 pub mod time_based_permission;
+/// Token blacklist for revocation.
 #[cfg(any(feature = "jwt", feature = "token"))]
 pub mod token_blacklist;
+/// Automatic token rotation.
 #[cfg(any(feature = "jwt", feature = "token"))]
 pub mod token_rotation;
+/// Token persistence storage backends.
 #[cfg(any(feature = "jwt", feature = "token"))]
 pub mod token_storage;
+/// User CRUD management.
 pub mod user_management;
 
 pub use advanced_permissions::{ObjectPermission as AdvancedObjectPermission, RoleBasedPermission};
@@ -135,7 +160,7 @@ pub use model_permissions::{
 #[cfg(feature = "oauth")]
 pub use oauth2::{
 	AccessToken, AuthorizationCode, GrantType, InMemoryOAuth2Store, OAuth2Application,
-	OAuth2Authentication, OAuth2TokenStore, SimpleUserRepository, UserRepository,
+	OAuth2Authentication, OAuth2TokenStore,
 };
 pub use object_permissions::{ObjectPermission, ObjectPermissionChecker, ObjectPermissionManager};
 pub use permission_operators::{AndPermission, NotPermission, OrPermission};
@@ -173,16 +198,23 @@ pub use user_management::{
 	CreateUserData, UpdateUserData, UserManagementError, UserManagementResult, UserManager,
 };
 
-/// Authentication errors
+/// Authentication errors that can occur during user verification.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthenticationError {
+	/// The provided credentials (username/password) are incorrect.
 	InvalidCredentials,
+	/// The requested user does not exist.
 	UserNotFound,
+	/// The user's session has expired.
 	SessionExpired,
+	/// The provided authentication token is invalid or malformed.
 	InvalidToken,
+	/// The request lacks valid authentication credentials.
 	NotAuthenticated,
+	/// A database error occurred during authentication.
 	DatabaseError(String),
+	/// An unspecified authentication error.
 	Unknown(String),
 }
 

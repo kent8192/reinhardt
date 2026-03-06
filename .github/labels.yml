@@ -168,6 +168,11 @@
   color: "ff7b72"
   description: "Issues related to RC release migration"
 
+# Develop Branch Migration Labels
+- name: migration-approved
+  color: "1f883d"
+  description: "Approved for develop branch merge into main (version transition)"
+
 - name: rc-addition
   color: "7ee787"
   description: "Approved non-breaking API addition during RC phase (SP-6)"

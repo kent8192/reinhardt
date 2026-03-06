@@ -24,6 +24,7 @@ prettyplease = "0.2"
 colored = "2.1"
 ctrlc = "3.4"
 regex = "1.10"
+reinhardt-deploy = { workspace = true }
 reinhardt-pages = {workspace = true, features = ["ast"]}
 zeroize = "1.8"
 

@@ -212,8 +212,10 @@ pub struct PageAttr {
 
 impl PageAttr {
 	/// Returns the HTML attribute name (converts underscores to hyphens).
+	///
+	/// Also strips the `r#` prefix if present (for raw identifiers like `r#for`, `r#type`).
 	pub fn html_name(&self) -> String {
-		self.name.to_string().replace('_', "-")
+		crate::core::attr_utils::ident_to_html_attr_name(&self.name.to_string())
 	}
 }
 

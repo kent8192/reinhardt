@@ -187,6 +187,37 @@ enum Commands {
 		#[arg(long)]
 		backup: bool,
 	},
+
+	/// Deploy and manage cloud infrastructure
+	Deploy {
+		#[command(subcommand)]
+		subcommand: Option<DeployCommands>,
+
+		/// Run in dry-run mode (simulate without side effects)
+		#[arg(long)]
+		dry_run: bool,
+
+		/// Deploy as preview environment
+		#[arg(long)]
+		preview: bool,
+
+		/// Target environment
+		#[arg(long, default_value = "production")]
+		env: String,
+	},
+}
+
+/// Deploy subcommands
+#[derive(Subcommand)]
+enum DeployCommands {
+	/// Initialize deploy configuration for a Reinhardt project
+	Init {
+		/// Auto-detect only (no interactive prompts)
+		#[arg(long)]
+		detect: bool,
+	},
+	/// Show deployment status
+	Status,
 }
 
 /// Plugin management subcommands
@@ -373,6 +404,12 @@ async fn main() {
 			backup,
 			cli.verbosity,
 		),
+		Commands::Deploy {
+			subcommand,
+			dry_run,
+			preview,
+			env,
+		} => run_deploy(subcommand, dry_run, preview, env, cli.verbosity).await,
 	};
 
 	if let Err(e) = result {
@@ -1254,6 +1291,62 @@ fn run_fmt_all(
 	}
 
 	Ok(())
+}
+
+async fn run_deploy(
+	subcommand: Option<DeployCommands>,
+	dry_run: bool,
+	preview: bool,
+	env: String,
+	verbosity: u8,
+) -> CommandResult<()> {
+	match subcommand {
+		None => {
+			// Main deploy pipeline
+			let _project_root = find_project_root().ok_or_else(|| {
+				reinhardt_commands::CommandError::ExecutionError(
+					"Could not find project root (no Cargo.toml found)".to_string(),
+				)
+			})?;
+
+			let opts = reinhardt_deploy::pipeline::PipelineOptions {
+				dry_run,
+				preview,
+				environment: env,
+			};
+
+			if verbosity > 0 {
+				println!(
+					"Deploy pipeline options: dry_run={}, preview={}, environment={}",
+					opts.dry_run, opts.preview, opts.environment
+				);
+			}
+
+			// Pipeline execution will be implemented in later tasks
+			println!("Deploy pipeline started (dry_run: {})", opts.dry_run);
+			Ok(())
+		}
+		Some(DeployCommands::Init { detect }) => {
+			let _project_root = find_project_root().ok_or_else(|| {
+				reinhardt_commands::CommandError::ExecutionError(
+					"Could not find project root (no Cargo.toml found)".to_string(),
+				)
+			})?;
+
+			if detect {
+				println!("Running auto-detection only...");
+			} else {
+				println!("Initializing deploy configuration...");
+			}
+
+			// Init implementation will come in Task 17
+			Ok(())
+		}
+		Some(DeployCommands::Status) => {
+			println!("Deployment status: not yet implemented");
+			Ok(())
+		}
+	}
 }
 
 /// Maximum number of parent directories to traverse when searching for project root.

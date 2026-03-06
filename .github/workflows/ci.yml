@@ -30,6 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       has-conflicts: ${{ steps.check.outputs.has-conflicts }}
+      infra-changed: ${{ steps.check-infra.outputs.infra-changed }}
     steps:
       - name: Check if PR has merge conflicts
         id: check
@@ -46,6 +47,21 @@ jobs:
             if (hasConflicts) {
               core.warning('PR has merge conflicts. Skipping CI — please resolve conflicts.');
             }
+
+      - name: Check if infra files changed
+        id: check-infra
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            const infraChanged = files.some(f => f.filename.startsWith('infra/'));
+            core.setOutput('infra-changed', infraChanged.toString());
 
   # Determine runner type based on whether the actor is the repository owner.
   # Repository owner uses self-hosted AWS Spot runners (faster, ~$70/month).
@@ -145,6 +161,16 @@ jobs:
     uses: ./.github/workflows/codeql.yml
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
+
+  terraform-check:
+    name: Terraform Check
+    needs: [check-branch-status]
+    if: >-
+      ${{
+        needs.check-branch-status.outputs.has-conflicts != 'true' &&
+        needs.check-branch-status.outputs.infra-changed == 'true'
+      }}
+    uses: ./.github/workflows/terraform-check.yml
 
   semver-check:
     name: SemVer Check
@@ -300,6 +326,7 @@ jobs:
       - todo-check
       - security-audit
       - codeql
+      - terraform-check
       - semver-check
       - release-dry-run
       - unit-test
@@ -355,6 +382,7 @@ jobs:
             "ui-test:${{ needs.ui-test.result }}"
             "coverage:${{ needs.coverage.result }}"
             "examples-test:${{ needs.examples-test.result }}"
+            "terraform-check:${{ needs.terraform-check.result }}"
           )
           for entry in "${selectively_skippable[@]}"; do
             name="${entry%%:*}"

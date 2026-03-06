@@ -71,12 +71,14 @@ pub mod validation;
 #[cfg(feature = "di")]
 pub mod di;
 
-// Generated Protobuf code (common types provided by the framework)
+/// Generated Protobuf code (common types provided by the framework).
 pub mod proto {
+	/// Common Protobuf types (Empty, Timestamp, Error, PageInfo, BatchResult).
 	pub mod common {
 		tonic::include_proto!("reinhardt.common");
 	}
 
+	/// GraphQL over gRPC types (GraphQLRequest, GraphQLResponse, SubscriptionEvent).
 	pub mod graphql {
 		tonic::include_proto!("reinhardt.graphql");
 	}

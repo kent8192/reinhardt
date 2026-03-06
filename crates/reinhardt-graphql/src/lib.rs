@@ -68,15 +68,22 @@
 //! }
 //! ```
 
+/// GraphQL execution context and data loaders.
 pub mod context;
+/// Resolver implementations for queries and mutations.
 pub mod resolvers;
+/// Schema definition, query limits, and built-in types.
 pub mod schema;
+/// Real-time GraphQL subscriptions with event broadcasting.
 pub mod subscription;
+/// GraphQL scalar and input type definitions.
 pub mod types;
 
+/// Dependency injection integration for GraphQL handlers.
 #[cfg(feature = "di")]
 pub mod di;
 
+/// GraphQL-over-gRPC service adapter.
 #[cfg(feature = "graphql-grpc")]
 pub mod grpc_service;
 

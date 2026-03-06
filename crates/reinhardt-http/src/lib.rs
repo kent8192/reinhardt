@@ -79,14 +79,22 @@
 //!     .unwrap();
 //! ```
 
+/// Authentication state tracking for requests.
 pub mod auth_state;
+/// Chunked file upload handling with progress tracking.
 pub mod chunked_upload;
+/// Request extension storage for passing data between middleware.
 pub mod extensions;
+/// Flash messages middleware for one-time notifications.
 #[cfg(feature = "messages")]
 pub mod messages_middleware;
+/// Middleware trait and handler chain.
 pub mod middleware;
+/// HTTP request type and builder.
 pub mod request;
+/// HTTP response type and builder.
 pub mod response;
+/// File upload handling and validation.
 pub mod upload;
 
 pub use auth_state::AuthState;

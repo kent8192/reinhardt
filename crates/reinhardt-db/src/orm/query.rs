@@ -2389,6 +2389,12 @@ where
 		self
 	}
 
+	/// Quote a SQL identifier to prevent injection via field names.
+	/// Uses PostgreSQL double-quote escaping (also valid for SQLite).
+	fn quote_identifier(field: &str) -> String {
+		format!("\"{}\"", field.replace('"', "\"\""))
+	}
+
 	/// Build WHERE condition using reinhardt-query from accumulated filters
 	fn build_where_condition(&self) -> Option<Condition> {
 		// Early return only if both filters and subquery_conditions are empty

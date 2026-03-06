@@ -179,9 +179,12 @@ impl AuthenticationBackend for MFAAuthentication {
 			(Some(user), Some(mfa_code)) => {
 				if self.verify_totp(user, mfa_code).await? {
 					Ok(Some(Box::new(SimpleUser {
-						id: Uuid::new_v4(),
+						id: Uuid::new_v5(&Uuid::NAMESPACE_URL, user.as_bytes()),
 						username: user.to_string(),
-						email: format!("{}@example.com", user),
+						email: String::new(),
+						// Security defaults: privilege flags are set to restrictive values
+						// since MFA authentication alone cannot determine user privileges.
+						// Use UserRepository integration for accurate privilege data.
 						is_active: true,
 						is_admin: false,
 						is_staff: false,
@@ -200,9 +203,12 @@ impl AuthenticationBackend for MFAAuthentication {
 		let secrets = self.secrets.lock().await;
 		if secrets.contains_key(user_id) {
 			Ok(Some(Box::new(SimpleUser {
-				id: Uuid::new_v4(),
+				id: Uuid::new_v5(&Uuid::NAMESPACE_URL, user_id.as_bytes()),
 				username: user_id.to_string(),
-				email: format!("{}@example.com", user_id),
+				email: String::new(),
+				// Security defaults: privilege flags are set to restrictive values
+				// since MFA authentication alone cannot determine user privileges.
+				// Use UserRepository integration for accurate privilege data.
 				is_active: true,
 				is_admin: false,
 				is_staff: false,

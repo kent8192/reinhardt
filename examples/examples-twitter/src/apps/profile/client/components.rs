@@ -16,7 +16,8 @@ use reinhardt::pages::component::View;
 use reinhardt::pages::form;
 use reinhardt::pages::page;
 use reinhardt::pages::reactive::Signal;
-use reinhardt::pages::reactive::hooks::{use_effect, use_state};
+use reinhardt::pages::reactive::hooks::{use_action, use_effect, use_state};
+use reinhardt::pages::reactive::Action;
 use uuid::Uuid;
 
 #[cfg(client)]
@@ -24,7 +25,6 @@ use {
 	crate::apps::profile::server::server_fn::{fetch_profile, update_profile_form},
 	reinhardt::pages::create_resource,
 	reinhardt::pages::reactive::ResourceState,
-	reinhardt::pages::spawn::spawn_task,
 };
 
 #[cfg(server)]
@@ -305,17 +305,21 @@ pub fn profile_edit(user_id: Uuid) -> View {
 		},
 	};
 
-	// Load current profile data into form fields
-	// Note: initial_loader doesn't support parameters, so we load manually
-	#[cfg(client)]
+	// Load current profile data into form fields using use_action
+	let load_profile = use_action(move |uid: Uuid| async move {
+		fetch_profile(uid).await.map_err(|e| e.to_string())
+	});
+
+	// Bridge loaded profile data to form fields
 	{
+		let load_profile_for_effect = load_profile.clone();
 		let avatar_url_signal = profile_form.avatar_url().clone();
 		let bio_signal = profile_form.bio().clone();
 		let location_signal = profile_form.location().clone();
 		let website_signal = profile_form.website().clone();
 
-		spawn_task(async move {
-			if let Ok(profile_data) = fetch_profile(user_id).await {
+		use_effect(move || {
+			if let Some(profile_data) = load_profile_for_effect.result() {
 				avatar_url_signal.set(profile_data.avatar_url.unwrap_or_default());
 				bio_signal.set(profile_data.bio.unwrap_or_default());
 				location_signal.set(profile_data.location.unwrap_or_default());
@@ -323,6 +327,8 @@ pub fn profile_edit(user_id: Uuid) -> View {
 			}
 		});
 	}
+
+	load_profile.dispatch(user_id);
 
 	// Clone state signals for page! macro
 	let loading_signal = profile_form.loading().clone();

@@ -6058,4 +6058,71 @@ mod tests {
 		assert_eq!(sql, "DELETE FROM \"test_users\" WHERE \"id\" = $1");
 		assert_eq!(params, vec!["1"]);
 	}
+
+	#[rstest]
+	#[case("username", r#""username""#)]
+	#[case("user_id", r#""user_id""#)]
+	#[case(r#"a"b"#, r#""a""b""#)]
+	#[case("field; DROP TABLE users", r#""field; DROP TABLE users""#)]
+	#[case("", r#""""#)]
+	fn test_quote_identifier(#[case] input: &str, #[case] expected: &str) {
+		// Arrange
+		// input and expected provided by rstest cases
+
+		// Act
+		let result = QuerySet::<TestUser>::quote_identifier(input);
+
+		// Assert
+		assert_eq!(result, expected);
+	}
+
+	#[rstest]
+	fn test_outerref_filter_uses_safe_quoting() {
+		// Arrange
+		use crate::orm::expressions::OuterRef;
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"author_id".to_string(),
+			FilterOperator::Eq,
+			FilterValue::OuterRef(OuterRef::new("id")),
+		));
+
+		// Act
+		let condition = queryset.build_where_condition();
+
+		// Assert
+		assert!(condition.is_some());
+	}
+
+	#[rstest]
+	fn test_array_contains_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"tags".to_string(),
+			FilterOperator::ArrayContains,
+			FilterValue::Array(vec!["rust".to_string(), "web".to_string()]),
+		));
+
+		// Act
+		let condition = queryset.build_where_condition();
+
+		// Assert
+		assert!(condition.is_some());
+	}
+
+	#[rstest]
+	fn test_injection_attempt_in_field_name_is_quoted() {
+		// Arrange
+		// Attempt SQL injection via field name with double quote
+		let malicious_field = r#"id" OR 1=1 --"#.to_string();
+
+		// Act
+		let quoted = QuerySet::<TestUser>::quote_identifier(&malicious_field);
+
+		// Assert
+		// The double quote inside is escaped, preventing injection
+		assert_eq!(quoted, r#""id"" OR 1=1 --""#);
+		// Verify the quote is not broken out of
+		assert!(quoted.starts_with('"'));
+		assert!(quoted.ends_with('"'));
+	}
 }

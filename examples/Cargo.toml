@@ -8,7 +8,9 @@ members = [
 	"examples-tutorial-rest",
 	"examples-github-issues",
 	"examples-twitter",
+	"examples-di-showcase",
 	"examples-viewset-advanced",
+	"examples-multi-auth",
 ]
 
 # Note: Each example has a binary named "manage"

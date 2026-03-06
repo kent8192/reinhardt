@@ -1,0 +1,10 @@
+resource "google_redis_instance" "main" {
+  name           = "{{ project_name }}-cache"
+  tier           = "BASIC"
+  memory_size_gb = 1
+  region         = "{{ region }}"
+
+  labels = {
+    app = "{{ project_name }}"
+  }
+}

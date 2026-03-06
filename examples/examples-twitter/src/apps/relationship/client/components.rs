@@ -54,7 +54,7 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 				watch {
 					if loading_signal.get() {
 						button {
-							r#type: "button",
+							type: "button",
 							class: "btn-secondary opacity-50 cursor-not-allowed",
 							disabled: loading_signal.get(),
 							aria_label: "Loading",
@@ -97,7 +97,7 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 						}
 					} else if is_following_signal.get() {
 						button {
-							r#type: "button",
+							type: "button",
 							class: "btn-outline group",
 							@click: {
 										let is_following = is_following_clone.clone();
@@ -140,7 +140,7 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 						}
 					} else {
 						button {
-							r#type: "button",
+							type: "button",
 							class: "btn-primary",
 							@click: {
 										let is_following = is_following_clone.clone();
@@ -205,7 +205,7 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 		page!(|btn_class: &str, btn_text: &str| {
 			div {
 				button {
-					r#type: "button",
+					type: "button",
 					class: btn_class,
 					{ btn_text }
 				}

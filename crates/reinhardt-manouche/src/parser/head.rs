@@ -6,6 +6,7 @@
 use proc_macro2::TokenStream;
 use syn::{
 	Expr, Ident, LitStr, Token, braced,
+	ext::IdentExt,
 	parse::{Parse, ParseStream},
 	punctuated::Punctuated,
 };
@@ -95,7 +96,7 @@ impl Parse for HeadElement {
 
 impl Parse for HeadAttr {
 	fn parse(input: ParseStream) -> syn::Result<Self> {
-		let name: Ident = input.parse()?;
+		let name = Ident::parse_any(input)?;
 		let span = name.span();
 
 		// Check for boolean attribute (no value) vs key-value attribute
@@ -437,5 +438,21 @@ mod tests {
 
 		// Assert
 		assert!(ast.elements.is_empty());
+	}
+
+	#[rstest]
+	#[case("type")]
+	#[case("for")]
+	fn test_parse_reserved_keyword_as_attr_name(#[case] keyword: &str) {
+		// Arrange
+		let input_str = format!("|| {{ script {{ src: \"/app.js\", {keyword}: \"module\", }} }}",);
+
+		// Act
+		let ast: HeadMacro = syn::parse_str(&input_str).unwrap();
+
+		// Assert
+		assert_eq!(ast.elements.len(), 1);
+		assert_eq!(ast.elements[0].attrs.len(), 2);
+		assert_eq!(ast.elements[0].attrs[1].name.to_string(), keyword);
 	}
 }

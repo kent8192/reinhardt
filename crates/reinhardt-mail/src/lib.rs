@@ -183,12 +183,19 @@
 //! # Ok(())
 //! # }
 
+/// Email sending backends (SMTP, console, file, in-memory).
 pub mod backends;
+/// Email header management and encoding.
 pub mod headers;
+/// Email message construction.
 pub mod message;
+/// Connection pooling for email backends.
 pub mod pooling;
+/// Template-based email rendering.
 pub mod templates;
+/// Email utility functions.
 pub mod utils;
+/// Email address and content validation.
 pub mod validation;
 
 use thiserror::Error;

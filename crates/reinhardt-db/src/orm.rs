@@ -294,6 +294,10 @@ pub use order_with_respect_to::{OrderError, OrderValue, OrderedModel};
 
 // reinhardt-query re-exports for query building in client code
 pub use reinhardt_query::prelude::{
-	Alias, ColumnRef, Cond, Expr, ExprTrait, MySqlQueryBuilder, PostgresQueryBuilder, Query,
-	QueryStatementBuilder, QueryStatementWriter, SqliteQueryBuilder,
+	Alias, ColumnRef, Cond, Expr, ExprTrait, IntoValue, MySqlQueryBuilder, Order,
+	PostgresQueryBuilder, Query, QueryStatementBuilder, QueryStatementWriter, SqliteQueryBuilder,
 };
+
+// Re-export reinhardt-query Value as QueryBuilderValue to avoid conflict with
+// annotation::Value and types::SqlValue
+pub use reinhardt_query::prelude::Value as QueryBuilderValue;

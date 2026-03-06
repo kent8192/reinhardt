@@ -1,0 +1,67 @@
+[package]
+name = "reinhardt-cms"
+version = "0.1.0-alpha.1"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "CMS functionality for Reinhardt framework (Wagtail/django-cms equivalent)"
+publish = true
+
+[dependencies]
+# Internal crates
+reinhardt-apps = { workspace = true }
+reinhardt-auth = { workspace = true }
+reinhardt-core = { workspace = true, features = ["exception", "types"] }
+reinhardt-db = { workspace = true, features = ["orm", "migrations", "contenttypes"] }
+reinhardt-di = { workspace = true }
+reinhardt-http = { workspace = true }
+reinhardt-urls = { workspace = true, features = ["routers"] }
+reinhardt-utils = { workspace = true, features = ["storage", "utils-core"] }
+reinhardt-admin = { workspace = true }
+reinhardt-pages = { workspace = true }
+
+# External crates
+tokio = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+parking_lot = { workspace = true }
+dashmap = "6.1.0"
+chrono = { workspace = true }
+sea-query = { workspace = true }
+uuid = { workspace = true }
+base64 = { workspace = true }
+inventory = { workspace = true }
+image = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+default = ["pages", "blocks", "media", "permissions", "workflow", "admin"]
+
+# Module features
+pages = []
+blocks = []
+media = []
+permissions = []
+workflow = []
+admin = []
+
+# All features
+all = ["pages", "blocks", "media", "permissions", "workflow", "admin"]
+full = ["all"]
+
+[dev-dependencies]
+reinhardt-test = { workspace = true, features = ["testcontainers"] }
+tokio-test = { workspace = true }
+rstest = { workspace = true }
+serial_test = { workspace = true }
+sqlx = { workspace = true, features = ["postgres", "runtime-tokio-native-tls"] }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
+tempfile = { workspace = true }
+proptest = { workspace = true }
+arbitrary = { workspace = true }

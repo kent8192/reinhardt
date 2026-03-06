@@ -20,6 +20,12 @@ struct RouteOptions {
 	use_inject: bool,
 	/// Route name for URL reversal
 	name: Option<String>,
+	/// Enable automatic validation with `pre_validate = true`
+	///
+	/// When enabled, extracted parameters implementing `validator::Validate`
+	/// are automatically validated before the handler is called.
+	/// Returns HTTP 422 with JSON error details on validation failure.
+	pre_validate: bool,
 }
 
 /// Information about parameter extractors
@@ -203,6 +209,7 @@ fn generate_wrapper_with_both(
 	original_fn: &ItemFn,
 	extractors: &[ExtractorInfo],
 	inject_params: &[InjectInfo],
+	options: &RouteOptions,
 ) -> (TokenStream, TokenStream) {
 	let di_crate = get_reinhardt_di_crate();
 	let core_crate = get_reinhardt_core_crate();
@@ -297,6 +304,25 @@ fn generate_wrapper_with_both(
 	let extractor_args: Vec<_> = extractors.iter().map(|ext| &ext.pat).collect();
 	let inject_args: Vec<_> = inject_params.iter().map(|param| &param.pat).collect();
 
+	// Generate pre_validate validation calls for extracted parameters
+	let validation_calls = if options.pre_validate {
+		let validate_calls: Vec<_> = extractors
+			.iter()
+			.map(|ext| {
+				let pat = &ext.pat;
+				quote! {
+					::validator::Validate::validate(&#pat)
+						.map_err(|e| #core_crate::exception::Error::Validation(
+							::serde_json::to_string(&e).unwrap_or_else(|_| format!("{:?}", e))
+						))?;
+				}
+			})
+			.collect();
+		quote! { #(#validate_calls)* }
+	} else {
+		quote! {}
+	};
+
 	// Generate code
 	(
 		quote! {
@@ -319,6 +345,9 @@ fn generate_wrapper_with_both(
 			// Extract request parameters
 			#(#extractor_calls)*
 
+			// Validate extracted parameters (when pre_validate = true)
+			#validation_calls
+
 			// Call the original function
 			#original_fn_name(#(#extractor_args,)* #(#inject_args),*).await
 		},
@@ -333,6 +362,7 @@ fn generate_view_type(
 	route_name: &str,
 	extractors: &[ExtractorInfo],
 	inject_params: &[InjectInfo],
+	options: &RouteOptions,
 ) -> Result<TokenStream> {
 	let reinhardt_crate = crate::crate_paths::get_reinhardt_crate();
 	let core_crate = get_reinhardt_core_crate();
@@ -354,7 +384,8 @@ fn generate_view_type(
 	let method_ident = syn::Ident::new(method, Span::call_site());
 
 	// Generate wrapper parts
-	let (original_fn, wrapper_body) = generate_wrapper_with_both(input, extractors, inject_params);
+	let (original_fn, wrapper_body) =
+		generate_wrapper_with_both(input, extractors, inject_params, options);
 
 	let route_doc = format!("Route: {} {}", method, path);
 
@@ -479,6 +510,19 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 										"use_inject must be a boolean (true or false)",
 									));
 								}
+							} else if path_expr.path.is_ident("pre_validate") {
+								if let Expr::Lit(ExprLit {
+									lit: Lit::Bool(bool_lit),
+									..
+								}) = &*assign.right
+								{
+									options.pre_validate = bool_lit.value;
+								} else {
+									return Err(Error::new_spanned(
+										&assign.right,
+										"pre_validate must be a boolean (true or false)",
+									));
+								}
 							} else if path_expr.path.is_ident("name") {
 								if let Expr::Lit(ExprLit {
 									lit: Lit::Str(str_lit),
@@ -496,7 +540,7 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 								return Err(Error::new_spanned(
 									&path_expr.path,
 									format!(
-										"unknown route option `{}`, expected `use_inject` or `name`",
+										"unknown route option `{}`, expected `use_inject`, `name`, or `pre_validate`",
 										path_expr.path.get_ident().map_or_else(
 											|| "unknown".to_string(),
 											|id| id.to_string()
@@ -594,6 +638,7 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 			&route_name,
 			&extractors,
 			&inject_params,
+			&options,
 		);
 	}
 

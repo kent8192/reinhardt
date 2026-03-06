@@ -397,7 +397,7 @@ pub fn profile_edit(user_id: Uuid) -> View {
 						watch {
 							if loading_signal.get() {
 								button {
-									r#type: "submit",
+									type: "submit",
 									class: "btn-primary opacity-50 cursor-not-allowed",
 									disabled: loading_signal.get(),
 									form: "profile-edit-form",
@@ -411,7 +411,7 @@ pub fn profile_edit(user_id: Uuid) -> View {
 								}
 							} else {
 								button {
-									r#type: "submit",
+									type: "submit",
 									class: "btn-primary",
 									form: "profile-edit-form",
 									"Save"

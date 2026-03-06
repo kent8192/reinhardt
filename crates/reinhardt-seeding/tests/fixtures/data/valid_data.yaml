@@ -1,0 +1,16 @@
+- model: blog.Post
+  pk: 1
+  fields:
+    title: "YAML Fixture Test"
+    content: "This is a YAML fixture file"
+    author_id: 1
+    published: true
+    created_at: "2024-01-01T00:00:00Z"
+- model: blog.Post
+  pk: 2
+  fields:
+    title: "Another YAML Post"
+    content: "More content here"
+    author_id: 1
+    published: false
+    created_at: "2024-01-02T00:00:00Z"

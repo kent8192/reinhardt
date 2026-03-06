@@ -11,12 +11,12 @@
 #   4. terraform plan && terraform apply
 
 aws_region     = "us-east-1"
-aws_account_id = "<aws-account-id>"  # aws sts get-caller-identity --query Account --output text
+aws_account_id = "<aws-account-id>" # aws sts get-caller-identity --query Account --output text
 
 # GitHub App credentials (created in GitHub App setup step)
-github_app_id              = "<github-app-id>"           # Settings > Developer settings > GitHub Apps > About
-github_app_installation_id = "<installation-id>"          # URL path after installing: /settings/installations/<id>
-github_app_key_base64      = "<base64-encoded-pem-key>"  # cat key.pem | base64 | tr -d '\n'
+github_app_id              = "<github-app-id>"          # Settings > Developer settings > GitHub Apps > About
+github_app_installation_id = "<installation-id>"        # URL path after installing: /settings/installations/<id>
+github_app_key_base64      = "<base64-encoded-pem-key>" # cat key.pem | base64 | tr -d '\n'
 
 # GitHub repository
 github_owner      = "<github-username>"

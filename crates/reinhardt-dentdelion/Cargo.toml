@@ -59,12 +59,12 @@ tracing = { workspace = true }
 # - Memory limit: 128MB default (configurable via WasmPluginConfig)
 # - Execution timeout: 30 seconds default (configurable)
 # - Models capability is NOT supported in WASM (requires compile-time integration)
-wasmtime = { version = "39.0.1", optional = true, features = [
+wasmtime = { version = "36.0.6", optional = true, features = [
 	"component-model",
 	"async",
 	"cranelift",
 ] }
-wasmtime-wasi = { version = "39.0.1", optional = true }
+wasmtime-wasi = { version = "36.0.6", optional = true }
 rmp-serde = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 

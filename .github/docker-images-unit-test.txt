@@ -1,0 +1,5 @@
+# Docker images for Unit Tests
+# These images are cached to avoid Docker Hub rate limits
+# Required for redis-backend feature tests
+
+redis:7-alpine

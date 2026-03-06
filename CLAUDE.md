@@ -503,10 +503,17 @@ Before submitting code:
 - Run `cargo doc --no-deps` locally before pushing doc-related fixes
 - Execute merge/conflict resolution and straightforward operations immediately without Plan Mode
 - Use worktree-based merge strategy for PR conflict resolution (NOT rebase/force-push)
+- Apply `migration-approved` label to develop/* → main PRs (requires maintainer approval for version transition)
 - Apply `agent-suspect` label to all agent-detected bug Issues
 - Verify agent-detected bugs independently before removing `agent-suspect` label
+- Create `develop/0.x+1.0` branch when version group enters RC phase (DB-1)
+- Direct next-version features and breaking changes to `develop/0.x+1.0` during RC (DB-2)
+- Apply RC bug fixes to `main` first, then forward-merge to develop (DB-3)
+- Forward-merge `main` into develop branch regularly (DB-4)
+- Merge develop branch into `main` after stable release using merge commit, not squash (DB-5)
 - Use independent context (separate agent session) for agent re-evaluation of `agent-suspect` Issues
 - Obtain SP-6 approval before adding non-breaking APIs during RC phase (`enhancement` + `rc-addition` labels + maintainer approval)
+- Use three-dot diff (`main...branch`) for PR diff verification to exclude merge history noise
 
 ### ❌ NEVER DO
 - Use `mod.rs` files (deprecated pattern)
@@ -564,9 +571,16 @@ Before submitting code:
 - Retry GitHub MCP tools after errors instead of falling back to `gh` CLI
 - Create branches without checking for name conflicts
 - Use rebase or force-push to resolve PR conflicts (use worktree merge instead)
+- Merge develop/* branches into main without `migration-approved` label and CI version validation
 - Remove `agent-suspect` label without independent verification (separate agent or human)
 - Count `agent-suspect` labeled Issues toward stability timer reset (SC-2a)
+- Merge next-version features or breaking changes directly into `main` during RC (use `develop/0.x+1.0`)
+- Apply bug fixes only to the develop branch without fixing on `main` first (DB-3)
+- Configure release-plz to monitor the develop branch (DB-6)
+- Delete the develop branch before merging into `main` (DB-5)
+- Squash-merge the develop branch into `main` (DB-5)
 - Use the same agent context for both detection and verification of a bug
+- Use two-dot diff (`main..branch`) for PR verification (includes merge history noise)
 
 ### 📚 Detailed Standards
 
@@ -577,7 +591,7 @@ For comprehensive guidelines, see:
 - **Documentation**: instructions/DOCUMENTATION_STANDARDS.md
 - **Git Commits**: instructions/COMMIT_GUIDELINE.md (includes CHANGELOG generation guidelines)
 - **Release Process**: instructions/RELEASE_PROCESS.md
-- **Stability Policy**: instructions/STABILITY_POLICY.md
+- **Stability Policy**: instructions/STABILITY_POLICY.md (includes DB-1 ~ DB-7 develop branch strategy)
 - **Agent Bug Discovery**: instructions/STABILITY_POLICY.md (SC-2a)
 - **Issues**: instructions/ISSUE_GUIDELINES.md
 - **Issue Handling**: instructions/ISSUE_HANDLING.md

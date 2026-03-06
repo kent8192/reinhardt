@@ -1,0 +1,14 @@
+# Stage 1: Build WASM frontend
+FROM rust:latest AS wasm-builder
+RUN rustup target add {{ wasm_target | default(value="wasm32-unknown-unknown") }}
+RUN cargo install trunk
+WORKDIR /app
+COPY . .
+RUN trunk build --release
+
+# Stage 2: Serve with nginx
+FROM nginx:alpine
+COPY --from=wasm-builder /app/{{ dist_dir | default(value="dist") }} /usr/share/nginx/html
+EXPOSE {{ port | default(value=80) }}
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD wget --quiet --tries=1 --spider http://localhost:{{ port | default(value=80) }}{{ health_check | default(value="/") }} || exit 1

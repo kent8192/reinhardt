@@ -456,7 +456,7 @@ mod tests {
 			!user.is_superuser(),
 			"superuser flag should default to false"
 		);
-		// Email emptiness is verified in test_jwt_claims_do_not_contain_email.
+		// Email emptiness is verified in test_claims_struct_has_no_email_field.
 		// The User trait does not expose email, so direct assertion is not
 		// possible through the trait object returned by authenticate().
 	}
@@ -466,7 +466,7 @@ mod tests {
 	/// This is a source-level contract test: the authenticate method at line 216-227
 	/// sets `email: String::new()`.
 	#[rstest]
-	fn test_jwt_claims_do_not_contain_email() {
+	fn test_claims_struct_has_no_email_field() {
 		// Arrange & Act
 		let claims = Claims::new(
 			"550e8400-e29b-41d4-a716-446655440000".to_string(),

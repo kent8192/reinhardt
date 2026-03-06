@@ -476,6 +476,18 @@ mod tests {
 	}
 
 	#[rstest]
+	fn test_user_id_namespace_matches_documented_derivation() {
+		// Arrange
+		let expected = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"https://reinhardt.rs/user-id");
+
+		// Act & Assert
+		assert_eq!(
+			USER_ID_NAMESPACE, expected,
+			"USER_ID_NAMESPACE must match documented derivation"
+		);
+	}
+
+	#[rstest]
 	#[tokio::test]
 	async fn test_get_user_different_usernames_produce_different_ids() {
 		// Arrange

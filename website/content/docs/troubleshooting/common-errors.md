@@ -154,22 +154,6 @@ async fn handler_with_di(req: reinhardt::Request) -> Response {
 }
 ```
 
-### Typed DI Parameters
-
-```rust
-use reinhardt::Depends;
-
-#[derive(Clone)]
-struct Database {
-    // ...
-}
-
-async fn handler_with_db(Depends(db): Depends<Arc<Database>>) -> Response {
-    // Use db for database operations
-    Response::ok()
-}
-```
-
 ---
 
 ## Middleware Order

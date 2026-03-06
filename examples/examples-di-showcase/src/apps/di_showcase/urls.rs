@@ -12,4 +12,6 @@ pub fn url_patterns() -> ServerRouter {
 		.endpoint(views::uncached_injection)
 		.endpoint(views::dashboard)
 		.endpoint(views::multiple_deps)
+		.endpoint(views::manual_injected)
+		.endpoint(views::manual_uncached)
 }

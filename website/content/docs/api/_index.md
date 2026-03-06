@@ -170,14 +170,13 @@ Dependency injection system inspired by FastAPI.
 **Key Components:**
 
 - `Injectable` trait
-- `Depends<T>` - Inject dependencies
 - `InjectionContext` - DI container
 - Singleton and request scopes
 
 **Example:**
 
 ```rust
-use reinhardt::di::{Injectable, Depends};
+use reinhardt::di::{Injectable, InjectionContext, DiResult};
 
 #[derive(Clone)]
 struct Database {
@@ -189,10 +188,6 @@ impl Injectable for Database {
     async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
         Ok(Database { pool: get_pool().await? })
     }
-}
-
-async fn handler(db: Depends<Database>) -> Result<Response> {
-    // db is automatically injected
 }
 ```
 
@@ -206,9 +201,9 @@ async fn handler(db: Depends<Database>) -> Result<Response> {
 
 ### reinhardt-db::orm
 
-ORM layer for database abstraction with reinhardt-query integration.
+ORM layer for database abstraction with Reinhardt's own query builder (reinhardt-query).
 
-> **Note**: `orm` is a sub-module of the `reinhardt-db` crate. Currently provides low-level API based on reinhardt-query.
+> **Note**: `orm` is a sub-module of the `reinhardt-db` crate. Currently provides low-level API based on Reinhardt's own query builder.
 
 **Key Components:**
 
@@ -220,7 +215,7 @@ ORM layer for database abstraction with reinhardt-query integration.
 
 **Current Implementation Status:**
 
-- ✅ reinhardt-query-based query builder (implemented)
+- ✅ Reinhardt's own query builder (reinhardt-query) (implemented)
 - ✅ Basic CRUD operations (implemented)
 - ✅ Relationship definitions (implemented)
 - ✅ `#[model(...)]` attribute macro (implemented - automatically applies Model trait)
@@ -240,7 +235,7 @@ struct User {
     age: i32,
 }
 
-// Query using reinhardt-query
+// Query using Reinhardt's own query builder
 let query = Query::select()
     .from(User::table_name())
     .column(User::id)

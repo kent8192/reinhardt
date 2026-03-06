@@ -1,5 +1,6 @@
 //! Reinhardt Project Management CLI for examples-di-showcase
 
+use examples_di_showcase as _;
 use reinhardt::commands::execute_from_command_line;
 use reinhardt::core::tokio;
 use std::process;

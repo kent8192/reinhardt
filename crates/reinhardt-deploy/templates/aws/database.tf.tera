@@ -1,0 +1,22 @@
+resource "aws_db_instance" "main" {
+  identifier     = "{{ project_name }}-db"
+  engine         = "{{ db_engine }}"
+  engine_version = "{{ db_engine_version }}"
+  instance_class = "{{ db_instance_class }}"
+
+  allocated_storage = {{ db_storage_gb }}
+  storage_type      = "gp3"
+
+  db_name  = "{{ project_name | replace(from="-", to="_") }}"
+  username = "admin"
+  port     = {{ db_port }}
+
+  multi_az            = {{ db_ha }}
+  skip_final_snapshot = true
+
+  vpc_security_group_ids = [aws_security_group.app.id]
+
+  tags = {
+    Name = "{{ project_name }}-db"
+  }
+}

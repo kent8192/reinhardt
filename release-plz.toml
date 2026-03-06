@@ -200,6 +200,10 @@ name = "reinhardt-test"
 version_group = "reinhardt"
 
 [[package]]
+name = "reinhardt-testkit"
+version_group = "reinhardt"
+
+[[package]]
 name = "reinhardt-throttling"
 version_group = "reinhardt"
 

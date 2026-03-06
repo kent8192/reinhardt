@@ -1,0 +1,32 @@
+resource "fly_app" "main" {
+  name = "{{ project_name }}"
+  org  = "personal"
+}
+
+resource "fly_machine" "app" {
+  app    = fly_app.main.name
+  region = "{{ region }}"
+  name   = "{{ project_name }}-app"
+
+  image = "registry.fly.io/{{ project_name }}:latest"
+
+  cpus     = {{ fly_cpus }}
+  memorymb = {{ fly_memory_mb }}
+
+  services = [
+    {
+      ports = [
+        {
+          port     = 443
+          handlers = ["tls", "http"]
+        },
+        {
+          port     = 80
+          handlers = ["http"]
+        }
+      ]
+      internal_port = {{ app_port }}
+      protocol      = "tcp"
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+[package]
+name = "reinhardt-seeding"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Database seeding and fixture management for Reinhardt framework"
+repository.workspace = true
+authors.workspace = true
+
+[features]
+default = ["json", "macros"]
+json = []
+yaml = ["dep:serde_yaml"]
+macros = ["dep:reinhardt-seeding-macros"]
+full = ["json", "yaml", "macros"]
+
+[dependencies]
+# Internal dependencies
+reinhardt-core = { workspace = true }
+reinhardt-db = { workspace = true }
+reinhardt-seeding-macros = { path = "macros", optional = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true, optional = true }
+
+# Fake data generation
+fake = { version = "3.0", features = ["derive"] }
+
+# Async
+async-trait = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Utilities
+parking_lot = { workspace = true }
+once_cell = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
+tokio-test = { workspace = true }
+tempfile = { workspace = true }

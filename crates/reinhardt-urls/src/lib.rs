@@ -40,15 +40,16 @@
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+#[cfg(not(target_arch = "wasm32"))]
 pub mod proxy;
 pub mod routers;
 
-#[cfg(feature = "routers-macros")]
+#[cfg(all(feature = "routers-macros", not(target_arch = "wasm32")))]
 #[cfg_attr(docsrs, doc(cfg(feature = "routers-macros")))]
 pub use reinhardt_routers_macros as routers_macros;
 
-// Re-export commonly used types from routers
-#[cfg(feature = "routers")]
+// Re-export commonly used types from routers (server-only)
+#[cfg(all(feature = "routers", not(target_arch = "wasm32")))]
 #[cfg_attr(docsrs, doc(cfg(feature = "routers")))]
 pub mod prelude {
 	pub use crate::routers::{

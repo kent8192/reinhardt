@@ -234,8 +234,7 @@ pub async fn list_rooms(
 	let mut room_infos = Vec::new();
 	for room in &rooms {
 		// Get members for each room (M2M requires per-room query)
-		let members_accessor =
-			ManyToManyAccessor::<DMRoom, User>::new(room, "members", db.clone());
+		let members_accessor = ManyToManyAccessor::<DMRoom, User>::new(room, "members", db.clone());
 		let members = members_accessor
 			.all()
 			.await
@@ -438,11 +437,7 @@ pub async fn list_messages(
 		Vec::new()
 	} else {
 		User::objects()
-			.filter(
-				"id",
-				FilterOperator::In,
-				FilterValue::Array(sender_ids),
-			)
+			.filter("id", FilterOperator::In, FilterValue::Array(sender_ids))
 			.all()
 			.await
 			.map_err(|e| ServerFnError::server(500, format!("Database error: {}", e)))?

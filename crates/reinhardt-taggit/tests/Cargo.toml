@@ -1,0 +1,38 @@
+[package]
+name = "reinhardt-taggit-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "lib.rs"
+doctest = false
+
+[[test]]
+name = "unit"
+path = "unit.rs"
+
+[[test]]
+name = "integration"
+path = "integration.rs"
+
+[dependencies]
+# Crate under test
+reinhardt-taggit = { path = "../" }
+
+# Reinhardt ecosystem
+reinhardt-core = { workspace = true }
+reinhardt-db = { workspace = true, features = ["orm"] }
+reinhardt-test = { workspace = true, features = ["testcontainers"] }
+
+# Testing
+rstest = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }
+testcontainers = { workspace = true }
+
+# Database
+sea-query = { workspace = true, features = ["backend-postgres"] }
+sqlx = { workspace = true }
+
+# Utilities
+chrono = { workspace = true }

@@ -369,6 +369,10 @@ fn is_char_literal(chars: &[(usize, char)], idx: usize) -> bool {
 /// template would need.
 const MAX_FORMAT_DEPTH: usize = 128;
 
+/// Line length threshold for triggering rustfmt on expression blocks.
+/// Expressions (including indentation and braces) shorter than this are kept on a single line.
+const EXPRESSION_LINE_LENGTH_THRESHOLD: usize = 100;
+
 /// AST-based page! macro formatter.
 pub(crate) struct AstPageFormatter {
 	/// Indentation string (tab by default)
@@ -1077,19 +1081,81 @@ impl AstPageFormatter {
 		self.apply_base_indent(&handler_str, base_indent)
 	}
 
+	/// Format a Rust expression with rustfmt when it exceeds the line length threshold.
+	///
+	/// Returns `(formatted_string, is_multiline)`.
+	/// Short expressions are returned as-is. Long expressions are wrapped in a
+	/// temporary function, formatted with prettyplease + rustfmt, and then extracted.
+	fn format_rust_expression(&self, expr: &syn::Expr, base_indent: usize) -> (String, bool) {
+		let cleaned = Self::clean_expression_spaces(&expr.to_token_stream().to_string());
+
+		// Estimate the total line length: indent + "{ " + expr + " }"
+		// Use 4 as the display width per indent level (tab = 4 spaces equivalent)
+		let indent_width = base_indent * 4;
+		let total_len = indent_width + 2 + cleaned.len() + 2; // "{ " and " }"
+
+		if total_len <= EXPRESSION_LINE_LENGTH_THRESHOLD {
+			return (cleaned, false);
+		}
+
+		// Wrap in a valid Rust file for formatting
+		let wrapper_code = format!(
+			"fn _wrapper() {{ let _handler = {}; }}",
+			expr.to_token_stream()
+		);
+
+		// Protect nested page! macros before formatting
+		let protect_result = self.protect_page_macros(&wrapper_code);
+
+		// Parse with syn
+		let Ok(file) = syn::parse_file(&protect_result.protected_content) else {
+			return (cleaned, false);
+		};
+
+		// Format with prettyplease + rustfmt
+		let prettyplease_output = prettyplease::unparse(&file);
+		let formatted = self.format_with_rustfmt(&prettyplease_output);
+
+		// Restore nested page! macros
+		let restored = Self::restore_page_macros(&formatted, &protect_result.backups);
+
+		// Extract the expression from the wrapper
+		let Some(expr_str) = Self::extract_handler_from_wrapper(&restored) else {
+			return (cleaned, false);
+		};
+
+		// Apply base indentation
+		let indented = self.apply_base_indent(&expr_str, base_indent);
+		let is_multiline = indented.contains('\n');
+		(indented, is_multiline)
+	}
+
 	/// Format an expression node.
+	///
+	/// Short expressions are kept on a single line. Long expressions are formatted
+	/// with rustfmt and rendered as a multiline braced block.
 	fn format_expression(&self, output: &mut String, expr: &PageExpression, indent: usize) {
 		let ind = self.make_indent(indent);
 		output.push_str(&ind);
 
-		let expr_str = Self::clean_expression_spaces(&expr.expr.to_token_stream().to_string());
+		let (formatted, is_multiline) = self.format_rust_expression(&expr.expr, indent + 1);
 
 		if expr.braced {
-			output.push_str("{ ");
-			output.push_str(&expr_str);
-			output.push_str(" }\n");
+			if is_multiline {
+				let inner_ind = self.make_indent(indent + 1);
+				output.push_str("{\n");
+				output.push_str(&inner_ind);
+				output.push_str(&formatted);
+				output.push('\n');
+				output.push_str(&ind);
+				output.push_str("}\n");
+			} else {
+				output.push_str("{ ");
+				output.push_str(&formatted);
+				output.push_str(" }\n");
+			}
 		} else {
-			output.push_str(&expr_str);
+			output.push_str(&formatted);
 			output.push('\n');
 		}
 	}
@@ -2420,5 +2486,234 @@ fn main() {
 		let restored =
 			AstPageFormatter::restore_page_macros(&protected.protected_content, &protected.backups);
 		assert_eq!(restored, original);
+	}
+
+	// ========================================
+	// Tests for expression formatting with rustfmt
+	// ========================================
+
+	// Short expressions: stay on a single line
+
+	#[test]
+	fn test_format_expression_short_braced() {
+		let formatter = AstPageFormatter::new();
+		let result = formatter.format(r#"page!(|| { { some_value } })"#).unwrap();
+		assert_eq!(result.content, "page!(|| {\n\t{ some_value }\n})");
+	}
+
+	#[test]
+	fn test_format_expression_short_unbraced() {
+		let formatter = AstPageFormatter::new();
+		let result = formatter.format(r#"page!(|| { some_value })"#).unwrap();
+		assert_eq!(result.content, "page!(|| {\n\tsome_value\n})");
+	}
+
+	#[test]
+	fn test_format_expression_short_method_call() {
+		let formatter = AstPageFormatter::new();
+		let result = formatter
+			.format(r#"page!(|| { { items.len() } })"#)
+			.unwrap();
+		assert_eq!(result.content, "page!(|| {\n\t{ items.len() }\n})");
+	}
+
+	#[test]
+	fn test_format_expression_short_string_literal() {
+		let formatter = AstPageFormatter::new();
+		let result = formatter
+			.format(r#"page!(|| { { "hello world" } })"#)
+			.unwrap();
+		assert_eq!(result.content, "page!(|| {\n\t{ \"hello world\" }\n})");
+	}
+
+	#[test]
+	fn test_format_expression_empty_braced() {
+		let formatter = AstPageFormatter::new();
+		let result = formatter.format(r#"page!(|| { { () } })"#).unwrap();
+		assert_eq!(result.content, "page!(|| {\n\t{ () }\n})");
+	}
+
+	#[test]
+	fn test_format_expression_numeric_literal() {
+		let formatter = AstPageFormatter::new();
+		let result = formatter.format(r#"page!(|| { { 42 } })"#).unwrap();
+		assert_eq!(result.content, "page!(|| {\n\t{ 42 }\n})");
+	}
+
+	#[test]
+	fn test_format_expression_boolean() {
+		let formatter = AstPageFormatter::new();
+		let result = formatter.format(r#"page!(|| { { true } })"#).unwrap();
+		assert_eq!(result.content, "page!(|| {\n\t{ true }\n})");
+	}
+
+	#[test]
+	fn test_format_expression_binary_op() {
+		let formatter = AstPageFormatter::new();
+		let result = formatter.format(r#"page!(|| { { x + y } })"#).unwrap();
+		assert_eq!(result.content, "page!(|| {\n\t{ x + y }\n})");
+	}
+
+	#[test]
+	fn test_format_expression_with_closure_under_threshold() {
+		let formatter = AstPageFormatter::new();
+		let result = formatter
+			.format(
+				r#"page!(|| { { items.iter().map(|item| item.render()).collect::<Vec<_>>() } })"#,
+			)
+			.unwrap();
+		assert_eq!(
+			result.content,
+			"page!(|| {\n\t{ items.iter().map(|item| item.render()).collect ::<Vec<_>>() }\n})"
+		);
+	}
+
+	#[test]
+	fn test_format_expression_with_if_condition() {
+		let formatter = AstPageFormatter::new();
+		let result = formatter
+			.format("page!(|| {\n\tif condition {\n\t\t{ short_val }\n\t}\n})")
+			.unwrap();
+		assert_eq!(
+			result.content,
+			"page!(|| {\n\tif condition {\n\t\t{ short_val }\n\t}\n})"
+		);
+	}
+
+	#[test]
+	fn test_format_expression_exactly_at_threshold() {
+		let formatter = AstPageFormatter::new();
+		let expr = "a".repeat(90);
+		let input = format!("page!(|| {{ {{ {} }} }})", expr);
+		let result = formatter.format(&input);
+		assert!(result.is_ok());
+	}
+
+	// Long expressions: multiline formatting via rustfmt
+
+	#[test]
+	fn test_format_expression_long_view_fragment() {
+		let formatter = AstPageFormatter::new();
+		let input = format!(
+			"page!(|| {{ {{ {} }} }})",
+			"View::fragment(signal.result().unwrap_or_default().iter().map(|item| View::text(item.clone())).collect::<Vec<_>>())"
+		);
+		let result = formatter.format(&input).unwrap();
+		assert_eq!(
+			result.content,
+			"page!(|| {\n\t{\n\t\tView::fragment(\n\t\t\t\tsignal\n\t\t\t\t\t.result()\n\t\t\t\t\t.unwrap_or_default()\n\t\t\t\t\t.iter()\n\t\t\t\t\t.map(|item| View::text(item.clone()))\n\t\t\t\t\t.collect::<Vec<_>>(),\n\t\t\t)\n\t}\n})"
+		);
+	}
+
+	#[test]
+	fn test_format_expression_long_chained_methods() {
+		let formatter = AstPageFormatter::new();
+		let input = format!(
+			"page!(|| {{ {{ {} }} }})",
+			r#"data.iter().filter(|x| x.is_active()).map(|x| x.name.clone()).collect::<Vec<String>>().join(", ")"#
+		);
+		let result = formatter.format(&input).unwrap();
+		assert_eq!(
+			result.content,
+			"page!(|| {\n\t{\n\t\tdata\n\t\t\t\t.iter()\n\t\t\t\t.filter(|x| x.is_active())\n\t\t\t\t.map(|x| x.name.clone())\n\t\t\t\t.collect::<Vec<String>>()\n\t\t\t\t.join(\", \")\n\t}\n})"
+		);
+	}
+
+	#[test]
+	fn test_format_expression_long_nested_function_calls() {
+		let formatter = AstPageFormatter::new();
+		let input = format!(
+			"page!(|| {{ {{ {} }} }})",
+			r#"format!("User: {} ({})", user.display_name().unwrap_or_default(), user.email().unwrap_or("no email".to_string()))"#
+		);
+		let result = formatter.format(&input).unwrap();
+		assert_eq!(
+			result.content,
+			"page!(|| {\n\t{\n\t\tformat!(\n\t\t\t\t\"User: {} ({})\",\n\t\t\t\tuser.display_name().unwrap_or_default(),\n\t\t\t\tuser.email().unwrap_or(\"no email\".to_string())\n\t\t\t)\n\t}\n})"
+		);
+	}
+
+	#[test]
+	fn test_format_expression_deeply_nested_in_elements() {
+		let formatter = AstPageFormatter::new();
+		let input = format!(
+			r#"page!(|| {{ div {{ span {{ {{ {} }} }} }} }})"#,
+			"View::fragment(signal.result().unwrap_or_default().iter().map(|item| View::text(item.clone())).collect::<Vec<_>>())"
+		);
+		let result = formatter.format(&input).unwrap();
+		assert_eq!(
+			result.content,
+			"page!(|| {\n\tdiv {\n\t\tspan {\n\t\t\t{\n\t\t\t\tView::fragment(\n\t\t\t\t\t\tsignal\n\t\t\t\t\t\t\t.result()\n\t\t\t\t\t\t\t.unwrap_or_default()\n\t\t\t\t\t\t\t.iter()\n\t\t\t\t\t\t\t.map(|item| View::text(item.clone()))\n\t\t\t\t\t\t\t.collect::<Vec<_>>(),\n\t\t\t\t\t)\n\t\t\t}\n\t\t}\n\t}\n})"
+		);
+	}
+
+	#[test]
+	fn test_format_expression_multiple_in_page() {
+		let formatter = AstPageFormatter::new();
+		let input = format!(
+			"page!(|| {{ {{ {} }} {{ {} }} }})",
+			"count",
+			"View::fragment(signal.result().unwrap_or_default().iter().map(|item| View::text(item.clone())).collect::<Vec<_>>())"
+		);
+		let result = formatter.format(&input).unwrap();
+		assert_eq!(
+			result.content,
+			"page!(|| {\n\t{ count }\n\t{\n\t\tView::fragment(\n\t\t\t\tsignal\n\t\t\t\t\t.result()\n\t\t\t\t\t.unwrap_or_default()\n\t\t\t\t\t.iter()\n\t\t\t\t\t.map(|item| View::text(item.clone()))\n\t\t\t\t\t.collect::<Vec<_>>(),\n\t\t\t)\n\t}\n})"
+		);
+	}
+
+	// Complex DSL formatting tests
+
+	#[test]
+	fn test_format_complex_dsl_nested_page_macro() {
+		let formatter = AstPageFormatter::new();
+		let input = r#"page!(|signal: Action<Vec<Item>, String>| {
+	div {
+		{ View::fragment(signal.result().unwrap_or_default().iter().map(|item| { let text = item.text.clone(); page!(|text: String| { span { { text } } })(text) }).collect::<Vec<_>>()) }
+	}
+})(signal)"#;
+		let result = formatter.format(input).unwrap();
+		assert_eq!(
+			result.content,
+			"page!(|signal: Action<Vec<Item>, String>| {\n\tdiv {\n\t\t{\n\t\t\tView::fragment(\n\t\t\t\t\tsignal\n\t\t\t\t\t\t.result()\n\t\t\t\t\t\t.unwrap_or_default()\n\t\t\t\t\t\t.iter()\n\t\t\t\t\t\t.map(|item| {\n\t\t\t\t\t\t\tlet text = item.text.clone();\n\t\t\t\t\t\t\tpage!(| text : String | { span { { text } } })(text)\n\t\t\t\t\t\t})\n\t\t\t\t\t\t.collect::<Vec<_>>(),\n\t\t\t\t)\n\t\t}\n\t}\n})(signal)"
+		);
+	}
+
+	#[test]
+	fn test_format_complex_dsl_conditional() {
+		let formatter = AstPageFormatter::new();
+		let input = r#"page!(|signal: Action<Vec<Item>, String>| {
+	div {
+		if signal.result().is_some() {
+			{ View::fragment(signal.result().unwrap_or_default().iter().map(|item| { let text = item.text.clone(); page!(|text: String| { div class="item" { { text } } })(text) }).collect::<Vec<_>>()) }
+		} else {
+			p { "Loading..." }
+		}
+	}
+})(signal)"#;
+		let result = formatter.format(input).unwrap();
+		assert_eq!(
+			result.content,
+			"page!(|signal: Action<Vec<Item>, String>| {\n\tdiv {\n\t\tif signal.result().is_some() {\n\t\t\t{\n\t\t\t\tView::fragment(\n\t\t\t\t\t\tsignal\n\t\t\t\t\t\t\t.result()\n\t\t\t\t\t\t\t.unwrap_or_default()\n\t\t\t\t\t\t\t.iter()\n\t\t\t\t\t\t\t.map(|item| {\n\t\t\t\t\t\t\t\tlet text = item.text.clone();\n\t\t\t\t\t\t\t\tpage!(| text : String | { div class = \"item\" { { text } } })(text)\n\t\t\t\t\t\t\t})\n\t\t\t\t\t\t\t.collect::<Vec<_>>(),\n\t\t\t\t\t)\n\t\t\t}\n\t\t} else {\n\t\t\tp {\n\t\t\t\t\"Loading...\"\n\t\t\t}\n\t\t}\n\t}\n})(signal)"
+		);
+	}
+
+	#[test]
+	fn test_format_complex_dsl_for_loop() {
+		let formatter = AstPageFormatter::new();
+		let input = r#"page!(|items: Vec<Item>| {
+	div class="list" {
+		for item in items {
+			div class="card" {
+				{ View::fragment(item.tags.iter().map(|tag| { let t = tag.clone(); page!(|t: String| { span class="tag" { { t } } })(t) }).collect::<Vec<_>>()) }
+			}
+		}
+	}
+})(items)"#;
+		let result = formatter.format(input).unwrap();
+		assert_eq!(
+			result.content,
+			"page!(|items: Vec<Item>| {\n\tdiv class=\"list\" {\n\t\tfor item in items {\n\t\t\tdiv class=\"card\" {\n\t\t\t\t{ View::fragment(item.tags.iter().map(|tag| { let t = tag.clone(); page!(|t: String| { span class=\"tag\" { { t } } })(t) }).collect::<Vec<_>>()) }\n\t\t\t}\n\t\t}\n\t}\n})(items)"
+		);
 	}
 }

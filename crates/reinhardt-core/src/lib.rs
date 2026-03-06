@@ -65,6 +65,8 @@
 //! | `messages` | disabled | Flash message storage |
 //! | `page` | disabled | Server-side page rendering types |
 
+pub mod apply_update;
+pub use apply_update::ApplyUpdate;
 /// HTTP endpoint routing and handler registration.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod endpoint;

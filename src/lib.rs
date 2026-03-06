@@ -274,6 +274,10 @@ pub use reinhardt_conf::settings::sources::{
 	DefaultSource, EnvSource, LowPriorityEnvSource, TomlFileSource,
 };
 
+// Re-export ApplyUpdate trait and macros
+pub use reinhardt_core::apply_update::ApplyUpdate;
+pub use reinhardt_macros::{ApplyUpdate as DeriveApplyUpdate, apply_update};
+
 // Re-export core types
 #[cfg(all(feature = "core", not(target_arch = "wasm32")))]
 pub use reinhardt_core::{
@@ -561,6 +565,13 @@ pub use reinhardt_db::orm::{
 	OnUpdate,
 	UniqueConstraint,
 };
+
+// Re-export reinhardt-query prelude types (via reinhardt-db orm)
+// Query builder Query type is available as reinhardt::db::orm::Query
+// to avoid name conflict with reinhardt::Query (DI params extractor).
+// Value is re-exported as QueryBuilderValue to avoid conflicts with existing types.
+#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+pub use reinhardt_db::orm::{IntoValue, Order, QueryBuilderValue};
 
 // Re-export database pool
 #[cfg(all(feature = "database", not(target_arch = "wasm32")))]
@@ -855,7 +866,14 @@ pub use reinhardt_forms::{
 
 // Re-export DI and parameters (FastAPI-style parameter extraction)
 #[cfg(all(feature = "di", not(target_arch = "wasm32")))]
-pub use reinhardt_di::{Depends, DiError, DiResult, InjectionContext, RequestContext};
+pub use reinhardt_di::injected::{Injected, OptionalInjected};
+#[cfg(all(feature = "di", not(target_arch = "wasm32")))]
+pub use reinhardt_di::scope::{RequestScope, Scope, SingletonScope};
+#[cfg(all(feature = "di", not(target_arch = "wasm32")))]
+pub use reinhardt_di::{
+	Depends, DependsBuilder, DiError, DiResult, Injectable, InjectionContext,
+	InjectionContextBuilder, InjectionMetadata, RequestContext,
+};
 
 // Re-export DI params - available in minimal, standard, and di features
 #[cfg(all(
@@ -1038,6 +1056,16 @@ pub mod prelude {
 
 	// Admin feature - use reinhardt-admin-api crate directly for admin functionality
 }
+
+// Re-export WebSocket types
+#[cfg(all(feature = "websockets-pages", not(target_arch = "wasm32")))]
+pub use reinhardt_websockets::integration::pages::PagesAuthenticator;
+#[cfg(all(feature = "websockets", not(target_arch = "wasm32")))]
+pub use reinhardt_websockets::room::RoomManager;
+#[cfg(all(feature = "websockets", not(target_arch = "wasm32")))]
+pub use reinhardt_websockets::{
+	ConsumerContext, Message, WebSocketConsumer, WebSocketError, WebSocketResult,
+};
 
 /// Database re-exports for Model derive macro generated code.
 ///

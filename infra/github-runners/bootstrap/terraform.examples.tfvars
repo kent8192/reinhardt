@@ -11,4 +11,4 @@
 #   terraform init && terraform plan && terraform apply
 
 aws_region     = "us-east-1"
-aws_account_id = "<aws-account-id>"  # 12-digit account ID: aws sts get-caller-identity --query Account --output text
+aws_account_id = "<aws-account-id>" # 12-digit account ID: aws sts get-caller-identity --query Account --output text

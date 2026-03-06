@@ -1,0 +1,11 @@
+resource "aws_elasticache_cluster" "main" {
+  cluster_id      = "{{ project_name }}-cache"
+  engine          = "redis"
+  node_type       = "cache.t4g.micro"
+  num_cache_nodes = 1
+  port            = 6379
+
+  tags = {
+    Name = "{{ project_name }}-cache"
+  }
+}

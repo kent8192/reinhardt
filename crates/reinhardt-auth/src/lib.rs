@@ -79,6 +79,9 @@ pub use core::Argon2Hasher;
 // Re-export permission operators from core
 pub use core::permission_operators;
 
+pub mod repository;
+pub use repository::{SimpleUserRepository, UserRepository};
+
 /// Advanced permission classes (role-based, object-level).
 pub mod advanced_permissions;
 /// Base user manager trait for CRUD operations.
@@ -157,7 +160,7 @@ pub use model_permissions::{
 #[cfg(feature = "oauth")]
 pub use oauth2::{
 	AccessToken, AuthorizationCode, GrantType, InMemoryOAuth2Store, OAuth2Application,
-	OAuth2Authentication, OAuth2TokenStore, SimpleUserRepository, UserRepository,
+	OAuth2Authentication, OAuth2TokenStore,
 };
 pub use object_permissions::{ObjectPermission, ObjectPermissionChecker, ObjectPermissionManager};
 pub use permission_operators::{AndPermission, NotPermission, OrPermission};

@@ -11,6 +11,7 @@ This document defines the stability guarantees and versioning policies for the R
 - [Version Lifecycle](#version-lifecycle)
 - [Alpha Phase](#alpha-phase)
 - [RC Phase](#rc-phase)
+- [Develop Branch Strategy](#develop-branch-strategy)
 - [Stable Phase](#stable-phase)
 - [RC to Stable Criteria](#rc-to-stable-criteria)
 - [Version Bump Rules During RC](#version-bump-rules-during-rc)
@@ -71,9 +72,9 @@ The RC phase is a stabilization period. The primary goal is to validate the API 
 
 During the RC phase (`0.1.0-rc.N`):
 
-- **NO** new public API additions (structs, traits, functions, methods, modules)
+- **NO** new public API additions — **except** backward-compatible (non-breaking) additions approved through the RC Non-Breaking Addition Review process (see SP-6)
 - **NO** new feature flags
-- **NO** new public re-exports
+- **NO** new public re-exports (unless part of an SP-6-approved addition)
 - Private/internal APIs may still be modified if they do not affect the public surface
 
 **Exception: Backward-Compatible Renames via Deprecation Alias**
@@ -97,7 +98,7 @@ Requirements for deprecation-alias renames:
 - Existing code using the old name MUST continue to compile without modification
 - The rename MUST be documented in the CHANGELOG
 
-**Rationale:** The RC phase validates the existing API surface. Adding new APIs during RC undermines this validation and introduces untested surface area. However, fixing naming issues discovered during RC validation improves API quality for the stable release, and deprecation aliases ensure no existing code breaks.
+**Rationale:** The RC phase validates the existing API surface. Unrestricted API additions during RC could introduce untested surface area. However, non-breaking additions that have been reviewed and approved through SP-6 maintain quality while providing necessary flexibility. Deprecation aliases ensure no existing code breaks when renaming.
 
 ### SP-2 (MUST): Bug-Fix-Only Policy
 
@@ -111,16 +112,17 @@ Only the following changes are permitted during RC:
 | Performance fixes | Optimization of existing behavior (no API changes) |
 | Dependency updates | Security patches, bug fix versions only |
 | Deprecation-alias renames | Rename public items with backward-compatible aliases (see SP-1 exception) |
+| Approved non-breaking additions | New APIs approved through SP-6 review process |
 
 | NOT Permitted | Examples |
 |---------------|----------|
-| New features | New API endpoints, new configuration options |
-| API additions | New public methods, new public types (even if non-breaking) |
+| New features without SP-6 approval | New API endpoints, new configuration options |
+| Unapproved API additions | New public methods, new public types without SP-6 approval |
 | Refactoring | Code restructuring that changes public interfaces |
 | New dependencies | Adding new crate dependencies |
 
-**Why non-breaking feature additions are not permitted:**
-Non-breaking API additions (new functions, types, traits) are safe from a SemVer perspective, but they undermine the purpose of the RC phase. New APIs introduced during RC have not been validated through the stabilization period, resulting in untested surface area entering the stable release. Feature additions should target the next version cycle (`0.2.0-alpha`).
+**Non-breaking additions during RC:**
+Non-breaking API additions (new functions, types, traits) are permitted during RC only when approved through the SP-6 review process. This ensures that additions are intentional and reviewed, while avoiding unnecessary restrictions that conflict with SemVer conventions and industry practice.
 
 ### SP-3 (MUST): Breaking Changes Require Approval
 
@@ -174,7 +176,129 @@ fix(orm): resolve panic when empty query result is returned
 fix(auth): correct token expiration calculation off-by-one error
 ```
 
-Feature commits (`feat:`) are **NOT** permitted during RC (enforced by review).
+Feature commits (`feat:`) are **NOT** permitted during RC unless approved through SP-6 (enforced by review).
+
+### SP-6 (MUST): RC Non-Breaking Addition Review
+
+Non-breaking API additions during the RC phase require a lightweight approval process:
+
+1. Create a GitHub Issue documenting the technical justification for the addition
+2. Apply `enhancement` and `rc-addition` labels
+3. Obtain maintainer approval before implementation
+4. Migration guide is **not required** (the addition is non-breaking)
+
+**Permitted additions:**
+- New public functions, methods, structs, traits, or modules that do not affect existing API surface
+- Additions where all existing code compiles and behaves identically without modification
+
+**Not permitted (even with approval):**
+- New feature flags (remains prohibited under SP-1)
+- Additions that require changes to existing API signatures
+- Additions that alter the behavior of existing APIs
+
+**Rationale:** SemVer and industry practice (e.g., Bevy) permit non-breaking additions in pre-release versions. A lightweight approval process ensures quality without unnecessarily blocking improvements. The `cargo-semver-checks --release-type minor` CI check already validates that additions are non-breaking.
+
+---
+
+## Develop Branch Strategy
+
+During the RC phase, `main` is restricted to bug fixes only (SP-2). To continue development of features and breaking changes for the next version, a dedicated develop branch is used.
+
+### DB-1 (MUST): Branch Creation
+
+When the version group enters the RC phase (first `rc.1` tag is created), a `develop/0.x+1.0` branch MUST be created from `main`:
+
+```bash
+# Example: when 0.1.0-rc.1 is released, create develop branch for 0.2.0
+git checkout main
+git checkout -b develop/0.2.0
+git push origin develop/0.2.0
+```
+
+Since all crates follow a unified version group, only one develop branch exists per RC cycle.
+
+### DB-2 (MUST): Permitted Changes
+
+The `develop/0.x+1.0` branch accepts changes that are NOT permitted on `main` during RC:
+
+| Permitted on develop | Examples |
+|---------------------|----------|
+| Breaking changes | API modifications, trait signature changes |
+| New features (`feat:`) | New API endpoints, new configuration options |
+| New API additions | New public methods, types, traits, modules |
+| New dependencies | Adding new crate dependencies |
+| Interface-changing refactoring | Code restructuring that changes public interfaces |
+
+All changes MUST follow the same coding standards, testing requirements, and commit conventions as `main`.
+
+### DB-3 (MUST): Bug Fix Flow
+
+Bug fixes during the RC phase MUST be applied to `main` first, then propagated to the develop branch via forward-merge (DB-4). This ensures:
+
+- RC releases always contain the latest fixes
+- The develop branch inherits all stability improvements
+- No bug fix is lost when the develop branch is eventually merged back
+
+**NEVER** apply a bug fix only to the develop branch. If the bug exists in the RC version, it must be fixed on `main` first.
+
+### DB-4 (SHOULD): Forward-Merge from Main
+
+Bug fixes merged to `main` SHOULD be regularly forward-merged into the develop branch:
+
+- **Minimum frequency**: After each RC version bump (e.g., `rc.1` → `rc.2`)
+- **Recommended frequency**: Weekly, or after each significant bug fix merge
+- **Merge strategy**: Use the worktree-based merge strategy (per PR_GUIDELINE.md CR-1)
+
+```bash
+# Forward-merge main into develop branch using worktree
+git worktree add /tmp/reinhardt-develop develop/0.2.0
+cd /tmp/reinhardt-develop
+git merge main
+# Resolve conflicts if any
+git push origin develop/0.2.0
+cd -
+git worktree remove /tmp/reinhardt-develop
+```
+
+### DB-5 (MUST): Lifecycle End
+
+After the stable release (e.g., `0.1.0` is published):
+
+1. **Final forward-merge**: Merge `main` into the develop branch to incorporate the stable release
+2. **Merge into main**: Merge the develop branch into `main` using a merge commit (NOT squash)
+3. **Delete the branch**: Remove the develop branch after successful merge
+
+```bash
+# After 0.1.0 stable release
+git checkout develop/0.2.0
+git merge main                    # Final forward-merge
+git checkout main
+git merge --no-ff develop/0.2.0   # Merge commit preserves full history
+git push origin main
+git branch -d develop/0.2.0
+git push origin --delete develop/0.2.0
+```
+
+**NEVER** squash-merge the develop branch. A merge commit preserves the complete development history and makes it easier to trace the origin of changes.
+
+### DB-6 (MUST): release-plz Interaction
+
+release-plz is configured to monitor `main` only:
+
+- The develop branch is **NOT** monitored by release-plz
+- No Release PRs, publishing, or tag creation occurs for the develop branch
+- `Cargo.toml` versions in the develop branch do NOT need manual management
+- After the develop branch is merged into `main`, release-plz will detect the changes and generate appropriate Release PRs for the next version cycle
+
+**No changes to `release-plz.toml` are required** for the develop branch workflow.
+
+### DB-7 (SHOULD): CI Coverage
+
+The existing CI configuration (`ci.yml`) runs on all pull requests regardless of target branch:
+
+- PRs targeting `develop/0.x+1.0` are automatically covered by CI
+- `cargo-semver-checks` may report breaking changes on develop branch PRs — this is expected and informational, not blocking
+- All other CI checks (tests, clippy, fmt, docs) apply normally
 
 ---
 
@@ -286,7 +410,7 @@ When a bug fix is applied during the RC phase:
 ```
 
 Each RC increment MUST:
-- Include only bug fixes (per SP-2)
+- Include bug fixes and/or approved non-breaking additions (per SP-2, SP-6)
 - Update the CHANGELOG with fix descriptions
 - Reset the stability timer (per SC-2)
 
@@ -307,7 +431,7 @@ The stable release MUST:
 
 During the RC phase:
 - **NEVER** bump to a new minor or major version
-- **NEVER** add `feat:` commits
+- **NEVER** add unapproved `feat:` commits (approved SP-6 additions may use `feat:`)
 - **NEVER** introduce new pre-release identifiers (e.g., `0.1.0-rc.1-beta.1`)
 
 ---
@@ -316,7 +440,7 @@ During the RC phase:
 
 ### MUST DO
 - Follow the monotonic lifecycle progression: alpha → RC → stable
-- Freeze public API surface during RC phase (no new APIs, no new features)
+- Freeze public API surface during RC phase (non-breaking additions require SP-6 approval)
 - Apply bug-fix-only policy during RC phase
 - Preserve backward compatibility when renaming APIs during RC (deprecation alias required)
 - Obtain explicit maintainer approval for any breaking change during RC
@@ -326,13 +450,19 @@ During the RC phase:
 - Meet ALL SC-1 criteria before transitioning to stable
 - Increment RC version for each bug fix release (`rc.1` → `rc.2`)
 - Use the API Change Proposal template for breaking changes during RC
+- Obtain SP-6 approval (issue + `rc-addition` label + maintainer sign-off) before adding non-breaking APIs during RC
 - Verify agent-detected bugs independently before removing `agent-suspect` label (SC-2a)
 - Exclude `agent-suspect` labeled issues from stability timer reset
+- Create `develop/0.x+1.0` branch when version group enters RC phase (DB-1)
+- Direct next-version features and breaking changes to `develop/0.x+1.0` during RC (DB-2)
+- Apply RC bug fixes to `main` first, then forward-merge to develop (DB-3)
+- Forward-merge `main` into develop branch regularly (DB-4)
+- Merge develop branch into `main` after stable release using merge commit (DB-5)
 
 ### NEVER DO
 - Regress from RC back to alpha
-- Add new public APIs during the RC phase (even if non-breaking)
-- Add `feat:` commits during the RC phase
+- Add new public APIs during the RC phase without SP-6 approval
+- Add unapproved `feat:` commits during the RC phase (SP-6-approved additions may use `feat:`)
 - Rename public APIs during RC without a backward-compatible deprecation alias
 - Remove APIs deprecated during RC before the next major version
 - Apply breaking changes during RC without explicit maintainer approval
@@ -342,6 +472,11 @@ During the RC phase:
 - Introduce new pre-release identifiers during RC (e.g., `-beta`)
 - Remove `agent-suspect` label without independent verification (separate agent or human)
 - Count `agent-suspect` labeled issues toward stability timer reset
+- Merge next-version features or breaking changes directly into `main` during RC (use `develop/0.x+1.0`)
+- Apply bug fixes only to the develop branch without fixing on `main` first (DB-3)
+- Configure release-plz to monitor the develop branch (DB-6)
+- Delete the develop branch before merging into `main` (DB-5)
+- Squash-merge the develop branch into `main` (DB-5)
 
 ---
 

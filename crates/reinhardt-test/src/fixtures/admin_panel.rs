@@ -32,7 +32,7 @@ use {
 
 // Import shared_db_pool fixture for testcontainers-based tests
 #[cfg(all(feature = "admin", feature = "testcontainers"))]
-use crate::fixtures::shared_postgres::shared_db_pool;
+use reinhardt_testkit::fixtures::shared_postgres::shared_db_pool;
 
 /// Fixture providing a basic AdminSite instance
 ///

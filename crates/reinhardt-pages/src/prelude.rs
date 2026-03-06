@@ -35,8 +35,8 @@
 //! - [`use_state`], [`use_effect`], [`use_memo`], [`use_callback`], [`use_context`]
 //! - [`use_ref`], [`use_reducer`], [`use_transition`], [`use_deferred_value`]
 //! - [`use_id`], [`use_layout_effect`], [`use_effect_event`], [`use_debug_value`]
-//! - [`use_optimistic`], [`use_action_state`], [`use_shared_state`]
-//! - [`use_sync_external_store`]
+//! - [`use_optimistic`], [`use_action_state`] (deprecated), [`use_shared_state`]
+//! - [`use_action`], [`use_sync_external_store`]
 //!
 //! ## Component System
 //! - [`Component`], [`PageElement`], [`IntoPage`], [`Page`], [`Props`]
@@ -73,6 +73,8 @@ pub use crate::reactive::{
 };
 
 // Hooks API
+pub use crate::reactive::{Action, ActionPhase, use_action};
+#[allow(deprecated)] // Intentional: re-exporting deprecated items for backward compatibility
 pub use crate::reactive::{
 	ActionState, Dispatch, OptimisticState, Ref, SetState, SharedSetState, SharedSignal,
 	TransitionState, use_action_state, use_callback, use_context, use_debug_value,

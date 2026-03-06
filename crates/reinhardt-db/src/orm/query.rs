@@ -2391,8 +2391,21 @@ where
 
 	/// Quote a SQL identifier to prevent injection via field names.
 	/// Uses PostgreSQL double-quote escaping (also valid for SQLite).
+	/// Handles dot-separated qualified names (e.g., "table.column" becomes "table"."column").
 	fn quote_identifier(field: &str) -> String {
-		format!("\"{}\"", field.replace('"', "\"\""))
+		fn quote_single(name: &str) -> String {
+			format!("\"{}\"", name.replace('"', "\"\""))
+		}
+
+		if field.contains('.') {
+			field
+				.split('.')
+				.map(quote_single)
+				.collect::<Vec<_>>()
+				.join(".")
+		} else {
+			quote_single(field)
+		}
 	}
 
 	/// Build WHERE condition using reinhardt-query from accumulated filters
@@ -2431,22 +2444,22 @@ where
 				(FilterOperator::Eq, FilterValue::OuterRef(outer)) => {
 					// For correlated subqueries, reference outer query field
 					// e.g., WHERE books.author_id = authors.id (where authors is from outer query)
-					col.eq(Expr::col(Alias::new(&outer.field)))
+					col.eq(Expr::col(parse_column_reference(&outer.field)))
 				}
 				(FilterOperator::Ne, FilterValue::OuterRef(outer)) => {
-					col.ne(Expr::col(Alias::new(&outer.field)))
+					col.ne(Expr::col(parse_column_reference(&outer.field)))
 				}
 				(FilterOperator::Gt, FilterValue::OuterRef(outer)) => {
-					col.gt(Expr::col(Alias::new(&outer.field)))
+					col.gt(Expr::col(parse_column_reference(&outer.field)))
 				}
 				(FilterOperator::Gte, FilterValue::OuterRef(outer)) => {
-					col.gte(Expr::col(Alias::new(&outer.field)))
+					col.gte(Expr::col(parse_column_reference(&outer.field)))
 				}
 				(FilterOperator::Lt, FilterValue::OuterRef(outer)) => {
-					col.lt(Expr::col(Alias::new(&outer.field)))
+					col.lt(Expr::col(parse_column_reference(&outer.field)))
 				}
 				(FilterOperator::Lte, FilterValue::OuterRef(outer)) => {
-					col.lte(Expr::col(Alias::new(&outer.field)))
+					col.lte(Expr::col(parse_column_reference(&outer.field)))
 				}
 				// Expression comparisons (F("a") * F("b") etc.)
 				(FilterOperator::Eq, FilterValue::Expression(expr)) => {
@@ -6065,6 +6078,8 @@ mod tests {
 	#[case(r#"a"b"#, r#""a""b""#)]
 	#[case("field; DROP TABLE users", r#""field; DROP TABLE users""#)]
 	#[case("", r#""""#)]
+	#[case("authors.id", r#""authors"."id""#)]
+	#[case("schema.table.column", r#""schema"."table"."column""#)]
 	fn test_quote_identifier(#[case] input: &str, #[case] expected: &str) {
 		// Arrange
 		// input and expected provided by rstest cases
@@ -6110,6 +6125,33 @@ mod tests {
 	}
 
 	#[rstest]
+	fn test_outerref_dot_separated_renders_qualified_column() {
+		// Arrange
+		use crate::orm::expressions::OuterRef;
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"author_id".to_string(),
+			FilterOperator::Eq,
+			FilterValue::OuterRef(OuterRef::new("authors.id")),
+		));
+
+		// Act
+		let sql = queryset.to_sql();
+
+		// Assert
+		// OuterRef("authors.id") must render as "authors"."id", not "authors.id"
+		assert!(
+			sql.contains(r#""authors"."id""#),
+			"Expected qualified column reference in SQL, got: {}",
+			sql
+		);
+		assert!(
+			!sql.contains(r#""authors.id""#),
+			"SQL must not contain single-identifier authors.id, got: {}",
+			sql
+		);
+	}
+
+		#[rstest]
 	fn test_injection_attempt_in_field_name_is_quoted() {
 		// Arrange
 		// Attempt SQL injection via field name with double quote

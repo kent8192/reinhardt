@@ -812,25 +812,6 @@ mod tests {
 	}
 
 	#[rstest::rstest]
-	fn test_rwlock_poison_recovery_in_memory_token_storage() {
-		// Arrange
-		let storage = InMemoryTokenStorage::new();
-
-		// Act - poison the RwLock by panicking while holding a write guard
-		let tokens_clone = Arc::clone(&storage.tokens);
-		let _ = std::thread::spawn(move || {
-			let _guard = tokens_clone.write().unwrap();
-			panic!("intentional panic to poison lock");
-		})
-		.join();
-
-		// Assert - operations still work after poison recovery
-		assert_eq!(storage.len(), 0);
-		assert!(storage.is_empty());
-		storage.clear();
-	}
-
-	#[rstest::rstest]
 	#[tokio::test]
 	async fn test_rwlock_poison_recovery_in_memory_token_storage_async() {
 		// Arrange

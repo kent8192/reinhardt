@@ -171,6 +171,7 @@ fn integer_converter_default_equals_new() {
 #[case("6ba7b810-9dad-11d1-80b4-00c04fd430c8")]
 #[case("00000000-0000-0000-0000-000000000000")]
 #[case("ffffffff-ffff-ffff-ffff-ffffffffffff")]
+#[case("550E8400-E29B-41D4-A716-446655440000")]
 fn uuid_converter_validate_valid(#[case] input: &str) {
 	// Arrange
 	let conv = UuidConverter;
@@ -186,7 +187,6 @@ fn uuid_converter_validate_valid(#[case] input: &str) {
 #[case("not-a-uuid")]
 #[case("550e8400-e29b-41d4-a716")]
 #[case("550e8400-e29b-41d4-a716-446655440000-extra")]
-#[case("550E8400-E29B-41D4-A716-446655440000")]
 #[case("")]
 #[case("550e8400e29b41d4a716446655440000")]
 fn uuid_converter_validate_invalid(#[case] input: &str) {
@@ -240,7 +240,7 @@ fn uuid_converter_pattern() {
 	// Assert
 	assert_eq!(
 		pattern,
-		r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+		r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 	);
 }
 

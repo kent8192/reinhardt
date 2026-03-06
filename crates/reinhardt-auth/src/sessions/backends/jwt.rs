@@ -19,7 +19,7 @@
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create JWT configuration
-//! let config = JwtConfig::new("your-secret-key".to_string())
+//! let config = JwtConfig::new("your-secret-key-must-be-at-least-32-bytes-long!!".to_string())
 //!     .with_algorithm(Algorithm::HS256)
 //!     .with_expiration(3600); // 1 hour
 //!
@@ -76,10 +76,10 @@ pub enum JwtSessionError {
 /// use jsonwebtoken::Algorithm;
 ///
 /// // Basic configuration with HS256
-/// let config = JwtConfig::new("my-secret-key".to_string());
+/// let config = JwtConfig::new("my-secret-key-for-jwt-at-least-32b!".to_string());
 ///
 /// // Advanced configuration
-/// let config = JwtConfig::new("my-secret-key".to_string())
+/// let config = JwtConfig::new("my-secret-key-for-jwt-at-least-32-bytes-long-for-hs512!!!!!!!!".to_string())
 ///     .with_algorithm(Algorithm::HS512)
 ///     .with_expiration(7200)
 ///     .with_issuer("my-app".to_string())
@@ -181,7 +181,7 @@ struct SessionClaims {
 /// use serde_json::json;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let config = JwtConfig::new("secret".to_string())
+/// let config = JwtConfig::new("secret-key-must-be-at-least-32-b!".to_string())
 ///     .with_algorithm(Algorithm::HS256);
 ///
 /// let backend = JwtSessionBackend::new(config);
@@ -222,6 +222,24 @@ impl JwtSessionBackend {
 	where
 		T: Serialize,
 	{
+		// Validate HMAC secret key length per NIST SP 800-107 recommendations
+		let min_key_length = match self.config.algorithm {
+			Algorithm::HS256 => Some(32),
+			Algorithm::HS384 => Some(48),
+			Algorithm::HS512 => Some(64),
+			_ => None, // Non-HMAC algorithms have different key requirements
+		};
+		if let Some(min_len) = min_key_length
+			&& self.config.secret.len() < min_len
+		{
+			return Err(JwtSessionError::EncodingError(format!(
+				"{:?} requires a secret key of at least {} bytes, but got {} bytes",
+				self.config.algorithm,
+				min_len,
+				self.config.secret.len()
+			)));
+		}
+
 		let now = chrono::Utc::now().timestamp() as usize;
 		let expiration = ttl.unwrap_or(self.config.expiration);
 
@@ -357,11 +375,13 @@ impl SessionBackend for JwtSessionBackend {
 mod tests {
 	use super::*;
 	use jsonwebtoken::{EncodingKey, Header, encode};
+	use rstest::rstest;
 	use serde_json::json;
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_jwt_session_save_and_load() {
-		let config = JwtConfig::new("test-secret".to_string());
+		let config = JwtConfig::new("test-secret-key-for-jwt-testing!!".to_string());
 		let backend = JwtSessionBackend::new(config);
 
 		let session_data = json!({
@@ -381,9 +401,10 @@ mod tests {
 		assert_eq!(loaded.unwrap()["user_id"], 123);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_jwt_session_expiration() {
-		let config = JwtConfig::new("test-secret".to_string());
+		let config = JwtConfig::new("test-secret-key-for-jwt-testing!!".to_string());
 		let backend = JwtSessionBackend::new(config.clone());
 
 		// Manually create an expired token by directly manipulating the tokens map
@@ -414,9 +435,10 @@ mod tests {
 		assert!(loaded.is_none());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_jwt_session_delete() {
-		let config = JwtConfig::new("test-secret".to_string());
+		let config = JwtConfig::new("test-secret-key-for-jwt-testing!!".to_string());
 		let backend = JwtSessionBackend::new(config);
 
 		let session_data = json!({
@@ -439,9 +461,10 @@ mod tests {
 		assert!(!backend.exists("delete_test").await.unwrap());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_jwt_session_exists() {
-		let config = JwtConfig::new("test-secret".to_string());
+		let config = JwtConfig::new("test-secret-key-for-jwt-testing!!".to_string());
 		let backend = JwtSessionBackend::new(config);
 
 		// Non-existent session
@@ -461,9 +484,13 @@ mod tests {
 		assert!(backend.exists("exists_test").await.unwrap());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_jwt_with_different_algorithms() {
-		let config = JwtConfig::new("test-secret".to_string()).with_algorithm(Algorithm::HS512);
+		let config = JwtConfig::new(
+			"test-secret-key-for-jwt-testing-hs512-algorithm-minimum-64-bytes!!".to_string(),
+		)
+		.with_algorithm(Algorithm::HS512);
 
 		let backend = JwtSessionBackend::new(config);
 
@@ -481,9 +508,10 @@ mod tests {
 		assert_eq!(loaded.unwrap()["user_id"], 111);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_jwt_with_issuer_and_audience() {
-		let config = JwtConfig::new("test-secret".to_string())
+		let config = JwtConfig::new("test-secret-key-for-jwt-testing!!".to_string())
 			.with_issuer("test-app".to_string())
 			.with_audience("test-users".to_string());
 
@@ -503,9 +531,10 @@ mod tests {
 		assert_eq!(loaded.unwrap()["user_id"], 222);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_jwt_session_complex_data() {
-		let config = JwtConfig::new("test-secret".to_string());
+		let config = JwtConfig::new("test-secret-key-for-jwt-testing!!".to_string());
 		let backend = JwtSessionBackend::new(config);
 
 		let session_data = json!({
@@ -531,5 +560,39 @@ mod tests {
 		assert_eq!(data["user_id"], 333);
 		assert_eq!(data["roles"][0], "admin");
 		assert_eq!(data["metadata"]["preferences"]["theme"], "dark");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_jwt_session_rejects_short_secret_key() {
+		// Arrange
+		let config = JwtConfig::new("short-key".to_string());
+		let backend = JwtSessionBackend::new(config);
+		let session_data = json!({"user_id": 1});
+
+		// Act
+		let result = backend.save("test", &session_data, Some(3600)).await;
+
+		// Assert
+		assert!(
+			result.is_err(),
+			"Short secret key should be rejected for HS256"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_jwt_session_rejects_short_secret_for_hs512() {
+		// Arrange
+		let config = JwtConfig::new("this-key-is-32-bytes-but-not-64!".to_string())
+			.with_algorithm(Algorithm::HS512);
+		let backend = JwtSessionBackend::new(config);
+		let session_data = json!({"user_id": 1});
+
+		// Act
+		let result = backend.save("test", &session_data, Some(3600)).await;
+
+		// Assert
+		assert!(result.is_err(), "32-byte key should be rejected for HS512");
 	}
 }

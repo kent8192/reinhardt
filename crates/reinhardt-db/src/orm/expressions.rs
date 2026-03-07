@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::marker::PhantomData;
 
-use crate::orm::query::{Filter, FilterOperator, FilterValue};
+use crate::orm::query::{Filter, FilterOperator, FilterValue, quote_identifier};
 
 /// F expression - represents a database field reference
 /// Similar to Django's F() objects for database-side operations
@@ -21,7 +21,7 @@ impl F {
 	///
 	/// // Reference a field for comparisons or updates
 	/// let price_ref = F::new("price");
-	/// assert_eq!(price_ref.to_sql(), "price");
+	/// assert_eq!(price_ref.to_sql(), "\"price\"");
 	///
 	/// // Can be used in queries like: WHERE price > F("cost") + 10
 	/// ```
@@ -38,10 +38,10 @@ impl F {
 	/// use reinhardt_db::orm::expressions::F;
 	///
 	/// let user_id = F::new("user_id");
-	/// assert_eq!(user_id.to_sql(), "user_id");
+	/// assert_eq!(user_id.to_sql(), "\"user_id\"");
 	/// ```
 	pub fn to_sql(&self) -> String {
-		self.field.clone()
+		quote_identifier(&self.field)
 	}
 }
 
@@ -153,10 +153,10 @@ impl<M, T> FieldRef<M, T> {
 	///
 	/// ```ignore
 	/// let id_ref = User::field_id();
-	/// assert_eq!(id_ref.to_sql(), "id");
+	/// assert_eq!(id_ref.to_sql(), "\"id\"");
 	/// ```
 	pub fn to_sql(&self) -> String {
-		self.name.to_string()
+		quote_identifier(self.name)
 	}
 
 	/// Create an equality filter for this field
@@ -890,7 +890,7 @@ mod tests {
 	fn test_field_ref_basic() {
 		let id_ref = TestUser::field_id();
 		assert_eq!(id_ref.name(), "id");
-		assert_eq!(id_ref.to_sql(), "id");
+		assert_eq!(id_ref.to_sql(), "\"id\"");
 		assert_eq!(format!("{}", id_ref), "id");
 	}
 
@@ -898,20 +898,20 @@ mod tests {
 	fn test_field_ref_string_field() {
 		let name_ref = TestUser::field_name();
 		assert_eq!(name_ref.name(), "name");
-		assert_eq!(name_ref.to_sql(), "name");
+		assert_eq!(name_ref.to_sql(), "\"name\"");
 	}
 
 	#[test]
 	fn test_field_ref_to_f_conversion() {
 		let id_ref = TestUser::field_id();
 		let f: F = id_ref.into();
-		assert_eq!(f.to_sql(), "id");
+		assert_eq!(f.to_sql(), "\"id\"");
 	}
 
 	#[test]
 	fn test_expressions_f_unit() {
 		let f = F::new("price");
-		assert_eq!(f.to_sql(), "price");
+		assert_eq!(f.to_sql(), "\"price\"");
 		assert_eq!(format!("{}", f), "price");
 	}
 
@@ -1048,7 +1048,7 @@ mod tests {
 		let id_field = TestUser::field_id();
 		let f: F = id_field.into();
 
-		assert_eq!(f.to_sql(), "id");
+		assert_eq!(f.to_sql(), "\"id\"");
 		assert_eq!(format!("{}", f), "id");
 	}
 
@@ -1058,7 +1058,7 @@ mod tests {
 		let name_field = TestUser::field_name();
 		let f: F = name_field.into();
 
-		assert_eq!(f.to_sql(), "name");
+		assert_eq!(f.to_sql(), "\"name\"");
 		assert_eq!(format!("{}", f), "name");
 	}
 
@@ -1068,8 +1068,8 @@ mod tests {
 		let id_f: F = TestUser::field_id().into();
 		let name_f: F = TestUser::field_name().into();
 
-		assert_eq!(id_f.to_sql(), "id");
-		assert_eq!(name_f.to_sql(), "name");
+		assert_eq!(id_f.to_sql(), "\"id\"");
+		assert_eq!(name_f.to_sql(), "\"name\"");
 		assert_ne!(id_f.to_sql(), name_f.to_sql());
 	}
 
@@ -1080,7 +1080,7 @@ mod tests {
 		let original_name = id_field.name();
 		let f: F = id_field.into();
 
-		assert_eq!(f.to_sql(), original_name);
+		assert_eq!(f.to_sql(), quote_identifier(original_name));
 	}
 
 	#[test]
@@ -1089,7 +1089,7 @@ mod tests {
 		const ID_FIELD: FieldRef<TestUser, i64> = FieldRef::new("id");
 		let f: F = ID_FIELD.into();
 
-		assert_eq!(f.to_sql(), "id");
+		assert_eq!(f.to_sql(), "\"id\"");
 	}
 }
 // Auto-generated tests for expressions module
@@ -1305,7 +1305,7 @@ mod expressions_extended_tests {
 		let outer_ref = OuterRef::new("price");
 		let f = F::new("product_price");
 		assert_eq!(outer_ref.to_sql(), "price");
-		assert_eq!(f.to_sql(), "product_price");
+		assert_eq!(f.to_sql(), "\"product_price\"");
 	}
 
 	#[test]
@@ -1398,7 +1398,7 @@ mod expressions_extended_tests {
 	fn test_datetime_and_duration_field_addition_with_annotate_and_no_output_field() {
 		// Test datetime and duration addition
 		let f = F::new("created_at + INTERVAL 7 DAY");
-		assert_eq!(f.to_sql(), "created_at + INTERVAL 7 DAY");
+		assert_eq!(f.to_sql(), "\"created_at + INTERVAL 7 DAY\"");
 	}
 
 	#[test]
@@ -1406,7 +1406,7 @@ mod expressions_extended_tests {
 	fn test_datetime_and_duration_field_addition_with_annotate_and_no_output_field_1() {
 		// Test datetime and duration addition
 		let f = F::new("start_time + duration");
-		assert_eq!(f.to_sql(), "start_time + duration");
+		assert_eq!(f.to_sql(), "\"start_time + duration\"");
 	}
 
 	#[test]
@@ -1464,7 +1464,7 @@ mod expressions_extended_tests {
 	fn test_datetime_subtraction_with_annotate_and_no_output_field() {
 		// Test datetime subtraction
 		let f = F::new("end_time - start_time");
-		assert_eq!(f.to_sql(), "end_time - start_time");
+		assert_eq!(f.to_sql(), "\"end_time - start_time\"");
 	}
 
 	#[test]
@@ -1472,7 +1472,7 @@ mod expressions_extended_tests {
 	fn test_datetime_subtraction_with_annotate_and_no_output_field_1() {
 		// Test datetime subtraction
 		let f = F::new("checkout_time - checkin_time");
-		assert_eq!(f.to_sql(), "checkout_time - checkin_time");
+		assert_eq!(f.to_sql(), "\"checkout_time - checkin_time\"");
 	}
 
 	#[test]
@@ -1806,7 +1806,7 @@ mod expressions_extended_tests {
 	fn test_in_lookup_allows_f_expressions_and_expressions_for_integers() {
 		// Test IN lookup with F expressions
 		let f = F::new("category_id");
-		assert_eq!(f.to_sql(), "category_id");
+		assert_eq!(f.to_sql(), "\"category_id\"");
 	}
 
 	#[test]
@@ -1853,7 +1853,7 @@ mod expressions_extended_tests {
 	fn test_incorrect_field_in_f_expression() {
 		// Test F expression with any field name (no validation at this level)
 		let f = F::new("nonexistent_field");
-		assert_eq!(f.to_sql(), "nonexistent_field");
+		assert_eq!(f.to_sql(), "\"nonexistent_field\"");
 	}
 
 	#[test]
@@ -1861,7 +1861,7 @@ mod expressions_extended_tests {
 	fn test_incorrect_field_in_f_expression_1() {
 		// Test F expression with any field name (no validation at this level)
 		let f = F::new("invalid__field__name");
-		assert_eq!(f.to_sql(), "invalid__field__name");
+		assert_eq!(f.to_sql(), "\"invalid__field__name\"");
 	}
 
 	#[test]
@@ -1869,7 +1869,7 @@ mod expressions_extended_tests {
 	fn test_incorrect_joined_field_in_f_expression() {
 		// Test F expression with joined field reference
 		let f = F::new("related__invalid_field");
-		assert_eq!(f.to_sql(), "related__invalid_field");
+		assert_eq!(f.to_sql(), "\"related__invalid_field\"");
 	}
 
 	#[test]
@@ -1877,7 +1877,7 @@ mod expressions_extended_tests {
 	fn test_incorrect_joined_field_in_f_expression_1() {
 		// Test F expression with joined field reference
 		let f = F::new("user__profile__missing");
-		assert_eq!(f.to_sql(), "user__profile__missing");
+		assert_eq!(f.to_sql(), "\"user__profile__missing\"");
 	}
 
 	#[test]
@@ -1912,8 +1912,8 @@ mod expressions_extended_tests {
 		// Test mixed character and date fields
 		let f1 = F::new("name");
 		let f2 = F::new("created_date");
-		assert_eq!(f1.to_sql(), "name");
-		assert_eq!(f2.to_sql(), "created_date");
+		assert_eq!(f1.to_sql(), "\"name\"");
+		assert_eq!(f2.to_sql(), "\"created_date\"");
 	}
 
 	#[test]
@@ -1923,7 +1923,7 @@ mod expressions_extended_tests {
 		let val_str = Value::String("test".to_string());
 		let f_date = F::new("birth_date");
 		assert_eq!(val_str.to_sql(), "'test'");
-		assert_eq!(f_date.to_sql(), "birth_date");
+		assert_eq!(f_date.to_sql(), "\"birth_date\"");
 	}
 
 	#[test]
@@ -2048,7 +2048,7 @@ mod expressions_extended_tests {
 		// Test group by with field
 		let f = F::new("category");
 		let agg = Aggregate::count(Some("id"));
-		assert_eq!(f.to_sql(), "category");
+		assert_eq!(f.to_sql(), "\"category\"");
 		assert_eq!(agg.to_sql(), "COUNT(id)");
 	}
 
@@ -2058,8 +2058,8 @@ mod expressions_extended_tests {
 		// Test group by with multiple fields
 		let f1 = F::new("year");
 		let f2 = F::new("month");
-		assert_eq!(f1.to_sql(), "year");
-		assert_eq!(f2.to_sql(), "month");
+		assert_eq!(f1.to_sql(), "\"year\"");
+		assert_eq!(f2.to_sql(), "\"month\"");
 	}
 
 	#[test]
@@ -2086,7 +2086,7 @@ mod expressions_extended_tests {
 		let subquery = Subquery::new(format!("SELECT {} FROM products", f.to_sql()));
 		assert_eq!(
 			subquery.to_sql(),
-			"(SELECT price FROM products)",
+			"(SELECT \"price\" FROM products)",
 			"Expected exact subquery with F expression, got: {}",
 			subquery.to_sql()
 		);
@@ -2097,7 +2097,7 @@ mod expressions_extended_tests {
 	fn test_object_create_with_f_expression_in_subquery_1() {
 		// Test F expression in subquery
 		let f = F::new("quantity");
-		assert_eq!(f.to_sql(), "quantity");
+		assert_eq!(f.to_sql(), "\"quantity\"");
 	}
 
 	#[test]
@@ -2385,7 +2385,7 @@ impl Expression {
 	/// use reinhardt_db::orm::expressions::{Expression, F, Value};
 	///
 	/// let field_expr = Expression::F(F::new("price"));
-	/// assert_eq!(field_expr.to_sql(), "price");
+	/// assert_eq!(field_expr.to_sql(), "\"price\"");
 	///
 	/// let value_expr = Expression::Value(Value::int(100));
 	/// assert_eq!(value_expr.to_sql(), "100");

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-mail@v0.1.0-rc.4...reinhardt-mail@v0.1.0-rc.5) - 2026-03-07
+
+### Documentation
+
+- add missing doc comments for public API modules and types
+
+### Other
+
+- resolve conflicts with origin/main
+
 ## [0.1.0-rc.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-mail@v0.1.0-rc.2...reinhardt-mail@v0.1.0-rc.3) - 2026-03-05
 
 ### Fixed

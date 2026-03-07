@@ -59,6 +59,10 @@ jobs:
 
           while IFS=' ' read -r HASH PARENT1 PARENT2 REST; do
             if [ -n "$PARENT2" ]; then
+              # Skip if parent is an ancestor of origin/main (came through main, not develop/*)
+              if git merge-base --is-ancestor "$PARENT2" origin/main 2>/dev/null; then
+                continue
+              fi
               DEVELOP_BRANCH=$(git branch -r --contains "$PARENT2" 2>/dev/null \
                 | grep 'origin/develop/' | head -1 | xargs)
               if [ -n "$DEVELOP_BRANCH" ]; then

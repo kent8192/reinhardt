@@ -1,6 +1,7 @@
 use super::postgres_features::{ArrayAgg, JsonbAgg, JsonbBuildObject, StringAgg, TsRank};
 use crate::orm::aggregation::Aggregate;
 use crate::orm::expressions::{F, Q};
+use crate::orm::query::quote_identifier;
 use serde::{Deserialize, Serialize};
 
 /// Represents an annotation value that can be added to a QuerySet
@@ -129,7 +130,7 @@ impl Annotation {
 	///
 	/// let annotation = Annotation::new("total", AnnotationValue::Value(Value::Int(100)));
 	/// assert_eq!(annotation.alias, "total");
-	/// assert_eq!(annotation.to_sql(), "100 AS total");
+	/// assert_eq!(annotation.to_sql(), "100 AS \"total\"");
 	/// ```
 	pub fn new(alias: impl Into<String>, value: AnnotationValue) -> Self {
 		Self {
@@ -140,7 +141,11 @@ impl Annotation {
 	/// Documentation for `to_sql`
 	///
 	pub fn to_sql(&self) -> String {
-		format!("{} AS {}", self.value.to_sql(), self.alias)
+		format!(
+			"{} AS {}",
+			self.value.to_sql(),
+			quote_identifier(&self.alias)
+		)
 	}
 
 	/// Helper method for creating field-based annotations (convenience alias for `new`)
@@ -232,13 +237,13 @@ mod tests {
 	#[test]
 	fn test_value_annotation() {
 		let ann = Annotation::new("is_active", AnnotationValue::Value(Value::Bool(true)));
-		assert_eq!(ann.to_sql(), "TRUE AS is_active");
+		assert_eq!(ann.to_sql(), "TRUE AS \"is_active\"");
 	}
 
 	#[test]
 	fn test_field_annotation() {
 		let ann = Annotation::new("another_price", AnnotationValue::Field(F::new("price")));
-		assert_eq!(ann.to_sql(), "price AS another_price");
+		assert_eq!(ann.to_sql(), "\"price\" AS \"another_price\"");
 	}
 
 	#[test]
@@ -247,8 +252,8 @@ mod tests {
 		let ann = Annotation::new("num_items", AnnotationValue::Aggregate(agg));
 		let sql = ann.to_sql();
 		assert!(
-			sql.contains("COUNT(id)") && sql.contains("AS num_items"),
-			"SQL should contain 'COUNT(id) AS num_items'. Got: {}",
+			sql.contains("COUNT(id)") && sql.contains("AS \"num_items\""),
+			"SQL should contain 'COUNT(id) AS \"num_items\"'. Got: {}",
 			sql
 		);
 	}
@@ -260,7 +265,7 @@ mod tests {
 			Box::new(AnnotationValue::Value(Value::Int(10))),
 		);
 		let ann = Annotation::new("new_price", AnnotationValue::Expression(expr));
-		assert_eq!(ann.to_sql(), "(price + 10) AS new_price");
+		assert_eq!(ann.to_sql(), "(\"price\" + 10) AS \"new_price\"");
 	}
 
 	#[test]
@@ -292,8 +297,8 @@ mod tests {
 			sql
 		);
 		assert!(
-			sql.ends_with("AS age_group") || sql.contains(" AS age_group"),
-			"SQL should end with 'AS age_group'. Got: {}",
+			sql.ends_with("AS \"age_group\"") || sql.contains(" AS \"age_group\""),
+			"SQL should end with 'AS \"age_group\"'. Got: {}",
 			sql
 		);
 	}
@@ -308,7 +313,7 @@ mod tests {
 		let ann = Annotation::new("display_name", AnnotationValue::Expression(expr));
 		assert_eq!(
 			ann.to_sql(),
-			"COALESCE(nickname, username, 'Anonymous') AS display_name"
+			"COALESCE(\"nickname\", \"username\", 'Anonymous') AS \"display_name\""
 		);
 	}
 
@@ -323,7 +328,10 @@ mod tests {
 			Box::new(AnnotationValue::Field(F::new("tax"))),
 		);
 		let ann = Annotation::new("total", AnnotationValue::Expression(expr));
-		assert_eq!(ann.to_sql(), "((price * quantity) + tax) AS total");
+		assert_eq!(
+			ann.to_sql(),
+			"((\"price\" * \"quantity\") + \"tax\") AS \"total\""
+		);
 	}
 
 	#[test]
@@ -335,7 +343,7 @@ mod tests {
 		let ann = Annotation::new("avg_order_value", AnnotationValue::Expression(expr));
 		assert_eq!(
 			ann.to_sql(),
-			"(total_sales / num_orders) AS avg_order_value"
+			"(\"total_sales\" / \"num_orders\") AS \"avg_order_value\""
 		);
 	}
 }

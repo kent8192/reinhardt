@@ -762,7 +762,7 @@ async fn test_exchange_decision_table(
 
 	// Execute
 	let result = auth
-		.exchange_code(code, client_id, secret, "https://example.com/callback")
+		.exchange_code(code, client_id, secret, "https://dt.example.com/callback")
 		.await;
 
 	// Assert
@@ -871,7 +871,7 @@ async fn test_use_case_multiple_concurrent_authorizations() {
 			&code_a,
 			"service_a",
 			"secret_a",
-			"https://example.com/callback",
+			"https://service-a.com/callback",
 		)
 		.await
 		.unwrap();
@@ -880,7 +880,7 @@ async fn test_use_case_multiple_concurrent_authorizations() {
 			&code_b,
 			"service_b",
 			"secret_b",
-			"https://example.com/callback",
+			"https://service-b.com/callback",
 		)
 		.await
 		.unwrap();
@@ -921,7 +921,7 @@ async fn test_use_case_refresh_token_presence() {
 			&code,
 			"refresh_test_client",
 			"refresh_test_secret",
-			"https://example.com/callback",
+			"https://refresh.example.com/callback",
 		)
 		.await
 		.unwrap();

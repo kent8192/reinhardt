@@ -597,9 +597,9 @@ impl ProjectState {
 			// across apps (Django convention: app_label_modelname)
 			let table_key = format!("{}_{}", app_label, model_name.to_lowercase());
 			tables.insert(
-				table_key.clone(),
+				table_key,
 				super::schema_diff::TableSchema {
-					name: table_key,
+					name: model_state.table_name.clone(),
 					columns,
 					indexes,
 					constraints,
@@ -687,9 +687,9 @@ impl ProjectState {
 				// across apps (Django convention: app_label_modelname)
 				let table_key = format!("{}_{}", this_app_label, model_name.to_lowercase());
 				tables.insert(
-					table_key.clone(),
+					table_key,
 					super::schema_diff::TableSchema {
-						name: table_key,
+						name: model_state.table_name.clone(),
 						columns,
 						indexes,
 						constraints,
@@ -5807,5 +5807,81 @@ mod tests {
 		assert_eq!(table.constraints[0].name, "ck_status");
 		assert_eq!(table.constraints[0].constraint_type, "check");
 		assert_eq!(table.constraints[0].definition, "status");
+	}
+
+	/// Helper to build a ModelState with a custom table name
+	fn build_model_state_with_table_name(
+		app_label: &str,
+		name: &str,
+		table_name: &str,
+		fields: Vec<FieldState>,
+	) -> ModelState {
+		let mut field_map = std::collections::BTreeMap::new();
+		for f in fields {
+			field_map.insert(f.name.clone(), f);
+		}
+		ModelState {
+			app_label: app_label.to_string(),
+			name: name.to_string(),
+			table_name: table_name.to_string(),
+			fields: field_map,
+			options: std::collections::HashMap::new(),
+			base_model: None,
+			inheritance_type: None,
+			discriminator_column: None,
+			indexes: Vec::new(),
+			constraints: Vec::new(),
+			many_to_many_fields: Vec::new(),
+		}
+	}
+
+	#[rstest]
+	fn to_database_schema_respects_custom_table_name() {
+		// Arrange
+		let model = build_model_state_with_table_name(
+			"blog",
+			"Post",
+			"custom_posts_table",
+			vec![FieldState::new(
+				"id",
+				super::super::FieldType::Integer,
+				false,
+			)],
+		);
+		let state = build_project_state(vec![(("blog".to_string(), "Post".to_string()), model)]);
+
+		// Act
+		let schema = state.to_database_schema();
+
+		// Assert
+		// The HashMap key should still be the auto-generated key
+		assert!(schema.tables.contains_key("blog_post"));
+		// But the TableSchema.name should use the custom table name
+		let table = &schema.tables["blog_post"];
+		assert_eq!(table.name, "custom_posts_table");
+	}
+
+	#[rstest]
+	fn to_database_schema_for_app_respects_custom_table_name() {
+		// Arrange
+		let model = build_model_state_with_table_name(
+			"blog",
+			"Post",
+			"custom_posts_table",
+			vec![FieldState::new(
+				"id",
+				super::super::FieldType::Integer,
+				false,
+			)],
+		);
+		let state = build_project_state(vec![(("blog".to_string(), "Post".to_string()), model)]);
+
+		// Act
+		let schema = state.to_database_schema_for_app("blog");
+
+		// Assert
+		assert!(schema.tables.contains_key("blog_post"));
+		let table = &schema.tables["blog_post"];
+		assert_eq!(table.name, "custom_posts_table");
 	}
 }

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.1.0-rc.4...reinhardt-dentdelion@v0.1.0-rc.5) - 2026-03-07
+
+### Maintenance
+
+- *(deps)* downgrade wasmtime to 36.0.6 to fix security advisories
+
 ## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dentdelion@v0.1.0-rc.1...reinhardt-dentdelion@v0.1.0-rc.2) - 2026-03-04
 
 ### Maintenance

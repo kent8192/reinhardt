@@ -125,12 +125,10 @@ fn extract_path_params(request: &Request) -> HashMap<String, String> {
 	let path = request.uri.path();
 	let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
 
-	// If we have at least 2 segments, assume second is an ID
+	// If we have at least 2 segments, treat the second as an ID parameter.
+	// Accept any non-empty segment (numeric, UUID, slug, etc.)
 	if segments.len() >= 2 {
-		// Check if second segment looks like a numeric ID
-		if segments[1].parse::<i64>().is_ok() {
-			params.insert("id".to_string(), segments[1].to_string());
-		}
+		params.insert("id".to_string(), segments[1].to_string());
 	}
 
 	params
@@ -1332,7 +1330,7 @@ mod tests {
 	}
 
 	#[rstest]
-	fn test_extract_path_params_non_numeric_segment_not_treated_as_id() {
+	fn test_extract_path_params_non_numeric_segment_treated_as_id() {
 		// Arrange
 		let request = build_request("/resource/username/");
 
@@ -1340,11 +1338,11 @@ mod tests {
 		let params = extract_path_params(&request);
 
 		// Assert
-		assert_eq!(params.get("id"), None);
+		assert_eq!(params.get("id"), Some(&"username".to_string()));
 	}
 
 	#[rstest]
-	fn test_extract_path_params_slug_segment_not_treated_as_id() {
+	fn test_extract_path_params_slug_segment_treated_as_id() {
 		// Arrange
 		let request = build_request("/resource/my-slug/");
 
@@ -1352,7 +1350,22 @@ mod tests {
 		let params = extract_path_params(&request);
 
 		// Assert
-		assert_eq!(params.get("id"), None);
+		assert_eq!(params.get("id"), Some(&"my-slug".to_string()));
+	}
+
+	#[rstest]
+	fn test_extract_path_params_uuid_segment_treated_as_id() {
+		// Arrange
+		let request = build_request("/resource/550e8400-e29b-41d4-a716-446655440000/");
+
+		// Act
+		let params = extract_path_params(&request);
+
+		// Assert
+		assert_eq!(
+			params.get("id"),
+			Some(&"550e8400-e29b-41d4-a716-446655440000".to_string())
+		);
 	}
 
 	#[rstest]

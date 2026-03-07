@@ -6,11 +6,9 @@
 use async_trait::async_trait;
 use reinhardt::DatabaseConnection;
 use reinhardt::db::orm::Model;
-use reinhardt_auth::sessions::InMemorySessionBackend;
-use reinhardt_websockets::integration::pages::PagesAuthenticator;
-use reinhardt_websockets::room::RoomManager;
-use reinhardt_websockets::{
-	ConsumerContext, Message, WebSocketConsumer, WebSocketError, WebSocketResult,
+use reinhardt::{
+	ConsumerContext, InMemorySessionBackend, Message, PagesAuthenticator, RoomManager,
+	WebSocketConsumer, WebSocketError, WebSocketResult,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

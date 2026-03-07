@@ -3,9 +3,9 @@
 //! Provides factory functions for creating DMRoom and DMMessage records.
 
 use chrono::Utc;
-use reinhardt_query::prelude::{
-	Alias, Expr, ExprTrait, IntoValue, Order, PostgresQueryBuilder, Query, QueryStatementBuilder,
-	Value,
+use reinhardt::db::orm::{
+	Alias, Expr, ExprTrait, IntoValue, Order, PostgresQueryBuilder, Query,
+	QueryBuilderValue as Value, QueryStatementBuilder,
 };
 use rstest::*;
 use sqlx::PgPool;

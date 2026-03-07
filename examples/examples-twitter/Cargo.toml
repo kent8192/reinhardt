@@ -65,10 +65,9 @@ reinhardt = { workspace = true, features = [
 	"pages",                   # WASM-based reactive frontend with SSR (reinhardt::pages)
 	"forms",                   # Form validation and processing
 	"websockets",              # WebSocket support for real-time DM
+	"websockets-pages",        # WebSocket Pages integration (PagesAuthenticator)
 	"client-router",           # Unified client/server routing with UnifiedRouter<V>
 ] }
-reinhardt-websockets = { workspace = true, features = ["pages-integration"] }
-reinhardt-auth = { workspace = true, features = ["sessions"] }
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
 clap = { version = "4", features = ["derive"] }
@@ -116,8 +115,6 @@ proptest = "1.6"
 trybuild = "1.0"
 serial_test = "3.2"
 testcontainers = { workspace = true }
-# SQL query builder for test factories
-reinhardt-query = { workspace = true }
 # Database driver for test fixtures (external crate, not reinhardt sub-crate)
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls", "uuid", "chrono"] }
 
@@ -126,7 +123,7 @@ sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls", "u
 # and reinhardt::test::server_fn for server function testing utilities
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies.reinhardt]
 workspace = true
-features = ["full", "auth-jwt", "test", "testcontainers", "server-fn-test"]
+features = ["full", "auth-jwt", "database", "test", "testcontainers", "server-fn-test"]
 
 [build-dependencies]
 cfg_aliases = "0.2"

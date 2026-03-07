@@ -87,6 +87,12 @@ jobs:
           if [[ "${{ inputs.run-all }}" != "true" && -n "${{ inputs.affected-packages }}" ]]; then
             while IFS= read -r pkg; do
               [[ -z "$pkg" ]] && continue
+              # Skip binary-only crates (no lib target)
+              if ! cargo metadata --format-version 1 --no-deps -q 2>/dev/null | \
+                jq -e --arg pkg "$pkg" '.packages[] | select(.name == $pkg) | .targets[] | select(.kind[] == "lib")' > /dev/null 2>&1; then
+                echo "Skipping $pkg (no lib target)"
+                continue
+              fi
               echo "::group::Doc tests for $pkg"
               cargo test -p "$pkg" --doc --all-features --no-fail-fast
               echo "::endgroup::"

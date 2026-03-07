@@ -119,39 +119,34 @@ pub fn use_dm_chat(room_id: Uuid) -> DmChatHandle {
 	let (is_loading, set_loading) = use_state(true);
 	let (error, set_error) = use_state(None::<String>);
 
-	// Initial message loading via server function
+	// Initial message loading via create_resource
+	#[cfg(client)]
 	{
-		let room_id = room_id;
-		let set_messages = set_messages.clone();
-		let set_loading = set_loading.clone();
-		let set_error = set_error.clone();
+		let initial_messages = reinhardt::pages::create_resource(move || async move {
+			crate::apps::dm::server::server_fn::list_messages(room_id, Some(50), None)
+				.await
+				.map_err(|e| format!("Failed to load messages: {}", e))
+		});
+
+		let set_messages_for_resource = set_messages.clone();
+		let set_loading_for_resource = set_loading.clone();
+		let set_error_for_resource = set_error.clone();
+		let resource_for_effect = initial_messages.clone();
 
 		use_effect(move || {
-			// Load initial messages using server function
-			// Note: In WASM, we use wasm-bindgen-futures to spawn async tasks
-			#[cfg(client)]
-			{
-				let set_messages = set_messages.clone();
-				let set_loading = set_loading.clone();
-				let set_error = set_error.clone();
-
-				wasm_bindgen_futures::spawn_local(async move {
-					match crate::apps::dm::server::server_fn::list_messages(room_id, Some(50), None)
-						.await
-					{
-						Ok(msgs) => {
-							set_messages(msgs);
-							set_loading(false);
-						}
-						Err(e) => {
-							set_error(Some(format!("Failed to load messages: {}", e)));
-							set_loading(false);
-						}
-					}
-				});
+			match resource_for_effect.get() {
+				reinhardt::pages::reactive::ResourceState::Loading => {
+					// Keep loading state
+				}
+				reinhardt::pages::reactive::ResourceState::Success(msgs) => {
+					set_messages_for_resource(msgs);
+					set_loading_for_resource(false);
+				}
+				reinhardt::pages::reactive::ResourceState::Error(err) => {
+					set_error_for_resource(Some(err));
+					set_loading_for_resource(false);
+				}
 			}
-
-			None::<fn()>
 		});
 	}
 
@@ -241,34 +236,34 @@ pub fn use_dm_room_list() -> DmRoomListHandle {
 	let (is_loading, set_loading) = use_state(true);
 	let (error, set_error) = use_state(None::<String>);
 
-	// Initial room list loading
+	// Initial room list loading via create_resource
+	#[cfg(client)]
 	{
-		let set_rooms = set_rooms.clone();
-		let set_loading = set_loading.clone();
-		let set_error = set_error.clone();
+		let initial_rooms = reinhardt::pages::create_resource(move || async move {
+			crate::apps::dm::server::server_fn::list_rooms()
+				.await
+				.map_err(|e| format!("Failed to load rooms: {}", e))
+		});
+
+		let set_rooms_for_resource = set_rooms.clone();
+		let set_loading_for_resource = set_loading.clone();
+		let set_error_for_resource = set_error.clone();
+		let resource_for_effect = initial_rooms.clone();
 
 		use_effect(move || {
-			#[cfg(client)]
-			{
-				let set_rooms = set_rooms.clone();
-				let set_loading = set_loading.clone();
-				let set_error = set_error.clone();
-
-				wasm_bindgen_futures::spawn_local(async move {
-					match crate::apps::dm::server::server_fn::list_rooms().await {
-						Ok(room_list) => {
-							set_rooms(room_list);
-							set_loading(false);
-						}
-						Err(e) => {
-							set_error(Some(format!("Failed to load rooms: {}", e)));
-							set_loading(false);
-						}
-					}
-				});
+			match resource_for_effect.get() {
+				reinhardt::pages::reactive::ResourceState::Loading => {
+					// Keep loading state
+				}
+				reinhardt::pages::reactive::ResourceState::Success(rooms) => {
+					set_rooms_for_resource(rooms);
+					set_loading_for_resource(false);
+				}
+				reinhardt::pages::reactive::ResourceState::Error(err) => {
+					set_error_for_resource(Some(err));
+					set_loading_for_resource(false);
+				}
 			}
-
-			None::<fn()>
 		});
 	}
 

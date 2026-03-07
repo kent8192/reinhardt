@@ -111,13 +111,13 @@ pub mod reinhardt_types {
 }
 
 // Server-side only re-exports (NOT for WASM)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reinhardt-apps", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub mod reinhardt_apps {
 	pub use reinhardt_apps::*;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reinhardt-di", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub mod reinhardt_di {
 	pub use reinhardt_di::*;
@@ -131,19 +131,19 @@ pub mod reinhardt_core {
 	pub use reinhardt_core::endpoint::EndpointMetadata;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reinhardt-http", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub mod reinhardt_http {
 	pub use reinhardt_http::*;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reinhardt-di", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub mod reinhardt_params {
 	pub use reinhardt_di::params::*;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "async-trait", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub mod async_trait {
 	pub use async_trait::*;
@@ -183,7 +183,7 @@ pub mod dentdelion;
 pub mod di;
 #[cfg(all(feature = "forms", not(target_arch = "wasm32")))]
 pub mod forms;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reinhardt-http", not(target_arch = "wasm32")))]
 pub mod http;
 #[cfg(all(
 	any(feature = "standard", feature = "middleware"),
@@ -206,7 +206,7 @@ pub mod test;
 pub mod urls;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod utils;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reinhardt-views", not(target_arch = "wasm32")))]
 pub mod views;
 
 // Server-side only re-exports (NOT for WASM)
@@ -215,15 +215,23 @@ pub mod views;
 pub use reinhardt_apps::{AppConfig, AppError, AppResult, Apps};
 
 // Re-export macros
-#[cfg(all(feature = "core", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "reinhardt-macros", not(target_arch = "wasm32")))]
 pub use reinhardt_macros::{AppConfig, app_config, installed_apps};
 
 // Re-export Model derive macro and model attribute macro (requires database feature)
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(
+	feature = "reinhardt-macros",
+	feature = "database",
+	not(target_arch = "wasm32")
+))]
 pub use reinhardt_macros::{Model, model};
 
 // Re-export collect_migrations macro (requires database feature)
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(
+	feature = "reinhardt-macros",
+	feature = "database",
+	not(target_arch = "wasm32")
+))]
 pub use reinhardt_macros::collect_migrations;
 
 // Re-export reinhardt_migrations crate (used by collect_migrations! macro)
@@ -237,22 +245,26 @@ pub use migrations as reinhardt_migrations;
 
 // Re-export reinhardt_macros as a module for hierarchical imports
 // This allows macro-generated code to use ::reinhardt::macros::Model
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reinhardt-macros", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub mod macros {
 	pub use reinhardt_macros::*;
 }
 
 // Re-export HTTP method macros
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reinhardt-macros", not(target_arch = "wasm32")))]
 pub use reinhardt_macros::{api_view, delete, get, patch, post, put};
 
 // Re-export routes attribute macro for URL pattern registration
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reinhardt-macros", not(target_arch = "wasm32")))]
 pub use reinhardt_macros::routes;
 
 // Re-export admin attribute macro (requires admin feature)
-#[cfg(all(feature = "admin", not(target_arch = "wasm32")))]
+#[cfg(all(
+	feature = "reinhardt-macros",
+	feature = "admin",
+	not(target_arch = "wasm32")
+))]
 pub use reinhardt_macros::admin;
 
 // Re-export settings from dedicated crate
@@ -276,6 +288,7 @@ pub use reinhardt_conf::settings::sources::{
 
 // Re-export ApplyUpdate trait and macros
 pub use reinhardt_core::apply_update::ApplyUpdate;
+#[cfg(all(feature = "reinhardt-macros", not(target_arch = "wasm32")))]
 pub use reinhardt_macros::{ApplyUpdate as DeriveApplyUpdate, apply_update};
 
 // Re-export core types
@@ -286,11 +299,15 @@ pub use reinhardt_core::{
 };
 
 // Re-export HTTP types
-#[cfg(all(feature = "core", not(target_arch = "wasm32")))]
+#[cfg(all(
+	feature = "core",
+	feature = "reinhardt-http",
+	not(target_arch = "wasm32")
+))]
 pub use reinhardt_http::{Handler, Middleware, MiddlewareChain, Request, Response, ViewResult};
 
 // Re-export inventory crate (used by HTTP method macros for endpoint registration)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reinhardt-macros", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub use inventory;
 
@@ -582,7 +599,7 @@ pub use reinhardt_db::pool::{ConnectionPool, PoolConfig, PoolError};
 pub use reinhardt_rest::serializers::{Deserializer, JsonSerializer, Serializer};
 
 // Re-export viewsets
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reinhardt-views", not(target_arch = "wasm32")))]
 pub use reinhardt_views::viewsets::{
 	Action, ActionType, CreateMixin, DestroyMixin, GenericViewSet, ListMixin, ModelViewSet,
 	ReadOnlyModelViewSet, RetrieveMixin, UpdateMixin, ViewSet,
@@ -690,11 +707,15 @@ pub use reinhardt_middleware::LoggingMiddleware;
 pub use reinhardt_middleware::CorsMiddleware;
 
 // Re-export HTTP types (additional commonly used types)
-#[cfg(all(feature = "core", not(target_arch = "wasm32")))]
+#[cfg(all(
+	feature = "core",
+	feature = "reinhardt-http",
+	not(target_arch = "wasm32")
+))]
 pub use reinhardt_http::Extensions;
 
 // Re-export HTTP types from hyper (already used in reinhardt_http)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reinhardt-http", not(target_arch = "wasm32")))]
 pub use hyper::{Method, StatusCode};
 
 // Re-export pagination
@@ -732,7 +753,7 @@ pub use reinhardt_core::validators::{
 };
 
 // Re-export views
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reinhardt-views", not(target_arch = "wasm32")))]
 pub use reinhardt_views::{
 	Context, DetailView, ListView, MultipleObjectMixin, SingleObjectMixin, View,
 };
@@ -898,7 +919,7 @@ pub use reinhardt_test::{APIClient, APIRequestFactory, APITestCase, TestResponse
 pub use reinhardt_utils::storage::{InMemoryStorage, LocalStorage, Storage};
 
 /// Convenience re-exports of commonly used types (server-side only).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "http-layer", not(target_arch = "wasm32")))]
 pub mod prelude {
 	// Core types - always available
 	pub use crate::{

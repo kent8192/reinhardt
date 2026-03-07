@@ -44,18 +44,23 @@ jobs:
             }
 
             async function getSubIssues(issueNumber) {
-              const subIssues = [];
-              let page = 1;
-              while (true) {
-                const response = await github.request(
-                  'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
-                  { owner, repo, issue_number: issueNumber, per_page: 100, page }
-                );
-                subIssues.push(...response.data);
-                if (response.data.length < 100) break;
-                page++;
+              try {
+                const subIssues = [];
+                let page = 1;
+                while (true) {
+                  const response = await github.request(
+                    'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
+                    { owner, repo, issue_number: issueNumber, per_page: 100, page }
+                  );
+                  subIssues.push(...response.data);
+                  if (response.data.length < 100) break;
+                  page++;
+                }
+                return subIssues;
+              } catch (error) {
+                core.warning(`Failed to fetch sub-issues for #${issueNumber}: ${error.message}`);
+                return null;
               }
-              return subIssues;
             }
 
             async function processParentChain(issueNumber, depth) {
@@ -79,23 +84,38 @@ jobs:
                 return;
               }
 
+              // Skip if parent has no-auto-close label
+              const parentLabels = parent.labels.map(l => l.name);
+              if (parentLabels.includes('no-auto-close')) {
+                core.info(`Parent #${parent.number} has no-auto-close label, skipping`);
+                return;
+              }
+
               // Check all sub-issues of the parent
               const subIssues = await getSubIssues(parent.number);
+              if (subIssues === null) {
+                core.warning(`Skipping parent #${parent.number} due to sub-issue fetch failure`);
+                return;
+              }
               if (subIssues.length === 0) {
                 core.info(`Parent #${parent.number} has no sub-issues`);
                 return;
               }
 
-              const allClosed = subIssues.every(sub => sub.state === 'closed');
-              core.info(`Parent #${parent.number} has ${subIssues.length} sub-issues, all closed: ${allClosed}`);
+              const allCompleted = subIssues.every(sub => sub.state === 'closed' && sub.state_reason === 'completed');
+              core.info(`Parent #${parent.number} has ${subIssues.length} sub-issues, all completed: ${allCompleted}`);
 
-              if (!allClosed) {
-                const openSubs = subIssues.filter(sub => sub.state !== 'closed');
-                core.info(`Open sub-issues: ${openSubs.map(s => `#${s.number}`).join(', ')}`);
+              if (!allCompleted) {
+                const incomplete = subIssues.filter(sub => sub.state !== 'closed' || sub.state_reason !== 'completed');
+                const details = incomplete.map(s => {
+                  if (s.state !== 'closed') return `#${s.number} (open)`;
+                  return `#${s.number} (closed as ${s.state_reason})`;
+                });
+                core.info(`Incomplete sub-issues: ${details.join(', ')}`);
                 return;
               }
 
-              // All sub-issues are closed - close the parent
+              // All sub-issues are completed - close the parent
               const subIssueList = subIssues
                 .map(sub => `- #${sub.number}: ${sub.title} (closed)`)
                 .join('\n');

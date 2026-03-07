@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.4...reinhardt-urls@v0.1.0-rc.5) - 2026-03-07
+
+### Fixed
+
+- *(urls)* accept case-insensitive UUIDs per RFC 4122
+- *(urls)* correct UUID converter test expectations for case-insensitive validation
+
+### Other
+
+- resolve conflict with main in labels.yml
+
 ## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.1...reinhardt-urls@v0.1.0-rc.2) - 2026-03-04
 
 ### Fixed

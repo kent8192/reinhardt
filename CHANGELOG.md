@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.4...reinhardt-web@v0.1.0-rc.5) - 2026-03-07
+
+### Added
+
+- *(examples)* introduce Injected<T> usage in di-showcase
+
+### Documentation
+
+- *(stability)* relax SP-1 API freeze and add SP-6 non-breaking addition review
+- *(claude)* add SP-6 non-breaking addition policy to quick reference
+- *(pr)* add three-dot diff rule for PR verification (RP-5)
+- *(pr)* replace Japanese text with English in RP-5
+
+### Fixed
+
+- *(ci)* enforce semver-check during RC phase instead of skipping
+- *(ci)* remove non-existent paths from CODEOWNERS
+- *(macros)* replace skeleton tests with meaningful assertions in pre_validate
+- *(examples)* add force-link for library crate in di-showcase manage.rs
+
+### Maintenance
+
+- *(labels)* add rc-addition label for SP-6 non-breaking additions
+- *(semver)* update comments to reflect SP-1 relaxation policy
+- *(serena)* clean up project.yml formatting
+
+### Testing
+
+- *(db)* add field mapping and migrations integration tests
+
 ## [0.1.0-rc.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.3...reinhardt-web@v0.1.0-rc.4) - 2026-03-05
 
 ### Documentation

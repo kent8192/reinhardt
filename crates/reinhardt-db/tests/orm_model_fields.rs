@@ -634,7 +634,7 @@ fn annotation_creation_and_to_sql() {
 
 	// Assert
 	assert_eq!(annotation.alias, "total");
-	assert_eq!(sql, "100 AS total");
+	assert_eq!(sql, "100 AS \"total\"");
 }
 
 #[rstest]
@@ -647,7 +647,7 @@ fn annotation_with_field_reference() {
 	let sql = annotation.to_sql();
 
 	// Assert
-	assert_eq!(sql, "\"price\" AS price_ref");
+	assert_eq!(sql, "\"price\" AS \"price_ref\"");
 }
 
 #[rstest]
@@ -660,7 +660,7 @@ fn annotation_with_aggregate() {
 	let sql = annotation.to_sql();
 
 	// Assert
-	assert_eq!(sql, "COUNT(*) AS item_count");
+	assert_eq!(sql, "COUNT(*) AS \"item_count\"");
 }
 
 #[rstest]

@@ -4,14 +4,6 @@ use std::marker::PhantomData;
 
 use crate::orm::query::{Filter, FilterOperator, FilterValue, quote_identifier};
 
-/// Check if a string is a simple SQL identifier (alphanumeric, underscores, dots only).
-/// Returns false for expressions containing operators, spaces, or other special characters.
-fn is_simple_identifier(s: &str) -> bool {
-	!s.is_empty()
-		&& s.chars()
-			.all(|c| c.is_alphanumeric() || c == '_' || c == '.')
-}
-
 /// F expression - represents a database field reference
 /// Similar to Django's F() objects for database-side operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,11 +41,7 @@ impl F {
 	/// assert_eq!(user_id.to_sql(), "\"user_id\"");
 	/// ```
 	pub fn to_sql(&self) -> String {
-		if is_simple_identifier(&self.field) {
-			quote_identifier(&self.field)
-		} else {
-			self.field.clone()
-		}
+		quote_identifier(&self.field)
 	}
 }
 
@@ -1410,7 +1398,7 @@ mod expressions_extended_tests {
 	fn test_datetime_and_duration_field_addition_with_annotate_and_no_output_field() {
 		// Test datetime and duration addition
 		let f = F::new("created_at + INTERVAL 7 DAY");
-		assert_eq!(f.to_sql(), "created_at + INTERVAL 7 DAY");
+		assert_eq!(f.to_sql(), "\"created_at + INTERVAL 7 DAY\"");
 	}
 
 	#[test]
@@ -1418,7 +1406,7 @@ mod expressions_extended_tests {
 	fn test_datetime_and_duration_field_addition_with_annotate_and_no_output_field_1() {
 		// Test datetime and duration addition
 		let f = F::new("start_time + duration");
-		assert_eq!(f.to_sql(), "start_time + duration");
+		assert_eq!(f.to_sql(), "\"start_time + duration\"");
 	}
 
 	#[test]
@@ -1476,7 +1464,7 @@ mod expressions_extended_tests {
 	fn test_datetime_subtraction_with_annotate_and_no_output_field() {
 		// Test datetime subtraction
 		let f = F::new("end_time - start_time");
-		assert_eq!(f.to_sql(), "end_time - start_time");
+		assert_eq!(f.to_sql(), "\"end_time - start_time\"");
 	}
 
 	#[test]
@@ -1484,7 +1472,7 @@ mod expressions_extended_tests {
 	fn test_datetime_subtraction_with_annotate_and_no_output_field_1() {
 		// Test datetime subtraction
 		let f = F::new("checkout_time - checkin_time");
-		assert_eq!(f.to_sql(), "checkout_time - checkin_time");
+		assert_eq!(f.to_sql(), "\"checkout_time - checkin_time\"");
 	}
 
 	#[test]

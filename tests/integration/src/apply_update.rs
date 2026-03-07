@@ -30,6 +30,7 @@ mod tests {
 		pub email: Option<String>,
 		pub age: Option<i32>,
 		#[apply_update(skip)]
+		#[allow(dead_code)] // intentionally skipped by #[apply_update(skip)]
 		pub display_name: Option<String>,
 	}
 

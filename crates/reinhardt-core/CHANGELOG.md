@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.4...reinhardt-core@v0.1.0-rc.5) - 2026-03-07
+
+### Fixed
+
+- *(macros)* dereference extractor before validation in pre_validate
+- *(macros)* replace skeleton tests with meaningful assertions in pre_validate
+
 ## [0.1.0-rc.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.3...reinhardt-core@v0.1.0-rc.4) - 2026-03-05
 
 ### Fixed

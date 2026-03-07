@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.4...reinhardt-auth@v0.1.0-rc.5) - 2026-03-07
+
+### Fixed
+
+- *(auth)* remove invalid sync poison recovery test for tokio RwLock
+- *(auth)* remove async poison recovery test for tokio RwLock
+- *(auth)* move HMAC validation to config init and improve test coverage
+- remove develop/0.2.0 content accidentally merged via PR [[#1918](https://github.com/kent8192/reinhardt-web/issues/1918)](https://github.com/kent8192/reinhardt-web/issues/1918)
+
+### Styling
+
+- *(auth)* fix trailing newline in token_storage tests
+
 ## [0.1.0-rc.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.3...reinhardt-auth@v0.1.0-rc.4) - 2026-03-05
 
 ### Fixed

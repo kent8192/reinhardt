@@ -75,14 +75,40 @@ jobs:
       runner: ${{ steps.set-runner.outputs.runner }}
       cargo-build-jobs: ${{ steps.set-runner.outputs.cargo-build-jobs }}
     steps:
+      - name: Parse PR checkbox for self-hosted
+        if: github.event_name == 'pull_request'
+        id: parse-checkbox
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.pull_request.body || '';
+            // Default: false (when checkbox is missing or unchecked)
+            const checked = /- \[x\] I use self-hosted runner/i.test(body);
+            core.setOutput('self-hosted-requested', checked.toString());
+
       - name: Set runner configuration
         id: set-runner
         env:
           ACTOR: ${{ github.actor }}
           REPO_OWNER: ${{ github.repository_owner }}
           SELF_HOSTED_ENABLED: ${{ vars.SELF_HOSTED_ENABLED }}
+          EVENT_NAME: ${{ github.event_name }}
+          SELF_HOSTED_REQUESTED: ${{ steps.parse-checkbox.outputs.self-hosted-requested }}
         run: |
+          USE_SELF_HOSTED=false
           if [[ "$ACTOR" == "$REPO_OWNER" ]] && [[ "$SELF_HOSTED_ENABLED" == "true" ]]; then
+            if [[ "$EVENT_NAME" == "pull_request" ]]; then
+              # PR: require explicit checkbox opt-in (default: false)
+              if [[ "$SELF_HOSTED_REQUESTED" == "true" ]]; then
+                USE_SELF_HOSTED=true
+              fi
+            else
+              # Non-PR events (workflow_dispatch): use self-hosted by default
+              USE_SELF_HOSTED=true
+            fi
+          fi
+
+          if [[ "$USE_SELF_HOSTED" == "true" ]]; then
             # Self-hosted: faster CI with AWS Spot instances
             echo 'runner=["self-hosted","linux","x64","reinhardt-ci"]' >> "$GITHUB_OUTPUT"
             echo 'cargo-build-jobs=8' >> "$GITHUB_OUTPUT"

@@ -1597,10 +1597,14 @@ mod tests {
 
 	#[rstest]
 	fn test_format_simple_element() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|| { div { "hello" } })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
 
+		// Assert
 		assert!(result.content.contains("div {"));
 		assert!(result.content.contains("\"hello\""));
 		assert!(result.contains_page_macro);
@@ -1608,10 +1612,14 @@ mod tests {
 
 	#[rstest]
 	fn test_format_with_attributes() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|| { div class="foo" { "hello" } })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
 
+		// Assert
 		assert!(result.content.contains("div"));
 		assert!(result.content.contains("class"));
 		assert!(result.contains_page_macro);
@@ -1619,51 +1627,71 @@ mod tests {
 
 	#[rstest]
 	fn test_no_change_non_page() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = "fn main() { println!(\"hello\"); }";
+
+		// Act
 		let result = formatter.format(input).unwrap();
 
+		// Assert
 		assert_eq!(input, result.content);
 		assert!(!result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_skip_page_in_string() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"fn main() { let s = "page!(|| { div { } })"; }"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
 
+		// Assert
 		assert!(result.content.contains("page!(|| { div { } })"));
 		assert!(!result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_skip_page_in_comment() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"// page!(|| { div { } })
 fn main() {}"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
 
+		// Assert
 		assert!(result.content.contains("// page!(|| { div { } })"));
 		assert!(!result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_format_with_params() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|name: String| { div { { name } } })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
 
+		// Assert
 		assert!(result.content.contains("name: String"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_format_nested_elements() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|| { div { p { "hello" } } })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
 
+		// Assert
 		assert!(result.content.contains("div {"));
 		assert!(result.content.contains("p {"));
 		assert!(result.contains_page_macro);
@@ -1671,30 +1699,42 @@ fn main() {}"#;
 
 	#[rstest]
 	fn test_format_if_node() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|| { @if true { div { } } })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
 
+		// Assert
 		assert!(result.content.contains("@if"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_format_for_node() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|| { @for item in items { div { } } })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
 
+		// Assert
 		assert!(result.content.contains("@for"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_format_component() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|| { <MyComponent /> })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
 
+		// Assert
 		assert!(result.content.contains("<MyComponent"));
 		assert!(result.content.contains("/>"));
 		assert!(result.contains_page_macro);
@@ -1702,16 +1742,21 @@ fn main() {}"#;
 
 	#[rstest]
 	fn test_format_event_handler() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|| { button { @click: |_| {}, "Click" } })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
 
+		// Assert
 		assert!(result.content.contains("@click"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_safety_complex_non_page_file() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"
 //! Module documentation
@@ -1743,7 +1788,11 @@ mod tests {
 	}
 }
 "#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
+
+		// Assert
 		assert_eq!(input, result.content);
 		assert!(!result.contains_page_macro);
 	}
@@ -1754,90 +1803,140 @@ mod tests {
 
 	#[rstest]
 	fn test_format_params_with_vec() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|items: Vec<String>| { div { } })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
+
+		// Assert
 		assert!(result.content.contains("items: Vec<String>"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_format_params_with_option() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|value: Option<i32>| { div { } })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
+
+		// Assert
 		assert!(result.content.contains("value: Option<i32>"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_format_params_with_result() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|res: Result<String, Error>| { div { } })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
+
+		// Assert
 		assert!(result.content.contains("res: Result<String, Error>"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_format_params_with_nested_generics() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|items: Vec<Option<String>>| { div { } })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
+
+		// Assert
 		assert!(result.content.contains("items: Vec<Option<String>>"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_format_params_with_multiple_generics() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|map: HashMap<String, i32>| { div { } })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
+
+		// Assert
 		assert!(result.content.contains("map: HashMap<String, i32>"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_format_params_with_references() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|s: &str| { div { } })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
+
+		// Assert
 		assert!(result.content.contains("s: &str"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_format_params_with_arrays() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|arr: [i32; 5]| { div { } })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
+
+		// Assert
 		assert!(result.content.contains("arr: [i32; 5]"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_format_params_with_tuples() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|t: (String, i32)| { div { } })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
+
+		// Assert
 		assert!(result.content.contains("t: (String, i32)"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_format_params_with_path_types() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|v: std::vec::Vec<String>| { div { } })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
+
+		// Assert
 		assert!(result.content.contains("v: std::vec::Vec<String>"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_format_params_with_complex_types() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|f: Box<dyn Fn() -> Result<(), Error>>| { div { } })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
+
+		// Assert
 		assert!(
 			result
 				.content
@@ -1848,54 +1947,71 @@ mod tests {
 
 	#[rstest]
 	fn test_format_params_types_idempotent() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|vec: Vec<String>, opt: Option<i32>, res: Result<String, Error>| { div { } })"#;
-		let result = formatter.format(input).unwrap();
 
+		// Act
+		let result = formatter.format(input).unwrap();
 		// Format again to ensure idempotency
 		let result2 = formatter.format(&result.content).unwrap();
+
+		// Assert
 		assert_eq!(result.content, result2.content);
 		assert!(result2.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_format_macro_calls() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|| {
 			div { { format!("Hello {}", name) } }
 		})"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
 
+		// Assert
 		assert!(result.content.contains("format!"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_format_function_calls() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|| {
 			div { { get_message() } }
 		})"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
 
+		// Assert
 		assert!(result.content.contains("get_message()"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_format_method_calls() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|| {
 			div { { user.get_name() } }
 		})"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
 
+		// Assert
 		assert!(result.content.contains("user.get_name()"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_format_complex_event_handler() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|| {
 			button {
@@ -1907,24 +2023,25 @@ mod tests {
 			}
 		})"#;
 
+		// Act
 		let result = formatter.format(input).unwrap();
+		// Format should be idempotent
+		let result2 = formatter.format(&result.content).unwrap();
 
-		// Verify structure is preserved
+		// Assert
 		assert!(result.content.contains("button"));
 		assert!(result.content.contains("@click"));
 		assert!(result.content.contains("|event|"));
 		assert!(result.content.contains("prevent_default(event)"));
 		assert!(result.content.contains("handle_click()"));
 		assert!(result.content.contains("\"Click Me\""));
-
-		// Format should be idempotent
-		let result2 = formatter.format(&result.content).unwrap();
 		assert_eq!(result.content, result2.content);
 		assert!(result2.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_format_function_macro_calls_idempotent() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|| {
 			div {
@@ -1934,8 +2051,11 @@ mod tests {
 			}
 		})"#;
 
+		// Act
 		let result = formatter.format(input).unwrap();
 		let result2 = formatter.format(&result.content).unwrap();
+
+		// Assert
 		assert_eq!(result.content, result2.content);
 		assert!(result2.contains_page_macro);
 	}
@@ -1944,6 +2064,7 @@ mod tests {
 
 	#[rstest]
 	fn test_ignore_all_at_file_start() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"// reinhardt-fmt: ignore-all
 
@@ -1951,15 +2072,17 @@ page!(|| {
 div{badly}
 })"#;
 
+		// Act
 		let result = formatter.format(input).unwrap();
 
-		// Should keep original formatting
+		// Assert
 		assert_eq!(input, result.content);
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_ignore_all_after_module_doc() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"//! Module documentation
 // reinhardt-fmt: ignore-all
@@ -1968,9 +2091,10 @@ page!(|| {
 div{badly}
 })"#;
 
+		// Act
 		let result = formatter.format(input).unwrap();
 
-		// Should keep original formatting
+		// Assert
 		assert_eq!(input, result.content);
 		assert!(result.contains_page_macro);
 	}
@@ -1979,6 +2103,8 @@ div{badly}
 	fn test_ignore_all_not_at_start() {
 		// When ignore-all marker appears AFTER code lines, it should NOT be recognized
 		// because the marker must appear BEFORE any code line (as documented).
+
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"use foo;
 
@@ -1988,18 +2114,18 @@ page!(|| {
 div{badly}
 })"#;
 
+		// Act
 		let result = formatter.format(input).unwrap();
 
-		// Marker after code line is NOT recognized, so formatting IS applied
+		// Assert
 		assert!(result.contains_page_macro);
-		// The page! macro content should be formatted (indentation added)
-		// Original: "div{badly}" -> Formatted: "div {\n\t\tbadly\n\t}"
 		assert!(result.content.contains("div {"));
 		assert!(result.content.contains("badly"));
 	}
 
 	#[rstest]
 	fn test_ignore_range_basic() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"// reinhardt-fmt: ignore-on
 page!(|| {
@@ -2009,17 +2135,18 @@ div{badly}
 
 page!(|| { div { "formatted" } })"#;
 
+		// Act
 		let result = formatter.format(input).unwrap();
 
-		// First macro should be unchanged
+		// Assert
 		assert!(result.content.contains("div{badly}"));
-		// Second macro should be formatted
 		assert!(result.content.contains("div {"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_ignore_range_nested_warning() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"// reinhardt-fmt: ignore-on
 page!(|| { div { "first" } })
@@ -2028,9 +2155,10 @@ page!(|| { div { "second" } })
 // reinhardt-fmt: ignore-off
 page!(|| { div { "third" } })"#;
 
+		// Act
 		let result = formatter.format(input).unwrap();
 
-		// All should be kept as-is
+		// Assert
 		assert!(result.content.contains("first"));
 		assert!(result.content.contains("second"));
 		assert!(result.content.contains("third"));
@@ -2039,14 +2167,16 @@ page!(|| { div { "third" } })"#;
 
 	#[rstest]
 	fn test_ignore_range_unmatched_on() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"// reinhardt-fmt: ignore-on
 page!(|| { div { "first" } })
 page!(|| { div { "second" } })"#;
 
+		// Act
 		let result = formatter.format(input).unwrap();
 
-		// Both should be unchanged (ignore-on without ignore-off)
+		// Assert
 		assert!(result.content.contains("first"));
 		assert!(result.content.contains("second"));
 		assert!(result.contains_page_macro);
@@ -2054,20 +2184,23 @@ page!(|| { div { "second" } })"#;
 
 	#[rstest]
 	fn test_ignore_range_unclosed() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|| { div { "before" } })
 // reinhardt-fmt: ignore-on
 page!(|| { div{badly} })"#;
 
+		// Act
 		let result = formatter.format(input).unwrap();
 
-		// Second macro should be unchanged
+		// Assert
 		assert!(result.content.contains("div{badly}"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_multiple_ignore_ranges() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|| { div { "formatted1" } })
 // reinhardt-fmt: ignore-on
@@ -2079,18 +2212,19 @@ page!(|| { div{ignored2} })
 // reinhardt-fmt: ignore-off
 page!(|| { div { "formatted3" } })"#;
 
+		// Act
 		let result = formatter.format(input).unwrap();
 
-		// Ignored macros should keep bad formatting
+		// Assert
 		assert!(result.content.contains("div{ignored1}"));
 		assert!(result.content.contains("div{ignored2}"));
-		// Formatted macros should have good formatting
 		assert!(result.content.contains("div {"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_individual_ignore_basic() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|| { div { "formatted" } })
 
@@ -2099,9 +2233,10 @@ page!(|| { div{ignored} })
 
 page!(|| { div { "formatted" } })"#;
 
+		// Act
 		let result = formatter.format(input).unwrap();
 
-		// Middle macro should be unchanged
+		// Assert
 		assert!(result.content.contains("div{ignored}"));
 		assert!(result.contains_page_macro);
 	}
@@ -2111,23 +2246,25 @@ page!(|| { div { "formatted" } })"#;
 		// When there's a blank line between the ignore marker and the macro,
 		// the marker should NOT be recognized (as documented: marker must be on
 		// the line immediately before the macro, with no blank lines).
+
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"// reinhardt-fmt: ignore
 
 page!(|| { div{ignored} })"#;
 
+		// Act
 		let result = formatter.format(input).unwrap();
 
-		// Marker is NOT recognized due to blank line, so formatting IS applied
+		// Assert
 		assert!(result.contains_page_macro);
-		// The page! macro content should be formatted (indentation and spacing added)
-		// Original: "div{ignored}" -> Formatted: "div {\n\t\tignored\n\t}"
 		assert!(result.content.contains("div {"));
 		assert!(result.content.contains("ignored"));
 	}
 
 	#[rstest]
 	fn test_individual_ignore_multiple() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"// reinhardt-fmt: ignore
 page!(|| { div{ignored1} })
@@ -2137,9 +2274,10 @@ page!(|| { div { "formatted" } })
 // reinhardt-fmt: ignore
 page!(|| { div{ignored2} })"#;
 
+		// Act
 		let result = formatter.format(input).unwrap();
 
-		// Both ignored macros should be unchanged
+		// Assert
 		assert!(result.content.contains("div{ignored1}"));
 		assert!(result.content.contains("div{ignored2}"));
 		assert!(result.contains_page_macro);
@@ -2147,6 +2285,7 @@ page!(|| { div{ignored2} })"#;
 
 	#[rstest]
 	fn test_individual_ignore_mixed_with_format() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|| { div { "formatted1" } })
 
@@ -2155,17 +2294,18 @@ page!(|| { div{ignored} })
 
 page!(|| { div { "formatted2" } })"#;
 
+		// Act
 		let result = formatter.format(input).unwrap();
 
-		// Ignored macro should keep bad formatting
+		// Assert
 		assert!(result.content.contains("div{ignored}"));
-		// Other macros should be formatted
 		assert!(result.content.contains("div {"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_individual_ignore_with_range() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"// reinhardt-fmt: ignore-on
 page!(|| { div{range_ignored} })
@@ -2176,9 +2316,10 @@ page!(|| { div{individual_ignored} })
 
 page!(|| { div { "formatted" } })"#;
 
+		// Act
 		let result = formatter.format(input).unwrap();
 
-		// Both ignored macros should be unchanged
+		// Assert
 		assert!(result.content.contains("div{range_ignored}"));
 		assert!(result.content.contains("div{individual_ignored}"));
 		assert!(result.contains_page_macro);
@@ -2186,90 +2327,118 @@ page!(|| { div { "formatted" } })"#;
 
 	#[rstest]
 	fn test_individual_ignore_priority() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"// reinhardt-fmt: ignore-on
 // reinhardt-fmt: ignore
 page!(|| { div{ignored} })
 // reinhardt-fmt: ignore-off"#;
 
+		// Act
 		let result = formatter.format(input).unwrap();
 
-		// Should be unchanged (both markers apply)
+		// Assert
 		assert!(result.content.contains("div{ignored}"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_individual_ignore_at_file_start() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"// reinhardt-fmt: ignore
 page!(|| { div{ignored} })"#;
 
+		// Act
 		let result = formatter.format(input).unwrap();
 
-		// Should be unchanged
+		// Assert
 		assert!(result.content.contains("div{ignored}"));
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_contains_page_macro_field_with_macro() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|| { div { } })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
 
+		// Assert
 		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_contains_page_macro_field_without_macro() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"fn main() { println!("test"); }"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
 
+		// Assert
 		assert!(!result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_ignore_all_with_page_macro() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"// reinhardt-fmt: ignore-all
 page!(|| { div { bad } })"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
 
-		assert_eq!(result.content, input); // Content unchanged
-		assert!(result.contains_page_macro); // But macro is present
+		// Assert
+		assert_eq!(result.content, input);
+		assert!(result.contains_page_macro);
 	}
 
 	#[rstest]
 	fn test_ignore_all_without_page_macro() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"// reinhardt-fmt: ignore-all
 fn main() {}"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
 
+		// Assert
 		assert_eq!(result.content, input);
-		assert!(!result.contains_page_macro); // No macro
+		assert!(!result.contains_page_macro);
 	}
 
 	// ==================== Protect/Restore Tests ====================
 
 	#[rstest]
 	fn test_protect_no_page_macro() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = "fn main() { println!(\"hello\"); }";
+
+		// Act
 		let result = formatter.protect_page_macros(input);
 
+		// Assert
 		assert_eq!(result.protected_content, input);
 		assert!(result.backups.is_empty());
 	}
 
 	#[rstest]
 	fn test_protect_single_macro() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"let view = page!(|| { div { "hello" } });"#;
+
+		// Act
 		let result = formatter.protect_page_macros(input);
 
+		// Assert
 		assert!(
 			result
 				.protected_content
@@ -2283,13 +2452,17 @@ fn main() {}"#;
 
 	#[rstest]
 	fn test_protect_multiple_macros() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"
 let view1 = page!(|| { div { "first" } });
 let view2 = page!(|| { div { "second" } });
 "#;
+
+		// Act
 		let result = formatter.protect_page_macros(input);
 
+		// Assert
 		assert!(
 			result
 				.protected_content
@@ -2306,6 +2479,7 @@ let view2 = page!(|| { div { "second" } });
 
 	#[rstest]
 	fn test_protect_preserves_surrounding_code() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"use foo::bar;
 
@@ -2314,8 +2488,11 @@ fn render() -> View {
 }
 
 fn main() {}"#;
+
+		// Act
 		let result = formatter.protect_page_macros(input);
 
+		// Assert
 		assert!(result.protected_content.contains("use foo::bar;"));
 		assert!(result.protected_content.contains("fn render() -> View"));
 		assert!(result.protected_content.contains("fn main() {}"));
@@ -2328,39 +2505,40 @@ fn main() {}"#;
 
 	#[rstest]
 	fn test_restore_single_macro() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let original = r#"let view = page!(|| { div { "hello" } });"#;
 
-		// Protect
+		// Act
 		let protected = formatter.protect_page_macros(original);
-
-		// Restore
 		let restored =
 			AstPageFormatter::restore_page_macros(&protected.protected_content, &protected.backups);
 
+		// Assert
 		assert_eq!(restored, original);
 	}
 
 	#[rstest]
 	fn test_restore_multiple_macros() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let original = r#"
 let view1 = page!(|| { div { "first" } });
 let view2 = page!(|| { div { "second" } });
 "#;
 
-		// Protect
+		// Act
 		let protected = formatter.protect_page_macros(original);
-
-		// Restore
 		let restored =
 			AstPageFormatter::restore_page_macros(&protected.protected_content, &protected.backups);
 
+		// Assert
 		assert_eq!(restored, original);
 	}
 
 	#[rstest]
 	fn test_protect_restore_roundtrip_complex() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let original = r#"use reinhardt::pages::page;
 
@@ -2387,43 +2565,48 @@ fn main() {
     let _f = footer();
 }"#;
 
-		// Protect
+		// Act
 		let protected = formatter.protect_page_macros(original);
-		assert_eq!(protected.backups.len(), 2);
-		assert!(!protected.protected_content.contains("page!("));
-
-		// Restore
 		let restored =
 			AstPageFormatter::restore_page_macros(&protected.protected_content, &protected.backups);
+
+		// Assert
+		assert_eq!(protected.backups.len(), 2);
+		assert!(!protected.protected_content.contains("page!("));
 		assert_eq!(restored, original);
 	}
 
 	#[rstest]
 	fn test_protect_empty_backups_restore() {
+		// Arrange
 		let content = "fn main() {}";
 		let backups: Vec<PageMacroBackup> = Vec::new();
 
+		// Act
 		let restored = AstPageFormatter::restore_page_macros(content, &backups);
+
+		// Assert
 		assert_eq!(restored, content);
 	}
 
 	#[rstest]
 	fn test_protect_with_trailing_call() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"let view = page!(|props: Props| { div { } })(props);"#;
-		let result = formatter.protect_page_macros(input);
 
-		// The trailing "(props)" should remain after the placeholder
+		// Act
+		let result = formatter.protect_page_macros(input);
+		let restored =
+			AstPageFormatter::restore_page_macros(&result.protected_content, &result.backups);
+
+		// Assert
 		assert!(
 			result
 				.protected_content
 				.contains("__reinhardt_placeholder__!(/*0*/)(props)")
 		);
 		assert_eq!(result.backups.len(), 1);
-
-		// Restore should bring back original
-		let restored =
-			AstPageFormatter::restore_page_macros(&result.protected_content, &result.backups);
 		assert_eq!(restored, input);
 	}
 
@@ -2431,63 +2614,92 @@ fn main() {
 
 	#[rstest]
 	fn test_find_matching_paren_with_emoji() {
+		// Arrange
 		let source = r#"(div { "😀" })"#;
+
+		// Act
 		let result = find_matching_paren(source, 1);
+
+		// Assert
 		assert_eq!(result, Some(source.len() - 1));
 	}
 
 	#[rstest]
 	fn test_find_matching_paren_with_cjk() {
+		// Arrange
 		let source = r#"(div { "日本語" })"#;
+
+		// Act
 		let result = find_matching_paren(source, 1);
+
+		// Assert
 		assert_eq!(result, Some(source.len() - 1));
 	}
 
 	#[rstest]
 	fn test_find_matching_paren_nested_with_unicode() {
+		// Arrange
 		let source = r#"(outer { (inner { "안녕" }) })"#;
+
+		// Act
 		let result = find_matching_paren(source, 1);
+
+		// Assert
 		assert_eq!(result, Some(source.len() - 1));
 	}
 
 	#[rstest]
 	fn test_find_matching_paren_mixed() {
+		// Arrange
 		let source = r#"(div { "Hello 世界 مرحبا" })"#;
+
+		// Act
 		let result = find_matching_paren(source, 1);
+
+		// Assert
 		assert_eq!(result, Some(source.len() - 1));
 	}
 
 	#[rstest]
 	fn test_is_in_comment_or_string_unicode_in_string() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let content = r#"let s = "😀🎉日本語";"#;
 		let pos_in_string = content.find("日").unwrap();
+
+		// Act & Assert
 		assert!(formatter.is_in_comment_or_string(content, pos_in_string));
 	}
 
 	#[rstest]
 	fn test_is_in_comment_or_string_unicode_in_comment() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let content = r#"// This is a comment with 日本語"#;
 		let pos_in_comment = content.find("日").unwrap();
+
+		// Act & Assert
 		assert!(formatter.is_in_comment_or_string(content, pos_in_comment));
 	}
 
 	#[rstest]
 	fn test_protect_restore_with_unicode_content() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let original = r#"let view = page!(|| { div { "😀🎉日本語" } });"#;
 
+		// Act
 		let protected = formatter.protect_page_macros(original);
+		let restored =
+			AstPageFormatter::restore_page_macros(&protected.protected_content, &protected.backups);
+
+		// Assert
 		assert_eq!(protected.backups.len(), 1);
 		assert!(
 			protected
 				.protected_content
 				.contains("__reinhardt_placeholder__")
 		);
-
-		let restored =
-			AstPageFormatter::restore_page_macros(&protected.protected_content, &protected.backups);
 		assert_eq!(restored, original);
 	}
 
@@ -2499,72 +2711,117 @@ fn main() {
 
 	#[rstest]
 	fn test_format_expression_short_braced() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
+
+		// Act
 		let result = formatter.format(r#"page!(|| { { some_value } })"#).unwrap();
+
+		// Assert
 		assert_eq!(result.content, "page!(|| {\n\t{ some_value }\n})");
 	}
 
 	#[rstest]
 	fn test_format_expression_short_unbraced() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
+
+		// Act
 		let result = formatter.format(r#"page!(|| { some_value })"#).unwrap();
+
+		// Assert
 		assert_eq!(result.content, "page!(|| {\n\tsome_value\n})");
 	}
 
 	#[rstest]
 	fn test_format_expression_short_method_call() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
+
+		// Act
 		let result = formatter
 			.format(r#"page!(|| { { items.len() } })"#)
 			.unwrap();
+
+		// Assert
 		assert_eq!(result.content, "page!(|| {\n\t{ items.len() }\n})");
 	}
 
 	#[rstest]
 	fn test_format_expression_short_string_literal() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
+
+		// Act
 		let result = formatter
 			.format(r#"page!(|| { { "hello world" } })"#)
 			.unwrap();
+
+		// Assert
 		assert_eq!(result.content, "page!(|| {\n\t{ \"hello world\" }\n})");
 	}
 
 	#[rstest]
 	fn test_format_expression_empty_braced() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
+
+		// Act
 		let result = formatter.format(r#"page!(|| { { () } })"#).unwrap();
+
+		// Assert
 		assert_eq!(result.content, "page!(|| {\n\t{ () }\n})");
 	}
 
 	#[rstest]
 	fn test_format_expression_numeric_literal() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
+
+		// Act
 		let result = formatter.format(r#"page!(|| { { 42 } })"#).unwrap();
+
+		// Assert
 		assert_eq!(result.content, "page!(|| {\n\t{ 42 }\n})");
 	}
 
 	#[rstest]
 	fn test_format_expression_boolean() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
+
+		// Act
 		let result = formatter.format(r#"page!(|| { { true } })"#).unwrap();
+
+		// Assert
 		assert_eq!(result.content, "page!(|| {\n\t{ true }\n})");
 	}
 
 	#[rstest]
 	fn test_format_expression_binary_op() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
+
+		// Act
 		let result = formatter.format(r#"page!(|| { { x + y } })"#).unwrap();
+
+		// Assert
 		assert_eq!(result.content, "page!(|| {\n\t{ x + y }\n})");
 	}
 
 	#[rstest]
 	fn test_format_expression_with_closure_under_threshold() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
+
+		// Act
 		let result = formatter
 			.format(
 				r#"page!(|| { { items.iter().map(|item| item.render()).collect::<Vec<_>>() } })"#,
 			)
 			.unwrap();
+
+		// Assert
 		assert_eq!(
 			result.content,
 			"page!(|| {\n\t{ items.iter().map(|item| item.render()).collect::<Vec<_>>() }\n})"
@@ -2573,10 +2830,15 @@ fn main() {
 
 	#[rstest]
 	fn test_format_expression_with_if_condition() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
+
+		// Act
 		let result = formatter
 			.format("page!(|| {\n\tif condition {\n\t\t{ short_val }\n\t}\n})")
 			.unwrap();
+
+		// Assert
 		assert_eq!(
 			result.content,
 			"page!(|| {\n\tif condition {\n\t\t{ short_val }\n\t}\n})"
@@ -2585,10 +2847,15 @@ fn main() {
 
 	#[rstest]
 	fn test_format_expression_exactly_at_threshold() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let expr = "a".repeat(90);
 		let input = format!("page!(|| {{ {{ {} }} }})", expr);
+
+		// Act
 		let result = formatter.format(&input);
+
+		// Assert
 		assert!(result.is_ok());
 	}
 
@@ -2596,12 +2863,17 @@ fn main() {
 
 	#[rstest]
 	fn test_format_expression_long_view_fragment() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = format!(
 			"page!(|| {{ {{ {} }} }})",
 			"View::fragment(signal.result().unwrap_or_default().iter().map(|item| View::text(item.clone())).collect::<Vec<_>>())"
 		);
+
+		// Act
 		let result = formatter.format(&input).unwrap();
+
+		// Assert
 		assert_eq!(
 			result.content,
 			"page!(|| {\n\t{\n\t\tView::fragment(\n\t\t\t\tsignal\n\t\t\t\t\t.result()\n\t\t\t\t\t.unwrap_or_default()\n\t\t\t\t\t.iter()\n\t\t\t\t\t.map(|item| View::text(item.clone()))\n\t\t\t\t\t.collect::<Vec<_>>(),\n\t\t\t)\n\t}\n})"
@@ -2610,12 +2882,17 @@ fn main() {
 
 	#[rstest]
 	fn test_format_expression_long_chained_methods() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = format!(
 			"page!(|| {{ {{ {} }} }})",
 			r#"data.iter().filter(|x| x.is_active()).map(|x| x.name.clone()).collect::<Vec<String>>().join(", ")"#
 		);
+
+		// Act
 		let result = formatter.format(&input).unwrap();
+
+		// Assert
 		assert_eq!(
 			result.content,
 			"page!(|| {\n\t{\n\t\tdata\n\t\t\t\t.iter()\n\t\t\t\t.filter(|x| x.is_active())\n\t\t\t\t.map(|x| x.name.clone())\n\t\t\t\t.collect::<Vec<String>>()\n\t\t\t\t.join(\", \")\n\t}\n})"
@@ -2624,12 +2901,17 @@ fn main() {
 
 	#[rstest]
 	fn test_format_expression_long_nested_function_calls() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = format!(
 			"page!(|| {{ {{ {} }} }})",
 			r#"format!("User: {} ({})", user.display_name().unwrap_or_default(), user.email().unwrap_or("no email".to_string()))"#
 		);
+
+		// Act
 		let result = formatter.format(&input).unwrap();
+
+		// Assert
 		assert_eq!(
 			result.content,
 			"page!(|| {\n\t{\n\t\tformat!(\n\t\t\t\t\"User: {} ({})\",\n\t\t\t\tuser.display_name().unwrap_or_default(),\n\t\t\t\tuser.email().unwrap_or(\"no email\".to_string())\n\t\t\t)\n\t}\n})"
@@ -2638,12 +2920,17 @@ fn main() {
 
 	#[rstest]
 	fn test_format_expression_deeply_nested_in_elements() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = format!(
 			r#"page!(|| {{ div {{ span {{ {{ {} }} }} }} }})"#,
 			"View::fragment(signal.result().unwrap_or_default().iter().map(|item| View::text(item.clone())).collect::<Vec<_>>())"
 		);
+
+		// Act
 		let result = formatter.format(&input).unwrap();
+
+		// Assert
 		assert_eq!(
 			result.content,
 			"page!(|| {\n\tdiv {\n\t\tspan {\n\t\t\t{\n\t\t\t\tView::fragment(\n\t\t\t\t\t\tsignal\n\t\t\t\t\t\t\t.result()\n\t\t\t\t\t\t\t.unwrap_or_default()\n\t\t\t\t\t\t\t.iter()\n\t\t\t\t\t\t\t.map(|item| View::text(item.clone()))\n\t\t\t\t\t\t\t.collect::<Vec<_>>(),\n\t\t\t\t\t)\n\t\t\t}\n\t\t}\n\t}\n})"
@@ -2652,13 +2939,18 @@ fn main() {
 
 	#[rstest]
 	fn test_format_expression_multiple_in_page() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = format!(
 			"page!(|| {{ {{ {} }} {{ {} }} }})",
 			"count",
 			"View::fragment(signal.result().unwrap_or_default().iter().map(|item| View::text(item.clone())).collect::<Vec<_>>())"
 		);
+
+		// Act
 		let result = formatter.format(&input).unwrap();
+
+		// Assert
 		assert_eq!(
 			result.content,
 			"page!(|| {\n\t{ count }\n\t{\n\t\tView::fragment(\n\t\t\t\tsignal\n\t\t\t\t\t.result()\n\t\t\t\t\t.unwrap_or_default()\n\t\t\t\t\t.iter()\n\t\t\t\t\t.map(|item| View::text(item.clone()))\n\t\t\t\t\t.collect::<Vec<_>>(),\n\t\t\t)\n\t}\n})"
@@ -2669,13 +2961,18 @@ fn main() {
 
 	#[rstest]
 	fn test_format_complex_dsl_nested_page_macro() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|signal: Action<Vec<Item>, String>| {
 	div {
 		{ View::fragment(signal.result().unwrap_or_default().iter().map(|item| { let text = item.text.clone(); page!(|text: String| { span { { text } } })(text) }).collect::<Vec<_>>()) }
 	}
 })(signal)"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
+
+		// Assert
 		assert_eq!(
 			result.content,
 			"page!(|signal: Action<Vec<Item>, String>| {\n\tdiv {\n\t\t{\n\t\t\tView::fragment(\n\t\t\t\t\tsignal\n\t\t\t\t\t\t.result()\n\t\t\t\t\t\t.unwrap_or_default()\n\t\t\t\t\t\t.iter()\n\t\t\t\t\t\t.map(|item| {\n\t\t\t\t\t\t\tlet text = item.text.clone();\n\t\t\t\t\t\t\tpage!(| text : String | { span { { text } } })(text)\n\t\t\t\t\t\t})\n\t\t\t\t\t\t.collect::<Vec<_>>(),\n\t\t\t\t)\n\t\t}\n\t}\n})(signal)"
@@ -2684,6 +2981,7 @@ fn main() {
 
 	#[rstest]
 	fn test_format_complex_dsl_conditional() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|signal: Action<Vec<Item>, String>| {
 	div {
@@ -2694,7 +2992,11 @@ fn main() {
 		}
 	}
 })(signal)"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
+
+		// Assert
 		assert_eq!(
 			result.content,
 			"page!(|signal: Action<Vec<Item>, String>| {\n\tdiv {\n\t\tif signal.result().is_some() {\n\t\t\t{\n\t\t\t\tView::fragment(\n\t\t\t\t\t\tsignal\n\t\t\t\t\t\t\t.result()\n\t\t\t\t\t\t\t.unwrap_or_default()\n\t\t\t\t\t\t\t.iter()\n\t\t\t\t\t\t\t.map(|item| {\n\t\t\t\t\t\t\t\tlet text = item.text.clone();\n\t\t\t\t\t\t\t\tpage!(| text : String | { div class = \"item\" { { text } } })(text)\n\t\t\t\t\t\t\t})\n\t\t\t\t\t\t\t.collect::<Vec<_>>(),\n\t\t\t\t\t)\n\t\t\t}\n\t\t} else {\n\t\t\tp {\n\t\t\t\t\"Loading...\"\n\t\t\t}\n\t\t}\n\t}\n})(signal)"
@@ -2703,6 +3005,7 @@ fn main() {
 
 	#[rstest]
 	fn test_format_complex_dsl_for_loop() {
+		// Arrange
 		let formatter = AstPageFormatter::new();
 		let input = r#"page!(|items: Vec<Item>| {
 	div class="list" {
@@ -2713,7 +3016,11 @@ fn main() {
 		}
 	}
 })(items)"#;
+
+		// Act
 		let result = formatter.format(input).unwrap();
+
+		// Assert
 		assert_eq!(
 			result.content,
 			"page!(|items: Vec<Item>| {\n\tdiv class=\"list\" {\n\t\tfor item in items {\n\t\t\tdiv class=\"card\" {\n\t\t\t\t{ View::fragment(item.tags.iter().map(|tag| { let t = tag.clone(); page!(|t: String| { span class=\"tag\" { { t } } })(t) }).collect::<Vec<_>>()) }\n\t\t\t}\n\t\t}\n\t}\n})(items)"

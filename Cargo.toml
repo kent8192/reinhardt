@@ -334,7 +334,6 @@ members = [
   "crates/reinhardt-pages",                             # WASM frontend framework
   "crates/reinhardt-pages/macros",              # WASM frontend macros
   "crates/reinhardt-pages/ast",                        # WASM frontend AST
-  "crates/reinhardt-whitenoise",                       # Static file optimization
   "crates/reinhardt-manouche",                         # DSL definitions for pages macros
   "crates/reinhardt-testkit",
   "crates/reinhardt-test",
@@ -362,17 +361,6 @@ members = [
   "crates/reinhardt-dentdelion",                        # Plugin system
   "crates/reinhardt-deeplink",                          # Mobile deep linking
   "crates/reinhardt-openapi",                           # OpenAPI router wrapper
-  "crates/reinhardt-pages-components",         # UI design system components
-  "crates/reinhardt-pages-components-macros",  # UI components macros
-  "crates/reinhardt-deploy",                           # Deployment engine
-  "crates/reinhardt-seeding",                          # Database seeding framework
-  "crates/reinhardt-storages",                         # Cloud storage backends
-  "crates/reinhardt-payment",                          # Payment integration
-  "crates/reinhardt-payment-mocks",                    # Payment testing mocks
-  "crates/reinhardt-tables",                           # Data table rendering
-  "crates/reinhardt-taggit",                           # Tagging functionality
-  "crates/reinhardt-debug-toolbar",                    # Debug toolbar
-  "crates/reinhardt-cms",                              # Content management system
   # Integration tests
   "tests",
   "tests/integration",
@@ -452,15 +440,6 @@ reinhardt-websockets = { path = "crates/reinhardt-websockets", version = "0.1.0-
 reinhardt-dentdelion = { path = "crates/reinhardt-dentdelion", version = "0.1.0-rc.4" }
 reinhardt-deeplink = { path = "crates/reinhardt-deeplink", version = "0.1.0-rc.4" }
 reinhardt-openapi = { path = "crates/reinhardt-openapi", version = "0.1.0-rc.4" }
-reinhardt-deploy = { path = "crates/reinhardt-deploy", version = "0.1.0-alpha.1" }
-reinhardt-seeding = { path = "crates/reinhardt-seeding", version = "0.1.0-rc.4" }
-reinhardt-storages = { path = "crates/reinhardt-storages", version = "0.1.0" }
-reinhardt-payment = { path = "crates/reinhardt-payment", version = "0.1.0" }
-reinhardt-payment-mocks = { path = "crates/reinhardt-payment-mocks", version = "0.1.0" }
-reinhardt-tables = { path = "crates/reinhardt-tables", version = "0.1.0-alpha.1" }
-reinhardt-taggit = { path = "crates/reinhardt-taggit", version = "0.1.0" }
-reinhardt-debug-toolbar = { path = "crates/reinhardt-debug-toolbar", version = "0.1.0-alpha.1" }
-reinhardt-cms = { path = "crates/reinhardt-cms", version = "0.1.0-alpha.1" }
 
 # Query subcrates
 reinhardt-query-macros = { path = "crates/reinhardt-query/macros", version = "0.1.0-rc.4" }

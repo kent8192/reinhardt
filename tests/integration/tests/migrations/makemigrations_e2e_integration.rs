@@ -580,7 +580,7 @@ async fn nc_05_field_rename_creates_rename_column_migration() {
 		"Migration file should contain both AddColumn and DropColumn for rename"
 	);
 	assert!(
-		file_content.contains("name"),
+		file_content.contains("\"name\""),
 		"Migration file should reference new column 'name'"
 	);
 }
@@ -1661,7 +1661,7 @@ async fn ec_01_no_models_error() {
 #[rstest]
 #[tokio::test]
 #[serial(makemigrations_e2e_errors)]
-async fn ec_02_empty_flag_without_app_label_error() {
+async fn ec_02_empty_schemas_no_changes_error() {
 	// Test: Error when both schemas are empty (E2E)
 	// With no tables at all, there are no changes to detect.
 
@@ -1691,7 +1691,7 @@ async fn ec_02_empty_flag_without_app_label_error() {
 #[rstest]
 #[tokio::test]
 #[serial(makemigrations_e2e_errors)]
-async fn ec_03_from_state_construction_failure_error() {
+async fn ec_03_duplicate_migration_detection() {
 	// Test: Duplicate migration detection (E2E)
 	// Generating the same migration twice should fail with DuplicateMigration error.
 
@@ -1735,7 +1735,7 @@ async fn ec_03_from_state_construction_failure_error() {
 #[rstest]
 #[tokio::test]
 #[serial(makemigrations_e2e_errors)]
-async fn ec_04_invalid_field_definition_error() {
+async fn ec_04_destructive_change_detection() {
 	// Test: Verify that destructive changes are flagged (E2E)
 	// Dropping a table is a destructive operation.
 
@@ -2496,15 +2496,15 @@ async fn edg_12_sql_reserved_words() {
 		"Migration should contain CreateTable"
 	);
 	assert!(
-		file_content.contains("order"),
+		file_content.contains("\"order\""),
 		"Migration should reference 'order' table name"
 	);
 	assert!(
-		file_content.contains("select"),
+		file_content.contains("\"select\""),
 		"Migration should reference 'select' column name"
 	);
 	assert!(
-		file_content.contains("group"),
+		file_content.contains("\"group\""),
 		"Migration should reference 'group' column name"
 	);
 }

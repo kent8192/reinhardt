@@ -10,12 +10,7 @@ use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-/// Project-specific UUID namespace for deterministic user ID generation.
-///
-/// Computed from `Uuid::new_v5(&Uuid::NAMESPACE_URL, b"https://reinhardt.rs/user-id")`.
-/// Using a project-specific namespace avoids semantic misuse of RFC 4122
-/// predefined namespaces (e.g. `NAMESPACE_OID` is intended for ISO OID strings).
-const USER_ID_NAMESPACE: Uuid = uuid::uuid!("c7a85537-073f-5092-8d10-774e109477c9");
+use crate::USER_ID_NAMESPACE;
 
 /// MFA authentication backend
 ///

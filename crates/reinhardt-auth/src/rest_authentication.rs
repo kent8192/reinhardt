@@ -252,12 +252,12 @@ impl RestAuthentication for TokenAuthentication {
 			{
 				// Try to parse user_id as UUID, or generate a new one if it fails
 				let id = uuid::Uuid::parse_str(user_id).unwrap_or_else(|_| {
-					uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, user_id.as_bytes())
+					uuid::Uuid::new_v5(&crate::USER_ID_NAMESPACE, user_id.as_bytes())
 				});
 				return Ok(Some(Box::new(SimpleUser {
 					id,
 					username: user_id.clone(),
-					email: format!("{}@example.com", user_id),
+					email: String::new(),
 					is_active: true,
 					is_admin: false,
 					is_staff: false,
@@ -283,12 +283,12 @@ impl AuthenticationBackend for TokenAuthentication {
 		if self.tokens.values().any(|id| id == user_id) {
 			// Try to parse user_id as UUID, or generate a new one if it fails
 			let id = uuid::Uuid::parse_str(user_id).unwrap_or_else(|_| {
-				uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, user_id.as_bytes())
+				uuid::Uuid::new_v5(&crate::USER_ID_NAMESPACE, user_id.as_bytes())
 			});
 			Ok(Some(Box::new(SimpleUser {
 				id,
 				username: user_id.to_string(),
-				email: format!("{}@example.com", user_id),
+				email: String::new(),
 				is_active: true,
 				is_admin: false,
 				is_staff: false,
@@ -342,9 +342,9 @@ impl RestAuthentication for RemoteUserAuthentication {
 			&& !username.is_empty()
 		{
 			return Ok(Some(Box::new(SimpleUser {
-				id: uuid::Uuid::new_v4(),
+				id: uuid::Uuid::new_v5(&crate::USER_ID_NAMESPACE, username.as_bytes()),
 				username: username.to_string(),
-				email: format!("{}@example.com", username),
+				email: String::new(),
 				is_active: true,
 				is_admin: false,
 				is_staff: false,
@@ -569,6 +569,7 @@ mod tests {
 	use crate::basic::BasicAuthentication;
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method};
+	use rstest::rstest;
 
 	#[tokio::test]
 	#[cfg(feature = "jwt")]
@@ -687,6 +688,124 @@ mod tests {
 		// Verify the authenticated user
 		let user = result.unwrap();
 		assert_eq!(user.get_username(), "testuser");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_token_auth_same_username_produces_same_id() {
+		// Arrange
+		let mut auth = TokenAuthentication::new();
+		auth.add_token("token1", "alice");
+		auth.add_token("token2", "alice");
+
+		let mut headers1 = HeaderMap::new();
+		headers1.insert("Authorization", "Token token1".parse().unwrap());
+		let request1 = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.headers(headers1)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		let mut headers2 = HeaderMap::new();
+		headers2.insert("Authorization", "Token token2".parse().unwrap());
+		let request2 = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.headers(headers2)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let user1 = RestAuthentication::authenticate(&auth, &request1)
+			.await
+			.unwrap()
+			.unwrap();
+		let user2 = RestAuthentication::authenticate(&auth, &request2)
+			.await
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			user1.id(),
+			user2.id(),
+			"same username must produce the same UUID"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_token_auth_user_has_default_privilege_flags() {
+		// Arrange
+		let mut auth = TokenAuthentication::new();
+		auth.add_token("secret_token", "alice");
+
+		let mut headers = HeaderMap::new();
+		headers.insert("Authorization", "Token secret_token".parse().unwrap());
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.headers(headers)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let user = RestAuthentication::authenticate(&auth, &request)
+			.await
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert!(user.is_active());
+		assert!(!user.is_admin());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_remote_user_auth_same_username_produces_same_id() {
+		// Arrange
+		let auth = RemoteUserAuthentication::new();
+
+		let mut headers1 = HeaderMap::new();
+		headers1.insert("REMOTE_USER", "bob".parse().unwrap());
+		let request1 = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.headers(headers1)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		let mut headers2 = HeaderMap::new();
+		headers2.insert("REMOTE_USER", "bob".parse().unwrap());
+		let request2 = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.headers(headers2)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let user1 = RestAuthentication::authenticate(&auth, &request1)
+			.await
+			.unwrap()
+			.unwrap();
+		let user2 = RestAuthentication::authenticate(&auth, &request2)
+			.await
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			user1.id(),
+			user2.id(),
+			"same username must produce the same UUID"
+		);
 	}
 
 	#[tokio::test]

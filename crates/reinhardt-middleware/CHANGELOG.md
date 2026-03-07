@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.4...reinhardt-middleware@v0.1.0-rc.5) - 2026-03-07
+
+### Fixed
+
+- remove develop/0.2.0 content accidentally merged via PR [[#1918](https://github.com/kent8192/reinhardt-web/issues/1918)](https://github.com/kent8192/reinhardt-web/issues/1918)
+
 ## [0.1.0-rc.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.2...reinhardt-middleware@v0.1.0-rc.3) - 2026-03-05
 
 ### Fixed

@@ -16,7 +16,7 @@ use {
 	},
 	reinhardt::pages::create_resource,
 	reinhardt::pages::reactive::ResourceState,
-	reinhardt::pages::spawn::spawn_task,
+	reinhardt::pages::reactive::hooks::{Action, use_action, use_effect},
 };
 
 /// Type of user list to display
@@ -35,57 +35,50 @@ pub enum UserListType {
 /// Uses watch blocks for reactive UI updates when state changes.
 pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 	let is_following = Signal::new(is_following_initial);
-	let loading = Signal::new(false);
-	let error = Signal::new(None::<String>);
 
-	// Clone signals for passing to page! macro
+	// Clone signal for passing to page! macro
 	let is_following_signal = is_following.clone();
-	let loading_signal = loading.clone();
-	let error_signal = error.clone();
 
 	#[cfg(client)]
 	{
-		let is_following_clone = is_following.clone();
-		let loading_clone = loading.clone();
-		let error_clone = error.clone();
+		let toggle_follow = use_action(
+			move |(target_id, currently_following): (Uuid, bool)| async move {
+				if currently_following {
+					unfollow_user(target_id).await
+				} else {
+					follow_user(target_id).await
+				}
+				.map_err(|e| e.to_string())
+			},
+		);
 
-		page!(|is_following_signal: Signal<bool>, loading_signal: Signal<bool>, error_signal: Signal<Option<String>>| {
+		// Toggle is_following on success and reset the action
+		{
+			let toggle_follow_for_effect = toggle_follow.clone();
+			let is_following_for_effect = is_following.clone();
+			use_effect(move || {
+				if toggle_follow_for_effect.is_success() {
+					let current = is_following_for_effect.get();
+					is_following_for_effect.set(!current);
+					toggle_follow_for_effect.reset();
+				}
+			});
+		}
+
+		page!(|is_following_signal: Signal<bool>, toggle_follow: Action<(), String>| {
 			div {
 				watch {
-					if loading_signal.get() {
+					if toggle_follow.is_pending() {
 						button {
 							type: "button",
 							class: "btn-secondary opacity-50 cursor-not-allowed",
-							disabled: loading_signal.get(),
+							disabled: true,
 							aria_label: "Loading",
 							@click: {
-										let is_following = is_following_clone.clone();
-										let loading = loading_clone.clone();
-										let error = error_clone.clone();
+										let toggle_follow = toggle_follow.clone();
+										let is_following_signal = is_following_signal.clone();
 										move |_event| {
-											let is_following_inner = is_following.clone();
-											let loading_inner = loading.clone();
-											let error_inner = error.clone();
-											let currently_following = is_following.get();
-											spawn_task(async move {
-												loading_inner.set(true);
-												error_inner.set(None);
-												let result = if currently_following {
-													unfollow_user(target_user_id).await
-												} else {
-													follow_user(target_user_id).await
-												};
-												match result {
-													Ok(()) => {
-														is_following_inner.set(!currently_following);
-														loading_inner.set(false);
-													}
-													Err(e) => {
-														error_inner.set(Some(e.to_string()));
-														loading_inner.set(false);
-													}
-												}
-											});
+											toggle_follow.dispatch((target_user_id, is_following_signal.get()));
 										}
 									},
 							div {
@@ -100,33 +93,10 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 							type: "button",
 							class: "btn-outline group",
 							@click: {
-										let is_following = is_following_clone.clone();
-										let loading = loading_clone.clone();
-										let error = error_clone.clone();
+										let toggle_follow = toggle_follow.clone();
+										let is_following_signal = is_following_signal.clone();
 										move |_event| {
-											let is_following_inner = is_following.clone();
-											let loading_inner = loading.clone();
-											let error_inner = error.clone();
-											let currently_following = is_following.get();
-											spawn_task(async move {
-												loading_inner.set(true);
-												error_inner.set(None);
-												let result = if currently_following {
-													unfollow_user(target_user_id).await
-												} else {
-													follow_user(target_user_id).await
-												};
-												match result {
-													Ok(()) => {
-														is_following_inner.set(!currently_following);
-														loading_inner.set(false);
-													}
-													Err(e) => {
-														error_inner.set(Some(e.to_string()));
-														loading_inner.set(false);
-													}
-												}
-											});
+											toggle_follow.dispatch((target_user_id, is_following_signal.get()));
 										}
 									},
 							span {
@@ -143,33 +113,10 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 							type: "button",
 							class: "btn-primary",
 							@click: {
-										let is_following = is_following_clone.clone();
-										let loading = loading_clone.clone();
-										let error = error_clone.clone();
+										let toggle_follow = toggle_follow.clone();
+										let is_following_signal = is_following_signal.clone();
 										move |_event| {
-											let is_following_inner = is_following.clone();
-											let loading_inner = loading.clone();
-											let error_inner = error.clone();
-											let currently_following = is_following.get();
-											spawn_task(async move {
-												loading_inner.set(true);
-												error_inner.set(None);
-												let result = if currently_following {
-													unfollow_user(target_user_id).await
-												} else {
-													follow_user(target_user_id).await
-												};
-												match result {
-													Ok(()) => {
-														is_following_inner.set(!currently_following);
-														loading_inner.set(false);
-													}
-													Err(e) => {
-														error_inner.set(Some(e.to_string()));
-														loading_inner.set(false);
-													}
-												}
-											});
+											toggle_follow.dispatch((target_user_id, is_following_signal.get()));
 										}
 									},
 							"Follow"
@@ -177,15 +124,15 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 					}
 				}
 				watch {
-					if error_signal.get().is_some() {
+					if toggle_follow.error().is_some() {
 						div {
 							class: "alert-danger mt-2 text-sm",
-							{ error_signal.get().unwrap_or_default() }
+							{ toggle_follow.error().unwrap_or_default() }
 						}
 					}
 				}
 			}
-		})(is_following_signal, loading_signal, error_signal)
+		})(is_following_signal, toggle_follow)
 	}
 
 	#[cfg(server)]
@@ -289,7 +236,7 @@ pub fn user_list(user_id: Uuid, list_type: UserListType) -> View {
 		let error_clone = error.clone();
 		let resource_for_effect = resource.clone();
 
-		reinhardt::pages::reactive::hooks::use_effect(move || match resource_for_effect.get() {
+		use_effect(move || match resource_for_effect.get() {
 			ResourceState::Loading => {
 				loading_clone.set(true);
 				error_clone.set(None);

@@ -147,7 +147,7 @@ pub fn polls_detail(question_id: i64) -> View {
 					div {
 						class: "mt-3",
 						button {
-							r#type: "submit",
+							type: "submit",
 							class: if is_loading { "btn-primary opacity-50 cursor-not-allowed" } else { "btn-primary" },
 							disabled: is_loading,
 							{ if is_loading { "Voting..." } else { "Vote" } }

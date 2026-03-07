@@ -10,7 +10,7 @@ pub mod resolvers;
 pub mod transactions;
 
 // Re-export fixtures for convenience
-pub use crate::graphql::fixtures::*;
+pub use super::fixtures::*;
 
 /// Database-specific fixtures module
 pub mod fixtures {

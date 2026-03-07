@@ -63,6 +63,7 @@ base64 = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
+reinhardt-test = { path = "../reinhardt-test" }
 tokio-test = "0.4"
 tokio = { workspace = true }
 serial_test = { workspace = true }

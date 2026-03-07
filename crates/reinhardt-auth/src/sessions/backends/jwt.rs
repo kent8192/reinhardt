@@ -65,7 +65,9 @@ pub enum JwtSessionError {
 	TokenExpired,
 	#[error("Invalid token")]
 	InvalidToken,
-	#[error("Invalid HMAC key length: {algorithm:?} requires at least {required} bytes, but got {actual} bytes")]
+	#[error(
+		"Invalid HMAC key length: {algorithm:?} requires at least {required} bytes, but got {actual} bytes"
+	)]
 	InvalidKeyLength {
 		algorithm: Algorithm,
 		required: usize,
@@ -613,7 +615,10 @@ mod tests {
 	#[rstest]
 	#[case::hs256_exact(Algorithm::HS256, "exactly-32-bytes-long-secret-key")]
 	#[case::hs384_exact(Algorithm::HS384, "exactly-48-bytes-long-secret-key-for-hs384-algo!")]
-	#[case::hs512_exact(Algorithm::HS512, "exactly-64-bytes-long-secret-key-for-hs512-algorithm-testing!!!!")]
+	#[case::hs512_exact(
+		Algorithm::HS512,
+		"exactly-64-bytes-long-secret-key-for-hs512-algorithm-testing!!!!"
+	)]
 	fn test_jwt_accepts_minimum_length_hmac_key(
 		#[case] algorithm: Algorithm,
 		#[case] secret: &str,

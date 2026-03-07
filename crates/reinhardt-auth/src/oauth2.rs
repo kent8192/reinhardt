@@ -409,6 +409,7 @@ impl AuthenticationBackend for OAuth2Authentication {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::core::user::SimpleUser;
 	use rstest::rstest;
 
 	#[rstest]

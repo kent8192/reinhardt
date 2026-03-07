@@ -773,43 +773,19 @@ Now use these server functions in components. Update `src/client/components/poll
 ```rust
 use reinhardt::pages::component::View;
 use reinhardt::pages::page;
-use reinhardt::pages::reactive::hooks::use_state;
-use reinhardt::pages::Signal;
+use reinhardt::pages::reactive::hooks::{Action, use_action};
 use crate::shared::types::{QuestionInfo, ChoiceInfo};
-
-#[cfg(wasm)]
-use {
-    crate::server_fn::polls::{get_questions, get_question_detail},
-    wasm_bindgen_futures::spawn_local,
-};
+use crate::server_fn::polls::{get_questions, get_question_detail};
 
 pub fn polls_index() -> View {
-    let (questions, set_questions) = use_state(Vec::<QuestionInfo>::new());
-    let (loading, set_loading) = use_state(true);
+    let load_questions = use_action(|_: ()| async move {
+        get_questions().await.map_err(|e| e.to_string())
+    });
+    load_questions.dispatch(());
 
-    #[cfg(wasm)]
-    {
-        let set_questions = set_questions.clone();
-        let set_loading = set_loading.clone();
+    let load_questions_signal = load_questions.clone();
 
-        spawn_local(async move {
-            match get_questions().await {
-                Ok(qs) => {
-                    set_questions(qs);
-                    set_loading(false);
-                }
-                Err(e) => {
-                    log::error!("Failed to load questions: {}", e);
-                    set_loading(false);
-                }
-            }
-        });
-    }
-
-    let questions_signal = questions.clone();
-    let loading_signal = loading.clone();
-
-    page!(|questions_signal: Signal<Vec<QuestionInfo>>, loading_signal: Signal<bool>| {
+    page!(|load_questions_signal: Action<Vec<QuestionInfo>, String>| {
         div {
             class: "max-w-4xl mx-auto px-4 mt-12",
             h1 {
@@ -817,8 +793,21 @@ pub fn polls_index() -> View {
                 "Polls"
             }
             watch {
-                if loading_signal.get() {
+                if load_questions_signal.error().is_some() {
+                    div {
+                        class: "alert-danger",
+                        { load_questions_signal.error().unwrap_or_default() }
+                    }
+                }
+            }
+            watch {
+                if load_questions_signal.is_pending() {
                     div { "Loading..." }
+                } else if load_questions_signal.result().unwrap_or_default().is_empty() {
+                    div {
+                        class: "space-y-2",
+                        "No polls are available."
+                    }
                 } else {
                     div {
                         class: "space-y-2",
@@ -828,7 +817,7 @@ pub fn polls_index() -> View {
                 }
             }
         }
-    })(questions_signal, loading_signal)
+    })(load_questions_signal)
 }
 ```
 
@@ -837,9 +826,9 @@ pub fn polls_index() -> View {
 **Data Flow:**
 
 ```
-Component Mount
+use_action(|_| async { get_questions().await })
     ↓
-spawn_local(async { get_questions().await })
+dispatch(()) triggers async execution
     ↓
 HTTP POST to server function endpoint
     ↓
@@ -847,9 +836,9 @@ Server executes with injected DB connection
     ↓
 Query database → Convert to DTOs → Return JSON
     ↓
-Client deserializes JSON → Update signal
+Client deserializes JSON → Action stores result/error
     ↓
-Component re-renders with new data
+watch blocks react to state changes → Component re-renders
 ```
 
 **Benefits:**

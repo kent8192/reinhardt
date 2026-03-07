@@ -36,7 +36,7 @@ fn f_expression_creation_and_to_sql() {
 
 	// Assert
 	assert_eq!(f.field, "price");
-	assert_eq!(f.to_sql(), "price");
+	assert_eq!(f.to_sql(), "\"price\"");
 }
 
 #[rstest]
@@ -52,9 +52,9 @@ fn f_expression_display() {
 }
 
 #[rstest]
-#[case("id", "id")]
-#[case("user_name", "user_name")]
-#[case("created_at", "created_at")]
+#[case("id", "\"id\"")]
+#[case("user_name", "\"user_name\"")]
+#[case("created_at", "\"created_at\"")]
 fn f_expression_various_fields(#[case] field: &str, #[case] expected_sql: &str) {
 	// Arrange
 
@@ -647,7 +647,7 @@ fn annotation_with_field_reference() {
 	let sql = annotation.to_sql();
 
 	// Assert
-	assert_eq!(sql, "price AS price_ref");
+	assert_eq!(sql, "\"price\" AS price_ref");
 }
 
 #[rstest]

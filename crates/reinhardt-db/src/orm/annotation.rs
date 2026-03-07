@@ -238,7 +238,7 @@ mod tests {
 	#[test]
 	fn test_field_annotation() {
 		let ann = Annotation::new("another_price", AnnotationValue::Field(F::new("price")));
-		assert_eq!(ann.to_sql(), "price AS another_price");
+		assert_eq!(ann.to_sql(), "\"price\" AS another_price");
 	}
 
 	#[test]
@@ -260,7 +260,7 @@ mod tests {
 			Box::new(AnnotationValue::Value(Value::Int(10))),
 		);
 		let ann = Annotation::new("new_price", AnnotationValue::Expression(expr));
-		assert_eq!(ann.to_sql(), "(price + 10) AS new_price");
+		assert_eq!(ann.to_sql(), "(\"price\" + 10) AS new_price");
 	}
 
 	#[test]
@@ -308,7 +308,7 @@ mod tests {
 		let ann = Annotation::new("display_name", AnnotationValue::Expression(expr));
 		assert_eq!(
 			ann.to_sql(),
-			"COALESCE(nickname, username, 'Anonymous') AS display_name"
+			"COALESCE(\"nickname\", \"username\", 'Anonymous') AS display_name"
 		);
 	}
 
@@ -323,7 +323,7 @@ mod tests {
 			Box::new(AnnotationValue::Field(F::new("tax"))),
 		);
 		let ann = Annotation::new("total", AnnotationValue::Expression(expr));
-		assert_eq!(ann.to_sql(), "((price * quantity) + tax) AS total");
+		assert_eq!(ann.to_sql(), "((\"price\" * \"quantity\") + \"tax\") AS total");
 	}
 
 	#[test]
@@ -335,7 +335,7 @@ mod tests {
 		let ann = Annotation::new("avg_order_value", AnnotationValue::Expression(expr));
 		assert_eq!(
 			ann.to_sql(),
-			"(total_sales / num_orders) AS avg_order_value"
+			"(\"total_sales\" / \"num_orders\") AS avg_order_value"
 		);
 	}
 }

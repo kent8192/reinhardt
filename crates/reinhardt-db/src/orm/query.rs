@@ -5514,7 +5514,7 @@ impl FilterValue {
 /// Quote a SQL identifier to prevent injection via field names.
 /// Uses PostgreSQL double-quote escaping (also valid for SQLite).
 /// Handles dot-separated qualified names (e.g., "table.column" becomes "table"."column").
-fn quote_identifier(field: &str) -> String {
+pub(crate) fn quote_identifier(field: &str) -> String {
 	if field.contains('\0') {
 		panic!("SQL identifier must not contain null bytes");
 	}

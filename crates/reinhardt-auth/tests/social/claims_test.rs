@@ -1,7 +1,7 @@
 //! Claims parsing tests
 
 use reinhardt_auth::social::core::claims::{IdToken, StandardClaims};
-use rstest::*;
+
 use serde_json::json;
 use std::collections::HashMap;
 

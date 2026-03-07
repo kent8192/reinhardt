@@ -394,7 +394,15 @@ pub fn user_list(user_id: Uuid, list_type: UserListType) -> View {
 				} else {
 					div {
 						class: "card overflow-hidden",
-						{ View::fragment(users_signal.get().iter().map(|u| user_card(u)).collect ::<Vec<_>>()) }
+						{
+							View::fragment(
+									users_signal
+										.get()
+										.iter()
+										.map(|u| user_card(u))
+										.collect::<Vec<_>>(),
+								)
+						}
 					}
 				}
 			}

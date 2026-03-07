@@ -163,7 +163,15 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 							class: "flex-shrink-0",
 							div {
 								class: "tweet-avatar bg-surface-tertiary flex items-center justify-center text-content-secondary font-semibold",
-								{ username.clone().chars().next().unwrap_or('U').to_uppercase().to_string() }
+								{
+									username
+											.clone()
+											.chars()
+											.next()
+											.unwrap_or('U')
+											.to_uppercase()
+											.to_string()
+								}
 							}
 						}
 						div {
@@ -502,7 +510,15 @@ pub fn tweet_list(user_id: Option<Uuid>) -> View {
 				} else {
 					div {
 						class: "card overflow-hidden",
-						{ View::fragment(tweets_signal.get().iter().map(|t| tweet_card(t, false)).collect ::<Vec<_>>()) }
+						{
+							View::fragment(
+									tweets_signal
+										.get()
+										.iter()
+										.map(|t| tweet_card(t, false))
+										.collect::<Vec<_>>(),
+								)
+						}
 					}
 				}
 			}

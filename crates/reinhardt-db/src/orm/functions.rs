@@ -1289,7 +1289,10 @@ mod tests {
 			AnnotationValue::Field(F::new("last_name")),
 		])
 		.unwrap();
-		assert_eq!(concat.to_sql(), "CONCAT(\"first_name\", ' ', \"last_name\")");
+		assert_eq!(
+			concat.to_sql(),
+			"CONCAT(\"first_name\", ' ', \"last_name\")"
+		);
 	}
 
 	#[test]

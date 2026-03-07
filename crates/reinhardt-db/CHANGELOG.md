@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.5...reinhardt-db@v0.1.0-rc.6) - 2026-03-07
+
+### Fixed
+
+- *(db)* address review feedback for SQL identifier quoting
+- *(db)* add identifier quoting to F::to_sql() and FieldRef::to_sql()
+- *(db)* always quote SQL identifiers in F::to_sql() and annotation alias
+
+### Security
+
+- *(db)* add identifier quoting helper for PostgreSQL custom expressions
+- *(db)* quote field identifiers in OuterRef and PostgreSQL-specific operators
+- *(db)* use parse_column_reference for OuterRef and add SQL verification tests
+- *(db)* address review feedback for SQL identifier quoting
+
+### Styling
+
+- apply format fixes after main merge
+- format assert_eq macro in concat function test
+
+### Testing
+
+- *(db)* add SQL injection prevention tests for filter field identifiers
+- *(db)* add coverage tests for all SQL identifier quoting branches
+- *(db)* replace loose assert!(contains) with strict assert_eq! in SQL tests
+
 ## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.4...reinhardt-db@v0.1.0-rc.5) - 2026-03-07
 
 ### Added

@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.4...reinhardt-web@v0.1.0-rc.5) - 2026-03-07
+
+### Added
+
+- *(examples)* introduce Injected<T> usage in di-showcase
+
+### Changed
+
+- *(examples)* remove unnecessary r# prefix from HTML attribute names
+
+### Documentation
+
+- *(stability)* relax SP-1 API freeze and add SP-6 non-breaking addition review
+- *(claude)* add SP-6 non-breaking addition policy to quick reference
+- *(pr)* add three-dot diff rule for PR verification (RP-5)
+- *(pr)* replace Japanese text with English in RP-5
+
+### Fixed
+
+- *(ci)* enforce semver-check during RC phase instead of skipping
+- *(ci)* remove non-existent paths from CODEOWNERS
+- *(macros)* replace skeleton tests with meaningful assertions in pre_validate
+- *(examples)* add force-link for library crate in di-showcase manage.rs
+- remove develop/0.2.0 content accidentally merged via PR [[#1918](https://github.com/kent8192/reinhardt-web/issues/1918)](https://github.com/kent8192/reinhardt-web/issues/1918)
+- *(test)* add missing redirect_uri argument to oauth2 exchange_code tests
+- restore non-crate develop/0.2.0 changes that are harmless or beneficial
+- *(test)* restore orphaned apply_update and pre_validate module declarations
+
+### Maintenance
+
+- *(labels)* add rc-addition label for SP-6 non-breaking additions
+- *(semver)* update comments to reflect SP-1 relaxation policy
+
+### Styling
+
+- *(examples)* apply rustfmt to examples-twitter components
+- *(examples)* apply reinhardt-admin fmt to examples-twitter common.rs
+
+### Testing
+
+- *(db)* add field mapping and migrations integration tests
+
 ## [0.1.0-rc.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.3...reinhardt-web@v0.1.0-rc.4) - 2026-03-05
 
 ### Documentation

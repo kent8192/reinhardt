@@ -576,8 +576,8 @@ async fn nc_05_field_rename_creates_rename_column_migration() {
 
 	// Rename is detected as add + drop (RenameColumn detection not yet implemented)
 	assert!(
-		file_content.contains("AddColumn") || file_content.contains("DropColumn"),
-		"Migration file should contain AddColumn or DropColumn for rename"
+		file_content.contains("AddColumn") && file_content.contains("DropColumn"),
+		"Migration file should contain both AddColumn and DropColumn for rename"
 	);
 	assert!(
 		file_content.contains("name"),

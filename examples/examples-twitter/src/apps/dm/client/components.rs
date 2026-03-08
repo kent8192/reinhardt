@@ -374,7 +374,15 @@ pub fn dm_room_list(on_room_select: impl Fn(Uuid) + Clone + 'static) -> View {
 						}
 					} else {
 						div {
-							{ View::fragment(rooms_signal.get().iter().map(|r| { room_item(r, on_room_select.clone()) }).collect ::<Vec<_>>()) }
+							{
+								View::fragment(
+										rooms_signal
+											.get()
+											.iter()
+											.map(|r| room_item(r, on_room_select.clone()))
+											.collect::<Vec<_>>(),
+									)
+							}
 						}
 					}
 				}

@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.5...reinhardt-web@v0.1.0-rc.6) - 2026-03-08
+
+### Documentation
+
+- *(tutorial)* migrate part 1 code examples from use_state/spawn_local to use_action
+- *(tutorial)* migrate part 2 code examples from use_state/spawn_local to use_action
+- *(tutorial)* migrate part 3 code examples from use_state/spawn_local to use_action
+- *(tutorial)* migrate part 4 code examples from spawn_local to use_action
+
+### Fixed
+
+- *(ci)* prevent UI Tests from running when Phase 1 checks fail
+- *(db)* add identifier quoting to F::to_sql() and FieldRef::to_sql()
+- *(db)* always quote SQL identifiers in F::to_sql() and annotation alias
+
+### Maintenance
+
+- *(serena)* clean up project.yml formatting
+- add develop leak guard to detect indirect develop/* merges
+- remove duplicate lowercase PR template
+- sync PR template content
+
+### Styling
+
+- apply format fixes after main merge
+- format assert_eq macro in concat function test
+
 ## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.4...reinhardt-web@v0.1.0-rc.5) - 2026-03-07
 
 ### Added

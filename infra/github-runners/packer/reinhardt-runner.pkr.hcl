@@ -102,6 +102,9 @@ build {
 	provisioner "shell" {
 		execute_command = "sudo sh -c '{{ .Vars }} {{ .Path }}'"
 		inline = [
+			"DEBIAN_FRONTEND=noninteractive apt-get update -qq",
+			"DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends software-properties-common",
+			"add-apt-repository -y universe",
 			"apt-get update -qq",
 			"DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\",
 			"  docker.io \\",

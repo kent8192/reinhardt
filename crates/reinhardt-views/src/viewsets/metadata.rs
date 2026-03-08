@@ -13,6 +13,7 @@ type AsyncHandlerFn =
 /// Custom action handler trait
 #[async_trait]
 pub trait ActionHandler: Send + Sync {
+	/// Handle the incoming request and return a response.
 	async fn handle(&self, request: Request) -> Result<Response>;
 }
 
@@ -22,6 +23,7 @@ pub struct FunctionActionHandler {
 }
 
 impl FunctionActionHandler {
+	/// Create a new `FunctionActionHandler` wrapping the given async function.
 	pub fn new<F>(handler: F) -> Self
 	where
 		F: Fn(Request) -> Pin<Box<dyn Future<Output = Result<Response>> + Send>>
@@ -199,12 +201,16 @@ impl fmt::Debug for ActionMetadata {
 
 /// Action registry entry (collected by inventory)
 pub struct ActionRegistryEntry {
+	/// Fully qualified type name of the viewset.
 	pub viewset_type: &'static str,
+	/// Name of the custom action.
 	pub action_name: &'static str,
+	/// Function that returns the action metadata.
 	pub metadata_fn: fn() -> ActionMetadata,
 }
 
 impl ActionRegistryEntry {
+	/// Create a new `ActionRegistryEntry`.
 	pub const fn new(
 		viewset_type: &'static str,
 		action_name: &'static str,

@@ -102,6 +102,7 @@ pub async fn model_admin_config() -> ModelAdminConfig {
 }
 
 #[cfg(all(feature = "admin", feature = "testcontainers"))]
+/// Creates an [`AdminDatabase`] fixture connected to a shared PostgreSQL test container.
 #[fixture]
 pub async fn admin_database(
 	#[future] shared_db_pool: (sqlx::PgPool, String),
@@ -231,6 +232,7 @@ pub async fn server_fn_test_context(
 }
 
 #[cfg(all(feature = "admin", feature = "testcontainers"))]
+/// Creates a test context for admin export/import testing with pre-populated data.
 #[fixture]
 pub async fn export_import_test_context(
 	#[future] admin_site: Arc<AdminSite>,

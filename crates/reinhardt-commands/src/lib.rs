@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! # Reinhardt Management Commands
 //!
 //! Django-style management command framework for Reinhardt.

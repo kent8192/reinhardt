@@ -210,8 +210,11 @@ fn parse_sqlite_url(url_str: &str) -> Result<DatabaseUrl, String> {
 /// Cache URL configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheUrl {
+	/// Cache backend type derived from the URL scheme (e.g., `"redis"`, `"locmem"`).
 	pub backend: String,
+	/// Backend-specific connection location parsed from the URL.
 	pub location: Option<String>,
+	/// Additional configuration options from URL query parameters.
 	pub options: HashMap<String, String>,
 }
 /// Parse a cache URL

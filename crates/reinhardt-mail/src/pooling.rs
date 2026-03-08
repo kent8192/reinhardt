@@ -32,20 +32,24 @@ impl Default for PoolConfig {
 }
 
 impl PoolConfig {
+	/// Creates a new pool configuration with default values.
 	pub fn new() -> Self {
 		Self::default()
 	}
 
+	/// Sets the maximum number of concurrent connections.
 	pub fn with_max_connections(mut self, max: usize) -> Self {
 		self.max_connections = max;
 		self
 	}
 
+	/// Sets the minimum number of idle connections to maintain.
 	pub fn with_min_idle(mut self, min: usize) -> Self {
 		self.min_idle = min;
 		self
 	}
 
+	/// Sets the maximum number of messages to send per connection before reconnecting.
 	pub fn with_max_messages_per_connection(mut self, max: usize) -> Self {
 		self.max_messages_per_connection = max;
 		self
@@ -203,6 +207,7 @@ pub struct BatchSender {
 }
 
 impl BatchSender {
+	/// Creates a new batch sender with the given SMTP and pool configurations.
 	pub fn new(smtp_config: SmtpConfig, pool_config: PoolConfig) -> EmailResult<Self> {
 		let pool = EmailPool::new(smtp_config, pool_config)?;
 
@@ -213,11 +218,13 @@ impl BatchSender {
 		})
 	}
 
+	/// Sets the number of messages to send per batch.
 	pub fn with_batch_size(mut self, size: usize) -> Self {
 		self.batch_size = size;
 		self
 	}
 
+	/// Sets the delay between batches for rate limiting.
 	pub fn with_delay(mut self, delay: std::time::Duration) -> Self {
 		self.delay = delay;
 		self

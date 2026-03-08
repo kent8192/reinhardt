@@ -251,49 +251,107 @@ impl FormFieldGroup {
 pub enum FormFieldProperty {
 	/// Named property with a value: `max_length: 100`, `label: "Username"`
 	Named {
+		/// Property name identifier.
 		name: Ident,
+		/// Property value expression.
 		value: Expr,
+		/// Source location span.
 		span: Span,
 	},
 	/// Flag property (boolean true): `required`
-	Flag { name: Ident, span: Span },
+	Flag {
+		/// Flag name identifier.
+		name: Ident,
+		/// Source location span.
+		span: Span,
+	},
 	/// Widget specification: `widget: PasswordInput`
-	Widget { widget_type: Ident, span: Span },
+	Widget {
+		/// Widget type identifier.
+		widget_type: Ident,
+		/// Source location span.
+		span: Span,
+	},
 	/// Custom wrapper element: `wrapper: div { class: "relative" }`
-	Wrapper { element: WrapperElement, span: Span },
+	Wrapper {
+		/// The wrapper HTML element definition.
+		element: WrapperElement,
+		/// Source location span.
+		span: Span,
+	},
 	/// SVG icon for the field: `icon: svg { ... }`
-	Icon { element: IconElement, span: Span },
+	Icon {
+		/// The icon element definition.
+		element: IconElement,
+		/// Source location span.
+		span: Span,
+	},
 	/// Icon position: `icon_position: "left"`
-	IconPosition { position: IconPosition, span: Span },
+	IconPosition {
+		/// The icon placement position.
+		position: IconPosition,
+		/// Source location span.
+		span: Span,
+	},
 	/// Custom attributes: `attrs: { aria_label: "...", data_testid: "..." }`
-	Attrs { attrs: Vec<CustomAttr>, span: Span },
+	Attrs {
+		/// List of custom attribute definitions.
+		attrs: Vec<CustomAttr>,
+		/// Source location span.
+		span: Span,
+	},
 	/// Two-way binding option: `bind: true` or `bind: false`
 	///
 	/// When true (default), the form automatically generates an @input handler
 	/// to update the Signal when the user types. Set to false to disable
 	/// automatic binding and use a custom handler instead.
-	Bind { enabled: bool, span: Span },
+	Bind {
+		/// Whether two-way binding is enabled.
+		enabled: bool,
+		/// Source location span.
+		span: Span,
+	},
 	/// Initial value source: `initial_from: "field_name"`
 	///
 	/// Maps this field to a property in the data returned by `initial_loader`.
 	/// The value is the property name in the loaded data structure.
-	InitialFrom { field_name: LitStr, span: Span },
+	InitialFrom {
+		/// Property name in the loaded data structure.
+		field_name: LitStr,
+		/// Source location span.
+		span: Span,
+	},
 	/// Choices source for dynamic ChoiceField: `choices_from: "choices"`
 	///
 	/// Specifies which field in the data returned by `choices_loader` contains
 	/// the array of choice options. Used with `ChoiceField` to populate
 	/// radio buttons, checkboxes, or select dropdowns dynamically.
-	ChoicesFrom { field_name: LitStr, span: Span },
+	ChoicesFrom {
+		/// Property name in the loaded data for choices.
+		field_name: LitStr,
+		/// Source location span.
+		span: Span,
+	},
 	/// Choice value path: `choice_value: "id"`
 	///
 	/// Specifies which property of each choice item to use as the form value.
 	/// The default is "value" if not specified.
-	ChoiceValue { path: LitStr, span: Span },
+	ChoiceValue {
+		/// Property path for the choice value.
+		path: LitStr,
+		/// Source location span.
+		span: Span,
+	},
 	/// Choice label path: `choice_label: "choice_text"`
 	///
 	/// Specifies which property of each choice item to use as the display label.
 	/// The default is "label" if not specified.
-	ChoiceLabel { path: LitStr, span: Span },
+	ChoiceLabel {
+		/// Property path for the choice display label.
+		path: LitStr,
+		/// Source location span.
+		span: Span,
+	},
 }
 
 /// A custom attribute for accessibility or data attributes.
@@ -539,13 +597,18 @@ impl FormFieldProperty {
 pub enum FormValidator {
 	/// Field-level validator: `username: [|v| ... => "error"]`
 	Field {
+		/// Name of the field to validate.
 		field_name: Ident,
+		/// Validation rules applied to this field.
 		rules: Vec<ValidatorRule>,
+		/// Source location span.
 		span: Span,
 	},
 	/// Form-level validator: `@form: [|data| ... => "error"]`
 	Form {
+		/// Validation rules applied to the entire form.
 		rules: Vec<ValidatorRule>,
+		/// Source location span.
 		span: Span,
 	},
 }

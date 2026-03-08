@@ -84,20 +84,27 @@ pub struct WasmBuildOutput {
 /// Error types for WASM build operations.
 #[derive(Debug, thiserror::Error)]
 pub enum WasmBuildError {
+	/// The `wasm32-unknown-unknown` rustup target is not installed.
 	#[error(
 		"wasm32-unknown-unknown target not installed. Run: rustup target add wasm32-unknown-unknown"
 	)]
 	TargetNotInstalled,
+	/// The `wasm-bindgen-cli` tool is not installed.
 	#[error("wasm-bindgen-cli not installed. Run: cargo install wasm-bindgen-cli")]
 	WasmBindgenNotInstalled,
+	/// The cargo build step failed.
 	#[error("Cargo build failed: {0}")]
 	CargoBuildFailed(String),
+	/// The wasm-bindgen post-processing step failed.
 	#[error("wasm-bindgen failed: {0}")]
 	WasmBindgenFailed(String),
+	/// The wasm-opt optimization step failed.
 	#[error("wasm-opt failed: {0}")]
 	WasmOptFailed(String),
+	/// Could not determine the crate name from `Cargo.toml`.
 	#[error("Failed to determine crate name from Cargo.toml")]
 	CrateNameNotFound,
+	/// An I/O error occurred during WASM build operations.
 	#[error("IO error: {0}")]
 	Io(#[from] std::io::Error),
 }

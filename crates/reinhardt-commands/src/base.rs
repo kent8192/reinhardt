@@ -165,9 +165,13 @@ pub trait BaseCommand: Send + Sync {
 /// Command argument definition
 #[derive(Debug, Clone)]
 pub struct CommandArgument {
+	/// The argument name used for display and lookup.
 	pub name: String,
+	/// A human-readable description of the argument.
 	pub description: String,
+	/// Whether this argument is required.
 	pub required: bool,
+	/// An optional default value if the argument is not provided.
 	pub default: Option<String>,
 }
 
@@ -202,12 +206,19 @@ impl CommandArgument {
 /// Command option/flag definition
 #[derive(Debug, Clone)]
 pub struct CommandOption {
+	/// Optional single-character short flag (e.g., `'v'` for `-v`).
 	pub short: Option<char>,
+	/// The long option name (e.g., `"verbose"` for `--verbose`).
 	pub long: String,
+	/// A human-readable description of the option.
 	pub description: String,
+	/// Whether this option expects a value argument.
 	pub takes_value: bool,
+	/// Whether this option is required.
 	pub required: bool,
+	/// An optional default value if the option is not provided.
 	pub default: Option<String>,
+	/// Whether this option can be specified multiple times.
 	pub multiple: bool,
 }
 

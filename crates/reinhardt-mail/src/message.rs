@@ -374,6 +374,10 @@ impl EmailMessage {
 	}
 }
 
+/// Builder for constructing validated `EmailMessage` instances.
+///
+/// Use the fluent API to set fields, then call [`build`](EmailMessageBuilder::build)
+/// to produce a validated `EmailMessage`.
 #[derive(Default)]
 pub struct EmailMessageBuilder {
 	subject: String,
@@ -390,61 +394,73 @@ pub struct EmailMessageBuilder {
 }
 
 impl EmailMessageBuilder {
+	/// Sets the email subject line.
 	pub fn subject(mut self, subject: impl Into<String>) -> Self {
 		self.subject = subject.into();
 		self
 	}
 
+	/// Sets the plain text body of the email.
 	pub fn body(mut self, body: impl Into<String>) -> Self {
 		self.body = body.into();
 		self
 	}
 
+	/// Sets the sender email address.
 	pub fn from(mut self, from: impl Into<String>) -> Self {
 		self.from_email = from.into();
 		self
 	}
 
+	/// Sets the sender email address (alias for [`from`](EmailMessageBuilder::from)).
 	pub fn from_email(mut self, from: impl Into<String>) -> Self {
 		self.from_email = from.into();
 		self
 	}
 
+	/// Sets the list of primary recipients.
 	pub fn to(mut self, to: Vec<String>) -> Self {
 		self.to = to;
 		self
 	}
 
+	/// Sets the list of CC (carbon copy) recipients.
 	pub fn cc(mut self, cc: Vec<String>) -> Self {
 		self.cc = cc;
 		self
 	}
 
+	/// Sets the list of BCC (blind carbon copy) recipients.
 	pub fn bcc(mut self, bcc: Vec<String>) -> Self {
 		self.bcc = bcc;
 		self
 	}
 
+	/// Sets the list of reply-to addresses.
 	pub fn reply_to(mut self, reply_to: Vec<String>) -> Self {
 		self.reply_to = reply_to;
 		self
 	}
 
+	/// Sets the HTML body of the email.
 	pub fn html(mut self, html: impl Into<String>) -> Self {
 		self.html_body = Some(html.into());
 		self
 	}
 
+	/// Adds a file attachment to the email.
 	pub fn attachment(mut self, attachment: Attachment) -> Self {
 		self.attachments.push(attachment);
 		self
 	}
 
+	/// Adds an alternative content representation to the email.
 	pub fn alternative(mut self, alternative: Alternative) -> Self {
 		self.alternatives.push(alternative);
 		self
 	}
 
+	/// Adds a custom email header with the given name and value.
 	pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
 		self.headers.push((name.into(), value.into()));
 		self

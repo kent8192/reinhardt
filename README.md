@@ -602,8 +602,17 @@ async fn complex_user_query() -> Result<Vec<DefaultUser>, Box<dyn std::error::Er
 		.order_by(vec![(DefaultUser::field_date_joined().into(), "DESC")])
 		.function(RowNumber::new());
 
-	// Components above are used with QuerySet to build and execute queries
-	unimplemented!("Full query execution requires a database connection")
+	// Build and execute the query using QuerySet
+	let users = DefaultUser::objects()
+		.filter(active_query)
+		.annotate("email_lower", email_lower)
+		.annotate("username_upper", username_upper)
+		.annotate("rank", rank_by_join_date)
+		.order_by(vec![("-date_joined",)])
+		.all()
+		.await?;
+
+	Ok(users)
 }
 
 // Transaction support

@@ -220,7 +220,8 @@ impl<H: PasswordHasher> UserManager<H> {
 		}
 
 		// Validate email
-		if !data.email.contains('@') || !data.email.contains('.') {
+		// JWT/MFA authentication may not provide email; skip validation for empty emails
+		if !data.email.is_empty() && (!data.email.contains('@') || !data.email.contains('.')) {
 			return Err(UserManagementError::InvalidEmail);
 		}
 
@@ -776,5 +777,30 @@ mod tests {
 				.await
 				.unwrap()
 		);
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_create_user_with_empty_email_succeeds() {
+		// Arrange
+		let hasher = Argon2Hasher::new();
+		let mut manager = UserManager::new(hasher);
+
+		let user_data = CreateUserData {
+			username: "jwt_user".to_string(),
+			email: String::new(),
+			password: "password123".to_string(),
+			is_active: true,
+			is_admin: false,
+		};
+
+		// Act
+		let result = manager.create_user(user_data).await;
+
+		// Assert
+		let user = result.unwrap();
+		assert_eq!(user.username, "jwt_user");
+		assert_eq!(user.email, "");
+		assert!(user.is_active);
 	}
 }

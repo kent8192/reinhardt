@@ -5,10 +5,15 @@ use crate::field::{FieldError, FieldResult, FormField, Widget};
 /// Boolean field for checkbox input
 #[derive(Debug, Clone)]
 pub struct BooleanField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Optional human-readable label for display.
 	pub label: Option<String>,
+	/// Whether the checkbox must be checked (true) to pass validation.
 	pub required: bool,
+	/// Optional help text displayed alongside the field.
 	pub help_text: Option<String>,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<serde_json::Value>,
 }
 

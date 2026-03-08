@@ -38,29 +38,36 @@ impl FormSet {
 		}
 	}
 
+	/// Returns the prefix used for form field naming.
 	pub fn prefix(&self) -> &str {
 		&self.prefix
 	}
 
+	/// Returns whether forms in this set can be deleted.
 	pub fn can_delete(&self) -> bool {
 		self.can_delete
 	}
+	/// Sets the number of extra empty forms to include.
 	pub fn with_extra(mut self, extra: usize) -> Self {
 		self.extra = extra;
 		self
 	}
+	/// Enables or disables form deletion within this set.
 	pub fn with_can_delete(mut self, can_delete: bool) -> Self {
 		self.can_delete = can_delete;
 		self
 	}
+	/// Enables or disables ordering of forms within this set.
 	pub fn with_can_order(mut self, can_order: bool) -> Self {
 		self.can_order = can_order;
 		self
 	}
+	/// Sets the maximum number of forms allowed.
 	pub fn with_max_num(mut self, max_num: Option<usize>) -> Self {
 		self.max_num = max_num;
 		self
 	}
+	/// Sets the minimum number of forms required for validation.
 	pub fn with_min_num(mut self, min_num: usize) -> Self {
 		self.min_num = min_num;
 		self
@@ -99,15 +106,19 @@ impl FormSet {
 		self.forms.push(form);
 		Ok(())
 	}
+	/// Returns a slice of all forms in this set.
 	pub fn forms(&self) -> &[Form] {
 		&self.forms
 	}
+	/// Returns a mutable reference to the forms vector.
 	pub fn forms_mut(&mut self) -> &mut Vec<Form> {
 		&mut self.forms
 	}
+	/// Returns the number of forms currently in this set.
 	pub fn form_count(&self) -> usize {
 		self.forms.len()
 	}
+	/// Returns the total form count including extra empty forms.
 	pub fn total_form_count(&self) -> usize {
 		self.forms.len() + self.extra
 	}
@@ -152,9 +163,11 @@ impl FormSet {
 
 		all_valid && self.errors.is_empty()
 	}
+	/// Returns the formset-level validation errors.
 	pub fn errors(&self) -> &[String] {
 		&self.errors
 	}
+	/// Returns cleaned data from all forms in the set.
 	pub fn cleaned_data(&self) -> Vec<&HashMap<String, serde_json::Value>> {
 		self.forms.iter().map(|f| f.cleaned_data()).collect()
 	}

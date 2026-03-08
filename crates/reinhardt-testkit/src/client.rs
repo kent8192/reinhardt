@@ -28,23 +28,30 @@ pub enum HttpVersion {
 	Auto,
 }
 
+/// Errors that can occur when using the API test client.
 #[derive(Debug, Error)]
 pub enum ClientError {
+	/// HTTP protocol error.
 	#[error("HTTP error: {0}")]
 	Http(#[from] http::Error),
 
+	/// Hyper transport error.
 	#[error("Hyper error: {0}")]
 	Hyper(#[from] hyper::Error),
 
+	/// JSON serialization/deserialization error.
 	#[error("Serialization error: {0}")]
 	Serialization(#[from] serde_json::Error),
 
+	/// Invalid HTTP header value.
 	#[error("Invalid header value: {0}")]
 	InvalidHeaderValue(#[from] http::header::InvalidHeaderValue),
 
+	/// Reqwest HTTP client error.
 	#[error("Reqwest error: {0}")]
 	Reqwest(#[from] reqwest::Error),
 
+	/// General request failure.
 	#[error("Request failed: {0}")]
 	RequestFailed(String),
 }
@@ -79,6 +86,7 @@ impl ClientError {
 	}
 }
 
+/// Result type for API client operations.
 pub type ClientResult<T> = Result<T, ClientError>;
 
 /// Type alias for request handler function
@@ -287,6 +295,7 @@ impl APIClient {
 	pub fn builder() -> APIClientBuilder {
 		APIClientBuilder::new()
 	}
+	/// Get the base URL of this client.
 	pub fn base_url(&self) -> &str {
 		&self.base_url
 	}

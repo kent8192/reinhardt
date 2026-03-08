@@ -166,11 +166,17 @@ pub trait ResponseExt {
 
 	/// Assert specific status codes
 	fn assert_ok(&self) -> &Self;
+	/// Assert that the response status is 201 Created.
 	fn assert_created(&self) -> &Self;
+	/// Assert that the response status is 204 No Content.
 	fn assert_no_content(&self) -> &Self;
+	/// Assert that the response status is 400 Bad Request.
 	fn assert_bad_request(&self) -> &Self;
+	/// Assert that the response status is 401 Unauthorized.
 	fn assert_unauthorized(&self) -> &Self;
+	/// Assert that the response status is 403 Forbidden.
 	fn assert_forbidden(&self) -> &Self;
+	/// Assert that the response status is 404 Not Found.
 	fn assert_not_found(&self) -> &Self;
 }
 

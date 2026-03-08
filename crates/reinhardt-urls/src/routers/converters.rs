@@ -37,8 +37,10 @@ use thiserror::Error;
 /// Error type for converter validation failures
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ConverterError {
+	/// The input value has an invalid format for this converter.
 	#[error("Invalid format: {0}")]
 	InvalidFormat(String),
+	/// The input value is outside the allowed range.
 	#[error("Value out of range: {0}")]
 	OutOfRange(String),
 }

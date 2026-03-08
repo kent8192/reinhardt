@@ -90,12 +90,15 @@ pub struct InfoObject {
 /// Contact information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContactObject {
+	/// Contact name.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub name: Option<String>,
 
+	/// Contact URL.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub url: Option<String>,
 
+	/// Contact email address.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub email: Option<String>,
 }
@@ -103,8 +106,10 @@ pub struct ContactObject {
 /// License information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LicenseObject {
+	/// License name (e.g., `"MIT"`, `"Apache-2.0"`).
 	pub name: String,
 
+	/// URL to the full license text.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub url: Option<String>,
 }
@@ -112,8 +117,10 @@ pub struct LicenseObject {
 /// Server object
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerObject {
+	/// Base URL of the server.
 	pub url: String,
 
+	/// Human-readable description of the server.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub description: Option<String>,
 }
@@ -121,21 +128,27 @@ pub struct ServerObject {
 /// Path item object
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathItemObject {
+	/// GET operation for this path.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub get: Option<OperationObject>,
 
+	/// POST operation for this path.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub post: Option<OperationObject>,
 
+	/// PUT operation for this path.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub put: Option<OperationObject>,
 
+	/// PATCH operation for this path.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub patch: Option<OperationObject>,
 
+	/// DELETE operation for this path.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub delete: Option<OperationObject>,
 
+	/// Path-level parameters shared by all operations.
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub parameters: Vec<ParameterObject>,
 }
@@ -143,46 +156,59 @@ pub struct PathItemObject {
 /// Operation object (HTTP method on a path)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationObject {
+	/// Short summary of the operation.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub summary: Option<String>,
 
+	/// Detailed description of the operation.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub description: Option<String>,
 
+	/// Unique identifier for the operation.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	#[serde(rename = "operationId")]
 	pub operation_id: Option<String>,
 
+	/// Tags for grouping this operation.
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub tags: Vec<String>,
 
+	/// Operation-specific parameters.
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub parameters: Vec<ParameterObject>,
 
+	/// Map of HTTP status codes to response descriptions.
 	pub responses: HashMap<String, ResponseObject>,
 }
 
 /// Parameter object
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParameterObject {
+	/// Parameter name.
 	pub name: String,
 
+	/// Location of the parameter (`"path"`, `"query"`, `"header"`, or `"cookie"`).
 	#[serde(rename = "in")]
 	pub location: String,
 
+	/// Human-readable description of the parameter.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub description: Option<String>,
 
+	/// Whether the parameter is required.
 	pub required: bool,
 
+	/// Schema describing the parameter type.
 	pub schema: SchemaObject,
 }
 
 /// Response object
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseObject {
+	/// Human-readable description of the response.
 	pub description: String,
 
+	/// Map of media types to their schemas.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub content: Option<HashMap<String, MediaTypeObject>>,
 }
@@ -190,15 +216,18 @@ pub struct ResponseObject {
 /// Media type object
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaTypeObject {
+	/// Schema describing the media type content.
 	pub schema: SchemaObject,
 }
 
 /// Schema object (simplified)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchemaObject {
+	/// The JSON Schema type (e.g., `"string"`, `"integer"`, `"object"`).
 	#[serde(rename = "type")]
 	pub schema_type: String,
 
+	/// Additional format hint (e.g., `"int64"`, `"date-time"`).
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub format: Option<String>,
 }
@@ -206,6 +235,7 @@ pub struct SchemaObject {
 /// Components object (reusable schemas)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComponentsObject {
+	/// Map of schema names to their definitions.
 	#[serde(skip_serializing_if = "HashMap::is_empty")]
 	pub schemas: HashMap<String, SchemaObject>,
 }
@@ -213,8 +243,10 @@ pub struct ComponentsObject {
 /// Tag object
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagObject {
+	/// Tag name used for grouping operations.
 	pub name: String,
 
+	/// Human-readable description of the tag.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub description: Option<String>,
 }

@@ -98,7 +98,12 @@ pub enum ProxyError {
 
 	/// Type mismatch in proxy operation
 	#[error("Type mismatch: expected {expected}, got {actual}")]
-	TypeMismatch { expected: String, actual: String },
+	TypeMismatch {
+		/// The expected type name.
+		expected: String,
+		/// The actual type name encountered.
+		actual: String,
+	},
 
 	/// Invalid proxy configuration
 	#[error("Invalid proxy configuration: {0}")]
@@ -124,5 +129,10 @@ pub enum ProxyError {
 
 	/// Version mismatch during update
 	#[error("Version mismatch: expected {expected}, got {actual}")]
-	VersionMismatch { expected: i64, actual: i64 },
+	VersionMismatch {
+		/// The expected version number.
+		expected: i64,
+		/// The actual version number encountered.
+		actual: i64,
+	},
 }

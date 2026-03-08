@@ -11,7 +11,9 @@ use reinhardt_core::exception::{Error, Result};
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
+/// Error type for URL reverse resolution failures.
 pub type ReverseError = Error;
+/// Result type for URL reverse resolution operations.
 pub type ReverseResult<T> = Result<T>;
 
 /// Optimized URL parameter substitution using Aho-Corasick algorithm
@@ -213,6 +215,7 @@ pub struct UrlReverser {
 }
 
 impl UrlReverser {
+	/// Create a new empty URL reverser.
 	pub fn new() -> Self {
 		Self {
 			routes: HashMap::new(),

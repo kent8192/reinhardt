@@ -5,7 +5,6 @@ use reinhardt_auth::social::core::OAuthProvider;
 use reinhardt_auth::social::core::config::{OAuth2Config, OIDCConfig, ProviderConfig};
 use reinhardt_auth::social::flow::{InMemoryStateStore, PkceFlow, StateData, StateStore};
 use reinhardt_auth::social::providers::{GitHubProvider, GoogleProvider};
-use rstest::*;
 
 #[path = "../../helpers.rs"]
 mod helpers;

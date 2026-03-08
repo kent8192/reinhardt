@@ -185,7 +185,6 @@ mod tests {
 		let storage = InMemorySocialAccountStorage::new();
 		let user_id = Uuid::new_v4();
 		let mut account = test_account(user_id);
-		let id = account.id;
 		storage.create(account.clone()).await.unwrap();
 
 		// Act

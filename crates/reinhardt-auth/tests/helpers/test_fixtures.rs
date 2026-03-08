@@ -2,21 +2,23 @@
 
 use reinhardt_auth::social::core::{
 	claims::{IdToken, StandardClaims},
-	config::{OAuth2Config, OIDCConfig, ProviderConfig},
+	config::ProviderConfig,
 	token::TokenResponse,
 };
 use std::collections::HashMap;
 
 /// Test fixture builder
-pub struct TestFixtures;
+#[allow(dead_code)] // test fixture for multiple provider scenarios
+pub(crate) struct TestFixtures;
 
+#[allow(dead_code)] // test fixture for multiple provider scenarios
 impl TestFixtures {
 	// ============================================================
 	// GitHub OAuth2 Fixtures
 	// ============================================================
 
 	/// Create GitHub provider configuration
-	pub fn github_config() -> ProviderConfig {
+	pub(crate) fn github_config() -> ProviderConfig {
 		ProviderConfig::github(
 			"test_github_client_id".into(),
 			"test_github_client_secret".into(),
@@ -25,7 +27,7 @@ impl TestFixtures {
 	}
 
 	/// Create GitHub token response
-	pub fn github_token_response() -> TokenResponse {
+	pub(crate) fn github_token_response() -> TokenResponse {
 		TokenResponse {
 			access_token: "gho_test_token".into(),
 			token_type: "Bearer".into(),
@@ -37,7 +39,7 @@ impl TestFixtures {
 	}
 
 	/// Create GitHub user info
-	pub fn github_userinfo() -> StandardClaims {
+	pub(crate) fn github_userinfo() -> StandardClaims {
 		StandardClaims {
 			sub: "github_user_123".into(),
 			email: Some("user@example.com".into()),
@@ -56,7 +58,7 @@ impl TestFixtures {
 	// ============================================================
 
 	/// Create Google provider configuration
-	pub fn google_config() -> ProviderConfig {
+	pub(crate) fn google_config() -> ProviderConfig {
 		ProviderConfig::google(
 			"test_google_client_id".into(),
 			"test_google_client_secret".into(),
@@ -65,7 +67,7 @@ impl TestFixtures {
 	}
 
 	/// Create Google token response
-	pub fn google_token_response() -> TokenResponse {
+	pub(crate) fn google_token_response() -> TokenResponse {
 		TokenResponse {
 			access_token: "ya29.test_token".into(),
 			token_type: "Bearer".into(),
@@ -77,7 +79,7 @@ impl TestFixtures {
 	}
 
 	/// Create Google ID token
-	pub fn google_id_token() -> IdToken {
+	pub(crate) fn google_id_token() -> IdToken {
 		IdToken {
 			sub: "google_user_123".into(),
 			iss: "https://accounts.google.com".into(),
@@ -97,7 +99,7 @@ impl TestFixtures {
 	}
 
 	/// Create Google user info
-	pub fn google_userinfo() -> StandardClaims {
+	pub(crate) fn google_userinfo() -> StandardClaims {
 		StandardClaims {
 			sub: "google_user_123".into(),
 			email: Some("user@gmail.com".into()),
@@ -116,7 +118,7 @@ impl TestFixtures {
 	// ============================================================
 
 	/// Create Microsoft provider configuration
-	pub fn microsoft_config(tenant: &str) -> ProviderConfig {
+	pub(crate) fn microsoft_config(tenant: &str) -> ProviderConfig {
 		ProviderConfig::microsoft(
 			"test_microsoft_client_id".into(),
 			"test_microsoft_client_secret".into(),
@@ -126,7 +128,7 @@ impl TestFixtures {
 	}
 
 	/// Create Microsoft token response
-	pub fn microsoft_token_response() -> TokenResponse {
+	pub(crate) fn microsoft_token_response() -> TokenResponse {
 		TokenResponse {
 			access_token: "EwAgA8l6BAAU".into(),
 			token_type: "Bearer".into(),
@@ -138,7 +140,7 @@ impl TestFixtures {
 	}
 
 	/// Create Microsoft ID token
-	pub fn microsoft_id_token() -> IdToken {
+	pub(crate) fn microsoft_id_token() -> IdToken {
 		IdToken {
 			sub: "microsoft_user_123".into(),
 			iss: "https://login.microsoftonline.com/common/v2.0".into(),
@@ -158,7 +160,7 @@ impl TestFixtures {
 	}
 
 	/// Create Microsoft user info
-	pub fn microsoft_userinfo() -> StandardClaims {
+	pub(crate) fn microsoft_userinfo() -> StandardClaims {
 		StandardClaims {
 			sub: "microsoft_user_123".into(),
 			email: Some("user@outlook.com".into()),
@@ -177,7 +179,7 @@ impl TestFixtures {
 	// ============================================================
 
 	/// Create Apple provider configuration
-	pub fn apple_config() -> ProviderConfig {
+	pub(crate) fn apple_config() -> ProviderConfig {
 		ProviderConfig::apple(
 			"test_apple_client_id".into(),
 			"test_apple_client_secret_jwt".into(),
@@ -186,7 +188,7 @@ impl TestFixtures {
 	}
 
 	/// Create Apple token response
-	pub fn apple_token_response() -> TokenResponse {
+	pub(crate) fn apple_token_response() -> TokenResponse {
 		TokenResponse {
 			access_token: "apple_access_token".into(),
 			token_type: "Bearer".into(),
@@ -198,7 +200,7 @@ impl TestFixtures {
 	}
 
 	/// Create Apple ID token
-	pub fn apple_id_token() -> IdToken {
+	pub(crate) fn apple_id_token() -> IdToken {
 		IdToken {
 			sub: "apple_user_123".into(),
 			iss: "https://appleid.apple.com".into(),
@@ -222,7 +224,7 @@ impl TestFixtures {
 	// ============================================================
 
 	/// Generate random state string
-	pub fn random_state() -> String {
+	pub(crate) fn random_state() -> String {
 		use rand::Rng;
 		rand::rng()
 			.sample_iter(&rand::distr::Alphanumeric)
@@ -232,7 +234,7 @@ impl TestFixtures {
 	}
 
 	/// Generate random nonce string
-	pub fn random_nonce() -> String {
+	pub(crate) fn random_nonce() -> String {
 		use rand::Rng;
 		rand::rng()
 			.sample_iter(&rand::distr::Alphanumeric)

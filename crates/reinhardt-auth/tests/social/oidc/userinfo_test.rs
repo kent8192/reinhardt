@@ -4,7 +4,7 @@ use helpers::mock_server::MockOAuth2Server;
 use reinhardt_auth::social::core::OAuth2Client;
 use reinhardt_auth::social::core::claims::StandardClaims;
 use reinhardt_auth::social::oidc::UserInfoClient;
-use rstest::*;
+
 use std::collections::HashMap;
 
 #[path = "../../helpers.rs"]

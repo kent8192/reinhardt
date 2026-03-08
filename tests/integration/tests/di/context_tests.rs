@@ -1,5 +1,7 @@
 //! Unit tests for InjectionContext and InjectionContextBuilder
 
+#![allow(unexpected_cfgs)]
+
 use reinhardt_di::{InjectionContext, SingletonScope};
 use reinhardt_test::fixtures::*;
 use rstest::*;

@@ -3,7 +3,6 @@
 use helpers::mock_server::MockOAuth2Server;
 use reinhardt_auth::social::core::OAuth2Client;
 use reinhardt_auth::social::oidc::{DiscoveryClient, OIDCDiscovery};
-use rstest::*;
 
 #[path = "../helpers.rs"]
 mod helpers;

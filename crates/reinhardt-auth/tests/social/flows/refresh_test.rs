@@ -4,7 +4,6 @@ use helpers::mock_server::MockOAuth2Server;
 use reinhardt_auth::social::core::OAuth2Client;
 use reinhardt_auth::social::core::config::ProviderConfig;
 use reinhardt_auth::social::flow::RefreshFlow;
-use rstest::*;
 
 #[path = "../../helpers.rs"]
 mod helpers;

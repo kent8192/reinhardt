@@ -58,23 +58,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      # Close stale release-plz PRs and delete their branches before creating a new one.
-      # release-plz creates a new timestamped branch (release-plz-<timestamp>) on every run,
-      # leaving old PRs and branches behind. Closing old PRs also cancels their CI runs.
-      - name: Close stale release-plz PRs and branches
-        env:
-          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
-        run: |
-          stale_prs=$(gh pr list --state open --head "release-plz-" --json number,headRefName --jq '.[] | "\(.number) \(.headRefName)"')
-          if [[ -z "$stale_prs" ]]; then
-            echo "No stale release-plz PRs found."
-          else
-            while IFS=' ' read -r pr_number branch_name; do
-              echo "Closing PR #${pr_number} (branch: ${branch_name})"
-              gh pr close "$pr_number" --delete-branch --comment "Superseded by new release-plz run."
-            done <<< "$stale_prs"
-          fi
-
       - name: Run release-plz release-pr
         uses: release-plz/action@v0.5
         with:

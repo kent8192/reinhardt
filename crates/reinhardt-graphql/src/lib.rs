@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! GraphQL support for Reinhardt framework
 //!
 //! This crate provides GraphQL API support for the Reinhardt framework.

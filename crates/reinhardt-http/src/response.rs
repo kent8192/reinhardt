@@ -194,8 +194,11 @@ pub fn truncate_for_log(input: &str, max_length: usize) -> String {
 /// HTTP Response representation
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Response {
+	/// The HTTP status code.
 	pub status: StatusCode,
+	/// The response headers.
 	pub headers: HeaderMap,
+	/// The response body as raw bytes.
 	pub body: Bytes,
 	/// Indicates whether the middleware chain should stop processing
 	/// When true, no further middleware or handlers will be executed
@@ -204,8 +207,11 @@ pub struct Response {
 
 /// Streaming HTTP Response
 pub struct StreamingResponse<S> {
+	/// The HTTP status code.
 	pub status: StatusCode,
+	/// The response headers.
 	pub headers: HeaderMap,
+	/// The streaming body source.
 	pub stream: S,
 }
 

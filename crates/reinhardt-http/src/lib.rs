@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! # Reinhardt HTTP
 //!
 //! HTTP request and response handling for the Reinhardt framework.

@@ -3,8 +3,13 @@ use super::key_validation::validate_key_component;
 use super::{Throttle, ThrottleError, ThrottleResult};
 use async_trait::async_trait;
 
+/// Rate throttle for authenticated user requests.
+///
+/// Limits the number of requests per time window, keyed by user identifier.
 pub struct UserRateThrottle<B: ThrottleBackend = MemoryBackend> {
+	/// Maximum number of requests allowed within the time window.
 	pub rate: usize,
+	/// Duration of the rate limit window in seconds.
 	pub window_secs: u64,
 	backend: B,
 }

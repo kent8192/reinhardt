@@ -20,16 +20,32 @@ const UPLOAD_SESSION_TIMEOUT: Duration = Duration::from_secs(3600);
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum ChunkedUploadError {
+	/// An I/O error occurred during chunk processing.
 	#[error("IO error: {0}")]
 	Io(#[from] io::Error),
+	/// The upload session with the given ID was not found.
 	#[error("Upload session not found: {0}")]
 	SessionNotFound(String),
+	/// The received chunk size does not match the expected size.
 	#[error("Invalid chunk: expected {expected}, got {actual}")]
-	InvalidChunk { expected: usize, actual: usize },
+	InvalidChunk {
+		/// The expected chunk size in bytes.
+		expected: usize,
+		/// The actual chunk size received.
+		actual: usize,
+	},
+	/// Chunks were received out of sequential order.
 	#[error("Chunk out of order: expected {expected}, got {actual}")]
-	ChunkOutOfOrder { expected: usize, actual: usize },
+	ChunkOutOfOrder {
+		/// The expected chunk index.
+		expected: usize,
+		/// The actual chunk index received.
+		actual: usize,
+	},
+	/// The upload session has already been completed.
 	#[error("Upload already completed")]
 	AlreadyCompleted,
+	/// The assembled file checksum does not match the expected value.
 	#[error("Checksum mismatch")]
 	ChecksumMismatch,
 }

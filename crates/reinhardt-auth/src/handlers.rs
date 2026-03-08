@@ -28,7 +28,9 @@ use std::sync::Arc;
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginCredentials {
+	/// The user's login name.
 	pub username: String,
+	/// The user's password.
 	pub password: String,
 }
 

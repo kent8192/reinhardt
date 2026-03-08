@@ -13,18 +13,25 @@ use std::path::{Path, PathBuf};
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum FileUploadError {
+	/// The uploaded file exceeds the maximum allowed size.
 	#[error("File too large: {0} bytes (max: {1} bytes)")]
 	FileTooLarge(usize, usize),
+	/// The uploaded file has a disallowed MIME type.
 	#[error("Invalid file type: {0}")]
 	InvalidFileType(String),
+	/// An I/O error occurred during file upload processing.
 	#[error("IO error: {0}")]
 	Io(#[from] io::Error),
+	/// A general upload error occurred.
 	#[error("Upload error: {0}")]
 	Upload(String),
+	/// The file checksum does not match the expected value.
 	#[error("Checksum verification failed")]
 	ChecksumMismatch,
+	/// The MIME type of the uploaded file could not be detected.
 	#[error("MIME type detection failed")]
 	MimeDetectionFailed,
+	/// The filename contains path traversal sequences (e.g., `../`).
 	#[error("Path traversal detected in filename")]
 	PathTraversal,
 }

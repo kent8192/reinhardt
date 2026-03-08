@@ -44,24 +44,31 @@ const SENSITIVE_PATTERNS: &[&str] = &[
 	"tonic::",
 ];
 
+/// Error types for gRPC service operations.
 #[derive(Debug, Error)]
 pub enum GrpcError {
+	/// A connection-level error (e.g., network failure, socket error).
 	#[error("Connection error: {0}")]
 	Connection(String),
 
+	/// A service-level error during request processing.
 	#[error("Service error: {0}")]
 	Service(String),
 
+	/// The requested resource was not found.
 	#[error("Not found: {0}")]
 	NotFound(String),
 
+	/// The request contained an invalid argument.
 	#[error("Invalid argument: {0}")]
 	InvalidArgument(String),
 
+	/// An internal server error occurred.
 	#[error("Internal error: {0}")]
 	Internal(String),
 }
 
+/// A specialized `Result` type for gRPC operations.
 pub type GrpcResult<T> = Result<T, GrpcError>;
 
 impl From<tonic::Status> for GrpcError {

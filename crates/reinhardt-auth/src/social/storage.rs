@@ -11,18 +11,31 @@ use crate::social::core::SocialAuthError;
 /// Social account linking user to provider
 #[derive(Debug, Clone)]
 pub struct SocialAccount {
+	/// Unique identifier for this social account link.
 	pub id: Uuid,
+	/// The local user ID linked to this social account.
 	pub user_id: Uuid,
+	/// The provider name (e.g., "google", "github").
 	pub provider: String,
+	/// The user's ID on the external provider.
 	pub provider_user_id: String,
+	/// The user's email from the provider, if available.
 	pub email: Option<String>,
+	/// The user's display name from the provider, if available.
 	pub display_name: Option<String>,
+	/// The user's profile picture URL from the provider, if available.
 	pub picture: Option<String>,
+	/// The OAuth2 access token.
 	pub access_token: String,
+	/// The OAuth2 refresh token, if available.
 	pub refresh_token: Option<String>,
+	/// When the access token expires.
 	pub token_expires_at: DateTime<Utc>,
+	/// The OAuth2 scopes granted.
 	pub scopes: Vec<String>,
+	/// When this social account link was created.
 	pub created_at: DateTime<Utc>,
+	/// When this social account link was last updated.
 	pub updated_at: DateTime<Utc>,
 }
 

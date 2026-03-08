@@ -5,16 +5,21 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Error types for GraphQL schema operations.
 #[derive(Debug, thiserror::Error)]
 pub enum GraphQLError {
+	/// A schema construction or configuration error.
 	#[error("Schema error: {0}")]
 	Schema(String),
+	/// An error occurred during resolver execution.
 	#[error("Resolver error: {0}")]
 	Resolver(String),
+	/// The requested resource was not found.
 	#[error("Not found: {0}")]
 	NotFound(String),
 }
 
+/// A specialized `Result` type for GraphQL schema operations.
 pub type GraphQLResult<T> = Result<T, GraphQLError>;
 
 /// Default maximum query depth limit.
@@ -255,9 +260,13 @@ fn validate_create_user_input(input: &CreateUserInput) -> GqlResult<()> {
 /// Example: User type for GraphQL
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
+	/// Unique identifier for the user.
 	pub id: ID,
+	/// Display name of the user.
 	pub name: String,
+	/// Email address of the user.
 	pub email: String,
+	/// Whether the user account is active.
 	pub active: bool,
 }
 
@@ -376,7 +385,9 @@ impl Query {
 /// Input type for creating users
 #[derive(async_graphql::InputObject)]
 pub struct CreateUserInput {
+	/// Name of the user to create.
 	pub name: String,
+	/// Email address of the user to create.
 	pub email: String,
 }
 

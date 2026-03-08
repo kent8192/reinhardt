@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-deeplink@v0.1.0-rc.5...reinhardt-deeplink@v0.1.0-rc.6) - 2026-03-08
+
+### Documentation
+
+- *(deeplink)* add missing public API documentation
+
 ## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-deeplink@v0.1.0-rc.1...reinhardt-deeplink@v0.1.0-rc.2) - 2026-03-04
 
 ### Maintenance

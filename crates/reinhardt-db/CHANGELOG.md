@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.5...reinhardt-db@v0.1.0-rc.6) - 2026-03-08
+
+### Documentation
+
+- *(db)* add missing public API documentation
+
+### Other
+
+- resolve conflict with main branch
+
+### Testing
+
+- *(db)* add round-trip tests for migration initial field
+
 ## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.4...reinhardt-db@v0.1.0-rc.5) - 2026-03-07
 
 ### Added

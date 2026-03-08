@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.5...reinhardt-auth@v0.1.0-rc.6) - 2026-03-08
+
+### Documentation
+
+- *(auth)* add missing public API documentation
+
+### Fixed
+
+- *(auth)* remove unused variable in social storage
+- *(auth)* fix visibility and unused imports in test helpers
+
 ## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.4...reinhardt-auth@v0.1.0-rc.5) - 2026-03-07
 
 ### Fixed

@@ -15,3 +15,10 @@
 #   to = github_actions_variable.self_hosted_enabled
 #   id = "${var.github_owner}/${var.github_repository}/SELF_HOSTED_ENABLED"
 # }
+
+# Golden AMI SSM parameter (see #2023).
+# Idempotent: no-op if already managed by this workspace.
+import {
+	to = aws_ssm_parameter.runner_ami_id
+	id = "/${var.prefix}/runner-ami-id"
+}

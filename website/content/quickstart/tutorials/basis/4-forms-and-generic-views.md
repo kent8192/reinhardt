@@ -102,19 +102,23 @@ let voting_form = form! {
 	},
 };
 
-// Populate choices dynamically from server
-#[cfg(target_arch = "wasm32")]
+// Populate choices dynamically from server using use_action
+let load_choices = use_action(|_: ()| async move {
+	get_question_detail(question_id).await.map_err(|e| e.to_string())
+});
+load_choices.dispatch(());
+
+// Bridge results to form via use_effect
 {
-	spawn_local(async move {
-		match get_question_detail(question_id).await {
-			Ok((q, choices)) => {
-				let choice_options: Vec<(String, String)> = choices
-					.iter()
-					.map(|c| (c.id.to_string(), c.choice_text.clone()))
-					.collect();
-				voting_form.choice_id_choices().set(choice_options);
-			}
-			Err(e) => { /* handle error */ }
+	let load_choices = load_choices.clone();
+	let voting_form = voting_form.clone();
+	use_effect(move || {
+		if let Some(Ok((_, choices))) = load_choices.result() {
+			let choice_options: Vec<(String, String)> = choices
+				.iter()
+				.map(|c| (c.id.to_string(), c.choice_text.clone()))
+				.collect();
+			voting_form.choice_id_choices().set(choice_options);
 		}
 	});
 }
@@ -293,13 +297,19 @@ let voting_form = form! {
 	},
 };
 
-// Step 2: Fetch choices from server and populate
-#[cfg(target_arch = "wasm32")]
+// Step 2: Fetch choices from server using use_action
+let load_choices = use_action(|_: ()| async move {
+	get_question_detail(question_id).await.map_err(|e| e.to_string())
+});
+load_choices.dispatch(());
+
+// Step 3: Bridge results to form via use_effect
 {
+	let load_choices = load_choices.clone();
 	let voting_form = voting_form.clone();
-	spawn_local(async move {
-		match get_question_detail(question_id).await {
-			Ok((question, choices)) => {
+	use_effect(move || {
+		match load_choices.result() {
+			Some(Ok((_, choices))) => {
 				// Transform server data to (value, label) tuples
 				let choice_options: Vec<(String, String)> = choices
 					.iter()
@@ -309,10 +319,11 @@ let voting_form = form! {
 				// Populate choices - triggers UI update
 				voting_form.choice_id_choices().set(choice_options);
 			}
-			Err(e) => {
+			Some(Err(e)) => {
 				// Handle error (e.g., set error Signal)
-				voting_form.error().set(Some(e.to_string()));
+				voting_form.error().set(Some(e.clone()));
 			}
+			None => {} // Still loading
 		}
 	});
 }
@@ -982,32 +993,39 @@ button {
 Show loading states and optimistic updates:
 
 ```rust
-spawn_local(async move {
-	set_submitting(true);
-
-	// Optimistic update (optional)
-	update_ui_optimistically();
-
-	match submit_form(data).await {
-		Ok(result) => {
-			// Success
-			navigate_to_success_page();
-		}
-		Err(e) => {
-			// Rollback optimistic update
-			rollback_ui();
-			set_error(Some(e.to_string()));
-			set_submitting(false);
-		}
-	}
+let submit_action = use_action(|data: FormData| async move {
+	submit_form(data).await.map_err(|e| e.to_string())
 });
+
+// Optimistic update (optional)
+update_ui_optimistically();
+submit_action.dispatch(data);
+
+// Bridge results via use_effect
+{
+	let submit_action = submit_action.clone();
+	use_effect(move || {
+		match submit_action.result() {
+			Some(Ok(result)) => {
+				// Success
+				navigate_to_success_page();
+			}
+			Some(Err(e)) => {
+				// Rollback optimistic update
+				rollback_ui();
+				set_error(Some(e.clone()));
+			}
+			None => {} // Still loading
+		}
+	});
+}
 ```
 
 ## Summary
 
 In this tutorial, you learned:
 
-- **Client-Side Form State**: Using `use_state()` for form data management
+- **Client-Side Form State**: Using `use_state()` for local form data and `use_action` for async operations
 - **Event Handlers**: Attaching listeners to form elements
 - **Client-Side Validation**: Immediate feedback before server submission
 - **Server-Side Validation**: Security and data integrity at the server
@@ -1021,7 +1039,7 @@ In this tutorial, you learned:
 | Aspect | Traditional (Tera) | reinhardt-pages |
 |--------|-------------------|-----------------|
 | Form Rendering | Server-side template | Client-side component |
-| State Management | Server session | Client state (`use_state`) |
+| State Management | Server session | Client state (`use_state`, `use_action`) |
 | Validation | Server-side only | Client + Server |
 | CSRF Protection | Template tags (`{% csrf_token %}`) | Middleware integration (future) |
 | Reusability | Generic views | Component composition |

@@ -139,6 +139,13 @@ impl FilesystemRepository {
 		let name = &migration.name;
 		let atomic = migration.atomic;
 
+		// Build initial field token
+		let initial_tokens = match migration.initial {
+			Some(true) => quote! { Some(true) },
+			Some(false) => quote! { Some(false) },
+			None => quote! { None },
+		};
+
 		// Generate operation code
 		let ops_tokens = migration.operations.iter();
 		let operations_code = quote! { vec![#(#ops_tokens),*] };
@@ -156,6 +163,7 @@ impl FilesystemRepository {
 					dependencies: vec![#(#deps),*],
 					atomic: #atomic,
 					replaces: vec![#(#replaces),*],
+					initial: #initial_tokens,
 				}
 			}
 		};
@@ -726,5 +734,59 @@ mod tests {
 			result.unwrap_err(),
 			MigrationError::PathTraversal(_)
 		));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_repository)]
+	async fn test_filesystem_repository_save_with_initial_true() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let mut repo = FilesystemRepository::new(temp_dir.path());
+		let mut migration = create_test_migration("polls", "0001_initial_true");
+		migration.initial = Some(true);
+
+		// Act
+		repo.save(&migration).await.unwrap();
+
+		// Assert - verify generated code contains initial: Some(true)
+		let path = repo.migration_path("polls", "0001_initial_true").unwrap();
+		let content = tokio::fs::read_to_string(&path).await.unwrap();
+		assert!(
+			content.contains("Some(true)"),
+			"Generated code should contain Some(true), got: {}",
+			content
+		);
+
+		// Assert - round-trip: get() parses back the same initial value
+		let retrieved = repo.get("polls", "0001_initial_true").await.unwrap();
+		assert_eq!(retrieved.initial, Some(true));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_repository)]
+	async fn test_filesystem_repository_save_with_initial_false() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let mut repo = FilesystemRepository::new(temp_dir.path());
+		let mut migration = create_test_migration("polls", "0001_initial_false");
+		migration.initial = Some(false);
+
+		// Act
+		repo.save(&migration).await.unwrap();
+
+		// Assert - verify generated code contains initial: Some(false)
+		let path = repo.migration_path("polls", "0001_initial_false").unwrap();
+		let content = tokio::fs::read_to_string(&path).await.unwrap();
+		assert!(
+			content.contains("Some(false)"),
+			"Generated code should contain Some(false), got: {}",
+			content
+		);
+
+		// Assert - round-trip: get() parses back the same initial value
+		let retrieved = repo.get("polls", "0001_initial_false").await.unwrap();
+		assert_eq!(retrieved.initial, Some(false));
 	}
 }

@@ -12,6 +12,7 @@ pub fn extract_migration_metadata(ast: &File, app_label: &str, name: &str) -> Re
 	let atomic = extract_atomic(ast).unwrap_or(true);
 	let replaces = extract_replaces(ast).unwrap_or_default();
 	let operations = extract_operations(ast).unwrap_or_default();
+	let initial = extract_initial(ast);
 
 	Ok(Migration {
 		app_label: app_label.to_string(),
@@ -20,7 +21,7 @@ pub fn extract_migration_metadata(ast: &File, app_label: &str, name: &str) -> Re
 		dependencies,
 		atomic,
 		replaces,
-		initial: None,
+		initial,
 		state_only: false,
 		database_only: false,
 		swappable_dependencies: vec![],
@@ -75,6 +76,40 @@ fn extract_replaces(ast: &File) -> Option<Vec<(String, String)>> {
 		}
 	}
 	None
+}
+
+/// Extract initial flag from `migration()` function
+fn extract_initial(ast: &File) -> Option<bool> {
+	for item in &ast.items {
+		if let Item::Fn(func) = item
+			&& func.sig.ident == "migration"
+			&& let Some(Stmt::Expr(expr, _)) = func.block.stmts.last()
+			&& let Some(initial_expr) = extract_field_from_migration_struct(expr, "initial")
+		{
+			return parse_option_bool_expr(&initial_expr);
+		}
+	}
+	None
+}
+
+/// Parse an `Option<bool>` expression (`Some(true)`, `Some(false)`, or `None`)
+fn parse_option_bool_expr(expr: &Expr) -> Option<bool> {
+	match expr {
+		Expr::Call(call) => {
+			// Some(true) or Some(false)
+			if let Expr::Path(path) = &*call.func
+				&& path.path.is_ident("Some")
+				&& call.args.len() == 1
+				&& let Expr::Lit(lit) = &call.args[0]
+				&& let syn::Lit::Bool(b) = &lit.lit
+			{
+				return Some(b.value);
+			}
+			None
+		}
+		Expr::Path(path) if path.path.is_ident("None") => None,
+		_ => None,
+	}
 }
 
 /// Extract operations from `migration()` function

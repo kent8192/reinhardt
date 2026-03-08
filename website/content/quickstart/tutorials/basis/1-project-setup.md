@@ -232,25 +232,22 @@ pub async fn get_questions(
 
 ### Calling from the Client
 
-On the client side (WASM), the same function becomes an async RPC call:
+On the client side (WASM), use `use_action` to call server functions reactively:
 
 ```rust
 #[cfg(wasm)]
 use crate::server_fn::polls::get_questions;
 
 // In your component
-spawn_local(async move {
-    match get_questions().await {
-        Ok(questions) => {
-            // Handle successful response
-            set_questions(questions);
-        }
-        Err(e) => {
-            // Handle error
-            log::error!("Failed to load questions: {}", e);
-        }
-    }
+let load_questions = use_action(|_: ()| async move {
+    get_questions().await.map_err(|e| e.to_string())
 });
+load_questions.dispatch(());
+
+// Access results reactively
+// load_questions.is_pending()  -- true while loading
+// load_questions.result()      -- Option<Vec<QuestionInfo>>
+// load_questions.error()       -- Option<String>
 ```
 
 **What happens under the hood:**
@@ -303,8 +300,8 @@ use reinhardt::pages::page;
 use reinhardt::pages::reactive::hooks::use_state;
 
 pub fn my_component() -> View {
-    // 1. State management with hooks
-    let (message, set_message) = use_state("Hello, world!".to_string());
+    // 1. Local state with use_state (for simple values)
+    let (message, _set_message) = use_state("Hello, world!".to_string());
 
     // 2. Clone signal for passing to page! macro
     let message_signal = message.clone();
@@ -326,46 +323,24 @@ Let's create a simple polls index component. Create `src/client/components/polls
 ```rust
 use reinhardt::pages::component::View;
 use reinhardt::pages::page;
-use reinhardt::pages::reactive::hooks::use_state;
+use reinhardt::pages::reactive::hooks::{Action, use_action};
 use crate::shared::types::QuestionInfo;
 
 #[cfg(wasm)]
-use {
-    crate::server_fn::polls::get_questions,
-    wasm_bindgen_futures::spawn_local,
-};
+use crate::server_fn::polls::get_questions;
 
 pub fn polls_index() -> View {
-    // State for questions list
-    let (questions, set_questions) = use_state(Vec::<QuestionInfo>::new());
-    let (loading, set_loading) = use_state(true);
+    // Load questions with use_action (combines loading, error, and data states)
+    let load_questions = use_action(|_: ()| async move {
+        get_questions().await.map_err(|e| e.to_string())
+    });
+    load_questions.dispatch(());
 
-    // Load questions on component mount
-    #[cfg(wasm)]
-    {
-        let set_questions = set_questions.clone();
-        let set_loading = set_loading.clone();
-
-        spawn_local(async move {
-            match get_questions().await {
-                Ok(qs) => {
-                    set_questions(qs);
-                    set_loading(false);
-                }
-                Err(e) => {
-                    log::error!("Failed to load: {}", e);
-                    set_loading(false);
-                }
-            }
-        });
-    }
-
-    // Clone signals for UI
-    let questions_signal = questions.clone();
-    let loading_signal = loading.clone();
+    // Clone action for passing to page! macro
+    let load_questions_signal = load_questions.clone();
 
     // Render UI
-    page!(|questions_signal: Signal<Vec<QuestionInfo>>, loading_signal: Signal<bool>| {
+    page!(|load_questions_signal: Action<Vec<QuestionInfo>, String>| {
         div {
             class: "max-w-4xl mx-auto px-4 mt-12",
             h1 {
@@ -373,12 +348,17 @@ pub fn polls_index() -> View {
                 "Latest Polls"
             }
             watch {
-                if loading_signal.get() {
+                if load_questions_signal.error().is_some() {
+                    div {
+                        class: "text-center text-red-500",
+                        { load_questions_signal.error().unwrap_or_default() }
+                    }
+                } else if load_questions_signal.is_pending() {
                     div {
                         class: "text-center",
                         "Loading..."
                     }
-                } else if questions_signal.get().is_empty() {
+                } else if load_questions_signal.result().unwrap_or_default().is_empty() {
                     p {
                         class: "text-gray-500",
                         "No polls are available."
@@ -392,35 +372,50 @@ pub fn polls_index() -> View {
                 }
             }
         }
-    })(questions_signal, loading_signal)
+    })(load_questions_signal)
 }
 ```
 
 ### Key Concepts
 
-**1. State Management with Hooks**
+**1. Async Data Loading with `use_action`**
 
 ```rust
-let (state, set_state) = use_state(initial_value);
+let load_data = use_action(|_: ()| async move {
+    get_data().await.map_err(|e| e.to_string())
+});
+load_data.dispatch(());
 ```
 
-- `state` - A `Signal<T>` that holds the current value
-- `set_state` - Function to update the state
-- Changes trigger UI re-renders automatically
+- `use_action` is the primary hook for async data loading in reinhardt-pages
+- It combines loading state, error state, and result data into a single `Action<T, E>` value
+- Call `.dispatch(())` to trigger the async operation
+- No need for `#[cfg(target_arch = "wasm32")]` guards or `spawn_local` -- `use_action` handles platform differences internally
 
-**2. Signal Cloning**
+**2. Action State Methods**
 
 ```rust
-let signal_clone = signal.clone();
+load_data.is_pending()                  // true while loading
+load_data.result()                      // Option<T> - the success value
+load_data.error()                       // Option<String> - the error message
+load_data.result().unwrap_or_default()  // T with fallback
 ```
 
-Signals are cheaply cloneable references to shared state. Clone before passing to async closures or the `page!` macro.
+The `Action<T, E>` type provides reactive accessors for all async operation states.
 
-**3. Conditional Rendering with `watch`**
+**3. Local State with `use_state`**
+
+```rust
+let (selected, set_selected) = use_state(None::<i64>);
+```
+
+Use `use_state` for simple local UI state (selected items, form inputs, toggle flags). For async data loading, prefer `use_action` instead.
+
+**4. Conditional Rendering with `watch`**
 
 ```rust
 watch {
-    if loading_signal.get() {
+    if load_data.is_pending() {
         // Show loading UI
     } else {
         // Show content
@@ -428,20 +423,7 @@ watch {
 }
 ```
 
-The `watch` block re-evaluates whenever its dependencies (signals) change.
-
-**4. Async Data Loading**
-
-```rust
-spawn_local(async move {
-    match get_questions().await {
-        Ok(data) => set_questions(data),
-        Err(e) => log::error!("{}", e),
-    }
-});
-```
-
-Use `spawn_local` to run async tasks in WASM. Server function calls return `Future`s that resolve with the result.
+The `watch` block re-evaluates whenever its dependencies (signals or actions) change.
 
 ## Setting Up Client Routing
 
@@ -719,42 +701,21 @@ Create `src/client/components/polls.rs`:
 ```rust
 use reinhardt::pages::component::View;
 use reinhardt::pages::page;
-use reinhardt::pages::reactive::hooks::use_state;
+use reinhardt::pages::reactive::hooks::{Action, use_action};
 use crate::shared::types::QuestionInfo;
 
 #[cfg(wasm)]
-use {
-    crate::server_fn::polls::get_questions,
-    wasm_bindgen_futures::spawn_local,
-};
+use crate::server_fn::polls::get_questions;
 
 pub fn polls_index() -> View {
-    let (questions, set_questions) = use_state(Vec::<QuestionInfo>::new());
-    let (loading, set_loading) = use_state(true);
+    let load_questions = use_action(|_: ()| async move {
+        get_questions().await.map_err(|e| e.to_string())
+    });
+    load_questions.dispatch(());
 
-    #[cfg(wasm)]
-    {
-        let set_questions = set_questions.clone();
-        let set_loading = set_loading.clone();
+    let load_questions_signal = load_questions.clone();
 
-        spawn_local(async move {
-            match get_questions().await {
-                Ok(qs) => {
-                    set_questions(qs);
-                    set_loading(false);
-                }
-                Err(e) => {
-                    log::error!("Failed to load: {}", e);
-                    set_loading(false);
-                }
-            }
-        });
-    }
-
-    let questions_signal = questions.clone();
-    let loading_signal = loading.clone();
-
-    page!(|questions_signal: Signal<Vec<QuestionInfo>>, loading_signal: Signal<bool>| {
+    page!(|load_questions_signal: Action<Vec<QuestionInfo>, String>| {
         div {
             class: "max-w-4xl mx-auto px-4 mt-12",
             h1 {
@@ -762,7 +723,7 @@ pub fn polls_index() -> View {
                 "Polls"
             }
             watch {
-                if loading_signal.get() {
+                if load_questions_signal.is_pending() {
                     div { "Loading..." }
                 } else {
                     div {
@@ -772,7 +733,7 @@ pub fn polls_index() -> View {
                 }
             }
         }
-    })(questions_signal, loading_signal)
+    })(load_questions_signal)
 }
 ```
 
@@ -1016,42 +977,28 @@ Add to `src/client/components/polls.rs`:
 ```rust
 /// Poll detail page with voting form
 pub fn polls_detail(question_id: i64) -> View {
-    let (question, set_question) = use_state(None::<QuestionInfo>);
-    let (choices, set_choices) = use_state(Vec::<ChoiceInfo>::new());
-    let (loading, set_loading) = use_state(true);
+    let load_detail = use_action(move |_: ()| async move {
+        get_question_detail(question_id).await.map_err(|e| e.to_string())
+    });
+    load_detail.dispatch(());
 
-    #[cfg(wasm)]
-    {
-        let set_question = set_question.clone();
-        let set_choices = set_choices.clone();
-        let set_loading = set_loading.clone();
+    let load_detail_signal = load_detail.clone();
 
-        spawn_local(async move {
-            match get_question_detail(question_id).await {
-                Ok((q, cs)) => {
-                    set_question(Some(q));
-                    set_choices(cs);
-                    set_loading(false);
-                }
-                Err(e) => {
-                    log::error!("Failed to load: {}", e);
-                    set_loading(false);
-                }
-            }
-        });
-    }
-
-    let question_signal = question.clone();
-    let choices_signal = choices.clone();
-    let loading_signal = loading.clone();
-
-    page!(|question_signal: Signal<Option<QuestionInfo>>, choices_signal: Signal<Vec<ChoiceInfo>>, loading_signal: Signal<bool>| {
+    page!(|load_detail_signal: Action<(QuestionInfo, Vec<ChoiceInfo>), String>| {
         div {
             class: "max-w-4xl mx-auto px-4 mt-12",
             watch {
-                if loading_signal.get() {
+                if load_detail_signal.error().is_some() {
+                    div {
+                        class: "text-red-500",
+                        { load_detail_signal.error().unwrap_or_default() }
+                    }
+                }
+            }
+            watch {
+                if load_detail_signal.is_pending() {
                     div { "Loading..." }
-                } else if let Some(q) = question_signal.get() {
+                } else if let Some((q, _choices)) = load_detail_signal.result() {
                     div {
                         h1 {
                             class: "text-3xl font-bold mb-6",
@@ -1063,7 +1010,7 @@ pub fn polls_detail(question_id: i64) -> View {
                 }
             }
         }
-    })(question_signal, choices_signal, loading_signal)
+    })(load_detail_signal)
 }
 ```
 
@@ -1150,9 +1097,9 @@ In this tutorial, you learned:
 - How to create a new reinhardt-pages project with WASM support
 - How to use **server functions** (`#[server_fn]`) for type-safe RPC communication
 - How to create **components** with the `page!` macro
-- How to manage state with **signals** and `use_state()`
+- How to load data asynchronously with `use_action()` and manage loading/error/result states
 - How to set up **client-side routing** with dynamic parameters
-- How to load data asynchronously with `spawn_local()`
+- How to manage simple local state with `use_state()`
 - The **three-layer architecture** (client, server_fn, shared)
 
 ### Key Takeaways
@@ -1166,7 +1113,8 @@ In this tutorial, you learned:
 **Components:**
 - Pure Rust functions that return `View` objects
 - Use `page!` macro for JSX-like UI syntax
-- Manage state with Signal-based reactivity
+- Load async data with `use_action` (combines loading, error, and result states)
+- Use `use_state` for simple local state (selections, toggles, form inputs)
 - Re-render automatically when state changes
 
 **Architecture:**

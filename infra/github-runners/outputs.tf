@@ -38,3 +38,13 @@ output "webhook_setup_guide" {
 		3. Verify: Push a commit to trigger CI and check AWS CloudWatch for Lambda invocations
 	EOT
 }
+
+output "github_actions_oidc_provider_arn" {
+	description = "ARN of the GitHub Actions OIDC provider"
+	value       = aws_iam_openid_connect_provider.github_actions.arn
+}
+
+output "github_actions_ami_builder_role_arn" {
+	description = "ARN of the IAM role for the AMI builder workflow"
+	value       = aws_iam_role.github_actions_ami_builder.arn
+}

@@ -11,7 +11,7 @@ on:
         options:
           - x64
           - arm64
-        default: "x64"
+        default: "arm64"
       force_rebuild:
         description: "Force rebuild even if no changes detected"
         required: false
@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      RUNNER_ARCH: ${{ github.event.inputs.architecture || 'x64' }}
+      RUNNER_ARCH: ${{ github.event.inputs.architecture || 'arm64' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -89,7 +89,7 @@ security/input-validation
 - One branch per logical work unit (see WU-1)
 - Branch names MUST NOT include internal metadata such as phase numbers, agent states, or workflow identifiers
 - Branch names MUST be descriptive and understandable to other developers without project-specific context
-- Branches may contain multiple commits if they follow commit guidelines (@docs/COMMIT_GUIDELINE.md)
+- Branches may contain multiple commits if they follow commit guidelines (@instructions/COMMIT_GUIDELINE.md)
 
 ---
 

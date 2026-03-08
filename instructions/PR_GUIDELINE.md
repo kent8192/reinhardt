@@ -294,7 +294,7 @@ feat(api)!: change response format to JSON:API specification
   - **MUST NOT** end with a period
   - Keep under 72 characters for readability
 
-**See**: @docs/COMMIT_GUIDELINE.md for detailed commit type definitions
+**See**: @instructions/COMMIT_GUIDELINE.md for detailed commit type definitions
 
 ---
 
@@ -489,7 +489,7 @@ A PR can only be merged when:
 - All conversations are resolved
 - At least one approval from a maintainer (if required by repo settings)
 - No merge conflicts with base branch
-- All commits follow commit guidelines (@docs/COMMIT_GUIDELINE.md)
+- All commits follow commit guidelines (@instructions/COMMIT_GUIDELINE.md)
 
 ### MP-2 (MUST): Merge Strategy
 
@@ -567,7 +567,7 @@ Version Changes:
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 ```
 
-**See**: @docs/RELEASE_PROCESS.md for detailed release procedures
+**See**: @instructions/RELEASE_PROCESS.md for detailed release procedures
 
 ### Develop Branch PRs
 
@@ -663,7 +663,7 @@ docs(readme): add installation instructions
 
 - **Main Quick Reference**: @CLAUDE.md (see Quick Reference section)
 - **Issue Handling Principles**: docs/ISSUE_HANDLING.md
-- **Commit Guidelines**: @docs/COMMIT_GUIDELINE.md
-- **Release Process**: @docs/RELEASE_PROCESS.md
+- **Commit Guidelines**: @instructions/COMMIT_GUIDELINE.md
+- **Release Process**: @instructions/RELEASE_PROCESS.md
 - **GitHub MCP Tools**: Available when GitHub MCP server is configured
 - **GitHub CLI Documentation (fallback)**: https://cli.github.com/manual/

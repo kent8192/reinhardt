@@ -772,6 +772,6 @@ cargo doc --package <crate-name> --open
 
 - **Main Quick Reference**: @CLAUDE.md (see Quick Reference section)
 - **Main standards**: @CLAUDE.md
-- **Module system**: @docs/MODULE_SYSTEM.md
-- **Testing standards**: @docs/TESTING_STANDARDS.md
-- **Anti-patterns**: @docs/ANTI_PATTERNS.md
+- **Module system**: @instructions/MODULE_SYSTEM.md
+- **Testing standards**: @instructions/TESTING_STANDARDS.md
+- **Anti-patterns**: @instructions/ANTI_PATTERNS.md

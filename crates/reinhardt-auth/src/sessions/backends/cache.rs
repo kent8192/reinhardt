@@ -42,10 +42,13 @@ use crate::sessions::cleanup::{CleanupableBackend, SessionMetadata};
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SessionError {
+	/// An error occurred in the cache backend.
 	#[error("Cache error: {0}")]
 	CacheError(String),
+	/// Session data could not be serialized or deserialized.
 	#[error("Serialization error: {0}")]
 	SerializationError(String),
+	/// The session has expired due to inactivity.
 	#[error("Session has expired due to inactivity")]
 	SessionExpired,
 }

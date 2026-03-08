@@ -233,21 +233,35 @@ impl PermissionsMixin for DefaultUser {
 	}
 }
 
+/// Query field descriptors for the `DefaultUser` model.
 #[cfg(feature = "argon2-hasher")]
 #[derive(Debug, Clone)]
 pub struct DefaultUserFields {
+	/// The user's unique identifier field.
 	pub id: reinhardt_db::orm::query_fields::Field<DefaultUser, Uuid>,
+	/// The username field.
 	pub username: reinhardt_db::orm::query_fields::Field<DefaultUser, String>,
+	/// The email address field.
 	pub email: reinhardt_db::orm::query_fields::Field<DefaultUser, String>,
+	/// The first name field.
 	pub first_name: reinhardt_db::orm::query_fields::Field<DefaultUser, String>,
+	/// The last name field.
 	pub last_name: reinhardt_db::orm::query_fields::Field<DefaultUser, String>,
+	/// The password hash field.
 	pub password_hash: reinhardt_db::orm::query_fields::Field<DefaultUser, Option<String>>,
+	/// The last login timestamp field.
 	pub last_login: reinhardt_db::orm::query_fields::Field<DefaultUser, Option<DateTime<Utc>>>,
+	/// The active status field.
 	pub is_active: reinhardt_db::orm::query_fields::Field<DefaultUser, bool>,
+	/// The staff status field.
 	pub is_staff: reinhardt_db::orm::query_fields::Field<DefaultUser, bool>,
+	/// The superuser status field.
 	pub is_superuser: reinhardt_db::orm::query_fields::Field<DefaultUser, bool>,
+	/// The date joined field.
 	pub date_joined: reinhardt_db::orm::query_fields::Field<DefaultUser, DateTime<Utc>>,
+	/// The user permissions field.
 	pub user_permissions: reinhardt_db::orm::query_fields::Field<DefaultUser, Vec<String>>,
+	/// The groups field.
 	pub groups: reinhardt_db::orm::query_fields::Field<DefaultUser, Vec<String>>,
 }
 
@@ -260,6 +274,7 @@ impl Default for DefaultUserFields {
 
 #[cfg(feature = "argon2-hasher")]
 impl DefaultUserFields {
+	/// Creates a new `DefaultUserFields` with default field mappings.
 	pub fn new() -> Self {
 		Self {
 			id: reinhardt_db::orm::query_fields::Field::new(vec!["id"]),

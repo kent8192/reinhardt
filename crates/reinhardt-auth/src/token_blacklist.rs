@@ -38,10 +38,15 @@ pub struct BlacklistedToken {
 /// Statistics for blacklisted tokens
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlacklistStats {
+	/// Total number of blacklisted tokens.
 	pub total_blacklisted: usize,
+	/// Number of tokens blacklisted due to logout.
 	pub by_logout: usize,
+	/// Number of tokens blacklisted due to compromise.
 	pub by_compromise: usize,
+	/// Number of tokens blacklisted by manual revocation.
 	pub by_manual_revoke: usize,
+	/// Number of tokens blacklisted due to rotation.
 	pub by_rotation: usize,
 }
 

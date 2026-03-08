@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! # Reinhardt Auth
 //!
 //! Authentication and authorization system for Reinhardt framework.

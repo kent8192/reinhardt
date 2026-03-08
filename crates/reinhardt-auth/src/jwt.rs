@@ -9,9 +9,13 @@ use uuid::Uuid;
 /// JWT Claims
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
-	pub sub: String, // Subject (user ID)
-	pub exp: i64,    // Expiration time
-	pub iat: i64,    // Issued at
+	/// Subject (user ID).
+	pub sub: String,
+	/// Expiration time (Unix timestamp).
+	pub exp: i64,
+	/// Issued at time (Unix timestamp).
+	pub iat: i64,
+	/// The username associated with this token.
 	pub username: String,
 }
 

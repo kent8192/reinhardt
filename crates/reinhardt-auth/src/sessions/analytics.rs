@@ -73,28 +73,42 @@ pub enum DeletionReason {
 pub enum SessionEvent {
 	/// Session was created
 	Created {
+		/// The session key identifier.
 		session_key: String,
+		/// Size of the session data in bytes.
 		size_bytes: usize,
+		/// Time-to-live in seconds, if set.
 		ttl_secs: Option<u64>,
+		/// When the session was created.
 		timestamp: DateTime<Utc>,
 	},
 	/// Session was accessed
 	Accessed {
+		/// The session key identifier.
 		session_key: String,
+		/// Access latency in milliseconds.
 		latency_ms: u64,
+		/// Whether the session data was found (cache hit).
 		hit: bool,
+		/// When the access occurred.
 		timestamp: DateTime<Utc>,
 	},
 	/// Session was deleted
 	Deleted {
+		/// The session key identifier.
 		session_key: String,
+		/// The reason the session was deleted.
 		reason: DeletionReason,
+		/// When the deletion occurred.
 		timestamp: DateTime<Utc>,
 	},
 	/// Session expired
 	Expired {
+		/// The session key identifier.
 		session_key: String,
+		/// Age of the session in seconds at expiration.
 		age_secs: u64,
+		/// When the expiration occurred.
 		timestamp: DateTime<Utc>,
 	},
 }

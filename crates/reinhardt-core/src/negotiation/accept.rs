@@ -5,6 +5,7 @@ use super::media_type::MediaType;
 /// Represents an Accept header
 #[derive(Debug, Clone)]
 pub struct AcceptHeader {
+	/// Parsed media types sorted by quality factor (highest first).
 	pub media_types: Vec<MediaType>,
 }
 

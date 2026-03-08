@@ -41,27 +41,42 @@ pub fn escape_attribute(s: &str) -> String {
 	html_escape(s)
 }
 
+/// Categories of validation errors that can occur during field cleaning.
+///
+/// Used as keys in custom error message maps to override default messages.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ErrorType {
+	/// The field value is missing but required.
 	Required,
+	/// The field value has an invalid format or type.
 	Invalid,
+	/// The field value is shorter than the minimum length.
 	MinLength,
+	/// The field value exceeds the maximum length.
 	MaxLength,
+	/// The field value is below the minimum allowed value.
 	MinValue,
+	/// The field value exceeds the maximum allowed value.
 	MaxValue,
+	/// A custom application-defined error category.
 	Custom(String),
 }
 
+/// Error type returned when field validation fails.
 #[derive(Debug, thiserror::Error)]
 pub enum FieldError {
+	/// The field is required but no value was provided.
 	#[error("{0}")]
 	Required(String),
+	/// The field value has an invalid format or type.
 	#[error("{0}")]
 	Invalid(String),
+	/// The field value failed a validation constraint (e.g., length, range).
 	#[error("{0}")]
 	Validation(String),
 }
 
+/// Result type alias for field validation operations.
 pub type FieldResult<T> = Result<T, FieldError>;
 
 impl FieldError {
@@ -115,20 +130,38 @@ impl FieldError {
 	}
 }
 
-/// Field widget type
+/// Field widget type that determines HTML rendering.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Widget {
+	/// Single-line text input (`<input type="text">`).
 	TextInput,
+	/// Password input that never renders its value (`<input type="password">`).
 	PasswordInput,
+	/// Email address input (`<input type="email">`).
 	EmailInput,
+	/// Numeric input (`<input type="number">`).
 	NumberInput,
+	/// Multi-line text area (`<textarea>`).
 	TextArea,
-	Select { choices: Vec<(String, String)> },
+	/// Dropdown select with predefined (value, label) choices (`<select>`).
+	Select {
+		/// Available (value, label) pairs for the dropdown.
+		choices: Vec<(String, String)>,
+	},
+	/// Checkbox input (`<input type="checkbox">`).
 	CheckboxInput,
-	RadioSelect { choices: Vec<(String, String)> },
+	/// Radio button group with predefined (value, label) choices.
+	RadioSelect {
+		/// Available (value, label) pairs for the radio group.
+		choices: Vec<(String, String)>,
+	},
+	/// Date picker input (`<input type="date">`).
 	DateInput,
+	/// Date and time picker input (`<input type="datetime-local">`).
 	DateTimeInput,
+	/// File upload input (`<input type="file">`).
 	FileInput,
+	/// Hidden input for passing data without display (`<input type="hidden">`).
 	HiddenInput,
 }
 
@@ -360,13 +393,20 @@ impl Widget {
 ///
 /// This trait is specifically for form fields. For ORM fields, use `reinhardt_db::orm::Field`.
 pub trait FormField: Send + Sync {
+	/// Returns the field's name used as the form data key.
 	fn name(&self) -> &str;
+	/// Returns the human-readable label, if set.
 	fn label(&self) -> Option<&str>;
+	/// Returns whether this field must have a non-empty value.
 	fn required(&self) -> bool;
+	/// Returns optional help text displayed alongside the field.
 	fn help_text(&self) -> Option<&str>;
+	/// Returns the widget type used for HTML rendering.
 	fn widget(&self) -> &Widget;
+	/// Returns the initial (default) value for this field, if any.
 	fn initial(&self) -> Option<&serde_json::Value>;
 
+	/// Validates and cleans the submitted value, returning the cleaned result.
 	fn clean(&self, value: Option<&serde_json::Value>) -> FieldResult<serde_json::Value>;
 
 	/// Check if the field value has changed from its initial value

@@ -49,7 +49,12 @@ pub struct SequenceDef {
 #[allow(dead_code)]
 pub enum OwnedBy {
 	/// OWNED BY table.column
-	Column { table: DynIden, column: DynIden },
+	Column {
+		/// The table that owns this sequence.
+		table: DynIden,
+		/// The column within the table that owns this sequence.
+		column: DynIden,
+	},
 	/// OWNED BY NONE
 	None,
 }

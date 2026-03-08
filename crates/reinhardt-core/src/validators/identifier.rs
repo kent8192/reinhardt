@@ -12,21 +12,27 @@ const MAX_IDENTIFIER_LENGTH: usize = 63;
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum IdentifierValidationError {
+	/// The identifier string is empty.
 	#[error("Identifier cannot be empty")]
 	Empty,
 
+	/// The identifier exceeds the maximum allowed length.
 	#[error("Identifier too long: {0} characters (max {MAX_IDENTIFIER_LENGTH})")]
 	TooLong(usize),
 
+	/// The identifier is not in snake_case format.
 	#[error("Identifier must be snake_case: '{0}'")]
 	NotSnakeCase(String),
 
+	/// The identifier contains a character that is not allowed.
 	#[error("Identifier contains invalid character: '{0}'")]
 	InvalidCharacter(char),
 
+	/// The identifier is a SQL reserved word and cannot be used.
 	#[error("Identifier is a SQL reserved word: '{0}'")]
 	ReservedWord(String),
 
+	/// The identifier does not start with a lowercase letter or underscore.
 	#[error("Identifier must start with lowercase letter or underscore: '{0}'")]
 	InvalidFirstCharacter(String),
 }

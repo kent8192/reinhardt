@@ -3,20 +3,29 @@ use std::sync::Arc;
 /// Action type for ViewSet operations
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActionType {
+	/// List all resources.
 	List,
+	/// Retrieve a single resource.
 	Retrieve,
+	/// Create a new resource.
 	Create,
+	/// Fully update an existing resource.
 	Update,
+	/// Partially update an existing resource.
 	PartialUpdate,
+	/// Delete a resource.
 	Destroy,
+	/// A custom, user-defined action.
 	Custom(Arc<str>),
 }
 
 /// Action metadata
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Action {
+	/// The type of action to perform.
 	pub action_type: ActionType,
-	pub detail: bool, // Whether this action operates on a single object
+	/// Whether this action operates on a single object (detail view).
+	pub detail: bool,
 }
 
 impl Action {

@@ -15,16 +15,32 @@ use std::collections::HashMap;
 pub enum BatchOperation<T> {
 	/// Create operation
 	#[serde(rename = "create")]
-	Create { data: T },
+	Create {
+		/// Data for the new resource.
+		data: T,
+	},
 	/// Update operation (full update)
 	#[serde(rename = "update")]
-	Update { id: String, data: T },
+	Update {
+		/// Identifier of the resource to update.
+		id: String,
+		/// Complete replacement data.
+		data: T,
+	},
 	/// Partial update operation
 	#[serde(rename = "partial_update")]
-	PartialUpdate { id: String, data: T },
+	PartialUpdate {
+		/// Identifier of the resource to partially update.
+		id: String,
+		/// Partial data to merge into the resource.
+		data: T,
+	},
 	/// Delete operation
 	#[serde(rename = "delete")]
-	Delete { id: String },
+	Delete {
+		/// Identifier of the resource to delete.
+		id: String,
+	},
 }
 
 /// Batch operation result

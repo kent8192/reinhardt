@@ -8,6 +8,7 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use tera::Tera;
 
+/// Context for template rendering, holding key-value pairs passed to Tera templates.
 #[derive(Debug, Clone)]
 pub struct TemplateContext {
 	variables: HashMap<String, JsonValue>,
@@ -24,12 +25,14 @@ impl From<TemplateContext> for tera::Context {
 }
 
 impl TemplateContext {
+	/// Creates a new empty template context.
 	pub fn new() -> Self {
 		Self {
 			variables: HashMap::new(),
 		}
 	}
 
+	/// Inserts a serializable value into the context under the given key.
 	pub fn insert<K, V>(&mut self, key: K, value: V) -> Result<(), serde_json::Error>
 	where
 		K: Into<String>,
@@ -47,13 +50,16 @@ impl Default for TemplateContext {
 	}
 }
 
+/// Command that processes a template directory, rendering Tera templates into output files.
 pub struct TemplateCommand;
 
 impl TemplateCommand {
+	/// Creates a new template command instance.
 	pub fn new() -> Self {
 		Self
 	}
 
+	/// Processes templates from the given directory, rendering them with the provided context.
 	pub fn handle(
 		&self,
 		name: &str,

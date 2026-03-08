@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! # Reinhardt REST
 //!
 //! **Unified REST API framework** for Reinhardt.
@@ -32,7 +33,7 @@
 //! - [`versioning`]: API versioning strategies (URL path, header, query)
 //! - [`authentication`]: REST authentication backends (JWT, Token, Session, Basic)
 //! - [`response`]: Typed API response wrappers and pagination support
-//! - [`schema`]: OpenAPI schema generation (requires `openapi` feature)
+//! - `schema`: OpenAPI schema generation (requires `openapi` feature)
 //!
 //! ## Feature Flags
 //!

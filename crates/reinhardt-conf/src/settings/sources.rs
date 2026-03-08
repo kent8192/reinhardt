@@ -28,21 +28,27 @@ pub trait ConfigSource: Send + Sync {
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum SourceError {
+	/// An I/O error occurred while reading the configuration source.
 	#[error("IO error: {0}")]
 	Io(#[from] std::io::Error),
 
+	/// The configuration content could not be parsed.
 	#[error("Parse error: {0}")]
 	Parse(String),
 
+	/// An error occurred reading environment variables.
 	#[error("Environment error: {0}")]
 	Env(#[from] EnvError),
 
+	/// The TOML configuration file could not be parsed.
 	#[error("TOML error: {0}")]
 	Toml(#[from] toml::de::Error),
 
+	/// The JSON configuration file could not be parsed.
 	#[error("JSON error: {0}")]
 	Json(#[from] serde_json::Error),
 
+	/// The configuration source is invalid or misconfigured.
 	#[error("Invalid source: {0}")]
 	InvalidSource(String),
 }

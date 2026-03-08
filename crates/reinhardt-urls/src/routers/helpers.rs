@@ -239,12 +239,16 @@ fn parse_non_group_char(input: &str) -> IResult<&str, char> {
 /// main_router.mount("/api/users", users_routes, Some("users".to_string()));
 /// ```
 pub struct IncludedRouter {
+	/// URL prefix to prepend to all contained routes.
 	pub prefix: String,
+	/// Routes included under this prefix.
 	pub routes: Vec<Route>,
+	/// Optional namespace for reverse URL resolution.
 	pub namespace: Option<String>,
 }
 
 impl IncludedRouter {
+	/// Create a new `IncludedRouter` with the given prefix and routes.
 	pub fn new(prefix: impl Into<String>, routes: Vec<Route>) -> Self {
 		Self {
 			prefix: prefix.into(),
@@ -253,6 +257,7 @@ impl IncludedRouter {
 		}
 	}
 
+	/// Set the namespace for this included router.
 	pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
 		self.namespace = Some(namespace.into());
 		self

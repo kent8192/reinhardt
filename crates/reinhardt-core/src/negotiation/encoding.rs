@@ -69,7 +69,9 @@ impl std::fmt::Display for Encoding {
 /// Represents an encoding with quality factor
 #[derive(Debug, Clone, PartialEq)]
 pub struct EncodingQuality {
+	/// The encoding type.
 	pub encoding: Encoding,
+	/// Quality factor between 0.0 and 1.0 (higher is preferred).
 	pub quality: f32,
 }
 

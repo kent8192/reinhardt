@@ -35,6 +35,7 @@ pub struct ViewSetHandler<V: ViewSet> {
 impl<V: ViewSet> std::panic::RefUnwindSafe for ViewSetHandler<V> {}
 
 impl<V: ViewSet> ViewSetHandler<V> {
+	/// Create a new `ViewSetHandler` with the given viewset and action mapping.
 	pub fn new(
 		viewset: Arc<V>,
 		action_map: HashMap<Method, String>,
@@ -137,11 +138,17 @@ fn extract_path_params(request: &Request) -> HashMap<String, String> {
 /// Error type for ModelViewSetHandler
 #[derive(Debug)]
 pub enum ViewError {
+	/// Serialization or deserialization failure.
 	Serialization(String),
+	/// Permission denied for the requested action.
 	Permission(String),
+	/// The requested resource was not found.
 	NotFound(String),
+	/// The request was malformed or invalid.
 	BadRequest(String),
+	/// An internal server error occurred.
 	Internal(String),
+	/// A database operation failed.
 	DatabaseError(String),
 }
 

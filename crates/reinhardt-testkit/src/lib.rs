@@ -31,27 +31,46 @@
 //! - **`websockets`**: Enable WebSocket testing utilities
 //! - **`graphql`**: Enable GraphQL testing utilities
 //! - **`property-based`**: Enable property-based testing with proptest
+#![warn(missing_docs)]
 
+/// Assertion helpers for common test patterns.
 pub mod assertions;
+/// HTTP client for making test API requests.
 pub mod client;
+/// Debug toolbar for inspecting queries, timing, and cache.
 pub mod debug;
+/// API request factory for creating mock HTTP requests.
 pub mod factory;
+/// Test fixture loading and management.
 pub mod fixtures;
+/// HTTP request/response helpers for testing.
 pub mod http;
+/// Test logging initialization utilities.
 pub mod logging;
+/// Test message assertion utilities.
 pub mod messages;
+/// Mock function and spy utilities for testing.
 pub mod mock;
+/// Test resource lifecycle management (setup/teardown).
 pub mod resource;
+/// Response wrapper with assertion methods.
 pub mod response;
+/// Test server spawning and management.
 pub mod server;
+/// Base test case with common assertions.
 pub mod testcase;
+/// Test view implementations for integration testing.
 pub mod views;
+/// Test ViewSet implementations for integration testing.
 pub mod viewsets;
 
+/// TestContainers integration (PostgreSQL, MySQL, Redis, etc.).
 #[cfg(feature = "testcontainers")]
 pub mod containers;
 
+/// Server function testing utilities.
 pub mod server_fn;
+/// WebSocket testing client.
 pub mod websocket;
 
 // Re-export testcontainers crates for convenient access
@@ -321,6 +340,7 @@ macro_rules! impl_test_model {
 		]
 	) => {
 		$crate::paste::paste! {
+			/// Field selector for the associated test model.
 			#[derive(Debug, Clone)]
 			pub struct [<$model Fields>];
 
@@ -408,6 +428,7 @@ macro_rules! impl_test_model {
 		]
 	) => {
 		$crate::paste::paste! {
+			/// Field selector for the associated test model.
 			#[derive(Debug, Clone)]
 			pub struct [<$model Fields>];
 
@@ -476,6 +497,7 @@ macro_rules! impl_test_model {
 		]
 	) => {
 		$crate::paste::paste! {
+			/// Field selector for the associated test model.
 			#[derive(Debug, Clone)]
 			pub struct [<$model Fields>];
 
@@ -536,6 +558,7 @@ macro_rules! impl_test_model {
 	// Version with app_label (no relationships)
 	($model:ident, $pk:ty, $table:expr, $app:expr) => {
 		$crate::paste::paste! {
+			/// Field selector for the associated test model.
 			#[derive(Debug, Clone)]
 			pub struct [<$model Fields>];
 
@@ -586,6 +609,7 @@ macro_rules! impl_test_model {
 	// Example: id: Uuid instead of id: Option<Uuid>
 	($model:ident, $pk:ty, $table:expr, $app:expr, non_option_pk) => {
 		$crate::paste::paste! {
+			/// Field selector for the associated test model.
 			#[derive(Debug, Clone)]
 			pub struct [<$model Fields>];
 

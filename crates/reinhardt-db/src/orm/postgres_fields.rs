@@ -283,15 +283,18 @@ pub struct BigIntegerRangeField {
 }
 
 impl BigIntegerRangeField {
+	/// Creates a new instance.
 	pub fn new() -> Self {
 		Self { default: None }
 	}
 
+	/// Sets the default and returns self for chaining.
 	pub fn with_default(mut self, lower: Option<i64>, upper: Option<i64>) -> Self {
 		self.default = Some((lower, upper));
 		self
 	}
 
+	/// Performs the sql type operation.
 	pub fn sql_type(&self) -> &'static str {
 		"INT8RANGE"
 	}
@@ -321,15 +324,18 @@ pub struct DateRangeField {
 }
 
 impl DateRangeField {
+	/// Creates a new instance.
 	pub fn new() -> Self {
 		Self { default: None }
 	}
 
+	/// Sets the default and returns self for chaining.
 	pub fn with_default(mut self, lower: Option<NaiveDate>, upper: Option<NaiveDate>) -> Self {
 		self.default = Some((lower, upper));
 		self
 	}
 
+	/// Performs the sql type operation.
 	pub fn sql_type(&self) -> &'static str {
 		"DATERANGE"
 	}
@@ -359,10 +365,12 @@ pub struct DateTimeRangeField {
 }
 
 impl DateTimeRangeField {
+	/// Creates a new instance.
 	pub fn new() -> Self {
 		Self { default: None }
 	}
 
+	/// Sets the default and returns self for chaining.
 	pub fn with_default(
 		mut self,
 		lower: Option<NaiveDateTime>,
@@ -372,6 +380,7 @@ impl DateTimeRangeField {
 		self
 	}
 
+	/// Performs the sql type operation.
 	pub fn sql_type(&self) -> &'static str {
 		"TSTZRANGE"
 	}

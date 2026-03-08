@@ -4,11 +4,17 @@ use serde::{Deserialize, Serialize};
 /// Index definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Index {
+	/// The name.
 	pub name: String,
+	/// The fields.
 	pub fields: Vec<String>,
+	/// The unique.
 	pub unique: bool,
+	/// The condition.
 	pub condition: Option<String>, // Partial index
+	/// The include.
 	pub include: Vec<String>,      // Covering index
+	/// The opclass.
 	pub opclass: Option<String>,   // Operator class
 }
 
@@ -90,6 +96,7 @@ impl Index {
 /// B-Tree index (default)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BTreeIndex {
+	/// The index.
 	pub index: Index,
 }
 
@@ -119,6 +126,7 @@ impl BTreeIndex {
 /// Hash index
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HashIndex {
+	/// The index.
 	pub index: Index,
 }
 
@@ -154,6 +162,7 @@ impl HashIndex {
 /// GIN index (for arrays, JSONB, full-text search)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GinIndex {
+	/// The index.
 	pub index: Index,
 }
 
@@ -189,6 +198,7 @@ impl GinIndex {
 /// GiST index (for geometric data, full-text search)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GistIndex {
+	/// The index.
 	pub index: Index,
 }
 

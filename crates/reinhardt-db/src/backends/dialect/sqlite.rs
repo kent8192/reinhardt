@@ -19,12 +19,14 @@ pub struct SqliteBackend {
 }
 
 impl SqliteBackend {
+	/// Creates a new SQLite backend with the given pool.
 	pub fn new(pool: SqlitePool) -> Self {
 		Self {
 			pool: Arc::new(pool),
 		}
 	}
 
+	/// Returns a reference to the underlying SQLite pool.
 	pub fn pool(&self) -> &SqlitePool {
 		&self.pool
 	}
@@ -263,6 +265,7 @@ pub struct SqliteTransactionExecutor {
 }
 
 impl SqliteTransactionExecutor {
+	/// Creates a new SQLite transaction executor.
 	pub fn new(tx: Transaction<'static, Sqlite>) -> Self {
 		Self { tx: Some(tx) }
 	}

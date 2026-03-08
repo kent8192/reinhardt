@@ -60,6 +60,7 @@
 //! | `hot-reload` | disabled | Live settings reload on file change |
 //! | `caching` | disabled | In-memory settings caching with TTL |
 
+#![warn(missing_docs)]
 #![cfg_attr(not(feature = "settings"), allow(unused_imports))]
 
 pub mod settings;

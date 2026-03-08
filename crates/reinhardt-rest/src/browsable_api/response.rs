@@ -6,15 +6,22 @@ use std::collections::HashMap;
 /// Response for browsable API
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrowsableResponse {
+	/// The JSON response body.
 	pub data: serde_json::Value,
+	/// Metadata about the response (status, method, path, headers).
 	pub metadata: ResponseMetadata,
 }
 
+/// Metadata associated with a browsable API response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseMetadata {
+	/// The HTTP status code.
 	pub status: u16,
+	/// The HTTP method used for the request.
 	pub method: String,
+	/// The request path.
 	pub path: String,
+	/// Response headers as key-value pairs.
 	pub headers: HashMap<String, String>,
 }
 

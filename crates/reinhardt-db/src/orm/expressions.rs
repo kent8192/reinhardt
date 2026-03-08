@@ -8,6 +8,7 @@ use crate::orm::query::{Filter, FilterOperator, FilterValue, quote_identifier};
 /// Similar to Django's F() objects for database-side operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct F {
+	/// The field.
 	pub field: String,
 }
 
@@ -351,6 +352,7 @@ impl<M, T> From<FieldRef<M, T>> for F {
 /// OuterRef - reference to a field in the outer query (for subqueries)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OuterRef {
+	/// The field.
 	pub field: String,
 }
 
@@ -395,7 +397,9 @@ impl OuterRef {
 /// Subquery - represents a subquery expression
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Subquery {
+	/// The sql.
 	pub sql: String,
+	/// The template.
 	pub template: String,
 }
 
@@ -452,6 +456,7 @@ impl Subquery {
 /// Exists - check if a subquery returns any rows
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Exists {
+	/// The subquery.
 	pub subquery: Subquery,
 }
 
@@ -496,15 +501,22 @@ impl Exists {
 /// Similar to Django's Value() for using literal values in expressions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Value {
+	/// The value.
 	pub value: ValueType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Defines possible value type values.
 pub enum ValueType {
+	/// String variant.
 	String(String),
+	/// Integer variant.
 	Integer(i64),
+	/// Float variant.
 	Float(f64),
+	/// Bool variant.
 	Bool(bool),
+	/// Null variant.
 	Null,
 }
 
@@ -661,8 +673,11 @@ impl From<bool> for ValueType {
 /// Q operator for combining query conditions
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum QOperator {
+	/// And variant.
 	And,
+	/// Or variant.
 	Or,
+	/// Not variant.
 	Not,
 }
 
@@ -682,13 +697,18 @@ impl fmt::Display for QOperator {
 pub enum Q {
 	/// Simple condition: field, operator, value
 	Condition {
+		/// The field.
 		field: String,
+		/// The operator.
 		operator: String,
+		/// The value.
 		value: String,
 	},
 	/// Combined conditions with AND/OR/NOT
 	Combined {
+		/// The operator.
 		operator: QOperator,
+		/// The conditions.
 		conditions: Vec<Q>,
 	},
 }
@@ -2195,6 +2215,7 @@ GROUP BY user_id",
 /// When clause for Case expressions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct When {
+	/// The condition.
 	pub condition: Q,
 	then: Box<Expression>,
 }
@@ -2257,6 +2278,7 @@ impl When {
 /// Similar to Django's Case() for conditional expressions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Case {
+	/// The when clauses.
 	pub when_clauses: Vec<When>,
 	default: Option<Box<Expression>>,
 }
@@ -2370,8 +2392,11 @@ impl Default for Case {
 /// Generic expression enum to support different expression types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Expression {
+	/// F variant.
 	F(F),
+	/// Value variant.
 	Value(Value),
+	/// Case variant.
 	Case(Case),
 	// Aggregate(super::aggregation::Aggregate),
 }

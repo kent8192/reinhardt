@@ -25,11 +25,17 @@ pub trait TypeDecorator: Send + Sync {
 
 #[non_exhaustive]
 #[derive(Debug, Clone)]
+/// Defines possible type error values.
 pub enum TypeError {
+	/// SerializationError variant.
 	SerializationError(String),
+	/// DeserializationError variant.
 	DeserializationError(String),
+	/// ValidationError variant.
 	ValidationError(String),
+	/// EncryptionError variant.
 	EncryptionError(String),
+	/// DecryptionError variant.
 	DecryptionError(String),
 }
 

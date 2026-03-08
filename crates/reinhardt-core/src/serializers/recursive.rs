@@ -188,13 +188,21 @@ pub type RecursiveResult<T> = Result<T, RecursiveError>;
 pub enum RecursiveError {
 	/// Maximum depth exceeded
 	MaxDepthExceeded {
+		/// The depth at which the limit was hit.
 		current_depth: usize,
+		/// The configured maximum depth.
 		max_depth: usize,
 	},
 	/// Circular reference detected
-	CircularReference { object_id: String },
+	CircularReference {
+		/// Identifier of the object that caused the circular reference.
+		object_id: String,
+	},
 	/// General serialization error
-	SerializationError { message: String },
+	SerializationError {
+		/// Human-readable error description.
+		message: String,
+	},
 }
 
 impl std::fmt::Display for RecursiveError {

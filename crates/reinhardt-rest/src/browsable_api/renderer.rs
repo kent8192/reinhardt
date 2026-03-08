@@ -3,14 +3,19 @@ use serde_json::Value;
 use std::sync::Arc;
 use tera::Tera;
 
+/// Errors that can occur during browsable API rendering.
 #[derive(Debug, thiserror::Error)]
 pub enum BrowsableApiError {
+	/// A template rendering error.
 	#[error("Template render error: {0}")]
 	Render(String),
+	/// A template compilation or loading error.
 	#[error("Template error: {0}")]
 	Template(String),
+	/// A JSON serialization error.
 	#[error("Serialization error: {0}")]
 	Serialization(#[from] serde_json::Error),
+	/// Any other error.
 	#[error("{0}")]
 	Other(String),
 }
@@ -21,19 +26,29 @@ impl From<tera::Error> for BrowsableApiError {
 	}
 }
 
+/// A convenience type alias for browsable API rendering results.
 pub type BrowsableApiResult<T> = Result<T, BrowsableApiError>;
 
 /// Context for rendering browsable API HTML
 #[derive(Debug, Clone, Serialize)]
 pub struct ApiContext {
+	/// The page title displayed in the header.
 	pub title: String,
+	/// An optional description of the endpoint.
 	pub description: Option<String>,
+	/// The API endpoint URL.
 	pub endpoint: String,
+	/// The HTTP method used for the current request.
 	pub method: String,
+	/// The JSON response data to display.
 	pub response_data: Value,
+	/// The HTTP status code of the response.
 	pub response_status: u16,
+	/// The HTTP methods allowed on this endpoint.
 	pub allowed_methods: Vec<String>,
+	/// An optional form context for making requests via the browsable interface.
 	pub request_form: Option<FormContext>,
+	/// Response headers to display.
 	pub headers: Vec<(String, String)>,
 	/// CSRF token for form protection
 	pub csrf_token: Option<String>,
@@ -42,26 +57,41 @@ pub struct ApiContext {
 /// Context for rendering request forms
 #[derive(Debug, Clone, Serialize)]
 pub struct FormContext {
+	/// The form fields to render.
 	pub fields: Vec<FormField>,
+	/// The URL to submit the form to.
 	pub submit_url: String,
+	/// The HTTP method for form submission.
 	pub submit_method: String,
 }
 
+/// A single form field in the browsable API request form.
 #[derive(Debug, Clone, Serialize)]
 pub struct FormField {
+	/// The field's HTML name attribute.
 	pub name: String,
+	/// The human-readable label for the field.
 	pub label: String,
+	/// The HTML input type (e.g., `"text"`, `"select"`, `"textarea"`).
 	pub field_type: String,
+	/// Whether the field is required for submission.
 	pub required: bool,
+	/// Optional help text displayed below the field.
 	pub help_text: Option<String>,
+	/// An optional pre-filled initial value for the field.
 	pub initial_value: Option<Value>,
+	/// Available options for select-type fields.
 	pub options: Option<Vec<SelectOption>>,
+	/// An optional placeholder label for the initial empty select option.
 	pub initial_label: Option<String>,
 }
 
+/// A single option within a select dropdown field.
 #[derive(Debug, Clone, Serialize)]
 pub struct SelectOption {
+	/// The value submitted when this option is selected.
 	pub value: String,
+	/// The display text shown to the user.
 	pub label: String,
 }
 

@@ -11,16 +11,26 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// Options for the `collectstatic` management command.
 #[derive(Debug, Clone)]
 pub struct CollectStaticOptions {
+	/// Whether to clear the destination directory before collecting.
 	pub clear: bool,
+	/// Whether to skip user confirmation prompts.
 	pub no_input: bool,
+	/// Whether to perform a dry run without copying files.
 	pub dry_run: bool,
+	/// Whether to prompt the user interactively.
 	pub interactive: bool,
+	/// Verbosity level (0 = quiet, 1 = normal, 2+ = verbose).
 	pub verbosity: u8,
+	/// Whether to create symbolic links instead of copying files.
 	pub link: bool,
+	/// Glob patterns for files to ignore during collection.
 	pub ignore_patterns: Vec<String>,
+	/// Whether to enable content-based hashing for cache busting.
 	pub enable_hashing: bool,
+	/// Whether to use fast (size-only) comparison instead of content hashing.
 	pub fast_compare: bool,
 }
 
@@ -40,15 +50,21 @@ impl Default for CollectStaticOptions {
 	}
 }
 
+/// Statistics from a `collectstatic` execution.
 #[derive(Debug, Clone)]
 pub struct CollectStaticStats {
+	/// Number of files copied to the destination.
 	pub copied: usize,
+	/// Number of files skipped due to ignore patterns.
 	pub skipped: usize,
+	/// Number of files deleted during clear operation.
 	pub deleted: usize,
+	/// Number of files already up-to-date at the destination.
 	pub unmodified: usize,
 }
 
 impl CollectStaticStats {
+	/// Creates a new stats counter with all values set to zero.
 	pub fn new() -> Self {
 		Self {
 			copied: 0,
@@ -65,6 +81,10 @@ impl Default for CollectStaticStats {
 	}
 }
 
+/// Management command for collecting static files into a single directory.
+///
+/// Discovers static files from configured directories and installed apps,
+/// then copies them to the `STATIC_ROOT` directory for production serving.
 #[derive(Default)]
 pub struct CollectStaticCommand {
 	config: StaticFilesConfig,
@@ -73,6 +93,7 @@ pub struct CollectStaticCommand {
 }
 
 impl CollectStaticCommand {
+	/// Creates a new command with the given static files configuration and options.
 	pub fn new(config: StaticFilesConfig, options: CollectStaticOptions) -> Self {
 		Self {
 			config,

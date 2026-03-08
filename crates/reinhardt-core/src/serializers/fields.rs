@@ -87,11 +87,17 @@ impl std::error::Error for FieldError {}
 /// ```
 #[derive(Debug, Clone)]
 pub struct CharField {
+	/// Whether this field is required.
 	pub required: bool,
+	/// Whether null values are allowed.
 	pub allow_null: bool,
+	/// Whether blank (empty) strings are allowed.
 	pub allow_blank: bool,
+	/// Minimum character length constraint.
 	pub min_length: Option<usize>,
+	/// Maximum character length constraint.
 	pub max_length: Option<usize>,
+	/// Default value when none is provided.
 	pub default: Option<String>,
 }
 
@@ -243,10 +249,15 @@ impl Default for CharField {
 /// ```
 #[derive(Debug, Clone)]
 pub struct IntegerField {
+	/// Whether this field is required.
 	pub required: bool,
+	/// Whether null values are allowed.
 	pub allow_null: bool,
+	/// Minimum value constraint.
 	pub min_value: Option<i64>,
+	/// Maximum value constraint.
 	pub max_value: Option<i64>,
+	/// Default value when none is provided.
 	pub default: Option<i64>,
 }
 
@@ -376,10 +387,15 @@ impl Default for IntegerField {
 /// ```
 #[derive(Debug, Clone)]
 pub struct FloatField {
+	/// Whether this field is required.
 	pub required: bool,
+	/// Whether null values are allowed.
 	pub allow_null: bool,
+	/// Minimum value constraint.
 	pub min_value: Option<f64>,
+	/// Maximum value constraint.
 	pub max_value: Option<f64>,
+	/// Default value when none is provided.
 	pub default: Option<f64>,
 }
 
@@ -505,8 +521,11 @@ impl Default for FloatField {
 /// ```
 #[derive(Debug, Clone)]
 pub struct BooleanField {
+	/// Whether this field is required.
 	pub required: bool,
+	/// Whether null values are allowed.
 	pub allow_null: bool,
+	/// Default value when none is provided.
 	pub default: Option<bool>,
 }
 
@@ -583,9 +602,13 @@ impl Default for BooleanField {
 /// ```
 #[derive(Debug, Clone)]
 pub struct EmailField {
+	/// Whether this field is required.
 	pub required: bool,
+	/// Whether null values are allowed.
 	pub allow_null: bool,
+	/// Whether blank (empty) strings are allowed.
 	pub allow_blank: bool,
+	/// Default value when none is provided.
 	pub default: Option<String>,
 }
 
@@ -696,9 +719,13 @@ impl Default for EmailField {
 /// ```
 #[derive(Debug, Clone)]
 pub struct URLField {
+	/// Whether this field is required.
 	pub required: bool,
+	/// Whether null values are allowed.
 	pub allow_null: bool,
+	/// Whether blank (empty) strings are allowed.
 	pub allow_blank: bool,
+	/// Default value when none is provided.
 	pub default: Option<String>,
 }
 
@@ -804,10 +831,15 @@ impl Default for URLField {
 /// ```
 #[derive(Debug, Clone)]
 pub struct ChoiceField {
+	/// Whether this field is required.
 	pub required: bool,
+	/// Whether null values are allowed.
 	pub allow_null: bool,
+	/// Whether blank (empty) strings are allowed.
 	pub allow_blank: bool,
+	/// List of valid choice values.
 	pub choices: Vec<String>,
+	/// Default value when none is provided.
 	pub default: Option<String>,
 }
 
@@ -901,9 +933,13 @@ impl ChoiceField {
 /// ```
 #[derive(Debug, Clone)]
 pub struct DateField {
+	/// Whether this field is required.
 	pub required: bool,
+	/// Whether null values are allowed.
 	pub allow_null: bool,
+	/// Date format string (strftime format, e.g., "%Y-%m-%d").
 	pub format: String,
+	/// Default value when none is provided.
 	pub default: Option<NaiveDate>,
 }
 
@@ -1028,9 +1064,13 @@ impl Default for DateField {
 /// ```
 #[derive(Debug, Clone)]
 pub struct DateTimeField {
+	/// Whether this field is required.
 	pub required: bool,
+	/// Whether null values are allowed.
 	pub allow_null: bool,
+	/// DateTime format string (strftime format, e.g., "%Y-%m-%d %H:%M:%S").
 	pub format: String,
+	/// Default value when none is provided.
 	pub default: Option<NaiveDateTime>,
 }
 

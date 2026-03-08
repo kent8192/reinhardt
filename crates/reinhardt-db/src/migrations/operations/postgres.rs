@@ -43,8 +43,11 @@ use serde::{Deserialize, Serialize};
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateExtension {
+	/// The name.
 	pub name: String,
+	/// The schema.
 	pub schema: Option<String>,
+	/// The version.
 	pub version: Option<String>,
 }
 
@@ -152,6 +155,7 @@ impl CreateExtension {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DropExtension {
+	/// The name.
 	pub name: String,
 }
 
@@ -203,8 +207,11 @@ impl DropExtension {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateCollation {
+	/// The name.
 	pub name: String,
+	/// The locale.
 	pub locale: String,
+	/// The provider.
 	pub provider: Option<String>,
 }
 

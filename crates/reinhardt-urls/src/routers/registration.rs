@@ -39,7 +39,7 @@
 //! 1. User code uses the `#[routes]` attribute macro on a function returning [`UnifiedRouter`]
 //! 2. Macro generates an `inventory::submit!` call with function pointers for both routers
 //! 3. Framework code retrieves registrations via `inventory::iter::<UrlPatternsRegistration>()`
-//! 4. Framework calls the registered functions to get [`ServerRouter`] and [`ClientRouter`]
+//! 4. Framework calls the registered functions to get [`ServerRouter`] and `ClientRouter`
 //!
 //! # Examples
 //!
@@ -61,7 +61,6 @@
 //!
 //! [`UnifiedRouter`]: crate::routers::UnifiedRouter
 //! [`ServerRouter`]: crate::routers::ServerRouter
-//! [`ClientRouter`]: crate::routers::ClientRouter
 
 #[cfg(feature = "client-router")]
 use crate::routers::client_router::ClientRouter;

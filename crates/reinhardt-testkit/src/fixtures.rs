@@ -53,9 +53,13 @@
 //! ```
 
 // Module declarations
+/// Fixture-based API client utilities.
 pub mod client;
+/// Fixture file loading from JSON, YAML, and TOML formats.
 pub mod loader;
+/// Mock database backend fixtures using mockall.
 pub mod mock;
+/// Test server fixtures and builder utilities.
 pub mod server;
 
 #[cfg(feature = "testcontainers")]

@@ -74,6 +74,7 @@ where
 	M: Model + Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone + 'static,
 	S: Serializer<Input = M, Output = String> + Send + Sync + 'static,
 {
+	/// Create a new `ListCreateAPIView` with default settings.
 	pub fn new() -> Self {
 		Self {
 			queryset: None,
@@ -85,11 +86,13 @@ where
 		}
 	}
 
+	/// Set the queryset for this view.
 	pub fn with_queryset(mut self, queryset: QuerySet<M>) -> Self {
 		self.queryset = Some(queryset);
 		self
 	}
 
+	/// Set the page size for pagination.
 	pub fn with_paginate_by(mut self, page_size: usize) -> Self {
 		self.pagination_config = Some(PaginationConfig::page_number(page_size, Some(100)));
 		self
@@ -101,6 +104,7 @@ where
 		self
 	}
 
+	/// Set the default ordering fields for list results.
 	pub fn with_ordering(mut self, ordering: Vec<String>) -> Self {
 		self.ordering = Some(ordering);
 		self
@@ -340,6 +344,7 @@ where
 	M: Model + Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone + 'static,
 	S: Serializer<Input = M, Output = String> + Send + Sync + 'static,
 {
+	/// Create a new `RetrieveUpdateAPIView` with default settings.
 	pub fn new() -> Self {
 		Self {
 			queryset: None,
@@ -348,11 +353,13 @@ where
 		}
 	}
 
+	/// Set the queryset for this view.
 	pub fn with_queryset(mut self, queryset: QuerySet<M>) -> Self {
 		self.queryset = Some(queryset);
 		self
 	}
 
+	/// Set the field used for object lookup.
 	pub fn with_lookup_field(mut self, field: String) -> Self {
 		self.lookup_field = field;
 		self
@@ -537,6 +544,7 @@ where
 	M: Model + Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone + 'static,
 	S: Serializer<Input = M, Output = String> + Send + Sync + 'static,
 {
+	/// Create a new `RetrieveDestroyAPIView` with default settings.
 	pub fn new() -> Self {
 		Self {
 			queryset: None,
@@ -545,11 +553,13 @@ where
 		}
 	}
 
+	/// Set the queryset for this view.
 	pub fn with_queryset(mut self, queryset: QuerySet<M>) -> Self {
 		self.queryset = Some(queryset);
 		self
 	}
 
+	/// Set the field used for object lookup.
 	pub fn with_lookup_field(mut self, field: String) -> Self {
 		self.lookup_field = field;
 		self
@@ -671,6 +681,7 @@ where
 	M: Model + Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone + 'static,
 	S: Serializer<Input = M, Output = String> + Send + Sync + 'static,
 {
+	/// Create a new `RetrieveUpdateDestroyAPIView` with default settings.
 	pub fn new() -> Self {
 		Self {
 			queryset: None,
@@ -679,11 +690,13 @@ where
 		}
 	}
 
+	/// Set the queryset for this view.
 	pub fn with_queryset(mut self, queryset: QuerySet<M>) -> Self {
 		self.queryset = Some(queryset);
 		self
 	}
 
+	/// Set the field used for object lookup.
 	pub fn with_lookup_field(mut self, field: String) -> Self {
 		self.lookup_field = field;
 		self

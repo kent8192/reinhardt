@@ -38,6 +38,7 @@
 //!
 //! See `reinhardt-routers` crate documentation for detailed usage and examples.
 
+#![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -49,6 +50,7 @@ pub mod routers;
 pub use reinhardt_routers_macros as routers_macros;
 
 // Re-export commonly used types from routers (server-only)
+/// Commonly used types re-exported for convenience.
 #[cfg(all(feature = "routers", not(target_arch = "wasm32")))]
 #[cfg_attr(docsrs, doc(cfg(feature = "routers")))]
 pub mod prelude {

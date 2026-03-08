@@ -34,10 +34,12 @@ impl APIRequestFactory {
 			default_headers: HeaderMap::new(),
 		}
 	}
+	/// Set the default content format (e.g., `"json"`, `"xml"`).
 	pub fn with_format(mut self, format: impl Into<String>) -> Self {
 		self.default_format = format.into();
 		self
 	}
+	/// Add a default header to all requests created by this factory.
 	pub fn with_header(
 		mut self,
 		name: impl AsRef<str>,
@@ -192,6 +194,7 @@ pub struct RequestBuilder {
 }
 
 impl RequestBuilder {
+	/// Create a new request builder with the given HTTP method, path, and default headers.
 	pub fn new(method: Method, path: &str, default_headers: &HeaderMap) -> Self {
 		Self {
 			method,
@@ -203,17 +206,21 @@ impl RequestBuilder {
 			user: None,
 		}
 	}
+	/// Get the HTTP method of this request.
 	pub fn method(&self) -> Method {
 		self.method.clone()
 	}
+	/// Get the path of this request.
 	pub fn path(&self) -> &str {
 		&self.path
 	}
+	/// Set the content format for this request.
 	pub fn with_format(mut self, format: &str) -> Self {
 		self.format = format.to_string();
 		self
 	}
 	// Fixes #865
+	/// Add a custom HTTP header to this request builder.
 	pub fn header(mut self, name: &str, value: &str) -> Result<Self, ClientError> {
 		let header_name: http::header::HeaderName = name
 			.parse()
@@ -222,10 +229,12 @@ impl RequestBuilder {
 			.insert(header_name, HeaderValue::from_str(value)?);
 		Ok(self)
 	}
+	/// Add a query parameter to this request.
 	pub fn query(mut self, key: &str, value: &str) -> Self {
 		self.query_params.insert(key.to_string(), value.to_string());
 		self
 	}
+	/// Add a query parameter (alias for `query`).
 	pub fn query_param(self, key: &str, value: &str) -> Self {
 		self.query(key, value)
 	}

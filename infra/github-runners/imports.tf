@@ -19,6 +19,6 @@
 # Golden AMI SSM parameter (see #2023).
 # Idempotent: no-op if already managed by this workspace.
 import {
-	to = aws_ssm_parameter.runner_ami_id
-	id = "/${var.prefix}/runner-ami-id"
+  to = aws_ssm_parameter.runner_ami_id
+  id = "/${var.prefix}/runner-ami-id"
 }

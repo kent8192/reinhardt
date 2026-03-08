@@ -112,3 +112,25 @@ module "github_runner" {
     max_attempts     = 3
   }
 }
+
+# Supplemental IAM policy: grant ssm:GetParameter (singular) for AMI SSM parameter.
+#
+# The module grants ssm:GetParameters (plural) automatically, but EC2 CreateFleet
+# with `resolve:ssm:` requires ssm:GetParameter (singular) to resolve the AMI ID
+# from the SSM parameter. These are different IAM actions.
+# See: https://github.com/kent8192/reinhardt-web/issues/2027
+resource "aws_iam_role_policy" "scale_up_ssm_get_parameter" {
+  name = "ssm-get-parameter-ami-resolve"
+  role = module.github_runner.runners.role_scale_up.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameter"]
+        Resource = [aws_ssm_parameter.runner_ami_id.arn]
+      }
+    ]
+  })
+}

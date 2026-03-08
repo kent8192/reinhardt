@@ -109,7 +109,7 @@ pub enum LockBehavior {
 }
 
 /// Lock clause for SELECT ... FOR UPDATE/SHARE
-// NOTE: FOR UPDATE/SHARE は現在未実装のため、フィールドが未使用となっている
+// NOTE: Fields are currently unused because FOR UPDATE/SHARE is not yet implemented
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct LockClause {

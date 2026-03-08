@@ -5,10 +5,15 @@ use std::sync::Arc;
 /// CORS middleware configuration
 #[non_exhaustive]
 pub struct CorsConfig {
+	/// Origins allowed to make cross-origin requests (e.g., `"*"` or specific domains).
 	pub allow_origins: Vec<String>,
+	/// HTTP methods allowed for cross-origin requests.
 	pub allow_methods: Vec<String>,
+	/// HTTP headers allowed in cross-origin requests.
 	pub allow_headers: Vec<String>,
+	/// Whether to include credentials (cookies, authorization headers) in CORS requests.
 	pub allow_credentials: bool,
+	/// Maximum time (in seconds) the browser should cache preflight responses.
 	pub max_age: Option<u64>,
 }
 

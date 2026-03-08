@@ -30,17 +30,24 @@ pub const MESSAGE_HEADER: &str = "X-Messages";
 /// Message severity levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MessageLevel {
+	/// Diagnostic information for developers, not shown to end users.
 	Debug,
+	/// Informational message for the user.
 	Info,
+	/// Indicates an operation completed successfully.
 	Success,
+	/// Indicates a potential issue that the user should be aware of.
 	Warning,
+	/// Indicates an operation failed or an error occurred.
 	Error,
 }
 
 /// A single flash message
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
+	/// The severity level of this message.
 	pub level: MessageLevel,
+	/// The message text to display to the user.
 	pub text: String,
 }
 

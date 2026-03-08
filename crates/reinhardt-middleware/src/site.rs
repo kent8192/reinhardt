@@ -256,6 +256,7 @@ impl Default for SiteConfig {
 /// ```
 pub struct SiteMiddleware {
 	config: SiteConfig,
+	/// The shared site registry containing all registered sites.
 	pub registry: Arc<SiteRegistry>,
 }
 

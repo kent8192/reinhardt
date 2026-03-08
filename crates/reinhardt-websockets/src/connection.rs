@@ -401,26 +401,37 @@ impl ConnectionConfig {
 	}
 }
 
+/// Errors that can occur during WebSocket operations.
 #[derive(Debug, thiserror::Error)]
 pub enum WebSocketError {
+	/// A connection-level error occurred.
 	#[error("Connection error")]
 	Connection(String),
+	/// Failed to send a message to the peer.
 	#[error("Send failed")]
 	Send(String),
+	/// Failed to receive a message from the peer.
 	#[error("Receive failed")]
 	Receive(String),
+	/// A WebSocket protocol violation was detected.
 	#[error("Protocol error")]
 	Protocol(String),
+	/// An internal server error occurred.
 	#[error("Internal error")]
 	Internal(String),
+	/// The connection timed out after the given duration of inactivity.
 	#[error("Connection timed out")]
 	Timeout(Duration),
+	/// Reconnection failed after the specified number of attempts.
 	#[error("Reconnection failed")]
 	ReconnectFailed(u32),
+	/// The binary payload was invalid or could not be decoded.
 	#[error("Invalid binary payload: {0}")]
 	BinaryPayload(String),
+	/// No pong response was received within the heartbeat timeout.
 	#[error("Heartbeat timeout: no pong received within {0:?}")]
 	HeartbeatTimeout(Duration),
+	/// The consumer could not keep up with the message rate.
 	#[error("Slow consumer: send timed out after {0:?}")]
 	SlowConsumer(Duration),
 }
@@ -465,17 +476,34 @@ impl WebSocketError {
 	}
 }
 
+/// A specialized `Result` type for WebSocket operations.
 pub type WebSocketResult<T> = Result<T, WebSocketError>;
 
 /// WebSocket message types
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type")]
 pub enum Message {
-	Text { data: String },
-	Binary { data: Vec<u8> },
+	/// A UTF-8 text message.
+	Text {
+		/// The text content of the message.
+		data: String,
+	},
+	/// A binary message.
+	Binary {
+		/// The raw bytes of the message.
+		data: Vec<u8>,
+	},
+	/// A ping control frame.
 	Ping,
+	/// A pong control frame (response to ping).
 	Pong,
-	Close { code: u16, reason: String },
+	/// A close control frame with status code and reason.
+	Close {
+		/// The WebSocket close status code.
+		code: u16,
+		/// A human-readable reason for closing.
+		reason: String,
+	},
 }
 
 impl Message {

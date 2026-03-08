@@ -16,16 +16,22 @@ pub type ChannelResult<T> = Result<T, ChannelError>;
 /// Channel layer errors
 #[derive(Debug, thiserror::Error)]
 pub enum ChannelError {
+	/// Failed to send a message through the channel.
 	#[error("Send error: {0}")]
 	SendError(String),
+	/// Failed to receive a message from the channel.
 	#[error("Receive error: {0}")]
 	ReceiveError(String),
+	/// The specified channel was not found.
 	#[error("Channel not found: {0}")]
 	ChannelNotFound(String),
+	/// The specified group was not found.
 	#[error("Group not found: {0}")]
 	GroupNotFound(String),
+	/// Failed to serialize or deserialize a message.
 	#[error("Serialization error: {0}")]
 	SerializationError(String),
+	/// Authentication is required to connect to the backing store.
 	#[error("Authentication required for Redis connection")]
 	AuthenticationRequired,
 }

@@ -16,10 +16,13 @@ pub type RouteResult = Result<(), RouteError>;
 /// Routing errors
 #[derive(Debug, thiserror::Error)]
 pub enum RouteError {
+	/// No route was found matching the given path.
 	#[error("Route not found")]
 	NotFound(String),
+	/// A route with the same path pattern already exists.
 	#[error("Route already exists")]
 	AlreadyExists(String),
+	/// The route pattern is malformed.
 	#[error("Invalid route pattern")]
 	InvalidPattern(String),
 }

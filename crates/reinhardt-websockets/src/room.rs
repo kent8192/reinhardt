@@ -13,18 +13,24 @@ use tokio::sync::RwLock;
 /// Error types for room operations
 #[derive(Debug, thiserror::Error)]
 pub enum RoomError {
+	/// The specified client was not found in the room.
 	#[error("Client not found")]
 	ClientNotFound(String),
+	/// The specified room does not exist.
 	#[error("Room not found")]
 	RoomNotFound(String),
+	/// A client with the same ID already exists in the room.
 	#[error("Client already exists")]
 	ClientAlreadyExists(String),
+	/// An underlying WebSocket error occurred.
 	#[error("WebSocket error")]
 	WebSocket(#[from] WebSocketError),
+	/// An error related to room or client metadata.
 	#[error("Metadata error")]
 	Metadata(String),
 }
 
+/// A specialized `Result` type for room operations.
 pub type RoomResult<T> = Result<T, RoomError>;
 
 /// Result of a broadcast operation that tracks individual send outcomes.

@@ -17,18 +17,28 @@ pub type ValidationResult = Result<(), ValidationError>;
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum ValidationError {
+	/// A security-related validation failed (e.g., weak secret key).
 	#[error("Security error: {0}")]
 	Security(String),
 
+	/// A settings value is invalid for the given key.
 	#[error("Invalid value for '{key}': {message}")]
-	InvalidValue { key: String, message: String },
+	InvalidValue {
+		/// The settings key with the invalid value.
+		key: String,
+		/// Description of why the value is invalid.
+		message: String,
+	},
 
+	/// A required settings field is missing.
 	#[error("Missing required field: {0}")]
 	MissingRequired(String),
 
+	/// A constraint on the settings value was violated.
 	#[error("Constraint violation: {0}")]
 	Constraint(String),
 
+	/// Multiple validation errors occurred.
 	#[error("Multiple validation errors: {0:?}")]
 	Multiple(Vec<ValidationError>),
 }

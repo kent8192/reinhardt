@@ -1,7 +1,6 @@
 //! PKCE (Proof Key for Code Exchange) flow tests
 
 use reinhardt_auth::social::flow::PkceFlow;
-use rstest::*;
 
 #[test]
 fn test_pkce_verifier_valid_length() {

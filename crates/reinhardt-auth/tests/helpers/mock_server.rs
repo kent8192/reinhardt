@@ -16,13 +16,17 @@ use tokio::net::TcpListener;
 
 /// Mock server configuration
 #[derive(Clone)]
-pub struct MockConfig {
-	pub authorization_endpoint: String,
-	pub token_endpoint: String,
-	pub userinfo_endpoint: Option<String>,
-	pub jwks_endpoint: Option<String>,
-	pub discovery_endpoint: Option<String>,
-	pub redirect_uri: String,
+pub(crate) struct MockConfig {
+	pub(crate) authorization_endpoint: String,
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) token_endpoint: String,
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) userinfo_endpoint: Option<String>,
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) jwks_endpoint: Option<String>,
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) discovery_endpoint: Option<String>,
+	pub(crate) redirect_uri: String,
 }
 
 impl MockConfig {
@@ -41,11 +45,15 @@ impl MockConfig {
 
 /// Error simulation mode
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ErrorMode {
+pub(crate) enum ErrorMode {
 	Success,
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
 	NetworkError,
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
 	InvalidResponse,
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
 	Unauthorized,
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
 	ServerError,
 }
 
@@ -57,6 +65,7 @@ struct MockServerState {
 	auth_code: Option<String>,
 	token_response: Option<TokenResponse>,
 	userinfo_response: Option<StandardClaims>,
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
 	id_token: Option<IdToken>,
 	discovery_response: Option<String>,
 	jwks_response: Option<String>,
@@ -65,14 +74,15 @@ struct MockServerState {
 }
 
 /// Mock OAuth2/OIDC server for testing
-pub struct MockOAuth2Server {
+pub(crate) struct MockOAuth2Server {
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
 	state: Arc<Mutex<MockServerState>>,
 	local_addr: SocketAddr,
 }
 
 impl MockOAuth2Server {
 	/// Create a new mock server
-	pub async fn new() -> Self {
+	pub(crate) async fn new() -> Self {
 		// Start the server first to get the actual address
 		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
 		let local_addr = listener.local_addr().unwrap();
@@ -121,7 +131,8 @@ impl MockOAuth2Server {
 	}
 
 	/// Enable OIDC endpoints (discovery, JWKS)
-	pub fn with_oidc(self) -> Self {
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) fn with_oidc(self) -> Self {
 		{
 			let mut state = self.state.lock().unwrap();
 			state.oidc_enabled = true;
@@ -130,7 +141,8 @@ impl MockOAuth2Server {
 	}
 
 	/// Disable OIDC endpoints (discovery, JWKS)
-	pub fn without_oidc(self) -> Self {
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) fn without_oidc(self) -> Self {
 		{
 			let mut state = self.state.lock().unwrap();
 			state.oidc_enabled = false;
@@ -139,7 +151,8 @@ impl MockOAuth2Server {
 	}
 
 	/// Enable UserInfo endpoint
-	pub fn with_userinfo(self) -> Self {
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) fn with_userinfo(self) -> Self {
 		{
 			let mut state = self.state.lock().unwrap();
 			state.userinfo_enabled = true;
@@ -148,7 +161,8 @@ impl MockOAuth2Server {
 	}
 
 	/// Disable UserInfo endpoint
-	pub fn without_userinfo(self) -> Self {
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) fn without_userinfo(self) -> Self {
 		{
 			let mut state = self.state.lock().unwrap();
 			state.userinfo_enabled = false;
@@ -157,68 +171,80 @@ impl MockOAuth2Server {
 	}
 
 	/// Set authorization response code
-	pub fn set_auth_response(&mut self, code: &str) {
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) fn set_auth_response(&mut self, code: &str) {
 		let mut state = self.state.lock().unwrap();
 		state.auth_code = Some(code.to_string());
 	}
 
 	/// Set token response
-	pub fn set_token_response(&mut self, response: TokenResponse) {
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) fn set_token_response(&mut self, response: TokenResponse) {
 		let mut state = self.state.lock().unwrap();
 		state.token_response = Some(response);
 	}
 
 	/// Set userinfo response
-	pub fn set_userinfo_response(&mut self, claims: StandardClaims) {
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) fn set_userinfo_response(&mut self, claims: StandardClaims) {
 		let mut state = self.state.lock().unwrap();
 		state.userinfo_response = Some(claims);
 	}
 
 	/// Set discovery document (OIDC)
-	pub fn set_discovery_response(&mut self, discovery: &str) {
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) fn set_discovery_response(&mut self, discovery: &str) {
 		let mut state = self.state.lock().unwrap();
 		state.discovery_response = Some(discovery.to_string());
 	}
 
 	/// Set JWKS response (OIDC)
-	pub fn set_jwks_response(&mut self, jwks: &str) {
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) fn set_jwks_response(&mut self, jwks: &str) {
 		let mut state = self.state.lock().unwrap();
 		state.jwks_response = Some(jwks.to_string());
 	}
 
 	/// Set error mode
-	pub fn set_error_mode(&mut self, mode: ErrorMode) {
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) fn set_error_mode(&mut self, mode: ErrorMode) {
 		let mut state = self.state.lock().unwrap();
 		state.error_mode = mode;
 	}
 
 	/// Get the base URL for this server
-	pub fn base_url(&self) -> String {
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) fn base_url(&self) -> String {
 		format!("http://{}", self.local_addr)
 	}
 
 	/// Get authorization URL
-	pub fn authorization_url(&self) -> String {
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) fn authorization_url(&self) -> String {
 		format!("http://{}/authorize", self.local_addr)
 	}
 
 	/// Get token URL
-	pub fn token_url(&self) -> String {
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) fn token_url(&self) -> String {
 		format!("http://{}/token", self.local_addr)
 	}
 
 	/// Get userinfo URL
-	pub fn userinfo_url(&self) -> Option<String> {
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) fn userinfo_url(&self) -> Option<String> {
 		Some(format!("http://{}/userinfo", self.local_addr))
 	}
 
 	/// Get JWKS URL
-	pub fn jwks_url(&self) -> Option<String> {
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) fn jwks_url(&self) -> Option<String> {
 		Some(format!("http://{}/jwks", self.local_addr))
 	}
 
 	/// Get discovery URL
-	pub fn discovery_url(&self) -> Option<String> {
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) fn discovery_url(&self) -> Option<String> {
 		Some(format!(
 			"http://{}/.well-known/openid-configuration",
 			self.local_addr
@@ -226,7 +252,8 @@ impl MockOAuth2Server {
 	}
 
 	/// Get the server port
-	pub fn port(&self) -> u16 {
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) fn port(&self) -> u16 {
 		self.local_addr.port()
 	}
 }

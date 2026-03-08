@@ -21,6 +21,7 @@ use std::collections::HashMap;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // test helper struct with derived traits
 struct TestModel {
 	id: i64,
 	name: String,

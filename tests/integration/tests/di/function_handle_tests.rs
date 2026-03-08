@@ -14,6 +14,7 @@ fn create_test_number() -> i32 {
 	42
 }
 
+#[allow(dead_code)] // test helper function reserved for future test cases
 fn create_another_string() -> String {
 	"another_production".to_string()
 }

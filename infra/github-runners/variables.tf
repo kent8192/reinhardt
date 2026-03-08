@@ -39,9 +39,9 @@ variable "github_repository" {
 }
 
 variable "runner_instance_types" {
-  description = "EC2 Spot fleet instance type candidates (priority order). c6a first for cost."
+  description = "EC2 Spot fleet Graviton instance type candidates (priority order)."
   type        = list(string)
-  default     = ["c6a.2xlarge", "c6i.2xlarge", "c5a.2xlarge"]
+  default     = ["c7g.2xlarge", "c6g.2xlarge"]
 }
 
 variable "runner_max_count" {
@@ -77,4 +77,10 @@ variable "monthly_budget_limit_usd" {
 variable "budget_alert_email" {
   description = "Email address for budget alert notifications"
   type        = string
+}
+
+variable "runner_ami_ssm_parameter_name" {
+  description = "SSM Parameter name storing the Golden AMI ID (managed by build-runner-ami workflow)"
+  type        = string
+  default     = "/reinhardt-ci/runner-ami-id"
 }

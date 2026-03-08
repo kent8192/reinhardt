@@ -2,7 +2,7 @@
 
 use chrono::{Duration, Utc};
 use reinhardt_auth::social::flow::{InMemoryStateStore, StateData, StateStore};
-use rstest::*;
+
 use std::sync::Arc;
 
 #[tokio::test]

@@ -644,8 +644,6 @@ mod tests {
 
 	#[test]
 	fn test_priority_comparison() {
-		use std::cmp::Ordering;
-
 		// Ordering is based on weight values
 		assert!(Priority::High > Priority::Normal);
 		assert!(Priority::Normal > Priority::Low);

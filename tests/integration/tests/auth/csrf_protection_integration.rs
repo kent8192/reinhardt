@@ -526,7 +526,7 @@ async fn fuzz_random_csrf_token_validation() {
 fn generate_csrf_token() -> String {
 	use rand::Rng;
 	let mut rng = rand::rng();
-	let bytes: Vec<u8> = (0..32).map(|_| rng.r#gen()).collect();
+	let bytes: Vec<u8> = (0..32).map(|_| rng.random()).collect();
 	hex::encode(bytes)
 }
 

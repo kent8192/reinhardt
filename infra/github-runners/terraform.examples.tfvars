@@ -23,7 +23,7 @@ github_owner      = "<github-username>"
 github_repository = "reinhardt-web"
 
 # Runner configuration (defaults tuned for reinhardt CI workload)
-runner_instance_types = ["c6a.2xlarge", "c6i.2xlarge", "c5a.2xlarge"]
+runner_instance_types = ["c7g.2xlarge", "c6g.2xlarge"]
 runner_max_count      = 30
 runner_extra_labels   = ["reinhardt-ci"]
 runner_ebs_size_gb    = 200

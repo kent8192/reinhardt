@@ -2,7 +2,6 @@
 
 use reinhardt_auth::social::core::OAuth2Client;
 use reinhardt_auth::social::oidc::{Jwk, JwkSet, JwksCache};
-use rstest::*;
 
 #[test]
 fn test_jwk_set_structure() {

@@ -227,6 +227,7 @@ mod tests {
 	use std::sync::atomic::{AtomicU64, Ordering};
 
 	#[derive(Debug)]
+	#[allow(dead_code)] // used through trait object (dyn Task + TaskExecutor)
 	struct DummyTask {
 		id: TaskId,
 	}

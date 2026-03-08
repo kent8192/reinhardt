@@ -16,7 +16,6 @@ use reinhardt_db::migrations::{
 	ColumnDefinition, FieldMetadata, FieldType, ModelMetadata, ModelRegistry,
 };
 use rstest::*;
-use std::collections::HashMap;
 
 // ============================================================================
 // Issue #1705: FieldMetadata → FieldState Mapping Tests

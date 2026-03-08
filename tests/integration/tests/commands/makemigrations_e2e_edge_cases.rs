@@ -85,6 +85,7 @@ fn migration_exists(migrations_dir: &PathBuf, app_label: &str, name: &str) -> bo
 }
 
 /// Helper to read migration file content
+#[allow(dead_code)] // helper function for migration file reading
 fn read_migration_file(migrations_dir: &PathBuf, app_label: &str, name: &str) -> String {
 	let file_path = migrations_dir.join(app_label).join(format!("{}.rs", name));
 	fs::read_to_string(file_path).expect("Failed to read migration file")
@@ -521,7 +522,7 @@ async fn ec_mm_03_01_concurrent_migration_creation() {
 
 	for i in 0..5 {
 		let temp_dir = temp_dir.clone();
-		let migrations_path = migrations_path.clone();
+		let _migrations_path = migrations_path.clone();
 
 		let handle = tokio::spawn(async move {
 			// Simulate concurrent migration creation

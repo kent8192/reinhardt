@@ -1,7 +1,6 @@
 //! Error handling tests
 
 use reinhardt_auth::social::core::SocialAuthError;
-use rstest::*;
 
 #[test]
 fn test_error_network() {

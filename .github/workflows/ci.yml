@@ -13,7 +13,13 @@ permissions:
   security-events: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  group: >-
+    ${{ github.workflow }}-${{
+      startsWith(github.head_ref || '', 'release-plz-')
+        && 'release-plz'
+        || github.head_ref
+        || github.run_id
+    }}
   cancel-in-progress: true
 
 env:
@@ -63,9 +69,10 @@ jobs:
             const infraChanged = files.some(f => f.filename.startsWith('infra/'));
             core.setOutput('infra-changed', infraChanged.toString());
 
-  # Determine runner type based on whether the actor is the repository owner.
-  # Repository owner uses self-hosted AWS Spot runners (faster, ~$70/month).
-  # Other contributors use GitHub-hosted ubuntu-latest (free but slower).
+  # Determine runner type for CI jobs.
+  # - release-plz PRs (branch: release-plz-*): auto-assigned self-hosted runner
+  # - Repository owner PRs: self-hosted via checkbox opt-in
+  # - Other contributors: GitHub-hosted ubuntu-latest (free but slower)
   # Self-hosted runners require SELF_HOSTED_ENABLED variable to be explicitly "true".
   # AWS Budget circuit breaker sets this to "false" when monthly cost is exceeded.
   determine-runner:
@@ -94,9 +101,16 @@ jobs:
           SELF_HOSTED_ENABLED: ${{ vars.SELF_HOSTED_ENABLED }}
           EVENT_NAME: ${{ github.event_name }}
           SELF_HOSTED_REQUESTED: ${{ steps.parse-checkbox.outputs.self-hosted-requested }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           USE_SELF_HOSTED=false
-          if [[ "$ACTOR" == "$REPO_OWNER" ]] && [[ "$SELF_HOSTED_ENABLED" == "true" ]]; then
+
+          # release-plz PRs: auto-assign self-hosted runner (bypass actor check).
+          # Only push-access users can create release-plz-* branches.
+          # Budget circuit breaker is still respected.
+          if [[ "$HEAD_REF" == release-plz-* ]] && [[ "$SELF_HOSTED_ENABLED" == "true" ]]; then
+            USE_SELF_HOSTED=true
+          elif [[ "$ACTOR" == "$REPO_OWNER" ]] && [[ "$SELF_HOSTED_ENABLED" == "true" ]]; then
             if [[ "$EVENT_NAME" == "pull_request" ]]; then
               # PR: require explicit checkbox opt-in (default: false)
               if [[ "$SELF_HOSTED_REQUESTED" == "true" ]]; then

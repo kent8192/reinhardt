@@ -70,7 +70,7 @@ cargo make runserver
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.2", package = "reinhardt-web", features = ["minimal"] }
+reinhardt = { version = "0.1.0", package = "reinhardt-web", features = ["minimal"] }
 ```
 
 ```rust
@@ -132,14 +132,13 @@ Reinhardt follows a **three-phase lifecycle** for every crate:
 | **RC** (`0.x.0-rc.N`) | API frozen. Bug fixes only. Safe to build against. |
 | **Stable** (`0.x.0`) | Full SemVer 2.0 guarantees. |
 
-**Current status:** All crates are at `0.1.0-rc` (Release Candidate).
+**Current status:** All crates are at `0.1.0` (Stable).
 
 **What this means for you:**
-- Public APIs will only change to fix critical bugs -- no new features or additions
-- If a critical fix requires an API change, a migration guide is provided
-- Naming improvements use deprecation aliases (your existing code keeps compiling)
-- Bug fixes are shipped as `rc.2`, `rc.3`, etc.
-- Stable `0.1.0` will be released after a 2-week stability period with no critical issues
+- Full SemVer 2.0 guarantees apply
+- Public APIs will not have breaking changes within the same major version
+- Bug fixes are shipped as patch releases (`0.1.1`, `0.1.2`, etc.)
+- New features are added in minor releases (`0.2.0`, `0.3.0`, etc.)
 
 For the full stability policy, see [API Stability Policy](docs/API_STABILITY.md).
 
@@ -158,7 +157,7 @@ Get all features with zero configuration:
 [dependencies]
 # Import as 'reinhardt', published as 'reinhardt-web'
 # Default enables ALL features (full bundle)
-reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web" }
+reinhardt = { version = "0.1.0", package = "reinhardt-web" }
 ```
 
 **Includes:** Database, Auth, REST API, Admin, GraphQL, WebSockets, Cache, i18n, Mail, Sessions, Static Files, Storage
@@ -177,7 +176,7 @@ For most projects that don't need all features:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web", default-features = false, features = ["standard"] }
+reinhardt = { version = "0.1.0", package = "reinhardt-web", default-features = false, features = ["standard"] }
 ```
 
 **Includes:** Core, Database (PostgreSQL), REST API, Auth, Middleware, Pages (WASM Frontend with SSR)
@@ -190,7 +189,7 @@ Lightweight and fast, perfect for simple APIs:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web", default-features = false, features = ["minimal"] }
+reinhardt = { version = "0.1.0", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 ```
 
 **Includes:** HTTP, routing, DI, parameter extraction, server
@@ -204,24 +203,24 @@ Install only the components you need:
 ```toml
 [dependencies]
 # Core components
-reinhardt-http = "0.1.0-rc.1"
-reinhardt-urls = "0.1.0-rc.1"
+reinhardt-http = "0.1.0"
+reinhardt-urls = "0.1.0"
 
 # Optional: Database
-reinhardt-db = "0.1.0-rc.1"
+reinhardt-db = "0.1.0"
 
 # Optional: Authentication
-reinhardt-auth = "0.1.0-rc.1"
+reinhardt-auth = "0.1.0"
 
 # Optional: REST API features
-reinhardt-rest = "0.1.0-rc.1"
+reinhardt-rest = "0.1.0"
 
 # Optional: Admin panel
-reinhardt-admin = "0.1.0-rc.1"
+reinhardt-admin = "0.1.0"
 
 # Optional: Advanced features
-reinhardt-graphql = "0.1.0-rc.1"
-reinhardt-websockets = "0.1.0-rc.1"
+reinhardt-graphql = "0.1.0"
+reinhardt-websockets = "0.1.0"
 ```
 
 **📖 For a complete list of available crates and feature flags, see the [Feature Flags Guide](https://reinhardt-web.dev/docs/feature-flags/).**

@@ -612,6 +612,9 @@ impl InjectionContext {
 	}
 }
 
+/// Context for per-request dependency injection resolution.
+///
+/// Wraps an `InjectionContext` with request-scoped lifetime management.
 pub struct RequestContext {
 	injection_ctx: InjectionContext,
 }

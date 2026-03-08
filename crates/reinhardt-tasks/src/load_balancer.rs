@@ -55,8 +55,11 @@ pub enum LoadBalancingStrategy {
 /// ```
 #[derive(Debug)]
 pub struct WorkerInfo {
+	/// Unique identifier for this worker.
 	pub id: WorkerId,
+	/// Weight used for weighted load balancing strategies.
 	pub weight: u32,
+	/// Number of currently active tasks on this worker.
 	pub active_tasks: AtomicUsize,
 }
 
@@ -116,8 +119,11 @@ impl WorkerInfo {
 /// ```
 #[derive(Debug, Clone)]
 pub struct WorkerMetrics {
+	/// Total number of successfully completed tasks.
 	pub tasks_completed: u64,
+	/// Total number of failed tasks.
 	pub tasks_failed: u64,
+	/// Average execution time across all completed tasks.
 	pub average_execution_time: Duration,
 }
 

@@ -41,8 +41,11 @@
 //! # }
 //! ```
 
+/// CockroachDB connection management.
 pub mod connection;
+/// CockroachDB distributed transaction support.
 pub mod distributed_tx;
+/// CockroachDB schema editor implementation.
 pub mod schema;
 
 pub use connection::{CockroachDBConnection, CockroachDBConnectionConfig};

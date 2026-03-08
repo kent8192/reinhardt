@@ -10,8 +10,9 @@ use std::ops::Deref;
 
 use super::{ParamContext, ParamError, ParamResult, extract::FromRequest};
 
-/// Marker trait for header names
+/// Marker trait for header names.
 pub trait HeaderName {
+	/// The name of the HTTP header to extract.
 	const NAME: &'static str;
 }
 

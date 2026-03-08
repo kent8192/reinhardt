@@ -3,12 +3,19 @@ use chrono::NaiveTime;
 
 /// TimeField for time input
 pub struct TimeField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Optional human-readable label for display.
 	pub label: Option<String>,
+	/// Whether this field must be filled in.
 	pub required: bool,
+	/// Optional help text displayed alongside the field.
 	pub help_text: Option<String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<serde_json::Value>,
+	/// Accepted time format strings (strftime patterns).
 	pub input_formats: Vec<String>,
 }
 

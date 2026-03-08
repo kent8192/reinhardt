@@ -4,20 +4,28 @@ use std::io;
 use std::path::PathBuf;
 use tracing;
 
+/// Errors that can occur when serving static files.
 #[derive(Debug, thiserror::Error)]
 pub enum StaticError {
+	/// The requested file was not found.
 	#[error("File not found: {0}")]
 	NotFound(String),
+	/// A directory traversal attack was detected and blocked.
 	#[error("Directory traversal blocked: {0}")]
 	DirectoryTraversal(String),
+	/// An underlying I/O error occurred.
 	#[error("IO error: {0}")]
 	Io(#[from] io::Error),
 }
 
+/// A static file that has been read from disk, including its content and metadata.
 #[derive(Debug)]
 pub struct StaticFile {
+	/// The raw file content.
 	pub content: Vec<u8>,
+	/// The resolved filesystem path of the file.
 	pub path: PathBuf,
+	/// The MIME type of the file (e.g., `"text/css"`).
 	pub mime_type: String,
 }
 
@@ -33,12 +41,14 @@ impl StaticFile {
 	}
 }
 
+/// Serves static files from a root directory with directory traversal protection.
 pub struct StaticFileHandler {
 	root: PathBuf,
 	index_files: Vec<String>,
 }
 
 impl StaticFileHandler {
+	/// Creates a new handler serving files from the given root directory.
 	pub fn new(root: PathBuf) -> Self {
 		Self {
 			root,
@@ -65,6 +75,7 @@ impl StaticFileHandler {
 		self
 	}
 
+	/// Reads and returns the static file at the given path, resolving index files for directories.
 	pub async fn serve(&self, path: &str) -> Result<StaticFile, StaticError> {
 		let resolved = self.resolve_path(path).await?;
 		let content = fs::read(&resolved)?;
@@ -77,6 +88,7 @@ impl StaticFileHandler {
 		})
 	}
 
+	/// Resolves and validates a request path to an absolute filesystem path within the root.
 	pub async fn resolve_path(&self, path: &str) -> Result<PathBuf, StaticError> {
 		let path = path.trim_start_matches('/');
 
@@ -131,4 +143,5 @@ impl StaticFileHandler {
 	}
 }
 
+/// A convenience type alias for `Result<T, StaticError>`.
 pub type StaticResult<T> = Result<T, StaticError>;

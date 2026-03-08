@@ -6,8 +6,11 @@ use chrono::{DateTime, Utc};
 /// Migration record
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MigrationRecord {
+	/// The app.
 	pub app: String,
+	/// The name.
 	pub name: String,
+	/// The applied.
 	pub applied: DateTime<Utc>,
 }
 
@@ -22,12 +25,14 @@ pub struct DatabaseMigrationRecorder {
 }
 
 impl MigrationRecorder {
+	/// Creates a new instance.
 	pub fn new() -> Self {
 		Self {
 			records: Vec::new(),
 		}
 	}
 
+	/// Performs the record applied operation.
 	pub fn record_applied(&mut self, app: &str, name: &str) {
 		self.records.push(MigrationRecord {
 			app: app.to_string(),
@@ -36,23 +41,28 @@ impl MigrationRecorder {
 		});
 	}
 
+	/// Returns the applied migrations.
 	pub fn get_applied_migrations(&self) -> &[MigrationRecord] {
 		&self.records
 	}
 
+	/// Returns the pplied.
 	pub fn is_applied(&self, app: &str, name: &str) -> bool {
 		self.records.iter().any(|r| r.app == app && r.name == name)
 	}
 
+	/// Performs the ensure schema table operation.
 	pub fn ensure_schema_table(&self) {
 		// Ensure migration schema table exists
 	}
 
 	// Async versions for database operations
+	/// Performs the ensure schema table async operation.
 	pub async fn ensure_schema_table_async<T>(&self, _pool: &T) -> super::Result<()> {
 		Ok(())
 	}
 
+	/// Returns the pplied async.
 	pub async fn is_applied_async<T>(
 		&self,
 		_pool: &T,
@@ -62,6 +72,7 @@ impl MigrationRecorder {
 		Ok(self.is_applied(app, name))
 	}
 
+	/// Performs the record applied async operation.
 	pub async fn record_applied_async<T>(
 		&mut self,
 		_pool: &T,
@@ -135,6 +146,7 @@ impl DatabaseMigrationRecorder {
 		Self { connection }
 	}
 
+	/// Performs the ensure schema table operation.
 	pub async fn ensure_schema_table(&self) -> super::Result<()> {
 		// Acquire advisory lock to prevent concurrent schema modifications
 		self.acquire_schema_lock().await?;

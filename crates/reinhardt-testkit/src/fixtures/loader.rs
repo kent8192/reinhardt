@@ -4,16 +4,21 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Errors that can occur during fixture loading.
 #[derive(Debug, thiserror::Error)]
 pub enum FixtureError {
+	/// The requested fixture file was not found.
 	#[error("Fixture not found: {0}")]
 	NotFound(String),
+	/// An error occurred while reading the fixture file.
 	#[error("Load error: {0}")]
 	Load(String),
+	/// An error occurred while parsing the fixture content.
 	#[error("Parse error: {0}")]
 	Parse(String),
 }
 
+/// Result type for fixture loading operations.
 pub type FixtureResult<T> = Result<T, FixtureError>;
 
 /// Fixture data loader
@@ -175,7 +180,9 @@ impl Default for FixtureLoader {
 
 /// Factory trait for creating test data
 pub trait Factory<T>: Send + Sync {
+	/// Build a single instance of the test data type.
 	fn build(&self) -> T;
+	/// Build multiple instances of the test data type.
 	fn build_batch(&self, count: usize) -> Vec<T> {
 		(0..count).map(|_| self.build()).collect()
 	}

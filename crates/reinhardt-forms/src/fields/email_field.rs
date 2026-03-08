@@ -6,13 +6,21 @@ use regex::Regex;
 /// Email field with format validation
 #[derive(Debug, Clone)]
 pub struct EmailField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Optional human-readable label for display.
 	pub label: Option<String>,
+	/// Whether this field must be filled in.
 	pub required: bool,
+	/// Optional help text displayed alongside the field.
 	pub help_text: Option<String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<serde_json::Value>,
+	/// Maximum allowed character count (defaults to 320 per RFC).
 	pub max_length: Option<usize>,
+	/// Minimum required character count.
 	pub min_length: Option<usize>,
 }
 

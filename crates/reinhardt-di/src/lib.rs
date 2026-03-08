@@ -188,6 +188,8 @@
 //! # }
 //! ```
 
+#![warn(missing_docs)]
+
 pub mod params;
 
 pub mod context;

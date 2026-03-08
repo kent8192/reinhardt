@@ -25,11 +25,14 @@ use std::sync::Arc;
 /// (serde_json::Value), not statically-typed models.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminRecord {
+	/// The primary key identifier for the admin record.
 	pub id: Option<i64>,
 }
 
+/// Field accessors for `AdminRecord` used in typed query construction.
 #[derive(Debug, Clone)]
 pub struct AdminRecordFields {
+	/// Typed field accessor for the `id` column.
 	pub id: reinhardt_db::orm::query_fields::Field<AdminRecord, Option<i64>>,
 }
 
@@ -40,6 +43,7 @@ impl Default for AdminRecordFields {
 }
 
 impl AdminRecordFields {
+	/// Creates a new set of field accessors with default column names.
 	pub fn new() -> Self {
 		Self {
 			id: reinhardt_db::orm::query_fields::Field::new(vec!["id".to_string()]),

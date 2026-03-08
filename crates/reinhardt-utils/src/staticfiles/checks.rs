@@ -5,20 +5,31 @@
 
 use super::StaticFilesConfig;
 
+/// Severity level for a configuration check message.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CheckLevel {
+	/// Detailed diagnostic information.
 	Debug,
+	/// General informational note about the configuration.
 	Info,
+	/// A potential misconfiguration that may cause issues.
 	Warning,
+	/// A configuration error that should be fixed.
 	Error,
+	/// A severe misconfiguration that prevents proper operation.
 	Critical,
 }
 
+/// A diagnostic message produced by a configuration check.
 #[derive(Debug, Clone)]
 pub struct CheckMessage {
+	/// The severity level of this message.
 	pub level: CheckLevel,
+	/// A unique identifier for this check (e.g., `"static.E001"`).
 	pub id: String,
+	/// A human-readable description of the issue.
 	pub message: String,
+	/// An optional suggestion for how to fix the issue.
 	pub hint: Option<String>,
 }
 

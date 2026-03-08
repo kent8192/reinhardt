@@ -8,14 +8,19 @@ use std::path::{Component, Path, PathBuf};
 /// Errors that can occur during safe path operations
 #[derive(Debug, thiserror::Error)]
 pub enum PathTraversalError {
+	/// The input contains `..` components that would traverse above the base directory.
 	#[error("Path traversal detected: input contains parent directory reference")]
 	ParentTraversal,
+	/// The input is an absolute path, which is not allowed for user-provided paths.
 	#[error("Absolute path not allowed in user input")]
 	AbsolutePath,
+	/// The resolved path falls outside the allowed base directory.
 	#[error("Path escapes base directory")]
 	EscapesBase,
+	/// The input contains a null byte, which is not allowed in file paths.
 	#[error("Path contains null byte")]
 	NullByte,
+	/// An I/O error occurred during path canonicalization.
 	#[error("IO error during path resolution: {0}")]
 	Io(#[from] std::io::Error),
 }

@@ -10,12 +10,16 @@ use std::sync::RwLock;
 /// Represents a content type (model) in the system
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ContentType {
+	/// The id.
 	pub id: Option<i64>,
+	/// The app label.
 	pub app_label: String,
+	/// The model.
 	pub model: String,
 }
 
 impl ContentType {
+	/// Creates a new instance.
 	pub fn new(app_label: impl Into<String>, model: impl Into<String>) -> Self {
 		Self {
 			id: None,
@@ -24,6 +28,7 @@ impl ContentType {
 		}
 	}
 
+	/// Sets the id and returns self for chaining.
 	pub fn with_id(mut self, id: i64) -> Self {
 		self.id = Some(id);
 		self
@@ -48,6 +53,7 @@ pub struct ContentTypeRegistry {
 }
 
 impl ContentTypeRegistry {
+	/// Creates a new instance.
 	pub fn new() -> Self {
 		Self {
 			types: RwLock::new(HashMap::new()),
@@ -152,16 +158,20 @@ impl Default for ContentTypeRegistry {
 
 use once_cell::sync::Lazy;
 
+/// Global content type registry.
 pub static CONTENT_TYPE_REGISTRY: Lazy<ContentTypeRegistry> = Lazy::new(ContentTypeRegistry::new);
 
 /// Generic foreign key field
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenericForeignKey {
+	/// The content type id.
 	pub content_type_id: Option<i64>,
+	/// The object id.
 	pub object_id: Option<i64>,
 }
 
 impl GenericForeignKey {
+	/// Creates a new instance.
 	pub fn new() -> Self {
 		Self {
 			content_type_id: None,
@@ -169,20 +179,24 @@ impl GenericForeignKey {
 		}
 	}
 
+	/// Performs the set operation.
 	pub fn set(&mut self, content_type: &ContentType, object_id: i64) {
 		self.content_type_id = content_type.id;
 		self.object_id = Some(object_id);
 	}
 
+	/// Returns the content type.
 	pub fn get_content_type(&self) -> Option<ContentType> {
 		self.content_type_id
 			.and_then(|id| CONTENT_TYPE_REGISTRY.get_by_id(id))
 	}
 
+	/// Returns the et.
 	pub fn is_set(&self) -> bool {
 		self.content_type_id.is_some() && self.object_id.is_some()
 	}
 
+	/// Performs the clear operation.
 	pub fn clear(&mut self) {
 		self.content_type_id = None;
 		self.object_id = None;
@@ -197,7 +211,9 @@ impl Default for GenericForeignKey {
 
 /// Trait for models that can be targets of generic relations
 pub trait GenericRelatable {
+	/// Returns the content type for this model.
 	fn get_content_type() -> ContentType;
+	/// Returns the object identifier for this instance.
 	fn get_object_id(&self) -> i64;
 }
 
@@ -208,6 +224,7 @@ pub struct GenericRelationQuery {
 }
 
 impl GenericRelationQuery {
+	/// Creates a new instance.
 	pub fn new(content_type: ContentType) -> Self {
 		Self {
 			content_type,
@@ -215,10 +232,12 @@ impl GenericRelationQuery {
 		}
 	}
 
+	/// Adds object.
 	pub fn add_object(&mut self, object_id: i64) {
 		self.object_ids.push(object_id);
 	}
 
+	/// Converts to sql.
 	pub fn to_sql(&self, table: &str) -> String {
 		let ct_id = self.content_type.id.unwrap_or(0);
 		let ids = self

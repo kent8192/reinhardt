@@ -1,3 +1,5 @@
+#![warn(missing_docs)]
+
 //! # Reinhardt Dispatch
 //!
 //! HTTP request dispatching and handler system for Reinhardt framework.

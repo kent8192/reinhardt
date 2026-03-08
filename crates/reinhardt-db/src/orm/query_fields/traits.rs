@@ -40,7 +40,9 @@ impl NumericType for f64 {}
 
 // DateTime type (legacy - prefer chrono types)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+/// Represents a date time.
 pub struct DateTime {
+	/// The timestamp.
 	pub timestamp: i64,
 }
 
@@ -49,9 +51,13 @@ impl DateTimeType for DateTime {}
 
 // Date type (legacy - prefer chrono types)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+/// Represents a date.
 pub struct Date {
+	/// The year.
 	pub year: i32,
+	/// The month.
 	pub month: u8,
+	/// The day.
 	pub day: u8,
 }
 

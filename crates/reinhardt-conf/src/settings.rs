@@ -33,9 +33,13 @@ pub mod audit;
 #[cfg(feature = "hot-reload")]
 pub mod hot_reload;
 
+/// Additional application-level configuration types.
 pub mod config;
+/// Database connection configuration types and helpers.
 pub mod database_config;
+/// Settings documentation and introspection utilities.
 pub mod docs;
+/// Test utilities for settings configuration.
 pub mod testing;
 
 use reinhardt_utils::staticfiles::storage::StaticFilesConfig;

@@ -115,6 +115,7 @@ pub struct PostgresIntrospector {
 
 #[cfg(feature = "postgres")]
 impl PostgresIntrospector {
+	/// Creates a new instance.
 	pub fn new(pool: sqlx::PgPool) -> Self {
 		Self { pool }
 	}
@@ -652,6 +653,7 @@ pub struct MySQLIntrospector {
 
 #[cfg(feature = "mysql")]
 impl MySQLIntrospector {
+	/// Creates a new MySQL introspector with the given pool.
 	pub fn new(pool: sqlx::MySqlPool) -> Self {
 		Self { pool }
 	}
@@ -1016,6 +1018,7 @@ pub struct SQLiteIntrospector {
 
 #[cfg(feature = "sqlite")]
 impl SQLiteIntrospector {
+	/// Creates a new SQLite introspector with the given pool.
 	pub fn new(pool: sqlx::SqlitePool) -> Self {
 		Self { pool }
 	}

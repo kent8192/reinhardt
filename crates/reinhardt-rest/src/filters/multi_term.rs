@@ -57,26 +57,37 @@ pub struct MultiTermSearch;
 /// Search term representation with advanced features
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchTerm {
+	/// The raw search term text.
 	pub value: String,
+	/// The type of search pattern for this term.
 	pub term_type: TermType,
+	/// An optional field name to restrict the search to.
 	pub field: Option<String>,
+	/// The boolean operator used to combine this term with others.
 	pub operator: Operator,
 }
 
 /// Term type for different search patterns
 #[derive(Debug, Clone, PartialEq)]
 pub enum TermType {
+	/// A single word search term.
 	Word,
+	/// An exact phrase search term (e.g., `"hello world"`).
 	Phrase,
+	/// A wildcard pattern search term (e.g., `rust*`).
 	Wildcard,
+	/// A field-specific value search (e.g., `title:rust`).
 	FieldValue,
 }
 
 /// Boolean operators for combining terms
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operator {
+	/// All terms must match.
 	And,
+	/// At least one term must match.
 	Or,
+	/// The term must not match.
 	Not,
 }
 

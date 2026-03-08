@@ -7,8 +7,11 @@ use std::collections::HashMap;
 /// A user-facing message
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
+	/// Severity level of this message.
 	pub level: Level,
+	/// The message text content.
 	pub text: String,
+	/// Additional CSS class tags for rendering.
 	pub extra_tags: Vec<String>,
 }
 

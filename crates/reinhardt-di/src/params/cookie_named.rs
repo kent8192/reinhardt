@@ -10,8 +10,9 @@ use std::ops::Deref;
 
 use super::{ParamContext, ParamError, ParamResult, extract::FromRequest};
 
-/// Marker trait for cookie names
+/// Marker trait for cookie names.
 pub trait CookieName {
+	/// The name of the cookie to extract.
 	const NAME: &'static str;
 }
 

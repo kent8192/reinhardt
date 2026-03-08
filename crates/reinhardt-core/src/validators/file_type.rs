@@ -66,39 +66,68 @@ pub struct FileTypeValidator {
 // Common MIME type constants
 impl FileTypeValidator {
 	// Image MIME types
+
+	/// MIME type for JPEG images (`image/jpeg`).
 	pub const MIME_JPEG: &'static str = "image/jpeg";
+	/// MIME type for PNG images (`image/png`).
 	pub const MIME_PNG: &'static str = "image/png";
+	/// MIME type for GIF images (`image/gif`).
 	pub const MIME_GIF: &'static str = "image/gif";
+	/// MIME type for WebP images (`image/webp`).
 	pub const MIME_WEBP: &'static str = "image/webp";
+	/// MIME type for SVG images (`image/svg+xml`).
 	pub const MIME_SVG: &'static str = "image/svg+xml";
+	/// MIME type for BMP images (`image/bmp`).
 	pub const MIME_BMP: &'static str = "image/bmp";
+	/// MIME type for TIFF images (`image/tiff`).
 	pub const MIME_TIFF: &'static str = "image/tiff";
 
 	// Document MIME types
+
+	/// MIME type for PDF documents (`application/pdf`).
 	pub const MIME_PDF: &'static str = "application/pdf";
+	/// MIME type for legacy Microsoft Word documents (`application/msword`).
 	pub const MIME_DOC: &'static str = "application/msword";
+	/// MIME type for Microsoft Word OOXML documents.
 	pub const MIME_DOCX: &'static str =
 		"application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+	/// MIME type for legacy Microsoft Excel spreadsheets (`application/vnd.ms-excel`).
 	pub const MIME_XLS: &'static str = "application/vnd.ms-excel";
+	/// MIME type for Microsoft Excel OOXML spreadsheets.
 	pub const MIME_XLSX: &'static str =
 		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+	/// MIME type for legacy Microsoft PowerPoint presentations (`application/vnd.ms-powerpoint`).
 	pub const MIME_PPT: &'static str = "application/vnd.ms-powerpoint";
+	/// MIME type for Microsoft PowerPoint OOXML presentations.
 	pub const MIME_PPTX: &'static str =
 		"application/vnd.openxmlformats-officedocument.presentationml.presentation";
 
 	// Text MIME types
+
+	/// MIME type for plain text files (`text/plain`).
 	pub const MIME_TEXT: &'static str = "text/plain";
+	/// MIME type for HTML documents (`text/html`).
 	pub const MIME_HTML: &'static str = "text/html";
+	/// MIME type for CSS stylesheets (`text/css`).
 	pub const MIME_CSS: &'static str = "text/css";
+	/// MIME type for JavaScript files (`text/javascript`).
 	pub const MIME_JS: &'static str = "text/javascript";
+	/// MIME type for JSON data (`application/json`).
 	pub const MIME_JSON: &'static str = "application/json";
+	/// MIME type for XML documents (`application/xml`).
 	pub const MIME_XML: &'static str = "application/xml";
 
 	// Archive MIME types
+
+	/// MIME type for ZIP archives (`application/zip`).
 	pub const MIME_ZIP: &'static str = "application/zip";
+	/// MIME type for RAR archives (`application/x-rar-compressed`).
 	pub const MIME_RAR: &'static str = "application/x-rar-compressed";
+	/// MIME type for 7-Zip archives (`application/x-7z-compressed`).
 	pub const MIME_7Z: &'static str = "application/x-7z-compressed";
+	/// MIME type for TAR archives (`application/x-tar`).
 	pub const MIME_TAR: &'static str = "application/x-tar";
+	/// MIME type for GZIP compressed files (`application/gzip`).
 	pub const MIME_GZIP: &'static str = "application/gzip";
 }
 

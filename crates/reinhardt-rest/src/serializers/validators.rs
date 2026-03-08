@@ -288,6 +288,7 @@ impl<M: Model> UniqueValidator<M> {
 		&self.field_name
 	}
 
+	/// Validates that the given value is unique for this field in the database.
 	pub async fn validate(
 		&self,
 		_connection: &DatabaseConnection,
@@ -471,6 +472,7 @@ impl<M: Model> UniqueTogetherValidator<M> {
 		&self.field_names
 	}
 
+	/// Validates that the combination of field values is unique together in the database.
 	pub async fn validate(
 		&self,
 		_connection: &DatabaseConnection,

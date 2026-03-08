@@ -28,14 +28,30 @@ use std::collections::HashMap;
 pub enum AdminRoute {
 	/// Dashboard route
 	Dashboard,
-	/// List view route
-	List { model_name: String },
-	/// Detail view route
-	Detail { model_name: String, id: String },
-	/// Create form route
-	Create { model_name: String },
-	/// Edit form route
-	Edit { model_name: String, id: String },
+	/// List view route for a specific model.
+	List {
+		/// The name of the model to list.
+		model_name: String,
+	},
+	/// Detail view route for a specific record.
+	Detail {
+		/// The name of the model.
+		model_name: String,
+		/// The record identifier.
+		id: String,
+	},
+	/// Create form route for a specific model.
+	Create {
+		/// The name of the model to create.
+		model_name: String,
+	},
+	/// Edit form route for a specific record.
+	Edit {
+		/// The name of the model.
+		model_name: String,
+		/// The record identifier to edit.
+		id: String,
+	},
 	/// Not found route
 	NotFound,
 }

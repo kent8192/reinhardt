@@ -25,10 +25,15 @@ use hyper::Method;
 /// ```
 #[derive(Debug, Clone)]
 pub struct EndpointMetadata {
+	/// URL path pattern for this endpoint (e.g., "/users/{id}/").
 	pub path: &'static str,
+	/// HTTP method name (e.g., "GET", "POST").
 	pub method: &'static str,
+	/// Optional route name for URL reversal.
 	pub name: Option<&'static str>,
+	/// Name of the handler function.
 	pub function_name: &'static str,
+	/// Module path where the handler is defined.
 	pub module_path: &'static str,
 
 	/// Type name of the request body (e.g., "CreateUserRequest")

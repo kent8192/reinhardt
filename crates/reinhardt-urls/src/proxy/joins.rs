@@ -3,17 +3,24 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+/// Configuration for join operations on proxy relationships.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JoinConfig {
+	/// Whether to eagerly load the relationship.
 	pub eager_load: bool,
+	/// Maximum depth for nested relationship traversal.
 	pub max_depth: Option<usize>,
+	/// Strategy to use when loading the relationship.
 	#[serde(skip)]
 	pub loading_strategy: Option<crate::proxy::LoadingStrategy>,
+	/// SQL join type (e.g., `"LEFT JOIN"`, `"INNER JOIN"`).
 	pub join_type: Option<String>,
+	/// SQL join condition expression.
 	pub condition: Option<String>,
 }
 
 impl JoinConfig {
+	/// Create a new `JoinConfig` with default values.
 	pub fn new() -> Self {
 		Self {
 			eager_load: false,
@@ -78,10 +85,14 @@ impl Default for JoinConfig {
 
 // LoadingStrategy is now re-exported from reinhardt-orm in lib.rs
 
+/// A proxy for traversing nested relationships with conditions.
 #[derive(Debug, Clone)]
 pub struct NestedProxy {
+	/// Sequence of relationship names forming the nested path.
 	pub path: Vec<String>,
+	/// Filter conditions applied along the path.
 	pub conditions: Vec<String>,
+	/// Final attribute to extract from the deepest relationship.
 	pub final_attribute: Option<String>,
 }
 
@@ -469,18 +480,22 @@ fn path_display(path: &[String]) -> String {
 	}
 }
 
+/// Extract relationship segments from a dot-separated path string.
 pub fn extract_through_path(path: &str) -> Vec<String> {
 	path.split('.').map(|s| s.to_string()).collect()
 }
 
+/// Check if any segment in a `RelationshipPath` matches the given predicate.
 pub fn filter_through_path(path: &RelationshipPath, predicate: impl Fn(&str) -> bool) -> bool {
 	path.segments.iter().any(|s| predicate(s))
 }
 
+/// Extract the path segments from a `NestedProxy`.
 pub fn traverse_and_extract(proxy: &NestedProxy) -> Vec<String> {
 	proxy.path.clone()
 }
 
+/// Extract the path segments from a `RelationshipPath`.
 pub fn traverse_relationships(path: &RelationshipPath) -> Vec<String> {
 	path.segments.clone()
 }

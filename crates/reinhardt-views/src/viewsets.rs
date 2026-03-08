@@ -188,20 +188,35 @@
 //! println!("Created: {}, Failed: {}", result.success_count, result.failure_count);
 //! ```
 
+/// Action types and metadata for viewset operations.
 pub mod actions;
+/// Batch create, update, and delete operations.
 pub mod batch_operations;
+/// Builder pattern for constructing viewset handlers.
 pub mod builder;
+/// Cached viewset support with automatic cache invalidation.
 pub mod cached;
+/// Filtering support for viewset list actions.
 pub mod filtering_support;
+/// HTTP handler integration for viewsets.
 pub mod handler;
+/// Dependency-injection-aware viewset support.
 pub mod injectable;
+/// Viewset metadata and action introspection.
 pub mod metadata;
+/// Middleware pipeline for viewset request processing.
 pub mod middleware;
+/// Mixin traits providing individual CRUD actions.
 pub mod mixins;
+/// Nested resource routing for parent-child relationships.
 pub mod nested_resources;
+/// Pagination integration for viewset list actions.
 pub mod pagination_support;
+/// Global viewset registry for auto-discovery.
 pub mod registry;
+/// Schema metadata generation for viewset endpoints.
 pub mod schema_metadata;
+/// Core viewset trait and base implementations.
 pub mod viewset;
 
 pub use actions::{Action, ActionType};

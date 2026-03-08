@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 /// Router trait - composes routes together
 pub trait Router: Send + Sync {
+	/// Add a route to this router.
 	fn add_route(&mut self, route: Route);
 
 	/// Mount routes from another source with a prefix

@@ -3,16 +3,24 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Execution context passed to management commands.
+///
+/// Contains command arguments, options, verbosity level, and optional
+/// application settings needed during command execution.
 #[derive(Debug, Clone)]
 pub struct CommandContext {
+	/// Positional arguments passed to the command.
 	pub args: Vec<String>,
+	/// Named options and their values (each option can have multiple values).
 	pub options: HashMap<String, Vec<String>>,
+	/// Verbosity level (0 = quiet, higher = more output).
 	pub verbosity: u8,
 	/// Optional reference to application settings
 	pub settings: Option<Arc<reinhardt_conf::settings::Settings>>,
 }
 
 impl CommandContext {
+	/// Creates a new command context with the given positional arguments.
 	pub fn new(args: Vec<String>) -> Self {
 		Self {
 			args,
@@ -22,11 +30,13 @@ impl CommandContext {
 		}
 	}
 
+	/// Replaces the positional arguments.
 	pub fn with_args(mut self, args: Vec<String>) -> Self {
 		self.args = args;
 		self
 	}
 
+	/// Replaces the named options map.
 	pub fn with_options(mut self, options: HashMap<String, Vec<String>>) -> Self {
 		self.options = options;
 		self
@@ -38,46 +48,57 @@ impl CommandContext {
 		self
 	}
 
+	/// Returns the positional argument at the given index, if present.
 	pub fn arg(&self, index: usize) -> Option<&String> {
 		self.args.get(index)
 	}
 
+	/// Returns the first value of a named option, if present.
 	pub fn option(&self, key: &str) -> Option<&String> {
 		self.options.get(key).and_then(|v| v.first())
 	}
 
+	/// Returns all values for a named option, if present.
 	pub fn option_values(&self, key: &str) -> Option<Vec<String>> {
 		self.options.get(key).cloned()
 	}
 
+	/// Returns whether a named option is present.
 	pub fn has_option(&self, key: &str) -> bool {
 		self.options.contains_key(key)
 	}
 
+	/// Prints an informational message to stdout.
 	pub fn info(&self, message: &str) {
 		println!("[INFO] {}", message);
 	}
 
+	/// Prints a success message to stdout.
 	pub fn success(&self, message: &str) {
 		println!("[SUCCESS] {}", message);
 	}
 
+	/// Prints a warning message to stderr.
 	pub fn warning(&self, message: &str) {
 		eprintln!("[WARNING] {}", message);
 	}
 
+	/// Prints a verbose message to stdout.
 	pub fn verbose(&self, message: &str) {
 		println!("[VERBOSE] {}", message);
 	}
 
+	/// Prints an error message to stderr.
 	pub fn error(&self, message: &str) {
 		eprintln!("[ERROR] {}", message);
 	}
 
+	/// Sets a single-value named option.
 	pub fn set_option(&mut self, key: String, value: String) {
 		self.options.insert(key, vec![value]);
 	}
 
+	/// Sets a multi-value named option.
 	pub fn set_option_multi(&mut self, key: String, values: Vec<String>) {
 		self.options.insert(key, values);
 	}

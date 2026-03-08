@@ -55,6 +55,7 @@ use crate::{DiResult, context::InjectionContext};
 /// ```
 #[async_trait::async_trait]
 pub trait Injectable: Sized + Send + Sync + 'static {
+	/// Creates an instance of this type by resolving dependencies from the injection context.
 	async fn inject(ctx: &InjectionContext) -> DiResult<Self>;
 
 	/// Inject without using cache (for `cache = false` support).

@@ -15,6 +15,7 @@ pub struct SignalContext {
 }
 
 impl SignalContext {
+	/// Creates a new empty signal context.
 	pub fn new() -> Self {
 		Self {
 			metadata: Arc::new(RwLock::new(HashMap::new())),
@@ -97,6 +98,7 @@ pub struct SignalMetrics {
 }
 
 impl SignalMetrics {
+	/// Creates a new `SignalMetrics` with all counters at zero.
 	pub fn new() -> Self {
 		Self {
 			send_count: 0,

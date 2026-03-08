@@ -13,14 +13,19 @@ pub type AuthResult<T> = Result<T, AuthError>;
 /// Authentication errors
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
+	/// Authentication failed with the given reason.
 	#[error("Authentication failed: {0}")]
 	AuthenticationFailed(String),
+	/// Authorization was denied for the given reason.
 	#[error("Authorization denied: {0}")]
 	AuthorizationDenied(String),
+	/// The provided credentials are invalid.
 	#[error("Invalid credentials")]
 	InvalidCredentials,
+	/// The authentication token has expired.
 	#[error("Token expired")]
 	TokenExpired,
+	/// No authentication credentials were provided.
 	#[error("Missing authentication")]
 	MissingAuthentication,
 }

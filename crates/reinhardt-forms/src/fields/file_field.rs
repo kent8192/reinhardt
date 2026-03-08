@@ -8,13 +8,21 @@ const DEFAULT_IMAGE_MAX_SIZE: u64 = 5 * 1024 * 1024;
 
 /// FileField for file upload
 pub struct FileField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Optional human-readable label for display.
 	pub label: Option<String>,
+	/// Whether a file must be uploaded.
 	pub required: bool,
+	/// Optional help text displayed alongside the field.
 	pub help_text: Option<String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<serde_json::Value>,
+	/// Maximum allowed filename length.
 	pub max_length: Option<usize>,
+	/// Whether to accept empty (zero-byte) files.
 	pub allow_empty_file: bool,
 	/// Maximum file size in bytes. Defaults to 10 MB.
 	pub max_size: u64,
@@ -149,13 +157,21 @@ impl FormField for FileField {
 
 /// ImageField for image upload with additional validation
 pub struct ImageField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Optional human-readable label for display.
 	pub label: Option<String>,
+	/// Whether an image must be uploaded.
 	pub required: bool,
+	/// Optional help text displayed alongside the field.
 	pub help_text: Option<String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<serde_json::Value>,
+	/// Maximum allowed filename length.
 	pub max_length: Option<usize>,
+	/// Whether to accept empty (zero-byte) files.
 	pub allow_empty_file: bool,
 	/// Maximum file size in bytes. Defaults to 5 MB.
 	pub max_size: u64,

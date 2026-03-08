@@ -9,52 +9,71 @@ use serde::{Deserialize, Serialize};
 pub enum PoolEvent {
 	/// Connection acquired from pool
 	ConnectionAcquired {
+		/// The connection id.
 		connection_id: String,
+		/// The timestamp.
 		timestamp: DateTime<Utc>,
 	},
 
 	/// Connection returned to pool
 	ConnectionReturned {
+		/// The connection id.
 		connection_id: String,
+		/// The timestamp.
 		timestamp: DateTime<Utc>,
 	},
 
 	/// New connection created
 	ConnectionCreated {
+		/// The connection id.
 		connection_id: String,
+		/// The timestamp.
 		timestamp: DateTime<Utc>,
 	},
 
 	/// Connection closed
 	ConnectionClosed {
+		/// The connection id.
 		connection_id: String,
+		/// The reason.
 		reason: String,
+		/// The timestamp.
 		timestamp: DateTime<Utc>,
 	},
 
 	/// Connection test failed
 	ConnectionTestFailed {
+		/// The connection id.
 		connection_id: String,
+		/// The error.
 		error: String,
+		/// The timestamp.
 		timestamp: DateTime<Utc>,
 	},
 
 	/// Connection invalidated (hard invalidation)
 	ConnectionInvalidated {
+		/// The connection id.
 		connection_id: String,
+		/// The reason.
 		reason: String,
+		/// The timestamp.
 		timestamp: DateTime<Utc>,
 	},
 
 	/// Connection soft invalidated (can complete current operation)
 	ConnectionSoftInvalidated {
+		/// The connection id.
 		connection_id: String,
+		/// The timestamp.
 		timestamp: DateTime<Utc>,
 	},
 
 	/// Connection reset
 	ConnectionReset {
+		/// The connection id.
 		connection_id: String,
+		/// The timestamp.
 		timestamp: DateTime<Utc>,
 	},
 }
@@ -94,6 +113,7 @@ impl PoolEvent {
 		}
 	}
 
+	/// Performs the connection test failed operation.
 	pub fn connection_test_failed(connection_id: String, error: String) -> Self {
 		Self::ConnectionTestFailed {
 			connection_id,

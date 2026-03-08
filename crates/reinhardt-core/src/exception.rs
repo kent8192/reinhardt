@@ -318,20 +318,35 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorKind {
+	/// HTTP-related errors (400).
 	Http,
+	/// Database-related errors (500).
 	Database,
+	/// Serialization/deserialization errors (400).
 	Serialization,
+	/// Input validation errors (400).
 	Validation,
+	/// Authentication failures (401).
 	Authentication,
+	/// Authorization/permission errors (403).
 	Authorization,
+	/// Resource not found errors (404).
 	NotFound,
+	/// HTTP method not allowed (405).
 	MethodNotAllowed,
+	/// Resource conflict errors (409).
 	Conflict,
+	/// Internal server errors (500).
 	Internal,
+	/// Configuration errors (500).
 	ImproperlyConfigured,
+	/// Request body already consumed (400).
 	BodyAlreadyConsumed,
+	/// Parse errors (400).
 	Parse,
+	/// Parameter validation errors (400).
 	ParamValidation,
+	/// Catch-all for other errors (500).
 	Other,
 }
 

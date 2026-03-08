@@ -168,8 +168,11 @@ fn split_sql_statements(sql: &str) -> Vec<String> {
 }
 
 #[derive(Debug)]
+/// Represents a execution result.
 pub struct ExecutionResult {
+	/// The applied.
 	pub applied: Vec<String>,
+	/// The failed.
 	pub failed: Option<String>,
 }
 
@@ -302,6 +305,7 @@ impl DatabaseMigrationExecutor {
 		}
 	}
 
+	/// Performs the apply migrations operation.
 	pub async fn apply_migrations(&mut self, migrations: &[Migration]) -> Result<ExecutionResult> {
 		let mut applied = Vec::new();
 

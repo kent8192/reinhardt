@@ -16,7 +16,12 @@ pub enum CompositePkError {
 	/// Missing required field value
 	MissingField(String),
 	/// Invalid field value type
-	InvalidFieldType { field: String, expected: String },
+	InvalidFieldType {
+		/// The field name.
+		field: String,
+		/// The expected type name.
+		expected: String,
+	},
 	/// Duplicate field name in definition
 	DuplicateField(String),
 }
@@ -46,9 +51,13 @@ impl std::error::Error for CompositePkError {}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PkValue {
+	/// String variant.
 	String(String),
+	/// Int variant.
 	Int(i64),
+	/// Uint variant.
 	Uint(u64),
+	/// Bool variant.
 	Bool(bool),
 }
 

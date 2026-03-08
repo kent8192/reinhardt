@@ -5,9 +5,13 @@ use std::fmt;
 /// Represents a media type (MIME type)
 #[derive(Debug, Clone, PartialEq)]
 pub struct MediaType {
+	/// Primary type (e.g., "application", "text", "*").
 	pub type_: String,
+	/// Subtype (e.g., "json", "html", "*").
 	pub subtype: String,
+	/// Additional parameters (e.g., charset=utf-8), excluding quality.
 	pub parameters: Vec<(String, String)>,
+	/// Quality factor between 0.0 and 1.0 (higher is preferred).
 	pub quality: f32,
 }
 

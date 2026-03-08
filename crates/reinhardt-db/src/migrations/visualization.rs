@@ -83,9 +83,13 @@ impl OutputFormat {
 /// ```
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
+	/// The app label.
 	pub app_label: String,
+	/// The migration name.
 	pub migration_name: String,
+	/// The applied at.
 	pub applied_at: String,
+	/// The operations count.
 	pub operations_count: usize,
 }
 
@@ -384,9 +388,13 @@ impl Default for MigrationVisualizer {
 /// ```
 #[derive(Debug, Clone)]
 pub struct MigrationStats {
+	/// The total migrations.
 	pub total_migrations: usize,
+	/// The apps count.
 	pub apps_count: usize,
+	/// The total operations.
 	pub total_operations: usize,
+	/// The by app.
 	pub by_app: HashMap<String, usize>,
 }
 

@@ -228,9 +228,13 @@ pub trait InstanceEvents: Send + Sync {
 /// Event listener container
 #[derive(Clone)]
 pub enum EventListener {
+	/// Mapper variant.
 	Mapper(Arc<dyn MapperEvents>),
+	/// Session variant.
 	Session(Arc<dyn SessionEvents>),
+	/// Attribute variant.
 	Attribute(Arc<dyn AttributeEvents>),
+	/// Instance variant.
 	Instance(Arc<dyn InstanceEvents>),
 }
 

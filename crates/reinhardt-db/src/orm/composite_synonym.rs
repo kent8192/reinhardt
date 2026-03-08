@@ -11,8 +11,11 @@ use std::fmt;
 #[non_exhaustive]
 #[derive(Debug)]
 pub enum SynonymError {
+	/// FieldNotFound variant.
 	FieldNotFound(String),
+	/// InvalidCombination variant.
 	InvalidCombination(String),
+	/// ComputationError variant.
 	ComputationError(String),
 }
 
@@ -34,10 +37,15 @@ impl std::error::Error for SynonymError {}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum FieldValue {
+	/// Integer variant.
 	Integer(i64),
+	/// Float variant.
 	Float(f64),
+	/// String variant.
 	String(String),
+	/// Boolean variant.
 	Boolean(bool),
+	/// Null variant.
 	Null,
 }
 

@@ -1,3 +1,5 @@
+#![warn(missing_docs)]
+
 //! # Reinhardt Forms
 //!
 //! Form processing and validation for the Reinhardt framework.

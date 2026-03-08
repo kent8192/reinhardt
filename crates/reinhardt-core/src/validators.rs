@@ -120,6 +120,7 @@ pub mod prelude {
 
 /// Trait for validators
 pub trait Validator<T: ?Sized> {
+	/// Validates the given value, returning an error if validation fails.
 	fn validate(&self, value: &T) -> ValidationResult<()>;
 }
 

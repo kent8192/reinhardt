@@ -52,8 +52,11 @@ pub type MiddlewareFn<T> = Arc<dyn SignalMiddleware<T>>;
 /// Call record for SignalSpy
 #[derive(Debug, Clone)]
 pub struct SignalCall {
+	/// Whether the signal was successfully sent.
 	pub signal_sent: bool,
+	/// Number of receivers that were called.
 	pub receivers_called: usize,
+	/// Error messages from failed receiver executions.
 	pub errors: Vec<String>,
 }
 
@@ -64,6 +67,7 @@ pub struct SignalSpy<T: Send + Sync + 'static> {
 }
 
 impl<T: Send + Sync + 'static> SignalSpy<T> {
+	/// Creates a new signal spy with empty call records.
 	pub fn new() -> Self {
 		Self {
 			calls: Arc::new(RwLock::new(Vec::new())),

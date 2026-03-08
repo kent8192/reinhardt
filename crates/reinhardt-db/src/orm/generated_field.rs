@@ -65,6 +65,7 @@ impl StorageType {
 /// ```
 #[derive(Debug, Clone)]
 pub struct GeneratedField {
+	/// The base.
 	pub base: BaseField,
 	/// SQL expression that generates the column value
 	pub expression: String,

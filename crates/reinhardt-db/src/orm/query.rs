@@ -20,17 +20,29 @@ use uuid::Uuid;
 
 // Django QuerySet API types
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Defines possible filter operator values.
 pub enum FilterOperator {
+	/// Eq variant.
 	Eq,
+	/// Ne variant.
 	Ne,
+	/// Gt variant.
 	Gt,
+	/// Gte variant.
 	Gte,
+	/// Lt variant.
 	Lt,
+	/// Lte variant.
 	Lte,
+	/// In variant.
 	In,
+	/// NotIn variant.
 	NotIn,
+	/// Contains variant.
 	Contains,
+	/// StartsWith variant.
 	StartsWith,
+	/// EndsWith variant.
 	EndsWith,
 	// PostgreSQL array operators
 	/// Array contains all elements (@>)
@@ -69,16 +81,23 @@ pub enum FilterOperator {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Defines possible filter value values.
 pub enum FilterValue {
+	/// String variant.
 	String(String),
+	/// Integer variant.
 	Integer(i64),
 	/// Alias for Integer (for compatibility with test code)
 	Int(i64),
+	/// Float variant.
 	Float(f64),
+	/// Boolean variant.
 	Boolean(bool),
 	/// Alias for Boolean (for compatibility with test code)
 	Bool(bool),
+	/// Null variant.
 	Null,
+	/// Array variant.
 	Array(Vec<String>),
 	/// Field reference for field-to-field comparisons (e.g., WHERE discount_price < total_price)
 	FieldRef(super::expressions::F),
@@ -89,13 +108,18 @@ pub enum FilterValue {
 }
 
 #[derive(Debug, Clone)]
+/// Represents a filter.
 pub struct Filter {
+	/// The field.
 	pub field: String,
+	/// The operator.
 	pub operator: FilterOperator,
+	/// The value.
 	pub value: FilterValue,
 }
 
 impl Filter {
+	/// Creates a new instance.
 	pub fn new(field: impl Into<String>, operator: FilterOperator, value: FilterValue) -> Self {
 		Self {
 			field: field.into(),
@@ -108,10 +132,15 @@ impl Filter {
 /// Values that can be used in UPDATE statements
 #[derive(Debug, Clone)]
 pub enum UpdateValue {
+	/// String variant.
 	String(String),
+	/// Integer variant.
 	Integer(i64),
+	/// Float variant.
 	Float(f64),
+	/// Boolean variant.
 	Boolean(bool),
+	/// Null variant.
 	Null,
 	/// Field reference for field-to-field updates (e.g., SET discount_price = total_price)
 	FieldRef(super::expressions::F),
@@ -292,17 +321,20 @@ impl From<uuid::Uuid> for FilterValue {
 }
 
 #[derive(Debug, Clone)]
+/// Represents a orm query.
 pub struct OrmQuery {
 	filters: Vec<Filter>,
 }
 
 impl OrmQuery {
+	/// Creates a new instance.
 	pub fn new() -> Self {
 		Self {
 			filters: Vec::new(),
 		}
 	}
 
+	/// Performs the filter operation.
 	pub fn filter(mut self, filter: Filter) -> Self {
 		self.filters.push(filter);
 		self
@@ -343,11 +375,17 @@ enum AggregateFunc {
 /// Comparison operators for HAVING clauses
 #[derive(Clone, Debug)]
 pub enum ComparisonOp {
+	/// Eq variant.
 	Eq,
+	/// Ne variant.
 	Ne,
+	/// Gt variant.
 	Gt,
+	/// Gte variant.
 	Gte,
+	/// Lt variant.
 	Lt,
+	/// Lte variant.
 	Lte,
 }
 
@@ -387,6 +425,7 @@ enum SubqueryCondition {
 }
 
 #[derive(Clone)]
+/// Represents a query set.
 pub struct QuerySet<T>
 where
 	T: super::Model,
@@ -419,6 +458,7 @@ impl<T> QuerySet<T>
 where
 	T: super::Model,
 {
+	/// Creates a new instance.
 	pub fn new() -> Self {
 		Self {
 			_phantom: std::marker::PhantomData,
@@ -444,6 +484,7 @@ where
 		}
 	}
 
+	/// Sets the manager and returns self for chaining.
 	pub fn with_manager(manager: std::sync::Arc<super::manager::Manager<T>>) -> Self {
 		Self {
 			_phantom: std::marker::PhantomData,
@@ -469,6 +510,7 @@ where
 		}
 	}
 
+	/// Performs the filter operation.
 	pub fn filter(mut self, filter: Filter) -> Self {
 		self.filters.push(filter);
 		self
@@ -4207,6 +4249,7 @@ where
 		stmt.to_owned()
 	}
 
+	/// Deletes sql.
 	pub fn delete_sql(&self) -> (String, Vec<String>) {
 		let stmt = self.delete_query();
 		use reinhardt_query::prelude::{PostgresQueryBuilder, QueryBuilder};
@@ -4570,6 +4613,7 @@ where
 		self
 	}
 
+	/// Converts to sql.
 	pub fn to_sql(&self) -> String {
 		let mut stmt = if self.select_related_fields.is_empty() {
 			// Simple SELECT without JOINs

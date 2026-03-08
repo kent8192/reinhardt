@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 
 /// Base database function trait
 pub trait DatabaseFunction {
+	/// Converts the function call to its SQL representation.
 	fn to_sql(&self) -> String;
+	/// Returns the SQL function name.
 	fn function_name(&self) -> &'static str;
 }
 
@@ -11,32 +13,53 @@ pub trait DatabaseFunction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cast {
 	expression: Box<AnnotationValue>,
+	/// The target type.
 	pub target_type: SqlType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Defines possible sql type values.
 pub enum SqlType {
+	/// Integer variant.
 	Integer,
+	/// BigInt variant.
 	BigInt,
+	/// SmallInt variant.
 	SmallInt,
+	/// Float variant.
 	Float,
+	/// Real variant.
 	Real,
+	/// Double variant.
 	Double,
+	/// Decimal variant.
 	Decimal {
+		/// The precision.
 		precision: Option<u8>,
+		/// The scale.
 		scale: Option<u8>,
 	},
+	/// Text variant.
 	Text,
+	/// Varchar variant.
 	Varchar {
+		/// The length.
 		length: Option<usize>,
 	},
+	/// Char variant.
 	Char {
+		/// The length.
 		length: usize,
 	},
+	/// Boolean variant.
 	Boolean,
+	/// Date variant.
 	Date,
+	/// Time variant.
 	Time,
+	/// Timestamp variant.
 	Timestamp,
+	/// Json variant.
 	Json,
 }
 
@@ -170,6 +193,7 @@ impl Cast {
 /// Greatest - return the maximum value among expressions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Greatest {
+	/// The expressions.
 	pub expressions: Vec<AnnotationValue>,
 }
 
@@ -204,6 +228,7 @@ impl Greatest {
 /// Least - return the minimum value among expressions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Least {
+	/// The expressions.
 	pub expressions: Vec<AnnotationValue>,
 }
 
@@ -295,6 +320,7 @@ impl NullIf {
 /// Concat - concatenate multiple strings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Concat {
+	/// The expressions.
 	pub expressions: Vec<AnnotationValue>,
 }
 
@@ -479,13 +505,18 @@ impl Length {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Trim {
 	expression: Box<AnnotationValue>,
+	/// The trim type.
 	pub trim_type: TrimType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Defines possible trim type values.
 pub enum TrimType {
+	/// Both variant.
 	Both,
+	/// Leading variant.
 	Leading,
+	/// Trailing variant.
 	Trailing,
 }
 
@@ -756,6 +787,7 @@ impl Floor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Round {
 	expression: Box<AnnotationValue>,
+	/// The decimals.
 	pub decimals: Option<i32>,
 }
 
@@ -956,21 +988,34 @@ impl Sqrt {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Extract {
 	expression: Box<AnnotationValue>,
+	/// The component.
 	pub component: ExtractComponent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Defines possible extract component values.
 pub enum ExtractComponent {
+	/// Year variant.
 	Year,
+	/// Month variant.
 	Month,
+	/// Day variant.
 	Day,
+	/// Hour variant.
 	Hour,
+	/// Minute variant.
 	Minute,
+	/// Second variant.
 	Second,
+	/// Week variant.
 	Week,
+	/// Quarter variant.
 	Quarter,
+	/// WeekDay variant.
 	WeekDay,
+	/// IsoWeekDay variant.
 	IsoWeekDay,
+	/// IsoYear variant.
 	IsoYear,
 }
 

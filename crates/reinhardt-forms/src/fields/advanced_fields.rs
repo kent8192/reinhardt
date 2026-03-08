@@ -29,11 +29,17 @@ use std::collections::HashMap;
 /// ```
 #[derive(Debug, Clone)]
 pub struct UUIDField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Whether this field must be filled in.
 	pub required: bool,
+	/// Custom error messages keyed by error type.
 	pub error_messages: HashMap<String, String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Help text displayed alongside the field.
 	pub help_text: String,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<Value>,
 }
 
@@ -222,11 +228,17 @@ impl FormField for UUIDField {
 /// ```
 #[derive(Debug, Clone)]
 pub struct DurationField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Whether this field must be filled in.
 	pub required: bool,
+	/// Custom error messages keyed by error type.
 	pub error_messages: HashMap<String, String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Help text displayed alongside the field.
 	pub help_text: String,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<Value>,
 }
 
@@ -470,12 +482,19 @@ impl FormField for DurationField {
 /// assert!(result.is_err());
 /// ```
 pub struct ComboField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Whether this field must be filled in.
 	pub required: bool,
+	/// Custom error messages keyed by error type.
 	pub error_messages: HashMap<String, String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Help text displayed alongside the field.
 	pub help_text: String,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<Value>,
+	/// The list of validator fields that all must pass.
 	pub validators: Vec<Box<dyn FormField>>,
 }
 
@@ -618,11 +637,17 @@ impl FormField for ComboField {
 /// ```
 #[derive(Debug, Clone)]
 pub struct ColorField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Whether this field must be filled in.
 	pub required: bool,
+	/// Custom error messages keyed by error type.
 	pub error_messages: HashMap<String, String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Help text displayed alongside the field.
 	pub help_text: String,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<Value>,
 }
 
@@ -804,16 +829,27 @@ pub const PASSWORD_REDACTED: &str = "**********";
 /// ```
 #[derive(Debug, Clone)]
 pub struct PasswordField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Whether this field must be filled in.
 	pub required: bool,
+	/// Custom error messages keyed by error type.
 	pub error_messages: HashMap<String, String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Help text displayed alongside the field.
 	pub help_text: String,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<Value>,
+	/// Minimum required password length.
 	pub min_length: usize,
+	/// Whether the password must contain at least one uppercase letter.
 	pub require_uppercase: bool,
+	/// Whether the password must contain at least one lowercase letter.
 	pub require_lowercase: bool,
+	/// Whether the password must contain at least one digit.
 	pub require_digit: bool,
+	/// Whether the password must contain at least one special character.
 	pub require_special: bool,
 }
 

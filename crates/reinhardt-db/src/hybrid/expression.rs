@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Represents a SQL expression
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SqlExpression {
+	/// The sql.
 	pub sql: String,
 }
 
@@ -150,6 +151,7 @@ impl SqlExpression {
 
 /// Trait for types that can be converted to SQL expressions
 pub trait Expression {
+	/// Converts the expression to its SQL representation.
 	fn to_sql(&self) -> String;
 }
 

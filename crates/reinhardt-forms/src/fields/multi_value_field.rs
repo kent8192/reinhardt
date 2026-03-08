@@ -3,13 +3,21 @@ use chrono::NaiveDateTime;
 
 /// MultiValueField combines multiple fields into one
 pub struct MultiValueField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Optional human-readable label for display.
 	pub label: Option<String>,
+	/// Whether this field must be filled in.
 	pub required: bool,
+	/// Optional help text displayed alongside the field.
 	pub help_text: Option<String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<serde_json::Value>,
+	/// The sub-fields that make up this composite field.
 	pub fields: Vec<Box<dyn FormField>>,
+	/// Whether all sub-fields must have values.
 	pub require_all_fields: bool,
 }
 
@@ -48,6 +56,7 @@ impl MultiValueField {
 			require_all_fields: true,
 		}
 	}
+	/// Compresses the cleaned sub-field values into a single value.
 	pub fn compress(&self, values: Vec<serde_json::Value>) -> FieldResult<serde_json::Value> {
 		// Default implementation: return array of values
 		Ok(serde_json::Value::Array(values))
@@ -125,17 +134,26 @@ impl FormField for MultiValueField {
 
 /// SplitDateTimeField splits datetime input into separate date and time fields
 pub struct SplitDateTimeField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Optional human-readable label for display.
 	pub label: Option<String>,
+	/// Whether this field must be filled in.
 	pub required: bool,
+	/// Optional help text displayed alongside the field.
 	pub help_text: Option<String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<serde_json::Value>,
+	/// Accepted date format strings for the date portion.
 	pub input_date_formats: Vec<String>,
+	/// Accepted time format strings for the time portion.
 	pub input_time_formats: Vec<String>,
 }
 
 impl SplitDateTimeField {
+	/// Creates a new `SplitDateTimeField` with default date and time formats.
 	pub fn new(name: String) -> Self {
 		Self {
 			name,

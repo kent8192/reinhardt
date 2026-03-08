@@ -346,17 +346,21 @@ pub struct ValidationResult {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AutoMigrationError {
 	#[error("No schema changes detected")]
+	/// NoChangesDetected variant.
 	NoChangesDetected,
 
 	#[error("Failed to write migration file: {0}")]
+	/// WriteError variant.
 	WriteError(String),
 
 	#[error("Migration validation failed: {0}")]
+	/// ValidationError variant.
 	ValidationError(String),
 
 	#[error(
 		"Duplicate migration detected: generated operations are identical to the last migration.\nThis usually means you're trying to generate the same migration twice.\nIf you need to modify the previous migration, delete it first and run makemigrations again."
 	)]
+	/// DuplicateMigration variant.
 	DuplicateMigration,
 }
 

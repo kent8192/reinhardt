@@ -16,8 +16,11 @@ pub struct FormWizard {
 
 /// A single step in the wizard
 pub struct WizardStep {
+	/// The unique name identifying this step.
 	pub name: String,
+	/// The form associated with this step.
 	pub form: Form,
+	/// An optional condition that determines whether this step is available.
 	pub condition: Option<WizardConditionFn>,
 }
 
@@ -64,6 +67,7 @@ impl WizardStep {
 		self.condition = Some(Box::new(condition));
 		self
 	}
+	/// Returns whether this step is available given the current session data.
 	pub fn is_available(&self, session_data: &WizardSessionData) -> bool {
 		if let Some(condition) = &self.condition {
 			condition(session_data)
@@ -93,6 +97,7 @@ impl FormWizard {
 		}
 	}
 
+	/// Returns a reference to all wizard steps.
 	pub fn steps(&self) -> &Vec<WizardStep> {
 		&self.steps
 	}
@@ -112,24 +117,31 @@ impl FormWizard {
 	pub fn add_step(&mut self, step: WizardStep) {
 		self.steps.push(step);
 	}
+	/// Returns the zero-based index of the current step.
 	pub fn current_step(&self) -> usize {
 		self.current_step
 	}
+	/// Returns the name of the current step, or `None` if there are no steps.
 	pub fn current_step_name(&self) -> Option<&str> {
 		self.steps.get(self.current_step).map(|s| s.name.as_str())
 	}
+	/// Returns a reference to the current step's form, or `None` if there are no steps.
 	pub fn current_form(&self) -> Option<&Form> {
 		self.steps.get(self.current_step).map(|s| &s.form)
 	}
+	/// Returns a mutable reference to the current step's form, or `None` if there are no steps.
 	pub fn current_form_mut(&mut self) -> Option<&mut Form> {
 		self.steps.get_mut(self.current_step).map(|s| &mut s.form)
 	}
+	/// Returns the total number of steps in the wizard.
 	pub fn total_steps(&self) -> usize {
 		self.steps.len()
 	}
+	/// Returns `true` if the wizard is on the first step.
 	pub fn is_first_step(&self) -> bool {
 		self.current_step == 0
 	}
+	/// Returns `true` if the wizard is on the last step.
 	pub fn is_last_step(&self) -> bool {
 		self.current_step + 1 >= self.steps.len()
 	}
@@ -295,12 +307,15 @@ impl FormWizard {
 			Err(FormError::Validation("Invalid step".to_string()))
 		}
 	}
+	/// Returns all session data collected across all completed steps.
 	pub fn get_all_data(&self) -> &HashMap<String, HashMap<String, serde_json::Value>> {
 		&self.session_data
 	}
+	/// Returns the saved data for a specific step, or `None` if that step has no data.
 	pub fn get_step_data(&self, step_name: &str) -> Option<&HashMap<String, serde_json::Value>> {
 		self.session_data.get(step_name)
 	}
+	/// Clears all session data and resets the wizard to the first step.
 	pub fn clear_data(&mut self) {
 		self.session_data.clear();
 		self.current_step = 0;
@@ -344,6 +359,7 @@ impl FormWizard {
 			Err(FormError::Validation("Invalid step".to_string()))
 		}
 	}
+	/// Returns the wizard completion progress as a percentage (0.0 to 100.0).
 	pub fn progress_percentage(&self) -> f32 {
 		if self.steps.is_empty() {
 			return 0.0;

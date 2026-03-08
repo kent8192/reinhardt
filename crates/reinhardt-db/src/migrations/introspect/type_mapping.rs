@@ -18,13 +18,21 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum TypeMappingError {
 	#[error("Unsupported type: {0}")]
+	/// UnsupportedType variant.
 	UnsupportedType(String),
 
 	#[error("Invalid type definition: {0}")]
+	/// InvalidTypeDefinition variant.
 	InvalidTypeDefinition(String),
 
+	/// Type override not found for the specified table and column.
 	#[error("Type override not found: {table}.{column}")]
-	OverrideNotFound { table: String, column: String },
+	OverrideNotFound {
+		/// The table name.
+		table: String,
+		/// The column name.
+		column: String,
+	},
 }
 
 /// Type mapper for converting SQL types to Rust types.

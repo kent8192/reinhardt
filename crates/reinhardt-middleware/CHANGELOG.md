@@ -7,53 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.4...reinhardt-middleware@v0.1.0-rc.5) - 2026-03-07
-
-### Fixed
-
-- remove develop/0.2.0 content accidentally merged via PR [[#1918](https://github.com/kent8192/reinhardt-web/issues/1918)](https://github.com/kent8192/reinhardt-web/issues/1918)
-
-## [0.1.0-rc.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.2...reinhardt-middleware@v0.1.0-rc.3) - 2026-03-05
-
-### Fixed
-
-- *(release)* use path-only dev-dep for reinhardt-test in cyclic crates
-
-## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.1...reinhardt-middleware@v0.1.0-rc.2) - 2026-03-04
-
-### Fixed
-
-- *(middleware)* validate host header against allowed hosts in HTTPS redirect
-- *(middleware)* add missing import in HttpsRedirectMiddleware doc test
-- *(meta)* fix workspace inheritance and authors metadata
-
-### Maintenance
-
-- *(testing)* add insta snapshot testing dependency across all crates
-
-### Other
-
-- resolve conflict with main (criterion version)
-
-## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.15...reinhardt-middleware@v0.1.0-rc.1) - 2026-02-24
-
-### Maintenance
-
-- updated the following local packages: reinhardt-auth
-
-## [0.1.0-alpha.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.14...reinhardt-middleware@v0.1.0-alpha.15) - 2026-02-23
-
-### Maintenance
-
-- updated the following local packages: reinhardt-core, reinhardt-http, reinhardt-conf, reinhardt-di, reinhardt-auth, reinhardt-mail
-
-## [0.1.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.13...reinhardt-middleware@v0.1.0-alpha.14) - 2026-02-23
-
-### Maintenance
-
-- updated the following local packages: reinhardt-conf, reinhardt-auth, reinhardt-mail
-
-## [0.1.0-alpha.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.12...reinhardt-middleware@v0.1.0-alpha.13) - 2026-02-21
+## [0.1.0](https://github.com/kent8192/reinhardt-web/releases/tag/reinhardt-middleware@v0.1.0) - 2026-03-08
 
 ### Added
 
@@ -61,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- remove develop/0.2.0 content accidentally merged via PR [[#1918](https://github.com/kent8192/reinhardt-web/issues/1918)](https://github.com/kent8192/reinhardt-web/issues/1918)
+- *(release)* use path-only dev-dep for reinhardt-test in cyclic crates
+- *(middleware)* validate host header against allowed hosts in HTTPS redirect
+- *(middleware)* add missing import in HttpsRedirectMiddleware doc test
+- *(meta)* fix workspace inheritance and authors metadata
 - apply permission checks uniformly to all HTTP methods
 - remove map_err on non-Result OpenApiRouter::wrap return value
 - resolve clippy collapsible_if warnings after merge with main
@@ -88,106 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - fix remaining clippy warnings across workspace
 - apply rustfmt formatting to workspace files
 
-## [0.1.0-alpha.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.11...reinhardt-middleware@v0.1.0-alpha.12) - 2026-02-16
-
 ### Maintenance
 
-- updated the following local packages: reinhardt-auth
-
-## [0.1.0-alpha.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.10...reinhardt-middleware@v0.1.0-alpha.11) - 2026-02-15
-
-### Maintenance
-
-- updated the following local packages: reinhardt-conf, reinhardt-auth, reinhardt-mail
-
-## [0.1.0-alpha.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.9...reinhardt-middleware@v0.1.0-alpha.10) - 2026-02-14
-
-### Maintenance
-
-- updated the following local packages: reinhardt-auth
-
-## [0.1.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.8...reinhardt-middleware@v0.1.0-alpha.9) - 2026-02-14
-
-### Maintenance
-
-- updated the following local packages: reinhardt-conf, reinhardt-auth, reinhardt-mail
-
-## [0.1.0-alpha.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.7...reinhardt-middleware@v0.1.0-alpha.8) - 2026-02-14
-
-### Maintenance
-
-- updated the following local packages: reinhardt-conf, reinhardt-auth, reinhardt-mail
-
-## [0.1.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.6...reinhardt-middleware@v0.1.0-alpha.7) - 2026-02-14
-
-### Maintenance
-
-- updated the following local packages: reinhardt-conf, reinhardt-di, reinhardt-auth, reinhardt-mail
-
-## [0.1.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.5...reinhardt-middleware@v0.1.0-alpha.6) - 2026-02-12
-
-### Maintenance
-
-- updated the following local packages: reinhardt-core, reinhardt-conf, reinhardt-auth, reinhardt-http, reinhardt-di, reinhardt-mail
-
-## [0.1.0-alpha.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.4...reinhardt-middleware@v0.1.0-alpha.5) - 2026-02-10
-
-### Maintenance
-
-- updated the following local packages: reinhardt-auth
-
-## [0.1.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.3...reinhardt-middleware@v0.1.0-alpha.4) - 2026-02-06
+- *(testing)* add insta snapshot testing dependency across all crates
 
 ### Other
 
-- updated the following local packages: reinhardt-di, reinhardt-conf, reinhardt-auth, reinhardt-mail
-
-## [0.1.0-alpha.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.2...reinhardt-middleware@v0.1.0-alpha.3) - 2026-02-03
-
-### Other
-
-- updated the following local packages: reinhardt-core, reinhardt-http, reinhardt-conf, reinhardt-di, reinhardt-auth, reinhardt-mail
-
-## [0.1.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.1...reinhardt-middleware@v0.1.0-alpha.2) - 2026-02-03
-
-### Fixed
-
-- *(ci)* remove proptest regression files from git tracking
-
-### Other
-
-- add release-plz migration markers to CHANGELOGs
-- *(changelog)* remove obsolete [0.1.0] sections
-- *(changelog)* add missing 0.1.0-alpha.1 release entries
-- *(package)* replace version.workspace with explicit versions
-
-### Breaking Changes
-- N/A
-
-### Added
-- Work in progress features (not yet released)
-
-### Changed
-- N/A
-
-### Deprecated
-- N/A
-
-### Removed
-- N/A
-
-### Fixed
-- N/A
-
-### Security
-- N/A
-
-<!-- release-plz-separator -->
-<!-- Entries below this line were created before release-plz adoption -->
-
-## [0.1.0-alpha.1] - 2026-01-23
-
-### Added
-
-- Initial crates.io release
-
+- resolve conflict with main (criterion version)

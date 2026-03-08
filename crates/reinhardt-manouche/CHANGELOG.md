@@ -7,52 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-manouche@v0.1.0-rc.4...reinhardt-manouche@v0.1.0-rc.5) - 2026-03-07
-
-### Fixed
-
-- *(manouche)* convert todo!() to unimplemented!() for stable audit
-
-## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-manouche@v0.1.0-rc.1...reinhardt-manouche@v0.1.0-rc.2) - 2026-03-04
-
-### Fixed
-
-- use workspace inheritance for authors, edition, license, and repository
-
-## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-manouche@v0.1.0-alpha.2...reinhardt-manouche@v0.1.0-rc.1) - 2026-02-23
-
-### Maintenance
-
-- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
-
-## [0.1.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-manouche@v0.1.0-alpha.1...reinhardt-manouche@v0.1.0-alpha.2) - 2026-02-23
-
-### Changed
-
-- *(manouche)* reduce duplication and improve error context
-- *(manouche)* replace magic string with Option<Ident> for FormMacro name
-
-### Fixed
-
-- *(manouche)* add compile-time validation for js_condition to prevent injection
-- replace panicking name() with safe error handling in FormFieldProperty ([[#578](https://github.com/kent8192/reinhardt-web/issues/578)](https://github.com/kent8192/reinhardt-web/issues/578))
-- *(reinhardt-manouche)* emit compile error for unsupported form-level validators
-- *(reinhardt-manouche)* replace debug_assert with assert in page parser
-
-### Maintenance
-
-- *(manouche)* convert TODO comments to todo!() macros in IR lowering
-
-### Security
-
-- *(manouche)* implement head element validation and fix attribute value extraction
-
-### Styling
-
-- apply rustfmt formatting to workspace files
-- apply rustfmt to pre-existing unformatted files
-
-## [0.1.0-alpha.1](https://github.com/kent8192/reinhardt-web/releases/tag/reinhardt-manouche@v0.1.0-alpha.1) - 2026-02-05
+## [0.1.0](https://github.com/kent8192/reinhardt-web/releases/tag/reinhardt-manouche@v0.1.0) - 2026-03-08
 
 ### Added
 
@@ -68,9 +23,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(manouche)* migrate types module from reinhardt-pages-ast
 - *(manouche)* add reactive trait definitions
 
+### Changed
+
+- *(manouche)* reduce duplication and improve error context
+- *(manouche)* replace magic string with Option<Ident> for FormMacro name
+
 ### Fixed
 
+- *(manouche)* convert todo!() to unimplemented!() for stable audit
+- use workspace inheritance for authors, edition, license, and repository
+- *(manouche)* add compile-time validation for js_condition to prevent injection
+- replace panicking name() with safe error handling in FormFieldProperty ([[#578](https://github.com/kent8192/reinhardt-web/issues/578)](https://github.com/kent8192/reinhardt-web/issues/578))
+- *(reinhardt-manouche)* emit compile error for unsupported form-level validators
+- *(reinhardt-manouche)* replace debug_assert with assert in page parser
 - add reinhardt-manouche to workspace deps and address review comments
+
+### Security
+
+- *(manouche)* implement head element validation and fix attribute value extraction
+
+### Styling
+
+- apply rustfmt formatting to workspace files
+- apply rustfmt to pre-existing unformatted files
+
+### Maintenance
+
+- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
+- *(manouche)* convert TODO comments to todo!() macros in IR lowering
 
 ### Other
 

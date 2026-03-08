@@ -7,13 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-routers-macros@v0.1.0-alpha.3...reinhardt-routers-macros@v0.1.0-rc.1) - 2026-02-23
-
-### Maintenance
-
-- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
-
-## [0.1.0-alpha.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-routers-macros@v0.1.0-alpha.2...reinhardt-routers-macros@v0.1.0-alpha.3) - 2026-02-21
+## [0.1.0](https://github.com/kent8192/reinhardt-web/releases/tag/reinhardt-urls-routers-macros@v0.1.0) - 2026-03-08
 
 ### Security
 
@@ -26,8 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - replace never-looping for with if-let per clippy::never_loop
 - apply rustfmt formatting to workspace files
 
-## [0.1.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-routers-macros@v0.1.0-alpha.1...reinhardt-routers-macros@v0.1.0-alpha.2) - 2026-02-03
+### Maintenance
 
-### Other
-
-- *(package)* replace version.workspace with explicit versions
+- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause

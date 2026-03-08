@@ -7,33 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.4...reinhardt-core@v0.1.0-rc.5) - 2026-03-07
-
-### Fixed
-
-- *(macros)* dereference extractor before validation in pre_validate
-- *(macros)* replace skeleton tests with meaningful assertions in pre_validate
-
-## [0.1.0-rc.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.3...reinhardt-core@v0.1.0-rc.4) - 2026-03-05
-
-### Fixed
-
-- *(core)* add wasm32 platform gate to parallel and jsonschema validator modules
-
-## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.1...reinhardt-core@v0.1.0-rc.2) - 2026-03-04
-
-### Fixed
-
-- *(deps)* align dependency versions to workspace definitions
-- *(core)* use character count instead of byte length in CharField validation
-
-## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-alpha.7...reinhardt-core@v0.1.0-rc.1) - 2026-02-23
-
-### Maintenance
-
-- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
-
-## [0.1.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-alpha.6...reinhardt-core@v0.1.0-alpha.7) - 2026-02-21
+## [0.1.0](https://github.com/kent8192/reinhardt-web/releases/tag/reinhardt-core@v0.1.0) - 2026-03-08
 
 ### Added
 
@@ -44,8 +18,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add anchor link support to is_safe_url
 - add enhanced sanitization utilities for XSS prevention
 
+### Changed
+
+- replace glob imports with explicit re-exports in validators prelude
+- use dynamic crate path resolution for all dependencies
+- replace glob import with explicit rayon trait imports
+- convert relative paths to absolute paths
+- restore single-level super:: paths preserved by convention
+
 ### Fixed
 
+- *(macros)* dereference extractor before validation in pre_validate
+- *(macros)* replace skeleton tests with meaningful assertions in pre_validate
+- *(core)* add wasm32 platform gate to parallel and jsonschema validator modules
+- *(deps)* align dependency versions to workspace definitions
+- *(core)* use character count instead of byte length in CharField validation
 - fix DOT format output vulnerable to content injection
 - log signal send errors instead of silently discarding
 - emit errors instead of silently ignoring invalid macro arguments
@@ -56,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - replace Box::leak with Arc to prevent memory leak
 - emit error when permission function lacks Request (#775)
 - use push instead of push_str for single char in escape_css_selector
+- *(core)* replace reinhardt-test with local poll_until helper
 
 ### Security
 
@@ -70,12 +58,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - fix CSP header sanitization and CSRF panic
 - add request body size limits and decompression bomb prevention
 
-### Changed
-
-- replace glob imports with explicit re-exports in validators prelude
-- use dynamic crate path resolution for all dependencies
-- replace glob import with explicit rayon trait imports
-
 ### Styling
 
 - fix clippy warnings and formatting in files merged from main
@@ -85,60 +67,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - apply rustfmt formatting to workspace files
 - fix formatting in security module
 
-## [0.1.0-alpha.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-alpha.4...reinhardt-core@v0.1.0-alpha.5) - 2026-02-12
+### Maintenance
 
-### Changed
-
-- convert relative paths to absolute paths
-- restore single-level super:: paths preserved by convention
-
-## [0.1.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-alpha.3...reinhardt-core@v0.1.0-alpha.4) - 2026-02-08
-
-### Fixed
-
-- *(core)* replace reinhardt-test with local poll_until helper
-
-## [0.1.0-alpha.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-alpha.2...reinhardt-core@v0.1.0-alpha.3) - 2026-02-03
-
-### Other
-
-- Merge pull request #111 from kent8192/fix/issue-81-bug-reinhardt-pages-wasm-build-fails-due-to-tokiomio-server-side-dependencies
-
-## [0.1.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-alpha.1...reinhardt-core@v0.1.0-alpha.2) - 2026-02-03
-
-### Other
-
-- add release-plz migration markers to CHANGELOGs
-- *(changelog)* remove obsolete [0.1.0] sections
-- *(changelog)* add missing 0.1.0-alpha.1 release entries
-- *(package)* replace version.workspace with explicit versions
-- N/A
-
-### Added
-- Work in progress features (not yet released)
-
-### Changed
-- N/A
-
-### Deprecated
-- N/A
-
-### Removed
-- N/A
-
-### Fixed
-- N/A
-
-### Security
-- N/A
-
-
-<!-- release-plz-separator -->
-<!-- Entries below this line were created before release-plz adoption -->
-
-## [0.1.0-alpha.1] - 2026-01-23
-
-### Added
-
-- Initial crates.io release
-
+- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause

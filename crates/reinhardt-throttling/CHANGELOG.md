@@ -7,35 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-throttling@v0.1.0-rc.4...reinhardt-throttling@v0.1.0-rc.5) - 2026-03-07
+## [0.1.0](https://github.com/kent8192/reinhardt-web/releases/tag/reinhardt-throttling@v0.1.0) - 2026-03-08
 
-### Documentation
+### Changed
 
-- add missing doc comments for public API modules and types
-
-### Other
-
-- resolve conflicts with main branch
-
-### Testing
-
-- *(throttling)* add test coverage for get_country_code GeoIP path
-
-## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-throttling@v0.1.0-rc.1...reinhardt-throttling@v0.1.0-rc.2) - 2026-03-04
+- refactor!(throttling): remove unused key and backend fields from bucket structs
 
 ### Fixed
 
 - *(throttling)* use per-key bucket state in TokenBucket rate limiter
 - *(meta)* fix workspace inheritance and authors metadata
-
-### Maintenance
-
-- *(testing)* add insta snapshot testing dependency across all crates
-
-## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-throttling@v0.1.0-alpha.2...reinhardt-throttling@v0.1.0-rc.1) - 2026-02-21
-
-### Fixed
-
 - return Result instead of panicking in TimeRange::new
 - add TTL-based eviction to MemoryBackend
 - check window expiration in get_count to prevent false denials
@@ -47,17 +28,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - fix overflow, division-by-zero, and missing input validation
 - add cache key validation to prevent injection
 
-### Changed
+### Documentation
 
-- refactor!(throttling): remove unused key and backend fields from bucket structs
+- add missing doc comments for public API modules and types
+
+### Testing
+
+- *(throttling)* add test coverage for get_country_code GeoIP path
 
 ### Styling
 
 - fix pre-existing clippy warnings and apply rustfmt
 - apply rustfmt to pre-existing unformatted files
 
-## [0.1.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-throttling@v0.1.0-alpha.1...reinhardt-throttling@v0.1.0-alpha.2) - 2026-02-03
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
 
 ### Other
 
-- *(package)* replace version.workspace with explicit versions
+- resolve conflicts with main branch

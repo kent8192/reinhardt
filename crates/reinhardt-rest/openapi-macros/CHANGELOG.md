@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-openapi-macros@v0.1.0-alpha.4...reinhardt-openapi-macros@v0.1.0-rc.1) - 2026-02-21
+## [0.1.0](https://github.com/kent8192/reinhardt-web/releases/tag/reinhardt-rest-openapi-macros@v0.1.0) - 2026-03-08
 
 ### Fixed
 
@@ -20,26 +20,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - fix pre-existing clippy warnings and apply rustfmt
 - apply rustfmt to pre-existing unformatted files
-
-## [0.1.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-openapi-macros@v0.1.0-alpha.3...reinhardt-openapi-macros@v0.1.0-alpha.4) - 2026-02-06
-
-### Fixed
-
-- break circular dependency between reinhardt-openapi-macros and reinhardt-rest
-
-### Other
-
-- Revert "Merge pull request #202 from kent8192/release-plz-2026-02-06T13-32-57Z"
-- release
-
-## [0.1.0-alpha.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-openapi-macros@v0.1.0-alpha.2...reinhardt-openapi-macros@v0.1.0-alpha.3) - 2026-02-03
-
-### Other
-
-- updated the following local packages: reinhardt-rest
-
-## [0.1.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-openapi-macros@v0.1.0-alpha.1...reinhardt-openapi-macros@v0.1.0-alpha.2) - 2026-02-03
-
-### Other
-
-- *(package)* replace version.workspace with explicit versions

@@ -7,37 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-tasks@v0.1.0-rc.4...reinhardt-tasks@v0.1.0-rc.5) - 2026-03-07
-
-### Documentation
-
-- add missing doc comments for public API modules and types
-
-### Other
-
-- resolve conflicts with origin/main
-
-## [0.1.0-rc.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-tasks@v0.1.0-rc.2...reinhardt-tasks@v0.1.0-rc.3) - 2026-03-05
+## [0.1.0](https://github.com/kent8192/reinhardt-web/releases/tag/reinhardt-tasks@v0.1.0) - 2026-03-08
 
 ### Fixed
 
 - *(release)* use path-only dev-dep for reinhardt-test in cyclic crates
-
-## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-tasks@v0.1.0-rc.1...reinhardt-tasks@v0.1.0-rc.2) - 2026-03-04
-
-### Fixed
-
 - *(tasks)* implement weight-based ordering for Priority enum
 - *(deps)* align dependency versions to workspace definitions
-
-### Maintenance
-
-- *(testing)* add insta snapshot testing dependency across all crates
-
-## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-tasks@v0.1.0-alpha.3...reinhardt-tasks@v0.1.0-rc.1) - 2026-02-21
-
-### Fixed
-
 - replace println!/eprintln! with structured logging macros
 - fix TTL truncation and RetryStrategy multiplier validation
 - enforce concurrency limit using tokio Semaphore
@@ -55,15 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - add resource limits and prevent busy loops in task subsystem
 
-### Styling
-
-- apply workspace-wide formatting and clippy fixes
-- apply workspace-wide formatting fixes
-- apply rustfmt to reinhardt-tasks formatting
-
 ### Performance
 
 - eliminate redundant get_task_data call
+
+### Documentation
+
+- add missing doc comments for public API modules and types
 
 ### Testing
 
@@ -72,56 +46,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - apply rstest and AAA pattern to existing tests
 - update scheduler integration tests for Arc API
 
+### Styling
+
+- apply workspace-wide formatting and clippy fixes
+- apply workspace-wide formatting fixes
+- apply rustfmt to reinhardt-tasks formatting
+
 ### Maintenance
 
+- *(testing)* add insta snapshot testing dependency across all crates
 - add explanatory comments to undocumented #[allow(...)] attributes
 
 ### Reverted
 
 - undo PR #219 version bumps for unpublished crates
-- undo release PR #215 version bumps
-
-## [0.1.0-alpha.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-tasks@v0.1.0-alpha.2...reinhardt-tasks@v0.1.0-alpha.3) - 2026-02-03
 
 ### Other
 
-- updated the following local packages: reinhardt-test
-
-## [0.1.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-tasks@v0.1.0-alpha.1...reinhardt-tasks@v0.1.0-alpha.2) - 2026-02-03
-
-### Other
-
-- add release-plz migration markers to CHANGELOGs
-- *(changelog)* remove obsolete [0.1.0] sections
-- *(changelog)* add missing 0.1.0-alpha.1 release entries
-- *(package)* replace version.workspace with explicit versions
-- N/A
-
-### Added
-- Work in progress features (not yet released)
-
-### Changed
-- N/A
-
-### Deprecated
-- N/A
-
-### Removed
-- N/A
-
-### Fixed
-- N/A
-
-### Security
-- N/A
-
-
-<!-- release-plz-separator -->
-<!-- Entries below this line were created before release-plz adoption -->
-
-## [0.1.0-alpha.1] - 2026-01-23
-
-### Added
-
-- Initial crates.io release
-
+- resolve conflicts with origin/main

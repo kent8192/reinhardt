@@ -7,85 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.4...reinhardt-db@v0.1.0-rc.5) - 2026-03-07
+## [0.1.0](https://github.com/kent8192/reinhardt-web/releases/tag/reinhardt-db@v0.1.0) - 2026-03-08
 
 ### Added
 
 - add reinhardt-query prelude re-exports to reinhardt-db orm
-
-## [0.1.0-rc.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.3...reinhardt-db@v0.1.0-rc.4) - 2026-03-05
-
-### Fixed
-
-- *(db)* use extract_string_field in migration AST parser to handle .to_string() pattern
-
-## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.1...reinhardt-db@v0.1.0-rc.2) - 2026-03-04
-
-### Fixed
-
-- *(db)* prevent SQL injection in BatchUpdateBuilder and QuerySet filters
-- *(db)* preserve backward compatibility for batch_ops API
-- *(deps)* align dependency versions to workspace definitions
-
-### Other
-
-- resolve fields.rs conflict with main
-
-### Styling
-
-- *(db)* apply formatter to batch_ops
-
-### Testing
-
-- *(db)* add coverage tests for BigUnsigned overflow clamping
-
-## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-alpha.16...reinhardt-db@v0.1.0-rc.1) - 2026-02-24
-
-### Fixed
-
-- *(db)* gate sqlite-dependent tests with feature flag
-- *(db)* replace float test values to avoid clippy approx_constant lint
-
-### Testing
-
-- *(db)* add warning log test for .sql file detection
-
-## [0.1.0-alpha.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-alpha.15...reinhardt-db@v0.1.0-alpha.16) - 2026-02-23
-
-### Maintenance
-
-- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
-
-## [0.1.0-alpha.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-alpha.14...reinhardt-db@v0.1.0-alpha.15) - 2026-02-23
-
-### Maintenance
-
-- updated the following local packages: reinhardt-query, reinhardt-conf
-
-## [0.1.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-alpha.13...reinhardt-db@v0.1.0-alpha.14) - 2026-02-21
-
-### Added
-
 - add Repository<T> for type-safe ODM CRUD operations
 - implement IndexModel with builder pattern and MongoDB conversion
 - add core Document trait for ODM layer
 - add ODM-specific error types for validation and operation failures
-
-### Fixed
-
-- add safe numeric conversions with proper error handling
-- adapt DatabaseConfig.password usage to SecretString type
-- use parameterized queries and escape identifiers to prevent SQL injection
-- add BackendError variant and proper error mapping in repository
-- make bson an optional dependency
-- use bson::error::Error for deserialization
-
-### Security
-
-- document raw SQL injection surface in query builder APIs
-- replace panics with error returns and use checked integer conversion
-- fix path traversal and credential masking
-- fix savepoint name injection in orm transaction module
 
 ### Changed
 
@@ -94,9 +24,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - remove unnecessary async_trait from Document trait
 - reorganize re-exports for ODM and low-level API separation
 - make bson dependency always available for ODM support
+- *(db)* replace super::super:: with crate:: absolute paths in migrations
+- *(db)* fix unused variable assignments in migration operation tests
+- convert relative paths to absolute paths
+- *(db)* convert relative paths to absolute paths in orm execution
+- restore single-level super:: paths preserved by convention
+- Improve CHECK constraints comments in PostgreSQL and MySQL introspectors for clarity
+
+### Fixed
+
+- *(db)* use extract_string_field in migration AST parser to handle .to_string() pattern
+- *(db)* prevent SQL injection in BatchUpdateBuilder and QuerySet filters
+- *(db)* preserve backward compatibility for batch_ops API
+- *(deps)* align dependency versions to workspace definitions
+- *(db)* gate sqlite-dependent tests with feature flag
+- *(db)* replace float test values to avoid clippy approx_constant lint
+- add safe numeric conversions with proper error handling
+- adapt DatabaseConfig.password usage to SecretString type
+- use parameterized queries and escape identifiers to prevent SQL injection
+- add BackendError variant and proper error mapping in repository
+- make bson an optional dependency
+- use bson::error::Error for deserialization
+- *(db)* bind insert values in many-to-many manager instead of discarding
+- *(db)* remove unused reinhardt-test dev-dependency
+
+### Security
+
+- document raw SQL injection surface in query builder APIs
+- replace panics with error returns and use checked integer conversion
+- fix path traversal and credential masking
+- fix savepoint name injection in orm transaction module
+
+### Testing
+
+- *(db)* add coverage tests for BigUnsigned overflow clamping
+- *(db)* add warning log test for .sql file detection
 
 ### Styling
 
+- *(db)* apply formatter to batch_ops
 - fix pre-existing clippy warnings and apply rustfmt
 - collapse nested if statements per clippy::collapsible_if
 - apply rustfmt formatting to workspace files
@@ -105,119 +71,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Maintenance
 
+- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
 - mark implicit TODOs for NoSQL ODM completion
 - remove unused ValidationError import
-
-## [0.1.0-alpha.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-alpha.11...reinhardt-db@v0.1.0-alpha.12) - 2026-02-15
-
-### Maintenance
-
-- updated the following local packages: reinhardt-query, reinhardt-conf
-
-## [0.1.0-alpha.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-alpha.10...reinhardt-db@v0.1.0-alpha.11) - 2026-02-14
-
-### Maintenance
-
-- updated the following local packages: reinhardt-query, reinhardt-conf
-
-## [0.1.0-alpha.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-alpha.9...reinhardt-db@v0.1.0-alpha.10) - 2026-02-14
-
-### Maintenance
-
-- updated the following local packages: reinhardt-query, reinhardt-conf
-
-## [0.1.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-alpha.8...reinhardt-db@v0.1.0-alpha.9) - 2026-02-14
-
-### Changed
-
-- *(db)* replace super::super:: with crate:: absolute paths in migrations
-- *(db)* fix unused variable assignments in migration operation tests
-
-### Fixed
-
-- *(db)* bind insert values in many-to-many manager instead of discarding
-
-## [0.1.0-alpha.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-alpha.7...reinhardt-db@v0.1.0-alpha.8) - 2026-02-12
-
-### Changed
-
-- convert relative paths to absolute paths
-- *(db)* convert relative paths to absolute paths in orm execution
-- restore single-level super:: paths preserved by convention
-
-### Fixed
-
-- correct incorrect path conversions in test imports
-
-## [0.1.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-alpha.6...reinhardt-db@v0.1.0-alpha.7) - 2026-02-10
-
-### Fixed
-
-- *(db)* remove unused reinhardt-test dev-dependency
-- *(release)* revert unpublished crate versions to pre-release state
-
-### Reverted
-
-- undo PR [[#219](https://github.com/kent8192/reinhardt-web/issues/219)](https://github.com/kent8192/reinhardt-web/issues/219) version bumps for unpublished crates
-
-## [0.1.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-alpha.5...reinhardt-db@v0.1.0-alpha.6) - 2026-02-06
-
-### Other
-
-- updated the following local packages: reinhardt-di, reinhardt-conf
-
-## [0.1.0-alpha.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-alpha.4...reinhardt-db@v0.1.0-alpha.5) - 2026-02-03
-
-### Other
-
-- updated the following local packages: reinhardt-core, reinhardt-conf, reinhardt-di
-
-## [0.1.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-alpha.3...reinhardt-db@v0.1.0-alpha.4) - 2026-02-03
-
-### Other
-
-- merge main into chore/release-plz-migration
-- add release-plz migration markers to CHANGELOGs
-- N/A
-
-### Added
-- Work in progress features (not yet released)
-
-### Changed
-- N/A
-
-### Deprecated
-- N/A
-
-### Removed
-- N/A
-
-### Fixed
-- N/A
-
-### Security
-- N/A
-
-
-<!-- release-plz-separator -->
-<!-- Entries below this line were created before release-plz adoption -->
-
-## [0.1.0-alpha.3] - 2026-01-30
-
-### Changed
-
-- Version bump for publish workflow correction (no functional changes)
-
-## [0.1.0-alpha.2] - 2026-01-29
-
-### Changed
-
-- Improve CHECK constraints comments in PostgreSQL and MySQL introspectors for clarity
-- Update package version from workspace reference to explicit version
-
-## [0.1.0-alpha.1] - 2026-01-23
-
-### Added
-
-- Initial crates.io release
-

@@ -7,56 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.4...reinhardt-pages@v0.1.0-rc.5) - 2026-03-07
+## [0.1.0](https://github.com/kent8192/reinhardt-web/releases/tag/reinhardt-pages@v0.1.0) - 2026-03-08
+
+### Changed
+
+- replace magic string with Option<Ident> for FormMacro name
+- extract duplicated form ID and action string generation
+- remove duplicate img required attribute validation
+- convert relative paths to absolute paths
+- restore single-level super:: paths preserved by convention
+- Update imports for `reinhardt_utils::staticfiles` module rename (#114)
+- Update imports for `reinhardt_utils::staticfiles` module rename (#114)
 
 ### Fixed
 
 - *(pages)* use dynamic year in SelectDateWidget instead of hardcoded 2025
 - remove develop/0.2.0 content accidentally merged via PR [[#1918](https://github.com/kent8192/reinhardt-web/issues/1918)](https://github.com/kent8192/reinhardt-web/issues/1918)
 - restore non-crate develop/0.2.0 changes that are harmless or beneficial
-
-### Other
-
-- resolve conflicts with origin/main
-
-## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.1...reinhardt-pages@v0.1.0-rc.2) - 2026-03-04
-
-### Fixed
-
 - *(pages)* add explanatory comments to #[allow(dead_code)]
-
-### Maintenance
-
-- *(testing)* add insta snapshot testing dependency across all crates
-
-## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.19...reinhardt-pages@v0.1.0-rc.1) - 2026-02-24
-
-### Maintenance
-
-- updated the following local packages: reinhardt-middleware, reinhardt-urls
-
-## [0.1.0-alpha.19](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.18...reinhardt-pages@v0.1.0-alpha.19) - 2026-02-24
-
-### Fixed
-
 - correct repository URLs from reinhardt-rs to reinhardt-web
-
-## [0.1.0-alpha.18](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.17...reinhardt-pages@v0.1.0-alpha.18) - 2026-02-23
-
-### Maintenance
-
-- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
-
-## [0.1.0-alpha.17](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.16...reinhardt-pages@v0.1.0-alpha.17) - 2026-02-23
-
-### Maintenance
-
-- updated the following local packages: reinhardt-pages-ast, reinhardt-pages-macros, reinhardt-middleware, reinhardt-urls
-
-## [0.1.0-alpha.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.15...reinhardt-pages@v0.1.0-alpha.16) - 2026-02-21
-
-### Fixed
-
 - store WebSocket closures in handle instead of leaking via forget()
 - replace unreachable!() with proper syn::Error in parse_if_node
 - reject non-boolean values for disabled/readonly/autofocus
@@ -89,12 +58,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - prevent open redirect attacks
 - escape HTML characters in SSR state JSON to prevent XSS
 
-### Changed
-
-- replace magic string with Option<Ident> for FormMacro name
-- extract duplicated form ID and action string generation
-- remove duplicate img required attribute validation
-
 ### Styling
 
 - apply workspace-wide formatting fixes
@@ -102,119 +65,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - fix rustfmt formatting in renderer.rs
 - fix formatting issues
 
-## [0.1.0-alpha.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.14...reinhardt-pages@v0.1.0-alpha.15) - 2026-02-16
-
 ### Maintenance
 
-- updated the following local packages: reinhardt-pages-macros, reinhardt-middleware, reinhardt-urls
-
-## [0.1.0-alpha.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.13...reinhardt-pages@v0.1.0-alpha.14) - 2026-02-15
-
-### Maintenance
-
-- updated the following local packages: reinhardt-middleware, reinhardt-urls
-
-## [0.1.0-alpha.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.12...reinhardt-pages@v0.1.0-alpha.13) - 2026-02-14
-
-### Maintenance
-
-- updated the following local packages: reinhardt-middleware, reinhardt-urls
-
-## [0.1.0-alpha.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.11...reinhardt-pages@v0.1.0-alpha.12) - 2026-02-14
-
-### Maintenance
-
-- updated the following local packages: reinhardt-middleware, reinhardt-urls
-
-## [0.1.0-alpha.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.10...reinhardt-pages@v0.1.0-alpha.11) - 2026-02-14
-
-### Maintenance
-
-- updated the following local packages: reinhardt-middleware, reinhardt-urls
-
-## [0.1.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.8...reinhardt-pages@v0.1.0-alpha.9) - 2026-02-12
-
-### Changed
-
-- convert relative paths to absolute paths
-- restore single-level super:: paths preserved by convention
-
-### Reverted
-
-- undo unintended visibility and formatting changes
-
-## [0.1.0-alpha.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.7...reinhardt-pages@v0.1.0-alpha.8) - 2026-02-10
-
-### Maintenance
-
-- updated the following local packages: reinhardt-middleware, reinhardt-urls
-
-## [0.1.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.6...reinhardt-pages@v0.1.0-alpha.7) - 2026-02-06
+- *(testing)* add insta snapshot testing dependency across all crates
+- *(license)* migrate from MIT/Apache-2.0 to BSD 3-Clause
 
 ### Other
 
-- updated the following local packages: reinhardt-utils, reinhardt-di, reinhardt-server, reinhardt-middleware, reinhardt-urls
-
-## [0.1.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.5...reinhardt-pages@v0.1.0-alpha.6) - 2026-02-03
-
-### Other
-
-- Merge pull request #111 from kent8192/fix/issue-81-bug-reinhardt-pages-wasm-build-fails-due-to-tokiomio-server-side-dependencies
-
-## [0.1.0-alpha.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.4...reinhardt-pages@v0.1.0-alpha.5) - 2026-02-03
-
-### Fixed
-
-- *(ci)* remove proptest regression files from git tracking
-
-### Other
-
-- merge main into chore/release-plz-migration
-- add release-plz migration markers to CHANGELOGs
-- N/A
-
-### Added
-- Work in progress features (not yet released)
-
-### Changed
-- N/A
-
-### Deprecated
-- N/A
-
-### Removed
-- N/A
-
-### Fixed
-- N/A
-
-### Security
-- N/A
-
-
-<!-- release-plz-separator -->
-<!-- Entries below this line were created before release-plz adoption -->
-
-## [0.1.0-alpha.4] - 2026-01-30
-
-### Changed
-
-- Re-release of 0.1.0-alpha.3 content after version correction
-- Update imports for `reinhardt_utils::staticfiles` module rename (#114)
-
-
-## [0.1.0-alpha.3] - 2026-01-29 [YANKED]
-
-**Note:** This version was yanked due to version skipping in the main crate (`reinhardt-web`). Use the latest available version instead.
-
-### Changed
-
-- Update imports for `reinhardt_utils::staticfiles` module rename (#114)
-
-
-## [0.1.0-alpha.1] - 2026-01-23
-
-### Added
-
-- Initial crates.io release
-
+- resolve conflicts with origin/main

@@ -741,7 +741,7 @@ mod tests {
 
 		// type_filter now returns a SimpleExpr; verify it builds correctly
 		let filter = rel.type_filter("post");
-		let mut stmt = Query::select()
+		let stmt = Query::select()
 			.column(Alias::new("*"))
 			.from(Alias::new("comments"))
 			.cond_where(Condition::all().add(filter))

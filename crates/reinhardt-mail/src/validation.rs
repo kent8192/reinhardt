@@ -314,7 +314,6 @@ mod tests {
 		// Arrange
 		// 254 characters is the maximum allowed (local@domain)
 		let local = "a".repeat(64);
-		let domain_label = "b".repeat(63);
 		// Build domain to reach exactly 254 total: local(64) + @(1) + domain(189) = 254
 		let domain_part_len = MAX_EMAIL_LENGTH - local.len() - 1; // subtract local and @
 		let domain = format!("{}.{}", "b".repeat(domain_part_len - 4), "com");

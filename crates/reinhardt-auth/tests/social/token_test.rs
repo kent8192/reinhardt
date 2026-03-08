@@ -1,8 +1,7 @@
 //! Token handling tests
 
 use chrono::{Duration, Utc};
-use reinhardt_auth::social::core::token::{OAuthToken, TokenResponse};
-use rstest::*;
+use reinhardt_auth::social::core::token::TokenResponse;
 
 #[test]
 fn test_token_response_from_response() {

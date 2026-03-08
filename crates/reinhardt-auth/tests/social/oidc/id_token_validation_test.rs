@@ -2,7 +2,6 @@
 
 use chrono::{Duration, Utc};
 use reinhardt_auth::social::core::claims::IdToken;
-use rstest::*;
 
 #[test]
 fn test_id_token_validate_signature() {

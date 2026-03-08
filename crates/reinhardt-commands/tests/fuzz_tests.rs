@@ -103,7 +103,7 @@ proptest! {
 		let mut ctx = TemplateContext::new();
 
 		for (key, value) in &pairs {
-			ctx.insert(key.clone(), value.clone());
+			let _ = ctx.insert(key.clone(), value.clone());
 		}
 
 		// Convert to tera context should not panic
@@ -127,10 +127,10 @@ proptest! {
 		let mut ctx = TemplateContext::new();
 
 		for (key, value) in &int_pairs {
-			ctx.insert(key.clone(), *value);
+			let _ = ctx.insert(key.clone(), *value);
 		}
 		for (key, value) in &float_pairs {
-			ctx.insert(key.clone(), *value);
+			let _ = ctx.insert(key.clone(), *value);
 		}
 
 		// Should not panic
@@ -148,7 +148,7 @@ proptest! {
 		let mut ctx = TemplateContext::new();
 
 		for (key, value) in &pairs {
-			ctx.insert(key.clone(), *value);
+			let _ = ctx.insert(key.clone(), *value);
 		}
 
 		let _tera_ctx: tera::Context = ctx.into();
@@ -308,11 +308,11 @@ fn test_template_context_edge_keys() {
 	let mut ctx = TemplateContext::new();
 
 	// Valid Tera keys
-	ctx.insert("a", "single char");
-	ctx.insert("_underscore", "leading underscore");
-	ctx.insert("CamelCase", "camel case");
-	ctx.insert("UPPERCASE", "all caps");
-	ctx.insert("with123numbers", "with numbers");
+	let _ = ctx.insert("a", "single char");
+	let _ = ctx.insert("_underscore", "leading underscore");
+	let _ = ctx.insert("CamelCase", "camel case");
+	let _ = ctx.insert("UPPERCASE", "all caps");
+	let _ = ctx.insert("with123numbers", "with numbers");
 
 	let tera_ctx: tera::Context = ctx.into();
 	let mut tera = tera::Tera::default();

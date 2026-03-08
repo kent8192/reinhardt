@@ -50,7 +50,7 @@ If you have written `ModelSerializer` or `Depends()` before, Reinhardt will feel
 | Your Goal | Start Here | Time to First Request |
 |-----------|-----------|----------------------|
 | **Full-stack REST API** | [Quick Start](#quick-start) | ~5 min |
-| **Just DI for my Axum app** | [Minimal Installation](#minimal-micro-build) | ~2 min |
+| **Just DI for my Axum app** | Planned | - |
 | **Full-stack with Pages (WASM + SSR)** | [Twitter Demo](examples/examples-twitter/) | ~10 min |
 
 ### Path A: Full-Stack REST API
@@ -63,7 +63,10 @@ cargo make runserver
 # Visit http://127.0.0.1:8000
 ```
 
-### Path B: Standalone DI
+### Path B: Standalone DI (Planned)
+
+> **Note:** Standalone DI is not officially supported yet and has not been verified to work.
+> This feature is planned for a future release.
 
 ```toml
 [dependencies]

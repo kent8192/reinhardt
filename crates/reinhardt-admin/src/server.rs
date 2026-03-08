@@ -32,16 +32,29 @@
 //! let dashboard_data = get_dashboard().await?;
 //! ```
 
+// The `#[server_fn]` proc macro generates internal modules that cannot have doc comments.
+// Allow missing docs for all server function submodules.
+#[allow(missing_docs)]
 pub mod create;
+#[allow(missing_docs)]
 pub mod dashboard;
+#[allow(missing_docs)]
 pub mod delete;
+#[allow(missing_docs)]
 pub mod detail;
+/// Error handling utilities for server functions.
 pub mod error;
+#[allow(missing_docs)]
 pub mod export;
+#[allow(missing_docs)]
 pub mod fields;
+#[allow(missing_docs)]
 pub mod import;
+/// Request size and rate limits for server functions.
 pub mod limits;
+#[allow(missing_docs)]
 pub mod list;
+#[allow(missing_docs)]
 pub mod update;
 
 pub mod audit;

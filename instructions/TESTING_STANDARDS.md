@@ -1840,4 +1840,4 @@ Before committing `.stderr` files, verify:
 - **Testing Checklist**: See Testing Philosophy and Implementation sections above
 - **Test Patterns**: See rstest Best Practices and Common Pitfalls sections above
 - **Main standards**: @CLAUDE.md
-- **Anti-patterns**: @docs/ANTI_PATTERNS.md
+- **Anti-patterns**: @instructions/ANTI_PATTERNS.md

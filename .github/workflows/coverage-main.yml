@@ -33,7 +33,7 @@ jobs:
           SELF_HOSTED_ENABLED: ${{ vars.SELF_HOSTED_ENABLED }}
         run: |
           if [[ "$ACTOR" == "$REPO_OWNER" ]] && [[ "$SELF_HOSTED_ENABLED" == "true" ]]; then
-            echo 'runner=["self-hosted","linux","x64","reinhardt-ci"]' >> "$GITHUB_OUTPUT"
+            echo 'runner=["self-hosted","linux","arm64","reinhardt-ci"]' >> "$GITHUB_OUTPUT"
             echo 'cargo-build-jobs=8' >> "$GITHUB_OUTPUT"
           else
             echo 'runner="ubuntu-latest"' >> "$GITHUB_OUTPUT"

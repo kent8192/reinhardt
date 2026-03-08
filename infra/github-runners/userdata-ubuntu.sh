@@ -22,13 +22,20 @@ DEBIAN_FRONTEND=noninteractive apt-get install -q -y \
 	wget
 
 # Install AWS CLI v2 (required for S3 runner binary download and SSM)
-curl -fsSL -o "awscliv2.zip" "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
+# Detect architecture for correct binary download
+ARCH=$$(uname -m)
+curl -fsSL -o "awscliv2.zip" "https://awscli.amazonaws.com/awscli-exe-linux-$${ARCH}.zip"
 unzip -q awscliv2.zip
 aws/install
 rm -rf aws awscliv2.zip
 
 # Install and configure CloudWatch agent for log shipping
-curl -fsSL -o "/tmp/amazon-cloudwatch-agent.deb" https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
+if [ "$$ARCH" = "aarch64" ]; then
+	CW_ARCH="arm64"
+else
+	CW_ARCH="amd64"
+fi
+curl -fsSL -o "/tmp/amazon-cloudwatch-agent.deb" "https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/$${CW_ARCH}/latest/amazon-cloudwatch-agent.deb"
 dpkg -i -E /tmp/amazon-cloudwatch-agent.deb
 rm -f /tmp/amazon-cloudwatch-agent.deb
 amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c "ssm:${ssm_key_cloudwatch_agent_config}"

@@ -1,0 +1,107 @@
+# Build custom AMI for self-hosted GitHub Actions runners
+name: Build Runner AMI
+
+on:
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: "CPU architecture to build the AMI for"
+        required: true
+        type: choice
+        options:
+          - x64
+          - arm64
+        default: "x64"
+      force_rebuild:
+        description: "Force rebuild even if no changes detected"
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    # Weekly build every Monday at 04:00 UTC
+    - cron: '0 4 * * 1'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-ami:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUNNER_ARCH: ${{ github.event.inputs.architecture || 'x64' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Install Packer
+        uses: hashicorp/setup-packer@v3
+        with:
+          version: latest
+
+      - name: Packer Init
+        run: |
+          cd infra/github-runners/packer
+          packer init reinhardt-runner.pkr.hcl
+
+      - name: Packer Validate
+        run: |
+          cd infra/github-runners/packer
+          packer validate -var "runner_arch=$RUNNER_ARCH" reinhardt-runner.pkr.hcl
+
+      - name: Build AMI
+        run: |
+          cd infra/github-runners/packer
+          PACKER_LOG=1 packer build -var "runner_arch=$RUNNER_ARCH" reinhardt-runner.pkr.hcl
+
+      - name: Extract AMI ID
+        id: extract-ami
+        run: |
+          AMI_ID=$(jq -r '.builds[-1].artifact_id | split(":")[1]' infra/github-runners/packer/manifest.json)
+          echo "ami_id=$AMI_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Update SSM Parameter
+        env:
+          AMI_ID: ${{ steps.extract-ami.outputs.ami_id }}
+        run: |
+          aws ssm put-parameter \
+            --name "/reinhardt-ci/runner-ami-id" \
+            --type String \
+            --value "$AMI_ID" \
+            --overwrite
+
+      - name: Clean up old AMIs
+        run: |
+          AMI_IDS=$(aws ec2 describe-images \
+            --owners self \
+            --filters "Name=name,Values=reinhardt-ci-runner-${RUNNER_ARCH}-*" \
+            --query 'sort_by(Images, &CreationDate)[:-3].ImageId' \
+            --output text)
+
+          for ami_id in $AMI_IDS; do
+            echo "Deregistering old AMI: $ami_id"
+            SNAPSHOTS=$(aws ec2 describe-images --image-ids "$ami_id" --query 'Images[0].BlockDeviceMappings[*].Ebs.SnapshotId' --output text)
+            aws ec2 deregister-image --image-id "$ami_id"
+            for snap_id in $SNAPSHOTS; do
+              echo "Deleting snapshot: $snap_id"
+              aws ec2 delete-snapshot --snapshot-id "$snap_id"
+            done
+          done
+
+      - name: Post Summary
+        env:
+          AMI_ID: ${{ steps.extract-ami.outputs.ami_id }}
+        run: |
+          echo "## AMI Build Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Architecture**: $RUNNER_ARCH" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **AMI ID**: $AMI_ID" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Region**: us-east-1" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **SSM Parameter**: /reinhardt-ci/runner-ami-id" >> "$GITHUB_STEP_SUMMARY"

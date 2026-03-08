@@ -22,19 +22,16 @@ module "github_runner" {
 
   # Runner OS / architecture
   runner_os           = "linux"
-  runner_architecture = "x64"
+  runner_architecture = "arm64"
 
-  # Ubuntu AMI uses 'ubuntu' user (module defaults to 'ec2-user' for Amazon Linux)
+  # Golden AMI (Ubuntu-based) uses 'ubuntu' user (module defaults to 'ec2-user' for Amazon Linux)
   runner_run_as = "ubuntu"
 
-  # Ubuntu 22.04 LTS (Jammy) AMI - Canonical official images in us-east-1
-  # Name pattern: ubuntu-jammy-22.04 (NOT ubuntu-22.04 which doesn't exist)
+  # Golden AMI built by Packer (build-runner-ami workflow).
+  # AMI ID is stored in SSM Parameter and updated by the workflow.
+  # ARN is constructed directly (not referenced) to avoid count-dependency issues at plan time.
   ami = {
-    filter = {
-      name  = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
-      state = ["available"]
-    }
-    owners = ["099720109477"] # Canonical
+    id_ssm_parameter_arn = "arn:aws:ssm:${var.aws_region}:${var.aws_account_id}:parameter/${var.prefix}/runner-ami-id"
   }
 
   # Spot fleet with fallback instance types for availability
@@ -79,8 +76,10 @@ module "github_runner" {
   # This template handles: AWS CLI, CloudWatch agent, runner install, and start.
   userdata_template = "${path.module}/userdata-ubuntu.sh"
 
-  # Pre-installation script: Docker, Rust build tools, TestContainers images
-  userdata_pre_install = file("${path.module}/runner-userdata.sh")
+  # Golden AMI has all tools pre-installed; only verify Docker is running.
+  userdata_pre_install = <<-EOT
+		systemctl is-active docker || systemctl start docker
+	EOT
 
   # Repository scope (not org-wide, for security isolation)
   enable_organization_runners = false
@@ -96,7 +95,7 @@ module "github_runner" {
   # period, scale-down terminates them before they become busy (race condition).
   scale_down_schedule_expression  = "cron(* * * * ? *)"
   minimum_running_time_in_minutes = 15
-  runner_boot_time_in_minutes     = 10 # Allow 10 min for cold start
+  runner_boot_time_in_minutes     = 5 # Golden AMI boots faster
 
   # Disable reserved concurrency for scale-up Lambda (-1 = use unreserved pool).
   # New AWS accounts have a low Lambda concurrency limit; reserving concurrency

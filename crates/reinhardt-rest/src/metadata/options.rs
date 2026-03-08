@@ -21,10 +21,15 @@ pub struct SerializerFieldInfo {
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct MetadataOptions {
+	/// The display name of the API view.
 	pub name: String,
+	/// A description of what the API view does.
 	pub description: String,
+	/// HTTP methods allowed on this view.
 	pub allowed_methods: Vec<String>,
+	/// Content types this view can render.
 	pub renders: Vec<String>,
+	/// Content types this view can parse from requests.
 	pub parses: Vec<String>,
 	/// Serializer field information for generating action metadata
 	pub serializer_fields: Option<HashMap<String, SerializerFieldInfo>>,

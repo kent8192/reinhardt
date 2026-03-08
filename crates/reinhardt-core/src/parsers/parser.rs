@@ -5,14 +5,19 @@ use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
 
+/// Type alias for parser errors, using the framework's `Error` type.
 pub type ParseError = Error;
+/// Type alias for parser results, using the framework's `Result` type.
 pub type ParseResult<T> = Result<T>;
 
 /// Media type representation
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaType {
+	/// Primary type (e.g., "application", "text").
 	pub main_type: String,
+	/// Subtype (e.g., "json", "html").
 	pub sub_type: String,
+	/// Additional parameters (e.g., charset=utf-8).
 	pub parameters: HashMap<String, String>,
 }
 
@@ -127,26 +132,41 @@ impl std::fmt::Display for MediaType {
 /// Parsed data representation
 #[derive(Debug, Clone)]
 pub enum ParsedData {
+	/// JSON-parsed data.
 	Json(Value),
+	/// XML-parsed data.
 	Xml(Value),
+	/// YAML-parsed data.
 	Yaml(Value),
+	/// URL-encoded form data.
 	Form(HashMap<String, String>),
+	/// Multipart form data with text fields and file uploads.
 	MultiPart {
+		/// Text field name-value pairs.
 		fields: HashMap<String, String>,
+		/// Uploaded file attachments.
 		files: Vec<UploadedFile>,
 	},
+	/// A single uploaded file.
 	File(UploadedFile),
+	/// MessagePack-parsed data.
 	MessagePack(Value),
+	/// Protobuf-parsed data.
 	Protobuf(Value),
 }
 
 /// Uploaded file representation
 #[derive(Debug, Clone)]
 pub struct UploadedFile {
+	/// Form field name for this upload.
 	pub name: String,
+	/// Original filename from the client, if provided.
 	pub filename: Option<String>,
+	/// MIME content type of the uploaded file.
 	pub content_type: Option<String>,
+	/// Size of the file data in bytes.
 	pub size: usize,
+	/// Raw file data.
 	pub data: Bytes,
 }
 

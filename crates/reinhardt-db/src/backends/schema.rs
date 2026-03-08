@@ -35,32 +35,57 @@ pub mod factory;
 pub enum DDLStatement {
 	/// CREATE TABLE statement
 	CreateTable {
+		/// The table name.
 		table: String,
+		/// Column definitions as (name, type) pairs.
 		columns: Vec<(String, String)>,
 	},
 	/// ALTER TABLE statement
 	AlterTable {
+		/// The table name.
 		table: String,
+		/// The list of changes to apply.
 		changes: Vec<AlterTableChange>,
 	},
 	/// DROP TABLE statement
-	DropTable { table: String, cascade: bool },
+	DropTable {
+		/// The table name.
+		table: String,
+		/// Whether to cascade the drop.
+		cascade: bool,
+	},
 	/// CREATE INDEX statement
 	CreateIndex {
+		/// The index name.
 		name: String,
+		/// The table name.
 		table: String,
+		/// The columns to index.
 		columns: Vec<String>,
+		/// Whether the index is unique.
 		unique: bool,
+		/// Optional WHERE condition for partial indexes.
 		condition: Option<String>,
 	},
 	/// DROP INDEX statement
-	DropIndex { name: String },
+	DropIndex {
+		/// The index name.
+		name: String,
+	},
 	/// CREATE SCHEMA statement
-	CreateSchema { name: String, if_not_exists: bool },
+	CreateSchema {
+		/// The schema name.
+		name: String,
+		/// Whether to use IF NOT EXISTS.
+		if_not_exists: bool,
+	},
 	/// DROP SCHEMA statement
 	DropSchema {
+		/// The schema name.
 		name: String,
+		/// Whether to cascade the drop.
 		cascade: bool,
+		/// Whether to use IF EXISTS.
 		if_exists: bool,
 	},
 	/// Raw SQL statement
@@ -98,28 +123,59 @@ impl DDLStatement {
 #[derive(Debug, Clone, PartialEq)]
 pub enum AlterTableChange {
 	/// Add a column
-	AddColumn { name: String, definition: String },
+	AddColumn {
+		/// The column name.
+		name: String,
+		/// The column definition SQL.
+		definition: String,
+	},
 	/// Drop a column
-	DropColumn { name: String },
+	DropColumn {
+		/// The column name.
+		name: String,
+	},
 	/// Rename a column
-	RenameColumn { old_name: String, new_name: String },
+	RenameColumn {
+		/// The old column name.
+		old_name: String,
+		/// The new column name.
+		new_name: String,
+	},
 	/// Alter column type
 	AlterColumnType {
+		/// The column name.
 		name: String,
+		/// The new column type.
 		new_type: String,
+		/// Optional collation for the column.
 		collation: Option<String>,
 	},
 	/// Set/drop column default
 	AlterColumnDefault {
+		/// The column name.
 		name: String,
+		/// The default value, or `None` to drop the default.
 		default: Option<String>,
 	},
 	/// Set/drop NOT NULL constraint
-	AlterColumnNullability { name: String, nullable: bool },
+	AlterColumnNullability {
+		/// The column name.
+		name: String,
+		/// Whether the column is nullable.
+		nullable: bool,
+	},
 	/// Add constraint
-	AddConstraint { name: String, definition: String },
+	AddConstraint {
+		/// The constraint name.
+		name: String,
+		/// The constraint definition SQL.
+		definition: String,
+	},
 	/// Drop constraint
-	DropConstraint { name: String },
+	DropConstraint {
+		/// The constraint name.
+		name: String,
+	},
 }
 
 /// Base trait for database schema editors

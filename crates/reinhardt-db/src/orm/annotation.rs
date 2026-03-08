@@ -33,10 +33,15 @@ pub enum AnnotationValue {
 /// Constant value types for annotations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Value {
+	/// String variant.
 	String(String),
+	/// Int variant.
 	Int(i64),
+	/// Float variant.
 	Float(f64),
+	/// Bool variant.
 	Bool(bool),
+	/// Null variant.
 	Null,
 }
 
@@ -67,7 +72,9 @@ pub enum Expression {
 	Divide(Box<AnnotationValue>, Box<AnnotationValue>),
 	/// CASE WHEN expression
 	Case {
+		/// The whens.
 		whens: Vec<When>,
+		/// The default.
 		default: Option<Box<AnnotationValue>>,
 	},
 	/// COALESCE(field1, field2, ...)
@@ -77,7 +84,9 @@ pub enum Expression {
 /// WHEN clause for CASE expressions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct When {
+	/// The condition.
 	pub condition: Q,
+	/// The then.
 	pub then: AnnotationValue,
 }
 
@@ -116,7 +125,9 @@ impl When {
 /// Represents an annotation on a QuerySet
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Annotation {
+	/// The alias.
 	pub alias: String,
+	/// The value.
 	pub value: AnnotationValue,
 }
 

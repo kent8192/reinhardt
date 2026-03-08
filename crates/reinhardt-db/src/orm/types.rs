@@ -41,14 +41,23 @@ pub trait SqlTypeDefinition: Send + Sync {
 /// Database value that can be sent to/from database
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SqlValue {
+	/// Null variant.
 	Null,
+	/// Boolean variant.
 	Boolean(bool),
+	/// Integer variant.
 	Integer(i64),
+	/// Float variant.
 	Float(f64),
+	/// Text variant.
 	Text(String),
+	/// Bytes variant.
 	Bytes(Vec<u8>),
+	/// Json variant.
 	Json(JsonValue),
+	/// Uuid variant.
 	Uuid(String),
+	/// Array variant.
 	Array(Vec<SqlValue>),
 }
 
@@ -87,9 +96,13 @@ impl std::error::Error for TypeError {}
 /// Database dialect for type mapping
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatabaseDialect {
+	/// PostgreSQL variant.
 	PostgreSQL,
+	/// MySQL variant.
 	MySQL,
+	/// SQLite variant.
 	SQLite,
+	/// MSSQL variant.
 	MSSQL,
 }
 

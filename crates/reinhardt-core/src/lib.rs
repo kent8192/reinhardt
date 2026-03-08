@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! # Reinhardt Core
 //!
 //! Core components for the Reinhardt framework, providing fundamental types,

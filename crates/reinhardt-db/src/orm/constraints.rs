@@ -3,14 +3,18 @@ use serde::{Deserialize, Serialize};
 
 /// Base trait for all constraints
 pub trait Constraint {
+	/// Converts the constraint to its SQL representation.
 	fn to_sql(&self) -> String;
+	/// Returns the constraint name.
 	fn name(&self) -> &str;
 }
 
 /// CHECK constraint (similar to Django's CheckConstraint)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckConstraint {
+	/// The name.
 	pub name: String,
+	/// The check.
 	pub check: String,
 }
 
@@ -47,8 +51,11 @@ impl Constraint for CheckConstraint {
 /// UNIQUE constraint (similar to Django's UniqueConstraint)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UniqueConstraint {
+	/// The name.
 	pub name: String,
+	/// The fields.
 	pub fields: Vec<String>,
+	/// The condition.
 	pub condition: Option<String>, // Partial unique constraint
 }
 
@@ -96,20 +103,32 @@ impl Constraint for UniqueConstraint {
 /// Foreign Key constraint
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForeignKeyConstraint {
+	/// The name.
 	pub name: String,
+	/// The field.
 	pub field: String,
+	/// The references table.
 	pub references_table: String,
+	/// The references field.
 	pub references_field: String,
+	/// The on delete.
 	pub on_delete: OnDelete,
+	/// The on update.
 	pub on_update: OnUpdate,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+/// Defines possible on delete values.
 pub enum OnDelete {
+	/// Cascade variant.
 	Cascade,
+	/// SetNull variant.
 	SetNull,
+	/// SetDefault variant.
 	SetDefault,
+	/// Restrict variant.
 	Restrict,
+	/// NoAction variant.
 	NoAction,
 }
 
@@ -128,11 +147,17 @@ impl OnDelete {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+/// Defines possible on update values.
 pub enum OnUpdate {
+	/// Cascade variant.
 	Cascade,
+	/// SetNull variant.
 	SetNull,
+	/// SetDefault variant.
 	SetDefault,
+	/// Restrict variant.
 	Restrict,
+	/// NoAction variant.
 	NoAction,
 }
 

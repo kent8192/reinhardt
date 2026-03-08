@@ -32,13 +32,20 @@ use serde_json::{self, Value};
 /// Default maximum nesting depth for JSON deserialization
 const DEFAULT_MAX_DEPTH: usize = 64;
 
+/// A form field for JSON data with optional schema validation.
 #[derive(Debug, Clone)]
 pub struct JSONField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Whether this field must be filled in.
 	pub required: bool,
+	/// Custom error messages keyed by error type.
 	pub error_messages: std::collections::HashMap<String, String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Help text displayed alongside the field.
 	pub help_text: String,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<Value>,
 	/// Whether to validate JSON is an object (not array, string, etc.)
 	pub require_object: bool,
@@ -88,26 +95,32 @@ impl JSONField {
 			max_depth: DEFAULT_MAX_DEPTH,
 		}
 	}
+	/// Sets whether this field is required.
 	pub fn required(mut self, required: bool) -> Self {
 		self.required = required;
 		self
 	}
+	/// Sets the help text displayed alongside the field.
 	pub fn help_text(mut self, text: impl Into<String>) -> Self {
 		self.help_text = text.into();
 		self
 	}
+	/// Sets the initial (default) JSON value.
 	pub fn initial(mut self, value: Value) -> Self {
 		self.initial = Some(value);
 		self
 	}
+	/// Requires the JSON value to be an object.
 	pub fn require_object(mut self) -> Self {
 		self.require_object = true;
 		self
 	}
+	/// Requires the JSON value to be an array.
 	pub fn require_array(mut self) -> Self {
 		self.require_array = true;
 		self
 	}
+	/// Sets the list of keys that must be present in JSON objects.
 	pub fn required_keys(mut self, keys: Vec<String>) -> Self {
 		self.required_keys = keys;
 		self
@@ -120,6 +133,7 @@ impl JSONField {
 		self.max_depth = depth;
 		self
 	}
+	/// Overrides the error message for a specific error type.
 	pub fn error_message(
 		mut self,
 		error_type: impl Into<String>,

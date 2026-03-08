@@ -14,18 +14,31 @@ use std::str::FromStr;
 /// calculations), consider using `rust_decimal::Decimal` in your application
 /// layer after form validation.
 pub struct DecimalField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Optional human-readable label for display.
 	pub label: Option<String>,
+	/// Whether this field must be filled in.
 	pub required: bool,
+	/// Optional help text displayed alongside the field.
 	pub help_text: Option<String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<serde_json::Value>,
+	/// Maximum allowed value.
 	pub max_value: Option<f64>,
+	/// Minimum allowed value.
 	pub min_value: Option<f64>,
+	/// Maximum total number of digits allowed.
 	pub max_digits: Option<usize>,
+	/// Maximum number of digits after the decimal point.
 	pub decimal_places: Option<usize>,
+	/// Whether to apply locale-aware formatting.
 	pub localize: bool,
+	/// The locale to use for formatting (e.g., "en_US").
 	pub locale: Option<String>,
+	/// Whether to display thousands separators.
 	pub use_thousands_separator: bool,
 }
 
@@ -58,14 +71,17 @@ impl DecimalField {
 			use_thousands_separator: false,
 		}
 	}
+	/// Enables or disables locale-aware formatting.
 	pub fn with_localize(mut self, localize: bool) -> Self {
 		self.localize = localize;
 		self
 	}
+	/// Sets the locale for number formatting.
 	pub fn with_locale(mut self, locale: String) -> Self {
 		self.locale = Some(locale);
 		self
 	}
+	/// Enables or disables thousands separator display.
 	pub fn with_thousands_separator(mut self, use_separator: bool) -> Self {
 		self.use_thousands_separator = use_separator;
 		self

@@ -10,11 +10,17 @@ use std::path::PathBuf;
 #[non_exhaustive]
 #[derive(Debug)]
 pub enum FileFieldError {
+	/// IoError variant.
 	IoError(io::Error),
+	/// InvalidPath variant.
 	InvalidPath(String),
+	/// InvalidImage variant.
 	InvalidImage(String),
+	/// InvalidDimensions variant.
 	InvalidDimensions {
+		/// The expected.
 		expected: (u32, u32),
+		/// The actual.
 		actual: (u32, u32),
 	},
 }
@@ -55,9 +61,13 @@ impl From<io::Error> for FileFieldError {
 /// ```
 #[derive(Debug, Clone)]
 pub struct FileField {
+	/// The base.
 	pub base: BaseField,
+	/// The upload to.
 	pub upload_to: String,
+	/// The max length.
 	pub max_length: u64,
+	/// The storage path.
 	pub storage_path: Option<PathBuf>,
 }
 
@@ -251,11 +261,17 @@ impl Field for FileField {
 /// ```
 #[derive(Debug, Clone)]
 pub struct ImageField {
+	/// The base.
 	pub base: BaseField,
+	/// The upload to.
 	pub upload_to: String,
+	/// The max length.
 	pub max_length: u64,
+	/// The storage path.
 	pub storage_path: Option<PathBuf>,
+	/// The width field.
 	pub width_field: Option<String>,
+	/// The height field.
 	pub height_field: Option<String>,
 }
 

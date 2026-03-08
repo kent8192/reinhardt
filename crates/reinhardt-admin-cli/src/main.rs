@@ -1,3 +1,5 @@
+#![warn(missing_docs)]
+
 //! Reinhardt Admin CLI
 //!
 //! Global command-line tool for Reinhardt project management.

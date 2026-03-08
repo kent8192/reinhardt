@@ -175,15 +175,20 @@ pub struct ForeignKeyInfo {
 /// Field state for migration detection
 #[derive(Debug, Clone)]
 pub struct FieldState {
+	/// The name.
 	pub name: String,
+	/// The field type.
 	pub field_type: super::FieldType,
+	/// The nullable.
 	pub nullable: bool,
+	/// The params.
 	pub params: std::collections::HashMap<String, String>,
 	/// ForeignKey information if this field is a foreign key
 	pub foreign_key: Option<ForeignKeyInfo>,
 }
 
 impl FieldState {
+	/// Creates a new instance.
 	pub fn new(name: impl Into<String>, field_type: super::FieldType, nullable: bool) -> Self {
 		Self {
 			name: name.into(),
@@ -537,6 +542,7 @@ impl Default for ProjectState {
 }
 
 impl ProjectState {
+	/// Converts to database schema.
 	pub fn to_database_schema(&self) -> super::schema_diff::DatabaseSchema {
 		let mut tables = BTreeMap::new();
 
@@ -2439,23 +2445,38 @@ impl Default for PatternMatcher {
 pub enum RuleCondition {
 	/// Model rename pattern
 	ModelRename {
+		/// The source model name pattern.
 		from_pattern: String,
+		/// The target model name pattern.
 		to_pattern: String,
 	},
 	/// Model move pattern
-	ModelMove { app_pattern: String },
+	ModelMove {
+		/// The application label pattern.
+		app_pattern: String,
+	},
 	/// Field addition pattern
-	FieldAddition { field_name_pattern: String },
+	FieldAddition {
+		/// The field name pattern.
+		field_name_pattern: String,
+	},
 	/// Field rename pattern
 	FieldRename {
+		/// The source field name pattern.
 		from_pattern: String,
+		/// The target field name pattern.
 		to_pattern: String,
 	},
 	/// Multiple model renames
-	MultipleModelRenames { min_count: usize },
+	MultipleModelRenames {
+		/// The minimum count of renames.
+		min_count: usize,
+	},
 	/// Multiple field additions
 	MultipleFieldAdditions {
+		/// The model name pattern.
 		model_pattern: String,
+		/// The minimum count of additions.
 		min_count: usize,
 	},
 }
@@ -2468,49 +2489,72 @@ pub enum RuleCondition {
 pub enum OperationRef {
 	/// Reference to a renamed model: (app_label, old_name, new_name)
 	RenamedModel {
+		/// The app label.
 		app_label: String,
+		/// The old name.
 		old_name: String,
+		/// The new name.
 		new_name: String,
 	},
 	/// Reference to a moved model: (from_app, to_app, model_name)
 	MovedModel {
+		/// The from app.
 		from_app: String,
+		/// The to app.
 		to_app: String,
+		/// The model name.
 		model_name: String,
 	},
 	/// Reference to an added field: (app_label, model_name, field_name)
 	AddedField {
+		/// The app label.
 		app_label: String,
+		/// The model name.
 		model_name: String,
+		/// The field name.
 		field_name: String,
 	},
 	/// Reference to a renamed field: (app_label, model_name, old_name, new_name)
 	RenamedField {
+		/// The app label.
 		app_label: String,
+		/// The model name.
 		model_name: String,
+		/// The old name.
 		old_name: String,
+		/// The new name.
 		new_name: String,
 	},
 	/// Reference to a removed field: (app_label, model_name, field_name)
 	RemovedField {
+		/// The app label.
 		app_label: String,
+		/// The model name.
 		model_name: String,
+		/// The field name.
 		field_name: String,
 	},
 	/// Reference to an altered field: (app_label, model_name, field_name)
 	AlteredField {
+		/// The app label.
 		app_label: String,
+		/// The model name.
 		model_name: String,
+		/// The field name.
 		field_name: String,
 	},
 	/// Reference to a created model: (app_label, model_name)
 	CreatedModel {
+		/// The app label.
 		app_label: String,
+		/// The model name.
 		model_name: String,
 	},
 	/// Reference to a deleted model: (app_label, model_name)
 	DeletedModel {
+		/// The app label.
 		app_label: String,
+		/// The model name.
 		model_name: String,
 	},
 }
@@ -4582,6 +4626,7 @@ impl MigrationAutodetector {
 		sorted
 	}
 
+	/// Performs the generate operations operation.
 	pub fn generate_operations(&self) -> Vec<super::Operation> {
 		let changes = self.detect_changes();
 		let mut operations = Vec::new();

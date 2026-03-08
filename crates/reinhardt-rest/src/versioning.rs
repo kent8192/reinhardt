@@ -54,23 +54,30 @@ use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 use thiserror::Error as ThisError;
 
+/// Errors that can occur during API version determination.
 #[derive(Debug, ThisError)]
 pub enum VersioningError {
+	/// The Accept header does not contain a valid version.
 	#[error("Invalid version in Accept header")]
 	InvalidAcceptHeader,
 
+	/// The URL path does not contain a valid version segment.
 	#[error("Invalid version in URL path")]
 	InvalidURLPath,
 
+	/// The URL namespace does not contain a valid version.
 	#[error("Invalid version in URL namespace")]
 	InvalidNamespace,
 
+	/// The hostname does not contain a valid version subdomain.
 	#[error("Invalid version in hostname")]
 	InvalidHostname,
 
+	/// The query parameter does not contain a valid version.
 	#[error("Invalid version in query parameter")]
 	InvalidQueryParameter,
 
+	/// The requested version is not in the allowed versions list.
 	#[error("Version not allowed: {0}")]
 	VersionNotAllowed(String),
 }
@@ -109,8 +116,11 @@ pub trait BaseVersioning: Send + Sync {
 /// Example: `Accept: application/json; version=1.0`
 #[derive(Debug, Clone)]
 pub struct AcceptHeaderVersioning {
+	/// The fallback version when no version is specified in the Accept header.
 	pub default_version: Option<String>,
+	/// The set of allowed API versions.
 	pub allowed_versions: HashSet<String>,
+	/// The parameter name to look for in the Accept header (default: `"version"`).
 	pub version_param: String,
 }
 
@@ -243,9 +253,13 @@ impl BaseVersioning for AcceptHeaderVersioning {
 /// Example: `/v1/users/` or `/api/v2/users/`
 #[derive(Debug, Clone)]
 pub struct URLPathVersioning {
+	/// The fallback version when no version is found in the URL path.
 	pub default_version: Option<String>,
+	/// The set of allowed API versions.
 	pub allowed_versions: HashSet<String>,
+	/// The parameter name for version (default: `"version"`).
 	pub version_param: String,
+	/// The regex pattern used to extract the version from the URL path.
 	pub path_regex: Regex,
 }
 
@@ -405,8 +419,11 @@ impl BaseVersioning for URLPathVersioning {
 /// Example: `v1.api.example.com` or `api-v2.example.com`
 #[derive(Debug, Clone)]
 pub struct HostNameVersioning {
+	/// The fallback version when no version is found in the hostname.
 	pub default_version: Option<String>,
+	/// The set of allowed API versions.
 	pub allowed_versions: HashSet<String>,
+	/// The regex pattern used to extract the version from the hostname.
 	pub hostname_regex: Regex,
 	/// Maps specific hostnames to their API versions.
 	/// Takes precedence over regex extraction.
@@ -589,8 +606,11 @@ impl BaseVersioning for HostNameVersioning {
 /// Example: `/users/?version=1.0` or `/users/?v=2.0`
 #[derive(Debug, Clone)]
 pub struct QueryParameterVersioning {
+	/// The fallback version when no version query parameter is present.
 	pub default_version: Option<String>,
+	/// The set of allowed API versions.
 	pub allowed_versions: HashSet<String>,
+	/// The query parameter name for the version (default: `"version"`).
 	pub version_param: String,
 }
 
@@ -714,7 +734,9 @@ impl BaseVersioning for QueryParameterVersioning {
 /// Now fully implemented with router namespace support
 #[derive(Debug)]
 pub struct NamespaceVersioning {
+	/// The fallback version when no version is found in the namespace.
 	pub default_version: Option<String>,
+	/// The set of allowed API versions.
 	pub allowed_versions: HashSet<String>,
 	/// Pattern for extracting version from namespace (e.g., "/v{version}/")
 	pub pattern: String,

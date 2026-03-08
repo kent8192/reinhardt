@@ -53,7 +53,12 @@ pub enum ScoringAlgorithm {
 	///
 	/// * `k1` - Controls term frequency saturation (typical: 1.2-2.0)
 	/// * `b` - Controls length normalization (typical: 0.75)
-	BM25 { k1: f64, b: f64 },
+	BM25 {
+		/// Controls term frequency saturation (typical: 1.2-2.0).
+		k1: f64,
+		/// Controls length normalization (typical: 0.75).
+		b: f64,
+	},
 
 	/// Custom scoring function
 	///

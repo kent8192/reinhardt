@@ -2,13 +2,20 @@ use crate::field::{FieldError, FieldResult, FormField, Widget};
 
 /// ChoiceField for selecting from predefined choices
 pub struct ChoiceField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Optional human-readable label for display.
 	pub label: Option<String>,
+	/// Whether a selection is required.
 	pub required: bool,
+	/// Optional help text displayed alongside the field.
 	pub help_text: Option<String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<serde_json::Value>,
-	pub choices: Vec<(String, String)>, // (value, label)
+	/// Available choices as (value, display_label) pairs.
+	pub choices: Vec<(String, String)>,
 }
 
 impl ChoiceField {
@@ -98,16 +105,24 @@ impl FormField for ChoiceField {
 
 /// MultipleChoiceField for selecting multiple choices
 pub struct MultipleChoiceField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Optional human-readable label for display.
 	pub label: Option<String>,
+	/// Whether at least one selection is required.
 	pub required: bool,
+	/// Optional help text displayed alongside the field.
 	pub help_text: Option<String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<serde_json::Value>,
+	/// Available choices as (value, display_label) pairs.
 	pub choices: Vec<(String, String)>,
 }
 
 impl MultipleChoiceField {
+	/// Creates a new `MultipleChoiceField` with the given name and choices.
 	pub fn new(name: String, choices: Vec<(String, String)>) -> Self {
 		Self {
 			name,

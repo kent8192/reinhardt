@@ -5,8 +5,11 @@ use serde_json::Value;
 
 /// Configuration for parameter representation
 pub struct ReprParamsConfig {
+	/// Maximum number of characters to display before truncation.
 	pub max_chars: usize,
+	/// Number of batch entries to show when truncating multi-parameter sets.
 	pub batches: usize,
+	/// Whether the parameters represent multiple bound parameter sets.
 	pub is_multi: bool,
 }
 

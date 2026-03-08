@@ -1,3 +1,5 @@
+#![warn(missing_docs)]
+
 //! Deeplink support for Reinhardt framework.
 //!
 //! This crate provides support for mobile app deep linking:

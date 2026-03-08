@@ -205,15 +205,18 @@ impl<T: FormModel> ModelFormSet<T> {
 	pub fn empty(prefix: String, config: ModelFormSetConfig) -> Self {
 		Self::new(prefix, Vec::new(), config)
 	}
+	/// Returns the prefix used for form field naming.
 	pub fn prefix(&self) -> &str {
 		self.formset.prefix()
 	}
+	/// Returns references to all model instances that have been loaded.
 	pub fn instances(&self) -> Vec<&T> {
 		self.model_forms
 			.iter()
 			.filter_map(|form| form.instance())
 			.collect()
 	}
+	/// Returns the number of forms backed by existing model instances.
 	pub fn form_count(&self) -> usize {
 		// Return number of forms with instances (not including extra empty forms)
 		self.model_forms
@@ -221,6 +224,7 @@ impl<T: FormModel> ModelFormSet<T> {
 			.filter(|form| form.instance().is_some())
 			.count()
 	}
+	/// Returns the total number of forms, including extra empty forms.
 	pub fn total_form_count(&self) -> usize {
 		// Return total number of forms including extras
 		self.model_forms.len()
@@ -240,6 +244,7 @@ impl<T: FormModel> ModelFormSet<T> {
 		// Validate all model forms
 		self.model_forms.iter_mut().all(|form| form.is_valid())
 	}
+	/// Collects and returns all validation errors from every form in the set.
 	pub fn errors(&self) -> Vec<String> {
 		// Collect errors from all model forms
 		self.model_forms

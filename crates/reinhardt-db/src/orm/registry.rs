@@ -4,12 +4,16 @@ use std::sync::{Arc, RwLock};
 /// Table metadata information
 #[derive(Debug, Clone)]
 pub struct TableInfo {
+	/// The name.
 	pub name: String,
+	/// The columns.
 	pub columns: Vec<ColumnInfo>,
+	/// The primary key.
 	pub primary_key: Vec<String>,
 }
 
 impl TableInfo {
+	/// Creates a new instance.
 	pub fn new(name: impl Into<String>) -> Self {
 		Self {
 			name: name.into(),
@@ -18,11 +22,13 @@ impl TableInfo {
 		}
 	}
 
+	/// Performs the schema operation.
 	pub fn schema(self, _schema: &str) -> Self {
 		// Schema information would be stored here
 		self
 	}
 
+	/// Adds column.
 	pub fn add_column(mut self, column: ColumnInfo) -> Self {
 		self.columns.push(column);
 		self
@@ -32,13 +38,18 @@ impl TableInfo {
 /// Column metadata information
 #[derive(Debug, Clone)]
 pub struct ColumnInfo {
+	/// The name.
 	pub name: String,
+	/// The column type.
 	pub column_type: String,
+	/// The nullable.
 	pub nullable: bool,
+	/// The default.
 	pub default: Option<String>,
 }
 
 impl ColumnInfo {
+	/// Creates a new instance.
 	pub fn new(name: impl Into<String>, column_type: impl Into<String>) -> Self {
 		Self {
 			name: name.into(),
@@ -66,12 +77,14 @@ pub struct MapperRegistry {
 }
 
 impl MapperRegistry {
+	/// Creates a new instance.
 	pub fn new() -> Self {
 		Self {
 			mappers: Arc::new(RwLock::new(HashMap::new())),
 		}
 	}
 
+	/// Performs the register operation.
 	pub fn register(&self, name: impl Into<String>, mapper: EntityMapper) {
 		let name = name.into();
 		if let Ok(mut mappers) = self.mappers.write() {
@@ -79,6 +92,7 @@ impl MapperRegistry {
 		}
 	}
 
+	/// Performs the get operation.
 	pub fn get(&self, name: &str) -> Option<EntityMapper> {
 		if let Ok(mappers) = self.mappers.read() {
 			mappers.get(name).cloned()
@@ -87,6 +101,7 @@ impl MapperRegistry {
 		}
 	}
 
+	/// Performs the remove operation.
 	pub fn remove(&self, name: &str) -> bool {
 		if let Ok(mut mappers) = self.mappers.write() {
 			mappers.remove(name).is_some()
@@ -95,12 +110,14 @@ impl MapperRegistry {
 		}
 	}
 
+	/// Performs the clear operation.
 	pub fn clear(&self) {
 		if let Ok(mut mappers) = self.mappers.write() {
 			mappers.clear();
 		}
 	}
 
+	/// Performs the count operation.
 	pub fn count(&self) -> usize {
 		if let Ok(mappers) = self.mappers.read() {
 			mappers.len()
@@ -119,12 +136,16 @@ impl Default for MapperRegistry {
 /// Entity mapper
 #[derive(Debug, Clone)]
 pub struct EntityMapper {
+	/// The table name.
 	pub table_name: String,
+	/// The columns.
 	pub columns: Vec<ColumnMapping>,
+	/// The primary key.
 	pub primary_key: Vec<String>,
 }
 
 impl EntityMapper {
+	/// Creates a new instance.
 	pub fn new(table_name: impl Into<String>) -> Self {
 		Self {
 			table_name: table_name.into(),
@@ -133,10 +154,12 @@ impl EntityMapper {
 		}
 	}
 
+	/// Adds column.
 	pub fn add_column(&mut self, mapping: ColumnMapping) {
 		self.columns.push(mapping);
 	}
 
+	/// Sets the primary key.
 	pub fn set_primary_key(&mut self, columns: Vec<String>) {
 		self.primary_key = columns;
 	}
@@ -145,13 +168,18 @@ impl EntityMapper {
 /// Column mapping
 #[derive(Debug, Clone)]
 pub struct ColumnMapping {
+	/// The property name.
 	pub property_name: String,
+	/// The column name.
 	pub column_name: String,
+	/// The column type.
 	pub column_type: String,
+	/// The nullable.
 	pub nullable: bool,
 }
 
 impl ColumnMapping {
+	/// Creates a new instance.
 	pub fn new(
 		property_name: impl Into<String>,
 		column_name: impl Into<String>,
@@ -165,6 +193,7 @@ impl ColumnMapping {
 		}
 	}
 
+	/// Performs the not null operation.
 	pub fn not_null(mut self) -> Self {
 		self.nullable = false;
 		self
@@ -306,9 +335,13 @@ pub trait EntityType {
 /// Model information for foreign key resolution
 #[derive(Debug, Clone)]
 pub struct ModelInfo {
+	/// The app label.
 	pub app_label: String,
+	/// The model name.
 	pub model_name: String,
+	/// The type path.
 	pub type_path: String,
+	/// The table name.
 	pub table_name: String,
 }
 
@@ -318,6 +351,7 @@ pub struct GlobalModelRegistry {
 }
 
 impl GlobalModelRegistry {
+	/// Creates a new instance.
 	pub fn new() -> Self {
 		Self {
 			models: Arc::new(RwLock::new(HashMap::new())),

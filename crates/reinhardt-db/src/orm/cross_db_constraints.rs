@@ -27,10 +27,15 @@ pub enum CrossDbError {
          crosses database boundaries. Cross-database foreign keys are not supported by most databases."
 	)]
 	ForeignKeyAcrossDatabase {
+		/// The source model.
 		source_model: String,
+		/// The target model.
 		target_model: String,
+		/// The field.
 		field: String,
+		/// The source db.
 		source_db: String,
+		/// The target db.
 		target_db: String,
 	},
 
@@ -41,10 +46,15 @@ pub enum CrossDbError {
          relationships are not supported."
 	)]
 	ManyToManyAcrossDatabase {
+		/// The source model.
 		source_model: String,
+		/// The target model.
 		target_model: String,
+		/// The field.
 		field: String,
+		/// The source db.
 		source_db: String,
+		/// The target db.
 		target_db: String,
 	},
 
@@ -54,10 +64,15 @@ pub enum CrossDbError {
          {target_model} ({target_db}) crosses database boundaries."
 	)]
 	OneToOneAcrossDatabase {
+		/// The source model.
 		source_model: String,
+		/// The target model.
 		target_model: String,
+		/// The field.
 		field: String,
+		/// The source db.
 		source_db: String,
+		/// The target db.
 		target_db: String,
 	},
 }

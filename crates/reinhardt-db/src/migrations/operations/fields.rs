@@ -66,8 +66,11 @@ pub use super::models::FieldDefinition;
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddField {
+	/// The model name.
 	pub model_name: String,
+	/// The field.
 	pub field: FieldDefinition,
+	/// The preserve default.
 	pub preserve_default: bool,
 }
 
@@ -159,7 +162,9 @@ impl AddField {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoveField {
+	/// The model name.
 	pub model_name: String,
+	/// The field name.
 	pub field_name: String,
 }
 
@@ -235,7 +240,9 @@ impl RemoveField {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlterField {
+	/// The model name.
 	pub model_name: String,
+	/// The field.
 	pub field: FieldDefinition,
 }
 
@@ -324,8 +331,11 @@ impl AlterField {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenameField {
+	/// The model name.
 	pub model_name: String,
+	/// The old name.
 	pub old_name: String,
+	/// The new name.
 	pub new_name: String,
 }
 

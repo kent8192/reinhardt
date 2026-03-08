@@ -12,8 +12,11 @@ use std::collections::HashMap;
 /// Validation error
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationError {
+	/// The field.
 	pub field: String,
+	/// The message.
 	pub message: String,
+	/// The code.
 	pub code: String,
 }
 
@@ -59,13 +62,16 @@ impl std::error::Error for ValidationError {}
 /// This is the ORM-specific validator trait. For the base validator trait,
 /// see `reinhardt_core::validators::Validator`.
 pub trait Validator: Send + Sync {
+	/// Validates the given value and returns an error if invalid.
 	fn validate(&self, value: &str) -> Result<()>;
+	/// Returns the error message for this validator.
 	fn message(&self) -> String;
 }
 
 /// Required field validator
 #[derive(Debug, Clone)]
 pub struct RequiredValidator {
+	/// The message.
 	pub message: String,
 }
 
@@ -143,7 +149,9 @@ impl OrmValidator for RequiredValidator {
 /// Max length validator
 #[derive(Debug, Clone)]
 pub struct MaxLengthValidator {
+	/// The max length.
 	pub max_length: usize,
+	/// The message.
 	pub message: String,
 }
 
@@ -216,7 +224,9 @@ impl OrmValidator for MaxLengthValidator {
 /// Min length validator
 #[derive(Debug, Clone)]
 pub struct MinLengthValidator {
+	/// The min length.
 	pub min_length: usize,
+	/// The message.
 	pub message: String,
 }
 
@@ -289,6 +299,7 @@ impl OrmValidator for MinLengthValidator {
 /// Email validator
 #[derive(Debug, Clone)]
 pub struct EmailValidator {
+	/// The message.
 	pub message: String,
 }
 
@@ -562,6 +573,7 @@ impl EmailValidator {
 /// URL validator
 #[derive(Debug, Clone)]
 pub struct URLValidator {
+	/// The message.
 	pub message: String,
 }
 
@@ -793,8 +805,11 @@ impl OrmValidator for RegexValidator {
 /// Numeric range validator
 #[derive(Debug, Clone)]
 pub struct RangeValidator {
+	/// The min.
 	pub min: Option<i64>,
+	/// The max.
 	pub max: Option<i64>,
+	/// The message.
 	pub message: String,
 }
 
@@ -901,6 +916,7 @@ impl OrmValidator for RangeValidator {
 
 /// Validator collection for a field
 pub struct FieldValidators {
+	/// The validators.
 	pub validators: Vec<Box<dyn Validator>>,
 }
 
@@ -971,6 +987,7 @@ impl Default for FieldValidators {
 
 /// Model validators collection
 pub struct ModelValidators {
+	/// The field validators.
 	pub field_validators: HashMap<String, FieldValidators>,
 }
 

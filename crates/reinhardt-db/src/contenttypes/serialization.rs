@@ -47,7 +47,12 @@ pub enum SerializationError {
 	/// Invalid data format
 	InvalidFormat(String),
 	/// Content type already exists during import
-	DuplicateEntry { app_label: String, model: String },
+	DuplicateEntry {
+		/// The application label.
+		app_label: String,
+		/// The model name.
+		model: String,
+	},
 }
 
 impl std::fmt::Display for SerializationError {

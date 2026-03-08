@@ -74,7 +74,12 @@ pub enum ReflectionError {
 	/// Field not found in model
 	FieldNotFound(String),
 	/// Type mismatch when accessing field
-	TypeMismatch { expected: String, actual: String },
+	TypeMismatch {
+		/// The expected type name.
+		expected: String,
+		/// The actual type name.
+		actual: String,
+	},
 	/// Invalid operation
 	InvalidOperation(String),
 	/// Serialization/deserialization error

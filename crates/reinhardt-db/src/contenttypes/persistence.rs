@@ -58,12 +58,15 @@ use crate::contenttypes::ContentType;
 #[cfg(feature = "database")]
 #[derive(Debug, thiserror::Error)]
 pub enum PersistenceError {
+	/// A database operation error.
 	#[error("Database error: {0}")]
 	DatabaseError(String),
 
+	/// A serialization or deserialization error.
 	#[error("Serialization error: {0}")]
 	SerializationError(String),
 
+	/// The requested item was not found.
 	#[error("Not found: {0}")]
 	NotFound(String),
 }
@@ -71,9 +74,13 @@ pub enum PersistenceError {
 #[non_exhaustive]
 #[cfg(not(feature = "database"))]
 #[derive(Debug)]
+/// Defines possible persistence error values.
 pub enum PersistenceError {
+	/// DatabaseError variant.
 	DatabaseError(String),
+	/// SerializationError variant.
 	SerializationError(String),
+	/// NotFound variant.
 	NotFound(String),
 }
 
@@ -121,8 +128,11 @@ impl std::error::Error for PersistenceError {}
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ContentTypeModel {
+	/// The id.
 	pub id: Option<i64>,
+	/// The app label.
 	pub app_label: String,
+	/// The model.
 	pub model: String,
 }
 

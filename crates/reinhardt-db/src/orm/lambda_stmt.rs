@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 
 /// Lambda statement for query caching
 pub struct LambdaStmt {
+	/// The cache key.
 	pub cache_key: String,
 	lambda_fn: Box<dyn Fn() -> String + Send + Sync>,
 }
@@ -205,7 +206,9 @@ impl Default for QueryCache {
 
 use once_cell::sync::Lazy;
 
+/// Global query cache.
 pub static QUERY_CACHE: Lazy<QueryCache> = Lazy::new(QueryCache::new);
+/// Global cache stats.
 pub static CACHE_STATS: Lazy<Arc<RwLock<CacheStatistics>>> =
 	Lazy::new(|| Arc::new(RwLock::new(CacheStatistics::new())));
 
@@ -214,6 +217,7 @@ type LambdaFunction = Box<dyn Fn() -> String + Send + Sync>;
 type LambdaFunctionMap = Arc<RwLock<HashMap<String, LambdaFunction>>>;
 
 // Lambda function registry
+/// Represents a lambda registry.
 pub struct LambdaRegistry {
 	// Allow dead_code: function registry stored for future lambda statement execution
 	#[allow(dead_code)]
@@ -245,9 +249,13 @@ impl LambdaRegistry {
 
 // Cache statistics
 #[derive(Debug, Clone)]
+/// Represents a cache statistics.
 pub struct CacheStatistics {
+	/// The hits.
 	pub hits: usize,
+	/// The misses.
 	pub misses: usize,
+	/// The total size.
 	pub total_size: usize,
 }
 

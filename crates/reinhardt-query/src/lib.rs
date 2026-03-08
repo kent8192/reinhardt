@@ -1,3 +1,5 @@
+#![warn(missing_docs)]
+
 //! # reinhardt-query
 //!
 //! A type-safe SQL query builder for the Reinhardt framework.

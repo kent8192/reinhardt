@@ -50,6 +50,11 @@ jobs:
         if: ${{ contains(inputs.runner || '', 'self-hosted') }}
         run: |
           if ! command -v gh &>/dev/null; then
+            # Wait for unattended-upgrades or other apt processes to finish
+            while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+              echo "Waiting for dpkg lock to be released..."
+              sleep 5
+            done
             curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
               | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
             sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg

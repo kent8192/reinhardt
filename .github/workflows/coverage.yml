@@ -294,6 +294,10 @@ jobs:
           # cargo-llvm-cov nextest not generating profraw with --test flag.
           # See: #2078
           source <(cargo llvm-cov show-env --export-prefix)
+          echo "=== Coverage env ==="
+          echo "LLVM_PROFILE_FILE=$LLVM_PROFILE_FILE"
+          echo "CARGO_TARGET_DIR=$CARGO_TARGET_DIR"
+          echo "RUSTFLAGS=$RUSTFLAGS"
           cargo test --no-run \
             --workspace \
             --test "*" \
@@ -306,6 +310,10 @@ jobs:
             -E "$FILTER_EXPR" \
             --all-features \
             --no-fail-fast
+          echo "=== Profraw search ==="
+          find "${CARGO_TARGET_DIR}" -name "*.profraw" 2>/dev/null | head -20
+          find "${CARGO_TARGET_DIR}" -name "*.profraw" 2>/dev/null | wc -l
+          df -h /tmp
           cargo llvm-cov report \
             --codecov \
             --output-path /tmp/intra-crate-codecov.json
@@ -446,6 +454,10 @@ jobs:
           # cargo-llvm-cov nextest not generating profraw with --test flag.
           # See: #2078
           source <(cargo llvm-cov show-env --export-prefix)
+          echo "=== Coverage env ==="
+          echo "LLVM_PROFILE_FILE=$LLVM_PROFILE_FILE"
+          echo "CARGO_TARGET_DIR=$CARGO_TARGET_DIR"
+          echo "RUSTFLAGS=$RUSTFLAGS"
           cargo test --no-run \
             --package reinhardt-integration-tests \
             --all-features
@@ -454,6 +466,10 @@ jobs:
             --all-features \
             --no-fail-fast \
             "${FILTER_ARGS[@]}"
+          echo "=== Profraw search ==="
+          find "${CARGO_TARGET_DIR}" -name "*.profraw" 2>/dev/null | head -20
+          find "${CARGO_TARGET_DIR}" -name "*.profraw" 2>/dev/null | wc -l
+          df -h /tmp
           cargo llvm-cov report \
             --codecov \
             --output-path /tmp/cross-crate-codecov.json

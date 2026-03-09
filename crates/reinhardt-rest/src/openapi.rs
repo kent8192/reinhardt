@@ -195,11 +195,11 @@ pub enum SchemaError {
 	#[error("Invalid schema: {0}")]
 	InvalidSchema(String),
 
-	/// A serialization or deserialization error occurred.
+	/// A serialization error occurred while processing the schema.
 	#[error("Serialization error: {0}")]
 	SerializationError(String),
 
-	/// An error occurred during schema inspection.
+	/// An error occurred in the schema inspector.
 	#[error("Inspector error: {0}")]
 	InspectorError(String),
 
@@ -208,5 +208,5 @@ pub enum SchemaError {
 	JsonError(#[from] serde_json::Error),
 }
 
-/// Result type alias for schema operations.
+/// Result type for OpenAPI schema operations.
 pub type SchemaResult<T> = std::result::Result<T, SchemaError>;

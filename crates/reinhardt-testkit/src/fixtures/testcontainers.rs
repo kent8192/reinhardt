@@ -412,7 +412,7 @@ pub async fn postgres_container() -> (ContainerAsync<GenericImage>, Arc<sqlx::Pg
 	(postgres, Arc::new(pool), port, database_url)
 }
 
-/// Creates and starts a CockroachDB container, returning the container handle, pool, port, and URL.
+/// Create a CockroachDB container with a connection pool for testing
 pub async fn cockroachdb_container()
 -> (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String) {
 	use testcontainers::core::IntoContainerPort;
@@ -553,7 +553,7 @@ async fn try_start_redis_container()
 /// Stores cluster container reference and initial node ports.
 /// Used for cleanup and port tracking.
 pub struct RedisClusterContainer {
-	/// Running Redis Cluster container handle.
+	/// The running Redis Cluster container handle.
 	pub container: ContainerAsync<GenericImage>,
 	/// Initial 6 node ports (7000-7005 mapped to host ports)
 	pub node_ports: Vec<u16>,
@@ -708,7 +708,7 @@ async fn try_start_redis_cluster(
 	.into())
 }
 
-/// Fixture that provides a ready Redis Cluster container with verified port mappings.
+/// Start a Redis Cluster container and wait until all node ports are ready
 #[fixture]
 pub async fn redis_cluster_ports_ready(
 	#[future] redis_cluster_cleanup: (),

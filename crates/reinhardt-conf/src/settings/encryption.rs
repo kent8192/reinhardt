@@ -6,24 +6,25 @@ use aes_gcm::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Encrypted configuration data with its associated nonce.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Holds encrypted configuration data with its associated nonce.
 pub struct EncryptedConfig {
-	/// The AES-256-GCM encrypted ciphertext.
+	/// The encrypted data bytes.
 	pub data: Vec<u8>,
-	/// The 12-byte nonce used for encryption.
+	/// The nonce used for AES-GCM encryption.
 	pub nonce: Vec<u8>,
 }
 
 impl EncryptedConfig {
-	/// Creates a new `EncryptedConfig` from raw ciphertext and nonce bytes.
+	/// Create a new `EncryptedConfig` from encrypted data and its nonce.
 	pub fn new(data: Vec<u8>, nonce: Vec<u8>) -> Self {
 		Self { data, nonce }
 	}
 }
 
-/// AES-256-GCM encryptor for configuration values.
+/// AES-256-GCM based configuration encryptor.
 pub struct ConfigEncryptor {
 	cipher: Aes256Gcm,
 }

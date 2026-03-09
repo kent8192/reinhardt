@@ -8,11 +8,11 @@ use tempfile::TempDir;
 
 /// Helper to create temporary directories and files for testing
 pub struct TestFileSetup {
-	/// Temporary directory that is cleaned up on drop.
+	/// The temporary directory that holds the test files.
 	pub temp_dir: TempDir,
-	/// Path to the created test file.
+	/// The path to the primary test file.
 	pub file_path: PathBuf,
-	/// Content written to the test file.
+	/// The content of the primary test file.
 	pub content: Vec<u8>,
 }
 
@@ -144,13 +144,13 @@ pub mod integration_helpers {
 
 	/// Setup for integration tests
 	pub struct IntegrationTestSetup {
-		/// Temporary directories used by the test (cleaned up on drop).
+		/// Temporary directories used by the test (kept alive for the test duration).
 		pub temp_dirs: Vec<TempDir>,
 		/// Static files configuration for the test.
 		pub config: StaticFilesConfig,
-		/// Static files finder configured with test directories.
+		/// Finder instance for locating static files across configured directories.
 		pub finder: StaticFilesFinder,
-		/// Static file handler for serving files in tests.
+		/// Handler instance for serving static files.
 		pub handler: StaticFileHandler,
 	}
 

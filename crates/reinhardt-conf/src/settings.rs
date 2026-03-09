@@ -21,6 +21,7 @@ pub mod dynamic;
 #[cfg(feature = "async")]
 pub mod backends;
 
+/// Secret management with provider-based storage and rotation support.
 #[cfg(feature = "async")]
 pub mod secrets;
 

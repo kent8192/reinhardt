@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       runner: ${{ steps.set-runner.outputs.runner }}
-      cargo-build-jobs: ${{ steps.set-runner.outputs.cargo-build-jobs }}
+      coverage-cargo-build-jobs: ${{ steps.set-runner.outputs.coverage-cargo-build-jobs }}
     steps:
       - name: Set runner configuration
         id: set-runner
@@ -34,10 +34,10 @@ jobs:
         run: |
           if [[ "$ACTOR" == "$REPO_OWNER" ]] && [[ "$SELF_HOSTED_ENABLED" == "true" ]]; then
             echo 'runner=["self-hosted","linux","arm64","reinhardt-ci"]' >> "$GITHUB_OUTPUT"
-            echo 'cargo-build-jobs=8' >> "$GITHUB_OUTPUT"
+            echo 'coverage-cargo-build-jobs=4' >> "$GITHUB_OUTPUT"
           else
             echo 'runner="ubuntu-latest"' >> "$GITHUB_OUTPUT"
-            echo 'cargo-build-jobs=1' >> "$GITHUB_OUTPUT"
+            echo 'coverage-cargo-build-jobs=1' >> "$GITHUB_OUTPUT"
           fi
 
   coverage:
@@ -47,4 +47,4 @@ jobs:
     secrets: inherit
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
-      cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
+      cargo-build-jobs: ${{ needs.determine-runner.outputs.coverage-cargo-build-jobs }}

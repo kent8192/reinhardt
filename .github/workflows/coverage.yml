@@ -278,13 +278,14 @@ jobs:
           linker = "/tmp/clang-mold-wrapper"
           EOF
 
-      - name: Verify coverage configuration
+      - name: Set coverage environment
         run: |
-          echo "=== .cargo/config.toml ==="
-          cat .cargo/config.toml
-          echo "=== CARGO_TARGET_DIR: ${CARGO_TARGET_DIR} ==="
-          echo "=== llvm-cov-target contents ==="
-          ls -la "${CARGO_TARGET_DIR}/llvm-cov-target/" 2>/dev/null || echo "(not found)"
+          source <(cargo llvm-cov show-env --export-prefix)
+          echo "LLVM_PROFILE_FILE=${LLVM_PROFILE_FILE}" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=${RUSTFLAGS}" >> "$GITHUB_ENV"
+          echo "CARGO_LLVM_COV=1" >> "$GITHUB_ENV"
+          echo "CARGO_LLVM_COV_SHOW_ENV=1" >> "$GITHUB_ENV"
+          echo "CARGO_LLVM_COV_TARGET_DIR=${CARGO_LLVM_COV_TARGET_DIR}" >> "$GITHUB_ENV"
 
       - name: Run intra-crate integration tests with coverage
         env:
@@ -296,8 +297,7 @@ jobs:
           else
             FILTER_EXPR="not binary(/ui/)"
           fi
-          cargo llvm-cov nextest \
-            --no-report \
+          cargo nextest run \
             --workspace \
             --test "*" \
             --exclude reinhardt-integration-tests \
@@ -314,6 +314,8 @@ jobs:
       - name: Debug profraw file locations
         if: failure()
         run: |
+          echo "=== LLVM_PROFILE_FILE: ${LLVM_PROFILE_FILE} ==="
+          echo "=== CARGO_LLVM_COV_TARGET_DIR: ${CARGO_LLVM_COV_TARGET_DIR} ==="
           echo "=== Searching for profraw files ==="
           find "${CARGO_TARGET_DIR}" -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in CARGO_TARGET_DIR"
           find /tmp -maxdepth 3 -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in /tmp"
@@ -444,13 +446,14 @@ jobs:
           linker = "/tmp/clang-mold-wrapper"
           EOF
 
-      - name: Verify coverage configuration
+      - name: Set coverage environment
         run: |
-          echo "=== .cargo/config.toml ==="
-          cat .cargo/config.toml
-          echo "=== CARGO_TARGET_DIR: ${CARGO_TARGET_DIR} ==="
-          echo "=== llvm-cov-target contents ==="
-          ls -la "${CARGO_TARGET_DIR}/llvm-cov-target/" 2>/dev/null || echo "(not found)"
+          source <(cargo llvm-cov show-env --export-prefix)
+          echo "LLVM_PROFILE_FILE=${LLVM_PROFILE_FILE}" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=${RUSTFLAGS}" >> "$GITHUB_ENV"
+          echo "CARGO_LLVM_COV=1" >> "$GITHUB_ENV"
+          echo "CARGO_LLVM_COV_SHOW_ENV=1" >> "$GITHUB_ENV"
+          echo "CARGO_LLVM_COV_TARGET_DIR=${CARGO_LLVM_COV_TARGET_DIR}" >> "$GITHUB_ENV"
 
       - name: Run cross-crate integration tests with coverage
         env:
@@ -461,8 +464,7 @@ jobs:
           if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
             FILTER_ARGS+=(-E "$NEXTEST_FILTER_EXPR")
           fi
-          cargo llvm-cov nextest \
-            --no-report \
+          cargo nextest run \
             --package reinhardt-integration-tests \
             --all-features \
             --no-fail-fast \
@@ -477,6 +479,8 @@ jobs:
       - name: Debug profraw file locations
         if: failure()
         run: |
+          echo "=== LLVM_PROFILE_FILE: ${LLVM_PROFILE_FILE} ==="
+          echo "=== CARGO_LLVM_COV_TARGET_DIR: ${CARGO_LLVM_COV_TARGET_DIR} ==="
           echo "=== Searching for profraw files ==="
           find "${CARGO_TARGET_DIR}" -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in CARGO_TARGET_DIR"
           find /tmp -maxdepth 3 -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in /tmp"

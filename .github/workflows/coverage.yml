@@ -106,8 +106,14 @@ jobs:
           echo "Disk usage after additional cleanup:"
           df -h
 
+      # Fully clean the llvm-cov target directory to avoid stale cached binaries
+      # from previous CI runs with different compiler flags on self-hosted runners.
+      # cargo llvm-cov clean only removes profraw files, not compiled binaries,
+      # which can cause profraw generation failures when flags change between runs.
       - name: Clean coverage artifacts
-        run: cargo llvm-cov clean --workspace
+        run: |
+          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
+          cargo llvm-cov clean --workspace
 
       # Configure mold linker via .cargo/config.toml instead of RUSTFLAGS.
       # RUSTFLAGS conflicts with cargo-llvm-cov's internal -C instrument-coverage flag,
@@ -241,7 +247,9 @@ jobs:
           images-file: .github/docker-images-intra-crate.txt
 
       - name: Clean coverage artifacts
-        run: cargo llvm-cov clean --workspace
+        run: |
+          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
+          cargo llvm-cov clean --workspace
 
       - name: Configure mold linker for coverage
         run: |
@@ -373,7 +381,9 @@ jobs:
           images-file: .github/docker-images-cross-crate.txt
 
       - name: Clean coverage artifacts
-        run: cargo llvm-cov clean --workspace
+        run: |
+          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
+          cargo llvm-cov clean --workspace
 
       - name: Configure mold linker for coverage
         run: |

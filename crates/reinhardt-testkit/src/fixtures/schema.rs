@@ -54,15 +54,19 @@ use reinhardt_db::orm::relationship::RelationshipType;
 /// Error type for schema operations
 #[derive(Debug, thiserror::Error)]
 pub enum SchemaError {
+	/// A field type could not be converted to a column definition.
 	#[error("Field conversion error: {0}")]
 	FieldConversion(String),
 
+	/// A migration failed to execute against the database.
 	#[error("Migration execution error: {0}")]
 	MigrationExecution(String),
 
+	/// Model dependencies could not be resolved (e.g., missing referenced model).
 	#[error("Dependency resolution error: {0}")]
 	DependencyResolution(String),
 
+	/// A circular dependency was detected among models.
 	#[error("Circular dependency detected: {0}")]
 	CircularDependency(String),
 }

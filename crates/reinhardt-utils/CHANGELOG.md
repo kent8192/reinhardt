@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.1.0-rc.5...reinhardt-utils@v0.1.0-rc.6) - 2026-03-09
+
+### Documentation
+
+- *(utils)* add missing public API documentation
+- add missing documentation for public items across crates
+
 ## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.1.0-rc.4...reinhardt-utils@v0.1.0-rc.5) - 2026-03-07
 
 ### Documentation

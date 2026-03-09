@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.1.0-rc.5...reinhardt-test@v0.1.0-rc.6) - 2026-03-09
+
+### Documentation
+
+- *(test)* add missing public API documentation
+- *(test)* add missing docs for feature-gated fixtures
+
 ## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.1.0-rc.4...reinhardt-test@v0.1.0-rc.5) - 2026-03-07
 
 ### Changed

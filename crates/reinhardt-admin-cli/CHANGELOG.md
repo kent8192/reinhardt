@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.1.0-rc.5...reinhardt-admin-cli@v0.1.0-rc.6) - 2026-03-09
+
+### Documentation
+
+- *(admin-cli)* add missing public API documentation
+
+### Fixed
+
+- *(admin-cli)* replace #[test] with #[rstest] and fix :: space bug
+
+### Styling
+
+- *(admin-cli)* add AAA comments to expression formatting tests
+
 ## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.1.0-alpha.19...reinhardt-admin-cli@v0.1.0-rc.1) - 2026-02-24
 
 ### Maintenance

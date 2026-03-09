@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-server@v0.1.0-rc.5...reinhardt-server@v0.1.0-rc.6) - 2026-03-09
+
+### Documentation
+
+- *(server)* add missing public API documentation
+- *(server)* add missing docs for feature-gated modules
+
 ## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-server@v0.1.0-rc.1...reinhardt-server@v0.1.0-rc.2) - 2026-03-04
 
 ### Maintenance

@@ -13,9 +13,9 @@ pub struct Index {
 	/// The condition.
 	pub condition: Option<String>, // Partial index
 	/// The include.
-	pub include: Vec<String>,      // Covering index
+	pub include: Vec<String>, // Covering index
 	/// The opclass.
-	pub opclass: Option<String>,   // Operator class
+	pub opclass: Option<String>, // Operator class
 }
 
 impl Index {

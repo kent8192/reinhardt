@@ -9,51 +9,51 @@ use serde::{Deserialize, Serialize};
 pub enum LookupType {
 	// Equality
 	/// Exact variant.
-	Exact,  // =
+	Exact, // =
 	/// IExact variant.
 	IExact, // ILIKE (case-insensitive)
 	/// Ne variant.
-	Ne,     // !=
+	Ne, // !=
 
 	// Pattern matching
 	/// Contains variant.
-	Contains,    // LIKE '%x%'
+	Contains, // LIKE '%x%'
 	/// IContains variant.
-	IContains,   // ILIKE '%x%'
+	IContains, // ILIKE '%x%'
 	/// StartsWith variant.
-	StartsWith,  // LIKE 'x%'
+	StartsWith, // LIKE 'x%'
 	/// IStartsWith variant.
 	IStartsWith, // ILIKE 'x%'
 	/// EndsWith variant.
-	EndsWith,    // LIKE '%x'
+	EndsWith, // LIKE '%x'
 	/// IEndsWith variant.
-	IEndsWith,   // ILIKE '%x'
+	IEndsWith, // ILIKE '%x'
 	/// Regex variant.
-	Regex,       // ~ (PostgreSQL)
+	Regex, // ~ (PostgreSQL)
 	/// IRegex variant.
-	IRegex,      // ~* (PostgreSQL)
+	IRegex, // ~* (PostgreSQL)
 
 	// Comparison
 	/// Gt variant.
-	Gt,    // >
+	Gt, // >
 	/// Gte variant.
-	Gte,   // >=
+	Gte, // >=
 	/// Lt variant.
-	Lt,    // <
+	Lt, // <
 	/// Lte variant.
-	Lte,   // <=
+	Lte, // <=
 	/// Range variant.
 	Range, // BETWEEN
 
 	// Set operations
 	/// In variant.
-	In,    // IN
+	In, // IN
 	/// NotIn variant.
 	NotIn, // NOT IN
 
 	// NULL checks
 	/// IsNull variant.
-	IsNull,    // IS NULL
+	IsNull, // IS NULL
 	/// IsNotNull variant.
 	IsNotNull, // IS NOT NULL
 }

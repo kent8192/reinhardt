@@ -293,6 +293,19 @@ jobs:
             --codecov \
             --output-path /tmp/intra-crate-codecov.json
 
+      - name: Debug profraw file locations
+        if: failure()
+        run: |
+          echo "=== Searching for profraw files ==="
+          find "${CARGO_TARGET_DIR}" -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in CARGO_TARGET_DIR"
+          find /tmp -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in /tmp"
+          echo ""
+          echo "=== llvm-cov-target structure ==="
+          ls -laR "${CARGO_TARGET_DIR}/llvm-cov-target/" 2>/dev/null | head -50 || echo "llvm-cov-target not found"
+          echo ""
+          echo "=== Disk space ==="
+          df -h /tmp
+
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
@@ -415,6 +428,20 @@ jobs:
           linker = "/tmp/clang-mold-wrapper"
           EOF
 
+      - name: Verify coverage configuration
+        run: |
+          echo "=== .cargo/config.toml ==="
+          cat .cargo/config.toml
+          echo ""
+          echo "=== CARGO_TARGET_DIR ==="
+          echo "${CARGO_TARGET_DIR}"
+          echo ""
+          echo "=== Target dir contents ==="
+          ls -la "${CARGO_TARGET_DIR}/" 2>/dev/null || echo "(empty or not found)"
+          echo ""
+          echo "=== llvm-cov-target contents ==="
+          ls -la "${CARGO_TARGET_DIR}/llvm-cov-target/" 2>/dev/null || echo "(empty or not found)"
+
       - name: Run cross-crate integration tests with coverage
         env:
           NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
@@ -431,6 +458,23 @@ jobs:
             --codecov \
             --output-path /tmp/cross-crate-codecov.json \
             "${FILTER_ARGS[@]}"
+
+      - name: Debug profraw file locations
+        if: failure()
+        run: |
+          echo "=== Searching for profraw files ==="
+          find "${CARGO_TARGET_DIR}" -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in CARGO_TARGET_DIR"
+          find /tmp -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in /tmp"
+          echo ""
+          echo "=== llvm-cov-target structure ==="
+          ls -laR "${CARGO_TARGET_DIR}/llvm-cov-target/" 2>/dev/null | head -50 || echo "llvm-cov-target not found"
+          echo ""
+          echo "=== Disk space ==="
+          df -h /tmp
+          echo ""
+          echo "=== Target dir size ==="
+          du -sh "${CARGO_TARGET_DIR}/" 2>/dev/null || echo "not found"
+          du -sh "${CARGO_TARGET_DIR}/llvm-cov-target/" 2>/dev/null || echo "not found"
 
       - name: Upload coverage to Codecov
         if: always()

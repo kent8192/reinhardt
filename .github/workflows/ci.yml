@@ -81,6 +81,7 @@ jobs:
     outputs:
       runner: ${{ steps.set-runner.outputs.runner }}
       cargo-build-jobs: ${{ steps.set-runner.outputs.cargo-build-jobs }}
+      coverage-cargo-build-jobs: ${{ steps.set-runner.outputs.coverage-cargo-build-jobs }}
     steps:
       - name: Parse PR checkbox for self-hosted
         if: github.event_name == 'pull_request'
@@ -126,10 +127,12 @@ jobs:
             # Self-hosted: faster CI with AWS Spot instances
             echo 'runner=["self-hosted","linux","arm64","reinhardt-ci"]' >> "$GITHUB_OUTPUT"
             echo 'cargo-build-jobs=8' >> "$GITHUB_OUTPUT"
+            echo 'coverage-cargo-build-jobs=4' >> "$GITHUB_OUTPUT"
           else
             # GitHub-hosted: free, slower; CARGO_BUILD_JOBS=1 prevents OOM on 7GB RAM
             echo 'runner="ubuntu-latest"' >> "$GITHUB_OUTPUT"
             echo 'cargo-build-jobs=1' >> "$GITHUB_OUTPUT"
+            echo 'coverage-cargo-build-jobs=1' >> "$GITHUB_OUTPUT"
           fi
 
   # Detect which packages are affected by the PR changes.
@@ -303,7 +306,7 @@ jobs:
     secrets: inherit
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
-      cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
+      cargo-build-jobs: ${{ needs.determine-runner.outputs.coverage-cargo-build-jobs }}
       nextest-filter: ${{ needs.detect-affected.outputs.nextest-filter }}
       run-all: ${{ needs.detect-affected.outputs.run-all }}
 

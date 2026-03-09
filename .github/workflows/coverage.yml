@@ -24,7 +24,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  CARGO_TARGET_DIR: /tmp/cargo_target
   CARGO_INCREMENTAL: 0
   CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
@@ -36,6 +35,8 @@ jobs:
     name: Unit Test Coverage
     runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: /tmp/cargo_target_unit_cov
     permissions:
       id-token: write
       contents: read
@@ -77,6 +78,13 @@ jobs:
         with:
           tool: nextest
 
+      - name: Install mold linker and build dependencies
+        run: |
+          sudo apt-get update -o DPkg::Lock::Timeout=120
+          sudo apt-get install -y -o DPkg::Lock::Timeout=120 mold clang lld build-essential
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2
         with:
@@ -98,6 +106,32 @@ jobs:
           rm -rf ~/.m2 || true
           echo "Disk usage after additional cleanup:"
           df -h
+
+      - name: Clean coverage artifacts
+        run: |
+          cargo llvm-cov clean --workspace
+          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
+
+      - name: Configure cargo for coverage
+        run: |
+          cat > /tmp/clang-mold-wrapper << 'WRAPPER'
+          #!/bin/sh
+          exec clang -fuse-ld=mold "$@"
+          WRAPPER
+          chmod +x /tmp/clang-mold-wrapper
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "aarch64" ]; then
+            TARGET="aarch64-unknown-linux-gnu"
+          elif [ "$ARCH" = "x86_64" ]; then
+            TARGET="x86_64-unknown-linux-gnu"
+          fi
+          cat > .cargo/config.toml << EOF
+          [env]
+          RUST_ANALYZER_CARGO_FEATURES = "all"
+
+          [target.${TARGET}]
+          linker = "/tmp/clang-mold-wrapper"
+          EOF
 
       - name: Run unit tests with coverage
         env:
@@ -134,6 +168,8 @@ jobs:
     name: Intra-Crate Integration Coverage
     runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 120
+    env:
+      CARGO_TARGET_DIR: /tmp/cargo_target_intra_cov
     permissions:
       id-token: write
       contents: read
@@ -167,8 +203,8 @@ jobs:
 
       - name: Install mold linker and build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y mold clang lld build-essential
+          sudo apt-get update -o DPkg::Lock::Timeout=120
+          sudo apt-get install -y -o DPkg::Lock::Timeout=120 mold clang lld build-essential
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
 
@@ -211,6 +247,32 @@ jobs:
         with:
           images-file: .github/docker-images-intra-crate.txt
 
+      - name: Clean coverage artifacts
+        run: |
+          cargo llvm-cov clean --workspace
+          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
+
+      - name: Configure cargo for coverage
+        run: |
+          cat > /tmp/clang-mold-wrapper << 'WRAPPER'
+          #!/bin/sh
+          exec clang -fuse-ld=mold "$@"
+          WRAPPER
+          chmod +x /tmp/clang-mold-wrapper
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "aarch64" ]; then
+            TARGET="aarch64-unknown-linux-gnu"
+          elif [ "$ARCH" = "x86_64" ]; then
+            TARGET="x86_64-unknown-linux-gnu"
+          fi
+          cat > .cargo/config.toml << EOF
+          [env]
+          RUST_ANALYZER_CARGO_FEATURES = "all"
+
+          [target.${TARGET}]
+          linker = "/tmp/clang-mold-wrapper"
+          EOF
+
       - name: Run intra-crate integration tests with coverage
         env:
           NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
@@ -248,6 +310,8 @@ jobs:
     name: Cross-Crate Integration Coverage
     runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: /tmp/cargo_target_cross_cov
     permissions:
       id-token: write
       contents: read
@@ -281,8 +345,8 @@ jobs:
 
       - name: Install mold linker and build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y mold clang lld build-essential
+          sudo apt-get update -o DPkg::Lock::Timeout=120
+          sudo apt-get install -y -o DPkg::Lock::Timeout=120 mold clang lld build-essential
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
 
@@ -324,6 +388,32 @@ jobs:
         uses: ./.github/actions/pull-docker-images
         with:
           images-file: .github/docker-images-cross-crate.txt
+
+      - name: Clean coverage artifacts
+        run: |
+          cargo llvm-cov clean --workspace
+          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
+
+      - name: Configure cargo for coverage
+        run: |
+          cat > /tmp/clang-mold-wrapper << 'WRAPPER'
+          #!/bin/sh
+          exec clang -fuse-ld=mold "$@"
+          WRAPPER
+          chmod +x /tmp/clang-mold-wrapper
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "aarch64" ]; then
+            TARGET="aarch64-unknown-linux-gnu"
+          elif [ "$ARCH" = "x86_64" ]; then
+            TARGET="x86_64-unknown-linux-gnu"
+          fi
+          cat > .cargo/config.toml << EOF
+          [env]
+          RUST_ANALYZER_CARGO_FEATURES = "all"
+
+          [target.${TARGET}]
+          linker = "/tmp/clang-mold-wrapper"
+          EOF
 
       - name: Run cross-crate integration tests with coverage
         env:

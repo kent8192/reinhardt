@@ -36,14 +36,14 @@ use tokio::sync::Mutex;
 /// Cache invalidation message types.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CacheInvalidationMessage {
-	/// Invalidate a specific key
+	/// Invalidate a specific key.
 	InvalidateKey {
 		/// The cache key to invalidate.
 		key: String,
 	},
-	/// Invalidate all keys matching a pattern
+	/// Invalidate all keys matching a pattern.
 	InvalidatePattern {
-		/// The glob pattern to match cache keys.
+		/// The glob pattern to match keys for invalidation.
 		pattern: String,
 	},
 	/// Clear all cache

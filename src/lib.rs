@@ -276,6 +276,7 @@ pub use reinhardt_conf::settings::sources::{
 
 // Re-export ApplyUpdate trait and macros
 pub use reinhardt_core::apply_update::ApplyUpdate;
+#[cfg(not(target_arch = "wasm32"))]
 pub use reinhardt_macros::{ApplyUpdate as DeriveApplyUpdate, apply_update};
 
 // Re-export core types

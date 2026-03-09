@@ -16,31 +16,40 @@ use thiserror::Error as ThisError;
 /// Errors that can occur when working with the application registry
 #[derive(Debug, ThisError)]
 pub enum AppError {
+	/// The requested application was not found in the registry.
 	#[error("Application not found: {0}")]
 	NotFound(String),
 
+	/// An application with the same label is already registered.
 	#[error("Application already registered: {0}")]
 	AlreadyRegistered(String),
 
+	/// The provided application label is invalid.
 	#[error("Invalid application label: {0}")]
 	InvalidLabel(String),
 
+	/// Two applications share the same label.
 	#[error("Duplicate application label: {0}")]
 	DuplicateLabel(String),
 
+	/// Two applications share the same name.
 	#[error("Duplicate application name: {0}")]
 	DuplicateName(String),
 
+	/// The application registry has not been initialized yet.
 	#[error("Application registry not ready")]
 	NotReady,
 
+	/// A configuration error occurred during application setup.
 	#[error("Application configuration error: {0}")]
 	ConfigError(String),
 
+	/// An error related to the internal state of the registry.
 	#[error("Registry state error: {0}")]
 	RegistryState(String),
 }
 
+/// A specialized `Result` type for application operations.
 pub type AppResult<T> = Result<T, AppError>;
 
 /// Configuration for a single application
@@ -970,8 +979,11 @@ pub trait BaseCommand: Send + Sync {
 /// Registered configurations will be automatically discovered by collectstatic.
 /// Uses static string references for compile-time registration.
 pub struct AppStaticFilesConfig {
+	/// Application label that owns these static files.
 	pub app_label: &'static str,
+	/// Filesystem path to the static files directory.
 	pub static_dir: &'static str,
+	/// URL prefix under which the static files are served.
 	pub url_prefix: &'static str,
 }
 
@@ -983,7 +995,9 @@ inventory::collect!(AppStaticFilesConfig);
 /// Registered configurations will be automatically discovered by makemessages.
 /// Uses static string references for compile-time registration.
 pub struct AppLocaleConfig {
+	/// Application label that owns these locale files.
 	pub app_label: &'static str,
+	/// Filesystem path to the locale directory.
 	pub locale_dir: &'static str,
 }
 
@@ -995,8 +1009,11 @@ inventory::collect!(AppLocaleConfig);
 /// Registered commands will be automatically discovered by the manage.py CLI.
 /// Uses static string references for compile-time registration.
 pub struct AppCommandConfig {
+	/// Application label that owns this command.
 	pub app_label: &'static str,
+	/// Name of the management command.
 	pub command_name: &'static str,
+	/// Factory function that creates the command instance.
 	pub command_fn: fn() -> Box<dyn BaseCommand>,
 }
 
@@ -1008,8 +1025,11 @@ inventory::collect!(AppCommandConfig);
 /// Registered configurations will be automatically discovered by collectmedia.
 /// Uses static string references for compile-time registration.
 pub struct AppMediaConfig {
+	/// Application label that owns these media files.
 	pub app_label: &'static str,
+	/// Filesystem path to the media files directory.
 	pub media_dir: &'static str,
+	/// URL prefix under which the media files are served.
 	pub url_prefix: &'static str,
 }
 

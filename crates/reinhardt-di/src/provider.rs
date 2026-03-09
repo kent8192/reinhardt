@@ -81,7 +81,9 @@ impl From<Arc<dyn Fn() -> ProviderFuture + Send + Sync>> for ProviderFn {
 	}
 }
 
+/// A dependency provider that asynchronously creates dependency instances.
 pub trait Provider: Send + Sync {
+	/// Produces a boxed future that resolves to the provided dependency value.
 	fn provide(&self) -> ProviderFuture;
 }
 

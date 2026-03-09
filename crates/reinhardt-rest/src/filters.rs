@@ -2,7 +2,7 @@
 //!
 //! Provides compile-time type-safe filtering using reinhardt-orm's Field<M, T> system.
 
-// Core filter trait
+/// Core filter trait and error types.
 pub mod filter;
 
 /// Supported database dialects for query generation

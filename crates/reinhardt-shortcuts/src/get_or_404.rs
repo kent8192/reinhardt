@@ -9,10 +9,13 @@ use tracing;
 /// Error type for get_or_404 operations
 #[derive(Debug, thiserror::Error)]
 pub enum GetError {
+	/// The queried object was not found in the database.
 	#[error("Object not found")]
 	NotFound,
+	/// The query returned more than one object when exactly one was expected.
 	#[error("Multiple objects returned")]
 	MultipleObjectsReturned,
+	/// A database error occurred during the query.
 	#[error("Database error: {0}")]
 	DatabaseError(String),
 }

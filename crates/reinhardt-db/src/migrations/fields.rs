@@ -6,48 +6,78 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FieldType {
 	// Integer types
+	/// BigInteger variant.
 	BigInteger,
+	/// Integer variant.
 	Integer,
+	/// SmallInteger variant.
 	SmallInteger,
-	TinyInt,   // MySQL-specific
+	/// TinyInt variant.
+	TinyInt, // MySQL-specific
+	/// MediumInt variant.
 	MediumInt, // MySQL-specific
 
 	// String types (with parameters)
+	/// Char variant.
 	Char(u32),
+	/// VarChar variant.
 	VarChar(u32),
+	/// Text variant.
 	Text,
-	TinyText,   // MySQL-specific
+	/// TinyText variant.
+	TinyText, // MySQL-specific
+	/// MediumText variant.
 	MediumText, // MySQL-specific
-	LongText,   // MySQL-specific
+	/// LongText variant.
+	LongText, // MySQL-specific
 
 	// Date/time types
+	/// Date variant.
 	Date,
+	/// Time variant.
 	Time,
+	/// DateTime variant.
 	DateTime,
+	/// TimestampTz variant.
 	TimestampTz, // PostgreSQL TIMESTAMPTZ
 
 	// Numeric types
+	/// Decimal variant.
 	Decimal {
+		/// The precision.
 		precision: u32,
+		/// The scale.
 		scale: u32,
 	},
+	/// Float variant.
 	Float,
+	/// Double variant.
 	Double,
+	/// Real variant.
 	Real,
 
 	// Boolean type
+	/// Boolean variant.
 	Boolean,
 
 	// Binary types
+	/// Binary variant.
 	Binary,
-	Blob,       // MySQL-specific
-	TinyBlob,   // MySQL-specific
+	/// Blob variant.
+	Blob, // MySQL-specific
+	/// TinyBlob variant.
+	TinyBlob, // MySQL-specific
+	/// MediumBlob variant.
 	MediumBlob, // MySQL-specific
-	LongBlob,   // MySQL-specific
-	Bytea,      // PostgreSQL-specific
+	/// LongBlob variant.
+	LongBlob, // MySQL-specific
+	/// Bytea variant.
+	Bytea, // PostgreSQL-specific
 
 	// JSON types
+	/// Json variant.
 	Json,
+	/// JsonBinary variant.
 	JsonBinary, // PostgreSQL JSONB
 
 	// PostgreSQL-specific types
@@ -75,39 +105,54 @@ pub enum FieldType {
 	TsQuery,
 
 	// Other types
+	/// Uuid variant.
 	Uuid,
+	/// Year variant.
 	Year, // MySQL-specific
 
 	// MySQL-specific collection types
+	/// Enum variant.
 	Enum {
+		/// The values.
 		values: Vec<String>,
 	},
+	/// Set variant.
 	Set {
+		/// The values.
 		values: Vec<String>,
 	},
 
 	// Relationship field types
 	/// ForeignKey relationship field
 	ForeignKey {
+		/// The to table.
 		to_table: String,
+		/// The to field.
 		to_field: String,
+		/// The on delete.
 		on_delete: super::ForeignKeyAction,
 	},
 
 	/// OneToOne relationship field
 	OneToOne {
+		/// The to.
 		to: String, // "app.Model" format
+		/// The on delete.
 		on_delete: super::ForeignKeyAction,
+		/// The on update.
 		on_update: super::ForeignKeyAction,
 	},
 
 	/// ManyToMany relationship field
 	ManyToMany {
-		to: String,              // "app.Model" format
+		/// The to.
+		to: String, // "app.Model" format
+		/// The through.
 		through: Option<String>, // Intermediate table name (None for auto-generation)
 	},
 
 	// Custom types
+	/// Custom variant.
 	Custom(String),
 }
 
@@ -308,131 +353,157 @@ impl FieldType {
 
 /// Trait for field types that provide their type name as a compile-time constant
 pub trait FieldTypeName {
+	/// The name constant.
 	const NAME: &'static str;
 }
 
 // Type-safe field type markers
+/// Represents a big integer field.
 pub struct BigIntegerField;
 impl FieldTypeName for BigIntegerField {
 	const NAME: &'static str = "BigIntegerField";
 }
 
+/// Represents a integer field.
 pub struct IntegerField;
 impl FieldTypeName for IntegerField {
 	const NAME: &'static str = "IntegerField";
 }
 
+/// Represents a small integer field.
 pub struct SmallIntegerField;
 impl FieldTypeName for SmallIntegerField {
 	const NAME: &'static str = "SmallIntegerField";
 }
 
+/// Represents a char field.
 pub struct CharField;
 impl FieldTypeName for CharField {
 	const NAME: &'static str = "CharField";
 }
 
+/// Represents a text field.
 pub struct TextField;
 impl FieldTypeName for TextField {
 	const NAME: &'static str = "TextField";
 }
 
+/// Represents a date time field.
 pub struct DateTimeField;
 impl FieldTypeName for DateTimeField {
 	const NAME: &'static str = "DateTimeField";
 }
 
+/// Represents a date field.
 pub struct DateField;
 impl FieldTypeName for DateField {
 	const NAME: &'static str = "DateField";
 }
 
+/// Represents a time field.
 pub struct TimeField;
 impl FieldTypeName for TimeField {
 	const NAME: &'static str = "TimeField";
 }
 
+/// Represents a boolean field.
 pub struct BooleanField;
 impl FieldTypeName for BooleanField {
 	const NAME: &'static str = "BooleanField";
 }
 
+/// Represents a decimal field.
 pub struct DecimalField;
 impl FieldTypeName for DecimalField {
 	const NAME: &'static str = "DecimalField";
 }
 
+/// Represents a binary field.
 pub struct BinaryField;
 impl FieldTypeName for BinaryField {
 	const NAME: &'static str = "BinaryField";
 }
 
+/// Represents a jsonfield.
 pub struct JSONField;
 impl FieldTypeName for JSONField {
 	const NAME: &'static str = "JSONField";
 }
 
+/// Represents a uuidfield.
 pub struct UUIDField;
 impl FieldTypeName for UUIDField {
 	const NAME: &'static str = "UUIDField";
 }
 
 // PostgreSQL-specific field type markers
+/// Represents a array field.
 pub struct ArrayField;
 impl FieldTypeName for ArrayField {
 	const NAME: &'static str = "ArrayField";
 }
 
+/// Represents a hstore field.
 pub struct HStoreField;
 impl FieldTypeName for HStoreField {
 	const NAME: &'static str = "HStoreField";
 }
 
+/// Represents a citext field.
 pub struct CITextField;
 impl FieldTypeName for CITextField {
 	const NAME: &'static str = "CITextField";
 }
 
+/// Represents a int4range field.
 pub struct Int4RangeField;
 impl FieldTypeName for Int4RangeField {
 	const NAME: &'static str = "Int4RangeField";
 }
 
+/// Represents a int8range field.
 pub struct Int8RangeField;
 impl FieldTypeName for Int8RangeField {
 	const NAME: &'static str = "Int8RangeField";
 }
 
+/// Represents a num range field.
 pub struct NumRangeField;
 impl FieldTypeName for NumRangeField {
 	const NAME: &'static str = "NumRangeField";
 }
 
+/// Represents a date range field.
 pub struct DateRangeField;
 impl FieldTypeName for DateRangeField {
 	const NAME: &'static str = "DateRangeField";
 }
 
+/// Represents a ts range field.
 pub struct TsRangeField;
 impl FieldTypeName for TsRangeField {
 	const NAME: &'static str = "TsRangeField";
 }
 
+/// Represents a ts tz range field.
 pub struct TsTzRangeField;
 impl FieldTypeName for TsTzRangeField {
 	const NAME: &'static str = "TsTzRangeField";
 }
 
+/// Represents a ts vector field.
 pub struct TsVectorField;
 impl FieldTypeName for TsVectorField {
 	const NAME: &'static str = "TsVectorField";
 }
 
+/// Represents a ts query field.
 pub struct TsQueryField;
 impl FieldTypeName for TsQueryField {
 	const NAME: &'static str = "TsQueryField";
 }
 
+/// Prelude module.
 pub mod prelude {
 	pub use super::{
 		// PostgreSQL-specific field types

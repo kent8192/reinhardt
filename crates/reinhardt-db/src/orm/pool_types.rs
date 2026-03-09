@@ -20,10 +20,15 @@ pub trait ConnectionHandle: Send + Sync + std::fmt::Debug {
 	fn connection_id(&self) -> &str;
 }
 
+/// Trait defining connection pool behavior.
 pub trait ConnectionPool: Send + Sync {
+	/// Acquires a connection from the pool.
 	fn get_connection(&self) -> Result<PooledConnection, PoolError>;
+	/// Returns a connection back to the pool.
 	fn return_connection(&self, conn: PooledConnection);
+	/// Returns the total pool size.
 	fn size(&self) -> usize;
+	/// Returns the number of currently active connections.
 	fn active_connections(&self) -> usize;
 }
 
@@ -104,10 +109,15 @@ impl PooledConnection {
 
 #[non_exhaustive]
 #[derive(Debug)]
+/// Defines possible pool error values.
 pub enum PoolError {
+	/// NoConnectionsAvailable variant.
 	NoConnectionsAvailable,
+	/// ConnectionFailed variant.
 	ConnectionFailed(String),
+	/// Timeout variant.
 	Timeout,
+	/// MaxConnectionsReached variant.
 	MaxConnectionsReached,
 }
 
@@ -120,7 +130,9 @@ struct PoolState {
 
 /// Queue-based connection pool (FIFO)
 pub struct QueuePool {
+	/// The max connections.
 	pub max_connections: usize,
+	/// The timeout.
 	pub timeout: Duration,
 	state: Arc<Mutex<PoolState>>,
 }
@@ -374,6 +386,7 @@ impl ConnectionPool for SingletonThreadPool {
 
 /// Async-compatible queue pool
 pub struct AsyncAdaptedQueuePool {
+	/// The max connections.
 	pub max_connections: usize,
 	semaphore: Arc<Semaphore>,
 	queue: Arc<TokioMutex<VecDeque<PooledConnection>>>,
@@ -572,11 +585,17 @@ impl Drop for AssertionPool {
 	}
 }
 
+/// Represents a pool statistics.
 pub struct PoolStatistics {
+	/// The total connections.
 	pub total_connections: usize,
+	/// The active connections.
 	pub active_connections: usize,
+	/// The idle connections.
 	pub idle_connections: usize,
+	/// The total requests.
 	pub total_requests: usize,
+	/// The failed requests.
 	pub failed_requests: usize,
 }
 

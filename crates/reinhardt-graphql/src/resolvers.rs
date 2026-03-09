@@ -11,8 +11,10 @@ use async_trait::async_trait;
 /// Base resolver trait
 #[async_trait]
 pub trait Resolver: Send + Sync {
+	/// The output type produced by this resolver.
 	type Output;
 
+	/// Execute the resolver and return the result.
 	async fn resolve(&self) -> GqlResult<Self::Output>;
 }
 
@@ -43,6 +45,7 @@ pub trait Resolver: Send + Sync {
 /// ```
 #[async_trait]
 pub trait ContextResolver: Send + Sync {
+	/// The output type produced by this resolver.
 	type Output;
 
 	/// Resolve using the provided GraphQL context

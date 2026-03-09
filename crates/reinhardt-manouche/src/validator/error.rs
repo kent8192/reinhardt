@@ -17,17 +17,37 @@ pub enum ValidationErrorKind {
 	/// Unknown HTML element
 	UnknownElement(String),
 	/// Invalid attribute for element
-	InvalidAttribute { element: String, attr: String },
+	InvalidAttribute {
+		/// The element that has the invalid attribute.
+		element: String,
+		/// The invalid attribute name.
+		attr: String,
+	},
 	/// Missing required attribute
-	MissingRequiredAttribute { element: String, attr: String },
+	MissingRequiredAttribute {
+		/// The element missing the attribute.
+		element: String,
+		/// The required attribute name.
+		attr: String,
+	},
 	/// Duplicate attribute
 	DuplicateAttribute(String),
 	/// Invalid event handler
 	InvalidEventHandler(String),
 	/// Type mismatch
-	TypeMismatch { expected: String, found: String },
+	TypeMismatch {
+		/// The expected type.
+		expected: String,
+		/// The type that was found.
+		found: String,
+	},
 	/// Invalid nesting (e.g., button inside button)
-	InvalidNesting { parent: String, child: String },
+	InvalidNesting {
+		/// The parent element.
+		parent: String,
+		/// The invalid child element.
+		child: String,
+	},
 	/// Void element cannot have children
 	VoidElementWithChildren(String),
 	/// Form-specific errors

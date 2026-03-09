@@ -85,9 +85,13 @@ use std::sync::{Arc, Mutex};
 /// Transaction isolation levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IsolationLevel {
+	/// ReadUncommitted variant.
 	ReadUncommitted,
+	/// ReadCommitted variant.
 	ReadCommitted,
+	/// RepeatableRead variant.
 	RepeatableRead,
+	/// Serializable variant.
 	Serializable,
 }
 
@@ -128,9 +132,13 @@ impl IsolationLevel {
 /// Transaction state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransactionState {
+	/// NotStarted variant.
 	NotStarted,
+	/// Active variant.
 	Active,
+	/// Committed variant.
 	Committed,
+	/// RolledBack variant.
 	RolledBack,
 }
 
@@ -142,6 +150,7 @@ pub enum TransactionState {
 #[derive(Debug, Clone)]
 pub struct Savepoint {
 	name: String,
+	/// The depth.
 	pub depth: usize,
 }
 

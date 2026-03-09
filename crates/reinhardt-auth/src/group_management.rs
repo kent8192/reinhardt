@@ -58,8 +58,11 @@ pub type GroupManagementResult<T> = Result<T, GroupManagementError>;
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Group {
+	/// Unique identifier for the group.
 	pub id: Uuid,
+	/// Name of the group.
 	pub name: String,
+	/// Optional description of the group's purpose.
 	pub description: Option<String>,
 }
 
@@ -79,7 +82,9 @@ pub struct Group {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateGroupData {
+	/// Name for the new group.
 	pub name: String,
+	/// Optional description for the new group.
 	pub description: Option<String>,
 }
 

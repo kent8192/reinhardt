@@ -52,21 +52,27 @@ use std::time::{Duration, Instant};
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum DynamicError {
+	/// An error originating from the storage backend.
 	#[error("Backend error: {0}")]
 	Backend(String),
 
+	/// A serialization or deserialization error.
 	#[error("Serialization error: {0}")]
 	Serialization(#[from] serde_json::Error),
 
+	/// The requested key was not found in the backend.
 	#[error("Key not found: {0}")]
 	KeyNotFound(String),
 
+	/// The stored value could not be converted to the requested type.
 	#[error("Invalid value type")]
 	InvalidType,
 
+	/// An error originating from the cache layer.
 	#[error("Cache error: {0}")]
 	Cache(String),
 
+	/// An error from the hot-reload file watcher.
 	#[cfg(feature = "hot-reload")]
 	#[error("Hot reload error: {0}")]
 	HotReload(String),

@@ -12,19 +12,27 @@ use std::collections::{HashMap, HashSet};
 /// Validation error type
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
-	/// Duplicate model name within the same app
+	/// Duplicate model name within the same app.
 	DuplicateModelName {
+		/// The application label where the duplicate was found.
 		app_label: String,
+		/// The duplicated model name.
 		model_name: String,
+		/// Number of occurrences of this model name.
 		count: usize,
 	},
-	/// Duplicate table name across different apps
+	/// Duplicate table name across different apps.
 	DuplicateTableName {
+		/// The duplicated table name.
 		table_name: String,
+		/// List of models that share this table name.
 		models: Vec<String>,
 	},
-	/// Circular relationship detected
-	CircularRelationship { path: Vec<String> },
+	/// Circular relationship detected.
+	CircularRelationship {
+		/// The cycle path as a sequence of model names.
+		path: Vec<String>,
+	},
 }
 
 impl std::fmt::Display for ValidationError {

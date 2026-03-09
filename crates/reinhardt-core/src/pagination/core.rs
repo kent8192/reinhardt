@@ -7,17 +7,24 @@ use serde::{Deserialize, Serialize};
 /// Represents pagination metadata
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaginationMetadata {
+	/// Total number of items across all pages.
 	pub count: usize,
+	/// URL for the next page, or `None` if this is the last page.
 	pub next: Option<String>,
+	/// URL for the previous page, or `None` if this is the first page.
 	pub previous: Option<String>,
 }
 
 /// Paginated response wrapper
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaginatedResponse<T> {
+	/// Total number of items across all pages.
 	pub count: usize,
+	/// URL for the next page, or `None` if this is the last page.
 	pub next: Option<String>,
+	/// URL for the previous page, or `None` if this is the first page.
 	pub previous: Option<String>,
+	/// Items on the current page.
 	pub results: Vec<T>,
 }
 
@@ -410,10 +417,15 @@ impl<'a, T: Clone> IntoIterator for &'a Page<T> {
 /// Schema parameter for OpenAPI/documentation
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SchemaParameter {
+	/// Parameter name (e.g., "page", "limit").
 	pub name: String,
+	/// Whether this parameter is required.
 	pub required: bool,
+	/// Where the parameter is found (e.g., "query", "path").
 	pub location: String,
+	/// Human-readable description of the parameter.
 	pub description: String,
+	/// Data type of the parameter (e.g., "integer", "string").
 	pub schema_type: String,
 }
 

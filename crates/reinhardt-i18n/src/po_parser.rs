@@ -19,16 +19,27 @@ const MAX_PO_FILE_SIZE: u64 = 10 * 1024 * 1024;
 /// Errors that can occur during .po file parsing
 #[derive(Debug, thiserror::Error)]
 pub enum PoParseError {
+	/// An I/O error occurred while reading the PO file.
 	#[error("IO error: {0}")]
 	IoError(#[from] std::io::Error),
+	/// A syntax error was encountered at a specific line in the PO file.
 	#[error("Parse error at line {line}: {message}")]
-	ParseError { line: usize, message: String },
+	ParseError {
+		/// The line number where the parse error occurred.
+		line: usize,
+		/// A description of the parse error.
+		message: String,
+	},
+	/// The PO file has an invalid or unsupported format.
 	#[error("Invalid format: {0}")]
 	InvalidFormat(String),
+	/// A plural form index exceeds the maximum supported value (5).
 	#[error("Invalid plural index: {0} (maximum is 5)")]
 	InvalidPluralIndex(usize),
+	/// The PO file exceeds the maximum allowed size.
 	#[error("PO file too large: {0} bytes (maximum is {MAX_PO_FILE_SIZE} bytes)")]
 	FileTooLarge(u64),
+	/// The PO file contains more entries than the allowed maximum.
 	#[error("Too many entries: {0} (maximum is {MAX_PO_ENTRIES})")]
 	TooManyEntries(usize),
 }

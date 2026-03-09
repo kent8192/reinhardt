@@ -755,8 +755,10 @@ impl Default for PathMatcher {
 /// Error type for Radix Router operations
 #[derive(Debug, thiserror::Error)]
 pub enum RadixRouterError {
+	/// The route pattern is syntactically invalid.
 	#[error("Invalid pattern: {0}")]
 	InvalidPattern(String),
+	/// The route could not be inserted into the radix tree (e.g., conflict).
 	#[error("Route insertion failed: {0}")]
 	InsertionFailed(String),
 }

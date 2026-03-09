@@ -9,8 +9,11 @@ use tokio::sync::Mutex;
 /// Tier definition
 #[derive(Debug, Clone)]
 pub struct Tier {
+	/// Name of the tier (e.g., "free", "premium").
 	pub name: String,
+	/// Maximum number of requests allowed within the duration.
 	pub rate: usize,
+	/// Time window for the rate limit.
 	pub duration: std::time::Duration,
 }
 

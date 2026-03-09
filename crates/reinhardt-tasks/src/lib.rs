@@ -61,6 +61,8 @@
 //! # }
 //! ```
 
+#![warn(missing_docs)]
+
 /// Task backend trait and built-in implementations.
 pub mod backend;
 /// Feature-gated backend implementations (Redis, SQLite, SQS, RabbitMQ).

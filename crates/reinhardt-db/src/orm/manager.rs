@@ -185,6 +185,7 @@ pub struct Manager<M: Model> {
 }
 
 impl<M: Model> Manager<M> {
+	/// Creates a new instance.
 	pub fn new() -> Self {
 		Self {
 			_marker: PhantomData,

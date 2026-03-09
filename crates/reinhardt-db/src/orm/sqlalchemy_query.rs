@@ -20,6 +20,7 @@ pub struct Column {
 }
 
 impl Column {
+	/// Creates a new instance.
 	pub fn new(name: &str) -> Self {
 		Self {
 			table: None,
@@ -27,11 +28,13 @@ impl Column {
 		}
 	}
 
+	/// Sets the table and returns self for chaining.
 	pub fn with_table(mut self, table: &str) -> Self {
 		self.table = Some(table.to_string());
 		self
 	}
 
+	/// Converts to sql.
 	pub fn to_sql(&self) -> String {
 		match &self.table {
 			Some(table) => format!("{}.{}", table, self.name),
@@ -43,9 +46,13 @@ impl Column {
 /// Join type - mirrors SQLAlchemy's join types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JoinType {
+	/// Inner variant.
 	Inner,
+	/// Left variant.
 	Left,
+	/// Right variant.
 	Right,
+	/// Full variant.
 	Full,
 }
 

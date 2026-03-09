@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! # Reinhardt Utils
 //!
 //! Utility functions for Reinhardt framework, inspired by Django's utils module.

@@ -8,26 +8,40 @@ use tokio::sync::RwLock;
 /// Debug panel information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DebugPanel {
+	/// Display title of the panel.
 	pub title: String,
+	/// Entries displayed within this panel.
 	pub content: Vec<DebugEntry>,
 }
 
+/// A single entry within a debug panel.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DebugEntry {
+	/// A key-value pair entry.
 	KeyValue {
+		/// The key label.
 		key: String,
+		/// The associated value.
 		value: String,
 	},
+	/// A tabular data entry.
 	Table {
+		/// Column header names.
 		headers: Vec<String>,
+		/// Row data (each inner Vec corresponds to one row).
 		rows: Vec<Vec<String>>,
 	},
+	/// A code snippet entry.
 	Code {
+		/// Programming language for syntax highlighting.
 		language: String,
+		/// The code content.
 		code: String,
 	},
+	/// A plain text entry.
 	Text {
+		/// The text content.
 		text: String,
 	},
 }
@@ -35,18 +49,26 @@ pub enum DebugEntry {
 /// Request/Response timing information
 #[derive(Debug, Clone, Serialize)]
 pub struct TimingInfo {
+	/// Total request processing time.
 	pub total_time: Duration,
+	/// Total time spent executing SQL queries.
 	pub sql_time: Duration,
+	/// Number of SQL queries executed.
 	pub sql_queries: usize,
+	/// Number of cache hits.
 	pub cache_hits: usize,
+	/// Number of cache misses.
 	pub cache_misses: usize,
 }
 
 /// SQL query record
 #[derive(Debug, Clone, Serialize)]
 pub struct SqlQuery {
+	/// The SQL query string.
 	pub query: String,
+	/// Time taken to execute the query.
 	pub duration: Duration,
+	/// Call stack at the point the query was executed.
 	pub stack_trace: Vec<String>,
 }
 

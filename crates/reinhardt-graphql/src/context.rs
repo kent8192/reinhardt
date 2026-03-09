@@ -24,10 +24,13 @@ pub enum ContextError {
 /// Error types for data loader operations
 #[derive(Debug, thiserror::Error)]
 pub enum LoaderError {
+	/// An error occurred during data loading.
 	#[error("Loader error: {0}")]
 	Load(String),
+	/// The requested item was not found.
 	#[error("Not found: {0}")]
 	NotFound(String),
+	/// The loaded data was invalid or could not be parsed.
 	#[error("Invalid data: {0}")]
 	InvalidData(String),
 }
@@ -61,7 +64,9 @@ pub enum LoaderError {
 /// ```
 #[async_trait]
 pub trait DataLoader: Send + Sync + 'static {
+	/// The key type used to look up values.
 	type Key: Send;
+	/// The value type returned by the loader.
 	type Value: Send;
 
 	/// Load a single value by key

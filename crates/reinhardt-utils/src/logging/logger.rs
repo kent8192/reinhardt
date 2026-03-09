@@ -1,30 +1,45 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+/// A trait for handling log records, dispatching them to an output destination.
 #[async_trait::async_trait]
 pub trait LogHandler: Send + Sync {
+	/// Processes a log record (e.g., writes it to a file or sends it over the network).
 	async fn handle(&self, record: &LogRecord);
+	/// Returns the minimum log level this handler will process.
 	fn level(&self) -> LogLevel;
+	/// Sets the minimum log level this handler will process.
 	fn set_level(&mut self, level: LogLevel);
 }
 
+/// Severity level for log records, ordered from least to most severe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LogLevel {
+	/// Detailed diagnostic information for debugging purposes.
 	Debug,
+	/// General informational messages about application progress.
 	Info,
+	/// Indicates a potential problem that does not prevent normal operation.
 	Warning,
+	/// Indicates a serious problem that may prevent some functionality.
 	Error,
 }
 
+/// A single log entry containing the level, source logger name, message, and optional extra data.
 #[derive(Debug, Clone)]
 pub struct LogRecord {
+	/// The severity level of this record.
 	pub level: LogLevel,
+	/// The name of the logger that created this record.
 	pub logger_name: String,
+	/// The log message text.
 	pub message: String,
+	/// Additional structured data attached to this record.
 	pub extra: HashMap<String, serde_json::Value>,
 }
 
 impl LogRecord {
+	/// Creates a new log record with the given level, logger name, and message.
 	pub fn new(
 		level: LogLevel,
 		logger_name: impl Into<String>,
@@ -80,6 +95,7 @@ impl LogRecord {
 	}
 }
 
+/// A named logger that dispatches log records to registered handlers.
 pub struct Logger {
 	name: String,
 	handlers: Arc<Mutex<Vec<Arc<dyn LogHandler>>>>,
@@ -87,6 +103,7 @@ pub struct Logger {
 }
 
 impl Logger {
+	/// Creates a new logger with the given name and a default level of `Debug`.
 	pub fn new(name: impl Into<String>) -> Self {
 		Self {
 			name: name.into(),
@@ -95,6 +112,7 @@ impl Logger {
 		}
 	}
 
+	/// Registers a handler that will receive log records from this logger.
 	pub async fn add_handler(&self, handler: Arc<dyn LogHandler>) {
 		self.handlers
 			.lock()
@@ -102,10 +120,12 @@ impl Logger {
 			.push(handler);
 	}
 
+	/// Sets the minimum log level; records below this level are discarded.
 	pub async fn set_level(&self, level: LogLevel) {
 		*self.level.lock().unwrap_or_else(|e| e.into_inner()) = level;
 	}
 
+	/// Dispatches a pre-built log record to all registered handlers.
 	pub async fn log_record(&self, record: &LogRecord) {
 		// Clone Arc references to handlers before releasing the lock
 		let handlers: Vec<Arc<dyn LogHandler>> = {
@@ -139,6 +159,7 @@ impl Logger {
 		}
 	}
 
+	/// Logs a message at the `Debug` level.
 	pub async fn debug(&self, message: impl Into<String>) {
 		self.log(LogLevel::Debug, message).await;
 	}
@@ -161,6 +182,7 @@ impl Logger {
 		self.log_sync(LogLevel::Debug, message);
 	}
 
+	/// Logs a message at the `Info` level.
 	pub async fn info(&self, message: impl Into<String>) {
 		self.log(LogLevel::Info, message).await;
 	}
@@ -183,6 +205,7 @@ impl Logger {
 		self.log_sync(LogLevel::Info, message);
 	}
 
+	/// Logs a message at the `Warning` level.
 	pub async fn warning(&self, message: impl Into<String>) {
 		self.log(LogLevel::Warning, message).await;
 	}
@@ -239,6 +262,7 @@ impl Logger {
 		}
 	}
 
+	/// Logs a message at the `Error` level.
 	pub async fn error(&self, message: impl Into<String>) {
 		self.log(LogLevel::Error, message).await;
 	}

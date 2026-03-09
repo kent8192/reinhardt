@@ -68,7 +68,10 @@ pub enum ReplaySpeed {
 	Fast,
 
 	/// Custom speed multiplier (e.g., 2.0 = 2x speed, 0.5 = half speed)
-	Custom { multiplier: f64 },
+	Custom {
+		/// The speed multiplier factor.
+		multiplier: f64,
+	},
 }
 
 impl ReplaySpeed {

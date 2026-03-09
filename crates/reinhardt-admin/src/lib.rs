@@ -19,6 +19,7 @@
 //! - `reinhardt-admin-api` - Backend API
 //! - `reinhardt-admin-ui` - Frontend UI
 
+#![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod adapters;

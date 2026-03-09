@@ -33,16 +33,23 @@
 //! // let handler_clone = server.handler();  // Returns Arc<dyn Handler>
 //! ```
 
+/// HTTP/1.1 server implementation based on Hyper.
 pub mod http;
+/// HTTP/2 server implementation with TLS support.
 pub mod http2;
+/// Rate limiting handler for controlling request throughput.
 pub mod rate_limit;
+/// Graceful shutdown coordination for server instances.
 pub mod shutdown;
+/// Request timeout handler for enforcing maximum execution time.
 pub mod timeout;
 
 #[cfg(feature = "graphql")]
+/// GraphQL request handler integration (requires `graphql` feature).
 pub mod graphql;
 
 #[cfg(feature = "websocket")]
+/// WebSocket server support with broadcast capabilities (requires `websocket` feature).
 pub mod websocket;
 
 pub use http::{HttpServer, serve, serve_with_shutdown};
@@ -62,7 +69,9 @@ pub use reinhardt_http::{Request, Response};
 
 /// Common server trait that all server types implement
 pub trait ServerHandler: Send + Sync {
+	/// The error type returned by this handler.
 	type Error;
+	/// Handles an incoming HTTP request and returns a response.
 	fn handle(
 		&self,
 		request: Request,

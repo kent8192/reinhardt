@@ -471,7 +471,7 @@ Reinhardt provides two types of environment variable sources with different prio
 Choose `EnvSource` when environment variables should always take precedence (e.g., production deployments).
 Choose `LowPriorityEnvSource` when TOML files should be the primary configuration source (e.g., development).
 
-See [Settings Documentation](docs/SETTINGS_DOCUMENT.md) for more details.
+See [Settings Documentation](https://reinhardt-web.dev/docs/settings/) for more details.
 
 **Using the Built-in DefaultUser:**
 
@@ -558,7 +558,7 @@ as it is automatically applied by the `#[model(...)]` attribute.
 - `#[field(null = true)]` - Allow NULL values
 - `#[field(unique = true)]` - Enforce uniqueness constraint
 
-For a complete list of field attributes, see the [Field Attributes Guide](docs/field_attributes.md).
+For a complete list of field attributes, see the [Field Attributes Guide](https://reinhardt-web.dev/docs/field-attributes/).
 
 The generated field accessors enable type-safe field references in queries:
 
@@ -602,7 +602,17 @@ async fn complex_user_query() -> Result<Vec<DefaultUser>, Box<dyn std::error::Er
 		.order_by(vec![(DefaultUser::field_date_joined().into(), "DESC")])
 		.function(RowNumber::new());
 
-	todo!("Execute query with these components")
+	// Build and execute the query using QuerySet
+	let users = DefaultUser::objects()
+		.filter(active_query)
+		.annotate("email_lower", email_lower)
+		.annotate("username_upper", username_upper)
+		.annotate("rank", rank_by_join_date)
+		.order_by(vec![("-date_joined",)])
+		.all()
+		.await?;
+
+	Ok(users)
 }
 
 // Transaction support
@@ -619,7 +629,7 @@ async fn create_user_with_transaction(
 }
 ```
 
-**Note**: Reinhardt uses reinhardt-query for SQL operations. The `#[derive(Model)]` macro automatically generates Model trait implementations, type-safe field accessors, and global model registry registration.
+**Note**: Reinhardt uses reinhardt-query for SQL operations. The `#[model(...)]` attribute automatically generates Model trait implementations, type-safe field accessors, and global model registry registration.
 
 Register in `src/config/apps.rs`:
 

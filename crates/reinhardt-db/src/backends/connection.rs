@@ -83,16 +83,19 @@ impl reinhardt_di::Injectable for DatabaseConnection {
 }
 
 impl DatabaseConnection {
+	/// Creates a new instance.
 	pub fn new(backend: Arc<dyn DatabaseBackend>) -> Self {
 		Self { backend }
 	}
 
 	#[cfg(feature = "postgres")]
+	/// Connects to postgres.
 	pub async fn connect_postgres(url: &str) -> Result<Self> {
 		Self::connect_postgres_with_pool_size(url, None).await
 	}
 
 	#[cfg(feature = "postgres")]
+	/// Connects to postgres with pool size.
 	pub async fn connect_postgres_with_pool_size(
 		url: &str,
 		pool_size: Option<u32>,
@@ -264,6 +267,7 @@ impl DatabaseConnection {
 		Ok((admin_url, db_name.to_string()))
 	}
 
+	/// Connects to a SQLite database at the given URL.
 	#[cfg(feature = "sqlite")]
 	pub async fn connect_sqlite(url: &str) -> Result<Self> {
 		use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
@@ -378,6 +382,7 @@ impl DatabaseConnection {
 		})
 	}
 
+	/// Creates a connection from an existing SQLite pool.
 	#[cfg(feature = "sqlite")]
 	pub fn from_sqlite_pool(pool: sqlx::SqlitePool) -> Self {
 		Self {
@@ -385,6 +390,7 @@ impl DatabaseConnection {
 		}
 	}
 
+	/// Connects to a MySQL database at the given URL.
 	#[cfg(feature = "mysql")]
 	pub async fn connect_mysql(url: &str) -> Result<Self> {
 		use sqlx::MySqlPool;
@@ -394,6 +400,7 @@ impl DatabaseConnection {
 		})
 	}
 
+	/// Performs the backend operation.
 	pub fn backend(&self) -> Arc<dyn DatabaseBackend> {
 		self.backend.clone()
 	}
@@ -403,18 +410,22 @@ impl DatabaseConnection {
 		self.backend.database_type()
 	}
 
+	/// Performs the insert operation.
 	pub fn insert(&self, table: impl Into<String>) -> InsertBuilder {
 		InsertBuilder::new(self.backend.clone(), table)
 	}
 
+	/// Performs the update operation.
 	pub fn update(&self, table: impl Into<String>) -> UpdateBuilder {
 		UpdateBuilder::new(self.backend.clone(), table)
 	}
 
+	/// Performs the select operation.
 	pub fn select(&self) -> SelectBuilder {
 		SelectBuilder::new(self.backend.clone())
 	}
 
+	/// Performs the delete operation.
 	pub fn delete(&self, table: impl Into<String>) -> DeleteBuilder {
 		DeleteBuilder::new(self.backend.clone(), table)
 	}
@@ -575,6 +586,7 @@ impl DatabaseConnection {
 		Ok(db_config.to_url())
 	}
 
+	/// Executes the operation.
 	pub async fn execute(
 		&self,
 		sql: &str,
@@ -583,6 +595,7 @@ impl DatabaseConnection {
 		self.backend.execute(sql, params).await
 	}
 
+	/// Fetches one.
 	pub async fn fetch_one(
 		&self,
 		sql: &str,
@@ -591,6 +604,7 @@ impl DatabaseConnection {
 		self.backend.fetch_one(sql, params).await
 	}
 
+	/// Fetches all.
 	pub async fn fetch_all(
 		&self,
 		sql: &str,
@@ -599,6 +613,7 @@ impl DatabaseConnection {
 		self.backend.fetch_all(sql, params).await
 	}
 
+	/// Fetches optional.
 	pub async fn fetch_optional(
 		&self,
 		sql: &str,
@@ -662,6 +677,7 @@ impl DatabaseConnection {
 	}
 
 	#[cfg(feature = "postgres")]
+	/// Converts into postgres.
 	pub fn into_postgres(&self) -> Option<sqlx::PgPool> {
 		self.backend
 			.as_any()
@@ -669,6 +685,7 @@ impl DatabaseConnection {
 			.map(|backend| backend.pool().clone())
 	}
 
+	/// Converts into the underlying SQLite pool, if the backend is SQLite.
 	#[cfg(feature = "sqlite")]
 	pub fn into_sqlite(&self) -> Option<sqlx::SqlitePool> {
 		self.backend
@@ -677,6 +694,7 @@ impl DatabaseConnection {
 			.map(|backend| backend.pool().clone())
 	}
 
+	/// Converts into the underlying MySQL pool, if the backend is MySQL.
 	#[cfg(feature = "mysql")]
 	pub fn into_mysql(&self) -> Option<sqlx::MySqlPool> {
 		self.backend

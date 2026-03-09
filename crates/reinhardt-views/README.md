@@ -16,11 +16,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", features = ["views"] }
+reinhardt = { version = "0.1.0-rc.5", features = ["views"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-alpha.1", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-alpha.1", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.5", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.5", features = ["full"] }      # All features
 ```
 
 Then import view features:
@@ -120,7 +120,6 @@ use reinhardt::views::viewsets::{ViewSet, ModelViewSet};
 
 #### Admin Integration
 
-- Re-exports admin views from `reinhardt-contrib`
 - Admin change view support
 - Integration with Django-style admin interface
 
@@ -267,11 +266,12 @@ let spec = OpenAPISpec::new(Info::new(
 
 ## Dependencies
 
-- `reinhardt-apps` - Request/Response types
-- `reinhardt-orm` - ORM integration
-- `reinhardt-serializers` - Serialization support
-- `reinhardt-exception` - Error handling
-- `reinhardt-contrib` - Admin views
+- `reinhardt-core` - Core types, serializers, pagination, and exception handling
+- `reinhardt-db` - Database and ORM integration
+- `reinhardt-rest` - REST framework (filters, serializers, OpenAPI)
+- `reinhardt-http` - HTTP request/response types
+- `reinhardt-di` - Dependency injection
+- `reinhardt-auth` - Authentication support
 - `async-trait` - Async trait support
 - `serde` - Serialization framework
 - `serde_json` - JSON serialization

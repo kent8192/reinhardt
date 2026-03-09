@@ -9,8 +9,8 @@ on:
         required: true
         type: choice
         options:
-          - x64
           - arm64
+          - x64
         default: "arm64"
       force_rebuild:
         description: "Force rebuild even if no changes detected"
@@ -31,6 +31,7 @@ jobs:
     timeout-minutes: 30
     env:
       RUNNER_ARCH: ${{ github.event.inputs.architecture || 'arm64' }}
+      PKR_VAR_runner_arch: ${{ github.event.inputs.architecture || 'arm64' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,7 +45,7 @@ jobs:
       - name: Install Packer
         uses: hashicorp/setup-packer@v3
         with:
-          version: latest
+          version: 1.15.0
 
       - name: Packer Init
         run: |
@@ -54,12 +55,12 @@ jobs:
       - name: Packer Validate
         run: |
           cd infra/github-runners/packer
-          packer validate -var "runner_arch=$RUNNER_ARCH" reinhardt-runner.pkr.hcl
+          packer validate reinhardt-runner.pkr.hcl
 
       - name: Build AMI
         run: |
           cd infra/github-runners/packer
-          PACKER_LOG=1 packer build -var "runner_arch=$RUNNER_ARCH" reinhardt-runner.pkr.hcl
+          PACKER_LOG=1 packer build reinhardt-runner.pkr.hcl
 
       - name: Extract AMI ID
         id: extract-ami
@@ -68,6 +69,7 @@ jobs:
           echo "ami_id=$AMI_ID" >> "$GITHUB_OUTPUT"
 
       - name: Update SSM Parameter
+        if: env.RUNNER_ARCH == 'arm64'
         env:
           AMI_ID: ${{ steps.extract-ami.outputs.ami_id }}
         run: |
@@ -76,6 +78,11 @@ jobs:
             --type String \
             --value "$AMI_ID" \
             --overwrite
+
+      - name: Skip SSM Update (non-arm64)
+        if: env.RUNNER_ARCH != 'arm64'
+        run: |
+          echo "::notice::Skipping SSM parameter update: runners use arm64 instances, but this build is for ${RUNNER_ARCH}"
 
       - name: Clean up old AMIs
         run: |
@@ -104,4 +111,8 @@ jobs:
           echo "- **Architecture**: $RUNNER_ARCH" >> "$GITHUB_STEP_SUMMARY"
           echo "- **AMI ID**: $AMI_ID" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Region**: us-east-1" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **SSM Parameter**: /reinhardt-ci/runner-ami-id" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$RUNNER_ARCH" == "arm64" ]]; then
+            echo "- **SSM Parameter**: /reinhardt-ci/runner-ami-id (updated)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- **SSM Parameter**: /reinhardt-ci/runner-ami-id (not updated — runners use arm64)" >> "$GITHUB_STEP_SUMMARY"
+          fi

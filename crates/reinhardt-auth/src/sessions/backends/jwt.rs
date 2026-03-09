@@ -55,22 +55,31 @@ use thiserror::Error;
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum JwtSessionError {
+	/// An error occurred while encoding the JWT.
 	#[error("JWT encoding error: {0}")]
 	EncodingError(String),
+	/// An error occurred while decoding the JWT.
 	#[error("JWT decoding error: {0}")]
 	DecodingError(String),
+	/// The specified token was not found.
 	#[error("Token not found: {0}")]
 	TokenNotFound(String),
+	/// The token has expired.
 	#[error("Token expired")]
 	TokenExpired,
+	/// The token is invalid or malformed.
 	#[error("Invalid token")]
 	InvalidToken,
+	/// The HMAC key length is too short for the specified algorithm.
 	#[error(
 		"Invalid HMAC key length: {algorithm:?} requires at least {required} bytes, but got {actual} bytes"
 	)]
 	InvalidKeyLength {
+		/// The HMAC algorithm being used.
 		algorithm: Algorithm,
+		/// The minimum required key length in bytes.
 		required: usize,
+		/// The actual key length provided.
 		actual: usize,
 	},
 }

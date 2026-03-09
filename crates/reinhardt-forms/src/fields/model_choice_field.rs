@@ -11,13 +11,21 @@ use std::marker::PhantomData;
 ///
 /// This field displays model instances as choices in a select widget.
 pub struct ModelChoiceField<T: FormModel> {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Whether a selection is required.
 	pub required: bool,
+	/// Custom error messages keyed by error type.
 	pub error_messages: HashMap<String, String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Help text displayed alongside the field.
 	pub help_text: String,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<Value>,
+	/// The list of model instances to choose from.
 	pub queryset: Vec<T>,
+	/// Label for the empty/default option (e.g., "Select one...").
 	pub empty_label: Option<String>,
 	_phantom: PhantomData<T>,
 }
@@ -97,22 +105,27 @@ impl<T: FormModel> ModelChoiceField<T> {
 			_phantom: PhantomData,
 		}
 	}
+	/// Sets whether a selection is required.
 	pub fn required(mut self, required: bool) -> Self {
 		self.required = required;
 		self
 	}
+	/// Sets the help text displayed alongside the field.
 	pub fn help_text(mut self, text: impl Into<String>) -> Self {
 		self.help_text = text.into();
 		self
 	}
+	/// Sets the initial (default) value.
 	pub fn initial(mut self, value: Value) -> Self {
 		self.initial = Some(value);
 		self
 	}
+	/// Sets the label for the empty/default option.
 	pub fn empty_label(mut self, label: Option<String>) -> Self {
 		self.empty_label = label;
 		self
 	}
+	/// Overrides the error message for a specific error type.
 	pub fn error_message(
 		mut self,
 		error_type: impl Into<String>,
@@ -246,12 +259,19 @@ impl<T: FormModel> FormField for ModelChoiceField<T> {
 ///
 /// This field displays model instances as choices in a multiple select widget.
 pub struct ModelMultipleChoiceField<T: FormModel> {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Whether at least one selection is required.
 	pub required: bool,
+	/// Custom error messages keyed by error type.
 	pub error_messages: HashMap<String, String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Help text displayed alongside the field.
 	pub help_text: String,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<Value>,
+	/// The list of model instances to choose from.
 	pub queryset: Vec<T>,
 	_phantom: PhantomData<T>,
 }
@@ -339,18 +359,22 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 			_phantom: PhantomData,
 		}
 	}
+	/// Sets whether at least one selection is required.
 	pub fn required(mut self, required: bool) -> Self {
 		self.required = required;
 		self
 	}
+	/// Sets the help text displayed alongside the field.
 	pub fn help_text(mut self, text: impl Into<String>) -> Self {
 		self.help_text = text.into();
 		self
 	}
+	/// Sets the initial (default) value.
 	pub fn initial(mut self, value: Value) -> Self {
 		self.initial = Some(value);
 		self
 	}
+	/// Overrides the error message for a specific error type.
 	pub fn error_message(
 		mut self,
 		error_type: impl Into<String>,

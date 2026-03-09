@@ -293,7 +293,7 @@ The `reinhardt-test` crate is published on crates.io and its workspace dependenc
 
 **Problem**: `cargo publish` resolves all dependencies (including dev-dependencies) from crates.io. If crate A has a dev-dependency on crate B, and crate B has a dev-dependency on crate A, neither can be published first — creating a deadlock.
 
-**Impact on Reinhardt**: The `reinhardt-test` crate provides test fixtures used across the workspace. If a functional crate (e.g., `reinhardt-orm`) adds `reinhardt-test` to its `[dev-dependencies]`, and `reinhardt-test` already depends on that functional crate, a circular publish dependency is created.
+**Impact on Reinhardt**: The `reinhardt-test` crate provides test fixtures used across the workspace. If a functional crate (e.g., `reinhardt-db`) adds `reinhardt-test` to its `[dev-dependencies]`, and `reinhardt-test` already depends on that functional crate, a circular publish dependency is created.
 
 **Rule**: Functional crates **must not** include other Reinhardt crates in `[dev-dependencies]`. Tests requiring cross-crate fixtures belong in the `reinhardt-integration-tests` crate.
 
@@ -398,7 +398,7 @@ Use this procedure when some crates were published successfully but others faile
 
 ```bash
 # Check which crate versions exist on crates.io
-for crate in reinhardt-core reinhardt-database reinhardt-orm reinhardt-web reinhardt-macros reinhardt-test; do
+for crate in reinhardt-core reinhardt-db reinhardt-db-macros reinhardt-macros reinhardt-test reinhardt-web; do
   version=$(curl -s "https://crates.io/api/v1/crates/$crate" | jq -r '.crate.max_version // "not found"')
   echo "$crate: $version"
 done

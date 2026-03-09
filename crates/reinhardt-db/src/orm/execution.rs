@@ -707,6 +707,7 @@ impl LoadOption {
 /// Query options container
 #[non_exhaustive]
 pub struct QueryOptions {
+	/// The load options.
 	pub load_options: Vec<LoadOption>,
 }
 

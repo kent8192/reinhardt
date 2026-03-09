@@ -17,34 +17,45 @@ pub const CSRF_ALLOWED_CHARS: &str =
 /// CSRF session key
 pub const CSRF_SESSION_KEY: &str = "_csrf_token";
 
-// Rejection reasons
+/// Rejection reason: Origin header does not match any trusted origins.
 pub const REASON_BAD_ORIGIN: &str = "Origin checking failed - does not match any trusted origins.";
+/// Rejection reason: Referer header does not match any trusted origins.
 pub const REASON_BAD_REFERER: &str =
 	"Referer checking failed - does not match any trusted origins.";
+/// Rejection reason: CSRF token is missing from the request.
 pub const REASON_CSRF_TOKEN_MISSING: &str = "CSRF token missing.";
+/// Rejection reason: CSRF token has an incorrect length.
 pub const REASON_INCORRECT_LENGTH: &str = "CSRF token has incorrect length.";
+/// Rejection reason: Referer uses HTTP while the host uses HTTPS.
 pub const REASON_INSECURE_REFERER: &str =
 	"Referer checking failed - Referer is insecure while host is secure.";
+/// Rejection reason: CSRF token contains invalid characters.
 pub const REASON_INVALID_CHARACTERS: &str = "CSRF token has invalid characters.";
+/// Rejection reason: Referer header is malformed.
 pub const REASON_MALFORMED_REFERER: &str = "Referer checking failed - Referer is malformed.";
+/// Rejection reason: CSRF cookie is not set.
 pub const REASON_NO_CSRF_COOKIE: &str = "CSRF cookie not set.";
+/// Rejection reason: Referer header is missing.
 pub const REASON_NO_REFERER: &str = "Referer checking failed - no Referer.";
 
 /// CSRF token validation error
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RejectRequest {
+	/// Human-readable reason for CSRF rejection.
 	pub reason: String,
 }
 
 /// Invalid token format error
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvalidTokenFormat {
+	/// Description of the format error.
 	pub reason: String,
 }
 
 /// CSRF metadata
 #[derive(Debug, Clone)]
 pub struct CsrfMeta {
+	/// The CSRF token value.
 	pub token: String,
 }
 
@@ -65,7 +76,9 @@ pub enum SameSite {
 /// All tokens are generated using HMAC-SHA256 for cryptographic security.
 #[derive(Debug, Clone)]
 pub struct CsrfConfig {
+	/// Name of the CSRF cookie (default: "csrftoken").
 	pub cookie_name: String,
+	/// Name of the HTTP header for CSRF token (default: "X-CSRFToken").
 	pub header_name: String,
 	/// CSRF cookie should NOT be HttpOnly (JavaScript needs access)
 	pub cookie_httponly: bool,
@@ -155,12 +168,14 @@ pub struct CsrfMiddleware {
 }
 
 impl CsrfMiddleware {
+	/// Creates a new `CsrfMiddleware` with default configuration.
 	pub fn new() -> Self {
 		Self {
 			config: CsrfConfig::default(),
 		}
 	}
 
+	/// Creates a new `CsrfMiddleware` with the given configuration.
 	pub fn with_config(config: CsrfConfig) -> Self {
 		Self { config }
 	}
@@ -177,10 +192,12 @@ impl Default for CsrfMiddleware {
 pub struct CsrfToken(pub String);
 
 impl CsrfToken {
+	/// Creates a new `CsrfToken` from a token string.
 	pub fn new(token: String) -> Self {
 		Self(token)
 	}
 
+	/// Returns the token value as a string slice.
 	pub fn as_str(&self) -> &str {
 		&self.0
 	}

@@ -25,6 +25,7 @@ pub trait BaseMetadata: Send + Sync {
 /// basic information about the view and its fields.
 #[derive(Debug, Clone)]
 pub struct SimpleMetadata {
+	/// Whether to include action metadata (POST/PUT fields) in the response.
 	pub include_actions: bool,
 }
 

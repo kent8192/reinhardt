@@ -40,11 +40,11 @@ output "webhook_setup_guide" {
 }
 
 output "github_actions_oidc_provider_arn" {
-	description = "ARN of the GitHub Actions OIDC provider"
-	value       = aws_iam_openid_connect_provider.github_actions.arn
+  description = "ARN of the GitHub Actions OIDC identity provider"
+  value       = aws_iam_openid_connect_provider.github_actions.arn
 }
 
 output "github_actions_ami_builder_role_arn" {
-	description = "ARN of the IAM role for the AMI builder workflow"
-	value       = aws_iam_role.github_actions_ami_builder.arn
+  description = "ARN of the IAM role used by the AMI builder workflow"
+  value       = aws_iam_role.github_actions_ami_builder.arn
 }

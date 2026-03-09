@@ -168,6 +168,15 @@ jobs:
       runner: ${{ needs.determine-runner.outputs.runner }}
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
 
+  wasm-check:
+    name: WASM Check
+    needs: [determine-runner, check-branch-status]
+    if: needs.check-branch-status.outputs.has-conflicts != 'true'
+    uses: ./.github/workflows/wasm-check.yml
+    with:
+      runner: ${{ needs.determine-runner.outputs.runner }}
+      cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
+
   publish-check:
     name: Publish Check
     needs: [determine-runner, check-branch-status]
@@ -354,6 +363,7 @@ jobs:
       - check
       - fmt
       - clippy
+      - wasm-check
       - publish-check
       - todo-check
       - security-audit
@@ -387,6 +397,7 @@ jobs:
             "check:${{ needs.check.result }}"
             "fmt:${{ needs.fmt.result }}"
             "clippy:${{ needs.clippy.result }}"
+            "wasm-check:${{ needs.wasm-check.result }}"
             "todo-check:${{ needs.todo-check.result }}"
             "security-audit:${{ needs.security-audit.result }}"
             "semver-check:${{ needs.semver-check.result }}"

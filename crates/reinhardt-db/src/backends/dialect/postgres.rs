@@ -19,12 +19,14 @@ pub struct PostgresBackend {
 }
 
 impl PostgresBackend {
+	/// Creates a new instance.
 	pub fn new(pool: PgPool) -> Self {
 		Self {
 			pool: Arc::new(pool),
 		}
 	}
 
+	/// Performs the pool operation.
 	pub fn pool(&self) -> &PgPool {
 		&self.pool
 	}
@@ -147,6 +149,7 @@ pub struct PgTransactionExecutor {
 }
 
 impl PgTransactionExecutor {
+	/// Creates a new instance.
 	pub fn new(tx: Transaction<'static, Postgres>) -> Self {
 		Self { tx: Some(tx) }
 	}

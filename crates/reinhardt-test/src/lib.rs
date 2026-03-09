@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! # Reinhardt Test
 //!
 //! Testing utilities for the Reinhardt framework.

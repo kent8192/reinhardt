@@ -319,10 +319,15 @@ pub enum ProxyTarget {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum ScalarValue {
+	/// A string value.
 	String(String),
+	/// A 64-bit integer value.
 	Integer(i64),
+	/// A 64-bit floating-point value.
 	Float(f64),
+	/// A boolean value.
 	Boolean(bool),
+	/// A null (absent) value.
 	Null,
 }
 

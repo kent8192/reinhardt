@@ -18,12 +18,14 @@ pub struct MySqlBackend {
 }
 
 impl MySqlBackend {
+	/// Creates a new MySQL backend with the given pool.
 	pub fn new(pool: MySqlPool) -> Self {
 		Self {
 			pool: Arc::new(pool),
 		}
 	}
 
+	/// Returns a reference to the underlying MySQL pool.
 	pub fn pool(&self) -> &MySqlPool {
 		&self.pool
 	}
@@ -181,6 +183,7 @@ pub struct MySqlTransactionExecutor {
 }
 
 impl MySqlTransactionExecutor {
+	/// Creates a new MySQL transaction executor.
 	pub fn new(tx: Transaction<'static, MySql>) -> Self {
 		Self { tx: Some(tx) }
 	}

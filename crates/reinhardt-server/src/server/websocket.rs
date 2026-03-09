@@ -129,6 +129,7 @@ pub trait WebSocketHandler: Send + Sync {
 #[cfg(feature = "websocket")]
 pub struct WebSocketServer {
 	handler: Arc<dyn WebSocketHandler>,
+	/// Optional broadcast manager for sending messages to multiple connected clients.
 	pub broadcast_manager: Option<BroadcastManager>,
 }
 

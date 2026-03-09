@@ -92,11 +92,17 @@ pub async fn audit_logger_with_test_data() -> Arc<MemoryAuditBackend> {
 /// It matches the structure expected by MemoryAuditLogger.
 #[derive(Clone, Debug)]
 pub struct TestAuditLogEntry {
+	/// Identifier of the user who performed the action.
 	pub user_id: String,
+	/// Name of the model that was affected.
 	pub model_name: String,
+	/// Identifier of the affected object.
 	pub object_id: String,
+	/// Description of the action performed (e.g., `"create"`, `"update"`).
 	pub action: String,
+	/// Optional JSON value describing the changes made.
 	pub changes: Option<serde_json::Value>,
+	/// Timestamp when the action occurred.
 	pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 

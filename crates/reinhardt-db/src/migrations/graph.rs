@@ -42,7 +42,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MigrationKey {
+	/// The app label.
 	pub app_label: String,
+	/// The name.
 	pub name: String,
 }
 
@@ -89,8 +91,11 @@ impl std::fmt::Display for MigrationKey {
 /// Migration graph node
 #[derive(Debug, Clone)]
 pub struct MigrationNode {
+	/// The key.
 	pub key: MigrationKey,
+	/// The dependencies.
 	pub dependencies: Vec<MigrationKey>,
+	/// The replaces.
 	pub replaces: Vec<MigrationKey>,
 }
 

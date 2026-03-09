@@ -22,3 +22,30 @@ import {
   to = aws_ssm_parameter.runner_ami_id
   id = "/${var.prefix}/runner-ami-id"
 }
+
+# AMI builder resources (re-integrated after state rm, see #2060).
+# Idempotent: no-op if already managed by this workspace.
+import {
+  to = aws_iam_openid_connect_provider.github_actions
+  id = "arn:aws:iam::819171434490:oidc-provider/token.actions.githubusercontent.com"
+}
+
+import {
+  to = aws_iam_role.github_actions_ami_builder
+  id = "${var.prefix}-gha-ami-builder"
+}
+
+import {
+  to = aws_iam_role_policy.ami_builder_ec2
+  id = "${var.prefix}-gha-ami-builder:packer-ec2-ami-build"
+}
+
+import {
+  to = aws_iam_role_policy.ami_builder_ssm
+  id = "${var.prefix}-gha-ami-builder:ssm-put-parameter-ami"
+}
+
+import {
+  to = github_actions_secret.aws_role_arn
+  id = "${var.github_repository}:AWS_ROLE_ARN"
+}

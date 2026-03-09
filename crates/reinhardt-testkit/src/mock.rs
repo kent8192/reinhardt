@@ -5,7 +5,9 @@ use tokio::sync::Mutex;
 /// Call record for tracking function calls
 #[derive(Debug, Clone)]
 pub struct CallRecord {
+	/// Arguments passed to the function call (serialized as JSON values).
 	pub args: Vec<serde_json::Value>,
+	/// Timestamp when the call was recorded.
 	pub timestamp: std::time::Instant,
 }
 
@@ -309,9 +311,11 @@ impl<T> Spy<T> {
 		};
 		self.calls.lock().await.push(record);
 	}
+	/// Get the total number of recorded calls.
 	pub async fn call_count(&self) -> usize {
 		self.calls.lock().await.len()
 	}
+	/// Check if the spy was called at least once.
 	pub async fn was_called(&self) -> bool {
 		self.call_count().await > 0
 	}
@@ -335,9 +339,11 @@ impl<T> Spy<T> {
 		let calls = self.calls.lock().await;
 		calls.iter().any(|record| record.args == args)
 	}
+	/// Get all recorded call records.
 	pub async fn get_calls(&self) -> Vec<CallRecord> {
 		self.calls.lock().await.clone()
 	}
+	/// Get the arguments from the last recorded call, if any.
 	pub async fn last_call_args(&self) -> Option<Vec<serde_json::Value>> {
 		self.calls.lock().await.last().map(|r| r.args.clone())
 	}
@@ -361,9 +367,11 @@ impl<T> Spy<T> {
 	pub async fn reset(&self) {
 		self.calls.lock().await.clear();
 	}
+	/// Get a reference to the wrapped inner value, if any.
 	pub fn inner(&self) -> Option<&T> {
 		self.inner.as_ref()
 	}
+	/// Consume the spy and return the wrapped inner value, if any.
 	pub fn into_inner(self) -> Option<T> {
 		self.inner
 	}

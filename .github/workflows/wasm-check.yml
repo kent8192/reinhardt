@@ -1,4 +1,4 @@
-name: TODO Check
+name: WASM Check
 
 on:
   workflow_call:
@@ -21,22 +21,8 @@ env:
   CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
 
 jobs:
-  todo-check:
-    name: Scan for unresolved TODO/FIXME
-    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
-    runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    timeout-minutes: 10
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Run Semgrep TODO/FIXME scan
-        run: docker run --rm -v "${{ github.workspace }}:/src" -w /src semgrep/semgrep semgrep scan --config .semgrep/ --baseline-commit origin/main --error --metrics off
-
-  clippy-todo-check:
-    name: Clippy TODO/unimplemented/dbg lint
+  wasm-check:
+    name: WASM Compilation Check
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
     timeout-minutes: 30
     steps:
@@ -55,18 +41,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Setup Rust with clippy
+      - name: Setup Rust
         uses: ./.github/actions/setup-rust
         with:
-          components: clippy
+          cache-key: "wasm-check"
 
-      - name: Setup protoc
-        uses: ./.github/actions/setup-protoc
+      - name: Install wasm32-unknown-unknown target
+        run: rustup target add wasm32-unknown-unknown
 
-      - name: Install cargo-make
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-make
-
-      - name: Run clippy TODO check
-        run: cargo make clippy-todo-check
+      - name: Run cargo check for WASM target
+        run: |
+          cargo check \
+            --target wasm32-unknown-unknown \
+            -p reinhardt-web \
+            --quiet

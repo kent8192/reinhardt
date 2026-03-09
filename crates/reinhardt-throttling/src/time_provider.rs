@@ -7,6 +7,7 @@ use tokio::time::Instant;
 /// This allows for time mocking in tests.
 #[async_trait]
 pub trait TimeProvider: Send + Sync {
+	/// Returns the current monotonic instant.
 	fn now(&self) -> Instant;
 
 	/// Returns the current hour of the day (0-23) from wall clock time.
@@ -29,6 +30,7 @@ pub trait TimeProvider: Send + Sync {
 pub struct SystemTimeProvider;
 
 impl SystemTimeProvider {
+	/// Creates a new system time provider.
 	pub fn new() -> Self {
 		Self
 	}
@@ -49,6 +51,7 @@ pub struct MockTimeProvider {
 }
 
 impl MockTimeProvider {
+	/// Creates a new mock time provider starting at the given instant.
 	pub fn new(start_time: Instant) -> Self {
 		Self {
 			current_time: Arc::new(RwLock::new(start_time)),
@@ -56,11 +59,13 @@ impl MockTimeProvider {
 		}
 	}
 
+	/// Advances the mock clock by the specified duration.
 	pub fn advance(&self, duration: std::time::Duration) {
 		let mut time = self.current_time.write();
 		*time += duration;
 	}
 
+	/// Sets the mock clock to the specified instant.
 	pub fn set_time(&self, time: Instant) {
 		let mut current = self.current_time.write();
 		*current = time;

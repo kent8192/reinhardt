@@ -206,7 +206,9 @@ impl TraceStore {
 
 /// Tracing header names
 pub const TRACE_ID_HEADER: &str = "X-Trace-ID";
+/// HTTP header name for propagating the current span ID.
 pub const SPAN_ID_HEADER: &str = "X-Span-ID";
+/// HTTP header name for propagating the parent span ID in distributed traces.
 pub const PARENT_SPAN_ID_HEADER: &str = "X-Parent-Span-ID";
 
 /// Configuration for tracing middleware

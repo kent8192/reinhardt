@@ -34,19 +34,28 @@ pub use registry::StorageRegistry;
 /// Storage trait for static files
 #[async_trait]
 pub trait Storage: Send + Sync {
+	/// Saves content under the given name and returns the URL.
 	async fn save(&self, name: &str, content: &[u8]) -> io::Result<String>;
+	/// Returns whether a file with the given name exists in storage.
 	fn exists(&self, name: &str) -> bool;
+	/// Reads and returns the content of the file with the given name.
 	async fn open(&self, name: &str) -> io::Result<Vec<u8>>;
+	/// Deletes the file with the given name from storage.
 	async fn delete(&self, name: &str) -> io::Result<()>;
+	/// Returns the URL for accessing the file with the given name.
 	fn url(&self, name: &str) -> String;
 }
 
+/// A storage backend that reads and writes files on the local filesystem.
 pub struct FileSystemStorage {
+	/// The root directory where files are stored.
 	pub location: PathBuf,
+	/// The base URL prefix used to generate file URLs.
 	pub base_url: String,
 }
 
 impl FileSystemStorage {
+	/// Creates a new filesystem storage rooted at the given location.
 	pub fn new<P: Into<PathBuf>>(location: P, base_url: &str) -> Self {
 		Self {
 			location: location.into(),
@@ -113,12 +122,14 @@ impl Storage for FileSystemStorage {
 	}
 }
 
+/// A storage backend that keeps files in memory, useful for testing.
 pub struct MemoryStorage {
 	base_url: String,
 	files: Arc<RwLock<HashMap<String, Vec<u8>>>>,
 }
 
 impl MemoryStorage {
+	/// Creates a new in-memory storage with the given base URL.
 	pub fn new(base_url: &str) -> Self {
 		Self {
 			base_url: base_url.to_string(),
@@ -170,11 +181,16 @@ impl Default for MemoryStorage {
 	}
 }
 
+/// Configuration for the static files system.
 #[derive(Debug, Clone)]
 pub struct StaticFilesConfig {
+	/// The directory where collected static files are stored for deployment.
 	pub static_root: PathBuf,
+	/// The URL prefix for serving static files (e.g., `"/static/"`).
 	pub static_url: String,
+	/// Source directories containing static files to be collected.
 	pub staticfiles_dirs: Vec<PathBuf>,
+	/// Optional URL prefix for user-uploaded media files.
 	pub media_url: Option<String>,
 }
 
@@ -189,15 +205,19 @@ impl Default for StaticFilesConfig {
 	}
 }
 
+/// Locates static files across multiple source directories.
 pub struct StaticFilesFinder {
+	/// The list of directories to search for static files.
 	pub directories: Vec<PathBuf>,
 }
 
 impl StaticFilesFinder {
+	/// Creates a new finder that searches the given directories.
 	pub fn new(directories: Vec<PathBuf>) -> Self {
 		Self { directories }
 	}
 
+	/// Finds the first file matching the given path across all configured directories.
 	pub fn find(&self, path: &str) -> Result<PathBuf, io::Error> {
 		let path = path.trim_start_matches('/');
 		for dir in &self.directories {
@@ -286,13 +306,17 @@ impl StaticFilesFinder {
 	}
 }
 
+/// A storage backend that renames files with a content hash for cache busting.
 pub struct HashedFileStorage {
+	/// The root directory where hashed files are stored.
 	pub location: PathBuf,
+	/// The base URL prefix used to generate file URLs.
 	pub base_url: String,
 	hashed_files: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl HashedFileStorage {
+	/// Creates a new hashed file storage rooted at the given location.
 	pub fn new<P: Into<PathBuf>>(location: P, base_url: &str) -> Self {
 		Self {
 			location: location.into(),
@@ -319,6 +343,7 @@ impl HashedFileStorage {
 		}
 	}
 
+	/// Saves a file with a content-hashed filename and returns the hashed name.
 	pub async fn save(&self, name: &str, content: &[u8]) -> io::Result<String> {
 		let hashed_name = self.get_hashed_name(name, content);
 		let file_path = self.location.join(&hashed_name);
@@ -335,6 +360,9 @@ impl HashedFileStorage {
 		Ok(hashed_name)
 	}
 
+	/// Saves multiple files with inter-file dependency resolution (e.g., CSS URL rewriting).
+	///
+	/// Returns the number of files processed.
 	pub async fn save_with_dependencies(
 		&self,
 		files: HashMap<String, Vec<u8>>,
@@ -387,6 +415,7 @@ impl HashedFileStorage {
 		Ok(hashed_map.len())
 	}
 
+	/// Opens and reads the content of a previously saved file by its original name.
 	pub async fn open(&self, name: &str) -> io::Result<Vec<u8>> {
 		let hashed_name = {
 			let hashed_files = self.hashed_files.read().unwrap();
@@ -402,6 +431,7 @@ impl HashedFileStorage {
 		tokio::fs::read(file_path).await
 	}
 
+	/// Returns the URL for a file, using the hashed name if available.
 	pub fn url(&self, name: &str) -> String {
 		let hashed_files = self.hashed_files.read().unwrap();
 		if let Some(hashed_name) = hashed_files.get(name) {
@@ -411,6 +441,7 @@ impl HashedFileStorage {
 		}
 	}
 
+	/// Returns whether a file with the given name exists in the hashed storage.
 	pub fn exists(&self, name: &str) -> bool {
 		let hashed_files = self.hashed_files.read().unwrap();
 		if let Some(hashed_name) = hashed_files.get(name) {
@@ -420,32 +451,42 @@ impl HashedFileStorage {
 		}
 	}
 
+	/// Returns the hashed filename for the given original name, if available.
 	pub fn get_hashed_path(&self, name: &str) -> Option<String> {
 		let hashed_files = self.hashed_files.read().unwrap();
 		hashed_files.get(name).cloned()
 	}
 }
 
-/// Manifest file format version
+/// Manifest file format version.
 pub enum ManifestVersion {
+	/// Version 1 of the manifest format.
 	V1,
 }
 
-/// Manifest file structure for static files
+/// Manifest file structure that maps original filenames to hashed filenames.
 pub struct Manifest {
+	/// The manifest format version.
 	pub version: ManifestVersion,
+	/// Mapping from original file paths to their hashed counterparts.
 	pub paths: std::collections::HashMap<String, String>,
 }
 
+/// A storage backend that persists a JSON manifest mapping original names to hashed names.
 pub struct ManifestStaticFilesStorage {
+	/// The root directory where files and the manifest are stored.
 	pub location: PathBuf,
+	/// The base URL prefix used to generate file URLs.
 	pub base_url: String,
+	/// The filename of the manifest file (default: `"staticfiles.json"`).
 	pub manifest_name: String,
+	/// If true, lookups for unmapped files will fail rather than fall back.
 	pub manifest_strict: bool,
 	hashed_files: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl ManifestStaticFilesStorage {
+	/// Creates a new manifest-based storage at the given location.
 	pub fn new<P: Into<PathBuf>>(location: P, base_url: &str) -> Self {
 		Self {
 			location: location.into(),
@@ -456,6 +497,7 @@ impl ManifestStaticFilesStorage {
 		}
 	}
 
+	/// Configures whether strict mode is enabled for manifest lookups.
 	pub fn with_manifest_strict(mut self, strict: bool) -> Self {
 		self.manifest_strict = strict;
 		self
@@ -596,6 +638,7 @@ impl ManifestStaticFilesStorage {
 		hashed_files.get(name).cloned()
 	}
 
+	/// Returns whether a file with the given name exists (checking both hashed and original paths).
 	pub fn exists(&self, name: &str) -> bool {
 		// First check if we have a hashed version of this file
 		let hashed_files = self.hashed_files.read().unwrap();

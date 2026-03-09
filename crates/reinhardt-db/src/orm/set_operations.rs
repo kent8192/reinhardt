@@ -4,11 +4,17 @@ use serde::{Deserialize, Serialize};
 /// Set operation type
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum SetOperation {
+	/// Union variant.
 	Union,
+	/// UnionAll variant.
 	UnionAll,
+	/// Intersect variant.
 	Intersect,
+	/// IntersectAll variant.
 	IntersectAll,
+	/// Except variant.
 	Except,
+	/// ExceptAll variant.
 	ExceptAll,
 }
 
@@ -30,10 +36,15 @@ impl SetOperation {
 /// Combined query using set operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CombinedQuery {
+	/// The queries.
 	pub queries: Vec<String>,
+	/// The operations.
 	pub operations: Vec<SetOperation>,
+	/// The order by.
 	pub order_by: Vec<String>,
+	/// The limit.
 	pub limit: Option<usize>,
+	/// The offset.
 	pub offset: Option<usize>,
 }
 

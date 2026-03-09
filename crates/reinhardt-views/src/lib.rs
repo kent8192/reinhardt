@@ -46,6 +46,7 @@
 //! #     detail_view.dispatch(request).await
 //! # }
 //! ```
+#![warn(missing_docs)]
 
 pub mod viewsets;
 

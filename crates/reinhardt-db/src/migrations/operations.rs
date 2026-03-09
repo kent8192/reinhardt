@@ -147,10 +147,14 @@ impl std::fmt::Display for IndexType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum MySqlAlgorithm {
+	/// Instant variant.
 	Instant,
+	/// Inplace variant.
 	Inplace,
+	/// Copy variant.
 	Copy,
 	#[default]
+	/// Default variant.
 	Default,
 }
 
@@ -169,10 +173,14 @@ impl std::fmt::Display for MySqlAlgorithm {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum MySqlLock {
+	/// None variant.
 	None,
+	/// Shared variant.
 	Shared,
+	/// Exclusive variant.
 	Exclusive,
 	#[default]
+	/// Default variant.
 	Default,
 }
 
@@ -192,26 +200,33 @@ impl std::fmt::Display for MySqlLock {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub struct AlterTableOptions {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
+	/// The algorithm.
 	pub algorithm: Option<MySqlAlgorithm>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
+	/// The lock.
 	pub lock: Option<MySqlLock>,
 }
 
 impl AlterTableOptions {
+	/// Creates a new instance.
 	pub fn new() -> Self {
 		Self::default()
 	}
+	/// Sets the algorithm and returns self for chaining.
 	pub fn with_algorithm(mut self, algorithm: MySqlAlgorithm) -> Self {
 		self.algorithm = Some(algorithm);
 		self
 	}
+	/// Sets the lock and returns self for chaining.
 	pub fn with_lock(mut self, lock: MySqlLock) -> Self {
 		self.lock = Some(lock);
 		self
 	}
+	/// Returns the mpty.
 	pub fn is_empty(&self) -> bool {
 		self.algorithm.is_none() && self.lock.is_none()
 	}
+	/// Converts to sql suffix.
 	pub fn to_sql_suffix(&self) -> String {
 		let mut parts = Vec::new();
 		if let Some(algo) = &self.algorithm
@@ -240,9 +255,13 @@ impl AlterTableOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum PartitionType {
+	/// Range variant.
 	Range,
+	/// List variant.
 	List,
+	/// Hash variant.
 	Hash,
+	/// Key variant.
 	Key,
 }
 
@@ -261,31 +280,40 @@ impl std::fmt::Display for PartitionType {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum PartitionValues {
+	/// LessThan variant.
 	LessThan(String),
+	/// In variant.
 	In(Vec<String>),
+	/// ModuloCount variant.
 	ModuloCount(u32),
 }
 
 /// Individual partition definition
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PartitionDef {
+	/// The name.
 	pub name: String,
+	/// The values.
 	pub values: PartitionValues,
 }
 
 impl PartitionDef {
+	/// Creates a new instance.
 	pub fn new(name: impl Into<String>, values: PartitionValues) -> Self {
 		Self {
 			name: name.into(),
 			values,
 		}
 	}
+	/// Performs the less than operation.
 	pub fn less_than(name: impl Into<String>, value: impl Into<String>) -> Self {
 		Self::new(name, PartitionValues::LessThan(value.into()))
 	}
+	/// Performs the maxvalue operation.
 	pub fn maxvalue(name: impl Into<String>) -> Self {
 		Self::new(name, PartitionValues::LessThan("MAXVALUE".to_string()))
 	}
+	/// Performs the list in operation.
 	pub fn list_in(name: impl Into<String>, values: Vec<String>) -> Self {
 		Self::new(name, PartitionValues::In(values))
 	}
@@ -309,12 +337,16 @@ pub struct InterleaveSpec {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PartitionOptions {
+	/// The partition type.
 	pub partition_type: PartitionType,
+	/// The column.
 	pub column: String,
+	/// The partitions.
 	pub partitions: Vec<PartitionDef>,
 }
 
 impl PartitionOptions {
+	/// Creates a new instance.
 	pub fn new(
 		partition_type: PartitionType,
 		column: impl Into<String>,
@@ -326,12 +358,15 @@ impl PartitionOptions {
 			partitions,
 		}
 	}
+	/// Performs the range operation.
 	pub fn range(column: impl Into<String>, partitions: Vec<PartitionDef>) -> Self {
 		Self::new(PartitionType::Range, column, partitions)
 	}
+	/// Performs the list operation.
 	pub fn list(column: impl Into<String>, partitions: Vec<PartitionDef>) -> Self {
 		Self::new(PartitionType::List, column, partitions)
 	}
+	/// Performs the hash operation.
 	pub fn hash(column: impl Into<String>, num_partitions: u32) -> Self {
 		Self::new(
 			PartitionType::Hash,
@@ -342,6 +377,7 @@ impl PartitionOptions {
 			)],
 		)
 	}
+	/// Performs the key operation.
 	pub fn key(column: impl Into<String>, num_partitions: u32) -> Self {
 		Self::new(
 			PartitionType::Key,
@@ -352,6 +388,7 @@ impl PartitionOptions {
 			)],
 		)
 	}
+	/// Converts to sql.
 	pub fn to_sql(&self) -> String {
 		let mut sql = format!("PARTITION BY {}({})", self.partition_type, self.column);
 		match self.partition_type {
@@ -425,48 +462,86 @@ pub enum Constraint {
 	///
 	/// Used for composite primary keys defined at the table level.
 	/// Single-column primary keys are typically defined directly on the column.
-	PrimaryKey { name: String, columns: Vec<String> },
+	PrimaryKey {
+		/// The constraint name.
+		name: String,
+		/// The columns that form the primary key.
+		columns: Vec<String>,
+	},
 	/// ForeignKey constraint
 	ForeignKey {
+		/// The constraint name.
 		name: String,
+		/// The columns in the referencing table.
 		columns: Vec<String>,
+		/// The referenced table name.
 		referenced_table: String,
+		/// The columns in the referenced table.
 		referenced_columns: Vec<String>,
+		/// Action on delete of the referenced row.
 		on_delete: super::ForeignKeyAction,
+		/// Action on update of the referenced row.
 		on_update: super::ForeignKeyAction,
+		/// Optional deferrable constraint option.
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		deferrable: Option<DeferrableOption>,
 	},
 	/// Unique constraint
-	Unique { name: String, columns: Vec<String> },
+	Unique {
+		/// The constraint name.
+		name: String,
+		/// The columns that must be unique together.
+		columns: Vec<String>,
+	},
 	/// Check constraint
-	Check { name: String, expression: String },
+	Check {
+		/// The constraint name.
+		name: String,
+		/// The SQL check expression.
+		expression: String,
+	},
 	/// OneToOne constraint (ForeignKey + Unique combination)
 	OneToOne {
+		/// The constraint name.
 		name: String,
+		/// The column in the referencing table.
 		column: String,
+		/// The referenced table name.
 		referenced_table: String,
+		/// The referenced column name.
 		referenced_column: String,
+		/// Action on delete of the referenced row.
 		on_delete: super::ForeignKeyAction,
+		/// Action on update of the referenced row.
 		on_update: super::ForeignKeyAction,
+		/// Optional deferrable constraint option.
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		deferrable: Option<DeferrableOption>,
 	},
 	/// ManyToMany relationship metadata (intermediate table reference)
 	ManyToMany {
+		/// The relationship name.
 		name: String,
+		/// The intermediate (through) table name.
 		through_table: String,
+		/// The column referencing the source table.
 		source_column: String,
+		/// The column referencing the target table.
 		target_column: String,
+		/// The target table name.
 		target_table: String,
 	},
 	/// Exclude constraint (PostgreSQL only)
 	Exclude {
+		/// The name.
 		name: String,
+		/// The elements.
 		elements: Vec<(String, String)>,
 		#[serde(default, skip_serializing_if = "Option::is_none")]
+		/// The using.
 		using: Option<String>,
 		#[serde(default, skip_serializing_if = "Option::is_none")]
+		/// The where clause.
 		where_clause: Option<String>,
 	},
 }
@@ -716,63 +791,101 @@ impl BulkLoadOptions {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum Operation {
+	/// CreateTable variant.
 	CreateTable {
+		/// The name.
 		name: String,
+		/// The columns.
 		columns: Vec<ColumnDefinition>,
 		#[serde(default)]
+		/// The constraints.
 		constraints: Vec<Constraint>,
 		#[serde(default, skip_serializing_if = "Option::is_none")]
+		/// The without rowid.
 		without_rowid: Option<bool>,
 		#[serde(default, skip_serializing_if = "Option::is_none")]
+		/// The interleave in parent.
 		interleave_in_parent: Option<InterleaveSpec>,
 		#[serde(default, skip_serializing_if = "Option::is_none")]
+		/// The partition.
 		partition: Option<PartitionOptions>,
 	},
+	/// DropTable variant.
 	DropTable {
+		/// The name.
 		name: String,
 	},
+	/// AddColumn variant.
 	AddColumn {
+		/// The table.
 		table: String,
+		/// The column.
 		column: ColumnDefinition,
 		#[serde(default, skip_serializing_if = "Option::is_none")]
+		/// The mysql options.
 		mysql_options: Option<AlterTableOptions>,
 	},
+	/// DropColumn variant.
 	DropColumn {
+		/// The table.
 		table: String,
+		/// The column.
 		column: String,
 	},
+	/// AlterColumn variant.
 	AlterColumn {
+		/// The table.
 		table: String,
+		/// The column.
 		column: String,
 		/// Original column definition (before alteration).
 		/// This is required for generating accurate rollback SQL.
 		/// If None, rollback will attempt to reconstruct from ProjectState.
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		old_definition: Option<ColumnDefinition>,
+		/// The new definition.
 		new_definition: ColumnDefinition,
 		#[serde(default, skip_serializing_if = "Option::is_none")]
+		/// The mysql options.
 		mysql_options: Option<AlterTableOptions>,
 	},
+	/// RenameTable variant.
 	RenameTable {
+		/// The old name.
 		old_name: String,
+		/// The new name.
 		new_name: String,
 	},
+	/// RenameColumn variant.
 	RenameColumn {
+		/// The table.
 		table: String,
+		/// The old name.
 		old_name: String,
+		/// The new name.
 		new_name: String,
 	},
+	/// AddConstraint variant.
 	AddConstraint {
+		/// The table.
 		table: String,
+		/// The constraint sql.
 		constraint_sql: String,
 	},
+	/// DropConstraint variant.
 	DropConstraint {
+		/// The table.
 		table: String,
+		/// The constraint name.
 		constraint_name: String,
 	},
+	/// CreateIndex variant.
 	CreateIndex {
+		/// The table.
 		table: String,
+		/// The columns.
 		columns: Vec<String>,
+		/// The unique.
 		unique: bool,
 		/// Index type (B-Tree, Hash, GIN, GiST, etc.)
 		///
@@ -830,39 +943,66 @@ pub enum Operation {
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		operator_class: Option<String>,
 	},
+	/// DropIndex variant.
 	DropIndex {
+		/// The table.
 		table: String,
+		/// The columns.
 		columns: Vec<String>,
 	},
+	/// RunSQL variant.
 	RunSQL {
+		/// The sql.
 		sql: String,
+		/// The reverse sql.
 		reverse_sql: Option<String>,
 	},
+	/// RunRust variant.
 	RunRust {
+		/// The code.
 		code: String,
+		/// The reverse code.
 		reverse_code: Option<String>,
 	},
+	/// AlterTableComment variant.
 	AlterTableComment {
+		/// The table.
 		table: String,
+		/// The comment.
 		comment: Option<String>,
 	},
+	/// AlterUniqueTogether variant.
 	AlterUniqueTogether {
+		/// The table.
 		table: String,
+		/// The unique together.
 		unique_together: Vec<Vec<String>>,
 	},
+	/// AlterModelOptions variant.
 	AlterModelOptions {
+		/// The table.
 		table: String,
+		/// The options.
 		options: std::collections::HashMap<String, String>,
 	},
+	/// CreateInheritedTable variant.
 	CreateInheritedTable {
+		/// The name.
 		name: String,
+		/// The columns.
 		columns: Vec<ColumnDefinition>,
+		/// The base table.
 		base_table: String,
+		/// The join column.
 		join_column: String,
 	},
+	/// AddDiscriminatorColumn variant.
 	AddDiscriminatorColumn {
+		/// The table.
 		table: String,
+		/// The column name.
 		column_name: String,
+		/// The default value.
 		default_value: String,
 	},
 	/// Move a model from one app to another
@@ -2314,17 +2454,24 @@ impl Operation {
 /// Column definition for legacy operations
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ColumnDefinition {
+	/// The name.
 	pub name: String,
+	/// The type definition.
 	pub type_definition: FieldType,
 	#[serde(default)]
+	/// The not null.
 	pub not_null: bool,
 	#[serde(default)]
+	/// The unique.
 	pub unique: bool,
 	#[serde(default)]
+	/// The primary key.
 	pub primary_key: bool,
 	#[serde(default)]
+	/// The auto increment.
 	pub auto_increment: bool,
 	#[serde(default)]
+	/// The default.
 	pub default: Option<String>,
 }
 
@@ -2535,9 +2682,13 @@ pub fn field_type_string_to_field_type(
 /// SQL dialect for generating database-specific SQL
 #[derive(Debug, Clone, Copy)]
 pub enum SqlDialect {
+	/// Sqlite variant.
 	Sqlite,
+	/// Postgres variant.
 	Postgres,
+	/// Mysql variant.
 	Mysql,
+	/// Cockroachdb variant.
 	Cockroachdb,
 }
 
@@ -2977,11 +3128,17 @@ pub use Operation::{AddColumn, AlterColumn, CreateTable, DropColumn};
 
 /// Operation statement types (reinhardt-query or sanitized raw SQL)
 pub enum OperationStatement {
+	/// TableCreate variant.
 	TableCreate(CreateTableStatement),
+	/// TableDrop variant.
 	TableDrop(DropTableStatement),
+	/// TableAlter variant.
 	TableAlter(AlterTableStatement),
+	/// TableRename variant.
 	TableRename(AlterTableStatement),
+	/// IndexCreate variant.
 	IndexCreate(CreateIndexStatement),
+	/// IndexDrop variant.
 	IndexDrop(DropIndexStatement),
 	/// Sanitized raw SQL (identifiers escaped with pg_escape::quote_identifier)
 	RawSql(String),

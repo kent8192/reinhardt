@@ -7,19 +7,26 @@ use std::collections::HashMap;
 /// Action metadata (for POST, PUT, etc.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionMetadata {
+	/// The HTTP method for this action (e.g., `"POST"`, `"PUT"`).
 	pub method: String,
+	/// Field metadata keyed by field name.
 	pub fields: HashMap<String, FieldInfo>,
 }
 
 /// Complete metadata response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetadataResponse {
+	/// The display name of the view.
 	pub name: String,
+	/// A description of the view.
 	pub description: String,
+	/// Content types the view can render.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub renders: Option<Vec<String>>,
+	/// Content types the view can parse.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub parses: Option<Vec<String>>,
+	/// Action metadata keyed by HTTP method, containing field info.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub actions: Option<HashMap<String, HashMap<String, FieldInfo>>>,
 }

@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //!
 //! Convenient shortcut functions for common Reinhardt operations.
 //!

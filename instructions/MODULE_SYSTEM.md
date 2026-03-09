@@ -95,7 +95,7 @@ pub use connection::Connection;
 
 ## Anti-Patterns (What NOT to Do)
 
-For detailed anti-patterns and examples, see @docs/ANTI_PATTERNS.md. Key module system anti-patterns:
+For detailed anti-patterns and examples, see @instructions/ANTI_PATTERNS.md. Key module system anti-patterns:
 
 - **Using `mod.rs`**: Use `module.rs` instead (Rust 2024 Edition)
 - **Glob imports**: Use explicit `pub use` (except in test modules)

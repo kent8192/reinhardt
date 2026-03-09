@@ -8,12 +8,19 @@
 /// Parameter type for error context
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParamType {
+	/// JSON request body parameter.
 	Json,
+	/// URL query string parameter.
 	Query,
+	/// URL path parameter.
 	Path,
+	/// Form-encoded body parameter.
 	Form,
+	/// HTTP header parameter.
 	Header,
+	/// Cookie parameter.
 	Cookie,
+	/// Raw request body parameter.
 	Body,
 }
 

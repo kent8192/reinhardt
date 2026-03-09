@@ -11,12 +11,19 @@ use std::sync::{Arc, RwLock};
 /// Metadata about a model's fields
 #[derive(Debug, Clone)]
 pub struct FieldMetadata {
+	/// The name.
 	pub name: String,
+	/// The field type.
 	pub field_type: String,
+	/// The nullable.
 	pub nullable: bool,
+	/// The primary key.
 	pub primary_key: bool,
+	/// The unique.
 	pub unique: bool,
+	/// The default.
 	pub default: Option<String>,
+	/// The max length.
 	pub max_length: Option<u64>,
 }
 
@@ -139,8 +146,11 @@ impl FieldMetadata {
 /// Metadata for a declarative model
 #[derive(Debug, Clone)]
 pub struct ModelMetadata {
+	/// The table name.
 	pub table_name: String,
+	/// The fields.
 	pub fields: Vec<FieldMetadata>,
+	/// The primary key fields.
 	pub primary_key_fields: Vec<String>,
 }
 

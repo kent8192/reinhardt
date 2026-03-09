@@ -53,12 +53,18 @@ impl TrustedProxies {
 
 /// HTTP Request representation
 pub struct Request {
+	/// The HTTP method (GET, POST, PUT, etc.).
 	pub method: Method,
+	/// The request URI (path and query string).
 	pub uri: Uri,
+	/// The HTTP protocol version.
 	pub version: Version,
+	/// The request headers.
 	pub headers: HeaderMap,
 	body: Bytes,
+	/// Path parameters extracted from the URL pattern.
 	pub path_params: HashMap<String, String>,
+	/// Query string parameters parsed from the URI.
 	pub query_params: HashMap<String, String>,
 	/// Indicates if this request came over HTTPS
 	pub is_secure: bool,

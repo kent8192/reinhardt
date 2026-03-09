@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Internationalization (i18n) support for Reinhardt
 //!
 //! This crate provides Django-style internationalization features including:

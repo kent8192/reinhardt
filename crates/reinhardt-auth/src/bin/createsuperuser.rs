@@ -49,18 +49,27 @@ struct Args {
 #[cfg(feature = "database")]
 #[model(table_name = "auth_user")]
 #[derive(serde::Serialize, serde::Deserialize)]
+/// Authentication user model for the createsuperuser command.
 pub struct AuthUser {
+	/// Primary key identifier.
 	#[field(primary_key = true)]
 	pub id: Option<i32>,
+	/// The user's login name.
 	#[field(max_length = 150)]
 	pub username: String,
+	/// The user's email address.
 	#[field(max_length = 254)]
 	pub email: String,
+	/// The hashed password.
 	#[field(max_length = 255)]
 	pub password_hash: Option<String>,
+	/// Whether the user is a staff member.
 	pub is_staff: bool,
+	/// Whether the user account is active.
 	pub is_active: bool,
+	/// Whether the user has superuser privileges.
 	pub is_superuser: bool,
+	/// When the user account was created.
 	pub date_joined: chrono::DateTime<Utc>,
 }
 

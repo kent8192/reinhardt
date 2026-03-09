@@ -31,9 +31,13 @@ use tokio::sync::{Semaphore, broadcast};
 /// ```
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
+	/// Name of this worker instance.
 	pub name: String,
+	/// Maximum number of tasks to process concurrently.
 	pub concurrency: usize,
+	/// Interval between polling the backend for new tasks.
 	pub poll_interval: Duration,
+	/// Webhook configurations for task completion notifications.
 	pub webhook_configs: Vec<WebhookConfig>,
 }
 

@@ -68,10 +68,15 @@ pub type UserManagementResult<T> = Result<T, UserManagementError>;
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateUserData {
+	/// Login username for the new user.
 	pub username: String,
+	/// Email address for the new user.
 	pub email: String,
+	/// Plain-text password (will be hashed before storage).
 	pub password: String,
+	/// Whether the new user account should be active.
 	pub is_active: bool,
+	/// Whether the new user should have admin privileges.
 	pub is_admin: bool,
 }
 
@@ -93,8 +98,11 @@ pub struct CreateUserData {
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UpdateUserData {
+	/// New email address, if being updated.
 	pub email: Option<String>,
+	/// New active status, if being updated.
 	pub is_active: Option<bool>,
+	/// New admin status, if being updated.
 	pub is_admin: Option<bool>,
 }
 

@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! # Reinhardt Core
 //!
 //! Core components for the Reinhardt framework, providing fundamental types,
@@ -24,7 +25,8 @@
 //! - **Storage Backends**: S3 (✅), Azure Blob (✅), GCS (✅), FileSystem (✅), Memory (✅)
 //!
 //! For detailed implementation and usage information, see the individual
-//! crate documentation in `reinhardt-contrib`, `reinhardt-tasks`, `reinhardt-core/backends`.
+//! crate documentation in `reinhardt-db`, `reinhardt-auth`, `reinhardt-mail`,
+//! and `reinhardt-tasks`.
 //!
 //! ## Quick Start
 //!

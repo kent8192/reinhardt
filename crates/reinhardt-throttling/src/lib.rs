@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! # Reinhardt Throttling
 //!
 //! Rate limiting and throttling for Reinhardt framework

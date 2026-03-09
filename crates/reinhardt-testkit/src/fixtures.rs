@@ -53,16 +53,23 @@
 //! ```
 
 // Module declarations
+/// Fixture-based API client utilities.
 pub mod client;
+/// Fixture file loading from JSON, YAML, and TOML formats.
 pub mod loader;
+/// Mock database backend fixtures using mockall.
 pub mod mock;
+/// Test server fixtures and builder utilities.
 pub mod server;
 
 #[cfg(feature = "testcontainers")]
+/// Suite-wide shared resources with automatic lifecycle management.
 pub mod resources;
 #[cfg(feature = "testcontainers")]
+/// Shared PostgreSQL container fixtures for test suites.
 pub mod shared_postgres;
 #[cfg(feature = "testcontainers")]
+/// Docker container fixtures (PostgreSQL, Redis, CockroachDB) via TestContainers.
 pub mod testcontainers;
 
 // Admin settings fixtures (depends only on reinhardt-conf, not reinhardt-admin)

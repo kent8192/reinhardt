@@ -84,3 +84,15 @@ variable "runner_ami_ssm_parameter_name" {
   type        = string
   default     = "/reinhardt-ci/runner-ami-id"
 }
+
+variable "tf_plan_aws_access_key_id" {
+  description = "AWS access key ID for terraform-plan CI workflow (read-only IAM user recommended)"
+  type        = string
+  sensitive   = true
+}
+
+variable "tf_plan_aws_secret_access_key" {
+  description = "AWS secret access key for terraform-plan CI workflow"
+  type        = string
+  sensitive   = true
+}

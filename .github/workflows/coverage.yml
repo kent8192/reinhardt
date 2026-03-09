@@ -143,13 +143,18 @@ jobs:
             FILTER_ARGS+=(-E "$NEXTEST_FILTER_EXPR")
           fi
           cargo llvm-cov nextest \
+            --no-report \
             --workspace \
             --lib \
             --all-features \
             --no-fail-fast \
-            --codecov \
-            --output-path /tmp/unit-codecov.json \
             "${FILTER_ARGS[@]}"
+
+      - name: Generate unit coverage report
+        run: |
+          cargo llvm-cov report \
+            --codecov \
+            --output-path /tmp/unit-codecov.json
 
       - name: Upload coverage to Codecov
         if: always()
@@ -273,6 +278,14 @@ jobs:
           linker = "/tmp/clang-mold-wrapper"
           EOF
 
+      - name: Verify coverage configuration
+        run: |
+          echo "=== .cargo/config.toml ==="
+          cat .cargo/config.toml
+          echo "=== CARGO_TARGET_DIR: ${CARGO_TARGET_DIR} ==="
+          echo "=== llvm-cov-target contents ==="
+          ls -la "${CARGO_TARGET_DIR}/llvm-cov-target/" 2>/dev/null || echo "(not found)"
+
       - name: Run intra-crate integration tests with coverage
         env:
           NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
@@ -284,14 +297,30 @@ jobs:
             FILTER_EXPR="not binary(/ui/)"
           fi
           cargo llvm-cov nextest \
+            --no-report \
             --workspace \
             --test "*" \
             --exclude reinhardt-integration-tests \
             -E "$FILTER_EXPR" \
             --all-features \
-            --no-fail-fast \
+            --no-fail-fast
+
+      - name: Generate intra-crate coverage report
+        run: |
+          cargo llvm-cov report \
             --codecov \
             --output-path /tmp/intra-crate-codecov.json
+
+      - name: Debug profraw file locations
+        if: failure()
+        run: |
+          echo "=== Searching for profraw files ==="
+          find "${CARGO_TARGET_DIR}" -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in CARGO_TARGET_DIR"
+          find /tmp -maxdepth 3 -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in /tmp"
+          echo "=== llvm-cov-target structure ==="
+          ls -laR "${CARGO_TARGET_DIR}/llvm-cov-target/" 2>/dev/null | head -50 || echo "llvm-cov-target not found"
+          echo "=== Disk space ==="
+          df -h /tmp
 
       - name: Upload coverage to Codecov
         if: always()
@@ -415,6 +444,14 @@ jobs:
           linker = "/tmp/clang-mold-wrapper"
           EOF
 
+      - name: Verify coverage configuration
+        run: |
+          echo "=== .cargo/config.toml ==="
+          cat .cargo/config.toml
+          echo "=== CARGO_TARGET_DIR: ${CARGO_TARGET_DIR} ==="
+          echo "=== llvm-cov-target contents ==="
+          ls -la "${CARGO_TARGET_DIR}/llvm-cov-target/" 2>/dev/null || echo "(not found)"
+
       - name: Run cross-crate integration tests with coverage
         env:
           NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
@@ -425,12 +462,28 @@ jobs:
             FILTER_ARGS+=(-E "$NEXTEST_FILTER_EXPR")
           fi
           cargo llvm-cov nextest \
+            --no-report \
             --package reinhardt-integration-tests \
             --all-features \
             --no-fail-fast \
-            --codecov \
-            --output-path /tmp/cross-crate-codecov.json \
             "${FILTER_ARGS[@]}"
+
+      - name: Generate cross-crate coverage report
+        run: |
+          cargo llvm-cov report \
+            --codecov \
+            --output-path /tmp/cross-crate-codecov.json
+
+      - name: Debug profraw file locations
+        if: failure()
+        run: |
+          echo "=== Searching for profraw files ==="
+          find "${CARGO_TARGET_DIR}" -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in CARGO_TARGET_DIR"
+          find /tmp -maxdepth 3 -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in /tmp"
+          echo "=== llvm-cov-target structure ==="
+          ls -laR "${CARGO_TARGET_DIR}/llvm-cov-target/" 2>/dev/null | head -50 || echo "llvm-cov-target not found"
+          echo "=== Disk space ==="
+          df -h /tmp
 
       - name: Upload coverage to Codecov
         if: always()

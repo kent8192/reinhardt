@@ -149,6 +149,10 @@ jobs:
           if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
             FILTER_ARGS+=(-E "$NEXTEST_FILTER_EXPR")
           fi
+          # Remove build.rustflags from config.toml to prevent conflict
+          # with cargo-llvm-cov's internal RUSTFLAGS management.
+          # Coverage builds don't need -Wunreachable_pub (Clippy handles it).
+          sed -i '/^rustflags/d' .cargo/config.toml
           cargo llvm-cov nextest \
             --workspace \
             --lib \
@@ -289,6 +293,10 @@ jobs:
           else
             FILTER_EXPR="not binary(/ui/)"
           fi
+          # Remove build.rustflags from config.toml to prevent conflict
+          # with cargo-llvm-cov's internal RUSTFLAGS management.
+          # Coverage builds don't need -Wunreachable_pub (Clippy handles it).
+          sed -i '/^rustflags/d' .cargo/config.toml
           cargo llvm-cov nextest \
             --workspace \
             --test "*" \
@@ -429,6 +437,16 @@ jobs:
           if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
             FILTER_ARGS+=(-E "$NEXTEST_FILTER_EXPR")
           fi
+          # Remove build.rustflags from config.toml to prevent conflict
+          # with cargo-llvm-cov's internal RUSTFLAGS management.
+          # Coverage builds don't need -Wunreachable_pub (Clippy handles it).
+          sed -i '/^rustflags/d' .cargo/config.toml
+          echo "=== .cargo/config.toml ==="
+          cat .cargo/config.toml
+          echo "=== Environment ==="
+          echo "CARGO_TARGET_DIR=$CARGO_TARGET_DIR"
+          echo "RUSTFLAGS=${RUSTFLAGS:-<unset>}"
+          echo "CARGO_ENCODED_RUSTFLAGS=${CARGO_ENCODED_RUSTFLAGS:-<unset>}"
           cargo llvm-cov nextest \
             --package reinhardt-integration-tests \
             --all-features \

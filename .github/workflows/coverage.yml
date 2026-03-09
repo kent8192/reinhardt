@@ -24,7 +24,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  CARGO_TARGET_DIR: /tmp/cargo_target
   CARGO_INCREMENTAL: 0
   CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
@@ -36,6 +35,8 @@ jobs:
     name: Unit Test Coverage
     runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: /tmp/cargo_target_unit_cov
     permissions:
       id-token: write
       contents: read
@@ -111,21 +112,21 @@ jobs:
           echo "Disk usage after additional cleanup:"
           df -h
 
-      # Fully clean the llvm-cov target directory to avoid stale cached binaries
-      # from previous CI runs with different compiler flags on self-hosted runners.
-      # cargo llvm-cov clean only removes profraw files, not compiled binaries,
-      # which can cause profraw generation failures when flags change between runs.
       - name: Clean coverage artifacts
-        run: |
-          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
-          cargo llvm-cov clean --workspace
+        run: cargo llvm-cov clean --workspace
 
-      # Configure mold linker via .cargo/config.toml instead of RUSTFLAGS.
-      # RUSTFLAGS conflicts with cargo-llvm-cov's internal -C instrument-coverage flag,
-      # causing profraw files to not be generated for some targets.
+      # Configure mold linker via wrapper script set as the target linker.
+      # We cannot use config.toml rustflags because cargo-llvm-cov overrides
+      # them with its own RUSTFLAGS (which includes -C instrument-coverage).
+      # The linker config is separate and not affected by RUSTFLAGS precedence.
       # See: #2078
       - name: Configure mold linker for coverage
         run: |
+          cat > /tmp/clang-mold-wrapper << 'WRAPPER'
+          #!/bin/sh
+          exec clang -fuse-ld=mold "$@"
+          WRAPPER
+          chmod +x /tmp/clang-mold-wrapper
           ARCH=$(uname -m)
           if [ "$ARCH" = "aarch64" ]; then
             TARGET="aarch64-unknown-linux-gnu"
@@ -135,8 +136,7 @@ jobs:
           cat >> .cargo/config.toml << EOF
 
           [target.${TARGET}]
-          linker = "clang"
-          rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+          linker = "/tmp/clang-mold-wrapper"
           EOF
 
       - name: Run unit tests with coverage
@@ -174,6 +174,8 @@ jobs:
     name: Intra-Crate Integration Coverage
     runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 120
+    env:
+      CARGO_TARGET_DIR: /tmp/cargo_target_intra_cov
     permissions:
       id-token: write
       contents: read
@@ -257,12 +259,15 @@ jobs:
           images-file: .github/docker-images-intra-crate.txt
 
       - name: Clean coverage artifacts
-        run: |
-          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
-          cargo llvm-cov clean --workspace
+        run: cargo llvm-cov clean --workspace
 
       - name: Configure mold linker for coverage
         run: |
+          cat > /tmp/clang-mold-wrapper << 'WRAPPER'
+          #!/bin/sh
+          exec clang -fuse-ld=mold "$@"
+          WRAPPER
+          chmod +x /tmp/clang-mold-wrapper
           ARCH=$(uname -m)
           if [ "$ARCH" = "aarch64" ]; then
             TARGET="aarch64-unknown-linux-gnu"
@@ -272,8 +277,7 @@ jobs:
           cat >> .cargo/config.toml << EOF
 
           [target.${TARGET}]
-          linker = "clang"
-          rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+          linker = "/tmp/clang-mold-wrapper"
           EOF
 
       - name: Run intra-crate integration tests with coverage
@@ -313,6 +317,8 @@ jobs:
     name: Cross-Crate Integration Coverage
     runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: /tmp/cargo_target_cross_cov
     permissions:
       id-token: write
       contents: read
@@ -396,12 +402,15 @@ jobs:
           images-file: .github/docker-images-cross-crate.txt
 
       - name: Clean coverage artifacts
-        run: |
-          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
-          cargo llvm-cov clean --workspace
+        run: cargo llvm-cov clean --workspace
 
       - name: Configure mold linker for coverage
         run: |
+          cat > /tmp/clang-mold-wrapper << 'WRAPPER'
+          #!/bin/sh
+          exec clang -fuse-ld=mold "$@"
+          WRAPPER
+          chmod +x /tmp/clang-mold-wrapper
           ARCH=$(uname -m)
           if [ "$ARCH" = "aarch64" ]; then
             TARGET="aarch64-unknown-linux-gnu"
@@ -411,8 +420,7 @@ jobs:
           cat >> .cargo/config.toml << EOF
 
           [target.${TARGET}]
-          linker = "clang"
-          rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+          linker = "/tmp/clang-mold-wrapper"
           EOF
 
       - name: Run cross-crate integration tests with coverage

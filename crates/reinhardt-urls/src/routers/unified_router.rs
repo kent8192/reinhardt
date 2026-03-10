@@ -39,17 +39,25 @@
 //! - When `client-router` feature is **disabled**: Server-only [`UnifiedRouter`] with
 //!   only `.server()` method available.
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::routers::server_router::ServerRouter;
 
 #[cfg(feature = "client-router")]
 use crate::routers::client_router::ClientRouter;
 
+#[cfg(not(target_arch = "wasm32"))]
 use hyper::Method;
+#[cfg(not(target_arch = "wasm32"))]
 use reinhardt_core::exception::Result;
+#[cfg(not(target_arch = "wasm32"))]
 use reinhardt_di::InjectionContext;
+#[cfg(not(target_arch = "wasm32"))]
 use reinhardt_http::{Request, Response};
+#[cfg(not(target_arch = "wasm32"))]
 use reinhardt_middleware::Middleware;
+#[cfg(not(target_arch = "wasm32"))]
 use std::future::Future;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 
 // ============================================================================
@@ -74,13 +82,13 @@ use std::sync::Arc;
 /// ```
 ///
 /// [`Page`]: reinhardt_core::page::Page
-#[cfg(feature = "client-router")]
+#[cfg(all(feature = "client-router", not(target_arch = "wasm32")))]
 pub struct UnifiedRouter {
 	server: ServerRouter,
 	client: ClientRouter,
 }
 
-#[cfg(feature = "client-router")]
+#[cfg(all(feature = "client-router", not(target_arch = "wasm32")))]
 impl UnifiedRouter {
 	/// Creates a new `UnifiedRouter` with default server and client routers.
 	pub fn new() -> Self {
@@ -276,7 +284,7 @@ impl UnifiedRouter {
 	}
 }
 
-#[cfg(feature = "client-router")]
+#[cfg(all(feature = "client-router", not(target_arch = "wasm32")))]
 impl Default for UnifiedRouter {
 	fn default() -> Self {
 		Self::new()
@@ -430,6 +438,102 @@ impl Default for UnifiedRouter {
 impl reinhardt_http::Handler for UnifiedRouter {
 	async fn handle(&self, request: Request) -> Result<Response> {
 		self.server.handle(request).await
+	}
+}
+
+// ============================================================================
+// WASM target with client-router feature
+// ============================================================================
+
+/// Stub type used in place of `ServerRouter` on WASM targets.
+///
+/// On WASM, server-side routing is not available. This stub allows
+/// `UnifiedRouter::server()` closures to compile by accepting and
+/// ignoring the server configuration closure.
+#[cfg(target_arch = "wasm32")]
+pub struct ServerRouterStub;
+
+/// Unified router for WASM targets with client-side routing.
+///
+/// On WASM, only client-side routing is available. The `.server()` method
+/// accepts a closure but discards its result, allowing shared route
+/// definitions to compile on both server and client.
+#[cfg(all(target_arch = "wasm32", feature = "client-router"))]
+pub struct UnifiedRouter {
+	client: ClientRouter,
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "client-router"))]
+impl UnifiedRouter {
+	/// Creates a new `UnifiedRouter` with a default client router.
+	pub fn new() -> Self {
+		Self {
+			client: ClientRouter::new(),
+		}
+	}
+
+	/// Accept and discard server-side routing configuration.
+	///
+	/// On WASM, server routing is not available. The closure is called
+	/// with a [`ServerRouterStub`] but its result is discarded.
+	pub fn server<F>(self, _f: F) -> Self
+	where
+		F: FnOnce(ServerRouterStub) -> ServerRouterStub,
+	{
+		self
+	}
+
+	/// Configure client-side routing with a closure.
+	pub fn client<F>(mut self, f: F) -> Self
+	where
+		F: FnOnce(ClientRouter) -> ClientRouter,
+	{
+		self.client = f(self.client);
+		self
+	}
+
+	/// Returns a reference to the client router.
+	pub fn client_ref(&self) -> &ClientRouter {
+		&self.client
+	}
+
+	/// Returns a mutable reference to the client router.
+	pub fn client_mut(&mut self) -> &mut ClientRouter {
+		&mut self.client
+	}
+
+	/// Consumes the router and returns the client router.
+	pub fn into_client(self) -> ClientRouter {
+		self.client
+	}
+
+	/// Registers (no-op for server) and returns client router.
+	pub fn register_globally(self) -> ClientRouter {
+		self.client
+	}
+
+	/// Mount a child UnifiedRouter on this router (client routes only).
+	pub fn mount_unified(mut self, _prefix: &str, child: UnifiedRouter) -> Self {
+		// Merge child client routes into parent
+		self.client = self.client.merge(child.client);
+		self
+	}
+
+	/// No-op on WASM - server prefix is not applicable.
+	pub fn with_prefix(self, _prefix: impl Into<String>) -> Self {
+		self
+	}
+
+	/// No-op on WASM - server namespace is not applicable.
+	pub fn with_namespace(self, _namespace: impl Into<String>) -> Self {
+		self
+	}
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "client-router"))]
+impl Default for UnifiedRouter {
+	fn default() -> Self {
+		Self::new()
 	}
 }
 

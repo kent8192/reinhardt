@@ -187,6 +187,8 @@ impl ClientRouter {
 	///
 	/// Routes and named route mappings from `other` are appended.
 	/// Signals and not_found handler from `other` are discarded.
+	// Used by UnifiedRouter::mount_unified() on WASM targets
+	#[allow(dead_code)]
 	pub(crate) fn merge(mut self, other: ClientRouter) -> Self {
 		let offset = self.routes.len();
 		for (name, idx) in other.named_routes {

@@ -161,7 +161,6 @@ pub fn dm_chat(room_id: Uuid, current_user_id: Option<Uuid>) -> Page {
 	page!(|messages_signal: Signal<Vec<MessageInfo>>, is_loading_signal: Signal<bool>, error_signal: Signal<Option<String>>, ws_state: Signal<ConnectionState>, input_signal: Signal<String>, current_user_id: Option<Uuid>, _room_id: Uuid| {
 		div {
 			class: "dm-chat-container flex flex-col h-full",
-			// Header with connection status
 			div {
 				class: "dm-header flex items-center justify-between p-4 border-b border-surface-tertiary",
 				h2 {
@@ -172,7 +171,6 @@ pub fn dm_chat(room_id: Uuid, current_user_id: Option<Uuid>) -> Page {
 					{ connection_status(matches!(ws_state.get(), ConnectionState::Open)) }
 				}
 			}
-			// Message list area
 			div {
 				class: "dm-messages flex-1 overflow-y-auto p-4 space-y-3",
 				watch {
@@ -214,21 +212,26 @@ pub fn dm_chat(room_id: Uuid, current_user_id: Option<Uuid>) -> Page {
 							class: "space-y-3",
 							{
 								Page::Fragment(
-									messages_signal.get().iter().map(|m| {
-										let is_own = current_user_id.map(|uid| m.sender_id == uid).unwrap_or(false);
-										message_item(m, is_own)
-									}).collect::<Vec<_>>()
-								)
+										messages_signal
+											.get()
+											.iter()
+											.map(|m| {
+												let is_own = current_user_id
+													.map(|uid| m.sender_id == uid)
+													.unwrap_or(false);
+												message_item(m, is_own)
+											})
+											.collect::<Vec<_>>(),
+									)
 							}
 						}
 					}
 				}
 			}
-			// Message input area
 			{
 				message_input(input_signal.clone(), move |content| {
-					chat_for_send.send_message(content);
-				})
+						chat_for_send.send_message(content);
+					})
 			}
 		}
 	})(

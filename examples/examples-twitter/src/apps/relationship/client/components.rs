@@ -74,7 +74,7 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> Page {
 						button {
 							type: "button",
 							class: "btn-secondary opacity-50 cursor-not-allowed",
-							disabled: {true},
+							disabled: { true },
 							aria_label: "Loading",
 							@click: {
 										let toggle_follow = toggle_follow.clone();

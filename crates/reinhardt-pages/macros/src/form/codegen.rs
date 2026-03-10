@@ -876,13 +876,11 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 								// Get field values from cloned signals
 								#loading_start
 
-								// Clone signals for async block - allow non_snake_case for generated variable names
-								{
-									#(
-										#[allow(non_snake_case)]
-										let #field_names = #field_value_getters;
-									)*
-								}
+								// Get field values from cloned signals - allow non_snake_case for generated variable names
+								#(
+									#[allow(non_snake_case)]
+									let #field_names = #field_value_getters;
+								)*
 
 								#[cfg(target_arch = "wasm32")]
 								{
@@ -911,16 +909,13 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 								// Prevent default form submission by handling it ourselves (no-op in non-WASM)
 								event.prevent_default();
 
-								// Get field values from cloned signals
+								// Get field values from cloned signals - allow non_snake_case for generated variable names
 								#loading_start
 
-								// Clone signals for async block - allow non_snake_case for generated variable names
-								{
-									#(
-										#[allow(non_snake_case)]
-										let #field_names = #field_value_getters;
-									)*
-								}
+								#(
+									#[allow(non_snake_case)]
+									let #field_names = #field_value_getters;
+								)*
 
 								#[cfg(target_arch = "wasm32")]
 								{

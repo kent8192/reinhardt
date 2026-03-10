@@ -154,7 +154,7 @@ pub mod server_router;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simple;
 /// Unified router combining server and client routing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), feature = "client-router"))]
 pub mod unified_router;
 /// Route map visualization in multiple formats (tree, DOT, Markdown).
 #[cfg(not(target_arch = "wasm32"))]
@@ -211,7 +211,7 @@ pub use server_router::{
 };
 
 // Unified router (closure-based API combining server and client routers)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), feature = "client-router"))]
 pub use unified_router::UnifiedRouter;
 
 // Client router re-exports

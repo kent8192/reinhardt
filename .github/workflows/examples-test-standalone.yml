@@ -1,0 +1,31 @@
+name: Examples Tests (Standalone)
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: examples-test-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  detect-affected:
+    name: Detect Affected Packages
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/detect-affected-packages.yml
+
+  examples-test:
+    name: Examples Tests
+    needs: [detect-affected]
+    if: |
+      always() &&
+      (github.event_name != 'pull_request' || needs.detect-affected.outputs.run-examples == 'true')
+    uses: ./.github/workflows/examples-test.yml
+    secrets: inherit
+    with:
+      runner: '"ubuntu-latest"'
+      cargo-build-jobs: '1'

@@ -252,11 +252,6 @@ jobs:
         with:
           images-file: .github/docker-images-intra-crate.txt
 
-      - name: Clean coverage artifacts
-        run: |
-          cargo llvm-cov clean --workspace
-          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
-
       - name: Configure cargo for coverage
         run: |
           cat > /tmp/clang-mold-wrapper << 'WRAPPER'
@@ -278,13 +273,10 @@ jobs:
           linker = "/tmp/clang-mold-wrapper"
           EOF
 
-      - name: Verify coverage configuration
+      - name: Clean coverage artifacts
         run: |
-          echo "=== .cargo/config.toml ==="
-          cat .cargo/config.toml
-          echo "=== CARGO_TARGET_DIR: ${CARGO_TARGET_DIR} ==="
-          echo "=== llvm-cov-target contents ==="
-          ls -la "${CARGO_TARGET_DIR}/llvm-cov-target/" 2>/dev/null || echo "(not found)"
+          cargo llvm-cov clean --workspace
+          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
 
       - name: Run intra-crate integration tests with coverage
         env:
@@ -310,17 +302,6 @@ jobs:
           cargo llvm-cov report \
             --codecov \
             --output-path /tmp/intra-crate-codecov.json
-
-      - name: Debug profraw file locations
-        if: failure()
-        run: |
-          echo "=== Searching for profraw files ==="
-          find "${CARGO_TARGET_DIR}" -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in CARGO_TARGET_DIR"
-          find /tmp -maxdepth 3 -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in /tmp"
-          echo "=== llvm-cov-target structure ==="
-          ls -laR "${CARGO_TARGET_DIR}/llvm-cov-target/" 2>/dev/null | head -50 || echo "llvm-cov-target not found"
-          echo "=== Disk space ==="
-          df -h /tmp
 
       - name: Upload coverage to Codecov
         if: always()
@@ -418,11 +399,6 @@ jobs:
         with:
           images-file: .github/docker-images-cross-crate.txt
 
-      - name: Clean coverage artifacts
-        run: |
-          cargo llvm-cov clean --workspace
-          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
-
       - name: Configure cargo for coverage
         run: |
           cat > /tmp/clang-mold-wrapper << 'WRAPPER'
@@ -444,13 +420,10 @@ jobs:
           linker = "/tmp/clang-mold-wrapper"
           EOF
 
-      - name: Verify coverage configuration
+      - name: Clean coverage artifacts
         run: |
-          echo "=== .cargo/config.toml ==="
-          cat .cargo/config.toml
-          echo "=== CARGO_TARGET_DIR: ${CARGO_TARGET_DIR} ==="
-          echo "=== llvm-cov-target contents ==="
-          ls -la "${CARGO_TARGET_DIR}/llvm-cov-target/" 2>/dev/null || echo "(not found)"
+          cargo llvm-cov clean --workspace
+          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
 
       - name: Run cross-crate integration tests with coverage
         env:
@@ -473,17 +446,6 @@ jobs:
           cargo llvm-cov report \
             --codecov \
             --output-path /tmp/cross-crate-codecov.json
-
-      - name: Debug profraw file locations
-        if: failure()
-        run: |
-          echo "=== Searching for profraw files ==="
-          find "${CARGO_TARGET_DIR}" -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in CARGO_TARGET_DIR"
-          find /tmp -maxdepth 3 -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in /tmp"
-          echo "=== llvm-cov-target structure ==="
-          ls -laR "${CARGO_TARGET_DIR}/llvm-cov-target/" 2>/dev/null | head -50 || echo "llvm-cov-target not found"
-          echo "=== Disk space ==="
-          df -h /tmp
 
       - name: Upload coverage to Codecov
         if: always()

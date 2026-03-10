@@ -282,7 +282,9 @@ impl<B: SessionBackend + CleanupableBackend> SessionCleanupTask<B> {
 mod tests {
 	use super::*;
 	use crate::sessions::InMemorySessionBackend;
+	use rstest::rstest;
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_cleanup_config_default() {
 		let config = CleanupConfig::default();
@@ -290,12 +292,14 @@ mod tests {
 		assert_eq!(config.batch_size, 1000);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_cleanup_task_creation() {
 		let backend = InMemorySessionBackend::new();
 		let _cleanup = SessionCleanupTask::new(backend, Duration::from_secs(3600));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_cleanup_task_with_config() {
 		let backend = InMemorySessionBackend::new();
@@ -306,6 +310,7 @@ mod tests {
 		let _cleanup = SessionCleanupTask::with_config(backend, config);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_run_cleanup_basic_backend() {
 		let backend = InMemorySessionBackend::new();

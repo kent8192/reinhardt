@@ -57,7 +57,9 @@ impl UserMapper for DefaultUserMapper {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
+	#[rstest]
 	#[test]
 	fn test_default_mapper_full_claims() {
 		// Arrange
@@ -90,6 +92,7 @@ mod tests {
 		);
 	}
 
+	#[rstest]
 	#[test]
 	fn test_default_mapper_minimal_claims() {
 		// Arrange
@@ -116,6 +119,7 @@ mod tests {
 		assert!(mapped.display_name.is_none());
 	}
 
+	#[rstest]
 	#[test]
 	fn test_default_mapper_extra_data() {
 		// Arrange

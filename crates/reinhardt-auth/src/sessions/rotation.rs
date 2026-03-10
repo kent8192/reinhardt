@@ -262,7 +262,9 @@ impl Default for SessionRotator {
 mod tests {
 	use super::*;
 	use crate::sessions::InMemorySessionBackend;
+	use rstest::rstest;
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_rotation_policy_default() {
 		let policy = RotationPolicy::default();
@@ -272,6 +274,7 @@ mod tests {
 		}
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_rotation_metadata_default() {
 		let metadata = RotationMetadata::default();
@@ -279,16 +282,19 @@ mod tests {
 		assert!(metadata.last_rotation <= Utc::now());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_session_rotator_creation() {
 		let _rotator = SessionRotator::new(RotationPolicy::OnLogin);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_session_rotator_default() {
 		let _rotator = SessionRotator::default();
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_rotate_session() {
 		let backend = InMemorySessionBackend::new();
@@ -308,6 +314,7 @@ mod tests {
 		assert_eq!(user_id, 123);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_should_rotate_periodic() {
 		let rotator = SessionRotator::new(RotationPolicy::Periodic(Duration::from_secs(3600)));
@@ -324,6 +331,7 @@ mod tests {
 		assert!(rotator.should_rotate(&old_metadata));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_should_rotate_after_requests() {
 		let rotator = SessionRotator::new(RotationPolicy::AfterRequests(100));
@@ -339,6 +347,7 @@ mod tests {
 		assert!(rotator.should_rotate(&metadata));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_should_rotate_never() {
 		let rotator = SessionRotator::new(RotationPolicy::Never);
@@ -353,6 +362,7 @@ mod tests {
 		assert!(!rotator.should_rotate(&old_metadata));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_increment_request_count() {
 		let rotator = SessionRotator::default();

@@ -460,7 +460,9 @@ where
 mod tests {
 	use super::*;
 	use crate::sessions::InMemorySessionBackend;
+	use rstest::rstest;
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_async_replication_save() {
 		let primary = InMemorySessionBackend::new();
@@ -488,6 +490,7 @@ mod tests {
 		assert_eq!(secondary_data.unwrap(), data);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_sync_replication_save() {
 		let primary = InMemorySessionBackend::new();
@@ -511,6 +514,7 @@ mod tests {
 		assert_eq!(secondary_data.unwrap(), data);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_acknowledged_replication_save() {
 		let primary = InMemorySessionBackend::new();
@@ -534,6 +538,7 @@ mod tests {
 		assert_eq!(secondary_data.unwrap(), data);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_replication_delete() {
 		let primary = InMemorySessionBackend::new();
@@ -558,6 +563,7 @@ mod tests {
 		assert!(!secondary.exists("test_key").await.unwrap());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_replication_load_fallback() {
 		let primary = InMemorySessionBackend::new();
@@ -579,6 +585,7 @@ mod tests {
 		assert_eq!(loaded.unwrap(), data);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_replication_config() {
 		let config = ReplicationConfig {
@@ -602,6 +609,7 @@ mod tests {
 		assert_eq!(replicated.config.retry_delay_ms, 200);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_replication_strategy_getter() {
 		let primary = InMemorySessionBackend::new();

@@ -395,7 +395,9 @@ where
 mod tests {
 	use super::*;
 	use crate::sessions::InMemorySessionBackend;
+	use rstest::rstest;
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_session_save_load() {
 		let backend = InMemorySessionBackend::new();
@@ -413,6 +415,7 @@ mod tests {
 		assert_eq!(loaded.unwrap(), data);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_session_isolation() {
 		let backend = InMemorySessionBackend::new();
@@ -444,6 +447,7 @@ mod tests {
 		assert_eq!(loaded2.unwrap(), data2);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_session_delete() {
 		let backend = InMemorySessionBackend::new();
@@ -462,6 +466,7 @@ mod tests {
 		assert!(!tenant_backend.exists("session_abc").await.unwrap());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_make_key() {
 		let backend = InMemorySessionBackend::new();
@@ -472,6 +477,7 @@ mod tests {
 		assert_eq!(key, "tenant:tenant_123:session:session_abc");
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_is_tenant_key() {
 		let backend = InMemorySessionBackend::new();
@@ -483,6 +489,7 @@ mod tests {
 		assert!(!tenant_backend.is_tenant_key("other:prefix:abc"));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_extract_session_id() {
 		let backend = InMemorySessionBackend::new();
@@ -496,6 +503,7 @@ mod tests {
 		assert_eq!(invalid, None);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_config_with_prefix() {
 		let config = TenantConfig::with_prefix("app:t:{tenant_id}:s:");
@@ -507,6 +515,7 @@ mod tests {
 		assert_eq!(key, "app:t:tenant_123:s:session_abc");
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_config_with_max_sessions() {
 		let config = TenantConfig::default().with_max_sessions(1);
@@ -532,6 +541,7 @@ mod tests {
 		}
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_config_with_strict_isolation() {
 		let config = TenantConfig::default().with_strict_isolation(true);
@@ -542,6 +552,7 @@ mod tests {
 		assert!(tenant_backend.config.strict_isolation);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_getters() {
 		let backend = InMemorySessionBackend::new();
@@ -558,6 +569,7 @@ mod tests {
 		);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_count_sessions() {
 		let backend = InMemorySessionBackend::new();

@@ -137,6 +137,7 @@ impl SocialAccountStorage for InMemorySocialAccountStorage {
 mod tests {
 	use super::*;
 	use chrono::Duration;
+	use rstest::rstest;
 
 	fn test_account(user_id: Uuid) -> SocialAccount {
 		SocialAccount {
@@ -156,6 +157,7 @@ mod tests {
 		}
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_create_and_find() {
 		// Arrange
@@ -176,6 +178,7 @@ mod tests {
 		assert_eq!(found.unwrap().provider_user_id, provider_uid);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_find_by_user() {
 		// Arrange
@@ -192,6 +195,7 @@ mod tests {
 		assert_eq!(accounts[0].user_id, user_id);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_update() {
 		// Arrange
@@ -210,6 +214,7 @@ mod tests {
 		assert_eq!(found[0].access_token, "new_token");
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_delete() {
 		// Arrange
@@ -227,6 +232,7 @@ mod tests {
 		assert!(accounts.is_empty());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_delete_nonexistent() {
 		// Arrange
@@ -239,6 +245,7 @@ mod tests {
 		assert!(result.is_err());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_update_nonexistent() {
 		// Arrange

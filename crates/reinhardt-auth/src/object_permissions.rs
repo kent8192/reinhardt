@@ -615,9 +615,7 @@ mod tests {
 	async fn test_bulk_check_multiple_objects() {
 		// Arrange
 		let mut manager = ObjectPermissionManager::new();
-		manager
-			.grant_permission("alice", "article:1", "view")
-			.await;
+		manager.grant_permission("alice", "article:1", "view").await;
 		manager
 			.grant_permission("alice", "article:2", "change")
 			.await;

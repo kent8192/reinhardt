@@ -424,10 +424,7 @@ mod tests {
 		let data = json!({"item": "to_delete"});
 
 		// Act - save and verify exists
-		backend
-			.save("wrap_del", &data, Some(3600))
-			.await
-			.unwrap();
+		backend.save("wrap_del", &data, Some(3600)).await.unwrap();
 		assert!(backend.exists("wrap_del").await.unwrap());
 
 		// Act - delete

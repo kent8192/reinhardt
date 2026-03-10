@@ -335,10 +335,7 @@ mod tests {
 		// Assert - verify persisted changes
 		let accounts = storage.find_by_user(user_id).await.unwrap();
 		let updated = accounts.iter().find(|a| a.id == account_id).unwrap();
-		assert_eq!(
-			updated.refresh_token,
-			Some("new_refresh_token".to_string())
-		);
+		assert_eq!(updated.refresh_token, Some("new_refresh_token".to_string()));
 		assert_eq!(updated.scopes, vec!["user", "repo"]);
 	}
 }

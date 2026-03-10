@@ -479,8 +479,7 @@ mod tests {
 		assert_eq!(result.total, 1);
 		// The session was skipped, so migrated count should be 0
 		assert_eq!(result.migrated, 0);
-		let loaded: Option<HashMap<String, serde_json::Value>> =
-			target.load("key1").await.unwrap();
+		let loaded: Option<HashMap<String, serde_json::Value>> = target.load("key1").await.unwrap();
 		assert_eq!(loaded.unwrap()["origin"], serde_json::json!("target_data"));
 	}
 

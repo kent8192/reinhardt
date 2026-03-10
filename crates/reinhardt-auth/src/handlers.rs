@@ -439,9 +439,18 @@ mod tests {
 			.unwrap()
 			.to_str()
 			.unwrap();
-		assert!(cookie_value.contains("HttpOnly"), "Cookie must include HttpOnly flag");
-		assert!(cookie_value.contains("Secure"), "Cookie must include Secure flag");
-		assert!(cookie_value.contains("SameSite=Lax"), "Cookie must include SameSite=Lax");
+		assert!(
+			cookie_value.contains("HttpOnly"),
+			"Cookie must include HttpOnly flag"
+		);
+		assert!(
+			cookie_value.contains("Secure"),
+			"Cookie must include Secure flag"
+		);
+		assert!(
+			cookie_value.contains("SameSite=Lax"),
+			"Cookie must include SameSite=Lax"
+		);
 	}
 
 	#[rstest]

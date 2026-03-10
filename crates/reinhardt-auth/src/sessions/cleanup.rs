@@ -327,7 +327,10 @@ mod tests {
 		// Arrange
 		let backend = InMemorySessionBackend::new();
 		let data = serde_json::json!({"user": "expired_user"});
-		backend.save("sess_expired", &data, Some(3600)).await.unwrap();
+		backend
+			.save("sess_expired", &data, Some(3600))
+			.await
+			.unwrap();
 
 		// Wait briefly so the session ages past the very short max_age
 		tokio::time::sleep(Duration::from_millis(50)).await;
@@ -350,7 +353,10 @@ mod tests {
 		// Arrange
 		let backend = InMemorySessionBackend::new();
 		let data = serde_json::json!({"user": "active_user"});
-		backend.save("sess_recent", &data, Some(3600)).await.unwrap();
+		backend
+			.save("sess_recent", &data, Some(3600))
+			.await
+			.unwrap();
 
 		// Access the session to populate last_accessed timestamp
 		let _: Option<serde_json::Value> = backend.load("sess_recent").await.unwrap();
@@ -373,9 +379,18 @@ mod tests {
 		// Arrange
 		let backend = InMemorySessionBackend::new();
 		let data = serde_json::json!({"batch": true});
-		backend.save("batch_sess_1", &data, Some(3600)).await.unwrap();
-		backend.save("batch_sess_2", &data, Some(3600)).await.unwrap();
-		backend.save("batch_sess_3", &data, Some(3600)).await.unwrap();
+		backend
+			.save("batch_sess_1", &data, Some(3600))
+			.await
+			.unwrap();
+		backend
+			.save("batch_sess_2", &data, Some(3600))
+			.await
+			.unwrap();
+		backend
+			.save("batch_sess_3", &data, Some(3600))
+			.await
+			.unwrap();
 
 		// Wait briefly so sessions age past the very short max_age
 		tokio::time::sleep(Duration::from_millis(50)).await;

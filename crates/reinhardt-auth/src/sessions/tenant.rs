@@ -662,8 +662,7 @@ mod tests {
 		// Arrange
 		let config = TenantConfig::default().with_max_sessions(3);
 		let backend = InMemorySessionBackend::new();
-		let tenant_backend =
-			TenantSessionBackend::new(backend, "tenant_a".to_string(), config);
+		let tenant_backend = TenantSessionBackend::new(backend, "tenant_a".to_string(), config);
 		let data = serde_json::json!({"key": "value"});
 
 		tenant_backend.save("sess_1", &data, None).await.unwrap();

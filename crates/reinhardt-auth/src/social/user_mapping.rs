@@ -148,4 +148,72 @@ mod tests {
 			Some(&Value::String("testuser".to_string()))
 		);
 	}
+
+	#[rstest]
+	#[test]
+	fn test_mapper_email_verified_defaults_false() {
+		// Arrange - email_verified is None
+		let claims = StandardClaims {
+			sub: "user_none_verified".to_string(),
+			email: Some("user@example.com".to_string()),
+			email_verified: None,
+			name: None,
+			given_name: None,
+			family_name: None,
+			picture: None,
+			locale: None,
+			additional_claims: HashMap::new(),
+		};
+		let mapper = DefaultUserMapper;
+
+		// Act
+		let mapped = mapper.map_claims_to_user(&claims).unwrap();
+
+		// Assert - None should default to false
+		assert!(!mapped.email_verified);
+	}
+
+	#[rstest]
+	#[test]
+	fn test_mapper_preserves_additional_claims() {
+		// Arrange - multiple extra_data fields
+		let mut additional = HashMap::new();
+		additional.insert("login".to_string(), Value::String("octocat".to_string()));
+		additional.insert(
+			"avatar_url".to_string(),
+			Value::String("https://example.com/avatar.png".to_string()),
+		);
+		additional.insert("followers".to_string(), Value::Number(42.into()));
+
+		let claims = StandardClaims {
+			sub: "user_extra".to_string(),
+			email: None,
+			email_verified: None,
+			name: None,
+			given_name: None,
+			family_name: None,
+			picture: None,
+			locale: None,
+			additional_claims: additional.clone(),
+		};
+		let mapper = DefaultUserMapper;
+
+		// Act
+		let mapped = mapper.map_claims_to_user(&claims).unwrap();
+
+		// Assert - all additional claims should be preserved
+		assert_eq!(mapped.extra_data.len(), 3);
+		assert_eq!(
+			mapped.extra_data.get("login"),
+			Some(&Value::String("octocat".to_string()))
+		);
+		assert_eq!(
+			mapped.extra_data.get("avatar_url"),
+			Some(&Value::String("https://example.com/avatar.png".to_string()))
+		);
+		assert_eq!(
+			mapped.extra_data.get("followers"),
+			Some(&Value::Number(42.into()))
+		);
+	}
 }

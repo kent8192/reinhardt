@@ -27,16 +27,19 @@ env:
   CARGO_TARGET_DIR: /tmp/cargo_target
   CARGO_INCREMENTAL: 0
   CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  RUST_MIN_STACK: 8388608  # 8MB - prevent stack overflow in deep async fixture chains
 
 jobs:
   unit-test:
-    name: Unit Tests (${{ matrix.partition }}/4)
+    name: Unit Tests (${{ matrix.partition }}/6)
     runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        partition: [1, 2, 3, 4]
+        partition: [1, 2, 3, 4, 5, 6]
     steps:
       - name: Free Disk Space (Ubuntu)
         if: ${{ !contains(inputs.runner, 'self-hosted') }}
@@ -64,6 +67,13 @@ jobs:
 
       - name: Setup protoc
         uses: ./.github/actions/setup-protoc
+
+      - name: Install mold linker and build dependencies
+        run: |
+          sudo apt-get update -o DPkg::Lock::Timeout=120
+          sudo apt-get install -y -o DPkg::Lock::Timeout=120 mold clang lld build-essential
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
 
       - name: Install cargo-make
         uses: taiki-e/install-action@v2
@@ -111,8 +121,9 @@ jobs:
             done < .github/docker-images-unit-test.txt
           fi
 
-      - name: Run unit tests (partition ${{ matrix.partition }}/4)
+      - name: Run unit tests (partition ${{ matrix.partition }}/6)
         env:
+          RUSTFLAGS: "-C linker=clang -C link-arg=-fuse-ld=mold"
           NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
           RUN_ALL: ${{ inputs.run-all }}
         run: |
@@ -124,7 +135,7 @@ jobs:
             --workspace \
             --lib \
             --all-features \
-            --partition hash:${{ matrix.partition }}/4 \
+            --partition hash:${{ matrix.partition }}/6 \
             --no-fail-fast \
             --status-level=none \
             --final-status-level=none \

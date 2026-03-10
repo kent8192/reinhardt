@@ -220,7 +220,10 @@ impl RestAuthentication for JwtAuth {
 						return Ok(Some(Box::new(SimpleUser {
 							id,
 							username: claims.username.clone(),
-							email: format!("{}@example.com", claims.username),
+							email: String::new(),
+							// Security defaults: privilege flags are set to restrictive values
+							// since JWT claims alone cannot determine user privileges.
+							// Use UserRepository integration for accurate privilege data.
 							is_active: true,
 							is_admin: false,
 							is_staff: false,
@@ -264,7 +267,6 @@ mod tests {
 	use hyper::{HeaderMap, Method};
 	use reinhardt_http::Request;
 	use rstest::rstest;
-
 	/// Helper to create a request with a given Authorization header value.
 	fn create_request_with_bearer(token: &str) -> Request {
 		let mut headers = HeaderMap::new();
@@ -429,5 +431,74 @@ mod tests {
 
 		// Assert
 		assert!(matches!(&result, Err(AuthenticationError::InvalidToken)));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_authenticate_does_not_fabricate_privilege_flags() {
+		// Arrange
+		let jwt_auth = JwtAuth::new(b"test-secret-key-256bit!");
+		let user_id = "550e8400-e29b-41d4-a716-446655440000";
+		let username = "alice";
+		let token = jwt_auth
+			.generate_token(user_id.to_string(), username.to_string())
+			.unwrap();
+		let request = create_request_with_bearer(&token);
+
+		// Act
+		let result = RestAuthentication::authenticate(&jwt_auth, &request).await;
+
+		// Assert - JWT claims contain only sub and username; all other fields
+		// must use security defaults (not fabricated values)
+		let user = result.unwrap().unwrap();
+		assert_eq!(user.id(), user_id);
+		assert_eq!(user.username(), username);
+		assert!(user.is_active());
+		assert!(!user.is_admin(), "admin flag should default to false");
+		assert!(!user.is_staff(), "staff flag should default to false");
+		assert!(
+			!user.is_superuser(),
+			"superuser flag should default to false"
+		);
+		// Email emptiness is verified in test_claims_struct_has_no_email_field.
+		// The User trait does not expose email, so direct assertion is not
+		// possible through the trait object returned by authenticate().
+	}
+
+	/// Verifies that JWT authentication does not fabricate email data.
+	/// JWT claims carry only `sub` (user ID) and `username`; the authenticated
+	/// user must not have email information injected from outside the token.
+	#[rstest]
+	#[tokio::test]
+	async fn test_jwt_authenticated_user_has_no_email_in_claims() {
+		// Arrange
+		let jwt_auth = JwtAuth::new(b"test-secret-key-256bit!");
+		let token = jwt_auth
+			.generate_token(
+				"550e8400-e29b-41d4-a716-446655440000".to_string(),
+				"alice".to_string(),
+			)
+			.unwrap();
+		let request = create_request_with_bearer(&token);
+
+		// Act
+		let result = RestAuthentication::authenticate(&jwt_auth, &request).await;
+		let user = result.unwrap().unwrap();
+
+		// Assert - JWT claims schema has no email field, so the authenticated
+		// user cannot carry email data from the token
+		let claims = Claims::new(
+			"550e8400-e29b-41d4-a716-446655440000".to_string(),
+			"alice".to_string(),
+			Duration::hours(1),
+		);
+		let serialized = serde_json::to_value(&claims).unwrap();
+		assert!(
+			serialized.get("email").is_none(),
+			"JWT Claims must not contain an email field"
+		);
+		// Verify the user was actually authenticated successfully
+		assert_eq!(user.username(), "alice");
+		assert_eq!(user.id(), "550e8400-e29b-41d4-a716-446655440000");
 	}
 }

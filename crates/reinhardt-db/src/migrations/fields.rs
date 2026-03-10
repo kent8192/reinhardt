@@ -13,7 +13,7 @@ pub enum FieldType {
 	/// SmallInteger variant.
 	SmallInteger,
 	/// TinyInt variant.
-	TinyInt,   // MySQL-specific
+	TinyInt, // MySQL-specific
 	/// MediumInt variant.
 	MediumInt, // MySQL-specific
 
@@ -25,11 +25,11 @@ pub enum FieldType {
 	/// Text variant.
 	Text,
 	/// TinyText variant.
-	TinyText,   // MySQL-specific
+	TinyText, // MySQL-specific
 	/// MediumText variant.
 	MediumText, // MySQL-specific
 	/// LongText variant.
-	LongText,   // MySQL-specific
+	LongText, // MySQL-specific
 
 	// Date/time types
 	/// Date variant.
@@ -64,15 +64,15 @@ pub enum FieldType {
 	/// Binary variant.
 	Binary,
 	/// Blob variant.
-	Blob,       // MySQL-specific
+	Blob, // MySQL-specific
 	/// TinyBlob variant.
-	TinyBlob,   // MySQL-specific
+	TinyBlob, // MySQL-specific
 	/// MediumBlob variant.
 	MediumBlob, // MySQL-specific
 	/// LongBlob variant.
-	LongBlob,   // MySQL-specific
+	LongBlob, // MySQL-specific
 	/// Bytea variant.
-	Bytea,      // PostgreSQL-specific
+	Bytea, // PostgreSQL-specific
 
 	// JSON types
 	/// Json variant.
@@ -146,7 +146,7 @@ pub enum FieldType {
 	/// ManyToMany relationship field
 	ManyToMany {
 		/// The to.
-		to: String,              // "app.Model" format
+		to: String, // "app.Model" format
 		/// The through.
 		through: Option<String>, // Intermediate table name (None for auto-generation)
 	},

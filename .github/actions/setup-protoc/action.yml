@@ -7,8 +7,11 @@ runs:
       if: runner.os == 'Linux'
       shell: bash
       run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y protobuf-compiler
+        # Use DPkg::Lock::Timeout to wait for dpkg lock instead of
+        # racy fuser-based polling (lock can be re-acquired between
+        # fuser check and apt-get execution)
+        sudo apt-get update -qq -o DPkg::Lock::Timeout=120
+        sudo apt-get install -y -o DPkg::Lock::Timeout=120 protobuf-compiler
         protoc --version
     - name: Install protoc (macOS)
       if: runner.os == 'macOS'

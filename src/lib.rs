@@ -276,6 +276,7 @@ pub use reinhardt_conf::settings::sources::{
 
 // Re-export ApplyUpdate trait and macros
 pub use reinhardt_core::apply_update::ApplyUpdate;
+#[cfg(not(target_arch = "wasm32"))]
 pub use reinhardt_macros::{ApplyUpdate as DeriveApplyUpdate, apply_update};
 
 // Re-export core types
@@ -591,9 +592,8 @@ pub use reinhardt_views::viewsets::{
 // Re-export routers
 #[cfg(not(target_arch = "wasm32"))]
 pub use reinhardt_urls::routers::{
-	DefaultRouter, PathMatcher, PathPattern, Route, Router, ServerRouter, UnifiedRouter,
-	UrlPatternsRegistration, clear_router, get_router, is_router_registered, register_router,
-	register_router_arc,
+	DefaultRouter, PathMatcher, PathPattern, Route, Router, ServerRouter, UrlPatternsRegistration,
+	clear_router, get_router, is_router_registered, register_router, register_router_arc,
 };
 
 // Re-export client-router types (requires client-router feature)
@@ -601,7 +601,7 @@ pub use reinhardt_urls::routers::{
 #[cfg(feature = "client-router")]
 pub use reinhardt_urls::routers::{
 	ClientPathPattern, ClientRoute, ClientRouteMatch, ClientRouter, FromPath, HistoryState,
-	NavigationType, ParamContext, SingleFromPath,
+	NavigationType, ParamContext, SingleFromPath, UnifiedRouter,
 };
 // Path extractor for client-side routing (separate from server-side Path from reinhardt-di)
 #[cfg(feature = "client-router")]

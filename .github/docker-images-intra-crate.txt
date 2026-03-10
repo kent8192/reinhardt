@@ -2,6 +2,7 @@
 # These images are cached to avoid Docker Hub rate limits
 
 # Databases
+postgres:16-alpine
 postgres:17-alpine
 
 # Cache/Key-Value Stores

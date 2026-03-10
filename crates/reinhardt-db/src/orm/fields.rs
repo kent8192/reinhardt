@@ -1646,7 +1646,7 @@ pub struct ForeignKey {
 	/// The base.
 	pub base: BaseField,
 	/// The to.
-	pub to: String,        // Related model name (e.g., "auth.Permission")
+	pub to: String, // Related model name (e.g., "auth.Permission")
 	/// The on delete.
 	pub on_delete: String, // CASCADE, SET_NULL, etc.
 	/// The related name.

@@ -168,6 +168,15 @@ jobs:
       runner: ${{ needs.determine-runner.outputs.runner }}
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
 
+  wasm-check:
+    name: WASM Check
+    needs: [determine-runner, check-branch-status]
+    if: needs.check-branch-status.outputs.has-conflicts != 'true'
+    uses: ./.github/workflows/wasm-check.yml
+    with:
+      runner: ${{ needs.determine-runner.outputs.runner }}
+      cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
+
   publish-check:
     name: Publish Check
     needs: [determine-runner, check-branch-status]
@@ -286,18 +295,6 @@ jobs:
       runner: ${{ needs.determine-runner.outputs.runner }}
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
 
-  coverage:
-    name: Coverage
-    uses: ./.github/workflows/coverage.yml
-    needs: [check, fmt, clippy, determine-runner, detect-affected]
-    if: needs.detect-affected.outputs.has-affected == 'true'
-    secrets: inherit
-    with:
-      runner: ${{ needs.determine-runner.outputs.runner }}
-      cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
-      nextest-filter: ${{ needs.detect-affected.outputs.nextest-filter }}
-      run-all: ${{ needs.detect-affected.outputs.run-all }}
-
   cross-platform-check:
     name: Cross-Platform Check
     uses: ./.github/workflows/cross-platform-check.yml
@@ -306,6 +303,7 @@ jobs:
   # Phase 2b: Additional tests run after core tests complete.
   # This phased approach prevents exceeding the Spot vCPU quota by
   # ensuring Phase 2a runners have terminated before Phase 2b starts.
+  # Note: examples-test and coverage run as separate standalone workflows.
   ui-test:
     name: UI Tests
     uses: ./.github/workflows/ui-test.yml
@@ -322,17 +320,6 @@ jobs:
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
       nextest-filter: ${{ needs.detect-affected.outputs.nextest-filter }}
       run-all: ${{ needs.detect-affected.outputs.run-all }}
-
-  examples-test:
-    name: Examples Tests
-    uses: ./.github/workflows/examples-test.yml
-    needs: [unit-test, intra-crate-integration-test, cross-crate-integration-test, determine-runner, detect-affected]
-    # Issue #1828: Skip when no examples/** changes on non-release PRs
-    if: needs.detect-affected.outputs.run-examples == 'true'
-    secrets: inherit
-    with:
-      runner: ${{ needs.determine-runner.outputs.runner }}
-      cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
 
   msrv-test:
     name: MSRV Test
@@ -354,6 +341,7 @@ jobs:
       - check
       - fmt
       - clippy
+      - wasm-check
       - publish-check
       - todo-check
       - security-audit
@@ -365,9 +353,7 @@ jobs:
       - cross-crate-integration-test
       - doc-test
       - docs-rs-check
-      - examples-test
       - ui-test
-      - coverage
       - cross-platform-check
       - msrv-test
     steps:
@@ -387,6 +373,7 @@ jobs:
             "check:${{ needs.check.result }}"
             "fmt:${{ needs.fmt.result }}"
             "clippy:${{ needs.clippy.result }}"
+            "wasm-check:${{ needs.wasm-check.result }}"
             "todo-check:${{ needs.todo-check.result }}"
             "security-audit:${{ needs.security-audit.result }}"
             "semver-check:${{ needs.semver-check.result }}"
@@ -410,8 +397,6 @@ jobs:
             "cross-crate-integration-test:${{ needs.cross-crate-integration-test.result }}"
             "doc-test:${{ needs.doc-test.result }}"
             "ui-test:${{ needs.ui-test.result }}"
-            "coverage:${{ needs.coverage.result }}"
-            "examples-test:${{ needs.examples-test.result }}"
             "terraform-check:${{ needs.terraform-check.result }}"
           )
           for entry in "${selectively_skippable[@]}"; do

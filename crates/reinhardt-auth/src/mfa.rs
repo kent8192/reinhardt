@@ -10,6 +10,8 @@ use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::USER_ID_NAMESPACE;
+
 /// MFA authentication backend
 ///
 /// Provides Time-based One-Time Password (TOTP) authentication.
@@ -179,9 +181,12 @@ impl AuthenticationBackend for MFAAuthentication {
 			(Some(user), Some(mfa_code)) => {
 				if self.verify_totp(user, mfa_code).await? {
 					Ok(Some(Box::new(SimpleUser {
-						id: Uuid::new_v4(),
+						id: Uuid::new_v5(&USER_ID_NAMESPACE, user.as_bytes()),
 						username: user.to_string(),
-						email: format!("{}@example.com", user),
+						email: String::new(),
+						// Security defaults: privilege flags are set to restrictive values
+						// since MFA authentication alone cannot determine user privileges.
+						// Use UserRepository integration for accurate privilege data.
 						is_active: true,
 						is_admin: false,
 						is_staff: false,
@@ -200,9 +205,12 @@ impl AuthenticationBackend for MFAAuthentication {
 		let secrets = self.secrets.lock().await;
 		if secrets.contains_key(user_id) {
 			Ok(Some(Box::new(SimpleUser {
-				id: Uuid::new_v4(),
+				id: Uuid::new_v5(&USER_ID_NAMESPACE, user_id.as_bytes()),
 				username: user_id.to_string(),
-				email: format!("{}@example.com", user_id),
+				email: String::new(),
+				// Security defaults: privilege flags are set to restrictive values
+				// since MFA authentication alone cannot determine user privileges.
+				// Use UserRepository integration for accurate privilege data.
 				is_active: true,
 				is_admin: false,
 				is_staff: false,
@@ -441,5 +449,77 @@ mod tests {
 
 		// Assert
 		assert_eq!(mfa.time_window, 60);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_get_user_same_username_produces_same_id() {
+		// Arrange
+		let mfa = MFAAuthentication::new("TestApp");
+		mfa.register_user("alice", "JBSWY3DPEHPK3PXP").await;
+
+		// Act
+		let user1 = mfa.get_user("alice").await.unwrap().unwrap();
+		let user2 = mfa.get_user("alice").await.unwrap().unwrap();
+
+		// Assert
+		assert_eq!(
+			user1.id(),
+			user2.id(),
+			"same username must produce the same UUID"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_user_id_is_deterministic_uuidv5() {
+		// Arrange
+		let mfa = MFAAuthentication::new("TestApp");
+		mfa.register_user("alice", "JBSWY3DPEHPK3PXP").await;
+
+		// Act
+		let user = mfa.get_user("alice").await.unwrap().unwrap();
+		let id = Uuid::parse_str(&user.id()).unwrap();
+
+		// Assert - ID must be UUIDv5 (version 5, RFC 4122 variant)
+		assert_eq!(id.get_version_num(), 5, "user ID must be UUIDv5");
+		assert_eq!(
+			id.get_variant(),
+			uuid::Variant::RFC4122,
+			"user ID must use RFC 4122 variant"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_get_user_unregistered_returns_none() {
+		// Arrange
+		let mfa = MFAAuthentication::new("TestApp");
+
+		// Act
+		let result = mfa.get_user("nonexistent_user").await.unwrap();
+
+		// Assert
+		assert!(result.is_none());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_get_user_different_usernames_produce_different_ids() {
+		// Arrange
+		let mfa = MFAAuthentication::new("TestApp");
+		mfa.register_user("alice", "JBSWY3DPEHPK3PXP").await;
+		mfa.register_user("bob", "KRSXG5CTMVRXEZLUKN").await;
+
+		// Act
+		let user_a = mfa.get_user("alice").await.unwrap().unwrap();
+		let user_b = mfa.get_user("bob").await.unwrap().unwrap();
+
+		// Assert
+		assert_ne!(
+			user_a.id(),
+			user_b.id(),
+			"different usernames must produce different UUIDs"
+		);
 	}
 }

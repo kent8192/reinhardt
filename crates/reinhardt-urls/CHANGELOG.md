@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.6...reinhardt-urls@v0.1.0-rc.7) - 2026-03-10
+
+### Added
+
+- *(urls)* add WASM-compatible UnifiedRouter variant with ServerRouterStub
+
+### Fixed
+
+- *(urls)* suppress dead_code warning for WASM-only `merge` method
+
 ## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.4...reinhardt-urls@v0.1.0-rc.5) - 2026-03-07
 
 ### Fixed

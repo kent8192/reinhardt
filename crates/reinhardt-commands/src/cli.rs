@@ -578,6 +578,13 @@ async fn execute_collectstatic(
 				.with_value("session_cookie_secure", Value::Bool(false))
 				.with_value("csrf_cookie_secure", Value::Bool(false))
 				.with_value("append_slash", Value::Bool(false))
+				// Middleware
+				.with_value("middleware", Value::Array(vec![]))
+				// URL configuration
+				.with_value("root_urlconf", Value::String(String::new()))
+				// Media files
+				.with_value("media_root", Value::Null)
+				// Admin/Manager contacts
 				.with_value("admins", Value::Array(vec![]))
 				.with_value("managers", Value::Array(vec![])),
 		)

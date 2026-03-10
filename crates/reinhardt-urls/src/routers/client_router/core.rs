@@ -183,6 +183,19 @@ impl ClientRouter {
 		}
 	}
 
+	/// Merges routes from another router into this one.
+	///
+	/// Routes and named route mappings from `other` are appended.
+	/// Signals and not_found handler from `other` are discarded.
+	pub(crate) fn merge(mut self, other: ClientRouter) -> Self {
+		let offset = self.routes.len();
+		for (name, idx) in other.named_routes {
+			self.named_routes.insert(name, idx + offset);
+		}
+		self.routes.extend(other.routes);
+		self
+	}
+
 	/// Adds a route to the router.
 	pub fn route<F>(mut self, pattern: &str, component: F) -> Self
 	where

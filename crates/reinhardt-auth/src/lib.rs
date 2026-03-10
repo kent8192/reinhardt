@@ -67,6 +67,12 @@ pub mod core;
 pub mod current_user;
 pub use current_user::CurrentUser;
 
+/// Project-specific UUID namespace for deterministic user ID generation.
+///
+/// Computed from `Uuid::new_v5(&Uuid::NAMESPACE_URL, b"https://reinhardt.rs/user-id")`.
+pub(crate) const USER_ID_NAMESPACE: uuid::Uuid =
+	uuid::uuid!("c7a85537-073f-5092-8d10-774e109477c9");
+
 // Re-export core authentication types
 pub use core::{
 	AllowAny, AnonymousUser, AuthBackend, BaseUser, CompositeAuthBackend, FullUser, IsActiveUser,

@@ -68,6 +68,7 @@ pub mod resources;
 #[cfg(feature = "testcontainers")]
 /// Shared PostgreSQL container fixtures for test suites.
 pub mod shared_postgres;
+/// TestContainers setup and lifecycle management fixtures.
 #[cfg(feature = "testcontainers")]
 /// Docker container fixtures (PostgreSQL, Redis, CockroachDB) via TestContainers.
 pub mod testcontainers;

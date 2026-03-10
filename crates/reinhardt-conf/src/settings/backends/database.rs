@@ -421,32 +421,35 @@ impl DatabaseBackend {
 
 		use reinhardt_query::prelude::{Alias, IntoValue, Query};
 
-		// Build INSERT query using reinhardt-query
-		let mut stmt = Query::insert()
-			.into_table(Alias::new("settings"))
-			.columns([
-				Alias::new("key"),
-				Alias::new("value"),
-				Alias::new("expire_date"),
-			])
-			.to_owned();
+		// Build INSERT query in a block scope so the non-Send SeaQuery
+		// statement is dropped before the await point.
+		let sql = {
+			let mut stmt = Query::insert()
+				.into_table(Alias::new("settings"))
+				.columns([
+					Alias::new("key"),
+					Alias::new("value"),
+					Alias::new("expire_date"),
+				])
+				.to_owned();
 
-		// Add values based on whether expire_date is set
-		if let Some(expire_str) = &expire_date_str {
-			stmt.values_panic(vec![
-				key.into_value(),
-				value_str.into_value(),
-				expire_str.clone().into_value(),
-			]);
-		} else {
-			stmt.values_panic(vec![
-				key.into_value(),
-				value_str.into_value(),
-				Option::<String>::None.into_value(),
-			]);
-		}
+			// Add values based on whether expire_date is set
+			if let Some(expire_str) = &expire_date_str {
+				stmt.values_panic(vec![
+					key.into_value(),
+					value_str.into_value(),
+					expire_str.clone().into_value(),
+				]);
+			} else {
+				stmt.values_panic(vec![
+					key.into_value(),
+					value_str.into_value(),
+					Option::<String>::None.into_value(),
+				]);
+			}
 
-		let sql = self.build_sql(stmt);
+			self.build_sql(stmt)
+		};
 
 		sqlx::query(&sql)
 			.execute(self.pool.as_ref())

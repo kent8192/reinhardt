@@ -22,9 +22,29 @@ env:
 
 jobs:
   wasm-check:
-    name: WASM Compilation Check
+    name: WASM Check (${{ matrix.target.name }})
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          # Root crate with default features (existing check)
+          - name: reinhardt-web
+            package: reinhardt-web
+            flags: ""
+          # Root crate with WASM application features
+          - name: reinhardt-web (wasm-features)
+            package: reinhardt-web
+            flags: "--no-default-features --features pages,client-router,pages-web-sys-full,di"
+          # WASM frontend framework with all features
+          - name: reinhardt-pages
+            package: reinhardt-pages
+            flags: "--all-features"
+          # Platform-agnostic query builder
+          - name: reinhardt-query
+            package: reinhardt-query
+            flags: "--no-default-features"
     steps:
       - name: Free Disk Space (Ubuntu)
         if: ${{ !contains(inputs.runner || '', 'self-hosted') }}
@@ -44,14 +64,20 @@ jobs:
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
         with:
-          cache-key: "wasm-check"
+          cache-key: "wasm-check-${{ matrix.target.name }}"
 
       - name: Install wasm32-unknown-unknown target
         run: rustup target add wasm32-unknown-unknown
 
-      - name: Run cargo check for WASM target
+      - name: Run cargo check for WASM target (${{ matrix.target.name }})
+        env:
+          # Pass matrix values through env to avoid direct shell injection.
+          # Values are workflow-defined constants (not user input). Issue #2098
+          TARGET_PACKAGE: ${{ matrix.target.package }}
+          TARGET_FLAGS: ${{ matrix.target.flags }}
         run: |
           cargo check \
             --target wasm32-unknown-unknown \
-            -p reinhardt-web \
+            -p "${TARGET_PACKAGE}" \
+            ${TARGET_FLAGS} \
             --quiet

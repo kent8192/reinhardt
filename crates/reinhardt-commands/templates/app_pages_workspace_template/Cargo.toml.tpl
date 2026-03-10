@@ -25,3 +25,6 @@ web-sys = { workspace = true }
 js-sys = { workspace = true }
 console_error_panic_hook = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
+
+[build-dependencies]
+cfg_aliases = "0.2"

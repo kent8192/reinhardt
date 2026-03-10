@@ -29,6 +29,7 @@ env:
   CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  RUST_MIN_STACK: 8388608  # 8MB - prevent stack overflow in deep async fixture chains
 
 jobs:
   cross-crate-integration-test:

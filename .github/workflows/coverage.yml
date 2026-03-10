@@ -273,41 +273,35 @@ jobs:
           linker = "/tmp/clang-mold-wrapper"
           EOF
 
+      - name: Clean coverage artifacts
+        run: |
+          cargo llvm-cov clean --workspace
+          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
+
       - name: Run intra-crate integration tests with coverage
         env:
           NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
           RUN_ALL: ${{ inputs.run-all }}
         run: |
-          source <(cargo llvm-cov show-env --export-prefix)
-          cargo llvm-cov clean --workspace
           if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
             FILTER_EXPR="(not binary(/ui/)) & ($NEXTEST_FILTER_EXPR)"
           else
             FILTER_EXPR="not binary(/ui/)"
           fi
-          cargo nextest run \
+          cargo llvm-cov nextest \
+            --no-report \
             --workspace \
             --test "*" \
             --exclude reinhardt-integration-tests \
             -E "$FILTER_EXPR" \
             --all-features \
             --no-fail-fast
+
+      - name: Generate intra-crate coverage report
+        run: |
           cargo llvm-cov report \
             --codecov \
             --output-path /tmp/intra-crate-codecov.json
-
-      - name: Debug profraw file locations
-        if: failure()
-        run: |
-          echo "=== show-env output ==="
-          cargo llvm-cov show-env 2>/dev/null || echo "(show-env failed)"
-          echo "=== Searching for profraw files ==="
-          find "${CARGO_TARGET_DIR}" -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in CARGO_TARGET_DIR"
-          find /tmp -maxdepth 3 -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in /tmp"
-          echo "=== llvm-cov-target structure ==="
-          ls -laR "${CARGO_TARGET_DIR}/llvm-cov-target/" 2>/dev/null | head -50 || echo "llvm-cov-target not found"
-          echo "=== Disk space ==="
-          df -h /tmp
 
       - name: Upload coverage to Codecov
         if: always()
@@ -426,38 +420,32 @@ jobs:
           linker = "/tmp/clang-mold-wrapper"
           EOF
 
+      - name: Clean coverage artifacts
+        run: |
+          cargo llvm-cov clean --workspace
+          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
+
       - name: Run cross-crate integration tests with coverage
         env:
           NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
           RUN_ALL: ${{ inputs.run-all }}
         run: |
-          source <(cargo llvm-cov show-env --export-prefix)
-          cargo llvm-cov clean --workspace
           FILTER_ARGS=()
           if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
             FILTER_ARGS+=(-E "$NEXTEST_FILTER_EXPR")
           fi
-          cargo nextest run \
+          cargo llvm-cov nextest \
+            --no-report \
             --package reinhardt-integration-tests \
             --all-features \
             --no-fail-fast \
             "${FILTER_ARGS[@]}"
+
+      - name: Generate cross-crate coverage report
+        run: |
           cargo llvm-cov report \
             --codecov \
             --output-path /tmp/cross-crate-codecov.json
-
-      - name: Debug profraw file locations
-        if: failure()
-        run: |
-          echo "=== show-env output ==="
-          cargo llvm-cov show-env 2>/dev/null || echo "(show-env failed)"
-          echo "=== Searching for profraw files ==="
-          find "${CARGO_TARGET_DIR}" -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in CARGO_TARGET_DIR"
-          find /tmp -maxdepth 3 -name "*.profraw" -type f 2>/dev/null | head -20 || echo "No profraw in /tmp"
-          echo "=== llvm-cov-target structure ==="
-          ls -laR "${CARGO_TARGET_DIR}/llvm-cov-target/" 2>/dev/null | head -50 || echo "llvm-cov-target not found"
-          echo "=== Disk space ==="
-          df -h /tmp
 
       - name: Upload coverage to Codecov
         if: always()

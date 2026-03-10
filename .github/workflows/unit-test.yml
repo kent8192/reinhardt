@@ -27,6 +27,7 @@ env:
   CARGO_TARGET_DIR: /tmp/cargo_target
   CARGO_INCREMENTAL: 0
   CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
+  RUST_MIN_STACK: 8388608  # 8MB - prevent stack overflow in deep async fixture chains
 
 jobs:
   unit-test:

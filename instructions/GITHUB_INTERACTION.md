@@ -45,6 +45,22 @@ Claude Code MUST follow this authorization model before posting any comment:
 - "Post directly" still means using proper tools (PP-3), not bypassing quality standards
 - When in doubt about authorization, always preview and confirm
 
+The following diagram summarizes the comment authorization decision flow:
+
+```mermaid
+flowchart TD
+    A[Want to post GitHub comment] --> B{Explicit user instruction?}
+    B -->|Yes| C[Post comment with attribution footer]
+    B -->|No| D{Plan Mode approved?}
+    D -->|Yes| C
+    D -->|No| E[Self-initiated comment]
+    E --> F[Draft comment]
+    F --> G[Preview to user]
+    G --> H{User approved?}
+    H -->|Yes| C
+    H -->|No| I[Discard or modify draft]
+```
+
 ### PP-2 (MUST): Content Preview Before Posting
 
 Before posting any self-initiated comment:

@@ -206,35 +206,40 @@ impl AuditBackend for DatabaseAuditBackend {
 	}
 
 	async fn get_events(&self, filter: Option<EventFilter>) -> Result<Vec<AuditEvent>, String> {
-		let mut query = Query::select()
-			.columns([
-				Alias::new("timestamp"),
-				Alias::new("event_type"),
-				Alias::new("user"),
-				Alias::new("changes"),
-			])
-			.from(Alias::new("audit_events"))
-			.to_owned();
+		// Build SELECT query in a block scope so the non-Send SeaQuery
+		// statement is dropped before the await point.
+		let sql = {
+			let mut query = Query::select()
+				.columns([
+					Alias::new("timestamp"),
+					Alias::new("event_type"),
+					Alias::new("user"),
+					Alias::new("changes"),
+				])
+				.from(Alias::new("audit_events"))
+				.to_owned();
 
-		// Apply filters
-		if let Some(ref f) = filter {
-			if let Some(ref event_type) = f.event_type {
-				query.and_where(Expr::col(Alias::new("event_type")).eq(event_type.as_str()));
+			// Apply filters
+			if let Some(ref f) = filter {
+				if let Some(ref event_type) = f.event_type {
+					query.and_where(Expr::col(Alias::new("event_type")).eq(event_type.as_str()));
+				}
+				if let Some(ref user) = f.user {
+					query.and_where(Expr::col(Alias::new("user")).eq(user.as_str()));
+				}
+				if let Some(start_time) = f.start_time {
+					query
+						.and_where(Expr::col(Alias::new("timestamp")).gte(start_time.to_rfc3339()));
+				}
+				if let Some(end_time) = f.end_time {
+					query.and_where(Expr::col(Alias::new("timestamp")).lte(end_time.to_rfc3339()));
+				}
 			}
-			if let Some(ref user) = f.user {
-				query.and_where(Expr::col(Alias::new("user")).eq(user.as_str()));
-			}
-			if let Some(start_time) = f.start_time {
-				query.and_where(Expr::col(Alias::new("timestamp")).gte(start_time.to_rfc3339()));
-			}
-			if let Some(end_time) = f.end_time {
-				query.and_where(Expr::col(Alias::new("timestamp")).lte(end_time.to_rfc3339()));
-			}
-		}
 
-		query.order_by(Alias::new("timestamp"), Order::Desc);
+			query.order_by(Alias::new("timestamp"), Order::Desc);
 
-		let sql = self.build_sql(query);
+			self.build_sql(query)
+		};
 
 		let rows = sqlx::query(&sql)
 			.fetch_all(self.pool.as_ref())

@@ -182,9 +182,9 @@ impl AuthenticationBackend for BasicAuthentication {
 				let is_valid = self.hasher.verify(&password, stored_hash).unwrap_or(false);
 				if is_valid {
 					return Ok(Some(Box::new(SimpleUser {
-						id: Uuid::new_v4(),
+						id: Uuid::new_v5(&crate::USER_ID_NAMESPACE, username.as_bytes()),
 						username: username.clone(),
-						email: format!("{}@example.com", username),
+						email: String::new(),
 						is_active: true,
 						is_admin: false,
 						is_staff: false,
@@ -201,9 +201,9 @@ impl AuthenticationBackend for BasicAuthentication {
 	async fn get_user(&self, user_id: &str) -> Result<Option<Box<dyn User>>, AuthenticationError> {
 		if self.users.contains_key(user_id) {
 			Ok(Some(Box::new(SimpleUser {
-				id: Uuid::new_v4(),
+				id: Uuid::new_v5(&crate::USER_ID_NAMESPACE, user_id.as_bytes()),
 				username: user_id.to_string(),
-				email: format!("{}@example.com", user_id),
+				email: String::new(),
 				is_active: true,
 				is_admin: false,
 				is_staff: false,
@@ -353,6 +353,103 @@ mod tests {
 			stored
 		);
 		assert_ne!(stored, "plaintext_password");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_authenticate_same_username_produces_same_id() {
+		// Arrange
+		let mut backend = BasicAuthentication::new();
+		backend.add_user("testuser", "testpass");
+
+		let auth = "Basic dGVzdHVzZXI6dGVzdHBhc3M=";
+		let request1 = create_request_with_auth(auth);
+		let request2 = create_request_with_auth(auth);
+
+		// Act
+		let user1 = AuthenticationBackend::authenticate(&backend, &request1)
+			.await
+			.unwrap()
+			.unwrap();
+		let user2 = AuthenticationBackend::authenticate(&backend, &request2)
+			.await
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			user1.id(),
+			user2.id(),
+			"same username must produce the same UUID"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_authenticated_user_id_is_deterministic_uuidv5() {
+		// Arrange
+		let mut backend = BasicAuthentication::new();
+		backend.add_user("testuser", "testpass");
+
+		let auth = "Basic dGVzdHVzZXI6dGVzdHBhc3M=";
+		let request = create_request_with_auth(auth);
+
+		// Act
+		let user = AuthenticationBackend::authenticate(&backend, &request)
+			.await
+			.unwrap()
+			.unwrap();
+		let id = Uuid::parse_str(&user.id()).unwrap();
+
+		// Assert
+		assert_eq!(id.get_version_num(), 5, "user ID must be UUIDv5");
+		assert_eq!(
+			id.get_variant(),
+			uuid::Variant::RFC4122,
+			"user ID must use RFC 4122 variant"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_authenticated_user_has_default_privilege_flags() {
+		// Arrange
+		let mut backend = BasicAuthentication::new();
+		backend.add_user("testuser", "testpass");
+
+		let auth = "Basic dGVzdHVzZXI6dGVzdHBhc3M=";
+		let request = create_request_with_auth(auth);
+
+		// Act
+		let user = AuthenticationBackend::authenticate(&backend, &request)
+			.await
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert!(user.is_active());
+		assert!(!user.is_admin());
+		assert!(!user.is_staff());
+		assert!(!user.is_superuser());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_get_user_same_username_produces_same_id() {
+		// Arrange
+		let mut backend = BasicAuthentication::new();
+		backend.add_user("testuser", "testpass");
+
+		// Act
+		let user1 = backend.get_user("testuser").await.unwrap().unwrap();
+		let user2 = backend.get_user("testuser").await.unwrap().unwrap();
+
+		// Assert
+		assert_eq!(
+			user1.id(),
+			user2.id(),
+			"same username must produce the same UUID"
+		);
 	}
 
 	#[rstest]

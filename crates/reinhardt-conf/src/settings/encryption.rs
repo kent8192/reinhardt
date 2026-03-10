@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 /// Encrypted configuration data with its associated nonce.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Holds encrypted configuration data with its associated nonce.
 pub struct EncryptedConfig {
 	/// The encrypted data bytes.
 	pub data: Vec<u8>,

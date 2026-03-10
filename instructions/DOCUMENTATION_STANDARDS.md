@@ -42,6 +42,21 @@ Session 1:
 5. Submit all changes together
 ```
 
+The following diagram summarizes the documentation update workflow:
+
+```mermaid
+flowchart TD
+    A[Code change made] --> B[Update lib.rs docs]
+    A --> C[Update crate README if exists]
+    A --> D[Update docs/ if relevant]
+    A --> E[Update root README if major change]
+    B & C & D & E --> F[Run doc tests: cargo test --doc]
+    F --> G[Build docs: cargo doc --no-deps]
+    G --> H[Verify examples work]
+    H --> I[Check links are valid]
+    I --> J[Submit code + docs together]
+```
+
 ---
 
 ## Documentation Locations
@@ -103,6 +118,19 @@ When modifying features, check and update the following documentation as applica
 - Changing established patterns
 - Adding new standards or conventions
 - Updating tutorials
+
+The following diagram illustrates where different types of documentation should be placed:
+
+```mermaid
+flowchart TD
+    A[Documentation to write] --> B{What level?}
+    B -->|"API reference"| C["lib.rs / module docs<br/>(inline rustdoc)"]
+    B -->|"Crate overview"| D["crate README.md"]
+    B -->|"Cross-crate guides"| E["docs/ directory"]
+    B -->|"Project overview"| F["Root README.md"]
+    B -->|"Internal standards"| G["instructions/ directory"]
+    B -->|"Planned features"| H["lib.rs header<br/>(NOT README.md)"]
+```
 
 ---
 

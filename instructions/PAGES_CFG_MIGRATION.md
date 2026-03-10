@@ -21,6 +21,20 @@ This guide explains how to introduce the reinhardt-pages cfg simplification feat
 
 ## Migration Steps
 
+The following diagram summarizes the migration step flow:
+
+```mermaid
+flowchart TD
+    A[Start migration] --> B["Replace #[pages_cfg] with #[cfg_attr]"]
+    B --> C[Update import paths]
+    C --> D[Remove pages_cfg dependency]
+    D --> E[Run cargo check]
+    E --> F{Passes?}
+    F -->|Yes| G[Migration complete]
+    F -->|No| H[Fix remaining references]
+    H --> E
+```
+
 ### Step 1: Update Cargo.toml
 
 Add `cfg_aliases` to the `[build-dependencies]` section:

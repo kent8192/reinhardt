@@ -124,6 +124,7 @@ jobs:
             -E "$FILTER_EXPR" \
             --partition hash:${{ matrix.partition }}/8 \
             --no-fail-fast \
+            --no-tests=warn \
             --status-level=none \
             --final-status-level=none
 

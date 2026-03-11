@@ -129,6 +129,7 @@ jobs:
             --all-features \
             --partition hash:${{ matrix.partition }}/6 \
             --no-fail-fast \
+            --no-tests=warn \
             --status-level=none \
             --final-status-level=none
 

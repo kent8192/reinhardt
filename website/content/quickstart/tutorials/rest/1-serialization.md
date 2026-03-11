@@ -26,6 +26,38 @@ chrono = { version = "0.4", features = ["serde"] }
 
 **Note:** Reinhardt uses feature flags to control which components are included in your build. The `standard` feature includes serializers, ORM, authentication, and other common API development tools. For more granular control, see the [Feature Flags Guide](/docs/feature-flags/).
 
+## Defining the Snippet Model
+
+First, define the Snippet model using Reinhardt's `#[model(...)]` attribute. This automatically implements the `Model` trait, generates type-safe field accessors, and registers the model globally:
+
+```rust
+use chrono::{DateTime, Utc};
+use reinhardt::prelude::*;
+use serde::{Serialize, Deserialize};
+
+/// Snippet model representing a code snippet
+#[derive(Serialize, Deserialize)]
+#[model(app_label = "snippets", table_name = "snippets")]
+pub struct Snippet {
+	#[field(primary_key = true)]
+	pub id: i64,
+
+	#[field(max_length = 100)]
+	pub title: String,
+
+	#[field(max_length = 10000)]
+	pub code: String,
+
+	#[field(max_length = 50)]
+	pub language: String,
+
+	#[field(auto_now_add = true)]
+	pub created_at: DateTime<Utc>,
+}
+```
+
+The `#[model(...)]` attribute automatically derives the `Model` trait -- you do not need `#[derive(Model)]` separately. Field attributes like `primary_key`, `max_length`, and `auto_now_add` define database schema constraints.
+
 ## Basic Serialization with Serde
 
 Reinhardt primarily uses [serde](https://serde.rs/) for serialization. For simple cases, derive macros are sufficient:
@@ -183,6 +215,67 @@ request.validate()?;  // Validates all fields
 - Simple and declarative
 - Works with `#[derive]` macros
 - Well-documented validator crate
+
+**Split Serializer Pattern (Input + Output):**
+
+For production APIs, separate input validation from output formatting. This pattern uses `SnippetSerializer` for request validation (with the `validator` crate) and `SnippetResponse` for response serialization (with a `from_model()` method):
+
+```rust
+use serde::{Serialize, Deserialize};
+use validator::Validate;
+
+/// Serializer for creating/updating snippets (input + validation)
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+pub struct SnippetSerializer {
+	#[validate(length(
+		min = 1,
+		max = 100,
+		message = "Title must be between 1 and 100 characters"
+	))]
+	pub title: String,
+
+	#[validate(length(
+		min = 1,
+		max = 65535,
+		message = "Code must be between 1 and 65535 characters"
+	))]
+	pub code: String,
+
+	#[validate(length(
+		min = 1,
+		max = 50,
+		message = "Language must be between 1 and 50 characters"
+	))]
+	pub language: String,
+}
+
+/// Response serializer for snippets (output + formatting)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnippetResponse {
+	pub id: i64,
+	pub title: String,
+	pub code: String,
+	pub language: String,
+	pub highlighted: String,
+}
+
+impl SnippetResponse {
+	pub fn from_model(snippet: &Snippet) -> Self {
+		Self {
+			id: snippet.id,
+			title: snippet.title.clone(),
+			code: snippet.code.clone(),
+			language: snippet.language.clone(),
+			highlighted: snippet.highlighted(),
+		}
+	}
+}
+```
+
+Key advantages of this split pattern:
+- **Input validation** is declarative using `#[validate(...)]` attributes
+- **Output formatting** is separate, allowing fields like `highlighted` that are computed from the model
+- The `from_model()` method provides a clean conversion from database model to API response
 
 ---
 
@@ -410,23 +503,31 @@ let json = serializer.serialize(&article).unwrap();
 Typical validation workflow in an API view with Reinhardt:
 
 ```rust
-use reinhardt::prelude::*;
-use reinhardt::{post, Json};
+use json::json;
+use reinhardt::core::serde::json;
+use reinhardt::http::ViewResult;
+use reinhardt::{post, Json, Response, StatusCode};
+use validator::Validate;
 
-#[post("/snippets", name = "create_snippet")]
-async fn create_snippet(Json(snippet): Json<Snippet>) -> Result<Response> {
+#[post("/snippets/", name = "snippets_create")]
+async fn create_snippet(
+    Json(serializer): Json<SnippetSerializer>,
+) -> ViewResult<Response> {
     // 1. Validate the data
-    if let Err(errors) = validate_snippet(&snippet) {
-        return Response::bad_request()
-            .with_json(&errors);
-    }
+    serializer.validate()?;
 
     // 2. Save to database (using Reinhardt ORM)
-    snippet.save(&conn).await?;
+    // let snippet = Manager::<Snippet>::new().create(...).await?;
 
     // 3. Return response with created status
-    Response::new(201)
-        .with_json(&snippet)
+    let response_data = json!({
+        "message": "Snippet created",
+        "snippet": SnippetResponse::from_model(&snippet)
+    });
+    let json = json::to_string(&response_data)?;
+    Ok(Response::new(StatusCode::CREATED)
+        .with_header("Content-Type", "application/json")
+        .with_body(json))
 }
 ```
 

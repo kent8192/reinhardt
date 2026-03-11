@@ -19,27 +19,37 @@ ViewSets allow you to implement common RESTful API patterns concisely.
 Provides full CRUD operations:
 
 ```rust
+use chrono::{DateTime, Utc};
 use reinhardt::prelude::*;
 use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[model(app_label = "snippets", table_name = "snippets")]
 struct Snippet {
-    #[field(primary_key = true)]
-    id: i64,
+	#[field(primary_key = true)]
+	pub id: i64,
 
-    #[field(max_length = 10000)]
-    code: String,
+	#[field(max_length = 100)]
+	pub title: String,
 
-    #[field(max_length = 50)]
-    language: String,
+	#[field(max_length = 10000)]
+	pub code: String,
+
+	#[field(max_length = 50)]
+	pub language: String,
+
+	#[field(auto_now_add = true)]
+	pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 struct SnippetSerializer {
-    id: i64,
-    code: String,
-    language: String,
+	#[validate(length(min = 1, max = 100))]
+	pub title: String,
+	#[validate(length(min = 1, max = 65535))]
+	pub code: String,
+	#[validate(length(min = 1, max = 50))]
+	pub language: String,
 }
 
 // Create ViewSet
@@ -66,23 +76,24 @@ Define your ViewSet registrations in `urls.rs`:
 // src/config/urls.rs
 use reinhardt::prelude::*;
 use reinhardt::routes;
-use std::sync::Arc;
 
 #[routes]
-pub fn routes() -> DefaultRouter {
+pub fn routes() -> UnifiedRouter {
     let snippet_viewset = ModelViewSet::<Snippet, SnippetSerializer>::new("snippet");
     let user_viewset = ReadOnlyModelViewSet::<User, UserSerializer>::new("user");
 
-    DefaultRouter::new()
-        .register_viewset("/snippets", Arc::new(snippet_viewset))
-        .register_viewset("/users", Arc::new(user_viewset))
+    UnifiedRouter::new()
+        .mount("/api/snippets/", ServerRouter::new()
+            .viewset("/snippets", snippet_viewset))
+        .mount("/api/users/", ServerRouter::new()
+            .viewset("/users", user_viewset))
 }
 
 // URLs are automatically generated:
-// GET/POST    /snippets/           - List/create
-// GET/PUT/PATCH/DELETE /snippets/{id}/ - Detail/update/delete
-// GET         /users/              - List
-// GET         /users/{id}/         - Detail
+// GET/POST    /api/snippets/           - List/create
+// GET/PUT/PATCH/DELETE /api/snippets/{id}/ - Detail/update/delete
+// GET         /api/users/              - List
+// GET         /api/users/{id}/         - Detail
 ```
 
 ## Automatic URL Generation
@@ -162,23 +173,24 @@ Register ViewSets in `urls.rs`:
 // src/config/urls.rs
 use reinhardt::prelude::*;
 use reinhardt::routes;
-use std::sync::Arc;
 
 #[routes]
-pub fn routes() -> DefaultRouter {
+pub fn routes() -> UnifiedRouter {
     let snippet_viewset = ModelViewSet::<Snippet, SnippetSerializer>::new("snippet");
     let user_viewset = ReadOnlyModelViewSet::<User, UserSerializer>::new("user");
 
-    DefaultRouter::new()
-        .register_viewset("/snippets", Arc::new(snippet_viewset))
-        .register_viewset("/users", Arc::new(user_viewset))
+    UnifiedRouter::new()
+        .mount("/api/snippets/", ServerRouter::new()
+            .viewset("/snippets", snippet_viewset))
+        .mount("/api/users/", ServerRouter::new()
+            .viewset("/users", user_viewset))
 }
 
 // API endpoints:
-//   GET/POST    /snippets/
-//   GET/PUT/PATCH/DELETE /snippets/{id}/
-//   GET         /users/
-//   GET         /users/{id}/
+//   GET/POST    /api/snippets/
+//   GET/PUT/PATCH/DELETE /api/snippets/{id}/
+//   GET         /api/users/
+//   GET         /api/users/{id}/
 ```
 
 Start the development server:
@@ -234,7 +246,7 @@ pub async fn delete(Path(snippet_id): Path<i64>) -> ViewResult<Response> {
 }
 
 // URL registration in urls.rs
-DefaultRouter::new()
+ServerRouter::new()
     .endpoint(views::list)
     .endpoint(views::create)
     .endpoint(views::retrieve)
@@ -248,23 +260,29 @@ DefaultRouter::new()
 
 ```rust
 // ~15 lines for the same functionality PLUS pagination, filtering, and ordering!
-use reinhardt::viewsets::{ModelViewSet, PaginationConfig, FilterConfig, OrderingConfig};
+use reinhardt::ModelViewSet;
+use reinhardt::views::viewsets::{FilterConfig, OrderingConfig, PaginationConfig};
 
 pub struct SnippetViewSet;
 
 impl SnippetViewSet {
-    pub fn new() -> ModelViewSet<Snippet, SnippetSerializer> {
+    /// Create a configured ModelViewSet for Snippet model
+    pub fn viewset() -> ModelViewSet<Snippet, SnippetSerializer> {
         ModelViewSet::new("snippet")
             .with_pagination(PaginationConfig::page_number(10, Some(100)))
-            .with_filters(FilterConfig::new()
-                .with_filterable_fields(vec!["language", "title"]))
-            .with_ordering(OrderingConfig::new()
-                .with_ordering_fields(vec!["created_at", "title"]))
+            .with_filters(
+                FilterConfig::new()
+                    .with_filterable_fields(vec!["language".to_string(), "title".to_string()]),
+            )
+            .with_ordering(
+                OrderingConfig::new()
+                    .with_ordering_fields(vec!["created_at".to_string(), "title".to_string()]),
+            )
     }
 }
 
 // URL registration in urls.rs
-DefaultRouter::new().register_viewset("/snippets-viewset", Arc::new(SnippetViewSet::new()))
+ServerRouter::new().viewset("/snippets-viewset", SnippetViewSet::viewset())
 ```
 
 **Total**: ~15 lines for full CRUD + pagination + filtering + ordering

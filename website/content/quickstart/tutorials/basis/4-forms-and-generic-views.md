@@ -52,13 +52,13 @@ let voting_form = form! {
 
 	fields: {
 		question_id: HiddenField {
-			initial: question_id_str.clone(),
+			initial: qid.to_string(),
 		},
 		choice_id: ChoiceField {
 			widget: RadioSelect,
 			required,
 			label: "Select your choice",
-			class: "form-check poll-choice p-3 mb-2 border rounded",
+			class: "form-check",
 			choices_from: "choices",  // Dynamic choices
 			choice_value: "id",
 			choice_label: "choice_text",
@@ -70,11 +70,19 @@ let voting_form = form! {
 			let is_loading = form.loading().get();
 			// Reactive UI updates when loading state changes
 			page!(|is_loading: bool| {
-				button {
-					r#type: "submit",
-					class: if is_loading { "btn btn-primary disabled" } else { "btn btn-primary" },
-					disabled: is_loading,
-					{ if is_loading { "Voting..." } else { "Vote" } }
+				div {
+					class: "mt-3",
+					button {
+						type: "submit",
+						class: if is_loading { "btn-primary opacity-50 cursor-not-allowed" } else { "btn-primary" },
+						disabled: is_loading,
+						{ if is_loading { "Voting..." } else { "Vote" } }
+					}
+					a {
+						href: "/",
+						class: "btn-secondary ml-2",
+						"Back to Polls"
+					}
 				}
 			})(is_loading)
 		},
@@ -84,41 +92,55 @@ let voting_form = form! {
 			page!(|err: Option<String>| {
 				watch {
 					if let Some(e) = err.clone() {
-						div { class: "alert alert-danger mt-3", { e } }
+						div {
+							class: "alert-danger mt-3",
+							{ e }
+						}
 					}
 				}
 			})(err)
 		},
-	},
-
-	on_success: |_result| {
-		// Navigate after successful submission
-		#[cfg(target_arch = "wasm32")]
-		{
-			if let Some(window) = web_sys::window() {
-				let _ = window.location().set_href(&format!("/polls/{}/results/", question_id));
-			}
-		}
+		success_navigation: |form| {
+			let is_loading = form.loading().get();
+			let err = form.error().get();
+			page!(|is_loading: bool, err: Option<String>| {
+				watch {
+					if ! is_loading &&err.is_none() {
+						#[cfg(target_arch = "wasm32")]
+								{
+									if let Some(window) = web_sys::window() {
+										let pathname = window.location().pathname().ok();
+										if let Some(path) = pathname {
+											let parts: Vec<&str> = path.split('/').collect();
+											if parts.len() >= 3 && parts[1] == "polls" {
+												if let Ok(question_id) = parts[2].parse::<i64>() {
+													let results_url = format!("/polls/{}/results/", question_id);
+													let _ = window.location().set_href(&results_url);
+												}
+											}
+										}
+									}
+								}
+					}
+				}
+			})(is_loading, err)
+		},
 	},
 };
 
-// Populate choices dynamically from server using use_action
-let load_choices = use_action(|_: ()| async move {
-	get_question_detail(question_id).await.map_err(|e| e.to_string())
-});
-load_choices.dispatch(());
-
-// Bridge results to form via use_effect
+// Bridge load_detail results to form choices via use_effect
 {
-	let load_choices = load_choices.clone();
-	let voting_form = voting_form.clone();
+	let load_detail_for_effect = load_detail.clone();
+	let voting_form_for_effect = voting_form.clone();
 	use_effect(move || {
-		if let Some(Ok((_, choices))) = load_choices.result() {
+		if let Some((_, ref choices)) = load_detail_for_effect.result() {
 			let choice_options: Vec<(String, String)> = choices
 				.iter()
 				.map(|c| (c.id.to_string(), c.choice_text.clone()))
 				.collect();
-			voting_form.choice_id_choices().set(choice_options);
+			voting_form_for_effect
+				.choice_id_choices()
+				.set(choice_options);
 		}
 	});
 }
@@ -131,42 +153,44 @@ load_choices.dispatch(());
 - **Built-in Loading States**: `form.loading()` and `form.error()` Signals
 - **Type-Safe**: Compiler ensures field names match form definition
 
-**Callback Patterns:**
+**Navigation Patterns:**
 
-The `form!` macro supports `on_success` and `on_error` callbacks for handling server function responses:
+The `form!` macro supports `watch` blocks for handling post-submission navigation. The `success_navigation` watch block pattern monitors loading and error state to detect successful form submissions:
 
-**on_success**: Invoked when the server function returns `Ok(T)`. Use it for:
-- Client-side navigation after successful submission
-- Displaying success messages
-- Updating related component state
-- Triggering analytics or logging events
+**success_navigation watch block**: Monitors `form.loading()` and `form.error()` Signals to navigate after successful submission:
+- When loading completes (`!is_loading`) and no error exists (`err.is_none()`), the form submission was successful
+- Extract the question ID from the current URL path to construct the results URL
+- Use `web_sys::window()` for client-side navigation
 
 ```rust
-on_success: |result| {
-	// Navigate to results page
-	#[cfg(target_arch = "wasm32")]
-	{
-		if let Some(window) = web_sys::window() {
-			let _ = window.location().set_href(&format!("/polls/{}/results/", question_id));
+success_navigation: |form| {
+	let is_loading = form.loading().get();
+	let err = form.error().get();
+	page!(|is_loading: bool, err: Option<String>| {
+		watch {
+			if ! is_loading &&err.is_none() {
+				#[cfg(target_arch = "wasm32")]
+						{
+							if let Some(window) = web_sys::window() {
+								let pathname = window.location().pathname().ok();
+								if let Some(path) = pathname {
+									let parts: Vec<&str> = path.split('/').collect();
+									if parts.len() >= 3 && parts[1] == "polls" {
+										if let Ok(question_id) = parts[2].parse::<i64>() {
+											let results_url = format!("/polls/{}/results/", question_id);
+											let _ = window.location().set_href(&results_url);
+										}
+									}
+								}
+							}
+						}
+			}
 		}
-	}
+	})(is_loading, err)
 },
 ```
 
-**on_error**: Invoked when the server function returns `Err(ServerFnError)`. Use it for:
-- Custom error logging
-- Analytics tracking for failures
-- Special error handling logic
-
-```rust
-on_error: |error| {
-	// Log error to console or analytics service
-	console_log!("Form submission failed: {:?}", error);
-	// Error is automatically set in form.error() Signal
-},
-```
-
-**Note**: If `on_error` is not specified, errors are automatically stored in `form.error()` Signal and can be displayed using `watch` blocks (see `error_display` in the example above).
+**Note**: Errors are automatically stored in `form.error()` Signal and can be displayed using `watch` blocks (see `error_display` in the example above).
 
 For complete implementation, see `examples/examples-tutorial-basis/src/client/components/polls.rs`.
 
@@ -188,11 +212,14 @@ watch: {
 	submit_button: |form| {
 		let is_loading = form.loading().get();
 		page!(|is_loading: bool| {
-			button {
-				type: "submit",
-				class: if is_loading { "btn disabled" } else { "btn btn-primary" },
-				disabled: is_loading,
-				{ if is_loading { "Submitting..." } else { "Submit" } }
+			div {
+				class: "mt-3",
+				button {
+					type: "submit",
+					class: if is_loading { "btn-primary opacity-50 cursor-not-allowed" } else { "btn-primary" },
+					disabled: is_loading,
+					{ if is_loading { "Submitting..." } else { "Submit" } }
+				}
 			}
 		})(is_loading)
 	},
@@ -270,7 +297,7 @@ let voting_form = form! {
 
 	fields: {
 		question_id: HiddenField {
-			initial: question_id_str.clone(),
+			initial: qid.to_string(),
 		},
 		choice_id: ChoiceField {
 			widget: RadioSelect,
@@ -297,36 +324,34 @@ let voting_form = form! {
 	},
 };
 
-// Step 2: Fetch choices from server using use_action
-let load_choices = use_action(|_: ()| async move {
-	get_question_detail(question_id).await.map_err(|e| e.to_string())
-});
-load_choices.dispatch(());
+// Step 2: Create action for loading question detail
+let load_detail =
+	use_action(
+		|qid: i64| async move { get_question_detail(qid).await.map_err(|e| e.to_string()) },
+	);
 
-// Step 3: Bridge results to form via use_effect
+// Step 3: Bridge load_detail results to form choices via use_effect
 {
-	let load_choices = load_choices.clone();
-	let voting_form = voting_form.clone();
+	let load_detail_for_effect = load_detail.clone();
+	let voting_form_for_effect = voting_form.clone();
 	use_effect(move || {
-		match load_choices.result() {
-			Some(Ok((_, choices))) => {
-				// Transform server data to (value, label) tuples
-				let choice_options: Vec<(String, String)> = choices
-					.iter()
-					.map(|c| (c.id.to_string(), c.choice_text.clone()))
-					.collect();
+		if let Some((_, ref choices)) = load_detail_for_effect.result() {
+			// Transform server data to (value, label) tuples
+			let choice_options: Vec<(String, String)> = choices
+				.iter()
+				.map(|c| (c.id.to_string(), c.choice_text.clone()))
+				.collect();
 
-				// Populate choices - triggers UI update
-				voting_form.choice_id_choices().set(choice_options);
-			}
-			Some(Err(e)) => {
-				// Handle error (e.g., set error Signal)
-				voting_form.error().set(Some(e.clone()));
-			}
-			None => {} // Still loading
+			// Populate choices - triggers UI update
+			voting_form_for_effect
+				.choice_id_choices()
+				.set(choice_options);
 		}
 	});
 }
+
+// Dispatch the action to load question data
+load_detail.dispatch(qid);
 ```
 
 **Key Points:**
@@ -499,58 +524,55 @@ The server function handles data persistence and server-side validation. Update 
 ```rust
 // src/server_fn/polls.rs
 use crate::shared::types::{ChoiceInfo, VoteRequest};
+use reinhardt::pages::server_fn::{server_fn, ServerFnError};
 
-#[cfg(not(target_arch = "wasm32"))]
-use reinhardt::pages::server_fn::{server_fn, ServerFnError};
-#[cfg(target_arch = "wasm32")]
-use reinhardt::pages::server_fn::{server_fn, ServerFnError};
+// Server-only imports
+#[cfg(server)]
+use reinhardt::atomic;
 
 /// Vote for a choice
 ///
 /// Server-side validation and atomic database update.
-#[cfg(not(target_arch = "wasm32"))]
 #[server_fn(use_inject = true)]
 pub async fn vote(
 	request: VoteRequest,
-	#[inject] _db: reinhardt::DatabaseConnection,
+	#[inject] db: reinhardt::DatabaseConnection,
 ) -> std::result::Result<ChoiceInfo, ServerFnError> {
 	use crate::apps::polls::models::Choice;
 	use reinhardt::Model;
 
-	let choice_manager = Choice::objects();
+	// Wrap read-modify-write in a transaction to prevent race conditions
+	let updated_choice = atomic(&db, || async {
+		let choice_manager = Choice::objects();
 
-	// Server-side validation: Get the choice
-	let mut choice = choice_manager
-		.get(request.choice_id)
-		.first()
-		.await
-		.map_err(|e| ServerFnError::ServerError(e.to_string()))?
-		.ok_or_else(|| ServerFnError::ServerError("Choice not found".to_string()))?;
+		// Get the choice
+		let mut choice = choice_manager
+			.get(request.choice_id)
+			.first()
+			.await
+			.map_err(|e| anyhow::anyhow!(e.to_string()))?
+			.ok_or_else(|| anyhow::anyhow!("Choice not found"))?;
 
-	// Server-side validation: Verify the choice belongs to the question
-	if choice.question_id != request.question_id {
-		return Err(ServerFnError::ServerError(
-			"Choice does not belong to this question".to_string(),
-		));
-	}
+		// Verify the choice belongs to the question
+		if *choice.question_id() != request.question_id {
+			return Err(anyhow::anyhow!("Choice does not belong to this question"));
+		}
 
-	// Atomic increment using database-level operation
-	// This prevents race conditions
-	choice.votes += 1;
+		// Increment vote count
+		choice.vote();
 
-	// Update in database
-	let updated_choice = choice_manager
-		.update(&choice)
-		.await
-		.map_err(|e| ServerFnError::ServerError(e.to_string()))?;
+		// Update in database
+		let updated = choice_manager
+			.update(&choice)
+			.await
+			.map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+		Ok(updated)
+	})
+	.await
+	.map_err(|e| ServerFnError::application(e.to_string()))?;
 
 	Ok(ChoiceInfo::from(updated_choice))
-}
-
-#[cfg(target_arch = "wasm32")]
-#[server_fn]
-pub async fn vote(_request: VoteRequest) -> std::result::Result<ChoiceInfo, ServerFnError> {
-	unreachable!()
 }
 ```
 
@@ -720,7 +742,7 @@ Extract common loading patterns:
 // src/client/components/common.rs
 use reinhardt::pages::prelude::*;
 
-pub fn loading_spinner() -> View {
+pub fn loading_spinner() -> Page {
 	page!(|| {
 		div {
 			class: "spinner-border text-primary",
@@ -733,7 +755,7 @@ pub fn loading_spinner() -> View {
 	})()
 }
 
-pub fn error_alert(message: &str) -> View {
+pub fn error_alert(message: &str) -> Page {
 	let msg = message.to_string();
 	page!(|msg: String| {
 		div {
@@ -749,7 +771,7 @@ Usage:
 ```rust
 use crate::client::components::common::{loading_spinner, error_alert};
 
-pub fn polls_index() -> View {
+pub fn polls_index() -> Page {
 	// ... state management
 
 	page!(|loading_state: bool, error_state: Option<String>| {
@@ -783,7 +805,7 @@ pub fn radio_choice(
 	label: &str,
 	checked: bool,
 	on_change: impl Fn(web_sys::Event) + 'static,
-) -> View {
+) -> Page {
 	let id = id.to_string();
 	let name = name.to_string();
 	let value = value.to_string();
@@ -821,7 +843,7 @@ pub fn submit_button(
 	label: &str,
 	loading: bool,
 	loading_label: &str,
-) -> View {
+) -> Page {
 	let label = label.to_string();
 	let loading_label = loading_label.to_string();
 
@@ -845,7 +867,7 @@ Usage in detail page:
 ```rust
 use crate::client::components::forms::{radio_choice, submit_button};
 
-pub fn polls_detail_page(question_id: i64) -> View {
+pub fn polls_detail_page(question_id: i64) -> Page {
 	// ... state and event handlers
 
 	page!(|choices_data: Vec<ChoiceInfo>, ...| {
@@ -908,7 +930,7 @@ Usage:
 ```rust
 use crate::client::hooks::form::use_form_field;
 
-pub fn polls_detail_page(question_id: i64) -> View {
+pub fn polls_detail_page(question_id: i64) -> Page {
 	let (choice_state, set_choice, set_choice_error, _) = use_form_field(None::<i64>);
 
 	let handle_choice_change = {

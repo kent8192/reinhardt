@@ -700,7 +700,7 @@ Apply the custom classes in your components:
 
 ```rust
 // src/client/components/polls.rs
-pub fn polls_index() -> View {
+pub fn polls_index() -> Page {
 	// ... state management
 
 	page!(|questions_list: Vec<QuestionInfo>, loading_state: bool, error_state: Option<String>| {
@@ -755,7 +755,7 @@ pub fn polls_index() -> View {
 ### Updated Detail Page with Custom Form Styling
 
 ```rust
-pub fn polls_detail_page(question_id: i64) -> View {
+pub fn polls_detail_page(question_id: i64) -> Page {
 	// ... state management and event handlers
 
 	page!(|
@@ -845,7 +845,7 @@ pub fn polls_detail_page(question_id: i64) -> View {
 ### Updated Results Page with Progress Bars
 
 ```rust
-pub fn polls_results_page(question_id: i64) -> View {
+pub fn polls_results_page(question_id: i64) -> Page {
 	// ... state management
 
 	page!(|
@@ -959,18 +959,60 @@ body {
 You can also reference images directly in components:
 
 ```rust
-page!(|| {
+// From polls_index_with_logo() in src/client/components/polls.rs
+page!(|load_questions_error: Action<Vec<QuestionInfo>, String>, load_questions_signal: Action<Vec<QuestionInfo>, String>| {
 	div {
-		class: "text-center",
-		img {
-			src: "/static/images/logo.png",
-			alt: "Polls App Logo",
-			class: "img-fluid mb-4",
-			style: "max-width: 200px"
+		class: "max-w-4xl mx-auto px-4 mt-12",
+		div {
+			class: "text-center mb-6",
+			img {
+				src: "/static/images/poll-icon.svg",
+				alt: "Polls App",
+				class: "mx-auto w-16 h-16",
+			}
 		}
-		h1 { "Welcome to Polls App" }
+		h1 {
+			class: "mb-4 text-center",
+			"Polls"
+		}
+		// ... error and loading watch blocks ...
+		watch {
+			if load_questions_signal.result().unwrap_or_default().is_empty() {
+				p {
+					class: "text-gray-500",
+					"No polls are available."
+				}
+			} else {
+				div {
+					class: "space-y-2",
+					{
+						Page::Fragment(
+							load_questions_signal
+								.result()
+								.unwrap_or_default()
+								.iter()
+								.map(|question| {
+									let href = format!("/polls/{}/", question.id);
+									let question_text = question.question_text.clone();
+									let pub_date = question.pub_date.format("%Y-%m-%d %H:%M").to_string();
+									page!(
+										| href : String, question_text : String, pub_date : String | { a {
+										href : href, class :
+										"block p-4 border rounded hover:bg-gray-50 transition-colors", div {
+										class : "flex w-full justify-between items-center", img { src :
+										"/static/images/poll-icon.svg", alt : "Poll", class : "w-8 h-8 mr-3",
+										} div { class : "flex-1", h5 { class : "mb-1", { question_text } } }
+										small { { pub_date } } } } }
+									)(href, question_text, pub_date)
+								})
+								.collect::<Vec<_>>(),
+						)
+					}
+				}
+			}
+		}
 	}
-})()
+})(load_questions_error, load_questions_signal)
 ```
 
 ## Building for Production

@@ -18,7 +18,7 @@ Generate URLs for named routes using the router's `reverse()` method:
 use reinhardt::prelude::*;
 use std::collections::HashMap;
 
-let router = DefaultRouter::new();
+let router = ServerRouter::new();
 
 // Define route parameters
 let mut params = HashMap::new();
@@ -116,7 +116,7 @@ Define URL patterns with route names:
 ```rust
 use reinhardt::prelude::*;
 
-let mut router = DefaultRouter::new();
+let mut router = ServerRouter::new();
 
 // Register ViewSets with route names
 let snippet_viewset = ModelViewSet::<Snippet, SnippetSerializer>::new("snippet");
@@ -142,9 +142,9 @@ use std::collections::HashMap;
 
 async fn snippet_detail(
     request: Request,
-    router: &DefaultRouter,
+    router: &ServerRouter,
     id: i64
-) -> Result<Response> {
+) -> ViewResult<Response> {
     // Get snippet from database
     let snippet = get_snippet(id).await?;
 
@@ -243,8 +243,8 @@ struct SnippetSerializer {
 }
 
 // In config/urls.rs
-pub fn url_patterns() -> DefaultRouter {
-    let mut router = DefaultRouter::new();
+pub fn url_patterns() -> ServerRouter {
+    let mut router = ServerRouter::new();
 
     // Register ViewSets
     let snippet_viewset = ModelViewSet::<Snippet, SnippetSerializer>::new("snippet");

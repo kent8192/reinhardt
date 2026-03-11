@@ -44,44 +44,51 @@ use rstest::*;
 
 #[rstest]
 fn test_was_published_recently_with_future_question() {
-    // Create a question 30 days in the future
+    // Arrange
     let future_date = Utc::now() + Duration::days(30);
-    let question = Question {
-        id: Some(1),
-        question_text: "Future question".to_string(),
-        pub_date: future_date,
-    };
+    let question = Question::new(
+        "Future question".to_string(), // question_text
+    );
+    // Override pub_date for testing
+    question.set_pub_date(future_date);
 
-    // Should return false for future questions
-    assert_eq!(question.was_published_recently(), false);
+    // Act
+    let result = question.was_published_recently();
+
+    // Assert
+    assert_eq!(result, false);
 }
 
 #[rstest]
 fn test_was_published_recently_with_old_question() {
-    // Create a question 2 days ago
+    // Arrange
     let old_date = Utc::now() - Duration::days(2);
-    let question = Question {
-        id: Some(1),
-        question_text: "Old question".to_string(),
-        pub_date: old_date,
-    };
+    let question = Question::new(
+        "Old question".to_string(), // question_text
+    );
+    question.set_pub_date(old_date);
 
-    // Should return false for questions older than 1 day
-    assert_eq!(question.was_published_recently(), false);
+    // Act
+    let result = question.was_published_recently();
+
+    // Assert
+    assert_eq!(result, false);
 }
 
 #[rstest]
 fn test_was_published_recently_with_recent_question() {
-    // Create a question from 23 hours ago
+    // Arrange
     let recent_date = Utc::now() - Duration::hours(23);
-    let question = Question {
-        id: Some(1),
-        question_text: "Recent question".to_string(),
-        pub_date: recent_date,
-    };
+    let question = Question::new(
+        "Recent question".to_string(), // question_text
+    );
+    question.set_pub_date(recent_date);
 
-    // Should return true for recent questions
-    assert_eq!(question.was_published_recently(), true);
+    // Act
+    let result = question.was_published_recently();
+
+    // Assert
+    assert_eq!(result, true);
 }
 ```
 
@@ -288,14 +295,14 @@ async fn test_increment_votes(
         .await
         .unwrap();
 
-    assert_eq!(choice.votes, 0);
+    assert_eq!(choice.votes(), 0);
 
     // Increment votes
-    choice.increment_votes(&conn).await.unwrap();
-    assert_eq!(choice.votes, 1);
+    choice.vote();
+    assert_eq!(choice.votes(), 1);
 
-    choice.increment_votes(&conn).await.unwrap();
-    assert_eq!(choice.votes, 2);
+    choice.vote();
+    assert_eq!(choice.votes(), 2);
 }
 ```
 
@@ -490,11 +497,9 @@ use rstest::*;
 
 #[fixture]
 fn sample_question() -> Question {
-    Question {
-        id: None,
-        question_text: "Sample question".to_string(),
-        pub_date: Utc::now(),
-    }
+    Question::new(
+        "Sample question".to_string(), // question_text
+    )
 }
 
 #[fixture]
@@ -524,7 +529,7 @@ async fn test_with_custom_fixture(
     let (question, choices) = question_with_choices.await;
 
     assert_eq!(choices.len(), 3);
-    assert!(question.id.is_some());
+    assert!(question.id() > 0);
 }
 ```
 

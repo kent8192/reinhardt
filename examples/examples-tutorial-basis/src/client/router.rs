@@ -3,7 +3,7 @@
 //! This module defines the client-side router for the polling application.
 
 use crate::client::pages::{index_page, polls_detail_page, polls_results_page};
-use reinhardt::pages::component::View;
+use reinhardt::pages::component::Page;
 use reinhardt::pages::page;
 use reinhardt::pages::router::Router;
 use std::cell::RefCell;
@@ -80,7 +80,7 @@ fn init_router() -> Router {
 }
 
 /// Error page
-fn error_page(message: &str) -> View {
+fn error_page(message: &str) -> Page {
 	let message = message.to_string();
 	page!(|message: String| {
 		div {

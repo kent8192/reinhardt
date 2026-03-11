@@ -4,10 +4,10 @@
 //! the index page, detail page with voting form, and results page.
 
 use crate::shared::types::{ChoiceInfo, QuestionInfo};
-use reinhardt::pages::component::View;
+use reinhardt::pages::component::Page;
 use reinhardt::pages::form;
 use reinhardt::pages::page;
-use reinhardt::pages::reactive::hooks::{Action, ActionPhase, use_action, use_effect};
+use reinhardt::pages::reactive::hooks::{Action, use_action, use_effect};
 
 use crate::server_fn::polls::{
 	get_question_detail, get_question_results, get_questions, submit_vote,
@@ -17,14 +17,15 @@ use crate::server_fn::polls::{
 ///
 /// Displays a list of available polls with links to vote.
 /// Uses watch blocks for reactive UI updates when async data loads.
-pub fn polls_index() -> View {
+pub fn polls_index() -> Page {
 	let load_questions =
 		use_action(|_: ()| async move { get_questions().await.map_err(|e| e.to_string()) });
 	load_questions.dispatch(());
 
+	let load_questions_error = load_questions.clone();
 	let load_questions_signal = load_questions.clone();
 
-	page!(|load_questions_signal: Action<Vec<QuestionInfo>, String>| {
+	page!(|load_questions_error: Action<Vec<QuestionInfo>, String>, load_questions_signal: Action<Vec<QuestionInfo>, String>| {
 		div {
 			class: "max-w-4xl mx-auto px-4 mt-12",
 			h1 {
@@ -32,10 +33,10 @@ pub fn polls_index() -> View {
 				"Polls"
 			}
 			watch {
-				if load_questions_signal.error().is_some() {
+				if load_questions_error.error().is_some() {
 					div {
 						class: "alert-danger",
-						{ load_questions_signal.error().unwrap_or_default() }
+						{ load_questions_error.error().unwrap_or_default() }
 					}
 				}
 			}
@@ -61,7 +62,7 @@ pub fn polls_index() -> View {
 					div {
 						class: "space-y-2",
 						{
-							View::fragment(
+							Page::Fragment(
 									load_questions_signal
 										.result()
 										.unwrap_or_default()
@@ -85,7 +86,7 @@ pub fn polls_index() -> View {
 				}
 			}
 		}
-	})(load_questions_signal)
+	})(load_questions_error, load_questions_signal)
 }
 
 /// Poll detail page - Show question and voting form
@@ -93,7 +94,7 @@ pub fn polls_index() -> View {
 /// Displays a question with its choices and allows the user to vote.
 /// Uses form! macro with Dynamic ChoiceField for declarative form handling.
 /// CSRF protection is automatically injected for POST method.
-pub fn polls_detail(question_id: i64) -> View {
+pub fn polls_detail(question_id: i64) -> Page {
 	let qid = question_id;
 
 	// Create action for loading question detail
@@ -254,9 +255,9 @@ pub fn polls_detail(question_id: i64) -> View {
 	// Question found - render voting form
 	if let Some((ref q, _)) = load_detail_signal.result() {
 		let question_text = q.question_text.clone();
-		let form_view = voting_form.into_view();
+		let form_view = voting_form.into_page();
 
-		page!(|question_text: String, form_view: View| {
+		page!(|question_text: String, form_view: Page| {
 			div {
 				class: "max-w-4xl mx-auto px-4 mt-12",
 				h1 {
@@ -289,7 +290,7 @@ pub fn polls_detail(question_id: i64) -> View {
 ///
 /// Displays the question with vote counts for each choice.
 /// Uses watch blocks for reactive UI updates when async data loads.
-pub fn polls_results(question_id: i64) -> View {
+pub fn polls_results(question_id: i64) -> Page {
 	let load_results =
 		use_action(
 			|qid: i64| async move { get_question_results(qid).await.map_err(|e| e.to_string()) },
@@ -349,7 +350,7 @@ pub fn polls_results(question_id: i64) -> View {
 								div {
 									class: "divide-y divide-gray-200",
 									{
-										View::fragment(
+										Page::Fragment(
 										        load_results_signal
 										            .result()
 										            .map(|(_, choices, total)| {
@@ -438,14 +439,15 @@ pub fn polls_results(question_id: i64) -> View {
 /// This shows how to use resolve_static() for images in page! macros.
 /// This function is identical to polls_index() but adds poll icons using
 /// static URL resolution.
-pub fn polls_index_with_logo() -> View {
+pub fn polls_index_with_logo() -> Page {
 	let load_questions =
 		use_action(|_: ()| async move { get_questions().await.map_err(|e| e.to_string()) });
 	load_questions.dispatch(());
 
+	let load_questions_error = load_questions.clone();
 	let load_questions_signal = load_questions.clone();
 
-	page!(|load_questions_signal: Action<Vec<QuestionInfo>, String>| {
+	page!(|load_questions_error: Action<Vec<QuestionInfo>, String>, load_questions_signal: Action<Vec<QuestionInfo>, String>| {
 		div {
 			class: "max-w-4xl mx-auto px-4 mt-12",
 			div {
@@ -461,10 +463,10 @@ pub fn polls_index_with_logo() -> View {
 				"Polls"
 			}
 			watch {
-				if load_questions_signal.error().is_some() {
+				if load_questions_error.error().is_some() {
 					div {
 						class: "alert-danger",
-						{ load_questions_signal.error().unwrap_or_default() }
+						{ load_questions_error.error().unwrap_or_default() }
 					}
 				}
 			}
@@ -490,7 +492,7 @@ pub fn polls_index_with_logo() -> View {
 					div {
 						class: "space-y-2",
 						{
-							View::fragment(
+							Page::Fragment(
 									load_questions_signal
 										.result()
 										.unwrap_or_default()
@@ -516,5 +518,5 @@ pub fn polls_index_with_logo() -> View {
 				}
 			}
 		}
-	})(load_questions_signal)
+	})(load_questions_error, load_questions_signal)
 }

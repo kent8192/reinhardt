@@ -142,6 +142,7 @@ jobs:
           if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
             FILTER_ARGS+=(-E "$NEXTEST_FILTER_EXPR")
           fi
+          set +e
           cargo llvm-cov nextest \
             --no-report \
             --workspace \
@@ -149,6 +150,14 @@ jobs:
             --all-features \
             --no-fail-fast \
             "${FILTER_ARGS[@]}"
+          EXIT_CODE=$?
+          set -e
+          if [[ $EXIT_CODE -eq 4 ]]; then
+            echo "::notice::No tests matched the filter — treating as success"
+            exit 0
+          elif [[ $EXIT_CODE -ne 0 ]]; then
+            exit $EXIT_CODE
+          fi
 
       - name: Generate unit coverage report
         run: |
@@ -288,6 +297,7 @@ jobs:
           else
             FILTER_EXPR="not binary(/ui/)"
           fi
+          set +e
           cargo llvm-cov nextest \
             --no-report \
             --workspace \
@@ -296,6 +306,14 @@ jobs:
             -E "$FILTER_EXPR" \
             --all-features \
             --no-fail-fast
+          EXIT_CODE=$?
+          set -e
+          if [[ $EXIT_CODE -eq 4 ]]; then
+            echo "::notice::No tests matched the filter — treating as success"
+            exit 0
+          elif [[ $EXIT_CODE -ne 0 ]]; then
+            exit $EXIT_CODE
+          fi
 
       - name: Generate intra-crate coverage report
         run: |
@@ -434,12 +452,21 @@ jobs:
           if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
             FILTER_ARGS+=(-E "$NEXTEST_FILTER_EXPR")
           fi
+          set +e
           cargo llvm-cov nextest \
             --no-report \
             --package reinhardt-integration-tests \
             --all-features \
             --no-fail-fast \
             "${FILTER_ARGS[@]}"
+          EXIT_CODE=$?
+          set -e
+          if [[ $EXIT_CODE -eq 4 ]]; then
+            echo "::notice::No tests matched the filter — treating as success"
+            exit 0
+          elif [[ $EXIT_CODE -ne 0 ]]; then
+            exit $EXIT_CODE
+          fi
 
       - name: Generate cross-crate coverage report
         run: |

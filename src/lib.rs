@@ -914,7 +914,6 @@ pub mod prelude {
 		ServerRouter,
 		SingleObjectMixin,
 		StatusCode,
-		UnifiedRouter,
 		View,
 		ViewResult,
 		ViewSet,
@@ -924,6 +923,10 @@ pub mod prelude {
 		is_router_registered,
 		register_router,
 	};
+
+	// UnifiedRouter requires client-router feature
+	#[cfg(feature = "client-router")]
+	pub use crate::UnifiedRouter;
 
 	// External dependencies (via core)
 	#[cfg(feature = "core")]

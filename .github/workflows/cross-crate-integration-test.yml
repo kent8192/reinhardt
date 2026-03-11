@@ -125,6 +125,7 @@ jobs:
             --all-features \
             --partition hash:${{ matrix.partition }}/3 \
             --no-fail-fast \
+            --no-tests=warn \
             --status-level=none \
             --final-status-level=none \
             "${FILTER_ARGS[@]}"

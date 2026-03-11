@@ -211,25 +211,25 @@ pub struct VoteRequest {
 }
 
 // Server-side conversions (not available in WASM)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 impl From<crate::apps::polls::models::Question> for QuestionInfo {
 	fn from(question: crate::apps::polls::models::Question) -> Self {
 		QuestionInfo {
-			id: question.id,
-			question_text: question.question_text,
-			pub_date: question.pub_date,
+			id: question.id(),
+			question_text: question.question_text().to_string(),
+			pub_date: question.pub_date(),
 		}
 	}
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 impl From<crate::apps::polls::models::Choice> for ChoiceInfo {
 	fn from(choice: crate::apps::polls::models::Choice) -> Self {
 		ChoiceInfo {
-			id: choice.id,
-			question_id: choice.question_id,
-			choice_text: choice.choice_text,
-			votes: choice.votes,
+			id: choice.id(),
+			question_id: *choice.question_id(),
+			choice_text: choice.choice_text().to_string(),
+			votes: choice.votes(),
 		}
 	}
 }
@@ -247,7 +247,14 @@ Create `src/server_fn/polls.rs`:
 
 ```rust
 use crate::shared::types::{ChoiceInfo, QuestionInfo, VoteRequest};
-use reinhardt::pages::server_fn::{server_fn, ServerFnError};
+use reinhardt::pages::server_fn::{ServerFnError, server_fn};
+
+// Server-only imports
+#[cfg(server)]
+use {
+	crate::shared::forms::create_vote_form,
+	reinhardt::forms::wasm_compat::{FormExt, FormMetadata},
+};
 
 /// Get all questions (latest 5)
 #[server_fn(use_inject = true)]
@@ -258,11 +265,18 @@ pub async fn get_questions(
 	use reinhardt::Model;
 
 	let manager = Question::objects();
-	let questions = manager.all().all().await
-		.map_err(|e| ServerFnError::ServerError(e.to_string()))?;
+	let questions = manager
+		.all()
+		.all()
+		.await
+		.map_err(|e| ServerFnError::application(e.to_string()))?;
 
-	let latest: Vec<QuestionInfo> = questions.into_iter().take(5)
-		.map(QuestionInfo::from).collect();
+	// Take latest 5 questions
+	let latest: Vec<QuestionInfo> = questions
+		.into_iter()
+		.take(5)
+		.map(QuestionInfo::from)
+		.collect();
 
 	Ok(latest)
 }
@@ -274,43 +288,165 @@ pub async fn get_question_detail(
 	#[inject] _db: reinhardt::DatabaseConnection,
 ) -> std::result::Result<(QuestionInfo, Vec<ChoiceInfo>), ServerFnError> {
 	use crate::apps::polls::models::{Choice, Question};
-	use reinhardt::db::orm::{FilterOperator, FilterValue};
 	use reinhardt::Model;
+	use reinhardt::db::orm::{FilterOperator, FilterValue};
 
-	let question = Question::objects().get(question_id).first().await
-		.map_err(|e| ServerFnError::ServerError(e.to_string()))?
-		.ok_or_else(|| ServerFnError::ServerError("Question not found".to_string()))?;
+	// Get question
+	let question_manager = Question::objects();
+	let question = question_manager
+		.get(question_id)
+		.first()
+		.await
+		.map_err(|e| ServerFnError::application(e.to_string()))?
+		.ok_or_else(|| ServerFnError::server(404, "Question not found"))?;
 
-	let choices = Choice::objects()
-		.filter(Choice::field_question_id(), FilterOperator::Eq, FilterValue::Int(question_id))
-		.all().await
-		.map_err(|e| ServerFnError::ServerError(e.to_string()))?;
+	// Get choices
+	let choice_manager = Choice::objects();
+	let choices = choice_manager
+		.filter(
+			Choice::field_question_id(),
+			FilterOperator::Eq,
+			FilterValue::Int(question_id),
+		)
+		.all()
+		.await
+		.map_err(|e| ServerFnError::application(e.to_string()))?;
 
-	Ok((QuestionInfo::from(question), choices.into_iter().map(ChoiceInfo::from).collect()))
+	let question_info = QuestionInfo::from(question);
+	let choice_infos: Vec<ChoiceInfo> = choices.into_iter().map(ChoiceInfo::from).collect();
+
+	Ok((question_info, choice_infos))
+}
+
+/// Get question results
+///
+/// Returns the question and all its choices with vote counts.
+#[server_fn(use_inject = true)]
+pub async fn get_question_results(
+	question_id: i64,
+	#[inject] _db: reinhardt::DatabaseConnection,
+) -> std::result::Result<(QuestionInfo, Vec<ChoiceInfo>, i32), ServerFnError> {
+	use crate::apps::polls::models::{Choice, Question};
+	use reinhardt::Model;
+	use reinhardt::db::orm::{FilterOperator, FilterValue};
+
+	// Get question
+	let question_manager = Question::objects();
+	let question = question_manager
+		.get(question_id)
+		.first()
+		.await
+		.map_err(|e| ServerFnError::application(e.to_string()))?
+		.ok_or_else(|| ServerFnError::server(404, "Question not found"))?;
+
+	// Get choices
+	let choice_manager = Choice::objects();
+	let choices = choice_manager
+		.filter(
+			Choice::field_question_id(),
+			FilterOperator::Eq,
+			FilterValue::Int(question_id),
+		)
+		.all()
+		.await
+		.map_err(|e| ServerFnError::application(e.to_string()))?;
+
+	// Calculate total votes
+	let total_votes: i32 = choices.iter().map(|c| c.votes()).sum();
+
+	let question_info = QuestionInfo::from(question);
+	let choice_infos: Vec<ChoiceInfo> = choices.into_iter().map(ChoiceInfo::from).collect();
+
+	Ok((question_info, choice_infos, total_votes))
 }
 
 /// Vote for a choice
+///
+/// Increments the vote count for the selected choice.
 #[server_fn(use_inject = true)]
 pub async fn vote(
 	request: VoteRequest,
-	#[inject] _db: reinhardt::DatabaseConnection,
+	#[inject] db: reinhardt::DatabaseConnection,
+) -> std::result::Result<ChoiceInfo, ServerFnError> {
+	vote_internal(request, db).await
+}
+
+/// Get vote form metadata for WASM client rendering
+///
+/// Returns form metadata with CSRF token for the voting form.
+#[cfg(server)]
+#[server_fn]
+pub async fn get_vote_form_metadata() -> std::result::Result<FormMetadata, ServerFnError> {
+	let form = create_vote_form();
+	Ok(form.to_metadata())
+}
+
+/// Submit vote via form! macro
+///
+/// Wrapper function that accepts individual field values from form! macro's submit.
+/// Converts String field values to the required types and calls the underlying vote function.
+#[server_fn(use_inject = true)]
+pub async fn submit_vote(
+	question_id: String,
+	choice_id: String,
+	#[inject] db: reinhardt::DatabaseConnection,
+) -> std::result::Result<ChoiceInfo, ServerFnError> {
+	let question_id: i64 = question_id
+		.parse()
+		.map_err(|_| ServerFnError::application("Invalid question_id"))?;
+	let choice_id: i64 = choice_id
+		.parse()
+		.map_err(|_| ServerFnError::application("Invalid choice_id"))?;
+
+	let request = VoteRequest {
+		question_id,
+		choice_id,
+	};
+
+	// Reuse the existing vote logic
+	vote_internal(request, db).await
+}
+
+/// Internal vote implementation (shared between vote and submit_vote)
+#[cfg(server)]
+async fn vote_internal(
+	request: VoteRequest,
+	db: reinhardt::DatabaseConnection,
 ) -> std::result::Result<ChoiceInfo, ServerFnError> {
 	use crate::apps::polls::models::Choice;
 	use reinhardt::Model;
+	use reinhardt::atomic;
 
-	let mut choice = Choice::objects().get(request.choice_id).first().await
-		.map_err(|e| ServerFnError::ServerError(e.to_string()))?
-		.ok_or_else(|| ServerFnError::ServerError("Choice not found".to_string()))?;
+	// Wrap read-modify-write in a transaction to prevent race conditions
+	let updated_choice = atomic(&db, || async {
+		let choice_manager = Choice::objects();
 
-	if choice.question_id != request.question_id {
-		return Err(ServerFnError::ServerError(
-			"Choice does not belong to this question".to_string(),
-		));
-	}
+		// Get the choice
+		let mut choice = choice_manager
+			.get(request.choice_id)
+			.first()
+			.await
+			.map_err(|e| anyhow::anyhow!(e.to_string()))?
+			.ok_or_else(|| anyhow::anyhow!("Choice not found"))?;
 
-	choice.votes += 1;
-	let updated_choice = Choice::objects().update(&choice).await
-		.map_err(|e| ServerFnError::ServerError(e.to_string()))?;
+		// Verify the choice belongs to the question
+		if *choice.question_id() != request.question_id {
+			return Err(anyhow::anyhow!("Choice does not belong to this question"));
+		}
+
+		// Increment vote count
+		choice.vote();
+
+		// Update in database
+		let updated = choice_manager
+			.update(&choice)
+			.await
+			.map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+		Ok(updated)
+	})
+	.await
+	.map_err(|e| ServerFnError::application(e.to_string()))?;
 
 	Ok(ChoiceInfo::from(updated_choice))
 }
@@ -395,14 +531,14 @@ pub async fn get_question(
 ) -> Result<QuestionInfo, ServerFnError> {
 	// Database error → ServerFnError
 	let question = Question::find_by_id(&db, id).await
-		.map_err(|e| ServerFnError::ServerError(e.to_string()))?;
+		.map_err(|e| ServerFnError::application(e.to_string()))?;
 
 	Ok(QuestionInfo::from(question))
 }
 ```
 
 **Common error conversions**:
-- `anyhow::Error` → `ServerFnError::ServerError(String)`
+- `anyhow::Error` → `ServerFnError::application(String)`
 - `serde_json::Error` → `ServerFnError::Deserialization(String)`
 - Custom errors → implement `From<YourError> for ServerFnError`
 
@@ -442,11 +578,11 @@ pub async fn vote(
 ) -> Result<ChoiceInfo, ServerFnError> {
 	// Server-side implementation only
 	let mut choice = Choice::find_by_id(&db, request.choice_id).await
-		.map_err(|e| ServerFnError::ServerError(e.to_string()))?;
+		.map_err(|e| ServerFnError::application(e.to_string()))?;
 
-	choice.votes += 1;
+	choice.vote();
 	choice.save(&db).await
-		.map_err(|e| ServerFnError::ServerError(e.to_string()))?;
+		.map_err(|e| ServerFnError::application(e.to_string()))?;
 
 	Ok(ChoiceInfo::from(choice))
 }
@@ -491,79 +627,113 @@ pub mod polls;
 Create `src/client/components/polls.rs`:
 
 ```rust
-use crate::shared::types::{ChoiceInfo, QuestionInfo, VoteRequest};
-use reinhardt::pages::component::{ElementView, IntoView, View};
+use crate::shared::types::{ChoiceInfo, QuestionInfo};
+use reinhardt::pages::component::Page;
+use reinhardt::pages::form;
 use reinhardt::pages::page;
 use reinhardt::pages::reactive::hooks::{Action, use_action, use_effect};
-use crate::server_fn::polls::{get_question_detail, get_question_results, get_questions, vote};
+
+use crate::server_fn::polls::{
+	get_question_detail, get_question_results, get_questions, submit_vote,
+};
 
 /// Polls index page - List all polls
-pub fn polls_index() -> View {
-	let load_questions = use_action(|_: ()| async move {
-		get_questions().await.map_err(|e| e.to_string())
-	});
+pub fn polls_index() -> Page {
+	let load_questions =
+		use_action(|_: ()| async move { get_questions().await.map_err(|e| e.to_string()) });
 	load_questions.dispatch(());
 
+	let load_questions_error = load_questions.clone();
 	let load_questions_signal = load_questions.clone();
 
-	page!(|load_questions_signal: Action<Vec<QuestionInfo>, String>| {
+	page!(|load_questions_error: Action<Vec<QuestionInfo>, String>, load_questions_signal: Action<Vec<QuestionInfo>, String>| {
 		div {
 			class: "max-w-4xl mx-auto px-4 mt-12",
-			h1 { class: "mb-4", "Polls" }
+			h1 {
+				class: "mb-4",
+				"Polls"
+			}
 			watch {
-				if load_questions_signal.error().is_some() {
-					div { class: "alert-danger", { load_questions_signal.error().unwrap_or_default() } }
+				if load_questions_error.error().is_some() {
+					div {
+						class: "alert-danger",
+						{ load_questions_error.error().unwrap_or_default() }
+					}
 				}
 			}
 			watch {
 				if load_questions_signal.is_pending() {
 					div {
 						class: "text-center",
-						div { class: "spinner w-8 h-8", role: "status",
-							span { class: "sr-only", "Loading..." }
+						div {
+							class: "spinner w-8 h-8",
+							role: "status",
+							span {
+								class: "sr-only",
+								"Loading..."
+							}
 						}
 					}
 				} else if load_questions_signal.result().unwrap_or_default().is_empty() {
-					p { class: "text-gray-500", "No polls are available." }
+					p {
+						class: "text-gray-500",
+						"No polls are available."
+					}
 				} else {
 					div {
 						class: "space-y-2",
-						{ View::fragment(load_questions_signal.result().unwrap_or_default().iter().map(|question| {
-							let href = format!("/polls/{}/", question.id);
-							let question_text = question.question_text.clone();
-							let pub_date = question.pub_date.format("%Y-%m-%d %H:%M").to_string();
-							page!(|href: String, question_text: String, pub_date: String| {
-								a {
-									href: href,
-									class: "block p-4 border rounded hover:bg-gray-50 transition-colors",
-									div {
-										class: "flex w-full justify-between",
-										h5 { class: "mb-1", { question_text } }
-										small { { pub_date } }
-									}
-								}
-							})(href, question_text, pub_date)
-						}).collect::<Vec<_>>(),) }
+						{
+							Page::Fragment(
+									load_questions_signal
+										.result()
+										.unwrap_or_default()
+										.iter()
+										.map(|question| {
+											let href = format!("/polls/{}/", question.id);
+											let question_text = question.question_text.clone();
+											let pub_date = question.pub_date.format("%Y-%m-%d %H:%M").to_string();
+											page!(
+												| href : String, question_text : String, pub_date : String | { a {
+												href : href, class :
+												"block p-4 border rounded hover:bg-gray-50 transition-colors", div {
+												class : "flex w-full justify-between", h5 { class : "mb-1", {
+												question_text } } small { { pub_date } } } } }
+											)(href, question_text, pub_date)
+										})
+										.collect::<Vec<_>>(),
+								)
+						}
 					}
 				}
 			}
 		}
-	})(load_questions_signal)
+	})(load_questions_error, load_questions_signal)
 }
 
 /// Poll detail page - Show question and voting form
-pub fn polls_detail(question_id: i64) -> View {
+///
+/// Uses form! macro with Dynamic ChoiceField for declarative form handling.
+/// CSRF protection is automatically injected for POST method.
+pub fn polls_detail(question_id: i64) -> Page {
 	let qid = question_id;
 
-	let load_detail = use_action(
-		|qid: i64| async move { get_question_detail(qid).await.map_err(|e| e.to_string()) },
-	);
+	// Create action for loading question detail
+	let load_detail =
+		use_action(
+			|qid: i64| async move { get_question_detail(qid).await.map_err(|e| e.to_string()) },
+		);
 
+	// Create the voting form using form! macro
+	// - server_fn: submit_vote accepts (question_id: String, choice_id: String)
+	// - method: Post enables automatic CSRF token injection
+	// - state: loading/error signals for form submission feedback
+	// - watch blocks for reactive UI updates
 	let voting_form = form! {
 		name: VotingForm,
 		server_fn: submit_vote,
 		method: Post,
 		state: { loading, error },
+
 		fields: {
 			question_id: HiddenField {
 				initial: qid.to_string(),
@@ -578,6 +748,7 @@ pub fn polls_detail(question_id: i64) -> View {
 				choice_label: "choice_text",
 			},
 		},
+
 		watch: {
 			submit_button: |form| {
 				let is_loading = form.loading().get();
@@ -590,7 +761,11 @@ pub fn polls_detail(question_id: i64) -> View {
 							disabled: is_loading,
 							{ if is_loading { "Voting..." } else { "Vote" } }
 						}
-						a { href: "/", class: "btn-secondary ml-2", "Back to Polls" }
+						a {
+							href: "/",
+							class: "btn-secondary ml-2",
+							"Back to Polls"
+						}
 					}
 				})(is_loading)
 			},
@@ -599,10 +774,38 @@ pub fn polls_detail(question_id: i64) -> View {
 				page!(|err: Option<String>| {
 					watch {
 						if let Some(e) = err.clone() {
-							div { class: "alert-danger mt-3", { e } }
+							div {
+								class: "alert-danger mt-3",
+								{ e }
+							}
 						}
 					}
 				})(err)
+			},
+			success_navigation: |form| {
+				let is_loading = form.loading().get();
+				let err = form.error().get();
+				page!(|is_loading: bool, err: Option<String>| {
+					watch {
+						if ! is_loading &&err.is_none() {
+							#[cfg(target_arch = "wasm32")]
+									{
+										if let Some(window) = web_sys::window() {
+											let pathname = window.location().pathname().ok();
+											if let Some(path) = pathname {
+												let parts: Vec<&str> = path.split('/').collect();
+												if parts.len() >= 3 && parts[1] == "polls" {
+													if let Ok(question_id) = parts[2].parse::<i64>() {
+														let results_url = format!("/polls/{}/results/", question_id);
+														let _ = window.location().set_href(&results_url);
+													}
+												}
+											}
+										}
+									}
+						}
+					}
+				})(is_loading, err)
 			},
 		},
 	};
@@ -617,134 +820,233 @@ pub fn polls_detail(question_id: i64) -> View {
 					.iter()
 					.map(|c| (c.id.to_string(), c.choice_text.clone()))
 					.collect();
-				voting_form_for_effect.choice_id_choices().set(choice_options);
+				voting_form_for_effect
+					.choice_id_choices()
+					.set(choice_options);
 			}
 		});
 	}
 
+	// Dispatch the action to load question data
 	load_detail.dispatch(qid);
 
 	let load_detail_signal = load_detail.clone();
-	let voting_form_view = voting_form.clone();
 
-	page!(|load_detail_signal: Action<(QuestionInfo, Vec<ChoiceInfo>), String>, voting_form_view: VotingForm, question_id: i64| {
-		div {
-			class: "max-w-4xl mx-auto px-4 mt-12",
-			watch {
-				if load_detail_signal.is_pending() {
-					div {
-						class: "text-center",
-						div { class: "spinner w-8 h-8", role: "status",
-							span { class: "sr-only", "Loading..." }
-						}
-					}
-				} else if load_detail_signal.error().is_some() {
-					div {
-						div { class: "alert-danger", { load_detail_signal.error().unwrap_or_default() } }
-						a { href: "/", class: "btn-primary mt-2", "Back to Polls" }
-					}
-				} else if let Some((ref question, _)) = load_detail_signal.result() {
-					div {
-						h1 { class: "mb-4", { question.question_text.clone() } }
-						{ voting_form_view.render() }
-					}
-				} else {
-					div {
-						div { class: "alert-warning", "Question not found" }
-						a { href: "/", class: "btn-primary", "Back to Polls" }
+	// Loading state
+	if load_detail_signal.is_pending() {
+		return page!(|| {
+			div {
+				class: "max-w-4xl mx-auto px-4 mt-12 text-center",
+				div {
+					class: "spinner w-8 h-8",
+					role: "status",
+					span {
+						class: "sr-only",
+						"Loading..."
 					}
 				}
 			}
-		}
-	})(load_detail_signal, voting_form_view, question_id)
+		})();
+	}
+
+	// Error state
+	if let Some(err) = load_detail_signal.error() {
+		return page!(|err: String, question_id: i64| {
+			div {
+				class: "max-w-4xl mx-auto px-4 mt-12",
+				div {
+					class: "alert-danger",
+					{ err }
+				}
+				a {
+					href: format!("/polls/{}/", question_id),
+					class: "btn-secondary",
+					"Try Again"
+				}
+				a {
+					href: "/",
+					class: "btn-primary ml-2",
+					"Back to Polls"
+				}
+			}
+		})(err, question_id);
+	}
+
+	// Question found - render voting form
+	if let Some((ref q, _)) = load_detail_signal.result() {
+		let question_text = q.question_text.clone();
+		let form_view = voting_form.into_page();
+
+		page!(|question_text: String, form_view: Page| {
+			div {
+				class: "max-w-4xl mx-auto px-4 mt-12",
+				h1 {
+					class: "mb-4",
+					{ question_text }
+				}
+				{ form_view }
+			}
+		})(question_text, form_view)
+	} else {
+		// Question not found
+		page!(|| {
+			div {
+				class: "max-w-4xl mx-auto px-4 mt-12",
+				div {
+					class: "alert-warning",
+					"Question not found"
+				}
+				a {
+					href: "/",
+					class: "btn-primary",
+					"Back to Polls"
+				}
+			}
+		})()
+	}
 }
 
 /// Poll results page - Show voting results
-pub fn polls_results(question_id: i64) -> View {
-	let load_results = use_action(
-		|qid: i64| async move { get_question_results(qid).await.map_err(|e| e.to_string()) },
-	);
+///
+/// Displays the question with vote counts for each choice.
+/// Uses watch blocks for reactive UI updates when async data loads.
+pub fn polls_results(question_id: i64) -> Page {
+	let load_results =
+		use_action(
+			|qid: i64| async move { get_question_results(qid).await.map_err(|e| e.to_string()) },
+		);
 	load_results.dispatch(question_id);
 
 	let load_results_signal = load_results.clone();
 
 	page!(|load_results_signal: Action<(QuestionInfo, Vec<ChoiceInfo>, i32), String>, question_id: i64| {
 		div {
-			class: "max-w-4xl mx-auto px-4 mt-12",
 			watch {
 				if load_results_signal.is_pending() {
 					div {
-						class: "text-center",
-						div { class: "spinner w-8 h-8", role: "status",
-							span { class: "sr-only", "Loading..." }
+						class: "max-w-4xl mx-auto px-4 mt-12 text-center",
+						div {
+							class: "spinner w-8 h-8",
+							role: "status",
+							span {
+								class: "sr-only",
+								"Loading..."
+							}
 						}
 					}
 				} else if load_results_signal.error().is_some() {
 					div {
-						div { class: "alert-danger", { load_results_signal.error().unwrap_or_default() } }
-						a { href: "/", class: "btn-primary", "Back to Polls" }
+						class: "max-w-4xl mx-auto px-4 mt-12",
+						div {
+							class: "alert-danger",
+							{ load_results_signal.error().unwrap_or_default() }
+						}
+						a {
+							href: "/",
+							class: "btn-primary",
+							"Back to Polls"
+						}
 					}
-				} else if let Some((ref question, ref choices, total)) = load_results_signal.result() {
+				} else if load_results_signal.result().is_some() {
 					div {
-						h1 { class: "mb-4", { question.question_text.clone() } }
+						class: "max-w-4xl mx-auto px-4 mt-12",
+						h1 {
+							class: "mb-4",
+							{
+								load_results_signal
+										.result()
+										.map(|(q, _, _)| q.question_text.clone())
+										.unwrap_or_default()
+							}
+						}
 						div {
 							class: "card",
 							div {
 								class: "card-body",
-								h5 { class: "card-title", "Results" }
+								h5 {
+									class: "text-xl font-bold",
+									"Results"
+								}
 								div {
-									class: "space-y-2",
-									{ View::fragment(choices.iter().map(|choice| {
-										let percentage = if *total > 0 {
-											(choice.votes as f64 / *total as f64 * 100.0) as i32
-										} else {
-											0
-										};
-										let choice_text = choice.choice_text.clone();
-										let votes = choice.votes;
-										page!(|choice_text: String, votes: i32, percentage: i32| {
-											div {
-												class: "p-3 border rounded",
-												div {
-													class: "flex justify-between items-center mb-2",
-													strong { { choice_text } }
-													span {
-														class: "badge-primary",
-														{ format!("{} votes", votes) }
-													}
-												}
-												div {
-													class: "w-full bg-gray-200 rounded",
-													div {
-														class: "bg-blue-500 text-white text-center rounded",
-														style: format!("width: {}%", percentage),
-														{ format!("{}%", percentage) }
-													}
-												}
-											}
-										})(choice_text, votes, percentage)
-									}).collect::<Vec<_>>(),) }
+									class: "divide-y divide-gray-200",
+									{
+										Page::Fragment(
+										        load_results_signal
+										            .result()
+										            .map(|(_, choices, total)| {
+										                choices
+										                    .iter()
+										                    .map(|choice| {
+										                        let percentage = if total > 0 {
+										                            (choice.votes as f64 / total as f64 * 100.0) as i32
+										                        } else {
+										                            0
+										                        };
+										                        let choice_text = choice.choice_text.clone();
+										                        let votes = choice.votes;
+										                        page!(
+										                            | choice_text : String, votes : i32, percentage : i32 | { div
+										                            { class : "py-4", div { class :
+										                            "flex justify-between items-center mb-2", strong { {
+										                            choice_text } } span { class :
+										                            "inline-flex items-center bg-brand rounded-full px-2.5 py-0.5 text-xs font-medium text-white",
+										                            { format!("{} votes", votes) } } } div { class :
+										                            "w-full bg-gray-200 rounded-full h-2.5", div { class :
+										                            "bg-brand h-2.5 rounded-full", role : "progressbar", style :
+										                            format!("width: {}%", percentage), aria_valuenow : percentage
+										                            .to_string(), aria_valuemin : "0", aria_valuemax : "100", {
+										                            format!("{}%", percentage) } } } } }
+										                        )(choice_text, votes, percentage)
+										                    })
+										                    .collect::<Vec<_>>()
+										            })
+										            .unwrap_or_default(),
+										    )
+									}
 								}
 								div {
 									class: "mt-3",
-									p { class: "text-gray-500", { format!("Total votes: {}", total) } }
+									p {
+										class: "text-gray-500",
+										{
+											format!(
+													"Total votes: {}",
+													load_results_signal
+														.result()
+														.map(|(_, _, total)| total)
+														.unwrap_or(0)
+												)
+										}
+									}
 								}
 							}
 						}
 						div {
 							class: "mt-3",
 							a {
-								href: format!("/polls/{}/", question.id),
+								href: format!("/polls/{}/", question_id),
 								class: "btn-primary",
 								"Vote Again"
 							}
-							a { href: "/", class: "btn-secondary ml-2", "Back to Polls" }
+							a {
+								href: "/",
+								class: "btn-secondary ml-2",
+								"Back to Polls"
+							}
 						}
 					}
 				} else {
 					div {
-						div { class: "alert-warning", "Question not found" }
-						a { href: "/", class: "btn-primary", "Back to Polls" }
+						class: "max-w-4xl mx-auto px-4 mt-12",
+						div {
+							class: "alert-warning",
+							"Question not found"
+						}
+						a {
+							href: "/",
+							class: "btn-primary",
+							"Back to Polls"
+						}
 					}
 				}
 			}
@@ -761,6 +1063,7 @@ pub fn polls_results(question_id: i64) -> View {
 - **`watch` blocks**: Reactive conditional rendering based on `Action` state
 - **`use_effect()`**: Side effects for bridging action results to form state
 - **`Action<T, E>`**: Reactive async action type with `is_pending()`, `result()`, `error()` methods
+- **`Page`**: Component type returned by `page!` macro (replaces `View`)
 
 ### Client-Side Routing
 
@@ -768,7 +1071,7 @@ Create `src/client/router.rs`:
 
 ```rust
 use crate::client::pages::{index_page, polls_detail_page, polls_results_page};
-use reinhardt::pages::component::View;
+use reinhardt::pages::component::Page;
 use reinhardt::pages::page;
 use reinhardt::pages::router::Router;
 use std::cell::RefCell;
@@ -823,7 +1126,7 @@ fn init_router() -> Router {
 		.not_found(|| error_page("Page not found"))
 }
 
-fn error_page(message: &str) -> View {
+fn error_page(message: &str) -> Page {
 	let message = message.to_string();
 	page!(|message: String| {
 		div {
@@ -845,17 +1148,17 @@ fn error_page(message: &str) -> View {
 Create `src/client/pages.rs`:
 
 ```rust
-use reinhardt::pages::component::View;
+use reinhardt::pages::component::Page;
 
-pub fn index_page() -> View {
+pub fn index_page() -> Page {
 	crate::client::components::polls::polls_index()
 }
 
-pub fn polls_detail_page(question_id: i64) -> View {
+pub fn polls_detail_page(question_id: i64) -> Page {
 	crate::client::components::polls::polls_detail(question_id)
 }
 
-pub fn polls_results_page(question_id: i64) -> View {
+pub fn polls_results_page(question_id: i64) -> Page {
 	crate::client::components::polls::polls_results(question_id)
 }
 ```

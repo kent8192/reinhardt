@@ -2,6 +2,7 @@
 //!
 //! This is the main entry point for the WASM application.
 
+use reinhardt::pages::PageExt;
 use reinhardt::pages::dom::Element;
 use wasm_bindgen::prelude::*;
 
@@ -9,7 +10,7 @@ use wasm_bindgen::prelude::*;
 use super::router;
 use crate::apps::auth::client::state;
 
-pub use router::{AppRoute, init_global_router, with_router};
+pub use router::{init_global_router, with_router};
 pub use state::{get_current_user, init_auth_state, is_authenticated, set_current_user};
 
 #[wasm_bindgen(start)]
@@ -50,10 +51,11 @@ pub fn main() -> Result<(), JsValue> {
 		}
 
 		// Render and mount the view (events are attached during mount)
-		let view = router.render_current();
-		if let Err(e) = view.mount(&root_element) {
-			web_sys::console::error_1(&format!("Failed to mount view: {:?}", e).into());
-			return;
+		if let Some(view) = router.render_current() {
+			if let Err(e) = view.mount(&root_element) {
+				web_sys::console::error_1(&format!("Failed to mount view: {:?}", e).into());
+				return;
+			}
 		}
 	});
 

@@ -6,6 +6,37 @@ This document explicitly lists common mistakes, anti-patterns, and practices to
 avoid in the Reinhardt project. Use this as a quick reference for code review
 and development.
 
+The following diagram provides a high-level overview of anti-pattern categories:
+
+```mermaid
+mindmap
+  root((Anti-Patterns))
+    Code Organization
+      mod.rs files
+      Glob imports
+      Circular dependencies
+      Deep relative paths
+    Code Style
+      Excessive .to_string
+      Obsolete code comments
+      Alternative TODO notations
+      Undocumented allow attrs
+    Testing
+      Skeleton tests
+      No Reinhardt components
+      Missing cleanup
+      Loose assertions
+    File Management
+      Save to project dir
+      Leave backup files
+    Workflow
+      Commit without auth
+      Monolithic commits
+    Documentation
+      Outdated docs
+      Planned features in README
+```
+
 ---
 
 ## Code Organization Anti-Patterns

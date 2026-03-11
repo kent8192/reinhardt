@@ -7,7 +7,7 @@
 use crate::apps::tweet::shared::types::TweetInfo;
 use crate::core::client::components::icons;
 use reinhardt::pages::Signal;
-use reinhardt::pages::component::View;
+use reinhardt::pages::component::Page;
 use reinhardt::pages::form;
 use reinhardt::pages::page;
 use reinhardt::pages::reactive::hooks::{Action, use_action, use_effect, use_state};
@@ -15,19 +15,19 @@ use uuid::Uuid;
 
 #[cfg(client)]
 use {
-	crate::apps::tweet::server::server_fn::{create_tweet, delete_tweet, list_tweets},
+	crate::apps::tweet::shared::server_fn::{create_tweet, delete_tweet, list_tweets},
 	reinhardt::pages::create_resource,
 	reinhardt::pages::reactive::ResourceState,
 };
 
 #[cfg(server)]
-use crate::apps::tweet::server::server_fn::{create_tweet, delete_tweet};
+use crate::apps::tweet::shared::server_fn::{create_tweet, delete_tweet};
 
 /// Like button component (extracted to avoid nested watch blocks)
 ///
 /// This function is separated from tweet_card to avoid nested watch block issues
 /// with closure ownership in the page! macro.
-fn like_button(liked: Signal<bool>, like_count: Signal<i32>) -> View {
+fn like_button(liked: Signal<bool>, like_count: Signal<i32>) -> Page {
 	// Clone signals for the watch block
 	let liked_signal = liked.clone();
 	let like_count_signal = like_count.clone();
@@ -101,31 +101,12 @@ fn like_button(liked: Signal<bool>, like_count: Signal<i32>) -> View {
 	)
 }
 
-/// Error display component (extracted to avoid nested watch blocks)
-///
-/// Displays an error message if present. This is separated to avoid
-/// nested watch block issues with closure ownership in page! macro.
-fn error_display(error_signal: Signal<Option<String>>) -> View {
-	let error_for_watch = error_signal.clone();
-
-	page!(|error_for_watch: Signal<Option<String>>| {
-		watch {
-			if error_for_watch.get().is_some() {
-				div {
-					class: "alert-danger mt-3",
-					{ error_for_watch.get().unwrap_or_default() }
-				}
-			}
-		}
-	})(error_for_watch)
-}
-
 /// Tweet card component using hooks
 ///
 /// Displays a single tweet with modern SNS design (Threads/Bluesky-inspired).
 /// Features avatar, username, handle, content, timestamp, and action buttons.
 /// Uses watch blocks for reactive UI updates when state changes.
-pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
+pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> Page {
 	let tweet_id = tweet.id;
 
 	// Hook-styled state management
@@ -148,7 +129,10 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 	// Clone delete_action for the click handler closure
 	let delete_action_for_click = delete_action.clone();
 
-	page!(|delete_action: Action<(), String>, show_delete: bool, username: String, content: String, created_at: String, tweet_id: Uuid, liked_signal: Signal<bool>, like_count_signal: Signal<i32>, delete_action_for_click: Action<(), String>| {
+	// Clone for error display watch block (separate closure from main watch block)
+	let delete_action_for_error = delete_action.clone();
+
+	page!(|delete_action: Action<(), String>, show_delete: bool, username: String, content: String, created_at: String, tweet_id: Uuid, liked_signal: Signal<bool>, like_count_signal: Signal<i32>, delete_action_for_click: Action<(), String>, delete_action_for_error: Action<(), String>| {
 		watch {
 			if delete_action.is_success() {
 				div {
@@ -246,14 +230,14 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 							}
 						}
 					}
-					watch {
-						if delete_action.error().is_some() {
-							div {
-								class: "alert-danger mt-3",
-								{ delete_action.error().unwrap_or_default() }
-							}
-						}
-					}
+				}
+			}
+		}
+		watch {
+			if delete_action_for_error.error().is_some() {
+				div {
+					class: "alert-danger mt-3",
+					{ delete_action_for_error.error().unwrap_or_default() }
 				}
 			}
 		}
@@ -267,6 +251,7 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 		liked_signal,
 		like_count_signal,
 		delete_action_for_click,
+		delete_action_for_error,
 	)
 }
 
@@ -282,7 +267,7 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 /// - `watch` block with match expressions: 4-level character counter styling
 /// - `state` block: Automatic loading/error signal management
 /// - `on_success` callback: Page reload after successful submission
-pub fn tweet_form() -> View {
+pub fn tweet_form() -> Page {
 	// Define the form using form! macro with derived signals
 	let tweet_form_instance = form! {
 		name: TweetFormInner,
@@ -385,10 +370,10 @@ pub fn tweet_form() -> View {
 
 	// Wrap form in the card layout
 	// Extract the form instance's view components for custom layout
-	let form_view = tweet_form_instance.into_view();
+	let form_view = tweet_form_instance.into_page();
 
 	// Create the full card layout
-	page!(|form_view: View| {
+	page!(|form_view: Page| {
 		div {
 			class: "card mb-4",
 			div {
@@ -417,7 +402,7 @@ pub fn tweet_form() -> View {
 /// Displays list of tweets with loading and error states.
 /// Uses React-like hooks for state management.
 /// Uses watch blocks for reactive UI updates when async data loads.
-pub fn tweet_list(user_id: Option<Uuid>) -> View {
+pub fn tweet_list(user_id: Option<Uuid>) -> Page {
 	// Data fetching with create_resource on client, initial loading state on server
 	let (tweets, _set_tweets) = use_state(Vec::<TweetInfo>::new());
 	let (loading, _set_loading) = use_state(true);
@@ -503,7 +488,7 @@ pub fn tweet_list(user_id: Option<Uuid>) -> View {
 					div {
 						class: "card overflow-hidden",
 						{
-							View::fragment(
+							Page::Fragment(
 									tweets_signal
 										.get()
 										.iter()

@@ -1,11 +1,6 @@
 //! DM server functions module
 //!
-//! This module contains server functions for direct messaging operations
-//! and WebSocket handlers for real-time message delivery.
-
-pub mod handlers;
-
-pub use handlers::DMHandler;
+//! This module contains server functions for direct messaging operations.
 
 use crate::apps::dm::shared::types::{MessageInfo, RoomInfo};
 use reinhardt::pages::server_fn::{ServerFnError, server_fn};

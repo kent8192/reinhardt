@@ -4,6 +4,7 @@
 //! These types are serializable and can be sent over the wire.
 
 pub mod pagination;
+pub mod server_fn;
 pub mod types;
 
 pub use pagination::*;

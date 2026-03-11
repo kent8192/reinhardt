@@ -8,7 +8,7 @@
 //! - Automatic redirect on success
 
 use crate::core::client::components::icons;
-use reinhardt::pages::component::View;
+use reinhardt::pages::component::Page;
 use reinhardt::pages::form;
 use reinhardt::pages::page;
 use reinhardt::pages::reactive::Signal;
@@ -16,7 +16,7 @@ use reinhardt::pages::reactive::Signal;
 #[cfg(client)]
 use {
 	crate::apps::auth::client::state::set_current_user,
-	crate::apps::auth::server::server_fn::{login, register},
+	crate::apps::auth::shared::server_fn::{login, register},
 };
 
 /// Login form component using form! macro
@@ -29,7 +29,7 @@ use {
 /// - Server function integration via `server_fn`
 /// - `on_success` callback for setting current user
 /// - `redirect_on_success` for navigation after login
-pub fn login_form() -> View {
+pub fn login_form() -> Page {
 	// Define form with state management and field definitions
 	let login_form = form! {
 		name: LoginForm,
@@ -96,10 +96,10 @@ pub fn login_form() -> View {
 	let error_signal = login_form.error().clone();
 
 	// Convert form! to View before passing to page!
-	let form_view = login_form.into_view();
+	let form_view = login_form.into_page();
 
 	// Render custom UI using page! macro
-	page!(|loading_signal: Signal<bool>, error_signal: Signal<Option<String>>, form_view: View| {
+	page!(|loading_signal: Signal<bool>, error_signal: Signal<Option<String>>, form_view: Page| {
 		div {
 			class: "min-h-screen flex items-center justify-center px-4 py-12 bg-surface-secondary",
 			div {
@@ -212,7 +212,7 @@ pub fn login_form() -> View {
 /// - SVG icons via `icon` property
 /// - Server function integration via `server_fn`
 /// - `redirect_on_success` for navigation after registration
-pub fn register_form() -> View {
+pub fn register_form() -> Page {
 	// Define form with state management and field definitions
 	let register_form = form! {
 		name: RegisterForm,
@@ -310,10 +310,10 @@ pub fn register_form() -> View {
 	let error_signal = register_form.error().clone();
 
 	// Convert form! to View before passing to page!
-	let form_view = register_form.into_view();
+	let form_view = register_form.into_page();
 
 	// Render custom UI using page! macro
-	page!(|loading_signal: Signal<bool>, error_signal: Signal<Option<String>>, form_view: View| {
+	page!(|loading_signal: Signal<bool>, error_signal: Signal<Option<String>>, form_view: Page| {
 		div {
 			class: "min-h-screen flex items-center justify-center px-4 py-12 bg-surface-secondary",
 			div {

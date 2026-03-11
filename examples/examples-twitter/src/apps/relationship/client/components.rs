@@ -5,13 +5,13 @@
 use crate::apps::auth::shared::types::UserInfo;
 use crate::core::client::components::icons;
 use reinhardt::pages::Signal;
-use reinhardt::pages::component::View;
+use reinhardt::pages::component::Page;
 use reinhardt::pages::page;
 use uuid::Uuid;
 
 #[cfg(client)]
 use {
-	crate::apps::relationship::server::server_fn::{
+	crate::apps::relationship::shared::server_fn::{
 		fetch_followers, fetch_following, follow_user, unfollow_user,
 	},
 	reinhardt::pages::create_resource,
@@ -33,7 +33,7 @@ pub enum UserListType {
 /// Provides a button to follow/unfollow a user with state management.
 /// Modern design with visual feedback for following state.
 /// Uses watch blocks for reactive UI updates when state changes.
-pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
+pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> Page {
 	let is_following = Signal::new(is_following_initial);
 
 	// Clone signal for passing to page! macro
@@ -65,14 +65,16 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 			});
 		}
 
-		page!(|is_following_signal: Signal<bool>, toggle_follow: Action<(), String>| {
+		let toggle_follow_for_error = toggle_follow.clone();
+
+		page!(|is_following_signal: Signal<bool>, toggle_follow: Action<(), String>, toggle_follow_for_error: Action<(), String>| {
 			div {
 				watch {
 					if toggle_follow.is_pending() {
 						button {
 							type: "button",
 							class: "btn-secondary opacity-50 cursor-not-allowed",
-							disabled: true,
+							disabled: { true },
 							aria_label: "Loading",
 							@click: {
 										let toggle_follow = toggle_follow.clone();
@@ -124,15 +126,19 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 					}
 				}
 				watch {
-					if toggle_follow.error().is_some() {
+					if toggle_follow_for_error.error().is_some() {
 						div {
 							class: "alert-danger mt-2 text-sm",
-							{ toggle_follow.error().unwrap_or_default() }
+							{ toggle_follow_for_error.error().unwrap_or_default() }
 						}
 					}
 				}
 			}
-		})(is_following_signal, toggle_follow)
+		})(
+			is_following_signal,
+			toggle_follow,
+			toggle_follow_for_error,
+		)
 	}
 
 	#[cfg(server)]
@@ -165,7 +171,7 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 ///
 /// Displays a single user in a list with modern SNS design.
 /// Features avatar, username, and profile link.
-fn user_card(user: &UserInfo) -> View {
+fn user_card(user: &UserInfo) -> Page {
 	let username = user.username.clone();
 	let display_username = format!("@{}", user.username);
 	let email = user.email.clone();
@@ -216,7 +222,7 @@ fn user_card(user: &UserInfo) -> View {
 /// Displays a list of users (followers or following) with loading and error states.
 /// Modern card-based design with smooth animations.
 /// Uses watch blocks for reactive UI updates when async data loads.
-pub fn user_list(user_id: Uuid, list_type: UserListType) -> View {
+pub fn user_list(user_id: Uuid, list_type: UserListType) -> Page {
 	let users = Signal::new(Vec::<UserInfo>::new());
 	let loading = Signal::new(true);
 	let error = Signal::new(None::<String>);
@@ -342,7 +348,7 @@ pub fn user_list(user_id: Uuid, list_type: UserListType) -> View {
 					div {
 						class: "card overflow-hidden",
 						{
-							View::fragment(
+							Page::Fragment(
 									users_signal
 										.get()
 										.iter()

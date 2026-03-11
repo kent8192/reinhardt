@@ -1,8 +1,6 @@
 //! Auth server module
 //!
-//! Contains server-side authentication functions.
-//! This module is only compiled for non-WebAssembly targets.
+//! Re-exports server functions from the shared module for backward compatibility.
+//! The actual implementations live in `shared::server_fn` to ensure WASM compatibility.
 
-pub mod server_fn;
-
-pub use server_fn::*;
+pub use crate::apps::auth::shared::server_fn;

@@ -49,6 +49,26 @@ During the RC phase, a `develop/0.x+1.0` branch exists for next-version developm
 - **After stable release**: Merging the develop branch into `main` introduces new features and breaking changes. release-plz detects these changes on the next push and generates Release PRs for the new version cycle (e.g., `0.2.0-alpha.1`).
 - **No manual version management**: `Cargo.toml` versions in the develop branch do not need manual updates. release-plz handles versioning after the branch is merged into `main`.
 
+The following diagram illustrates the develop branch lifecycle and its interaction with the release workflow:
+
+```mermaid
+gitGraph
+    commit id: "v0.1.0-rc.1"
+    branch "develop/0.2.0"
+    commit id: "feat: breaking change"
+    checkout main
+    commit id: "fix: rc bug" tag: "v0.1.0-rc.2"
+    checkout "develop/0.2.0"
+    merge main id: "forward-merge"
+    commit id: "feat: new feature"
+    checkout main
+    commit id: "stable" tag: "v0.1.0"
+    checkout "develop/0.2.0"
+    merge main id: "final forward-merge"
+    checkout main
+    merge "develop/0.2.0" id: "merge develop into main"
+```
+
 ---
 
 ## How release-plz Works
@@ -167,6 +187,16 @@ Upon merge, release-plz:
 - Already-published crate versions are skipped automatically (no errors on retry)
 - Only publishable crates are processed (respects `publish = false` in Cargo.toml)
 - Workspace dependencies are published in the correct order
+
+The following diagram summarizes the 5-step release workflow:
+
+```mermaid
+flowchart LR
+    A["1. Write conventional commits<br/>(Developer)"] --> B["2. Push to main<br/>(Developer)"]
+    B --> C["3. Create Release PR<br/>(release-plz)"]
+    C --> D["4. Review and Merge PR<br/>(Developer)"]
+    D --> E["5. Publish to crates.io<br/>+ create tags<br/>(release-plz)"]
+```
 
 ---
 
@@ -288,6 +318,18 @@ The `reinhardt-test` crate is published on crates.io and its workspace dependenc
 ---
 
 ## Known Issues & Pitfalls
+
+The following diagram provides a decision tree for diagnosing release and publish failures:
+
+```mermaid
+flowchart TD
+    A[Release/Publish failed] --> B{Error type?}
+    B -->|Circular dependency| C["RP-2: Fix dependency chain<br/>Use optional deps for reinhardt-test"]
+    B -->|Dev-dependency resolution| D["KI-2: Choose strategy<br/>optional dep / path-only / separate testkit"]
+    B -->|Partial failure| E["RP-1: Identify published/unpublished<br/>rollback unpublished versions<br/>new Release PR and merge"]
+    B -->|gix cache panic| F["RP-3: Re-run release-plz<br/>(transient error)"]
+    B -->|Phantom version bump| G["KI-5: Set release_always = true"]
+```
 
 ### KI-1: Circular Publish Dependencies
 

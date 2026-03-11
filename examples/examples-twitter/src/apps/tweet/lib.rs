@@ -1,6 +1,8 @@
 //! Tweet application module
 
+#[cfg(server)]
 pub mod admin;
+#[cfg(server)]
 pub mod models;
 pub mod shared;
 pub mod urls;

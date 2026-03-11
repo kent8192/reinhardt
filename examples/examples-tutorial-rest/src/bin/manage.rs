@@ -6,6 +6,10 @@ use reinhardt::commands::execute_from_command_line;
 use reinhardt::core::tokio;
 use std::process;
 
+// Import the lib crate to ensure inventory registrations (e.g., #[routes]) are linked into the binary.
+// Without this, inventory::iter will not find any registered URL patterns.
+use examples_tutorial_rest as _;
+
 #[tokio::main]
 async fn main() {
 	// Set settings module environment variable

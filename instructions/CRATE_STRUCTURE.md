@@ -150,6 +150,17 @@ Users enable functionality through feature flags in `Cargo.toml`:
 reinhardt = { version = "0.1.0-alpha.1", features = ["db-postgres", "orm", "migrations"] }
 ```
 
+The following diagram summarizes how to choose the right feature set:
+
+```mermaid
+flowchart TD
+    A[Choose feature set] --> B{What do you need?}
+    B -->|"Core + DI + Server only"| C["minimal"]
+    B -->|"Standard web app<br/>(DB, REST, auth, middleware)"| D["standard"]
+    B -->|"Everything included"| E["full"]
+    B -->|"Specific components"| F["Fine-grained control<br/>Enable individual features"]
+```
+
 ### Common Feature Flag Patterns
 
 #### Minimal Setup

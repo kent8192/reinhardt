@@ -182,6 +182,20 @@ When using `render_page_with_view_head()`, the View's head is **additive** to an
 3. **CSS links**: Both sources are included
 4. **Scripts**: Both sources are included
 
+The following diagram illustrates how head elements from different sources are merged:
+
+```mermaid
+flowchart TD
+    A["SsrOptions head elements"] --> C[Merge into final head]
+    B["View head! macro elements"] --> C
+    C --> D{Title conflict?}
+    D -->|Both exist| E["View title wins"]
+    D -->|Only one| F["Use available title"]
+    C --> G["Meta tags: both included"]
+    C --> H["CSS links: both included"]
+    C --> I["Scripts: both included"]
+```
+
 This allows gradual migration without breaking existing functionality.
 
 ## Using resolve_static()
@@ -275,6 +289,21 @@ let options = SsrOptions::new()
 ```
 
 However, we recommend completing the migration before the 0.3.0 release.
+
+## Migration Timeline
+
+The following diagram shows the planned migration timeline for the head macro transition:
+
+```mermaid
+timeline
+    title Head Macro Migration Timeline
+    Phase 1 : Deprecation warnings added
+            : Old API still functional
+    Phase 2 : Migration period
+            : Both old and new API work
+    Phase 3 : Old API removed
+            : Only new head! macro
+```
 
 ## Need Help?
 

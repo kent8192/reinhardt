@@ -8,6 +8,21 @@ This file defines strategic principles for handling multiple issues efficiently.
 
 ## Handling Approach
 
+The following diagram summarizes the batch issue processing workflow:
+
+```mermaid
+flowchart TD
+    A[Multiple issues to handle] --> B["HA-1: Group by fix pattern"]
+    B --> C["HA-2: Divide into phases by severity"]
+    C --> D["WU-3: Identify cross-crate dependencies"]
+    D --> E{Shared utilities needed?}
+    E -->|Yes| F["Create preceding PR for shared changes"]
+    F --> G["Merge preceding PR first"]
+    E -->|No| G
+    G --> H["HA-3: Parallelize independent crate work<br/>via Agent Teams"]
+    H --> I["WU-1: 1 PR = 1 crate x 1 fix pattern"]
+```
+
 ### HA-1 (SHOULD): Fix Pattern Batch Processing
 
 Group issues by fix pattern (the technique or approach used to resolve them) and process them as a batch.
@@ -158,6 +173,17 @@ Step 2 (parallel, after Step 1 merge):
 - Preceding PRs SHOULD be minimal — only the shared code needed
 - Per-crate PRs MUST reference the preceding PR in their description
 - Never duplicate shared logic across crate-specific PRs
+
+The following diagram illustrates the WU-3 dependency structure between preceding and per-crate PRs:
+
+```mermaid
+flowchart TD
+    P["Preceding PR:<br/>shared utilities / cross-crate changes"] --> |merge first| A["PR: crate-A fix"]
+    P --> |merge first| B["PR: crate-B fix"]
+    P --> |merge first| C["PR: crate-C fix"]
+    A -.-> |parallel| B
+    B -.-> |parallel| C
+```
 
 ---
 

@@ -243,6 +243,17 @@ fn test_redirect_status_code() {
 }
 ```
 
+The following diagram summarizes the test classification decision tree:
+
+```mermaid
+flowchart TD
+    A[New test to write] --> B{How many Reinhardt crates involved?}
+    B -->|"2+ crates"| C["Cross-crate integration test<br/>Location: tests/ at repo root"]
+    B -->|"1 crate"| D{How many distinct components tested?}
+    D -->|"1 component"| E["Unit test<br/>Location: inline #[cfg(test)] or crates/reinhardt-~/tests/"]
+    D -->|"2+ components"| F["Within-crate integration test<br/>Location: crates/reinhardt-~/tests/"]
+```
+
 ---
 
 ## Test Implementation
@@ -659,6 +670,14 @@ All tests SHOULD follow the **Arrange-Act-Assert (AAA)** pattern for clear, cons
 | **Arrange** | Set up test preconditions and inputs | Given |
 | **Act** | Execute the behavior under test | When |
 | **Assert** | Verify the expected outcomes | Then |
+
+The following diagram illustrates the AAA pattern flow:
+
+```mermaid
+flowchart LR
+    A["// Arrange<br/>Set up test data,<br/>fixtures, preconditions"] --> B["// Act<br/>Execute the function<br/>or method under test"]
+    B --> C["// Assert<br/>Verify expected outcomes<br/>with strict assertions"]
+```
 
 **Comment Labels:**
 

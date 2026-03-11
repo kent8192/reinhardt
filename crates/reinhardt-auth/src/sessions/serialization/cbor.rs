@@ -88,6 +88,7 @@ impl Serializer for CborSerializer {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 
 	#[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -168,5 +169,22 @@ mod tests {
 		let bytes_none = serializer.serialize(&data_none).unwrap();
 		let restored_none: WithOption = serializer.deserialize(&bytes_none).unwrap();
 		assert_eq!(data_none, restored_none);
+	}
+
+	#[rstest]
+	#[test]
+	fn test_empty_data_roundtrip() {
+		// Arrange
+		let serializer = CborSerializer;
+		let data: std::collections::HashMap<String, serde_json::Value> =
+			std::collections::HashMap::new();
+
+		// Act
+		let bytes = serializer.serialize(&data).unwrap();
+		let restored: std::collections::HashMap<String, serde_json::Value> =
+			serializer.deserialize(&bytes).unwrap();
+
+		// Assert
+		assert_eq!(restored, data);
 	}
 }

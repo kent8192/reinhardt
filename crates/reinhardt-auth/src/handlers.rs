@@ -206,6 +206,7 @@ mod tests {
 	use crate::session::InMemorySessionStore;
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method};
+	use rstest::rstest;
 	use uuid::Uuid;
 
 	struct TestAuthBackend {
@@ -237,6 +238,7 @@ mod tests {
 		}
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_login_handler_success() {
 		let session_store = Arc::new(InMemorySessionStore::new());
@@ -278,6 +280,7 @@ mod tests {
 		);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_login_handler_failure() {
 		let session_store = Arc::new(InMemorySessionStore::new());
@@ -298,6 +301,7 @@ mod tests {
 		);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_logout_handler() {
 		let session_store = Arc::new(InMemorySessionStore::new());
@@ -331,6 +335,7 @@ mod tests {
 		assert!(session_store.load(&session_id).await.is_none());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_logout_handler_no_session() {
 		let session_store = Arc::new(InMemorySessionStore::new());
@@ -345,5 +350,199 @@ mod tests {
 
 		let response = handler.handle(request).await.unwrap();
 		assert_eq!(response.status, reinhardt_http::Response::ok().status);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_login_handler_session_contains_user_id() {
+		// Arrange
+		let session_store = Arc::new(InMemorySessionStore::new());
+		let user_id = Uuid::new_v4();
+		let test_user = SimpleUser {
+			id: user_id,
+			username: "session_user".to_string(),
+			email: "session@example.com".to_string(),
+			is_active: true,
+			is_admin: false,
+			is_staff: false,
+			is_superuser: false,
+		};
+		let auth_backend = Arc::new(TestAuthBackend {
+			test_user: Some(test_user),
+		});
+		let handler = LoginHandler::new(session_store.clone(), auth_backend);
+
+		let request = Request::builder()
+			.method(Method::POST)
+			.uri("/login")
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = handler.handle(request).await.unwrap();
+
+		// Assert - extract session ID from Set-Cookie header
+		let cookie_value = response
+			.headers
+			.get("set-cookie")
+			.unwrap()
+			.to_str()
+			.unwrap();
+		let session_id: String = cookie_value
+			.split(';')
+			.next()
+			.unwrap()
+			.split('=')
+			.nth(1)
+			.unwrap()
+			.to_string();
+
+		let session = session_store.load(&session_id).await.unwrap();
+		let stored_user_id = session.get(SESSION_KEY_USER_ID).unwrap();
+		assert_eq!(stored_user_id, &serde_json::json!(user_id.to_string()));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_login_handler_cookie_attributes() {
+		// Arrange
+		let session_store = Arc::new(InMemorySessionStore::new());
+		let test_user = SimpleUser {
+			id: Uuid::new_v4(),
+			username: "cookie_user".to_string(),
+			email: "cookie@example.com".to_string(),
+			is_active: true,
+			is_admin: false,
+			is_staff: false,
+			is_superuser: false,
+		};
+		let auth_backend = Arc::new(TestAuthBackend {
+			test_user: Some(test_user),
+		});
+		let handler = LoginHandler::new(session_store, auth_backend);
+
+		let request = Request::builder()
+			.method(Method::POST)
+			.uri("/login")
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = handler.handle(request).await.unwrap();
+
+		// Assert
+		let cookie_value = response
+			.headers
+			.get("set-cookie")
+			.unwrap()
+			.to_str()
+			.unwrap();
+		assert!(
+			cookie_value.contains("HttpOnly"),
+			"Cookie must include HttpOnly flag"
+		);
+		assert!(
+			cookie_value.contains("Secure"),
+			"Cookie must include Secure flag"
+		);
+		assert!(
+			cookie_value.contains("SameSite=Lax"),
+			"Cookie must include SameSite=Lax"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_logout_handler_clears_session_cookie() {
+		// Arrange
+		let session_store = Arc::new(InMemorySessionStore::new());
+		let handler = LogoutHandler::new(session_store);
+
+		let request = Request::builder()
+			.method(Method::POST)
+			.uri("/logout")
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = handler.handle(request).await.unwrap();
+
+		// Assert
+		let cookie_value = response
+			.headers
+			.get("set-cookie")
+			.unwrap()
+			.to_str()
+			.unwrap();
+		assert!(
+			cookie_value.contains("Max-Age=0"),
+			"Logout cookie must set Max-Age=0 to clear the session"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_login_handler_response_body_structure() {
+		// Arrange
+		let session_store = Arc::new(InMemorySessionStore::new());
+		let test_user = SimpleUser {
+			id: Uuid::new_v4(),
+			username: "body_user".to_string(),
+			email: "body@example.com".to_string(),
+			is_active: true,
+			is_admin: false,
+			is_staff: false,
+			is_superuser: false,
+		};
+		let auth_backend = Arc::new(TestAuthBackend {
+			test_user: Some(test_user),
+		});
+		let handler = LoginHandler::new(session_store, auth_backend);
+
+		let request = Request::builder()
+			.method(Method::POST)
+			.uri("/login")
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = handler.handle(request).await.unwrap();
+
+		// Assert - response body should contain success and message fields
+		let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+		assert_eq!(body["success"], true);
+		assert_eq!(body["message"], "Login successful");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_login_handler_inactive_user_rejected() {
+		// Arrange - auth backend returns no user (simulating inactive user rejection)
+		let session_store = Arc::new(InMemorySessionStore::new());
+		let auth_backend = Arc::new(TestAuthBackend { test_user: None });
+		let handler = LoginHandler::new(session_store, auth_backend);
+
+		let request = Request::builder()
+			.method(Method::POST)
+			.uri("/login")
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = handler.handle(request).await.unwrap();
+
+		// Assert
+		assert_eq!(
+			response.status,
+			reinhardt_http::Response::unauthorized().status
+		);
+		let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+		assert_eq!(body["success"], false);
+		assert_eq!(body["message"], "Invalid credentials");
 	}
 }

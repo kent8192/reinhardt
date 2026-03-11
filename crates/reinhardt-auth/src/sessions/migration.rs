@@ -347,7 +347,10 @@ where
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::sessions::backends::InMemorySessionBackend;
+	use rstest::rstest;
 
+	#[rstest]
 	#[test]
 	fn test_migration_result_new() {
 		let result = MigrationResult::new();
@@ -357,6 +360,7 @@ mod tests {
 		assert!(result.errors.is_empty());
 	}
 
+	#[rstest]
 	#[test]
 	fn test_migration_result_is_successful() {
 		let mut result = MigrationResult::new();
@@ -368,6 +372,7 @@ mod tests {
 		assert!(!result.is_successful());
 	}
 
+	#[rstest]
 	#[test]
 	fn test_migration_result_success_rate() {
 		let mut result = MigrationResult::new();
@@ -378,17 +383,166 @@ mod tests {
 		assert_eq!(result.success_rate(), 95.0);
 	}
 
+	#[rstest]
 	#[test]
 	fn test_migration_result_success_rate_zero_total() {
 		let result = MigrationResult::new();
 		assert_eq!(result.success_rate(), 0.0);
 	}
 
+	#[rstest]
 	#[test]
 	fn test_migration_config_default() {
 		let config = MigrationConfig::default();
 		assert_eq!(config.batch_size, 1000);
 		assert!(!config.skip_existing);
 		assert!(!config.verify_migration);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_migrate_empty_source() {
+		// Arrange
+		let source = InMemorySessionBackend::new();
+		let target = InMemorySessionBackend::new();
+		let migrator = SessionMigrator::new(source, target);
+
+		// Act
+		let result = migrator.migrate().await.unwrap();
+
+		// Assert
+		assert_eq!(result.total, 0);
+		assert_eq!(result.migrated, 0);
+		assert_eq!(result.failed, 0);
+		assert!(result.errors.is_empty());
+		assert!(result.is_successful());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_migrate_multiple_sessions() {
+		// Arrange
+		let source = InMemorySessionBackend::new();
+		let target = InMemorySessionBackend::new();
+
+		let data1: HashMap<String, serde_json::Value> =
+			[("user".into(), serde_json::json!("alice"))].into();
+		let data2: HashMap<String, serde_json::Value> =
+			[("user".into(), serde_json::json!("bob"))].into();
+		let data3: HashMap<String, serde_json::Value> =
+			[("user".into(), serde_json::json!("carol"))].into();
+
+		source.save("key1", &data1, None).await.unwrap();
+		source.save("key2", &data2, None).await.unwrap();
+		source.save("key3", &data3, None).await.unwrap();
+
+		let migrator = SessionMigrator::new(source, target.clone());
+
+		// Act
+		let result = migrator.migrate().await.unwrap();
+
+		// Assert
+		assert_eq!(result.total, 3);
+		assert_eq!(result.migrated, 3);
+		assert_eq!(result.failed, 0);
+		assert!(target.exists("key1").await.unwrap());
+		assert!(target.exists("key2").await.unwrap());
+		assert!(target.exists("key3").await.unwrap());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_migrate_skip_existing_preserves_target() {
+		// Arrange
+		let source = InMemorySessionBackend::new();
+		let target = InMemorySessionBackend::new();
+
+		let source_data: HashMap<String, serde_json::Value> =
+			[("origin".into(), serde_json::json!("source_data"))].into();
+		let target_data: HashMap<String, serde_json::Value> =
+			[("origin".into(), serde_json::json!("target_data"))].into();
+
+		source.save("key1", &source_data, None).await.unwrap();
+		target.save("key1", &target_data, None).await.unwrap();
+
+		let config = MigrationConfig {
+			batch_size: 1000,
+			skip_existing: true,
+			verify_migration: false,
+		};
+		let migrator = SessionMigrator::with_config(source, target.clone(), config);
+
+		// Act
+		let result = migrator.migrate().await.unwrap();
+
+		// Assert
+		assert_eq!(result.total, 1);
+		// The session was skipped, so migrated count should be 0
+		assert_eq!(result.migrated, 0);
+		let loaded: Option<HashMap<String, serde_json::Value>> = target.load("key1").await.unwrap();
+		assert_eq!(loaded.unwrap()["origin"], serde_json::json!("target_data"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_migrate_with_verification_reads_back() {
+		// Arrange
+		let source = InMemorySessionBackend::new();
+		let target = InMemorySessionBackend::new();
+
+		let data1: HashMap<String, serde_json::Value> =
+			[("val".into(), serde_json::json!(1))].into();
+		let data2: HashMap<String, serde_json::Value> =
+			[("val".into(), serde_json::json!(2))].into();
+
+		source.save("sess_a", &data1, None).await.unwrap();
+		source.save("sess_b", &data2, None).await.unwrap();
+
+		let config = MigrationConfig {
+			batch_size: 1000,
+			skip_existing: false,
+			verify_migration: true,
+		};
+		let migrator = SessionMigrator::with_config(source, target.clone(), config);
+
+		// Act
+		let result = migrator.migrate().await.unwrap();
+
+		// Assert
+		// With verification enabled, migrated count reflects verified sessions
+		assert_eq!(result.total, 2);
+		assert_eq!(result.migrated, 2);
+		assert_eq!(result.failed, 0);
+		assert!(result.is_successful());
+		// Verify data actually exists in target
+		assert!(target.exists("sess_a").await.unwrap());
+		assert!(target.exists("sess_b").await.unwrap());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_dry_run_returns_count_without_migrating() {
+		// Arrange
+		let source = InMemorySessionBackend::new();
+		let target = InMemorySessionBackend::new();
+
+		let data: HashMap<String, serde_json::Value> =
+			[("key".into(), serde_json::json!("value"))].into();
+
+		source.save("dry1", &data, None).await.unwrap();
+		source.save("dry2", &data, None).await.unwrap();
+		source.save("dry3", &data, None).await.unwrap();
+
+		let migrator = SessionMigrator::new(source, target.clone());
+
+		// Act
+		let count = migrator.dry_run().await.unwrap();
+
+		// Assert
+		assert_eq!(count, 3);
+		// Target must remain empty after dry run
+		assert!(!target.exists("dry1").await.unwrap());
+		assert!(!target.exists("dry2").await.unwrap());
+		assert!(!target.exists("dry3").await.unwrap());
 	}
 }

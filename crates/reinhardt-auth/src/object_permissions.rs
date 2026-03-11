@@ -349,6 +349,7 @@ mod tests {
 	use bytes::Bytes;
 	use hyper::Method;
 	use reinhardt_http::Request;
+	use rstest::rstest;
 	use uuid::Uuid;
 
 	#[tokio::test]
@@ -607,5 +608,84 @@ mod tests {
 		};
 
 		assert!(!perm.has_permission(&context).await);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_bulk_check_multiple_objects() {
+		// Arrange
+		let mut manager = ObjectPermissionManager::new();
+		manager.grant_permission("alice", "article:1", "view").await;
+		manager
+			.grant_permission("alice", "article:2", "change")
+			.await;
+		// article:3 has no permissions granted for alice
+
+		let user = SimpleUser {
+			id: Uuid::new_v4(),
+			username: "alice".to_string(),
+			email: "alice@example.com".to_string(),
+			is_active: true,
+			is_admin: false,
+			is_staff: false,
+			is_superuser: false,
+		};
+
+		// Act
+		let result_obj1 = manager
+			.has_object_permission(&user, "article:1", "view")
+			.await;
+		let result_obj2 = manager
+			.has_object_permission(&user, "article:2", "change")
+			.await;
+		let result_obj3 = manager
+			.has_object_permission(&user, "article:3", "view")
+			.await;
+
+		// Assert
+		assert!(result_obj1);
+		assert!(result_obj2);
+		assert!(!result_obj3);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_different_users_same_object() {
+		// Arrange
+		let mut manager = ObjectPermissionManager::new();
+		manager
+			.grant_permission("alice", "article:42", "view")
+			.await;
+
+		let user_a = SimpleUser {
+			id: Uuid::new_v4(),
+			username: "alice".to_string(),
+			email: "alice@example.com".to_string(),
+			is_active: true,
+			is_admin: false,
+			is_staff: false,
+			is_superuser: false,
+		};
+		let user_b = SimpleUser {
+			id: Uuid::new_v4(),
+			username: "bob".to_string(),
+			email: "bob@example.com".to_string(),
+			is_active: true,
+			is_admin: false,
+			is_staff: false,
+			is_superuser: false,
+		};
+
+		// Act
+		let result_a = manager
+			.has_object_permission(&user_a, "article:42", "view")
+			.await;
+		let result_b = manager
+			.has_object_permission(&user_b, "article:42", "view")
+			.await;
+
+		// Assert
+		assert!(result_a);
+		assert!(!result_b);
 	}
 }

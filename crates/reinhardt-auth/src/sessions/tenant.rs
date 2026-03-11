@@ -395,7 +395,9 @@ where
 mod tests {
 	use super::*;
 	use crate::sessions::InMemorySessionBackend;
+	use rstest::rstest;
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_session_save_load() {
 		let backend = InMemorySessionBackend::new();
@@ -413,6 +415,7 @@ mod tests {
 		assert_eq!(loaded.unwrap(), data);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_session_isolation() {
 		let backend = InMemorySessionBackend::new();
@@ -444,6 +447,7 @@ mod tests {
 		assert_eq!(loaded2.unwrap(), data2);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_session_delete() {
 		let backend = InMemorySessionBackend::new();
@@ -462,6 +466,7 @@ mod tests {
 		assert!(!tenant_backend.exists("session_abc").await.unwrap());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_make_key() {
 		let backend = InMemorySessionBackend::new();
@@ -472,6 +477,7 @@ mod tests {
 		assert_eq!(key, "tenant:tenant_123:session:session_abc");
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_is_tenant_key() {
 		let backend = InMemorySessionBackend::new();
@@ -483,6 +489,7 @@ mod tests {
 		assert!(!tenant_backend.is_tenant_key("other:prefix:abc"));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_extract_session_id() {
 		let backend = InMemorySessionBackend::new();
@@ -496,6 +503,7 @@ mod tests {
 		assert_eq!(invalid, None);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_config_with_prefix() {
 		let config = TenantConfig::with_prefix("app:t:{tenant_id}:s:");
@@ -507,6 +515,7 @@ mod tests {
 		assert_eq!(key, "app:t:tenant_123:s:session_abc");
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_config_with_max_sessions() {
 		let config = TenantConfig::default().with_max_sessions(1);
@@ -532,6 +541,7 @@ mod tests {
 		}
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_config_with_strict_isolation() {
 		let config = TenantConfig::default().with_strict_isolation(true);
@@ -542,6 +552,7 @@ mod tests {
 		assert!(tenant_backend.config.strict_isolation);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_getters() {
 		let backend = InMemorySessionBackend::new();
@@ -558,6 +569,7 @@ mod tests {
 		);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_tenant_count_sessions() {
 		let backend = InMemorySessionBackend::new();
@@ -567,5 +579,103 @@ mod tests {
 		// count_sessions returns 0 when no sessions exist
 		let count = tenant_backend.count_sessions().await.unwrap();
 		assert_eq!(count, 0);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_tenant_list_sessions_returns_all() {
+		// Arrange
+		let backend = InMemorySessionBackend::new();
+		let tenant_backend =
+			TenantSessionBackend::new(backend, "tenant_a".to_string(), TenantConfig::default());
+		let data = serde_json::json!({"key": "value"});
+
+		tenant_backend.save("sess_1", &data, None).await.unwrap();
+		tenant_backend.save("sess_2", &data, None).await.unwrap();
+		tenant_backend.save("sess_3", &data, None).await.unwrap();
+
+		// Act
+		let sessions = tenant_backend.list_sessions().await.unwrap();
+
+		// Assert
+		assert_eq!(sessions.len(), 3);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_tenant_delete_all_sessions() {
+		// Arrange
+		let backend = InMemorySessionBackend::new();
+		let tenant_backend =
+			TenantSessionBackend::new(backend, "tenant_a".to_string(), TenantConfig::default());
+		let data = serde_json::json!({"key": "value"});
+
+		tenant_backend.save("sess_1", &data, None).await.unwrap();
+		tenant_backend.save("sess_2", &data, None).await.unwrap();
+		tenant_backend.save("sess_3", &data, None).await.unwrap();
+
+		// Act
+		let deleted = tenant_backend.delete_all_sessions().await.unwrap();
+
+		// Assert
+		assert_eq!(deleted, 3);
+		let remaining = tenant_backend.list_sessions().await.unwrap();
+		assert_eq!(remaining.len(), 0);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_two_tenants_independent_counts() {
+		// Arrange
+		let backend = InMemorySessionBackend::new();
+		let tenant_a = TenantSessionBackend::new(
+			backend.clone(),
+			"tenant_a".to_string(),
+			TenantConfig::default(),
+		);
+		let tenant_b = TenantSessionBackend::new(
+			backend.clone(),
+			"tenant_b".to_string(),
+			TenantConfig::default(),
+		);
+		let data = serde_json::json!({"key": "value"});
+
+		tenant_a.save("sess_1", &data, None).await.unwrap();
+		tenant_a.save("sess_2", &data, None).await.unwrap();
+
+		tenant_b.save("sess_1", &data, None).await.unwrap();
+		tenant_b.save("sess_2", &data, None).await.unwrap();
+		tenant_b.save("sess_3", &data, None).await.unwrap();
+
+		// Act
+		let count_a = tenant_a.count_sessions().await.unwrap();
+		let count_b = tenant_b.count_sessions().await.unwrap();
+
+		// Assert
+		assert_eq!(count_a, 2);
+		assert_eq!(count_b, 3);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_tenant_max_sessions_after_delete() {
+		// Arrange
+		let config = TenantConfig::default().with_max_sessions(3);
+		let backend = InMemorySessionBackend::new();
+		let tenant_backend = TenantSessionBackend::new(backend, "tenant_a".to_string(), config);
+		let data = serde_json::json!({"key": "value"});
+
+		tenant_backend.save("sess_1", &data, None).await.unwrap();
+		tenant_backend.save("sess_2", &data, None).await.unwrap();
+		tenant_backend.save("sess_3", &data, None).await.unwrap();
+
+		// Act
+		tenant_backend.delete("sess_2").await.unwrap();
+		let result = tenant_backend.save("sess_4", &data, None).await;
+
+		// Assert
+		assert!(result.is_ok());
+		let count = tenant_backend.count_sessions().await.unwrap();
+		assert_eq!(count, 3);
 	}
 }

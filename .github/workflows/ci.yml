@@ -379,7 +379,6 @@ jobs:
             "semver-check:${{ needs.semver-check.result }}"
             "docs-rs-check:${{ needs.docs-rs-check.result }}"
             "cross-platform-check:${{ needs.cross-platform-check.result }}"
-            "msrv-test:${{ needs.msrv-test.result }}"
           )
           for entry in "${always_required[@]}"; do
             name="${entry%%:*}"
@@ -398,6 +397,7 @@ jobs:
             "doc-test:${{ needs.doc-test.result }}"
             "ui-test:${{ needs.ui-test.result }}"
             "terraform-check:${{ needs.terraform-check.result }}"
+            "msrv-test:${{ needs.msrv-test.result }}"
           )
           for entry in "${selectively_skippable[@]}"; do
             name="${entry%%:*}"

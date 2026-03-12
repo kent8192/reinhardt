@@ -173,6 +173,7 @@ full = [
   "reinhardt-middleware/full",
   "reinhardt-graphql/full",
   "dentdelion",
+  "client-router",
 ]
 
 # API-only preset - REST without templates/forms

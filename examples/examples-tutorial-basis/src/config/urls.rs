@@ -2,9 +2,9 @@
 //!
 //! The `routes` function defines all URL patterns for this project.
 
-use reinhardt::prelude::*;
 #[cfg(server)]
 use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::prelude::*;
 #[cfg(server)]
 use reinhardt::routes;
 

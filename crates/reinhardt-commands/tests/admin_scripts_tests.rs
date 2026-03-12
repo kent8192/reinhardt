@@ -440,7 +440,7 @@ async fn test_startapp_creates_app_structure() {
 	assert!(result.is_ok(), "StartApp command failed: {:?}", result);
 
 	// Verify app directory was created in src/apps/ (default module mode)
-	assert!(env.file_exists(&format!("src/apps/{}/lib.rs", app_name)));
+	assert!(env.file_exists(&format!("src/apps/{}.rs", app_name)));
 }
 
 #[serial]
@@ -668,7 +668,7 @@ async fn test_startapp_template() {
 
 	if result.is_ok() {
 		// Custom template should be used (default module mode creates in src/apps/)
-		assert!(env.file_exists("src/apps/myapp/lib.rs") || env.file_exists("myapp/lib.rs"));
+		assert!(env.file_exists("src/apps/myapp.rs"));
 	}
 }
 
@@ -985,7 +985,7 @@ async fn test_full_project_and_app_workflow() {
 	match app_result {
 		Ok(_) => {
 			// Verify app was created in src/apps/ (default module mode)
-			assert!(env.file_exists(&format!("{}/src/apps/{}/lib.rs", project_name, app_name)));
+			assert!(env.file_exists(&format!("{}/src/apps/{}.rs", project_name, app_name)));
 		}
 		Err(e) => {
 			// Log error but don't fail test as this depends on project template completeness

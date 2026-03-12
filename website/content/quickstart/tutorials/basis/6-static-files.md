@@ -1223,6 +1223,30 @@ img {
 }
 ```
 
+## Registering WASM Build Artifacts for collectstatic
+
+For reinhardt-pages applications, the WASM build artifacts (`.js` and `.wasm` files) need to be registered so that `collectstatic` can discover them. Create `src/config/wasm.rs`:
+
+```rust
+use reinhardt::reinhardt_apps::AppStaticFilesConfig;
+
+inventory::submit! {
+	AppStaticFilesConfig {
+		app_label: "examples-tutorial-basis-wasm",
+		static_dir: "dist-wasm",
+		url_prefix: "",
+	}
+}
+```
+
+This uses the `inventory` crate to register the `dist-wasm` directory (where `wasm-pack` outputs build artifacts) as a static file source. Without this registration, `collectstatic` won't discover WASM build artifacts and they won't be included in the production `staticfiles/` directory.
+
+Make sure to include this module in your `config.rs`:
+
+```rust
+pub mod wasm;
+```
+
 ## Collecting Static Files for Production
 
 For production deployments, the `collectstatic` command gathers all static files from your apps and copies them to a single directory for efficient serving.

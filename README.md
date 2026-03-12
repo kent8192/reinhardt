@@ -21,7 +21,14 @@
 
 ## Quick Navigation
 
-[Who is Reinhardt For?](#who-is-reinhardt-for) · [Quick Start](#quick-start) · [Why Reinhardt?](#why-reinhardt) · [Key Features](#key-features) · [Installation](#installation) · [Getting Started](#getting-started-guide) · [Components](#available-components) · [API Stability](#api-stability)
+- [Who is Reinhardt For?](#who-is-reinhardt-for)
+- [Quick Start](#quick-start)
+- [Why Reinhardt?](#why-reinhardt)
+- [Key Features](#key-features)
+- [Installation](#installation)
+- [Getting Started Guide](#getting-started-guide)
+- [Available Components](#available-components)
+- [API Stability](#api-stability)
 
 ## Who is Reinhardt For?
 
@@ -56,12 +63,12 @@ We call this **polylithic**: many building blocks that still feel like one coher
 
 Reinhardt brings together the best of three worlds:
 
-| Inspiration        | What We Borrowed                                       | What We Improved                                     |
-|--------------------|--------------------------------------------------------|------------------------------------------------------|
-| 🐍 **Django**      | Batteries-included philosophy, ORM design, admin panel | Feature flags for composable builds, Rust's type safety |
-| 🎯 **Django REST** | Serializers, ViewSets, permissions                     | Compile-time validation, zero-cost abstractions      |
-| ⚡ **FastAPI**      | DI system, automatic OpenAPI                           | Native Rust performance, no runtime overhead         |
-| 🗄️ **SQLAlchemy** | QuerySet patterns, relationship handling               | Type-safe query builder, compile-time validation     |
+| Inspiration        | What We Borrowed                        | What We Improved                           |
+|--------------------|-----------------------------------------|--------------------------------------------|
+| 🐍 **Django**      | Batteries-included, ORM, admin          | Composable feature flags, type safety      |
+| 🎯 **Django REST** | Serializers, ViewSets, permissions      | Compile-time validation, zero-cost         |
+| ⚡ **FastAPI**      | DI system, auto OpenAPI                 | Native performance, no runtime overhead    |
+| 🗄️ **SQLAlchemy** | QuerySet patterns, relationships        | Type-safe queries, compile-time checks     |
 
 **Result**: A framework that's familiar to Python developers, but with Rust's performance and safety guarantees.
 

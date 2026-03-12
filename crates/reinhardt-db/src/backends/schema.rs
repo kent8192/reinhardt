@@ -411,10 +411,11 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 	/// assert_eq!(sql, "CREATE SCHEMA IF NOT EXISTS \"my_schema\"");
 	/// ```
 	fn create_schema_statement(&self, name: &str, if_not_exists: bool) -> String {
+		let escaped_name = name.replace('"', "\"\"");
 		if if_not_exists {
-			format!("CREATE SCHEMA IF NOT EXISTS \"{}\"", name)
+			format!("CREATE SCHEMA IF NOT EXISTS \"{}\"", escaped_name)
 		} else {
-			format!("CREATE SCHEMA \"{}\"", name)
+			format!("CREATE SCHEMA \"{}\"", escaped_name)
 		}
 	}
 
@@ -458,7 +459,9 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 
 		format!(
 			"DROP SCHEMA{} \"{}\"{}",
-			if_exists_clause, name, cascade_clause
+			if_exists_clause,
+			name.replace('"', "\"\""),
+			cascade_clause
 		)
 	}
 

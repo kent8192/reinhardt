@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
-use validator::Validate;
+use reinhardt::Validate;
 
 use crate::apps::issues::errors::ApiError;
 use crate::apps::issues::models::Issue;

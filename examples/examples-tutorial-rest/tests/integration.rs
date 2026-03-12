@@ -65,7 +65,7 @@ mod tests {
 	#[rstest]
 	fn test_snippet_serializer_validation() {
 		use examples_tutorial_rest::apps::snippets::serializers::SnippetSerializer;
-		use validator::Validate;
+		use reinhardt::Validate;
 
 		// Valid snippet
 		let valid = SnippetSerializer {

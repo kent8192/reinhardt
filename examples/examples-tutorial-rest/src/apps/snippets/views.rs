@@ -4,7 +4,7 @@ use reinhardt::core::serde::json;
 use reinhardt::http::ViewResult;
 use reinhardt::{Json, Path, Response, StatusCode};
 use reinhardt::{delete, get, post, put};
-use validator::Validate;
+use reinhardt::Validate;
 
 use super::models::Snippet;
 use super::serializers::{SnippetResponse, SnippetSerializer};

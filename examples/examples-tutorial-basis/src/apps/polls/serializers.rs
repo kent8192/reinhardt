@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use validator::Validate;
+use reinhardt::Validate;
 
 /// Serializer for creating/updating questions
 #[derive(Debug, Serialize, Deserialize, Validate)]

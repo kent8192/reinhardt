@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use validator::Validate;
+use reinhardt::Validate;
 
 // OpenAPI schema generation (server-side only)
 #[cfg(server)]

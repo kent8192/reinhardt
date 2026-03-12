@@ -9,18 +9,33 @@
 //! - Static files
 //! - Admin panel customization
 
-// Server-side modules
+// Server-only re-exports for macro-generated code
+#[cfg(server)]
+mod server_only {
+	pub use reinhardt::core::async_trait;
+	pub use reinhardt::reinhardt_apps;
+	pub use reinhardt::reinhardt_core;
+	pub use reinhardt::reinhardt_di::params;
+	pub use reinhardt::reinhardt_http;
+}
+#[cfg(server)]
+pub use server_only::*;
+
+// Applications (server-only, polls uses ServerRouter)
 #[cfg(server)]
 pub mod apps;
-#[cfg(server)]
+
+// Configuration (urls unconditional, rest server-only)
 pub mod config;
 
-// Client-side modules
+// Client-only modules (WASM)
 #[cfg(client)]
 pub mod client;
 
-// Server function definitions (both WASM and server)
+// Shared modules (both WASM and server)
 pub mod server_fn;
-
-// Shared types (both WASM and server)
 pub mod shared;
+
+// Re-exports
+#[cfg(server)]
+pub use config::settings::get_settings;

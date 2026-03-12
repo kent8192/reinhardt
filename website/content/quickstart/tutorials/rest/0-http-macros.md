@@ -248,19 +248,19 @@ By default, dependencies are resolved per request. Use `cache = true` for single
 
 ---
 
-## DefaultRouter Integration
+## ServerRouter Integration
 
 ### High-Level API (Recommended)
 
-Use `DefaultRouter::function()` for application routing:
+Use `ServerRouter` for application routing:
 
 ```rust
-use reinhardt::routers::DefaultRouter;
-use hyper::Method;
+use reinhardt::ServerRouter;
+use reinhardt::Method;
 use crate::views;
 
-pub fn url_patterns() -> DefaultRouter {
-    DefaultRouter::new()
+pub fn url_patterns() -> ServerRouter {
+    ServerRouter::new()
         .endpoint(views::list_users)
         .endpoint(views::get_user)
         .endpoint(views::create_user)
@@ -275,8 +275,8 @@ pub fn url_patterns() -> DefaultRouter {
 use reinhardt::routes;
 
 #[routes]
-pub fn routes() -> DefaultRouter {
-    DefaultRouter::new()
+pub fn routes() -> ServerRouter {
+    ServerRouter::new()
         .mount("/api/v1/users/", users::urls::url_patterns())
         .mount("/api/v1/posts/", posts::urls::url_patterns())
 }
@@ -301,8 +301,8 @@ pub fn url_patterns() -> Vec<Route> {
 
 ### Comparison
 
-| Feature | Route::from_handler | DefaultRouter::function |
-|---------|---------------------|------------------------|
+| Feature | Route::from_handler | ServerRouter |
+|---------|---------------------|--------------|
 | **Level** | Low-level primitive | High-level API |
 | **Prefix Support** | Manual concatenation | Automatic via `.mount()` |
 | **Namespace** | Manual management | Automatic registration |
@@ -310,7 +310,7 @@ pub fn url_patterns() -> Vec<Route> {
 | **URL Parameters** | `{param}` syntax | `{param}` syntax (same) |
 | **Recommended For** | Library development | Application routing |
 
-**Recommendation**: Use `DefaultRouter::function()` for better maintainability and explicit HTTP method handling.
+**Recommendation**: Use `ServerRouter` for better maintainability and explicit HTTP method handling.
 
 ---
 
@@ -419,7 +419,7 @@ impl Middleware for AuthMiddleware {
 }
 
 // Apply to routes
-let router = DefaultRouter::new()
+let router = ServerRouter::new()
     .function("/protected", Method::GET, protected_handler);
 
 let app = MiddlewareChain::new(Arc::new(router))
@@ -443,7 +443,7 @@ Named routes enable URL reversal and better debugging.
 
 ```rust
 // ✅ Good: Explicit method
-DefaultRouter::new()
+ServerRouter::new()
     .function("/users", Method::GET, list_users)
     .function("/users", Method::POST, create_user)
 
@@ -486,7 +486,7 @@ HTTP method decorators provide a powerful, type-safe way to build RESTful APIs i
 - **`#[get]`, `#[post]`, etc.** - FastAPI-inspired routing
 - **Path extractors** - Type-safe URL parameter parsing
 - **`#[inject]`** - Automatic dependency injection
-- **`DefaultRouter`** - High-level routing API
+- **`ServerRouter`** - High-level routing API
 - **Custom extractors** - Extend for your use cases
 
 **When to use:**

@@ -63,7 +63,7 @@ use reinhardt::prelude::*;
 use chrono::{DateTime, Utc};
 
 // The model struct uses #[model(...)] only
-#[model(app_label = "polls", table_name = "polls_question")]
+#[model(app_label = "polls", table_name = "questions")]
 pub struct Question {
     #[field(primary_key = true)]
     pub id: i64,
@@ -102,7 +102,7 @@ pub struct QuestionAdmin;
 ```rust
 use reinhardt::db::associations::ForeignKeyField;
 
-#[model(app_label = "polls", table_name = "polls_choice")]
+#[model(app_label = "polls", table_name = "choices")]
 pub struct Choice {
     #[field(primary_key = true)]
     pub id: i64,

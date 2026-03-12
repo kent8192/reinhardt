@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.7...reinhardt-web@v0.1.0-rc.8) - 2026-03-12
+
+### Fixed
+
+- *(ci)* prevent guard workflow cancellations from non-migration label events
+- collapse nested if statements in start_commands to fix clippy lint
+- *(commands)* update startapp test assertions for Rust 2024 module paths
+
+### Maintenance
+
+- update serena project.yml with new config options
+
 ## [0.1.0-rc.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.6...reinhardt-web@v0.1.0-rc.7) - 2026-03-11
 
 ### Documentation

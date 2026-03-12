@@ -234,7 +234,7 @@ pub async fn get_questions(
 On the client side (WASM), use `use_action` to call server functions reactively:
 
 ```rust
-#[cfg(wasm)]
+#[cfg(client)]
 use crate::server_fn::polls::get_questions;
 
 // In your component
@@ -272,7 +272,7 @@ pub async fn create_question(
     #[inject] user: CurrentUser,
 ) -> Result<QuestionInfo, ServerFnError> {
     // db and user are automatically injected by the framework
-    let question = Question::new(&question_text, user.id);
+    let question = Question::new(&question_text);
     question.save(&db).await?;
     Ok(QuestionInfo::from(question))
 }
@@ -325,7 +325,7 @@ use reinhardt::pages::page;
 use reinhardt::pages::reactive::hooks::{Action, use_action};
 use crate::shared::types::QuestionInfo;
 
-#[cfg(wasm)]
+#[cfg(client)]
 use crate::server_fn::polls::get_questions;
 
 pub fn polls_index() -> View {
@@ -702,7 +702,7 @@ use reinhardt::pages::page;
 use reinhardt::pages::reactive::hooks::{Action, use_action};
 use crate::shared::types::QuestionInfo;
 
-#[cfg(wasm)]
+#[cfg(client)]
 use crate::server_fn::polls::get_questions;
 
 pub fn polls_index() -> View {

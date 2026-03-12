@@ -378,10 +378,13 @@ impl ScriptTag {
 		}
 
 		if let Some(ref content) = self.content {
+			// Escape "</", preventing content from closing the script tag (XSS mitigation)
+			let escaped_content = content.replace("</", "<\\/");
+
 			if attrs.is_empty() {
-				format!("<script>{}</script>", content)
+				format!("<script>{}</script>", escaped_content)
 			} else {
-				format!("<script {}>{}</script>", attrs.join(" "), content)
+				format!("<script {}>{}</script>", attrs.join(" "), escaped_content)
 			}
 		} else {
 			format!("<script {}></script>", attrs.join(" "))

@@ -254,7 +254,10 @@ impl SsrRenderer {
 
 		// DOCTYPE and html opening
 		html.push_str("<!DOCTYPE html>\n");
-		html.push_str(&format!("<html lang=\"{}\">\n", self.options.lang));
+		html.push_str(&format!(
+			"<html lang=\"{}\">\n",
+			self.options.lang.replace('"', "&quot;")
+		));
 
 		// Head section
 		html.push_str("<head>\n");
@@ -346,7 +349,10 @@ impl SsrRenderer {
 
 		// DOCTYPE and html opening
 		html.push_str("<!DOCTYPE html>\n");
-		html.push_str(&format!("<html lang=\"{}\">\n", self.options.lang));
+		html.push_str(&format!(
+			"<html lang=\"{}\">\n",
+			self.options.lang.replace('"', "&quot;")
+		));
 
 		// Head section
 		html.push_str("<head>\n");

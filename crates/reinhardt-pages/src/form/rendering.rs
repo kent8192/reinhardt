@@ -134,7 +134,7 @@ impl Widget for TextInput {
 		}
 
 		for (key, val) in attrs {
-			html.push_str(&format!(r#" {}="{}""#, key, html_escape(val)));
+			html.push_str(&format!(r#" {}="{}""#, html_escape(key), html_escape(val)));
 		}
 
 		html.push_str(" />");
@@ -172,7 +172,7 @@ impl Widget for DateInput {
 		}
 
 		for (key, val) in attrs {
-			html.push_str(&format!(r#" {}="{}""#, key, html_escape(val)));
+			html.push_str(&format!(r#" {}="{}""#, html_escape(key), html_escape(val)));
 		}
 
 		html.push_str(" />");
@@ -210,7 +210,7 @@ impl Widget for CheckboxInput {
 		}
 
 		for (key, val) in attrs {
-			html.push_str(&format!(r#" {}="{}""#, key, html_escape(val)));
+			html.push_str(&format!(r#" {}="{}""#, html_escape(key), html_escape(val)));
 		}
 
 		html.push_str(" />");
@@ -254,7 +254,7 @@ impl Widget for Select {
 		let mut html = format!(r#"<select name="{}""#, html_escape(name));
 
 		for (key, val) in attrs {
-			html.push_str(&format!(r#" {}="{}""#, key, html_escape(val)));
+			html.push_str(&format!(r#" {}="{}""#, html_escape(key), html_escape(val)));
 		}
 
 		html.push('>');
@@ -315,7 +315,7 @@ impl Widget for SelectMultiple {
 		let mut html = format!(r#"<select name="{}" multiple"#, html_escape(name));
 
 		for (key, val) in attrs {
-			html.push_str(&format!(r#" {}="{}""#, key, html_escape(val)));
+			html.push_str(&format!(r#" {}="{}""#, html_escape(key), html_escape(val)));
 		}
 
 		html.push('>');
@@ -390,7 +390,7 @@ impl Widget for RadioSelect {
 			}
 
 			for (key, val) in attrs {
-				html.push_str(&format!(r#" {}="{}""#, key, html_escape(val)));
+				html.push_str(&format!(r#" {}="{}""#, html_escape(key), html_escape(val)));
 			}
 
 			html.push_str(" /> ");
@@ -456,7 +456,7 @@ impl Widget for CheckboxSelectMultiple {
 			}
 
 			for (key, val) in attrs {
-				html.push_str(&format!(r#" {}="{}""#, key, html_escape(val)));
+				html.push_str(&format!(r#" {}="{}""#, html_escape(key), html_escape(val)));
 			}
 
 			html.push_str(" /> ");
@@ -494,7 +494,7 @@ impl Widget for FileInput {
 		let mut html = format!(r#"<input type="file" name="{}""#, html_escape(name));
 
 		for (key, val) in attrs {
-			html.push_str(&format!(r#" {}="{}""#, key, html_escape(val)));
+			html.push_str(&format!(r#" {}="{}""#, html_escape(key), html_escape(val)));
 		}
 
 		html.push_str(" />");
@@ -539,7 +539,11 @@ impl Widget for SplitDateTimeWidget {
 		for (key, val) in attrs {
 			if key.starts_with("date_") {
 				let date_attr = key.strip_prefix("date_").unwrap();
-				html.push_str(&format!(r#" {}="{}""#, date_attr, html_escape(val)));
+				html.push_str(&format!(
+					r#" {}="{}""#,
+					html_escape(date_attr),
+					html_escape(val)
+				));
 			}
 		}
 		html.push_str(" /> ");
@@ -553,7 +557,11 @@ impl Widget for SplitDateTimeWidget {
 		for (key, val) in attrs {
 			if key.starts_with("time_") {
 				let time_attr = key.strip_prefix("time_").unwrap();
-				html.push_str(&format!(r#" {}="{}""#, time_attr, html_escape(val)));
+				html.push_str(&format!(
+					r#" {}="{}""#,
+					html_escape(time_attr),
+					html_escape(val)
+				));
 			}
 		}
 		html.push_str(" />");
@@ -621,7 +629,11 @@ impl Widget for SelectDateWidget {
 		for (key, val) in attrs {
 			if key.starts_with("year_") {
 				let year_attr = key.strip_prefix("year_").unwrap();
-				html.push_str(&format!(r#" {}="{}""#, year_attr, html_escape(val)));
+				html.push_str(&format!(
+					r#" {}="{}""#,
+					html_escape(year_attr),
+					html_escape(val)
+				));
 			}
 		}
 		html.push('>');
@@ -641,7 +653,11 @@ impl Widget for SelectDateWidget {
 		for (key, val) in attrs {
 			if key.starts_with("month_") {
 				let month_attr = key.strip_prefix("month_").unwrap();
-				html.push_str(&format!(r#" {}="{}""#, month_attr, html_escape(val)));
+				html.push_str(&format!(
+					r#" {}="{}""#,
+					html_escape(month_attr),
+					html_escape(val)
+				));
 			}
 		}
 		html.push('>');
@@ -661,7 +677,11 @@ impl Widget for SelectDateWidget {
 		for (key, val) in attrs {
 			if key.starts_with("day_") {
 				let day_attr = key.strip_prefix("day_").unwrap();
-				html.push_str(&format!(r#" {}="{}""#, day_attr, html_escape(val)));
+				html.push_str(&format!(
+					r#" {}="{}""#,
+					html_escape(day_attr),
+					html_escape(val)
+				));
 			}
 		}
 		html.push('>');

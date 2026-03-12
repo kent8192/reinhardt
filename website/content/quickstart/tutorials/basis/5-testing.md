@@ -46,11 +46,9 @@ use rstest::*;
 fn test_was_published_recently_with_future_question() {
     // Arrange
     let future_date = Utc::now() + Duration::days(30);
-    let question = Question::new(
-        "Future question".to_string(), // question_text
-    );
-    // Override pub_date for testing
-    question.set_pub_date(future_date);
+    let mut question = Question::new("Future question");
+    // Override auto-generated pub_date for testing
+    question.pub_date = future_date;
 
     // Act
     let result = question.was_published_recently();
@@ -63,10 +61,8 @@ fn test_was_published_recently_with_future_question() {
 fn test_was_published_recently_with_old_question() {
     // Arrange
     let old_date = Utc::now() - Duration::days(2);
-    let question = Question::new(
-        "Old question".to_string(), // question_text
-    );
-    question.set_pub_date(old_date);
+    let mut question = Question::new("Old question");
+    question.pub_date = old_date;
 
     // Act
     let result = question.was_published_recently();
@@ -79,10 +75,8 @@ fn test_was_published_recently_with_old_question() {
 fn test_was_published_recently_with_recent_question() {
     // Arrange
     let recent_date = Utc::now() - Duration::hours(23);
-    let question = Question::new(
-        "Recent question".to_string(), // question_text
-    );
-    question.set_pub_date(recent_date);
+    let mut question = Question::new("Recent question");
+    question.pub_date = recent_date;
 
     // Act
     let result = question.was_published_recently();
@@ -227,10 +221,8 @@ async fn test_create_and_retrieve_question(
     let (_container, conn) = postgres_fixture.await;
 
     // Create a question using the auto-generated new() function
-    let mut question = Question::new(
-        "What's your favorite language?".to_string(),
-        Utc::now(),
-    );
+    // pub_date is auto-set by #[field(auto_now_add = true)]
+    let mut question = Question::new("What's your favorite language?");
     question.save(&conn).await.unwrap();
 
     let question_id = question.id();
@@ -256,22 +248,19 @@ async fn test_question_choices_relationship(
     let (_container, conn) = postgres_fixture.await;
 
     // Create question
-    let mut question = Question::new(
-        "Test question".to_string(),
-        Utc::now(),
-    );
+    let mut question = Question::new("Test question");
     question.save(&conn).await.unwrap();
 
     let question_id = question.id();
 
     // Add choices
-    let mut choice1 = Choice::new("Rust".to_string(), 0, question_id);
+    let mut choice1 = Choice::new("Rust", 0, question_id);
     choice1.save(&conn).await.unwrap();
 
-    let mut choice2 = Choice::new("Python".to_string(), 0, question_id);
+    let mut choice2 = Choice::new("Python", 0, question_id);
     choice2.save(&conn).await.unwrap();
 
-    let mut choice3 = Choice::new("Go".to_string(), 0, question_id);
+    let mut choice3 = Choice::new("Go", 0, question_id);
     choice3.save(&conn).await.unwrap();
 
     // Retrieve choices using generated accessor
@@ -289,10 +278,10 @@ async fn test_increment_votes(
 ) {
     let (_container, conn) = postgres_fixture.await;
 
-    let mut question = Question::new("Test".to_string(), Utc::now());
+    let mut question = Question::new("Test");
     question.save(&conn).await.unwrap();
 
-    let mut choice = Choice::new("Option A".to_string(), 0, question.id());
+    let mut choice = Choice::new("Option A", 0, question.id());
     choice.save(&conn).await.unwrap();
 
     assert_eq!(choice.votes(), 0);
@@ -341,10 +330,8 @@ async fn test_create_question_sqlite(
     let conn = polls_sqlite.await;
 
     // Create a question using the auto-generated new() function
-    let mut question = Question::new(
-        "What's your favorite language?".to_string(),
-        Utc::now(),
-    );
+    // pub_date is auto-set by #[field(auto_now_add = true)]
+    let mut question = Question::new("What's your favorite language?");
     question.save(&conn).await.unwrap();
 
     assert!(question.id() > 0);
@@ -368,22 +355,14 @@ async fn test_question_choices_relationship_sqlite(
     let conn = polls_sqlite.await;
 
     // Create question
-    let mut question = Question::new("Test question".to_string(), Utc::now());
+    let mut question = Question::new("Test question");
     question.save(&conn).await.unwrap();
 
-    // Add choices using ForeignKeyField
-    let choice1 = Choice::new(
-        ForeignKeyField::new(question.id),
-        "Rust".to_string(),
-        0,
-    );
+    // Add choices (choice_text, votes, question_id)
+    let mut choice1 = Choice::new("Rust", 0, question.id());
     choice1.save(&conn).await.unwrap();
 
-    let choice2 = Choice::new(
-        ForeignKeyField::new(question.id),
-        "Python".to_string(),
-        0,
-    );
+    let mut choice2 = Choice::new("Python", 0, question.id());
     choice2.save(&conn).await.unwrap();
 
     // Retrieve choices using generated accessor
@@ -452,10 +431,10 @@ async fn test_index_with_questions(
     let (_container, conn) = postgres_fixture.await;
 
     // Create test data
-    let mut q1 = Question::new("Test question 1".to_string(), Utc::now());
+    let mut q1 = Question::new("Test question 1");
     q1.save(&conn).await.unwrap();
 
-    let mut q2 = Question::new("Test question 2".to_string(), Utc::now());
+    let mut q2 = Question::new("Test question 2");
     q2.save(&conn).await.unwrap();
 
     // Call index view
@@ -498,10 +477,8 @@ use rstest::*;
 
 #[fixture]
 fn sample_question() -> Question {
-    Question::new(
-        "Sample question".to_string(), // question_text
-        Utc::now(),                    // pub_date
-    )
+    // pub_date is auto-set by #[field(auto_now_add = true)]
+    Question::new("Sample question")
 }
 
 #[fixture]
@@ -510,18 +487,18 @@ async fn question_with_choices(
 ) -> (Question, Vec<Choice>) {
     let (_container, conn) = postgres_fixture.await;
 
-    let mut question = Question::new("Test".to_string(), Utc::now());
+    let mut question = Question::new("Test");
     question.save(&conn).await.unwrap();
 
     let question_id = question.id();
 
-    let mut choice_a = Choice::new("A".to_string(), 0, question_id);
+    let mut choice_a = Choice::new("A", 0, question_id);
     choice_a.save(&conn).await.unwrap();
 
-    let mut choice_b = Choice::new("B".to_string(), 0, question_id);
+    let mut choice_b = Choice::new("B", 0, question_id);
     choice_b.save(&conn).await.unwrap();
 
-    let mut choice_c = Choice::new("C".to_string(), 0, question_id);
+    let mut choice_c = Choice::new("C", 0, question_id);
     choice_c.save(&conn).await.unwrap();
 
     let choices = vec![choice_a, choice_b, choice_c];

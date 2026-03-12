@@ -2,6 +2,8 @@
 //!
 //! A RESTful API application
 
+use reinhardt::app_config;
+
 pub mod admin;
 pub mod models;
 pub mod serializers;

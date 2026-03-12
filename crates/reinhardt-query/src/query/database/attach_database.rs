@@ -125,12 +125,15 @@ impl QueryStatementBuilder for AttachDatabaseStatement {
 				.as_ref()
 				.expect("ATTACH DATABASE requires a schema name (AS clause)");
 			let quote = query_builder.quote_char();
+			// Escape single quotes in file_path to prevent SQL injection
+			let escaped_file_path = file_path.replace('\'', "''");
+			// Escape quote characters in db_name identifier to prevent SQL injection
+			let escaped_db_name = db_name
+				.to_string()
+				.replace(quote, &format!("{}{}", quote, quote));
 			let sql = format!(
 				"ATTACH DATABASE '{}' AS {}{}{}",
-				file_path,
-				quote,
-				db_name.to_string(),
-				quote,
+				escaped_file_path, quote, escaped_db_name, quote,
 			);
 			return (sql, crate::value::Values::new());
 		}

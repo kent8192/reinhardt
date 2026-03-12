@@ -98,7 +98,11 @@ impl QueryStatementBuilder for DetachDatabaseStatement {
 				.as_ref()
 				.expect("DETACH DATABASE requires a database name");
 			let quote = query_builder.quote_char();
-			let sql = format!("DETACH DATABASE {}{}{}", quote, db_name.to_string(), quote,);
+			// Escape quote characters in db_name identifier to prevent SQL injection
+			let escaped_db_name = db_name
+				.to_string()
+				.replace(quote, &format!("{}{}", quote, quote));
+			let sql = format!("DETACH DATABASE {}{}{}", quote, escaped_db_name, quote,);
 			return (sql, crate::value::Values::new());
 		}
 		if (query_builder as &dyn Any)

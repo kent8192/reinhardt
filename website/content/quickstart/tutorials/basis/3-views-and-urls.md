@@ -164,19 +164,36 @@ mkdir -p src/shared
 Update `src/lib.rs`:
 
 ```rust
-// Client-side modules (WASM only)
-#[cfg(target_arch = "wasm32")]
+// Server-only re-exports for macro-generated code
+#[cfg(server)]
+mod server_only {
+	pub use reinhardt::core::async_trait;
+	pub use reinhardt::reinhardt_apps;
+	pub use reinhardt::reinhardt_core;
+	pub use reinhardt::reinhardt_di::params;
+	pub use reinhardt::reinhardt_http;
+}
+#[cfg(server)]
+pub use server_only::*;
+
+// Applications (server-only, polls uses ServerRouter)
+#[cfg(server)]
+pub mod apps;
+
+// Configuration (urls unconditional, rest server-only)
+pub mod config;
+
+// Client-only modules (WASM)
+#[cfg(client)]
 pub mod client;
 
-// Server function definitions (both WASM and server)
+// Shared modules (both WASM and server)
 pub mod server_fn;
-
-// Shared types (both WASM and server)
 pub mod shared;
 
-// Existing modules
-pub mod apps;
-pub mod config;
+// Re-exports
+#[cfg(server)]
+pub use config::settings::get_settings;
 ```
 
 ## Creating Shared Types
@@ -184,6 +201,8 @@ pub mod config;
 Create `src/shared.rs`:
 
 ```rust
+#[cfg(server)]
+pub mod forms;
 pub mod types;
 ```
 
@@ -607,16 +626,9 @@ No manual conditional compilation or `unreachable!()` stubs are needed.
 Create `src/client.rs`:
 
 ```rust
-#[cfg(target_arch = "wasm32")]
 pub mod lib;
-
-#[cfg(target_arch = "wasm32")]
 pub mod router;
-
-#[cfg(target_arch = "wasm32")]
 pub mod pages;
-
-#[cfg(target_arch = "wasm32")]
 pub mod components;
 ```
 

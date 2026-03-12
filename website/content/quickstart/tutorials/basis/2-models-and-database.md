@@ -261,8 +261,8 @@ The `#[model(...)]` macro automatically generates:
 3. **QuerySet Methods**: Type-safe querying
    ```rust
    Question::objects()
-       .filter(Question::field_pub_date().gte(Utc::now()))
-       .all(&conn)
+       .filter_by(Question::field_pub_date().gte(Utc::now()))
+       .all()
        .await?;
    ```
 
@@ -330,19 +330,19 @@ println!("Created question with ID: {}", question.id());
 // Get all questions ordered by publication date (using type-safe field accessors)
 let questions = Question::objects()
     .order_by(Question::field_pub_date(), false)  // false = DESC
-    .all(&conn)
+    .all()
     .await?;
 
 // Filter questions by date
 let recent_questions = Question::objects()
-    .filter(Question::field_pub_date().gte(Utc::now() - chrono::Duration::days(7)))
-    .all(&conn)
+    .filter_by(Question::field_pub_date().gte(Utc::now() - chrono::Duration::days(7)))
+    .all()
     .await?;
 
 // Get a specific question by ID
 let question = Question::objects()
-    .filter(Question::field_id().eq(1))
-    .first(&conn)
+    .get(1)
+    .first()
     .await?
     .ok_or("Question not found")?;
 ```
@@ -466,37 +466,19 @@ Create `polls/tests.rs`:
 ```rust
 use super::models::{Question, Choice};
 use reinhardt::prelude::*;
-use reinhardt::test::fixtures::*;
+use reinhardt::test::fixtures::postgres_fixture;
 use chrono::Utc;
 use rstest::*;
-use testcontainers::ContainerAsync;
-use testcontainers_modules::postgres::Postgres;
-
-#[fixture]
-async fn postgres_db() -> (ContainerAsync<Postgres>, Arc<DatabaseConnection>) {
-    let postgres = Postgres::default()
-        .start()
-        .await
-        .expect("Failed to start PostgreSQL");
-
-    let port = postgres.get_host_port_ipv4(5432).await.unwrap();
-    let url = format!("postgres://postgres:postgres@localhost:{}/test_db", port);
-
-    let conn = DatabaseConnection::connect(&url).await.unwrap();
-    let conn = Arc::new(conn);
-
-    // Run migrations
-    run_migrations(&conn).await.unwrap();
-
-    (postgres, conn)
-}
+use testcontainers::{ContainerAsync, GenericImage};
+use reinhardt::db::backends::DatabaseConnection;
+use std::sync::Arc;
 
 #[rstest]
 #[tokio::test]
 async fn test_create_question_and_choices(
-    #[future] postgres_db: (ContainerAsync<Postgres>, Arc<DatabaseConnection>)
+    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>)
 ) {
-    let (_container, conn) = postgres_db.await;
+    let (_container, conn) = postgres_fixture.await;
 
     // Create a question using the auto-generated new() function
     let mut question = Question::new(
@@ -526,8 +508,8 @@ async fn test_create_question_and_choices(
 
     // Retrieve the question
     let retrieved_question = Question::objects()
-        .filter(Question::field_id().eq(question_id))
-        .first(&conn)
+        .get(question_id)
+        .first()
         .await
         .unwrap()
         .expect("Question not found");
@@ -546,9 +528,9 @@ async fn test_create_question_and_choices(
 #[rstest]
 #[tokio::test]
 async fn test_increment_votes(
-    #[future] postgres_db: (ContainerAsync<Postgres>, Arc<DatabaseConnection>)
+    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>)
 ) {
-    let (_container, conn) = postgres_db.await;
+    let (_container, conn) = postgres_fixture.await;
 
     // Create question and choice
     let mut question = Question::new(
@@ -576,8 +558,8 @@ async fn test_increment_votes(
 
     // Verify votes incremented
     let updated_choice = Choice::objects()
-        .filter(Choice::field_id().eq(choice_id))
-        .first(&conn)
+        .get(choice_id)
+        .first()
         .await
         .unwrap()
         .expect("Choice not found");
@@ -615,7 +597,7 @@ async fn index(req: Request) -> Result<Response> {
         .get::<DatabaseConnection>()
         .ok_or("Database not configured")?;
 
-    let questions = Question::objects().all().all().await?;
+    let questions = Question::objects().all().await?;
     // ...
 }
 ```
@@ -627,7 +609,7 @@ async fn index(req: Request) -> Result<Response> {
 async fn index(
     #[inject] conn: DatabaseConnection,  // Automatically injected!
 ) -> Result<Response> {
-    let questions = Question::objects().all().all().await?;
+    let questions = Question::objects().all().await?;
     // ...
 }
 ```
@@ -731,7 +713,6 @@ pub async fn get_questions(
 
     let questions = Question::objects()
         .all()
-        .all()
         .await
         .map_err(|e| ServerFnError::application(e.to_string()))?;
 
@@ -748,16 +729,23 @@ pub async fn get_question_detail(
 ) -> Result<(QuestionInfo, Vec<ChoiceInfo>), ServerFnError> {
     use crate::apps::polls::models::{Question, Choice};
     use reinhardt::Model;
+    use reinhardt::db::orm::{FilterOperator, FilterValue};
 
     // Get question
     let question = Question::objects()
         .get(question_id)
+        .first()
         .await
-        .map_err(|e| ServerFnError::application(e.to_string()))?;
+        .map_err(|e| ServerFnError::application(e.to_string()))?
+        .ok_or_else(|| ServerFnError::server(404, "Question not found"))?;
 
     // Get choices for this question
     let choices = Choice::objects()
-        .filter(Choice::field_question().eq(question_id))
+        .filter(
+            Choice::field_question_id(),
+            FilterOperator::Eq,
+            FilterValue::Int(question_id),
+        )
         .all()
         .await
         .map_err(|e| ServerFnError::application(e.to_string()))?;

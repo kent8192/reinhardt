@@ -213,7 +213,6 @@ pub async fn get_questions(
     // This code runs on the server only
     let questions = Question::objects()
         .all()
-        .all()
         .await
         .map_err(|e| ServerFnError::application(e.to_string()))?;
 
@@ -682,7 +681,6 @@ pub async fn get_questions(
     use reinhardt::Model;
 
     let questions = Question::objects()
-        .all()
         .all()
         .await
         .map_err(|e| ServerFnError::application(e.to_string()))?;

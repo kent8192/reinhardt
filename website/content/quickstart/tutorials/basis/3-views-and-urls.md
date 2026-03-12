@@ -271,6 +271,7 @@ pub async fn get_questions(
 	let manager = Question::objects();
 	let questions = manager
 		.all()
+		.all()
 		.await
 		.map_err(|e| ServerFnError::application(e.to_string()))?;
 

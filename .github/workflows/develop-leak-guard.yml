@@ -10,12 +10,19 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  group: >-
+    ${{ github.workflow }}-${{ github.head_ref || github.run_id }}-${{
+    contains(fromJSON('["labeled","unlabeled"]'), github.event.action) &&
+    github.event.label.name != 'migration-approved' &&
+    github.event.label.name || 'default' }}
   cancel-in-progress: true
 
 jobs:
   develop-leak-guard:
     name: Develop Leak Guard
+    if: >-
+      github.event.action != 'labeled' && github.event.action != 'unlabeled' ||
+      github.event.label.name == 'migration-approved'
     runs-on: ubuntu-latest
     steps:
       - name: Check if migration-approved

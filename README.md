@@ -105,6 +105,8 @@ For the full stability policy, see [API Stability Policy](docs/API_STABILITY.md)
 
 Reinhardt is a modular framework. Choose your starting point:
 
+> **New here?** Start with the default full-featured setup unless you specifically want a smaller build.
+
 ### Default: Full-Featured (Batteries Included) ⚠️ New Default
 
 Get all features with zero configuration:

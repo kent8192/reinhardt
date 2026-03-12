@@ -157,6 +157,12 @@ pub mod linkme {
 
 #[cfg(all(feature = "database", not(target_arch = "wasm32")))]
 #[doc(hidden)]
+pub mod ctor {
+	pub use ctor::*;
+}
+
+#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[doc(hidden)]
 pub mod reinhardt_orm {
 	pub use reinhardt_db::orm::*;
 }

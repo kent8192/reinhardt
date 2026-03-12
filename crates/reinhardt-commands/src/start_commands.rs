@@ -66,7 +66,10 @@ impl BaseCommand for StartProjectCommand {
 
 		// Determine project type
 		let is_restful = ctx.has_option("restful");
-		let with_pages = ctx.has_option("with-pages");
+		let with_pages = ctx.has_option("with-pages")
+			|| ctx
+				.option("type")
+				.is_some_and(|t| t == "mtv" || t == "pages");
 
 		// Validate exclusive flags
 		if is_restful && with_pages {
@@ -195,7 +198,10 @@ impl BaseCommand for StartAppCommand {
 
 		// Determine app type and structure
 		let is_restful = ctx.has_option("restful");
-		let with_pages = ctx.has_option("with-pages");
+		let with_pages = ctx.has_option("with-pages")
+			|| ctx
+				.option("type")
+				.is_some_and(|t| t == "mtv" || t == "pages");
 		let is_workspace = ctx.has_option("workspace");
 
 		// Validate exclusive flags
@@ -741,5 +747,33 @@ mod tests {
 
 		assert_eq!(content_with_example, "debug = false\n");
 		assert_eq!(content_without_example, "debug = false\n");
+	}
+
+	#[rstest]
+	fn test_startproject_type_option_mtv() {
+		// Arrange
+		let cmd = StartProjectCommand;
+		let options = cmd.options();
+
+		// Act & Assert
+		// Verify that the --with-pages flag exists, which is the target
+		// for type option "mtv" / "pages" mapping
+		assert!(
+			options.iter().any(|opt| opt.long == "with-pages"),
+			"--with-pages flag should exist for mtv type mapping"
+		);
+	}
+
+	#[rstest]
+	fn test_startapp_type_option_mtv() {
+		// Arrange
+		let cmd = StartAppCommand;
+		let options = cmd.options();
+
+		// Act & Assert
+		assert!(
+			options.iter().any(|opt| opt.long == "with-pages"),
+			"--with-pages flag should exist in StartAppCommand for mtv type mapping"
+		);
 	}
 }

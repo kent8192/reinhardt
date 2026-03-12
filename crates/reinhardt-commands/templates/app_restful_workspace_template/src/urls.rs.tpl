@@ -1,7 +1,7 @@
 //! URL configuration for {{ app_name }} app (RESTful)
 
-use reinhardt::UnifiedRouter;
+use reinhardt::ServerRouter;
 
-pub fn url_patterns() -> UnifiedRouter {
-    UnifiedRouter::new()
+pub fn url_patterns() -> ServerRouter {
+    ServerRouter::new()
 }

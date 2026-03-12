@@ -44,23 +44,25 @@ This generates a complete project structure:
 
 ```
 my-api/
+├── .gitignore
 ├── Cargo.toml
+├── Makefile.toml
+├── bacon.toml
 ├── settings/
-│   ├── base.example.toml
-│   ├── local.example.toml
-│   ├── staging.example.toml
-│   └── production.example.toml
+│   ├── base.toml
+│   ├── local.toml
+│   ├── staging.toml
+│   └── production.toml
 ├── src/
 │   ├── lib.rs
-│   ├── main.rs
-│   ├── config.rs
 │   ├── apps.rs
+│   ├── config.rs
 │   ├── bin/
 │   │   └── manage.rs
 │   └── config/
+│       ├── apps.rs
 │       ├── settings.rs
-│       ├── urls.rs
-│       └── apps.rs
+│       └── urls.rs
 └── README.md
 ```
 
@@ -84,14 +86,38 @@ This generates a project with 3-layer architecture:
 
 ```
 my-app/
+├── .gitignore
 ├── Cargo.toml
 ├── Makefile.toml
+├── bacon.toml
+├── build.rs
 ├── index.html
+├── settings/
+│   ├── base.example.toml
+│   ├── local.example.toml
+│   ├── staging.example.toml
+│   └── production.example.toml
 ├── src/
-│   ├── client/       # WASM UI (runs in browser)
-│   ├── server/       # Server functions (runs on server)
-│   ├── shared/       # Shared types (used by both)
-│   └── ...
+│   ├── lib.rs
+│   ├── apps.rs
+│   ├── config.rs
+│   ├── bin/
+│   │   └── manage.rs
+│   ├── client.rs
+│   ├── client/
+│   │   ├── router.rs
+│   │   └── state.rs
+│   ├── config/
+│   │   ├── apps.rs
+│   │   ├── settings.rs
+│   │   └── urls.rs
+│   ├── server/
+│   │   └── server_fn.rs
+│   ├── shared.rs
+│   └── shared/
+│       ├── errors.rs
+│       └── types.rs
+└── README.md
 ```
 
 Visit `http://127.0.0.1:8000/` in your browser.

@@ -67,6 +67,13 @@ pub fn get_settings() -> Settings {
         // Lowest priority: Default values
         .add_source(
             DefaultSource::new()
+                .with_value(
+                    "base_dir",
+                    serde_json::Value::String(
+                        env::var("CARGO_MANIFEST_DIR")
+                            .unwrap_or_else(|_| ".".to_string()),
+                    ),
+                )
                 .with_value("debug", serde_json::Value::Bool(false))
                 .with_value(
                     "language_code",

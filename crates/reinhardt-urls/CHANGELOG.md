@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.7...reinhardt-urls@v0.1.0-rc.8) - 2026-03-12
+
+### Documentation
+
+- document client-router feature requirement for UnifiedRouter in prelude
+
 ## [0.1.0-rc.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.6...reinhardt-urls@v0.1.0-rc.7) - 2026-03-11
 
 ### Added

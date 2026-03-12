@@ -8,6 +8,7 @@ use crate::sessions::{Session, backends::SessionBackend};
 use crate::{AuthenticationBackend, AuthenticationError, SimpleUser, User};
 use reinhardt_http::Request;
 use std::sync::Arc;
+use subtle::ConstantTimeEq;
 
 /// REST API authentication trait wrapper
 ///
@@ -144,19 +145,27 @@ impl RestAuthentication for CompositeAuthentication {
 		&self,
 		request: &Request,
 	) -> Result<Option<Box<dyn User>>, AuthenticationError> {
-		// Try each backend in order
+		// Try each backend in order, collecting errors
+		let mut errors: Vec<AuthenticationError> = Vec::new();
+
 		for backend in &self.backends {
 			match backend.authenticate(request).await {
 				Ok(Some(user)) => return Ok(Some(user)),
 				Ok(None) => continue,
 				Err(e) => {
-					// Log error but continue to next backend
 					tracing::warn!("Authentication backend error occurred");
 					tracing::debug!(error = %e, "Authentication backend error details");
-					continue;
+					errors.push(e);
 				}
 			}
 		}
+
+		// If all backends failed with errors and none returned Ok(None),
+		// propagate the first error to inform the caller
+		if !errors.is_empty() && self.backends.len() == errors.len() {
+			return Err(errors.into_iter().next().expect("errors is non-empty"));
+		}
+
 		Ok(None)
 	}
 }
@@ -171,20 +180,27 @@ impl AuthenticationBackend for CompositeAuthentication {
 	}
 
 	async fn get_user(&self, user_id: &str) -> Result<Option<Box<dyn User>>, AuthenticationError> {
-		// Try each backend in order until one succeeds
-		// This is a fallback approach since we don't track which backend authenticated the user
+		// Try each backend in order until one succeeds, collecting errors
+		let mut errors: Vec<AuthenticationError> = Vec::new();
+
 		for backend in &self.backends {
 			match backend.get_user(user_id).await {
 				Ok(Some(user)) => return Ok(Some(user)),
 				Ok(None) => continue,
 				Err(e) => {
-					// Log error but continue to next backend
 					tracing::warn!("get_user backend error occurred");
 					tracing::debug!(error = %e, "get_user backend error details");
-					continue;
+					errors.push(e);
 				}
 			}
 		}
+
+		// If all backends failed with errors and none returned Ok(None),
+		// propagate the first error to inform the caller
+		if !errors.is_empty() && self.backends.len() == errors.len() {
+			return Err(errors.into_iter().next().expect("errors is non-empty"));
+		}
+
 		Ok(None)
 	}
 }
@@ -226,6 +242,21 @@ impl TokenAuthentication {
 	pub fn add_token(&mut self, token: impl Into<String>, user_id: impl Into<String>) {
 		self.tokens.insert(token.into(), user_id.into());
 	}
+
+	/// Find a token using constant-time comparison to prevent timing attacks
+	fn find_token_constant_time(&self, candidate: &str) -> Option<&String> {
+		let candidate_bytes = candidate.as_bytes();
+		self.tokens.iter().find_map(|(stored_token, user_id)| {
+			let stored_bytes = stored_token.as_bytes();
+			if candidate_bytes.len() == stored_bytes.len()
+				&& bool::from(candidate_bytes.ct_eq(stored_bytes))
+			{
+				Some(user_id)
+			} else {
+				None
+			}
+		})
+	}
 }
 
 impl Default for TokenAuthentication {
@@ -248,7 +279,7 @@ impl RestAuthentication for TokenAuthentication {
 		if let Some(header) = auth_header {
 			let prefix = format!("{} ", self.config.prefix);
 			if let Some(token) = header.strip_prefix(&prefix)
-				&& let Some(user_id) = self.tokens.get(token)
+				&& let Some(user_id) = self.find_token_constant_time(token)
 			{
 				// Try to parse user_id as UUID, or generate a new one if it fails
 				let id = uuid::Uuid::parse_str(user_id).unwrap_or_else(|_| {

@@ -138,7 +138,20 @@ impl Permission for DjangoModelPermissions {
 			return false;
 		}
 
-		context.is_admin
+		// Admins always have permission
+		if context.is_admin {
+			return true;
+		}
+
+		// Check user_permissions map for the authenticated user
+		if let Some(user) = &context.user {
+			let perms = self.user_permissions.read().await;
+			if let Some(user_perms) = perms.get(user.username()) {
+				return !user_perms.is_empty();
+			}
+		}
+
+		false
 	}
 }
 

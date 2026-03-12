@@ -50,6 +50,3 @@ with-reinhardt = []
 [[test]]
 name = "integration"
 required-features = ["with-reinhardt"]
-
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(with_reinhardt)"] }

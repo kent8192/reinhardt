@@ -219,7 +219,7 @@ pub struct HelloResponse {
 }
 
 #[get("/hello", name = "hello_world")]
-pub async fn hello_world() -> Result<Response> {
+pub async fn hello_world() -> ViewResult<Response> {
     let response_data = HelloResponse {
         message: "Hello, Reinhardt!".to_string(),
     };

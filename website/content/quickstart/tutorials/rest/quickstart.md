@@ -88,7 +88,7 @@ Implement API endpoints using HTTP method decorators. Add to `users/views.rs`:
 ```rust
 use json::json;
 use reinhardt::core::serde::json;
-use reinhardt::http::ViewResult;
+use reinhardt::ViewResult;
 use reinhardt::{get, post, Json, Response, StatusCode};
 use crate::models::User;
 use crate::serializers::UserSerializer;
@@ -175,7 +175,7 @@ Edit `users/views.rs` to implement full CRUD operations:
 ```rust
 use json::json;
 use reinhardt::core::serde::json;
-use reinhardt::http::ViewResult;
+use reinhardt::ViewResult;
 use reinhardt::{get, post, Json, Path, Response, StatusCode};
 use crate::models::User;
 use crate::serializers::UserSerializer;

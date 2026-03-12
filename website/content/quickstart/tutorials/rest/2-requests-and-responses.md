@@ -16,7 +16,7 @@ Reinhardt's `Request` object provides access to HTTP request data:
 
 ```rust
 use reinhardt::prelude::*;
-use reinhardt::http::ViewResult;
+use reinhardt::ViewResult;
 use reinhardt::{get, Method, Response};
 
 #[get("/example", name = "my_view")]
@@ -111,7 +111,7 @@ Reinhardt provides convenient helper methods on the `Request` type for parsing r
 
 ```rust
 use reinhardt::prelude::*;
-use reinhardt::http::ViewResult;
+use reinhardt::ViewResult;
 use reinhardt::post;
 use serde::{Serialize, Deserialize};
 
@@ -208,7 +208,7 @@ Reinhardt supports multiple content types:
 
 ```rust
 use reinhardt::prelude::*;
-use reinhardt::http::ViewResult;
+use reinhardt::ViewResult;
 use reinhardt::post;
 use serde_json::Value;
 
@@ -246,7 +246,7 @@ Handle errors gracefully:
 
 ```rust
 use reinhardt::prelude::*;
-use reinhardt::http::ViewResult;
+use reinhardt::ViewResult;
 use reinhardt::post;
 
 #[post("/safe", name = "safe_view")]
@@ -278,7 +278,7 @@ Full request/response handling using Reinhardt's helper methods:
 
 ```rust
 use reinhardt::prelude::*;
-use reinhardt::http::ViewResult;
+use reinhardt::ViewResult;
 use reinhardt::endpoint;
 use reinhardt::Method;
 use serde::{Serialize, Deserialize};

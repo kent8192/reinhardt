@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.6...reinhardt-auth@v0.1.0-rc.7) - 2026-03-11
+
+### Fixed
+
+- *(auth)* add missing #[rstest] annotations to 57 existing tests
+
+### Styling
+
+- apply format fixes
+
+### Testing
+
+- *(auth)* add CacheSessionBackend direct CRUD tests
+- *(auth)* add JwtSessionBackend extended edge case tests
+- *(auth)* add LoginHandler/LogoutHandler edge case tests
+- *(auth)* add SocialAccountStorage extended coverage
+- *(auth)* add UserMapper extended coverage
+- *(auth)* add session replication gap tests
+- *(auth)* add session migration functional tests
+- *(auth)* add tenant isolation gap tests
+- *(auth)* add session rotation gap tests
+- *(auth)* add session cleanup functional tests
+- *(auth)* add permissions edge case tests (object, IP, time-based)
+- *(auth)* add serialization empty data roundtrip tests
+- *(auth)* add repository trait unit tests
+
 ## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.4...reinhardt-auth@v0.1.0-rc.5) - 2026-03-07
 
 ### Fixed

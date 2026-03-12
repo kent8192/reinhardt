@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.6...reinhardt-web@v0.1.0-rc.7) - 2026-03-11
+
+### Documentation
+
+- *(website)* update basis tutorial models to match examples
+- *(website)* update basis tutorial server functions and components
+- *(website)* update basis tutorial forms, testing, and static files
+- *(website)* update rest tutorials to match examples
+
+### Fixed
+
+- *(urls)* suppress dead_code warning for WASM-only `merge` method
+- *(prelude)* add feature gate for `UnifiedRouter` re-export
+- *(ci)* add --no-tests=warn to ui-test nextest run
+- *(ci)* handle nextest exit code 4 in coverage workflows
+- *(ci)* move msrv-test to selectively-skippable in ci-success gate
+
+### Maintenance
+
+- *(nextest)* add --no-tests=warn to prevent empty partition failures
+
+### Styling
+
+- apply format fixes to src/lib.rs
+- *(examples)* format examples-twitter common.rs
+- *(examples)* format examples-twitter relationship components
+
 ## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.4...reinhardt-web@v0.1.0-rc.5) - 2026-03-07
 
 ### Added

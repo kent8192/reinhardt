@@ -27,8 +27,9 @@ jobs:
     steps:
       - name: Check if guard applies
         id: guard-scope
+        env:
+          BRANCH: ${{ github.head_ref }}
         run: |
-          BRANCH="${{ github.head_ref }}"
           if [[ "$BRANCH" == develop/* ]]; then
             echo "applies=true" >> "$GITHUB_OUTPUT"
           else

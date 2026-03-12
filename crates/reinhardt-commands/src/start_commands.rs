@@ -284,31 +284,29 @@ impl BaseCommand for StartAppCommand {
 			// lib.rs is only special at the crate root.
 			// Only apply this rename for the default location (src/apps/{name}/);
 			// when a custom target is specified, preserve lib.rs in that location.
-			if !has_custom_target {
-				if let Some(ref target_path) = app_target {
-					let lib_rs_path = target_path.join("lib.rs");
-					if lib_rs_path.exists() {
-						// The module entry point goes one level up, alongside the subdirectory
-						let module_rs_path = target_path
-							.parent()
-							.map(|parent| parent.join(format!("{}.rs", app_name)))
-							.ok_or_else(|| {
-								CommandError::ExecutionError(format!(
-									"Failed to determine parent directory for '{}'",
-									target_path.display()
-								))
-							})?;
-						std::fs::rename(&lib_rs_path, &module_rs_path).map_err(|e| {
+			if !has_custom_target && let Some(ref target_path) = app_target {
+				let lib_rs_path = target_path.join("lib.rs");
+				if lib_rs_path.exists() {
+					// The module entry point goes one level up, alongside the subdirectory
+					let module_rs_path = target_path
+						.parent()
+						.map(|parent| parent.join(format!("{}.rs", app_name)))
+						.ok_or_else(|| {
 							CommandError::ExecutionError(format!(
-								"Failed to move lib.rs to {}.rs: {}",
-								app_name, e
+								"Failed to determine parent directory for '{}'",
+								target_path.display()
 							))
 						})?;
-						ctx.verbose(&format!(
-							"Moved {}/lib.rs -> {}.rs (Rust 2024 Edition module convention)",
-							app_name, app_name
-						));
-					}
+					std::fs::rename(&lib_rs_path, &module_rs_path).map_err(|e| {
+						CommandError::ExecutionError(format!(
+							"Failed to move lib.rs to {}.rs: {}",
+							app_name, e
+						))
+					})?;
+					ctx.verbose(&format!(
+						"Moved {}/lib.rs -> {}.rs (Rust 2024 Edition module convention)",
+						app_name, app_name
+					));
 				}
 			}
 

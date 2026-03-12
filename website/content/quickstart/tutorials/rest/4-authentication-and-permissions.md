@@ -232,7 +232,7 @@ use reinhardt::prelude::*;
 use reinhardt::IsAuthenticated;
 use serde::{Serialize, Deserialize};
 use async_trait::async_trait;
-use hyper::Method;
+use reinhardt::Method;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Snippet {

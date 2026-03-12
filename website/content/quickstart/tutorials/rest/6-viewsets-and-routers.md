@@ -66,6 +66,18 @@ use reinhardt::prelude::*;
 let snippet_viewset = ReadOnlyModelViewSet::<Snippet, SnippetSerializer>::new("snippet");
 ```
 
+## Choosing the Right Router
+
+Reinhardt provides three router types for different use cases:
+
+| Router | Use Case | Features |
+|--------|----------|----------|
+| `ServerRouter` | Server-side routing (recommended) | Function-based views, ViewSets, middleware |
+| `DefaultRouter` | Low-level API routing | Library development, minimal overhead |
+| `UnifiedRouter` | Full-stack routing | Combines `ServerRouter` + `ClientRouter`, requires `client-router` feature |
+
+For most applications, use `ServerRouter`. It supports both function-based views and ViewSets, and is the standard choice for web applications built with Reinhardt.
+
 ## Using Routers
 
 Register ViewSets with routers to automatically generate URLs.

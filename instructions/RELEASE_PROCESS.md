@@ -428,6 +428,26 @@ Tests continue to work because the project always runs tests with `--all-feature
 
 (Ref: [#246](https://github.com/kent8192/reinhardt-web/issues/246))
 
+### KI-6: crates.io Rate Limit (429 Too Many Requests)
+
+**Status**: Mitigated (CI workflow has retry with delay)
+
+**Problem**: crates.io enforces a publish rate limit of 1 crate per minute with
+a burst allowance of 30 crates. With 45+ crates in the workspace, publishing
+exceeds the burst limit, resulting in HTTP 429 errors.
+
+**Mitigation**:
+- The release workflow (`release-plz.yml`) includes up to 3 publish attempts
+  with 120-second delays between retries
+- release-plz automatically skips already-published crates on retry
+- Each attempt can publish up to 30 crates (burst), covering 90 total
+
+**If the issue persists** (e.g., workspace grows beyond 90 crates):
+- Contact crates.io support (`help@crates.io`) to request a rate limit increase
+- Alternatively, increase the delay or add more retry rounds
+
+**Reference**: `<https://github.com/rust-lang/crates.io/issues/1643>`
+
 ---
 
 ## Recovery Procedures
@@ -598,6 +618,7 @@ cargo publish --dry-run -p reinhardt-web  # root crate depends on reinhardt-test
 - **Partial Failure**: See [KI-3: Partial Release Failure Deadlock](#ki-3-partial-release-failure-deadlock) and [RP-1](#rp-1-partial-release-failure-recovery)
 - **gix Panic**: See [KI-4: gix/gitoxide Slotmap Overflow](#ki-4-gixgitoxide-slotmap-overflow) and [RP-3](#rp-3-gix-cache-failure-recovery)
 - **Phantom Version (dependency not found)**: See [KI-5: Phantom Version Bumps from `dependencies_update`](#ki-5-phantom-version-bumps-from-dependencies_update)
+    - **Rate Limit (429)**: See [KI-6: crates.io Rate Limit](#ki-6-cratesio-rate-limit-429-too-many-requests)
 
 **CHANGELOG Not Updated:**
 - Ensure `changelog_update = true` in config

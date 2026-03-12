@@ -118,7 +118,7 @@ jobs:
       - name: Clear cargo registry git index cache
         run: rm -rf ~/.cargo/registry/index/github.com-*
 
-      - name: Publish to crates.io and create releases
+      - name: Publish to crates.io and create releases (attempt 1/3)
         id: release-attempt-1
         continue-on-error: true
         uses: release-plz/action@v0.5
@@ -128,12 +128,39 @@ jobs:
           GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Clear registry index for retry
+      - name: Wait for crates.io rate limit reset (attempt 1)
+        if: steps.release-attempt-1.outcome == 'failure'
+        run: |
+          echo "First publish attempt failed. Waiting 120s for crates.io rate limit reset..."
+          sleep 120
+
+      - name: Clear registry index for retry (attempt 1)
         if: steps.release-attempt-1.outcome == 'failure'
         run: rm -rf ~/.cargo/registry/index/github.com-*
 
-      - name: Retry publish to crates.io and create releases
+      - name: Publish to crates.io and create releases (attempt 2/3)
+        id: release-attempt-2
         if: steps.release-attempt-1.outcome == 'failure'
+        continue-on-error: true
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io rate limit reset (attempt 2)
+        if: steps.release-attempt-1.outcome == 'failure' && steps.release-attempt-2.outcome == 'failure'
+        run: |
+          echo "Second publish attempt failed. Waiting 120s for crates.io rate limit reset..."
+          sleep 120
+
+      - name: Clear registry index for retry (attempt 2)
+        if: steps.release-attempt-1.outcome == 'failure' && steps.release-attempt-2.outcome == 'failure'
+        run: rm -rf ~/.cargo/registry/index/github.com-*
+
+      - name: Publish to crates.io and create releases (attempt 3/3)
+        if: steps.release-attempt-1.outcome == 'failure' && steps.release-attempt-2.outcome == 'failure'
         uses: release-plz/action@v0.5
         with:
           command: release

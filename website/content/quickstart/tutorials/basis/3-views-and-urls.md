@@ -27,33 +27,37 @@ This architecture enables:
 
 ### Simplified Conditional Compilation
 
-Starting from Rust 2024 edition, Reinhardt supports simplified conditional compilation attributes for WASM/native targets. Instead of verbose `#[cfg(target_arch = "wasm32")]`, you can use shorter aliases:
+Starting from Rust 2024 edition, Reinhardt supports simplified conditional compilation attributes for WASM/server targets. Instead of verbose `#[cfg(target_arch = "wasm32")]`, you can use shorter aliases:
 
-- **`#[cfg(wasm)]`** - Code runs only in WASM (browser)
-- **`#[cfg(native)]`** - Code runs only on native (server)
+- **`#[cfg(client)]`** - Code runs only in WASM (browser)
+- **`#[cfg(server)]`** - Code runs only on native (server)
 
-This is configured in your `build.rs`:
+This is configured in your `build.rs` using the `cfg_aliases` crate:
 
 ```rust
-fn main() {
-	// Define custom cfg aliases
-	println!("cargo:rustc-check-cfg=cfg(wasm)");
-	println!("cargo:rustc-check-cfg=cfg(native)");
+use cfg_aliases::cfg_aliases;
 
-	if std::env::var("CARGO_CFG_TARGET_ARCH").unwrap() == "wasm32" {
-		println!("cargo:rustc-cfg=wasm");
-	} else {
-		println!("cargo:rustc-cfg=native");
+fn main() {
+	// Rust 2024 edition requires explicit check-cfg declarations
+	println!("cargo::rustc-check-cfg=cfg(client)");
+	println!("cargo::rustc-check-cfg=cfg(server)");
+
+	cfg_aliases! {
+		// Platform aliases for simpler conditional compilation
+		// Use `#[cfg(client)]` instead of `#[cfg(target_arch = "wasm32")]`
+		client: { target_arch = "wasm32" },
+		// Use `#[cfg(server)]` instead of `#[cfg(not(target_arch = "wasm32"))]`
+		server: { not(target_arch = "wasm32") },
 	}
 }
 ```
 
 **Benefits:**
-- **Shorter code**: `#[cfg(wasm)]` vs `#[cfg(target_arch = "wasm32")]`
-- **Clearer intent**: `wasm` and `native` are more semantic than architecture names
+- **Shorter code**: `#[cfg(client)]` vs `#[cfg(target_arch = "wasm32")]`
+- **Clearer intent**: `client` and `server` are more semantic than architecture names
 - **Easier maintenance**: Less typing, less visual noise
 
-Throughout this tutorial, we use the simplified `#[cfg(wasm)]` and `#[cfg(native)]` syntax. If you see `#[cfg(target_arch = "wasm32")]` in older code, they are equivalent when the build.rs configuration is in place.
+Throughout this tutorial, we use the simplified `#[cfg(client)]` and `#[cfg(server)]` syntax. If you see `#[cfg(target_arch = "wasm32")]` in older code, they are equivalent when the build.rs configuration is in place.
 
 ### 1. Update Cargo.toml
 
@@ -64,7 +68,7 @@ Add WASM support and reinhardt-pages dependency:
 crate-type = ["cdylib", "rlib"]  # cdylib for WASM, rlib for server
 
 # WASM-specific dependencies (using simplified cfg)
-[target.'cfg(wasm)'.dependencies]
+[target.'cfg(client)'.dependencies]
 reinhardt-pages = { workspace = true }
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = [
@@ -73,7 +77,7 @@ web-sys = { version = "0.3", features = [
 console_error_panic_hook = "0.1"
 
 # Server-specific dependencies (using simplified cfg)
-[target.'cfg(native)'.dependencies]
+[target.'cfg(server)'.dependencies]
 reinhardt = { workspace = true, features = ["full", "pages"] }
 tokio = { version = "1", features = ["full"] }
 ```

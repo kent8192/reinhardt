@@ -505,7 +505,7 @@ Typical validation workflow in an API view with Reinhardt:
 ```rust
 use json::json;
 use reinhardt::core::serde::json;
-use reinhardt::http::ViewResult;
+use reinhardt::ViewResult;
 use reinhardt::{post, Json, Response, StatusCode};
 use validator::Validate;
 

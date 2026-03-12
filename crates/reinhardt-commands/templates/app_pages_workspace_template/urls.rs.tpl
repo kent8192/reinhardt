@@ -1,4 +1,4 @@
-//! URL configuration for {{ app_name }} app (RESTful)
+//! URL configuration for {{ app_name }} app (Pages)
 
 use reinhardt::UnifiedRouter;
 

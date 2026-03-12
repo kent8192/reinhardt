@@ -34,7 +34,7 @@ use reinhardt::prelude::*;
 use reinhardt::get;
 
 #[get("/users", name = "list_users")]
-pub async fn list_users() -> Result<Response> {
+pub async fn list_users() -> ViewResult<Response> {
     let users = vec!["Alice", "Bob", "Charlie"];
     let json = serde_json::to_string(&users)?;
 
@@ -48,7 +48,7 @@ pub async fn list_users() -> Result<Response> {
 
 ```rust
 use reinhardt::post;
-use reinhardt::http::Json;
+use reinhardt::Json;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize)]
@@ -60,7 +60,7 @@ struct CreateUserRequest {
 #[post("/users", name = "create_user")]
 pub async fn create_user(
     Json(data): Json<CreateUserRequest>,
-) -> Result<Response> {
+) -> ViewResult<Response> {
     // Process the user creation
     let user_id = 123; // Simulated
 
@@ -82,19 +82,19 @@ pub async fn create_user(
 use reinhardt::{get, post, put, patch, delete};
 
 #[get("/resource", name = "read")]
-pub async fn read() -> Result<Response> { /* ... */ }
+pub async fn read() -> ViewResult<Response> { /* ... */ }
 
 #[post("/resource", name = "create")]
-pub async fn create() -> Result<Response> { /* ... */ }
+pub async fn create() -> ViewResult<Response> { /* ... */ }
 
 #[put("/resource/{id}/", name = "update")]
-pub async fn update() -> Result<Response> { /* ... */ }
+pub async fn update() -> ViewResult<Response> { /* ... */ }
 
 #[patch("/resource/{id}/", name = "partial_update")]
-pub async fn partial_update() -> Result<Response> { /* ... */ }
+pub async fn partial_update() -> ViewResult<Response> { /* ... */ }
 
 #[delete("/resource/{id}/", name = "destroy")]
-pub async fn destroy() -> Result<Response> { /* ... */ }
+pub async fn destroy() -> ViewResult<Response> { /* ... */ }
 ```
 
 ---
@@ -107,12 +107,12 @@ Use the `Path` extractor to capture URL parameters:
 
 ```rust
 use reinhardt::get;
-use reinhardt::http::Path;
+use reinhardt::Path;
 
 #[get("/users/{id}/", name = "get_user")]
 pub async fn get_user(
     Path(user_id): Path<i64>,
-) -> Result<Response> {
+) -> ViewResult<Response> {
     // user_id is automatically parsed from the URL
     let response = serde_json::json!({
         "id": user_id,
@@ -131,7 +131,7 @@ pub async fn get_user(
 #[get("/users/{user_id}/posts/{post_id}/", name = "get_user_post")]
 pub async fn get_user_post(
     Path((user_id, post_id)): Path<(i64, i64)>,
-) -> Result<Response> {
+) -> ViewResult<Response> {
     let response = serde_json::json!({
         "user_id": user_id,
         "post_id": post_id,
@@ -151,7 +151,7 @@ use std::collections::HashMap;
 #[get("/articles/{year}/{month}/{slug}/", name = "get_article")]
 pub async fn get_article(
     Path((year, month, slug)): Path<(i32, i32, String)>,
-) -> Result<Response> {
+) -> ViewResult<Response> {
     // year, month, slug are automatically parsed from the URL
 
     // ... use year, month, slug
@@ -173,7 +173,7 @@ use reinhardt::db::DatabaseConnection;
 #[get("/data", name = "get_data")]
 pub async fn get_data(
     #[inject] db: DatabaseConnection,
-) -> Result<Response> {
+) -> ViewResult<Response> {
     // db is automatically injected by the framework
     let data = db.query("SELECT * FROM items").fetch_all().await?;
     let json = serde_json::to_string(&data)?;
@@ -195,7 +195,7 @@ pub async fn get_user(
     req: Request,
     #[inject] db: DatabaseConnection,
     #[inject(cache = true)] cache: Arc<Cache>,
-) -> Result<Response> {
+) -> ViewResult<Response> {
     // Extract path parameter
     let id = req.path_params.get("id")
         .ok_or("Missing id")?
@@ -345,7 +345,7 @@ impl FromRequest for CurrentUser {
 
 // Use in handlers
 #[get("/profile", name = "profile")]
-pub async fn profile(user: CurrentUser) -> Result<Response> {
+pub async fn profile(user: CurrentUser) -> ViewResult<Response> {
     let response = serde_json::json!({
         "id": user.id,
         "username": user.username,
@@ -468,10 +468,10 @@ let user_id = req.path_params.get("id")?.parse::<i64>()?;
 #[get("/data", name = "get_data")]
 pub async fn get_data(
     #[inject] db: DatabaseConnection,
-) -> Result<Response> { /* ... */ }
+) -> ViewResult<Response> { /* ... */ }
 
 // ❌ Avoid: Manual threading
-pub async fn get_data(req: Request) -> Result<Response> {
+pub async fn get_data(req: Request) -> ViewResult<Response> {
     let db = req.app_state.get::<DatabaseConnection>()?;
     // ...
 }

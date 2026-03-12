@@ -44,11 +44,23 @@ struct Snippet {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 struct SnippetSerializer {
-	#[validate(length(min = 1, max = 100))]
+	#[validate(length(
+		min = 1,
+		max = 100,
+		message = "Title must be between 1 and 100 characters"
+	))]
 	pub title: String,
-	#[validate(length(min = 1, max = 65535))]
+	#[validate(length(
+		min = 1,
+		max = 10000,
+		message = "Code must be between 1 and 10000 characters"
+	))]
 	pub code: String,
-	#[validate(length(min = 1, max = 50))]
+	#[validate(length(
+		min = 1,
+		max = 50,
+		message = "Language must be between 1 and 50 characters"
+	))]
 	pub language: String,
 }
 

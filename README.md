@@ -29,7 +29,7 @@ Reinhardt is designed for developers who:
 
 - **Know Django/DRF** and want the same productivity in Rust
 - **Use Axum/Actix** but miss Django's batteries (ORM, admin, auth, DI)
-- **Need a full-stack Rust framework** without adopting Leptos/Dioxus for the frontend
+- **Want an integrated Rust web stack** without assembling everything from scratch
 - **Want incremental adoption** -- start with just DI or ORM, grow into a full stack later
 
 If you have written `ModelSerializer` or `Depends()` before, Reinhardt will feel like home.
@@ -44,10 +44,15 @@ cargo run --bin manage runserver  # Visit http://127.0.0.1:8000
 
 For a full walkthrough, see the [Getting Started Guide](#getting-started-guide).
 
+New to Reinhardt? Start with the default setup first. You can adopt a smaller custom stack later if needed.
+
 ## Why Reinhardt?
 
-**Polylithic** = Poly (many) + Lithic (building blocks).
-Unlike monolithic frameworks that force you to use everything, Reinhardt lets you compose your perfect stack from independent, well-tested components.
+Rust web development is powerful, but it often starts with choosing and wiring together many separate libraries.
+
+Reinhardt takes a different approach: integrated batteries when you want them, composable parts when you don't.
+
+We call this **polylithic**: many building blocks that still feel like one coherent framework.
 
 Reinhardt brings together the best of three worlds:
 

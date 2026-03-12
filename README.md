@@ -3,11 +3,11 @@
 
   <h1>Reinhardt</h1>
 
-  <h3>🦀 Polylithic Batteries Included</h3>
+  <h3>🦀 Django's productivity, Rust's performance</h3>
 
-  <p><strong>A composable full-stack API framework for Rust</strong></p>
-  <p>Build with <em>all</em> the power of Django's batteries-included philosophy,<br/>
-  or compose <em>only</em> what you need—your choice, your way.</p>
+  <p><strong>A composable, batteries-included web framework for Rust</strong></p>
+  <p>Build with the integrated experience of Django/DRF,<br/>
+  or compose only the pieces you need.</p>
 
 [![Crates.io](https://img.shields.io/crates/v/reinhardt-web.svg)](https://crates.io/crates/reinhardt-web)
 [![Documentation](https://docs.rs/reinhardt-web/badge.svg)](https://docs.rs/reinhardt-web)
@@ -19,20 +19,9 @@
 
 ---
 
-## 📍 Quick Navigation
+## Quick Navigation
 
-You may be looking for:
-
-- 🌐 [Official Website](https://reinhardt-web.dev) - Documentation, tutorials, and guides
-- 🚀 [Quick Start](#quick-start) - Get up and running in 5 minutes
-- 📦 [Installation Options](#installation) - Choose your flavor: Micro, Standard, or Full
-- 📚 [Getting Started Guide](https://reinhardt-web.dev/quickstart/getting-started/) - Step-by-step tutorial
-- 🎛️ [Feature Flags](https://reinhardt-web.dev/docs/feature-flags/) - Fine-tune your build
-- 📖 [API Documentation](https://docs.rs/reinhardt-web) - Complete API reference
-- 🎯 [Who is Reinhardt For?](#who-is-reinhardt-for) - Check if Reinhardt fits your needs
-- 🛤️ [Choose Your Path](#choose-your-path) - Find the right starting point for you
-- 🔒 [API Stability](#api-stability) - Our stability promise and release lifecycle
-- 💬 [Community & Support](#getting-help) - Get help from the community
+[Who is Reinhardt For?](#who-is-reinhardt-for) · [Quick Start](#quick-start) · [Why Reinhardt?](#why-reinhardt) · [Key Features](#key-features) · [Installation](#installation) · [Getting Started](#getting-started-guide) · [Components](#available-components) · [API Stability](#api-stability)
 
 ## Who is Reinhardt For?
 
@@ -45,55 +34,19 @@ Reinhardt is designed for developers who:
 
 If you have written `ModelSerializer` or `Depends()` before, Reinhardt will feel like home.
 
-## Choose Your Path
-
-| Your Goal | Start Here | Time to First Request |
-|-----------|-----------|----------------------|
-| **Full-stack REST API** | [Quick Start](#quick-start) | ~5 min |
-| **Just DI for my Axum app** | Planned | - |
-| **Full-stack with Pages (WASM + SSR)** | [Twitter Demo](examples/examples-twitter/) | ~10 min |
-
-### Path A: Full-Stack REST API
+## Quick Start
 
 ```bash
 cargo install reinhardt-admin-cli
-reinhardt-admin startproject myproject
-cd myproject
-cargo run --bin manage runserver
-# Visit http://127.0.0.1:8000
+reinhardt-admin startproject my-api && cd my-api
+cargo run --bin manage runserver  # Visit http://127.0.0.1:8000
 ```
 
-### Path B: Standalone DI (Planned)
-
-> **Note:** Standalone DI is not officially supported yet and has not been verified to work.
-> This feature is planned for a future release.
-
-```toml
-[dependencies]
-reinhardt = { version = "0.1.0-rc.8", package = "reinhardt-web", features = ["minimal"] }
-```
-
-```rust
-use reinhardt::{Json, Path, Query};
-
-#[reinhardt::endpoint(method = "GET", path = "/hello/:name")]
-async fn hello(Path(name): Path<String>) -> Json<String> {
-    Json(format!("Hello, {}!", name))
-}
-```
-
-### Path C: Full-Stack with Pages
-
-```bash
-reinhardt-admin startproject myproject --with-pages
-cd myproject
-cargo make dev
-# Frontend: http://127.0.0.1:8000
-```
+For a full walkthrough, see the [Getting Started Guide](#getting-started-guide).
 
 ## Why Reinhardt?
 
-**Polylithic = Poly (many) + Lithic (building blocks)**
+**Polylithic** = Poly (many) + Lithic (building blocks).
 Unlike monolithic frameworks that force you to use everything, Reinhardt lets you compose your perfect stack from independent, well-tested components.
 
 Reinhardt brings together the best of three worlds:
@@ -146,9 +99,6 @@ For the full stability policy, see [API Stability Policy](docs/API_STABILITY.md)
 ## Installation
 
 Reinhardt is a modular framework. Choose your starting point:
-
-**Note on Crate Naming:**
-The main Reinhardt crate is published on crates.io as `reinhardt-web`, but you import it as `reinhardt` in your code using the `package` attribute.
 
 ### Default: Full-Featured (Batteries Included) ⚠️ New Default
 
@@ -224,9 +174,12 @@ reinhardt-graphql = "0.1.0-rc.8"
 reinhardt-websockets = "0.1.0-rc.8"
 ```
 
+**Note on Crate Naming:**
+The main Reinhardt crate is published on crates.io as `reinhardt-web`, but you import it as `reinhardt` in your code using the `package` attribute.
+
 **📖 For a complete list of available crates and feature flags, see the [Feature Flags Guide](https://reinhardt-web.dev/docs/feature-flags/).**
 
-## Quick Start
+## Getting Started Guide
 
 ### 1. Install Reinhardt Admin Tool
 
@@ -1058,6 +1011,17 @@ pub async fn create_user(
 		.with_body(json))
 }
 ```
+
+## Adoption Paths
+
+| Your Goal | Start Here |
+|-----------|-----------|
+| **Full-stack REST API** | [Getting Started Guide](#getting-started-guide) |
+| **Full-stack with Pages (WASM + SSR)** | [Twitter Demo](examples/examples-twitter/) |
+| **Lightweight DI-focused API** | [Minimal Installation](#option-2-microservices-minimal-setup) |
+
+> **Standalone DI for existing Axum apps** is planned for a future release.
+> See [Discussions](https://github.com/kent8192/reinhardt-web/discussions) for updates.
 
 ## Available Components
 

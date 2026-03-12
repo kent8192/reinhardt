@@ -2,6 +2,8 @@
 //!
 //! A Reinhardt Pages application with WASM frontend and server functions
 
+use reinhardt::app_config;
+
 // Server-side modules
 pub mod admin;
 pub mod models;

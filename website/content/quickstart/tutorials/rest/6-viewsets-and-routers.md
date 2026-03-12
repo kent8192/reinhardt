@@ -70,6 +70,15 @@ let snippet_viewset = ReadOnlyModelViewSet::<Snippet, SnippetSerializer>::new("s
 
 Register ViewSets with routers to automatically generate URLs.
 
+> **Note:** `UnifiedRouter` is available by default on server (non-WASM) targets.
+> If you are targeting WASM or need client-side routing support, enable the
+> `client-router` feature in your `Cargo.toml`:
+>
+> ```toml
+> [dependencies]
+> reinhardt = { version = "...", features = ["client-router"] }
+> ```
+
 Define your ViewSet registrations in `urls.rs`:
 
 ```rust

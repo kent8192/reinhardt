@@ -163,6 +163,9 @@ pub mod output;
 pub mod plugin_commands;
 /// Command registry for discovery and dispatch.
 pub mod registry;
+/// Static site generation command.
+#[cfg(feature = "ssg")]
+pub mod ssg_commands;
 /// Project and app scaffolding commands (startproject, startapp).
 pub mod start_commands;
 /// Template-based code generation utilities.
@@ -193,6 +196,9 @@ pub use wasm_builder::{
 	WasmBuildConfig, WasmBuildError, WasmBuildOutput, WasmBuilder, check_wasm_tools_installed,
 };
 pub use welcome_page::WelcomePage;
+
+#[cfg(feature = "ssg")]
+pub use ssg_commands::SsgBuildCommand;
 
 #[cfg(feature = "plugins")]
 pub use plugin_commands::{

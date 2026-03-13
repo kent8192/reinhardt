@@ -173,6 +173,10 @@ pub mod server_fn;
 // Server-side rendering
 pub mod ssr;
 
+// Static site generation (server-side only, feature-gated)
+#[cfg(all(not(target_arch = "wasm32"), feature = "ssg"))]
+pub mod ssg;
+
 // Client-side hydration
 pub mod hydration;
 
@@ -241,6 +245,8 @@ pub use reinhardt_forms::{
 };
 pub use router::{Link, PathPattern, Route, Router, RouterOutlet};
 pub use server_fn::{ServerFn, ServerFnError};
+#[cfg(all(not(target_arch = "wasm32"), feature = "ssg"))]
+pub use ssg::{SitemapGenerator, SsgBuilder, SsgOutput, SsgRoute};
 pub use ssr::{SsrOptions, SsrRenderer, SsrState};
 pub use static_resolver::{init_static_resolver, is_initialized, resolve_static};
 

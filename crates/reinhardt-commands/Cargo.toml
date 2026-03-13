@@ -90,6 +90,7 @@ postgres = ["reinhardt-db?/postgres", "dep:sqlx", "sqlx/postgres"]
 sqlite = ["reinhardt-db?/sqlite", "dep:sqlx", "sqlx/sqlite"]
 mysql = ["reinhardt-db?/mysql", "dep:sqlx", "sqlx/mysql"]
 testcontainers = ["dep:reinhardt-test", "reinhardt-test?/testcontainers"]
+ssg = ["reinhardt-pages/ssg"]
 plugins = ["dep:reinhardt-dentdelion"]
 full = [
   "migrations",
@@ -106,4 +107,5 @@ full = [
   "mysql",
   "testcontainers",
   "plugins",
+  "ssg",
 ]

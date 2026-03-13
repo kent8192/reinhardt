@@ -1,10 +1,10 @@
 use chrono::Utc;
 use json::json;
+use reinhardt::Validate;
 use reinhardt::core::serde::json;
 use reinhardt::http::ViewResult;
 use reinhardt::{Json, Path, Response, StatusCode};
 use reinhardt::{delete, get, post, put};
-use reinhardt::Validate;
 
 use super::models::Snippet;
 use super::serializers::{SnippetResponse, SnippetSerializer};

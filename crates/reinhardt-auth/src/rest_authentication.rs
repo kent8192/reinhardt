@@ -141,6 +141,16 @@ impl Default for CompositeAuthentication {
 
 #[async_trait::async_trait]
 impl RestAuthentication for CompositeAuthentication {
+	/// Fallback authentication pattern: backends are tried sequentially.
+	///
+	/// - `Ok(Some(user))`: authentication succeeded, return immediately
+	/// - `Ok(None)`: this backend does not handle this authentication type, try next
+	/// - `Err(e)`: backend error (e.g., database failure), log and try next
+	///
+	/// Errors are only propagated when ALL backends return `Err`, meaning no backend
+	/// could attempt authentication. If any backend returns `Ok(None)`, it indicates
+	/// that at least one backend processed the request normally, so errors from
+	/// other backends are considered irrelevant to this request type.
 	async fn authenticate(
 		&self,
 		request: &Request,
@@ -596,11 +606,13 @@ impl<B: SessionBackend> AuthenticationBackend for SessionAuthentication<B> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::AuthenticationError;
 	#[cfg(feature = "jwt")]
 	use crate::basic::BasicAuthentication;
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method};
 	use rstest::rstest;
+	use std::sync::Mutex;
 
 	#[tokio::test]
 	#[cfg(feature = "jwt")]
@@ -924,5 +936,121 @@ mod tests {
 			.unwrap();
 		assert!(result.is_some());
 		assert_eq!(result.unwrap().get_username(), "charlie");
+	}
+
+	struct MockAuthBackend {
+		auth_result: Mutex<Option<Result<Option<Box<dyn User>>, AuthenticationError>>>,
+		get_user_result: Mutex<Option<Result<Option<Box<dyn User>>, AuthenticationError>>>,
+	}
+
+	impl MockAuthBackend {
+		fn new(
+			auth_result: Result<Option<Box<dyn User>>, AuthenticationError>,
+			get_user_result: Result<Option<Box<dyn User>>, AuthenticationError>,
+		) -> Self {
+			Self {
+				auth_result: Mutex::new(Some(auth_result)),
+				get_user_result: Mutex::new(Some(get_user_result)),
+			}
+		}
+	}
+
+	#[async_trait::async_trait]
+	impl AuthenticationBackend for MockAuthBackend {
+		async fn authenticate(
+			&self,
+			_request: &Request,
+		) -> Result<Option<Box<dyn User>>, AuthenticationError> {
+			self.auth_result.lock().unwrap().take().unwrap_or(Ok(None))
+		}
+
+		async fn get_user(
+			&self,
+			_user_id: &str,
+		) -> Result<Option<Box<dyn User>>, AuthenticationError> {
+			self.get_user_result
+				.lock()
+				.unwrap()
+				.take()
+				.unwrap_or(Ok(None))
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_composite_auth_all_backends_error() {
+		// Arrange
+		let composite = CompositeAuthentication::new()
+			.with_backend(MockAuthBackend::new(
+				Err(AuthenticationError::DatabaseError("db1 down".to_string())),
+				Err(AuthenticationError::DatabaseError("db1 down".to_string())),
+			))
+			.with_backend(MockAuthBackend::new(
+				Err(AuthenticationError::DatabaseError("db2 down".to_string())),
+				Err(AuthenticationError::DatabaseError("db2 down".to_string())),
+			));
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let result = RestAuthentication::authenticate(&composite, &request).await;
+
+		// Assert - all backends errored, so error is propagated
+		assert!(result.is_err());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_composite_auth_one_error_one_none() {
+		// Arrange - one backend errors, another returns Ok(None)
+		// This tests the intentional fallback behavior: Ok(None) means
+		// "this backend doesn't handle this auth type", so errors from
+		// other backends are irrelevant.
+		let composite = CompositeAuthentication::new()
+			.with_backend(MockAuthBackend::new(
+				Err(AuthenticationError::DatabaseError("db down".to_string())),
+				Err(AuthenticationError::DatabaseError("db down".to_string())),
+			))
+			.with_backend(MockAuthBackend::new(Ok(None), Ok(None)));
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let result = RestAuthentication::authenticate(&composite, &request).await;
+
+		// Assert - one backend returned Ok(None), so errors are not propagated
+		assert!(result.is_ok());
+		assert!(result.unwrap().is_none());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_composite_get_user_all_error() {
+		// Arrange
+		let composite = CompositeAuthentication::new()
+			.with_backend(MockAuthBackend::new(
+				Ok(None),
+				Err(AuthenticationError::DatabaseError("db1 down".to_string())),
+			))
+			.with_backend(MockAuthBackend::new(
+				Ok(None),
+				Err(AuthenticationError::DatabaseError("db2 down".to_string())),
+			));
+
+		// Act
+		let result = AuthenticationBackend::get_user(&composite, "some_user").await;
+
+		// Assert - all backends errored on get_user, so error is propagated
+		assert!(result.is_err());
 	}
 }

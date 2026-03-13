@@ -625,4 +625,85 @@ mod tests {
 		// Act & Assert - no user means we cannot check role
 		assert!(!perm.has_permission(&context).await);
 	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_role_permission_denies_empty_permission_list() {
+		// Arrange
+		let mut perm = RoleBasedPermission::new();
+		perm.add_role("viewer", Vec::<String>::new());
+		perm.assign_user_role("alice", "viewer");
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		let context = PermissionContext {
+			request: &request,
+			is_authenticated: true,
+			is_admin: false,
+			is_active: true,
+			user: Some(make_user("alice")),
+		};
+
+		// Act & Assert
+		assert!(!perm.has_permission(&context).await);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_role_permission_with_required_permission_grants() {
+		// Arrange
+		let mut perm = RoleBasedPermission::with_required_permission("write");
+		perm.add_role("editor", vec!["read", "write"]);
+		perm.assign_user_role("alice", "editor");
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		let context = PermissionContext {
+			request: &request,
+			is_authenticated: true,
+			is_admin: false,
+			is_active: true,
+			user: Some(make_user("alice")),
+		};
+
+		// Act & Assert
+		assert!(perm.has_permission(&context).await);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_role_permission_with_required_permission_denies() {
+		// Arrange
+		let mut perm = RoleBasedPermission::with_required_permission("delete");
+		perm.add_role("editor", vec!["read", "write"]);
+		perm.assign_user_role("alice", "editor");
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		let context = PermissionContext {
+			request: &request,
+			is_authenticated: true,
+			is_admin: false,
+			is_active: true,
+			user: Some(make_user("alice")),
+		};
+
+		// Act & Assert
+		assert!(!perm.has_permission(&context).await);
+	}
 }

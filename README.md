@@ -651,12 +651,12 @@ async fn manage_users() -> Result<(), Box<dyn std::error::Error>> {
 		username: "alice".to_string(),
 		email: "alice@example.com".to_string(),
 		password: "secure_password".to_string(),
-		first_name: Some("Alice".to_string()),
-		last_name: Some("Smith".to_string()),
+		is_active: true,
+		is_admin: false,
 	}).await?;
 
 	// Update user information
-	user_manager.update_user(user.id, UpdateUserData {
+	user_manager.update_user(&user.id.to_string(), UpdateUserData {
 		email: Some("alice.smith@example.com".to_string()),
 		is_active: Some(true),
 		..Default::default()
@@ -669,11 +669,10 @@ async fn manage_users() -> Result<(), Box<dyn std::error::Error>> {
 	}).await?;
 
 	// Assign object-level permissions
-	let permission = ObjectPermission::new("edit", user.id, article.id);
-	let perm_checker = ObjectPermissionChecker::new();
-	if perm_checker.has_permission(&user, "edit", &article).await? {
-		// User can edit the article
-	}
+	let mut perm_manager = ObjectPermissionManager::new();
+	perm_manager.grant_permission("alice", "article:123", "edit");
+	let perm = ObjectPermission::new(perm_manager, "article:123", "edit");
+	// Use perm with the permission system to check access
 
 	Ok(())
 }
@@ -701,7 +700,7 @@ If you need additional fields beyond DefaultUser, define your own:
 
 ```rust
 // users/models.rs
-use reinhardt::auth::{BaseUser, FullUser, PermissionsMixin};
+use reinhardt::auth::{BaseUser, FullUser, PermissionsMixin, Argon2Hasher};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use serde::{Serialize, Deserialize};
@@ -746,6 +745,7 @@ pub struct CustomUser {
 
 impl BaseUser for CustomUser {
 	type PrimaryKey = Uuid;
+	type Hasher = Argon2Hasher;
 
 	fn get_username_field() -> &'static str { "username" }
 	fn get_username(&self) -> &str { &self.username }
@@ -1078,7 +1078,7 @@ Reinhardt offers modular components you can mix and match:
 
 - 📚 [Getting Started Guide](https://reinhardt-web.dev/quickstart/getting-started/) - Step-by-step tutorial for beginners
 - 🎛️ [Feature Flags Guide](https://reinhardt-web.dev/docs/feature-flags/) - Optimize your build with granular feature control
-- 📖 [API Reference](https://docs.rs/reinhardt) (Coming soon)
+- 📖 [API Reference](https://docs.rs/reinhardt-web) (Coming soon)
 - 📝 [Tutorials](https://reinhardt-web.dev/quickstart/tutorials/) - Learn by building real applications
 
 **For AI Assistants**: See [CLAUDE.md](CLAUDE.md) for project-specific coding standards, testing guidelines, and development conventions.

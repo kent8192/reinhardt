@@ -6,6 +6,7 @@
 use super::time_provider::{SystemTimeProvider, TimeProvider};
 use super::{Throttle, ThrottleError, ThrottleResult};
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::Instant;
@@ -130,7 +131,7 @@ struct BucketState {
 pub struct LeakyBucketThrottle<T: TimeProvider = SystemTimeProvider> {
 	config: LeakyBucketConfig,
 	time_provider: Arc<T>,
-	state: Arc<RwLock<BucketState>>,
+	states: Arc<RwLock<HashMap<String, BucketState>>>,
 }
 
 impl LeakyBucketThrottle<SystemTimeProvider> {
@@ -145,15 +146,10 @@ impl LeakyBucketThrottle<SystemTimeProvider> {
 	/// let throttle = LeakyBucketThrottle::new(config);
 	/// ```
 	pub fn new(config: LeakyBucketConfig) -> Self {
-		let initial_state = BucketState {
-			level: 0.0,
-			last_leak: SystemTimeProvider::new().now(),
-		};
-
 		Self {
 			config,
 			time_provider: Arc::new(SystemTimeProvider::new()),
-			state: Arc::new(RwLock::new(initial_state)),
+			states: Arc::new(RwLock::new(HashMap::new())),
 		}
 	}
 }
@@ -161,15 +157,18 @@ impl LeakyBucketThrottle<SystemTimeProvider> {
 impl<T: TimeProvider> LeakyBucketThrottle<T> {
 	/// Creates a new leaky bucket with custom time provider
 	pub fn with_time_provider(config: LeakyBucketConfig, time_provider: Arc<T>) -> Self {
-		let initial_state = BucketState {
-			level: 0.0,
-			last_leak: time_provider.now(),
-		};
-
 		Self {
 			config,
 			time_provider,
-			state: Arc::new(RwLock::new(initial_state)),
+			states: Arc::new(RwLock::new(HashMap::new())),
+		}
+	}
+
+	/// Create a new bucket state initialized as empty
+	fn new_bucket_state(&self) -> BucketState {
+		BucketState {
+			level: 0.0,
+			last_leak: self.time_provider.now(),
 		}
 	}
 
@@ -187,31 +186,47 @@ impl<T: TimeProvider> LeakyBucketThrottle<T> {
 		state.last_leak = now;
 	}
 
-	/// Get current bucket level
-	pub async fn level(&self) -> f64 {
-		let mut state = self.state.write().await;
-		self.leak_bucket(&mut state);
+	/// Get current bucket level for a given key
+	pub async fn level_for_key(&self, key: &str) -> f64 {
+		let mut states = self.states.write().await;
+		let state = states
+			.entry(key.to_string())
+			.or_insert_with(|| self.new_bucket_state());
+		self.leak_bucket(state);
 		state.level
 	}
 
-	/// Reset the bucket to empty
+	/// Get current bucket level (uses default empty key for backward compatibility)
+	pub async fn level(&self) -> f64 {
+		self.level_for_key("").await
+	}
+
+	/// Reset the bucket for a specific key
+	pub async fn reset_key(&self, key: &str) {
+		let mut states = self.states.write().await;
+		states.remove(key);
+	}
+
+	/// Reset all buckets
 	pub async fn reset(&self) {
-		let mut state = self.state.write().await;
-		state.level = 0.0;
-		state.last_leak = self.time_provider.now();
+		let mut states = self.states.write().await;
+		states.clear();
 	}
 }
 
 #[async_trait]
 impl<T: TimeProvider> Throttle for LeakyBucketThrottle<T> {
-	async fn allow_request(&self, _key: &str) -> ThrottleResult<bool> {
-		let mut state = self.state.write().await;
+	async fn allow_request(&self, key: &str) -> ThrottleResult<bool> {
+		let mut states = self.states.write().await;
+		let state = states
+			.entry(key.to_string())
+			.or_insert_with(|| self.new_bucket_state());
 
 		// Leak requests first
-		self.leak_bucket(&mut state);
+		self.leak_bucket(state);
 
-		// Check if there's room in the bucket
-		if state.level < self.config.capacity as f64 {
+		// Check if there's room in the bucket after adding one request
+		if state.level + 1.0 <= self.config.capacity as f64 {
 			state.level += 1.0;
 			Ok(true)
 		} else {
@@ -219,10 +234,15 @@ impl<T: TimeProvider> Throttle for LeakyBucketThrottle<T> {
 		}
 	}
 
-	async fn wait_time(&self, _key: &str) -> ThrottleResult<Option<u64>> {
-		let state = self.state.read().await;
+	async fn wait_time(&self, key: &str) -> ThrottleResult<Option<u64>> {
+		let mut states = self.states.write().await;
+		let state = states
+			.entry(key.to_string())
+			.or_insert_with(|| self.new_bucket_state());
 
-		if state.level < self.config.capacity as f64 {
+		self.leak_bucket(state);
+
+		if state.level + 1.0 <= self.config.capacity as f64 {
 			return Ok(None);
 		}
 
@@ -323,7 +343,7 @@ mod tests {
 		let throttle = LeakyBucketThrottle::with_time_provider(config, time_provider.clone());
 
 		// Assert - initial level should be 0
-		assert_eq!(throttle.level().await, 0.0);
+		assert_eq!(throttle.level_for_key("user").await, 0.0);
 
 		// Act - add 5 requests
 		for _ in 0..5 {
@@ -331,13 +351,13 @@ mod tests {
 		}
 
 		// Assert
-		assert_eq!(throttle.level().await, 5.0);
+		assert_eq!(throttle.level_for_key("user").await, 5.0);
 
 		// Act - advance time by 1 second (2 requests leak)
 		time_provider.advance(std::time::Duration::from_secs(1));
 
 		// Assert
-		assert_eq!(throttle.level().await, 3.0);
+		assert_eq!(throttle.level_for_key("user").await, 3.0);
 	}
 
 	#[rstest]
@@ -353,13 +373,13 @@ mod tests {
 		for _ in 0..10 {
 			throttle.allow_request("user").await.unwrap();
 		}
-		assert!(throttle.level().await > 0.0);
+		assert!(throttle.level_for_key("user").await > 0.0);
 
-		// Act - reset
+		// Act - reset all buckets
 		throttle.reset().await;
 
-		// Assert
-		assert_eq!(throttle.level().await, 0.0);
+		// Assert - after reset, a new bucket is created with level 0
+		assert_eq!(throttle.level_for_key("user").await, 0.0);
 	}
 
 	#[rstest]
@@ -380,6 +400,66 @@ mod tests {
 		let wait = throttle.wait_time("user").await.unwrap();
 		assert!(wait.is_some());
 		assert!(wait.unwrap() > 0);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_leaky_bucket_per_key_isolation() {
+		// Arrange
+		use tokio::time::Instant;
+		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
+		let config = LeakyBucketConfig::new(5, 1.0).unwrap();
+		let throttle = LeakyBucketThrottle::with_time_provider(config, time_provider);
+
+		// Act - fill the bucket for "alice"
+		for _ in 0..5 {
+			assert!(throttle.allow_request("alice").await.unwrap());
+		}
+
+		// Assert - "alice" is full, "bob" is independent and still allowed
+		assert!(!throttle.allow_request("alice").await.unwrap());
+		assert!(throttle.allow_request("bob").await.unwrap());
+
+		// Assert - levels are independent
+		assert_eq!(throttle.level_for_key("alice").await, 5.0);
+		assert_eq!(throttle.level_for_key("bob").await, 1.0);
+
+		// Assert - wait_time is independent
+		let alice_wait = throttle.wait_time("alice").await.unwrap();
+		let bob_wait = throttle.wait_time("bob").await.unwrap();
+		assert!(alice_wait.is_some());
+		assert!(bob_wait.is_none());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_leaky_bucket_reset_key() {
+		// Arrange
+		use tokio::time::Instant;
+		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
+		let config = LeakyBucketConfig::new(5, 1.0).unwrap();
+		let throttle = LeakyBucketThrottle::with_time_provider(config, time_provider);
+
+		// Act - fill both keys
+		for _ in 0..5 {
+			throttle.allow_request("alice").await.unwrap();
+			throttle.allow_request("bob").await.unwrap();
+		}
+
+		// Assert - both full
+		assert_eq!(throttle.level_for_key("alice").await, 5.0);
+		assert_eq!(throttle.level_for_key("bob").await, 5.0);
+
+		// Act - reset only "alice"
+		throttle.reset_key("alice").await;
+
+		// Assert - "alice" is reset, "bob" is unchanged
+		assert_eq!(throttle.level_for_key("alice").await, 0.0);
+		assert_eq!(throttle.level_for_key("bob").await, 5.0);
+
+		// Assert - "alice" can accept requests again, "bob" cannot
+		assert!(throttle.allow_request("alice").await.unwrap());
+		assert!(!throttle.allow_request("bob").await.unwrap());
 	}
 
 	#[rstest]

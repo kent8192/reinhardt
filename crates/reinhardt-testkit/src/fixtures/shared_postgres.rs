@@ -88,7 +88,8 @@ where
 /// Shared PostgreSQL container with base URL for connections
 pub struct SharedPostgres {
 	/// Container reference - kept alive to prevent container shutdown
-	#[allow(dead_code)] // Container must be kept alive for the duration of tests
+	// Allow dead_code: container handle must be kept alive to prevent shutdown during tests
+	#[allow(dead_code)]
 	container: Option<ContainerAsync<GenericImage>>,
 	/// Base connection URL (without database name)
 	pub base_url: String,

@@ -147,6 +147,8 @@ pub struct RoleBasedPermission {
 	roles: HashMap<String, Vec<String>>,
 	/// User role mapping (username -> role)
 	user_roles: HashMap<String, String>,
+	/// Required permission for the Permission trait check (optional)
+	required_permission: Option<String>,
 }
 
 impl RoleBasedPermission {
@@ -163,6 +165,31 @@ impl RoleBasedPermission {
 		Self {
 			roles: HashMap::new(),
 			user_roles: HashMap::new(),
+			required_permission: None,
+		}
+	}
+
+	/// Create a new role-based permission system with a required permission
+	///
+	/// When a required permission is set, `has_permission` checks that the user's
+	/// role includes that specific permission, not just that the user has any role.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_auth::advanced_permissions::RoleBasedPermission;
+	///
+	/// let mut perm = RoleBasedPermission::with_required_permission("write");
+	/// perm.add_role("editor", vec!["read", "write"]);
+	/// perm.assign_user_role("alice", "editor");
+	///
+	/// assert!(perm.user_has_permission("alice", "write"));
+	/// ```
+	pub fn with_required_permission(permission: impl Into<String>) -> Self {
+		Self {
+			roles: HashMap::new(),
+			user_roles: HashMap::new(),
+			required_permission: Some(permission.into()),
 		}
 	}
 
@@ -240,8 +267,21 @@ impl Permission for RoleBasedPermission {
 			None => return false,
 		};
 
-		// Check if the user has an assigned role with any permissions
-		self.user_roles.contains_key(user.username())
+		// Check specific permission within the user's role
+		match &self.required_permission {
+			Some(perm) => self.user_has_permission(user.username(), perm),
+			// If no required permission is set, check that the user has a role
+			// with at least one permission defined
+			None => {
+				if let Some(role) = self.user_roles.get(user.username())
+					&& let Some(perms) = self.roles.get(role)
+				{
+					!perms.is_empty()
+				} else {
+					false
+				}
+			}
+		}
 	}
 }
 
@@ -583,6 +623,87 @@ mod tests {
 		};
 
 		// Act & Assert - no user means we cannot check role
+		assert!(!perm.has_permission(&context).await);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_role_permission_denies_empty_permission_list() {
+		// Arrange
+		let mut perm = RoleBasedPermission::new();
+		perm.add_role("viewer", Vec::<String>::new());
+		perm.assign_user_role("alice", "viewer");
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		let context = PermissionContext {
+			request: &request,
+			is_authenticated: true,
+			is_admin: false,
+			is_active: true,
+			user: Some(make_user("alice")),
+		};
+
+		// Act & Assert
+		assert!(!perm.has_permission(&context).await);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_role_permission_with_required_permission_grants() {
+		// Arrange
+		let mut perm = RoleBasedPermission::with_required_permission("write");
+		perm.add_role("editor", vec!["read", "write"]);
+		perm.assign_user_role("alice", "editor");
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		let context = PermissionContext {
+			request: &request,
+			is_authenticated: true,
+			is_admin: false,
+			is_active: true,
+			user: Some(make_user("alice")),
+		};
+
+		// Act & Assert
+		assert!(perm.has_permission(&context).await);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_role_permission_with_required_permission_denies() {
+		// Arrange
+		let mut perm = RoleBasedPermission::with_required_permission("delete");
+		perm.add_role("editor", vec!["read", "write"]);
+		perm.assign_user_role("alice", "editor");
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		let context = PermissionContext {
+			request: &request,
+			is_authenticated: true,
+			is_admin: false,
+			is_active: true,
+			user: Some(make_user("alice")),
+		};
+
+		// Act & Assert
 		assert!(!perm.has_permission(&context).await);
 	}
 }

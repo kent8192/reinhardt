@@ -82,6 +82,7 @@ admin = [
 forms = ["reinhardt-forms"]
 graphql = ["reinhardt-graphql"]
 pages = ["reinhardt-pages"]
+pages-tui = ["pages", "reinhardt-pages/tui"]
 templates = ["reinhardt-pages"]
 # pages + web-sys full features for WASM applications
 pages-web-sys-full = ["pages", "reinhardt-pages/web-sys-full"]

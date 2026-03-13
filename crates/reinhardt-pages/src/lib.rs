@@ -194,6 +194,10 @@ pub mod static_resolver;
 // Table utilities (django-tables2 equivalent)
 pub mod tables;
 
+// TUI rendering backend (terminal-based rendering using ratatui)
+#[cfg(all(feature = "tui", not(target_arch = "wasm32")))]
+pub mod tui;
+
 // Re-export commonly used types
 pub use api::{ApiModel, ApiQuerySet, Filter, FilterOp};
 pub use auth::{AuthData, AuthError, AuthState, auth_state};

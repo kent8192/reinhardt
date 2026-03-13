@@ -4,11 +4,11 @@
 
 use async_graphql::{Context, ErrorExtensions, ID, Object, Result as GqlResult, Subscription};
 use futures_util::Stream;
+use reinhardt::Validate;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
-use reinhardt::Validate;
 
 use crate::apps::issues::errors::ApiError;
 use crate::apps::issues::models::Issue;

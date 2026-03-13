@@ -11,9 +11,9 @@ use uuid::Uuid;
 use {
 	crate::apps::profile::models::Profile,
 	reinhardt::DatabaseConnection,
+	reinhardt::Validate,
 	reinhardt::db::orm::{FilterOperator, FilterValue, Model},
 	reinhardt::middleware::session::SessionData,
-	validator::Validate,
 };
 
 /// Internal helper for profile update logic

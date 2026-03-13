@@ -19,6 +19,7 @@ debug-hooks = []
 uuid = ["dep:uuid"]
 chrono = ["dep:chrono"]
 ast = []
+tailwind = ["dep:glob"]
 # web-sys features for WASM applications
 # Applications should use this feature to get all required web-sys features
 web-sys-full = [
@@ -92,6 +93,9 @@ thiserror = { workspace = true }
 
 # Router pattern matching
 regex = "1.11"
+
+# Tailwind CSS class scanning (glob pattern matching)
+glob = { version = "0.3", optional = true }
 
 # Optional type support for path parameters
 uuid = { version = "1.0", optional = true, features = ["std"] }

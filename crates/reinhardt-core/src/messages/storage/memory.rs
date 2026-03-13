@@ -37,22 +37,22 @@ impl Default for MemoryStorage {
 
 impl MessageStorage for MemoryStorage {
 	fn add(&mut self, message: Message) {
-		let mut messages = self.messages.lock().unwrap();
+		let mut messages = self.messages.lock().unwrap_or_else(|e| e.into_inner());
 		messages.push_back(message);
 	}
 
 	fn get_all(&mut self) -> Vec<Message> {
-		let mut messages = self.messages.lock().unwrap();
+		let mut messages = self.messages.lock().unwrap_or_else(|e| e.into_inner());
 		messages.drain(..).collect()
 	}
 
 	fn peek(&self) -> Vec<Message> {
-		let messages = self.messages.lock().unwrap();
+		let messages = self.messages.lock().unwrap_or_else(|e| e.into_inner());
 		messages.iter().cloned().collect()
 	}
 
 	fn clear(&mut self) {
-		let mut messages = self.messages.lock().unwrap();
+		let mut messages = self.messages.lock().unwrap_or_else(|e| e.into_inner());
 		messages.clear();
 	}
 }

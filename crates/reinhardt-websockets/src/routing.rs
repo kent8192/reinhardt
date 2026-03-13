@@ -108,6 +108,7 @@ impl WebSocketRoute {
 /// assert_eq!(found.unwrap().name(), Some("websocket:chat"));
 /// # });
 /// ```
+#[derive(Clone)]
 pub struct WebSocketRouter {
 	routes: Arc<RwLock<HashMap<String, WebSocketRoute>>>,
 	names: Arc<RwLock<HashMap<String, String>>>, // name -> path mapping
@@ -243,11 +244,7 @@ pub async fn register_websocket_router(router: WebSocketRouter) {
 /// Get the global WebSocket router
 pub async fn get_websocket_router() -> Option<WebSocketRouter> {
 	let global = GLOBAL_ROUTER.read().await;
-	if global.is_some() {
-		Some(WebSocketRouter::new())
-	} else {
-		None
-	}
+	global.clone()
 }
 
 /// Clear the global WebSocket router

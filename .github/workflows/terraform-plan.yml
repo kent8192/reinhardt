@@ -38,10 +38,10 @@ jobs:
             backend: local
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
 
       - name: Terraform Init (S3 backend)
         if: matrix.backend == 's3'
@@ -91,7 +91,7 @@ jobs:
 
       - name: Post plan to PR
         if: github.event_name == 'pull_request' && env.SKIP_PLAN != 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           MODULE: ${{ matrix.module }}
           PLAN_EXIT: ${{ steps.plan.outputs.exitcode }}

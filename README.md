@@ -1078,7 +1078,7 @@ Reinhardt offers modular components you can mix and match:
 
 - 📚 [Getting Started Guide](https://reinhardt-web.dev/quickstart/getting-started/) - Step-by-step tutorial for beginners
 - 🎛️ [Feature Flags Guide](https://reinhardt-web.dev/docs/feature-flags/) - Optimize your build with granular feature control
-- 📖 [API Reference](https://docs.rs/reinhardt) (Coming soon)
+- 📖 [API Reference](https://docs.rs/reinhardt-web) (Coming soon)
 - 📝 [Tutorials](https://reinhardt-web.dev/quickstart/tutorials/) - Learn by building real applications
 
 **For AI Assistants**: See [CLAUDE.md](CLAUDE.md) for project-specific coding standards, testing guidelines, and development conventions.

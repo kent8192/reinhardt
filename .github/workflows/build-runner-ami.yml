@@ -34,14 +34,15 @@ jobs:
       PKR_VAR_runner_arch: ${{ github.event.inputs.architecture || 'arm64' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
+      # NOTE: Still on Node.js 20 - update when Node.js 24 version becomes available
       - name: Install Packer
         uses: hashicorp/setup-packer@v3
         with:

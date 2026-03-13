@@ -30,7 +30,8 @@
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+use tracing::warn;
 
 /// Route match result: (handler_id, path_params)
 pub type RouteCacheEntry = (String, HashMap<String, String>);
@@ -75,6 +76,14 @@ pub struct RouteCache {
 }
 
 impl RouteCache {
+	/// Acquire the inner lock, recovering from poison if necessary
+	fn lock_inner(&self) -> MutexGuard<'_, LruCache> {
+		self.inner.lock().unwrap_or_else(|e| {
+			warn!("RouteCache Mutex poisoned, recovering with inner value");
+			e.into_inner()
+		})
+	}
+
 	/// Create a new route cache with the specified capacity
 	///
 	/// # Arguments
@@ -135,7 +144,7 @@ impl RouteCache {
 	/// assert!(cache.get("/users/").is_some());
 	/// ```
 	pub fn get(&self, path: &str) -> Option<RouteCacheEntry> {
-		let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+		let mut inner = self.lock_inner();
 		inner.get(path)
 	}
 
@@ -156,7 +165,7 @@ impl RouteCache {
 	/// cache.put("/users/", ("users".to_string(), HashMap::new()));
 	/// ```
 	pub fn put(&self, path: &str, entry: RouteCacheEntry) {
-		let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+		let mut inner = self.lock_inner();
 		inner.put(path.to_string(), entry);
 	}
 
@@ -176,7 +185,7 @@ impl RouteCache {
 	/// assert_eq!(cache.len(), 0);
 	/// ```
 	pub fn clear(&self) {
-		let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+		let mut inner = self.lock_inner();
 		inner.clear();
 	}
 
@@ -195,7 +204,7 @@ impl RouteCache {
 	/// assert_eq!(cache.len(), 1);
 	/// ```
 	pub fn len(&self) -> usize {
-		let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+		let inner = self.lock_inner();
 		inner.len()
 	}
 
@@ -210,7 +219,7 @@ impl RouteCache {
 	/// assert!(cache.is_empty());
 	/// ```
 	pub fn is_empty(&self) -> bool {
-		let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+		let inner = self.lock_inner();
 		inner.is_empty()
 	}
 
@@ -225,7 +234,7 @@ impl RouteCache {
 	/// assert_eq!(cache.capacity(), 100);
 	/// ```
 	pub fn capacity(&self) -> usize {
-		let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+		let inner = self.lock_inner();
 		inner.capacity()
 	}
 
@@ -247,7 +256,7 @@ impl RouteCache {
 	/// assert!(cache.estimated_memory() > 0);
 	/// ```
 	pub fn estimated_memory(&self) -> usize {
-		let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+		let inner = self.lock_inner();
 		inner.estimated_memory
 	}
 }

@@ -29,6 +29,7 @@ js-sys = "0.3"
 reinhardt-db = { workspace = true, features = ["orm"] }
 async-trait = { workspace = true }
 futures = { workspace = true }
+tracing = { workspace = true }
 reinhardt-views = { workspace = true, features = ["viewsets"] }
 reinhardt-middleware = { workspace = true }
 reinhardt-http = { workspace = true }

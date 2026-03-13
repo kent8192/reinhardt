@@ -1,7 +1,8 @@
 //! Lazy loading and eager loading strategies for association proxies
 
 use async_trait::async_trait;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use tracing::warn;
 
 use crate::proxy::ProxyResult;
 
@@ -99,9 +100,25 @@ where
 		}
 	}
 
+	/// Acquire a read lock, recovering from poison if necessary
+	fn read_lock(&self) -> RwLockReadGuard<'_, Option<T>> {
+		self.data.read().unwrap_or_else(|e| {
+			warn!("RwLock poisoned on read, recovering with inner value");
+			e.into_inner()
+		})
+	}
+
+	/// Acquire a write lock, recovering from poison if necessary
+	fn write_lock(&self) -> RwLockWriteGuard<'_, Option<T>> {
+		self.data.write().unwrap_or_else(|e| {
+			warn!("RwLock poisoned on write, recovering with inner value");
+			e.into_inner()
+		})
+	}
+
 	/// Check if data is loaded
 	pub fn is_loaded(&self) -> bool {
-		self.data.read().unwrap_or_else(|e| e.into_inner()).is_some()
+		self.read_lock().is_some()
 	}
 
 	/// Load the data if not already loaded
@@ -115,7 +132,7 @@ where
 		let data = (self.loader)().await?;
 
 		// Store it
-		let mut guard = self.data.write().unwrap_or_else(|e| e.into_inner());
+		let mut guard = self.write_lock();
 		*guard = Some(data);
 
 		Ok(())
@@ -126,8 +143,21 @@ where
 		// Ensure data is loaded
 		self.load().await?;
 
-		let guard = self.data.read().unwrap_or_else(|e| e.into_inner());
-		Ok(guard.as_ref().unwrap().clone())
+		// Handle the case where data was reset between load() and this read
+		// by another task calling reset() concurrently.
+		let guard = self.read_lock();
+		match guard.as_ref() {
+			Some(data) => Ok(data.clone()),
+			None => {
+				// Data was reset after load() completed; drop the read lock
+				// and reload
+				drop(guard);
+				let data = (self.loader)().await?;
+				let mut write_guard = self.write_lock();
+				*write_guard = Some(data.clone());
+				Ok(data)
+			}
+		}
 	}
 
 	/// Get the loaded data without loading (returns None if not loaded)
@@ -145,13 +175,12 @@ where
 	/// assert!(lazy.get_if_loaded().is_none());
 	/// ```
 	pub fn get_if_loaded(&self) -> Option<T> {
-		let guard = self.data.read().unwrap_or_else(|e| e.into_inner());
-		guard.as_ref().cloned()
+		self.read_lock().as_ref().cloned()
 	}
 
 	/// Reset the lazy-loaded value, forcing a reload on next access
 	pub fn reset(&self) {
-		let mut guard = self.data.write().unwrap_or_else(|e| e.into_inner());
+		let mut guard = self.write_lock();
 		*guard = None;
 	}
 }
@@ -239,9 +268,31 @@ impl RelationshipCache {
 		}
 	}
 
+	/// Acquire a read lock, recovering from poison if necessary
+	fn read_lock(
+		&self,
+	) -> RwLockReadGuard<'_, std::collections::HashMap<String, Box<dyn std::any::Any + Send + Sync>>>
+	{
+		self.cache.read().unwrap_or_else(|e| {
+			warn!("RelationshipCache RwLock poisoned on read, recovering with inner value");
+			e.into_inner()
+		})
+	}
+
+	/// Acquire a write lock, recovering from poison if necessary
+	fn write_lock(
+		&self,
+	) -> RwLockWriteGuard<'_, std::collections::HashMap<String, Box<dyn std::any::Any + Send + Sync>>>
+	{
+		self.cache.write().unwrap_or_else(|e| {
+			warn!("RelationshipCache RwLock poisoned on write, recovering with inner value");
+			e.into_inner()
+		})
+	}
+
 	/// Check if a relationship is cached
 	pub fn contains(&self, key: &str) -> bool {
-		self.cache.read().unwrap_or_else(|e| e.into_inner()).contains_key(key)
+		self.read_lock().contains_key(key)
 	}
 
 	/// Get a cached relationship
@@ -249,25 +300,25 @@ impl RelationshipCache {
 	where
 		T: 'static + Clone,
 	{
-		let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
+		let cache = self.read_lock();
 		cache.get(key).and_then(|v| v.downcast_ref::<T>().cloned())
 	}
 
 	/// Set a cached relationship
 	pub fn set<T: 'static + Send + Sync>(&self, key: String, value: T) {
-		let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
+		let mut cache = self.write_lock();
 		cache.insert(key, Box::new(value));
 	}
 
 	/// Remove a cached relationship
 	pub fn remove(&self, key: &str) -> bool {
-		let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
+		let mut cache = self.write_lock();
 		cache.remove(key).is_some()
 	}
 
 	/// Clear all cached relationships
 	pub fn clear(&self) {
-		let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
+		let mut cache = self.write_lock();
 		cache.clear();
 	}
 }

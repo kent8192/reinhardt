@@ -1,6 +1,16 @@
 use crate::field::{FieldError, FieldResult, FormField, Widget};
+use regex::Regex;
+use std::sync::LazyLock;
+
+/// Cached URL validation regex to avoid repeated compilation.
+static URL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+	Regex::new(
+		r"^https?://(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}|localhost|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::\d+)?(?:/[^\s]*)?$"
+	).expect("URL regex pattern is valid")
+});
 
 /// URLField for URL input
+#[derive(Debug, Clone)]
 pub struct URLField {
 	/// The field name used as the form data key.
 	pub name: String,
@@ -42,12 +52,7 @@ impl URLField {
 	}
 
 	fn validate_url(url: &str) -> bool {
-		// Basic URL validation
-		let url_regex = regex::Regex::new(
-            r"^https?://(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}|localhost|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::\d+)?(?:/[^\s]*)?$"
-        ).unwrap();
-
-		url_regex.is_match(url)
+		URL_REGEX.is_match(url)
 	}
 }
 

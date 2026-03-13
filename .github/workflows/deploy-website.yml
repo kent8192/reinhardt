@@ -29,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Zola
         uses: taiki-e/install-action@v2
@@ -53,6 +53,7 @@ jobs:
             -d '{"production_branch": "main"}' \
             | jq -r '"Production branch set to: \(.result.production_branch)"'
 
+      # NOTE: Still on Node.js 20 - update when Node.js 24 version becomes available
       - name: Deploy to Cloudflare Pages
         id: deploy
         uses: cloudflare/wrangler-action@v3
@@ -64,6 +65,7 @@ jobs:
             --project-name=reinhardt-web
             --branch=${{ github.head_ref || github.ref_name }}
 
+      # NOTE: Still on Node.js 20 - update when Node.js 24 version becomes available
       - name: Comment preview URL on PR
         if: github.event_name == 'pull_request'
         uses: marocchino/sticky-pull-request-comment@v2

@@ -4,6 +4,7 @@
 //! ATTACH DATABASE is a SQLite-specific feature for connecting additional database files.
 
 use crate::types::{DynIden, IntoIden};
+use crate::value::Value;
 
 use crate::query::traits::{QueryBuilderTrait, QueryStatementBuilder, QueryStatementWriter};
 
@@ -112,10 +113,10 @@ impl QueryStatementBuilder for AttachDatabaseStatement {
 		{
 			panic!("ATTACH DATABASE is SQLite-specific and not supported in MySQL");
 		}
-		if (query_builder as &dyn Any)
-			.downcast_ref::<crate::backend::SqliteQueryBuilder>()
-			.is_some()
+		if let Some(sqlite_builder) =
+			(query_builder as &dyn Any).downcast_ref::<crate::backend::SqliteQueryBuilder>()
 		{
+			use crate::backend::QueryBuilder as _;
 			let file_path = self
 				.file_path
 				.as_deref()
@@ -124,13 +125,14 @@ impl QueryStatementBuilder for AttachDatabaseStatement {
 				.database_name
 				.as_ref()
 				.expect("ATTACH DATABASE requires a schema name (AS clause)");
-			let quote = query_builder.quote_char();
+			// Reuse Value::to_sql_literal for proper string literal escaping
+			let escaped_file_path =
+				Value::String(Some(Box::new(file_path.to_string()))).to_sql_literal();
+			// Reuse escape_identifier for proper identifier escaping
+			let escaped_db_name = sqlite_builder.escape_identifier(&db_name.to_string());
 			let sql = format!(
-				"ATTACH DATABASE '{}' AS {}{}{}",
-				file_path,
-				quote,
-				db_name.to_string(),
-				quote,
+				"ATTACH DATABASE {} AS {}",
+				escaped_file_path, escaped_db_name,
 			);
 			return (sql, crate::value::Values::new());
 		}
@@ -205,5 +207,65 @@ mod tests {
 		let stmt = AttachDatabaseStatement::default();
 		assert!(stmt.file_path.is_none());
 		assert!(stmt.database_name.is_none());
+	}
+
+	#[rstest]
+	fn test_attach_database_build_sql() {
+		// Arrange
+		let mut stmt = AttachDatabaseStatement::new();
+		stmt.file_path("path/to/db.sqlite").as_name("auxiliary");
+
+		// Act
+		let (sql, values) = stmt.build_any(&crate::backend::SqliteQueryBuilder);
+
+		// Assert
+		assert_eq!(sql, r#"ATTACH DATABASE 'path/to/db.sqlite' AS "auxiliary""#);
+		assert!(values.0.is_empty());
+	}
+
+	#[rstest]
+	fn test_attach_database_file_path_with_single_quotes() {
+		// Arrange
+		let mut stmt = AttachDatabaseStatement::new();
+		stmt.file_path("/path/to/file's.db").as_name("auxiliary");
+
+		// Act
+		let (sql, _) = stmt.build_any(&crate::backend::SqliteQueryBuilder);
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"ATTACH DATABASE '/path/to/file''s.db' AS "auxiliary""#
+		);
+	}
+
+	#[rstest]
+	fn test_attach_database_db_name_with_double_quotes() {
+		// Arrange
+		let mut stmt = AttachDatabaseStatement::new();
+		stmt.file_path("path/to/db.sqlite").as_name(r#"my"db"#);
+
+		// Act
+		let (sql, _) = stmt.build_any(&crate::backend::SqliteQueryBuilder);
+
+		// Assert
+		assert_eq!(sql, r#"ATTACH DATABASE 'path/to/db.sqlite' AS "my""db""#);
+	}
+
+	#[rstest]
+	fn test_attach_database_both_special_chars() {
+		// Arrange
+		let mut stmt = AttachDatabaseStatement::new();
+		stmt.file_path("/tmp/user's data/test.db")
+			.as_name(r#"special"name"#);
+
+		// Act
+		let (sql, _) = stmt.build_any(&crate::backend::SqliteQueryBuilder);
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"ATTACH DATABASE '/tmp/user''s data/test.db' AS "special""name""#
+		);
 	}
 }

@@ -187,11 +187,15 @@ pub mod enum_type {
 	pub fn create_enum(type_name: &str, values: &[&str]) -> String {
 		let values_str = values
 			.iter()
-			.map(|v| format!("'{}'", v))
+			.map(|v| format!("'{}'", v.replace('\'', "''")))
 			.collect::<Vec<_>>()
 			.join(", ");
 
-		format!("CREATE TYPE \"{}\" AS ENUM ({})", type_name, values_str)
+		format!(
+			"CREATE TYPE \"{}\" AS ENUM ({})",
+			type_name.replace('"', "\"\""),
+			values_str
+		)
 	}
 
 	/// Generate DROP TYPE statement
@@ -210,7 +214,9 @@ pub mod enum_type {
 
 		format!(
 			"DROP TYPE{} \"{}\"{}",
-			if_exists_clause, type_name, cascade_clause
+			if_exists_clause,
+			type_name.replace('"', "\"\""),
+			cascade_clause
 		)
 	}
 
@@ -229,14 +235,16 @@ pub mod enum_type {
 	/// ```
 	pub fn add_enum_value(type_name: &str, new_value: &str, after: Option<&str>) -> String {
 		let after_clause = if let Some(a) = after {
-			format!(" AFTER '{}'", a)
+			format!(" AFTER '{}'", a.replace('\'', "''"))
 		} else {
 			String::new()
 		};
 
 		format!(
 			"ALTER TYPE \"{}\" ADD VALUE '{}'{}",
-			type_name, new_value, after_clause
+			type_name.replace('"', "\"\""),
+			new_value.replace('\'', "''"),
+			after_clause
 		)
 	}
 }
@@ -244,6 +252,20 @@ pub mod enum_type {
 /// PostgreSQL sequence helpers
 pub mod sequence {
 	/// Generate setval() function call for sequence
+	///
+	/// # Arguments
+	///
+	/// * `sequence_name` - Name of the sequence (will be escaped for single quotes)
+	/// * `value_expression` - SQL expression that evaluates to the desired sequence value
+	///
+	/// # Security
+	///
+	/// The `value_expression` parameter accepts **raw SQL expressions** (e.g.,
+	/// `SELECT MAX(id) FROM users`). This is by design, as the parameter is intended
+	/// for SQL expressions that cannot be parameterized or escaped as simple values.
+	///
+	/// **Callers are responsible for ensuring `value_expression` is safe.**
+	/// Never pass user-controlled input directly as `value_expression`.
 	///
 	/// # Example
 	///
@@ -254,17 +276,21 @@ pub mod sequence {
 	/// assert!(sql.contains("SELECT setval"));
 	/// ```
 	pub fn set_sequence_value(sequence_name: &str, value_expression: &str) -> String {
-		format!("SELECT setval('{}', ({}))", sequence_name, value_expression)
+		format!(
+			"SELECT setval('{}', ({}))",
+			sequence_name.replace('\'', "''"),
+			value_expression
+		)
 	}
 
 	/// Generate nextval() function call for sequence
 	pub fn next_sequence_value(sequence_name: &str) -> String {
-		format!("SELECT nextval('{}')", sequence_name)
+		format!("SELECT nextval('{}')", sequence_name.replace('\'', "''"))
 	}
 
 	/// Generate currval() function call for sequence
 	pub fn current_sequence_value(sequence_name: &str) -> String {
-		format!("SELECT currval('{}')", sequence_name)
+		format!("SELECT currval('{}')", sequence_name.replace('\'', "''"))
 	}
 }
 

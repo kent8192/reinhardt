@@ -178,6 +178,14 @@ pub enum AlterTableChange {
 	},
 }
 
+/// Escapes a schema identifier by doubling double-quote characters.
+///
+/// This prevents SQL injection in schema names used within quoted identifiers.
+/// For example, a schema name containing `"` will have it escaped to `""`.
+fn escape_schema_identifier(name: &str) -> String {
+	name.replace('"', "\"\"")
+}
+
 /// Base trait for database schema editors
 ///
 /// This trait defines the interface that all database-specific schema editors must implement.
@@ -411,10 +419,11 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 	/// assert_eq!(sql, "CREATE SCHEMA IF NOT EXISTS \"my_schema\"");
 	/// ```
 	fn create_schema_statement(&self, name: &str, if_not_exists: bool) -> String {
+		let escaped_name = escape_schema_identifier(name);
 		if if_not_exists {
-			format!("CREATE SCHEMA IF NOT EXISTS \"{}\"", name)
+			format!("CREATE SCHEMA IF NOT EXISTS \"{}\"", escaped_name)
 		} else {
-			format!("CREATE SCHEMA \"{}\"", name)
+			format!("CREATE SCHEMA \"{}\"", escaped_name)
 		}
 	}
 
@@ -458,7 +467,9 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 
 		format!(
 			"DROP SCHEMA{} \"{}\"{}",
-			if_exists_clause, name, cascade_clause
+			if_exists_clause,
+			escape_schema_identifier(name),
+			cascade_clause
 		)
 	}
 
@@ -554,6 +565,8 @@ impl std::error::Error for SchemaEditorError {}
 
 #[cfg(test)]
 mod tests {
+	use rstest::rstest;
+
 	use super::*;
 
 	struct TestSchemaEditor;
@@ -682,6 +695,87 @@ mod tests {
 			changes: vec![],
 		};
 		assert_eq!(alter_stmt.table_name(), "posts");
+	}
+
+	#[rstest]
+	#[case("my_schema", "CREATE SCHEMA IF NOT EXISTS \"my_schema\"")]
+	#[case(
+		"schema\"injection",
+		"CREATE SCHEMA IF NOT EXISTS \"schema\"\"injection\""
+	)]
+	#[case(
+		"special-chars_123",
+		"CREATE SCHEMA IF NOT EXISTS \"special-chars_123\""
+	)]
+	fn test_create_schema_escapes_identifier(
+		#[case] schema_name: &str,
+		#[case] expected_sql: &str,
+	) {
+		// Arrange
+		let editor = TestSchemaEditor;
+
+		// Act
+		let sql = editor.create_schema_statement(schema_name, true);
+
+		// Assert
+		assert_eq!(sql, expected_sql);
+	}
+
+	#[rstest]
+	fn test_create_schema_without_if_not_exists() {
+		// Arrange
+		let editor = TestSchemaEditor;
+
+		// Act
+		let sql = editor.create_schema_statement("my_schema", false);
+
+		// Assert
+		assert_eq!(sql, "CREATE SCHEMA \"my_schema\"");
+	}
+
+	#[rstest]
+	#[case("my_schema", "DROP SCHEMA IF EXISTS \"my_schema\" CASCADE")]
+	#[case(
+		"schema\"injection",
+		"DROP SCHEMA IF EXISTS \"schema\"\"injection\" CASCADE"
+	)]
+	#[case(
+		"special-chars_123",
+		"DROP SCHEMA IF EXISTS \"special-chars_123\" CASCADE"
+	)]
+	fn test_drop_schema_escapes_identifier(#[case] schema_name: &str, #[case] expected_sql: &str) {
+		// Arrange
+		let editor = TestSchemaEditor;
+
+		// Act
+		let sql = editor.drop_schema_statement(schema_name, true, true);
+
+		// Assert
+		assert_eq!(sql, expected_sql);
+	}
+
+	#[rstest]
+	fn test_drop_schema_without_cascade_and_if_exists() {
+		// Arrange
+		let editor = TestSchemaEditor;
+
+		// Act
+		let sql = editor.drop_schema_statement("my_schema", false, false);
+
+		// Assert
+		assert_eq!(sql, "DROP SCHEMA \"my_schema\"");
+	}
+
+	#[rstest]
+	fn test_escape_schema_identifier_helper() {
+		// Arrange / Act / Assert
+		assert_eq!(escape_schema_identifier("simple"), "simple");
+		assert_eq!(escape_schema_identifier("has\"quote"), "has\"\"quote");
+		assert_eq!(
+			escape_schema_identifier("multiple\"\"quotes"),
+			"multiple\"\"\"\"quotes"
+		);
+		assert_eq!(escape_schema_identifier(""), "");
 	}
 }
 

@@ -333,13 +333,14 @@ Use the appropriate issue template when creating issues:
 
 | Template | Use When | Label Applied |
 |----------|----------|---------------|
-| `1-bug.yml` | Unexpected behavior or error | `bug` |
-| `2-feature.yml` | New functionality request | `enhancement` |
+| `1-bug_report.yml` | Unexpected behavior or error | `bug` |
+| `2-feature_request.yml` | New functionality request | `enhancement` |
 | `3-documentation.yml` | Documentation issues | `documentation` |
 | `4-question.yml` | Usage questions | `question` |
 | `5-performance.yml` | Performance issues | `performance` |
 | `6-ci_cd.yml` | CI/CD workflow failures | `ci-cd` |
 | `7-security.yml` | Security vulnerabilities | `security`, `critical` |
+| `8-api_change.yml` | API change proposals | `enhancement`, `rc-migration` |
 
 ### Issue Title Format
 

@@ -47,7 +47,7 @@ pub mod flow;
 pub mod oidc;
 pub mod providers;
 pub mod storage;
-pub mod url_validation;
+pub(crate) mod url_validation;
 pub mod user_mapping;
 
 // Re-export core types
@@ -71,9 +71,6 @@ pub use providers::{AppleProvider, GitHubProvider, GoogleProvider, MicrosoftProv
 
 // Re-export backend
 pub use backend::{AuthorizationResult, CallbackResult, SocialAuthBackend};
-
-// Re-export URL validation
-pub use url_validation::validate_endpoint_url;
 
 // Re-export user mapping
 pub use user_mapping::{DefaultUserMapper, MappedUser, UserMapper};

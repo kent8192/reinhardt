@@ -3,9 +3,22 @@
 //! Ensures endpoint URLs use HTTPS to prevent cleartext transmission of
 //! sensitive credentials (access tokens, authorization codes, client secrets).
 
-use url::Url;
+
+use url::{Host, Url};
 
 use super::core::SocialAuthError;
+
+/// Returns a sanitized representation of a URL containing only
+/// scheme, host, and port. Avoids leaking sensitive components
+/// such as userinfo, path, or query parameters in error messages.
+fn sanitize_url(parsed: &Url) -> String {
+	let scheme = parsed.scheme();
+	let host = parsed.host_str().unwrap_or("unknown");
+	match parsed.port_or_known_default() {
+		Some(port) => format!("{}://{}:{}", scheme, host, port),
+		None => format!("{}://{}", scheme, host),
+	}
+}
 
 /// Validates that an endpoint URL uses a secure transport scheme.
 ///
@@ -16,24 +29,31 @@ use super::core::SocialAuthError;
 ///
 /// Returns [`SocialAuthError::InsecureEndpoint`] if the URL uses an insecure scheme
 /// or [`SocialAuthError::Configuration`] if the URL cannot be parsed.
-pub fn validate_endpoint_url(url: &str) -> Result<(), SocialAuthError> {
-	let parsed = Url::parse(url).map_err(|e| {
-		SocialAuthError::Configuration(format!("invalid endpoint URL '{}': {}", url, e))
-	})?;
+pub(crate) fn validate_endpoint_url(url: &str) -> Result<(), SocialAuthError> {
+	let parsed = Url::parse(url)
+		.map_err(|e| SocialAuthError::Configuration(format!("invalid endpoint URL: {}", e)))?;
 
 	match parsed.scheme() {
 		"https" => Ok(()),
-		"http" if is_loopback(parsed.host_str()) => Ok(()),
+		"http" if is_loopback(&parsed) => Ok(()),
 		scheme => Err(SocialAuthError::InsecureEndpoint(format!(
 			"endpoint '{}' uses insecure scheme '{}': HTTPS is required",
-			url, scheme
+			sanitize_url(&parsed),
+			scheme
 		))),
 	}
 }
 
-/// Checks whether the given host is a loopback address.
-fn is_loopback(host: Option<&str>) -> bool {
-	matches!(host, Some("localhost" | "127.0.0.1" | "[::1]" | "::1"))
+/// Checks whether the URL's host is a loopback address using
+/// network-level detection to catch all loopback variants
+/// (e.g. `127.0.0.2`, `127.255.255.255`).
+fn is_loopback(parsed: &Url) -> bool {
+	match parsed.host() {
+		Some(Host::Domain("localhost")) => true,
+		Some(Host::Ipv4(addr)) => addr.is_loopback(),
+		Some(Host::Ipv6(addr)) => addr.is_loopback(),
+		_ => false,
+	}
 }
 
 #[cfg(test)]
@@ -61,6 +81,8 @@ mod tests {
 	#[case("http://127.0.0.1:3000/auth")]
 	#[case("http://[::1]:8080/token")]
 	#[case("http://localhost/token")]
+	#[case("http://127.0.0.2:8080/callback")]
+	#[case("http://127.255.255.255/token")]
 	fn test_http_loopback_is_accepted(#[case] url: &str) {
 		// Arrange
 		// (URL provided via test parameter)
@@ -101,6 +123,29 @@ mod tests {
 		// Assert
 		let err = result.unwrap_err();
 		assert!(matches!(err, SocialAuthError::InsecureEndpoint(_)));
+	}
+
+	#[rstest]
+	fn test_error_messages_do_not_leak_sensitive_url_components() {
+		// Arrange
+		let url = "http://user:password@example.com/token?secret=abc123";
+
+		// Act
+		let result = validate_endpoint_url(url);
+
+		// Assert
+		let err = result.unwrap_err();
+		let message = format!("{}", err);
+		assert!(
+			!message.contains("password"),
+			"Error message should not contain userinfo: {}",
+			message
+		);
+		assert!(
+			!message.contains("secret=abc123"),
+			"Error message should not contain query params: {}",
+			message
+		);
 	}
 
 	#[rstest]

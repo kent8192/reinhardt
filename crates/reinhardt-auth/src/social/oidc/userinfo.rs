@@ -3,7 +3,6 @@
 //! Fetches user profile information from OIDC UserInfo endpoint.
 
 use crate::social::core::{OAuth2Client, SocialAuthError, StandardClaims};
-use crate::social::url_validation::validate_endpoint_url;
 
 /// UserInfo endpoint client
 pub struct UserInfoClient {
@@ -18,9 +17,13 @@ impl UserInfoClient {
 
 	/// Fetches user information from the UserInfo endpoint
 	///
+	/// The endpoint URL is expected to have been validated at discovery/config
+	/// time via [`validate_endpoint_url`](crate::social::url_validation::validate_endpoint_url),
+	/// so no per-request re-parsing is performed here.
+	///
 	/// # Arguments
 	///
-	/// * `userinfo_endpoint` - The UserInfo endpoint URL
+	/// * `userinfo_endpoint` - The UserInfo endpoint URL (pre-validated)
 	/// * `access_token` - The OAuth2 access token
 	///
 	/// # Returns
@@ -31,8 +34,6 @@ impl UserInfoClient {
 		userinfo_endpoint: &str,
 		access_token: &str,
 	) -> Result<StandardClaims, SocialAuthError> {
-		validate_endpoint_url(userinfo_endpoint)?;
-
 		let response = self
 			.client
 			.client()

@@ -791,7 +791,7 @@ CARGO_MANIFEST_DIR=$(pwd)/examples/examples-twitter \
 
 ## References
 
-- [Reinhardt Framework Documentation](https://docs.rs/reinhardt)
+- [Reinhardt Framework Documentation](https://docs.rs/reinhardt-web)
 - [Getting Started Guide](../../../docs/GETTING_STARTED.md)
 - [Testing Standards](../../../docs/TESTING_STANDARDS.md)
 - [Database Integration Example](../examples-database-integration/README.md)

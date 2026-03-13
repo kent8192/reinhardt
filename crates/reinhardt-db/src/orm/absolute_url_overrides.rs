@@ -48,19 +48,19 @@ pub fn register_url_override<F>(model_path: impl Into<String>, generator: F)
 where
 	F: Fn(&dyn std::any::Any) -> Option<String> + Send + Sync + 'static,
 {
-	let mut overrides = URL_OVERRIDES.write().unwrap();
+	let mut overrides = URL_OVERRIDES.write().unwrap_or_else(|e| e.into_inner());
 	overrides.insert(model_path.into(), Arc::new(generator));
 }
 /// Clear all URL overrides (useful for testing)
 ///
 pub fn clear_url_overrides() {
-	let mut overrides = URL_OVERRIDES.write().unwrap();
+	let mut overrides = URL_OVERRIDES.write().unwrap_or_else(|e| e.into_inner());
 	overrides.clear();
 }
 
 /// Check if there's a URL override for a model
 fn check_url_override(model_path: &str, obj: &dyn std::any::Any) -> Option<String> {
-	let overrides = URL_OVERRIDES.read().unwrap();
+	let overrides = URL_OVERRIDES.read().unwrap_or_else(|e| e.into_inner());
 	if let Some(generator) = overrides.get(model_path) {
 		return generator(obj);
 	}

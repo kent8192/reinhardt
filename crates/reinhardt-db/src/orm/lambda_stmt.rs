@@ -52,7 +52,7 @@ impl LambdaStmt {
 	pub fn execute(&self) -> Result<String, String> {
 		// Check cache first
 		if let Some(cached) = QUERY_CACHE.get(&self.cache_key) {
-			CACHE_STATS.write().unwrap().hits += 1;
+			CACHE_STATS.write().unwrap_or_else(|e| e.into_inner()).hits += 1;
 			return Ok(cached);
 		}
 
@@ -61,7 +61,7 @@ impl LambdaStmt {
 
 		// Cache the compiled query
 		QUERY_CACHE.set(self.cache_key.clone(), query.clone());
-		CACHE_STATS.write().unwrap().misses += 1;
+		CACHE_STATS.write().unwrap_or_else(|e| e.into_inner()).misses += 1;
 
 		Ok(query)
 	}
@@ -118,7 +118,7 @@ impl QueryCache {
 	/// assert_eq!(cache.get("key1"), Some("SELECT * FROM users".to_string()));
 	/// ```
 	pub fn get(&self, key: &str) -> Option<String> {
-		self.cache.read().unwrap().get(key).cloned()
+		self.cache.read().unwrap_or_else(|e| e.into_inner()).get(key).cloned()
 	}
 	/// Store a compiled query in the cache
 	///
@@ -132,7 +132,7 @@ impl QueryCache {
 	/// assert!(cache.contains("users"));
 	/// ```
 	pub fn set(&self, key: String, value: String) {
-		self.cache.write().unwrap().insert(key, value);
+		self.cache.write().unwrap_or_else(|e| e.into_inner()).insert(key, value);
 	}
 	/// Clear all cached queries
 	///
@@ -148,7 +148,7 @@ impl QueryCache {
 	/// assert_eq!(cache.size(), 0);
 	/// ```
 	pub fn clear(&self) {
-		self.cache.write().unwrap().clear();
+		self.cache.write().unwrap_or_else(|e| e.into_inner()).clear();
 	}
 	/// Get the number of cached queries
 	///
@@ -163,7 +163,7 @@ impl QueryCache {
 	/// assert_eq!(cache.size(), 2);
 	/// ```
 	pub fn size(&self) -> usize {
-		self.cache.read().unwrap().len()
+		self.cache.read().unwrap_or_else(|e| e.into_inner()).len()
 	}
 	/// Remove a specific query from the cache
 	///
@@ -179,7 +179,7 @@ impl QueryCache {
 	/// assert_eq!(cache.size(), 0);
 	/// ```
 	pub fn remove(&self, key: &str) -> Option<String> {
-		self.cache.write().unwrap().remove(key)
+		self.cache.write().unwrap_or_else(|e| e.into_inner()).remove(key)
 	}
 	/// Check if a query key exists in the cache
 	///
@@ -194,7 +194,7 @@ impl QueryCache {
 	/// assert!(!cache.contains("key2"));
 	/// ```
 	pub fn contains(&self, key: &str) -> bool {
-		self.cache.read().unwrap().contains_key(key)
+		self.cache.read().unwrap_or_else(|e| e.into_inner()).contains_key(key)
 	}
 }
 

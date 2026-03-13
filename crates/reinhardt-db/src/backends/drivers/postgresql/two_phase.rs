@@ -470,7 +470,7 @@ impl PostgresTwoPhaseParticipant {
 	pub async fn prepare_by_xid(&self, xid: &str) -> Result<()> {
 		// Extract the session temporarily to avoid holding the lock across await
 		let mut session = {
-			let mut sessions = self.sessions.lock().unwrap();
+			let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
 			sessions.remove(xid).ok_or_else(|| {
 				DatabaseError::QueryError(format!("No active session for XID: {}", xid))
 			})?
@@ -489,7 +489,7 @@ impl PostgresTwoPhaseParticipant {
 		session.state = PgTwoPhaseState::Prepared;
 		self.sessions
 			.lock()
-			.unwrap()
+			.unwrap_or_else(|e| e.into_inner())
 			.insert(xid.to_string(), session);
 
 		Ok(())
@@ -499,7 +499,7 @@ impl PostgresTwoPhaseParticipant {
 	///
 	/// Removes the session from internal storage, executes COMMIT PREPARED, and consumes the session.
 	pub async fn commit_managed(&self, xid: &str) -> Result<()> {
-		let mut session = self.sessions.lock().unwrap().remove(xid).ok_or_else(|| {
+		let mut session = self.sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(xid).ok_or_else(|| {
 			DatabaseError::QueryError(format!("No active session for XID: {}", xid))
 		})?;
 
@@ -520,7 +520,7 @@ impl PostgresTwoPhaseParticipant {
 	///
 	/// Removes the session from internal storage, executes ROLLBACK PREPARED, and consumes the session.
 	pub async fn rollback_managed(&self, xid: &str) -> Result<()> {
-		let mut session = self.sessions.lock().unwrap().remove(xid).ok_or_else(|| {
+		let mut session = self.sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(xid).ok_or_else(|| {
 			DatabaseError::QueryError(format!("No active session for XID: {}", xid))
 		})?;
 

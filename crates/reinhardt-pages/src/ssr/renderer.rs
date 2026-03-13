@@ -254,7 +254,10 @@ impl SsrRenderer {
 
 		// DOCTYPE and html opening
 		html.push_str("<!DOCTYPE html>\n");
-		html.push_str(&format!("<html lang=\"{}\">\n", self.options.lang));
+		html.push_str(&format!(
+			"<html lang=\"{}\">\n",
+			html_escape(&self.options.lang)
+		));
 
 		// Head section
 		html.push_str("<head>\n");
@@ -346,7 +349,10 @@ impl SsrRenderer {
 
 		// DOCTYPE and html opening
 		html.push_str("<!DOCTYPE html>\n");
-		html.push_str(&format!("<html lang=\"{}\">\n", self.options.lang));
+		html.push_str(&format!(
+			"<html lang=\"{}\">\n",
+			html_escape(&self.options.lang)
+		));
 
 		// Head section
 		html.push_str("<head>\n");
@@ -726,5 +732,40 @@ mod tests {
 		assert!(!html.contains("</script><img"));
 		// The escaped version should be present
 		assert!(html.contains("<\\/script>"));
+	}
+
+	#[test]
+	fn test_ssr_renderer_lang_escaping() {
+		// Arrange
+		let component = TestComponent {
+			message: "Test".to_string(),
+		};
+		let opts = SsrOptions::new().lang("en\" onload=\"alert(1)");
+		let mut renderer = SsrRenderer::with_options(opts);
+
+		// Act
+		let html = renderer.render_page(&component);
+
+		// Assert - the quote in the lang value should be escaped, preventing attribute breakout
+		assert!(html.contains("&quot;"));
+		// The entire malicious value should be contained within the lang attribute
+		assert!(html.contains("lang=\"en&quot; onload=&quot;alert(1)\""));
+	}
+
+	#[test]
+	fn test_ssr_renderer_lang_escaping_angle_brackets() {
+		// Arrange
+		let component = TestComponent {
+			message: "Test".to_string(),
+		};
+		let opts = SsrOptions::new().lang("<script>alert(1)</script>");
+		let mut renderer = SsrRenderer::with_options(opts);
+
+		// Act
+		let html = renderer.render_page(&component);
+
+		// Assert - angle brackets should be escaped
+		assert!(html.contains("&lt;script&gt;"));
+		assert!(!html.contains("<html lang=\"<script>"));
 	}
 }

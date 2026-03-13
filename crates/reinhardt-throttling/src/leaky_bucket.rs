@@ -189,8 +189,9 @@ impl<T: TimeProvider> LeakyBucketThrottle<T> {
 	/// Get current bucket level for a given key
 	pub async fn level_for_key(&self, key: &str) -> f64 {
 		let mut states = self.states.write().await;
-		let new_state = self.new_bucket_state();
-		let state = states.entry(key.to_string()).or_insert(new_state);
+		let state = states
+			.entry(key.to_string())
+			.or_insert_with(|| self.new_bucket_state());
 		self.leak_bucket(state);
 		state.level
 	}
@@ -217,8 +218,9 @@ impl<T: TimeProvider> LeakyBucketThrottle<T> {
 impl<T: TimeProvider> Throttle for LeakyBucketThrottle<T> {
 	async fn allow_request(&self, key: &str) -> ThrottleResult<bool> {
 		let mut states = self.states.write().await;
-		let new_state = self.new_bucket_state();
-		let state = states.entry(key.to_string()).or_insert(new_state);
+		let state = states
+			.entry(key.to_string())
+			.or_insert_with(|| self.new_bucket_state());
 
 		// Leak requests first
 		self.leak_bucket(state);
@@ -234,8 +236,9 @@ impl<T: TimeProvider> Throttle for LeakyBucketThrottle<T> {
 
 	async fn wait_time(&self, key: &str) -> ThrottleResult<Option<u64>> {
 		let mut states = self.states.write().await;
-		let new_state = self.new_bucket_state();
-		let state = states.entry(key.to_string()).or_insert(new_state);
+		let state = states
+			.entry(key.to_string())
+			.or_insert_with(|| self.new_bucket_state());
 
 		self.leak_bucket(state);
 

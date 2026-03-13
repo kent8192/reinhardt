@@ -253,6 +253,20 @@ pub mod enum_type {
 pub mod sequence {
 	/// Generate setval() function call for sequence
 	///
+	/// # Arguments
+	///
+	/// * `sequence_name` - Name of the sequence (will be escaped for single quotes)
+	/// * `value_expression` - SQL expression that evaluates to the desired sequence value
+	///
+	/// # Security
+	///
+	/// The `value_expression` parameter accepts **raw SQL expressions** (e.g.,
+	/// `SELECT MAX(id) FROM users`). This is by design, as the parameter is intended
+	/// for SQL expressions that cannot be parameterized or escaped as simple values.
+	///
+	/// **Callers are responsible for ensuring `value_expression` is safe.**
+	/// Never pass user-controlled input directly as `value_expression`.
+	///
 	/// # Example
 	///
 	/// ```rust

@@ -178,6 +178,14 @@ pub enum AlterTableChange {
 	},
 }
 
+/// Escapes a schema identifier by doubling double-quote characters.
+///
+/// This prevents SQL injection in schema names used within quoted identifiers.
+/// For example, a schema name containing `"` will have it escaped to `""`.
+fn escape_schema_identifier(name: &str) -> String {
+	name.replace('"', "\"\"")
+}
+
 /// Base trait for database schema editors
 ///
 /// This trait defines the interface that all database-specific schema editors must implement.
@@ -411,7 +419,7 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 	/// assert_eq!(sql, "CREATE SCHEMA IF NOT EXISTS \"my_schema\"");
 	/// ```
 	fn create_schema_statement(&self, name: &str, if_not_exists: bool) -> String {
-		let escaped_name = name.replace('"', "\"\"");
+		let escaped_name = escape_schema_identifier(name);
 		if if_not_exists {
 			format!("CREATE SCHEMA IF NOT EXISTS \"{}\"", escaped_name)
 		} else {
@@ -460,7 +468,7 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 		format!(
 			"DROP SCHEMA{} \"{}\"{}",
 			if_exists_clause,
-			name.replace('"', "\"\""),
+			escape_schema_identifier(name),
 			cascade_clause
 		)
 	}

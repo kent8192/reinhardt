@@ -600,6 +600,11 @@ mod tests {
 	use super::*;
 	use crate::Argon2Hasher;
 
+	const TEST_PASSWORD: &str = "password123";
+	const TEST_PASSWORD_ALT: &str = "password456";
+	const TEST_PASSWORD_VERIFY: &str = "mypassword";
+	const TEST_PASSWORD_WRONG: &str = "wrongpassword";
+
 	#[tokio::test]
 	async fn test_create_user() {
 		let hasher = Argon2Hasher::new();
@@ -608,7 +613,7 @@ mod tests {
 		let user_data = CreateUserData {
 			username: "alice".to_string(),
 			email: "alice@example.com".to_string(),
-			password: "password123".to_string(),
+			password: TEST_PASSWORD.to_string(),
 			is_active: true,
 			is_admin: false,
 		};
@@ -628,7 +633,7 @@ mod tests {
 		let user_data1 = CreateUserData {
 			username: "bob".to_string(),
 			email: "bob@example.com".to_string(),
-			password: "password123".to_string(),
+			password: TEST_PASSWORD.to_string(),
 			is_active: true,
 			is_admin: false,
 		};
@@ -636,7 +641,7 @@ mod tests {
 		let user_data2 = CreateUserData {
 			username: "bob".to_string(),
 			email: "bob2@example.com".to_string(),
-			password: "password456".to_string(),
+			password: TEST_PASSWORD_ALT.to_string(),
 			is_active: true,
 			is_admin: false,
 		};
@@ -654,7 +659,7 @@ mod tests {
 		let user_data = CreateUserData {
 			username: "charlie".to_string(),
 			email: "charlie@example.com".to_string(),
-			password: "password123".to_string(),
+			password: TEST_PASSWORD.to_string(),
 			is_active: true,
 			is_admin: false,
 		};
@@ -672,7 +677,7 @@ mod tests {
 		let user_data = CreateUserData {
 			username: "diana".to_string(),
 			email: "diana@example.com".to_string(),
-			password: "password123".to_string(),
+			password: TEST_PASSWORD.to_string(),
 			is_active: true,
 			is_admin: false,
 		};
@@ -690,7 +695,7 @@ mod tests {
 		let user_data = CreateUserData {
 			username: "eve".to_string(),
 			email: "eve@example.com".to_string(),
-			password: "password123".to_string(),
+			password: TEST_PASSWORD.to_string(),
 			is_active: true,
 			is_admin: false,
 		};
@@ -720,7 +725,7 @@ mod tests {
 		let user_data = CreateUserData {
 			username: "frank".to_string(),
 			email: "frank@example.com".to_string(),
-			password: "password123".to_string(),
+			password: TEST_PASSWORD.to_string(),
 			is_active: true,
 			is_admin: false,
 		};
@@ -739,7 +744,7 @@ mod tests {
 		let user_data1 = CreateUserData {
 			username: "grace".to_string(),
 			email: "grace@example.com".to_string(),
-			password: "password123".to_string(),
+			password: TEST_PASSWORD.to_string(),
 			is_active: true,
 			is_admin: false,
 		};
@@ -747,7 +752,7 @@ mod tests {
 		let user_data2 = CreateUserData {
 			username: "henry".to_string(),
 			email: "henry@example.com".to_string(),
-			password: "password123".to_string(),
+			password: TEST_PASSWORD.to_string(),
 			is_active: true,
 			is_admin: false,
 		};
@@ -767,7 +772,7 @@ mod tests {
 		let user_data = CreateUserData {
 			username: "iris".to_string(),
 			email: "iris@example.com".to_string(),
-			password: "mypassword".to_string(),
+			password: TEST_PASSWORD_VERIFY.to_string(),
 			is_active: true,
 			is_admin: false,
 		};
@@ -775,13 +780,13 @@ mod tests {
 		let user = manager.create_user(user_data).await.unwrap();
 		assert!(
 			manager
-				.verify_password(&user.id.to_string(), "mypassword")
+				.verify_password(&user.id.to_string(), TEST_PASSWORD_VERIFY)
 				.await
 				.unwrap()
 		);
 		assert!(
 			!manager
-				.verify_password(&user.id.to_string(), "wrongpassword")
+				.verify_password(&user.id.to_string(), TEST_PASSWORD_WRONG)
 				.await
 				.unwrap()
 		);
@@ -797,7 +802,7 @@ mod tests {
 		let user_data = CreateUserData {
 			username: "testuser".to_string(),
 			email: "invalidemail.com".to_string(),
-			password: "password123".to_string(),
+			password: TEST_PASSWORD.to_string(),
 			is_active: true,
 			is_admin: false,
 		};
@@ -819,7 +824,7 @@ mod tests {
 		let user_data = CreateUserData {
 			username: "testuser".to_string(),
 			email: "invalid@emailcom".to_string(),
-			password: "password123".to_string(),
+			password: TEST_PASSWORD.to_string(),
 			is_active: true,
 			is_admin: false,
 		};
@@ -856,7 +861,7 @@ mod tests {
 		let user_data = CreateUserData {
 			username: "jwt_user".to_string(),
 			email: String::new(),
-			password: "password123".to_string(),
+			password: TEST_PASSWORD.to_string(),
 			is_active: true,
 			is_admin: false,
 		};

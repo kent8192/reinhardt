@@ -194,6 +194,10 @@ pub mod static_resolver;
 // Table utilities (django-tables2 equivalent)
 pub mod tables;
 
+// Tailwind CSS build pipeline integration (server-side only, feature-gated)
+#[cfg(all(not(target_arch = "wasm32"), feature = "tailwind"))]
+pub mod tailwind;
+
 // Re-export commonly used types
 pub use api::{ApiModel, ApiQuerySet, Filter, FilterOp};
 pub use auth::{AuthData, AuthError, AuthState, auth_state};

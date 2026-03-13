@@ -135,7 +135,7 @@ impl GraphQLContext {
 	/// assert_eq!(context.get_data("user_id"), Some(json!("123")));
 	/// ```
 	pub fn set_data(&self, key: String, value: Value) {
-		let mut data = self.custom_data.write().unwrap();
+		let mut data = self.custom_data.write().unwrap_or_else(|e| e.into_inner());
 		data.insert(key, value);
 	}
 
@@ -158,7 +158,7 @@ impl GraphQLContext {
 	/// assert_eq!(context.get_data("nonexistent"), None);
 	/// ```
 	pub fn get_data(&self, key: &str) -> Option<Value> {
-		let data = self.custom_data.read().unwrap();
+		let data = self.custom_data.read().unwrap_or_else(|e| e.into_inner());
 		data.get(key).cloned()
 	}
 
@@ -208,7 +208,7 @@ impl GraphQLContext {
 	/// assert_eq!(context.get_data("temp"), None);
 	/// ```
 	pub fn remove_data(&self, key: &str) -> Option<Value> {
-		let mut data = self.custom_data.write().unwrap();
+		let mut data = self.custom_data.write().unwrap_or_else(|e| e.into_inner());
 		data.remove(key)
 	}
 
@@ -230,7 +230,7 @@ impl GraphQLContext {
 	/// assert_eq!(context.get_data("key2"), None);
 	/// ```
 	pub fn clear_data(&self) {
-		let mut data = self.custom_data.write().unwrap();
+		let mut data = self.custom_data.write().unwrap_or_else(|e| e.into_inner());
 		data.clear();
 	}
 
@@ -267,7 +267,7 @@ impl GraphQLContext {
 	/// assert!(retrieved.is_some());
 	/// ```
 	pub fn add_data_loader<T: DataLoader>(&self, loader: Arc<T>) {
-		let mut loaders = self.data_loaders.write().unwrap();
+		let mut loaders = self.data_loaders.write().unwrap_or_else(|e| e.into_inner());
 		loaders.insert(TypeId::of::<T>(), Box::new(loader));
 	}
 
@@ -309,7 +309,7 @@ impl GraphQLContext {
 	/// assert!(retrieved.is_some());
 	/// ```
 	pub fn get_data_loader<T: DataLoader>(&self) -> Option<Arc<T>> {
-		let loaders = self.data_loaders.read().unwrap();
+		let loaders = self.data_loaders.read().unwrap_or_else(|e| e.into_inner());
 		loaders
 			.get(&TypeId::of::<T>())
 			.and_then(|loader| loader.downcast_ref::<Arc<T>>().cloned())
@@ -395,7 +395,7 @@ impl GraphQLContext {
 	/// assert!(context.get_data_loader::<RemovableLoader>().is_none());
 	/// ```
 	pub fn remove_data_loader<T: DataLoader>(&self) {
-		let mut loaders = self.data_loaders.write().unwrap();
+		let mut loaders = self.data_loaders.write().unwrap_or_else(|e| e.into_inner());
 		loaders.remove(&TypeId::of::<T>());
 	}
 
@@ -445,7 +445,7 @@ impl GraphQLContext {
 	/// assert!(context.get_data_loader::<Loader2>().is_none());
 	/// ```
 	pub fn clear_loaders(&self) {
-		let mut loaders = self.data_loaders.write().unwrap();
+		let mut loaders = self.data_loaders.write().unwrap_or_else(|e| e.into_inner());
 		loaders.clear();
 	}
 }

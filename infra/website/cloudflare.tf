@@ -30,6 +30,13 @@ resource "cloudflare_dns_record" "website_apex" {
   depends_on = [cloudflare_pages_domain.website]
 }
 
+# Custom domain for www subdomain — registers www with the Pages project
+resource "cloudflare_pages_domain" "website_www" {
+  account_id   = var.cloudflare_account_id
+  project_name = cloudflare_pages_project.website.name
+  name         = "www.${var.custom_domain}"
+}
+
 # www subdomain CNAME record pointing to Cloudflare Pages
 resource "cloudflare_dns_record" "website_www" {
   zone_id = data.cloudflare_zone.website.zone_id
@@ -39,7 +46,7 @@ resource "cloudflare_dns_record" "website_www" {
   ttl     = 1
   proxied = true
 
-  depends_on = [cloudflare_pages_domain.website]
+  depends_on = [cloudflare_pages_domain.website_www]
 }
 
 # Google Search Console domain verification

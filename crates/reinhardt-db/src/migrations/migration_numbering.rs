@@ -54,14 +54,20 @@ impl MigrationNumbering {
 				// Increment and update cache
 				drop(cache); // Release read lock
 				let next = cached_num + 1;
-				NUMBERING_CACHE.write().unwrap_or_else(|e| e.into_inner()).insert(cache_key, next);
+				NUMBERING_CACHE
+					.write()
+					.unwrap_or_else(|e| e.into_inner())
+					.insert(cache_key, next);
 				return Self::format_number(next);
 			}
 		}
 
 		// Cache miss - scan filesystem
 		let highest = Self::get_highest_number(migrations_dir, app_label);
-		NUMBERING_CACHE.write().unwrap_or_else(|e| e.into_inner()).insert(cache_key, highest);
+		NUMBERING_CACHE
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.insert(cache_key, highest);
 		Self::format_number(highest + 1)
 	}
 
@@ -110,7 +116,10 @@ impl MigrationNumbering {
 	/// MigrationNumbering::invalidate_cache();
 	/// ```
 	pub fn invalidate_cache() {
-		NUMBERING_CACHE.write().unwrap_or_else(|e| e.into_inner()).clear();
+		NUMBERING_CACHE
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.clear();
 	}
 
 	/// Format a migration number as a zero-padded string

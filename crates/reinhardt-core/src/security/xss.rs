@@ -349,6 +349,18 @@ pub fn escape_css_selector(input: &str) -> String {
 	result
 }
 
+/// Validates an HTML attribute name to prevent attribute injection attacks.
+///
+/// Returns `true` if the name is non-empty and contains only safe characters
+/// for HTML attribute names: ASCII letters, digits, hyphens, underscores,
+/// dots, and colons.
+pub fn validate_html_attr_name(name: &str) -> bool {
+	!name.is_empty()
+		&& name
+			.chars()
+			.all(|ch| matches!(ch, 'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | ':'))
+}
+
 /// Validate that a string is safe to use as a CSS selector value
 ///
 /// Returns `true` if the input contains no CSS metacharacters that could
@@ -536,5 +548,28 @@ mod tests {
 		assert!(!validate_css_selector("a[0]"));
 		assert!(!validate_css_selector("a{b}"));
 		assert!(!validate_css_selector("a b"));
+	}
+
+	#[test]
+	fn test_validate_html_attr_name_valid() {
+		assert!(validate_html_attr_name("class"));
+		assert!(validate_html_attr_name("data-value"));
+		assert!(validate_html_attr_name("aria-label"));
+		assert!(validate_html_attr_name("xml:lang"));
+		assert!(validate_html_attr_name("id"));
+		assert!(validate_html_attr_name("data-my.attr"));
+		assert!(validate_html_attr_name("A1"));
+	}
+
+	#[test]
+	fn test_validate_html_attr_name_invalid() {
+		assert!(!validate_html_attr_name(""));
+		assert!(!validate_html_attr_name("foo bar"));
+		assert!(!validate_html_attr_name("onclick=alert(1)"));
+		assert!(!validate_html_attr_name("a\"b"));
+		assert!(!validate_html_attr_name("a'b"));
+		assert!(!validate_html_attr_name("a<b"));
+		assert!(!validate_html_attr_name("a>b"));
+		assert!(!validate_html_attr_name("a/b"));
 	}
 }

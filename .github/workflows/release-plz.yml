@@ -73,6 +73,7 @@ jobs:
 
   release-plz-release:
     name: Release
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     concurrency:
       group: release-plz-release-${{ github.ref }}

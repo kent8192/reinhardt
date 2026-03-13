@@ -225,8 +225,8 @@ impl<T: TimeProvider> Throttle for LeakyBucketThrottle<T> {
 		// Leak requests first
 		self.leak_bucket(state);
 
-		// Check if there's room in the bucket
-		if state.level < self.config.capacity as f64 {
+		// Check if there's room in the bucket after adding one request
+		if state.level + 1.0 <= self.config.capacity as f64 {
 			state.level += 1.0;
 			Ok(true)
 		} else {
@@ -242,7 +242,7 @@ impl<T: TimeProvider> Throttle for LeakyBucketThrottle<T> {
 
 		self.leak_bucket(state);
 
-		if state.level < self.config.capacity as f64 {
+		if state.level + 1.0 <= self.config.capacity as f64 {
 			return Ok(None);
 		}
 
@@ -400,6 +400,66 @@ mod tests {
 		let wait = throttle.wait_time("user").await.unwrap();
 		assert!(wait.is_some());
 		assert!(wait.unwrap() > 0);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_leaky_bucket_per_key_isolation() {
+		// Arrange
+		use tokio::time::Instant;
+		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
+		let config = LeakyBucketConfig::new(5, 1.0).unwrap();
+		let throttle = LeakyBucketThrottle::with_time_provider(config, time_provider);
+
+		// Act - fill the bucket for "alice"
+		for _ in 0..5 {
+			assert!(throttle.allow_request("alice").await.unwrap());
+		}
+
+		// Assert - "alice" is full, "bob" is independent and still allowed
+		assert!(!throttle.allow_request("alice").await.unwrap());
+		assert!(throttle.allow_request("bob").await.unwrap());
+
+		// Assert - levels are independent
+		assert_eq!(throttle.level_for_key("alice").await, 5.0);
+		assert_eq!(throttle.level_for_key("bob").await, 1.0);
+
+		// Assert - wait_time is independent
+		let alice_wait = throttle.wait_time("alice").await.unwrap();
+		let bob_wait = throttle.wait_time("bob").await.unwrap();
+		assert!(alice_wait.is_some());
+		assert!(bob_wait.is_none());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_leaky_bucket_reset_key() {
+		// Arrange
+		use tokio::time::Instant;
+		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
+		let config = LeakyBucketConfig::new(5, 1.0).unwrap();
+		let throttle = LeakyBucketThrottle::with_time_provider(config, time_provider);
+
+		// Act - fill both keys
+		for _ in 0..5 {
+			throttle.allow_request("alice").await.unwrap();
+			throttle.allow_request("bob").await.unwrap();
+		}
+
+		// Assert - both full
+		assert_eq!(throttle.level_for_key("alice").await, 5.0);
+		assert_eq!(throttle.level_for_key("bob").await, 5.0);
+
+		// Act - reset only "alice"
+		throttle.reset_key("alice").await;
+
+		// Assert - "alice" is reset, "bob" is unchanged
+		assert_eq!(throttle.level_for_key("alice").await, 0.0);
+		assert_eq!(throttle.level_for_key("bob").await, 5.0);
+
+		// Assert - "alice" can accept requests again, "bob" cannot
+		assert!(throttle.allow_request("alice").await.unwrap());
+		assert!(!throttle.allow_request("bob").await.unwrap());
 	}
 
 	#[rstest]

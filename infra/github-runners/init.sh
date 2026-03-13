@@ -103,7 +103,9 @@ fi
 if [[ "$CURRENT_TRACKED_VERSION" != "$MODULE_VERSION" && -n "$CURRENT_TRACKED_VERSION" ]]; then
   echo "  [version-change] Lambda version changed: v${CURRENT_TRACKED_VERSION} -> v${MODULE_VERSION}"
   echo "  [cleanup] Removing outdated Lambda zip files..."
-  rm -f "${LAMBDA_DIR}"/*.zip
+  for zip_name in webhook runners runner-binaries-syncer; do
+    rm -f "${LAMBDA_DIR}/${zip_name}.zip"
+  done
 fi
 
 # Download each required Lambda zip (skip if already downloaded for this version)

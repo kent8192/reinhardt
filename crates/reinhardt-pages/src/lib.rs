@@ -191,6 +191,10 @@ pub mod testing;
 // Static file URL resolver
 pub mod static_resolver;
 
+// Hot Module Replacement (server-side only, feature-gated)
+#[cfg(all(not(target_arch = "wasm32"), feature = "hmr"))]
+pub mod hmr;
+
 // Table utilities (django-tables2 equivalent)
 pub mod tables;
 

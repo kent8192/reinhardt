@@ -19,6 +19,7 @@ debug-hooks = []
 uuid = ["dep:uuid"]
 chrono = ["dep:chrono"]
 ast = []
+hmr = ["dep:notify", "dep:tokio-tungstenite", "dep:futures-util"]
 # web-sys features for WASM applications
 # Applications should use this feature to get all required web-sys features
 web-sys-full = [
@@ -165,6 +166,11 @@ hyper = { workspace = true }
 async-trait = "0.1"
 uuid = { version = "1.0", features = ["v4"] }
 tokio = { workspace = true }
+
+# HMR dependencies (server-side only, feature-gated)
+notify = { version = "8.2.0", optional = true }
+tokio-tungstenite = { version = "0.26", optional = true }
+futures-util = { version = "0.3", optional = true }
 
 [build-dependencies]
 cfg_aliases = "0.2"

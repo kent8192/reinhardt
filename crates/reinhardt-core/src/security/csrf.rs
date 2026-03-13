@@ -447,7 +447,7 @@ pub fn should_rotate_token(
 ) -> bool {
 	match rotation_interval {
 		Some(interval) => current_timestamp.saturating_sub(token_timestamp) >= interval,
-		None => false, // Always rotate when interval is not specified
+		None => false, // Never rotate when interval is not specified
 	}
 }
 

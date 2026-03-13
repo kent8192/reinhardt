@@ -7,6 +7,7 @@ use crate::DefaultUser;
 use crate::sessions::{Session, backends::SessionBackend};
 use crate::{AuthenticationBackend, AuthenticationError, SimpleUser, User};
 use reinhardt_http::Request;
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
 
@@ -217,8 +218,11 @@ impl AuthenticationBackend for CompositeAuthentication {
 
 /// Token authentication using custom tokens
 pub struct TokenAuthentication {
-	/// Token store (token -> user_id)
+	/// Token store (token -> user_id) — retained for `get_user` lookups by user_id
 	tokens: std::collections::HashMap<String, String>,
+	/// SHA-256 digest index for O(1) token lookup
+	/// Key: SHA-256(token), Value: (original_token, user_id)
+	token_index: std::collections::HashMap<[u8; 32], (String, String)>,
 	/// Configuration
 	config: TokenAuthConfig,
 }
@@ -236,6 +240,7 @@ impl TokenAuthentication {
 	pub fn new() -> Self {
 		Self {
 			tokens: std::collections::HashMap::new(),
+			token_index: std::collections::HashMap::new(),
 			config: TokenAuthConfig::default(),
 		}
 	}
@@ -244,19 +249,32 @@ impl TokenAuthentication {
 	pub fn with_config(config: TokenAuthConfig) -> Self {
 		Self {
 			tokens: std::collections::HashMap::new(),
+			token_index: std::collections::HashMap::new(),
 			config,
 		}
 	}
 
 	/// Add a token for a user
+	///
+	/// Tokens are stored with their SHA-256 digest for O(1) lookup.
 	pub fn add_token(&mut self, token: impl Into<String>, user_id: impl Into<String>) {
-		self.tokens.insert(token.into(), user_id.into());
+		let token = token.into();
+		let user_id = user_id.into();
+		let digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+		self.token_index
+			.insert(digest, (token.clone(), user_id.clone()));
+		self.tokens.insert(token, user_id);
 	}
 
-	/// Find a token using constant-time comparison to prevent timing attacks
+	/// Find a token using SHA-256 digest for O(1) lookup with constant-time
+	/// verification to prevent timing attacks.
+	///
+	/// 1. Compute SHA-256(candidate) and look up in the digest index (O(1))
+	/// 2. Verify the match with constant-time comparison on the original token
 	fn find_token_constant_time(&self, candidate: &str) -> Option<&String> {
-		let candidate_bytes = candidate.as_bytes();
-		self.tokens.iter().find_map(|(stored_token, user_id)| {
+		let digest: [u8; 32] = Sha256::digest(candidate.as_bytes()).into();
+		if let Some((stored_token, user_id)) = self.token_index.get(&digest) {
+			let candidate_bytes = candidate.as_bytes();
 			let stored_bytes = stored_token.as_bytes();
 			if candidate_bytes.len() == stored_bytes.len()
 				&& bool::from(candidate_bytes.ct_eq(stored_bytes))
@@ -265,7 +283,9 @@ impl TokenAuthentication {
 			} else {
 				None
 			}
-		})
+		} else {
+			None
+		}
 	}
 }
 

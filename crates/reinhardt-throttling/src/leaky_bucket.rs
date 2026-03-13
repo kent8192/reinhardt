@@ -717,7 +717,9 @@ mod tests {
 	#[rstest]
 	fn test_leaky_bucket_config_with_max_entries() {
 		// Arrange & Act
-		let config = LeakyBucketConfig::new(10, 2.0).unwrap().with_max_entries(5000);
+		let config = LeakyBucketConfig::new(10, 2.0)
+			.unwrap()
+			.with_max_entries(5000);
 
 		// Assert
 		assert_eq!(config.max_entries, 5000);

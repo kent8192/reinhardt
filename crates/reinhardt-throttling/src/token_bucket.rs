@@ -782,7 +782,9 @@ mod tests {
 		// Arrange
 		use tokio::time::Instant;
 		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
-		let config = TokenBucketConfig::new(5, 5, 1, 1).unwrap().with_max_entries(3);
+		let config = TokenBucketConfig::new(5, 5, 1, 1)
+			.unwrap()
+			.with_max_entries(3);
 		let throttle = TokenBucket::with_time_provider(config, time_provider.clone());
 
 		// Act - add 3 keys that consume some tokens
@@ -807,7 +809,9 @@ mod tests {
 		// Arrange
 		use tokio::time::Instant;
 		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
-		let config = TokenBucketConfig::new(5, 5, 60, 1).unwrap().with_max_entries(3);
+		let config = TokenBucketConfig::new(5, 5, 60, 1)
+			.unwrap()
+			.with_max_entries(3);
 		let throttle = TokenBucket::with_time_provider(config, time_provider.clone());
 
 		// Act - fill 3 keys, consuming all tokens (long refill interval so they stay active)
@@ -832,7 +836,9 @@ mod tests {
 	#[rstest]
 	fn test_token_bucket_config_with_max_entries() {
 		// Arrange & Act
-		let config = TokenBucketConfig::new(10, 5, 1, 1).unwrap().with_max_entries(5000);
+		let config = TokenBucketConfig::new(10, 5, 1, 1)
+			.unwrap()
+			.with_max_entries(5000);
 
 		// Assert
 		assert_eq!(config.max_entries, 5000);

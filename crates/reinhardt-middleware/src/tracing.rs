@@ -494,15 +494,17 @@ impl Middleware for TracingMiddleware {
 
 		// Add trace headers to response
 		let mut response = result?;
-		if let (Ok(trace_header), Ok(trace_value)) =
-			(self.config.trace_id_header.parse::<HeaderName>(), trace_id.parse())
-		{
+		if let (Ok(trace_header), Ok(trace_value)) = (
+			self.config.trace_id_header.parse::<HeaderName>(),
+			trace_id.parse(),
+		) {
 			response.headers.insert(trace_header, trace_value);
 		}
 
-		if let (Ok(span_header), Ok(span_value)) =
-			(self.config.span_id_header.parse::<HeaderName>(), span_id.parse())
-		{
+		if let (Ok(span_header), Ok(span_value)) = (
+			self.config.span_id_header.parse::<HeaderName>(),
+			span_id.parse(),
+		) {
 			response.headers.insert(span_header, span_value);
 		}
 

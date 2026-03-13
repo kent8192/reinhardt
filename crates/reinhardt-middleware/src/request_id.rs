@@ -211,9 +211,10 @@ impl Middleware for RequestIdMiddleware {
 
 		// Add to request headers if not empty
 		if !request_id.is_empty()
-			&& let (Ok(header_name), Ok(header_value)) =
-				(self.config.header_name.parse::<HeaderName>(), request_id.parse())
-		{
+			&& let (Ok(header_name), Ok(header_value)) = (
+				self.config.header_name.parse::<HeaderName>(),
+				request_id.parse(),
+			) {
 			request.headers.insert(header_name, header_value);
 		}
 
@@ -222,9 +223,10 @@ impl Middleware for RequestIdMiddleware {
 
 		// Add request ID to response headers
 		if !request_id.is_empty()
-			&& let (Ok(header_name), Ok(header_value)) =
-				(self.config.header_name.parse::<HeaderName>(), request_id.parse())
-		{
+			&& let (Ok(header_name), Ok(header_value)) = (
+				self.config.header_name.parse::<HeaderName>(),
+				request_id.parse(),
+			) {
 			response.headers.insert(header_name, header_value);
 		}
 

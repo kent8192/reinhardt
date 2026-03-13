@@ -327,14 +327,12 @@ impl Middleware for SecurityMiddleware {
 		if self.config.ssl_redirect && !is_secure {
 			let redirect_url = self.build_https_url(&request);
 			let mut response = Response::new(StatusCode::PERMANENT_REDIRECT);
-			response
-				.headers
-				.insert(
-					LOCATION,
-					redirect_url
-						.parse()
-						.unwrap_or_else(|_| HeaderValue::from_static("/")),
-				);
+			response.headers.insert(
+				LOCATION,
+				redirect_url
+					.parse()
+					.unwrap_or_else(|_| HeaderValue::from_static("/")),
+			);
 			return Ok(response);
 		}
 

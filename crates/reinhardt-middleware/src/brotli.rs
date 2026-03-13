@@ -7,9 +7,7 @@
 use async_trait::async_trait;
 use brotli::enc::BrotliEncoderParams;
 use bytes::Bytes;
-use hyper::header::{
-	ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, HeaderValue,
-};
+use hyper::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, HeaderValue};
 use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use std::sync::Arc;
 

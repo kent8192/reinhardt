@@ -182,8 +182,12 @@ impl Middleware for ConditionalGetMiddleware {
 			let generated = self.generate_etag_from_body(&response.body);
 			if let Ok(etag_value) = generated.parse() {
 				response.headers.insert(ETAG, etag_value);
+				Some(generated)
+			} else {
+				// ETag value could not be parsed as a valid header value;
+				// treat as if no ETag was generated
+				None
 			}
-			Some(generated)
 		} else {
 			response
 				.headers

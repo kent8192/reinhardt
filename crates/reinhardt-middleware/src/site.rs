@@ -353,8 +353,7 @@ impl Middleware for SiteMiddleware {
 			&& let (Ok(header_name), Ok(header_value)) = (
 				SITE_ID_HEADER.parse::<HeaderName>(),
 				site.id.to_string().parse(),
-			)
-		{
+			) {
 			response.headers.insert(header_name, header_value);
 		}
 

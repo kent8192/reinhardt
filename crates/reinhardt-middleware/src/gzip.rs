@@ -6,9 +6,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use hyper::header::{
-	ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, HeaderValue,
-};
+use hyper::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, HeaderValue};
 use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use std::io::Write;
 use std::sync::Arc;

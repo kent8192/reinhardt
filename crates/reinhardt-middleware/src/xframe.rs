@@ -193,15 +193,11 @@ impl Middleware for XFrameOptionsMiddleware {
 
 		// Only add header if not already present
 		if !response.headers.contains_key(&X_FRAME_OPTIONS) {
-			response
-				.headers
-				.insert(
-					X_FRAME_OPTIONS,
-					self.option
-						.as_str()
-						.parse()
-						.unwrap_or_else(|_| hyper::header::HeaderValue::from_static("DENY")),
-				);
+			let header_value = match self.option {
+				XFrameOptions::Deny => hyper::header::HeaderValue::from_static("DENY"),
+				XFrameOptions::SameOrigin => hyper::header::HeaderValue::from_static("SAMEORIGIN"),
+			};
+			response.headers.insert(X_FRAME_OPTIONS, header_value);
 		}
 
 		Ok(response)

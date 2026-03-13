@@ -49,9 +49,7 @@ impl RegexField {
 		// Validate the pattern eagerly so callers get errors at construction time
 		let compiled = Regex::new(pattern)?;
 		let cache = OnceLock::new();
-		cache
-			.set(compiled)
-			.unwrap_or_else(|_| panic!("OnceLock should be empty at construction"));
+		let _ = cache.set(compiled);
 		Ok(Self {
 			name,
 			label: None,
@@ -101,9 +99,7 @@ impl Clone for RegexField {
 	fn clone(&self) -> Self {
 		let cache = OnceLock::new();
 		if let Some(regex) = self.regex_cache.get() {
-			cache
-				.set(regex.clone())
-				.unwrap_or_else(|_| panic!("OnceLock should be empty during clone"));
+			let _ = cache.set(regex.clone());
 		}
 		Self {
 			name: self.name.clone(),

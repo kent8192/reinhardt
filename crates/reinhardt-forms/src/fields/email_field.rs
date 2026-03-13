@@ -4,12 +4,12 @@ use crate::field::{FieldError, FieldResult, FormField, Widget};
 use regex::Regex;
 use std::sync::LazyLock;
 
+/// Email validation regex pattern.
+const EMAIL_PATTERN: &str = r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$";
+
 /// Cached email validation regex to avoid repeated compilation.
-static EMAIL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-	Regex::new(
-		r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
-	).expect("Email regex pattern is valid")
-});
+static EMAIL_REGEX: LazyLock<Regex> =
+	LazyLock::new(|| Regex::new(EMAIL_PATTERN).expect("Email regex pattern is valid"));
 
 /// Email field with format validation
 #[derive(Debug, Clone)]

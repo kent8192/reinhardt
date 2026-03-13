@@ -1,6 +1,6 @@
 //! Aggregate validation errors by field name
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 
 use super::errors::ValidationError;
@@ -12,14 +12,14 @@ use super::errors::ValidationError;
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ValidationErrors {
-	errors: HashMap<&'static str, Vec<ValidationError>>,
+	errors: BTreeMap<&'static str, Vec<ValidationError>>,
 }
 
 impl ValidationErrors {
 	/// Create an empty error collection.
 	pub fn new() -> Self {
 		Self {
-			errors: HashMap::new(),
+			errors: BTreeMap::new(),
 		}
 	}
 
@@ -29,7 +29,7 @@ impl ValidationErrors {
 	}
 
 	/// Get all field errors as a map.
-	pub fn field_errors(&self) -> &HashMap<&'static str, Vec<ValidationError>> {
+	pub fn field_errors(&self) -> &BTreeMap<&'static str, Vec<ValidationError>> {
 		&self.errors
 	}
 

@@ -515,11 +515,17 @@ impl AssertionPool {
 	/// pool.return_connection(conn_id2);
 	/// ```
 	pub fn get_connection(&self) -> usize {
-		let mut counter = self.connection_counter.lock().unwrap_or_else(|e| e.into_inner());
+		let mut counter = self
+			.connection_counter
+			.lock()
+			.unwrap_or_else(|e| e.into_inner());
 		let id = *counter;
 		*counter += 1;
 
-		let mut active = self.active_connections.lock().unwrap_or_else(|e| e.into_inner());
+		let mut active = self
+			.active_connections
+			.lock()
+			.unwrap_or_else(|e| e.into_inner());
 		active.insert(id);
 
 		eprintln!("[AssertionPool] Connection {} acquired", id);
@@ -552,7 +558,10 @@ impl AssertionPool {
 	/// pool.return_connection(999); // Panics - connection not active
 	/// ```
 	pub fn return_connection(&self, id: usize) {
-		let mut active = self.active_connections.lock().unwrap_or_else(|e| e.into_inner());
+		let mut active = self
+			.active_connections
+			.lock()
+			.unwrap_or_else(|e| e.into_inner());
 		if !active.remove(&id) {
 			panic!("Attempted to return connection {} that was not active", id);
 		}
@@ -561,7 +570,10 @@ impl AssertionPool {
 
 	/// Get the number of currently active connections
 	pub fn active_count(&self) -> usize {
-		let active = self.active_connections.lock().unwrap_or_else(|e| e.into_inner());
+		let active = self
+			.active_connections
+			.lock()
+			.unwrap_or_else(|e| e.into_inner());
 		active.len()
 	}
 }
@@ -574,7 +586,14 @@ impl Default for AssertionPool {
 
 impl Drop for AssertionPool {
 	fn drop(&mut self) {
-		let active = self.active_connections.lock().unwrap_or_else(|e| e.into_inner());
+		// Avoid double-panic if already unwinding
+		if std::thread::panicking() {
+			return;
+		}
+		let active = self
+			.active_connections
+			.lock()
+			.unwrap_or_else(|e| e.into_inner());
 		if !active.is_empty() {
 			panic!(
 				"AssertionPool dropped with {} active connections: {:?}",

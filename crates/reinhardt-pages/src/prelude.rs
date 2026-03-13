@@ -93,7 +93,7 @@ pub use crate::reactive::{create_resource, create_resource_with_deps};
 
 pub use crate::component::{
 	Component, Head, IntoPage, LinkTag, MetaTag, Page, PageElement, PageEventHandler, PageExt,
-	Props, ScriptTag, StyleTag,
+	Props, ResourceTracker, ScriptTag, StyleTag, SuspenseBoundary,
 };
 
 // ============================================================================

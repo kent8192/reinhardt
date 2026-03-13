@@ -207,8 +207,8 @@ pub use callback::{Callback, IntoEventHandler, event_handler, into_event_handler
 #[cfg(not(target_arch = "wasm32"))]
 pub use component::DummyEvent;
 pub use component::{
-	Component, Head, IntoPage, LinkTag, MetaTag, Page, PageElement, PageExt, Props, ScriptTag,
-	StyleTag,
+	Component, Head, IntoPage, LinkTag, MetaTag, Page, PageElement, PageExt, Props,
+	ResourceTracker, ScriptTag, StyleTag, SuspenseBoundary,
 };
 pub use csrf::{CsrfManager, get_csrf_token};
 pub use dom::{Document, Element, EventHandle, EventType, document};

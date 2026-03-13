@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-throttling@v0.1.0-rc.8...reinhardt-throttling@v0.1.0-rc.9) - 2026-03-13
+
+### Fixed
+
+- *(throttling)* use per-key state in leaky bucket throttle
+- *(throttling)* use lazy initialization for per-key bucket state
+- *(throttling)* prevent capacity overflow and add per-key isolation tests
+- *(throttling)* use lazy evaluation for new_bucket_state in TokenBucketThrottle
+
 ## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-throttling@v0.1.0-rc.4...reinhardt-throttling@v0.1.0-rc.5) - 2026-03-07
 
 ### Documentation

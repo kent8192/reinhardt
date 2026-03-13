@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.8...reinhardt-auth@v0.1.0-rc.9) - 2026-03-13
+
+### Fixed
+
+- *(auth)* harden session cookie, token comparison, and permission checks
+
+### Performance
+
+- *(auth)* use SHA-256 digest index for O(1) token lookup
+
+### Styling
+
+- add explanatory comments to remaining #[allow(dead_code)] attributes
+
+### Testing
+
+- *(auth)* add tests for permission and composite auth error handling
+
 ## [0.1.0-rc.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.6...reinhardt-auth@v0.1.0-rc.7) - 2026-03-11
 
 ### Fixed

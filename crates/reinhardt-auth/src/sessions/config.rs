@@ -271,7 +271,7 @@ impl Default for SessionConfig {
 	/// - cookie_age: None (session cookie)
 	/// - cookie_path: "/"
 	/// - cookie_domain: None
-	/// - cookie_secure: false
+	/// - cookie_secure: true
 	/// - cookie_httponly: true
 	/// - cookie_samesite: SameSite::Lax
 	/// - save_every_request: false
@@ -284,6 +284,7 @@ impl Default for SessionConfig {
 	/// let config = SessionConfig::default();
 	/// assert_eq!(config.cookie_name(), "sessionid");
 	/// assert_eq!(config.cookie_path(), "/");
+	/// assert!(config.cookie_secure());
 	/// assert!(config.cookie_httponly());
 	/// assert_eq!(config.cookie_samesite(), SameSite::Lax);
 	/// ```
@@ -293,7 +294,7 @@ impl Default for SessionConfig {
 			cookie_age: None,
 			cookie_path: String::from("/"),
 			cookie_domain: None,
-			cookie_secure: false,
+			cookie_secure: true,
 			cookie_httponly: true,
 			cookie_samesite: SameSite::Lax,
 			save_every_request: false,
@@ -567,7 +568,7 @@ mod tests {
 		assert_eq!(config.cookie_age(), None);
 		assert_eq!(config.cookie_path(), "/");
 		assert_eq!(config.cookie_domain(), None);
-		assert!(!config.cookie_secure());
+		assert!(config.cookie_secure());
 		assert!(config.cookie_httponly());
 		assert_eq!(config.cookie_samesite(), SameSite::Lax);
 		assert!(!config.save_every_request());

@@ -94,7 +94,12 @@ impl ViewSetMiddleware for AuthenticationMiddleware {
 				let mut response = Response::new(hyper::StatusCode::FOUND);
 				response
 					.headers
-					.insert("Location", login_url.parse().unwrap());
+					.insert(
+					"Location",
+					login_url
+						.parse()
+						.expect("login_url should be a valid header value"),
+				);
 				response.body = "Redirecting to login...".into();
 				response
 			} else {

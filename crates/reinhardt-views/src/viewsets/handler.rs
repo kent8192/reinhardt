@@ -100,7 +100,13 @@ impl<V: ViewSet + 'static> Handler for ViewSetHandler<V> {
 				let mut response = Response::new(hyper::StatusCode::METHOD_NOT_ALLOWED);
 				response
 					.headers
-					.insert(hyper::header::ALLOW, allowed.join(", ").parse().unwrap());
+					.insert(
+					hyper::header::ALLOW,
+					allowed
+						.join(", ")
+						.parse()
+						.expect("HTTP method names should be valid header values"),
+				);
 				return Ok(response);
 			}
 		};

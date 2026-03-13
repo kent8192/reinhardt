@@ -61,7 +61,7 @@ Reinhardt takes a different approach: integrated batteries when you want them, c
 
 We call this **polylithic**: many building blocks that still feel like one coherent framework.
 
-Reinhardt brings together the best of three worlds:
+Reinhardt brings together the best of four worlds:
 
 | Inspiration        | What We Borrowed                        | What We Improved                           |
 |--------------------|-----------------------------------------|--------------------------------------------|
@@ -1067,6 +1067,8 @@ Reinhardt offers modular components you can mix and match:
 | GraphQL             | `reinhardt-graphql`       | Schema generation, subscriptions            |
 | WebSockets          | `reinhardt-websockets`    | Real-time communication                     |
 | i18n                | `reinhardt-i18n`          | Multi-language support                      |
+| **Middleware**       |                           |                                             |
+| Middleware          | `reinhardt-middleware`    | HTTP middleware components, CORS, security  |
 | **Testing**         |                           |                                             |
 | Test Utilities      | `reinhardt-test`          | Testing helpers, fixtures, TestContainers   |
 

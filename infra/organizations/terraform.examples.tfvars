@@ -7,7 +7,3 @@
 aws_region    = "us-east-1"
 account_name  = "reinhardt-ci-runners"
 account_email = "<your-email+reinhardt-ci@example.com>" # Must be unique across all AWS accounts
-
-# Set to existing account ID if importing an already-created sub-account.
-# Leave empty ("") to create a new sub-account via terraform apply.
-existing_account_id = ""

@@ -24,23 +24,21 @@ resource "aws_budgets_budget" "ci_monthly" {
     values = ["user:Project$reinhardt"]
   }
 
-  # Warning at 80%: email only
+  # Warning at 80%: email via SNS topic
   notification {
-    comparison_operator        = "GREATER_THAN"
-    threshold                  = 80
-    threshold_type             = "PERCENTAGE"
-    notification_type          = "ACTUAL"
-    subscriber_sns_topic_arns  = [aws_sns_topic.budget_alert.arn]
-    subscriber_email_addresses = [var.budget_alert_email]
+    comparison_operator       = "GREATER_THAN"
+    threshold                 = 80
+    threshold_type            = "PERCENTAGE"
+    notification_type         = "ACTUAL"
+    subscriber_sns_topic_arns = [aws_sns_topic.budget_alert.arn]
   }
 
-  # Critical at 100%: email notification (manual action required to disable self-hosted runners)
+  # Critical at 100%: email via SNS topic (manual action required to disable self-hosted runners)
   notification {
-    comparison_operator        = "GREATER_THAN"
-    threshold                  = 100
-    threshold_type             = "PERCENTAGE"
-    notification_type          = "ACTUAL"
-    subscriber_sns_topic_arns  = [aws_sns_topic.budget_alert.arn]
-    subscriber_email_addresses = [var.budget_alert_email]
+    comparison_operator       = "GREATER_THAN"
+    threshold                 = 100
+    threshold_type            = "PERCENTAGE"
+    notification_type         = "ACTUAL"
+    subscriber_sns_topic_arns = [aws_sns_topic.budget_alert.arn]
   }
 }

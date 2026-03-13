@@ -4,7 +4,7 @@
 packer {
 	required_plugins {
 		amazon = {
-			version = ">= 1.0.0"
+			version = "~> 1.0"
 			source  = "github.com/hashicorp/amazon"
 		}
 	}
@@ -16,7 +16,7 @@ packer {
 
 variable "runner_arch" {
 	type        = string
-	default     = "x64"
+	default     = "arm64"
 	description = "Runner architecture: x64 or arm64"
 
 	validation {

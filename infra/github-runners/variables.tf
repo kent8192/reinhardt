@@ -79,12 +79,6 @@ variable "budget_alert_email" {
   type        = string
 }
 
-variable "runner_ami_ssm_parameter_name" {
-  description = "SSM Parameter name storing the Golden AMI ID (managed by build-runner-ami workflow)"
-  type        = string
-  default     = "/reinhardt-ci/runner-ami-id"
-}
-
 variable "tf_plan_aws_access_key_id" {
   description = "AWS access key ID for terraform-plan CI workflow (read-only IAM user recommended)"
   type        = string

@@ -5,6 +5,7 @@ use reinhardt_http::{Request, Response, Result};
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, RwLock};
+use tracing;
 
 /// Global action registry for manual registration
 /// This is a temporary solution until the procedural macro is fully implemented
@@ -21,7 +22,10 @@ impl ManualActionRegistry {
 
 	/// Register an action for a ViewSet type
 	pub fn register(&self, viewset_type: &str, action: ActionMetadata) {
-		let mut actions = self.actions.write().unwrap_or_else(|e| e.into_inner());
+		let mut actions = self.actions.write().unwrap_or_else(|e| {
+			tracing::warn!("Action registry RwLock was poisoned, recovering");
+			e.into_inner()
+		});
 		actions
 			.entry(viewset_type.to_string())
 			.or_default()
@@ -30,13 +34,19 @@ impl ManualActionRegistry {
 
 	/// Get actions for a ViewSet type
 	pub fn get_actions(&self, viewset_type: &str) -> Vec<ActionMetadata> {
-		let actions = self.actions.read().unwrap_or_else(|e| e.into_inner());
-		actions.get(viewset_type).cloned().unwrap_or_else(Vec::new)
+		let actions = self.actions.read().unwrap_or_else(|e| {
+			tracing::warn!("Action registry RwLock was poisoned, recovering");
+			e.into_inner()
+		});
+		actions.get(viewset_type).cloned().unwrap_or_default()
 	}
 
 	/// Clear all registered actions (for testing)
 	pub fn clear(&self) {
-		let mut actions = self.actions.write().unwrap_or_else(|e| e.into_inner());
+		let mut actions = self.actions.write().unwrap_or_else(|e| {
+			tracing::warn!("Action registry RwLock was poisoned, recovering");
+			e.into_inner()
+		});
 		actions.clear();
 	}
 }

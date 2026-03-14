@@ -90,3 +90,8 @@ variable "tf_plan_aws_secret_access_key" {
   type        = string
   sensitive   = true
 }
+
+variable "organizations_account_email" {
+  description = "Email address for the CI sub-account (used by organizations module in terraform-plan CI)"
+  type        = string
+}

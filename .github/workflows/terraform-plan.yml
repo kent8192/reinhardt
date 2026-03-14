@@ -70,6 +70,26 @@ jobs:
           terraform init -input=false
         continue-on-error: true
 
+      - name: Check required variables
+        if: env.SKIP_PLAN != 'true'
+        env:
+          TF_VAR_aws_account_id: ${{ secrets.TF_AWS_ACCOUNT_ID }}
+          TF_VAR_account_email: ${{ secrets.TF_ACCOUNT_EMAIL }}
+          TF_VAR_cloudflare_account_id: ${{ secrets.TF_CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          case "${{ matrix.module }}" in
+            bootstrap|github-runners)
+              [ -z "$TF_VAR_aws_account_id" ] && SKIP=true ;;
+            organizations)
+              [ -z "$TF_VAR_account_email" ] && SKIP=true ;;
+            website)
+              [ -z "$TF_VAR_cloudflare_account_id" ] && SKIP=true ;;
+          esac
+          if [ "${SKIP:-}" = "true" ]; then
+            echo "::warning::Required variables not configured — skipping ${{ matrix.module }}"
+            echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+          fi
+
       - name: Terraform Plan
         if: env.SKIP_PLAN != 'true'
         id: plan
@@ -84,13 +104,26 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.TF_CLOUDFLARE_API_TOKEN }}
           TF_VAR_cloudflare_api_token: ${{ secrets.TF_CLOUDFLARE_API_TOKEN }}
           TF_VAR_github_token: ${{ secrets.TF_GITHUB_TOKEN }}
+          TF_VAR_aws_account_id: ${{ secrets.TF_AWS_ACCOUNT_ID }}
+          TF_VAR_cloudflare_account_id: ${{ secrets.TF_CLOUDFLARE_ACCOUNT_ID }}
+          TF_VAR_budget_alert_email: ${{ secrets.TF_BUDGET_ALERT_EMAIL }}
+          TF_VAR_account_email: ${{ secrets.TF_ACCOUNT_EMAIL }}
+          TF_VAR_github_owner: ${{ secrets.TF_GITHUB_OWNER }}
+          TF_VAR_github_repository: ${{ secrets.TF_GITHUB_REPOSITORY }}
+          TF_VAR_pages_project_name: ${{ secrets.TF_PAGES_PROJECT_NAME }}
+          TF_VAR_custom_domain: ${{ secrets.TF_CUSTOM_DOMAIN }}
+          TF_VAR_google_site_verification: ${{ secrets.TF_GOOGLE_SITE_VERIFICATION }}
+          TF_VAR_dns_record_apex_id: ${{ secrets.TF_DNS_RECORD_APEX_ID }}
+          TF_VAR_dns_record_www_id: ${{ secrets.TF_DNS_RECORD_WWW_ID }}
+          TF_VAR_dns_record_google_verification_id: ${{ secrets.TF_DNS_RECORD_GOOGLE_VERIFICATION_ID }}
+          TF_VAR_tf_plan_aws_access_key_id: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
+          TF_VAR_tf_plan_aws_secret_access_key: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
         run: |
           terraform plan -no-color -input=false 2>&1 | tee plan-output.txt
           echo "exitcode=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
-        continue-on-error: true
 
       - name: Post plan to PR
-        if: github.event_name == 'pull_request' && env.SKIP_PLAN != 'true'
+        if: always() && github.event_name == 'pull_request' && env.SKIP_PLAN != 'true'
         uses: actions/github-script@v8
         env:
           MODULE: ${{ matrix.module }}

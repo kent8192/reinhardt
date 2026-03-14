@@ -432,6 +432,60 @@ mod tests {
 	}
 
 	#[test]
+	fn test_create_request_body_fallback_when_type_not_in_registry() {
+		// Arrange
+		let inspector = EndpointInspector::new();
+
+		// Use a type name that is guaranteed to not exist in the global schema registry
+		let metadata = EndpointMetadata {
+			path: "/api/nonexistent",
+			method: "POST",
+			name: Some("create_nonexistent"),
+			function_name: "create_nonexistent",
+			module_path: "nonexistent::views",
+			request_body_type: Some("NonExistentType"),
+			request_content_type: Some("application/json"),
+		};
+
+		// Act
+		let request_body = inspector.create_request_body(&metadata);
+
+		// Assert: fallback schema is returned (not None)
+		assert!(
+			request_body.is_some(),
+			"Should return a request body even for unregistered types"
+		);
+
+		let rb = request_body.unwrap();
+		assert!(
+			rb.content.contains_key("application/json"),
+			"Fallback request body should have application/json content"
+		);
+
+		// Verify fallback schema has a description mentioning the type name
+		let content = rb.content.get("application/json").unwrap();
+		assert!(
+			content.schema.is_some(),
+			"Fallback content should have a schema"
+		);
+
+		if let Some(utoipa::openapi::RefOr::T(schema)) = &content.schema {
+			if let utoipa::openapi::schema::Schema::Object(obj) = schema {
+				let description = obj.description.as_deref().unwrap_or("");
+				assert!(
+					description.contains("NonExistentType"),
+					"Fallback schema description should mention the type name, got: {}",
+					description
+				);
+			} else {
+				panic!("Fallback schema should be an Object schema");
+			}
+		} else {
+			panic!("Fallback schema should be a concrete schema (not a $ref)");
+		}
+	}
+
+	#[test]
 	fn test_metadata_method_to_http_method() {
 		let inspector = EndpointInspector::new();
 

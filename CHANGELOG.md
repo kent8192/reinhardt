@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.8...reinhardt-web@v0.1.0-rc.9) - 2026-03-14
+
+### Documentation
+
+- *(readme)* fix outdated versions and incorrect install command
+- *(readme)* restructure sections for better first impression
+- *(readme)* improve copywriting for broader audience appeal
+- *(readme)* improve quick navigation and table readability
+
+### Fixed
+
+- *(throttling)* use per-key state in leaky bucket throttle
+- *(throttling)* use lazy initialization for per-key bucket state
+- *(throttling)* prevent capacity overflow and add per-key isolation tests
+- *(ci)* correct workflow configuration issues
+- *(ci)* revert create-github-app-token to v2
+
+### Maintenance
+
+- *(ci)* exclude test code from CodeQL analysis
+- add housekeeping workflow to cancel orphaned runs
+- add always-on housekeeping runner infrastructure
+
+### Other
+
+- resolve conflicts with main in README.md
+
 ## [0.1.0-rc.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.7...reinhardt-web@v0.1.0-rc.8) - 2026-03-12
 
 ### Fixed

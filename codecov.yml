@@ -36,6 +36,7 @@ coverage:
   ignore:
     # Proc-macro crates (compile-time only)
     - "crates/reinhardt-core/macros/**"
+    - "crates/reinhardt-db-macros/**"
     - "crates/reinhardt-di/macros/**"
     - "crates/reinhardt-query/macros/**"
     - "crates/reinhardt-graphql/macros/**"

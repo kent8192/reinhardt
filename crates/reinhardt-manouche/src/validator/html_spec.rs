@@ -25,10 +25,12 @@ pub(crate) struct ElementSpec {
 	/// Allowed attributes (None = all attributes allowed)
 	pub allowed_attrs: Option<&'static [&'static str]>,
 	/// Whether this is a void element (no children allowed)
-	#[allow(dead_code)] // Reserved for Phase 3
+	// Allow dead_code: reserved for Phase 3 void element nesting validation
+	#[allow(dead_code)]
 	pub is_void: bool,
 	/// Whether this is an interactive element (cannot nest)
-	#[allow(dead_code)] // Reserved for Phase 3
+	// Allow dead_code: reserved for Phase 3 interactive element nesting validation
+	#[allow(dead_code)]
 	pub is_interactive: bool,
 	/// Content model constraints
 	pub content_model: Option<ContentModel>,
@@ -40,7 +42,8 @@ pub(crate) struct AttrSpec {
 	/// Attribute name
 	pub name: &'static str,
 	/// Expected type of attribute value
-	#[allow(dead_code)] // Reserved for Phase 3
+	// Allow dead_code: reserved for Phase 3 attribute type validation
+	#[allow(dead_code)]
 	pub expected_type: AttrType,
 	/// Whether this attribute is required
 	pub required: bool,
@@ -54,13 +57,16 @@ pub(crate) enum AttrType {
 	/// URL value (should be string literal for static validation)
 	Url,
 	/// Boolean value (true/false)
-	#[allow(dead_code)] // Reserved for Phase 3
+	// Allow dead_code: reserved for Phase 3 boolean attribute value validation
+	#[allow(dead_code)]
 	Boolean,
 	/// Numeric value (integer or float)
-	#[allow(dead_code)] // Reserved for Phase 3
+	// Allow dead_code: reserved for Phase 3 numeric attribute value validation
+	#[allow(dead_code)]
 	Number,
 	/// Any type (no validation)
-	#[allow(dead_code)] // Reserved for Phase 3
+	// Allow dead_code: reserved for Phase 3 permissive attribute validation
+	#[allow(dead_code)]
 	Any,
 }
 
@@ -92,7 +98,7 @@ pub(crate) struct EnumAttrSpec {
 #[derive(Debug, Clone)]
 pub(crate) struct ElementEnumAttrs {
 	/// Element tag name
-	/// Allow dead_code: Field reserved for future debugging/validation features
+	// Allow dead_code: field reserved for future debugging and validation features
 	#[allow(dead_code)]
 	pub tag: &'static str,
 	/// Enumerated attributes for this element
@@ -1846,7 +1852,8 @@ pub(crate) fn get_enum_attr_spec(tag: &str, attr: &str) -> Option<&'static EnumA
 /// SVG presentation attributes (allowed on most SVG elements).
 ///
 /// Based on: <https://developer.mozilla.org/en-US/docs/Web/SVG/Attribute/Presentation>
-#[allow(dead_code)] // Will be used by form! macro SVG icon validation
+// Allow dead_code: will be used by form! macro SVG icon validation
+#[allow(dead_code)]
 pub(crate) static SVG_PRESENTATION_ATTRS: &[&str] = &[
 	// Fill and stroke
 	"fill",
@@ -2511,7 +2518,8 @@ pub(super) static MARKER_SPEC: ElementSpec = ElementSpec {
 /// Specification for `<title>` element in SVG context (accessible title).
 ///
 /// Reference: <https://developer.mozilla.org/en-US/docs/Web/SVG/Element/title>
-#[allow(dead_code)] // Will be used by form! macro SVG icon validation
+// Allow dead_code: will be used by form! macro SVG icon validation
+#[allow(dead_code)]
 pub(super) static TITLE_SVG_SPEC: ElementSpec = ElementSpec {
 	tag: "title",
 	required_attrs: &[],
@@ -2536,7 +2544,8 @@ pub(super) static DESC_SPEC: ElementSpec = ElementSpec {
 /// Checks if a tag is an SVG element.
 ///
 /// This is used to determine if SVG-specific validation rules should apply.
-#[allow(dead_code)] // Will be used by form! macro SVG icon validation
+// Allow dead_code: will be used by form! macro SVG icon validation
+#[allow(dead_code)]
 pub(crate) fn is_svg_element(tag: &str) -> bool {
 	matches!(
 		tag,
@@ -2562,7 +2571,8 @@ pub(crate) fn is_svg_element(tag: &str) -> bool {
 /// Checks if an attribute is a valid SVG presentation attribute.
 ///
 /// Presentation attributes can be used on most SVG elements.
-#[allow(dead_code)] // Will be used by form! macro SVG icon validation
+// Allow dead_code: will be used by form! macro SVG icon validation
+#[allow(dead_code)]
 pub(crate) fn is_svg_presentation_attr(attr: &str) -> bool {
 	SVG_PRESENTATION_ATTRS.contains(&attr)
 }

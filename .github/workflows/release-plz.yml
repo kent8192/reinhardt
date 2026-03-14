@@ -23,12 +23,13 @@ jobs:
     name: Release PR
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     concurrency:
       group: release-plz-${{ github.ref }}
       cancel-in-progress: false
     steps:
       - name: Generate GitHub token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@v2
         id: generate-token
         with:
           app-id: ${{ secrets.RELEASE_PLZ_APP_ID }}
@@ -73,13 +74,15 @@ jobs:
 
   release-plz-release:
     name: Release
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     concurrency:
       group: release-plz-release-${{ github.ref }}
       cancel-in-progress: false
     steps:
       - name: Generate GitHub token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@v2
         id: generate-token
         with:
           app-id: ${{ secrets.RELEASE_PLZ_APP_ID }}

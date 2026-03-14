@@ -611,7 +611,7 @@ mod tests {
 	use std::time::Duration;
 	use tokio::time::sleep;
 
-	// Fields are used indirectly through Task trait implementation in tests
+	// Allow dead_code: fields are accessed indirectly through Task trait implementation
 	#[allow(dead_code)]
 	struct TestTask {
 		id: TaskId,

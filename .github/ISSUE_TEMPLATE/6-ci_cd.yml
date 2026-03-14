@@ -13,17 +13,46 @@ body:
 			label: Affected Workflow
 			description: Select the affected CI/CD workflow
 			options:
+				- auto-close-parent-issue.yml
+				- auto-label-pr.yml
+				- build-runner-ami.yml
+				- cancel-on-pr-close.yml
 				- check.yml
-				- fmt.yml
+				- ci.yml
 				- clippy.yml
-				- unit-test.yml
-				- doc-test.yml
+				- codeql.yml
+				- coverage.yml
+				- coverage-main.yml
 				- cross-crate-integration-test.yml
-				- intra-crate-integration-test.yml
+				- cross-platform-check.yml
+				- deploy-website.yml
+				- detect-affected-packages.yml
+				- develop-leak-guard.yml
+				- develop-merge-guard.yml
+				- doc-test.yml
+				- docs-rs-check.yml
 				- examples-test.yml
+				- examples-test-standalone.yml
+				- fmt.yml
+				- intra-crate-integration-test.yml
+				- monitor-rc-stability.yml
+				- msrv-test.yml
+				- mutation-test.yml
+				- osv-scanner.yml
+				- publish-check.yml
+				- release-plz.yml
+				- release-plz-dry-run.yml
+				- security-audit.yml
+				- semver-check.yml
+				- stale.yml
+				- terraform-check.yml
+				- terraform-plan.yml
+				- test-examples.yml
+				- todo-check.yml
 				- ui-test.yml
-				- publish-dry-run.yml
-				- publish-on-merge.yml
+				- unit-test.yml
+				- update-version-refs.yml
+				- wasm-check.yml
 				- Other (specify below)
 		validations:
 			required: true

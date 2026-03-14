@@ -3,7 +3,7 @@
 use super::MessageStorage;
 use crate::messages::message::Message;
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// In-memory message storage
 #[derive(Debug)]
@@ -27,6 +27,14 @@ impl MemoryStorage {
 			messages: Arc::new(Mutex::new(VecDeque::new())),
 		}
 	}
+
+	/// Acquire the mutex lock with poison recovery and logging.
+	fn lock_messages(&self) -> MutexGuard<'_, VecDeque<Message>> {
+		self.messages.lock().unwrap_or_else(|e| {
+			tracing::warn!("Messages mutex was poisoned, recovering");
+			e.into_inner()
+		})
+	}
 }
 
 impl Default for MemoryStorage {
@@ -37,22 +45,22 @@ impl Default for MemoryStorage {
 
 impl MessageStorage for MemoryStorage {
 	fn add(&mut self, message: Message) {
-		let mut messages = self.messages.lock().unwrap();
+		let mut messages = self.lock_messages();
 		messages.push_back(message);
 	}
 
 	fn get_all(&mut self) -> Vec<Message> {
-		let mut messages = self.messages.lock().unwrap();
+		let mut messages = self.lock_messages();
 		messages.drain(..).collect()
 	}
 
 	fn peek(&self) -> Vec<Message> {
-		let messages = self.messages.lock().unwrap();
+		let messages = self.lock_messages();
 		messages.iter().cloned().collect()
 	}
 
 	fn clear(&mut self) {
-		let mut messages = self.messages.lock().unwrap();
+		let mut messages = self.lock_messages();
 		messages.clear();
 	}
 }

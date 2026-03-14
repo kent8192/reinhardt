@@ -290,10 +290,10 @@ dependencies = ["docker-cleanup-force", "examples-test-only"]
 description = "Run all tests without Docker cleanup"
 dependencies = [
   "unit-test",
-  "integration-test",
-  "doc-test",
-  "examples-test",
-  "ui-test"
+  "integration-test-only",
+  "doc-test-only",
+  "examples-test-only",
+  "ui-test-only"
 ]
 
 [tasks.test]

@@ -13,6 +13,7 @@ use std::str::FromStr;
 /// For applications requiring exact decimal arithmetic (e.g., financial
 /// calculations), consider using `rust_decimal::Decimal` in your application
 /// layer after form validation.
+#[derive(Debug, Clone)]
 pub struct DecimalField {
 	/// The field name used as the form data key.
 	pub name: String,

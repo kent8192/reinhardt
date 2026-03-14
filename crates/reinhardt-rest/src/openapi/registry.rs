@@ -6,7 +6,7 @@
 use super::{Components, RefOr, Schema};
 use crate::ComponentsBuilder;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// A registry for managing reusable OpenAPI schemas
 ///
@@ -56,6 +56,22 @@ impl SchemaRegistry {
 		}
 	}
 
+	/// Lock the schemas mutex, recovering from poison if necessary
+	fn lock_schemas(&self) -> MutexGuard<'_, HashMap<String, Schema>> {
+		self.schemas.lock().unwrap_or_else(|e| {
+			tracing::warn!("Lock poisoned, recovering: schemas mutex was poisoned");
+			e.into_inner()
+		})
+	}
+
+	/// Lock the references mutex, recovering from poison if necessary
+	fn lock_references(&self) -> MutexGuard<'_, HashMap<String, usize>> {
+		self.references.lock().unwrap_or_else(|e| {
+			tracing::warn!("Lock poisoned, recovering: references mutex was poisoned");
+			e.into_inner()
+		})
+	}
+
 	/// Register a schema with a given name
 	///
 	/// If a schema with the same name already exists, it will be replaced.
@@ -71,7 +87,7 @@ impl SchemaRegistry {
 	/// ```
 	pub fn register(&self, name: impl Into<String>, schema: Schema) {
 		let name = name.into();
-		let mut schemas = self.schemas.lock().unwrap();
+		let mut schemas = self.lock_schemas();
 		schemas.insert(name, schema);
 	}
 
@@ -92,7 +108,7 @@ impl SchemaRegistry {
 	/// assert!(schema.is_some());
 	/// ```
 	pub fn get_schema(&self, name: &str) -> Option<Schema> {
-		let schemas = self.schemas.lock().unwrap();
+		let schemas = self.lock_schemas();
 		schemas.get(name).cloned()
 	}
 
@@ -121,10 +137,10 @@ impl SchemaRegistry {
 	/// }
 	/// ```
 	pub fn get_ref(&self, name: &str) -> Option<RefOr<Schema>> {
-		let schemas = self.schemas.lock().unwrap();
+		let schemas = self.lock_schemas();
 		if schemas.contains_key(name) {
 			// Increment reference count for circular detection
-			let mut references = self.references.lock().unwrap();
+			let mut references = self.lock_references();
 			*references.entry(name.to_string()).or_insert(0) += 1;
 
 			Some(RefOr::Ref(utoipa::openapi::Ref::new(format!(
@@ -151,7 +167,7 @@ impl SchemaRegistry {
 	/// assert!(registry.contains("User"));
 	/// ```
 	pub fn contains(&self, name: &str) -> bool {
-		let schemas = self.schemas.lock().unwrap();
+		let schemas = self.lock_schemas();
 		schemas.contains_key(name)
 	}
 
@@ -170,7 +186,7 @@ impl SchemaRegistry {
 	/// assert_eq!(registry.len(), 1);
 	/// ```
 	pub fn len(&self) -> usize {
-		let schemas = self.schemas.lock().unwrap();
+		let schemas = self.lock_schemas();
 		schemas.len()
 	}
 
@@ -189,7 +205,7 @@ impl SchemaRegistry {
 	/// assert!(!registry.is_empty());
 	/// ```
 	pub fn is_empty(&self) -> bool {
-		let schemas = self.schemas.lock().unwrap();
+		let schemas = self.lock_schemas();
 		schemas.is_empty()
 	}
 
@@ -215,7 +231,7 @@ impl SchemaRegistry {
 	/// assert!(circular.contains(&"User".to_string()));
 	/// ```
 	pub fn detect_circular_references(&self) -> Vec<String> {
-		let references = self.references.lock().unwrap();
+		let references = self.lock_references();
 		references
 			.iter()
 			.filter(|(_, count)| **count > 1)
@@ -239,10 +255,10 @@ impl SchemaRegistry {
 	/// assert!(registry.is_empty());
 	/// ```
 	pub fn clear(&self) {
-		let mut schemas = self.schemas.lock().unwrap();
+		let mut schemas = self.lock_schemas();
 		schemas.clear();
 
-		let mut references = self.references.lock().unwrap();
+		let mut references = self.lock_references();
 		references.clear();
 	}
 
@@ -267,7 +283,7 @@ impl SchemaRegistry {
 	/// assert!(components.schemas.contains_key("Post"));
 	/// ```
 	pub fn to_components(&self) -> Components {
-		let schemas = self.schemas.lock().unwrap();
+		let schemas = self.lock_schemas();
 		let mut builder = ComponentsBuilder::new();
 
 		for (name, schema) in schemas.iter() {
@@ -300,11 +316,26 @@ impl SchemaRegistry {
 	/// assert!(registry1.contains("Post"));
 	/// ```
 	pub fn merge(&self, other: &SchemaRegistry) {
-		let other_schemas = other.schemas.lock().unwrap();
-		let mut schemas = self.schemas.lock().unwrap();
+		// Clone data from other first to avoid holding both locks simultaneously,
+		// which could cause deadlock if merge is called in opposite order
+		let other_schemas: HashMap<String, Schema> = {
+			let guard = other.lock_schemas();
+			guard.clone()
+		};
+		let other_references: HashMap<String, usize> = {
+			let guard = other.lock_references();
+			guard.clone()
+		};
 
-		for (name, schema) in other_schemas.iter() {
-			schemas.insert(name.clone(), schema.clone());
+		let mut schemas = self.lock_schemas();
+		for (name, schema) in other_schemas {
+			schemas.insert(name, schema);
+		}
+		drop(schemas);
+
+		let mut references = self.lock_references();
+		for (name, count) in other_references {
+			*references.entry(name).or_insert(0) += count;
 		}
 	}
 }

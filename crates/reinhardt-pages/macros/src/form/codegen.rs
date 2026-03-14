@@ -493,10 +493,9 @@ fn generate_watch_methods(
 /// let count_memo = Memo::new(move || form.char_count());
 /// ```
 // Parameter reserved for future crate path customization
-#[allow(unused_variables)]
 fn generate_derived_methods(
 	derived: &Option<TypedFormDerived>,
-	pages_crate: &TokenStream,
+	_pages_crate: &TokenStream,
 ) -> TokenStream {
 	let Some(derived) = derived else {
 		return quote! {};

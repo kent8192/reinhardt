@@ -312,6 +312,7 @@ impl ToSchema for uuid::Uuid {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 	use std::collections::HashMap;
 
 	/// Custom test struct for HashMap value testing
@@ -339,7 +340,127 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
+	fn test_string_schema_returns_string_type() {
+		// Arrange / Act
+		let schema = String::schema();
+
+		// Assert
+		match schema {
+			Schema::Object(obj) => {
+				assert!(matches!(obj.schema_type, SchemaType::Type(Type::String)));
+			}
+			_ => panic!("Expected Object schema"),
+		}
+	}
+
+	#[rstest]
+	fn test_str_ref_schema_returns_string_type() {
+		// Arrange / Act
+		let schema = <&str>::schema();
+
+		// Assert
+		match schema {
+			Schema::Object(obj) => {
+				assert!(matches!(obj.schema_type, SchemaType::Type(Type::String)));
+			}
+			_ => panic!("Expected Object schema"),
+		}
+	}
+
+	#[rstest]
+	fn test_i32_schema_returns_integer_type() {
+		// Arrange / Act
+		let schema = i32::schema();
+
+		// Assert
+		match schema {
+			Schema::Object(obj) => {
+				assert!(matches!(obj.schema_type, SchemaType::Type(Type::Integer)));
+			}
+			_ => panic!("Expected Object schema"),
+		}
+	}
+
+	#[rstest]
+	fn test_bool_schema_returns_boolean_type() {
+		// Arrange / Act
+		let schema = bool::schema();
+
+		// Assert
+		match schema {
+			Schema::Object(obj) => {
+				assert!(matches!(obj.schema_type, SchemaType::Type(Type::Boolean)));
+			}
+			_ => panic!("Expected Object schema"),
+		}
+	}
+
+	#[rstest]
+	fn test_f64_schema_returns_number_type() {
+		// Arrange / Act
+		let schema = f64::schema();
+
+		// Assert
+		match schema {
+			Schema::Object(obj) => {
+				assert!(matches!(obj.schema_type, SchemaType::Type(Type::Number)));
+			}
+			_ => panic!("Expected Object schema"),
+		}
+	}
+
+	#[rstest]
+	fn test_vec_schema_produces_array_with_item_schema() {
+		// Arrange / Act
+		let schema = Vec::<String>::schema();
+
+		// Assert: Vec<T> should produce an Array schema
+		match schema {
+			Schema::Array(arr) => {
+				// Verify the item schema is String
+				match &arr.items {
+					utoipa::openapi::schema::ArrayItems::RefOrSchema(boxed) => match boxed.as_ref()
+					{
+						utoipa::openapi::RefOr::T(Schema::Object(item_obj)) => {
+							assert!(matches!(
+								item_obj.schema_type,
+								SchemaType::Type(Type::String)
+							));
+						}
+						_ => panic!("Expected Object schema for String items"),
+					},
+					_ => panic!("Expected RefOrSchema ArrayItems"),
+				}
+			}
+			_ => panic!("Expected Array schema for Vec<String>"),
+		}
+	}
+
+	#[rstest]
+	fn test_option_schema_delegates_to_inner_type() {
+		// Arrange / Act
+		let option_schema = Option::<i32>::schema();
+		let i32_schema = i32::schema();
+
+		// Assert: Option<T> should delegate to T's schema
+		// Both should produce Object schemas with Integer type
+		match (option_schema, i32_schema) {
+			(Schema::Object(opt_obj), Schema::Object(i32_obj)) => {
+				assert!(
+					matches!(opt_obj.schema_type, SchemaType::Type(Type::Integer)),
+					"Option<i32> schema should be Integer type"
+				);
+				assert!(
+					matches!(i32_obj.schema_type, SchemaType::Type(Type::Integer)),
+					"i32 schema should be Integer type"
+				);
+			}
+			_ => panic!("Expected Object schemas for both Option<i32> and i32"),
+		}
+	}
+
+	#[rstest]
 	fn test_hashmap_with_primitive_values() {
 		let schema = <HashMap<String, i32>>::schema();
 
@@ -373,7 +494,7 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn test_hashmap_schema_name() {
 		let schema_name = <HashMap<String, i32>>::schema_name();
 		assert_eq!(schema_name, Some("HashMap_String_Value".into()));
@@ -382,7 +503,7 @@ mod tests {
 		assert_eq!(schema_name_with_user, Some("HashMap_String_User".into()));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_hashmap_with_custom_struct() {
 		let schema = <HashMap<String, User>>::schema();
 
@@ -416,7 +537,7 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn test_nested_hashmap() {
 		let schema = <HashMap<String, HashMap<String, String>>>::schema();
 
@@ -467,7 +588,7 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn test_hashmap_with_option_values() {
 		let schema = <HashMap<String, Option<i32>>>::schema();
 
@@ -498,7 +619,7 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn test_hashmap_with_vec_values() {
 		let schema = <HashMap<String, Vec<String>>>::schema();
 

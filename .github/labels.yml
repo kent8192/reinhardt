@@ -132,6 +132,10 @@
   color: ededed
   description: Example projects and demo applications
 
+- name: infrastructure
+  color: "0e8a16"
+  description: "Infrastructure and Terraform changes"
+
 # Code Quality Labels
 - name: refactoring
   color: ededed

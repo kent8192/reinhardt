@@ -4,6 +4,10 @@
 # CI/CD
 /.github/workflows/ @kent8192
 
+# Infrastructure
+/infra/ @kent8192
+/infra/**/.terraform.lock.hcl @kent8192
+
 # Documentation
 /README.md @kent8192
 /CONTRIBUTING.md @kent8192

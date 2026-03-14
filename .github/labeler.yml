@@ -68,6 +68,11 @@ examples:
       - any-glob-to-any-file:
           - examples/**
 
+infrastructure:
+  - changed-files:
+      - any-glob-to-any-file:
+          - infra/**
+
 ci-cd:
   - changed-files:
       - any-glob-to-any-file:

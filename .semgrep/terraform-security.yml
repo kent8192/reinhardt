@@ -1,0 +1,42 @@
+rules:
+  - id: terraform-external-data-source
+    patterns:
+      - pattern-regex: 'data\s+"external"'
+    message: >-
+      External data source detected. The "external" data source allows arbitrary
+      command execution during `terraform plan`, which can be exploited to run
+      malicious code without applying any changes. Use native Terraform data
+      sources or provider-specific resources instead.
+    languages: [generic]
+    severity: ERROR
+    paths:
+      include:
+        - "*.tf"
+
+  - id: terraform-local-exec-provisioner
+    patterns:
+      - pattern-regex: 'provisioner\s+"local-exec"'
+    message: >-
+      Local-exec provisioner detected. The "local-exec" provisioner allows
+      arbitrary command execution on the machine running Terraform, which can be
+      exploited to exfiltrate credentials or compromise the CI/CD environment.
+      Use provider-specific resources or configuration management tools instead.
+    languages: [generic]
+    severity: ERROR
+    paths:
+      include:
+        - "*.tf"
+
+  - id: terraform-remote-exec-provisioner
+    patterns:
+      - pattern-regex: 'provisioner\s+"remote-exec"'
+    message: >-
+      Remote-exec provisioner detected. The "remote-exec" provisioner allows
+      arbitrary command execution on remote infrastructure, which can be
+      exploited to compromise target systems. Use provider-specific resources,
+      cloud-init, or configuration management tools instead.
+    languages: [generic]
+    severity: ERROR
+    paths:
+      include:
+        - "*.tf"

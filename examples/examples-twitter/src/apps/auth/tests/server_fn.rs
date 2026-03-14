@@ -604,7 +604,7 @@ async fn test_register_duplicate_email(#[future] twitter_db_pool: (PgPool, Strin
 #[tokio::test]
 async fn test_register_password_validation() {
 	use crate::apps::auth::shared::types::RegisterRequest;
-	use validator::Validate;
+	use reinhardt::Validate;
 
 	// Arrange
 	let request = RegisterRequest {
@@ -646,7 +646,7 @@ async fn test_register_password_mismatch() {
 #[tokio::test]
 async fn test_register_invalid_email() {
 	use crate::apps::auth::shared::types::RegisterRequest;
-	use validator::Validate;
+	use reinhardt::Validate;
 
 	// Arrange
 	let request = RegisterRequest {
@@ -667,7 +667,7 @@ async fn test_register_invalid_email() {
 #[tokio::test]
 async fn test_register_short_username() {
 	use crate::apps::auth::shared::types::RegisterRequest;
-	use validator::Validate;
+	use reinhardt::Validate;
 
 	// Arrange
 	let request = RegisterRequest {
@@ -688,7 +688,7 @@ async fn test_register_short_username() {
 #[tokio::test]
 async fn test_login_request_validation_empty_password() {
 	use crate::apps::auth::shared::types::LoginRequest;
-	use validator::Validate;
+	use reinhardt::Validate;
 
 	// Arrange
 	let request = LoginRequest {
@@ -707,7 +707,7 @@ async fn test_login_request_validation_empty_password() {
 #[tokio::test]
 async fn test_login_request_validation_invalid_email() {
 	use crate::apps::auth::shared::types::LoginRequest;
-	use validator::Validate;
+	use reinhardt::Validate;
 
 	// Arrange
 	let request = LoginRequest {

@@ -74,7 +74,7 @@ impl MessagesContainer {
 	/// container.add(Message::success("Operation completed"));
 	/// ```
 	pub fn add(&self, message: Message) {
-		let mut messages = self.messages.lock().unwrap();
+		let mut messages = self.messages.lock().unwrap_or_else(|e| e.into_inner());
 		messages.push(message);
 	}
 
@@ -91,7 +91,7 @@ impl MessagesContainer {
 	/// assert_eq!(messages.len(), 1);
 	/// ```
 	pub fn get_messages(&self) -> Vec<Message> {
-		let messages = self.messages.lock().unwrap();
+		let messages = self.messages.lock().unwrap_or_else(|e| e.into_inner());
 		messages.clone()
 	}
 
@@ -108,7 +108,7 @@ impl MessagesContainer {
 	/// assert_eq!(container.get_messages().len(), 0);
 	/// ```
 	pub fn clear(&self) {
-		let mut messages = self.messages.lock().unwrap();
+		let mut messages = self.messages.lock().unwrap_or_else(|e| e.into_inner());
 		messages.clear();
 	}
 }

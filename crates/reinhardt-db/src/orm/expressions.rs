@@ -888,7 +888,7 @@ impl Q {
 mod tests {
 	use super::*;
 
-	// Test model for FieldRef demonstration
+	// Allow dead_code: test model struct for FieldRef trait implementation verification
 	#[allow(dead_code)]
 	struct TestUser {
 		id: i64,

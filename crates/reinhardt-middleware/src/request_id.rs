@@ -210,22 +210,24 @@ impl Middleware for RequestIdMiddleware {
 		let request_id = self.get_or_generate_id(&request);
 
 		// Add to request headers if not empty
-		if !request_id.is_empty() {
-			let header_name: HeaderName = self.config.header_name.parse().unwrap();
-			request
-				.headers
-				.insert(header_name, request_id.parse().unwrap());
+		if !request_id.is_empty()
+			&& let (Ok(header_name), Ok(header_value)) = (
+				self.config.header_name.parse::<HeaderName>(),
+				request_id.parse(),
+			) {
+			request.headers.insert(header_name, header_value);
 		}
 
 		// Call the handler
 		let mut response = handler.handle(request).await?;
 
 		// Add request ID to response headers
-		if !request_id.is_empty() {
-			let header_name: HeaderName = self.config.header_name.parse().unwrap();
-			response
-				.headers
-				.insert(header_name, request_id.parse().unwrap());
+		if !request_id.is_empty()
+			&& let (Ok(header_name), Ok(header_value)) = (
+				self.config.header_name.parse::<HeaderName>(),
+				request_id.parse(),
+			) {
+			response.headers.insert(header_name, header_value);
 		}
 
 		Ok(response)

@@ -5,6 +5,7 @@ use thiserror::Error;
 /// Validation errors produced by validators.
 #[non_exhaustive]
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub enum ValidationError {
 	/// Invalid email address format.
 	#[error("Invalid email: {0}")]

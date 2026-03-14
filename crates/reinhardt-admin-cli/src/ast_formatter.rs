@@ -397,7 +397,8 @@ impl AstPageFormatter {
 	}
 
 	/// Create a new formatter with the specified rustfmt options.
-	#[allow(dead_code)] // Reserved for future use when full options support is needed
+	// Allow dead_code: reserved for future use when full rustfmt options support is needed
+	#[allow(dead_code)]
 	pub(crate) fn with_options(rustfmt_options: RustfmtOptions) -> Self {
 		Self {
 			indent: "\t".to_string(),

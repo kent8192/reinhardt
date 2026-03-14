@@ -79,6 +79,7 @@ pub trait ViewSet: Send + Sync {
 
 /// Generic ViewSet implementation
 /// Composes functionality through trait bounds
+// Allow dead_code: generic container for composable ViewSet implementations via trait bounds
 #[allow(dead_code)]
 #[derive(Clone)]
 pub struct GenericViewSet<T> {

@@ -70,6 +70,7 @@ struct IdentityEntry {
 	/// Type ID for runtime type checking
 	type_id: TypeId,
 	/// Whether the object has been modified
+	// Allow dead_code: dirty tracking flag set internally, read by future flush/commit logic
 	#[allow(dead_code)]
 	is_dirty: bool,
 }
@@ -94,6 +95,7 @@ struct IdentityEntry {
 /// ```
 pub struct Session {
 	/// Connection pool
+	// Allow dead_code: pool stored for session-scoped query execution and transaction management
 	#[allow(dead_code)]
 	pool: Arc<AnyPool>,
 	/// Database backend type

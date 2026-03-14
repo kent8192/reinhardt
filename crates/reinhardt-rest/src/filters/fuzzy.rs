@@ -846,6 +846,7 @@ mod tests {
 	use super::*;
 
 	#[derive(Clone)]
+	// Allow dead_code: test model used as type parameter for FuzzySearchFilter, fields not read directly
 	#[allow(dead_code)]
 	struct User {
 		id: i64,

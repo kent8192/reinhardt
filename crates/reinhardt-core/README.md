@@ -234,7 +234,7 @@ use reinhardt::core::signals::Signal;
 - **thiserror integration** - Full integration with `thiserror` for derived error impl
 - **anyhow integration** - `Other` variant wraps any `anyhow::Error` for compatibility
 - **Error categorization** - `ErrorKind` enum for categorical classification
-- **Standard conversions** - `From` implementations for `serde_json::Error`, `std::io::Error`, `http::Error`, `String`, `&str`, `validator::ValidationErrors`
+- **Standard conversions** - `From` implementations for `serde_json::Error`, `std::io::Error`, `http::Error`, `String`, `&str`, `reinhardt::ValidationErrors`
 - **Parameter validation context** - `ParamErrorContext` struct with detailed parameter extraction error information
 - **Parameter type enumeration** - `ParamType` enum (`Json`, `Query`, `Path`, `Form`, `Header`, `Cookie`, `Body`)
 - **Additional error types** - `TemplateNotFound` (404), `MissingContentType` (400), `MethodNotAllowed` (405), `Conflict` (409)

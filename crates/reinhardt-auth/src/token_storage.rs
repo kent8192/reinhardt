@@ -332,7 +332,7 @@ mod database_storage {
 
 	/// Table identifier for auth_tokens
 	#[derive(Debug, Iden)]
-	// Some variants are used only for DDL but still needed for schema completeness
+	// Allow dead_code: some variants are used only for DDL but needed for schema completeness
 	#[allow(dead_code)]
 	enum AuthTokens {
 		Table,

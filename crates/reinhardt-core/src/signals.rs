@@ -191,6 +191,7 @@ mod tests {
 	use std::sync::atomic::{AtomicUsize, Ordering};
 
 	#[derive(Debug, Clone)]
+	// Allow dead_code: test-only model struct; fields accessed indirectly via Clone/Debug derives and signal dispatch
 	#[allow(dead_code)]
 	struct TestModel {
 		id: i32,

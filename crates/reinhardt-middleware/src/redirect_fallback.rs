@@ -187,7 +187,10 @@ impl Middleware for RedirectFallbackMiddleware {
 		let mut redirect_response = Response::new(self.redirect_status());
 		redirect_response.headers.insert(
 			hyper::header::LOCATION,
-			self.config.fallback_url.parse().unwrap(),
+			self.config
+				.fallback_url
+				.parse()
+				.unwrap_or_else(|_| hyper::header::HeaderValue::from_static("/")),
 		);
 
 		Ok(redirect_response)

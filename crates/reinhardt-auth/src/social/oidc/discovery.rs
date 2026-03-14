@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::social::core::{OAuth2Client, SocialAuthError};
+use crate::social::url_validation::validate_endpoint_url;
 
 /// OpenID Connect Discovery document
 ///
@@ -133,6 +134,14 @@ impl DiscoveryClient {
 			.json()
 			.await
 			.map_err(|e| SocialAuthError::Discovery(e.to_string()))?;
+
+		// Validate all endpoint URLs once at discovery time
+		validate_endpoint_url(&document.authorization_endpoint)?;
+		validate_endpoint_url(&document.token_endpoint)?;
+		validate_endpoint_url(&document.jwks_uri)?;
+		if let Some(ref userinfo_url) = document.userinfo_endpoint {
+			validate_endpoint_url(userinfo_url)?;
+		}
 
 		// Update cache keyed by issuer_url
 		{

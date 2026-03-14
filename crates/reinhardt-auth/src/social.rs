@@ -47,6 +47,7 @@ pub mod flow;
 pub mod oidc;
 pub mod providers;
 pub mod storage;
+pub(crate) mod url_validation;
 pub mod user_mapping;
 
 // Re-export core types

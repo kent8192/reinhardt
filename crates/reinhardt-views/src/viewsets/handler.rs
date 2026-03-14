@@ -18,8 +18,10 @@ use std::sync::Arc;
 pub struct ViewSetHandler<V: ViewSet> {
 	viewset: Arc<V>,
 	action_map: HashMap<Method, String>,
+	// Allow dead_code: stored for DRF-compatible handler identification in URL reversing
 	#[allow(dead_code)]
 	name: Option<String>,
+	// Allow dead_code: stored for DRF-compatible view suffix (e.g. "List", "Instance") in URL reversing
 	#[allow(dead_code)]
 	suffix: Option<String>,
 

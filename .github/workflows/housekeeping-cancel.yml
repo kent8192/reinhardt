@@ -9,6 +9,10 @@ permissions:
   actions: write
   pull-requests: read
 
+concurrency:
+  group: housekeeping-cancel
+  cancel-in-progress: true
+
 jobs:
   cancel-orphaned-runs:
     name: Cancel Orphaned Workflow Runs

@@ -245,8 +245,7 @@ impl CockroachDBTransactionManager {
 		let mut tx = self.pool.begin().await.map_err(DatabaseError::from)?;
 
 		let sql = format!("SET TRANSACTION PRIORITY {}", priority);
-		let sql_static: &'static str = Box::leak(sql.into_boxed_str());
-		sqlx::query(sql_static)
+		sqlx::raw_sql(&sql)
 			.execute(&mut *tx)
 			.await
 			.map_err(DatabaseError::from)?;

@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.8...reinhardt-web@v0.1.0-rc.9) - 2026-03-14
+
+### Added
+
+- *(infra)* add repository Terraform module for GitHub settings
+- *(ci)* add infrastructure label and labeler mapping
+- *(ci)* guard terraform-plan against fork PRs and add repository module
+- *(ci)* add tfprovidercheck provider allowlist
+- *(ci)* add semgrep terraform security rules
+- *(ci)* add terraform-validate-fork workflow (Stage 1)
+- *(ci)* add terraform-plan-privileged workflow (Stage 2)
+- *(ci)* add terraform-apply workflow for post-merge automation
+
+### Changed
+
+- *(ci)* migrate housekeeping runner to cancel-runner
+
+### Documentation
+
+- *(readme)* fix outdated versions and incorrect install command
+- *(readme)* restructure sections for better first impression
+- *(readme)* improve copywriting for broader audience appeal
+- *(readme)* improve quick navigation and table readability
+- *(auth)* fix private intra-doc link in get_user_info
+
+### Fixed
+
+- *(throttling)* use per-key state in leaky bucket throttle
+- *(throttling)* use lazy initialization for per-key bucket state
+- *(throttling)* prevent capacity overflow and add per-key isolation tests
+- *(ci)* correct workflow configuration issues
+- *(ci)* revert create-github-app-token to v2
+- *(ci)* change auto-label-pr to pull_request_target for fork PR support
+- *(ci)* address review findings in terraform security workflows
+- *(ci)* add missing TF_VAR mappings for terraform plan workflows
+- *(ci)* use secrets instead of vars for TF_GITHUB_OWNER and TF_GITHUB_REPOSITORY
+- *(infra)* install aws cli in housekeeping runner userdata
+- *(infra)* remove user_data from ignore_changes in housekeeping runner
+- *(infra)* enable unattended-upgrades on housekeeping runner
+- *(infra)* upgrade housekeeping runner from t4g.nano to t4g.micro
+- *(ci)* add missing organizations_account_email to terraform plan workflows
+- *(ci)* download lambda zip files before terraform plan
+- *(ci)* download lambda zip files before terraform apply plan step
+
+### Maintenance
+
+- *(ci)* exclude test code from CodeQL analysis
+- add infra ownership to CODEOWNERS
+- add docs/superpowers to .gitignore
+
+### Other
+
+- resolve conflicts with main in README.md
+- resolve conflicts with main branch
+- incorporate CI fix from fix/housekeeping-runner-instance-type
+
 ## [0.1.0-rc.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.7...reinhardt-web@v0.1.0-rc.8) - 2026-03-12
 
 ### Fixed

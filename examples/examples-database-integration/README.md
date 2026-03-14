@@ -329,6 +329,40 @@ guidelines.
 
 ## Troubleshooting
 
+### Database Not Initialized
+
+```
+Database error: Database not initialized
+```
+
+This error occurs when the application starts without a running database. All
+ORM-based endpoints require a PostgreSQL connection.
+
+**Solutions:**
+
+1. Start PostgreSQL using Docker (see Database Setup above):
+   ```bash
+   docker run -d \
+     --name reinhardt-postgres \
+     -e POSTGRES_USER=reinhardt \
+     -e POSTGRES_PASSWORD=reinhardt_dev \
+     -e POSTGRES_DB=reinhardt_examples \
+     -p 5432:5432 \
+     postgres:17
+   ```
+2. Set the `DATABASE_URL` environment variable:
+   ```bash
+   export DATABASE_URL="postgres://reinhardt:reinhardt_dev@localhost:5432/reinhardt_examples"
+   ```
+3. Run migrations before starting the application:
+   ```bash
+   cargo run --bin manage migrate
+   ```
+4. Restart the application:
+   ```bash
+   cargo run --package examples-database-integration
+   ```
+
 ### Connection Errors
 
 ```
@@ -337,7 +371,10 @@ Error: Database connection failed
 
 **Solutions:**
 
-1. Verify database server is running
+1. Verify database server is running:
+   ```bash
+   docker ps | grep reinhardt-postgres
+   ```
 2. Check DATABASE_URL environment variable is set correctly
 3. Verify credentials (username, password) are correct
 

@@ -38,6 +38,10 @@ jobs:
               'ci': 'ci-cd',
               'style': 'code-quality',
               'security': 'security',
+              'chore': 'dependencies',
+              'build': 'ci-cd',
+              'deprecated': 'breaking-change',
+              'revert': 'bug',
             };
 
             const labelsToAdd = [];

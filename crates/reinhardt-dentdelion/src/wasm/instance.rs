@@ -37,12 +37,14 @@ pub struct WasmPluginInstance {
 	/// Current plugin state.
 	state: RwLock<PluginState>,
 	/// The compiled WASM component.
-	#[allow(dead_code)] // Used for future WASM function calls
+	// Allow dead_code: compiled component retained for future WASM function calls
+	#[allow(dead_code)]
 	component: Component,
 	/// Host state for this instance.
 	host_state: RwLock<HostState>,
 	/// Reference to the runtime.
-	#[allow(dead_code)] // Used for future store creation
+	// Allow dead_code: runtime reference retained for future store creation
+	#[allow(dead_code)]
 	runtime: Arc<WasmRuntime>,
 	/// WASM-specific configuration.
 	wasm_config: Option<WasmPluginConfig>,
@@ -131,7 +133,8 @@ impl WasmPluginInstance {
 	}
 
 	/// Create a new store for executing plugin functions.
-	#[allow(dead_code)] // Used for future WASM function calls
+	// Allow dead_code: store creation method reserved for future WASM function execution
+	#[allow(dead_code)]
 	fn create_store(&self) -> Store<HostState> {
 		let host_state = self.host_state.read().clone();
 		self.runtime.create_store(host_state)

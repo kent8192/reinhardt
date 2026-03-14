@@ -3,11 +3,11 @@
 //! RESTful API endpoints
 
 use chrono::Utc;
+use reinhardt::Validate;
 use reinhardt::core::serde::json;
 use reinhardt::http::ViewResult;
 use reinhardt::{Json, Path, Response, StatusCode};
 use reinhardt::{delete, get, post, put};
-use validator::Validate;
 
 use super::models::Article;
 use super::serializers::{

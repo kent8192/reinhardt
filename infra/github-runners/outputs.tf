@@ -39,6 +39,16 @@ output "webhook_setup_guide" {
 	EOT
 }
 
+output "housekeeping_runner_instance_id" {
+  description = "EC2 instance ID of the housekeeping runner (empty if disabled)"
+  value       = var.enable_housekeeping_runner ? aws_instance.housekeeping[0].id : ""
+}
+
+output "housekeeping_runner_private_ip" {
+  description = "Private IP of the housekeeping runner (for SSM Session Manager access)"
+  value       = var.enable_housekeeping_runner ? aws_instance.housekeeping[0].private_ip : ""
+}
+
 output "github_actions_oidc_provider_arn" {
   description = "ARN of the GitHub Actions OIDC identity provider"
   value       = aws_iam_openid_connect_provider.github_actions.arn

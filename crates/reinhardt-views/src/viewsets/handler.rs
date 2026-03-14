@@ -13,13 +13,16 @@ use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use tracing;
 
 /// Handler implementation that wraps a ViewSet
 pub struct ViewSetHandler<V: ViewSet> {
 	viewset: Arc<V>,
 	action_map: HashMap<Method, String>,
+	// Allow dead_code: stored for DRF-compatible handler identification in URL reversing
 	#[allow(dead_code)]
 	name: Option<String>,
+	// Allow dead_code: stored for DRF-compatible view suffix (e.g. "List", "Instance") in URL reversing
 	#[allow(dead_code)]
 	suffix: Option<String>,
 
@@ -98,9 +101,17 @@ impl<V: ViewSet + 'static> Handler for ViewSetHandler<V> {
 			None => {
 				let allowed: Vec<String> = self.action_map.keys().map(|m| m.to_string()).collect();
 				let mut response = Response::new(hyper::StatusCode::METHOD_NOT_ALLOWED);
-				response
-					.headers
-					.insert(hyper::header::ALLOW, allowed.join(", ").parse().unwrap());
+				match allowed.join(", ").parse() {
+					Ok(header_value) => {
+						response.headers.insert(hyper::header::ALLOW, header_value);
+					}
+					Err(e) => {
+						tracing::warn!(
+							error = %e,
+							"Failed to parse allowed methods as header value"
+						);
+					}
+				}
 				return Ok(response);
 			}
 		};

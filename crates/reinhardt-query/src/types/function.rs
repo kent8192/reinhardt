@@ -50,6 +50,7 @@ use crate::types::{DynIden, IntoIden};
 ///     .body("SELECT 1");
 /// ```
 #[derive(Debug, Clone)]
+// Allow dead_code: DDL definition struct for CREATE FUNCTION; fields populated by builder but not yet consumed by backend SQL generation
 #[allow(dead_code)]
 pub struct FunctionDef {
 	pub(crate) name: DynIden,
@@ -83,6 +84,7 @@ pub struct FunctionDef {
 ///     .mode(ParameterMode::Out);
 /// ```
 #[derive(Debug, Clone)]
+// Allow dead_code: DDL parameter struct for function signatures; fields populated by builder but not yet consumed by backend SQL generation
 #[allow(dead_code)]
 pub struct FunctionParameter {
 	pub(crate) name: Option<DynIden>,
@@ -95,6 +97,7 @@ pub struct FunctionParameter {
 ///
 /// Specifies the direction and behavior of a function parameter.
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Allow dead_code: enum variants define all SQL parameter modes (IN/OUT/INOUT/VARIADIC); not all consumed yet by backend SQL generation
 #[allow(dead_code)]
 pub enum ParameterMode {
 	/// IN - Input parameter (default)
@@ -122,6 +125,7 @@ pub enum ParameterMode {
 /// let lang = FunctionLanguage::Custom("plpython3u".to_string());
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Allow dead_code: enum variants define all SQL function languages; not all consumed yet by backend SQL generation
 #[allow(dead_code)]
 pub enum FunctionLanguage {
 	/// SQL language
@@ -152,6 +156,7 @@ pub enum FunctionLanguage {
 /// let behavior = FunctionBehavior::Volatile;   // Result may change (default)
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Allow dead_code: enum variants define SQL function volatility categories; not all consumed yet by backend SQL generation
 #[allow(dead_code)]
 pub enum FunctionBehavior {
 	/// IMMUTABLE - Result depends only on arguments, never changes
@@ -175,6 +180,7 @@ pub enum FunctionBehavior {
 /// let security = FunctionSecurity::Invoker; // Execute with invoker's privileges (default)
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Allow dead_code: enum variants define SQL SECURITY DEFINER/INVOKER options; not all consumed yet by backend SQL generation
 #[allow(dead_code)]
 pub enum FunctionSecurity {
 	/// SECURITY DEFINER - Execute with privileges of function definer

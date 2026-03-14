@@ -1,0 +1,6 @@
+providers:
+  - source: "registry.terraform.io/hashicorp/aws"
+  - source: "registry.terraform.io/hashicorp/random"
+  - source: "registry.terraform.io/hashicorp/null"
+  - source: "registry.terraform.io/integrations/github"
+  - source: "registry.terraform.io/cloudflare/cloudflare"

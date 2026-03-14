@@ -2,8 +2,8 @@
 //!
 //! Data serialization and validation
 
+use reinhardt::Validate;
 use serde::{Deserialize, Serialize};
-use validator::Validate;
 
 /// Article creation request serializer
 #[derive(Serialize, Deserialize, Validate, Debug)]
@@ -80,8 +80,8 @@ pub struct ArticleListResponse {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use reinhardt::Validate;
 	use rstest::rstest;
-	use validator::Validate;
 
 	#[rstest]
 	fn test_create_article_request_valid() {

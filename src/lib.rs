@@ -734,7 +734,8 @@ pub use reinhardt_core::signals::{
 #[cfg(all(feature = "core", not(target_arch = "wasm32")))]
 pub use reinhardt_core::validators::{
 	CreditCardValidator, EmailValidator, IBANValidator, IPAddressValidator, PhoneNumberValidator,
-	UrlValidator, ValidationError as ValidatorError, ValidationResult, Validator,
+	UrlValidator, Validate, ValidationError as ValidatorError, ValidationErrors, ValidationResult,
+	Validator,
 };
 
 // Re-export views

@@ -20,8 +20,8 @@
 //! ### Presets
 //!
 //! - `minimal` - Core functionality only (routing, DI, params)
-//! - `standard` (default) - Balanced for most projects
-//! - `full` - All features enabled
+//! - `full` (default) - All features enabled
+//! - `standard` - Balanced for most projects
 //! - `api-only` - REST API without templates/forms
 //! - `graphql-server` - GraphQL-focused setup
 //! - `websocket-server` - WebSocket-centric setup
@@ -50,7 +50,7 @@
 //! - `middleware-security` - Security headers (HSTS, XSS Protection, etc.)
 //! - `middleware-rate-limit` - Rate limiting and throttling
 //!
-//! See [docs/FEATURE_FLAGS.md](../docs/FEATURE_FLAGS.md) for detailed documentation.
+//! See [Cargo.toml feature definitions](https://github.com/kent8192/reinhardt/blob/main/Cargo.toml) for detailed documentation.
 //!
 //! ## Quick Example
 //!
@@ -802,6 +802,10 @@ pub use reinhardt_rest::browsable_api;
 // ```
 #[cfg(all(feature = "openapi", not(target_arch = "wasm32")))]
 pub use reinhardt_rest::openapi::*;
+
+// Re-export OpenApiRouter (requires openapi-router feature)
+#[cfg(all(feature = "openapi-router", not(target_arch = "wasm32")))]
+pub use reinhardt_openapi::OpenApiRouter;
 
 // Re-export shortcuts (Django-style convenience functions)
 #[cfg(all(feature = "shortcuts", not(target_arch = "wasm32")))]

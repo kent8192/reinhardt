@@ -187,6 +187,7 @@ impl QueryFieldCompiler {
 	}
 
 	/// Convert lookup type to SQL operator (PostgreSQL)
+	// Allow dead_code: PostgreSQL-specific operator mapping used when PostgreSQL backend is active
 	#[allow(dead_code)]
 	fn lookup_type_to_operator(lookup_type: &LookupType) -> &'static str {
 		match lookup_type {
@@ -278,6 +279,7 @@ impl QueryFieldCompiler {
 	}
 
 	/// Compile lookup value to SQL
+	// Allow dead_code: lookup value compilation used by backend-specific query field compilers
 	#[allow(dead_code)]
 	fn compile_value(value: &LookupValue, lookup_type: &LookupType) -> String {
 		match lookup_type {

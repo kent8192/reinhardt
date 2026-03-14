@@ -133,6 +133,7 @@ impl HtmlHighlighter {
 	}
 
 	/// Escape HTML entities in text
+	// Allow dead_code: utility method reserved for safe HTML output in highlight rendering
 	#[allow(dead_code)]
 	fn escape_html(&self, text: &str) -> String {
 		text.replace('&', "&amp;")

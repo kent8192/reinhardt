@@ -174,6 +174,7 @@ struct VaultSecretMetadata {
 }
 
 #[derive(Debug, Serialize)]
+// Allow dead_code: request body struct for Vault KV write API, reserved for future secret write operations
 #[allow(dead_code)]
 struct VaultWriteRequest {
 	data: HashMap<String, String>,

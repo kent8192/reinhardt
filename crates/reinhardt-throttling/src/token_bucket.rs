@@ -296,8 +296,9 @@ impl<T: TimeProvider> TokenBucket<T> {
 	/// Try to consume tokens from the bucket for a given key
 	async fn consume_tokens(&self, key: &str, count: usize) -> ThrottleResult<bool> {
 		let mut buckets = self.buckets.write().await;
-		let new_state = self.new_bucket_state();
-		let state = buckets.entry(key.to_string()).or_insert(new_state);
+		let state = buckets
+			.entry(key.to_string())
+			.or_insert_with(|| self.new_bucket_state());
 
 		// Refill tokens first
 		self.refill_tokens(state);
@@ -314,8 +315,9 @@ impl<T: TimeProvider> TokenBucket<T> {
 	/// Get current token count for a given key
 	pub async fn tokens_for_key(&self, key: &str) -> usize {
 		let mut buckets = self.buckets.write().await;
-		let new_state = self.new_bucket_state();
-		let state = buckets.entry(key.to_string()).or_insert(new_state);
+		let state = buckets
+			.entry(key.to_string())
+			.or_insert_with(|| self.new_bucket_state());
 		self.refill_tokens(state);
 		state.tokens
 	}
@@ -350,8 +352,9 @@ impl<T: TimeProvider> Throttle for TokenBucket<T> {
 
 	async fn wait_time(&self, key: &str) -> ThrottleResult<Option<u64>> {
 		let mut buckets = self.buckets.write().await;
-		let new_state = self.new_bucket_state();
-		let state = buckets.entry(key.to_string()).or_insert(new_state);
+		let state = buckets
+			.entry(key.to_string())
+			.or_insert_with(|| self.new_bucket_state());
 
 		if state.tokens >= self.config.tokens_per_request {
 			return Ok(None);

@@ -173,8 +173,11 @@ resource "aws_instance" "housekeeping" {
     Name = "${var.prefix}-housekeeping"
   }
 
-  # Don't replace instance when AMI updates (base Ubuntu AMI is fine)
+  # Don't replace instance when AMI updates (base Ubuntu AMI is fine).
+  # user_data is NOT ignored: changes to the bootstrap script should
+  # trigger instance replacement to maintain IaC correctness.
   lifecycle {
-    ignore_changes = [ami, user_data]
+    ignore_changes        = [ami]
+    create_before_destroy = true
   }
 }

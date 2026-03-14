@@ -17,13 +17,17 @@ fi
 # --- First boot: install and register runner ---
 
 apt-get update -y
-apt-get install -y jq curl openssl unzip
+apt-get install -y jq curl openssl unzip unattended-upgrades
 
 # Install AWS CLI v2 (arm64) - not included in base Ubuntu AMI
 curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscliv2.zip
 unzip -q /tmp/awscliv2.zip -d /tmp
 /tmp/aws/install
 rm -rf /tmp/awscliv2.zip /tmp/aws
+
+# Enable automatic security updates
+dpkg-reconfigure -f noninteractive unattended-upgrades
+systemctl enable --now apt-daily-upgrade.timer
 
 # Fetch GitHub App credentials from SSM
 APP_ID=$(aws ssm get-parameter \

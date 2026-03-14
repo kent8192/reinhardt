@@ -5,8 +5,24 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tracing;
+
+/// Acquire a read lock, recovering from poisoning with a warning log.
+fn read_or_recover<'a, T>(lock: &'a RwLock<T>, context: &str) -> RwLockReadGuard<'a, T> {
+	lock.read().unwrap_or_else(|e| {
+		tracing::warn!("RwLock poisoned during read ({}), recovering", context);
+		e.into_inner()
+	})
+}
+
+/// Acquire a write lock, recovering from poisoning with a warning log.
+fn write_or_recover<'a, T>(lock: &'a RwLock<T>, context: &str) -> RwLockWriteGuard<'a, T> {
+	lock.write().unwrap_or_else(|e| {
+		tracing::warn!("RwLock poisoned during write ({}), recovering", context);
+		e.into_inner()
+	})
+}
 
 // Cloud storage backends
 #[cfg(feature = "s3")]
@@ -147,26 +163,24 @@ impl MemoryStorage {
 #[async_trait]
 impl Storage for MemoryStorage {
 	async fn save(&self, name: &str, content: &[u8]) -> io::Result<String> {
-		let mut files = self.files.write().unwrap();
+		let mut files = write_or_recover(&self.files, "MemoryStorage::save");
 		files.insert(name.to_string(), content.to_vec());
 		Ok(self.url(name))
 	}
 
 	fn exists(&self, name: &str) -> bool {
-		self.files.read().unwrap().contains_key(name)
+		read_or_recover(&self.files, "MemoryStorage::exists").contains_key(name)
 	}
 
 	async fn open(&self, name: &str) -> io::Result<Vec<u8>> {
-		self.files
-			.read()
-			.unwrap()
+		read_or_recover(&self.files, "MemoryStorage::open")
 			.get(name)
 			.cloned()
 			.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "File not found"))
 	}
 
 	async fn delete(&self, name: &str) -> io::Result<()> {
-		self.files.write().unwrap().remove(name);
+		write_or_recover(&self.files, "MemoryStorage::delete").remove(name);
 		Ok(())
 	}
 
@@ -354,7 +368,7 @@ impl HashedFileStorage {
 
 		tokio::fs::write(&file_path, content).await?;
 
-		let mut hashed_files = self.hashed_files.write().unwrap();
+		let mut hashed_files = write_or_recover(&self.hashed_files, "HashedFileStorage::save");
 		hashed_files.insert(name.to_string(), hashed_name.clone());
 
 		Ok(hashed_name)
@@ -407,7 +421,10 @@ impl HashedFileStorage {
 		}
 
 		// Update the internal mapping
-		let mut hashed_files = self.hashed_files.write().unwrap();
+		let mut hashed_files = write_or_recover(
+			&self.hashed_files,
+			"HashedFileStorage::save_with_dependencies",
+		);
 		for (orig, hashed) in processed_files {
 			hashed_files.insert(orig, hashed);
 		}
@@ -418,7 +435,7 @@ impl HashedFileStorage {
 	/// Opens and reads the content of a previously saved file by its original name.
 	pub async fn open(&self, name: &str) -> io::Result<Vec<u8>> {
 		let hashed_name = {
-			let hashed_files = self.hashed_files.read().unwrap();
+			let hashed_files = read_or_recover(&self.hashed_files, "HashedFileStorage::open");
 			hashed_files
 				.get(name)
 				.ok_or_else(|| {
@@ -433,7 +450,7 @@ impl HashedFileStorage {
 
 	/// Returns the URL for a file, using the hashed name if available.
 	pub fn url(&self, name: &str) -> String {
-		let hashed_files = self.hashed_files.read().unwrap();
+		let hashed_files = read_or_recover(&self.hashed_files, "HashedFileStorage::url");
 		if let Some(hashed_name) = hashed_files.get(name) {
 			format!("{}{}", self.base_url, hashed_name)
 		} else {
@@ -443,7 +460,7 @@ impl HashedFileStorage {
 
 	/// Returns whether a file with the given name exists in the hashed storage.
 	pub fn exists(&self, name: &str) -> bool {
-		let hashed_files = self.hashed_files.read().unwrap();
+		let hashed_files = read_or_recover(&self.hashed_files, "HashedFileStorage::exists");
 		if let Some(hashed_name) = hashed_files.get(name) {
 			self.location.join(hashed_name).exists()
 		} else {
@@ -453,7 +470,8 @@ impl HashedFileStorage {
 
 	/// Returns the hashed filename for the given original name, if available.
 	pub fn get_hashed_path(&self, name: &str) -> Option<String> {
-		let hashed_files = self.hashed_files.read().unwrap();
+		let hashed_files =
+			read_or_recover(&self.hashed_files, "HashedFileStorage::get_hashed_path");
 		hashed_files.get(name).cloned()
 	}
 }
@@ -577,7 +595,10 @@ impl ManifestStaticFilesStorage {
 
 		// Update internal mapping
 		{
-			let mut hashed_files = self.hashed_files.write().unwrap();
+			let mut hashed_files = write_or_recover(
+				&self.hashed_files,
+				"ManifestStaticFilesStorage::save_with_dependencies",
+			);
 			hashed_files.extend(processed_files);
 		}
 
@@ -589,7 +610,10 @@ impl ManifestStaticFilesStorage {
 
 	async fn save_manifest(&self) -> io::Result<()> {
 		let (manifest_path, manifest_json) = {
-			let hashed_files = self.hashed_files.read().unwrap();
+			let hashed_files = read_or_recover(
+				&self.hashed_files,
+				"ManifestStaticFilesStorage::save_manifest",
+			);
 			let manifest_path = self.normalize_path(&self.manifest_name);
 
 			// Create manifest with "paths" key to match Django's manifest structure
@@ -621,7 +645,10 @@ impl ManifestStaticFilesStorage {
 
 		// Extract "paths" object from manifest
 		if let Some(paths) = manifest_data.get("paths").and_then(|p| p.as_object()) {
-			let mut hashed_files = self.hashed_files.write().unwrap();
+			let mut hashed_files = write_or_recover(
+				&self.hashed_files,
+				"ManifestStaticFilesStorage::load_manifest",
+			);
 			for (key, value) in paths {
 				if let Some(hashed_name) = value.as_str() {
 					hashed_files.insert(key.clone(), hashed_name.to_string());
@@ -634,14 +661,18 @@ impl ManifestStaticFilesStorage {
 
 	/// Get the hashed path for a given file
 	pub fn get_hashed_path(&self, name: &str) -> Option<String> {
-		let hashed_files = self.hashed_files.read().unwrap();
+		let hashed_files = read_or_recover(
+			&self.hashed_files,
+			"ManifestStaticFilesStorage::get_hashed_path",
+		);
 		hashed_files.get(name).cloned()
 	}
 
 	/// Returns whether a file with the given name exists (checking both hashed and original paths).
 	pub fn exists(&self, name: &str) -> bool {
 		// First check if we have a hashed version of this file
-		let hashed_files = self.hashed_files.read().unwrap();
+		let hashed_files =
+			read_or_recover(&self.hashed_files, "ManifestStaticFilesStorage::exists");
 		if let Some(hashed_name) = hashed_files.get(name) {
 			// Check hashed file path
 			let hashed_path = self.normalize_path(hashed_name);
@@ -658,8 +689,12 @@ impl ManifestStaticFilesStorage {
 	/// Open a file by its original name
 	pub async fn open(&self, name: &str) -> io::Result<Vec<u8>> {
 		let actual_name = {
-			let hashed_files = self.hashed_files.read().unwrap();
-			hashed_files.get(name).unwrap_or(&name.to_string()).clone()
+			let hashed_files =
+				read_or_recover(&self.hashed_files, "ManifestStaticFilesStorage::open");
+			hashed_files
+				.get(name)
+				.cloned()
+				.unwrap_or_else(|| name.to_string())
 		};
 
 		let file_path = self.normalize_path(&actual_name);
@@ -668,8 +703,11 @@ impl ManifestStaticFilesStorage {
 
 	/// Get URL for a file
 	pub fn url(&self, name: &str) -> String {
-		let hashed_files = self.hashed_files.read().unwrap();
-		let actual_name = hashed_files.get(name).unwrap_or(&name.to_string()).clone();
+		let hashed_files = read_or_recover(&self.hashed_files, "ManifestStaticFilesStorage::url");
+		let actual_name = hashed_files
+			.get(name)
+			.cloned()
+			.unwrap_or_else(|| name.to_string());
 		drop(hashed_files);
 
 		self.normalize_url(&self.base_url, &actual_name)

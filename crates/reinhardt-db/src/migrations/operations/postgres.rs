@@ -106,18 +106,18 @@ impl CreateExtension {
 	/// assert!(sql[0].contains("hstore"));
 	/// ```
 	pub fn database_forwards(&self, _schema_editor: &dyn BaseDatabaseSchemaEditor) -> Vec<String> {
-		let mut parts = vec!["CREATE EXTENSION IF NOT EXISTS"];
+		let mut parts = vec!["CREATE EXTENSION IF NOT EXISTS".to_string()];
 		// Always use double quotes for PostgreSQL identifier safety
-		parts.push(Box::leak(format!("\"{}\"", self.name).into_boxed_str()));
+		parts.push(format!("\"{}\"", self.name));
 
 		if let Some(ref schema) = self.schema {
-			parts.push("SCHEMA");
-			parts.push(Box::leak(format!("\"{}\"", schema).into_boxed_str()));
+			parts.push("SCHEMA".to_string());
+			parts.push(format!("\"{}\"", schema));
 		}
 
 		if let Some(ref version) = self.version {
-			parts.push("VERSION");
-			parts.push(Box::leak(quote_literal(version).into()));
+			parts.push("VERSION".to_string());
+			parts.push(quote_literal(version));
 		}
 
 		vec![format!("{};", parts.join(" "))]

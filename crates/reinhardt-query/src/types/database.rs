@@ -125,6 +125,7 @@ use crate::types::{DynIden, IntoIden, ZoneConfig};
 ///     .collate("utf8mb4_unicode_ci");
 /// ```
 #[derive(Debug, Clone)]
+// Allow dead_code: DDL definition struct for CREATE DATABASE; fields populated by builder but not yet consumed by backend SQL generation
 #[allow(dead_code)]
 pub struct DatabaseDef {
 	pub(crate) name: DynIden,

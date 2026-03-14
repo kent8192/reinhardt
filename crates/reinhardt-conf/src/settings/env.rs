@@ -272,8 +272,10 @@ pub enum EnvError {
 mod tests {
 	use super::*;
 	use rstest::rstest;
+	use serial_test::serial;
 
 	#[rstest]
+	#[serial(env)]
 	fn test_env_str() {
 		// SAFETY: Setting environment variables is unsafe in multi-threaded programs.
 		// This test uses #[serial] to ensure exclusive access to environment variables.
@@ -289,7 +291,7 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn test_env_str_with_default() {
 		let env = Env::new();
 		assert_eq!(
@@ -299,7 +301,8 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
+	#[serial(env)]
 	fn test_env_bool() {
 		// SAFETY: Setting environment variables is unsafe in multi-threaded programs.
 		// This test uses #[serial] to ensure exclusive access to environment variables.
@@ -326,7 +329,8 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
+	#[serial(env)]
 	fn test_env_int() {
 		// SAFETY: Setting environment variables is unsafe in multi-threaded programs.
 		// This test uses #[serial] to ensure exclusive access to environment variables.
@@ -342,7 +346,8 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
+	#[serial(env)]
 	fn test_env_list() {
 		// SAFETY: Setting environment variables is unsafe in multi-threaded programs.
 		// This test uses #[serial] to ensure exclusive access to environment variables.
@@ -358,7 +363,8 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
+	#[serial(env)]
 	fn test_settings_env_with_prefix() {
 		// SAFETY: Setting environment variables is unsafe in multi-threaded programs.
 		// This test uses #[serial] to ensure exclusive access to environment variables.
@@ -374,7 +380,8 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
+	#[serial(env)]
 	fn test_env_path() {
 		// SAFETY: Setting environment variables is unsafe in multi-threaded programs.
 		// This test uses #[serial] to ensure exclusive access to environment variables.

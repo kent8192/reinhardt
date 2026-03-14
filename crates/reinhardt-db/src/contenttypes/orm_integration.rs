@@ -276,8 +276,7 @@ impl ContentTypeQuery {
 	/// ```
 	pub async fn all(&self) -> Result<Vec<ContentType>, PersistenceError> {
 		let (sql, values) = self.build_query();
-		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
-		let rows = bind_query_values(sqlx::query(sql_leaked), &values)
+		let rows = bind_query_values(sqlx::query(&sql), &values)
 			.fetch_all(&*self.pool)
 			.await
 			.map_err(|e| {
@@ -372,8 +371,7 @@ impl ContentTypeQuery {
 		}
 
 		let (sql, values) = count_query.build(SqliteQueryBuilder);
-		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
-		let row = bind_query_values(sqlx::query(sql_leaked), &values)
+		let row = bind_query_values(sqlx::query(&sql), &values)
 			.fetch_one(&*self.pool)
 			.await
 			.map_err(|e| PersistenceError::DatabaseError(format!("Failed to count: {}", e)))?;
@@ -445,9 +443,7 @@ impl ContentTypeTransaction {
 			.expect("Failed to build insert statement")
 			.to_owned();
 		let (sql, values) = stmt.build(SqliteQueryBuilder);
-		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
-
-		bind_query_values(sqlx::query(sql_leaked), &values)
+		bind_query_values(sqlx::query(&sql), &values)
 			.execute(&*self.pool)
 			.await
 			.map_err(|e| {
@@ -482,9 +478,7 @@ impl ContentTypeTransaction {
 			)
 			.to_owned();
 		let (sql, values) = stmt.build(SqliteQueryBuilder);
-		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
-
-		bind_query_values(sqlx::query(sql_leaked), &values)
+		bind_query_values(sqlx::query(&sql), &values)
 			.execute(&*self.pool)
 			.await
 			.map_err(|e| {

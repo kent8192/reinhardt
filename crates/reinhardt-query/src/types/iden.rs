@@ -145,6 +145,7 @@ mod tests {
 	use super::*;
 	use rstest::rstest;
 
+	// Allow dead_code: test-only enum whose variants are used via Iden trait methods, not direct field access
 	#[allow(dead_code)]
 	#[derive(Debug, Clone, Copy)]
 	enum TestTable {

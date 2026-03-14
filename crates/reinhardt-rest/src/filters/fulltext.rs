@@ -260,6 +260,7 @@ mod tests {
 	use super::*;
 
 	#[derive(Clone)]
+	// Allow dead_code: test model used as type parameter for FullTextSearchFilter, fields not read directly
 	#[allow(dead_code)]
 	struct Article {
 		id: i64,

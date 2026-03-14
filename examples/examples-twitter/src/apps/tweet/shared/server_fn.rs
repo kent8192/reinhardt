@@ -14,8 +14,8 @@ use {
 	crate::apps::tweet::shared::types::CreateTweetRequest,
 	reinhardt::CurrentUser,
 	reinhardt::DatabaseConnection,
+	reinhardt::Validate,
 	reinhardt::db::orm::{Filter, FilterOperator, FilterValue, Model},
-	validator::Validate,
 };
 
 /// Create a new tweet

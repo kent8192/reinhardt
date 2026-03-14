@@ -44,6 +44,7 @@ pub struct PostgresSuiteResource {
 	// Note: Container must be held to keep it alive during test suite execution
 	// TestContainers automatically stops/removes containers when dropped
 	/// The running PostgreSQL container handle (kept alive for the suite duration).
+	// Allow dead_code: container handle must be held to prevent automatic cleanup by TestContainers
 	#[allow(dead_code)]
 	pub container: testcontainers::ContainerAsync<testcontainers::GenericImage>,
 	/// Connection pool for executing queries against the PostgreSQL container.
@@ -168,6 +169,7 @@ pub struct MySqlSuiteResource {
 	// Note: Container must be held to keep it alive during test suite execution
 	// TestContainers automatically stops/removes containers when dropped
 	/// The running MySQL container handle (kept alive for the suite duration).
+	// Allow dead_code: container handle must be held to prevent automatic cleanup by TestContainers
 	#[allow(dead_code)]
 	pub container: testcontainers::ContainerAsync<testcontainers::GenericImage>,
 	/// Connection pool for executing queries against the MySQL container.

@@ -24,6 +24,8 @@
 //! Note: The `#[field(...)]` attribute is parsed by the `#[document]` macro
 //! and does not need to be imported separately.
 
+#![warn(missing_docs)]
+
 use proc_macro::TokenStream;
 
 mod document;

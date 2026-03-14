@@ -79,9 +79,11 @@ pub struct MongoDBTransactionExecutor {
 	/// The MongoDB session (Option for consume-on-commit/rollback pattern)
 	session: Option<ClientSession>,
 	/// Reference to the client for accessing database/collections
+	// Allow dead_code: client stored for collection access during transactional operations
 	#[allow(dead_code)]
 	client: Arc<Client>,
 	/// Database name for operations
+	// Allow dead_code: database name stored for scoping collection lookups within transactions
 	#[allow(dead_code)]
 	database_name: String,
 }

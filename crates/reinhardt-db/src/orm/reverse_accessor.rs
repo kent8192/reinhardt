@@ -340,9 +340,7 @@ mod tests {
 		assert!(sql.contains("OFFSET"));
 	}
 
-	// Test models for SQL generation tests.
-	// These implement the Model trait to validate SQL generation patterns.
-	// The structs themselves are not instantiated; only their trait implementations are used.
+	// Allow dead_code: test model struct not instantiated; only its trait implementations are tested
 	#[allow(dead_code)]
 	#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 	struct TestUser {

@@ -89,11 +89,11 @@ pub struct FormComponent {
 	errors: Signal<HashMap<String, Vec<String>>>,
 
 	/// Form submission URL (used in WASM render() method)
-	#[allow(dead_code)]
+	#[allow(dead_code)] // Field read by WASM render() via cfg(target_arch = "wasm32")
 	action: String,
 
 	/// HTTP method (GET or POST, used in WASM render() method)
-	#[allow(dead_code)]
+	#[allow(dead_code)] // Field read by WASM render() via cfg(target_arch = "wasm32")
 	method: String,
 }
 

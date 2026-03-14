@@ -22,7 +22,7 @@ struct RouteOptions {
 	name: Option<String>,
 	/// Enable automatic validation with `pre_validate = true`
 	///
-	/// When enabled, extracted parameters implementing `validator::Validate`
+	/// When enabled, extracted parameters implementing `reinhardt_core::validators::Validate`
 	/// are automatically validated before the handler is called.
 	/// Extractors used with this option must implement `Deref` to the inner type
 	/// (e.g., `Json<T>` derefs to `T`), as validation is performed on the dereferenced value.
@@ -313,9 +313,9 @@ fn generate_wrapper_with_both(
 			.map(|ext| {
 				let pat = &ext.pat;
 				quote! {
-					::validator::Validate::validate(&*#pat)
+					#core_crate::validators::Validate::validate(&*#pat)
 						.map_err(|e| #core_crate::exception::Error::Validation(
-							::serde_json::to_string(&e).unwrap_or_else(|_| format!("{:?}", e))
+							::serde_json::to_string(&e).unwrap_or_else(|_| format!("{}", e))
 						))?;
 				}
 			})

@@ -412,6 +412,7 @@ pub(super) fn attach_events(
 }
 
 /// Detaches all event handlers from the registry.
+// Allow dead_code: cleanup function reserved for future hydration lifecycle management
 #[allow(dead_code)]
 pub(super) fn detach_all(registry: &mut EventRegistry) {
 	registry.clear();

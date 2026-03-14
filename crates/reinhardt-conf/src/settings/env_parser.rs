@@ -115,7 +115,14 @@ impl std::fmt::Debug for DatabaseUrl {
 			.field("engine", &self.engine)
 			.field("name", &self.name)
 			.field("user", &self.user)
-			.field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+			.field(
+				"password",
+				if self.password.is_some() {
+					&"Some([REDACTED])"
+				} else {
+					&"None"
+				},
+			)
 			.field("host", &self.host)
 			.field("port", &self.port)
 			.field("options", &self.options)

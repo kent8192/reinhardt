@@ -316,6 +316,7 @@ mod tests {
 	use std::collections::HashMap;
 
 	/// Custom test struct for HashMap value testing
+	// Allow dead_code: test struct providing ToSchema impl for OpenAPI schema generation tests
 	#[allow(dead_code)]
 	struct User {
 		id: i64,

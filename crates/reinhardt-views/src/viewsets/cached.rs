@@ -391,6 +391,7 @@ mod tests {
 	fn test_cached_viewset_creation() {
 		#[derive(Debug, Clone)]
 		struct TestViewSet {
+			// Allow dead_code: field set during construction to simulate a named viewset in test
 			#[allow(dead_code)]
 			name: String,
 		}

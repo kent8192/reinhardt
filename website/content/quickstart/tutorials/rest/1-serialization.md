@@ -183,11 +183,11 @@ best fits your use case.
 
 ### Pattern 1: Simple Serde (Most Common)
 
-For basic validation with standard rules, use serde with the `validator` crate:
+For basic validation with standard rules, use serde with Reinhardt's built-in validation:
 
 ```rust
 use serde::{Serialize, Deserialize};
-use validator::Validate;
+use reinhardt::Validate;
 
 #[derive(Serialize, Deserialize, Validate)]
 pub struct CreateUserRequest {
@@ -214,15 +214,15 @@ request.validate()?;  // Validates all fields
 **Benefits:**
 - Simple and declarative
 - Works with `#[derive]` macros
-- Well-documented validator crate
+- Well-documented validation system
 
 **Split Serializer Pattern (Input + Output):**
 
-For production APIs, separate input validation from output formatting. This pattern uses `SnippetSerializer` for request validation (with the `validator` crate) and `SnippetResponse` for response serialization (with a `from_model()` method):
+For production APIs, separate input validation from output formatting. This pattern uses `SnippetSerializer` for request validation (with Reinhardt's built-in validation) and `SnippetResponse` for response serialization (with a `from_model()` method):
 
 ```rust
 use serde::{Serialize, Deserialize};
-use validator::Validate;
+use reinhardt::Validate;
 
 /// Serializer for creating/updating snippets (input + validation)
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
@@ -390,7 +390,7 @@ for a complete GraphQL implementation with `InputObject`.
 
 | Use Case | Pattern | Crate |
 |----------|---------|-------|
-| **REST API with standard validation** | Pattern 1 | `serde` + `validator` |
+| **REST API with standard validation** | Pattern 1 | `serde` + `reinhardt::Validate` |
 | **Complex business rules** | Pattern 2 | `reinhardt::Serializer` |
 | **GraphQL API** | Pattern 3 | `async-graphql::InputObject` |
 
@@ -402,7 +402,7 @@ for a complete GraphQL implementation with `InputObject`.
 
 2. Do you need complex validation (database lookups, custom logic)?
    - **Yes** → Use Pattern 2 (Custom `Serializer`)
-   - **No** → Use Pattern 1 (Simple Serde + `validator`)
+   - **No** → Use Pattern 1 (Simple Serde + built-in validation)
 
 For most REST APIs, **Pattern 1** is the recommended starting point.
 
@@ -507,7 +507,7 @@ use json::json;
 use reinhardt::core::serde::json;
 use reinhardt::ViewResult;
 use reinhardt::{post, Json, Response, StatusCode};
-use validator::Validate;
+use reinhardt::Validate;
 
 #[post("/snippets/", name = "snippets_create")]
 async fn create_snippet(

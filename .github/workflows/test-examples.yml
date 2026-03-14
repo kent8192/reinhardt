@@ -143,3 +143,7 @@ jobs:
       - name: Doc Test
         working-directory: examples/${{ matrix.example }}
         run: cargo test --doc --all-features
+
+      - name: Cleanup local config
+        if: always()
+        run: rm -f examples/.cargo/config.toml

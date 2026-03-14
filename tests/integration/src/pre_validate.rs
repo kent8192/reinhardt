@@ -5,10 +5,10 @@ mod tests {
 	use reinhardt::post;
 	use reinhardt_core::endpoint::EndpointInfo;
 	use reinhardt_core::exception::Error;
+	use reinhardt_core::validators::Validate;
 	use reinhardt_http::Response;
 	use rstest::rstest;
 	use serde::Deserialize;
-	use validator::Validate;
 
 	// A validatable request struct
 	#[derive(Deserialize, Validate)]

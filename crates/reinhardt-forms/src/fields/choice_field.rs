@@ -1,6 +1,7 @@
 use crate::field::{FieldError, FieldResult, FormField, Widget};
 
 /// ChoiceField for selecting from predefined choices
+#[derive(Debug, Clone)]
 pub struct ChoiceField {
 	/// The field name used as the form data key.
 	pub name: String,
@@ -104,6 +105,7 @@ impl FormField for ChoiceField {
 }
 
 /// MultipleChoiceField for selecting multiple choices
+#[derive(Debug, Clone)]
 pub struct MultipleChoiceField {
 	/// The field name used as the form data key.
 	pub name: String,

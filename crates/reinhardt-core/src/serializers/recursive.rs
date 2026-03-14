@@ -410,6 +410,7 @@ mod tests {
 
 	#[test]
 	fn test_context_visit_and_leave() {
+		// Allow dead_code: test-only struct; fields used only for pointer-based identity in circular reference detection
 		#[allow(dead_code)]
 		struct User {
 			id: i64,
@@ -429,6 +430,7 @@ mod tests {
 
 	#[test]
 	fn test_context_reset() {
+		// Allow dead_code: test-only struct; fields used only for pointer-based identity in circular reference detection
 		#[allow(dead_code)]
 		struct User {
 			id: i64,
@@ -489,6 +491,7 @@ mod tests {
 
 	#[test]
 	fn test_circular_reference_detection() {
+		// Allow dead_code: test-only struct; fields used only for pointer-based identity in circular reference detection
 		#[allow(dead_code)]
 		struct User {
 			id: i64,
@@ -506,6 +509,7 @@ mod tests {
 
 	#[test]
 	fn test_circular_visit_with() {
+		// Allow dead_code: test-only struct; fields used only for pointer-based identity in circular reference detection
 		#[allow(dead_code)]
 		struct User {
 			id: i64,
@@ -523,6 +527,7 @@ mod tests {
 
 	#[test]
 	fn test_circular_visit_with_error() {
+		// Allow dead_code: test-only struct; fields used only for pointer-based identity in circular reference detection
 		#[allow(dead_code)]
 		struct User {
 			id: i64,
@@ -544,6 +549,7 @@ mod tests {
 
 	#[test]
 	fn test_different_objects_same_string_representation() {
+		// Allow dead_code: test-only struct; fields used only for pointer-based identity in circular reference detection
 		#[allow(dead_code)]
 		struct User {
 			id: i64,
@@ -563,6 +569,7 @@ mod tests {
 
 	#[test]
 	fn test_same_object_multiple_references() {
+		// Allow dead_code: test-only struct; fields used only for pointer-based identity in circular reference detection
 		#[allow(dead_code)]
 		struct User {
 			id: i64,

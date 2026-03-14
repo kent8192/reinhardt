@@ -54,6 +54,7 @@ use crate::types::{
 ///     .body("SELECT 1");
 /// ```
 #[derive(Debug, Clone)]
+// Allow dead_code: DDL definition struct for CREATE PROCEDURE; fields populated by builder but not yet consumed by backend SQL generation
 #[allow(dead_code)]
 pub struct ProcedureDef {
 	pub(crate) name: DynIden,
@@ -87,6 +88,7 @@ pub struct ProcedureDef {
 ///     .mode(ParameterMode::Out);
 /// ```
 #[derive(Debug, Clone)]
+// Allow dead_code: DDL parameter struct for procedure signatures; fields populated by builder but not yet consumed by backend SQL generation
 #[allow(dead_code)]
 pub struct ProcedureParameter {
 	pub(crate) name: Option<DynIden>,

@@ -23,6 +23,7 @@ type WsWriter = futures_util::stream::SplitSink<WebSocketStream<TcpStream>, Mess
 /// Client connection information
 #[cfg(feature = "websocket")]
 struct Client {
+	// Allow dead_code: stored for logging and debugging WebSocket client connections
 	#[allow(dead_code)]
 	addr: SocketAddr,
 	sender: Arc<Mutex<WsWriter>>,

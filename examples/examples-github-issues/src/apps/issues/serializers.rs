@@ -2,7 +2,7 @@
 
 use async_graphql::{Context, Enum, ID, InputObject, Object, Result as GqlResult, SimpleObject};
 use chrono::{DateTime, Utc};
-use validator::Validate;
+use reinhardt::Validate;
 
 use crate::apps::issues::models::Issue;
 

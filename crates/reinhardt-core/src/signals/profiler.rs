@@ -493,6 +493,7 @@ mod tests {
 	use crate::signals::{SignalName, signal::Signal};
 
 	#[derive(Debug, Clone)]
+	// Allow dead_code: test-only data struct; fields accessed indirectly via Clone/Debug derives and signal dispatch
 	#[allow(dead_code)]
 	struct TestData {
 		value: String,

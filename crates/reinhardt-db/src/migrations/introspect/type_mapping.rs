@@ -256,7 +256,8 @@ impl TypeMapper {
 /// ```rust,ignore
 /// assert_eq!(parse_varchar_length("VARCHAR(255)"), Ok(255));
 /// ```
-#[allow(dead_code)] // Utility function for future type parsing features
+// Allow dead_code: utility for extracting VARCHAR length from SQL type definitions during introspection
+#[allow(dead_code)]
 pub(super) fn parse_varchar_length(type_def: &str) -> Result<u32, TypeMappingError> {
 	let upper = type_def.to_uppercase();
 	if !upper.starts_with("VARCHAR(") || !upper.ends_with(')') {
@@ -278,7 +279,8 @@ pub(super) fn parse_varchar_length(type_def: &str) -> Result<u32, TypeMappingErr
 /// ```rust,ignore
 /// assert_eq!(parse_decimal_precision("DECIMAL(10,2)"), Ok((10, 2)));
 /// ```
-#[allow(dead_code)] // Utility function for future type parsing features
+// Allow dead_code: utility for extracting DECIMAL precision/scale from SQL type definitions during introspection
+#[allow(dead_code)]
 pub(super) fn parse_decimal_precision(type_def: &str) -> Result<(u32, u32), TypeMappingError> {
 	let upper = type_def.to_uppercase();
 	if !upper.starts_with("DECIMAL(") || !upper.ends_with(')') {

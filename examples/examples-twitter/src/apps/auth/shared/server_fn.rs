@@ -10,11 +10,11 @@ use reinhardt::pages::server_fn::{ServerFnError, server_fn};
 use {
 	crate::apps::auth::models::User,
 	crate::apps::auth::shared::types::{LoginRequest, RegisterRequest},
+	reinhardt::Validate,
 	reinhardt::db::orm::{FilterOperator, FilterValue, Model},
 	reinhardt::middleware::session::{SessionData, SessionStoreRef},
 	reinhardt::{BaseUser, DatabaseConnection},
 	uuid::Uuid,
-	validator::Validate,
 };
 
 /// Login user, persist session, and return user info

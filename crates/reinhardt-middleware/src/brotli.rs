@@ -7,7 +7,7 @@
 use async_trait::async_trait;
 use brotli::enc::BrotliEncoderParams;
 use bytes::Bytes;
-use hyper::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE};
+use hyper::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, HeaderValue};
 use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use std::sync::Arc;
 
@@ -266,7 +266,7 @@ impl Middleware for BrotliMiddleware {
 					response.body = Bytes::from(compressed);
 					response
 						.headers
-						.insert(CONTENT_ENCODING, "br".parse().unwrap());
+						.insert(CONTENT_ENCODING, HeaderValue::from_static("br"));
 					response.headers.remove(CONTENT_LENGTH);
 				}
 				Ok(response)

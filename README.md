@@ -75,7 +75,7 @@ Reinhardt brings together the best of three worlds:
 ## ✨ Key Features
 
 - **Type-Safe ORM** with compile-time validation (reinhardt-query)
-- **Powerful Serializers** with automatic validation (serde + validator)
+- **Powerful Serializers** with automatic validation (serde + built-in validation)
 - **FastAPI-Style DI** with type-safe dependency injection and caching
 - **ViewSets** for rapid CRUD API development
 - **Multi-Auth** (JWT, Token, Session, Basic) with BaseUser/FullUser traits
@@ -946,7 +946,7 @@ In your app's `serializers/user.rs`:
 ```rust
 // users/serializers/user.rs
 use serde::{Serialize, Deserialize};
-use validator::Validate;
+use reinhardt::Validate;
 
 #[derive(Serialize, Deserialize, Validate)]
 pub struct CreateUserRequest {
@@ -986,7 +986,7 @@ use reinhardt::{Request, Response, StatusCode, ViewResult, post};
 use reinhardt::db::DatabaseConnection;
 use crate::models::User;
 use crate::serializers::{CreateUserRequest, UserResponse};
-use validator::Validate;
+use reinhardt::Validate;
 use std::sync::Arc;
 
 #[post("/users", name = "create_user")]
@@ -1057,7 +1057,7 @@ Reinhardt offers modular components you can mix and match:
 | **Authentication**  |                           |                                             |
 | Auth                | `reinhardt-auth`          | JWT, Token, Session, Basic auth, User models|
 | **REST API**        |                           |                                             |
-| Serializers         | `reinhardt-rest`          | serde/validator integration, ViewSets       |
+| Serializers         | `reinhardt-rest`          | built-in serialization and validation, ViewSets |
 | **Forms**           |                           |                                             |
 | Forms               | `reinhardt-forms`         | Form handling and validation                |
 | **Advanced**        |                           |                                             |

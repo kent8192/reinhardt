@@ -34,6 +34,7 @@ pub struct SyncSignal {
 	/// - Cache storage design (per-signal or global)
 	/// - Cache invalidation strategy
 	/// - Thread-safety considerations for cached function pointers
+	// Allow dead_code: caching flag reserved for planned dispatch optimization; not yet used in current send() implementation
 	#[allow(dead_code)]
 	use_caching: bool,
 }

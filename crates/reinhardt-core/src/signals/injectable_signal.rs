@@ -90,6 +90,7 @@ mod tests {
 	use super::*;
 	use crate::signals::SignalName;
 
+	// Allow dead_code: test-only model struct; fields accessed indirectly via Clone/Debug derives and signal dispatch
 	#[allow(dead_code)]
 	#[derive(Debug, Clone)]
 	struct TestModel {

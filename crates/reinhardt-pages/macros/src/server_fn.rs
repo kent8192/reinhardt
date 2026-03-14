@@ -19,8 +19,8 @@ use syn::{FnArg, ItemFn, Meta, Token, parse_macro_input};
 
 // Import crate path helpers for dynamic resolution
 use crate::crate_paths::{
-	CratePathInfo, get_reinhardt_di_crate, get_reinhardt_http_crate, get_reinhardt_pages_crate,
-	get_reinhardt_pages_crate_info,
+	CratePathInfo, get_reinhardt_core_crate, get_reinhardt_di_crate, get_reinhardt_http_crate,
+	get_reinhardt_pages_crate, get_reinhardt_pages_crate_info,
 };
 
 /// Convert snake_case identifier to UpperCamelCase for struct naming
@@ -776,9 +776,10 @@ fn generate_server_handler(
 
 	// Generate pre_validate validation code
 	let validation_code = if pre_validate {
+		let core_crate = get_reinhardt_core_crate();
 		quote! {
-			::validator::Validate::validate(&args)
-				.map_err(|e| ::serde_json::to_string(&e).unwrap_or_else(|_| format!("{:?}", e)))?;
+			#core_crate::validators::Validate::validate(&args)
+				.map_err(|e| ::serde_json::to_string(&e).unwrap_or_else(|_| format!("{}", e)))?;
 		}
 	} else {
 		quote! {}

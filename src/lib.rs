@@ -734,7 +734,8 @@ pub use reinhardt_core::signals::{
 #[cfg(all(feature = "core", not(target_arch = "wasm32")))]
 pub use reinhardt_core::validators::{
 	CreditCardValidator, EmailValidator, IBANValidator, IPAddressValidator, PhoneNumberValidator,
-	UrlValidator, ValidationError as ValidatorError, ValidationResult, Validator,
+	UrlValidator, Validate, ValidationError as ValidatorError, ValidationErrors, ValidationResult,
+	Validator,
 };
 
 // Re-export views
@@ -802,6 +803,10 @@ pub use reinhardt_rest::browsable_api;
 // ```
 #[cfg(all(feature = "openapi", not(target_arch = "wasm32")))]
 pub use reinhardt_rest::openapi::*;
+
+// Re-export OpenApiRouter (requires openapi-router feature)
+#[cfg(all(feature = "openapi-router", not(target_arch = "wasm32")))]
+pub use reinhardt_openapi::OpenApiRouter;
 
 // Re-export shortcuts (Django-style convenience functions)
 #[cfg(all(feature = "shortcuts", not(target_arch = "wasm32")))]

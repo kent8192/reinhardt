@@ -483,8 +483,8 @@ impl From<&str> for Error {
 	}
 }
 
-impl From<validator::ValidationErrors> for Error {
-	fn from(err: validator::ValidationErrors) -> Self {
+impl From<crate::validators::ValidationErrors> for Error {
+	fn from(err: crate::validators::ValidationErrors) -> Self {
 		Error::Validation(format!("Validation failed: {}", err))
 	}
 }

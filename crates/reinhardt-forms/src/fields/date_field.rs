@@ -2,6 +2,7 @@ use crate::field::{FieldError, FieldResult, FormField, Widget};
 use chrono::{Datelike, NaiveDate};
 
 /// DateField for date input
+#[derive(Debug, Clone)]
 pub struct DateField {
 	/// The field name used as the form data key.
 	pub name: String,

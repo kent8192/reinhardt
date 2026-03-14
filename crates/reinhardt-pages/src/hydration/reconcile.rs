@@ -344,6 +344,7 @@ pub fn reconcile_with_options(
 }
 
 /// Normalizes whitespace for comparison.
+// Allow dead_code: utility function used by reconciliation comparison logic
 #[allow(dead_code)]
 fn normalize_whitespace(s: &str) -> String {
 	s.split_whitespace().collect::<Vec<_>>().join(" ")

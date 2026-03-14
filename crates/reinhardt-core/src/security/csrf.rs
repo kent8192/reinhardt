@@ -163,6 +163,7 @@ impl CsrfConfig {
 
 /// CSRF middleware
 pub struct CsrfMiddleware {
+	// Allow dead_code: config stored for future middleware request/response processing; not yet consumed by HTTP pipeline
 	#[allow(dead_code)]
 	config: CsrfConfig,
 }

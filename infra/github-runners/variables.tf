@@ -94,7 +94,7 @@ variable "enable_housekeeping_runner" {
 variable "housekeeping_instance_type" {
   description = "EC2 instance type for the housekeeping runner (API-only jobs, minimal resources needed)"
   type        = string
-  default     = "t4g.nano"
+  default     = "t4g.micro"
 }
 
 

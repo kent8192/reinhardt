@@ -20,3 +20,8 @@ variable "environment_reviewer" {
   description = "GitHub username for environment deployment approvals."
   type        = string
 }
+
+variable "account_email" {
+  description = "Email address for the CI sub-account (stored as GitHub secret for Terraform CI)."
+  type        = string
+}

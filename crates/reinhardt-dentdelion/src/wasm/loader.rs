@@ -15,7 +15,8 @@ use super::runtime::WasmRuntime;
 use super::types::ConfigValue;
 
 /// Default plugin directory relative to project root.
-#[allow(dead_code)] // Reserved for future auto-discovery from default location
+// Allow dead_code: reserved for future plugin auto-discovery from default location
+#[allow(dead_code)]
 pub(super) const DEFAULT_PLUGIN_DIR: &str = ".dentdelion/plugins";
 
 /// WASM file extension.

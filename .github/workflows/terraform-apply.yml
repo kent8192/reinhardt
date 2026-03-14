@@ -1,0 +1,184 @@
+name: Terraform Apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: terraform-apply-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: github-runners
+            dir: infra/github-runners
+            backend: s3
+          - module: bootstrap
+            dir: infra/bootstrap
+            backend: local
+          - module: website
+            dir: infra/website
+            backend: local
+          - module: organizations
+            dir: infra/organizations
+            backend: local
+          - module: repository
+            dir: infra/repository
+            backend: local
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: Terraform Init (S3 backend)
+        if: matrix.backend == 's3'
+        working-directory: ${{ matrix.dir }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.TF_AWS_REGION }}
+        run: |
+          if [ -z "$AWS_ACCESS_KEY_ID" ]; then
+            echo "::warning::AWS credentials not configured — skipping ${{ matrix.module }}"
+            echo "SKIP_MODULE=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=${{ matrix.module }}/terraform.tfstate" \
+            -backend-config="region=${{ secrets.TF_AWS_REGION }}" \
+            -input=false
+
+      - name: Terraform Init (local backend)
+        if: matrix.backend == 'local'
+        working-directory: ${{ matrix.dir }}
+        run: |
+          terraform init -input=false
+
+      - name: Terraform Plan
+        if: env.SKIP_MODULE != 'true'
+        id: plan
+        working-directory: ${{ matrix.dir }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.TF_AWS_REGION }}
+          TF_VAR_github_app_id: ${{ secrets.TF_GITHUB_APP_ID }}
+          TF_VAR_github_app_installation_id: ${{ secrets.TF_GITHUB_APP_INSTALLATION_ID }}
+          TF_VAR_github_app_key_base64: ${{ secrets.TF_GITHUB_APP_KEY_BASE64 }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.TF_CLOUDFLARE_API_TOKEN }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.TF_CLOUDFLARE_API_TOKEN }}
+          TF_VAR_github_token: ${{ secrets.TF_GITHUB_TOKEN }}
+        run: |
+          terraform plan -no-color -input=false -out=tfplan 2>&1 | tee plan-output.txt
+          echo "exitcode=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload plan artifact
+        if: env.SKIP_MODULE != 'true' && steps.plan.outputs.exitcode == '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ matrix.module }}
+          path: |
+            ${{ matrix.dir }}/tfplan
+            ${{ matrix.dir }}/.terraform
+            ${{ matrix.dir }}/.terraform.lock.hcl
+          retention-days: 1
+
+  apply:
+    name: Apply (${{ matrix.module }})
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - module: github-runners
+            dir: infra/github-runners
+            backend: s3
+          - module: bootstrap
+            dir: infra/bootstrap
+            backend: local
+          - module: website
+            dir: infra/website
+            backend: local
+          - module: organizations
+            dir: infra/organizations
+            backend: local
+          - module: repository
+            dir: infra/repository
+            backend: local
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: Download plan artifact
+        id: download
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ matrix.module }}
+          path: ${{ matrix.dir }}
+        continue-on-error: true
+
+      - name: Skip if no plan artifact
+        if: steps.download.outcome == 'failure'
+        run: |
+          echo "::notice::No plan artifact for ${{ matrix.module }} — skipping apply"
+          echo "SKIP_APPLY=true" >> "$GITHUB_ENV"
+
+      - name: Terraform Init (S3 backend)
+        if: env.SKIP_APPLY != 'true' && matrix.backend == 's3'
+        working-directory: ${{ matrix.dir }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.TF_AWS_REGION }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=${{ matrix.module }}/terraform.tfstate" \
+            -backend-config="region=${{ secrets.TF_AWS_REGION }}" \
+            -input=false
+
+      - name: Terraform Init (local backend)
+        if: env.SKIP_APPLY != 'true' && matrix.backend == 'local'
+        working-directory: ${{ matrix.dir }}
+        run: |
+          terraform init -input=false
+
+      - name: Terraform Apply
+        if: env.SKIP_APPLY != 'true'
+        working-directory: ${{ matrix.dir }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.TF_AWS_REGION }}
+          TF_VAR_github_app_id: ${{ secrets.TF_GITHUB_APP_ID }}
+          TF_VAR_github_app_installation_id: ${{ secrets.TF_GITHUB_APP_INSTALLATION_ID }}
+          TF_VAR_github_app_key_base64: ${{ secrets.TF_GITHUB_APP_KEY_BASE64 }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.TF_CLOUDFLARE_API_TOKEN }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.TF_CLOUDFLARE_API_TOKEN }}
+          TF_VAR_github_token: ${{ secrets.TF_GITHUB_TOKEN }}
+        run: |
+          terraform apply -no-color -input=false tfplan

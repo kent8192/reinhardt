@@ -1,5 +1,5 @@
-# Always-on housekeeping runner (t4g.nano, On-Demand).
-# Runs scheduled workflows (e.g., housekeeping-cancel.yml) every 5 minutes.
+# Always-on cancel runner (t4g.nano, On-Demand).
+# Runs event-driven workflows (e.g., cancel-on-pr-close.yml) on PR close.
 # Unlike the JIT ephemeral CI runners, this instance is persistent and
 # uses a systemd service to keep the runner process alive across reboots.
 
@@ -7,14 +7,14 @@
 # The runner needs these at first boot to generate a registration token.
 # Subsequent boots reuse the persisted runner config (no re-registration).
 
-resource "aws_ssm_parameter" "housekeeping_github_app_id" {
-  count = var.enable_housekeeping_runner ? 1 : 0
-  name  = "/${var.prefix}/housekeeping/github-app-id"
+resource "aws_ssm_parameter" "cancel_runner_github_app_id" {
+  count = var.enable_cancel_runner ? 1 : 0
+  name  = "/${var.prefix}/cancel-runner/github-app-id"
   type  = "String"
   value = var.github_app_id
 
   tags = {
-    Description = "GitHub App ID for housekeeping runner registration"
+    Description = "GitHub App ID for cancel runner registration"
   }
 
   lifecycle {
@@ -22,14 +22,14 @@ resource "aws_ssm_parameter" "housekeeping_github_app_id" {
   }
 }
 
-resource "aws_ssm_parameter" "housekeeping_github_app_key" {
-  count = var.enable_housekeeping_runner ? 1 : 0
-  name  = "/${var.prefix}/housekeeping/github-app-key"
+resource "aws_ssm_parameter" "cancel_runner_github_app_key" {
+  count = var.enable_cancel_runner ? 1 : 0
+  name  = "/${var.prefix}/cancel-runner/github-app-key"
   type  = "SecureString"
   value = base64decode(var.github_app_key_base64)
 
   tags = {
-    Description = "GitHub App private key for housekeeping runner registration"
+    Description = "GitHub App private key for cancel runner registration"
   }
 
   lifecycle {
@@ -37,14 +37,14 @@ resource "aws_ssm_parameter" "housekeeping_github_app_key" {
   }
 }
 
-resource "aws_ssm_parameter" "housekeeping_github_app_installation_id" {
-  count = var.enable_housekeeping_runner ? 1 : 0
-  name  = "/${var.prefix}/housekeeping/github-app-installation-id"
+resource "aws_ssm_parameter" "cancel_runner_github_app_installation_id" {
+  count = var.enable_cancel_runner ? 1 : 0
+  name  = "/${var.prefix}/cancel-runner/github-app-installation-id"
   type  = "String"
   value = var.github_app_installation_id
 
   tags = {
-    Description = "GitHub App installation ID for housekeeping runner registration"
+    Description = "GitHub App installation ID for cancel runner registration"
   }
 
   lifecycle {
@@ -54,10 +54,10 @@ resource "aws_ssm_parameter" "housekeeping_github_app_installation_id" {
 
 # --- Security Group: egress only ---
 
-resource "aws_security_group" "housekeeping" {
-  count       = var.enable_housekeeping_runner ? 1 : 0
-  name        = "${var.prefix}-housekeeping"
-  description = "Housekeeping runner - egress only (HTTPS to GitHub, HTTP for apt)"
+resource "aws_security_group" "cancel_runner" {
+  count       = var.enable_cancel_runner ? 1 : 0
+  name        = "${var.prefix}-cancel-runner"
+  description = "Cancel runner - egress only (HTTPS to GitHub, HTTP for apt)"
   vpc_id      = data.aws_vpc.default.id
 
   # HTTPS: GitHub API, runner downloads, SSM endpoints
@@ -95,15 +95,15 @@ resource "aws_security_group" "housekeeping" {
   }
 
   tags = {
-    Name = "${var.prefix}-housekeeping"
+    Name = "${var.prefix}-cancel-runner"
   }
 }
 
 # --- IAM Role ---
 
-resource "aws_iam_role" "housekeeping" {
-  count = var.enable_housekeeping_runner ? 1 : 0
-  name  = "${var.prefix}-housekeeping"
+resource "aws_iam_role" "cancel_runner" {
+  count = var.enable_cancel_runner ? 1 : 0
+  name  = "${var.prefix}-cancel-runner"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -115,10 +115,10 @@ resource "aws_iam_role" "housekeeping" {
   })
 }
 
-resource "aws_iam_role_policy" "housekeeping_ssm_read" {
-  count = var.enable_housekeeping_runner ? 1 : 0
+resource "aws_iam_role_policy" "cancel_runner_ssm_read" {
+  count = var.enable_cancel_runner ? 1 : 0
   name  = "ssm-read-github-app-credentials"
-  role  = aws_iam_role.housekeeping[0].name
+  role  = aws_iam_role.cancel_runner[0].name
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -129,48 +129,48 @@ resource "aws_iam_role_policy" "housekeeping_ssm_read" {
         "ssm:GetParameters",
       ]
       Resource = [
-        aws_ssm_parameter.housekeeping_github_app_id[0].arn,
-        aws_ssm_parameter.housekeeping_github_app_key[0].arn,
-        aws_ssm_parameter.housekeeping_github_app_installation_id[0].arn,
+        aws_ssm_parameter.cancel_runner_github_app_id[0].arn,
+        aws_ssm_parameter.cancel_runner_github_app_key[0].arn,
+        aws_ssm_parameter.cancel_runner_github_app_installation_id[0].arn,
       ]
     }]
   })
 }
 
 # SSM Session Manager for shell debugging (no SSH port needed)
-resource "aws_iam_role_policy_attachment" "housekeeping_ssm_managed" {
-  count      = var.enable_housekeeping_runner ? 1 : 0
-  role       = aws_iam_role.housekeeping[0].name
+resource "aws_iam_role_policy_attachment" "cancel_runner_ssm_managed" {
+  count      = var.enable_cancel_runner ? 1 : 0
+  role       = aws_iam_role.cancel_runner[0].name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-resource "aws_iam_instance_profile" "housekeeping" {
-  count = var.enable_housekeeping_runner ? 1 : 0
-  name  = "${var.prefix}-housekeeping"
-  role  = aws_iam_role.housekeeping[0].name
+resource "aws_iam_instance_profile" "cancel_runner" {
+  count = var.enable_cancel_runner ? 1 : 0
+  name  = "${var.prefix}-cancel-runner"
+  role  = aws_iam_role.cancel_runner[0].name
 }
 
 # --- EC2 Instance ---
 
-resource "aws_instance" "housekeeping" {
-  count         = var.enable_housekeeping_runner ? 1 : 0
+resource "aws_instance" "cancel_runner" {
+  count         = var.enable_cancel_runner ? 1 : 0
   ami           = data.aws_ami.ubuntu_arm64_latest.id
-  instance_type = var.housekeeping_instance_type
+  instance_type = var.cancel_runner_instance_type
 
   subnet_id              = data.aws_subnets.default.ids[0]
-  vpc_security_group_ids = [aws_security_group.housekeeping[0].id]
-  iam_instance_profile   = aws_iam_instance_profile.housekeeping[0].name
+  vpc_security_group_ids = [aws_security_group.cancel_runner[0].id]
+  iam_instance_profile   = aws_iam_instance_profile.cancel_runner[0].name
 
-  user_data = templatefile("${path.module}/housekeeping-userdata.sh", {
+  user_data = templatefile("${path.module}/cancel-runner-userdata.sh", {
     aws_region        = var.aws_region
     prefix            = var.prefix
     github_owner      = var.github_owner
     github_repository = var.github_repository
-    runner_labels     = "reinhardt-housekeeping"
+    runner_labels     = "reinhardt-cancel"
   })
 
   tags = {
-    Name = "${var.prefix}-housekeeping"
+    Name = "${var.prefix}-cancel-runner"
   }
 
   # Don't replace instance when AMI updates (base Ubuntu AMI is fine).

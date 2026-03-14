@@ -1,5 +1,5 @@
 #!/bin/bash
-# User data for the housekeeping runner (t4g.nano, always-on).
+# User data for the cancel runner (t4g.nano, always-on).
 # First boot: registers as a GitHub Actions runner using GitHub App credentials.
 # Subsequent boots: systemd restarts the runner service automatically.
 set -euo pipefail
@@ -32,18 +32,18 @@ systemctl enable --now apt-daily-upgrade.timer
 # Fetch GitHub App credentials from SSM
 APP_ID=$(aws ssm get-parameter \
   --region "${aws_region}" \
-  --name "/${prefix}/housekeeping/github-app-id" \
+  --name "/${prefix}/cancel-runner/github-app-id" \
   --query 'Parameter.Value' --output text)
 
 APP_KEY=$(aws ssm get-parameter \
   --region "${aws_region}" \
-  --name "/${prefix}/housekeeping/github-app-key" \
+  --name "/${prefix}/cancel-runner/github-app-key" \
   --with-decryption \
   --query 'Parameter.Value' --output text)
 
 INSTALLATION_ID=$(aws ssm get-parameter \
   --region "${aws_region}" \
-  --name "/${prefix}/housekeeping/github-app-installation-id" \
+  --name "/${prefix}/cancel-runner/github-app-installation-id" \
   --query 'Parameter.Value' --output text)
 
 # Generate JWT from GitHub App private key (valid for 10 minutes)
@@ -80,7 +80,7 @@ chown -R "$RUNNER_USER:$RUNNER_USER" "$RUNNER_DIR"
 sudo -u "$RUNNER_USER" ./config.sh \
   --url "https://github.com/${github_owner}/${github_repository}" \
   --token "$REG_TOKEN" \
-  --name "housekeeping-runner" \
+  --name "cancel-runner" \
   --labels "self-hosted,linux,arm64,${runner_labels}" \
   --unattended \
   --replace
@@ -89,4 +89,4 @@ sudo -u "$RUNNER_USER" ./config.sh \
 ./svc.sh install "$RUNNER_USER"
 ./svc.sh start
 
-echo "Housekeeping runner registered and started successfully"
+echo "Cancel runner registered and started successfully"

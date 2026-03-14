@@ -125,6 +125,7 @@ jobs:
           TF_VAR_dns_record_google_verification_id: ${{ secrets.TF_DNS_RECORD_GOOGLE_VERIFICATION_ID }}
           TF_VAR_tf_plan_aws_access_key_id: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
           TF_VAR_tf_plan_aws_secret_access_key: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
+          TF_VAR_organizations_account_email: ${{ secrets.TF_ACCOUNT_EMAIL }}
           TF_VAR_environment_reviewer: ${{ secrets.TF_ENVIRONMENT_REVIEWER }}
         run: |
           terraform plan -no-color -input=false 2>&1 | tee plan-output.txt

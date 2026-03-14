@@ -1081,6 +1081,13 @@ pub use reinhardt_websockets::{
 	ConsumerContext, Message, WebSocketConsumer, WebSocketError, WebSocketResult,
 };
 
+/// SQL query builder module.
+///
+/// Re-exports [`reinhardt_query`] for building type-safe SQL queries.
+/// Requires `database` feature.
+#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+pub mod query;
+
 /// Database re-exports for Model derive macro generated code.
 ///
 /// These must be available at `::reinhardt::db::*` for the macro to work correctly.

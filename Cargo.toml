@@ -61,6 +61,7 @@ database = [
   "reinhardt-db/orm",
   "reinhardt-db/migrations",
   "reinhardt-db/contenttypes",
+  "reinhardt-query",
   "linkme",
   "ctor",
 ]
@@ -287,6 +288,7 @@ reinhardt-graphql = { workspace = true, optional = true }
 reinhardt-websockets = { workspace = true, optional = true }
 reinhardt-openapi = { workspace = true, optional = true }
 reinhardt-dentdelion = { workspace = true, optional = true }
+reinhardt-query = { workspace = true, optional = true }
 
 # Dependencies used directly in this crate
 thiserror = { workspace = true }

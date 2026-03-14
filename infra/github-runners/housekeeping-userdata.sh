@@ -17,7 +17,13 @@ fi
 # --- First boot: install and register runner ---
 
 apt-get update -y
-apt-get install -y jq curl openssl
+apt-get install -y jq curl openssl unzip
+
+# Install AWS CLI v2 (arm64) - not included in base Ubuntu AMI
+curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscliv2.zip
+unzip -q /tmp/awscliv2.zip -d /tmp
+/tmp/aws/install
+rm -rf /tmp/awscliv2.zip /tmp/aws
 
 # Fetch GitHub App credentials from SSM
 APP_ID=$(aws ssm get-parameter \

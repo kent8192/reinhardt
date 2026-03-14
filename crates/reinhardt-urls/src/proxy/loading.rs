@@ -145,13 +145,17 @@ where
 
 		// Handle the case where data was reset between load() and this read
 		// by another task calling reset() concurrently.
-		let guard = self.read_lock();
-		match guard.as_ref() {
-			Some(data) => Ok(data.clone()),
+		// Extract the cloned data while holding the lock briefly, then drop it
+		// before any await point to satisfy clippy::await_holding_lock.
+		let cached = {
+			let guard = self.read_lock();
+			guard.as_ref().cloned()
+		};
+
+		match cached {
+			Some(data) => Ok(data),
 			None => {
-				// Data was reset after load() completed; drop the read lock
-				// and reload
-				drop(guard);
+				// Data was reset after load() completed; reload
 				let data = (self.loader)().await?;
 				let mut write_guard = self.write_lock();
 				*write_guard = Some(data.clone());

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.1.0-rc.8...reinhardt-conf@v0.1.0-rc.9) - 2026-03-14
+
+### Styling
+
+- *(urls,views,conf,rest)* add explanatory comments to #[allow(dead_code)] attributes
+
 ## [0.1.0-rc.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.1.0-rc.6...reinhardt-conf@v0.1.0-rc.7) - 2026-03-11
 
 ### Testing

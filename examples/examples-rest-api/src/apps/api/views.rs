@@ -47,7 +47,9 @@ pub async fn list_articles() -> ViewResult<Response> {
 		results,
 	};
 
-	Ok(Response::new(StatusCode::OK).with_body(json::to_vec(&response)?))
+	Ok(Response::new(StatusCode::OK)
+		.with_header("Content-Type", "application/json")
+		.with_body(json::to_vec(&response)?))
 }
 
 /// Create a new article
@@ -83,7 +85,9 @@ pub async fn create_article(Json(create_req): Json<CreateArticleRequest>) -> Vie
 
 	let response: ArticleResponse = created_article.into();
 
-	Ok(Response::new(StatusCode::CREATED).with_body(json::to_vec(&response)?))
+	Ok(Response::new(StatusCode::CREATED)
+		.with_header("Content-Type", "application/json")
+		.with_body(json::to_vec(&response)?))
 }
 
 /// Get a specific article by ID
@@ -97,15 +101,19 @@ pub async fn get_article(Path(id): Path<i64>) -> ViewResult<Response> {
 	let article = match storage::get_article(id) {
 		Some(article) => article,
 		None => {
-			return Ok(Response::new(StatusCode::NOT_FOUND).with_body(
-				format!(r#"{{"error": "Article with id {} not found"}}"#, id).into_bytes(),
-			));
+			return Ok(Response::new(StatusCode::NOT_FOUND)
+				.with_header("Content-Type", "application/json")
+				.with_body(
+					format!(r#"{{"error": "Article with id {} not found"}}"#, id).into_bytes(),
+				));
 		}
 	};
 
 	let response: ArticleResponse = article.into();
 
-	Ok(Response::new(StatusCode::OK).with_body(json::to_vec(&response)?))
+	Ok(Response::new(StatusCode::OK)
+		.with_header("Content-Type", "application/json")
+		.with_body(json::to_vec(&response)?))
 }
 
 /// Update an article
@@ -135,9 +143,11 @@ pub async fn update_article(
 	let mut article = match storage::get_article(id) {
 		Some(article) => article,
 		None => {
-			return Ok(Response::new(StatusCode::NOT_FOUND).with_body(
-				format!(r#"{{"error": "Article with id {} not found"}}"#, id).into_bytes(),
-			));
+			return Ok(Response::new(StatusCode::NOT_FOUND)
+				.with_header("Content-Type", "application/json")
+				.with_body(
+					format!(r#"{{"error": "Article with id {} not found"}}"#, id).into_bytes(),
+				));
 		}
 	};
 
@@ -160,15 +170,20 @@ pub async fn update_article(
 	let updated_article = match storage::update_article(article) {
 		Some(article) => article,
 		None => {
-			return Ok(Response::new(StatusCode::INTERNAL_SERVER_ERROR).with_body(
-				format!(r#"{{"error": "Failed to update article with id {}"}}"#, id).into_bytes(),
-			));
+			return Ok(Response::new(StatusCode::INTERNAL_SERVER_ERROR)
+				.with_header("Content-Type", "application/json")
+				.with_body(
+					format!(r#"{{"error": "Failed to update article with id {}"}}"#, id)
+						.into_bytes(),
+				));
 		}
 	};
 
 	let response: ArticleResponse = updated_article.into();
 
-	Ok(Response::new(StatusCode::OK).with_body(json::to_vec(&response)?))
+	Ok(Response::new(StatusCode::OK)
+		.with_header("Content-Type", "application/json")
+		.with_body(json::to_vec(&response)?))
 }
 
 /// Delete an article
@@ -183,9 +198,11 @@ pub async fn update_article(
 pub async fn delete_article(Path(id): Path<i64>) -> ViewResult<Response> {
 	// Delete article from in-memory storage
 	if !storage::delete_article(id) {
-		return Ok(Response::new(StatusCode::NOT_FOUND).with_body(
-			format!(r#"{{"error": "Article with id {} not found"}}"#, id).into_bytes(),
-		));
+		return Ok(Response::new(StatusCode::NOT_FOUND)
+			.with_header("Content-Type", "application/json")
+			.with_body(
+				format!(r#"{{"error": "Article with id {} not found"}}"#, id).into_bytes(),
+			));
 	}
 
 	Ok(Response::new(StatusCode::NO_CONTENT).with_body(Vec::new()))

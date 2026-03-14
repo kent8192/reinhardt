@@ -213,6 +213,7 @@ mod tests {
 	use super::*;
 	use serde::Deserialize;
 
+	// Allow dead_code: fields are accessed via Deserialize derive, not directly in code
 	#[allow(dead_code)]
 	#[derive(Debug, Deserialize, PartialEq)]
 	struct TestQuery {

@@ -253,6 +253,7 @@ impl MessageStorage for CookieStorage {
 /// assert_eq!(messages[0].level, MessageLevel::Success);
 /// # });
 /// ```
+// Allow dead_code: public API for middleware pipeline integration, not yet wired into default stack
 #[allow(dead_code)]
 pub struct MessageMiddleware {
 	storage: Arc<dyn MessageStorage>,

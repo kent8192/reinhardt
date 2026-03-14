@@ -1,6 +1,7 @@
 use crate::field::{FieldError, FieldResult, FormField, Widget};
 
 /// FloatField for floating-point number input
+#[derive(Debug, Clone)]
 pub struct FloatField {
 	/// The field name used as the form data key.
 	pub name: String,

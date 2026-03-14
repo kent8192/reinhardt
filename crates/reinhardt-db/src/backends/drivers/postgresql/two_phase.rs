@@ -178,12 +178,9 @@ impl PostgresTwoPhaseParticipant {
 	/// # }
 	/// ```
 	pub async fn prepare(&self, session: &mut PgSession) -> Result<()> {
-		// Use Box::leak to convert String to &'static str for sqlx compatibility
-		// This is acceptable as prepared transaction IDs are typically short-lived
 		let xid_escaped = pg_escape::quote_literal(&session.xid);
 		let sql = format!("PREPARE TRANSACTION {}", xid_escaped);
-		let sql_static: &'static str = Box::leak(sql.into_boxed_str());
-		sqlx::query(sql_static)
+		sqlx::raw_sql(&sql)
 			.execute(&mut *session.connection)
 			.await
 			.map_err(DatabaseError::from)?;
@@ -215,11 +212,9 @@ impl PostgresTwoPhaseParticipant {
 	/// # }
 	/// ```
 	pub async fn commit(&self, mut session: PgSession) -> Result<()> {
-		// Use Box::leak to convert String to &'static str for sqlx compatibility
 		let xid_escaped = pg_escape::quote_literal(&session.xid);
 		let sql = format!("COMMIT PREPARED {}", xid_escaped);
-		let sql_static: &'static str = Box::leak(sql.into_boxed_str());
-		sqlx::query(sql_static)
+		sqlx::raw_sql(&sql)
 			.execute(&mut *session.connection)
 			.await
 			.map_err(DatabaseError::from)?;
@@ -250,8 +245,7 @@ impl PostgresTwoPhaseParticipant {
 		let mut conn = self.pool.acquire().await.map_err(DatabaseError::from)?;
 		let xid_escaped = pg_escape::quote_literal(xid);
 		let sql = format!("COMMIT PREPARED {}", xid_escaped);
-		let sql_static: &'static str = Box::leak(sql.into_boxed_str());
-		sqlx::query(sql_static)
+		sqlx::raw_sql(&sql)
 			.execute(&mut *conn)
 			.await
 			.map_err(DatabaseError::from)?;
@@ -277,11 +271,9 @@ impl PostgresTwoPhaseParticipant {
 	/// # }
 	/// ```
 	pub async fn rollback(&self, mut session: PgSession) -> Result<()> {
-		// Use Box::leak to convert String to &'static str for sqlx compatibility
 		let xid_escaped = pg_escape::quote_literal(&session.xid);
 		let sql = format!("ROLLBACK PREPARED {}", xid_escaped);
-		let sql_static: &'static str = Box::leak(sql.into_boxed_str());
-		sqlx::query(sql_static)
+		sqlx::raw_sql(&sql)
 			.execute(&mut *session.connection)
 			.await
 			.map_err(DatabaseError::from)?;
@@ -312,8 +304,7 @@ impl PostgresTwoPhaseParticipant {
 		let mut conn = self.pool.acquire().await.map_err(DatabaseError::from)?;
 		let xid_escaped = pg_escape::quote_literal(xid);
 		let sql = format!("ROLLBACK PREPARED {}", xid_escaped);
-		let sql_static: &'static str = Box::leak(sql.into_boxed_str());
-		sqlx::query(sql_static)
+		sqlx::raw_sql(&sql)
 			.execute(&mut *conn)
 			.await
 			.map_err(DatabaseError::from)?;
@@ -479,8 +470,7 @@ impl PostgresTwoPhaseParticipant {
 		// Perform the prepare operation directly without calling self.prepare()
 		let xid_escaped = pg_escape::quote_literal(xid);
 		let sql = format!("PREPARE TRANSACTION {}", xid_escaped);
-		let sql_static: &'static str = Box::leak(sql.into_boxed_str());
-		sqlx::query(sql_static)
+		sqlx::raw_sql(&sql)
 			.execute(&mut *session.connection)
 			.await
 			.map_err(DatabaseError::from)?;
@@ -506,8 +496,7 @@ impl PostgresTwoPhaseParticipant {
 		// Execute commit directly without calling self.commit()
 		let xid_escaped = pg_escape::quote_literal(xid);
 		let sql = format!("COMMIT PREPARED {}", xid_escaped);
-		let sql_static: &'static str = Box::leak(sql.into_boxed_str());
-		sqlx::query(sql_static)
+		sqlx::raw_sql(&sql)
 			.execute(&mut *session.connection)
 			.await
 			.map_err(DatabaseError::from)?;
@@ -527,8 +516,7 @@ impl PostgresTwoPhaseParticipant {
 		// Execute rollback directly without calling self.rollback()
 		let xid_escaped = pg_escape::quote_literal(xid);
 		let sql = format!("ROLLBACK PREPARED {}", xid_escaped);
-		let sql_static: &'static str = Box::leak(sql.into_boxed_str());
-		sqlx::query(sql_static)
+		sqlx::raw_sql(&sql)
 			.execute(&mut *session.connection)
 			.await
 			.map_err(DatabaseError::from)?;

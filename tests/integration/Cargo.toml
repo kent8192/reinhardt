@@ -9,7 +9,7 @@ autotests = true
 # Main reinhardt facade crate for proc macro path resolution.
 # Proc macros generate code with absolute paths like ::reinhardt::db::orm::Model
 # This dependency makes those paths resolvable in test files.
-reinhardt = { workspace = true, features = ["full"] }
+reinhardt = { workspace = true, features = ["full", "openapi-router"] }
 
 # Reinhardt crates
 reinhardt-apps = { workspace = true }

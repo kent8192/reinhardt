@@ -16,6 +16,7 @@
 //! - `EndpointInspector` retrieves schemas from the registry
 //! - Request bodies appear correctly in generated OpenAPI JSON
 
+use rstest::rstest;
 use serde::{Deserialize, Serialize};
 
 use reinhardt_core::endpoint::EndpointMetadata;
@@ -59,7 +60,7 @@ struct UserProfile {
 /// - ToSchema trait is implemented
 /// - schema() method returns valid OpenAPI schema
 /// - schema_name() returns correct type name
-#[test]
+#[rstest]
 fn test_schema_derive_macro_basic() {
 	// Verify ToSchema trait is implemented
 	let schema = CreateUserRequest::schema();
@@ -106,7 +107,7 @@ fn test_schema_derive_macro_basic() {
 /// - Schemas are automatically registered via inventory
 /// - GLOBAL_SCHEMA_REGISTRY contains the registered schema
 /// - Registered schema matches the generated schema
-#[test]
+#[rstest]
 fn test_schema_global_registry_registration() {
 	// Access global registry
 	let registry = reinhardt_rest::openapi::registry::get_all_schemas();
@@ -150,7 +151,7 @@ fn test_schema_global_registry_registration() {
 /// - EndpointInspector retrieves schema from global registry
 /// - Request body is created with correct schema
 /// - extract_paths() produces valid OpenAPI path items
-#[test]
+#[rstest]
 fn test_endpoint_inspector_uses_registered_schema() {
 	let inspector = EndpointInspector::new();
 
@@ -225,7 +226,7 @@ fn test_endpoint_inspector_uses_registered_schema() {
 /// - POST/PUT/PATCH methods generate request bodies
 /// - GET methods do not generate request bodies
 /// - Content-Type is correctly set
-#[test]
+#[rstest]
 fn test_request_body_with_registered_schema() {
 	// Test POST metadata
 	let post_metadata = EndpointMetadata {
@@ -269,7 +270,7 @@ fn test_request_body_with_registered_schema() {
 /// - Descriptions are included
 /// - Examples are included
 /// - Serde rename is respected
-#[test]
+#[rstest]
 fn test_schema_with_field_attributes() {
 	let schema = UserProfile::schema();
 
@@ -301,7 +302,7 @@ fn test_schema_with_field_attributes() {
 /// Verification:
 /// - Optional fields are correctly represented
 /// - Required fields list is accurate
-#[test]
+#[rstest]
 fn test_schema_with_optional_fields() {
 	let schema = UpdateUserRequest::schema();
 
@@ -336,7 +337,7 @@ fn test_schema_with_optional_fields() {
 /// - Multiple structs can derive Schema
 /// - Each gets registered independently
 /// - No conflicts between schemas
-#[test]
+#[rstest]
 fn test_multiple_schema_registration() {
 	let registry = reinhardt_rest::openapi::registry::get_all_schemas();
 
@@ -362,4 +363,38 @@ fn test_multiple_schema_registration() {
 	let create_json = serde_json::to_string(create_schema.unwrap()).unwrap();
 	let update_json = serde_json::to_string(update_schema.unwrap()).unwrap();
 	assert_ne!(create_json, update_json, "Schemas should be different");
+}
+
+/// Test 8: Global registry contains expected minimum number of schemas
+///
+/// Verification:
+/// - The global registry is populated at startup via inventory/ctor
+/// - At least the 3 test models registered in this file are present
+/// - Registry size uses >= N assertion to tolerate other schemas from other test files
+#[rstest]
+fn test_global_registry_contains_minimum_expected_schemas() {
+	// Arrange
+	let registry = reinhardt_rest::openapi::registry::get_all_schemas();
+
+	// Assert: must contain at least the 3 structs defined in this test file
+	// Use >= to avoid breakage when other test files register additional schemas
+	assert!(
+		registry.len() >= 3,
+		"Global registry should contain at least 3 schemas, found {}",
+		registry.len()
+	);
+
+	// Verify the specific schemas from this test file are present
+	assert!(
+		registry.contains_key("CreateUserRequest"),
+		"Registry must contain CreateUserRequest"
+	);
+	assert!(
+		registry.contains_key("UpdateUserRequest"),
+		"Registry must contain UpdateUserRequest"
+	);
+	assert!(
+		registry.contains_key("UserProfile"),
+		"Registry must contain UserProfile"
+	);
 }

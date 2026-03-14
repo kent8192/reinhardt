@@ -17,6 +17,7 @@ concurrency:
 
 jobs:
   plan:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     name: Plan (${{ matrix.module }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -35,6 +36,9 @@ jobs:
             backend: local
           - module: organizations
             dir: infra/organizations
+            backend: local
+          - module: repository
+            dir: infra/repository
             backend: local
 
     steps:

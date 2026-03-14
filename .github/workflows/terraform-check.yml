@@ -21,6 +21,8 @@ jobs:
             path: infra/github-runners/bootstrap
           - name: organizations
             path: infra/organizations
+          - name: repository
+            path: infra/repository
     defaults:
       run:
         working-directory: ${{ matrix.module.path }}

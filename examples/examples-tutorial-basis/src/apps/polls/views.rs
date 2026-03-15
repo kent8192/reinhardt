@@ -6,7 +6,7 @@ use reinhardt::db::orm::{FilterOperator, FilterValue};
 use reinhardt::http::ViewResult;
 use reinhardt::{Json, Path};
 use reinhardt::{Response, get, post};
-use serde::Deserialize;
+use reinhardt::core::serde::Deserialize;
 
 use super::models::{Choice, Question};
 

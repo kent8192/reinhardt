@@ -3,7 +3,7 @@
 //! Database models for REST API example
 
 use reinhardt::prelude::*;
-use serde::{Deserialize, Serialize};
+use reinhardt::core::serde::{Deserialize, Serialize};
 
 /// Article model
 ///

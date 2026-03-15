@@ -9,7 +9,7 @@ use reinhardt::core::serde::json;
 use reinhardt::http::ViewResult;
 use reinhardt::{Json, Path, Response, StatusCode};
 use reinhardt::{delete, get, post, put};
-use serde::Deserialize;
+use reinhardt::core::serde::Deserialize;
 
 /// Request body for creating/updating todos
 #[derive(Debug, Deserialize)]

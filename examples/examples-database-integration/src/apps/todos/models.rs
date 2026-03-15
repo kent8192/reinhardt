@@ -3,7 +3,7 @@
 //! Database models for TODO list
 
 use reinhardt::prelude::*;
-use serde::{Deserialize, Serialize};
+use reinhardt::core::serde::{Deserialize, Serialize};
 
 /// Todo model
 ///

@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use reinhardt::db::associations::ManyToManyField;
 use reinhardt::model;
-use serde::{Deserialize, Serialize};
+use reinhardt::core::serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // Used by #[model] macro for type inference in ManyToManyField<DMRoom, User> relationship field.

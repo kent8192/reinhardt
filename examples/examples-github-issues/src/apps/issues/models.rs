@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use reinhardt::model;
-use serde::{Deserialize, Serialize};
+use reinhardt::core::serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Issue state

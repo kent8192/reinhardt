@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use reinhardt::db::associations::ManyToManyField;
 use reinhardt::prelude::*;
 use reinhardt::{Argon2Hasher, BaseUser};
-use serde::{Deserialize, Serialize};
+use reinhardt::core::serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // Test-only dependency for sqlx::FromRow (server-side only)

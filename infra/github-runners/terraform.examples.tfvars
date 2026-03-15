@@ -28,6 +28,11 @@ runner_max_count      = 30
 runner_extra_labels   = ["reinhardt-ci"]
 runner_ebs_size_gb    = 200
 
+# Release runner configuration (for release-plz)
+release_runner_instance_types = ["c7g.xlarge", "c6g.xlarge"]
+release_runner_max_count      = 2
+release_runner_extra_labels   = ["reinhardt-release"]
+
 # Budget circuit breaker
 monthly_budget_limit_usd = "100"
 budget_alert_email       = "<your-email@example.com>"

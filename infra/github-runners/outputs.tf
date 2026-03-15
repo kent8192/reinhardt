@@ -11,7 +11,10 @@ output "webhook_secret" {
 
 output "runner_labels" {
   description = "Labels to use in GitHub Actions runs-on for self-hosted runners"
-  value       = jsonencode(concat(["self-hosted", "linux", "arm64"], var.runner_extra_labels))
+  value = {
+    ci      = jsonencode(concat(["self-hosted", "linux", "arm64"], var.runner_extra_labels))
+    release = jsonencode(concat(["self-hosted", "linux", "arm64"], var.release_runner_extra_labels))
+  }
 }
 
 # Manual webhook setup guide.

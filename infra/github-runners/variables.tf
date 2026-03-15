@@ -98,6 +98,24 @@ variable "cancel_runner_instance_type" {
 }
 
 
+variable "release_runner_instance_types" {
+  description = "EC2 Spot fleet instance types for release runner"
+  type        = list(string)
+  default     = ["c7g.xlarge", "c6g.xlarge"]
+}
+
+variable "release_runner_extra_labels" {
+  description = "Custom labels for release runners"
+  type        = list(string)
+  default     = ["reinhardt-release"]
+}
+
+variable "release_runner_max_count" {
+  description = "Maximum concurrent release runners"
+  type        = number
+  default     = 2
+}
+
 variable "tf_plan_aws_access_key_id" {
   description = "AWS access key ID for terraform-plan CI workflow (read-only IAM user recommended)"
   type        = string

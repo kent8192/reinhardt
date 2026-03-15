@@ -1,8 +1,8 @@
 //! GraphQL types and input objects for issues
 
-use async_graphql::{Context, Enum, ID, InputObject, Object, Result as GqlResult, SimpleObject};
 use chrono::{DateTime, Utc};
 use reinhardt::Validate;
+use reinhardt::graphql::{Context, Enum, GqlResult, ID, InputObject, Object, SimpleObject};
 
 use crate::apps::issues::models::Issue;
 

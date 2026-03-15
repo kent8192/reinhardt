@@ -201,12 +201,32 @@ use reinhardt::db::{
 	orm::{F, Q, Transaction},
 	migrations::Migration,  // ✅ Correct: module-qualified only
 };
+// SQL query builder (via reinhardt-query)
+use reinhardt::query::prelude::*;
 
 // ❌ NOT available at top level
 // use reinhardt::Migration;  // This does NOT compile
 
 // With feature = "di"
 use reinhardt::{Body, Cookie, Header, Json, Path, Query};
+
+// With feature = "graphql"
+use reinhardt::graphql;
+
+// With feature = "i18n"
+use reinhardt::i18n;
+
+// With feature = "mail"
+use reinhardt::mail;
+
+// With feature = "grpc"
+use reinhardt::grpc;
+
+// With feature = "dispatch"
+use reinhardt::dispatch;
+
+// With feature = "deeplink"
+use reinhardt::deeplink;
 
 // With feature = "test"
 use reinhardt::test::{
@@ -225,9 +245,13 @@ use reinhardt::prelude::*;
 // - UnifiedRouter, Router, DefaultRouter
 // - StatusCode
 // - ViewSet, ModelViewSet, ReadOnlyModelViewSet
-// - (if core feature) Request, Response, Handler, Middleware
-// - (if database feature) Model, DatabaseConnection, F, Q, Transaction
+// - (if core feature) Request, Response, Handler, Middleware, Signals
+// - (if database feature) Model, DatabaseConnection, F, Q, Transaction, atomic
 // - (if di feature) Body, Cookie, Header, Json, Path, Query
+// - (if rest feature) Serializer, Paginator, Throttle, Versioning
+// - (if auth feature) User, UserManager, GroupManager, Permission
+// - (if cache feature) Cache, InMemoryCache
+// - (if sessions feature) Session, AuthenticationMiddleware
 ```
 
 ---

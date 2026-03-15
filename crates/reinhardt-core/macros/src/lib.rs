@@ -742,6 +742,7 @@ pub fn derive_apply_update(input: TokenStream) -> TokenStream {
 /// - `#[validate(email)]` - Validate email format
 /// - `#[validate(url)]` - Validate URL format
 /// - `#[validate(length(min = N, max = M))]` - Validate string length
+/// - `#[validate(range(min = N, max = M))]` - Validate numeric range
 /// - `message = "..."` - Custom error message (inside rule parentheses)
 ///
 /// `Option<T>` fields are skipped when `None`.

@@ -1168,6 +1168,7 @@ impl BaseCommand for RunServerCommand {
 				));
 			}
 
+			#[cfg(feature = "openapi-router")]
 			if !no_docs {
 				ctx.info(&format!("📖 Docs:    http://{}/api/docs", actual_address));
 			}

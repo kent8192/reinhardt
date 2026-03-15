@@ -18,7 +18,7 @@ impl UserInfoClient {
 	/// Fetches user information from the UserInfo endpoint
 	///
 	/// The endpoint URL is expected to have been validated at discovery/config
-	/// time via [`validate_endpoint_url`](crate::social::url_validation::validate_endpoint_url),
+	/// time via `validate_endpoint_url`,
 	/// so no per-request re-parsing is performed here.
 	///
 	/// # Arguments

@@ -70,6 +70,39 @@ jobs:
         run: |
           terraform init -input=false
 
+      - name: Download Lambda zip files
+        if: env.SKIP_MODULE != 'true' && matrix.module == 'github-runners'
+        working-directory: ${{ matrix.dir }}
+        run: |
+          MODULES_JSON=".terraform/modules/modules.json"
+          if [ ! -f "$MODULES_JSON" ]; then
+            echo "::warning::modules.json not found — skipping Lambda download"
+            exit 0
+          fi
+
+          MODULE_VERSION=$(python3 -c "
+          import json, sys
+          data = json.load(open('$MODULES_JSON'))
+          for m in data.get('Modules', []):
+              if m.get('Key') == 'github_runner':
+                  print(m['Version'])
+                  sys.exit(0)
+          sys.exit(1)
+          " 2>/dev/null || echo "")
+
+          if [ -z "$MODULE_VERSION" ]; then
+            echo "::warning::Could not detect module version — skipping Lambda download"
+            exit 0
+          fi
+
+          echo "Downloading Lambda zips for v${MODULE_VERSION}..."
+          mkdir -p lambdas
+          BASE_URL="https://github.com/github-aws-runners/terraform-aws-github-runner/releases/download/v${MODULE_VERSION}"
+          for name in webhook runners runner-binaries-syncer; do
+            curl -fsSL -o "lambdas/${name}.zip" "${BASE_URL}/${name}.zip"
+            echo "  Downloaded ${name}.zip"
+          done
+
       - name: Terraform Plan
         if: env.SKIP_MODULE != 'true'
         id: plan

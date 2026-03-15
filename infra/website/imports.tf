@@ -22,7 +22,7 @@ import {
 
 # www subdomain DNS record
 import {
-  to = cloudflare_dns_record.website_www
+  to = cloudflare_dns_record.dns_website_www
   id = "${data.cloudflare_zone.website.zone_id}/${var.dns_record_www_id}"
 }
 

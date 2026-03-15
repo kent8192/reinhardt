@@ -85,16 +85,16 @@ variable "runner_ami_ssm_parameter_name" {
   default     = "/reinhardt-ci/runner-ami-id"
 }
 
-variable "enable_housekeeping_runner" {
-  description = "Enable the always-on housekeeping runner (t4g.nano) for scheduled cleanup workflows"
+variable "enable_cancel_runner" {
+  description = "Enable the always-on cancel runner (t4g.nano) for event-driven cancel workflows"
   type        = bool
-  default     = false
+  default     = true
 }
 
-variable "housekeeping_instance_type" {
-  description = "EC2 instance type for the housekeeping runner (API-only jobs, minimal resources needed)"
+variable "cancel_runner_instance_type" {
+  description = "EC2 instance type for the cancel runner (API-only jobs, minimal resources needed)"
   type        = string
-  default     = "t4g.nano"
+  default     = "t4g.micro"
 }
 
 

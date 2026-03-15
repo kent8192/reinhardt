@@ -183,14 +183,26 @@ pub mod commands;
 pub mod conf;
 #[cfg(all(feature = "core", not(target_arch = "wasm32")))]
 pub mod core;
+#[cfg(all(feature = "deeplink", not(target_arch = "wasm32")))]
+pub mod deeplink;
 #[cfg(all(feature = "dentdelion", not(target_arch = "wasm32")))]
 pub mod dentdelion;
 #[cfg(all(feature = "di", not(target_arch = "wasm32")))]
 pub mod di;
+#[cfg(all(feature = "dispatch", not(target_arch = "wasm32")))]
+pub mod dispatch;
 #[cfg(all(feature = "forms", not(target_arch = "wasm32")))]
 pub mod forms;
+#[cfg(all(feature = "graphql", not(target_arch = "wasm32")))]
+pub mod graphql;
+#[cfg(all(feature = "grpc", not(target_arch = "wasm32")))]
+pub mod grpc;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod http;
+#[cfg(all(feature = "i18n", not(target_arch = "wasm32")))]
+pub mod i18n;
+#[cfg(all(feature = "mail", not(target_arch = "wasm32")))]
+pub mod mail;
 #[cfg(all(
 	any(feature = "standard", feature = "middleware"),
 	not(target_arch = "wasm32")
@@ -1080,6 +1092,13 @@ pub use reinhardt_websockets::room::RoomManager;
 pub use reinhardt_websockets::{
 	ConsumerContext, Message, WebSocketConsumer, WebSocketError, WebSocketResult,
 };
+
+/// SQL query builder module.
+///
+/// Re-exports [`reinhardt_query`] for building type-safe SQL queries.
+/// Requires `database` feature.
+#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+pub mod query;
 
 /// Database re-exports for Model derive macro generated code.
 ///

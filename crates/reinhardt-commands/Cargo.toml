@@ -101,6 +101,7 @@ full = [
   "reinhardt-db",
   "di",
   "openapi",
+  "openapi-router",
   "postgres",
   "sqlite",
   "mysql",

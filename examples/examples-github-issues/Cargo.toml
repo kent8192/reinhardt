@@ -26,6 +26,7 @@ linkme = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 inventory = "0.3"
+# Required for async_graphql proc macro expansion (macros reference ::async_graphql internally)
 async-graphql = { version = "7.0", features = ["chrono"] }
 async-stream = "0.3"
 futures-util = "0.3"

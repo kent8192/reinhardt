@@ -121,7 +121,7 @@ test = ["reinhardt-test"]
 testcontainers = ["test", "reinhardt-test/testcontainers"]
 server-fn-test = ["test", "reinhardt-test/server-fn-test"]
 openapi = ["reinhardt-rest", "reinhardt-rest/openapi"]
-openapi-router = ["reinhardt-openapi", "openapi"]
+openapi-router = ["reinhardt-openapi", "openapi", "reinhardt-commands/openapi-router"]
 reinhardt-browsable-api = ["reinhardt-rest", "reinhardt-rest/browsable-api"]
 browsable-api = ["reinhardt-browsable-api"]
 # Client-router feature: Enables UnifiedRouter<V> with both .server() and .client() methods
@@ -185,6 +185,7 @@ full = [
   "reinhardt-grpc/full",
   "dentdelion",
   "client-router",
+  "openapi-router",
 ]
 
 # API-only preset - REST without templates/forms

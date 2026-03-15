@@ -3792,14 +3792,32 @@ impl Operation {
 			return json_to_sea_value(&json);
 		}
 
-		// SQL function calls (e.g., NOW(), CURRENT_TIMESTAMP)
+		// SQL constants that should remain unquoted
+		const SQL_CONSTANTS: &[&str] = &[
+			"CURRENT_TIMESTAMP",
+			"CURRENT_DATE",
+			"CURRENT_TIME",
+			"CURRENT_USER",
+			"SESSION_USER",
+			"LOCALTIME",
+			"LOCALTIMESTAMP",
+		];
+
+		// SQL function calls (e.g., NOW(), CURRENT_TIMESTAMP()) - keep unquoted
 		if trimmed.ends_with("()") || trimmed.contains('(') {
-			// Return as custom SQL expression
 			return Value::String(Some(Box::new(trimmed.to_string())));
 		}
 
-		// Default: treat as string
-		Value::String(Some(Box::new(trimmed.to_string())))
+		// SQL constants - keep unquoted
+		if SQL_CONSTANTS
+			.iter()
+			.any(|c| trimmed.eq_ignore_ascii_case(c))
+		{
+			return Value::String(Some(Box::new(trimmed.to_string())));
+		}
+
+		// Default: plain string - auto-quote as SQL string literal
+		Value::String(Some(Box::new(format!("'{}'", trimmed.replace('\'', "''")))))
 	}
 }
 
@@ -4120,6 +4138,7 @@ impl MigrationOperation for Operation {
 mod tests {
 	use super::*;
 	use FieldType;
+	use rstest::rstest;
 
 	#[test]
 	fn test_create_table_to_statement() {
@@ -5130,6 +5149,100 @@ mod tests {
 			),
 			_ => {
 				panic!("Expected Value::String(Some(\"hello\")), got different variant")
+			}
+		}
+	}
+
+	#[rstest]
+	#[case("pending", "'pending'")]
+	#[case("active", "'active'")]
+	#[case("hello world", "'hello world'")]
+	#[case("it's", "'it''s'")]
+	fn test_convert_default_value_plain_string(#[case] input: &str, #[case] expected: &str) {
+		// Arrange
+		let op = Operation::CreateTable {
+			name: "test".to_string(),
+			columns: vec![],
+			constraints: vec![],
+			without_rowid: None,
+			partition: None,
+			interleave_in_parent: None,
+		};
+
+		// Act
+		let value = op.convert_default_value(input);
+
+		// Assert
+		match value {
+			Value::String(Some(s)) => assert_eq!(
+				*s, expected,
+				"Plain string '{input}' should be auto-quoted as SQL string literal"
+			),
+			_ => {
+				panic!("Expected Value::String(Some(\"{expected}\")), got {value:?}")
+			}
+		}
+	}
+
+	#[rstest]
+	#[case("CURRENT_TIMESTAMP")]
+	#[case("current_timestamp")]
+	#[case("CURRENT_DATE")]
+	#[case("CURRENT_TIME")]
+	#[case("CURRENT_USER")]
+	#[case("SESSION_USER")]
+	#[case("LOCALTIME")]
+	#[case("LOCALTIMESTAMP")]
+	fn test_convert_default_value_sql_constant(#[case] input: &str) {
+		// Arrange
+		let op = Operation::CreateTable {
+			name: "test".to_string(),
+			columns: vec![],
+			constraints: vec![],
+			without_rowid: None,
+			partition: None,
+			interleave_in_parent: None,
+		};
+
+		// Act
+		let value = op.convert_default_value(input);
+
+		// Assert
+		match value {
+			Value::String(Some(s)) => {
+				assert_eq!(*s, input, "SQL constant '{input}' should remain unquoted")
+			}
+			_ => {
+				panic!("Expected Value::String(Some(\"{input}\")), got {value:?}")
+			}
+		}
+	}
+
+	#[rstest]
+	#[case("NOW()")]
+	#[case("uuid_generate_v4()")]
+	#[case("gen_random_uuid()")]
+	fn test_convert_default_value_sql_function(#[case] input: &str) {
+		// Arrange
+		let op = Operation::CreateTable {
+			name: "test".to_string(),
+			columns: vec![],
+			constraints: vec![],
+			without_rowid: None,
+			partition: None,
+			interleave_in_parent: None,
+		};
+
+		// Act
+		let value = op.convert_default_value(input);
+
+		// Assert
+		match value {
+			Value::String(Some(s)) => {
+				assert_eq!(*s, input, "SQL function '{input}' should remain unquoted")
+			}
+			_ => {
+				panic!("Expected Value::String(Some(\"{input}\")), got {value:?}")
 			}
 		}
 	}

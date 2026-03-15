@@ -2,8 +2,8 @@
 //!
 //! Database models for REST API example
 
-use reinhardt::prelude::*;
 use reinhardt::core::serde::{Deserialize, Serialize};
+use reinhardt::prelude::*;
 
 /// Article model
 ///

@@ -5,11 +5,11 @@
 use crate::apps::todos::models::Todo;
 use chrono::Utc;
 use reinhardt::Model;
+use reinhardt::core::serde::Deserialize;
 use reinhardt::core::serde::json;
 use reinhardt::http::ViewResult;
 use reinhardt::{Json, Path, Response, StatusCode};
 use reinhardt::{delete, get, post, put};
-use reinhardt::core::serde::Deserialize;
 
 /// Request body for creating/updating todos
 #[derive(Debug, Deserialize)]

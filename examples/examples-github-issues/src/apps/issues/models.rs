@@ -1,8 +1,8 @@
 //! Issue model
 
 use chrono::{DateTime, Utc};
-use reinhardt::model;
 use reinhardt::core::serde::{Deserialize, Serialize};
+use reinhardt::model;
 use uuid::Uuid;
 
 /// Issue state

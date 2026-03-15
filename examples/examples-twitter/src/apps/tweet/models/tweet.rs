@@ -1,9 +1,9 @@
 //! Tweet model
 
 use chrono::{DateTime, Utc};
+use reinhardt::core::serde::{Deserialize, Serialize};
 use reinhardt::db::associations::ForeignKeyField;
 use reinhardt::model;
-use reinhardt::core::serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // Used by #[model] macro for type inference in ForeignKeyField<T> relationship fields.

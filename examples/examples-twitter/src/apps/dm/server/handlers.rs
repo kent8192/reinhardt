@@ -3,14 +3,14 @@
 //! This module implements the WebSocket handler for direct messaging (DM) functionality.
 //! It handles real-time message delivery, room management, and message persistence.
 
-use reinhardt::core::async_trait::async_trait;
 use reinhardt::DatabaseConnection;
+use reinhardt::core::async_trait;
+use reinhardt::core::serde::{Deserialize, Serialize};
 use reinhardt::db::orm::Model;
 use reinhardt::{
 	ConsumerContext, InMemorySessionBackend, Message, PagesAuthenticator, RoomManager,
 	WebSocketConsumer, WebSocketError, WebSocketResult,
 };
-use reinhardt::core::serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;

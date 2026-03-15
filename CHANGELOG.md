@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.10...reinhardt-web@v0.1.0-rc.11) - 2026-03-15
+
+### Fixed
+
+- *(reinhardt-db)* auto-quote plain string defaults in migration engine
+- *(reinhardt-web)* restore Cargo.toml to rc.10 version from main
+
 ## [0.1.0-rc.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.9...reinhardt-web@v0.1.0-rc.10) - 2026-03-15
 
 ### Changed

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.10...reinhardt-db@v0.1.0-rc.11) - 2026-03-15
+
+### Fixed
+
+- *(reinhardt-db)* fix makemigrations codegen for type mismatch and missing fields
+
 ## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.8...reinhardt-db@v0.1.0-rc.9) - 2026-03-15
 
 ### Changed

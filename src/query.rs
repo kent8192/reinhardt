@@ -16,12 +16,12 @@
 //! # #[cfg(feature = "database")]
 //! # {
 //! let mut stmt = Query::select();
-//! stmt.column(Asterisk)
+//! stmt.column(ColumnRef::asterisk())
 //!     .from("users")
 //!     .and_where(Expr::col("active").eq(true));
 //!
 //! let builder = PostgresQueryBuilder::new();
-//! let (sql, values) = builder.build(&stmt);
+//! let (sql, values) = builder.build_select(&stmt);
 //! # }
 //! ```
 

@@ -59,7 +59,7 @@
 //!     }
 //!
 //!     ::reinhardt::inventory::submit! {
-//!         ::reinhardt::UrlPatternsRegistration::new(__get_server_router)
+//!         ::reinhardt::UrlPatternsRegistration::__macro_new(__get_server_router)
 //!     }
 //! };
 //! ```
@@ -130,9 +130,9 @@ pub(crate) fn routes_impl(_args: TokenStream, input: ItemFn) -> Result<TokenStre
 				::std::sync::Arc::new(unified.into_server())
 			}
 
-			// Register with inventory using feature-independent constructor
+			// Register with inventory using feature-independent internal constructor
 			#reinhardt::inventory::submit! {
-				#reinhardt::UrlPatternsRegistration::new(__get_server_router)
+				#reinhardt::UrlPatternsRegistration::__macro_new(__get_server_router)
 			}
 		};
 

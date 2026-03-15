@@ -123,11 +123,7 @@ pub struct UrlPatternsRegistration {
 }
 
 impl UrlPatternsRegistration {
-	/// Create a new registration with only the server router factory function
-	///
-	/// The macro always generates a call to this constructor with only the
-	/// server router, ensuring feature-independent code generation. The client
-	/// router can be added later via `with_client_router()`.
+	/// Create a new registration with the router factory functions
 	///
 	/// # Examples
 	///
@@ -137,13 +133,41 @@ impl UrlPatternsRegistration {
 	///
 	/// let registration = UrlPatternsRegistration::new(
 	///     || Arc::new(routes().into_server()),
+	///     Some(|| Arc::new(routes().into_client())),
 	/// );
 	/// ```
 	///
 	/// # Note
 	///
 	/// You typically don't call this directly. Use the `#[routes]` macro instead.
+	#[cfg(feature = "client-router")]
+	pub const fn new(
+		get_server_router: fn() -> Arc<ServerRouter>,
+		get_client_router: Option<fn() -> Arc<ClientRouter>>,
+	) -> Self {
+		Self {
+			get_server_router,
+			get_client_router,
+		}
+	}
+
+	/// Create a new registration with the server router factory function (server-only mode)
+	///
+	/// # Note
+	///
+	/// You typically don't call this directly. Use the `#[routes]` macro instead.
+	#[cfg(not(feature = "client-router"))]
 	pub const fn new(get_server_router: fn() -> Arc<ServerRouter>) -> Self {
+		Self { get_server_router }
+	}
+
+	/// Internal constructor used by the `#[routes]` macro.
+	///
+	/// Always takes a single argument regardless of feature flags, ensuring
+	/// the macro output is feature-independent. This avoids feature context
+	/// mismatches between the library and downstream crates.
+	#[doc(hidden)]
+	pub const fn __macro_new(get_server_router: fn() -> Arc<ServerRouter>) -> Self {
 		Self {
 			get_server_router,
 			#[cfg(feature = "client-router")]

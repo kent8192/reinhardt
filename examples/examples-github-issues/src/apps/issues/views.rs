@@ -2,9 +2,9 @@
 //!
 //! This module contains Query, Mutation, and Subscription resolvers for issue operations.
 
-use async_graphql::{Context, ErrorExtensions, ID, Object, Result as GqlResult, Subscription};
 use futures_util::Stream;
 use reinhardt::Validate;
+use reinhardt::graphql::{Context, ErrorExtensions, GqlResult, ID, Object, Subscription};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};

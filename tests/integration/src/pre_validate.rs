@@ -37,6 +37,17 @@ mod tests {
 		Ok(Response::new(hyper::StatusCode::CREATED))
 	}
 
+	// Handler with pre_validate = true and destructuring pattern.
+	// This verifies that destructuring extractors (e.g., `Json(body)`) work
+	// correctly with pre_validate, avoiding "use of moved value" errors.
+	#[post("/users-destructured", pre_validate = true)]
+	async fn create_user_destructured(
+		reinhardt::Json(body): reinhardt::Json<CreateUserRequest>,
+	) -> Result<Response, Error> {
+		let _ = body.name;
+		Ok(Response::new(hyper::StatusCode::CREATED))
+	}
+
 	// Handler with pre_validate = true and use_inject = true
 	#[post("/users-inject", pre_validate = true, use_inject = true)]
 	async fn create_user_with_inject(
@@ -71,6 +82,27 @@ mod tests {
 
 		// Assert
 		assert_eq!(path, "/users-no-validate");
+	}
+
+	#[rstest]
+	fn test_destructured_variant_view_has_correct_path() {
+		// Arrange & Act
+		let path = CreateUserDestructuredView::path();
+
+		// Assert
+		assert_eq!(path, "/users-destructured");
+	}
+
+	#[rstest]
+	fn test_destructured_variant_factory_returns_view() {
+		// Arrange & Act
+		let _view: CreateUserDestructuredView = create_user_destructured();
+
+		// Assert
+		assert_eq!(
+			CreateUserDestructuredView::method(),
+			reinhardt::Method::POST
+		);
 	}
 
 	#[rstest]

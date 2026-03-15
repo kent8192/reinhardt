@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.9...reinhardt-web@v0.1.0-rc.10) - 2026-03-15
+
+### Fixed
+
+- *(commands)* remove non-existent framework apps from project templates
+- *(commands)* delete unused config/apps.rs.tpl from project templates
+
 ## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.8...reinhardt-web@v0.1.0-rc.9) - 2026-03-15
 
 ### Added

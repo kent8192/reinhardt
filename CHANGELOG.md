@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.9...reinhardt-web@v0.1.0-rc.10) - 2026-03-15
+
+### Changed
+
+- *(examples)* use reinhardt re-exports for serde and async_trait
+
+### Documentation
+
+- *(readme)* update version references to 0.1.0-rc.9
+- *(examples)* update version references in CLAUDE.md to 0.1.0-rc.9
+- *(website)* update reinhardt_version to 0.1.0-rc.9
+- *(readme)* fix dispatch crate label and add missing components
+- *(examples)* add new module re-exports to available re-exports
+- update version references in crate READMEs to 0.1.0-rc.9
+- *(instructions)* update outdated version references to 0.1.0-rc.9
+
+### Fixed
+
+- *(commands)* propagate openapi-router feature to reinhardt-commands
+- *(commands)* gate docs banner on openapi-router feature
+
+### Maintenance
+
+- *(examples)* update workspace dependency to 0.1.0-rc.9
+
+### Styling
+
+- *(examples)* apply import order formatting for rc.9 compatibility
+
 ## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.8...reinhardt-web@v0.1.0-rc.9) - 2026-03-15
 
 ### Added

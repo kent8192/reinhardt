@@ -4,8 +4,8 @@
 //! Uses reinhardt ORM (Manager/QuerySet) for database operations.
 
 use chrono::{DateTime, Utc};
+use reinhardt::core::serde::{Deserialize, Serialize};
 use reinhardt::model;
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // Test-only dependency for sqlx::FromRow (server-side only)

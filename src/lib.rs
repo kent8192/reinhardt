@@ -189,8 +189,14 @@ pub mod dentdelion;
 pub mod di;
 #[cfg(all(feature = "forms", not(target_arch = "wasm32")))]
 pub mod forms;
+#[cfg(all(feature = "graphql", not(target_arch = "wasm32")))]
+pub mod graphql;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod http;
+#[cfg(all(feature = "i18n", not(target_arch = "wasm32")))]
+pub mod i18n;
+#[cfg(all(feature = "mail", not(target_arch = "wasm32")))]
+pub mod mail;
 #[cfg(all(
 	any(feature = "standard", feature = "middleware"),
 	not(target_arch = "wasm32")

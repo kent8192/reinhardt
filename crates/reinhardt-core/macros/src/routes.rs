@@ -286,43 +286,93 @@ fn generate_wrapper_with_both(
 		})
 		.collect();
 
-	// Generate extractor calls
-	let extractor_calls: Vec<_> = extractors
-		.iter()
-		.map(|ext| {
-			let pat = &ext.pat;
-			let ty = &ext.ty;
-			quote! {
-				let #pat = <#ty as #params_crate::FromRequest>::from_request(&req, &ctx)
-					.await
-					.map_err(|e| #core_crate::exception::Error::Validation(
-						format!("Parameter extraction failed: {:?}", e)
-					))?;
-			}
-		})
-		.collect();
-
-	// Build call arguments (extractors first, then inject params)
-	let extractor_args: Vec<_> = extractors.iter().map(|ext| &ext.pat).collect();
+	// Build call arguments for inject params (shared between both paths)
 	let inject_args: Vec<_> = inject_params.iter().map(|param| &param.pat).collect();
 
-	// Generate pre_validate validation calls for extracted parameters
-	let validation_calls = if options.pre_validate {
-		let validate_calls: Vec<_> = extractors
+	// Generate extractor calls and validation differently based on pre_validate.
+	// When pre_validate = true and a destructuring pattern like `Json(body)` is used,
+	// extracting directly into the pattern would consume the wrapper, making it
+	// impossible to validate via Deref on the original extractor type.
+	// The 3-step approach (extract to temp -> validate temp -> destructure) avoids this.
+	let (extractor_calls, validation_calls, destructure_calls, extractor_args): (
+		Vec<_>,
+		proc_macro2::TokenStream,
+		proc_macro2::TokenStream,
+		Vec<Box<Pat>>,
+	) = if options.pre_validate {
+		// Step 1: Extract into temporary variables
+		let temp_names: Vec<syn::Ident> = extractors
 			.iter()
-			.map(|ext| {
-				let pat = &ext.pat;
+			.enumerate()
+			.map(|(i, _)| syn::Ident::new(&format!("__ext_{}", i), Span::call_site()))
+			.collect();
+
+		let calls: Vec<_> = extractors
+			.iter()
+			.zip(temp_names.iter())
+			.map(|(ext, temp)| {
+				let ty = &ext.ty;
 				quote! {
-					#core_crate::validators::Validate::validate(&*#pat)
+					let #temp = <#ty as #params_crate::FromRequest>::from_request(&req, &ctx)
+						.await
+						.map_err(|e| #core_crate::exception::Error::Validation(
+							format!("Parameter extraction failed: {:?}", e)
+						))?;
+				}
+			})
+			.collect();
+
+		// Step 2: Validate using temp variables (Deref on the extractor type)
+		let validate_calls: Vec<_> = temp_names
+			.iter()
+			.map(|temp| {
+				quote! {
+					#core_crate::validators::Validate::validate(&*#temp)
 						.map_err(|e| #core_crate::exception::Error::Validation(
 							::serde_json::to_string(&e).unwrap_or_else(|_| format!("{}", e))
 						))?;
 				}
 			})
 			.collect();
-		quote! { #(#validate_calls)* }
+
+		// Step 3: Destructure temp variables into original patterns
+		let destructure: Vec<_> = extractors
+			.iter()
+			.zip(temp_names.iter())
+			.map(|(ext, temp)| {
+				let pat = &ext.pat;
+				quote! { let #pat = #temp; }
+			})
+			.collect();
+
+		let args: Vec<Box<Pat>> = extractors.iter().map(|ext| ext.pat.clone()).collect();
+
+		(
+			calls,
+			quote! { #(#validate_calls)* },
+			quote! { #(#destructure)* },
+			args,
+		)
 	} else {
-		quote! {}
+		// Without pre_validate: extract directly into the original pattern
+		let calls: Vec<_> = extractors
+			.iter()
+			.map(|ext| {
+				let pat = &ext.pat;
+				let ty = &ext.ty;
+				quote! {
+					let #pat = <#ty as #params_crate::FromRequest>::from_request(&req, &ctx)
+						.await
+						.map_err(|e| #core_crate::exception::Error::Validation(
+							format!("Parameter extraction failed: {:?}", e)
+						))?;
+				}
+			})
+			.collect();
+
+		let args: Vec<Box<Pat>> = extractors.iter().map(|ext| ext.pat.clone()).collect();
+
+		(calls, quote! {}, quote! {}, args)
 	};
 
 	// Generate code
@@ -349,6 +399,9 @@ fn generate_wrapper_with_both(
 
 			// Validate extracted parameters (when pre_validate = true)
 			#validation_calls
+
+			// Destructure into original patterns (when pre_validate = true)
+			#destructure_calls
 
 			// Call the original function
 			#original_fn_name(#(#extractor_args,)* #(#inject_args),*).await

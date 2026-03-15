@@ -130,6 +130,9 @@ client-router = ["reinhardt-urls/client-router"]
 
 # Plugin system
 dentdelion = ["reinhardt-dentdelion"]
+deeplink = ["reinhardt-deeplink"]
+dispatch = ["reinhardt-dispatch"]
+grpc = ["reinhardt-grpc"]
 
 # Meta features
 full = [
@@ -174,6 +177,12 @@ full = [
   "reinhardt-websockets/full",
   "reinhardt-middleware/full",
   "reinhardt-graphql/full",
+  "deeplink",
+  "dispatch",
+  "grpc",
+  "reinhardt-deeplink/full",
+  "reinhardt-dispatch/full",
+  "reinhardt-grpc/full",
   "dentdelion",
   "client-router",
 ]
@@ -287,7 +296,10 @@ reinhardt-mail = { workspace = true, optional = true }
 reinhardt-graphql = { workspace = true, optional = true }
 reinhardt-websockets = { workspace = true, optional = true }
 reinhardt-openapi = { workspace = true, optional = true }
+reinhardt-deeplink = { workspace = true, optional = true }
 reinhardt-dentdelion = { workspace = true, optional = true }
+reinhardt-dispatch = { workspace = true, optional = true }
+reinhardt-grpc = { workspace = true, optional = true }
 reinhardt-query = { workspace = true, optional = true }
 
 # Dependencies used directly in this crate

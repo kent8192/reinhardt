@@ -30,6 +30,9 @@ serde_json = { workspace = true }
 # Error handling
 thiserror = { workspace = true }
 
+[features]
+full = []
+
 [dev-dependencies]
 insta = { workspace = true }
 # Testing framework

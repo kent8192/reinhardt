@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
+use reinhardt::core::serde::{Deserialize, Serialize};
 use reinhardt::prelude::*;
-use serde::{Deserialize, Serialize};
 
 /// Snippet model representing a code snippet
 #[derive(Serialize, Deserialize)]

@@ -22,7 +22,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-default = ["full"]
+default = ["standard"]
 
 # Minimal feature set - for microservices and simple APIs
 # Provides routing, DI, parameter extraction, HTTP server, and core functionality

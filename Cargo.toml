@@ -235,7 +235,7 @@ auth-oauth = ["auth", "reinhardt-auth/oauth"]
 auth-token = ["auth", "reinhardt-auth/token"]
 
 # Fine-grained database support
-db-postgres = ["database", "reinhardt-db/postgres"]
+db-postgres = ["database", "reinhardt-db/postgres", "reinhardt-commands/postgres"]
 db-mysql = ["database", "reinhardt-db/mysql"]
 db-sqlite = ["database", "reinhardt-db/sqlite", "reinhardt-commands/sqlite"]
 db-cockroachdb = ["database", "reinhardt-db/cockroachdb-backend"]

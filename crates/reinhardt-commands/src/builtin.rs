@@ -132,7 +132,7 @@ impl BaseCommand for MigrateCommand {
 			// 4. Connect to database (auto-create if it doesn't exist for PostgreSQL)
 			// This is done before filtering migrations to ensure connection errors are detected
 			// even when no migrations need to be applied
-			let connection = if database_url.starts_with("postgres://")
+			let connection: DatabaseConnection = if database_url.starts_with("postgres://")
 				|| database_url.starts_with("postgresql://")
 			{
 				#[cfg(feature = "postgres")]

@@ -125,6 +125,7 @@ url = { workspace = true }
 rust_decimal = { workspace = true }
 async-stream = "0.3"
 regex = { workspace = true }
+tracing = { workspace = true }
 
 [features]
 default = ["postgres", "sqlite", "caching", "hot-reload", "dynamic-redis"]

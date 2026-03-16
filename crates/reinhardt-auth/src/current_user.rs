@@ -185,7 +185,15 @@ where
 		#[cfg(feature = "params")]
 		let db: Arc<DatabaseConnection> = match ctx.resolve::<DatabaseConnection>().await {
 			Ok(conn) => conn,
-			Err(_) => return Ok(Self::anonymous()),
+			Err(e) => {
+				::tracing::warn!(
+					error = %e,
+					"DatabaseConnection not registered in DI context. \
+					 CurrentUser will be anonymous. \
+					 Hint: Register DatabaseConnection as a singleton in InjectionContext."
+				);
+				return Ok(Self::anonymous());
+			}
 		};
 
 		// 6. Load user from database using Model::objects() (Django-style ORM)

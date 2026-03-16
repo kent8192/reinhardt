@@ -43,7 +43,7 @@ async fn test_create_tweet_validation_success(#[future] twitter_db_pool: (PgPool
 #[rstest]
 #[tokio::test]
 async fn test_create_tweet_validation_empty_content() {
-	use validator::Validate;
+	use reinhardt::Validate;
 
 	let request = CreateTweetRequest {
 		content: "".to_string(),
@@ -56,7 +56,7 @@ async fn test_create_tweet_validation_empty_content() {
 #[rstest]
 #[tokio::test]
 async fn test_create_tweet_validation_too_long() {
-	use validator::Validate;
+	use reinhardt::Validate;
 
 	// Create content that exceeds 280 characters
 	let long_content = "a".repeat(281);
@@ -74,7 +74,7 @@ async fn test_create_tweet_validation_too_long() {
 #[rstest]
 #[tokio::test]
 async fn test_create_tweet_validation_max_length() {
-	use validator::Validate;
+	use reinhardt::Validate;
 
 	// Create content exactly at the limit (280 characters)
 	let max_content = "a".repeat(280);

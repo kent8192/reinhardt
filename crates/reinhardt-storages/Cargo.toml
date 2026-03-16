@@ -1,0 +1,45 @@
+[package]
+name = "reinhardt-storages"
+version = "0.1.0"
+edition = "2024"
+authors = ["Reinhardt Contributors"]
+license = "MIT OR Apache-2.0"
+description = "Cloud storage backend abstraction for Reinhardt framework"
+repository = "https://github.com/kent8192/reinhardt-web"
+keywords = ["storage", "s3", "gcs", "azure", "cloud"]
+categories = ["web-programming", "filesystem"]
+
+[dependencies]
+async-trait = "0.1"
+tokio = { version = "1", features = ["fs", "rt-multi-thread", "macros"] }
+chrono = "0.4"
+thiserror = "1"
+
+# S3
+aws-sdk-s3 = { version = "1", optional = true }
+aws-config = { version = "1", optional = true }
+
+# GCS
+google-cloud-storage = { version = "0.16", optional = true }
+
+# Azure
+azure_storage_blobs = { version = "0.20", optional = true }
+azure_core = { version = "0.20", optional = true }
+
+[dev-dependencies]
+testcontainers = "0.26"
+tokio = { version = "1", features = ["full"] }
+tempfile = "3"
+rstest = "0.23"
+uuid = { version = "1", features = ["v4"] }
+rand = "0.8"
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+serial_test = "3"
+
+[features]
+default = ["s3", "local"]
+s3 = ["aws-sdk-s3", "aws-config"]
+gcs = ["google-cloud-storage"]
+azure = ["azure_storage_blobs", "azure_core"]
+local = ["tokio/fs"]
+all = ["s3", "gcs", "azure", "local"]

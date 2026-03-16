@@ -37,7 +37,8 @@
 //! # Generated Code
 //!
 //! The macro preserves the original function and adds `inventory::submit!`
-//! registration code that extracts both server and client routers:
+//! registration code. The generated code is feature-independent to avoid
+//! feature context mismatches between the library and downstream crates:
 //!
 //! ```rust,ignore
 //! // Input:
@@ -57,18 +58,8 @@
 //!         ::std::sync::Arc::new(unified.into_server())
 //!     }
 //!
-//!     #[cfg(feature = "client-router")]
-//!     fn __get_client_router() -> ::std::sync::Arc<::reinhardt::ClientRouter> {
-//!         let unified = routes();
-//!         ::std::sync::Arc::new(unified.into_client())
-//!     }
-//!
 //!     ::reinhardt::inventory::submit! {
-//!         ::reinhardt::UrlPatternsRegistration::new(
-//!             __get_server_router,
-//!             #[cfg(feature = "client-router")]
-//!             __get_client_router,
-//!         )
+//!         ::reinhardt::UrlPatternsRegistration::__macro_new(__get_server_router)
 //!     }
 //! };
 //! ```
@@ -84,8 +75,11 @@ use syn::{ItemFn, Result};
 /// 1. Preserves the original function definition
 /// 2. Adds `inventory::submit!` to register the function with the framework
 ///
-/// The macro extracts both `ServerRouter` and `ClientRouter` from the
-/// `UnifiedRouter` returned by the annotated function.
+/// The macro generates feature-independent code that only registers the
+/// server router. The client router is handled within the library's own
+/// feature-gated code via `with_client_router()`, avoiding the problem
+/// where `#[cfg(feature = "client-router")]` in macro output would be
+/// evaluated in the downstream crate's feature context.
 ///
 /// # Parameters
 ///
@@ -116,7 +110,10 @@ pub(crate) fn routes_impl(_args: TokenStream, input: ItemFn) -> Result<TokenStre
 		));
 	}
 
-	// Generate the original function, the inventory registration, and the linker marker
+	// Generate the original function, the inventory registration, and the linker marker.
+	// The generated code is intentionally feature-independent: only the server router
+	// is registered here. The client router is set via with_client_router() in library
+	// code that has its own proper #[cfg(feature = "client-router")] gates.
 	// Note: Rust 2024 edition requires unsafe for #[no_mangle] and #[link_section] attributes.
 	// The inventory::submit! macro uses #[link_section] internally.
 	let expanded = quote! {
@@ -133,25 +130,9 @@ pub(crate) fn routes_impl(_args: TokenStream, input: ItemFn) -> Result<TokenStre
 				::std::sync::Arc::new(unified.into_server())
 			}
 
-			// Client router extraction function (only when client-router feature is enabled)
-			#[cfg(feature = "client-router")]
-			fn __get_client_router() -> ::std::sync::Arc<#reinhardt::ClientRouter> {
-				let unified = #fn_name();
-				::std::sync::Arc::new(unified.into_client())
-			}
-
-			// Register with inventory using the new UrlPatternsRegistration structure
-			#[cfg(feature = "client-router")]
+			// Register with inventory using feature-independent internal constructor
 			#reinhardt::inventory::submit! {
-				#reinhardt::UrlPatternsRegistration::new(
-					__get_server_router,
-					__get_client_router,
-				)
-			}
-
-			#[cfg(not(feature = "client-router"))]
-			#reinhardt::inventory::submit! {
-				#reinhardt::UrlPatternsRegistration::new(__get_server_router)
+				#reinhardt::UrlPatternsRegistration::__macro_new(__get_server_router)
 			}
 		};
 

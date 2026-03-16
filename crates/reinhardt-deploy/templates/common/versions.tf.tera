@@ -1,0 +1,12 @@
+terraform {
+  required_version = ">= {{ terraform_version }}"
+
+  required_providers {
+{% for provider in providers %}
+    {{ provider.name }} = {
+      source  = "{{ provider.source }}"
+      version = "{{ provider.version }}"
+    }
+{% endfor %}
+  }
+}

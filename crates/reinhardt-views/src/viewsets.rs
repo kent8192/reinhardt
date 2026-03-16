@@ -252,6 +252,7 @@ mod tests {
 	use hyper::{HeaderMap, Method, StatusCode, Version};
 	use reinhardt_http::Request;
 
+	// Allow dead_code: test model used as type parameter for ModelViewSet, fields not read directly
 	#[allow(dead_code)]
 	#[derive(Debug, Clone)]
 	struct TestModel {

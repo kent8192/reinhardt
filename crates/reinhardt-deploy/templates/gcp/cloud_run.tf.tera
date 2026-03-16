@@ -1,0 +1,33 @@
+resource "google_cloud_run_v2_service" "app" {
+  name     = "{{ project_name }}"
+  location = "{{ region }}"
+
+  template {
+    containers {
+      image = "{{ region }}-docker.pkg.dev/${var.gcp_project_id}/{{ project_name }}/{{ project_name }}"
+
+      ports {
+        container_port = {{ app_port }}
+      }
+
+      resources {
+        limits = {
+          cpu    = "{{ app_cpu_limit }}"
+          memory = "{{ app_memory_limit }}"
+        }
+      }
+    }
+
+    scaling {
+      min_instance_count = 0
+      max_instance_count = {{ app_instances }}
+    }
+  }
+}
+
+resource "google_cloud_run_service_iam_member" "public" {
+  service  = google_cloud_run_v2_service.app.name
+  location = google_cloud_run_v2_service.app.location
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}

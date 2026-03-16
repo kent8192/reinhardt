@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.1.0-rc.8...reinhardt-forms@v0.1.0-rc.9) - 2026-03-15
+
+### Fixed
+
+- *(forms)* add missing Debug and Clone derives to form fields
+- *(forms)* simplify OnceLock usage and extract regex patterns to constants
+
+### Performance
+
+- *(forms)* cache URL and email regex with LazyLock
+
 ## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.1.0-rc.4...reinhardt-forms@v0.1.0-rc.5) - 2026-03-07
 
 ### Documentation

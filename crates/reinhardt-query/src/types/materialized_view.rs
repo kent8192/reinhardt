@@ -32,6 +32,7 @@ use crate::types::{DynIden, IntoIden};
 ///     .with_data(false);
 /// ```
 #[derive(Debug, Clone)]
+// Allow dead_code: DDL definition struct for CREATE MATERIALIZED VIEW; fields populated by builder but not yet consumed by backend SQL generation
 #[allow(dead_code)]
 pub struct MaterializedViewDef {
 	pub(crate) name: DynIden,

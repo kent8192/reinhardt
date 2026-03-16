@@ -147,7 +147,7 @@ Users enable functionality through feature flags in `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", features = ["db-postgres", "orm", "migrations"] }
+reinhardt = { version = "0.1.0-rc.9", features = ["db-postgres", "orm", "migrations"] }
 ```
 
 The following diagram summarizes how to choose the right feature set:
@@ -165,25 +165,25 @@ flowchart TD
 
 #### Minimal Setup
 ```toml
-reinhardt = { version = "0.1.0-alpha.1", features = ["minimal"] }
+reinhardt = { version = "0.1.0-rc.9", features = ["minimal"] }
 # Includes: core, di, server
 ```
 
 #### Standard Setup (Recommended)
 ```toml
-reinhardt = { version = "0.1.0-alpha.1", features = ["standard"] }
+reinhardt = { version = "0.1.0-rc.9", features = ["standard"] }
 # Includes: minimal + database, db-postgres, rest, auth
 ```
 
 #### Full Features
 ```toml
-reinhardt = { version = "0.1.0-alpha.1", features = ["full"] }
+reinhardt = { version = "0.1.0-rc.9", features = ["full"] }
 # Includes: all features from all crates
 ```
 
 #### Fine-Grained Control
 ```toml
-reinhardt = { version = "0.1.0-alpha.1", features = [
+reinhardt = { version = "0.1.0-rc.9", features = [
     "core",
     "db-postgres",
     "orm",
@@ -212,7 +212,7 @@ reinhardt-pool = "0.1.0"
 reinhardt-backends = "0.1.0"
 
 # After (unified structure)
-reinhardt = { version = "0.1.0-alpha.1", features = ["db-postgres", "orm", "migrations"] }
+reinhardt = { version = "0.1.0-rc.9", features = ["db-postgres", "orm", "migrations"] }
 ```
 
 ### For Maintainers
@@ -352,7 +352,7 @@ All top-level crates share the same version number, managed through workspace in
 
 ```toml
 [workspace]
-version = "0.1.0-alpha.1"
+version = "0.1.0-rc.9"
 
 [package]
 version.workspace = true
@@ -377,7 +377,7 @@ reinhardt-pool = "0.1.0"
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", features = ["db-postgres", "orm", "migrations"] }
+reinhardt = { version = "0.1.0-rc.9", features = ["db-postgres", "orm", "migrations"] }
 ```
 
 ### Code Changes

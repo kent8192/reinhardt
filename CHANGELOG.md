@@ -7,6 +7,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.10...reinhardt-web@v0.1.0-rc.11) - 2026-03-16
+
+### Fixed
+
+- *(examples)* add missing feature flags for examples CI
+- *(examples)* add missing feature flags for github-issues and rest-api examples
+
+### Other
+
+- resolve conflict with main for examples-database-integration
+
+## [0.1.0-rc.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.9...reinhardt-web@v0.1.0-rc.10) - 2026-03-15
+
+### Changed
+
+- *(examples)* use reinhardt re-exports for serde and async_trait
+
+### Documentation
+
+- *(readme)* update version references to 0.1.0-rc.9
+- *(examples)* update version references in CLAUDE.md to 0.1.0-rc.9
+- *(website)* update reinhardt_version to 0.1.0-rc.9
+- *(readme)* fix dispatch crate label and add missing components
+- *(examples)* add new module re-exports to available re-exports
+- update version references in crate READMEs to 0.1.0-rc.9
+- *(instructions)* update outdated version references to 0.1.0-rc.9
+
+### Fixed
+
+- *(commands)* propagate openapi-router feature to reinhardt-commands
+- *(commands)* gate docs banner on openapi-router feature
+
+### Maintenance
+
+- *(examples)* update workspace dependency to 0.1.0-rc.9
+
+### Styling
+
+- *(examples)* apply import order formatting for rc.9 compatibility
+
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.8...reinhardt-web@v0.1.0-rc.9) - 2026-03-15
+
+### Added
+
+- *(infra)* add repository Terraform module for GitHub settings
+- *(ci)* add infrastructure label and labeler mapping
+- *(ci)* guard terraform-plan against fork PRs and add repository module
+- *(ci)* add tfprovidercheck provider allowlist
+- *(ci)* add semgrep terraform security rules
+- *(ci)* add terraform-validate-fork workflow (Stage 1)
+- *(ci)* add terraform-plan-privileged workflow (Stage 2)
+- *(ci)* add terraform-apply workflow for post-merge automation
+- expose reinhardt-query as reinhardt::query via database feature
+- expose graphql, i18n, mail modules from reinhardt-web facade
+- add grpc, dispatch, deeplink module re-exports with feature flags
+
+### Changed
+
+- *(ci)* migrate housekeeping runner to cancel-runner
+
+### Documentation
+
+- *(readme)* fix outdated versions and incorrect install command
+- *(readme)* restructure sections for better first impression
+- *(readme)* improve copywriting for broader audience appeal
+- *(readme)* improve quick navigation and table readability
+- *(auth)* fix private intra-doc link in get_user_info
+
+### Fixed
+
+- *(throttling)* use per-key state in leaky bucket throttle
+- *(throttling)* use lazy initialization for per-key bucket state
+- *(throttling)* prevent capacity overflow and add per-key isolation tests
+- *(ci)* correct workflow configuration issues
+- *(ci)* revert create-github-app-token to v2
+- *(ci)* change auto-label-pr to pull_request_target for fork PR support
+- *(ci)* address review findings in terraform security workflows
+- *(ci)* add missing TF_VAR mappings for terraform plan workflows
+- *(ci)* use secrets instead of vars for TF_GITHUB_OWNER and TF_GITHUB_REPOSITORY
+- *(infra)* install aws cli in housekeeping runner userdata
+- *(infra)* remove user_data from ignore_changes in housekeeping runner
+- *(infra)* enable unattended-upgrades on housekeeping runner
+- *(infra)* upgrade housekeeping runner from t4g.nano to t4g.micro
+- *(ci)* add missing organizations_account_email to terraform plan workflows
+- *(ci)* download lambda zip files before terraform plan
+- *(ci)* download lambda zip files before terraform apply plan step
+- *(ci)* downgrade upload-artifact from v7 to v4 in mutation-test workflow
+
+### Maintenance
+
+- *(ci)* exclude test code from CodeQL analysis
+- add infra ownership to CODEOWNERS
+- add docs/superpowers to .gitignore
+
+### Other
+
+- resolve conflicts with main in README.md
+- resolve conflicts with main branch
+- incorporate CI fix from fix/housekeeping-runner-instance-type
+
 ## [0.1.0-rc.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.7...reinhardt-web@v0.1.0-rc.8) - 2026-03-12
 
 ### Fixed

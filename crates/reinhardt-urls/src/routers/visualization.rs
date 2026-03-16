@@ -57,6 +57,7 @@ pub enum VisualizationFormat {
 /// ```
 pub struct RouteVisualizer {
 	routes: Vec<RouteInfo>,
+	// Allow dead_code: constructed from routes for future namespace-based visualization formats
 	#[allow(dead_code)]
 	namespace_tree: NamespaceTree,
 }
@@ -295,6 +296,7 @@ impl RouteVisualizer {
 
 /// Namespace tree structure
 struct NamespaceTree {
+	// Allow dead_code: populated during construction for future hierarchical namespace rendering
 	#[allow(dead_code)]
 	nodes: HashMap<String, NamespaceNode>,
 }
@@ -351,6 +353,7 @@ impl NamespaceTree {
 
 /// Namespace tree node
 struct NamespaceNode {
+	// Allow dead_code: stored for display purposes in future namespace tree visualization
 	#[allow(dead_code)]
 	name: String,
 	full_path: String,

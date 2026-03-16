@@ -82,3 +82,43 @@ resource "github_actions_secret" "tf_plan_github_app_key_base64" {
     ignore_changes = [plaintext_value]
   }
 }
+
+resource "github_actions_secret" "tf_plan_aws_account_id" {
+  repository      = var.github_repository
+  secret_name     = "TF_AWS_ACCOUNT_ID"
+  plaintext_value = var.aws_account_id
+
+  lifecycle {
+    ignore_changes = [plaintext_value]
+  }
+}
+
+resource "github_actions_secret" "tf_plan_budget_alert_email" {
+  repository      = var.github_repository
+  secret_name     = "TF_BUDGET_ALERT_EMAIL"
+  plaintext_value = var.budget_alert_email
+
+  lifecycle {
+    ignore_changes = [plaintext_value]
+  }
+}
+
+resource "github_actions_secret" "tf_plan_github_owner" {
+  repository      = var.github_repository
+  secret_name     = "TF_GITHUB_OWNER"
+  plaintext_value = var.github_owner
+
+  lifecycle {
+    ignore_changes = [plaintext_value]
+  }
+}
+
+resource "github_actions_secret" "tf_plan_account_email" {
+  repository      = var.github_repository
+  secret_name     = "TF_ACCOUNT_EMAIL"
+  plaintext_value = var.organizations_account_email
+
+  lifecycle {
+    ignore_changes = [plaintext_value]
+  }
+}

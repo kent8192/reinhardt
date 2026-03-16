@@ -1,7 +1,7 @@
 /// Lambda Statement - Cached query compilation
 /// Based on SQLAlchemy's lambda_stmt
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 /// Lambda statement for query caching
 pub struct LambdaStmt {
@@ -52,7 +52,7 @@ impl LambdaStmt {
 	pub fn execute(&self) -> Result<String, String> {
 		// Check cache first
 		if let Some(cached) = QUERY_CACHE.get(&self.cache_key) {
-			CACHE_STATS.write().unwrap().hits += 1;
+			acquire_stats_write_lock().hits += 1;
 			return Ok(cached);
 		}
 
@@ -61,7 +61,7 @@ impl LambdaStmt {
 
 		// Cache the compiled query
 		QUERY_CACHE.set(self.cache_key.clone(), query.clone());
-		CACHE_STATS.write().unwrap().misses += 1;
+		acquire_stats_write_lock().misses += 1;
 
 		Ok(query)
 	}
@@ -118,7 +118,7 @@ impl QueryCache {
 	/// assert_eq!(cache.get("key1"), Some("SELECT * FROM users".to_string()));
 	/// ```
 	pub fn get(&self, key: &str) -> Option<String> {
-		self.cache.read().unwrap().get(key).cloned()
+		self.acquire_read_lock().get(key).cloned()
 	}
 	/// Store a compiled query in the cache
 	///
@@ -132,7 +132,7 @@ impl QueryCache {
 	/// assert!(cache.contains("users"));
 	/// ```
 	pub fn set(&self, key: String, value: String) {
-		self.cache.write().unwrap().insert(key, value);
+		self.acquire_write_lock().insert(key, value);
 	}
 	/// Clear all cached queries
 	///
@@ -148,7 +148,7 @@ impl QueryCache {
 	/// assert_eq!(cache.size(), 0);
 	/// ```
 	pub fn clear(&self) {
-		self.cache.write().unwrap().clear();
+		self.acquire_write_lock().clear();
 	}
 	/// Get the number of cached queries
 	///
@@ -163,7 +163,7 @@ impl QueryCache {
 	/// assert_eq!(cache.size(), 2);
 	/// ```
 	pub fn size(&self) -> usize {
-		self.cache.read().unwrap().len()
+		self.acquire_read_lock().len()
 	}
 	/// Remove a specific query from the cache
 	///
@@ -179,7 +179,7 @@ impl QueryCache {
 	/// assert_eq!(cache.size(), 0);
 	/// ```
 	pub fn remove(&self, key: &str) -> Option<String> {
-		self.cache.write().unwrap().remove(key)
+		self.acquire_write_lock().remove(key)
 	}
 	/// Check if a query key exists in the cache
 	///
@@ -194,7 +194,50 @@ impl QueryCache {
 	/// assert!(!cache.contains("key2"));
 	/// ```
 	pub fn contains(&self, key: &str) -> bool {
-		self.cache.read().unwrap().contains_key(key)
+		self.acquire_read_lock().contains_key(key)
+	}
+
+	/// Acquire a read lock, clearing the cache on poison to prevent corrupted data
+	fn acquire_read_lock(&self) -> RwLockReadGuard<'_, HashMap<String, String>> {
+		match self.cache.read() {
+			Ok(guard) => guard,
+			Err(poisoned) => {
+				tracing::warn!(
+					"Query cache RwLock was poisoned on read, clearing cache to prevent corrupted data"
+				);
+				// We need a write lock to clear, so drop the poisoned read guard
+				drop(poisoned);
+				// Clear via write lock, then re-acquire read
+				match self.cache.write() {
+					Ok(mut guard) => {
+						guard.clear();
+						drop(guard);
+					}
+					Err(poisoned) => {
+						let mut guard = poisoned.into_inner();
+						guard.clear();
+						drop(guard);
+					}
+				}
+				// After clearing, acquire the read lock (now unpoisoned after clear)
+				self.cache.read().unwrap_or_else(|e| e.into_inner())
+			}
+		}
+	}
+
+	/// Acquire a write lock, clearing the cache on poison to prevent corrupted data
+	fn acquire_write_lock(&self) -> RwLockWriteGuard<'_, HashMap<String, String>> {
+		match self.cache.write() {
+			Ok(guard) => guard,
+			Err(poisoned) => {
+				tracing::warn!(
+					"Query cache RwLock was poisoned on write, clearing cache to prevent corrupted data"
+				);
+				let mut guard = poisoned.into_inner();
+				guard.clear();
+				guard
+			}
+		}
 	}
 }
 
@@ -211,6 +254,19 @@ pub static QUERY_CACHE: Lazy<QueryCache> = Lazy::new(QueryCache::new);
 /// Global cache stats.
 pub static CACHE_STATS: Lazy<Arc<RwLock<CacheStatistics>>> =
 	Lazy::new(|| Arc::new(RwLock::new(CacheStatistics::new())));
+
+/// Acquire write lock on CACHE_STATS, clearing on poison
+fn acquire_stats_write_lock() -> RwLockWriteGuard<'static, CacheStatistics> {
+	match CACHE_STATS.write() {
+		Ok(guard) => guard,
+		Err(poisoned) => {
+			tracing::warn!("Cache statistics RwLock was poisoned, resetting statistics");
+			let mut guard = poisoned.into_inner();
+			guard.reset();
+			guard
+		}
+	}
+}
 
 // Type alias for lambda function
 type LambdaFunction = Box<dyn Fn() -> String + Send + Sync>;

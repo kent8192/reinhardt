@@ -5,7 +5,7 @@
 #[cfg(test)]
 mod tests {
 	use crate::config::schema::get_schema;
-	use async_graphql::Request;
+	use reinhardt::graphql::Request;
 
 	#[tokio::test]
 	async fn test_register_user() {

@@ -8,7 +8,8 @@ use serde_json::Value;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use tracing::warn;
 
 /// Error types for context operations
 #[derive(Debug, thiserror::Error)]
@@ -121,6 +122,38 @@ impl GraphQLContext {
 		}
 	}
 
+	/// Acquires a read lock on custom_data with poison recovery.
+	fn custom_data_read(&self) -> RwLockReadGuard<'_, HashMap<String, Value>> {
+		self.custom_data.read().unwrap_or_else(|e| {
+			warn!("custom_data RwLock was poisoned, recovering read lock");
+			e.into_inner()
+		})
+	}
+
+	/// Acquires a write lock on custom_data with poison recovery.
+	fn custom_data_write(&self) -> RwLockWriteGuard<'_, HashMap<String, Value>> {
+		self.custom_data.write().unwrap_or_else(|e| {
+			warn!("custom_data RwLock was poisoned, recovering write lock");
+			e.into_inner()
+		})
+	}
+
+	/// Acquires a read lock on data_loaders with poison recovery.
+	fn loaders_read(&self) -> RwLockReadGuard<'_, HashMap<TypeId, Box<dyn Any + Send + Sync>>> {
+		self.data_loaders.read().unwrap_or_else(|e| {
+			warn!("data_loaders RwLock was poisoned, recovering read lock");
+			e.into_inner()
+		})
+	}
+
+	/// Acquires a write lock on data_loaders with poison recovery.
+	fn loaders_write(&self) -> RwLockWriteGuard<'_, HashMap<TypeId, Box<dyn Any + Send + Sync>>> {
+		self.data_loaders.write().unwrap_or_else(|e| {
+			warn!("data_loaders RwLock was poisoned, recovering write lock");
+			e.into_inner()
+		})
+	}
+
 	/// Set custom data in the context
 	///
 	/// # Examples
@@ -135,7 +168,7 @@ impl GraphQLContext {
 	/// assert_eq!(context.get_data("user_id"), Some(json!("123")));
 	/// ```
 	pub fn set_data(&self, key: String, value: Value) {
-		let mut data = self.custom_data.write().unwrap();
+		let mut data = self.custom_data_write();
 		data.insert(key, value);
 	}
 
@@ -158,7 +191,7 @@ impl GraphQLContext {
 	/// assert_eq!(context.get_data("nonexistent"), None);
 	/// ```
 	pub fn get_data(&self, key: &str) -> Option<Value> {
-		let data = self.custom_data.read().unwrap();
+		let data = self.custom_data_read();
 		data.get(key).cloned()
 	}
 
@@ -208,7 +241,7 @@ impl GraphQLContext {
 	/// assert_eq!(context.get_data("temp"), None);
 	/// ```
 	pub fn remove_data(&self, key: &str) -> Option<Value> {
-		let mut data = self.custom_data.write().unwrap();
+		let mut data = self.custom_data_write();
 		data.remove(key)
 	}
 
@@ -230,7 +263,7 @@ impl GraphQLContext {
 	/// assert_eq!(context.get_data("key2"), None);
 	/// ```
 	pub fn clear_data(&self) {
-		let mut data = self.custom_data.write().unwrap();
+		let mut data = self.custom_data_write();
 		data.clear();
 	}
 
@@ -267,7 +300,7 @@ impl GraphQLContext {
 	/// assert!(retrieved.is_some());
 	/// ```
 	pub fn add_data_loader<T: DataLoader>(&self, loader: Arc<T>) {
-		let mut loaders = self.data_loaders.write().unwrap();
+		let mut loaders = self.loaders_write();
 		loaders.insert(TypeId::of::<T>(), Box::new(loader));
 	}
 
@@ -309,7 +342,7 @@ impl GraphQLContext {
 	/// assert!(retrieved.is_some());
 	/// ```
 	pub fn get_data_loader<T: DataLoader>(&self) -> Option<Arc<T>> {
-		let loaders = self.data_loaders.read().unwrap();
+		let loaders = self.loaders_read();
 		loaders
 			.get(&TypeId::of::<T>())
 			.and_then(|loader| loader.downcast_ref::<Arc<T>>().cloned())
@@ -395,7 +428,7 @@ impl GraphQLContext {
 	/// assert!(context.get_data_loader::<RemovableLoader>().is_none());
 	/// ```
 	pub fn remove_data_loader<T: DataLoader>(&self) {
-		let mut loaders = self.data_loaders.write().unwrap();
+		let mut loaders = self.loaders_write();
 		loaders.remove(&TypeId::of::<T>());
 	}
 
@@ -445,7 +478,7 @@ impl GraphQLContext {
 	/// assert!(context.get_data_loader::<Loader2>().is_none());
 	/// ```
 	pub fn clear_loaders(&self) {
-		let mut loaders = self.data_loaders.write().unwrap();
+		let mut loaders = self.loaders_write();
 		loaders.clear();
 	}
 }

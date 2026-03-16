@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-commands"
-version = "0.1.0-rc.8"
+version = "0.1.0-rc.11"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -101,6 +101,7 @@ full = [
   "reinhardt-db",
   "di",
   "openapi",
+  "openapi-router",
   "postgres",
   "sqlite",
   "mysql",

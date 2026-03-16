@@ -1,7 +1,7 @@
 name: Auto Label PR
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened, edited]
 
 permissions:
@@ -38,6 +38,10 @@ jobs:
               'ci': 'ci-cd',
               'style': 'code-quality',
               'security': 'security',
+              'chore': 'dependencies',
+              'build': 'ci-cd',
+              'deprecated': 'breaking-change',
+              'revert': 'bug',
             };
 
             const labelsToAdd = [];

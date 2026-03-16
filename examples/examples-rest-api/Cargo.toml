@@ -37,6 +37,11 @@ reqwest = { version = "0.12", features = ["json"] }
 testcontainers = "0.25.2"
 testcontainers-modules = { version = "0.13.0", features = [] }
 
+# Use reinhardt with test feature (NOT reinhardt-test sub-crate)
+[dev-dependencies.reinhardt]
+workspace = true
+features = ["minimal", "conf", "commands", "client-router", "admin", "test"]
+
 [features]
 default = ["with-reinhardt", "client-router"]
 with-reinhardt = []

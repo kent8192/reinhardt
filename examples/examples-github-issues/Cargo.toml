@@ -17,6 +17,12 @@ reinhardt = { workspace = true, features = [
 	"argon2-hasher",  # Required for DefaultUser
 	"client-router",  # Client-side routing support (required for #[routes] macro)
 	"conf",           # Settings configuration (DefaultSource, Settings, SettingsBuilder)
+	"commands",       # Management commands (runserver, etc.)
+	"admin",          # reinhardt::admin module, #[admin] macro
+	"database",       # #[model(...)] macro for projects/models.rs
+	"db-postgres",    # PostgreSQL backend for database models
+	"middleware",     # reinhardt::middleware module
+	"middleware-cors", # CorsMiddleware in middleware
 ] }
 clap = { version = "4", features = ["derive"] }
 console = "0.16.1"
@@ -43,7 +49,7 @@ argon2 = { version = "0.5", features = ["std"] }
 # Use reinhardt with test feature (NOT reinhardt-test sub-crate)
 [dev-dependencies.reinhardt]
 workspace = true
-features = ["minimal", "graphql", "auth-jwt", "argon2-hasher", "client-router", "test", "testcontainers"]
+features = ["minimal", "graphql", "auth-jwt", "argon2-hasher", "client-router", "conf", "commands", "admin", "database", "db-postgres", "middleware", "middleware-cors", "test", "testcontainers"]
 
 [features]
 default = ["client-router"]

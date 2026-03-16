@@ -16,6 +16,7 @@ reinhardt = { workspace = true, features = [
 	"auth-jwt",       # JWT authentication
 	"argon2-hasher",  # Required for DefaultUser
 	"client-router",  # Client-side routing support (required for #[routes] macro)
+	"conf",           # Settings configuration (DefaultSource, Settings, SettingsBuilder)
 ] }
 clap = { version = "4", features = ["derive"] }
 console = "0.16.1"

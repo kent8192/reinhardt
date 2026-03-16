@@ -18,29 +18,14 @@ jobs:
   # With release_always = false in release-plz.toml:
   # - Regular pushes: release-plz skips publishing (not from release PR)
   # - Release PR merge: release-plz detects release-plz-* branch and publishes
-
-  determine-runner:
-    name: Determine Runner
-    runs-on: ubuntu-latest
-    outputs:
-      runner: ${{ steps.set-runner.outputs.runner }}
-    steps:
-      - name: Set runner configuration
-        id: set-runner
-        env:
-          SELF_HOSTED_ENABLED: ${{ vars.SELF_HOSTED_ENABLED }}
-        run: |
-          if [[ "$SELF_HOSTED_ENABLED" == "true" ]]; then
-            echo 'runner=["self-hosted","linux","arm64","reinhardt-ci"]' >> "$GITHUB_OUTPUT"
-          else
-            echo 'runner="ubuntu-latest"' >> "$GITHUB_OUTPUT"
-          fi
+  #
+  # Runner: Always uses self-hosted AWS runner for release operations
+  # (faster builds, no disk space issues, no dpkg lock contention)
 
   release-plz-pr:
     name: Release PR
-    needs: [determine-runner]
     if: github.event_name == 'push'
-    runs-on: ${{ fromJSON(needs.determine-runner.outputs.runner) }}
+    runs-on: ["self-hosted","linux","arm64","reinhardt-ci"]
     timeout-minutes: 30
     concurrency:
       group: release-plz-${{ github.ref }}
@@ -52,18 +37,6 @@ jobs:
         with:
           app-id: ${{ secrets.RELEASE_PLZ_APP_ID }}
           private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
-
-      - name: Free Disk Space
-        if: ${{ !contains(needs.determine-runner.outputs.runner, 'self-hosted') }}
-        uses: jlumbroso/free-disk-space@v1.3.1
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
 
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -86,9 +59,8 @@ jobs:
 
   release-plz-release:
     name: Release
-    needs: [determine-runner]
     if: github.event_name == 'push'
-    runs-on: ${{ fromJSON(needs.determine-runner.outputs.runner) }}
+    runs-on: ["self-hosted","linux","arm64","reinhardt-ci"]
     timeout-minutes: 30
     concurrency:
       group: release-plz-release-${{ github.ref }}
@@ -100,18 +72,6 @@ jobs:
         with:
           app-id: ${{ secrets.RELEASE_PLZ_APP_ID }}
           private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
-
-      - name: Free Disk Space
-        if: ${{ !contains(needs.determine-runner.outputs.runner, 'self-hosted') }}
-        uses: jlumbroso/free-disk-space@v1.3.1
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
 
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -125,7 +85,6 @@ jobs:
         uses: ./.github/actions/setup-protoc
 
       - name: Install GitHub CLI (self-hosted)
-        if: ${{ contains(needs.determine-runner.outputs.runner, 'self-hosted') }}
         run: |
           if ! command -v gh &>/dev/null; then
             curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \

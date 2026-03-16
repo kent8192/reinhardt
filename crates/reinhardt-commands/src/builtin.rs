@@ -122,6 +122,7 @@ impl BaseCommand for MigrateCommand {
 				&& !database_url.starts_with("postgresql://")
 				&& !database_url.starts_with("sqlite://")
 				&& !database_url.starts_with("sqlite:")
+				&& !database_url.starts_with("mysql://")
 			{
 				return Err(crate::CommandError::ExecutionError(format!(
 					"Unsupported database URL scheme: {}",
@@ -132,7 +133,7 @@ impl BaseCommand for MigrateCommand {
 			// 4. Connect to database (auto-create if it doesn't exist for PostgreSQL)
 			// This is done before filtering migrations to ensure connection errors are detected
 			// even when no migrations need to be applied
-			let connection = if database_url.starts_with("postgres://")
+			let connection: DatabaseConnection = if database_url.starts_with("postgres://")
 				|| database_url.starts_with("postgresql://")
 			{
 				#[cfg(feature = "postgres")]
@@ -143,6 +144,17 @@ impl BaseCommand for MigrateCommand {
 				{
 					return Err(crate::CommandError::ExecutionError(
 						"PostgreSQL support not enabled. Enable 'postgres' feature.".to_string(),
+					));
+				}
+			} else if database_url.starts_with("mysql://") {
+				#[cfg(feature = "mysql")]
+				{
+					DatabaseConnection::connect_mysql(&database_url).await
+				}
+				#[cfg(not(feature = "mysql"))]
+				{
+					return Err(crate::CommandError::ExecutionError(
+						"MySQL support not enabled. Enable 'mysql' feature.".to_string(),
 					));
 				}
 			} else {

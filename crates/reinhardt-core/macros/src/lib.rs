@@ -637,6 +637,13 @@ pub fn derive_app_config(input: TokenStream) -> TokenStream {
 
 /// Collect migrations and register them with the global registry
 ///
+/// # Deprecated since 0.2.0
+///
+/// **This macro is deprecated.** Use [`FilesystemSource`] instead for loading migrations.
+/// `FilesystemSource` scans directories for `.rs` migration files and does not require
+/// compile-time registration. It is consistent with `manage migrate` behavior and
+/// works reliably in Cargo workspaces when using `env!("CARGO_MANIFEST_DIR")`.
+///
 /// This macro generates a `MigrationProvider` implementation and automatically
 /// registers it with the global migration registry using `linkme::distributed_slice`.
 ///
@@ -645,6 +652,7 @@ pub fn derive_app_config(input: TokenStream) -> TokenStream {
 /// - Each migration module must export a `migration()` function returning `Migration`
 /// - The crate must have `reinhardt-migrations` and `linkme` as dependencies
 ///
+/// [`FilesystemSource`]: reinhardt_db::migrations::FilesystemSource
 #[proc_macro]
 pub fn collect_migrations(input: TokenStream) -> TokenStream {
 	collect_migrations::collect_migrations_impl(input.into())

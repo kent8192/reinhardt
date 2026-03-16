@@ -24,11 +24,19 @@ impl FilesystemSource {
 	///
 	/// * `root_dir` - Root directory to scan for migration files
 	///
-	/// # Example
+	/// # Workspace Safety
+	///
+	/// When used in a Cargo workspace, relative paths are resolved from the
+	/// current working directory, which may differ depending on where `cargo`
+	/// commands are invoked. Use `env!("CARGO_MANIFEST_DIR")` for reliable paths:
 	///
 	/// ```rust,no_run
 	/// use reinhardt_db::migrations::FilesystemSource;
-	/// let source = FilesystemSource::new("./migrations");
+	///
+	/// // Workspace-safe: path is always relative to the crate's Cargo.toml
+	/// let source = FilesystemSource::new(
+	///     format!("{}/migrations", env!("CARGO_MANIFEST_DIR"))
+	/// );
 	/// ```
 	pub fn new<P: AsRef<Path>>(root_dir: P) -> Self {
 		Self {
@@ -116,6 +124,16 @@ impl FilesystemSource {
 impl MigrationSource for FilesystemSource {
 	async fn all_migrations(&self) -> Result<Vec<Migration>> {
 		let mut migrations = Vec::new();
+
+		// Warn when root directory does not exist (common with relative paths in workspaces)
+		if !self.root_dir.exists() {
+			tracing::warn!(
+				path = %self.root_dir.display(),
+				"Migration root directory does not exist. No migrations will be loaded. \
+				 Hint: Use `env!(\"CARGO_MANIFEST_DIR\")` for workspace-safe absolute paths."
+			);
+			return Ok(Vec::new());
+		}
 
 		// Walk directory tree to find all .rs files
 		for entry in walkdir::WalkDir::new(&self.root_dir)
@@ -465,6 +483,81 @@ pub fn migration() -> Migration {
 		);
 		assert_eq!(migrations[0].app_label, "polls");
 		assert_eq!(migrations[0].name, "0001_initial");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_source)]
+	async fn test_nonexistent_directory_returns_empty_with_warning() {
+		use std::sync::{Arc, Mutex};
+		use tracing_subscriber::layer::SubscriberExt as _;
+		use tracing_subscriber::util::SubscriberInitExt as _;
+
+		// Arrange
+		struct LogCapture {
+			logs: Arc<Mutex<Vec<String>>>,
+		}
+
+		impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for LogCapture {
+			fn on_event(
+				&self,
+				event: &tracing::Event<'_>,
+				_ctx: tracing_subscriber::layer::Context<'_, S>,
+			) {
+				struct MessageVisitor {
+					message: String,
+				}
+
+				impl tracing::field::Visit for MessageVisitor {
+					fn record_debug(
+						&mut self,
+						field: &tracing::field::Field,
+						value: &dyn std::fmt::Debug,
+					) {
+						if field.name() == "message" {
+							self.message = format!("{:?}", value);
+						}
+					}
+				}
+
+				let mut visitor = MessageVisitor {
+					message: String::new(),
+				};
+				event.record(&mut visitor);
+
+				let mut logs = self.logs.lock().unwrap();
+				logs.push(format!(
+					"[{}] {}",
+					event.metadata().level(),
+					visitor.message
+				));
+			}
+		}
+
+		let logs = Arc::new(Mutex::new(Vec::new()));
+		let capture = LogCapture { logs: logs.clone() };
+		let _guard = tracing_subscriber::registry().with(capture).set_default();
+
+		let source = FilesystemSource::new("/nonexistent/path/that/does/not/exist");
+
+		// Act
+		let migrations = source.all_migrations().await.unwrap();
+
+		// Assert
+		assert!(
+			migrations.is_empty(),
+			"Non-existent directory should return empty migrations"
+		);
+
+		let captured = logs.lock().unwrap();
+		let has_warning = captured
+			.iter()
+			.any(|log| log.contains("WARN") && log.contains("does not exist"));
+		assert!(
+			has_warning,
+			"Expected warning log for non-existent directory, but got: {:?}",
+			*captured
+		);
 	}
 
 	#[rstest]

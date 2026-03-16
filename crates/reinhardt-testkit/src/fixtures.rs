@@ -70,6 +70,7 @@ pub mod resources;
 pub mod shared_postgres;
 /// TestContainers setup and lifecycle management fixtures.
 #[cfg(feature = "testcontainers")]
+#[allow(deprecated)] // Module contains deprecated fixtures; suppress rstest-generated code warnings
 /// Docker container fixtures (PostgreSQL, Redis, CockroachDB) via TestContainers.
 pub mod testcontainers;
 
@@ -124,6 +125,7 @@ pub use server::graphql_server;
 
 // From testcontainers module (conditional on feature)
 #[cfg(feature = "testcontainers")]
+#[allow(deprecated)] // Re-exporting deprecated fixtures for backward compatibility
 pub use testcontainers::{
 	FileLockGuard, cockroachdb_container, create_test_any_pool, localstack_fixture,
 	mongodb_container, mysql_container, mysql_with_all_migrations, mysql_with_apps_migrations,

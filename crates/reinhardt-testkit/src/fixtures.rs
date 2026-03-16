@@ -131,9 +131,8 @@ pub use testcontainers::{
 	mongodb_container, mysql_container, mysql_with_all_migrations, mysql_with_apps_migrations,
 	mysql_with_migrations_from, postgres_container, postgres_with_all_migrations,
 	postgres_with_apps_migrations, postgres_with_migrations_from,
-	postgres_with_migrations_from_dir, rabbitmq_container,
-	redis_container, sqlite_with_all_migrations, sqlite_with_apps_migrations,
-	sqlite_with_migrations_from,
+	postgres_with_migrations_from_dir, rabbitmq_container, redis_container,
+	sqlite_with_all_migrations, sqlite_with_apps_migrations, sqlite_with_migrations_from,
 };
 
 // From shared_postgres module (conditional on feature)

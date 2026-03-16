@@ -1,0 +1,45 @@
+# Production Environment Settings for {{ project_name }}
+#
+# This file contains settings specific to the production environment.
+# Copy this file to production.toml and customize as needed.
+# The production.toml file is gitignored and should not be committed.
+#
+# SECURITY WARNING: Keep this file secure and never commit actual production settings!
+
+# Disable debug mode in production
+debug = false
+
+# Secret key (MUST be changed and kept secret!)
+# Generate a secure secret key using: reinhardt-admin generate-secret-key
+secret_key = "CHANGE_THIS_PRODUCTION_SECRET_KEY_MUST_BE_VERY_LONG_AND_RANDOM"
+
+# Allowed hosts for production
+allowed_hosts = ["example.com", "www.example.com"]
+
+# Database configuration for production
+[database]
+engine = "postgresql"
+host = "prod-db.example.com"
+port = 5432
+name = "{{ project_name }}_prod"
+user = "{{ project_name }}_user"
+password = "CHANGE_THIS_PRODUCTION_DB_PASSWORD"
+
+# Static files (served from CDN)
+[static]
+url = "https://cdn.example.com/static/"
+root = "/var/www/{{ project_name }}/staticfiles"
+
+# Media files (served from CDN or S3)
+[media]
+url = "https://cdn.example.com/media/"
+root = "/var/www/{{ project_name }}/media"
+
+# Security settings (strict for production)
+[security]
+session_cookie_secure = true
+csrf_cookie_secure = true
+secure_ssl_redirect = true
+secure_hsts_seconds = 31536000  # 1 year
+secure_hsts_include_subdomains = true
+secure_hsts_preload = true

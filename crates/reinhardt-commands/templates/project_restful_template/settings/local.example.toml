@@ -1,0 +1,34 @@
+# Local Development Settings for {{ project_name }}
+#
+# This file contains settings specific to local development environment.
+# Copy this file to local.toml and customize as needed.
+# The local.toml file is gitignored and should not be committed.
+
+# Enable debug mode for development
+debug = true
+
+# Secret key for development (NEVER use this in production!)
+secret_key = "local-development-secret-key-change-in-production"
+
+# Allow all hosts in development
+allowed_hosts = ["*"]
+
+# Database configuration for local development
+[database]
+engine = "postgresql"
+host = "localhost"
+port = 5432
+name = "{{ project_name }}_dev"
+user = "postgres"
+password = "postgres"
+
+# Alternatively, use SQLite for simpler local development:
+# [database]
+# engine = "sqlite"
+# name = "db.sqlite3"
+
+# Security settings (relaxed for development)
+[security]
+session_cookie_secure = false
+csrf_cookie_secure = false
+secure_ssl_redirect = false

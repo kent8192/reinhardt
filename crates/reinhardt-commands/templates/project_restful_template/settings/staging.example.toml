@@ -1,0 +1,42 @@
+# Staging Environment Settings for {{ project_name }}
+#
+# This file contains settings specific to the staging environment.
+# Copy this file to staging.toml and customize as needed.
+# The staging.toml file is gitignored and should not be committed.
+
+# Disable debug mode in staging
+debug = false
+
+# Secret key (MUST be changed and kept secret!)
+secret_key = "CHANGE_THIS_STAGING_SECRET_KEY"
+
+# Allowed hosts for staging
+allowed_hosts = ["staging.example.com", "*.staging.example.com"]
+
+# Database configuration for staging
+[database]
+engine = "postgresql"
+host = "staging-db.example.com"
+port = 5432
+name = "{{ project_name }}_staging"
+user = "{{ project_name }}_user"
+password = "CHANGE_THIS_STAGING_DB_PASSWORD"
+
+# Static files (typically served from CDN in staging)
+[static]
+url = "https://cdn-staging.example.com/static/"
+root = "/var/www/{{ project_name }}/staticfiles"
+
+# Media files
+[media]
+url = "https://cdn-staging.example.com/media/"
+root = "/var/www/{{ project_name }}/media"
+
+# Security settings (moderate for staging)
+[security]
+session_cookie_secure = true
+csrf_cookie_secure = true
+secure_ssl_redirect = true
+secure_hsts_seconds = 3600
+secure_hsts_include_subdomains = false
+secure_hsts_preload = false

@@ -21,6 +21,7 @@ reinhardt = { workspace = true, features = [
     "commands",      # Management commands
     "client-router", # Client-side routing support (required for #[routes] macro)
     "test",          # Test utilities (required for TestContainers and fixtures)
+    "testcontainers", # Required for postgres_container, ContainerAsync, GenericImage
     "conf",          # Settings configuration (DefaultSource, Settings, SettingsBuilder)
 ] }
 

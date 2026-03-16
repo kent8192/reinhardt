@@ -17,6 +17,7 @@ reinhardt = { workspace = true, features = [
     "conf",           # Settings configuration
     "commands",       # Management commands (runserver, etc.)
     "client-router",  # Client-side routing support (required for #[routes] macro)
+    "admin",          # Required for reinhardt::admin module and #[admin] macro
 ] }
 
 tokio = { version = "1.48.0", features = ["full"] }

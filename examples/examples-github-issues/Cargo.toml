@@ -14,6 +14,7 @@ reinhardt = { workspace = true, features = [
 	"minimal",        # Core HTTP/Routing/DI/Server
 	"graphql",        # GraphQL support
 	"auth-jwt",       # JWT authentication
+	"argon2-hasher",  # Required for DefaultUser
 	"client-router",  # Client-side routing support (required for #[routes] macro)
 	"conf",           # Settings configuration (DefaultSource, Settings, SettingsBuilder)
 ] }
@@ -42,7 +43,7 @@ argon2 = { version = "0.5", features = ["std"] }
 # Use reinhardt with test feature (NOT reinhardt-test sub-crate)
 [dev-dependencies.reinhardt]
 workspace = true
-features = ["minimal", "graphql", "auth-jwt", "client-router", "test", "testcontainers"]
+features = ["minimal", "graphql", "auth-jwt", "argon2-hasher", "client-router", "test", "testcontainers"]
 
 [features]
 default = ["client-router"]

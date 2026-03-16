@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.10...reinhardt-commands@v0.1.0-rc.11) - 2026-03-16
+
+### Documentation
+
+- *(reinhardt-commands)* document --force-empty-state flag and linkme dependency
+
+### Fixed
+
+- *(reinhardt-commands)* add mysql branch to migrate command connection logic
+
 ## [0.1.0-rc.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.9...reinhardt-commands@v0.1.0-rc.10) - 2026-03-15
 
 ### Fixed

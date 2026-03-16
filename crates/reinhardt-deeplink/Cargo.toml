@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-deeplink"
-version = "0.1.0-rc.10"
+version = "0.1.0-rc.11"
 edition.workspace = true
 license.workspace = true
 description = "Mobile app deep linking with iOS Universal Links, Android App Links, and custom URL schemes"

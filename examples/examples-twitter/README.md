@@ -363,7 +363,7 @@ async fn test_with_database(
 ```
 
 For comprehensive testing standards, see:
-- [Testing Standards](../../../docs/TESTING_STANDARDS.md)
+- [Testing Standards](../../../instructions/TESTING_STANDARDS.md)
 - [Examples Database Integration](../examples-database-integration/README.md)
 
 ## API Reference
@@ -792,8 +792,8 @@ CARGO_MANIFEST_DIR=$(pwd)/examples/examples-twitter \
 ## References
 
 - [Reinhardt Framework Documentation](https://docs.rs/reinhardt-web)
-- [Getting Started Guide](../../../docs/GETTING_STARTED.md)
-- [Testing Standards](../../../docs/TESTING_STANDARDS.md)
+- [Getting Started Guide](../../../instructions/GETTING_STARTED.md)
+- [Testing Standards](../../../instructions/TESTING_STANDARDS.md)
 - [Database Integration Example](../examples-database-integration/README.md)
 - [REST API Example](../examples-rest-api/README.md)
 

@@ -129,7 +129,7 @@ CHANGELOGs are generated from commit messages and categorized into sections base
 - Breaking changes are always included, even from otherwise-skipped commits
 - Commits are sorted in chronological order (oldest first)
 
-For detailed guidelines on writing CHANGELOG-friendly commit messages, see [docs/COMMIT_GUIDELINE.md](COMMIT_GUIDELINE.md) § CG: CHANGELOG Generation Guidelines.
+For detailed guidelines on writing CHANGELOG-friendly commit messages, see [instructions/COMMIT_GUIDELINE.md](COMMIT_GUIDELINE.md) § CG: CHANGELOG Generation Guidelines.
 
 ---
 

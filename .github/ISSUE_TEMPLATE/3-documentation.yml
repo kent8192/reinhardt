@@ -22,7 +22,7 @@ body:
     attributes:
       label: Documentation Location
       description: Where is the documentation issue located?
-      placeholder: "e.g., README.md, docs/MODULE_SYSTEM.md, or https://docs.rs/reinhardt-core"
+      placeholder: "e.g., README.md, instructions/MODULE_SYSTEM.md, or https://docs.rs/reinhardt-core"
     validations:
       required: true
 

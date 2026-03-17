@@ -271,7 +271,7 @@ Enable Dependabot alerts in your fork to receive automatic vulnerability notific
 
 ## Security-Related Resources
 
-- **Issue Guidelines**: docs/ISSUE_GUIDELINES.md (see Security Issues section)
+- **Issue Guidelines**: instructions/ISSUE_GUIDELINES.md (see Security Issues section)
 - **Contributing Guide**: CONTRIBUTING.md
 - **Code of Conduct**: CODE_OF_CONDUCT.md
 

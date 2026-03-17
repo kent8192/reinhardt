@@ -206,7 +206,9 @@ pub(crate) fn use_inject_impl(_args: TokenStream, input: ItemFn) -> Result<Token
 						"DI context not set on router. Creating empty fallback context. \
 						 Hint: Configure the router with .with_di_context() for proper dependency injection."
 					);
-					::std::sync::Arc::new(#di_crate::InjectionContext::new())
+					::std::sync::Arc::new(::std::sync::Arc::new(
+						#di_crate::InjectionContext::builder(#di_crate::SingletonScope::new()).build()
+					))
 				}
 			};
 		}

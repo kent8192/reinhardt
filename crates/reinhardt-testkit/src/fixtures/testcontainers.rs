@@ -1815,11 +1815,11 @@ pub async fn postgres_with_apps_migrations(
 }
 
 /// Helper function for creating a PostgreSQL container with migrations
-/// loaded from a filesystem directory via [`FilesystemSource`].
+/// loaded from a filesystem directory via `FilesystemSource`.
 ///
 /// This is the recommended approach for loading migrations in tests:
 /// - Consistent with `manage migrate` behavior
-/// - Does not require [`collect_migrations!`] macro registration
+/// - Does not require `collect_migrations!` macro registration
 /// - Works reliably in Cargo workspaces when using `env!("CARGO_MANIFEST_DIR")`
 ///
 /// # Arguments
@@ -1843,8 +1843,6 @@ pub async fn postgres_with_apps_migrations(
 /// }
 /// ```
 ///
-/// [`FilesystemSource`]: reinhardt_db::migrations::FilesystemSource
-/// [`collect_migrations!`]: reinhardt_macros::collect_migrations
 #[cfg(feature = "testcontainers")]
 pub async fn postgres_with_migrations_from_dir(
 	migrations_dir: impl AsRef<std::path::Path>,

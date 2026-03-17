@@ -134,6 +134,35 @@ impl MigrationNamer {
 		)
 	}
 
+	/// Generate merge migration name from conflicting leaf names
+	///
+	/// Combines leaf migration names into a merge name following Django conventions.
+	/// The format is `merge_{leaf1}_{leaf2}` with truncation if the name exceeds
+	/// `MAX_NAME_LENGTH`.
+	///
+	/// When the combined name is too long, it is truncated with `_and_more` suffix.
+	///
+	/// # Examples
+	///
+	/// ```rust
+	/// # use reinhardt_db::migrations::MigrationNamer;
+	/// let name = MigrationNamer::generate_merge_name(&["0002_add_field", "0002_add_index"]);
+	/// assert_eq!(name, "merge_0002_add_field_0002_add_index");
+	///
+	/// let name = MigrationNamer::generate_merge_name(&["0002_a", "0002_b", "0002_c"]);
+	/// assert_eq!(name, "merge_0002_a_0002_b_0002_c");
+	/// ```
+	pub fn generate_merge_name(leaf_names: &[&str]) -> String {
+		let combined = leaf_names.join("_");
+		let name = format!("merge_{}", combined);
+
+		if name.len() <= MAX_NAME_LENGTH {
+			name
+		} else {
+			Self::truncate_name(&name)
+		}
+	}
+
 	/// Truncate long migration name and append `_and_more`
 	///
 	/// Ensures the final name stays within `MAX_NAME_LENGTH` characters.
@@ -245,5 +274,62 @@ mod tests {
 		};
 
 		assert_eq!(result, exact_name);
+	}
+
+	#[test]
+	fn test_generate_merge_name_two_leaves() {
+		// Arrange
+		let leaves = &["0002_add_field", "0002_add_index"];
+
+		// Act
+		let name = MigrationNamer::generate_merge_name(leaves);
+
+		// Assert
+		assert_eq!(name, "merge_0002_add_field_0002_add_index");
+	}
+
+	#[test]
+	fn test_generate_merge_name_three_leaves() {
+		// Arrange
+		let leaves = &["0002_a", "0002_b", "0002_c"];
+
+		// Act
+		let name = MigrationNamer::generate_merge_name(leaves);
+
+		// Assert
+		assert_eq!(name, "merge_0002_a_0002_b_0002_c");
+	}
+
+	#[test]
+	fn test_generate_merge_name_truncation() {
+		// Arrange: create leaf names that when combined exceed MAX_NAME_LENGTH
+		let leaves = &[
+			"0002_very_long_migration_name_alpha",
+			"0002_very_long_migration_name_beta",
+		];
+
+		// Act
+		let name = MigrationNamer::generate_merge_name(leaves);
+
+		// Assert
+		assert!(
+			name.len() <= 52,
+			"Name should be within MAX_NAME_LENGTH, got len={}",
+			name.len()
+		);
+		assert!(name.starts_with("merge_"));
+		assert!(name.ends_with("_and_more"));
+	}
+
+	#[test]
+	fn test_generate_merge_name_single_leaf() {
+		// Arrange: edge case - single leaf (defensive)
+		let leaves = &["0002_add_field"];
+
+		// Act
+		let name = MigrationNamer::generate_merge_name(leaves);
+
+		// Assert
+		assert_eq!(name, "merge_0002_add_field");
 	}
 }

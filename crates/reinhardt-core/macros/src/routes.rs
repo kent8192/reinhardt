@@ -468,6 +468,9 @@ fn generate_view_type(
 				module_path: module_path!(),
 				request_body_type: #request_body_type,
 				request_content_type: #request_content_type,
+				responses: &[],
+				headers: &[],
+				security: &[],
 			}
 		}
 	};
@@ -751,6 +754,9 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 				module_path: module_path!(),
 				request_body_type: #request_body_type,
 				request_content_type: #request_content_type,
+				responses: &[],
+				headers: &[],
+				security: &[],
 			}
 		}
 	};

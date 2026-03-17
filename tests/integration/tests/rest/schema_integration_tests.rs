@@ -213,6 +213,9 @@ fn test_endpoint_inspector_uses_registered_schema() {
 		module_path: "users::views",
 		request_body_type: Some("CreateUserRequest"),
 		request_content_type: Some("application/json"),
+		responses: &[],
+		headers: &[],
+		security: &[],
 	};
 
 	assert_eq!(metadata.request_body_type, Some("CreateUserRequest"));
@@ -237,6 +240,9 @@ fn test_request_body_with_registered_schema() {
 		module_path: "users::views",
 		request_body_type: Some("CreateUserRequest"),
 		request_content_type: Some("application/json"),
+		responses: &[],
+		headers: &[],
+		security: &[],
 	};
 
 	// Verify POST should have request body
@@ -254,6 +260,9 @@ fn test_request_body_with_registered_schema() {
 		module_path: "users::views",
 		request_body_type: None,
 		request_content_type: None,
+		responses: &[],
+		headers: &[],
+		security: &[],
 	};
 
 	// Verify GET should not have request body

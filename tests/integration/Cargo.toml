@@ -105,6 +105,9 @@ async-trait = { workspace = true }
 # Temp files (used in migration_duplicate.rs)
 tempfile = { workspace = true }
 
+# CLI parsing (used in merge migration CLI tests)
+clap = { version = "4.5", features = ["derive"] }
+
 # Additional dependencies required by tests
 async-graphql = { workspace = true }
 base64 = { workspace = true }

@@ -137,7 +137,7 @@ impl MigrationNamer {
 	/// Generate merge migration name from conflicting leaf names
 	///
 	/// Combines leaf migration names into a merge name following Django conventions.
-	/// The format is `merge_{leaf1}_{leaf2}` with truncation if the name exceeds
+	/// The format is `merge_{leaf1}_{leaf2}` (sorted alphabetically) with truncation if the name exceeds
 	/// `MAX_NAME_LENGTH`.
 	///
 	/// When the combined name is too long, it is truncated with `_and_more` suffix.
@@ -153,7 +153,9 @@ impl MigrationNamer {
 	/// assert_eq!(name, "merge_0002_a_0002_b_0002_c");
 	/// ```
 	pub fn generate_merge_name(leaf_names: &[&str]) -> String {
-		let combined = leaf_names.join("_");
+		let mut sorted_names: Vec<&str> = leaf_names.to_vec();
+		sorted_names.sort();
+		let combined = sorted_names.join("_");
 		let name = format!("merge_{}", combined);
 
 		if name.len() <= MAX_NAME_LENGTH {
@@ -313,8 +315,9 @@ mod tests {
 
 		// Assert
 		assert!(
-			name.len() <= 52,
-			"Name should be within MAX_NAME_LENGTH, got len={}",
+			name.len() <= MAX_NAME_LENGTH,
+			"Name should be within MAX_NAME_LENGTH ({}), got len={}",
+			MAX_NAME_LENGTH,
 			name.len()
 		);
 		assert!(name.starts_with("merge_"));

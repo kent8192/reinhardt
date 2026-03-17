@@ -12,24 +12,22 @@
 # Django-style settings
 debug = false
 secret_key = "CHANGE_THIS_IN_PRODUCTION_MUST_BE_KEPT_SECRET"
+# Reserved: not yet consumed by the framework
 language_code = "en-us"
 time_zone = "UTC"
 use_i18n = true
 use_tz = true
 append_slash = true
+# Reserved: not yet consumed by the framework
 default_auto_field = "reinhardt.db.models.BigAutoField"
 
 # Allowed hosts (empty list allows all hosts in debug mode)
 allowed_hosts = []
 
 # Installed applications
-installed_apps = [
-    "reinhardt.contrib.contenttypes",
-    "reinhardt.contrib.auth",
-    "reinhardt.contrib.sessions",
-    "reinhardt.contrib.messages",
-    "reinhardt.contrib.static",
-]
+# Register your app configs here using the installed_apps! macro in your code.
+# Example: installed_apps![MyAppConfig, AnotherAppConfig]
+installed_apps = []
 
 # Database configuration
 [database]

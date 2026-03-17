@@ -504,4 +504,65 @@ mod tests {
 		// Undefined variables cause an error in Tera
 		assert!(result.is_err());
 	}
+
+	#[test]
+	fn test_to_example_context_applies_overrides() {
+		// Arrange
+		let mut ctx = TemplateContext::new();
+		ctx.insert("secret_key", "real-key").unwrap();
+		ctx.insert("project_name", "my_project").unwrap();
+		ctx.set_example_override("secret_key", "PLACEHOLDER").unwrap();
+
+		// Act
+		let example_ctx = ctx.to_example_context();
+
+		// Assert - example context should have override applied
+		let template_cmd = TemplateCommand::new();
+		let example_result = template_cmd
+			.render_template("{{ secret_key }}", &example_ctx)
+			.unwrap();
+		assert_eq!(example_result, "PLACEHOLDER");
+
+		// Assert - original context should retain real value
+		let real_result = template_cmd
+			.render_template("{{ secret_key }}", &ctx)
+			.unwrap();
+		assert_eq!(real_result, "real-key");
+
+		// Assert - non-overridden keys should be the same in both
+		let example_name = template_cmd
+			.render_template("{{ project_name }}", &example_ctx)
+			.unwrap();
+		let real_name = template_cmd
+			.render_template("{{ project_name }}", &ctx)
+			.unwrap();
+		assert_eq!(example_name, "my_project");
+		assert_eq!(real_name, "my_project");
+	}
+
+	#[test]
+	fn test_set_example_override_returns_ok() {
+		let mut ctx = TemplateContext::new();
+		let result = ctx.set_example_override("key", "value");
+		assert!(result.is_ok());
+	}
+
+	#[test]
+	fn test_example_context_with_no_overrides_is_identical() {
+		// Arrange
+		let mut ctx = TemplateContext::new();
+		ctx.insert("key", "value").unwrap();
+		// No overrides set
+
+		// Act
+		let example_ctx = ctx.to_example_context();
+
+		// Assert
+		let template_cmd = TemplateCommand::new();
+		let original = template_cmd.render_template("{{ key }}", &ctx).unwrap();
+		let example = template_cmd
+			.render_template("{{ key }}", &example_ctx)
+			.unwrap();
+		assert_eq!(original, example);
+	}
 }

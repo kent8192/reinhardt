@@ -335,4 +335,19 @@ mod tests {
 		// Assert
 		assert_eq!(name, "merge_0002_add_field");
 	}
+
+	#[test]
+	fn test_generate_merge_name_unsorted_input_produces_deterministic_output() {
+		// Arrange: intentionally unsorted input
+		let unsorted = &["0002_b", "0002_a"];
+		let sorted = &["0002_a", "0002_b"];
+
+		// Act
+		let name_from_unsorted = MigrationNamer::generate_merge_name(unsorted);
+		let name_from_sorted = MigrationNamer::generate_merge_name(sorted);
+
+		// Assert: both produce the same deterministic output
+		assert_eq!(name_from_unsorted, "merge_0002_a_0002_b");
+		assert_eq!(name_from_unsorted, name_from_sorted);
+	}
 }

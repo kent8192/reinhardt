@@ -76,7 +76,9 @@ fn test_merge_two_conflicting_branches() {
 	// Assert
 	assert_eq!(conflicts.len(), 1);
 	assert!(conflicts.contains_key("myapp"));
-	let leaves = &conflicts["myapp"];
+	let leaves = conflicts
+		.get("myapp")
+		.expect("expected conflicts for 'myapp', but none found");
 	assert_eq!(leaves.len(), 2);
 
 	// Verify merge migration can be created
@@ -114,7 +116,9 @@ fn test_merge_three_conflicting_branches() {
 
 	// Assert
 	assert_eq!(conflicts.len(), 1);
-	let leaves = &conflicts["myapp"];
+	let leaves = conflicts
+		.get("myapp")
+		.expect("expected conflicts for 'myapp', but none found");
 	assert_eq!(leaves.len(), 3);
 
 	// Verify merge has 3 dependencies
@@ -183,7 +187,9 @@ fn test_merge_dry_run() {
 
 	// Verify conflicts were detected
 	assert_eq!(conflicts.len(), 1);
-	let leaves = &conflicts["myapp"];
+	let leaves = conflicts
+		.get("myapp")
+		.expect("expected conflicts for 'myapp', but none found");
 	let leaf_names: Vec<&str> = leaves.iter().map(|k| k.name.as_str()).collect();
 	let merge_name = MigrationNamer::generate_merge_name(&leaf_names);
 	let migration_number = MigrationNumbering::next_number(&migrations_dir, "myapp");

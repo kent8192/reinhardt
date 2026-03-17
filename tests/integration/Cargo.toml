@@ -106,7 +106,7 @@ async-trait = { workspace = true }
 tempfile = { workspace = true }
 
 # CLI parsing (used in merge migration CLI tests)
-clap = { version = "4.5", features = ["derive"] }
+clap = { workspace = true }
 
 # Additional dependencies required by tests
 async-graphql = { workspace = true }

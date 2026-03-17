@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.11...reinhardt-commands@v0.1.0-rc.12) - 2026-03-17
+
+### Added
+
+- *(commands)* add --merge option to makemigrations command
+
+### Deprecated
+
+- *(conf)* mark Settings.installed_apps and related methods as deprecated
+
+### Testing
+
+- add tests for makemigrations --merge option
+
 ## [0.1.0-rc.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.10...reinhardt-commands@v0.1.0-rc.11) - 2026-03-16
 
 ### Documentation

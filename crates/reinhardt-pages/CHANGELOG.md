@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.11...reinhardt-pages@v0.1.0-rc.12) - 2026-03-17
+
+### Fixed
+
+- *(pages)* retain event handles in ElementBuilder::build()
+
 ## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.8...reinhardt-pages@v0.1.0-rc.9) - 2026-03-15
 
 ### Fixed

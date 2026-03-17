@@ -171,6 +171,7 @@ See instructions/DOCUMENTATION_STANDARDS.md for comprehensive documentation stan
 See instructions/GITHUB_INTERACTION.md for comprehensive GitHub interaction guidelines including:
 - Posting authorization policy (PP-1 ~ PP-3)
 - PR review response format (RR-1 ~ RR-3)
+- Copilot review handling (CR-1 ~ CR-5)
 - Issue discussion guidelines (ID-1 ~ ID-2)
 - Agent context provision (AC-1 ~ AC-2)
 
@@ -521,6 +522,9 @@ Before submitting code:
 - Use independent context (separate agent session) for agent re-evaluation of `agent-suspect` Issues
 - Obtain SP-6 approval before adding non-breaking APIs during RC phase (`enhancement` + `rc-addition` labels + maintainer approval)
 - Use three-dot diff (`main...branch`) for PR diff verification to exclude merge history noise
+- Evaluate, respond to, and resolve Copilot review comments after PR creation (CR-1 ~ CR-4)
+- Reply to every Copilot review thread before resolving it (no silent resolves)
+- Use GraphQL `resolveReviewThread` mutation to resolve Copilot review threads
 
 ### ❌ NEVER DO
 - Use `mod.rs` files (deprecated pattern)
@@ -589,6 +593,9 @@ Before submitting code:
 - Squash-merge the develop branch into `main` (DB-5)
 - Use the same agent context for both detection and verification of a bug
 - Use two-dot diff (`main..branch`) for PR verification (includes merge history noise)
+- Resolve Copilot review threads without posting a reply first
+- Poll in a loop waiting for Copilot review to appear
+- Dismiss valid Copilot review concerns without fixing the code
 
 ### 📚 Detailed Standards
 
@@ -604,6 +611,7 @@ For comprehensive guidelines, see:
 - **Issues**: instructions/ISSUE_GUIDELINES.md
 - **Issue Handling**: instructions/ISSUE_HANDLING.md
 - **GitHub Interactions**: instructions/GITHUB_INTERACTION.md
+- **Copilot Review Handling**: instructions/GITHUB_INTERACTION.md (CR-1 ~ CR-5)
 - **GitHub Discussions**: https://github.com/kent8192/reinhardt-web/discussions
 - **Security Policy**: SECURITY.md
 - **Code of Conduct**: CODE_OF_CONDUCT.md

@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.11...reinhardt-web@v0.1.0-rc.12) - 2026-03-17
+
+### Added
+
+- *(testkit)* add postgres_with_migrations_from_dir helper using FilesystemSource
+- *(di)* add Option<T> blanket Injectable impl for optional injection
+- *(core)* auto-detect #[inject] without requiring use_inject = true
+- *(auth)* add AuthInfo lightweight auth extractor
+- *(auth)* add AuthUser<U> extractor with tuple struct destructuring
+- *(auth)* add validate_auth_extractors startup DI validation
+
+### Changed
+
+- *(auth)* update re-exports and suppress deprecation warnings
+
+### Deprecated
+
+- *(testkit)* deprecate global_registry-based migration fixtures
+- *(core)* deprecate collect_migrations! macro in favor of FilesystemSource
+
+### Documentation
+
+- add draft PR conversion protection policy
+- add ergonomic auth extractors design spec
+
+### Fixed
+
+- *(auth)* remove Uuid::nil() fallback on user_id parse failure
+
+### Styling
+
+- *(testkit)* apply auto-fix formatting to fixtures re-export
+
 ## [0.1.0-rc.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.10...reinhardt-web@v0.1.0-rc.11) - 2026-03-16
 
 ### Fixed

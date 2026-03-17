@@ -597,12 +597,12 @@ All GitHub comments posted by Claude Code MUST include the following footer:
 
 ## Related Documentation
 
-- **Pull Request Guidelines**: docs/PR_GUIDELINE.md
-- **Issue Guidelines**: docs/ISSUE_GUIDELINES.md
-- **Commit Guidelines**: docs/COMMIT_GUIDELINE.md
-- **Documentation Standards**: docs/DOCUMENTATION_STANDARDS.md
+- **Pull Request Guidelines**: instructions/PR_GUIDELINE.md
+- **Issue Guidelines**: instructions/ISSUE_GUIDELINES.md
+- **Commit Guidelines**: instructions/COMMIT_GUIDELINE.md
+- **Documentation Standards**: instructions/DOCUMENTATION_STANDARDS.md
 - **Main Quick Reference**: CLAUDE.md (see Quick Reference section)
 
 ---
 
-**Note**: This document focuses on commenting and interacting with existing PRs and Issues. For creating PRs, see docs/PR_GUIDELINE.md. For creating Issues, see docs/ISSUE_GUIDELINES.md.
+**Note**: This document focuses on commenting and interacting with existing PRs and Issues. For creating PRs, see instructions/PR_GUIDELINE.md. For creating Issues, see instructions/ISSUE_GUIDELINES.md.

@@ -322,9 +322,11 @@ impl ElementBuilder {
 	/// let element = div().class("container").build();
 	/// ```
 	pub fn build(self) -> Element {
-		// Event handles are dropped here, but they're owned by the element
-		// through the closure's captured state. This is safe.
-		self.element
+		let mut element = self.element;
+		// Transfer event handle ownership to the Element so listeners
+		// remain active for the lifetime of the Element.
+		element.store_event_handles(self.event_handles);
+		element
 	}
 }
 
@@ -1001,3 +1003,29 @@ define_element!(
 	/// JavaScript.
 	template, "template"
 );
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use wasm_bindgen_test::*;
+
+	wasm_bindgen_test_configure!(run_in_browser);
+
+	#[wasm_bindgen_test]
+	fn test_build_retains_event_handles() {
+		// Arrange
+		let element = button().on_click(|| {}).on_click(|| {}).build();
+
+		// Assert: event handles should be transferred to the Element
+		assert_eq!(element.event_handle_count(), 2);
+	}
+
+	#[wasm_bindgen_test]
+	fn test_build_without_events_has_zero_handles() {
+		// Arrange & Act
+		let element = div().class("container").build();
+
+		// Assert
+		assert_eq!(element.event_handle_count(), 0);
+	}
+}

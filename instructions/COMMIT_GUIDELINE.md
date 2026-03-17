@@ -192,7 +192,7 @@ sequenceDiagram
 
 **For Detailed Information:**
 
-See [docs/RELEASE_PROCESS.md](RELEASE_PROCESS.md) for complete release workflow documentation
+See [instructions/RELEASE_PROCESS.md](RELEASE_PROCESS.md) for complete release workflow documentation
 
 ---
 

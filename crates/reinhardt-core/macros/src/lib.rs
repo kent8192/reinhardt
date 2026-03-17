@@ -639,7 +639,7 @@ pub fn derive_app_config(input: TokenStream) -> TokenStream {
 ///
 /// # Deprecated since 0.2.0
 ///
-/// **This macro is deprecated.** Use [`FilesystemSource`] instead for loading migrations.
+/// **This macro is deprecated.** Use `FilesystemSource` instead for loading migrations.
 /// `FilesystemSource` scans directories for `.rs` migration files and does not require
 /// compile-time registration. It is consistent with `manage migrate` behavior and
 /// works reliably in Cargo workspaces when using `env!("CARGO_MANIFEST_DIR")`.
@@ -652,7 +652,6 @@ pub fn derive_app_config(input: TokenStream) -> TokenStream {
 /// - Each migration module must export a `migration()` function returning `Migration`
 /// - The crate must have `reinhardt-migrations` and `linkme` as dependencies
 ///
-/// [`FilesystemSource`]: reinhardt_db::migrations::FilesystemSource
 #[proc_macro]
 pub fn collect_migrations(input: TokenStream) -> TokenStream {
 	collect_migrations::collect_migrations_impl(input.into())

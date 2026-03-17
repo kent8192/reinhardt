@@ -44,6 +44,8 @@ fn safe_client_error_detail(error: &crate::Error) -> Option<String> {
 	use crate::Error;
 	match error {
 		Error::Validation(msg) => Some(msg.clone()),
+		Error::Http(msg) => Some(msg.clone()),
+		Error::Serialization(msg) => Some(msg.clone()),
 		Error::ParseError(_) => Some("Invalid request format".to_string()),
 		Error::BodyAlreadyConsumed => Some("Request body has already been consumed".to_string()),
 		Error::MissingContentType => Some("Missing Content-Type header".to_string()),

@@ -13,7 +13,7 @@ mod schema;
 mod serde_attrs;
 
 use crate::crate_paths::get_reinhardt_openapi_crate;
-use schema::{FieldAttributes, extract_field_attributes};
+use schema::{FieldAttributes, extract_container_attributes, extract_field_attributes};
 use serde_attrs::{
 	TaggingStrategy, extract_serde_enum_attrs, extract_serde_rename_all,
 	extract_serde_variant_attrs,
@@ -29,8 +29,10 @@ use serde_attrs::{
 /// ## Container Attributes
 ///
 /// - `#[schema(title = "...")]` - Override the schema title (default: type name)
-/// - `#[schema(description = "...")]` - Schema description
+/// - `#[schema(description = "...")]` - Schema description (overrides doc comments)
 /// - `#[schema(example = "...")]` - Example value for the entire type
+/// - `#[schema(deprecated)]` - Mark the entire type as deprecated
+/// - `#[schema(nullable)]` - Allow null values
 ///
 /// ## Field Attributes (for structs)
 ///
@@ -41,11 +43,20 @@ use serde_attrs::{
 /// - `#[schema(read_only)]` - Field is read-only (GET responses only)
 /// - `#[schema(write_only)]` - Field is write-only (POST/PUT requests only)
 /// - `#[schema(format = "...")]` - OpenAPI format (e.g., "email", "uri", "date-time")
-/// - `#[schema(minimum = N)]` - Minimum value for numbers
-/// - `#[schema(maximum = N)]` - Maximum value for numbers
-/// - `#[schema(min_length = N)]` - Minimum length for strings/arrays
-/// - `#[schema(max_length = N)]` - Maximum length for strings/arrays
+/// - `#[schema(minimum = N)]` - Minimum value for numbers (inclusive)
+/// - `#[schema(maximum = N)]` - Maximum value for numbers (inclusive)
+/// - `#[schema(exclusive_minimum = N)]` - Minimum value for numbers (exclusive)
+/// - `#[schema(exclusive_maximum = N)]` - Maximum value for numbers (exclusive)
+/// - `#[schema(multiple_of = N)]` - Value must be a multiple of N
+/// - `#[schema(min_length = N)]` - Minimum length for strings
+/// - `#[schema(max_length = N)]` - Maximum length for strings
 /// - `#[schema(pattern = "...")]` - Regex pattern for string validation
+/// - `#[schema(min_items = N)]` - Minimum number of array items
+/// - `#[schema(max_items = N)]` - Maximum number of array items
+/// - `#[schema(unique_items)]` - Array items must be unique
+/// - `#[schema(nullable)]` - Field allows null values
+/// - `#[schema(default_value = "...")]` - Default value (JSON string)
+/// - `#[schema(title = "...")]` - Field-level title override
 ///
 /// # Enum Support
 ///
@@ -96,6 +107,10 @@ fn derive_struct_schema(input: &DeriveInput, data: &syn::DataStruct) -> TokenStr
 
 	// Extract container-level attributes
 	let struct_name = name.to_string();
+	let container_attrs = match extract_container_attributes(&input.attrs) {
+		Ok(attrs) => attrs,
+		Err(err) => return err.to_compile_error().into(),
+	};
 
 	// Extract container-level rename_all for field name transformation
 	// Fixes #835
@@ -174,6 +189,9 @@ fn derive_struct_schema(input: &DeriveInput, data: &syn::DataStruct) -> TokenStr
 	// Get dynamic crate path
 	let openapi_crate = get_reinhardt_openapi_crate();
 
+	// Generate container attribute modifications
+	let container_mods = generate_container_modifications(&container_attrs, &openapi_crate);
+
 	// Fixes #839: Generate allOf if there are flattened fields
 	let schema_body = if !flatten_schemas.is_empty() {
 		quote! {
@@ -194,7 +212,9 @@ fn derive_struct_schema(input: &DeriveInput, data: &syn::DataStruct) -> TokenStr
 			all_of_builder = all_of_builder.item(#openapi_crate::RefOr::T(main_schema));
 			#(all_of_builder = all_of_builder.item(#openapi_crate::RefOr::T(#flatten_schemas));)*
 
-			Schema::AllOf(all_of_builder.build())
+			let mut schema = Schema::AllOf(all_of_builder.build());
+			#container_mods
+			schema
 		}
 	} else {
 		quote! {
@@ -207,7 +227,9 @@ fn derive_struct_schema(input: &DeriveInput, data: &syn::DataStruct) -> TokenStr
 			#(#field_schemas)*
 			#required_builder
 
-			Schema::Object(builder.build())
+			let mut schema = Schema::Object(builder.build());
+			#container_mods
+			schema
 		}
 	};
 
@@ -252,6 +274,12 @@ fn derive_enum_schema(input: &DeriveInput, data: &syn::DataEnum) -> TokenStream 
 	let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 	let enum_name = name.to_string();
 
+	// Extract container-level attributes
+	let container_attrs = match extract_container_attributes(&input.attrs) {
+		Ok(attrs) => attrs,
+		Err(err) => return err.to_compile_error().into(),
+	};
+
 	// Extract serde enum attributes for tagging strategy
 	let serde_attrs = extract_serde_enum_attrs(&input.attrs);
 	let tagging = serde_attrs.tagging_strategy();
@@ -265,12 +293,25 @@ fn derive_enum_schema(input: &DeriveInput, data: &syn::DataEnum) -> TokenStream 
 		.iter()
 		.all(|v| matches!(v.fields, Fields::Unit));
 
+	// Generate container attribute modifications
+	let container_mods = generate_container_modifications(&container_attrs, &openapi_crate);
+
 	let schema_body = if all_unit_variants && matches!(tagging, TaggingStrategy::External) {
 		// Simple string enum: generate string schema with enum values
-		generate_simple_enum_schema(data, &openapi_crate, &serde_attrs)
+		let base = generate_simple_enum_schema(data, &openapi_crate, &serde_attrs);
+		quote! {
+			let mut schema = { #base };
+			#container_mods
+			schema
+		}
 	} else {
 		// Complex enum: use EnumSchemaBuilder
-		generate_complex_enum_schema(data, &openapi_crate, &enum_name, &tagging)
+		let base = generate_complex_enum_schema(data, &openapi_crate, &enum_name, &tagging);
+		quote! {
+			let mut schema = { #base };
+			#container_mods
+			schema
+		}
 	};
 
 	// Generate inventory registration only for non-generic types
@@ -302,6 +343,63 @@ fn derive_enum_schema(input: &DeriveInput, data: &syn::DataEnum) -> TokenStream 
 	};
 
 	TokenStream::from(expanded)
+}
+
+/// Generate code to apply container-level attributes to a schema
+fn generate_container_modifications(
+	attrs: &schema::ContainerAttributes,
+	openapi_crate: &proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+	let mut mods = Vec::new();
+
+	if let Some(ref title) = attrs.title {
+		mods.push(quote! {
+			if let Schema::Object(ref mut obj) = schema {
+				obj.title = Some(#title.to_string());
+			}
+		});
+	}
+
+	if let Some(ref description) = attrs.description {
+		mods.push(quote! {
+			if let Schema::Object(ref mut obj) = schema {
+				obj.description = Some(#description.to_string());
+			}
+		});
+	}
+
+	if let Some(ref example) = attrs.example {
+		mods.push(quote! {
+			if let Schema::Object(ref mut obj) = schema {
+				obj.example = Some(serde_json::json!(#example));
+			}
+		});
+	}
+
+	if attrs.deprecated {
+		mods.push(quote! {
+			if let Schema::Object(ref mut obj) = schema {
+				obj.deprecated = Some(#openapi_crate::utoipa::openapi::Deprecated::True);
+			}
+		});
+	}
+
+	if attrs.nullable {
+		mods.push(quote! {
+			if let Schema::Object(ref mut obj) = schema {
+				use #openapi_crate::utoipa::openapi::schema::{SchemaType, Type};
+				obj.schema_type = SchemaType::from_iter([Type::Object, Type::Null]);
+			}
+		});
+	}
+
+	if mods.is_empty() {
+		quote! {}
+	} else {
+		quote! {
+			#(#mods)*
+		}
+	}
 }
 
 /// Generate schema for simple unit-variant enums (string enum)
@@ -574,101 +672,176 @@ fn build_field_schema(field_type: &syn::Type, attrs: &FieldAttributes) -> proc_m
 	// Build schema with attributes applied
 	let mut modifications = Vec::new();
 
+	if let Some(ref title) = attrs.title {
+		modifications.push(quote! {
+			if let Schema::Object(ref mut obj) = schema {
+				obj.title = Some(#title.to_string());
+			}
+		});
+	}
+
 	if let Some(ref description) = attrs.description {
 		modifications.push(quote! {
-			if let Schema::Object(mut obj) = schema {
+			if let Schema::Object(ref mut obj) = schema {
 				obj.description = Some(#description.to_string());
-				schema = Schema::Object(obj);
 			}
 		});
 	}
 
 	if let Some(ref example) = attrs.example {
 		modifications.push(quote! {
-			if let Schema::Object(mut obj) = schema {
+			if let Schema::Object(ref mut obj) = schema {
 				obj.example = Some(serde_json::json!(#example));
-				schema = Schema::Object(obj);
 			}
 		});
 	}
 
 	if let Some(ref format) = attrs.format {
 		modifications.push(quote! {
-			if let Schema::Object(mut obj) = schema {
+			if let Schema::Object(ref mut obj) = schema {
 				obj.format = Some(#openapi_crate::utoipa::openapi::schema::SchemaFormat::Custom(#format.to_string()));
-				schema = Schema::Object(obj);
 			}
 		});
 	}
 
 	if attrs.read_only {
 		modifications.push(quote! {
-			if let Schema::Object(mut obj) = schema {
+			if let Schema::Object(ref mut obj) = schema {
 				obj.read_only = Some(true);
-				schema = Schema::Object(obj);
 			}
 		});
 	}
 
 	if attrs.write_only {
 		modifications.push(quote! {
-			if let Schema::Object(mut obj) = schema {
+			if let Schema::Object(ref mut obj) = schema {
 				obj.write_only = Some(true);
-				schema = Schema::Object(obj);
 			}
 		});
 	}
 
 	if attrs.deprecated {
 		modifications.push(quote! {
-			if let Schema::Object(mut obj) = schema {
+			if let Schema::Object(ref mut obj) = schema {
 				obj.deprecated = Some(#openapi_crate::utoipa::openapi::Deprecated::True);
-				schema = Schema::Object(obj);
 			}
 		});
 	}
 
 	if let Some(min) = attrs.minimum {
 		modifications.push(quote! {
-			if let Schema::Object(mut obj) = schema {
+			if let Schema::Object(ref mut obj) = schema {
 				obj.minimum = Some(#openapi_crate::utoipa::Number::from(#min as f64));
-				schema = Schema::Object(obj);
 			}
 		});
 	}
 
 	if let Some(max) = attrs.maximum {
 		modifications.push(quote! {
-			if let Schema::Object(mut obj) = schema {
+			if let Schema::Object(ref mut obj) = schema {
 				obj.maximum = Some(#openapi_crate::utoipa::Number::from(#max as f64));
-				schema = Schema::Object(obj);
+			}
+		});
+	}
+
+	if let Some(ex_min) = attrs.exclusive_minimum {
+		modifications.push(quote! {
+			if let Schema::Object(ref mut obj) = schema {
+				obj.exclusive_minimum = Some(#openapi_crate::utoipa::Number::from(#ex_min as f64));
+			}
+		});
+	}
+
+	if let Some(ex_max) = attrs.exclusive_maximum {
+		modifications.push(quote! {
+			if let Schema::Object(ref mut obj) = schema {
+				obj.exclusive_maximum = Some(#openapi_crate::utoipa::Number::from(#ex_max as f64));
+			}
+		});
+	}
+
+	if let Some(mul) = attrs.multiple_of {
+		modifications.push(quote! {
+			if let Schema::Object(ref mut obj) = schema {
+				obj.multiple_of = Some(#openapi_crate::utoipa::Number::from(#mul));
 			}
 		});
 	}
 
 	if let Some(min_len) = attrs.min_length {
 		modifications.push(quote! {
-			if let Schema::Object(mut obj) = schema {
+			if let Schema::Object(ref mut obj) = schema {
 				obj.min_length = Some(#min_len);
-				schema = Schema::Object(obj);
 			}
 		});
 	}
 
 	if let Some(max_len) = attrs.max_length {
 		modifications.push(quote! {
-			if let Schema::Object(mut obj) = schema {
+			if let Schema::Object(ref mut obj) = schema {
 				obj.max_length = Some(#max_len);
-				schema = Schema::Object(obj);
 			}
 		});
 	}
 
 	if let Some(ref pattern) = attrs.pattern {
 		modifications.push(quote! {
-			if let Schema::Object(mut obj) = schema {
+			if let Schema::Object(ref mut obj) = schema {
 				obj.pattern = Some(#pattern.to_string());
-				schema = Schema::Object(obj);
+			}
+		});
+	}
+
+	if let Some(min_items) = attrs.min_items {
+		modifications.push(quote! {
+			if let Schema::Array(ref mut arr) = schema {
+				arr.min_items = Some(#min_items);
+			}
+		});
+	}
+
+	if let Some(max_items) = attrs.max_items {
+		modifications.push(quote! {
+			if let Schema::Array(ref mut arr) = schema {
+				arr.max_items = Some(#max_items);
+			}
+		});
+	}
+
+	if attrs.unique_items {
+		modifications.push(quote! {
+			if let Schema::Array(ref mut arr) = schema {
+				arr.unique_items = true;
+			}
+		});
+	}
+
+	if attrs.nullable {
+		modifications.push(quote! {
+			if let Schema::Object(ref mut obj) = schema {
+				use #openapi_crate::utoipa::openapi::schema::SchemaType;
+				// Preserve the existing type and add Null
+				let existing_type = std::mem::replace(
+					&mut obj.schema_type,
+					SchemaType::AnyValue,
+				);
+				match existing_type {
+					SchemaType::Type(t) => {
+						use #openapi_crate::utoipa::openapi::schema::Type;
+						obj.schema_type = SchemaType::from_iter([t, Type::Null]);
+					}
+					other => {
+						obj.schema_type = other;
+					}
+				}
+			}
+		});
+	}
+
+	if let Some(ref default_value) = attrs.default_value {
+		modifications.push(quote! {
+			if let Schema::Object(ref mut obj) = schema {
+				obj.default = Some(serde_json::json!(#default_value));
 			}
 		});
 	}
@@ -678,6 +851,7 @@ fn build_field_schema(field_type: &syn::Type, attrs: &FieldAttributes) -> proc_m
 	} else {
 		quote! {
 			{
+				use #openapi_crate::Schema;
 				let mut schema = #base_schema;
 				#(#modifications)*
 				schema

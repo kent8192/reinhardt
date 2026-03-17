@@ -31,10 +31,29 @@ use crate::reactive::{Effect, Signal};
 ///
 /// This struct provides a safe, ergonomic API for DOM manipulation while
 /// maintaining compatibility with the underlying web-sys types.
-#[derive(Clone)]
 pub struct Element {
 	/// The underlying web-sys Element
 	inner: web_sys::Element,
+	/// Event handles for RAII cleanup
+	///
+	/// These handles keep event listeners alive as long as the Element exists.
+	/// When the Element is dropped, the handles are dropped too, automatically
+	/// removing the event listeners from the DOM.
+	event_handles: Vec<EventHandle>,
+}
+
+impl Clone for Element {
+	/// Clone the element reference without cloning event handles.
+	///
+	/// Cloned elements share the same underlying DOM element but do not
+	/// take ownership of event handles. The original Element retains
+	/// ownership of all event handles.
+	fn clone(&self) -> Self {
+		Self {
+			inner: self.inner.clone(),
+			event_handles: Vec::new(),
+		}
+	}
 }
 
 impl Element {
@@ -54,7 +73,10 @@ impl Element {
 	/// let element = Element::new(web_element);
 	/// ```
 	pub fn new(element: web_sys::Element) -> Self {
-		Self { inner: element }
+		Self {
+			inner: element,
+			event_handles: Vec::new(),
+		}
 	}
 
 	/// Get a reference to the underlying web-sys Element
@@ -67,6 +89,23 @@ impl Element {
 	/// Consume self and return the underlying web-sys Element
 	pub fn into_web_sys(self) -> web_sys::Element {
 		self.inner
+	}
+
+	/// Store event handles to keep event listeners alive.
+	///
+	/// Event handles use RAII to automatically remove event listeners when
+	/// dropped. By storing them in the Element, the listeners remain active
+	/// as long as the Element itself is alive.
+	pub fn store_event_handles(&mut self, handles: Vec<EventHandle>) {
+		self.event_handles.extend(handles);
+	}
+
+	/// Get the number of stored event handles.
+	///
+	/// Useful for verifying that event handles have been properly transferred
+	/// to the element.
+	pub fn event_handle_count(&self) -> usize {
+		self.event_handles.len()
 	}
 
 	/// Set an attribute on this element

@@ -627,9 +627,11 @@ pub use reinhardt_urls::routers::Path as ClientPath;
 
 // Re-export auth
 #[cfg(all(feature = "auth", not(target_arch = "wasm32")))]
+#[allow(deprecated)] // CurrentUser is deprecated in favor of AuthUser
 pub use reinhardt_auth::{
-	AllowAny, AnonymousUser, AuthBackend, BaseUser, CurrentUser, DefaultUser, FullUser,
-	IsAdminUser, IsAuthenticated, PasswordHasher, Permission, PermissionsMixin, SimpleUser, User,
+	AllowAny, AnonymousUser, AuthBackend, AuthInfo, AuthUser, BaseUser, CurrentUser, DefaultUser,
+	FullUser, IsAdminUser, IsAuthenticated, PasswordHasher, Permission, PermissionsMixin,
+	SimpleUser, User, validate_auth_extractors,
 };
 
 #[cfg(all(

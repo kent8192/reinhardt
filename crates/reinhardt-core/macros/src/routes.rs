@@ -653,14 +653,9 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 	// Detect inject params (always detect for error checking)
 	let all_inject_params = detect_inject_params(&input.sig.inputs);
 
-	// Error if use_inject = false and #[inject] parameters exist
+	// Auto-enable injection when #[inject] attributes are present
 	if !options.use_inject && !all_inject_params.is_empty() {
-		let first_inject = &all_inject_params[0];
-		return Err(Error::new_spanned(
-			&first_inject.pat,
-			"#[inject] attribute requires use_inject = true option. \
-			 Usage: #[get(\"/path\", use_inject = true)]",
-		));
+		options.use_inject = true;
 	}
 
 	// Use inject params only when use_inject = true

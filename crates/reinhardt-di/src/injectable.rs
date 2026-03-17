@@ -102,3 +102,49 @@ where
 		T::inject_uncached(ctx).await.map(std::sync::Arc::new)
 	}
 }
+
+/// Blanket implementation of Injectable for `Option<T>`
+///
+/// This allows optional injection where failure results in `None`
+/// instead of an error. Useful for endpoints that serve both
+/// authenticated and anonymous users.
+///
+/// # Security Note
+///
+/// `Option<T>` swallows ALL injection errors into `None`.
+/// For security-critical endpoints, use `T` directly to ensure
+/// errors are surfaced as HTTP 401/500.
+///
+/// ```ignore
+/// # use reinhardt_di::Injectable;
+/// # struct AuthInfo;
+/// # struct Response;
+/// # type ViewResult<T> = Result<T, Box<dyn std::error::Error>>;
+/// # use reinhardt_core::endpoint;
+/// #[endpoint]
+/// async fn handler(
+///     #[inject] auth: Option<AuthInfo>,
+/// ) -> ViewResult<Response> {
+///     // auth is None if not authenticated
+/// #   Ok(Response)
+/// }
+/// ```
+#[async_trait::async_trait]
+impl<T> Injectable for Option<T>
+where
+	T: Injectable + Clone + Send + Sync + 'static,
+{
+	async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
+		match T::inject(ctx).await {
+			Ok(value) => Ok(Some(value)),
+			Err(_) => Ok(None),
+		}
+	}
+
+	async fn inject_uncached(ctx: &InjectionContext) -> DiResult<Self> {
+		match T::inject_uncached(ctx).await {
+			Ok(value) => Ok(Some(value)),
+			Err(_) => Ok(None),
+		}
+	}
+}

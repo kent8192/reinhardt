@@ -185,6 +185,18 @@ pub enum Commands {
 		names: bool,
 	},
 
+	/// Output structured project metadata for platform introspection
+	#[cfg(feature = "introspect")]
+	Introspect {
+		/// Output format: yaml (default) or json
+		#[arg(short = 'f', long, default_value = "yaml")]
+		format: String,
+
+		/// Output only a specific section (app, databases, routes, middleware, settings, features)
+		#[arg(short = 's', long)]
+		section: Option<String>,
+	},
+
 	/// Generate OpenAPI 3.0 schema from registered endpoints
 	#[cfg(feature = "openapi")]
 	Generateopenapi {
@@ -258,6 +270,8 @@ fn requires_router(command: &Commands) -> bool {
 		Commands::Runserver { .. } => true,
 		#[cfg(feature = "routers")]
 		Commands::Showurls { .. } => true,
+		#[cfg(feature = "introspect")]
+		Commands::Introspect { .. } => true,
 		#[cfg(feature = "openapi")]
 		Commands::Generateopenapi { .. } => true,
 		_ => false,
@@ -355,6 +369,8 @@ pub async fn run_command(
 			ignore,
 		} => execute_collectstatic(clear, no_input, dry_run, link, ignore, verbosity).await,
 		Commands::Showurls { names } => execute_showurls(names, verbosity).await,
+		#[cfg(feature = "introspect")]
+		Commands::Introspect { format, section } => execute_introspect(format, section, verbosity).await,
 		#[cfg(feature = "openapi")]
 		Commands::Generateopenapi {
 			format,
@@ -661,6 +677,75 @@ async fn execute_showurls(_names: bool, _verbosity: u8) -> Result<(), Box<dyn st
 	Err("showurls command requires 'routers' feature. \
 		Enable it in your Cargo.toml: \
 		reinhardt-commands = { version = \"0.1.0\", features = [\"routers\"] }"
+		.into())
+}
+
+/// Execute the introspect command
+#[cfg(feature = "introspect")]
+async fn execute_introspect(
+	format: String,
+	section: Option<String>,
+	verbosity: u8,
+) -> Result<(), Box<dyn std::error::Error>> {
+	use crate::introspect::{collect_introspect_data, format_json, format_yaml};
+	use colored::Colorize;
+
+	if verbosity > 0 {
+		eprintln!("{}", "Collecting project metadata...".cyan().bold());
+	}
+
+	let output = collect_introspect_data()?;
+
+	// If a section filter is specified, extract just that section
+	let content = if let Some(ref section_name) = section {
+		let valid_sections = [
+			"app",
+			"databases",
+			"routes",
+			"middleware",
+			"settings",
+			"features",
+		];
+		if !valid_sections.contains(&section_name.as_str()) {
+			return Err(format!(
+				"Invalid section '{}'. Valid sections: {}",
+				section_name,
+				valid_sections.join(", ")
+			)
+			.into());
+		}
+
+		// Serialize to serde_json::Value, then extract the section
+		let full_value = serde_json::to_value(&output)?;
+		let section_value = full_value
+			.get(section_name)
+			.ok_or_else(|| format!("Section '{}' not found in output", section_name))?;
+
+		match format.as_str() {
+			"json" => serde_json::to_string_pretty(section_value)?,
+			_ => serde_yaml::to_string(section_value)?,
+		}
+	} else {
+		match format.as_str() {
+			"json" => format_json(&output)?,
+			_ => format_yaml(&output)?,
+		}
+	};
+
+	println!("{}", content);
+
+	Ok(())
+}
+
+#[cfg(not(feature = "introspect"))]
+async fn execute_introspect(
+	_format: String,
+	_section: Option<String>,
+	_verbosity: u8,
+) -> Result<(), Box<dyn std::error::Error>> {
+	Err("introspect command requires 'introspect' feature. \
+		Enable it in your Cargo.toml: \
+		reinhardt-commands = { version = \"0.1.0\", features = [\"introspect\"] }"
 		.into())
 }
 
@@ -991,6 +1076,22 @@ mod tests {
 
 		// Assert
 		assert!(!result);
+	}
+
+	#[cfg(feature = "introspect")]
+	#[rstest]
+	fn test_requires_router_for_introspect() {
+		// Arrange
+		let command = Commands::Introspect {
+			format: "yaml".to_string(),
+			section: None,
+		};
+
+		// Act
+		let result = requires_router(&command);
+
+		// Assert
+		assert!(result);
 	}
 
 	#[cfg(feature = "routers")]

@@ -66,6 +66,10 @@ pub enum Commands {
 		#[arg(long)]
 		empty: bool,
 
+		/// Fix migration conflicts (create merge migration)
+		#[arg(long)]
+		merge: bool,
+
 		/// Force using empty state when database/TestContainers is unavailable (dangerous)
 		#[arg(long)]
 		force_empty_state: bool,
@@ -285,6 +289,7 @@ pub async fn run_command(
 			name,
 			check,
 			empty,
+			merge,
 			force_empty_state,
 			migration_dir: _,
 		} => {
@@ -294,6 +299,7 @@ pub async fn run_command(
 				name,
 				check,
 				empty,
+				merge,
 				force_empty_state,
 				verbosity,
 			)
@@ -360,12 +366,15 @@ pub async fn run_command(
 
 /// Execute the makemigrations command
 #[cfg(feature = "migrations")]
+// Allow too_many_arguments: CLI flags are mapped 1:1 to function parameters for clarity
+#[allow(clippy::too_many_arguments)]
 async fn execute_makemigrations(
 	app_labels: Vec<String>,
 	dry_run: bool,
 	name: Option<String>,
 	check: bool,
 	empty: bool,
+	merge: bool,
 	force_empty_state: bool,
 	verbosity: u8,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -386,6 +395,9 @@ async fn execute_makemigrations(
 	}
 	if empty {
 		ctx.set_option("empty".to_string(), "true".to_string());
+	}
+	if merge {
+		ctx.set_option("merge".to_string(), "true".to_string());
 	}
 	if force_empty_state {
 		ctx.set_option("force-empty-state".to_string(), "true".to_string());
@@ -969,6 +981,7 @@ mod tests {
 			name: None,
 			check: false,
 			empty: false,
+			merge: false,
 			force_empty_state: false,
 			migration_dir: std::path::PathBuf::from("./migrations"),
 		};

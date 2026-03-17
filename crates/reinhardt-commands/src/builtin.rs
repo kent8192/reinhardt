@@ -524,8 +524,8 @@ impl BaseCommand for MakeMigrationsCommand {
 		{
 			use crate::CommandError;
 			use reinhardt_db::migrations::{
-				FilesystemRepository, FilesystemSource, MigrationNamer, MigrationNumbering,
-				MigrationService, autodetector::ProjectState,
+				FilesystemRepository, FilesystemSource, MigrationGraph, MigrationKey,
+				MigrationNamer, MigrationNumbering, MigrationService, autodetector::ProjectState,
 			};
 			use std::sync::Arc;
 			use tokio::sync::Mutex;
@@ -554,6 +554,111 @@ impl BaseCommand for MakeMigrationsCommand {
 					app_migrations.last().cloned()
 				}
 			};
+
+			// Handle --merge flag for resolving migration conflicts
+			let is_merge = ctx.has_option("merge");
+			if is_merge {
+				if is_empty {
+					return Err(CommandError::ExecutionError(
+						"--merge and --empty are mutually exclusive options".to_string(),
+					));
+				}
+
+				// Load all existing migrations and build the graph
+				let all_migrations = service.load_all().await.map_err(|e| {
+					CommandError::ExecutionError(format!("Failed to load migrations: {}", e))
+				})?;
+
+				let mut graph = MigrationGraph::new();
+				for migration in &all_migrations {
+					let key =
+						MigrationKey::new(migration.app_label.clone(), migration.name.clone());
+					let deps: Vec<MigrationKey> = migration
+						.dependencies
+						.iter()
+						.map(|(app, name)| MigrationKey::new(app.clone(), name.clone()))
+						.collect();
+					graph.add_migration(key, deps);
+				}
+
+				// Detect conflicts
+				let mut conflicts = graph.detect_conflicts();
+
+				// Apply app_label filter if specified
+				if let Some(ref app_name) = app_label {
+					conflicts.retain(|app, _| app == app_name);
+				}
+
+				if conflicts.is_empty() {
+					ctx.info("No conflicts detected");
+					return Ok(());
+				}
+
+				// Generate merge migration for each conflicting app
+				let mut conflict_apps: Vec<String> = conflicts.keys().cloned().collect();
+				conflict_apps.sort();
+
+				for conflict_app in &conflict_apps {
+					let leaf_keys = &conflicts[conflict_app];
+					let leaf_names: Vec<&str> = leaf_keys.iter().map(|k| k.name.as_str()).collect();
+
+					// Generate merge name
+					let base_name = migration_name_opt
+						.clone()
+						.unwrap_or_else(|| MigrationNamer::generate_merge_name(&leaf_names));
+					let migration_number =
+						MigrationNumbering::next_number(&migrations_dir, conflict_app);
+					let final_name = format!("{}_{}", migration_number, base_name);
+
+					// Dependencies = all conflicting leaves
+					let dependencies: Vec<(String, String)> = leaf_keys
+						.iter()
+						.map(|k| (k.app_label.clone(), k.name.clone()))
+						.collect();
+
+					let merge_migration = reinhardt_db::migrations::Migration {
+						app_label: conflict_app.clone(),
+						name: final_name.clone(),
+						operations: Vec::new(),
+						dependencies,
+						atomic: true,
+						replaces: Vec::new(),
+						initial: None,
+						state_only: false,
+						database_only: false,
+						optional_dependencies: Vec::new(),
+						swappable_dependencies: Vec::new(),
+					};
+
+					if !is_dry_run {
+						service
+							.save_migration(&merge_migration)
+							.await
+							.map_err(|e| {
+								CommandError::ExecutionError(format!(
+									"Failed to save merge migration: {}",
+									e
+								))
+							})?;
+						ctx.success(&format!(
+							"Created merge migration for '{}': {}",
+							conflict_app, final_name
+						));
+					} else {
+						ctx.info(&format!(
+							"Would create merge migration for '{}': {}",
+							conflict_app, final_name
+						));
+					}
+
+					// Show merged leaves
+					for leaf in leaf_keys {
+						ctx.verbose(&format!("  Merging: {}", leaf.name));
+					}
+				}
+
+				return Ok(());
+			}
 
 			// Handle --empty flag for manual migrations
 			if is_empty {
@@ -745,6 +850,44 @@ impl BaseCommand for MakeMigrationsCommand {
 					}
 				}
 			};
+
+			// Check for migration conflicts before proceeding
+			{
+				let all_migrations = service.load_all().await.unwrap_or_default();
+				if !all_migrations.is_empty() {
+					let mut graph = MigrationGraph::new();
+					for migration in &all_migrations {
+						let key =
+							MigrationKey::new(migration.app_label.clone(), migration.name.clone());
+						let deps: Vec<MigrationKey> = migration
+							.dependencies
+							.iter()
+							.map(|(app, name)| MigrationKey::new(app.clone(), name.clone()))
+							.collect();
+						graph.add_migration(key, deps);
+					}
+
+					let conflicts = graph.detect_conflicts();
+					if !conflicts.is_empty() {
+						let mut conflict_apps: Vec<&String> = conflicts.keys().collect();
+						conflict_apps.sort();
+						for app in &conflict_apps {
+							let leaves = &conflicts[*app];
+							let leaf_names: Vec<&str> =
+								leaves.iter().map(|k| k.name.as_str()).collect();
+							ctx.error(&format!(
+								"Conflicting migrations detected for '{}': {}",
+								app,
+								leaf_names.join(", ")
+							));
+						}
+						return Err(CommandError::ExecutionError(
+							"Run 'makemigrations --merge' to resolve migration conflicts."
+								.to_string(),
+						));
+					}
+				}
+			}
 
 			for app_name in &app_names {
 				// Filter target state for this app only

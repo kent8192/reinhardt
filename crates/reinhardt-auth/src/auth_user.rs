@@ -1,7 +1,7 @@
 //! Authenticated user extractor that loads the full user model from database.
 //!
 //! Wraps the user model `U` as a tuple struct for destructuring, consistent
-//! with [`Path`], [`Json`], and other Reinhardt extractors.
+//! with `Path`, `Json`, and other Reinhardt extractors.
 
 use crate::BaseUser;
 use async_trait::async_trait;

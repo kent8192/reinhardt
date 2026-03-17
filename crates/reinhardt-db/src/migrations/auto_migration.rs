@@ -363,6 +363,17 @@ pub enum AutoMigrationError {
 	)]
 	/// DuplicateMigration variant.
 	DuplicateMigration,
+
+	#[error(
+		"Conflicting migrations detected for '{app_label}': {migrations:?}. Run makemigrations --merge to resolve."
+	)]
+	/// ConflictingMigrations variant.
+	ConflictingMigrations {
+		/// The app label with conflicting migrations.
+		app_label: String,
+		/// The conflicting migration names.
+		migrations: Vec<String>,
+	},
 }
 
 impl From<std::io::Error> for AutoMigrationError {

@@ -486,7 +486,7 @@ cargo make clippy-check
 - Each PR should have a single, clear purpose
 - Smaller PRs are easier to review and less risky to merge
 
-**For batch issue handling**: See docs/ISSUE_HANDLING.md for work unit principles (WU-1 ~ WU-3) on how to scope PRs when addressing multiple issues.
+**For batch issue handling**: See instructions/ISSUE_HANDLING.md for work unit principles (WU-1 ~ WU-3) on how to scope PRs when addressing multiple issues.
 
 ### RP-5 (MUST): Use Three-Dot Diff for PR Verification
 
@@ -818,7 +818,7 @@ docs(readme): add installation instructions
 ## Related Documentation
 
 - **Main Quick Reference**: @CLAUDE.md (see Quick Reference section)
-- **Issue Handling Principles**: docs/ISSUE_HANDLING.md
+- **Issue Handling Principles**: instructions/ISSUE_HANDLING.md
 - **Commit Guidelines**: @instructions/COMMIT_GUIDELINE.md
 - **Release Process**: @instructions/RELEASE_PROCESS.md
 - **GitHub MCP Tools**: Available when GitHub MCP server is configured

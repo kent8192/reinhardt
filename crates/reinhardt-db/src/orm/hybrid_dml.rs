@@ -125,7 +125,7 @@ impl InsertBuilder {
 		if let Some(expr) = property.expression() {
 			// Replace the column reference in the expression with the actual value
 			// For example: "LOWER(email)" -> "LOWER('value')"
-			let value_expr = format!("'{}'", value);
+			let value_expr = format!("'{}'", value.replace('\'', "''"));
 			let expanded_expr =
 				expr.replace(&format!("({})", column), &format!("({})", value_expr));
 			self.values.insert(
@@ -347,7 +347,7 @@ impl UpdateBuilder {
 		// If the property has an expression, use it; otherwise treat as direct value
 		if let Some(expr) = property.expression() {
 			// Replace the column reference in the expression with the actual value
-			let value_expr = format!("'{}'", value);
+			let value_expr = format!("'{}'", value.replace('\'', "''"));
 			let expanded_expr =
 				expr.replace(&format!("({})", column), &format!("({})", value_expr));
 			self.values.insert(
@@ -784,5 +784,54 @@ mod tests {
 		);
 		assert_eq!(params[0], "updated@example.com");
 		assert_eq!(params[1], "1");
+	}
+
+	#[test]
+	fn test_insert_builder_hybrid_value_escapes_single_quotes() {
+		// Arrange
+		use crate::hybrid::property::HybridProperty;
+		let prop: HybridProperty<String, String> = HybridProperty::new(|s: &String| s.clone())
+			.with_expression(|| "LOWER(email)".to_string());
+
+		// Act
+		let builder = InsertBuilder::new("users").hybrid_value("email", &prop, "test@o'brien.com");
+		let (sql, _params) = builder.build();
+
+		// Assert
+		assert!(
+			sql.contains("LOWER('test@o''brien.com')"),
+			"Single quotes in values must be escaped with double single quotes, got: {}",
+			sql
+		);
+		assert!(
+			!sql.contains("o'brien.com')"),
+			"Unescaped single quote detected (SQL injection vulnerability), got: {}",
+			sql
+		);
+	}
+
+	#[test]
+	fn test_update_builder_set_hybrid_escapes_single_quotes() {
+		// Arrange
+		use crate::hybrid::property::HybridProperty;
+		let prop: HybridProperty<String, String> = HybridProperty::new(|s: &String| s.clone())
+			.with_expression(|| "LOWER(email)".to_string());
+
+		// Act
+		let builder = UpdateBuilder::new("users")
+			.set_hybrid("email", &prop, "'; DROP TABLE users;--")
+			.where_clause("id", "1");
+		let (sql, _params) = builder.build();
+
+		// Assert: the single quote in value is escaped to ''
+		// Input: '; DROP TABLE users;-- -> escaped: ''; DROP TABLE users;--
+		// Wrapped: ''''; DROP TABLE users;--' (open-quote, escaped-quote-pair, rest, close-quote)
+		// Wait: format!("'{}'", "''; DROP TABLE users;--") = "'''; DROP TABLE users;--'"
+		// 3 quotes = open + escaped pair, then rest + close
+		assert!(
+			sql.contains("'''; DROP TABLE users;--'"),
+			"SQL injection attempt must have single quotes escaped, got: {}",
+			sql
+		);
 	}
 }

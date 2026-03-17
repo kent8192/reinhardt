@@ -2168,10 +2168,13 @@ impl Operation {
 		project_state: &ProjectState,
 	) -> super::Result<Option<String>> {
 		match self {
-			Operation::CreateTable { name, .. } => Ok(Some(format!("DROP TABLE {};", name))),
+			Operation::CreateTable { name, .. } => {
+				Ok(Some(format!("DROP TABLE {};", quote_identifier(name))))
+			}
 			Operation::AddColumn { table, column, .. } => Ok(Some(format!(
 				"ALTER TABLE {} DROP COLUMN {};",
-				table, column.name
+				quote_identifier(table),
+				quote_identifier(&column.name)
 			))),
 			Operation::RunSQL { reverse_sql, .. } => {
 				Ok(reverse_sql.as_ref().map(|s| s.to_string()))
@@ -2185,7 +2188,8 @@ impl Operation {
 			// Phase 1: Simple reverse operations
 			Operation::RenameTable { old_name, new_name } => Ok(Some(format!(
 				"ALTER TABLE {} RENAME TO {};",
-				new_name, old_name
+				quote_identifier(new_name),
+				quote_identifier(old_name)
 			))),
 			Operation::RenameColumn {
 				table,
@@ -2193,14 +2197,19 @@ impl Operation {
 				new_name,
 			} => Ok(Some(format!(
 				"ALTER TABLE {} RENAME COLUMN {} TO {};",
-				table, new_name, old_name
+				quote_identifier(table),
+				quote_identifier(new_name),
+				quote_identifier(old_name)
 			))),
 			Operation::CreateIndex { table, columns, .. } => {
 				// Use the same naming convention as to_sql(): idx_{table}_{columns_joined}
 				// This ensures the rollback DROP INDEX targets the correct index name
 				let columns_joined = columns.join("_");
 				let index_name = format!("idx_{}_{}", table, columns_joined);
-				Ok(Some(format!("DROP INDEX {};", index_name)))
+				Ok(Some(format!(
+					"DROP INDEX {};",
+					quote_identifier(&index_name)
+				)))
 			}
 			Operation::AddConstraint {
 				table,
@@ -2217,7 +2226,8 @@ impl Operation {
 					})?;
 				Ok(Some(format!(
 					"ALTER TABLE {} DROP CONSTRAINT {};",
-					table, constraint_name
+					quote_identifier(table),
+					quote_identifier(&constraint_name)
 				)))
 			}
 			// Phase 2: Complex reverse operations using ProjectState
@@ -2230,7 +2240,8 @@ impl Operation {
 					let col_sql = Self::column_to_sql(&col_def, dialect);
 					return Ok(Some(format!(
 						"ALTER TABLE {} ADD COLUMN {};",
-						table, col_sql
+						quote_identifier(table),
+						col_sql
 					)));
 				}
 				// Cannot reconstruct without state
@@ -2249,7 +2260,10 @@ impl Operation {
 					let null_clause = if old_def.not_null { " NOT NULL" } else { "" };
 					return Ok(Some(format!(
 						"ALTER TABLE {} ALTER COLUMN {} TYPE {}{};",
-						table, column, type_sql, null_clause
+						quote_identifier(table),
+						quote_identifier(column),
+						type_sql,
+						null_clause
 					)));
 				}
 
@@ -2263,7 +2277,10 @@ impl Operation {
 					let null_clause = if col_def.not_null { " NOT NULL" } else { "" };
 					return Ok(Some(format!(
 						"ALTER TABLE {} ALTER COLUMN {} TYPE {}{};",
-						table, column, type_sql, null_clause
+						quote_identifier(table),
+						quote_identifier(column),
+						type_sql,
+						null_clause
 					)));
 				}
 				// Cannot reconstruct without state
@@ -2275,10 +2292,16 @@ impl Operation {
 				// The current implementation generates a basic CREATE INDEX statement.
 				let columns_joined = columns.join("_");
 				let index_name = format!("idx_{}_{}", table, columns_joined);
-				let columns_list = columns.join(", ");
+				let columns_list = columns
+					.iter()
+					.map(|c| quote_identifier(c).to_string())
+					.collect::<Vec<_>>()
+					.join(", ");
 				Ok(Some(format!(
 					"CREATE INDEX {} ON {} ({});",
-					index_name, table, columns_list
+					quote_identifier(&index_name),
+					quote_identifier(table),
+					columns_list
 				)))
 			}
 			Operation::DropConstraint {
@@ -2293,7 +2316,11 @@ impl Operation {
 						.find(|c| c.name == *constraint_name)
 				{
 					let constraint = constraint_def.to_constraint();
-					return Ok(Some(format!("ALTER TABLE {} ADD {};", table, constraint)));
+					return Ok(Some(format!(
+						"ALTER TABLE {} ADD {};",
+						quote_identifier(table),
+						constraint
+					)));
 				}
 				// Cannot reconstruct without state
 				Ok(None)
@@ -2317,7 +2344,7 @@ impl Operation {
 
 					return Ok(Some(format!(
 						"CREATE TABLE {} (\n{}\n);",
-						name,
+						quote_identifier(name),
 						parts.join(",\n")
 					)));
 				}
@@ -2327,7 +2354,7 @@ impl Operation {
 			Operation::BulkLoad { table, .. } => {
 				// Reverse of bulk load is to truncate the table (remove loaded data)
 				// Note: This removes ALL data, not just the data loaded by this operation
-				Ok(Some(format!("TRUNCATE TABLE {};", table)))
+				Ok(Some(format!("TRUNCATE TABLE {};", quote_identifier(table))))
 			}
 			_ => Ok(None),
 		}
@@ -5447,6 +5474,190 @@ mod tests {
 			model.inheritance_type,
 			Some("single_table".to_string()),
 			"inheritance_type should be 'single_table'"
+		);
+	}
+
+	#[rstest]
+	fn test_to_reverse_sql_create_table_quotes_identifiers() {
+		// Arrange
+		let op = Operation::CreateTable {
+			name: "user-data".to_string(),
+			columns: vec![],
+			constraints: vec![],
+			without_rowid: None,
+			partition: None,
+			interleave_in_parent: None,
+		};
+		let state = ProjectState::default();
+
+		// Act
+		let sql = op
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			sql, "DROP TABLE \"user-data\";",
+			"Identifiers with special characters must be quoted"
+		);
+	}
+
+	#[rstest]
+	fn test_to_reverse_sql_add_column_quotes_identifiers() {
+		// Arrange
+		let op = Operation::AddColumn {
+			table: "my table".to_string(),
+			column: ColumnDefinition {
+				name: "my column".to_string(),
+				type_definition: FieldType::VarChar(255),
+				not_null: false,
+				unique: false,
+				primary_key: false,
+				auto_increment: false,
+				default: None,
+			},
+			mysql_options: None,
+		};
+		let state = ProjectState::default();
+
+		// Act
+		let sql = op
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			sql, "ALTER TABLE \"my table\" DROP COLUMN \"my column\";",
+			"Table and column names with spaces must be quoted"
+		);
+	}
+
+	#[rstest]
+	fn test_to_reverse_sql_rename_table_quotes_identifiers() {
+		// Arrange: both names contain special characters requiring quoting
+		let op = Operation::RenameTable {
+			old_name: "old; DROP TABLE users;--".to_string(),
+			new_name: "new-name".to_string(),
+		};
+		let state = ProjectState::default();
+
+		// Act
+		let sql = op
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			sql, "ALTER TABLE \"new-name\" RENAME TO \"old; DROP TABLE users;--\";",
+			"SQL injection attempt must be quoted as identifier"
+		);
+	}
+
+	#[rstest]
+	fn test_to_reverse_sql_rename_column_quotes_identifiers() {
+		// Arrange: use identifiers with special characters to verify quoting
+		let op = Operation::RenameColumn {
+			table: "my table".to_string(),
+			old_name: "old col".to_string(),
+			new_name: "new col".to_string(),
+		};
+		let state = ProjectState::default();
+
+		// Act
+		let sql = op
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			sql, "ALTER TABLE \"my table\" RENAME COLUMN \"new col\" TO \"old col\";",
+			"Identifiers with spaces must be quoted"
+		);
+	}
+
+	#[rstest]
+	fn test_to_reverse_sql_create_index_quotes_identifiers() {
+		// Arrange
+		let op = Operation::CreateIndex {
+			table: "my-table".to_string(),
+			columns: vec!["col a".to_string()],
+			unique: false,
+			index_type: None,
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		};
+		let state = ProjectState::default();
+
+		// Act
+		let sql = op
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert!(
+			sql.contains("DROP INDEX \"idx_my-table_col a\""),
+			"Index name must be quoted, got: {}",
+			sql
+		);
+	}
+
+	#[rstest]
+	fn test_to_reverse_sql_add_constraint_quotes_identifiers() {
+		// Arrange: table name with special characters triggers quoting
+		let op = Operation::AddConstraint {
+			table: "my-table".to_string(),
+			constraint_sql: "CONSTRAINT chk_positive CHECK (x > 0)".to_string(),
+		};
+		let state = ProjectState::default();
+
+		// Act
+		let sql = op
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert!(
+			sql.contains("ALTER TABLE \"my-table\""),
+			"Table name with special characters must be quoted, got: {}",
+			sql
+		);
+		assert!(
+			sql.contains("DROP CONSTRAINT"),
+			"Should contain DROP CONSTRAINT, got: {}",
+			sql
+		);
+	}
+
+	#[rstest]
+	fn test_to_reverse_sql_bulk_load_quotes_identifiers() {
+		// Arrange
+		let op = Operation::BulkLoad {
+			table: "user-data".to_string(),
+			source: BulkLoadSource::Stdin,
+			format: BulkLoadFormat::default(),
+			options: BulkLoadOptions::default(),
+		};
+		let state = ProjectState::default();
+
+		// Act
+		let sql = op
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			sql, "TRUNCATE TABLE \"user-data\";",
+			"Table name must be quoted"
 		);
 	}
 }

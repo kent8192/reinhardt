@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This file defines strategic principles for handling multiple issues efficiently. While docs/ISSUE_GUIDELINES.md covers individual issue creation and management, this document provides workflow-level guidance for planning, batching, and parallelizing issue resolution across the Reinhardt project's multi-crate workspace.
+This file defines strategic principles for handling multiple issues efficiently. While instructions/ISSUE_GUIDELINES.md covers individual issue creation and management, this document provides workflow-level guidance for planning, batching, and parallelizing issue resolution across the Reinhardt project's multi-crate workspace.
 
 ---
 
@@ -245,11 +245,11 @@ Commits 2-4 (parallel via Agent Team, HA-3):
 
 ## Related Documentation
 
-- **Issue Guidelines**: docs/ISSUE_GUIDELINES.md
-- **Pull Request Guidelines**: docs/PR_GUIDELINE.md
-- **Commit Guidelines**: docs/COMMIT_GUIDELINE.md
-- **GitHub Interaction**: docs/GITHUB_INTERACTION.md
+- **Issue Guidelines**: instructions/ISSUE_GUIDELINES.md
+- **Pull Request Guidelines**: instructions/PR_GUIDELINE.md
+- **Commit Guidelines**: instructions/COMMIT_GUIDELINE.md
+- **GitHub Interaction**: instructions/GITHUB_INTERACTION.md
 
 ---
 
-**Note**: This document provides strategic guidance for batch issue handling. For individual issue creation and management, see docs/ISSUE_GUIDELINES.md. For PR formatting and review process, see docs/PR_GUIDELINE.md.
+**Note**: This document provides strategic guidance for batch issue handling. For individual issue creation and management, see instructions/ISSUE_GUIDELINES.md. For PR formatting and review process, see instructions/PR_GUIDELINE.md.

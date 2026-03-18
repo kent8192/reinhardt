@@ -157,6 +157,27 @@ pub struct InfraSignals {
 
 	/// Background worker support required
 	pub background_worker: bool,
+
+	/// gRPC support required
+	pub grpc: bool,
+
+	/// Storage backend type (e.g., "s3", "azure", "gcs")
+	pub storage: Option<String>,
+
+	/// Mail backend type (e.g., "smtp")
+	pub mail: Option<String>,
+
+	/// Session backend type (e.g., "redis", "database", "file")
+	pub session_backend: Option<String>,
+
+	/// GraphQL support required
+	pub graphql: bool,
+
+	/// Admin panel support required
+	pub admin_panel: bool,
+
+	/// Internationalization support required
+	pub i18n: bool,
 }
 
 /// Introspect management command
@@ -485,6 +506,13 @@ fn collect_features_metadata() -> FeaturesMetadata {
 					cache: "none".to_string(),
 					websocket: false,
 					background_worker: false,
+					grpc: false,
+					storage: None,
+					mail: None,
+					session_backend: None,
+					graphql: false,
+					admin_panel: false,
+					i18n: false,
 				},
 			};
 		}
@@ -501,6 +529,13 @@ fn collect_features_metadata() -> FeaturesMetadata {
 					cache: "none".to_string(),
 					websocket: false,
 					background_worker: false,
+					grpc: false,
+					storage: None,
+					mail: None,
+					session_backend: None,
+					graphql: false,
+					admin_panel: false,
+					i18n: false,
 				},
 			};
 		}
@@ -542,6 +577,15 @@ fn collect_features_metadata() -> FeaturesMetadata {
 		background_worker: all_features
 			.iter()
 			.any(|f| has_token(f, "tasks") || has_token(f, "worker") || has_token(f, "celery")),
+		grpc: all_features.iter().any(|f| has_token(f, "grpc")),
+		storage: detect_storage_signal(&all_features),
+		mail: detect_mail_signal(&all_features),
+		session_backend: detect_session_backend_signal(&all_features),
+		graphql: all_features.iter().any(|f| has_token(f, "graphql")),
+		admin_panel: all_features.iter().any(|f| has_token(f, "admin")),
+		i18n: all_features
+			.iter()
+			.any(|f| has_token(f, "i18n") || has_token(f, "l10n") || has_token(f, "locale")),
 	};
 
 	FeaturesMetadata {
@@ -592,6 +636,67 @@ fn detect_cache_signal(features: &[&str]) -> String {
 	"none".to_string()
 }
 
+/// Detect storage backend type from feature names using strict token matching
+fn detect_storage_signal(features: &[&str]) -> Option<String> {
+	for f in features {
+		if has_token(f, "s3") {
+			return Some("s3".to_string());
+		}
+		if has_token(f, "azure") {
+			return Some("azure".to_string());
+		}
+		if has_token(f, "gcs") {
+			return Some("gcs".to_string());
+		}
+	}
+	None
+}
+
+/// Detect mail backend type from feature names using strict token matching.
+///
+/// Recognizes both explicit backend tokens (e.g., `smtp`) and the generic
+/// `mail` feature flag used by this workspace (`mail = ["reinhardt-mail"]`).
+/// When only the generic `mail` token is present, returns `"smtp"` as the
+/// default backend since `reinhardt-mail` uses SMTP transport.
+fn detect_mail_signal(features: &[&str]) -> Option<String> {
+	for f in features {
+		if has_token(f, "smtp") {
+			return Some("smtp".to_string());
+		}
+	}
+	// Fall back to detecting the generic "mail" feature flag
+	for f in features {
+		if has_token(f, "mail") {
+			return Some("smtp".to_string());
+		}
+	}
+	None
+}
+
+/// Detect session backend type from feature names using compound token matching.
+///
+/// Requires a feature to contain both a session-related token (`session` or
+/// `sessions`) and a backend token (e.g., `redis-sessions`, `session-db`) to
+/// avoid false positives with cache detection for bare `redis` tokens.
+fn detect_session_backend_signal(features: &[&str]) -> Option<String> {
+	for f in features {
+		let is_session_feature = has_token(f, "session") || has_token(f, "sessions");
+		if !is_session_feature {
+			continue;
+		}
+		if has_token(f, "redis") {
+			return Some("redis".to_string());
+		}
+		if has_token(f, "db") || has_token(f, "database") {
+			return Some("database".to_string());
+		}
+		if has_token(f, "file") {
+			return Some("file".to_string());
+		}
+	}
+	None
+}
+
 /// Format the introspect output as YAML
 pub fn format_yaml(output: &IntrospectOutput) -> Result<String, Box<dyn std::error::Error>> {
 	Ok(serde_yaml::to_string(output)?)
@@ -617,6 +722,13 @@ mod tests {
 				cache: "none".to_string(),
 				websocket: false,
 				background_worker: false,
+				grpc: false,
+				storage: None,
+				mail: None,
+				session_backend: None,
+				graphql: false,
+				admin_panel: false,
+				i18n: false,
 			},
 		}
 	}
@@ -631,6 +743,13 @@ mod tests {
 				cache: "none".to_string(),
 				websocket: false,
 				background_worker: false,
+				grpc: false,
+				storage: None,
+				mail: None,
+				session_backend: None,
+				graphql: false,
+				admin_panel: false,
+				i18n: false,
 			},
 		}
 	}
@@ -811,6 +930,13 @@ mod tests {
 				cache: "redis".to_string(),
 				websocket: true,
 				background_worker: false,
+				grpc: true,
+				storage: Some("s3".to_string()),
+				mail: Some("smtp".to_string()),
+				session_backend: Some("redis".to_string()),
+				graphql: true,
+				admin_panel: false,
+				i18n: true,
 			},
 		};
 
@@ -824,6 +950,13 @@ mod tests {
 		assert_eq!(parsed["infrastructure_signals"]["cache"], "redis");
 		assert_eq!(parsed["infrastructure_signals"]["websocket"], true);
 		assert_eq!(parsed["infrastructure_signals"]["background_worker"], false);
+		assert_eq!(parsed["infrastructure_signals"]["grpc"], true);
+		assert_eq!(parsed["infrastructure_signals"]["storage"], "s3");
+		assert_eq!(parsed["infrastructure_signals"]["mail"], "smtp");
+		assert_eq!(parsed["infrastructure_signals"]["session_backend"], "redis");
+		assert_eq!(parsed["infrastructure_signals"]["graphql"], true);
+		assert_eq!(parsed["infrastructure_signals"]["admin_panel"], false);
+		assert_eq!(parsed["infrastructure_signals"]["i18n"], true);
 	}
 
 	#[rstest]
@@ -965,5 +1098,103 @@ mod tests {
 		assert!(parsed.get("middleware").is_some());
 		assert!(parsed.get("settings").is_some());
 		assert!(parsed.get("features").is_some());
+	}
+
+	#[rstest]
+	#[case(&["grpc-server"], true)]
+	#[case(&["my-grpc-api"], true)]
+	#[case(&["server"], false)]
+	#[case(&["graphics"], false)] // "grpc" must NOT match "graphics"
+	fn test_grpc_detection(#[case] features: &[&str], #[case] expected: bool) {
+		// Arrange & Act
+		let result = features.iter().any(|f| has_token(f, "grpc"));
+
+		// Assert
+		assert_eq!(result, expected);
+	}
+
+	#[rstest]
+	#[case(&["aws-s3-backend"], Some("s3"))]
+	#[case(&["azure-storage"], Some("azure"))]
+	#[case(&["gcs-backend"], Some("gcs"))]
+	#[case(&["server"], None)]
+	#[case(&["s3-azure-gcs"], Some("s3"))] // first match wins
+	fn test_detect_storage_signal(#[case] features: &[&str], #[case] expected: Option<&str>) {
+		// Arrange & Act
+		let result = detect_storage_signal(features);
+
+		// Assert
+		assert_eq!(result.as_deref(), expected);
+	}
+
+	#[rstest]
+	#[case(&["smtp-backend"], Some("smtp"))]
+	#[case(&["mail-smtp"], Some("smtp"))]
+	#[case(&["mail"], Some("smtp"))] // workspace feature: mail = ["reinhardt-mail"]
+	#[case(&["server"], None)]
+	fn test_detect_mail_signal(#[case] features: &[&str], #[case] expected: Option<&str>) {
+		// Arrange & Act
+		let result = detect_mail_signal(features);
+
+		// Assert
+		assert_eq!(result.as_deref(), expected);
+	}
+
+	#[rstest]
+	#[case(&["session-redis"], Some("redis"))]
+	#[case(&["session-db"], Some("database"))]
+	#[case(&["session-database"], Some("database"))]
+	#[case(&["session-file"], Some("file"))]
+	#[case(&["redis-sessions"], Some("redis"))] // workspace feature: reinhardt-auth/redis-sessions
+	#[case(&["redis-backend"], None)] // bare "redis" without "session" must NOT match
+	#[case(&["server"], None)]
+	fn test_detect_session_backend_signal(
+		#[case] features: &[&str],
+		#[case] expected: Option<&str>,
+	) {
+		// Arrange & Act
+		let result = detect_session_backend_signal(features);
+
+		// Assert
+		assert_eq!(result.as_deref(), expected);
+	}
+
+	#[rstest]
+	#[case(&["graphql-api"], true)]
+	#[case(&["my-graphql"], true)]
+	#[case(&["server"], false)]
+	fn test_graphql_detection(#[case] features: &[&str], #[case] expected: bool) {
+		// Arrange & Act
+		let result = features.iter().any(|f| has_token(f, "graphql"));
+
+		// Assert
+		assert_eq!(result, expected);
+	}
+
+	#[rstest]
+	#[case(&["admin-panel"], true)]
+	#[case(&["my-admin"], true)]
+	#[case(&["server"], false)]
+	fn test_admin_panel_detection(#[case] features: &[&str], #[case] expected: bool) {
+		// Arrange & Act
+		let result = features.iter().any(|f| has_token(f, "admin"));
+
+		// Assert
+		assert_eq!(result, expected);
+	}
+
+	#[rstest]
+	#[case(&["i18n-support"], true)]
+	#[case(&["l10n-backend"], true)]
+	#[case(&["locale-data"], true)]
+	#[case(&["server"], false)]
+	fn test_i18n_detection(#[case] features: &[&str], #[case] expected: bool) {
+		// Arrange & Act
+		let result = features
+			.iter()
+			.any(|f| has_token(f, "i18n") || has_token(f, "l10n") || has_token(f, "locale"));
+
+		// Assert
+		assert_eq!(result, expected);
 	}
 }

@@ -426,6 +426,346 @@ fn test_to_camel_case_edge_underscores() {
 // Sanity Tests
 // =============================================================================
 
+// =============================================================================
+// Example Override Tests (Issue #2438)
+// =============================================================================
+
+/// Test set_example_override produces different content in example vs non-example files
+///
+/// **Category**: Happy Path
+/// **Verifies**: `.example.toml` gets override value, `.toml` gets real value
+#[rstest]
+fn test_example_override_produces_different_content() {
+	// Arrange
+	let template_dir = tempfile::tempdir().unwrap();
+	let output_dir = tempfile::tempdir().unwrap();
+
+	let settings_dir = template_dir.path().join("settings");
+	std::fs::create_dir_all(&settings_dir).unwrap();
+	std::fs::write(
+		settings_dir.join("config.example.toml"),
+		"secret_key = \"{{ secret_key }}\"\n",
+	)
+	.unwrap();
+
+	let cmd = reinhardt_commands::TemplateCommand::new();
+	let mut context = TemplateContext::new();
+	context
+		.insert("secret_key", "real-generated-key-abc123")
+		.unwrap();
+	context
+		.set_example_override("secret_key", "CHANGE_THIS_PLACEHOLDER")
+		.unwrap();
+	let ctx = reinhardt_commands::CommandContext::new(vec![]);
+
+	// Act
+	cmd.handle(
+		"test",
+		Some(output_dir.path()),
+		template_dir.path(),
+		context,
+		&ctx,
+	)
+	.unwrap();
+
+	// Assert
+	let example_content = std::fs::read_to_string(
+		output_dir
+			.path()
+			.join("settings")
+			.join("config.example.toml"),
+	)
+	.unwrap();
+	let real_content =
+		std::fs::read_to_string(output_dir.path().join("settings").join("config.toml")).unwrap();
+
+	assert_eq!(
+		example_content, "secret_key = \"CHANGE_THIS_PLACEHOLDER\"\n",
+		".example.toml should contain the override placeholder"
+	);
+	assert_eq!(
+		real_content, "secret_key = \"real-generated-key-abc123\"\n",
+		".toml should contain the real generated key"
+	);
+}
+
+/// Test example override with multiple overridden keys
+///
+/// **Category**: Happy Path
+/// **Verifies**: Multiple overrides are all applied to .example files
+#[rstest]
+fn test_example_override_multiple_keys() {
+	// Arrange
+	let template_dir = tempfile::tempdir().unwrap();
+	let output_dir = tempfile::tempdir().unwrap();
+
+	let settings_dir = template_dir.path().join("settings");
+	std::fs::create_dir_all(&settings_dir).unwrap();
+	std::fs::write(
+		settings_dir.join("db.example.toml"),
+		"secret = \"{{ secret_key }}\"\npassword = \"{{ db_password }}\"\n",
+	)
+	.unwrap();
+
+	let cmd = reinhardt_commands::TemplateCommand::new();
+	let mut context = TemplateContext::new();
+	context.insert("secret_key", "real-secret").unwrap();
+	context.insert("db_password", "real-password").unwrap();
+	context
+		.set_example_override("secret_key", "CHANGE_SECRET")
+		.unwrap();
+	context
+		.set_example_override("db_password", "CHANGE_PASSWORD")
+		.unwrap();
+	let ctx = reinhardt_commands::CommandContext::new(vec![]);
+
+	// Act
+	cmd.handle(
+		"test",
+		Some(output_dir.path()),
+		template_dir.path(),
+		context,
+		&ctx,
+	)
+	.unwrap();
+
+	// Assert
+	let example_content =
+		std::fs::read_to_string(output_dir.path().join("settings").join("db.example.toml"))
+			.unwrap();
+	let real_content =
+		std::fs::read_to_string(output_dir.path().join("settings").join("db.toml")).unwrap();
+
+	assert_eq!(
+		example_content,
+		"secret = \"CHANGE_SECRET\"\npassword = \"CHANGE_PASSWORD\"\n",
+	);
+	assert_eq!(
+		real_content,
+		"secret = \"real-secret\"\npassword = \"real-password\"\n",
+	);
+}
+
+/// Test non-example files are unaffected by example overrides
+///
+/// **Category**: Edge Case
+/// **Verifies**: Regular files (without .example.) ignore overrides entirely
+#[rstest]
+fn test_example_override_does_not_affect_regular_files() {
+	// Arrange
+	let template_dir = tempfile::tempdir().unwrap();
+	let output_dir = tempfile::tempdir().unwrap();
+
+	std::fs::write(
+		template_dir.path().join("config.toml"),
+		"key = \"{{ secret_key }}\"\n",
+	)
+	.unwrap();
+
+	let cmd = reinhardt_commands::TemplateCommand::new();
+	let mut context = TemplateContext::new();
+	context.insert("secret_key", "real-value").unwrap();
+	context
+		.set_example_override("secret_key", "PLACEHOLDER")
+		.unwrap();
+	let ctx = reinhardt_commands::CommandContext::new(vec![]);
+
+	// Act
+	cmd.handle(
+		"test",
+		Some(output_dir.path()),
+		template_dir.path(),
+		context,
+		&ctx,
+	)
+	.unwrap();
+
+	// Assert
+	let content = std::fs::read_to_string(output_dir.path().join("config.toml")).unwrap();
+	assert_eq!(
+		content, "key = \"real-value\"\n",
+		"Non-example file should use real value, not override"
+	);
+	// .example.toml should NOT be created for a non-example template
+	assert!(
+		!output_dir.path().join("config.example.toml").exists(),
+		"No .example.toml should be created for non-example templates"
+	);
+}
+
+/// Test example override with empty overrides map
+///
+/// **Category**: Edge Case
+/// **Verifies**: When no overrides are set, .example and .toml files have identical content
+#[rstest]
+fn test_example_override_empty_produces_identical_content() {
+	// Arrange
+	let template_dir = tempfile::tempdir().unwrap();
+	let output_dir = tempfile::tempdir().unwrap();
+
+	let settings_dir = template_dir.path().join("settings");
+	std::fs::create_dir_all(&settings_dir).unwrap();
+	std::fs::write(
+		settings_dir.join("base.example.toml"),
+		"key = \"{{ value }}\"\n",
+	)
+	.unwrap();
+
+	let cmd = reinhardt_commands::TemplateCommand::new();
+	let mut context = TemplateContext::new();
+	context.insert("value", "same-for-both").unwrap();
+	// No set_example_override call
+	let ctx = reinhardt_commands::CommandContext::new(vec![]);
+
+	// Act
+	cmd.handle(
+		"test",
+		Some(output_dir.path()),
+		template_dir.path(),
+		context,
+		&ctx,
+	)
+	.unwrap();
+
+	// Assert
+	let example_content =
+		std::fs::read_to_string(output_dir.path().join("settings").join("base.example.toml"))
+			.unwrap();
+	let real_content =
+		std::fs::read_to_string(output_dir.path().join("settings").join("base.toml")).unwrap();
+
+	assert_eq!(example_content, real_content);
+	assert_eq!(example_content, "key = \"same-for-both\"\n");
+}
+
+/// Test secret_key substitution mimics the actual startproject flow
+///
+/// **Category**: Integration
+/// **Verifies**: The real secret_key flow produces a random key in .toml
+/// and a placeholder in .example.toml
+#[rstest]
+fn test_secret_key_startproject_flow() {
+	// Arrange
+	let template_dir = tempfile::tempdir().unwrap();
+	let output_dir = tempfile::tempdir().unwrap();
+
+	let settings_dir = template_dir.path().join("settings");
+	std::fs::create_dir_all(&settings_dir).unwrap();
+	std::fs::write(
+		settings_dir.join("base.example.toml"),
+		"secret_key = \"{{ secret_key }}\"\n",
+	)
+	.unwrap();
+
+	let secret_key = format!("insecure-{}", generate_secret_key());
+
+	let cmd = reinhardt_commands::TemplateCommand::new();
+	let mut context = TemplateContext::new();
+	context.insert("secret_key", &secret_key).unwrap();
+	context
+		.set_example_override(
+			"secret_key",
+			"CHANGE_THIS_IN_PRODUCTION_MUST_BE_KEPT_SECRET",
+		)
+		.unwrap();
+	let ctx = reinhardt_commands::CommandContext::new(vec![]);
+
+	// Act
+	cmd.handle(
+		"test",
+		Some(output_dir.path()),
+		template_dir.path(),
+		context,
+		&ctx,
+	)
+	.unwrap();
+
+	// Assert
+	let example_content =
+		std::fs::read_to_string(output_dir.path().join("settings").join("base.example.toml"))
+			.unwrap();
+	let real_content =
+		std::fs::read_to_string(output_dir.path().join("settings").join("base.toml")).unwrap();
+
+	// .example.toml should have the placeholder
+	assert_eq!(
+		example_content,
+		"secret_key = \"CHANGE_THIS_IN_PRODUCTION_MUST_BE_KEPT_SECRET\"\n",
+	);
+	// .toml should have the real generated key
+	assert!(
+		real_content.starts_with("secret_key = \"insecure-"),
+		"Real config should contain the generated secret key, got: {}",
+		real_content
+	);
+	assert!(
+		real_content.len() > 30,
+		"Real config should contain a substantial key"
+	);
+	// The two should be different
+	assert_ne!(
+		example_content, real_content,
+		".example.toml and .toml should have different secret_key values"
+	);
+}
+
+/// Test override only applies to specified keys, other variables pass through
+///
+/// **Category**: Edge Case
+/// **Verifies**: Non-overridden variables render identically in both files
+#[rstest]
+fn test_example_override_partial_keys() {
+	// Arrange
+	let template_dir = tempfile::tempdir().unwrap();
+	let output_dir = tempfile::tempdir().unwrap();
+
+	let settings_dir = template_dir.path().join("settings");
+	std::fs::create_dir_all(&settings_dir).unwrap();
+	std::fs::write(
+		settings_dir.join("app.example.toml"),
+		"name = \"{{ project_name }}\"\nsecret = \"{{ secret_key }}\"\n",
+	)
+	.unwrap();
+
+	let cmd = reinhardt_commands::TemplateCommand::new();
+	let mut context = TemplateContext::new();
+	context.insert("project_name", "my_app").unwrap();
+	context.insert("secret_key", "real-secret-key").unwrap();
+	// Only override secret_key, not project_name
+	context
+		.set_example_override("secret_key", "PLACEHOLDER")
+		.unwrap();
+	let ctx = reinhardt_commands::CommandContext::new(vec![]);
+
+	// Act
+	cmd.handle(
+		"test",
+		Some(output_dir.path()),
+		template_dir.path(),
+		context,
+		&ctx,
+	)
+	.unwrap();
+
+	// Assert
+	let example_content =
+		std::fs::read_to_string(output_dir.path().join("settings").join("app.example.toml"))
+			.unwrap();
+	let real_content =
+		std::fs::read_to_string(output_dir.path().join("settings").join("app.toml")).unwrap();
+
+	// project_name should be the same in both
+	assert!(example_content.contains("name = \"my_app\""));
+	assert!(real_content.contains("name = \"my_app\""));
+	// secret_key should differ
+	assert!(example_content.contains("secret = \"PLACEHOLDER\""));
+	assert!(real_content.contains("secret = \"real-secret-key\""));
+}
+
+// =============================================================================
+// Sanity Tests
+// =============================================================================
+
 /// Sanity test for template workflow
 ///
 /// **Category**: Sanity

@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- release-plz-separator -->
 <!-- Entries below this line were created before release-plz adoption -->
 
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-openapi@v0.1.0-rc.8...reinhardt-openapi@v0.1.0-rc.9) - 2026-03-15
+
+### Testing
+
+- *(openapi)* add body content and Content-Type header validation tests
+
 ## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-openapi@v0.1.0-rc.1...reinhardt-openapi@v0.1.0-rc.2) - 2026-03-04
 
 ### Maintenance

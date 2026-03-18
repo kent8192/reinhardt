@@ -103,14 +103,14 @@ When modifying features, check and update the following documentation as applica
 - Adding planned features
 
 #### Detailed Guides
-**Location:** `docs/` directory
+**Location:** `instructions/` directory
 **Files:**
-- `docs/GETTING_STARTED.md` - Getting started guide
-- `docs/FEATURE_FLAGS.md` - Feature flags documentation
+- `instructions/GETTING_STARTED.md` - Getting started guide
+- `instructions/FEATURE_FLAGS.md` - Feature flags documentation
 - `docs/tutorials/` - Tutorial files
-- `docs/MODULE_SYSTEM.md` - Module system standards
-- `docs/TESTING_STANDARDS.md` - Testing standards
-- `docs/ANTI_PATTERNS.md` - Anti-patterns guide
+- `instructions/MODULE_SYSTEM.md` - Module system standards
+- `instructions/TESTING_STANDARDS.md` - Testing standards
+- `instructions/ANTI_PATTERNS.md` - Anti-patterns guide
 - Other relevant documentation files
 
 **When to Update:**
@@ -332,7 +332,7 @@ Ensure all links and references are valid.
 
 **Check Internal Links:**
 ```markdown
-See [Module System](docs/MODULE_SYSTEM.md)  ✅
+See [Module System](instructions/MODULE_SYSTEM.md)  ✅
 See [Module System](docs/MODULES.md)        ❌ Wrong file
 ```
 

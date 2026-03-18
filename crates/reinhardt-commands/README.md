@@ -178,6 +178,76 @@ cargo run --bin manage migrate
 cargo run --bin manage runserver
 ```
 
+### `makemigrations` Command Options
+
+The `makemigrations` command supports the following flags and options:
+
+| Flag / Option | Description |
+|---------------|-------------|
+| `--dry-run` | Show what would be created without writing files |
+| `--empty` | Create an empty migration |
+| `--from-db` | Use database history instead of TestContainers for state building |
+| `--force-empty-state` | Force using empty state when database/TestContainers is unavailable (**dangerous**) |
+| `-v`, `--verbose` | Show detailed operation list |
+| `-n`, `--name <NAME>` | Name for the migration |
+| `--migrations-dir <DIR>` | Directory for migration files (default: `migrations`) |
+
+#### The `--force-empty-state` Flag
+
+By default, `makemigrations` builds the current project state by replaying
+existing migrations using TestContainers (or a real database with `--from-db`).
+If neither is available, the command fails.
+
+The `--force-empty-state` flag overrides this behavior by assuming an empty
+starting state, which is useful in the following scenarios:
+
+- **Initial migration generation**: When a project has no existing migrations
+  and no database is available
+- **Starting fresh**: When you want to regenerate migrations from scratch
+
+**Warning:** Using `--force-empty-state` on a project with existing migrations
+may create duplicate migrations because the command cannot detect previously
+applied changes. Use with caution.
+
+```bash
+# Generate initial migrations without a running database
+cargo run --bin manage makemigrations --force-empty-state
+
+# Combine with --dry-run to preview without writing files
+cargo run --bin manage makemigrations --force-empty-state --dry-run
+```
+
+### `collect_migrations!` Macro and `linkme` Dependency
+
+The `collect_migrations!` macro registers migration modules for runtime
+discovery. It relies on the [`linkme`](https://crates.io/crates/linkme) crate
+for compile-time distributed slice registration.
+
+Projects using `collect_migrations!` must add `linkme` as a dependency:
+
+```toml
+[dependencies]
+reinhardt = { version = "0.1.0-rc.10", features = ["standard"] }
+linkme = "0.3"
+```
+
+Usage in your app's `migrations.rs`:
+
+```rust
+pub mod _0001_initial;
+pub mod _0002_add_fields;
+
+reinhardt::collect_migrations!(
+    app_label = "myapp",
+    _0001_initial,
+    _0002_add_fields,
+);
+```
+
+The `linkme` crate is re-exported by `reinhardt` under `reinhardt::linkme`, but
+the direct dependency is required for the macro to resolve the crate at compile
+time.
+
 ### Django Equivalents
 
 | Django                            | Reinhardt                               |

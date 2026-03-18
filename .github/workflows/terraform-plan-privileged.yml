@@ -111,7 +111,7 @@ jobs:
       - name: Install and run tfprovidercheck
         working-directory: ${{ matrix.dir }}
         run: |
-          go install github.com/suzuki-shunsuke/tfprovidercheck@v1.0.7
+          go install github.com/suzuki-shunsuke/tfprovidercheck/cmd/tfprovidercheck@v1.0.7
           if [ -f .terraform.lock.hcl ]; then
             tfprovidercheck
           else

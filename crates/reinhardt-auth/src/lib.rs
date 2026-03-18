@@ -65,7 +65,20 @@ pub mod core;
 
 // CurrentUser injectable for dependency injection
 pub mod current_user;
+#[allow(deprecated)]
 pub use current_user::CurrentUser;
+
+// AuthInfo lightweight auth extractor
+pub mod auth_info;
+pub use auth_info::AuthInfo;
+
+// AuthUser authenticated user extractor
+pub mod auth_user;
+pub use auth_user::AuthUser;
+
+// Startup validation for auth extractors
+pub mod auth_extractors;
+pub use auth_extractors::validate_auth_extractors;
 
 /// Project-specific UUID namespace for deterministic user ID generation.
 ///

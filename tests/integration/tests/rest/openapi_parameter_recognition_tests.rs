@@ -434,6 +434,9 @@ fn test_endpoint_metadata_supports_form_content_type() {
 		module_path: "auth::views",
 		request_body_type: Some("LoginForm"),
 		request_content_type: Some("application/x-www-form-urlencoded"),
+		responses: &[],
+		headers: &[],
+		security: &[],
 	};
 
 	// Act & Assert

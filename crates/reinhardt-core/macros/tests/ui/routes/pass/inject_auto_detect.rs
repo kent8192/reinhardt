@@ -1,4 +1,4 @@
-//! Test: `#[inject]` requires use_inject = true
+//! Test: `#[inject]` auto-enables injection without `use_inject = true`
 
 use reinhardt_macros::get;
 

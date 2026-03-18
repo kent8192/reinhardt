@@ -17,6 +17,7 @@ reinhardt = { workspace = true, features = [
     "conf",           # Settings configuration
     "commands",       # Management commands (runserver, etc.)
     "client-router",  # Client-side routing support (required for #[routes] macro)
+    "admin",          # Required for reinhardt::admin module and #[admin] macro
 ] }
 
 tokio = { version = "1.48.0", features = ["full"] }
@@ -35,6 +36,11 @@ tokio = { version = "1.48.0", features = ["rt", "macros"] }
 reqwest = { version = "0.12", features = ["json"] }
 testcontainers = "0.25.2"
 testcontainers-modules = { version = "0.13.0", features = [] }
+
+# Use reinhardt with test feature (NOT reinhardt-test sub-crate)
+[dev-dependencies.reinhardt]
+workspace = true
+features = ["minimal", "conf", "commands", "client-router", "admin", "test"]
 
 [features]
 default = ["with-reinhardt", "client-router"]

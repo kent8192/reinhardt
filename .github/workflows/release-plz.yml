@@ -18,11 +18,14 @@ jobs:
   # With release_always = false in release-plz.toml:
   # - Regular pushes: release-plz skips publishing (not from release PR)
   # - Release PR merge: release-plz detects release-plz-* branch and publishes
+  #
+  # Runner: Always uses self-hosted AWS runner for release operations
+  # (faster builds, no disk space issues, no dpkg lock contention)
 
   release-plz-pr:
     name: Release PR
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ["self-hosted","linux","arm64","reinhardt-ci"]
     timeout-minutes: 30
     concurrency:
       group: release-plz-${{ github.ref }}
@@ -35,34 +38,16 @@ jobs:
           app-id: ${{ secrets.RELEASE_PLZ_APP_ID }}
           private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
 
-      - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@v1.3.1
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
 
-      - name: Install protoc
-        run: |
-          # Wait for unattended-upgrades or other apt processes to finish
-          while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-            echo "Waiting for dpkg lock to be released..."
-            sleep 5
-          done
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
+      - name: Setup protoc
+        uses: ./.github/actions/setup-protoc
 
       - name: Run release-plz release-pr
         uses: release-plz/action@v0.5
@@ -75,7 +60,7 @@ jobs:
   release-plz-release:
     name: Release
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ["self-hosted","linux","arm64","reinhardt-ci"]
     timeout-minutes: 30
     concurrency:
       group: release-plz-release-${{ github.ref }}
@@ -88,34 +73,28 @@ jobs:
           app-id: ${{ secrets.RELEASE_PLZ_APP_ID }}
           private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
 
-      - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@v1.3.1
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
 
-      - name: Install protoc
+      - name: Setup protoc
+        uses: ./.github/actions/setup-protoc
+
+      - name: Install GitHub CLI (self-hosted)
         run: |
-          # Wait for unattended-upgrades or other apt processes to finish
-          while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-            echo "Waiting for dpkg lock to be released..."
-            sleep 5
-          done
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
+          if ! command -v gh &>/dev/null; then
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+              | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+              | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+            sudo apt-get update -qq -o DPkg::Lock::Timeout=120
+            sudo apt-get install -y -o DPkg::Lock::Timeout=120 gh
+          fi
 
       # Workaround for gix slotmap overflow (GitoxideLabs/gitoxide#1788)
       - name: Clear cargo registry git index cache

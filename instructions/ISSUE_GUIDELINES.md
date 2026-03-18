@@ -478,9 +478,9 @@ https://github.com/kent8192/reinhardt-web/security/advisories
 
 ## Related Documentation
 
-- **Pull Request Guidelines**: docs/PR_GUIDELINE.md
-- **Issue Handling Principles**: docs/ISSUE_HANDLING.md
-- **Commit Guidelines**: docs/COMMIT_GUIDELINE.md
+- **Pull Request Guidelines**: instructions/PR_GUIDELINE.md
+- **Issue Handling Principles**: instructions/ISSUE_HANDLING.md
+- **Commit Guidelines**: instructions/COMMIT_GUIDELINE.md
 - **Contributing Guide**: CONTRIBUTING.md
 - **Security Policy**: SECURITY.md
 - **Code of Conduct**: CODE_OF_CONDUCT.md
@@ -488,4 +488,4 @@ https://github.com/kent8192/reinhardt-web/security/advisories
 
 ---
 
-**Note**: This document focuses on issue creation and management. For pull request guidelines, see docs/PR_GUIDELINE.md.
+**Note**: This document focuses on issue creation and management. For pull request guidelines, see instructions/PR_GUIDELINE.md.

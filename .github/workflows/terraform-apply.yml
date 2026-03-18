@@ -155,7 +155,6 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: production
     strategy:
       fail-fast: false
       max-parallel: 1

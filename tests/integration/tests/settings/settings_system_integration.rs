@@ -39,6 +39,7 @@ fn test_load_custom_settings() {
 // ============================================================================
 
 #[test]
+#[allow(deprecated)] // Test: verifies deprecated `add_app` and `installed_apps` behavior
 fn test_add_installed_app() {
 	let mut settings = Settings::default();
 
@@ -206,6 +207,7 @@ fn test_production_settings_validation() {
 }
 
 #[test]
+#[allow(deprecated)] // Test: verifies deprecated `installed_apps` field is present
 fn test_required_settings_present() {
 	let settings = Settings::default();
 

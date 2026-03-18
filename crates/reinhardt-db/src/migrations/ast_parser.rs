@@ -259,6 +259,24 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 				let columns = extract_string_vec_field(&expr_struct.fields, "columns");
 				return Some(super::Operation::DropIndex { table, columns });
 			}
+			"AddConstraint" => {
+				let table = extract_string_field(&expr_struct.fields, "table")?;
+				let constraint_sql =
+					extract_string_field(&expr_struct.fields, "constraint_sql")?;
+				return Some(super::Operation::AddConstraint {
+					table,
+					constraint_sql,
+				});
+			}
+			"DropConstraint" => {
+				let table = extract_string_field(&expr_struct.fields, "table")?;
+				let constraint_name =
+					extract_string_field(&expr_struct.fields, "constraint_name")?;
+				return Some(super::Operation::DropConstraint {
+					table,
+					constraint_name,
+				});
+			}
 			"RunSQL" => {
 				// Use extract_string_field to handle both literal and .to_string() patterns (#1336)
 				let sql = extract_string_field(&expr_struct.fields, "sql")?;
@@ -770,19 +788,13 @@ fn parse_tuple_vec_expr(expr: &Expr) -> Result<Vec<(String, String)>> {
 	match expr {
 		// Handle vec![...] macro
 		Expr::Macro(expr_macro) if expr_macro.mac.path.is_ident("vec") => {
-			// Parse the tokens inside vec! as an array expression
 			let tokens = &expr_macro.mac.tokens;
-			// Try to parse as array
-			if let Ok(array) = syn::parse2::<Expr>(tokens.clone()) {
-				if let Expr::Array(expr_array) = array {
-					for item in &expr_array.elems {
-						if let Some(tuple) = extract_string_tuple(item) {
-							result.push(tuple);
-						}
-					}
-				} else {
-					// Try parsing as single tuple
-					if let Some(tuple) = extract_string_tuple(&array) {
+			// Wrap tokens in array brackets so syn can parse comma-separated items
+			if let Ok(parsed) =
+				syn::parse2::<syn::ExprArray>(quote::quote! { [#tokens] })
+			{
+				for item in &parsed.elems {
+					if let Some(tuple) = extract_string_tuple(item) {
 						result.push(tuple);
 					}
 				}

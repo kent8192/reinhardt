@@ -60,6 +60,8 @@ rcgen = "0.14.5"
 reinhardt-utils = {workspace = true, features = ["utils-core", "staticfiles"]}
 reinhardt-rest = {workspace = true, features = ["openapi"], optional = true}
 reinhardt-openapi = { workspace = true, optional = true }
+cargo_metadata = { workspace = true, optional = true }
+serde_yaml = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["signal"] }
@@ -80,6 +82,7 @@ migrations = ["reinhardt-db"]
 routers = ["dep:reinhardt-urls"]
 di = ["dep:reinhardt-di"]
 openapi = ["dep:reinhardt-rest", "dep:reinhardt-http"]
+introspect = ["routers", "dep:cargo_metadata", "dep:serde_yaml"]
 openapi-router = ["dep:reinhardt-openapi", "openapi"]
 server = ["dep:reinhardt-server", "dep:reinhardt-middleware", "routers", "di"]
 autoreload = ["dep:notify", "server"]
@@ -94,6 +97,7 @@ plugins = ["dep:reinhardt-dentdelion"]
 full = [
   "migrations",
   "routers",
+  "introspect",
   "server",
   "autoreload",
   "shell",

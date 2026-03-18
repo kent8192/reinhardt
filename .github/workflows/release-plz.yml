@@ -18,6 +18,9 @@ jobs:
   # With release_always = false in release-plz.toml:
   # - Regular pushes: release-plz skips publishing (not from release PR)
   # - Release PR merge: release-plz detects release-plz-* branch and publishes
+  #
+  # Runner: Always uses self-hosted AWS runner for release operations
+  # (faster builds, no disk space issues, no dpkg lock contention)
 
   determine-runner:
     name: Determine Runner
@@ -80,18 +83,13 @@ jobs:
         if: ${{ contains(toJSON(needs.determine-runner.outputs.runner), 'self-hosted') }}
         run: |
           if ! command -v gh &>/dev/null; then
-            # Wait for unattended-upgrades or other apt processes to finish
-            while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-              echo "Waiting for dpkg lock to be released..."
-              sleep 5
-            done
             curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
               | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
             sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
             echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
               | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-            sudo apt-get update -qq
-            sudo apt-get install -y gh
+            sudo apt-get update -qq -o DPkg::Lock::Timeout=120
+            sudo apt-get install -y -o DPkg::Lock::Timeout=120 gh
           fi
 
       - name: Run release-plz release-pr
@@ -146,18 +144,13 @@ jobs:
         if: ${{ contains(toJSON(needs.determine-runner.outputs.runner), 'self-hosted') }}
         run: |
           if ! command -v gh &>/dev/null; then
-            # Wait for unattended-upgrades or other apt processes to finish
-            while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-              echo "Waiting for dpkg lock to be released..."
-              sleep 5
-            done
             curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
               | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
             sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
             echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
               | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-            sudo apt-get update -qq
-            sudo apt-get install -y gh
+            sudo apt-get update -qq -o DPkg::Lock::Timeout=120
+            sudo apt-get install -y -o DPkg::Lock::Timeout=120 gh
           fi
 
       # Workaround for gix slotmap overflow (GitoxideLabs/gitoxide#1788)

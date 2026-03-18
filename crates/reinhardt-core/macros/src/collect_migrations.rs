@@ -1,5 +1,7 @@
 //! Implementation of the `collect_migrations!` macro
 //!
+//! **Deprecated since 0.2.0**: Use `FilesystemSource` instead for loading migrations.
+//!
 //! This macro generates a `MigrationProvider` implementation and registers it
 //! with the global migration registry using `linkme::distributed_slice`.
 

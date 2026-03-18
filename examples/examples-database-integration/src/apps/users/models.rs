@@ -2,8 +2,8 @@
 //!
 //! Database models for user management
 
+use reinhardt::core::serde::{Deserialize, Serialize};
 use reinhardt::prelude::*;
-use serde::{Deserialize, Serialize};
 
 /// User model
 ///

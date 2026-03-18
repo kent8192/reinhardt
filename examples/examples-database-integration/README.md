@@ -324,7 +324,7 @@ async fn test_with_manual_setup() {
 }
 ```
 
-See [Testing Standards](../../../docs/TESTING_STANDARDS.md) for comprehensive
+See [Testing Standards](../../../instructions/TESTING_STANDARDS.md) for comprehensive
 guidelines.
 
 ## Troubleshooting

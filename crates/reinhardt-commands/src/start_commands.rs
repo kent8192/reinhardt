@@ -98,6 +98,10 @@ impl BaseCommand for StartProjectCommand {
 		context.insert("project_name", &project_name)?;
 		context.insert("crate_name", project_name.replace('-', "_"))?;
 		context.insert("secret_key", &secret_key)?;
+		context.set_example_override(
+			"secret_key",
+			"CHANGE_THIS_IN_PRODUCTION_MUST_BE_KEPT_SECRET",
+		)?;
 		context.insert("camel_case_project_name", to_camel_case(&project_name))?;
 		context.insert("reinhardt_version", env!("CARGO_PKG_VERSION"))?;
 		context.insert("is_restful", if !with_pages { "true" } else { "false" })?;

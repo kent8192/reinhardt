@@ -15,3 +15,6 @@ mod validator_orm_constraints;
 
 #[path = "validation/serializer_validator_advanced.rs"]
 mod serializer_validator_advanced;
+
+#[path = "validation/validate_derive_range.rs"]
+mod validate_derive_range;

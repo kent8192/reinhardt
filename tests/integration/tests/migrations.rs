@@ -70,3 +70,7 @@ mod field_mapping_integration;
 // Makemigrations E2E Integration Tests
 #[path = "migrations/makemigrations_e2e_integration.rs"]
 mod makemigrations_e2e_integration;
+
+// Merge Migration Tests
+#[path = "migrations/merge_migration_integration.rs"]
+mod merge_migration_integration;

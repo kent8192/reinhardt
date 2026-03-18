@@ -198,8 +198,8 @@ After understanding this example:
 ## Related Documentation
 
 - [Basis Tutorial](../../../docs/tutorials/en/basis/) - Step-by-step guide
-- [Feature Flags Guide](../../../docs/FEATURE_FLAGS.md) - Available features
-- [Getting Started](../../../docs/GETTING_STARTED.md) - Quick start guide
+- [Feature Flags Guide](../../../instructions/FEATURE_FLAGS.md) - Available features
+- [Getting Started](../../../instructions/GETTING_STARTED.md) - Quick start guide
 - [API Documentation](https://docs.rs/reinhardt-web) - Complete API reference
 
 ## License

@@ -4,6 +4,7 @@
 
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite};
 use crate::types::{MutationRequest, MutationResponse};
+#[allow(deprecated)] // CurrentUser is deprecated, will migrate to AuthUser in 0.2.0
 use reinhardt_auth::{CurrentUser, DefaultUser};
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use std::sync::Arc;
@@ -47,6 +48,7 @@ use super::validation::validate_mutation_data;
 /// let response = create_record("User".to_string(), request).await?;
 /// println!("Created: {}", response.message);
 /// ```
+#[allow(deprecated)] // CurrentUser will be migrated to AuthUser in 0.2.0
 #[server_fn(use_inject = true)]
 pub async fn create_record(
 	model_name: String,

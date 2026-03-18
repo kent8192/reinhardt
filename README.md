@@ -97,7 +97,7 @@ Reinhardt follows a **three-phase lifecycle** for every crate:
 | **RC** (`0.x.0-rc.N`) | API frozen. Bug fixes only. Safe to build against. |
 | **Stable** (`0.x.0`) | Full SemVer 2.0 guarantees. |
 
-**Current status:** All crates are at `0.1.0-rc.8` (Release Candidate).
+**Current status:** All crates are at `0.1.0-rc.9` (Release Candidate).
 
 **What this means for you:**
 - Public APIs will only change to fix critical bugs -- no new features or additions
@@ -122,7 +122,7 @@ Get all features with zero configuration:
 [dependencies]
 # Import as 'reinhardt', published as 'reinhardt-web'
 # Default enables ALL features (full bundle)
-reinhardt = { version = "0.1.0-rc.8", package = "reinhardt-web" }
+reinhardt = { version = "0.1.0-rc.9", package = "reinhardt-web" }
 ```
 
 **Includes:** Database, Auth, REST API, Admin, GraphQL, WebSockets, Cache, i18n, Mail, Sessions, Static Files, Storage
@@ -141,7 +141,7 @@ For most projects that don't need all features:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.8", package = "reinhardt-web", default-features = false, features = ["standard"] }
+reinhardt = { version = "0.1.0-rc.9", package = "reinhardt-web", default-features = false, features = ["standard"] }
 ```
 
 **Includes:** Core, Database (PostgreSQL), REST API, Auth, Middleware, Pages (WASM Frontend with SSR)
@@ -154,7 +154,7 @@ Lightweight and fast, perfect for simple APIs:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.8", package = "reinhardt-web", default-features = false, features = ["minimal"] }
+reinhardt = { version = "0.1.0-rc.9", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 ```
 
 **Includes:** HTTP, routing, DI, parameter extraction, server
@@ -168,24 +168,24 @@ Install only the components you need:
 ```toml
 [dependencies]
 # Core components
-reinhardt-http = "0.1.0-rc.8"
-reinhardt-urls = "0.1.0-rc.8"
+reinhardt-http = "0.1.0-rc.9"
+reinhardt-urls = "0.1.0-rc.9"
 
 # Optional: Database
-reinhardt-db = "0.1.0-rc.8"
+reinhardt-db = "0.1.0-rc.9"
 
 # Optional: Authentication
-reinhardt-auth = "0.1.0-rc.8"
+reinhardt-auth = "0.1.0-rc.9"
 
 # Optional: REST API features
-reinhardt-rest = "0.1.0-rc.8"
+reinhardt-rest = "0.1.0-rc.9"
 
 # Optional: Admin panel
-reinhardt-admin = "0.1.0-rc.8"
+reinhardt-admin = "0.1.0-rc.9"
 
 # Optional: Advanced features
-reinhardt-graphql = "0.1.0-rc.8"
-reinhardt-websockets = "0.1.0-rc.8"
+reinhardt-graphql = "0.1.0-rc.9"
+reinhardt-websockets = "0.1.0-rc.9"
 ```
 
 **Note on Crate Naming:**
@@ -1048,7 +1048,7 @@ Reinhardt offers modular components you can mix and match:
 | HTTP & Routing      | `reinhardt-http`          | Request/Response, HTTP handling             |
 | URL Routing         | `reinhardt-urls`          | Function-based and class-based routes       |
 | Server              | `reinhardt-server`        | HTTP server implementation                  |
-| Middleware          | `reinhardt-dispatch`      | Middleware chain, signal dispatch           |
+| Dispatch            | `reinhardt-dispatch`      | HTTP request dispatching, handler composition |
 | Configuration       | `reinhardt-conf`          | Settings management, environment loading    |
 | Commands            | `reinhardt-commands`      | Management CLI tools (startproject, etc.)   |
 | Shortcuts           | `reinhardt-shortcuts`     | Common utility functions                    |
@@ -1067,6 +1067,9 @@ Reinhardt offers modular components you can mix and match:
 | GraphQL             | `reinhardt-graphql`       | Schema generation, subscriptions            |
 | WebSockets          | `reinhardt-websockets`    | Real-time communication                     |
 | i18n                | `reinhardt-i18n`          | Multi-language support                      |
+| Mail                | `reinhardt-mail`          | Email sending and templating                |
+| gRPC                | `reinhardt-grpc`          | gRPC services, protobuf types               |
+| Deep Link           | `reinhardt-deeplink`      | iOS Universal Links, Android App Links      |
 | **Middleware**       |                           |                                             |
 | Middleware          | `reinhardt-middleware`    | HTTP middleware components, CORS, security  |
 | **Testing**         |                           |                                             |

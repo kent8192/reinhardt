@@ -637,6 +637,13 @@ pub fn derive_app_config(input: TokenStream) -> TokenStream {
 
 /// Collect migrations and register them with the global registry
 ///
+/// # Deprecated since 0.2.0
+///
+/// **This macro is deprecated.** Use `FilesystemSource` instead for loading migrations.
+/// `FilesystemSource` scans directories for `.rs` migration files and does not require
+/// compile-time registration. It is consistent with `manage migrate` behavior and
+/// works reliably in Cargo workspaces when using `env!("CARGO_MANIFEST_DIR")`.
+///
 /// This macro generates a `MigrationProvider` implementation and automatically
 /// registers it with the global migration registry using `linkme::distributed_slice`.
 ///
@@ -742,6 +749,7 @@ pub fn derive_apply_update(input: TokenStream) -> TokenStream {
 /// - `#[validate(email)]` - Validate email format
 /// - `#[validate(url)]` - Validate URL format
 /// - `#[validate(length(min = N, max = M))]` - Validate string length
+/// - `#[validate(range(min = N, max = M))]` - Validate numeric range
 /// - `message = "..."` - Custom error message (inside rule parentheses)
 ///
 /// `Option<T>` fields are skipped when `None`.

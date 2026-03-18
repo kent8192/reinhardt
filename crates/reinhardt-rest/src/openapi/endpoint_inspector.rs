@@ -10,11 +10,13 @@ use reinhardt_core::endpoint::EndpointMetadata;
 use utoipa::openapi::{
 	HttpMethod, PathItem, ResponseBuilder,
 	content::ContentBuilder,
+	header::HeaderBuilder,
 	path::{
 		Operation, OperationBuilder, Parameter, ParameterBuilder, ParameterIn, PathItemBuilder,
 	},
 	request_body::{RequestBody, RequestBodyBuilder},
 	schema::{ObjectBuilder, Schema, SchemaFormat, Type},
+	security::SecurityRequirement,
 };
 
 /// Configuration for endpoint inspection
@@ -33,6 +35,18 @@ impl Default for InspectorConfig {
 			include_function_names: true,
 			default_tag: "Default".to_string(),
 		}
+	}
+}
+
+/// Normalize a type name by extracting the last path segment.
+///
+/// Handles fully-qualified paths like `"crate :: models :: CreateUserRequest"`
+/// (produced by `quote!().to_string()`) by returning just `"CreateUserRequest"`.
+/// Simple names without `::` are returned as-is but still trimmed of whitespace.
+fn normalize_type_name(type_str: &str) -> &str {
+	match type_str.rsplit_once("::") {
+		Some((_, last)) => last.trim(),
+		None => type_str.trim(),
 	}
 }
 
@@ -133,19 +147,24 @@ impl EndpointInspector {
 		let body_type = metadata.request_body_type?;
 		let content_type = metadata.request_content_type?;
 
+		// Normalize the type name to handle fully-qualified paths from quote!()
+		// e.g., "crate :: models :: CreateUserRequest" → "CreateUserRequest"
+		let normalized_type = normalize_type_name(body_type);
+
 		// Try to get schema from global registry first
-		let schema =
-			if let Some(registered_schema) = super::registry::get_all_schemas().get(body_type) {
-				// Use registered schema
-				registered_schema.clone()
-			} else {
-				// Fallback: Create placeholder schema (empty object)
-				Schema::Object(
-					ObjectBuilder::new()
-						.description(Some(format!("Request body for {}", body_type)))
-						.build(),
-				)
-			};
+		let schema = if let Some(registered_schema) =
+			super::registry::get_all_schemas().get(normalized_type)
+		{
+			// Use registered schema
+			registered_schema.clone()
+		} else {
+			// Fallback: Create placeholder schema (empty object)
+			Schema::Object(
+				ObjectBuilder::new()
+					.description(Some(format!("Request body for {}", normalized_type)))
+					.build(),
+			)
+		};
 
 		// Create Content with schema
 		let content = ContentBuilder::new().schema(Some(schema)).build();
@@ -153,7 +172,7 @@ impl EndpointInspector {
 		// Create RequestBody
 		Some(
 			RequestBodyBuilder::new()
-				.description(Some(format!("Request body containing {}", body_type)))
+				.description(Some(format!("Request body containing {}", normalized_type)))
 				.required(Some(utoipa::openapi::Required::True))
 				.content(content_type, content)
 				.build(),
@@ -185,13 +204,41 @@ impl EndpointInspector {
 			builder = builder.request_body(Some(request_body));
 		}
 
-		// Add default response
-		builder = builder.response(
-			"200",
-			ResponseBuilder::new()
-				.description("Successful response")
-				.build(),
-		);
+		// Add default response (with headers if present)
+		let mut default_resp_builder = ResponseBuilder::new().description("Successful response");
+		for header in metadata.headers {
+			default_resp_builder = default_resp_builder.header(
+				header.name,
+				HeaderBuilder::new()
+					.description(Some(header.description.to_string()))
+					.build(),
+			);
+		}
+		builder = builder.response("200", default_resp_builder.build());
+
+		// Add custom responses from metadata
+		for response in metadata.responses {
+			let mut resp_builder =
+				ResponseBuilder::new().description(response.description.to_string());
+
+			// Add any response headers from metadata to custom responses
+			for header in metadata.headers {
+				resp_builder = resp_builder.header(
+					header.name,
+					HeaderBuilder::new()
+						.description(Some(header.description.to_string()))
+						.build(),
+				);
+			}
+
+			builder = builder.response(response.status.to_string(), resp_builder.build());
+		}
+
+		// Add security requirements from metadata
+		for security_name in metadata.security {
+			let requirement = SecurityRequirement::new::<&str, [&str; 0], &str>(security_name, []);
+			builder = builder.security(requirement);
+		}
 
 		builder.build()
 	}
@@ -312,6 +359,34 @@ impl Default for EndpointInspector {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::openapi::schema_registration::SchemaRegistration;
+	use utoipa::openapi::schema::ObjectBuilder;
+
+	// Register a test schema for qualified-path lookup verification.
+	// This will be present in the global registry under "QualifiedPathTestSchema".
+	inventory::submit! {
+		SchemaRegistration {
+			name: "QualifiedPathTestSchema",
+			generator: || {
+				Schema::Object(
+					ObjectBuilder::new()
+						.schema_type(utoipa::openapi::schema::Type::Object)
+						.title(Some("QualifiedPathTestSchema"))
+						.description(Some("Test schema for qualified path lookup"))
+						.property(
+							"test_field",
+							Schema::Object(
+								ObjectBuilder::new()
+									.schema_type(utoipa::openapi::schema::Type::String)
+									.build(),
+							),
+						)
+						.required("test_field")
+						.build(),
+				)
+			},
+		}
+	}
 
 	#[test]
 	fn test_normalize_path() {
@@ -378,6 +453,9 @@ mod tests {
 			module_path: "users::views",
 			request_body_type: Some("CreateUserRequest"),
 			request_content_type: Some("application/json"),
+			responses: &[],
+			headers: &[],
+			security: &[],
 		};
 
 		let request_body = inspector.create_request_body(&metadata);
@@ -404,6 +482,9 @@ mod tests {
 			module_path: "users::views",
 			request_body_type: None,
 			request_content_type: None,
+			responses: &[],
+			headers: &[],
+			security: &[],
 		};
 
 		let request_body = inspector.create_request_body(&metadata);
@@ -422,6 +503,9 @@ mod tests {
 			module_path: "auth::views",
 			request_body_type: Some("LoginForm"),
 			request_content_type: Some("application/x-www-form-urlencoded"),
+			responses: &[],
+			headers: &[],
+			security: &[],
 		};
 
 		let request_body = inspector.create_request_body(&metadata);
@@ -445,6 +529,9 @@ mod tests {
 			module_path: "nonexistent::views",
 			request_body_type: Some("NonExistentType"),
 			request_content_type: Some("application/json"),
+			responses: &[],
+			headers: &[],
+			security: &[],
 		};
 
 		// Act
@@ -513,5 +600,117 @@ mod tests {
 
 		// Test invalid method
 		assert!(inspector.metadata_method_to_http_method("INVALID").is_err());
+	}
+
+	#[test]
+	fn test_normalize_type_name_simple() {
+		// Arrange / Act / Assert
+		assert_eq!(
+			normalize_type_name("CreateUserRequest"),
+			"CreateUserRequest"
+		);
+	}
+
+	#[test]
+	fn test_normalize_type_name_fully_qualified() {
+		// Arrange: fully-qualified path as produced by quote!().to_string()
+		// Act / Assert
+		assert_eq!(
+			normalize_type_name("crate :: models :: CreateUserRequest"),
+			"CreateUserRequest"
+		);
+	}
+
+	#[test]
+	fn test_normalize_type_name_compact_path() {
+		// Arrange: compact path without spaces around ::
+		// Act / Assert
+		assert_eq!(
+			normalize_type_name("crate::models::CreateUserRequest"),
+			"CreateUserRequest"
+		);
+	}
+
+	#[test]
+	fn test_normalize_type_name_single_segment_with_colons() {
+		// Arrange: path with only one :: separator
+		// Act / Assert
+		assert_eq!(normalize_type_name("models::LoginForm"), "LoginForm");
+	}
+
+	#[test]
+	fn test_normalize_type_name_empty_string() {
+		// Arrange / Act / Assert
+		assert_eq!(normalize_type_name(""), "");
+	}
+
+	#[test]
+	fn test_create_request_body_with_qualified_path_uses_registered_schema() {
+		// Arrange: verify the test schema is present in the global registry
+		let all_schemas = super::super::registry::get_all_schemas();
+		assert!(
+			all_schemas.contains_key("QualifiedPathTestSchema"),
+			"Test schema 'QualifiedPathTestSchema' should be registered in the global registry"
+		);
+
+		let inspector = EndpointInspector::new();
+
+		// Simulate a fully-qualified type path as produced by quote!()
+		let metadata = EndpointMetadata {
+			path: "/api/test",
+			method: "POST",
+			name: Some("test_endpoint"),
+			function_name: "test_endpoint",
+			module_path: "test::views",
+			request_body_type: Some("crate :: models :: QualifiedPathTestSchema"),
+			request_content_type: Some("application/json"),
+			responses: &[],
+			headers: &[],
+			security: &[],
+		};
+
+		// Act
+		let request_body = inspector.create_request_body(&metadata);
+
+		// Assert: should return a request body using the registered schema
+		assert!(
+			request_body.is_some(),
+			"Should return a request body even with fully-qualified type path"
+		);
+
+		let rb = request_body.unwrap();
+		assert!(rb.content.contains_key("application/json"));
+
+		// Verify the schema came from the registry (has title and properties),
+		// not the fallback (which only has a description)
+		let content = rb.content.get("application/json").unwrap();
+		match &content.schema {
+			Some(utoipa::openapi::RefOr::T(schema)) => match schema {
+				Schema::Object(obj) => {
+					// The registered schema has a title set
+					assert_eq!(
+						obj.title.as_deref(),
+						Some("QualifiedPathTestSchema"),
+						"Schema should come from the registry (has title), not the fallback"
+					);
+					// The registered schema has a 'test_field' property
+					assert!(
+						obj.properties.contains_key("test_field"),
+						"Schema should contain 'test_field' property from the registered schema"
+					);
+					// The registered schema has a specific description
+					assert_eq!(
+						obj.description.as_deref(),
+						Some("Test schema for qualified path lookup"),
+						"Schema description should match the registered schema"
+					);
+				}
+				_ => panic!("Expected Object schema from registry, got non-Object variant"),
+			},
+			Some(utoipa::openapi::RefOr::Ref(_)) => {
+				panic!("Expected concrete schema, got a $ref")
+			}
+			None => panic!("Expected schema in content, got None"),
+		}
 	}
 }

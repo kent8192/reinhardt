@@ -2,7 +2,7 @@
 //!
 //! This module contains Query and Mutation resolvers for project operations.
 
-use async_graphql::{Context, ID, Object, Result as GqlResult};
+use reinhardt::graphql::{Context, Error as GqlError, GqlResult, ID, Object};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -152,12 +152,12 @@ impl ProjectMutation {
 		use reinhardt::Claims;
 		let claims = ctx
 			.data::<Claims>()
-			.map_err(|_| async_graphql::Error::new("Authentication required"))?;
+			.map_err(|_| GqlError::new("Authentication required"))?;
 		let project_storage = ctx.data::<ProjectStorage>()?;
 		let member_storage = ctx.data::<ProjectMemberStorage>()?;
 
-		let owner_id = Uuid::parse_str(&claims.sub)
-			.map_err(|_| async_graphql::Error::new("Invalid user ID"))?;
+		let owner_id =
+			Uuid::parse_str(&claims.sub).map_err(|_| GqlError::new("Invalid user ID"))?;
 
 		let project = Project::new(
 			input.name,
@@ -188,9 +188,9 @@ impl ProjectMutation {
 		let member_storage = ctx.data::<ProjectMemberStorage>()?;
 
 		let project_id = Uuid::parse_str(input.project_id.as_str())
-			.map_err(|_| async_graphql::Error::new("Invalid project ID"))?;
+			.map_err(|_| GqlError::new("Invalid project ID"))?;
 		let user_id = Uuid::parse_str(input.user_id.as_str())
-			.map_err(|_| async_graphql::Error::new("Invalid user ID"))?;
+			.map_err(|_| GqlError::new("Invalid user ID"))?;
 
 		// Check if project exists
 		if project_storage
@@ -198,7 +198,7 @@ impl ProjectMutation {
 			.await
 			.is_none()
 		{
-			return Err(async_graphql::Error::new("Project not found"));
+			return Err(GqlError::new("Project not found"));
 		}
 
 		// Check if already a member
@@ -206,7 +206,7 @@ impl ProjectMutation {
 			.is_member(&project_id.to_string(), &user_id.to_string())
 			.await
 		{
-			return Err(async_graphql::Error::new("User is already a member"));
+			return Err(GqlError::new("User is already a member"));
 		}
 
 		let member = ProjectMember::new(

@@ -451,6 +451,7 @@ fn settings_default_language_code_is_en_us() {
 }
 
 #[rstest]
+#[allow(deprecated)] // Test: verifies deprecated `installed_apps` field behavior
 fn settings_default_installed_apps_is_empty() {
 	// Act
 	let settings = Settings::default();
@@ -536,6 +537,7 @@ fn settings_new_debug_defaults_to_true() {
 // ===========================================================================
 
 #[rstest]
+#[allow(deprecated)] // Test: verifies deprecated `add_app` method behavior
 fn settings_add_app_increases_count() {
 	// Arrange
 	let mut settings = Settings::default();
@@ -549,6 +551,7 @@ fn settings_add_app_increases_count() {
 }
 
 #[rstest]
+#[allow(deprecated)] // Test: verifies deprecated `add_app` method behavior
 fn settings_add_multiple_apps() {
 	// Arrange
 	let mut settings = Settings::default();
@@ -566,6 +569,7 @@ fn settings_add_multiple_apps() {
 }
 
 #[rstest]
+#[allow(deprecated)] // Test: verifies deprecated `with_validated_apps` method behavior
 fn settings_with_validated_apps_replaces_apps_list() {
 	// Arrange
 	let mut settings = Settings::default();

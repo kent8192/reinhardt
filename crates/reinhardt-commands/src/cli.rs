@@ -8,6 +8,8 @@ use crate::MakeMigrationsCommand;
 use crate::base::BaseCommand;
 use crate::collectstatic::{CollectStaticCommand, CollectStaticOptions};
 use crate::{CheckCommand, CommandContext, MigrateCommand, RunServerCommand, ShellCommand};
+#[cfg(feature = "introspect")]
+use clap::ValueEnum;
 use clap::{Parser, Subcommand};
 use reinhardt_conf::settings::builder::SettingsBuilder;
 use reinhardt_conf::settings::profile::Profile;
@@ -38,6 +40,16 @@ pub struct Cli {
 	pub verbosity: u8,
 }
 
+/// Output format for the introspect command
+#[cfg(feature = "introspect")]
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum OutputFormat {
+	/// YAML output (default)
+	Yaml,
+	/// JSON output
+	Json,
+}
+
 /// Command-line interface commands
 ///
 /// This enum defines all available management commands.
@@ -65,6 +77,10 @@ pub enum Commands {
 		/// Create empty migration
 		#[arg(long)]
 		empty: bool,
+
+		/// Fix migration conflicts (create merge migration)
+		#[arg(long)]
+		merge: bool,
 
 		/// Force using empty state when database/TestContainers is unavailable (dangerous)
 		#[arg(long)]
@@ -181,6 +197,18 @@ pub enum Commands {
 		names: bool,
 	},
 
+	/// Output structured project metadata for platform introspection
+	#[cfg(feature = "introspect")]
+	Introspect {
+		/// Output format: yaml (default) or json
+		#[arg(short = 'f', long, value_enum, default_value_t = OutputFormat::Yaml)]
+		format: OutputFormat,
+
+		/// Output only a specific section (app, databases, routes, middleware, settings, features)
+		#[arg(short = 's', long)]
+		section: Option<String>,
+	},
+
 	/// Generate OpenAPI 3.0 schema from registered endpoints
 	#[cfg(feature = "openapi")]
 	Generateopenapi {
@@ -254,6 +282,8 @@ fn requires_router(command: &Commands) -> bool {
 		Commands::Runserver { .. } => true,
 		#[cfg(feature = "routers")]
 		Commands::Showurls { .. } => true,
+		#[cfg(feature = "introspect")]
+		Commands::Introspect { .. } => true,
 		#[cfg(feature = "openapi")]
 		Commands::Generateopenapi { .. } => true,
 		_ => false,
@@ -285,6 +315,7 @@ pub async fn run_command(
 			name,
 			check,
 			empty,
+			merge,
 			force_empty_state,
 			migration_dir: _,
 		} => {
@@ -294,6 +325,7 @@ pub async fn run_command(
 				name,
 				check,
 				empty,
+				merge,
 				force_empty_state,
 				verbosity,
 			)
@@ -349,6 +381,8 @@ pub async fn run_command(
 			ignore,
 		} => execute_collectstatic(clear, no_input, dry_run, link, ignore, verbosity).await,
 		Commands::Showurls { names } => execute_showurls(names, verbosity).await,
+		#[cfg(feature = "introspect")]
+		Commands::Introspect { format, section } => execute_introspect(format, section, verbosity).await,
 		#[cfg(feature = "openapi")]
 		Commands::Generateopenapi {
 			format,
@@ -360,12 +394,15 @@ pub async fn run_command(
 
 /// Execute the makemigrations command
 #[cfg(feature = "migrations")]
+// Allow too_many_arguments: CLI flags are mapped 1:1 to function parameters for clarity
+#[allow(clippy::too_many_arguments)]
 async fn execute_makemigrations(
 	app_labels: Vec<String>,
 	dry_run: bool,
 	name: Option<String>,
 	check: bool,
 	empty: bool,
+	merge: bool,
 	force_empty_state: bool,
 	verbosity: u8,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -386,6 +423,9 @@ async fn execute_makemigrations(
 	}
 	if empty {
 		ctx.set_option("empty".to_string(), "true".to_string());
+	}
+	if merge {
+		ctx.set_option("merge".to_string(), "true".to_string());
 	}
 	if force_empty_state {
 		ctx.set_option("force-empty-state".to_string(), "true".to_string());
@@ -652,6 +692,67 @@ async fn execute_showurls(_names: bool, _verbosity: u8) -> Result<(), Box<dyn st
 		.into())
 }
 
+/// Execute the introspect command
+#[cfg(feature = "introspect")]
+async fn execute_introspect(
+	format: OutputFormat,
+	section: Option<String>,
+	verbosity: u8,
+) -> Result<(), Box<dyn std::error::Error>> {
+	use crate::introspect::{collect_introspect_data, format_json, format_yaml};
+	use colored::Colorize;
+
+	if verbosity > 0 {
+		eprintln!("{}", "Collecting project metadata...".cyan().bold());
+	}
+
+	let output = collect_introspect_data()?;
+
+	// If a section filter is specified, extract just that section
+	let content = if let Some(ref section_name) = section {
+		let valid_sections = [
+			"app",
+			"databases",
+			"routes",
+			"middleware",
+			"settings",
+			"features",
+		];
+		if !valid_sections.contains(&section_name.as_str()) {
+			return Err(format!(
+				"Invalid section '{}'. Valid sections: {}",
+				section_name,
+				valid_sections.join(", ")
+			)
+			.into());
+		}
+
+		// Serialize to serde_json::Value, then extract the section
+		let full_value = serde_json::to_value(&output)?;
+		let section_value = full_value
+			.get(section_name)
+			.ok_or_else(|| format!("Section '{}' not found in output", section_name))?;
+
+		match format {
+			OutputFormat::Json => serde_json::to_string_pretty(section_value)?,
+			OutputFormat::Yaml => serde_yaml::to_string(section_value)?,
+		}
+	} else {
+		match format {
+			OutputFormat::Json => format_json(&output)?,
+			OutputFormat::Yaml => format_yaml(&output)?,
+		}
+	};
+
+	println!("{}", content);
+
+	Ok(())
+}
+
+// Stub when introspect feature is disabled — not reachable because the
+// Commands::Introspect variant is also feature-gated, but keeps the match arm
+// exhaustive for non-introspect builds that might add a fallback.
+
 /// Execute the generateopenapi command
 #[cfg(feature = "openapi")]
 async fn execute_generateopenapi(
@@ -827,7 +928,7 @@ async fn auto_register_router() -> Result<(), Box<dyn std::error::Error>> {
 /// Produces a 50-character hex string (200 bits of entropy). This is used
 /// as the default `SECRET_KEY` when no explicit key is configured, ensuring
 /// that each process gets a unique key rather than a shared hardcoded value.
-fn generate_random_secret_key() -> String {
+pub(crate) fn generate_random_secret_key() -> String {
 	use rand::Rng;
 	use std::fmt::Write;
 
@@ -969,6 +1070,7 @@ mod tests {
 			name: None,
 			check: false,
 			empty: false,
+			merge: false,
 			force_empty_state: false,
 			migration_dir: std::path::PathBuf::from("./migrations"),
 		};
@@ -978,6 +1080,22 @@ mod tests {
 
 		// Assert
 		assert!(!result);
+	}
+
+	#[cfg(feature = "introspect")]
+	#[rstest]
+	fn test_requires_router_for_introspect() {
+		// Arrange
+		let command = Commands::Introspect {
+			format: OutputFormat::Yaml,
+			section: None,
+		};
+
+		// Act
+		let result = requires_router(&command);
+
+		// Assert
+		assert!(result);
 	}
 
 	#[cfg(feature = "routers")]

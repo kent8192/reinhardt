@@ -111,13 +111,13 @@ pub mod reinhardt_types {
 }
 
 // Server-side only re-exports (NOT for WASM)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "core", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub mod reinhardt_apps {
 	pub use reinhardt_apps::*;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "di", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub mod reinhardt_di {
 	pub use reinhardt_di::*;
@@ -137,7 +137,7 @@ pub mod reinhardt_http {
 	pub use reinhardt_http::*;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "di", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub mod reinhardt_params {
 	pub use reinhardt_di::params::*;
@@ -183,14 +183,26 @@ pub mod commands;
 pub mod conf;
 #[cfg(all(feature = "core", not(target_arch = "wasm32")))]
 pub mod core;
+#[cfg(all(feature = "deeplink", not(target_arch = "wasm32")))]
+pub mod deeplink;
 #[cfg(all(feature = "dentdelion", not(target_arch = "wasm32")))]
 pub mod dentdelion;
 #[cfg(all(feature = "di", not(target_arch = "wasm32")))]
 pub mod di;
+#[cfg(all(feature = "dispatch", not(target_arch = "wasm32")))]
+pub mod dispatch;
 #[cfg(all(feature = "forms", not(target_arch = "wasm32")))]
 pub mod forms;
+#[cfg(all(feature = "graphql", not(target_arch = "wasm32")))]
+pub mod graphql;
+#[cfg(all(feature = "grpc", not(target_arch = "wasm32")))]
+pub mod grpc;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod http;
+#[cfg(all(feature = "i18n", not(target_arch = "wasm32")))]
+pub mod i18n;
+#[cfg(all(feature = "mail", not(target_arch = "wasm32")))]
+pub mod mail;
 #[cfg(all(
 	any(feature = "standard", feature = "middleware"),
 	not(target_arch = "wasm32")
@@ -297,7 +309,7 @@ pub use reinhardt_core::{
 pub use reinhardt_http::{Handler, Middleware, MiddlewareChain, Request, Response, ViewResult};
 
 // Re-export inventory crate (used by HTTP method macros for endpoint registration)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "core", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub use inventory;
 
@@ -615,9 +627,11 @@ pub use reinhardt_urls::routers::Path as ClientPath;
 
 // Re-export auth
 #[cfg(all(feature = "auth", not(target_arch = "wasm32")))]
+#[allow(deprecated)] // CurrentUser is deprecated in favor of AuthUser
 pub use reinhardt_auth::{
-	AllowAny, AnonymousUser, AuthBackend, BaseUser, CurrentUser, DefaultUser, FullUser,
-	IsAdminUser, IsAuthenticated, PasswordHasher, Permission, PermissionsMixin, SimpleUser, User,
+	AllowAny, AnonymousUser, AuthBackend, AuthInfo, AuthUser, BaseUser, CurrentUser, DefaultUser,
+	FullUser, IsAdminUser, IsAuthenticated, PasswordHasher, Permission, PermissionsMixin,
+	SimpleUser, User, validate_auth_extractors,
 };
 
 #[cfg(all(
@@ -926,7 +940,6 @@ pub mod prelude {
 		SingleObjectMixin,
 		StatusCode,
 		View,
-		ViewResult,
 		ViewSet,
 		// Routers
 		clear_router,
@@ -934,6 +947,10 @@ pub mod prelude {
 		is_router_registered,
 		register_router,
 	};
+
+	// ViewResult requires core feature (re-exported from reinhardt_http)
+	#[cfg(feature = "core")]
+	pub use crate::ViewResult;
 
 	// UnifiedRouter requires client-router feature
 	#[cfg(feature = "client-router")]

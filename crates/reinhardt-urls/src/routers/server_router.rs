@@ -32,6 +32,7 @@ use reinhardt_di::InjectionContext;
 use reinhardt_http::{Error, Handler, MiddlewareChain, Request, Response, Result};
 use reinhardt_middleware::Middleware;
 use reinhardt_views::viewsets::{Action, ViewSet};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};
 
@@ -46,6 +47,32 @@ pub(crate) use self::handlers::ViewSetHandler;
 pub mod global;
 mod handlers;
 mod matching;
+
+/// Information about a registered middleware
+///
+/// Captures the short name and full type path of a middleware added via
+/// [`ServerRouter::with_middleware()`]. This enables runtime introspection
+/// of the middleware stack without requiring `Middleware` to be `Debug`.
+///
+/// # Examples
+///
+/// ```
+/// use reinhardt_urls::routers::server_router::MiddlewareInfo;
+///
+/// let info = MiddlewareInfo {
+///     name: "LoggingMiddleware".to_string(),
+///     type_name: "reinhardt_middleware::LoggingMiddleware".to_string(),
+/// };
+/// assert_eq!(info.name, "LoggingMiddleware");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MiddlewareInfo {
+	/// Short name of the middleware (last segment of the type path)
+	pub name: String,
+
+	/// Full type path (e.g., `"reinhardt_middleware::logging::LoggingMiddleware"`)
+	pub type_name: String,
+}
 
 /// Route information tuple: (path, name, namespace, methods)
 pub type RouteInfo = Vec<(String, Option<String>, Option<String>, Vec<Method>)>;
@@ -144,6 +171,9 @@ pub struct ServerRouter {
 
 	/// Middleware stack
 	middleware: Vec<Arc<dyn Middleware>>,
+
+	/// Middleware type information for runtime introspection
+	middleware_names: Vec<MiddlewareInfo>,
 
 	/// URL reverser
 	reverser: UrlReverser,
@@ -258,6 +288,7 @@ impl ServerRouter {
 			children: Vec::new(),
 			di_context: None,
 			middleware: Vec::new(),
+			middleware_names: Vec::new(),
 			reverser: UrlReverser::new(),
 			get_router: RwLock::new(MatchitRouter::new()),
 			post_router: RwLock::new(MatchitRouter::new()),
@@ -331,6 +362,16 @@ impl ServerRouter {
 	///     .with_middleware(LoggingMiddleware::new());
 	/// ```
 	pub fn with_middleware<M: Middleware + 'static>(mut self, mw: M) -> Self {
+		let full_type_name = std::any::type_name::<M>().to_string();
+		let short_name = full_type_name
+			.rsplit("::")
+			.next()
+			.unwrap_or(&full_type_name)
+			.to_string();
+		self.middleware_names.push(MiddlewareInfo {
+			name: short_name,
+			type_name: full_type_name,
+		});
 		self.middleware.push(Arc::new(mw));
 		self
 	}
@@ -1165,6 +1206,24 @@ impl ServerRouter {
 	/// Get the number of child routers
 	pub fn children_count(&self) -> usize {
 		self.children.len()
+	}
+
+	/// Get all registered middleware information
+	///
+	/// Returns a deduplicated list of middleware registered on this router
+	/// and all child routers. The order reflects registration order.
+	pub fn get_registered_middleware(&self) -> Vec<MiddlewareInfo> {
+		let mut all = self.middleware_names.clone();
+
+		// Collect from children recursively
+		for child in &self.children {
+			all.extend(child.get_registered_middleware());
+		}
+
+		// Deduplicate while preserving order
+		let mut seen = std::collections::HashSet::new();
+		all.retain(|info| seen.insert(info.type_name.clone()));
+		all
 	}
 
 	/// Get all routes from this router and its children

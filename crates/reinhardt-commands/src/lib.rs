@@ -154,6 +154,9 @@ pub mod embedded_templates;
 pub mod formatter;
 /// Internationalization commands (makemessages, compilemessages).
 pub mod i18n_commands;
+/// Project introspection command for platform metadata discovery.
+#[cfg(feature = "introspect")]
+pub mod introspect;
 /// Email testing command.
 pub mod mail_commands;
 /// Terminal output wrapper with styling support.
@@ -184,6 +187,8 @@ pub use cli::{Cli, Commands, execute_from_command_line, run_command};
 pub use collectstatic::{CollectStaticCommand, CollectStaticOptions, CollectStaticStats};
 pub use context::CommandContext;
 pub use i18n_commands::{CompileMessagesCommand, MakeMessagesCommand};
+#[cfg(feature = "introspect")]
+pub use introspect::IntrospectCommand;
 pub use mail_commands::SendTestEmailCommand;
 pub use output::OutputWrapper;
 pub use registry::CommandRegistry;

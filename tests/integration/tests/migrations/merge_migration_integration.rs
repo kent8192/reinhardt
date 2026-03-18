@@ -76,7 +76,9 @@ fn test_merge_two_conflicting_branches() {
 	// Assert
 	assert_eq!(conflicts.len(), 1);
 	assert!(conflicts.contains_key("myapp"));
-	let leaves = &conflicts["myapp"];
+	let leaves = conflicts
+		.get("myapp")
+		.expect("expected conflicts for 'myapp', but none found");
 	assert_eq!(leaves.len(), 2);
 
 	// Verify merge migration can be created
@@ -114,7 +116,9 @@ fn test_merge_three_conflicting_branches() {
 
 	// Assert
 	assert_eq!(conflicts.len(), 1);
-	let leaves = &conflicts["myapp"];
+	let leaves = conflicts
+		.get("myapp")
+		.expect("expected conflicts for 'myapp', but none found");
 	assert_eq!(leaves.len(), 3);
 
 	// Verify merge has 3 dependencies
@@ -162,7 +166,7 @@ fn test_merge_multiple_apps() {
 
 #[rstest]
 fn test_merge_dry_run() {
-	// Arrange
+	// Arrange: set up conflicting migrations on disk
 	let temp_dir = TempDir::new().unwrap();
 	let migrations_dir = temp_dir.path().join("migrations");
 
@@ -172,11 +176,33 @@ fn test_merge_dry_run() {
 
 	let initial_count = fs::read_dir(migrations_dir.join("myapp")).unwrap().count();
 
-	// Act: simulate dry run by NOT creating the merge migration file
+	// Act: detect conflicts and generate merge migration in-memory (dry-run simulation)
+	let migrations = vec![
+		make_migration("myapp", "0001_initial", vec![]),
+		make_migration("myapp", "0002_add_field", vec![("myapp", "0001_initial")]),
+		make_migration("myapp", "0002_add_index", vec![("myapp", "0001_initial")]),
+	];
+	let graph = build_graph(&migrations);
+	let conflicts = graph.detect_conflicts();
 
-	// Assert: file count unchanged
+	// Verify conflicts were detected
+	assert_eq!(conflicts.len(), 1);
+	let leaves = conflicts
+		.get("myapp")
+		.expect("expected conflicts for 'myapp', but none found");
+	let leaf_names: Vec<&str> = leaves.iter().map(|k| k.name.as_str()).collect();
+	let merge_name = MigrationNamer::generate_merge_name(&leaf_names);
+	let migration_number = MigrationNumbering::next_number(&migrations_dir, "myapp");
+	let _final_name = format!("{}_{}", migration_number, merge_name);
+
+	// In dry-run mode, the merge migration is NOT saved to disk
+
+	// Assert: no new files created (dry-run)
 	let final_count = fs::read_dir(migrations_dir.join("myapp")).unwrap().count();
-	assert_eq!(initial_count, final_count);
+	assert_eq!(
+		initial_count, final_count,
+		"Dry run should not create any new migration files"
+	);
 }
 
 // ============================================================================
@@ -263,17 +289,19 @@ fn test_merge_already_merged() {
 
 #[rstest]
 fn test_merge_with_empty_mutually_exclusive() {
-	// Arrange & Act & Assert
-	// This is a validation check - both flags being true should be rejected.
-	// The actual validation happens in builtin.rs execute method.
-	// Here we verify the logical condition.
-	let is_merge = true;
-	let is_empty = true;
+	// Arrange & Act: verify that --merge and --empty can both be parsed at CLI level
+	// (mutual exclusivity is enforced at command execution time, not parse time)
+	use clap::Parser;
+	use reinhardt_commands::Cli;
+
+	let cli = Cli::try_parse_from(["manage", "makemigrations", "--merge", "--empty"]);
+
+	// Assert: CLI parsing succeeds (both flags accepted)
+	// The actual rejection happens in MakeMigrationsCommand::execute()
 	assert!(
-		is_merge && is_empty,
-		"Both flags can be set simultaneously at parse level"
+		cli.is_ok(),
+		"Both --merge and --empty should be parseable at CLI level"
 	);
-	// The command handler should reject this combination
 }
 
 // ============================================================================

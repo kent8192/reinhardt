@@ -22,7 +22,7 @@ reinhardt-server = { workspace = true, optional = true }
 reinhardt-middleware = { workspace = true, optional = true }
 reinhardt-pages = { workspace = true }
 chrono = { workspace = true }
-clap = { version = "4.5", features = ["derive", "cargo"] }
+clap = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }

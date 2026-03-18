@@ -530,6 +530,24 @@ impl BaseCommand for MakeMigrationsCommand {
 			use std::sync::Arc;
 			use tokio::sync::Mutex;
 
+			// Build a MigrationGraph from a list of Migration structs
+			fn build_migration_graph(
+				migrations: &[reinhardt_db::migrations::Migration],
+			) -> MigrationGraph {
+				let mut graph = MigrationGraph::new();
+				for migration in migrations {
+					let key =
+						MigrationKey::new(migration.app_label.clone(), migration.name.clone());
+					let deps: Vec<MigrationKey> = migration
+						.dependencies
+						.iter()
+						.map(|(app, name)| MigrationKey::new(app.clone(), name.clone()))
+						.collect();
+					graph.add_migration(key, deps);
+				}
+				graph
+			}
+
 			let source = Arc::new(FilesystemSource::new(migrations_dir.clone()));
 			let repository = Arc::new(Mutex::new(FilesystemRepository::new(
 				migrations_dir.clone(),
@@ -569,17 +587,7 @@ impl BaseCommand for MakeMigrationsCommand {
 					CommandError::ExecutionError(format!("Failed to load migrations: {}", e))
 				})?;
 
-				let mut graph = MigrationGraph::new();
-				for migration in &all_migrations {
-					let key =
-						MigrationKey::new(migration.app_label.clone(), migration.name.clone());
-					let deps: Vec<MigrationKey> = migration
-						.dependencies
-						.iter()
-						.map(|(app, name)| MigrationKey::new(app.clone(), name.clone()))
-						.collect();
-					graph.add_migration(key, deps);
-				}
+				let graph = build_migration_graph(&all_migrations);
 
 				// Detect conflicts
 				let mut conflicts = graph.detect_conflicts();
@@ -853,19 +861,14 @@ impl BaseCommand for MakeMigrationsCommand {
 
 			// Check for migration conflicts before proceeding
 			{
-				let all_migrations = service.load_all().await.unwrap_or_default();
+				let all_migrations = service.load_all().await.map_err(|e| {
+					CommandError::ExecutionError(format!(
+						"Failed to load migrations for conflict check: {}",
+						e
+					))
+				})?;
 				if !all_migrations.is_empty() {
-					let mut graph = MigrationGraph::new();
-					for migration in &all_migrations {
-						let key =
-							MigrationKey::new(migration.app_label.clone(), migration.name.clone());
-						let deps: Vec<MigrationKey> = migration
-							.dependencies
-							.iter()
-							.map(|(app, name)| MigrationKey::new(app.clone(), name.clone()))
-							.collect();
-						graph.add_migration(key, deps);
-					}
+					let graph = build_migration_graph(&all_migrations);
 
 					let conflicts = graph.detect_conflicts();
 					if !conflicts.is_empty() {

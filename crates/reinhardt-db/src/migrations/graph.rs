@@ -324,11 +324,18 @@ impl MigrationGraph {
 		}
 
 		// Find all nodes with in-degree 0 (no dependencies within the graph)
-		let mut queue: VecDeque<MigrationKey> = in_degree
+		// Sort deterministically by (app_label, name) to ensure consistent ordering
+		let mut zero_degree: Vec<MigrationKey> = in_degree
 			.iter()
 			.filter(|&(_, &degree)| degree == 0)
 			.map(|(key, _)| key.clone())
 			.collect();
+		zero_degree.sort_by(|a, b| {
+			a.app_label
+				.cmp(&b.app_label)
+				.then_with(|| a.name.cmp(&b.name))
+		});
+		let mut queue: VecDeque<MigrationKey> = zero_degree.into_iter().collect();
 
 		let mut result = Vec::new();
 

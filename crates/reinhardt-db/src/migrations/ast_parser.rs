@@ -814,12 +814,19 @@ fn extract_string_tuple(expr: &Expr) -> Option<(String, String)> {
 	None
 }
 
-/// Extract string value from a literal expression
+/// Extract string value from a literal expression or `.to_string()` method call
 fn extract_string_literal(expr: &Expr) -> Option<String> {
+	// Handle direct string literal: "foo"
 	if let Expr::Lit(expr_lit) = expr
 		&& let syn::Lit::Str(lit_str) = &expr_lit.lit
 	{
 		return Some(lit_str.value());
+	}
+	// Handle "foo".to_string() pattern
+	if let Expr::MethodCall(method_call) = expr
+		&& method_call.method == "to_string"
+	{
+		return extract_string_literal(&method_call.receiver);
 	}
 	None
 }

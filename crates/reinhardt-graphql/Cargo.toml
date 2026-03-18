@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-graphql"
-version = "0.1.0-rc.12"
+version = "0.1.0-rc.13"
 description = "GraphQL API support for Reinhardt (facade crate)"
 edition.workspace = true
 license.workspace = true

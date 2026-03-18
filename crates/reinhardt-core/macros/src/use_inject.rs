@@ -197,19 +197,25 @@ pub(crate) fn use_inject_impl(_args: TokenStream, input: ItemFn) -> Result<Token
 	}
 
 	// Generate DI context extraction (from Request)
+	// Fork a per-request context from the shared router context so that
+	// the HTTP request is available for parameter extraction (e.g. AuthInfo).
 	let di_context_extraction = if !inject_params.is_empty() {
 		quote! {
-			let __di_ctx = match #request_pat.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>() {
-				Some(ctx) => ctx,
-				None => {
-					::tracing::warn!(
-						"DI context not set on router. Creating empty fallback context. \
-						 Hint: Configure the router with .with_di_context() for proper dependency injection."
-					);
-					::std::sync::Arc::new(::std::sync::Arc::new(
-						#di_crate::InjectionContext::builder(#di_crate::SingletonScope::new()).build()
-					))
-				}
+			let __di_ctx = {
+				let __shared_ctx = match #request_pat.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>() {
+					Some(ctx) => ctx,
+					None => {
+						::tracing::warn!(
+							"DI context not set on router. Creating empty fallback context. \
+							 Hint: Configure the router with .with_di_context() for proper dependency injection."
+						);
+						::std::sync::Arc::new(::std::sync::Arc::new(
+							#di_crate::InjectionContext::builder(#di_crate::SingletonScope::new()).build()
+						))
+					}
+				};
+				let __di_request = #request_pat.clone_for_di();
+				::std::sync::Arc::new((*__shared_ctx).fork_for_request(__di_request))
 			};
 		}
 	} else {

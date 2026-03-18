@@ -3,6 +3,7 @@
 use crate::function_handle::FunctionHandle;
 use crate::override_registry::OverrideRegistry;
 use crate::scope::{RequestScope, SingletonScope};
+use reinhardt_http::Request as HttpRequest;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -394,6 +395,29 @@ impl InjectionContext {
 		&self.singleton_scope
 	}
 
+	/// Creates a per-request fork of this context with an HTTP request.
+	///
+	/// The forked context shares the same singleton scope but has a fresh
+	/// request scope. When the `params` feature is enabled, the HTTP request
+	/// and its path parameters are made available for parameter extraction.
+	#[allow(unused_variables)] // `request` is unused when `params` feature is disabled
+	pub fn fork_for_request(&self, request: HttpRequest) -> InjectionContext {
+		#[cfg(feature = "params")]
+		let param_context = Some(Arc::new(ParamContext::with_path_params(
+			request.path_params.clone(),
+		)));
+
+		InjectionContext {
+			request_scope: RequestScope::new(),
+			singleton_scope: self.singleton_scope.clone(),
+			override_registry: self.override_registry.clone(),
+			#[cfg(feature = "params")]
+			request: Some(Arc::new(request)),
+			#[cfg(feature = "params")]
+			param_context,
+		}
+	}
+
 	/// Returns a reference to the override registry.
 	///
 	/// The override registry stores function-level overrides that take
@@ -654,5 +678,74 @@ impl RequestContext {
 	/// ```
 	pub fn injection_context(&self) -> &InjectionContext {
 		&self.injection_ctx
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	#[rstest]
+	fn test_fork_for_request_shares_singleton_scope() {
+		// Arrange
+		let singleton_scope = Arc::new(SingletonScope::new());
+		singleton_scope.set(42u32);
+		let ctx = InjectionContext::builder(singleton_scope).build();
+
+		let request = HttpRequest::builder()
+			.method(hyper::Method::GET)
+			.uri("/test")
+			.build()
+			.unwrap();
+
+		// Act
+		let forked = ctx.fork_for_request(request);
+
+		// Assert - singleton scope is shared
+		let value = forked.get_singleton::<u32>();
+		assert_eq!(value.map(|v| *v), Some(42));
+	}
+
+	#[rstest]
+	fn test_fork_for_request_has_independent_request_scope() {
+		// Arrange
+		let singleton_scope = Arc::new(SingletonScope::new());
+		let ctx = InjectionContext::builder(singleton_scope).build();
+		ctx.set_request("original".to_string());
+
+		let request = HttpRequest::builder()
+			.method(hyper::Method::GET)
+			.uri("/test")
+			.build()
+			.unwrap();
+
+		// Act
+		let forked = ctx.fork_for_request(request);
+
+		// Assert - request scope is independent (not inherited)
+		assert!(forked.get_request::<String>().is_none());
+	}
+
+	#[cfg(feature = "params")]
+	#[rstest]
+	fn test_fork_for_request_sets_http_request() {
+		// Arrange
+		let singleton_scope = Arc::new(SingletonScope::new());
+		let ctx = InjectionContext::builder(singleton_scope).build();
+
+		let request = HttpRequest::builder()
+			.method(hyper::Method::POST)
+			.uri("/api/users")
+			.build()
+			.unwrap();
+
+		// Act
+		let forked = ctx.fork_for_request(request);
+
+		// Assert - HTTP request is available
+		let http_req = forked.get_http_request();
+		assert!(http_req.is_some());
+		assert_eq!(http_req.unwrap().method, hyper::Method::POST);
 	}
 }

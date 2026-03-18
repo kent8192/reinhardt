@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       runner: ${{ steps.set-runner.outputs.runner }}
+      is_self_hosted: ${{ steps.set-runner.outputs.is_self_hosted }}
     steps:
       - name: Set runner configuration
         id: set-runner
@@ -35,8 +36,10 @@ jobs:
         run: |
           if [[ "$SELF_HOSTED_ENABLED" == "true" ]]; then
             echo 'runner=["self-hosted","linux","arm64","reinhardt-release"]' >> "$GITHUB_OUTPUT"
+            echo 'is_self_hosted=true' >> "$GITHUB_OUTPUT"
           else
             echo 'runner="ubuntu-latest"' >> "$GITHUB_OUTPUT"
+            echo 'is_self_hosted=false' >> "$GITHUB_OUTPUT"
           fi
 
   release-plz-pr:
@@ -57,7 +60,7 @@ jobs:
           private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
 
       - name: Free Disk Space
-        if: ${{ !contains(toJSON(needs.determine-runner.outputs.runner), 'self-hosted') }}
+        if: ${{ needs.determine-runner.outputs.is_self_hosted != 'true' }}
         uses: jlumbroso/free-disk-space@v1.3.1
         with:
           tool-cache: false
@@ -80,7 +83,7 @@ jobs:
         uses: ./.github/actions/setup-protoc
 
       - name: Install GitHub CLI (safety net for self-hosted)
-        if: ${{ contains(toJSON(needs.determine-runner.outputs.runner), 'self-hosted') }}
+        if: ${{ needs.determine-runner.outputs.is_self_hosted == 'true' }}
         run: |
           if ! command -v gh &>/dev/null; then
             curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -118,7 +121,7 @@ jobs:
           private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
 
       - name: Free Disk Space
-        if: ${{ !contains(toJSON(needs.determine-runner.outputs.runner), 'self-hosted') }}
+        if: ${{ needs.determine-runner.outputs.is_self_hosted != 'true' }}
         uses: jlumbroso/free-disk-space@v1.3.1
         with:
           tool-cache: false
@@ -141,7 +144,7 @@ jobs:
         uses: ./.github/actions/setup-protoc
 
       - name: Install GitHub CLI (safety net for self-hosted)
-        if: ${{ contains(toJSON(needs.determine-runner.outputs.runner), 'self-hosted') }}
+        if: ${{ needs.determine-runner.outputs.is_self_hosted == 'true' }}
         run: |
           if ! command -v gh &>/dev/null; then
             curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \

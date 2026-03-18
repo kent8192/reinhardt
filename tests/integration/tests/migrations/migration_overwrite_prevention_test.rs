@@ -8,7 +8,7 @@
 //! 5. Directory structure correctness (migrations/{app}/NNNN_name.rs)
 
 use reinhardt_db::migrations::{
-	Migration, MigrationRepository, migration_numbering::MigrationNumbering,
+	Migration, MigrationRepository, migration_numbering::MigrationNumbering, operations::Operation,
 	repository::filesystem::FilesystemRepository,
 };
 use serial_test::serial;
@@ -285,4 +285,108 @@ fn test_large_number_handling() {
 	// Next should be 10000 (but formatted as 4 digits, so it wraps)
 	let next_after_9999 = MigrationNumbering::next_number(migrations_dir, "blog");
 	assert_eq!(next_after_9999, "10000");
+}
+
+/// Helper function to create a migration with operations for duplicate check tests
+fn create_migration_with_operations(app_label: &str, name: &str) -> Migration {
+	let mut migration = Migration::new(name, app_label);
+	migration.operations.push(Operation::DropTable {
+		name: "test_table".to_string(),
+	});
+	migration
+}
+
+/// Test Case 11: Merge migration (empty operations) saves successfully
+/// Validates that merge migrations with empty operations don't trigger
+/// DuplicateOperations error even when existing migrations have empty operations too.
+/// Regression test for issue #2484.
+#[tokio::test]
+#[serial(migration_overwrite)]
+async fn test_merge_migration_empty_operations_saves_successfully() {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let mut repo = FilesystemRepository::new(temp_dir.path());
+
+	// Save a regular migration (which will also have empty operations from new())
+	let existing = create_test_migration("blog", "0001_initial");
+	repo.save(&existing).await.unwrap();
+
+	// Act: save a merge migration (empty operations, has dependencies)
+	let mut merge_migration = create_test_migration("blog", "0002_merge");
+	merge_migration
+		.dependencies
+		.push(("blog".to_string(), "0001_initial".to_string()));
+
+	// Assert: should succeed without DuplicateOperations error
+	let result = repo.save(&merge_migration).await;
+	assert!(result.is_ok(), "merge migration save failed: {result:?}");
+	assert!(temp_dir.path().join("blog").join("0002_merge.rs").exists());
+}
+
+/// Test Case 12: Multiple merge migrations save successfully
+/// Validates that multiple merge migrations (all with empty operations)
+/// can coexist without false-positive duplicate detection.
+/// Regression test for issue #2484.
+#[tokio::test]
+#[serial(migration_overwrite)]
+async fn test_multiple_merge_migrations_save_successfully() {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let mut repo = FilesystemRepository::new(temp_dir.path());
+
+	let base = create_test_migration("blog", "0001_initial");
+	repo.save(&base).await.unwrap();
+
+	let mut merge1 = create_test_migration("blog", "0002_merge_branch_a");
+	merge1
+		.dependencies
+		.push(("blog".to_string(), "0001_initial".to_string()));
+	repo.save(&merge1).await.unwrap();
+
+	// Act: save a second merge migration
+	let mut merge2 = create_test_migration("blog", "0003_merge_branch_b");
+	merge2
+		.dependencies
+		.push(("blog".to_string(), "0002_merge_branch_a".to_string()));
+
+	// Assert
+	let result = repo.save(&merge2).await;
+	assert!(
+		result.is_ok(),
+		"second merge migration save failed: {result:?}"
+	);
+	assert!(
+		temp_dir
+			.path()
+			.join("blog")
+			.join("0003_merge_branch_b.rs")
+			.exists()
+	);
+}
+
+/// Test Case 13: Duplicate operations check still works for non-empty operations
+/// Validates that the duplicate detection still catches actual duplicates
+/// (migrations with identical non-empty operations).
+/// Regression prevention for the fix in issue #2484.
+#[tokio::test]
+#[serial(migration_overwrite)]
+async fn test_duplicate_operations_check_still_catches_real_duplicates() {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let mut repo = FilesystemRepository::new(temp_dir.path());
+
+	let migration1 = create_migration_with_operations("blog", "0001_drop_table");
+	repo.save(&migration1).await.unwrap();
+
+	// Act: save another migration with identical operations but different name
+	let migration2 = create_migration_with_operations("blog", "0002_drop_table_again");
+	let result = repo.save(&migration2).await;
+
+	// Assert: should fail with DuplicateOperations error
+	assert!(result.is_err());
+	let err_msg = result.unwrap_err().to_string();
+	assert!(
+		err_msg.contains("identical operations"),
+		"expected DuplicateOperations error, got: {err_msg}"
+	);
 }

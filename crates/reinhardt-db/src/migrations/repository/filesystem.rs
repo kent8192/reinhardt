@@ -258,17 +258,22 @@ impl MigrationRepository for FilesystemRepository {
 			))));
 		}
 
-		// Check for duplicate operations with existing migrations
-		let existing_migrations = self.list(&migration.app_label).await?;
-		for existing in &existing_migrations {
-			if self.has_identical_operations(existing, migration) {
-				return Err(MigrationError::DuplicateOperations(format!(
-					"Migration '{}' has identical operations to existing migration '{}'. \
-					This usually indicates a problem with from_state construction. \
-					The existing migration was created at the same location and performs \
-					the same database changes.",
-					migration.name, existing.name
-				)));
+		// Check for duplicate operations with existing migrations.
+		// Skip for migrations with empty operations (e.g., merge migrations)
+		// since empty-vs-empty comparison is never a meaningful duplicate signal.
+		// The file-exists check above already prevents actual overwrites.
+		if !migration.operations.is_empty() {
+			let existing_migrations = self.list(&migration.app_label).await?;
+			for existing in &existing_migrations {
+				if self.has_identical_operations(existing, migration) {
+					return Err(MigrationError::DuplicateOperations(format!(
+						"Migration '{}' has identical operations to existing migration '{}'. \
+						This usually indicates a problem with from_state construction. \
+						The existing migration was created at the same location and performs \
+						the same database changes.",
+						migration.name, existing.name
+					)));
+				}
 			}
 		}
 

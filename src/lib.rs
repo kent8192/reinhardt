@@ -111,13 +111,13 @@ pub mod reinhardt_types {
 }
 
 // Server-side only re-exports (NOT for WASM)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "core", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub mod reinhardt_apps {
 	pub use reinhardt_apps::*;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "di", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub mod reinhardt_di {
 	pub use reinhardt_di::*;
@@ -137,7 +137,7 @@ pub mod reinhardt_http {
 	pub use reinhardt_http::*;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "di", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub mod reinhardt_params {
 	pub use reinhardt_di::params::*;
@@ -309,7 +309,7 @@ pub use reinhardt_core::{
 pub use reinhardt_http::{Handler, Middleware, MiddlewareChain, Request, Response, ViewResult};
 
 // Re-export inventory crate (used by HTTP method macros for endpoint registration)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "core", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub use inventory;
 
@@ -940,7 +940,6 @@ pub mod prelude {
 		SingleObjectMixin,
 		StatusCode,
 		View,
-		ViewResult,
 		ViewSet,
 		// Routers
 		clear_router,
@@ -948,6 +947,10 @@ pub mod prelude {
 		is_router_registered,
 		register_router,
 	};
+
+	// ViewResult requires core feature (re-exported from reinhardt_http)
+	#[cfg(feature = "core")]
+	pub use crate::ViewResult;
 
 	// UnifiedRouter requires client-router feature
 	#[cfg(feature = "client-router")]

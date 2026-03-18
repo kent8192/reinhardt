@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.11...reinhardt-auth@v0.1.0-rc.12) - 2026-03-18
+
+### Added
+
+- *(auth)* add AuthInfo lightweight auth extractor
+- *(auth)* add AuthUser<U> extractor with tuple struct destructuring
+- *(auth)* add validate_auth_extractors startup DI validation
+
+### Changed
+
+- *(auth)* update re-exports and suppress deprecation warnings
+
+### Documentation
+
+- *(auth)* use backticks instead of intra-doc links for cross-crate types
+
+### Fixed
+
+- *(auth)* add warning log when DatabaseConnection is missing for CurrentUser injection
+- *(auth)* remove Uuid::nil() fallback on user_id parse failure
+
 ## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.8...reinhardt-auth@v0.1.0-rc.9) - 2026-03-15
 
 ### Documentation

@@ -133,7 +133,7 @@ impl CursorEncoder for Base64CursorEncoder {
 
 		let timestamp = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
-			.unwrap()
+			.unwrap_or_default()
 			.as_secs();
 
 		// Build message payload for HMAC signing
@@ -180,7 +180,7 @@ impl CursorEncoder for Base64CursorEncoder {
 		// Check if cursor is expired
 		let now = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
-			.unwrap()
+			.unwrap_or_default()
 			.as_secs();
 		// Use saturating_sub to prevent underflow when timestamp > now
 		// (e.g., due to clock skew or NTP adjustments)

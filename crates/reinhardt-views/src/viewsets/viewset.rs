@@ -9,6 +9,11 @@ use reinhardt_http::{Request, Response, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Create a `MethodNotAllowed` error for the given HTTP method.
+fn method_not_allowed(method: &Method) -> reinhardt_core::exception::Error {
+	reinhardt_core::exception::Error::MethodNotAllowed(format!("Method {} not allowed", method))
+}
+
 /// ViewSet trait - similar to Django REST Framework's ViewSet
 /// Uses composition of mixins instead of inheritance
 #[async_trait]
@@ -380,10 +385,7 @@ where
 				// Destroy action
 				self.handle_destroy(request).await
 			}
-			_ => Err(reinhardt_core::exception::Error::MethodNotAllowed(format!(
-				"Method {} not allowed",
-				request.method
-			))),
+			_ => Err(method_not_allowed(&request.method)),
 		}
 	}
 }
@@ -592,10 +594,7 @@ where
 					.with_json(&serde_json::json!({}))
 					.map_err(|e| reinhardt_core::exception::Error::Http(e.to_string()))
 			}
-			_ => Err(reinhardt_core::exception::Error::MethodNotAllowed(format!(
-				"Method {} not allowed",
-				request.method
-			))),
+			_ => Err(method_not_allowed(&request.method)),
 		}
 	}
 }

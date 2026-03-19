@@ -462,6 +462,9 @@ impl<T: TimeProvider> Throttle for TokenBucket<T> {
 			.entry(key.to_string())
 			.or_insert_with(|| self.new_bucket_state());
 
+		// Refill tokens before checking to avoid stale token counts
+		self.refill_tokens(state);
+
 		if state.tokens >= self.config.tokens_per_request {
 			return Ok(None);
 		}
@@ -646,6 +649,32 @@ mod tests {
 		let wait = throttle.wait_time("user").await.unwrap();
 		assert!(wait.is_some());
 		assert!(wait.unwrap() > 0);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_token_bucket_wait_time_returns_none_after_refill() {
+		// Arrange
+		use tokio::time::Instant;
+		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
+		let config = TokenBucketConfig::new(5, 5, 10, 1).unwrap();
+		let throttle = TokenBucket::with_time_provider(config, time_provider.clone());
+
+		// Act - consume all tokens
+		for _ in 0..5 {
+			throttle.allow_request("user").await.unwrap();
+		}
+
+		// Assert - should require waiting before refill
+		let wait = throttle.wait_time("user").await.unwrap();
+		assert!(wait.is_some());
+
+		// Act - advance time past the refill interval
+		time_provider.advance(std::time::Duration::from_secs(11));
+
+		// Assert - wait_time should return None after tokens are refilled
+		let wait = throttle.wait_time("user").await.unwrap();
+		assert_eq!(wait, None);
 	}
 
 	#[rstest]

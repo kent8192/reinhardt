@@ -107,7 +107,12 @@ impl PostgresSuiteResource {
 						break;
 					}
 					Err(e) if attempt < MAX_RETRIES - 1 => {
-						let backoff = Duration::from_millis(100 * 2u64.pow(attempt));
+						// Cap backoff at 10 seconds to prevent overflow if MAX_RETRIES is increased
+						let backoff = Duration::from_millis(
+							100u64
+								.saturating_mul(2u64.saturating_pow(attempt))
+								.min(10_000),
+						);
 						eprintln!(
 							"Connection attempt {} failed: {}. Retrying in {:?}...",
 							attempt + 1,

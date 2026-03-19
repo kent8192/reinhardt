@@ -1084,7 +1084,11 @@ pub mod prelude {
 	pub use crate::LoggingMiddleware;
 
 	// Sessions feature
-	#[cfg(all(feature = "sessions", feature = "middleware"))]
+	#[cfg(all(
+		feature = "sessions",
+		feature = "middleware",
+		not(target_arch = "wasm32")
+	))]
 	pub use crate::AuthenticationMiddleware;
 	#[cfg(feature = "sessions")]
 	pub use crate::Session;

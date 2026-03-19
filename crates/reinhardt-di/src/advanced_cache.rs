@@ -48,6 +48,11 @@ where
 {
 	/// Create a new LRU cache with the given capacity
 	///
+	/// # Panics
+	///
+	/// Panics if `capacity` is 0. A zero-capacity cache cannot store any items
+	/// and is likely a programming error.
+	///
 	/// # Example
 	///
 	/// ```rust
@@ -56,6 +61,7 @@ where
 	/// let cache: LruCache<String, i32> = LruCache::new(100);
 	/// ```
 	pub fn new(capacity: usize) -> Self {
+		assert!(capacity > 0, "LruCache capacity must be greater than 0");
 		Self {
 			capacity,
 			map: IndexMap::new(),

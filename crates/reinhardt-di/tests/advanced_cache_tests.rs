@@ -6,6 +6,14 @@ use reinhardt_di::advanced_cache::{CacheStats, LruCache, TtlCache};
 use rstest::*;
 use std::time::Duration;
 
+/// Test that LruCache::new panics when capacity is zero
+#[rstest]
+#[should_panic(expected = "LruCache capacity must be greater than 0")]
+fn lru_cache_new_with_zero_capacity_panics() {
+	// Act
+	let _cache: LruCache<String, i32> = LruCache::new(0);
+}
+
 /// Test LRU cache eviction when capacity is exceeded
 #[rstest]
 #[tokio::test]

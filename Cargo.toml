@@ -486,8 +486,8 @@ sqlx = { version = "0.8", features = [
   "rust_decimal",
 ] }
 
-# TLS
-native-tls = "0.2"
+# TLS — lower-bound avoids 0.2.17 build failure (non-exhaustive pattern in openssl.rs)
+native-tls = ">=0.2.18, <0.3"
 
 # Authentication & Security
 argon2 = { version = "0.5", features = ["std"] }

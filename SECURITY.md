@@ -2,14 +2,15 @@
 
 ## Supported Versions
 
-Currently, only the latest development version is supported. Stable releases are not yet available.
+This project is currently in the Release Candidate (RC) phase. See [Stability Policy](instructions/STABILITY_POLICY.md) for API guarantees.
 
 | Version | Supported |
 |---------|-----------|
-| Latest development branch | ✅ Yes |
-| Other branches | ❌ No |
+| 0.1.0-rc.N (latest RC) | ✅ Yes |
+| Previous RC versions | ⚠️ Bug fixes only |
+| Pre-RC versions | ❌ No |
 
-**Note:** This project is in active development and has not yet released a stable version.
+**Note:** During the RC phase, the API is frozen and only bug fixes and security patches are accepted. See the Stability Policy for details.
 
 ---
 
@@ -283,6 +284,6 @@ We thank all security researchers who responsibly disclose vulnerabilities to he
 
 ---
 
-**Last Updated:** 2026-01-26
+**Last Updated:** 2026-03-19
 
 **Repository:** https://github.com/kent8192/reinhardt-web

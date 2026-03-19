@@ -45,6 +45,7 @@ fn safe_client_error_detail(error: &crate::Error) -> Option<String> {
 	match error {
 		Error::Validation(msg) => Some(msg.clone()),
 		Error::Http(msg) => Some(msg.clone()),
+		Error::Conflict(msg) => Some(msg.clone()),
 		Error::Serialization(msg) => Some(msg.clone()),
 		Error::ParseError(_) => Some("Invalid request format".to_string()),
 		Error::BodyAlreadyConsumed => Some("Request body has already been consumed".to_string()),
@@ -1229,5 +1230,20 @@ mod tests {
 			response.headers.get("X-Custom").unwrap().to_str().unwrap(),
 			"valid-value"
 		);
+	}
+
+	#[rstest]
+	fn test_from_error_conflict_includes_detail() {
+		// Arrange
+		let error = crate::Error::Conflict("Email already exists".to_string());
+
+		// Act
+		let response: Response = error.into();
+
+		// Assert
+		assert_eq!(response.status, StatusCode::CONFLICT);
+		let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+		assert_eq!(body["error"], "Conflict");
+		assert_eq!(body["detail"], "Email already exists");
 	}
 }

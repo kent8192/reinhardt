@@ -71,8 +71,8 @@ pub fn parse_dict(value: &str) -> HashMap<String, String> {
 			let key = key.trim().to_string();
 			let val = val.trim().to_string();
 
-			// Skip entries where both key and value are empty
-			if !key.is_empty() || !val.is_empty() {
+			// Skip entries with empty keys
+			if !key.is_empty() {
 				map.insert(key, val);
 			}
 		}
@@ -394,5 +394,60 @@ mod tests {
 		let cache = parse_cache_url("redis://localhost:6379/0").unwrap();
 		assert_eq!(cache.backend, "reinhardt.cache.backends.redis.RedisCache");
 		assert_eq!(cache.location.unwrap(), "redis://localhost:6379/0");
+	}
+
+	#[rstest::rstest]
+	fn test_parse_dict_rejects_empty_keys() {
+		// Arrange
+		let input = "=value,key2=value2";
+
+		// Act
+		let dict = parse_dict(input);
+
+		// Assert
+		assert!(!dict.contains_key(""), "Empty key should not be inserted");
+		assert_eq!(dict.len(), 1);
+		assert_eq!(dict.get("key2").unwrap(), "value2");
+	}
+
+	#[rstest::rstest]
+	fn test_parse_dict_allows_empty_values() {
+		// Arrange
+		let input = "key1=,key2=value2";
+
+		// Act
+		let dict = parse_dict(input);
+
+		// Assert
+		assert_eq!(dict.get("key1").unwrap(), "");
+		assert_eq!(dict.get("key2").unwrap(), "value2");
+	}
+
+	#[rstest::rstest]
+	fn test_parse_dict_skips_both_empty() {
+		// Arrange
+		let input = "=,key=value";
+
+		// Act
+		let dict = parse_dict(input);
+
+		// Assert
+		assert!(!dict.contains_key(""), "Empty key should not be inserted");
+		assert_eq!(dict.len(), 1);
+		assert_eq!(dict.get("key").unwrap(), "value");
+	}
+
+	#[rstest::rstest]
+	fn test_parse_dict_multiple_empty_key_entries() {
+		// Arrange
+		let input = "=a,=b,valid=ok";
+
+		// Act
+		let dict = parse_dict(input);
+
+		// Assert
+		assert!(!dict.contains_key(""), "Empty keys should not be inserted");
+		assert_eq!(dict.len(), 1);
+		assert_eq!(dict.get("valid").unwrap(), "ok");
 	}
 }

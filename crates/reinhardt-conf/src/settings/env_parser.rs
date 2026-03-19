@@ -335,6 +335,26 @@ mod tests {
 	}
 
 	#[test]
+	fn test_parse_dict_skips_empty_key_or_value() {
+		// Empty key ("=value") should be skipped
+		let dict = parse_dict("=value");
+		assert!(dict.is_empty());
+
+		// Empty value ("key=") should be skipped
+		let dict = parse_dict("key=");
+		assert!(dict.is_empty());
+
+		// Both empty ("=") should be skipped
+		let dict = parse_dict("=");
+		assert!(dict.is_empty());
+
+		// Mixed: valid pair alongside empty key/value entries
+		let dict = parse_dict("=value,key=,valid=entry,=");
+		assert_eq!(dict.len(), 1);
+		assert_eq!(dict.get("valid").unwrap(), "entry");
+	}
+
+	#[test]
 	fn test_parse_sqlite_memory() {
 		let db = parse_database_url("sqlite::memory:").unwrap();
 		assert_eq!(db.engine, "reinhardt.db.backends.sqlite3");

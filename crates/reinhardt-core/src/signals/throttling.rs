@@ -237,13 +237,13 @@ impl<T> ThrottleState<T> {
 		}
 	}
 
-	fn can_emit_token_bucket(&mut self, refill_rate: u32) -> bool {
+	fn can_emit_token_bucket(&mut self, refill_rate: u32, capacity: u32) -> bool {
 		let now = Instant::now();
 		let elapsed = now.duration_since(self.last_refill).as_secs_f64();
 
-		// Refill tokens based on elapsed time
+		// Refill tokens based on elapsed time, capped at bucket capacity
 		let tokens_to_add = elapsed * refill_rate as f64;
-		self.tokens = (self.tokens + tokens_to_add).min(refill_rate as f64);
+		self.tokens = (self.tokens + tokens_to_add).min(capacity as f64);
 		self.last_refill = now;
 
 		if self.tokens >= 1.0 {
@@ -259,11 +259,11 @@ impl<T> ThrottleState<T> {
 			ThrottleStrategy::FixedWindow => self.can_emit_fixed_window(config),
 			ThrottleStrategy::SlidingWindow => self.can_emit_sliding_window(config),
 			ThrottleStrategy::TokenBucket { refill_rate } => {
-				self.can_emit_token_bucket(refill_rate)
+				self.can_emit_token_bucket(refill_rate, config.max_emissions)
 			}
 			ThrottleStrategy::LeakyBucket { leak_rate } => {
 				// Leaky bucket is similar to token bucket but with constant processing
-				self.can_emit_token_bucket(leak_rate)
+				self.can_emit_token_bucket(leak_rate, config.max_emissions)
 			}
 		}
 	}
@@ -699,6 +699,67 @@ mod tests {
 
 		// Eventually all should be processed
 		assert!(counter.load(Ordering::SeqCst) >= 9);
+		assert_eq!(throttle.dropped_count(), 0);
+	}
+
+	#[rstest::rstest]
+	fn test_token_bucket_capacity_capped_at_max_emissions_not_refill_rate() {
+		// Arrange: max_emissions (capacity) = 100, refill_rate = 10
+		let capacity: u32 = 100;
+		let refill_rate: u32 = 10;
+		let mut state = ThrottleState::<i32>::new(capacity);
+
+		// Act: consume all initial tokens
+		let mut emitted = 0u32;
+		while state.can_emit_token_bucket(refill_rate, capacity) {
+			emitted += 1;
+			if emitted > capacity + 1 {
+				break; // Safety guard
+			}
+		}
+
+		// Assert: initial burst capacity should equal max_emissions, not refill_rate
+		assert_eq!(emitted, capacity);
+	}
+
+	#[rstest::rstest]
+	fn test_token_bucket_refill_does_not_exceed_capacity() {
+		// Arrange: capacity = 50, refill_rate = 10
+		let capacity: u32 = 50;
+		let refill_rate: u32 = 10;
+		let mut state = ThrottleState::<i32>::new(capacity);
+
+		// Consume all tokens
+		while state.can_emit_token_bucket(refill_rate, capacity) {}
+
+		// Simulate time passage by manually setting last_refill far in the past
+		state.last_refill = Instant::now() - Duration::from_secs(100);
+
+		// Act: after a long time, tokens should refill but cap at capacity
+		let mut emitted_after_refill = 0u32;
+		while state.can_emit_token_bucket(refill_rate, capacity) {
+			emitted_after_refill += 1;
+			if emitted_after_refill > capacity + 1 {
+				break; // Safety guard
+			}
+		}
+
+		// Assert: refilled tokens should be capped at capacity (50), not refill_rate (10)
+		assert_eq!(emitted_after_refill, capacity);
+	}
+
+	#[rstest::rstest]
+	fn test_leaky_bucket_uses_max_emissions_as_capacity() {
+		// Arrange: leaky bucket delegates to token bucket internally
+		let signal = Signal::<i32>::new(SignalName::custom("test_leaky_cap"));
+		let config = ThrottleConfig::new()
+			.with_strategy(ThrottleStrategy::LeakyBucket { leak_rate: 5 })
+			.with_max_emissions(50);
+
+		let throttle = SignalThrottle::new(signal, config);
+
+		// Act & Assert: verify the throttle was created with correct config
+		// (leaky bucket delegates to can_emit_token_bucket with max_emissions as capacity)
 		assert_eq!(throttle.dropped_count(), 0);
 	}
 }

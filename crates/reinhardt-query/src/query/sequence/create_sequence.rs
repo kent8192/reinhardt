@@ -259,7 +259,7 @@ impl QueryStatementBuilder for CreateSequenceStatement {
 		{
 			return builder.build_create_sequence(self);
 		}
-		panic!("Unsupported query builder type");
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

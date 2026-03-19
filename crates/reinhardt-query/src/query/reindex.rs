@@ -178,16 +178,14 @@ impl QueryStatementBuilder for ReindexStatement {
 		} else if let Some(_mysql) =
 			(query_builder as &dyn Any).downcast_ref::<crate::backend::MySqlQueryBuilder>()
 		{
-			panic!(
-				"MySQL does not support REINDEX. Use OPTIMIZE TABLE or DROP/CREATE INDEX instead."
-			);
+			unimplemented!("MySQL does not support REINDEX. Use OPTIMIZE TABLE or DROP/CREATE INDEX instead.");
 		} else if let Some(sqlite) =
 			(query_builder as &dyn Any).downcast_ref::<crate::backend::SqliteQueryBuilder>()
 		{
 			use crate::backend::QueryBuilder;
 			sqlite.build_reindex(self)
 		} else {
-			panic!("Unsupported query builder type");
+			unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 		}
 	}
 }

@@ -148,7 +148,7 @@ impl QueryStatementBuilder for CommentStatement {
 		{
 			return builder.build_comment(self);
 		}
-		panic!("Unsupported query builder type");
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

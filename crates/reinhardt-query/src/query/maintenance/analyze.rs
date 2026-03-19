@@ -145,7 +145,7 @@ impl QueryStatementBuilder for AnalyzeStatement {
 		{
 			return builder.build_analyze(self);
 		}
-		panic!("Unsupported query builder type");
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

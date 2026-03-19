@@ -180,7 +180,7 @@ impl QueryStatementBuilder for DropProcedureStatement {
 		{
 			return builder.build_drop_procedure(self);
 		}
-		panic!("Unsupported query builder type");
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

@@ -194,7 +194,7 @@ impl QueryStatementBuilder for DropTriggerStatement {
 		{
 			return builder.build_drop_trigger(self);
 		}
-		panic!("Unsupported query builder type");
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

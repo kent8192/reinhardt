@@ -228,7 +228,7 @@ impl QueryStatementBuilder for RepairTableStatement {
 		{
 			return builder.build_repair_table(self);
 		}
-		panic!("Unsupported query builder type");
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

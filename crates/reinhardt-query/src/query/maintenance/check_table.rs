@@ -135,7 +135,7 @@ impl QueryStatementBuilder for CheckTableStatement {
 		{
 			return builder.build_check_table(self);
 		}
-		panic!("Unsupported query builder type");
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

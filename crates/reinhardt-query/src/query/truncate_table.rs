@@ -177,7 +177,7 @@ impl QueryStatementBuilder for TruncateTableStatement {
 		{
 			return builder.build_truncate_table(self);
 		}
-		panic!("Unsupported query builder type");
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

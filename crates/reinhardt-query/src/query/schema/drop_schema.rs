@@ -145,7 +145,7 @@ impl QueryStatementBuilder for DropSchemaStatement {
 		{
 			return builder.build_drop_schema(self);
 		}
-		panic!("Unsupported query builder type");
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

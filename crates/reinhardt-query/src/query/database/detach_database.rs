@@ -81,13 +81,13 @@ impl QueryStatementBuilder for DetachDatabaseStatement {
 			.downcast_ref::<crate::backend::PostgresQueryBuilder>()
 			.is_some()
 		{
-			panic!("DETACH DATABASE is SQLite-specific and not supported in PostgreSQL");
+			unimplemented!("DETACH DATABASE is SQLite-specific and not supported in PostgreSQL");
 		}
 		if (query_builder as &dyn Any)
 			.downcast_ref::<crate::backend::MySqlQueryBuilder>()
 			.is_some()
 		{
-			panic!("DETACH DATABASE is SQLite-specific and not supported in MySQL");
+			unimplemented!("DETACH DATABASE is SQLite-specific and not supported in MySQL");
 		}
 		if let Some(sqlite_builder) =
 			(query_builder as &dyn Any).downcast_ref::<crate::backend::SqliteQueryBuilder>()
@@ -106,9 +106,9 @@ impl QueryStatementBuilder for DetachDatabaseStatement {
 			.downcast_ref::<crate::backend::CockroachDBQueryBuilder>()
 			.is_some()
 		{
-			panic!("DETACH DATABASE is SQLite-specific and not supported in CockroachDB");
+			unimplemented!("DETACH DATABASE is SQLite-specific and not supported in CockroachDB");
 		}
-		panic!("Unsupported query builder type");
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

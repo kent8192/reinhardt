@@ -28,7 +28,7 @@ fn query_value_to_sea_value(qv: &QueryValue) -> Value {
 		QueryValue::Uuid(u) => Value::Uuid(Some(Box::new(*u))),
 		// NOW() is handled specially in build() methods, should not reach here
 		QueryValue::Now => {
-			panic!("QueryValue::Now should be handled in build() method, not converted to Value")
+			unreachable!("QueryValue::Now should be handled in build() method, not converted to Value")
 		}
 	}
 }

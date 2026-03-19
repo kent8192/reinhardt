@@ -228,7 +228,7 @@ impl QueryStatementBuilder for AlterProcedureStatement {
 		{
 			return builder.build_alter_procedure(self);
 		}
-		panic!("Unsupported query builder type");
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

@@ -164,9 +164,7 @@ impl QueryStatementBuilder for DeleteStatement {
 			return sqlite.build_delete(self);
 		}
 
-		panic!(
-			"Unsupported query builder type. Use PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder."
-		);
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

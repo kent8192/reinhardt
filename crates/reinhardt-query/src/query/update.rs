@@ -242,9 +242,7 @@ impl QueryStatementBuilder for UpdateStatement {
 			return sqlite.build_update(self);
 		}
 
-		panic!(
-			"Unsupported query builder type. Use PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder."
-		);
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

@@ -67,7 +67,7 @@ impl QueryFieldCompiler {
 						end_sql
 					)
 				} else {
-					panic!("Range lookup requires Range value");
+					unreachable!("Range lookup requires Range value");
 				}
 			}
 			LookupType::In | LookupType::NotIn => {

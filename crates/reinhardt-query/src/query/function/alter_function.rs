@@ -242,7 +242,7 @@ impl QueryStatementBuilder for AlterFunctionStatement {
 		{
 			return builder.build_alter_function(self);
 		}
-		panic!("Unsupported query builder type");
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

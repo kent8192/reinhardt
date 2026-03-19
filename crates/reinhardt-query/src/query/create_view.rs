@@ -201,7 +201,7 @@ impl QueryStatementBuilder for CreateViewStatement {
 		{
 			return builder.build_create_view(self);
 		}
-		panic!("Unsupported query builder type");
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

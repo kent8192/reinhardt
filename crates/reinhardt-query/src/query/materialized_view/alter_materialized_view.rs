@@ -152,14 +152,14 @@ impl QueryStatementBuilder for AlterMaterializedViewStatement {
 		if let Some(_builder) =
 			(query_builder as &dyn Any).downcast_ref::<crate::backend::MySqlQueryBuilder>()
 		{
-			panic!("MySQL does not support materialized views");
+			unimplemented!("MySQL does not support materialized views");
 		}
 		if let Some(_builder) =
 			(query_builder as &dyn Any).downcast_ref::<crate::backend::SqliteQueryBuilder>()
 		{
-			panic!("SQLite does not support materialized views");
+			unimplemented!("SQLite does not support materialized views");
 		}
-		panic!("Unsupported query builder type");
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

@@ -824,9 +824,7 @@ impl QueryStatementBuilder for SelectStatement {
 			return sqlite.build_select(self);
 		}
 
-		panic!(
-			"Unsupported query builder type. Use PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder."
-		);
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

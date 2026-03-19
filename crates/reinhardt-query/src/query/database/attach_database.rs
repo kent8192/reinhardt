@@ -105,13 +105,13 @@ impl QueryStatementBuilder for AttachDatabaseStatement {
 			.downcast_ref::<crate::backend::PostgresQueryBuilder>()
 			.is_some()
 		{
-			panic!("ATTACH DATABASE is SQLite-specific and not supported in PostgreSQL");
+			unimplemented!("ATTACH DATABASE is SQLite-specific and not supported in PostgreSQL");
 		}
 		if (query_builder as &dyn Any)
 			.downcast_ref::<crate::backend::MySqlQueryBuilder>()
 			.is_some()
 		{
-			panic!("ATTACH DATABASE is SQLite-specific and not supported in MySQL");
+			unimplemented!("ATTACH DATABASE is SQLite-specific and not supported in MySQL");
 		}
 		if let Some(sqlite_builder) =
 			(query_builder as &dyn Any).downcast_ref::<crate::backend::SqliteQueryBuilder>()
@@ -140,9 +140,9 @@ impl QueryStatementBuilder for AttachDatabaseStatement {
 			.downcast_ref::<crate::backend::CockroachDBQueryBuilder>()
 			.is_some()
 		{
-			panic!("ATTACH DATABASE is SQLite-specific and not supported in CockroachDB");
+			unimplemented!("ATTACH DATABASE is SQLite-specific and not supported in CockroachDB");
 		}
-		panic!("Unsupported query builder type");
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

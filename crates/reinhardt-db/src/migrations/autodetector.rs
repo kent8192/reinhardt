@@ -2970,7 +2970,7 @@ impl InferenceEngine {
 		}
 
 		// Sort by confidence (highest first)
-		intents.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
+		intents.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
 
 		intents
 	}

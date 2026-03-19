@@ -124,9 +124,9 @@ impl QueryStatementBuilder for AlterIndexStatement {
 		} else if let Some(_sqlite) =
 			(query_builder as &dyn Any).downcast_ref::<crate::backend::SqliteQueryBuilder>()
 		{
-			panic!("SQLite does not support ALTER INDEX. Drop and recreate the index instead.");
+			unimplemented!("SQLite does not support ALTER INDEX. Drop and recreate the index instead.");
 		} else {
-			panic!("Unsupported query builder type");
+			unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 		}
 	}
 }

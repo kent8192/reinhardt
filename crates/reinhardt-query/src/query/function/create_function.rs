@@ -258,7 +258,7 @@ impl QueryStatementBuilder for CreateFunctionStatement {
 		{
 			return builder.build_create_function(self);
 		}
-		panic!("Unsupported query builder type");
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

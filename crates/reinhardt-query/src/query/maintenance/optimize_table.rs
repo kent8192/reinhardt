@@ -165,7 +165,7 @@ impl QueryStatementBuilder for OptimizeTableStatement {
 		{
 			return builder.build_optimize_table(self);
 		}
-		panic!("Unsupported query builder type");
+		unreachable!("Unsupported query builder type: expected PostgresQueryBuilder, MySqlQueryBuilder, or SqliteQueryBuilder");
 	}
 }
 

@@ -218,7 +218,7 @@ fn validate_create_user_input(input: &CreateUserInput) -> GqlResult<()> {
 	if name.is_empty() {
 		return Err(async_graphql::Error::new("Name cannot be empty"));
 	}
-	if name.len() > MAX_NAME_LENGTH {
+	if name.chars().count() > MAX_NAME_LENGTH {
 		return Err(async_graphql::Error::new(format!(
 			"Name exceeds maximum length of {} characters",
 			MAX_NAME_LENGTH
@@ -238,7 +238,7 @@ fn validate_create_user_input(input: &CreateUserInput) -> GqlResult<()> {
 	if email.is_empty() {
 		return Err(async_graphql::Error::new("Email cannot be empty"));
 	}
-	if email.len() > MAX_EMAIL_LENGTH {
+	if email.chars().count() > MAX_EMAIL_LENGTH {
 		return Err(async_graphql::Error::new(format!(
 			"Email exceeds maximum length of {} characters",
 			MAX_EMAIL_LENGTH

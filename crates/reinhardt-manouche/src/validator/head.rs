@@ -29,7 +29,7 @@ pub fn validate_head(ast: &HeadMacro) -> Result<TypedHeadMacro> {
 			return Err(syn::Error::new(
 				elem.span,
 				"'script' elements are not allowed in head! macro. \
-				 Use a 'link' element with a script src or load scripts via asset pipeline",
+				 Load scripts via the asset pipeline or use page! macro instead",
 			));
 		}
 

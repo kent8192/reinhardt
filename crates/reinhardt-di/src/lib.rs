@@ -240,6 +240,14 @@ pub enum DiError {
 	#[error("Dependency not found: {0}")]
 	NotFound(String),
 
+	/// An authentication-related dependency failed to resolve.
+	///
+	/// This variant is used when an authentication dependency (e.g., `AuthInfo`)
+	/// cannot be resolved because the user is not authenticated.
+	/// Maps to HTTP 401 Unauthorized via `From<DiError> for Error`.
+	#[error("Authentication required: {0}")]
+	Authentication(String),
+
 	/// A circular dependency chain was detected during resolution.
 	#[error("Circular dependency detected: {0}")]
 	CircularDependency(String),
@@ -287,7 +295,13 @@ pub enum DiError {
 
 impl From<DiError> for reinhardt_core::exception::Error {
 	fn from(err: DiError) -> Self {
-		reinhardt_core::exception::Error::Internal(format!("Dependency injection error: {}", err))
+		match err {
+			DiError::Authentication(msg) => reinhardt_core::exception::Error::Authentication(msg),
+			other => reinhardt_core::exception::Error::Internal(format!(
+				"Dependency injection error: {}",
+				other
+			)),
+		}
 	}
 }
 

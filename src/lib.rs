@@ -697,7 +697,13 @@ pub use reinhardt_auth::{
 };
 
 // Re-export middleware
-#[cfg(all(feature = "sessions", not(target_arch = "wasm32")))]
+// AuthenticationMiddleware requires both sessions (for session backend) and
+// middleware (for the reinhardt-middleware crate dependency)
+#[cfg(all(
+	feature = "sessions",
+	feature = "middleware",
+	not(target_arch = "wasm32")
+))]
 pub use reinhardt_middleware::AuthenticationMiddleware;
 
 #[cfg(all(
@@ -1078,8 +1084,10 @@ pub mod prelude {
 	pub use crate::LoggingMiddleware;
 
 	// Sessions feature
+	#[cfg(all(feature = "sessions", feature = "middleware"))]
+	pub use crate::AuthenticationMiddleware;
 	#[cfg(feature = "sessions")]
-	pub use crate::{AuthenticationMiddleware, Session};
+	pub use crate::Session;
 
 	// Cache feature
 	#[cfg(feature = "cache")]

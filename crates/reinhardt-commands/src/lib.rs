@@ -183,7 +183,9 @@ pub use builtin::MakeMigrationsCommand;
 #[cfg(feature = "routers")]
 pub use builtin::ShowUrlsCommand;
 pub use builtin::{CheckCommand, CheckDiCommand, MigrateCommand, RunServerCommand, ShellCommand};
-pub use cli::{Cli, Commands, execute_from_command_line, run_command};
+pub use cli::{
+	Cli, Commands, execute_from_command_line, execute_from_command_line_with_registry, run_command,
+};
 pub use collectstatic::{CollectStaticCommand, CollectStaticOptions, CollectStaticStats};
 pub use context::CommandContext;
 pub use i18n_commands::{CompileMessagesCommand, MakeMessagesCommand};

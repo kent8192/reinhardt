@@ -7,6 +7,7 @@
 use crate::MakeMigrationsCommand;
 use crate::base::BaseCommand;
 use crate::collectstatic::{CollectStaticCommand, CollectStaticOptions};
+use crate::registry::CommandRegistry;
 use crate::{CheckCommand, CommandContext, MigrateCommand, RunServerCommand, ShellCommand};
 #[cfg(feature = "introspect")]
 use clap::ValueEnum;
@@ -260,6 +261,62 @@ pub enum Commands {
 /// }
 /// ```
 pub async fn execute_from_command_line() -> Result<(), Box<dyn std::error::Error>> {
+	execute_from_command_line_with_registry(CommandRegistry::new()).await
+}
+
+/// Execute commands from command-line arguments with a custom command registry.
+///
+/// This variant of [`execute_from_command_line`] accepts a [`CommandRegistry`] containing
+/// downstream-registered custom commands. When a subcommand does not match any built-in
+/// command, the registry is consulted. If a matching command is found, it is executed;
+/// otherwise clap's standard error handling is used.
+///
+/// # Arguments
+///
+/// * `registry` - A [`CommandRegistry`] containing custom commands to make available
+///
+/// # Returns
+///
+/// Returns `Ok(())` on success, or an error message on failure.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use reinhardt_commands::{execute_from_command_line_with_registry, CommandRegistry};
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let mut registry = CommandRegistry::new();
+///     // registry.register(Box::new(MyCustomCommand));
+///
+///     if let Err(e) = execute_from_command_line_with_registry(registry).await {
+///         eprintln!("Error: {}", e);
+///         std::process::exit(1);
+///     }
+///     Ok(())
+/// }
+/// ```
+pub async fn execute_from_command_line_with_registry(
+	registry: CommandRegistry,
+) -> Result<(), Box<dyn std::error::Error>> {
+	// Try to match a registry command before falling back to clap parsing.
+	// This allows custom commands to take precedence and avoids clap errors
+	// for subcommands it does not know about.
+	let args: Vec<String> = env::args().collect();
+	if let Some(subcommand) = find_subcommand_name(&args)
+		&& let Some(cmd) = registry.get(&subcommand)
+	{
+		let verbosity = parse_verbosity_from_args(&args);
+		let remaining_args = collect_remaining_args(&args, &subcommand);
+		let mut ctx = CommandContext::default();
+		ctx.set_verbosity(verbosity);
+		for arg in remaining_args {
+			ctx.add_arg(arg);
+		}
+		return cmd.execute(&ctx).await.map_err(|e| e.into());
+	}
+
+	// No registry match — fall back to standard clap parsing for built-in commands
 	let cli = Cli::parse();
 
 	// Only register router for commands that serve HTTP traffic.
@@ -270,6 +327,50 @@ pub async fn execute_from_command_line() -> Result<(), Box<dyn std::error::Error
 	}
 
 	run_command(cli.command, cli.verbosity).await
+}
+
+/// Extract the subcommand name from raw CLI arguments.
+///
+/// Skips the program name (argv[0]) and any flags (starting with `-`),
+/// returning the first positional argument as the subcommand name.
+fn find_subcommand_name(args: &[String]) -> Option<String> {
+	args.iter()
+		.skip(1)
+		.find(|arg| !arg.starts_with('-'))
+		.cloned()
+}
+
+/// Parse `-v` / `--verbosity` count from raw CLI arguments.
+fn parse_verbosity_from_args(args: &[String]) -> u8 {
+	let mut count: u8 = 0;
+	for arg in args.iter().skip(1) {
+		if arg == "--verbosity" || arg == "--verbose" {
+			count = count.saturating_add(1);
+		} else if arg.starts_with("-") && !arg.starts_with("--") {
+			// Count each 'v' in short flags like -vvv
+			count = count.saturating_add(arg.chars().filter(|&c| c == 'v').count() as u8);
+		}
+	}
+	count
+}
+
+/// Collect positional arguments that follow the subcommand name.
+fn collect_remaining_args(args: &[String], subcommand: &str) -> Vec<String> {
+	let mut found_subcommand = false;
+	let mut remaining = Vec::new();
+	for arg in args.iter().skip(1) {
+		if !found_subcommand {
+			if arg == subcommand {
+				found_subcommand = true;
+			}
+			continue;
+		}
+		// Skip flags — only collect positional arguments
+		if !arg.starts_with('-') {
+			remaining.push(arg.clone());
+		}
+	}
+	remaining
 }
 
 /// Returns `true` for commands that require HTTP route registration.
@@ -1124,5 +1225,166 @@ mod tests {
 			"Expected lib+bin hint in error message, got: {}",
 			error_msg
 		);
+	}
+
+	#[rstest]
+	#[case(
+		&["manage", "syncdb", "arg1"],
+		Some("syncdb".to_string())
+	)]
+	#[case(
+		&["manage", "-v", "syncdb"],
+		Some("syncdb".to_string())
+	)]
+	#[case(
+		&["manage", "--verbosity", "syncdb"],
+		Some("syncdb".to_string())
+	)]
+	#[case(
+		&["manage"],
+		None
+	)]
+	#[case(
+		&["manage", "--help"],
+		None
+	)]
+	fn test_find_subcommand_name(#[case] args: &[&str], #[case] expected: Option<String>) {
+		// Arrange
+		let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+
+		// Act
+		let result = find_subcommand_name(&args);
+
+		// Assert
+		assert_eq!(result, expected);
+	}
+
+	#[rstest]
+	#[case(&["manage", "cmd"], 0)]
+	#[case(&["manage", "-v", "cmd"], 1)]
+	#[case(&["manage", "-vvv", "cmd"], 3)]
+	#[case(&["manage", "--verbosity", "cmd"], 1)]
+	#[case(&["manage", "-vv", "--verbosity", "cmd"], 3)]
+	fn test_parse_verbosity_from_args(#[case] args: &[&str], #[case] expected: u8) {
+		// Arrange
+		let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+
+		// Act
+		let result = parse_verbosity_from_args(&args);
+
+		// Assert
+		assert_eq!(result, expected);
+	}
+
+	#[rstest]
+	fn test_collect_remaining_args() {
+		// Arrange
+		let args: Vec<String> = vec!["manage", "syncdb", "myapp", "otherapp"]
+			.into_iter()
+			.map(String::from)
+			.collect();
+
+		// Act
+		let result = collect_remaining_args(&args, "syncdb");
+
+		// Assert
+		assert_eq!(result, vec!["myapp".to_string(), "otherapp".to_string()]);
+	}
+
+	#[rstest]
+	fn test_collect_remaining_args_skips_flags() {
+		// Arrange
+		let args: Vec<String> = vec!["manage", "syncdb", "--verbose", "myapp", "-f"]
+			.into_iter()
+			.map(String::from)
+			.collect();
+
+		// Act
+		let result = collect_remaining_args(&args, "syncdb");
+
+		// Assert
+		assert_eq!(result, vec!["myapp".to_string()]);
+	}
+
+	#[rstest]
+	fn test_registry_command_is_found() {
+		// Arrange
+		use crate::{CommandResult, registry::CommandRegistry};
+		use async_trait::async_trait;
+
+		struct TestCustomCommand;
+
+		#[async_trait]
+		impl BaseCommand for TestCustomCommand {
+			fn name(&self) -> &str {
+				"customcmd"
+			}
+
+			async fn execute(&self, _ctx: &CommandContext) -> CommandResult<()> {
+				Ok(())
+			}
+		}
+
+		let mut registry = CommandRegistry::new();
+		registry.register(Box::new(TestCustomCommand));
+
+		// Act
+		let cmd = registry.get("customcmd");
+
+		// Assert
+		assert!(cmd.is_some());
+		assert_eq!(cmd.unwrap().name(), "customcmd");
+	}
+
+	#[rstest]
+	fn test_registry_command_not_found_returns_none() {
+		// Arrange
+		let registry = CommandRegistry::new();
+
+		// Act
+		let cmd = registry.get("nonexistent");
+
+		// Assert
+		assert!(cmd.is_none());
+	}
+
+	#[rstest]
+	fn test_registry_lists_registered_commands() {
+		// Arrange
+		use crate::{CommandResult, registry::CommandRegistry};
+		use async_trait::async_trait;
+
+		struct CmdA;
+		#[async_trait]
+		impl BaseCommand for CmdA {
+			fn name(&self) -> &str {
+				"alpha"
+			}
+			async fn execute(&self, _ctx: &CommandContext) -> CommandResult<()> {
+				Ok(())
+			}
+		}
+
+		struct CmdB;
+		#[async_trait]
+		impl BaseCommand for CmdB {
+			fn name(&self) -> &str {
+				"beta"
+			}
+			async fn execute(&self, _ctx: &CommandContext) -> CommandResult<()> {
+				Ok(())
+			}
+		}
+
+		let mut registry = CommandRegistry::new();
+		registry.register(Box::new(CmdA));
+		registry.register(Box::new(CmdB));
+
+		// Act
+		let mut names = registry.list();
+		names.sort();
+
+		// Assert
+		assert_eq!(names, vec!["alpha", "beta"]);
 	}
 }

@@ -261,8 +261,7 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 			}
 			"AddConstraint" => {
 				let table = extract_string_field(&expr_struct.fields, "table")?;
-				let constraint_sql =
-					extract_string_field(&expr_struct.fields, "constraint_sql")?;
+				let constraint_sql = extract_string_field(&expr_struct.fields, "constraint_sql")?;
 				return Some(super::Operation::AddConstraint {
 					table,
 					constraint_sql,
@@ -270,8 +269,7 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 			}
 			"DropConstraint" => {
 				let table = extract_string_field(&expr_struct.fields, "table")?;
-				let constraint_name =
-					extract_string_field(&expr_struct.fields, "constraint_name")?;
+				let constraint_name = extract_string_field(&expr_struct.fields, "constraint_name")?;
 				return Some(super::Operation::DropConstraint {
 					table,
 					constraint_name,
@@ -790,9 +788,7 @@ fn parse_tuple_vec_expr(expr: &Expr) -> Result<Vec<(String, String)>> {
 		Expr::Macro(expr_macro) if expr_macro.mac.path.is_ident("vec") => {
 			let tokens = &expr_macro.mac.tokens;
 			// Wrap tokens in array brackets so syn can parse comma-separated items
-			if let Ok(parsed) =
-				syn::parse2::<syn::ExprArray>(quote::quote! { [#tokens] })
-			{
+			if let Ok(parsed) = syn::parse2::<syn::ExprArray>(quote::quote! { [#tokens] }) {
 				for item in &parsed.elems {
 					if let Some(tuple) = extract_string_tuple(item) {
 						result.push(tuple);

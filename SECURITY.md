@@ -2,14 +2,15 @@
 
 ## Supported Versions
 
-Currently, only the latest development version is supported. Stable releases are not yet available.
+This project is currently in Release Candidate (RC) phase. Only the latest RC version is supported with security patches.
 
 | Version | Supported |
 |---------|-----------|
-| Latest development branch | ✅ Yes |
-| Other branches | ❌ No |
+| 0.1.0-rc.x (latest) | ✅ Yes |
+| Older RC versions | ❌ No |
+| Development branches | ❌ No |
 
-**Note:** This project is in active development and has not yet released a stable version.
+**Note:** This project has not yet reached a stable 1.0 release. Security patches are applied to the latest RC version only.
 
 ---
 

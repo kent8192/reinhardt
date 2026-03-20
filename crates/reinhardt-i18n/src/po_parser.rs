@@ -512,8 +512,8 @@ msgstr "Ouvrir"
 
 		// Assert
 		assert_eq!(
-			catalog.get_context("menu.file", "Open"),
-			Some(&"Ouvrir".to_string())
+			catalog.get_context("menu.file", "Open").map(String::as_str),
+			Some("Ouvrir")
 		);
 	}
 
@@ -532,8 +532,8 @@ msgstr "Retour"
 
 		// Assert
 		assert_eq!(
-			catalog.get_context("navigation", "Back"),
-			Some(&"Retour".to_string())
+			catalog.get_context("navigation", "Back").map(String::as_str),
+			Some("Retour")
 		);
 	}
 
@@ -558,8 +558,8 @@ msgstr ""
 
 		// Assert
 		assert_eq!(
-			catalog.get_context("ctx.part", "hello world"),
-			Some(&"bonjour monde".to_string())
+			catalog.get_context("ctx.part", "hello world").map(String::as_str),
+			Some("bonjour monde")
 		);
 	}
 }

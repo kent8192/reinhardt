@@ -11,5 +11,5 @@ use super::views;
 pub fn routes() -> UnifiedRouter {
 	UnifiedRouter::new()
 		.endpoint(views::list_users)
-		.mount("/api/todos/", crate::apps::todos::urls::url_patterns())
+		.mount("/api/", crate::apps::todos::urls::url_patterns())
 }

@@ -51,6 +51,7 @@ pub const BOOLEAN_ATTRS: &[&str] = &[
 	"required",
 	"reversed",
 	"selected",
+	"truespeed",
 ];
 
 /// Converts a Rust identifier to an HTML attribute name.

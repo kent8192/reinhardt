@@ -46,7 +46,6 @@ reqwest = { version = "0.12", features = ["json"] }
 serial_test = "3"
 tokio = { version = "1", features = ["full"] }
 argon2 = { version = "0.5", features = ["std"] }
-serial_test = "3"
 
 # Use reinhardt with test feature (NOT reinhardt-test sub-crate)
 [dev-dependencies.reinhardt]

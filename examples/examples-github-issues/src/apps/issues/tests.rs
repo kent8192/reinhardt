@@ -9,7 +9,6 @@ mod tests {
 	use crate::config::urls::AppSchema;
 	use reinhardt::Claims;
 	use reinhardt::graphql::Request;
-	use serial_test::serial;
 	use std::sync::Arc;
 
 	/// Helper to create a schema with an authenticated user
@@ -64,7 +63,6 @@ mod tests {
 
 	#[serial(github_issues)]
 	#[tokio::test]
-	#[serial(github_issues)]
 	async fn test_create_issue() {
 		let (schema, token, project_id) = create_test_context().await;
 
@@ -105,7 +103,6 @@ mod tests {
 
 	#[serial(github_issues)]
 	#[tokio::test]
-	#[serial(github_issues)]
 	async fn test_update_issue() {
 		let (schema, token, project_id) = create_test_context().await;
 		let jwt_auth = reinhardt::JwtAuth::new(b"your-secret-key-change-in-production");
@@ -159,7 +156,6 @@ mod tests {
 
 	#[serial(github_issues)]
 	#[tokio::test]
-	#[serial(github_issues)]
 	async fn test_close_and_reopen_issue() {
 		let (schema, token, project_id) = create_test_context().await;
 		let jwt_auth = reinhardt::JwtAuth::new(b"your-secret-key-change-in-production");
@@ -226,7 +222,6 @@ mod tests {
 
 	#[serial(github_issues)]
 	#[tokio::test]
-	#[serial(github_issues)]
 	async fn test_issues_query() {
 		let (schema, token, project_id) = create_test_context().await;
 		let jwt_auth = reinhardt::JwtAuth::new(b"your-secret-key-change-in-production");
@@ -288,7 +283,6 @@ mod tests {
 
 	#[serial(github_issues)]
 	#[tokio::test]
-	#[serial(github_issues)]
 	async fn test_issues_query_by_project() {
 		let (schema, token, project_id) = create_test_context().await;
 		let jwt_auth = reinhardt::JwtAuth::new(b"your-secret-key-change-in-production");
@@ -344,7 +338,6 @@ mod tests {
 
 	#[serial(github_issues)]
 	#[tokio::test]
-	#[serial(github_issues)]
 	async fn test_issue_query_by_id() {
 		let (schema, token, project_id) = create_test_context().await;
 		let jwt_auth = reinhardt::JwtAuth::new(b"your-secret-key-change-in-production");

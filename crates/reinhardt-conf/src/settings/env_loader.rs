@@ -426,6 +426,8 @@ pub fn load_env_optional(path: impl Into<PathBuf>) -> Result<bool, EnvError> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
+	use serial_test::serial;
 	use std::fs::File;
 	use std::io::Write;
 	use tempfile::TempDir;
@@ -557,31 +559,46 @@ ESCAPED=\$not_expanded
 		}
 	}
 
-	#[test]
+	/// Guard that removes environment variables on drop, ensuring cleanup
+	/// even if assertions panic.
+	struct EnvGuard(Vec<&'static str>);
+
+	impl Drop for EnvGuard {
+		fn drop(&mut self) {
+			// SAFETY: Removing environment variables is unsafe in multi-threaded
+			// programs.  Tests using this guard run under #[serial] to ensure
+			// exclusive access.
+			for key in &self.0 {
+				unsafe {
+					env::remove_var(key);
+				}
+			}
+		}
+	}
+
+	#[rstest]
+	#[serial(env_vars)]
 	fn test_single_quoted_values_preserve_escape_sequences() {
+		// Arrange
+		let _guard = EnvGuard(vec!["SINGLE_ESCAPE", "DOUBLE_ESCAPE"]);
 		let content = r#"
 SINGLE_ESCAPE='\n\t\\'
 DOUBLE_ESCAPE="\n\t\\"
 		"#;
 
+		// Act
 		let loader = EnvLoader::new();
 		loader.parse_and_set(content).unwrap();
 
+		// Assert
 		// Single-quoted: escape sequences preserved literally per POSIX semantics
 		assert_eq!(env::var("SINGLE_ESCAPE").unwrap(), r"\n\t\\");
 
 		// Double-quoted: escape sequences are processed
-		let double_val = env::var("DOUBLE_ESCAPE").unwrap();
-		assert!(
-			double_val.contains('\n') || double_val.contains('\t'),
-			"Double-quoted value should have processed escapes"
+		assert_eq!(
+			env::var("DOUBLE_ESCAPE").unwrap(),
+			"\n\t\\",
+			"Double-quoted value should process escapes to newline, tab, and backslash"
 		);
-
-		// SAFETY: Removing environment variables is unsafe in multi-threaded programs.
-		// This test uses #[serial] to ensure exclusive access to environment variables.
-		unsafe {
-			env::remove_var("SINGLE_ESCAPE");
-			env::remove_var("DOUBLE_ESCAPE");
-		}
 	}
 }

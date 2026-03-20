@@ -92,6 +92,7 @@ impl PostgresSuiteResource {
 			use std::time::Duration;
 
 			const MAX_RETRIES: u32 = 10;
+			const BASE_DELAY_MS: u64 = 100;
 			let mut pool_result = None;
 
 			for attempt in 0..MAX_RETRIES {
@@ -108,8 +109,8 @@ impl PostgresSuiteResource {
 					}
 					Err(e) if attempt < MAX_RETRIES - 1 => {
 						// Cap backoff at 10 seconds to prevent overflow if MAX_RETRIES is increased
-						let backoff = Duration::from_millis(
-							100u64
+						let delay = Duration::from_millis(
+							BASE_DELAY_MS
 								.saturating_mul(2u64.saturating_pow(attempt))
 								.min(10_000),
 						);
@@ -117,9 +118,9 @@ impl PostgresSuiteResource {
 							"Connection attempt {} failed: {}. Retrying in {:?}...",
 							attempt + 1,
 							e,
-							backoff
+							delay
 						);
-						tokio::time::sleep(backoff).await;
+						tokio::time::sleep(delay).await;
 					}
 					Err(e) => panic!(
 						"Failed to connect to PostgreSQL after {} retries: {}",
@@ -226,6 +227,7 @@ impl MySqlSuiteResource {
 			use std::time::Duration;
 
 			const MAX_RETRIES: u32 = 10;
+			const BASE_DELAY_MS: u64 = 100;
 			let mut pool_result = None;
 
 			for attempt in 0..MAX_RETRIES {
@@ -241,11 +243,15 @@ impl MySqlSuiteResource {
 						break;
 					}
 					Err(e) if attempt < MAX_RETRIES - 1 => {
+						let delay =
+							Duration::from_millis(BASE_DELAY_MS * 2_u64.pow(attempt.min(6)));
 						eprintln!(
-							"Connection attempt {} failed: {}. Retrying...",
+							"Connection attempt {} failed: {}. Retrying after {:?}...",
 							attempt + 1,
-							e
+							e,
+							delay
 						);
+						tokio::time::sleep(delay).await;
 					}
 					Err(e) => panic!(
 						"Failed to connect to MySQL after {} retries: {}",

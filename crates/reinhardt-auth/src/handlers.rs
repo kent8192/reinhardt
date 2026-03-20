@@ -85,11 +85,11 @@ impl<S: SessionStore, A: AuthenticationBackend> LoginHandler<S, A> {
 	fn extract_session_id(&self, request: &Request) -> Option<SessionId> {
 		request
 			.headers
-			.get("cookie")
+			.get(hyper::header::COOKIE)
 			.and_then(|v| v.to_str().ok())
 			.and_then(|cookies| {
 				cookies.split(';').find_map(|cookie| {
-					let mut parts = cookie.trim().split('=');
+					let mut parts = cookie.trim().splitn(2, '=');
 					if parts.next()? == SESSION_COOKIE_NAME {
 						Some(parts.next()?.to_string())
 					} else {
@@ -187,11 +187,11 @@ impl<S: SessionStore> LogoutHandler<S> {
 	fn extract_session_id(&self, request: &Request) -> Option<SessionId> {
 		request
 			.headers
-			.get("cookie")
+			.get(hyper::header::COOKIE)
 			.and_then(|v| v.to_str().ok())
 			.and_then(|cookies| {
 				cookies.split(';').find_map(|cookie| {
-					let mut parts = cookie.trim().split('=');
+					let mut parts = cookie.trim().splitn(2, '=');
 					if parts.next()? == SESSION_COOKIE_NAME {
 						Some(parts.next()?.to_string())
 					} else {
@@ -627,14 +627,15 @@ mod tests {
 			.unwrap()
 			.to_str()
 			.unwrap();
-		let new_session_id: String = cookie_value
-			.split(';')
-			.next()
-			.unwrap()
-			.split('=')
-			.nth(1)
-			.unwrap()
-			.to_string();
+		let cookie_pair = cookie_value.split(';').next().unwrap();
+		let mut parts = cookie_pair.splitn(2, '=');
+		let cookie_name = parts.next().unwrap();
+		let cookie_val = parts.next().unwrap();
+		assert_eq!(
+			cookie_name, SESSION_COOKIE_NAME,
+			"Expected session cookie name to be {SESSION_COOKIE_NAME}"
+		);
+		let new_session_id: String = cookie_val.to_string();
 		assert_ne!(
 			new_session_id, old_session_id,
 			"New session ID must differ from old session ID"

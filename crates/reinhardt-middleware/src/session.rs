@@ -23,13 +23,37 @@ use uuid::Uuid;
 /// ```rust,ignore
 /// fn handle(&self, request: Request) -> Result<Response> {
 ///     if let Some(session_id) = request.extensions.get::<SessionId>() {
-///         println!("Session: {}", session_id.0);
+///         println!("Session: {}", session_id.as_str());
 ///     }
 ///     // ...
 /// }
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SessionId(pub String);
+pub struct SessionId(String);
+
+impl SessionId {
+	/// Create a new `SessionId` from the given string.
+	pub fn new(id: String) -> Self {
+		Self(id)
+	}
+
+	/// Returns the session ID as a string slice.
+	pub fn as_str(&self) -> &str {
+		&self.0
+	}
+}
+
+impl AsRef<str> for SessionId {
+	fn as_ref(&self) -> &str {
+		self.as_str()
+	}
+}
+
+impl std::fmt::Display for SessionId {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.write_str(self.as_str())
+	}
+}
 
 /// Session data
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -532,7 +556,9 @@ impl Middleware for SessionMiddleware {
 		self.store.save(session.clone());
 
 		// Inject session ID into request extensions so downstream handlers can access it
-		request.extensions.insert(SessionId(session.id.clone()));
+		request
+			.extensions
+			.insert(SessionId::new(session.id.clone()));
 
 		// Call the handler
 		let mut response = handler.handle(request).await?;
@@ -1009,8 +1035,13 @@ mod tests {
 
 		// Assert - handler received request with session ID in extensions
 		let guard = captured.read().unwrap();
-		let session_id = guard.as_ref().expect("SessionId should be present in extensions");
-		assert!(!session_id.0.is_empty(), "Session ID should not be empty");
+		let session_id = guard
+			.as_ref()
+			.expect("SessionId should be present in extensions");
+		assert!(
+			!session_id.as_str().is_empty(),
+			"Session ID should not be empty"
+		);
 	}
 
 	#[rstest::rstest]
@@ -1046,15 +1077,9 @@ mod tests {
 			.unwrap()
 			.to_str()
 			.unwrap();
-		let cookie_session_id = cookie
-			.split(';')
-			.next()
-			.unwrap()
-			.split('=')
-			.nth(1)
-			.unwrap();
+		let cookie_session_id = cookie.split(';').next().unwrap().split('=').nth(1).unwrap();
 
-		assert_eq!(session_id.0, cookie_session_id);
+		assert_eq!(session_id.as_str(), cookie_session_id);
 	}
 
 	#[rstest::rstest]
@@ -1116,7 +1141,7 @@ mod tests {
 		// Assert - session ID in extensions matches the original session
 		let guard = captured.read().unwrap();
 		let session_id = guard.as_ref().expect("SessionId should be present");
-		assert_eq!(session_id.0, original_session_id);
+		assert_eq!(session_id.as_str(), original_session_id);
 	}
 }
 

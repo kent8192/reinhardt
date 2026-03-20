@@ -187,6 +187,53 @@
 //! // }
 //! # }
 //! ```
+//!
+//! ## Auth Extractor DI Context Requirements
+//!
+//! The `reinhardt-auth` crate provides injectable auth extractors that depend on
+//! specific DI context configuration. Understanding these requirements is essential
+//! for proper authentication integration.
+//!
+//! ### `AuthUser<U>` (recommended)
+//!
+//! Loads the full user model from the database. Requires:
+//!
+//! - **`DatabaseConnection`** registered as a singleton in `InjectionContext`
+//! - **`AuthState`** present in request extensions (set by authentication middleware)
+//! - Feature `params` enabled on `reinhardt-auth`
+//!
+//! Returns an injection error if any requirement is missing (fail-fast behavior).
+//!
+//! ```rust,ignore
+//! use reinhardt_auth::AuthUser;
+//! use reinhardt_auth::DefaultUser;
+//!
+//! #[get("/profile/")]
+//! pub async fn profile(
+//!     #[inject] AuthUser(user): AuthUser<DefaultUser>,
+//! ) -> ViewResult<Response> {
+//!     let username = user.get_username();
+//!     // ...
+//! }
+//! ```
+//!
+//! ### `AuthInfo` (lightweight alternative)
+//!
+//! Extracts authentication metadata without a database query. Requires:
+//!
+//! - **`AuthState`** present in request extensions (set by authentication middleware)
+//! - No `DatabaseConnection` needed
+//!
+//! ### `CurrentUser<U>` (deprecated)
+//!
+//! Deprecated in favor of `AuthUser<U>`. Unlike `AuthUser<U>`, missing context
+//! causes silent fallback to anonymous instead of returning an error.
+//!
+//! ### Startup Validation
+//!
+//! Call `reinhardt_auth::validate_auth_extractors()` during application startup
+//! to verify that required dependencies (e.g., `DatabaseConnection`) are registered
+//! before the first request arrives.
 
 #![warn(missing_docs)]
 

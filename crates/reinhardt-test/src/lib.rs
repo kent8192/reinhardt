@@ -130,8 +130,8 @@ pub use reinhardt_testkit::containers::{
 #[cfg(feature = "static")]
 pub use reinhardt_testkit::static_files::*;
 
-// E2E browser testing re-exports
-#[cfg(feature = "e2e")]
+// E2E browser testing re-exports (native target only)
+#[cfg(all(feature = "e2e", not(target_arch = "wasm32")))]
 pub use fixtures::wasm::e2e::{
 	BrowserClient, BrowserConfig, BrowserType, browser_client, browser_config,
 };

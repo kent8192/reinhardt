@@ -11,7 +11,7 @@
 //! # Environment Variables
 //!
 //! - `WEBDRIVER_URL`: WebDriver server URL (default: `http://localhost:4444`)
-//! - `BROWSER_HEADLESS`: Set to `"false"` to disable headless mode (default: `"true"`)
+//! - `BROWSER_HEADLESS`: Set to `"false"`, `"0"`, `"no"`, or `"off"` (case-insensitive) to disable headless mode (default: enabled)
 //! - `BROWSER_TYPE`: `"chrome"` or `"firefox"` (default: `"chrome"`)
 //! - `BROWSER_WAIT_TIMEOUT`: Element wait timeout in seconds (default: `10`)
 //!
@@ -99,7 +99,7 @@ impl BrowserConfig {
 			std::env::var("WEBDRIVER_URL").unwrap_or_else(|_| "http://localhost:4444".to_string());
 
 		let headless = std::env::var("BROWSER_HEADLESS")
-			.map(|v| v != "false" && v != "0")
+			.map(|v| !matches!(v.to_lowercase().trim(), "false" | "0" | "no" | "off"))
 			.unwrap_or(true);
 
 		let browser_type = std::env::var("BROWSER_TYPE")
@@ -406,7 +406,104 @@ pub fn browser_config() -> BrowserConfig {
 /// ```
 #[fixture]
 pub async fn browser_client(browser_config: BrowserConfig) -> BrowserClient {
-	BrowserClient::connect(browser_config)
+	BrowserClient::connect(browser_config.clone())
 		.await
-		.expect("Failed to connect to WebDriver server")
+		.unwrap_or_else(|e| {
+			panic!(
+				"Failed to connect to WebDriver server at {} (browser: {:?}, headless: {}): {e}",
+				browser_config.webdriver_url, browser_config.browser_type, browser_config.headless,
+			)
+		})
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::*;
+	use serial_test::serial;
+
+	#[rstest]
+	#[case("chrome", BrowserType::Chrome)]
+	#[case("Chrome", BrowserType::Chrome)]
+	#[case("CHROME", BrowserType::Chrome)]
+	#[case("firefox", BrowserType::Firefox)]
+	#[case("Firefox", BrowserType::Firefox)]
+	#[case("FIREFOX", BrowserType::Firefox)]
+	#[case("gecko", BrowserType::Firefox)]
+	#[case("geckodriver", BrowserType::Firefox)]
+	#[case("unknown", BrowserType::Chrome)]
+	#[case("", BrowserType::Chrome)]
+	fn test_browser_type_from_str_lossy(#[case] input: &str, #[case] expected: BrowserType) {
+		// Act
+		let result = BrowserType::from_str_lossy(input);
+
+		// Assert
+		assert_eq!(result, expected);
+	}
+
+	#[rstest]
+	#[serial(browser_env)]
+	fn test_browser_config_defaults() {
+		// Arrange
+		std::env::remove_var("WEBDRIVER_URL");
+		std::env::remove_var("BROWSER_HEADLESS");
+		std::env::remove_var("BROWSER_TYPE");
+		std::env::remove_var("BROWSER_WAIT_TIMEOUT");
+
+		// Act
+		let config = BrowserConfig::from_env();
+
+		// Assert
+		assert_eq!(config.webdriver_url, "http://localhost:4444");
+		assert!(config.headless);
+		assert_eq!(config.browser_type, BrowserType::Chrome);
+		assert_eq!(config.wait_timeout, Duration::from_secs(10));
+	}
+
+	#[rstest]
+	#[case("false", false)]
+	#[case("False", false)]
+	#[case("FALSE", false)]
+	#[case("0", false)]
+	#[case("no", false)]
+	#[case("off", false)]
+	#[case("true", true)]
+	#[case("1", true)]
+	#[case("yes", true)]
+	#[serial(browser_env)]
+	fn test_browser_headless_parsing(#[case] value: &str, #[case] expected: bool) {
+		// Arrange
+		std::env::set_var("BROWSER_HEADLESS", value);
+
+		// Act
+		let config = BrowserConfig::from_env();
+
+		// Assert
+		assert_eq!(config.headless, expected);
+
+		// Cleanup
+		std::env::remove_var("BROWSER_HEADLESS");
+	}
+
+	#[rstest]
+	#[serial(browser_env)]
+	fn test_browser_config_custom_values() {
+		// Arrange
+		std::env::set_var("WEBDRIVER_URL", "http://selenium:4444");
+		std::env::set_var("BROWSER_TYPE", "firefox");
+		std::env::set_var("BROWSER_WAIT_TIMEOUT", "30");
+
+		// Act
+		let config = BrowserConfig::from_env();
+
+		// Assert
+		assert_eq!(config.webdriver_url, "http://selenium:4444");
+		assert_eq!(config.browser_type, BrowserType::Firefox);
+		assert_eq!(config.wait_timeout, Duration::from_secs(30));
+
+		// Cleanup
+		std::env::remove_var("WEBDRIVER_URL");
+		std::env::remove_var("BROWSER_TYPE");
+		std::env::remove_var("BROWSER_WAIT_TIMEOUT");
+	}
 }

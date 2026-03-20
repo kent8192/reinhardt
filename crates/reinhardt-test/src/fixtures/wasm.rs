@@ -19,6 +19,6 @@ pub use browser::{
 	populated_storage, screen, session_cookies, wasm_test_env,
 };
 
-// E2E browser testing fixtures via WebDriver (native target)
-#[cfg(feature = "e2e")]
+// E2E browser testing fixtures via WebDriver (native target only)
+#[cfg(all(feature = "e2e", not(target_arch = "wasm32")))]
 pub mod e2e;

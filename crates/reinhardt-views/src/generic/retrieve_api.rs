@@ -237,6 +237,7 @@ mod tests {
 	#[case("12abc", false)]
 	#[case("", false)]
 	#[case("3.14", false)]
+	#[case("9223372036854775808", false)] // i64::MAX + 1 overflow
 	fn test_lookup_value_integer_parsing(#[case] input: &str, #[case] should_be_integer: bool) {
 		// Arrange
 		let lookup_value = input.to_string();
@@ -250,8 +251,16 @@ mod tests {
 
 		// Assert
 		match filter_value {
-			FilterValue::Integer(_) => assert!(should_be_integer, "Expected String variant for input '{}'", input),
-			FilterValue::String(_) => assert!(!should_be_integer, "Expected Integer variant for input '{}'", input),
+			FilterValue::Integer(_) => assert!(
+				should_be_integer,
+				"Expected String variant for input '{}'",
+				input
+			),
+			FilterValue::String(_) => assert!(
+				!should_be_integer,
+				"Expected Integer variant for input '{}'",
+				input
+			),
 			_ => panic!("Unexpected FilterValue variant"),
 		}
 	}

@@ -69,13 +69,8 @@ jobs:
 
       - name: Install mold linker and build dependencies
         run: |
-          # Wait for unattended-upgrades or other apt processes to finish
-          while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-            echo "Waiting for dpkg lock to be released..."
-            sleep 5
-          done
-          sudo apt-get update
-          sudo apt-get install -y mold clang lld build-essential
+          sudo -E apt-get -o DPkg::Lock::Timeout=120 update
+          sudo -E apt-get -o DPkg::Lock::Timeout=120 install -y mold clang lld build-essential
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
 

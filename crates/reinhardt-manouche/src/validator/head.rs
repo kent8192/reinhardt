@@ -45,12 +45,14 @@ pub fn validate_head(ast: &HeadMacro) -> Result<TypedHeadMacro> {
 			));
 		}
 
-		// Build typed attributes, extracting literal values where possible
+		// Build typed attributes, extracting literal values where possible.
+		// Use ident_to_html_attr_name to strip r# prefix and convert
+		// underscores to hyphens for proper HTML attribute names.
 		let typed_attrs: Vec<TypedHeadAttr> = elem
 			.attrs
 			.iter()
 			.map(|attr| {
-				let name = attr.name.to_string();
+				let name = crate::core::attr_utils::ident_to_html_attr_name(&attr.name.to_string());
 				let value = extract_literal_value(&attr.value);
 				TypedHeadAttr {
 					name,
@@ -114,10 +116,11 @@ fn extract_literal_value(expr: &Expr) -> String {
 /// Rejects `http-equiv="refresh"` when the content contains a URL redirect,
 /// as this can be used for open redirect attacks.
 fn validate_meta_element(attrs: &[TypedHeadAttr], span: proc_macro2::Span) -> Result<()> {
-	// Normalize attribute names: convert underscores to hyphens for HTML attribute matching
-	let has_refresh = attrs.iter().any(|a| {
-		(a.name == "http_equiv" || a.name == "httpEquiv") && a.value.eq_ignore_ascii_case("refresh")
-	});
+	// Attribute names are already normalized by ident_to_html_attr_name
+	// (underscores converted to hyphens), so check for "http-equiv"
+	let has_refresh = attrs
+		.iter()
+		.any(|a| a.name == "http-equiv" && a.value.eq_ignore_ascii_case("refresh"));
 
 	if has_refresh {
 		// Check if content contains a URL redirect (e.g., "5; url=...")
@@ -135,4 +138,68 @@ fn validate_meta_element(attrs: &[TypedHeadAttr], span: proc_macro2::Span) -> Re
 	}
 
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::parser::parse_head;
+	use quote::quote;
+	use rstest::rstest;
+
+	#[rstest]
+	fn test_validate_head_strips_raw_identifier_prefix() {
+		// Arrange
+		let input = quote!(|| {
+			link {
+				rel: "stylesheet",
+				r#type: "text/css",
+			}
+		});
+		let ast = parse_head(input).unwrap();
+
+		// Act
+		let typed = validate_head(&ast).unwrap();
+
+		// Assert
+		assert_eq!(typed.elements[0].attrs[1].name, "type");
+	}
+
+	#[rstest]
+	fn test_validate_head_converts_underscores_to_hyphens() {
+		// Arrange
+		let input = quote!(|| {
+			meta {
+				http_equiv: "content-type",
+				content: "text/html; charset=utf-8",
+			}
+		});
+		let ast = parse_head(input).unwrap();
+
+		// Act
+		let typed = validate_head(&ast).unwrap();
+
+		// Assert
+		assert_eq!(typed.elements[0].attrs[0].name, "http-equiv");
+	}
+
+	#[rstest]
+	fn test_validate_head_meta_refresh_redirect_rejected() {
+		// Arrange
+		let input = quote!(|| {
+			meta {
+				http_equiv: "refresh",
+				content: "5; url=https://evil.com",
+			}
+		});
+		let ast = parse_head(input).unwrap();
+
+		// Act
+		let result = validate_head(&ast);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(err.to_string().contains("http-equiv=\"refresh\""));
+	}
 }

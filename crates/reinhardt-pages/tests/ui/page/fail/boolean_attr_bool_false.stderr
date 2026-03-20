@@ -1,13 +1,11 @@
-error: Boolean attribute 'disabled' cannot have a boolean literal value.
-       HTML boolean attributes represent true/false by their presence/absence:
-       - Attribute present = true
-       - Attribute absent = false
+error: Boolean attribute 'disabled' cannot be set to `false`.
+       To disable a boolean attribute, omit it entirely:
+       - Attribute present = true (e.g., `disabled` or `disabled: true`)
+       - Attribute absent = false (just remove `disabled`)
 
        Use a variable or expression for dynamic boolean values:
        Correct:   disabled: is_disabled
        Correct:   disabled: state.is_active()
-       Incorrect: disabled: true
-       Incorrect: disabled: false
  --> tests/ui/page/fail/boolean_attr_bool_false.rs:8:4
   |
 8 |             disabled: false,

@@ -493,23 +493,25 @@ fn validate_attr_type(
 			));
 		}
 
-		// 2. Boolean literals are prohibited
-		if value.is_bool_literal() {
-			return Err(syn::Error::new(
-				span,
-				format!(
-					"Boolean attribute '{}' cannot have a boolean literal value.\n\
-					HTML boolean attributes represent true/false by their presence/absence:\n\
-					  - Attribute present = true\n\
-					  - Attribute absent = false\n\n\
-					Use a variable or expression for dynamic boolean values:\n\
-					  Correct:   {}: is_disabled\n\
-					  Correct:   {}: state.is_active()\n\
-					  Incorrect: {}: true\n\
-					  Incorrect: {}: false",
-					attr_name, attr_name, attr_name, attr_name, attr_name
-				),
-			));
+		// 2. Boolean literal `false` is prohibited (omit the attribute instead).
+		//    `true` is allowed to support standalone syntax (e.g., `required`
+		//    which the parser desugars to `required: true`).
+		if let AttrValue::BoolLit(lit) = value {
+			if !lit.value() {
+				return Err(syn::Error::new(
+					span,
+					format!(
+						"Boolean attribute '{}' cannot be set to `false`.\n\
+						To disable a boolean attribute, omit it entirely:\n\
+						  - Attribute present = true (e.g., `{0}` or `{0}: true`)\n\
+						  - Attribute absent = false (just remove `{0}`)\n\n\
+						Use a variable or expression for dynamic boolean values:\n\
+						  Correct:   {0}: is_disabled\n\
+						  Correct:   {0}: state.is_active()",
+						attr_name
+					),
+				));
+			}
 		}
 
 		// 3. Numeric literals are prohibited
@@ -1142,10 +1144,7 @@ mod tests {
 			validate_attr_type("disabled", &value, "button", proc_macro2::Span::call_site());
 
 		// Assert
-		assert!(result.is_err());
-		let err_msg = result.unwrap_err().to_string();
-		assert!(err_msg.contains("Boolean attribute"));
-		assert!(err_msg.contains("cannot have a boolean literal value"));
+		assert!(result.is_ok());
 	}
 
 	#[rstest]
@@ -1159,8 +1158,7 @@ mod tests {
 		// Assert
 		assert!(result.is_err());
 		let err_msg = result.unwrap_err().to_string();
-		assert!(err_msg.contains("Boolean attribute"));
-		assert!(err_msg.contains("cannot have a boolean literal value"));
+		assert!(err_msg.contains("cannot be set to `false`"));
 	}
 
 	#[rstest]

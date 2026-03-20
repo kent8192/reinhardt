@@ -814,7 +814,7 @@ where
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to query objects: {}", e)))?;
 
 			// Compare pk as strings (JSON number vs Display)
-			let pk_str = pk.to_string();
+			let pk_str = pk.to_string().replace('"', "");
 
 			items
 				.into_iter()
@@ -834,7 +834,7 @@ where
 				.find(|item| {
 					if let Some(item_pk) = item.primary_key() {
 						let item_pk_str = item_pk.to_string();
-						let pk_str = pk.to_string();
+						let pk_str = pk.to_string().replace('"', "");
 						item_pk_str == pk_str
 					} else {
 						false
@@ -1518,5 +1518,135 @@ mod tests {
 
 		// Assert
 		assert_eq!(response.status, hyper::StatusCode::OK);
+	}
+
+	// -----------------------------------------------------------------------
+	// Test model for retrieve PK tests
+	// -----------------------------------------------------------------------
+
+	#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq)]
+	struct TestItem {
+		id: Option<i64>,
+		name: String,
+	}
+
+	#[derive(Clone)]
+	struct TestItemFields;
+
+	impl reinhardt_db::orm::FieldSelector for TestItemFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	impl reinhardt_db::orm::Model for TestItem {
+		type PrimaryKey = i64;
+		type Fields = TestItemFields;
+
+		fn table_name() -> &'static str {
+			"test_items"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			self.id
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = Some(value);
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestItemFields
+		}
+	}
+
+	/// Helper to build a ModelViewSetHandler with in-memory queryset
+	fn build_model_handler(items: Vec<TestItem>) -> ModelViewSetHandler<TestItem> {
+		ModelViewSetHandler::<TestItem>::new().with_queryset(items)
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_retrieve_strips_quotes_from_numeric_pk() {
+		// Arrange
+		let items = vec![
+			TestItem {
+				id: Some(1),
+				name: "first".to_string(),
+			},
+			TestItem {
+				id: Some(2),
+				name: "second".to_string(),
+			},
+		];
+		let handler = build_model_handler(items);
+		let request = build_request("/items/1/");
+
+		// Act - pass pk with surrounding quotes (as JSON string value)
+		let pk = serde_json::json!("1");
+		let result = handler.retrieve(&request, pk).await;
+
+		// Assert - should find the item despite quotes in pk
+		assert!(result.is_ok(), "retrieve should succeed with quoted pk");
+		let response = result.unwrap();
+		assert_eq!(response.status, hyper::StatusCode::OK);
+		let body_str = String::from_utf8(response.body.to_vec()).unwrap();
+		assert!(
+			body_str.contains("\"name\":\"first\""),
+			"response should contain the matched item, got: {}",
+			body_str
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_retrieve_works_with_unquoted_numeric_pk() {
+		// Arrange
+		let items = vec![TestItem {
+			id: Some(42),
+			name: "answer".to_string(),
+		}];
+		let handler = build_model_handler(items);
+		let request = build_request("/items/42/");
+
+		// Act - pass pk as JSON number (no quotes)
+		let pk = serde_json::json!(42);
+		let result = handler.retrieve(&request, pk).await;
+
+		// Assert
+		assert!(result.is_ok(), "retrieve should succeed with numeric pk");
+		let response = result.unwrap();
+		assert_eq!(response.status, hyper::StatusCode::OK);
+		let body_str = String::from_utf8(response.body.to_vec()).unwrap();
+		assert!(
+			body_str.contains("\"name\":\"answer\""),
+			"response should contain the matched item, got: {}",
+			body_str
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_retrieve_returns_not_found_for_nonexistent_pk() {
+		// Arrange
+		let items = vec![TestItem {
+			id: Some(1),
+			name: "only".to_string(),
+		}];
+		let handler = build_model_handler(items);
+		let request = build_request("/items/999/");
+
+		// Act
+		let pk = serde_json::json!(999);
+		let result = handler.retrieve(&request, pk).await;
+
+		// Assert
+		assert!(result.is_err(), "retrieve should fail for nonexistent pk");
+		let err = result.unwrap_err();
+		assert!(
+			matches!(err, ViewError::NotFound(_)),
+			"error should be NotFound, got: {:?}",
+			err
+		);
 	}
 }

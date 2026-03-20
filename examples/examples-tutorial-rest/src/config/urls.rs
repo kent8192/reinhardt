@@ -7,8 +7,5 @@ use reinhardt::routes;
 
 #[routes]
 pub fn routes() -> UnifiedRouter {
-	UnifiedRouter::new().mount(
-		"/api/snippets/",
-		crate::apps::snippets::urls::url_patterns(),
-	)
+	UnifiedRouter::new().mount("/api/", crate::apps::snippets::urls::url_patterns())
 }

@@ -7,9 +7,11 @@ mod tests {
 	use serial_test::serial;
 	use crate::config::schema::get_schema;
 	use reinhardt::graphql::Request;
+	use serial_test::serial;
 
 	#[serial(github_issues)]
 	#[tokio::test]
+	#[serial(github_issues)]
 	async fn test_register_user() {
 		let schema = get_schema();
 
@@ -51,6 +53,7 @@ mod tests {
 
 	#[serial(github_issues)]
 	#[tokio::test]
+	#[serial(github_issues)]
 	async fn test_login_user() {
 		let schema = get_schema();
 
@@ -94,6 +97,7 @@ mod tests {
 
 	#[serial(github_issues)]
 	#[tokio::test]
+	#[serial(github_issues)]
 	async fn test_login_invalid_credentials() {
 		let schema = get_schema();
 
@@ -117,6 +121,7 @@ mod tests {
 
 	#[serial(github_issues)]
 	#[tokio::test]
+	#[serial(github_issues)]
 	async fn test_users_query() {
 		let schema = get_schema();
 
@@ -162,6 +167,7 @@ mod tests {
 
 	#[serial(github_issues)]
 	#[tokio::test]
+	#[serial(github_issues)]
 	async fn test_user_query_by_id() {
 		let schema = get_schema();
 

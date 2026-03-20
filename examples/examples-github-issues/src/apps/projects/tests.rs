@@ -9,6 +9,7 @@ mod tests {
 	use crate::config::urls::AppSchema;
 	use reinhardt::Claims;
 	use reinhardt::graphql::Request;
+	use serial_test::serial;
 	use std::sync::Arc;
 
 	/// Helper to get authenticated claims
@@ -43,6 +44,7 @@ mod tests {
 
 	#[serial(github_issues)]
 	#[tokio::test]
+	#[serial(github_issues)]
 	async fn test_create_project() {
 		let schema = get_schema();
 		let (claims, _) = get_auth_claims(&schema).await;
@@ -73,6 +75,7 @@ mod tests {
 
 	#[serial(github_issues)]
 	#[tokio::test]
+	#[serial(github_issues)]
 	async fn test_create_private_project() {
 		let schema = get_schema();
 		let (claims, _) = get_auth_claims(&schema).await;
@@ -100,6 +103,7 @@ mod tests {
 
 	#[serial(github_issues)]
 	#[tokio::test]
+	#[serial(github_issues)]
 	async fn test_projects_query() {
 		let schema = get_schema();
 		let (claims, _) = get_auth_claims(&schema).await;
@@ -144,6 +148,7 @@ mod tests {
 
 	#[serial(github_issues)]
 	#[tokio::test]
+	#[serial(github_issues)]
 	async fn test_projects_query_with_visibility_filter() {
 		let schema = get_schema();
 		let (claims, _) = get_auth_claims(&schema).await;
@@ -195,6 +200,7 @@ mod tests {
 
 	#[serial(github_issues)]
 	#[tokio::test]
+	#[serial(github_issues)]
 	async fn test_project_query_by_id() {
 		let schema = get_schema();
 		let (claims, _) = get_auth_claims(&schema).await;
@@ -240,6 +246,7 @@ mod tests {
 
 	#[serial(github_issues)]
 	#[tokio::test]
+	#[serial(github_issues)]
 	async fn test_add_member_to_project() {
 		let schema = get_schema();
 		let (owner_claims, _) = get_auth_claims(&schema).await;
@@ -307,6 +314,7 @@ mod tests {
 
 	#[serial(github_issues)]
 	#[tokio::test]
+	#[serial(github_issues)]
 	async fn test_remove_member_from_project() {
 		let schema = get_schema();
 		let (owner_claims, _) = get_auth_claims(&schema).await;
@@ -378,6 +386,7 @@ mod tests {
 
 	#[serial(github_issues)]
 	#[tokio::test]
+	#[serial(github_issues)]
 	async fn test_project_with_members_relation() {
 		let schema = get_schema();
 		let (owner_claims, owner_id) = get_auth_claims(&schema).await;

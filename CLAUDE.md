@@ -4,7 +4,7 @@
 
 This file contains project-specific instructions for the Reinhardt project. These rules ensure code quality, maintainability, and consistent practices across the Rust codebase.
 
-For detailed standards, see documentation in `docs/` directory.
+For detailed standards, see documentation in `instructions/` directory.
 
 ---
 
@@ -100,7 +100,7 @@ See instructions/TESTING_STANDARDS.md for comprehensive testing standards includ
 
 **Update Requirements:**
 - **ALWAYS** update docs when code changes (same workflow)
-- Update all relevant: README.md, crate README, docs/, lib.rs
+- Update all relevant: README.md, crate README, instructions/, lib.rs
 - Planned features go in `lib.rs` header, NOT in README.md
 - Test all code examples
 - Verify all links are valid
@@ -287,13 +287,13 @@ cargo build --workspace --all --all-features
 
 **Testing:**
 ```bash
-cargo test --workspace --all --all-features
+cargo nextest run --workspace --all-features
 cargo test --doc  # Documentation tests
 ```
 
 **Code Quality:**
 ```bash
-cargo make fmt-check   # Cheeck format rules of the code
+cargo make fmt-check   # Check format rules of the code
 cargo make clippy-check  # Check lint rules of the code
 cargo make fmt-fix   # Automatically fix code based on formatting rules
 cargo make clippy-fix  # Automatically fix code based on lint rules

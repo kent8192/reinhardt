@@ -5,7 +5,7 @@
 
 use proc_macro2::TokenStream;
 use syn::{
-	Expr, Ident, LitStr, Token, braced,
+	Expr, Ident, Token, braced,
 	ext::IdentExt,
 	parse::{Parse, ParseStream},
 	punctuated::Punctuated,
@@ -72,13 +72,12 @@ impl Parse for HeadElement {
 			"title" => parse_title_content(&content_stream)?,
 			"meta" => (parse_attrs(&content_stream)?, None),
 			"link" => (parse_attrs(&content_stream)?, None),
-			"script" => parse_script_content(&content_stream)?,
 			"style" => parse_style_content(&content_stream)?,
 			_ => {
 				return Err(syn::Error::new(
 					span,
 					format!(
-						"Unknown head element '{}'. Expected: title, meta, link, script, style",
+						"Unknown head element '{}'. Expected: title, meta, link, style",
 						tag_str
 					),
 				));
@@ -128,27 +127,6 @@ fn parse_title_content(input: ParseStream) -> syn::Result<(Vec<HeadAttr>, Option
 	};
 
 	Ok((Vec::new(), Some(content)))
-}
-
-/// Parses script element content.
-///
-/// script { src: "...", defer } or script { "inline code" }
-fn parse_script_content(input: ParseStream) -> syn::Result<(Vec<HeadAttr>, Option<HeadContent>)> {
-	// Check if it's inline content (string literal or expression starting with brace)
-	if input.peek(LitStr) {
-		let lit: LitStr = input.parse()?;
-		return Ok((Vec::new(), Some(HeadContent::Text(lit.value()))));
-	}
-
-	// Check for block expression
-	if input.peek(syn::token::Brace) {
-		let expr: Expr = input.parse()?;
-		return Ok((Vec::new(), Some(HeadContent::Expr(expr))));
-	}
-
-	// Otherwise parse as attributes for external script
-	let attrs = parse_attrs(input)?;
-	Ok((attrs, None))
 }
 
 /// Parses style element content.
@@ -260,7 +238,7 @@ mod tests {
 	}
 
 	#[rstest]
-	fn test_parse_head_script_external_with_boolean_attr() {
+	fn test_parse_head_script_rejected() {
 		// Arrange
 		let input = quote!(|| {
 			script {
@@ -270,35 +248,12 @@ mod tests {
 		});
 
 		// Act
-		let ast = parse_head(input).unwrap();
+		let result = parse_head(input);
 
 		// Assert
-		assert_eq!(ast.elements.len(), 1);
-		assert_eq!(ast.elements[0].tag.to_string(), "script");
-		assert_eq!(ast.elements[0].attrs.len(), 2);
-		assert_eq!(ast.elements[0].attrs[0].name.to_string(), "src");
-		assert_eq!(ast.elements[0].attrs[1].name.to_string(), "defer");
-		assert!(ast.elements[0].content.is_none());
-	}
-
-	#[rstest]
-	fn test_parse_head_script_inline() {
-		// Arrange
-		let input = quote!(|| {
-			script { "console.log('hello');" }
-		});
-
-		// Act
-		let ast = parse_head(input).unwrap();
-
-		// Assert
-		assert_eq!(ast.elements.len(), 1);
-		assert_eq!(ast.elements[0].tag.to_string(), "script");
-		assert!(ast.elements[0].attrs.is_empty());
-		assert!(matches!(
-			ast.elements[0].content,
-			Some(HeadContent::Text(ref s)) if s == "console.log('hello');"
-		));
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(err.to_string().contains("Unknown head element"));
 	}
 
 	#[rstest]
@@ -328,7 +283,7 @@ mod tests {
 			title { "My Page" }
 			meta { name: "description", content: "Page description" }
 			link { rel: "stylesheet", href: "/static/style.css" }
-			script { src: "/static/app.js", defer }
+			style { "body { margin: 0; }" }
 		});
 
 		// Act
@@ -339,7 +294,7 @@ mod tests {
 		assert_eq!(ast.elements[0].tag.to_string(), "title");
 		assert_eq!(ast.elements[1].tag.to_string(), "meta");
 		assert_eq!(ast.elements[2].tag.to_string(), "link");
-		assert_eq!(ast.elements[3].tag.to_string(), "script");
+		assert_eq!(ast.elements[3].tag.to_string(), "style");
 	}
 
 	#[rstest]
@@ -409,12 +364,12 @@ mod tests {
 	}
 
 	#[rstest]
-	fn test_parse_head_script_module() {
+	fn test_parse_head_link_with_raw_identifier() {
 		// Arrange
 		let input = quote!(|| {
-			script {
-				src: "/static/app.mjs",
-				r#type: "module",
+			link {
+				rel: "stylesheet",
+				r#type: "text/css",
 			}
 		});
 
@@ -424,7 +379,7 @@ mod tests {
 		// Assert
 		assert_eq!(ast.elements.len(), 1);
 		assert_eq!(ast.elements[0].attrs.len(), 2);
-		// Raw identifier r#type is preserved as-is
+		// Raw identifier r#type is preserved as-is in the parser
 		assert_eq!(ast.elements[0].attrs[1].name.to_string(), "r#type");
 	}
 
@@ -445,7 +400,8 @@ mod tests {
 	#[case("for")]
 	fn test_parse_reserved_keyword_as_attr_name(#[case] keyword: &str) {
 		// Arrange
-		let input_str = format!("|| {{ script {{ src: \"/app.js\", {keyword}: \"module\", }} }}",);
+		let input_str =
+			format!("|| {{ link {{ rel: \"stylesheet\", {keyword}: \"text/css\", }} }}");
 
 		// Act
 		let ast: HeadMacro = syn::parse_str(&input_str).unwrap();

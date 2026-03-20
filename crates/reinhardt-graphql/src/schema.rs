@@ -1069,23 +1069,23 @@ mod tests {
 
 	#[rstest::rstest]
 	#[case(
-		r#"{ user(name: "hello \"world\"") { id } }"#,
-		1,
+		"{\n  user(name: \"hello \\\"world\\\"\") {\n    id\n  }\n}",
+		2,
 		"escaped quotes inside string should not affect field count"
 	)]
 	#[case(
-		r#"{ user(name: "hello \\\"end") { id name } }"#,
-		2,
+		"{\n  user(name: \"hello \\\\\\\"end\") {\n    id\n    name\n  }\n}",
+		3,
 		"escaped backslash before quote should correctly toggle string state"
 	)]
 	#[case(
-		r#"{ user(name: "no escapes") { id } }"#,
-		1,
+		"{\n  user(name: \"no escapes\") {\n    id\n  }\n}",
+		2,
 		"string without escapes should count fields normally"
 	)]
 	#[case(
-		r#"{ user(name: "a\"b\"c") { id name email } }"#,
-		3,
+		"{\n  user(name: \"a\\\"b\\\"c\") {\n    id\n    name\n    email\n  }\n}",
+		4,
 		"multiple escaped quotes in a single string literal"
 	)]
 	fn test_count_query_fields_with_escaped_strings(

@@ -33,8 +33,12 @@ impl AcceptHeader {
 			.filter_map(|s| MediaType::parse(s.trim()))
 			.collect();
 
-		// Sort by quality (highest first)
-		media_types.sort_by(|a, b| b.quality.partial_cmp(&a.quality).unwrap());
+		// Sort by quality (highest first), treat incomparable values as equal
+		media_types.sort_by(|a, b| {
+			b.quality
+				.partial_cmp(&a.quality)
+				.unwrap_or(std::cmp::Ordering::Equal)
+		});
 
 		Self { media_types }
 	}

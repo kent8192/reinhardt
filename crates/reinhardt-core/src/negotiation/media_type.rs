@@ -73,6 +73,10 @@ impl MediaType {
 
 				if key == "q" {
 					if let Ok(q) = value.parse::<f32>() {
+						// Reject NaN and infinity quality values
+						if !q.is_finite() {
+							return None;
+						}
 						media_type.quality = q.clamp(0.0, 1.0);
 					}
 				} else {

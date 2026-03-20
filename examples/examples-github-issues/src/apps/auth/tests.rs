@@ -4,9 +4,9 @@
 
 #[cfg(test)]
 mod tests {
-	use serial_test::serial;
 	use crate::config::schema::get_schema;
 	use reinhardt::graphql::Request;
+	use serial_test::serial;
 
 	#[serial(github_issues)]
 	#[tokio::test]

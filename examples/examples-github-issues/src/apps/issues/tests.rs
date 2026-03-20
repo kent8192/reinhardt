@@ -4,11 +4,11 @@
 
 #[cfg(test)]
 mod tests {
-	use serial_test::serial;
 	use crate::config::schema::get_schema;
 	use crate::config::urls::AppSchema;
 	use reinhardt::Claims;
 	use reinhardt::graphql::Request;
+	use serial_test::serial;
 	use std::sync::Arc;
 
 	/// Helper to create a schema with an authenticated user

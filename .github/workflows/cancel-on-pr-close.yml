@@ -10,7 +10,7 @@ permissions:
 jobs:
   cancel-stale-runs:
     name: Cancel Stale Workflow Runs
-    runs-on: [self-hosted, linux, arm64, reinhardt-cancel]
+    runs-on: [self-hosted, linux, arm64, reinhardt-hotpath]
     timeout-minutes: 8
     steps:
       - name: Cancel and force-cancel stale runs

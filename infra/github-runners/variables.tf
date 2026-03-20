@@ -85,14 +85,14 @@ variable "runner_ami_ssm_parameter_name" {
   default     = "/reinhardt-ci/runner-ami-id"
 }
 
-variable "enable_cancel_runner" {
-  description = "Enable the always-on cancel runner (t4g.nano) for event-driven cancel workflows"
+variable "enable_hotpath_runner" {
+  description = "Enable the always-on hotpath runner for lightweight CI control jobs"
   type        = bool
   default     = true
 }
 
-variable "cancel_runner_instance_type" {
-  description = "EC2 instance type for the cancel runner (API-only jobs, minimal resources needed)"
+variable "hotpath_runner_instance_type" {
+  description = "EC2 instance type for the hotpath runner (lightweight CI control jobs)"
   type        = string
   default     = "t4g.micro"
 }

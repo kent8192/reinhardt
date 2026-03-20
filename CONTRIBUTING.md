@@ -148,7 +148,7 @@ pub mod routing;
 
 - **DELETE obsolete code immediately** - don't leave commented-out code
 - **NO comments documenting deleted code** - Git history is the record
-- Extract important notes to `instructions/IMPLEMENTATION_NOTES.md` if needed
+- Extract important notes to project documentation if needed
 
 ### TODO and Placeholder Policy
 

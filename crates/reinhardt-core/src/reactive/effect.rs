@@ -234,12 +234,10 @@ impl Effect {
 				// Only reinsert if the effect is still registered (not disposed during execution)
 				let still_alive =
 					EFFECT_TIMING.with(|storage| storage.borrow().contains_key(&self.effect_id));
-				if still_alive {
-					if let Some(f) = self.effect_fn.take() {
-						EFFECT_FUNCTIONS.with(|storage| {
-							storage.borrow_mut().insert(self.effect_id, f);
-						});
-					}
+				if still_alive && let Some(f) = self.effect_fn.take() {
+					EFFECT_FUNCTIONS.with(|storage| {
+						storage.borrow_mut().insert(self.effect_id, f);
+					});
 				}
 			}
 		}

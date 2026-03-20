@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-rc.13...reinhardt-rest@v0.1.0-rc.14) - 2026-03-20
+
+### Fixed
+
+- *(rest)* correct module path in versioning macro
+
 ## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-rc.11...reinhardt-rest@v0.1.0-rc.12) - 2026-03-18
 
 ### Added

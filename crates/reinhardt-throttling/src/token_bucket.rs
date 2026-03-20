@@ -214,11 +214,9 @@ impl TokenBucketConfigBuilder {
 		let refill_rate = self
 			.refill_rate
 			.ok_or_else(|| ThrottleError::InvalidConfig("refill_rate must be set".to_string()))?;
-		let refill_interval = self
-			.refill_interval
-			.ok_or_else(|| {
-				ThrottleError::InvalidConfig("refill_interval must be set".to_string())
-			})?;
+		let refill_interval = self.refill_interval.ok_or_else(|| {
+			ThrottleError::InvalidConfig("refill_interval must be set".to_string())
+		})?;
 		let tokens_per_request = self.tokens_per_request.unwrap_or(1);
 
 		// Delegate to TokenBucketConfig::new for centralized validation

@@ -245,9 +245,7 @@ fn parse_element_node(input: ParseStream) -> Result<PageNode> {
 				&& !fork.peek(token::Brace)
 				&& !fork.peek(token::Paren)
 			{
-				element
-					.attrs
-					.push(parse_standalone_boolean_attr(&content)?);
+				element.attrs.push(parse_standalone_boolean_attr(&content)?);
 				continue;
 			}
 		}

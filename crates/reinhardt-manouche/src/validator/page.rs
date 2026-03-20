@@ -503,22 +503,22 @@ fn validate_attr_type(
 		// 2. Boolean literal `false` is prohibited (omit the attribute instead).
 		//    `true` is allowed to support standalone syntax (e.g., `required`
 		//    which the parser desugars to `required: true`).
-		if let AttrValue::BoolLit(lit) = value {
-			if !lit.value() {
-				return Err(syn::Error::new(
-					span,
-					format!(
-						"Boolean attribute '{}' cannot be set to `false`.\n\
+		if let AttrValue::BoolLit(lit) = value
+			&& !lit.value()
+		{
+			return Err(syn::Error::new(
+				span,
+				format!(
+					"Boolean attribute '{}' cannot be set to `false`.\n\
 						To disable a boolean attribute, omit it entirely:\n\
 						  - Attribute present = true (e.g., `{0}` or `{0}: true`)\n\
 						  - Attribute absent = false (just remove `{0}`)\n\n\
 						Use a variable or expression for dynamic boolean values:\n\
 						  Correct:   {0}: is_disabled\n\
 						  Correct:   {0}: state.is_active()",
-						attr_name
-					),
-				));
-			}
+					attr_name
+				),
+			));
 		}
 
 		// 3. Numeric literals are prohibited

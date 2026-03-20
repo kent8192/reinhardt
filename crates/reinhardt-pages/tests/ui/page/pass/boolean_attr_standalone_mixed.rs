@@ -9,7 +9,7 @@ fn main() {
 		div {
 			input {
 				r#type: "text",
-				required,
+				required: true,
 				class: "form-input",
 				readonly: is_readonly,
 			}

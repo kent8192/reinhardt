@@ -7,16 +7,20 @@ fn main() {
 		div {
 			input {
 				r#type: "text",
-				required
+				required: true,
 			}
 			button {
-				disabled
+				disabled: true,
 				"Submit"
 			}
 			select {
-				multiple
-				option { "A" }
-				option { "B" }
+				multiple: true,
+				option {
+					"A"
+				}
+				option {
+					"B"
+				}
 			}
 		}
 	});

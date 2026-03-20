@@ -177,8 +177,16 @@ fn count_query_fields(query: &str) -> usize {
 			continue;
 		}
 
+		let mut escaped = false;
 		for ch in trimmed.chars() {
+			if escaped {
+				// Previous character was a backslash inside a string,
+				// so this character is escaped — skip it.
+				escaped = false;
+				continue;
+			}
 			match ch {
+				'\\' if in_string => escaped = true,
 				'"' => in_string = !in_string,
 				'{' if !in_string => depth += 1,
 				'}' if !in_string => depth = depth.saturating_sub(1),
@@ -1057,5 +1065,40 @@ mod tests {
 			!result.extensions.is_empty(),
 			"expected Analyzer extension data in response"
 		);
+	}
+
+	#[rstest::rstest]
+	#[case(
+		r#"{ user(name: "hello \"world\"") { id } }"#,
+		1,
+		"escaped quotes inside string should not affect field count"
+	)]
+	#[case(
+		r#"{ user(name: "hello \\\"end") { id name } }"#,
+		2,
+		"escaped backslash before quote should correctly toggle string state"
+	)]
+	#[case(
+		r#"{ user(name: "no escapes") { id } }"#,
+		1,
+		"string without escapes should count fields normally"
+	)]
+	#[case(
+		r#"{ user(name: "a\"b\"c") { id name email } }"#,
+		3,
+		"multiple escaped quotes in a single string literal"
+	)]
+	fn test_count_query_fields_with_escaped_strings(
+		#[case] query: &str,
+		#[case] expected: usize,
+		#[case] description: &str,
+	) {
+		// Arrange — query and expected count provided by rstest parametrization
+
+		// Act
+		let count = count_query_fields(query);
+
+		// Assert
+		assert_eq!(count, expected, "{}", description);
 	}
 }

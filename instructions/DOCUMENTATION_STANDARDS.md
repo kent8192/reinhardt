@@ -103,9 +103,11 @@ When modifying features, check and update the following documentation as applica
 - Adding planned features
 
 #### Detailed Guides
-**Location:** `instructions/` directory
+**Location:** `instructions/` directory and `website/` directory
 **Files:**
-- `docs/tutorials/` - Tutorial files
+- `website/content/quickstart/getting-started.md` - Getting started guide
+- `website/content/docs/feature-flags.md` - Feature flags documentation
+- `website/content/quickstart/tutorials/` - Tutorial files
 - `instructions/MODULE_SYSTEM.md` - Module system standards
 - `instructions/TESTING_STANDARDS.md` - Testing standards
 - `instructions/ANTI_PATTERNS.md` - Anti-patterns guide

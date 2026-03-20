@@ -290,7 +290,7 @@ macro_rules! versioned_handler {
     ($versioning:expr, {
         $($version:literal => $handler:expr),* $(,)?
     }) => {{
-        let mut builder = $crate::handler::VersionedHandlerBuilder::new($versioning);
+        let mut builder = $crate::versioning::handler::VersionedHandlerBuilder::new($versioning);
         $(
             builder = builder.with_version_handler($version, $handler);
         )*
@@ -300,7 +300,7 @@ macro_rules! versioned_handler {
     ($versioning:expr, {
         $($version:literal => $handler:expr),* $(,)?
     }, default => $default_handler:expr) => {{
-        let mut builder = $crate::handler::VersionedHandlerBuilder::new($versioning);
+        let mut builder = $crate::versioning::handler::VersionedHandlerBuilder::new($versioning);
         $(
             builder = builder.with_version_handler($version, $handler);
         )*

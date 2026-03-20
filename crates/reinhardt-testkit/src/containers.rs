@@ -161,7 +161,7 @@ impl PostgresContainer {
 		use testcontainers::core::IntoContainerPort;
 
 		// Use GenericImage to ensure port is properly exposed
-		let image = GenericImage::new("postgres", "16-alpine")
+		let image = GenericImage::new("postgres", "17-alpine")
 			.with_exposed_port(5432.tcp())
 			.with_wait_for(WaitFor::message_on_stderr(
 				"database system is ready to accept connections",

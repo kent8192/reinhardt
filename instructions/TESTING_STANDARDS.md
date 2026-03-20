@@ -1204,7 +1204,8 @@ fn test_with_guaranteed_cleanup() {
 async fn test_bad(
     #[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String)
 ) {
-    let result = postgres_container.query(...);  // ❌ Missing .await
+    // ❌ Trying to destructure without .await — postgres_container is a Future here
+    let (_container, pool, _port, _url) = postgres_container;
 }
 ```
 

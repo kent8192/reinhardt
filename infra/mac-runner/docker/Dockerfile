@@ -1,5 +1,10 @@
 FROM myoung34/github-runner:2.333.0
 
+# Install build dependencies (pkg-config + libssl-dev required for openssl-sys crate)
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends pkg-config libssl-dev \
+	&& rm -rf /var/lib/apt/lists/*
+
 # Install Rust toolchain
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable \
 	&& . "$HOME/.cargo/env" \

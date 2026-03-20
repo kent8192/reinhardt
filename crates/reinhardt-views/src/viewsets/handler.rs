@@ -813,8 +813,9 @@ where
 				.await
 				.map_err(|e| ViewError::DatabaseError(format!("Failed to query objects: {}", e)))?;
 
-			// Compare pk as strings (JSON number vs Display)
-			let pk_str = pk.to_string().replace('"', "");
+			// Normalize pk: strip surrounding quotes from JSON string PKs for comparison
+			let pk_str = pk.to_string();
+			let pk_str = pk_str.trim_matches('"');
 
 			items
 				.into_iter()
@@ -829,13 +830,13 @@ where
 		} else {
 			// Use in-memory queryset
 			let queryset = self.get_queryset();
+			let pk_str = pk.to_string();
+			let pk_str = pk_str.trim_matches('"');
 			queryset
 				.iter()
 				.find(|item| {
 					if let Some(item_pk) = item.primary_key() {
-						let item_pk_str = item_pk.to_string();
-						let pk_str = pk.to_string().replace('"', "");
-						item_pk_str == pk_str
+						item_pk.to_string() == pk_str
 					} else {
 						false
 					}
@@ -1590,12 +1591,10 @@ mod tests {
 		assert!(result.is_ok(), "retrieve should succeed with quoted pk");
 		let response = result.unwrap();
 		assert_eq!(response.status, hyper::StatusCode::OK);
-		let body_str = String::from_utf8(response.body.to_vec()).unwrap();
-		assert!(
-			body_str.contains("\"name\":\"first\""),
-			"response should contain the matched item, got: {}",
-			body_str
-		);
+		let body: TestItem =
+			serde_json::from_slice(&response.body.to_vec()).expect("response should be valid JSON");
+		assert_eq!(body.name, "first");
+		assert_eq!(body.id, Some(1));
 	}
 
 	#[rstest]
@@ -1617,12 +1616,10 @@ mod tests {
 		assert!(result.is_ok(), "retrieve should succeed with numeric pk");
 		let response = result.unwrap();
 		assert_eq!(response.status, hyper::StatusCode::OK);
-		let body_str = String::from_utf8(response.body.to_vec()).unwrap();
-		assert!(
-			body_str.contains("\"name\":\"answer\""),
-			"response should contain the matched item, got: {}",
-			body_str
-		);
+		let body: TestItem =
+			serde_json::from_slice(&response.body.to_vec()).expect("response should be valid JSON");
+		assert_eq!(body.name, "answer");
+		assert_eq!(body.id, Some(42));
 	}
 
 	#[rstest]

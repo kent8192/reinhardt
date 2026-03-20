@@ -132,10 +132,7 @@ impl LimitOffsetPagination {
 	}
 
 	fn build_url(&self, base_url: &str, offset: usize, limit: usize) -> String {
-		let url = url::Url::parse(base_url).unwrap_or_else(|_| {
-			url::Url::parse(&format!("http://localhost{}", base_url))
-				.unwrap_or_else(|_| url::Url::parse("http://localhost/").expect("hardcoded URL"))
-		});
+		let url = super::parse_base_url(base_url);
 
 		let mut new_url = url.clone();
 		new_url

@@ -95,6 +95,15 @@ pub mod cursor;
 mod limit_offset;
 mod page_number;
 
+/// Parses a base URL with fallback for relative paths and malformed URLs.
+/// Returns a valid `Url` without panicking regardless of input.
+pub(crate) fn parse_base_url(base_url: &str) -> url::Url {
+	url::Url::parse(base_url)
+		.or_else(|_| url::Url::parse(&format!("http://localhost{}", base_url)))
+		// SAFETY: "http://localhost/" is a valid URL constant; parse cannot fail
+		.unwrap_or_else(|_| url::Url::parse("http://localhost/").unwrap())
+}
+
 // Re-export core types and traits
 pub use self::core::{
 	AsyncPaginator, Page, PaginatedResponse, PaginationMetadata, Paginator, SchemaParameter,

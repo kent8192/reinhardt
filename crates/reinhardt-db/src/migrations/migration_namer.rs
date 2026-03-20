@@ -350,4 +350,44 @@ mod tests {
 		assert_eq!(name_from_unsorted, "merge_0002_a_0002_b");
 		assert_eq!(name_from_unsorted, name_from_sorted);
 	}
+
+	#[test]
+	fn test_generate_merge_name_empty_slice() {
+		// Arrange
+		let leaves: &[&str] = &[];
+
+		// Act
+		let name = MigrationNamer::generate_merge_name(leaves);
+
+		// Assert: should return "merge_" without panic
+		assert_eq!(name, "merge_");
+	}
+
+	#[test]
+	fn test_generate_merge_name_boundary_52_and_53_chars() {
+		// Arrange: "merge_" is 6 chars, MAX_NAME_LENGTH is 52
+		// Need leaf content of exactly 46 chars for boundary (52 total)
+		let leaf_46 = "a".repeat(46);
+		let leaf_47 = "a".repeat(47);
+
+		// Act: exactly 52 chars (6 + 46) - no truncation
+		let name_52 = MigrationNamer::generate_merge_name(&[&leaf_46]);
+
+		// Assert: no truncation at exactly MAX_NAME_LENGTH
+		assert_eq!(name_52.len(), 52);
+		assert_eq!(name_52, format!("merge_{}", leaf_46));
+		assert!(!name_52.ends_with("_and_more"));
+
+		// Act: 53 chars (6 + 47) - truncation
+		let name_53 = MigrationNamer::generate_merge_name(&[&leaf_47]);
+
+		// Assert: truncated with _and_more suffix
+		assert!(
+			name_53.len() <= MAX_NAME_LENGTH,
+			"Name should be within MAX_NAME_LENGTH ({}), got len={}",
+			MAX_NAME_LENGTH,
+			name_53.len()
+		);
+		assert!(name_53.ends_with("_and_more"));
+	}
 }

@@ -484,10 +484,12 @@ fn minify_html(html: &str) -> String {
 		// Detect opening preserved tag (e.g. <pre>, <textarea class="...">)
 		if preserved_tag.is_none() && c == '<' {
 			for tag in &PRESERVED_TAGS {
-				if remaining.strip_prefix(&format!("<{tag}")).is_some_and(|after| {
-					after.starts_with(|ch: char| ch == '>' || ch.is_ascii_whitespace())
-						|| after.is_empty()
-				}) {
+				if remaining
+					.strip_prefix(&format!("<{tag}"))
+					.is_some_and(|after| {
+						after.starts_with(|ch: char| ch == '>' || ch.is_ascii_whitespace())
+							|| after.is_empty()
+					}) {
 					preserved_tag = Some(tag);
 					break;
 				}
@@ -768,10 +770,7 @@ mod tests {
 	}
 
 	#[rstest]
-	#[case::pre(
-		"<pre>  hello\n  world  </pre>",
-		"<pre>  hello\n  world  </pre>"
-	)]
+	#[case::pre("<pre>  hello\n  world  </pre>", "<pre>  hello\n  world  </pre>")]
 	#[case::textarea(
 		"<textarea>  hello\n  world  </textarea>",
 		"<textarea>  hello\n  world  </textarea>"

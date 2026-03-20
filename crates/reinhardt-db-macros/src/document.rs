@@ -65,12 +65,9 @@ pub(crate) fn document_impl(attr: TokenStream, item: TokenStream) -> TokenStream
 		let mut field_attrs = crate::field::attr_parser::FieldAttrs::default();
 		for attr in &field.attrs {
 			if attr.path().is_ident("field") {
-				if let Ok(parsed) = attr.parse_args::<crate::field::attr_parser::FieldAttrs>() {
-					field_attrs = parsed;
-				} else if let Ok(meta) = attr.parse_args::<syn::Ident>()
-					&& meta == "primary_key"
-				{
-					field_attrs.primary_key = true;
+				match attr.parse_args::<crate::field::attr_parser::FieldAttrs>() {
+					Ok(parsed) => field_attrs = parsed,
+					Err(err) => return err.to_compile_error().into(),
 				}
 			}
 		}

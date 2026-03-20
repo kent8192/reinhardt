@@ -8,8 +8,8 @@
 //! 5. Directory structure correctness (migrations/{app}/NNNN_name.rs)
 
 use reinhardt_db::migrations::{
-	Migration, MigrationRepository, migration_numbering::MigrationNumbering, operations::Operation,
-	repository::filesystem::FilesystemRepository,
+	Migration, MigrationError, MigrationRepository, migration_numbering::MigrationNumbering,
+	operations::Operation, repository::filesystem::FilesystemRepository,
 };
 use serial_test::serial;
 use tempfile::TempDir;
@@ -388,5 +388,231 @@ async fn test_duplicate_operations_check_still_catches_real_duplicates() {
 	assert!(
 		err_msg.contains("identical operations"),
 		"expected DuplicateOperations error, got: {err_msg}"
+	);
+}
+
+/// Helper function to create a merge migration with dependencies and empty operations
+fn create_merge_migration(app_label: &str, name: &str, deps: Vec<(&str, &str)>) -> Migration {
+	let mut migration = Migration::new(name, app_label);
+	migration.dependencies = deps
+		.into_iter()
+		.map(|(a, n)| (a.to_string(), n.to_string()))
+		.collect();
+	// Merge migrations have empty operations by design
+	migration
+}
+
+/// Test Case 14: Merge migration save and get round-trip
+/// Validates that a merge migration can be saved and retrieved correctly.
+#[tokio::test]
+#[serial(migration_overwrite)]
+async fn test_merge_migration_save_and_get_round_trip() {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let mut repo = FilesystemRepository::new(temp_dir.path());
+
+	let m1 = create_test_migration("blog", "0001_initial");
+	repo.save(&m1).await.unwrap();
+	let m2 = create_test_migration("blog", "0002_add_field");
+	repo.save(&m2).await.unwrap();
+
+	let merge = create_merge_migration(
+		"blog",
+		"0003_merge",
+		vec![("blog", "0001_initial"), ("blog", "0002_add_field")],
+	);
+	repo.save(&merge).await.unwrap();
+
+	// Act
+	let retrieved = repo.get("blog", "0003_merge").await;
+
+	// Assert
+	assert!(retrieved.is_ok(), "get failed: {:?}", retrieved.err());
+	let retrieved = retrieved.unwrap();
+	assert_eq!(retrieved.app_label, "blog");
+	assert_eq!(retrieved.name, "0003_merge");
+	assert!(
+		retrieved.operations.is_empty(),
+		"merge migration should have no operations"
+	);
+}
+
+/// Test Case 15: Merge migration appears in list
+/// Validates that merge migrations are included in list() results.
+#[tokio::test]
+#[serial(migration_overwrite)]
+async fn test_merge_migration_appears_in_list() {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let mut repo = FilesystemRepository::new(temp_dir.path());
+
+	let m1 = create_test_migration("blog", "0001_initial");
+	repo.save(&m1).await.unwrap();
+	let m2 = create_test_migration("blog", "0002_add_field");
+	repo.save(&m2).await.unwrap();
+	let merge = create_merge_migration(
+		"blog",
+		"0003_merge",
+		vec![("blog", "0001_initial"), ("blog", "0002_add_field")],
+	);
+	repo.save(&merge).await.unwrap();
+
+	// Act
+	let migrations = repo.list("blog").await.unwrap();
+
+	// Assert
+	assert_eq!(migrations.len(), 3);
+	let names: Vec<&str> = migrations.iter().map(|m| m.name.as_str()).collect();
+	assert!(names.contains(&"0003_merge"));
+}
+
+/// Test Case 16: Sequential merge saves coexist on disk
+/// Validates that two merge migrations at different points coexist.
+#[tokio::test]
+#[serial(migration_overwrite)]
+async fn test_sequential_merge_saves_coexist_on_disk() {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let mut repo = FilesystemRepository::new(temp_dir.path());
+
+	let m1 = create_test_migration("blog", "0001_initial");
+	repo.save(&m1).await.unwrap();
+	let m2a = create_test_migration("blog", "0002_a");
+	repo.save(&m2a).await.unwrap();
+	let m2b = create_test_migration("blog", "0002_b");
+	repo.save(&m2b).await.unwrap();
+	let merge1 = create_merge_migration(
+		"blog",
+		"0003_merge",
+		vec![("blog", "0002_a"), ("blog", "0002_b")],
+	);
+	repo.save(&merge1).await.unwrap();
+	let m4x = create_test_migration("blog", "0004_x");
+	repo.save(&m4x).await.unwrap();
+	let m4y = create_test_migration("blog", "0004_y");
+	repo.save(&m4y).await.unwrap();
+	let merge2 = create_merge_migration(
+		"blog",
+		"0005_merge",
+		vec![("blog", "0004_x"), ("blog", "0004_y")],
+	);
+	repo.save(&merge2).await.unwrap();
+
+	// Act
+	let blog_dir = temp_dir.path().join("blog");
+	let migrations = repo.list("blog").await.unwrap();
+
+	// Assert: both merge files exist on disk
+	assert!(blog_dir.join("0003_merge.rs").exists());
+	assert!(blog_dir.join("0005_merge.rs").exists());
+	assert_eq!(migrations.len(), 7);
+}
+
+/// Test Case 17: Merge migration overwrite prevention
+/// Validates that saving a merge migration with an existing name fails.
+#[tokio::test]
+#[serial(migration_overwrite)]
+async fn test_merge_overwrite_prevention() {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let mut repo = FilesystemRepository::new(temp_dir.path());
+
+	let m1 = create_test_migration("blog", "0001_initial");
+	repo.save(&m1).await.unwrap();
+	let merge = create_merge_migration("blog", "0003_merge", vec![("blog", "0001_initial")]);
+	repo.save(&merge).await.unwrap();
+
+	// Act: save duplicate merge migration
+	let duplicate = create_merge_migration("blog", "0003_merge", vec![("blog", "0001_initial")]);
+	let result = repo.save(&duplicate).await;
+
+	// Assert
+	assert!(result.is_err());
+	let err_msg = result.unwrap_err().to_string();
+	assert!(
+		err_msg.contains("already exists"),
+		"expected 'already exists' error, got: {err_msg}"
+	);
+}
+
+/// Test Case 18: Merge migration with path traversal rejected
+/// Validates that path traversal in app_label is rejected.
+#[tokio::test]
+#[serial(migration_overwrite)]
+async fn test_merge_with_path_traversal_rejected() {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let mut repo = FilesystemRepository::new(temp_dir.path());
+
+	let merge = create_merge_migration("../evil", "0001_merge", vec![("blog", "0001_initial")]);
+
+	// Act
+	let result = repo.save(&merge).await;
+
+	// Assert
+	assert!(result.is_err(), "Path traversal should be rejected");
+	assert!(matches!(
+		result.unwrap_err(),
+		MigrationError::PathTraversal(_)
+	));
+}
+
+/// Test Case 19: Merge migration with empty app label rejected
+/// Validates that empty app_label is rejected by path validation.
+#[tokio::test]
+#[serial(migration_overwrite)]
+async fn test_merge_with_empty_app_label_rejected() {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let mut repo = FilesystemRepository::new(temp_dir.path());
+
+	let merge = create_merge_migration("", "0001_merge", vec![("blog", "0001_initial")]);
+
+	// Act
+	let result = repo.save(&merge).await;
+
+	// Assert
+	assert!(result.is_err(), "Empty app_label should be rejected");
+	assert!(matches!(
+		result.unwrap_err(),
+		MigrationError::PathTraversal(_)
+	));
+}
+
+/// Test Case 20: Merge migration generated code contains dependencies
+/// Validates that the generated .rs file includes dependency information.
+#[tokio::test]
+#[serial(migration_overwrite)]
+async fn test_merge_migration_generated_code_contains_dependencies() {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let mut repo = FilesystemRepository::new(temp_dir.path());
+
+	let merge = create_merge_migration(
+		"blog",
+		"0003_merge",
+		vec![("blog", "0001_initial"), ("blog", "0002_add_field")],
+	);
+	repo.save(&merge).await.unwrap();
+
+	// Act: read the generated file
+	let file_path = temp_dir.path().join("blog").join("0003_merge.rs");
+	let content = tokio::fs::read_to_string(&file_path).await.unwrap();
+
+	// Assert: file contains dependency information and app label
+	assert!(
+		content.contains("blog"),
+		"generated code should reference app label 'blog'"
+	);
+	assert!(
+		content.contains("0001_initial") || content.contains("dependencies"),
+		"generated code should contain dependency references"
+	);
+
+	// Merge migration should have empty operations
+	// (no CreateTable, AddColumn, etc. in the generated code)
+	assert!(
+		!content.contains("CreateTable") && !content.contains("AddColumn"),
+		"merge migration should not contain table/column operations"
 	);
 }

@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.13...reinhardt-web@v0.1.0-rc.14) - 2026-03-20
+
+### Added
+
+- *(infra)* add custom runner Docker image with Rust toolchain
+- *(infra)* add Terraform GitHub config for MAC_RUNNER_ENABLED variable
+- *(infra)* add Terraform configuration for Mac local runner
+- *(ci)* extend determine-runner with Mac local runner priority
+
+### Changed
+
+- *(infra)* rename cancel-runner to hotpath-runner
+
+### Documentation
+
+- update CRATE_STRUCTURE.md with accurate crate count and descriptions
+- fix broken links, typos, and outdated info in root docs
+- *(infra)* add Mac local runner README with setup instructions
+
+### Fixed
+
+- *(migrations)* resolve multi-element dependency parsing and deterministic sort
+- *(rest)* correct module path in versioning macro
+- *(ci)* use atomic dpkg lock timeout and add missing environment key
+- *(testkit)* unify PostgreSQL version, add pool close, and cleanup backoff
+- *(pages)* protect textarea, style, and script from minification
+- *(db-macros)* emit compile error for unknown field attributes
+- *(examples)* use /api/ mount point for URL consistency
+- *(ci)* add actor check to workflow_dispatch Mac runner gate
+- *(infra)* use pre-built binaries for nextest and mold in Dockerfile
+- *(infra)* use canonical repo URL (reinhardt-web) for runner registration
+- *(infra)* update runner base image to v2.333.0 (v2.322.0 deprecated)
+- *(infra)* add OpenSSL dev packages to Mac runner Docker image
+- *(ci)* pass explicit config path to tfprovidercheck
+
+### Maintenance
+
+- add workflow to auto-delete release-plz branches on PR close
+- remove accidentally committed tfplan binary
+
+### Styling
+
+- *(infra)* apply terraform fmt to all .tf files
+
 ## [0.1.0-rc.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.12...reinhardt-web@v0.1.0-rc.13) - 2026-03-18
 
 ### Added

@@ -39,14 +39,14 @@ output "webhook_setup_guide" {
 	EOT
 }
 
-output "cancel_runner_instance_id" {
-  description = "EC2 instance ID of the cancel runner (empty if disabled)"
-  value       = var.enable_cancel_runner ? aws_instance.cancel_runner[0].id : ""
+output "hotpath_runner_instance_id" {
+  description = "EC2 instance ID of the hotpath runner (empty if disabled)"
+  value       = var.enable_hotpath_runner ? aws_instance.hotpath_runner[0].id : ""
 }
 
-output "cancel_runner_private_ip" {
-  description = "Private IP of the cancel runner (for SSM Session Manager access)"
-  value       = var.enable_cancel_runner ? aws_instance.cancel_runner[0].private_ip : ""
+output "hotpath_runner_private_ip" {
+  description = "Private IP of the hotpath runner (for SSM Session Manager access)"
+  value       = var.enable_hotpath_runner ? aws_instance.hotpath_runner[0].private_ip : ""
 }
 
 output "github_actions_oidc_provider_arn" {

@@ -13,7 +13,7 @@ jobs:
     if: >-
       github.event.pull_request.merged == false &&
       startsWith(github.event.pull_request.head.ref, 'release-plz-')
-    runs-on: [self-hosted, linux, arm64, reinhardt-cancel]
+    runs-on: [self-hosted, linux, arm64, reinhardt-hotpath]
     timeout-minutes: 5
     steps:
       - name: Delete remote branch

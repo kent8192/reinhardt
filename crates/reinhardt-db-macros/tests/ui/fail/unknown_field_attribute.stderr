@@ -1,0 +1,5 @@
+error: unknown flag attribute `requried`
+ --> tests/ui/fail/unknown_field_attribute.rs:8:13
+  |
+8 |     #[field(requried)]
+  |             ^^^^^^^^

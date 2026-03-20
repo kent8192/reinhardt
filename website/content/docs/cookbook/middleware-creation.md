@@ -24,9 +24,10 @@ All middleware must implement the `Middleware` trait.
 
 ```rust
 use async_trait::async_trait;
-use reinhardt::{Handler, Middleware, Request, Response, ViewResult};
+use reinhardt::{Handler, Request, Response, ViewResult};
 use std::sync::Arc;
 
+// The framework provides this trait (shown here for reference):
 #[async_trait]
 pub trait Middleware: Send + Sync {
     /// Process the request and optionally call the next handler

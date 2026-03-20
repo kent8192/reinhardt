@@ -411,7 +411,7 @@ impl Middleware for AuthMiddleware {
     async fn process(&self, req: Request, next: Arc<dyn Handler>) -> Result<Response> {
         // Check authentication via request extensions
         let auth_state = req.extensions.get::<AuthState>();
-        if auth_state.is_none() || !auth_state.unwrap().is_authenticated() {
+        if !auth_state.is_some_and(|s| s.is_authenticated()) {
             return Ok(Response::new(StatusCode::UNAUTHORIZED)
                 .with_body("Unauthorized"));
         }

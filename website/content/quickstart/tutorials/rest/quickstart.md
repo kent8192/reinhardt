@@ -86,8 +86,7 @@ This example uses simple data structures. In real applications, you can implemen
 Implement API endpoints using HTTP method decorators. Add to `users/views.rs`:
 
 ```rust
-use json::json;
-use serde_json as json;
+use serde_json::{self as json, json};
 use reinhardt::ViewResult;
 use reinhardt::{get, post, Json, Response, StatusCode};
 use crate::models::User;
@@ -173,8 +172,7 @@ pub struct UserSerializer {
 Edit `users/views.rs` to implement full CRUD operations:
 
 ```rust
-use json::json;
-use serde_json as json;
+use serde_json::{self as json, json};
 use reinhardt::ViewResult;
 use reinhardt::{get, post, Json, Path, Response, StatusCode};
 use crate::models::User;

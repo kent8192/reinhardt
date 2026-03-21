@@ -589,6 +589,7 @@ scopeguard = "1.2.0"
 tempfile = "3.15.0"
 trybuild = "1.0.114"
 url = "2.5.4"
+colored = "3.0.0"
 criterion = { version = "0.8", features = ["html_reports"] }
 insta = { version = "1.41", features = ["json", "toml"] }
 

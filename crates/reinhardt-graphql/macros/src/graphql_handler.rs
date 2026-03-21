@@ -199,11 +199,14 @@ pub(crate) fn expand_graphql_handler(input: ItemFn) -> Result<TokenStream> {
 
 	// Generate DI extraction code
 	let di_context_extraction = quote! {
-		let __di_ctx = #context_pat
-			.get_di_context()
-			.map_err(|e| ::async_graphql::Error::new(format!(
-				"DI context not set. Ensure the schema was built with .data(injection_ctx): {:?}", e
-			)))?;
+		let __di_ctx = {
+			let __shared_ctx = #context_pat
+				.get_di_context()
+				.map_err(|e| ::async_graphql::Error::new(format!(
+					"DI context not set. Ensure the schema was built with .data(injection_ctx): {:?}", e
+				)))?;
+			::std::sync::Arc::new((*__shared_ctx).fork())
+		};
 	};
 
 	// Generate injection calls
@@ -216,7 +219,7 @@ pub(crate) fn expand_graphql_handler(input: ItemFn) -> Result<TokenStream> {
 
 			if use_cache {
 				quote! {
-					let #pat: #ty = #di_crate::Injected::<#ty>::resolve(__di_ctx)
+					let #pat: #ty = #di_crate::Injected::<#ty>::resolve(&__di_ctx)
 						.await
 						.map_err(|e| ::async_graphql::Error::new(
 							format!("Dependency injection failed for {}: {:?}", stringify!(#ty), e)
@@ -225,7 +228,7 @@ pub(crate) fn expand_graphql_handler(input: ItemFn) -> Result<TokenStream> {
 				}
 			} else {
 				quote! {
-					let #pat: #ty = #di_crate::Injected::<#ty>::resolve_uncached(__di_ctx)
+					let #pat: #ty = #di_crate::Injected::<#ty>::resolve_uncached(&__di_ctx)
 						.await
 						.map_err(|e| ::async_graphql::Error::new(
 							format!("Dependency injection failed for {}: {:?}", stringify!(#ty), e)

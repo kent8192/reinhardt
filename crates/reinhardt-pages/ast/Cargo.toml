@@ -14,12 +14,12 @@ categories = ["parser-implementations", "wasm"]
 reinhardt-manouche = { workspace = true }
 
 # Documentation
-aquamarine = "0.5"
+aquamarine = { workspace = true }
 
 # Parsing and AST manipulation
-syn = { version = "2.0", features = ["full", "extra-traits", "visit-mut"] }
-quote = "1.0"
-proc-macro2 = "1.0"
+syn = { workspace = true, features = ["full", "extra-traits", "visit-mut"] }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
 
 # Diagnostic and error handling
 darling = "0.20"

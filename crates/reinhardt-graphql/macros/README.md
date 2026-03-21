@@ -13,15 +13,15 @@ Derive macros for GraphQL-gRPC integration in Reinhardt framework
 ```toml
 # ✅ Correct - use the reinhardt parent crate
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", features = ["graphql"] }
+reinhardt = { version = "0.1.0-rc.13", features = ["graphql"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-alpha.1", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-alpha.1", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
 
 # ❌ Incorrect - don't depend on this crate directly
 [dependencies]
-reinhardt-graphql-macros = "0.1.0-alpha.1"
+reinhardt-graphql-macros = "0.1.0-rc.13"
 ```
 
 The macros are automatically re-exported by `reinhardt::graphql`:

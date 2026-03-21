@@ -50,6 +50,15 @@ resource "random_password" "webhook_secret" {
   special = false
 }
 
+# Dynamically retrieve available AZs in the current region
+data "aws_availability_zones" "available" {
+  state = "available"
+
+  # Exclude AZs that do not support Graviton instance types (c7g/c6g).
+  # Each region may have different unsupported AZs; add them to this list as needed.
+  exclude_zone_ids = var.excluded_zone_ids
+}
+
 # Default VPC data sources (use default VPC for simplicity)
 data "aws_vpc" "default" {
   default = true
@@ -61,9 +70,7 @@ data "aws_subnets" "default" {
     values = [data.aws_vpc.default.id]
   }
   filter {
-    # Exclude us-east-1e: Graviton instance types (c7g/c6g) are not supported in this AZ.
-    # us-east-1a, 1b, 1c, 1d, 1f all support the required Graviton instance types.
     name   = "availability-zone"
-    values = ["us-east-1a", "us-east-1b", "us-east-1c", "us-east-1d", "us-east-1f"]
+    values = data.aws_availability_zones.available.names
   }
 }

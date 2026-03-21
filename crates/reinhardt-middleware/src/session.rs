@@ -13,6 +13,48 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 
+/// Newtype wrapper for session ID stored in request extensions.
+///
+/// Handlers can retrieve the current session ID from the request
+/// extensions without parsing cookies manually.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// fn handle(&self, request: Request) -> Result<Response> {
+///     if let Some(session_id) = request.extensions.get::<SessionId>() {
+///         println!("Session: {}", session_id.as_str());
+///     }
+///     // ...
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionId(String);
+
+impl SessionId {
+	/// Create a new `SessionId` from the given string.
+	pub fn new(id: String) -> Self {
+		Self(id)
+	}
+
+	/// Returns the session ID as a string slice.
+	pub fn as_str(&self) -> &str {
+		&self.0
+	}
+}
+
+impl AsRef<str> for SessionId {
+	fn as_ref(&self) -> &str {
+		self.as_str()
+	}
+}
+
+impl std::fmt::Display for SessionId {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.write_str(self.as_str())
+	}
+}
+
 /// Session data
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionData {
@@ -513,6 +555,11 @@ impl Middleware for SessionMiddleware {
 		// Save the session
 		self.store.save(session.clone());
 
+		// Inject session ID into request extensions so downstream handlers can access it
+		request
+			.extensions
+			.insert(SessionId::new(session.id.clone()));
+
 		// Call the handler
 		let mut response = handler.handle(request).await?;
 
@@ -945,6 +992,156 @@ mod tests {
 		assert!(!store.is_empty());
 		store.delete(&session_id);
 		assert_eq!(store.len(), 0);
+	}
+
+	/// Handler that captures the session ID from request extensions
+	struct SessionIdCapturingHandler {
+		captured: Arc<RwLock<Option<SessionId>>>,
+	}
+
+	#[async_trait]
+	impl Handler for SessionIdCapturingHandler {
+		async fn handle(&self, request: Request) -> Result<Response> {
+			// Capture session ID from extensions
+			let session_id = request.extensions.get::<SessionId>();
+			let mut guard = self.captured.write().unwrap();
+			*guard = session_id;
+			Ok(Response::new(StatusCode::OK).with_body(Bytes::from("OK")))
+		}
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_session_id_injected_into_request_extensions() {
+		// Arrange
+		let config = SessionConfig::new("sessionid".to_string(), Duration::from_secs(3600));
+		let middleware = SessionMiddleware::new(config);
+		let captured = Arc::new(RwLock::new(None));
+		let handler = Arc::new(SessionIdCapturingHandler {
+			captured: Arc::clone(&captured),
+		});
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let _response = middleware.process(request, handler).await.unwrap();
+
+		// Assert - handler received request with session ID in extensions
+		let guard = captured.read().unwrap();
+		let session_id = guard
+			.as_ref()
+			.expect("SessionId should be present in extensions");
+		assert!(
+			!session_id.as_str().is_empty(),
+			"Session ID should not be empty"
+		);
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_session_id_in_extensions_matches_cookie() {
+		// Arrange
+		let config = SessionConfig::new("sessionid".to_string(), Duration::from_secs(3600));
+		let middleware = SessionMiddleware::new(config);
+		let captured = Arc::new(RwLock::new(None));
+		let handler = Arc::new(SessionIdCapturingHandler {
+			captured: Arc::clone(&captured),
+		});
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert - session ID in extensions matches the one in Set-Cookie header
+		let guard = captured.read().unwrap();
+		let session_id = guard.as_ref().expect("SessionId should be present");
+
+		let cookie = response
+			.headers
+			.get("set-cookie")
+			.unwrap()
+			.to_str()
+			.unwrap();
+		let cookie_session_id = cookie.split(';').next().unwrap().split('=').nth(1).unwrap();
+
+		assert_eq!(session_id.as_str(), cookie_session_id);
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_session_id_in_extensions_preserved_for_existing_session() {
+		// Arrange
+		let config = SessionConfig::new("sessionid".to_string(), Duration::from_secs(3600));
+		let middleware = Arc::new(SessionMiddleware::new(config));
+		let captured = Arc::new(RwLock::new(None));
+
+		// First request to create session
+		let handler1 = Arc::new(TestHandler);
+		let request1 = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+		let response1 = middleware.process(request1, handler1).await.unwrap();
+		let cookie = response1
+			.headers
+			.get("set-cookie")
+			.unwrap()
+			.to_str()
+			.unwrap();
+		let original_session_id = cookie
+			.split(';')
+			.next()
+			.unwrap()
+			.split('=')
+			.nth(1)
+			.unwrap()
+			.to_string();
+
+		// Second request with existing session cookie
+		let handler2 = Arc::new(SessionIdCapturingHandler {
+			captured: Arc::clone(&captured),
+		});
+		let mut headers = HeaderMap::new();
+		headers.insert(
+			hyper::header::COOKIE,
+			hyper::header::HeaderValue::from_str(&format!("sessionid={}", original_session_id))
+				.unwrap(),
+		);
+		let request2 = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(headers)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let _response2 = middleware.process(request2, handler2).await.unwrap();
+
+		// Assert - session ID in extensions matches the original session
+		let guard = captured.read().unwrap();
+		let session_id = guard.as_ref().expect("SessionId should be present");
+		assert_eq!(session_id.as_str(), original_session_id);
 	}
 }
 

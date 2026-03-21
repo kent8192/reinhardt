@@ -330,7 +330,8 @@ jobs:
   # Phase 2b: Additional tests run after core tests complete.
   # This phased approach prevents exceeding the Spot vCPU quota by
   # ensuring Phase 2a runners have terminated before Phase 2b starts.
-  # Note: examples-test and coverage run as separate standalone workflows.
+  # Note: examples-test runs as a separate standalone workflow.
+  # Coverage runs only on main branch pushes (not on PRs).
   ui-test:
     name: UI Tests
     uses: ./.github/workflows/ui-test.yml

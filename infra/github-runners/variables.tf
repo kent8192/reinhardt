@@ -4,6 +4,12 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
+variable "excluded_zone_ids" {
+  description = "Zone IDs to exclude (AZs that do not support required Graviton instance types). Use zone IDs (e.g. 'use1-az3') for cross-account consistency."
+  type        = list(string)
+  default     = []
+}
+
 variable "aws_account_id" {
   description = "AWS Account ID for the CI sub-account. Used by init.sh to auto-generate backend.tfvars with the correct S3 bucket name."
   type        = string

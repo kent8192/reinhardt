@@ -334,7 +334,17 @@ pub enum DiError {
 
 impl From<DiError> for reinhardt_core::exception::Error {
 	fn from(err: DiError) -> Self {
-		reinhardt_core::exception::Error::Internal(format!("Dependency injection error: {}", err))
+		match &err {
+			DiError::NotFound(_)
+			| DiError::NotRegistered { .. }
+			| DiError::DependencyNotRegistered { .. } => reinhardt_core::exception::Error::NotFound(
+				format!("Dependency injection error: {}", err),
+			),
+			_ => reinhardt_core::exception::Error::Internal(format!(
+				"Dependency injection error: {}",
+				err
+			)),
+		}
 	}
 }
 

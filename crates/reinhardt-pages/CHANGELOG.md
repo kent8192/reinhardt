@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.13...reinhardt-pages@v0.1.0-rc.14) - 2026-03-21
+
+### Fixed
+
+- *(pages)* protect textarea, style, and script from minification
+
+### Styling
+
+- *(pages)* fix formatting in renderer.rs
+
 ## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.11...reinhardt-pages@v0.1.0-rc.12) - 2026-03-18
 
 ### Fixed

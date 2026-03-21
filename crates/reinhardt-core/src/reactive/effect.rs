@@ -311,7 +311,8 @@ impl super::runtime::Runtime {
 
 		// Execute each pending effect (skip disposed ones)
 		for node_id in pending {
-			let still_registered = EFFECT_TIMING.with(|storage| storage.borrow().contains_key(&node_id));
+			let still_registered =
+				EFFECT_TIMING.with(|storage| storage.borrow().contains_key(&node_id));
 			if still_registered {
 				self.execute_scheduled_effect(node_id);
 			}

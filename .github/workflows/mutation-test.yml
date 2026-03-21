@@ -28,7 +28,7 @@ env:
 
 jobs:
   mutation-test:
-    name: "Shard ${{ matrix.shard }}/${{ env.TOTAL_SHARDS }}"
+    name: "Shard ${{ matrix.shard }}/5"
     runs-on: ubuntu-latest
     if: inputs.shard == '0' || inputs.shard == '' || inputs.shard == matrix.shard
     timeout-minutes: 360

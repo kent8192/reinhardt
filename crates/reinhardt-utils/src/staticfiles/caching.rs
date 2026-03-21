@@ -252,6 +252,9 @@ impl CacheControlConfig {
 		config
 			.type_policies
 			.insert("ico".to_string(), CachePolicy::long_term());
+		config
+			.type_policies
+			.insert("wasm".to_string(), CachePolicy::long_term());
 
 		// HTML files should revalidate more frequently
 		config
@@ -284,7 +287,7 @@ impl CacheControlConfig {
 	}
 
 	/// Get policy for a given path
-	fn get_policy(&self, path: &str) -> &CachePolicy {
+	pub(crate) fn get_policy(&self, path: &str) -> &CachePolicy {
 		// Try extension-based matching first
 		if let Some(extension) = path.rsplit('.').next()
 			&& let Some(policy) = self.type_policies.get(extension)
@@ -715,6 +718,38 @@ mod tests {
 		let header_value = policy.to_header_value();
 
 		assert_eq!(header_value, "public, max-age=300, s-maxage=3600");
+	}
+
+	#[tokio::test]
+	async fn test_wasm_file_gets_long_term_cache() {
+		let config = CacheControlConfig::new();
+		let middleware = Arc::new(CacheControlMiddleware::new(config));
+		let handler = Arc::new(TestHandler::ok());
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/static/app.wasm")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		let response = middleware.process(request, handler).await.unwrap();
+
+		let cache_control = response
+			.headers
+			.get("cache-control")
+			.unwrap()
+			.to_str()
+			.unwrap();
+		assert_eq!(cache_control, "public, immutable, max-age=31536000");
+	}
+
+	#[tokio::test]
+	async fn test_default_config_includes_wasm() {
+		let config = CacheControlConfig::new();
+		assert!(config.type_policies.contains_key("wasm"));
 	}
 
 	#[tokio::test]

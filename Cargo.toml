@@ -570,6 +570,9 @@ redis = { version = "0.32", features = ["tokio-comp", "connection-manager"] }
 refinery = { version = "0.9.0", features = ["tokio-postgres"] }
 rust_decimal = "1.37"
 
+# E2E browser testing
+fantoccini = "0.22"
+
 # Testing
 testcontainers = { version = "0.26.3", features = ["blocking"] }
 testcontainers-modules = { version = "0.14.0", features = [

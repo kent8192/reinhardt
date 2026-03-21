@@ -8,6 +8,7 @@ mod tests {
 	use crate::config::urls::AppSchema;
 	use reinhardt::Claims;
 	use reinhardt::graphql::Request;
+	use serial_test::serial;
 	use std::sync::Arc;
 
 	/// Helper to create a schema with an authenticated user
@@ -60,6 +61,7 @@ mod tests {
 		(schema, token, project_id)
 	}
 
+	#[serial(github_issues)]
 	#[tokio::test]
 	async fn test_create_issue() {
 		let (schema, token, project_id) = create_test_context().await;
@@ -99,6 +101,7 @@ mod tests {
 		assert_eq!(data["createIssue"]["projectId"], project_id);
 	}
 
+	#[serial(github_issues)]
 	#[tokio::test]
 	async fn test_update_issue() {
 		let (schema, token, project_id) = create_test_context().await;
@@ -151,6 +154,7 @@ mod tests {
 		assert_eq!(data["updateIssue"]["body"], "Updated body content");
 	}
 
+	#[serial(github_issues)]
 	#[tokio::test]
 	async fn test_close_and_reopen_issue() {
 		let (schema, token, project_id) = create_test_context().await;
@@ -216,6 +220,7 @@ mod tests {
 		assert_eq!(data["reopenIssue"]["state"], "OPEN");
 	}
 
+	#[serial(github_issues)]
 	#[tokio::test]
 	async fn test_issues_query() {
 		let (schema, token, project_id) = create_test_context().await;
@@ -276,6 +281,7 @@ mod tests {
 		assert_eq!(page_info["hasPreviousPage"], false);
 	}
 
+	#[serial(github_issues)]
 	#[tokio::test]
 	async fn test_issues_query_by_project() {
 		let (schema, token, project_id) = create_test_context().await;
@@ -330,6 +336,7 @@ mod tests {
 		assert_eq!(data["issues"]["pageInfo"]["totalCount"], 1);
 	}
 
+	#[serial(github_issues)]
 	#[tokio::test]
 	async fn test_issue_query_by_id() {
 		let (schema, token, project_id) = create_test_context().await;

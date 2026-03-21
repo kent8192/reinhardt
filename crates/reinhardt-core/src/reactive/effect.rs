@@ -220,12 +220,35 @@ impl Effect {
 			});
 		});
 
-		// Execute the effect function
-		EFFECT_FUNCTIONS.with(|storage| {
-			if let Some(effect_fn) = storage.borrow_mut().get_mut(&effect_id) {
-				effect_fn();
+		// Execute the effect function using Remove-Execute-Reinsert pattern
+		// to avoid RefCell reentrant borrow panics when the closure creates nested effects.
+		// An RAII guard ensures the closure is reinserted even if the user closure panics,
+		// and skips reinsertion if the effect was disposed during execution.
+		struct EffectFnGuard {
+			effect_id: NodeId,
+			effect_fn: Option<EffectFn>,
+		}
+
+		impl Drop for EffectFnGuard {
+			fn drop(&mut self) {
+				// Only reinsert if the effect is still registered (not disposed during execution)
+				let still_alive =
+					EFFECT_TIMING.with(|storage| storage.borrow().contains_key(&self.effect_id));
+				if still_alive && let Some(f) = self.effect_fn.take() {
+					EFFECT_FUNCTIONS.with(|storage| {
+						storage.borrow_mut().insert(self.effect_id, f);
+					});
+				}
 			}
-		});
+		}
+
+		let mut guard = EffectFnGuard {
+			effect_id,
+			effect_fn: EFFECT_FUNCTIONS.with(|storage| storage.borrow_mut().remove(&effect_id)),
+		};
+		if let Some(ref mut f) = guard.effect_fn {
+			f();
+		}
 
 		// Pop observer from stack
 		with_runtime(|rt| {
@@ -251,6 +274,11 @@ impl Effect {
 		let _ = EFFECT_FUNCTIONS.try_with(|storage| {
 			storage.borrow_mut().remove(&self.id);
 		});
+
+		// Remove timing entry so the RAII guard in execute_effect() knows not to reinsert
+		let _ = EFFECT_TIMING.try_with(|storage| {
+			storage.borrow_mut().remove(&self.id);
+		});
 	}
 }
 
@@ -274,15 +302,19 @@ impl super::runtime::Runtime {
 	/// Flush all pending updates (enhanced version)
 	///
 	/// This executes all Effects that have been scheduled for update.
+	/// Skips effects that were disposed between scheduling and execution.
 	pub fn flush_updates_enhanced(&self) {
 		*self.update_scheduled.borrow_mut() = false;
 
 		// Take all pending updates
 		let pending = core::mem::take(&mut *self.pending_updates.borrow_mut());
 
-		// Execute each pending effect
+		// Execute each pending effect (skip disposed ones)
 		for node_id in pending {
-			self.execute_scheduled_effect(node_id);
+			let still_registered = EFFECT_TIMING.with(|storage| storage.borrow().contains_key(&node_id));
+			if still_registered {
+				self.execute_scheduled_effect(node_id);
+			}
 		}
 	}
 }
@@ -431,8 +463,98 @@ mod tests {
 		assert_eq!(*run_count.borrow(), 1); // Still 1
 	}
 
-	// Note: Nested effects test removed due to Drop ordering issues with thread-local storage.
-	// Nested effects (Effect created inside Effect) are generally considered an anti-pattern
-	// and should be avoided in production code. The reactive system is designed for
-	// flat dependency graphs, not deeply nested structures.
+	// Nested effect creation is supported via the Remove-Execute-Reinsert pattern in
+	// execute_effect(). The closure is temporarily removed from EFFECT_FUNCTIONS storage
+	// before execution, preventing RefCell reentrant borrow panics when nested Effects
+	// are created inside the closure.
+
+	#[rstest::rstest]
+	#[serial]
+	fn test_nested_effect_creation() {
+		// Arrange
+		let outer_ran = Rc::new(RefCell::new(false));
+		let inner_ran = Rc::new(RefCell::new(false));
+		let outer_ran_clone = outer_ran.clone();
+		let inner_ran_clone = inner_ran.clone();
+
+		// Act - create an effect whose closure creates another effect
+		let _outer = Effect::new(move || {
+			*outer_ran_clone.borrow_mut() = true;
+			let inner_ran_inner = inner_ran_clone.clone();
+			let _inner = Effect::new(move || {
+				*inner_ran_inner.borrow_mut() = true;
+			});
+		});
+
+		// Assert - both effects should have executed without panic
+		assert_eq!(*outer_ran.borrow(), true);
+		assert_eq!(*inner_ran.borrow(), true);
+	}
+
+	#[rstest::rstest]
+	#[serial]
+	fn test_effect_creates_signal_and_effect() {
+		// Arrange
+		let outer_ran = Rc::new(RefCell::new(false));
+		let inner_value = Rc::new(RefCell::new(0));
+		let outer_ran_clone = outer_ran.clone();
+		let inner_value_clone = inner_value.clone();
+
+		// Act - create an effect whose closure creates a signal and another effect
+		let _outer = Effect::new(move || {
+			*outer_ran_clone.borrow_mut() = true;
+			let new_signal = Signal::new(42);
+			let signal_for_inner = new_signal.clone();
+			let value_capture = inner_value_clone.clone();
+			let _inner = Effect::new(move || {
+				*value_capture.borrow_mut() = signal_for_inner.get();
+			});
+		});
+
+		// Assert - outer ran and inner captured the signal value
+		assert_eq!(*outer_ran.borrow(), true);
+		assert_eq!(*inner_value.borrow(), 42);
+	}
+
+	#[rstest::rstest]
+	#[serial]
+	fn test_effect_dispose_during_execution() {
+		// Arrange
+		let signal = Signal::new(0);
+		let run_count = Rc::new(RefCell::new(0));
+		let run_count_clone = run_count.clone();
+		let effect_holder: Rc<RefCell<Option<Effect>>> = Rc::new(RefCell::new(None));
+		let holder_clone = effect_holder.clone();
+		let signal_clone = signal.clone();
+
+		// Act - create an effect that reads a signal and disposes itself on re-execution
+		let effect = Effect::new(move || {
+			let _val = signal_clone.get(); // Track signal dependency
+			*run_count_clone.borrow_mut() += 1;
+			// On re-execution, the holder has the effect so dispose is called
+			if let Some(e) = holder_clone.borrow().as_ref() {
+				e.dispose();
+			}
+		});
+
+		// Store the effect so it can be disposed during next execution
+		*effect_holder.borrow_mut() = Some(effect);
+
+		// Assert - effect ran once during creation
+		assert_eq!(*run_count.borrow(), 1);
+
+		// Act - trigger re-execution via signal change; effect disposes itself
+		signal.set(1);
+		with_runtime(|rt| rt.flush_updates_enhanced());
+
+		// Assert - effect ran a second time (during which it disposed itself)
+		assert_eq!(*run_count.borrow(), 2);
+
+		// Act - trigger another change; disposed effect should NOT run
+		signal.set(2);
+		with_runtime(|rt| rt.flush_updates_enhanced());
+
+		// Assert - still 2, effect did not run again
+		assert_eq!(*run_count.borrow(), 2);
+	}
 }

@@ -1,4 +1,4 @@
-FROM myoung34/github-runner:2.333.0
+FROM myoung34/github-runner:2.333.0-ubuntu-jammy
 
 # Install build dependencies (pkg-config + libssl-dev required for openssl-sys crate)
 RUN apt-get update \
@@ -17,7 +17,7 @@ RUN curl -LsSf https://get.nexte.st/latest/linux-arm | tar zxf - -C /usr/local/b
 RUN . "$HOME/.cargo/env" \
 	&& cargo install cargo-make --locked
 
-# Install mold linker (not available in Ubuntu Focal repos, use GitHub release)
+# Install mold linker (repo version is too old, use GitHub release)
 RUN MOLD_VERSION=2.35.1 \
 	&& curl -LsSf "https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-aarch64-linux.tar.gz" \
 	| tar xzf - --strip-components=1 -C /usr/local

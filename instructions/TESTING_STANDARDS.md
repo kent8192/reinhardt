@@ -969,7 +969,7 @@ let pool = loop {
 };
 ```
 
-**Reference:** See `reinhardt-test/src/fixtures/testcontainers.rs` for production implementation.
+**Reference:** See `reinhardt-testkit/src/fixtures/testcontainers.rs` for production implementation.
 
 ---
 
@@ -1201,8 +1201,11 @@ fn test_with_guaranteed_cleanup() {
 ```rust
 #[rstest]
 #[tokio::test]
-async fn test_bad(#[future] postgres_fixture: DbFixture) {
-    let result = postgres_fixture.query(...);  // ❌ Missing .await
+async fn test_bad(
+    #[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String)
+) {
+    // ❌ Trying to destructure without .await — postgres_container is a Future here
+    let (_container, pool, _port, _url) = postgres_container;
 }
 ```
 
@@ -1210,9 +1213,11 @@ async fn test_bad(#[future] postgres_fixture: DbFixture) {
 ```rust
 #[rstest]
 #[tokio::test]
-async fn test_good(#[future] postgres_fixture: DbFixture) {
-    let db = postgres_fixture.await;  // ✅ Correct
-    let result = db.query(...);
+async fn test_good(
+    #[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String)
+) {
+    let (_container, pool, _port, _url) = postgres_container.await;  // ✅ Correct
+    let result = pool.query(...);
 }
 ```
 
@@ -1493,8 +1498,10 @@ async fn test_admin_permissions(
 ```rust
 #[rstest]
 #[tokio::test]
-async fn test_user_query(#[future] postgres_fixture: DbFixture) {
-    let (_container, pool) = postgres_fixture.await;
+async fn test_user_query(
+    #[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String)
+) {
+    let (_container, pool, _port, _url) = postgres_container.await;
 
     // ❌ Raw SQL string - avoid this
     sqlx::query("SELECT * FROM users WHERE id = $1")
@@ -1527,8 +1534,10 @@ enum Users {
 
 #[rstest]
 #[tokio::test]
-async fn test_user_query(#[future] postgres_fixture: DbFixture) {
-    let (_container, pool) = postgres_fixture.await;
+async fn test_user_query(
+    #[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String)
+) {
+    let (_container, pool, _port, _url) = postgres_container.await;
 
     // ✅ Type-safe query with reinhardt-query
     let (sql, values) = Query::select()
@@ -1644,7 +1653,7 @@ For convenience, use the `migration_registry` fixture from `reinhardt-test`:
 
 ```rust
 use reinhardt_test::fixtures::*;
-use reinhardt_migrations::Migration;
+use reinhardt_db::migrations::Migration;
 use rstest::*;
 
 #[rstest]

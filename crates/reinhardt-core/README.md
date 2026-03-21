@@ -91,7 +91,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt-core = "0.1.0-alpha.1"
+reinhardt-core = "0.1.0-rc.13"
 ```
 
 ### Optional Features
@@ -100,7 +100,7 @@ Enable specific modules based on your needs:
 
 ```toml
 [dependencies]
-reinhardt-core = { version = "0.1.0-alpha.1", features = ["signals", "macros", "security"] }
+reinhardt-core = { version = "0.1.0-rc.13", features = ["signals", "macros", "security"] }
 ```
 
 Available features:

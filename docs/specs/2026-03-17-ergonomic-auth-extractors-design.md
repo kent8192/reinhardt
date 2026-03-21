@@ -157,24 +157,21 @@ impl Injectable for AuthInfo {
     async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
         // Get Request from InjectionContext (requires "params" feature)
         let request = ctx.get_http_request()
-            .ok_or_else(|| DiError::resolution_failed(
-                "AuthInfo",
-                "No HTTP request available in InjectionContext. \
-                 Ensure the router is configured with .with_di_context()"
+            .ok_or_else(|| DiError::NotFound(
+                "AuthInfo: No HTTP request available in InjectionContext. \
+                 Ensure the router is configured with .with_di_context()".into()
             ))?;
 
         // Get AuthState from request extensions
-        let auth_state: AuthState = request.extensions.get::<AuthState>()
-            .ok_or_else(|| DiError::resolution_failed(
-                "AuthInfo",
-                "No AuthState found in request extensions. \
-                 Ensure authentication middleware is configured."
+        let auth_state = request.extensions.get::<AuthState>()
+            .ok_or_else(|| DiError::NotFound(
+                "AuthInfo: No AuthState found in request extensions. \
+                 Ensure authentication middleware is configured.".into()
             ))?;
 
         if !auth_state.is_authenticated() {
-            return Err(DiError::resolution_failed(
-                "AuthInfo",
-                "User is not authenticated"
+            return Err(DiError::NotFound(
+                "AuthInfo: User is not authenticated".into()
             ));
         }
 
@@ -186,9 +183,8 @@ impl Injectable for AuthInfo {
 #[async_trait]
 impl Injectable for AuthInfo {
     async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
-        Err(DiError::resolution_failed(
-            "AuthInfo",
-            "AuthInfo requires the 'params' feature to be enabled"
+        Err(DiError::NotFound(
+            "AuthInfo: requires the 'params' feature to be enabled".into()
         ))
     }
 }
@@ -209,22 +205,19 @@ where
     async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
         // Get Request from InjectionContext
         let request = ctx.get_http_request()
-            .ok_or_else(|| DiError::resolution_failed(
-                "AuthUser",
-                "No HTTP request available in InjectionContext"
+            .ok_or_else(|| DiError::NotFound(
+                "AuthUser: No HTTP request available in InjectionContext".into()
             ))?;
 
         // Get AuthState from request extensions
         let auth_state: AuthState = request.extensions.get::<AuthState>()
-            .ok_or_else(|| DiError::resolution_failed(
-                "AuthUser",
-                "No AuthState found in request extensions"
+            .ok_or_else(|| DiError::NotFound(
+                "AuthUser: No AuthState found in request extensions".into()
             ))?;
 
         if !auth_state.is_authenticated() {
-            return Err(DiError::resolution_failed(
-                "AuthUser",
-                "User is not authenticated"
+            return Err(DiError::NotFound(
+                "AuthUser: User is not authenticated".into()
             ));
         }
 
@@ -237,10 +230,9 @@ where
                     error = ?e,
                     "failed to parse user_id from AuthState"
                 );
-                DiError::resolution_failed(
-                    "AuthUser",
-                    "Invalid user_id format in AuthState"
-                )
+                DiError::Internal {
+                    message: "AuthUser: Invalid user_id format in AuthState".into()
+                }
             })?;
 
         let model_pk = <U as Model>::PrimaryKey::from(user_pk);
@@ -253,9 +245,8 @@ where
                     error = ?e,
                     "DatabaseConnection not available for AuthUser resolution"
                 );
-                DiError::resolution_failed(
-                    "AuthUser",
-                    "DatabaseConnection not registered in DI context"
+                DiError::NotFound(
+                    "AuthUser: DatabaseConnection not registered in DI context".into()
                 )
             })?;
 
@@ -266,14 +257,14 @@ where
             .await
             .map_err(|e| {
                 ::tracing::warn!(error = ?e, "Failed to load user from database");
-                DiError::resolution_failed("AuthUser", "Database query failed")
+                DiError::Internal { message: "AuthUser: Database query failed".into() }
             })?
             .ok_or_else(|| {
                 ::tracing::warn!(
                     user_id = %auth_state.user_id(),
                     "User not found in database"
                 );
-                DiError::resolution_failed("AuthUser", "User not found")
+                DiError::NotFound("AuthUser: User not found".into())
             })?;
 
         Ok(AuthUser(user))
@@ -326,13 +317,17 @@ if !options.use_inject && !all_inject_params.is_empty() {
 }
 ```
 
-The trybuild test `inject_without_use_inject.rs` must be updated to expect
-successful compilation instead of an error, or converted to a passing test
-that verifies auto-detection works.
+If a trybuild test for `inject_without_use_inject` exists, it must be updated
+to expect successful compilation instead of an error, or converted to a passing
+test that verifies auto-detection works.
 
 ## Security
 
-### AuthRejection (error response type)
+### AuthRejection (error response type — proposed)
+
+> **Implementation note**: `AuthRejection` is not yet implemented. Auth injection
+> failures currently propagate through the existing `DiError` → `Error::Internal`
+> conversion path.
 
 ```rust
 /// Rejection type for auth-related injection failures.
@@ -376,9 +371,14 @@ security-critical endpoints where authentication failures must be surfaced.
 Reserve `Option<AuthUser<U>>` for endpoints that legitimately serve both
 authenticated and anonymous users (e.g., personalized homepages).
 
-## AuthExtractors Middleware
+## AuthExtractors Validation
 
-Optional middleware for startup-time validation of DI configuration.
+Optional startup-time validation of DI configuration.
+
+> **Implementation note**: The current implementation uses a standalone function
+> `pub fn validate_auth_extractors(ctx: &InjectionContext)` rather than the
+> middleware struct proposed below. The middleware approach may be adopted in a
+> future iteration.
 
 ```rust
 /// Validates DI context configuration for auth extractors at startup.
@@ -428,6 +428,10 @@ impl Middleware for AuthExtractors {
 ```
 
 ## Handler Examples
+
+> **Note**: The import paths below assume the facade crate (`reinhardt`) re-exports
+> these types. Until facade re-exports are added, use direct crate imports
+> (e.g., `use reinhardt_auth::{AuthInfo, AuthUser}`).
 
 ```rust
 use reinhardt::{get, Response, ViewResult, Path};
@@ -533,7 +537,7 @@ pub async fn legacy(
 | `reinhardt-di` | `Option<T>` blanket `Injectable` impl |
 | `reinhardt-auth` | `AuthUser<U>` type + `Injectable` impl, `AuthInfo` type + `Injectable` impl, `CurrentUser<U>` deprecated, `AuthExtractors` middleware |
 | `reinhardt-core/macros` | Auto-detect `#[inject]` without `use_inject = true`, update trybuild test |
-| `reinhardt` (facade) | Re-export `AuthUser`, `AuthInfo`, `AuthExtractors` |
+| `reinhardt` (facade) | Re-export `AuthUser`, `AuthInfo`, `AuthExtractors` (not yet implemented) |
 
 ## Test Plan
 

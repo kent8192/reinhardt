@@ -4,6 +4,7 @@ use super::config::PoolConfig;
 use super::errors::{PoolError, PoolResult};
 use super::events::{PoolEvent, PoolEventListener};
 use sqlx::{Database, MySql, Pool, Postgres, Sqlite};
+use std::mem::ManuallyDrop;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock;
@@ -219,7 +220,7 @@ where
 			.await;
 
 		Ok(PooledConnection {
-			conn,
+			conn: ManuallyDrop::new(conn),
 			pool_ref: self.clone_arc(),
 			connection_id,
 		})
@@ -411,7 +412,10 @@ impl ConnectionPool<Sqlite> {
 
 /// A pooled connection wrapper with event emission
 pub struct PooledConnection<DB: sqlx::Database> {
-	conn: sqlx::pool::PoolConnection<DB>,
+	// Wrapped in ManuallyDrop so we can take ownership in Drop.
+	// When no tokio runtime is available, we detach the connection
+	// to avoid sqlx's PoolConnection::Drop calling rt::spawn().
+	conn: ManuallyDrop<sqlx::pool::PoolConnection<DB>>,
 	pool_ref: Arc<ConnectionPool<DB>>,
 	connection_id: String,
 }
@@ -420,7 +424,7 @@ impl<DB: sqlx::Database> PooledConnection<DB> {
 	/// Documentation for `inner`
 	///
 	pub fn inner(&mut self) -> &mut sqlx::pool::PoolConnection<DB> {
-		&mut self.conn
+		&mut *self.conn
 	}
 	/// Get the unique identifier for this connection
 	///
@@ -474,15 +478,32 @@ impl<DB: sqlx::Database> PooledConnection<DB> {
 
 impl<DB: sqlx::Database> Drop for PooledConnection<DB> {
 	fn drop(&mut self) {
-		let pool_ref = self.pool_ref.clone();
-		let connection_id = self.connection_id.clone();
+		// SAFETY: ManuallyDrop::take is called exactly once (in drop).
+		let conn = unsafe { ManuallyDrop::take(&mut self.conn) };
 
-		// Emit checkin event asynchronously
-		tokio::spawn(async move {
-			pool_ref
-				.emit_event(PoolEvent::connection_returned(connection_id))
-				.await;
-		});
+		match tokio::runtime::Handle::try_current() {
+			Ok(handle) => {
+				// Runtime available: drop the connection normally (returns to pool)
+				// and emit the connection-returned event.
+				drop(conn);
+
+				let pool_ref = self.pool_ref.clone();
+				let connection_id = self.connection_id.clone();
+
+				handle.spawn(async move {
+					pool_ref
+						.emit_event(PoolEvent::connection_returned(connection_id))
+						.await;
+				});
+			}
+			Err(_) => {
+				// No runtime available: prevent sqlx's PoolConnection::Drop
+				// from running, as it calls crate::rt::spawn() which panics
+				// without a tokio runtime. The connection is intentionally
+				// leaked to avoid the panic.
+				std::mem::forget(conn);
+			}
+		}
 	}
 }
 
@@ -571,5 +592,48 @@ mod tests {
 			masked, non_url,
 			"Non-URL strings should pass through unchanged"
 		);
+	}
+
+	#[rstest]
+	fn test_handle_try_current_returns_err_outside_runtime() {
+		// Arrange & Act & Assert
+		// Run on a fresh thread to avoid inheriting runtime context
+		// from the test runner's worker thread.
+		let handle = std::thread::spawn(|| {
+			let result = tokio::runtime::Handle::try_current();
+			assert!(
+				result.is_err(),
+				"Handle::try_current() should return Err outside of a tokio runtime"
+			);
+		});
+		handle.join().expect("thread should not panic");
+	}
+
+	#[rstest]
+	fn test_drop_pooled_connection_outside_runtime_does_not_panic() {
+		// Arrange
+		// Create a Tokio runtime and acquire a pooled connection inside it.
+		let rt = tokio::runtime::Runtime::new().expect("failed to create Tokio runtime");
+
+		let (pool, conn) = rt.block_on(async {
+			let config = PoolConfig::default();
+			let pool = ConnectionPool::new_sqlite("sqlite::memory:", config)
+				.await
+				.expect("failed to create ConnectionPool");
+
+			let conn = pool.acquire().await.expect("failed to acquire connection");
+
+			(pool, conn)
+		});
+
+		// Drop the runtime so there is no active Tokio runtime.
+		drop(rt);
+
+		// Act & Assert
+		// Dropping the connection outside any runtime should not panic.
+		drop(conn);
+
+		// Also drop the pool to ensure cleanup does not panic outside a runtime.
+		drop(pool);
 	}
 }

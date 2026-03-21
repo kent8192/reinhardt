@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.1.0-rc.13...reinhardt-utils@v0.1.0-rc.14) - 2026-03-21
+
+### Fixed
+
+- *(utils)* use CacheControlConfig for static file cache headers instead of hardcoded values
+- *(utils)* address review comments for static file cache headers
+- *(utils)* remove #[non_exhaustive] from StaticFilesConfig to comply with RC semver policy
+
+### Styling
+
+- *(utils)* apply auto-fix formatting
+
 ## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.1.0-rc.8...reinhardt-utils@v0.1.0-rc.9) - 2026-03-15
 
 ### Changed

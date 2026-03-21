@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.13...reinhardt-auth@v0.1.0-rc.14) - 2026-03-21
+
+### Fixed
+
+- *(auth)* invalidate old session on login to prevent session fixation
+- address copilot review feedback for session fixation
+
 ## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.11...reinhardt-auth@v0.1.0-rc.12) - 2026-03-18
 
 ### Added

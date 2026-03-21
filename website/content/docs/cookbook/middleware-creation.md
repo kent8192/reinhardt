@@ -24,13 +24,14 @@ All middleware must implement the `Middleware` trait.
 
 ```rust
 use async_trait::async_trait;
-use reinhardt::{Handler, Middleware, Request, Response, Result};
+use reinhardt::{Handler, Request, Response, ViewResult};
 use std::sync::Arc;
 
+// The framework provides this trait (shown here for reference):
 #[async_trait]
 pub trait Middleware: Send + Sync {
     /// Process the request and optionally call the next handler
-    async fn process(&self, request: Request, next: Arc<dyn Handler>) -> Result<Response>;
+    async fn process(&self, request: Request, next: Arc<dyn Handler>) -> ViewResult<Response>;
 
     /// Determine if this middleware should process the request
     fn should_continue(&self, _request: &Request) -> bool {
@@ -47,14 +48,14 @@ pub trait Middleware: Send + Sync {
 
 ```rust
 use async_trait::async_trait;
-use reinhardt::{Handler, Middleware, Request, Response, Result};
+use reinhardt::{Handler, Middleware, Request, Response, ViewResult};
 use std::sync::Arc;
 
 pub struct LoggingMiddleware;
 
 #[async_trait]
 impl Middleware for LoggingMiddleware {
-    async fn process(&self, request: Request, next: Arc<dyn Handler>) -> Result<Response> {
+    async fn process(&self, request: Request, next: Arc<dyn Handler>) -> ViewResult<Response> {
         println!("Request: {} {}", request.method, request.uri.path());
 
         // Call next handler or middleware
@@ -70,7 +71,7 @@ impl Middleware for LoggingMiddleware {
 
 ```rust
 use async_trait::async_trait;
-use reinhardt::{Handler, Middleware, Request, Response, Result};
+use reinhardt::{Handler, Middleware, Request, Response, ViewResult};
 use std::sync::Arc;
 
 pub struct CustomHeaderMiddleware {
@@ -89,7 +90,7 @@ impl CustomHeaderMiddleware {
 
 #[async_trait]
 impl Middleware for CustomHeaderMiddleware {
-    async fn process(&self, request: Request, next: Arc<dyn Handler>) -> Result<Response> {
+    async fn process(&self, request: Request, next: Arc<dyn Handler>) -> ViewResult<Response> {
         let mut response = next.handle(request).await?;
 
         // Add custom header to response
@@ -113,7 +114,7 @@ Execute middleware only under certain conditions.
 
 ```rust
 use async_trait::async_trait;
-use reinhardt::{Handler, Middleware, Request, Response, Result};
+use reinhardt::{Handler, Middleware, Request, Response, ViewResult};
 use std::sync::Arc;
 
 pub struct AdminOnlyMiddleware;
@@ -125,7 +126,7 @@ impl Middleware for AdminOnlyMiddleware {
         request.uri.path().starts_with("/admin/")
     }
 
-    async fn process(&self, request: Request, next: Arc<dyn Handler>) -> Result<Response> {
+    async fn process(&self, request: Request, next: Arc<dyn Handler>) -> ViewResult<Response> {
         // Admin check logic
         let auth_header = request.get_header("Authorization");
 
@@ -146,7 +147,7 @@ impl Middleware for AdminOnlyMiddleware {
 
 ```rust
 use async_trait::async_trait;
-use reinhardt::{Handler, Middleware, Request, Response, Result};
+use reinhardt::{Handler, Middleware, Request, Response, ViewResult};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -189,7 +190,7 @@ impl Middleware for RateLimiter {
         true
     }
 
-    async fn process(&self, request: Request, next: Arc<dyn Handler>) -> Result<Response> {
+    async fn process(&self, request: Request, next: Arc<dyn Handler>) -> ViewResult<Response> {
         let client_ip = request.get_client_ip()
             .map(|ip| ip.to_string())
             .unwrap_or_else(|| "unknown".to_string());

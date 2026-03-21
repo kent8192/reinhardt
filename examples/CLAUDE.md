@@ -372,6 +372,4 @@ Each mistake is paired with its correct alternative:
 ## Related Documentation
 
 - **Main Project Standards**: @../CLAUDE.md
-- **Feature Flags**: @../instructions/FEATURE_FLAGS.md
-- **Getting Started Guide**: @../instructions/GETTING_STARTED.md
 - **Project README**: @../README.md

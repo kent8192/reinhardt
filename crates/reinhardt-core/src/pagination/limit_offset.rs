@@ -113,6 +113,13 @@ impl LimitOffsetPagination {
 
 				if key == self.limit_query_param {
 					limit = Self::parse_positive_int(value)?;
+					// Reject zero limit to prevent infinite next-link loop
+					if limit == 0 {
+						return Err(Error::InvalidLimit(format!(
+							"{} must be greater than zero (got {})",
+							self.limit_query_param, limit
+						)));
+					}
 					// Apply max_limit if configured
 					if let Some(max) = self.max_limit
 						&& limit > max

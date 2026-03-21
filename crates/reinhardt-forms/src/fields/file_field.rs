@@ -6,6 +6,56 @@ const DEFAULT_FILE_MAX_SIZE: u64 = 10 * 1024 * 1024;
 /// Default maximum image file size: 5 MB
 const DEFAULT_IMAGE_MAX_SIZE: u64 = 5 * 1024 * 1024;
 
+/// Validate that a filename does not contain path traversal sequences,
+/// null bytes, or represent an absolute path.
+fn validate_filename_safety(filename: &str) -> FieldResult<()> {
+	// Reject null bytes
+	if filename.contains('\0') {
+		return Err(FieldError::Validation(
+			"Filename contains null bytes".to_string(),
+		));
+	}
+
+	// Reject directory traversal by checking path components split on both
+	// '/' and '\\' separators.  This catches bare ".." without a trailing
+	// slash as well as sequences like "../" and "..\\".
+	for component in filename.split(['/', '\\']) {
+		if component == ".." {
+			return Err(FieldError::Validation(
+				"Filename contains directory traversal sequence".to_string(),
+			));
+		}
+	}
+
+	// Reject absolute paths (Unix-style)
+	if filename.starts_with('/') {
+		return Err(FieldError::Validation(
+			"Filename must not be an absolute path".to_string(),
+		));
+	}
+
+	// Reject absolute paths (Windows UNC paths, e.g. \\server\share)
+	if filename.starts_with("\\\\") {
+		return Err(FieldError::Validation(
+			"Filename must not be an absolute path".to_string(),
+		));
+	}
+
+	// Reject absolute paths (Windows-style drive letters, e.g. C:\)
+	let bytes = filename.as_bytes();
+	if bytes.len() >= 3
+		&& bytes[0].is_ascii_alphabetic()
+		&& bytes[1] == b':'
+		&& (bytes[2] == b'\\' || bytes[2] == b'/')
+	{
+		return Err(FieldError::Validation(
+			"Filename must not be an absolute path".to_string(),
+		));
+	}
+
+	Ok(())
+}
+
 /// FileField for file upload
 pub struct FileField {
 	/// The field name used as the form data key.
@@ -116,6 +166,9 @@ impl FormField for FileField {
 					}
 					return Ok(serde_json::Value::Null);
 				}
+
+				// Validate filename for path traversal attacks
+				validate_filename_safety(filename)?;
 
 				// Check filename length
 				if let Some(max) = self.max_length
@@ -277,6 +330,9 @@ impl FormField for ImageField {
 					}
 					return Ok(serde_json::Value::Null);
 				}
+
+				// Validate filename for path traversal attacks
+				validate_filename_safety(filename)?;
 
 				// Validate image extension
 				if !Self::is_valid_image_extension(filename) {
@@ -454,6 +510,118 @@ mod tests {
 		assert!(matches!(result, Err(FieldError::Validation(ref msg)) if msg.contains("empty")));
 	}
 
+	// ---- Path Traversal Security ----
+
+	#[rstest]
+	#[case("../../etc/passwd", "directory traversal")]
+	#[case("../secret.txt", "directory traversal")]
+	#[case("foo/../../etc/shadow", "directory traversal")]
+	#[case("..\\windows\\system32", "directory traversal")]
+	#[case("..\\..\\boot.ini", "directory traversal")]
+	fn test_filefield_rejects_directory_traversal(
+		#[case] filename: &str,
+		#[case] expected_msg: &str,
+	) {
+		// Arrange
+		let field = FileField::new("document".to_string());
+		let file = serde_json::json!({
+			"filename": filename,
+			"size": 1024
+		});
+
+		// Act
+		let result = field.clean(Some(&file));
+
+		// Assert
+		assert!(
+			matches!(result, Err(FieldError::Validation(ref msg)) if msg.contains(expected_msg)),
+			"Expected directory traversal rejection for filename: {filename}"
+		);
+	}
+
+	#[rstest]
+	fn test_filefield_rejects_null_bytes() {
+		// Arrange
+		let field = FileField::new("document".to_string());
+		let file = serde_json::json!({
+			"filename": "file\0name.pdf",
+			"size": 1024
+		});
+
+		// Act
+		let result = field.clean(Some(&file));
+
+		// Assert
+		assert!(
+			matches!(result, Err(FieldError::Validation(ref msg)) if msg.contains("null bytes")),
+			"Expected null bytes rejection"
+		);
+	}
+
+	#[rstest]
+	#[case("/etc/passwd")]
+	#[case("/var/log/syslog")]
+	fn test_filefield_rejects_unix_absolute_path(#[case] filename: &str) {
+		// Arrange
+		let field = FileField::new("document".to_string());
+		let file = serde_json::json!({
+			"filename": filename,
+			"size": 1024
+		});
+
+		// Act
+		let result = field.clean(Some(&file));
+
+		// Assert
+		assert!(
+			matches!(result, Err(FieldError::Validation(ref msg)) if msg.contains("absolute path")),
+			"Expected absolute path rejection for filename: {filename}"
+		);
+	}
+
+	#[rstest]
+	#[case("C:\\Windows\\system32\\config")]
+	#[case("D:/Documents/secret.txt")]
+	fn test_filefield_rejects_windows_absolute_path(#[case] filename: &str) {
+		// Arrange
+		let field = FileField::new("document".to_string());
+		let file = serde_json::json!({
+			"filename": filename,
+			"size": 1024
+		});
+
+		// Act
+		let result = field.clean(Some(&file));
+
+		// Assert
+		assert!(
+			matches!(result, Err(FieldError::Validation(ref msg)) if msg.contains("absolute path")),
+			"Expected absolute path rejection for filename: {filename}"
+		);
+	}
+
+	#[rstest]
+	#[case("document.pdf")]
+	#[case("my-file_v2.tar.gz")]
+	#[case("photo (1).jpg")]
+	fn test_filefield_accepts_safe_filenames(#[case] filename: &str) {
+		// Arrange
+		let field = FileField::new("document".to_string());
+		let file = serde_json::json!({
+			"filename": filename,
+			"size": 1024
+		});
+
+		// Act
+		let result = field.clean(Some(&file));
+
+		// Assert
+		assert!(
+			result.is_ok(),
+			"Expected safe filename to be accepted: {filename}"
+		);
+	}
+
 	// ---- Boundary Value Analysis ----
 
 	#[rstest]
@@ -601,6 +769,65 @@ mod tests {
 		// Assert
 		assert!(
 			matches!(result, Err(FieldError::Validation(ref msg)) if msg.contains("exceeds maximum"))
+		);
+	}
+
+	// ---- Path Traversal Security (ImageField) ----
+
+	#[rstest]
+	fn test_imagefield_rejects_directory_traversal() {
+		// Arrange
+		let field = ImageField::new("photo".to_string());
+		let file = serde_json::json!({
+			"filename": "../../etc/passwd.jpg",
+			"size": 1024
+		});
+
+		// Act
+		let result = field.clean(Some(&file));
+
+		// Assert
+		assert!(
+			matches!(result, Err(FieldError::Validation(ref msg)) if msg.contains("directory traversal")),
+			"Expected directory traversal rejection for ImageField"
+		);
+	}
+
+	#[rstest]
+	fn test_imagefield_rejects_null_bytes() {
+		// Arrange
+		let field = ImageField::new("photo".to_string());
+		let file = serde_json::json!({
+			"filename": "photo\0.jpg",
+			"size": 1024
+		});
+
+		// Act
+		let result = field.clean(Some(&file));
+
+		// Assert
+		assert!(
+			matches!(result, Err(FieldError::Validation(ref msg)) if msg.contains("null bytes")),
+			"Expected null bytes rejection for ImageField"
+		);
+	}
+
+	#[rstest]
+	fn test_imagefield_rejects_absolute_path() {
+		// Arrange
+		let field = ImageField::new("photo".to_string());
+		let file = serde_json::json!({
+			"filename": "/etc/photo.jpg",
+			"size": 1024
+		});
+
+		// Act
+		let result = field.clean(Some(&file));
+
+		// Assert
+		assert!(
+			matches!(result, Err(FieldError::Validation(ref msg)) if msg.contains("absolute path")),
+			"Expected absolute path rejection for ImageField"
 		);
 	}
 

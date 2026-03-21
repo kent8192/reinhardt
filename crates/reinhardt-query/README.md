@@ -43,7 +43,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt-query = { version = "0.1.0-alpha.1" }
+reinhardt-query = { version = "0.1.0-rc.13" }
 ```
 
 ## Quick Start

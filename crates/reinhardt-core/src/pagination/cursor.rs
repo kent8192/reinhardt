@@ -178,8 +178,10 @@ impl CursorPagination {
 	}
 
 	fn build_url(&self, base_url: &str, cursor: &str) -> String {
+		let fallback_base = url::Url::parse("http://localhost/").expect("hardcoded URL");
 		let url = url::Url::parse(base_url)
-			.unwrap_or_else(|_| url::Url::parse(&format!("http://localhost{}", base_url)).unwrap());
+			.or_else(|_| fallback_base.join(base_url))
+			.unwrap_or_else(|_| fallback_base.clone());
 
 		let mut new_url = url.clone();
 		new_url
@@ -319,5 +321,31 @@ impl AsyncPaginator for CursorPagination {
 
 	fn get_schema_parameters(&self) -> Vec<SchemaParameter> {
 		Paginator::get_schema_parameters(self)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use rstest::rstest;
+
+	use super::*;
+
+	#[rstest]
+	#[case("not a valid url at all \x00\x01")]
+	#[case("://missing-scheme")]
+	#[case("")]
+	fn build_url_does_not_panic_with_malformed_base_url(#[case] malformed_url: &str) {
+		// Arrange
+		let paginator = CursorPagination::new();
+		let items: Vec<i32> = (0..20).collect();
+
+		// Act
+		let result = paginator.paginate(&items, None, malformed_url);
+
+		// Assert
+		assert!(
+			result.is_ok(),
+			"paginate should not panic with malformed URL: {malformed_url:?}"
+		);
 	}
 }

@@ -119,18 +119,18 @@ impl EmailPool {
 	///
 	/// # Errors
 	///
-	/// Returns [`EmailError::InvalidConfiguration`] if `max_connections` or
+	/// Returns [`EmailError::BackendError`] if `max_connections` or
 	/// `max_messages_per_connection` is zero.
 	pub fn new(smtp_config: SmtpConfig, pool_config: PoolConfig) -> EmailResult<Self> {
 		if pool_config.max_connections == 0 {
-			return Err(EmailError::InvalidConfiguration(format!(
-				"max_connections must be at least 1, got {}",
+			return Err(EmailError::BackendError(format!(
+				"Invalid configuration: max_connections must be at least 1, got {}",
 				pool_config.max_connections
 			)));
 		}
 		if pool_config.max_messages_per_connection == 0 {
-			return Err(EmailError::InvalidConfiguration(format!(
-				"max_messages_per_connection must be at least 1, got {}",
+			return Err(EmailError::BackendError(format!(
+				"Invalid configuration: max_messages_per_connection must be at least 1, got {}",
 				pool_config.max_messages_per_connection
 			)));
 		}
@@ -329,8 +329,8 @@ mod tests {
 		// Assert
 		let err = result.unwrap_err();
 		assert!(
-			matches!(err, EmailError::InvalidConfiguration(ref msg) if msg.contains("max_connections")),
-			"Expected InvalidConfiguration for max_connections, got: {err}"
+			matches!(err, EmailError::BackendError(ref msg) if msg.contains("max_connections")),
+			"Expected BackendError for max_connections, got: {err}"
 		);
 	}
 
@@ -346,8 +346,8 @@ mod tests {
 		// Assert
 		let err = result.unwrap_err();
 		assert!(
-			matches!(err, EmailError::InvalidConfiguration(ref msg) if msg.contains("max_messages_per_connection")),
-			"Expected InvalidConfiguration for max_messages_per_connection, got: {err}"
+			matches!(err, EmailError::BackendError(ref msg) if msg.contains("max_messages_per_connection")),
+			"Expected BackendError for max_messages_per_connection, got: {err}"
 		);
 	}
 

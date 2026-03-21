@@ -176,7 +176,9 @@ async fn handle_result() -> Response {
 
     match result {
         Ok(data) => Response::ok().with_json(&data).unwrap(),
-        Err(e) => Response::from(e), // Automatically converts to JSON error response
+        Err(e) => Response::bad_request()
+            .with_json(&serde_json::json!({"error": e.to_string()}))
+            .unwrap(),
     }
 }
 ```

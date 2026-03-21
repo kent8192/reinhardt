@@ -79,8 +79,9 @@ resource "docker_container" "dind" {
 
   restart = "always"
 
-  # Docker daemon injects default log_opts (max-file, max-size) into container
-  # state, causing spurious replacement diffs when not set in config.
+  # Docker daemon injects default log_driver, log_opts (max-file, max-size),
+  # and memory_swap into container state, causing spurious replacement diffs
+  # when not set in config.
   lifecycle {
     ignore_changes = [log_driver, log_opts, memory_swap]
   }
@@ -153,8 +154,9 @@ resource "docker_container" "runner" {
     retries  = 3
   }
 
-  # Docker daemon injects default log_opts (max-file, max-size) into container
-  # state, causing spurious replacement diffs when not set in config.
+  # Docker daemon injects default log_driver, log_opts (max-file, max-size),
+  # and memory_swap into container state, causing spurious replacement diffs
+  # when not set in config.
   lifecycle {
     ignore_changes = [log_driver, log_opts, memory_swap]
   }

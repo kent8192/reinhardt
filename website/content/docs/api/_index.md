@@ -109,7 +109,7 @@ use reinhardt::http::{Request, Response, ViewResult};
 #[get("/", name = "my_view")]
 async fn my_view(request: Request) -> ViewResult<Response> {
     // Handle request
-    Ok(Response::new(200, "Hello, World!".into()))
+    Ok(Response::ok().with_body("Hello, World!"))
 }
 
 // HTTP method decorators automatically register this function as a route handler

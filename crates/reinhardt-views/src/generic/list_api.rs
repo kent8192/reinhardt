@@ -263,8 +263,8 @@ where
 		self.queryset.clone().unwrap_or_default()
 	}
 
-	/// Gets the objects to display
-	async fn get_objects(&self, request: &Request) -> Result<Vec<M>> {
+	/// Builds a filtered queryset with ordering applied, before pagination.
+	fn get_filtered_queryset(&self, request: &Request) -> QuerySet<M> {
 		let mut queryset = self.get_queryset();
 
 		// Apply ordering if configured
@@ -286,6 +286,13 @@ where
 				}
 			}
 		}
+
+		queryset
+	}
+
+	/// Gets the objects to display with pagination applied.
+	async fn get_objects(&self, request: &Request) -> Result<Vec<M>> {
+		let mut queryset = self.get_filtered_queryset(request);
 
 		// Apply pagination based on request parameters
 		if let Some(ref pagination) = self.pagination_config {
@@ -368,6 +375,13 @@ where
 					.collect();
 
 				let response_body = if let Some(ref pagination) = self.pagination_config {
+					// Get total count from the filtered queryset (before pagination)
+					let total_count = self
+						.get_filtered_queryset(&request)
+						.count()
+						.await
+						.map_err(|e| Error::Http(e.to_string()))?;
+
 					match pagination {
 						PaginationConfig::PageNumber { page_size, .. } => {
 							let page = request
@@ -375,12 +389,12 @@ where
 								.get("page")
 								.and_then(|p| p.parse::<usize>().ok())
 								.unwrap_or(1);
-							let count = results.len();
+							let has_next = page.saturating_mul(*page_size) < total_count;
 							serde_json::json!({
-								"count": count,
+								"count": total_count,
 								"page": page,
 								"page_size": page_size,
-								"next": if count == *page_size { Some(format!("?page={}", page + 1)) } else { None::<String> },
+								"next": if has_next { Some(format!("?page={}", page + 1)) } else { None::<String> },
 								"previous": if page > 1 { Some(format!("?page={}", page - 1)) } else { None::<String> },
 								"results": results
 							})
@@ -396,19 +410,19 @@ where
 								.get("limit")
 								.and_then(|l| l.parse::<usize>().ok())
 								.unwrap_or(10);
-							let count = results.len();
+							let has_next = offset.saturating_add(limit) < total_count;
 							serde_json::json!({
-								"count": count,
+								"count": total_count,
 								"offset": offset,
 								"limit": limit,
-								"next": if count == limit { Some(format!("?offset={}&limit={}", offset + limit, limit)) } else { None::<String> },
+								"next": if has_next { Some(format!("?offset={}&limit={}", offset.saturating_add(limit), limit)) } else { None::<String> },
 								"previous": if offset > 0 { Some(format!("?offset={}&limit={}", offset.saturating_sub(limit), limit)) } else { None::<String> },
 								"results": results
 							})
 						}
 						_ => {
 							serde_json::json!({
-								"count": results.len(),
+								"count": total_count,
 								"results": results
 							})
 						}

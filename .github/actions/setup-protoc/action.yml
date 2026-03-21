@@ -15,13 +15,14 @@ runs:
         PROTOC_VERSION="${{ inputs.version }}"
         ARCH=$(uname -m)
         case "$ARCH" in
-          x86_64)  PROTOC_ARCH="linux-x86_64" ;;
-          aarch64) PROTOC_ARCH="linux-aarch_64" ;;
-          *)       echo "Unsupported architecture: $ARCH" && exit 1 ;;
+          x86_64)         PROTOC_ARCH="linux-x86_64" ;;
+          aarch64|arm64)  PROTOC_ARCH="linux-aarch_64" ;;
+          *)              echo "Unsupported architecture: $ARCH" && exit 1 ;;
         esac
-        curl -LsSf "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-${PROTOC_ARCH}.zip" \
+        curl -LsSf --retry 3 --retry-delay 5 --connect-timeout 10 \
+          "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-${PROTOC_ARCH}.zip" \
           -o /tmp/protoc.zip
-        sudo unzip -o /tmp/protoc.zip -d /usr/local bin/protoc
+        sudo unzip -o /tmp/protoc.zip -d /usr/local bin/protoc 'include/*'
         sudo chmod +x /usr/local/bin/protoc
         rm /tmp/protoc.zip
         protoc --version

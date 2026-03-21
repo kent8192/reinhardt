@@ -11,13 +11,13 @@ authors.workspace = true
 proc-macro = true
 
 [dependencies]
-syn = { version = "2.0", features = ["full", "extra-traits"] }
-quote = "1.0"
-proc-macro2 = "1.0"
+syn = { workspace = true, features = ["full", "extra-traits"] }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
 proc-macro-crate = "3.1"
-nom = "8"
-ctor = "0.6.0"
-inventory = "0.3"
+nom = { workspace = true }
+ctor = { workspace = true }
+inventory = { workspace = true }
 
 [features]
 full = []
@@ -27,9 +27,9 @@ db-sqlite = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
-trybuild = "1.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+trybuild = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 serial_test = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }

@@ -11,6 +11,10 @@ use super::{
 #[cfg(feature = "postgres")]
 use super::dialect::PostgresBackend;
 
+/// SQLSTATE code for "invalid_catalog_name" (database does not exist)
+#[cfg(feature = "postgres")]
+const SQLSTATE_INVALID_CATALOG_NAME: &str = "3D000";
+
 #[cfg(feature = "sqlite")]
 use super::dialect::SqliteBackend;
 
@@ -100,26 +104,7 @@ impl DatabaseConnection {
 		url: &str,
 		pool_size: Option<u32>,
 	) -> Result<Self> {
-		use sqlx::postgres::PgPoolOptions;
-		use std::time::Duration;
-
-		// Priority: explicit argument > environment variable > default
-		let max_connections = pool_size
-			.or_else(|| {
-				std::env::var("DATABASE_POOL_MAX_CONNECTIONS")
-					.ok()
-					.and_then(|v| v.parse::<u32>().ok())
-			})
-			.unwrap_or(20); // Increased default from 10 to 20 for better concurrency
-
-		let pool = PgPoolOptions::new()
-			.max_connections(max_connections)
-			.min_connections(1) // Maintain at least 1 connection
-			.acquire_timeout(Duration::from_secs(10)) // Increased from 3s to 10s for busy pools
-			.idle_timeout(Some(Duration::from_secs(10))) // Close idle connections after 10s
-			.max_lifetime(Some(Duration::from_secs(30 * 60))) // Close connections after 30 minutes
-			.connect(url)
-			.await?;
+		let pool = Self::build_postgres_pool(url, pool_size).await?;
 
 		Ok(Self {
 			backend: Arc::new(PostgresBackend::new(pool)),
@@ -156,6 +141,37 @@ impl DatabaseConnection {
 		Self::connect_postgres_or_create_with_pool_size(url, None).await
 	}
 
+	/// Build a PostgreSQL pool with the given URL and pool size.
+	///
+	/// Returns the raw `sqlx::Error` on failure so callers can inspect
+	/// SQLSTATE codes before converting to `DatabaseError`.
+	#[cfg(feature = "postgres")]
+	async fn build_postgres_pool(
+		url: &str,
+		pool_size: Option<u32>,
+	) -> std::result::Result<sqlx::PgPool, sqlx::Error> {
+		use sqlx::postgres::PgPoolOptions;
+		use std::time::Duration;
+
+		// Priority: explicit argument > environment variable > default
+		let max_connections = pool_size
+			.or_else(|| {
+				std::env::var("DATABASE_POOL_MAX_CONNECTIONS")
+					.ok()
+					.and_then(|v| v.parse::<u32>().ok())
+			})
+			.unwrap_or(20); // Increased default from 10 to 20 for better concurrency
+
+		PgPoolOptions::new()
+			.max_connections(max_connections)
+			.min_connections(1) // Maintain at least 1 connection
+			.acquire_timeout(Duration::from_secs(10)) // Increased from 3s to 10s for busy pools
+			.idle_timeout(Some(Duration::from_secs(10))) // Close idle connections after 10s
+			.max_lifetime(Some(Duration::from_secs(30 * 60))) // Close connections after 30 minutes
+			.connect(url)
+			.await
+	}
+
 	/// Connect to PostgreSQL with automatic database creation and custom pool size.
 	///
 	/// See [`Self::connect_postgres_or_create`] for details on automatic database creation.
@@ -164,18 +180,23 @@ impl DatabaseConnection {
 		url: &str,
 		pool_size: Option<u32>,
 	) -> Result<Self> {
-		// First try normal connection
-		match Self::connect_postgres_with_pool_size(url, pool_size).await {
-			Ok(conn) => return Ok(conn),
+		// First try normal connection, keeping the raw sqlx::Error
+		// so we can check the SQLSTATE code
+		match Self::build_postgres_pool(url, pool_size).await {
+			Ok(pool) => {
+				return Ok(Self {
+					backend: Arc::new(PostgresBackend::new(pool)),
+				});
+			}
 			Err(e) => {
-				// Check if error indicates database doesn't exist
-				let error_str = format!("{:?}", e);
-				if !error_str.contains("does not exist")
-					&& !error_str.contains("database")
-					&& !error_str.contains("3D000")
-				{
-					// Not a "database doesn't exist" error, propagate it
-					return Err(e);
+				// Check if the error is SQLSTATE 3D000 (invalid_catalog_name),
+				// which indicates the database does not exist
+				let is_db_not_found = matches!(
+					&e,
+					sqlx::Error::Database(db_err) if db_err.code().as_deref() == Some(SQLSTATE_INVALID_CATALOG_NAME)
+				);
+				if !is_db_not_found {
+					return Err(e.into());
 				}
 				// Database doesn't exist, try to create it
 			}

@@ -321,20 +321,21 @@ pub fn url_patterns() -> Vec<Route> {
 Create custom extractors for common patterns:
 
 ```rust
-use reinhardt::di::FromRequest;
+use reinhardt::di::{FromRequest, ParamContext, ParamResult};
 
 pub struct CurrentUser {
     pub id: i64,
     pub username: String,
 }
 
-#[async_trait]
 impl FromRequest for CurrentUser {
-    type Error = AuthError;
-
-    async fn from_request(req: &Request) -> Result<Self, Self::Error> {
-        // Extract from session, JWT, etc.
-        let user_id = req.session().get("user_id")?;
+    async fn from_request(req: &Request, _ctx: &ParamContext) -> ParamResult<Self> {
+        // Extract from headers, JWT, etc.
+        let user_id = req.headers
+            .get("x-user-id")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0);
 
         Ok(CurrentUser {
             id: user_id,
@@ -408,8 +409,9 @@ pub struct AuthMiddleware;
 #[async_trait]
 impl Middleware for AuthMiddleware {
     async fn process(&self, req: Request, next: Arc<dyn Handler>) -> Result<Response> {
-        // Check authentication
-        if !req.session().has("user_id") {
+        // Check authentication via request extensions
+        let auth_state = req.extensions.get::<AuthState>();
+        if !auth_state.is_some_and(|s| s.is_authenticated()) {
             return Ok(Response::new(StatusCode::UNAUTHORIZED)
                 .with_body("Unauthorized"));
         }

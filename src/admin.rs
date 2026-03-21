@@ -61,10 +61,8 @@ pub mod server {
 	pub use reinhardt_admin::server::*;
 }
 
-#[cfg(target_arch = "wasm32")]
-pub mod pages {
-	pub use reinhardt_admin_pages::*;
-}
+// Admin pages module is not yet available as a separate crate.
+// WASM admin UI will be provided by a future reinhardt-admin-pages crate.
 
 // Re-export core router for admin route mounting
 #[cfg(not(target_arch = "wasm32"))]
@@ -76,5 +74,4 @@ pub use adapters::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::*;
 
-#[cfg(target_arch = "wasm32")]
-pub use pages::*;
+// WASM admin pages re-export will be added when reinhardt-admin-pages crate is available.

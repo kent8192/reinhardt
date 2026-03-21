@@ -340,6 +340,9 @@ mod tests {
 		let result = paginator.paginate(&items, None, malformed_url);
 
 		// Assert
-		assert!(result.is_ok(), "paginate should not panic with malformed URL: {malformed_url:?}");
+		assert!(
+			result.is_ok(),
+			"paginate should not panic with malformed URL: {malformed_url:?}"
+		);
 	}
 }

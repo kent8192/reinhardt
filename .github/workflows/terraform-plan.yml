@@ -48,6 +48,7 @@ jobs:
         uses: hashicorp/setup-terraform@v4
 
       - name: Terraform Init (S3 backend)
+        id: init-s3
         if: matrix.backend == 's3'
         working-directory: ${{ matrix.dir }}
         env:
@@ -68,11 +69,18 @@ jobs:
         continue-on-error: true
 
       - name: Terraform Init (local backend)
+        id: init-local
         if: matrix.backend == 'local'
         working-directory: ${{ matrix.dir }}
         run: |
           terraform init -input=false
         continue-on-error: true
+
+      - name: Check terraform init outcome
+        if: steps.init-s3.outcome == 'failure' || steps.init-local.outcome == 'failure'
+        run: |
+          echo "::error::Terraform init failed for ${{ matrix.module }}"
+          exit 1
 
       - name: Check required variables
         if: env.SKIP_PLAN != 'true'

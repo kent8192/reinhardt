@@ -33,7 +33,8 @@ impl AcceptHeader {
 			.filter_map(|s| MediaType::parse(s.trim()))
 			.collect();
 
-		// Sort by quality (highest first), treat incomparable values as equal
+		// Sort by quality (highest first)
+		// Non-finite values are rejected at parse time; unwrap_or is a safety net
 		media_types.sort_by(|a, b| {
 			b.quality
 				.partial_cmp(&a.quality)
@@ -93,6 +94,7 @@ impl AcceptHeader {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_parse_accept_header() {
@@ -110,5 +112,20 @@ mod tests {
 		];
 		let best = accept.find_best_match(&available);
 		assert!(best.is_some());
+	}
+
+	#[rstest]
+	#[case("text/html;q=NaN", 0)]
+	#[case("text/html;q=NaN, application/json", 1)]
+	#[case("text/html, application/json;q=NaN", 1)]
+	fn test_parse_does_not_panic_on_nan_quality(#[case] input: &str, #[case] expected_len: usize) {
+		// Arrange
+		// (input provided by rstest case)
+
+		// Act
+		let accept = AcceptHeader::parse(input);
+
+		// Assert
+		assert_eq!(accept.media_types.len(), expected_len);
 	}
 }

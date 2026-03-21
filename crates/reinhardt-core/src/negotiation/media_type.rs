@@ -73,7 +73,7 @@ impl MediaType {
 
 				if key == "q" {
 					if let Ok(q) = value.parse::<f32>() {
-						// Reject NaN and infinity quality values
+						// Reject non-finite quality values (NaN, inf, -inf)
 						if !q.is_finite() {
 							return None;
 						}
@@ -194,6 +194,7 @@ impl fmt::Display for MediaType {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_parse_media_type() {
@@ -208,5 +209,21 @@ mod tests {
 		let json = MediaType::new("application", "json");
 		let wildcard = MediaType::new("*", "*");
 		assert!(json.matches(&wildcard));
+	}
+
+	#[rstest]
+	#[case("text/html;q=NaN")]
+	#[case("application/json; q=NaN")]
+	#[case("text/html;q=inf")]
+	#[case("text/html;q=-inf")]
+	fn test_parse_rejects_non_finite_quality(#[case] input: &str) {
+		// Arrange
+		// (input provided by rstest case)
+
+		// Act
+		let result = MediaType::parse(input);
+
+		// Assert
+		assert_eq!(result, None, "Non-finite quality value should be rejected");
 	}
 }

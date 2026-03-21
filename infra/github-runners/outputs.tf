@@ -39,14 +39,9 @@ output "webhook_setup_guide" {
 	EOT
 }
 
-output "hotpath_runner_instance_id" {
-  description = "EC2 instance ID of the hotpath runner (empty if disabled)"
-  value       = var.enable_hotpath_runner ? aws_instance.hotpath_runner[0].id : ""
-}
-
-output "hotpath_runner_private_ip" {
-  description = "Private IP of the hotpath runner (for SSM Session Manager access)"
-  value       = var.enable_hotpath_runner ? aws_instance.hotpath_runner[0].private_ip : ""
+output "hotpath_runner_asg_name" {
+  description = "Auto Scaling Group name for the hotpath runner (empty if disabled)"
+  value       = var.enable_hotpath_runner ? aws_autoscaling_group.hotpath_runner[0].name : ""
 }
 
 output "github_actions_oidc_provider_arn" {

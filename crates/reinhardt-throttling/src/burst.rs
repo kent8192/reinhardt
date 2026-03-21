@@ -156,7 +156,10 @@ mod tests {
 		let sustained_count = b.get_count("sustained:user1").await.unwrap();
 		assert_eq!(raw_count, 0, "raw key should have no entries");
 		assert_eq!(burst_count, 2, "burst key should track burst requests");
-		assert_eq!(sustained_count, 2, "sustained key should track sustained requests");
+		assert_eq!(
+			sustained_count, 2,
+			"sustained key should track sustained requests"
+		);
 	}
 
 	#[rstest]

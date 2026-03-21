@@ -12,11 +12,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", features = ["rest"] }
+reinhardt = { version = "0.1.0-rc.9", features = ["rest"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-alpha.1", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-alpha.1", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.9", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.9", features = ["full"] }      # All features
 ```
 
 Then import REST features:
@@ -59,7 +59,7 @@ use reinhardt::rest::{PaginatedResponse};
   - `AuthResult<U>` - Result type for authentication operations
   - `AuthBackend` - Authentication backend trait
 
-#### Routing (from `reinhardt-routers`)
+#### Routing (from `reinhardt-http`)
 
 - **Router Types**:
   - `DefaultRouter` - Default router with automatic ViewSet URL generation
@@ -68,7 +68,7 @@ use reinhardt::rest::{PaginatedResponse};
   - `Route` - Individual route definition
   - `UrlPattern` - URL pattern matching
 
-#### Browsable API (from `reinhardt-browsable-api`)
+#### Browsable API (module `browsable_api`)
 
 - **HTML Interface**: Interactive API explorer for development and testing
 - **Automatic Documentation**: Self-documenting API endpoints
@@ -83,7 +83,7 @@ use reinhardt::rest::{PaginatedResponse};
   - `ResponseBuilder<T>` - Fluent builder for API responses
 - **Utilities**:
   - `IntoApiResponse<T>` - Trait for converting types to API responses
-  - `PaginatedResponse` - Paginated response wrapper (from `reinhardt-pagination`)
+  - `PaginatedResponse` - Paginated response wrapper (from `reinhardt-core`)
 
 #### Schema Generation (from `reinhardt-openapi`)
 
@@ -96,14 +96,14 @@ use reinhardt::rest::{PaginatedResponse};
   - Auto-schema generation from Rust types
   - `SwaggerUI` - Interactive API documentation
 
-#### Pagination (from `reinhardt-pagination`)
+#### Pagination (from `reinhardt-core`)
 
 - **Pagination Strategies**:
   - `PageNumberPagination` - Page-based pagination
   - `LimitOffsetPagination` - Offset-based pagination
   - `CursorPagination` - Cursor-based pagination
 
-#### Filtering (from `reinhardt-filters`)
+#### Filtering (module `filters`)
 
 - **Filter Backends**:
   - `SearchFilter` - Search across multiple fields
@@ -118,7 +118,7 @@ use reinhardt::rest::{PaginatedResponse};
   - `UserRateThrottle` - Rate limiting for authenticated users
   - `ScopedRateThrottle` - Per-endpoint rate limiting
 
-#### Signals/Hooks (from `reinhardt-signals`)
+#### Signals/Hooks (from `reinhardt-dispatch`)
 
 - **Model Signals**:
   - `pre_save`, `post_save` - Model save signals
@@ -130,8 +130,8 @@ use reinhardt::rest::{PaginatedResponse};
 This crate does not contain tests. All functionality is tested in the underlying specialized crates:
 
 - Authentication tests: `reinhardt-auth/tests/`
-- Router tests: `reinhardt-routers/tests/`
-- Browsable API tests: `reinhardt-browsable-api/tests/`
+- Router tests: `reinhardt-http/tests/`
+- Browsable API tests: `reinhardt-rest/src/browsable_api/`
 - Response handling tests: Documentation tests in `src/response.rs`
 - Integration tests: `tests/integration/`
 
@@ -343,7 +343,7 @@ let response = result.into_api_response();
 - **`ModelSerializer<M>`**: Automatic serialization for ORM models
   - Django-style automatic field mapping from model definitions
   - Built-in validation support with `validate()` method
-  - Seamless integration with `reinhardt-orm::Model` trait
+  - Seamless integration with `reinhardt-db::Model` trait
   - JSON serialization/deserialization for database models
   - Extensible validation system for custom business logic
   - **Meta Configuration**: Field inclusion/exclusion, read-only/write-only fields
@@ -454,7 +454,7 @@ let response = result.into_api_response();
 - **`ContentNegotiator`**: Select appropriate response format based on client request
 - **`MediaType`**: Parse and compare media type strings
 
-#### Parsers (Re-exported from `reinhardt-parsers`)
+#### Parsers (Re-exported from `reinhardt-core`)
 
 - **`JSONParser`**: Parse JSON request bodies
 - **`FormParser`**: Parse form-encoded data

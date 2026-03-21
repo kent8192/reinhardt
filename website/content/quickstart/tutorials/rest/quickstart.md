@@ -86,22 +86,24 @@ This example uses simple data structures. In real applications, you can implemen
 Implement API endpoints using HTTP method decorators. Add to `users/views.rs`:
 
 ```rust
-use reinhardt::prelude::*;
-use reinhardt::{get, post, Json};
-use reinhardt::db::DatabaseConnection;
+use serde_json::{self as json, json};
+use reinhardt::ViewResult;
+use reinhardt::{get, post, Json, Response, StatusCode};
 use crate::models::User;
 use crate::serializers::UserSerializer;
 
 #[get("/users", name = "list_users")]
-pub async fn list_users(
-    #[inject] conn: DatabaseConnection,
-) -> Result<Response> {
-    let users = User::objects().all().all().await?;
+pub async fn list_users() -> ViewResult<Response> {
+    let users = User::objects().all().await?;
     let serialized: Vec<UserSerializer> = users.into_iter()
         .map(|u| UserSerializer::from(u))
         .collect();
 
-    ApiResponse::success(serialized)
+    let response_data = json!({ "users": serialized });
+    let json = json::to_string(&response_data)?;
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json))
 }
 ```
 
@@ -111,13 +113,19 @@ pub async fn list_users(
 #[post("/users", name = "create_user")]
 pub async fn create_user(
     Json(data): Json<UserSerializer>,
-    #[inject] conn: DatabaseConnection,
-) -> Result<Response> {
+) -> ViewResult<Response> {
     // Create user
     let user = User::objects().create(data.username, data.email).await?;
     let serialized = UserSerializer::from(user);
 
-    ApiResponse::success(serialized)
+    let response_data = json!({
+        "message": "User created",
+        "user": serialized
+    });
+    let json = json::to_string(&response_data)?;
+    Ok(Response::new(StatusCode::CREATED)
+        .with_header("Content-Type", "application/json")
+        .with_body(json))
 }
 ```
 
@@ -164,46 +172,56 @@ pub struct UserSerializer {
 Edit `users/views.rs` to implement full CRUD operations:
 
 ```rust
-use reinhardt::prelude::*;
-use reinhardt::{get, post, Json};
-use reinhardt::http::Path;
-use reinhardt::db::DatabaseConnection;
+use serde_json::{self as json, json};
+use reinhardt::ViewResult;
+use reinhardt::{get, post, Json, Path, Response, StatusCode};
 use crate::models::User;
 use crate::serializers::UserSerializer;
 
 #[get("/users", name = "list_users")]
-pub async fn list_users(
-    #[inject] conn: DatabaseConnection,
-) -> Result<Response> {
-    let users = User::objects().all().all().await?;
+pub async fn list_users() -> ViewResult<Response> {
+    let users = User::objects().all().await?;
     let serialized: Vec<UserSerializer> = users.into_iter()
         .map(|u| UserSerializer::from(u))
         .collect();
 
-    ApiResponse::success(serialized)
+    let response_data = json!({ "users": serialized });
+    let json = json::to_string(&response_data)?;
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json))
 }
 
 #[get("/users/{id}/", name = "retrieve_user")]
 pub async fn retrieve_user(
     Path(id): Path<i64>,
-    #[inject] conn: DatabaseConnection,
-) -> Result<Response> {
+) -> ViewResult<Response> {
     let user = User::objects().get(id).first().await?
         .ok_or("User not found")?;
 
     let serialized = UserSerializer::from(user);
-    ApiResponse::success(serialized)
+    let response_data = json!({ "user": serialized });
+    let json = json::to_string(&response_data)?;
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json))
 }
 
 #[post("/users", name = "create_user")]
 pub async fn create_user(
     Json(data): Json<UserSerializer>,
-    #[inject] conn: DatabaseConnection,
-) -> Result<Response> {
+) -> ViewResult<Response> {
     let user = User::objects().create(data.username, data.email).await?;
     let serialized = UserSerializer::from(user);
 
-    ApiResponse::success(serialized)
+    let response_data = json!({
+        "message": "User created",
+        "user": serialized
+    });
+    let json = json::to_string(&response_data)?;
+    Ok(Response::new(StatusCode::CREATED)
+        .with_header("Content-Type", "application/json")
+        .with_body(json))
 }
 ```
 
@@ -212,13 +230,12 @@ pub async fn create_user(
 Edit `users/urls.rs` to register the view functions:
 
 ```rust
-use reinhardt::routers::DefaultRouter;
-use hyper::Method;
-use crate::views;
+use reinhardt::ServerRouter;
 
-pub fn url_patterns() -> DefaultRouter {
-    DefaultRouter::new()
-        .with_namespace("users")
+use super::views;
+
+pub fn url_patterns() -> ServerRouter {
+    ServerRouter::new()
         .endpoint(views::list_users)
         .endpoint(views::retrieve_user)
         .endpoint(views::create_user)
@@ -239,8 +256,8 @@ use reinhardt::prelude::*;
 use reinhardt::routes;
 
 #[routes]
-pub fn routes() -> DefaultRouter {
-    DefaultRouter::new()
+pub fn routes() -> UnifiedRouter {
+    UnifiedRouter::new()
         .mount("/api/", users::urls::url_patterns())
 }
 ```

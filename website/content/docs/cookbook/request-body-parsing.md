@@ -99,7 +99,7 @@ async fn contact(Form(form): Form<ContactForm>) -> reinhardt::Response {
 ```rust
 use reinhardt_di::params::Form;
 use serde::{Deserialize, Serialize};
-use validator::Validate;
+use reinhardt::Validate;
 
 #[derive(Deserialize, Validate)]
 struct ContactForm {
@@ -256,12 +256,12 @@ async fn create_user(Json(user): Json<User>) -> reinhardt::Response {
 ```rust
 use reinhardt_di::params::Json;
 use reinhardt::{Request, Response};
-use reinhardt::RequestContext;
+use reinhardt_di::params::ParamContext;
 
 async fn create_user_manual(req: Request) -> reinhardt::Result<Response> {
     use reinhardt_di::params::FromRequest;
 
-    let ctx = RequestContext::new();
+    let ctx = ParamContext::default();
 
     match Json::<User>::from_request(&req, &ctx).await {
         Ok(Json(user)) => {

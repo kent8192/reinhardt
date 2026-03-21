@@ -11,31 +11,41 @@ use thiserror::Error;
 /// Errors that can occur when building an application
 #[derive(Debug, Error)]
 pub enum BuildError {
+	/// An error originating from the application registry.
 	#[error("Application error: {0}")]
 	App(#[from] AppError),
 
+	/// The provided configuration value is invalid.
 	#[error("Invalid configuration: {0}")]
 	InvalidConfig(String),
 
+	/// A required configuration value was not provided.
 	#[error("Missing required configuration: {0}")]
 	MissingConfig(String),
 
+	/// An error in route configuration.
 	#[error("Route configuration error: {0}")]
 	RouteError(String),
 
+	/// An error in database configuration.
 	#[error("Database configuration error: {0}")]
 	DatabaseError(String),
 }
 
+/// A specialized `Result` type for application build operations.
 pub type BuildResult<T> = Result<T, BuildError>;
 
 /// Route definition for the application
 /// Lightweight wrapper around path patterns
 #[derive(Clone)]
 pub struct RouteConfig {
+	/// URL path pattern for this route.
 	pub path: String,
+	/// Name of the handler associated with this route.
 	pub handler_name: String,
+	/// Optional name for reverse URL lookup.
 	pub name: Option<String>,
+	/// Optional namespace for grouping routes.
 	pub namespace: Option<String>,
 }
 
@@ -123,9 +133,13 @@ impl RouteConfig {
 /// Database configuration for the application
 #[derive(Clone, Debug)]
 pub struct ApplicationDatabaseConfig {
+	/// Database connection URL.
 	pub url: String,
+	/// Maximum number of connections in the pool.
 	pub pool_size: Option<u32>,
+	/// Maximum number of connections that can exceed `pool_size`.
 	pub max_overflow: Option<u32>,
+	/// Connection timeout in seconds.
 	pub timeout: Option<u64>,
 }
 

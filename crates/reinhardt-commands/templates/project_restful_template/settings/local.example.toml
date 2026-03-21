@@ -8,7 +8,7 @@
 debug = true
 
 # Secret key for development (NEVER use this in production!)
-secret_key = "local-development-secret-key-change-in-production"
+secret_key = "{{ secret_key }}"
 
 # Allow all hosts in development
 allowed_hosts = ["*"]

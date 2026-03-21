@@ -49,6 +49,7 @@ impl TransactionMode {
 /// Migration execution plan
 #[derive(Debug, Clone)]
 pub struct MigrationPlan {
+	/// The migrations.
 	pub migrations: Vec<Migration>,
 	/// Transaction mode for execution
 	pub transaction_mode: TransactionMode,

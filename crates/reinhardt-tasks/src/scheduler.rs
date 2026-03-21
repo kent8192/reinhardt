@@ -18,6 +18,7 @@ use std::sync::Arc;
 /// ```
 #[derive(Debug, Clone)]
 pub struct CronSchedule {
+	/// The cron expression string (e.g., `"0 0 * * *"` for daily at midnight).
 	pub expression: String,
 }
 
@@ -60,7 +61,9 @@ impl CronSchedule {
 	}
 }
 
+/// Trait for defining when a task should next be executed.
 pub trait Schedule: Send + Sync {
+	/// Returns the next scheduled run time, or `None` if no future run is scheduled.
 	fn next_run(&self) -> Option<DateTime<Utc>>;
 }
 
@@ -227,6 +230,8 @@ mod tests {
 	use std::sync::atomic::{AtomicU64, Ordering};
 
 	#[derive(Debug)]
+	// Allow dead_code: fields are accessed through trait object (dyn Task + TaskExecutor)
+	#[allow(dead_code)]
 	struct DummyTask {
 		id: TaskId,
 	}

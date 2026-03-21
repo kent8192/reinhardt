@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       runner:
-        description: 'Runner label JSON. Use "\"ubuntu-latest\"" for GitHub-hosted or "[\"self-hosted\",\"linux\",\"x64\",\"reinhardt-ci\"]" for self-hosted.'
+        description: 'Runner label JSON. Use "\"ubuntu-latest\"" for GitHub-hosted or "[\"self-hosted\",\"linux\",\"arm64\",\"reinhardt-ci\"]" for self-hosted.'
         type: string
         default: '"ubuntu-latest"'
       cargo-build-jobs:
@@ -70,8 +70,8 @@ jobs:
 
       - name: Install mold linker and build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y mold clang lld build-essential
+          sudo apt-get update -o DPkg::Lock::Timeout=120
+          sudo apt-get install -y -o DPkg::Lock::Timeout=120 mold clang lld build-essential
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
 
@@ -129,6 +129,7 @@ jobs:
             --all-features \
             --partition hash:${{ matrix.partition }}/6 \
             --no-fail-fast \
+            --no-tests=warn \
             --status-level=none \
             --final-status-level=none
 

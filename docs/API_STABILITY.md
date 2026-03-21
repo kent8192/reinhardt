@@ -73,7 +73,7 @@ the stable release. The following table summarizes what changes are permitted:
 |-------------|-----------|------------|
 | Bug fixes (no API change) | Yes | Standard review process |
 | Critical bug fix with breaking API change | Yes | Explicit maintainer approval + migration guide |
-| Non-breaking feature additions | **No** | Deferred to next version cycle |
+| Non-breaking feature additions | **Conditional** | Requires SP-6 approval (`enhancement` + `rc-addition` labels + maintainer sign-off) |
 | Renames via deprecation alias | Yes | Old name preserved as `#[deprecated]` alias |
 | Documentation / test additions | Yes | No API surface change |
 
@@ -86,12 +86,19 @@ fixed by modifying an existing public API, the breaking change is permitted with
 2. A new RC version (`rc.N+1`) and stability timer reset
 3. A migration guide included in the PR
 
-### Why Non-Breaking Feature Additions Are Not Permitted
+### Non-Breaking Feature Additions During RC (SP-6)
 
-New public APIs (functions, types, traits) introduced during RC have not undergone the
-stabilization validation period. Even though they do not break existing code, they enter the
-stable release as untested API surface. Feature additions should target the next version
-cycle (e.g., `0.2.0-alpha`).
+Non-breaking API additions (new functions, types, traits, modules) are permitted during RC
+when approved through the SP-6 review process:
+
+1. Create a GitHub Issue documenting the technical justification for the addition
+2. Apply `enhancement` and `rc-addition` labels
+3. Obtain maintainer approval before implementation
+
+Additions must not affect existing API surface — all existing code must compile and behave
+identically without modification. New feature flags remain prohibited even with approval.
+
+For the full SP-6 policy, see [Stability Policy](../instructions/STABILITY_POLICY.md).
 
 ### Backward-Compatible Renames
 
@@ -207,7 +214,7 @@ Every breaking change (MAJOR release) and every significant deprecation must inc
 3. **How to migrate**: Step-by-step migration instructions with code examples
 4. **Timeline**: When the old behavior will be fully removed (if applicable)
 
-Migration guides are placed in `docs/migrations/vX.Y.Z-migration.md`.
+Migration guides are placed in individual crate CHANGELOGs and release notes.
 
 ---
 

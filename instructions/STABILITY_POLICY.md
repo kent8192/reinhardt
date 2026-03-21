@@ -45,6 +45,21 @@ Versions MUST progress monotonically through the lifecycle:
 
 Each crate in the workspace follows its own lifecycle independently. One crate may be in RC while another is still in alpha.
 
+The following diagram shows the version lifecycle state transitions:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Alpha
+    Alpha --> Alpha: any change (alpha.N to alpha.N+1)
+    Alpha --> RC: API freeze decision
+    RC --> RC: bug fix only (rc.N to rc.N+1)
+    RC --> Stable: SC-1 all 7 criteria met
+
+    note right of Alpha: No stability guarantees\nAny breaking change permitted
+    note right of RC: API frozen\nBug fixes only (SP-2)\nNon-breaking additions need SP-6
+    note right of Stable: Full SemVer compliance\nBreaking = MAJOR bump
+```
+
 ---
 
 ## Alpha Phase
@@ -99,6 +114,21 @@ Requirements for deprecation-alias renames:
 - The rename MUST be documented in the CHANGELOG
 
 **Rationale:** The RC phase validates the existing API surface. Unrestricted API additions during RC could introduce untested surface area. However, non-breaking additions that have been reviewed and approved through SP-6 maintain quality while providing necessary flexibility. Deprecation aliases ensure no existing code breaks when renaming.
+
+The following diagram provides a decision tree for determining whether a change is permitted during the RC phase:
+
+```mermaid
+flowchart TD
+    A[Change requested during RC] --> B{Bug fix?}
+    B -->|Yes| C["Permitted (SP-2)"]
+    B -->|No| D{Non-breaking API addition?}
+    D -->|Yes| E["SP-6: Issue + rc-addition label<br/>+ maintainer approval"]
+    D -->|No| F{Breaking change?}
+    F -->|Yes| G{Critical bug / Security / Soundness?}
+    G -->|Yes| H["SP-3: API Change Proposal<br/>+ maintainer approval<br/>+ migration guide"]
+    G -->|No| I["NOT PERMITTED<br/>Direct to develop branch"]
+    F -->|No| I
+```
 
 ### SP-2 (MUST): Bug-Fix-Only Policy
 
@@ -217,6 +247,27 @@ git push origin develop/0.2.0
 
 Since all crates follow a unified version group, only one develop branch exists per RC cycle.
 
+The following diagram illustrates the develop branch lifecycle from creation through merge:
+
+```mermaid
+gitGraph
+    commit id: "rc.1 (API freeze)"
+    branch "develop/0.2.0"
+    commit id: "feat: new API (breaking)"
+    commit id: "feat: next-version feature"
+    checkout main
+    commit id: "fix: rc bug" tag: "rc.2"
+    checkout "develop/0.2.0"
+    merge main id: "forward-merge (DB-4)"
+    commit id: "refactor: trait redesign"
+    checkout main
+    commit id: "stable" tag: "v0.1.0"
+    checkout "develop/0.2.0"
+    merge main id: "final forward-merge"
+    checkout main
+    merge "develop/0.2.0" id: "merge develop (DB-5)"
+```
+
 ### DB-2 (MUST): Permitted Changes
 
 The `develop/0.x+1.0` branch accepts changes that are NOT permitted on `main` during RC:
@@ -240,6 +291,23 @@ Bug fixes during the RC phase MUST be applied to `main` first, then propagated t
 - No bug fix is lost when the develop branch is eventually merged back
 
 **NEVER** apply a bug fix only to the develop branch. If the bug exists in the RC version, it must be fixed on `main` first.
+
+The following diagram shows the RC bug fix flow where fixes are applied to main first, then forward-merged to the develop branch:
+
+```mermaid
+gitGraph
+    commit id: "v0.1.0-rc.1"
+    branch "develop/0.2.0"
+    commit id: "feat: next-version work"
+    checkout main
+    branch "fix/rc-bug"
+    commit id: "fix: critical bug"
+    checkout main
+    merge "fix/rc-bug" id: "fix applied to main first" tag: "v0.1.0-rc.2"
+    checkout "develop/0.2.0"
+    merge main id: "forward-merge fix (DB-3)"
+    commit id: "continue development"
+```
 
 ### DB-4 (SHOULD): Forward-Merge from Main
 
@@ -346,6 +414,22 @@ rc.1 released          → Timer starts (Day 0)
 Critical bug found     → Timer resets (Day 5)
 rc.2 released (fix)    → Timer restarts (Day 0)
 No issues for 14 days  → Ready for stable (Day 14)
+```
+
+The following diagram visualizes the stability timer behavior including agent-detected bug handling:
+
+```mermaid
+flowchart LR
+    A["rc.1 released<br/>Day 0"] --> B["Days pass..."]
+    B --> C{Event occurred?}
+    C -->|"New rc.N+1"| D["RESET to Day 0"]
+    C -->|"Critical/High bug fix"| D
+    C -->|"Breaking change (SP-3)"| D
+    C -->|"Agent detects bug"| E["agent-suspect label<br/>Timer NOT reset"]
+    E --> F{Independent verification}
+    F -->|Confirmed| G["Remove label<br/>Timer RESETS"]
+    F -->|False positive| H["Close issue<br/>No impact"]
+    C -->|"14 days clear"| I["Ready for stable"]
 ```
 
 ### SC-2a (MUST): Agent-Detected Bug Verification (Two-Step Process)

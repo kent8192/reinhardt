@@ -50,6 +50,7 @@ where
 	Fut: Future<Output = DiResult<T>> + Send + Sync,
 	T: Any + Send + Sync + 'static,
 {
+	/// Creates a new async factory from the given closure.
 	pub fn new(factory: F) -> Self {
 		Self {
 			factory,
@@ -253,11 +254,15 @@ pub fn reset_global_registry() {
 
 /// Registration entry for inventory collection
 pub struct DependencyRegistration {
+	/// The `TypeId` of the dependency being registered.
 	pub type_id: TypeId,
+	/// The human-readable name of the type.
 	pub type_name: &'static str,
+	/// The scope (request or singleton) for this dependency.
 	pub scope: DependencyScope,
-	/// Direct dependencies of this type
+	/// Direct dependencies of this type.
 	pub dependencies: Vec<TypeId>,
+	/// A function that registers this dependency's factory with the registry.
 	pub register_fn: Box<dyn Fn(&DependencyRegistry) + Send + Sync>,
 }
 

@@ -20,17 +20,29 @@ use uuid::Uuid;
 
 // Django QuerySet API types
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Defines possible filter operator values.
 pub enum FilterOperator {
+	/// Eq variant.
 	Eq,
+	/// Ne variant.
 	Ne,
+	/// Gt variant.
 	Gt,
+	/// Gte variant.
 	Gte,
+	/// Lt variant.
 	Lt,
+	/// Lte variant.
 	Lte,
+	/// In variant.
 	In,
+	/// NotIn variant.
 	NotIn,
+	/// Contains variant.
 	Contains,
+	/// StartsWith variant.
 	StartsWith,
+	/// EndsWith variant.
 	EndsWith,
 	// PostgreSQL array operators
 	/// Array contains all elements (@>)
@@ -69,16 +81,23 @@ pub enum FilterOperator {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Defines possible filter value values.
 pub enum FilterValue {
+	/// String variant.
 	String(String),
+	/// Integer variant.
 	Integer(i64),
 	/// Alias for Integer (for compatibility with test code)
 	Int(i64),
+	/// Float variant.
 	Float(f64),
+	/// Boolean variant.
 	Boolean(bool),
 	/// Alias for Boolean (for compatibility with test code)
 	Bool(bool),
+	/// Null variant.
 	Null,
+	/// Array variant.
 	Array(Vec<String>),
 	/// Field reference for field-to-field comparisons (e.g., WHERE discount_price < total_price)
 	FieldRef(super::expressions::F),
@@ -89,13 +108,18 @@ pub enum FilterValue {
 }
 
 #[derive(Debug, Clone)]
+/// Represents a filter.
 pub struct Filter {
+	/// The field.
 	pub field: String,
+	/// The operator.
 	pub operator: FilterOperator,
+	/// The value.
 	pub value: FilterValue,
 }
 
 impl Filter {
+	/// Creates a new instance.
 	pub fn new(field: impl Into<String>, operator: FilterOperator, value: FilterValue) -> Self {
 		Self {
 			field: field.into(),
@@ -108,10 +132,15 @@ impl Filter {
 /// Values that can be used in UPDATE statements
 #[derive(Debug, Clone)]
 pub enum UpdateValue {
+	/// String variant.
 	String(String),
+	/// Integer variant.
 	Integer(i64),
+	/// Float variant.
 	Float(f64),
+	/// Boolean variant.
 	Boolean(bool),
+	/// Null variant.
 	Null,
 	/// Field reference for field-to-field updates (e.g., SET discount_price = total_price)
 	FieldRef(super::expressions::F),
@@ -292,17 +321,20 @@ impl From<uuid::Uuid> for FilterValue {
 }
 
 #[derive(Debug, Clone)]
+/// Represents a orm query.
 pub struct OrmQuery {
 	filters: Vec<Filter>,
 }
 
 impl OrmQuery {
+	/// Creates a new instance.
 	pub fn new() -> Self {
 		Self {
 			filters: Vec::new(),
 		}
 	}
 
+	/// Performs the filter operation.
 	pub fn filter(mut self, filter: Filter) -> Self {
 		self.filters.push(filter);
 		self
@@ -343,11 +375,17 @@ enum AggregateFunc {
 /// Comparison operators for HAVING clauses
 #[derive(Clone, Debug)]
 pub enum ComparisonOp {
+	/// Eq variant.
 	Eq,
+	/// Ne variant.
 	Ne,
+	/// Gt variant.
 	Gt,
+	/// Gte variant.
 	Gte,
+	/// Lt variant.
 	Lt,
+	/// Lte variant.
 	Lte,
 }
 
@@ -387,6 +425,7 @@ enum SubqueryCondition {
 }
 
 #[derive(Clone)]
+/// Represents a query set.
 pub struct QuerySet<T>
 where
 	T: super::Model,
@@ -419,6 +458,7 @@ impl<T> QuerySet<T>
 where
 	T: super::Model,
 {
+	/// Creates a new instance.
 	pub fn new() -> Self {
 		Self {
 			_phantom: std::marker::PhantomData,
@@ -444,6 +484,7 @@ where
 		}
 	}
 
+	/// Sets the manager and returns self for chaining.
 	pub fn with_manager(manager: std::sync::Arc<super::manager::Manager<T>>) -> Self {
 		Self {
 			_phantom: std::marker::PhantomData,
@@ -469,6 +510,7 @@ where
 		}
 	}
 
+	/// Performs the filter operation.
 	pub fn filter(mut self, filter: Filter) -> Self {
 		self.filters.push(filter);
 		self
@@ -2399,7 +2441,7 @@ where
 		let mut cond = Condition::all();
 
 		for filter in &self.filters {
-			let col = Expr::col(Alias::new(&filter.field));
+			let col = Expr::col(parse_column_reference(&filter.field));
 
 			let expr = match (&filter.operator, &filter.value) {
 				// Field-to-field comparisons (must come before generic patterns)
@@ -2425,22 +2467,22 @@ where
 				(FilterOperator::Eq, FilterValue::OuterRef(outer)) => {
 					// For correlated subqueries, reference outer query field
 					// e.g., WHERE books.author_id = authors.id (where authors is from outer query)
-					Expr::cust(format!("{} = {}", filter.field, outer.to_sql())).into_simple_expr()
+					col.eq(Expr::col(parse_column_reference(&outer.field)))
 				}
 				(FilterOperator::Ne, FilterValue::OuterRef(outer)) => {
-					Expr::cust(format!("{} != {}", filter.field, outer.to_sql())).into_simple_expr()
+					col.ne(Expr::col(parse_column_reference(&outer.field)))
 				}
 				(FilterOperator::Gt, FilterValue::OuterRef(outer)) => {
-					Expr::cust(format!("{} > {}", filter.field, outer.to_sql())).into_simple_expr()
+					col.gt(Expr::col(parse_column_reference(&outer.field)))
 				}
 				(FilterOperator::Gte, FilterValue::OuterRef(outer)) => {
-					Expr::cust(format!("{} >= {}", filter.field, outer.to_sql())).into_simple_expr()
+					col.gte(Expr::col(parse_column_reference(&outer.field)))
 				}
 				(FilterOperator::Lt, FilterValue::OuterRef(outer)) => {
-					Expr::cust(format!("{} < {}", filter.field, outer.to_sql())).into_simple_expr()
+					col.lt(Expr::col(parse_column_reference(&outer.field)))
 				}
 				(FilterOperator::Lte, FilterValue::OuterRef(outer)) => {
-					Expr::cust(format!("{} <= {}", filter.field, outer.to_sql())).into_simple_expr()
+					col.lte(Expr::col(parse_column_reference(&outer.field)))
 				}
 				// Expression comparisons (F("a") * F("b") etc.)
 				(FilterOperator::Eq, FilterValue::Expression(expr)) => {
@@ -2551,7 +2593,11 @@ where
 					// field @> ARRAY[?, ?] - parameterized
 					let placeholders = arr.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
 					Expr::cust_with_values(
-						format!("{} @> ARRAY[{}]", filter.field, placeholders),
+						format!(
+							"{} @> ARRAY[{}]",
+							quote_identifier(&filter.field),
+							placeholders
+						),
 						arr.iter().cloned(),
 					)
 					.into_simple_expr()
@@ -2560,7 +2606,11 @@ where
 					// field <@ ARRAY[?, ?] - parameterized
 					let placeholders = arr.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
 					Expr::cust_with_values(
-						format!("{} <@ ARRAY[{}]", filter.field, placeholders),
+						format!(
+							"{} <@ ARRAY[{}]",
+							quote_identifier(&filter.field),
+							placeholders
+						),
 						arr.iter().cloned(),
 					)
 					.into_simple_expr()
@@ -2569,7 +2619,11 @@ where
 					// field && ARRAY[?, ?] - parameterized
 					let placeholders = arr.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
 					Expr::cust_with_values(
-						format!("{} && ARRAY[{}]", filter.field, placeholders),
+						format!(
+							"{} && ARRAY[{}]",
+							quote_identifier(&filter.field),
+							placeholders
+						),
 						arr.iter().cloned(),
 					)
 					.into_simple_expr()
@@ -2578,7 +2632,10 @@ where
 				(FilterOperator::FullTextMatch, FilterValue::String(query)) => {
 					// field @@ plainto_tsquery('english', ?) - parameterized
 					Expr::cust_with_values(
-						format!("{} @@ plainto_tsquery('english', ?)", filter.field),
+						format!(
+							"{} @@ plainto_tsquery('english', ?)",
+							quote_identifier(&filter.field)
+						),
 						[query.clone()],
 					)
 					.into_simple_expr()
@@ -2586,20 +2643,28 @@ where
 				// PostgreSQL JSONB operators
 				(FilterOperator::JsonbContains, FilterValue::String(json)) => {
 					// field @> ?::jsonb - parameterized
-					Expr::cust_with_values(format!("{} @> ?::jsonb", filter.field), [json.clone()])
-						.into_simple_expr()
+					Expr::cust_with_values(
+						format!("{} @> ?::jsonb", quote_identifier(&filter.field)),
+						[json.clone()],
+					)
+					.into_simple_expr()
 				}
 				(FilterOperator::JsonbContainedBy, FilterValue::String(json)) => {
 					// field <@ ?::jsonb - parameterized
-					Expr::cust_with_values(format!("{} <@ ?::jsonb", filter.field), [json.clone()])
-						.into_simple_expr()
+					Expr::cust_with_values(
+						format!("{} <@ ?::jsonb", quote_identifier(&filter.field)),
+						[json.clone()],
+					)
+					.into_simple_expr()
 				}
 				(FilterOperator::JsonbKeyExists, FilterValue::String(key)) => {
 					// field ? 'key' - using PgBinOper for safe parameterization
-					Expr::cust(&filter.field).into_simple_expr().binary(
-						BinOper::PgOperator(PgBinOper::JsonContainsKey),
-						SimpleExpr::from(key.clone()),
-					)
+					Expr::cust(quote_identifier(&filter.field))
+						.into_simple_expr()
+						.binary(
+							BinOper::PgOperator(PgBinOper::JsonContainsKey),
+							SimpleExpr::from(key.clone()),
+						)
 				}
 				(FilterOperator::JsonbAnyKeyExists, FilterValue::Array(keys)) => {
 					// field ?| array[?, ?] - using PgBinOper for safe parameterization
@@ -2609,10 +2674,12 @@ where
 						keys.iter().cloned(),
 					)
 					.into_simple_expr();
-					Expr::cust(&filter.field).into_simple_expr().binary(
-						BinOper::PgOperator(PgBinOper::JsonContainsAnyKey),
-						array_expr,
-					)
+					Expr::cust(quote_identifier(&filter.field))
+						.into_simple_expr()
+						.binary(
+							BinOper::PgOperator(PgBinOper::JsonContainsAnyKey),
+							array_expr,
+						)
 				}
 				(FilterOperator::JsonbAllKeysExist, FilterValue::Array(keys)) => {
 					// field ?& array[?, ?] - using PgBinOper for safe parameterization
@@ -2622,32 +2689,46 @@ where
 						keys.iter().cloned(),
 					)
 					.into_simple_expr();
-					Expr::cust(&filter.field).into_simple_expr().binary(
-						BinOper::PgOperator(PgBinOper::JsonContainsAllKeys),
-						array_expr,
-					)
+					Expr::cust(quote_identifier(&filter.field))
+						.into_simple_expr()
+						.binary(
+							BinOper::PgOperator(PgBinOper::JsonContainsAllKeys),
+							array_expr,
+						)
 				}
 				(FilterOperator::JsonbPathExists, FilterValue::String(path)) => {
 					// field @? ? - parameterized
-					Expr::cust_with_values(format!("{} @? ?", filter.field), [path.clone()])
-						.into_simple_expr()
+					Expr::cust_with_values(
+						format!("{} @? ?", quote_identifier(&filter.field)),
+						[path.clone()],
+					)
+					.into_simple_expr()
 				}
 				// PostgreSQL Range operators
 				(FilterOperator::RangeContains, v) => {
 					// field @> ? - parameterized
 					let val = Self::filter_value_to_sql_string(v);
-					Expr::cust_with_values(format!("{} @> ?", filter.field), [val])
-						.into_simple_expr()
+					Expr::cust_with_values(
+						format!("{} @> ?", quote_identifier(&filter.field)),
+						[val],
+					)
+					.into_simple_expr()
 				}
 				(FilterOperator::RangeContainedBy, FilterValue::String(range)) => {
 					// field <@ ? - parameterized
-					Expr::cust_with_values(format!("{} <@ ?", filter.field), [range.clone()])
-						.into_simple_expr()
+					Expr::cust_with_values(
+						format!("{} <@ ?", quote_identifier(&filter.field)),
+						[range.clone()],
+					)
+					.into_simple_expr()
 				}
 				(FilterOperator::RangeOverlaps, FilterValue::String(range)) => {
 					// field && ? - parameterized
-					Expr::cust_with_values(format!("{} && ?", filter.field), [range.clone()])
-						.into_simple_expr()
+					Expr::cust_with_values(
+						format!("{} && ?", quote_identifier(&filter.field)),
+						[range.clone()],
+					)
+					.into_simple_expr()
 				}
 				// Fallback for unsupported combinations
 				_ => {
@@ -2664,11 +2745,13 @@ where
 			let expr = match subq_cond {
 				SubqueryCondition::In { field, subquery } => {
 					// field IN (subquery)
-					Expr::cust(format!("{} IN {}", field, subquery)).into_simple_expr()
+					Expr::cust(format!("{} IN {}", quote_identifier(field), subquery))
+						.into_simple_expr()
 				}
 				SubqueryCondition::NotIn { field, subquery } => {
 					// field NOT IN (subquery)
-					Expr::cust(format!("{} NOT IN {}", field, subquery)).into_simple_expr()
+					Expr::cust(format!("{} NOT IN {}", quote_identifier(field), subquery))
+						.into_simple_expr()
 				}
 				SubqueryCondition::Exists { subquery } => {
 					// EXISTS (subquery)
@@ -2799,6 +2882,7 @@ where
 	}
 
 	/// Convert FilterValue to String representation
+	// Allow dead_code: internal conversion helper for filter value stringification in queries
 	#[allow(dead_code)]
 	fn value_to_string(v: &FilterValue) -> String {
 		match v {
@@ -2853,6 +2937,7 @@ where
 	}
 
 	/// Convert FilterValue to array of reinhardt_query::value::Value
+	// Allow dead_code: internal conversion for IN clause array parameter binding
 	#[allow(dead_code)]
 	fn value_to_array(v: &FilterValue) -> Vec<reinhardt_query::value::Value> {
 		match v {
@@ -2878,6 +2963,7 @@ where
 	///
 	/// This method generates a complete SELECT statement internally and extracts only
 	/// the WHERE portion, which is less efficient than using `build_where_condition()`.
+	// Allow dead_code: backward-compatible string-based WHERE clause builder for legacy code paths
 	#[allow(dead_code)]
 	fn build_where_clause(&self) -> (String, Vec<String>) {
 		if self.filters.is_empty() {
@@ -4166,6 +4252,7 @@ where
 		stmt.to_owned()
 	}
 
+	/// Deletes sql.
 	pub fn delete_sql(&self) -> (String, Vec<String>) {
 		let stmt = self.delete_query();
 		use reinhardt_query::prelude::{PostgresQueryBuilder, QueryBuilder};
@@ -4529,6 +4616,7 @@ where
 		self
 	}
 
+	/// Converts to sql.
 	pub fn to_sql(&self) -> String {
 		let mut stmt = if self.select_related_fields.is_empty() {
 			// Simple SELECT without JOINs
@@ -5467,8 +5555,31 @@ impl FilterValue {
 }
 
 // ============================================================================
-// Helper Functions for JOIN Support
+// Helper Functions
 // ============================================================================
+
+/// Quote a SQL identifier to prevent injection via field names.
+/// Uses PostgreSQL double-quote escaping (also valid for SQLite).
+/// Handles dot-separated qualified names (e.g., "table.column" becomes "table"."column").
+pub(crate) fn quote_identifier(field: &str) -> String {
+	if field.contains('\0') {
+		panic!("SQL identifier must not contain null bytes");
+	}
+
+	fn quote_single(name: &str) -> String {
+		format!("\"{}\"", name.replace('"', "\"\""))
+	}
+
+	if field.contains('.') {
+		field
+			.split('.')
+			.map(quote_single)
+			.collect::<Vec<_>>()
+			.join(".")
+	} else {
+		quote_single(field)
+	}
+}
 
 /// Parse field reference into reinhardt-query column expression
 ///
@@ -5495,12 +5606,23 @@ fn parse_column_reference(field: &str) -> reinhardt_query::prelude::ColumnRef {
 	} else if field.contains('.') {
 		// Qualified column reference (table.column format)
 		let parts: Vec<&str> = field.split('.').collect();
-		if parts.len() == 2 {
-			// Produces: "table"."column" instead of "table.column"
-			ColumnRef::table_column(Alias::new(parts[0]), Alias::new(parts[1]))
-		} else {
-			// Fallback for unexpected formats (e.g., schema.table.column)
-			ColumnRef::column(Alias::new(field))
+		match parts.as_slice() {
+			[table, column] => {
+				// Produces: "table"."column" instead of "table.column"
+				ColumnRef::table_column(Alias::new(*table), Alias::new(*column))
+			}
+			[schema, table, column] => {
+				// Produces: "schema"."table"."column"
+				ColumnRef::schema_table_column(
+					Alias::new(*schema),
+					Alias::new(*table),
+					Alias::new(*column),
+				)
+			}
+			_ => {
+				// Fallback for unexpected formats (4+ parts)
+				ColumnRef::column(Alias::new(field))
+			}
 		}
 	} else {
 		// Simple column reference
@@ -5512,6 +5634,7 @@ fn parse_column_reference(field: &str) -> reinhardt_query::prelude::ColumnRef {
 mod tests {
 	use crate::orm::query::UpdateValue;
 	use crate::orm::{FilterOperator, FilterValue, Model, QuerySet, query::Filter};
+	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use std::collections::HashMap;
 
@@ -6011,5 +6134,366 @@ mod tests {
 		let (sql, params) = queryset.delete_sql();
 		assert_eq!(sql, "DELETE FROM \"test_users\" WHERE \"id\" = $1");
 		assert_eq!(params, vec!["1"]);
+	}
+
+	#[rstest]
+	#[case("username", r#""username""#)]
+	#[case("user_id", r#""user_id""#)]
+	#[case(r#"a"b"#, r#""a""b""#)]
+	#[case("field; DROP TABLE users", r#""field; DROP TABLE users""#)]
+	#[case("", r#""""#)]
+	#[case("authors.id", r#""authors"."id""#)]
+	#[case("schema.table.column", r#""schema"."table"."column""#)]
+	fn test_quote_identifier(#[case] input: &str, #[case] expected: &str) {
+		// Arrange
+		// input and expected provided by rstest cases
+
+		// Act
+		let result = super::quote_identifier(input);
+
+		// Assert
+		assert_eq!(result, expected);
+	}
+
+	#[rstest]
+	fn test_outerref_filter_uses_safe_quoting() {
+		// Arrange
+		use crate::orm::expressions::OuterRef;
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"author_id".to_string(),
+			FilterOperator::Eq,
+			FilterValue::OuterRef(OuterRef::new("id")),
+		));
+
+		// Act
+		let sql = queryset.to_sql();
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_users" WHERE "author_id" = "id""#
+		);
+	}
+
+	#[rstest]
+	fn test_array_contains_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"tags".to_string(),
+			FilterOperator::ArrayContains,
+			FilterValue::Array(vec!["rust".to_string(), "web".to_string()]),
+		));
+
+		// Act
+		let sql = queryset.to_sql();
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_users" WHERE "tags" @> ARRAY['rust', 'web']"#
+		);
+	}
+
+	#[rstest]
+	fn test_outerref_dot_separated_renders_qualified_column() {
+		// Arrange
+		use crate::orm::expressions::OuterRef;
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"author_id".to_string(),
+			FilterOperator::Eq,
+			FilterValue::OuterRef(OuterRef::new("authors.id")),
+		));
+
+		// Act
+		let sql = queryset.to_sql();
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_users" WHERE "author_id" = "authors"."id""#
+		);
+	}
+
+	#[rstest]
+	fn test_injection_attempt_in_field_name_is_quoted() {
+		// Arrange
+		// Attempt SQL injection via field name with double quote
+		let malicious_field = r#"id" OR 1=1 --"#.to_string();
+
+		// Act
+		let quoted = super::quote_identifier(&malicious_field);
+
+		// Assert
+		// The double quote inside is escaped, preventing injection
+		assert_eq!(quoted, r#""id"" OR 1=1 --""#);
+		// Verify the quote is not broken out of
+		assert!(quoted.starts_with('"'));
+		assert!(quoted.ends_with('"'));
+	}
+
+	#[rstest]
+	#[should_panic(expected = "SQL identifier must not contain null bytes")]
+	fn test_quote_identifier_rejects_null_bytes() {
+		// Arrange
+		let field_with_null = "field\0name";
+
+		// Act
+		super::quote_identifier(field_with_null);
+
+		// Assert - should panic before reaching here
+	}
+
+	#[rstest]
+	#[case(FilterOperator::Ne, "<>")]
+	#[case(FilterOperator::Gt, ">")]
+	#[case(FilterOperator::Gte, ">=")]
+	#[case(FilterOperator::Lt, "<")]
+	#[case(FilterOperator::Lte, "<=")]
+	fn test_outerref_comparison_operators(#[case] op: FilterOperator, #[case] sql_op: &str) {
+		// Arrange
+		use crate::orm::expressions::OuterRef;
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"author_id".to_string(),
+			op,
+			FilterValue::OuterRef(OuterRef::new("id")),
+		));
+
+		// Act
+		let sql = queryset.to_sql();
+
+		// Assert
+		let expected = format!(
+			r#"SELECT * FROM "test_users" WHERE "author_id" {} "id""#,
+			sql_op
+		);
+		assert_eq!(sql, expected);
+	}
+
+	#[rstest]
+	fn test_array_contained_by_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"tags".to_string(),
+			FilterOperator::ArrayContainedBy,
+			FilterValue::Array(vec!["rust".to_string()]),
+		));
+
+		// Act
+		let sql = queryset.to_sql();
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_users" WHERE "tags" <@ ARRAY['rust']"#
+		);
+	}
+
+	#[rstest]
+	fn test_array_overlap_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"tags".to_string(),
+			FilterOperator::ArrayOverlap,
+			FilterValue::Array(vec!["rust".to_string()]),
+		));
+
+		// Act
+		let sql = queryset.to_sql();
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_users" WHERE "tags" && ARRAY['rust']"#
+		);
+	}
+
+	#[rstest]
+	fn test_full_text_match_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"content".to_string(),
+			FilterOperator::FullTextMatch,
+			FilterValue::String("search term".to_string()),
+		));
+
+		// Act
+		let sql = queryset.to_sql();
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_users" WHERE "content" @@ plainto_tsquery('english', 'search term')"#
+		);
+	}
+
+	#[rstest]
+	fn test_jsonb_contains_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"metadata".to_string(),
+			FilterOperator::JsonbContains,
+			FilterValue::String(r#"{"key": "value"}"#.to_string()),
+		));
+
+		// Act
+		let sql = queryset.to_sql();
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_users" WHERE "metadata" @> '{"key": "value"}'::jsonb"#
+		);
+	}
+
+	#[rstest]
+	fn test_jsonb_contained_by_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"metadata".to_string(),
+			FilterOperator::JsonbContainedBy,
+			FilterValue::String(r#"{"key": "value"}"#.to_string()),
+		));
+
+		// Act
+		let sql = queryset.to_sql();
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_users" WHERE "metadata" <@ '{"key": "value"}'::jsonb"#
+		);
+	}
+
+	#[rstest]
+	fn test_jsonb_key_exists_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"metadata".to_string(),
+			FilterOperator::JsonbKeyExists,
+			FilterValue::String("key".to_string()),
+		));
+
+		// Act
+		let sql = queryset.to_sql();
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_users" WHERE "metadata" ? 'key'"#
+		);
+	}
+
+	#[rstest]
+	fn test_jsonb_any_key_exists_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"metadata".to_string(),
+			FilterOperator::JsonbAnyKeyExists,
+			FilterValue::Array(vec!["key1".to_string(), "key2".to_string()]),
+		));
+
+		// Act
+		let sql = queryset.to_sql();
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_users" WHERE "metadata" ?| array['key1', 'key2']"#
+		);
+	}
+
+	#[rstest]
+	fn test_jsonb_all_keys_exist_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"metadata".to_string(),
+			FilterOperator::JsonbAllKeysExist,
+			FilterValue::Array(vec!["key1".to_string(), "key2".to_string()]),
+		));
+
+		// Act
+		let sql = queryset.to_sql();
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_users" WHERE "metadata" ?& array['key1', 'key2']"#
+		);
+	}
+
+	#[rstest]
+	fn test_jsonb_path_exists_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"metadata".to_string(),
+			FilterOperator::JsonbPathExists,
+			FilterValue::String("$.key".to_string()),
+		));
+
+		// Act
+		let sql = queryset.to_sql();
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_users" WHERE "metadata" @'$.key' "#
+		);
+	}
+
+	#[rstest]
+	fn test_range_contains_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"age_range".to_string(),
+			FilterOperator::RangeContains,
+			FilterValue::String("25".to_string()),
+		));
+
+		// Act
+		let sql = queryset.to_sql();
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_users" WHERE "age_range" @> '''25'''"#
+		);
+	}
+
+	#[rstest]
+	fn test_range_contained_by_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"age_range".to_string(),
+			FilterOperator::RangeContainedBy,
+			FilterValue::String("[20, 30]".to_string()),
+		));
+
+		// Act
+		let sql = queryset.to_sql();
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_users" WHERE "age_range" <@ '[20, 30]'"#
+		);
+	}
+
+	#[rstest]
+	fn test_range_overlaps_filter_quotes_field() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().filter(Filter::new(
+			"age_range".to_string(),
+			FilterOperator::RangeOverlaps,
+			FilterValue::String("[20, 30]".to_string()),
+		));
+
+		// Act
+		let sql = queryset.to_sql();
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"SELECT * FROM "test_users" WHERE "age_range" && '[20, 30]'"#
+		);
 	}
 }

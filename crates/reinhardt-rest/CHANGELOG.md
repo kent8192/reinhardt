@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-rc.11...reinhardt-rest@v0.1.0-rc.12) - 2026-03-18
+
+### Added
+
+- *(rest)* add operation-level OpenAPI route attributes
+
+### Fixed
+
+- *(rest)* address Copilot review feedback on OpenAPI annotations
+- *(rest)* add missing EndpointMetadata fields in qualified path test
+
+## [0.1.0-rc.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-rc.9...reinhardt-rest@v0.1.0-rc.10) - 2026-03-15
+
+### Documentation
+
+- update version references in crate READMEs to 0.1.0-rc.9
+
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-rc.8...reinhardt-rest@v0.1.0-rc.9) - 2026-03-15
+
+### Testing
+
+- *(openapi)* add missing tests for schema registration and HTTP delivery
+
 ## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-rc.1...reinhardt-rest@v0.1.0-rc.2) - 2026-03-04
 
 ### Fixed

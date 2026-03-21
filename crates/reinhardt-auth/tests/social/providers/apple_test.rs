@@ -3,7 +3,6 @@
 use reinhardt_auth::social::core::OAuthProvider;
 use reinhardt_auth::social::core::config::ProviderConfig;
 use reinhardt_auth::social::providers::AppleProvider;
-use rstest::*;
 
 #[tokio::test]
 async fn test_apple_provider_config() {

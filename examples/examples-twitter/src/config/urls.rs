@@ -9,15 +9,19 @@
 use reinhardt::UnifiedRouter;
 #[cfg(not(target_arch = "wasm32"))]
 use reinhardt::admin::admin_routes;
+#[cfg(server)]
 use reinhardt::routes;
 
 // Import app URL modules
 use crate::apps::{auth, dm, profile, relationship, tweet};
+#[cfg(server)]
 use crate::config::admin::configure_admin;
+#[cfg(server)]
 use crate::config::middleware::{
 	create_cache_control_middleware, create_cors_middleware, create_security_middleware,
 	create_session_middleware, create_static_files_middleware,
 };
+#[cfg(server)]
 use reinhardt::LoggingMiddleware;
 
 /// Build URL patterns for the application
@@ -38,9 +42,10 @@ use reinhardt::LoggingMiddleware;
 ///
 /// Each app's `routes()` function returns a `UnifiedRouter` with both
 /// server and client routes defined.
-#[routes]
+#[cfg_attr(server, routes)]
 pub fn routes() -> UnifiedRouter {
 	// Configure admin site (registration only, no DB needed yet)
+	#[cfg(server)]
 	let _admin = configure_admin();
 
 	// Admin routes require DatabaseConnection for query execution.
@@ -63,12 +68,14 @@ pub fn routes() -> UnifiedRouter {
 	// Mount admin panel routes (server-only, not available on wasm32)
 	#[cfg(not(target_arch = "wasm32"))]
 	let router = router.mount("/admin/", admin_routes());
-	router
-		// Apply middleware stack (order matters for request processing)
+	// Apply middleware stack (server-only)
+	#[cfg(server)]
+	let router = router
 		.with_middleware(LoggingMiddleware::new())
 		.with_middleware(create_security_middleware())
 		.with_middleware(create_cors_middleware())
 		.with_middleware(create_session_middleware())
 		.with_middleware(create_cache_control_middleware())
-		.with_middleware(create_static_files_middleware())
+		.with_middleware(create_static_files_middleware());
+	router
 }

@@ -219,6 +219,7 @@ impl SessionAnalytics for PrometheusAnalytics {
 mod tests {
 	use super::*;
 	use chrono::Utc;
+	use rstest::rstest;
 	use std::sync::OnceLock;
 
 	static ANALYTICS: OnceLock<PrometheusAnalytics> = OnceLock::new();
@@ -227,6 +228,7 @@ mod tests {
 		ANALYTICS.get_or_init(|| PrometheusAnalytics::new().unwrap())
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_prometheus_analytics_created() {
 		let analytics = get_analytics();
@@ -243,6 +245,7 @@ mod tests {
 		assert!(analytics.session_created().get() > 0);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_prometheus_analytics_accessed() {
 		let analytics = get_analytics();
@@ -271,6 +274,7 @@ mod tests {
 		assert!(analytics.session_access_miss().get() > 0);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_prometheus_analytics_deleted() {
 		let analytics = get_analytics();
@@ -291,6 +295,7 @@ mod tests {
 		);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_prometheus_analytics_expired() {
 		let analytics = get_analytics();

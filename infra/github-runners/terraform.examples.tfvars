@@ -23,7 +23,7 @@ github_owner      = "<github-username>"
 github_repository = "reinhardt-web"
 
 # Runner configuration (defaults tuned for reinhardt CI workload)
-runner_instance_types = ["c6a.2xlarge", "c6i.2xlarge", "c5a.2xlarge"]
+runner_instance_types = ["c7g.2xlarge", "c6g.2xlarge"]
 runner_max_count      = 30
 runner_extra_labels   = ["reinhardt-ci"]
 runner_ebs_size_gb    = 200
@@ -33,3 +33,11 @@ monthly_budget_limit_usd = "100"
 budget_alert_email       = "<your-email@example.com>"
 
 prefix = "reinhardt-ci"
+
+# Organizations module variable (for terraform-plan CI)
+organizations_account_email = "<your-email+reinhardt-ci@example.com>"
+
+# Hotpath runner (always-on, for lightweight CI control jobs)
+# Set to true after initial CI setup is confirmed working.
+enable_hotpath_runner        = true
+hotpath_runner_instance_type = "t4g.micro"

@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Manouche DSL - Domain Specific Language for reinhardt-pages.
 //!
 //! This crate provides the Abstract Syntax Tree (AST) structures, parsing logic,

@@ -14,6 +14,7 @@
 //! - test_user: Test user data (reinhardt-test)
 
 use chrono::Utc;
+#[allow(deprecated)] // CurrentUser is deprecated, will migrate to AuthUser in 0.2.0
 use reinhardt_auth::{BaseUser, CurrentUser, DefaultUser};
 use reinhardt_di::{InjectionContext, SingletonScope};
 use reinhardt_query::prelude::{

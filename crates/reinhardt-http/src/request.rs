@@ -53,12 +53,18 @@ impl TrustedProxies {
 
 /// HTTP Request representation
 pub struct Request {
+	/// The HTTP method (GET, POST, PUT, etc.).
 	pub method: Method,
+	/// The request URI (path and query string).
 	pub uri: Uri,
+	/// The HTTP protocol version.
 	pub version: Version,
+	/// The request headers.
 	pub headers: HeaderMap,
 	body: Bytes,
+	/// Path parameters extracted from the URL pattern.
 	pub path_params: HashMap<String, String>,
+	/// Query string parameters parsed from the URI.
 	pub query_params: HashMap<String, String>,
 	/// Indicates if this request came over HTTPS
 	pub is_secure: bool,
@@ -910,6 +916,32 @@ impl Request {
 		serde_urlencoded::from_str(&encoded)
 			.map_err(|e| crate::Error::Http(format!("Failed to parse query parameters: {}", e)))
 	}
+
+	/// Creates a lightweight copy of this request for dependency injection.
+	///
+	/// The clone shares the same extensions store (via internal `Arc`),
+	/// so `AuthState` and other extensions set on the original request
+	/// are accessible in the clone. Body and parsers are not copied
+	/// as they are not needed for DI resolution.
+	pub fn clone_for_di(&self) -> Self {
+		Request {
+			method: self.method.clone(),
+			uri: self.uri.clone(),
+			version: self.version,
+			headers: self.headers.clone(),
+			body: Bytes::new(),
+			path_params: self.path_params.clone(),
+			query_params: self.query_params.clone(),
+			is_secure: self.is_secure,
+			remote_addr: self.remote_addr,
+			#[cfg(feature = "parsers")]
+			parsers: Vec::new(),
+			#[cfg(feature = "parsers")]
+			parsed_data: Arc::new(Mutex::new(None)),
+			body_consumed: Arc::new(AtomicBool::new(false)),
+			extensions: self.extensions.clone(),
+		}
+	}
 }
 
 #[cfg(test)]
@@ -1129,5 +1161,57 @@ mod tests {
 			.unwrap();
 
 		assert!(request.validate_content_type("application/json").is_err());
+	}
+
+	#[rstest]
+	fn test_clone_for_di_shares_extensions() {
+		// Arrange
+		let request = Request::builder()
+			.method(Method::POST)
+			.uri("/api/users/42?page=1")
+			.version(Version::HTTP_11)
+			.header(header::CONTENT_TYPE, "application/json")
+			.body(Bytes::from("request body"))
+			.build()
+			.unwrap();
+
+		request.extensions.insert(42u32);
+
+		// Act
+		let cloned = request.clone_for_di();
+
+		// Assert - extensions are shared (same Arc backing store)
+		assert_eq!(cloned.extensions.get::<u32>(), Some(42));
+
+		// Verify metadata is preserved
+		assert_eq!(cloned.method, Method::POST);
+		assert_eq!(cloned.uri.path(), "/api/users/42");
+		assert_eq!(cloned.version, Version::HTTP_11);
+		assert!(cloned.headers.contains_key(header::CONTENT_TYPE));
+		assert_eq!(cloned.query_params.get("page"), Some(&"1".to_string()));
+
+		// Body should be empty (not needed for DI)
+		assert!(cloned.body().is_empty());
+	}
+
+	#[rstest]
+	fn test_clone_for_di_shares_extensions_bidirectionally() {
+		// Arrange
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.build()
+			.unwrap();
+
+		let cloned = request.clone_for_di();
+
+		// Act - insert into cloned extensions
+		cloned.extensions.insert("from_clone".to_string());
+
+		// Assert - original also sees it (shared backing store)
+		assert_eq!(
+			request.extensions.get::<String>(),
+			Some("from_clone".to_string())
+		);
 	}
 }

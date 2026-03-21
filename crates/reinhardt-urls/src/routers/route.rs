@@ -7,8 +7,10 @@ use std::sync::Arc;
 /// Similar to Django's URLPattern
 #[derive(Clone)]
 pub struct Route {
+	/// URL path pattern (e.g., `"/users/{id}/"`)
 	pub path: String,
 	handler: Arc<dyn Handler>,
+	/// Optional route name for reverse URL lookup.
 	pub name: Option<String>,
 	/// Namespace for this route (e.g., "users", "api")
 	/// When combined with name, forms "namespace:name"

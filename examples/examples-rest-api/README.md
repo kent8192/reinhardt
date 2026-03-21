@@ -273,7 +273,7 @@ async fn test_with_manual_setup() {
 - Error handling tests ensure proper status codes (400, 404, 405)
 - Comprehensive workflow tests verify end-to-end functionality
 
-See [Testing Standards](../../../docs/TESTING_STANDARDS.md) for comprehensive
+See [Testing Standards](../../../instructions/TESTING_STANDARDS.md) for comprehensive
 guidelines.
 
 ## Customization
@@ -302,7 +302,7 @@ pub fn routes() -> UnifiedRouter {
 
 ## References
 
-- [Reinhardt Documentation](https://docs.rs/reinhardt)
+- [Reinhardt Documentation](https://docs.rs/reinhardt-web)
 - [Django Settings Best Practices](https://docs.djangoproject.com/en/stable/topics/settings/)
 - [12 Factor App](https://12factor.net/)
 

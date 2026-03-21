@@ -38,7 +38,7 @@ jobs:
         shard: [1, 2, 3, 4, 5]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Rust
         uses: ./.github/actions/setup-rust

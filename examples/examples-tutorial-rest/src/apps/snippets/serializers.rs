@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
-use validator::Validate;
+use reinhardt::Validate;
+use reinhardt::core::serde::{Deserialize, Serialize};
 
 /// Serializer for creating/updating snippets
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
@@ -13,8 +13,8 @@ pub struct SnippetSerializer {
 
 	#[validate(length(
 		min = 1,
-		max = 65535,
-		message = "Code must be between 1 and 65535 characters"
+		max = 10000,
+		message = "Code must be between 1 and 10000 characters"
 	))]
 	pub code: String,
 
@@ -89,7 +89,7 @@ mod tests {
 		// Arrange
 		let at_limit = SnippetSerializer {
 			title: "Valid".to_string(),
-			code: "x".repeat(65535),
+			code: "x".repeat(10000),
 			language: "rust".to_string(),
 		};
 
@@ -105,7 +105,7 @@ mod tests {
 		// Arrange
 		let over_limit = SnippetSerializer {
 			title: "Valid".to_string(),
-			code: "x".repeat(65536),
+			code: "x".repeat(10001),
 			language: "rust".to_string(),
 		};
 

@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! # Reinhardt Database
 //!
 //! Django-style database layer for Reinhardt framework.

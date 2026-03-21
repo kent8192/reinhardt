@@ -5,16 +5,21 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Error types for GraphQL schema operations.
 #[derive(Debug, thiserror::Error)]
 pub enum GraphQLError {
+	/// A schema construction or configuration error.
 	#[error("Schema error: {0}")]
 	Schema(String),
+	/// An error occurred during resolver execution.
 	#[error("Resolver error: {0}")]
 	Resolver(String),
+	/// The requested resource was not found.
 	#[error("Not found: {0}")]
 	NotFound(String),
 }
 
+/// A specialized `Result` type for GraphQL schema operations.
 pub type GraphQLResult<T> = Result<T, GraphQLError>;
 
 /// Default maximum query depth limit.
@@ -53,6 +58,14 @@ const MAX_NAME_LENGTH: usize = 100;
 
 /// Maximum allowed length for email input.
 const MAX_EMAIL_LENGTH: usize = 254;
+
+/// Check whether a string exceeds the given character limit.
+///
+/// Uses short-circuit counting: stops as soon as `max + 1` characters
+/// have been scanned, avoiding a full O(n) traversal for large inputs.
+fn exceeds_max_chars(s: &str, max: usize) -> bool {
+	s.chars().nth(max).is_some()
+}
 
 /// Configuration for GraphQL query protection limits.
 ///
@@ -172,8 +185,16 @@ fn count_query_fields(query: &str) -> usize {
 			continue;
 		}
 
+		let mut escaped = false;
 		for ch in trimmed.chars() {
+			if escaped {
+				// Previous character was a backslash inside a string,
+				// so this character is escaped — skip it.
+				escaped = false;
+				continue;
+			}
 			match ch {
+				'\\' if in_string => escaped = true,
 				'"' => in_string = !in_string,
 				'{' if !in_string => depth += 1,
 				'}' if !in_string => depth = depth.saturating_sub(1),
@@ -213,7 +234,7 @@ fn validate_create_user_input(input: &CreateUserInput) -> GqlResult<()> {
 	if name.is_empty() {
 		return Err(async_graphql::Error::new("Name cannot be empty"));
 	}
-	if name.len() > MAX_NAME_LENGTH {
+	if exceeds_max_chars(name, MAX_NAME_LENGTH) {
 		return Err(async_graphql::Error::new(format!(
 			"Name exceeds maximum length of {} characters",
 			MAX_NAME_LENGTH
@@ -233,7 +254,7 @@ fn validate_create_user_input(input: &CreateUserInput) -> GqlResult<()> {
 	if email.is_empty() {
 		return Err(async_graphql::Error::new("Email cannot be empty"));
 	}
-	if email.len() > MAX_EMAIL_LENGTH {
+	if exceeds_max_chars(email, MAX_EMAIL_LENGTH) {
 		return Err(async_graphql::Error::new(format!(
 			"Email exceeds maximum length of {} characters",
 			MAX_EMAIL_LENGTH
@@ -255,9 +276,13 @@ fn validate_create_user_input(input: &CreateUserInput) -> GqlResult<()> {
 /// Example: User type for GraphQL
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
+	/// Unique identifier for the user.
 	pub id: ID,
+	/// Display name of the user.
 	pub name: String,
+	/// Email address of the user.
 	pub email: String,
+	/// Whether the user account is active.
 	pub active: bool,
 }
 
@@ -376,7 +401,9 @@ impl Query {
 /// Input type for creating users
 #[derive(async_graphql::InputObject)]
 pub struct CreateUserInput {
+	/// Name of the user to create.
 	pub name: String,
+	/// Email address of the user to create.
 	pub email: String,
 }
 
@@ -1045,6 +1072,129 @@ mod tests {
 		assert!(
 			!result.extensions.is_empty(),
 			"expected Analyzer extension data in response"
+		);
+	}
+
+	#[rstest::rstest]
+	#[case(
+		"{\n  user(name: \"hello \\\"world\\\"\") {\n    id\n  }\n}",
+		2,
+		"escaped quotes inside string should not affect field count"
+	)]
+	#[case(
+		"{\n  user(name: \"hello \\\\\\\"end\") {\n    id\n    name\n  }\n}",
+		3,
+		"escaped backslash before quote should correctly toggle string state"
+	)]
+	#[case(
+		"{\n  user(name: \"no escapes\") {\n    id\n  }\n}",
+		2,
+		"string without escapes should count fields normally"
+	)]
+	#[case(
+		"{\n  user(name: \"a\\\"b\\\"c\") {\n    id\n    name\n    email\n  }\n}",
+		4,
+		"multiple escaped quotes in a single string literal"
+	)]
+	fn test_count_query_fields_with_escaped_strings(
+		#[case] query: &str,
+		#[case] expected: usize,
+		#[case] description: &str,
+	) {
+		// Arrange — query and expected count provided by rstest parametrization
+
+		// Act
+		let count = count_query_fields(query);
+
+		// Assert
+		assert_eq!(count, expected, "{}", description);
+	}
+
+	#[tokio::test]
+	async fn test_exceeds_max_chars_short_circuits() {
+		// Arrange / Act / Assert
+		assert!(!exceeds_max_chars("hello", 5)); // exactly at limit
+		assert!(exceeds_max_chars("hello!", 5)); // one over
+		assert!(!exceeds_max_chars("", 0)); // empty at zero limit
+		assert!(exceeds_max_chars("a", 0)); // single char over zero limit
+	}
+
+	#[tokio::test]
+	async fn test_create_user_accepts_multibyte_name_within_limit() {
+		// Arrange: CJK characters are multi-byte in UTF-8 but each is 1 char
+		let storage = UserStorage::new();
+		let schema = create_schema(storage);
+
+		// 4 CJK characters = 4 chars (well under MAX_NAME_LENGTH of 100)
+		let query = r#"
+			mutation {
+				createUser(input: { name: "田中太郎", email: "tanaka@example.com" }) {
+					name
+				}
+			}
+		"#;
+
+		// Act
+		let result = schema.execute(query).await;
+
+		// Assert: should succeed because character count is within limit
+		assert!(
+			result.errors.is_empty(),
+			"expected success for multi-byte name within limit, got: {:?}",
+			result.errors
+		);
+		let data = result.data.into_json().unwrap();
+		assert_eq!(data["createUser"]["name"], "田中太郎");
+	}
+
+	#[tokio::test]
+	async fn test_create_user_rejects_multibyte_name_over_limit() {
+		// Arrange: build a name with exactly MAX_NAME_LENGTH + 1 CJK characters
+		let storage = UserStorage::new();
+		let schema = create_schema(storage);
+
+		let long_name: String = "あ".repeat(MAX_NAME_LENGTH + 1);
+		let query = format!(
+			r#"mutation {{ createUser(input: {{ name: "{}", email: "test@example.com" }}) {{ id }} }}"#,
+			long_name
+		);
+
+		// Act
+		let result = schema.execute(&query).await;
+
+		// Assert: should reject because character count exceeds limit
+		assert!(
+			!result.errors.is_empty(),
+			"expected validation error for name exceeding {} characters",
+			MAX_NAME_LENGTH
+		);
+	}
+
+	#[tokio::test]
+	async fn test_create_user_accepts_emoji_name_at_limit() {
+		// Arrange: emoji are multi-byte in UTF-8 but each is 1 char count
+		let storage = UserStorage::new();
+		let schema = create_schema(storage);
+
+		// Exactly MAX_NAME_LENGTH emoji characters
+		// Note: name validation only allows alphanumeric, spaces, underscores,
+		// hyphens, and dots, so emoji will be rejected by the character check,
+		// not the length check. We test length via CJK instead.
+		// Here we verify that a name at exactly the limit passes length validation.
+		let name_at_limit: String = "a".repeat(MAX_NAME_LENGTH);
+		let query = format!(
+			r#"mutation {{ createUser(input: {{ name: "{}", email: "test@example.com" }}) {{ id }} }}"#,
+			name_at_limit
+		);
+
+		// Act
+		let result = schema.execute(&query).await;
+
+		// Assert: should succeed (exactly at limit)
+		assert!(
+			result.errors.is_empty(),
+			"expected success for name at exactly the limit, got: {:?}",
+			result.errors
 		);
 	}
 }

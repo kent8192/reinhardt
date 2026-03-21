@@ -5,10 +5,15 @@ use std::sync::Arc;
 /// CORS middleware configuration
 #[non_exhaustive]
 pub struct CorsConfig {
+	/// Origins allowed to make cross-origin requests (e.g., `"*"` or specific domains).
 	pub allow_origins: Vec<String>,
+	/// HTTP methods allowed for cross-origin requests.
 	pub allow_methods: Vec<String>,
+	/// HTTP headers allowed in cross-origin requests.
 	pub allow_headers: Vec<String>,
+	/// Whether to include credentials (cookies, authorization headers) in CORS requests.
 	pub allow_credentials: bool,
+	/// Maximum time (in seconds) the browser should cache preflight responses.
 	pub max_age: Option<u64>,
 }
 
@@ -194,6 +199,7 @@ impl Middleware for CorsMiddleware {
 			// Add Vary: Origin when origin depends on request
 			if self.config.allow_origins.len() > 1
 				|| !self.config.allow_origins.contains(&"*".to_string())
+				|| self.config.allow_credentials
 			{
 				response.headers.insert(
 					hyper::header::VARY,
@@ -225,6 +231,7 @@ impl Middleware for CorsMiddleware {
 		// Add Vary: Origin when origin depends on request
 		if self.config.allow_origins.len() > 1
 			|| !self.config.allow_origins.contains(&"*".to_string())
+			|| self.config.allow_credentials
 		{
 			response.headers.insert(
 				hyper::header::VARY,
@@ -618,5 +625,86 @@ mod tests {
 				.get(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN)
 				.is_none()
 		);
+	}
+
+	#[tokio::test]
+	async fn test_wildcard_with_credentials_adds_vary_header_preflight() {
+		// Arrange: wildcard origins + credentials enabled (cache poisoning scenario)
+		let config = CorsConfig {
+			allow_origins: vec!["*".to_string()],
+			allow_methods: vec!["GET".to_string(), "POST".to_string()],
+			allow_headers: vec!["Content-Type".to_string()],
+			allow_credentials: true,
+			max_age: None,
+		};
+		let middleware = CorsMiddleware::new(config);
+		let handler = Arc::new(TestHandler);
+
+		let request = create_request_with_origin(
+			Method::OPTIONS,
+			"/api/data",
+			"https://attacker.example.com",
+		);
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert: preflight response must include Vary: Origin to prevent cache poisoning
+		assert_eq!(response.status, StatusCode::NO_CONTENT);
+		assert_eq!(
+			response
+				.headers
+				.get(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+				.unwrap(),
+			"https://attacker.example.com"
+		);
+		assert_eq!(
+			response
+				.headers
+				.get(hyper::header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+				.unwrap(),
+			"true"
+		);
+		// Vary: Origin MUST be present when credentials + wildcard causes origin reflection
+		assert_eq!(response.headers.get(hyper::header::VARY).unwrap(), "Origin");
+	}
+
+	#[tokio::test]
+	async fn test_wildcard_with_credentials_adds_vary_header_regular_request() {
+		// Arrange: wildcard origins + credentials enabled (cache poisoning scenario)
+		let config = CorsConfig {
+			allow_origins: vec!["*".to_string()],
+			allow_methods: vec!["GET".to_string()],
+			allow_headers: vec!["Content-Type".to_string()],
+			allow_credentials: true,
+			max_age: None,
+		};
+		let middleware = CorsMiddleware::new(config);
+		let handler = Arc::new(TestHandler);
+
+		let request =
+			create_request_with_origin(Method::GET, "/api/data", "https://victim.example.com");
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert: regular response must include Vary: Origin to prevent cache poisoning
+		assert_eq!(response.status, StatusCode::OK);
+		assert_eq!(
+			response
+				.headers
+				.get(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+				.unwrap(),
+			"https://victim.example.com"
+		);
+		assert_eq!(
+			response
+				.headers
+				.get(hyper::header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+				.unwrap(),
+			"true"
+		);
+		// Vary: Origin MUST be present when credentials + wildcard causes origin reflection
+		assert_eq!(response.headers.get(hyper::header::VARY).unwrap(), "Origin");
 	}
 }

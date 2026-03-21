@@ -155,6 +155,7 @@ fn test_commands_makemigrations_parse_app_labels() {
 		name: None,
 		check: false,
 		empty: false,
+		merge: false,
 		force_empty_state: false,
 		migration_dir: PathBuf::from("./migrations"),
 	};
@@ -540,6 +541,7 @@ fn test_empty_app_labels() {
 		name: None,
 		check: false,
 		empty: false,
+		merge: false,
 		force_empty_state: false,
 		migration_dir: PathBuf::from("./migrations"),
 	};
@@ -568,6 +570,7 @@ fn test_special_characters_in_paths() {
 		name: None,
 		check: false,
 		empty: false,
+		merge: false,
 		force_empty_state: false,
 		migration_dir: special_path.clone(),
 	};
@@ -1362,5 +1365,55 @@ fn test_runserver_pages_integration() {
 		assert!(no_spa, "no_spa should be true");
 	} else {
 		panic!("Expected Runserver command");
+	}
+}
+
+// ============================================================================
+// Makemigrations --merge Flag Tests
+// ============================================================================
+
+/// Test: Parse Makemigrations command with --merge flag
+///
+/// Category: Happy Path
+/// Verifies that --merge flag is correctly parsed.
+#[cfg(feature = "migrations")]
+#[rstest]
+fn test_makemigrations_merge_flag_parsed() {
+	// Arrange
+	let cli = Cli::try_parse_from(["manage", "makemigrations", "--merge"]).unwrap();
+
+	// Act & Assert
+	match cli.command {
+		Commands::Makemigrations { merge, .. } => {
+			assert!(merge, "--merge flag should be true");
+		}
+		_ => panic!("Expected Makemigrations command"),
+	}
+}
+
+/// Test: Parse Makemigrations command with --merge and --name
+///
+/// Category: Happy Path
+/// Verifies that --merge and --name flags work together.
+#[cfg(feature = "migrations")]
+#[rstest]
+fn test_makemigrations_merge_with_name() {
+	// Arrange
+	let cli = Cli::try_parse_from([
+		"manage",
+		"makemigrations",
+		"--merge",
+		"--name",
+		"resolve_conflicts",
+	])
+	.unwrap();
+
+	// Act & Assert
+	match cli.command {
+		Commands::Makemigrations { merge, name, .. } => {
+			assert!(merge, "--merge flag should be true");
+			assert_eq!(name, Some("resolve_conflicts".to_string()));
+		}
+		_ => panic!("Expected Makemigrations command"),
 	}
 }

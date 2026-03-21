@@ -113,6 +113,7 @@ pub trait TestDatabase: Send + Sync {
 
 /// PostgreSQL test container
 pub struct PostgresContainer {
+	// Allow dead_code: container handle must be held to prevent automatic cleanup by TestContainers
 	#[allow(dead_code)]
 	container: ContainerAsync<GenericImage>,
 	host: String,
@@ -160,7 +161,7 @@ impl PostgresContainer {
 		use testcontainers::core::IntoContainerPort;
 
 		// Use GenericImage to ensure port is properly exposed
-		let image = GenericImage::new("postgres", "16-alpine")
+		let image = GenericImage::new("postgres", "17-alpine")
 			.with_exposed_port(5432.tcp())
 			.with_wait_for(WaitFor::message_on_stderr(
 				"database system is ready to accept connections",
@@ -220,6 +221,7 @@ impl TestDatabase for PostgresContainer {
 
 /// MySQL test container
 pub struct MySqlContainer {
+	// Allow dead_code: container handle must be held to prevent automatic cleanup by TestContainers
 	#[allow(dead_code)]
 	container: ContainerAsync<Mysql>,
 	host: String,
@@ -290,6 +292,7 @@ impl TestDatabase for MySqlContainer {
 
 /// Redis test container
 pub struct RedisContainer {
+	// Allow dead_code: container handle must be held to prevent automatic cleanup by TestContainers
 	#[allow(dead_code)]
 	container: ContainerAsync<GenericImage>,
 	host: String,
@@ -415,6 +418,7 @@ impl RedisContainer {
 
 /// Memcached test container
 pub struct MemcachedContainer {
+	// Allow dead_code: container handle must be held to prevent automatic cleanup by TestContainers
 	#[allow(dead_code)]
 	container: ContainerAsync<GenericImage>,
 	host: String,
@@ -596,6 +600,7 @@ where
 
 /// RabbitMQ test container
 pub struct RabbitMQContainer {
+	// Allow dead_code: container handle must be held to prevent automatic cleanup by TestContainers
 	#[allow(dead_code)]
 	container: ContainerAsync<GenericImage>,
 	host: String,
@@ -735,6 +740,7 @@ where
 
 /// Mailpit test container for SMTP testing
 pub struct MailpitContainer {
+	// Allow dead_code: container handle must be held to prevent automatic cleanup by TestContainers
 	#[allow(dead_code)]
 	container: ContainerAsync<GenericImage>,
 	host: String,

@@ -8,7 +8,7 @@ use reinhardt::UnifiedRouter;
 use reinhardt::pages::server_fn::ServerFnRouterExt;
 
 #[cfg(server)]
-use crate::apps::auth::server::server_fn::{current_user, login, logout, register};
+use crate::apps::auth::shared::server_fn::{current_user, login, logout, register};
 
 #[cfg(client)]
 use crate::apps::auth::client::components::{login_form, register_form};

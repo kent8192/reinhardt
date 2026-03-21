@@ -40,6 +40,7 @@ mod routes;
 mod routes_registration;
 mod schema;
 mod use_inject;
+mod validate_derive;
 
 use action::action_impl;
 use admin::admin_impl;
@@ -636,6 +637,13 @@ pub fn derive_app_config(input: TokenStream) -> TokenStream {
 
 /// Collect migrations and register them with the global registry
 ///
+/// # Deprecated since 0.2.0
+///
+/// **This macro is deprecated.** Use `FilesystemSource` instead for loading migrations.
+/// `FilesystemSource` scans directories for `.rs` migration files and does not require
+/// compile-time registration. It is consistent with `manage migrate` behavior and
+/// works reliably in Cargo workspaces when using `env!("CARGO_MANIFEST_DIR")`.
+///
 /// This macro generates a `MigrationProvider` implementation and automatically
 /// registers it with the global migration registry using `linkme::distributed_slice`.
 ///
@@ -727,6 +735,30 @@ pub fn derive_apply_update(input: TokenStream) -> TokenStream {
 	let input = parse_macro_input!(input as syn::DeriveInput);
 
 	apply_update_derive_impl(input)
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
+}
+
+/// Derive macro for struct-level validation
+///
+/// Implements the `Validate` trait using `#[validate(...)]` field attributes
+/// to call Reinhardt's built-in validators.
+///
+/// # Supported Attributes
+///
+/// - `#[validate(email)]` - Validate email format
+/// - `#[validate(url)]` - Validate URL format
+/// - `#[validate(length(min = N, max = M))]` - Validate string length
+/// - `#[validate(range(min = N, max = M))]` - Validate numeric range
+/// - `message = "..."` - Custom error message (inside rule parentheses)
+///
+/// `Option<T>` fields are skipped when `None`.
+///
+#[proc_macro_derive(Validate, attributes(validate))]
+pub fn derive_validate(input: TokenStream) -> TokenStream {
+	let input = parse_macro_input!(input as syn::DeriveInput);
+
+	validate_derive::validate_derive_impl(input)
 		.unwrap_or_else(|e| e.to_compile_error())
 		.into()
 }

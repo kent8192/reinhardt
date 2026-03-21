@@ -19,6 +19,7 @@ pub struct TestViewSet {
 }
 
 impl TestViewSet {
+	/// Create a new `TestViewSet` with the given basename.
 	pub fn new(basename: impl Into<String>) -> Self {
 		Self {
 			basename: basename.into(),
@@ -27,11 +28,13 @@ impl TestViewSet {
 		}
 	}
 
+	/// Set whether this viewset requires login.
 	pub fn with_login_required(mut self, login_required: bool) -> Self {
 		self.login_required = login_required;
 		self
 	}
 
+	/// Set the required permissions for this viewset.
 	pub fn with_permissions(mut self, permissions: Vec<String>) -> Self {
 		self.required_permissions = permissions;
 		self
@@ -90,6 +93,7 @@ pub struct SimpleViewSet {
 }
 
 impl SimpleViewSet {
+	/// Create a new `SimpleViewSet` with the given basename.
 	pub fn new(basename: impl Into<String>) -> Self {
 		Self {
 			basename: basename.into(),

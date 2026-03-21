@@ -92,18 +92,37 @@ mkdir -p "$LAMBDA_DIR"
 
 BASE_URL="https://github.com/github-aws-runners/terraform-aws-github-runner/releases/download/v${MODULE_VERSION}"
 
+# Version tracking file to detect version changes across runs
+VERSION_FILE="${LAMBDA_DIR}/.lambda-version"
+CURRENT_TRACKED_VERSION=""
+if [[ -f "$VERSION_FILE" ]]; then
+  CURRENT_TRACKED_VERSION=$(cat "$VERSION_FILE")
+fi
+
+# If module version changed, re-download all Lambda zips
+if [[ "$CURRENT_TRACKED_VERSION" != "$MODULE_VERSION" && -n "$CURRENT_TRACKED_VERSION" ]]; then
+  echo "  [version-change] Lambda version changed: v${CURRENT_TRACKED_VERSION} -> v${MODULE_VERSION}"
+  echo "  [cleanup] Removing outdated Lambda zip files..."
+  for zip_name in webhook runners runner-binaries-syncer; do
+    rm -f "${LAMBDA_DIR}/${zip_name}.zip"
+  done
+fi
+
 # Download each required Lambda zip (skip if already downloaded for this version)
 for LAMBDA_NAME in webhook runners runner-binaries-syncer; do
   DEST="${LAMBDA_DIR}/${LAMBDA_NAME}.zip"
   # Check if the file exists and is non-empty
   if [[ -f "$DEST" && -s "$DEST" ]]; then
-    echo "  [skip] ${LAMBDA_NAME}.zip already exists"
+    echo "  [skip] ${LAMBDA_NAME}.zip already exists (v${MODULE_VERSION})"
   else
     echo "  [download] ${LAMBDA_NAME}.zip from v${MODULE_VERSION}..."
     curl -fL --progress-bar -o "$DEST" "${BASE_URL}/${LAMBDA_NAME}.zip"
     echo "  [ok] ${LAMBDA_NAME}.zip ($(du -sh "$DEST" | cut -f1))"
   fi
 done
+
+# Record the current version for future runs
+echo "$MODULE_VERSION" > "$VERSION_FILE"
 
 echo ""
 echo "All Lambda zip files are ready in ./${LAMBDA_DIR}/"

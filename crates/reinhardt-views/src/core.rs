@@ -8,6 +8,7 @@ use std::collections::HashMap;
 /// Base trait for all generic views
 #[async_trait]
 pub trait View: Send + Sync {
+	/// Dispatch the request and return a response.
 	async fn dispatch(&self, request: Request) -> Result<Response>;
 
 	/// Returns the list of HTTP methods allowed by this view

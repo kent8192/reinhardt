@@ -72,3 +72,47 @@ impl UserRepository for SimpleUserRepository {
 		})))
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_simple_user_repo_returns_user() {
+		// Arrange
+		let repo = SimpleUserRepository;
+		let user_id = "test_user_42";
+
+		// Act
+		let result = repo.get_user_by_id(user_id).await;
+
+		// Assert
+		let user = result
+			.expect("get_user_by_id should not return Err")
+			.expect("get_user_by_id should return Some for any input");
+		assert_eq!(user.username(), user_id);
+		assert!(user.is_active());
+		assert!(user.is_authenticated());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_simple_user_repo_deterministic_uuid() {
+		// Arrange
+		let repo = SimpleUserRepository;
+		let user_id = "deterministic_id_input";
+		let expected_uuid = Uuid::new_v5(&Uuid::NAMESPACE_URL, user_id.as_bytes());
+
+		// Act
+		let first_result = repo.get_user_by_id(user_id).await;
+		let second_result = repo.get_user_by_id(user_id).await;
+
+		// Assert
+		let first_user = first_result.unwrap().unwrap();
+		let second_user = second_result.unwrap().unwrap();
+		assert_eq!(first_user.id(), expected_uuid.to_string());
+		assert_eq!(first_user.id(), second_user.id());
+	}
+}

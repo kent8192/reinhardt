@@ -67,6 +67,7 @@ impl Serializer for JsonSerializer {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 
 	#[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -105,5 +106,22 @@ mod tests {
 
 		assert_eq!(restored["user_id"], 123);
 		assert_eq!(restored["username"], "alice");
+	}
+
+	#[rstest]
+	#[test]
+	fn test_empty_data_roundtrip() {
+		// Arrange
+		let serializer = JsonSerializer;
+		let data: std::collections::HashMap<String, serde_json::Value> =
+			std::collections::HashMap::new();
+
+		// Act
+		let bytes = serializer.serialize(&data).unwrap();
+		let restored: std::collections::HashMap<String, serde_json::Value> =
+			serializer.deserialize(&bytes).unwrap();
+
+		// Assert
+		assert_eq!(restored, data);
 	}
 }

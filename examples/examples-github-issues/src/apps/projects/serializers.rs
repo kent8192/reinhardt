@@ -1,7 +1,7 @@
 //! GraphQL types and input objects for projects
 
-use async_graphql::{Context, Enum, ID, InputObject, Object, Result as GqlResult};
 use chrono::{DateTime, Utc};
+use reinhardt::graphql::{Context, Enum, GqlResult, ID, InputObject, Object};
 
 use crate::apps::projects::models::{Project, ProjectMember};
 

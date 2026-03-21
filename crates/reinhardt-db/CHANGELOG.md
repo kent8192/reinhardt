@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.12...reinhardt-db@v0.1.0-rc.13) - 2026-03-18
+
+### Fixed
+
+- *(migrations)* skip duplicate operations check for empty-operations migrations
+
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.11...reinhardt-db@v0.1.0-rc.12) - 2026-03-18
+
+### Added
+
+- *(db)* add migration conflict detection and merge name generation
+
+### Documentation
+
+- *(db)* recommend CARGO_MANIFEST_DIR for workspace-safe migration paths
+
+### Fixed
+
+- *(db)* warn when FilesystemSource root directory does not exist
+
+### Other
+
+- incorporate main branch docs.rs fixes
+
+### Styling
+
+- *(db)* apply auto-fix formatting to filesystem source
+
+## [0.1.0-rc.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.10...reinhardt-db@v0.1.0-rc.11) - 2026-03-16
+
+### Fixed
+
+- *(reinhardt-db)* fix makemigrations codegen for type mismatch and missing fields
+
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.8...reinhardt-db@v0.1.0-rc.9) - 2026-03-15
+
+### Changed
+
+- *(db)* centralize schema identifier escaping and document value_expression safety
+
+### Fixed
+
+- *(db)* escape SQL identifiers in extension and schema operations
+- *(db)* replace lock/read/write unwrap with poison-safe alternatives
+- *(db)* add double-panic prevention and improve poison recovery
+
+### Styling
+
+- apply auto-fix for fmt and clippy
+
+### Testing
+
+- *(db)* add schema name escaping tests
+
 ## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.4...reinhardt-db@v0.1.0-rc.5) - 2026-03-07
 
 ### Added

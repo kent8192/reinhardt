@@ -37,17 +37,17 @@ args = ["runserver"]
 [tasks.makemigrations]
 description = "Create new migrations based on model changes"
 command = "cargo"
-args = ["run", "--bin", "manage", "makemigrations"]
+args = ["run", "--bin", "examples-tutorial-basis", "makemigrations"]
 
 [tasks.makemigrations-app]
 description = "Create new migrations for a specific app (usage: cargo make makemigrations-app -- <app_label>)"
 command = "cargo"
-args = ["run", "--bin", "manage", "makemigrations", "${@}"]
+args = ["run", "--bin", "examples-tutorial-basis", "makemigrations", "${@}"]
 
 [tasks.migrate]
 description = "Apply database migrations"
 command = "cargo"
-args = ["run", "--bin", "manage", "migrate"]
+args = ["run", "--bin", "examples-tutorial-basis", "migrate"]
 
 # ============================================================================
 # Static Files
@@ -56,7 +56,7 @@ args = ["run", "--bin", "manage", "migrate"]
 [tasks.collectstatic]
 description = "Collect static files into STATIC_ROOT"
 command = "cargo"
-args = ["run", "--bin", "manage", "collectstatic"]
+args = ["run", "--bin", "examples-tutorial-basis", "collectstatic"]
 
 # ============================================================================
 # Project Management
@@ -65,17 +65,17 @@ args = ["run", "--bin", "manage", "collectstatic"]
 [tasks.check]
 description = "Check the project for common issues"
 command = "cargo"
-args = ["run", "--bin", "manage", "check"]
+args = ["run", "--bin", "examples-tutorial-basis", "check"]
 
 [tasks.showurls]
 description = "Display all registered URL patterns"
 command = "cargo"
-args = ["run", "--bin", "manage", "showurls"]
+args = ["run", "--bin", "examples-tutorial-basis", "showurls"]
 
 [tasks.shell]
 description = "Run an interactive Rust shell (REPL)"
 command = "cargo"
-args = ["run", "--bin", "manage", "shell"]
+args = ["run", "--bin", "examples-tutorial-basis", "shell"]
 
 # ============================================================================
 # Testing
@@ -171,8 +171,14 @@ description = "Run WASM tests with browser (for debugging)"
 command = "wasm-pack"
 args = ["test", "--chrome"]
 
+[tasks.wasm-compile-dev]
+description = "Compile WASM binary (debug mode)"
+command = "cargo"
+args = ["build", "--target", "wasm32-unknown-unknown"]
+
 [tasks.wasm-bindgen-dev]
 description = "Generate WASM bindings using wasm-pack (debug mode)"
+dependencies = ["wasm-compile-dev"]
 command = "wasm-pack"
 args = [
 	"build",
@@ -191,8 +197,14 @@ cargo run --bin examples-tutorial-basis collectstatic --no-input
 echo "✓ WASM build and collectstatic completed"
 '''
 
+[tasks.wasm-compile-release]
+description = "Compile WASM binary (release mode)"
+command = "cargo"
+args = ["build", "--target", "wasm32-unknown-unknown", "--release"]
+
 [tasks.wasm-bindgen-release]
 description = "Generate WASM bindings using wasm-pack (release mode)"
+dependencies = ["wasm-compile-release"]
 command = "wasm-pack"
 args = [
 	"build",
@@ -233,17 +245,57 @@ rm -rf dist dist-wasm
 echo "✓ Cleaned WASM artifacts"
 '''
 
+[tasks.clean-cache]
+description = "Clean WASM artifacts and Rust incremental build cache"
+script = '''
+echo "🧹 Cleaning build cache..."
+
+# WASM artifacts
+if [ -d "dist-wasm" ]; then
+	rm -rf dist-wasm
+	echo "  ✓ Removed dist-wasm/"
+fi
+
+if [ -d "dist" ]; then
+	rm -rf dist
+	echo "  ✓ Removed dist/"
+fi
+
+# Rust incremental build cache
+if [ -d "target/debug/incremental" ]; then
+	rm -rf target/debug/incremental
+	echo "  ✓ Removed target/debug/incremental/"
+fi
+
+# WASM target build cache
+if [ -d "target/wasm32-unknown-unknown" ]; then
+	rm -rf target/wasm32-unknown-unknown
+	echo "  ✓ Removed target/wasm32-unknown-unknown/"
+fi
+
+echo "✨ Build cache cleaned"
+'''
+
 # ============================================================================
 # Development Workflow
 # ============================================================================
 
 [tasks.dev]
 description = "Build WASM and start development server with frontend"
-dependencies = ["wasm-build-dev", "run-dev-server"]
+dependencies = ["clean-cache", "wasm-build-dev", "run-dev-server"]
 
 [tasks.run-dev-server]
+description = "Start development server with frontend (MUST run from project directory)"
 script = '''
 #!/bin/bash
+CURRENT_DIR=$(basename "$PWD")
+if [ "$CURRENT_DIR" != "examples-tutorial-basis" ]; then
+	echo "Error: This command must be run from examples/examples-tutorial-basis directory"
+	echo "Current directory: $PWD"
+	echo "Please run: cd examples/examples-tutorial-basis && cargo make dev"
+	exit 1
+fi
+
 echo "🚀 Starting development server with WASM frontend..."
 cargo run --bin examples-tutorial-basis -- runserver --with-pages --noreload
 '''
@@ -254,7 +306,7 @@ dependencies = ["build", "runserver-watch"]
 
 [tasks.dev-release]
 description = "Build optimized WASM and start server"
-dependencies = ["wasm-build-release", "run-dev-release-server"]
+dependencies = ["clean-cache", "wasm-build-release", "collectstatic", "run-dev-release-server"]
 
 [tasks.run-dev-release-server]
 script = '''
@@ -278,14 +330,14 @@ dependencies = ["fmt-check", "clippy-check", "build", "test"]
 [tasks.runserver-v]
 description = "Start the development server with verbose output"
 command = "cargo"
-args = ["run", "--bin", "manage", "runserver", "-v"]
+args = ["run", "--bin", "examples-tutorial-basis", "runserver", "-v"]
 
 [tasks.runserver-vv]
 description = "Start the development server with very verbose output"
 command = "cargo"
-args = ["run", "--bin", "manage", "runserver", "-vv"]
+args = ["run", "--bin", "examples-tutorial-basis", "runserver", "-vv"]
 
 [tasks.runserver-vvv]
 description = "Start the development server with maximum verbosity"
 command = "cargo"
-args = ["run", "--bin", "manage", "runserver", "-vvv"]
+args = ["run", "--bin", "examples-tutorial-basis", "runserver", "-vvv"]

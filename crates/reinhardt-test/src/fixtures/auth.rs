@@ -29,15 +29,23 @@ pub use reinhardt_auth::{
 /// ```
 #[derive(Clone, Debug)]
 pub struct TestUser {
+	/// Unique identifier for the test user.
 	pub id: Uuid,
+	/// Username for authentication.
 	pub username: String,
+	/// Email address associated with the test user.
 	pub email: String,
+	/// Whether the user account is active and can authenticate.
 	pub is_active: bool,
+	/// Whether the user has admin privileges.
 	pub is_admin: bool,
+	/// Whether the user has staff-level access.
 	pub is_staff: bool,
+	/// Whether the user has superuser (all permissions) access.
 	pub is_superuser: bool,
 }
 
+/// Creates a default [`TestUser`] fixture with standard non-privileged settings.
 #[fixture]
 pub fn test_user() -> TestUser {
 	TestUser {

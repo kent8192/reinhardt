@@ -168,8 +168,11 @@ fn split_sql_statements(sql: &str) -> Vec<String> {
 }
 
 #[derive(Debug)]
+/// Represents a execution result.
 pub struct ExecutionResult {
+	/// The applied.
 	pub applied: Vec<String>,
+	/// The failed.
 	pub failed: Option<String>,
 }
 
@@ -302,6 +305,7 @@ impl DatabaseMigrationExecutor {
 		}
 	}
 
+	/// Performs the apply migrations operation.
 	pub async fn apply_migrations(&mut self, migrations: &[Migration]) -> Result<ExecutionResult> {
 		let mut applied = Vec::new();
 
@@ -693,6 +697,7 @@ impl DatabaseMigrationExecutor {
 	/// Build migration plan - returns list of migrations to apply
 	///
 	/// Returns (app_label, migration_name) tuples in dependency order
+	// Allow dead_code: public API for migration CLI tooling to preview pending migrations
 	#[allow(dead_code)]
 	pub async fn build_plan(&self, service: &MigrationService) -> Result<Vec<(String, String)>> {
 		let graph = service.build_dependency_graph().await?;
@@ -946,6 +951,7 @@ impl DatabaseMigrationExecutor {
 	}
 
 	/// Execute a migration by loading it from the service
+	// Allow dead_code: public API for programmatic single-migration execution
 	#[allow(dead_code)]
 	pub async fn execute_migration(
 		&mut self,

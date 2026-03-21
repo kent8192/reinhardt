@@ -74,7 +74,12 @@ pub enum ReflectionError {
 	/// Field not found in model
 	FieldNotFound(String),
 	/// Type mismatch when accessing field
-	TypeMismatch { expected: String, actual: String },
+	TypeMismatch {
+		/// The expected type name.
+		expected: String,
+		/// The actual type name.
+		actual: String,
+	},
 	/// Invalid operation
 	InvalidOperation(String),
 	/// Serialization/deserialization error
@@ -307,6 +312,7 @@ pub struct ModelReflector {
 	/// Table name
 	table_name: String,
 	/// Type ID for runtime type checking
+	// Allow dead_code: stored for future runtime type-safe downcasting in reflection API
 	#[allow(dead_code)]
 	type_id: TypeId,
 }

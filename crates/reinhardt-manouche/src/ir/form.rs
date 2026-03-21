@@ -32,10 +32,15 @@ pub enum FormActionIR {
 /// IR for form method.
 #[derive(Debug)]
 pub enum FormMethodIR {
+	/// HTTP GET method.
 	Get,
+	/// HTTP POST method.
 	Post,
+	/// HTTP PUT method.
 	Put,
+	/// HTTP PATCH method.
 	Patch,
+	/// HTTP DELETE method.
 	Delete,
 }
 
@@ -61,16 +66,27 @@ pub struct FieldIR {
 /// IR for field types.
 #[derive(Debug)]
 pub enum FieldTypeIR {
+	/// Character/text field.
 	CharField,
+	/// Integer number field.
 	IntegerField,
+	/// Floating-point number field.
 	FloatField,
+	/// Boolean/checkbox field.
 	BooleanField,
+	/// Selection from predefined choices.
 	ChoiceField,
+	/// Date-only field.
 	DateField,
+	/// Date and time field.
 	DateTimeField,
+	/// Email address field.
 	EmailField,
+	/// URL field.
 	UrlField,
+	/// File upload field.
 	FileField,
+	/// Custom field type with the given type name.
 	Custom(String),
 }
 
@@ -97,16 +113,27 @@ pub struct WidgetIR {
 /// IR for widget types.
 #[derive(Debug)]
 pub enum WidgetTypeIR {
+	/// Text input widget.
 	TextInput,
+	/// Password input widget.
 	PasswordInput,
+	/// Multi-line text area widget.
 	TextArea,
+	/// Dropdown select widget.
 	Select,
+	/// Checkbox widget.
 	Checkbox,
+	/// Radio button widget.
 	Radio,
+	/// File upload widget.
 	FileInput,
+	/// Date picker widget.
 	DateInput,
+	/// Date-time picker widget.
 	DateTimeInput,
+	/// Hidden input widget.
 	Hidden,
+	/// Custom widget type with the given type name.
 	Custom(String),
 }
 

@@ -16,8 +16,3 @@ variable "account_email" {
   # Example: "ci-runners+reinhardt@yourdomain.com"
 }
 
-variable "existing_account_id" {
-  description = "Existing AWS account ID to import (leave empty for new account creation)"
-  type        = string
-  default     = "" # Set to account ID (e.g. "123456789012") if importing existing account
-}

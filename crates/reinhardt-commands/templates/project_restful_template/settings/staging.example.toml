@@ -8,7 +8,7 @@
 debug = false
 
 # Secret key (MUST be changed and kept secret!)
-secret_key = "CHANGE_THIS_STAGING_SECRET_KEY"
+secret_key = "{{ secret_key }}"
 
 # Allowed hosts for staging
 allowed_hosts = ["staging.example.com", "*.staging.example.com"]

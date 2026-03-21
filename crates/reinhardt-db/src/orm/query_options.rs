@@ -100,9 +100,13 @@ pub enum CompiledCacheOption {
 /// Isolation level for transactions
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IsolationLevel {
+	/// ReadUncommitted variant.
 	ReadUncommitted,
+	/// ReadCommitted variant.
 	ReadCommitted,
+	/// RepeatableRead variant.
 	RepeatableRead,
+	/// Serializable variant.
 	Serializable,
 }
 

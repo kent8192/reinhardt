@@ -132,6 +132,10 @@
   color: ededed
   description: Example projects and demo applications
 
+- name: infrastructure
+  color: "0e8a16"
+  description: "Infrastructure and Terraform changes"
+
 # Code Quality Labels
 - name: refactoring
   color: ededed
@@ -187,6 +191,14 @@
   description: "Automated PR (release-plz)"
 
 # Automation Labels
+- name: stale
+  color: ededed
+  description: Automatically marked as stale due to inactivity
+
 - name: auto-closed
   color: c5def5
   description: Automatically closed when all sub-issues were completed
+
+- name: no-auto-close
+  color: fbca04
+  description: Prevent automatic closure when all sub-issues are completed

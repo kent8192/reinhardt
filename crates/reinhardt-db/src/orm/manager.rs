@@ -185,6 +185,7 @@ pub struct Manager<M: Model> {
 }
 
 impl<M: Model> Manager<M> {
+	/// Creates a new instance.
 	pub fn new() -> Self {
 		Self {
 			_marker: PhantomData,
@@ -905,6 +906,7 @@ impl<M: Model> Manager<M> {
 	}
 
 	/// Serialize a JSON value to SQL-compatible string representation
+	// Allow dead_code: internal helper for JSON-to-SQL serialization in manager operations
 	#[allow(dead_code)]
 	fn serialize_value(v: &serde_json::Value) -> String {
 		match v {

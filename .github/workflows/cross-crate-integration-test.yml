@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       runner:
-        description: 'Runner label JSON. Use "\"ubuntu-latest\"" for GitHub-hosted or "[\"self-hosted\",\"linux\",\"x64\",\"reinhardt-ci\"]" for self-hosted.'
+        description: 'Runner label JSON. Use "\"ubuntu-latest\"" for GitHub-hosted or "[\"self-hosted\",\"linux\",\"arm64\",\"reinhardt-ci\"]" for self-hosted.'
         type: string
         default: '"ubuntu-latest"'
       cargo-build-jobs:
@@ -29,6 +29,7 @@ env:
   CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  RUST_MIN_STACK: 8388608  # 8MB - prevent stack overflow in deep async fixture chains
 
 jobs:
   cross-crate-integration-test:
@@ -69,8 +70,8 @@ jobs:
 
       - name: Install mold linker and build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y mold clang lld build-essential
+          sudo apt-get update -o DPkg::Lock::Timeout=120
+          sudo apt-get install -y -o DPkg::Lock::Timeout=120 mold clang lld build-essential
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
 
@@ -124,6 +125,7 @@ jobs:
             --all-features \
             --partition hash:${{ matrix.partition }}/3 \
             --no-fail-fast \
+            --no-tests=warn \
             --status-level=none \
             --final-status-level=none \
             "${FILTER_ARGS[@]}"

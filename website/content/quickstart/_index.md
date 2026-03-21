@@ -35,7 +35,7 @@ use reinhardt::prelude::*;
 use reinhardt::get;
 
 #[get("/hello", name = "hello_world")]
-pub async fn hello_world() -> Result<Response> {
+pub async fn hello_world() -> ViewResult<Response> {
     Response::ok().with_body("Hello, Reinhardt!")
 }
 ```

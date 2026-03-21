@@ -2,6 +2,7 @@
 //!
 //! Server-only components for direct messaging.
 
-pub mod server_fn;
+pub mod handlers;
 
-pub use server_fn::*;
+pub use crate::apps::dm::shared::server_fn::*;
+pub use handlers::DMHandler;

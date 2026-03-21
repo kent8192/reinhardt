@@ -206,7 +206,9 @@ impl TraceStore {
 
 /// Tracing header names
 pub const TRACE_ID_HEADER: &str = "X-Trace-ID";
+/// HTTP header name for propagating the current span ID.
 pub const SPAN_ID_HEADER: &str = "X-Span-ID";
+/// HTTP header name for propagating the parent span ID in distributed traces.
 pub const PARENT_SPAN_ID_HEADER: &str = "X-Parent-Span-ID";
 
 /// Configuration for tracing middleware
@@ -492,15 +494,19 @@ impl Middleware for TracingMiddleware {
 
 		// Add trace headers to response
 		let mut response = result?;
-		let trace_header: HeaderName = self.config.trace_id_header.parse().unwrap();
-		response
-			.headers
-			.insert(trace_header, trace_id.parse().unwrap());
+		if let (Ok(trace_header), Ok(trace_value)) = (
+			self.config.trace_id_header.parse::<HeaderName>(),
+			trace_id.parse(),
+		) {
+			response.headers.insert(trace_header, trace_value);
+		}
 
-		let span_header: HeaderName = self.config.span_id_header.parse().unwrap();
-		response
-			.headers
-			.insert(span_header, span_id.parse().unwrap());
+		if let (Ok(span_header), Ok(span_value)) = (
+			self.config.span_id_header.parse::<HeaderName>(),
+			span_id.parse(),
+		) {
+			response.headers.insert(span_header, span_value);
+		}
 
 		Ok(response)
 	}

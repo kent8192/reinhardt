@@ -42,8 +42,11 @@ use std::sync::Arc;
 /// Database type for query optimization
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatabaseType {
+	/// PostgreSQL database.
 	PostgreSQL,
+	/// MySQL database.
 	MySQL,
+	/// SQLite database.
 	SQLite,
 }
 

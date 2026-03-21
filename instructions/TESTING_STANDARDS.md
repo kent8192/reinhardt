@@ -243,6 +243,17 @@ fn test_redirect_status_code() {
 }
 ```
 
+The following diagram summarizes the test classification decision tree:
+
+```mermaid
+flowchart TD
+    A[New test to write] --> B{How many Reinhardt crates involved?}
+    B -->|"2+ crates"| C["Cross-crate integration test<br/>Location: tests/ at repo root"]
+    B -->|"1 crate"| D{How many distinct components tested?}
+    D -->|"1 component"| E["Unit test<br/>Location: inline #[cfg(test)] or crates/reinhardt-~/tests/"]
+    D -->|"2+ components"| F["Within-crate integration test<br/>Location: crates/reinhardt-~/tests/"]
+```
+
 ---
 
 ## Test Implementation
@@ -660,6 +671,14 @@ All tests SHOULD follow the **Arrange-Act-Assert (AAA)** pattern for clear, cons
 | **Act** | Execute the behavior under test | When |
 | **Assert** | Verify the expected outcomes | Then |
 
+The following diagram illustrates the AAA pattern flow:
+
+```mermaid
+flowchart LR
+    A["// Arrange<br/>Set up test data,<br/>fixtures, preconditions"] --> B["// Act<br/>Execute the function<br/>or method under test"]
+    B --> C["// Assert<br/>Verify expected outcomes<br/>with strict assertions"]
+```
+
 **Comment Labels:**
 
 Use ONLY these standard labels:
@@ -950,7 +969,7 @@ let pool = loop {
 };
 ```
 
-**Reference:** See `reinhardt-test/src/fixtures/testcontainers.rs` for production implementation.
+**Reference:** See `reinhardt-testkit/src/fixtures/testcontainers.rs` for production implementation.
 
 ---
 
@@ -1182,8 +1201,11 @@ fn test_with_guaranteed_cleanup() {
 ```rust
 #[rstest]
 #[tokio::test]
-async fn test_bad(#[future] postgres_fixture: DbFixture) {
-    let result = postgres_fixture.query(...);  // ❌ Missing .await
+async fn test_bad(
+    #[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String)
+) {
+    // ❌ Trying to destructure without .await — postgres_container is a Future here
+    let (_container, pool, _port, _url) = postgres_container;
 }
 ```
 
@@ -1191,9 +1213,11 @@ async fn test_bad(#[future] postgres_fixture: DbFixture) {
 ```rust
 #[rstest]
 #[tokio::test]
-async fn test_good(#[future] postgres_fixture: DbFixture) {
-    let db = postgres_fixture.await;  // ✅ Correct
-    let result = db.query(...);
+async fn test_good(
+    #[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String)
+) {
+    let (_container, pool, _port, _url) = postgres_container.await;  // ✅ Correct
+    let result = pool.query(...);
 }
 ```
 
@@ -1474,8 +1498,10 @@ async fn test_admin_permissions(
 ```rust
 #[rstest]
 #[tokio::test]
-async fn test_user_query(#[future] postgres_fixture: DbFixture) {
-    let (_container, pool) = postgres_fixture.await;
+async fn test_user_query(
+    #[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String)
+) {
+    let (_container, pool, _port, _url) = postgres_container.await;
 
     // ❌ Raw SQL string - avoid this
     sqlx::query("SELECT * FROM users WHERE id = $1")
@@ -1508,8 +1534,10 @@ enum Users {
 
 #[rstest]
 #[tokio::test]
-async fn test_user_query(#[future] postgres_fixture: DbFixture) {
-    let (_container, pool) = postgres_fixture.await;
+async fn test_user_query(
+    #[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String)
+) {
+    let (_container, pool, _port, _url) = postgres_container.await;
 
     // ✅ Type-safe query with reinhardt-query
     let (sql, values) = Query::select()
@@ -1625,7 +1653,7 @@ For convenience, use the `migration_registry` fixture from `reinhardt-test`:
 
 ```rust
 use reinhardt_test::fixtures::*;
-use reinhardt_migrations::Migration;
+use reinhardt_db::migrations::Migration;
 use rstest::*;
 
 #[rstest]
@@ -1840,4 +1868,4 @@ Before committing `.stderr` files, verify:
 - **Testing Checklist**: See Testing Philosophy and Implementation sections above
 - **Test Patterns**: See rstest Best Practices and Common Pitfalls sections above
 - **Main standards**: @CLAUDE.md
-- **Anti-patterns**: @docs/ANTI_PATTERNS.md
+- **Anti-patterns**: @instructions/ANTI_PATTERNS.md

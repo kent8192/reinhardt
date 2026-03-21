@@ -9,4 +9,4 @@ pub mod router;
 
 // Re-export main entry point and utilities
 pub use lib::main;
-pub use router::{AppRoute, init_global_router, with_router};
+pub use router::{init_global_router, with_router};

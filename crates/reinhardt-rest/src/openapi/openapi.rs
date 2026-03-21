@@ -25,10 +25,10 @@ pub use utoipa::openapi::path::ParameterIn as ParameterLocation;
 // Re-export security-related types
 pub use utoipa::openapi::security::{ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityScheme};
 
-// Provide convenient type alias for API key location
+/// Convenient type alias for API key location configuration.
 pub type ApiKeyLocation = utoipa::openapi::security::ApiKeyValue;
 
-// Re-export HttpScheme for convenience
+/// Convenient type alias for HTTP authentication scheme.
 pub type HttpScheme = HttpAuthScheme;
 
 // Re-export builders

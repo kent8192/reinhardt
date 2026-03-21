@@ -17,9 +17,9 @@
 //!
 //! | Database | Feature Flag | Backend Type |
 //! |----------|--------------|--------------|
-//! | PostgreSQL | `postgres` | [`PostgresBackend`] |
-//! | MySQL/MariaDB | `mysql` | [`MySqlBackend`] |
-//! | SQLite | `sqlite` | [`SqliteBackend`] |
+//! | PostgreSQL | `postgres` | `PostgresBackend` |
+//! | MySQL/MariaDB | `mysql` | `MySqlBackend` |
+//! | SQLite | `sqlite` | `SqliteBackend` |
 //! | CockroachDB | `cockroachdb-backend` | `CockroachDBBackend` |
 //!
 //! ## Core Traits
@@ -73,8 +73,8 @@
 //!
 //! For distributed transaction support across multiple databases:
 //!
-//! - **PostgreSQL**: [`PostgresTwoPhaseParticipant`] with `PREPARE TRANSACTION`
-//! - **MySQL**: [`MySqlTwoPhaseParticipant`] with XA transactions
+//! - **PostgreSQL**: `PostgresTwoPhaseParticipant` with `PREPARE TRANSACTION`
+//! - **MySQL**: `MySqlTwoPhaseParticipant` with XA transactions
 //!
 //! ```rust,ignore
 //! use reinhardt_db::backends::PostgresTwoPhaseParticipant;
@@ -141,10 +141,12 @@
 pub mod backend;
 pub mod connection;
 pub mod dialect;
+/// Database-specific driver implementations (PostgreSQL, MySQL, SQLite, CockroachDB).
 pub mod drivers;
 pub mod error;
 pub mod optimization;
 pub mod query_builder;
+/// Database schema editing and DDL generation.
 pub mod schema;
 pub mod types;
 

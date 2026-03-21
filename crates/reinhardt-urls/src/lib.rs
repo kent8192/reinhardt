@@ -38,6 +38,7 @@
 //!
 //! See `reinhardt-routers` crate documentation for detailed usage and examples.
 
+#![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -49,6 +50,28 @@ pub mod routers;
 pub use reinhardt_routers_macros as routers_macros;
 
 // Re-export commonly used types from routers (server-only)
+/// Commonly used types re-exported for convenience.
+///
+/// ## Feature-Gated Items
+///
+/// Most items in this prelude are available with the default `routers` feature.
+/// Some items require additional features to be enabled:
+///
+/// - `UnifiedRouter` — available on non-WASM targets with the `routers` feature.
+///   When targeting WASM, the `client-router` feature must also be enabled.
+///   To enable in `Cargo.toml`:
+///
+///   ```toml
+///   [dependencies]
+///   reinhardt-urls = { version = "...", features = ["client-router"] }
+///   ```
+///
+///   Or use the `full` feature to enable all functionality:
+///
+///   ```toml
+///   [dependencies]
+///   reinhardt-urls = { version = "...", features = ["full"] }
+///   ```
 #[cfg(all(feature = "routers", not(target_arch = "wasm32")))]
 #[cfg_attr(docsrs, doc(cfg(feature = "routers")))]
 pub mod prelude {

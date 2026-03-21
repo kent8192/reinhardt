@@ -322,14 +322,23 @@ pub struct ImportsConfig {
 #[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct CliArgs {
+	/// The database url.
 	pub database_url: Option<String>,
+	/// The output dir.
 	pub output_dir: Option<PathBuf>,
+	/// The app label.
 	pub app_label: Option<String>,
+	/// The include tables.
 	pub include_tables: Option<String>,
+	/// The exclude tables.
 	pub exclude_tables: Option<String>,
+	/// The config file.
 	pub config_file: Option<PathBuf>,
+	/// The dry run.
 	pub dry_run: bool,
+	/// The force.
 	pub force: bool,
+	/// The verbose.
 	pub verbose: bool,
 }
 

@@ -79,6 +79,8 @@
 //! - From `reinhardt-server`: [`HttpServer`], [`serve`]
 //! - From `reinhardt-types`: [`Handler`], [`Middleware`], [`MiddlewareChain`]
 
+#![warn(missing_docs)]
+
 pub mod apps;
 pub mod builder;
 pub mod discovery;

@@ -11,7 +11,7 @@ output "webhook_secret" {
 
 output "runner_labels" {
   description = "Labels to use in GitHub Actions runs-on for self-hosted runners"
-  value       = jsonencode(concat(["self-hosted", "linux", "x64"], var.runner_extra_labels))
+  value       = jsonencode(concat(["self-hosted", "linux", "arm64"], var.runner_extra_labels))
 }
 
 # Manual webhook setup guide.
@@ -37,4 +37,24 @@ output "webhook_setup_guide" {
 
 		3. Verify: Push a commit to trigger CI and check AWS CloudWatch for Lambda invocations
 	EOT
+}
+
+output "hotpath_runner_instance_id" {
+  description = "EC2 instance ID of the hotpath runner (empty if disabled)"
+  value       = var.enable_hotpath_runner ? aws_instance.hotpath_runner[0].id : ""
+}
+
+output "hotpath_runner_private_ip" {
+  description = "Private IP of the hotpath runner (for SSM Session Manager access)"
+  value       = var.enable_hotpath_runner ? aws_instance.hotpath_runner[0].private_ip : ""
+}
+
+output "github_actions_oidc_provider_arn" {
+  description = "ARN of the GitHub Actions OIDC identity provider"
+  value       = aws_iam_openid_connect_provider.github_actions.arn
+}
+
+output "github_actions_ami_builder_role_arn" {
+  description = "ARN of the IAM role used by the AMI builder workflow"
+  value       = aws_iam_role.github_actions_ami_builder.arn
 }

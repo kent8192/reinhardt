@@ -109,6 +109,60 @@ description = "Clean build artifacts"
 command = "cargo"
 args = ["clean"]
 
+[tasks.runserver-watch]
+description = "Start the development server with auto-reload (requires bacon)"
+command = "bacon"
+args = ["runserver"]
+
+[tasks.makemigrations-app]
+description = "Create new migrations for a specific app (usage: cargo make makemigrations-app -- <app_label>)"
+command = "cargo"
+args = ["run", "--bin", "examples-tutorial-rest", "makemigrations", "${@}"]
+
+[tasks.collectstatic]
+description = "Collect static files into STATIC_ROOT"
+command = "cargo"
+args = ["run", "--bin", "examples-tutorial-rest", "collectstatic"]
+
+[tasks.check]
+description = "Check the project for common issues"
+command = "cargo"
+args = ["run", "--bin", "examples-tutorial-rest", "check"]
+
+[tasks.showurls]
+description = "Display all registered URL patterns"
+command = "cargo"
+args = ["run", "--bin", "examples-tutorial-rest", "showurls"]
+
+[tasks.shell]
+description = "Run an interactive Rust shell (REPL)"
+command = "cargo"
+args = ["run", "--bin", "examples-tutorial-rest", "shell"]
+
+[tasks.test-watch]
+description = "Run tests with auto-reload (requires bacon)"
+command = "bacon"
+args = ["test"]
+
+[tasks.dev-watch]
+description = "Start development with auto-reload"
+dependencies = ["build", "runserver-watch"]
+
+[tasks.runserver-v]
+description = "Start the development server with verbose output"
+command = "cargo"
+args = ["run", "--bin", "examples-tutorial-rest", "runserver", "-v"]
+
+[tasks.runserver-vv]
+description = "Start the development server with very verbose output"
+command = "cargo"
+args = ["run", "--bin", "examples-tutorial-rest", "runserver", "-vv"]
+
+[tasks.runserver-vvv]
+description = "Start the development server with maximum verbosity"
+command = "cargo"
+args = ["run", "--bin", "examples-tutorial-rest", "runserver", "-vvv"]
+
 # ============================================================================
 # CI/CD Workflow
 # ============================================================================

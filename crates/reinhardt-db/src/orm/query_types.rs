@@ -12,8 +12,11 @@ use reinhardt_query::prelude::{
 /// Database backend type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DbBackend {
+	/// Postgres variant.
 	Postgres,
+	/// Mysql variant.
 	Mysql,
+	/// Sqlite variant.
 	Sqlite,
 }
 
@@ -31,8 +34,11 @@ impl DbBackend {
 /// Query builder type
 #[derive(Debug, Clone, Copy)]
 pub enum DbQueryBuilder {
+	/// Postgres variant.
 	Postgres,
+	/// Mysql variant.
 	Mysql,
+	/// Sqlite variant.
 	Sqlite,
 }
 
@@ -41,15 +47,25 @@ pub enum DbQueryBuilder {
 /// Wraps reinhardt-query objects for passing around instead of SQL strings
 #[derive(Debug, Clone)]
 pub enum QueryStatement {
+	/// Select variant.
 	Select(SelectStatement),
+	/// Insert variant.
 	Insert(InsertStatement),
+	/// Update variant.
 	Update(UpdateStatement),
+	/// Delete variant.
 	Delete(DeleteStatement),
+	/// CreateTable variant.
 	CreateTable(CreateTableStatement),
+	/// AlterTable variant.
 	AlterTable(AlterTableStatement),
+	/// DropTable variant.
 	DropTable(DropTableStatement),
+	/// RenameTable variant.
 	RenameTable(AlterTableStatement),
+	/// CreateIndex variant.
 	CreateIndex(CreateIndexStatement),
+	/// DropIndex variant.
 	DropIndex(DropIndexStatement),
 }
 

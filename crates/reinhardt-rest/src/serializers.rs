@@ -194,23 +194,41 @@ pub use reinhardt_core::serializers::{
 };
 
 // REST-specific modules (ORM-integrated features)
+/// Cache invalidation strategies for serialized data.
 pub mod cache_invalidation;
+/// Content negotiation for serializer output formats.
 pub mod content_negotiation;
+/// Hyperlinked model serializers with URL-based relationships.
 pub mod hyperlinked;
+/// Serializer introspection utilities.
 pub mod introspection;
+/// Serializer meta configuration.
 pub mod meta;
+/// Method-based computed fields for serializers.
 pub mod method_field;
+/// ORM-integrated model serializers.
 pub mod model_serializer;
+/// Nested serializer support.
 pub mod nested;
+/// Configuration for nested serializer behavior.
 pub mod nested_config;
+/// ORM-integrated nested serializer support.
 pub mod nested_orm;
+/// Parser integration for serializer input.
 pub mod parsers;
+/// Serialization performance monitoring and metrics.
 pub mod performance;
+/// Database connection pool management for serializers.
 pub mod pool_manager;
+/// QuerySet integration for model serializers.
 pub mod queryset_integration;
+/// ORM-integrated relation field types.
 pub mod relation_fields_orm;
+/// Relationship field types for serializers.
 pub mod relations;
+/// Validator configuration for serializer fields.
 pub mod validator_config;
+/// Database-backed validators (unique, unique-together).
 pub mod validators;
 
 // Re-export REST-specific types

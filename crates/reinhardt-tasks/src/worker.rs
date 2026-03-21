@@ -31,9 +31,13 @@ use tokio::sync::{Semaphore, broadcast};
 /// ```
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
+	/// Name of this worker instance.
 	pub name: String,
+	/// Maximum number of tasks to process concurrently.
 	pub concurrency: usize,
+	/// Interval between polling the backend for new tasks.
 	pub poll_interval: Duration,
+	/// Webhook configurations for task completion notifications.
 	pub webhook_configs: Vec<WebhookConfig>,
 }
 
@@ -607,7 +611,7 @@ mod tests {
 	use std::time::Duration;
 	use tokio::time::sleep;
 
-	// Fields are used indirectly through Task trait implementation in tests
+	// Allow dead_code: fields are accessed indirectly through Task trait implementation
 	#[allow(dead_code)]
 	struct TestTask {
 		id: TaskId,

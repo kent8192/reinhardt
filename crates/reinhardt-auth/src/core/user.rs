@@ -94,12 +94,19 @@ pub trait User: Send + Sync {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SimpleUser {
+	/// Unique identifier for the user.
 	pub id: Uuid,
+	/// The user's login name.
 	pub username: String,
+	/// The user's email address.
 	pub email: String,
+	/// Whether the user account is active.
 	pub is_active: bool,
+	/// Whether the user has admin privileges.
 	pub is_admin: bool,
+	/// Whether the user is a staff member.
 	pub is_staff: bool,
+	/// Whether the user has superuser privileges.
 	pub is_superuser: bool,
 }
 

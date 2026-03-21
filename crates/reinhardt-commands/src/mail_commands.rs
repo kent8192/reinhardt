@@ -3,9 +3,11 @@
 use crate::{BaseCommand, CommandContext, CommandError, CommandResult};
 use async_trait::async_trait;
 
+/// Management command for sending a test email to verify mail configuration.
 pub struct SendTestEmailCommand;
 
 impl SendTestEmailCommand {
+	/// Creates a new instance of the send test email command.
 	pub fn new() -> Self {
 		Self
 	}

@@ -419,6 +419,7 @@ mod tests {
 	use chrono::Timelike;
 	use hyper::Method;
 	use reinhardt_http::Request;
+	use rstest::rstest;
 
 	#[test]
 	fn test_time_window_creation() {
@@ -621,5 +622,67 @@ mod tests {
 
 		assert!(permission.is_allowed_at(&monday));
 		assert!(!permission.is_allowed_at(&tuesday));
+	}
+
+	#[rstest]
+	fn test_time_window_exact_boundary_start() {
+		// Arrange
+		let permission = TimeBasedPermission::new().add_time_window("09:00", "17:00");
+		let exact_start = Utc::now()
+			.date_naive()
+			.and_hms_opt(9, 0, 0)
+			.unwrap()
+			.and_utc();
+
+		// Act
+		let result = permission.is_allowed_at(&exact_start);
+
+		// Assert
+		assert!(result);
+	}
+
+	#[rstest]
+	fn test_time_window_exact_boundary_end() {
+		// Arrange
+		let permission = TimeBasedPermission::new().add_time_window("09:00", "17:00");
+		let exact_end = Utc::now()
+			.date_naive()
+			.and_hms_opt(17, 0, 0)
+			.unwrap()
+			.and_utc();
+		let one_second_after = Utc::now()
+			.date_naive()
+			.and_hms_opt(17, 0, 1)
+			.unwrap()
+			.and_utc();
+
+		// Act
+		let result_at_end = permission.is_allowed_at(&exact_end);
+		let result_after_end = permission.is_allowed_at(&one_second_after);
+
+		// Assert - end time is inclusive in TimeWindow::contains
+		assert!(result_at_end);
+		assert!(!result_after_end);
+	}
+
+	#[rstest]
+	fn test_date_range_single_day() {
+		// Arrange - single day range for 2024-06-15
+		let permission = TimeBasedPermission::new().add_date_range("2024-06-15", "2024-06-15");
+
+		let within_day = DateTime::parse_from_rfc3339("2024-06-15T12:00:00Z")
+			.unwrap()
+			.with_timezone(&Utc);
+		let different_day = DateTime::parse_from_rfc3339("2024-06-16T12:00:00Z")
+			.unwrap()
+			.with_timezone(&Utc);
+
+		// Act
+		let result_within = permission.is_allowed_at(&within_day);
+		let result_different = permission.is_allowed_at(&different_day);
+
+		// Assert
+		assert!(result_within);
+		assert!(!result_different);
 	}
 }

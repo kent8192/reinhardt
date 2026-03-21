@@ -4,26 +4,37 @@ use crate::{Task, TaskId, TaskStatus, registry::SerializedTask};
 use async_trait::async_trait;
 use thiserror::Error;
 
+/// Errors that can occur during task execution in a backend.
 #[derive(Debug, Error)]
 pub enum TaskExecutionError {
+	/// The task failed during execution.
 	#[error("Task execution failed: {0}")]
 	ExecutionFailed(String),
 
+	/// The requested task was not found in the backend.
 	#[error("Task not found: {0}")]
 	NotFound(TaskId),
 
+	/// A backend-specific error occurred.
 	#[error("Backend error: {0}")]
 	BackendError(String),
 }
 
+/// Alias for `TaskStatus` used in result contexts.
 pub type ResultStatus = TaskStatus;
+/// Alias for `TaskStatus` used in task result contexts.
 pub type TaskResultStatus = TaskStatus;
 
+/// Trait for task queue backends that handle enqueueing, dequeueing, and status tracking.
 #[async_trait]
 pub trait TaskBackend: Send + Sync {
+	/// Enqueues a task and returns its assigned ID.
 	async fn enqueue(&self, task: Box<dyn Task>) -> Result<TaskId, TaskExecutionError>;
+	/// Dequeues the next available task ID, if any.
 	async fn dequeue(&self) -> Result<Option<TaskId>, TaskExecutionError>;
+	/// Retrieves the current status of a task by its ID.
 	async fn get_status(&self, task_id: TaskId) -> Result<TaskStatus, TaskExecutionError>;
+	/// Updates the status of a task.
 	async fn update_status(
 		&self,
 		task_id: TaskId,
@@ -38,12 +49,15 @@ pub trait TaskBackend: Send + Sync {
 		task_id: TaskId,
 	) -> Result<Option<SerializedTask>, TaskExecutionError>;
 
+	/// Returns the name of this backend implementation.
 	fn backend_name(&self) -> &str;
 }
 
+/// Registry of available task backends.
 pub struct TaskBackends;
 
 impl TaskBackends {
+	/// Creates a new empty backend registry.
 	pub fn new() -> Self {
 		Self
 	}
@@ -55,9 +69,11 @@ impl Default for TaskBackends {
 	}
 }
 
+/// A no-op backend that discards all tasks. Useful for testing.
 pub struct DummyBackend;
 
 impl DummyBackend {
+	/// Creates a new dummy backend.
 	pub fn new() -> Self {
 		Self
 	}
@@ -104,9 +120,11 @@ impl TaskBackend for DummyBackend {
 	}
 }
 
+/// A backend that executes tasks immediately upon enqueueing.
 pub struct ImmediateBackend;
 
 impl ImmediateBackend {
+	/// Creates a new immediate backend.
 	pub fn new() -> Self {
 		Self
 	}

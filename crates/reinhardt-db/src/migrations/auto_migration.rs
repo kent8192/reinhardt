@@ -209,7 +209,8 @@ impl AutoMigrationGenerator {
 	}
 
 	/// Generate rollback operations
-	#[allow(dead_code)] // Planned for future rollback migration feature
+	// Allow dead_code: rollback operation generation planned for future migration reversal feature
+	#[allow(dead_code)]
 	fn generate_rollback(&self, operations: &[Operation]) -> Vec<Operation> {
 		operations
 			.iter()
@@ -346,18 +347,33 @@ pub struct ValidationResult {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AutoMigrationError {
 	#[error("No schema changes detected")]
+	/// NoChangesDetected variant.
 	NoChangesDetected,
 
 	#[error("Failed to write migration file: {0}")]
+	/// WriteError variant.
 	WriteError(String),
 
 	#[error("Migration validation failed: {0}")]
+	/// ValidationError variant.
 	ValidationError(String),
 
 	#[error(
 		"Duplicate migration detected: generated operations are identical to the last migration.\nThis usually means you're trying to generate the same migration twice.\nIf you need to modify the previous migration, delete it first and run makemigrations again."
 	)]
+	/// DuplicateMigration variant.
 	DuplicateMigration,
+
+	#[error(
+		"Conflicting migrations detected for '{app_label}': {formatted_migrations}. Run makemigrations --merge to resolve."
+	)]
+	/// ConflictingMigrations variant.
+	ConflictingMigrations {
+		/// The app label with conflicting migrations.
+		app_label: String,
+		/// The conflicting migration names (comma-separated for display).
+		formatted_migrations: String,
+	},
 }
 
 impl From<std::io::Error> for AutoMigrationError {

@@ -208,7 +208,9 @@ impl Handler for MethodEchoHandler {
 /// # }
 /// ```
 pub struct DelayedHandler {
+	/// Delay in milliseconds before returning the response.
 	pub delay_ms: u64,
+	/// The body content to return in the response.
 	pub response_body: String,
 }
 
@@ -269,6 +271,7 @@ impl Handler for BodyEchoHandler {
 /// # }
 /// ```
 pub struct LargeResponseHandler {
+	/// Size of the response body in kilobytes.
 	pub size_kb: usize,
 }
 

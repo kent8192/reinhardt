@@ -188,13 +188,21 @@ pub type RecursiveResult<T> = Result<T, RecursiveError>;
 pub enum RecursiveError {
 	/// Maximum depth exceeded
 	MaxDepthExceeded {
+		/// The depth at which the limit was hit.
 		current_depth: usize,
+		/// The configured maximum depth.
 		max_depth: usize,
 	},
 	/// Circular reference detected
-	CircularReference { object_id: String },
+	CircularReference {
+		/// Identifier of the object that caused the circular reference.
+		object_id: String,
+	},
 	/// General serialization error
-	SerializationError { message: String },
+	SerializationError {
+		/// Human-readable error description.
+		message: String,
+	},
 }
 
 impl std::fmt::Display for RecursiveError {
@@ -402,6 +410,7 @@ mod tests {
 
 	#[test]
 	fn test_context_visit_and_leave() {
+		// Allow dead_code: test-only struct; fields used only for pointer-based identity in circular reference detection
 		#[allow(dead_code)]
 		struct User {
 			id: i64,
@@ -421,6 +430,7 @@ mod tests {
 
 	#[test]
 	fn test_context_reset() {
+		// Allow dead_code: test-only struct; fields used only for pointer-based identity in circular reference detection
 		#[allow(dead_code)]
 		struct User {
 			id: i64,
@@ -481,6 +491,7 @@ mod tests {
 
 	#[test]
 	fn test_circular_reference_detection() {
+		// Allow dead_code: test-only struct; fields used only for pointer-based identity in circular reference detection
 		#[allow(dead_code)]
 		struct User {
 			id: i64,
@@ -498,6 +509,7 @@ mod tests {
 
 	#[test]
 	fn test_circular_visit_with() {
+		// Allow dead_code: test-only struct; fields used only for pointer-based identity in circular reference detection
 		#[allow(dead_code)]
 		struct User {
 			id: i64,
@@ -515,6 +527,7 @@ mod tests {
 
 	#[test]
 	fn test_circular_visit_with_error() {
+		// Allow dead_code: test-only struct; fields used only for pointer-based identity in circular reference detection
 		#[allow(dead_code)]
 		struct User {
 			id: i64,
@@ -536,6 +549,7 @@ mod tests {
 
 	#[test]
 	fn test_different_objects_same_string_representation() {
+		// Allow dead_code: test-only struct; fields used only for pointer-based identity in circular reference detection
 		#[allow(dead_code)]
 		struct User {
 			id: i64,
@@ -555,6 +569,7 @@ mod tests {
 
 	#[test]
 	fn test_same_object_multiple_references() {
+		// Allow dead_code: test-only struct; fields used only for pointer-based identity in circular reference detection
 		#[allow(dead_code)]
 		struct User {
 			id: i64,

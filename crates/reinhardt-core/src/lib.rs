@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! # Reinhardt Core
 //!
 //! Core components for the Reinhardt framework, providing fundamental types,
@@ -24,7 +25,8 @@
 //! - **Storage Backends**: S3 (✅), Azure Blob (✅), GCS (✅), FileSystem (✅), Memory (✅)
 //!
 //! For detailed implementation and usage information, see the individual
-//! crate documentation in `reinhardt-contrib`, `reinhardt-tasks`, `reinhardt-core/backends`.
+//! crate documentation in `reinhardt-db`, `reinhardt-auth`, `reinhardt-mail`,
+//! and `reinhardt-tasks`.
 //!
 //! ## Quick Start
 //!
@@ -59,9 +61,11 @@
 //! | `signals` | enabled | Async signal/slot system |
 //! | `macros` | enabled | Procedural macros re-export |
 //! | `security` | enabled | Password hashing and security utilities |
+//! | `validators` | enabled | Comprehensive input validation |
 //! | `serializers` | enabled | Data serialization framework |
-//! | `parsers` | enabled | Request body parsers |
-//! | `pagination` | enabled | Pagination strategies |
+//! | `parsers` | disabled | Request body parsers |
+//! | `pagination` | disabled | Pagination strategies |
+//! | `negotiation` | disabled | HTTP content negotiation |
 //! | `messages` | disabled | Flash message storage |
 //! | `page` | disabled | Server-side page rendering types |
 

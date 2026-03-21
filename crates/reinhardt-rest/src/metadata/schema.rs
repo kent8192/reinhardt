@@ -11,36 +11,52 @@ use std::collections::HashMap;
 /// OpenAPI 3.0 schema representation
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct FieldSchema {
+	/// The JSON Schema type (e.g., `"string"`, `"integer"`, `"object"`).
 	#[serde(rename = "type", skip_serializing_if = "Option::is_none")]
 	pub schema_type: Option<String>,
+	/// The format hint (e.g., `"date-time"`, `"email"`, `"uri"`).
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub format: Option<String>,
+	/// A description of what this field represents.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub description: Option<String>,
+	/// The minimum numeric value allowed.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub minimum: Option<f64>,
+	/// The maximum numeric value allowed.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub maximum: Option<f64>,
+	/// The minimum string length allowed.
 	#[serde(rename = "minLength", skip_serializing_if = "Option::is_none")]
 	pub min_length: Option<usize>,
+	/// The maximum string length allowed.
 	#[serde(rename = "maxLength", skip_serializing_if = "Option::is_none")]
 	pub max_length: Option<usize>,
+	/// A regex pattern the value must match.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub pattern: Option<String>,
+	/// Allowed enum values for choice fields.
 	#[serde(rename = "enum", skip_serializing_if = "Option::is_none")]
 	pub enum_values: Option<Vec<String>>,
+	/// Schema for array items.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub items: Option<Box<FieldSchema>>,
+	/// Schemas for object properties.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub properties: Option<HashMap<String, FieldSchema>>,
+	/// List of required property names within an object schema.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub required: Option<Vec<String>>,
+	/// The default value for this field.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub default: Option<Value>,
+	/// Whether this field is read-only.
 	#[serde(rename = "readOnly", skip_serializing_if = "Option::is_none")]
 	pub read_only: Option<bool>,
+	/// Whether this field is write-only.
 	#[serde(rename = "writeOnly", skip_serializing_if = "Option::is_none")]
 	pub write_only: Option<bool>,
+	/// Whether this field accepts null values.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub nullable: Option<bool>,
 }

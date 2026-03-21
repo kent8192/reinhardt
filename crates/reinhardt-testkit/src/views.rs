@@ -15,9 +15,13 @@ use std::collections::HashMap;
 /// Test model for view tests
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TestModel {
+	/// Primary key identifier.
 	pub id: Option<i64>,
+	/// Display name of the test model.
 	pub name: String,
+	/// URL-safe slug derived from the name.
 	pub slug: String,
+	/// ISO 8601 timestamp of creation.
 	pub created_at: String,
 }
 
@@ -26,8 +30,11 @@ crate::impl_test_model!(TestModel, i64, "test_models");
 /// Test model for API view tests
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ApiTestModel {
+	/// Primary key identifier.
 	pub id: Option<i64>,
+	/// Title of the API test model entry.
 	pub title: String,
+	/// Body content of the API test model entry.
 	pub content: String,
 }
 
@@ -181,11 +188,14 @@ pub fn create_large_test_objects(count: usize) -> Vec<TestModel> {
 
 /// Create a simple view for testing basic functionality
 pub struct SimpleTestView {
+	/// The response body content.
 	pub content: String,
+	/// HTTP methods that this view accepts.
 	pub allowed_methods: Vec<Method>,
 }
 
 impl SimpleTestView {
+	/// Create a new `SimpleTestView` with the given content, accepting only GET.
 	pub fn new(content: &str) -> Self {
 		Self {
 			content: content.to_string(),
@@ -193,6 +203,7 @@ impl SimpleTestView {
 		}
 	}
 
+	/// Set the allowed HTTP methods for this view.
 	pub fn with_methods(mut self, methods: Vec<Method>) -> Self {
 		self.allowed_methods = methods;
 		self
@@ -215,19 +226,28 @@ impl reinhardt_views::View for SimpleTestView {
 
 /// Create a view that always returns an error for testing error handling
 pub struct ErrorTestView {
+	/// The error message to return.
 	pub error_message: String,
+	/// The kind of error to return.
 	pub error_kind: ErrorKind,
 }
 
+/// Kind of error that an `ErrorTestView` will produce.
 pub enum ErrorKind {
+	/// HTTP 404 Not Found error.
 	NotFound,
+	/// Validation error (e.g., invalid input).
 	Validation,
+	/// Internal server error.
 	Internal,
+	/// Authentication required error.
 	Authentication,
+	/// Authorization denied error.
 	Authorization,
 }
 
 impl ErrorTestView {
+	/// Create a new `ErrorTestView` with the given message and error kind.
 	pub fn new(error_message: String, error_kind: ErrorKind) -> Self {
 		Self {
 			error_message,
@@ -235,10 +255,12 @@ impl ErrorTestView {
 		}
 	}
 
+	/// Create an `ErrorTestView` that returns a 404 Not Found error.
 	pub fn not_found(message: impl Into<String>) -> Self {
 		Self::new(message.into(), ErrorKind::NotFound)
 	}
 
+	/// Create an `ErrorTestView` that returns a validation error.
 	pub fn validation(message: impl Into<String>) -> Self {
 		Self::new(message.into(), ErrorKind::Validation)
 	}

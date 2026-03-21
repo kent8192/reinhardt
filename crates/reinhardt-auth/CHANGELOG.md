@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.11...reinhardt-auth@v0.1.0-rc.12) - 2026-03-18
+
+### Added
+
+- *(auth)* add AuthInfo lightweight auth extractor
+- *(auth)* add AuthUser<U> extractor with tuple struct destructuring
+- *(auth)* add validate_auth_extractors startup DI validation
+
+### Changed
+
+- *(auth)* update re-exports and suppress deprecation warnings
+
+### Documentation
+
+- *(auth)* use backticks instead of intra-doc links for cross-crate types
+
+### Fixed
+
+- *(auth)* add warning log when DatabaseConnection is missing for CurrentUser injection
+- *(auth)* remove Uuid::nil() fallback on user_id parse failure
+
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.8...reinhardt-auth@v0.1.0-rc.9) - 2026-03-15
+
+### Documentation
+
+- *(auth)* fix private intra-doc link in get_user_info
+
+### Fixed
+
+- *(auth)* harden session cookie, token comparison, and permission checks
+
+### Performance
+
+- *(auth)* use SHA-256 digest index for O(1) token lookup
+
+### Security
+
+- *(auth)* enforce HTTPS for OAuth2/OIDC endpoint URLs
+- *(auth)* sanitize URL error messages and improve loopback detection
+
+### Styling
+
+- fix formatting in url_validation.rs
+
+### Testing
+
+- *(auth)* add tests for permission and composite auth error handling
+
+## [0.1.0-rc.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.6...reinhardt-auth@v0.1.0-rc.7) - 2026-03-11
+
+### Fixed
+
+- *(auth)* add missing #[rstest] annotations to 57 existing tests
+
+### Styling
+
+- apply format fixes
+
+### Testing
+
+- *(auth)* add CacheSessionBackend direct CRUD tests
+- *(auth)* add JwtSessionBackend extended edge case tests
+- *(auth)* add LoginHandler/LogoutHandler edge case tests
+- *(auth)* add SocialAccountStorage extended coverage
+- *(auth)* add UserMapper extended coverage
+- *(auth)* add session replication gap tests
+- *(auth)* add session migration functional tests
+- *(auth)* add tenant isolation gap tests
+- *(auth)* add session rotation gap tests
+- *(auth)* add session cleanup functional tests
+- *(auth)* add permissions edge case tests (object, IP, time-based)
+- *(auth)* add serialization empty data roundtrip tests
+- *(auth)* add repository trait unit tests
+
 ## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.4...reinhardt-auth@v0.1.0-rc.5) - 2026-03-07
 
 ### Fixed

@@ -9,7 +9,7 @@ autotests = true
 # Main reinhardt facade crate for proc macro path resolution.
 # Proc macros generate code with absolute paths like ::reinhardt::db::orm::Model
 # This dependency makes those paths resolvable in test files.
-reinhardt = { workspace = true, features = ["full"] }
+reinhardt = { workspace = true, features = ["full", "openapi-router"] }
 
 # Reinhardt crates
 reinhardt-apps = { workspace = true }
@@ -105,6 +105,9 @@ async-trait = { workspace = true }
 # Temp files (used in migration_duplicate.rs)
 tempfile = { workspace = true }
 
+# CLI parsing (used in merge migration CLI tests)
+clap = { workspace = true }
+
 # Additional dependencies required by tests
 async-graphql = { workspace = true }
 base64 = { workspace = true }
@@ -125,7 +128,7 @@ url = { workspace = true }
 rust_decimal = { workspace = true }
 async-stream = "0.3"
 regex = { workspace = true }
-validator = { version = "0.20", features = ["derive"] }
+tracing = { workspace = true }
 
 [features]
 default = ["postgres", "sqlite", "caching", "hot-reload", "dynamic-redis"]

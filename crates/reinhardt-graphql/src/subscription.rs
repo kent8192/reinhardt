@@ -11,8 +11,11 @@ pub const DEFAULT_CHANNEL_CAPACITY: usize = 256;
 /// Event types for subscriptions
 #[derive(Debug, Clone)]
 pub enum UserEvent {
+	/// A new user was created.
 	Created(crate::schema::User),
+	/// An existing user was updated.
 	Updated(crate::schema::User),
+	/// A user was deleted, identified by their ID.
 	Deleted(ID),
 }
 

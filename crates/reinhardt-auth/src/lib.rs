@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! # Reinhardt Auth
 //!
 //! Authentication and authorization system for Reinhardt framework.
@@ -64,7 +65,26 @@ pub mod core;
 
 // CurrentUser injectable for dependency injection
 pub mod current_user;
+#[allow(deprecated)]
 pub use current_user::CurrentUser;
+
+// AuthInfo lightweight auth extractor
+pub mod auth_info;
+pub use auth_info::AuthInfo;
+
+// AuthUser authenticated user extractor
+pub mod auth_user;
+pub use auth_user::AuthUser;
+
+// Startup validation for auth extractors
+pub mod auth_extractors;
+pub use auth_extractors::validate_auth_extractors;
+
+/// Project-specific UUID namespace for deterministic user ID generation.
+///
+/// Computed from `Uuid::new_v5(&Uuid::NAMESPACE_URL, b"https://reinhardt.rs/user-id")`.
+pub(crate) const USER_ID_NAMESPACE: uuid::Uuid =
+	uuid::uuid!("c7a85537-073f-5092-8d10-774e109477c9");
 
 // Re-export core authentication types
 pub use core::{

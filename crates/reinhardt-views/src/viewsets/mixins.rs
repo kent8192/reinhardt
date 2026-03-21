@@ -8,30 +8,35 @@ use crate::viewsets::{BatchRequest, BatchResponse};
 /// List mixin - provides list() action
 #[async_trait]
 pub trait ListMixin: Send + Sync {
+	/// List all resources matching the request parameters.
 	async fn list(&self, request: Request) -> Result<Response>;
 }
 
 /// Retrieve mixin - provides retrieve() action
 #[async_trait]
 pub trait RetrieveMixin: Send + Sync {
+	/// Retrieve a single resource by its identifier.
 	async fn retrieve(&self, request: Request, id: String) -> Result<Response>;
 }
 
 /// Create mixin - provides create() action
 #[async_trait]
 pub trait CreateMixin: Send + Sync {
+	/// Create a new resource from the request data.
 	async fn create(&self, request: Request) -> Result<Response>;
 }
 
 /// Update mixin - provides update() action
 #[async_trait]
 pub trait UpdateMixin: Send + Sync {
+	/// Fully update an existing resource by its identifier.
 	async fn update(&self, request: Request, id: String) -> Result<Response>;
 }
 
 /// Destroy mixin - provides destroy() action
 #[async_trait]
 pub trait DestroyMixin: Send + Sync {
+	/// Delete a resource by its identifier.
 	async fn destroy(&self, request: Request, id: String) -> Result<Response>;
 }
 

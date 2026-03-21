@@ -55,22 +55,31 @@ use thiserror::Error;
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum JwtSessionError {
+	/// An error occurred while encoding the JWT.
 	#[error("JWT encoding error: {0}")]
 	EncodingError(String),
+	/// An error occurred while decoding the JWT.
 	#[error("JWT decoding error: {0}")]
 	DecodingError(String),
+	/// The specified token was not found.
 	#[error("Token not found: {0}")]
 	TokenNotFound(String),
+	/// The token has expired.
 	#[error("Token expired")]
 	TokenExpired,
+	/// The token is invalid or malformed.
 	#[error("Invalid token")]
 	InvalidToken,
+	/// The HMAC key length is too short for the specified algorithm.
 	#[error(
 		"Invalid HMAC key length: {algorithm:?} requires at least {required} bytes, but got {actual} bytes"
 	)]
 	InvalidKeyLength {
+		/// The HMAC algorithm being used.
 		algorithm: Algorithm,
+		/// The minimum required key length in bytes.
 		required: usize,
+		/// The actual key length provided.
 		actual: usize,
 	},
 }
@@ -636,5 +645,88 @@ mod tests {
 			algorithm,
 			secret.len()
 		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_jwt_session_load_nonexistent_key() {
+		// Arrange
+		let config = JwtConfig::new("test-secret-key-for-jwt-testing!!".to_string());
+		let backend = JwtSessionBackend::new(config).unwrap();
+
+		// Act
+		let loaded: Option<serde_json::Value> = backend.load("unknown_key").await.unwrap();
+
+		// Assert
+		assert!(loaded.is_none());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_jwt_session_save_overwrite() {
+		// Arrange
+		let config = JwtConfig::new("test-secret-key-for-jwt-testing!!".to_string());
+		let backend = JwtSessionBackend::new(config).unwrap();
+		let data_v1 = json!({"version": 1, "name": "old"});
+		let data_v2 = json!({"version": 2, "name": "new"});
+
+		// Act
+		backend
+			.save("overwrite_key", &data_v1, Some(3600))
+			.await
+			.unwrap();
+		backend
+			.save("overwrite_key", &data_v2, Some(3600))
+			.await
+			.unwrap();
+		let loaded: Option<serde_json::Value> = backend.load("overwrite_key").await.unwrap();
+
+		// Assert
+		let loaded = loaded.unwrap();
+		assert_eq!(loaded["version"], 2);
+		assert_eq!(loaded["name"], "new");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_jwt_session_delete_then_load() {
+		// Arrange
+		let config = JwtConfig::new("test-secret-key-for-jwt-testing!!".to_string());
+		let backend = JwtSessionBackend::new(config).unwrap();
+		let data = json!({"to_delete": true});
+
+		backend
+			.save("del_load_key", &data, Some(3600))
+			.await
+			.unwrap();
+
+		// Act
+		backend.delete("del_load_key").await.unwrap();
+		let loaded: Option<serde_json::Value> = backend.load("del_load_key").await.unwrap();
+
+		// Assert
+		assert!(loaded.is_none());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_jwt_session_exists_after_delete() {
+		// Arrange
+		let config = JwtConfig::new("test-secret-key-for-jwt-testing!!".to_string());
+		let backend = JwtSessionBackend::new(config).unwrap();
+		let data = json!({"exists_check": true});
+
+		// Act - save and check exists
+		backend
+			.save("exists_del_key", &data, Some(3600))
+			.await
+			.unwrap();
+		assert!(backend.exists("exists_del_key").await.unwrap());
+
+		// Act - delete and check exists
+		backend.delete("exists_del_key").await.unwrap();
+
+		// Assert
+		assert!(!backend.exists("exists_del_key").await.unwrap());
 	}
 }

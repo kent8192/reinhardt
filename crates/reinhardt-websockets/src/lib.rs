@@ -143,6 +143,8 @@
 //! The authentication cookies from the user's HTTP session are automatically included
 //! in the WebSocket handshake, allowing the server to authenticate the connection.
 
+#![warn(missing_docs)]
+
 /// Token-based authentication and authorization for WebSocket connections.
 pub mod auth;
 /// Channel layer abstraction for cross-process messaging.

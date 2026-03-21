@@ -29,4 +29,7 @@ fn main() {
 
 	println!("cargo:rerun-if-changed=build.rs");
 	println!("cargo:rerun-if-changed=../.cargo/config.toml");
+
+	// Declare custom cfg to avoid warnings in Rust 2024 edition
+	println!("cargo::rustc-check-cfg=cfg(with_reinhardt)");
 }

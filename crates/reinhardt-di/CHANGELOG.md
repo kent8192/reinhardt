@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di@v0.1.0-rc.12...reinhardt-di@v0.1.0-rc.13) - 2026-03-18
+
+### Fixed
+
+- *(di)* set HTTP request on per-request InjectionContext in use_inject macro
+
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di@v0.1.0-rc.11...reinhardt-di@v0.1.0-rc.12) - 2026-03-18
+
+### Added
+
+- *(di)* add Option<T> blanket Injectable impl for optional injection
+
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di@v0.1.0-rc.8...reinhardt-di@v0.1.0-rc.9) - 2026-03-15
+
+### Styling
+
+- add explanatory comments to remaining #[allow(dead_code)] attributes
+
 ## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di@v0.1.0-rc.4...reinhardt-di@v0.1.0-rc.5) - 2026-03-07
 
 ### Documentation

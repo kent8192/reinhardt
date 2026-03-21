@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       runner:
-        description: 'Runner label JSON. Use "\"ubuntu-latest\"" for GitHub-hosted or "[\"self-hosted\",\"linux\",\"x64\",\"reinhardt-ci\"]" for self-hosted.'
+        description: 'Runner label JSON. Use "\"ubuntu-latest\"" for GitHub-hosted or "[\"self-hosted\",\"linux\",\"arm64\",\"reinhardt-ci\"]" for self-hosted.'
         type: string
         default: '"ubuntu-latest"'
       cargo-build-jobs:
@@ -69,8 +69,8 @@ jobs:
 
       - name: Install mold linker and build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y mold clang lld build-essential
+          sudo -E apt-get -o DPkg::Lock::Timeout=120 update
+          sudo -E apt-get -o DPkg::Lock::Timeout=120 install -y mold clang lld build-essential
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
 
@@ -107,9 +107,11 @@ jobs:
       - name: Run UI tests (partition ${{ matrix.partition }}/8)
         env:
           RUSTFLAGS: "-C linker=clang -C link-arg=-fuse-ld=mold"
+          NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
+          RUN_ALL: ${{ inputs.run-all }}
         run: |
-          if [[ "${{ inputs.run-all }}" != "true" && -n "${{ inputs.nextest-filter }}" ]]; then
-            FILTER_EXPR="binary(/ui/) & (${{ inputs.nextest-filter }})"
+          if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
+            FILTER_EXPR="binary(/ui/) & ($NEXTEST_FILTER_EXPR)"
           else
             FILTER_EXPR="binary(/ui/)"
           fi
@@ -119,6 +121,7 @@ jobs:
             -E "$FILTER_EXPR" \
             --partition hash:${{ matrix.partition }}/8 \
             --no-fail-fast \
+            --no-tests=warn \
             --status-level=none \
             --final-status-level=none
 

@@ -490,6 +490,47 @@ pub(crate) fn installed_apps_impl(input: TokenStream) -> Result<TokenStream> {
 	let core_crate = get_reinhardt_core_crate();
 	let InstalledApps { apps } = syn::parse2(input)?;
 
+	// Handle empty input: generate an uninhabited enum with valid implementations.
+	// In Rust 2024 edition, `match self {}` on a reference is illegal because
+	// reference types are always considered inhabited. We use `match *self {}`
+	// (deref) which is legal for uninhabited enum types.
+	if apps.is_empty() {
+		return Ok(quote! {
+			/// Enum representing all installed applications
+			#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+			pub enum InstalledApp {}
+
+			impl std::fmt::Display for InstalledApp {
+				fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+					match *self {}
+				}
+			}
+
+			impl std::str::FromStr for InstalledApp {
+				type Err = String;
+
+				fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+					Err(format!("Unknown app: {}", s))
+				}
+			}
+
+			impl InstalledApp {
+				/// Get all installed apps as strings
+				///
+				/// Returns a vector containing the string representations of all installed applications.
+				pub fn all_apps() -> Vec<String> {
+					vec![]
+				}
+
+				/// Get the path for this app
+				///
+				pub fn path(&self) -> &'static str {
+					match *self {}
+				}
+			}
+		});
+	}
+
 	// Collect app labels and paths
 	let labels: Vec<_> = apps.iter().map(|app| &app.label).collect();
 	let paths: Vec<_> = apps.iter().map(|app| &app.path).collect();

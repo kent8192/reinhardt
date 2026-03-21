@@ -4,8 +4,11 @@ use serde::{Deserialize, Serialize};
 /// Window frame type
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum FrameType {
+	/// Range variant.
 	Range,
+	/// Rows variant.
 	Rows,
+	/// Groups variant.
 	Groups,
 }
 
@@ -33,10 +36,15 @@ impl FrameType {
 /// Frame boundary
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum FrameBoundary {
+	/// UnboundedPreceding variant.
 	UnboundedPreceding,
+	/// Preceding variant.
 	Preceding(i64),
+	/// CurrentRow variant.
 	CurrentRow,
+	/// Following variant.
 	Following(i64),
+	/// UnboundedFollowing variant.
 	UnboundedFollowing,
 }
 
@@ -68,8 +76,11 @@ impl FrameBoundary {
 /// Window frame specification
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Frame {
+	/// The frame type.
 	pub frame_type: FrameType,
+	/// The start.
 	pub start: FrameBoundary,
+	/// The end.
 	pub end: Option<FrameBoundary>,
 }
 
@@ -164,8 +175,11 @@ impl Frame {
 /// Window specification
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Window {
+	/// The partition by.
 	pub partition_by: Vec<String>,
+	/// The order by.
 	pub order_by: Vec<String>,
+	/// The frame.
 	pub frame: Option<Frame>,
 }
 
@@ -272,6 +286,7 @@ impl Default for Window {
 
 /// Base trait for window functions
 pub trait WindowFunction {
+	/// Converts the window function to SQL using the given window definition.
 	fn to_sql(&self, window: &Window) -> String;
 }
 
@@ -390,6 +405,7 @@ impl WindowFunction for DenseRank {
 /// NTILE window function
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NTile {
+	/// The num buckets.
 	pub num_buckets: i64,
 }
 
@@ -419,8 +435,11 @@ impl WindowFunction for NTile {
 /// LEAD window function
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lead {
+	/// The expression.
 	pub expression: String,
+	/// The offset.
 	pub offset: i64,
+	/// The default.
 	pub default: Option<String>,
 }
 
@@ -488,8 +507,11 @@ impl WindowFunction for Lead {
 /// LAG window function
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lag {
+	/// The expression.
 	pub expression: String,
+	/// The offset.
 	pub offset: i64,
+	/// The default.
 	pub default: Option<String>,
 }
 
@@ -557,6 +579,7 @@ impl WindowFunction for Lag {
 /// FIRST_VALUE window function
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FirstValue {
+	/// The expression.
 	pub expression: String,
 }
 
@@ -597,6 +620,7 @@ impl WindowFunction for FirstValue {
 /// LAST_VALUE window function
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LastValue {
+	/// The expression.
 	pub expression: String,
 }
 
@@ -633,7 +657,9 @@ impl WindowFunction for LastValue {
 /// NTH_VALUE window function
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NthValue {
+	/// The expression.
 	pub expression: String,
+	/// The n.
 	pub n: i64,
 }
 

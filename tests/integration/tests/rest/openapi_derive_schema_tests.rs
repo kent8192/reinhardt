@@ -20,6 +20,7 @@ use utoipa::openapi::{
 #[rstest]
 fn test_simple_struct_schema_generation() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema)]
 	struct User {
@@ -48,6 +49,7 @@ fn test_simple_struct_schema_generation() {
 #[rstest]
 fn test_optional_fields_not_required() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema)]
 	struct User {
@@ -74,6 +76,7 @@ fn test_optional_fields_not_required() {
 #[rstest]
 fn test_field_with_description() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema)]
 	struct User {
@@ -110,6 +113,7 @@ fn test_field_with_description() {
 #[rstest]
 fn test_field_with_example() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema)]
 	struct User {
@@ -142,6 +146,7 @@ fn test_field_with_example() {
 #[rstest]
 fn test_field_with_format() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema)]
 	struct User {
@@ -177,6 +182,7 @@ fn test_field_with_format() {
 #[rstest]
 fn test_field_with_read_only() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema)]
 	struct User {
@@ -208,6 +214,7 @@ fn test_field_with_read_only() {
 #[rstest]
 fn test_field_with_write_only() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema)]
 	struct CreateUser {
@@ -239,6 +246,7 @@ fn test_field_with_write_only() {
 #[rstest]
 fn test_field_with_deprecated() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema)]
 	struct User {
@@ -271,6 +279,7 @@ fn test_field_with_deprecated() {
 #[rstest]
 fn test_field_with_numeric_constraints() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema)]
 	struct Product {
@@ -304,6 +313,7 @@ fn test_field_with_numeric_constraints() {
 #[rstest]
 fn test_field_with_string_length_constraints() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema)]
 	struct User {
@@ -337,6 +347,7 @@ fn test_field_with_string_length_constraints() {
 #[rstest]
 fn test_field_with_pattern() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema)]
 	struct User {
@@ -366,6 +377,7 @@ fn test_field_with_pattern() {
 #[rstest]
 fn test_doc_comments_as_description() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema)]
 	struct User {
@@ -401,6 +413,7 @@ fn test_doc_comments_as_description() {
 #[rstest]
 fn test_explicit_description_overrides_doc_comment() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema)]
 	struct User {
@@ -431,6 +444,7 @@ fn test_explicit_description_overrides_doc_comment() {
 #[rstest]
 fn test_combined_attributes() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema)]
 	struct User {
@@ -476,6 +490,7 @@ fn test_combined_attributes() {
 #[rstest]
 fn test_complex_struct_with_all_features() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema)]
 	struct User {
@@ -577,6 +592,7 @@ fn test_complex_struct_with_all_features() {
 #[rstest]
 fn test_simple_unit_enum_generates_string_schema() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema)]
 	enum Status {
@@ -605,6 +621,7 @@ fn test_simple_unit_enum_generates_string_schema() {
 #[rstest]
 fn test_internally_tagged_enum() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema, Serialize, Deserialize)]
 	#[serde(tag = "type")]
@@ -630,6 +647,7 @@ fn test_internally_tagged_enum() {
 #[rstest]
 fn test_adjacently_tagged_enum() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema, Serialize, Deserialize)]
 	#[serde(tag = "t", content = "c")]
@@ -654,6 +672,7 @@ fn test_adjacently_tagged_enum() {
 #[rstest]
 fn test_untagged_enum() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema, Serialize, Deserialize)]
 	#[serde(untagged)]
@@ -679,6 +698,7 @@ fn test_untagged_enum() {
 #[rstest]
 fn test_externally_tagged_enum_with_struct_variants() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema)]
 	enum Shape {
@@ -704,6 +724,7 @@ fn test_externally_tagged_enum_with_struct_variants() {
 #[rstest]
 fn test_enum_with_newtype_variant() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema)]
 	enum Wrapper {
@@ -726,6 +747,7 @@ fn test_enum_with_newtype_variant() {
 #[rstest]
 fn test_enum_with_serde_rename() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema, Serialize, Deserialize)]
 	enum Status {
@@ -755,6 +777,7 @@ fn test_enum_with_serde_rename() {
 #[rstest]
 fn test_enum_with_serde_rename_all() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema, Serialize, Deserialize)]
 	#[serde(rename_all = "snake_case")]
@@ -784,6 +807,7 @@ fn test_enum_with_serde_rename_all() {
 #[rstest]
 fn test_enum_with_skip_variant() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema, Serialize, Deserialize)]
 	enum Mode {
@@ -814,6 +838,7 @@ fn test_enum_with_skip_variant() {
 #[rstest]
 fn test_mixed_variant_types() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema)]
 	enum Data {
@@ -840,6 +865,7 @@ fn test_mixed_variant_types() {
 #[rstest]
 fn test_internally_tagged_with_unit_variant() {
 	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
 	#[allow(dead_code)]
 	#[derive(Schema, Serialize, Deserialize)]
 	#[serde(tag = "kind")]
@@ -859,5 +885,498 @@ fn test_internally_tagged_with_unit_variant() {
 			assert!(one_of.discriminator.is_some());
 		}
 		_ => panic!("Expected OneOf schema for internally tagged enum with unit variants"),
+	}
+}
+
+// ============================================================================
+// Container Attribute Tests (Fixes #2441)
+// ============================================================================
+
+#[rstest]
+fn test_container_title_attribute() {
+	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
+	#[allow(dead_code)]
+	#[derive(Schema)]
+	#[schema(title = "User Account")]
+	struct UserAccount {
+		id: i64,
+		name: String,
+	}
+
+	// Act
+	let schema = UserAccount::schema();
+
+	// Assert
+	match schema {
+		Schema::Object(obj) => {
+			assert_eq!(obj.title, Some("User Account".to_string()));
+		}
+		_ => panic!("Expected Object schema"),
+	}
+}
+
+#[rstest]
+fn test_container_description_attribute() {
+	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
+	#[allow(dead_code)]
+	#[derive(Schema)]
+	#[schema(description = "A user account in the system")]
+	struct UserProfile {
+		id: i64,
+		name: String,
+	}
+
+	// Act
+	let schema = UserProfile::schema();
+
+	// Assert
+	match schema {
+		Schema::Object(obj) => {
+			assert_eq!(
+				obj.description,
+				Some("A user account in the system".to_string())
+			);
+		}
+		_ => panic!("Expected Object schema"),
+	}
+}
+
+#[rstest]
+fn test_container_description_overrides_doc_comment() {
+	// Arrange
+	/// This doc comment should be overridden
+	// Allow: compile-time-only test fixture for derive macro verification
+	#[allow(dead_code)]
+	#[derive(Schema)]
+	#[schema(description = "Explicit container description")]
+	struct OverrideDoc {
+		id: i64,
+	}
+
+	// Act
+	let schema = OverrideDoc::schema();
+
+	// Assert
+	match schema {
+		Schema::Object(obj) => {
+			assert_eq!(
+				obj.description,
+				Some("Explicit container description".to_string())
+			);
+		}
+		_ => panic!("Expected Object schema"),
+	}
+}
+
+#[rstest]
+fn test_container_example_attribute() {
+	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
+	#[allow(dead_code)]
+	#[derive(Schema)]
+	#[schema(example = "{\"id\": 1, \"name\": \"Alice\"}")]
+	struct ExampleUser {
+		id: i64,
+		name: String,
+	}
+
+	// Act
+	let schema = ExampleUser::schema();
+
+	// Assert
+	match schema {
+		Schema::Object(obj) => {
+			assert!(obj.example.is_some());
+		}
+		_ => panic!("Expected Object schema"),
+	}
+}
+
+#[rstest]
+fn test_container_deprecated_attribute() {
+	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
+	#[allow(dead_code)]
+	#[derive(Schema)]
+	#[schema(deprecated)]
+	struct LegacyData {
+		id: i64,
+	}
+
+	// Act
+	let schema = LegacyData::schema();
+
+	// Assert
+	match schema {
+		Schema::Object(obj) => {
+			assert!(matches!(obj.deprecated, Some(Deprecated::True)));
+		}
+		_ => panic!("Expected Object schema"),
+	}
+}
+
+#[rstest]
+fn test_container_nullable_attribute() {
+	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
+	#[allow(dead_code)]
+	#[derive(Schema)]
+	#[schema(nullable)]
+	struct NullableData {
+		id: i64,
+	}
+
+	// Act
+	let schema = NullableData::schema();
+	let json = serde_json::to_value(&schema).expect("Failed to serialize");
+
+	// Assert: type should be ["object", "null"]
+	let type_value = json.get("type").expect("Expected 'type' in schema");
+	assert!(
+		type_value.is_array(),
+		"nullable schema should have array type"
+	);
+	let types: Vec<&str> = type_value
+		.as_array()
+		.unwrap()
+		.iter()
+		.filter_map(|v| v.as_str())
+		.collect();
+	assert!(types.contains(&"object"), "Should contain 'object' type");
+	assert!(types.contains(&"null"), "Should contain 'null' type");
+}
+
+#[rstest]
+fn test_container_combined_attributes() {
+	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
+	#[allow(dead_code)]
+	#[derive(Schema)]
+	#[schema(
+		title = "Combined User",
+		description = "A user with all container attributes",
+		deprecated
+	)]
+	struct CombinedUser {
+		id: i64,
+		name: String,
+	}
+
+	// Act
+	let schema = CombinedUser::schema();
+
+	// Assert
+	match schema {
+		Schema::Object(obj) => {
+			assert_eq!(obj.title, Some("Combined User".to_string()));
+			assert_eq!(
+				obj.description,
+				Some("A user with all container attributes".to_string())
+			);
+			assert!(matches!(obj.deprecated, Some(Deprecated::True)));
+		}
+		_ => panic!("Expected Object schema"),
+	}
+}
+
+// ============================================================================
+// New Field Attribute Tests (Fixes #2441)
+// ============================================================================
+
+#[rstest]
+fn test_field_exclusive_minimum_maximum() {
+	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
+	#[allow(dead_code)]
+	#[derive(Schema)]
+	struct NumericBounds {
+		#[schema(exclusive_minimum = 0, exclusive_maximum = 100)]
+		value: i32,
+	}
+
+	// Act
+	let schema = NumericBounds::schema();
+
+	// Assert
+	match schema {
+		Schema::Object(obj) => {
+			if let Some(utoipa::openapi::RefOr::T(Schema::Object(value_obj))) =
+				obj.properties.get("value")
+			{
+				assert!(
+					value_obj.exclusive_minimum.is_some(),
+					"exclusive_minimum should be set"
+				);
+				assert!(
+					value_obj.exclusive_maximum.is_some(),
+					"exclusive_maximum should be set"
+				);
+			} else {
+				panic!("Expected Object schema for value field");
+			}
+		}
+		_ => panic!("Expected Object schema"),
+	}
+}
+
+#[rstest]
+fn test_field_multiple_of() {
+	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
+	#[allow(dead_code)]
+	#[derive(Schema)]
+	struct MultipleOfTest {
+		#[schema(multiple_of = 5)]
+		count: i32,
+	}
+
+	// Act
+	let schema = MultipleOfTest::schema();
+
+	// Assert
+	match schema {
+		Schema::Object(obj) => {
+			if let Some(utoipa::openapi::RefOr::T(Schema::Object(count_obj))) =
+				obj.properties.get("count")
+			{
+				assert!(count_obj.multiple_of.is_some(), "multiple_of should be set");
+				let mul_json = serde_json::to_value(&count_obj.multiple_of).unwrap();
+				assert_eq!(mul_json.as_f64(), Some(5.0));
+			} else {
+				panic!("Expected Object schema for count field");
+			}
+		}
+		_ => panic!("Expected Object schema"),
+	}
+}
+
+#[rstest]
+fn test_field_min_max_items() {
+	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
+	#[allow(dead_code)]
+	#[derive(Schema)]
+	struct ItemBounds {
+		#[schema(min_items = 1, max_items = 10)]
+		tags: Vec<String>,
+	}
+
+	// Act
+	let schema = ItemBounds::schema();
+
+	// Assert
+	match schema {
+		Schema::Object(obj) => {
+			if let Some(utoipa::openapi::RefOr::T(Schema::Array(arr))) = obj.properties.get("tags")
+			{
+				assert_eq!(arr.min_items, Some(1));
+				assert_eq!(arr.max_items, Some(10));
+			} else {
+				panic!("Expected Array schema for tags field");
+			}
+		}
+		_ => panic!("Expected Object schema"),
+	}
+}
+
+#[rstest]
+fn test_field_unique_items() {
+	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
+	#[allow(dead_code)]
+	#[derive(Schema)]
+	struct UniqueSet {
+		#[schema(unique_items)]
+		items: Vec<String>,
+	}
+
+	// Act
+	let schema = UniqueSet::schema();
+
+	// Assert
+	match schema {
+		Schema::Object(obj) => {
+			if let Some(utoipa::openapi::RefOr::T(Schema::Array(arr))) = obj.properties.get("items")
+			{
+				assert!(arr.unique_items, "unique_items should be true");
+			} else {
+				panic!("Expected Array schema for items field");
+			}
+		}
+		_ => panic!("Expected Object schema"),
+	}
+}
+
+#[rstest]
+fn test_field_nullable() {
+	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
+	#[allow(dead_code)]
+	#[derive(Schema)]
+	struct NullableField {
+		#[schema(nullable)]
+		value: String,
+	}
+
+	// Act
+	let schema = NullableField::schema();
+	let json = serde_json::to_value(&schema).expect("Failed to serialize");
+
+	// Assert: the value field should have type ["string", "null"]
+	let properties = json.get("properties").expect("Expected properties");
+	let value_prop = properties.get("value").expect("Expected value property");
+	let type_value = value_prop
+		.get("type")
+		.expect("Expected 'type' in value property");
+	assert!(
+		type_value.is_array(),
+		"nullable field should have array type"
+	);
+	let types: Vec<&str> = type_value
+		.as_array()
+		.unwrap()
+		.iter()
+		.filter_map(|v| v.as_str())
+		.collect();
+	assert!(types.contains(&"null"), "Should contain 'null' type");
+}
+
+#[rstest]
+fn test_field_default_value() {
+	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
+	#[allow(dead_code)]
+	#[derive(Schema)]
+	struct WithDefault {
+		#[schema(default_value = "active")]
+		status: String,
+	}
+
+	// Act
+	let schema = WithDefault::schema();
+
+	// Assert
+	match schema {
+		Schema::Object(obj) => {
+			if let Some(utoipa::openapi::RefOr::T(Schema::Object(status_obj))) =
+				obj.properties.get("status")
+			{
+				assert!(status_obj.default.is_some(), "default should be set");
+			} else {
+				panic!("Expected Object schema for status field");
+			}
+		}
+		_ => panic!("Expected Object schema"),
+	}
+}
+
+#[rstest]
+fn test_field_title() {
+	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
+	#[allow(dead_code)]
+	#[derive(Schema)]
+	struct WithTitle {
+		#[schema(title = "User Identifier")]
+		id: i64,
+	}
+
+	// Act
+	let schema = WithTitle::schema();
+
+	// Assert
+	match schema {
+		Schema::Object(obj) => {
+			if let Some(utoipa::openapi::RefOr::T(Schema::Object(id_obj))) =
+				obj.properties.get("id")
+			{
+				assert_eq!(id_obj.title, Some("User Identifier".to_string()));
+			} else {
+				panic!("Expected Object schema for id field");
+			}
+		}
+		_ => panic!("Expected Object schema"),
+	}
+}
+
+#[rstest]
+fn test_field_attributes_in_json_output() {
+	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
+	#[allow(dead_code)]
+	#[derive(Schema)]
+	struct JsonVerification {
+		#[schema(exclusive_minimum = 0, exclusive_maximum = 100, multiple_of = 5)]
+		score: i32,
+
+		#[schema(title = "Tag List", min_items = 1, max_items = 20, unique_items)]
+		tags: Vec<String>,
+
+		#[schema(default_value = "pending", title = "Status")]
+		status: String,
+	}
+
+	// Act
+	let schema = JsonVerification::schema();
+	let json = serde_json::to_value(&schema).expect("Failed to serialize");
+
+	// Assert
+	let props = json.get("properties").unwrap().as_object().unwrap();
+
+	// Check score field
+	let score = props.get("score").unwrap().as_object().unwrap();
+	assert_eq!(
+		score.get("exclusiveMinimum").and_then(|v| v.as_f64()),
+		Some(0.0)
+	);
+	assert_eq!(
+		score.get("exclusiveMaximum").and_then(|v| v.as_f64()),
+		Some(100.0)
+	);
+	assert_eq!(score.get("multipleOf").and_then(|v| v.as_f64()), Some(5.0));
+
+	// Check tags field
+	let tags = props.get("tags").unwrap().as_object().unwrap();
+	assert_eq!(tags.get("minItems").and_then(|v| v.as_u64()), Some(1));
+	assert_eq!(tags.get("maxItems").and_then(|v| v.as_u64()), Some(20));
+	assert_eq!(
+		tags.get("uniqueItems").and_then(|v| v.as_bool()),
+		Some(true)
+	);
+
+	// Check status field
+	let status = props.get("status").unwrap().as_object().unwrap();
+	assert_eq!(status.get("title").and_then(|v| v.as_str()), Some("Status"));
+	assert!(status.get("default").is_some());
+}
+
+#[rstest]
+fn test_enum_container_attributes() {
+	// Arrange
+	// Allow: compile-time-only test fixture for derive macro verification
+	#[allow(dead_code)]
+	#[derive(Schema)]
+	#[schema(title = "User Status", description = "The status of a user account")]
+	enum UserStatus {
+		Active,
+		Inactive,
+		Suspended,
+	}
+
+	// Act
+	let schema = UserStatus::schema();
+
+	// Assert
+	match schema {
+		Schema::Object(obj) => {
+			assert_eq!(obj.title, Some("User Status".to_string()));
+			assert_eq!(
+				obj.description,
+				Some("The status of a user account".to_string())
+			);
+		}
+		_ => panic!("Expected Object schema for simple enum with container attrs"),
 	}
 }

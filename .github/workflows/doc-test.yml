@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       runner:
-        description: 'Runner label JSON. Use "\"ubuntu-latest\"" for GitHub-hosted or "[\"self-hosted\",\"linux\",\"x64\",\"reinhardt-ci\"]" for self-hosted.'
+        description: 'Runner label JSON. Use "\"ubuntu-latest\"" for GitHub-hosted or "[\"self-hosted\",\"linux\",\"arm64\",\"reinhardt-ci\"]" for self-hosted.'
         type: string
         default: '"ubuntu-latest"'
       cargo-build-jobs:
@@ -83,8 +83,11 @@ jobs:
           df -h
 
       - name: Run doc tests
+        env:
+          RUN_ALL: ${{ inputs.run-all }}
+          AFFECTED_PACKAGES: ${{ inputs.affected-packages }}
         run: |
-          if [[ "${{ inputs.run-all }}" != "true" && -n "${{ inputs.affected-packages }}" ]]; then
+          if [[ "$RUN_ALL" != "true" && -n "$AFFECTED_PACKAGES" ]]; then
             while IFS= read -r pkg; do
               [[ -z "$pkg" ]] && continue
               # Skip binary-only crates (no lib target)
@@ -96,7 +99,7 @@ jobs:
               echo "::group::Doc tests for $pkg"
               cargo test -p "$pkg" --doc --all-features --no-fail-fast
               echo "::endgroup::"
-            done <<< "${{ inputs.affected-packages }}"
+            done <<< "$AFFECTED_PACKAGES"
           else
             cargo make doc-test-only
           fi

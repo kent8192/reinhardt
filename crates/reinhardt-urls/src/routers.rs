@@ -108,38 +108,55 @@
 pub mod client_router;
 
 // Server-only modules (not available on WASM)
+/// Route matching result cache for repeated lookups.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cache;
+/// Path parameter type converters (integer, UUID, slug, date, etc.).
 #[cfg(not(target_arch = "wasm32"))]
 pub mod converters;
+/// Helper functions for building routes (similar to Django's `path()` and `re_path()`).
 #[cfg(not(target_arch = "wasm32"))]
 pub mod helpers;
+/// Route introspection and analysis utilities.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod introspection;
+/// Hierarchical namespace management for URL resolution.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod namespace;
+/// OpenAPI specification generation from registered routes.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod openapi_integration;
+/// Path pattern matching and radix tree routing.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pattern;
+/// Compile-time URL pattern registration via `inventory`.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod registration;
+/// URL reverse resolution (name-to-URL mapping).
 #[cfg(not(target_arch = "wasm32"))]
 pub mod reverse;
+/// Route definition combining path patterns with handlers.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod route;
+/// Route grouping with shared prefix and middleware.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod route_group;
+/// Router trait and default implementation.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod router;
+/// SCRIPT_NAME prefix management for reverse proxy deployments.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod script_prefix;
+/// Full HTTP routing implementation with global router management.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod server_router;
+/// Minimal router for simple routing use cases.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simple;
-#[cfg(not(target_arch = "wasm32"))]
+/// Unified router combining server and client routing.
+#[cfg(any(not(target_arch = "wasm32"), feature = "client-router"))]
 pub mod unified_router;
+/// Route map visualization in multiple formats (tree, DOT, Markdown).
 #[cfg(not(target_arch = "wasm32"))]
 pub mod visualization;
 
@@ -189,12 +206,12 @@ pub use simple::SimpleRouter;
 // Server router (full HTTP routing implementation)
 #[cfg(not(target_arch = "wasm32"))]
 pub use server_router::{
-	FunctionHandler, ServerRouter, clear_router, get_router, is_router_registered, register_router,
-	register_router_arc,
+	FunctionHandler, MiddlewareInfo, ServerRouter, clear_router, get_router, is_router_registered,
+	register_router, register_router_arc,
 };
 
 // Unified router (closure-based API combining server and client routers)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), feature = "client-router"))]
 pub use unified_router::UnifiedRouter;
 
 // Client router re-exports

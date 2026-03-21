@@ -44,6 +44,8 @@ fn safe_client_error_detail(error: &crate::Error) -> Option<String> {
 	use crate::Error;
 	match error {
 		Error::Validation(msg) => Some(msg.clone()),
+		Error::Http(msg) => Some(msg.clone()),
+		Error::Serialization(msg) => Some(msg.clone()),
 		Error::ParseError(_) => Some("Invalid request format".to_string()),
 		Error::BodyAlreadyConsumed => Some("Request body has already been consumed".to_string()),
 		Error::MissingContentType => Some("Missing Content-Type header".to_string()),
@@ -51,6 +53,7 @@ fn safe_client_error_detail(error: &crate::Error) -> Option<String> {
 		Error::InvalidCursor(_) => Some("Invalid cursor value".to_string()),
 		Error::InvalidLimit(msg) => Some(format!("Invalid limit: {}", msg)),
 		Error::MissingParameter(name) => Some(format!("Missing parameter: {}", name)),
+		Error::Conflict(msg) => Some(msg.clone()),
 		Error::ParamValidation(ctx) => {
 			Some(format!("{} parameter extraction failed", ctx.param_type))
 		}
@@ -194,8 +197,11 @@ pub fn truncate_for_log(input: &str, max_length: usize) -> String {
 /// HTTP Response representation
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Response {
+	/// The HTTP status code.
 	pub status: StatusCode,
+	/// The response headers.
 	pub headers: HeaderMap,
+	/// The response body as raw bytes.
 	pub body: Bytes,
 	/// Indicates whether the middleware chain should stop processing
 	/// When true, no further middleware or handlers will be executed
@@ -204,8 +210,11 @@ pub struct Response {
 
 /// Streaming HTTP Response
 pub struct StreamingResponse<S> {
+	/// The HTTP status code.
 	pub status: StatusCode,
+	/// The response headers.
 	pub headers: HeaderMap,
+	/// The streaming body source.
 	pub stream: S,
 }
 

@@ -1,50 +1,37 @@
-name: Coverage (main)
-
-# Upload coverage on main branch pushes to populate Codecov Flags baseline.
-# Without this, Codecov Flags tab shows "No report uploaded" because
-# ci.yml only triggers on pull_request events.
+name: Coverage
 
 on:
+  pull_request:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
   id-token: write
+  pull-requests: read
 
 concurrency:
-  group: coverage-main-${{ github.sha }}
+  group: coverage-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
-  determine-runner:
-    name: Determine Runner
-    runs-on: ubuntu-latest
-    outputs:
-      runner: ${{ steps.set-runner.outputs.runner }}
-      cargo-build-jobs: ${{ steps.set-runner.outputs.cargo-build-jobs }}
-    steps:
-      - name: Set runner configuration
-        id: set-runner
-        env:
-          ACTOR: ${{ github.actor }}
-          REPO_OWNER: ${{ github.repository_owner }}
-          SELF_HOSTED_ENABLED: ${{ vars.SELF_HOSTED_ENABLED }}
-        run: |
-          if [[ "$ACTOR" == "$REPO_OWNER" ]] && [[ "$SELF_HOSTED_ENABLED" == "true" ]]; then
-            echo 'runner=["self-hosted","linux","x64","reinhardt-ci"]' >> "$GITHUB_OUTPUT"
-            echo 'cargo-build-jobs=8' >> "$GITHUB_OUTPUT"
-          else
-            echo 'runner="ubuntu-latest"' >> "$GITHUB_OUTPUT"
-            echo 'cargo-build-jobs=1' >> "$GITHUB_OUTPUT"
-          fi
+  detect-affected:
+    name: Detect Affected Packages
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/detect-affected-packages.yml
 
   coverage:
     name: Coverage
-    needs: [determine-runner]
+    needs: [detect-affected]
+    if: |
+      always() &&
+      (github.event_name != 'pull_request' || needs.detect-affected.outputs.has-affected == 'true')
     uses: ./.github/workflows/coverage.yml
     secrets: inherit
     with:
-      runner: ${{ needs.determine-runner.outputs.runner }}
-      cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
+      runner: '"ubuntu-latest"'
+      cargo-build-jobs: '1'
+      nextest-filter: ${{ needs.detect-affected.outputs.nextest-filter || '' }}
+      run-all: ${{ needs.detect-affected.outputs.run-all || 'true' }}

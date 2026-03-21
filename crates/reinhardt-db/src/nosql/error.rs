@@ -129,7 +129,10 @@ pub enum OdmError {
 	NotFound,
 
 	/// Duplicate key error.
-	DuplicateKey { field: String },
+	DuplicateKey {
+		/// The field that caused the duplicate key error.
+		field: String,
+	},
 
 	/// Serialization error.
 	Serialization(String),
@@ -243,8 +246,11 @@ pub enum ValidationError {
 
 	/// Value out of range.
 	OutOfRange {
+		/// The field name.
 		field: &'static str,
+		/// The minimum allowed value.
 		min: i64,
+		/// The maximum allowed value.
 		max: i64,
 	},
 

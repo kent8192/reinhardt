@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-testkit"
-version = "0.1.0-rc.5"
+version = "0.1.0-rc.13"
 edition.workspace = true
 authors.workspace = true
 description = "Core testing infrastructure for Reinhardt framework (no functional crate dependencies)"

@@ -4,6 +4,12 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
+variable "excluded_zone_ids" {
+  description = "Zone IDs to exclude (AZs that do not support required Graviton instance types). Use zone IDs (e.g. 'use1-az3') for cross-account consistency."
+  type        = list(string)
+  default     = []
+}
+
 variable "aws_account_id" {
   description = "AWS Account ID for the CI sub-account. Used by init.sh to auto-generate backend.tfvars with the correct S3 bucket name."
   type        = string
@@ -39,9 +45,9 @@ variable "github_repository" {
 }
 
 variable "runner_instance_types" {
-  description = "EC2 Spot fleet instance type candidates (priority order). c6a first for cost."
+  description = "EC2 Spot fleet Graviton instance type candidates (priority order)."
   type        = list(string)
-  default     = ["c6a.2xlarge", "c6i.2xlarge", "c5a.2xlarge"]
+  default     = ["c7g.2xlarge", "c6g.2xlarge"]
 }
 
 variable "runner_max_count" {
@@ -76,5 +82,41 @@ variable "monthly_budget_limit_usd" {
 
 variable "budget_alert_email" {
   description = "Email address for budget alert notifications"
+  type        = string
+}
+
+variable "runner_ami_ssm_parameter_name" {
+  description = "SSM Parameter name storing the Golden AMI ID (managed by build-runner-ami workflow)"
+  type        = string
+  default     = "/reinhardt-ci/runner-ami-id"
+}
+
+variable "enable_hotpath_runner" {
+  description = "Enable the always-on hotpath runner for lightweight CI control jobs"
+  type        = bool
+  default     = true
+}
+
+variable "hotpath_runner_instance_type" {
+  description = "EC2 instance type for the hotpath runner (lightweight CI control jobs)"
+  type        = string
+  default     = "t4g.micro"
+}
+
+
+variable "tf_plan_aws_access_key_id" {
+  description = "AWS access key ID for terraform-plan CI workflow (read-only IAM user recommended)"
+  type        = string
+  sensitive   = true
+}
+
+variable "tf_plan_aws_secret_access_key" {
+  description = "AWS secret access key for terraform-plan CI workflow"
+  type        = string
+  sensitive   = true
+}
+
+variable "organizations_account_email" {
+  description = "Email address for the CI sub-account (used by organizations module in terraform-plan CI)"
   type        = string
 }

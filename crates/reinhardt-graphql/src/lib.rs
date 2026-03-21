@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! GraphQL support for Reinhardt framework
 //!
 //! This crate provides GraphQL API support for the Reinhardt framework.
@@ -110,3 +111,15 @@ pub use di::{GraphQLContextExt, SchemaBuilderExt};
 
 #[cfg(feature = "di")]
 pub use reinhardt_graphql_macros::graphql_handler;
+
+// Re-export async_graphql base types for facade pattern.
+// These types are commonly needed by user code to define GraphQL schemas,
+// resolvers, and error handling without depending on async_graphql directly.
+pub use async_graphql::{
+	Context, Enum, Error, ErrorExtensions, FieldError, ID, InputObject, MergedObject,
+	MergedSubscription, Object, Request, Result as GqlResult, Schema, SimpleObject, Subscription,
+};
+
+/// Re-export of `async_graphql::http` module for HTTP integration utilities
+/// such as `playground_source` and `GraphQLPlaygroundConfig`.
+pub use async_graphql::http;

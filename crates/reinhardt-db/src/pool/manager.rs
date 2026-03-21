@@ -13,6 +13,7 @@ pub struct PoolManager {
 }
 
 impl PoolManager {
+	/// Creates a new instance.
 	pub fn new(config: PoolConfig) -> Self {
 		Self {
 			pools: Arc::new(RwLock::new(HashMap::new())),
@@ -20,6 +21,7 @@ impl PoolManager {
 		}
 	}
 
+	/// Adds pool.
 	pub async fn add_pool<T: 'static + Send + Sync>(
 		&self,
 		name: impl Into<String>,
@@ -30,6 +32,7 @@ impl PoolManager {
 		Ok(())
 	}
 
+	/// Returns the pool.
 	pub async fn get_pool<T: 'static + Send + Sync>(&self, name: &str) -> PoolResult<Arc<T>> {
 		let pools = self.pools.read().await;
 		pools
@@ -38,6 +41,7 @@ impl PoolManager {
 			.ok_or_else(|| PoolError::PoolNotFound(name.to_string()))
 	}
 
+	/// Removes pool.
 	pub async fn remove_pool(&self, name: &str) -> PoolResult<()> {
 		let mut pools = self.pools.write().await;
 		pools
@@ -46,6 +50,7 @@ impl PoolManager {
 		Ok(())
 	}
 
+	/// Performs the config operation.
 	pub fn config(&self) -> &PoolConfig {
 		&self.config
 	}

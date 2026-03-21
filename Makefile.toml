@@ -290,10 +290,10 @@ dependencies = ["docker-cleanup-force", "examples-test-only"]
 description = "Run all tests without Docker cleanup"
 dependencies = [
   "unit-test",
-  "integration-test",
-  "doc-test",
-  "examples-test",
-  "ui-test"
+  "integration-test-only",
+  "doc-test-only",
+  "examples-test-only",
+  "ui-test-only"
 ]
 
 [tasks.test]
@@ -556,7 +556,7 @@ dependencies = ["local-examples-clean", "remote-examples-clean"]
 
 [tasks.ci-full]
 description = "Run all CI checks including examples tests"
-dependencies = ["check", "fmt", "clippy", "test", "examples-test"]
+dependencies = ["check", "fmt-check", "clippy-check", "test", "examples-test"]
 
 [tasks.ci-with-examples]
 description = "Alias for ci-full"

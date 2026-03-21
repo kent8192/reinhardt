@@ -20,10 +20,15 @@ pub trait ConnectionHandle: Send + Sync + std::fmt::Debug {
 	fn connection_id(&self) -> &str;
 }
 
+/// Trait defining connection pool behavior.
 pub trait ConnectionPool: Send + Sync {
+	/// Acquires a connection from the pool.
 	fn get_connection(&self) -> Result<PooledConnection, PoolError>;
+	/// Returns a connection back to the pool.
 	fn return_connection(&self, conn: PooledConnection);
+	/// Returns the total pool size.
 	fn size(&self) -> usize;
+	/// Returns the number of currently active connections.
 	fn active_connections(&self) -> usize;
 }
 
@@ -104,10 +109,15 @@ impl PooledConnection {
 
 #[non_exhaustive]
 #[derive(Debug)]
+/// Defines possible pool error values.
 pub enum PoolError {
+	/// NoConnectionsAvailable variant.
 	NoConnectionsAvailable,
+	/// ConnectionFailed variant.
 	ConnectionFailed(String),
+	/// Timeout variant.
 	Timeout,
+	/// MaxConnectionsReached variant.
 	MaxConnectionsReached,
 }
 
@@ -120,7 +130,9 @@ struct PoolState {
 
 /// Queue-based connection pool (FIFO)
 pub struct QueuePool {
+	/// The max connections.
 	pub max_connections: usize,
+	/// The timeout.
 	pub timeout: Duration,
 	state: Arc<Mutex<PoolState>>,
 }
@@ -157,7 +169,7 @@ impl QueuePool {
 
 impl ConnectionPool for QueuePool {
 	fn get_connection(&self) -> Result<PooledConnection, PoolError> {
-		let mut state = self.state.lock().unwrap();
+		let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
 
 		// Try to get an existing connection from the pool
 		if let Some(mut conn) = state.available.pop_front() {
@@ -179,7 +191,7 @@ impl ConnectionPool for QueuePool {
 	}
 
 	fn return_connection(&self, conn: PooledConnection) {
-		let mut state = self.state.lock().unwrap();
+		let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
 		state.available.push_back(conn);
 		if state.active > 0 {
 			state.active -= 1;
@@ -187,12 +199,12 @@ impl ConnectionPool for QueuePool {
 	}
 
 	fn size(&self) -> usize {
-		let state = self.state.lock().unwrap();
+		let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
 		state.available.len() + state.active
 	}
 
 	fn active_connections(&self) -> usize {
-		let state = self.state.lock().unwrap();
+		let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
 		state.active
 	}
 }
@@ -229,7 +241,7 @@ impl Default for NullPool {
 
 impl ConnectionPool for NullPool {
 	fn get_connection(&self) -> Result<PooledConnection, PoolError> {
-		let mut id = self.next_id.lock().unwrap();
+		let mut id = self.next_id.lock().unwrap_or_else(|e| e.into_inner());
 		let conn_id = *id;
 		*id += 1;
 
@@ -280,7 +292,7 @@ impl Default for StaticPool {
 
 impl ConnectionPool for StaticPool {
 	fn get_connection(&self) -> Result<PooledConnection, PoolError> {
-		let mut conn_opt = self.connection.lock().unwrap();
+		let mut conn_opt = self.connection.lock().unwrap_or_else(|e| e.into_inner());
 
 		// If connection doesn't exist, create it
 		if conn_opt.is_none() {
@@ -300,7 +312,7 @@ impl ConnectionPool for StaticPool {
 	}
 
 	fn active_connections(&self) -> usize {
-		let conn_opt = self.connection.lock().unwrap();
+		let conn_opt = self.connection.lock().unwrap_or_else(|e| e.into_inner());
 		if conn_opt.is_some() { 1 } else { 0 }
 	}
 }
@@ -339,7 +351,7 @@ impl Default for SingletonThreadPool {
 impl ConnectionPool for SingletonThreadPool {
 	fn get_connection(&self) -> Result<PooledConnection, PoolError> {
 		let thread_id = std::thread::current().id();
-		let mut connections = self.connections.lock().unwrap();
+		let mut connections = self.connections.lock().unwrap_or_else(|e| e.into_inner());
 
 		// If connection exists for this thread, return it (cloned)
 		if let Some(conn) = connections.get(&thread_id) {
@@ -347,7 +359,7 @@ impl ConnectionPool for SingletonThreadPool {
 		}
 
 		// Create new connection for this thread
-		let mut next_id = self.next_id.lock().unwrap();
+		let mut next_id = self.next_id.lock().unwrap_or_else(|e| e.into_inner());
 		let id = *next_id;
 		*next_id += 1;
 
@@ -362,18 +374,19 @@ impl ConnectionPool for SingletonThreadPool {
 	}
 
 	fn size(&self) -> usize {
-		let connections = self.connections.lock().unwrap();
+		let connections = self.connections.lock().unwrap_or_else(|e| e.into_inner());
 		connections.len()
 	}
 
 	fn active_connections(&self) -> usize {
-		let connections = self.connections.lock().unwrap();
+		let connections = self.connections.lock().unwrap_or_else(|e| e.into_inner());
 		connections.len()
 	}
 }
 
 /// Async-compatible queue pool
 pub struct AsyncAdaptedQueuePool {
+	/// The max connections.
 	pub max_connections: usize,
 	semaphore: Arc<Semaphore>,
 	queue: Arc<TokioMutex<VecDeque<PooledConnection>>>,
@@ -502,11 +515,17 @@ impl AssertionPool {
 	/// pool.return_connection(conn_id2);
 	/// ```
 	pub fn get_connection(&self) -> usize {
-		let mut counter = self.connection_counter.lock().unwrap();
+		let mut counter = self
+			.connection_counter
+			.lock()
+			.unwrap_or_else(|e| e.into_inner());
 		let id = *counter;
 		*counter += 1;
 
-		let mut active = self.active_connections.lock().unwrap();
+		let mut active = self
+			.active_connections
+			.lock()
+			.unwrap_or_else(|e| e.into_inner());
 		active.insert(id);
 
 		eprintln!("[AssertionPool] Connection {} acquired", id);
@@ -539,7 +558,10 @@ impl AssertionPool {
 	/// pool.return_connection(999); // Panics - connection not active
 	/// ```
 	pub fn return_connection(&self, id: usize) {
-		let mut active = self.active_connections.lock().unwrap();
+		let mut active = self
+			.active_connections
+			.lock()
+			.unwrap_or_else(|e| e.into_inner());
 		if !active.remove(&id) {
 			panic!("Attempted to return connection {} that was not active", id);
 		}
@@ -548,7 +570,10 @@ impl AssertionPool {
 
 	/// Get the number of currently active connections
 	pub fn active_count(&self) -> usize {
-		let active = self.active_connections.lock().unwrap();
+		let active = self
+			.active_connections
+			.lock()
+			.unwrap_or_else(|e| e.into_inner());
 		active.len()
 	}
 }
@@ -561,7 +586,14 @@ impl Default for AssertionPool {
 
 impl Drop for AssertionPool {
 	fn drop(&mut self) {
-		let active = self.active_connections.lock().unwrap();
+		// Avoid double-panic if already unwinding
+		if std::thread::panicking() {
+			return;
+		}
+		let active = self
+			.active_connections
+			.lock()
+			.unwrap_or_else(|e| e.into_inner());
 		if !active.is_empty() {
 			panic!(
 				"AssertionPool dropped with {} active connections: {:?}",
@@ -572,11 +604,17 @@ impl Drop for AssertionPool {
 	}
 }
 
+/// Represents a pool statistics.
 pub struct PoolStatistics {
+	/// The total connections.
 	pub total_connections: usize,
+	/// The active connections.
 	pub active_connections: usize,
+	/// The idle connections.
 	pub idle_connections: usize,
+	/// The total requests.
 	pub total_requests: usize,
+	/// The failed requests.
 	pub failed_requests: usize,
 }
 

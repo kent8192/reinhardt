@@ -49,6 +49,26 @@ During the RC phase, a `develop/0.x+1.0` branch exists for next-version developm
 - **After stable release**: Merging the develop branch into `main` introduces new features and breaking changes. release-plz detects these changes on the next push and generates Release PRs for the new version cycle (e.g., `0.2.0-alpha.1`).
 - **No manual version management**: `Cargo.toml` versions in the develop branch do not need manual updates. release-plz handles versioning after the branch is merged into `main`.
 
+The following diagram illustrates the develop branch lifecycle and its interaction with the release workflow:
+
+```mermaid
+gitGraph
+    commit id: "v0.1.0-rc.1"
+    branch "develop/0.2.0"
+    commit id: "feat: breaking change"
+    checkout main
+    commit id: "fix: rc bug" tag: "v0.1.0-rc.2"
+    checkout "develop/0.2.0"
+    merge main id: "forward-merge"
+    commit id: "feat: new feature"
+    checkout main
+    commit id: "stable" tag: "v0.1.0"
+    checkout "develop/0.2.0"
+    merge main id: "final forward-merge"
+    checkout main
+    merge "develop/0.2.0" id: "merge develop into main"
+```
+
 ---
 
 ## How release-plz Works
@@ -109,7 +129,7 @@ CHANGELOGs are generated from commit messages and categorized into sections base
 - Breaking changes are always included, even from otherwise-skipped commits
 - Commits are sorted in chronological order (oldest first)
 
-For detailed guidelines on writing CHANGELOG-friendly commit messages, see [docs/COMMIT_GUIDELINE.md](COMMIT_GUIDELINE.md) § CG: CHANGELOG Generation Guidelines.
+For detailed guidelines on writing CHANGELOG-friendly commit messages, see [instructions/COMMIT_GUIDELINE.md](COMMIT_GUIDELINE.md) § CG: CHANGELOG Generation Guidelines.
 
 ---
 
@@ -167,6 +187,16 @@ Upon merge, release-plz:
 - Already-published crate versions are skipped automatically (no errors on retry)
 - Only publishable crates are processed (respects `publish = false` in Cargo.toml)
 - Workspace dependencies are published in the correct order
+
+The following diagram summarizes the 5-step release workflow:
+
+```mermaid
+flowchart LR
+    A["1. Write conventional commits<br/>(Developer)"] --> B["2. Push to main<br/>(Developer)"]
+    B --> C["3. Create Release PR<br/>(release-plz)"]
+    C --> D["4. Review and Merge PR<br/>(Developer)"]
+    D --> E["5. Publish to crates.io<br/>+ create tags<br/>(release-plz)"]
+```
 
 ---
 
@@ -289,11 +319,23 @@ The `reinhardt-test` crate is published on crates.io and its workspace dependenc
 
 ## Known Issues & Pitfalls
 
+The following diagram provides a decision tree for diagnosing release and publish failures:
+
+```mermaid
+flowchart TD
+    A[Release/Publish failed] --> B{Error type?}
+    B -->|Circular dependency| C["RP-2: Fix dependency chain<br/>Use optional deps for reinhardt-test"]
+    B -->|Dev-dependency resolution| D["KI-2: Choose strategy<br/>optional dep / path-only / separate testkit"]
+    B -->|Partial failure| E["RP-1: Identify published/unpublished<br/>rollback unpublished versions<br/>new Release PR and merge"]
+    B -->|gix cache panic| F["RP-3: Re-run release-plz<br/>(transient error)"]
+    B -->|Phantom version bump| G["KI-5: Set release_always = true"]
+```
+
 ### KI-1: Circular Publish Dependencies
 
 **Problem**: `cargo publish` resolves all dependencies (including dev-dependencies) from crates.io. If crate A has a dev-dependency on crate B, and crate B has a dev-dependency on crate A, neither can be published first — creating a deadlock.
 
-**Impact on Reinhardt**: The `reinhardt-test` crate provides test fixtures used across the workspace. If a functional crate (e.g., `reinhardt-orm`) adds `reinhardt-test` to its `[dev-dependencies]`, and `reinhardt-test` already depends on that functional crate, a circular publish dependency is created.
+**Impact on Reinhardt**: The `reinhardt-test` crate provides test fixtures used across the workspace. If a functional crate (e.g., `reinhardt-db`) adds `reinhardt-test` to its `[dev-dependencies]`, and `reinhardt-test` already depends on that functional crate, a circular publish dependency is created.
 
 **Rule**: Functional crates **must not** include other Reinhardt crates in `[dev-dependencies]`. Tests requiring cross-crate fixtures belong in the `reinhardt-integration-tests` crate.
 
@@ -386,6 +428,26 @@ Tests continue to work because the project always runs tests with `--all-feature
 
 (Ref: [#246](https://github.com/kent8192/reinhardt-web/issues/246))
 
+### KI-6: crates.io Rate Limit (429 Too Many Requests)
+
+**Status**: Mitigated (CI workflow has retry with delay)
+
+**Problem**: crates.io enforces a publish rate limit of 1 crate per minute with
+a burst allowance of 30 crates. With 45+ crates in the workspace, publishing
+exceeds the burst limit, resulting in HTTP 429 errors.
+
+**Mitigation**:
+- The release workflow (`release-plz.yml`) includes up to 3 publish attempts
+  with 120-second delays between retries
+- release-plz automatically skips already-published crates on retry
+- Each attempt can publish up to 30 crates (burst), covering 90 total
+
+**If the issue persists** (e.g., workspace grows beyond 90 crates):
+- Contact crates.io support (`help@crates.io`) to request a rate limit increase
+- Alternatively, increase the delay or add more retry rounds
+
+**Reference**: `<https://github.com/rust-lang/crates.io/issues/1643>`
+
 ---
 
 ## Recovery Procedures
@@ -398,7 +460,7 @@ Use this procedure when some crates were published successfully but others faile
 
 ```bash
 # Check which crate versions exist on crates.io
-for crate in reinhardt-core reinhardt-database reinhardt-orm reinhardt-web reinhardt-macros reinhardt-test; do
+for crate in reinhardt-core reinhardt-db reinhardt-db-macros reinhardt-macros reinhardt-test reinhardt-web; do
   version=$(curl -s "https://crates.io/api/v1/crates/$crate" | jq -r '.crate.max_version // "not found"')
   echo "$crate: $version"
 done
@@ -556,6 +618,7 @@ cargo publish --dry-run -p reinhardt-web  # root crate depends on reinhardt-test
 - **Partial Failure**: See [KI-3: Partial Release Failure Deadlock](#ki-3-partial-release-failure-deadlock) and [RP-1](#rp-1-partial-release-failure-recovery)
 - **gix Panic**: See [KI-4: gix/gitoxide Slotmap Overflow](#ki-4-gixgitoxide-slotmap-overflow) and [RP-3](#rp-3-gix-cache-failure-recovery)
 - **Phantom Version (dependency not found)**: See [KI-5: Phantom Version Bumps from `dependencies_update`](#ki-5-phantom-version-bumps-from-dependencies_update)
+    - **Rate Limit (429)**: See [KI-6: crates.io Rate Limit](#ki-6-cratesio-rate-limit-429-too-many-requests)
 
 **CHANGELOG Not Updated:**
 - Ensure `changelog_update = true` in config

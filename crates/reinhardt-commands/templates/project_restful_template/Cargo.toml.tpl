@@ -8,6 +8,7 @@ name = "manage"
 path = "src/bin/manage.rs"
 
 [dependencies]
-reinhardt = { version = "*", package = "reinhardt-web", features = ["full"] }
+reinhardt = { version = "{{ reinhardt_version }}", package = "reinhardt-web", features = ["full"] }
+ctor = "0.6"
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }

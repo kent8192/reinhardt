@@ -256,6 +256,7 @@ impl Default for SiteConfig {
 /// ```
 pub struct SiteMiddleware {
 	config: SiteConfig,
+	/// The shared site registry containing all registered sites.
 	pub registry: Arc<SiteRegistry>,
 }
 
@@ -323,10 +324,12 @@ impl Middleware for SiteMiddleware {
 						.clone();
 					if let Some(site) = default_site {
 						let mut response = handler.handle(request).await?;
-						let header_name: HeaderName = SITE_ID_HEADER.parse().unwrap();
-						response
-							.headers
-							.insert(header_name, site.id.to_string().parse().unwrap());
+						if let (Ok(header_name), Ok(header_value)) = (
+							SITE_ID_HEADER.parse::<HeaderName>(),
+							site.id.to_string().parse(),
+						) {
+							response.headers.insert(header_name, header_value);
+						}
 						return Ok(response);
 					}
 				}
@@ -346,11 +349,12 @@ impl Middleware for SiteMiddleware {
 		let mut response = handler.handle(request).await?;
 
 		// Add site ID to response headers if site was found
-		if let Some(site) = site {
-			let header_name: HeaderName = SITE_ID_HEADER.parse().unwrap();
-			response
-				.headers
-				.insert(header_name, site.id.to_string().parse().unwrap());
+		if let Some(site) = site
+			&& let (Ok(header_name), Ok(header_value)) = (
+				SITE_ID_HEADER.parse::<HeaderName>(),
+				site.id.to_string().parse(),
+			) {
+			response.headers.insert(header_name, header_value);
 		}
 
 		Ok(response)

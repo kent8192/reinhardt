@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       runner:
-        description: 'Runner label JSON. Use "\"ubuntu-latest\"" for GitHub-hosted or "[\"self-hosted\",\"linux\",\"x64\",\"reinhardt-ci\"]" for self-hosted.'
+        description: 'Runner label JSON. Use "\"ubuntu-latest\"" for GitHub-hosted or "[\"self-hosted\",\"linux\",\"arm64\",\"reinhardt-ci\"]" for self-hosted.'
         type: string
         default: '"ubuntu-latest"'
       cargo-build-jobs:
@@ -24,7 +24,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  CARGO_TARGET_DIR: /tmp/cargo_target
   CARGO_INCREMENTAL: 0
   CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
@@ -36,6 +35,8 @@ jobs:
     name: Unit Test Coverage
     runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: /tmp/cargo_target_unit_cov
     permissions:
       id-token: write
       contents: read
@@ -77,6 +78,13 @@ jobs:
         with:
           tool: nextest
 
+      - name: Install mold linker and build dependencies
+        run: |
+          sudo apt-get update -o DPkg::Lock::Timeout=120
+          sudo apt-get install -y -o DPkg::Lock::Timeout=120 mold clang lld build-essential
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2
         with:
@@ -99,6 +107,32 @@ jobs:
           echo "Disk usage after additional cleanup:"
           df -h
 
+      - name: Clean coverage artifacts
+        run: |
+          cargo llvm-cov clean --workspace
+          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
+
+      - name: Configure cargo for coverage
+        run: |
+          cat > /tmp/clang-mold-wrapper << 'WRAPPER'
+          #!/bin/sh
+          exec clang -fuse-ld=mold "$@"
+          WRAPPER
+          chmod +x /tmp/clang-mold-wrapper
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "aarch64" ]; then
+            TARGET="aarch64-unknown-linux-gnu"
+          elif [ "$ARCH" = "x86_64" ]; then
+            TARGET="x86_64-unknown-linux-gnu"
+          fi
+          cat > .cargo/config.toml << EOF
+          [env]
+          RUST_ANALYZER_CARGO_FEATURES = "all"
+
+          [target.${TARGET}]
+          linker = "/tmp/clang-mold-wrapper"
+          EOF
+
       - name: Run unit tests with coverage
         env:
           NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
@@ -108,14 +142,28 @@ jobs:
           if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
             FILTER_ARGS+=(-E "$NEXTEST_FILTER_EXPR")
           fi
+          set +e
           cargo llvm-cov nextest \
+            --no-report \
             --workspace \
             --lib \
             --all-features \
             --no-fail-fast \
-            --codecov \
-            --output-path /tmp/unit-codecov.json \
             "${FILTER_ARGS[@]}"
+          EXIT_CODE=$?
+          set -e
+          if [[ $EXIT_CODE -eq 4 ]]; then
+            echo "::notice::No tests matched the filter — treating as success"
+            exit 0
+          elif [[ $EXIT_CODE -ne 0 ]]; then
+            exit $EXIT_CODE
+          fi
+
+      - name: Generate unit coverage report
+        run: |
+          cargo llvm-cov report \
+            --codecov \
+            --output-path /tmp/unit-codecov.json
 
       - name: Upload coverage to Codecov
         if: always()
@@ -134,6 +182,8 @@ jobs:
     name: Intra-Crate Integration Coverage
     runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 120
+    env:
+      CARGO_TARGET_DIR: /tmp/cargo_target_intra_cov
     permissions:
       id-token: write
       contents: read
@@ -167,8 +217,8 @@ jobs:
 
       - name: Install mold linker and build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y mold clang lld build-essential
+          sudo apt-get update -o DPkg::Lock::Timeout=120
+          sudo apt-get install -y -o DPkg::Lock::Timeout=120 mold clang lld build-essential
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
 
@@ -211,6 +261,32 @@ jobs:
         with:
           images-file: .github/docker-images-intra-crate.txt
 
+      - name: Configure cargo for coverage
+        run: |
+          cat > /tmp/clang-mold-wrapper << 'WRAPPER'
+          #!/bin/sh
+          exec clang -fuse-ld=mold "$@"
+          WRAPPER
+          chmod +x /tmp/clang-mold-wrapper
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "aarch64" ]; then
+            TARGET="aarch64-unknown-linux-gnu"
+          elif [ "$ARCH" = "x86_64" ]; then
+            TARGET="x86_64-unknown-linux-gnu"
+          fi
+          cat > .cargo/config.toml << EOF
+          [env]
+          RUST_ANALYZER_CARGO_FEATURES = "all"
+
+          [target.${TARGET}]
+          linker = "/tmp/clang-mold-wrapper"
+          EOF
+
+      - name: Clean coverage artifacts
+        run: |
+          cargo llvm-cov clean --workspace
+          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
+
       - name: Run intra-crate integration tests with coverage
         env:
           NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
@@ -221,13 +297,27 @@ jobs:
           else
             FILTER_EXPR="not binary(/ui/)"
           fi
+          set +e
           cargo llvm-cov nextest \
+            --no-report \
             --workspace \
             --test "*" \
             --exclude reinhardt-integration-tests \
             -E "$FILTER_EXPR" \
             --all-features \
-            --no-fail-fast \
+            --no-fail-fast
+          EXIT_CODE=$?
+          set -e
+          if [[ $EXIT_CODE -eq 4 ]]; then
+            echo "::notice::No tests matched the filter — treating as success"
+            exit 0
+          elif [[ $EXIT_CODE -ne 0 ]]; then
+            exit $EXIT_CODE
+          fi
+
+      - name: Generate intra-crate coverage report
+        run: |
+          cargo llvm-cov report \
             --codecov \
             --output-path /tmp/intra-crate-codecov.json
 
@@ -248,6 +338,8 @@ jobs:
     name: Cross-Crate Integration Coverage
     runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: /tmp/cargo_target_cross_cov
     permissions:
       id-token: write
       contents: read
@@ -281,8 +373,8 @@ jobs:
 
       - name: Install mold linker and build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y mold clang lld build-essential
+          sudo apt-get update -o DPkg::Lock::Timeout=120
+          sudo apt-get install -y -o DPkg::Lock::Timeout=120 mold clang lld build-essential
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
 
@@ -325,6 +417,32 @@ jobs:
         with:
           images-file: .github/docker-images-cross-crate.txt
 
+      - name: Configure cargo for coverage
+        run: |
+          cat > /tmp/clang-mold-wrapper << 'WRAPPER'
+          #!/bin/sh
+          exec clang -fuse-ld=mold "$@"
+          WRAPPER
+          chmod +x /tmp/clang-mold-wrapper
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "aarch64" ]; then
+            TARGET="aarch64-unknown-linux-gnu"
+          elif [ "$ARCH" = "x86_64" ]; then
+            TARGET="x86_64-unknown-linux-gnu"
+          fi
+          cat > .cargo/config.toml << EOF
+          [env]
+          RUST_ANALYZER_CARGO_FEATURES = "all"
+
+          [target.${TARGET}]
+          linker = "/tmp/clang-mold-wrapper"
+          EOF
+
+      - name: Clean coverage artifacts
+        run: |
+          cargo llvm-cov clean --workspace
+          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
+
       - name: Run cross-crate integration tests with coverage
         env:
           NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
@@ -334,13 +452,27 @@ jobs:
           if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
             FILTER_ARGS+=(-E "$NEXTEST_FILTER_EXPR")
           fi
+          set +e
           cargo llvm-cov nextest \
+            --no-report \
             --package reinhardt-integration-tests \
             --all-features \
             --no-fail-fast \
-            --codecov \
-            --output-path /tmp/cross-crate-codecov.json \
             "${FILTER_ARGS[@]}"
+          EXIT_CODE=$?
+          set -e
+          if [[ $EXIT_CODE -eq 4 ]]; then
+            echo "::notice::No tests matched the filter — treating as success"
+            exit 0
+          elif [[ $EXIT_CODE -ne 0 ]]; then
+            exit $EXIT_CODE
+          fi
+
+      - name: Generate cross-crate coverage report
+        run: |
+          cargo llvm-cov report \
+            --codecov \
+            --output-path /tmp/cross-crate-codecov.json
 
       - name: Upload coverage to Codecov
         if: always()

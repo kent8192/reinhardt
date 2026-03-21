@@ -121,7 +121,9 @@ impl SessionAnalytics for LoggerAnalytics {
 mod tests {
 	use super::*;
 	use chrono::Utc;
+	use rstest::rstest;
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_logger_analytics_created() {
 		let analytics = LoggerAnalytics::new();
@@ -136,6 +138,7 @@ mod tests {
 		analytics.record_event(event).await;
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_logger_analytics_accessed() {
 		let analytics = LoggerAnalytics::new();
@@ -150,6 +153,7 @@ mod tests {
 		analytics.record_event(event).await;
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_logger_analytics_deleted() {
 		let analytics = LoggerAnalytics::new();
@@ -163,6 +167,7 @@ mod tests {
 		analytics.record_event(event).await;
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_logger_analytics_expired() {
 		let analytics = LoggerAnalytics::new();

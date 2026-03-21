@@ -158,13 +158,15 @@ impl Permission for IsOwnerOrReadOnly {
 
 ## Using Permissions with ViewSets
 
-Apply permissions to ViewSets:
+Apply permissions to ViewSets using `ModelViewSetHandler`:
 
 ```rust
 use reinhardt::prelude::*;
+use reinhardt::IsAuthenticated;
+use std::sync::Arc;
 
-let viewset = ModelViewSet::<Snippet, SnippetSerializer>::new("snippet")
-    .with_permission(IsAuthenticated);
+let handler = ModelViewSetHandler::<Snippet>::new()
+    .add_permission(Arc::new(IsAuthenticated));
 ```
 
 ## Object-Level Permissions
@@ -232,7 +234,8 @@ use reinhardt::prelude::*;
 use reinhardt::IsAuthenticated;
 use serde::{Serialize, Deserialize};
 use async_trait::async_trait;
-use hyper::Method;
+use reinhardt::Method;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Snippet {
@@ -250,9 +253,9 @@ struct SnippetSerializer {
     owner: String,
 }
 
-// Example 1: Using standard permission
-let viewset_with_standard = ModelViewSet::<Snippet, SnippetSerializer>::new("snippet")
-    .with_permission(IsAuthenticated);
+// Example 1: Using standard permission with ModelViewSetHandler
+let handler_with_standard = ModelViewSetHandler::<Snippet>::new()
+    .add_permission(Arc::new(IsAuthenticated));
 
 // Example 2: Custom permission for more complex logic
 pub struct IsOwnerOrReadOnly;
@@ -275,9 +278,9 @@ impl Permission for IsOwnerOrReadOnly {
     }
 }
 
-// Create ViewSet with custom permission
-let viewset_with_custom = ModelViewSet::<Snippet, SnippetSerializer>::new("snippet")
-    .with_permission(IsOwnerOrReadOnly);
+// Create handler with custom permission
+let handler_with_custom = ModelViewSetHandler::<Snippet>::new()
+    .add_permission(Arc::new(IsOwnerOrReadOnly));
 ```
 
 ## Summary

@@ -8,12 +8,18 @@ use std::str::FromStr;
 #[repr(i32)]
 #[derive(Default)]
 pub enum Level {
+	/// Debug-level messages (value: 10).
 	Debug = 10,
+	/// Informational messages (value: 20). This is the default level.
 	#[default]
 	Info = 20,
+	/// Success messages (value: 25).
 	Success = 25,
+	/// Warning messages (value: 30).
 	Warning = 30,
+	/// Error messages (value: 40).
 	Error = 40,
+	/// Custom level with a user-defined numeric value.
 	Custom(i32), // Support for custom levels
 }
 

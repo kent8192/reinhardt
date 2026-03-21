@@ -460,7 +460,9 @@ where
 mod tests {
 	use super::*;
 	use crate::sessions::InMemorySessionBackend;
+	use rstest::rstest;
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_async_replication_save() {
 		let primary = InMemorySessionBackend::new();
@@ -488,6 +490,7 @@ mod tests {
 		assert_eq!(secondary_data.unwrap(), data);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_sync_replication_save() {
 		let primary = InMemorySessionBackend::new();
@@ -511,6 +514,7 @@ mod tests {
 		assert_eq!(secondary_data.unwrap(), data);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_acknowledged_replication_save() {
 		let primary = InMemorySessionBackend::new();
@@ -534,6 +538,7 @@ mod tests {
 		assert_eq!(secondary_data.unwrap(), data);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_replication_delete() {
 		let primary = InMemorySessionBackend::new();
@@ -558,6 +563,7 @@ mod tests {
 		assert!(!secondary.exists("test_key").await.unwrap());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_replication_load_fallback() {
 		let primary = InMemorySessionBackend::new();
@@ -579,6 +585,7 @@ mod tests {
 		assert_eq!(loaded.unwrap(), data);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_replication_config() {
 		let config = ReplicationConfig {
@@ -602,6 +609,7 @@ mod tests {
 		assert_eq!(replicated.config.retry_delay_ms, 200);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_replication_strategy_getter() {
 		let primary = InMemorySessionBackend::new();
@@ -611,5 +619,106 @@ mod tests {
 			ReplicatedSessionBackend::new(primary, secondary, ReplicationStrategy::SyncReplication);
 
 		assert_eq!(replicated.strategy(), ReplicationStrategy::SyncReplication);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_async_replication_delete_propagates() {
+		// Arrange
+		let primary = InMemorySessionBackend::new();
+		let secondary = InMemorySessionBackend::new();
+		let data = serde_json::json!({"key": "value"});
+		primary.save("test_key", &data, None).await.unwrap();
+		secondary.save("test_key", &data, None).await.unwrap();
+
+		let replicated = ReplicatedSessionBackend::new(
+			primary.clone(),
+			secondary.clone(),
+			ReplicationStrategy::AsyncReplication,
+		);
+
+		// Act
+		replicated.delete("test_key").await.unwrap();
+		tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+		// Assert
+		let primary_data: Option<serde_json::Value> = primary.load("test_key").await.unwrap();
+		assert_eq!(primary_data, None);
+		let secondary_data: Option<serde_json::Value> = secondary.load("test_key").await.unwrap();
+		assert_eq!(secondary_data, None);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_sync_replication_delete_both_removed() {
+		// Arrange
+		let primary = InMemorySessionBackend::new();
+		let secondary = InMemorySessionBackend::new();
+		let data = serde_json::json!({"key": "value"});
+
+		let replicated = ReplicatedSessionBackend::new(
+			primary.clone(),
+			secondary.clone(),
+			ReplicationStrategy::SyncReplication,
+		);
+		replicated.save("test_key", &data, None).await.unwrap();
+
+		// Act
+		replicated.delete("test_key").await.unwrap();
+
+		// Assert
+		let primary_data: Option<serde_json::Value> = primary.load("test_key").await.unwrap();
+		assert_eq!(primary_data, None);
+		let secondary_data: Option<serde_json::Value> = secondary.load("test_key").await.unwrap();
+		assert_eq!(secondary_data, None);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_load_prefers_primary() {
+		// Arrange
+		let primary = InMemorySessionBackend::new();
+		let secondary = InMemorySessionBackend::new();
+		let primary_data = serde_json::json!({"source": "primary_data"});
+		let secondary_data = serde_json::json!({"source": "secondary_data"});
+		primary.save("test_key", &primary_data, None).await.unwrap();
+		secondary
+			.save("test_key", &secondary_data, None)
+			.await
+			.unwrap();
+
+		let replicated = ReplicatedSessionBackend::new(
+			primary.clone(),
+			secondary.clone(),
+			ReplicationStrategy::SyncReplication,
+		);
+
+		// Act
+		let loaded: Option<serde_json::Value> = replicated.load("test_key").await.unwrap();
+
+		// Assert
+		assert_eq!(loaded.unwrap(), primary_data);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_acknowledged_replication_save_both() {
+		// Arrange
+		let primary = InMemorySessionBackend::new();
+		let secondary = InMemorySessionBackend::new();
+
+		let replicated = ReplicatedSessionBackend::new(
+			primary.clone(),
+			secondary.clone(),
+			ReplicationStrategy::AcknowledgedReplication,
+		);
+		let data = serde_json::json!({"key": "value"});
+
+		// Act
+		replicated.save("test_key", &data, None).await.unwrap();
+
+		// Assert
+		assert!(primary.exists("test_key").await.unwrap());
+		assert!(secondary.exists("test_key").await.unwrap());
 	}
 }

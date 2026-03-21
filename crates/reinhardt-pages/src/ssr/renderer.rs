@@ -254,7 +254,10 @@ impl SsrRenderer {
 
 		// DOCTYPE and html opening
 		html.push_str("<!DOCTYPE html>\n");
-		html.push_str(&format!("<html lang=\"{}\">\n", self.options.lang));
+		html.push_str(&format!(
+			"<html lang=\"{}\">\n",
+			html_escape(&self.options.lang)
+		));
 
 		// Head section
 		html.push_str("<head>\n");
@@ -346,7 +349,10 @@ impl SsrRenderer {
 
 		// DOCTYPE and html opening
 		html.push_str("<!DOCTYPE html>\n");
-		html.push_str(&format!("<html lang=\"{}\">\n", self.options.lang));
+		html.push_str(&format!(
+			"<html lang=\"{}\">\n",
+			html_escape(&self.options.lang)
+		));
 
 		// Head section
 		html.push_str("<head>\n");
@@ -448,12 +454,19 @@ fn escape_json_for_script(json: &str) -> String {
 /// denial-of-service via excessively large payloads.
 const MINIFY_HTML_MAX_INPUT_SIZE: usize = 1024 * 1024;
 
+/// Tag names whose content must be preserved verbatim during minification.
+///
+/// - `pre`, `textarea`: whitespace is semantically significant
+/// - `script`, `style`: whitespace removal can break code/selectors
+const PRESERVED_TAGS: [&str; 4] = ["pre", "textarea", "script", "style"];
+
 /// Simple HTML minification (removes extra whitespace).
 ///
 /// Returns the input unmodified when its byte length exceeds
 /// `MINIFY_HTML_MAX_INPUT_SIZE` (1MB) to prevent denial-of-service attacks.
 ///
-/// Whitespace inside `<pre>` blocks is preserved.
+/// Whitespace inside `<pre>`, `<textarea>`, `<script>`, and `<style>` blocks
+/// is preserved.
 fn minify_html(html: &str) -> String {
 	if html.len() > MINIFY_HTML_MAX_INPUT_SIZE {
 		return html.to_string();
@@ -461,35 +474,44 @@ fn minify_html(html: &str) -> String {
 
 	let mut result = String::with_capacity(html.len());
 	let mut prev_was_whitespace = false;
-	let mut in_pre = false;
+	// When inside a preserved tag, holds the tag name for closing-tag matching
+	let mut preserved_tag: Option<&str> = None;
 	let mut chars = html.char_indices().peekable();
 
 	while let Some((byte_pos, c)) = chars.next() {
 		let remaining = &html[byte_pos..];
 
-		// Detect opening <pre tag (e.g. <pre>, <pre class="...">)
-		if !in_pre
-			&& c == '<'
-			&& remaining.strip_prefix("<pre").is_some_and(|after| {
-				after.starts_with(|ch: char| ch == '>' || ch.is_ascii_whitespace())
-					|| after.is_empty()
-			}) {
-			in_pre = true;
-		}
-
-		// Detect closing </pre> tag
-		if in_pre && c == '<' && remaining.starts_with("</pre>") {
-			result.push_str("</pre>");
-			// Skip the remaining 5 chars of "</pre>" (we already consumed '<')
-			for _ in 0..5 {
-				chars.next();
+		// Detect opening preserved tag (e.g. <pre>, <textarea class="...">)
+		if preserved_tag.is_none() && c == '<' {
+			for tag in &PRESERVED_TAGS {
+				if remaining
+					.strip_prefix(&format!("<{tag}"))
+					.is_some_and(|after| {
+						after.starts_with(|ch: char| ch == '>' || ch.is_ascii_whitespace())
+							|| after.is_empty()
+					}) {
+					preserved_tag = Some(tag);
+					break;
+				}
 			}
-			in_pre = false;
-			prev_was_whitespace = false;
-			continue;
 		}
 
-		if in_pre {
+		// Detect closing tag for the currently preserved tag
+		if let Some(tag) = preserved_tag {
+			let close = format!("</{tag}>");
+			if c == '<' && remaining.starts_with(&close) {
+				result.push_str(&close);
+				// Skip the remaining chars of the closing tag (we already consumed '<')
+				for _ in 0..close.len() - 1 {
+					chars.next();
+				}
+				preserved_tag = None;
+				prev_was_whitespace = false;
+				continue;
+			}
+		}
+
+		if preserved_tag.is_some() {
 			result.push(c);
 		} else if c.is_whitespace() {
 			if !prev_was_whitespace {
@@ -559,6 +581,7 @@ fn test_ssr_options_default_strategy_static() {
 mod tests {
 	use super::*;
 	use crate::component::PageElement;
+	use rstest::rstest;
 
 	struct TestComponent {
 		message: String,
@@ -726,5 +749,76 @@ mod tests {
 		assert!(!html.contains("</script><img"));
 		// The escaped version should be present
 		assert!(html.contains("<\\/script>"));
+	}
+
+	#[test]
+	fn test_ssr_renderer_lang_escaping() {
+		// Arrange
+		let component = TestComponent {
+			message: "Test".to_string(),
+		};
+		let opts = SsrOptions::new().lang("en\" onload=\"alert(1)");
+		let mut renderer = SsrRenderer::with_options(opts);
+
+		// Act
+		let html = renderer.render_page(&component);
+
+		// Assert - the quote in the lang value should be escaped, preventing attribute breakout
+		assert!(html.contains("&quot;"));
+		// The entire malicious value should be contained within the lang attribute
+		assert!(html.contains("lang=\"en&quot; onload=&quot;alert(1)\""));
+	}
+
+	#[rstest]
+	#[case::pre("<pre>  hello\n  world  </pre>", "<pre>  hello\n  world  </pre>")]
+	#[case::textarea(
+		"<textarea>  hello\n  world  </textarea>",
+		"<textarea>  hello\n  world  </textarea>"
+	)]
+	#[case::style(
+		"<style>  .foo  {  color: red;  }  </style>",
+		"<style>  .foo  {  color: red;  }  </style>"
+	)]
+	#[case::script(
+		"<script>  var x  =  1;  </script>",
+		"<script>  var x  =  1;  </script>"
+	)]
+	#[case::pre_with_attrs(
+		"<pre class=\"code\">  spaced  </pre>",
+		"<pre class=\"code\">  spaced  </pre>"
+	)]
+	#[case::textarea_with_attrs(
+		"<textarea rows=\"5\">  multi\n  line  </textarea>",
+		"<textarea rows=\"5\">  multi\n  line  </textarea>"
+	)]
+	#[case::surrounding_whitespace_collapsed(
+		"<div>  hello  </div>  <pre>  keep  </pre>  <div>  world  </div>",
+		"<div> hello </div> <pre>  keep  </pre> <div> world </div>"
+	)]
+	fn test_minify_html_preserves_tag_content(#[case] input: &str, #[case] expected: &str) {
+		// Arrange (input and expected provided by rstest cases)
+
+		// Act
+		let result = minify_html(input);
+
+		// Assert
+		assert_eq!(result, expected);
+	}
+
+	#[test]
+	fn test_ssr_renderer_lang_escaping_angle_brackets() {
+		// Arrange
+		let component = TestComponent {
+			message: "Test".to_string(),
+		};
+		let opts = SsrOptions::new().lang("<script>alert(1)</script>");
+		let mut renderer = SsrRenderer::with_options(opts);
+
+		// Act
+		let html = renderer.render_page(&component);
+
+		// Assert - angle brackets should be escaped
+		assert!(html.contains("&lt;script&gt;"));
+		assert!(!html.contains("<html lang=\"<script>"));
 	}
 }

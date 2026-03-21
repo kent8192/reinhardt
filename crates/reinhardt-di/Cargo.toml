@@ -1,7 +1,7 @@
 
 [package]
 name = "reinhardt-di"
-version = "0.1.0-rc.5"
+version = "0.1.0-rc.13"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -34,7 +34,6 @@ form_urlencoded = "1.2"
 http = "1.0"
 urlencoding = "2.1"
 regex = { workspace = true }
-validator = { version = "0.20.0", features = ["derive"], optional = true }
 multer = { version = "3.1", optional = true }
 futures-util = { version = "0.3", optional = true }
 uuid = { workspace = true, optional = true }
@@ -52,7 +51,7 @@ di-full = [
   "generator",
   
 ]
-validation = ["reinhardt-core/validators", "validator"]
+validation = ["reinhardt-core/validators"]
 multi-value-arrays = []
 multipart = ["multer", "futures-util"]
 uuid = ["dep:uuid"]

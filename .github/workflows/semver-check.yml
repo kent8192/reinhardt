@@ -57,8 +57,15 @@ jobs:
           LATEST_TAG=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
             "https://api.github.com/repos/obi1kenobi/cargo-semver-checks/releases/latest" \
             | jq -r '.tag_name')
+          # Auto-detect architecture for correct binary
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "aarch64" ]; then
+            TARGET="aarch64-unknown-linux-musl"
+          else
+            TARGET="x86_64-unknown-linux-musl"
+          fi
           curl -fsSL -o /tmp/cargo-semver-checks.tar.gz \
-            "https://github.com/obi1kenobi/cargo-semver-checks/releases/download/${LATEST_TAG}/cargo-semver-checks-x86_64-unknown-linux-musl.tar.gz"
+            "https://github.com/obi1kenobi/cargo-semver-checks/releases/download/${LATEST_TAG}/cargo-semver-checks-${TARGET}.tar.gz"
           mkdir -p /tmp/csc
           tar xzf /tmp/cargo-semver-checks.tar.gz -C /tmp/csc/
           mv /tmp/csc/cargo-semver-checks ~/.cargo/bin/

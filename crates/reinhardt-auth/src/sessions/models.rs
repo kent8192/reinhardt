@@ -277,11 +277,15 @@ impl SessionModel {
 	}
 }
 
+/// Query field descriptors for the `SessionModel`.
 #[cfg(feature = "database")]
 #[derive(Debug, Clone)]
 pub struct SessionModelFields {
+	/// The session key field.
 	pub session_key: reinhardt_db::orm::query_fields::Field<SessionModel, String>,
+	/// The session data field.
 	pub session_data: reinhardt_db::orm::query_fields::Field<SessionModel, serde_json::Value>,
+	/// The expiration date field.
 	pub expire_date: reinhardt_db::orm::query_fields::Field<SessionModel, DateTime<Utc>>,
 }
 
@@ -294,6 +298,7 @@ impl Default for SessionModelFields {
 
 #[cfg(feature = "database")]
 impl SessionModelFields {
+	/// Creates a new `SessionModelFields` with default field mappings.
 	pub fn new() -> Self {
 		Self {
 			session_key: reinhardt_db::orm::query_fields::Field::new(vec!["session_key"]),

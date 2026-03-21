@@ -89,6 +89,7 @@ impl Serializer for BincodeSerializer {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 
 	#[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -188,5 +189,22 @@ mod tests {
 		let bytes = serializer.serialize(&data).unwrap();
 		// Bincode is very compact
 		assert!(bytes.len() < 20);
+	}
+
+	#[rstest]
+	#[test]
+	fn test_empty_data_roundtrip() {
+		// Arrange
+		let serializer = BincodeSerializer;
+		let data: std::collections::HashMap<String, serde_json::Value> =
+			std::collections::HashMap::new();
+
+		// Act
+		let bytes = serializer.serialize(&data).unwrap();
+		let restored: std::collections::HashMap<String, serde_json::Value> =
+			serializer.deserialize(&bytes).unwrap();
+
+		// Assert
+		assert_eq!(restored, data);
 	}
 }

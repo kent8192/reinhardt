@@ -66,7 +66,7 @@ async fn test_fetch_profile_not_found(#[future] twitter_db_pool: (PgPool, String
 #[rstest]
 #[tokio::test]
 async fn test_update_profile_validation_bio_too_long() {
-	use validator::Validate;
+	use reinhardt::Validate;
 
 	// Bio exceeds 500 characters
 	let long_bio = "a".repeat(501);
@@ -84,7 +84,7 @@ async fn test_update_profile_validation_bio_too_long() {
 #[rstest]
 #[tokio::test]
 async fn test_update_profile_validation_bio_max_length() {
-	use validator::Validate;
+	use reinhardt::Validate;
 
 	// Bio exactly at limit (500 characters)
 	let max_bio = "a".repeat(500);
@@ -102,7 +102,7 @@ async fn test_update_profile_validation_bio_max_length() {
 #[rstest]
 #[tokio::test]
 async fn test_update_profile_validation_invalid_avatar_url() {
-	use validator::Validate;
+	use reinhardt::Validate;
 
 	let request = UpdateProfileRequest {
 		bio: None,
@@ -118,7 +118,7 @@ async fn test_update_profile_validation_invalid_avatar_url() {
 #[rstest]
 #[tokio::test]
 async fn test_update_profile_validation_valid_avatar_url() {
-	use validator::Validate;
+	use reinhardt::Validate;
 
 	let request = UpdateProfileRequest {
 		bio: None,
@@ -134,7 +134,7 @@ async fn test_update_profile_validation_valid_avatar_url() {
 #[rstest]
 #[tokio::test]
 async fn test_update_profile_validation_location_too_long() {
-	use validator::Validate;
+	use reinhardt::Validate;
 
 	// Location exceeds 100 characters
 	let long_location = "a".repeat(101);
@@ -155,7 +155,7 @@ async fn test_update_profile_validation_location_too_long() {
 #[rstest]
 #[tokio::test]
 async fn test_update_profile_validation_invalid_website() {
-	use validator::Validate;
+	use reinhardt::Validate;
 
 	let request = UpdateProfileRequest {
 		bio: None,
@@ -174,7 +174,7 @@ async fn test_update_profile_validation_invalid_website() {
 #[rstest]
 #[tokio::test]
 async fn test_update_profile_validation_all_valid() {
-	use validator::Validate;
+	use reinhardt::Validate;
 
 	let request = UpdateProfileRequest {
 		bio: Some("My bio".to_string()),
@@ -190,7 +190,7 @@ async fn test_update_profile_validation_all_valid() {
 #[rstest]
 #[tokio::test]
 async fn test_update_profile_validation_partial_update() {
-	use validator::Validate;
+	use reinhardt::Validate;
 
 	// Only updating bio
 	let request = UpdateProfileRequest {

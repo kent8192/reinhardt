@@ -26,6 +26,19 @@ Key principles from the specification:
 - Always wait for user confirmation before committing changes
 - Prepare changes and inform the user, but let them decide when to commit
 
+The following diagram summarizes the commit authorization decision flow:
+
+```mermaid
+flowchart TD
+    A[Want to create a commit] --> B{Explicit user instruction?}
+    B -->|Yes| C[Create commit]
+    B -->|No| D{Plan Mode approved?}
+    D -->|Yes| E{Implementation + tests passed?}
+    E -->|Yes| C
+    E -->|No| F[Report failure to user, do NOT commit]
+    D -->|No| G[Do NOT commit, wait for instruction]
+```
+
 **EXCEPTION: Plan Mode Approval**
 
 When a user approves a plan by accepting Exit Plan Mode, this constitutes explicit authorization for both:
@@ -160,9 +173,26 @@ This project uses [release-plz](https://release-plz.ieni.dev/) for automated rel
 - ❌ NEVER manually bump versions in feature branches (let release-plz handle it)
 - ❌ NEVER create release tags manually (release-plz creates them)
 
+The following diagram illustrates the release-plz automated workflow:
+
+```mermaid
+sequenceDiagram
+    participant Dev as Developer
+    participant Git as Git/GitHub
+    participant RP as release-plz
+    participant Crates as crates.io
+
+    Dev->>Git: Push conventional commits to main
+    RP->>Git: Analyze commits since last release
+    RP->>Git: Create Release PR (version bumps + CHANGELOG)
+    Dev->>Git: Review and merge Release PR
+    RP->>Crates: Publish crates
+    RP->>Git: Create git tags (crate@vX.Y.Z)
+```
+
 **For Detailed Information:**
 
-See [docs/RELEASE_PROCESS.md](RELEASE_PROCESS.md) for complete release workflow documentation
+See [instructions/RELEASE_PROCESS.md](RELEASE_PROCESS.md) for complete release workflow documentation
 
 ---
 
@@ -410,6 +440,21 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 This section describes how commit messages are transformed into CHANGELOG entries by release-plz. The configuration is defined in `release-plz.toml`.
 
 ### CG-1: Commit Type to CHANGELOG Section Mapping
+
+The following diagram shows how commit types map to version bumps and CHANGELOG sections:
+
+```mermaid
+flowchart LR
+    A["feat:"] --> B["MINOR bump"]
+    C["fix:"] --> D["PATCH bump"]
+    E["feat!: / BREAKING CHANGE:"] --> F["MAJOR bump"]
+    G["other types"] --> H["PATCH bump"]
+
+    B --> I["Added section"]
+    D --> J["Fixed section"]
+    F --> K["Breaking section"]
+    H --> L["Maintenance/Other section"]
+```
 
 Every commit type maps to a specific CHANGELOG section:
 

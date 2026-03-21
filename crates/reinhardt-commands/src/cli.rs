@@ -7,7 +7,10 @@
 use crate::MakeMigrationsCommand;
 use crate::base::BaseCommand;
 use crate::collectstatic::{CollectStaticCommand, CollectStaticOptions};
+use crate::registry::CommandRegistry;
 use crate::{CheckCommand, CommandContext, MigrateCommand, RunServerCommand, ShellCommand};
+#[cfg(feature = "introspect")]
+use clap::ValueEnum;
 use clap::{Parser, Subcommand};
 use reinhardt_conf::settings::builder::SettingsBuilder;
 use reinhardt_conf::settings::profile::Profile;
@@ -38,6 +41,16 @@ pub struct Cli {
 	pub verbosity: u8,
 }
 
+/// Output format for the introspect command
+#[cfg(feature = "introspect")]
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum OutputFormat {
+	/// YAML output (default)
+	Yaml,
+	/// JSON output
+	Json,
+}
+
 /// Command-line interface commands
 ///
 /// This enum defines all available management commands.
@@ -65,6 +78,10 @@ pub enum Commands {
 		/// Create empty migration
 		#[arg(long)]
 		empty: bool,
+
+		/// Fix migration conflicts (create merge migration)
+		#[arg(long)]
+		merge: bool,
 
 		/// Force using empty state when database/TestContainers is unavailable (dangerous)
 		#[arg(long)]
@@ -181,6 +198,18 @@ pub enum Commands {
 		names: bool,
 	},
 
+	/// Output structured project metadata for platform introspection
+	#[cfg(feature = "introspect")]
+	Introspect {
+		/// Output format: yaml (default) or json
+		#[arg(short = 'f', long, value_enum, default_value_t = OutputFormat::Yaml)]
+		format: OutputFormat,
+
+		/// Output only a specific section (app, databases, routes, middleware, settings, features)
+		#[arg(short = 's', long)]
+		section: Option<String>,
+	},
+
 	/// Generate OpenAPI 3.0 schema from registered endpoints
 	#[cfg(feature = "openapi")]
 	Generateopenapi {
@@ -195,6 +224,19 @@ pub enum Commands {
 		/// Also generate Postman Collection
 		#[arg(long)]
 		postman: bool,
+	},
+
+	/// Execute a custom command registered in a `CommandRegistry`
+	///
+	/// This variant is not exposed in the CLI help. It is used internally
+	/// by [`execute_from_command_line_with_registry`] to dispatch commands
+	/// that are not built-in but were registered by the downstream project.
+	#[command(skip)]
+	Custom {
+		/// The name of the custom command to execute.
+		name: String,
+		/// Positional arguments forwarded to the custom command.
+		args: Vec<String>,
 	},
 }
 
@@ -232,16 +274,78 @@ pub enum Commands {
 /// }
 /// ```
 pub async fn execute_from_command_line() -> Result<(), Box<dyn std::error::Error>> {
-	let cli = Cli::parse();
+	execute_from_command_line_with_registry(CommandRegistry::new()).await
+}
+
+/// Execute commands from command-line arguments with a custom command registry.
+///
+/// This entry point works like [`execute_from_command_line`] but additionally
+/// accepts a [`CommandRegistry`] containing user-defined management commands.
+/// If the subcommand parsed from CLI arguments does not match any built-in
+/// command, the registry is consulted for a matching custom command.
+///
+/// # Arguments
+///
+/// * `registry` - A [`CommandRegistry`] holding custom commands to make available.
+///
+/// # Returns
+///
+/// Returns `Ok(())` on success, or an error message on failure.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use reinhardt_commands::{execute_from_command_line_with_registry, CommandRegistry};
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     unsafe {
+///         std::env::set_var("REINHARDT_SETTINGS_MODULE", "myproject.config.settings");
+///     }
+///
+///     let mut registry = CommandRegistry::new();
+///     // registry.register(Box::new(MyCustomCommand));
+///
+///     if let Err(e) = execute_from_command_line_with_registry(registry).await {
+///         eprintln!("Error: {}", e);
+///         std::process::exit(1);
+///     }
+///     Ok(())
+/// }
+/// ```
+pub async fn execute_from_command_line_with_registry(
+	registry: CommandRegistry,
+) -> Result<(), Box<dyn std::error::Error>> {
+	// Attempt normal clap parsing first. If it fails (e.g., unknown subcommand),
+	// fall back to checking the registry for a matching custom command.
+	let (command, verbosity) = match Cli::try_parse() {
+		Ok(cli) => (cli.command, cli.verbosity),
+		Err(clap_err) => {
+			// Only intercept "unknown subcommand" errors; re-raise others (--help, --version, etc.)
+			if !is_unknown_subcommand(&clap_err) {
+				clap_err.exit();
+			}
+
+			// Extract the raw arguments and try to find a matching custom command.
+			let raw_args: Vec<String> = env::args().collect();
+			match resolve_custom_command(&raw_args, &registry) {
+				Some((name, args, verbosity)) => (Commands::Custom { name, args }, verbosity),
+				None => {
+					// No custom command matched either; let clap display its error.
+					clap_err.exit();
+				}
+			}
+		}
+	};
 
 	// Only register router for commands that serve HTTP traffic.
 	// DB-only commands (migrate, makemigrations) and utility commands
 	// (shell, check, collectstatic) must not require route registration.
-	if requires_router(&cli.command) {
+	if requires_router(&command) {
 		auto_register_router().await?;
 	}
 
-	run_command(cli.command, cli.verbosity).await
+	run_command_with_registry(command, verbosity, registry).await
 }
 
 /// Returns `true` for commands that require HTTP route registration.
@@ -254,16 +358,22 @@ fn requires_router(command: &Commands) -> bool {
 		Commands::Runserver { .. } => true,
 		#[cfg(feature = "routers")]
 		Commands::Showurls { .. } => true,
+		#[cfg(feature = "introspect")]
+		Commands::Introspect { .. } => true,
 		#[cfg(feature = "openapi")]
 		Commands::Generateopenapi { .. } => true,
 		_ => false,
 	}
 }
 
-/// Execute a command with the given verbosity level
+/// Execute a command with the given verbosity level.
 ///
-/// This is the internal entry point for executing commands.
-/// For most use cases, prefer using `execute_from_command_line()` instead.
+/// This is the internal entry point for executing built-in commands.
+/// For most use cases, prefer using [`execute_from_command_line`] or
+/// [`execute_from_command_line_with_registry`] instead.
+///
+/// Note: this function does **not** dispatch [`Commands::Custom`] variants.
+/// Use [`run_command_with_registry`] when custom commands may be present.
 ///
 /// # Arguments
 ///
@@ -277,6 +387,28 @@ pub async fn run_command(
 	command: Commands,
 	verbosity: u8,
 ) -> Result<(), Box<dyn std::error::Error>> {
+	run_command_with_registry(command, verbosity, CommandRegistry::new()).await
+}
+
+/// Execute a command with the given verbosity level and a custom command registry.
+///
+/// This extends [`run_command`] by also checking the provided [`CommandRegistry`]
+/// when a [`Commands::Custom`] variant is encountered.
+///
+/// # Arguments
+///
+/// * `command` - The command to execute
+/// * `verbosity` - Verbosity level (0-3, higher is more verbose)
+/// * `registry` - A [`CommandRegistry`] for resolving custom commands
+///
+/// # Returns
+///
+/// Returns `Ok(())` on success, or an error message on failure.
+pub async fn run_command_with_registry(
+	command: Commands,
+	verbosity: u8,
+	registry: CommandRegistry,
+) -> Result<(), Box<dyn std::error::Error>> {
 	match command {
 		#[cfg(feature = "migrations")]
 		Commands::Makemigrations {
@@ -285,6 +417,7 @@ pub async fn run_command(
 			name,
 			check,
 			empty,
+			merge,
 			force_empty_state,
 			migration_dir: _,
 		} => {
@@ -294,6 +427,7 @@ pub async fn run_command(
 				name,
 				check,
 				empty,
+				merge,
 				force_empty_state,
 				verbosity,
 			)
@@ -349,23 +483,117 @@ pub async fn run_command(
 			ignore,
 		} => execute_collectstatic(clear, no_input, dry_run, link, ignore, verbosity).await,
 		Commands::Showurls { names } => execute_showurls(names, verbosity).await,
+		#[cfg(feature = "introspect")]
+		Commands::Introspect { format, section } => execute_introspect(format, section, verbosity).await,
 		#[cfg(feature = "openapi")]
 		Commands::Generateopenapi {
 			format,
 			output,
 			postman,
 		} => execute_generateopenapi(format, output, postman, verbosity).await,
+		Commands::Custom { name, args } => {
+			execute_custom_command(&name, &args, verbosity, &registry).await
+		}
 	}
+}
+
+/// Returns `true` when the clap error represents an unrecognised subcommand.
+///
+/// Only `InvalidSubcommand` is intercepted. `UnknownArgument` is intentionally
+/// excluded because it fires for unknown flags/options (e.g. `--bogus-flag`)
+/// which should still produce the normal clap error output.
+fn is_unknown_subcommand(err: &clap::Error) -> bool {
+	matches!(err.kind(), clap::error::ErrorKind::InvalidSubcommand)
+}
+
+/// Known global options that accept a separate value argument.
+///
+/// When skipping leading flags we must also consume the following token for
+/// options that take a value (e.g. `--verbosity 2`). Without this, the value
+/// would be mistaken for the subcommand name.
+const GLOBAL_OPTIONS_WITH_VALUE: &[&str] = &["--verbosity"];
+
+/// Try to resolve raw CLI arguments into a custom command from the registry.
+///
+/// The convention is: `manage <subcommand> [args...]`.  Global flags that
+/// appear before the subcommand (e.g., `-v`) are skipped.  The function also
+/// extracts the verbosity level so it can be forwarded to the custom command.
+fn resolve_custom_command(
+	raw_args: &[String],
+	registry: &CommandRegistry,
+) -> Option<(String, Vec<String>, u8)> {
+	let mut verbosity: u8 = 0;
+
+	// Skip the binary name (argv[0]) and parse leading global flags.
+	let mut iter = raw_args.iter().skip(1).peekable();
+	while let Some(arg) = iter.peek() {
+		if !arg.starts_with('-') {
+			break;
+		}
+		let flag = iter.next().unwrap(); // safe: peeked above
+
+		if flag == "-v" || flag == "--verbose" {
+			verbosity = verbosity.saturating_add(1);
+		} else if flag == "--verbosity" {
+			// Consume the next token as the value.
+			if let Some(val) = iter.peek()
+				&& !val.starts_with('-')
+			{
+				verbosity = val.parse().unwrap_or(0);
+				iter.next();
+			}
+		} else if let Some(val) = flag.strip_prefix("--verbosity=") {
+			verbosity = val.parse().unwrap_or(0);
+		} else if GLOBAL_OPTIONS_WITH_VALUE.contains(&flag.as_str()) {
+			// Skip the value for other known options that take one.
+			iter.next();
+		}
+	}
+
+	let subcommand = iter.next()?;
+	if registry.get(subcommand).is_some() {
+		let remaining: Vec<String> = iter.cloned().collect();
+		Some((subcommand.clone(), remaining, verbosity))
+	} else {
+		None
+	}
+}
+
+/// Execute a custom command looked up from the registry.
+async fn execute_custom_command(
+	name: &str,
+	args: &[String],
+	verbosity: u8,
+	registry: &CommandRegistry,
+) -> Result<(), Box<dyn std::error::Error>> {
+	let cmd = registry.get(name).ok_or_else(|| {
+		format!(
+			"Custom command '{}' not found in registry.\nRegistered commands: {}",
+			name,
+			registry.list().join(", ")
+		)
+	})?;
+
+	let mut ctx = CommandContext::default();
+	ctx.set_verbosity(verbosity);
+	for arg in args {
+		ctx.add_arg(arg.clone());
+	}
+
+	cmd.execute(&ctx).await.map_err(|e| e.into())
 }
 
 /// Execute the makemigrations command
 #[cfg(feature = "migrations")]
+// Allow too_many_arguments: CLI flags are mapped 1:1 to function parameters for clarity
+#[allow(clippy::too_many_arguments)]
 async fn execute_makemigrations(
 	app_labels: Vec<String>,
 	dry_run: bool,
 	name: Option<String>,
 	check: bool,
 	empty: bool,
+	merge: bool,
 	force_empty_state: bool,
 	verbosity: u8,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -386,6 +614,9 @@ async fn execute_makemigrations(
 	}
 	if empty {
 		ctx.set_option("empty".to_string(), "true".to_string());
+	}
+	if merge {
+		ctx.set_option("merge".to_string(), "true".to_string());
 	}
 	if force_empty_state {
 		ctx.set_option("force-empty-state".to_string(), "true".to_string());
@@ -578,6 +809,13 @@ async fn execute_collectstatic(
 				.with_value("session_cookie_secure", Value::Bool(false))
 				.with_value("csrf_cookie_secure", Value::Bool(false))
 				.with_value("append_slash", Value::Bool(false))
+				// Middleware
+				.with_value("middleware", Value::Array(vec![]))
+				// URL configuration
+				.with_value("root_urlconf", Value::String(String::new()))
+				// Media files
+				.with_value("media_root", Value::Null)
+				// Admin/Manager contacts
 				.with_value("admins", Value::Array(vec![]))
 				.with_value("managers", Value::Array(vec![])),
 		)
@@ -644,6 +882,67 @@ async fn execute_showurls(_names: bool, _verbosity: u8) -> Result<(), Box<dyn st
 		reinhardt-commands = { version = \"0.1.0\", features = [\"routers\"] }"
 		.into())
 }
+
+/// Execute the introspect command
+#[cfg(feature = "introspect")]
+async fn execute_introspect(
+	format: OutputFormat,
+	section: Option<String>,
+	verbosity: u8,
+) -> Result<(), Box<dyn std::error::Error>> {
+	use crate::introspect::{collect_introspect_data, format_json, format_yaml};
+	use colored::Colorize;
+
+	if verbosity > 0 {
+		eprintln!("{}", "Collecting project metadata...".cyan().bold());
+	}
+
+	let output = collect_introspect_data()?;
+
+	// If a section filter is specified, extract just that section
+	let content = if let Some(ref section_name) = section {
+		let valid_sections = [
+			"app",
+			"databases",
+			"routes",
+			"middleware",
+			"settings",
+			"features",
+		];
+		if !valid_sections.contains(&section_name.as_str()) {
+			return Err(format!(
+				"Invalid section '{}'. Valid sections: {}",
+				section_name,
+				valid_sections.join(", ")
+			)
+			.into());
+		}
+
+		// Serialize to serde_json::Value, then extract the section
+		let full_value = serde_json::to_value(&output)?;
+		let section_value = full_value
+			.get(section_name)
+			.ok_or_else(|| format!("Section '{}' not found in output", section_name))?;
+
+		match format {
+			OutputFormat::Json => serde_json::to_string_pretty(section_value)?,
+			OutputFormat::Yaml => serde_yaml::to_string(section_value)?,
+		}
+	} else {
+		match format {
+			OutputFormat::Json => format_json(&output)?,
+			OutputFormat::Yaml => format_yaml(&output)?,
+		}
+	};
+
+	println!("{}", content);
+
+	Ok(())
+}
+
+// Stub when introspect feature is disabled — not reachable because the
+// Commands::Introspect variant is also feature-gated, but keeps the match arm
+// exhaustive for non-introspect builds that might add a fallback.
 
 /// Execute the generateopenapi command
 #[cfg(feature = "openapi")]
@@ -723,7 +1022,8 @@ async fn execute_generateopenapi(
 }
 
 #[cfg(not(feature = "openapi"))]
-#[allow(dead_code)] // Entry point when openapi feature is disabled
+// Allow dead_code: stub entry point when openapi feature is disabled
+#[allow(dead_code)]
 async fn execute_generateopenapi(
 	_format: String,
 	_output: PathBuf,
@@ -819,7 +1119,7 @@ async fn auto_register_router() -> Result<(), Box<dyn std::error::Error>> {
 /// Produces a 50-character hex string (200 bits of entropy). This is used
 /// as the default `SECRET_KEY` when no explicit key is configured, ensuring
 /// that each process gets a unique key rather than a shared hardcoded value.
-fn generate_random_secret_key() -> String {
+pub(crate) fn generate_random_secret_key() -> String {
 	use rand::Rng;
 	use std::fmt::Write;
 
@@ -961,6 +1261,7 @@ mod tests {
 			name: None,
 			check: false,
 			empty: false,
+			merge: false,
 			force_empty_state: false,
 			migration_dir: std::path::PathBuf::from("./migrations"),
 		};
@@ -970,6 +1271,22 @@ mod tests {
 
 		// Assert
 		assert!(!result);
+	}
+
+	#[cfg(feature = "introspect")]
+	#[rstest]
+	fn test_requires_router_for_introspect() {
+		// Arrange
+		let command = Commands::Introspect {
+			format: OutputFormat::Yaml,
+			section: None,
+		};
+
+		// Act
+		let result = requires_router(&command);
+
+		// Assert
+		assert!(result);
 	}
 
 	#[cfg(feature = "routers")]

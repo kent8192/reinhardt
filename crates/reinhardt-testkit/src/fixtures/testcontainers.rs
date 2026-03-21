@@ -412,6 +412,7 @@ pub async fn postgres_container() -> (ContainerAsync<GenericImage>, Arc<sqlx::Pg
 	(postgres, Arc::new(pool), port, database_url)
 }
 
+/// Create a CockroachDB container with a connection pool for testing
 pub async fn cockroachdb_container()
 -> (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String) {
 	use testcontainers::core::IntoContainerPort;
@@ -552,6 +553,7 @@ async fn try_start_redis_container()
 /// Stores cluster container reference and initial node ports.
 /// Used for cleanup and port tracking.
 pub struct RedisClusterContainer {
+	/// The running Redis Cluster container handle.
 	pub container: ContainerAsync<GenericImage>,
 	/// Initial 6 node ports (7000-7005 mapped to host ports)
 	pub node_ports: Vec<u16>,
@@ -706,6 +708,7 @@ async fn try_start_redis_cluster(
 	.into())
 }
 
+/// Start a Redis Cluster container and wait until all node ports are ready
 #[fixture]
 pub async fn redis_cluster_ports_ready(
 	#[future] redis_cluster_cleanup: (),
@@ -1699,6 +1702,13 @@ pub async fn sqlite_with_migrations_from<P: reinhardt_db::migrations::MigrationP
 /// );
 /// ```
 #[cfg(feature = "testcontainers")]
+#[deprecated(
+	since = "0.2.0",
+	note = "Use `postgres_with_migrations_from_dir()` instead. \
+			This fixture requires `collect_migrations!` macro registration \
+			which is being deprecated in favor of `FilesystemSource`."
+)]
+#[allow(deprecated)] // Suppress warnings from rstest-generated code referencing this deprecated fixture
 #[rstest::fixture]
 pub async fn postgres_with_all_migrations() -> Result<
 	(
@@ -1757,6 +1767,13 @@ pub async fn postgres_with_all_migrations() -> Result<
 /// # }
 /// ```
 #[cfg(feature = "testcontainers")]
+#[deprecated(
+	since = "0.2.0",
+	note = "Use `postgres_with_migrations_from_dir()` instead. \
+			This function requires `collect_migrations!` macro registration \
+			which is being deprecated in favor of `FilesystemSource`."
+)]
+#[allow(deprecated)] // Suppress warnings from internal usage of this deprecated function
 pub async fn postgres_with_apps_migrations(
 	app_labels: &[&str],
 ) -> Result<
@@ -1797,6 +1814,77 @@ pub async fn postgres_with_apps_migrations(
 	Ok((container, Arc::new(connection)))
 }
 
+/// Helper function for creating a PostgreSQL container with migrations
+/// loaded from a filesystem directory via `FilesystemSource`.
+///
+/// This is the recommended approach for loading migrations in tests:
+/// - Consistent with `manage migrate` behavior
+/// - Does not require `collect_migrations!` macro registration
+/// - Works reliably in Cargo workspaces when using `env!("CARGO_MANIFEST_DIR")`
+///
+/// # Arguments
+///
+/// * `migrations_dir` - Path to the root directory containing migration files
+///   organized as `<app_label>/<name>.rs`
+///
+/// # Example
+///
+/// ```ignore
+/// use reinhardt_testkit::fixtures::postgres_with_migrations_from_dir;
+/// use std::sync::Arc;
+///
+/// #[tokio::test]
+/// async fn test_with_filesystem_migrations() {
+///     let migrations_dir = format!("{}/migrations", env!("CARGO_MANIFEST_DIR"));
+///     let (_container, db) = postgres_with_migrations_from_dir(&migrations_dir)
+///         .await
+///         .unwrap();
+///     // All migrations from the directory are applied
+/// }
+/// ```
+///
+#[cfg(feature = "testcontainers")]
+pub async fn postgres_with_migrations_from_dir(
+	migrations_dir: impl AsRef<std::path::Path>,
+) -> Result<
+	(
+		ContainerAsync<GenericImage>,
+		std::sync::Arc<reinhardt_db::DatabaseConnection>,
+	),
+	Box<dyn std::error::Error>,
+> {
+	use reinhardt_db::DatabaseConnection;
+	use reinhardt_db::migrations::FilesystemSource;
+	use reinhardt_db::migrations::MigrationSource;
+	use reinhardt_db::migrations::executor::DatabaseMigrationExecutor;
+	use std::sync::Arc;
+
+	// Start PostgreSQL container
+	let (container, _pool, _port, url) = postgres_container().await;
+
+	// Connect to database
+	let connection = DatabaseConnection::connect_postgres(&url)
+		.await
+		.map_err(|e| format!("Failed to connect to PostgreSQL for migrations: {}", e))?;
+
+	// Load migrations from filesystem
+	let source = FilesystemSource::new(migrations_dir);
+	let migrations = source
+		.all_migrations()
+		.await
+		.map_err(|e| format!("Failed to load migrations from filesystem: {}", e))?;
+
+	if !migrations.is_empty() {
+		let mut executor = DatabaseMigrationExecutor::new(connection.inner().clone());
+		executor
+			.apply_migrations(&migrations)
+			.await
+			.map_err(|e| format!("Failed to apply migrations: {}", e))?;
+	}
+
+	Ok((container, Arc::new(connection)))
+}
+
 /// MySQL container with ALL registered migrations applied
 ///
 /// This fixture collects migrations from the global registry and applies them
@@ -1820,6 +1908,13 @@ pub async fn postgres_with_apps_migrations(
 /// }
 /// ```
 #[cfg(feature = "testcontainers")]
+#[deprecated(
+	since = "0.2.0",
+	note = "Use filesystem-based migration loading instead. \
+			This fixture requires `collect_migrations!` macro registration \
+			which is being deprecated in favor of `FilesystemSource`."
+)]
+#[allow(deprecated)] // Suppress warnings from rstest-generated code referencing this deprecated fixture
 #[rstest::fixture]
 pub async fn mysql_with_all_migrations() -> (
 	ContainerAsync<GenericImage>,
@@ -1858,6 +1953,13 @@ pub async fn mysql_with_all_migrations() -> (
 ///
 /// * `app_labels` - List of app labels to include
 #[cfg(feature = "testcontainers")]
+#[deprecated(
+	since = "0.2.0",
+	note = "Use filesystem-based migration loading instead. \
+			This function requires `collect_migrations!` macro registration \
+			which is being deprecated in favor of `FilesystemSource`."
+)]
+#[allow(deprecated)] // Suppress warnings from internal usage of this deprecated function
 pub async fn mysql_with_apps_migrations(
 	app_labels: &[&str],
 ) -> (
@@ -1917,6 +2019,13 @@ pub async fn mysql_with_apps_migrations(
 /// }
 /// ```
 #[cfg(feature = "testcontainers")]
+#[deprecated(
+	since = "0.2.0",
+	note = "Use filesystem-based migration loading instead. \
+			This fixture requires `collect_migrations!` macro registration \
+			which is being deprecated in favor of `FilesystemSource`."
+)]
+#[allow(deprecated)] // Suppress warnings from rstest-generated code referencing this deprecated fixture
 #[rstest::fixture]
 pub async fn sqlite_with_all_migrations() -> std::sync::Arc<reinhardt_db::DatabaseConnection> {
 	use reinhardt_db::DatabaseConnection;
@@ -1951,6 +2060,13 @@ pub async fn sqlite_with_all_migrations() -> std::sync::Arc<reinhardt_db::Databa
 ///
 /// * `app_labels` - List of app labels to include
 #[cfg(feature = "testcontainers")]
+#[deprecated(
+	since = "0.2.0",
+	note = "Use filesystem-based migration loading instead. \
+			This function requires `collect_migrations!` macro registration \
+			which is being deprecated in favor of `FilesystemSource`."
+)]
+#[allow(deprecated)] // Suppress warnings from internal usage of this deprecated function
 pub async fn sqlite_with_apps_migrations(
 	app_labels: &[&str],
 ) -> std::sync::Arc<reinhardt_db::DatabaseConnection> {

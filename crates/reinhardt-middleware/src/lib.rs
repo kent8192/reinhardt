@@ -85,13 +85,13 @@
 //! - [`cache`]: HTTP response caching with configurable key strategies
 //! - [`circuit_breaker`]: Circuit breaker pattern for fault-tolerant backends
 //! - [`common`]: Common HTTP functionality (trailing slash, URL normalization)
-//! - [`cors`]: Cross-Origin Resource Sharing headers (requires `cors` feature)
+//! - `cors`: Cross-Origin Resource Sharing headers (requires `cors` feature)
 //! - [`csp`]: Content Security Policy header generation
 //! - [`csrf`]: CSRF token validation and protection
 //! - [`etag`]: ETag generation and conditional request handling
 //! - [`logging`]: Structured request/response logging
 //! - [`metrics`]: Performance metrics collection and export
-//! - [`rate_limit`]: API rate limiting (requires `rate-limit` feature)
+//! - `rate_limit`: API rate limiting (requires `rate-limit` feature)
 //! - [`request_id`]: Unique request ID generation and propagation
 //! - [`session`]: Session management with pluggable storage backends
 //! - [`timeout`]: Request timeout enforcement
@@ -125,7 +125,9 @@
 //! 9. `RateLimitMiddleware` - Apply rate limits
 //! 10. Application handlers
 
+#![warn(missing_docs)]
 pub mod allowed_hosts;
+/// Session-based authentication middleware (requires `sessions` feature).
 pub mod auth;
 pub mod broken_link;
 #[cfg(feature = "compression")]
@@ -135,6 +137,7 @@ pub mod circuit_breaker;
 pub mod common;
 pub mod conditional;
 #[cfg(feature = "cors")]
+/// Cross-Origin Resource Sharing (CORS) middleware for handling preflight and CORS headers.
 pub mod cors;
 pub mod csp;
 pub mod csp_helpers;
@@ -146,6 +149,7 @@ pub mod gzip;
 pub mod honeypot;
 pub mod https_redirect;
 pub mod locale;
+/// Structured request/response logging with configurable formats.
 pub mod logging;
 pub mod messages;
 pub mod metrics;

@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tracing::warn;
 
 /// Type wrapper for CSP nonce stored in Request extensions
 #[derive(Debug, Clone)]
@@ -316,9 +317,17 @@ impl Middleware for CspMiddleware {
 
 		// Add CSP header
 		let csp_value = self.build_csp_header(nonce.as_deref());
-		response
-			.headers
-			.insert(self.get_header_name(), csp_value.parse().unwrap());
+		match csp_value.parse() {
+			Ok(value) => {
+				response.headers.insert(self.get_header_name(), value);
+			}
+			Err(e) => {
+				warn!(
+					error = %e,
+					"Failed to parse CSP header value, skipping header insertion"
+				);
+			}
+		}
 
 		Ok(response)
 	}

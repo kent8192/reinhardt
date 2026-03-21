@@ -58,6 +58,7 @@ pub struct ModelMetadata {
 }
 
 impl ModelMetadata {
+	/// Creates a new instance.
 	pub fn new(
 		app_label: impl Into<String>,
 		model_name: impl Into<String>,
@@ -73,14 +74,17 @@ impl ModelMetadata {
 		}
 	}
 
+	/// Adds field.
 	pub fn add_field(&mut self, name: String, field: FieldMetadata) {
 		self.fields.insert(name, field);
 	}
 
+	/// Sets the option.
 	pub fn set_option(&mut self, key: String, value: String) {
 		self.options.insert(key, value);
 	}
 
+	/// Adds many to many.
 	pub fn add_many_to_many(&mut self, m2m: ManyToManyMetadata) {
 		self.many_to_many_fields.push(m2m);
 	}
@@ -185,6 +189,7 @@ pub struct FieldMetadata {
 }
 
 impl FieldMetadata {
+	/// Creates a new instance.
 	pub fn new(field_type: super::FieldType) -> Self {
 		Self {
 			field_type,
@@ -193,11 +198,13 @@ impl FieldMetadata {
 		}
 	}
 
+	/// Sets the param and returns self for chaining.
 	pub fn with_param(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
 		self.params.insert(key.into(), value.into());
 		self
 	}
 
+	/// Sets the foreign key and returns self for chaining.
 	pub fn with_foreign_key(mut self, foreign_key: super::autodetector::ForeignKeyInfo) -> Self {
 		self.foreign_key = Some(foreign_key);
 		self
@@ -380,6 +387,7 @@ pub struct ModelRegistry {
 }
 
 impl ModelRegistry {
+	/// Creates a new instance.
 	pub fn new() -> Self {
 		Self {
 			models: Arc::new(RwLock::new(HashMap::new())),

@@ -108,8 +108,8 @@ pub fn use_dm_chat(room_id: Uuid) -> DmChatHandle {
 		&ws_url,
 		UseWebSocketOptions {
 			auto_reconnect: true,
-			max_reconnect_attempts: Some(5),
-			reconnect_delay: Some(1000),
+			max_reconnect_attempts: 5,
+			reconnect_delay: 1000,
 			..Default::default()
 		},
 	);
@@ -123,7 +123,7 @@ pub fn use_dm_chat(room_id: Uuid) -> DmChatHandle {
 	#[cfg(client)]
 	{
 		let initial_messages = reinhardt::pages::create_resource(move || async move {
-			crate::apps::dm::server::server_fn::list_messages(room_id, Some(50), None)
+			crate::apps::dm::shared::server_fn::list_messages(room_id, Some(50), None)
 				.await
 				.map_err(|e| format!("Failed to load messages: {}", e))
 		});
@@ -165,7 +165,7 @@ pub fn use_dm_chat(room_id: Uuid) -> DmChatHandle {
 					messages.set(current);
 				}
 			}
-			None::<fn()>
+			()
 		});
 	}
 
@@ -225,8 +225,8 @@ pub fn use_dm_room_list() -> DmRoomListHandle {
 		"/ws/dm/notifications",
 		UseWebSocketOptions {
 			auto_reconnect: true,
-			max_reconnect_attempts: Some(3),
-			reconnect_delay: Some(2000),
+			max_reconnect_attempts: 3,
+			reconnect_delay: 2000,
 			..Default::default()
 		},
 	);
@@ -240,7 +240,7 @@ pub fn use_dm_room_list() -> DmRoomListHandle {
 	#[cfg(client)]
 	{
 		let initial_rooms = reinhardt::pages::create_resource(move || async move {
-			crate::apps::dm::server::server_fn::list_rooms()
+			crate::apps::dm::shared::server_fn::list_rooms()
 				.await
 				.map_err(|e| format!("Failed to load rooms: {}", e))
 		});
@@ -286,7 +286,7 @@ pub fn use_dm_room_list() -> DmRoomListHandle {
 					rooms.set(current);
 				}
 			}
-			None::<fn()>
+			()
 		});
 	}
 

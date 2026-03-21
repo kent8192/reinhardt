@@ -12,30 +12,29 @@
 
 use crate::apps::profile::shared::types::ProfileResponse;
 use crate::core::client::components::icons;
-use reinhardt::pages::component::View;
+use reinhardt::pages::component::Page;
 use reinhardt::pages::form;
 use reinhardt::pages::page;
-use reinhardt::pages::reactive::Action;
 use reinhardt::pages::reactive::Signal;
 use reinhardt::pages::reactive::hooks::{use_action, use_effect, use_state};
 use uuid::Uuid;
 
 #[cfg(client)]
 use {
-	crate::apps::profile::server::server_fn::{fetch_profile, update_profile_form},
+	crate::apps::profile::shared::server_fn::{fetch_profile, update_profile_form},
 	reinhardt::pages::create_resource,
 	reinhardt::pages::reactive::ResourceState,
 };
 
 #[cfg(server)]
-use crate::apps::profile::server::server_fn::fetch_profile;
+use crate::apps::profile::shared::server_fn::fetch_profile;
 
 /// Profile view component using hooks
 ///
 /// Displays user profile information with modern SNS design.
 /// Features cover image, large avatar, bio, location, and website.
 /// Uses watch blocks for reactive UI updates when async data loads.
-pub fn profile_view(user_id: Uuid) -> View {
+pub fn profile_view(user_id: Uuid) -> Page {
 	// Data fetching with create_resource on client, initial loading state on server
 	let (profile, _set_profile) = use_state(None::<ProfileResponse>);
 	let (loading, _set_loading) = use_state(true);
@@ -214,7 +213,7 @@ pub fn profile_view(user_id: Uuid) -> View {
 ///
 /// The form uses custom UnoCSS styling and card layout through page! macro,
 /// while form! handles all Signal management and form submission logic.
-pub fn profile_edit(user_id: Uuid) -> View {
+pub fn profile_edit(user_id: Uuid) -> Page {
 	// Define form with state management and field definitions
 	// form! macro generates:
 	// - Signal<String> for each field with automatic two-way binding
@@ -338,13 +337,13 @@ pub fn profile_edit(user_id: Uuid) -> View {
 
 	// Convert form! to View before passing to page!
 	// into_view() consumes self, so we call it after cloning signals
-	let form_view = profile_form.into_view();
+	let form_view = profile_form.into_page();
 
 	let user_id_str = user_id.to_string();
 
 	// Render custom UI using page! macro
 	// form! handles Signal management, page! handles custom layout
-	page!(|loading_signal: Signal<bool>, error_signal: Signal<Option<String>>, success_signal: Signal<bool>, form_view: View, user_id_str: String| {
+	page!(|loading_signal: Signal<bool>, error_signal: Signal<Option<String>>, success_signal: Signal<bool>, form_view: Page, user_id_str: String| {
 		div {
 			class: "max-w-2xl mx-auto p-4",
 			div {

@@ -138,7 +138,20 @@ impl Permission for DjangoModelPermissions {
 			return false;
 		}
 
-		context.is_admin
+		// Admins always have permission
+		if context.is_admin {
+			return true;
+		}
+
+		// Check user_permissions map for the authenticated user
+		if let Some(user) = &context.user {
+			let perms = self.user_permissions.read().await;
+			if let Some(user_perms) = perms.get(user.username()) {
+				return !user_perms.is_empty();
+			}
+		}
+
+		false
 	}
 }
 
@@ -559,5 +572,67 @@ mod tests {
 		};
 
 		assert!(perm.has_permission(&context).await);
+	}
+
+	fn make_user(username: &str) -> Box<dyn crate::User> {
+		Box::new(crate::SimpleUser {
+			id: uuid::Uuid::new_v4(),
+			username: username.to_string(),
+			email: format!("{}@example.com", username),
+			is_active: true,
+			is_admin: false,
+			is_staff: false,
+			is_superuser: false,
+		})
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn test_django_model_permissions_non_admin_with_permissions() {
+		// Arrange
+		let mut perm = DjangoModelPermissions::new();
+		perm.add_user_permission("alice", "blog.add_article");
+
+		let request = Request::builder()
+			.method(Method::POST)
+			.uri("/")
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		let context = PermissionContext {
+			request: &request,
+			is_authenticated: true,
+			is_admin: false,
+			is_active: true,
+			user: Some(make_user("alice")),
+		};
+
+		// Act & Assert
+		assert!(perm.has_permission(&context).await);
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn test_django_model_permissions_non_admin_empty_permissions() {
+		// Arrange
+		let mut perm = DjangoModelPermissions::new();
+		// Don't add any permissions for alice
+
+		let request = Request::builder()
+			.method(Method::POST)
+			.uri("/")
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		let context = PermissionContext {
+			request: &request,
+			is_authenticated: true,
+			is_admin: false,
+			is_active: true,
+			user: Some(make_user("alice")),
+		};
+
+		// Act & Assert
+		assert!(!perm.has_permission(&context).await);
 	}
 }

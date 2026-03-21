@@ -47,8 +47,11 @@ use serde::{Deserialize, Serialize};
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunSQL {
+	/// The sql.
 	pub sql: String,
+	/// The reverse sql.
 	pub reverse_sql: Option<String>,
+	/// The state operations.
 	pub state_operations: Vec<StateOperation>,
 }
 
@@ -174,10 +177,30 @@ impl RunSQL {
 /// This allows RunSQL to update the project state appropriately
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StateOperation {
-	AddModel { name: String },
-	RemoveModel { name: String },
-	AddField { model: String, field: String },
-	RemoveField { model: String, field: String },
+	/// Add a model to the project state.
+	AddModel {
+		/// The model name.
+		name: String,
+	},
+	/// Remove a model from the project state.
+	RemoveModel {
+		/// The model name.
+		name: String,
+	},
+	/// Add a field to a model in the project state.
+	AddField {
+		/// The model name.
+		model: String,
+		/// The field name.
+		field: String,
+	},
+	/// Remove a field from a model in the project state.
+	RemoveField {
+		/// The model name.
+		model: String,
+		/// The field name.
+		field: String,
+	},
 }
 
 impl StateOperation {
@@ -220,10 +243,13 @@ impl StateOperation {
 /// });
 /// ```
 pub struct RunCode {
+	/// The description.
 	pub description: String,
 	#[allow(clippy::type_complexity)]
+	/// The code.
 	pub code: Box<dyn Fn(&DatabaseConnection) -> Result<(), String> + Send + Sync>,
 	#[allow(clippy::type_complexity)]
+	/// The reverse code.
 	pub reverse_code: Option<Box<dyn Fn(&DatabaseConnection) -> Result<(), String> + Send + Sync>>,
 }
 

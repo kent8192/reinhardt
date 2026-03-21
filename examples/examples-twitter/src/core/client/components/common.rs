@@ -19,7 +19,7 @@
 
 use crate::core::client::components::icons;
 use reinhardt::pages::Signal;
-use reinhardt::pages::component::{ElementView, IntoView, View};
+use reinhardt::pages::component::{IntoPage, Page, PageElement};
 use reinhardt::pages::page;
 
 #[cfg(client)]
@@ -100,7 +100,7 @@ impl ButtonSize {
 /// * `variant` - Visual style variant
 /// * `disabled` - Whether the button is disabled
 /// * `on_click` - Signal that will be set to true when clicked
-pub fn button(text: &str, variant: ButtonVariant, disabled: bool, on_click: Signal<bool>) -> View {
+pub fn button(text: &str, variant: ButtonVariant, disabled: bool, on_click: Signal<bool>) -> Page {
 	button_with_size(text, variant, ButtonSize::Medium, disabled, on_click)
 }
 
@@ -111,7 +111,7 @@ pub fn button_with_size(
 	size: ButtonSize,
 	disabled: bool,
 	on_click: Signal<bool>,
-) -> View {
+) -> Page {
 	let class = if size.class().is_empty() {
 		variant.class().to_string()
 	} else {
@@ -156,7 +156,7 @@ pub fn button_with_size(
 /// Loading spinner component
 ///
 /// Displays a modern spinner animation while content is loading.
-pub fn loading_spinner() -> View {
+pub fn loading_spinner() -> Page {
 	page!(|| {
 		div {
 			class: "flex items-center justify-center py-8",
@@ -173,7 +173,7 @@ pub fn loading_spinner() -> View {
 }
 
 /// Large loading spinner with text
-pub fn loading_spinner_large(message: &str) -> View {
+pub fn loading_spinner_large(message: &str) -> Page {
 	let message = message.to_string();
 	page!(|message: String| {
 		div {
@@ -198,7 +198,7 @@ pub fn loading_spinner_large(message: &str) -> View {
 ///
 /// * `message` - Error message to display
 /// * `dismissible` - Whether the alert can be dismissed
-pub fn error_alert(message: &str, dismissible: bool) -> View {
+pub fn error_alert(message: &str, dismissible: bool) -> Page {
 	let message = message.to_string();
 	if dismissible {
 		page!(|message: String| {
@@ -245,7 +245,7 @@ pub fn error_alert(message: &str, dismissible: bool) -> View {
 /// # Arguments
 ///
 /// * `message` - Success message to display
-pub fn success_alert(message: &str) -> View {
+pub fn success_alert(message: &str) -> Page {
 	let message = message.to_string();
 	page!(|message: String| {
 		div {
@@ -263,7 +263,7 @@ pub fn success_alert(message: &str) -> View {
 }
 
 /// Warning alert component
-pub fn warning_alert(message: &str) -> View {
+pub fn warning_alert(message: &str) -> Page {
 	let message = message.to_string();
 	page!(|message: String| {
 		div {
@@ -299,7 +299,7 @@ pub fn text_input(
 	input_type: &str,
 	value: Signal<String>,
 	required: bool,
-) -> View {
+) -> Page {
 	let id_owned = id.to_string();
 	let placeholder_owned = placeholder.to_string();
 	let input_type_owned = input_type.to_string();
@@ -404,7 +404,7 @@ pub fn textarea(
 	rows: u32,
 	max_length: usize,
 	value: Signal<String>,
-) -> View {
+) -> Page {
 	let id_owned = id.to_string();
 	let placeholder_owned = placeholder.to_string();
 	let label_owned = label.to_string();
@@ -579,35 +579,35 @@ impl AvatarSize {
 /// * `url` - Avatar image URL (None for default avatar)
 /// * `alt` - Alt text for the image
 /// * `size` - Size in pixels
-pub fn avatar(url: Option<&str>, alt: &str, size: u32) -> View {
+pub fn avatar(url: Option<&str>, alt: &str, size: u32) -> Page {
 	let src = url
 		.map(|s| s.to_string())
 		.unwrap_or_else(|| "https://via.placeholder.com/150?text=User".to_string());
 	let alt_owned = alt.to_string();
 	let size_str = format!("{}px", size);
 
-	// Use ElementView instead of page! macro for dynamic src attribute
-	ElementView::new("img")
+	// Use PageElement instead of page! macro for dynamic src attribute
+	PageElement::new("img")
 		.attr("src", src)
 		.attr("alt", alt_owned)
 		.attr("class", "rounded-full object-cover bg-surface-tertiary")
 		.attr("width", size_str.clone())
 		.attr("height", size_str)
-		.into_view()
+		.into_page()
 }
 
 /// Avatar component with size enum
-pub fn avatar_sized(url: Option<&str>, alt: &str, size: AvatarSize) -> View {
+pub fn avatar_sized(url: Option<&str>, alt: &str, size: AvatarSize) -> Page {
 	let src = url
 		.map(|s| s.to_string())
 		.unwrap_or_else(|| "https://via.placeholder.com/150?text=User".to_string());
 	let alt_owned = alt.to_string();
 
-	ElementView::new("img")
+	PageElement::new("img")
 		.attr("src", src)
 		.attr("alt", alt_owned)
 		.attr("class", format!("{} bg-surface-tertiary", size.class()))
-		.into_view()
+		.into_page()
 }
 
 /// Theme toggle button component
@@ -615,7 +615,7 @@ pub fn avatar_sized(url: Option<&str>, alt: &str, size: AvatarSize) -> View {
 /// Displays a button to toggle between light and dark mode.
 /// Uses JavaScript to toggle the theme and persist to localStorage.
 /// The click event is attached via JavaScript in index.html.
-pub fn theme_toggle() -> View {
+pub fn theme_toggle() -> Page {
 	page!(|| {
 		button {
 			class: "theme-toggle",
@@ -631,12 +631,12 @@ pub fn theme_toggle() -> View {
 /// Empty placeholder component
 ///
 /// Displays an empty div (useful for conditional rendering).
-pub fn empty() -> View {
+pub fn empty() -> Page {
 	page!(|| { div {} })()
 }
 
 /// Divider component
-pub fn divider() -> View {
+pub fn divider() -> Page {
 	page!(|| {
 		div {
 			class: "divider",
@@ -645,7 +645,7 @@ pub fn divider() -> View {
 }
 
 /// Badge component
-pub fn badge(text: &str, primary: bool) -> View {
+pub fn badge(text: &str, primary: bool) -> Page {
 	let text = text.to_string();
 	let class = if primary {
 		"badge-primary"

@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 
 /// Base database function trait
 pub trait DatabaseFunction {
+	/// Converts the function call to its SQL representation.
 	fn to_sql(&self) -> String;
+	/// Returns the SQL function name.
 	fn function_name(&self) -> &'static str;
 }
 
@@ -11,32 +13,53 @@ pub trait DatabaseFunction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cast {
 	expression: Box<AnnotationValue>,
+	/// The target type.
 	pub target_type: SqlType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Defines possible sql type values.
 pub enum SqlType {
+	/// Integer variant.
 	Integer,
+	/// BigInt variant.
 	BigInt,
+	/// SmallInt variant.
 	SmallInt,
+	/// Float variant.
 	Float,
+	/// Real variant.
 	Real,
+	/// Double variant.
 	Double,
+	/// Decimal variant.
 	Decimal {
+		/// The precision.
 		precision: Option<u8>,
+		/// The scale.
 		scale: Option<u8>,
 	},
+	/// Text variant.
 	Text,
+	/// Varchar variant.
 	Varchar {
+		/// The length.
 		length: Option<usize>,
 	},
+	/// Char variant.
 	Char {
+		/// The length.
 		length: usize,
 	},
+	/// Boolean variant.
 	Boolean,
+	/// Date variant.
 	Date,
+	/// Time variant.
 	Time,
+	/// Timestamp variant.
 	Timestamp,
+	/// Json variant.
 	Json,
 }
 
@@ -97,7 +120,7 @@ impl Cast {
 	///     AnnotationValue::Field(F::new("price")),
 	///     SqlType::Integer
 	/// );
-	/// assert_eq!(cast.to_sql(), "CAST(price AS INTEGER)");
+	/// assert_eq!(cast.to_sql(), "CAST(\"price\" AS INTEGER)");
 	/// ```
 	pub fn new(expression: AnnotationValue, target_type: SqlType) -> Self {
 		Self {
@@ -156,7 +179,7 @@ impl Cast {
 	///     AnnotationValue::Field(F::new("id")),
 	///     SqlType::Varchar { length: Some(50) }
 	/// );
-	/// assert_eq!(cast.to_sql(), "CAST(id AS VARCHAR(50))");
+	/// assert_eq!(cast.to_sql(), "CAST(\"id\" AS VARCHAR(50))");
 	/// ```
 	pub fn to_sql(&self) -> String {
 		format!(
@@ -170,6 +193,7 @@ impl Cast {
 /// Greatest - return the maximum value among expressions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Greatest {
+	/// The expressions.
 	pub expressions: Vec<AnnotationValue>,
 }
 
@@ -204,6 +228,7 @@ impl Greatest {
 /// Least - return the minimum value among expressions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Least {
+	/// The expressions.
 	pub expressions: Vec<AnnotationValue>,
 }
 
@@ -295,6 +320,7 @@ impl NullIf {
 /// Concat - concatenate multiple strings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Concat {
+	/// The expressions.
 	pub expressions: Vec<AnnotationValue>,
 }
 
@@ -313,7 +339,7 @@ impl Concat {
 	///     AnnotationValue::Value(Value::String(" ".into())),
 	///     AnnotationValue::Field(F::new("last_name")),
 	/// ]).unwrap();
-	/// assert_eq!(concat.to_sql(), "CONCAT(first_name, ' ', last_name)");
+	/// assert_eq!(concat.to_sql(), "CONCAT(\"first_name\", ' ', \"last_name\")");
 	/// ```
 	pub fn new(expressions: Vec<AnnotationValue>) -> Result<Self, String> {
 		if expressions.len() < 2 {
@@ -359,7 +385,7 @@ impl Upper {
 	/// use reinhardt_db::orm::expressions::F;
 	///
 	/// let upper = Upper::new(AnnotationValue::Field(F::new("email")));
-	/// assert_eq!(upper.to_sql(), "UPPER(email)");
+	/// assert_eq!(upper.to_sql(), "UPPER(\"email\")");
 	/// ```
 	pub fn new(expression: AnnotationValue) -> Self {
 		Self {
@@ -376,7 +402,7 @@ impl Upper {
 	/// use reinhardt_db::orm::expressions::F;
 	///
 	/// let upper = Upper::new(AnnotationValue::Field(F::new("name")));
-	/// assert_eq!(upper.to_sql(), "UPPER(name)");
+	/// assert_eq!(upper.to_sql(), "UPPER(\"name\")");
 	/// ```
 	pub fn to_sql(&self) -> String {
 		format!("UPPER({})", self.expression.to_sql())
@@ -410,7 +436,7 @@ impl Lower {
 	/// use reinhardt_db::orm::expressions::F;
 	///
 	/// let lower = Lower::new(AnnotationValue::Field(F::new("name")));
-	/// assert_eq!(lower.to_sql(), "LOWER(name)");
+	/// assert_eq!(lower.to_sql(), "LOWER(\"name\")");
 	/// ```
 	pub fn new(expression: AnnotationValue) -> Self {
 		Self {
@@ -451,7 +477,7 @@ impl Length {
 	/// use reinhardt_db::orm::expressions::F;
 	///
 	/// let length = Length::new(AnnotationValue::Field(F::new("name")));
-	/// assert_eq!(length.to_sql(), "LENGTH(name)");
+	/// assert_eq!(length.to_sql(), "LENGTH(\"name\")");
 	/// ```
 	pub fn new(expression: AnnotationValue) -> Self {
 		Self {
@@ -479,13 +505,18 @@ impl Length {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Trim {
 	expression: Box<AnnotationValue>,
+	/// The trim type.
 	pub trim_type: TrimType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Defines possible trim type values.
 pub enum TrimType {
+	/// Both variant.
 	Both,
+	/// Leading variant.
 	Leading,
+	/// Trailing variant.
 	Trailing,
 }
 
@@ -500,7 +531,7 @@ impl Trim {
 	/// use reinhardt_db::orm::expressions::F;
 	///
 	/// let trim = Trim::new(AnnotationValue::Field(F::new("name")));
-	/// assert_eq!(trim.to_sql(), "TRIM(name)");
+	/// assert_eq!(trim.to_sql(), "TRIM(\"name\")");
 	/// ```
 	pub fn new(expression: AnnotationValue) -> Self {
 		Self {
@@ -564,7 +595,7 @@ impl Substr {
 	///     AnnotationValue::Value(Value::Int(1)),
 	///     Some(AnnotationValue::Value(Value::Int(5))),
 	/// );
-	/// assert_eq!(substr.to_sql(), "SUBSTR(name, 1, 5)");
+	/// assert_eq!(substr.to_sql(), "SUBSTR(\"name\", 1, 5)");
 	/// ```
 	pub fn new(
 		expression: AnnotationValue,
@@ -646,7 +677,7 @@ impl Abs {
 	/// use reinhardt_db::orm::expressions::F;
 	///
 	/// let abs = Abs::new(AnnotationValue::Field(F::new("temperature")));
-	/// assert_eq!(abs.to_sql(), "ABS(temperature)");
+	/// assert_eq!(abs.to_sql(), "ABS(\"temperature\")");
 	/// ```
 	pub fn new(expression: AnnotationValue) -> Self {
 		Self {
@@ -687,7 +718,7 @@ impl Ceil {
 	/// use reinhardt_db::orm::expressions::F;
 	///
 	/// let ceil = Ceil::new(AnnotationValue::Field(F::new("price")));
-	/// assert_eq!(ceil.to_sql(), "CEIL(price)");
+	/// assert_eq!(ceil.to_sql(), "CEIL(\"price\")");
 	/// ```
 	pub fn new(expression: AnnotationValue) -> Self {
 		Self {
@@ -728,7 +759,7 @@ impl Floor {
 	/// use reinhardt_db::orm::expressions::F;
 	///
 	/// let floor = Floor::new(AnnotationValue::Field(F::new("price")));
-	/// assert_eq!(floor.to_sql(), "FLOOR(price)");
+	/// assert_eq!(floor.to_sql(), "FLOOR(\"price\")");
 	/// ```
 	pub fn new(expression: AnnotationValue) -> Self {
 		Self {
@@ -756,6 +787,7 @@ impl Floor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Round {
 	expression: Box<AnnotationValue>,
+	/// The decimals.
 	pub decimals: Option<i32>,
 }
 
@@ -770,7 +802,7 @@ impl Round {
 	/// use reinhardt_db::orm::expressions::F;
 	///
 	/// let round = Round::new(AnnotationValue::Field(F::new("price")), Some(2));
-	/// assert_eq!(round.to_sql(), "ROUND(price, 2)");
+	/// assert_eq!(round.to_sql(), "ROUND(\"price\", 2)");
 	/// ```
 	pub fn new(expression: AnnotationValue, decimals: Option<i32>) -> Self {
 		Self {
@@ -926,7 +958,7 @@ impl Sqrt {
 	/// use reinhardt_db::orm::expressions::F;
 	///
 	/// let sqrt = Sqrt::new(AnnotationValue::Field(F::new("area")));
-	/// assert_eq!(sqrt.to_sql(), "SQRT(area)");
+	/// assert_eq!(sqrt.to_sql(), "SQRT(\"area\")");
 	/// ```
 	pub fn new(expression: AnnotationValue) -> Self {
 		Self {
@@ -956,21 +988,34 @@ impl Sqrt {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Extract {
 	expression: Box<AnnotationValue>,
+	/// The component.
 	pub component: ExtractComponent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Defines possible extract component values.
 pub enum ExtractComponent {
+	/// Year variant.
 	Year,
+	/// Month variant.
 	Month,
+	/// Day variant.
 	Day,
+	/// Hour variant.
 	Hour,
+	/// Minute variant.
 	Minute,
+	/// Second variant.
 	Second,
+	/// Week variant.
 	Week,
+	/// Quarter variant.
 	Quarter,
+	/// WeekDay variant.
 	WeekDay,
+	/// IsoWeekDay variant.
 	IsoWeekDay,
+	/// IsoYear variant.
 	IsoYear,
 }
 
@@ -1008,7 +1053,7 @@ impl Extract {
 	///     AnnotationValue::Field(F::new("created_at")),
 	///     ExtractComponent::Year
 	/// );
-	/// assert_eq!(extract.to_sql(), "EXTRACT(YEAR FROM created_at)");
+	/// assert_eq!(extract.to_sql(), "EXTRACT(YEAR FROM \"created_at\")");
 	/// ```
 	pub fn new(expression: AnnotationValue, component: ExtractComponent) -> Self {
 		Self {
@@ -1026,7 +1071,7 @@ impl Extract {
 	/// use reinhardt_db::orm::expressions::F;
 	///
 	/// let year_extract = Extract::year(AnnotationValue::Field(F::new("birth_date")));
-	/// assert_eq!(year_extract.to_sql(), "EXTRACT(YEAR FROM birth_date)");
+	/// assert_eq!(year_extract.to_sql(), "EXTRACT(YEAR FROM \"birth_date\")");
 	/// ```
 	pub fn year(expression: AnnotationValue) -> Self {
 		Self::new(expression, ExtractComponent::Year)
@@ -1041,7 +1086,7 @@ impl Extract {
 	/// use reinhardt_db::orm::expressions::F;
 	///
 	/// let month_extract = Extract::month(AnnotationValue::Field(F::new("order_date")));
-	/// assert_eq!(month_extract.to_sql(), "EXTRACT(MONTH FROM order_date)");
+	/// assert_eq!(month_extract.to_sql(), "EXTRACT(MONTH FROM \"order_date\")");
 	/// ```
 	pub fn month(expression: AnnotationValue) -> Self {
 		Self::new(expression, ExtractComponent::Month)
@@ -1056,7 +1101,7 @@ impl Extract {
 	/// use reinhardt_db::orm::expressions::F;
 	///
 	/// let day_extract = Extract::day(AnnotationValue::Field(F::new("timestamp")));
-	/// assert_eq!(day_extract.to_sql(), "EXTRACT(DAY FROM timestamp)");
+	/// assert_eq!(day_extract.to_sql(), "EXTRACT(DAY FROM \"timestamp\")");
 	/// ```
 	pub fn day(expression: AnnotationValue) -> Self {
 		Self::new(expression, ExtractComponent::Day)
@@ -1071,7 +1116,7 @@ impl Extract {
 	/// use reinhardt_db::orm::expressions::F;
 	///
 	/// let hour_extract = Extract::hour(AnnotationValue::Field(F::new("event_time")));
-	/// assert_eq!(hour_extract.to_sql(), "EXTRACT(HOUR FROM event_time)");
+	/// assert_eq!(hour_extract.to_sql(), "EXTRACT(HOUR FROM \"event_time\")");
 	/// ```
 	pub fn hour(expression: AnnotationValue) -> Self {
 		Self::new(expression, ExtractComponent::Hour)
@@ -1086,7 +1131,7 @@ impl Extract {
 	/// use reinhardt_db::orm::expressions::F;
 	///
 	/// let minute_extract = Extract::minute(AnnotationValue::Field(F::new("timestamp")));
-	/// assert_eq!(minute_extract.to_sql(), "EXTRACT(MINUTE FROM timestamp)");
+	/// assert_eq!(minute_extract.to_sql(), "EXTRACT(MINUTE FROM \"timestamp\")");
 	/// ```
 	pub fn minute(expression: AnnotationValue) -> Self {
 		Self::new(expression, ExtractComponent::Minute)
@@ -1101,7 +1146,7 @@ impl Extract {
 	/// use reinhardt_db::orm::expressions::F;
 	///
 	/// let second_extract = Extract::second(AnnotationValue::Field(F::new("timestamp")));
-	/// assert_eq!(second_extract.to_sql(), "EXTRACT(SECOND FROM timestamp)");
+	/// assert_eq!(second_extract.to_sql(), "EXTRACT(SECOND FROM \"timestamp\")");
 	/// ```
 	pub fn second(expression: AnnotationValue) -> Self {
 		Self::new(expression, ExtractComponent::Second)
@@ -1239,7 +1284,7 @@ mod tests {
 	#[test]
 	fn test_cast_to_integer() {
 		let cast = Cast::new(AnnotationValue::Field(F::new("price")), SqlType::Integer);
-		assert_eq!(cast.to_sql(), "CAST(price AS INTEGER)");
+		assert_eq!(cast.to_sql(), "CAST(\"price\" AS INTEGER)");
 	}
 
 	#[test]
@@ -1248,7 +1293,7 @@ mod tests {
 			AnnotationValue::Field(F::new("id")),
 			SqlType::Varchar { length: Some(50) },
 		);
-		assert_eq!(cast.to_sql(), "CAST(id AS VARCHAR(50))");
+		assert_eq!(cast.to_sql(), "CAST(\"id\" AS VARCHAR(50))");
 	}
 
 	#[test]
@@ -1259,7 +1304,7 @@ mod tests {
 			AnnotationValue::Value(Value::Int(100)),
 		])
 		.unwrap();
-		assert_eq!(greatest.to_sql(), "GREATEST(price1, price2, 100)");
+		assert_eq!(greatest.to_sql(), "GREATEST(\"price1\", \"price2\", 100)");
 	}
 
 	#[test]
@@ -1269,7 +1314,7 @@ mod tests {
 			AnnotationValue::Field(F::new("score2")),
 		])
 		.unwrap();
-		assert_eq!(least.to_sql(), "LEAST(score1, score2)");
+		assert_eq!(least.to_sql(), "LEAST(\"score1\", \"score2\")");
 	}
 
 	#[test]
@@ -1278,7 +1323,7 @@ mod tests {
 			AnnotationValue::Field(F::new("status")),
 			AnnotationValue::Value(Value::String("inactive".into())),
 		);
-		assert_eq!(nullif.to_sql(), "NULLIF(status, 'inactive')");
+		assert_eq!(nullif.to_sql(), "NULLIF(\"status\", 'inactive')");
 	}
 
 	#[test]
@@ -1289,37 +1334,40 @@ mod tests {
 			AnnotationValue::Field(F::new("last_name")),
 		])
 		.unwrap();
-		assert_eq!(concat.to_sql(), "CONCAT(first_name, ' ', last_name)");
+		assert_eq!(
+			concat.to_sql(),
+			"CONCAT(\"first_name\", ' ', \"last_name\")"
+		);
 	}
 
 	#[test]
 	fn test_upper() {
 		let upper = Upper::new(AnnotationValue::Field(F::new("name")));
-		assert_eq!(upper.to_sql(), "UPPER(name)");
+		assert_eq!(upper.to_sql(), "UPPER(\"name\")");
 	}
 
 	#[test]
 	fn test_lower() {
 		let lower = Lower::new(AnnotationValue::Field(F::new("email")));
-		assert_eq!(lower.to_sql(), "LOWER(email)");
+		assert_eq!(lower.to_sql(), "LOWER(\"email\")");
 	}
 
 	#[test]
 	fn test_length() {
 		let length = Length::new(AnnotationValue::Field(F::new("description")));
-		assert_eq!(length.to_sql(), "LENGTH(description)");
+		assert_eq!(length.to_sql(), "LENGTH(\"description\")");
 	}
 
 	#[test]
 	fn test_trim() {
 		let trim = Trim::new(AnnotationValue::Field(F::new("name")));
-		assert_eq!(trim.to_sql(), "TRIM(name)");
+		assert_eq!(trim.to_sql(), "TRIM(\"name\")");
 	}
 
 	#[test]
 	fn test_trim_leading() {
 		let trim = Trim::new(AnnotationValue::Field(F::new("name"))).leading();
-		assert_eq!(trim.to_sql(), "LTRIM(name)");
+		assert_eq!(trim.to_sql(), "LTRIM(\"name\")");
 	}
 
 	#[test]
@@ -1329,31 +1377,31 @@ mod tests {
 			AnnotationValue::Value(Value::Int(1)),
 			Some(AnnotationValue::Value(Value::Int(100))),
 		);
-		assert_eq!(substr.to_sql(), "SUBSTR(description, 1, 100)");
+		assert_eq!(substr.to_sql(), "SUBSTR(\"description\", 1, 100)");
 	}
 
 	#[test]
 	fn test_abs() {
 		let abs = Abs::new(AnnotationValue::Field(F::new("balance")));
-		assert_eq!(abs.to_sql(), "ABS(balance)");
+		assert_eq!(abs.to_sql(), "ABS(\"balance\")");
 	}
 
 	#[test]
 	fn test_ceil() {
 		let ceil = Ceil::new(AnnotationValue::Field(F::new("price")));
-		assert_eq!(ceil.to_sql(), "CEIL(price)");
+		assert_eq!(ceil.to_sql(), "CEIL(\"price\")");
 	}
 
 	#[test]
 	fn test_floor() {
 		let floor = Floor::new(AnnotationValue::Field(F::new("score")));
-		assert_eq!(floor.to_sql(), "FLOOR(score)");
+		assert_eq!(floor.to_sql(), "FLOOR(\"score\")");
 	}
 
 	#[test]
 	fn test_round() {
 		let round = Round::new(AnnotationValue::Field(F::new("price")), Some(2));
-		assert_eq!(round.to_sql(), "ROUND(price, 2)");
+		assert_eq!(round.to_sql(), "ROUND(\"price\", 2)");
 	}
 
 	#[test]
@@ -1362,7 +1410,7 @@ mod tests {
 			AnnotationValue::Field(F::new("value")),
 			AnnotationValue::Value(Value::Int(10)),
 		);
-		assert_eq!(mod_op.to_sql(), "MOD(value, 10)");
+		assert_eq!(mod_op.to_sql(), "MOD(\"value\", 10)");
 	}
 
 	#[test]
@@ -1371,13 +1419,13 @@ mod tests {
 			AnnotationValue::Field(F::new("base")),
 			AnnotationValue::Value(Value::Int(2)),
 		);
-		assert_eq!(power.to_sql(), "POWER(base, 2)");
+		assert_eq!(power.to_sql(), "POWER(\"base\", 2)");
 	}
 
 	#[test]
 	fn test_sqrt() {
 		let sqrt = Sqrt::new(AnnotationValue::Field(F::new("area")));
-		assert_eq!(sqrt.to_sql(), "SQRT(area)");
+		assert_eq!(sqrt.to_sql(), "SQRT(\"area\")");
 	}
 
 	#[test]
@@ -1401,25 +1449,25 @@ mod tests {
 	#[test]
 	fn test_extract_year() {
 		let extract = Extract::year(AnnotationValue::Field(F::new("created_at")));
-		assert_eq!(extract.to_sql(), "EXTRACT(YEAR FROM created_at)");
+		assert_eq!(extract.to_sql(), "EXTRACT(YEAR FROM \"created_at\")");
 	}
 
 	#[test]
 	fn test_extract_month() {
 		let extract = Extract::month(AnnotationValue::Field(F::new("order_date")));
-		assert_eq!(extract.to_sql(), "EXTRACT(MONTH FROM order_date)");
+		assert_eq!(extract.to_sql(), "EXTRACT(MONTH FROM \"order_date\")");
 	}
 
 	#[test]
 	fn test_extract_day() {
 		let extract = Extract::day(AnnotationValue::Field(F::new("timestamp")));
-		assert_eq!(extract.to_sql(), "EXTRACT(DAY FROM timestamp)");
+		assert_eq!(extract.to_sql(), "EXTRACT(DAY FROM \"timestamp\")");
 	}
 
 	#[test]
 	fn test_extract_hour() {
 		let extract = Extract::hour(AnnotationValue::Field(F::new("event_time")));
-		assert_eq!(extract.to_sql(), "EXTRACT(HOUR FROM event_time)");
+		assert_eq!(extract.to_sql(), "EXTRACT(HOUR FROM \"event_time\")");
 	}
 
 	#[test]

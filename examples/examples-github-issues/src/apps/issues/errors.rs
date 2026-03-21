@@ -2,7 +2,7 @@
 //!
 //! This module provides structured error types with error codes for GraphQL responses.
 
-use async_graphql::{ErrorExtensions, FieldError};
+use reinhardt::graphql::{ErrorExtensions, FieldError};
 
 /// API error types with error codes for GraphQL responses
 #[derive(Debug, Clone)]

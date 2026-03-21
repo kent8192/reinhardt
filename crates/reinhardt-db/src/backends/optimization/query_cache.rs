@@ -154,8 +154,11 @@ impl QueryCache {
 /// Cache statistics
 #[derive(Debug, Default, Clone)]
 pub struct CacheStats {
+	/// The total entries.
 	pub total_entries: usize,
+	/// The total hits.
 	pub total_hits: usize,
+	/// The expired entries.
 	pub expired_entries: usize,
 }
 

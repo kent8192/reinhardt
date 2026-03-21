@@ -7,14 +7,27 @@
 /// Errors returned by [`validate_identifier`].
 #[derive(Debug, thiserror::Error)]
 pub enum IdentifierError {
+	/// The identifier is an empty string.
 	#[error("Identifier is empty")]
 	Empty,
+	/// The identifier exceeds the allowed maximum length.
 	#[error("Identifier exceeds maximum length of {max_length} characters")]
-	TooLong { max_length: usize },
+	TooLong {
+		/// The maximum allowed length.
+		max_length: usize,
+	},
+	/// The identifier contains a character that is not alphanumeric, hyphen, or underscore.
 	#[error("Identifier contains invalid character: '{ch}'")]
-	InvalidCharacter { ch: char },
+	InvalidCharacter {
+		/// The invalid character found.
+		ch: char,
+	},
+	/// The identifier starts with a character that is not alphanumeric or underscore.
 	#[error("Identifier must start with alphanumeric or underscore, got: '{ch}'")]
-	InvalidStartCharacter { ch: char },
+	InvalidStartCharacter {
+		/// The invalid starting character.
+		ch: char,
+	},
 }
 
 /// Validates a URL for safe redirect usage.

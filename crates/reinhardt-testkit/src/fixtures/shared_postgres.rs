@@ -88,7 +88,8 @@ where
 /// Shared PostgreSQL container with base URL for connections
 pub struct SharedPostgres {
 	/// Container reference - kept alive to prevent container shutdown
-	#[allow(dead_code)] // Container must be kept alive for the duration of tests
+	// Allow dead_code: container handle must be kept alive to prevent shutdown during tests
+	#[allow(dead_code)]
 	container: Option<ContainerAsync<GenericImage>>,
 	/// Base connection URL (without database name)
 	pub base_url: String,
@@ -117,6 +118,7 @@ async fn test_connection(url: &str) -> bool {
 	{
 		Ok(pool) => {
 			let result = sqlx::query("SELECT 1").fetch_one(&pool).await;
+			pool.close().await;
 			result.is_ok()
 		}
 		Err(_) => false,
@@ -155,7 +157,7 @@ async fn start_postgres_container() -> (ContainerAsync<GenericImage>, String) {
 	// to allow container reuse across processes. This avoids the thread-safety
 	// violation of calling std::env::set_var in an async context. (Fixes #873)
 
-	let container = GenericImage::new("postgres", "16-alpine")
+	let container = GenericImage::new("postgres", "17-alpine")
 		.with_exposed_port(5432.tcp())
 		.with_wait_for(WaitFor::message_on_stderr(
 			"database system is ready to accept connections",

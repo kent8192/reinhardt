@@ -3,11 +3,11 @@
 
   <h1>Reinhardt</h1>
 
-  <h3>🦀 Polylithic Batteries Included</h3>
+  <h3>🦀 Django's productivity, Rust's performance</h3>
 
-  <p><strong>A composable full-stack API framework for Rust</strong></p>
-  <p>Build with <em>all</em> the power of Django's batteries-included philosophy,<br/>
-  or compose <em>only</em> what you need—your choice, your way.</p>
+  <p><strong>A composable, batteries-included web framework for Rust</strong></p>
+  <p>Build with the integrated experience of Django/DRF,<br/>
+  or compose only the pieces you need.</p>
 
 [![Crates.io](https://img.shields.io/crates/v/reinhardt-web.svg)](https://crates.io/crates/reinhardt-web)
 [![Documentation](https://docs.rs/reinhardt-web/badge.svg)](https://docs.rs/reinhardt-web)
@@ -19,20 +19,16 @@
 
 ---
 
-## 📍 Quick Navigation
+## Quick Navigation
 
-You may be looking for:
-
-- 🌐 [Official Website](https://reinhardt-web.dev) - Documentation, tutorials, and guides
-- 🚀 [Quick Start](#quick-start) - Get up and running in 5 minutes
-- 📦 [Installation Options](#installation) - Choose your flavor: Micro, Standard, or Full
-- 📚 [Getting Started Guide](https://reinhardt-web.dev/quickstart/getting-started/) - Step-by-step tutorial
-- 🎛️ [Feature Flags](https://reinhardt-web.dev/docs/feature-flags/) - Fine-tune your build
-- 📖 [API Documentation](https://docs.rs/reinhardt-web) - Complete API reference
-- 🎯 [Who is Reinhardt For?](#who-is-reinhardt-for) - Check if Reinhardt fits your needs
-- 🛤️ [Choose Your Path](#choose-your-path) - Find the right starting point for you
-- 🔒 [API Stability](#api-stability) - Our stability promise and release lifecycle
-- 💬 [Community & Support](#getting-help) - Get help from the community
+- [Who is Reinhardt For?](#who-is-reinhardt-for)
+- [Quick Start](#quick-start)
+- [Why Reinhardt?](#why-reinhardt)
+- [Key Features](#key-features)
+- [Installation](#installation)
+- [Getting Started Guide](#getting-started-guide)
+- [Available Components](#available-components)
+- [API Stability](#api-stability)
 
 ## Who is Reinhardt For?
 
@@ -40,74 +36,46 @@ Reinhardt is designed for developers who:
 
 - **Know Django/DRF** and want the same productivity in Rust
 - **Use Axum/Actix** but miss Django's batteries (ORM, admin, auth, DI)
-- **Need a full-stack Rust framework** without adopting Leptos/Dioxus for the frontend
+- **Want an integrated Rust web stack** without assembling everything from scratch
 - **Want incremental adoption** -- start with just DI or ORM, grow into a full stack later
 
 If you have written `ModelSerializer` or `Depends()` before, Reinhardt will feel like home.
 
-## Choose Your Path
-
-| Your Goal | Start Here | Time to First Request |
-|-----------|-----------|----------------------|
-| **Full-stack REST API** | [Quick Start](#quick-start) | ~5 min |
-| **Just DI for my Axum app** | [Minimal Installation](#minimal-micro-build) | ~2 min |
-| **Full-stack with Pages (WASM + SSR)** | [Twitter Demo](examples/examples-twitter/) | ~10 min |
-
-### Path A: Full-Stack REST API
+## Quick Start
 
 ```bash
-cargo install reinhardt-admin
-reinhardt-admin startproject myproject
-cd myproject
-cargo make runserver
-# Visit http://127.0.0.1:8000
+cargo install reinhardt-admin-cli
+reinhardt-admin startproject my-api && cd my-api
+cargo run --bin manage runserver  # Visit http://127.0.0.1:8000
 ```
 
-### Path B: Standalone DI
+For a full walkthrough, see the [Getting Started Guide](#getting-started-guide).
 
-```toml
-[dependencies]
-reinhardt = { version = "0.1.0-rc.2", package = "reinhardt-web", features = ["minimal"] }
-```
-
-```rust
-use reinhardt::{Json, Path, Query};
-
-#[reinhardt::endpoint(method = "GET", path = "/hello/:name")]
-async fn hello(Path(name): Path<String>) -> Json<String> {
-    Json(format!("Hello, {}!", name))
-}
-```
-
-### Path C: Full-Stack with Pages
-
-```bash
-reinhardt-admin startproject myproject --with-pages
-cd myproject
-cargo make dev
-# Frontend: http://127.0.0.1:8000
-```
+New to Reinhardt? Start with the default setup first. You can adopt a smaller custom stack later if needed.
 
 ## Why Reinhardt?
 
-**Polylithic = Poly (many) + Lithic (building blocks)**
-Unlike monolithic frameworks that force you to use everything, Reinhardt lets you compose your perfect stack from independent, well-tested components.
+Rust web development is powerful, but it often starts with choosing and wiring together many separate libraries.
 
-Reinhardt brings together the best of three worlds:
+Reinhardt takes a different approach: integrated batteries when you want them, composable parts when you don't.
 
-| Inspiration        | What We Borrowed                                       | What We Improved                                     |
-|--------------------|--------------------------------------------------------|------------------------------------------------------|
-| 🐍 **Django**      | Batteries-included philosophy, ORM design, admin panel | Feature flags for composable builds, Rust's type safety |
-| 🎯 **Django REST** | Serializers, ViewSets, permissions                     | Compile-time validation, zero-cost abstractions      |
-| ⚡ **FastAPI**      | DI system, automatic OpenAPI                           | Native Rust performance, no runtime overhead         |
-| 🗄️ **SQLAlchemy** | QuerySet patterns, relationship handling               | Type-safe query builder, compile-time validation     |
+We call this **polylithic**: many building blocks that still feel like one coherent framework.
+
+Reinhardt brings together the best of four worlds:
+
+| Inspiration        | What We Borrowed                        | What We Improved                           |
+|--------------------|-----------------------------------------|--------------------------------------------|
+| 🐍 **Django**      | Batteries-included, ORM, admin          | Composable feature flags, type safety      |
+| 🎯 **Django REST** | Serializers, ViewSets, permissions      | Compile-time validation, zero-cost         |
+| ⚡ **FastAPI**      | DI system, auto OpenAPI                 | Native performance, no runtime overhead    |
+| 🗄️ **SQLAlchemy** | QuerySet patterns, relationships        | Type-safe queries, compile-time checks     |
 
 **Result**: A framework that's familiar to Python developers, but with Rust's performance and safety guarantees.
 
 ## ✨ Key Features
 
 - **Type-Safe ORM** with compile-time validation (reinhardt-query)
-- **Powerful Serializers** with automatic validation (serde + validator)
+- **Powerful Serializers** with automatic validation (serde + built-in validation)
 - **FastAPI-Style DI** with type-safe dependency injection and caching
 - **ViewSets** for rapid CRUD API development
 - **Multi-Auth** (JWT, Token, Session, Basic) with BaseUser/FullUser traits
@@ -129,7 +97,7 @@ Reinhardt follows a **three-phase lifecycle** for every crate:
 | **RC** (`0.x.0-rc.N`) | API frozen. Bug fixes only. Safe to build against. |
 | **Stable** (`0.x.0`) | Full SemVer 2.0 guarantees. |
 
-**Current status:** All crates are at `0.1.0-rc` (Release Candidate).
+**Current status:** All crates are at `0.1.0-rc.9` (Release Candidate).
 
 **What this means for you:**
 - Public APIs will only change to fix critical bugs -- no new features or additions
@@ -144,8 +112,7 @@ For the full stability policy, see [API Stability Policy](docs/API_STABILITY.md)
 
 Reinhardt is a modular framework. Choose your starting point:
 
-**Note on Crate Naming:**
-The main Reinhardt crate is published on crates.io as `reinhardt-web`, but you import it as `reinhardt` in your code using the `package` attribute.
+> **New here?** Start with the default full-featured setup unless you specifically want a smaller build.
 
 ### Default: Full-Featured (Batteries Included) ⚠️ New Default
 
@@ -155,7 +122,7 @@ Get all features with zero configuration:
 [dependencies]
 # Import as 'reinhardt', published as 'reinhardt-web'
 # Default enables ALL features (full bundle)
-reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web" }
+reinhardt = { version = "0.1.0-rc.9", package = "reinhardt-web" }
 ```
 
 **Includes:** Database, Auth, REST API, Admin, GraphQL, WebSockets, Cache, i18n, Mail, Sessions, Static Files, Storage
@@ -174,7 +141,7 @@ For most projects that don't need all features:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web", default-features = false, features = ["standard"] }
+reinhardt = { version = "0.1.0-rc.9", package = "reinhardt-web", default-features = false, features = ["standard"] }
 ```
 
 **Includes:** Core, Database (PostgreSQL), REST API, Auth, Middleware, Pages (WASM Frontend with SSR)
@@ -187,7 +154,7 @@ Lightweight and fast, perfect for simple APIs:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.1", package = "reinhardt-web", default-features = false, features = ["minimal"] }
+reinhardt = { version = "0.1.0-rc.9", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 ```
 
 **Includes:** HTTP, routing, DI, parameter extraction, server
@@ -201,29 +168,32 @@ Install only the components you need:
 ```toml
 [dependencies]
 # Core components
-reinhardt-http = "0.1.0-rc.1"
-reinhardt-urls = "0.1.0-rc.1"
+reinhardt-http = "0.1.0-rc.9"
+reinhardt-urls = "0.1.0-rc.9"
 
 # Optional: Database
-reinhardt-db = "0.1.0-rc.1"
+reinhardt-db = "0.1.0-rc.9"
 
 # Optional: Authentication
-reinhardt-auth = "0.1.0-rc.1"
+reinhardt-auth = "0.1.0-rc.9"
 
 # Optional: REST API features
-reinhardt-rest = "0.1.0-rc.1"
+reinhardt-rest = "0.1.0-rc.9"
 
 # Optional: Admin panel
-reinhardt-admin = "0.1.0-rc.1"
+reinhardt-admin = "0.1.0-rc.9"
 
 # Optional: Advanced features
-reinhardt-graphql = "0.1.0-rc.1"
-reinhardt-websockets = "0.1.0-rc.1"
+reinhardt-graphql = "0.1.0-rc.9"
+reinhardt-websockets = "0.1.0-rc.9"
 ```
+
+**Note on Crate Naming:**
+The main Reinhardt crate is published on crates.io as `reinhardt-web`, but you import it as `reinhardt` in your code using the `package` attribute.
 
 **📖 For a complete list of available crates and feature flags, see the [Feature Flags Guide](https://reinhardt-web.dev/docs/feature-flags/).**
 
-## Quick Start
+## Getting Started Guide
 
 ### 1. Install Reinhardt Admin Tool
 
@@ -468,7 +438,7 @@ Reinhardt provides two types of environment variable sources with different prio
 Choose `EnvSource` when environment variables should always take precedence (e.g., production deployments).
 Choose `LowPriorityEnvSource` when TOML files should be the primary configuration source (e.g., development).
 
-See [Settings Documentation](docs/SETTINGS_DOCUMENT.md) for more details.
+See [Settings Documentation](https://reinhardt-web.dev/docs/settings/) for more details.
 
 **Using the Built-in DefaultUser:**
 
@@ -555,7 +525,7 @@ as it is automatically applied by the `#[model(...)]` attribute.
 - `#[field(null = true)]` - Allow NULL values
 - `#[field(unique = true)]` - Enforce uniqueness constraint
 
-For a complete list of field attributes, see the [Field Attributes Guide](docs/field_attributes.md).
+For a complete list of field attributes, see the [Field Attributes Guide](https://reinhardt-web.dev/docs/field-attributes/).
 
 The generated field accessors enable type-safe field references in queries:
 
@@ -599,7 +569,17 @@ async fn complex_user_query() -> Result<Vec<DefaultUser>, Box<dyn std::error::Er
 		.order_by(vec![(DefaultUser::field_date_joined().into(), "DESC")])
 		.function(RowNumber::new());
 
-	todo!("Execute query with these components")
+	// Build and execute the query using QuerySet
+	let users = DefaultUser::objects()
+		.filter(active_query)
+		.annotate("email_lower", email_lower)
+		.annotate("username_upper", username_upper)
+		.annotate("rank", rank_by_join_date)
+		.order_by(vec![("-date_joined",)])
+		.all()
+		.await?;
+
+	Ok(users)
 }
 
 // Transaction support
@@ -616,7 +596,7 @@ async fn create_user_with_transaction(
 }
 ```
 
-**Note**: Reinhardt uses reinhardt-query for SQL operations. The `#[derive(Model)]` macro automatically generates Model trait implementations, type-safe field accessors, and global model registry registration.
+**Note**: Reinhardt uses reinhardt-query for SQL operations. The `#[model(...)]` attribute automatically generates Model trait implementations, type-safe field accessors, and global model registry registration.
 
 Register in `src/config/apps.rs`:
 
@@ -671,12 +651,12 @@ async fn manage_users() -> Result<(), Box<dyn std::error::Error>> {
 		username: "alice".to_string(),
 		email: "alice@example.com".to_string(),
 		password: "secure_password".to_string(),
-		first_name: Some("Alice".to_string()),
-		last_name: Some("Smith".to_string()),
+		is_active: true,
+		is_admin: false,
 	}).await?;
 
 	// Update user information
-	user_manager.update_user(user.id, UpdateUserData {
+	user_manager.update_user(&user.id.to_string(), UpdateUserData {
 		email: Some("alice.smith@example.com".to_string()),
 		is_active: Some(true),
 		..Default::default()
@@ -689,11 +669,10 @@ async fn manage_users() -> Result<(), Box<dyn std::error::Error>> {
 	}).await?;
 
 	// Assign object-level permissions
-	let permission = ObjectPermission::new("edit", user.id, article.id);
-	let perm_checker = ObjectPermissionChecker::new();
-	if perm_checker.has_permission(&user, "edit", &article).await? {
-		// User can edit the article
-	}
+	let mut perm_manager = ObjectPermissionManager::new();
+	perm_manager.grant_permission("alice", "article:123", "edit");
+	let perm = ObjectPermission::new(perm_manager, "article:123", "edit");
+	// Use perm with the permission system to check access
 
 	Ok(())
 }
@@ -721,7 +700,7 @@ If you need additional fields beyond DefaultUser, define your own:
 
 ```rust
 // users/models.rs
-use reinhardt::auth::{BaseUser, FullUser, PermissionsMixin};
+use reinhardt::auth::{BaseUser, FullUser, PermissionsMixin, Argon2Hasher};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use serde::{Serialize, Deserialize};
@@ -766,6 +745,7 @@ pub struct CustomUser {
 
 impl BaseUser for CustomUser {
 	type PrimaryKey = Uuid;
+	type Hasher = Argon2Hasher;
 
 	fn get_username_field() -> &'static str { "username" }
 	fn get_username(&self) -> &str { &self.username }
@@ -966,7 +946,7 @@ In your app's `serializers/user.rs`:
 ```rust
 // users/serializers/user.rs
 use serde::{Serialize, Deserialize};
-use validator::Validate;
+use reinhardt::Validate;
 
 #[derive(Serialize, Deserialize, Validate)]
 pub struct CreateUserRequest {
@@ -1006,7 +986,7 @@ use reinhardt::{Request, Response, StatusCode, ViewResult, post};
 use reinhardt::db::DatabaseConnection;
 use crate::models::User;
 use crate::serializers::{CreateUserRequest, UserResponse};
-use validator::Validate;
+use reinhardt::Validate;
 use std::sync::Arc;
 
 #[post("/users", name = "create_user")]
@@ -1046,6 +1026,17 @@ pub async fn create_user(
 }
 ```
 
+## Adoption Paths
+
+| Your Goal | Start Here |
+|-----------|-----------|
+| **Full-stack REST API** | [Getting Started Guide](#getting-started-guide) |
+| **Full-stack with Pages (WASM + SSR)** | [Twitter Demo](examples/examples-twitter/) |
+| **Lightweight DI-focused API** | [Minimal Installation](#option-2-microservices-minimal-setup) |
+
+> **Standalone DI for existing Axum apps** is planned for a future release.
+> See [Discussions](https://github.com/kent8192/reinhardt-web/discussions) for updates.
+
 ## Available Components
 
 Reinhardt offers modular components you can mix and match:
@@ -1057,7 +1048,7 @@ Reinhardt offers modular components you can mix and match:
 | HTTP & Routing      | `reinhardt-http`          | Request/Response, HTTP handling             |
 | URL Routing         | `reinhardt-urls`          | Function-based and class-based routes       |
 | Server              | `reinhardt-server`        | HTTP server implementation                  |
-| Middleware          | `reinhardt-dispatch`      | Middleware chain, signal dispatch           |
+| Dispatch            | `reinhardt-dispatch`      | HTTP request dispatching, handler composition |
 | Configuration       | `reinhardt-conf`          | Settings management, environment loading    |
 | Commands            | `reinhardt-commands`      | Management CLI tools (startproject, etc.)   |
 | Shortcuts           | `reinhardt-shortcuts`     | Common utility functions                    |
@@ -1066,7 +1057,7 @@ Reinhardt offers modular components you can mix and match:
 | **Authentication**  |                           |                                             |
 | Auth                | `reinhardt-auth`          | JWT, Token, Session, Basic auth, User models|
 | **REST API**        |                           |                                             |
-| Serializers         | `reinhardt-rest`          | serde/validator integration, ViewSets       |
+| Serializers         | `reinhardt-rest`          | built-in serialization and validation, ViewSets |
 | **Forms**           |                           |                                             |
 | Forms               | `reinhardt-forms`         | Form handling and validation                |
 | **Advanced**        |                           |                                             |
@@ -1076,6 +1067,11 @@ Reinhardt offers modular components you can mix and match:
 | GraphQL             | `reinhardt-graphql`       | Schema generation, subscriptions            |
 | WebSockets          | `reinhardt-websockets`    | Real-time communication                     |
 | i18n                | `reinhardt-i18n`          | Multi-language support                      |
+| Mail                | `reinhardt-mail`          | Email sending and templating                |
+| gRPC                | `reinhardt-grpc`          | gRPC services, protobuf types               |
+| Deep Link           | `reinhardt-deeplink`      | iOS Universal Links, Android App Links      |
+| **Middleware**       |                           |                                             |
+| Middleware          | `reinhardt-middleware`    | HTTP middleware components, CORS, security  |
 | **Testing**         |                           |                                             |
 | Test Utilities      | `reinhardt-test`          | Testing helpers, fixtures, TestContainers   |
 
@@ -1087,7 +1083,7 @@ Reinhardt offers modular components you can mix and match:
 
 - 📚 [Getting Started Guide](https://reinhardt-web.dev/quickstart/getting-started/) - Step-by-step tutorial for beginners
 - 🎛️ [Feature Flags Guide](https://reinhardt-web.dev/docs/feature-flags/) - Optimize your build with granular feature control
-- 📖 [API Reference](https://docs.rs/reinhardt) (Coming soon)
+- 📖 [API Reference](https://docs.rs/reinhardt-web) (Coming soon)
 - 📝 [Tutorials](https://reinhardt-web.dev/quickstart/tutorials/) - Learn by building real applications
 
 **For AI Assistants**: See [CLAUDE.md](CLAUDE.md) for project-specific coding standards, testing guidelines, and development conventions.

@@ -43,10 +43,15 @@ use testcontainers::core::WaitFor;
 pub struct PostgresSuiteResource {
 	// Note: Container must be held to keep it alive during test suite execution
 	// TestContainers automatically stops/removes containers when dropped
+	/// The running PostgreSQL container handle (kept alive for the suite duration).
+	// Allow dead_code: container handle must be held to prevent automatic cleanup by TestContainers
 	#[allow(dead_code)]
 	pub container: testcontainers::ContainerAsync<testcontainers::GenericImage>,
+	/// Connection pool for executing queries against the PostgreSQL container.
 	pub pool: sqlx::postgres::PgPool,
+	/// The host port mapped to the container's PostgreSQL port.
 	pub port: u16,
+	/// The full database connection URL (e.g., `postgres://postgres@localhost:<port>/postgres`).
 	pub database_url: String,
 }
 
@@ -87,6 +92,7 @@ impl PostgresSuiteResource {
 			use std::time::Duration;
 
 			const MAX_RETRIES: u32 = 10;
+			const BASE_DELAY_MS: u64 = 100;
 			let mut pool_result = None;
 
 			for attempt in 0..MAX_RETRIES {
@@ -102,11 +108,15 @@ impl PostgresSuiteResource {
 						break;
 					}
 					Err(e) if attempt < MAX_RETRIES - 1 => {
+						let delay =
+							Duration::from_millis(BASE_DELAY_MS * 2_u64.pow(attempt.min(6)));
 						eprintln!(
-							"Connection attempt {} failed: {}. Retrying...",
+							"Connection attempt {} failed: {}. Retrying after {:?}...",
 							attempt + 1,
-							e
+							e,
+							delay
 						);
+						tokio::time::sleep(delay).await;
 					}
 					Err(e) => panic!(
 						"Failed to connect to PostgreSQL after {} retries: {}",
@@ -163,10 +173,15 @@ pub fn postgres_suite() -> SuiteGuard<PostgresSuiteResource> {
 pub struct MySqlSuiteResource {
 	// Note: Container must be held to keep it alive during test suite execution
 	// TestContainers automatically stops/removes containers when dropped
+	/// The running MySQL container handle (kept alive for the suite duration).
+	// Allow dead_code: container handle must be held to prevent automatic cleanup by TestContainers
 	#[allow(dead_code)]
 	pub container: testcontainers::ContainerAsync<testcontainers::GenericImage>,
+	/// Connection pool for executing queries against the MySQL container.
 	pub pool: sqlx::mysql::MySqlPool,
+	/// The host port mapped to the container's MySQL port.
 	pub port: u16,
+	/// The full database connection URL (e.g., `mysql://root:test@localhost:<port>/test`).
 	pub database_url: String,
 }
 
@@ -208,6 +223,7 @@ impl MySqlSuiteResource {
 			use std::time::Duration;
 
 			const MAX_RETRIES: u32 = 10;
+			const BASE_DELAY_MS: u64 = 100;
 			let mut pool_result = None;
 
 			for attempt in 0..MAX_RETRIES {
@@ -223,11 +239,15 @@ impl MySqlSuiteResource {
 						break;
 					}
 					Err(e) if attempt < MAX_RETRIES - 1 => {
+						let delay =
+							Duration::from_millis(BASE_DELAY_MS * 2_u64.pow(attempt.min(6)));
 						eprintln!(
-							"Connection attempt {} failed: {}. Retrying...",
+							"Connection attempt {} failed: {}. Retrying after {:?}...",
 							attempt + 1,
-							e
+							e,
+							delay
 						);
+						tokio::time::sleep(delay).await;
 					}
 					Err(e) => panic!(
 						"Failed to connect to MySQL after {} retries: {}",

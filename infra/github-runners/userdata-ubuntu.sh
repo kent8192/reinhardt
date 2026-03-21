@@ -10,27 +10,8 @@ set -x
 
 ${pre_install}
 
-# Install system packages required for CI builds and runner dependencies
-apt-get -q update
-DEBIAN_FRONTEND=noninteractive apt-get install -q -y \
-	build-essential \
-	ca-certificates \
-	curl \
-	git \
-	jq \
-	unzip \
-	wget
-
-# Install AWS CLI v2 (required for S3 runner binary download and SSM)
-curl -fsSL -o "awscliv2.zip" "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
-unzip -q awscliv2.zip
-aws/install
-rm -rf aws awscliv2.zip
-
-# Install and configure CloudWatch agent for log shipping
-curl -fsSL -o "/tmp/amazon-cloudwatch-agent.deb" https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
-dpkg -i -E /tmp/amazon-cloudwatch-agent.deb
-rm -f /tmp/amazon-cloudwatch-agent.deb
+# All system packages, AWS CLI v2, and CloudWatch agent are pre-installed
+# in the Golden AMI (built by Packer). Only CloudWatch config is fetched here.
 amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c "ssm:${ssm_key_cloudwatch_agent_config}"
 
 ${install_runner}

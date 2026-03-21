@@ -78,6 +78,24 @@ When creating issues via `gh issue create`, GitHub CLI does not automatically ap
 
 **Note:** For security vulnerabilities, ALWAYS use GitHub Security Advisories instead of public issues.
 
+The following diagram illustrates the template selection decision tree:
+
+```mermaid
+flowchart TD
+    A[Create new issue] --> B{What type?}
+    B -->|Bug| C["1-bug_report.yml<br/>Label: bug"]
+    B -->|Feature| D["2-feature_request.yml<br/>Label: enhancement"]
+    B -->|Docs| E["3-documentation.yml<br/>Label: documentation"]
+    B -->|Question| F{Consider GitHub Discussions first}
+    F -->|Still Issue| G["4-question.yml<br/>Label: question"]
+    B -->|Performance| H["5-performance.yml<br/>Label: performance"]
+    B -->|CI/CD| I["6-ci_cd.yml<br/>Label: ci-cd"]
+    B -->|Security| J{Is it a vulnerability?}
+    J -->|Yes| K["Use GitHub Security Advisories<br/>NOT public issue"]
+    J -->|No| L["7-security.yml<br/>Labels: security, critical"]
+    B -->|API Change| M["8-api_change.yml<br/>Labels: enhancement, rc-migration"]
+```
+
 ---
 
 ## Issue Title Format
@@ -226,6 +244,20 @@ Issues created by LLM agent bug discovery MUST include the `agent-suspect` label
 | In Progress | Being actively worked | Add `in-progress` via project board |
 | Blocked | Awaiting dependency | Add `blocked` via project board |
 | Closed | Resolved | - |
+
+The following diagram shows the issue lifecycle state transitions:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Open: Issue created
+    Open --> Triaged: Maintainer adds priority/scope labels
+    Triaged --> InProgress: Assigned and work started
+    InProgress --> Blocked: Dependency or blocker
+    Blocked --> InProgress: Blocker resolved
+    InProgress --> Closed: Fixed (reference PR/commit)
+    Open --> Closed: Invalid / Duplicate / Wontfix
+    Triaged --> Closed: Wontfix with explanation
+```
 
 ### LC-2 (MUST): Issue Hygiene
 
@@ -446,9 +478,9 @@ https://github.com/kent8192/reinhardt-web/security/advisories
 
 ## Related Documentation
 
-- **Pull Request Guidelines**: docs/PR_GUIDELINE.md
-- **Issue Handling Principles**: docs/ISSUE_HANDLING.md
-- **Commit Guidelines**: docs/COMMIT_GUIDELINE.md
+- **Pull Request Guidelines**: instructions/PR_GUIDELINE.md
+- **Issue Handling Principles**: instructions/ISSUE_HANDLING.md
+- **Commit Guidelines**: instructions/COMMIT_GUIDELINE.md
 - **Contributing Guide**: CONTRIBUTING.md
 - **Security Policy**: SECURITY.md
 - **Code of Conduct**: CODE_OF_CONDUCT.md
@@ -456,4 +488,4 @@ https://github.com/kent8192/reinhardt-web/security/advisories
 
 ---
 
-**Note**: This document focuses on issue creation and management. For pull request guidelines, see docs/PR_GUIDELINE.md.
+**Note**: This document focuses on issue creation and management. For pull request guidelines, see instructions/PR_GUIDELINE.md.

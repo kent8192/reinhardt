@@ -53,16 +53,25 @@
 //! ```
 
 // Module declarations
+/// Fixture-based API client utilities.
 pub mod client;
+/// Fixture file loading from JSON, YAML, and TOML formats.
 pub mod loader;
+/// Mock database backend fixtures using mockall.
 pub mod mock;
+/// Test server fixtures and builder utilities.
 pub mod server;
 
 #[cfg(feature = "testcontainers")]
+/// Suite-wide shared resources with automatic lifecycle management.
 pub mod resources;
 #[cfg(feature = "testcontainers")]
+/// Shared PostgreSQL container fixtures for test suites.
 pub mod shared_postgres;
+/// TestContainers setup and lifecycle management fixtures.
 #[cfg(feature = "testcontainers")]
+#[allow(deprecated)] // Module contains deprecated fixtures; suppress rstest-generated code warnings
+/// Docker container fixtures (PostgreSQL, Redis, CockroachDB) via TestContainers.
 pub mod testcontainers;
 
 // Admin settings fixtures (depends only on reinhardt-conf, not reinhardt-admin)
@@ -116,13 +125,14 @@ pub use server::graphql_server;
 
 // From testcontainers module (conditional on feature)
 #[cfg(feature = "testcontainers")]
+#[allow(deprecated)] // Re-exporting deprecated fixtures for backward compatibility
 pub use testcontainers::{
 	FileLockGuard, cockroachdb_container, create_test_any_pool, localstack_fixture,
 	mongodb_container, mysql_container, mysql_with_all_migrations, mysql_with_apps_migrations,
 	mysql_with_migrations_from, postgres_container, postgres_with_all_migrations,
-	postgres_with_apps_migrations, postgres_with_migrations_from, rabbitmq_container,
-	redis_container, sqlite_with_all_migrations, sqlite_with_apps_migrations,
-	sqlite_with_migrations_from,
+	postgres_with_apps_migrations, postgres_with_migrations_from,
+	postgres_with_migrations_from_dir, rabbitmq_container, redis_container,
+	sqlite_with_all_migrations, sqlite_with_apps_migrations, sqlite_with_migrations_from,
 };
 
 // From shared_postgres module (conditional on feature)

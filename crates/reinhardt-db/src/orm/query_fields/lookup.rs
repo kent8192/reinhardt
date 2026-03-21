@@ -8,45 +8,72 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LookupType {
 	// Equality
-	Exact,  // =
+	/// Exact variant.
+	Exact, // =
+	/// IExact variant.
 	IExact, // ILIKE (case-insensitive)
-	Ne,     // !=
+	/// Ne variant.
+	Ne, // !=
 
 	// Pattern matching
-	Contains,    // LIKE '%x%'
-	IContains,   // ILIKE '%x%'
-	StartsWith,  // LIKE 'x%'
+	/// Contains variant.
+	Contains, // LIKE '%x%'
+	/// IContains variant.
+	IContains, // ILIKE '%x%'
+	/// StartsWith variant.
+	StartsWith, // LIKE 'x%'
+	/// IStartsWith variant.
 	IStartsWith, // ILIKE 'x%'
-	EndsWith,    // LIKE '%x'
-	IEndsWith,   // ILIKE '%x'
-	Regex,       // ~ (PostgreSQL)
-	IRegex,      // ~* (PostgreSQL)
+	/// EndsWith variant.
+	EndsWith, // LIKE '%x'
+	/// IEndsWith variant.
+	IEndsWith, // ILIKE '%x'
+	/// Regex variant.
+	Regex, // ~ (PostgreSQL)
+	/// IRegex variant.
+	IRegex, // ~* (PostgreSQL)
 
 	// Comparison
-	Gt,    // >
-	Gte,   // >=
-	Lt,    // <
-	Lte,   // <=
+	/// Gt variant.
+	Gt, // >
+	/// Gte variant.
+	Gte, // >=
+	/// Lt variant.
+	Lt, // <
+	/// Lte variant.
+	Lte, // <=
+	/// Range variant.
 	Range, // BETWEEN
 
 	// Set operations
-	In,    // IN
+	/// In variant.
+	In, // IN
+	/// NotIn variant.
 	NotIn, // NOT IN
 
 	// NULL checks
-	IsNull,    // IS NULL
+	/// IsNull variant.
+	IsNull, // IS NULL
+	/// IsNotNull variant.
 	IsNotNull, // IS NOT NULL
 }
 
 /// Lookup value - the value to compare against
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LookupValue {
+	/// String variant.
 	String(String),
+	/// Int variant.
 	Int(i64),
+	/// Float variant.
 	Float(f64),
+	/// Bool variant.
 	Bool(bool),
+	/// Array variant.
 	Array(Vec<LookupValue>),
+	/// Range variant.
 	Range(Box<LookupValue>, Box<LookupValue>),
+	/// Null variant.
 	Null,
 }
 

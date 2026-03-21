@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.11...reinhardt-urls@v0.1.0-rc.12) - 2026-03-18
+
+### Added
+
+- *(urls)* add middleware registry for type discovery
+
+### Fixed
+
+- *(commands)* address Copilot review feedback on introspect command
+
+## [0.1.0-rc.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.9...reinhardt-urls@v0.1.0-rc.10) - 2026-03-15
+
+### Fixed
+
+- *(macros)* remove feature-dependent code generation from #[routes] macro
+- *(urls)* restore semver-compatible new() and add __macro_new()
+
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.8...reinhardt-urls@v0.1.0-rc.9) - 2026-03-15
+
+### Fixed
+
+- *(urls)* replace lock/read/write().unwrap() with safe alternatives for panic prevention
+- *(urls)* resolve race condition and add poison logging
+- *(urls)* avoid holding RwLock guard across await point
+
+## [0.1.0-rc.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.7...reinhardt-urls@v0.1.0-rc.8) - 2026-03-12
+
+### Documentation
+
+- document client-router feature requirement for UnifiedRouter in prelude
+
+## [0.1.0-rc.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.6...reinhardt-urls@v0.1.0-rc.7) - 2026-03-11
+
+### Added
+
+- *(urls)* add WASM-compatible UnifiedRouter variant with ServerRouterStub
+
+### Fixed
+
+- *(urls)* suppress dead_code warning for WASM-only `merge` method
+
 ## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.4...reinhardt-urls@v0.1.0-rc.5) - 2026-03-07
 
 ### Fixed

@@ -24,9 +24,13 @@ fn haversine_distance(p1: &Point, p2: &Point) -> f64 {
 // ============= SPATIAL DATA TYPES =============
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents a point.
 pub struct Point {
+	/// The x.
 	pub x: f64,
+	/// The y.
 	pub y: f64,
+	/// The srid.
 	pub srid: i32, // Spatial Reference System Identifier
 }
 
@@ -76,8 +80,11 @@ impl Point {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents a line string.
 pub struct LineString {
+	/// The points.
 	pub points: Vec<Point>,
+	/// The srid.
 	pub srid: i32,
 }
 
@@ -113,9 +120,13 @@ impl LineString {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents a polygon.
 pub struct Polygon {
+	/// The exterior.
 	pub exterior: Vec<Point>,
+	/// The interiors.
 	pub interiors: Vec<Vec<Point>>,
+	/// The srid.
 	pub srid: i32,
 }
 
@@ -213,25 +224,35 @@ fn point_in_polygon(point: &Point, polygon: &[Point]) -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents a multi point.
 pub struct MultiPoint {
+	/// The points.
 	pub points: Vec<Point>,
+	/// The srid.
 	pub srid: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents a multi line string.
 pub struct MultiLineString {
+	/// The lines.
 	pub lines: Vec<LineString>,
+	/// The srid.
 	pub srid: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents a multi polygon.
 pub struct MultiPolygon {
+	/// The polygons.
 	pub polygons: Vec<Polygon>,
+	/// The srid.
 	pub srid: i32,
 }
 
 // ============= SPATIAL OPERATIONS =============
 
+/// Trait defining spatial ops behavior.
 pub trait SpatialOps {
 	/// Check if geometry contains another
 	fn contains(&self, other: &dyn SpatialOps) -> bool;
@@ -253,10 +274,15 @@ pub trait SpatialOps {
 }
 
 #[derive(Debug, Clone)]
+/// Represents a bounding box.
 pub struct BoundingBox {
+	/// The min x.
 	pub min_x: f64,
+	/// The min y.
 	pub min_y: f64,
+	/// The max x.
 	pub max_x: f64,
+	/// The max y.
 	pub max_y: f64,
 }
 
@@ -281,12 +307,19 @@ impl BoundingBox {
 
 // ============= SPATIAL QUERIES =============
 
+/// Defines possible spatial lookup values.
 pub enum SpatialLookup {
+	/// Contains variant.
 	Contains(Point),
+	/// Within variant.
 	Within(Polygon),
+	/// Intersects variant.
 	Intersects(Polygon),
+	/// DWithin variant.
 	DWithin(Point, f64), // Distance within
+	/// BBContains variant.
 	BBContains(BoundingBox),
+	/// BBOverlaps variant.
 	BBOverlaps(BoundingBox),
 }
 
@@ -349,8 +382,11 @@ impl SpatialLookup {
 
 // ============= COORDINATE SYSTEMS =============
 
+/// Represents a coordinate transform.
 pub struct CoordinateTransform {
+	/// The from srid.
 	pub from_srid: i32,
+	/// The to srid.
 	pub to_srid: i32,
 }
 
@@ -446,7 +482,9 @@ fn web_mercator_to_wgs84(point: &Point) -> Point {
 
 // ============= SPATIAL INDEXES =============
 
+/// Represents a gi stindex.
 pub struct GiSTIndex {
+	/// The column.
 	pub column: String,
 }
 
@@ -479,16 +517,22 @@ impl GiSTIndex {
 
 // ============= MEASUREMENTS =============
 
+/// Represents a distance.
 pub struct Distance {
 	value: f64,
 	unit: DistanceUnit,
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Defines possible distance unit values.
 pub enum DistanceUnit {
+	/// Meters variant.
 	Meters,
+	/// Kilometers variant.
 	Kilometers,
+	/// Miles variant.
 	Miles,
+	/// Feet variant.
 	Feet,
 }
 
@@ -539,6 +583,7 @@ impl Distance {
 }
 
 // Spatial aggregates implementation
+/// Represents a spatial aggregate.
 pub struct SpatialAggregate;
 
 impl SpatialAggregate {

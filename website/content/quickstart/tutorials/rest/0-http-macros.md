@@ -34,7 +34,7 @@ use reinhardt::prelude::*;
 use reinhardt::get;
 
 #[get("/users", name = "list_users")]
-pub async fn list_users() -> Result<Response> {
+pub async fn list_users() -> ViewResult<Response> {
     let users = vec!["Alice", "Bob", "Charlie"];
     let json = serde_json::to_string(&users)?;
 
@@ -48,7 +48,7 @@ pub async fn list_users() -> Result<Response> {
 
 ```rust
 use reinhardt::post;
-use reinhardt::http::Json;
+use reinhardt::Json;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize)]
@@ -60,7 +60,7 @@ struct CreateUserRequest {
 #[post("/users", name = "create_user")]
 pub async fn create_user(
     Json(data): Json<CreateUserRequest>,
-) -> Result<Response> {
+) -> ViewResult<Response> {
     // Process the user creation
     let user_id = 123; // Simulated
 
@@ -82,19 +82,19 @@ pub async fn create_user(
 use reinhardt::{get, post, put, patch, delete};
 
 #[get("/resource", name = "read")]
-pub async fn read() -> Result<Response> { /* ... */ }
+pub async fn read() -> ViewResult<Response> { /* ... */ }
 
 #[post("/resource", name = "create")]
-pub async fn create() -> Result<Response> { /* ... */ }
+pub async fn create() -> ViewResult<Response> { /* ... */ }
 
 #[put("/resource/{id}/", name = "update")]
-pub async fn update() -> Result<Response> { /* ... */ }
+pub async fn update() -> ViewResult<Response> { /* ... */ }
 
 #[patch("/resource/{id}/", name = "partial_update")]
-pub async fn partial_update() -> Result<Response> { /* ... */ }
+pub async fn partial_update() -> ViewResult<Response> { /* ... */ }
 
 #[delete("/resource/{id}/", name = "destroy")]
-pub async fn destroy() -> Result<Response> { /* ... */ }
+pub async fn destroy() -> ViewResult<Response> { /* ... */ }
 ```
 
 ---
@@ -107,12 +107,12 @@ Use the `Path` extractor to capture URL parameters:
 
 ```rust
 use reinhardt::get;
-use reinhardt::http::Path;
+use reinhardt::Path;
 
 #[get("/users/{id}/", name = "get_user")]
 pub async fn get_user(
     Path(user_id): Path<i64>,
-) -> Result<Response> {
+) -> ViewResult<Response> {
     // user_id is automatically parsed from the URL
     let response = serde_json::json!({
         "id": user_id,
@@ -131,7 +131,7 @@ pub async fn get_user(
 #[get("/users/{user_id}/posts/{post_id}/", name = "get_user_post")]
 pub async fn get_user_post(
     Path((user_id, post_id)): Path<(i64, i64)>,
-) -> Result<Response> {
+) -> ViewResult<Response> {
     let response = serde_json::json!({
         "user_id": user_id,
         "post_id": post_id,
@@ -151,7 +151,7 @@ use std::collections::HashMap;
 #[get("/articles/{year}/{month}/{slug}/", name = "get_article")]
 pub async fn get_article(
     Path((year, month, slug)): Path<(i32, i32, String)>,
-) -> Result<Response> {
+) -> ViewResult<Response> {
     // year, month, slug are automatically parsed from the URL
 
     // ... use year, month, slug
@@ -173,7 +173,7 @@ use reinhardt::db::DatabaseConnection;
 #[get("/data", name = "get_data")]
 pub async fn get_data(
     #[inject] db: DatabaseConnection,
-) -> Result<Response> {
+) -> ViewResult<Response> {
     // db is automatically injected by the framework
     let data = db.query("SELECT * FROM items").fetch_all().await?;
     let json = serde_json::to_string(&data)?;
@@ -195,7 +195,7 @@ pub async fn get_user(
     req: Request,
     #[inject] db: DatabaseConnection,
     #[inject(cache = true)] cache: Arc<Cache>,
-) -> Result<Response> {
+) -> ViewResult<Response> {
     // Extract path parameter
     let id = req.path_params.get("id")
         .ok_or("Missing id")?
@@ -248,19 +248,19 @@ By default, dependencies are resolved per request. Use `cache = true` for single
 
 ---
 
-## DefaultRouter Integration
+## ServerRouter Integration
 
 ### High-Level API (Recommended)
 
-Use `DefaultRouter::function()` for application routing:
+Use `ServerRouter` for application routing:
 
 ```rust
-use reinhardt::routers::DefaultRouter;
-use hyper::Method;
+use reinhardt::ServerRouter;
+use reinhardt::Method;
 use crate::views;
 
-pub fn url_patterns() -> DefaultRouter {
-    DefaultRouter::new()
+pub fn url_patterns() -> ServerRouter {
+    ServerRouter::new()
         .endpoint(views::list_users)
         .endpoint(views::get_user)
         .endpoint(views::create_user)
@@ -275,8 +275,8 @@ pub fn url_patterns() -> DefaultRouter {
 use reinhardt::routes;
 
 #[routes]
-pub fn routes() -> DefaultRouter {
-    DefaultRouter::new()
+pub fn routes() -> ServerRouter {
+    ServerRouter::new()
         .mount("/api/v1/users/", users::urls::url_patterns())
         .mount("/api/v1/posts/", posts::urls::url_patterns())
 }
@@ -301,8 +301,8 @@ pub fn url_patterns() -> Vec<Route> {
 
 ### Comparison
 
-| Feature | Route::from_handler | DefaultRouter::function |
-|---------|---------------------|------------------------|
+| Feature | Route::from_handler | ServerRouter |
+|---------|---------------------|--------------|
 | **Level** | Low-level primitive | High-level API |
 | **Prefix Support** | Manual concatenation | Automatic via `.mount()` |
 | **Namespace** | Manual management | Automatic registration |
@@ -310,7 +310,7 @@ pub fn url_patterns() -> Vec<Route> {
 | **URL Parameters** | `{param}` syntax | `{param}` syntax (same) |
 | **Recommended For** | Library development | Application routing |
 
-**Recommendation**: Use `DefaultRouter::function()` for better maintainability and explicit HTTP method handling.
+**Recommendation**: Use `ServerRouter` for better maintainability and explicit HTTP method handling.
 
 ---
 
@@ -321,20 +321,21 @@ pub fn url_patterns() -> Vec<Route> {
 Create custom extractors for common patterns:
 
 ```rust
-use reinhardt::di::FromRequest;
+use reinhardt::di::{FromRequest, ParamContext, ParamResult};
 
 pub struct CurrentUser {
     pub id: i64,
     pub username: String,
 }
 
-#[async_trait]
 impl FromRequest for CurrentUser {
-    type Error = AuthError;
-
-    async fn from_request(req: &Request) -> Result<Self, Self::Error> {
-        // Extract from session, JWT, etc.
-        let user_id = req.session().get("user_id")?;
+    async fn from_request(req: &Request, _ctx: &ParamContext) -> ParamResult<Self> {
+        // Extract from headers, JWT, etc.
+        let user_id = req.headers
+            .get("x-user-id")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0);
 
         Ok(CurrentUser {
             id: user_id,
@@ -345,7 +346,7 @@ impl FromRequest for CurrentUser {
 
 // Use in handlers
 #[get("/profile", name = "profile")]
-pub async fn profile(user: CurrentUser) -> Result<Response> {
+pub async fn profile(user: CurrentUser) -> ViewResult<Response> {
     let response = serde_json::json!({
         "id": user.id,
         "username": user.username,
@@ -408,8 +409,9 @@ pub struct AuthMiddleware;
 #[async_trait]
 impl Middleware for AuthMiddleware {
     async fn process(&self, req: Request, next: Arc<dyn Handler>) -> Result<Response> {
-        // Check authentication
-        if !req.session().has("user_id") {
+        // Check authentication via request extensions
+        let auth_state = req.extensions.get::<AuthState>();
+        if !auth_state.is_some_and(|s| s.is_authenticated()) {
             return Ok(Response::new(StatusCode::UNAUTHORIZED)
                 .with_body("Unauthorized"));
         }
@@ -419,7 +421,7 @@ impl Middleware for AuthMiddleware {
 }
 
 // Apply to routes
-let router = DefaultRouter::new()
+let router = ServerRouter::new()
     .function("/protected", Method::GET, protected_handler);
 
 let app = MiddlewareChain::new(Arc::new(router))
@@ -443,7 +445,7 @@ Named routes enable URL reversal and better debugging.
 
 ```rust
 // ✅ Good: Explicit method
-DefaultRouter::new()
+ServerRouter::new()
     .function("/users", Method::GET, list_users)
     .function("/users", Method::POST, create_user)
 
@@ -468,10 +470,10 @@ let user_id = req.path_params.get("id")?.parse::<i64>()?;
 #[get("/data", name = "get_data")]
 pub async fn get_data(
     #[inject] db: DatabaseConnection,
-) -> Result<Response> { /* ... */ }
+) -> ViewResult<Response> { /* ... */ }
 
 // ❌ Avoid: Manual threading
-pub async fn get_data(req: Request) -> Result<Response> {
+pub async fn get_data(req: Request) -> ViewResult<Response> {
     let db = req.app_state.get::<DatabaseConnection>()?;
     // ...
 }
@@ -486,7 +488,7 @@ HTTP method decorators provide a powerful, type-safe way to build RESTful APIs i
 - **`#[get]`, `#[post]`, etc.** - FastAPI-inspired routing
 - **Path extractors** - Type-safe URL parameter parsing
 - **`#[inject]`** - Automatic dependency injection
-- **`DefaultRouter`** - High-level routing API
+- **`ServerRouter`** - High-level routing API
 - **Custom extractors** - Extend for your use cases
 
 **When to use:**

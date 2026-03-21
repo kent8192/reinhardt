@@ -1,0 +1,168 @@
+name: Terraform Validate (Fork PR)
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - ".semgrep/terraform-security.yml"
+      - ".tfprovidercheck.yml"
+
+# No secrets, no write permissions — safe to run on fork code
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-validate-fork-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  detect-changes:
+    name: Detect changed modules
+    if: github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      website: ${{ steps.filter.outputs.website }}
+      github-runners: ${{ steps.filter.outputs.github-runners }}
+      github-runners-bootstrap: ${{ steps.filter.outputs.github-runners-bootstrap }}
+      organizations: ${{ steps.filter.outputs.organizations }}
+      repository: ${{ steps.filter.outputs.repository }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Detect changed paths
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            website:
+              - 'infra/website/**'
+            github-runners:
+              - 'infra/github-runners/**'
+              - '!infra/github-runners/bootstrap/**'
+            github-runners-bootstrap:
+              - 'infra/github-runners/bootstrap/**'
+            organizations:
+              - 'infra/organizations/**'
+            repository:
+              - 'infra/repository/**'
+
+  validate:
+    name: Validate (${{ matrix.module.name }})
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - name: website
+            path: infra/website
+            filter: website
+          - name: github-runners
+            path: infra/github-runners
+            filter: github-runners
+          - name: github-runners-bootstrap
+            path: infra/github-runners/bootstrap
+            filter: github-runners-bootstrap
+          - name: organizations
+            path: infra/organizations
+            filter: organizations
+          - name: repository
+            path: infra/repository
+            filter: repository
+    defaults:
+      run:
+        working-directory: ${{ matrix.module.path }}
+    steps:
+      - name: Check if module changed
+        id: should-run
+        run: |
+          case "${{ matrix.module.filter }}" in
+            website)              changed="${{ needs.detect-changes.outputs.website }}" ;;
+            github-runners)       changed="${{ needs.detect-changes.outputs.github-runners }}" ;;
+            github-runners-bootstrap) changed="${{ needs.detect-changes.outputs.github-runners-bootstrap }}" ;;
+            organizations)        changed="${{ needs.detect-changes.outputs.organizations }}" ;;
+            repository)           changed="${{ needs.detect-changes.outputs.repository }}" ;;
+            *)                    changed="false" ;;
+          esac
+          echo "skip=$( [ "$changed" = "true" ] && echo false || echo true )" >> "$GITHUB_OUTPUT"
+        working-directory: .
+
+      - name: Checkout repository
+        if: steps.should-run.outputs.skip == 'false'
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Terraform
+        if: steps.should-run.outputs.skip == 'false'
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~> 1.10"
+
+      # --- Lock file tampering check (before any terraform commands) ---
+
+      - name: Check lock file not modified by fork
+        if: steps.should-run.outputs.skip == 'false'
+        run: |
+          if git diff --name-only "origin/${{ github.base_ref }}"...HEAD | grep -q '\.terraform\.lock\.hcl'; then
+            echo "::error::Fork PRs must not modify .terraform.lock.hcl files"
+            echo "Modified lock files:"
+            git diff --name-only "origin/${{ github.base_ref }}"...HEAD | grep '\.terraform\.lock\.hcl'
+            exit 1
+          fi
+        working-directory: .
+
+      # --- Terraform validation ---
+
+      - name: Terraform Format Check
+        if: steps.should-run.outputs.skip == 'false'
+        run: terraform fmt -check -recursive -diff
+
+      - name: Terraform Init (backend-free)
+        if: steps.should-run.outputs.skip == 'false'
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        if: steps.should-run.outputs.skip == 'false'
+        run: terraform validate
+
+      # --- Provider allowlist check ---
+
+      - name: Setup Go
+        if: steps.should-run.outputs.skip == 'false'
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+          cache: false
+
+      - name: Install and run tfprovidercheck
+        if: steps.should-run.outputs.skip == 'false'
+        run: |
+          go install github.com/suzuki-shunsuke/tfprovidercheck/cmd/tfprovidercheck@v1.0.7
+          if [ -f .terraform.lock.hcl ]; then
+            terraform version -json | tfprovidercheck -c "$GITHUB_WORKSPACE/.tfprovidercheck.yml"
+          else
+            echo "No .terraform.lock.hcl found — skipping provider check"
+          fi
+
+      # --- Semgrep security scan ---
+
+      - name: Setup Python
+        if: steps.should-run.outputs.skip == 'false'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Semgrep terraform security scan
+        if: steps.should-run.outputs.skip == 'false'
+        run: |
+          pip install semgrep==1.155.0
+          semgrep scan \
+            --config "$GITHUB_WORKSPACE/.semgrep/terraform-security.yml" \
+            --error \
+            --metrics off \
+            "$GITHUB_WORKSPACE/${{ matrix.module.path }}"
+        working-directory: .

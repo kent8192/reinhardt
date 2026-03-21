@@ -23,19 +23,18 @@ env:
 jobs:
   todo-check:
     name: Scan for unresolved TODO/FIXME
-    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
+    # github.event.pull_request is available in workflow_call context when caller is triggered by pull_request
+    if: github.event.pull_request != null && github.actor != 'dependabot[bot]'
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    container:
-      image: semgrep/semgrep
     timeout-minutes: 10
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Run Semgrep TODO/FIXME scan
-        run: semgrep ci --config .semgrep/ --metrics off
+        run: docker run --rm -v "${{ github.workspace }}:/src" -w /src semgrep/semgrep semgrep scan --config .semgrep/ --baseline-commit ${{ github.event.pull_request.base.sha }} --error --metrics off
 
   clippy-todo-check:
     name: Clippy TODO/unimplemented/dbg lint

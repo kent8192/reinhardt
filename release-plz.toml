@@ -245,7 +245,7 @@ sort_commits = "oldest"
 
 # Commit parsers: evaluated in order, first match wins.
 # Skip rules come before mapping rules.
-# See docs/COMMIT_GUIDELINE.md "CG: CHANGELOG Generation Guidelines" section.
+# See instructions/COMMIT_GUIDELINE.md "CG: CHANGELOG Generation Guidelines" section.
 commit_parsers = [
   # Skip: automated commits not relevant to release notes
   { message = "^chore: release", skip = true },

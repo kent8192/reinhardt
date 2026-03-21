@@ -1,10 +1,16 @@
 use super::logger::{LogHandler, LogLevel, LogRecord};
 use std::sync::{Arc, Mutex};
 
+/// A handler that writes log records to the console (stdout/stderr).
 pub struct ConsoleHandler;
+/// A handler that writes log records to a file.
 pub struct FileHandler;
+/// A handler that writes log records in JSON format.
 pub struct JsonHandler;
 
+/// A handler that stores log records in memory for later retrieval.
+///
+/// This is primarily useful for testing, allowing assertions on logged messages.
 #[derive(Clone)]
 pub struct MemoryHandler {
 	level: LogLevel,
@@ -12,6 +18,7 @@ pub struct MemoryHandler {
 }
 
 impl MemoryHandler {
+	/// Creates a new `MemoryHandler` that captures records at or above the given level.
 	pub fn new(level: LogLevel) -> Self {
 		Self {
 			level,
@@ -19,6 +26,7 @@ impl MemoryHandler {
 		}
 	}
 
+	/// Returns a clone of all captured log records.
 	pub fn get_records(&self) -> Vec<LogRecord> {
 		self.records
 			.lock()
@@ -26,6 +34,7 @@ impl MemoryHandler {
 			.clone()
 	}
 
+	/// Removes all captured log records.
 	pub fn clear(&self) {
 		self.records
 			.lock()

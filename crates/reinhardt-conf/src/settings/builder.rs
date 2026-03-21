@@ -404,12 +404,16 @@ impl MergedSettings {
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
+	/// An error occurred while loading a configuration source.
 	#[error("Source error in '{description}': {error}")]
 	Source {
+		/// Description of the source that caused the error.
 		description: String,
+		/// The underlying source error.
 		error: SourceError,
 	},
 
+	/// A validation check on the built settings failed.
 	#[error("Validation error: {0}")]
 	Validation(String),
 }
@@ -418,12 +422,16 @@ pub enum BuildError {
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum GetError {
+	/// The requested key does not exist in the settings.
 	#[error("Missing required key: {0}")]
 	MissingKey(String),
 
+	/// The value could not be deserialized to the requested type.
 	#[error("Failed to deserialize key '{key}': {error}")]
 	Deserialize {
+		/// The key that failed to deserialize.
 		key: String,
+		/// The underlying deserialization error.
 		error: serde_json::Error,
 	},
 }

@@ -4,7 +4,7 @@
 
 This file contains project-specific instructions for the Reinhardt project. These rules ensure code quality, maintainability, and consistent practices across the Rust codebase.
 
-For detailed standards, see documentation in `docs/` directory.
+For detailed standards, see documentation in `instructions/` directory.
 
 ---
 
@@ -100,7 +100,7 @@ See instructions/TESTING_STANDARDS.md for comprehensive testing standards includ
 
 **Update Requirements:**
 - **ALWAYS** update docs when code changes (same workflow)
-- Update all relevant: README.md, crate README, docs/, lib.rs
+- Update all relevant: README.md, crate README, instructions/, lib.rs
 - Planned features go in `lib.rs` header, NOT in README.md
 - Test all code examples
 - Verify all links are valid
@@ -124,6 +124,12 @@ See instructions/DOCUMENTATION_STANDARDS.md for comprehensive documentation stan
 - Each commit MUST be small enough to explain in one line
 - Use `git apply <patchfile name>.patch` for partial file commits
 - **NEVER** execute batch commits without user confirmation
+
+**Draft PR Policy:**
+- **NEVER** convert a Draft PR to Ready for Review without explicit user instruction
+- **NO EXCEPTIONS**: Plan Mode approval does NOT authorize Draft PR conversion (unlike commits/pushes)
+- Before converting, ensure all CI checks pass and tests pass locally
+- Use `gh pr ready <number>` for conversion
 
 **Branch Operations:**
 - When merging branches and resolving conflicts, execute immediately without entering Plan Mode
@@ -165,6 +171,7 @@ See instructions/DOCUMENTATION_STANDARDS.md for comprehensive documentation stan
 See instructions/GITHUB_INTERACTION.md for comprehensive GitHub interaction guidelines including:
 - Posting authorization policy (PP-1 ~ PP-3)
 - PR review response format (RR-1 ~ RR-3)
+- Copilot review handling (CR-1 ~ CR-5)
 - Issue discussion guidelines (ID-1 ~ ID-2)
 - Agent context provision (AC-1 ~ AC-2)
 
@@ -280,13 +287,13 @@ cargo build --workspace --all --all-features
 
 **Testing:**
 ```bash
-cargo test --workspace --all --all-features
+cargo nextest run --workspace --all-features
 cargo test --doc  # Documentation tests
 ```
 
 **Code Quality:**
 ```bash
-cargo make fmt-check   # Cheeck format rules of the code
+cargo make fmt-check   # Check format rules of the code
 cargo make clippy-check  # Check lint rules of the code
 cargo make fmt-fix   # Automatically fix code based on formatting rules
 cargo make clippy-fix  # Automatically fix code based on lint rules
@@ -455,6 +462,7 @@ Before submitting code:
 - Delete temp files from `/tmp` immediately
 - Wait for explicit user instruction before commits
 - Understand that Plan Mode approval authorizes both implementation and commits
+- Wait for explicit user instruction before converting Draft PRs to Ready for Review (Plan Mode approval does NOT authorize conversion)
 - Mark placeholders with `todo!()` or `// TODO:`
 - Use `#[serial(group_name)]` for global state tests
 - Split commits by specific intent, not features
@@ -514,10 +522,14 @@ Before submitting code:
 - Use independent context (separate agent session) for agent re-evaluation of `agent-suspect` Issues
 - Obtain SP-6 approval before adding non-breaking APIs during RC phase (`enhancement` + `rc-addition` labels + maintainer approval)
 - Use three-dot diff (`main...branch`) for PR diff verification to exclude merge history noise
+- Evaluate, respond to, and resolve Copilot review comments after PR creation (CR-1 ~ CR-4)
+- Reply to every Copilot review thread before resolving it (no silent resolves)
+- Use GraphQL `resolveReviewThread` mutation to resolve Copilot review threads
 
 ### ❌ NEVER DO
 - Use `mod.rs` files (deprecated pattern)
 - Commit without user instruction (except Plan Mode approval)
+- Convert Draft PRs to Ready for Review without explicit user instruction (Plan Mode approval does NOT count)
 - Leave docs outdated after code changes
 - Document user requests or AI interactions in project documentation
 - Save files to project directory (use `/tmp`)
@@ -581,6 +593,9 @@ Before submitting code:
 - Squash-merge the develop branch into `main` (DB-5)
 - Use the same agent context for both detection and verification of a bug
 - Use two-dot diff (`main..branch`) for PR verification (includes merge history noise)
+- Resolve Copilot review threads without posting a reply first
+- Poll in a loop waiting for Copilot review to appear
+- Dismiss valid Copilot review concerns without fixing the code
 
 ### 📚 Detailed Standards
 
@@ -596,6 +611,7 @@ For comprehensive guidelines, see:
 - **Issues**: instructions/ISSUE_GUIDELINES.md
 - **Issue Handling**: instructions/ISSUE_HANDLING.md
 - **GitHub Interactions**: instructions/GITHUB_INTERACTION.md
+- **Copilot Review Handling**: instructions/GITHUB_INTERACTION.md (CR-1 ~ CR-5)
 - **GitHub Discussions**: https://github.com/kent8192/reinhardt-web/discussions
 - **Security Policy**: SECURITY.md
 - **Code of Conduct**: CODE_OF_CONDUCT.md

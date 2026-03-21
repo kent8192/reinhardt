@@ -8,24 +8,46 @@ use reinhardt_core::messages::{Level, Message};
 /// Error type for message assertion failures
 #[derive(Debug, thiserror::Error)]
 pub enum MessageAssertionError {
+	/// The number of messages did not match the expected count.
 	#[error("Message count mismatch: expected {expected}, got {actual}")]
-	CountMismatch { expected: usize, actual: usize },
+	CountMismatch {
+		/// Expected message count.
+		expected: usize,
+		/// Actual message count.
+		actual: usize,
+	},
 
+	/// A specific message was not found in the collection.
 	#[error("Message not found: {message}")]
-	MessageNotFound { message: String },
+	MessageNotFound {
+		/// The message text that was not found.
+		message: String,
+	},
 
+	/// The message level did not match the expected level.
 	#[error("Message level mismatch: expected {expected:?}, got {actual:?}")]
-	LevelMismatch { expected: Level, actual: Level },
+	LevelMismatch {
+		/// Expected message level.
+		expected: Level,
+		/// Actual message level.
+		actual: Level,
+	},
 
+	/// The message tags did not match the expected tags.
 	#[error("Message tags mismatch: expected {expected:?}, got {actual:?}")]
 	TagsMismatch {
+		/// Expected tag list.
 		expected: Vec<String>,
+		/// Actual tag list.
 		actual: Vec<String>,
 	},
 
+	/// The message order did not match the expected order.
 	#[error("Order mismatch: expected {expected:?}, got {actual:?}")]
 	OrderMismatch {
+		/// Expected message order.
 		expected: Vec<String>,
+		/// Actual message order.
 		actual: Vec<String>,
 	},
 }

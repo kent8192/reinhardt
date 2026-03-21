@@ -8,7 +8,7 @@ use reinhardt::UnifiedRouter;
 use reinhardt::pages::server_fn::ServerFnRouterExt;
 
 #[cfg(server)]
-use crate::apps::relationship::server::server_fn::{
+use crate::apps::relationship::shared::server_fn::{
 	fetch_followers, fetch_following, follow_user, unfollow_user,
 };
 

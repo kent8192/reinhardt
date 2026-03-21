@@ -1,0 +1,93 @@
+# Configuration for actions/labeler
+# Maps file path patterns to repository labels
+
+database:
+  - changed-files:
+      - any-glob-to-any-file:
+          - crates/reinhardt-db/**
+          - crates/reinhardt-db-macros/**
+
+orm:
+  - changed-files:
+      - any-glob-to-any-file:
+          - crates/reinhardt-query/**
+          - crates/reinhardt-core/**
+
+auth:
+  - changed-files:
+      - any-glob-to-any-file:
+          - crates/reinhardt-auth/**
+
+http:
+  - changed-files:
+      - any-glob-to-any-file:
+          - crates/reinhardt-http/**
+          - crates/reinhardt-middleware/**
+          - crates/reinhardt-server/**
+          - crates/reinhardt-views/**
+
+routing:
+  - changed-files:
+      - any-glob-to-any-file:
+          - crates/reinhardt-urls/**
+
+api:
+  - changed-files:
+      - any-glob-to-any-file:
+          - crates/reinhardt-rest/**
+          - crates/reinhardt-openapi/**
+
+admin:
+  - changed-files:
+      - any-glob-to-any-file:
+          - crates/reinhardt-admin/**
+          - crates/reinhardt-admin-cli/**
+
+forms:
+  - changed-files:
+      - any-glob-to-any-file:
+          - crates/reinhardt-forms/**
+
+graphql:
+  - changed-files:
+      - any-glob-to-any-file:
+          - crates/reinhardt-graphql/**
+
+websockets:
+  - changed-files:
+      - any-glob-to-any-file:
+          - crates/reinhardt-websockets/**
+
+i18n:
+  - changed-files:
+      - any-glob-to-any-file:
+          - crates/reinhardt-i18n/**
+
+examples:
+  - changed-files:
+      - any-glob-to-any-file:
+          - examples/**
+
+infrastructure:
+  - changed-files:
+      - any-glob-to-any-file:
+          - infra/**
+
+ci-cd:
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/**
+
+github-actions:
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/workflows/**
+          - .github/actions/**
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - docs/**
+          - instructions/**
+          - "*.md"
+          - "!**/CHANGELOG.md"

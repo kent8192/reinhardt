@@ -282,7 +282,9 @@ impl<B: SessionBackend + CleanupableBackend> SessionCleanupTask<B> {
 mod tests {
 	use super::*;
 	use crate::sessions::InMemorySessionBackend;
+	use rstest::rstest;
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_cleanup_config_default() {
 		let config = CleanupConfig::default();
@@ -290,12 +292,14 @@ mod tests {
 		assert_eq!(config.batch_size, 1000);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_cleanup_task_creation() {
 		let backend = InMemorySessionBackend::new();
 		let _cleanup = SessionCleanupTask::new(backend, Duration::from_secs(3600));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_cleanup_task_with_config() {
 		let backend = InMemorySessionBackend::new();
@@ -306,6 +310,7 @@ mod tests {
 		let _cleanup = SessionCleanupTask::with_config(backend, config);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_run_cleanup_basic_backend() {
 		let backend = InMemorySessionBackend::new();
@@ -314,5 +319,96 @@ mod tests {
 		// Basic backend without metadata support returns 0
 		let removed = cleanup.run_cleanup().await.unwrap();
 		assert_eq!(removed, 0);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_cleanup_removes_expired_sessions() {
+		// Arrange
+		let backend = InMemorySessionBackend::new();
+		let data = serde_json::json!({"user": "expired_user"});
+		backend
+			.save("sess_expired", &data, Some(3600))
+			.await
+			.unwrap();
+
+		// Wait briefly so the session ages past the very short max_age
+		tokio::time::sleep(Duration::from_millis(50)).await;
+
+		// Create cleanup task with very short max_age (1ms) so session is considered expired
+		let cleanup = SessionCleanupTask::new(backend.clone(), Duration::from_millis(1));
+
+		// Act
+		let removed = cleanup.run_cleanup_with_metadata().await.unwrap();
+
+		// Assert
+		assert_eq!(removed, 1);
+		let loaded: Option<serde_json::Value> = backend.load("sess_expired").await.unwrap();
+		assert!(loaded.is_none());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_cleanup_preserves_recent_sessions() {
+		// Arrange
+		let backend = InMemorySessionBackend::new();
+		let data = serde_json::json!({"user": "active_user"});
+		backend
+			.save("sess_recent", &data, Some(3600))
+			.await
+			.unwrap();
+
+		// Access the session to populate last_accessed timestamp
+		let _: Option<serde_json::Value> = backend.load("sess_recent").await.unwrap();
+
+		// Create cleanup task with long max_age so session is still valid
+		let cleanup = SessionCleanupTask::new(backend.clone(), Duration::from_secs(3600));
+
+		// Act
+		let removed = cleanup.run_cleanup_with_metadata().await.unwrap();
+
+		// Assert
+		assert_eq!(removed, 0);
+		let loaded: Option<serde_json::Value> = backend.load("sess_recent").await.unwrap();
+		assert!(loaded.is_some());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_cleanup_batch_processing() {
+		// Arrange
+		let backend = InMemorySessionBackend::new();
+		let data = serde_json::json!({"batch": true});
+		backend
+			.save("batch_sess_1", &data, Some(3600))
+			.await
+			.unwrap();
+		backend
+			.save("batch_sess_2", &data, Some(3600))
+			.await
+			.unwrap();
+		backend
+			.save("batch_sess_3", &data, Some(3600))
+			.await
+			.unwrap();
+
+		// Wait briefly so sessions age past the very short max_age
+		tokio::time::sleep(Duration::from_millis(50)).await;
+
+		// Create cleanup task with batch_size=1 and very short max_age
+		let config = CleanupConfig {
+			max_age: Duration::from_millis(1),
+			batch_size: 1,
+		};
+		let cleanup = SessionCleanupTask::with_config(backend.clone(), config);
+
+		// Act
+		let removed = cleanup.run_cleanup_with_metadata().await.unwrap();
+
+		// Assert
+		assert_eq!(removed, 3);
+		assert!(!backend.exists("batch_sess_1").await.unwrap());
+		assert!(!backend.exists("batch_sess_2").await.unwrap());
+		assert!(!backend.exists("batch_sess_3").await.unwrap());
 	}
 }

@@ -47,7 +47,10 @@ jobs:
         uses: ./.github/actions/setup-rust
 
       - name: Setup protoc
-        uses: ./.github/actions/setup-protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run release-plz release-pr
         uses: release-plz/action@v0.5
@@ -82,7 +85,10 @@ jobs:
         uses: ./.github/actions/setup-rust
 
       - name: Setup protoc
-        uses: ./.github/actions/setup-protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install GitHub CLI (self-hosted)
         run: |

@@ -37,6 +37,10 @@ resource "docker_container" "dind" {
 
   privileged = true
 
+  # Set hostname so DinD TLS certificate SANs include the container name,
+  # allowing runners to connect via tcp://mac-runner-dind:2376
+  hostname = "mac-runner-dind"
+
   env = [
     "DOCKER_TLS_CERTDIR=/certs",
   ]
@@ -78,6 +82,12 @@ resource "docker_container" "dind" {
   }
 
   restart = "always"
+
+  # Docker daemon injects default log_opts (max-file, max-size) into container
+  # state, causing spurious replacement diffs when not set in config.
+  lifecycle {
+    ignore_changes = [log_driver, log_opts, memory_swap]
+  }
 }
 
 # --- Runner Containers ---
@@ -145,5 +155,11 @@ resource "docker_container" "runner" {
     interval = "30s"
     timeout  = "10s"
     retries  = 3
+  }
+
+  # Docker daemon injects default log_opts (max-file, max-size) into container
+  # state, causing spurious replacement diffs when not set in config.
+  lifecycle {
+    ignore_changes = [log_driver, log_opts, memory_swap]
   }
 }

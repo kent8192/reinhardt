@@ -60,7 +60,10 @@ jobs:
           key: msrv-${{ matrix.rust }}
 
       - name: Setup protoc
-        uses: ./.github/actions/setup-protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run cargo check (Rust ${{ matrix.rust }})
         run: cargo check --workspace --all --all-features

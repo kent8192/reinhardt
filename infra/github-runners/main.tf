@@ -64,18 +64,6 @@ data "aws_vpc" "default" {
   default = true
 }
 
-data "aws_availability_zones" "available" {
-  state = "available"
-
-  filter {
-    name   = "opt-in-status"
-    values = ["otp-in-not-required"]
-  }
-
-  # Exclude us-east-1e (zone ID use1-az3) because it doesn't support required Graviton instance types
-  exclude_zone_ids = ["use1-az3"]
-}
-
 data "aws_subnets" "default" {
   filter {
     name   = "vpc-id"

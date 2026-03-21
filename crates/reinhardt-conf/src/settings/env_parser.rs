@@ -71,8 +71,8 @@ pub fn parse_dict(value: &str) -> HashMap<String, String> {
 			let key = key.trim().to_string();
 			let val = val.trim().to_string();
 
-			// Skip entries where both key and value are empty
-			if !key.is_empty() || !val.is_empty() {
+			// Skip entries where key or value is empty
+			if !key.is_empty() && !val.is_empty() {
 				map.insert(key, val);
 			}
 		}
@@ -332,6 +332,26 @@ mod tests {
 		let dict = parse_dict("key1=value1,key2=value2");
 		assert_eq!(dict.get("key1").unwrap(), "value1");
 		assert_eq!(dict.get("key2").unwrap(), "value2");
+	}
+
+	#[test]
+	fn test_parse_dict_skips_empty_key_or_value() {
+		// Empty key ("=value") should be skipped
+		let dict = parse_dict("=value");
+		assert!(dict.is_empty());
+
+		// Empty value ("key=") should be skipped
+		let dict = parse_dict("key=");
+		assert!(dict.is_empty());
+
+		// Both empty ("=") should be skipped
+		let dict = parse_dict("=");
+		assert!(dict.is_empty());
+
+		// Mixed: valid pair alongside empty key/value entries
+		let dict = parse_dict("=value,key=,valid=entry,=");
+		assert_eq!(dict.len(), 1);
+		assert_eq!(dict.get("valid").unwrap(), "entry");
 	}
 
 	#[test]

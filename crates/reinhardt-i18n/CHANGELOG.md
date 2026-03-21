@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-i18n@v0.1.0-rc.13...reinhardt-i18n@v0.1.0-rc.14) - 2026-03-21
+
+### Fixed
+
+- *(i18n)* handle msgctxt continuation lines in PO parser
+- address copilot review feedback and merge main
+
+### Styling
+
+- *(i18n)* format method chain in po_parser tests
+
 ## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-i18n@v0.1.0-rc.4...reinhardt-i18n@v0.1.0-rc.5) - 2026-03-07
 
 ### Documentation

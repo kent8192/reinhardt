@@ -42,14 +42,16 @@ Public items not marked with `#[doc(hidden)]` or `#[unstable]` are considered **
 
 ### Experimental API
 
-Items marked with `#[doc(cfg(feature = "unstable"))]` or documented as experimental are
-**experimental** and may change in MINOR releases:
+Items documented as experimental are **experimental** and may change in MINOR releases:
 
 - New traits under active development
 - Extension points that may be redesigned
 - Performance-sensitive APIs pending benchmarking
 
 **Guarantee**: Breaking changes require documenting migration paths.
+
+> **Note**: There is currently no `unstable` feature flag in the codebase. Experimental
+> items are identified by documentation annotations rather than feature-gating.
 
 ### Internal API
 

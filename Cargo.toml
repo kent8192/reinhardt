@@ -94,7 +94,7 @@ cache = ["reinhardt-utils/cache"]
 redis-backend = ["cache", "reinhardt-utils/redis-backend"]
 i18n = ["reinhardt-i18n"]
 mail = ["reinhardt-mail"]
-sessions = ["reinhardt-auth"]
+sessions = ["reinhardt-auth", "reinhardt-auth/sessions"]
 middleware = [
   "reinhardt-middleware",
   "reinhardt-middleware/sessions",
@@ -110,7 +110,7 @@ commands = ["reinhardt-commands", "reinhardt-commands/migrations"]
 
 # Parent crate features (new module structure)
 conf = ["reinhardt-conf"]
-core = ["reinhardt-core", "reinhardt-apps", "inventory"]
+core = ["reinhardt-core", "reinhardt-apps", "dep:inventory"]
 rest = ["reinhardt-rest"]
 messages = ["reinhardt-core/messages"]
 # DI feature: Uses reinhardt-core/di which internally enables reinhardt-di/params
@@ -120,7 +120,7 @@ di = ["reinhardt-di", "reinhardt-di/params", "reinhardt-db?/di"]
 test = ["reinhardt-test"]
 testcontainers = ["test", "reinhardt-test/testcontainers"]
 server-fn-test = ["test", "reinhardt-test/server-fn-test"]
-openapi = ["reinhardt-rest", "reinhardt-rest/openapi"]
+openapi = ["reinhardt-rest", "reinhardt-rest/openapi", "rest", "dep:inventory"]
 openapi-router = ["reinhardt-openapi", "openapi", "reinhardt-commands/openapi-router"]
 reinhardt-browsable-api = ["reinhardt-rest", "reinhardt-rest/browsable-api"]
 browsable-api = ["reinhardt-browsable-api"]
@@ -257,8 +257,9 @@ middleware-rate-limit = [
 reinhardt-pages = { workspace = true, optional = true }
 reinhardt-urls = { workspace = true }
 
-# Server-side dependencies (NOT for WASM)
 reinhardt-core = {workspace = true, features = ["types"]}
+
+# Server-side dependencies (NOT for WASM)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Core dependencies
 reinhardt-utils = { workspace = true }
@@ -486,9 +487,8 @@ sqlx = { version = "0.8", features = [
   "rust_decimal",
 ] }
 
-# TLS
-# Pin to avoid build failure in native-tls 0.2.17 (non-exhaustive pattern in openssl.rs)
-native-tls = "=0.2.14"
+# TLS — lower-bound avoids 0.2.17 build failure (non-exhaustive pattern in openssl.rs)
+native-tls = ">=0.2.18, <0.3"
 
 # Authentication & Security
 argon2 = { version = "0.5", features = ["std"] }
@@ -570,6 +570,9 @@ redis = { version = "0.32", features = ["tokio-comp", "connection-manager"] }
 refinery = { version = "0.9.0", features = ["tokio-postgres"] }
 rust_decimal = "1.37"
 
+# E2E browser testing
+fantoccini = "0.22"
+
 # Testing
 testcontainers = { version = "0.26.3", features = ["blocking"] }
 testcontainers-modules = { version = "0.14.0", features = [
@@ -590,6 +593,7 @@ scopeguard = "1.2.0"
 tempfile = "3.15.0"
 trybuild = "1.0.114"
 url = "2.5.4"
+colored = "3.0.0"
 criterion = { version = "0.8", features = ["html_reports"] }
 insta = { version = "1.41", features = ["json", "toml"] }
 

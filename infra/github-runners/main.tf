@@ -50,6 +50,15 @@ resource "random_password" "webhook_secret" {
   special = false
 }
 
+# Dynamically retrieve available AZs in the current region
+data "aws_availability_zones" "available" {
+  state = "available"
+
+  # Exclude AZs that do not support Graviton instance types (c7g/c6g).
+  # Each region may have different unsupported AZs; add them to this list as needed.
+  exclude_zone_ids = var.excluded_zone_ids
+}
+
 # Default VPC data sources (use default VPC for simplicity)
 data "aws_vpc" "default" {
   default = true

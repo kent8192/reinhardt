@@ -37,6 +37,8 @@ wasm = [
 wasm-full = ["wasm", "reinhardt-pages/web-sys-full"]
 # Server function testing utilities
 server-fn-test = []
+# E2E browser testing via WebDriver (fantoccini)
+e2e = ["dep:fantoccini", "dep:url"]
 full = ["testcontainers", "static", "websockets", "graphql", "property-based", "tasks", "admin"]
 
 [dependencies]
@@ -102,6 +104,10 @@ web-sys = { version = "0.3.83", optional = true, features = [
   "Location",
   "History",
 ] }
+
+# Optional E2E testing dependencies (feature-gated)
+fantoccini = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
 
 # Re-exported dependencies needed for backward compatibility
 tokio = { workspace = true }

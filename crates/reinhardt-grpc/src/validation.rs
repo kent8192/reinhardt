@@ -220,9 +220,15 @@ impl ValidationRuleSet {
 
 	/// Add a maximum length check for a string field.
 	///
-	/// If the string length exceeds `max`, a violation is recorded.
+	/// If the Unicode scalar value count exceeds `max`, a violation is recorded.
+	/// Uses early-exit counting (up to `max + 1`) to avoid full string scans.
+	///
+	/// Note: This counts Unicode scalar values (`char`), not grapheme clusters.
+	/// Composite characters like emoji sequences (e.g., family emoji) may count
+	/// as multiple characters.
 	pub fn require_max_length(mut self, field: &str, value: &str, max: usize) -> Self {
-		if value.len() > max {
+		// Early exit: only count up to max + 1 to avoid O(n) scan on long strings
+		if value.chars().take(max + 1).count() > max {
 			self.violations.push(FieldRule::max_length(field, max));
 		}
 		self
@@ -230,9 +236,15 @@ impl ValidationRuleSet {
 
 	/// Add a minimum length check for a string field.
 	///
-	/// If the string length is below `min`, a violation is recorded.
+	/// If the Unicode scalar value count is below `min`, a violation is recorded.
+	/// Uses early-exit counting (up to `min`) to avoid full string scans.
+	///
+	/// Note: This counts Unicode scalar values (`char`), not grapheme clusters.
+	/// Composite characters like emoji sequences (e.g., family emoji) may count
+	/// as multiple characters.
 	pub fn require_min_length(mut self, field: &str, value: &str, min: usize) -> Self {
-		if value.len() < min {
+		// Early exit: only count up to min to determine if string is long enough
+		if value.chars().take(min).count() < min {
 			self.violations.push(FieldRule::min_length(field, min));
 		}
 		self

@@ -28,7 +28,7 @@ env:
 
 jobs:
   mutation-test:
-    name: "Shard ${{ matrix.shard }}/${{ env.TOTAL_SHARDS }}"
+    name: "Shard ${{ matrix.shard }}/5"
     runs-on: ubuntu-latest
     if: inputs.shard == '0' || inputs.shard == '' || inputs.shard == matrix.shard
     timeout-minutes: 360
@@ -44,7 +44,10 @@ jobs:
         uses: ./.github/actions/setup-rust
 
       - name: Setup Protoc
-        uses: ./.github/actions/setup-protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install cargo-mutants
         uses: taiki-e/install-action@v2

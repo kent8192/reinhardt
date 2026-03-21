@@ -43,6 +43,7 @@ tokio = { version = "1", features = ["full"] }
 [dev-dependencies]
 rstest = "0.26.1"
 reqwest = { version = "0.12", features = ["json"] }
+serial_test = "3"
 tokio = { version = "1", features = ["full"] }
 argon2 = { version = "0.5", features = ["std"] }
 

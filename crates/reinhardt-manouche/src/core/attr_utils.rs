@@ -23,6 +23,37 @@ const SVG_CAMEL_CASE_ATTRS: &[(&str, &str)] = &[
 	("text_length", "textLength"),
 ];
 
+/// Standard HTML boolean attributes that can be written in standalone form
+/// (e.g., `required` instead of `required: true`).
+pub const BOOLEAN_ATTRS: &[&str] = &[
+	"allowfullscreen",
+	"async",
+	"autofocus",
+	"autoplay",
+	"checked",
+	"controls",
+	"default",
+	"defer",
+	"disabled",
+	"formnovalidate",
+	"hidden",
+	"inert",
+	"ismap",
+	"itemscope",
+	"loop",
+	"multiple",
+	"muted",
+	"nomodule",
+	"novalidate",
+	"open",
+	"playsinline",
+	"readonly",
+	"required",
+	"reversed",
+	"selected",
+	"truespeed",
+];
+
 /// Converts a Rust identifier to an HTML attribute name.
 ///
 /// Strips `r#` prefix, maps SVG camelCase attributes, and converts `_` to `-`.

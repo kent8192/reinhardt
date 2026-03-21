@@ -1,7 +1,9 @@
 #!/bin/bash
-# User data for the hotpath runner (t4g.micro, always-on).
+# User data for the hotpath runner (t4g.micro Spot, ASG-managed).
 # First boot: registers as a GitHub Actions runner using GitHub App credentials.
-# Subsequent boots: systemd restarts the runner service automatically.
+# Subsequent boots (stop/start, reboot): systemd restarts the runner automatically.
+# During ASG capacity rebalancing, the new instance runs the first-boot path and
+# config.sh --replace seamlessly switches the runner registration from the old instance.
 set -euo pipefail
 exec > >(tee /var/log/user-data.log | logger -t user-data) 2>&1
 

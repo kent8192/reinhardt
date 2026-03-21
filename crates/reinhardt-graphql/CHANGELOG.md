@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-graphql@v0.1.0-rc.13...reinhardt-graphql@v0.1.0-rc.14) - 2026-03-21
+
+### Changed
+
+- *(graphql)* extract exceeds_max_chars helper with short-circuit and add multi-byte tests
+
+### Fixed
+
+- *(graphql)* use character count instead of byte length for name validation
+- resolve merge conflict keeping both escape tracking and char count tests
+
 ## [0.1.0-rc.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-graphql@v0.1.0-rc.9...reinhardt-graphql@v0.1.0-rc.10) - 2026-03-15
 
 ### Added

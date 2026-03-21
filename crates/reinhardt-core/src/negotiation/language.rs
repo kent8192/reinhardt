@@ -84,6 +84,10 @@ impl Language {
 				&& key.trim() == "q"
 				&& let Ok(q) = value.trim().parse::<f32>()
 			{
+				// Reject non-finite quality values (NaN, inf, -inf)
+				if !q.is_finite() {
+					return None;
+				}
 				quality = q.clamp(0.0, 1.0);
 			}
 		}
@@ -212,7 +216,12 @@ impl LanguageNegotiator {
 		let mut requested = self.parse_accept_language(accept_language);
 
 		// Sort by quality (highest first)
-		requested.sort_by(|a, b| b.quality.partial_cmp(&a.quality).unwrap());
+		// Non-finite values are rejected at parse time; unwrap_or is a safety net
+		requested.sort_by(|a, b| {
+			b.quality
+				.partial_cmp(&a.quality)
+				.unwrap_or(std::cmp::Ordering::Equal)
+		});
 
 		for req in &requested {
 			for avail in available {
@@ -267,7 +276,12 @@ impl LanguageNegotiator {
 	/// ```
 	pub fn find_all_matches(&self, accept_language: &str, available: &[Language]) -> Vec<Language> {
 		let mut requested = self.parse_accept_language(accept_language);
-		requested.sort_by(|a, b| b.quality.partial_cmp(&a.quality).unwrap());
+		// Use unwrap_or as a safety net in case NaN slips through
+		requested.sort_by(|a, b| {
+			b.quality
+				.partial_cmp(&a.quality)
+				.unwrap_or(std::cmp::Ordering::Equal)
+		});
 
 		let mut matches = Vec::new();
 		for req in &requested {
@@ -291,6 +305,7 @@ impl Default for LanguageNegotiator {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_language_parse() {
@@ -337,5 +352,47 @@ mod tests {
 
 		let matches = negotiator.find_all_matches("en, fr, de", &available);
 		assert_eq!(matches.len(), 2);
+	}
+
+	#[rstest]
+	#[case("en-US;q=NaN")]
+	#[case("en-US;q=inf")]
+	#[case("en-US;q=-inf")]
+	fn test_parse_rejects_non_finite_quality(#[case] input: &str) {
+		// Arrange
+		// (input provided by rstest case)
+
+		// Act
+		let result = Language::parse(input);
+
+		// Assert
+		assert_eq!(result, None, "Non-finite quality value should be rejected");
+	}
+
+	#[rstest]
+	fn test_negotiate_does_not_panic_on_nan_quality() {
+		// Arrange
+		let negotiator = LanguageNegotiator::new();
+		let available = vec![Language::new("en"), Language::new("fr")];
+
+		// Act
+		let result = negotiator.negotiate("en;q=NaN, fr;q=0.9", &available);
+
+		// Assert
+		assert_eq!(result.code, "fr");
+	}
+
+	#[rstest]
+	fn test_find_all_matches_does_not_panic_on_nan_quality() {
+		// Arrange
+		let negotiator = LanguageNegotiator::new();
+		let available = vec![Language::new("en"), Language::new("fr")];
+
+		// Act
+		let matches = negotiator.find_all_matches("en;q=NaN, fr;q=0.9", &available);
+
+		// Assert
+		assert_eq!(matches.len(), 1);
+		assert_eq!(matches[0].code, "fr");
 	}
 }

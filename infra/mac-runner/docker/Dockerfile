@@ -26,5 +26,12 @@ RUN MOLD_VERSION=2.35.1 \
 COPY scripts/healthcheck.sh /usr/local/bin/healthcheck.sh
 RUN chmod +x /usr/local/bin/healthcheck.sh
 
+# Copy cleanup scripts for workspace management
+COPY scripts/pre-start-cleanup.sh /usr/local/bin/pre-start-cleanup.sh
+COPY scripts/entrypoint-wrapper.sh /usr/local/bin/entrypoint-wrapper.sh
+RUN chmod +x /usr/local/bin/pre-start-cleanup.sh /usr/local/bin/entrypoint-wrapper.sh
+
 # Ensure cargo is in PATH for all users
 ENV PATH="/root/.cargo/bin:${PATH}"
+
+ENTRYPOINT ["/usr/local/bin/entrypoint-wrapper.sh"]

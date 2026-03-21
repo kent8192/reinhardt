@@ -1,0 +1,47 @@
+name: Runner Cleanup
+
+on:
+  schedule:
+    # Daily at 05:00 UTC (14:00 JST) - low activity period
+    - cron: "0 5 * * *"
+    # Weekly aggressive cleanup on Sunday at 03:00 UTC
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      aggressive:
+        description: "Run aggressive cleanup (remove all unused images)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup-dind:
+    name: Clean DinD Docker Storage
+    runs-on: [self-hosted, linux, arm64, mac-local]
+    timeout-minutes: 10
+    steps:
+      - name: Report disk usage before cleanup
+        run: docker system df
+
+      - name: Remove stopped containers
+        run: docker container prune -f
+
+      - name: Remove unused images older than 24h
+        run: docker image prune -a -f --filter "until=24h"
+
+      - name: Remove unused volumes
+        run: docker volume prune -f
+
+      - name: Remove build cache older than 24h
+        run: docker builder prune -f --filter "until=24h"
+
+      - name: Aggressive cleanup (weekly or manual)
+        if: github.event.schedule == '0 3 * * 0' || inputs.aggressive == true
+        run: |
+          docker system prune -af
+          docker builder prune -af
+
+      - name: Report disk usage after cleanup
+        run: docker system df

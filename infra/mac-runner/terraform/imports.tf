@@ -25,3 +25,8 @@ import {
 	to       = docker_volume.runner_work[each.value]
 	id       = "mac-runner-work-${each.value}"
 }
+
+import {
+	to = docker_volume.dind_data
+	id = "mac-runner-dind-data"
+}

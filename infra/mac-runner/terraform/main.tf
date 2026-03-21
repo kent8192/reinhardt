@@ -24,6 +24,10 @@ resource "docker_volume" "runner_work" {
   name  = "mac-runner-work-${count.index}"
 }
 
+resource "docker_volume" "dind_data" {
+  name = "mac-runner-dind-data"
+}
+
 # --- DinD (Docker-in-Docker) ---
 
 resource "docker_image" "dind" {
@@ -63,6 +67,11 @@ resource "docker_container" "dind" {
       volume_name    = volumes.value.name
       container_path = "/runner-work/${volumes.key}"
     }
+  }
+
+  volumes {
+    volume_name    = docker_volume.dind_data.name
+    container_path = "/var/lib/docker"
   }
 
   networks_advanced {

@@ -63,13 +63,46 @@ cd ../github
 terraform apply -var="mac_runner_enabled=true"
 ```
 
-### Weekly maintenance
+### Disk cleanup
+
+Disk cleanup is automated at three layers:
+
+| Layer | Mechanism | Frequency | Target |
+|-------|-----------|-----------|--------|
+| DinD internal | GitHub Actions workflow (`runner-cleanup.yml`) | Daily 05:00 UTC / Weekly Sun 03:00 UTC | TestContainers images, stopped containers, build cache |
+| Runner workspace | Entrypoint script (`pre-start-cleanup.sh`) | Every job (on container restart) | Previous job's `target/`, git clones |
+| Host Docker | launchd (`com.reinhardt.runner-cleanup.plist`) | Daily 04:00 (threshold-based) | Host-level dangling images, build cache |
+
+**Manual trigger:**
+
+```bash
+# Trigger DinD cleanup via GitHub Actions
+gh workflow run runner-cleanup.yml
+gh workflow run runner-cleanup.yml -f aggressive=true
+
+# Manual host cleanup
+infra/mac-runner/host/cleanup-host.sh
+```
+
+**Install host-level launchd schedule:**
+
+```bash
+cp infra/mac-runner/host/com.reinhardt.runner-cleanup.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.reinhardt.runner-cleanup.plist
+```
+
+**Check cleanup logs:**
+
+```bash
+cat /tmp/mac-runner-cleanup.log
+```
+
+### Image rebuild
 
 ```bash
 cd infra/mac-runner/terraform
 terraform taint docker_image.runner
 terraform apply
-docker system prune -f
 ```
 
 ## Architecture

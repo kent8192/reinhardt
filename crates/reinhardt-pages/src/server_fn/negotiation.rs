@@ -21,7 +21,9 @@
 //!     "application/x-www-form-urlencoded",
 //!     "json",
 //! ).unwrap();
-//! assert_eq!(json_body, r#"{"age":"30","name":"Alice"}"#);
+//! let parsed: serde_json::Value = serde_json::from_str(&json_body).unwrap();
+//! assert_eq!(parsed["name"], "Alice");
+//! assert_eq!(parsed["age"], "30");
 //! ```
 
 /// Convert a request body from its original Content-Type to the format

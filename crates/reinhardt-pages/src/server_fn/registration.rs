@@ -67,8 +67,10 @@ pub trait ServerFnRegistration: Send + Sync + 'static {
 
 	/// The codec this server function uses (e.g., `"json"`, `"url"`, `"msgpack"`).
 	///
-	/// Determines the `Content-Type` used for request/response encoding.
-	/// Defaults to `"json"` for backward compatibility.
+	/// Controls how the server expects to decode the incoming request body.
+	/// The actual response `Content-Type` may differ depending on the codec;
+	/// for example, the `"url"` codec still returns JSON responses while only
+	/// the request format differs. Defaults to `"json"` for backward compatibility.
 	const CODEC: &'static str = "json";
 
 	/// Returns the handler function pointer.

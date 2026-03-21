@@ -90,7 +90,7 @@ where
 	T: DeserializeOwned + Send,
 {
 	async fn from_request(req: &Request, _ctx: &ParamContext) -> ParamResult<Self> {
-		// Check Content-Type header
+		// Check Content-Type header (case-insensitive per RFC 7231)
 		let content_type = req
 			.headers
 			.get(http::header::CONTENT_TYPE)
@@ -98,8 +98,10 @@ where
 			.unwrap_or("");
 
 		// Allow empty Content-Type for backward compatibility,
-		// but reject explicit non-JSON content types
-		if !content_type.is_empty() && !content_type.contains("application/json") {
+		// but reject explicit non-JSON content types.
+		// Normalize to lowercase for case-insensitive comparison.
+		let ct_lower = content_type.to_lowercase();
+		if !ct_lower.is_empty() && !ct_lower.contains("application/json") {
 			return Err(ParamError::InvalidParameter(Box::new(
 				ParamErrorContext::new(
 					ParamType::Json,
@@ -129,5 +131,131 @@ where
 			let raw_value = String::from_utf8_lossy(&body_bytes).into_owned();
 			ParamError::json_deserialization::<T>(e, Some(raw_value))
 		})
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use bytes::Bytes;
+	use hyper::{HeaderMap, Method, Version, header};
+	use rstest::rstest;
+	use serde::Deserialize;
+
+	// Allow dead_code: fields are accessed via Deserialize derive, not directly in code
+	#[allow(dead_code)]
+	#[derive(Debug, Deserialize, PartialEq)]
+	struct TestPayload {
+		name: String,
+	}
+
+	fn build_request(content_type: Option<&str>, body: &str) -> Request {
+		let mut headers = HeaderMap::new();
+		if let Some(ct) = content_type {
+			headers.insert(header::CONTENT_TYPE, ct.parse().unwrap());
+		}
+		Request::builder()
+			.method(Method::POST)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(headers)
+			.body(Bytes::from(body.to_string()))
+			.build()
+			.unwrap()
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn json_content_type_is_accepted() {
+		// Arrange
+		let req = build_request(Some("application/json"), r#"{"name":"Alice"}"#);
+		let ctx = ParamContext::new();
+
+		// Act
+		let result = Json::<TestPayload>::from_request(&req, &ctx).await;
+
+		// Assert
+		assert!(result.is_ok());
+		assert_eq!(result.unwrap().0.name, "Alice");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn json_content_type_with_charset_is_accepted() {
+		// Arrange
+		let req = build_request(Some("application/json; charset=utf-8"), r#"{"name":"Bob"}"#);
+		let ctx = ParamContext::new();
+
+		// Act
+		let result = Json::<TestPayload>::from_request(&req, &ctx).await;
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn missing_content_type_is_allowed_for_backward_compat() {
+		// Arrange
+		let req = build_request(None, r#"{"name":"Charlie"}"#);
+		let ctx = ParamContext::new();
+
+		// Act
+		let result = Json::<TestPayload>::from_request(&req, &ctx).await;
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn uppercase_json_content_type_is_accepted() {
+		// Arrange
+		let req = build_request(Some("Application/JSON"), r#"{"name":"Dave"}"#);
+		let ctx = ParamContext::new();
+
+		// Act
+		let result = Json::<TestPayload>::from_request(&req, &ctx).await;
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn form_urlencoded_content_type_is_rejected() {
+		// Arrange
+		let req = build_request(Some("application/x-www-form-urlencoded"), "name=Alice");
+		let ctx = ParamContext::new();
+
+		// Act
+		let result = Json::<TestPayload>::from_request(&req, &ctx).await;
+
+		// Assert
+		assert!(result.is_err());
+		let err_msg = result.unwrap_err().to_string();
+		assert!(
+			err_msg.contains("Expected application/json"),
+			"Error should mention expected type, got: {err_msg}"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn text_plain_content_type_is_rejected() {
+		// Arrange
+		let req = build_request(Some("text/plain"), r#"{"name":"Eve"}"#);
+		let ctx = ParamContext::new();
+
+		// Act
+		let result = Json::<TestPayload>::from_request(&req, &ctx).await;
+
+		// Assert
+		assert!(result.is_err());
+		let err_msg = result.unwrap_err().to_string();
+		assert!(
+			err_msg.contains("text/plain"),
+			"Error should include actual Content-Type, got: {err_msg}"
+		);
 	}
 }

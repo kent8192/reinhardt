@@ -532,7 +532,9 @@ msgstr "Retour"
 
 		// Assert
 		assert_eq!(
-			catalog.get_context("navigation", "Back").map(String::as_str),
+			catalog
+				.get_context("navigation", "Back")
+				.map(String::as_str),
 			Some("Retour")
 		);
 	}
@@ -558,7 +560,9 @@ msgstr ""
 
 		// Assert
 		assert_eq!(
-			catalog.get_context("ctx.part", "hello world").map(String::as_str),
+			catalog
+				.get_context("ctx.part", "hello world")
+				.map(String::as_str),
 			Some("bonjour monde")
 		);
 	}

@@ -1,7 +1,6 @@
 name: Coverage
 
 on:
-  pull_request:
   push:
     branches:
       - main
@@ -10,28 +9,17 @@ on:
 permissions:
   contents: read
   id-token: write
-  pull-requests: read
 
 concurrency:
-  group: coverage-${{ github.event.pull_request.number || github.sha }}
+  group: coverage-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
-  detect-affected:
-    name: Detect Affected Packages
-    if: github.event_name == 'pull_request'
-    uses: ./.github/workflows/detect-affected-packages.yml
-
   coverage:
     name: Coverage
-    needs: [detect-affected]
-    if: |
-      always() &&
-      (github.event_name != 'pull_request' || needs.detect-affected.outputs.has-affected == 'true')
     uses: ./.github/workflows/coverage.yml
     secrets: inherit
     with:
       runner: '"ubuntu-latest"'
       cargo-build-jobs: '1'
-      nextest-filter: ${{ needs.detect-affected.outputs.nextest-filter || '' }}
-      run-all: ${{ needs.detect-affected.outputs.run-all || 'true' }}
+      run-all: 'true'

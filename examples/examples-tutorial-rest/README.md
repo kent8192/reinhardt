@@ -292,8 +292,6 @@ After understanding this example:
 ## Related Documentation
 
 - [REST Tutorial](../../../docs/tutorials/en/rest/) - Step-by-step guide
-- [Feature Flags Guide](../../../instructions/FEATURE_FLAGS.md) - Available features
-- [Getting Started](../../../instructions/GETTING_STARTED.md) - Quick start guide
 - [API Documentation](https://docs.rs/reinhardt-web) - Complete API reference
 
 ## License

@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::backends::{
 	backend::DatabaseBackend,
-	error::Result,
+	error::{DatabaseError, Result},
 	types::{
 		DatabaseType, IsolationLevel, QueryResult, QueryValue, Row, Savepoint, TransactionExecutor,
 	},
@@ -198,6 +198,8 @@ impl PostgresBackend {
 				// Convert DECIMAL/NUMERIC to f64 for Float storage
 				if let Some(f) = value.to_f64() {
 					row.insert(column_name.to_string(), QueryValue::Float(f));
+				} else {
+					return Err(Self::decimal_conversion_error(&value, column_name));
 				}
 			} else if let Ok(value) = pg_row.try_get::<f64, _>(column_name) {
 				row.insert(column_name.to_string(), QueryValue::Float(value));
@@ -222,6 +224,14 @@ impl PostgresBackend {
 			}
 		}
 		Ok(row)
+	}
+
+	/// Build a TypeError for failed Decimal-to-f64 conversion
+	fn decimal_conversion_error(value: &rust_decimal::Decimal, column_name: &str) -> DatabaseError {
+		DatabaseError::TypeError(format!(
+			"Failed to convert Decimal value '{}' to f64 for column '{}'",
+			value, column_name
+		))
 	}
 }
 
@@ -343,5 +353,89 @@ impl TransactionExecutor for PgTransactionExecutor {
 		let sp = Savepoint::new(name);
 		sqlx::query(&sp.rollback_sql()).execute(&mut **tx).await?;
 		Ok(())
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use rstest::rstest;
+	use rust_decimal::prelude::ToPrimitive;
+
+	/// Verify that normal Decimal values succeed to_f64() conversion
+	#[rstest]
+	#[case::positive(rust_decimal::Decimal::new(12345, 2), 123.45)]
+	#[case::zero(rust_decimal::Decimal::ZERO, 0.0)]
+	#[case::negative(rust_decimal::Decimal::new(-999, 1), -99.9)]
+	#[case::max(rust_decimal::Decimal::MAX, 7.922816251426434e28)]
+	fn test_decimal_to_f64_conversion_succeeds(
+		#[case] decimal: rust_decimal::Decimal,
+		#[case] expected: f64,
+	) {
+		// Act
+		let result = decimal.to_f64();
+
+		// Assert
+		assert!(
+			result.is_some(),
+			"Decimal '{}' should convert to f64",
+			decimal
+		);
+		let f = result.unwrap();
+
+		// Use combined relative and absolute tolerance for float comparison
+		let diff = (f - expected).abs();
+		let rel_tol = 1e-12;
+		let abs_tol = 1e-12;
+		let tol = expected.abs() * rel_tol + abs_tol;
+
+		assert!(
+			diff <= tol,
+			"Expected approximately {} (tolerance {}, diff {}), got {}",
+			expected,
+			tol,
+			diff,
+			f
+		);
+	}
+
+	/// Verify the TypeError is constructed correctly for conversion failures
+	#[rstest]
+	fn test_decimal_conversion_error_message_format() {
+		use crate::backends::error::DatabaseError;
+
+		// Arrange
+		let value = rust_decimal::Decimal::new(12345, 2);
+		let column_name = "price_column";
+
+		// Act
+		let error = super::PostgresBackend::decimal_conversion_error(&value, column_name);
+
+		// Assert
+		assert!(matches!(error, DatabaseError::TypeError(_)));
+		let error_msg = error.to_string();
+		assert!(
+			error_msg.contains("price_column"),
+			"Error message should contain the column name"
+		);
+		assert!(
+			error_msg.contains("123.45"),
+			"Error message should contain the decimal value"
+		);
+	}
+
+	/// Verify TypeError is the correct variant for type conversion failures
+	#[rstest]
+	fn test_type_error_variant_distinction() {
+		use crate::backends::error::DatabaseError;
+
+		// Arrange & Act
+		let type_error = DatabaseError::TypeError("conversion failed".to_string());
+		let query_error = DatabaseError::QueryError("query failed".to_string());
+
+		// Assert
+		assert!(matches!(type_error, DatabaseError::TypeError(_)));
+		assert!(!matches!(type_error, DatabaseError::QueryError(_)));
+		assert!(matches!(query_error, DatabaseError::QueryError(_)));
+		assert!(!matches!(query_error, DatabaseError::TypeError(_)));
 	}
 }

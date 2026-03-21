@@ -37,6 +37,10 @@ resource "docker_container" "dind" {
 
   privileged = true
 
+  # Set hostname so DinD TLS certificate SANs include the container name,
+  # allowing runners to connect via tcp://mac-runner-dind:2376
+  hostname = "mac-runner-dind"
+
   env = [
     "DOCKER_TLS_CERTDIR=/certs",
   ]

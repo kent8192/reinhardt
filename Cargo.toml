@@ -94,7 +94,7 @@ cache = ["reinhardt-utils/cache"]
 redis-backend = ["cache", "reinhardt-utils/redis-backend"]
 i18n = ["reinhardt-i18n"]
 mail = ["reinhardt-mail"]
-sessions = ["reinhardt-auth"]
+sessions = ["reinhardt-auth", "reinhardt-auth/sessions"]
 middleware = [
   "reinhardt-middleware",
   "reinhardt-middleware/sessions",

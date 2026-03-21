@@ -437,25 +437,32 @@ fn validate_attr_type(
 ) -> Result<()> {
 	// Boolean attributes validation - must use dynamic expressions only
 	const BOOLEAN_ATTRS: &[&str] = &[
-		"disabled",
-		"required",
-		"readonly",
-		"checked",
-		"selected",
+		"allowfullscreen",
+		"async",
 		"autofocus",
 		"autoplay",
+		"checked",
 		"controls",
-		"loop",
-		"muted",
 		"default",
 		"defer",
+		"disabled",
 		"formnovalidate",
 		"hidden",
+		"inert",
 		"ismap",
+		"itemscope",
+		"loop",
 		"multiple",
+		"muted",
+		"nomodule",
 		"novalidate",
 		"open",
+		"playsinline",
+		"readonly",
+		"required",
 		"reversed",
+		"selected",
+		"truespeed",
 	];
 
 	// Numeric attributes that must have integer literal or dynamic values
@@ -502,21 +509,23 @@ fn validate_attr_type(
 			));
 		}
 
-		// 2. Boolean literals are prohibited
-		if value.is_bool_literal() {
+		// 2. Boolean literal `false` is prohibited (omit the attribute instead).
+		//    `true` is allowed to support standalone syntax (e.g., `required`
+		//    which the parser desugars to `required: true`).
+		if let AttrValue::BoolLit(lit) = value
+			&& !lit.value()
+		{
 			return Err(syn::Error::new(
 				span,
 				format!(
-					"Boolean attribute '{}' cannot have a boolean literal value.\n\
-					HTML boolean attributes represent true/false by their presence/absence:\n\
-					  - Attribute present = true\n\
-					  - Attribute absent = false\n\n\
-					Use a variable or expression for dynamic boolean values:\n\
-					  Correct:   {}: is_disabled\n\
-					  Correct:   {}: state.is_active()\n\
-					  Incorrect: {}: true\n\
-					  Incorrect: {}: false",
-					attr_name, attr_name, attr_name, attr_name, attr_name
+					"Boolean attribute '{}' cannot be set to `false`.\n\
+						To disable a boolean attribute, omit it entirely:\n\
+						  - Attribute present = true (e.g., `{0}` or `{0}: true`)\n\
+						  - Attribute absent = false (just remove `{0}`)\n\n\
+						Use a variable or expression for dynamic boolean values:\n\
+						  Correct:   {0}: is_disabled\n\
+						  Correct:   {0}: state.is_active()",
+					attr_name
 				),
 			));
 		}
@@ -1006,10 +1015,7 @@ mod tests {
 		let value = AttrValue::from_expr(parse_quote!(true));
 		let result =
 			validate_attr_type("disabled", &value, "button", proc_macro2::Span::call_site());
-		assert!(result.is_err());
-		let err_msg = result.unwrap_err().to_string();
-		assert!(err_msg.contains("Boolean attribute"));
-		assert!(err_msg.contains("cannot have a boolean literal value"));
+		assert!(result.is_ok());
 	}
 
 	#[test]
@@ -1018,8 +1024,7 @@ mod tests {
 		let result = validate_attr_type("checked", &value, "input", proc_macro2::Span::call_site());
 		assert!(result.is_err());
 		let err_msg = result.unwrap_err().to_string();
-		assert!(err_msg.contains("Boolean attribute"));
-		assert!(err_msg.contains("cannot have a boolean literal value"));
+		assert!(err_msg.contains("cannot be set to `false`"));
 	}
 
 	#[test]

@@ -445,10 +445,14 @@ mod tests {
 	#[serial(browser_env)]
 	fn test_browser_config_defaults() {
 		// Arrange
-		std::env::remove_var("WEBDRIVER_URL");
-		std::env::remove_var("BROWSER_HEADLESS");
-		std::env::remove_var("BROWSER_TYPE");
-		std::env::remove_var("BROWSER_WAIT_TIMEOUT");
+		// SAFETY: Modifying environment variables is unsafe in multi-threaded programs.
+		// This test uses #[serial] to ensure exclusive access to environment variables.
+		unsafe {
+			std::env::remove_var("WEBDRIVER_URL");
+			std::env::remove_var("BROWSER_HEADLESS");
+			std::env::remove_var("BROWSER_TYPE");
+			std::env::remove_var("BROWSER_WAIT_TIMEOUT");
+		}
 
 		// Act
 		let config = BrowserConfig::from_env();
@@ -473,7 +477,11 @@ mod tests {
 	#[serial(browser_env)]
 	fn test_browser_headless_parsing(#[case] value: &str, #[case] expected: bool) {
 		// Arrange
-		std::env::set_var("BROWSER_HEADLESS", value);
+		// SAFETY: Modifying environment variables is unsafe in multi-threaded programs.
+		// This test uses #[serial] to ensure exclusive access to environment variables.
+		unsafe {
+			std::env::set_var("BROWSER_HEADLESS", value);
+		}
 
 		// Act
 		let config = BrowserConfig::from_env();
@@ -482,16 +490,24 @@ mod tests {
 		assert_eq!(config.headless, expected);
 
 		// Cleanup
-		std::env::remove_var("BROWSER_HEADLESS");
+		// SAFETY: Removing environment variables is unsafe in multi-threaded programs.
+		// This test uses #[serial] to ensure exclusive access to environment variables.
+		unsafe {
+			std::env::remove_var("BROWSER_HEADLESS");
+		}
 	}
 
 	#[rstest]
 	#[serial(browser_env)]
 	fn test_browser_config_custom_values() {
 		// Arrange
-		std::env::set_var("WEBDRIVER_URL", "http://selenium:4444");
-		std::env::set_var("BROWSER_TYPE", "firefox");
-		std::env::set_var("BROWSER_WAIT_TIMEOUT", "30");
+		// SAFETY: Modifying environment variables is unsafe in multi-threaded programs.
+		// This test uses #[serial] to ensure exclusive access to environment variables.
+		unsafe {
+			std::env::set_var("WEBDRIVER_URL", "http://selenium:4444");
+			std::env::set_var("BROWSER_TYPE", "firefox");
+			std::env::set_var("BROWSER_WAIT_TIMEOUT", "30");
+		}
 
 		// Act
 		let config = BrowserConfig::from_env();
@@ -502,8 +518,12 @@ mod tests {
 		assert_eq!(config.wait_timeout, Duration::from_secs(30));
 
 		// Cleanup
-		std::env::remove_var("WEBDRIVER_URL");
-		std::env::remove_var("BROWSER_TYPE");
-		std::env::remove_var("BROWSER_WAIT_TIMEOUT");
+		// SAFETY: Removing environment variables is unsafe in multi-threaded programs.
+		// This test uses #[serial] to ensure exclusive access to environment variables.
+		unsafe {
+			std::env::remove_var("WEBDRIVER_URL");
+			std::env::remove_var("BROWSER_TYPE");
+			std::env::remove_var("BROWSER_WAIT_TIMEOUT");
+		}
 	}
 }

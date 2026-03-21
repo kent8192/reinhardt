@@ -14,6 +14,7 @@ use std::sync::Arc;
 use maxminddb::geoip2;
 
 /// Configuration for geo-based rate limiting
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct GeoRateConfig {
 	/// Rate for specific country codes (ISO 3166-1 alpha-2)
@@ -152,10 +153,11 @@ impl<B: ThrottleBackend> GeoRateThrottle<B> {
 	fn get_country_code(&self, ip: IpAddr) -> Option<String> {
 		let reader = self.geoip_reader.as_ref()?;
 
-		let country: geoip2::Country = reader.lookup(ip).ok()??;
+		let result = reader.lookup(ip).ok()?;
+		let country: geoip2::Country = result.decode().ok()??;
 		country
 			.country
-			.and_then(|c| c.iso_code)
+			.iso_code
 			.map(|s| s.to_string())
 	}
 

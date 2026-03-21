@@ -14,6 +14,19 @@ This document defines the module system standards for the Reinhardt project usin
 
 ## Basic Patterns
 
+The following diagram helps select the appropriate module pattern:
+
+```mermaid
+flowchart TD
+    A[New module needed] --> B{Has submodules?}
+    B -->|No| C["Pattern 1: Single file<br/>module.rs"]
+    B -->|Yes| D{Has nested sub-submodules?}
+    D -->|No| E["Pattern 2: Entry point + directory<br/>module.rs + module/"]
+    D -->|Yes| F{Nesting depth > 4?}
+    F -->|Yes| G[Refactor: reduce nesting]
+    F -->|No| H["Pattern 3: Hierarchical<br/>module.rs + module/ with nested dirs"]
+```
+
 ### Pattern 1: Small Module (Single File)
 
 For modules with no submodules:
@@ -95,7 +108,7 @@ pub use connection::Connection;
 
 ## Anti-Patterns (What NOT to Do)
 
-For detailed anti-patterns and examples, see @docs/ANTI_PATTERNS.md. Key module system anti-patterns:
+For detailed anti-patterns and examples, see @instructions/ANTI_PATTERNS.md. Key module system anti-patterns:
 
 - **Using `mod.rs`**: Use `module.rs` instead (Rust 2024 Edition)
 - **Glob imports**: Use explicit `pub use` (except in test modules)

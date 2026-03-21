@@ -128,6 +128,14 @@
   color: ededed
   description: Internationalization, localization
 
+- name: examples
+  color: ededed
+  description: Example projects and demo applications
+
+- name: infrastructure
+  color: "0e8a16"
+  description: "Infrastructure and Terraform changes"
+
 # Code Quality Labels
 - name: refactoring
   color: ededed
@@ -149,3 +157,48 @@
 - name: github-actions
   color: 2cbe4e
   description: GitHub Actions workflow files
+
+# Agent Labels
+- name: agent-suspect
+  color: "d4c5f9"
+  description: "Agent-detected issue pending independent verification"
+
+# Migration Labels
+- name: stable-migration
+  color: "0969da"
+  description: "Issues related to stable release migration"
+
+- name: rc-migration
+  color: "ff7b72"
+  description: "Issues related to RC release migration"
+
+# Develop Branch Migration Labels
+- name: migration-approved
+  color: "1f883d"
+  description: "Approved for develop branch merge into main (version transition)"
+
+- name: rc-addition
+  color: "7ee787"
+  description: "Approved non-breaking API addition during RC phase (SP-6)"
+
+# Process Labels
+- name: process
+  color: "cfd3d7"
+  description: "Process and workflow improvements"
+
+- name: automated
+  color: "ededed"
+  description: "Automated PR (release-plz)"
+
+# Automation Labels
+- name: stale
+  color: ededed
+  description: Automatically marked as stale due to inactivity
+
+- name: auto-closed
+  color: c5def5
+  description: Automatically closed when all sub-issues were completed
+
+- name: no-auto-close
+  color: fbca04
+  description: Prevent automatic closure when all sub-issues are completed

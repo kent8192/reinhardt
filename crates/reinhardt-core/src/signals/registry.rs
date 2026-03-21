@@ -23,19 +23,19 @@ impl SignalRegistry {
 		let type_id = TypeId::of::<T>();
 		let key = (type_id, name.as_str().to_string());
 
-		// Try to get existing signal
+		// Use upgradable read lock to prevent TOCTOU race condition.
+		// This ensures no other thread can insert between our read check and write.
+		let signals = self.signals.upgradable_read();
+		if let Some(signal_any) = signals.get(&key)
+			&& let Some(signal) = signal_any.downcast_ref::<Signal<T>>()
 		{
-			let signals = self.signals.read();
-			if let Some(signal_any) = signals.get(&key)
-				&& let Some(signal) = signal_any.downcast_ref::<Signal<T>>()
-			{
-				return signal.clone();
-			}
+			return signal.clone();
 		}
 
-		// Create new signal
+		// Atomically upgrade to write lock
 		let signal = Signal::new(name);
-		self.signals.write().insert(key, Box::new(signal.clone()));
+		let mut signals = parking_lot::RwLockUpgradableReadGuard::upgrade(signals);
+		signals.insert(key, Box::new(signal.clone()));
 		signal
 	}
 
@@ -49,19 +49,19 @@ impl SignalRegistry {
 		let type_id = TypeId::of::<T>();
 		let key = (type_id, name_str.clone());
 
-		// Try to get existing signal
+		// Use upgradable read lock to prevent TOCTOU race condition.
+		// This ensures no other thread can insert between our read check and write.
+		let signals = self.signals.upgradable_read();
+		if let Some(signal_any) = signals.get(&key)
+			&& let Some(signal) = signal_any.downcast_ref::<Signal<T>>()
 		{
-			let signals = self.signals.read();
-			if let Some(signal_any) = signals.get(&key)
-				&& let Some(signal) = signal_any.downcast_ref::<Signal<T>>()
-			{
-				return signal.clone();
-			}
+			return signal.clone();
 		}
 
-		// Create new signal using Arc-based SignalName to avoid memory leak
+		// Atomically upgrade to write lock
 		let signal = Signal::new(SignalName::from_string(name_str.clone()));
-		self.signals.write().insert(key, Box::new(signal.clone()));
+		let mut signals = parking_lot::RwLockUpgradableReadGuard::upgrade(signals);
+		signals.insert(key, Box::new(signal.clone()));
 		signal
 	}
 }

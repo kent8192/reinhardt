@@ -45,6 +45,7 @@ pub enum EscapeContext {
 }
 
 /// Configuration for XSS protection
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct XssConfig {
 	/// Allow specific HTML tags (only used in permissive mode)

@@ -1,7 +1,6 @@
 //! Profile server module
 //!
 //! Contains server-only functionality for profile management.
+//! Server functions are defined in the shared module for WASM compatibility.
 
-pub mod server_fn;
-
-pub use server_fn::*;
+pub use crate::apps::profile::shared::server_fn::*;

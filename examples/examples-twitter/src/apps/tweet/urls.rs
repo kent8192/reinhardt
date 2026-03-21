@@ -8,7 +8,7 @@ use reinhardt::UnifiedRouter;
 use reinhardt::pages::server_fn::ServerFnRouterExt;
 
 #[cfg(server)]
-use crate::apps::tweet::server::server_fn::{create_tweet, delete_tweet, list_tweets};
+use crate::apps::tweet::shared::server_fn::{create_tweet, delete_tweet, list_tweets};
 
 #[cfg(client)]
 use crate::core::client::pages::{home_page, timeline_page};

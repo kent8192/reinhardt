@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Global versioning configuration
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersioningConfig {
 	/// Default version to use when no version is specified

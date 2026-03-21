@@ -35,6 +35,7 @@ pub enum SyncMode {
 }
 
 /// Error type for sync operations
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncError {
 	/// Database error
@@ -212,6 +213,7 @@ impl SyncResult {
 }
 
 /// Options for sync operation
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct SyncOptions {
 	/// Sync mode

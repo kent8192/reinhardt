@@ -3,7 +3,7 @@
 //! This module provides types for materialized view-related DDL operations:
 //!
 //! - [`MaterializedViewDef`]: Materialized view definition for CREATE MATERIALIZED VIEW
-//! - [`MaterializedViewOption`]: Options for ALTER MATERIALIZED VIEW operations
+//! - `MaterializedViewOption`: Options for ALTER MATERIALIZED VIEW operations
 //!
 //! Note: Materialized views are PostgreSQL and CockroachDB specific features.
 //! Other databases will panic with appropriate error messages.
@@ -32,6 +32,7 @@ use crate::types::{DynIden, IntoIden};
 ///     .with_data(false);
 /// ```
 #[derive(Debug, Clone)]
+// Allow dead_code: DDL definition struct for CREATE MATERIALIZED VIEW; fields populated by builder but not yet consumed by backend SQL generation
 #[allow(dead_code)]
 pub struct MaterializedViewDef {
 	pub(crate) name: DynIden,

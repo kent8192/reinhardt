@@ -31,9 +31,13 @@ use tokio::sync::{Semaphore, broadcast};
 /// ```
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
+	/// Name of this worker instance.
 	pub name: String,
+	/// Maximum number of tasks to process concurrently.
 	pub concurrency: usize,
+	/// Interval between polling the backend for new tasks.
 	pub poll_interval: Duration,
+	/// Webhook configurations for task completion notifications.
 	pub webhook_configs: Vec<WebhookConfig>,
 }
 
@@ -317,21 +321,21 @@ impl Worker {
 	/// configured concurrency limit is enforced. The permit is released
 	/// when the spawned task completes.
 	async fn try_process_task(&self, backend: Arc<dyn TaskBackend>) {
+		// Acquire concurrency permit before dequeue to prevent task loss
+		// when semaphore is closed.
+		let permit = match self.concurrency_semaphore.clone().acquire_owned().await {
+			Ok(permit) => permit,
+			Err(_) => {
+				tracing::error!(
+					worker = %self.config.name,
+					"Concurrency semaphore closed unexpectedly"
+				);
+				return;
+			}
+		};
+
 		match backend.dequeue().await {
 			Ok(Some(task_id)) => {
-				// Acquire a concurrency permit before executing the task.
-				// This enforces the configured concurrency limit.
-				let permit = match self.concurrency_semaphore.clone().acquire_owned().await {
-					Ok(permit) => permit,
-					Err(_) => {
-						tracing::error!(
-							worker = %self.config.name,
-							"Concurrency semaphore closed unexpectedly"
-						);
-						return;
-					}
-				};
-
 				tracing::info!(worker = %self.config.name, task_id = %task_id, "Processing task");
 
 				// Execute task; permit is held for the duration
@@ -488,8 +492,9 @@ impl Worker {
 			Err(_) => (TaskStatus::Failure, crate::webhook::TaskStatus::Failed),
 		};
 
-		// Store result if result backend is available
-		if let Some(ref result_backend) = self.result_backend {
+		// Store result if result backend is available.
+		// Capture store_result error separately to ensure lock is always released.
+		let store_error = if let Some(ref result_backend) = self.result_backend {
 			let metadata = match result {
 				Ok(_) => TaskResultMetadata::new(
 					task_id,
@@ -501,8 +506,10 @@ impl Worker {
 				}
 			};
 
-			result_backend.store_result(metadata).await?;
-		}
+			result_backend.store_result(metadata).await.err()
+		} else {
+			None
+		};
 
 		// Send webhook notifications
 		if !self.webhook_senders.is_empty() {
@@ -541,9 +548,21 @@ impl Worker {
 			}
 		}
 
-		// Release lock if acquired
-		if let Some(ref lock) = self.task_lock {
-			lock.release(task_id).await?;
+		// Always release lock if acquired, regardless of store_result outcome
+		if let Some(ref lock) = self.task_lock
+			&& let Err(e) = lock.release(task_id).await
+		{
+			tracing::error!(
+				worker = %self.config.name,
+				task_id = %task_id,
+				error = %e,
+				"Failed to release task lock"
+			);
+		}
+
+		// Propagate store_result error after lock is released
+		if let Some(e) = store_error {
+			return Err(Box::new(e));
 		}
 
 		result
@@ -592,7 +611,7 @@ mod tests {
 	use std::time::Duration;
 	use tokio::time::sleep;
 
-	// Fields are used indirectly through Task trait implementation in tests
+	// Allow dead_code: fields are accessed indirectly through Task trait implementation
 	#[allow(dead_code)]
 	struct TestTask {
 		id: TaskId,
@@ -694,6 +713,31 @@ mod tests {
 
 		// Assert
 		assert!(worker.task_lock.is_some());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_try_process_task_returns_early_when_semaphore_closed() {
+		// Arrange
+		let config = WorkerConfig::new("test-worker".to_string());
+		let semaphore = Arc::new(Semaphore::new(1));
+		semaphore.close(); // Close semaphore to trigger early return
+		let worker = Worker {
+			config,
+			shutdown_tx: broadcast::channel(1).0,
+			registry: None,
+			task_lock: None,
+			result_backend: None,
+			webhook_senders: Vec::new(),
+			concurrency_semaphore: semaphore,
+		};
+		let backend = Arc::new(DummyBackend::new());
+
+		// Act - should return immediately without dequeuing
+		worker.try_process_task(backend).await;
+
+		// Assert - if we reach here without panic, the early return path worked
+		// DummyBackend would not have been called for dequeue
 	}
 
 	#[rstest]

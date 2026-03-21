@@ -831,10 +831,7 @@ async fn test_mysql_algorithm_instant(
 			where_clause: None,
 			concurrently: false,
 			expressions: None,
-			mysql_options: Some(AlterTableOptions {
-				algorithm: Some(MySqlAlgorithm::Instant),
-				lock: None,
-			}),
+			mysql_options: Some(AlterTableOptions::new().with_algorithm(MySqlAlgorithm::Instant)),
 			operator_class: None,
 		}],
 		dependencies: vec![],
@@ -912,10 +909,7 @@ async fn test_mysql_algorithm_inplace(
 			where_clause: None,
 			concurrently: false,
 			expressions: None,
-			mysql_options: Some(AlterTableOptions {
-				algorithm: Some(MySqlAlgorithm::Inplace),
-				lock: None,
-			}),
+			mysql_options: Some(AlterTableOptions::new().with_algorithm(MySqlAlgorithm::Inplace)),
 			operator_class: None,
 		}],
 		dependencies: vec![],
@@ -990,10 +984,7 @@ async fn test_mysql_lock_none(
 			where_clause: None,
 			concurrently: false,
 			expressions: None,
-			mysql_options: Some(AlterTableOptions {
-				algorithm: None,
-				lock: Some(MySqlLock::None),
-			}),
+			mysql_options: Some(AlterTableOptions::new().with_lock(MySqlLock::None)),
 			operator_class: None,
 		}],
 		dependencies: vec![],
@@ -1169,24 +1160,24 @@ async fn test_mysql_partition_by_range(
 		constraints: vec![],
 		without_rowid: None,
 		interleave_in_parent: None,
-		partition: Some(PartitionOptions {
-			partition_type: reinhardt_db::migrations::operations::PartitionType::Range,
-			column: "id".to_string(),
-			partitions: vec![
-				PartitionDef {
-					name: "p0".to_string(),
-					values: reinhardt_db::migrations::operations::PartitionValues::LessThan(
+		partition: Some(PartitionOptions::new(
+			reinhardt_db::migrations::operations::PartitionType::Range,
+			"id",
+			vec![
+				PartitionDef::new(
+					"p0",
+					reinhardt_db::migrations::operations::PartitionValues::LessThan(
 						"1000".to_string(),
 					),
-				},
-				PartitionDef {
-					name: "p1".to_string(),
-					values: reinhardt_db::migrations::operations::PartitionValues::LessThan(
+				),
+				PartitionDef::new(
+					"p1",
+					reinhardt_db::migrations::operations::PartitionValues::LessThan(
 						"2000".to_string(),
 					),
-				},
+				),
 			],
-		}),
+		)),
 	};
 
 	// Verify partition options are set correctly
@@ -1229,28 +1220,28 @@ async fn test_mysql_partition_by_hash(
 		constraints: vec![],
 		without_rowid: None,
 		interleave_in_parent: None,
-		partition: Some(PartitionOptions {
-			partition_type: reinhardt_db::migrations::operations::PartitionType::Hash,
-			column: "id".to_string(),
-			partitions: vec![
-				PartitionDef {
-					name: "p0".to_string(),
-					values: reinhardt_db::migrations::operations::PartitionValues::ModuloCount(4),
-				},
-				PartitionDef {
-					name: "p1".to_string(),
-					values: reinhardt_db::migrations::operations::PartitionValues::ModuloCount(4),
-				},
-				PartitionDef {
-					name: "p2".to_string(),
-					values: reinhardt_db::migrations::operations::PartitionValues::ModuloCount(4),
-				},
-				PartitionDef {
-					name: "p3".to_string(),
-					values: reinhardt_db::migrations::operations::PartitionValues::ModuloCount(4),
-				},
+		partition: Some(PartitionOptions::new(
+			reinhardt_db::migrations::operations::PartitionType::Hash,
+			"id",
+			vec![
+				PartitionDef::new(
+					"p0",
+					reinhardt_db::migrations::operations::PartitionValues::ModuloCount(4),
+				),
+				PartitionDef::new(
+					"p1",
+					reinhardt_db::migrations::operations::PartitionValues::ModuloCount(4),
+				),
+				PartitionDef::new(
+					"p2",
+					reinhardt_db::migrations::operations::PartitionValues::ModuloCount(4),
+				),
+				PartitionDef::new(
+					"p3",
+					reinhardt_db::migrations::operations::PartitionValues::ModuloCount(4),
+				),
 			],
-		}),
+		)),
 	};
 
 	// Verify partition options are set correctly

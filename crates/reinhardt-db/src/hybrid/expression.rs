@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Represents a SQL expression
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SqlExpression {
+	/// The sql.
 	pub sql: String,
 }
 
@@ -31,7 +32,7 @@ impl SqlExpression {
 	/// let expr = SqlExpression::new("SELECT * FROM users");
 	/// assert_eq!(expr.sql, "SELECT * FROM users");
 	///
-	// Also works with String
+	/// // Also works with String
 	/// let expr2 = SqlExpression::new(String::from("COUNT(*)"));
 	/// assert_eq!(expr2.sql, "COUNT(*)");
 	/// ```
@@ -59,7 +60,7 @@ impl SqlExpression {
 	/// let expr = SqlExpression::concat(&["first_name", "' '", "last_name"]);
 	/// assert_eq!(expr.sql, "CONCAT(first_name, ' ', last_name)");
 	///
-	// Single part
+	/// // Single part
 	/// let expr2 = SqlExpression::concat(&["column1"]);
 	/// assert_eq!(expr2.sql, "CONCAT(column1)");
 	/// ```
@@ -150,6 +151,7 @@ impl SqlExpression {
 
 /// Trait for types that can be converted to SQL expressions
 pub trait Expression {
+	/// Converts the expression to its SQL representation.
 	fn to_sql(&self) -> String;
 }
 

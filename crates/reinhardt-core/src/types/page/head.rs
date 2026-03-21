@@ -378,10 +378,18 @@ impl ScriptTag {
 		}
 
 		if let Some(ref content) = self.content {
+			// Escape closing tags in inline scripts to prevent premature script termination.
+			// The "</script>" sequence inside a <script> block would be interpreted by the HTML
+			// parser as closing the script element, enabling injection. Replacing "</" with "<\\/"
+			// is a well-established defense used by Django, Rails, and other frameworks.
+			// This pattern only matches the literal two-character sequence "</" -- it does not
+			// affect expressions like `a < / b` (which have spaces).
+			let escaped_content = content.replace("</", "<\\/");
+
 			if attrs.is_empty() {
-				format!("<script>{}</script>", content)
+				format!("<script>{}</script>", escaped_content)
 			} else {
-				format!("<script {}>{}</script>", attrs.join(" "), content)
+				format!("<script {}>{}</script>", attrs.join(" "), escaped_content)
 			}
 		} else {
 			format!("<script {}></script>", attrs.join(" "))
@@ -434,10 +442,13 @@ impl StyleTag {
 			attrs.push(format!("nonce=\"{}\"", html_escape(nonce)));
 		}
 
+		// Escape "</", preventing content from closing the style tag (XSS mitigation)
+		let escaped_content = self.content.replace("</", "<\\/");
+
 		if attrs.is_empty() {
-			format!("<style>{}</style>", self.content)
+			format!("<style>{}</style>", escaped_content)
 		} else {
-			format!("<style {}>{}</style>", attrs.join(" "), self.content)
+			format!("<style {}>{}</style>", attrs.join(" "), escaped_content)
 		}
 	}
 }
@@ -795,6 +806,31 @@ mod tests {
 	}
 
 	#[rstest]
+	fn test_style_tag_escapes_closing_tag_xss() {
+		// Arrange
+		let style = StyleTag::new("</style><script>alert(1)</script>");
+
+		// Act
+		let html = style.to_html();
+
+		// Assert
+		assert_eq!(html, "<style><\\/style><script>alert(1)<\\/script></style>");
+		assert!(!html.contains("</style><script>"));
+	}
+
+	#[rstest]
+	fn test_style_tag_escapes_multiple_closing_sequences() {
+		// Arrange
+		let style = StyleTag::new("a{} </style> b{} </style>");
+
+		// Act
+		let html = style.to_html();
+
+		// Assert
+		assert_eq!(html, "<style>a{} <\\/style> b{} <\\/style></style>");
+	}
+
+	#[rstest]
 	fn test_head_builder() {
 		let head = Head::new()
 			.title("Test Page")
@@ -865,5 +901,33 @@ mod tests {
 		assert!(html.contains("property=\"og:description\""));
 		assert!(html.contains("property=\"og:image\""));
 		assert!(html.contains("property=\"og:type\""));
+	}
+
+	#[rstest]
+	fn test_script_tag_escapes_closing_tag_xss() {
+		// Arrange
+		let script = ScriptTag::inline("</script><script>alert(1)</script>");
+
+		// Act
+		let html = script.to_html();
+
+		// Assert
+		assert_eq!(
+			html,
+			"<script><\\/script><script>alert(1)<\\/script></script>"
+		);
+		assert!(!html.contains("</script><script>"));
+	}
+
+	#[rstest]
+	fn test_script_tag_preserves_normal_content() {
+		// Arrange
+		let script = ScriptTag::inline("console.log('hello');");
+
+		// Act
+		let html = script.to_html();
+
+		// Assert
+		assert_eq!(html, "<script>console.log('hello');</script>");
 	}
 }

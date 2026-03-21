@@ -3,16 +3,25 @@
 use super::utils::generate_token;
 
 /// Content Security Policy configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentSecurityPolicy {
+	/// Allowed sources for the `default-src` directive.
 	pub default_src: Vec<String>,
+	/// Allowed sources for the `script-src` directive.
 	pub script_src: Vec<String>,
+	/// Allowed sources for the `style-src` directive.
 	pub style_src: Vec<String>,
+	/// Allowed sources for the `img-src` directive.
 	pub img_src: Vec<String>,
+	/// Allowed sources for the `connect-src` directive.
 	pub connect_src: Vec<String>,
+	/// Allowed sources for the `font-src` directive.
 	pub font_src: Vec<String>,
+	/// Allowed sources for the `object-src` directive.
 	pub object_src: Vec<String>,
+	/// Allowed sources for the `media-src` directive.
 	pub media_src: Vec<String>,
+	/// Allowed sources for the `frame-src` directive.
 	pub frame_src: Vec<String>,
 	/// URI to send CSP violation reports to
 	pub report_uri: Option<String>,
@@ -42,6 +51,7 @@ impl Default for ContentSecurityPolicy {
 }
 
 impl ContentSecurityPolicy {
+	/// Creates a new `ContentSecurityPolicy` with default values.
 	pub fn new() -> Self {
 		Self::default()
 	}
@@ -174,20 +184,28 @@ impl ContentSecurityPolicy {
 		parts.join("; ")
 	}
 
+	/// Generate header value without a nonce.
 	pub fn to_header_value(&self) -> String {
 		self.to_header_value_with_nonce(None)
 	}
 }
 
 /// Security headers configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecurityHeadersConfig {
+	/// Whether to send the `X-Content-Type-Options: nosniff` header.
 	pub x_content_type_options: bool,
+	/// Value for the `X-Frame-Options` header (e.g., "DENY", "SAMEORIGIN").
 	pub x_frame_options: Option<String>,
+	/// Whether to send the `X-XSS-Protection: 1; mode=block` header.
 	pub x_xss_protection: bool,
+	/// Value for the `Strict-Transport-Security` header.
 	pub strict_transport_security: Option<String>,
+	/// Content Security Policy configuration.
 	pub content_security_policy: Option<ContentSecurityPolicy>,
+	/// Value for the `Referrer-Policy` header.
 	pub referrer_policy: Option<String>,
+	/// Value for the `Permissions-Policy` header.
 	pub permissions_policy: Option<String>,
 	/// Cross-Origin-Embedder-Policy
 	pub cross_origin_embedder_policy: Option<String>,
@@ -257,21 +275,25 @@ impl SecurityHeadersConfig {
 }
 
 /// Security headers middleware
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecurityHeadersMiddleware {
 	config: SecurityHeadersConfig,
 }
 
 impl SecurityHeadersMiddleware {
+	/// Creates a new middleware with default security headers.
 	pub fn new() -> Self {
 		Self {
 			config: SecurityHeadersConfig::default(),
 		}
 	}
 
+	/// Creates a new middleware with the given configuration.
 	pub fn with_config(config: SecurityHeadersConfig) -> Self {
 		Self { config }
 	}
 
+	/// Returns a reference to the security headers configuration.
 	pub fn config(&self) -> &SecurityHeadersConfig {
 		&self.config
 	}

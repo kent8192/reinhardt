@@ -65,14 +65,14 @@ use validation::{PathValidationError, validate_path_syntax};
 /// ```compile_fail
 /// use reinhardt_routers_macros::path;
 ///
-// Error: path must start with '/'
+/// // Error: path must start with '/'
 /// let invalid = path!("users/");
 /// ```
 ///
 /// ```compile_fail
 /// use reinhardt_routers_macros::path;
 ///
-// Error: parameter names must be snake_case
+/// // Error: parameter names must be snake_case
 /// let invalid = path!("/users/{userId}/");
 /// ```
 #[proc_macro]

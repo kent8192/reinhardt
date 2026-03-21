@@ -123,6 +123,7 @@ impl CircuitBreakerState {
 }
 
 /// Circuit breaker configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct CircuitBreakerConfig {
 	/// Error rate threshold (0.0 - 1.0)
@@ -270,18 +271,22 @@ impl CircuitBreakerMiddleware {
 	}
 
 	/// Get the current state
-	pub fn get_state(&self) -> CircuitState {
-		self.state.read().unwrap().state
+	pub fn state(&self) -> CircuitState {
+		self.state.read().unwrap_or_else(|e| e.into_inner()).state
 	}
 
 	/// Get statistics
-	pub fn get_stats(&self) -> CircuitStats {
-		self.state.read().unwrap().stats.clone()
+	pub fn stats(&self) -> CircuitStats {
+		self.state
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.stats
+			.clone()
 	}
 
 	/// Reset the circuit breaker
 	pub fn reset(&self) {
-		let mut state = self.state.write().unwrap();
+		let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
 		state.state = CircuitState::Closed;
 		state.stats.reset();
 		state.opened_at = None;
@@ -289,14 +294,14 @@ impl CircuitBreakerMiddleware {
 
 	/// Open the circuit
 	fn open_circuit(&self) {
-		let mut state = self.state.write().unwrap();
+		let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
 		state.state = CircuitState::Open;
 		state.opened_at = Some(Instant::now());
 	}
 
 	/// Close the circuit
 	fn close_circuit(&self) {
-		let mut state = self.state.write().unwrap();
+		let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
 		state.state = CircuitState::Closed;
 		state.stats.reset();
 		state.opened_at = None;
@@ -304,7 +309,7 @@ impl CircuitBreakerMiddleware {
 
 	/// Transition to half-open state
 	fn transition_to_half_open(&self) {
-		let mut state = self.state.write().unwrap();
+		let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
 		state.state = CircuitState::HalfOpen;
 		state.stats.reset();
 	}
@@ -329,7 +334,7 @@ impl CircuitBreakerMiddleware {
 
 	/// Check and execute state transitions
 	fn check_and_update_state(&self) {
-		let state = self.state.read().unwrap();
+		let state = self.state.read().unwrap_or_else(|e| e.into_inner());
 		let current_state = state.state;
 		let stats = &state.stats;
 
@@ -378,7 +383,7 @@ impl Default for CircuitBreakerMiddleware {
 impl Middleware for CircuitBreakerMiddleware {
 	async fn process(&self, request: Request, handler: Arc<dyn Handler>) -> Result<Response> {
 		// Check state
-		let current_state = self.get_state();
+		let current_state = self.state();
 
 		match current_state {
 			CircuitState::Open => {
@@ -386,7 +391,7 @@ impl Middleware for CircuitBreakerMiddleware {
 				self.check_and_update_state();
 
 				// If still open, return error
-				if self.get_state() == CircuitState::Open {
+				if self.state() == CircuitState::Open {
 					return Ok(self.circuit_breaker_error());
 				}
 			}
@@ -401,7 +406,7 @@ impl Middleware for CircuitBreakerMiddleware {
 		// Record response
 		let is_failure = self.is_failure_response(response.status);
 		{
-			let mut state = self.state.write().unwrap();
+			let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
 			if is_failure {
 				state.stats.record_failure();
 			} else {
@@ -471,7 +476,7 @@ mod tests {
 		let response = middleware.process(request, handler).await.unwrap();
 
 		assert_eq!(response.status, StatusCode::OK);
-		assert_eq!(middleware.get_state(), CircuitState::Closed);
+		assert_eq!(middleware.state(), CircuitState::Closed);
 	}
 
 	#[tokio::test]
@@ -494,7 +499,7 @@ mod tests {
 		}
 
 		// Circuit should be open
-		assert_eq!(middleware.get_state(), CircuitState::Open);
+		assert_eq!(middleware.state(), CircuitState::Open);
 	}
 
 	#[tokio::test]
@@ -550,7 +555,7 @@ mod tests {
 			let _response = middleware.process(request, handler.clone()).await.unwrap();
 		}
 
-		assert_eq!(middleware.get_state(), CircuitState::Open);
+		assert_eq!(middleware.state(), CircuitState::Open);
 
 		// After timeout
 		thread::sleep(Duration::from_millis(150));
@@ -566,7 +571,7 @@ mod tests {
 			.unwrap();
 		let _response = middleware.process(request, handler).await.unwrap();
 
-		assert_eq!(middleware.get_state(), CircuitState::HalfOpen);
+		assert_eq!(middleware.state(), CircuitState::HalfOpen);
 	}
 
 	#[tokio::test]
@@ -609,7 +614,7 @@ mod tests {
 			.await
 			.unwrap();
 
-		assert_eq!(middleware.get_state(), CircuitState::HalfOpen);
+		assert_eq!(middleware.state(), CircuitState::HalfOpen);
 
 		// Continue with successes
 		for _ in 0..3 {
@@ -628,7 +633,7 @@ mod tests {
 		}
 
 		// Circuit should be closed
-		assert_eq!(middleware.get_state(), CircuitState::Closed);
+		assert_eq!(middleware.state(), CircuitState::Closed);
 	}
 
 	#[tokio::test]
@@ -671,7 +676,7 @@ mod tests {
 				.unwrap();
 		}
 
-		let stats = middleware.get_stats();
+		let stats = middleware.stats();
 		assert_eq!(stats.total_requests(), 5);
 		assert_eq!(stats.successful_requests(), 3);
 		assert_eq!(stats.failed_requests(), 2);
@@ -697,13 +702,35 @@ mod tests {
 			let _response = middleware.process(request, handler.clone()).await.unwrap();
 		}
 
-		assert_eq!(middleware.get_state(), CircuitState::Open);
+		assert_eq!(middleware.state(), CircuitState::Open);
 
 		// Reset
 		middleware.reset();
 
-		assert_eq!(middleware.get_state(), CircuitState::Closed);
-		let stats = middleware.get_stats();
+		assert_eq!(middleware.state(), CircuitState::Closed);
+		let stats = middleware.stats();
 		assert_eq!(stats.total_requests(), 0);
+	}
+
+	#[rstest::rstest]
+	fn test_rwlock_poison_recovery_circuit_breaker() {
+		// Arrange
+		let config = CircuitBreakerConfig::new(0.5, 10, Duration::from_secs(30));
+		let middleware = CircuitBreakerMiddleware::new(config);
+
+		// Act - poison the RwLock by panicking while holding a write guard
+		let state_clone = Arc::clone(&middleware.state);
+		let _ = thread::spawn(move || {
+			let _guard = state_clone.write().unwrap();
+			panic!("intentional panic to poison lock");
+		})
+		.join();
+
+		// Assert - operations still work after poison recovery
+		assert_eq!(middleware.state(), CircuitState::Closed);
+		let stats = middleware.stats();
+		assert_eq!(stats.total_requests(), 0);
+		middleware.reset();
+		assert_eq!(middleware.state(), CircuitState::Closed);
 	}
 }

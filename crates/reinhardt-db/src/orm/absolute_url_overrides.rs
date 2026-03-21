@@ -42,25 +42,53 @@ pub trait HasAbsoluteUrl: std::any::Any {
 	/// Get the model identifier for URL override lookup (e.g., "app_label.modelname")
 	fn model_identifier() -> String;
 }
+/// Acquire a read lock on URL_OVERRIDES with poison recovery and logging
+fn acquire_read_lock() -> std::sync::RwLockReadGuard<'static, HashMap<String, UrlOverrideFn>> {
+	match URL_OVERRIDES.read() {
+		Ok(guard) => guard,
+		Err(poisoned) => {
+			tracing::warn!(
+				"URL overrides RwLock was poisoned on read, recovering with potentially stale data"
+			);
+			poisoned.into_inner()
+		}
+	}
+}
+
+/// Acquire a write lock on URL_OVERRIDES with poison recovery and logging
+fn acquire_write_lock() -> std::sync::RwLockWriteGuard<'static, HashMap<String, UrlOverrideFn>> {
+	match URL_OVERRIDES.write() {
+		Ok(guard) => guard,
+		Err(poisoned) => {
+			tracing::warn!(
+				"URL overrides RwLock was poisoned on write, recovering with cleared state"
+			);
+			let mut guard = poisoned.into_inner();
+			guard.clear();
+			guard
+		}
+	}
+}
+
 /// Register a URL override for a specific model
 ///
 pub fn register_url_override<F>(model_path: impl Into<String>, generator: F)
 where
 	F: Fn(&dyn std::any::Any) -> Option<String> + Send + Sync + 'static,
 {
-	let mut overrides = URL_OVERRIDES.write().unwrap();
+	let mut overrides = acquire_write_lock();
 	overrides.insert(model_path.into(), Arc::new(generator));
 }
 /// Clear all URL overrides (useful for testing)
 ///
 pub fn clear_url_overrides() {
-	let mut overrides = URL_OVERRIDES.write().unwrap();
+	let mut overrides = acquire_write_lock();
 	overrides.clear();
 }
 
 /// Check if there's a URL override for a model
 fn check_url_override(model_path: &str, obj: &dyn std::any::Any) -> Option<String> {
-	let overrides = URL_OVERRIDES.read().unwrap();
+	let overrides = acquire_read_lock();
 	if let Some(generator) = overrides.get(model_path) {
 		return generator(obj);
 	}
@@ -76,6 +104,7 @@ mod tests {
 	#[derive(Debug)]
 	struct TestA {
 		pk: i32,
+		// Allow dead_code: field used by derive macros for serialization
 		#[allow(dead_code)]
 		name: String,
 	}
@@ -102,6 +131,7 @@ mod tests {
 	#[derive(Debug)]
 	struct TestB {
 		pk: i32,
+		// Allow dead_code: field used by derive macros for serialization
 		#[allow(dead_code)]
 		name: String,
 	}
@@ -128,6 +158,7 @@ mod tests {
 	#[derive(Debug)]
 	struct TestC {
 		pk: i32,
+		// Allow dead_code: field used by derive macros for serialization
 		#[allow(dead_code)]
 		name: String,
 	}

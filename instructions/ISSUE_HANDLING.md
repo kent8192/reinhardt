@@ -2,11 +2,26 @@
 
 ## Purpose
 
-This file defines strategic principles for handling multiple issues efficiently. While docs/ISSUE_GUIDELINES.md covers individual issue creation and management, this document provides workflow-level guidance for planning, batching, and parallelizing issue resolution across the Reinhardt project's multi-crate workspace.
+This file defines strategic principles for handling multiple issues efficiently. While instructions/ISSUE_GUIDELINES.md covers individual issue creation and management, this document provides workflow-level guidance for planning, batching, and parallelizing issue resolution across the Reinhardt project's multi-crate workspace.
 
 ---
 
 ## Handling Approach
+
+The following diagram summarizes the batch issue processing workflow:
+
+```mermaid
+flowchart TD
+    A[Multiple issues to handle] --> B["HA-1: Group by fix pattern"]
+    B --> C["HA-2: Divide into phases by severity"]
+    C --> D["WU-3: Identify cross-crate dependencies"]
+    D --> E{Shared utilities needed?}
+    E -->|Yes| F["Create preceding PR for shared changes"]
+    F --> G["Merge preceding PR first"]
+    E -->|No| G
+    G --> H["HA-3: Parallelize independent crate work<br/>via Agent Teams"]
+    H --> I["WU-1: 1 PR = 1 crate x 1 fix pattern"]
+```
 
 ### HA-1 (SHOULD): Fix Pattern Batch Processing
 
@@ -89,7 +104,7 @@ security/input-validation
 - One branch per logical work unit (see WU-1)
 - Branch names MUST NOT include internal metadata such as phase numbers, agent states, or workflow identifiers
 - Branch names MUST be descriptive and understandable to other developers without project-specific context
-- Branches may contain multiple commits if they follow commit guidelines (@docs/COMMIT_GUIDELINE.md)
+- Branches may contain multiple commits if they follow commit guidelines (@instructions/COMMIT_GUIDELINE.md)
 
 ---
 
@@ -159,6 +174,17 @@ Step 2 (parallel, after Step 1 merge):
 - Per-crate PRs MUST reference the preceding PR in their description
 - Never duplicate shared logic across crate-specific PRs
 
+The following diagram illustrates the WU-3 dependency structure between preceding and per-crate PRs:
+
+```mermaid
+flowchart TD
+    P["Preceding PR:<br/>shared utilities / cross-crate changes"] --> |merge first| A["PR: crate-A fix"]
+    P --> |merge first| B["PR: crate-B fix"]
+    P --> |merge first| C["PR: crate-C fix"]
+    A -.-> |parallel| B
+    B -.-> |parallel| C
+```
+
 ---
 
 ## Workflow Example
@@ -219,11 +245,11 @@ Commits 2-4 (parallel via Agent Team, HA-3):
 
 ## Related Documentation
 
-- **Issue Guidelines**: docs/ISSUE_GUIDELINES.md
-- **Pull Request Guidelines**: docs/PR_GUIDELINE.md
-- **Commit Guidelines**: docs/COMMIT_GUIDELINE.md
-- **GitHub Interaction**: docs/GITHUB_INTERACTION.md
+- **Issue Guidelines**: instructions/ISSUE_GUIDELINES.md
+- **Pull Request Guidelines**: instructions/PR_GUIDELINE.md
+- **Commit Guidelines**: instructions/COMMIT_GUIDELINE.md
+- **GitHub Interaction**: instructions/GITHUB_INTERACTION.md
 
 ---
 
-**Note**: This document provides strategic guidance for batch issue handling. For individual issue creation and management, see docs/ISSUE_GUIDELINES.md. For PR formatting and review process, see docs/PR_GUIDELINE.md.
+**Note**: This document provides strategic guidance for batch issue handling. For individual issue creation and management, see instructions/ISSUE_GUIDELINES.md. For PR formatting and review process, see instructions/PR_GUIDELINE.md.

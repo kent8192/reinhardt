@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-commands"
-version = "0.1.0-alpha.21"
+version = "0.1.0-rc.13"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -14,7 +14,7 @@ reinhardt-conf = { workspace = true }
 reinhardt-dentdelion = { workspace = true, features = ["cli"], optional = true }
 reinhardt-urls = { workspace = true, features = ["routers", "database"], optional = true }
 reinhardt-db = { workspace = true, features = ["migrations", "backends-settings", "orm", "settings"], optional = true }
-reinhardt-test = { path = "../reinhardt-test", version = "0.1.0-alpha.20", optional = true }
+reinhardt-test = { workspace = true, optional = true }
 reinhardt-di = { workspace = true, optional = true }
 reinhardt-http = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
@@ -22,11 +22,11 @@ reinhardt-server = { workspace = true, optional = true }
 reinhardt-middleware = { workspace = true, optional = true }
 reinhardt-pages = { workspace = true }
 chrono = { workspace = true }
-clap = { version = "4.5", features = ["derive", "cargo"] }
+clap = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
-colored = "3.0.0"
+colored = { workspace = true }
 dialoguer = "0.12.0"
 hyper = { workspace = true }
 hyper-util = { workspace = true }
@@ -60,11 +60,14 @@ rcgen = "0.14.5"
 reinhardt-utils = {workspace = true, features = ["utils-core", "staticfiles"]}
 reinhardt-rest = {workspace = true, features = ["openapi"], optional = true}
 reinhardt-openapi = { workspace = true, optional = true }
+cargo_metadata = { workspace = true, optional = true }
+serde_yaml = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["signal"] }
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 tempfile = "3.13"
 regex = { workspace = true }
@@ -79,6 +82,7 @@ migrations = ["reinhardt-db"]
 routers = ["dep:reinhardt-urls"]
 di = ["dep:reinhardt-di"]
 openapi = ["dep:reinhardt-rest", "dep:reinhardt-http"]
+introspect = ["routers", "dep:cargo_metadata", "dep:serde_yaml"]
 openapi-router = ["dep:reinhardt-openapi", "openapi"]
 server = ["dep:reinhardt-server", "dep:reinhardt-middleware", "routers", "di"]
 autoreload = ["dep:notify", "server"]
@@ -93,6 +97,7 @@ plugins = ["dep:reinhardt-dentdelion"]
 full = [
   "migrations",
   "routers",
+  "introspect",
   "server",
   "autoreload",
   "shell",
@@ -100,6 +105,7 @@ full = [
   "reinhardt-db",
   "di",
   "openapi",
+  "openapi-router",
   "postgres",
   "sqlite",
   "mysql",

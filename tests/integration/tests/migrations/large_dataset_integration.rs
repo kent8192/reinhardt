@@ -276,20 +276,14 @@ async fn test_postgres_copy_from(
 		table: leak_str("events").to_string(),
 		source: BulkLoadSource::File(leak_str("/tmp/events.csv").to_string()),
 		format: BulkLoadFormat::Csv,
-		options: BulkLoadOptions {
-			delimiter: Some(','),
-			null_string: None,
-			header: true,
-			columns: Some(vec![
+		options: BulkLoadOptions::new()
+			.with_delimiter(',')
+			.with_header(true)
+			.with_columns(vec![
 				leak_str("event_type").to_string(),
 				leak_str("timestamp").to_string(),
-			]),
-			local: false,
-			quote: Some('"'),
-			escape: None,
-			line_terminator: None,
-			encoding: None,
-		},
+			])
+			.with_quote('"'),
 	};
 
 	// Verify the operation has the expected structure
@@ -328,20 +322,14 @@ async fn test_mysql_load_data(
 		table: leak_str("events").to_string(),
 		source: BulkLoadSource::File(leak_str("/tmp/events.csv").to_string()),
 		format: BulkLoadFormat::Csv,
-		options: BulkLoadOptions {
-			delimiter: Some(','),
-			null_string: None,
-			header: false,
-			columns: Some(vec![
+		options: BulkLoadOptions::new()
+			.with_delimiter(',')
+			.with_columns(vec![
 				leak_str("event_type").to_string(),
 				leak_str("timestamp").to_string(),
-			]),
-			local: true,
-			quote: None,
-			escape: None,
-			line_terminator: Some(leak_str("\n").to_string()),
-			encoding: None,
-		},
+			])
+			.with_local(true)
+			.with_line_terminator("\n"),
 	};
 
 	// Verify the operation has the expected structure

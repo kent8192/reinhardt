@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! HTTP server implementation for Reinhardt framework
 //!
 //! This crate provides HTTP server capabilities with support for:
@@ -5,6 +6,7 @@
 //! - GraphQL (optional)
 //! - WebSocket (optional)
 
+/// Core server modules including HTTP, rate limiting, shutdown, and timeout.
 pub mod server;
 
 // Re-export server implementation

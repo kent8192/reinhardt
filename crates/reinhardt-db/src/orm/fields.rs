@@ -8,9 +8,13 @@ use std::collections::HashMap;
 /// Returns (name, path, args, kwargs) similar to Django's deconstruct()
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldDeconstruction {
+	/// The name.
 	pub name: Option<String>,
+	/// The path.
 	pub path: String,
+	/// The args.
 	pub args: Vec<FieldArg>,
+	/// The kwargs.
 	pub kwargs: HashMap<String, FieldKwarg>,
 }
 
@@ -18,9 +22,13 @@ pub struct FieldDeconstruction {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum FieldArg {
+	/// String variant.
 	String(String),
+	/// Int variant.
 	Int(i64),
+	/// Bool variant.
 	Bool(bool),
+	/// Float variant.
 	Float(f64),
 }
 
@@ -28,12 +36,19 @@ pub enum FieldArg {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum FieldKwarg {
+	/// String variant.
 	String(String),
+	/// Int variant.
 	Int(i64),
+	/// Uint variant.
 	Uint(u64),
+	/// Bool variant.
 	Bool(bool),
+	/// Float variant.
 	Float(f64),
+	/// Choices variant.
 	Choices(Vec<(String, String)>),
+	/// Callable variant.
 	Callable(String), // Function name as string
 }
 
@@ -68,16 +83,27 @@ pub trait Field: Send + Sync {
 /// Base field attributes shared by all fields
 #[derive(Debug, Clone)]
 pub struct BaseField {
+	/// The name.
 	pub name: Option<String>,
+	/// The null.
 	pub null: bool,
+	/// The blank.
 	pub blank: bool,
+	/// The default.
 	pub default: Option<FieldKwarg>,
+	/// The db default.
 	pub db_default: Option<FieldKwarg>, // Database-level default value
+	/// The db column.
 	pub db_column: Option<String>,
+	/// The db tablespace.
 	pub db_tablespace: Option<String>,
+	/// The primary key.
 	pub primary_key: bool,
+	/// The unique.
 	pub unique: bool,
+	/// The editable.
 	pub editable: bool,
+	/// The choices.
 	pub choices: Option<Vec<(String, String)>>,
 }
 
@@ -182,6 +208,7 @@ impl Default for BaseField {
 /// AutoField - auto-incrementing integer primary key
 #[derive(Debug, Clone)]
 pub struct AutoField {
+	/// The base.
 	pub base: BaseField,
 }
 
@@ -239,6 +266,7 @@ impl Field for AutoField {
 /// BigIntegerField
 #[derive(Debug, Clone)]
 pub struct BigIntegerField {
+	/// The base.
 	pub base: BaseField,
 }
 
@@ -290,6 +318,7 @@ impl Field for BigIntegerField {
 /// BooleanField
 #[derive(Debug, Clone)]
 pub struct BooleanField {
+	/// The base.
 	pub base: BaseField,
 }
 
@@ -354,7 +383,9 @@ impl Field for BooleanField {
 /// CharField - text field with max_length
 #[derive(Debug, Clone)]
 pub struct CharField {
+	/// The base.
 	pub base: BaseField,
+	/// The max length.
 	pub max_length: u64,
 }
 
@@ -441,6 +472,7 @@ impl Field for CharField {
 /// IntegerField
 #[derive(Debug, Clone)]
 pub struct IntegerField {
+	/// The base.
 	pub base: BaseField,
 }
 
@@ -491,7 +523,7 @@ impl IntegerField {
 	/// use reinhardt_db::orm::fields::IntegerField;
 	///
 	/// let field = IntegerField::with_callable_choices("get_status_choices");
-	// The callable name would be used to dynamically generate choices at runtime
+	/// // The callable name would be used to dynamically generate choices at runtime
 	/// assert!(field.base.choices.is_none()); // Callable choices are handled separately
 	/// ```
 	pub fn with_callable_choices(_callable_name: &str) -> Self {
@@ -524,8 +556,11 @@ impl Field for IntegerField {
 /// DateField
 #[derive(Debug, Clone)]
 pub struct DateField {
+	/// The base.
 	pub base: BaseField,
+	/// The auto now.
 	pub auto_now: bool,
+	/// The auto now add.
 	pub auto_now_add: bool,
 }
 
@@ -604,8 +639,11 @@ impl Field for DateField {
 /// DateTimeField
 #[derive(Debug, Clone)]
 pub struct DateTimeField {
+	/// The base.
 	pub base: BaseField,
+	/// The auto now.
 	pub auto_now: bool,
+	/// The auto now add.
 	pub auto_now_add: bool,
 }
 
@@ -702,8 +740,11 @@ impl Field for DateTimeField {
 /// DecimalField
 #[derive(Debug, Clone)]
 pub struct DecimalField {
+	/// The base.
 	pub base: BaseField,
+	/// The max digits.
 	pub max_digits: u32,
+	/// The decimal places.
 	pub decimal_places: u32,
 }
 
@@ -715,7 +756,7 @@ impl DecimalField {
 	/// ```
 	/// use reinhardt_db::orm::fields::DecimalField;
 	///
-	// For monetary values: max 10 digits, 2 decimal places
+	/// // For monetary values: max 10 digits, 2 decimal places
 	/// let price_field = DecimalField::new(10, 2);
 	/// assert_eq!(price_field.max_digits, 10);
 	/// assert_eq!(price_field.decimal_places, 2);
@@ -761,7 +802,9 @@ impl Field for DecimalField {
 /// EmailField
 #[derive(Debug, Clone)]
 pub struct EmailField {
+	/// The base.
 	pub base: BaseField,
+	/// The max length.
 	pub max_length: u64,
 }
 
@@ -831,6 +874,7 @@ impl Field for EmailField {
 /// FloatField
 #[derive(Debug, Clone)]
 pub struct FloatField {
+	/// The base.
 	pub base: BaseField,
 }
 
@@ -880,6 +924,7 @@ impl Field for FloatField {
 /// TextField
 #[derive(Debug, Clone)]
 pub struct TextField {
+	/// The base.
 	pub base: BaseField,
 }
 
@@ -930,8 +975,11 @@ impl Field for TextField {
 /// TimeField
 #[derive(Debug, Clone)]
 pub struct TimeField {
+	/// The base.
 	pub base: BaseField,
+	/// The auto now.
 	pub auto_now: bool,
+	/// The auto now add.
 	pub auto_now_add: bool,
 }
 
@@ -1008,7 +1056,9 @@ impl Field for TimeField {
 /// URLField
 #[derive(Debug, Clone)]
 pub struct URLField {
+	/// The base.
 	pub base: BaseField,
+	/// The max length.
 	pub max_length: u64,
 }
 
@@ -1072,6 +1122,7 @@ impl Field for URLField {
 /// BinaryField
 #[derive(Debug, Clone)]
 pub struct BinaryField {
+	/// The base.
 	pub base: BaseField,
 }
 
@@ -1144,8 +1195,11 @@ impl Field for BinaryField {
 /// SlugField
 #[derive(Debug, Clone)]
 pub struct SlugField {
+	/// The base.
 	pub base: BaseField,
+	/// The max length.
 	pub max_length: u64,
+	/// The db index.
 	pub db_index: bool,
 }
 
@@ -1215,6 +1269,7 @@ impl Field for SlugField {
 /// SmallIntegerField
 #[derive(Debug, Clone)]
 pub struct SmallIntegerField {
+	/// The base.
 	pub base: BaseField,
 }
 
@@ -1264,6 +1319,7 @@ impl Field for SmallIntegerField {
 /// PositiveIntegerField
 #[derive(Debug, Clone)]
 pub struct PositiveIntegerField {
+	/// The base.
 	pub base: BaseField,
 }
 
@@ -1313,6 +1369,7 @@ impl Field for PositiveIntegerField {
 /// PositiveSmallIntegerField
 #[derive(Debug, Clone)]
 pub struct PositiveSmallIntegerField {
+	/// The base.
 	pub base: BaseField,
 }
 
@@ -1362,6 +1419,7 @@ impl Field for PositiveSmallIntegerField {
 /// PositiveBigIntegerField
 #[derive(Debug, Clone)]
 pub struct PositiveBigIntegerField {
+	/// The base.
 	pub base: BaseField,
 }
 
@@ -1411,8 +1469,11 @@ impl Field for PositiveBigIntegerField {
 /// GenericIPAddressField - IPv4 or IPv6 address field
 #[derive(Debug, Clone)]
 pub struct GenericIPAddressField {
+	/// The base.
 	pub base: BaseField,
+	/// The protocol.
 	pub protocol: String, // "both", "IPv4", "IPv6"
+	/// The unpack ipv4.
 	pub unpack_ipv4: bool,
 }
 
@@ -1496,12 +1557,19 @@ impl Field for GenericIPAddressField {
 /// FilePathField - field for selecting file paths
 #[derive(Debug, Clone)]
 pub struct FilePathField {
+	/// The base.
 	pub base: BaseField,
+	/// The path.
 	pub path: String,
+	/// The match pattern.
 	pub match_pattern: Option<String>,
+	/// The recursive.
 	pub recursive: bool,
+	/// The allow files.
 	pub allow_files: bool,
+	/// The allow folders.
 	pub allow_folders: bool,
+	/// The max length.
 	pub max_length: u64,
 }
 
@@ -1575,9 +1643,13 @@ impl Field for FilePathField {
 /// ForeignKey - Many-to-one relationship field
 #[derive(Debug, Clone)]
 pub struct ForeignKey {
+	/// The base.
 	pub base: BaseField,
-	pub to: String,        // Related model name (e.g., "auth.Permission")
+	/// The to.
+	pub to: String, // Related model name (e.g., "auth.Permission")
+	/// The on delete.
 	pub on_delete: String, // CASCADE, SET_NULL, etc.
+	/// The related name.
 	pub related_name: Option<String>,
 }
 
@@ -1639,9 +1711,13 @@ impl Field for ForeignKey {
 /// OneToOneField - One-to-one relationship field
 #[derive(Debug, Clone)]
 pub struct OneToOneField {
+	/// The base.
 	pub base: BaseField,
+	/// The to.
 	pub to: String,
+	/// The on delete.
 	pub on_delete: String,
+	/// The related name.
 	pub related_name: Option<String>,
 }
 
@@ -1702,9 +1778,13 @@ impl Field for OneToOneField {
 /// ManyToManyField - Many-to-many relationship field
 #[derive(Debug, Clone)]
 pub struct ManyToManyField {
+	/// The base.
 	pub base: BaseField,
+	/// The to.
 	pub to: String,
+	/// The related name.
 	pub related_name: Option<String>,
+	/// The through.
 	pub through: Option<String>,
 }
 

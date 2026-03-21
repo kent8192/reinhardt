@@ -11,18 +11,31 @@ use crate::social::core::SocialAuthError;
 /// Social account linking user to provider
 #[derive(Debug, Clone)]
 pub struct SocialAccount {
+	/// Unique identifier for this social account link.
 	pub id: Uuid,
+	/// The local user ID linked to this social account.
 	pub user_id: Uuid,
+	/// The provider name (e.g., "google", "github").
 	pub provider: String,
+	/// The user's ID on the external provider.
 	pub provider_user_id: String,
+	/// The user's email from the provider, if available.
 	pub email: Option<String>,
+	/// The user's display name from the provider, if available.
 	pub display_name: Option<String>,
+	/// The user's profile picture URL from the provider, if available.
 	pub picture: Option<String>,
+	/// The OAuth2 access token.
 	pub access_token: String,
+	/// The OAuth2 refresh token, if available.
 	pub refresh_token: Option<String>,
+	/// When the access token expires.
 	pub token_expires_at: DateTime<Utc>,
+	/// The OAuth2 scopes granted.
 	pub scopes: Vec<String>,
+	/// When this social account link was created.
 	pub created_at: DateTime<Utc>,
+	/// When this social account link was last updated.
 	pub updated_at: DateTime<Utc>,
 }
 
@@ -124,6 +137,7 @@ impl SocialAccountStorage for InMemorySocialAccountStorage {
 mod tests {
 	use super::*;
 	use chrono::Duration;
+	use rstest::rstest;
 
 	fn test_account(user_id: Uuid) -> SocialAccount {
 		SocialAccount {
@@ -143,6 +157,7 @@ mod tests {
 		}
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_create_and_find() {
 		// Arrange
@@ -163,6 +178,7 @@ mod tests {
 		assert_eq!(found.unwrap().provider_user_id, provider_uid);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_find_by_user() {
 		// Arrange
@@ -179,13 +195,13 @@ mod tests {
 		assert_eq!(accounts[0].user_id, user_id);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_update() {
 		// Arrange
 		let storage = InMemorySocialAccountStorage::new();
 		let user_id = Uuid::new_v4();
 		let mut account = test_account(user_id);
-		let id = account.id;
 		storage.create(account.clone()).await.unwrap();
 
 		// Act
@@ -198,6 +214,7 @@ mod tests {
 		assert_eq!(found[0].access_token, "new_token");
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_delete() {
 		// Arrange
@@ -215,6 +232,7 @@ mod tests {
 		assert!(accounts.is_empty());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_delete_nonexistent() {
 		// Arrange
@@ -227,6 +245,7 @@ mod tests {
 		assert!(result.is_err());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_update_nonexistent() {
 		// Arrange
@@ -238,5 +257,85 @@ mod tests {
 
 		// Assert
 		assert!(result.is_err());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_find_by_provider_nonexistent_returns_none() {
+		// Arrange
+		let storage = InMemorySocialAccountStorage::new();
+
+		// Act
+		let result = storage
+			.find_by_provider_and_uid("nonexistent_provider", "unknown_uid")
+			.await
+			.unwrap();
+
+		// Assert
+		assert!(result.is_none());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_find_by_user_no_accounts_returns_empty() {
+		// Arrange
+		let storage = InMemorySocialAccountStorage::new();
+		let random_user_id = Uuid::new_v4();
+
+		// Act
+		let accounts = storage.find_by_user(random_user_id).await.unwrap();
+
+		// Assert
+		assert!(accounts.is_empty());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_create_multiple_providers_same_user() {
+		// Arrange
+		let storage = InMemorySocialAccountStorage::new();
+		let user_id = Uuid::new_v4();
+
+		let mut github_account = test_account(user_id);
+		github_account.provider = "github".to_string();
+		github_account.provider_user_id = "gh_user_1".to_string();
+
+		let mut google_account = test_account(user_id);
+		google_account.id = Uuid::new_v4();
+		google_account.provider = "google".to_string();
+		google_account.provider_user_id = "google_user_1".to_string();
+
+		// Act
+		storage.create(github_account).await.unwrap();
+		storage.create(google_account).await.unwrap();
+		let accounts = storage.find_by_user(user_id).await.unwrap();
+
+		// Assert
+		assert_eq!(accounts.len(), 2);
+		let providers: Vec<&str> = accounts.iter().map(|a| a.provider.as_str()).collect();
+		assert!(providers.contains(&"github"));
+		assert!(providers.contains(&"google"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_update_token_fields() {
+		// Arrange
+		let storage = InMemorySocialAccountStorage::new();
+		let user_id = Uuid::new_v4();
+		let mut account = test_account(user_id);
+		let account_id = account.id;
+		storage.create(account.clone()).await.unwrap();
+
+		// Act - update refresh token and scopes
+		account.refresh_token = Some("new_refresh_token".to_string());
+		account.scopes = vec!["user".to_string(), "repo".to_string()];
+		storage.update(account).await.unwrap();
+
+		// Assert - verify persisted changes
+		let accounts = storage.find_by_user(user_id).await.unwrap();
+		let updated = accounts.iter().find(|a| a.id == account_id).unwrap();
+		assert_eq!(updated.refresh_token, Some("new_refresh_token".to_string()));
+		assert_eq!(updated.scopes, vec!["user", "repo"]);
 	}
 }

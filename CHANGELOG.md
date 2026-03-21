@@ -7,6 +7,337 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.12...reinhardt-web@v0.1.0-rc.13) - 2026-03-18
+
+### Added
+
+- *(commands)* extend InfraSignals with gRPC, storage, mail, session, graphql, admin, i18n detection
+
+### Fixed
+
+- *(commands)* align mail and session detection with workspace feature names
+
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.11...reinhardt-web@v0.1.0-rc.12) - 2026-03-18
+
+### Added
+
+- *(testkit)* add postgres_with_migrations_from_dir helper using FilesystemSource
+- *(di)* add Option<T> blanket Injectable impl for optional injection
+- *(core)* auto-detect #[inject] without requiring use_inject = true
+- *(auth)* add AuthInfo lightweight auth extractor
+- *(auth)* add AuthUser<U> extractor with tuple struct destructuring
+- *(auth)* add validate_auth_extractors startup DI validation
+
+### Changed
+
+- *(auth)* update re-exports and suppress deprecation warnings
+
+### Deprecated
+
+- *(testkit)* deprecate global_registry-based migration fixtures
+- *(core)* deprecate collect_migrations! macro in favor of FilesystemSource
+- *(conf)* mark Settings.installed_apps and related methods as deprecated
+
+### Documentation
+
+- add draft PR conversion protection policy
+- add ergonomic auth extractors design spec
+- *(auth)* use backticks instead of intra-doc links for cross-crate types
+- *(macros)* use backtick for FilesystemSource in collect_migrations doc
+- *(macros,testkit)* use backticks for cross-crate intra-doc links
+
+### Fixed
+
+- *(auth)* remove Uuid::nil() fallback on user_id parse failure
+
+### Other
+
+- incorporate main branch docs.rs fixes
+
+### Styling
+
+- *(testkit)* apply auto-fix formatting to fixtures re-export
+
+## [0.1.0-rc.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.10...reinhardt-web@v0.1.0-rc.11) - 2026-03-16
+
+### Fixed
+
+- *(examples)* add missing feature flags for examples CI
+- *(examples)* add missing feature flags for github-issues and rest-api examples
+
+### Other
+
+- resolve conflict with main for examples-database-integration
+
+## [0.1.0-rc.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.9...reinhardt-web@v0.1.0-rc.10) - 2026-03-15
+
+### Changed
+
+- *(examples)* use reinhardt re-exports for serde and async_trait
+
+### Documentation
+
+- *(readme)* update version references to 0.1.0-rc.9
+- *(examples)* update version references in CLAUDE.md to 0.1.0-rc.9
+- *(website)* update reinhardt_version to 0.1.0-rc.9
+- *(readme)* fix dispatch crate label and add missing components
+- *(examples)* add new module re-exports to available re-exports
+- update version references in crate READMEs to 0.1.0-rc.9
+- *(instructions)* update outdated version references to 0.1.0-rc.9
+
+### Fixed
+
+- *(commands)* propagate openapi-router feature to reinhardt-commands
+- *(commands)* gate docs banner on openapi-router feature
+
+### Maintenance
+
+- *(examples)* update workspace dependency to 0.1.0-rc.9
+
+### Styling
+
+- *(examples)* apply import order formatting for rc.9 compatibility
+
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.8...reinhardt-web@v0.1.0-rc.9) - 2026-03-15
+
+### Added
+
+- *(infra)* add repository Terraform module for GitHub settings
+- *(ci)* add infrastructure label and labeler mapping
+- *(ci)* guard terraform-plan against fork PRs and add repository module
+- *(ci)* add tfprovidercheck provider allowlist
+- *(ci)* add semgrep terraform security rules
+- *(ci)* add terraform-validate-fork workflow (Stage 1)
+- *(ci)* add terraform-plan-privileged workflow (Stage 2)
+- *(ci)* add terraform-apply workflow for post-merge automation
+- expose reinhardt-query as reinhardt::query via database feature
+- expose graphql, i18n, mail modules from reinhardt-web facade
+- add grpc, dispatch, deeplink module re-exports with feature flags
+
+### Changed
+
+- *(ci)* migrate housekeeping runner to cancel-runner
+
+### Documentation
+
+- *(readme)* fix outdated versions and incorrect install command
+- *(readme)* restructure sections for better first impression
+- *(readme)* improve copywriting for broader audience appeal
+- *(readme)* improve quick navigation and table readability
+- *(auth)* fix private intra-doc link in get_user_info
+
+### Fixed
+
+- *(throttling)* use per-key state in leaky bucket throttle
+- *(throttling)* use lazy initialization for per-key bucket state
+- *(throttling)* prevent capacity overflow and add per-key isolation tests
+- *(ci)* correct workflow configuration issues
+- *(ci)* revert create-github-app-token to v2
+- *(ci)* change auto-label-pr to pull_request_target for fork PR support
+- *(ci)* address review findings in terraform security workflows
+- *(ci)* add missing TF_VAR mappings for terraform plan workflows
+- *(ci)* use secrets instead of vars for TF_GITHUB_OWNER and TF_GITHUB_REPOSITORY
+- *(infra)* install aws cli in housekeeping runner userdata
+- *(infra)* remove user_data from ignore_changes in housekeeping runner
+- *(infra)* enable unattended-upgrades on housekeeping runner
+- *(infra)* upgrade housekeeping runner from t4g.nano to t4g.micro
+- *(ci)* add missing organizations_account_email to terraform plan workflows
+- *(ci)* download lambda zip files before terraform plan
+- *(ci)* download lambda zip files before terraform apply plan step
+- *(ci)* downgrade upload-artifact from v7 to v4 in mutation-test workflow
+
+### Maintenance
+
+- *(ci)* exclude test code from CodeQL analysis
+- add infra ownership to CODEOWNERS
+- add docs/superpowers to .gitignore
+
+### Other
+
+- resolve conflicts with main in README.md
+- resolve conflicts with main branch
+- incorporate CI fix from fix/housekeeping-runner-instance-type
+
+## [0.1.0-rc.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.7...reinhardt-web@v0.1.0-rc.8) - 2026-03-12
+
+### Fixed
+
+- *(ci)* prevent guard workflow cancellations from non-migration label events
+- collapse nested if statements in start_commands to fix clippy lint
+- *(commands)* update startapp test assertions for Rust 2024 module paths
+
+### Maintenance
+
+- update serena project.yml with new config options
+
+## [0.1.0-rc.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.6...reinhardt-web@v0.1.0-rc.7) - 2026-03-11
+
+### Documentation
+
+- *(website)* update basis tutorial models to match examples
+- *(website)* update basis tutorial server functions and components
+- *(website)* update basis tutorial forms, testing, and static files
+- *(website)* update rest tutorials to match examples
+
+### Fixed
+
+- *(urls)* suppress dead_code warning for WASM-only `merge` method
+- *(prelude)* add feature gate for `UnifiedRouter` re-export
+- *(ci)* add --no-tests=warn to ui-test nextest run
+- *(ci)* handle nextest exit code 4 in coverage workflows
+- *(ci)* move msrv-test to selectively-skippable in ci-success gate
+
+### Maintenance
+
+- *(nextest)* add --no-tests=warn to prevent empty partition failures
+
+### Styling
+
+- apply format fixes to src/lib.rs
+- *(examples)* format examples-twitter common.rs
+- *(examples)* format examples-twitter relationship components
+
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.4...reinhardt-web@v0.1.0-rc.5) - 2026-03-07
+
+### Added
+
+- *(examples)* introduce Injected<T> usage in di-showcase
+
+### Documentation
+
+- *(stability)* relax SP-1 API freeze and add SP-6 non-breaking addition review
+- *(claude)* add SP-6 non-breaking addition policy to quick reference
+- *(pr)* add three-dot diff rule for PR verification (RP-5)
+- *(pr)* replace Japanese text with English in RP-5
+
+### Fixed
+
+- *(ci)* enforce semver-check during RC phase instead of skipping
+- *(ci)* remove non-existent paths from CODEOWNERS
+- *(macros)* replace skeleton tests with meaningful assertions in pre_validate
+- *(examples)* add force-link for library crate in di-showcase manage.rs
+- *(ci)* prevent UI Tests from running when Phase 1 checks fail
+- *(ci)* add missing validator dependency to reinhardt-test-support
+
+### Maintenance
+
+- *(labels)* add rc-addition label for SP-6 non-breaking additions
+- *(semver)* update comments to reflect SP-1 relaxation policy
+- *(serena)* clean up project.yml formatting
+- *(template)* add self-hosted runner checkbox to PR template
+- require PR checkbox opt-in for self-hosted runner selection
+
+### Testing
+
+- *(db)* add field mapping and migrations integration tests
+
+## [0.1.0-rc.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.3...reinhardt-web@v0.1.0-rc.4) - 2026-03-05
+
+### Documentation
+
+- *(website)* update admin customization tutorial to use separate admin struct pattern
+
+### Fixed
+
+- *(core)* add wasm32 platform gate to parallel and jsonschema validator modules
+
+## [0.1.0-rc.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.2...reinhardt-web@v0.1.0-rc.3) - 2026-03-04
+
+### Fixed
+
+- *(commands)* correct project template compilation errors
+- *(commands)* correct app template compilation errors
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.1...reinhardt-web@v0.1.0-rc.2) - 2026-03-04
+
+### Changed
+
+- *(ci)* remove redundant flags from cargo check task
+
+### Documentation
+
+- add agent-detected bug verification policy (SC-2a, IL-3)
+- *(rest)* align REST tutorial docs with actual API
+- *(basis)* align basis tutorial docs with actual API
+- align cookbook and quickstart docs with actual API
+
+### Fixed
+
+- *(ci)* change runner selection to opt-in for self-hosted runners
+- *(ci)* add 5-minute grace period for JIT runner scale-down
+- *(ci)* increase JIT runner minimum running time to 15 minutes
+- *(ci)* use ubuntu user for runner userdata and run_as configuration
+- *(ci)* add Ubuntu userdata template to replace Amazon Linux default
+- *(ci)* remove nounset flag from userdata to fix unbound variable error
+- *(ci)* use correct root device name for Ubuntu AMI (/dev/sda1)
+- *(ci)* install protoc v28 instead of system v3.12 for proto3 optional
+- *(ci)* add unzip to userdata package list for protoc installation
+- *(ci)* use .cargo/config.toml instead of RUSTFLAGS for mold in coverage
+- *(ci)* remove mold linker from coverage jobs to fix profraw generation
+- *(ci)* enable job_retry to prevent ephemeral runner scaling deadlock
+- *(ci)* add missing rust setup and gh cli for self-hosted runners
+- *(middleware)* validate host header against allowed hosts in HTTPS redirect
+- *(middleware)* add missing import in HttpsRedirectMiddleware doc test
+- *(auth)* use deterministic UUID for RemoteUserAuthentication
+- *(urls)* convert path-type parameters to matchit catch-all syntax in RadixTree mode
+- *(test)* update rand 0.9 API usage in csrf integration tests
+- *(ci)* allow publish-check to be skipped on release-plz branches
+- *(ci)* handle cargo metadata failure and jq errors in detect-affected-packages.sh
+- *(ci)* use git log to detect changed files in PR branches that contain main
+- *(ci)* use origin/HEAD_REF instead of HEAD to detect changed files in PRs
+- *(ci)* resolve permanent cache miss in setup-rust action
+- *(ci)* remove shell quoting bug in nextest filter expression passing
+
+### Maintenance
+
+- migrate remaining workflows to support self-hosted runners
+- phase test jobs to prevent spot vCPU quota exhaustion
+- skip CI for out-of-date PR branches
+- add branch status check to test-examples workflow
+- add agent-suspect and stable-migration labels to labels.yml
+- add RC stability timer monitoring workflow
+- *(semver)* auto-detect breaking changes from commit messages
+- increase semver-check timeout from 30 to 45 minutes
+- add Tachyon Inc. copyright notices
+- remove out-of-date branch skip from CI workflows
+- add run-examples output to detect-affected-packages workflow
+- fix BASE_REF fallback in detect-examples step
+- skip examples-test when no examples changes on non-release PRs
+- skip test-examples matrix when no examples changes on non-release PRs
+- switch detect-affected-packages from git log to git diff
+- use GitHub PR Files API to detect changed files in PR context
+- add pull-requests: read permission to CI workflow
+- fail explicitly on gh api errors instead of silently swallowing them
+
+### Other
+
+- resolve fields.rs conflict with main
+
+### Styling
+
+- *(urls)* apply project formatting to pattern module
+
+## [0.1.0-alpha.19](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-alpha.18...reinhardt-web@v0.1.0-alpha.19) - 2026-02-24
+
+### Documentation
+
+- add official website link to Quick Navigation
+- update internal documentation links to official website URLs
+- remove repository-hosted documentation migrated to reinhardt-web.dev
+
+### Fixed
+
+- *(website)* set cloudflare pages production branch to main before deploy
+- *(website)* add workflow_dispatch trigger for manual deployment
+- *(website)* add DNS records for custom domain resolution
+- *(infra)* add import blocks for existing Cloudflare resources
+- *(db)* gate sqlite-dependent tests with feature flag
+- *(db)* replace float test values to avoid clippy approx_constant lint
+
+### Testing
+
+- *(db)* add warning log test for .sql file detection
+
 ## [0.1.0-alpha.18](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-alpha.17...reinhardt-web@v0.1.0-alpha.18) - 2026-02-24
 
 ### Added

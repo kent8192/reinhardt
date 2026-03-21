@@ -28,44 +28,69 @@ use std::collections::HashMap;
 /// assert!(json.contains("Alice"));
 /// ```
 pub trait Serializer {
+	/// The source type to serialize from.
 	type Input;
+	/// The target serialized representation.
 	type Output;
 
+	/// Serialize the input into the output representation.
 	fn serialize(&self, input: &Self::Input) -> Result<Self::Output, SerializerError>;
+	/// Deserialize the output back into the input type.
 	fn deserialize(&self, output: &Self::Output) -> Result<Self::Input, SerializerError>;
 }
 
 /// Errors that can occur during validation
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidatorError {
 	/// Unique constraint violation
 	UniqueViolation {
+		/// Name of the field with the unique constraint.
 		field_name: String,
+		/// The duplicate value that caused the violation.
 		value: String,
+		/// Human-readable error message.
 		message: String,
 	},
 	/// Unique together constraint violation
 	UniqueTogetherViolation {
+		/// Names of the fields in the composite unique constraint.
 		field_names: Vec<String>,
+		/// Map of field names to their duplicate values.
 		values: HashMap<String, String>,
+		/// Human-readable error message.
 		message: String,
 	},
 	/// Required field missing
-	RequiredField { field_name: String, message: String },
+	RequiredField {
+		/// Name of the missing required field.
+		field_name: String,
+		/// Human-readable error message.
+		message: String,
+	},
 	/// Field validation error
 	FieldValidation {
+		/// Name of the field that failed validation.
 		field_name: String,
+		/// The value that failed validation.
 		value: String,
+		/// The constraint that was violated.
 		constraint: String,
+		/// Human-readable error message.
 		message: String,
 	},
 	/// Database error
 	DatabaseError {
+		/// Human-readable error message.
 		message: String,
+		/// Optional underlying error source description.
 		source: Option<String>,
 	},
 	/// Custom validation error
-	Custom { message: String },
+	Custom {
+		/// Human-readable error message.
+		message: String,
+	},
 }
 
 impl std::fmt::Display for ValidatorError {
@@ -172,14 +197,21 @@ impl ValidatorError {
 }
 
 /// Errors that can occur during serialization
-#[derive(Debug, Clone)]
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SerializerError {
 	/// Validation error
 	Validation(ValidatorError),
 	/// Serde serialization/deserialization error
-	Serde { message: String },
+	Serde {
+		/// Human-readable error message from serde.
+		message: String,
+	},
 	/// Other error
-	Other { message: String },
+	Other {
+		/// Human-readable error message.
+		message: String,
+	},
 }
 
 impl std::fmt::Display for SerializerError {
@@ -314,6 +346,7 @@ impl SerializerError {
 /// let deserialized = serializer.deserialize(&json).unwrap();
 /// assert_eq!(user.id, deserialized.id);
 /// ```
+#[derive(Debug, Clone)]
 pub struct JsonSerializer<T> {
 	_phantom: std::marker::PhantomData<T>,
 }
@@ -375,9 +408,12 @@ where
 /// }
 /// ```
 pub trait Deserializer {
+	/// The serialized input type to deserialize from.
 	type Input;
+	/// The deserialized output type.
 	type Output;
 
+	/// Deserialize the input into the output type.
 	fn deserialize(&self, input: &Self::Input) -> Result<Self::Output, SerializerError>;
 }
 

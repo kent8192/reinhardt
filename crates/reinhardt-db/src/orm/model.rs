@@ -391,16 +391,22 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 /// Trait for models with timestamps - compose this with Model
 /// This follows Rust's composition pattern rather than Django's inheritance
 pub trait Timestamped {
+	/// Returns the creation timestamp.
 	fn created_at(&self) -> chrono::DateTime<chrono::Utc>;
+	/// Returns the last update timestamp.
 	fn updated_at(&self) -> chrono::DateTime<chrono::Utc>;
+	/// Sets the last update timestamp.
 	fn set_updated_at(&mut self, time: chrono::DateTime<chrono::Utc>);
 }
 
 /// Trait for soft-deletable models
 /// Another composition trait instead of inheritance
 pub trait SoftDeletable {
+	/// Returns the deletion timestamp, or `None` if not deleted.
 	fn deleted_at(&self) -> Option<chrono::DateTime<chrono::Utc>>;
+	/// Sets the deletion timestamp, or `None` to restore.
 	fn set_deleted_at(&mut self, time: Option<chrono::DateTime<chrono::Utc>>);
+	/// Returns whether the model has been soft-deleted.
 	fn is_deleted(&self) -> bool {
 		self.deleted_at().is_some()
 	}
@@ -409,7 +415,9 @@ pub trait SoftDeletable {
 /// Common timestamp fields that can be composed into structs
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Timestamps {
+	/// The created at.
 	pub created_at: chrono::DateTime<chrono::Utc>,
+	/// The updated at.
 	pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -443,7 +451,7 @@ impl Timestamps {
 	/// let mut timestamps = Timestamps::now();
 	/// let old_updated = timestamps.updated_at;
 	///
-	// Wait a small amount to ensure time difference
+	/// // Wait a small amount to ensure time difference
 	/// std::thread::sleep(std::time::Duration::from_millis(1));
 	/// timestamps.touch();
 	///
@@ -457,6 +465,7 @@ impl Timestamps {
 /// Soft delete field that can be composed into structs
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SoftDelete {
+	/// The deleted at.
 	pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 

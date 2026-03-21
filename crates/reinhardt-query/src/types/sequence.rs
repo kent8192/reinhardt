@@ -31,6 +31,7 @@ use crate::types::{DynIden, IntoIden};
 ///     .max_value(Some(1000));
 /// ```
 #[derive(Debug, Clone)]
+// Allow dead_code: DDL definition struct for CREATE SEQUENCE; fields populated by builder but not yet consumed by backend SQL generation
 #[allow(dead_code)]
 pub struct SequenceDef {
 	pub(crate) name: DynIden,
@@ -46,10 +47,16 @@ pub struct SequenceDef {
 
 /// Ownership specification for sequences
 #[derive(Debug, Clone)]
+// Allow dead_code: enum variants define OWNED BY options for sequences; not all consumed yet by backend SQL generation
 #[allow(dead_code)]
 pub enum OwnedBy {
 	/// OWNED BY table.column
-	Column { table: DynIden, column: DynIden },
+	Column {
+		/// The table that owns this sequence.
+		table: DynIden,
+		/// The column within the table that owns this sequence.
+		column: DynIden,
+	},
 	/// OWNED BY NONE
 	None,
 }
@@ -73,6 +80,7 @@ pub enum OwnedBy {
 /// let opt = SequenceOption::IncrementBy(5);
 /// ```
 #[derive(Debug, Clone)]
+// Allow dead_code: enum variants define all ALTER SEQUENCE options; not all consumed yet by backend SQL generation
 #[allow(dead_code)]
 pub enum SequenceOption {
 	/// RESTART [WITH value]

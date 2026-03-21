@@ -39,6 +39,7 @@ pub enum SerializationFormat {
 }
 
 /// Error type for serialization operations
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SerializationError {
 	/// JSON serialization/deserialization error
@@ -46,7 +47,12 @@ pub enum SerializationError {
 	/// Invalid data format
 	InvalidFormat(String),
 	/// Content type already exists during import
-	DuplicateEntry { app_label: String, model: String },
+	DuplicateEntry {
+		/// The application label.
+		app_label: String,
+		/// The model name.
+		model: String,
+	},
 }
 
 impl std::fmt::Display for SerializationError {
@@ -169,6 +175,7 @@ impl ContentTypeExport {
 }
 
 /// Import options
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct ImportOptions {
 	/// Whether to skip existing entries instead of returning an error

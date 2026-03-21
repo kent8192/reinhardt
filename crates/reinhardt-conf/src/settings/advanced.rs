@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Main application settings
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdvancedSettings {
 	/// Debug mode
@@ -180,12 +181,18 @@ impl AdvancedSettings {
 }
 
 /// Database settings
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseSettings {
+	/// Database connection URL (e.g., `"sqlite::memory:"`, `"postgres://..."`)
 	pub url: String,
+	/// Maximum number of connections in the pool.
 	pub max_connections: u32,
+	/// Minimum number of idle connections to maintain.
 	pub min_connections: u32,
+	/// Connection timeout in seconds.
 	pub connect_timeout: u64,
+	/// Idle connection timeout in seconds before eviction.
 	pub idle_timeout: u64,
 }
 
@@ -202,10 +209,14 @@ impl Default for DatabaseSettings {
 }
 
 /// Cache settings
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheSettings {
+	/// Cache backend type (e.g., `"memory"`, `"redis"`, `"database"`).
 	pub backend: String,
+	/// Backend-specific connection location or URL.
 	pub location: Option<String>,
+	/// Default cache entry timeout in seconds.
 	pub timeout: u64,
 }
 
@@ -220,13 +231,20 @@ impl Default for CacheSettings {
 }
 
 /// Session settings
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSettings {
+	/// Session storage engine (e.g., `"cookie"`, `"database"`, `"redis"`).
 	pub engine: String,
+	/// Name of the session cookie.
 	pub cookie_name: String,
+	/// Maximum age of the session cookie in seconds.
 	pub cookie_age: u64,
+	/// Whether to set the `Secure` flag on the session cookie.
 	pub cookie_secure: bool,
+	/// Whether to set the `HttpOnly` flag on the session cookie.
 	pub cookie_httponly: bool,
+	/// `SameSite` attribute for the session cookie (e.g., `"lax"`, `"strict"`, `"none"`).
 	pub cookie_samesite: String,
 }
 
@@ -244,12 +262,18 @@ impl Default for SessionSettings {
 }
 
 /// CORS settings
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CorsSettings {
+	/// Allowed origin domains (use `"*"` for any origin).
 	pub allow_origins: Vec<String>,
+	/// Allowed HTTP methods.
 	pub allow_methods: Vec<String>,
+	/// Allowed HTTP request headers.
 	pub allow_headers: Vec<String>,
+	/// Whether to allow credentials (cookies, authorization headers).
 	pub allow_credentials: bool,
+	/// Maximum age (in seconds) for preflight response caching.
 	pub max_age: u64,
 }
 
@@ -272,9 +296,12 @@ impl Default for CorsSettings {
 }
 
 /// Static files settings
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StaticSettings {
+	/// URL prefix for serving static files (e.g., `"/static/"`).
 	pub url: String,
+	/// Root directory for collected static files.
 	pub root: PathBuf,
 }
 
@@ -288,9 +315,12 @@ impl Default for StaticSettings {
 }
 
 /// Media files settings
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaSettings {
+	/// URL prefix for serving user-uploaded media files (e.g., `"/media/"`).
 	pub url: String,
+	/// Root directory for user-uploaded media files.
 	pub root: PathBuf,
 }
 
@@ -304,15 +334,24 @@ impl Default for MediaSettings {
 }
 
 /// Email settings
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailSettings {
+	/// Email backend type (e.g., `"smtp"`, `"console"`, `"file"`, `"memory"`).
 	pub backend: String,
+	/// SMTP server hostname.
 	pub host: String,
+	/// SMTP server port number.
 	pub port: u16,
+	/// Optional SMTP authentication username.
 	pub username: Option<String>,
+	/// Optional SMTP authentication password.
 	pub password: Option<String>,
+	/// Whether to use STARTTLS for the SMTP connection.
 	pub use_tls: bool,
+	/// Whether to use direct TLS/SSL for the SMTP connection.
 	pub use_ssl: bool,
+	/// Default sender email address for outgoing emails.
 	pub from_email: String,
 
 	/// List of (name, email) tuples for site administrators
@@ -380,9 +419,12 @@ impl Default for EmailSettings {
 }
 
 /// Logging settings
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingSettings {
+	/// Log level (e.g., `"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"`).
 	pub level: String,
+	/// Log output format (e.g., `"text"`, `"json"`).
 	pub format: String,
 }
 
@@ -396,20 +438,26 @@ impl Default for LoggingSettings {
 }
 
 /// Settings error
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum SettingsError {
+	/// An error occurred reading or writing a configuration file.
 	#[error("File error: {0}")]
 	FileError(String),
 
+	/// An error occurred parsing configuration content.
 	#[error("Parse error: {0}")]
 	ParseError(String),
 
+	/// A configuration value failed validation.
 	#[error("Validation error: {0}")]
 	ValidationError(String),
 
+	/// The configuration file format is not supported.
 	#[error("Unsupported format: {0}")]
 	UnsupportedFormat(String),
 
+	/// An error occurred during serialization or deserialization.
 	#[error("Serialization error: {0}")]
 	SerializationError(String),
 }

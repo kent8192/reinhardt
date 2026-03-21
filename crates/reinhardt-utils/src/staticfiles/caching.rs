@@ -252,6 +252,9 @@ impl CacheControlConfig {
 		config
 			.type_policies
 			.insert("ico".to_string(), CachePolicy::long_term());
+		config
+			.type_policies
+			.insert("wasm".to_string(), CachePolicy::long_term());
 
 		// HTML files should revalidate more frequently
 		config
@@ -284,7 +287,7 @@ impl CacheControlConfig {
 	}
 
 	/// Get policy for a given path
-	fn get_policy(&self, path: &str) -> &CachePolicy {
+	pub(crate) fn get_policy(&self, path: &str) -> &CachePolicy {
 		// Try extension-based matching first
 		if let Some(extension) = path.rsplit('.').next()
 			&& let Some(policy) = self.type_policies.get(extension)
@@ -362,16 +365,26 @@ impl Middleware for CacheControlMiddleware {
 		let policy = self.config.get_policy(&path);
 
 		// Add Cache-Control header
-		let cache_control_header: HeaderName = "cache-control".parse().unwrap();
+		// These header name/value parses use known-valid static strings, so expect() is appropriate
+		let cache_control_header: HeaderName = "cache-control"
+			.parse()
+			.expect("valid header name: cache-control");
 		response.headers.insert(
 			cache_control_header,
-			policy.to_header_value().parse().unwrap(),
+			policy
+				.to_header_value()
+				.parse()
+				.expect("valid header value for cache-control"),
 		);
 
 		// Add Vary header if specified
 		if let Some(vary) = &policy.vary {
-			let vary_header: HeaderName = "vary".parse().unwrap();
-			response.headers.insert(vary_header, vary.parse().unwrap());
+			let vary_header: HeaderName = "vary".parse().expect("valid header name: vary");
+			if let Ok(vary_value) = vary.parse() {
+				response.headers.insert(vary_header, vary_value);
+			} else {
+				tracing::warn!("Invalid Vary header value: {}", vary);
+			}
 		}
 
 		Ok(response)
@@ -705,6 +718,38 @@ mod tests {
 		let header_value = policy.to_header_value();
 
 		assert_eq!(header_value, "public, max-age=300, s-maxage=3600");
+	}
+
+	#[tokio::test]
+	async fn test_wasm_file_gets_long_term_cache() {
+		let config = CacheControlConfig::new();
+		let middleware = Arc::new(CacheControlMiddleware::new(config));
+		let handler = Arc::new(TestHandler::ok());
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/static/app.wasm")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		let response = middleware.process(request, handler).await.unwrap();
+
+		let cache_control = response
+			.headers
+			.get("cache-control")
+			.unwrap()
+			.to_str()
+			.unwrap();
+		assert_eq!(cache_control, "public, immutable, max-age=31536000");
+	}
+
+	#[tokio::test]
+	async fn test_default_config_includes_wasm() {
+		let config = CacheControlConfig::new();
+		assert!(config.type_policies.contains_key("wasm"));
 	}
 
 	#[tokio::test]

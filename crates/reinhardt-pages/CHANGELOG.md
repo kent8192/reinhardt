@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.11...reinhardt-pages@v0.1.0-rc.12) - 2026-03-18
+
+### Fixed
+
+- *(pages)* retain event handles in ElementBuilder::build()
+
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.8...reinhardt-pages@v0.1.0-rc.9) - 2026-03-15
+
+### Fixed
+
+- *(core,pages)* escape script tag content and HTML attributes to prevent XSS
+- *(pages)* validate attr keys, fix SSR lang escaping, enhance script escape docs
+
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.4...reinhardt-pages@v0.1.0-rc.5) - 2026-03-07
+
+### Fixed
+
+- *(pages)* use dynamic year in SelectDateWidget instead of hardcoded 2025
+- remove develop/0.2.0 content accidentally merged via PR [[#1918](https://github.com/kent8192/reinhardt-web/issues/1918)](https://github.com/kent8192/reinhardt-web/issues/1918)
+- restore non-crate develop/0.2.0 changes that are harmless or beneficial
+
+### Other
+
+- resolve conflicts with origin/main
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.1...reinhardt-pages@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(pages)* add explanatory comments to #[allow(dead_code)]
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.19...reinhardt-pages@v0.1.0-rc.1) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-middleware, reinhardt-urls
+
 ## [0.1.0-alpha.19](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-alpha.18...reinhardt-pages@v0.1.0-alpha.19) - 2026-02-24
 
 ### Fixed

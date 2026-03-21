@@ -11,7 +11,7 @@ debug = false
 
 # Secret key (MUST be changed and kept secret!)
 # Generate a secure secret key using: reinhardt-admin generate-secret-key
-secret_key = "CHANGE_THIS_PRODUCTION_SECRET_KEY_MUST_BE_VERY_LONG_AND_RANDOM"
+secret_key = "{{ secret_key }}"
 
 # Allowed hosts for production
 allowed_hosts = ["example.com", "www.example.com"]

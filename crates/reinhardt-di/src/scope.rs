@@ -4,12 +4,16 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};
 
+/// Defines the lifetime scope of a dependency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
+	/// A new instance is created for each request.
 	Request,
+	/// A single instance is shared across the entire application lifetime.
 	Singleton,
 }
 
+/// Per-request dependency cache that stores resolved instances for the duration of a request.
 #[derive(Clone)]
 pub struct RequestScope {
 	cache: Arc<RwLock<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>>,
@@ -118,6 +122,7 @@ impl Default for RequestScope {
 	}
 }
 
+/// Application-wide dependency cache that persists across all requests.
 pub struct SingletonScope {
 	cache: Arc<RwLock<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>>,
 }
@@ -171,7 +176,7 @@ impl SingletonScope {
 	/// let scope = SingletonScope::new();
 	/// scope.set(42i32);
 	///
-	// Same value retrieved across multiple calls
+	/// // Same value retrieved across multiple calls
 	/// let val1 = scope.get::<i32>().unwrap();
 	/// let val2 = scope.get::<i32>().unwrap();
 	/// assert_eq!(*val1, *val2);

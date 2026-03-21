@@ -26,6 +26,7 @@ impl CachedSecret {
 }
 
 /// HashiCorp Vault client configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct VaultConfig {
 	/// Vault server address (e.g., "http://127.0.0.1:8200")
@@ -173,6 +174,7 @@ struct VaultSecretMetadata {
 }
 
 #[derive(Debug, Serialize)]
+// Allow dead_code: request body struct for Vault KV write API, reserved for future secret write operations
 #[allow(dead_code)]
 struct VaultWriteRequest {
 	data: HashMap<String, String>,

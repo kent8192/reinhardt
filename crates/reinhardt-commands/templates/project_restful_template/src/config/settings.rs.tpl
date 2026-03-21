@@ -32,7 +32,6 @@ use reinhardt::conf::settings::profile::Profile;
 use reinhardt::conf::settings::sources::{DefaultSource, LowPriorityEnvSource, TomlFileSource};
 use reinhardt::Settings;
 use std::env;
-use std::path::PathBuf;
 
 /// Get settings based on environment variable
 ///
@@ -42,7 +41,7 @@ use std::path::PathBuf;
 /// # Examples
 ///
 /// ```no_run
-/// use {{ project_name }}::config::settings::get_settings;
+/// use {{ crate_name }}::config::settings::get_settings;
 ///
 /// let settings = get_settings();
 /// println!("Debug mode: {}", settings.debug);
@@ -56,7 +55,7 @@ use std::path::PathBuf;
 /// - Required settings are missing
 pub fn get_settings() -> Settings {
     let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| "local".to_string());
-    let profile = Profile::from_str(&profile_str).unwrap_or(Profile::Development);
+    let profile = Profile::parse(&profile_str);
 
     // Get the project root directory (parent of src/)
     let base_dir = env::current_dir().expect("Failed to get current directory");
@@ -68,6 +67,13 @@ pub fn get_settings() -> Settings {
         // Lowest priority: Default values
         .add_source(
             DefaultSource::new()
+                .with_value(
+                    "base_dir",
+                    serde_json::Value::String(
+                        env::var("CARGO_MANIFEST_DIR")
+                            .unwrap_or_else(|_| ".".to_string()),
+                    ),
+                )
                 .with_value("debug", serde_json::Value::Bool(false))
                 .with_value(
                     "language_code",

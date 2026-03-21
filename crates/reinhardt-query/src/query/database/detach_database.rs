@@ -89,16 +89,17 @@ impl QueryStatementBuilder for DetachDatabaseStatement {
 		{
 			panic!("DETACH DATABASE is SQLite-specific and not supported in MySQL");
 		}
-		if (query_builder as &dyn Any)
-			.downcast_ref::<crate::backend::SqliteQueryBuilder>()
-			.is_some()
+		if let Some(sqlite_builder) =
+			(query_builder as &dyn Any).downcast_ref::<crate::backend::SqliteQueryBuilder>()
 		{
+			use crate::backend::QueryBuilder as _;
 			let db_name = self
 				.database_name
 				.as_ref()
 				.expect("DETACH DATABASE requires a database name");
-			let quote = query_builder.quote_char();
-			let sql = format!("DETACH DATABASE {}{}{}", quote, db_name.to_string(), quote,);
+			// Reuse escape_identifier for proper identifier escaping
+			let escaped_db_name = sqlite_builder.escape_identifier(&db_name.to_string());
+			let sql = format!("DETACH DATABASE {}", escaped_db_name);
 			return (sql, crate::value::Values::new());
 		}
 		if (query_builder as &dyn Any)
@@ -161,5 +162,45 @@ mod tests {
 			result.database_name.as_ref().unwrap().to_string(),
 			"test_db"
 		);
+	}
+
+	#[rstest]
+	fn test_detach_database_build_sql() {
+		// Arrange
+		let mut stmt = DetachDatabaseStatement::new();
+		stmt.name("auxiliary");
+
+		// Act
+		let (sql, values) = stmt.build_any(&crate::backend::SqliteQueryBuilder);
+
+		// Assert
+		assert_eq!(sql, r#"DETACH DATABASE "auxiliary""#);
+		assert!(values.0.is_empty());
+	}
+
+	#[rstest]
+	fn test_detach_database_db_name_with_double_quotes() {
+		// Arrange
+		let mut stmt = DetachDatabaseStatement::new();
+		stmt.name(r#"my"db"#);
+
+		// Act
+		let (sql, _) = stmt.build_any(&crate::backend::SqliteQueryBuilder);
+
+		// Assert
+		assert_eq!(sql, r#"DETACH DATABASE "my""db""#);
+	}
+
+	#[rstest]
+	fn test_detach_database_db_name_with_special_chars() {
+		// Arrange
+		let mut stmt = DetachDatabaseStatement::new();
+		stmt.name(r#"test"schema"name"#);
+
+		// Act
+		let (sql, _) = stmt.build_any(&crate::backend::SqliteQueryBuilder);
+
+		// Assert
+		assert_eq!(sql, r#"DETACH DATABASE "test""schema""name""#);
 	}
 }

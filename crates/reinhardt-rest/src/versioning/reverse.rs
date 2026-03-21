@@ -122,10 +122,15 @@ impl VersionedUrlBuilder {
 /// Versioning strategy for URL building
 #[derive(Debug, Clone, PartialEq)]
 pub enum VersioningStrategy {
+	/// Version embedded in the URL path (e.g., `/v1/users/`).
 	URLPath,
+	/// Version specified in the Accept header.
 	AcceptHeader,
+	/// Version specified as a query parameter.
 	QueryParameter,
+	/// Version extracted from the hostname subdomain.
 	HostName,
+	/// Version extracted from the URL namespace.
 	Namespace,
 }
 
@@ -197,11 +202,16 @@ pub struct ApiDocUrlBuilder {
 	format: ApiDocFormat,
 }
 
+/// The format for API documentation output.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ApiDocFormat {
+	/// OpenAPI 3.0 specification format.
 	OpenApi,
+	/// Swagger UI format.
 	Swagger,
+	/// ReDoc documentation format.
 	ReDoc,
+	/// A custom documentation format identified by name.
 	Custom(String),
 }
 

@@ -22,7 +22,7 @@ This example corresponds to the REST tutorial Quickstart and Tutorial 1-6:
 
 ### Serializers
 
-- **SnippetSerializer**: Input validation with validator
+- **SnippetSerializer**: Input validation with built-in validation
 - **SnippetResponse**: Output serialization
 
 ### API Endpoints
@@ -193,7 +193,7 @@ UnifiedRouter::new()
 ### 5. Validation
 
 ```rust
-use validator::Validate;
+use reinhardt::Validate;
 
 // In view handler
 serializer.validate()?;  // Returns validation errors if invalid
@@ -292,9 +292,7 @@ After understanding this example:
 ## Related Documentation
 
 - [REST Tutorial](../../../docs/tutorials/en/rest/) - Step-by-step guide
-- [Feature Flags Guide](../../../docs/FEATURE_FLAGS.md) - Available features
-- [Getting Started](../../../docs/GETTING_STARTED.md) - Quick start guide
-- [API Documentation](https://docs.rs/reinhardt) - Complete API reference
+- [API Documentation](https://docs.rs/reinhardt-web) - Complete API reference
 
 ## License
 

@@ -20,7 +20,7 @@ impl CollectionOperations {
 	///
 	/// let proxy = CollectionProxy::new("posts", "title");
 	/// let ops = CollectionOperations::new(proxy);
-	// Operations wrapper is ready to use
+	/// // Operations wrapper is ready to use
 	/// ```
 	pub fn new(proxy: CollectionProxy) -> Self {
 		Self { proxy }

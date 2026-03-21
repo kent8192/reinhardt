@@ -35,3 +35,7 @@ mod workflow_integration;
 // Plugin command tests
 #[path = "commands/plugin_integration.rs"]
 mod plugin_integration;
+
+// Edge case E2E tests for makemigrations command
+#[path = "commands/makemigrations_e2e_edge_cases.rs"]
+mod makemigrations_e2e_edge_cases;

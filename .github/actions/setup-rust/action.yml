@@ -9,6 +9,10 @@ inputs:
     description: 'Enable Rust cache'
     required: false
     default: 'true'
+  cache-key:
+    description: 'Additional cache key suffix to differentiate caches between parallel jobs (e.g. check target type). Issue #1845'
+    required: false
+    default: ''
 runs:
   using: composite
   steps:
@@ -17,9 +21,36 @@ runs:
       with:
         components: ${{ inputs.components }}
 
+    # Issue #1831: Detect the actual CARGO_TARGET_DIR from the calling workflow's
+    # environment. Workflows set CARGO_TARGET_DIR to an absolute path (e.g.
+    # /tmp/cargo_target or $RUNNER_TEMP/cargo_target) to conserve workspace disk
+    # space on hosted runners.
+    #
+    # rust-cache's `workspaces` parameter uses path.join(root, target), which does
+    # NOT treat absolute paths as absolute in Node.js — so passing an absolute path
+    # via `workspaces` results in a wrong resolved path and a permanent cache miss.
+    # Instead, we use `cache-directories` (which pushes paths as-is to cachePaths)
+    # to correctly cache the absolute target directory, and disable `cache-targets`
+    # to prevent rust-cache from trying to cache the incorrectly-resolved workspace
+    # target path.
+    - name: Detect cargo target directory for caching
+      id: cargo-target-dir
+      if: inputs.cache == 'true'
+      shell: bash
+      run: |
+        target_dir="${CARGO_TARGET_DIR:-./target}"
+        echo "path=$target_dir" >> "$GITHUB_OUTPUT"
+
     - name: Cache Rust dependencies
       if: inputs.cache == 'true'
       uses: Swatinem/rust-cache@v2
       with:
-        workspaces: |
-          . -> /tmp/cargo_target
+        # Disable workspace target caching: the computed path would be wrong for
+        # absolute CARGO_TARGET_DIR values (due to Node.js path.join semantics).
+        cache-targets: "false"
+        # Cache the actual CARGO_TARGET_DIR path directly (absolute path preserved).
+        cache-directories: ${{ steps.cargo-target-dir.outputs.path }}
+        cache-on-failure: "true"
+        # Optional suffix to differentiate cache entries between parallel jobs
+        # that check different target types (e.g. lib vs tests). Issue #1845
+        key: ${{ inputs.cache-key }}

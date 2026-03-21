@@ -94,27 +94,38 @@
 
 // Core modules - always available
 pub mod aggregation;
+/// Annotation module.
 pub mod annotation;
 pub mod bulk_update;
 pub mod connection;
 pub mod connection_ext; // reinhardt-query connection support
+/// Constraints module.
 pub mod constraints;
+/// Expressions module.
 pub mod expressions;
+/// Fields module.
 pub mod fields;
+/// Functions module.
 pub mod functions;
 pub mod hybrid_dml;
+/// Indexes module.
 pub mod indexes;
 pub mod inspection;
+/// Into primary key module.
 pub mod into_primary_key;
+/// Model module.
 pub mod model;
 pub mod query_fields;
 pub mod query_helpers; // Common query patterns using reinhardt-query
 pub mod query_types; // Type definitions for passing reinhardt-query objects
+/// Set operations module.
 pub mod set_operations;
 pub mod sql_condition_parser;
 pub mod transaction;
 pub mod typed_join;
+/// Validators module.
 pub mod validators;
+/// Window module.
 pub mod window;
 
 // New advanced features
@@ -123,17 +134,23 @@ pub mod composite_pk;
 pub mod composite_synonym;
 pub mod cross_db_constraints;
 pub mod cte;
+/// File fields module.
 pub mod file_fields;
 pub mod filtered_relation;
 pub mod generated_field;
+/// Gis module.
 pub mod gis;
+/// Lambda stmt module.
 pub mod lambda_stmt;
+/// Lateral join module.
 pub mod lateral_join;
 pub mod order_with_respect_to;
+/// Pool types module.
 pub mod pool_types;
 pub mod postgres_features;
 pub mod postgres_fields;
 pub mod two_phase_commit;
+/// Type decorator module.
 pub mod type_decorator;
 
 // SQLAlchemy-style modules - default
@@ -141,6 +158,7 @@ pub mod async_query;
 pub mod database_routing;
 pub mod declarative;
 pub mod engine;
+/// Events module.
 pub mod events;
 pub mod execution;
 pub mod fk_accessor;
@@ -152,6 +170,7 @@ pub mod polymorphic;
 pub mod query_execution;
 pub mod query_options;
 pub mod reflection;
+/// Registry module.
 pub mod registry;
 pub mod relations;
 pub mod relationship;
@@ -161,6 +180,7 @@ pub mod sqlalchemy_query;
 pub mod types;
 
 // Django ORM compatibility layer
+/// Manager module.
 pub mod manager;
 
 // Unified query interface facade
@@ -294,6 +314,10 @@ pub use order_with_respect_to::{OrderError, OrderValue, OrderedModel};
 
 // reinhardt-query re-exports for query building in client code
 pub use reinhardt_query::prelude::{
-	Alias, ColumnRef, Cond, Expr, ExprTrait, MySqlQueryBuilder, PostgresQueryBuilder, Query,
-	QueryStatementBuilder, QueryStatementWriter, SqliteQueryBuilder,
+	Alias, ColumnRef, Cond, Expr, ExprTrait, IntoValue, MySqlQueryBuilder, Order,
+	PostgresQueryBuilder, Query, QueryStatementBuilder, QueryStatementWriter, SqliteQueryBuilder,
 };
+
+// Re-export reinhardt-query Value as QueryBuilderValue to avoid conflict with
+// annotation::Value and types::SqlValue
+pub use reinhardt_query::prelude::Value as QueryBuilderValue;

@@ -8,7 +8,11 @@ pub enum TriggerEvent {
 	/// INSERT operation
 	Insert,
 	/// UPDATE operation (optionally on specific columns)
-	Update { columns: Option<Vec<String>> },
+	Update {
+		/// Optional list of column names that restrict trigger activation.
+		/// When `None`, the trigger fires on any column update.
+		columns: Option<Vec<String>>,
+	},
 	/// DELETE operation
 	Delete,
 }

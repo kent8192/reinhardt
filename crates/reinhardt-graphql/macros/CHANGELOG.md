@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-graphql-macros@v0.1.0-alpha.3...reinhardt-graphql-macros@v0.1.0-alpha.4) - 2026-02-24
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-graphql-macros@v0.1.0-alpha.3...reinhardt-graphql-macros@v0.1.0-rc.1) - 2026-02-24
 
 ### Fixed
 

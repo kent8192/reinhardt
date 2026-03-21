@@ -519,11 +519,11 @@ fn test_collectstatic_file_collision(temp_dir: TempDir) {
 
 	assert!(result.is_ok(), "Execute should succeed ");
 
-	// File should exist (content depends on implementation - later or earlier wins)
+	// File should exist with content from the later source directory
 	let content = fs::read_to_string(dest_dir.join("app.js")).expect("Failed to read app.js ");
-	assert!(
-		content.contains("source"),
-		"app.js should have content from one source"
+	assert_eq!(
+		content, "// source2 version",
+		"later source directory should override earlier one (Django-compatible behavior)"
 	);
 }
 
@@ -952,4 +952,101 @@ fn test_collectstatic_skips_nonexistent_autodiscovered_dirs(temp_dir: TempDir) {
 	// Stats may be 0 if no auto-discovered directories exist
 	let _stats = result.unwrap();
 	// Test passes if execute() succeeded without errors
+}
+
+// ============================================================================
+// HTML Template STATIC_URL Tests
+// ============================================================================
+
+/// Test: HTML template processing uses static_url configuration
+///
+/// Category: Happy Path
+/// Verifies that {{ static_url("...") }} patterns are replaced with the
+/// configured static_url prefix, not hardcoded "/".
+#[rstest]
+fn test_collectstatic_html_template_uses_static_url(temp_dir: TempDir) {
+	// Arrange
+	let source_dir = temp_dir.path().join("static_source");
+	let dest_dir = temp_dir.path().join("static_root");
+	let css_dir = source_dir.join("css");
+	fs::create_dir_all(&css_dir).expect("Failed to create css dir");
+	fs::write(css_dir.join("style.css"), b".app { color: red; }")
+		.expect("Failed to write style.css");
+
+	let html_content = r#"<link href="{{ static_url("css/style.css") }}" rel="stylesheet">"#;
+	fs::write(source_dir.join("index.html"), html_content).expect("Failed to write index.html");
+
+	let config = StaticFilesConfig {
+		static_url: "/assets/".to_string(),
+		static_root: dest_dir.clone(),
+		staticfiles_dirs: vec![source_dir],
+		media_url: None,
+	};
+
+	let options = CollectStaticOptions {
+		enable_hashing: true,
+		verbosity: 0,
+		..Default::default()
+	};
+
+	let mut command = CollectStaticCommand::new(config, options);
+
+	// Act
+	let result = command.execute();
+	assert!(result.is_ok(), "CollectStatic should succeed");
+
+	// Assert
+	let output_html =
+		fs::read_to_string(dest_dir.join("index.html")).expect("Failed to read output HTML");
+	assert!(
+		output_html.contains("/assets/css/style."),
+		"HTML should contain /assets/ prefix, got: {}",
+		output_html
+	);
+}
+
+/// Test: HTML template processing with CDN URL
+///
+/// Category: Happy Path
+/// Verifies that {{ static_url("...") }} patterns work with full CDN URLs.
+#[rstest]
+fn test_collectstatic_html_template_cdn_url(temp_dir: TempDir) {
+	// Arrange
+	let source_dir = temp_dir.path().join("static_source");
+	let dest_dir = temp_dir.path().join("static_root");
+	let css_dir = source_dir.join("css");
+	fs::create_dir_all(&css_dir).expect("Failed to create css dir");
+	fs::write(css_dir.join("style.css"), b".app { color: blue; }")
+		.expect("Failed to write style.css");
+
+	let html_content = r#"<link href="{{ static_url("css/style.css") }}" rel="stylesheet">"#;
+	fs::write(source_dir.join("index.html"), html_content).expect("Failed to write index.html");
+
+	let config = StaticFilesConfig {
+		static_url: "https://cdn.example.com/static/".to_string(),
+		static_root: dest_dir.clone(),
+		staticfiles_dirs: vec![source_dir],
+		media_url: None,
+	};
+
+	let options = CollectStaticOptions {
+		enable_hashing: true,
+		verbosity: 0,
+		..Default::default()
+	};
+
+	let mut command = CollectStaticCommand::new(config, options);
+
+	// Act
+	let result = command.execute();
+	assert!(result.is_ok(), "CollectStatic should succeed");
+
+	// Assert
+	let output_html =
+		fs::read_to_string(dest_dir.join("index.html")).expect("Failed to read output HTML");
+	assert!(
+		output_html.contains("https://cdn.example.com/static/css/style."),
+		"HTML should contain CDN URL prefix, got: {}",
+		output_html
+	);
 }

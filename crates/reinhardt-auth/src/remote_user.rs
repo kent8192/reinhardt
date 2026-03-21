@@ -114,9 +114,9 @@ impl AuthenticationBackend for RemoteUserAuthentication {
 			Some(username) if !username.is_empty() => {
 				// Create user from header
 				Ok(Some(Box::new(SimpleUser {
-					id: Uuid::new_v4(),
+					id: Uuid::new_v5(&crate::USER_ID_NAMESPACE, username.as_bytes()),
 					username: username.to_string(),
-					email: format!("{}@example.com", username),
+					email: String::new(),
 					is_active: true,
 					is_admin: false,
 					is_staff: false,
@@ -142,6 +142,7 @@ mod tests {
 	use super::*;
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method};
+	use rstest::rstest;
 
 	#[tokio::test]
 	async fn test_remote_user_with_header() {
@@ -193,6 +194,80 @@ mod tests {
 		let result = auth.authenticate(&request).await.unwrap();
 		assert!(result.is_some());
 		assert_eq!(result.unwrap().get_username(), "alice");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_same_username_produces_same_id() {
+		// Arrange
+		let auth = RemoteUserAuthentication::new();
+
+		let mut headers1 = HeaderMap::new();
+		headers1.insert("REMOTE_USER", "testuser".parse().unwrap());
+		let request1 = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.headers(headers1)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		let mut headers2 = HeaderMap::new();
+		headers2.insert("REMOTE_USER", "testuser".parse().unwrap());
+		let request2 = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.headers(headers2)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let user1 = auth.authenticate(&request1).await.unwrap().unwrap();
+		let user2 = auth.authenticate(&request2).await.unwrap().unwrap();
+
+		// Assert
+		assert_eq!(
+			user1.id(),
+			user2.id(),
+			"same username must produce the same UUID"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_authenticated_user_has_default_privilege_flags() {
+		// Arrange
+		let auth = RemoteUserAuthentication::new();
+		let mut headers = HeaderMap::new();
+		headers.insert("REMOTE_USER", "testuser".parse().unwrap());
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.headers(headers)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let user = auth.authenticate(&request).await.unwrap().unwrap();
+
+		// Assert
+		assert!(user.is_active());
+		assert!(!user.is_admin());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_get_user_always_returns_none() {
+		// Arrange
+		let auth = RemoteUserAuthentication::new();
+
+		// Act
+		let result = auth.get_user("any_user_id").await.unwrap();
+
+		// Assert
+		assert!(result.is_none());
 	}
 
 	#[tokio::test]

@@ -3,6 +3,23 @@
 use reinhardt_macros::installed_apps;
 
 #[test]
+fn test_installed_apps_empty() {
+	installed_apps! {}
+
+	// Arrange
+	use std::str::FromStr;
+
+	// Act
+	let apps = InstalledApp::all_apps();
+	let from_str_result = InstalledApp::from_str("anything");
+
+	// Assert
+	assert_eq!(apps, Vec::<String>::new());
+	assert!(from_str_result.is_err());
+	assert_eq!(from_str_result.unwrap_err(), "Unknown app: anything");
+}
+
+#[test]
 fn test_installed_apps_basic() {
 	installed_apps! {
 		auth: "myproject.auth",

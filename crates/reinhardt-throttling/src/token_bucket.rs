@@ -7,9 +7,13 @@
 use super::time_provider::{SystemTimeProvider, TimeProvider};
 use super::{Throttle, ThrottleError, ThrottleResult};
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{Duration, Instant};
+
+/// Default maximum number of entries in the per-key state HashMap
+const DEFAULT_MAX_ENTRIES: usize = 10_000;
 
 /// Token bucket configuration
 #[derive(Debug, Clone)]
@@ -29,7 +33,8 @@ impl TokenBucketConfig {
 	///
 	/// # Errors
 	///
-	/// Returns [`ThrottleError::InvalidConfig`] if `refill_interval` is zero.
+	/// Returns [`ThrottleError::InvalidConfig`] if any of `capacity`,
+	/// `refill_rate`, `refill_interval`, or `tokens_per_request` is zero.
 	///
 	/// # Examples
 	///
@@ -47,9 +52,24 @@ impl TokenBucketConfig {
 		refill_interval: u64,
 		tokens_per_request: usize,
 	) -> ThrottleResult<Self> {
+		if capacity == 0 {
+			return Err(ThrottleError::InvalidConfig(
+				"capacity must be non-zero".to_string(),
+			));
+		}
+		if refill_rate == 0 {
+			return Err(ThrottleError::InvalidConfig(
+				"refill_rate must be non-zero".to_string(),
+			));
+		}
 		if refill_interval == 0 {
 			return Err(ThrottleError::InvalidConfig(
 				"refill_interval must be non-zero".to_string(),
+			));
+		}
+		if tokens_per_request == 0 {
+			return Err(ThrottleError::InvalidConfig(
+				"tokens_per_request must be non-zero".to_string(),
 			));
 		}
 		Ok(Self {
@@ -185,24 +205,22 @@ impl TokenBucketConfigBuilder {
 	/// # Errors
 	///
 	/// Returns [`ThrottleError::InvalidConfig`] if any required field is not set
-	/// or if `refill_interval` is zero.
+	/// or if any of `capacity`, `refill_rate`, `refill_interval`, or
+	/// `tokens_per_request` is zero.
 	pub fn build(self) -> ThrottleResult<TokenBucketConfig> {
-		let refill_interval = self.refill_interval.unwrap_or(0);
-		if refill_interval == 0 {
-			return Err(ThrottleError::InvalidConfig(
-				"refill_interval must be set and non-zero".to_string(),
-			));
-		}
-		Ok(TokenBucketConfig {
-			capacity: self
-				.capacity
-				.ok_or_else(|| ThrottleError::InvalidConfig("capacity must be set".to_string()))?,
-			refill_rate: self.refill_rate.ok_or_else(|| {
-				ThrottleError::InvalidConfig("refill_rate must be set".to_string())
-			})?,
-			refill_interval,
-			tokens_per_request: self.tokens_per_request.unwrap_or(1),
-		})
+		let capacity = self
+			.capacity
+			.ok_or_else(|| ThrottleError::InvalidConfig("capacity must be set".to_string()))?;
+		let refill_rate = self
+			.refill_rate
+			.ok_or_else(|| ThrottleError::InvalidConfig("refill_rate must be set".to_string()))?;
+		let refill_interval = self.refill_interval.ok_or_else(|| {
+			ThrottleError::InvalidConfig("refill_interval must be set".to_string())
+		})?;
+		let tokens_per_request = self.tokens_per_request.unwrap_or(1);
+
+		// Delegate to TokenBucketConfig::new for centralized validation
+		TokenBucketConfig::new(capacity, refill_rate, refill_interval, tokens_per_request)
 	}
 }
 
@@ -211,6 +229,8 @@ impl TokenBucketConfigBuilder {
 struct BucketState {
 	tokens: usize,
 	last_refill: Instant,
+	/// Last time this entry was accessed (for eviction ordering)
+	last_accessed: Instant,
 }
 
 /// Token bucket throttle implementation
@@ -232,7 +252,8 @@ struct BucketState {
 pub struct TokenBucket<T: TimeProvider = SystemTimeProvider> {
 	config: TokenBucketConfig,
 	time_provider: Arc<T>,
-	state: Arc<RwLock<BucketState>>,
+	buckets: Arc<RwLock<HashMap<String, BucketState>>>,
+	max_entries: usize,
 }
 
 impl TokenBucket<SystemTimeProvider> {
@@ -247,15 +268,11 @@ impl TokenBucket<SystemTimeProvider> {
 	/// let throttle = TokenBucket::new(config);
 	/// ```
 	pub fn new(config: TokenBucketConfig) -> Self {
-		let initial_state = BucketState {
-			tokens: config.capacity,
-			last_refill: SystemTimeProvider::new().now(),
-		};
-
 		Self {
 			config,
 			time_provider: Arc::new(SystemTimeProvider::new()),
-			state: Arc::new(RwLock::new(initial_state)),
+			buckets: Arc::new(RwLock::new(HashMap::new())),
+			max_entries: DEFAULT_MAX_ENTRIES,
 		}
 	}
 }
@@ -263,20 +280,72 @@ impl TokenBucket<SystemTimeProvider> {
 impl<T: TimeProvider> TokenBucket<T> {
 	/// Creates a new token bucket with custom time provider
 	pub fn with_time_provider(config: TokenBucketConfig, time_provider: Arc<T>) -> Self {
-		let initial_state = BucketState {
-			tokens: config.capacity,
-			last_refill: time_provider.now(),
-		};
-
 		Self {
 			config,
 			time_provider,
-			state: Arc::new(RwLock::new(initial_state)),
+			buckets: Arc::new(RwLock::new(HashMap::new())),
+			max_entries: DEFAULT_MAX_ENTRIES,
 		}
 	}
 
-	/// Refill tokens based on elapsed time
+	/// Sets the maximum number of per-key entries before eviction occurs.
+	///
+	/// When the number of tracked keys exceeds this limit, the least recently
+	/// accessed entries are evicted to make room. Defaults to 10,000.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_throttling::token_bucket::{TokenBucket, TokenBucketConfig};
+	///
+	/// let config = TokenBucketConfig::per_second(5, 10);
+	/// let throttle = TokenBucket::new(config).with_max_entries(500);
+	/// ```
+	pub fn with_max_entries(mut self, max_entries: usize) -> Self {
+		self.max_entries = max_entries;
+		self
+	}
+
+	/// Returns the maximum number of per-key entries before eviction occurs
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_throttling::token_bucket::{TokenBucket, TokenBucketConfig};
+	///
+	/// let config = TokenBucketConfig::per_second(5, 10);
+	/// let throttle = TokenBucket::new(config);
+	/// assert_eq!(throttle.max_entries(), 10_000);
+	/// ```
+	pub fn max_entries(&self) -> usize {
+		self.max_entries
+	}
+
+	/// Create a new bucket state initialized with full capacity
+	fn new_bucket_state(&self) -> BucketState {
+		let now = self.time_provider.now();
+		BucketState {
+			tokens: self.config.capacity,
+			last_refill: now,
+			last_accessed: now,
+		}
+	}
+
+	/// Refill tokens based on elapsed time and mark the entry as accessed.
+	///
+	/// Use this for operations that represent actual usage (e.g., `allow_request`,
+	/// `tokens_for_key`). For read-only queries like `wait_time`, use
+	/// `refill_tokens_only` to avoid affecting eviction ordering.
 	fn refill_tokens(&self, state: &mut BucketState) {
+		self.refill_tokens_only(state);
+		state.last_accessed = self.time_provider.now();
+	}
+
+	/// Refill tokens based on elapsed time without updating `last_accessed`.
+	///
+	/// This avoids marking the entry as recently used, preserving correct
+	/// eviction ordering when called from read-only queries like `wait_time`.
+	fn refill_tokens_only(&self, state: &mut BucketState) {
 		let now = self.time_provider.now();
 		let elapsed = now.duration_since(state.last_refill);
 		let refill_duration = Duration::from_secs(self.config.refill_interval);
@@ -289,17 +358,66 @@ impl<T: TimeProvider> TokenBucket<T> {
 			// Add tokens but cap at capacity
 			state.tokens = (state.tokens + tokens_to_add).min(self.config.capacity);
 
-			// Update last refill time
-			state.last_refill = now;
+			// Advance last refill time by the consumed intervals to preserve fractional time
+			state.last_refill += Duration::from_secs(intervals * self.config.refill_interval);
 		}
 	}
 
-	/// Try to consume tokens from the bucket
-	async fn consume_tokens(&self, count: usize) -> ThrottleResult<bool> {
-		let mut state = self.state.write().await;
+	/// Evict stale entries when the map is at or exceeds its maximum size.
+	///
+	/// Called before inserting a new key to ensure there is room. First removes
+	/// entries that would be at full capacity after refill (accounting for
+	/// elapsed time). If still at capacity, removes the least recently
+	/// accessed entries.
+	fn evict_if_needed(&self, buckets: &mut HashMap<String, BucketState>) {
+		if buckets.len() < self.max_entries {
+			return;
+		}
+
+		let now = self.time_provider.now();
+		let refill_duration = Duration::from_secs(self.config.refill_interval);
+
+		// Phase 1: remove entries that are effectively at full capacity
+		buckets.retain(|_, state| {
+			let elapsed = now.duration_since(state.last_refill);
+			let mut effective_tokens = state.tokens;
+			if elapsed >= refill_duration {
+				let intervals = elapsed.as_secs() / self.config.refill_interval;
+				let tokens_to_add = (intervals as usize) * self.config.refill_rate;
+				effective_tokens = (effective_tokens + tokens_to_add).min(self.config.capacity);
+			}
+			effective_tokens < self.config.capacity
+		});
+
+		if buckets.len() < self.max_entries {
+			return;
+		}
+
+		// Phase 2: evict least recently accessed entries to make room
+		let mut entries: Vec<(String, Instant)> = buckets
+			.iter()
+			.map(|(k, v)| (k.clone(), v.last_accessed))
+			.collect();
+		entries.sort_by_key(|(_, accessed)| *accessed);
+
+		let to_remove = buckets.len() - self.max_entries + 1;
+		for (key, _) in entries.into_iter().take(to_remove) {
+			buckets.remove(&key);
+		}
+	}
+
+	/// Try to consume tokens from the bucket for a given key
+	async fn consume_tokens(&self, key: &str, count: usize) -> ThrottleResult<bool> {
+		let mut buckets = self.buckets.write().await;
+		if !buckets.contains_key(key) {
+			self.evict_if_needed(&mut buckets);
+		}
+		let state = buckets
+			.entry(key.to_string())
+			.or_insert_with(|| self.new_bucket_state());
 
 		// Refill tokens first
-		self.refill_tokens(&mut state);
+		self.refill_tokens(state);
 
 		// Check if we have enough tokens
 		if state.tokens >= count {
@@ -310,29 +428,70 @@ impl<T: TimeProvider> TokenBucket<T> {
 		}
 	}
 
-	/// Get current token count
-	pub async fn tokens(&self) -> usize {
-		let mut state = self.state.write().await;
-		self.refill_tokens(&mut state);
+	/// Get current token count for a given key
+	pub async fn tokens_for_key(&self, key: &str) -> usize {
+		let mut buckets = self.buckets.write().await;
+		if !buckets.contains_key(key) {
+			self.evict_if_needed(&mut buckets);
+		}
+		let state = buckets
+			.entry(key.to_string())
+			.or_insert_with(|| self.new_bucket_state());
+		self.refill_tokens(state);
 		state.tokens
 	}
 
-	/// Reset the bucket to full capacity
+	/// Get current token count (uses default empty key for backward compatibility)
+	pub async fn tokens(&self) -> usize {
+		self.tokens_for_key("").await
+	}
+
+	/// Reset the bucket for a specific key
+	pub async fn reset_key(&self, key: &str) {
+		let mut buckets = self.buckets.write().await;
+		if let Some(state) = buckets.get_mut(key) {
+			state.tokens = self.config.capacity;
+			state.last_refill = self.time_provider.now();
+		}
+	}
+
+	/// Reset all buckets
 	pub async fn reset(&self) {
-		let mut state = self.state.write().await;
-		state.tokens = self.config.capacity;
-		state.last_refill = self.time_provider.now();
+		let mut buckets = self.buckets.write().await;
+		buckets.clear();
+	}
+
+	/// Returns the number of tracked keys in the state map
+	pub async fn entry_count(&self) -> usize {
+		self.buckets.read().await.len()
+	}
+
+	/// Returns whether a specific key exists in the state map
+	pub async fn contains_key(&self, key: &str) -> bool {
+		self.buckets.read().await.contains_key(key)
 	}
 }
 
 #[async_trait]
 impl<T: TimeProvider> Throttle for TokenBucket<T> {
-	async fn allow_request(&self, _key: &str) -> ThrottleResult<bool> {
-		self.consume_tokens(self.config.tokens_per_request).await
+	async fn allow_request(&self, key: &str) -> ThrottleResult<bool> {
+		self.consume_tokens(key, self.config.tokens_per_request)
+			.await
 	}
 
-	async fn wait_time(&self, _key: &str) -> ThrottleResult<Option<u64>> {
-		let state = self.state.read().await;
+	async fn wait_time(&self, key: &str) -> ThrottleResult<Option<u64>> {
+		let mut buckets = self.buckets.write().await;
+		if !buckets.contains_key(key) {
+			self.evict_if_needed(&mut buckets);
+		}
+		let state = buckets
+			.entry(key.to_string())
+			.or_insert_with(|| self.new_bucket_state());
+
+		// Refill tokens before checking wait time to avoid stale results.
+		// Use refill_tokens_only to avoid updating last_accessed, since
+		// wait_time is a read-only query that should not affect eviction.
+		self.refill_tokens_only(state);
 
 		if state.tokens >= self.config.tokens_per_request {
 			return Ok(None);
@@ -443,7 +602,7 @@ mod tests {
 		let throttle = TokenBucket::new(config);
 
 		// Assert - initial tokens should equal capacity
-		assert_eq!(throttle.tokens().await, 10);
+		assert_eq!(throttle.tokens_for_key("user").await, 10);
 
 		// Act - consume 3 tokens
 		for _ in 0..3 {
@@ -451,7 +610,33 @@ mod tests {
 		}
 
 		// Assert
-		assert_eq!(throttle.tokens().await, 7);
+		assert_eq!(throttle.tokens_for_key("user").await, 7);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_token_bucket_per_key_isolation() {
+		// Arrange
+		let config = TokenBucketConfig::new(3, 3, 60, 1).unwrap();
+		let throttle = TokenBucket::new(config);
+
+		// Act - exhaust user_a's tokens
+		for _ in 0..3 {
+			assert!(throttle.allow_request("user_a").await.unwrap());
+		}
+
+		// Assert - user_a is throttled
+		assert!(!throttle.allow_request("user_a").await.unwrap());
+
+		// Assert - user_b still has full capacity (independent bucket)
+		for _ in 0..3 {
+			assert!(throttle.allow_request("user_b").await.unwrap());
+		}
+		assert!(!throttle.allow_request("user_b").await.unwrap());
+
+		// Assert - token counts are independent
+		assert_eq!(throttle.tokens_for_key("user_a").await, 0);
+		assert_eq!(throttle.tokens_for_key("user_b").await, 0);
 	}
 
 	#[rstest]
@@ -465,13 +650,13 @@ mod tests {
 		for _ in 0..10 {
 			throttle.allow_request("user").await.unwrap();
 		}
-		assert_eq!(throttle.tokens().await, 0);
+		assert_eq!(throttle.tokens_for_key("user").await, 0);
 
-		// Act - reset
+		// Act - reset all buckets
 		throttle.reset().await;
 
-		// Assert
-		assert_eq!(throttle.tokens().await, 10);
+		// Assert - after reset, a new bucket is created with full capacity
+		assert_eq!(throttle.tokens_for_key("user").await, 10);
 	}
 
 	#[rstest]
@@ -622,5 +807,219 @@ mod tests {
 			result.unwrap_err(),
 			ThrottleError::InvalidConfig(_)
 		));
+	}
+
+	#[rstest]
+	fn test_new_rejects_zero_capacity() {
+		// Arrange & Act
+		let result = TokenBucketConfig::new(0, 5, 10, 1);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(
+			result.unwrap_err(),
+			ThrottleError::InvalidConfig(_)
+		));
+	}
+
+	#[rstest]
+	fn test_new_rejects_zero_refill_rate() {
+		// Arrange & Act
+		let result = TokenBucketConfig::new(10, 0, 10, 1);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(
+			result.unwrap_err(),
+			ThrottleError::InvalidConfig(_)
+		));
+	}
+
+	#[rstest]
+	fn test_new_rejects_zero_tokens_per_request() {
+		// Arrange & Act
+		let result = TokenBucketConfig::new(10, 5, 10, 0);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(
+			result.unwrap_err(),
+			ThrottleError::InvalidConfig(_)
+		));
+	}
+
+	#[rstest]
+	fn test_builder_rejects_zero_capacity() {
+		// Arrange & Act
+		let result = TokenBucketConfig::builder()
+			.capacity(0)
+			.refill_rate(5)
+			.refill_interval(10)
+			.tokens_per_request(1)
+			.build();
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(
+			result.unwrap_err(),
+			ThrottleError::InvalidConfig(_)
+		));
+	}
+
+	#[rstest]
+	fn test_builder_rejects_zero_refill_rate() {
+		// Arrange & Act
+		let result = TokenBucketConfig::builder()
+			.capacity(10)
+			.refill_rate(0)
+			.refill_interval(10)
+			.tokens_per_request(1)
+			.build();
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(
+			result.unwrap_err(),
+			ThrottleError::InvalidConfig(_)
+		));
+	}
+
+	#[rstest]
+	fn test_builder_rejects_zero_tokens_per_request() {
+		// Arrange & Act
+		let result = TokenBucketConfig::builder()
+			.capacity(10)
+			.refill_rate(5)
+			.refill_interval(10)
+			.tokens_per_request(0)
+			.build();
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(
+			result.unwrap_err(),
+			ThrottleError::InvalidConfig(_)
+		));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_wait_time_refills_before_computing() {
+		// Arrange
+		use tokio::time::Instant;
+		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
+		let config = TokenBucketConfig::new(5, 5, 1, 1).unwrap();
+		let throttle = TokenBucket::with_time_provider(config, time_provider.clone());
+
+		// Act - consume all tokens
+		for _ in 0..5 {
+			throttle.allow_request("user").await.unwrap();
+		}
+
+		// Act - advance time past refill interval so tokens should be refilled
+		time_provider.advance(std::time::Duration::from_secs(2));
+
+		// Assert - wait_time should return None because refill restores tokens
+		let wait = throttle.wait_time("user").await.unwrap();
+		assert_eq!(wait, None);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_refill_preserves_fractional_interval() {
+		// Arrange
+		use tokio::time::Instant;
+		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
+		let config = TokenBucketConfig::new(10, 2, 10, 1).unwrap();
+		let throttle = TokenBucket::with_time_provider(config, time_provider.clone());
+
+		// Act - consume all tokens
+		for _ in 0..10 {
+			throttle.allow_request("user").await.unwrap();
+		}
+
+		// Act - advance by 15 seconds (1.5 intervals of 10s each)
+		// Should refill 1 interval worth (2 tokens), preserving 5s remainder
+		time_provider.advance(std::time::Duration::from_secs(15));
+		assert_eq!(throttle.tokens_for_key("user").await, 2);
+
+		// Act - advance by another 5 seconds (completes the partial interval)
+		time_provider.advance(std::time::Duration::from_secs(5));
+		assert_eq!(throttle.tokens_for_key("user").await, 4);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_token_bucket_eviction_at_capacity() {
+		// Arrange
+		use tokio::time::Instant;
+		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
+		let config = TokenBucketConfig::new(5, 5, 1, 1).unwrap();
+		let throttle =
+			TokenBucket::with_time_provider(config, time_provider.clone()).with_max_entries(3);
+
+		// Act - add 3 keys that consume some tokens
+		for i in 0..3 {
+			let key = format!("user_{i}");
+			throttle.allow_request(&key).await.unwrap();
+		}
+
+		// Arrange - advance time so tokens fully refill (idle entries)
+		time_provider.advance(std::time::Duration::from_secs(10));
+
+		// Act - add a 4th key, triggering eviction of fully-refilled entries
+		assert!(throttle.allow_request("user_new").await.unwrap());
+
+		// Assert - map should have at most max_entries keys
+		assert!(throttle.entry_count().await <= 3);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_token_bucket_eviction_lru_when_active() {
+		// Arrange
+		use tokio::time::Instant;
+		let time_provider = Arc::new(MockTimeProvider::new(Instant::now()));
+		let config = TokenBucketConfig::new(5, 5, 60, 1).unwrap();
+		let throttle =
+			TokenBucket::with_time_provider(config, time_provider.clone()).with_max_entries(3);
+
+		// Act - fill 3 keys, consuming all tokens (long refill interval so they stay active)
+		for i in 0..3 {
+			let key = format!("user_{i}");
+			for _ in 0..5 {
+				throttle.allow_request(&key).await.unwrap();
+			}
+			// Stagger access times for deterministic LRU ordering
+			time_provider.advance(std::time::Duration::from_millis(100));
+		}
+
+		// Act - add a 4th key, triggering LRU eviction
+		assert!(throttle.allow_request("user_new").await.unwrap());
+
+		// Assert - oldest key (user_0) should have been evicted
+		assert!(throttle.entry_count().await <= 3);
+		assert!(!throttle.contains_key("user_0").await);
+		assert!(throttle.contains_key("user_new").await);
+	}
+
+	#[rstest]
+	fn test_token_bucket_throttle_with_max_entries() {
+		// Arrange & Act
+		let config = TokenBucketConfig::new(10, 5, 1, 1).unwrap();
+		let throttle = TokenBucket::new(config).with_max_entries(5000);
+
+		// Assert
+		assert_eq!(throttle.max_entries(), 5000);
+	}
+
+	#[rstest]
+	fn test_token_bucket_throttle_default_max_entries() {
+		// Arrange & Act
+		let config = TokenBucketConfig::new(10, 5, 1, 1).unwrap();
+		let throttle = TokenBucket::new(config);
+
+		// Assert
+		assert_eq!(throttle.max_entries(), DEFAULT_MAX_ENTRIES);
 	}
 }

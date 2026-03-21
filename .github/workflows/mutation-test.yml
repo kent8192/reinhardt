@@ -1,0 +1,90 @@
+name: Mutation Testing
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
+    inputs:
+      shard:
+        description: 'Shard to run (0 = all)'
+        type: choice
+        options:
+          - "0"
+          - "1"
+          - "2"
+          - "3"
+          - "4"
+          - "5"
+        default: "0"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_TARGET_DIR: /tmp/cargo_target
+  TOTAL_SHARDS: 5
+
+jobs:
+  mutation-test:
+    name: "Shard ${{ matrix.shard }}/5"
+    runs-on: ubuntu-latest
+    if: inputs.shard == '0' || inputs.shard == '' || inputs.shard == matrix.shard
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Setup Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      - name: Run mutation testing
+        continue-on-error: true
+        run: cargo mutants --shard ${{ matrix.shard }}/${{ env.TOTAL_SHARDS }} --test-tool nextest --timeout-multiplier 2 --jobs 1 --output /tmp/mutants-shard-${{ matrix.shard }}
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Mutation Testing Results - Shard ${{ matrix.shard }}/${{ env.TOTAL_SHARDS }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f /tmp/mutants-shard-${{ matrix.shard }}/outcomes.json ]; then
+            caught=$(jq '[.[] | select(.scenario != "Baseline" and .summary == "CaughtMutant")] | length' /tmp/mutants-shard-${{ matrix.shard }}/outcomes.json)
+            missed=$(jq '[.[] | select(.scenario != "Baseline" and .summary == "MissedMutant")] | length' /tmp/mutants-shard-${{ matrix.shard }}/outcomes.json)
+            timeout=$(jq '[.[] | select(.scenario != "Baseline" and .summary == "Timeout")] | length' /tmp/mutants-shard-${{ matrix.shard }}/outcomes.json)
+            echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Caught | $caught |" >> $GITHUB_STEP_SUMMARY
+            echo "| Missed | $missed |" >> $GITHUB_STEP_SUMMARY
+            echo "| Timeout | $timeout |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No results found." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-shard-${{ matrix.shard }}
+          path: /tmp/mutants-shard-${{ matrix.shard }}/
+          retention-days: 14

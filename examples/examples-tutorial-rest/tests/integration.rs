@@ -43,7 +43,7 @@ mod tests {
 	// Unit Tests (2 tests)
 	// ============================================================================
 
-	#[test]
+	#[rstest]
 	fn test_snippet_model() {
 		use chrono::Utc;
 		use examples_tutorial_rest::apps::snippets::models::Snippet;
@@ -62,10 +62,10 @@ mod tests {
 		assert_eq!(snippet.id, 0);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_snippet_serializer_validation() {
 		use examples_tutorial_rest::apps::snippets::serializers::SnippetSerializer;
-		use validator::Validate;
+		use reinhardt::Validate;
 
 		// Valid snippet
 		let valid = SnippetSerializer {

@@ -1,3 +1,6 @@
+/// Escapes control characters and non-ASCII bytes in a string to `\xNN` notation.
+///
+/// This is useful for sanitizing log output to prevent control character injection.
 pub fn escape_control_chars(s: &str) -> String {
 	let mut result = String::with_capacity(s.len());
 
@@ -14,6 +17,9 @@ pub fn escape_control_chars(s: &str) -> String {
 
 	result
 }
+/// A trait for formatting log records into string representations.
 pub trait Formatter {}
+/// A formatter tailored for server-side log output.
 pub struct ServerFormatter;
+/// A standard log formatter that produces a default textual representation.
 pub struct StandardFormatter;

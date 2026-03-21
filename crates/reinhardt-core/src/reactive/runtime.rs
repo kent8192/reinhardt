@@ -337,6 +337,8 @@ impl Runtime {
 	/// Remove a node from the dependency graph
 	///
 	/// This should be called when a Signal/Effect/Memo is dropped.
+	/// Also removes the node from pending updates to prevent disposed effects
+	/// from being re-scheduled, which could cause infinite loops.
 	///
 	/// # Arguments
 	///
@@ -344,6 +346,10 @@ impl Runtime {
 	pub fn remove_node(&self, node_id: NodeId) {
 		self.clear_dependencies(node_id);
 		self.dependency_graph.borrow_mut().remove(&node_id);
+		// Remove from pending updates to prevent re-execution of disposed effects
+		self.pending_updates
+			.borrow_mut()
+			.retain(|&id| id != node_id);
 	}
 
 	/// Check if a node exists in the dependency graph (for testing)

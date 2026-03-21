@@ -191,6 +191,12 @@ fn load_settings() -> Settings {
 				.with_value("session_cookie_secure", serde_json::json!(false))
 				.with_value("csrf_cookie_secure", serde_json::json!(false))
 				.with_value("append_slash", serde_json::json!(true))
+				// Middleware
+				.with_value("middleware", serde_json::json!([]))
+				// URL configuration
+				.with_value("root_urlconf", serde_json::json!(""))
+				// Media files
+				.with_value("media_root", serde_json::json!(null))
 				// Admin/Manager contacts
 				.with_value("admins", serde_json::json!([]))
 				.with_value("managers", serde_json::json!([])),
@@ -378,8 +384,8 @@ fn generate_random_secret_key() -> String {
 	use rand::Rng;
 	use std::fmt::Write;
 
-	let mut rng = rand::thread_rng();
-	let bytes: [u8; 25] = rng.r#gen();
+	let mut rng = rand::rng();
+	let bytes: [u8; 25] = rng.random();
 	let mut hex_string = String::with_capacity(50);
 	for b in bytes {
 		let _ = write!(hex_string, "{:02x}", b);

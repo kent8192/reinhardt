@@ -14,17 +14,49 @@ Learn how to serialize and deserialize data in Reinhardt.
 
 First, add Reinhardt to your project's `Cargo.toml`:
 
-```toml
+{% versioned_code(lang="toml") %}
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.18", package = "reinhardt-web", features = ["standard", "serializers"] }
-# Or for minimal setup: reinhardt = { version = "0.1.0-alpha.18", package = "reinhardt-web", default-features = false, features = ["minimal", "serializers"] }
+reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web", features = ["standard"] }
+# Or for minimal setup: reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
 chrono = { version = "0.4", features = ["serde"] }
-```
+{% end %}
 
 **Note:** Reinhardt uses feature flags to control which components are included in your build. The `standard` feature includes serializers, ORM, authentication, and other common API development tools. For more granular control, see the [Feature Flags Guide](/docs/feature-flags/).
+
+## Defining the Snippet Model
+
+First, define the Snippet model using Reinhardt's `#[model(...)]` attribute. This automatically implements the `Model` trait, generates type-safe field accessors, and registers the model globally:
+
+```rust
+use chrono::{DateTime, Utc};
+use reinhardt::prelude::*;
+use serde::{Serialize, Deserialize};
+
+/// Snippet model representing a code snippet
+#[derive(Serialize, Deserialize)]
+#[model(app_label = "snippets", table_name = "snippets")]
+pub struct Snippet {
+	#[field(primary_key = true)]
+	pub id: i64,
+
+	#[field(max_length = 100)]
+	pub title: String,
+
+	#[field(max_length = 10000)]
+	pub code: String,
+
+	#[field(max_length = 50)]
+	pub language: String,
+
+	#[field(auto_now_add = true)]
+	pub created_at: DateTime<Utc>,
+}
+```
+
+The `#[model(...)]` attribute automatically derives the `Model` trait -- you do not need `#[derive(Model)]` separately. Field attributes like `primary_key`, `max_length`, and `auto_now_add` define database schema constraints.
 
 ## Basic Serialization with Serde
 
@@ -42,43 +74,52 @@ pub struct Snippet {
 }
 ```
 
-## Custom Validation with Serializer Trait
+## Custom Serialization with the Serializer Trait
 
-For custom validation logic, implement the `Serializer` trait:
+For custom serialization logic, implement the `Serializer` trait. Validation can be handled by a separate function:
 
 ```rust
 use reinhardt::prelude::*;
 
 pub struct SnippetSerializer;
 
-impl Serializer<Snippet> for SnippetSerializer {
-    fn validate(&self, instance: &Snippet) -> ValidationResult {
-        let mut errors = Vec::new();
+impl Serializer for SnippetSerializer {
+    type Input = Snippet;
+    type Output = Vec<u8>;
 
-        // Validate title length
-        if instance.title.is_empty() {
-            errors.push(ValidationError::new("title", "Title cannot be empty"));
-        }
+    fn serialize(&self, input: &Self::Input) -> Result<Self::Output, SerializerError> {
+        serde_json::to_vec(input).map_err(|e| SerializerError::SerializeError(e.to_string()))
+    }
 
-        // Validate code
-        if instance.code.is_empty() {
-            errors.push(ValidationError::new("code", "Code cannot be empty"));
-        }
+    fn deserialize(&self, output: &Self::Output) -> Result<Self::Input, SerializerError> {
+        serde_json::from_slice(output).map_err(|e| SerializerError::DeserializeError(e.to_string()))
+    }
+}
 
-        // Validate language
-        let valid_languages = ["python", "rust", "javascript"];
-        if !valid_languages.contains(&instance.language.as_str()) {
-            errors.push(ValidationError::new(
-                "language",
-                "Language must be python, rust, or javascript"
-            ));
-        }
+// For custom validation, use a separate validation function:
+fn validate_snippet(snippet: &Snippet) -> Result<(), Vec<ValidationError>> {
+    let mut errors = Vec::new();
 
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
+    if snippet.title.is_empty() {
+        errors.push(ValidationError::field_error("title", "Title cannot be empty"));
+    }
+
+    if snippet.code.is_empty() {
+        errors.push(ValidationError::field_error("code", "Code cannot be empty"));
+    }
+
+    let valid_languages = ["python", "rust", "javascript"];
+    if !valid_languages.contains(&snippet.language.as_str()) {
+        errors.push(ValidationError::field_error(
+            "language",
+            "Language must be python, rust, or javascript"
+        ));
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
     }
 }
 ```
@@ -142,11 +183,11 @@ best fits your use case.
 
 ### Pattern 1: Simple Serde (Most Common)
 
-For basic validation with standard rules, use serde with the `validator` crate:
+For basic validation with standard rules, use serde with Reinhardt's built-in validation:
 
 ```rust
 use serde::{Serialize, Deserialize};
-use validator::Validate;
+use reinhardt::Validate;
 
 #[derive(Serialize, Deserialize, Validate)]
 pub struct CreateUserRequest {
@@ -173,45 +214,118 @@ request.validate()?;  // Validates all fields
 **Benefits:**
 - Simple and declarative
 - Works with `#[derive]` macros
-- Well-documented validator crate
+- Well-documented validation system
+
+**Split Serializer Pattern (Input + Output):**
+
+For production APIs, separate input validation from output formatting. This pattern uses `SnippetSerializer` for request validation (with Reinhardt's built-in validation) and `SnippetResponse` for response serialization (with a `from_model()` method):
+
+```rust
+use serde::{Serialize, Deserialize};
+use reinhardt::Validate;
+
+/// Serializer for creating/updating snippets (input + validation)
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+pub struct SnippetSerializer {
+	#[validate(length(
+		min = 1,
+		max = 100,
+		message = "Title must be between 1 and 100 characters"
+	))]
+	pub title: String,
+
+	#[validate(length(
+		min = 1,
+		max = 10000,
+		message = "Code must be between 1 and 10000 characters"
+	))]
+	pub code: String,
+
+	#[validate(length(
+		min = 1,
+		max = 50,
+		message = "Language must be between 1 and 50 characters"
+	))]
+	pub language: String,
+}
+
+/// Response serializer for snippets (output + formatting)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnippetResponse {
+	pub id: i64,
+	pub title: String,
+	pub code: String,
+	pub language: String,
+	pub highlighted: String,
+}
+
+impl SnippetResponse {
+	pub fn from_model(snippet: &Snippet) -> Self {
+		Self {
+			id: snippet.id,
+			title: snippet.title.clone(),
+			code: snippet.code.clone(),
+			language: snippet.language.clone(),
+			highlighted: snippet.highlighted(),
+		}
+	}
+}
+```
+
+Key advantages of this split pattern:
+- **Input validation** is declarative using `#[validate(...)]` attributes
+- **Output formatting** is separate, allowing fields like `highlighted` that are computed from the model
+- The `from_model()` method provides a clean conversion from database model to API response
 
 ---
 
-### Pattern 2: Custom `Serializer` Trait
+### Pattern 2: Custom `Serializer` Trait with Validation
 
-For complex validation logic or business rules:
+For custom serialization with complex validation logic or business rules:
 
 ```rust
 use reinhardt::prelude::*;
 
 pub struct UserSerializer;
 
-impl Serializer<User> for UserSerializer {
-    fn validate(&self, instance: &User) -> ValidationResult {
-        let mut errors = Vec::new();
+impl Serializer for UserSerializer {
+    type Input = User;
+    type Output = Vec<u8>;
 
-        // Complex business rule: username must not contain admin keywords
-        if instance.username.to_lowercase().contains("admin") {
-            errors.push(ValidationError::new(
-                "username",
-                "Username cannot contain 'admin'"
-            ));
-        }
+    fn serialize(&self, input: &Self::Input) -> Result<Self::Output, SerializerError> {
+        serde_json::to_vec(input).map_err(|e| SerializerError::SerializeError(e.to_string()))
+    }
 
-        // Database lookup validation (async)
-        // Check if username is already taken
-        if User::exists_by_username(&instance.username).await {
-            errors.push(ValidationError::new(
-                "username",
-                "Username already taken"
-            ));
-        }
+    fn deserialize(&self, output: &Self::Output) -> Result<Self::Input, SerializerError> {
+        serde_json::from_slice(output).map_err(|e| SerializerError::DeserializeError(e.to_string()))
+    }
+}
 
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
+// For complex business rules, use a separate validation function:
+async fn validate_user(user: &User) -> Result<(), Vec<ValidationError>> {
+    let mut errors = Vec::new();
+
+    // Complex business rule: username must not contain admin keywords
+    if user.username.to_lowercase().contains("admin") {
+        errors.push(ValidationError::field_error(
+            "username",
+            "Username cannot contain 'admin'"
+        ));
+    }
+
+    // Database lookup validation (async)
+    // Check if username is already taken
+    if User::exists_by_username(&user.username).await {
+        errors.push(ValidationError::field_error(
+            "username",
+            "Username already taken"
+        ));
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
     }
 }
 ```
@@ -276,7 +390,7 @@ for a complete GraphQL implementation with `InputObject`.
 
 | Use Case | Pattern | Crate |
 |----------|---------|-------|
-| **REST API with standard validation** | Pattern 1 | `serde` + `validator` |
+| **REST API with standard validation** | Pattern 1 | `serde` + `reinhardt::Validate` |
 | **Complex business rules** | Pattern 2 | `reinhardt::Serializer` |
 | **GraphQL API** | Pattern 3 | `async-graphql::InputObject` |
 
@@ -288,7 +402,7 @@ for a complete GraphQL implementation with `InputObject`.
 
 2. Do you need complex validation (database lookups, custom logic)?
    - **Yes** → Use Pattern 2 (Custom `Serializer`)
-   - **No** → Use Pattern 1 (Simple Serde + `validator`)
+   - **No** → Use Pattern 1 (Simple Serde + built-in validation)
 
 For most REST APIs, **Pattern 1** is the recommended starting point.
 
@@ -307,18 +421,18 @@ pub struct User {
     pub age: i32,
 }
 
-let validator = |user: &User| -> ValidationResult {
+fn validate_user(user: &User) -> Result<(), Vec<ValidationError>> {
     let mut errors = Vec::new();
 
     if user.username.len() < 3 {
-        errors.push(ValidationError::new(
+        errors.push(ValidationError::field_error(
             "username",
             "Username must be at least 3 characters"
         ));
     }
 
     if user.age < 18 {
-        errors.push(ValidationError::new(
+        errors.push(ValidationError::field_error(
             "age",
             "User must be at least 18 years old"
         ));
@@ -329,9 +443,7 @@ let validator = |user: &User| -> ValidationResult {
     } else {
         Err(errors)
     }
-};
-
-let serializer = ModelSerializer::new(validator);
+}
 
 // Valid data
 let valid_user = User {
@@ -340,7 +452,7 @@ let valid_user = User {
     email: "alice@example.com".to_string(),
     age: 25,
 };
-assert!(serializer.validate(&valid_user).is_ok());
+assert!(validate_user(&valid_user).is_ok());
 
 // Invalid data
 let invalid_user = User {
@@ -349,7 +461,7 @@ let invalid_user = User {
     email: "bob@example.com".to_string(),
     age: 16,  // Too young
 };
-assert!(serializer.validate(&invalid_user).is_err());
+assert!(validate_user(&invalid_user).is_err());
 ```
 
 ## Nested Serializers
@@ -391,24 +503,40 @@ let json = serializer.serialize(&article).unwrap();
 Typical validation workflow in an API view with Reinhardt:
 
 ```rust
-use reinhardt::prelude::*;
-use reinhardt::{post, Json};
+use json::json;
+use reinhardt::core::serde::json;
+use reinhardt::ViewResult;
+use reinhardt::{post, Json, Response, StatusCode};
+use reinhardt::Validate;
 
-#[post("/snippets", name = "create_snippet")]
-async fn create_snippet(Json(snippet): Json<Snippet>) -> Result<Response> {
+#[post("/snippets/", name = "snippets_create")]
+async fn create_snippet(
+    Json(serializer): Json<SnippetSerializer>,
+) -> ViewResult<Response> {
     // 1. Validate the data
-    let validator = SnippetSerializer;
-    if let Err(errors) = validator.validate(&snippet) {
-        return Response::bad_request()
-            .with_json(&errors);
-    }
+    serializer.validate()?;
 
     // 2. Save to database (using Reinhardt ORM)
-    snippet.save(&conn).await?;
+    // let snippet = Manager::<Snippet>::new().create(...).await?;
+
+    // Demo mode: Create a mock snippet with a sample ID
+    let snippet = Snippet {
+        id: 4,
+        title: serializer.title.clone(),
+        code: serializer.code.clone(),
+        language: serializer.language.clone(),
+        created_at: Utc::now(),
+    };
 
     // 3. Return response with created status
-    Response::new(201)
-        .with_json(&snippet)
+    let response_data = json!({
+        "message": "Snippet created",
+        "snippet": SnippetResponse::from_model(&snippet)
+    });
+    let json = json::to_string(&response_data)?;
+    Ok(Response::new(StatusCode::CREATED)
+        .with_header("Content-Type", "application/json")
+        .with_body(json))
 }
 ```
 

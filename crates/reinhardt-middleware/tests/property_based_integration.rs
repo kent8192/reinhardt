@@ -108,15 +108,7 @@ proptest! {
 		rt.block_on(async {
 			use reinhardt_middleware::rate_limit::{RateLimitConfig, RateLimitMiddleware, RateLimitStrategy};
 
-			let config = RateLimitConfig {
-				capacity,
-				refill_rate,
-				cost_per_request: 1.0,
-				strategy: RateLimitStrategy::PerIp,
-				exclude_paths: vec![],
-				error_message: None,
-				trusted_proxies: vec![],
-			};
+			let config = RateLimitConfig::new(RateLimitStrategy::PerIp, capacity, refill_rate);
 
 			let middleware = Arc::new(RateLimitMiddleware::new(config));
 			let handler = Arc::new(ConfigurableTestHandler::always_success());
@@ -145,15 +137,7 @@ proptest! {
 		rt.block_on(async {
 			use reinhardt_middleware::rate_limit::{RateLimitConfig, RateLimitMiddleware, RateLimitStrategy};
 
-			let config = RateLimitConfig {
-				capacity,
-				refill_rate,
-				cost_per_request: 1.0,
-				strategy: RateLimitStrategy::PerIp,
-				exclude_paths: vec![],
-				error_message: None,
-				trusted_proxies: vec![],
-			};
+			let config = RateLimitConfig::new(RateLimitStrategy::PerIp, capacity, refill_rate);
 
 			let middleware = Arc::new(RateLimitMiddleware::new(config));
 			let handler = Arc::new(ConfigurableTestHandler::always_success());
@@ -187,18 +171,13 @@ proptest! {
 		use reinhardt_middleware::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerMiddleware, CircuitState};
 		use std::time::Duration;
 
-		let config = CircuitBreakerConfig {
-			error_threshold,
-			min_requests,
-			timeout: Duration::from_secs(60),
-			half_open_success_threshold: 3,
-			error_message: None,
-		};
+		let config = CircuitBreakerConfig::new(error_threshold, min_requests, Duration::from_secs(60))
+			.with_half_open_success_threshold(3);
 
 		let middleware = CircuitBreakerMiddleware::new(config);
 
 		// State should be one of the valid states
-		let state = middleware.get_state();
+		let state = middleware.state();
 		assert!(matches!(state, CircuitState::Closed | CircuitState::Open | CircuitState::HalfOpen));
 	}
 
@@ -213,13 +192,8 @@ proptest! {
 			use reinhardt_middleware::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerMiddleware};
 			use std::time::Duration;
 
-			let config = CircuitBreakerConfig {
-				error_threshold,
-				min_requests,
-				timeout: Duration::from_secs(60),
-				half_open_success_threshold: 3,
-				error_message: None,
-			};
+			let config = CircuitBreakerConfig::new(error_threshold, min_requests, Duration::from_secs(60))
+				.with_half_open_success_threshold(3);
 
 			let middleware = Arc::new(CircuitBreakerMiddleware::new(config));
 			let handler = Arc::new(ConfigurableTestHandler::always_success());
@@ -335,9 +309,7 @@ proptest! {
 			use reinhardt_middleware::timeout::{TimeoutConfig, TimeoutMiddleware};
 			use std::time::Duration;
 
-			let config = TimeoutConfig {
-				duration: Duration::from_millis(timeout_ms),
-			};
+			let config = TimeoutConfig::new(Duration::from_millis(timeout_ms));
 
 			let middleware = Arc::new(TimeoutMiddleware::new(config));
 			let handler = Arc::new(ConfigurableTestHandler::always_success());

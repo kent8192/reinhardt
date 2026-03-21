@@ -8,7 +8,8 @@ use std::fmt;
 pub type Result<T> = std::result::Result<T, NoSQLError>;
 
 /// Unified error type for NoSQL operations
-#[derive(Debug)]
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NoSQLError {
 	/// Connection error
 	ConnectionError(String),
@@ -114,6 +115,7 @@ impl From<redis::RedisError> for NoSQLError {
 pub type OdmResult<T> = std::result::Result<T, OdmError>;
 
 /// Error type for ODM operations.
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum OdmError {
 	/// Validation failed.
@@ -127,7 +129,10 @@ pub enum OdmError {
 	NotFound,
 
 	/// Duplicate key error.
-	DuplicateKey { field: String },
+	DuplicateKey {
+		/// The field that caused the duplicate key error.
+		field: String,
+	},
 
 	/// Serialization error.
 	Serialization(String),
@@ -227,7 +232,8 @@ impl From<bson::error::Error> for OdmError {
 }
 
 /// Validation error type.
-#[derive(Debug)]
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
 	/// Required field is missing or empty.
 	Required(&'static str),
@@ -240,8 +246,11 @@ pub enum ValidationError {
 
 	/// Value out of range.
 	OutOfRange {
+		/// The field name.
 		field: &'static str,
+		/// The minimum allowed value.
 		min: i64,
+		/// The maximum allowed value.
 		max: i64,
 	},
 

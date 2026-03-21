@@ -66,7 +66,10 @@ impl BaseCommand for StartProjectCommand {
 
 		// Determine project type
 		let is_restful = ctx.has_option("restful");
-		let with_pages = ctx.has_option("with-pages");
+		let with_pages = ctx.has_option("with-pages")
+			|| ctx
+				.option("type")
+				.is_some_and(|t| t == "mtv" || t == "pages");
 
 		// Validate exclusive flags
 		if is_restful && with_pages {
@@ -93,7 +96,12 @@ impl BaseCommand for StartProjectCommand {
 		// Prepare template context
 		let mut context = TemplateContext::new();
 		context.insert("project_name", &project_name)?;
+		context.insert("crate_name", project_name.replace('-', "_"))?;
 		context.insert("secret_key", &secret_key)?;
+		context.set_example_override(
+			"secret_key",
+			"CHANGE_THIS_IN_PRODUCTION_MUST_BE_KEPT_SECRET",
+		)?;
 		context.insert("camel_case_project_name", to_camel_case(&project_name))?;
 		context.insert("reinhardt_version", env!("CARGO_PKG_VERSION"))?;
 		context.insert("is_restful", if !with_pages { "true" } else { "false" })?;
@@ -194,7 +202,10 @@ impl BaseCommand for StartAppCommand {
 
 		// Determine app type and structure
 		let is_restful = ctx.has_option("restful");
-		let with_pages = ctx.has_option("with-pages");
+		let with_pages = ctx.has_option("with-pages")
+			|| ctx
+				.option("type")
+				.is_some_and(|t| t == "mtv" || t == "pages");
 		let is_workspace = ctx.has_option("workspace");
 
 		// Validate exclusive flags
@@ -245,7 +256,9 @@ impl BaseCommand for StartAppCommand {
 			}
 
 			// Set target to src/apps/{app_name} if no custom target is specified
-			let app_target = if target.is_some() {
+			// Track whether a custom target was provided before consuming target
+			let has_custom_target = target.is_some();
+			let app_target = if has_custom_target {
 				target
 			} else {
 				Some(apps_dir.join(&app_name))
@@ -275,6 +288,37 @@ impl BaseCommand for StartAppCommand {
 				context,
 				ctx,
 			)?;
+
+			// Rust 2024 Edition: rename {app_name}/lib.rs -> {app_name}.rs
+			// Module entry points must be named after the module, not lib.rs.
+			// lib.rs is only special at the crate root.
+			// Only apply this rename for the default location (src/apps/{name}/);
+			// when a custom target is specified, preserve lib.rs in that location.
+			if !has_custom_target && let Some(ref target_path) = app_target {
+				let lib_rs_path = target_path.join("lib.rs");
+				if lib_rs_path.exists() {
+					// The module entry point goes one level up, alongside the subdirectory
+					let module_rs_path = target_path
+						.parent()
+						.map(|parent| parent.join(format!("{}.rs", app_name)))
+						.ok_or_else(|| {
+							CommandError::ExecutionError(format!(
+								"Failed to determine parent directory for '{}'",
+								target_path.display()
+							))
+						})?;
+					std::fs::rename(&lib_rs_path, &module_rs_path).map_err(|e| {
+						CommandError::ExecutionError(format!(
+							"Failed to move lib.rs to {}.rs: {}",
+							app_name, e
+						))
+					})?;
+					ctx.verbose(&format!(
+						"Moved {}/lib.rs -> {}.rs (Rust 2024 Edition module convention)",
+						app_name, app_name
+					));
+				}
+			}
 
 			// Update or create apps.rs to export the new app
 			update_apps_export(&app_name)?;
@@ -522,7 +566,8 @@ fn update_apps_export(app_name: &str) -> CommandResult<()> {
 		ast.items.push(Item::Mod(mod_item));
 
 		// Add use declaration: pub use app_name::AppNameConfig;
-		let config_ident = syn::Ident::new(&camel_case_name, proc_macro2::Span::call_site());
+		let config_name = format!("{}Config", camel_case_name);
+		let config_ident = syn::Ident::new(&config_name, proc_macro2::Span::call_site());
 		let use_item: ItemUse = syn::parse_quote! {
 			pub use #app_ident::#config_ident;
 		};
@@ -706,5 +751,33 @@ mod tests {
 
 		assert_eq!(content_with_example, "debug = false\n");
 		assert_eq!(content_without_example, "debug = false\n");
+	}
+
+	#[rstest]
+	fn test_startproject_type_option_mtv() {
+		// Arrange
+		let cmd = StartProjectCommand;
+		let options = cmd.options();
+
+		// Act & Assert
+		// Verify that the --with-pages flag exists, which is the target
+		// for type option "mtv" / "pages" mapping
+		assert!(
+			options.iter().any(|opt| opt.long == "with-pages"),
+			"--with-pages flag should exist for mtv type mapping"
+		);
+	}
+
+	#[rstest]
+	fn test_startapp_type_option_mtv() {
+		// Arrange
+		let cmd = StartAppCommand;
+		let options = cmd.options();
+
+		// Act & Assert
+		assert!(
+			options.iter().any(|opt| opt.long == "with-pages"),
+			"--with-pages flag should exist in StartAppCommand for mtv type mapping"
+		);
 	}
 }

@@ -1023,7 +1023,7 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 					quote! { #migrations_crate::FieldType::Boolean }
 				}
 				"DateTime" => {
-					quote! { #migrations_crate::FieldType::DateTime }
+					quote! { #migrations_crate::FieldType::TimestampTz }
 				}
 				"Date" => {
 					quote! { #migrations_crate::FieldType::Date }
@@ -2533,6 +2533,30 @@ fn generate_registration_code(
 		if config.primary_key {
 			params.push(quote! { .with_param("primary_key", "true") });
 		}
+
+		// auto_increment: default true for primary_key fields (Django-compatible)
+		if config.primary_key {
+			let auto_inc = config.auto_increment.unwrap_or(true);
+			if auto_inc {
+				params.push(quote! { .with_param("auto_increment", "true") });
+			}
+		} else if let Some(true) = config.auto_increment {
+			params.push(quote! { .with_param("auto_increment", "true") });
+		}
+
+		// not_null: infer from Rust Option type
+		let (is_option, _) = extract_option_type(&field_info.ty);
+		let is_not_null = if let Some(null) = config.null {
+			!null
+		} else if config.primary_key {
+			true
+		} else {
+			!is_option
+		};
+		if is_not_null {
+			params.push(quote! { .with_param("not_null", "true") });
+		}
+
 		if let Some(max_length) = config.max_length {
 			let ml_str = max_length.to_string();
 			params.push(quote! { .with_param("max_length", #ml_str) });
@@ -2545,6 +2569,31 @@ fn generate_registration_code(
 			&& unique
 		{
 			params.push(quote! { .with_param("unique", "true") });
+		}
+		// Infer nullable from Rust type when not explicitly set
+		if config.null.is_none() {
+			let (is_option, _) = extract_option_type(&field_info.ty);
+			if is_option {
+				params.push(quote! { .with_param("null", "true") });
+			} else {
+				params.push(quote! { .with_param("null", "false") });
+			}
+		}
+		// auto_increment: explicit value or default true for integer PKs
+		if config.primary_key && is_integer_primary_key_type(&field_info.ty) {
+			let auto_inc = config.auto_increment.unwrap_or(true);
+			let auto_inc_str = auto_inc.to_string();
+			params.push(quote! { .with_param("auto_increment", #auto_inc_str) });
+		} else if let Some(auto_increment) = config.auto_increment {
+			let auto_inc_str = auto_increment.to_string();
+			params.push(quote! { .with_param("auto_increment", #auto_inc_str) });
+		}
+		// auto_now / auto_now_add params
+		if config.auto_now == Some(true) {
+			params.push(quote! { .with_param("auto_now", "true") });
+		}
+		if config.auto_now_add == Some(true) {
+			params.push(quote! { .with_param("auto_now_add", "true") });
 		}
 
 		// Generate ForeignKey information if present

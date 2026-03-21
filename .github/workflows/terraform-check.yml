@@ -1,0 +1,45 @@
+name: Terraform Check
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  terraform:
+    name: Terraform (${{ matrix.module.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - name: website
+            path: infra/website
+          - name: github-runners
+            path: infra/github-runners
+          - name: github-runners-bootstrap
+            path: infra/github-runners/bootstrap
+          - name: organizations
+            path: infra/organizations
+          - name: repository
+            path: infra/repository
+    defaults:
+      run:
+        working-directory: ${{ matrix.module.path }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~> 1.10"
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive -diff
+
+      - name: Terraform Init (backend-free)
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        run: terraform validate

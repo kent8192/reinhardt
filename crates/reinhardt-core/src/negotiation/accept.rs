@@ -5,6 +5,7 @@ use super::media_type::MediaType;
 /// Represents an Accept header
 #[derive(Debug, Clone)]
 pub struct AcceptHeader {
+	/// Parsed media types sorted by quality factor (highest first).
 	pub media_types: Vec<MediaType>,
 }
 
@@ -23,7 +24,7 @@ impl AcceptHeader {
 	///
 	/// let complex = AcceptHeader::parse("text/html, application/json; q=0.8, */*; q=0.1");
 	/// assert_eq!(complex.media_types.len(), 3);
-	// Sorted by quality
+	/// // Sorted by quality
 	/// assert_eq!(complex.media_types[0].subtype, "html");
 	/// ```
 	pub fn parse(header: &str) -> Self {
@@ -33,7 +34,12 @@ impl AcceptHeader {
 			.collect();
 
 		// Sort by quality (highest first)
-		media_types.sort_by(|a, b| b.quality.partial_cmp(&a.quality).unwrap());
+		// Non-finite values are rejected at parse time; unwrap_or is a safety net
+		media_types.sort_by(|a, b| {
+			b.quality
+				.partial_cmp(&a.quality)
+				.unwrap_or(std::cmp::Ordering::Equal)
+		});
 
 		Self { media_types }
 	}
@@ -88,6 +94,7 @@ impl AcceptHeader {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_parse_accept_header() {
@@ -105,5 +112,20 @@ mod tests {
 		];
 		let best = accept.find_best_match(&available);
 		assert!(best.is_some());
+	}
+
+	#[rstest]
+	#[case("text/html;q=NaN", 0)]
+	#[case("text/html;q=NaN, application/json", 1)]
+	#[case("text/html, application/json;q=NaN", 1)]
+	fn test_parse_does_not_panic_on_nan_quality(#[case] input: &str, #[case] expected_len: usize) {
+		// Arrange
+		// (input provided by rstest case)
+
+		// Act
+		let accept = AcceptHeader::parse(input);
+
+		// Assert
+		assert_eq!(accept.media_types.len(), expected_len);
 	}
 }

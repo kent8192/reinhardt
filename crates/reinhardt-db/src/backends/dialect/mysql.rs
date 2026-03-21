@@ -18,12 +18,14 @@ pub struct MySqlBackend {
 }
 
 impl MySqlBackend {
+	/// Creates a new MySQL backend with the given pool.
 	pub fn new(pool: MySqlPool) -> Self {
 		Self {
 			pool: Arc::new(pool),
 		}
 	}
 
+	/// Returns a reference to the underlying MySQL pool.
 	pub fn pool(&self) -> &MySqlPool {
 		&self.pool
 	}
@@ -65,7 +67,12 @@ impl MySqlBackend {
 			} else if let Ok(value) = mysql_row.try_get::<String, _>(column_name) {
 				row.insert(column_name.to_string(), QueryValue::String(value));
 			} else if let Ok(value) = mysql_row.try_get::<Vec<u8>, _>(column_name) {
-				row.insert(column_name.to_string(), QueryValue::Bytes(value));
+				// MySQL 8.0 information_schema returns binary collation columns that
+				// sqlx reports as LONGBLOB. Attempt UTF-8 conversion to recover string data.
+				match String::from_utf8(value.clone()) {
+					Ok(s) => row.insert(column_name.to_string(), QueryValue::String(s)),
+					Err(_) => row.insert(column_name.to_string(), QueryValue::Bytes(value)),
+				};
 			} else if let Ok(value) = mysql_row.try_get::<chrono::NaiveDateTime, _>(column_name) {
 				// MySQL TIMESTAMP/DATETIME without timezone
 				row.insert(
@@ -176,6 +183,7 @@ pub struct MySqlTransactionExecutor {
 }
 
 impl MySqlTransactionExecutor {
+	/// Creates a new MySQL transaction executor.
 	pub fn new(tx: Transaction<'static, MySql>) -> Self {
 		Self { tx: Some(tx) }
 	}
@@ -213,7 +221,12 @@ impl MySqlTransactionExecutor {
 			} else if let Ok(value) = mysql_row.try_get::<String, _>(column_name) {
 				row.insert(column_name.to_string(), QueryValue::String(value));
 			} else if let Ok(value) = mysql_row.try_get::<Vec<u8>, _>(column_name) {
-				row.insert(column_name.to_string(), QueryValue::Bytes(value));
+				// MySQL 8.0 information_schema returns binary collation columns that
+				// sqlx reports as LONGBLOB. Attempt UTF-8 conversion to recover string data.
+				match String::from_utf8(value.clone()) {
+					Ok(s) => row.insert(column_name.to_string(), QueryValue::String(s)),
+					Err(_) => row.insert(column_name.to_string(), QueryValue::Bytes(value)),
+				};
 			} else if let Ok(value) = mysql_row.try_get::<chrono::NaiveDateTime, _>(column_name) {
 				row.insert(
 					column_name.to_string(),

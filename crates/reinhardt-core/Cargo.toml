@@ -1,11 +1,15 @@
 [package]
 name = "reinhardt-core"
-version = "0.1.0-alpha.8"
+version = "0.1.0-rc.13"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
 description = "Core components for Reinhardt framework"
+keywords = ["web", "framework", "django", "rust", "async"]
+categories = ["web-programming", "web-programming::http-server"]
+readme = "README.md"
+documentation = "https://docs.rs/reinhardt-core"
 
 [dependencies]
 # Re-export all internal crates
@@ -20,7 +24,6 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 serde_urlencoded = { workspace = true }
 http = { workspace = true }
-validator = "0.20"
 base64 = "0.22"
 percent-encoding = "2.3"
 url = "2.5"
@@ -40,7 +43,7 @@ aquamarine = { workspace = true }
 sha2 = "0.10"
 hmac = "0.12"
 hex = "0.4"
-rand = "0.9"
+rand = { workspace = true }
 ipnet = "2.10"
 regex = "1.11"
 chrono = { workspace = true }
@@ -48,7 +51,7 @@ once_cell = "1.20"
 typed-arena = "2.0"
 serde-xml-rs = { version = "0.8.1", optional = true }
 parking_lot = "0.12"
-uuid = { version = "1.0", features = ["v4", "serde"] }
+tracing = { workspace = true }
 fluent-bundle = { version = "0.15", optional = true }
 image = "0.25"
 
@@ -59,11 +62,14 @@ hyper = { workspace = true }
 jsonschema = { version = "0.26", optional = true }
 rayon = { version = "1.10", optional = true }
 unic-langid = { version = "0.9", optional = true }
+uuid = { version = "1.0", features = ["v4", "serde"] }
 
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3", features = ["Event"] }
 wasm-bindgen = "0.2"
+uuid = { version = "1.0", features = ["v4", "serde", "js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [features]
 default = [
@@ -81,7 +87,7 @@ types = []
 exception = []
 signals = ["serde"]
 security = []
-validators = []
+validators = ["serde"]
 serializers = ["serde"]
 messages = []
 negotiation = []
@@ -125,6 +131,7 @@ parallel = ["dep:rayon"]
 i18n = ["dep:fluent-bundle", "dep:unic-langid"]
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio = { version = "1", features = ["full", "macros", "rt", "test-util"] }
 bytes = "1.0"
 hyper = "1.0"

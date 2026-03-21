@@ -10,26 +10,34 @@ pub use crate::backends::connection::DatabaseConnection as BackendsConnection;
 pub use crate::backends::types::{IsolationLevel, QueryValue, Row, TransactionExecutor};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Defines possible database backend values.
 pub enum DatabaseBackend {
+	/// Postgres variant.
 	Postgres,
+	/// MySql variant.
 	MySql,
+	/// Sqlite variant.
 	Sqlite,
 }
 
 /// Query row wrapper for ORM compatibility
 #[derive(serde::Serialize)]
 pub struct QueryRow {
+	/// The data.
 	pub data: serde_json::Value,
+	// Allow dead_code: field reserved for future connection metadata tracking
 	#[allow(dead_code)]
 	#[serde(skip)]
 	inner: Option<Row>,
 }
 
 impl QueryRow {
+	/// Creates a new instance.
 	pub fn new(data: serde_json::Value) -> Self {
 		Self { data, inner: None }
 	}
 
+	/// Creates an instance from backend row.
 	pub fn from_backend_row(row: Row) -> Self {
 		// Convert Row to JSON for backward compatibility
 		let mut map = serde_json::Map::new();
@@ -73,8 +81,11 @@ impl QueryRow {
 }
 
 #[async_trait]
+/// Trait defining database executor behavior.
 pub trait DatabaseExecutor: Send + Sync {
+	/// Executes a SQL statement and returns the number of affected rows.
 	async fn execute(&self, sql: &str) -> Result<u64, anyhow::Error>;
+	/// Executes a SQL query and returns the resulting rows.
 	async fn query(&self, sql: &str) -> Result<Vec<QueryRow>, anyhow::Error>;
 }
 
@@ -86,6 +97,7 @@ pub struct DatabaseConnection {
 }
 
 impl DatabaseConnection {
+	/// Creates a new instance.
 	pub fn new(backend: DatabaseBackend, inner: BackendsConnection) -> Self {
 		Self { backend, inner }
 	}
@@ -249,6 +261,7 @@ impl DatabaseConnection {
 		))
 	}
 
+	/// Performs the backend operation.
 	pub fn backend(&self) -> DatabaseBackend {
 		self.backend
 	}

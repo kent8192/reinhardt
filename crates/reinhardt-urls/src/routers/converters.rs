@@ -37,8 +37,10 @@ use thiserror::Error;
 /// Error type for converter validation failures
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ConverterError {
+	/// The input value has an invalid format for this converter.
 	#[error("Invalid format: {0}")]
 	InvalidFormat(String),
+	/// The input value is outside the allowed range.
 	#[error("Value out of range: {0}")]
 	OutOfRange(String),
 }
@@ -202,8 +204,10 @@ impl UuidConverter {
 	fn regex() -> &'static Regex {
 		static REGEX: OnceLock<Regex> = OnceLock::new();
 		REGEX.get_or_init(|| {
-			Regex::new(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-				.expect("Invalid UUID regex pattern")
+			Regex::new(
+				r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+			)
+			.expect("Invalid UUID regex pattern")
 		})
 	}
 }
@@ -227,7 +231,7 @@ impl Converter for UuidConverter {
 	}
 
 	fn pattern(&self) -> &str {
-		r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+		r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 	}
 }
 
@@ -586,6 +590,7 @@ impl Converter for FloatConverter {
 mod tests {
 	use super::*;
 	use chrono::Datelike;
+	use rstest::rstest;
 
 	#[test]
 	fn test_integer_converter_basic() {
@@ -647,7 +652,7 @@ mod tests {
 		assert!(!conv.validate("not-a-uuid"));
 		assert!(!conv.validate("550e8400-e29b-41d4-a716")); // Too short
 		assert!(!conv.validate("550e8400-e29b-41d4-a716-446655440000-extra")); // Too long
-		assert!(!conv.validate("550E8400-E29B-41D4-A716-446655440000")); // Uppercase
+		assert!(conv.validate("550E8400-E29B-41D4-A716-446655440000")); // Uppercase (RFC 4122)
 	}
 
 	#[test]
@@ -695,7 +700,7 @@ mod tests {
 		assert_eq!(int_conv.pattern(), r"-?\d+");
 		assert_eq!(
 			uuid_conv.pattern(),
-			r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+			r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 		);
 		assert_eq!(slug_conv.pattern(), r"[a-z0-9]+(-[a-z0-9]+)*");
 	}
@@ -918,5 +923,55 @@ mod tests {
 		assert!(conv.convert("%2e%2e/etc/passwd").is_err());
 		assert!(conv.convert("foo%2fbar").is_err());
 		assert!(conv.convert("foo%5cbar").is_err());
+	}
+
+	// ===================================================================
+	// UUID case-insensitive validation tests (Issue #1818, RFC 4122)
+	// ===================================================================
+
+	#[rstest]
+	#[case::lowercase("550e8400-e29b-41d4-a716-446655440000")]
+	#[case::uppercase("550E8400-E29B-41D4-A716-446655440000")]
+	#[case::mixed_case("550e8400-E29B-41d4-a716-446655440000")]
+	fn test_uuid_converter_accepts_case_insensitive(#[case] uuid: &str) {
+		// Arrange
+		let conv = UuidConverter;
+
+		// Act
+		let result = conv.validate(uuid);
+
+		// Assert
+		assert!(result, "UUID '{}' should be valid per RFC 4122", uuid);
+	}
+
+	#[rstest]
+	#[case::lowercase("550e8400-e29b-41d4-a716-446655440000")]
+	#[case::uppercase("550E8400-E29B-41D4-A716-446655440000")]
+	#[case::mixed_case("550e8400-E29B-41d4-a716-446655440000")]
+	fn test_uuid_converter_converts_case_insensitive(#[case] uuid: &str) {
+		// Arrange
+		let conv = UuidConverter;
+
+		// Act
+		let result = conv.convert(uuid);
+
+		// Assert
+		assert_eq!(result.unwrap(), uuid);
+	}
+
+	#[rstest]
+	#[case::too_short("550e8400-e29b-41d4-a716")]
+	#[case::not_a_uuid("not-a-uuid")]
+	#[case::invalid_chars("gggggggg-gggg-gggg-gggg-gggggggggggg")]
+	#[case::missing_hyphens("550e8400e29b41d4a716446655440000")]
+	fn test_uuid_converter_rejects_invalid(#[case] value: &str) {
+		// Arrange
+		let conv = UuidConverter;
+
+		// Act
+		let result = conv.validate(value);
+
+		// Assert
+		assert!(!result, "UUID '{}' should be invalid", value);
 	}
 }

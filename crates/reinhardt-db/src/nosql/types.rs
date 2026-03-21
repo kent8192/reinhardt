@@ -122,6 +122,7 @@ impl UpdateResult {
 }
 
 /// Options for find operations in document databases
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct FindOptions {
 	/// Maximum number of documents to return

@@ -56,17 +56,19 @@ pub mod reserved;
 pub mod string;
 pub mod uniqueness;
 pub mod url;
+pub mod validate;
+pub mod validation_errors;
 
 #[cfg(feature = "serde")]
 pub mod serialization;
 
-#[cfg(feature = "jsonschema")]
+#[cfg(all(feature = "jsonschema", not(target_arch = "wasm32")))]
 pub mod schema;
 
-#[cfg(feature = "parallel")]
+#[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
 pub mod parallel;
 
-#[cfg(feature = "i18n")]
+#[cfg(all(feature = "i18n", not(target_arch = "wasm32")))]
 pub mod i18n;
 
 pub use color::{ColorFormat, ColorValidator};
@@ -91,6 +93,13 @@ pub use string::{
 };
 pub use uniqueness::UniqueValidator;
 pub use url::UrlValidator;
+pub use validate::Validate;
+pub use validation_errors::ValidationErrors;
+
+// Re-export the derive macro so `use reinhardt_core::validators::Validate` brings
+// both the trait and derive macro into scope (same pattern as serde/serde_derive).
+#[cfg(feature = "macros")]
+pub use reinhardt_macros::Validate;
 
 /// Re-export commonly used types
 pub mod prelude {
@@ -116,10 +125,16 @@ pub mod prelude {
 	};
 	pub use super::uniqueness::UniqueValidator;
 	pub use super::url::UrlValidator;
+	pub use super::validate::Validate;
+	pub use super::validation_errors::ValidationErrors;
+
+	#[cfg(feature = "macros")]
+	pub use reinhardt_macros::Validate;
 }
 
 /// Trait for validators
 pub trait Validator<T: ?Sized> {
+	/// Validates the given value, returning an error if validation fails.
 	fn validate(&self, value: &T) -> ValidationResult<()>;
 }
 

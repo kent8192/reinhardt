@@ -48,10 +48,16 @@ pub enum FieldType {
 	Date,
 	/// DateTime input
 	DateTime,
-	/// Select dropdown with choices
-	Select { choices: Vec<(String, String)> },
-	/// Multiple select
-	MultiSelect { choices: Vec<(String, String)> },
+	/// Select dropdown with choices.
+	Select {
+		/// Available choices as `(value, label)` pairs.
+		choices: Vec<(String, String)>,
+	},
+	/// Multiple select.
+	MultiSelect {
+		/// Available choices as `(value, label)` pairs.
+		choices: Vec<(String, String)>,
+	},
 	/// File upload
 	File,
 	/// Hidden field
@@ -64,12 +70,21 @@ pub enum FieldType {
 pub enum FilterType {
 	/// Boolean filter (Yes/No checkbox)
 	Boolean,
-	/// Choice filter (dropdown with predefined options)
-	Choice { choices: Vec<FilterChoice> },
-	/// Date range filter (predefined ranges like "Today", "Last 7 days")
-	DateRange { ranges: Vec<FilterChoice> },
-	/// Number range filter (predefined ranges)
-	NumberRange { ranges: Vec<FilterChoice> },
+	/// Choice filter (dropdown with predefined options).
+	Choice {
+		/// Available filter choices.
+		choices: Vec<FilterChoice>,
+	},
+	/// Date range filter (predefined ranges like "Today", "Last 7 days").
+	DateRange {
+		/// Available date range options.
+		ranges: Vec<FilterChoice>,
+	},
+	/// Number range filter (predefined ranges).
+	NumberRange {
+		/// Available number range options.
+		ranges: Vec<FilterChoice>,
+	},
 }
 
 /// Filter choice for Choice/DateRange/NumberRange filters

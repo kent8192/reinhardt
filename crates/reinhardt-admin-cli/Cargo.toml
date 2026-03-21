@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-admin-cli"
-version = "0.1.0-alpha.18"
+version = "0.1.0-rc.13"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -21,7 +21,7 @@ syn = { version = "2.0", features = ["full", "parsing", "visit"] }
 quote = "1.0"
 proc-macro2 = "1.0"
 prettyplease = "0.2"
-colored = "2.1"
+colored = { workspace = true }
 ctrlc = "3.4"
 regex = "1.10"
 reinhardt-pages = {workspace = true, features = ["ast"]}

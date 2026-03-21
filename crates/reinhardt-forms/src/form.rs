@@ -4,28 +4,40 @@ use crate::wasm_compat::ValidationRule;
 use std::collections::HashMap;
 use std::ops::Index;
 
-/// Constant-time byte comparison to prevent timing attacks on CSRF tokens.
+/// Constant-time comparison to prevent timing attacks on CSRF tokens.
+///
+/// Hashes both inputs with SHA-256 to produce fixed-length digests,
+/// then compares the digests in constant time using `subtle`. This
+/// prevents leaking the length of either input through timing.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-	if a.len() != b.len() {
-		return false;
-	}
-	let mut result = 0u8;
-	for (x, y) in a.iter().zip(b.iter()) {
-		result |= x ^ y;
-	}
-	result == 0
+	use sha2::{Digest, Sha256};
+	use subtle::ConstantTimeEq;
+
+	let hash_a = Sha256::digest(a);
+	let hash_b = Sha256::digest(b);
+	hash_a.ct_eq(&hash_b).into()
 }
 
+/// Error type returned when form-level validation fails.
 #[derive(Debug, thiserror::Error)]
 pub enum FormError {
+	/// A validation error on a specific field.
 	#[error("Field error in {field}: {error}")]
-	Field { field: String, error: FieldError },
+	Field {
+		/// Name of the field that failed validation.
+		field: String,
+		/// The underlying field error.
+		error: FieldError,
+	},
+	/// A form-level validation error not tied to a specific field.
 	#[error("Validation error: {0}")]
 	Validation(String),
+	/// No model instance is available for a save operation.
 	#[error("No model instance available for save operation")]
 	NoInstance,
 }
 
+/// Result type alias for form-level operations.
 pub type FormResult<T> = Result<T, FormError>;
 
 type CleanFunction =
@@ -272,18 +284,23 @@ impl Form {
 
 		self.errors.is_empty()
 	}
+	/// Returns the cleaned (validated) form data.
 	pub fn cleaned_data(&self) -> &HashMap<String, serde_json::Value> {
 		&self.data
 	}
+	/// Returns the current validation errors keyed by field name.
 	pub fn errors(&self) -> &HashMap<String, Vec<String>> {
 		&self.errors
 	}
+	/// Returns whether the form has been bound with submitted data.
 	pub fn is_bound(&self) -> bool {
 		self.is_bound
 	}
+	/// Returns the list of fields registered on this form.
 	pub fn fields(&self) -> &[Box<dyn FormField>] {
 		&self.fields
 	}
+	/// Returns the initial (default) values for the form.
 	pub fn initial(&self) -> &HashMap<String, serde_json::Value> {
 		&self.initial
 	}
@@ -339,16 +356,19 @@ impl Form {
 		}
 		false
 	}
+	/// Looks up a field by name, returning a reference if found.
 	pub fn get_field(&self, name: &str) -> Option<&dyn FormField> {
 		self.fields
 			.iter()
 			.find(|f| f.name() == name)
 			.map(|f| f.as_ref())
 	}
+	/// Removes and returns a field by name, or `None` if not found.
 	pub fn remove_field(&mut self, name: &str) -> Option<Box<dyn FormField>> {
 		let pos = self.fields.iter().position(|f| f.name() == name)?;
 		Some(self.fields.remove(pos))
 	}
+	/// Returns the number of fields registered on this form.
 	pub fn field_count(&self) -> usize {
 		self.fields.len()
 	}
@@ -816,12 +836,15 @@ impl Form {
 		}
 	}
 
+	/// Returns the field name prefix for this form.
 	pub fn prefix(&self) -> &str {
 		&self.prefix
 	}
+	/// Sets the field name prefix for this form.
 	pub fn set_prefix(&mut self, prefix: String) {
 		self.prefix = prefix;
 	}
+	/// Returns the field name with the form prefix prepended (e.g., "prefix-field").
 	pub fn add_prefix_to_field_name(&self, field_name: &str) -> String {
 		if self.prefix.is_empty() {
 			field_name.to_string()
@@ -889,6 +912,7 @@ impl Form {
 		html
 	}
 
+	/// Returns a `BoundField` with the field's submitted data and errors attached.
 	pub fn get_bound_field<'a>(&'a self, name: &str) -> Option<BoundField<'a>> {
 		let field = self.get_field(name)?;
 		let data = self.data.get(name);
@@ -928,6 +952,7 @@ impl Default for Form {
 impl Form {
 	// Allow borrowed_box because Index trait impl requires &Box<dyn FormField>
 	#[allow(clippy::borrowed_box)]
+	/// Looks up a field by name, returning a reference to the boxed field.
 	pub fn get(&self, name: &str) -> Option<&Box<dyn FormField>> {
 		self.fields.iter().find(|f| f.name() == name)
 	}

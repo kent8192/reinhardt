@@ -53,6 +53,7 @@ use crate::backends::PostgresTwoPhaseParticipant;
 use crate::backends::{MySqlTwoPhaseParticipant, XaSessionPrepared, XaSessionStarted};
 
 /// Errors that can occur during two-phase commit operations
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TwoPhaseError {
 	/// A participant failed during the prepare phase
@@ -188,7 +189,9 @@ pub trait TwoPhaseParticipant: Send + Sync {
 /// A participant in the distributed transaction
 #[derive(Debug, Clone)]
 pub struct Participant {
+	/// The db alias.
 	pub db_alias: String,
+	/// The status.
 	pub status: ParticipantStatus,
 }
 

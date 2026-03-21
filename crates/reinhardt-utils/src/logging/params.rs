@@ -5,8 +5,11 @@ use serde_json::Value;
 
 /// Configuration for parameter representation
 pub struct ReprParamsConfig {
+	/// Maximum number of characters to display before truncation.
 	pub max_chars: usize,
+	/// Number of batch entries to show when truncating multi-parameter sets.
 	pub batches: usize,
+	/// Whether the parameters represent multiple bound parameter sets.
 	pub is_multi: bool,
 }
 
@@ -27,12 +30,12 @@ impl Default for ReprParamsConfig {
 /// use reinhardt_utils::logging::params::{repr_params, ReprParamsConfig};
 /// use serde_json::json;
 ///
-// Simple parameter representation
+/// // Simple parameter representation
 /// let params = json!({"user_id": 42, "email": "test@example.com"});
 /// let config = ReprParamsConfig::default();
 /// let output = repr_params(&params, &config);
 ///
-// Output includes the parameter values
+/// // Output includes the parameter values
 /// assert!(output.contains("user_id"));
 /// assert!(output.contains("42"));
 /// ```
@@ -152,11 +155,11 @@ fn repr_object(obj: &serde_json::Map<String, Value>, config: &ReprParamsConfig) 
 /// ```
 /// use reinhardt_utils::logging::params::truncate_param;
 ///
-// Short strings are returned unchanged
+/// // Short strings are returned unchanged
 /// let short_text = "Hello";
 /// assert_eq!(truncate_param(short_text, 100), "Hello");
 ///
-// Long strings are truncated with indication
+/// // Long strings are truncated with indication
 /// let long_text = "a".repeat(1000);
 /// let truncated = truncate_param(&long_text, 50);
 /// assert!(truncated.len() < 1000);

@@ -8,8 +8,11 @@ use uuid::Uuid;
 /// Database type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DatabaseType {
+	/// Postgres variant.
 	Postgres,
+	/// Sqlite variant.
 	Sqlite,
+	/// Mysql variant.
 	Mysql,
 }
 
@@ -39,14 +42,21 @@ impl DatabaseType {
 }
 
 /// Query value types
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum QueryValue {
+	/// Null variant.
 	Null,
+	/// Bool variant.
 	Bool(bool),
+	/// Int variant.
 	Int(i64),
+	/// Float variant.
 	Float(f64),
+	/// String variant.
 	String(String),
+	/// Bytes variant.
 	Bytes(Vec<u8>),
+	/// Timestamp variant.
 	Timestamp(chrono::DateTime<chrono::Utc>),
 	/// UUID value for PostgreSQL uuid columns
 	Uuid(Uuid),
@@ -103,28 +113,33 @@ impl From<Uuid> for QueryValue {
 }
 
 /// Query result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryResult {
+	/// The rows affected.
 	pub rows_affected: u64,
 }
 
 /// Row from query result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Row {
+	/// The data.
 	pub data: HashMap<String, QueryValue>,
 }
 
 impl Row {
+	/// Creates a new instance.
 	pub fn new() -> Self {
 		Self {
 			data: HashMap::new(),
 		}
 	}
 
+	/// Performs the insert operation.
 	pub fn insert(&mut self, key: String, value: QueryValue) {
 		self.data.insert(key, value);
 	}
 
+	/// Performs the get operation.
 	pub fn get<T: TryFrom<QueryValue>>(&self, key: &str) -> std::result::Result<T, DatabaseError>
 	where
 		DatabaseError: From<<T as TryFrom<QueryValue>>::Error>,

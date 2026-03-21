@@ -76,18 +76,17 @@ impl MockAPIView {
 		}
 
 		let metadata = self.metadata_class.as_ref().unwrap();
-		let options = MetadataOptions {
-			name: self.name.clone(),
-			description: self.description.clone(),
-			allowed_methods: self.allowed_methods.clone(),
-			renders: vec!["application/json".to_string(), "text/html".to_string()],
-			parses: vec![
-				"application/json".to_string(),
-				"application/x-www-form-urlencoded".to_string(),
-				"multipart/form-data".to_string(),
-			],
-			serializer_fields: None,
-		};
+		// Use field mutation because MetadataOptions is #[non_exhaustive]
+		let mut options = MetadataOptions::default();
+		options.name = self.name.clone();
+		options.description = self.description.clone();
+		options.allowed_methods = self.allowed_methods.clone();
+		options.renders = vec!["application/json".to_string(), "text/html".to_string()];
+		options.parses = vec![
+			"application/json".to_string(),
+			"application/x-www-form-urlencoded".to_string(),
+			"multipart/form-data".to_string(),
+		];
 
 		let metadata_response = metadata.determine_metadata(request, &options).await?;
 		let body = serde_json::to_vec(&metadata_response).unwrap();
@@ -145,14 +144,12 @@ impl PermissionAPIView {
 			}
 		}
 
-		let options = MetadataOptions {
-			name: self.name.clone(),
-			description: self.description.clone(),
-			allowed_methods: filtered_methods.clone(),
-			renders: vec!["application/json".to_string()],
-			parses: vec!["application/json".to_string()],
-			serializer_fields: None,
-		};
+		// Use field mutation because MetadataOptions is #[non_exhaustive]
+		let mut options = MetadataOptions::default();
+		options.name = self.name.clone();
+		options.description = self.description.clone();
+		options.allowed_methods = filtered_methods.clone();
+		// renders and parses already default to ["application/json"]
 
 		let fields = HashMap::new();
 		let actions = SimpleMetadata::new().determine_actions(&filtered_methods, &fields);
@@ -199,14 +196,12 @@ impl VersionedAPIView {
 			"Request should have version attribute"
 		);
 
-		let options = MetadataOptions {
-			name: "Example".to_string(),
-			description: "Example view.".to_string(),
-			allowed_methods: vec!["POST".to_string()],
-			renders: vec!["application/json".to_string()],
-			parses: vec!["application/json".to_string()],
-			serializer_fields: None,
-		};
+		// Use field mutation because MetadataOptions is #[non_exhaustive]
+		let mut options = MetadataOptions::default();
+		options.name = "Example".to_string();
+		options.description = "Example view.".to_string();
+		options.allowed_methods = vec!["POST".to_string()];
+		// renders and parses already default to ["application/json"]
 
 		let metadata_response = self
 			.metadata_class
@@ -442,18 +437,17 @@ async fn test_read_only_primary_key_related_field() {
 			.build(),
 	);
 
-	let options = MetadataOptions {
-		name: "Example".to_string(),
-		description: "Example view.".to_string(),
-		allowed_methods: vec!["POST".to_string()],
-		renders: vec!["application/json".to_string(), "text/html".to_string()],
-		parses: vec![
-			"application/json".to_string(),
-			"application/x-www-form-urlencoded".to_string(),
-			"multipart/form-data".to_string(),
-		],
-		serializer_fields: None,
-	};
+	// Use field mutation because MetadataOptions is #[non_exhaustive]
+	let mut options = MetadataOptions::default();
+	options.name = "Example".to_string();
+	options.description = "Example view.".to_string();
+	options.allowed_methods = vec!["POST".to_string()];
+	options.renders = vec!["application/json".to_string(), "text/html".to_string()];
+	options.parses = vec![
+		"application/json".to_string(),
+		"application/x-www-form-urlencoded".to_string(),
+		"multipart/form-data".to_string(),
+	];
 
 	let metadata_response = metadata
 		.determine_metadata(&request, &options)

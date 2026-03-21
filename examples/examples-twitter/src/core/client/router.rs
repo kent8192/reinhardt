@@ -1,7 +1,7 @@
 //! Client-side routing
 //!
 //! This module provides the client-side router for the Twitter clone application.
-//! Routes are defined in each app's `urls.rs` using the `UnifiedRouter<Page>` pattern,
+//! Routes are defined in each app's `urls.rs` using the `UnifiedRouter` pattern,
 //! and this module handles router initialization and global access.
 
 use reinhardt::ClientRouter;
@@ -14,7 +14,7 @@ use crate::config::urls::routes;
 
 // Global Router instance
 thread_local! {
-	static ROUTER: RefCell<Option<ClientRouter<Page>>> = const { RefCell::new(None) };
+	static ROUTER: RefCell<Option<ClientRouter>> = const { RefCell::new(None) };
 }
 
 /// Initialize the global router instance
@@ -41,7 +41,7 @@ pub fn init_global_router() {
 /// Panics if the router has not been initialized via `init_global_router()`.
 pub fn with_router<F, R>(f: F) -> R
 where
-	F: FnOnce(&ClientRouter<Page>) -> R,
+	F: FnOnce(&ClientRouter) -> R,
 {
 	ROUTER.with(|r| {
 		f(r.borrow()
@@ -52,7 +52,10 @@ where
 
 /// Home page view
 pub fn home_page_view() -> Page {
-	__reinhardt_placeholder__!(/*0*/)()
+	use crate::apps::tweet::client::components::tweet_list;
+
+	// Show the global feed on the home page
+	tweet_list(None)
 }
 
 /// Login page view
@@ -89,17 +92,36 @@ pub fn timeline_page_view() -> Page {
 	let form_view = tweet_form();
 	let list_view = tweet_list(None);
 
-	__reinhardt_placeholder__!(/*1*/)(form_view, list_view)
+	// Combine tweet form and list into a single timeline page
+	page!(|form_view: Page, list_view: Page| {
+		div {
+			class: "flex flex-col gap-4",
+			{ form_view }
+			{ list_view }
+		}
+	})(form_view, list_view)
 }
 
 /// DM chat page view
 pub fn dm_chat_page_view(room_id: String) -> Page {
 	use crate::apps::dm::client::components::dm_chat;
 
-	dm_chat(room_id)
+	dm_chat(Uuid::parse_str(&room_id).unwrap_or_default(), None)
 }
 
 /// Not found page view
 pub fn not_found_page_view() -> Page {
-	__reinhardt_placeholder__!(/*2*/)()
+	page!(|| {
+		div {
+			class: "flex flex-col items-center justify-center min-h-50vh gap-4",
+			h1 {
+				class: "text-4xl font-bold",
+				"404"
+			}
+			p {
+				class: "text-lg text-content-secondary",
+				"Page not found"
+			}
+		}
+	})()
 }

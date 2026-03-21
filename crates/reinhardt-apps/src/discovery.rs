@@ -193,7 +193,7 @@ impl RelationMetadata {
 ///
 /// # Errors
 ///
-/// Returns [`AppError::RegistryState`] if reverse relations have already been finalized.
+/// Returns [`crate::AppError::RegistryState`] if reverse relations have already been finalized.
 pub fn build_reverse_relations() -> Result<(), crate::AppError> {
 	// Step 1: Get all registered models
 	let models = get_registered_models();
@@ -309,7 +309,7 @@ fn extract_model_relations(model: &ModelMetadata) -> Vec<RelationMetadata> {
 ///
 /// # Errors
 ///
-/// Returns [`AppError::RegistryState`] if called after reverse relations have been finalized.
+/// Returns [`crate::AppError::RegistryState`] if called after reverse relations have been finalized.
 pub fn create_reverse_relation(relation: &RelationMetadata) -> Result<(), crate::AppError> {
 	// Use reverse_name() which handles both explicit and default naming
 	let reverse_name = relation.reverse_name().into_owned();

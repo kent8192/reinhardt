@@ -92,6 +92,7 @@ impl SettingDoc {
 }
 
 /// Documentation for a group of settings
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct SettingsGroup {
 	/// Group name

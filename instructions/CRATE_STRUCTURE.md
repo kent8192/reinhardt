@@ -1,251 +1,229 @@
 # Crate Structure
 
-This document explains the overall structure of the Reinhardt project, including how top-level crates and internal modules are organized.
+This document explains the overall structure of the Reinhardt project, including how crates are organized within the Cargo workspace.
 
 ## Overview
 
-The Reinhardt project uses a **3-tier architecture**:
+The Reinhardt project uses a **flat workspace architecture**:
 
-1. **Root Facade** (`reinhardt`) - Feature gate control and unified API
-2. **Top-Level Crates** (31 crates) - Public API and module organization
-3. **Internal Modules** (`publish = false`) - Implementation organized by functionality
+1. **Root Facade** (`reinhardt-web`) - Feature gate control and unified API
+2. **Workspace Crates** (44 crates under `crates/`) - Modular functionality organized by domain
+3. **Test Crates** (3 crates under `tests/`) - Integration tests and benchmarks
+4. **Example Crates** (8 crates under `examples/`) - Separate workspace with usage examples
 
-This structure provides modularity internally while offering a simple, unified interface to users.
+All crates under `crates/` are published to crates.io and share versioned workspace dependencies.
 
-## Top-Level Crates
+## Workspace Crates (45 total)
 
-The following crates are published to crates.io:
+The main workspace consists of 1 root facade crate + 44 crates under `crates/`:
+
+### Root Facade
+
+| Crate | Package Name | Description |
+|-------|-------------|-------------|
+| `.` (root) | `reinhardt-web` | Full-stack API framework facade with feature flags |
 
 ### Core Framework
-- `reinhardt` - Root facade crate with feature flags
-- `reinhardt-core` - Core components (types, exception, signals, validators, etc.)
-- `reinhardt-http` - HTTP types and request/response handling
-- `reinhardt-server` - HTTP server implementation (Hyper-based)
+
+| Crate | Package Name | Description |
+|-------|-------------|-------------|
+| `reinhardt-core` | `reinhardt-core` | Core components for Reinhardt framework |
+| `reinhardt-core/macros` | `reinhardt-macros` | Procedural macros for Reinhardt framework |
+| `reinhardt-apps` | `reinhardt-apps` | Application registry and management |
+| `reinhardt-conf` | `reinhardt-conf` | Configuration management with encryption and secrets |
+| `reinhardt-http` | `reinhardt-http` | HTTP primitives, request and response handling |
+| `reinhardt-server` | `reinhardt-server` | HTTP server implementation |
+| `reinhardt-di` | `reinhardt-di` | Dependency injection system (FastAPI-inspired) |
+| `reinhardt-di/macros` | `reinhardt-di-macros` | Procedural macros for dependency injection |
 
 ### Database Layer
-- `reinhardt-db` - Database abstraction (ORM, migrations, pool, backends)
-- `reinhardt-apps` - Application registry and configuration
 
-### Authentication & Authorization
-- `reinhardt-auth` - Authentication and authorization system
+| Crate | Package Name | Description |
+|-------|-------------|-------------|
+| `reinhardt-db` | `reinhardt-db` | Django-style database layer (ORM, migrations, pool, backends) |
+| `reinhardt-db-macros` | `reinhardt-db-macros` | Procedural macros for database layer (ORM and NoSQL ODM) |
+| `reinhardt-query` | `reinhardt-query` | SQL query builder |
+| `reinhardt-query/macros` | `reinhardt-query-macros` | Procedural macros for SQL identifier derivation |
 
 ### API Development
-- `reinhardt-rest` - REST API framework (DRF-style)
-- `reinhardt-graphql` - GraphQL integration
 
-### Configuration & Settings
-- `reinhardt-conf` - Settings management with hot-reload and encryption
+| Crate | Package Name | Description |
+|-------|-------------|-------------|
+| `reinhardt-rest` | `reinhardt-rest` | REST API framework aggregator (DRF-style) |
+| `reinhardt-rest/openapi-macros` | `reinhardt-openapi-macros` | Procedural macros for OpenAPI schema generation |
+| `reinhardt-openapi` | `reinhardt-openapi` | OpenAPI router wrapper |
+| `reinhardt-graphql` | `reinhardt-graphql` | GraphQL API support (facade crate) |
+| `reinhardt-graphql/macros` | `reinhardt-graphql-macros` | Procedural macros for GraphQL schema generation |
+| `reinhardt-grpc` | `reinhardt-grpc` | gRPC support for RPC services |
+| `reinhardt-grpc/macros` | `reinhardt-grpc-macros` | Procedural macros for gRPC DI integration |
+
+### Authentication & Authorization
+
+| Crate | Package Name | Description |
+|-------|-------------|-------------|
+| `reinhardt-auth` | `reinhardt-auth` | Authentication and authorization system |
+
+### URL Routing
+
+| Crate | Package Name | Description |
+|-------|-------------|-------------|
+| `reinhardt-urls` | `reinhardt-urls` | URL routing and proxy utilities |
+| `reinhardt-urls/routers-macros` | `reinhardt-routers-macros` | Procedural macros for compile-time URL path validation |
+| `reinhardt-dispatch` | `reinhardt-dispatch` | URL dispatcher and request routing |
 
 ### Frontend & Pages
-- `reinhardt-pages` - SSR and page generation
-- `reinhardt-forms` - Form handling and validation
-- `reinhardt-admin` - Admin interface (Django admin-style)
 
-### Utilities
-- `reinhardt-di` - Dependency injection (FastAPI-style)
-- `reinhardt-urls` - URL routing and pattern matching
-- `reinhardt-commands` - CLI command framework
-- `reinhardt-middleware` - Middleware implementations
-- `reinhardt-tasks` - Background task processing
-- `reinhardt-dentdelion` - WASM and plugin system
-- ... and 12 more utility crates
+| Crate | Package Name | Description |
+|-------|-------------|-------------|
+| `reinhardt-pages` | `reinhardt-pages` | WASM-based frontend framework (Django-like API) |
+| `reinhardt-pages/macros` | `reinhardt-pages-macros` | Procedural macros for WASM frontend |
+| `reinhardt-pages/ast` | `reinhardt-pages-ast` | AST definitions for pages macro DSLs |
+| `reinhardt-manouche` | `reinhardt-manouche` | DSL definitions for pages macros (Manouche Jazz DSL) |
+| `reinhardt-forms` | `reinhardt-forms` | Form handling and validation |
 
-## Internal Module Organization
+### Admin & CLI
 
-Each top-level crate contains internal modules organized under `crates/` directory. These modules have `publish = false` and are only accessible through the parent crate's public API.
+| Crate | Package Name | Description |
+|-------|-------------|-------------|
+| `reinhardt-admin` | `reinhardt-admin` | Admin panel functionality (Django admin-style) |
+| `reinhardt-admin-cli` | `reinhardt-admin-cli` | Command-line tool for project management |
+| `reinhardt-commands` | `reinhardt-commands` | Django-style management command framework |
 
-### Example: reinhardt-db Structure
+### Middleware & Views
 
-```mermaid
-graph TD
-    A[reinhardt-db<br/>Top-Level Crate] --> B[orm<br/>ORM Module]
-    A --> C[migrations<br/>Migration System]
-    A --> D[pool<br/>Connection Pool]
-    A --> E[backends<br/>Database Drivers]
-    A --> F[associations<br/>Relationships]
-    A --> G[hybrid<br/>Hybrid Properties]
-    A --> H[contenttypes<br/>Generic Relations]
-    A --> I[nosql<br/>NoSQL Support]
+| Crate | Package Name | Description |
+|-------|-------------|-------------|
+| `reinhardt-views` | `reinhardt-views` | View layer aggregator for viewsets and views-core |
+| `reinhardt-middleware` | `reinhardt-middleware` | Middleware system for request/response pipeline |
 
-    style A fill:#e1f5ff
-    style B fill:#fff3cd
-    style C fill:#fff3cd
-    style D fill:#fff3cd
-    style E fill:#f8d7da
-    style F fill:#d4edda
-    style G fill:#d4edda
-    style H fill:#d4edda
-    style I fill:#d4edda
-```
+### Utilities & Extensions
 
-### Example: reinhardt-core Structure
+| Crate | Package Name | Description |
+|-------|-------------|-------------|
+| `reinhardt-utils` | `reinhardt-utils` | Utility functions aggregator |
+| `reinhardt-shortcuts` | `reinhardt-shortcuts` | Django-style shortcut functions (redirects, rendering, 404) |
+| `reinhardt-tasks` | `reinhardt-tasks` | Background task execution and scheduling |
+| `reinhardt-throttling` | `reinhardt-throttling` | Throttling and rate limiting |
+| `reinhardt-mail` | `reinhardt-mail` | Email sending with multiple backends |
+| `reinhardt-i18n` | `reinhardt-i18n` | Internationalization and localization |
+| `reinhardt-websockets` | `reinhardt-websockets` | WebSocket support for real-time communication |
+| `reinhardt-dentdelion` | `reinhardt-dentdelion` | Plugin system |
+| `reinhardt-deeplink` | `reinhardt-deeplink` | Mobile deep linking (iOS Universal Links, Android App Links) |
 
-```mermaid
-graph TD
-    A[reinhardt-core<br/>Top-Level Crate] --> B[types<br/>Core Types]
-    A --> C[exception<br/>Error Handling]
-    A --> D[signals<br/>Event System]
-    A --> E[macros<br/>Proc Macros]
-    A --> F[security<br/>Security Utils]
-    A --> G[validators<br/>Validation]
-    A --> H[serializers<br/>Serialization]
-    A --> I[messages<br/>Flash Messages]
-    A --> J[pagination<br/>Pagination]
-    A --> K[parsers<br/>Body Parsers]
-    A --> L[negotiation<br/>Content Negotiation]
+### Testing
 
-    style A fill:#e1f5ff
-    style B fill:#fff3cd
-    style C fill:#fff3cd
-    style D fill:#fff3cd
-    style E fill:#fff3cd
-    style F fill:#d4edda
-    style G fill:#d4edda
-    style H fill:#d4edda
-    style I fill:#d4edda
-    style J fill:#d4edda
-    style K fill:#d4edda
-    style L fill:#d4edda
-```
+| Crate | Package Name | Description |
+|-------|-------------|-------------|
+| `reinhardt-test` | `reinhardt-test` | Testing utilities and helpers |
+| `reinhardt-testkit` | `reinhardt-testkit` | Core testing infrastructure (no functional crate dependencies) |
 
-## Physical vs Logical Structure
+## Test & Benchmark Crates
 
-### Physical Structure (File System)
+These are workspace members under `tests/` used for integration testing and benchmarking:
+
+| Path | Package Name | Description |
+|------|-------------|-------------|
+| `tests/` | `reinhardt-test-support` | Test support crate |
+| `tests/integration/` | `reinhardt-integration-tests` | Integration tests |
+| `tests/bench/` | `reinhardt-benchmarks` | Benchmark tests |
+
+## Example Crates (Separate Workspace)
+
+Examples are excluded from the main workspace and form their own independent workspace:
+
+| Path | Package Name |
+|------|-------------|
+| `examples/examples-hello-world/` | `examples-hello-world` |
+| `examples/examples-rest-api/` | `examples-rest-api` |
+| `examples/examples-tutorial-basis/` | `examples-tutorial-basis` |
+| `examples/examples-tutorial-rest/` | `examples-tutorial-rest` |
+| `examples/examples-database-integration/` | `examples-database-integration` |
+| `examples/examples-di-showcase/` | `examples-di-showcase` |
+| `examples/examples-github-issues/` | `examples-github-issues` |
+| `examples/examples-twitter/` | `examples-twitter` |
+
+## Physical Structure
 
 ```
-crates/
-├── reinhardt-db/
-│   ├── Cargo.toml           # Top-level crate definition
-│   ├── src/
-│   │   └── lib.rs           # Public API (re-exports modules)
-│   └── crates/              # Internal modules
-│       ├── orm/             # publish = false
-│       ├── migrations/      # publish = false
-│       ├── pool/            # publish = false
-│       ├── backends/        # publish = false
-│       └── ...
+reinhardt/
+├── Cargo.toml              # Root facade (reinhardt-web) + workspace definition
+├── src/lib.rs              # Re-exports with feature gates
+├── crates/
+│   ├── reinhardt-core/     # Core framework
+│   │   ├── Cargo.toml
+│   │   ├── src/
+│   │   └── macros/         # reinhardt-macros (sub-crate)
+│   ├── reinhardt-db/       # Database layer
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   ├── reinhardt-db-macros/ # DB macros (separate crate)
+│   ├── reinhardt-pages/    # WASM frontend
+│   │   ├── Cargo.toml
+│   │   ├── src/
+│   │   ├── macros/         # reinhardt-pages-macros (sub-crate)
+│   │   └── ast/            # reinhardt-pages-ast (sub-crate)
+│   ├── reinhardt-rest/     # REST API
+│   │   ├── Cargo.toml
+│   │   ├── src/
+│   │   └── openapi-macros/ # reinhardt-openapi-macros (sub-crate)
+│   └── ...                 # Other crates follow flat structure
+├── tests/
+│   ├── Cargo.toml          # Test support
+│   ├── integration/        # Integration tests
+│   └── bench/              # Benchmarks
+└── examples/               # Separate workspace (excluded from main)
+    ├── Cargo.toml          # Examples workspace root
+    └── examples-*/         # Individual example crates
 ```
 
-### Logical Structure (User View)
-
-Users access functionality through module paths:
-
-```rust
-// Accessing ORM module
-use reinhardt::db::orm::{Model, QuerySet};
-
-// Accessing migrations module
-use reinhardt::db::migrations::{Migration, MigrationExecutor};
-
-// Accessing pool module
-use reinhardt::db::pool::ConnectionPool;
-```
+Some crates contain sub-crates for procedural macros or AST definitions within their directory (e.g., `reinhardt-core/macros/`, `reinhardt-pages/ast/`). These are separate workspace members, not internal unpublished modules.
 
 ## Feature Flags
 
-Users enable functionality through feature flags in `Cargo.toml`:
+Users enable functionality through feature flags on the root `reinhardt-web` crate:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", features = ["db-postgres", "orm", "migrations"] }
+reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }
+```
+
+The following diagram summarizes how to choose the right feature set:
+
+```mermaid
+flowchart TD
+    A[Choose feature set] --> B{What do you need?}
+    B -->|"Core + DI + Server only"| C["minimal"]
+    B -->|"Standard web app<br/>(DB, REST, auth, middleware)"| D["standard (default)"]
+    B -->|"Specific components"| E["Fine-grained control<br/>Enable individual features"]
 ```
 
 ### Common Feature Flag Patterns
 
 #### Minimal Setup
 ```toml
-reinhardt = { version = "0.1.0-alpha.1", features = ["minimal"] }
+reinhardt = { version = "0.1.0-rc.13", features = ["minimal"] }
 # Includes: core, di, server
 ```
 
-#### Standard Setup (Recommended)
+#### Standard Setup (Default)
 ```toml
-reinhardt = { version = "0.1.0-alpha.1", features = ["standard"] }
-# Includes: minimal + database, db-postgres, rest, auth
-```
-
-#### Full Features
-```toml
-reinhardt = { version = "0.1.0-alpha.1", features = ["full"] }
-# Includes: all features from all crates
+reinhardt = { version = "0.1.0-rc.13" }
+# Or explicitly: features = ["standard"]
+# Includes: minimal + database, db-postgres, rest, auth, middleware, pages, and more
 ```
 
 #### Fine-Grained Control
 ```toml
-reinhardt = { version = "0.1.0-alpha.1", features = [
+reinhardt = { version = "0.1.0-rc.13", default-features = false, features = [
     "core",
+    "database",
     "db-postgres",
-    "orm",
-    "migrations",
     "rest",
-    "auth-jwt"
+    "auth",
 ] }
 ```
 
-## Why This Structure?
-
-### For Users
-
-**Benefits**:
-- **Simple Dependency Management**: Add one crate (`reinhardt`) to `Cargo.toml`
-- **Feature-Based Selection**: Enable only what you need via feature flags
-- **Unified API**: All functionality accessible through consistent module paths
-- **Easy Upgrades**: Single version number to manage
-
-**Example**:
-```toml
-# Before (if modules were separate crates)
-reinhardt-orm = "0.1.0"
-reinhardt-migrations = "0.1.0"
-reinhardt-pool = "0.1.0"
-reinhardt-backends = "0.1.0"
-
-# After (unified structure)
-reinhardt = { version = "0.1.0-alpha.1", features = ["db-postgres", "orm", "migrations"] }
-```
-
-### For Maintainers
-
-**Benefits**:
-- **Modularity**: Each module can be developed independently
-- **Code Reuse**: Modules can share internal utilities
-- **Workspace Efficiency**: Shared build artifacts and dependencies
-- **Clear Boundaries**: Each module has well-defined responsibilities
-- **Version Synchronization**: All modules share the same version
-
-### For Contributors
-
-**Benefits**:
-- **Easy Navigation**: Clear module boundaries and responsibilities
-- **Isolated Changes**: Work on one module without affecting others
-- **Consistent Patterns**: Similar structure across all crates
-- **Comprehensive Tests**: Each module has its own test suite
-
-## Module Dependencies
-
-### Cross-Module Dependencies
-
-Modules can depend on other modules within the same crate:
-
-```rust
-// In reinhardt-db/crates/migrations
-use reinhardt_db::backends;  // Depends on backends module
-use reinhardt_db::orm;        // Depends on orm module
-```
-
-### Cross-Crate Dependencies
-
-Top-level crates can depend on other top-level crates:
-
-```rust
-// reinhardt-admin depends on reinhardt-db
-use reinhardt_db::orm::Model;
-
-// reinhardt-rest depends on reinhardt-core
-use reinhardt_core::types::Handler;
-```
-
-### Dependency Graph (Simplified)
+## Dependency Graph (Simplified)
 
 ```mermaid
 graph LR
@@ -269,127 +247,50 @@ graph LR
     style F fill:#f8d7da
 ```
 
-## Module Naming Conventions
-
-### Internal Module Names
-
-Internal modules use descriptive names without the `reinhardt-` prefix:
-
-- ✅ `orm` (not `reinhardt-orm`)
-- ✅ `migrations` (not `reinhardt-migrations`)
-- ✅ `pool` (not `reinhardt-pool`)
-
-### Cargo Package Names
-
-Internal modules still have full package names in `Cargo.toml` for disambiguation:
-
-```toml
-[package]
-name = "reinhardt-orm"
-publish = false  # Not published to crates.io
-```
-
-### Module Paths in Code
-
-Users access modules through the parent crate:
-
-```rust
-use reinhardt::db::orm::Model;        // ✅ Correct
-// NOT: use reinhardt_db::Model;     // ❌ Won't work
-```
-
-## Testing Strategy
-
-### Unit Tests
-
-Each module has its own unit tests:
-
-```bash
-# Test specific module
-cargo test -p reinhardt-orm --all-features
-
-# Test all modules in a crate
-cargo test -p reinhardt-db --all-features
-```
-
-### Integration Tests
-
-Integration tests are located in the `tests/` directory of each crate:
-
-```bash
-cargo test --test orm_integration_tests
-```
-
-### Workspace Tests
-
-Run all tests across the workspace:
-
-```bash
-cargo test --workspace --all-features
-```
-
 ## Publishing Strategy
 
 ### What Gets Published
 
-- ✅ Top-level crates (`reinhardt`, `reinhardt-core`, `reinhardt-db`, etc.)
-- ❌ Internal modules (all have `publish = false`)
+- All crates under `crates/` are published to crates.io
+- Test crates (`tests/`) are not published
+- Example crates (`examples/`) are not published
 
 ### Version Synchronization
 
-All top-level crates share the same version number, managed through workspace inheritance:
-
-```toml
-[workspace]
-version = "0.1.0-alpha.1"
-
-[package]
-version.workspace = true
-```
+All workspace crates share version coordination through `[workspace.dependencies]` in the root `Cargo.toml`.
 
 ### Release Process
 
 See [RELEASE_PROCESS.md](RELEASE_PROCESS.md) for detailed release procedures.
 
-## Migration from Old Structure
+## Testing Strategy
 
-### Before (Hypothetical Separate Crates)
+### Unit Tests
 
-```toml
-[dependencies]
-reinhardt-orm = "0.1.0"
-reinhardt-migrations = "0.1.0"
-reinhardt-pool = "0.1.0"
+Each crate has its own unit tests:
+
+```bash
+# Test specific crate
+cargo test -p reinhardt-db --all-features
+
+# Test all crates
+cargo test --workspace --all-features
 ```
 
-### After (Current Unified Structure)
+### Integration Tests
 
-```toml
-[dependencies]
-reinhardt = { version = "0.1.0-alpha.1", features = ["db-postgres", "orm", "migrations"] }
-```
+Integration tests are in the `tests/integration/` crate:
 
-### Code Changes
-
-**Before**:
-```rust
-use reinhardt_db::Model;
-use reinhardt_migrations::Migration;
-```
-
-**After**:
-```rust
-use reinhardt::db::orm::Model;
-use reinhardt::db::migrations::Migration;
+```bash
+cargo nextest run --package reinhardt-integration-tests
 ```
 
 ## Related Documentation
 
 - [MODULE_SYSTEM.md](MODULE_SYSTEM.md) - Module organization guidelines
-- [FEATURE_FLAGS.md](FEATURE_FLAGS.md) - Complete feature flags reference
 - [RELEASE_PROCESS.md](RELEASE_PROCESS.md) - Release and publishing procedures
 - Individual crate README files - Detailed feature documentation
 
 ---
 
-**Last Updated**: 2026-01-18 (during subcrate integration)
+**Last Updated**: 2026-03-20

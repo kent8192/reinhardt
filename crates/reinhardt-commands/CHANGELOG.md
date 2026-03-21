@@ -7,6 +7,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.12...reinhardt-commands@v0.1.0-rc.13) - 2026-03-18
+
+### Added
+
+- *(commands)* extend InfraSignals with gRPC, storage, mail, session, graphql, admin, i18n detection
+
+### Fixed
+
+- *(commands)* align mail and session detection with workspace feature names
+
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.11...reinhardt-commands@v0.1.0-rc.12) - 2026-03-18
+
+### Added
+
+- *(commands)* add --merge option to makemigrations command
+- *(commands)* add introspect management command
+
+### Deprecated
+
+- *(conf)* mark Settings.installed_apps and related methods as deprecated
+
+### Fixed
+
+- *(commands)* address Copilot review feedback on introspect command
+
+### Testing
+
+- add tests for makemigrations --merge option
+
+## [0.1.0-rc.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.10...reinhardt-commands@v0.1.0-rc.11) - 2026-03-16
+
+### Documentation
+
+- *(reinhardt-commands)* document --force-empty-state flag and linkme dependency
+
+### Fixed
+
+- *(reinhardt-commands)* add mysql branch to migrate command connection logic
+
+## [0.1.0-rc.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.9...reinhardt-commands@v0.1.0-rc.10) - 2026-03-15
+
+### Fixed
+
+- *(commands)* propagate openapi-router feature to reinhardt-commands
+- *(commands)* gate docs banner on openapi-router feature
+
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.8...reinhardt-commands@v0.1.0-rc.9) - 2026-03-15
+
+### Fixed
+
+- *(commands)* add features section and fix router types in templates
+- *(commands)* remove redundant features section from restful template
+
+### Styling
+
+- add explanatory comments to remaining #[allow(dead_code)] attributes
+
+## [0.1.0-rc.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.7...reinhardt-commands@v0.1.0-rc.8) - 2026-03-12
+
+### Fixed
+
+- *(commands)* generate app module as {name}.rs per Rust 2024 Edition convention
+- *(commands)* only rename lib.rs for default app location, not custom targets
+- collapse nested if statements in start_commands to fix clippy lint
+- *(commands)* update startapp test assertions for Rust 2024 module paths
+
+## [0.1.0-rc.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.6...reinhardt-commands@v0.1.0-rc.7) - 2026-03-11
+
+### Changed
+
+- *(commands)* rename template cfg attrs to cfg_aliases and add missing module roots
+
+### Fixed
+
+- *(commands)* add missing middleware, root_urlconf, media_root defaults to runserver and collectstatic
+
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.4...reinhardt-commands@v0.1.0-rc.5) - 2026-03-07
+
+### Documentation
+
+- add missing doc comments for public API modules and types
+
+## [0.1.0-rc.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.2...reinhardt-commands@v0.1.0-rc.3) - 2026-03-04
+
+### Fixed
+
+- *(commands)* correct project template compilation errors
+- *(commands)* correct app template compilation errors
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.1...reinhardt-commands@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(deps)* align dependency versions to workspace definitions
+- *(staticfiles)* unify manifest.json format to use "paths" key
+- *(staticfiles)* use STATIC_URL in HTML template processing
+
 ## [0.1.0-alpha.21](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-alpha.20...reinhardt-commands@v0.1.0-alpha.21) - 2026-02-24
 
 ### Maintenance

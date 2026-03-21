@@ -8,18 +8,27 @@ use std::sync::OnceLock;
 /// Compiled regex is cached using `OnceLock` to avoid repeated
 /// compilation which could lead to ReDoS via allocation overhead.
 pub struct RegexField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Optional human-readable label for display.
 	pub label: Option<String>,
+	/// Whether this field must be filled in.
 	pub required: bool,
+	/// Optional help text displayed alongside the field.
 	pub help_text: Option<String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<serde_json::Value>,
 	/// Cached compiled regex to prevent repeated compilation (ReDoS mitigation)
 	regex_cache: OnceLock<Regex>,
 	/// Raw pattern string stored for lazy compilation
 	pattern: String,
+	/// The error message shown when the regex does not match.
 	pub error_message: String,
+	/// Maximum allowed character count.
 	pub max_length: Option<usize>,
+	/// Minimum required character count.
 	pub min_length: Option<usize>,
 }
 
@@ -40,9 +49,7 @@ impl RegexField {
 		// Validate the pattern eagerly so callers get errors at construction time
 		let compiled = Regex::new(pattern)?;
 		let cache = OnceLock::new();
-		cache
-			.set(compiled)
-			.unwrap_or_else(|_| panic!("OnceLock should be empty at construction"));
+		let _ = cache.set(compiled);
 		Ok(Self {
 			name,
 			label: None,
@@ -64,9 +71,49 @@ impl RegexField {
 			Regex::new(&self.pattern).expect("Pattern was validated at construction")
 		})
 	}
+	/// Overrides the default error message for validation failures.
 	pub fn with_error_message(mut self, message: String) -> Self {
 		self.error_message = message;
 		self
+	}
+}
+
+impl std::fmt::Debug for RegexField {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("RegexField")
+			.field("name", &self.name)
+			.field("label", &self.label)
+			.field("required", &self.required)
+			.field("help_text", &self.help_text)
+			.field("widget", &self.widget)
+			.field("initial", &self.initial)
+			.field("pattern", &self.pattern)
+			.field("error_message", &self.error_message)
+			.field("max_length", &self.max_length)
+			.field("min_length", &self.min_length)
+			.finish()
+	}
+}
+
+impl Clone for RegexField {
+	fn clone(&self) -> Self {
+		let cache = OnceLock::new();
+		if let Some(regex) = self.regex_cache.get() {
+			let _ = cache.set(regex.clone());
+		}
+		Self {
+			name: self.name.clone(),
+			label: self.label.clone(),
+			required: self.required,
+			help_text: self.help_text.clone(),
+			widget: self.widget.clone(),
+			initial: self.initial.clone(),
+			regex_cache: cache,
+			pattern: self.pattern.clone(),
+			error_message: self.error_message.clone(),
+			max_length: self.max_length,
+			min_length: self.min_length,
+		}
 	}
 }
 
@@ -144,18 +191,28 @@ impl FormField for RegexField {
 }
 
 /// SlugField for URL-safe slugs
+#[derive(Debug, Clone)]
 pub struct SlugField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Optional human-readable label for display.
 	pub label: Option<String>,
+	/// Whether this field must be filled in.
 	pub required: bool,
+	/// Optional help text displayed alongside the field.
 	pub help_text: Option<String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<serde_json::Value>,
+	/// Maximum allowed character count (defaults to 50).
 	pub max_length: Option<usize>,
+	/// Whether to allow Unicode characters in the slug.
 	pub allow_unicode: bool,
 }
 
 impl SlugField {
+	/// Creates a new `SlugField` with a default max length of 50.
 	pub fn new(name: String) -> Self {
 		Self {
 			name,
@@ -248,24 +305,37 @@ impl FormField for SlugField {
 }
 
 /// GenericIPAddressField for IPv4 and IPv6 addresses
+#[derive(Debug, Clone)]
 pub struct GenericIPAddressField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Optional human-readable label for display.
 	pub label: Option<String>,
+	/// Whether this field must be filled in.
 	pub required: bool,
+	/// Optional help text displayed alongside the field.
 	pub help_text: Option<String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<serde_json::Value>,
+	/// Which IP protocol versions to accept.
 	pub protocol: IPProtocol,
 }
 
+/// Specifies which IP address protocol versions are accepted.
 #[derive(Debug, Clone, Copy)]
 pub enum IPProtocol {
+	/// Accept both IPv4 and IPv6 addresses.
 	Both,
+	/// Accept only IPv4 addresses.
 	IPv4,
+	/// Accept only IPv6 addresses.
 	IPv6,
 }
 
 impl GenericIPAddressField {
+	/// Creates a new `GenericIPAddressField` that accepts both IPv4 and IPv6.
 	pub fn new(name: String) -> Self {
 		Self {
 			name,

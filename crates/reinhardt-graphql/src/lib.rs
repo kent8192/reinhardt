@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! GraphQL support for Reinhardt framework
 //!
 //! This crate provides GraphQL API support for the Reinhardt framework.
@@ -68,15 +69,22 @@
 //! }
 //! ```
 
+/// GraphQL execution context and data loaders.
 pub mod context;
+/// Resolver implementations for queries and mutations.
 pub mod resolvers;
+/// Schema definition, query limits, and built-in types.
 pub mod schema;
+/// Real-time GraphQL subscriptions with event broadcasting.
 pub mod subscription;
+/// GraphQL scalar and input type definitions.
 pub mod types;
 
+/// Dependency injection integration for GraphQL handlers.
 #[cfg(feature = "di")]
 pub mod di;
 
+/// GraphQL-over-gRPC service adapter.
 #[cfg(feature = "graphql-grpc")]
 pub mod grpc_service;
 
@@ -103,3 +111,15 @@ pub use di::{GraphQLContextExt, SchemaBuilderExt};
 
 #[cfg(feature = "di")]
 pub use reinhardt_graphql_macros::graphql_handler;
+
+// Re-export async_graphql base types for facade pattern.
+// These types are commonly needed by user code to define GraphQL schemas,
+// resolvers, and error handling without depending on async_graphql directly.
+pub use async_graphql::{
+	Context, Enum, Error, ErrorExtensions, FieldError, ID, InputObject, MergedObject,
+	MergedSubscription, Object, Request, Result as GqlResult, Schema, SimpleObject, Subscription,
+};
+
+/// Re-export of `async_graphql::http` module for HTTP integration utilities
+/// such as `playground_source` and `GraphQLPlaygroundConfig`.
+pub use async_graphql::http;

@@ -5,17 +5,26 @@ use serde::{Deserialize, Serialize};
 /// Represents a LATERAL JOIN clause
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LateralJoin {
+	/// The alias.
 	pub alias: String,
+	/// The subquery.
 	pub subquery: String,
+	/// The join type.
 	pub join_type: LateralJoinType,
+	/// The on condition.
 	pub on_condition: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Defines possible lateral join type values.
 pub enum LateralJoinType {
+	/// Inner variant.
 	Inner,
+	/// Left variant.
 	Left,
+	/// Right variant.
 	Right,
+	/// Full variant.
 	Full,
 }
 
@@ -120,7 +129,7 @@ impl LateralJoinBuilder {
 	/// use reinhardt_db::orm::lateral_join::LateralJoinBuilder;
 	///
 	/// let builder = LateralJoinBuilder::new("latest");
-	// Builder methods can be chained: .subquery().left().on().build()
+	/// // Builder methods can be chained: .subquery().left().on().build()
 	/// ```
 	pub fn new(alias: impl Into<String>) -> Self {
 		Self {

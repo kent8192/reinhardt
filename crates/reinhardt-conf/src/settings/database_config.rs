@@ -20,6 +20,7 @@ const USERINFO_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
 	.remove(b'~');
 
 /// Database configuration
+#[non_exhaustive]
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DatabaseConfig {
 	/// Database engine/backend
@@ -59,6 +60,53 @@ impl fmt::Debug for DatabaseConfig {
 }
 
 impl DatabaseConfig {
+	/// Create a new database configuration with the given engine and name
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_conf::settings::DatabaseConfig;
+	///
+	/// let db = DatabaseConfig::new("reinhardt.db.backends.sqlite3", "myapp.db");
+	/// assert_eq!(db.engine, "reinhardt.db.backends.sqlite3");
+	/// assert_eq!(db.name, "myapp.db");
+	/// ```
+	pub fn new(engine: impl Into<String>, name: impl Into<String>) -> Self {
+		Self {
+			engine: engine.into(),
+			name: name.into(),
+			user: None,
+			password: None,
+			host: None,
+			port: None,
+			options: HashMap::new(),
+		}
+	}
+
+	/// Set the user for this database configuration
+	pub fn with_user(mut self, user: impl Into<String>) -> Self {
+		self.user = Some(user.into());
+		self
+	}
+
+	/// Set the password for this database configuration
+	pub fn with_password(mut self, password: impl Into<String>) -> Self {
+		self.password = Some(SecretString::new(password.into()));
+		self
+	}
+
+	/// Set the host for this database configuration
+	pub fn with_host(mut self, host: impl Into<String>) -> Self {
+		self.host = Some(host.into());
+		self
+	}
+
+	/// Set the port for this database configuration
+	pub fn with_port(mut self, port: u16) -> Self {
+		self.port = Some(port);
+		self
+	}
+
 	/// Create a SQLite database configuration
 	///
 	/// # Examples

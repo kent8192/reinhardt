@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dispatch@v0.1.0-rc.8...reinhardt-dispatch@v0.1.0-rc.9) - 2026-03-15
+
+### Styling
+
+- add explanatory comments to remaining #[allow(dead_code)] attributes
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dispatch@v0.1.0-rc.1...reinhardt-dispatch@v0.1.0-rc.2) - 2026-03-04
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dispatch@v0.1.0-alpha.13...reinhardt-dispatch@v0.1.0-rc.1) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-middleware, reinhardt-views, reinhardt-urls
+
 ## [0.1.0-alpha.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-dispatch@v0.1.0-alpha.12...reinhardt-dispatch@v0.1.0-alpha.13) - 2026-02-23
 
 ### Maintenance

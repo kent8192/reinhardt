@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
+use reinhardt::core::serde::{Deserialize, Serialize};
 use reinhardt::db::associations::ForeignKeyField;
 use reinhardt::prelude::*;
-use serde::{Deserialize, Serialize};
 
 /// Question model representing a poll question
 #[model(app_label = "polls", table_name = "questions")]
@@ -54,8 +54,9 @@ impl Choice {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	#[test]
+	#[rstest]
 	fn test_choice_vote() {
 		let mut choice = Choice::new(
 			"Choice 1".to_string(), // choice_text

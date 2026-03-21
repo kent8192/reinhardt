@@ -44,7 +44,7 @@ impl MemoryBackend<SystemTimeProvider> {
 	/// use reinhardt_rest::throttling::MemoryBackend;
 	///
 	/// let backend = MemoryBackend::new();
-	// Backend is ready to track rate limits in memory
+	/// // Backend is ready to track rate limits in memory
 	/// ```
 	pub fn new() -> Self {
 		Self {
@@ -105,7 +105,7 @@ impl RedisThrottleBackend {
 	/// use reinhardt_rest::throttling::RedisThrottleBackend;
 	///
 	/// let backend = RedisThrottleBackend::new("redis://127.0.0.1:6379").unwrap();
-	// Backend is now connected to Redis for distributed rate limiting
+	/// // Backend is now connected to Redis for distributed rate limiting
 	/// ```
 	pub fn new(url: &str) -> Result<Self, String> {
 		let client = redis::Client::open(url).map_err(|e| e.to_string())?;

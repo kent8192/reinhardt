@@ -525,6 +525,7 @@ where
 			reinhardt_rest::serializers::SerializerError::Other { message } => {
 				Error::Serialization(message)
 			}
+			_ => Error::Serialization(e.to_string()),
 		})?;
 
 		// Build response - for HEAD, return same headers but empty body

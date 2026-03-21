@@ -57,7 +57,8 @@ Issues MUST be created using the appropriate issue template:
 - Question (`.github/ISSUE_TEMPLATE/4-question.yml`)
 - Performance Issue (`.github/ISSUE_TEMPLATE/5-performance.yml`)
 - CI/CD Issue (`.github/ISSUE_TEMPLATE/6-ci_cd.yml`)
-- Security Vulnerability (Use GitHub Security Advisories)
+- Security Vulnerability (`.github/ISSUE_TEMPLATE/7-security.yml`)
+- API Change Proposal (`.github/ISSUE_TEMPLATE/8-api_change.yml`)
 
 **Template Selection:**
 | Issue Type | Template File | Label Applied |
@@ -68,13 +69,32 @@ Issues MUST be created using the appropriate issue template:
 | Question | `.github/ISSUE_TEMPLATE/4-question.yml` | `question` |
 | Performance | `.github/ISSUE_TEMPLATE/5-performance.yml` | `performance` |
 | CI/CD | `.github/ISSUE_TEMPLATE/6-ci_cd.yml` | `ci-cd` |
-| Security | Use GitHub Security Advisories | `security`, `critical` |
+| Security | `.github/ISSUE_TEMPLATE/7-security.yml` | `security`, `critical` |
+| API change proposal | `.github/ISSUE_TEMPLATE/8-api_change.yml` | `enhancement`, `rc-migration` |
 
 **CLI Template Usage:**
 
 When creating issues via `gh issue create`, GitHub CLI does not automatically apply templates like the Web UI. Read the appropriate template file from `.github/ISSUE_TEMPLATE/` and include its structure in your `--body` content.
 
 **Note:** For security vulnerabilities, ALWAYS use GitHub Security Advisories instead of public issues.
+
+The following diagram illustrates the template selection decision tree:
+
+```mermaid
+flowchart TD
+    A[Create new issue] --> B{What type?}
+    B -->|Bug| C["1-bug_report.yml<br/>Label: bug"]
+    B -->|Feature| D["2-feature_request.yml<br/>Label: enhancement"]
+    B -->|Docs| E["3-documentation.yml<br/>Label: documentation"]
+    B -->|Question| F{Consider GitHub Discussions first}
+    F -->|Still Issue| G["4-question.yml<br/>Label: question"]
+    B -->|Performance| H["5-performance.yml<br/>Label: performance"]
+    B -->|CI/CD| I["6-ci_cd.yml<br/>Label: ci-cd"]
+    B -->|Security| J{Is it a vulnerability?}
+    J -->|Yes| K["Use GitHub Security Advisories<br/>NOT public issue"]
+    J -->|No| L["7-security.yml<br/>Labels: security, critical"]
+    B -->|API Change| M["8-api_change.yml<br/>Labels: enhancement, rc-migration"]
+```
 
 ---
 
@@ -187,6 +207,21 @@ Issue titles MUST be:
 - Recommended: Type + Priority + Scope
 - Example: `bug`, `high`, `database` for a critical database bug
 
+### IL-3 (MUST): Agent-Detected Issue Labels
+
+Issues created by LLM agent bug discovery MUST include the `agent-suspect` label:
+
+| Label | Color | Description |
+|-------|-------|-------------|
+| `agent-suspect` | #d4c5f9 | Agent-detected issue pending independent verification |
+
+**Rules:**
+- ALL agent-detected issues MUST have `agent-suspect` label at creation
+- `agent-suspect` issues are excluded from stability timer reset (SC-2a)
+- The label is removed ONLY after independent verification confirms the issue
+- Independent verification requires a separate agent (with independent context) or human review
+- The verifying entity MUST NOT have participated in the initial detection
+
 ---
 
 ## Issue Lifecycle
@@ -209,6 +244,20 @@ Issue titles MUST be:
 | In Progress | Being actively worked | Add `in-progress` via project board |
 | Blocked | Awaiting dependency | Add `blocked` via project board |
 | Closed | Resolved | - |
+
+The following diagram shows the issue lifecycle state transitions:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Open: Issue created
+    Open --> Triaged: Maintainer adds priority/scope labels
+    Triaged --> InProgress: Assigned and work started
+    InProgress --> Blocked: Dependency or blocker
+    Blocked --> InProgress: Blocker resolved
+    InProgress --> Closed: Fixed (reference PR/commit)
+    Open --> Closed: Invalid / Duplicate / Wontfix
+    Triaged --> Closed: Wontfix with explanation
+```
 
 ### LC-2 (MUST): Issue Hygiene
 
@@ -285,7 +334,11 @@ Issue titles MUST be:
 - Clarifying API behavior
 - General usage questions
 
-**Note:** For usage questions, consider GitHub Discussions first.
+**Note:** For usage questions, prefer GitHub Discussions first:
+https://github.com/kent8192/reinhardt-web/discussions
+
+Issues should be reserved for actionable items (bugs, feature requests, etc.).
+Questions posted as Issues may be redirected to Discussions.
 
 **Label Applied:** `question`
 
@@ -319,6 +372,38 @@ Issue titles MUST be:
 - Environment details
 
 **Label Applied:** `ci-cd`
+
+### Security Vulnerability (`.github/ISSUE_TEMPLATE/7-security.yml`)
+
+**Use When:**
+- Reporting a security vulnerability
+- Identifying potential security risks
+
+**Required Information:**
+- Vulnerability description
+- Affected versions
+- Steps to reproduce
+- Impact assessment
+
+**Note:** For critical security vulnerabilities, prefer GitHub Security Advisories for private disclosure.
+
+**Label Applied:** `security`, `critical`
+
+### API Change Proposal (`.github/ISSUE_TEMPLATE/8-api_change.yml`)
+
+**Use When:**
+- Proposing changes to existing public APIs
+- Requesting breaking or non-breaking API modifications
+- Initiating a Final Comment Period (FCP) for API changes
+
+**Required Information:**
+- Current API description
+- Proposed change
+- Breaking change classification
+- Migration path (for breaking changes)
+- Rationale
+
+**Label Applied:** `enhancement`, `rc-migration`
 
 ---
 
@@ -373,6 +458,8 @@ https://github.com/kent8192/reinhardt-web/security/advisories
 - Provide minimal reproduction code for bug reports
 - Include environment details (Rust version, OS)
 - Be specific in issue titles (max 72 characters)
+- Apply `agent-suspect` label to all agent-detected bug issues
+- Verify agent-detected bugs independently before removing `agent-suspect` label
 
 ### ❌ NEVER DO
 
@@ -384,14 +471,16 @@ https://github.com/kent8192/reinhardt-web/security/advisories
 - Apply `release` label to issues (only for PRs)
 - Submit bug reports without reproduction steps
 - Leave issues inactive without response
+- Remove `agent-suspect` label without independent verification
+- Count `agent-suspect` labeled issues toward stability timer reset (SC-2a)
 
 ---
 
 ## Related Documentation
 
-- **Pull Request Guidelines**: docs/PR_GUIDELINE.md
-- **Issue Handling Principles**: docs/ISSUE_HANDLING.md
-- **Commit Guidelines**: docs/COMMIT_GUIDELINE.md
+- **Pull Request Guidelines**: instructions/PR_GUIDELINE.md
+- **Issue Handling Principles**: instructions/ISSUE_HANDLING.md
+- **Commit Guidelines**: instructions/COMMIT_GUIDELINE.md
 - **Contributing Guide**: CONTRIBUTING.md
 - **Security Policy**: SECURITY.md
 - **Code of Conduct**: CODE_OF_CONDUCT.md
@@ -399,4 +488,4 @@ https://github.com/kent8192/reinhardt-web/security/advisories
 
 ---
 
-**Note**: This document focuses on issue creation and management. For pull request guidelines, see docs/PR_GUIDELINE.md.
+**Note**: This document focuses on issue creation and management. For pull request guidelines, see instructions/PR_GUIDELINE.md.

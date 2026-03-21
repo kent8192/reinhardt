@@ -79,7 +79,7 @@ const DEFAULT_SESSION_DIR: &str = "/tmp/reinhardt_sessions";
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let backend = FileSessionBackend::new(None)?;
 ///
-// Save user session
+/// // Save user session
 /// let user_data = json!({
 ///     "user_id": 123,
 ///     "email": "user@example.com",
@@ -88,7 +88,7 @@ const DEFAULT_SESSION_DIR: &str = "/tmp/reinhardt_sessions";
 ///
 /// backend.save("user_session_xyz", &user_data, Some(7200)).await?;
 ///
-// Check if session exists
+/// // Check if session exists
 /// assert!(backend.exists("user_session_xyz").await?);
 /// # Ok(())
 /// # }
@@ -117,10 +117,10 @@ impl FileSessionBackend {
 	/// use std::path::PathBuf;
 	///
 	/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-	// Use default directory
+	/// // Use default directory
 	/// let backend1 = FileSessionBackend::new(None)?;
 	///
-	// Use custom directory
+	/// // Use custom directory
 	/// let backend2 = FileSessionBackend::new(Some(PathBuf::from("/tmp/custom_sessions")))?;
 	/// # Ok(())
 	/// # }

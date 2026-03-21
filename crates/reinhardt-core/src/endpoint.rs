@@ -23,12 +23,22 @@ use hyper::Method;
 ///     println!("{} {}", metadata.method, metadata.path);
 /// }
 /// ```
+// NOTE: #[non_exhaustive] is intentionally omitted in the pre-1.0 phase.
+// EndpointMetadata is constructed via struct literals in both proc-macro codegen
+// (reinhardt-core-macros) and test code across multiple crates. Adding
+// #[non_exhaustive] would require a builder or constructor, which adds complexity
+// without benefit before the public API stabilizes at 1.0.
 #[derive(Debug, Clone)]
 pub struct EndpointMetadata {
+	/// URL path pattern for this endpoint (e.g., "/users/{id}/").
 	pub path: &'static str,
+	/// HTTP method name (e.g., "GET", "POST").
 	pub method: &'static str,
+	/// Optional route name for URL reversal.
 	pub name: Option<&'static str>,
+	/// Name of the handler function.
 	pub function_name: &'static str,
+	/// Module path where the handler is defined.
 	pub module_path: &'static str,
 
 	/// Type name of the request body (e.g., "CreateUserRequest")
@@ -37,6 +47,35 @@ pub struct EndpointMetadata {
 
 	/// Content-Type of the request body (e.g., "application/json", "application/x-www-form-urlencoded")
 	pub request_content_type: Option<&'static str>,
+
+	/// Additional response definitions beyond the default 200
+	/// Each entry: (status_code, description)
+	pub responses: &'static [EndpointResponse],
+
+	/// Response headers
+	/// Each entry: (header_name, description)
+	pub headers: &'static [EndpointHeader],
+
+	/// Security requirements (e.g., "bearer", "api_key")
+	pub security: &'static [&'static str],
+}
+
+/// A response definition for an endpoint
+#[derive(Debug, Clone, Copy)]
+pub struct EndpointResponse {
+	/// HTTP status code (e.g., 201, 404)
+	pub status: u16,
+	/// Description of the response
+	pub description: &'static str,
+}
+
+/// A response header definition for an endpoint
+#[derive(Debug, Clone, Copy)]
+pub struct EndpointHeader {
+	/// Header name (e.g., "X-Request-Id")
+	pub name: &'static str,
+	/// Description of the header
+	pub description: &'static str,
 }
 
 // Register EndpointMetadata as a collectible type with inventory

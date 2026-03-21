@@ -54,6 +54,7 @@ impl TimeRange {
 }
 
 /// Configuration for time-of-day based rate limiting
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct TimeOfDayConfig {
 	/// Peak time range

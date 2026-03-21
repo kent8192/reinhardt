@@ -18,21 +18,21 @@ use uuid::Uuid;
 /// let backend = InMemorySessionBackend::new();
 /// let mut session = Session::new(backend);
 ///
-// Set session data
+/// // Set session data
 /// session.set("user_id", 42)?;
 /// session.set("username", "alice")?;
 ///
-// Get session data
+/// // Get session data
 /// let user_id: i32 = session.get("user_id")?.unwrap();
 /// assert_eq!(user_id, 42);
 ///
-// Check if key exists
+/// // Check if key exists
 /// assert!(session.contains_key("username"));
 ///
-// Delete a key
+/// // Delete a key
 /// session.delete("username");
 ///
-// Save session
+/// // Save session
 /// session.save().await?;
 /// # Ok(())
 /// # }
@@ -269,9 +269,9 @@ impl<B: SessionBackend> Session<B> {
 	///
 	/// session.flush().await?;
 	///
-	// Data is cleared
+	/// // Data is cleared
 	/// assert!(!session.contains_key("key"));
-	// New session key is generated
+	/// // New session key is generated
 	/// assert_ne!(session.get_or_create_key(), old_key);
 	/// # Ok(())
 	/// # }
@@ -307,11 +307,11 @@ impl<B: SessionBackend> Session<B> {
 	///
 	/// session.cycle_key().await?;
 	///
-	// Data is preserved
+	/// // Data is preserved
 	/// let user_id: i32 = session.get("user_id")?.unwrap();
 	/// assert_eq!(user_id, 123);
 	///
-	// Session key has changed
+	/// // Session key has changed
 	/// assert_ne!(session.get_or_create_key(), old_key);
 	/// # Ok(())
 	/// # }
@@ -530,7 +530,7 @@ impl<B: SessionBackend> Session<B> {
 	/// let items = session.items();
 	/// assert_eq!(items.len(), 2);
 	///
-	// Find specific item
+	/// // Find specific item
 	/// let user_id_item = items.iter()
 	///     .find(|(k, _)| k.as_str() == "user_id")
 	///     .unwrap();

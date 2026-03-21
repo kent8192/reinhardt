@@ -257,7 +257,7 @@ async fn test_circuit_breaker_open_state_returns_503() {
 
 	// Verify circuit is now open
 	assert_eq!(
-		middleware.get_state(),
+		middleware.state(),
 		CircuitState::Open,
 		"Circuit should be open after failures"
 	);
@@ -299,7 +299,7 @@ async fn test_circuit_breaker_counts_failures() {
 
 	// Verify: Circuit should still be closed (min_requests not met)
 	assert_eq!(
-		middleware.get_state(),
+		middleware.state(),
 		CircuitState::Closed,
 		"Circuit should still be closed (min_requests not met)"
 	);
@@ -312,7 +312,7 @@ async fn test_circuit_breaker_counts_failures() {
 
 	// Verify: Circuit should now be open
 	assert_eq!(
-		middleware.get_state(),
+		middleware.state(),
 		CircuitState::Open,
 		"Circuit should be open after exceeding threshold"
 	);

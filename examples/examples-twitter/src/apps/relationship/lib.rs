@@ -2,6 +2,7 @@
 //!
 //! User relationship models for examples-twitter
 
+#[cfg(server)]
 use reinhardt::app_config;
 
 pub mod shared;
@@ -16,6 +17,7 @@ pub mod server;
 #[cfg(test)]
 pub mod tests;
 
+#[cfg(server)]
 #[app_config(
 	name = "relationship",
 	label = "relationship",

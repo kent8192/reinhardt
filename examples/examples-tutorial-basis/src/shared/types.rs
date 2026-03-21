@@ -4,7 +4,7 @@
 //! All types must be serializable with serde.
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use reinhardt::core::serde::{Deserialize, Serialize};
 
 /// Question information (DTO)
 ///

@@ -447,7 +447,7 @@ pub trait WithValidation: Sized {
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// # let req = ();
 /// # let ctx = ();
-// In your handler:
+/// // In your handler:
 /// // async fn handler(
 /// //     // Extract path parameter "id" and validate it
 /// //     id: ValidatedPath<i32>,
@@ -485,50 +485,69 @@ pub type ValidatedForm<T> = ValidationConstraints<super::Form<T>>;
 // Non-feature-gated versions for testing
 // ============================================================================
 
+/// Validation constraints wrapper for parameter types.
+///
+/// Wraps an extracted parameter with configurable validation rules
+/// including length limits, value ranges, regex patterns, and format checks.
 #[cfg(not(feature = "validation"))]
 pub struct ValidationConstraints<T> {
+	/// The wrapped parameter value.
 	pub inner: T,
+	/// Minimum required string length.
 	pub min_length: Option<usize>,
+	/// Maximum allowed string length.
 	pub max_length: Option<usize>,
+	/// Minimum allowed value (as string for generic comparison).
 	pub min_value: Option<String>,
+	/// Maximum allowed value (as string for generic comparison).
 	pub max_value: Option<String>,
+	/// Regular expression pattern that the value must match.
 	pub regex: Option<String>,
+	/// Whether the value must be a valid email address.
 	pub email: bool,
+	/// Whether the value must be a valid URL.
 	pub url: bool,
 }
 
 #[cfg(not(feature = "validation"))]
 impl<T> ValidationConstraints<T> {
+	/// Sets the minimum string length constraint.
 	pub fn min_length(mut self, min: usize) -> Self {
 		self.min_length = Some(min);
 		self
 	}
 
+	/// Sets the maximum string length constraint.
 	pub fn max_length(mut self, max: usize) -> Self {
 		self.max_length = Some(max);
 		self
 	}
 
+	/// Sets the minimum value constraint.
 	pub fn min_value<V: ToString>(mut self, min: V) -> Self {
 		self.min_value = Some(min.to_string());
 		self
 	}
 
+	/// Sets the maximum value constraint.
 	pub fn max_value<V: ToString>(mut self, max: V) -> Self {
 		self.max_value = Some(max.to_string());
 		self
 	}
 
+	/// Sets a regex pattern that the value must match.
 	pub fn regex(mut self, pattern: impl Into<String>) -> Self {
 		self.regex = Some(pattern.into());
 		self
 	}
 
+	/// Enables email format validation.
 	pub fn email(mut self) -> Self {
 		self.email = true;
 		self
 	}
 
+	/// Enables URL format validation.
 	pub fn url(mut self) -> Self {
 		self.url = true;
 		self
@@ -538,6 +557,7 @@ impl<T> ValidationConstraints<T> {
 	/// Limits regex complexity to prevent ReDoS attacks via excessively large patterns.
 	const MAX_REGEX_PATTERN_LENGTH: usize = 1024;
 
+	/// Validates a string value against the configured constraints.
 	pub fn validate_string(&self, value: &str) -> Result<(), String> {
 		if let Some(min) = self.min_length
 			&& value.len() < min
@@ -586,6 +606,7 @@ impl<T> ValidationConstraints<T> {
 		Ok(())
 	}
 
+	/// Validates a numeric value against the configured min/max constraints.
 	pub fn validate_number<N>(&self, value: &N) -> Result<(), String>
 	where
 		N: PartialOrd + std::fmt::Display + Clone + std::str::FromStr,
@@ -606,6 +627,7 @@ impl<T> ValidationConstraints<T> {
 		Ok(())
 	}
 
+	/// Consumes the wrapper and returns the inner value.
 	pub fn into_inner(self) -> T {
 		self.inner
 	}
@@ -620,12 +642,15 @@ impl<T> Deref for ValidationConstraints<T> {
 	}
 }
 
+/// A `Path<T>` parameter wrapped with validation constraints.
 #[cfg(not(feature = "validation"))]
 pub type ValidatedPath<T> = ValidationConstraints<super::Path<T>>;
 
+/// A `Query<T>` parameter wrapped with validation constraints.
 #[cfg(not(feature = "validation"))]
 pub type ValidatedQuery<T> = ValidationConstraints<super::Query<T>>;
 
+/// A `Form<T>` parameter wrapped with validation constraints.
 #[cfg(not(feature = "validation"))]
 pub type ValidatedForm<T> = ValidationConstraints<super::Form<T>>;
 
@@ -636,9 +661,10 @@ impl<T> WithValidation for super::Path<T> {}
 #[cfg(not(feature = "validation"))]
 impl<T> WithValidation for super::Query<T> {}
 
-// Implement non-feature-gated WithValidation trait
+/// Extension trait for adding validation constraints to parameter types.
 #[cfg(not(feature = "validation"))]
 pub trait WithValidation: Sized {
+	/// Creates a `ValidationConstraints` wrapper with a minimum length.
 	fn min_length(self, min: usize) -> ValidationConstraints<Self> {
 		ValidationConstraints {
 			inner: self,
@@ -652,6 +678,7 @@ pub trait WithValidation: Sized {
 		}
 	}
 
+	/// Creates a `ValidationConstraints` wrapper with a maximum length.
 	fn max_length(self, max: usize) -> ValidationConstraints<Self> {
 		ValidationConstraints {
 			inner: self,
@@ -665,6 +692,7 @@ pub trait WithValidation: Sized {
 		}
 	}
 
+	/// Creates a `ValidationConstraints` wrapper with a minimum value.
 	fn min_value<V: ToString>(self, min: V) -> ValidationConstraints<Self> {
 		ValidationConstraints {
 			inner: self,
@@ -678,6 +706,7 @@ pub trait WithValidation: Sized {
 		}
 	}
 
+	/// Creates a `ValidationConstraints` wrapper with a maximum value.
 	fn max_value<V: ToString>(self, max: V) -> ValidationConstraints<Self> {
 		ValidationConstraints {
 			inner: self,
@@ -691,6 +720,7 @@ pub trait WithValidation: Sized {
 		}
 	}
 
+	/// Creates a `ValidationConstraints` wrapper with a regex pattern.
 	fn regex(self, pattern: impl Into<String>) -> ValidationConstraints<Self> {
 		ValidationConstraints {
 			inner: self,
@@ -704,6 +734,7 @@ pub trait WithValidation: Sized {
 		}
 	}
 
+	/// Creates a `ValidationConstraints` wrapper with email format validation.
 	fn email(self) -> ValidationConstraints<Self> {
 		ValidationConstraints {
 			inner: self,
@@ -717,6 +748,7 @@ pub trait WithValidation: Sized {
 		}
 	}
 
+	/// Creates a `ValidationConstraints` wrapper with URL format validation.
 	fn url(self) -> ValidationConstraints<Self> {
 		ValidationConstraints {
 			inner: self,

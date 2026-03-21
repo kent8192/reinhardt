@@ -11,7 +11,6 @@ reinhardt = { workspace = true, features = [
     "full",
     "client-router",
 ] }
-hyper = "1.8"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 tokio = { version = "1.48.0", features = ["full"] }

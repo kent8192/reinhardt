@@ -49,6 +49,7 @@ impl LoadMetrics {
 }
 
 /// Configuration for adaptive throttling
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct AdaptiveConfig {
 	/// Minimum rate limit (requests, period)

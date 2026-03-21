@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// Configuration for redirect fallback behavior
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RedirectResponseConfig {
 	/// The fallback URL to redirect to on 404 errors
@@ -186,7 +187,10 @@ impl Middleware for RedirectFallbackMiddleware {
 		let mut redirect_response = Response::new(self.redirect_status());
 		redirect_response.headers.insert(
 			hyper::header::LOCATION,
-			self.config.fallback_url.parse().unwrap(),
+			self.config
+				.fallback_url
+				.parse()
+				.unwrap_or_else(|_| hyper::header::HeaderValue::from_static("/")),
 		);
 
 		Ok(redirect_response)

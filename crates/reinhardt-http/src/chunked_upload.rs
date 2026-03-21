@@ -5,7 +5,7 @@
 //! and assembling chunks back into complete files.
 
 use percent_encoding::percent_decode_str;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -17,20 +17,43 @@ use std::time::{Duration, Instant};
 const UPLOAD_SESSION_TIMEOUT: Duration = Duration::from_secs(3600);
 
 /// Errors that can occur during chunked upload
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum ChunkedUploadError {
+	/// An I/O error occurred during chunk processing.
 	#[error("IO error: {0}")]
 	Io(#[from] io::Error),
+	/// The upload session with the given ID was not found.
 	#[error("Upload session not found: {0}")]
 	SessionNotFound(String),
+	/// The received chunk size does not match the expected size.
 	#[error("Invalid chunk: expected {expected}, got {actual}")]
-	InvalidChunk { expected: usize, actual: usize },
+	InvalidChunk {
+		/// The expected chunk size in bytes.
+		expected: usize,
+		/// The actual chunk size received.
+		actual: usize,
+	},
+	/// Chunks were received out of sequential order.
 	#[error("Chunk out of order: expected {expected}, got {actual}")]
-	ChunkOutOfOrder { expected: usize, actual: usize },
+	ChunkOutOfOrder {
+		/// The expected chunk index.
+		expected: usize,
+		/// The actual chunk index received.
+		actual: usize,
+	},
+	/// The upload session has already been completed.
 	#[error("Upload already completed")]
 	AlreadyCompleted,
+	/// The assembled file checksum does not match the expected value.
 	#[error("Checksum mismatch")]
 	ChecksumMismatch,
+	/// A chunk with the same number has already been uploaded.
+	#[error("Duplicate chunk: chunk {chunk_number} has already been uploaded")]
+	DuplicateChunk {
+		/// The chunk number that was uploaded more than once.
+		chunk_number: usize,
+	},
 }
 
 /// Upload progress information
@@ -148,6 +171,8 @@ pub struct ChunkedUploadSession {
 	pub total_chunks: usize,
 	/// Number of chunks received so far
 	pub received_chunks: usize,
+	/// Set of chunk numbers that have been received, used to detect duplicates
+	received_chunk_numbers: HashSet<usize>,
 	/// Temporary directory for chunks
 	pub temp_dir: PathBuf,
 	/// Whether the upload is complete
@@ -183,6 +208,7 @@ impl ChunkedUploadSession {
 			chunk_size,
 			total_chunks,
 			received_chunks: 0,
+			received_chunk_numbers: HashSet::new(),
 			temp_dir,
 			completed: false,
 			progress: UploadProgress::new(total_size, total_chunks),
@@ -365,12 +391,18 @@ impl ChunkedUploadManager {
 			});
 		}
 
+		// Reject duplicate chunk uploads to prevent counter overcounting
+		if session.received_chunk_numbers.contains(&chunk_number) {
+			return Err(ChunkedUploadError::DuplicateChunk { chunk_number });
+		}
+
 		// Write chunk to disk
 		let chunk_path = session.chunk_path(chunk_number);
 		let mut file = File::create(chunk_path)?;
 		file.write_all(data)?;
 
-		session.received_chunks += 1;
+		session.received_chunk_numbers.insert(chunk_number);
+		session.received_chunks = session.received_chunk_numbers.len();
 		session.update_progress(data.len());
 
 		if session.is_complete() {
@@ -710,5 +742,77 @@ mod tests {
 
 		// Assert
 		assert!(result.is_err());
+	}
+
+	// =================================================================
+	// Duplicate chunk upload prevention tests (Issue #2260)
+	// =================================================================
+
+	#[rstest::rstest]
+	fn test_duplicate_chunk_upload_is_rejected() {
+		// Arrange
+		let temp_dir = PathBuf::from("/tmp/test_chunks_dedup");
+		let manager = ChunkedUploadManager::new(temp_dir.clone());
+		manager
+			.start_session("dedup1".to_string(), "file.bin".to_string(), 300, 100)
+			.unwrap();
+		let chunk_data = vec![0u8; 100];
+
+		// Act
+		manager.upload_chunk("dedup1", 0, &chunk_data).unwrap();
+		let result = manager.upload_chunk("dedup1", 0, &chunk_data);
+
+		// Assert
+		assert!(result.is_err());
+		if let Err(ChunkedUploadError::DuplicateChunk { chunk_number }) = result {
+			assert_eq!(chunk_number, 0);
+		} else {
+			panic!("Expected DuplicateChunk error");
+		}
+
+		// Verify received_chunks was not overcounted
+		let session = manager.get_session("dedup1").unwrap();
+		assert_eq!(session.received_chunks, 1);
+		assert!(!session.is_complete());
+
+		// Cleanup
+		manager.cleanup_session("dedup1").unwrap();
+	}
+
+	#[rstest::rstest]
+	fn test_sequential_chunk_upload_still_works() {
+		// Arrange
+		let temp_dir = PathBuf::from("/tmp/test_chunks_dedup_seq");
+		let manager = ChunkedUploadManager::new(temp_dir.clone());
+		manager
+			.start_session("dedup2".to_string(), "file.bin".to_string(), 300, 100)
+			.unwrap();
+
+		// Act
+		for i in 0..3 {
+			let chunk_data = vec![i as u8; 100];
+			manager.upload_chunk("dedup2", i, &chunk_data).unwrap();
+		}
+
+		// Assert
+		let session = manager.get_session("dedup2").unwrap();
+		assert_eq!(session.received_chunks, 3);
+		assert!(session.is_complete());
+
+		// Verify assembly works correctly
+		let output_path = temp_dir.join("dedup2_assembled.bin");
+		let result = manager.assemble_chunks("dedup2", output_path.clone());
+		assert!(result.is_ok());
+
+		let content = fs::read(&output_path).unwrap();
+		assert_eq!(content.len(), 300);
+		// Verify each chunk has correct content
+		assert!(content[0..100].iter().all(|&b| b == 0));
+		assert!(content[100..200].iter().all(|&b| b == 1));
+		assert!(content[200..300].iter().all(|&b| b == 2));
+
+		// Cleanup
+		fs::remove_file(output_path).unwrap();
+		manager.cleanup_session("dedup2").unwrap();
 	}
 }

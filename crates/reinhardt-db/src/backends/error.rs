@@ -3,11 +3,17 @@
 use thiserror::Error;
 
 /// Database operation errors
-#[derive(Error, Debug)]
+#[non_exhaustive]
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum DatabaseError {
 	/// Feature not supported by this database
 	#[error("Feature '{feature}' is not supported by {database}")]
-	UnsupportedFeature { database: String, feature: String },
+	UnsupportedFeature {
+		/// The database that does not support the feature.
+		database: String,
+		/// The feature that is not supported.
+		feature: String,
+	},
 
 	/// Operation not supported by this backend
 	#[error("Not supported: {0}")]

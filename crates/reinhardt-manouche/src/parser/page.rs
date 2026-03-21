@@ -13,7 +13,9 @@
 
 use proc_macro2::TokenStream;
 use syn::{
-	Expr, Ident, Pat, Result, Token, braced, parenthesized,
+	Expr, Ident, Pat, Result, Token, braced,
+	ext::IdentExt,
+	parenthesized,
 	parse::{Parse, ParseStream},
 	token,
 };
@@ -218,9 +220,10 @@ fn parse_element_node(input: ParseStream) -> Result<PageNode> {
 
 		// Check for attribute: key: value,
 		// Attributes are identified by: ident : expr ,
-		if content.peek(Ident) {
+		// Use peek_any to also match reserved keywords (type, for, etc.)
+		if content.peek(Ident::peek_any) {
 			let fork = content.fork();
-			let _ident: Ident = fork.parse()?;
+			let ident = Ident::parse_any(&fork)?;
 
 			// If followed by :, it's an attribute
 			if fork.peek(Token![:]) {
@@ -234,6 +237,17 @@ fn parse_element_node(input: ParseStream) -> Result<PageNode> {
 				element.attrs.push(parse_attr(&content)?);
 				continue;
 			}
+
+			// Standalone boolean attribute (e.g., `required`, `disabled`)
+			// Must not be followed by { (element) or ( (component call)
+			let ident_str = ident.to_string();
+			if crate::core::attr_utils::BOOLEAN_ATTRS.contains(&ident_str.as_str())
+				&& !fork.peek(token::Brace)
+				&& !fork.peek(token::Paren)
+			{
+				element.attrs.push(parse_standalone_boolean_attr(&content)?);
+				continue;
+			}
 		}
 
 		// Otherwise, it's a child node
@@ -243,9 +257,30 @@ fn parse_element_node(input: ParseStream) -> Result<PageNode> {
 	Ok(PageNode::Element(element))
 }
 
+/// Parses a standalone boolean attribute: `required`, `disabled`, etc.
+///
+/// Generates a synthetic `true` literal as the attribute value.
+fn parse_standalone_boolean_attr(input: ParseStream) -> Result<PageAttr> {
+	let name = Ident::parse_any(input)?;
+	let span = name.span();
+
+	// Consume optional trailing comma
+	if input.peek(Token![,]) {
+		input.parse::<Token![,]>()?;
+	}
+
+	// Create synthetic `true` literal value
+	let value = Expr::Lit(syn::ExprLit {
+		attrs: vec![],
+		lit: syn::Lit::Bool(syn::LitBool::new(true, span)),
+	});
+
+	Ok(PageAttr { name, value, span })
+}
+
 /// Parses an attribute: `name: value,`
 fn parse_attr(input: ParseStream) -> Result<PageAttr> {
-	let name: Ident = input.parse()?;
+	let name = Ident::parse_any(input)?;
 	let span = name.span();
 	input.parse::<Token![:]>()?;
 
@@ -955,5 +990,121 @@ mod tests {
 		let page = result.unwrap();
 		assert!(page.params.is_empty());
 		assert_eq!(page.body.nodes.len(), 1);
+	}
+
+	#[rstest]
+	#[case("type")]
+	#[case("for")]
+	fn test_parse_reserved_keyword_as_attr_name(#[case] keyword: &str) {
+		// Arrange
+		let input_str = format!("|| {{ input {{ {keyword}: \"text\", }} }}",);
+
+		// Act
+		let result: PageMacro = syn::parse_str(&input_str).unwrap();
+
+		// Assert
+		match &result.body.nodes[0] {
+			PageNode::Element(elem) => {
+				assert_eq!(elem.attrs.len(), 1);
+				assert_eq!(elem.attrs[0].name.to_string(), keyword);
+			}
+			_ => panic!("expected Element"),
+		}
+	}
+
+	#[rstest]
+	fn test_parse_standalone_boolean_attr() {
+		// Arrange
+		let input = quote!(|| { input { required } });
+
+		// Act
+		let result: PageMacro = syn::parse2(input).unwrap();
+
+		// Assert
+		match &result.body.nodes[0] {
+			PageNode::Element(elem) => {
+				assert_eq!(elem.attrs.len(), 1);
+				assert_eq!(elem.attrs[0].name.to_string(), "required");
+				match &elem.attrs[0].value {
+					Expr::Lit(lit) => match &lit.lit {
+						syn::Lit::Bool(b) => assert!(b.value()),
+						_ => panic!("expected BoolLit"),
+					},
+					_ => panic!("expected Lit expr"),
+				}
+			}
+			_ => panic!("expected Element"),
+		}
+	}
+
+	#[rstest]
+	fn test_parse_multiple_standalone_boolean_attrs() {
+		// Arrange
+		let input = quote!(|| { input { required disabled readonly } });
+
+		// Act
+		let result: PageMacro = syn::parse2(input).unwrap();
+
+		// Assert
+		match &result.body.nodes[0] {
+			PageNode::Element(elem) => {
+				assert_eq!(elem.attrs.len(), 3);
+				assert_eq!(elem.attrs[0].name.to_string(), "required");
+				assert_eq!(elem.attrs[1].name.to_string(), "disabled");
+				assert_eq!(elem.attrs[2].name.to_string(), "readonly");
+			}
+			_ => panic!("expected Element"),
+		}
+	}
+
+	#[rstest]
+	fn test_parse_mixed_attrs_and_standalone_boolean() {
+		// Arrange
+		let input = quote!(|| {
+			input {
+				r#type: "text",
+				required,
+				class: "form-input",
+			}
+		});
+
+		// Act
+		let result: PageMacro = syn::parse2(input).unwrap();
+
+		// Assert
+		match &result.body.nodes[0] {
+			PageNode::Element(elem) => {
+				assert_eq!(elem.attrs.len(), 3);
+				assert_eq!(elem.attrs[0].html_name(), "type");
+				assert_eq!(elem.attrs[1].name.to_string(), "required");
+				assert_eq!(elem.attrs[2].name.to_string(), "class");
+			}
+			_ => panic!("expected Element"),
+		}
+	}
+
+	#[rstest]
+	fn test_parse_standalone_boolean_with_children() {
+		// Arrange
+		let input = quote!(|| {
+			select {
+				required
+				option { "A" }
+				option { "B" }
+			}
+		});
+
+		// Act
+		let result: PageMacro = syn::parse2(input).unwrap();
+
+		// Assert
+		match &result.body.nodes[0] {
+			PageNode::Element(elem) => {
+				assert_eq!(elem.attrs.len(), 1);
+				assert_eq!(elem.attrs[0].name.to_string(), "required");
+				assert_eq!(elem.children.len(), 2);
+			}
+			_ => panic!("expected Element"),
+		}
 	}
 }

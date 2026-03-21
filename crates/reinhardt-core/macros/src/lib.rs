@@ -19,6 +19,8 @@ mod admin;
 mod api_view;
 mod app_config_attribute;
 mod app_config_derive;
+mod apply_update_attribute;
+mod apply_update_derive;
 mod collect_migrations;
 mod crate_paths;
 mod injectable_common;
@@ -38,11 +40,14 @@ mod routes;
 mod routes_registration;
 mod schema;
 mod use_inject;
+mod validate_derive;
 
 use action::action_impl;
 use admin::admin_impl;
 use api_view::api_view_impl;
 use app_config_attribute::app_config_attribute_impl;
+use apply_update_attribute::apply_update_attribute_impl;
+use apply_update_derive::apply_update_derive_impl;
 use injectable_fn::injectable_fn_impl;
 use injectable_struct::injectable_struct_impl;
 use installed_apps::installed_apps_impl;
@@ -632,6 +637,13 @@ pub fn derive_app_config(input: TokenStream) -> TokenStream {
 
 /// Collect migrations and register them with the global registry
 ///
+/// # Deprecated since 0.2.0
+///
+/// **This macro is deprecated.** Use `FilesystemSource` instead for loading migrations.
+/// `FilesystemSource` scans directories for `.rs` migration files and does not require
+/// compile-time registration. It is consistent with `manage migrate` behavior and
+/// works reliably in Cargo workspaces when using `env!("CARGO_MANIFEST_DIR")`.
+///
 /// This macro generates a `MigrationProvider` implementation and automatically
 /// registers it with the global migration registry using `linkme::distributed_slice`.
 ///
@@ -686,6 +698,67 @@ pub fn admin(args: TokenStream, input: TokenStream) -> TokenStream {
 	let input = parse_macro_input!(input as ItemStruct);
 
 	admin_impl(args.into(), input)
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
+}
+
+/// Attribute macro for applying partial updates to target structs
+///
+/// Automatically adds `#[derive(ApplyUpdate)]` and creates a helper config attribute.
+/// This provides a cleaner syntax for defining update request structs.
+///
+/// # Attributes
+///
+/// - `target(Type1, Type2, ...)`: Target types to generate `ApplyUpdate` implementations for
+///
+/// # Field Attributes
+///
+/// - `#[apply_update(skip)]`: Skip this field during update application
+/// - `#[apply_update(rename = "field_name")]`: Use a different field name on the target
+///
+#[proc_macro_attribute]
+pub fn apply_update(args: TokenStream, input: TokenStream) -> TokenStream {
+	let input = parse_macro_input!(input as ItemStruct);
+
+	apply_update_attribute_impl(args.into(), input)
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
+}
+
+/// Derive macro for automatic `ApplyUpdate` trait implementation
+///
+/// **Note**: Do not use this derive macro directly. Use `#[apply_update(...)]`
+/// attribute macro instead.
+///
+#[proc_macro_derive(ApplyUpdate, attributes(apply_update, apply_update_config))]
+pub fn derive_apply_update(input: TokenStream) -> TokenStream {
+	let input = parse_macro_input!(input as syn::DeriveInput);
+
+	apply_update_derive_impl(input)
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
+}
+
+/// Derive macro for struct-level validation
+///
+/// Implements the `Validate` trait using `#[validate(...)]` field attributes
+/// to call Reinhardt's built-in validators.
+///
+/// # Supported Attributes
+///
+/// - `#[validate(email)]` - Validate email format
+/// - `#[validate(url)]` - Validate URL format
+/// - `#[validate(length(min = N, max = M))]` - Validate string length
+/// - `#[validate(range(min = N, max = M))]` - Validate numeric range
+/// - `message = "..."` - Custom error message (inside rule parentheses)
+///
+/// `Option<T>` fields are skipped when `None`.
+///
+#[proc_macro_derive(Validate, attributes(validate))]
+pub fn derive_validate(input: TokenStream) -> TokenStream {
+	let input = parse_macro_input!(input as syn::DeriveInput);
+
+	validate_derive::validate_derive_impl(input)
 		.unwrap_or_else(|e| e.to_compile_error())
 		.into()
 }

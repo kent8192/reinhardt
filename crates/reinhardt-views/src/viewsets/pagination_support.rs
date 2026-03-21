@@ -14,17 +14,23 @@ use serde::Serialize;
 pub enum PaginationConfig {
 	/// Page number based pagination (default: page_size=10, max_page_size=100)
 	PageNumber {
+		/// Number of items per page.
 		page_size: usize,
+		/// Maximum allowed page size.
 		max_page_size: Option<usize>,
 	},
 	/// Limit/offset based pagination (default: default_limit=10, max_limit=100)
 	LimitOffset {
+		/// Default number of items to return.
 		default_limit: usize,
+		/// Maximum allowed limit.
 		max_limit: Option<usize>,
 	},
 	/// Cursor based pagination for large datasets
 	Cursor {
+		/// Number of items per page.
 		page_size: usize,
+		/// Field name used for cursor ordering.
 		ordering_field: String,
 	},
 	/// No pagination - return all results

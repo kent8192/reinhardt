@@ -17,8 +17,9 @@
 //! Interactive components with event handlers are hydrated on the client side.
 //! UnoCSS shortcuts are defined in index.html for consistent styling.
 
+use crate::core::client::components::icons;
 use reinhardt::pages::Signal;
-use reinhardt::pages::component::{ElementView, IntoView, View};
+use reinhardt::pages::component::{IntoPage, Page, PageElement};
 use reinhardt::pages::page;
 
 #[cfg(client)]
@@ -99,7 +100,7 @@ impl ButtonSize {
 /// * `variant` - Visual style variant
 /// * `disabled` - Whether the button is disabled
 /// * `on_click` - Signal that will be set to true when clicked
-pub fn button(text: &str, variant: ButtonVariant, disabled: bool, on_click: Signal<bool>) -> View {
+pub fn button(text: &str, variant: ButtonVariant, disabled: bool, on_click: Signal<bool>) -> Page {
 	button_with_size(text, variant, ButtonSize::Medium, disabled, on_click)
 }
 
@@ -110,7 +111,7 @@ pub fn button_with_size(
 	size: ButtonSize,
 	disabled: bool,
 	on_click: Signal<bool>,
-) -> View {
+) -> Page {
 	let class = if size.class().is_empty() {
 		variant.class().to_string()
 	} else {
@@ -124,7 +125,7 @@ pub fn button_with_size(
 		page!(|class: String, text: String, disabled: bool| {
 			button {
 				class: class,
-				r#type: "button",
+				type: "button",
 				disabled: disabled,
 				@click: {
 							let on_click = on_click_clone.clone();
@@ -143,7 +144,7 @@ pub fn button_with_size(
 		page!(|class: String, text: String, disabled: bool| {
 			button {
 				class: { class },
-				r#type: "button",
+				type: "button",
 				disabled: disabled,
 				data_reactive: "true",
 				{ text }
@@ -155,7 +156,7 @@ pub fn button_with_size(
 /// Loading spinner component
 ///
 /// Displays a modern spinner animation while content is loading.
-pub fn loading_spinner() -> View {
+pub fn loading_spinner() -> Page {
 	page!(|| {
 		div {
 			class: "flex items-center justify-center py-8",
@@ -172,7 +173,7 @@ pub fn loading_spinner() -> View {
 }
 
 /// Large loading spinner with text
-pub fn loading_spinner_large(message: &str) -> View {
+pub fn loading_spinner_large(message: &str) -> Page {
 	let message = message.to_string();
 	page!(|message: String| {
 		div {
@@ -197,7 +198,7 @@ pub fn loading_spinner_large(message: &str) -> View {
 ///
 /// * `message` - Error message to display
 /// * `dismissible` - Whether the alert can be dismissed
-pub fn error_alert(message: &str, dismissible: bool) -> View {
+pub fn error_alert(message: &str, dismissible: bool) -> Page {
 	let message = message.to_string();
 	if dismissible {
 		page!(|message: String| {
@@ -206,35 +207,16 @@ pub fn error_alert(message: &str, dismissible: bool) -> View {
 				role: "alert",
 				div {
 					class: "flex items-start gap-3",
-					svg {
-						class: "w-5 h-5 flex-shrink-0 mt-0.5",
-						fill: "currentColor",
-						viewBox: "0 0 20 20",
-						path {
-							fill_rule: "evenodd",
-							d: "M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z",
-						}
-					}
+					{ icons::error_circle_icon_with_class("w-5 h-5 flex-shrink-0 mt-0.5") }
 					span {
 						class: "flex-1",
 						{ message }
 					}
 					button {
-						r#type: "button",
+						type: "button",
 						class: "btn-icon text-danger hover:bg-red-100 dark:hover:bg-red-900/30 -mr-2 -mt-1",
 						aria_label: "Close",
-						svg {
-							class: "w-4 h-4",
-							fill: "none",
-							stroke: "currentColor",
-							viewBox: "0 0 24 24",
-							path {
-								stroke_linecap: "round",
-								stroke_linejoin: "round",
-								stroke_width: "2",
-								d: "M6 18L18 6M6 6l12 12",
-							}
-						}
+						{ icons::close_icon() }
 					}
 				}
 			}
@@ -246,15 +228,7 @@ pub fn error_alert(message: &str, dismissible: bool) -> View {
 				role: "alert",
 				div {
 					class: "flex items-start gap-3",
-					svg {
-						class: "w-5 h-5 flex-shrink-0 mt-0.5",
-						fill: "currentColor",
-						viewBox: "0 0 20 20",
-						path {
-							fill_rule: "evenodd",
-							d: "M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z",
-						}
-					}
+					{ icons::error_circle_icon_with_class("w-5 h-5 flex-shrink-0 mt-0.5") }
 					span {
 						{ message }
 					}
@@ -271,7 +245,7 @@ pub fn error_alert(message: &str, dismissible: bool) -> View {
 /// # Arguments
 ///
 /// * `message` - Success message to display
-pub fn success_alert(message: &str) -> View {
+pub fn success_alert(message: &str) -> Page {
 	let message = message.to_string();
 	page!(|message: String| {
 		div {
@@ -279,15 +253,7 @@ pub fn success_alert(message: &str) -> View {
 			role: "alert",
 			div {
 				class: "flex items-start gap-3",
-				svg {
-					class: "w-5 h-5 flex-shrink-0 mt-0.5",
-					fill: "currentColor",
-					viewBox: "0 0 20 20",
-					path {
-						fill_rule: "evenodd",
-						d: "M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z",
-					}
-				}
+				{ icons::success_check_icon() }
 				span {
 					{ message }
 				}
@@ -297,7 +263,7 @@ pub fn success_alert(message: &str) -> View {
 }
 
 /// Warning alert component
-pub fn warning_alert(message: &str) -> View {
+pub fn warning_alert(message: &str) -> Page {
 	let message = message.to_string();
 	page!(|message: String| {
 		div {
@@ -305,15 +271,7 @@ pub fn warning_alert(message: &str) -> View {
 			role: "alert",
 			div {
 				class: "flex items-start gap-3",
-				svg {
-					class: "w-5 h-5 flex-shrink-0 mt-0.5",
-					fill: "currentColor",
-					viewBox: "0 0 20 20",
-					path {
-						fill_rule: "evenodd",
-						d: "M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z",
-					}
-				}
+				{ icons::warning_icon() }
 				span {
 					{ message }
 				}
@@ -341,7 +299,7 @@ pub fn text_input(
 	input_type: &str,
 	value: Signal<String>,
 	required: bool,
-) -> View {
+) -> Page {
 	let id_owned = id.to_string();
 	let placeholder_owned = placeholder.to_string();
 	let input_type_owned = input_type.to_string();
@@ -357,13 +315,13 @@ pub fn text_input(
 			div {
 				class: "mb-4",
 				label {
-					r#for: id_owned.clone(),
+					for: id_owned.clone(),
 					class: "form-label",
 					{ label_owned }
 				}
 				watch {
 					input {
-						r#type: input_type_owned.clone(),
+						type: input_type_owned.clone(),
 						class: "form-input",
 						id: id_owned.clone(),
 						name: id_owned.clone(),
@@ -399,13 +357,13 @@ pub fn text_input(
 			div {
 				class: "mb-4",
 				label {
-					r#for: { id_owned.clone() },
+					for: { id_owned.clone() },
 					class: "form-label",
 					{ label_owned }
 				}
 				watch {
 					input {
-						r#type: { input_type_owned.clone() },
+						type: { input_type_owned.clone() },
 						class: "form-input",
 						id: { id_owned.clone() },
 						name: { id_owned.clone() },
@@ -446,7 +404,7 @@ pub fn textarea(
 	rows: u32,
 	max_length: usize,
 	value: Signal<String>,
-) -> View {
+) -> Page {
 	let id_owned = id.to_string();
 	let placeholder_owned = placeholder.to_string();
 	let label_owned = label.to_string();
@@ -470,7 +428,7 @@ pub fn textarea(
 			div {
 				class: "mb-4",
 				label {
-					r#for: id_owned.clone(),
+					for: id_owned.clone(),
 					class: "form-label",
 					{ label_owned }
 				}
@@ -526,7 +484,7 @@ pub fn textarea(
 			div {
 				class: "mb-4",
 				label {
-					r#for: { id_owned.clone() },
+					for: { id_owned.clone() },
 					class: "form-label",
 					{ label_owned }
 				}
@@ -621,35 +579,35 @@ impl AvatarSize {
 /// * `url` - Avatar image URL (None for default avatar)
 /// * `alt` - Alt text for the image
 /// * `size` - Size in pixels
-pub fn avatar(url: Option<&str>, alt: &str, size: u32) -> View {
+pub fn avatar(url: Option<&str>, alt: &str, size: u32) -> Page {
 	let src = url
 		.map(|s| s.to_string())
 		.unwrap_or_else(|| "https://via.placeholder.com/150?text=User".to_string());
 	let alt_owned = alt.to_string();
 	let size_str = format!("{}px", size);
 
-	// Use ElementView instead of page! macro for dynamic src attribute
-	ElementView::new("img")
+	// Use PageElement instead of page! macro for dynamic src attribute
+	PageElement::new("img")
 		.attr("src", src)
 		.attr("alt", alt_owned)
 		.attr("class", "rounded-full object-cover bg-surface-tertiary")
 		.attr("width", size_str.clone())
 		.attr("height", size_str)
-		.into_view()
+		.into_page()
 }
 
 /// Avatar component with size enum
-pub fn avatar_sized(url: Option<&str>, alt: &str, size: AvatarSize) -> View {
+pub fn avatar_sized(url: Option<&str>, alt: &str, size: AvatarSize) -> Page {
 	let src = url
 		.map(|s| s.to_string())
 		.unwrap_or_else(|| "https://via.placeholder.com/150?text=User".to_string());
 	let alt_owned = alt.to_string();
 
-	ElementView::new("img")
+	PageElement::new("img")
 		.attr("src", src)
 		.attr("alt", alt_owned)
 		.attr("class", format!("{} bg-surface-tertiary", size.class()))
-		.into_view()
+		.into_page()
 }
 
 /// Theme toggle button component
@@ -657,37 +615,15 @@ pub fn avatar_sized(url: Option<&str>, alt: &str, size: AvatarSize) -> View {
 /// Displays a button to toggle between light and dark mode.
 /// Uses JavaScript to toggle the theme and persist to localStorage.
 /// The click event is attached via JavaScript in index.html.
-pub fn theme_toggle() -> View {
+pub fn theme_toggle() -> Page {
 	page!(|| {
 		button {
 			class: "theme-toggle",
-			r#type: "button",
+			type: "button",
 			id: "theme-toggle-btn",
 			aria_label: "Toggle theme",
-			svg {
-				class: "icon-sun w-5 h-5",
-				fill: "none",
-				stroke: "currentColor",
-				viewBox: "0 0 24 24",
-				path {
-					stroke_linecap: "round",
-					stroke_linejoin: "round",
-					stroke_width: "2",
-					d: "M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z",
-				}
-			}
-			svg {
-				class: "icon-moon w-5 h-5",
-				fill: "none",
-				stroke: "currentColor",
-				viewBox: "0 0 24 24",
-				path {
-					stroke_linecap: "round",
-					stroke_linejoin: "round",
-					stroke_width: "2",
-					d: "M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z",
-				}
-			}
+			{ icons::sun_icon() }
+			{ icons::moon_icon() }
 		}
 	})()
 }
@@ -695,12 +631,12 @@ pub fn theme_toggle() -> View {
 /// Empty placeholder component
 ///
 /// Displays an empty div (useful for conditional rendering).
-pub fn empty() -> View {
+pub fn empty() -> Page {
 	page!(|| { div {} })()
 }
 
 /// Divider component
-pub fn divider() -> View {
+pub fn divider() -> Page {
 	page!(|| {
 		div {
 			class: "divider",
@@ -709,7 +645,7 @@ pub fn divider() -> View {
 }
 
 /// Badge component
-pub fn badge(text: &str, primary: bool) -> View {
+pub fn badge(text: &str, primary: bool) -> Page {
 	let text = text.to_string();
 	let class = if primary {
 		"badge-primary"

@@ -518,13 +518,20 @@ pub struct PerformanceMetrics {
 	validation_times: Arc<RwLock<Vec<u64>>>,
 }
 
+/// Aggregated performance statistics for serialization and validation operations.
 #[derive(Debug, Clone)]
 pub struct PerformanceStats {
+	/// Total number of serialization operations recorded.
 	pub total_serializations: usize,
+	/// Total number of validation operations recorded.
 	pub total_validations: usize,
+	/// Average serialization time in milliseconds.
 	pub avg_serialization_ms: f64,
+	/// Average validation time in milliseconds.
 	pub avg_validation_ms: f64,
+	/// Maximum serialization time in milliseconds.
 	pub max_serialization_ms: u64,
+	/// Maximum validation time in milliseconds.
 	pub max_validation_ms: u64,
 }
 

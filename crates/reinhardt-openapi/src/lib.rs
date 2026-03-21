@@ -1,3 +1,5 @@
+#![warn(missing_docs)]
+
 //! # Reinhardt OpenAPI Router
 //!
 //! OpenAPI router wrapper that automatically adds documentation endpoints.

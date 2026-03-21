@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-graphql"
-version = "0.1.0-alpha.7"
+version = "0.1.0-rc.13"
 description = "GraphQL API support for Reinhardt (facade crate)"
 edition.workspace = true
 license.workspace = true
@@ -27,6 +27,8 @@ subscription = [
 di = ["dep:reinhardt-di", "dep:reinhardt-graphql-macros"]
 # All features enabled
 full = ["graphql-grpc", "subscription", "di"]
+# Test utilities
+test-utils = ["dep:reinhardt-test", "reinhardt-test/testcontainers"]
 
 [dependencies]
 # Core dependencies (merged from graphql-core)
@@ -55,8 +57,11 @@ reinhardt-di = { workspace = true, optional = true }
 # Re-export macros when features are enabled
 reinhardt-graphql-macros = { workspace = true, optional = true }
 
+# Test utilities (optional)
+reinhardt-test = { workspace = true, optional = true }
+
 [dev-dependencies]
+insta = { workspace = true }
 tokio-test = "0.4"
-reinhardt-test = { workspace = true, features = ["testcontainers"] }
 rstest = { workspace = true }
 trybuild = { workspace = true }

@@ -15,10 +15,14 @@ use std::fmt;
 use std::sync::Arc;
 
 /// Error type for ordering operations
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum OrderError {
+	/// InvalidOrder variant.
 	InvalidOrder(String),
+	/// OrderFieldNotFound variant.
 	OrderFieldNotFound(String),
+	/// UpdateFailed variant.
 	UpdateFailed(String),
 }
 
@@ -38,8 +42,11 @@ impl std::error::Error for OrderError {}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum OrderValue {
+	/// Integer variant.
 	Integer(i64),
+	/// String variant.
 	String(String),
+	/// Boolean variant.
 	Boolean(bool),
 }
 

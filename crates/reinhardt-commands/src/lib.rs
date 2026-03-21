@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! # Reinhardt Management Commands
 //!
 //! Django-style management command framework for Reinhardt.
@@ -137,22 +138,41 @@
 //! Bacon can be configured via `bacon.toml` in the project root. See the bacon
 //! documentation for more details: <https://dystroy.org/bacon/>
 
+/// Base command trait and argument/option definitions.
 pub mod base;
+/// Built-in management commands (migrate, runserver, shell, etc.).
 pub mod builtin;
+/// CLI argument parsing and command dispatch.
 pub mod cli;
+/// Static file collection command.
 pub mod collectstatic;
+/// Command execution context (settings, output, verbosity).
 pub mod context;
+/// Embedded Tera templates for project/app scaffolding.
 pub mod embedded_templates;
+/// Code formatting utilities for generated code.
 pub mod formatter;
+/// Internationalization commands (makemessages, compilemessages).
 pub mod i18n_commands;
+/// Project introspection command for platform metadata discovery.
+#[cfg(feature = "introspect")]
+pub mod introspect;
+/// Email testing command.
 pub mod mail_commands;
+/// Terminal output wrapper with styling support.
 pub mod output;
+/// Plugin management commands.
 #[cfg(feature = "plugins")]
 pub mod plugin_commands;
+/// Command registry for discovery and dispatch.
 pub mod registry;
+/// Project and app scaffolding commands (startproject, startapp).
 pub mod start_commands;
+/// Template-based code generation utilities.
 pub mod template;
+/// WASM build tooling for client-side compilation.
 pub mod wasm_builder;
+/// Development server welcome page.
 pub mod welcome_page;
 
 use thiserror::Error;
@@ -163,10 +183,15 @@ pub use builtin::MakeMigrationsCommand;
 #[cfg(feature = "routers")]
 pub use builtin::ShowUrlsCommand;
 pub use builtin::{CheckCommand, CheckDiCommand, MigrateCommand, RunServerCommand, ShellCommand};
-pub use cli::{Cli, Commands, execute_from_command_line, run_command};
+pub use cli::{
+	Cli, Commands, execute_from_command_line, execute_from_command_line_with_registry, run_command,
+	run_command_with_registry,
+};
 pub use collectstatic::{CollectStaticCommand, CollectStaticOptions, CollectStaticStats};
 pub use context::CommandContext;
 pub use i18n_commands::{CompileMessagesCommand, MakeMessagesCommand};
+#[cfg(feature = "introspect")]
+pub use introspect::IntrospectCommand;
 pub use mail_commands::SendTestEmailCommand;
 pub use output::OutputWrapper;
 pub use registry::CommandRegistry;
@@ -183,23 +208,30 @@ pub use plugin_commands::{
 	PluginListCommand, PluginRemoveCommand, PluginSearchCommand, PluginUpdateCommand,
 };
 
+/// Errors that can occur during management command execution.
 #[derive(Debug, Error)]
 pub enum CommandError {
+	/// The requested command was not found in the registry.
 	#[error("Command not found: {0}")]
 	NotFound(String),
 
+	/// The provided command arguments are invalid.
 	#[error("Invalid arguments: {0}")]
 	InvalidArguments(String),
 
+	/// A runtime error occurred during command execution.
 	#[error("Execution error: {0}")]
 	ExecutionError(String),
 
+	/// An I/O error occurred.
 	#[error("IO error: {0}")]
 	IoError(#[from] std::io::Error),
 
+	/// An error occurred while parsing command input.
 	#[error("Parse error: {0}")]
 	ParseError(String),
 
+	/// A template rendering error occurred.
 	#[error("Template error: {0}")]
 	TemplateError(String),
 }
@@ -222,4 +254,5 @@ impl From<serde_json::Error> for CommandError {
 	}
 }
 
+/// A specialized `Result` type for management command operations.
 pub type CommandResult<T> = std::result::Result<T, CommandError>;

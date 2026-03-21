@@ -1,0 +1,92 @@
+name: Develop Leak Guard
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: >-
+    ${{ github.workflow }}-${{ github.head_ref || github.run_id }}-${{
+    contains(fromJSON('["labeled","unlabeled"]'), github.event.action) &&
+    github.event.label.name != 'migration-approved' &&
+    github.event.label.name || 'default' }}
+  cancel-in-progress: true
+
+jobs:
+  develop-leak-guard:
+    name: Develop Leak Guard
+    if: >-
+      github.event.action != 'labeled' && github.event.action != 'unlabeled' ||
+      github.event.label.name == 'migration-approved'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if migration-approved
+        id: label-check
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+            });
+            const labels = pr.labels.map(l => l.name);
+            const approved = labels.includes('migration-approved');
+            core.setOutput('skip', approved ? 'true' : 'false');
+            if (approved) {
+              core.info('migration-approved label found, skipping leak check.');
+            }
+
+      - name: Checkout full history
+        if: steps.label-check.outputs.skip != 'true'
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check for develop/* merge leaks
+        if: steps.label-check.outputs.skip != 'true'
+        run: |
+          # Fetch all remote develop/* refs
+          git fetch origin '+refs/heads/develop/*:refs/remotes/origin/develop/*' --no-tags 2>/dev/null || true
+
+          # Check if any develop/* remote branches exist
+          if ! git branch -r | grep -q 'origin/develop/'; then
+            echo "No origin/develop/* branches found. Nothing to check."
+            exit 0
+          fi
+
+          MERGE_BASE=$(git merge-base origin/main HEAD)
+          FOUND=0
+          DETAILS=""
+
+          while IFS=' ' read -r HASH PARENT1 PARENT2 REST; do
+            if [ -n "$PARENT2" ]; then
+              # Skip if parent is an ancestor of origin/main (came through main, not develop/*)
+              if git merge-base --is-ancestor "$PARENT2" origin/main 2>/dev/null; then
+                continue
+              fi
+              DEVELOP_BRANCH=$(git branch -r --contains "$PARENT2" 2>/dev/null \
+                | grep 'origin/develop/' | head -1 | xargs)
+              if [ -n "$DEVELOP_BRANCH" ]; then
+                SUBJECT=$(git log --oneline -1 "$HASH")
+                DETAILS="${DETAILS}  - ${SUBJECT} (parent: ${PARENT2:0:12} on ${DEVELOP_BRANCH})\n"
+                FOUND=1
+              fi
+            fi
+          done < <(git log "$MERGE_BASE"..HEAD --merges --format="%H %P")
+
+          if [ "$FOUND" -eq 1 ]; then
+            echo "::error::This PR contains merge commits from develop/* branches."
+            echo "Detected develop/* merge leaks:"
+            echo -e "$DETAILS"
+            echo ""
+            echo "If this is an intentional develop branch merge, apply the 'migration-approved' label."
+            exit 1
+          else
+            echo "No develop/* merge leaks detected."
+          fi

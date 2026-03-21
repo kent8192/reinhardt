@@ -441,6 +441,7 @@ impl<T> Default for ResponseBuilder<T> {
 
 /// Trait for converting to REST API responses
 pub trait IntoApiResponse<T> {
+	/// Converts this value into an `ApiResponse<T>`.
 	fn into_api_response(self) -> ApiResponse<T>;
 }
 

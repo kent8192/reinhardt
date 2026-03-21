@@ -8,7 +8,7 @@ use reinhardt::UnifiedRouter;
 use reinhardt::pages::server_fn::ServerFnRouterExt;
 
 #[cfg(server)]
-use crate::apps::profile::server::server_fn::{fetch_profile, update_profile, update_profile_form};
+use crate::apps::profile::shared::server_fn::{fetch_profile, update_profile, update_profile_form};
 
 #[cfg(client)]
 use {

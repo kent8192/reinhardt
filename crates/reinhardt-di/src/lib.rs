@@ -187,6 +187,55 @@
 //! // }
 //! # }
 //! ```
+//!
+//! ## Auth Extractor DI Context Requirements
+//!
+//! The `reinhardt-auth` crate provides injectable auth extractors that depend on
+//! specific DI context configuration. Understanding these requirements is essential
+//! for proper authentication integration.
+//!
+//! ### `AuthUser<U>` (recommended)
+//!
+//! Loads the full user model from the database. Requires:
+//!
+//! - **`DatabaseConnection`** registered as a singleton in `InjectionContext`
+//! - **`AuthState`** present in request extensions (set by authentication middleware)
+//! - Feature `params` enabled on `reinhardt-auth`
+//!
+//! Returns an injection error if any requirement is missing (fail-fast behavior).
+//!
+//! ```rust,ignore
+//! use reinhardt_auth::AuthUser;
+//! use reinhardt_auth::DefaultUser;
+//!
+//! #[get("/profile/")]
+//! pub async fn profile(
+//!     #[inject] AuthUser(user): AuthUser<DefaultUser>,
+//! ) -> ViewResult<Response> {
+//!     let username = user.get_username();
+//!     // ...
+//! }
+//! ```
+//!
+//! ### `AuthInfo` (lightweight alternative)
+//!
+//! Extracts authentication metadata without a database query. Requires:
+//!
+//! - **`AuthState`** present in request extensions (set by authentication middleware)
+//! - No `DatabaseConnection` needed
+//!
+//! ### `CurrentUser<U>` (deprecated)
+//!
+//! Deprecated in favor of `AuthUser<U>`. Unlike `AuthUser<U>`, missing context
+//! causes silent fallback to anonymous instead of returning an error.
+//!
+//! ### Startup Validation
+//!
+//! Call `reinhardt_auth::validate_auth_extractors()` during application startup
+//! to verify that required dependencies (e.g., `DatabaseConnection`) are registered
+//! before the first request arrives.
+
+#![warn(missing_docs)]
 
 pub mod params;
 
@@ -231,39 +280,75 @@ pub use inventory;
 #[cfg(feature = "macros")]
 pub use reinhardt_di_macros::{injectable, injectable_factory};
 
+/// Errors that can occur during dependency injection resolution.
 #[derive(Debug, Error)]
 pub enum DiError {
+	/// The requested dependency was not found in the container.
 	#[error("Dependency not found: {0}")]
 	NotFound(String),
 
+	/// A circular dependency chain was detected during resolution.
 	#[error("Circular dependency detected: {0}")]
 	CircularDependency(String),
 
+	/// An error occurred in a dependency provider function.
 	#[error("Provider error: {0}")]
 	ProviderError(String),
 
+	/// The resolved type did not match the expected type.
 	#[error("Type mismatch: expected {expected}, got {actual}")]
-	TypeMismatch { expected: String, actual: String },
+	TypeMismatch {
+		/// The type that was expected.
+		expected: String,
+		/// The type that was actually resolved.
+		actual: String,
+	},
 
+	/// An error related to dependency scoping (request vs singleton).
 	#[error("Scope error: {0}")]
 	ScopeError(String),
 
+	/// The requested type was not registered in the dependency registry.
 	#[error("Type '{type_name}' not registered. {hint}")]
-	NotRegistered { type_name: String, hint: String },
+	NotRegistered {
+		/// The name of the unregistered type.
+		type_name: String,
+		/// A hint message suggesting how to register the type.
+		hint: String,
+	},
 
+	/// A required dependency was not registered.
 	#[error("Dependency not registered: {type_name}")]
-	DependencyNotRegistered { type_name: String },
+	DependencyNotRegistered {
+		/// The name of the unregistered dependency type.
+		type_name: String,
+	},
 
+	/// An internal error in the DI system.
 	#[error("Internal error: {message}")]
-	Internal { message: String },
+	Internal {
+		/// A description of the internal error.
+		message: String,
+	},
 }
 
 impl From<DiError> for reinhardt_core::exception::Error {
 	fn from(err: DiError) -> Self {
-		reinhardt_core::exception::Error::Internal(format!("Dependency injection error: {}", err))
+		match &err {
+			DiError::NotFound(_)
+			| DiError::NotRegistered { .. }
+			| DiError::DependencyNotRegistered { .. } => reinhardt_core::exception::Error::NotFound(
+				format!("Dependency injection error: {}", err),
+			),
+			_ => reinhardt_core::exception::Error::Internal(format!(
+				"Dependency injection error: {}",
+				err
+			)),
+		}
 	}
 }
 
+/// A specialized `Result` type for dependency injection operations.
 pub type DiResult<T> = std::result::Result<T, DiError>;
 
 // Generator support

@@ -833,4 +833,60 @@ mod tests {
 		// Act & Assert - non-blocked client should be allowed
 		assert!(permission.has_permission(&context).await);
 	}
+
+	#[rstest]
+	fn test_ipv6_whitelist_single_address() {
+		// Arrange
+		let permission = IpWhitelistPermission::new().add_ip("2001:db8::1");
+		let ipv6_addr = IpAddr::from_str("2001:db8::1").unwrap();
+		let other_ipv6 = IpAddr::from_str("2001:db8::2").unwrap();
+
+		// Act
+		let result_match = permission.is_allowed(&ipv6_addr);
+		let result_no_match = permission.is_allowed(&other_ipv6);
+
+		// Assert
+		assert!(result_match);
+		assert!(!result_no_match);
+	}
+
+	#[rstest]
+	fn test_cidr_range_boundary_addresses() {
+		// Arrange
+		let permission = IpWhitelistPermission::new().add_cidr("10.0.0.0/24");
+		let first_addr = IpAddr::from_str("10.0.0.0").unwrap();
+		let last_addr = IpAddr::from_str("10.0.0.255").unwrap();
+		let outside_addr = IpAddr::from_str("10.0.1.0").unwrap();
+
+		// Act
+		let result_first = permission.is_allowed(&first_addr);
+		let result_last = permission.is_allowed(&last_addr);
+		let result_outside = permission.is_allowed(&outside_addr);
+
+		// Assert
+		assert!(result_first);
+		assert!(result_last);
+		assert!(!result_outside);
+	}
+
+	#[rstest]
+	fn test_mixed_ipv4_ipv6_whitelist() {
+		// Arrange
+		let permission = IpWhitelistPermission::new()
+			.add_ip("192.168.1.1")
+			.add_ip("2001:db8::1");
+		let ipv4_addr = IpAddr::from_str("192.168.1.1").unwrap();
+		let ipv6_addr = IpAddr::from_str("2001:db8::1").unwrap();
+		let other_ipv4 = IpAddr::from_str("10.0.0.1").unwrap();
+
+		// Act
+		let result_ipv4 = permission.is_allowed(&ipv4_addr);
+		let result_ipv6 = permission.is_allowed(&ipv6_addr);
+		let result_other = permission.is_allowed(&other_ipv4);
+
+		// Assert
+		assert!(result_ipv4);
+		assert!(result_ipv6);
+		assert!(!result_other);
+	}
 }

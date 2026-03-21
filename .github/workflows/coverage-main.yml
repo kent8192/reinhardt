@@ -1,0 +1,25 @@
+name: Coverage
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: coverage-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: Coverage
+    uses: ./.github/workflows/coverage.yml
+    secrets: inherit
+    with:
+      runner: '"ubuntu-latest"'
+      cargo-build-jobs: '1'
+      run-all: 'true'

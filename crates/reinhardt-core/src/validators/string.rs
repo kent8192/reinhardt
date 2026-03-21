@@ -53,13 +53,14 @@ impl MinLengthValidator {
 
 impl Validator<String> for MinLengthValidator {
 	fn validate(&self, value: &String) -> ValidationResult<()> {
-		if value.len() >= self.min {
+		let char_count = value.chars().count();
+		if char_count >= self.min {
 			Ok(())
 		} else if let Some(ref msg) = self.message {
 			Err(ValidationError::Custom(msg.clone()))
 		} else {
 			Err(ValidationError::TooShort {
-				length: value.len(),
+				length: char_count,
 				min: self.min,
 			})
 		}
@@ -68,13 +69,14 @@ impl Validator<String> for MinLengthValidator {
 
 impl Validator<str> for MinLengthValidator {
 	fn validate(&self, value: &str) -> ValidationResult<()> {
-		if value.len() >= self.min {
+		let char_count = value.chars().count();
+		if char_count >= self.min {
 			Ok(())
 		} else if let Some(ref msg) = self.message {
 			Err(ValidationError::Custom(msg.clone()))
 		} else {
 			Err(ValidationError::TooShort {
-				length: value.len(),
+				length: char_count,
 				min: self.min,
 			})
 		}
@@ -129,13 +131,14 @@ impl MaxLengthValidator {
 
 impl Validator<String> for MaxLengthValidator {
 	fn validate(&self, value: &String) -> ValidationResult<()> {
-		if value.len() <= self.max {
+		let char_count = value.chars().count();
+		if char_count <= self.max {
 			Ok(())
 		} else if let Some(ref msg) = self.message {
 			Err(ValidationError::Custom(msg.clone()))
 		} else {
 			Err(ValidationError::TooLong {
-				length: value.len(),
+				length: char_count,
 				max: self.max,
 			})
 		}
@@ -144,13 +147,14 @@ impl Validator<String> for MaxLengthValidator {
 
 impl Validator<str> for MaxLengthValidator {
 	fn validate(&self, value: &str) -> ValidationResult<()> {
-		if value.len() <= self.max {
+		let char_count = value.chars().count();
+		if char_count <= self.max {
 			Ok(())
 		} else if let Some(ref msg) = self.message {
 			Err(ValidationError::Custom(msg.clone()))
 		} else {
 			Err(ValidationError::TooLong {
-				length: value.len(),
+				length: char_count,
 				max: self.max,
 			})
 		}
@@ -796,9 +800,39 @@ mod tests {
 	#[test]
 	fn test_min_length_validator_unicode() {
 		let validator = MinLengthValidator::new(3);
-		// Unicode characters count as single characters in byte length
 		assert!(validator.validate("abc").is_ok());
-		assert!(validator.validate("日本語").is_ok()); // 9 bytes, 3 chars
+		assert!(validator.validate("日本語").is_ok()); // 9 bytes, 3 chars — passes because char count is used
+	}
+
+	#[test]
+	fn test_min_length_validator_uses_char_count_not_bytes() {
+		// "あい" is 2 characters but 6 bytes in UTF-8
+		let validator = MinLengthValidator::new(3);
+		let result = validator.validate("あい");
+		assert!(result.is_err());
+		match result {
+			Err(ValidationError::TooShort { length, min }) => {
+				assert_eq!(length, 2); // character count, not byte length (6)
+				assert_eq!(min, 3);
+			}
+			_ => panic!("Expected TooShort error"),
+		}
+	}
+
+	#[test]
+	fn test_max_length_validator_uses_char_count_not_bytes() {
+		// "あいう" is 3 characters but 9 bytes in UTF-8
+		let validator = MaxLengthValidator::new(5);
+		assert!(validator.validate("あいう").is_ok()); // 3 chars <= 5: valid
+		let result = validator.validate("あいうえおか"); // 6 chars > 5: invalid
+		assert!(result.is_err());
+		match result {
+			Err(ValidationError::TooLong { length, max }) => {
+				assert_eq!(length, 6); // character count, not byte length (18)
+				assert_eq!(max, 5);
+			}
+			_ => panic!("Expected TooLong error"),
+		}
 	}
 
 	#[test]

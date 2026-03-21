@@ -5,11 +5,13 @@
 
 use crate::apps::dm::client::hooks::{use_dm_chat, use_dm_room_list};
 use crate::apps::dm::shared::types::{MessageInfo, RoomInfo};
+use crate::core::client::components::icons;
 use reinhardt::pages::Signal;
-use reinhardt::pages::component::View;
+use reinhardt::pages::component::Page;
 use reinhardt::pages::page;
 use reinhardt::pages::reactive::hooks::{ConnectionState, use_state};
 use uuid::Uuid;
+use wasm_bindgen::JsCast;
 
 /// Message input component (extracted to avoid complex closures)
 ///
@@ -17,7 +19,7 @@ use uuid::Uuid;
 fn message_input(
 	input_signal: Signal<String>,
 	send_callback: impl Fn(String) + Clone + 'static,
-) -> View {
+) -> Page {
 	let input_for_display = input_signal.clone();
 	let input_for_change = input_signal.clone();
 	let input_for_click = input_signal.clone();
@@ -26,7 +28,7 @@ fn message_input(
 		div {
 			class: "dm-input-container flex gap-2 p-4 border-t border-surface-tertiary",
 			input {
-				r#type: "text",
+				type: "text",
 				class: "form-control flex-1",
 				placeholder: "Type a message...",
 				value: input_for_display.get(),
@@ -43,7 +45,7 @@ fn message_input(
 			}
 			button {
 				class: "btn-primary",
-				r#type: "button",
+				type: "button",
 				@click: {
 							let input_signal = input_for_click.clone();
 							let send_callback = send_callback.clone();
@@ -62,7 +64,7 @@ fn message_input(
 }
 
 /// Single message display component
-fn message_item(message: &MessageInfo, is_own_message: bool) -> View {
+fn message_item(message: &MessageInfo, is_own_message: bool) -> Page {
 	let content = message.content.clone();
 	let sender = message.sender_username.clone();
 	let timestamp = message.created_at.clone();
@@ -109,7 +111,7 @@ fn message_item(message: &MessageInfo, is_own_message: bool) -> View {
 }
 
 /// Connection status indicator component
-fn connection_status(is_connected: bool) -> View {
+fn connection_status(is_connected: bool) -> Page {
 	page!(|is_connected: bool| {
 		div {
 			class: "flex items-center gap-2 text-sm",
@@ -140,7 +142,7 @@ fn connection_status(is_connected: bool) -> View {
 /// - Message sending with optimistic UI
 /// - Connection status indicator
 /// - Loading and error states
-pub fn dm_chat(room_id: Uuid, current_user_id: Option<Uuid>) -> View {
+pub fn dm_chat(room_id: Uuid, current_user_id: Option<Uuid>) -> Page {
 	let chat = use_dm_chat(room_id);
 
 	// Local state for input
@@ -156,10 +158,9 @@ pub fn dm_chat(room_id: Uuid, current_user_id: Option<Uuid>) -> View {
 	// Clone chat handle for send callback
 	let chat_for_send = chat.clone();
 
-	page!(|messages_signal: Signal<Vec<MessageInfo>>, is_loading_signal: Signal<bool>, error_signal: Signal<Option<String>>, ws_state: Signal<ConnectionState>, input_signal: Signal<String>, current_user_id: Option<Uuid>, room_id: Uuid| {
+	page!(|messages_signal: Signal<Vec<MessageInfo>>, is_loading_signal: Signal<bool>, error_signal: Signal<Option<String>>, ws_state: Signal<ConnectionState>, input_signal: Signal<String>, current_user_id: Option<Uuid>, _room_id: Uuid| {
 		div {
 			class: "dm-chat-container flex flex-col h-full",
-			// Header with connection status
 			div {
 				class: "dm-header flex items-center justify-between p-4 border-b border-surface-tertiary",
 				h2 {
@@ -170,7 +171,6 @@ pub fn dm_chat(room_id: Uuid, current_user_id: Option<Uuid>) -> View {
 					{ connection_status(matches!(ws_state.get(), ConnectionState::Open)) }
 				}
 			}
-			// Message list area
 			div {
 				class: "dm-messages flex-1 overflow-y-auto p-4 space-y-3",
 				watch {
@@ -196,18 +196,7 @@ pub fn dm_chat(room_id: Uuid, current_user_id: Option<Uuid>) -> View {
 							class: "flex flex-col items-center justify-center py-16 text-center",
 							div {
 								class: "w-16 h-16 rounded-full bg-surface-tertiary flex items-center justify-center mb-4",
-								svg {
-									class: "w-8 h-8 text-content-tertiary",
-									fill: "none",
-									stroke: "currentColor",
-									viewBox: "0 0 24 24",
-									path {
-										stroke_linecap: "round",
-										stroke_linejoin: "round",
-										stroke_width: "1.5",
-										d: "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z",
-									}
-								}
+								{ icons::chat_bubble_icon_lg() }
 							}
 							h3 {
 								class: "text-lg font-semibold text-content-primary mb-1",
@@ -222,30 +211,34 @@ pub fn dm_chat(room_id: Uuid, current_user_id: Option<Uuid>) -> View {
 						div {
 							class: "space-y-3",
 							{
-								let current_uid = current_user_id;
-								View::fragment(
-									messages_signal.get().iter().map(|m| {
-										let is_own = current_uid.map(|uid| m.sender_id == uid).unwrap_or(false);
-										message_item(m, is_own)
-									}).collect::<Vec<_>>()
-								)
+								Page::Fragment(
+										messages_signal
+											.get()
+											.iter()
+											.map(|m| {
+												let is_own = current_user_id
+													.map(|uid| m.sender_id == uid)
+													.unwrap_or(false);
+												message_item(m, is_own)
+											})
+											.collect::<Vec<_>>(),
+									)
 							}
 						}
 					}
 				}
 			}
-			// Message input area
 			{
 				message_input(input_signal.clone(), move |content| {
-					chat_for_send.send_message(content);
-				})
+						chat_for_send.send_message(content);
+					})
 			}
 		}
 	})(
 		messages_signal,
 		is_loading_signal,
 		error_signal,
-		ws_state,
+		ws_state.clone(),
 		input_signal,
 		current_user_id,
 		room_id,
@@ -253,7 +246,7 @@ pub fn dm_chat(room_id: Uuid, current_user_id: Option<Uuid>) -> View {
 }
 
 /// Single room item in the list
-fn room_item(room: &RoomInfo, on_select: impl Fn(Uuid) + Clone + 'static) -> View {
+fn room_item(room: &RoomInfo, on_select: impl Fn(Uuid) + Clone + 'static) -> Page {
 	let room_id = room.id;
 	let name = room.name.clone();
 	let last_message = room.last_message.clone();
@@ -325,7 +318,7 @@ fn room_item(room: &RoomInfo, on_select: impl Fn(Uuid) + Clone + 'static) -> Vie
 /// - Room list with last message preview
 /// - Unread message badges (real-time updated)
 /// - Loading and error states
-pub fn dm_room_list(on_room_select: impl Fn(Uuid) + Clone + 'static) -> View {
+pub fn dm_room_list(on_room_select: impl Fn(Uuid) + Clone + 'static) -> Page {
 	let room_list = use_dm_room_list();
 
 	// Clone signals for page macro
@@ -371,18 +364,7 @@ pub fn dm_room_list(on_room_select: impl Fn(Uuid) + Clone + 'static) -> View {
 							class: "flex flex-col items-center justify-center py-16 text-center px-4",
 							div {
 								class: "w-16 h-16 rounded-full bg-surface-tertiary flex items-center justify-center mb-4",
-								svg {
-									class: "w-8 h-8 text-content-tertiary",
-									fill: "none",
-									stroke: "currentColor",
-									viewBox: "0 0 24 24",
-									path {
-										stroke_linecap: "round",
-										stroke_linejoin: "round",
-										stroke_width: "1.5",
-										d: "M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z",
-									}
-								}
+								{ icons::chat_multi_icon_lg() }
 							}
 							h3 {
 								class: "text-lg font-semibold text-content-primary mb-1",
@@ -395,7 +377,15 @@ pub fn dm_room_list(on_room_select: impl Fn(Uuid) + Clone + 'static) -> View {
 						}
 					} else {
 						div {
-							{ View::fragment(rooms_signal.get().iter().map(|r| { room_item(r, on_room_select.clone()) }).collect ::<Vec<_>>()) }
+							{
+								Page::Fragment(
+										rooms_signal
+											.get()
+											.iter()
+											.map(|r| room_item(r, on_room_select.clone()))
+											.collect::<Vec<_>>(),
+									)
+							}
 						}
 					}
 				}

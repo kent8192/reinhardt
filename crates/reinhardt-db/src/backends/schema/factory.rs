@@ -130,9 +130,11 @@ pub struct SchemaEditorFactory {
 	#[cfg(feature = "postgres")]
 	pg_pool: Option<Arc<PgPool>>,
 	#[cfg(feature = "mysql")]
+	// Allow dead_code: pool stored for future MySQL schema operations
 	#[allow(dead_code)]
 	mysql_pool: Option<Arc<MySqlPool>>,
 	#[cfg(feature = "sqlite")]
+	// Allow dead_code: pool stored for future SQLite schema operations
 	#[allow(dead_code)]
 	sqlite_pool: Option<Arc<SqlitePool>>,
 }

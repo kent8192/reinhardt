@@ -7,7 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-alpha.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-throttling@v0.1.0-alpha.2...reinhardt-throttling@v0.1.0-alpha.3) - 2026-02-21
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-throttling@v0.1.0-rc.8...reinhardt-throttling@v0.1.0-rc.9) - 2026-03-15
+
+### Fixed
+
+- *(throttling)* use per-key state in leaky bucket throttle
+- *(throttling)* use lazy initialization for per-key bucket state
+- *(throttling)* prevent capacity overflow and add per-key isolation tests
+- *(throttling)* make max_entries field private to preserve semver compatibility
+- *(throttling)* move max_entries cap from Config to Throttle backend
+
+### Other
+
+- resolve conflict with main in token_bucket.rs
+
+### Performance
+
+- *(throttling)* add bounded HashMap with eviction for per-key throttle backends
+
+### Styling
+
+- apply auto-fix for fmt and clippy
+
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-throttling@v0.1.0-rc.4...reinhardt-throttling@v0.1.0-rc.5) - 2026-03-07
+
+### Documentation
+
+- add missing doc comments for public API modules and types
+
+### Other
+
+- resolve conflicts with main branch
+
+### Testing
+
+- *(throttling)* add test coverage for get_country_code GeoIP path
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-throttling@v0.1.0-rc.1...reinhardt-throttling@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(throttling)* use per-key bucket state in TokenBucket rate limiter
+- *(meta)* fix workspace inheritance and authors metadata
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-throttling@v0.1.0-alpha.2...reinhardt-throttling@v0.1.0-rc.1) - 2026-02-21
 
 ### Fixed
 

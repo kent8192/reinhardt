@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Error types for composite primary key operations
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum CompositePkError {
 	/// Empty fields list provided
@@ -15,7 +16,12 @@ pub enum CompositePkError {
 	/// Missing required field value
 	MissingField(String),
 	/// Invalid field value type
-	InvalidFieldType { field: String, expected: String },
+	InvalidFieldType {
+		/// The field name.
+		field: String,
+		/// The expected type name.
+		expected: String,
+	},
 	/// Duplicate field name in definition
 	DuplicateField(String),
 }
@@ -45,9 +51,13 @@ impl std::error::Error for CompositePkError {}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PkValue {
+	/// String variant.
 	String(String),
+	/// Int variant.
 	Int(i64),
+	/// Uint variant.
 	Uint(u64),
+	/// Bool variant.
 	Bool(bool),
 }
 
@@ -154,6 +164,13 @@ impl From<&String> for PkValue {
 	}
 }
 
+/// Quote a SQL identifier using ANSI SQL double-quote escaping.
+///
+/// Embedded double quotes are escaped by doubling them.
+fn quote_identifier(ident: &str) -> String {
+	format!("\"{}\"", ident.replace('"', "\"\""))
+}
+
 /// Composite primary key definition consisting of multiple fields
 ///
 /// A composite primary key is a primary key that spans multiple columns in a database table.
@@ -249,9 +266,14 @@ impl CompositePrimaryKey {
 	/// assert!(sql.contains("order_id"));
 	/// ```
 	pub fn to_sql(&self) -> String {
-		let fields = self.fields.join(", ");
+		let fields: Vec<String> = self.fields.iter().map(|f| quote_identifier(f)).collect();
+		let fields = fields.join(", ");
 		if let Some(ref name) = self.name {
-			format!("CONSTRAINT {} PRIMARY KEY ({})", name, fields)
+			format!(
+				"CONSTRAINT {} PRIMARY KEY ({})",
+				quote_identifier(name),
+				fields
+			)
 		} else {
 			format!("PRIMARY KEY ({})", fields)
 		}
@@ -296,7 +318,7 @@ impl CompositePrimaryKey {
 	///
 	/// let where_clause = pk.to_where_clause(&values);
 	/// assert!(where_clause.is_ok());
-	/// assert!(where_clause.unwrap().contains("user_id = 100"));
+	/// assert!(where_clause.unwrap().contains("\"user_id\" = 100"));
 	/// ```
 	pub fn to_where_clause(
 		&self,
@@ -309,7 +331,7 @@ impl CompositePrimaryKey {
 			.iter()
 			.map(|field| {
 				let value = values.get(field).unwrap();
-				format!("{} = {}", field, value.to_sql_string())
+				format!("{} = {}", quote_identifier(field), value.to_sql_string())
 			})
 			.collect();
 
@@ -360,6 +382,7 @@ impl Constraint for CompositePrimaryKey {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_composite_pk_new_valid() {
@@ -401,7 +424,7 @@ mod tests {
 		let pk =
 			CompositePrimaryKey::new(vec!["user_id".to_string(), "order_id".to_string()]).unwrap();
 		let sql = pk.to_sql();
-		assert_eq!(sql, "PRIMARY KEY (user_id, order_id)");
+		assert_eq!(sql, "PRIMARY KEY (\"user_id\", \"order_id\")");
 	}
 
 	#[test]
@@ -414,7 +437,7 @@ mod tests {
 		let sql = pk.to_sql();
 		assert_eq!(
 			sql,
-			"CONSTRAINT user_order_pk PRIMARY KEY (user_id, order_id)"
+			"CONSTRAINT \"user_order_pk\" PRIMARY KEY (\"user_id\", \"order_id\")"
 		);
 	}
 
@@ -470,8 +493,8 @@ mod tests {
 
 		let where_clause = pk.to_where_clause(&values);
 		let clause = where_clause.unwrap();
-		assert!(clause.contains("user_id = 100"));
-		assert!(clause.contains("role_id = 5"));
+		assert!(clause.contains("\"user_id\" = 100"));
+		assert!(clause.contains("\"role_id\" = 5"));
 		assert!(clause.contains(" AND "));
 	}
 
@@ -531,8 +554,8 @@ mod tests {
 		values.insert("city".to_string(), PkValue::String("New York".to_string()));
 
 		let where_clause = pk.to_where_clause(&values).unwrap();
-		assert!(where_clause.contains("country = 'USA'"));
-		assert!(where_clause.contains("city = 'New York'"));
+		assert!(where_clause.contains("\"country\" = 'USA'"));
+		assert!(where_clause.contains("\"city\" = 'New York'"));
 	}
 
 	#[test]
@@ -543,8 +566,8 @@ mod tests {
 		values.insert("active".to_string(), PkValue::Bool(true));
 
 		let where_clause = pk.to_where_clause(&values).unwrap();
-		assert!(where_clause.contains("id = 42"));
-		assert!(where_clause.contains("active = TRUE"));
+		assert!(where_clause.contains("\"id\" = 42"));
+		assert!(where_clause.contains("\"active\" = TRUE"));
 	}
 
 	#[test]
@@ -571,5 +594,90 @@ mod tests {
 		let value = PkValue::String("test".to_string());
 		let serialized = serde_json::to_string(&value).unwrap();
 		assert_eq!(serialized, "\"test\"");
+	}
+
+	#[rstest]
+	fn test_to_sql_quotes_normal_field_names() {
+		// Arrange
+		let pk =
+			CompositePrimaryKey::new(vec!["user_id".to_string(), "role_id".to_string()]).unwrap();
+
+		// Act
+		let sql = pk.to_sql();
+
+		// Assert
+		assert_eq!(sql, "PRIMARY KEY (\"user_id\", \"role_id\")");
+	}
+
+	#[rstest]
+	fn test_to_sql_escapes_special_characters_in_field_names() {
+		// Arrange
+		let pk =
+			CompositePrimaryKey::new(vec!["field\"; DROP TABLE users; --".to_string()]).unwrap();
+
+		// Act
+		let sql = pk.to_sql();
+
+		// Assert
+		// The embedded double quote is escaped by doubling, preventing identifier breakout
+		assert_eq!(sql, "PRIMARY KEY (\"field\"\"; DROP TABLE users; --\")");
+	}
+
+	#[rstest]
+	fn test_to_sql_escapes_special_characters_in_constraint_name() {
+		// Arrange
+		let pk =
+			CompositePrimaryKey::with_name(vec!["id".to_string()], "pk\"; DROP TABLE users; --")
+				.unwrap();
+
+		// Act
+		let sql = pk.to_sql();
+
+		// Assert
+		assert_eq!(
+			sql,
+			"CONSTRAINT \"pk\"\"; DROP TABLE users; --\" PRIMARY KEY (\"id\")"
+		);
+	}
+
+	#[rstest]
+	fn test_to_sql_escapes_embedded_double_quotes_in_field() {
+		// Arrange
+		let pk = CompositePrimaryKey::new(vec!["field\"name".to_string()]).unwrap();
+
+		// Act
+		let sql = pk.to_sql();
+
+		// Assert
+		assert_eq!(sql, "PRIMARY KEY (\"field\"\"name\")");
+	}
+
+	#[rstest]
+	fn test_where_clause_quotes_field_names_with_special_characters() {
+		// Arrange
+		let malicious_field = "id\"; DROP TABLE users; --".to_string();
+		let pk = CompositePrimaryKey::new(vec![malicious_field.clone()]).unwrap();
+		let mut values = HashMap::new();
+		values.insert(malicious_field, PkValue::Int(1));
+
+		// Act
+		let clause = pk.to_where_clause(&values).unwrap();
+
+		// Assert
+		assert_eq!(clause, "\"id\"\"; DROP TABLE users; --\" = 1");
+	}
+
+	#[rstest]
+	fn test_where_clause_quotes_normal_field_names() {
+		// Arrange
+		let pk = CompositePrimaryKey::new(vec!["user_id".to_string()]).unwrap();
+		let mut values = HashMap::new();
+		values.insert("user_id".to_string(), PkValue::Int(42));
+
+		// Act
+		let clause = pk.to_where_clause(&values).unwrap();
+
+		// Assert
+		assert_eq!(clause, "\"user_id\" = 42");
 	}
 }

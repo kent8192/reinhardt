@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-graphql-macros"
-version = "0.1.0-alpha.4"
+version = "0.1.0-rc.13"
 description = "Procedural macros for GraphQL schema generation"
 edition.workspace = true
 license.workspace = true
@@ -11,9 +11,9 @@ authors.workspace = true
 proc-macro = true
 
 [dependencies]
-proc-macro2 = "1.0"
-quote = "1.0"
-syn = { version = "2.0", features = ["full", "extra-traits"] }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true, features = ["full", "extra-traits"] }
 proc-macro-crate = "3.1"
 
 [dev-dependencies]

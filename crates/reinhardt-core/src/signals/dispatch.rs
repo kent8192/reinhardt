@@ -34,6 +34,7 @@ pub struct SyncSignal {
 	/// - Cache storage design (per-signal or global)
 	/// - Cache invalidation strategy
 	/// - Thread-safety considerations for cached function pointers
+	// Allow dead_code: caching flag reserved for planned dispatch optimization; not yet used in current send() implementation
 	#[allow(dead_code)]
 	use_caching: bool,
 }
@@ -181,18 +182,30 @@ impl SyncSignal {
 		self.clear_dead_receivers();
 
 		// Collect live receivers under the lock, then release it before invocation
-		let live_receivers: Vec<SyncReceiverFn> = {
+		let live_receivers: Vec<(Option<std::any::TypeId>, SyncReceiverFn)> = {
 			let receivers = self.receivers.read();
 			receivers
 				.iter()
-				.filter_map(|r| r.receiver.upgrade())
+				.filter_map(|r| r.receiver.upgrade().map(|recv| (r.sender_type_id, recv)))
 				.collect()
 		};
 		// Lock is now released; safe to invoke callbacks without deadlock risk
 
 		let mut results = Vec::new();
 
-		for receiver in &live_receivers {
+		for (sender_type_id, receiver) in &live_receivers {
+			// Check sender type match
+			if let Some(expected_type_id) = sender_type_id {
+				if let Some(ref actual_sender) = sender {
+					// Must explicitly dereference Arc to get the underlying TypeId
+					if (**actual_sender).type_id() != *expected_type_id {
+						continue; // Type mismatch
+					}
+				} else {
+					continue; // Receiver expects a specific sender, but None was provided
+				}
+			}
+
 			let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
 				receiver(sender.clone(), kwargs)
 			}));

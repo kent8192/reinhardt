@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-benchmarks"
-version = "0.1.0-alpha.1"
+version = "0.1.0-rc.1"
 edition.workspace = true
 publish = false
 
@@ -12,7 +12,7 @@ reinhardt-apps = { workspace = true }
 reinhardt-http = { workspace = true }
 
 # Benchmarking
-criterion = "0.8.1"
+criterion = { workspace = true }
 
 # Async runtime
 tokio = { version = "1.0", features = ["full"] }

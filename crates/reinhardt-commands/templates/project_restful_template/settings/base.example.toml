@@ -22,15 +22,6 @@ default_auto_field = "reinhardt.db.models.BigAutoField"
 # Allowed hosts (empty list allows all hosts in debug mode)
 allowed_hosts = []
 
-# Installed applications
-installed_apps = [
-    "reinhardt.contrib.contenttypes",
-    "reinhardt.contrib.auth",
-    "reinhardt.contrib.sessions",
-    "reinhardt.contrib.messages",
-    "reinhardt.contrib.static",
-]
-
 # Database configuration
 [database]
 engine = "postgresql"

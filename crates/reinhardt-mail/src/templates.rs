@@ -53,6 +53,7 @@ pub struct TemplateEmailBuilder {
 }
 
 impl TemplateEmailBuilder {
+	/// Creates a new template email builder with empty defaults.
 	pub fn new() -> Self {
 		Self {
 			from_email: String::new(),
@@ -67,51 +68,63 @@ impl TemplateEmailBuilder {
 		}
 	}
 
+	/// Sets the sender email address.
 	pub fn from(mut self, from: impl Into<String>) -> Self {
 		self.from_email = from.into();
 		self
 	}
 
+	/// Sets the list of primary recipients.
 	pub fn to(mut self, to: Vec<String>) -> Self {
 		self.to = to;
 		self
 	}
 
+	/// Sets the list of CC (carbon copy) recipients.
 	pub fn cc(mut self, cc: Vec<String>) -> Self {
 		self.cc = cc;
 		self
 	}
 
+	/// Sets the list of BCC (blind carbon copy) recipients.
 	pub fn bcc(mut self, bcc: Vec<String>) -> Self {
 		self.bcc = bcc;
 		self
 	}
 
+	/// Sets the list of reply-to addresses.
 	pub fn reply_to(mut self, reply_to: Vec<String>) -> Self {
 		self.reply_to = reply_to;
 		self
 	}
 
+	/// Sets the subject line template string containing `{{key}}` placeholders.
 	pub fn subject_template(mut self, template: impl Into<String>) -> Self {
 		self.subject_template = template.into();
 		self
 	}
 
+	/// Sets the plain text body template string containing `{{key}}` placeholders.
 	pub fn body_template(mut self, template: impl Into<String>) -> Self {
 		self.body_template = template.into();
 		self
 	}
 
+	/// Sets the HTML body template string containing `{{key}}` placeholders.
+	///
+	/// Values in HTML templates are automatically HTML-escaped to prevent XSS.
 	pub fn html_template(mut self, template: impl Into<String>) -> Self {
 		self.html_template = Some(template.into());
 		self
 	}
 
+	/// Sets the template rendering context containing key-value pairs for substitution.
 	pub fn context(mut self, context: TemplateContext) -> Self {
 		self.context = context;
 		self
 	}
 
+	/// Adds a single key-value pair to the template context.
 	pub fn add_context(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
 		self.context.insert(key.into(), value);
 		self

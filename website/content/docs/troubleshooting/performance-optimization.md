@@ -66,7 +66,7 @@ router.register_all_routes();
 
 ## Database Query Optimization
 
-### Efficient Queries with reinhardt-query
+### Efficient Queries with Reinhardt's Query Builder
 
 ```rust
 use reinhardt::query::prelude::{Query, Postgres, Expr, Func, Order};

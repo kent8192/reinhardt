@@ -130,8 +130,15 @@ pub fn begin_resolution(
 		return Err(CycleError::MaxDepthExceeded(depth));
 	}
 
-	// Always perform deterministic circular check (no sampling)
-	check_circular_dependency(type_id)?;
+	// Always perform deterministic circular check (no sampling).
+	// Decrement depth on error since ResolutionGuard is not yet created.
+	if let Err(e) = check_circular_dependency(type_id) {
+		let _ = with_state(|state| {
+			let mut s = state.borrow_mut();
+			s.resolution_depth -= 1;
+		});
+		return Err(e);
+	}
 
 	// Add to set and path
 	with_state(|state| {

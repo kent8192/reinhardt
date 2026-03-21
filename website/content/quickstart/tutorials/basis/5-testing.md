@@ -44,44 +44,45 @@ use rstest::*;
 
 #[rstest]
 fn test_was_published_recently_with_future_question() {
-    // Create a question 30 days in the future
+    // Arrange
     let future_date = Utc::now() + Duration::days(30);
-    let question = Question {
-        id: Some(1),
-        question_text: "Future question".to_string(),
-        pub_date: future_date,
-    };
+    let mut question = Question::new("Future question");
+    // Override auto-generated pub_date for testing
+    question.pub_date = future_date;
 
-    // Should return false for future questions
-    assert_eq!(question.was_published_recently(), false);
+    // Act
+    let result = question.was_published_recently();
+
+    // Assert
+    assert_eq!(result, false);
 }
 
 #[rstest]
 fn test_was_published_recently_with_old_question() {
-    // Create a question 2 days ago
+    // Arrange
     let old_date = Utc::now() - Duration::days(2);
-    let question = Question {
-        id: Some(1),
-        question_text: "Old question".to_string(),
-        pub_date: old_date,
-    };
+    let mut question = Question::new("Old question");
+    question.pub_date = old_date;
 
-    // Should return false for questions older than 1 day
-    assert_eq!(question.was_published_recently(), false);
+    // Act
+    let result = question.was_published_recently();
+
+    // Assert
+    assert_eq!(result, false);
 }
 
 #[rstest]
 fn test_was_published_recently_with_recent_question() {
-    // Create a question from 23 hours ago
+    // Arrange
     let recent_date = Utc::now() - Duration::hours(23);
-    let question = Question {
-        id: Some(1),
-        question_text: "Recent question".to_string(),
-        pub_date: recent_date,
-    };
+    let mut question = Question::new("Recent question");
+    question.pub_date = recent_date;
 
-    // Should return true for recent questions
-    assert_eq!(question.was_published_recently(), true);
+    // Act
+    let result = question.was_published_recently();
+
+    // Assert
+    assert_eq!(result, true);
 }
 ```
 
@@ -163,7 +164,7 @@ let conn = DatabaseConnection::connect("postgres://localhost/test_db").await?;
 #[rstest]
 #[tokio::test]
 async fn test_user(
-    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>)
+    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>),
 ) {
     let (_container, conn) = postgres_fixture.await;
     // Each test gets its own PostgreSQL instance!
@@ -215,28 +216,26 @@ use crate::models::{Question, Choice};
 #[rstest]
 #[tokio::test]
 async fn test_create_and_retrieve_question(
-    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>)
+    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>),
 ) {
     let (_container, conn) = postgres_fixture.await;
 
-    // Create a question
-    let question = Question::create(
-        &conn,
-        "What's your favorite language?".to_string(),
-        Utc::now(),
-    )
-    .await
-    .unwrap();
+    // Create a question using the auto-generated new() function
+    // pub_date is auto-set by #[field(auto_now_add = true)]
+    let mut question = Question::new("What's your favorite language?");
+    question.save(&conn).await.unwrap();
 
-    assert!(question.id.is_some());
+    let question_id = question.id();
 
     // Retrieve it
-    let retrieved = Question::get(&conn, question.id.unwrap())
+    let retrieved = Question::objects()
+        .get(question_id)
+        .first()
         .await
         .unwrap()
         .expect("Question not found");
 
-    assert_eq!(retrieved.question_text, "What's your favorite language?");
+    assert_eq!(retrieved.question_text(), "What's your favorite language?");
 
     // Container is automatically cleaned up when test ends
 }
@@ -244,56 +243,55 @@ async fn test_create_and_retrieve_question(
 #[rstest]
 #[tokio::test]
 async fn test_question_choices_relationship(
-    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>)
+    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>),
 ) {
     let (_container, conn) = postgres_fixture.await;
 
     // Create question
-    let question = Question::create(
-        &conn,
-        "Test question".to_string(),
-        Utc::now(),
-    )
-    .await
-    .unwrap();
+    let mut question = Question::new("Test question");
+    question.save(&conn).await.unwrap();
 
-    let question_id = question.id.unwrap();
+    let question_id = question.id();
 
     // Add choices
-    Choice::create(&conn, question_id, "Rust".to_string()).await.unwrap();
-    Choice::create(&conn, question_id, "Python".to_string()).await.unwrap();
-    Choice::create(&conn, question_id, "Go".to_string()).await.unwrap();
+    let mut choice1 = Choice::new("Rust", 0, question_id);
+    choice1.save(&conn).await.unwrap();
 
-    // Retrieve choices
-    let choices = question.choices(&conn).await.unwrap();
+    let mut choice2 = Choice::new("Python", 0, question_id);
+    choice2.save(&conn).await.unwrap();
+
+    let mut choice3 = Choice::new("Go", 0, question_id);
+    choice3.save(&conn).await.unwrap();
+
+    // Retrieve choices using generated accessor
+    let choices_accessor = Choice::question_accessor().reverse(&question, &conn);
+    let choices = choices_accessor.all().await.unwrap();
 
     assert_eq!(choices.len(), 3);
-    assert_eq!(choices[0].choice_text, "Rust");
+    assert_eq!(choices[0].choice_text(), "Rust");
 }
 
 #[rstest]
 #[tokio::test]
 async fn test_increment_votes(
-    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>)
+    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>),
 ) {
     let (_container, conn) = postgres_fixture.await;
 
-    let question = Question::create(&conn, "Test".to_string(), Utc::now())
-        .await
-        .unwrap();
+    let mut question = Question::new("Test");
+    question.save(&conn).await.unwrap();
 
-    let mut choice = Choice::create(&conn, question.id.unwrap(), "Option A".to_string())
-        .await
-        .unwrap();
+    let mut choice = Choice::new("Option A", 0, question.id());
+    choice.save(&conn).await.unwrap();
 
-    assert_eq!(choice.votes, 0);
+    assert_eq!(choice.votes(), 0);
 
     // Increment votes
-    choice.increment_votes(&conn).await.unwrap();
-    assert_eq!(choice.votes, 1);
+    choice.vote();
+    assert_eq!(choice.votes(), 1);
 
-    choice.increment_votes(&conn).await.unwrap();
-    assert_eq!(choice.votes, 2);
+    choice.vote();
+    assert_eq!(choice.votes(), 2);
 }
 ```
 
@@ -331,22 +329,22 @@ async fn test_create_question_sqlite(
 ) {
     let conn = polls_sqlite.await;
 
-    // Create a question
-    let question = Question::new(
-        "What's your favorite language?".to_string(),
-    );
+    // Create a question using the auto-generated new() function
+    // pub_date is auto-set by #[field(auto_now_add = true)]
+    let mut question = Question::new("What's your favorite language?");
     question.save(&conn).await.unwrap();
 
-    assert!(question.id > 0);
+    assert!(question.id() > 0);
 
     // Retrieve it
     let retrieved = Question::objects()
-        .filter(Question::field_id().eq(question.id))
-        .get(&conn)
+        .get(question.id())
+        .first()
         .await
-        .unwrap();
+        .unwrap()
+        .expect("Question not found");
 
-    assert_eq!(retrieved.question_text, "What's your favorite language?");
+    assert_eq!(retrieved.question_text(), "What's your favorite language?");
 }
 
 #[rstest]
@@ -357,22 +355,14 @@ async fn test_question_choices_relationship_sqlite(
     let conn = polls_sqlite.await;
 
     // Create question
-    let question = Question::new("Test question".to_string());
+    let mut question = Question::new("Test question");
     question.save(&conn).await.unwrap();
 
-    // Add choices using ForeignKeyField
-    let choice1 = Choice::new(
-        ForeignKeyField::new(question.id),
-        "Rust".to_string(),
-        0,
-    );
+    // Add choices (choice_text, votes, question_id)
+    let mut choice1 = Choice::new("Rust", 0, question.id());
     choice1.save(&conn).await.unwrap();
 
-    let choice2 = Choice::new(
-        ForeignKeyField::new(question.id),
-        "Python".to_string(),
-        0,
-    );
+    let mut choice2 = Choice::new("Python", 0, question.id());
     choice2.save(&conn).await.unwrap();
 
     // Retrieve choices using generated accessor
@@ -422,7 +412,7 @@ use crate::views;
 #[rstest]
 #[tokio::test]
 async fn test_index_no_questions(
-    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>)
+    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>),
 ) {
     let (_container, conn) = postgres_fixture.await;
 
@@ -436,17 +426,16 @@ async fn test_index_no_questions(
 #[rstest]
 #[tokio::test]
 async fn test_index_with_questions(
-    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>)
+    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>),
 ) {
     let (_container, conn) = postgres_fixture.await;
 
     // Create test data
-    Question::create(&conn, "Test question 1".to_string(), Utc::now())
-        .await
-        .unwrap();
-    Question::create(&conn, "Test question 2".to_string(), Utc::now())
-        .await
-        .unwrap();
+    let mut q1 = Question::new("Test question 1");
+    q1.save(&conn).await.unwrap();
+
+    let mut q2 = Question::new("Test question 2");
+    q2.save(&conn).await.unwrap();
 
     // Call index view
     let response = views::index(conn.clone()).await.unwrap();
@@ -458,7 +447,7 @@ async fn test_index_with_questions(
 #[rstest]
 #[tokio::test]
 async fn test_detail_not_found(
-    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>)
+    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>),
 ) {
     let (_container, conn) = postgres_fixture.await;
 
@@ -488,28 +477,31 @@ use rstest::*;
 
 #[fixture]
 fn sample_question() -> Question {
-    Question {
-        id: None,
-        question_text: "Sample question".to_string(),
-        pub_date: Utc::now(),
-    }
+    // pub_date is auto-set by #[field(auto_now_add = true)]
+    Question::new("Sample question")
 }
 
 #[fixture]
 async fn question_with_choices(
-    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>)
+    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>),
 ) -> (Question, Vec<Choice>) {
     let (_container, conn) = postgres_fixture.await;
 
-    let question = Question::create(&conn, "Test".to_string(), Utc::now())
-        .await
-        .unwrap();
+    let mut question = Question::new("Test");
+    question.save(&conn).await.unwrap();
 
-    let choices = vec![
-        Choice::create(&conn, question.id.unwrap(), "A".to_string()).await.unwrap(),
-        Choice::create(&conn, question.id.unwrap(), "B".to_string()).await.unwrap(),
-        Choice::create(&conn, question.id.unwrap(), "C".to_string()).await.unwrap(),
-    ];
+    let question_id = question.id();
+
+    let mut choice_a = Choice::new("A", 0, question_id);
+    choice_a.save(&conn).await.unwrap();
+
+    let mut choice_b = Choice::new("B", 0, question_id);
+    choice_b.save(&conn).await.unwrap();
+
+    let mut choice_c = Choice::new("C", 0, question_id);
+    choice_c.save(&conn).await.unwrap();
+
+    let choices = vec![choice_a, choice_b, choice_c];
 
     (question, choices)
 }
@@ -522,7 +514,7 @@ async fn test_with_custom_fixture(
     let (question, choices) = question_with_choices.await;
 
     assert_eq!(choices.len(), 3);
-    assert!(question.id.is_some());
+    assert!(question.id() > 0);
 }
 ```
 
@@ -625,6 +617,8 @@ In this tutorial, you learned:
 - How to create custom fixtures for common test data
 - Best practices for test organization and isolation
 - The importance of automatic cleanup via RAII
+
+> **Note**: The example project also includes WASM component tests in `tests/wasm/` using `wasm-bindgen-test`. These tests verify client-side rendering with mock infrastructure. For WASM testing patterns, see the reinhardt-pages documentation.
 
 ## What's Next?
 

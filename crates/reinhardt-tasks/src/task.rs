@@ -5,8 +5,11 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
+/// Default queue name used when no specific queue is specified.
 pub const DEFAULT_TASK_QUEUE_NAME: &str = "default";
+/// Minimum allowed task priority value.
 pub const TASK_MIN_PRIORITY: i32 = 0;
+/// Maximum allowed task priority value.
 pub const TASK_MAX_PRIORITY: i32 = 9;
 
 /// Unique identifier for a task
@@ -71,10 +74,15 @@ impl FromStr for TaskId {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TaskStatus {
+	/// The task is waiting to be executed.
 	Pending,
+	/// The task is currently being executed.
 	Running,
+	/// The task completed successfully.
 	Success,
+	/// The task failed during execution.
 	Failure,
+	/// The task is scheduled for retry after a failure.
 	Retry,
 }
 
@@ -104,7 +112,7 @@ impl TaskPriority {
 	/// let p1 = TaskPriority::new(5);
 	/// assert_eq!(p1.value(), 5);
 	///
-	// Out of range values are clamped
+	/// // Out of range values are clamped
 	/// let p2 = TaskPriority::new(100);
 	/// assert_eq!(p2.value(), 9);
 	///
@@ -136,15 +144,21 @@ impl Default for TaskPriority {
 	}
 }
 
+/// Core trait that all tasks must implement, providing identity and metadata.
 pub trait Task: Send + Sync {
+	/// Returns the unique identifier for this task instance.
 	fn id(&self) -> TaskId;
+	/// Returns the name of this task type.
 	fn name(&self) -> &str;
+	/// Returns the priority of this task. Defaults to medium priority (5).
 	fn priority(&self) -> TaskPriority {
 		TaskPriority::default()
 	}
 }
 
+/// Trait for tasks that can be executed asynchronously.
 #[async_trait]
 pub trait TaskExecutor: Task {
+	/// Executes the task and returns the result.
 	async fn execute(&self) -> crate::TaskResult<()>;
 }

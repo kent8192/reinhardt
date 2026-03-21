@@ -7,7 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-alpha.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.1.0-alpha.10...reinhardt-utils@v0.1.0-alpha.11) - 2026-02-23
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.1.0-rc.8...reinhardt-utils@v0.1.0-rc.9) - 2026-03-15
+
+### Changed
+
+- *(reinhardt-utils)* centralize RwLock poison recovery with helper functions
+
+### Fixed
+
+- *(utils)* replace unwrap with safe alternatives for panic prevention
+
+### Styling
+
+- fix formatting in reinhardt-utils staticfiles
+
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.1.0-rc.4...reinhardt-utils@v0.1.0-rc.5) - 2026-03-07
+
+### Documentation
+
+- add missing doc comments for public API modules and types
+
+### Fixed
+
+- *(utils)* capitalize only first character in capfirst function
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.1.0-rc.1...reinhardt-utils@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(meta)* fix workspace inheritance and authors metadata
+- *(staticfiles)* unify manifest.json format to use "paths" key
+
+### Other
+
+- resolve conflict with main (criterion version)
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.1.0-alpha.10...reinhardt-utils@v0.1.0-rc.1) - 2026-02-23
 
 ### Maintenance
 

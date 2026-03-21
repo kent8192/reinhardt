@@ -7,7 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-http@v0.1.0-alpha.8...reinhardt-http@v0.1.0-alpha.9) - 2026-02-23
+## [0.1.0-rc.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-http@v0.1.0-rc.12...reinhardt-http@v0.1.0-rc.13) - 2026-03-18
+
+### Fixed
+
+- *(di)* set HTTP request on per-request InjectionContext in use_inject macro
+
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-http@v0.1.0-rc.11...reinhardt-http@v0.1.0-rc.12) - 2026-03-18
+
+### Fixed
+
+- *(http)* make AuthState::from_extensions() find AuthState object directly
+- *(http)* add Error::Http and Error::Serialization to safe client error detail
+
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-http@v0.1.0-rc.8...reinhardt-http@v0.1.0-rc.9) - 2026-03-15
+
+### Fixed
+
+- *(http)* replace lock().unwrap() with poison-recovery pattern
+
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-http@v0.1.0-rc.4...reinhardt-http@v0.1.0-rc.5) - 2026-03-07
+
+### Documentation
+
+- add missing doc comments for public API modules and types
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-http@v0.1.0-rc.1...reinhardt-http@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(http)* use char_indices for UTF-8 safe truncation in truncate_for_log
+- *(meta)* fix workspace inheritance and authors metadata
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-http@v0.1.0-alpha.8...reinhardt-http@v0.1.0-rc.1) - 2026-02-23
 
 ### Maintenance
 

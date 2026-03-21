@@ -13,6 +13,7 @@ use tokio::sync::RwLock;
 use tokio::time::{Duration, Instant};
 
 /// Token bucket configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct TokenBucketConfig {
 	/// Maximum number of tokens in the bucket (burst capacity)
@@ -212,8 +213,10 @@ struct BucketState {
 /// # });
 /// ```
 pub struct TokenBucket<B: ThrottleBackend, T: TimeProvider = SystemTimeProvider> {
+	// Allow dead_code: identifies this throttle instance for distributed backend key-spacing
 	#[allow(dead_code)]
 	key: String,
+	// Allow dead_code: stored for future distributed state persistence via ThrottleBackend
 	#[allow(dead_code)]
 	backend: Arc<B>,
 	config: TokenBucketConfig,

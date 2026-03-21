@@ -5,19 +5,26 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 /// Represents pagination metadata
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaginationMetadata {
+	/// Total number of items across all pages.
 	pub count: usize,
+	/// URL for the next page, or `None` if this is the last page.
 	pub next: Option<String>,
+	/// URL for the previous page, or `None` if this is the first page.
 	pub previous: Option<String>,
 }
 
 /// Paginated response wrapper
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaginatedResponse<T> {
+	/// Total number of items across all pages.
 	pub count: usize,
+	/// URL for the next page, or `None` if this is the last page.
 	pub next: Option<String>,
+	/// URL for the previous page, or `None` if this is the first page.
 	pub previous: Option<String>,
+	/// Items on the current page.
 	pub results: Vec<T>,
 }
 
@@ -292,10 +299,10 @@ impl<T: Clone> Page<T> {
 	/// ```
 	/// use reinhardt_core::pagination::Page;
 	///
-	// For a large page range, ellipsis (None) are added
+	/// // For a large page range, ellipsis (None) are added
 	/// let page = Page::new(vec![1], 10, 20, 200, 10);
 	/// let elided = page.get_elided_page_range(2, 2);
-	// Result like: [Some(1), Some(2), None, Some(8), Some(9), Some(10), Some(11), Some(12), None, Some(19), Some(20)]
+	/// // Result like: [Some(1), Some(2), None, Some(8), Some(9), Some(10), Some(11), Some(12), None, Some(19), Some(20)]
 	/// assert!(elided.contains(&None)); // Contains ellipsis
 	/// assert!(elided.contains(&Some(10))); // Contains current page
 	/// ```
@@ -408,12 +415,17 @@ impl<'a, T: Clone> IntoIterator for &'a Page<T> {
 }
 
 /// Schema parameter for OpenAPI/documentation
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SchemaParameter {
+	/// Parameter name (e.g., "page", "limit").
 	pub name: String,
+	/// Whether this parameter is required.
 	pub required: bool,
+	/// Where the parameter is found (e.g., "query", "path").
 	pub location: String,
+	/// Human-readable description of the parameter.
 	pub description: String,
+	/// Data type of the parameter (e.g., "integer", "string").
 	pub schema_type: String,
 }
 

@@ -13,8 +13,11 @@ use std::sync::Arc;
 /// Represents a dependency tree node
 #[derive(Debug, Clone)]
 pub struct DependencyNode {
+	/// The `TypeId` of this dependency.
 	pub type_id: TypeId,
+	/// The human-readable type name.
 	pub type_name: String,
+	/// Direct dependencies of this node.
 	pub dependencies: Vec<DependencyNode>,
 }
 

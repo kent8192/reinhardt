@@ -85,9 +85,13 @@ use std::sync::{Arc, Mutex};
 /// Transaction isolation levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IsolationLevel {
+	/// ReadUncommitted variant.
 	ReadUncommitted,
+	/// ReadCommitted variant.
 	ReadCommitted,
+	/// RepeatableRead variant.
 	RepeatableRead,
+	/// Serializable variant.
 	Serializable,
 }
 
@@ -128,9 +132,13 @@ impl IsolationLevel {
 /// Transaction state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransactionState {
+	/// NotStarted variant.
 	NotStarted,
+	/// Active variant.
 	Active,
+	/// Committed variant.
 	Committed,
+	/// RolledBack variant.
 	RolledBack,
 }
 
@@ -142,6 +150,7 @@ pub enum TransactionState {
 #[derive(Debug, Clone)]
 pub struct Savepoint {
 	name: String,
+	/// The depth.
 	pub depth: usize,
 }
 
@@ -303,7 +312,7 @@ impl Transaction {
 	/// assert_eq!(sql, "BEGIN TRANSACTION");
 	/// assert_eq!(tx.state().unwrap(), TransactionState::Active);
 	///
-	// Nested transaction creates savepoint
+	/// // Nested transaction creates savepoint
 	/// let nested_sql = tx.begin().unwrap();
 	/// assert!(nested_sql.contains("SAVEPOINT"));
 	/// ```
@@ -1606,6 +1615,7 @@ mod tests {
 	use reinhardt_core::validators::TableName;
 	use serde::{Deserialize, Serialize};
 
+	// Allow dead_code: test model struct for transaction tests
 	#[allow(dead_code)]
 	#[derive(Debug, Clone, Serialize, Deserialize)]
 	struct TestItem {
@@ -1622,6 +1632,7 @@ mod tests {
 		}
 	}
 
+	// Allow dead_code: test constant for transaction tests
 	#[allow(dead_code)]
 	const TEST_ITEM_TABLE: TableName = TableName::new_const("test_items");
 

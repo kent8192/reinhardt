@@ -61,21 +61,39 @@
 //! # }
 //! ```
 
+#![warn(missing_docs)]
+
+/// Task backend trait and built-in implementations.
 pub mod backend;
+/// Feature-gated backend implementations (Redis, SQLite, SQS, RabbitMQ).
 pub mod backends;
+/// Task chaining for sequential execution pipelines.
 pub mod chain;
+/// Directed acyclic graph (DAG) based task dependencies.
 pub mod dag;
+/// Worker load balancing strategies.
 pub mod load_balancer;
+/// Distributed task locking to prevent duplicate execution.
 pub mod locking;
+/// Task execution metrics and monitoring.
 pub mod metrics;
+/// Priority-based task queue.
 pub mod priority_queue;
+/// Core task queue with configuration.
 pub mod queue;
+/// Task registry for serialization and discovery.
 pub mod registry;
+/// Result backend for storing task outputs.
 pub mod result;
+/// Retry policies with exponential backoff.
 pub mod retry;
+/// Cron-like task scheduling.
 pub mod scheduler;
+/// Task trait and execution lifecycle.
 pub mod task;
+/// Webhook notifications for task completion events.
 pub mod webhook;
+/// Task worker execution loop.
 pub mod worker;
 
 pub use backend::{

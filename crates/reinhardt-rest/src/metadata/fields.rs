@@ -8,31 +8,45 @@ use std::collections::HashMap;
 /// Field metadata information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldInfo {
+	/// The data type of this field.
 	#[serde(rename = "type")]
 	pub field_type: FieldType,
+	/// Whether this field is required for input.
 	pub required: bool,
+	/// Whether this field is read-only.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub read_only: Option<bool>,
+	/// A human-readable label for the field.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub label: Option<String>,
+	/// Additional help text describing the field.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub help_text: Option<String>,
+	/// The minimum allowed length for string values.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub min_length: Option<usize>,
+	/// The maximum allowed length for string values.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub max_length: Option<usize>,
+	/// The minimum allowed value for numeric fields.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub min_value: Option<f64>,
+	/// The maximum allowed value for numeric fields.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub max_value: Option<f64>,
+	/// Available choices for choice-type fields.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub choices: Option<Vec<ChoiceInfo>>,
+	/// Child field info for list-type fields.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub child: Option<Box<FieldInfo>>,
+	/// Child field info for nested object fields.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub children: Option<HashMap<String, FieldInfo>>,
+	/// Custom validators applied to this field.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub validators: Option<Vec<FieldValidator>>,
+	/// The default value for this field when not provided.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub default_value: Option<serde_json::Value>,
 }

@@ -1,0 +1,2 @@
+debug = true
+secret_key = "di-showcase-secret-key-for-development-only"

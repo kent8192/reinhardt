@@ -477,7 +477,7 @@ static REVERSE_RELATIONS: OnceLock<HashMap<String, Vec<ReverseRelationMetadata>>
 ///
 /// # Errors
 ///
-/// Returns [`AppError::RegistryState`] if called after `finalize_reverse_relations()`.
+/// Returns [`crate::AppError::RegistryState`] if called after `finalize_reverse_relations()`.
 pub fn register_reverse_relation(relation: ReverseRelationMetadata) -> Result<(), crate::AppError> {
 	if REVERSE_RELATIONS.get().is_some() {
 		return Err(crate::AppError::RegistryState(

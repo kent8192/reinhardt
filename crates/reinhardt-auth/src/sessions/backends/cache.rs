@@ -39,12 +39,16 @@ use thiserror::Error;
 use crate::sessions::cleanup::{CleanupableBackend, SessionMetadata};
 
 /// Session backend errors
-#[derive(Debug, Error)]
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SessionError {
+	/// An error occurred in the cache backend.
 	#[error("Cache error: {0}")]
 	CacheError(String),
+	/// Session data could not be serialized or deserialized.
 	#[error("Serialization error: {0}")]
 	SerializationError(String),
+	/// The session has expired due to inactivity.
 	#[error("Session has expired due to inactivity")]
 	SessionExpired,
 }
@@ -88,7 +92,7 @@ pub trait SessionBackend: Send + Sync + Clone {
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let backend = InMemorySessionBackend::new();
 ///
-// Store shopping cart in session
+/// // Store shopping cart in session
 /// let cart_data = json!({
 ///     "items": ["item1", "item2"],
 ///     "total": 59.99,
@@ -96,7 +100,7 @@ pub trait SessionBackend: Send + Sync + Clone {
 ///
 /// backend.save("cart_session_456", &cart_data, Some(1800)).await?;
 ///
-// Check if session exists
+/// // Check if session exists
 /// assert!(backend.exists("cart_session_456").await?);
 /// # Ok(())
 /// # }
@@ -209,7 +213,7 @@ impl CleanupableBackend for InMemorySessionBackend {
 /// let cache = Arc::new(InMemoryCache::new());
 /// let backend = CacheSessionBackend::new(cache);
 ///
-// Store user preferences in session
+/// // Store user preferences in session
 /// let preferences = json!({
 ///     "theme": "dark",
 ///     "language": "en",
@@ -218,7 +222,7 @@ impl CleanupableBackend for InMemorySessionBackend {
 ///
 /// backend.save("pref_session_789", &preferences, Some(7200)).await?;
 ///
-// Load preferences
+/// // Load preferences
 /// let loaded: Option<serde_json::Value> = backend.load("pref_session_789").await?;
 /// assert_eq!(loaded.unwrap()["theme"], "dark");
 /// # Ok(())
@@ -276,5 +280,159 @@ impl<C: Cache + Clone + 'static> SessionBackend for CacheSessionBackend<C> {
 			.has_key(session_key)
 			.await
 			.map_err(|e| SessionError::CacheError(e.to_string()))
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+	use serde_json::json;
+	use std::collections::HashMap;
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_in_memory_save_and_load_roundtrip() {
+		// Arrange
+		let backend = InMemorySessionBackend::new();
+		let mut data = HashMap::new();
+		data.insert("user_id".to_string(), json!(42));
+		data.insert("username".to_string(), json!("alice"));
+
+		// Act
+		backend.save("sess_1", &data, Some(3600)).await.unwrap();
+		let loaded: Option<HashMap<String, serde_json::Value>> =
+			backend.load("sess_1").await.unwrap();
+
+		// Assert
+		let loaded = loaded.unwrap();
+		assert_eq!(loaded["user_id"], json!(42));
+		assert_eq!(loaded["username"], json!("alice"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_in_memory_load_nonexistent_key() {
+		// Arrange
+		let backend = InMemorySessionBackend::new();
+
+		// Act
+		let loaded: Option<serde_json::Value> = backend.load("nonexistent").await.unwrap();
+
+		// Assert
+		assert!(loaded.is_none());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_in_memory_delete_removes_session() {
+		// Arrange
+		let backend = InMemorySessionBackend::new();
+		let data = json!({"key": "value"});
+		backend.save("sess_del", &data, Some(3600)).await.unwrap();
+
+		// Act
+		backend.delete("sess_del").await.unwrap();
+		let loaded: Option<serde_json::Value> = backend.load("sess_del").await.unwrap();
+
+		// Assert
+		assert!(loaded.is_none());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_in_memory_exists_reflects_state() {
+		// Arrange
+		let backend = InMemorySessionBackend::new();
+		let data = json!({"active": true});
+
+		// Assert - initially does not exist
+		assert!(!backend.exists("sess_ex").await.unwrap());
+
+		// Act - save
+		backend.save("sess_ex", &data, Some(3600)).await.unwrap();
+
+		// Assert - exists after save
+		assert!(backend.exists("sess_ex").await.unwrap());
+
+		// Act - delete
+		backend.delete("sess_ex").await.unwrap();
+
+		// Assert - does not exist after delete
+		assert!(!backend.exists("sess_ex").await.unwrap());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_in_memory_save_overwrites_existing() {
+		// Arrange
+		let backend = InMemorySessionBackend::new();
+		let data_v1 = json!({"version": 1});
+		let data_v2 = json!({"version": 2});
+
+		// Act
+		backend.save("sess_ow", &data_v1, Some(3600)).await.unwrap();
+		backend.save("sess_ow", &data_v2, Some(3600)).await.unwrap();
+		let loaded: Option<serde_json::Value> = backend.load("sess_ow").await.unwrap();
+
+		// Assert
+		assert_eq!(loaded.unwrap()["version"], 2);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_in_memory_save_with_ttl() {
+		// Arrange
+		let backend = InMemorySessionBackend::new();
+		let data = json!({"ttl_test": true});
+
+		// Act
+		backend.save("sess_ttl", &data, Some(60)).await.unwrap();
+		let loaded: Option<serde_json::Value> = backend.load("sess_ttl").await.unwrap();
+
+		// Assert
+		assert_eq!(loaded.unwrap()["ttl_test"], true);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_cache_backend_wrapper_save_and_load() {
+		// Arrange
+		let cache = Arc::new(InMemoryCache::new());
+		let backend = CacheSessionBackend::new(cache);
+		let data = json!({"wrapped": "value", "count": 99});
+
+		// Act
+		backend
+			.save("wrapped_sess", &data, Some(3600))
+			.await
+			.unwrap();
+		let loaded: Option<serde_json::Value> = backend.load("wrapped_sess").await.unwrap();
+
+		// Assert
+		let loaded = loaded.unwrap();
+		assert_eq!(loaded["wrapped"], "value");
+		assert_eq!(loaded["count"], 99);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_cache_backend_wrapper_delete_and_exists() {
+		// Arrange
+		let cache = Arc::new(InMemoryCache::new());
+		let backend = CacheSessionBackend::new(cache);
+		let data = json!({"item": "to_delete"});
+
+		// Act - save and verify exists
+		backend.save("wrap_del", &data, Some(3600)).await.unwrap();
+		assert!(backend.exists("wrap_del").await.unwrap());
+
+		// Act - delete
+		backend.delete("wrap_del").await.unwrap();
+
+		// Assert
+		assert!(!backend.exists("wrap_del").await.unwrap());
+		let loaded: Option<serde_json::Value> = backend.load("wrap_del").await.unwrap();
+		assert!(loaded.is_none());
 	}
 }

@@ -10,7 +10,8 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 /// User management error
-#[derive(Debug, Clone)]
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UserManagementError {
 	/// User not found
 	UserNotFound,
@@ -65,12 +66,17 @@ pub type UserManagementResult<T> = Result<T, UserManagementError>;
 /// assert_eq!(user_data.username, "alice");
 /// assert_eq!(user_data.email, "alice@example.com");
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateUserData {
+	/// Login username for the new user.
 	pub username: String,
+	/// Email address for the new user.
 	pub email: String,
+	/// Plain-text password (will be hashed before storage).
 	pub password: String,
+	/// Whether the new user account should be active.
 	pub is_active: bool,
+	/// Whether the new user should have admin privileges.
 	pub is_admin: bool,
 }
 
@@ -90,10 +96,13 @@ pub struct CreateUserData {
 /// assert_eq!(update_data.email, Some("newemail@example.com".to_string()));
 /// assert_eq!(update_data.is_active, Some(false));
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UpdateUserData {
+	/// New email address, if being updated.
 	pub email: Option<String>,
+	/// New active status, if being updated.
 	pub is_active: Option<bool>,
+	/// New admin status, if being updated.
 	pub is_admin: Option<bool>,
 }
 
@@ -103,13 +112,22 @@ pub struct UpdateUserData {
 ///
 /// # Examples
 ///
-/// ```rust,no_run
+/// ```rust
+/// # use reinhardt_auth::PasswordHasher;
+/// # struct MockHasher;
+/// # impl PasswordHasher for MockHasher {
+/// #     fn hash(&self, p: &str) -> Result<String, reinhardt_core::exception::Error> {
+/// #         Ok(format!("hash:{p}"))
+/// #     }
+/// #     fn verify(&self, p: &str, h: &str) -> Result<bool, reinhardt_core::exception::Error> {
+/// #         Ok(h == format!("hash:{p}"))
+/// #     }
+/// # }
 /// use reinhardt_auth::user_management::{UserManager, CreateUserData};
-/// use reinhardt_auth::Argon2Hasher;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let hasher = Argon2Hasher::new();
+///     let hasher = MockHasher;
 ///     let mut manager = UserManager::new(hasher);
 ///
 ///     // Create user
@@ -146,12 +164,20 @@ impl<H: PasswordHasher> UserManager<H> {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```rust
+	/// # use reinhardt_auth::PasswordHasher;
+	/// # struct MockHasher;
+	/// # impl PasswordHasher for MockHasher {
+	/// #     fn hash(&self, p: &str) -> Result<String, reinhardt_core::exception::Error> {
+	/// #         Ok(format!("hash:{p}"))
+	/// #     }
+	/// #     fn verify(&self, p: &str, h: &str) -> Result<bool, reinhardt_core::exception::Error> {
+	/// #         Ok(h == format!("hash:{p}"))
+	/// #     }
+	/// # }
 	/// use reinhardt_auth::user_management::UserManager;
-	/// use reinhardt_auth::Argon2Hasher;
 	///
-	/// let hasher = Argon2Hasher::new();
-	/// let manager = UserManager::new(hasher);
+	/// let manager = UserManager::new(MockHasher);
 	/// ```
 	pub fn new(hasher: H) -> Self {
 		Self {
@@ -166,14 +192,22 @@ impl<H: PasswordHasher> UserManager<H> {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```rust
+	/// # use reinhardt_auth::PasswordHasher;
+	/// # struct MockHasher;
+	/// # impl PasswordHasher for MockHasher {
+	/// #     fn hash(&self, p: &str) -> Result<String, reinhardt_core::exception::Error> {
+	/// #         Ok(format!("hash:{p}"))
+	/// #     }
+	/// #     fn verify(&self, p: &str, h: &str) -> Result<bool, reinhardt_core::exception::Error> {
+	/// #         Ok(h == format!("hash:{p}"))
+	/// #     }
+	/// # }
 	/// use reinhardt_auth::user_management::{UserManager, CreateUserData};
-	/// use reinhardt_auth::Argon2Hasher;
 	///
 	/// #[tokio::main]
 	/// async fn main() {
-	///     let hasher = Argon2Hasher::new();
-	///     let mut manager = UserManager::new(hasher);
+	///     let mut manager = UserManager::new(MockHasher);
 	///
 	///     let user_data = CreateUserData {
 	///         username: "bob".to_string(),
@@ -194,7 +228,8 @@ impl<H: PasswordHasher> UserManager<H> {
 		}
 
 		// Validate email
-		if !data.email.contains('@') || !data.email.contains('.') {
+		// JWT/MFA authentication may not provide email; skip validation for empty emails
+		if !data.email.is_empty() && (!data.email.contains('@') || !data.email.contains('.')) {
 			return Err(UserManagementError::InvalidEmail);
 		}
 
@@ -243,14 +278,22 @@ impl<H: PasswordHasher> UserManager<H> {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```rust
+	/// # use reinhardt_auth::PasswordHasher;
+	/// # struct MockHasher;
+	/// # impl PasswordHasher for MockHasher {
+	/// #     fn hash(&self, p: &str) -> Result<String, reinhardt_core::exception::Error> {
+	/// #         Ok(format!("hash:{p}"))
+	/// #     }
+	/// #     fn verify(&self, p: &str, h: &str) -> Result<bool, reinhardt_core::exception::Error> {
+	/// #         Ok(h == format!("hash:{p}"))
+	/// #     }
+	/// # }
 	/// use reinhardt_auth::user_management::{UserManager, CreateUserData};
-	/// use reinhardt_auth::Argon2Hasher;
 	///
 	/// #[tokio::main]
 	/// async fn main() {
-	///     let hasher = Argon2Hasher::new();
-	///     let mut manager = UserManager::new(hasher);
+	///     let mut manager = UserManager::new(MockHasher);
 	///
 	///     let user_data = CreateUserData {
 	///         username: "charlie".to_string(),
@@ -280,14 +323,22 @@ impl<H: PasswordHasher> UserManager<H> {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```rust
+	/// # use reinhardt_auth::PasswordHasher;
+	/// # struct MockHasher;
+	/// # impl PasswordHasher for MockHasher {
+	/// #     fn hash(&self, p: &str) -> Result<String, reinhardt_core::exception::Error> {
+	/// #         Ok(format!("hash:{p}"))
+	/// #     }
+	/// #     fn verify(&self, p: &str, h: &str) -> Result<bool, reinhardt_core::exception::Error> {
+	/// #         Ok(h == format!("hash:{p}"))
+	/// #     }
+	/// # }
 	/// use reinhardt_auth::user_management::{UserManager, CreateUserData};
-	/// use reinhardt_auth::Argon2Hasher;
 	///
 	/// #[tokio::main]
 	/// async fn main() {
-	///     let hasher = Argon2Hasher::new();
-	///     let mut manager = UserManager::new(hasher);
+	///     let mut manager = UserManager::new(MockHasher);
 	///
 	///     let user_data = CreateUserData {
 	///         username: "diana".to_string(),
@@ -319,14 +370,22 @@ impl<H: PasswordHasher> UserManager<H> {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```rust
+	/// # use reinhardt_auth::PasswordHasher;
+	/// # struct MockHasher;
+	/// # impl PasswordHasher for MockHasher {
+	/// #     fn hash(&self, p: &str) -> Result<String, reinhardt_core::exception::Error> {
+	/// #         Ok(format!("hash:{p}"))
+	/// #     }
+	/// #     fn verify(&self, p: &str, h: &str) -> Result<bool, reinhardt_core::exception::Error> {
+	/// #         Ok(h == format!("hash:{p}"))
+	/// #     }
+	/// # }
 	/// use reinhardt_auth::user_management::{UserManager, CreateUserData, UpdateUserData};
-	/// use reinhardt_auth::Argon2Hasher;
 	///
 	/// #[tokio::main]
 	/// async fn main() {
-	///     let hasher = Argon2Hasher::new();
-	///     let mut manager = UserManager::new(hasher);
+	///     let mut manager = UserManager::new(MockHasher);
 	///
 	///     let user_data = CreateUserData {
 	///         username: "eve".to_string(),
@@ -384,14 +443,22 @@ impl<H: PasswordHasher> UserManager<H> {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```rust
+	/// # use reinhardt_auth::PasswordHasher;
+	/// # struct MockHasher;
+	/// # impl PasswordHasher for MockHasher {
+	/// #     fn hash(&self, p: &str) -> Result<String, reinhardt_core::exception::Error> {
+	/// #         Ok(format!("hash:{p}"))
+	/// #     }
+	/// #     fn verify(&self, p: &str, h: &str) -> Result<bool, reinhardt_core::exception::Error> {
+	/// #         Ok(h == format!("hash:{p}"))
+	/// #     }
+	/// # }
 	/// use reinhardt_auth::user_management::{UserManager, CreateUserData};
-	/// use reinhardt_auth::Argon2Hasher;
 	///
 	/// #[tokio::main]
 	/// async fn main() {
-	///     let hasher = Argon2Hasher::new();
-	///     let mut manager = UserManager::new(hasher);
+	///     let mut manager = UserManager::new(MockHasher);
 	///
 	///     let user_data = CreateUserData {
 	///         username: "frank".to_string(),
@@ -430,14 +497,22 @@ impl<H: PasswordHasher> UserManager<H> {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```rust
+	/// # use reinhardt_auth::PasswordHasher;
+	/// # struct MockHasher;
+	/// # impl PasswordHasher for MockHasher {
+	/// #     fn hash(&self, p: &str) -> Result<String, reinhardt_core::exception::Error> {
+	/// #         Ok(format!("hash:{p}"))
+	/// #     }
+	/// #     fn verify(&self, p: &str, h: &str) -> Result<bool, reinhardt_core::exception::Error> {
+	/// #         Ok(h == format!("hash:{p}"))
+	/// #     }
+	/// # }
 	/// use reinhardt_auth::user_management::{UserManager, CreateUserData};
-	/// use reinhardt_auth::Argon2Hasher;
 	///
 	/// #[tokio::main]
 	/// async fn main() {
-	///     let hasher = Argon2Hasher::new();
-	///     let mut manager = UserManager::new(hasher);
+	///     let mut manager = UserManager::new(MockHasher);
 	///
 	///     let user_data1 = CreateUserData {
 	///         username: "grace".to_string(),
@@ -471,14 +546,22 @@ impl<H: PasswordHasher> UserManager<H> {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```rust
+	/// # use reinhardt_auth::PasswordHasher;
+	/// # struct MockHasher;
+	/// # impl PasswordHasher for MockHasher {
+	/// #     fn hash(&self, p: &str) -> Result<String, reinhardt_core::exception::Error> {
+	/// #         Ok(format!("hash:{p}"))
+	/// #     }
+	/// #     fn verify(&self, p: &str, h: &str) -> Result<bool, reinhardt_core::exception::Error> {
+	/// #         Ok(h == format!("hash:{p}"))
+	/// #     }
+	/// # }
 	/// use reinhardt_auth::user_management::{UserManager, CreateUserData};
-	/// use reinhardt_auth::Argon2Hasher;
 	///
 	/// #[tokio::main]
 	/// async fn main() {
-	///     let hasher = Argon2Hasher::new();
-	///     let mut manager = UserManager::new(hasher);
+	///     let mut manager = UserManager::new(MockHasher);
 	///
 	///     let user_data = CreateUserData {
 	///         username: "iris".to_string(),
@@ -702,5 +785,89 @@ mod tests {
 				.await
 				.unwrap()
 		);
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_create_user_with_email_missing_at_sign_returns_invalid_email() {
+		// Arrange
+		let hasher = Argon2Hasher::new();
+		let mut manager = UserManager::new(hasher);
+
+		let user_data = CreateUserData {
+			username: "testuser".to_string(),
+			email: "invalidemail.com".to_string(),
+			password: "password123".to_string(),
+			is_active: true,
+			is_admin: false,
+		};
+
+		// Act
+		let result = manager.create_user(user_data).await;
+
+		// Assert
+		assert_eq!(result.unwrap_err(), UserManagementError::InvalidEmail);
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_create_user_with_email_missing_dot_returns_invalid_email() {
+		// Arrange
+		let hasher = Argon2Hasher::new();
+		let mut manager = UserManager::new(hasher);
+
+		let user_data = CreateUserData {
+			username: "testuser".to_string(),
+			email: "invalid@emailcom".to_string(),
+			password: "password123".to_string(),
+			is_active: true,
+			is_admin: false,
+		};
+
+		// Act
+		let result = manager.create_user(user_data).await;
+
+		// Assert
+		assert_eq!(result.unwrap_err(), UserManagementError::InvalidEmail);
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_get_user_nonexistent_returns_user_not_found() {
+		// Arrange
+		let hasher = Argon2Hasher::new();
+		let manager = UserManager::new(hasher);
+		let nonexistent_id = Uuid::new_v4().to_string();
+
+		// Act
+		let result = manager.get_user(&nonexistent_id).await;
+
+		// Assert
+		assert_eq!(result.unwrap_err(), UserManagementError::UserNotFound);
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_create_user_with_empty_email_succeeds() {
+		// Arrange
+		let hasher = Argon2Hasher::new();
+		let mut manager = UserManager::new(hasher);
+
+		let user_data = CreateUserData {
+			username: "jwt_user".to_string(),
+			email: String::new(),
+			password: "password123".to_string(),
+			is_active: true,
+			is_admin: false,
+		};
+
+		// Act
+		let result = manager.create_user(user_data).await;
+
+		// Assert
+		let user = result.unwrap();
+		assert_eq!(user.username, "jwt_user");
+		assert_eq!(user.email, "");
+		assert!(user.is_active);
 	}
 }

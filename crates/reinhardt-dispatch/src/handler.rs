@@ -26,7 +26,8 @@ pub struct BaseHandler {
 	/// `Dispatcher` to choose between sync and async code paths. When
 	/// `false`, async dispatch still works but callers may opt for a
 	/// blocking wrapper.
-	#[allow(dead_code)] // read via is_async() accessor; behavioral branching planned
+	// Allow dead_code: read via is_async() accessor; behavioral branching planned
+	#[allow(dead_code)]
 	is_async: bool,
 	router: Option<Arc<DefaultRouter>>,
 }

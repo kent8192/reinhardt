@@ -303,7 +303,7 @@ dependencies = ["clean-cache", "wasm-build-dev", "run-dev-server"]
 description = "Start development server with frontend (MUST run from project directory)"
 script = '''
 #!/bin/bash
-# 現在のディレクトリが examples-twitter かチェック
+# Check if current directory is examples-twitter
 CURRENT_DIR=$(basename "$PWD")
 if [ "$CURRENT_DIR" != "examples-twitter" ]; then
 	echo "Error: This command must be run from examples/examples-twitter directory"

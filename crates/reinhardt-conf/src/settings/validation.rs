@@ -14,20 +14,31 @@ use reinhardt_core::validators::SettingsValidator as BaseSettingsValidator;
 pub type ValidationResult = Result<(), ValidationError>;
 
 /// Validation error
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum ValidationError {
+	/// A security-related validation failed (e.g., weak secret key).
 	#[error("Security error: {0}")]
 	Security(String),
 
+	/// A settings value is invalid for the given key.
 	#[error("Invalid value for '{key}': {message}")]
-	InvalidValue { key: String, message: String },
+	InvalidValue {
+		/// The settings key with the invalid value.
+		key: String,
+		/// Description of why the value is invalid.
+		message: String,
+	},
 
+	/// A required settings field is missing.
 	#[error("Missing required field: {0}")]
 	MissingRequired(String),
 
+	/// A constraint on the settings value was violated.
 	#[error("Constraint violation: {0}")]
 	Constraint(String),
 
+	/// Multiple validation errors occurred.
 	#[error("Multiple validation errors: {0:?}")]
 	Multiple(Vec<ValidationError>),
 }
@@ -73,7 +84,7 @@ impl RequiredValidator {
 	///     "secret_key".to_string(),
 	///     "database_url".to_string(),
 	/// ]);
-	// Validator will check that these fields exist in settings
+	/// // Validator will check that these fields exist in settings
 	/// ```
 	pub fn new(fields: Vec<String>) -> Self {
 		Self { fields }
@@ -133,7 +144,7 @@ impl SecurityValidator {
 	/// use reinhardt_conf::settings::profile::Profile;
 	///
 	/// let validator = SecurityValidator::new(Profile::Production);
-	// Validator will enforce production security requirements
+	/// // Validator will enforce production security requirements
 	/// ```
 	pub fn new(profile: Profile) -> Self {
 		Self { profile }
@@ -184,11 +195,15 @@ impl SettingsValidator for SecurityValidator {
 		}
 
 		// Check HTTPS settings
-		if let Some(secure_ssl) = settings.get("secure_ssl_redirect")
-			&& secure_ssl.as_bool() != Some(true)
-		{
+		if let Some(secure_ssl) = settings.get("secure_ssl_redirect") {
+			if secure_ssl.as_bool() != Some(true) {
+				errors.push(ValidationError::Security(
+					"SECURE_SSL_REDIRECT should be true in production".to_string(),
+				));
+			}
+		} else {
 			errors.push(ValidationError::Security(
-				"SECURE_SSL_REDIRECT should be true in production".to_string(),
+				"SECURE_SSL_REDIRECT must be set in production".to_string(),
 			));
 		}
 
@@ -279,7 +294,7 @@ impl RangeValidator {
 	/// use reinhardt_conf::settings::validation::RangeValidator;
 	///
 	/// let validator = RangeValidator::new(Some(0.0), Some(100.0));
-	// Validator will check values are between 0 and 100
+	/// // Validator will check values are between 0 and 100
 	/// ```
 	pub fn new(min: Option<f64>, max: Option<f64>) -> Self {
 		Self { min, max }
@@ -292,7 +307,7 @@ impl RangeValidator {
 	/// use reinhardt_conf::settings::validation::RangeValidator;
 	///
 	/// let validator = RangeValidator::min(0.0);
-	// Values must be >= 0
+	/// // Values must be >= 0
 	/// ```
 	pub fn min(min: f64) -> Self {
 		Self {
@@ -308,7 +323,7 @@ impl RangeValidator {
 	/// use reinhardt_conf::settings::validation::RangeValidator;
 	///
 	/// let validator = RangeValidator::max(100.0);
-	// Values must be <= 100
+	/// // Values must be <= 100
 	/// ```
 	pub fn max(max: f64) -> Self {
 		Self {
@@ -324,7 +339,7 @@ impl RangeValidator {
 	/// use reinhardt_conf::settings::validation::RangeValidator;
 	///
 	/// let validator = RangeValidator::between(1.0, 10.0);
-	// Values must be between 1 and 10 (inclusive)
+	/// // Values must be between 1 and 10 (inclusive)
 	/// ```
 	pub fn between(min: f64, max: f64) -> Self {
 		Self {
@@ -432,7 +447,7 @@ impl PatternValidator {
 	/// use reinhardt_conf::settings::validation::PatternValidator;
 	///
 	/// let validator = PatternValidator::new(r"^\d{3}-\d{3}-\d{4}$").unwrap();
-	// Validates phone number format
+	/// // Validates phone number format
 	/// ```
 	pub fn new(pattern: &str) -> Result<Self, regex::Error> {
 		Ok(Self {
@@ -513,7 +528,7 @@ impl ChoiceValidator {
 	///     "staging".to_string(),
 	///     "production".to_string(),
 	/// ]);
-	// Value must be one of the allowed choices
+	/// // Value must be one of the allowed choices
 	/// ```
 	pub fn new(choices: Vec<String>) -> Self {
 		Self { choices }
@@ -579,6 +594,7 @@ impl BaseSettingsValidator for ChoiceValidator {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_settings_validation_required() {
@@ -637,6 +653,88 @@ mod tests {
 			validator
 				.validate("key", &Value::Number(150.into()))
 				.is_err()
+		);
+	}
+
+	#[rstest]
+	fn test_security_validator_missing_ssl_redirect_in_production() {
+		// Arrange
+		let validator = SecurityValidator::new(Profile::Production);
+		let mut settings = HashMap::new();
+		settings.insert("debug".to_string(), Value::Bool(false));
+		settings.insert(
+			"secret_key".to_string(),
+			Value::String("a-very-long-secure-random-key-that-is-at-least-32-chars".to_string()),
+		);
+		settings.insert(
+			"allowed_hosts".to_string(),
+			Value::Array(vec![Value::String("example.com".to_string())]),
+		);
+		// Note: secure_ssl_redirect is intentionally omitted
+
+		// Act
+		let result = validator.validate_settings(&settings);
+
+		// Assert
+		let err = result.unwrap_err();
+		let error_msg = err.to_string();
+		assert!(
+			error_msg.contains("SECURE_SSL_REDIRECT must be set in production"),
+			"Expected error about missing SECURE_SSL_REDIRECT, got: {error_msg}"
+		);
+	}
+
+	#[rstest]
+	fn test_security_validator_ssl_redirect_false_in_production() {
+		// Arrange
+		let validator = SecurityValidator::new(Profile::Production);
+		let mut settings = HashMap::new();
+		settings.insert("debug".to_string(), Value::Bool(false));
+		settings.insert(
+			"secret_key".to_string(),
+			Value::String("a-very-long-secure-random-key-that-is-at-least-32-chars".to_string()),
+		);
+		settings.insert(
+			"allowed_hosts".to_string(),
+			Value::Array(vec![Value::String("example.com".to_string())]),
+		);
+		settings.insert("secure_ssl_redirect".to_string(), Value::Bool(false));
+
+		// Act
+		let result = validator.validate_settings(&settings);
+
+		// Assert
+		let err = result.unwrap_err();
+		let error_msg = err.to_string();
+		assert!(
+			error_msg.contains("SECURE_SSL_REDIRECT should be true in production"),
+			"Expected error about SECURE_SSL_REDIRECT being false, got: {error_msg}"
+		);
+	}
+
+	#[rstest]
+	fn test_security_validator_ssl_redirect_true_in_production() {
+		// Arrange
+		let validator = SecurityValidator::new(Profile::Production);
+		let mut settings = HashMap::new();
+		settings.insert("debug".to_string(), Value::Bool(false));
+		settings.insert(
+			"secret_key".to_string(),
+			Value::String("a-very-long-secure-random-key-that-is-at-least-32-chars".to_string()),
+		);
+		settings.insert(
+			"allowed_hosts".to_string(),
+			Value::Array(vec![Value::String("example.com".to_string())]),
+		);
+		settings.insert("secure_ssl_redirect".to_string(), Value::Bool(true));
+
+		// Act
+		let result = validator.validate_settings(&settings);
+
+		// Assert
+		assert!(
+			result.is_ok(),
+			"Expected validation to pass with valid production settings, got: {result:?}"
 		);
 	}
 

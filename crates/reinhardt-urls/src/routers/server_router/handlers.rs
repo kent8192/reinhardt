@@ -24,6 +24,7 @@ impl Handler for ViewSetHandler {
 
 /// Function handler adapter
 pub struct FunctionHandler<F> {
+	/// The wrapped async function.
 	pub func: F,
 }
 

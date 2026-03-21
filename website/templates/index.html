@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 
 {% block content %}
+{%- set crate_data = load_data(url="https://crates.io/api/v1/crates/reinhardt-web", format="json", headers=["User-Agent=reinhardt-web-site (zola)"], required=false) -%}
+{%- if crate_data and crate_data.crate -%}
+	{%- set latest_version = crate_data.crate.max_version -%}
+{%- else -%}
+	{%- set latest_version = config.extra.reinhardt_version -%}
+{%- endif -%}
 <section class="hero" aria-labelledby="hero-title">
 	<div class="hero-inner container">
 		<h1 id="hero-title" class="hero-title">
@@ -20,7 +26,7 @@
 			</a>
 		</div>
 		<p class="hero-meta">
-			<code>v0.1.0-alpha</code>
+			<code>v{{ latest_version }}</code>
 			&middot; BSD-3-Clause
 			&middot; <a href="{{ config.extra.crates_io }}" target="_blank" rel="noopener noreferrer">crates.io</a>
 		</p>
@@ -88,7 +94,7 @@
 		<h2 id="quickstart-title" class="section-title">Get Started in Seconds</h2>
 		<div class="code-block-wrapper">
 			<pre><code class="language-toml">[dependencies]
-reinhardt = { version = "0.1.0-alpha", package = "reinhardt-web" }</code></pre>
+reinhardt = { version = "{{ latest_version }}", package = "reinhardt-web" }</code></pre>
 		</div>
 		<a href="/quickstart/" class="btn btn-primary">Full Quickstart Guide →</a>
 	</div>

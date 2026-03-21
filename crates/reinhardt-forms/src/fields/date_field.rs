@@ -2,15 +2,25 @@ use crate::field::{FieldError, FieldResult, FormField, Widget};
 use chrono::{Datelike, NaiveDate};
 
 /// DateField for date input
+#[derive(Debug, Clone)]
 pub struct DateField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Optional human-readable label for display.
 	pub label: Option<String>,
+	/// Whether this field must be filled in.
 	pub required: bool,
+	/// Optional help text displayed alongside the field.
 	pub help_text: Option<String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<serde_json::Value>,
+	/// Accepted date format strings (strftime patterns).
 	pub input_formats: Vec<String>,
+	/// Whether to apply locale-aware formatting.
 	pub localize: bool,
+	/// The locale to use for formatting (e.g., "en_US").
 	pub locale: Option<String>,
 }
 

@@ -30,17 +30,24 @@ pub const MESSAGE_HEADER: &str = "X-Messages";
 /// Message severity levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MessageLevel {
+	/// Diagnostic information for developers, not shown to end users.
 	Debug,
+	/// Informational message for the user.
 	Info,
+	/// Indicates an operation completed successfully.
 	Success,
+	/// Indicates a potential issue that the user should be aware of.
 	Warning,
+	/// Indicates an operation failed or an error occurred.
 	Error,
 }
 
 /// A single flash message
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
+	/// The severity level of this message.
 	pub level: MessageLevel,
+	/// The message text to display to the user.
 	pub text: String,
 }
 
@@ -128,7 +135,7 @@ impl Default for SessionStorage {
 
 impl MessageStorage for SessionStorage {
 	fn add_message(&self, session_id: &str, message: Message) {
-		let mut messages = self.messages.write().unwrap();
+		let mut messages = self.messages.write().unwrap_or_else(|e| e.into_inner());
 		messages
 			.entry(session_id.to_string())
 			.or_default()
@@ -136,12 +143,12 @@ impl MessageStorage for SessionStorage {
 	}
 
 	fn get_and_clear_messages(&self, session_id: &str) -> Vec<Message> {
-		let mut messages = self.messages.write().unwrap();
+		let mut messages = self.messages.write().unwrap_or_else(|e| e.into_inner());
 		messages.remove(session_id).unwrap_or_default()
 	}
 
 	fn get_messages(&self, session_id: &str) -> Vec<Message> {
-		let messages = self.messages.read().unwrap();
+		let messages = self.messages.read().unwrap_or_else(|e| e.into_inner());
 		messages.get(session_id).cloned().unwrap_or_default()
 	}
 }
@@ -179,7 +186,7 @@ impl Default for CookieStorage {
 
 impl MessageStorage for CookieStorage {
 	fn add_message(&self, session_id: &str, message: Message) {
-		let mut messages = self.messages.write().unwrap();
+		let mut messages = self.messages.write().unwrap_or_else(|e| e.into_inner());
 		messages
 			.entry(session_id.to_string())
 			.or_default()
@@ -187,12 +194,12 @@ impl MessageStorage for CookieStorage {
 	}
 
 	fn get_and_clear_messages(&self, session_id: &str) -> Vec<Message> {
-		let mut messages = self.messages.write().unwrap();
+		let mut messages = self.messages.write().unwrap_or_else(|e| e.into_inner());
 		messages.remove(session_id).unwrap_or_default()
 	}
 
 	fn get_messages(&self, session_id: &str) -> Vec<Message> {
-		let messages = self.messages.read().unwrap();
+		let messages = self.messages.read().unwrap_or_else(|e| e.into_inner());
 		messages.get(session_id).cloned().unwrap_or_default()
 	}
 }
@@ -246,6 +253,7 @@ impl MessageStorage for CookieStorage {
 /// assert_eq!(messages[0].level, MessageLevel::Success);
 /// # });
 /// ```
+// Allow dead_code: public API for middleware pipeline integration, not yet wired into default stack
 #[allow(dead_code)]
 pub struct MessageMiddleware {
 	storage: Arc<dyn MessageStorage>,

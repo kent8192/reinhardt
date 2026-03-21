@@ -13,6 +13,7 @@ use std::sync::Arc;
 use super::renderer::{ApiContext, BrowsableApiRenderer};
 
 /// Middleware configuration for Browsable API
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct BrowsableApiConfig {
 	/// Enable browsable API (default: true)
@@ -70,11 +71,10 @@ impl BrowsableApiMiddleware {
 	/// ```
 	/// use reinhardt_rest::browsable_api::middleware::{BrowsableApiMiddleware, BrowsableApiConfig};
 	///
-	/// let config = BrowsableApiConfig {
-	///     enabled: true,
-	///     template_name: Some("custom_api.tpl".to_string()),
-	///     custom_css: Some("/static/api.css".to_string()),
-	/// };
+	/// let mut config = BrowsableApiConfig::default();
+	/// config.enabled = true;
+	/// config.template_name = Some("custom_api.tpl".to_string());
+	/// config.custom_css = Some("/static/api.css".to_string());
 	///
 	/// let middleware = BrowsableApiMiddleware::with_config(config);
 	/// ```

@@ -18,6 +18,7 @@ use std::sync::Arc;
 /// ```
 #[derive(Debug, Clone)]
 pub struct CronSchedule {
+	/// The cron expression string (e.g., `"0 0 * * *"` for daily at midnight).
 	pub expression: String,
 }
 
@@ -29,10 +30,10 @@ impl CronSchedule {
 	/// ```rust
 	/// use reinhardt_tasks::CronSchedule;
 	///
-	// Run every day at midnight
+	/// // Run every day at midnight
 	/// let daily = CronSchedule::new("0 0 * * *".to_string());
 	///
-	// Run every hour
+	/// // Run every hour
 	/// let hourly = CronSchedule::new("0 * * * *".to_string());
 	/// ```
 	pub fn new(expression: String) -> Self {
@@ -60,7 +61,9 @@ impl CronSchedule {
 	}
 }
 
+/// Trait for defining when a task should next be executed.
 pub trait Schedule: Send + Sync {
+	/// Returns the next scheduled run time, or `None` if no future run is scheduled.
 	fn next_run(&self) -> Option<DateTime<Utc>>;
 }
 
@@ -78,7 +81,7 @@ impl Schedule for CronSchedule {
 /// use reinhardt_tasks::Scheduler;
 ///
 /// let scheduler = Scheduler::new();
-// Add tasks and run scheduler
+/// // Add tasks and run scheduler
 /// ```
 // Fixes #786: added shutdown broadcast channel
 pub struct Scheduler {
@@ -227,6 +230,8 @@ mod tests {
 	use std::sync::atomic::{AtomicU64, Ordering};
 
 	#[derive(Debug)]
+	// Allow dead_code: fields are accessed through trait object (dyn Task + TaskExecutor)
+	#[allow(dead_code)]
 	struct DummyTask {
 		id: TaskId,
 	}

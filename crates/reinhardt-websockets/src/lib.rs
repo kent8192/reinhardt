@@ -143,24 +143,42 @@
 //! The authentication cookies from the user's HTTP session are automatically included
 //! in the WebSocket handshake, allowing the server to authenticate the connection.
 
+#![warn(missing_docs)]
+
+/// Token-based authentication and authorization for WebSocket connections.
 pub mod auth;
+/// Channel layer abstraction for cross-process messaging.
 pub mod channels;
+/// Message compression (gzip, deflate, brotli).
 #[cfg(feature = "compression")]
 pub mod compression;
+/// WebSocket connection management and ping/pong keepalive.
 pub mod connection;
+/// Django Channels-inspired consumer classes for message handling.
 pub mod consumers;
+/// WebSocket upgrade handler and connection lifecycle.
 pub mod handler;
+/// Integration with reinhardt-pages for cookie/session-based auth.
 #[cfg(feature = "pages-integration")]
 pub mod integration;
+/// WebSocket connection and message metrics.
 pub mod metrics;
+/// WebSocket middleware for pre/post-processing.
 pub mod middleware;
+/// Origin validation for WebSocket handshake requests.
 pub mod origin;
+/// WebSocket protocol frame handling.
 pub mod protocol;
+/// Automatic reconnection with exponential backoff.
 pub mod reconnection;
+/// Redis-backed channel layer for distributed deployments.
 #[cfg(feature = "redis-channel")]
 pub mod redis_channel;
+/// Room-based connection grouping for targeted broadcasts.
 pub mod room;
+/// URL-based WebSocket endpoint routing.
 pub mod routing;
+/// Connection and message rate limiting.
 pub mod throttling;
 
 pub use auth::{

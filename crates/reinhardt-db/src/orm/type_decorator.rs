@@ -23,12 +23,19 @@ pub trait TypeDecorator: Send + Sync {
 	fn sql_type_name(&self) -> &str;
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone)]
+/// Defines possible type error values.
 pub enum TypeError {
+	/// SerializationError variant.
 	SerializationError(String),
+	/// DeserializationError variant.
 	DeserializationError(String),
+	/// ValidationError variant.
 	ValidationError(String),
+	/// EncryptionError variant.
 	EncryptionError(String),
+	/// DecryptionError variant.
 	DecryptionError(String),
 }
 
@@ -77,7 +84,7 @@ impl EncryptedString {
 
 		// Generate a random 12-byte nonce
 		let mut nonce_bytes = [0u8; 12];
-		rand::thread_rng().fill_bytes(&mut nonce_bytes);
+		rand::rng().fill_bytes(&mut nonce_bytes);
 		let nonce = Nonce::from(nonce_bytes);
 
 		// Encrypt the data

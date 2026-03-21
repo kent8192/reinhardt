@@ -450,7 +450,15 @@ fn test_watch_with_fragment_result(list_signal: Signal<Vec<String>>) {
 	let view = page!(|items: Signal<Vec<String>>| {
 		div {
 			watch {
-				{ Page::fragment(items.get().iter().map(|i| { Page::text(i.clone()) }).collect ::<Vec<Page>>()) }
+				{
+					Page::fragment(
+							items
+								.get()
+								.iter()
+								.map(|i| Page::text(i.clone()))
+								.collect::<Vec<Page>>(),
+						)
+				}
 			}
 		}
 	})(items.clone());

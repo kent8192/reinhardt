@@ -44,23 +44,25 @@ This generates a complete project structure:
 
 ```
 my-api/
+├── .gitignore
 ├── Cargo.toml
+├── Makefile.toml
+├── bacon.toml
 ├── settings/
-│   ├── base.example.toml
-│   ├── local.example.toml
-│   ├── staging.example.toml
-│   └── production.example.toml
+│   ├── base.toml
+│   ├── local.toml
+│   ├── staging.toml
+│   └── production.toml
 ├── src/
 │   ├── lib.rs
-│   ├── main.rs
-│   ├── config.rs
 │   ├── apps.rs
+│   ├── config.rs
 │   ├── bin/
 │   │   └── manage.rs
 │   └── config/
+│       ├── apps.rs
 │       ├── settings.rs
-│       ├── urls.rs
-│       └── apps.rs
+│       └── urls.rs
 └── README.md
 ```
 
@@ -84,14 +86,38 @@ This generates a project with 3-layer architecture:
 
 ```
 my-app/
+├── .gitignore
 ├── Cargo.toml
 ├── Makefile.toml
+├── bacon.toml
+├── build.rs
 ├── index.html
+├── settings/
+│   ├── base.example.toml
+│   ├── local.example.toml
+│   ├── staging.example.toml
+│   └── production.example.toml
 ├── src/
-│   ├── client/       # WASM UI (runs in browser)
-│   ├── server/       # Server functions (runs on server)
-│   ├── shared/       # Shared types (used by both)
-│   └── ...
+│   ├── lib.rs
+│   ├── apps.rs
+│   ├── config.rs
+│   ├── bin/
+│   │   └── manage.rs
+│   ├── client.rs
+│   ├── client/
+│   │   ├── router.rs
+│   │   └── state.rs
+│   ├── config/
+│   │   ├── apps.rs
+│   │   ├── settings.rs
+│   │   └── urls.rs
+│   ├── server/
+│   │   └── server_fn.rs
+│   ├── shared.rs
+│   └── shared/
+│       ├── errors.rs
+│       └── types.rs
+└── README.md
 ```
 
 Visit `http://127.0.0.1:8000/` in your browser.
@@ -113,13 +139,13 @@ Reinhardt comes in three flavors. Choose the one that fits your needs:
 
 All features enabled, best for learning and rapid prototyping:
 
-```toml
+{% versioned_code(lang="toml") %}
 [dependencies]
 # Default behavior - all features enabled
-reinhardt = { version = "0.1.0-alpha.18", package = "reinhardt-web" }
+reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web" }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
-```
+{% end %}
 
 **Includes:** Database, Auth, REST API, Admin, GraphQL, WebSockets, Cache, i18n,
 Mail, Sessions, Static Files, Storage
@@ -128,12 +154,12 @@ Mail, Sessions, Static Files, Storage
 
 Balanced setup for most production projects:
 
-```toml
+{% versioned_code(lang="toml") %}
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.18", package = "reinhardt-web", default-features = false, features = ["standard"] }
+reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web", default-features = false, features = ["standard"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
-```
+{% end %}
 
 **Includes:** Core, Database (PostgreSQL), REST API, Auth, Middleware, Templates
 
@@ -141,12 +167,12 @@ serde = { version = "1.0", features = ["derive"] }
 
 For microservices and simple APIs:
 
-```toml
+{% versioned_code(lang="toml") %}
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.18", package = "reinhardt-web", default-features = false, features = ["minimal"] }
+reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
-```
+{% end %}
 
 **Includes:** HTTP, routing, DI, parameter extraction, server
 
@@ -193,7 +219,7 @@ pub struct HelloResponse {
 }
 
 #[get("/hello", name = "hello_world")]
-pub async fn hello_world() -> Result<Response> {
+pub async fn hello_world() -> ViewResult<Response> {
     let response_data = HelloResponse {
         message: "Hello, Reinhardt!".to_string(),
     };
@@ -232,12 +258,12 @@ pub fn todo_viewset() -> ModelViewSet<Todo, TodoSerializer> {
 Register in `todos/urls.rs`:
 
 ```rust
-use reinhardt::routers::UnifiedRouter;
+use reinhardt::routers::DefaultRouter;
 use std::sync::Arc;
 use crate::views::todo_viewset;
 
-pub fn url_patterns() -> UnifiedRouter {
-    UnifiedRouter::new()
+pub fn url_patterns() -> DefaultRouter {
+    DefaultRouter::new()
         .register_viewset("/todos", Arc::new(todo_viewset()))
 }
 ```
@@ -249,8 +275,8 @@ use reinhardt::prelude::*;
 use reinhardt::routes;
 
 #[routes]
-pub fn routes() -> UnifiedRouter {
-    UnifiedRouter::new()
+pub fn routes() -> DefaultRouter {
+    DefaultRouter::new()
         .mount("/api/", todos::urls::url_patterns())
 }
 ```
@@ -346,10 +372,10 @@ next:
 
 To use a database instead of in-memory storage:
 
-```toml
+{% versioned_code(lang="toml") %}
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.18", package = "reinhardt-web", features = ["standard", "db-postgres"] }
-```
+reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web", features = ["standard", "db-postgres"] }
+{% end %}
 
 Check out the [ORM documentation](/docs/api/) for more details.
 

@@ -1,7 +1,8 @@
 //! Lazy loading and eager loading strategies for association proxies
 
 use async_trait::async_trait;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use tracing::warn;
 
 use crate::proxy::ProxyResult;
 
@@ -22,7 +23,7 @@ pub enum LoadStrategy {
 #[async_trait]
 pub trait LazyLoadable: Send + Sync {
 	/// The type of the loaded data
-	type Data: Send + Sync;
+	type Data: Clone + Send + Sync;
 
 	/// Check if data is loaded
 	fn is_loaded(&self) -> bool;
@@ -31,16 +32,16 @@ pub trait LazyLoadable: Send + Sync {
 	async fn load(&mut self) -> ProxyResult<()>;
 
 	/// Get the loaded data, loading if necessary
-	async fn get(&mut self) -> ProxyResult<&Self::Data>;
+	async fn get(&mut self) -> ProxyResult<Self::Data>;
 
 	/// Get the loaded data without loading (returns None if not loaded)
-	fn get_if_loaded(&self) -> Option<&Self::Data>;
+	fn get_if_loaded(&self) -> Option<Self::Data>;
 }
 
 /// Lazy-loaded wrapper for relationship data
 pub struct LazyLoaded<T, F>
 where
-	T: Send + Sync,
+	T: Clone + Send + Sync,
 	F: Fn() -> futures::future::BoxFuture<'static, ProxyResult<T>> + Send + Sync,
 {
 	/// The cached data
@@ -51,7 +52,7 @@ where
 
 impl<T, F> LazyLoaded<T, F>
 where
-	T: Send + Sync,
+	T: Clone + Send + Sync,
 	F: Fn() -> futures::future::BoxFuture<'static, ProxyResult<T>> + Send + Sync,
 {
 	/// Create a new lazy-loaded value
@@ -99,9 +100,25 @@ where
 		}
 	}
 
+	/// Acquire a read lock, recovering from poison if necessary
+	fn read_lock(&self) -> RwLockReadGuard<'_, Option<T>> {
+		self.data.read().unwrap_or_else(|e| {
+			warn!("RwLock poisoned on read, recovering with inner value");
+			e.into_inner()
+		})
+	}
+
+	/// Acquire a write lock, recovering from poison if necessary
+	fn write_lock(&self) -> RwLockWriteGuard<'_, Option<T>> {
+		self.data.write().unwrap_or_else(|e| {
+			warn!("RwLock poisoned on write, recovering with inner value");
+			e.into_inner()
+		})
+	}
+
 	/// Check if data is loaded
 	pub fn is_loaded(&self) -> bool {
-		self.data.read().unwrap().is_some()
+		self.read_lock().is_some()
 	}
 
 	/// Load the data if not already loaded
@@ -115,23 +132,35 @@ where
 		let data = (self.loader)().await?;
 
 		// Store it
-		let mut guard = self.data.write().unwrap();
+		let mut guard = self.write_lock();
 		*guard = Some(data);
 
 		Ok(())
 	}
 
 	/// Get the loaded data, loading if necessary
-	pub async fn get(&self) -> ProxyResult<&T> {
+	pub async fn get(&self) -> ProxyResult<T> {
 		// Ensure data is loaded
 		self.load().await?;
 
-		// This is safe because we just loaded the data
-		let guard = self.data.read().unwrap();
-		unsafe {
-			// SAFETY: We just ensured data is loaded above
-			let ptr = guard.as_ref().unwrap() as *const T;
-			Ok(&*ptr)
+		// Handle the case where data was reset between load() and this read
+		// by another task calling reset() concurrently.
+		// Extract the cloned data while holding the lock briefly, then drop it
+		// before any await point to satisfy clippy::await_holding_lock.
+		let cached = {
+			let guard = self.read_lock();
+			guard.as_ref().cloned()
+		};
+
+		match cached {
+			Some(data) => Ok(data),
+			None => {
+				// Data was reset after load() completed; reload
+				let data = (self.loader)().await?;
+				let mut write_guard = self.write_lock();
+				*write_guard = Some(data.clone());
+				Ok(data)
+			}
 		}
 	}
 
@@ -149,22 +178,13 @@ where
 	/// // Returns None since not loaded yet
 	/// assert!(lazy.get_if_loaded().is_none());
 	/// ```
-	pub fn get_if_loaded(&self) -> Option<&T> {
-		let guard = self.data.read().unwrap();
-		if guard.is_some() {
-			unsafe {
-				// SAFETY: We checked that it's Some
-				let ptr = guard.as_ref().unwrap() as *const T;
-				Some(&*ptr)
-			}
-		} else {
-			None
-		}
+	pub fn get_if_loaded(&self) -> Option<T> {
+		self.read_lock().as_ref().cloned()
 	}
 
 	/// Reset the lazy-loaded value, forcing a reload on next access
 	pub fn reset(&self) {
-		let mut guard = self.data.write().unwrap();
+		let mut guard = self.write_lock();
 		*guard = None;
 	}
 }
@@ -252,9 +272,31 @@ impl RelationshipCache {
 		}
 	}
 
+	/// Acquire a read lock, recovering from poison if necessary
+	fn read_lock(
+		&self,
+	) -> RwLockReadGuard<'_, std::collections::HashMap<String, Box<dyn std::any::Any + Send + Sync>>>
+	{
+		self.cache.read().unwrap_or_else(|e| {
+			warn!("RelationshipCache RwLock poisoned on read, recovering with inner value");
+			e.into_inner()
+		})
+	}
+
+	/// Acquire a write lock, recovering from poison if necessary
+	fn write_lock(
+		&self,
+	) -> RwLockWriteGuard<'_, std::collections::HashMap<String, Box<dyn std::any::Any + Send + Sync>>>
+	{
+		self.cache.write().unwrap_or_else(|e| {
+			warn!("RelationshipCache RwLock poisoned on write, recovering with inner value");
+			e.into_inner()
+		})
+	}
+
 	/// Check if a relationship is cached
 	pub fn contains(&self, key: &str) -> bool {
-		self.cache.read().unwrap().contains_key(key)
+		self.read_lock().contains_key(key)
 	}
 
 	/// Get a cached relationship
@@ -262,25 +304,25 @@ impl RelationshipCache {
 	where
 		T: 'static + Clone,
 	{
-		let cache = self.cache.read().unwrap();
+		let cache = self.read_lock();
 		cache.get(key).and_then(|v| v.downcast_ref::<T>().cloned())
 	}
 
 	/// Set a cached relationship
 	pub fn set<T: 'static + Send + Sync>(&self, key: String, value: T) {
-		let mut cache = self.cache.write().unwrap();
+		let mut cache = self.write_lock();
 		cache.insert(key, Box::new(value));
 	}
 
 	/// Remove a cached relationship
 	pub fn remove(&self, key: &str) -> bool {
-		let mut cache = self.cache.write().unwrap();
+		let mut cache = self.write_lock();
 		cache.remove(key).is_some()
 	}
 
 	/// Clear all cached relationships
 	pub fn clear(&self) {
-		let mut cache = self.cache.write().unwrap();
+		let mut cache = self.write_lock();
 		cache.clear();
 	}
 }
@@ -305,7 +347,7 @@ mod tests {
 		assert!(lazy.is_loaded());
 
 		let data = lazy.get_if_loaded().unwrap();
-		assert_eq!(data, &vec![1, 2, 3]);
+		assert_eq!(data, vec![1, 2, 3]);
 	}
 
 	#[tokio::test]
@@ -315,7 +357,7 @@ mod tests {
 		assert!(lazy.is_loaded());
 
 		let data = lazy.get_if_loaded().unwrap();
-		assert_eq!(data, &vec![1, 2, 3]);
+		assert_eq!(data, vec![1, 2, 3]);
 	}
 
 	#[test]
@@ -327,6 +369,63 @@ mod tests {
 
 		assert_eq!(config.max_depth, 5);
 		assert_eq!(config.relationships, vec!["posts", "comments"]);
+	}
+
+	#[tokio::test]
+	async fn test_lazy_loaded_get_returns_owned_clone() {
+		// Arrange
+		let lazy = LazyLoaded::new(|| Box::pin(async { Ok(vec![10, 20, 30]) }));
+
+		// Act - get() loads and returns owned T via clone
+		let data = lazy.get().await.unwrap();
+
+		// Assert
+		assert_eq!(data, vec![10, 20, 30]);
+		assert!(lazy.is_loaded());
+	}
+
+	#[tokio::test]
+	async fn test_lazy_loaded_get_if_loaded_returns_none_when_not_loaded() {
+		// Arrange
+		let lazy = LazyLoaded::new(|| Box::pin(async { Ok(42) }));
+
+		// Act
+		let result = lazy.get_if_loaded();
+
+		// Assert
+		assert_eq!(result, None);
+	}
+
+	#[tokio::test]
+	async fn test_lazy_loaded_get_if_loaded_returns_cloned_value() {
+		// Arrange
+		let lazy = LazyLoaded::preloaded(String::from("hello"), || {
+			Box::pin(async { Ok(String::from("world")) })
+		});
+
+		// Act
+		let result = lazy.get_if_loaded();
+
+		// Assert
+		assert_eq!(result, Some(String::from("hello")));
+	}
+
+	#[tokio::test]
+	async fn test_lazy_loaded_reset_forces_reload() {
+		// Arrange
+		let lazy = LazyLoaded::preloaded(vec![1], || Box::pin(async { Ok(vec![2]) }));
+		assert!(lazy.is_loaded());
+
+		// Act
+		lazy.reset();
+
+		// Assert
+		assert!(!lazy.is_loaded());
+		assert_eq!(lazy.get_if_loaded(), None);
+
+		// Reload
+		let data = lazy.get().await.unwrap();
+		assert_eq!(data, vec![2]);
 	}
 
 	#[test]

@@ -153,6 +153,7 @@ pub struct Relationship<P: Model, C: Model> {
 	uselist: bool,
 
 	/// Relationship direction (for self-referential)
+	// Allow dead_code: direction field required for self-referential relationship resolution
 	#[allow(dead_code)]
 	direction: Option<RelationshipDirection>,
 
@@ -514,6 +515,7 @@ impl<P: Model, C: Model> Relationship<P, C> {
 }
 
 /// Join configuration for Joined loading strategy
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct JoinConfig {
 	/// Table to join

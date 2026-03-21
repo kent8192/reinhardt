@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.1.0-rc.8...reinhardt-websockets@v0.1.0-rc.9) - 2026-03-15
+
+### Fixed
+
+- *(websockets)* return registered router instead of empty one in get_or_init
+
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.1.0-rc.4...reinhardt-websockets@v0.1.0-rc.5) - 2026-03-07
+
+### Documentation
+
+- add missing doc comments for public API modules and types
+
+### Other
+
+- resolve conflicts with origin/main
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.1.0-rc.1...reinhardt-websockets@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(websockets)* release connection slot on disconnect in RateLimitMiddleware
+- *(websockets)* add non_exhaustive to ConnectionContext
+- *(websockets)* release lock before send in Room::send_to
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.1.0-alpha.16...reinhardt-websockets@v0.1.0-rc.1) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-auth, reinhardt-pages
+
 ## [0.1.0-alpha.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.1.0-alpha.15...reinhardt-websockets@v0.1.0-alpha.16) - 2026-02-24
 
 ### Maintenance

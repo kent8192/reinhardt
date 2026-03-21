@@ -7,6 +7,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.12...reinhardt-db@v0.1.0-rc.13) - 2026-03-18
+
+### Fixed
+
+- *(migrations)* skip duplicate operations check for empty-operations migrations
+
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.11...reinhardt-db@v0.1.0-rc.12) - 2026-03-18
+
+### Added
+
+- *(db)* add migration conflict detection and merge name generation
+
+### Documentation
+
+- *(db)* recommend CARGO_MANIFEST_DIR for workspace-safe migration paths
+
+### Fixed
+
+- *(db)* warn when FilesystemSource root directory does not exist
+
+### Other
+
+- incorporate main branch docs.rs fixes
+
+### Styling
+
+- *(db)* apply auto-fix formatting to filesystem source
+
+## [0.1.0-rc.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.10...reinhardt-db@v0.1.0-rc.11) - 2026-03-16
+
+### Fixed
+
+- *(reinhardt-db)* fix makemigrations codegen for type mismatch and missing fields
+
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.8...reinhardt-db@v0.1.0-rc.9) - 2026-03-15
+
+### Changed
+
+- *(db)* centralize schema identifier escaping and document value_expression safety
+
+### Fixed
+
+- *(db)* escape SQL identifiers in extension and schema operations
+- *(db)* replace lock/read/write unwrap with poison-safe alternatives
+- *(db)* add double-panic prevention and improve poison recovery
+
+### Styling
+
+- apply auto-fix for fmt and clippy
+
+### Testing
+
+- *(db)* add schema name escaping tests
+
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.4...reinhardt-db@v0.1.0-rc.5) - 2026-03-07
+
+### Added
+
+- add reinhardt-query prelude re-exports to reinhardt-db orm
+
+## [0.1.0-rc.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.3...reinhardt-db@v0.1.0-rc.4) - 2026-03-05
+
+### Fixed
+
+- *(db)* use extract_string_field in migration AST parser to handle .to_string() pattern
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.1...reinhardt-db@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(db)* prevent SQL injection in BatchUpdateBuilder and QuerySet filters
+- *(db)* preserve backward compatibility for batch_ops API
+- *(deps)* align dependency versions to workspace definitions
+
+### Other
+
+- resolve fields.rs conflict with main
+
+### Styling
+
+- *(db)* apply formatter to batch_ops
+
+### Testing
+
+- *(db)* add coverage tests for BigUnsigned overflow clamping
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-alpha.16...reinhardt-db@v0.1.0-rc.1) - 2026-02-24
+
+### Fixed
+
+- *(db)* gate sqlite-dependent tests with feature flag
+- *(db)* replace float test values to avoid clippy approx_constant lint
+
+### Testing
+
+- *(db)* add warning log test for .sql file detection
+
 ## [0.1.0-alpha.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-alpha.15...reinhardt-db@v0.1.0-alpha.16) - 2026-02-23
 
 ### Maintenance

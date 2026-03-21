@@ -25,6 +25,7 @@ pub trait BaseMetadata: Send + Sync {
 /// basic information about the view and its fields.
 #[derive(Debug, Clone)]
 pub struct SimpleMetadata {
+	/// Whether to include action metadata (POST/PUT fields) in the response.
 	pub include_actions: bool,
 }
 
@@ -137,7 +138,7 @@ impl SimpleMetadata {
 	/// let allowed_methods = vec!["GET".to_string(), "POST".to_string(), "PUT".to_string()];
 	/// let actions = metadata.determine_actions(&allowed_methods, &fields);
 	///
-	// GET is not included in actions, only POST and PUT
+	/// // GET is not included in actions, only POST and PUT
 	/// assert!(!actions.contains_key("GET"));
 	/// assert!(actions.contains_key("POST"));
 	/// assert!(actions.contains_key("PUT"));

@@ -20,6 +20,14 @@ struct RouteOptions {
 	use_inject: bool,
 	/// Route name for URL reversal
 	name: Option<String>,
+	/// Enable automatic validation with `pre_validate = true`
+	///
+	/// When enabled, extracted parameters implementing `reinhardt_core::validators::Validate`
+	/// are automatically validated before the handler is called.
+	/// Extractors used with this option must implement `Deref` to the inner type
+	/// (e.g., `Json<T>` derefs to `T`), as validation is performed on the dereferenced value.
+	/// Returns HTTP 400 with JSON error details on validation failure.
+	pre_validate: bool,
 }
 
 /// Information about parameter extractors
@@ -203,6 +211,7 @@ fn generate_wrapper_with_both(
 	original_fn: &ItemFn,
 	extractors: &[ExtractorInfo],
 	inject_params: &[InjectInfo],
+	options: &RouteOptions,
 ) -> (TokenStream, TokenStream) {
 	let di_crate = get_reinhardt_di_crate();
 	let core_crate = get_reinhardt_core_crate();
@@ -277,25 +286,94 @@ fn generate_wrapper_with_both(
 		})
 		.collect();
 
-	// Generate extractor calls
-	let extractor_calls: Vec<_> = extractors
-		.iter()
-		.map(|ext| {
-			let pat = &ext.pat;
-			let ty = &ext.ty;
-			quote! {
-				let #pat = <#ty as #params_crate::FromRequest>::from_request(&req, &ctx)
-					.await
-					.map_err(|e| #core_crate::exception::Error::Validation(
-						format!("Parameter extraction failed: {:?}", e)
-					))?;
-			}
-		})
-		.collect();
-
-	// Build call arguments (extractors first, then inject params)
-	let extractor_args: Vec<_> = extractors.iter().map(|ext| &ext.pat).collect();
+	// Build call arguments for inject params (shared between both paths)
 	let inject_args: Vec<_> = inject_params.iter().map(|param| &param.pat).collect();
+
+	// Generate extractor calls and validation differently based on pre_validate.
+	// When pre_validate = true and a destructuring pattern like `Json(body)` is used,
+	// extracting directly into the pattern would consume the wrapper, making it
+	// impossible to validate via Deref on the original extractor type.
+	// The 3-step approach (extract to temp -> validate temp -> destructure) avoids this.
+	let (extractor_calls, validation_calls, destructure_calls, extractor_args): (
+		Vec<_>,
+		proc_macro2::TokenStream,
+		proc_macro2::TokenStream,
+		Vec<Box<Pat>>,
+	) = if options.pre_validate {
+		// Step 1: Extract into temporary variables
+		let temp_names: Vec<syn::Ident> = extractors
+			.iter()
+			.enumerate()
+			.map(|(i, _)| syn::Ident::new(&format!("__ext_{}", i), Span::call_site()))
+			.collect();
+
+		let calls: Vec<_> = extractors
+			.iter()
+			.zip(temp_names.iter())
+			.map(|(ext, temp)| {
+				let ty = &ext.ty;
+				quote! {
+					let #temp = <#ty as #params_crate::FromRequest>::from_request(&req, &ctx)
+						.await
+						.map_err(|e| #core_crate::exception::Error::Validation(
+							format!("Parameter extraction failed: {:?}", e)
+						))?;
+				}
+			})
+			.collect();
+
+		// Step 2: Validate using temp variables (Deref on the extractor type)
+		let validate_calls: Vec<_> = temp_names
+			.iter()
+			.map(|temp| {
+				quote! {
+					#core_crate::validators::Validate::validate(&*#temp)
+						.map_err(|e| #core_crate::exception::Error::Validation(
+							::serde_json::to_string(&e).unwrap_or_else(|_| format!("{}", e))
+						))?;
+				}
+			})
+			.collect();
+
+		// Step 3: Destructure temp variables into original patterns
+		let destructure: Vec<_> = extractors
+			.iter()
+			.zip(temp_names.iter())
+			.map(|(ext, temp)| {
+				let pat = &ext.pat;
+				quote! { let #pat = #temp; }
+			})
+			.collect();
+
+		let args: Vec<Box<Pat>> = extractors.iter().map(|ext| ext.pat.clone()).collect();
+
+		(
+			calls,
+			quote! { #(#validate_calls)* },
+			quote! { #(#destructure)* },
+			args,
+		)
+	} else {
+		// Without pre_validate: extract directly into the original pattern
+		let calls: Vec<_> = extractors
+			.iter()
+			.map(|ext| {
+				let pat = &ext.pat;
+				let ty = &ext.ty;
+				quote! {
+					let #pat = <#ty as #params_crate::FromRequest>::from_request(&req, &ctx)
+						.await
+						.map_err(|e| #core_crate::exception::Error::Validation(
+							format!("Parameter extraction failed: {:?}", e)
+						))?;
+				}
+			})
+			.collect();
+
+		let args: Vec<Box<Pat>> = extractors.iter().map(|ext| ext.pat.clone()).collect();
+
+		(calls, quote! {}, quote! {}, args)
+	};
 
 	// Generate code
 	(
@@ -319,6 +397,12 @@ fn generate_wrapper_with_both(
 			// Extract request parameters
 			#(#extractor_calls)*
 
+			// Validate extracted parameters (when pre_validate = true)
+			#validation_calls
+
+			// Destructure into original patterns (when pre_validate = true)
+			#destructure_calls
+
 			// Call the original function
 			#original_fn_name(#(#extractor_args,)* #(#inject_args),*).await
 		},
@@ -333,6 +417,7 @@ fn generate_view_type(
 	route_name: &str,
 	extractors: &[ExtractorInfo],
 	inject_params: &[InjectInfo],
+	options: &RouteOptions,
 ) -> Result<TokenStream> {
 	let reinhardt_crate = crate::crate_paths::get_reinhardt_crate();
 	let core_crate = get_reinhardt_core_crate();
@@ -354,7 +439,8 @@ fn generate_view_type(
 	let method_ident = syn::Ident::new(method, Span::call_site());
 
 	// Generate wrapper parts
-	let (original_fn, wrapper_body) = generate_wrapper_with_both(input, extractors, inject_params);
+	let (original_fn, wrapper_body) =
+		generate_wrapper_with_both(input, extractors, inject_params, options);
 
 	let route_doc = format!("Route: {} {}", method, path);
 
@@ -382,6 +468,9 @@ fn generate_view_type(
 				module_path: module_path!(),
 				request_body_type: #request_body_type,
 				request_content_type: #request_content_type,
+				responses: &[],
+				headers: &[],
+				security: &[],
 			}
 		}
 	};
@@ -479,6 +568,19 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 										"use_inject must be a boolean (true or false)",
 									));
 								}
+							} else if path_expr.path.is_ident("pre_validate") {
+								if let Expr::Lit(ExprLit {
+									lit: Lit::Bool(bool_lit),
+									..
+								}) = &*assign.right
+								{
+									options.pre_validate = bool_lit.value;
+								} else {
+									return Err(Error::new_spanned(
+										&assign.right,
+										"pre_validate must be a boolean (true or false)",
+									));
+								}
 							} else if path_expr.path.is_ident("name") {
 								if let Expr::Lit(ExprLit {
 									lit: Lit::Str(str_lit),
@@ -496,7 +598,7 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 								return Err(Error::new_spanned(
 									&path_expr.path,
 									format!(
-										"unknown route option `{}`, expected `use_inject` or `name`",
+										"unknown route option `{}`, expected `use_inject`, `name`, or `pre_validate`",
 										path_expr.path.get_ident().map_or_else(
 											|| "unknown".to_string(),
 											|id| id.to_string()
@@ -554,14 +656,9 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 	// Detect inject params (always detect for error checking)
 	let all_inject_params = detect_inject_params(&input.sig.inputs);
 
-	// Error if use_inject = false and #[inject] parameters exist
+	// Auto-enable injection when #[inject] attributes are present
 	if !options.use_inject && !all_inject_params.is_empty() {
-		let first_inject = &all_inject_params[0];
-		return Err(Error::new_spanned(
-			&first_inject.pat,
-			"#[inject] attribute requires use_inject = true option. \
-			 Usage: #[get(\"/path\", use_inject = true)]",
-		));
+		options.use_inject = true;
 	}
 
 	// Use inject params only when use_inject = true
@@ -594,6 +691,7 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 			&route_name,
 			&extractors,
 			&inject_params,
+			&options,
 		);
 	}
 
@@ -656,6 +754,9 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 				module_path: module_path!(),
 				request_body_type: #request_body_type,
 				request_content_type: #request_content_type,
+				responses: &[],
+				headers: &[],
+				security: &[],
 			}
 		}
 	};

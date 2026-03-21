@@ -816,6 +816,10 @@ impl Query {
 	///     .body("SELECT $1 + 1");
 	/// ```
 	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	/// use reinhardt_query::types::function::*;
+	///
 	/// // PL/pgSQL function with OR REPLACE and options:
 	///
 	/// let query = Query::create_function()
@@ -850,6 +854,9 @@ impl Query {
 	///     .rename_to("new_func");
 	/// ```
 	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	///
 	/// // Change function owner:
 	///
 	/// let query = Query::alter_function()
@@ -875,6 +882,9 @@ impl Query {
 	/// let query = Query::drop_function()
 	///     .name("my_func");
 	/// ```
+	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
 	///
 	/// // DROP FUNCTION with IF EXISTS and CASCADE:
 	///
@@ -906,6 +916,10 @@ impl Query {
 	///     .language(FunctionLanguage::Sql)
 	///     .body("INSERT INTO event_log (message) VALUES ($1)");
 	/// ```
+	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	/// use reinhardt_query::types::function::*;
 	///
 	/// // PL/pgSQL procedure with OR REPLACE and options:
 	///
@@ -940,6 +954,9 @@ impl Query {
 	///     .rename_to("new_proc");
 	/// ```
 	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	///
 	/// // Change procedure owner:
 	///
 	/// let query = Query::alter_procedure()
@@ -965,6 +982,9 @@ impl Query {
 	/// let query = Query::drop_procedure()
 	///     .name("my_proc");
 	/// ```
+	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
 	///
 	/// // DROP PROCEDURE with IF EXISTS and CASCADE:
 	///
@@ -993,6 +1013,9 @@ impl Query {
 	///     .name("mood")
 	///     .as_enum(vec!["happy".to_string(), "sad".to_string(), "neutral".to_string()]);
 	/// ```
+	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
 	///
 	/// // Create COMPOSITE type:
 	///
@@ -1063,6 +1086,9 @@ impl Query {
 	/// let query = Query::drop_type()
 	///     .name("mood");
 	/// ```
+	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
 	///
 	/// // DROP TYPE with IF EXISTS and CASCADE:
 	///
@@ -1319,6 +1345,10 @@ impl Query {
 	///     .attribute(RoleAttribute::Password("secret".to_string()));
 	/// ```
 	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	/// use reinhardt_query::dcl::*;
+	///
 	/// // MySQL CREATE ROLE:
 	///
 	/// let query = Query::create_role()
@@ -1360,6 +1390,10 @@ impl Query {
 	///     .role("developer")
 	///     .attribute(RoleAttribute::NoLogin);
 	/// ```
+	///
+	/// ```rust,ignore
+	/// use reinhardt_query::prelude::*;
+	/// use reinhardt_query::dcl::*;
 	///
 	/// // MySQL:
 	///

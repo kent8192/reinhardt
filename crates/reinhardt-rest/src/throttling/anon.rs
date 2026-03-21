@@ -21,7 +21,7 @@ impl AnonRateThrottle<MemoryBackend> {
 	/// ```
 	/// use reinhardt_rest::throttling::AnonRateThrottle;
 	///
-	// Allow 60 requests per hour for anonymous users
+	/// // Allow 60 requests per hour for anonymous users
 	/// let throttle = AnonRateThrottle::new(60, 3600);
 	/// assert_eq!(throttle.rate, 60);
 	/// assert_eq!(throttle.window_secs, 3600);

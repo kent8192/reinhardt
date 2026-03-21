@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// Configuration for broken link detection
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokenLinkConfig {
 	/// Enable or disable broken link detection

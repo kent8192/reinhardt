@@ -28,7 +28,7 @@ pub fn now() -> DateTime<Utc> {
 /// use chrono::{DateTime, Local};
 ///
 /// let local_dt = localtime();
-// Verify it returns a DateTime<Local>
+/// // Verify it returns a DateTime<Local>
 /// let _: DateTime<Local> = local_dt;
 /// ```
 pub fn localtime() -> DateTime<Local> {
@@ -43,7 +43,7 @@ pub fn localtime() -> DateTime<Local> {
 ///
 /// let utc_now = now();
 /// let local = to_local(utc_now);
-// Should be the same instant in time
+/// // Should be the same instant in time
 /// assert_eq!(utc_now.timestamp(), local.timestamp());
 /// ```
 pub fn to_local(dt: DateTime<Utc>) -> DateTime<Local> {
@@ -59,7 +59,7 @@ pub fn to_local(dt: DateTime<Utc>) -> DateTime<Local> {
 /// let local = localtime();
 /// let utc = to_utc(local);
 /// let back_to_local = to_local(utc);
-// Should represent the same instant
+/// // Should represent the same instant
 /// assert_eq!(local.timestamp(), back_to_local.timestamp());
 /// ```
 pub fn to_utc(dt: DateTime<Local>) -> DateTime<Utc> {
@@ -190,7 +190,7 @@ pub fn get_timezone_name_utc(_dt: &DateTime<Utc>) -> &'static str {
 ///
 /// let dt = localtime();
 /// let tz_name = get_timezone_name_local(&dt);
-// The timezone name will vary by system, but should not be empty
+/// // The timezone name will vary by system, but should not be empty
 /// assert!(!tz_name.is_empty());
 /// ```
 pub fn get_timezone_name_local(_dt: &DateTime<Local>) -> Cow<'static, str> {

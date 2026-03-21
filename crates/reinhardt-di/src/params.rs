@@ -85,29 +85,38 @@ pub use validation::{
 
 // Box wrappers to reduce enum size (clippy::result_large_err mitigation)
 // ParamErrorContext contains multiple String fields which make the enum large
+/// Errors that can occur during parameter extraction from HTTP requests.
 #[derive(Debug, Error)]
 pub enum ParamError {
+	/// A required parameter was not provided.
 	#[error("Missing required parameter: {0}")]
 	MissingParameter(String),
 
+	/// The parameter value is invalid.
 	#[error("{}", .0.format_error())]
 	InvalidParameter(Box<ParamErrorContext>),
 
+	/// The parameter value could not be parsed to the expected type.
 	#[error("{}", .0.format_error())]
 	ParseError(Box<ParamErrorContext>),
 
+	/// The parameter value could not be deserialized.
 	#[error("{}", .0.format_error())]
 	DeserializationError(Box<ParamErrorContext>),
 
+	/// The URL-encoded parameter could not be decoded.
 	#[error("{}", .0.format_error())]
 	UrlEncodingError(Box<ParamErrorContext>),
 
+	/// An error occurred while reading the request body.
 	#[error("Request body error: {0}")]
 	BodyError(String),
 
+	/// The request payload exceeds the configured size limit.
 	#[error("Payload too large: {0}")]
 	PayloadTooLarge(String),
 
+	/// The parameter failed validation constraints.
 	#[cfg(feature = "validation")]
 	#[error("{}", .0.format_error())]
 	ValidationError(Box<ParamErrorContext>),
@@ -204,6 +213,7 @@ impl From<ParamError> for CoreError {
 	}
 }
 
+/// A specialized `Result` type for parameter extraction operations.
 pub type ParamResult<T> = std::result::Result<T, ParamError>;
 
 /// Context for parameter extraction

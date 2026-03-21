@@ -9,8 +9,11 @@ use tokio::sync::Mutex;
 /// Tier definition
 #[derive(Debug, Clone)]
 pub struct Tier {
+	/// Name of the tier (e.g., "free", "premium").
 	pub name: String,
+	/// Maximum number of requests allowed within the duration.
 	pub rate: usize,
+	/// Time window for the rate limit.
 	pub duration: std::time::Duration,
 }
 
@@ -126,7 +129,7 @@ impl<B: ThrottleBackend> TieredRateThrottle<B> {
 	/// assert_eq!(tier.name, "premium");
 	/// assert_eq!(tier.rate, 1000);
 	///
-	// Unknown tier returns default
+	/// // Unknown tier returns default
 	/// let unknown = throttle.get_tier("unknown");
 	/// assert_eq!(unknown.name, "free");
 	/// ```

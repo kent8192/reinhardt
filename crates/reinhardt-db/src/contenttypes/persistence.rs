@@ -54,24 +54,33 @@ use std::sync::Arc;
 use crate::contenttypes::ContentType;
 
 /// Error type for persistence operations
+#[non_exhaustive]
 #[cfg(feature = "database")]
 #[derive(Debug, thiserror::Error)]
 pub enum PersistenceError {
+	/// A database operation error.
 	#[error("Database error: {0}")]
 	DatabaseError(String),
 
+	/// A serialization or deserialization error.
 	#[error("Serialization error: {0}")]
 	SerializationError(String),
 
+	/// The requested item was not found.
 	#[error("Not found: {0}")]
 	NotFound(String),
 }
 
+#[non_exhaustive]
 #[cfg(not(feature = "database"))]
 #[derive(Debug)]
+/// Defines possible persistence error values.
 pub enum PersistenceError {
+	/// DatabaseError variant.
 	DatabaseError(String),
+	/// SerializationError variant.
 	SerializationError(String),
+	/// NotFound variant.
 	NotFound(String),
 }
 
@@ -119,8 +128,11 @@ impl std::error::Error for PersistenceError {}
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ContentTypeModel {
+	/// The id.
 	pub id: Option<i64>,
+	/// The app label.
 	pub app_label: String,
+	/// The model.
 	pub model: String,
 }
 
@@ -323,14 +335,9 @@ impl ContentTypePersistence {
 		} else {
 			stmt.to_string(SqliteQueryBuilder)
 		};
-		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
-
-		sqlx::query(sql_leaked)
-			.execute(&mut *conn)
-			.await
-			.map_err(|e| {
-				PersistenceError::DatabaseError(format!("Failed to create table: {}", e))
-			})?;
+		sqlx::raw_sql(&sql).execute(&mut *conn).await.map_err(|e| {
+			PersistenceError::DatabaseError(format!("Failed to create table: {}", e))
+		})?;
 
 		// Create unique index on (app_label, model)
 		let idx = Query::create_index()
@@ -347,14 +354,9 @@ impl ContentTypePersistence {
 		} else {
 			idx.to_string(SqliteQueryBuilder)
 		};
-		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
-
-		sqlx::query(sql_leaked)
-			.execute(&mut *conn)
-			.await
-			.map_err(|e| {
-				PersistenceError::DatabaseError(format!("Failed to create unique index: {}", e))
-			})?;
+		sqlx::raw_sql(&sql).execute(&mut *conn).await.map_err(|e| {
+			PersistenceError::DatabaseError(format!("Failed to create unique index: {}", e))
+		})?;
 
 		// Create index on app_label
 		let idx = Query::create_index()
@@ -369,14 +371,9 @@ impl ContentTypePersistence {
 		} else {
 			idx.to_string(SqliteQueryBuilder)
 		};
-		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
-
-		sqlx::query(sql_leaked)
-			.execute(&mut *conn)
-			.await
-			.map_err(|e| {
-				PersistenceError::DatabaseError(format!("Failed to create app_label index: {}", e))
-			})?;
+		sqlx::raw_sql(&sql).execute(&mut *conn).await.map_err(|e| {
+			PersistenceError::DatabaseError(format!("Failed to create app_label index: {}", e))
+		})?;
 
 		// Create index on model
 		let idx = Query::create_index()
@@ -391,14 +388,9 @@ impl ContentTypePersistence {
 		} else {
 			idx.to_string(SqliteQueryBuilder)
 		};
-		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
-
-		sqlx::query(sql_leaked)
-			.execute(&mut *conn)
-			.await
-			.map_err(|e| {
-				PersistenceError::DatabaseError(format!("Failed to create model index: {}", e))
-			})?;
+		sqlx::raw_sql(&sql).execute(&mut *conn).await.map_err(|e| {
+			PersistenceError::DatabaseError(format!("Failed to create model index: {}", e))
+		})?;
 
 		Ok(())
 	}
@@ -483,9 +475,7 @@ impl ContentTypePersistenceBackend for ContentTypePersistence {
 			)
 			.to_owned();
 		let (sql, values) = self.build_sql_with_values(stmt);
-		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
-
-		let row = bind_query_values(sqlx::query(sql_leaked), &values)
+		let row = bind_query_values(sqlx::query(&sql), &values)
 			.fetch_optional(&*self.pool)
 			.await
 			.map_err(|e| {
@@ -527,9 +517,7 @@ impl ContentTypePersistenceBackend for ContentTypePersistence {
 			)
 			.to_owned();
 		let (sql, values) = self.build_sql_with_values(stmt);
-		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
-
-		let row = bind_query_values(sqlx::query(sql_leaked), &values)
+		let row = bind_query_values(sqlx::query(&sql), &values)
 			.fetch_optional(&*self.pool)
 			.await
 			.map_err(|e| {
@@ -585,9 +573,7 @@ impl ContentTypePersistenceBackend for ContentTypePersistence {
 			.order_by(Alias::new("model"), Order::Asc)
 			.to_owned();
 		let (sql, values) = self.build_sql_with_values(stmt);
-		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
-
-		let rows = bind_query_values(sqlx::query(sql_leaked), &values)
+		let rows = bind_query_values(sqlx::query(&sql), &values)
 			.fetch_all(&*self.pool)
 			.await
 			.map_err(|e| {
@@ -629,9 +615,7 @@ impl ContentTypePersistenceBackend for ContentTypePersistence {
 				)
 				.to_owned();
 			let (sql, values) = self.build_sql_with_values(stmt);
-			let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
-
-			bind_query_values(sqlx::query(sql_leaked), &values)
+			bind_query_values(sqlx::query(&sql), &values)
 				.execute(&*self.pool)
 				.await
 				.map_err(|e| {
@@ -651,9 +635,7 @@ impl ContentTypePersistenceBackend for ContentTypePersistence {
 					.returning([Alias::new("id")])
 					.to_owned();
 				let (sql, values) = self.build_sql_with_values(stmt);
-				let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
-
-				let id_row = bind_query_values(sqlx::query(sql_leaked), &values)
+				let id_row = bind_query_values(sqlx::query(&sql), &values)
 					.fetch_one(&*self.pool)
 					.await
 					.map_err(|e| {
@@ -681,9 +663,7 @@ impl ContentTypePersistenceBackend for ContentTypePersistence {
 					.expect("Failed to build insert statement")
 					.to_owned();
 				let (sql, values) = self.build_sql_with_values(stmt);
-				let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
-
-				bind_query_values(sqlx::query(sql_leaked), &values)
+				bind_query_values(sqlx::query(&sql), &values)
 					.execute(&*self.pool)
 					.await
 					.map_err(|e| {
@@ -725,9 +705,7 @@ impl ContentTypePersistenceBackend for ContentTypePersistence {
 			)
 			.to_owned();
 		let (sql, values) = self.build_sql_with_values(stmt);
-		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
-
-		bind_query_values(sqlx::query(sql_leaked), &values)
+		bind_query_values(sqlx::query(&sql), &values)
 			.execute(&*self.pool)
 			.await
 			.map_err(|e| {
@@ -750,9 +728,7 @@ impl ContentTypePersistenceBackend for ContentTypePersistence {
 			)
 			.to_owned();
 		let (sql, values) = self.build_sql_with_values(stmt);
-		let sql_leaked: &'static str = Box::leak(sql.into_boxed_str());
-
-		let row = bind_query_values(sqlx::query(sql_leaked), &values)
+		let row = bind_query_values(sqlx::query(&sql), &values)
 			.fetch_optional(&*self.pool)
 			.await
 			.map_err(|e| {

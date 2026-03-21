@@ -16,6 +16,7 @@ use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use std::sync::Arc;
 
 /// Security middleware configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct SecurityConfig {
 	/// Enable HSTS (HTTP Strict Transport Security)
@@ -151,18 +152,17 @@ impl SecurityMiddleware {
 	/// }
 	///
 	/// # tokio_test::block_on(async {
-	/// let config = SecurityConfig {
-	///     hsts_enabled: true,
-	///     hsts_seconds: 31536000,
-	///     hsts_include_subdomains: true,
-	///     hsts_preload: true,
-	///     ssl_redirect: false,
-	///     content_type_nosniff: true,
-	///     referrer_policy: Some("strict-origin-when-cross-origin".to_string()),
-	///     cross_origin_opener_policy: Some("same-origin".to_string()),
-	///     x_frame_options: Some("DENY".to_string()),
-	///     secure_proxy_ssl_header: None,
-	/// };
+	/// let mut config = SecurityConfig::default();
+	/// config.hsts_enabled = true;
+	/// config.hsts_seconds = 31536000;
+	/// config.hsts_include_subdomains = true;
+	/// config.hsts_preload = true;
+	/// config.ssl_redirect = false;
+	/// config.content_type_nosniff = true;
+	/// config.referrer_policy = Some("strict-origin-when-cross-origin".to_string());
+	/// config.cross_origin_opener_policy = Some("same-origin".to_string());
+	/// config.x_frame_options = Some("DENY".to_string());
+	/// config.secure_proxy_ssl_header = None;
 	///
 	/// let middleware = SecurityMiddleware::with_config(config);
 	/// let handler = Arc::new(TestHandler);
@@ -272,9 +272,11 @@ impl SecurityMiddleware {
 		// HSTS header (only on HTTPS)
 		if self.config.hsts_enabled && is_secure {
 			let hsts_value = self.build_hsts_header();
-			response
-				.headers
-				.insert("Strict-Transport-Security", hsts_value.parse().unwrap());
+			if let Ok(header_value) = hsts_value.parse() {
+				response
+					.headers
+					.insert("Strict-Transport-Security", header_value);
+			}
 		}
 
 		// X-Content-Type-Options
@@ -286,24 +288,26 @@ impl SecurityMiddleware {
 		}
 
 		// Referrer-Policy
-		if let Some(ref policy) = self.config.referrer_policy {
-			response
-				.headers
-				.insert("Referrer-Policy", policy.parse().unwrap());
+		if let Some(ref policy) = self.config.referrer_policy
+			&& let Ok(header_value) = policy.parse()
+		{
+			response.headers.insert("Referrer-Policy", header_value);
 		}
 
 		// Cross-Origin-Opener-Policy
-		if let Some(ref policy) = self.config.cross_origin_opener_policy {
+		if let Some(ref policy) = self.config.cross_origin_opener_policy
+			&& let Ok(header_value) = policy.parse()
+		{
 			response
 				.headers
-				.insert("Cross-Origin-Opener-Policy", policy.parse().unwrap());
+				.insert("Cross-Origin-Opener-Policy", header_value);
 		}
 
 		// X-Frame-Options
-		if let Some(ref value) = self.config.x_frame_options {
-			response
-				.headers
-				.insert("X-Frame-Options", value.parse().unwrap());
+		if let Some(ref value) = self.config.x_frame_options
+			&& let Ok(header_value) = value.parse()
+		{
+			response.headers.insert("X-Frame-Options", header_value);
 		}
 	}
 }
@@ -322,10 +326,13 @@ impl Middleware for SecurityMiddleware {
 		// SSL redirect for all HTTP methods
 		if self.config.ssl_redirect && !is_secure {
 			let redirect_url = self.build_https_url(&request);
-			let mut response = Response::new(StatusCode::MOVED_PERMANENTLY);
-			response
-				.headers
-				.insert(LOCATION, redirect_url.parse().unwrap());
+			let mut response = Response::new(StatusCode::PERMANENT_REDIRECT);
+			response.headers.insert(
+				LOCATION,
+				redirect_url
+					.parse()
+					.unwrap_or_else(|_| HeaderValue::from_static("/")),
+			);
 			return Ok(response);
 		}
 
@@ -497,7 +504,7 @@ mod tests {
 
 		let response = middleware.process(request, handler).await.unwrap();
 
-		assert_eq!(response.status, StatusCode::MOVED_PERMANENTLY);
+		assert_eq!(response.status, StatusCode::PERMANENT_REDIRECT);
 		assert_eq!(
 			response.headers.get(LOCATION).unwrap(),
 			"https://example.com/test?key=value"
@@ -534,7 +541,7 @@ mod tests {
 			.build()
 			.unwrap();
 		let response = middleware.process(request, handler).await.unwrap();
-		assert_eq!(response.status, StatusCode::MOVED_PERMANENTLY);
+		assert_eq!(response.status, StatusCode::PERMANENT_REDIRECT);
 
 		// PUT should also be redirected to HTTPS
 		let handler = Arc::new(TestHandler);
@@ -547,7 +554,7 @@ mod tests {
 			.build()
 			.unwrap();
 		let response = middleware.process(request, handler).await.unwrap();
-		assert_eq!(response.status, StatusCode::MOVED_PERMANENTLY);
+		assert_eq!(response.status, StatusCode::PERMANENT_REDIRECT);
 
 		// DELETE should also be redirected to HTTPS
 		let handler = Arc::new(TestHandler);
@@ -560,7 +567,7 @@ mod tests {
 			.build()
 			.unwrap();
 		let response = middleware.process(request, handler).await.unwrap();
-		assert_eq!(response.status, StatusCode::MOVED_PERMANENTLY);
+		assert_eq!(response.status, StatusCode::PERMANENT_REDIRECT);
 	}
 
 	#[tokio::test]

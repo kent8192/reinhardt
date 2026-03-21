@@ -41,6 +41,7 @@ use crate::orm::{DatabaseConnection, QueryRow};
 ///
 /// This struct groups together the parameters needed to identify and work with
 /// a ManyToMany relationship through a junction table.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct ManyToManyConfig<PK> {
 	/// Primary key of the source instance

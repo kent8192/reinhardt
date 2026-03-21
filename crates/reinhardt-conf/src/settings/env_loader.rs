@@ -54,7 +54,7 @@ impl EnvLoader {
 	/// let loader = EnvLoader::new()
 	///     .path(PathBuf::from(".env.production"));
 	///
-	// Loader is configured to load from .env.production
+	/// // Loader is configured to load from .env.production
 	/// ```
 	pub fn path(mut self, path: impl Into<PathBuf>) -> Self {
 		self.path = Some(path.into());
@@ -70,7 +70,7 @@ impl EnvLoader {
 	/// let loader = EnvLoader::new()
 	///     .overwrite(true);
 	///
-	// When loading .env, existing env vars will be overwritten
+	/// // When loading .env, existing env vars will be overwritten
 	/// ```
 	pub fn overwrite(mut self, enabled: bool) -> Self {
 		self.overwrite = enabled;
@@ -86,7 +86,7 @@ impl EnvLoader {
 	/// let loader = EnvLoader::new()
 	///     .interpolate(true);
 	///
-	// Variables like $HOME or ${USER} will be expanded
+	/// // Variables like $HOME or ${USER} will be expanded
 	/// ```
 	pub fn interpolate(mut self, enabled: bool) -> Self {
 		self.interpolate = enabled;
@@ -151,9 +151,9 @@ impl EnvLoader {
 	/// let loader = EnvLoader::new()
 	///     .path(PathBuf::from(".env.optional"));
 	///
-	// Returns Ok(true) if loaded, Ok(false) if not found
+	/// // Returns Ok(true) if loaded, Ok(false) if not found
 	/// let loaded = loader.load_optional().unwrap();
-	// Won't panic if file doesn't exist
+	/// // Won't panic if file doesn't exist
 	/// ```
 	pub fn load_optional(&self) -> Result<bool, EnvError> {
 		let path = match &self.path {
@@ -254,20 +254,26 @@ impl EnvLoader {
 				validate_env_var_name(key)?;
 				let mut value = value.trim().to_string();
 
-				// Remove quotes if present
-				if (value.starts_with('"') && value.ends_with('"'))
-					|| (value.starts_with('\'') && value.ends_with('\''))
-				{
+				// Remove quotes if present, tracking quote type for POSIX semantics
+				let is_single_quoted =
+					value.starts_with('\'') && value.ends_with('\'') && value.len() >= 2;
+				let is_double_quoted =
+					value.starts_with('"') && value.ends_with('"') && value.len() >= 2;
+				if is_single_quoted || is_double_quoted {
 					value = value[1..value.len() - 1].to_string();
 				}
 
-				// Handle variable interpolation
-				if self.interpolate {
-					value = self.expand_variables(&value);
-				}
+				// Single-quoted values preserve literal content per POSIX semantics:
+				// no variable interpolation or escape processing
+				if !is_single_quoted {
+					// Handle variable interpolation
+					if self.interpolate {
+						value = self.expand_variables(&value);
+					}
 
-				// Handle escaped characters
-				value = self.unescape(&value);
+					// Handle escaped characters
+					value = self.unescape(&value);
+				}
 
 				// Set or skip based on overwrite setting
 				if self.overwrite || env::var(key).is_err() {
@@ -341,11 +347,34 @@ impl EnvLoader {
 
 	/// Unescape common escape sequences
 	fn unescape(&self, value: &str) -> String {
-		value
-			.replace("\\n", "\n")
-			.replace("\\r", "\r")
-			.replace("\\t", "\t")
-			.replace("\\\\", "\\")
+		let mut result = String::with_capacity(value.len());
+		let mut chars = value.chars().peekable();
+		while let Some(c) = chars.next() {
+			if c == '\\' {
+				match chars.peek() {
+					Some('n') => {
+						result.push('\n');
+						chars.next();
+					}
+					Some('r') => {
+						result.push('\r');
+						chars.next();
+					}
+					Some('t') => {
+						result.push('\t');
+						chars.next();
+					}
+					Some('\\') => {
+						result.push('\\');
+						chars.next();
+					}
+					_ => result.push(c),
+				}
+			} else {
+				result.push(c);
+			}
+		}
+		result
 	}
 }
 
@@ -409,9 +438,9 @@ pub fn load_env_auto() -> Result<(), EnvError> {
 /// use reinhardt_conf::settings::env_loader::load_env_optional;
 /// use std::path::PathBuf;
 ///
-// Returns true if loaded, false if not found
+/// // Returns true if loaded, false if not found
 /// let loaded = load_env_optional(PathBuf::from(".env.test")).unwrap();
-// Will not panic if file doesn't exist
+/// // Will not panic if file doesn't exist
 /// ```
 pub fn load_env_optional(path: impl Into<PathBuf>) -> Result<bool, EnvError> {
 	EnvLoader::new().path(path).load_optional()
@@ -420,6 +449,8 @@ pub fn load_env_optional(path: impl Into<PathBuf>) -> Result<bool, EnvError> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
+	use serial_test::serial;
 	use std::fs::File;
 	use std::io::Write;
 	use tempfile::TempDir;
@@ -549,5 +580,76 @@ ESCAPED=\$not_expanded
 		unsafe {
 			env::remove_var("FILE_VAR");
 		}
+	}
+
+	/// Guard that removes environment variables on drop, ensuring cleanup
+	/// even if assertions panic.
+	struct EnvGuard(Vec<&'static str>);
+
+	impl Drop for EnvGuard {
+		fn drop(&mut self) {
+			// SAFETY: Removing environment variables is unsafe in multi-threaded
+			// programs.  Tests using this guard run under #[serial] to ensure
+			// exclusive access.
+			for key in &self.0 {
+				unsafe {
+					env::remove_var(key);
+				}
+			}
+		}
+	}
+
+	#[rstest]
+	#[serial(env_vars)]
+	fn test_single_quoted_values_preserve_escape_sequences() {
+		// Arrange
+		let _guard = EnvGuard(vec!["SINGLE_ESCAPE", "DOUBLE_ESCAPE"]);
+		let content = r#"
+SINGLE_ESCAPE='\n\t\\'
+DOUBLE_ESCAPE="\n\t\\"
+		"#;
+
+		// Act
+		let loader = EnvLoader::new();
+		loader.parse_and_set(content).unwrap();
+
+		// Assert
+		// Single-quoted: escape sequences preserved literally per POSIX semantics
+		assert_eq!(env::var("SINGLE_ESCAPE").unwrap(), r"\n\t\\");
+
+		// Double-quoted: escape sequences are processed
+		assert_eq!(
+			env::var("DOUBLE_ESCAPE").unwrap(),
+			"\n\t\\",
+			"Double-quoted value should process escapes to newline, tab, and backslash"
+		);
+	}
+
+	#[rstest]
+	// Basic escape sequences: `\n` → newline, `\r` → carriage return, `\t` → tab
+	#[case::newline(r"\n", "\n")]
+	#[case::carriage_return(r"\r", "\r")]
+	#[case::tab(r"\t", "\t")]
+	// `\\` (2 chars) → `\` (1 char)
+	#[case::escaped_backslash(r"\\", r"\")]
+	// `\\n` (3 chars: \, \, n) → `\` then `n` as literal → `\n` (backslash + n)
+	#[case::literal_backslash_n(r"\\n", r"\n")]
+	// `\\\\n` (5 chars: \, \, \, \, n) → `\`, `\`, then `n` as literal
+	#[case::escaped_backslash_then_literal_n(r"\\\\n", r"\\n")]
+	// `\\\\` (4 chars: \, \, \, \) → `\`, `\`
+	#[case::double_escaped_backslash(r"\\\\", r"\\")]
+	// Trailing lone backslash is preserved as-is
+	#[case::trailing_backslash(r"hello\", r"hello\")]
+	#[case::mixed_sequences(r"line1\nline2\ttab", "line1\nline2\ttab")]
+	#[case::no_escapes("hello world", "hello world")]
+	fn test_unescape(#[case] input: &str, #[case] expected: &str) {
+		// Arrange
+		let loader = EnvLoader::new();
+
+		// Act
+		let result = loader.unescape(input);
+
+		// Assert
+		assert_eq!(result, expected);
 	}
 }

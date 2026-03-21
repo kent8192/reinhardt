@@ -1,20 +1,20 @@
-# E2Eテストシナリオ
+# E2E Test Scenarios
 
-## 概要
-このドキュメントはTwitterクローンアプリケーションのエンドツーエンドテストシナリオを定義します。WASMフロントエンドとバックエンドサーバーの統合テストを対象とし、実際のユーザーフローをシミュレートします。
+## Overview
+This document defines end-to-end test scenarios for the Twitter clone application. It covers integration tests between the WASM frontend and backend server, simulating actual user flows.
 
-## テスト環境要件
-- **フロントエンド**: WASMアプリケーション (`dist-wasm/` ビルド出力)
-- **バックエンド**: 開発サーバー (ポート8000)
-- **データベース**: SQLite (テスト用マイグレーション適用済み)
-- **テストフレームワーク**: Playwright
-- **ブラウザ**: Chromium (ヘッドレスモード推奨)
+## Test Environment Requirements
+- **Frontend**: WASM application (`dist-wasm/` build output)
+- **Backend**: Development server (port 8000)
+- **Database**: SQLite (with test migrations applied)
+- **Test Framework**: Playwright
+- **Browser**: Chromium (headless mode recommended)
 
-## テストデータ設定
-各テストの前提条件として以下のテストデータが必要です：
+## Test Data Setup
+The following test data is required as a precondition for each test:
 
 ```typescript
-// テストユーザー
+// Test users
 const TEST_USERS = {
   existing: {
     username: 'testuser',
@@ -28,269 +28,269 @@ const TEST_USERS = {
   }
 };
 
-// テストツイート
+// Test tweets
 const TEST_TWEETS = {
-  simple: 'これはテストツイートです。',
-  long: 'x'.repeat(280), // 最大長
-  withHashtag: '#テスト #Twitterクローン'
+  simple: 'This is a test tweet.',
+  long: 'x'.repeat(280), // Maximum length
+  withHashtag: '#test #TwitterClone'
 };
 ```
 
-## シナリオ1: 新規ユーザー登録フロー
-### 概要
-新規ユーザーがアプリケーションに登録し、タイムラインページにリダイレクトされるまでのフローを検証します。
+## Scenario 1: New User Registration Flow
+### Overview
+Verifies the flow from a new user registering with the application to being redirected to the timeline page.
 
-### 前提条件
-- アプリケーションが `/` でアクセス可能
-- テストユーザーのメールアドレスが未登録
-- サーバーが正常に動作している
+### Preconditions
+- The application is accessible at `/`
+- The test user's email address is not yet registered
+- The server is operating normally
 
-### テストステップ
-1. **ホームページ表示** → 「ログイン」と「登録」リンクが表示される
-2. **登録ページ遷移** → 登録フォームが表示される（ユーザー名、メール、パスワード、確認用パスワードフィールド）
-3. **有効な情報入力** → すべてのフィールドに有効な値を入力
-4. **フォーム送信** → 成功メッセージ表示、`/login` ページへリダイレクト
-5. **ログインページ確認** → 登録成功メッセージとログインフォームが表示される
+### Test Steps
+1. **Home page display** -> "Login" and "Register" links are displayed
+2. **Navigate to registration page** -> Registration form is displayed (username, email, password, and password confirmation fields)
+3. **Enter valid information** -> Enter valid values in all fields
+4. **Submit form** -> Success message is displayed, redirect to `/login` page
+5. **Verify login page** -> Registration success message and login form are displayed
 
-### 検証ポイント
-- [ ] 登録フォームの必須フィールドが適切にバリデーションされる
-- [ ] パスワード不一致時にエラーメッセージが表示される
-- [ ] 重複メールアドレスで適切なエラーメッセージが表示される
-- [ ] 登録成功後、ログインページにリダイレクトされる
-- [ ] ログインページで登録成功メッセージが表示される
+### Verification Points
+- [ ] Required fields in the registration form are properly validated
+- [ ] An error message is displayed when passwords do not match
+- [ ] An appropriate error message is displayed for duplicate email addresses
+- [ ] After successful registration, the user is redirected to the login page
+- [ ] A registration success message is displayed on the login page
 
-### エッジケース
-- パスワード強度不足（短すぎる、複雑さ不足）
-- 無効なメールアドレス形式
-- ユーザー名に無効な文字を含む
-- ネットワークエラー発生時の挙動
+### Edge Cases
+- Insufficient password strength (too short, insufficient complexity)
+- Invalid email address format
+- Username contains invalid characters
+- Behavior when a network error occurs
 
-## シナリオ2: 既存ユーザーログインフロー
-### 概要
-既存ユーザーがログインし、タイムラインページにアクセスするフローを検証します。
+## Scenario 2: Existing User Login Flow
+### Overview
+Verifies the flow of an existing user logging in and accessing the timeline page.
 
-### 前提条件
-- テストユーザーが既に登録済み
-- ユーザーがログアウト状態
+### Preconditions
+- The test user is already registered
+- The user is in a logged-out state
 
-### テストステップ
-1. **ログインページ表示** → ログインフォームが表示される
-2. **有効な認証情報入力** → 登録済みのメールアドレスとパスワードを入力
-3. **フォーム送信** → 成功メッセージ表示、`/timeline` ページへリダイレクト
-4. **タイムラインページ確認** → ユーザー名表示、ツイート作成フォームが表示される
-5. **認証状態の永続性** → ページリロード後もログイン状態が維持される
+### Test Steps
+1. **Login page display** -> Login form is displayed
+2. **Enter valid credentials** -> Enter registered email address and password
+3. **Submit form** -> Success message is displayed, redirect to `/timeline` page
+4. **Verify timeline page** -> Username is displayed, tweet creation form is displayed
+5. **Authentication state persistence** -> Login state is maintained after page reload
 
-### 検証ポイント
-- [ ] 無効な認証情報で適切なエラーメッセージが表示される
-- [ ] ログイン成功後、タイムラインページにリダイレクトされる
-- [ ] タイムラインページでユーザー名が正しく表示される
-- [ ] セッションが適切に維持される
-- [ ] ログアウトリンクが表示される
+### Verification Points
+- [ ] An appropriate error message is displayed for invalid credentials
+- [ ] After successful login, the user is redirected to the timeline page
+- [ ] The username is correctly displayed on the timeline page
+- [ ] The session is properly maintained
+- [ ] A logout link is displayed
 
-### エッジケース
-- 無効なメールアドレス形式
-- 間違ったパスワード
-- 存在しないユーザーでのログイン試行
-- アカウントが無効化されている場合
+### Edge Cases
+- Invalid email address format
+- Incorrect password
+- Login attempt with a non-existent user
+- Account has been deactivated
 
-## シナリオ3: ツイート作成フロー
-### 概要
-ログイン済みユーザーが新しいツイートを作成するフローを検証します。
+## Scenario 3: Tweet Creation Flow
+### Overview
+Verifies the flow of a logged-in user creating a new tweet.
 
-### 前提条件
-- ユーザーがログイン済み
-- タイムラインページ (`/timeline`) にアクセス可能
+### Preconditions
+- The user is logged in
+- The timeline page (`/timeline`) is accessible
 
-### テストステップ
-1. **タイムラインページ表示** → ツイート作成フォームが表示される
-2. **ツイート内容入力** → 有効なツイート内容を入力（1〜280文字）
-3. **文字数カウンター確認** → 入力に応じて文字数が更新される
-4. **ツイート投稿** → 投稿ボタンをクリック
-5. **投稿成功確認** → ツイートがタイムラインに表示される
-6. **ページリロード** → 投稿したツイートが永続化されている
+### Test Steps
+1. **Timeline page display** -> Tweet creation form is displayed
+2. **Enter tweet content** -> Enter valid tweet content (1-280 characters)
+3. **Verify character counter** -> Character count updates as input changes
+4. **Post tweet** -> Click the post button
+5. **Verify successful post** -> Tweet appears on the timeline
+6. **Page reload** -> The posted tweet has been persisted
 
-### 検証ポイント
-- [ ] 空のツイートは投稿できない
-- [ ] 280文字を超えるツイートは投稿できない
-- [ ] 文字数カウンターが正しく動作する（通常/警告/危険状態）
-- [ ] 投稿成功後、フォームがクリアされる
-- [ ] 投稿したツイートがタイムラインの先頭に表示される
-- [ ] ツイートに作成日時が正しく表示される
+### Verification Points
+- [ ] Empty tweets cannot be posted
+- [ ] Tweets exceeding 280 characters cannot be posted
+- [ ] The character counter works correctly (normal/warning/danger states)
+- [ ] After successful posting, the form is cleared
+- [ ] The posted tweet appears at the top of the timeline
+- [ ] The tweet displays the correct creation timestamp
 
-### エッジケース
-- ちょうど280文字のツイート
-- 特殊文字（絵文字、改行、ハッシュタグ）を含むツイート
-- ネットワークエラー発生時のリトライ挙動
-- 連続投稿の制限
+### Edge Cases
+- A tweet with exactly 280 characters
+- Tweets containing special characters (emoji, line breaks, hashtags)
+- Retry behavior when a network error occurs
+- Rate limiting for consecutive posts
 
-## シナリオ4: ツイート削除フロー
-### 概要
-ユーザーが自身のツイートを削除するフローを検証します。
+## Scenario 4: Tweet Deletion Flow
+### Overview
+Verifies the flow of a user deleting their own tweet.
 
-### 前提条件
-- ユーザーがログイン済み
-- ユーザーが少なくとも1つのツイートを投稿済み
-- タイムラインページにツイートが表示されている
+### Preconditions
+- The user is logged in
+- The user has posted at least one tweet
+- Tweets are displayed on the timeline page
 
-### テストステップ
-1. **タイムラインページ表示** → ユーザーのツイートに削除ボタンが表示される
-2. **削除ボタンクリック** → 削除確認ダイアログが表示される（必要な場合）
-3. **削除確認** → 削除を実行
-4. **削除成功確認** → ツイートがタイムラインから消える
-5. **ページリロード** → 削除されたツイートが再表示されない
+### Test Steps
+1. **Timeline page display** -> Delete button is displayed on the user's tweets
+2. **Click delete button** -> Deletion confirmation dialog is displayed (if applicable)
+3. **Confirm deletion** -> Execute the deletion
+4. **Verify successful deletion** -> Tweet disappears from the timeline
+5. **Page reload** -> The deleted tweet does not reappear
 
-### 検証ポイント
-- [ ] 自分のツイートにのみ削除ボタンが表示される
-- [ ] 削除後、ツイートが即座に非表示になる
-- [ ] 削除後にページリロードしてもツイートが表示されない
-- [ ] 削除失敗時（権限不足など）に適切なエラーメッセージが表示される
+### Verification Points
+- [ ] Delete button is displayed only on the user's own tweets
+- [ ] After deletion, the tweet is immediately hidden
+- [ ] The tweet does not reappear after page reload following deletion
+- [ ] An appropriate error message is displayed when deletion fails (e.g., insufficient permissions)
 
-### エッジケース
-- 他のユーザーのツイートを削除しようとした場合
-- 削除中のネットワーク切断
-- 同時削除の競合状態
+### Edge Cases
+- Attempting to delete another user's tweet
+- Network disconnection during deletion
+- Concurrent deletion race condition
 
-## シナリオ5: プロフィール表示フロー
-### 概要
-ユーザーが自身または他のユーザーのプロフィールを表示するフローを検証します。
+## Scenario 5: Profile Display Flow
+### Overview
+Verifies the flow of a user viewing their own or another user's profile.
 
-### 前提条件
-- ユーザーがログイン済み
-- 表示対象のユーザーが存在する
-- プロフィール情報（bio、場所、ウェブサイト）が設定されている
+### Preconditions
+- The user is logged in
+- The target user exists
+- Profile information (bio, location, website) has been configured
 
-### テストステップ
-1. **プロフィールページ遷移** → `profile/{user_id}` にアクセス
-2. **プロフィール情報確認** → ユーザー名、アバター、bio、場所、ウェブサイトが表示される
-3. **フォロー情報確認** → フォロー数、フォロワー数が表示される
-4. **ツイートリスト確認** → ユーザーのツイート一覧が表示される
-5. **アクション確認** → フォローボタン、プロフィール編集ボタンが適切に表示される
+### Test Steps
+1. **Navigate to profile page** -> Access `profile/{user_id}`
+2. **Verify profile information** -> Username, avatar, bio, location, and website are displayed
+3. **Verify follow information** -> Following count and follower count are displayed
+4. **Verify tweet list** -> A list of the user's tweets is displayed
+5. **Verify actions** -> Follow button and profile edit button are displayed appropriately
 
-### 検証ポイント
-- [ ] 存在しないユーザーIDで404エラーが表示される
-- [ ] 自分のプロフィールには編集ボタンが表示される
-- [ ] 他のユーザーのプロフィールにはフォローボタンが表示される
-- [ ] プロフィール情報が正しく表示される
-- [ ] ユーザーのツイートが正しくフィルタリングされて表示される
+### Verification Points
+- [ ] A 404 error is displayed for a non-existent user ID
+- [ ] An edit button is displayed on the user's own profile
+- [ ] A follow button is displayed on other users' profiles
+- [ ] Profile information is displayed correctly
+- [ ] The user's tweets are correctly filtered and displayed
 
-## シナリオ6: プロフィール編集フロー
-### 概要
-ユーザーが自身のプロフィール情報を編集するフローを検証します。
+## Scenario 6: Profile Edit Flow
+### Overview
+Verifies the flow of a user editing their own profile information.
 
-### 前提条件
-- ユーザーがログイン済み
-- プロフィール編集ページ (`/profile/{user_id}/edit`) にアクセス可能
+### Preconditions
+- The user is logged in
+- The profile edit page (`/profile/{user_id}/edit`) is accessible
 
-### テストステップ
-1. **プロフィール編集ページ遷移** → 編集フォームが表示される
-2. **現在の値確認** → フォームに現在のプロフィール情報が表示される
-3. **情報更新** → 各フィールドを更新
-4. **フォーム送信** → 保存ボタンをクリック
-5. **成功確認** → 成功メッセージ表示、プロフィールページへリダイレクト
-6. **変更反映確認** → 更新した情報がプロフィールページに反映されている
+### Test Steps
+1. **Navigate to profile edit page** -> Edit form is displayed
+2. **Verify current values** -> Current profile information is displayed in the form
+3. **Update information** -> Update each field
+4. **Submit form** -> Click the save button
+5. **Verify success** -> Success message is displayed, redirect to profile page
+6. **Verify changes** -> Updated information is reflected on the profile page
 
-### 検証ポイント
-- [ ] フォームに現在のプロフィール情報が正しく表示される
-- [ ] バリデーションエラーが適切に表示される（無効なURLなど）
-- [ ] 保存成功後、プロフィールページにリダイレクトされる
-- [ ] 更新した情報が正しく反映される
-- [ ] キャンセルボタンでプロフィールページに戻る
+### Verification Points
+- [ ] Current profile information is correctly displayed in the form
+- [ ] Validation errors are properly displayed (e.g., invalid URL)
+- [ ] After successful save, the user is redirected to the profile page
+- [ ] Updated information is correctly reflected
+- [ ] The cancel button returns to the profile page
 
-## シナリオ7: フォロー/アンフォローフロー
-### 概要
-ユーザーが他のユーザーをフォロー/アンフォローするフローを検証します。
+## Scenario 7: Follow/Unfollow Flow
+### Overview
+Verifies the flow of a user following/unfollowing another user.
 
-### 前提条件
-- ユーザーA（ログイン済み）とユーザーB（存在するユーザー）が存在
-- ユーザーAはユーザーBをまだフォローしていない
+### Preconditions
+- User A (logged in) and User B (existing user) exist
+- User A is not yet following User B
 
-### テストステップ
-1. **ユーザーBのプロフィール表示** → フォローボタンが「Follow」と表示される
-2. **フォロー実行** → フォローボタンをクリック
-3. **状態更新確認** → ボタンが「Following」に変わる
-4. **フォロワー数更新** → ユーザーBのフォロワー数が増加
-5. **アンフォロー実行** → 「Following」ボタンをクリック
-6. **状態戻り確認** → ボタンが「Follow」に戻る
-7. **フォロワー数減少確認** → ユーザーBのフォロワー数が減少
+### Test Steps
+1. **Display User B's profile** -> Follow button shows "Follow"
+2. **Execute follow** -> Click the follow button
+3. **Verify state update** -> Button changes to "Following"
+4. **Follower count update** -> User B's follower count increases
+5. **Execute unfollow** -> Click the "Following" button
+6. **Verify state revert** -> Button reverts to "Follow"
+7. **Verify follower count decrease** -> User B's follower count decreases
 
-### 検証ポイント
-- [ ] フォロー状態に応じてボタンテキストが正しく変わる
-- [ ] フォローボタンホバー時に「Unfollow」が表示される
-- [ ] フォロー/アンフォロー後にカウントが即座に更新される
-- [ ] ネットワークエラー時も状態がロールバックされる
-- [ ] 自分自身をフォローできない
+### Verification Points
+- [ ] Button text changes correctly based on follow state
+- [ ] "Unfollow" is displayed on hover over the follow button
+- [ ] Count updates immediately after follow/unfollow
+- [ ] State rolls back on network error
+- [ ] Users cannot follow themselves
 
-## シナリオ8: ナビゲーションフロー
-### 概要
-アプリケーション内のページ遷移フローを検証します。
+## Scenario 8: Navigation Flow
+### Overview
+Verifies page navigation flows within the application.
 
-### 前提条件
-- アプリケーションが正常に動作している
-- ユーザーがログイン済み
+### Preconditions
+- The application is operating normally
+- The user is logged in
 
-### テストステップ
-1. **ホームページからログインページ** → ログインリンクをクリック
-2. **ログインページから登録ページ** → 登録リンクをクリック
-3. **登録ページからログインページ** → ログインリンクをクリック
-4. **ログイン後タイムラインページ** → ログイン成功後自動遷移
-5. **タイムラインページからプロフィール** → ユーザー名リンクをクリック
-6. **プロフィールから編集ページ** → 編集ボタンをクリック
-7. **編集ページからプロフィール** → キャンセルボタンをクリック
-8. **ブラウザ戻る/進む** → 履歴ナビゲーションが正しく動作
+### Test Steps
+1. **Home page to login page** -> Click login link
+2. **Login page to registration page** -> Click registration link
+3. **Registration page to login page** -> Click login link
+4. **Timeline page after login** -> Automatic redirect after successful login
+5. **Timeline page to profile** -> Click username link
+6. **Profile to edit page** -> Click edit button
+7. **Edit page to profile** -> Click cancel button
+8. **Browser back/forward** -> History navigation works correctly
 
-### 検証ポイント
-- [ ] すべてのナビゲーションリンクが正しく動作する
-- [ ] 認証が必要なページは未認証時にリダイレクトされる
-- [ ] ブラウザの戻る/進むボタンが正しく動作する
-- [ ] 現在のページがナビゲーションで正しくハイライトされる
-- [ ] 404ページが存在しないルートで表示される
+### Verification Points
+- [ ] All navigation links work correctly
+- [ ] Pages requiring authentication redirect unauthenticated users
+- [ ] Browser back/forward buttons work correctly
+- [ ] The current page is correctly highlighted in navigation
+- [ ] A 404 page is displayed for non-existent routes
 
-## シナリオ9: エラーハンドリングフロー
-### 概要
-アプリケーションのエラーハンドリング機能を検証します。
+## Scenario 9: Error Handling Flow
+### Overview
+Verifies the application's error handling capabilities.
 
-### 前提条件
-- アプリケーションが正常に動作している
+### Preconditions
+- The application is operating normally
 
-### テストステップ
-1. **ネットワークエラーシミュレーション** → サーバーに接続できない状態で操作
-2. **無効なフォーム入力** → バリデーションエラーをトリガー
-3. **権限エラー** → 権限のない操作を実行
-4. **サーバーエラー** → サーバー側で500エラーを発生
-5. **クライアントエラー** → JavaScriptエラーを発生
+### Test Steps
+1. **Network error simulation** -> Perform operations while unable to connect to the server
+2. **Invalid form input** -> Trigger validation errors
+3. **Permission error** -> Execute an unauthorized operation
+4. **Server error** -> Cause a 500 error on the server side
+5. **Client error** -> Trigger a JavaScript error
 
-### 検証ポイント
-- [ ] ネットワークエラー時、適切なエラーメッセージが表示される
-- [ ] フォームバリデーションエラーがフィールド近くに表示される
-- [ ] 権限エラー時、適切なメッセージと代替アクションが提供される
-- [ ] サーバーエラー時、ユーザーフレンドリーなメッセージが表示される
-- [ ] エラー後もアプリケーションがクラッシュせずに動作する
+### Verification Points
+- [ ] Appropriate error messages are displayed during network errors
+- [ ] Form validation errors are displayed near the relevant fields
+- [ ] Appropriate messages and alternative actions are provided for permission errors
+- [ ] User-friendly messages are displayed during server errors
+- [ ] The application continues to function without crashing after errors
 
-## シナリオ10: レスポンシブデザインフロー
-### 概要
-異なる画面サイズでのレイアウトと機能を検証します。
+## Scenario 10: Responsive Design Flow
+### Overview
+Verifies layout and functionality across different screen sizes.
 
-### 前提条件
-- アプリケーションが正常に動作している
-- ユーザーがログイン済み
+### Preconditions
+- The application is operating normally
+- The user is logged in
 
-### テストステップ
-1. **デスクトップ表示** → 幅1200px以上で表示確認
-2. **タブレット表示** → 幅768pxで表示確認
-3. **モバイル表示** → 幅375pxで表示確認
-4. **画面回転** → 縦向き/横向きでの表示確認
-5. **ズーム操作** → ブラウザズーム機能での表示確認
+### Test Steps
+1. **Desktop display** -> Verify display at width 1200px or greater
+2. **Tablet display** -> Verify display at width 768px
+3. **Mobile display** -> Verify display at width 375px
+4. **Screen rotation** -> Verify display in portrait/landscape orientation
+5. **Zoom operation** -> Verify display with browser zoom functionality
 
-### 検証ポイント
-- [ ] すべての画面幅でレイアウトが崩れない
-- [ ] モバイルでナビゲーションメニューが適切に折りたたまれる
-- [ ] フォーム要素がタッチ操作に適切なサイズである
-- [ ] 画像とメディアが画面幅に応じて適切にスケーリングされる
-- [ ] テキストが読めるサイズで表示される
+### Verification Points
+- [ ] Layout does not break at any screen width
+- [ ] Navigation menu collapses appropriately on mobile
+- [ ] Form elements are appropriately sized for touch interaction
+- [ ] Images and media scale appropriately based on screen width
+- [ ] Text is displayed at a readable size
 
-## テスト実装ガイドライン
+## Test Implementation Guidelines
 
-### Playwright設定
+### Playwright Configuration
 ```typescript
 // playwright.config.ts
 import { defineConfig, devices } from '@playwright/test';
@@ -321,12 +321,12 @@ export default defineConfig({
     command: 'cargo run --bin runserver',
     url: 'http://localhost:8000',
     reuseExistingServer: !process.env.CI,
-    timeout: 120 * 1000, // 2分
+    timeout: 120 * 1000, // 2 minutes
   },
 });
 ```
 
-### ページオブジェクトパターン
+### Page Object Pattern
 ```typescript
 // tests/pages/login-page.ts
 export class LoginPage {
@@ -352,7 +352,7 @@ export class LoginPage {
 }
 ```
 
-### テストデータ管理
+### Test Data Management
 ```typescript
 // tests/fixtures/test-data.ts
 export interface TestUser {
@@ -362,40 +362,40 @@ export interface TestUser {
 }
 
 export const createTestUser = async (): Promise<TestUser> => {
-  // テストユーザーを作成するヘルパー関数
-  // データベースに直接挿入またはAPI経由で作成
+  // Helper function to create a test user
+  // Insert directly into the database or create via API
 };
 
 export const cleanupTestData = async (): Promise<void> => {
-  // テストデータをクリーンアップする関数
+  // Function to clean up test data
 };
 ```
 
-## 優先順位と実行計画
+## Priority and Execution Plan
 
-### 高優先度（MVP機能）
-1. シナリオ1: 新規ユーザー登録フロー
-2. シナリオ2: 既存ユーザーログインフロー
-3. シナリオ3: ツイート作成フロー
-4. シナリオ8: ナビゲーションフロー
+### High Priority (MVP Features)
+1. Scenario 1: New User Registration Flow
+2. Scenario 2: Existing User Login Flow
+3. Scenario 3: Tweet Creation Flow
+4. Scenario 8: Navigation Flow
 
-### 中優先度（主要機能）
-5. シナリオ4: ツイート削除フロー
-6. シナリオ5: プロフィール表示フロー
-7. シナリオ6: プロフィール編集フロー
-8. シナリオ7: フォロー/アンフォローフロー
+### Medium Priority (Core Features)
+5. Scenario 4: Tweet Deletion Flow
+6. Scenario 5: Profile Display Flow
+7. Scenario 6: Profile Edit Flow
+8. Scenario 7: Follow/Unfollow Flow
 
-### 低優先度（拡張機能）
-9. シナリオ9: エラーハンドリングフロー
-10. シナリオ10: レスポンシブデザインフロー
+### Low Priority (Extended Features)
+9. Scenario 9: Error Handling Flow
+10. Scenario 10: Responsive Design Flow
 
-## 成功基準
-- すべての高優先度シナリオがパスする
-- テストカバレッジが主要ユーザーフローの80%以上をカバー
-- テスト実行時間が10分以内
-- フラッキーテストが5%未満
+## Success Criteria
+- All high-priority scenarios pass
+- Test coverage covers 80% or more of major user flows
+- Test execution time is within 10 minutes
+- Flaky tests are less than 5%
 
 ---
 
-*最終更新日: 2026-01-09*  
-*シナリオバージョン: 1.0.0*
+*Last updated: 2026-01-09*
+*Scenario version: 1.0.0*

@@ -120,17 +120,11 @@ async fn sanity_table_filtering(
 		.expect("Failed to read schema");
 
 	// Create config that only includes users table
-	let config = IntrospectConfig::default()
+	let mut config = IntrospectConfig::default()
 		.with_database_url("postgres://test@localhost/test")
 		.with_app_label("testapp");
-
-	let config = IntrospectConfig {
-		tables: reinhardt_db::migrations::TableFilterConfig {
-			include: vec!["users".to_string()],
-			exclude: vec![],
-		},
-		..config
-	};
+	config.tables.include = vec!["users".to_string()];
+	config.tables.exclude = vec![];
 
 	let generator = SchemaCodeGenerator::new(config);
 	let output = generator

@@ -14,6 +14,7 @@ use zeroize::Zeroize;
 /// Trait for email backends
 #[async_trait::async_trait]
 pub trait EmailBackend: Send + Sync {
+	/// Send one or more email messages, returning the number of messages sent successfully.
 	async fn send_messages(&self, messages: &[EmailMessage]) -> EmailResult<usize>;
 }
 
@@ -123,6 +124,7 @@ pub struct FileBackend {
 }
 
 impl FileBackend {
+	/// Creates a new file backend that stores emails in the specified directory.
 	pub fn new(directory: impl Into<std::path::PathBuf>) -> Self {
 		Self {
 			directory: directory.into(),
@@ -185,20 +187,24 @@ pub struct MemoryBackend {
 }
 
 impl MemoryBackend {
+	/// Creates a new memory backend with an empty message store.
 	pub fn new() -> Self {
 		Self {
 			messages: std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new())),
 		}
 	}
 
+	/// Returns the number of messages stored in the backend.
 	pub async fn count(&self) -> usize {
 		self.messages.lock().await.len()
 	}
 
+	/// Returns a clone of all stored messages.
 	pub async fn get_messages(&self) -> Vec<EmailMessage> {
 		self.messages.lock().await.clone()
 	}
 
+	/// Removes all stored messages from the backend.
 	pub async fn clear(&self) {
 		self.messages.lock().await.clear();
 	}
@@ -244,12 +250,19 @@ pub enum SmtpAuthMechanism {
 /// Configuration for SMTP backend
 #[derive(Debug, Clone)]
 pub struct SmtpConfig {
+	/// SMTP server hostname.
 	pub host: String,
+	/// SMTP server port number.
 	pub port: u16,
+	/// Optional username for SMTP authentication.
 	pub username: Option<String>,
+	/// Optional password for SMTP authentication.
 	pub password: Option<String>,
+	/// Connection security mode (none, STARTTLS, or TLS).
 	pub security: SmtpSecurity,
+	/// Authentication mechanism to use.
 	pub auth_mechanism: SmtpAuthMechanism,
+	/// Connection timeout duration.
 	pub timeout: Duration,
 }
 
@@ -268,6 +281,7 @@ impl Default for SmtpConfig {
 }
 
 impl SmtpConfig {
+	/// Creates a new SMTP configuration with the given host and port.
 	pub fn new(host: impl Into<String>, port: u16) -> Self {
 		Self {
 			host: host.into(),
@@ -280,22 +294,26 @@ impl SmtpConfig {
 		}
 	}
 
+	/// Sets the SMTP authentication credentials.
 	pub fn with_credentials(mut self, username: String, password: String) -> Self {
 		self.username = Some(username);
 		self.password = Some(password);
 		self
 	}
 
+	/// Sets the connection security mode.
 	pub fn with_security(mut self, security: SmtpSecurity) -> Self {
 		self.security = security;
 		self
 	}
 
+	/// Sets the authentication mechanism.
 	pub fn with_auth_mechanism(mut self, mechanism: SmtpAuthMechanism) -> Self {
 		self.auth_mechanism = mechanism;
 		self
 	}
 
+	/// Sets the connection timeout duration.
 	pub fn with_timeout(mut self, timeout: Duration) -> Self {
 		self.timeout = timeout;
 		self
@@ -353,6 +371,7 @@ pub struct SmtpBackend {
 }
 
 impl SmtpBackend {
+	/// Creates a new SMTP backend with the given configuration.
 	pub fn new(config: SmtpConfig) -> EmailResult<Self> {
 		config.validate()?;
 		Ok(Self { config })

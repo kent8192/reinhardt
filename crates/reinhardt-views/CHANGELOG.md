@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.1.0-rc.9...reinhardt-views@v0.1.0-rc.10) - 2026-03-15
+
+### Documentation
+
+- update version references in crate READMEs to 0.1.0-rc.9
+
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.1.0-rc.8...reinhardt-views@v0.1.0-rc.9) - 2026-03-15
+
+### Fixed
+
+- *(views)* replace unwrap with safe alternatives for panic prevention
+- *(views)* replace panics with error handling and add poison logging
+
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.1.0-rc.4...reinhardt-views@v0.1.0-rc.5) - 2026-03-07
+
+### Fixed
+
+- merge main and resolve CI issues
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.1.0-rc.1...reinhardt-views@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(views)* replace std RwLock with parking_lot to prevent poisoning panics
+- *(views)* add RefUnwindSafe impl for ViewSetHandler
+- *(views)* remove unsafe keyword from RefUnwindSafe impl
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.1.0-alpha.15...reinhardt-views@v0.1.0-rc.1) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-db, reinhardt-auth, reinhardt-rest
+
 ## [0.1.0-alpha.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.1.0-alpha.14...reinhardt-views@v0.1.0-alpha.15) - 2026-02-23
 
 ### Maintenance

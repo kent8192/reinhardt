@@ -2,6 +2,7 @@
 //!
 //! This is the main entry point for the WASM application.
 
+use reinhardt::pages::PageExt;
 use reinhardt::pages::dom::Element;
 use wasm_bindgen::prelude::*;
 

@@ -17,34 +17,45 @@ pub const CSRF_ALLOWED_CHARS: &str =
 /// CSRF session key
 pub const CSRF_SESSION_KEY: &str = "_csrf_token";
 
-// Rejection reasons
+/// Rejection reason: Origin header does not match any trusted origins.
 pub const REASON_BAD_ORIGIN: &str = "Origin checking failed - does not match any trusted origins.";
+/// Rejection reason: Referer header does not match any trusted origins.
 pub const REASON_BAD_REFERER: &str =
 	"Referer checking failed - does not match any trusted origins.";
+/// Rejection reason: CSRF token is missing from the request.
 pub const REASON_CSRF_TOKEN_MISSING: &str = "CSRF token missing.";
+/// Rejection reason: CSRF token has an incorrect length.
 pub const REASON_INCORRECT_LENGTH: &str = "CSRF token has incorrect length.";
+/// Rejection reason: Referer uses HTTP while the host uses HTTPS.
 pub const REASON_INSECURE_REFERER: &str =
 	"Referer checking failed - Referer is insecure while host is secure.";
+/// Rejection reason: CSRF token contains invalid characters.
 pub const REASON_INVALID_CHARACTERS: &str = "CSRF token has invalid characters.";
+/// Rejection reason: Referer header is malformed.
 pub const REASON_MALFORMED_REFERER: &str = "Referer checking failed - Referer is malformed.";
+/// Rejection reason: CSRF cookie is not set.
 pub const REASON_NO_CSRF_COOKIE: &str = "CSRF cookie not set.";
+/// Rejection reason: Referer header is missing.
 pub const REASON_NO_REFERER: &str = "Referer checking failed - no Referer.";
 
 /// CSRF token validation error
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RejectRequest {
+	/// Human-readable reason for CSRF rejection.
 	pub reason: String,
 }
 
 /// Invalid token format error
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvalidTokenFormat {
+	/// Description of the format error.
 	pub reason: String,
 }
 
 /// CSRF metadata
 #[derive(Debug, Clone)]
 pub struct CsrfMeta {
+	/// The CSRF token value.
 	pub token: String,
 }
 
@@ -65,7 +76,9 @@ pub enum SameSite {
 /// All tokens are generated using HMAC-SHA256 for cryptographic security.
 #[derive(Debug, Clone)]
 pub struct CsrfConfig {
+	/// Name of the CSRF cookie (default: "csrftoken").
 	pub cookie_name: String,
+	/// Name of the HTTP header for CSRF token (default: "X-CSRFToken").
 	pub header_name: String,
 	/// CSRF cookie should NOT be HttpOnly (JavaScript needs access)
 	pub cookie_httponly: bool,
@@ -150,17 +163,20 @@ impl CsrfConfig {
 
 /// CSRF middleware
 pub struct CsrfMiddleware {
+	// Allow dead_code: config stored for future middleware request/response processing; not yet consumed by HTTP pipeline
 	#[allow(dead_code)]
 	config: CsrfConfig,
 }
 
 impl CsrfMiddleware {
+	/// Creates a new `CsrfMiddleware` with default configuration.
 	pub fn new() -> Self {
 		Self {
 			config: CsrfConfig::default(),
 		}
 	}
 
+	/// Creates a new `CsrfMiddleware` with the given configuration.
 	pub fn with_config(config: CsrfConfig) -> Self {
 		Self { config }
 	}
@@ -177,10 +193,12 @@ impl Default for CsrfMiddleware {
 pub struct CsrfToken(pub String);
 
 impl CsrfToken {
+	/// Creates a new `CsrfToken` from a token string.
 	pub fn new(token: String) -> Self {
 		Self(token)
 	}
 
+	/// Returns the token value as a string slice.
 	pub fn as_str(&self) -> &str {
 		&self.0
 	}
@@ -429,8 +447,8 @@ pub fn should_rotate_token(
 	rotation_interval: Option<u64>,
 ) -> bool {
 	match rotation_interval {
-		Some(interval) => current_timestamp - token_timestamp >= interval,
-		None => false, // Always rotate when interval is not specified
+		Some(interval) => current_timestamp.saturating_sub(token_timestamp) >= interval,
+		None => false, // Never rotate when interval is not specified
 	}
 }
 
@@ -734,5 +752,55 @@ mod tests {
 		// Assert - rsplitn splits "...a1b2:extra" as token and "12345" as timestamp.
 		// The token portion "...a1b2:extra" has wrong length, so it is rejected.
 		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_should_rotate_token_normal_case() {
+		// Arrange
+		let token_timestamp = 1000u64;
+		let current_timestamp = 4700u64; // 3700 seconds later
+		let interval = 3600u64; // 1 hour
+
+		// Act
+		let result = should_rotate_token(token_timestamp, current_timestamp, Some(interval));
+
+		// Assert
+		assert_eq!(
+			result, true,
+			"Token older than interval should trigger rotation"
+		);
+	}
+
+	#[rstest]
+	fn test_should_rotate_token_future_timestamp_no_panic() {
+		// Arrange
+		let token_timestamp = 5000u64; // Future: token_timestamp > current_timestamp
+		let current_timestamp = 1000u64;
+		let interval = 3600u64;
+
+		// Act
+		let result = should_rotate_token(token_timestamp, current_timestamp, Some(interval));
+
+		// Assert
+		assert_eq!(
+			result, false,
+			"Future-dated token should not trigger rotation"
+		);
+	}
+
+	#[rstest]
+	fn test_should_rotate_token_equal_timestamps() {
+		// Arrange
+		let timestamp = 1000u64;
+		let interval = 3600u64;
+
+		// Act
+		let result = should_rotate_token(timestamp, timestamp, Some(interval));
+
+		// Assert
+		assert_eq!(
+			result, false,
+			"Equal timestamps (0 elapsed) should not trigger rotation"
+		);
 	}
 }

@@ -1,10 +1,10 @@
 use chrono::Utc;
 use json::json;
+use reinhardt::Validate;
 use reinhardt::core::serde::json;
 use reinhardt::http::ViewResult;
 use reinhardt::{Json, Path, Response, StatusCode};
 use reinhardt::{delete, get, post, put};
-use validator::Validate;
 
 use super::models::Snippet;
 use super::serializers::{SnippetResponse, SnippetSerializer};
@@ -114,10 +114,15 @@ pub async fn retrieve(Path(snippet_id): Path<i64>) -> ViewResult<Response> {
 
 	// Demo mode: Find in sample data
 	let snippets = get_sample_snippets();
-	let snippet = snippets
-		.iter()
-		.find(|s| s.id == snippet_id)
-		.ok_or("Snippet not found")?;
+	let snippet = match snippets.iter().find(|s| s.id == snippet_id) {
+		Some(snippet) => snippet,
+		None => {
+			let error = json::to_string(&json!({"error": "Snippet not found"}))?;
+			return Ok(Response::new(StatusCode::NOT_FOUND)
+				.with_header("Content-Type", "application/json")
+				.with_body(error));
+		}
+	};
 
 	let response_data = json!({
 		"snippet": SnippetResponse::from_model(snippet)
@@ -154,10 +159,15 @@ pub async fn update(
 
 	// Demo mode: Verify snippet exists and return updated version
 	let snippets = get_sample_snippets();
-	let existing = snippets
-		.iter()
-		.find(|s| s.id == snippet_id)
-		.ok_or("Snippet not found")?;
+	let existing = match snippets.iter().find(|s| s.id == snippet_id) {
+		Some(snippet) => snippet,
+		None => {
+			let error = json::to_string(&json!({"error": "Snippet not found"}))?;
+			return Ok(Response::new(StatusCode::NOT_FOUND)
+				.with_header("Content-Type", "application/json")
+				.with_body(error));
+		}
+	};
 
 	// Create updated snippet
 	let updated_snippet = Snippet {
@@ -192,10 +202,12 @@ pub async fn delete(Path(snippet_id): Path<i64>) -> ViewResult<Response> {
 
 	// Demo mode: Verify snippet exists
 	let snippets = get_sample_snippets();
-	let _existing = snippets
-		.iter()
-		.find(|s| s.id == snippet_id)
-		.ok_or("Snippet not found")?;
+	if !snippets.iter().any(|s| s.id == snippet_id) {
+		let error = json::to_string(&json!({"error": "Snippet not found"}))?;
+		return Ok(Response::new(StatusCode::NOT_FOUND)
+			.with_header("Content-Type", "application/json")
+			.with_body(error));
+	}
 
 	// Return 204 No Content for successful deletion
 	Ok(Response::new(StatusCode::NO_CONTENT))

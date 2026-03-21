@@ -11,13 +11,21 @@ use std::marker::PhantomData;
 ///
 /// This field displays model instances as choices in a select widget.
 pub struct ModelChoiceField<T: FormModel> {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Whether a selection is required.
 	pub required: bool,
+	/// Custom error messages keyed by error type.
 	pub error_messages: HashMap<String, String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Help text displayed alongside the field.
 	pub help_text: String,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<Value>,
+	/// The list of model instances to choose from.
 	pub queryset: Vec<T>,
+	/// Label for the empty/default option (e.g., "Select one...").
 	pub empty_label: Option<String>,
 	_phantom: PhantomData<T>,
 }
@@ -33,7 +41,7 @@ impl<T: FormModel> ModelChoiceField<T> {
 	/// use reinhardt_forms::FormModel;
 	/// use serde_json::{json, Value};
 	///
-	// Define a simple Category model
+	/// // Define a simple Category model
 	/// #[derive(Clone)]
 	/// struct Category {
 	///     id: i32,
@@ -62,7 +70,7 @@ impl<T: FormModel> ModelChoiceField<T> {
 	///     }
 	/// }
 	///
-	// Create a queryset with sample categories
+	/// // Create a queryset with sample categories
 	/// let categories = vec![
 	///     Category { id: 1, name: "Technology".to_string() },
 	///     Category { id: 2, name: "Science".to_string() },
@@ -97,22 +105,27 @@ impl<T: FormModel> ModelChoiceField<T> {
 			_phantom: PhantomData,
 		}
 	}
+	/// Sets whether a selection is required.
 	pub fn required(mut self, required: bool) -> Self {
 		self.required = required;
 		self
 	}
+	/// Sets the help text displayed alongside the field.
 	pub fn help_text(mut self, text: impl Into<String>) -> Self {
 		self.help_text = text.into();
 		self
 	}
+	/// Sets the initial (default) value.
 	pub fn initial(mut self, value: Value) -> Self {
 		self.initial = Some(value);
 		self
 	}
+	/// Sets the label for the empty/default option.
 	pub fn empty_label(mut self, label: Option<String>) -> Self {
 		self.empty_label = label;
 		self
 	}
+	/// Overrides the error message for a specific error type.
 	pub fn error_message(
 		mut self,
 		error_type: impl Into<String>,
@@ -125,6 +138,7 @@ impl<T: FormModel> ModelChoiceField<T> {
 
 	/// Get choices from queryset
 	/// Converts model instances to (value, label) pairs for display in select widget
+	// Allow dead_code: API reserved for future widget rendering integration
 	#[allow(dead_code)]
 	fn get_choices(&self) -> Vec<(String, String)> {
 		let mut choices = Vec::new();
@@ -245,12 +259,19 @@ impl<T: FormModel> FormField for ModelChoiceField<T> {
 ///
 /// This field displays model instances as choices in a multiple select widget.
 pub struct ModelMultipleChoiceField<T: FormModel> {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Whether at least one selection is required.
 	pub required: bool,
+	/// Custom error messages keyed by error type.
 	pub error_messages: HashMap<String, String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Help text displayed alongside the field.
 	pub help_text: String,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<Value>,
+	/// The list of model instances to choose from.
 	pub queryset: Vec<T>,
 	_phantom: PhantomData<T>,
 }
@@ -266,7 +287,7 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 	/// use reinhardt_forms::FormModel;
 	/// use serde_json::{json, Value};
 	///
-	// Define a simple Tag model
+	/// // Define a simple Tag model
 	/// #[derive(Clone)]
 	/// struct Tag {
 	///     id: i32,
@@ -295,7 +316,7 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 	///     }
 	/// }
 	///
-	// Create a queryset with sample tags
+	/// // Create a queryset with sample tags
 	/// let tags = vec![
 	///     Tag { id: 1, name: "rust".to_string() },
 	///     Tag { id: 2, name: "programming".to_string() },
@@ -306,7 +327,7 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 	/// assert_eq!(field.name(), "tags");
 	/// assert!(FormField::required(&field));
 	///
-	// Test with multiple selections
+	/// // Test with multiple selections
 	/// let result = field.clean(Some(&json!(["1", "2"])));
 	/// assert!(result.is_ok());
 	/// ```
@@ -338,18 +359,22 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 			_phantom: PhantomData,
 		}
 	}
+	/// Sets whether at least one selection is required.
 	pub fn required(mut self, required: bool) -> Self {
 		self.required = required;
 		self
 	}
+	/// Sets the help text displayed alongside the field.
 	pub fn help_text(mut self, text: impl Into<String>) -> Self {
 		self.help_text = text.into();
 		self
 	}
+	/// Sets the initial (default) value.
 	pub fn initial(mut self, value: Value) -> Self {
 		self.initial = Some(value);
 		self
 	}
+	/// Overrides the error message for a specific error type.
 	pub fn error_message(
 		mut self,
 		error_type: impl Into<String>,
@@ -361,6 +386,7 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 	}
 
 	/// Get choices from queryset
+	// Allow dead_code: API reserved for future widget rendering integration
 	#[allow(dead_code)]
 	fn get_choices(&self) -> Vec<(String, String)> {
 		let mut choices = Vec::new();

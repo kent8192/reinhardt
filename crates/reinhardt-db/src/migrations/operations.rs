@@ -147,10 +147,14 @@ impl std::fmt::Display for IndexType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum MySqlAlgorithm {
+	/// Instant variant.
 	Instant,
+	/// Inplace variant.
 	Inplace,
+	/// Copy variant.
 	Copy,
 	#[default]
+	/// Default variant.
 	Default,
 }
 
@@ -169,10 +173,14 @@ impl std::fmt::Display for MySqlAlgorithm {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum MySqlLock {
+	/// None variant.
 	None,
+	/// Shared variant.
 	Shared,
+	/// Exclusive variant.
 	Exclusive,
 	#[default]
+	/// Default variant.
 	Default,
 }
 
@@ -188,29 +196,37 @@ impl std::fmt::Display for MySqlLock {
 }
 
 /// MySQL ALTER TABLE options
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub struct AlterTableOptions {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
+	/// The algorithm.
 	pub algorithm: Option<MySqlAlgorithm>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
+	/// The lock.
 	pub lock: Option<MySqlLock>,
 }
 
 impl AlterTableOptions {
+	/// Creates a new instance.
 	pub fn new() -> Self {
 		Self::default()
 	}
+	/// Sets the algorithm and returns self for chaining.
 	pub fn with_algorithm(mut self, algorithm: MySqlAlgorithm) -> Self {
 		self.algorithm = Some(algorithm);
 		self
 	}
+	/// Sets the lock and returns self for chaining.
 	pub fn with_lock(mut self, lock: MySqlLock) -> Self {
 		self.lock = Some(lock);
 		self
 	}
+	/// Returns the mpty.
 	pub fn is_empty(&self) -> bool {
 		self.algorithm.is_none() && self.lock.is_none()
 	}
+	/// Converts to sql suffix.
 	pub fn to_sql_suffix(&self) -> String {
 		let mut parts = Vec::new();
 		if let Some(algo) = &self.algorithm
@@ -239,9 +255,13 @@ impl AlterTableOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum PartitionType {
+	/// Range variant.
 	Range,
+	/// List variant.
 	List,
+	/// Hash variant.
 	Hash,
+	/// Key variant.
 	Key,
 }
 
@@ -260,31 +280,40 @@ impl std::fmt::Display for PartitionType {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum PartitionValues {
+	/// LessThan variant.
 	LessThan(String),
+	/// In variant.
 	In(Vec<String>),
+	/// ModuloCount variant.
 	ModuloCount(u32),
 }
 
 /// Individual partition definition
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PartitionDef {
+	/// The name.
 	pub name: String,
+	/// The values.
 	pub values: PartitionValues,
 }
 
 impl PartitionDef {
+	/// Creates a new instance.
 	pub fn new(name: impl Into<String>, values: PartitionValues) -> Self {
 		Self {
 			name: name.into(),
 			values,
 		}
 	}
+	/// Performs the less than operation.
 	pub fn less_than(name: impl Into<String>, value: impl Into<String>) -> Self {
 		Self::new(name, PartitionValues::LessThan(value.into()))
 	}
+	/// Performs the maxvalue operation.
 	pub fn maxvalue(name: impl Into<String>) -> Self {
 		Self::new(name, PartitionValues::LessThan("MAXVALUE".to_string()))
 	}
+	/// Performs the list in operation.
 	pub fn list_in(name: impl Into<String>, values: Vec<String>) -> Self {
 		Self::new(name, PartitionValues::In(values))
 	}
@@ -305,14 +334,19 @@ pub struct InterleaveSpec {
 }
 
 /// Table partitioning options
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PartitionOptions {
+	/// The partition type.
 	pub partition_type: PartitionType,
+	/// The column.
 	pub column: String,
+	/// The partitions.
 	pub partitions: Vec<PartitionDef>,
 }
 
 impl PartitionOptions {
+	/// Creates a new instance.
 	pub fn new(
 		partition_type: PartitionType,
 		column: impl Into<String>,
@@ -324,12 +358,15 @@ impl PartitionOptions {
 			partitions,
 		}
 	}
+	/// Performs the range operation.
 	pub fn range(column: impl Into<String>, partitions: Vec<PartitionDef>) -> Self {
 		Self::new(PartitionType::Range, column, partitions)
 	}
+	/// Performs the list operation.
 	pub fn list(column: impl Into<String>, partitions: Vec<PartitionDef>) -> Self {
 		Self::new(PartitionType::List, column, partitions)
 	}
+	/// Performs the hash operation.
 	pub fn hash(column: impl Into<String>, num_partitions: u32) -> Self {
 		Self::new(
 			PartitionType::Hash,
@@ -340,6 +377,7 @@ impl PartitionOptions {
 			)],
 		)
 	}
+	/// Performs the key operation.
 	pub fn key(column: impl Into<String>, num_partitions: u32) -> Self {
 		Self::new(
 			PartitionType::Key,
@@ -350,6 +388,7 @@ impl PartitionOptions {
 			)],
 		)
 	}
+	/// Converts to sql.
 	pub fn to_sql(&self) -> String {
 		let mut sql = format!("PARTITION BY {}({})", self.partition_type, self.column);
 		match self.partition_type {
@@ -423,48 +462,86 @@ pub enum Constraint {
 	///
 	/// Used for composite primary keys defined at the table level.
 	/// Single-column primary keys are typically defined directly on the column.
-	PrimaryKey { name: String, columns: Vec<String> },
+	PrimaryKey {
+		/// The constraint name.
+		name: String,
+		/// The columns that form the primary key.
+		columns: Vec<String>,
+	},
 	/// ForeignKey constraint
 	ForeignKey {
+		/// The constraint name.
 		name: String,
+		/// The columns in the referencing table.
 		columns: Vec<String>,
+		/// The referenced table name.
 		referenced_table: String,
+		/// The columns in the referenced table.
 		referenced_columns: Vec<String>,
+		/// Action on delete of the referenced row.
 		on_delete: super::ForeignKeyAction,
+		/// Action on update of the referenced row.
 		on_update: super::ForeignKeyAction,
+		/// Optional deferrable constraint option.
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		deferrable: Option<DeferrableOption>,
 	},
 	/// Unique constraint
-	Unique { name: String, columns: Vec<String> },
+	Unique {
+		/// The constraint name.
+		name: String,
+		/// The columns that must be unique together.
+		columns: Vec<String>,
+	},
 	/// Check constraint
-	Check { name: String, expression: String },
+	Check {
+		/// The constraint name.
+		name: String,
+		/// The SQL check expression.
+		expression: String,
+	},
 	/// OneToOne constraint (ForeignKey + Unique combination)
 	OneToOne {
+		/// The constraint name.
 		name: String,
+		/// The column in the referencing table.
 		column: String,
+		/// The referenced table name.
 		referenced_table: String,
+		/// The referenced column name.
 		referenced_column: String,
+		/// Action on delete of the referenced row.
 		on_delete: super::ForeignKeyAction,
+		/// Action on update of the referenced row.
 		on_update: super::ForeignKeyAction,
+		/// Optional deferrable constraint option.
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		deferrable: Option<DeferrableOption>,
 	},
 	/// ManyToMany relationship metadata (intermediate table reference)
 	ManyToMany {
+		/// The relationship name.
 		name: String,
+		/// The intermediate (through) table name.
 		through_table: String,
+		/// The column referencing the source table.
 		source_column: String,
+		/// The column referencing the target table.
 		target_column: String,
+		/// The target table name.
 		target_table: String,
 	},
 	/// Exclude constraint (PostgreSQL only)
 	Exclude {
+		/// The name.
 		name: String,
+		/// The elements.
 		elements: Vec<(String, String)>,
 		#[serde(default, skip_serializing_if = "Option::is_none")]
+		/// The using.
 		using: Option<String>,
 		#[serde(default, skip_serializing_if = "Option::is_none")]
+		/// The where clause.
 		where_clause: Option<String>,
 	},
 }
@@ -613,6 +690,7 @@ impl std::fmt::Display for BulkLoadFormat {
 /// Options for bulk data loading
 ///
 /// Provides fine-grained control over how data is parsed during bulk loading.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BulkLoadOptions {
 	/// Field delimiter character (default: ',' for CSV, '\t' for TEXT)
@@ -713,63 +791,101 @@ impl BulkLoadOptions {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum Operation {
+	/// CreateTable variant.
 	CreateTable {
+		/// The name.
 		name: String,
+		/// The columns.
 		columns: Vec<ColumnDefinition>,
 		#[serde(default)]
+		/// The constraints.
 		constraints: Vec<Constraint>,
 		#[serde(default, skip_serializing_if = "Option::is_none")]
+		/// The without rowid.
 		without_rowid: Option<bool>,
 		#[serde(default, skip_serializing_if = "Option::is_none")]
+		/// The interleave in parent.
 		interleave_in_parent: Option<InterleaveSpec>,
 		#[serde(default, skip_serializing_if = "Option::is_none")]
+		/// The partition.
 		partition: Option<PartitionOptions>,
 	},
+	/// DropTable variant.
 	DropTable {
+		/// The name.
 		name: String,
 	},
+	/// AddColumn variant.
 	AddColumn {
+		/// The table.
 		table: String,
+		/// The column.
 		column: ColumnDefinition,
 		#[serde(default, skip_serializing_if = "Option::is_none")]
+		/// The mysql options.
 		mysql_options: Option<AlterTableOptions>,
 	},
+	/// DropColumn variant.
 	DropColumn {
+		/// The table.
 		table: String,
+		/// The column.
 		column: String,
 	},
+	/// AlterColumn variant.
 	AlterColumn {
+		/// The table.
 		table: String,
+		/// The column.
 		column: String,
 		/// Original column definition (before alteration).
 		/// This is required for generating accurate rollback SQL.
 		/// If None, rollback will attempt to reconstruct from ProjectState.
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		old_definition: Option<ColumnDefinition>,
+		/// The new definition.
 		new_definition: ColumnDefinition,
 		#[serde(default, skip_serializing_if = "Option::is_none")]
+		/// The mysql options.
 		mysql_options: Option<AlterTableOptions>,
 	},
+	/// RenameTable variant.
 	RenameTable {
+		/// The old name.
 		old_name: String,
+		/// The new name.
 		new_name: String,
 	},
+	/// RenameColumn variant.
 	RenameColumn {
+		/// The table.
 		table: String,
+		/// The old name.
 		old_name: String,
+		/// The new name.
 		new_name: String,
 	},
+	/// AddConstraint variant.
 	AddConstraint {
+		/// The table.
 		table: String,
+		/// The constraint sql.
 		constraint_sql: String,
 	},
+	/// DropConstraint variant.
 	DropConstraint {
+		/// The table.
 		table: String,
+		/// The constraint name.
 		constraint_name: String,
 	},
+	/// CreateIndex variant.
 	CreateIndex {
+		/// The table.
 		table: String,
+		/// The columns.
 		columns: Vec<String>,
+		/// The unique.
 		unique: bool,
 		/// Index type (B-Tree, Hash, GIN, GiST, etc.)
 		///
@@ -827,39 +943,66 @@ pub enum Operation {
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		operator_class: Option<String>,
 	},
+	/// DropIndex variant.
 	DropIndex {
+		/// The table.
 		table: String,
+		/// The columns.
 		columns: Vec<String>,
 	},
+	/// RunSQL variant.
 	RunSQL {
+		/// The sql.
 		sql: String,
+		/// The reverse sql.
 		reverse_sql: Option<String>,
 	},
+	/// RunRust variant.
 	RunRust {
+		/// The code.
 		code: String,
+		/// The reverse code.
 		reverse_code: Option<String>,
 	},
+	/// AlterTableComment variant.
 	AlterTableComment {
+		/// The table.
 		table: String,
+		/// The comment.
 		comment: Option<String>,
 	},
+	/// AlterUniqueTogether variant.
 	AlterUniqueTogether {
+		/// The table.
 		table: String,
+		/// The unique together.
 		unique_together: Vec<Vec<String>>,
 	},
+	/// AlterModelOptions variant.
 	AlterModelOptions {
+		/// The table.
 		table: String,
+		/// The options.
 		options: std::collections::HashMap<String, String>,
 	},
+	/// CreateInheritedTable variant.
 	CreateInheritedTable {
+		/// The name.
 		name: String,
+		/// The columns.
 		columns: Vec<ColumnDefinition>,
+		/// The base table.
 		base_table: String,
+		/// The join column.
 		join_column: String,
 	},
+	/// AddDiscriminatorColumn variant.
 	AddDiscriminatorColumn {
+		/// The table.
 		table: String,
+		/// The column name.
 		column_name: String,
+		/// The default value.
 		default_value: String,
 	},
 	/// Move a model from one app to another
@@ -2025,10 +2168,13 @@ impl Operation {
 		project_state: &ProjectState,
 	) -> super::Result<Option<String>> {
 		match self {
-			Operation::CreateTable { name, .. } => Ok(Some(format!("DROP TABLE {};", name))),
+			Operation::CreateTable { name, .. } => {
+				Ok(Some(format!("DROP TABLE {};", quote_identifier(name))))
+			}
 			Operation::AddColumn { table, column, .. } => Ok(Some(format!(
 				"ALTER TABLE {} DROP COLUMN {};",
-				table, column.name
+				quote_identifier(table),
+				quote_identifier(&column.name)
 			))),
 			Operation::RunSQL { reverse_sql, .. } => {
 				Ok(reverse_sql.as_ref().map(|s| s.to_string()))
@@ -2042,7 +2188,8 @@ impl Operation {
 			// Phase 1: Simple reverse operations
 			Operation::RenameTable { old_name, new_name } => Ok(Some(format!(
 				"ALTER TABLE {} RENAME TO {};",
-				new_name, old_name
+				quote_identifier(new_name),
+				quote_identifier(old_name)
 			))),
 			Operation::RenameColumn {
 				table,
@@ -2050,14 +2197,19 @@ impl Operation {
 				new_name,
 			} => Ok(Some(format!(
 				"ALTER TABLE {} RENAME COLUMN {} TO {};",
-				table, new_name, old_name
+				quote_identifier(table),
+				quote_identifier(new_name),
+				quote_identifier(old_name)
 			))),
 			Operation::CreateIndex { table, columns, .. } => {
 				// Use the same naming convention as to_sql(): idx_{table}_{columns_joined}
 				// This ensures the rollback DROP INDEX targets the correct index name
 				let columns_joined = columns.join("_");
 				let index_name = format!("idx_{}_{}", table, columns_joined);
-				Ok(Some(format!("DROP INDEX {};", index_name)))
+				Ok(Some(format!(
+					"DROP INDEX {};",
+					quote_identifier(&index_name)
+				)))
 			}
 			Operation::AddConstraint {
 				table,
@@ -2074,7 +2226,8 @@ impl Operation {
 					})?;
 				Ok(Some(format!(
 					"ALTER TABLE {} DROP CONSTRAINT {};",
-					table, constraint_name
+					quote_identifier(table),
+					quote_identifier(&constraint_name)
 				)))
 			}
 			// Phase 2: Complex reverse operations using ProjectState
@@ -2087,7 +2240,8 @@ impl Operation {
 					let col_sql = Self::column_to_sql(&col_def, dialect);
 					return Ok(Some(format!(
 						"ALTER TABLE {} ADD COLUMN {};",
-						table, col_sql
+						quote_identifier(table),
+						col_sql
 					)));
 				}
 				// Cannot reconstruct without state
@@ -2106,7 +2260,10 @@ impl Operation {
 					let null_clause = if old_def.not_null { " NOT NULL" } else { "" };
 					return Ok(Some(format!(
 						"ALTER TABLE {} ALTER COLUMN {} TYPE {}{};",
-						table, column, type_sql, null_clause
+						quote_identifier(table),
+						quote_identifier(column),
+						type_sql,
+						null_clause
 					)));
 				}
 
@@ -2120,7 +2277,10 @@ impl Operation {
 					let null_clause = if col_def.not_null { " NOT NULL" } else { "" };
 					return Ok(Some(format!(
 						"ALTER TABLE {} ALTER COLUMN {} TYPE {}{};",
-						table, column, type_sql, null_clause
+						quote_identifier(table),
+						quote_identifier(column),
+						type_sql,
+						null_clause
 					)));
 				}
 				// Cannot reconstruct without state
@@ -2132,10 +2292,16 @@ impl Operation {
 				// The current implementation generates a basic CREATE INDEX statement.
 				let columns_joined = columns.join("_");
 				let index_name = format!("idx_{}_{}", table, columns_joined);
-				let columns_list = columns.join(", ");
+				let columns_list = columns
+					.iter()
+					.map(|c| quote_identifier(c).to_string())
+					.collect::<Vec<_>>()
+					.join(", ");
 				Ok(Some(format!(
 					"CREATE INDEX {} ON {} ({});",
-					index_name, table, columns_list
+					quote_identifier(&index_name),
+					quote_identifier(table),
+					columns_list
 				)))
 			}
 			Operation::DropConstraint {
@@ -2150,7 +2316,11 @@ impl Operation {
 						.find(|c| c.name == *constraint_name)
 				{
 					let constraint = constraint_def.to_constraint();
-					return Ok(Some(format!("ALTER TABLE {} ADD {};", table, constraint)));
+					return Ok(Some(format!(
+						"ALTER TABLE {} ADD {};",
+						quote_identifier(table),
+						constraint
+					)));
 				}
 				// Cannot reconstruct without state
 				Ok(None)
@@ -2174,7 +2344,7 @@ impl Operation {
 
 					return Ok(Some(format!(
 						"CREATE TABLE {} (\n{}\n);",
-						name,
+						quote_identifier(name),
 						parts.join(",\n")
 					)));
 				}
@@ -2184,7 +2354,7 @@ impl Operation {
 			Operation::BulkLoad { table, .. } => {
 				// Reverse of bulk load is to truncate the table (remove loaded data)
 				// Note: This removes ALL data, not just the data loaded by this operation
-				Ok(Some(format!("TRUNCATE TABLE {};", table)))
+				Ok(Some(format!("TRUNCATE TABLE {};", quote_identifier(table))))
 			}
 			_ => Ok(None),
 		}
@@ -2311,17 +2481,24 @@ impl Operation {
 /// Column definition for legacy operations
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ColumnDefinition {
+	/// The name.
 	pub name: String,
+	/// The type definition.
 	pub type_definition: FieldType,
 	#[serde(default)]
+	/// The not null.
 	pub not_null: bool,
 	#[serde(default)]
+	/// The unique.
 	pub unique: bool,
 	#[serde(default)]
+	/// The primary key.
 	pub primary_key: bool,
 	#[serde(default)]
+	/// The auto increment.
 	pub auto_increment: bool,
 	#[serde(default)]
+	/// The default.
 	pub default: Option<String>,
 }
 
@@ -2532,9 +2709,13 @@ pub fn field_type_string_to_field_type(
 /// SQL dialect for generating database-specific SQL
 #[derive(Debug, Clone, Copy)]
 pub enum SqlDialect {
+	/// Sqlite variant.
 	Sqlite,
+	/// Postgres variant.
 	Postgres,
+	/// Mysql variant.
 	Mysql,
+	/// Cockroachdb variant.
 	Cockroachdb,
 }
 
@@ -2974,11 +3155,17 @@ pub use Operation::{AddColumn, AlterColumn, CreateTable, DropColumn};
 
 /// Operation statement types (reinhardt-query or sanitized raw SQL)
 pub enum OperationStatement {
+	/// TableCreate variant.
 	TableCreate(CreateTableStatement),
+	/// TableDrop variant.
 	TableDrop(DropTableStatement),
+	/// TableAlter variant.
 	TableAlter(AlterTableStatement),
+	/// TableRename variant.
 	TableRename(AlterTableStatement),
+	/// IndexCreate variant.
 	IndexCreate(CreateIndexStatement),
+	/// IndexDrop variant.
 	IndexDrop(DropIndexStatement),
 	/// Sanitized raw SQL (identifiers escaped with pg_escape::quote_identifier)
 	RawSql(String),
@@ -3632,14 +3819,32 @@ impl Operation {
 			return json_to_sea_value(&json);
 		}
 
-		// SQL function calls (e.g., NOW(), CURRENT_TIMESTAMP)
+		// SQL constants that should remain unquoted
+		const SQL_CONSTANTS: &[&str] = &[
+			"CURRENT_TIMESTAMP",
+			"CURRENT_DATE",
+			"CURRENT_TIME",
+			"CURRENT_USER",
+			"SESSION_USER",
+			"LOCALTIME",
+			"LOCALTIMESTAMP",
+		];
+
+		// SQL function calls (e.g., NOW(), CURRENT_TIMESTAMP()) - keep unquoted
 		if trimmed.ends_with("()") || trimmed.contains('(') {
-			// Return as custom SQL expression
 			return Value::String(Some(Box::new(trimmed.to_string())));
 		}
 
-		// Default: treat as string
-		Value::String(Some(Box::new(trimmed.to_string())))
+		// SQL constants - keep unquoted
+		if SQL_CONSTANTS
+			.iter()
+			.any(|c| trimmed.eq_ignore_ascii_case(c))
+		{
+			return Value::String(Some(Box::new(trimmed.to_string())));
+		}
+
+		// Default: plain string - auto-quote as SQL string literal
+		Value::String(Some(Box::new(format!("'{}'", trimmed.replace('\'', "''")))))
 	}
 }
 
@@ -3960,6 +4165,7 @@ impl MigrationOperation for Operation {
 mod tests {
 	use super::*;
 	use FieldType;
+	use rstest::rstest;
 
 	#[test]
 	fn test_create_table_to_statement() {
@@ -4974,6 +5180,100 @@ mod tests {
 		}
 	}
 
+	#[rstest]
+	#[case("pending", "'pending'")]
+	#[case("active", "'active'")]
+	#[case("hello world", "'hello world'")]
+	#[case("it's", "'it''s'")]
+	fn test_convert_default_value_plain_string(#[case] input: &str, #[case] expected: &str) {
+		// Arrange
+		let op = Operation::CreateTable {
+			name: "test".to_string(),
+			columns: vec![],
+			constraints: vec![],
+			without_rowid: None,
+			partition: None,
+			interleave_in_parent: None,
+		};
+
+		// Act
+		let value = op.convert_default_value(input);
+
+		// Assert
+		match value {
+			Value::String(Some(s)) => assert_eq!(
+				*s, expected,
+				"Plain string '{input}' should be auto-quoted as SQL string literal"
+			),
+			_ => {
+				panic!("Expected Value::String(Some(\"{expected}\")), got {value:?}")
+			}
+		}
+	}
+
+	#[rstest]
+	#[case("CURRENT_TIMESTAMP")]
+	#[case("current_timestamp")]
+	#[case("CURRENT_DATE")]
+	#[case("CURRENT_TIME")]
+	#[case("CURRENT_USER")]
+	#[case("SESSION_USER")]
+	#[case("LOCALTIME")]
+	#[case("LOCALTIMESTAMP")]
+	fn test_convert_default_value_sql_constant(#[case] input: &str) {
+		// Arrange
+		let op = Operation::CreateTable {
+			name: "test".to_string(),
+			columns: vec![],
+			constraints: vec![],
+			without_rowid: None,
+			partition: None,
+			interleave_in_parent: None,
+		};
+
+		// Act
+		let value = op.convert_default_value(input);
+
+		// Assert
+		match value {
+			Value::String(Some(s)) => {
+				assert_eq!(*s, input, "SQL constant '{input}' should remain unquoted")
+			}
+			_ => {
+				panic!("Expected Value::String(Some(\"{input}\")), got {value:?}")
+			}
+		}
+	}
+
+	#[rstest]
+	#[case("NOW()")]
+	#[case("uuid_generate_v4()")]
+	#[case("gen_random_uuid()")]
+	fn test_convert_default_value_sql_function(#[case] input: &str) {
+		// Arrange
+		let op = Operation::CreateTable {
+			name: "test".to_string(),
+			columns: vec![],
+			constraints: vec![],
+			without_rowid: None,
+			partition: None,
+			interleave_in_parent: None,
+		};
+
+		// Act
+		let value = op.convert_default_value(input);
+
+		// Assert
+		match value {
+			Value::String(Some(s)) => {
+				assert_eq!(*s, input, "SQL function '{input}' should remain unquoted")
+			}
+			_ => {
+				panic!("Expected Value::String(Some(\"{input}\")), got {value:?}")
+			}
+		}
+	}
+
 	#[test]
 	fn test_apply_column_type_integer() {
 		let op = Operation::CreateTable {
@@ -5174,6 +5474,190 @@ mod tests {
 			model.inheritance_type,
 			Some("single_table".to_string()),
 			"inheritance_type should be 'single_table'"
+		);
+	}
+
+	#[rstest]
+	fn test_to_reverse_sql_create_table_quotes_identifiers() {
+		// Arrange
+		let op = Operation::CreateTable {
+			name: "user-data".to_string(),
+			columns: vec![],
+			constraints: vec![],
+			without_rowid: None,
+			partition: None,
+			interleave_in_parent: None,
+		};
+		let state = ProjectState::default();
+
+		// Act
+		let sql = op
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			sql, "DROP TABLE \"user-data\";",
+			"Identifiers with special characters must be quoted"
+		);
+	}
+
+	#[rstest]
+	fn test_to_reverse_sql_add_column_quotes_identifiers() {
+		// Arrange
+		let op = Operation::AddColumn {
+			table: "my table".to_string(),
+			column: ColumnDefinition {
+				name: "my column".to_string(),
+				type_definition: FieldType::VarChar(255),
+				not_null: false,
+				unique: false,
+				primary_key: false,
+				auto_increment: false,
+				default: None,
+			},
+			mysql_options: None,
+		};
+		let state = ProjectState::default();
+
+		// Act
+		let sql = op
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			sql, "ALTER TABLE \"my table\" DROP COLUMN \"my column\";",
+			"Table and column names with spaces must be quoted"
+		);
+	}
+
+	#[rstest]
+	fn test_to_reverse_sql_rename_table_quotes_identifiers() {
+		// Arrange: both names contain special characters requiring quoting
+		let op = Operation::RenameTable {
+			old_name: "old; DROP TABLE users;--".to_string(),
+			new_name: "new-name".to_string(),
+		};
+		let state = ProjectState::default();
+
+		// Act
+		let sql = op
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			sql, "ALTER TABLE \"new-name\" RENAME TO \"old; DROP TABLE users;--\";",
+			"SQL injection attempt must be quoted as identifier"
+		);
+	}
+
+	#[rstest]
+	fn test_to_reverse_sql_rename_column_quotes_identifiers() {
+		// Arrange: use identifiers with special characters to verify quoting
+		let op = Operation::RenameColumn {
+			table: "my table".to_string(),
+			old_name: "old col".to_string(),
+			new_name: "new col".to_string(),
+		};
+		let state = ProjectState::default();
+
+		// Act
+		let sql = op
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			sql, "ALTER TABLE \"my table\" RENAME COLUMN \"new col\" TO \"old col\";",
+			"Identifiers with spaces must be quoted"
+		);
+	}
+
+	#[rstest]
+	fn test_to_reverse_sql_create_index_quotes_identifiers() {
+		// Arrange
+		let op = Operation::CreateIndex {
+			table: "my-table".to_string(),
+			columns: vec!["col a".to_string()],
+			unique: false,
+			index_type: None,
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		};
+		let state = ProjectState::default();
+
+		// Act
+		let sql = op
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert!(
+			sql.contains("DROP INDEX \"idx_my-table_col a\""),
+			"Index name must be quoted, got: {}",
+			sql
+		);
+	}
+
+	#[rstest]
+	fn test_to_reverse_sql_add_constraint_quotes_identifiers() {
+		// Arrange: table name with special characters triggers quoting
+		let op = Operation::AddConstraint {
+			table: "my-table".to_string(),
+			constraint_sql: "CONSTRAINT chk_positive CHECK (x > 0)".to_string(),
+		};
+		let state = ProjectState::default();
+
+		// Act
+		let sql = op
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert!(
+			sql.contains("ALTER TABLE \"my-table\""),
+			"Table name with special characters must be quoted, got: {}",
+			sql
+		);
+		assert!(
+			sql.contains("DROP CONSTRAINT"),
+			"Should contain DROP CONSTRAINT, got: {}",
+			sql
+		);
+	}
+
+	#[rstest]
+	fn test_to_reverse_sql_bulk_load_quotes_identifiers() {
+		// Arrange
+		let op = Operation::BulkLoad {
+			table: "user-data".to_string(),
+			source: BulkLoadSource::Stdin,
+			format: BulkLoadFormat::default(),
+			options: BulkLoadOptions::default(),
+		};
+		let state = ProjectState::default();
+
+		// Act
+		let sql = op
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			sql, "TRUNCATE TABLE \"user-data\";",
+			"Table name must be quoted"
 		);
 	}
 }

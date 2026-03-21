@@ -1,0 +1,113 @@
+name: "📐 API Change Proposal"
+description: Propose a change to an existing public API
+labels: ["enhancement", "rc-migration"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template to propose changes to existing public APIs.
+        Please provide as much detail as possible to help maintainers evaluate the proposal.
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Prerequisites
+      options:
+        - label: I have searched existing issues to verify this API change hasn't been proposed
+          required: true
+        - label: I have reviewed the API stability policy in docs/API_STABILITY.md
+          required: false
+
+  - type: textarea
+    id: current-api
+    attributes:
+      label: Current API
+      description: Describe the current API behavior and signature
+      placeholder: |
+        ```rust
+        pub fn current_function(param: CurrentType) -> CurrentReturn {
+            // current behavior
+        }
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-change
+    attributes:
+      label: Proposed Change
+      description: Describe the proposed changes to the API
+      placeholder: |
+        ```rust
+        pub fn proposed_function(param: NewType) -> NewReturn {
+            // proposed behavior
+        }
+        ```
+    validations:
+      required: true
+
+  - type: dropdown
+    id: breaking-change
+    attributes:
+      label: Is this a breaking change?
+      options:
+        - "Yes - requires major version bump (SemVer MAJOR)"
+        - "No - backward compatible (SemVer MINOR or PATCH)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: migration-path
+    attributes:
+      label: Migration Path
+      description: |
+        If this is a breaking change, describe how users should migrate from the old API to the new one.
+        Include code examples showing before and after.
+      placeholder: |
+        Before:
+        ```rust
+        let result = old_function(param);
+        ```
+
+        After:
+        ```rust
+        let result = new_function(new_param);
+        ```
+
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Rationale
+      description: Why is this change needed? What problem does it solve or what improvement does it bring?
+      placeholder: |
+        The current API has the following issues:
+        1. ...
+        2. ...
+
+        This change improves the API by...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Describe any alternative API designs you've considered and why you prefer this approach
+      placeholder: |
+        I considered the following alternatives:
+        1. ...
+
+  - type: textarea
+    id: affected-users
+    attributes:
+      label: Impact on Existing Users
+      description: Who will be affected by this change? Are there known users of the current API?
+      placeholder: |
+        This change affects users who...
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any other context, references, or examples that would help evaluate this proposal

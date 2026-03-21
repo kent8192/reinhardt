@@ -5,7 +5,7 @@ reloading in Reinhardt projects.
 
 ## Overview
 
-As of Reinhardt version 0.1.0-alpha.2 (upcoming), cargo-watch support has been
+As of Reinhardt version 0.1.0-rc.9, cargo-watch support has been
 removed in favor of bacon. Bacon provides a better development experience with:
 
 - **Real-time feedback**: Displays build output and errors immediately
@@ -31,6 +31,18 @@ The following cargo-watch-related features have been removed:
    - All `cargo watch` commands replaced with `bacon` commands
 
 ## Migration Steps
+
+The following diagram summarizes the migration step flow:
+
+```mermaid
+flowchart TD
+    A[Start migration] --> B[Install bacon]
+    B --> C[Create bacon.toml config]
+    C --> D[Configure jobs]
+    D --> E[Learn keyboard shortcuts]
+    E --> F[Remove cargo-watch dependency]
+    F --> G[Migration complete]
+```
 
 ### 1. Install bacon
 
@@ -78,14 +90,14 @@ dependencies = ["install-bacon", "install-nextest"]
 
 ```toml
 [dependencies]
-reinhardt-commands = { version = "0.1.0-alpha.1", features = ["cargo-watch-reload"] }
+reinhardt-commands = { version = "0.1.0-rc.9", features = ["cargo-watch-reload"] }
 ```
 
 **After:**
 
 ```toml
 [dependencies]
-reinhardt-commands = { version = "0.1.0-alpha.2" }
+reinhardt-commands = { version = "0.1.0-rc.9" }
 # No feature flag needed - bacon is used externally
 ```
 
@@ -181,6 +193,19 @@ Bacon provides interactive keyboard shortcuts while running:
 - `Ctrl+j` - Show all available jobs
 - `h` - Show help
 - `q` - Quit
+
+The following diagram illustrates how you can switch between common jobs using keyboard shortcuts:
+
+```mermaid
+stateDiagram-v2
+    [*] --> check: bacon (default)
+    check --> clippy: c key
+    clippy --> check: k key
+    check --> test: t key
+    test --> check: k key
+    clippy --> test: t key
+    test --> clippy: c key
+```
 
 ## VSCode Integration (Optional)
 

@@ -5,13 +5,17 @@ use super::media_type::MediaType;
 
 /// Trait for renderers
 pub trait Renderer {
+	/// Returns the media type this renderer produces.
 	fn media_type(&self) -> &MediaType;
+	/// Returns the format identifier (e.g., "json", "html").
 	fn format(&self) -> &str;
 }
 
 /// Error type for negotiation failures
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum NegotiationError {
+	/// No renderer matches the client's Accept header.
 	NoSuitableRenderer,
 }
 
@@ -27,6 +31,7 @@ impl std::error::Error for NegotiationError {}
 
 /// Base content negotiator trait
 pub trait BaseContentNegotiation {
+	/// Select the best parser based on the request's Content-Type.
 	fn select_parser(
 		&self,
 		_request: Option<&str>,
@@ -35,6 +40,7 @@ pub trait BaseContentNegotiation {
 		Err(NegotiationError::NoSuitableRenderer)
 	}
 
+	/// Select the best renderer based on the request's Accept header.
 	fn select_renderer(
 		&self,
 		_request: Option<&str>,
@@ -45,6 +51,7 @@ pub trait BaseContentNegotiation {
 }
 
 /// Content negotiator for selecting appropriate renderer
+#[derive(Debug, Clone)]
 pub struct ContentNegotiator {
 	default_media_type: MediaType,
 }
@@ -58,7 +65,7 @@ impl ContentNegotiator {
 	/// use reinhardt_core::negotiation::ContentNegotiator;
 	///
 	/// let negotiator = ContentNegotiator::new();
-	// Default media type is application/json
+	/// // Default media type is application/json
 	/// ```
 	pub fn new() -> Self {
 		Self {
@@ -131,7 +138,7 @@ impl ContentNegotiator {
 	/// let (media_type, media_type_str) = result.unwrap();
 	/// assert_eq!(media_type.subtype, "json");
 	///
-	// No accept header uses first renderer
+	/// // No accept header uses first renderer
 	/// let result2 = negotiator.select_renderer(None, &renderers);
 	/// assert!(result2.is_ok());
 	/// ```
@@ -247,7 +254,9 @@ impl ContentNegotiator {
 /// Renderer information for testing
 #[derive(Debug, Clone)]
 pub struct RendererInfo {
+	/// The media type this renderer produces.
 	pub media_type: MediaType,
+	/// The format identifier (e.g., "json", "html").
 	pub format: String,
 }
 
@@ -258,6 +267,7 @@ impl Default for ContentNegotiator {
 }
 
 /// Base content negotiation implementation (abstract)
+#[derive(Debug, Clone)]
 pub struct BaseNegotiator;
 
 impl BaseContentNegotiation for BaseNegotiator {}

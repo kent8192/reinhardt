@@ -6,11 +6,17 @@ use serde::{Deserialize, Serialize};
 /// Metadata about a stored file
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileMetadata {
+	/// The storage path of the file.
 	pub path: String,
+	/// The size of the file in bytes.
 	pub size: u64,
+	/// The MIME content type of the file, if known.
 	pub content_type: Option<String>,
+	/// The timestamp when the file was created.
 	pub created_at: DateTime<Utc>,
+	/// The timestamp when the file was last modified.
 	pub modified_at: DateTime<Utc>,
+	/// An optional checksum (e.g., MD5, SHA-256) for integrity verification.
 	pub checksum: Option<String>,
 }
 
@@ -73,7 +79,9 @@ impl FileMetadata {
 /// Represents a stored file
 #[derive(Debug)]
 pub struct StoredFile {
+	/// Metadata describing the stored file.
 	pub metadata: FileMetadata,
+	/// The raw file content.
 	pub content: Vec<u8>,
 }
 

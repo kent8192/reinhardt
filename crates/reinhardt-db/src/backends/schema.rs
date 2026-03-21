@@ -35,32 +35,57 @@ pub mod factory;
 pub enum DDLStatement {
 	/// CREATE TABLE statement
 	CreateTable {
+		/// The table name.
 		table: String,
+		/// Column definitions as (name, type) pairs.
 		columns: Vec<(String, String)>,
 	},
 	/// ALTER TABLE statement
 	AlterTable {
+		/// The table name.
 		table: String,
+		/// The list of changes to apply.
 		changes: Vec<AlterTableChange>,
 	},
 	/// DROP TABLE statement
-	DropTable { table: String, cascade: bool },
+	DropTable {
+		/// The table name.
+		table: String,
+		/// Whether to cascade the drop.
+		cascade: bool,
+	},
 	/// CREATE INDEX statement
 	CreateIndex {
+		/// The index name.
 		name: String,
+		/// The table name.
 		table: String,
+		/// The columns to index.
 		columns: Vec<String>,
+		/// Whether the index is unique.
 		unique: bool,
+		/// Optional WHERE condition for partial indexes.
 		condition: Option<String>,
 	},
 	/// DROP INDEX statement
-	DropIndex { name: String },
+	DropIndex {
+		/// The index name.
+		name: String,
+	},
 	/// CREATE SCHEMA statement
-	CreateSchema { name: String, if_not_exists: bool },
+	CreateSchema {
+		/// The schema name.
+		name: String,
+		/// Whether to use IF NOT EXISTS.
+		if_not_exists: bool,
+	},
 	/// DROP SCHEMA statement
 	DropSchema {
+		/// The schema name.
 		name: String,
+		/// Whether to cascade the drop.
 		cascade: bool,
+		/// Whether to use IF EXISTS.
 		if_exists: bool,
 	},
 	/// Raw SQL statement
@@ -98,28 +123,67 @@ impl DDLStatement {
 #[derive(Debug, Clone, PartialEq)]
 pub enum AlterTableChange {
 	/// Add a column
-	AddColumn { name: String, definition: String },
+	AddColumn {
+		/// The column name.
+		name: String,
+		/// The column definition SQL.
+		definition: String,
+	},
 	/// Drop a column
-	DropColumn { name: String },
+	DropColumn {
+		/// The column name.
+		name: String,
+	},
 	/// Rename a column
-	RenameColumn { old_name: String, new_name: String },
+	RenameColumn {
+		/// The old column name.
+		old_name: String,
+		/// The new column name.
+		new_name: String,
+	},
 	/// Alter column type
 	AlterColumnType {
+		/// The column name.
 		name: String,
+		/// The new column type.
 		new_type: String,
+		/// Optional collation for the column.
 		collation: Option<String>,
 	},
 	/// Set/drop column default
 	AlterColumnDefault {
+		/// The column name.
 		name: String,
+		/// The default value, or `None` to drop the default.
 		default: Option<String>,
 	},
 	/// Set/drop NOT NULL constraint
-	AlterColumnNullability { name: String, nullable: bool },
+	AlterColumnNullability {
+		/// The column name.
+		name: String,
+		/// Whether the column is nullable.
+		nullable: bool,
+	},
 	/// Add constraint
-	AddConstraint { name: String, definition: String },
+	AddConstraint {
+		/// The constraint name.
+		name: String,
+		/// The constraint definition SQL.
+		definition: String,
+	},
 	/// Drop constraint
-	DropConstraint { name: String },
+	DropConstraint {
+		/// The constraint name.
+		name: String,
+	},
+}
+
+/// Escapes a schema identifier by doubling double-quote characters.
+///
+/// This prevents SQL injection in schema names used within quoted identifiers.
+/// For example, a schema name containing `"` will have it escaped to `""`.
+fn escape_schema_identifier(name: &str) -> String {
+	name.replace('"', "\"\"")
 }
 
 /// Base trait for database schema editors
@@ -355,10 +419,11 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 	/// assert_eq!(sql, "CREATE SCHEMA IF NOT EXISTS \"my_schema\"");
 	/// ```
 	fn create_schema_statement(&self, name: &str, if_not_exists: bool) -> String {
+		let escaped_name = escape_schema_identifier(name);
 		if if_not_exists {
-			format!("CREATE SCHEMA IF NOT EXISTS \"{}\"", name)
+			format!("CREATE SCHEMA IF NOT EXISTS \"{}\"", escaped_name)
 		} else {
-			format!("CREATE SCHEMA \"{}\"", name)
+			format!("CREATE SCHEMA \"{}\"", escaped_name)
 		}
 	}
 
@@ -402,7 +467,9 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 
 		format!(
 			"DROP SCHEMA{} \"{}\"{}",
-			if_exists_clause, name, cascade_clause
+			if_exists_clause,
+			escape_schema_identifier(name),
+			cascade_clause
 		)
 	}
 
@@ -471,6 +538,7 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 pub type SchemaEditorResult<T> = Result<T, SchemaEditorError>;
 
 /// Errors that can occur during schema editing operations
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum SchemaEditorError {
 	/// SQL execution error
@@ -497,6 +565,8 @@ impl std::error::Error for SchemaEditorError {}
 
 #[cfg(test)]
 mod tests {
+	use rstest::rstest;
+
 	use super::*;
 
 	struct TestSchemaEditor;
@@ -625,6 +695,87 @@ mod tests {
 			changes: vec![],
 		};
 		assert_eq!(alter_stmt.table_name(), "posts");
+	}
+
+	#[rstest]
+	#[case("my_schema", "CREATE SCHEMA IF NOT EXISTS \"my_schema\"")]
+	#[case(
+		"schema\"injection",
+		"CREATE SCHEMA IF NOT EXISTS \"schema\"\"injection\""
+	)]
+	#[case(
+		"special-chars_123",
+		"CREATE SCHEMA IF NOT EXISTS \"special-chars_123\""
+	)]
+	fn test_create_schema_escapes_identifier(
+		#[case] schema_name: &str,
+		#[case] expected_sql: &str,
+	) {
+		// Arrange
+		let editor = TestSchemaEditor;
+
+		// Act
+		let sql = editor.create_schema_statement(schema_name, true);
+
+		// Assert
+		assert_eq!(sql, expected_sql);
+	}
+
+	#[rstest]
+	fn test_create_schema_without_if_not_exists() {
+		// Arrange
+		let editor = TestSchemaEditor;
+
+		// Act
+		let sql = editor.create_schema_statement("my_schema", false);
+
+		// Assert
+		assert_eq!(sql, "CREATE SCHEMA \"my_schema\"");
+	}
+
+	#[rstest]
+	#[case("my_schema", "DROP SCHEMA IF EXISTS \"my_schema\" CASCADE")]
+	#[case(
+		"schema\"injection",
+		"DROP SCHEMA IF EXISTS \"schema\"\"injection\" CASCADE"
+	)]
+	#[case(
+		"special-chars_123",
+		"DROP SCHEMA IF EXISTS \"special-chars_123\" CASCADE"
+	)]
+	fn test_drop_schema_escapes_identifier(#[case] schema_name: &str, #[case] expected_sql: &str) {
+		// Arrange
+		let editor = TestSchemaEditor;
+
+		// Act
+		let sql = editor.drop_schema_statement(schema_name, true, true);
+
+		// Assert
+		assert_eq!(sql, expected_sql);
+	}
+
+	#[rstest]
+	fn test_drop_schema_without_cascade_and_if_exists() {
+		// Arrange
+		let editor = TestSchemaEditor;
+
+		// Act
+		let sql = editor.drop_schema_statement("my_schema", false, false);
+
+		// Assert
+		assert_eq!(sql, "DROP SCHEMA \"my_schema\"");
+	}
+
+	#[rstest]
+	fn test_escape_schema_identifier_helper() {
+		// Arrange / Act / Assert
+		assert_eq!(escape_schema_identifier("simple"), "simple");
+		assert_eq!(escape_schema_identifier("has\"quote"), "has\"\"quote");
+		assert_eq!(
+			escape_schema_identifier("multiple\"\"quotes"),
+			"multiple\"\"\"\"quotes"
+		);
+		assert_eq!(escape_schema_identifier(""), "");
 	}
 }
 

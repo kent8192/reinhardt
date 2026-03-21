@@ -1,0 +1,82 @@
+name: Auto Label PR
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label-by-path:
+    name: Label by changed files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/labeler@v6
+        with:
+          repo-token: "${{ secrets.GITHUB_TOKEN }}"
+          configuration-path: .github/labeler.yml
+          sync-labels: false
+
+  label-by-title:
+    name: Label by PR title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const title = context.payload.pull_request.title;
+
+            const typeMap = {
+              'feat': 'enhancement',
+              'fix': 'bug',
+              'docs': 'documentation',
+              'perf': 'performance',
+              'refactor': 'refactoring',
+              'test': 'code-quality',
+              'ci': 'ci-cd',
+              'style': 'code-quality',
+              'security': 'security',
+              'chore': 'dependencies',
+              'build': 'ci-cd',
+              'deprecated': 'breaking-change',
+              'revert': 'bug',
+            };
+
+            const labelsToAdd = [];
+
+            // Check for breaking change indicator
+            const breakingMatch = title.match(/^[a-z]+(?:\([^)]*\))?!/);
+            if (breakingMatch) {
+              labelsToAdd.push('breaking-change');
+            }
+
+            // Extract type prefix (e.g., "feat(scope):" or "feat:")
+            const typeMatch = title.match(/^([a-z]+)(?:\([^)]*\))?!?:/);
+            if (typeMatch) {
+              const type = typeMatch[1];
+              if (typeMap[type]) {
+                labelsToAdd.push(typeMap[type]);
+              }
+            }
+
+            if (labelsToAdd.length > 0) {
+              // Get existing labels to avoid duplicates
+              const { data: currentLabels } = await github.rest.issues.listLabelsOnIssue({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+              });
+              const existingLabelNames = currentLabels.map(l => l.name);
+              const newLabels = labelsToAdd.filter(l => !existingLabelNames.includes(l));
+
+              if (newLabels.length > 0) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  labels: newLabels,
+                });
+              }
+            }

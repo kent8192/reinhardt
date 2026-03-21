@@ -2,14 +2,30 @@ name: Coverage
 
 on:
   workflow_call:
+    inputs:
+      runner:
+        description: 'Runner label JSON. Use "\"ubuntu-latest\"" for GitHub-hosted or "[\"self-hosted\",\"linux\",\"arm64\",\"reinhardt-ci\"]" for self-hosted.'
+        type: string
+        default: '"ubuntu-latest"'
+      cargo-build-jobs:
+        description: "Parallel cargo build jobs (1=GitHub-hosted OOM safe, 8=self-hosted)"
+        type: string
+        default: "1"
+      nextest-filter:
+        description: "Nextest filter expression for affected packages"
+        type: string
+        default: ""
+      run-all:
+        description: "Whether to run all tests"
+        type: string
+        default: "true"
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  CARGO_TARGET_DIR: /tmp/cargo_target
   CARGO_INCREMENTAL: 0
-  CARGO_BUILD_JOBS: 2
+  CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
   RUST_MIN_STACK: 8388608
@@ -17,14 +33,17 @@ env:
 jobs:
   unit-coverage:
     name: Unit Test Coverage
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: /tmp/cargo_target_unit_cov
     permissions:
       id-token: write
       contents: read
     steps:
       - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
+        if: ${{ !contains(inputs.runner, 'self-hosted') }}
+        uses: jlumbroso/free-disk-space@v1.3.1
         with:
           tool-cache: true
           android: true
@@ -47,7 +66,10 @@ jobs:
         uses: ./.github/actions/setup-rust
 
       - name: Setup protoc
-        uses: ./.github/actions/setup-protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install cargo-make
         uses: taiki-e/install-action@v2
@@ -59,12 +81,20 @@ jobs:
         with:
           tool: nextest
 
+      - name: Install mold linker and build dependencies
+        run: |
+          sudo apt-get update -o DPkg::Lock::Timeout=120
+          sudo apt-get install -y -o DPkg::Lock::Timeout=120 mold clang lld build-essential
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
 
       - name: Additional disk cleanup before tests
+        if: ${{ !contains(inputs.runner, 'self-hosted') }}
         run: |
           echo "Disk usage before additional cleanup:"
           df -h
@@ -80,21 +110,66 @@ jobs:
           echo "Disk usage after additional cleanup:"
           df -h
 
-      - name: Run unit tests with coverage
+      - name: Clean coverage artifacts
         run: |
+          cargo llvm-cov clean --workspace
+          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
+
+      - name: Configure mold linker for coverage
+        run: |
+          cat > /tmp/clang-mold-wrapper << 'WRAPPER'
+          #!/bin/sh
+          exec clang -fuse-ld=mold "$@"
+          WRAPPER
+          chmod +x /tmp/clang-mold-wrapper
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "aarch64" ]; then
+            ENV_KEY="CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER"
+          elif [ "$ARCH" = "x86_64" ]; then
+            ENV_KEY="CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER"
+          else
+            echo "Unsupported architecture for mold linker configuration: $ARCH" >&2
+            exit 1
+          fi
+          echo "${ENV_KEY}=/tmp/clang-mold-wrapper" >> "$GITHUB_ENV"
+
+      - name: Run unit tests with coverage
+        env:
+          NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
+          RUN_ALL: ${{ inputs.run-all }}
+        run: |
+          FILTER_ARGS=()
+          if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
+            FILTER_ARGS+=(-E "$NEXTEST_FILTER_EXPR")
+          fi
+          set +e
           cargo llvm-cov nextest \
+            --no-report \
             --workspace \
             --lib \
             --all-features \
             --no-fail-fast \
-            --lcov \
-            --output-path /tmp/unit-lcov.info
+            "${FILTER_ARGS[@]}"
+          EXIT_CODE=$?
+          set -e
+          if [[ $EXIT_CODE -eq 4 ]]; then
+            echo "::notice::No tests matched the filter — treating as success"
+            exit 0
+          elif [[ $EXIT_CODE -ne 0 ]]; then
+            exit $EXIT_CODE
+          fi
+
+      - name: Generate unit coverage report
+        run: |
+          cargo llvm-cov report \
+            --codecov \
+            --output-path /tmp/unit-codecov.json
 
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: /tmp/unit-lcov.info
+          files: /tmp/unit-codecov.json
           flags: unit
           fail_ci_if_error: false
           use_oidc: true
@@ -105,14 +180,17 @@ jobs:
 
   intra-crate-integration-coverage:
     name: Intra-Crate Integration Coverage
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 120
+    env:
+      CARGO_TARGET_DIR: /tmp/cargo_target_intra_cov
     permissions:
       id-token: write
       contents: read
     steps:
       - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
+        if: ${{ !contains(inputs.runner, 'self-hosted') }}
+        uses: jlumbroso/free-disk-space@v1.3.1
         with:
           tool-cache: true
           android: true
@@ -135,12 +213,15 @@ jobs:
         uses: ./.github/actions/setup-rust
 
       - name: Setup protoc
-        uses: ./.github/actions/setup-protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install mold linker and build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y mold clang lld build-essential
+          sudo apt-get update -o DPkg::Lock::Timeout=120
+          sudo apt-get install -y -o DPkg::Lock::Timeout=120 mold clang lld build-essential
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
 
@@ -160,6 +241,7 @@ jobs:
           tool: cargo-llvm-cov
 
       - name: Additional disk cleanup before tests
+        if: ${{ !contains(inputs.runner, 'self-hosted') }}
         run: |
           echo "Disk usage before additional cleanup:"
           df -h
@@ -182,25 +264,68 @@ jobs:
         with:
           images-file: .github/docker-images-intra-crate.txt
 
+      - name: Configure mold linker for coverage
+        run: |
+          cat > /tmp/clang-mold-wrapper << 'WRAPPER'
+          #!/bin/sh
+          exec clang -fuse-ld=mold "$@"
+          WRAPPER
+          chmod +x /tmp/clang-mold-wrapper
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "aarch64" ]; then
+            ENV_KEY="CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER"
+          elif [ "$ARCH" = "x86_64" ]; then
+            ENV_KEY="CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER"
+          else
+            echo "Unsupported architecture for mold linker configuration: $ARCH" >&2
+            exit 1
+          fi
+          echo "${ENV_KEY}=/tmp/clang-mold-wrapper" >> "$GITHUB_ENV"
+
+      - name: Clean coverage artifacts
+        run: |
+          cargo llvm-cov clean --workspace
+          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
+
       - name: Run intra-crate integration tests with coverage
         env:
-          RUSTFLAGS: "-C linker=clang -C link-arg=-fuse-ld=mold"
+          NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
+          RUN_ALL: ${{ inputs.run-all }}
         run: |
+          if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
+            FILTER_EXPR="(not binary(/ui/)) & ($NEXTEST_FILTER_EXPR)"
+          else
+            FILTER_EXPR="not binary(/ui/)"
+          fi
+          set +e
           cargo llvm-cov nextest \
+            --no-report \
             --workspace \
             --test "*" \
             --exclude reinhardt-integration-tests \
-            -E "not binary(/ui/)" \
+            -E "$FILTER_EXPR" \
             --all-features \
-            --no-fail-fast \
-            --lcov \
-            --output-path /tmp/intra-crate-lcov.info
+            --no-fail-fast
+          EXIT_CODE=$?
+          set -e
+          if [[ $EXIT_CODE -eq 4 ]]; then
+            echo "::notice::No tests matched the filter — treating as success"
+            exit 0
+          elif [[ $EXIT_CODE -ne 0 ]]; then
+            exit $EXIT_CODE
+          fi
+
+      - name: Generate intra-crate coverage report
+        run: |
+          cargo llvm-cov report \
+            --codecov \
+            --output-path /tmp/intra-crate-codecov.json
 
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: /tmp/intra-crate-lcov.info
+          files: /tmp/intra-crate-codecov.json
           flags: intra-crate-integration
           fail_ci_if_error: false
           use_oidc: true
@@ -211,14 +336,17 @@ jobs:
 
   cross-crate-integration-coverage:
     name: Cross-Crate Integration Coverage
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: /tmp/cargo_target_cross_cov
     permissions:
       id-token: write
       contents: read
     steps:
       - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
+        if: ${{ !contains(inputs.runner, 'self-hosted') }}
+        uses: jlumbroso/free-disk-space@v1.3.1
         with:
           tool-cache: true
           android: true
@@ -241,12 +369,15 @@ jobs:
         uses: ./.github/actions/setup-rust
 
       - name: Setup protoc
-        uses: ./.github/actions/setup-protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install mold linker and build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y mold clang lld build-essential
+          sudo apt-get update -o DPkg::Lock::Timeout=120
+          sudo apt-get install -y -o DPkg::Lock::Timeout=120 mold clang lld build-essential
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
 
@@ -266,6 +397,7 @@ jobs:
           tool: cargo-llvm-cov
 
       - name: Additional disk cleanup before tests
+        if: ${{ !contains(inputs.runner, 'self-hosted') }}
         run: |
           echo "Disk usage before additional cleanup:"
           df -h
@@ -288,22 +420,65 @@ jobs:
         with:
           images-file: .github/docker-images-cross-crate.txt
 
+      - name: Configure mold linker for coverage
+        run: |
+          cat > /tmp/clang-mold-wrapper << 'WRAPPER'
+          #!/bin/sh
+          exec clang -fuse-ld=mold "$@"
+          WRAPPER
+          chmod +x /tmp/clang-mold-wrapper
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "aarch64" ]; then
+            ENV_KEY="CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER"
+          elif [ "$ARCH" = "x86_64" ]; then
+            ENV_KEY="CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER"
+          else
+            echo "Unsupported architecture for mold linker configuration: $ARCH" >&2
+            exit 1
+          fi
+          echo "${ENV_KEY}=/tmp/clang-mold-wrapper" >> "$GITHUB_ENV"
+
+      - name: Clean coverage artifacts
+        run: |
+          cargo llvm-cov clean --workspace
+          rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
+
       - name: Run cross-crate integration tests with coverage
         env:
-          RUSTFLAGS: "-C linker=clang -C link-arg=-fuse-ld=mold"
+          NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
+          RUN_ALL: ${{ inputs.run-all }}
         run: |
+          FILTER_ARGS=()
+          if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
+            FILTER_ARGS+=(-E "$NEXTEST_FILTER_EXPR")
+          fi
+          set +e
           cargo llvm-cov nextest \
+            --no-report \
             --package reinhardt-integration-tests \
             --all-features \
             --no-fail-fast \
-            --lcov \
-            --output-path /tmp/cross-crate-lcov.info
+            "${FILTER_ARGS[@]}"
+          EXIT_CODE=$?
+          set -e
+          if [[ $EXIT_CODE -eq 4 ]]; then
+            echo "::notice::No tests matched the filter — treating as success"
+            exit 0
+          elif [[ $EXIT_CODE -ne 0 ]]; then
+            exit $EXIT_CODE
+          fi
+
+      - name: Generate cross-crate coverage report
+        run: |
+          cargo llvm-cov report \
+            --codecov \
+            --output-path /tmp/cross-crate-codecov.json
 
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: /tmp/cross-crate-lcov.info
+          files: /tmp/cross-crate-codecov.json
           flags: cross-crate-integration
           fail_ci_if_error: false
           use_oidc: true

@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! # Reinhardt Auth
 //!
 //! Authentication and authorization system for Reinhardt framework.
@@ -13,9 +14,43 @@
 //! - **Standard Permissions**: Permission classes for common authorization scenarios
 //! - **createsuperuser Command**: CLI tool for creating admin users
 //!
+//! ## Quick Start
+//!
+//! ```rust
+//! use reinhardt_auth::core::{IsAuthenticated, PermissionContext};
+//!
+//! // Check if a permission is satisfied
+//! let permission = IsAuthenticated;
+//! // In actual usage, you would pass a real request context
+//! let _ = permission; // permission classes implement PermissionClass trait
+//! ```
+//!
+//! ## Architecture
+//!
+//! Key modules in this crate:
+//!
+//! - [`core`]: Authentication traits, user types, permission classes, and password hashing
+//! - [`sessions`]: Session backends (JWT, database, Redis, cookie, file)
+//! - [`current_user`]: Dependency-injectable `CurrentUser` extractor
+//! - `social` (feature-gated): OAuth2/OpenID Connect social authentication providers
+//! - `user_management`: CRUD operations for users and groups
+//!
+//! ## Feature Flags
+//!
+//! | Feature | Default | Description |
+//! |---------|---------|-------------|
+//! | `params` | enabled | `CurrentUser` parameter extraction via DI |
+//! | `jwt` | disabled | JWT-based authentication backend |
+//! | `sessions` | disabled | Session-based authentication |
+//! | `oauth` | disabled | OAuth2 authorization code flow |
+//! | `token` | disabled | Token-based authentication |
+//! | `argon2-hasher` | disabled | Argon2 password hashing (alternative to bcrypt) |
+//! | `social` | disabled | Social authentication (OAuth2/OIDC providers) |
+//! | `database` | disabled | Database-backed user/group storage via ORM |
+//!
 //! ## Security Note: Client-Side vs Server-Side Checks
 //!
-//! Authentication state exposed via [`reinhardt_http::AuthState`] (e.g.,
+//! Authentication state exposed via `reinhardt_http::AuthState` (e.g.,
 //! `is_authenticated()`, `is_admin()`) is populated by server-side
 //! middleware and stored in request extensions. When this state is
 //! forwarded to client-side code (e.g., via WASM or JSON responses),
@@ -30,7 +65,26 @@ pub mod core;
 
 // CurrentUser injectable for dependency injection
 pub mod current_user;
+#[allow(deprecated)]
 pub use current_user::CurrentUser;
+
+// AuthInfo lightweight auth extractor
+pub mod auth_info;
+pub use auth_info::AuthInfo;
+
+// AuthUser authenticated user extractor
+pub mod auth_user;
+pub use auth_user::AuthUser;
+
+// Startup validation for auth extractors
+pub mod auth_extractors;
+pub use auth_extractors::validate_auth_extractors;
+
+/// Project-specific UUID namespace for deterministic user ID generation.
+///
+/// Computed from `Uuid::new_v5(&Uuid::NAMESPACE_URL, b"https://reinhardt.rs/user-id")`.
+pub(crate) const USER_ID_NAMESPACE: uuid::Uuid =
+	uuid::uuid!("c7a85537-073f-5092-8d10-774e109477c9");
 
 // Re-export core authentication types
 pub use core::{
@@ -45,38 +99,63 @@ pub use core::Argon2Hasher;
 // Re-export permission operators from core
 pub use core::permission_operators;
 
-// Implementation-specific modules (kept in contrib)
+pub mod repository;
+pub use repository::{SimpleUserRepository, UserRepository};
+
+/// Advanced permission classes (role-based, object-level).
 pub mod advanced_permissions;
+/// Base user manager trait for CRUD operations.
 pub mod base_user_manager;
+/// HTTP Basic authentication backend.
 pub mod basic;
+/// Default user model with Argon2 password hashing.
 pub mod default_user;
+/// Default user manager implementation.
 pub mod default_user_manager;
+/// Group management (create, delete, assign users).
 pub mod group_management;
+/// Login/logout HTTP handlers.
 #[cfg(feature = "sessions")]
 pub mod handlers;
+/// IP-based permission classes (whitelist/blacklist with CIDR).
 pub mod ip_permission;
+/// JWT (JSON Web Token) authentication.
 #[cfg(feature = "jwt")]
 pub mod jwt;
+/// Multi-factor authentication support.
 pub mod mfa;
+/// Django-compatible model-level permissions.
 pub mod model_permissions;
+/// OAuth2 authentication provider.
 #[cfg(feature = "oauth")]
 pub mod oauth2;
+/// Object-level permission checking.
 pub mod object_permissions;
+/// Rate-limiting permission class.
 #[cfg(feature = "rate-limit")]
 pub mod rate_limit_permission;
+/// Remote user authentication (proxy-based).
 pub mod remote_user;
+/// REST API authentication backends.
 pub mod rest_authentication;
+/// Session-based authentication.
 #[cfg(feature = "sessions")]
 pub mod session;
+/// Social authentication providers (Google, GitHub, Apple, Microsoft).
 #[cfg(feature = "social")]
 pub mod social;
+/// Time-based permission class (time windows, date ranges).
 pub mod time_based_permission;
+/// Token blacklist for revocation.
 #[cfg(any(feature = "jwt", feature = "token"))]
 pub mod token_blacklist;
+/// Automatic token rotation.
 #[cfg(any(feature = "jwt", feature = "token"))]
 pub mod token_rotation;
+/// Token persistence storage backends.
 #[cfg(any(feature = "jwt", feature = "token"))]
 pub mod token_storage;
+/// User CRUD management.
 pub mod user_management;
 
 pub use advanced_permissions::{ObjectPermission as AdvancedObjectPermission, RoleBasedPermission};
@@ -101,7 +180,7 @@ pub use model_permissions::{
 #[cfg(feature = "oauth")]
 pub use oauth2::{
 	AccessToken, AuthorizationCode, GrantType, InMemoryOAuth2Store, OAuth2Application,
-	OAuth2Authentication, OAuth2TokenStore, SimpleUserRepository, UserRepository,
+	OAuth2Authentication, OAuth2TokenStore,
 };
 pub use object_permissions::{ObjectPermission, ObjectPermissionChecker, ObjectPermissionManager};
 pub use permission_operators::{AndPermission, NotPermission, OrPermission};
@@ -139,15 +218,23 @@ pub use user_management::{
 	CreateUserData, UpdateUserData, UserManagementError, UserManagementResult, UserManager,
 };
 
-/// Authentication errors
-#[derive(Debug, Clone)]
+/// Authentication errors that can occur during user verification.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthenticationError {
+	/// The provided credentials (username/password) are incorrect.
 	InvalidCredentials,
+	/// The requested user does not exist.
 	UserNotFound,
+	/// The user's session has expired.
 	SessionExpired,
+	/// The provided authentication token is invalid or malformed.
 	InvalidToken,
+	/// The request lacks valid authentication credentials.
 	NotAuthenticated,
+	/// A database error occurred during authentication.
 	DatabaseError(String),
+	/// An unspecified authentication error.
 	Unknown(String),
 }
 

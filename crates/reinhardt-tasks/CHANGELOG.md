@@ -7,7 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-tasks@v0.1.0-alpha.3...reinhardt-tasks@v0.1.0-alpha.4) - 2026-02-21
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-tasks@v0.1.0-rc.8...reinhardt-tasks@v0.1.0-rc.9) - 2026-03-15
+
+### Styling
+
+- add explanatory comments to remaining #[allow(dead_code)] attributes
+
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-tasks@v0.1.0-rc.4...reinhardt-tasks@v0.1.0-rc.5) - 2026-03-07
+
+### Documentation
+
+- add missing doc comments for public API modules and types
+
+### Other
+
+- resolve conflicts with origin/main
+
+## [0.1.0-rc.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-tasks@v0.1.0-rc.2...reinhardt-tasks@v0.1.0-rc.3) - 2026-03-05
+
+### Fixed
+
+- *(release)* use path-only dev-dep for reinhardt-test in cyclic crates
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-tasks@v0.1.0-rc.1...reinhardt-tasks@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(tasks)* implement weight-based ordering for Priority enum
+- *(deps)* align dependency versions to workspace definitions
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-tasks@v0.1.0-alpha.3...reinhardt-tasks@v0.1.0-rc.1) - 2026-02-21
 
 ### Fixed
 

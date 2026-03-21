@@ -14,6 +14,7 @@ use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::sync::Arc;
+use tracing::warn;
 
 // Re-export CSRF functionality from reinhardt-core::security
 pub use reinhardt_core::security::csrf::{
@@ -26,6 +27,7 @@ pub use reinhardt_core::security::csrf::{
 };
 
 /// CSRF middleware configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct CsrfMiddlewareConfig {
 	/// Base CSRF configuration
@@ -141,7 +143,7 @@ impl CsrfMiddleware {
 		// which are attacker-controlled.
 		use rand::RngCore;
 		let mut random_bytes = [0u8; 32];
-		rand::thread_rng().fill_bytes(&mut random_bytes);
+		rand::rng().fill_bytes(&mut random_bytes);
 		hex::encode(random_bytes)
 	}
 
@@ -374,9 +376,17 @@ impl Middleware for CsrfMiddleware {
 		// Process request
 		let mut response = handler.handle(request).await?;
 		let cookie_header = self.build_set_cookie_header(&token);
-		response
-			.headers
-			.insert("Set-Cookie", cookie_header.parse().unwrap());
+		match cookie_header.parse() {
+			Ok(value) => {
+				response.headers.insert("Set-Cookie", value);
+			}
+			Err(e) => {
+				warn!(
+					error = %e,
+					"Failed to parse CSRF Set-Cookie header value, skipping cookie insertion"
+				);
+			}
+		}
 
 		Ok(response)
 	}

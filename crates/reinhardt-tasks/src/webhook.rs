@@ -616,8 +616,8 @@ impl HttpWebhookSender {
 			* retry_config.backoff_multiplier.powi(retry_count as i32);
 
 		// Add jitter (±25%)
-		let mut rng = rand::thread_rng();
-		let jitter = rng.gen_range(-0.25..=0.25);
+		let mut rng = rand::rng();
+		let jitter = rng.random_range(-0.25..=0.25);
 		let backoff_with_jitter = backoff_ms * (1.0 + jitter);
 
 		// Cap at max backoff (AFTER jitter)

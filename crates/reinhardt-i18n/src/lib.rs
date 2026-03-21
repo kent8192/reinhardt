@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Internationalization (i18n) support for Reinhardt
 //!
 //! This crate provides Django-style internationalization features including:
@@ -48,15 +49,19 @@ use std::sync::Arc;
 
 use reinhardt_utils::safe_path_join;
 
-/// Error types for i18n operations
+/// Error types for i18n operations.
 #[derive(Debug, thiserror::Error)]
 pub enum I18nError {
+	/// The locale identifier is not a valid BCP 47 language tag.
 	#[error("Invalid locale format: {0}")]
 	InvalidLocale(String),
+	/// No message catalog was found for the requested locale.
 	#[error("Catalog not found for locale: {0}")]
 	CatalogNotFound(String),
+	/// Failed to load a message catalog from disk.
 	#[error("Failed to load catalog: {0}")]
 	LoadError(String),
+	/// A path traversal attack was detected in locale file paths.
 	#[error("Path traversal detected: {0}")]
 	PathTraversal(String),
 }
@@ -64,8 +69,10 @@ pub enum I18nError {
 mod catalog;
 mod lazy;
 mod locale;
+/// PO (Portable Object) file parser for gettext catalogs.
 pub mod po_parser;
 mod translation;
+/// I18n utility functions for locale detection and path handling.
 pub mod utils;
 
 pub use catalog::MessageCatalog;

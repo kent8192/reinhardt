@@ -7,7 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-alpha.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-graphql@v0.1.0-alpha.6...reinhardt-graphql@v0.1.0-alpha.7) - 2026-02-24
+## [0.1.0-rc.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-graphql@v0.1.0-rc.9...reinhardt-graphql@v0.1.0-rc.10) - 2026-03-15
+
+### Added
+
+- *(graphql)* re-export async_graphql base types through reinhardt facade
+
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-graphql@v0.1.0-rc.8...reinhardt-graphql@v0.1.0-rc.9) - 2026-03-15
+
+### Fixed
+
+- *(graphql)* replace rwlock unwrap with poison-recovery pattern
+- *(graphql)* centralize poison recovery with logging helpers
+
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-graphql@v0.1.0-rc.4...reinhardt-graphql@v0.1.0-rc.5) - 2026-03-07
+
+### Documentation
+
+- add missing doc comments for public API modules and types
+
+## [0.1.0-rc.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-graphql@v0.1.0-rc.2...reinhardt-graphql@v0.1.0-rc.3) - 2026-03-05
+
+### Fixed
+
+- *(release)* move reinhardt-test to optional dep in non-cyclic crates
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-graphql@v0.1.0-rc.1...reinhardt-graphql@v0.1.0-rc.2) - 2026-03-04
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-graphql@v0.1.0-alpha.6...reinhardt-graphql@v0.1.0-rc.1) - 2026-02-24
 
 ### Fixed
 

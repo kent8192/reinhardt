@@ -5,27 +5,29 @@
 //! while tweet_card and tweet_list use page! macro with hooks-styled state management.
 
 use crate::apps::tweet::shared::types::TweetInfo;
+use crate::core::client::components::icons;
 use reinhardt::pages::Signal;
-use reinhardt::pages::component::View;
+use reinhardt::pages::component::Page;
 use reinhardt::pages::form;
 use reinhardt::pages::page;
-use reinhardt::pages::reactive::hooks::use_state;
+use reinhardt::pages::reactive::hooks::{Action, use_action, use_effect, use_state};
 use uuid::Uuid;
 
 #[cfg(client)]
 use {
-	crate::apps::tweet::server::server_fn::{create_tweet, delete_tweet, list_tweets},
-	reinhardt::pages::spawn::spawn_task,
+	crate::apps::tweet::shared::server_fn::{create_tweet, delete_tweet, list_tweets},
+	reinhardt::pages::create_resource,
+	reinhardt::pages::reactive::ResourceState,
 };
 
 #[cfg(server)]
-use crate::apps::tweet::server::server_fn::create_tweet;
+use crate::apps::tweet::shared::server_fn::{create_tweet, delete_tweet};
 
 /// Like button component (extracted to avoid nested watch blocks)
 ///
 /// This function is separated from tweet_card to avoid nested watch block issues
 /// with closure ownership in the page! macro.
-fn like_button(liked: Signal<bool>, like_count: Signal<i32>) -> View {
+fn like_button(liked: Signal<bool>, like_count: Signal<i32>) -> Page {
 	// Clone signals for the watch block
 	let liked_signal = liked.clone();
 	let like_count_signal = like_count.clone();
@@ -41,7 +43,7 @@ fn like_button(liked: Signal<bool>, like_count: Signal<i32>) -> View {
 			if liked_signal.get() {
 				button {
 					class: "tweet-action-btn text-danger",
-					r#type: "button",
+					type: "button",
 					aria_label: "Like",
 					@click: {
 								let liked_for_click = liked_for_click_if.clone();
@@ -57,18 +59,7 @@ fn like_button(liked: Signal<bool>, like_count: Signal<i32>) -> View {
 									});
 								}
 							},
-					svg {
-						class: "w-5 h-5 animate-heart",
-						fill: "currentColor",
-						stroke: "currentColor",
-						viewBox: "0 0 24 24",
-						path {
-							stroke_linecap: "round",
-							stroke_linejoin: "round",
-							stroke_width: "1.5",
-							d: "M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z",
-						}
-					}
+					{ icons::heart_icon_filled() }
 					span {
 						{ format!("{}", like_count_signal.get()) }
 					}
@@ -76,7 +67,7 @@ fn like_button(liked: Signal<bool>, like_count: Signal<i32>) -> View {
 			} else {
 				button {
 					class: "tweet-action-btn hover:text-danger",
-					r#type: "button",
+					type: "button",
 					aria_label: "Like",
 					@click: {
 								let liked_for_click = liked_for_click_else.clone();
@@ -92,18 +83,7 @@ fn like_button(liked: Signal<bool>, like_count: Signal<i32>) -> View {
 									});
 								}
 							},
-					svg {
-						class: "w-5 h-5",
-						fill: "none",
-						stroke: "currentColor",
-						viewBox: "0 0 24 24",
-						path {
-							stroke_linecap: "round",
-							stroke_linejoin: "round",
-							stroke_width: "1.5",
-							d: "M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z",
-						}
-					}
+					{ icons::heart_icon_outline() }
 					span {
 						{ format!("{}", like_count_signal_else.get()) }
 					}
@@ -121,43 +101,22 @@ fn like_button(liked: Signal<bool>, like_count: Signal<i32>) -> View {
 	)
 }
 
-/// Error display component (extracted to avoid nested watch blocks)
-///
-/// Displays an error message if present. This is separated to avoid
-/// nested watch block issues with closure ownership in page! macro.
-fn error_display(error_signal: Signal<Option<String>>) -> View {
-	let error_for_watch = error_signal.clone();
-
-	page!(|error_for_watch: Signal<Option<String>>| {
-		watch {
-			if error_for_watch.get().is_some() {
-				div {
-					class: "alert-danger mt-3",
-					{ error_for_watch.get().unwrap_or_default() }
-				}
-			}
-		}
-	})(error_for_watch)
-}
-
 /// Tweet card component using hooks
 ///
 /// Displays a single tweet with modern SNS design (Threads/Bluesky-inspired).
 /// Features avatar, username, handle, content, timestamp, and action buttons.
 /// Uses watch blocks for reactive UI updates when state changes.
-pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
+pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> Page {
 	let tweet_id = tweet.id;
 
 	// Hook-styled state management
-	let (deleted, set_deleted) = use_state(false);
-	let (error, set_error) = use_state(None::<String>);
+	let delete_action =
+		use_action(
+			move |tid: Uuid| async move { delete_tweet(tid).await.map_err(|e| e.to_string()) },
+		);
 	let (liked, _set_liked) = use_state(false);
 	let (like_count, _set_like_count) = use_state(0i32);
 
-	// Clone signals for passing to page! macro
-	let deleted_signal = deleted.clone();
-	// Clone for error display component
-	let error_signal_for_display = error.clone();
 	// Clone liked/like_count signals so we can call like_button inside watch
 	let liked_signal = liked.clone();
 	let like_count_signal = like_count.clone();
@@ -167,9 +126,15 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 	let content = tweet.content.clone();
 	let created_at = tweet.created_at.clone();
 
-	page!(|deleted_signal: Signal<bool>, error_signal_for_display: Signal<Option<String>>, show_delete: bool, username: String, content: String, created_at: String, tweet_id: Uuid, liked_signal: Signal<bool>, like_count_signal: Signal<i32>| {
+	// Clone delete_action for the click handler closure
+	let delete_action_for_click = delete_action.clone();
+
+	// Clone for error display watch block (separate closure from main watch block)
+	let delete_action_for_error = delete_action.clone();
+
+	page!(|delete_action: Action<(), String>, show_delete: bool, username: String, content: String, created_at: String, tweet_id: Uuid, liked_signal: Signal<bool>, like_count_signal: Signal<i32>, delete_action_for_click: Action<(), String>, delete_action_for_error: Action<(), String>| {
 		watch {
-			if deleted_signal.get() {
+			if delete_action.is_success() {
 				div {
 					class: "hidden",
 				}
@@ -182,7 +147,15 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 							class: "flex-shrink-0",
 							div {
 								class: "tweet-avatar bg-surface-tertiary flex items-center justify-center text-content-secondary font-semibold",
-								{ username.clone().chars().next().unwrap_or('U').to_uppercase().to_string() }
+								{
+									username
+											.clone()
+											.chars()
+											.next()
+											.unwrap_or('U')
+											.to_uppercase()
+											.to_string()
+								}
 							}
 						}
 						div {
@@ -211,41 +184,15 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 								if show_delete {
 									button {
 										class: "btn-ghost btn-sm text-danger hover:bg-danger/10",
-										r#type: "button",
+										type: "button",
 										aria_label: "Delete tweet",
 										@click: {
-													let set_deleted = set_deleted.clone();
-													let set_error = set_error.clone();
+													let delete_action = delete_action_for_click.clone();
 													move |_event| {
-														#[cfg(client)]
-														{
-															let set_deleted = set_deleted.clone();
-															let set_error = set_error.clone();
-															spawn_task(async move {
-																match delete_tweet(tweet_id).await {
-																	Ok(()) => {
-																		set_deleted(true);
-																	}
-																	Err(e) => {
-																		set_error(Some(e.to_string()));
-																	}
-																}
-															});
-														}
+														delete_action.dispatch(tweet_id);
 													}
 												},
-										svg {
-											class: "w-4 h-4",
-											fill: "none",
-											stroke: "currentColor",
-											viewBox: "0 0 24 24",
-											path {
-												stroke_linecap: "round",
-												stroke_linejoin: "round",
-												stroke_width: "2",
-												d: "M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16",
-											}
-										}
+										{ icons::trash_icon() }
 									}
 								}
 							}
@@ -257,40 +204,18 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 								class: "tweet-actions",
 								button {
 									class: "tweet-action-btn hover:text-brand",
-									r#type: "button",
+									type: "button",
 									aria_label: "Reply",
-									svg {
-										class: "w-5 h-5",
-										fill: "none",
-										stroke: "currentColor",
-										viewBox: "0 0 24 24",
-										path {
-											stroke_linecap: "round",
-											stroke_linejoin: "round",
-											stroke_width: "1.5",
-											d: "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z",
-										}
-									}
+									{ icons::chat_bubble_icon() }
 									span {
 										"0"
 									}
 								}
 								button {
 									class: "tweet-action-btn hover:text-success",
-									r#type: "button",
+									type: "button",
 									aria_label: "Retweet",
-									svg {
-										class: "w-5 h-5",
-										fill: "none",
-										stroke: "currentColor",
-										viewBox: "0 0 24 24",
-										path {
-											stroke_linecap: "round",
-											stroke_linejoin: "round",
-											stroke_width: "1.5",
-											d: "M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15",
-										}
-									}
+									{ icons::retweet_icon() }
 									span {
 										"0"
 									}
@@ -298,31 +223,26 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 								{ like_button(liked_signal.clone(), like_count_signal.clone()) }
 								button {
 									class: "tweet-action-btn hover:text-brand",
-									r#type: "button",
+									type: "button",
 									aria_label: "Share",
-									svg {
-										class: "w-5 h-5",
-										fill: "none",
-										stroke: "currentColor",
-										viewBox: "0 0 24 24",
-										path {
-											stroke_linecap: "round",
-											stroke_linejoin: "round",
-											stroke_width: "1.5",
-											d: "M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12",
-										}
-									}
+									{ icons::share_icon() }
 								}
 							}
 						}
 					}
-					{ error_display(error_signal_for_display.clone()) }
+				}
+			}
+		}
+		watch {
+			if delete_action_for_error.error().is_some() {
+				div {
+					class: "alert-danger mt-3",
+					{ delete_action_for_error.error().unwrap_or_default() }
 				}
 			}
 		}
 	})(
-		deleted_signal,
-		error_signal_for_display,
+		delete_action,
 		show_delete,
 		username,
 		content,
@@ -330,6 +250,8 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 		tweet_id,
 		liked_signal,
 		like_count_signal,
+		delete_action_for_click,
+		delete_action_for_error,
 	)
 }
 
@@ -345,7 +267,7 @@ pub fn tweet_card(tweet: &TweetInfo, show_delete: bool) -> View {
 /// - `watch` block with match expressions: 4-level character counter styling
 /// - `state` block: Automatic loading/error signal management
 /// - `on_success` callback: Page reload after successful submission
-pub fn tweet_form() -> View {
+pub fn tweet_form() -> Page {
 	// Define the form using form! macro with derived signals
 	let tweet_form_instance = form! {
 		name: TweetFormInner,
@@ -413,7 +335,7 @@ pub fn tweet_form() -> View {
 				page!(|is_loading: bool, is_disabled: bool| {
 					div {
 						button {
-							r#type: "submit",
+							type: "submit",
 							class: if is_disabled { "btn-primary opacity-50 cursor-not-allowed" } else { "btn-primary" },
 							disabled: is_disabled,
 							{ if is_loading { "Posting..." } else { "Post" } }
@@ -448,10 +370,10 @@ pub fn tweet_form() -> View {
 
 	// Wrap form in the card layout
 	// Extract the form instance's view components for custom layout
-	let form_view = tweet_form_instance.into_view();
+	let form_view = tweet_form_instance.into_page();
 
 	// Create the full card layout
-	page!(|form_view: View| {
+	page!(|form_view: Page| {
 		div {
 			class: "card mb-4",
 			div {
@@ -480,31 +402,37 @@ pub fn tweet_form() -> View {
 /// Displays list of tweets with loading and error states.
 /// Uses React-like hooks for state management.
 /// Uses watch blocks for reactive UI updates when async data loads.
-pub fn tweet_list(user_id: Option<Uuid>) -> View {
-	// Hook-styled state management
-	let (tweets, set_tweets) = use_state(Vec::<TweetInfo>::new());
-	let (loading, set_loading) = use_state(true);
-	let (error, set_error) = use_state(None::<String>);
+pub fn tweet_list(user_id: Option<Uuid>) -> Page {
+	// Data fetching with create_resource on client, initial loading state on server
+	let (tweets, _set_tweets) = use_state(Vec::<TweetInfo>::new());
+	let (loading, _set_loading) = use_state(true);
+	let (error, _set_error) = use_state(None::<String>);
 
 	#[cfg(client)]
 	{
-		let set_tweets = set_tweets.clone();
-		let set_loading = set_loading.clone();
-		let set_error = set_error.clone();
+		let resource = create_resource(move || async move {
+			list_tweets(user_id, 0).await.map_err(|e| e.to_string())
+		});
 
-		spawn_task(async move {
-			set_loading(true);
-			set_error(None);
+		// Bridge resource state to individual signals for page! macro compatibility
+		let tweets_setter = _set_tweets.clone();
+		let loading_setter = _set_loading.clone();
+		let error_setter = _set_error.clone();
+		let resource_for_effect = resource.clone();
 
-			match list_tweets(user_id, 0).await {
-				Ok(tweet_list) => {
-					set_tweets(tweet_list);
-					set_loading(false);
-				}
-				Err(e) => {
-					set_error(Some(e.to_string()));
-					set_loading(false);
-				}
+		use_effect(move || match resource_for_effect.get() {
+			ResourceState::Loading => {
+				loading_setter(true);
+				error_setter(None);
+			}
+			ResourceState::Success(data) => {
+				tweets_setter(data);
+				loading_setter(false);
+				error_setter(None);
+			}
+			ResourceState::Error(err) => {
+				error_setter(Some(err));
+				loading_setter(false);
 			}
 		});
 	}
@@ -534,15 +462,7 @@ pub fn tweet_list(user_id: Option<Uuid>) -> View {
 						role: "alert",
 						div {
 							class: "flex items-center gap-2",
-							svg {
-								class: "w-5 h-5 flex-shrink-0",
-								fill: "currentColor",
-								viewBox: "0 0 20 20",
-								path {
-									fill_rule: "evenodd",
-									d: "M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z",
-								}
-							}
+							{ icons::error_circle_icon() }
 							span {
 								{ error_signal.get().unwrap_or_default() }
 							}
@@ -553,18 +473,7 @@ pub fn tweet_list(user_id: Option<Uuid>) -> View {
 						class: "flex flex-col items-center justify-center py-16 text-center",
 						div {
 							class: "w-16 h-16 rounded-full bg-surface-tertiary flex items-center justify-center mb-4",
-							svg {
-								class: "w-8 h-8 text-content-tertiary",
-								fill: "none",
-								stroke: "currentColor",
-								viewBox: "0 0 24 24",
-								path {
-									stroke_linecap: "round",
-									stroke_linejoin: "round",
-									stroke_width: "1.5",
-									d: "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z",
-								}
-							}
+							{ icons::chat_bubble_icon_lg() }
 						}
 						h3 {
 							class: "text-lg font-semibold text-content-primary mb-1",
@@ -578,7 +487,15 @@ pub fn tweet_list(user_id: Option<Uuid>) -> View {
 				} else {
 					div {
 						class: "card overflow-hidden",
-						{ View::fragment(tweets_signal.get().iter().map(|t| tweet_card(t, false)).collect ::<Vec<_>>()) }
+						{
+							Page::Fragment(
+									tweets_signal
+										.get()
+										.iter()
+										.map(|t| tweet_card(t, false))
+										.collect::<Vec<_>>(),
+								)
+						}
 					}
 				}
 			}

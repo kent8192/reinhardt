@@ -65,7 +65,10 @@ impl SiteRegistry {
 	/// ```
 	pub fn register(&self, site: Site) {
 		let domain = site.domain.clone();
-		self.sites.write().unwrap().insert(domain, site);
+		self.sites
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.insert(domain, site);
 	}
 
 	/// Set default site
@@ -80,19 +83,28 @@ impl SiteRegistry {
 	/// registry.set_default(site);
 	/// ```
 	pub fn set_default(&self, site: Site) {
-		*self.default_site.write().unwrap() = Some(site);
+		*self.default_site.write().unwrap_or_else(|e| e.into_inner()) = Some(site);
 	}
 
 	/// Get site by domain
 	pub fn get_by_domain(&self, domain: &str) -> Option<Site> {
 		// Try exact match first
-		if let Some(site) = self.sites.read().unwrap().get(domain) {
+		if let Some(site) = self
+			.sites
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.get(domain)
+		{
 			return Some(site.clone());
 		}
 
 		// Try without www prefix
 		if let Some(without_www) = domain.strip_prefix("www.")
-			&& let Some(site) = self.sites.read().unwrap().get(without_www)
+			&& let Some(site) = self
+				.sites
+				.read()
+				.unwrap_or_else(|e| e.into_inner())
+				.get(without_www)
 		{
 			return Some(site.clone());
 		}
@@ -102,19 +114,30 @@ impl SiteRegistry {
 	}
 
 	/// Get default site
-	pub fn get_default(&self) -> Option<Site> {
-		self.default_site.read().unwrap().clone()
+	pub fn default_site(&self) -> Option<Site> {
+		self.default_site
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.clone()
 	}
 
 	/// Get all registered sites
-	pub fn get_all(&self) -> Vec<Site> {
-		self.sites.read().unwrap().values().cloned().collect()
+	pub fn all(&self) -> Vec<Site> {
+		self.sites
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.values()
+			.cloned()
+			.collect()
 	}
 
 	/// Clear all sites
 	pub fn clear(&self) {
-		self.sites.write().unwrap().clear();
-		*self.default_site.write().unwrap() = None;
+		self.sites
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.clear();
+		*self.default_site.write().unwrap_or_else(|e| e.into_inner()) = None;
 	}
 }
 
@@ -122,6 +145,7 @@ impl SiteRegistry {
 pub const SITE_ID_HEADER: &str = "X-Site-ID";
 
 /// Configuration for site middleware
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct SiteConfig {
 	/// Enable site middleware
@@ -232,6 +256,7 @@ impl Default for SiteConfig {
 /// ```
 pub struct SiteMiddleware {
 	config: SiteConfig,
+	/// The shared site registry containing all registered sites.
 	pub registry: Arc<SiteRegistry>,
 }
 
@@ -291,13 +316,20 @@ impl Middleware for SiteMiddleware {
 			None => {
 				// No host header, use default site if fallback enabled
 				if self.config.fallback_enabled {
-					let default_site = self.registry.default_site.read().unwrap().clone();
+					let default_site = self
+						.registry
+						.default_site
+						.read()
+						.unwrap_or_else(|e| e.into_inner())
+						.clone();
 					if let Some(site) = default_site {
 						let mut response = handler.handle(request).await?;
-						let header_name: HeaderName = SITE_ID_HEADER.parse().unwrap();
-						response
-							.headers
-							.insert(header_name, site.id.to_string().parse().unwrap());
+						if let (Ok(header_name), Ok(header_value)) = (
+							SITE_ID_HEADER.parse::<HeaderName>(),
+							site.id.to_string().parse(),
+						) {
+							response.headers.insert(header_name, header_value);
+						}
 						return Ok(response);
 					}
 				}
@@ -310,18 +342,19 @@ impl Middleware for SiteMiddleware {
 
 		// If no site found, try default site if fallback enabled
 		if site.is_none() && self.config.fallback_enabled {
-			site = self.registry.get_default();
+			site = self.registry.default_site();
 		}
 
 		// Call handler
 		let mut response = handler.handle(request).await?;
 
 		// Add site ID to response headers if site was found
-		if let Some(site) = site {
-			let header_name: HeaderName = SITE_ID_HEADER.parse().unwrap();
-			response
-				.headers
-				.insert(header_name, site.id.to_string().parse().unwrap());
+		if let Some(site) = site
+			&& let (Ok(header_name), Ok(header_value)) = (
+				SITE_ID_HEADER.parse::<HeaderName>(),
+				site.id.to_string().parse(),
+			) {
+			response.headers.insert(header_name, header_value);
 		}
 
 		Ok(response)
@@ -576,13 +609,13 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn test_get_all_sites() {
+	async fn test_all_sites() {
 		let registry = SiteRegistry::new();
 
 		registry.register(Site::new(1, "site1.com".to_string(), "Site 1".to_string()));
 		registry.register(Site::new(2, "site2.com".to_string(), "Site 2".to_string()));
 
-		let sites = registry.get_all();
+		let sites = registry.all();
 		assert_eq!(sites.len(), 2);
 	}
 
@@ -599,7 +632,7 @@ mod tests {
 
 		registry.clear();
 
-		assert_eq!(registry.get_all().len(), 0);
+		assert_eq!(registry.all().len(), 0);
 		assert!(registry.default_site.read().unwrap().is_none());
 	}
 
@@ -619,5 +652,37 @@ mod tests {
 
 		let response = middleware.process(request, handler).await.unwrap();
 		assert_eq!(response.status, StatusCode::OK);
+	}
+
+	#[rstest::rstest]
+	fn test_rwlock_poison_recovery_site_registry() {
+		// Arrange
+		let registry = Arc::new(SiteRegistry::new());
+		registry.register(Site::new(
+			1,
+			"example.com".to_string(),
+			"Example".to_string(),
+		));
+
+		// Act - poison the RwLock by panicking while holding a write guard
+		let registry_clone = Arc::clone(&registry);
+		let _ = std::thread::spawn(move || {
+			let _guard = registry_clone.sites.write().unwrap();
+			panic!("intentional panic to poison lock");
+		})
+		.join();
+
+		// Assert - operations still work after poison recovery
+		registry.register(Site::new(2, "test.com".to_string(), "Test".to_string()));
+		assert!(registry.get_by_domain("example.com").is_some());
+		assert!(registry.get_by_domain("test.com").is_some());
+		assert_eq!(registry.all().len(), 2);
+
+		let default = Site::new(99, "default.com".to_string(), "Default".to_string());
+		registry.set_default(default);
+		assert!(registry.default_site().is_some());
+
+		registry.clear();
+		assert_eq!(registry.all().len(), 0);
 	}
 }

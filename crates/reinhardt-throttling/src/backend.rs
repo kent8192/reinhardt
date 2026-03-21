@@ -7,9 +7,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
 use tokio::time::{Duration, Instant};
 
+/// Backend trait for throttle storage.
+///
+/// Implementations store and retrieve request counts for rate limiting.
 #[async_trait]
 pub trait ThrottleBackend: Send + Sync {
+	/// Increment the request count for a key within the given time window (in seconds).
 	async fn increment(&self, key: &str, window: u64) -> Result<usize, String>;
+	/// Get the current request count for a key.
 	async fn get_count(&self, key: &str) -> Result<usize, String>;
 
 	/// Increment with Duration instead of u64
@@ -41,6 +46,7 @@ struct WindowEntry {
 /// Probabilistic eviction runs roughly once per this many increment operations.
 const EVICTION_INTERVAL: u64 = 100;
 
+/// In-memory throttle backend using a hash map with time-windowed entries.
 #[derive(Clone)]
 pub struct MemoryBackend<T: TimeProvider = SystemTimeProvider> {
 	storage: Arc<RwLock<HashMap<String, WindowEntry>>>,
@@ -58,7 +64,7 @@ impl MemoryBackend<SystemTimeProvider> {
 	/// use reinhardt_throttling::MemoryBackend;
 	///
 	/// let backend = MemoryBackend::new();
-	// Backend is ready to track rate limits in memory
+	/// // Backend is ready to track rate limits in memory
 	/// ```
 	pub fn new() -> Self {
 		Self {
@@ -146,6 +152,7 @@ impl<T: TimeProvider> ThrottleBackend for MemoryBackend<T> {
 	}
 }
 
+/// Redis-based throttle backend for distributed rate limiting.
 #[cfg(feature = "redis-backend")]
 pub struct RedisThrottleBackend {
 	client: redis::Client,
@@ -172,7 +179,7 @@ impl RedisThrottleBackend {
 	/// use reinhardt_throttling::RedisThrottleBackend;
 	///
 	/// let backend = RedisThrottleBackend::new("redis://127.0.0.1:6379").unwrap();
-	// Backend is now connected to Redis for distributed rate limiting
+	/// // Backend is now connected to Redis for distributed rate limiting
 	/// ```
 	pub fn new(url: &str) -> Result<Self, String> {
 		let client = redis::Client::open(url).map_err(|e| e.to_string())?;

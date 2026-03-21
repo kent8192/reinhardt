@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 /// Router trait - composes routes together
 pub trait Router: Send + Sync {
+	/// Add a route to this router.
 	fn add_route(&mut self, route: Route);
 
 	/// Mount routes from another source with a prefix
@@ -248,7 +249,7 @@ impl DefaultRouter {
 	/// router.register_viewset("test", viewset.clone());
 	///
 	/// let url_map = router.get_action_url_map(viewset.as_ref(), "http://testserver");
-	// The ViewSet has no extra actions, so the map will be empty
+	/// // The ViewSet has no extra actions, so the map will be empty
 	/// assert!(url_map.is_empty());
 	/// ```
 	pub fn get_action_url_map<V: ViewSet>(
@@ -479,7 +480,7 @@ impl Router for DefaultRouter {
 	/// let mut router = DefaultRouter::new();
 	/// router.mount("/users", users_routes, Some("users".to_string()));
 	///
-	// Routes are prefixed: /users/ and /users/{id}/
+	/// // Routes are prefixed: /users/ and /users/{id}/
 	/// assert_eq!(router.get_routes().len(), 2);
 	/// ```
 	fn mount(&mut self, prefix: &str, routes: Vec<Route>, namespace: Option<String>) {

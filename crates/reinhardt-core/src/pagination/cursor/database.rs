@@ -105,6 +105,7 @@ pub enum Direction {
 }
 
 /// Pagination errors specific to cursor operations
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaginationError {
 	/// Invalid cursor format or decoding error

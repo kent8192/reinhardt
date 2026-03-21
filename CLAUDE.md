@@ -4,7 +4,7 @@
 
 This file contains project-specific instructions for the Reinhardt project. These rules ensure code quality, maintainability, and consistent practices across the Rust codebase.
 
-For detailed standards, see documentation in `docs/` directory.
+For detailed standards, see documentation in `instructions/` directory.
 
 ---
 
@@ -75,7 +75,7 @@ See instructions/ANTI_PATTERNS.md for comprehensive anti-patterns guide.
 - Integration tests: Test integration points between components
   - Cross-crate integration: Place in `tests/` crate
   - Within-crate integration: Can place in functional crate
-- Functional crates MUST NOT include other Reinhardt crates in `dev-dependencies`
+- Functional crates MUST NOT use `{ workspace = true }` for `reinhardt-test` in `dev-dependencies` (use optional dependency or path-only dev-dependency; see KI-2)
 - ALL test artifacts MUST be cleaned up
 - Global state tests MUST use `#[serial(group_name)]`
 - Use strict assertions (`assert_eq!`) instead of loose matching (`contains`)
@@ -100,7 +100,7 @@ See instructions/TESTING_STANDARDS.md for comprehensive testing standards includ
 
 **Update Requirements:**
 - **ALWAYS** update docs when code changes (same workflow)
-- Update all relevant: README.md, crate README, docs/, lib.rs
+- Update all relevant: README.md, crate README, instructions/, lib.rs
 - Planned features go in `lib.rs` header, NOT in README.md
 - Test all code examples
 - Verify all links are valid
@@ -125,6 +125,28 @@ See instructions/DOCUMENTATION_STANDARDS.md for comprehensive documentation stan
 - Use `git apply <patchfile name>.patch` for partial file commits
 - **NEVER** execute batch commits without user confirmation
 
+**Draft PR Policy:**
+- **NEVER** convert a Draft PR to Ready for Review without explicit user instruction
+- **NO EXCEPTIONS**: Plan Mode approval does NOT authorize Draft PR conversion (unlike commits/pushes)
+- Before converting, ensure all CI checks pass and tests pass locally
+- Use `gh pr ready <number>` for conversion
+
+**Branch Operations:**
+- When merging branches and resolving conflicts, execute immediately without entering Plan Mode
+- Before creating branches, verify names don't conflict with existing ones using `git worktree list` and `git branch -a`
+
+**PR Conflict Resolution:**
+- **MUST** use worktree-based merge strategy for resolving PR conflicts (NOT rebase or force-push)
+- Procedure:
+  1. Create a local worktree for the PR source branch
+  2. Merge the target branch (e.g., `main`) into the source branch within the worktree
+  3. Resolve conflicts in the worktree
+  4. Commit the merge resolution
+  5. Push the source branch to remote
+  6. Clean up the worktree
+- **NEVER** use `git rebase` or `git push --force` to resolve PR conflicts
+- This preserves commit history and avoids force-push risks
+
 **GitHub Integration:**
 - **MUST** use GitHub CLI (`gh`) for all GitHub operations
 - Use `gh pr create` for creating pull requests
@@ -132,7 +154,11 @@ See instructions/DOCUMENTATION_STANDARDS.md for comprehensive documentation stan
 - Use `gh issue create` for creating issues
 - Use `gh issue view` for viewing issue details
 - Use `gh api` for accessing GitHub API
+- Use `gh discussion list` for viewing discussions
+- Use `gh discussion create` for creating discussions
+- For usage questions, prefer GitHub Discussions over Issues
 - **NEVER** use raw `curl` or web browser for GitHub operations when `gh` is available
+- When GitHub MCP tools return errors (e.g., 404), immediately fall back to `gh` CLI instead of retrying
 
 **GitHub Comments & Interactions:**
 - **NEVER** post comments on PRs or Issues without authorization
@@ -145,6 +171,7 @@ See instructions/DOCUMENTATION_STANDARDS.md for comprehensive documentation stan
 See instructions/GITHUB_INTERACTION.md for comprehensive GitHub interaction guidelines including:
 - Posting authorization policy (PP-1 ~ PP-3)
 - PR review response format (RR-1 ~ RR-3)
+- Copilot review handling (CR-1 ~ CR-5)
 - Issue discussion guidelines (ID-1 ~ ID-2)
 - Agent context provision (AC-1 ~ AC-2)
 
@@ -215,7 +242,8 @@ This project uses [release-plz](https://release-plz.ieni.dev/) for automated rel
 
 **Key Warnings (Lessons Learned):**
 - **NEVER** create circular publish dependency chains (functional crates must not dev-depend on other Reinhardt crates)
-- **NEVER** add `version` field to `reinhardt-test` workspace dependency (causes publish failure; see cargo#15151)
+- **MUST** declare `reinhardt-test` as an optional dependency (not dev-dependency) in functional crates for correct release-plz publish ordering (see KI-2 in instructions/RELEASE_PROCESS.md)
+- **MUST** include `version` field in `reinhardt-test` workspace dependency (same as other published crates)
 - **MUST** follow RP-1 recovery procedure for partial release failures (see instructions/RELEASE_PROCESS.md)
 - **NEVER** change `pr_branch_prefix` from `"release-plz-"` (breaks two-step release workflow)
 - `publish_no_verify = true` is required because dev-dependencies reference unpublished workspace crates
@@ -227,6 +255,7 @@ See instructions/RELEASE_PROCESS.md for detailed release procedures.
 - Run dry-run for ALL batch operations before actual execution
 - Use parallel agents for independent file edits
 - NO batch commits (create one at a time with user confirmation)
+- Execute straightforward operations (branch deletion, worktree cleanup) immediately without planning
 
 ### Issue Handling
 
@@ -258,13 +287,13 @@ cargo build --workspace --all --all-features
 
 **Testing:**
 ```bash
-cargo test --workspace --all --all-features
+cargo nextest run --workspace --all-features
 cargo test --doc  # Documentation tests
 ```
 
 **Code Quality:**
 ```bash
-cargo make fmt-check   # Cheeck format rules of the code
+cargo make fmt-check   # Check format rules of the code
 cargo make clippy-check  # Check lint rules of the code
 cargo make fmt-fix   # Automatically fix code based on formatting rules
 cargo make clippy-fix  # Automatically fix code based on lint rules
@@ -280,6 +309,11 @@ docker run --rm -v "$(pwd):/src" semgrep/semgrep semgrep scan --config .semgrep/
 
 # Semgrep: diff-aware scan (compare against main branch)
 docker run --rm -v "$(pwd):/src" semgrep/semgrep semgrep scan --config .semgrep/ --baseline-commit origin/main --error --metrics off
+```
+
+**Security Audit:**
+```bash
+cargo make audit  # Check for known vulnerabilities in dependencies
 ```
 
 **Placeholder Check (formatter artifact detection):**
@@ -379,6 +413,14 @@ cat .testcontainers.properties
 
 ## Review Process
 
+**CI Failure Diagnosis (Known Patterns):**
+- Check these recurring patterns first:
+  1. rustdoc intra-doc link errors with `-D warnings`
+  2. docs.rs build issues from empty code blocks
+  3. SemVer compatibility with `cargo-semver-checks`
+  4. Windows CI-specific failures
+- Always run `cargo doc --no-deps` locally before pushing doc-related fixes
+
 Before submitting code:
 
 1. **Run all commands:**
@@ -420,6 +462,7 @@ Before submitting code:
 - Delete temp files from `/tmp` immediately
 - Wait for explicit user instruction before commits
 - Understand that Plan Mode approval authorizes both implementation and commits
+- Wait for explicit user instruction before converting Draft PRs to Ready for Review (Plan Mode approval does NOT authorize conversion)
 - Mark placeholders with `todo!()` or `// TODO:`
 - Use `#[serial(group_name)]` for global state tests
 - Split commits by specific intent, not features
@@ -432,7 +475,7 @@ Before submitting code:
 - Use `deprecated` type for marking features/APIs as deprecated (dedicated CHANGELOG section)
 - Review Release PRs created by release-plz before merging
 - Verify no circular dev-dependency chains exist before publishing (functional crates must not dev-depend on other Reinhardt crates)
-- Keep `reinhardt-test` workspace dependency without `version` field (unpublished crate; cargo#15151)
+- Include `version` field in `reinhardt-test` workspace dependency (published crate, same as others)
 - Follow RP-1 procedure in instructions/RELEASE_PROCESS.md for partial release failures
 - Use GitHub CLI (`gh`) for all GitHub operations (PR, issues, releases)
 - Search existing issues before creating new ones
@@ -462,10 +505,31 @@ Before submitting code:
 - Include Claude Code attribution footer on all GitHub comments
 - Use repository-relative paths (not absolute) in GitHub comments
 - Provide structured agent context using AC-2 template format
+- Fall back to `gh` CLI when GitHub MCP tools return errors
+- Verify branch name uniqueness before creation (`git worktree list` and `git branch -a`)
+- Check known CI failure patterns before deep investigation
+- Run `cargo doc --no-deps` locally before pushing doc-related fixes
+- Execute merge/conflict resolution and straightforward operations immediately without Plan Mode
+- Use worktree-based merge strategy for PR conflict resolution (NOT rebase/force-push)
+- Apply `migration-approved` label to develop/* → main PRs (requires maintainer approval for version transition)
+- Apply `agent-suspect` label to all agent-detected bug Issues
+- Verify agent-detected bugs independently before removing `agent-suspect` label
+- Create `develop/0.x+1.0` branch when version group enters RC phase (DB-1)
+- Direct next-version features and breaking changes to `develop/0.x+1.0` during RC (DB-2)
+- Apply RC bug fixes to `main` first, then forward-merge to develop (DB-3)
+- Forward-merge `main` into develop branch regularly (DB-4)
+- Merge develop branch into `main` after stable release using merge commit, not squash (DB-5)
+- Use independent context (separate agent session) for agent re-evaluation of `agent-suspect` Issues
+- Obtain SP-6 approval before adding non-breaking APIs during RC phase (`enhancement` + `rc-addition` labels + maintainer approval)
+- Use three-dot diff (`main...branch`) for PR diff verification to exclude merge history noise
+- Evaluate, respond to, and resolve Copilot review comments after PR creation (CR-1 ~ CR-4)
+- Reply to every Copilot review thread before resolving it (no silent resolves)
+- Use GraphQL `resolveReviewThread` mutation to resolve Copilot review threads
 
 ### ❌ NEVER DO
 - Use `mod.rs` files (deprecated pattern)
 - Commit without user instruction (except Plan Mode approval)
+- Convert Draft PRs to Ready for Review without explicit user instruction (Plan Mode approval does NOT count)
 - Leave docs outdated after code changes
 - Document user requests or AI interactions in project documentation
 - Save files to project directory (use `/tmp`)
@@ -482,8 +546,8 @@ Before submitting code:
 - Manually bump versions in feature branches (let release-plz handle it)
 - Create release tags manually (release-plz creates them automatically)
 - Skip reviewing Release PRs before merging
-- Add `reinhardt-test` to functional crate `[dev-dependencies]` (creates circular publish dependency)
-- Add `version` field to `reinhardt-test` workspace dependency (breaks cargo publish; cargo#15151)
+- Use `reinhardt-test = { workspace = true }` in functional crate `[dev-dependencies]` (workspace deps include version, causing publish failures; use optional dep or path-only dev-dep instead)
+- Omit `version` field from `reinhardt-test` workspace dependency (causes publish failure for dependents)
 - Change `pr_branch_prefix` from `"release-plz-"` (breaks two-step release workflow)
 - Merge Release PR without rolling back unpublished crate versions after partial release failure
 - Write vague commit descriptions that are unclear as CHANGELOG entries (e.g., "fix issue", "update code")
@@ -515,6 +579,23 @@ Before submitting code:
 - Post vague or non-actionable GitHub comments
 - Skip Claude Code attribution footer on GitHub comments
 - Create PRs/Issues without following template structure
+- Enter Plan Mode for merge operations, branch deletion, or worktree cleanup
+- Retry GitHub MCP tools after errors instead of falling back to `gh` CLI
+- Create branches without checking for name conflicts
+- Use rebase or force-push to resolve PR conflicts (use worktree merge instead)
+- Merge develop/* branches into main without `migration-approved` label and CI version validation
+- Remove `agent-suspect` label without independent verification (separate agent or human)
+- Count `agent-suspect` labeled Issues toward stability timer reset (SC-2a)
+- Merge next-version features or breaking changes directly into `main` during RC (use `develop/0.x+1.0`)
+- Apply bug fixes only to the develop branch without fixing on `main` first (DB-3)
+- Configure release-plz to monitor the develop branch (DB-6)
+- Delete the develop branch before merging into `main` (DB-5)
+- Squash-merge the develop branch into `main` (DB-5)
+- Use the same agent context for both detection and verification of a bug
+- Use two-dot diff (`main..branch`) for PR verification (includes merge history noise)
+- Resolve Copilot review threads without posting a reply first
+- Poll in a loop waiting for Copilot review to appear
+- Dismiss valid Copilot review concerns without fixing the code
 
 ### 📚 Detailed Standards
 
@@ -525,9 +606,13 @@ For comprehensive guidelines, see:
 - **Documentation**: instructions/DOCUMENTATION_STANDARDS.md
 - **Git Commits**: instructions/COMMIT_GUIDELINE.md (includes CHANGELOG generation guidelines)
 - **Release Process**: instructions/RELEASE_PROCESS.md
+- **Stability Policy**: instructions/STABILITY_POLICY.md (includes DB-1 ~ DB-7 develop branch strategy)
+- **Agent Bug Discovery**: instructions/STABILITY_POLICY.md (SC-2a)
 - **Issues**: instructions/ISSUE_GUIDELINES.md
 - **Issue Handling**: instructions/ISSUE_HANDLING.md
 - **GitHub Interactions**: instructions/GITHUB_INTERACTION.md
+- **Copilot Review Handling**: instructions/GITHUB_INTERACTION.md (CR-1 ~ CR-5)
+- **GitHub Discussions**: https://github.com/kent8192/reinhardt-web/discussions
 - **Security Policy**: SECURITY.md
 - **Code of Conduct**: CODE_OF_CONDUCT.md
 - **Label Definitions**: .github/labels.yml

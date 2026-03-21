@@ -71,8 +71,8 @@ pub fn parse_dict(value: &str) -> HashMap<String, String> {
 			let key = key.trim().to_string();
 			let val = val.trim().to_string();
 
-			// Skip entries where both key and value are empty
-			if !key.is_empty() || !val.is_empty() {
+			// Skip entries where key or value is empty
+			if !key.is_empty() && !val.is_empty() {
 				map.insert(key, val);
 			}
 		}
@@ -82,7 +82,7 @@ pub fn parse_dict(value: &str) -> HashMap<String, String> {
 }
 
 /// Database URL configuration parsed from a connection string
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct DatabaseUrl {
 	/// Database engine (postgresql, mysql, sqlite, etc.)
 	pub engine: String,
@@ -108,6 +108,29 @@ pub struct DatabaseUrl {
 	/// Original URL string
 	pub url: String,
 }
+
+impl std::fmt::Debug for DatabaseUrl {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("DatabaseUrl")
+			.field("engine", &self.engine)
+			.field("name", &self.name)
+			.field("user", &self.user)
+			.field(
+				"password",
+				if self.password.is_some() {
+					&"Some([REDACTED])"
+				} else {
+					&"None"
+				},
+			)
+			.field("host", &self.host)
+			.field("port", &self.port)
+			.field("options", &self.options)
+			.field("url", &"[REDACTED]")
+			.finish()
+	}
+}
+
 /// Parse a database URL
 ///
 /// Supports formats:
@@ -210,8 +233,11 @@ fn parse_sqlite_url(url_str: &str) -> Result<DatabaseUrl, String> {
 /// Cache URL configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheUrl {
+	/// Cache backend type derived from the URL scheme (e.g., `"redis"`, `"locmem"`).
 	pub backend: String,
+	/// Backend-specific connection location parsed from the URL.
 	pub location: Option<String>,
+	/// Additional configuration options from URL query parameters.
 	pub options: HashMap<String, String>,
 }
 /// Parse a cache URL
@@ -306,6 +332,26 @@ mod tests {
 		let dict = parse_dict("key1=value1,key2=value2");
 		assert_eq!(dict.get("key1").unwrap(), "value1");
 		assert_eq!(dict.get("key2").unwrap(), "value2");
+	}
+
+	#[test]
+	fn test_parse_dict_skips_empty_key_or_value() {
+		// Empty key ("=value") should be skipped
+		let dict = parse_dict("=value");
+		assert!(dict.is_empty());
+
+		// Empty value ("key=") should be skipped
+		let dict = parse_dict("key=");
+		assert!(dict.is_empty());
+
+		// Both empty ("=") should be skipped
+		let dict = parse_dict("=");
+		assert!(dict.is_empty());
+
+		// Mixed: valid pair alongside empty key/value entries
+		let dict = parse_dict("=value,key=,valid=entry,=");
+		assert_eq!(dict.len(), 1);
+		assert_eq!(dict.get("valid").unwrap(), "entry");
 	}
 
 	#[test]

@@ -32,6 +32,20 @@ This file defines the pull request (PR) policy for the Reinhardt project. These 
 - **NEVER** use web browser UI for PR creation when MCP or CLI is available
 - MCP and CLI both ensure consistency and can be automated
 
+The following diagram summarizes the PR creation flow:
+
+```mermaid
+flowchart TD
+    A[Create new PR] --> B{GitHub MCP available?}
+    B -->|Yes| C[Use create_pull_request MCP tool]
+    B -->|No| D[Use gh pr create CLI]
+    C --> E[Follow PR template structure]
+    D --> E
+    E --> F[Add appropriate labels]
+    F --> G[Run pre-review checks]
+    G --> H[Request review]
+```
+
 **PR Template Location:** `.github/PULL_REQUEST_TEMPLATE.md`
 
 When creating PRs via `gh pr create`, the `--body` content MUST follow the PR template structure defined in `.github/PULL_REQUEST_TEMPLATE.md`.
@@ -70,13 +84,13 @@ When creating PRs via `gh pr create`, the `--body` content MUST follow the PR te
 ### PC-3 (MUST): Branch Naming
 
 - Branch names SHOULD follow the pattern: `<type>/<scope>-<short-description>`
-- Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, etc.
+- Types: `feature`, `fix`, `refactor`, `docs`, `test`, `chore`, etc.
 - Scope: Module or component name
 - Short description: Kebab-case brief summary
 
 **Examples:**
 ```
-feat/auth-jwt-validation
+feature/auth-jwt-validation
 fix/orm-connection-pool-race-condition
 refactor/http-middleware-pipeline
 docs/api-openapi-spec
@@ -85,6 +99,40 @@ chore/ci-github-actions-update
 ```
 
 **Exception:** Release branches follow the format `release/<crate>/vX.Y.Z` for compatibility with automated workflows.
+
+**RC Phase: Next-Version Feature Branches**
+
+During the RC phase, feature branches for the next version (breaking changes, new features) MUST target the `develop/0.x+1.0` branch instead of `main`:
+
+```
+# Feature branch targeting develop branch during RC
+feature/mysql-backend       → PR target: develop/0.2.0
+feat/new-query-builder      → PR target: develop/0.2.0
+refactor/trait-redesign     → PR target: develop/0.2.0
+
+# Bug fix branches still target main during RC
+fix/connection-pool-leak    → PR target: main
+```
+
+See instructions/STABILITY_POLICY.md § DB-2 for permitted changes on the develop branch.
+
+The following diagram illustrates branch targeting during the RC phase:
+
+```mermaid
+gitGraph
+    commit id: "v0.1.0-rc.1"
+    branch "develop/0.2.0"
+    checkout main
+    branch "fix/pool-leak"
+    commit id: "fix: pool leak"
+    checkout main
+    merge "fix/pool-leak" id: "bug fix to main"
+    checkout "develop/0.2.0"
+    branch "feature/mysql"
+    commit id: "feat: mysql support"
+    checkout "develop/0.2.0"
+    merge "feature/mysql" id: "feature to develop"
+```
 
 ### PC-4 (SHOULD): Draft PRs for Work in Progress
 
@@ -95,6 +143,58 @@ chore/ci-github-actions-update
 **Example:**
 ```bash
 gh pr create --draft --title "feat(auth): add JWT validation (WIP)"
+```
+
+### PC-4a (MUST): Draft PR Conversion Protection
+
+Converting a Draft PR to Ready for Review is a **visibility-affecting action** that exposes the PR to reviewers and triggers notifications. This conversion **MUST** require explicit user instruction.
+
+**Rules:**
+- **NEVER** convert a Draft PR to Ready for Review without explicit user instruction
+- **Plan Mode approval does NOT authorize Draft PR conversion** (unlike commits/pushes)
+  - Rationale: Plan Mode authorizes *implementation work* (code changes, commits, pushes), but Draft PR conversion is a *review readiness decision* that only the user can make
+- Before converting, ensure all CI checks pass and tests pass locally
+- Use `gh pr ready <number>` for conversion
+
+**Pre-Conversion Checklist:**
+- [ ] User has explicitly instructed conversion
+- [ ] All CI checks pass
+- [ ] All tests pass locally
+- [ ] PR description is complete and accurate
+- [ ] Code follows project style guidelines
+- [ ] Documentation is updated (if applicable)
+
+**Example:**
+```bash
+# Convert Draft PR to Ready for Review (ONLY after explicit user instruction)
+gh pr ready 123
+
+# Verify PR status after conversion
+gh pr view 123 --json isDraft
+```
+
+**Authorization Comparison:**
+
+| Action | Explicit Instruction | Plan Mode Approval |
+|--------|---------------------|-------------------|
+| Commit | ✅ Authorized | ✅ Authorized |
+| Push | ✅ Authorized | ✅ Authorized |
+| GitHub Comments | ✅ Authorized | ✅ Authorized |
+| Draft PR → Ready | ✅ Authorized | ❌ NOT Authorized |
+
+The following diagram illustrates the Draft PR lifecycle:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Draft: gh pr create --draft
+    Draft --> Draft: Implementation continues
+    Draft --> Draft: CI checks run
+    Draft --> ReadyForReview: User explicitly instructs conversion
+    note right of ReadyForReview: Requires explicit user instruction\nPlan Mode approval NOT sufficient
+    ReadyForReview --> Review: Reviewers notified
+    Review --> Merged: Approved and merged
+    Review --> Draft: Converted back to draft
+    Merged --> [*]
 ```
 
 ### PC-5 (MUST): PR Labels
@@ -278,7 +378,7 @@ feat(api)!: change response format to JSON:API specification
   - **MUST NOT** end with a period
   - Keep under 72 characters for readability
 
-**See**: @docs/COMMIT_GUIDELINE.md for detailed commit type definitions
+**See**: @instructions/COMMIT_GUIDELINE.md for detailed commit type definitions
 
 ---
 
@@ -386,7 +486,113 @@ cargo make clippy-check
 - Each PR should have a single, clear purpose
 - Smaller PRs are easier to review and less risky to merge
 
-**For batch issue handling**: See docs/ISSUE_HANDLING.md for work unit principles (WU-1 ~ WU-3) on how to scope PRs when addressing multiple issues.
+**For batch issue handling**: See instructions/ISSUE_HANDLING.md for work unit principles (WU-1 ~ WU-3) on how to scope PRs when addressing multiple issues.
+
+### RP-5 (MUST): Use Three-Dot Diff for PR Verification
+
+Use three-dot diff for verifying PR changes.
+
+- **MUST** use three-dot diff (`...`) to verify PR changes from the merge base
+- Three-dot diff excludes merge history noise and shows only changes introduced by the PR
+- This applies to both manual review and automated diff verification
+
+**Commands:**
+```bash
+# Three-dot diff: shows changes from merge base (CORRECT)
+git diff main...feature-branch
+
+# Two-dot diff: includes merge history noise (AVOID)
+git diff main..feature-branch
+```
+
+**GitHub CLI:**
+```bash
+# View PR diff (GitHub uses three-dot diff by default)
+gh pr diff <number>
+```
+
+**Rationale:**
+- Two-dot diff includes all commits reachable from one branch but not the other, polluting the diff with merge history
+- Three-dot diff compares the tip of the feature branch against the merge base (common ancestor), showing only the PR's actual changes
+
+---
+
+## PR Conflict Resolution
+
+### CR-1 (MUST): Worktree-Based Merge Strategy
+
+PR conflicts MUST be resolved using a worktree-based merge strategy. Rebase and force-push are NOT allowed for conflict resolution.
+
+**Procedure:**
+
+1. Create a worktree for the source branch:
+   ```bash
+   git worktree add /tmp/<worktree-name> <source-branch>
+   ```
+2. In the worktree, merge the target branch:
+   ```bash
+   cd /tmp/<worktree-name>
+   git merge <target-branch>
+   ```
+3. Resolve conflicts and commit:
+   ```bash
+   # Resolve conflicts in files
+   git add <resolved-files>
+   git commit
+   ```
+4. Push and clean up:
+   ```bash
+   git push origin <source-branch>
+   cd -
+   git worktree remove /tmp/<worktree-name>
+   ```
+
+**Rationale:**
+- Preserves complete commit history
+- Avoids force-push risks (overwriting upstream changes)
+- Merge commits clearly document conflict resolution
+- Worktree isolation prevents interference with current work
+
+The following sequence diagram shows the worktree-based conflict resolution workflow:
+
+```mermaid
+sequenceDiagram
+    participant D as Developer
+    participant M as Main Repo
+    participant W as Worktree
+    participant R as Remote
+
+    D->>M: git worktree add /tmp/wt source-branch
+    D->>W: cd /tmp/wt
+    D->>W: git merge target-branch
+    Note over W: Resolve conflicts in files
+    D->>W: git add + git commit
+    D->>R: git push origin source-branch
+    D->>M: git worktree remove /tmp/wt
+```
+
+The following git graph shows how the merge commit appears in the branch history:
+
+```mermaid
+gitGraph
+    commit id: "main commits..."
+    branch feature-branch
+    commit id: "feature work"
+    commit id: "more changes"
+    checkout main
+    commit id: "new main commits (cause conflict)"
+    checkout feature-branch
+    merge main id: "resolve conflicts (worktree merge)"
+    commit id: "continue work"
+```
+
+### CR-2 (NEVER): Prohibited Approaches
+
+- **NEVER** use `git rebase` to resolve PR conflicts
+- **NEVER** use `git push --force` or `git push --force-with-lease` for conflict resolution
+- **NEVER** use `git reset --hard` as part of conflict resolution workflow
+
+**Exception:** Rebase may be used ONLY when explicitly requested by the user, with clear understanding of the implications.
 
 ---
 
@@ -400,7 +606,7 @@ A PR can only be merged when:
 - All conversations are resolved
 - At least one approval from a maintainer (if required by repo settings)
 - No merge conflicts with base branch
-- All commits follow commit guidelines (@docs/COMMIT_GUIDELINE.md)
+- All commits follow commit guidelines (@instructions/COMMIT_GUIDELINE.md)
 
 ### MP-2 (MUST): Merge Strategy
 
@@ -420,6 +626,43 @@ A PR can only be merged when:
 - Creates additional merge commit
 - Only use for merging long-lived branches
 - Generally avoid for feature branches
+
+The following diagrams compare the three merge strategies:
+
+**Squash and Merge (Default):**
+
+```mermaid
+gitGraph
+    commit id: "main"
+    branch feature
+    commit id: "wip: draft"
+    commit id: "fix: typo"
+    commit id: "feat: complete"
+    checkout main
+    commit id: "feat: add feature (squashed)" type: HIGHLIGHT
+```
+
+**Rebase and Merge:**
+
+```mermaid
+gitGraph
+    commit id: "main"
+    commit id: "feat: step 1 (rebased)" type: HIGHLIGHT
+    commit id: "feat: step 2 (rebased)" type: HIGHLIGHT
+    commit id: "feat: step 3 (rebased)" type: HIGHLIGHT
+```
+
+**Merge Commit (Avoid for features):**
+
+```mermaid
+gitGraph
+    commit id: "main"
+    branch feature
+    commit id: "feat: step 1"
+    commit id: "feat: step 2"
+    checkout main
+    merge feature id: "Merge branch feature"
+```
 
 ### MP-3 (SHOULD): Delete Branch After Merge
 
@@ -478,7 +721,49 @@ Version Changes:
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 ```
 
-**See**: @docs/RELEASE_PROCESS.md for detailed release procedures
+**See**: @instructions/RELEASE_PROCESS.md for detailed release procedures
+
+### Develop Branch PRs
+
+For PRs from `develop/*` branches targeting `main` (version transitions):
+
+**Requirements:**
+
+- **MUST** have `migration-approved` label applied by maintainer
+- Branch name MUST follow `develop/X.Y.Z` format
+- Version transition MUST be valid: `develop_minor == main_minor + 1` and `patch == 0`
+- CI workflow `Develop Merge Guard` validates these requirements automatically
+
+**Guard Behavior:**
+
+| Source Branch | `migration-approved` Label | Version Valid | Result |
+|--------------|---------------------------|---------------|--------|
+| Non-develop | N/A | N/A | Pass (guard skipped) |
+| `develop/*` | Missing | Any | Fail |
+| `develop/*` | Present | Invalid | Fail |
+| `develop/*` | Present | Valid | Pass |
+
+**Title Format:**
+```
+feat!: merge develop/X.Y.Z into main
+
+Example:
+feat!: merge develop/0.2.0 into main
+```
+
+**Example:**
+```bash
+# Apply migration-approved label (maintainer only)
+gh pr edit <number> --add-label migration-approved
+
+# Create develop branch PR
+gh pr create --title "feat!: merge develop/0.2.0 into main" \
+  --base main \
+  --head develop/0.2.0 \
+  --label migration-approved,breaking-change
+```
+
+**See**: `.github/workflows/develop-merge-guard.yml` for CI guard implementation
 
 ### Documentation-Only PRs
 
@@ -512,6 +797,8 @@ docs(readme): add installation instructions
 - Run all checks before requesting review
 - Address all review comments
 - Ensure all CI checks pass before merge
+- Use three-dot diff (`main...branch`) for PR verification to exclude merge history noise
+- Wait for explicit user instruction before converting Draft PRs to Ready for Review (Plan Mode approval does NOT authorize conversion)
 
 ### ❌ NEVER DO
 - Write PR titles or descriptions in non-English languages
@@ -522,14 +809,17 @@ docs(readme): add installation instructions
 - Merge with failing CI checks
 - Leave unresolved review comments
 - Force push after review has started (unless explicitly requested)
+- Use rebase or force-push to resolve PR conflicts (use worktree merge instead)
+- Use two-dot diff (`main..branch`) for PR verification (includes merge history noise)
+- Convert Draft PRs to Ready for Review without explicit user instruction (Plan Mode approval does NOT count)
 
 ---
 
 ## Related Documentation
 
 - **Main Quick Reference**: @CLAUDE.md (see Quick Reference section)
-- **Issue Handling Principles**: docs/ISSUE_HANDLING.md
-- **Commit Guidelines**: @docs/COMMIT_GUIDELINE.md
-- **Release Process**: @docs/RELEASE_PROCESS.md
+- **Issue Handling Principles**: instructions/ISSUE_HANDLING.md
+- **Commit Guidelines**: @instructions/COMMIT_GUIDELINE.md
+- **Release Process**: @instructions/RELEASE_PROCESS.md
 - **GitHub MCP Tools**: Available when GitHub MCP server is configured
 - **GitHub CLI Documentation (fallback)**: https://cli.github.com/manual/

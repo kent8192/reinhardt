@@ -38,6 +38,7 @@ use thiserror::Error;
 ///
 /// Returned by checked arithmetic functions and safe type conversions when
 /// the operation cannot be performed safely.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum CheckedArithmeticError {
 	/// Arithmetic overflow occurred.

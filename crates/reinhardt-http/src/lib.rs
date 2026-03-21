@@ -1,7 +1,50 @@
-//! HTTP request and response handling for Reinhardt framework.
+#![warn(missing_docs)]
+//! # Reinhardt HTTP
 //!
-//! This crate provides core HTTP abstractions including request and response types,
-//! header handling, and content negotiation.
+//! HTTP request and response handling for the Reinhardt framework.
+//!
+//! This crate provides core HTTP abstractions including typed request and response types,
+//! header handling, content negotiation, file uploads, and middleware composition.
+//!
+//! ## Quick Start
+//!
+//! ```rust
+//! use reinhardt_http::{Request, Response};
+//! use hyper::{Method, HeaderMap};
+//!
+//! // Build a request
+//! let request = Request::builder()
+//!     .method(Method::GET)
+//!     .uri("/api/status")
+//!     .version(hyper::Version::HTTP_11)
+//!     .headers(HeaderMap::new())
+//!     .body(bytes::Bytes::new())
+//!     .build()
+//!     .unwrap();
+//!
+//! // Create a simple response
+//! let response = Response::ok().with_body("OK");
+//! ```
+//!
+//! ## Architecture
+//!
+//! Key modules in this crate:
+//!
+//! - [`request`]: Typed HTTP request wrapper with builder pattern and trusted proxy support
+//! - [`response`]: HTTP response with helpers for JSON, streaming, and error responses
+//! - [`middleware`]: Middleware trait and composition chain for request processing
+//! - [`auth_state`]: Authentication state extensions stored in request context
+//! - [`upload`]: File upload handling (in-memory and temporary file backends)
+//! - [`chunked_upload`]: Resumable chunked upload session management
+//! - [`extensions`]: Typed request extension storage
+//!
+//! ## Feature Flags
+//!
+//! | Feature | Default | Description |
+//! |---------|---------|-------------|
+//! | `parsers` | enabled | Request body parsing (JSON, Form, Multipart) |
+//! | `messages` | disabled | Flash message middleware for session-based notifications |
+//! | `full` | disabled | Enables all optional features |
 //!
 //! ## Request Construction
 //!
@@ -37,14 +80,22 @@
 //!     .unwrap();
 //! ```
 
+/// Authentication state tracking for requests.
 pub mod auth_state;
+/// Chunked file upload handling with progress tracking.
 pub mod chunked_upload;
+/// Request extension storage for passing data between middleware.
 pub mod extensions;
+/// Flash messages middleware for one-time notifications.
 #[cfg(feature = "messages")]
 pub mod messages_middleware;
+/// Middleware trait and handler chain.
 pub mod middleware;
+/// HTTP request type and builder.
 pub mod request;
+/// HTTP response type and builder.
 pub mod response;
+/// File upload handling and validation.
 pub mod upload;
 
 pub use auth_state::AuthState;

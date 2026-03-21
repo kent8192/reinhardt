@@ -92,14 +92,21 @@ pub trait User: Send + Sync {
 /// assert!(user.is_admin());
 /// assert!(user.is_staff());
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SimpleUser {
+	/// Unique identifier for the user.
 	pub id: Uuid,
+	/// The user's login name.
 	pub username: String,
+	/// The user's email address.
 	pub email: String,
+	/// Whether the user account is active.
 	pub is_active: bool,
+	/// Whether the user has admin privileges.
 	pub is_admin: bool,
+	/// Whether the user is a staff member.
 	pub is_staff: bool,
+	/// Whether the user has superuser privileges.
 	pub is_superuser: bool,
 }
 
@@ -151,6 +158,7 @@ impl User for SimpleUser {
 /// assert_eq!(anon.username(), "");
 /// assert_eq!(anon.id(), "");
 /// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnonymousUser;
 
 impl User for AnonymousUser {

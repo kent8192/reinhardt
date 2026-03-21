@@ -7,7 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-alpha.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-server@v0.1.0-alpha.8...reinhardt-server@v0.1.0-alpha.9) - 2026-02-23
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-server@v0.1.0-rc.11...reinhardt-server@v0.1.0-rc.12) - 2026-03-18
+
+### Security
+
+- *(server)* route error handler through SafeErrorResponse
+
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-server@v0.1.0-rc.8...reinhardt-server@v0.1.0-rc.9) - 2026-03-15
+
+### Styling
+
+- add explanatory comments to remaining #[allow(dead_code)] attributes
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-server@v0.1.0-rc.1...reinhardt-server@v0.1.0-rc.2) - 2026-03-04
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-server@v0.1.0-alpha.8...reinhardt-server@v0.1.0-rc.1) - 2026-02-23
 
 ### Maintenance
 

@@ -70,7 +70,7 @@ impl AdminAuth {
 		Self { auth_state }
 	}
 
-	/// Creates a new AdminAuth from an Arc<Request>.
+	/// Creates a new AdminAuth from an `Arc<Request>`.
 	///
 	/// # Arguments
 	///

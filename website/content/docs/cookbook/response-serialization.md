@@ -123,7 +123,7 @@ async fn not_found() -> Response {
 Stream large or chunked data.
 
 ```rust
-use reinhardt::StreamingResponse;
+use reinhardt::http::StreamingResponse;
 use futures::stream;
 use bytes::Bytes;
 
@@ -142,7 +142,7 @@ async fn stream_data() -> StreamingResponse<impl Stream<Item = Result<Bytes, Box
 ### Server-Sent Events
 
 ```rust
-use reinhardt::StreamingResponse;
+use reinhardt::http::StreamingResponse;
 use futures::stream;
 use std::time::Duration;
 
@@ -176,7 +176,9 @@ async fn handle_result() -> Response {
 
     match result {
         Ok(data) => Response::ok().with_json(&data).unwrap(),
-        Err(e) => Response::from(e), // Automatically converts to JSON error response
+        Err(e) => Response::bad_request()
+            .with_json(&serde_json::json!({"error": e.to_string()}))
+            .unwrap(),
     }
 }
 ```

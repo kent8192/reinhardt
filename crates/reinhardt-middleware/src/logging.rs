@@ -8,6 +8,7 @@ use std::time::Instant;
 /// Configuration for logging middleware
 ///
 /// Controls how request/response information is logged.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct LoggingConfig {
 	/// Whether to include raw values (request body, etc.) in error logs.

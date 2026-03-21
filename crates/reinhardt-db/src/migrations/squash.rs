@@ -37,11 +37,11 @@ use std::collections::HashSet;
 /// ```rust
 /// use reinhardt_db::migrations::squash::SquashOptions;
 ///
-/// let options = SquashOptions {
-///     optimize: true,
-///     no_optimize: false,
-/// };
+/// let options = SquashOptions::default();
+/// assert!(options.optimize);
+/// assert!(!options.no_optimize);
 /// ```
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct SquashOptions {
 	/// Enable operation optimization (remove redundant operations)

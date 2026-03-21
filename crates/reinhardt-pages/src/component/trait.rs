@@ -46,12 +46,14 @@ pub trait Component: 'static {
 // 2. Use render() directly: component.render() returns Page
 
 /// A boxed component for dynamic dispatch.
+// Allow dead_code: type alias reserved for future dynamic component rendering
 #[allow(dead_code)]
 pub(super) struct DynComponent {
 	inner: Box<dyn Component>,
 	name: &'static str,
 }
 
+// Allow dead_code: impl block for DynComponent reserved for future dynamic dispatch
 #[allow(dead_code)]
 impl DynComponent {
 	/// Creates a new dynamic component.
@@ -84,6 +86,7 @@ impl std::fmt::Debug for DynComponent {
 /// Helper trait for creating components from functions.
 ///
 /// This allows simple functions to be used as components.
+// Allow dead_code: trait reserved for future function-to-component adapter API
 #[allow(dead_code)]
 pub(super) trait FnComponent<Args> {
 	/// The output type of the function.

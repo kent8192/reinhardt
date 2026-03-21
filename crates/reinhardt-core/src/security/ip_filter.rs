@@ -33,7 +33,7 @@ pub enum IpFilterMode {
 /// let ip2: IpAddr = "192.168.2.1".parse().unwrap();
 /// assert!(!config.is_allowed(&ip2));
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IpFilterConfig {
 	/// Filtering mode
 	pub mode: IpFilterMode,
@@ -198,6 +198,7 @@ impl Default for IpFilterConfig {
 }
 
 /// IP Filtering Middleware
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IpFilterMiddleware {
 	config: IpFilterConfig,
 }

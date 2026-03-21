@@ -11,16 +11,30 @@ use std::marker::PhantomData;
 /// Field type metadata for ModelForm field inference
 #[derive(Debug, Clone)]
 pub enum FieldType {
-	Char { max_length: Option<usize> },
+	/// Character field with optional maximum length constraint.
+	Char {
+		/// Maximum character length, if any.
+		max_length: Option<usize>,
+	},
+	/// Multi-line text field rendered as a textarea.
 	Text,
+	/// Integer number field.
 	Integer,
+	/// Floating-point number field.
 	Float,
+	/// Boolean field rendered as a checkbox.
 	Boolean,
+	/// Date and time field.
 	DateTime,
+	/// Date-only field.
 	Date,
+	/// Time-only field.
 	Time,
+	/// Email address field with format validation.
 	Email,
+	/// URL field with format validation.
 	Url,
+	/// JSON data field.
 	Json,
 }
 
@@ -131,25 +145,31 @@ pub struct ModelFormConfig {
 }
 
 impl ModelFormConfig {
+	/// Creates a new default configuration.
 	pub fn new() -> Self {
 		Self::default()
 	}
+	/// Sets the list of fields to include in the generated form.
 	pub fn fields(mut self, fields: Vec<String>) -> Self {
 		self.fields = Some(fields);
 		self
 	}
+	/// Sets the list of fields to exclude from the generated form.
 	pub fn exclude(mut self, exclude: Vec<String>) -> Self {
 		self.exclude = exclude;
 		self
 	}
+	/// Overrides the widget for a specific field.
 	pub fn widget(mut self, field: String, widget: crate::Widget) -> Self {
 		self.widgets.insert(field, widget);
 		self
 	}
+	/// Sets a custom label for a specific field.
 	pub fn label(mut self, field: String, label: String) -> Self {
 		self.labels.insert(field, label);
 		self
 	}
+	/// Sets custom help text for a specific field.
 	pub fn help_text(mut self, field: String, text: String) -> Self {
 		self.help_texts.insert(field, text);
 		self
@@ -160,6 +180,7 @@ impl ModelFormConfig {
 pub struct ModelForm<T: FormModel> {
 	form: Form,
 	instance: Option<T>,
+	// Allow dead_code: config stored for future form rendering customization
 	#[allow(dead_code)]
 	config: ModelFormConfig,
 	_phantom: PhantomData<T>,
@@ -269,7 +290,7 @@ impl<T: FormModel> ModelForm<T> {
 	/// ```ignore
 	/// use reinhardt_forms::{ModelForm, ModelFormConfig};
 	///
-	// Assuming we have a model that implements the Model trait
+	/// // Assuming we have a model that implements the Model trait
 	/// let config = ModelFormConfig::new();
 	/// let form = ModelForm::new(Some(instance), config);
 	/// ```
@@ -428,12 +449,15 @@ impl<T: FormModel> ModelForm<T> {
 		}
 	}
 
+	/// Returns a reference to the underlying form.
 	pub fn form(&self) -> &Form {
 		&self.form
 	}
+	/// Returns a mutable reference to the underlying form.
 	pub fn form_mut(&mut self) -> &mut Form {
 		&mut self.form
 	}
+	/// Returns a reference to the model instance, if one exists.
 	pub fn instance(&self) -> Option<&T> {
 		self.instance.as_ref()
 	}
@@ -446,28 +470,34 @@ pub struct ModelFormBuilder<T: FormModel> {
 }
 
 impl<T: FormModel> ModelFormBuilder<T> {
+	/// Creates a new `ModelFormBuilder` with default configuration.
 	pub fn new() -> Self {
 		Self {
 			config: ModelFormConfig::default(),
 			_phantom: PhantomData,
 		}
 	}
+	/// Sets the list of fields to include in the form.
 	pub fn fields(mut self, fields: Vec<String>) -> Self {
 		self.config.fields = Some(fields);
 		self
 	}
+	/// Sets the list of fields to exclude from the form.
 	pub fn exclude(mut self, exclude: Vec<String>) -> Self {
 		self.config.exclude = exclude;
 		self
 	}
+	/// Overrides the widget for a specific field.
 	pub fn widget(mut self, field: String, widget: crate::Widget) -> Self {
 		self.config.widgets.insert(field, widget);
 		self
 	}
+	/// Overrides the label for a specific field.
 	pub fn label(mut self, field: String, label: String) -> Self {
 		self.config.labels.insert(field, label);
 		self
 	}
+	/// Overrides the help text for a specific field.
 	pub fn help_text(mut self, field: String, text: String) -> Self {
 		self.config.help_texts.insert(field, text);
 		self

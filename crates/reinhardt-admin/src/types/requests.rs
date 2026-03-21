@@ -114,8 +114,11 @@ pub struct BulkDeleteRequest {
 #[serde(rename_all = "lowercase")]
 #[derive(Default)]
 pub enum ExportFormat {
+	/// JSON format (default).
 	#[default]
 	Json,
+	/// Comma-separated values format.
 	Csv,
+	/// Tab-separated values format.
 	Tsv,
 }

@@ -195,16 +195,16 @@ impl PageNumberPagination {
 	/// let paginator = PageNumberPagination::new().page_size(5);
 	/// let items: Vec<i32> = (1..=20).collect();
 	///
-	// Get page 2
+	/// // Get page 2
 	/// let page = paginator.get_page(&items, Some("2"));
 	/// assert_eq!(page.number, 2);
 	/// assert_eq!(page.len(), 5);
 	///
-	// Invalid page number defaults to page 1
+	/// // Invalid page number defaults to page 1
 	/// let page = paginator.get_page(&items, Some("invalid"));
 	/// assert_eq!(page.number, 1);
 	///
-	// Out of range page number returns last page
+	/// // Out of range page number returns last page
 	/// let page = paginator.get_page(&items, Some("100"));
 	/// assert_eq!(page.number, 4);
 	/// ```
@@ -324,8 +324,7 @@ impl PageNumberPagination {
 	}
 
 	fn build_url(&self, base_url: &str, page: usize) -> String {
-		let url = url::Url::parse(base_url)
-			.unwrap_or_else(|_| url::Url::parse(&format!("http://localhost{}", base_url)).unwrap());
+		let url = super::parse_base_url(base_url);
 
 		let mut new_url = url.clone();
 		new_url
@@ -469,5 +468,31 @@ impl AsyncPaginator for PageNumberPagination {
 
 	fn get_schema_parameters(&self) -> Vec<SchemaParameter> {
 		Paginator::get_schema_parameters(self)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use rstest::rstest;
+
+	use super::*;
+
+	#[rstest]
+	#[case("not a valid url at all \x00\x01")]
+	#[case("://missing-scheme")]
+	#[case("")]
+	fn build_url_does_not_panic_with_malformed_base_url(#[case] malformed_url: &str) {
+		// Arrange
+		let paginator = PageNumberPagination::new();
+		let items: Vec<i32> = (0..20).collect();
+
+		// Act
+		let result = paginator.paginate(&items, None, malformed_url);
+
+		// Assert
+		assert!(
+			result.is_ok(),
+			"paginate should not panic with malformed URL: {malformed_url:?}"
+		);
 	}
 }

@@ -49,6 +49,7 @@ impl TransactionMode {
 /// Migration execution plan
 #[derive(Debug, Clone)]
 pub struct MigrationPlan {
+	/// The migrations.
 	pub migrations: Vec<Migration>,
 	/// Transaction mode for execution
 	pub transaction_mode: TransactionMode,
@@ -139,7 +140,7 @@ impl MigrationPlan {
 	///
 	/// plan.sort().unwrap();
 	///
-	// After sorting, 0001 should come before 0002
+	/// // After sorting, 0001 should come before 0002
 	/// assert_eq!(plan.migrations[0].name, "0001_initial");
 	/// assert_eq!(plan.migrations[1].name, "0002_add_field");
 	/// ```

@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.11...reinhardt-middleware@v0.1.0-rc.12) - 2026-03-18
+
+### Security
+
+- *(middleware)* add Vary header when wildcard origins combined with credentials
+
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.8...reinhardt-middleware@v0.1.0-rc.9) - 2026-03-15
+
+### Fixed
+
+- *(middleware)* replace parse().unwrap() with safe alternatives for panic prevention
+- *(middleware)* correct header handling on parse failures
+
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.4...reinhardt-middleware@v0.1.0-rc.5) - 2026-03-07
+
+### Fixed
+
+- remove develop/0.2.0 content accidentally merged via PR [[#1918](https://github.com/kent8192/reinhardt-web/issues/1918)](https://github.com/kent8192/reinhardt-web/issues/1918)
+
+## [0.1.0-rc.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.2...reinhardt-middleware@v0.1.0-rc.3) - 2026-03-05
+
+### Fixed
+
+- *(release)* use path-only dev-dep for reinhardt-test in cyclic crates
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.1...reinhardt-middleware@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(middleware)* validate host header against allowed hosts in HTTPS redirect
+- *(middleware)* add missing import in HttpsRedirectMiddleware doc test
+- *(meta)* fix workspace inheritance and authors metadata
+
+### Maintenance
+
+- *(testing)* add insta snapshot testing dependency across all crates
+
+### Other
+
+- resolve conflict with main (criterion version)
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.15...reinhardt-middleware@v0.1.0-rc.1) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-auth
+
 ## [0.1.0-alpha.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-alpha.14...reinhardt-middleware@v0.1.0-alpha.15) - 2026-02-23
 
 ### Maintenance

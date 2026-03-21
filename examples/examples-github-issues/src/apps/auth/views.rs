@@ -2,8 +2,8 @@
 //!
 //! This module contains Query and Mutation resolvers for user authentication operations.
 
-use async_graphql::{Context, ID, Object, Result as GqlResult};
 use chrono::Utc;
+use reinhardt::graphql::{Context, Error as GqlError, GqlResult, ID, Object};
 use reinhardt::{BaseUser, JwtAuth};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -37,6 +37,16 @@ impl UserStorage {
 		self.users.read().await.get(id).cloned()
 	}
 
+	/// Find a user by email
+	pub async fn find_by_email(&self, email: &str) -> Option<User> {
+		self.users
+			.read()
+			.await
+			.values()
+			.find(|u| u.email == email)
+			.cloned()
+	}
+
 	/// Find a user by username
 	pub async fn find_by_username(&self, username: &str) -> Option<User> {
 		self.users
@@ -62,13 +72,12 @@ impl AuthQuery {
 	/// Get current authenticated user
 	async fn me(&self, ctx: &Context<'_>) -> GqlResult<Option<UserType>> {
 		use reinhardt::Claims;
-		let claims = ctx.data_opt::<Claims>();
-		if let Some(claims) = claims {
-			let storage = ctx.data::<UserStorage>()?;
-			let user = storage.get_user(&claims.sub).await;
-			return Ok(user.map(UserType));
-		}
-		Ok(None)
+		let claims = ctx
+			.data_opt::<Claims>()
+			.ok_or_else(|| GqlError::new("Authentication required"))?;
+		let storage = ctx.data::<UserStorage>()?;
+		let user = storage.get_user(&claims.sub).await;
+		Ok(user.map(UserType))
 	}
 
 	/// List all users
@@ -100,20 +109,20 @@ impl AuthMutation {
 		let user = storage
 			.find_by_username(&input.username)
 			.await
-			.ok_or_else(|| async_graphql::Error::new("Invalid credentials"))?;
+			.ok_or_else(|| GqlError::new("Invalid credentials"))?;
 
 		// Verify password
 		if !user
 			.check_password(&input.password)
-			.map_err(|e| async_graphql::Error::new(e.to_string()))?
+			.map_err(|e| GqlError::new(e.to_string()))?
 		{
-			return Err(async_graphql::Error::new("Invalid credentials"));
+			return Err(GqlError::new("Invalid credentials"));
 		}
 
 		// Generate JWT token
 		let token = jwt_auth
 			.generate_token(user.id.to_string(), user.username.clone())
-			.map_err(|e| async_graphql::Error::new(e.to_string()))?;
+			.map_err(|e| GqlError::new(e.to_string()))?;
 
 		Ok(AuthPayload { token, user })
 	}
@@ -125,7 +134,12 @@ impl AuthMutation {
 
 		// Check if username already exists
 		if storage.find_by_username(&input.username).await.is_some() {
-			return Err(async_graphql::Error::new("Username already taken"));
+			return Err(GqlError::new("Username already taken"));
+		}
+
+		// Check if email already exists
+		if storage.find_by_email(&input.email).await.is_some() {
+			return Err(GqlError::new("Email already in use"));
 		}
 
 		// Create new user with struct initialization instead of field reassignment
@@ -140,14 +154,14 @@ impl AuthMutation {
 			..Default::default()
 		};
 		user.set_password(&input.password)
-			.map_err(|e| async_graphql::Error::new(e.to_string()))?;
+			.map_err(|e| GqlError::new(e.to_string()))?;
 
 		storage.add_user(user.clone()).await;
 
 		// Generate JWT token
 		let token = jwt_auth
 			.generate_token(user.id.to_string(), user.username.clone())
-			.map_err(|e| async_graphql::Error::new(e.to_string()))?;
+			.map_err(|e| GqlError::new(e.to_string()))?;
 
 		Ok(AuthPayload { token, user })
 	}

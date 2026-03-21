@@ -19,8 +19,8 @@ use syn::{FnArg, ItemFn, Meta, Token, parse_macro_input};
 
 // Import crate path helpers for dynamic resolution
 use crate::crate_paths::{
-	CratePathInfo, get_reinhardt_di_crate, get_reinhardt_http_crate, get_reinhardt_pages_crate,
-	get_reinhardt_pages_crate_info,
+	CratePathInfo, get_reinhardt_core_crate, get_reinhardt_di_crate, get_reinhardt_http_crate,
+	get_reinhardt_pages_crate, get_reinhardt_pages_crate_info,
 };
 
 /// Convert snake_case identifier to UpperCamelCase for struct naming
@@ -114,6 +114,22 @@ pub(crate) struct ServerFnOptions {
 	/// }
 	/// ```
 	pub no_csrf: bool,
+
+	/// Enable automatic validation with `pre_validate = true`
+	///
+	/// When enabled, deserialized arguments implementing `validator::Validate`
+	/// are automatically validated before the server function is called.
+	/// Returns an error with validation details on failure.
+	///
+	/// # Example
+	///
+	/// ```ignore
+	/// #[server_fn(pre_validate = true)]
+	/// async fn create_user(req: CreateUserRequest) -> Result<User, ServerFnError> {
+	///     // req is already validated
+	/// }
+	/// ```
+	pub pre_validate: bool,
 }
 
 fn default_codec() -> String {
@@ -127,6 +143,7 @@ impl Default for ServerFnOptions {
 			endpoint: None,
 			codec: default_codec(),
 			no_csrf: false,
+			pre_validate: false,
 		}
 	}
 }
@@ -649,6 +666,7 @@ fn generate_server_handler(
 	let name = info.name();
 	let endpoint = info.endpoint();
 	let codec = info.codec();
+	let pre_validate = info.options.pre_validate;
 	let func = &info.func;
 	let sig = &func.sig;
 
@@ -754,6 +772,17 @@ fn generate_server_handler(
 			);
 			return quote! { compile_error!(#msg); };
 		}
+	};
+
+	// Generate pre_validate validation code
+	let validation_code = if pre_validate {
+		let core_crate = get_reinhardt_core_crate();
+		quote! {
+			#core_crate::validators::Validate::validate(&args)
+				.map_err(|e| ::serde_json::to_string(&e).unwrap_or_else(|_| format!("{}", e)))?;
+		}
+	} else {
+		quote! {}
 	};
 
 	// Generate codec-specific serialization code for server response
@@ -874,6 +903,9 @@ fn generate_server_handler(
 
 			// Deserialize request body based on codec
 			#deserialize_code
+
+			// Validate deserialized arguments (when pre_validate = true)
+			#validation_code
 
 			// Resolve #[inject] parameters via DI
 			#di_resolution

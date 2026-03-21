@@ -118,11 +118,10 @@ async fn test_etag_empty_body() {
 #[cfg(feature = "compression")]
 #[tokio::test]
 async fn test_gzip_empty_body() {
-	let config = GZipConfig {
-		min_length: 0, // Allow compression of any size
-		compression_level: 6,
-		compressible_types: vec!["text/".to_string()],
-	};
+	let mut config = GZipConfig::default();
+	config.min_length = 0; // Allow compression of any size
+	config.compression_level = 6;
+	config.compressible_types = vec!["text/".to_string()];
 	let middleware = Arc::new(GZipMiddleware::with_config(config));
 	let handler = Arc::new(ContentHandler::new("", "text/html"));
 
@@ -258,11 +257,10 @@ async fn test_etag_unicode_body() {
 #[cfg(feature = "compression")]
 #[tokio::test]
 async fn test_gzip_multiple_accept_encoding_headers() {
-	let config = GZipConfig {
-		min_length: 100,
-		compression_level: 6,
-		compressible_types: vec!["text/".to_string()],
-	};
+	let mut config = GZipConfig::default();
+	config.min_length = 100;
+	config.compression_level = 6;
+	config.compressible_types = vec!["text/".to_string()];
 	let middleware = Arc::new(GZipMiddleware::with_config(config));
 	let handler = Arc::new(ContentHandler::new(
 		"This is a test response body that is long enough to be compressed by gzip middleware.",
@@ -293,11 +291,10 @@ async fn test_gzip_multiple_accept_encoding_headers() {
 #[cfg(feature = "compression")]
 #[tokio::test]
 async fn test_gzip_q_value_accept_encoding() {
-	let config = GZipConfig {
-		min_length: 100,
-		compression_level: 6,
-		compressible_types: vec!["text/".to_string()],
-	};
+	let mut config = GZipConfig::default();
+	config.min_length = 100;
+	config.compression_level = 6;
+	config.compressible_types = vec!["text/".to_string()];
 	let middleware = Arc::new(GZipMiddleware::with_config(config));
 	let handler = Arc::new(ContentHandler::new(
 		"This is a test response body that is long enough to be compressed by gzip middleware.",
@@ -481,7 +478,7 @@ async fn test_concurrent_circuit_breaker_state() {
 
 	// Circuit should be open after failures exceed threshold
 	assert_eq!(
-		middleware.get_state(),
+		middleware.state(),
 		reinhardt_middleware::circuit_breaker::CircuitState::Open,
 		"Circuit should be open after concurrent failures"
 	);
@@ -494,11 +491,10 @@ async fn test_concurrent_circuit_breaker_state() {
 #[cfg(feature = "compression")]
 #[tokio::test]
 async fn test_gzip_very_large_response() {
-	let config = GZipConfig {
-		min_length: 100,
-		compression_level: 1, // Fast compression for large data
-		compressible_types: vec!["text/".to_string()],
-	};
+	let mut config = GZipConfig::default();
+	config.min_length = 100;
+	config.compression_level = 1; // Fast compression for large data
+	config.compressible_types = vec!["text/".to_string()];
 	let middleware = Arc::new(GZipMiddleware::with_config(config));
 
 	// 10MB response body
@@ -670,11 +666,10 @@ async fn test_timeout_just_before_deadline() {
 #[cfg(feature = "compression")]
 #[tokio::test]
 async fn test_gzip_binary_content() {
-	let config = GZipConfig {
-		min_length: 10,
-		compression_level: 6,
-		compressible_types: vec!["text/".to_string(), "application/json".to_string()],
-	};
+	let mut config = GZipConfig::default();
+	config.min_length = 10;
+	config.compression_level = 6;
+	config.compressible_types = vec!["text/".to_string(), "application/json".to_string()];
 	let middleware = Arc::new(GZipMiddleware::with_config(config));
 
 	// Binary content (image/png)
@@ -694,11 +689,10 @@ async fn test_gzip_binary_content() {
 #[cfg(feature = "compression")]
 #[tokio::test]
 async fn test_gzip_charset_content_type() {
-	let config = GZipConfig {
-		min_length: 100,
-		compression_level: 6,
-		compressible_types: vec!["text/".to_string()],
-	};
+	let mut config = GZipConfig::default();
+	config.min_length = 100;
+	config.compression_level = 6;
+	config.compressible_types = vec!["text/".to_string()];
 	let middleware = Arc::new(GZipMiddleware::with_config(config));
 
 	// Content-Type with charset

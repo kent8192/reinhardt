@@ -17,9 +17,9 @@ use std::collections::HashMap;
 #[rstest]
 fn test_template_variable_substitution() {
 	let mut ctx = TemplateContext::new();
-	ctx.insert("name", "TestApp");
-	ctx.insert("version", "1.0.0");
-	ctx.insert("author", "Test Author");
+	let _ = ctx.insert("name", "TestApp");
+	let _ = ctx.insert("version", "1.0.0");
+	let _ = ctx.insert("author", "Test Author");
 
 	let tera_ctx: tera::Context = ctx.into();
 	let mut tera = tera::Tera::default();
@@ -46,7 +46,7 @@ Author: {{ author }}
 #[case(false, "Feature is disabled")]
 fn test_template_boolean_conditionals(#[case] enabled: bool, #[case] expected_text: &str) {
 	let mut ctx = TemplateContext::new();
-	ctx.insert("feature_enabled", enabled);
+	let _ = ctx.insert("feature_enabled", enabled);
 
 	let tera_ctx: tera::Context = ctx.into();
 	let mut tera = tera::Tera::default();
@@ -65,8 +65,8 @@ fn test_template_boolean_conditionals(#[case] enabled: bool, #[case] expected_te
 #[rstest]
 fn test_template_numeric_values() {
 	let mut ctx = TemplateContext::new();
-	ctx.insert("count", 42i64);
-	ctx.insert("price", 19.99f64);
+	let _ = ctx.insert("count", 42i64);
+	let _ = ctx.insert("price", 19.99f64);
 
 	let tera_ctx: tera::Context = ctx.into();
 	let mut tera = tera::Tera::default();
@@ -85,7 +85,7 @@ fn test_template_numeric_values() {
 #[rstest]
 fn test_template_list_iteration() {
 	let mut ctx = TemplateContext::new();
-	ctx.insert("items", vec!["apple", "banana", "cherry"]);
+	let _ = ctx.insert("items", vec!["apple", "banana", "cherry"]);
 
 	let tera_ctx: tera::Context = ctx.into();
 	let mut tera = tera::Tera::default();
@@ -111,7 +111,7 @@ fn test_template_map_values() {
 	let mut config = HashMap::new();
 	config.insert("host".to_string(), "localhost".to_string());
 	config.insert("port".to_string(), "8080".to_string());
-	ctx.insert("config", config);
+	let _ = ctx.insert("config", config);
 
 	let tera_ctx: tera::Context = ctx.into();
 	let mut tera = tera::Tera::default();
@@ -150,7 +150,7 @@ fn test_template_undefined_variable_error() {
 #[rstest]
 fn test_template_syntax_error() {
 	let mut ctx = TemplateContext::new();
-	ctx.insert("name", "test");
+	let _ = ctx.insert("name", "test");
 
 	let tera_ctx: tera::Context = ctx.into();
 	let mut tera = tera::Tera::default();
@@ -188,8 +188,8 @@ fn test_template_empty_context() {
 #[rstest]
 fn test_template_unicode_content() {
 	let mut ctx = TemplateContext::new();
-	ctx.insert("greeting", "こんにちは");
-	ctx.insert("emoji", "🦀");
+	let _ = ctx.insert("greeting", "こんにちは");
+	let _ = ctx.insert("emoji", "🦀");
 
 	let tera_ctx: tera::Context = ctx.into();
 	let mut tera = tera::Tera::default();
@@ -207,7 +207,7 @@ fn test_template_unicode_content() {
 #[rstest]
 fn test_template_special_characters() {
 	let mut ctx = TemplateContext::new();
-	ctx.insert("code", "fn main() { println!(\"Hello\"); }");
+	let _ = ctx.insert("code", "fn main() { println!(\"Hello\"); }");
 
 	let tera_ctx: tera::Context = ctx.into();
 	let mut tera = tera::Tera::default();
@@ -226,8 +226,8 @@ fn test_template_special_characters() {
 #[rstest]
 fn test_template_empty_string_values() {
 	let mut ctx = TemplateContext::new();
-	ctx.insert("empty", "");
-	ctx.insert("non_empty", "value");
+	let _ = ctx.insert("empty", "");
+	let _ = ctx.insert("non_empty", "value");
 
 	let tera_ctx: tera::Context = ctx.into();
 	let mut tera = tera::Tera::default();
@@ -258,9 +258,9 @@ fn test_template_nested_structures() {
 	config.insert("server".to_string(), server);
 
 	// Insert nested structure via serde_json
-	ctx.insert("database_host", "localhost");
-	ctx.insert("database_name", "mydb");
-	ctx.insert("server_port", "3000");
+	let _ = ctx.insert("database_host", "localhost");
+	let _ = ctx.insert("database_name", "mydb");
+	let _ = ctx.insert("server_port", "3000");
 
 	let tera_ctx: tera::Context = ctx.into();
 	let mut tera = tera::Tera::default();
@@ -283,10 +283,10 @@ fn test_template_nested_structures() {
 #[rstest]
 fn test_template_mixed_value_types() {
 	let mut ctx = TemplateContext::new();
-	ctx.insert("name", "App");
-	ctx.insert("version", 1i64);
-	ctx.insert("debug", true);
-	ctx.insert("factor", 1.5f64);
+	let _ = ctx.insert("name", "App");
+	let _ = ctx.insert("version", 1i64);
+	let _ = ctx.insert("debug", true);
+	let _ = ctx.insert("factor", 1.5f64);
 
 	let tera_ctx: tera::Context = ctx.into();
 	let mut tera = tera::Tera::default();
@@ -306,8 +306,8 @@ fn test_template_mixed_value_types() {
 #[rstest]
 fn test_template_context_overwrite() {
 	let mut ctx = TemplateContext::new();
-	ctx.insert("value", "first");
-	ctx.insert("value", "second");
+	let _ = ctx.insert("value", "first");
+	let _ = ctx.insert("value", "second");
 
 	let tera_ctx: tera::Context = ctx.into();
 	let mut tera = tera::Tera::default();
@@ -329,9 +329,9 @@ fn test_template_context_overwrite() {
 #[rstest]
 fn test_template_rust_file_generation() {
 	let mut ctx = TemplateContext::new();
-	ctx.insert("module_name", "my_module");
-	ctx.insert("struct_name", "MyStruct");
-	ctx.insert("fields", vec!["id: i64", "name: String"]);
+	let _ = ctx.insert("module_name", "my_module");
+	let _ = ctx.insert("struct_name", "MyStruct");
+	let _ = ctx.insert("fields", vec!["id: i64", "name: String"]);
 
 	let tera_ctx: tera::Context = ctx.into();
 	let mut tera = tera::Tera::default();
@@ -358,9 +358,9 @@ pub struct {{ struct_name }} {
 #[rstest]
 fn test_template_config_file_generation() {
 	let mut ctx = TemplateContext::new();
-	ctx.insert("project_name", "myproject");
-	ctx.insert("version", "0.1.0");
-	ctx.insert("edition", "2024");
+	let _ = ctx.insert("project_name", "myproject");
+	let _ = ctx.insert("version", "0.1.0");
+	let _ = ctx.insert("edition", "2024");
 
 	let tera_ctx: tera::Context = ctx.into();
 	let mut tera = tera::Tera::default();
@@ -385,9 +385,9 @@ edition = "{{ edition }}"
 #[rstest]
 fn test_template_migration_generation() {
 	let mut ctx = TemplateContext::new();
-	ctx.insert("migration_name", "CreateUsersTable");
-	ctx.insert("table_name", "users");
-	ctx.insert("columns", vec!["id", "email", "created_at"]);
+	let _ = ctx.insert("migration_name", "CreateUsersTable");
+	let _ = ctx.insert("table_name", "users");
+	let _ = ctx.insert("columns", vec!["id", "email", "created_at"]);
 
 	let tera_ctx: tera::Context = ctx.into();
 	let mut tera = tera::Tera::default();

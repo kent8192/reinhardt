@@ -4,7 +4,12 @@ use super::{Throttle, ThrottleResult};
 use async_trait::async_trait;
 use std::collections::HashMap;
 
+/// Scope-based rate throttle with per-scope rate limits.
+///
+/// Different API scopes (e.g., "api", "upload") can have independent
+/// rate limits, each keyed by a scope-identifier pair.
 pub struct ScopedRateThrottle<B: ThrottleBackend = MemoryBackend> {
+	/// Mapping of scope names to their rate limit configuration (rate, window_secs).
 	pub scopes: HashMap<String, (usize, u64)>,
 	backend: B,
 }
@@ -60,7 +65,7 @@ impl<B: ThrottleBackend> ScopedRateThrottle<B> {
 	///
 	/// # Errors
 	///
-	/// Returns [`ThrottleError::InvalidKey`] if the scope name fails validation.
+	/// Returns [`crate::ThrottleError::InvalidKey`] if the scope name fails validation.
 	///
 	/// # Examples
 	///

@@ -104,7 +104,7 @@ pub fn validate_app_id(app_id: &str) -> Result<(), DeeplinkError> {
 /// - Have at least 2 segments separated by dots (e.g., `com.example`)
 /// - Each segment must start with a letter or underscore
 /// - Each segment may contain only ASCII alphanumeric characters, hyphens, or underscores
-/// - Total length must not exceed [`MAX_BUNDLE_ID_LENGTH`] characters
+/// - Total length must not exceed `MAX_BUNDLE_ID_LENGTH` (155) characters
 ///
 /// # Errors
 ///
@@ -157,7 +157,7 @@ fn is_valid_bundle_segment(segment: &str) -> bool {
 /// - Start with an ASCII letter
 /// - Contain only ASCII letters, digits, `+`, `-`, or `.`
 /// - Not be a dangerous scheme (`javascript`, `data`, `vbscript`, `file`)
-/// - Not exceed [`MAX_SCHEME_LENGTH`] characters
+/// - Not exceed `MAX_SCHEME_LENGTH` (64) characters
 ///
 /// # Errors
 ///

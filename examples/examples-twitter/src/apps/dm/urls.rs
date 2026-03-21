@@ -8,7 +8,7 @@ use reinhardt::UnifiedRouter;
 use reinhardt::pages::server_fn::ServerFnRouterExt;
 
 #[cfg(server)]
-use crate::apps::dm::server::server_fn::{
+use crate::apps::dm::shared::server_fn::{
 	create_room, get_room, list_messages, list_rooms, mark_as_read, send_message,
 };
 

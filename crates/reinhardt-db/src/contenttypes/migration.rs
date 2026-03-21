@@ -27,12 +27,23 @@ use super::{ContentType, ContentTypeRegistry};
 use std::collections::HashMap;
 
 /// Error type for migration operations
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MigrationError {
 	/// The source content type was not found
-	SourceNotFound { app_label: String, model: String },
+	SourceNotFound {
+		/// The application label.
+		app_label: String,
+		/// The model name.
+		model: String,
+	},
 	/// The target content type already exists
-	TargetExists { app_label: String, model: String },
+	TargetExists {
+		/// The application label.
+		app_label: String,
+		/// The model name.
+		model: String,
+	},
 	/// Invalid migration parameters
 	InvalidParameters(String),
 }

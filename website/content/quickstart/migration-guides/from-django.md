@@ -262,24 +262,14 @@ class UserListView(View):
 ### Reinhardt Views
 
 ```rust
-// views.rs
-use reinhardt::{View, EndpointMetadata, Request, Response};
+// views.rs — using HTTP method decorators (recommended)
+use reinhardt::{get, Request, Response, ViewResult};
 
-pub struct UserListView;
-
-#[async_trait]
-impl View for UserListView {
-    async fn dispatch(&self, request: Request) -> Result<Response, Error> {
-        let users = User::objects().all().await?;
-        Ok(Response::ok().with_json(&users)?)
-    }
-}
-
-// EndpointMetadata for route configuration
-impl EndpointMetadata for UserListView {
-    fn path() -> &'static str { "/users/" }
-    fn method() -> Method { Method::GET }
-    fn name() -> &'static str { "user-list" }
+// EndpointMetadata is auto-registered by the #[get] macro
+#[get("/users/", name = "user-list")]
+pub async fn user_list(request: Request) -> ViewResult<Response> {
+    let users = User::objects().all().await?;
+    Ok(Response::ok().with_json(&users)?)
 }
 ```
 
@@ -304,7 +294,7 @@ class UserForm(forms.ModelForm):
 ```rust
 // forms.rs
 use serde::{Deserialize, Serialize};
-use validator::Validate;
+use reinhardt::Validate;
 
 #[derive(Deserialize, Serialize, Validate)]
 struct UserForm {

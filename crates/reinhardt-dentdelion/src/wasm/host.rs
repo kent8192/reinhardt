@@ -955,7 +955,7 @@ impl HostStateBuilder {
 	///
 	/// If not set, a new SSR proxy will be created for this host state.
 	/// By default, the SSR proxy is unavailable (TypeScript runtime not enabled).
-	/// Use [`SsrProxy::with_availability(true)`] to enable SSR.
+	/// Use [`SsrProxy::with_availability`] with `true` to enable SSR.
 	pub fn ssr_proxy(mut self, ssr_proxy: SharedSsrProxy) -> Self {
 		self.ssr_proxy = Some(ssr_proxy);
 		self

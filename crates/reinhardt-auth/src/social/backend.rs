@@ -163,8 +163,8 @@ impl Default for SocialAuthBackend {
 /// Generates a random alphanumeric string of the specified length
 fn generate_random_string(length: usize) -> String {
 	use rand::Rng;
-	rand::thread_rng()
-		.sample_iter(&rand::distributions::Alphanumeric)
+	rand::rng()
+		.sample_iter(&rand::distr::Alphanumeric)
 		.take(length)
 		.map(char::from)
 		.collect()

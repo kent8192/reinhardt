@@ -401,26 +401,37 @@ impl ConnectionConfig {
 	}
 }
 
+/// Errors that can occur during WebSocket operations.
 #[derive(Debug, thiserror::Error)]
 pub enum WebSocketError {
+	/// A connection-level error occurred.
 	#[error("Connection error")]
 	Connection(String),
+	/// Failed to send a message to the peer.
 	#[error("Send failed")]
 	Send(String),
+	/// Failed to receive a message from the peer.
 	#[error("Receive failed")]
 	Receive(String),
+	/// A WebSocket protocol violation was detected.
 	#[error("Protocol error")]
 	Protocol(String),
+	/// An internal server error occurred.
 	#[error("Internal error")]
 	Internal(String),
+	/// The connection timed out after the given duration of inactivity.
 	#[error("Connection timed out")]
 	Timeout(Duration),
+	/// Reconnection failed after the specified number of attempts.
 	#[error("Reconnection failed")]
 	ReconnectFailed(u32),
+	/// The binary payload was invalid or could not be decoded.
 	#[error("Invalid binary payload: {0}")]
 	BinaryPayload(String),
+	/// No pong response was received within the heartbeat timeout.
 	#[error("Heartbeat timeout: no pong received within {0:?}")]
 	HeartbeatTimeout(Duration),
+	/// The consumer could not keep up with the message rate.
 	#[error("Slow consumer: send timed out after {0:?}")]
 	SlowConsumer(Duration),
 }
@@ -465,17 +476,34 @@ impl WebSocketError {
 	}
 }
 
+/// A specialized `Result` type for WebSocket operations.
 pub type WebSocketResult<T> = Result<T, WebSocketError>;
 
 /// WebSocket message types
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type")]
 pub enum Message {
-	Text { data: String },
-	Binary { data: Vec<u8> },
+	/// A UTF-8 text message.
+	Text {
+		/// The text content of the message.
+		data: String,
+	},
+	/// A binary message.
+	Binary {
+		/// The raw bytes of the message.
+		data: Vec<u8>,
+	},
+	/// A ping control frame.
 	Ping,
+	/// A pong control frame (response to ping).
 	Pong,
-	Close { code: u16, reason: String },
+	/// A close control frame with status code and reason.
+	Close {
+		/// The WebSocket close status code.
+		code: u16,
+		/// A human-readable reason for closing.
+		reason: String,
+	},
 }
 
 impl Message {
@@ -1276,6 +1304,7 @@ pub struct HeartbeatMonitor {
 	config: HeartbeatConfig,
 	last_pong: Arc<RwLock<Instant>>,
 	timed_out: Arc<RwLock<bool>>,
+	pong_notify: Arc<tokio::sync::Notify>,
 }
 
 impl HeartbeatMonitor {
@@ -1286,12 +1315,17 @@ impl HeartbeatMonitor {
 			config,
 			last_pong: Arc::new(RwLock::new(Instant::now())),
 			timed_out: Arc::new(RwLock::new(false)),
+			pong_notify: Arc::new(tokio::sync::Notify::new()),
 		}
 	}
 
 	/// Records a pong response, resetting the timeout tracker.
+	///
+	/// This also wakes up the heartbeat monitor's sleep so it can
+	/// proceed immediately instead of waiting for the full pong timeout.
 	pub async fn record_pong(&self) {
 		*self.last_pong.write().await = Instant::now();
+		self.pong_notify.notify_one();
 	}
 
 	/// Returns the duration since the last pong was received.
@@ -1358,11 +1392,19 @@ impl HeartbeatMonitor {
 				// Best-effort ping; if send fails, check_heartbeat will catch it
 				let _ = monitor.send_ping().await;
 
-				// Wait for pong timeout period, then check
-				tokio::time::sleep(monitor.config.pong_timeout).await;
-
-				if monitor.check_heartbeat().await {
-					break;
+				// Wait for pong or timeout, whichever comes first.
+				// If pong arrives early, we skip the remaining sleep and
+				// proceed to the next ping interval immediately.
+				tokio::select! {
+					() = tokio::time::sleep(monitor.config.pong_timeout) => {
+						// Timeout elapsed without pong notification
+						if monitor.check_heartbeat().await {
+							break;
+						}
+					}
+					() = monitor.pong_notify.notified() => {
+						// Pong received early; no need to wait further
+					}
 				}
 			}
 		})
@@ -1992,6 +2034,48 @@ mod tests {
 		// Assert
 		let msg = rx.recv().await.unwrap();
 		assert!(matches!(msg, Message::Ping));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_heartbeat_monitor_early_pong_skips_full_sleep() {
+		// Arrange
+		let (tx, _rx) = mpsc::unbounded_channel();
+		let conn = Arc::new(WebSocketConnection::new("hb_early".to_string(), tx));
+		// Use a long pong_timeout to make the test obvious
+		let config = HeartbeatConfig {
+			ping_interval: Duration::from_secs(60),
+			pong_timeout: Duration::from_secs(10),
+		};
+		let monitor = Arc::new(HeartbeatMonitor::new(conn, config));
+
+		// Act: simulate pong arriving after a short delay
+		let monitor_clone = Arc::clone(&monitor);
+		tokio::spawn(async move {
+			tokio::time::sleep(Duration::from_millis(50)).await;
+			monitor_clone.record_pong().await;
+		});
+
+		// Send ping and wait for pong or timeout via select!
+		let _ = monitor.send_ping().await;
+		let start = Instant::now();
+
+		tokio::select! {
+			() = tokio::time::sleep(monitor.config.pong_timeout) => {
+				panic!("Should not reach full timeout");
+			}
+			() = monitor.pong_notify.notified() => {
+				// Pong received early
+			}
+		}
+
+		// Assert: should complete well before the 10s pong_timeout
+		let elapsed = start.elapsed();
+		assert!(
+			elapsed < Duration::from_secs(2),
+			"Expected early wakeup but elapsed {:?}",
+			elapsed
+		);
 	}
 
 	#[rstest]

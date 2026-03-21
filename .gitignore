@@ -137,12 +137,17 @@ examples/examples-twitter/static/admin/
 
 # Design/planning documents (local only)
 docs/plans/
+docs/superpowers/
 website/public/
 website/static/giallo*.css
 
 # Terraform
-infra/.terraform/
-infra/*.tfstate
-infra/*.tfstate.backup
-infra/.terraform.tfstate.lock.info
-infra/terraform.tfvars
+infra/**/.terraform/
+infra/**/*.tfstate
+infra/**/*.tfstate.backup
+infra/**/.terraform.tfstate.lock.info
+infra/**/*.tfvars
+!infra/**/*.example.tfvars
+!infra/**/*.examples.tfvars
+infra/**/backend.tfvars
+infra/github-runners/lambdas/*.zip

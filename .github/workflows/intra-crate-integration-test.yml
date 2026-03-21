@@ -2,6 +2,23 @@ name: Intra-Crate Integration Tests
 
 on:
   workflow_call:
+    inputs:
+      runner:
+        description: 'Runner label JSON. Use "\"ubuntu-latest\"" for GitHub-hosted or "[\"self-hosted\",\"linux\",\"arm64\",\"reinhardt-ci\"]" for self-hosted.'
+        type: string
+        default: '"ubuntu-latest"'
+      cargo-build-jobs:
+        description: "Parallel cargo build jobs (1=GitHub-hosted OOM safe, 8=self-hosted)"
+        type: string
+        default: "1"
+      nextest-filter:
+        description: "Nextest filter expression for affected packages"
+        type: string
+        default: ""
+      run-all:
+        description: "Whether to run all tests"
+        type: string
+        default: "true"
   workflow_dispatch:
 
 env:
@@ -9,7 +26,7 @@ env:
   RUST_BACKTRACE: 1
   CARGO_TARGET_DIR: /tmp/cargo_target
   CARGO_INCREMENTAL: 0
-  CARGO_BUILD_JOBS: 1
+  CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
   RUST_MIN_STACK: 8388608  # 8MB - prevent stack overflow in deep async fixture chains
@@ -17,7 +34,7 @@ env:
 jobs:
   intra-crate-integration-test:
     name: Intra-Crate Integration Tests (${{ matrix.partition }}/6)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -25,7 +42,8 @@ jobs:
         partition: [1, 2, 3, 4, 5, 6]
     steps:
       - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
+        if: ${{ !contains(inputs.runner, 'self-hosted') }}
+        uses: jlumbroso/free-disk-space@v1.3.1
         with:
           tool-cache: true
           android: true
@@ -48,12 +66,15 @@ jobs:
         uses: ./.github/actions/setup-rust
 
       - name: Setup protoc
-        uses: ./.github/actions/setup-protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install mold linker and build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y mold clang lld build-essential
+          sudo apt-get update -o DPkg::Lock::Timeout=120
+          sudo apt-get install -y -o DPkg::Lock::Timeout=120 mold clang lld build-essential
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
 
@@ -68,6 +89,7 @@ jobs:
           tool: nextest
 
       - name: Additional disk cleanup before tests
+        if: ${{ !contains(inputs.runner, 'self-hosted') }}
         run: |
           echo "Disk usage before additional cleanup:"
           df -h
@@ -94,15 +116,23 @@ jobs:
       - name: Run intra-crate integration tests (partition ${{ matrix.partition }}/6)
         env:
           RUSTFLAGS: "-C linker=clang -C link-arg=-fuse-ld=mold"
+          NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
+          RUN_ALL: ${{ inputs.run-all }}
         run: |
+          if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
+            FILTER_EXPR="(not binary(/ui/)) & ($NEXTEST_FILTER_EXPR)"
+          else
+            FILTER_EXPR="not binary(/ui/)"
+          fi
           cargo nextest run \
             --workspace \
             --test "*" \
             --exclude reinhardt-integration-tests \
-            -E "not binary(/ui/)" \
+            -E "$FILTER_EXPR" \
             --all-features \
             --partition hash:${{ matrix.partition }}/6 \
             --no-fail-fast \
+            --no-tests=warn \
             --status-level=none \
             --final-status-level=none
 

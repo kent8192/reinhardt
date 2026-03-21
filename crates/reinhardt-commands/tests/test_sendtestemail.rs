@@ -49,13 +49,8 @@ async fn test_manager_receivers() {
 	let command = SendTestEmailCommand::new();
 
 	// Create mock settings with manager contacts
-	let settings = Settings {
-		managers: vec![Contact {
-			name: "Manager".to_string(),
-			email: "manager@example.com".to_string(),
-		}],
-		..Settings::default()
-	};
+	let mut settings = Settings::default();
+	settings.managers = vec![Contact::new("Manager", "manager@example.com")];
 
 	let mut ctx = CommandContext::new(vec![]).with_settings(Arc::new(settings));
 	ctx.set_option("managers".to_string(), "true".to_string());
@@ -70,13 +65,8 @@ async fn test_admin_receivers() {
 	let command = SendTestEmailCommand::new();
 
 	// Create mock settings with admin contacts
-	let settings = Settings {
-		admins: vec![Contact {
-			name: "Admin".to_string(),
-			email: "admin@example.com".to_string(),
-		}],
-		..Settings::default()
-	};
+	let mut settings = Settings::default();
+	settings.admins = vec![Contact::new("Admin", "admin@example.com")];
 
 	let mut ctx = CommandContext::new(vec![]).with_settings(Arc::new(settings));
 	ctx.set_option("admins".to_string(), "true".to_string());
@@ -91,17 +81,9 @@ async fn test_manager_and_admin_receivers() {
 	let command = SendTestEmailCommand::new();
 
 	// Create mock settings with both manager and admin contacts
-	let settings = Settings {
-		managers: vec![Contact {
-			name: "Manager".to_string(),
-			email: "manager@example.com".to_string(),
-		}],
-		admins: vec![Contact {
-			name: "Admin".to_string(),
-			email: "admin@example.com".to_string(),
-		}],
-		..Settings::default()
-	};
+	let mut settings = Settings::default();
+	settings.managers = vec![Contact::new("Manager", "manager@example.com")];
+	settings.admins = vec![Contact::new("Admin", "admin@example.com")];
 
 	let mut ctx = CommandContext::new(vec![]).with_settings(Arc::new(settings));
 	ctx.set_option("managers".to_string(), "true".to_string());

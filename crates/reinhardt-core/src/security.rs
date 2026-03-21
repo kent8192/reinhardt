@@ -47,7 +47,7 @@ pub use redirect::{RedirectValidationError, is_safe_redirect, validate_redirect_
 pub use resource_limits::{LimitExceeded, ResourceLimits};
 pub use xss::{
 	escape_css_selector, escape_html, escape_html_content, sanitize_html, strip_tags_safe,
-	validate_css_selector,
+	validate_css_selector, validate_html_attr_name,
 };
 
 use thiserror::Error;
@@ -56,6 +56,7 @@ use thiserror::Error;
 pub type SecurityResult<T> = Result<T, SecurityError>;
 
 /// Security-related errors
+#[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum SecurityError {
 	/// CSRF token validation failed

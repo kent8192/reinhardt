@@ -16,7 +16,7 @@
 
 use super::fixtures::{empty_postgres_database, postgres_introspect_schema};
 use reinhardt_db::migrations::introspection::{DatabaseIntrospector, PostgresIntrospector};
-use reinhardt_db::migrations::{IntrospectConfig, SchemaCodeGenerator, TableFilterConfig};
+use reinhardt_db::migrations::{IntrospectConfig, SchemaCodeGenerator};
 use reinhardt_test::fixtures::{ContainerAsync, GenericImage, postgres_container};
 use rstest::*;
 use sqlx::PgPool;
@@ -182,15 +182,11 @@ async fn test_all_tables_filtered_out(
 		.expect("Failed to read schema");
 
 	// Create config that excludes all tables
-	let config = IntrospectConfig {
-		tables: TableFilterConfig {
-			include: vec!["nonexistent_pattern".to_string()],
-			exclude: vec![],
-		},
-		..IntrospectConfig::default()
-			.with_database_url("postgres://test@localhost/test")
-			.with_app_label("testapp")
-	};
+	let mut config = IntrospectConfig::default()
+		.with_database_url("postgres://test@localhost/test")
+		.with_app_label("testapp");
+	config.tables.include = vec!["nonexistent_pattern".to_string()];
+	config.tables.exclude = vec![];
 
 	let generator = SchemaCodeGenerator::new(config);
 	let output = generator

@@ -265,6 +265,22 @@ a {
 		border-radius: 4px;
 		color: #ffffff;
 	}
+
+	a {
+		color: #ffffff;
+		text-decoration: underline;
+		text-decoration-color: rgba(255, 255, 255, 0.5);
+		text-underline-offset: 2px;
+
+		&:visited {
+			color: #ffffff;
+		}
+
+		&:hover, &:focus {
+			color: #ffffff;
+			text-decoration-color: #ffffff;
+		}
+	}
 }
 
 // Buttons

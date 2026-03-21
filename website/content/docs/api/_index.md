@@ -109,7 +109,7 @@ use reinhardt::http::{Request, Response, ViewResult};
 #[get("/", name = "my_view")]
 async fn my_view(request: Request) -> ViewResult<Response> {
     // Handle request
-    Ok(Response::new(200, "Hello, World!".into()))
+    Ok(Response::ok().with_body("Hello, World!"))
 }
 
 // HTTP method decorators automatically register this function as a route handler
@@ -170,14 +170,13 @@ Dependency injection system inspired by FastAPI.
 **Key Components:**
 
 - `Injectable` trait
-- `Depends<T>` - Inject dependencies
 - `InjectionContext` - DI container
 - Singleton and request scopes
 
 **Example:**
 
 ```rust
-use reinhardt::di::{Injectable, Depends};
+use reinhardt::di::{Injectable, InjectionContext, DiResult};
 
 #[derive(Clone)]
 struct Database {
@@ -189,10 +188,6 @@ impl Injectable for Database {
     async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
         Ok(Database { pool: get_pool().await? })
     }
-}
-
-async fn handler(db: Depends<Database>) -> Result<Response> {
-    // db is automatically injected
 }
 ```
 
@@ -206,9 +201,9 @@ async fn handler(db: Depends<Database>) -> Result<Response> {
 
 ### reinhardt-db::orm
 
-ORM layer for database abstraction with reinhardt-query integration.
+ORM layer for database abstraction with Reinhardt's own query builder (reinhardt-query).
 
-> **Note**: `orm` is a sub-module of the `reinhardt-db` crate. Currently provides low-level API based on reinhardt-query.
+> **Note**: `orm` is a sub-module of the `reinhardt-db` crate. Currently provides low-level API based on Reinhardt's own query builder.
 
 **Key Components:**
 
@@ -220,7 +215,7 @@ ORM layer for database abstraction with reinhardt-query integration.
 
 **Current Implementation Status:**
 
-- ✅ reinhardt-query-based query builder (implemented)
+- ✅ Reinhardt's own query builder (reinhardt-query) (implemented)
 - ✅ Basic CRUD operations (implemented)
 - ✅ Relationship definitions (implemented)
 - ✅ `#[model(...)]` attribute macro (implemented - automatically applies Model trait)
@@ -240,7 +235,7 @@ struct User {
     age: i32,
 }
 
-// Query using reinhardt-query
+// Query using Reinhardt's own query builder
 let query = Query::select()
     .from(User::table_name())
     .column(User::id)
@@ -345,10 +340,18 @@ struct UserSerializer {
     email: String,
 }
 
-impl Serializer<User> for UserSerializer {
-    fn validate(&self, instance: &User) -> ValidationResult {
-        // Custom validation
-        Ok(())
+impl Serializer for UserSerializer {
+    type Input = User;
+    type Output = UserResponse;
+
+    fn serialize(&self, input: &Self::Input) -> Result<Self::Output, SerializerError> {
+        // Custom serialization
+        Ok(UserResponse { id: input.id, username: input.username.clone(), email: input.email.clone() })
+    }
+
+    fn deserialize(&self, output: &Self::Output) -> Result<Self::Input, SerializerError> {
+        // Custom deserialization
+        Ok(User { id: output.id, username: output.username.clone(), email: output.email.clone() })
     }
 }
 ```
@@ -383,10 +386,10 @@ let viewset = ModelViewSet::<User, UserSerializer>::new();
 
 **Cargo.toml:**
 
-```toml
+{% versioned_code(lang="toml") %}
 [dependencies]
-reinhardt-views = { version = "0.1.0-alpha.18", features = ["viewsets"] }
-```
+reinhardt-views = { version = "LATEST_VERSION", features = ["viewsets"] }
+{% end %}
 
 **Documentation:**
 
@@ -789,10 +792,10 @@ pub fn main() {
 
 **Cargo.toml:**
 
-```toml
+{% versioned_code(lang="toml") %}
 [dependencies]
-reinhardt-pages = { version = "0.1.0-alpha.18", features = ["pages-full"] }
-```
+reinhardt-pages = { version = "LATEST_VERSION", features = ["pages-full"] }
+{% end %}
 
 **Feature Flags:**
 

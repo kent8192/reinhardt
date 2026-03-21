@@ -7,7 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-alpha.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-alpha.7...reinhardt-core@v0.1.0-alpha.8) - 2026-02-23
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.11...reinhardt-core@v0.1.0-rc.12) - 2026-03-18
+
+### Added
+
+- *(rest)* add operation-level OpenAPI route attributes
+
+### Documentation
+
+- *(macros)* use backtick for FilesystemSource in collect_migrations doc
+
+### Fixed
+
+- *(rest)* address Copilot review feedback on OpenAPI annotations
+
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.8...reinhardt-core@v0.1.0-rc.9) - 2026-03-15
+
+### Added
+
+- *(core)* add validate_html_attr_name for attribute key validation
+
+### Fixed
+
+- *(core,pages)* escape script tag content and HTML attributes to prevent XSS
+- *(pages)* validate attr keys, fix SSR lang escaping, enhance script escape docs
+- *(core)* correct misleading CSRF token rotation comment
+- *(core)* replace lock().unwrap() with safe alternatives for panic prevention
+- *(core)* centralize message mutex poison recovery with logging
+
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.4...reinhardt-core@v0.1.0-rc.5) - 2026-03-07
+
+### Fixed
+
+- *(macros)* dereference extractor before validation in pre_validate
+- *(macros)* replace skeleton tests with meaningful assertions in pre_validate
+
+## [0.1.0-rc.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.3...reinhardt-core@v0.1.0-rc.4) - 2026-03-05
+
+### Fixed
+
+- *(core)* add wasm32 platform gate to parallel and jsonschema validator modules
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.1...reinhardt-core@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(deps)* align dependency versions to workspace definitions
+- *(core)* use character count instead of byte length in CharField validation
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-alpha.7...reinhardt-core@v0.1.0-rc.1) - 2026-02-23
 
 ### Maintenance
 

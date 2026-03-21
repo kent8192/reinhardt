@@ -24,11 +24,19 @@ impl FilesystemSource {
 	///
 	/// * `root_dir` - Root directory to scan for migration files
 	///
-	/// # Example
+	/// # Workspace Safety
+	///
+	/// When used in a Cargo workspace, relative paths are resolved from the
+	/// current working directory, which may differ depending on where `cargo`
+	/// commands are invoked. Use `env!("CARGO_MANIFEST_DIR")` for reliable paths:
 	///
 	/// ```rust,no_run
 	/// use reinhardt_db::migrations::FilesystemSource;
-	/// let source = FilesystemSource::new("./migrations");
+	///
+	/// // Workspace-safe: path is always relative to the crate's Cargo.toml
+	/// let source = FilesystemSource::new(
+	///     format!("{}/migrations", env!("CARGO_MANIFEST_DIR"))
+	/// );
 	/// ```
 	pub fn new<P: AsRef<Path>>(root_dir: P) -> Self {
 		Self {
@@ -117,6 +125,16 @@ impl MigrationSource for FilesystemSource {
 	async fn all_migrations(&self) -> Result<Vec<Migration>> {
 		let mut migrations = Vec::new();
 
+		// Warn when root directory does not exist (common with relative paths in workspaces)
+		if !self.root_dir.exists() {
+			tracing::warn!(
+				path = %self.root_dir.display(),
+				"Migration root directory does not exist. No migrations will be loaded. \
+				 Hint: Use `env!(\"CARGO_MANIFEST_DIR\")` for workspace-safe absolute paths."
+			);
+			return Ok(Vec::new());
+		}
+
 		// Walk directory tree to find all .rs files
 		for entry in walkdir::WalkDir::new(&self.root_dir)
 			.follow_links(true)
@@ -124,6 +142,20 @@ impl MigrationSource for FilesystemSource {
 			.filter_map(|e| e.ok())
 		{
 			let path = entry.path();
+
+			// Warn when .sql files are found (Reinhardt uses .rs migration files)
+			// Note: This check is case-sensitive and only matches lowercase ".sql"
+			// Uppercase variants (".SQL", ".Sql") are not detected as SQL migration files.
+			// This is intentional - migration files should follow standard naming conventions.
+			if path.extension().and_then(|s| s.to_str()) == Some("sql") {
+				tracing::warn!(
+					path = %path.display(),
+					"Found SQL migration file but Reinhardt uses Rust (.rs) migration files. \
+					 This file will be ignored. Run `cargo run --bin manage makemigrations` \
+					 to generate Rust migration files from your model definitions."
+				);
+				continue;
+			}
 
 			// Skip if not a .rs file
 			if path.extension().and_then(|s| s.to_str()) != Some("rs") {
@@ -152,6 +184,25 @@ impl MigrationSource for FilesystemSource {
 			}
 		}
 
+		// Sort by numeric prefix for deterministic ordering (#1335)
+		migrations.sort_by(|a, b| {
+			let num_a = a
+				.name
+				.chars()
+				.take_while(|c| c.is_ascii_digit())
+				.collect::<String>()
+				.parse::<u32>()
+				.unwrap_or(0);
+			let num_b = b
+				.name
+				.chars()
+				.take_while(|c| c.is_ascii_digit())
+				.collect::<String>()
+				.parse::<u32>()
+				.unwrap_or(0);
+			num_a.cmp(&num_b).then_with(|| a.name.cmp(&b.name))
+		});
+
 		Ok(migrations)
 	}
 }
@@ -159,6 +210,7 @@ impl MigrationSource for FilesystemSource {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 	use serial_test::serial;
 	use std::fs;
 	use tempfile::TempDir;
@@ -173,20 +225,26 @@ mod tests {
 		fs::write(file_path, content).unwrap();
 	}
 
+	#[rstest]
 	#[tokio::test]
 	#[serial(filesystem_source)]
 	async fn test_filesystem_source_new() {
+		// Arrange
 		let temp_dir = TempDir::new().unwrap();
+
+		// Act
 		let source = FilesystemSource::new(temp_dir.path());
+
+		// Assert
 		assert_eq!(source.root_dir, temp_dir.path());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	#[serial(filesystem_source)]
 	async fn test_filesystem_source_all_migrations() {
+		// Arrange
 		let temp_dir = TempDir::new().unwrap();
-
-		// Create test migration files
 		create_migration_file(
 			temp_dir.path(),
 			"polls",
@@ -206,7 +264,6 @@ pub fn migration() -> Migration {
 }
 "#,
 		);
-
 		create_migration_file(
 			temp_dir.path(),
 			"users",
@@ -226,21 +283,23 @@ pub fn migration() -> Migration {
 }
 "#,
 		);
-
 		let source = FilesystemSource::new(temp_dir.path());
+
+		// Act
 		let migrations = source.all_migrations().await.unwrap();
 
+		// Assert
 		assert_eq!(migrations.len(), 2);
 		assert!(migrations.iter().any(|m| m.app_label == "polls"));
 		assert!(migrations.iter().any(|m| m.app_label == "users"));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	#[serial(filesystem_source)]
 	async fn test_filesystem_source_migrations_for_app() {
+		// Arrange
 		let temp_dir = TempDir::new().unwrap();
-
-		// Create test migration files
 		create_migration_file(
 			temp_dir.path(),
 			"polls",
@@ -260,7 +319,6 @@ pub fn migration() -> Migration {
 }
 "#,
 		);
-
 		create_migration_file(
 			temp_dir.path(),
 			"polls",
@@ -280,19 +338,118 @@ pub fn migration() -> Migration {
 }
 "#,
 		);
-
 		let source = FilesystemSource::new(temp_dir.path());
+
+		// Act
 		let polls_migrations = source.migrations_for_app("polls").await.unwrap();
 
+		// Assert
 		assert_eq!(polls_migrations.len(), 2);
 		assert!(polls_migrations.iter().all(|m| m.app_label == "polls"));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	#[serial(filesystem_source)]
 	async fn test_filesystem_source_get_migration() {
+		// Arrange
 		let temp_dir = TempDir::new().unwrap();
+		create_migration_file(
+			temp_dir.path(),
+			"polls",
+			"0001_initial",
+			r#"
+use reinhardt_db::migrations::prelude::*;
 
+pub fn migration() -> Migration {
+	Migration {
+		app_label: "polls",
+		name: "0001_initial",
+		operations: vec![],
+		dependencies: vec![],
+		atomic: true,
+		replaces: vec![],
+	}
+}
+"#,
+		);
+		let source = FilesystemSource::new(temp_dir.path());
+
+		// Act
+		let migration = source.get_migration("polls", "0001_initial").await.unwrap();
+
+		// Assert
+		assert_eq!(migration.app_label, "polls");
+		assert_eq!(migration.name, "0001_initial");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_source)]
+	async fn test_filesystem_source_get_migration_not_found() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let source = FilesystemSource::new(temp_dir.path());
+
+		// Act
+		let result = source.get_migration("polls", "0001_initial").await;
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(result.unwrap_err(), MigrationError::NotFound(_)));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_source)]
+	async fn test_sql_files_are_ignored_in_migration_scan() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let app_dir = temp_dir.path().join("polls");
+		fs::create_dir_all(&app_dir).unwrap();
+
+		// Create .sql files that should be ignored
+		fs::write(
+			app_dir.join("0001_initial.sql"),
+			"CREATE TABLE polls (id SERIAL PRIMARY KEY);",
+		)
+		.unwrap();
+		fs::write(
+			app_dir.join("0002_add_field.sql"),
+			"ALTER TABLE polls ADD COLUMN name TEXT;",
+		)
+		.unwrap();
+
+		let source = FilesystemSource::new(temp_dir.path());
+
+		// Act
+		let migrations = source.all_migrations().await.unwrap();
+
+		// Assert
+		assert_eq!(
+			migrations.len(),
+			0,
+			"SQL files should not be loaded as migrations"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_source)]
+	async fn test_sql_files_ignored_while_rs_files_loaded() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let app_dir = temp_dir.path().join("polls");
+		fs::create_dir_all(&app_dir).unwrap();
+
+		// Create a .sql file (should be ignored)
+		fs::write(
+			app_dir.join("0001_initial.sql"),
+			"CREATE TABLE polls (id SERIAL PRIMARY KEY);",
+		)
+		.unwrap();
+
+		// Create a valid .rs migration file (should be loaded)
 		create_migration_file(
 			temp_dir.path(),
 			"polls",
@@ -314,21 +471,177 @@ pub fn migration() -> Migration {
 		);
 
 		let source = FilesystemSource::new(temp_dir.path());
-		let migration = source.get_migration("polls", "0001_initial").await.unwrap();
 
-		assert_eq!(migration.app_label, "polls");
-		assert_eq!(migration.name, "0001_initial");
+		// Act
+		let migrations = source.all_migrations().await.unwrap();
+
+		// Assert
+		assert_eq!(
+			migrations.len(),
+			1,
+			"Only .rs files should be loaded as migrations"
+		);
+		assert_eq!(migrations[0].app_label, "polls");
+		assert_eq!(migrations[0].name, "0001_initial");
 	}
 
+	#[rstest]
 	#[tokio::test]
 	#[serial(filesystem_source)]
-	async fn test_filesystem_source_get_migration_not_found() {
+	async fn test_nonexistent_directory_returns_empty_with_warning() {
+		use std::sync::{Arc, Mutex};
+		use tracing_subscriber::layer::SubscriberExt as _;
+		use tracing_subscriber::util::SubscriberInitExt as _;
+
+		// Arrange
+		struct LogCapture {
+			logs: Arc<Mutex<Vec<String>>>,
+		}
+
+		impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for LogCapture {
+			fn on_event(
+				&self,
+				event: &tracing::Event<'_>,
+				_ctx: tracing_subscriber::layer::Context<'_, S>,
+			) {
+				struct MessageVisitor {
+					message: String,
+				}
+
+				impl tracing::field::Visit for MessageVisitor {
+					fn record_debug(
+						&mut self,
+						field: &tracing::field::Field,
+						value: &dyn std::fmt::Debug,
+					) {
+						if field.name() == "message" {
+							self.message = format!("{:?}", value);
+						}
+					}
+				}
+
+				let mut visitor = MessageVisitor {
+					message: String::new(),
+				};
+				event.record(&mut visitor);
+
+				let mut logs = self.logs.lock().unwrap();
+				logs.push(format!(
+					"[{}] {}",
+					event.metadata().level(),
+					visitor.message
+				));
+			}
+		}
+
+		let logs = Arc::new(Mutex::new(Vec::new()));
+		let capture = LogCapture { logs: logs.clone() };
+		let _guard = tracing_subscriber::registry().with(capture).set_default();
+
+		let source = FilesystemSource::new("/nonexistent/path/that/does/not/exist");
+
+		// Act
+		let migrations = source.all_migrations().await.unwrap();
+
+		// Assert
+		assert!(
+			migrations.is_empty(),
+			"Non-existent directory should return empty migrations"
+		);
+
+		let captured = logs.lock().unwrap();
+		let has_warning = captured
+			.iter()
+			.any(|log| log.contains("WARN") && log.contains("does not exist"));
+		assert!(
+			has_warning,
+			"Expected warning log for non-existent directory, but got: {:?}",
+			*captured
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_source)]
+	async fn test_sql_files_trigger_warning_log() {
+		use std::sync::{Arc, Mutex};
+		use tracing_subscriber::layer::SubscriberExt as _;
+		use tracing_subscriber::util::SubscriberInitExt as _;
+
+		// Arrange
+		/// A tracing layer that captures log messages to a Vec<String>
+		struct LogCapture {
+			logs: Arc<Mutex<Vec<String>>>,
+		}
+
+		impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for LogCapture {
+			fn on_event(
+				&self,
+				event: &tracing::Event<'_>,
+				_ctx: tracing_subscriber::layer::Context<'_, S>,
+			) {
+				// Create a visitor to extract the message
+				struct MessageVisitor {
+					message: String,
+				}
+
+				impl tracing::field::Visit for MessageVisitor {
+					fn record_debug(
+						&mut self,
+						field: &tracing::field::Field,
+						value: &dyn std::fmt::Debug,
+					) {
+						if field.name() == "message" {
+							self.message = format!("{:?}", value);
+						}
+					}
+				}
+
+				let mut visitor = MessageVisitor {
+					message: String::new(),
+				};
+				event.record(&mut visitor);
+
+				let mut logs = self.logs.lock().unwrap();
+				logs.push(format!(
+					"[{}] {}",
+					event.metadata().level(),
+					visitor.message
+				));
+			}
+		}
+
+		let logs = Arc::new(Mutex::new(Vec::new()));
+		let capture = LogCapture { logs: logs.clone() };
+
+		// Set up the subscriber with our capture layer
+		let _guard = tracing_subscriber::registry().with(capture).set_default();
+
 		let temp_dir = TempDir::new().unwrap();
+		let app_dir = temp_dir.path().join("polls");
+		fs::create_dir_all(&app_dir).unwrap();
+
+		// Create a .sql file that should trigger a warning
+		fs::write(
+			app_dir.join("0001_initial.sql"),
+			"CREATE TABLE polls (id SERIAL PRIMARY KEY);",
+		)
+		.unwrap();
 
 		let source = FilesystemSource::new(temp_dir.path());
-		let result = source.get_migration("polls", "0001_initial").await;
 
-		assert!(result.is_err());
-		assert!(matches!(result.unwrap_err(), MigrationError::NotFound(_)));
+		// Act
+		let _ = source.all_migrations().await.unwrap();
+
+		// Assert
+		let captured = logs.lock().unwrap();
+		let has_warning = captured
+			.iter()
+			.any(|log| log.contains("WARN") && log.contains("SQL migration file"));
+		assert!(
+			has_warning,
+			"Expected warning log for SQL file, but got: {:?}",
+			*captured
+		);
 	}
 }

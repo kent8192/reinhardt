@@ -260,8 +260,8 @@ impl ToTokens for InterleaveSpec {
 		let parent_columns = &self.parent_columns;
 		tokens.extend(quote! {
 			InterleaveSpec {
-				parent_table: #parent_table,
-				parent_columns: vec![#(#parent_columns),*],
+				parent_table: #parent_table.to_string(),
+				parent_columns: vec![#(#parent_columns.to_string()),*],
 			}
 		});
 	}
@@ -404,7 +404,7 @@ impl ToTokens for Operation {
 				};
 				tokens.extend(quote! {
 					Operation::CreateTable {
-						name: #name,
+						name: #name.to_string(),
 						columns: vec![#(#columns_tokens),*],
 						constraints: vec![#(#constraints_tokens),*],
 						without_rowid: #without_rowid_tokens,
@@ -416,47 +416,65 @@ impl ToTokens for Operation {
 			Operation::DropTable { name } => {
 				tokens.extend(quote! {
 					Operation::DropTable {
-						name: #name,
+						name: #name.to_string(),
 					}
 				});
 			}
-			Operation::AddColumn { table, column, .. } => {
+			Operation::AddColumn {
+				table,
+				column,
+				mysql_options,
+			} => {
+				let mysql_opts_token = match mysql_options {
+					Some(opts) => quote! { Some(#opts) },
+					None => quote! { None },
+				};
 				tokens.extend(quote! {
 					Operation::AddColumn {
-						table: #table,
+						table: #table.to_string(),
 						column: #column,
-						mysql_options: None,
+						mysql_options: #mysql_opts_token,
 					}
 				});
 			}
 			Operation::DropColumn { table, column } => {
 				tokens.extend(quote! {
 					Operation::DropColumn {
-						table: #table,
-						column: #column,
+						table: #table.to_string(),
+						column: #column.to_string(),
 					}
 				});
 			}
 			Operation::AlterColumn {
 				table,
 				column,
+				old_definition,
 				new_definition,
-				..
+				mysql_options,
 			} => {
+				let old_def_token = match old_definition {
+					Some(def) => quote! { Some(#def) },
+					None => quote! { None },
+				};
+				let mysql_opts_token = match mysql_options {
+					Some(opts) => quote! { Some(#opts) },
+					None => quote! { None },
+				};
 				tokens.extend(quote! {
 					Operation::AlterColumn {
-						table: #table,
-						column: #column,
+						table: #table.to_string(),
+						column: #column.to_string(),
+						old_definition: #old_def_token,
 						new_definition: #new_definition,
-						mysql_options: None,
+						mysql_options: #mysql_opts_token,
 					}
 				});
 			}
 			Operation::RenameTable { old_name, new_name } => {
 				tokens.extend(quote! {
 					Operation::RenameTable {
-						old_name: #old_name,
-						new_name: #new_name,
+						old_name: #old_name.to_string(),
+						new_name: #new_name.to_string(),
 					}
 				});
 			}
@@ -467,9 +485,9 @@ impl ToTokens for Operation {
 			} => {
 				tokens.extend(quote! {
 					Operation::RenameColumn {
-						table: #table,
-						old_name: #old_name,
-						new_name: #new_name,
+						table: #table.to_string(),
+						old_name: #old_name.to_string(),
+						new_name: #new_name.to_string(),
 					}
 				});
 			}
@@ -479,8 +497,8 @@ impl ToTokens for Operation {
 			} => {
 				tokens.extend(quote! {
 					Operation::AddConstraint {
-						table: #table,
-						constraint_sql: #constraint_sql,
+						table: #table.to_string(),
+						constraint_sql: #constraint_sql.to_string(),
 					}
 				});
 			}
@@ -490,8 +508,8 @@ impl ToTokens for Operation {
 			} => {
 				tokens.extend(quote! {
 					Operation::DropConstraint {
-						table: #table,
-						constraint_name: #constraint_name,
+						table: #table.to_string(),
+						constraint_name: #constraint_name.to_string(),
 					}
 				});
 			}
@@ -523,13 +541,13 @@ impl ToTokens for Operation {
 					None => quote! { None },
 				};
 				let where_clause_token = match where_clause {
-					Some(s) => quote! { Some(#s) },
+					Some(s) => quote! { Some(#s.to_string()) },
 					None => quote! { None },
 				};
 				let expressions_token = match expressions {
 					Some(exprs) => {
 						let exprs_iter = exprs.iter();
-						quote! { Some(vec![#(#exprs_iter),*]) }
+						quote! { Some(vec![#(#exprs_iter.to_string()),*]) }
 					}
 					None => quote! { None },
 				};
@@ -538,13 +556,13 @@ impl ToTokens for Operation {
 					None => quote! { None },
 				};
 				let operator_class_token = match operator_class {
-					Some(oc) => quote! { Some(#oc) },
+					Some(oc) => quote! { Some(#oc.to_string()) },
 					None => quote! { None },
 				};
 				tokens.extend(quote! {
 					Operation::CreateIndex {
-						table: #table,
-						columns: vec![#(#columns_iter),*],
+						table: #table.to_string(),
+						columns: vec![#(#columns_iter.to_string()),*],
 						unique: #unique,
 						index_type: #index_type_token,
 						where_clause: #where_clause_token,
@@ -559,43 +577,43 @@ impl ToTokens for Operation {
 				let columns_iter = columns.iter();
 				tokens.extend(quote! {
 					Operation::DropIndex {
-						table: #table,
-						columns: vec![#(#columns_iter),*],
+						table: #table.to_string(),
+						columns: vec![#(#columns_iter.to_string()),*],
 					}
 				});
 			}
 			Operation::RunSQL { sql, reverse_sql } => {
 				let reverse_sql_token = match reverse_sql {
-					Some(s) => quote! { Some(#s) },
+					Some(s) => quote! { Some(#s.to_string()) },
 					None => quote! { None },
 				};
 				tokens.extend(quote! {
 					Operation::RunSQL {
-						sql: #sql,
+						sql: #sql.to_string(),
 						reverse_sql: #reverse_sql_token,
 					}
 				});
 			}
 			Operation::RunRust { code, reverse_code } => {
 				let reverse_code_token = match reverse_code {
-					Some(s) => quote! { Some(#s) },
+					Some(s) => quote! { Some(#s.to_string()) },
 					None => quote! { None },
 				};
 				tokens.extend(quote! {
 					Operation::RunRust {
-						code: #code,
+						code: #code.to_string(),
 						reverse_code: #reverse_code_token,
 					}
 				});
 			}
 			Operation::AlterTableComment { table, comment } => {
 				let comment_token = match comment {
-					Some(s) => quote! { Some(#s) },
+					Some(s) => quote! { Some(#s.to_string()) },
 					None => quote! { None },
 				};
 				tokens.extend(quote! {
 					Operation::AlterTableComment {
-						table: #table,
+						table: #table.to_string(),
 						comment: #comment_token,
 					}
 				});
@@ -606,11 +624,11 @@ impl ToTokens for Operation {
 			} => {
 				let unique_together_tokens = unique_together.iter().map(|fields| {
 					let fields_iter = fields.iter();
-					quote! { vec![#(#fields_iter),*] }
+					quote! { vec![#(#fields_iter.to_string()),*] }
 				});
 				tokens.extend(quote! {
 					Operation::AlterUniqueTogether {
-						table: #table,
+						table: #table.to_string(),
 						unique_together: vec![#(#unique_together_tokens),*],
 					}
 				});
@@ -620,10 +638,10 @@ impl ToTokens for Operation {
 				let values = options.values();
 				tokens.extend(quote! {
 					Operation::AlterModelOptions {
-						table: #table,
+						table: #table.to_string(),
 						options: {
 							let mut map = std::collections::HashMap::new();
-							#(map.insert(#keys, #values);)*
+							#(map.insert(#keys.to_string(), #values.to_string());)*
 							map
 						},
 					}
@@ -638,10 +656,10 @@ impl ToTokens for Operation {
 				let columns_tokens = columns.iter();
 				tokens.extend(quote! {
 					Operation::CreateInheritedTable {
-						name: #name,
+						name: #name.to_string(),
 						columns: vec![#(#columns_tokens),*],
-						base_table: #base_table,
-						join_column: #join_column,
+						base_table: #base_table.to_string(),
+						join_column: #join_column.to_string(),
 					}
 				});
 			}
@@ -652,9 +670,9 @@ impl ToTokens for Operation {
 			} => {
 				tokens.extend(quote! {
 					Operation::AddDiscriminatorColumn {
-						table: #table,
-						column_name: #column_name,
-						default_value: #default_value,
+						table: #table.to_string(),
+						column_name: #column_name.to_string(),
+						default_value: #default_value.to_string(),
 					}
 				});
 			}
@@ -667,18 +685,18 @@ impl ToTokens for Operation {
 				new_table_name,
 			} => {
 				let old_table_token = match old_table_name {
-					Some(s) => quote! { Some(#s) },
+					Some(s) => quote! { Some(#s.to_string()) },
 					None => quote! { None },
 				};
 				let new_table_token = match new_table_name {
-					Some(s) => quote! { Some(#s) },
+					Some(s) => quote! { Some(#s.to_string()) },
 					None => quote! { None },
 				};
 				tokens.extend(quote! {
 					Operation::MoveModel {
-						model_name: #model_name,
-						from_app: #from_app,
-						to_app: #to_app,
+						model_name: #model_name.to_string(),
+						from_app: #from_app.to_string(),
+						to_app: #to_app.to_string(),
 						rename_table: #rename_table,
 						old_table_name: #old_table_token,
 						new_table_name: #new_table_token,
@@ -691,7 +709,7 @@ impl ToTokens for Operation {
 			} => {
 				tokens.extend(quote! {
 					Operation::CreateSchema {
-						name: #name,
+						name: #name.to_string(),
 						if_not_exists: #if_not_exists,
 					}
 				});
@@ -703,7 +721,7 @@ impl ToTokens for Operation {
 			} => {
 				tokens.extend(quote! {
 					Operation::DropSchema {
-						name: #name,
+						name: #name.to_string(),
 						cascade: #cascade,
 						if_exists: #if_exists,
 					}
@@ -715,12 +733,12 @@ impl ToTokens for Operation {
 				schema,
 			} => {
 				let schema_token = match schema {
-					Some(s) => quote! { Some(#s) },
+					Some(s) => quote! { Some(#s.to_string()) },
 					None => quote! { None },
 				};
 				tokens.extend(quote! {
 					Operation::CreateExtension {
-						name: #name,
+						name: #name.to_string(),
 						if_not_exists: #if_not_exists,
 						schema: #schema_token,
 					}
@@ -735,13 +753,13 @@ impl ToTokens for Operation {
 				// Manually construct tokens for BulkLoadSource
 				let source_tokens = match source {
 					super::BulkLoadSource::File(path) => {
-						quote! { BulkLoadSource::File(#path) }
+						quote! { BulkLoadSource::File(#path.to_string()) }
 					}
 					super::BulkLoadSource::Stdin => {
 						quote! { BulkLoadSource::Stdin }
 					}
 					super::BulkLoadSource::Program(cmd) => {
-						quote! { BulkLoadSource::Program(#cmd) }
+						quote! { BulkLoadSource::Program(#cmd.to_string()) }
 					}
 				};
 
@@ -758,14 +776,14 @@ impl ToTokens for Operation {
 					None => quote! { None },
 				};
 				let null_string_token = match &options.null_string {
-					Some(s) => quote! { Some(#s) },
+					Some(s) => quote! { Some(#s.to_string()) },
 					None => quote! { None },
 				};
 				let header = options.header;
 				let columns_token = match &options.columns {
 					Some(cols) => {
 						let cols_iter = cols.iter();
-						quote! { Some(vec![#(#cols_iter),*]) }
+						quote! { Some(vec![#(#cols_iter.to_string()),*]) }
 					}
 					None => quote! { None },
 				};
@@ -779,17 +797,17 @@ impl ToTokens for Operation {
 					None => quote! { None },
 				};
 				let line_terminator_token = match &options.line_terminator {
-					Some(lt) => quote! { Some(#lt) },
+					Some(lt) => quote! { Some(#lt.to_string()) },
 					None => quote! { None },
 				};
 				let encoding_token = match &options.encoding {
-					Some(e) => quote! { Some(#e) },
+					Some(e) => quote! { Some(#e.to_string()) },
 					None => quote! { None },
 				};
 
 				tokens.extend(quote! {
 					Operation::BulkLoad {
-						table: #table,
+						table: #table.to_string(),
 						source: #source_tokens,
 						format: #format_tokens,
 						options: BulkLoadOptions {
@@ -819,7 +837,7 @@ impl ToTokens for ColumnDefinition {
 		let auto_increment = self.auto_increment;
 
 		let default_token = match &self.default {
-			Some(s) => quote! { Some(#s) },
+			Some(s) => quote! { Some(#s.to_string()) },
 			None => quote! { None },
 		};
 
@@ -946,7 +964,7 @@ impl ToTokens for ColumnDefinition {
 
 		tokens.extend(quote! {
 			ColumnDefinition {
-				name: #name,
+				name: #name.to_string(),
 				type_definition: #field_type_token,
 				not_null: #not_null,
 				unique: #unique,
@@ -962,13 +980,13 @@ impl ToTokens for super::BulkLoadSource {
 	fn to_tokens(&self, tokens: &mut TokenStream) {
 		let variant = match self {
 			super::BulkLoadSource::File(path) => {
-				quote! { BulkLoadSource::File(#path) }
+				quote! { BulkLoadSource::File(#path.to_string()) }
 			}
 			super::BulkLoadSource::Stdin => {
 				quote! { BulkLoadSource::Stdin }
 			}
 			super::BulkLoadSource::Program(cmd) => {
-				quote! { BulkLoadSource::Program(#cmd) }
+				quote! { BulkLoadSource::Program(#cmd.to_string()) }
 			}
 		};
 		tokens.extend(variant);
@@ -994,14 +1012,14 @@ impl ToTokens for super::BulkLoadOptions {
 		};
 
 		let null_string = match &self.null_string {
-			Some(s) => quote! { Some(#s) },
+			Some(s) => quote! { Some(#s.to_string()) },
 			None => quote! { None },
 		};
 
 		let header = self.header;
 
 		let columns = match &self.columns {
-			Some(cols) => quote! { Some(vec![#(#cols),*]) },
+			Some(cols) => quote! { Some(vec![#(#cols.to_string()),*]) },
 			None => quote! { None },
 		};
 
@@ -1018,12 +1036,12 @@ impl ToTokens for super::BulkLoadOptions {
 		};
 
 		let line_terminator = match &self.line_terminator {
-			Some(s) => quote! { Some(#s) },
+			Some(s) => quote! { Some(#s.to_string()) },
 			None => quote! { None },
 		};
 
 		let encoding = match &self.encoding {
-			Some(s) => quote! { Some(#s) },
+			Some(s) => quote! { Some(#s.to_string()) },
 			None => quote! { None },
 		};
 

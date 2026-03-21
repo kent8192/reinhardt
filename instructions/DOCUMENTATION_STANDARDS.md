@@ -42,6 +42,21 @@ Session 1:
 5. Submit all changes together
 ```
 
+The following diagram summarizes the documentation update workflow:
+
+```mermaid
+flowchart TD
+    A[Code change made] --> B[Update lib.rs docs]
+    A --> C[Update crate README if exists]
+    A --> D[Update docs/ if relevant]
+    A --> E[Update root README if major change]
+    B & C & D & E --> F[Run doc tests: cargo test --doc]
+    F --> G[Build docs: cargo doc --no-deps]
+    G --> H[Verify examples work]
+    H --> I[Check links are valid]
+    I --> J[Submit code + docs together]
+```
+
 ---
 
 ## Documentation Locations
@@ -88,14 +103,14 @@ When modifying features, check and update the following documentation as applica
 - Adding planned features
 
 #### Detailed Guides
-**Location:** `docs/` directory
+**Location:** `instructions/` directory and `website/` directory
 **Files:**
-- `docs/GETTING_STARTED.md` - Getting started guide
-- `docs/FEATURE_FLAGS.md` - Feature flags documentation
-- `docs/tutorials/` - Tutorial files
-- `docs/MODULE_SYSTEM.md` - Module system standards
-- `docs/TESTING_STANDARDS.md` - Testing standards
-- `docs/ANTI_PATTERNS.md` - Anti-patterns guide
+- `website/content/quickstart/getting-started.md` - Getting started guide
+- `website/content/docs/feature-flags.md` - Feature flags documentation
+- `website/content/quickstart/tutorials/` - Tutorial files
+- `instructions/MODULE_SYSTEM.md` - Module system standards
+- `instructions/TESTING_STANDARDS.md` - Testing standards
+- `instructions/ANTI_PATTERNS.md` - Anti-patterns guide
 - Other relevant documentation files
 
 **When to Update:**
@@ -103,6 +118,19 @@ When modifying features, check and update the following documentation as applica
 - Changing established patterns
 - Adding new standards or conventions
 - Updating tutorials
+
+The following diagram illustrates where different types of documentation should be placed:
+
+```mermaid
+flowchart TD
+    A[Documentation to write] --> B{What level?}
+    B -->|"API reference"| C["lib.rs / module docs<br/>(inline rustdoc)"]
+    B -->|"Crate overview"| D["crate README.md"]
+    B -->|"Cross-crate guides"| E["docs/ directory"]
+    B -->|"Project overview"| F["Root README.md"]
+    B -->|"Internal standards"| G["instructions/ directory"]
+    B -->|"Planned features"| H["lib.rs header<br/>(NOT README.md)"]
+```
 
 ---
 
@@ -304,7 +332,7 @@ Ensure all links and references are valid.
 
 **Check Internal Links:**
 ```markdown
-See [Module System](docs/MODULE_SYSTEM.md)  ✅
+See [Module System](instructions/MODULE_SYSTEM.md)  ✅
 See [Module System](docs/MODULES.md)        ❌ Wrong file
 ```
 
@@ -442,12 +470,12 @@ Bare URLs in doc comments trigger "bare URL" warnings. Wrap them properly.
 
 ```rust
 // ✅ CORRECT
-/// See <https://docs.rs/reinhardt> for API documentation
+/// See <https://docs.rs/reinhardt-web> for API documentation
 /// Documentation at `https://github.com/kent8192/reinhardt-web`
-/// Visit [our docs](https://docs.rs/reinhardt) for more info
+/// Visit [our docs](https://docs.rs/reinhardt-web) for more info
 
 // ❌ INCORRECT (causes "bare URL" warnings)
-/// See https://docs.rs/reinhardt for API documentation
+/// See https://docs.rs/reinhardt-web for API documentation
 /// Documentation at https://github.com/kent8192/reinhardt-web
 ```
 
@@ -772,6 +800,6 @@ cargo doc --package <crate-name> --open
 
 - **Main Quick Reference**: @CLAUDE.md (see Quick Reference section)
 - **Main standards**: @CLAUDE.md
-- **Module system**: @docs/MODULE_SYSTEM.md
-- **Testing standards**: @docs/TESTING_STANDARDS.md
-- **Anti-patterns**: @docs/ANTI_PATTERNS.md
+- **Module system**: @instructions/MODULE_SYSTEM.md
+- **Testing standards**: @instructions/TESTING_STANDARDS.md
+- **Anti-patterns**: @instructions/ANTI_PATTERNS.md

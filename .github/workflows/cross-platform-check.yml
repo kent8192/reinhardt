@@ -1,0 +1,67 @@
+name: Cross-Platform Check
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  cross-platform-check:
+    name: Cross-Platform Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Verify compilation on all major platforms
+        os: [macos-latest, windows-latest]
+
+    steps:
+      - name: Set cargo target directory
+        # Use the RUNNER_TEMP shell environment variable (not runner.temp context) because
+        # the runner context is unavailable at workflow/job-level env evaluation in
+        # reusable workflows (workflow_call). RUNNER_TEMP is a raw shell variable set by
+        # GitHub Actions on all hosted runners (macOS, Windows, Linux) and resolves to
+        # the OS-appropriate temp directory without requiring context evaluation.
+        shell: bash
+        run: echo "CARGO_TARGET_DIR=$RUNNER_TEMP/cargo_target" >> "$GITHUB_ENV"
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Setup protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure OpenSSL (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          # Install OpenSSL via vcpkg. The vcpkg package manager is pre-installed on
+          # GitHub-hosted Windows runners and provides MSVC-compatible OpenSSL libraries
+          # with a stable, predictable directory structure that openssl-sys can locate.
+          vcpkg install openssl:x64-windows
+          vcpkg integrate install
+
+          # Set environment variables for openssl-sys crate to find the vcpkg-installed OpenSSL.
+          # vcpkg installs to $env:VCPKG_INSTALLATION_ROOT/installed/x64-windows by default.
+          $opensslDir = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
+          if (-not (Test-Path "$opensslDir\include\openssl\ssl.h")) {
+            Write-Error "OpenSSL headers not found at: $opensslDir\include\openssl\ssl.h"
+            exit 1
+          }
+          Write-Host "Using OpenSSL at: $opensslDir"
+          echo "OPENSSL_DIR=$opensslDir" >> $env:GITHUB_ENV
+
+      - name: Run cargo check (${{ matrix.os }})
+        run: cargo check --workspace --all --all-features
+

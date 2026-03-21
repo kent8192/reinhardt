@@ -1,0 +1,97 @@
+name: Cancel Stale Runs on PR Close
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  actions: write
+
+jobs:
+  cancel-stale-runs:
+    name: Cancel Stale Workflow Runs
+    runs-on: [self-hosted, linux, arm64, reinhardt-hotpath]
+    timeout-minutes: 8
+    steps:
+      - name: Cancel and force-cancel stale runs
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const branch = context.payload.pull_request.head.ref;
+            const targetWorkflows = ['ci.yml', 'test-examples.yml'];
+
+            // Phase 1: Find and cancel all non-completed runs
+            const cancelledRunIds = [];
+
+            for (const wf of targetWorkflows) {
+              const { data } = await github.rest.actions.listWorkflowRuns({
+                owner, repo,
+                workflow_id: wf,
+                branch,
+              });
+
+              const staleRuns = data.workflow_runs.filter(r =>
+                r.status !== 'completed'
+              );
+
+              for (const run of staleRuns) {
+                try {
+                  console.log(`Cancelling ${wf} run #${run.id} (status: ${run.status})`);
+                  await github.rest.actions.cancelWorkflowRun({
+                    owner, repo, run_id: run.id,
+                  });
+                  cancelledRunIds.push({ id: run.id, workflow: wf });
+                } catch (e) {
+                  console.log(`Failed to cancel run #${run.id}: ${e.message}`);
+                }
+              }
+            }
+
+            if (cancelledRunIds.length === 0) {
+              console.log('No stale runs found');
+              return;
+            }
+
+            // Phase 2: Poll up to 5 minutes, then force-cancel
+            const maxWaitMs = 5 * 60 * 1000;
+            const pollIntervalMs = 30 * 1000;
+            const startTime = Date.now();
+
+            while (Date.now() - startTime < maxWaitMs) {
+              await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+
+              let allDone = true;
+              for (const { id } of cancelledRunIds) {
+                const { data: run } = await github.rest.actions.getWorkflowRun({
+                  owner, repo, run_id: id,
+                });
+                if (run.status !== 'completed') {
+                  allDone = false;
+                  break;
+                }
+              }
+
+              if (allDone) {
+                console.log('All cancelled runs completed');
+                return;
+              }
+            }
+
+            // Phase 3: Force-cancel any remaining runs
+            for (const { id, workflow } of cancelledRunIds) {
+              const { data: run } = await github.rest.actions.getWorkflowRun({
+                owner, repo, run_id: id,
+              });
+              if (run.status !== 'completed') {
+                console.log(`Force-cancelling ${workflow} run #${id}`);
+                try {
+                  await github.rest.actions.forceCancelWorkflowRun({
+                    owner, repo, run_id: id,
+                  });
+                } catch (e) {
+                  console.log(`Failed to force-cancel run #${id}: ${e.message}`);
+                }
+              }
+            }

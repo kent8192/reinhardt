@@ -2,6 +2,15 @@ name: TODO Check
 
 on:
   workflow_call:
+    inputs:
+      runner:
+        description: 'Runner label JSON'
+        type: string
+        default: '"ubuntu-latest"'
+      cargo-build-jobs:
+        description: "Parallel cargo build jobs"
+        type: string
+        default: "1"
   workflow_dispatch:
 
 env:
@@ -9,31 +18,32 @@ env:
   RUST_BACKTRACE: 1
   CARGO_TARGET_DIR: /tmp/cargo_target
   CARGO_INCREMENTAL: 0
+  CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
 
 jobs:
   todo-check:
     name: Scan for unresolved TODO/FIXME
-    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
-    runs-on: ubuntu-latest
-    container:
-      image: semgrep/semgrep
+    # github.event.pull_request is available in workflow_call context when caller is triggered by pull_request
+    if: github.event.pull_request != null && github.actor != 'dependabot[bot]'
+    runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Run Semgrep TODO/FIXME scan
-        run: semgrep ci --config .semgrep/ --metrics off
+        run: docker run --rm -v "${{ github.workspace }}:/src" -w /src semgrep/semgrep semgrep scan --config .semgrep/ --baseline-commit ${{ github.event.pull_request.base.sha }} --error --metrics off
 
   clippy-todo-check:
     name: Clippy TODO/unimplemented/dbg lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
     timeout-minutes: 30
     steps:
       - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
+        if: ${{ !contains(inputs.runner || '', 'self-hosted') }}
+        uses: jlumbroso/free-disk-space@v1.3.1
         with:
           tool-cache: true
           android: true
@@ -52,7 +62,10 @@ jobs:
           components: clippy
 
       - name: Setup protoc
-        uses: ./.github/actions/setup-protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install cargo-make
         uses: taiki-e/install-action@v2

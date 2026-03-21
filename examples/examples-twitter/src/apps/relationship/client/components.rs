@@ -3,17 +3,20 @@
 //! Provides follow button and user list components for managing user relationships.
 
 use crate::apps::auth::shared::types::UserInfo;
+use crate::core::client::components::icons;
 use reinhardt::pages::Signal;
-use reinhardt::pages::component::View;
+use reinhardt::pages::component::Page;
 use reinhardt::pages::page;
 use uuid::Uuid;
 
 #[cfg(client)]
 use {
-	crate::apps::relationship::server::server_fn::{
+	crate::apps::relationship::shared::server_fn::{
 		fetch_followers, fetch_following, follow_user, unfollow_user,
 	},
-	reinhardt::pages::spawn::spawn_task,
+	reinhardt::pages::create_resource,
+	reinhardt::pages::reactive::ResourceState,
+	reinhardt::pages::reactive::hooks::{Action, use_action, use_effect},
 };
 
 /// Type of user list to display
@@ -30,59 +33,54 @@ pub enum UserListType {
 /// Provides a button to follow/unfollow a user with state management.
 /// Modern design with visual feedback for following state.
 /// Uses watch blocks for reactive UI updates when state changes.
-pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
+pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> Page {
 	let is_following = Signal::new(is_following_initial);
-	let loading = Signal::new(false);
-	let error = Signal::new(None::<String>);
 
-	// Clone signals for passing to page! macro
+	// Clone signal for passing to page! macro
 	let is_following_signal = is_following.clone();
-	let loading_signal = loading.clone();
-	let error_signal = error.clone();
 
 	#[cfg(client)]
 	{
-		let is_following_clone = is_following.clone();
-		let loading_clone = loading.clone();
-		let error_clone = error.clone();
+		let toggle_follow = use_action(
+			move |(target_id, currently_following): (Uuid, bool)| async move {
+				if currently_following {
+					unfollow_user(target_id).await
+				} else {
+					follow_user(target_id).await
+				}
+				.map_err(|e| e.to_string())
+			},
+		);
 
-		page!(|is_following_signal: Signal<bool>, loading_signal: Signal<bool>, error_signal: Signal<Option<String>>| {
+		// Toggle is_following on success and reset the action
+		{
+			let toggle_follow_for_effect = toggle_follow.clone();
+			let is_following_for_effect = is_following.clone();
+			use_effect(move || {
+				if toggle_follow_for_effect.is_success() {
+					let current = is_following_for_effect.get();
+					is_following_for_effect.set(!current);
+					toggle_follow_for_effect.reset();
+				}
+			});
+		}
+
+		let toggle_follow_for_error = toggle_follow.clone();
+
+		page!(|is_following_signal: Signal<bool>, toggle_follow: Action<(), String>, toggle_follow_for_error: Action<(), String>| {
 			div {
 				watch {
-					if loading_signal.get() {
+					if toggle_follow.is_pending() {
 						button {
-							r#type: "button",
+							type: "button",
 							class: "btn-secondary opacity-50 cursor-not-allowed",
-							disabled: loading_signal.get(),
+							disabled: { true },
 							aria_label: "Loading",
 							@click: {
-										let is_following = is_following_clone.clone();
-										let loading = loading_clone.clone();
-										let error = error_clone.clone();
+										let toggle_follow = toggle_follow.clone();
+										let is_following_signal = is_following_signal.clone();
 										move |_event| {
-											let is_following_inner = is_following.clone();
-											let loading_inner = loading.clone();
-											let error_inner = error.clone();
-											let currently_following = is_following.get();
-											spawn_task(async move {
-												loading_inner.set(true);
-												error_inner.set(None);
-												let result = if currently_following {
-													unfollow_user(target_user_id).await
-												} else {
-													follow_user(target_user_id).await
-												};
-												match result {
-													Ok(()) => {
-														is_following_inner.set(!currently_following);
-														loading_inner.set(false);
-													}
-													Err(e) => {
-														error_inner.set(Some(e.to_string()));
-														loading_inner.set(false);
-													}
-												}
-											});
+											toggle_follow.dispatch((target_user_id, is_following_signal.get()));
 										}
 									},
 							div {
@@ -94,36 +92,13 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 						}
 					} else if is_following_signal.get() {
 						button {
-							r#type: "button",
+							type: "button",
 							class: "btn-outline group",
 							@click: {
-										let is_following = is_following_clone.clone();
-										let loading = loading_clone.clone();
-										let error = error_clone.clone();
+										let toggle_follow = toggle_follow.clone();
+										let is_following_signal = is_following_signal.clone();
 										move |_event| {
-											let is_following_inner = is_following.clone();
-											let loading_inner = loading.clone();
-											let error_inner = error.clone();
-											let currently_following = is_following.get();
-											spawn_task(async move {
-												loading_inner.set(true);
-												error_inner.set(None);
-												let result = if currently_following {
-													unfollow_user(target_user_id).await
-												} else {
-													follow_user(target_user_id).await
-												};
-												match result {
-													Ok(()) => {
-														is_following_inner.set(!currently_following);
-														loading_inner.set(false);
-													}
-													Err(e) => {
-														error_inner.set(Some(e.to_string()));
-														loading_inner.set(false);
-													}
-												}
-											});
+											toggle_follow.dispatch((target_user_id, is_following_signal.get()));
 										}
 									},
 							span {
@@ -137,36 +112,13 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 						}
 					} else {
 						button {
-							r#type: "button",
+							type: "button",
 							class: "btn-primary",
 							@click: {
-										let is_following = is_following_clone.clone();
-										let loading = loading_clone.clone();
-										let error = error_clone.clone();
+										let toggle_follow = toggle_follow.clone();
+										let is_following_signal = is_following_signal.clone();
 										move |_event| {
-											let is_following_inner = is_following.clone();
-											let loading_inner = loading.clone();
-											let error_inner = error.clone();
-											let currently_following = is_following.get();
-											spawn_task(async move {
-												loading_inner.set(true);
-												error_inner.set(None);
-												let result = if currently_following {
-													unfollow_user(target_user_id).await
-												} else {
-													follow_user(target_user_id).await
-												};
-												match result {
-													Ok(()) => {
-														is_following_inner.set(!currently_following);
-														loading_inner.set(false);
-													}
-													Err(e) => {
-														error_inner.set(Some(e.to_string()));
-														loading_inner.set(false);
-													}
-												}
-											});
+											toggle_follow.dispatch((target_user_id, is_following_signal.get()));
 										}
 									},
 							"Follow"
@@ -174,15 +126,19 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 					}
 				}
 				watch {
-					if error_signal.get().is_some() {
+					if toggle_follow_for_error.error().is_some() {
 						div {
 							class: "alert-danger mt-2 text-sm",
-							{ error_signal.get().unwrap_or_default() }
+							{ toggle_follow_for_error.error().unwrap_or_default() }
 						}
 					}
 				}
 			}
-		})(is_following_signal, loading_signal, error_signal)
+		})(
+			is_following_signal,
+			toggle_follow,
+			toggle_follow_for_error,
+		)
 	}
 
 	#[cfg(server)]
@@ -202,7 +158,7 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 		page!(|btn_class: &str, btn_text: &str| {
 			div {
 				button {
-					r#type: "button",
+					type: "button",
 					class: btn_class,
 					{ btn_text }
 				}
@@ -215,7 +171,7 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> View {
 ///
 /// Displays a single user in a list with modern SNS design.
 /// Features avatar, username, and profile link.
-fn user_card(user: &UserInfo) -> View {
+fn user_card(user: &UserInfo) -> Page {
 	let username = user.username.clone();
 	let display_username = format!("@{}", user.username);
 	let email = user.email.clone();
@@ -249,18 +205,7 @@ fn user_card(user: &UserInfo) -> View {
 						{ display_username }
 					}
 				}
-				svg {
-					class: "w-5 h-5 text-content-tertiary flex-shrink-0",
-					fill: "none",
-					stroke: "currentColor",
-					viewBox: "0 0 24 24",
-					path {
-						stroke_linecap: "round",
-						stroke_linejoin: "round",
-						stroke_width: "2",
-						d: "M9 5l7 7-7 7",
-					}
-				}
+				{ icons::chevron_right_icon() }
 			}
 		}
 	})(
@@ -277,35 +222,39 @@ fn user_card(user: &UserInfo) -> View {
 /// Displays a list of users (followers or following) with loading and error states.
 /// Modern card-based design with smooth animations.
 /// Uses watch blocks for reactive UI updates when async data loads.
-pub fn user_list(user_id: Uuid, list_type: UserListType) -> View {
+pub fn user_list(user_id: Uuid, list_type: UserListType) -> Page {
 	let users = Signal::new(Vec::<UserInfo>::new());
 	let loading = Signal::new(true);
 	let error = Signal::new(None::<String>);
 
 	#[cfg(client)]
 	{
-		let users_clone = users.clone();
-		let loading_clone = loading.clone();
-		let error_clone = error.clone();
-
-		spawn_task(async move {
-			loading_clone.set(true);
-			error_clone.set(None);
-
+		let resource = create_resource(move || async move {
 			let result = match list_type {
 				UserListType::Followers => fetch_followers(user_id).await,
 				UserListType::Following => fetch_following(user_id).await,
 			};
+			result.map_err(|e| e.to_string())
+		});
 
-			match result {
-				Ok(user_list) => {
-					users_clone.set(user_list);
-					loading_clone.set(false);
-				}
-				Err(e) => {
-					error_clone.set(Some(e.to_string()));
-					loading_clone.set(false);
-				}
+		let users_clone = users.clone();
+		let loading_clone = loading.clone();
+		let error_clone = error.clone();
+		let resource_for_effect = resource.clone();
+
+		use_effect(move || match resource_for_effect.get() {
+			ResourceState::Loading => {
+				loading_clone.set(true);
+				error_clone.set(None);
+			}
+			ResourceState::Success(data) => {
+				users_clone.set(data);
+				loading_clone.set(false);
+				error_clone.set(None);
+			}
+			ResourceState::Error(err) => {
+				error_clone.set(Some(err));
+				loading_clone.set(false);
 			}
 		});
 	}
@@ -342,18 +291,7 @@ pub fn user_list(user_id: Uuid, list_type: UserListType) -> View {
 					href: "/",
 					class: "btn-icon",
 					aria_label: "Go back home",
-					svg {
-						class: "w-5 h-5",
-						fill: "none",
-						stroke: "currentColor",
-						viewBox: "0 0 24 24",
-						path {
-							stroke_linecap: "round",
-							stroke_linejoin: "round",
-							stroke_width: "2",
-							d: "M10 19l-7-7m0 0l7-7m-7 7h18",
-						}
-					}
+					{ icons::arrow_left_icon() }
 				}
 				h2 {
 					class: "text-xl font-bold text-content-primary",
@@ -377,15 +315,7 @@ pub fn user_list(user_id: Uuid, list_type: UserListType) -> View {
 						class: "alert-danger",
 						div {
 							class: "flex items-center gap-2",
-							svg {
-								class: "w-5 h-5 flex-shrink-0",
-								fill: "currentColor",
-								viewBox: "0 0 20 20",
-								path {
-									fill_rule: "evenodd",
-									d: "M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z",
-								}
-							}
+							{ icons::error_circle_icon() }
 							span {
 								{ error_signal.get().unwrap_or_default() }
 							}
@@ -417,7 +347,15 @@ pub fn user_list(user_id: Uuid, list_type: UserListType) -> View {
 				} else {
 					div {
 						class: "card overflow-hidden",
-						{ View::fragment(users_signal.get().iter().map(|u| user_card(u)).collect ::<Vec<_>>()) }
+						{
+							Page::Fragment(
+									users_signal
+										.get()
+										.iter()
+										.map(|u| user_card(u))
+										.collect::<Vec<_>>(),
+								)
+						}
 					}
 				}
 			}

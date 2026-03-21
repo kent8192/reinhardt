@@ -1,9 +1,14 @@
 [package]
 name = "reinhardt-http"
-version = "0.1.0-alpha.9"
+version = "0.1.0-rc.13"
 edition.workspace = true
+authors.workspace = true
 license.workspace = true
 description = "HTTP primitives, request and response handling for Reinhardt"
+keywords = ["http", "web", "request", "response", "framework"]
+categories = ["web-programming", "web-programming::http-server"]
+readme = "README.md"
+documentation = "https://docs.rs/reinhardt-http"
 repository.workspace = true
 
 [dependencies]
@@ -23,6 +28,7 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 reqwest = { workspace = true, features = ["json"] }
 rstest = { workspace = true }

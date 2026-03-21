@@ -12,10 +12,15 @@ use std::fmt;
 /// Represents a Common Table Expression (WITH clause)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CTE {
+	/// The name.
 	pub name: String,
+	/// The query.
 	pub query: String,
+	/// The columns.
 	pub columns: Vec<String>,
+	/// The recursive.
 	pub recursive: bool,
+	/// The materialized.
 	pub materialized: Option<bool>,
 }
 
@@ -174,7 +179,7 @@ impl CTEBuilder {
 	/// use reinhardt_db::orm::cte::CTEBuilder;
 	///
 	/// let builder = CTEBuilder::new("user_stats");
-	// Use builder to construct a CTE step by step
+	/// // Use builder to construct a CTE step by step
 	/// ```
 	pub fn new(name: impl Into<String>) -> Self {
 		Self {

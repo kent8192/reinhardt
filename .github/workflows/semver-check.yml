@@ -1,0 +1,144 @@
+name: SemVer Check
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: 'Runner label JSON'
+        type: string
+        default: '"ubuntu-latest"'
+      cargo-build-jobs:
+        description: "Parallel cargo build jobs"
+        type: string
+        default: "1"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
+
+jobs:
+  semver-checks:
+    name: SemVer Compatibility Check
+    runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
+    timeout-minutes: 90
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        if: ${{ !contains(inputs.runner || '', 'self-hosted') }}
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          # fetch-depth: 0 is required for --baseline-rev to access the full git history.
+          # cargo-semver-checks needs to checkout and build the baseline commit, which
+          # is not possible with a shallow clone (fetch-depth: 1, the default).
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Setup protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cargo-semver-checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Get latest release tag via GitHub API (no gh CLI dependency)
+          LATEST_TAG=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://api.github.com/repos/obi1kenobi/cargo-semver-checks/releases/latest" \
+            | jq -r '.tag_name')
+          # Auto-detect architecture for correct binary
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "aarch64" ]; then
+            TARGET="aarch64-unknown-linux-musl"
+          else
+            TARGET="x86_64-unknown-linux-musl"
+          fi
+          curl -fsSL -o /tmp/cargo-semver-checks.tar.gz \
+            "https://github.com/obi1kenobi/cargo-semver-checks/releases/download/${LATEST_TAG}/cargo-semver-checks-${TARGET}.tar.gz"
+          mkdir -p /tmp/csc
+          tar xzf /tmp/cargo-semver-checks.tar.gz -C /tmp/csc/
+          mv /tmp/csc/cargo-semver-checks ~/.cargo/bin/
+          rm -rf /tmp/csc /tmp/cargo-semver-checks.tar.gz
+
+      # On release-plz Release PRs, run the full semver-check using version numbers
+      # from Cargo.toml to validate the complete release (major/minor/patch).
+      # release-plz bumps versions in Cargo.toml, so cargo-semver-checks can auto-detect
+      # the intended release type and verify compliance.
+      - name: Run cargo-semver-checks (release PR - full version check)
+        if: ${{ startsWith(github.head_ref || github.ref_name, 'release-plz-') }}
+        env:
+          # Use the PR base branch SHA as the baseline since crates are not yet published
+          # to crates.io. This compares SemVer compatibility against the main branch state.
+          # github.event.pull_request.base.sha is a git commit SHA (hex string), safe to use.
+          BASELINE_REV: ${{ github.event.pull_request.base.sha }}
+        run: |
+          cargo semver-checks check-release \
+            --workspace \
+            --exclude reinhardt-web \
+            --exclude reinhardt-pages \
+            --all-features \
+            --baseline-rev "${BASELINE_REV:-HEAD~1}"
+
+      # Detect pre-release phase to determine the appropriate semver-check behavior:
+      # - Alpha (0.x.y-alpha.N): No API stability guarantees → skip semver-check
+      # - RC (0.x.y-rc.N): No breaking changes permitted, approved additions allowed → enforce semver-check
+      # - Stable (0.x.y): Full SemVer guarantees → enforce semver-check
+      - name: Detect pre-release phase
+        if: ${{ !startsWith(github.head_ref || github.ref_name, 'release-plz-') }}
+        id: detect-prerelease
+        run: |
+          if grep -rqP '^version\s*=\s*"[^"]*-alpha' crates/*/Cargo.toml; then
+            echo "phase=alpha" >> "$GITHUB_OUTPUT"
+            echo "::notice::Alpha version detected. Skipping semver-check (no API stability guarantee during alpha)."
+          elif grep -rqP '^version\s*=\s*"[^"]*-rc' crates/*/Cargo.toml; then
+            echo "phase=rc" >> "$GITHUB_OUTPUT"
+            echo "::notice::RC version detected. Enforcing semver-check (no breaking changes permitted during RC phase)."
+          else
+            echo "phase=stable" >> "$GITHUB_OUTPUT"
+            echo "::notice::Stable version detected. Enforcing semver-check (full SemVer guarantees)."
+          fi
+
+      # On normal PRs with RC versions, enforce minor release type to block breaking
+      # breaking changes. Per stability policy (SP-1), the API surface is frozen
+      # during RC -- only bug fixes and deprecation-alias renames are permitted.
+      - name: Run cargo-semver-checks (normal PR - RC versions)
+        if: ${{ !startsWith(github.head_ref || github.ref_name, 'release-plz-') && steps.detect-prerelease.outputs.phase == 'rc' }}
+        env:
+          BASELINE_REV: ${{ github.event.pull_request.base.sha }}
+        run: |
+          cargo semver-checks check-release \
+            --workspace \
+            --exclude reinhardt-web \
+            --exclude reinhardt-pages \
+            --all-features \
+            --release-type minor \
+            --baseline-rev "${BASELINE_REV:-HEAD~1}"
+
+      # On normal PRs with stable versions, enforce minor release type to block
+      # breaking changes from being merged into main.
+      - name: Run cargo-semver-checks (normal PR - stable versions)
+        if: ${{ !startsWith(github.head_ref || github.ref_name, 'release-plz-') && steps.detect-prerelease.outputs.phase == 'stable' }}
+        env:
+          BASELINE_REV: ${{ github.event.pull_request.base.sha }}
+        run: |
+          cargo semver-checks check-release \
+            --workspace \
+            --exclude reinhardt-web \
+            --exclude reinhardt-pages \
+            --all-features \
+            --release-type minor \
+            --baseline-rev "${BASELINE_REV:-HEAD~1}"

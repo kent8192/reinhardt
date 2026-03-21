@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! # Reinhardt Email
 //!
 //! Django-style email sending for Reinhardt with comprehensive features for production use.
@@ -183,12 +184,19 @@
 //! # Ok(())
 //! # }
 
+/// Email sending backends (SMTP, console, file, in-memory).
 pub mod backends;
+/// Email header management and encoding.
 pub mod headers;
+/// Email message construction.
 pub mod message;
+/// Connection pooling for email backends.
 pub mod pooling;
+/// Template-based email rendering.
 pub mod templates;
+/// Email utility functions.
 pub mod utils;
+/// Email address and content validation.
 pub mod validation;
 
 use thiserror::Error;
@@ -201,32 +209,42 @@ pub use message::{Alternative, Attachment, EmailMessage, EmailMessageBuilder};
 pub use utils::{mail_admins, mail_managers, send_mail, send_mail_with_backend, send_mass_mail};
 pub use validation::MAX_EMAIL_LENGTH;
 
+/// Errors that can occur during email operations.
 #[derive(Debug, Error)]
 pub enum EmailError {
+	/// The provided email address is invalid.
 	#[error("Invalid email address: {0}")]
 	InvalidAddress(String),
 
+	/// A required field is missing from the email message.
 	#[error("Missing required field: {0}")]
 	MissingField(String),
 
+	/// An error occurred in the email backend.
 	#[error("Backend error: {0}")]
 	BackendError(String),
 
+	/// An SMTP protocol error occurred.
 	#[error("SMTP error: {0}")]
 	SmtpError(String),
 
+	/// An I/O error occurred during email operations.
 	#[error("IO error: {0}")]
 	IoError(#[from] std::io::Error),
 
+	/// A template rendering error occurred.
 	#[error("Template error: {0}")]
 	TemplateError(String),
 
+	/// An error occurred processing an attachment.
 	#[error("Attachment error: {0}")]
 	AttachmentError(String),
 
+	/// An email header name or value is invalid.
 	#[error("Invalid header: {0}")]
 	InvalidHeader(String),
 
+	/// A header injection attack was detected in the input.
 	#[error("Header injection attempt detected: {0}")]
 	HeaderInjection(String),
 }
@@ -243,4 +261,5 @@ impl EmailError {
 	}
 }
 
+/// A type alias for `Result<T, EmailError>`.
 pub type EmailResult<T> = std::result::Result<T, EmailError>;

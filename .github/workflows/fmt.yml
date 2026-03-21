@@ -2,6 +2,11 @@ name: Format Check
 
 on:
   workflow_call:
+    inputs:
+      runner:
+        description: 'Runner label JSON'
+        type: string
+        default: '"ubuntu-latest"'
   workflow_dispatch:
 
 env:
@@ -11,7 +16,7 @@ env:
 jobs:
   fmt:
     name: Format Check
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
       - name: Checkout repository

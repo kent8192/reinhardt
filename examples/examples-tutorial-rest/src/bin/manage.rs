@@ -1,7 +1,6 @@
 //! Reinhardt Project Management CLI for examples-tutorial-rest
-//!
-//! This is the project-specific management command interface (equivalent to Django's manage.py).
 
+use examples_tutorial_rest::config;
 use reinhardt::commands::execute_from_command_line;
 use reinhardt::core::tokio;
 use std::process;
@@ -16,6 +15,9 @@ async fn main() {
 			"examples_tutorial_rest.config.settings",
 		);
 	}
+
+	// Ensure config module is loaded (triggers #[routes] macro)
+	let _ = &config::urls::routes;
 
 	// Execute command from command line
 	if let Err(e) = execute_from_command_line().await {

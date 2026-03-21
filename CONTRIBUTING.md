@@ -51,8 +51,8 @@ Build commands:
 # Build the entire workspace (recommended)
 cargo make build
 
-# Build with all features
-cargo make build --all-features
+# Build with all features (already included in the task definition)
+cargo make build
 
 # Or use plain cargo if needed
 cargo build --workspace --all --all-features
@@ -105,8 +105,8 @@ Reinhardt uses a workspace structure:
 **IMPORTANT**: Reinhardt uses Rust 2024 Edition module system:
 
 - L **DO NOT USE** `mod.rs` files
--  **USE** `module_name.rs` files instead
--  **DECLARE** modules in `lib.rs` or parent module with `mod module_name;`
+- **USE** `module_name.rs` files instead
+- **DECLARE** modules in `lib.rs` or parent module with `mod module_name;`
 
 Example:
 
@@ -118,8 +118,8 @@ pub mod routing;
 // File structure:
 // src/
 //   lib.rs
-//   http.rs          //  Correct
-//   routing.rs       //  Correct
+//   http.rs          // Correct
+//   routing.rs       // Correct
 //   http/mod.rs      // L DO NOT USE
 ```
 
@@ -148,7 +148,7 @@ pub mod routing;
 
 - **DELETE obsolete code immediately** - don't leave commented-out code
 - **NO comments documenting deleted code** - Git history is the record
-- Extract important notes to `instructions/IMPLEMENTATION_NOTES.md` if needed
+- Extract important notes to dedicated documentation files in `instructions/` if needed
 
 ### TODO and Placeholder Policy
 
@@ -175,18 +175,18 @@ pub mod routing;
 Examples:
 
 ```rust
-//  Good: Marked placeholder
+// Good: Marked placeholder
 pub fn get_cache_config() -> CacheConfig {
     todo!("Implement cache configuration loading from settings")
 }
 
-//  Good: Using TODO comment
+// Good: Using TODO comment
 pub fn validate_input(data: &str) -> Result<()> {
     // TODO: Add input validation logic - planned for next sprint
     Ok(())
 }
 
-//  Good: Intentionally not implemented
+// Good: Intentionally not implemented
 fn legacy_api() -> String {
     unimplemented!("This legacy API is intentionally not supported")
 }
@@ -203,6 +203,36 @@ pub fn get_config() -> Config {
 - **PREFER** absolute paths or single-level relative paths (e.g., `../`)
 - Deep relative paths make code harder to understand
 
+### API Deprecation Policy
+
+When marking a public API as deprecated, follow these requirements:
+
+**Required attributes:**
+
+```rust
+#[deprecated(
+    since = "0.2.0",
+    note = "Use `new_function()` instead. Will be removed in 1.0.0."
+)]
+pub fn old_function() { ... }
+```
+
+**Requirements:**
+- `since`: Version when the item was deprecated (follow semantic versioning)
+- `note`: Concise migration path describing what to use instead and when removal is planned
+- Both `since` and `note` fields are **MANDATORY** — bare `#[deprecated]` is not allowed
+
+**Deprecation lifecycle:**
+1. Add `#[deprecated(since = "...", note = "...")]` to the item
+2. Keep the implementation functional until the planned removal version
+3. Add a `deprecated` commit type entry in CHANGELOG (triggers dedicated section)
+4. Remove the item in the version specified in `note`
+
+**Naming convention for commit messages:**
+```
+deprecated(auth): mark `old_session_token()` as deprecated in favor of `session_token()`
+```
+
 ---
 
 ## Testing Guidelines
@@ -212,7 +242,7 @@ pub fn get_config() -> Config {
 1. **NO skeleton implementations**: Tests MUST contain meaningful assertions
    - Tests must be capable of failing when code is incorrect
    - L Bad: `assert!(true)` or empty test bodies
-   -  Good: Tests with real assertions
+   - Good: Tests with real assertions
 
 2. **Use Reinhardt components**: Every test MUST use at least one Reinhardt crate component
 
@@ -230,7 +260,8 @@ pub fn get_config() -> Config {
 **Integration Tests**:
 
 - Use TWO or MORE Reinhardt crates
-- **MUST** be placed in the `tests` crate
+- Cross-crate integration tests **MUST** be placed in the `tests` crate
+- Within-crate integration tests can be placed in the functional crate
 - Test interactions between multiple crates
 
 **Dependency Rules**:
@@ -251,9 +282,10 @@ pub fn get_config() -> Config {
 Example:
 
 ```rust
+use rstest::rstest;
 use serial_test::serial;
 
-#[test]
+#[rstest]
 #[serial(i18n)]
 fn test_translation() {
     activate("fr", catalog);
@@ -303,13 +335,14 @@ Use the appropriate issue template when creating issues:
 
 | Template | Use When | Label Applied |
 |----------|----------|---------------|
-| `1-bug.yml` | Unexpected behavior or error | `bug` |
-| `2-feature.yml` | New functionality request | `enhancement` |
+| `1-bug_report.yml` | Unexpected behavior or error | `bug` |
+| `2-feature_request.yml` | New functionality request | `enhancement` |
 | `3-documentation.yml` | Documentation issues | `documentation` |
 | `4-question.yml` | Usage questions | `question` |
 | `5-performance.yml` | Performance issues | `performance` |
 | `6-ci_cd.yml` | CI/CD workflow failures | `ci-cd` |
 | `7-security.yml` | Security vulnerabilities | `security`, `critical` |
+| `8-api_change.yml` | API change proposals | `enhancement`, `rc-migration` |
 
 ### Issue Title Format
 
@@ -576,12 +609,102 @@ Update documentation for:
 
 ---
 
+## API Stabilization Process
+
+### Final Comment Period (FCP)
+
+The **Final Comment Period** (FCP) is a structured process for reaching consensus on significant API changes before they are stabilized. FCP ensures that all stakeholders have an opportunity to review and comment on proposed changes before they become part of the stable API.
+
+### When FCP Applies
+
+FCP is required for:
+
+- **New public API additions** that affect the stable interface
+- **Modifications to existing public APIs** that are backward-incompatible
+- **Deprecation of stable APIs** that users depend on
+- **Removal of previously deprecated APIs**
+- **Significant behavioral changes** that affect the documented contract
+
+FCP is **not required** for:
+- Internal implementation changes
+- Documentation-only changes
+- Bug fixes that restore intended behavior
+- Additions to unstable/experimental API categories
+
+### FCP Process
+
+1. **Proposal Phase**: Open a GitHub Issue using the [API Change Proposal template](.github/ISSUE_TEMPLATE/8-api_change.yml)
+   - Describe the current API, proposed change, and rationale
+   - Classify the change (breaking/non-breaking)
+   - Provide a migration path for breaking changes
+
+2. **Discussion Phase** (minimum 7 days for non-breaking, 14 days for breaking):
+   - Community and maintainers review the proposal
+   - Alternative approaches are discussed
+   - Concerns and objections are raised and addressed
+
+3. **FCP Announcement**: A maintainer posts an FCP announcement comment on the issue
+   - States the proposed disposition (merge/postpone/close)
+   - Begins the final comment period countdown
+   - Labels the issue with `fcp-merge`, `fcp-postpone`, or `fcp-close`
+
+4. **Final Comment Period** (minimum 7 days):
+   - Community has a final opportunity to raise concerns
+   - Any new objections restart the discussion phase
+   - No new concerns → proceed to disposition
+
+5. **Resolution**: After FCP completes without new objections
+   - Issue is closed with final decision documented
+   - Implementation PR is opened referencing the stabilization issue
+   - API is marked as stable in the next minor/major release
+
+### API Stability Categories
+
+| Category | Description | FCP Required |
+|----------|-------------|--------------|
+| `Stable` | Fully supported, covered by SemVer | Yes (for changes) |
+| `Experimental` | Subject to change without major version bump | No |
+| `Internal` | Not part of the public API contract | No |
+
+### Marking API Stability
+
+Use `#[doc(cfg(...))]` and doc comments to communicate API status:
+
+```rust
+/// Stable API - covered by SemVer guarantees.
+pub fn stable_function() {}
+
+/// **Experimental**: This API is subject to change.
+///
+/// May be modified or removed in future minor versions.
+#[cfg_attr(docsrs, doc(cfg(feature = "experimental")))]
+pub fn experimental_function() {}
+```
+
+### Deprecation Policy
+
+When an API is deprecated:
+
+1. Add `#[deprecated(since = "x.y.z", note = "Use `new_function()` instead")]`
+2. Open a GitHub Issue documenting the deprecation timeline
+3. Provide a migration guide in the documentation
+4. Maintain the deprecated API for at least one minor version cycle
+5. Remove the API only after FCP and appropriate deprecation period
+
+### Resources
+
+- [API Stability Policy](docs/API_STABILITY.md) - Detailed stability guarantees
+- [API Change Proposal Template](.github/ISSUE_TEMPLATE/8-api_change.yml) - Template for API proposals
+- [SemVer specification](https://semver.org/) - Versioning guidelines
+
+---
+
 ## Getting Help
 
 ### Resources
 
-- [Getting Started Guide](/quickstart/getting-started/)
-- [Feature Flags Guide](/docs/feature-flags/)
+- [Getting Started Guide](website/content/quickstart/getting-started.md)
+- [Feature Flags Guide](website/content/docs/feature-flags.md)
 - [Issue Guidelines](instructions/ISSUE_GUIDELINES.md) - Issue creation and management
 - [Pull Request Guidelines](instructions/PR_GUIDELINE.md) - PR policies and procedures
 - [Security Policy](SECURITY.md) - Security vulnerability reporting
@@ -594,12 +717,12 @@ Update documentation for:
 
 Please check:
 
--  [Getting Started Guide](/quickstart/getting-started/)
--  [Issue Guidelines](instructions/ISSUE_GUIDELINES.md)
--  [Pull Request Guidelines](instructions/PR_GUIDELINE.md)
--  [Examples](examples/)
--  Existing GitHub Issues and Discussions
--  [CLAUDE.md](CLAUDE.md) for project-specific guidelines
+- [Getting Started Guide](website/content/quickstart/getting-started.md)
+- [Issue Guidelines](instructions/ISSUE_GUIDELINES.md)
+- [Pull Request Guidelines](instructions/PR_GUIDELINE.md)
+- [Examples](examples/)
+- Existing GitHub Issues and Discussions
+- [CLAUDE.md](CLAUDE.md) for project-specific guidelines
 
 ---
 
@@ -612,33 +735,33 @@ Please check:
 - L NO `mod.rs` files
 - L NO TODO/NOTE comments in user-facing placeholders
 - L NO unmarked placeholder implementations
--  USE 2024 edition module system
--  MARK ALL placeholders with `todo!()` or `// TODO:`
+- USE 2024 edition module system
+- MARK ALL placeholders with `todo!()` or `// TODO:`
 
 **Testing**:
 
 - L NO skeleton tests
 - L NO cross-crate functional dev-dependencies (except reinhardt-test)
--  CLEAN UP all test artifacts
--  SERIALIZE tests with global state using `#[serial]`
+- CLEAN UP all test artifacts
+- SERIALIZE tests with global state using `#[serial]`
 
 **File Management**:
 
 - L NO saving files to project directory (use `/tmp`)
 - L NO relative paths with more than one level up
--  DELETE `/tmp` files when done
+- DELETE `/tmp` files when done
 
 **Documentation**:
 
 - L NO outdated documentation after code changes
--  UPDATE documentation with code changes
+- UPDATE documentation with code changes
 
 **Commits**:
 
 - L NO commits without user instruction
 - L NO batch commits without confirmation
--  SPLIT commits by logical purpose
--  KEEP commits small and focused
+- SPLIT commits by logical purpose
+- KEEP commits small and focused
 
 
 ### Common Commands

@@ -213,6 +213,6 @@ Next steps:
 ## References
 
 - [Reinhardt Documentation](../../../docs/)
-- [Testing Standards](../../../docs/TESTING_STANDARDS.md)
+- [Testing Standards](../../../instructions/TESTING_STANDARDS.md)
 - [Standard Fixtures Guide](../../../crates/reinhardt-test/README.md)
 - [Examples Overview](../../README.md)

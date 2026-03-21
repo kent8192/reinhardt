@@ -5,9 +5,13 @@ use std::fmt;
 /// Represents a media type (MIME type)
 #[derive(Debug, Clone, PartialEq)]
 pub struct MediaType {
+	/// Primary type (e.g., "application", "text", "*").
 	pub type_: String,
+	/// Subtype (e.g., "json", "html", "*").
 	pub subtype: String,
+	/// Additional parameters (e.g., charset=utf-8), excluding quality.
 	pub parameters: Vec<(String, String)>,
+	/// Quality factor between 0.0 and 1.0 (higher is preferred).
 	pub quality: f32,
 }
 
@@ -69,6 +73,10 @@ impl MediaType {
 
 				if key == "q" {
 					if let Ok(q) = value.parse::<f32>() {
+						// Reject non-finite quality values (NaN, inf, -inf)
+						if !q.is_finite() {
+							return None;
+						}
 						media_type.quality = q.clamp(0.0, 1.0);
 					}
 				} else {
@@ -186,6 +194,7 @@ impl fmt::Display for MediaType {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_parse_media_type() {
@@ -200,5 +209,21 @@ mod tests {
 		let json = MediaType::new("application", "json");
 		let wildcard = MediaType::new("*", "*");
 		assert!(json.matches(&wildcard));
+	}
+
+	#[rstest]
+	#[case("text/html;q=NaN")]
+	#[case("application/json; q=NaN")]
+	#[case("text/html;q=inf")]
+	#[case("text/html;q=-inf")]
+	fn test_parse_rejects_non_finite_quality(#[case] input: &str) {
+		// Arrange
+		// (input provided by rstest case)
+
+		// Act
+		let result = MediaType::parse(input);
+
+		// Assert
+		assert_eq!(result, None, "Non-finite quality value should be rejected");
 	}
 }

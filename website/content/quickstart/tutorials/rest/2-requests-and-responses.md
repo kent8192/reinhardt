@@ -16,11 +16,11 @@ Reinhardt's `Request` object provides access to HTTP request data:
 
 ```rust
 use reinhardt::prelude::*;
-use reinhardt::get;
-use hyper::{Method, StatusCode};
+use reinhardt::ViewResult;
+use reinhardt::{get, Method, Response};
 
 #[get("/example", name = "my_view")]
-async fn my_view(request: Request) -> Result<Response> {
+async fn my_view(request: Request) -> ViewResult<Response> {
     // Access HTTP method
     match request.method {
         Method::GET => println!("GET request"),
@@ -34,7 +34,7 @@ async fn my_view(request: Request) -> Result<Response> {
     }
 
     // Access query parameters
-    let query = request.query_string();
+    let query = &request.query_params;
 
     // Access request body
     let body_bytes = request.body();
@@ -65,7 +65,7 @@ let response = Response::ok()
     .with_json(&data)?;
 
 // Custom status code (201 Created)
-let response = Response::new(201)
+let response = Response::created()
     .with_body("Created");
 
 // Response with custom headers
@@ -84,11 +84,11 @@ Response::ok()
     .with_json(&data)?
 
 // 201 Created
-Response::new(201)
+Response::created()
     .with_json(&data)?
 
 // 204 No Content
-Response::new(204)
+Response::no_content()
 
 // 400 Bad Request
 Response::bad_request()
@@ -111,6 +111,7 @@ Reinhardt provides convenient helper methods on the `Request` type for parsing r
 
 ```rust
 use reinhardt::prelude::*;
+use reinhardt::ViewResult;
 use reinhardt::post;
 use serde::{Serialize, Deserialize};
 
@@ -122,14 +123,14 @@ struct CreateSnippet {
 }
 
 #[post("/snippets", name = "create_snippet")]
-async fn create_snippet(request: Request) -> Result<Response> {
+async fn create_snippet(request: Request) -> ViewResult<Response> {
     // Recommended: Use request helper method for JSON parsing
     let data: CreateSnippet = request.json()?;
 
     println!("Title: {}", data.title);
     println!("Code: {}", data.code);
 
-    Response::new(201)
+    Response::created()
         .with_json(&data)
 }
 ```
@@ -171,8 +172,7 @@ let data: CreateSnippet = request.json()?;
 
 **Available Helper Methods:**
 - `request.json::<T>().await?` - Parse JSON body into type T
-- `request.parse_form().await?` - Parse URL-encoded form data
-- `request.body` - Access raw body bytes
+- `request.body()` - Access raw body bytes
 
 **Benefits:**
 - Automatic Content-Type header validation
@@ -185,13 +185,13 @@ let data: CreateSnippet = request.json()?;
 For special parsing requirements, you can manually parse the request body:
 
 ```rust
-#[post("/snippets", name = "create_snippet_manual")]
-async fn create_snippet_manual(request: Request) -> Result<Response> {
+#[post("/snippets/", name = "create_snippet_manual")]
+async fn create_snippet_manual(request: Request) -> ViewResult<Response> {
     // Manual parsing for advanced use cases
     let body_bytes = request.body();
     let data: CreateSnippet = serde_json::from_slice(body_bytes)?;
 
-    Response::new(201)
+    Response::created()
         .with_json(&data)
 }
 ```
@@ -207,11 +207,12 @@ Reinhardt supports multiple content types:
 
 ```rust
 use reinhardt::prelude::*;
+use reinhardt::ViewResult;
 use reinhardt::post;
 use serde_json::Value;
 
 #[post("/handle", name = "handle_request")]
-async fn handle_request(mut request: Request) -> Result<Response> {
+async fn handle_request(mut request: Request) -> ViewResult<Response> {
     let content_type = request.headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
@@ -226,7 +227,7 @@ async fn handle_request(mut request: Request) -> Result<Response> {
                 .with_json(&data)
         }
         "application/x-www-form-urlencoded" => {
-            let form_data = request.parse_form().await?;
+            let form_data: serde_json::Value = serde_urlencoded::from_bytes(body_bytes)?;
             Response::ok()
                 .with_json(&form_data)
         }
@@ -244,10 +245,11 @@ Handle errors gracefully:
 
 ```rust
 use reinhardt::prelude::*;
+use reinhardt::ViewResult;
 use reinhardt::post;
 
 #[post("/safe", name = "safe_view")]
-async fn safe_view(request: Request) -> Result<Response> {
+async fn safe_view(request: Request) -> ViewResult<Response> {
     // Parse and validate data
     let body_bytes = request.body();
     let data: CreateSnippet = match serde_json::from_slice(body_bytes) {
@@ -264,7 +266,7 @@ async fn safe_view(request: Request) -> Result<Response> {
             .with_body("Title is required");
     }
 
-    Response::new(201)
+    Response::created()
         .with_json(&data)
 }
 ```
@@ -275,9 +277,10 @@ Full request/response handling using Reinhardt's helper methods:
 
 ```rust
 use reinhardt::prelude::*;
+use reinhardt::ViewResult;
 use reinhardt::endpoint;
+use reinhardt::Method;
 use serde::{Serialize, Deserialize};
-use hyper::Method;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Snippet {
@@ -300,7 +303,7 @@ fn validate_snippet(snippet: &Snippet) -> Result<(), String> {
 }
 
 #[get("/snippets", name = "snippet_list")]
-async fn snippet_list(mut request: Request) -> Result<Response> {
+async fn snippet_list(mut request: Request) -> ViewResult<Response> {
     match request.method {
         Method::GET => {
             // Return list of snippets
@@ -328,11 +331,11 @@ async fn snippet_list(mut request: Request) -> Result<Response> {
             // Assign ID and save
             snippet.id = Some(1);
 
-            Response::new(201)
+            Response::created()
                 .with_json(&snippet)
         }
         _ => {
-            Response::new(405)
+            Response::new(StatusCode::METHOD_NOT_ALLOWED)
                 .with_body("Method not allowed")
         }
     }

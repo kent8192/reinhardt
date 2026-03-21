@@ -2,17 +2,33 @@
 
 use crate::field::{FieldError, FieldResult, FormField, Widget};
 use regex::Regex;
+use std::sync::LazyLock;
+
+/// Email validation regex pattern.
+const EMAIL_PATTERN: &str = r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$";
+
+/// Cached email validation regex to avoid repeated compilation.
+static EMAIL_REGEX: LazyLock<Regex> =
+	LazyLock::new(|| Regex::new(EMAIL_PATTERN).expect("Email regex pattern is valid"));
 
 /// Email field with format validation
 #[derive(Debug, Clone)]
 pub struct EmailField {
+	/// The field name used as the form data key.
 	pub name: String,
+	/// Optional human-readable label for display.
 	pub label: Option<String>,
+	/// Whether this field must be filled in.
 	pub required: bool,
+	/// Optional help text displayed alongside the field.
 	pub help_text: Option<String>,
+	/// The widget type used for rendering this field.
 	pub widget: Widget,
+	/// Optional initial (default) value for the field.
 	pub initial: Option<serde_json::Value>,
+	/// Maximum allowed character count (defaults to 320 per RFC).
 	pub max_length: Option<usize>,
+	/// Minimum required character count.
 	pub min_length: Option<usize>,
 }
 
@@ -134,13 +150,7 @@ impl EmailField {
 
 	/// Validate email format
 	fn validate_email(email: &str) -> bool {
-		// Basic email validation regex
-		// This is a simplified version - production should use a more robust validator
-		let email_regex = Regex::new(
-            r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
-        ).unwrap();
-
-		email_regex.is_match(email)
+		EMAIL_REGEX.is_match(email)
 	}
 }
 

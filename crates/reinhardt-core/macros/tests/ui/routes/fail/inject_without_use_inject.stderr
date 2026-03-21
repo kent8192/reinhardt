@@ -1,5 +1,0 @@
-error: #[inject] attribute requires use_inject = true option. Usage: #[get("/path", use_inject = true)]
- --> tests/ui/routes/fail/inject_without_use_inject.rs:8:28
-  |
-8 | async fn handler(#[inject] service: MyService) -> String {
-  |                            ^^^^^^^

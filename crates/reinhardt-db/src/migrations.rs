@@ -193,41 +193,63 @@ pub trait MigrationProvider {
 	fn migrations() -> Vec<Migration>;
 }
 
+/// Errors that can occur during migration operations.
+#[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum MigrationError {
+	/// The requested migration was not found.
 	#[error("Migration not found: {0}")]
 	NotFound(String),
 
+	/// A migration dependency could not be resolved.
 	#[error("Dependency error: {0}")]
 	DependencyError(String),
 
+	/// An SQL execution error occurred.
 	#[error("SQL error: {0}")]
 	SqlError(#[from] sqlx::Error),
 
+	/// A database backend error occurred.
 	#[error("Database error: {0}")]
 	DatabaseError(#[from] crate::backends::QueryDatabaseError),
 
+	/// The migration definition is invalid.
 	#[error("Invalid migration: {0}")]
 	InvalidMigration(String),
 
+	/// The migration cannot be reversed.
 	#[error("Irreversible migration: {0}")]
 	IrreversibleError(String),
 
+	/// An I/O error occurred during migration.
 	#[error("IO error: {0}")]
 	IoError(#[from] std::io::Error),
 
+	/// A formatting error occurred.
 	#[error("Format error: {0}")]
 	FmtError(#[from] std::fmt::Error),
 
+	/// Circular dependency detected in migration graph.
 	#[error("Circular dependency detected: {cycle}")]
-	CircularDependency { cycle: String },
+	CircularDependency {
+		/// Description of the dependency cycle.
+		cycle: String,
+	},
 
+	/// A required migration node was not found.
 	#[error("Node not found: {message} - {node}")]
-	NodeNotFound { message: String, node: String },
+	NodeNotFound {
+		/// The error message.
+		message: String,
+		/// The node identifier.
+		node: String,
+	},
 
+	/// An error occurred during database introspection.
 	#[error("Introspection error: {0}")]
 	IntrospectionError(String),
 
+	/// The database type is not supported.
 	#[error("Unsupported database: {0}")]
 	UnsupportedDatabase(String),
 
@@ -256,9 +278,11 @@ pub enum MigrationError {
 	PathTraversal(String),
 }
 
+/// Type alias for result.
 pub type Result<T> = std::result::Result<T, MigrationError>;
 
 // Prelude for migrations
+/// Prelude module.
 pub mod prelude {
 	pub use super::fields::prelude::*;
 	pub use super::{ColumnDefinition, Constraint, ForeignKeyAction, Migration, Operation};

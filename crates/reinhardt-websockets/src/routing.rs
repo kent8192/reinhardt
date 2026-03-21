@@ -16,10 +16,13 @@ pub type RouteResult = Result<(), RouteError>;
 /// Routing errors
 #[derive(Debug, thiserror::Error)]
 pub enum RouteError {
+	/// No route was found matching the given path.
 	#[error("Route not found")]
 	NotFound(String),
+	/// A route with the same path pattern already exists.
 	#[error("Route already exists")]
 	AlreadyExists(String),
+	/// The route pattern is malformed.
 	#[error("Invalid route pattern")]
 	InvalidPattern(String),
 }
@@ -105,6 +108,7 @@ impl WebSocketRoute {
 /// assert_eq!(found.unwrap().name(), Some("websocket:chat"));
 /// # });
 /// ```
+#[derive(Clone)]
 pub struct WebSocketRouter {
 	routes: Arc<RwLock<HashMap<String, WebSocketRoute>>>,
 	names: Arc<RwLock<HashMap<String, String>>>, // name -> path mapping
@@ -240,11 +244,7 @@ pub async fn register_websocket_router(router: WebSocketRouter) {
 /// Get the global WebSocket router
 pub async fn get_websocket_router() -> Option<WebSocketRouter> {
 	let global = GLOBAL_ROUTER.read().await;
-	if global.is_some() {
-		Some(WebSocketRouter::new())
-	} else {
-		None
-	}
+	global.clone()
 }
 
 /// Clear the global WebSocket router

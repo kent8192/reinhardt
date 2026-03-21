@@ -19,9 +19,8 @@ reinhardt = { version = "{{ reinhardt_version }}", package = "reinhardt-web", fe
 
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.11", features = ["v4", "serde"] }
-ctor = "0.6.3"
+ctor = "0.6"
 linkme = "0.3"
-validator = { version = "0.20.0", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 inventory = "0.3"

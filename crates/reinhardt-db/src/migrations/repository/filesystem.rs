@@ -117,27 +117,36 @@ impl FilesystemRepository {
 
 	/// Generate Rust code for a migration file
 	fn generate_migration_code(&self, migration: &Migration) -> Result<String> {
-		// Build dependencies vector
+		// Build dependencies vector (tuple elements need .to_string() for String type)
 		let deps: Vec<_> = migration
 			.dependencies
 			.iter()
 			.map(|(app, name)| {
-				quote! { (#app, #name) }
+				quote! { (#app.to_string(), #name.to_string()) }
 			})
 			.collect();
 
-		// Build replaces vector
+		// Build replaces vector (tuple elements need .to_string() for String type)
 		let replaces: Vec<_> = migration
 			.replaces
 			.iter()
 			.map(|(app, name)| {
-				quote! { (#app, #name) }
+				quote! { (#app.to_string(), #name.to_string()) }
 			})
 			.collect();
 
 		let app_label = &migration.app_label;
 		let name = &migration.name;
 		let atomic = migration.atomic;
+		let state_only = migration.state_only;
+		let database_only = migration.database_only;
+
+		// Build initial field token
+		let initial_tokens = match migration.initial {
+			Some(true) => quote! { Some(true) },
+			Some(false) => quote! { Some(false) },
+			None => quote! { None },
+		};
 
 		// Generate operation code
 		let ops_tokens = migration.operations.iter();
@@ -150,12 +159,17 @@ impl FilesystemRepository {
 
 			pub fn migration() -> Migration {
 				Migration {
-					app_label: #app_label,
-					name: #name,
+					app_label: #app_label.to_string(),
+					name: #name.to_string(),
 					operations: #operations_code,
 					dependencies: vec![#(#deps),*],
 					atomic: #atomic,
 					replaces: vec![#(#replaces),*],
+					initial: #initial_tokens,
+					state_only: #state_only,
+					database_only: #database_only,
+					swappable_dependencies: vec![],
+					optional_dependencies: vec![],
 				}
 			}
 		};
@@ -244,17 +258,22 @@ impl MigrationRepository for FilesystemRepository {
 			))));
 		}
 
-		// Check for duplicate operations with existing migrations
-		let existing_migrations = self.list(&migration.app_label).await?;
-		for existing in &existing_migrations {
-			if self.has_identical_operations(existing, migration) {
-				return Err(MigrationError::DuplicateOperations(format!(
-					"Migration '{}' has identical operations to existing migration '{}'. \
-					This usually indicates a problem with from_state construction. \
-					The existing migration was created at the same location and performs \
-					the same database changes.",
-					migration.name, existing.name
-				)));
+		// Check for duplicate operations with existing migrations.
+		// Skip for migrations with empty operations (e.g., merge migrations)
+		// since empty-vs-empty comparison is never a meaningful duplicate signal.
+		// The file-exists check above already prevents actual overwrites.
+		if !migration.operations.is_empty() {
+			let existing_migrations = self.list(&migration.app_label).await?;
+			for existing in &existing_migrations {
+				if self.has_identical_operations(existing, migration) {
+					return Err(MigrationError::DuplicateOperations(format!(
+						"Migration '{}' has identical operations to existing migration '{}'. \
+						This usually indicates a problem with from_state construction. \
+						The existing migration was created at the same location and performs \
+						the same database changes.",
+						migration.name, existing.name
+					)));
+				}
 			}
 		}
 
@@ -726,5 +745,59 @@ mod tests {
 			result.unwrap_err(),
 			MigrationError::PathTraversal(_)
 		));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_repository)]
+	async fn test_filesystem_repository_save_with_initial_true() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let mut repo = FilesystemRepository::new(temp_dir.path());
+		let mut migration = create_test_migration("polls", "0001_initial_true");
+		migration.initial = Some(true);
+
+		// Act
+		repo.save(&migration).await.unwrap();
+
+		// Assert - verify generated code contains initial: Some(true)
+		let path = repo.migration_path("polls", "0001_initial_true").unwrap();
+		let content = tokio::fs::read_to_string(&path).await.unwrap();
+		assert!(
+			content.contains("Some(true)"),
+			"Generated code should contain Some(true), got: {}",
+			content
+		);
+
+		// Assert - round-trip: get() parses back the same initial value
+		let retrieved = repo.get("polls", "0001_initial_true").await.unwrap();
+		assert_eq!(retrieved.initial, Some(true));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_repository)]
+	async fn test_filesystem_repository_save_with_initial_false() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let mut repo = FilesystemRepository::new(temp_dir.path());
+		let mut migration = create_test_migration("polls", "0001_initial_false");
+		migration.initial = Some(false);
+
+		// Act
+		repo.save(&migration).await.unwrap();
+
+		// Assert - verify generated code contains initial: Some(false)
+		let path = repo.migration_path("polls", "0001_initial_false").unwrap();
+		let content = tokio::fs::read_to_string(&path).await.unwrap();
+		assert!(
+			content.contains("Some(false)"),
+			"Generated code should contain Some(false), got: {}",
+			content
+		);
+
+		// Assert - round-trip: get() parses back the same initial value
+		let retrieved = repo.get("polls", "0001_initial_false").await.unwrap();
+		assert_eq!(retrieved.initial, Some(false));
 	}
 }

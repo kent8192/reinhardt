@@ -49,23 +49,30 @@ use moka::future::Cache;
 use std::time::{Duration, Instant};
 
 /// Error type for dynamic settings operations
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum DynamicError {
+	/// An error originating from the storage backend.
 	#[error("Backend error: {0}")]
 	Backend(String),
 
+	/// A serialization or deserialization error.
 	#[error("Serialization error: {0}")]
 	Serialization(#[from] serde_json::Error),
 
+	/// The requested key was not found in the backend.
 	#[error("Key not found: {0}")]
 	KeyNotFound(String),
 
+	/// The stored value could not be converted to the requested type.
 	#[error("Invalid value type")]
 	InvalidType,
 
+	/// An error originating from the cache layer.
 	#[error("Cache error: {0}")]
 	Cache(String),
 
+	/// An error from the hot-reload file watcher.
 	#[cfg(feature = "hot-reload")]
 	#[error("Hot reload error: {0}")]
 	HotReload(String),
@@ -256,7 +263,7 @@ pub struct DynamicSettings {
 	observers: Arc<RwLock<HashMap<SubscriptionId, ObserverCallback>>>,
 
 	#[cfg(feature = "hot-reload")]
-	hot_reload: Option<Arc<parking_lot::Mutex<super::hot_reload::HotReloadManager>>>,
+	hot_reload: Option<Arc<tokio::sync::Mutex<super::hot_reload::HotReloadManager>>>,
 }
 
 impl DynamicSettings {
@@ -624,11 +631,11 @@ impl DynamicSettings {
 	/// # });
 	/// ```
 	#[cfg(feature = "hot-reload")]
-	#[allow(clippy::await_holding_lock)] // HotReloadManager's async methods require holding the lock
 	pub async fn watch_file(&self, path: &std::path::Path) -> DynamicResult<()> {
 		if let Some(hot_reload) = &self.hot_reload {
 			hot_reload
 				.lock()
+				.await
 				.watch(path)
 				.await
 				.map_err(DynamicError::Backend)?;
@@ -659,11 +666,11 @@ impl DynamicSettings {
 	/// # }
 	/// ```
 	#[cfg(feature = "hot-reload")]
-	#[allow(clippy::await_holding_lock)] // HotReloadManager's async methods require holding the lock
 	pub async fn unwatch_file(&self, path: &std::path::Path) -> DynamicResult<()> {
 		if let Some(hot_reload) = &self.hot_reload {
 			hot_reload
 				.lock()
+				.await
 				.unwatch(path)
 				.await
 				.map_err(DynamicError::Backend)?;
@@ -688,11 +695,11 @@ impl DynamicSettings {
 	/// # }
 	/// ```
 	#[cfg(feature = "hot-reload")]
-	#[allow(clippy::await_holding_lock)] // HotReloadManager's async methods require holding the lock
 	pub async fn stop_watching(&self) -> DynamicResult<()> {
 		if let Some(hot_reload) = &self.hot_reload {
 			hot_reload
 				.lock()
+				.await
 				.stop()
 				.await
 				.map_err(DynamicError::Backend)?;
@@ -718,7 +725,7 @@ impl DynamicSettings {
 	#[cfg(feature = "hot-reload")]
 	pub fn with_hot_reload(mut self) -> Self {
 		let manager = super::hot_reload::HotReloadManager::new();
-		self.hot_reload = Some(Arc::new(parking_lot::Mutex::new(manager)));
+		self.hot_reload = Some(Arc::new(tokio::sync::Mutex::new(manager)));
 		self
 	}
 

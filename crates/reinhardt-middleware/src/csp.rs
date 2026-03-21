@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tracing::warn;
 
 /// Type wrapper for CSP nonce stored in Request extensions
 #[derive(Debug, Clone)]
@@ -28,6 +29,7 @@ fn is_valid_nonce(nonce: &str) -> bool {
 }
 
 /// CSP directive configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct CspConfig {
 	/// CSP directives (e.g., "default-src", "script-src")
@@ -170,11 +172,10 @@ impl CspMiddleware {
 	/// directives.insert("default-src".to_string(), vec!["'self'".to_string()]);
 	/// directives.insert("script-src".to_string(), vec!["'self'".to_string(), "https://cdn.example.com".to_string()]);
 	///
-	/// let config = CspConfig {
-	///     directives,
-	///     report_only: false,
-	///     include_nonce: false,
-	/// };
+	/// let mut config = CspConfig::default();
+	/// config.directives = directives;
+	/// config.report_only = false;
+	/// config.include_nonce = false;
 	///
 	/// let middleware = CspMiddleware::with_config(config);
 	/// let handler = Arc::new(TestHandler);
@@ -251,7 +252,7 @@ impl CspMiddleware {
 		use rand::RngCore;
 
 		let mut bytes = [0u8; 16];
-		rand::rngs::OsRng.fill_bytes(&mut bytes);
+		rand::rng().fill_bytes(&mut bytes);
 		base64::engine::general_purpose::STANDARD.encode(bytes)
 	}
 
@@ -316,9 +317,17 @@ impl Middleware for CspMiddleware {
 
 		// Add CSP header
 		let csp_value = self.build_csp_header(nonce.as_deref());
-		response
-			.headers
-			.insert(self.get_header_name(), csp_value.parse().unwrap());
+		match csp_value.parse() {
+			Ok(value) => {
+				response.headers.insert(self.get_header_name(), value);
+			}
+			Err(e) => {
+				warn!(
+					error = %e,
+					"Failed to parse CSP header value, skipping header insertion"
+				);
+			}
+		}
 
 		Ok(response)
 	}

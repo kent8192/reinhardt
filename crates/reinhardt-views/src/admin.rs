@@ -19,18 +19,23 @@ use std::marker::PhantomData;
 /// Error type for admin operations
 #[derive(Debug, thiserror::Error)]
 pub enum AdminError {
+	/// The requested model was not found.
 	#[error("Model not found: {0}")]
 	ModelNotFound(String),
 
+	/// The requested field was not found on the model.
 	#[error("Field not found: {0}")]
 	FieldNotFound(String),
 
+	/// The provided filter expression is invalid.
 	#[error("Invalid filter: {0}")]
 	InvalidFilter(String),
 
+	/// The current user does not have permission for this action.
 	#[error("Permission denied: {0}")]
 	PermissionDenied(String),
 
+	/// A database query error occurred.
 	#[error("Query error: {0}")]
 	QueryError(String),
 }

@@ -62,10 +62,11 @@ impl CacheEntry {
 		let mut response = Response::new(status).with_body(self.body.clone());
 
 		for (key, value) in &self.headers {
-			response.headers.insert(
-				hyper::header::HeaderName::try_from(key).unwrap(),
-				value.parse().unwrap(),
-			);
+			if let (Ok(header_name), Ok(header_value)) =
+				(hyper::header::HeaderName::try_from(key), value.parse())
+			{
+				response.headers.insert(header_name, header_value);
+			}
 		}
 
 		// Add cache header
@@ -93,43 +94,43 @@ impl CacheStore {
 
 	/// Get an entry
 	pub fn get(&self, key: &str) -> Option<CacheEntry> {
-		let entries = self.entries.read().unwrap();
+		let entries = self.entries.read().unwrap_or_else(|e| e.into_inner());
 		entries.get(key).cloned()
 	}
 
 	/// Set an entry
 	pub fn set(&self, key: String, entry: CacheEntry) {
-		let mut entries = self.entries.write().unwrap();
+		let mut entries = self.entries.write().unwrap_or_else(|e| e.into_inner());
 		entries.insert(key, entry);
 	}
 
 	/// Delete an entry
 	pub fn delete(&self, key: &str) {
-		let mut entries = self.entries.write().unwrap();
+		let mut entries = self.entries.write().unwrap_or_else(|e| e.into_inner());
 		entries.remove(key);
 	}
 
 	/// Clean up expired entries
 	pub fn cleanup(&self) {
-		let mut entries = self.entries.write().unwrap();
+		let mut entries = self.entries.write().unwrap_or_else(|e| e.into_inner());
 		entries.retain(|_, entry| !entry.is_expired());
 	}
 
 	/// Clear the store
 	pub fn clear(&self) {
-		let mut entries = self.entries.write().unwrap();
+		let mut entries = self.entries.write().unwrap_or_else(|e| e.into_inner());
 		entries.clear();
 	}
 
 	/// Get the number of entries
 	pub fn len(&self) -> usize {
-		let entries = self.entries.read().unwrap();
+		let entries = self.entries.read().unwrap_or_else(|e| e.into_inner());
 		entries.len()
 	}
 
 	/// Check if the store is empty
 	pub fn is_empty(&self) -> bool {
-		let entries = self.entries.read().unwrap();
+		let entries = self.entries.read().unwrap_or_else(|e| e.into_inner());
 		entries.is_empty()
 	}
 }
@@ -148,6 +149,7 @@ pub enum CacheKeyStrategy {
 }
 
 /// Cache configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct CacheConfig {
 	/// Default TTL
@@ -366,9 +368,7 @@ impl CacheMiddleware {
 	/// Generate cache key
 	fn generate_cache_key(&self, request: &Request) -> String {
 		let base = match self.config.key_strategy {
-			CacheKeyStrategy::UrlOnly => {
-				format!("{}:{}", request.method.as_str(), request.uri.path())
-			}
+			CacheKeyStrategy::UrlOnly => request.uri.path().to_string(),
 			CacheKeyStrategy::UrlAndMethod => {
 				format!("{}:{}", request.method.as_str(), request.uri.path())
 			}
@@ -790,5 +790,29 @@ mod tests {
 		// Different method should result in cache miss
 		assert_eq!(response2.headers.get("x-cache").unwrap(), "MISS");
 		assert_eq!(handler2.get_call_count(), 1);
+	}
+
+	#[rstest::rstest]
+	fn test_rwlock_poison_recovery_cache_store() {
+		// Arrange
+		let store = Arc::new(CacheStore::new());
+
+		// Act - poison the RwLock by panicking while holding a write guard
+		let store_clone = Arc::clone(&store);
+		let _ = std::thread::spawn(move || {
+			let _guard = store_clone.entries.write().unwrap();
+			panic!("intentional panic to poison lock");
+		})
+		.join();
+
+		// Assert - operations still work after poison recovery
+		let response = Response::new(StatusCode::OK).with_body(Bytes::from("test"));
+		let entry = CacheEntry::new(&response, Duration::from_secs(60));
+		store.set("key1".to_string(), entry);
+		assert_eq!(store.len(), 1);
+		assert!(!store.is_empty());
+		assert!(store.get("key1").is_some());
+		store.delete("key1");
+		assert_eq!(store.len(), 0);
 	}
 }

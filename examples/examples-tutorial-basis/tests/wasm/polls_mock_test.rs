@@ -22,7 +22,7 @@ use examples_tutorial_basis::client::components::polls::{
 	polls_detail, polls_index, polls_results,
 };
 use examples_tutorial_basis::shared::types::{ChoiceInfo, QuestionInfo, VoteRequest};
-use reinhardt::pages::component::View;
+use reinhardt::pages::component::Page;
 use reinhardt::pages::testing::{
 	assert_server_fn_call_count, assert_server_fn_not_called, clear_mocks, mock_server_fn,
 	mock_server_fn_error,
@@ -99,11 +99,11 @@ fn mock_vote_request() -> VoteRequest {
 // Polls Index Rendering Tests
 // ============================================================================
 
-/// Test polls index renders as a View::Element
+/// Test polls index renders as a Page::Element
 #[wasm_bindgen_test]
 fn test_polls_index_renders() {
 	let view = polls_index();
-	assert!(matches!(view, View::Element(_)));
+	assert!(matches!(view, Page::Element(_)));
 }
 
 /// Test polls index contains title
@@ -111,12 +111,12 @@ fn test_polls_index_renders() {
 fn test_polls_index_has_title() {
 	let view = polls_index();
 
-	if let View::Element(element) = view {
+	if let Page::Element(element) = view {
 		let html = element.to_html();
 		assert!(html.contains("Polls"), "Should have 'Polls' title");
 		assert!(html.contains("<h1"), "Title should be in h1 tag");
 	} else {
-		panic!("Expected View::Element");
+		panic!("Expected Page::Element");
 	}
 }
 
@@ -125,14 +125,14 @@ fn test_polls_index_has_title() {
 fn test_polls_index_has_container() {
 	let view = polls_index();
 
-	if let View::Element(element) = view {
+	if let Page::Element(element) = view {
 		let html = element.to_html();
 		assert!(
 			html.contains("container"),
 			"Should have Bootstrap container class"
 		);
 	} else {
-		panic!("Expected View::Element");
+		panic!("Expected Page::Element");
 	}
 }
 
@@ -140,11 +140,11 @@ fn test_polls_index_has_container() {
 // Polls Detail Rendering Tests
 // ============================================================================
 
-/// Test polls detail renders as a View::Element
+/// Test polls detail renders as a Page::Element
 #[wasm_bindgen_test]
 fn test_polls_detail_renders() {
 	let view = polls_detail(1);
-	assert!(matches!(view, View::Element(_)));
+	assert!(matches!(view, Page::Element(_)));
 }
 
 /// Test polls detail renders for different question IDs
@@ -154,7 +154,7 @@ fn test_polls_detail_different_ids() {
 	for id in [1, 2, 10, 100] {
 		let view = polls_detail(id);
 		assert!(
-			matches!(view, View::Element(_)),
+			matches!(view, Page::Element(_)),
 			"Should render for question_id = {}",
 			id
 		);
@@ -165,11 +165,11 @@ fn test_polls_detail_different_ids() {
 // Polls Results Rendering Tests
 // ============================================================================
 
-/// Test polls results renders as a View::Element
+/// Test polls results renders as a Page::Element
 #[wasm_bindgen_test]
 fn test_polls_results_renders() {
 	let view = polls_results(1);
-	assert!(matches!(view, View::Element(_)));
+	assert!(matches!(view, Page::Element(_)));
 }
 
 /// Test polls results renders for different question IDs
@@ -179,7 +179,7 @@ fn test_polls_results_different_ids() {
 	for id in [1, 2, 10, 100] {
 		let view = polls_results(id);
 		assert!(
-			matches!(view, View::Element(_)),
+			matches!(view, Page::Element(_)),
 			"Should render for question_id = {}",
 			id
 		);

@@ -89,11 +89,25 @@ impl Span {
 	}
 }
 
+/// Default maximum number of spans before eviction triggers
+const DEFAULT_MAX_SPANS: usize = 10_000;
+
 /// Trace context storage
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TraceStore {
 	/// Active spans
 	spans: RwLock<HashMap<String, Span>>,
+	/// Maximum number of spans before completed spans are evicted
+	max_spans: usize,
+}
+
+impl Default for TraceStore {
+	fn default() -> Self {
+		Self {
+			spans: RwLock::new(HashMap::new()),
+			max_spans: DEFAULT_MAX_SPANS,
+		}
+	}
 }
 
 impl TraceStore {
@@ -102,42 +116,76 @@ impl TraceStore {
 		Self::default()
 	}
 
+	/// Create a new trace store with a custom maximum span limit
+	pub fn with_max_spans(max_spans: usize) -> Self {
+		Self {
+			spans: RwLock::new(HashMap::new()),
+			max_spans,
+		}
+	}
+
 	/// Start a new span
 	pub fn start_span(&self, trace_id: String, operation_name: String) -> String {
 		let span = Span::new(trace_id, operation_name);
 		let span_id = span.span_id.clone();
-		self.spans.write().unwrap().insert(span_id.clone(), span);
+		let mut spans = self.spans.write().unwrap_or_else(|e| e.into_inner());
+		spans.insert(span_id.clone(), span);
+
+		// Evict completed spans when store exceeds capacity
+		if spans.len() > self.max_spans {
+			spans.retain(|_, s| s.end_time.is_none());
+		}
+		drop(spans);
 		span_id
 	}
 
 	/// End a span
 	pub fn end_span(&self, span_id: &str) {
-		if let Some(span) = self.spans.write().unwrap().get_mut(span_id) {
+		if let Some(span) = self
+			.spans
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.get_mut(span_id)
+		{
 			span.end();
 		}
 	}
 
 	/// Mark span as error
 	pub fn mark_span_error(&self, span_id: &str) {
-		if let Some(span) = self.spans.write().unwrap().get_mut(span_id) {
+		if let Some(span) = self
+			.spans
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.get_mut(span_id)
+		{
 			span.mark_error();
 		}
 	}
 
 	/// Add tag to span
 	pub fn add_span_tag(&self, span_id: &str, key: String, value: String) {
-		if let Some(span) = self.spans.write().unwrap().get_mut(span_id) {
+		if let Some(span) = self
+			.spans
+			.write()
+			.unwrap_or_else(|e| e.into_inner())
+			.get_mut(span_id)
+		{
 			span.add_tag(key, value);
 		}
 	}
 
 	/// Get span
 	pub fn get_span(&self, span_id: &str) -> Option<Span> {
-		self.spans.read().unwrap().get(span_id).cloned()
+		self.spans
+			.read()
+			.unwrap_or_else(|e| e.into_inner())
+			.get(span_id)
+			.cloned()
 	}
 
 	/// Get all completed spans
-	pub fn get_completed_spans(&self) -> Vec<Span> {
+	pub fn completed_spans(&self) -> Vec<Span> {
 		self.spans
 			.read()
 			.unwrap()
@@ -158,10 +206,13 @@ impl TraceStore {
 
 /// Tracing header names
 pub const TRACE_ID_HEADER: &str = "X-Trace-ID";
+/// HTTP header name for propagating the current span ID.
 pub const SPAN_ID_HEADER: &str = "X-Span-ID";
+/// HTTP header name for propagating the parent span ID in distributed traces.
 pub const PARENT_SPAN_ID_HEADER: &str = "X-Parent-Span-ID";
 
 /// Configuration for tracing middleware
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct TracingConfig {
 	/// Enable tracing
@@ -336,7 +387,7 @@ impl TracingMiddleware {
 	///
 	/// // Access the store
 	/// let store = middleware.store();
-	/// let completed = store.get_completed_spans();
+	/// let completed = store.completed_spans();
 	/// ```
 	pub fn store(&self) -> &TraceStore {
 		&self.store
@@ -443,15 +494,19 @@ impl Middleware for TracingMiddleware {
 
 		// Add trace headers to response
 		let mut response = result?;
-		let trace_header: HeaderName = self.config.trace_id_header.parse().unwrap();
-		response
-			.headers
-			.insert(trace_header, trace_id.parse().unwrap());
+		if let (Ok(trace_header), Ok(trace_value)) = (
+			self.config.trace_id_header.parse::<HeaderName>(),
+			trace_id.parse(),
+		) {
+			response.headers.insert(trace_header, trace_value);
+		}
 
-		let span_header: HeaderName = self.config.span_id_header.parse().unwrap();
-		response
-			.headers
-			.insert(span_header, span_id.parse().unwrap());
+		if let (Ok(span_header), Ok(span_value)) = (
+			self.config.span_id_header.parse::<HeaderName>(),
+			span_id.parse(),
+		) {
+			response.headers.insert(span_header, span_value);
+		}
 
 		Ok(response)
 	}
@@ -502,7 +557,7 @@ mod tests {
 		assert!(response.headers.contains_key(SPAN_ID_HEADER));
 
 		// Should have recorded span
-		let spans = middleware.store.get_completed_spans();
+		let spans = middleware.store.completed_spans();
 		assert_eq!(spans.len(), 1);
 		assert_eq!(spans[0].status, SpanStatus::Ok);
 	}
@@ -553,7 +608,7 @@ mod tests {
 		let _response = middleware.process(request, handler).await.unwrap();
 
 		// Span should be marked as error
-		let spans = middleware.store.get_completed_spans();
+		let spans = middleware.store.completed_spans();
 		assert_eq!(spans.len(), 1);
 		assert_eq!(spans[0].status, SpanStatus::Error);
 	}
@@ -577,7 +632,7 @@ mod tests {
 
 		// Should not have trace headers for excluded path
 		assert!(!response.headers.contains_key(TRACE_ID_HEADER));
-		assert_eq!(middleware.store.get_completed_spans().len(), 0);
+		assert_eq!(middleware.store.completed_spans().len(), 0);
 	}
 
 	#[tokio::test]
@@ -599,7 +654,7 @@ mod tests {
 
 		// Should not have trace headers when disabled
 		assert!(!response.headers.contains_key(TRACE_ID_HEADER));
-		assert_eq!(middleware.store.get_completed_spans().len(), 0);
+		assert_eq!(middleware.store.completed_spans().len(), 0);
 	}
 
 	#[tokio::test]
@@ -619,7 +674,7 @@ mod tests {
 
 		let _response = middleware.process(request, handler).await.unwrap();
 
-		let spans = middleware.store.get_completed_spans();
+		let spans = middleware.store.completed_spans();
 		assert_eq!(spans.len(), 1);
 
 		let span = &spans[0];
@@ -646,7 +701,7 @@ mod tests {
 
 		let _response = middleware.process(request, handler).await.unwrap();
 
-		let spans = middleware.store.get_completed_spans();
+		let spans = middleware.store.completed_spans();
 		let span = &spans[0];
 
 		// Span should have a duration
@@ -673,12 +728,12 @@ mod tests {
 			let _response = middleware.process(request, handler.clone()).await.unwrap();
 		}
 
-		assert_eq!(middleware.store.get_completed_spans().len(), 5);
+		assert_eq!(middleware.store.completed_spans().len(), 5);
 
 		// Clear completed spans
 		middleware.store.clear_completed();
 
-		assert_eq!(middleware.store.get_completed_spans().len(), 0);
+		assert_eq!(middleware.store.completed_spans().len(), 0);
 	}
 
 	#[tokio::test]
@@ -740,5 +795,83 @@ mod tests {
 		let response = middleware.process(request, handler).await.unwrap();
 
 		assert!(response.headers.contains_key(TRACE_ID_HEADER));
+	}
+
+	#[test]
+	fn test_trace_store_with_max_spans() {
+		// Arrange
+		let store = TraceStore::with_max_spans(3);
+
+		// Act
+		let id1 = store.start_span("t1".to_string(), "op1".to_string());
+		let id2 = store.start_span("t2".to_string(), "op2".to_string());
+		let id3 = store.start_span("t3".to_string(), "op3".to_string());
+
+		// Assert - all 3 spans should exist
+		assert!(store.get_span(&id1).is_some());
+		assert!(store.get_span(&id2).is_some());
+		assert!(store.get_span(&id3).is_some());
+	}
+
+	#[test]
+	fn test_trace_store_evicts_completed_spans_on_overflow() {
+		// Arrange
+		let store = TraceStore::with_max_spans(3);
+
+		// Add 3 spans and complete 2 of them
+		let id1 = store.start_span("t1".to_string(), "op1".to_string());
+		let id2 = store.start_span("t2".to_string(), "op2".to_string());
+		let id3 = store.start_span("t3".to_string(), "op3".to_string());
+
+		store.end_span(&id1);
+		store.end_span(&id2);
+		// id3 is still active
+
+		// Act - adding a 4th span exceeds max_spans, triggering eviction
+		let id4 = store.start_span("t4".to_string(), "op4".to_string());
+
+		// Assert - completed spans should be evicted, active ones remain
+		assert!(store.get_span(&id1).is_none());
+		assert!(store.get_span(&id2).is_none());
+		assert!(store.get_span(&id3).is_some());
+		assert!(store.get_span(&id4).is_some());
+	}
+
+	#[test]
+	fn test_trace_store_no_eviction_when_under_limit() {
+		// Arrange
+		let store = TraceStore::with_max_spans(10);
+
+		// Act
+		let id1 = store.start_span("t1".to_string(), "op1".to_string());
+		store.end_span(&id1);
+		let id2 = store.start_span("t2".to_string(), "op2".to_string());
+
+		// Assert - no eviction, both should exist
+		assert!(store.get_span(&id1).is_some());
+		assert!(store.get_span(&id2).is_some());
+	}
+
+	#[rstest::rstest]
+	fn test_rwlock_poison_recovery_trace_store() {
+		// Arrange
+		let store = Arc::new(TraceStore::new());
+		let span_id = store.start_span("trace-1".to_string(), "GET /test".to_string());
+
+		// Act - poison the RwLock by panicking while holding a write guard
+		let store_clone = Arc::clone(&store);
+		let _ = std::thread::spawn(move || {
+			let _guard = store_clone.spans.write().unwrap();
+			panic!("intentional panic to poison lock");
+		})
+		.join();
+
+		// Assert - operations still work after poison recovery
+		store.add_span_tag(&span_id, "key".to_string(), "value".to_string());
+		store.mark_span_error(&span_id);
+		store.end_span(&span_id);
+		let span = store.get_span(&span_id);
+		assert!(span.is_some());
+		assert_eq!(span.unwrap().status, SpanStatus::Error);
 	}
 }

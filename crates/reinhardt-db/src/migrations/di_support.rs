@@ -1,9 +1,12 @@
 //! Dependency injection support for migrations
 
 /// Migration configuration
-#[derive(Debug, Clone)]
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MigrationConfig {
+	/// The migrations dir.
 	pub migrations_dir: String,
+	/// The auto migrate.
 	pub auto_migrate: bool,
 }
 
@@ -23,10 +26,12 @@ pub struct MigrationService {
 }
 
 impl MigrationService {
+	/// Creates a new instance.
 	pub fn new(config: MigrationConfig) -> Self {
 		Self { config }
 	}
 
+	/// Performs the config operation.
 	pub fn config(&self) -> &MigrationConfig {
 		&self.config
 	}

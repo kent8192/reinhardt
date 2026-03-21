@@ -2,12 +2,14 @@
 //!
 //! Provides OAuth2 authorization flow support for third-party authentication.
 
-use crate::{AuthenticationBackend, AuthenticationError, SimpleUser, User};
+use crate::repository::{SimpleUserRepository, UserRepository};
+use crate::{AuthenticationBackend, AuthenticationError, User};
 use async_trait::async_trait;
 use reinhardt_http::Request;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -40,6 +42,9 @@ pub struct AccessToken {
 	pub scope: Option<String>,
 }
 
+/// Maximum lifetime of an authorization code per RFC 6749 Section 4.1.2
+const AUTHORIZATION_CODE_TTL: Duration = Duration::from_secs(600);
+
 /// OAuth2 authorization code
 #[derive(Debug, Clone)]
 pub struct AuthorizationCode {
@@ -53,6 +58,8 @@ pub struct AuthorizationCode {
 	pub user_id: String,
 	/// Scope
 	pub scope: Option<String>,
+	/// Timestamp when the code was created
+	pub created_at: Instant,
 }
 
 /// OAuth2 application/client
@@ -87,34 +94,6 @@ pub trait OAuth2TokenStore: Send + Sync {
 	async fn revoke_token(&self, token: &str) -> Result<(), String>;
 }
 
-/// User repository trait for OAuth2 authentication
-///
-/// Provides an abstraction for retrieving user data from various storage backends.
-///
-/// # Examples
-///
-/// ```
-/// use reinhardt_auth::{UserRepository, User};
-/// use async_trait::async_trait;
-///
-/// struct MyUserRepository;
-///
-/// #[async_trait]
-/// impl UserRepository for MyUserRepository {
-///     async fn get_user_by_id(&self, user_id: &str) -> Result<Option<Box<dyn User>>, String> {
-///         // Custom implementation
-///         Ok(None)
-///     }
-/// }
-/// ```
-#[async_trait]
-pub trait UserRepository: Send + Sync {
-	/// Get user by ID
-	///
-	/// Returns `Ok(Some(user))` if found, `Ok(None)` if not found, or `Err` on error.
-	async fn get_user_by_id(&self, user_id: &str) -> Result<Option<Box<dyn User>>, String>;
-}
-
 /// In-memory OAuth2 token store
 ///
 /// # Examples
@@ -132,6 +111,7 @@ pub trait UserRepository: Send + Sync {
 ///         redirect_uri: "https://example.com/callback".to_string(),
 ///         user_id: "user_456".to_string(),
 ///         scope: Some("read write".to_string()),
+///         created_at: std::time::Instant::now(),
 ///     };
 ///
 ///     store.store_code(code).await.unwrap();
@@ -168,7 +148,12 @@ impl OAuth2TokenStore for InMemoryOAuth2Store {
 
 	async fn consume_code(&self, code: &str) -> Result<Option<AuthorizationCode>, String> {
 		let mut codes = self.codes.lock().await;
-		Ok(codes.remove(code))
+		match codes.remove(code) {
+			Some(auth_code) if auth_code.created_at.elapsed() > AUTHORIZATION_CODE_TTL => {
+				Err("authorization code has expired".to_string())
+			}
+			other => Ok(other),
+		}
 	}
 
 	async fn store_token(&self, user_id: &str, token: AccessToken) -> Result<(), String> {
@@ -186,41 +171,6 @@ impl OAuth2TokenStore for InMemoryOAuth2Store {
 		let mut tokens = self.tokens.lock().await;
 		tokens.remove(token);
 		Ok(())
-	}
-}
-
-/// Simple in-memory user repository
-///
-/// Creates SimpleUser instances on-the-fly without database access.
-/// Suitable for testing and development environments.
-///
-/// # Examples
-///
-/// ```
-/// use reinhardt_auth::{SimpleUserRepository, UserRepository};
-///
-/// #[tokio::main]
-/// async fn main() {
-///     let repo = SimpleUserRepository;
-///     let user = repo.get_user_by_id("user_123").await.unwrap();
-///     assert!(user.is_some());
-/// }
-/// ```
-pub struct SimpleUserRepository;
-
-#[async_trait]
-impl UserRepository for SimpleUserRepository {
-	async fn get_user_by_id(&self, user_id: &str) -> Result<Option<Box<dyn User>>, String> {
-		// Create a simple user object for development/testing
-		Ok(Some(Box::new(SimpleUser {
-			id: Uuid::new_v4(),
-			username: user_id.to_string(),
-			email: format!("{}@example.com", user_id),
-			is_active: true,
-			is_admin: false,
-			is_staff: false,
-			is_superuser: false,
-		})))
 	}
 }
 
@@ -348,6 +298,7 @@ impl OAuth2Authentication {
 			redirect_uri: redirect_uri.to_string(),
 			user_id: user_id.to_string(),
 			scope,
+			created_at: Instant::now(),
 		};
 
 		self.token_store.store_code(auth_code).await?;
@@ -360,6 +311,7 @@ impl OAuth2Authentication {
 		code: &str,
 		client_id: &str,
 		client_secret: &str,
+		redirect_uri: &str,
 	) -> Result<AccessToken, String> {
 		// Validate client
 		if !self.validate_client(client_id, client_secret).await {
@@ -372,6 +324,17 @@ impl OAuth2Authentication {
 			.consume_code(code)
 			.await?
 			.ok_or_else(|| "Invalid or expired authorization code".to_string())?;
+
+		// Verify the authorization code was issued to the requesting client
+		if auth_code.client_id != client_id {
+			return Err("Authorization code was not issued to this client".to_string());
+		}
+
+		// Verify the redirect URI matches the one used in the authorization request
+		// as required by RFC 6749 Section 4.1.3
+		if auth_code.redirect_uri != redirect_uri {
+			return Err("redirect_uri does not match the authorization request".to_string());
+		}
 
 		// Generate access token
 		let token = AccessToken {
@@ -446,7 +409,10 @@ impl AuthenticationBackend for OAuth2Authentication {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::core::user::SimpleUser;
+	use rstest::rstest;
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_oauth2_application() {
 		let app = OAuth2Application {
@@ -463,6 +429,7 @@ mod tests {
 		assert!(!auth.validate_client("test_client", "wrong_secret").await);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_authorization_code_flow() {
 		let app = OAuth2Application {
@@ -490,7 +457,12 @@ mod tests {
 
 		// Exchange code for token
 		let token = auth
-			.exchange_code(&code, "test_client", "test_secret")
+			.exchange_code(
+				&code,
+				"test_client",
+				"test_secret",
+				"https://example.com/callback",
+			)
 			.await
 			.unwrap();
 
@@ -499,6 +471,7 @@ mod tests {
 		assert!(token.refresh_token.is_some());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_token_store() {
 		let store = InMemoryOAuth2Store::new();
@@ -509,6 +482,7 @@ mod tests {
 			redirect_uri: "https://example.com/callback".to_string(),
 			user_id: "user_123".to_string(),
 			scope: Some("read".to_string()),
+			created_at: Instant::now(),
 		};
 
 		store.store_code(code.clone()).await.unwrap();
@@ -522,6 +496,57 @@ mod tests {
 		assert!(consumed.is_none());
 	}
 
+	#[rstest]
+	#[tokio::test]
+	async fn test_exchange_code_rejects_mismatched_client_id() {
+		// Arrange - register two clients
+		let app_a = OAuth2Application {
+			client_id: "client_a".to_string(),
+			client_secret: "secret_a".to_string(),
+			redirect_uris: vec!["https://a.example.com/callback".to_string()],
+			grant_types: vec![GrantType::AuthorizationCode],
+		};
+		let app_b = OAuth2Application {
+			client_id: "client_b".to_string(),
+			client_secret: "secret_b".to_string(),
+			redirect_uris: vec!["https://b.example.com/callback".to_string()],
+			grant_types: vec![GrantType::AuthorizationCode],
+		};
+
+		let auth = OAuth2Authentication::new();
+		auth.register_application(app_a).await;
+		auth.register_application(app_b).await;
+
+		// Generate code for client_a
+		let code = auth
+			.generate_authorization_code(
+				"client_a",
+				"https://a.example.com/callback",
+				"user_123",
+				None,
+			)
+			.await
+			.unwrap();
+
+		// Act - try to exchange code using client_b's credentials
+		let result = auth
+			.exchange_code(
+				&code,
+				"client_b",
+				"secret_b",
+				"https://b.example.com/callback",
+			)
+			.await;
+
+		// Assert - should reject because code was issued to client_a
+		assert!(result.is_err());
+		assert_eq!(
+			result.unwrap_err(),
+			"Authorization code was not issued to this client"
+		);
+	}
+
+	#[rstest]
 	#[tokio::test]
 	async fn test_invalid_client_credentials() {
 		let app = OAuth2Application {
@@ -545,12 +570,18 @@ mod tests {
 			.unwrap();
 
 		let result = auth
-			.exchange_code(&code, "test_client", "wrong_secret")
+			.exchange_code(
+				&code,
+				"test_client",
+				"wrong_secret",
+				"https://example.com/callback",
+			)
 			.await;
 
 		assert!(result.is_err());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_simple_user_repository() {
 		let repo = SimpleUserRepository;
@@ -565,6 +596,7 @@ mod tests {
 		assert!(user.is_active());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_oauth2_with_default_repository() {
 		let auth = OAuth2Authentication::new();
@@ -577,6 +609,7 @@ mod tests {
 		assert_eq!(user.get_username(), "user_456");
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_oauth2_with_custom_repository() {
 		// Custom repository for testing
@@ -622,6 +655,7 @@ mod tests {
 		assert!(user.is_none());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_oauth2_with_store_and_repository() {
 		struct CustomRepository;
@@ -649,5 +683,83 @@ mod tests {
 		// Verify custom repository is used
 		let user = auth.get_user("test").await.unwrap().unwrap();
 		assert_eq!(user.get_username(), "custom_test");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_exchange_code_rejects_mismatched_redirect_uri() {
+		// Arrange
+		let app = OAuth2Application {
+			client_id: "test_client".to_string(),
+			client_secret: "test_secret".to_string(),
+			redirect_uris: vec!["https://example.com/callback".to_string()],
+			grant_types: vec![GrantType::AuthorizationCode],
+		};
+		let auth = OAuth2Authentication::new();
+		auth.register_application(app).await;
+		let code = auth
+			.generate_authorization_code(
+				"test_client",
+				"https://example.com/callback",
+				"user_123",
+				None,
+			)
+			.await
+			.unwrap();
+
+		// Act
+		let result = auth
+			.exchange_code(
+				&code,
+				"test_client",
+				"test_secret",
+				"https://attacker.example.com/callback",
+			)
+			.await;
+
+		// Assert
+		assert!(result.is_err());
+		assert_eq!(
+			result.unwrap_err(),
+			"redirect_uri does not match the authorization request"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_exchange_code_succeeds_with_matching_redirect_uri() {
+		// Arrange
+		let app = OAuth2Application {
+			client_id: "test_client".to_string(),
+			client_secret: "test_secret".to_string(),
+			redirect_uris: vec!["https://example.com/callback".to_string()],
+			grant_types: vec![GrantType::AuthorizationCode],
+		};
+		let auth = OAuth2Authentication::new();
+		auth.register_application(app).await;
+		let code = auth
+			.generate_authorization_code(
+				"test_client",
+				"https://example.com/callback",
+				"user_123",
+				None,
+			)
+			.await
+			.unwrap();
+
+		// Act
+		let result = auth
+			.exchange_code(
+				&code,
+				"test_client",
+				"test_secret",
+				"https://example.com/callback",
+			)
+			.await;
+
+		// Assert
+		assert!(result.is_ok());
+		let token = result.unwrap();
+		assert_eq!(token.token_type, "Bearer");
 	}
 }

@@ -1,0 +1,250 @@
+name: Auto-Close Parent Issue
+
+on:
+  issues:
+    types: [closed, reopened]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  auto-close-parent:
+    name: Auto-Close Parent Issue
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check and close parent issues
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const MAX_DEPTH = 5;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            async function getParent(issueNumber) {
+              try {
+                const response = await github.request(
+                  'GET /repos/{owner}/{repo}/issues/{issue_number}/parent',
+                  { owner, repo, issue_number: issueNumber }
+                );
+                // Skip if parent is in a different repository
+                if (response.data.repository &&
+                    response.data.repository.full_name !== `${owner}/${repo}`) {
+                  core.info(`Parent #${response.data.number} is in a different repository, skipping`);
+                  return null;
+                }
+                return response.data;
+              } catch (error) {
+                if (error.status === 404) {
+                  return null;
+                }
+                throw error;
+              }
+            }
+
+            async function getSubIssues(issueNumber) {
+              try {
+                const subIssues = [];
+                let page = 1;
+                while (true) {
+                  const response = await github.request(
+                    'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
+                    { owner, repo, issue_number: issueNumber, per_page: 100, page }
+                  );
+                  subIssues.push(...response.data);
+                  if (response.data.length < 100) break;
+                  page++;
+                }
+                return subIssues;
+              } catch (error) {
+                core.warning(`Failed to fetch sub-issues for #${issueNumber}: ${error.message}`);
+                return null;
+              }
+            }
+
+            async function processParentChain(issueNumber, depth) {
+              if (depth >= MAX_DEPTH) {
+                core.info(`Reached max depth (${MAX_DEPTH}), stopping recursion`);
+                return;
+              }
+
+              const parent = await getParent(issueNumber);
+              if (!parent) {
+                core.info(`Issue #${issueNumber} has no parent issue`);
+                return;
+              }
+
+              core.info(`Found parent issue #${parent.number}: ${parent.title}`);
+
+              // Skip if parent is already closed
+              if (parent.state === 'closed') {
+                core.info(`Parent #${parent.number} is already closed, checking grandparent`);
+                await processParentChain(parent.number, depth + 1);
+                return;
+              }
+
+              // Skip if parent has no-auto-close label
+              const parentLabels = parent.labels.map(l => l.name);
+              if (parentLabels.includes('no-auto-close')) {
+                core.info(`Parent #${parent.number} has no-auto-close label, skipping`);
+                return;
+              }
+
+              // Check all sub-issues of the parent
+              const subIssues = await getSubIssues(parent.number);
+              if (subIssues === null) {
+                core.warning(`Skipping parent #${parent.number} due to sub-issue fetch failure`);
+                return;
+              }
+              if (subIssues.length === 0) {
+                core.info(`Parent #${parent.number} has no sub-issues`);
+                return;
+              }
+
+              const allCompleted = subIssues.every(sub => sub.state === 'closed' && sub.state_reason === 'completed');
+              core.info(`Parent #${parent.number} has ${subIssues.length} sub-issues, all completed: ${allCompleted}`);
+
+              if (!allCompleted) {
+                const incomplete = subIssues.filter(sub => sub.state !== 'closed' || sub.state_reason !== 'completed');
+                const details = incomplete.map(s => {
+                  if (s.state !== 'closed') return `#${s.number} (open)`;
+                  return `#${s.number} (closed as ${s.state_reason})`;
+                });
+                core.info(`Incomplete sub-issues: ${details.join(', ')}`);
+                return;
+              }
+
+              // All sub-issues are completed - close the parent
+              const subIssueList = subIssues
+                .map(sub => `- #${sub.number}: ${sub.title} (closed)`)
+                .join('\n');
+
+              await github.rest.issues.createComment({
+                owner, repo,
+                issue_number: parent.number,
+                body: [
+                  'All sub-issues have been completed. Automatically closing this issue.',
+                  '',
+                  '### Completed sub-issues',
+                  subIssueList,
+                  '',
+                  '---',
+                  '*This action was performed automatically by the auto-close-parent-issue workflow.*'
+                ].join('\n')
+              });
+
+              await github.rest.issues.addLabels({
+                owner, repo,
+                issue_number: parent.number,
+                labels: ['auto-closed']
+              });
+
+              await github.rest.issues.update({
+                owner, repo,
+                issue_number: parent.number,
+                state: 'closed',
+                state_reason: 'completed'
+              });
+
+              core.info(`Closed parent issue #${parent.number}`);
+
+              // Recursively check grandparent
+              await processParentChain(parent.number, depth + 1);
+            }
+
+            await processParentChain(context.issue.number, 0);
+
+  auto-reopen-parent:
+    name: Reopen Parent Issue
+    if: github.event.action == 'reopened'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check and reopen parent issues
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const MAX_DEPTH = 5;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            async function getParent(issueNumber) {
+              try {
+                const response = await github.request(
+                  'GET /repos/{owner}/{repo}/issues/{issue_number}/parent',
+                  { owner, repo, issue_number: issueNumber }
+                );
+                if (response.data.repository &&
+                    response.data.repository.full_name !== `${owner}/${repo}`) {
+                  core.info(`Parent #${response.data.number} is in a different repository, skipping`);
+                  return null;
+                }
+                return response.data;
+              } catch (error) {
+                if (error.status === 404) {
+                  return null;
+                }
+                throw error;
+              }
+            }
+
+            async function processParentChain(issueNumber, depth) {
+              if (depth >= MAX_DEPTH) {
+                core.info(`Reached max depth (${MAX_DEPTH}), stopping recursion`);
+                return;
+              }
+
+              const parent = await getParent(issueNumber);
+              if (!parent) {
+                core.info(`Issue #${issueNumber} has no parent issue`);
+                return;
+              }
+
+              core.info(`Found parent issue #${parent.number}: ${parent.title}`);
+
+              // Only reopen if parent was auto-closed
+              if (parent.state !== 'closed') {
+                core.info(`Parent #${parent.number} is not closed, skipping`);
+                return;
+              }
+
+              const labels = parent.labels.map(l => l.name);
+              if (!labels.includes('auto-closed')) {
+                core.info(`Parent #${parent.number} was not auto-closed, skipping`);
+                return;
+              }
+
+              // Reopen the parent
+              await github.rest.issues.createComment({
+                owner, repo,
+                issue_number: parent.number,
+                body: [
+                  `Sub-issue #${issueNumber} was reopened. Automatically reopening this parent issue.`,
+                  '',
+                  '---',
+                  '*This action was performed automatically by the auto-close-parent-issue workflow.*'
+                ].join('\n')
+              });
+
+              await github.rest.issues.removeLabel({
+                owner, repo,
+                issue_number: parent.number,
+                name: 'auto-closed'
+              }).catch(err => {
+                // Label may have been manually removed
+                if (err.status !== 404) throw err;
+              });
+
+              await github.rest.issues.update({
+                owner, repo,
+                issue_number: parent.number,
+                state: 'open'
+              });
+
+              core.info(`Reopened parent issue #${parent.number}`);
+
+              // Recursively check grandparent
+              await processParentChain(parent.number, depth + 1);
+            }
+
+            await processParentChain(context.issue.number, 0);

@@ -161,7 +161,7 @@ impl<T: FromPath> FromPath for Path<T> {
 
 /// Trait for extracting a single value at a specific index from path parameters.
 ///
-/// This is used internally to support the multi-argument Path<T> style:
+/// This is used internally to support the multi-argument `Path<T>` style:
 /// `|Path(user_id): Path<Uuid>, Path(post_id): Path<i64>|`
 pub trait SingleFromPath: Sized {
 	/// Extracts a single value at the given index.

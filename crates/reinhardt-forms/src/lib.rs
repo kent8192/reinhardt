@@ -1,3 +1,5 @@
+#![warn(missing_docs)]
+
 //! # Reinhardt Forms
 //!
 //! Form processing and validation for the Reinhardt framework.
@@ -118,16 +120,27 @@
 //! let result = wizard.process_step(&request).await?;
 //! ```
 
+/// Bound field rendering with data and errors attached.
 pub mod bound_field;
+/// Core form field trait and error types.
 pub mod field;
+/// Built-in field types (text, email, integer, choice, etc.).
 pub mod fields;
+/// Form trait and validation logic.
 pub mod form;
+/// Formset for managing multiple form instances.
 pub mod formset;
+/// Built-in formset types (inline, base).
 pub mod formsets;
+/// Model-backed form with automatic field generation.
 pub mod model_form;
+/// Model-backed formset for bulk editing.
 pub mod model_formset;
+/// Field-level and form-level validators.
 pub mod validators;
+/// WASM compatibility layer for client-side forms.
 pub mod wasm_compat;
+/// Multi-step form wizard.
 pub mod wizard;
 
 pub use bound_field::BoundField;

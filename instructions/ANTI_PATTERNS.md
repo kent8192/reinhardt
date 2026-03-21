@@ -6,6 +6,37 @@ This document explicitly lists common mistakes, anti-patterns, and practices to
 avoid in the Reinhardt project. Use this as a quick reference for code review
 and development.
 
+The following diagram provides a high-level overview of anti-pattern categories:
+
+```mermaid
+mindmap
+  root((Anti-Patterns))
+    Code Organization
+      mod.rs files
+      Glob imports
+      Circular dependencies
+      Deep relative paths
+    Code Style
+      Excessive .to_string
+      Obsolete code comments
+      Alternative TODO notations
+      Undocumented allow attrs
+    Testing
+      Skeleton tests
+      No Reinhardt components
+      Missing cleanup
+      Loose assertions
+    File Management
+      Save to project dir
+      Leave backup files
+    Workflow
+      Commit without auth
+      Monolithic commits
+    Documentation
+      Outdated docs
+      Planned features in README
+```
+
 ---
 
 ## Code Organization Anti-Patterns
@@ -25,7 +56,7 @@ src/database.rs      // ✅ Rust 2024 style
 ```
 
 **Why?** `mod.rs` is deprecated and makes file navigation harder. See
-@docs/MODULE_SYSTEM.md
+@instructions/MODULE_SYSTEM.md
 
 ### ❌ Glob Imports
 
@@ -352,7 +383,7 @@ suppression must be justified with a clear comment explaining:
 
 Tests without meaningful assertions that always pass.
 
-**Why?** Tests must be capable of failing. See @docs/TESTING_STANDARDS.md TP-1
+**Why?** Tests must be capable of failing. See @instructions/TESTING_STANDARDS.md TP-1
 for detailed examples.
 
 ### ❌ Tests Without Reinhardt Components
@@ -360,13 +391,13 @@ for detailed examples.
 Tests that only verify standard library or third-party behavior.
 
 **Why?** Every test must verify at least one Reinhardt component. See
-@docs/TESTING_STANDARDS.md TP-2.
+@instructions/TESTING_STANDARDS.md TP-2.
 
 ### ❌ Tests Without Cleanup
 
 Tests that create files/resources without cleaning up.
 
-**Why?** Test artifacts must be cleaned up. See @docs/TESTING_STANDARDS.md TI-3
+**Why?** Test artifacts must be cleaned up. See @instructions/TESTING_STANDARDS.md TI-3
 for cleanup techniques.
 
 ### ❌ Global State Tests Without Serialization
@@ -374,7 +405,7 @@ for cleanup techniques.
 Tests modifying global state without `#[serial]` attribute.
 
 **Why?** Global state tests can conflict if run in parallel. See
-@docs/TESTING_STANDARDS.md TI-4 for serial test patterns.
+@instructions/TESTING_STANDARDS.md TI-4 for serial test patterns.
 
 ### ❌ Loose Assertions
 
@@ -382,7 +413,7 @@ Using `contains()`, range checks, or loose pattern matching instead of exact
 value assertions.
 
 **Why?** Loose assertions can pass with incorrect values. See
-@docs/TESTING_STANDARDS.md TI-5 for assertion strictness guidelines and
+@instructions/TESTING_STANDARDS.md TI-5 for assertion strictness guidelines and
 acceptable exceptions.
 
 ### ❌ Tests Without Clear AAA Structure
@@ -391,7 +422,7 @@ Tests that mix setup, execution, and verification without clear phase separation
 or use non-standard phase labels (`// Setup`, `// Execute`, `// Verify`).
 
 **Why?** Clear Arrange-Act-Assert structure improves test readability and
-maintainability. See @docs/TESTING_STANDARDS.md TI-6 for AAA pattern guidelines
+maintainability. See @instructions/TESTING_STANDARDS.md TI-6 for AAA pattern guidelines
 and examples.
 
 ---
@@ -642,6 +673,6 @@ only.
 
 - **Main Quick Reference**: @CLAUDE.md (see Quick Reference section)
 - **Main standards**: @CLAUDE.md
-- **Module system**: @docs/MODULE_SYSTEM.md
-- **Testing standards**: @docs/TESTING_STANDARDS.md
-- **Documentation standards**: @docs/DOCUMENTATION_STANDARDS.md
+- **Module system**: @instructions/MODULE_SYSTEM.md
+- **Testing standards**: @instructions/TESTING_STANDARDS.md
+- **Documentation standards**: @instructions/DOCUMENTATION_STANDARDS.md

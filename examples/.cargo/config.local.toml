@@ -7,6 +7,3 @@
 
 [patch.crates-io]
 reinhardt-web = { path = ".." }
-reinhardt-query = { path = "../crates/reinhardt-query" }
-reinhardt-websockets = { path = "../crates/reinhardt-websockets" }
-reinhardt-auth = { path = "../crates/reinhardt-auth" }

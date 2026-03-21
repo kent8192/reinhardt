@@ -1,9 +1,9 @@
 [package]
 name = "reinhardt-pages-macros"
-version = "0.1.0-alpha.10"
-edition = "2024"
-authors = ["Reinhardt Contributors"]
-license = "BSD-3-Clause"
+version = "0.1.0-rc.13"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
 description = "Procedural macros for reinhardt-pages (WASM frontend framework)"
 repository.workspace = true
 keywords = ["wasm", "macro", "server-functions", "rpc"]
@@ -23,9 +23,9 @@ reinhardt-manouche = { workspace = true }
 reinhardt-core = { workspace = true }
 
 # Procedural macro essentials
-syn = { version = "2.0", features = ["full", "extra-traits"] }
-quote = "1.0"
-proc-macro2 = "1.0"
+syn = { workspace = true, features = ["full", "extra-traits"] }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
 
 # Error handling
 darling = "0.20"

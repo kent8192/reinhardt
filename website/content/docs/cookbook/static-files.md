@@ -24,8 +24,8 @@ Guide to serving static files (CSS, JavaScript, images, etc.).
 Use `StaticFilesMiddleware` for serving static files.
 
 ```rust
-use reinhardt::staticfiles::StaticFilesMiddleware;
-use reinhardt::staticfiles::storage::StaticFilesConfig;
+use reinhardt_utils::staticfiles::middleware::StaticFilesMiddleware;
+use reinhardt_utils::staticfiles::storage::StaticFilesConfig;
 
 let config = StaticFilesConfig {
     static_root: "static".into(),
@@ -44,7 +44,7 @@ let middleware = StaticFilesMiddleware::new(config);
 > - `storage::StaticFilesConfig` - For storage configuration (`static_root`, `static_url`, `staticfiles_dirs`, `media_url`)
 > - `middleware::StaticFilesConfig` - For middleware configuration (`root_dir`, `url_prefix`, `spa_mode`, etc.)
 >
-> This example uses the storage version. The storage config is also re-exported at `reinhardt::staticfiles::StaticFilesConfig`.
+> This example uses the storage version. The storage config is also re-exported at `reinhardt_utils::staticfiles::StaticFilesConfig`.
 
 ---
 
@@ -55,7 +55,7 @@ let middleware = StaticFilesMiddleware::new(config);
 Saves files to local filesystem.
 
 ```rust
-use reinhardt::staticfiles::storage::FileSystemStorage;
+use reinhardt_utils::staticfiles::storage::FileSystemStorage;
 
 let storage = FileSystemStorage::new("/var/www/static", "https://cdn.example.com/static");
 
@@ -81,7 +81,7 @@ storage.delete("css/style.css").await?;
 In-memory storage (for testing).
 
 ```rust
-use reinhardt::staticfiles::storage::MemoryStorage;
+use reinhardt_utils::staticfiles::storage::MemoryStorage;
 
 let storage = MemoryStorage::new("/static/");
 
@@ -97,7 +97,7 @@ let content = storage.open("test.txt").await?;
 Saves files to AWS S3 (requires `s3` feature).
 
 ```rust
-use reinhardt::staticfiles::storage::{S3Storage, S3Config};
+use reinhardt_utils::staticfiles::storage::{S3Storage, S3Config};
 
 async fn example() -> Result<(), Box<dyn std::error::Error>> {
 let config = S3Config {
@@ -121,7 +121,7 @@ Ok(())
 Saves files to Azure Blob Storage (requires `azure` feature).
 
 ```rust
-use reinhardt::staticfiles::storage::{AzureBlobStorage, AzureBlobConfig};
+use reinhardt_utils::staticfiles::storage::{AzureBlobStorage, AzureBlobConfig};
 
 async fn example() -> Result<(), Box<dyn std::error::Error>> {
 let config = AzureBlobConfig {
@@ -140,7 +140,7 @@ Ok(())
 Saves files to Google Cloud Storage (requires `gcs` feature).
 
 ```rust
-use reinhardt::staticfiles::storage::{GcsStorage, GcsConfig};
+use reinhardt_utils::staticfiles::storage::{GcsStorage, GcsConfig};
 
 async fn example() -> Result<(), Box<dyn std::error::Error>> {
 let config = GcsConfig {
@@ -163,7 +163,7 @@ Ok(())
 Use `StaticFileHandler` to serve local files directly.
 
 ```rust
-use reinhardt::staticfiles::handler::StaticFileHandler;
+use reinhardt_utils::staticfiles::handler::StaticFileHandler;
 
 let handler = StaticFileHandler::new("/path/to/static");
 ```
@@ -173,7 +173,7 @@ let handler = StaticFileHandler::new("/path/to/static");
 Use `HashedFileStorage` for cache busting.
 
 ```rust
-use reinhardt::staticfiles::storage::HashedFileStorage;
+use reinhardt_utils::staticfiles::storage::HashedFileStorage;
 
 let storage = HashedFileStorage::new("/var/www/static", "https://cdn.example.com/static");
 
@@ -187,7 +187,7 @@ let url = storage.save("style.css", css_bytes).await?;
 Versioned files using manifest (similar to Django's `ManifestStaticFilesStorage`).
 
 ```rust
-use reinhardt::staticfiles::storage::{ManifestStaticFilesStorage, Manifest};
+use reinhardt_utils::staticfiles::storage::{ManifestStaticFilesStorage, Manifest};
 
 let manifest = Manifest {
     version: "v1.0.0".to_string(),
@@ -216,7 +216,7 @@ let url = storage.url("css/style.css");
 Resolves paths for static files.
 
 ```rust
-use reinhardt::staticfiles::PathResolver;
+use reinhardt_utils::staticfiles::PathResolver;
 
 let resolver = PathResolver::new(vec![
     "/app/static".into(),
@@ -234,7 +234,7 @@ if let Some(path) = resolver.resolve("css/style.css") {
 Finds static files across multiple directories.
 
 ```rust
-use reinhardt::staticfiles::StaticFilesFinder;
+use reinhardt_utils::staticfiles::StaticFilesFinder;
 use std::path::PathBuf;
 
 let finder = StaticFilesFinder::new(vec![
@@ -261,7 +261,7 @@ let all_files = finder.find_all();
 Controls caching for static files.
 
 ```rust
-use reinhardt::staticfiles::{CacheControlMiddleware, CacheControlConfig};
+use reinhardt_utils::staticfiles::{CacheControlMiddleware, CacheControlConfig};
 
 let config = CacheControlConfig {
     public: true,
@@ -276,7 +276,7 @@ let middleware = CacheControlMiddleware::new(config);
 ### Cache Directives
 
 ```rust
-use reinhardt::staticfiles::CacheDirective;
+use reinhardt_utils::staticfiles::CacheDirective;
 
 // Typical static files (cache for 1 hour)
 let directive = CacheDirective::public()
@@ -297,8 +297,8 @@ let no_cache = CacheDirective::no_cache();
 
 ```rust
 use reinhardt::ServerRouter;
-use reinhardt::staticfiles::StaticFilesMiddleware;
-use reinhardt::staticfiles::storage::StaticFilesConfig;
+use reinhardt_utils::staticfiles::middleware::StaticFilesMiddleware;
+use reinhardt_utils::staticfiles::storage::StaticFilesConfig;
 
 let router = ServerRouter::new()
     .with_middleware(StaticFilesMiddleware::new(

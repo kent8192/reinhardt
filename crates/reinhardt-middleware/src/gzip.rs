@@ -6,12 +6,13 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use hyper::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE};
+use hyper::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, HeaderValue};
 use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use std::io::Write;
 use std::sync::Arc;
 
 /// GZip compression middleware configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct GZipConfig {
 	/// Minimum response size to compress (in bytes)
@@ -128,11 +129,10 @@ impl GZipMiddleware {
 	/// }
 	///
 	/// # tokio_test::block_on(async {
-	/// let config = GZipConfig {
-	///     min_length: 1000,
-	///     compression_level: 9,
-	///     compressible_types: vec!["text/".to_string(), "application/json".to_string()],
-	/// };
+	/// let mut config = GZipConfig::default();
+	/// config.min_length = 1000;
+	/// config.compression_level = 9;
+	/// config.compressible_types = vec!["text/".to_string(), "application/json".to_string()];
 	///
 	/// let middleware = GZipMiddleware::with_config(config);
 	/// let handler = Arc::new(TestHandler);
@@ -150,7 +150,7 @@ impl GZipMiddleware {
 	///     .unwrap();
 	///
 	/// let response = middleware.process(request, handler).await.unwrap();
-	// Small response not compressed due to min_length=1000
+	/// // Small response not compressed due to min_length=1000
 	/// assert!(!response.headers.contains_key(hyper::header::CONTENT_ENCODING));
 	/// # });
 	/// ```
@@ -235,11 +235,10 @@ impl Middleware for GZipMiddleware {
 			response.body = Bytes::from(compressed);
 			response
 				.headers
-				.insert(CONTENT_ENCODING, "gzip".parse().unwrap());
-			response.headers.insert(
-				CONTENT_LENGTH,
-				response.body.len().to_string().parse().unwrap(),
-			);
+				.insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+			if let Ok(len_value) = response.body.len().to_string().parse() {
+				response.headers.insert(CONTENT_LENGTH, len_value);
+			}
 		}
 
 		Ok(response)

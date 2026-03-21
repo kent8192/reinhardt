@@ -109,7 +109,12 @@ async fn test_complete_authorization_code_flow(oauth2_with_app: OAuth2Authentica
 
 	// Step 2: Exchange code for token
 	let token = oauth2_with_app
-		.exchange_code(&code, "test_client", "test_secret_12345")
+		.exchange_code(
+			&code,
+			"test_client",
+			"test_secret_12345",
+			"https://example.com/callback",
+		)
 		.await
 		.expect("Token exchange should succeed");
 
@@ -141,6 +146,7 @@ async fn test_token_store_operations(token_store: Arc<InMemoryOAuth2Store>) {
 		redirect_uri: "https://example.com/callback".to_string(),
 		user_id: "user_456".to_string(),
 		scope: Some("read".to_string()),
+		created_at: std::time::Instant::now(),
 	};
 
 	token_store
@@ -279,7 +285,12 @@ async fn test_exchange_code_with_invalid_credentials(oauth2_with_app: OAuth2Auth
 
 	// Try to exchange with wrong secret
 	let result = oauth2_with_app
-		.exchange_code(&code, "test_client", "wrong_secret")
+		.exchange_code(
+			&code,
+			"test_client",
+			"wrong_secret",
+			"https://example.com/callback",
+		)
 		.await;
 
 	assert!(result.is_err(), "Exchange with wrong secret should fail");
@@ -307,7 +318,12 @@ async fn test_exchange_code_with_unknown_client(oauth2_with_app: OAuth2Authentic
 
 	// Try to exchange with unknown client
 	let result = oauth2_with_app
-		.exchange_code(&code, "unknown_client", "any_secret")
+		.exchange_code(
+			&code,
+			"unknown_client",
+			"any_secret",
+			"https://example.com/callback",
+		)
 		.await;
 
 	assert!(result.is_err(), "Exchange with unknown client should fail");
@@ -318,7 +334,12 @@ async fn test_exchange_code_with_unknown_client(oauth2_with_app: OAuth2Authentic
 async fn test_exchange_invalid_code(oauth2_with_app: OAuth2Authentication) {
 	// Try to exchange non-existent code
 	let result = oauth2_with_app
-		.exchange_code("nonexistent_code", "test_client", "test_secret_12345")
+		.exchange_code(
+			"nonexistent_code",
+			"test_client",
+			"test_secret_12345",
+			"https://example.com/callback",
+		)
 		.await;
 
 	assert!(result.is_err(), "Exchange with invalid code should fail");
@@ -346,13 +367,23 @@ async fn test_code_reuse_prevention(oauth2_with_app: OAuth2Authentication) {
 
 	// First exchange should succeed
 	let first_result = oauth2_with_app
-		.exchange_code(&code, "test_client", "test_secret_12345")
+		.exchange_code(
+			&code,
+			"test_client",
+			"test_secret_12345",
+			"https://example.com/callback",
+		)
 		.await;
 	assert!(first_result.is_ok(), "First exchange should succeed");
 
 	// Second exchange should fail (code is consumed)
 	let second_result = oauth2_with_app
-		.exchange_code(&code, "test_client", "test_secret_12345")
+		.exchange_code(
+			&code,
+			"test_client",
+			"test_secret_12345",
+			"https://example.com/callback",
+		)
 		.await;
 	assert!(second_result.is_err(), "Code reuse should be prevented");
 }
@@ -412,13 +443,23 @@ async fn test_token_lifecycle_states(oauth2_with_app: OAuth2Authentication) {
 
 	// State 2: Exchange for token
 	let token = oauth2_with_app
-		.exchange_code(&code, "test_client", "test_secret_12345")
+		.exchange_code(
+			&code,
+			"test_client",
+			"test_secret_12345",
+			"https://example.com/callback",
+		)
 		.await
 		.unwrap();
 
 	// State 3: Code is consumed (cannot reuse)
 	let reuse_result = oauth2_with_app
-		.exchange_code(&code, "test_client", "test_secret_12345")
+		.exchange_code(
+			&code,
+			"test_client",
+			"test_secret_12345",
+			"https://example.com/callback",
+		)
 		.await;
 	assert!(reuse_result.is_err(), "Code should be consumed");
 
@@ -485,10 +526,20 @@ async fn test_multiple_codes_same_user(oauth2_with_app: OAuth2Authentication) {
 
 	// Both codes should be exchangeable
 	let token1 = oauth2_with_app
-		.exchange_code(&code1, "test_client", "test_secret_12345")
+		.exchange_code(
+			&code1,
+			"test_client",
+			"test_secret_12345",
+			"https://example.com/callback",
+		)
 		.await;
 	let token2 = oauth2_with_app
-		.exchange_code(&code2, "test_client", "test_secret_12345")
+		.exchange_code(
+			&code2,
+			"test_client",
+			"test_secret_12345",
+			"https://example.com/callback",
+		)
 		.await;
 
 	assert!(token1.is_ok(), "First code should exchange successfully");
@@ -548,7 +599,12 @@ async fn test_scope_handling(oauth2_with_app: OAuth2Authentication) {
 		.unwrap();
 
 	let token_no_scope = oauth2_with_app
-		.exchange_code(&code_no_scope, "test_client", "test_secret_12345")
+		.exchange_code(
+			&code_no_scope,
+			"test_client",
+			"test_secret_12345",
+			"https://example.com/callback",
+		)
 		.await
 		.unwrap();
 	assert!(
@@ -568,7 +624,12 @@ async fn test_scope_handling(oauth2_with_app: OAuth2Authentication) {
 		.unwrap();
 
 	let token_with_scope = oauth2_with_app
-		.exchange_code(&code_with_scope, "test_client", "test_secret_12345")
+		.exchange_code(
+			&code_with_scope,
+			"test_client",
+			"test_secret_12345",
+			"https://example.com/callback",
+		)
 		.await
 		.unwrap();
 	assert_eq!(
@@ -593,7 +654,12 @@ async fn test_empty_string_scope(oauth2_with_app: OAuth2Authentication) {
 		.unwrap();
 
 	let token = oauth2_with_app
-		.exchange_code(&code, "test_client", "test_secret_12345")
+		.exchange_code(
+			&code,
+			"test_client",
+			"test_secret_12345",
+			"https://example.com/callback",
+		)
 		.await
 		.unwrap();
 
@@ -624,7 +690,12 @@ async fn test_special_characters_in_user_id(oauth2_with_app: OAuth2Authenticatio
 			.expect(&format!("Code generation for '{}' should succeed", user_id));
 
 		let token = oauth2_with_app
-			.exchange_code(&code, "test_client", "test_secret_12345")
+			.exchange_code(
+				&code,
+				"test_client",
+				"test_secret_12345",
+				"https://example.com/callback",
+			)
 			.await
 			.expect(&format!("Token exchange for '{}' should succeed", user_id));
 
@@ -690,7 +761,9 @@ async fn test_exchange_decision_table(
 	};
 
 	// Execute
-	let result = auth.exchange_code(code, client_id, secret).await;
+	let result = auth
+		.exchange_code(code, client_id, secret, "https://dt.example.com/callback")
+		.await;
 
 	// Assert
 	assert_eq!(
@@ -728,7 +801,12 @@ async fn test_use_case_sso_login_flow(oauth2_with_app: OAuth2Authentication) {
 
 	// Step 2: User is redirected back with code - app exchanges for token
 	let token = oauth2_with_app
-		.exchange_code(&code, "test_client", "test_secret_12345")
+		.exchange_code(
+			&code,
+			"test_client",
+			"test_secret_12345",
+			"https://example.com/callback",
+		)
 		.await
 		.expect("Token exchange should succeed");
 
@@ -789,11 +867,21 @@ async fn test_use_case_multiple_concurrent_authorizations() {
 
 	// Both services exchange their codes
 	let token_a = auth
-		.exchange_code(&code_a, "service_a", "secret_a")
+		.exchange_code(
+			&code_a,
+			"service_a",
+			"secret_a",
+			"https://service-a.com/callback",
+		)
 		.await
 		.unwrap();
 	let token_b = auth
-		.exchange_code(&code_b, "service_b", "secret_b")
+		.exchange_code(
+			&code_b,
+			"service_b",
+			"secret_b",
+			"https://service-b.com/callback",
+		)
 		.await
 		.unwrap();
 
@@ -829,7 +917,12 @@ async fn test_use_case_refresh_token_presence() {
 		.unwrap();
 
 	let token = auth
-		.exchange_code(&code, "refresh_test_client", "refresh_test_secret")
+		.exchange_code(
+			&code,
+			"refresh_test_client",
+			"refresh_test_secret",
+			"https://refresh.example.com/callback",
+		)
 		.await
 		.unwrap();
 

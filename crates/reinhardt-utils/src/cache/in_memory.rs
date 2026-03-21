@@ -59,7 +59,7 @@ impl InMemoryCache {
 	/// use reinhardt_utils::cache::InMemoryCache;
 	///
 	/// let cache = InMemoryCache::new();
-	// Cache is ready to use with no default TTL
+	/// // Cache is ready to use with no default TTL
 	/// ```
 	pub fn new() -> Self {
 		Self {
@@ -93,7 +93,7 @@ impl InMemoryCache {
 	/// use reinhardt_utils::cache::InMemoryCache;
 	///
 	/// let cache = InMemoryCache::with_layered_cleanup();
-	// Use layered cleanup for better performance
+	/// // Use layered cleanup for better performance
 	/// ```
 	pub fn with_layered_cleanup() -> Self {
 		Self {
@@ -147,12 +147,12 @@ impl InMemoryCache {
 	/// let cache = InMemoryCache::new()
 	///     .with_default_ttl(Duration::from_secs(1));
 	///
-	// Set a value without explicit TTL
+	/// // Set a value without explicit TTL
 	/// cache.set("key", &"value", None).await.unwrap();
 	///
-	// Wait for default TTL to expire
+	/// // Wait for default TTL to expire
 	///
-	// Value should be expired
+	/// // Value should be expired
 	/// let value: Option<String> = cache.get("key").await.unwrap();
 	/// assert_eq!(value, None);
 	/// # }
@@ -177,15 +177,15 @@ impl InMemoryCache {
 	/// // Naive cleanup
 	/// let cache = InMemoryCache::new();
 	///
-	// Set a value with short TTL
+	/// // Set a value with short TTL
 	/// cache.set("key1", &"value", Some(Duration::from_millis(10))).await.unwrap();
 	///
-	// Wait for expiration
+	/// // Wait for expiration
 	///
-	// Clean up expired entries (O(n) scan)
+	/// // Clean up expired entries (O(n) scan)
 	/// cache.cleanup_expired().await;
 	///
-	// Verify the key is gone
+	/// // Verify the key is gone
 	/// assert!(!cache.has_key("key1").await.unwrap());
 	///
 	/// // Layered cleanup (faster for large caches)

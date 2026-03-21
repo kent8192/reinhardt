@@ -4,12 +4,18 @@ use serde::{Deserialize, Serialize};
 /// Index definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Index {
+	/// The name.
 	pub name: String,
+	/// The fields.
 	pub fields: Vec<String>,
+	/// The unique.
 	pub unique: bool,
+	/// The condition.
 	pub condition: Option<String>, // Partial index
-	pub include: Vec<String>,      // Covering index
-	pub opclass: Option<String>,   // Operator class
+	/// The include.
+	pub include: Vec<String>, // Covering index
+	/// The opclass.
+	pub opclass: Option<String>, // Operator class
 }
 
 impl Index {
@@ -90,6 +96,7 @@ impl Index {
 /// B-Tree index (default)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BTreeIndex {
+	/// The index.
 	pub index: Index,
 }
 
@@ -119,6 +126,7 @@ impl BTreeIndex {
 /// Hash index
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HashIndex {
+	/// The index.
 	pub index: Index,
 }
 
@@ -132,7 +140,7 @@ impl HashIndex {
 	///
 	/// let hash = HashIndex::new("user_email_hash", vec!["email".to_string()]);
 	/// assert_eq!(hash.index.name, "user_email_hash");
-	// Hash indexes are fast for equality but don't support range queries
+	/// // Hash indexes are fast for equality but don't support range queries
 	/// ```
 	pub fn new(name: impl Into<String>, fields: Vec<String>) -> Self {
 		let mut index = Index::new(name, fields);
@@ -154,6 +162,7 @@ impl HashIndex {
 /// GIN index (for arrays, JSONB, full-text search)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GinIndex {
+	/// The index.
 	pub index: Index,
 }
 
@@ -167,7 +176,7 @@ impl GinIndex {
 	///
 	/// let gin = GinIndex::new("post_tags_gin", vec!["tags".to_string()]);
 	/// assert_eq!(gin.index.name, "post_tags_gin");
-	// GIN indexes are ideal for array and JSONB column searches
+	/// // GIN indexes are ideal for array and JSONB column searches
 	/// ```
 	pub fn new(name: impl Into<String>, fields: Vec<String>) -> Self {
 		let mut index = Index::new(name, fields);
@@ -189,6 +198,7 @@ impl GinIndex {
 /// GiST index (for geometric data, full-text search)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GistIndex {
+	/// The index.
 	pub index: Index,
 }
 
@@ -202,7 +212,7 @@ impl GistIndex {
 	///
 	/// let gist = GistIndex::new("location_gist", vec!["coordinates".to_string()]);
 	/// assert_eq!(gist.index.name, "location_gist");
-	// GiST indexes support geometric and spatial queries
+	/// // GiST indexes support geometric and spatial queries
 	/// ```
 	pub fn new(name: impl Into<String>, fields: Vec<String>) -> Self {
 		let mut index = Index::new(name, fields);

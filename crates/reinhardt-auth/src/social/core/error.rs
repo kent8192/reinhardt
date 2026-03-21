@@ -3,7 +3,8 @@
 use thiserror::Error;
 
 /// Social authentication errors
-#[derive(Debug, Error)]
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SocialAuthError {
 	/// Network error during HTTP requests
 	#[error("Network error: {0}")]
@@ -84,6 +85,10 @@ pub enum SocialAuthError {
 	/// Unknown error
 	#[error("Unknown error: {0}")]
 	Unknown(String),
+
+	/// Insecure endpoint URL (non-HTTPS)
+	#[error("Insecure endpoint: {0}")]
+	InsecureEndpoint(String),
 }
 
 /// Conversion from reqwest::Error

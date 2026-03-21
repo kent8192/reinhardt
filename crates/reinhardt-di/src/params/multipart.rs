@@ -49,7 +49,7 @@ impl Multipart {
 	/// use reinhardt_di::params::Multipart;
 	/// # async fn example(mut multipart: Multipart) -> Result<(), Box<dyn std::error::Error>> {
 	///
-	// Iterate through all fields in the multipart request
+	/// // Iterate through all fields in the multipart request
 	/// while let Some(field) = multipart.next_field().await? {
 	///     let name = field.name().unwrap_or("unknown");
 	///     println!("Processing field: {}", name);

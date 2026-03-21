@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-i18n"
-version = "0.1.0-alpha.6"
+version = "0.1.0-rc.13"
 description = "Internationalization and localization support"
 edition.workspace = true
 license.workspace = true
@@ -15,18 +15,20 @@ reinhardt-utils = { workspace = true }
 
 # DI integration (optional)
 reinhardt-di = { workspace = true, optional = true }
+reinhardt-test = { workspace = true, optional = true }
 
 [features]
 default = []
 full = ["di"]
 di = ["dep:reinhardt-di"]
+test-utils = ["dep:reinhardt-test"]
 
 [dev-dependencies]
+insta = { workspace = true }
 tokio = { workspace = true }
 tempfile = "3.8"
 serial_test = { workspace = true }
 rstest = { workspace = true }
 scopeguard = { workspace = true }
-reinhardt-test = { workspace = true }
 reinhardt-di = { workspace = true }
 unic-langid = "0.9"

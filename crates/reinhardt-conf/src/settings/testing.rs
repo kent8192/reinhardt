@@ -30,7 +30,7 @@ impl TestEnv {
 	/// let mut test_env = TestEnv::new().unwrap();
 	/// test_env.set_var("TEST_KEY", "test_value");
 	/// assert_eq!(std::env::var("TEST_KEY").unwrap(), "test_value");
-	// Environment is cleaned up when test_env is dropped
+	/// // Environment is cleaned up when test_env is dropped
 	/// ```
 	pub fn new() -> std::io::Result<Self> {
 		Ok(Self {
@@ -154,7 +154,7 @@ impl TestEnv {
 	/// let test_env = TestEnv::new().unwrap();
 	/// test_env.create_env_file("API_KEY=secret123").unwrap();
 	/// test_env.load_env().unwrap();
-	// Environment variables from .env are now loaded
+	/// // Environment variables from .env are now loaded
 	/// ```
 	pub fn load_env(&self) -> Result<(), super::env::EnvError> {
 		let env_path = self.temp_dir.path().join(".env");

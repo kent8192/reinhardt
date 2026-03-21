@@ -297,6 +297,7 @@ impl<T: Model> GenericRelationSet<T> {
 ///
 /// assert_eq!(config.related_model(), "Comment");
 /// ```
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenericRelationConfig {
 	/// Name of the related model

@@ -10,6 +10,7 @@
 //! For client-side (WASM) rendering, use DOM APIs directly through
 //! the `FormComponent` in this crate.
 
+use reinhardt_core::security::xss::validate_html_attr_name;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -134,6 +135,13 @@ impl Widget for TextInput {
 		}
 
 		for (key, val) in attrs {
+			debug_assert!(
+				validate_html_attr_name(key),
+				"Invalid HTML attribute name: {key}"
+			);
+			if !validate_html_attr_name(key) {
+				continue;
+			}
 			html.push_str(&format!(r#" {}="{}""#, key, html_escape(val)));
 		}
 
@@ -172,6 +180,13 @@ impl Widget for DateInput {
 		}
 
 		for (key, val) in attrs {
+			debug_assert!(
+				validate_html_attr_name(key),
+				"Invalid HTML attribute name: {key}"
+			);
+			if !validate_html_attr_name(key) {
+				continue;
+			}
 			html.push_str(&format!(r#" {}="{}""#, key, html_escape(val)));
 		}
 
@@ -210,6 +225,13 @@ impl Widget for CheckboxInput {
 		}
 
 		for (key, val) in attrs {
+			debug_assert!(
+				validate_html_attr_name(key),
+				"Invalid HTML attribute name: {key}"
+			);
+			if !validate_html_attr_name(key) {
+				continue;
+			}
 			html.push_str(&format!(r#" {}="{}""#, key, html_escape(val)));
 		}
 
@@ -254,6 +276,13 @@ impl Widget for Select {
 		let mut html = format!(r#"<select name="{}""#, html_escape(name));
 
 		for (key, val) in attrs {
+			debug_assert!(
+				validate_html_attr_name(key),
+				"Invalid HTML attribute name: {key}"
+			);
+			if !validate_html_attr_name(key) {
+				continue;
+			}
 			html.push_str(&format!(r#" {}="{}""#, key, html_escape(val)));
 		}
 
@@ -315,6 +344,13 @@ impl Widget for SelectMultiple {
 		let mut html = format!(r#"<select name="{}" multiple"#, html_escape(name));
 
 		for (key, val) in attrs {
+			debug_assert!(
+				validate_html_attr_name(key),
+				"Invalid HTML attribute name: {key}"
+			);
+			if !validate_html_attr_name(key) {
+				continue;
+			}
 			html.push_str(&format!(r#" {}="{}""#, key, html_escape(val)));
 		}
 
@@ -390,6 +426,13 @@ impl Widget for RadioSelect {
 			}
 
 			for (key, val) in attrs {
+				debug_assert!(
+					validate_html_attr_name(key),
+					"Invalid HTML attribute name: {key}"
+				);
+				if !validate_html_attr_name(key) {
+					continue;
+				}
 				html.push_str(&format!(r#" {}="{}""#, key, html_escape(val)));
 			}
 
@@ -456,6 +499,13 @@ impl Widget for CheckboxSelectMultiple {
 			}
 
 			for (key, val) in attrs {
+				debug_assert!(
+					validate_html_attr_name(key),
+					"Invalid HTML attribute name: {key}"
+				);
+				if !validate_html_attr_name(key) {
+					continue;
+				}
 				html.push_str(&format!(r#" {}="{}""#, key, html_escape(val)));
 			}
 
@@ -494,6 +544,13 @@ impl Widget for FileInput {
 		let mut html = format!(r#"<input type="file" name="{}""#, html_escape(name));
 
 		for (key, val) in attrs {
+			debug_assert!(
+				validate_html_attr_name(key),
+				"Invalid HTML attribute name: {key}"
+			);
+			if !validate_html_attr_name(key) {
+				continue;
+			}
 			html.push_str(&format!(r#" {}="{}""#, key, html_escape(val)));
 		}
 
@@ -537,8 +594,11 @@ impl Widget for SplitDateTimeWidget {
 			html_escape(date_value)
 		));
 		for (key, val) in attrs {
-			if key.starts_with("date_") {
-				let date_attr = key.strip_prefix("date_").unwrap();
+			if let Some(date_attr) = key.strip_prefix("date_") {
+				if !validate_html_attr_name(date_attr) {
+					debug_assert!(false, "Invalid HTML attribute name: {date_attr}");
+					continue;
+				}
 				html.push_str(&format!(r#" {}="{}""#, date_attr, html_escape(val)));
 			}
 		}
@@ -551,8 +611,11 @@ impl Widget for SplitDateTimeWidget {
 			html_escape(time_value)
 		));
 		for (key, val) in attrs {
-			if key.starts_with("time_") {
-				let time_attr = key.strip_prefix("time_").unwrap();
+			if let Some(time_attr) = key.strip_prefix("time_") {
+				if !validate_html_attr_name(time_attr) {
+					debug_assert!(false, "Invalid HTML attribute name: {time_attr}");
+					continue;
+				}
 				html.push_str(&format!(r#" {}="{}""#, time_attr, html_escape(val)));
 			}
 		}
@@ -571,7 +634,15 @@ pub struct SelectDateWidget {
 impl SelectDateWidget {
 	/// Create a new select date widget with default year range
 	pub fn new() -> Self {
-		let current_year = 2025;
+		let current_year = {
+			use std::time::{SystemTime, UNIX_EPOCH};
+			let secs = SystemTime::now()
+				.duration_since(UNIX_EPOCH)
+				.expect("system clock is before UNIX epoch")
+				.as_secs();
+			// 365.25 days/year * 86400 secs/day = 31_557_600 secs/year
+			1970 + (secs / 31_557_600) as i32
+		};
 		let years = (current_year - 100..=current_year + 10).collect();
 		Self { years }
 	}
@@ -611,8 +682,11 @@ impl Widget for SelectDateWidget {
 		// Year select
 		html.push_str(&format!(r#"<select name="{}_year""#, escaped_name));
 		for (key, val) in attrs {
-			if key.starts_with("year_") {
-				let year_attr = key.strip_prefix("year_").unwrap();
+			if let Some(year_attr) = key.strip_prefix("year_") {
+				if !validate_html_attr_name(year_attr) {
+					debug_assert!(false, "Invalid HTML attribute name: {year_attr}");
+					continue;
+				}
 				html.push_str(&format!(r#" {}="{}""#, year_attr, html_escape(val)));
 			}
 		}
@@ -631,8 +705,11 @@ impl Widget for SelectDateWidget {
 		// Month select
 		html.push_str(&format!(r#"<select name="{}_month""#, escaped_name));
 		for (key, val) in attrs {
-			if key.starts_with("month_") {
-				let month_attr = key.strip_prefix("month_").unwrap();
+			if let Some(month_attr) = key.strip_prefix("month_") {
+				if !validate_html_attr_name(month_attr) {
+					debug_assert!(false, "Invalid HTML attribute name: {month_attr}");
+					continue;
+				}
 				html.push_str(&format!(r#" {}="{}""#, month_attr, html_escape(val)));
 			}
 		}
@@ -651,8 +728,11 @@ impl Widget for SelectDateWidget {
 		// Day select
 		html.push_str(&format!(r#"<select name="{}_day""#, escaped_name));
 		for (key, val) in attrs {
-			if key.starts_with("day_") {
-				let day_attr = key.strip_prefix("day_").unwrap();
+			if let Some(day_attr) = key.strip_prefix("day_") {
+				if !validate_html_attr_name(day_attr) {
+					debug_assert!(false, "Invalid HTML attribute name: {day_attr}");
+					continue;
+				}
 				html.push_str(&format!(r#" {}="{}""#, day_attr, html_escape(val)));
 			}
 		}
@@ -1123,5 +1203,63 @@ mod tests {
 		// Normal names should work correctly
 		assert!(html.contains(r#"name="username""#));
 		assert!(html.contains(r#"value="john""#));
+	}
+
+	#[test]
+	fn test_attr_key_injection_with_space_is_skipped() {
+		// Arrange
+		let widget = TextInput::new();
+		let mut attrs = HashMap::new();
+		attrs.insert("class".to_string(), "form-control".to_string());
+		attrs.insert("onclick=alert(1) x".to_string(), "y".to_string());
+
+		// Act - catch_unwind to handle debug_assert! in debug builds
+		let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			widget.render("field", None, &attrs)
+		}));
+
+		// Assert - in debug builds, debug_assert! fires; in release, invalid key is skipped
+		if let Ok(html) = result {
+			assert!(html.contains(r#"class="form-control""#));
+			assert!(!html.contains("onclick"));
+		}
+		// If panicked (debug build), the debug_assert! did its job
+	}
+
+	#[test]
+	fn test_attr_key_injection_with_equals_is_skipped() {
+		// Arrange
+		let widget = TextInput::new();
+		let mut attrs = HashMap::new();
+		attrs.insert("onclick=alert(1)".to_string(), "x".to_string());
+
+		// Act - catch_unwind to handle debug_assert! in debug builds
+		let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			widget.render("field", None, &attrs)
+		}));
+
+		// Assert - in debug builds, debug_assert! fires; in release, invalid key is skipped
+		if let Ok(html) = result {
+			assert!(!html.contains("onclick"));
+		}
+		// If panicked (debug build), the debug_assert! did its job
+	}
+
+	#[test]
+	fn test_valid_attr_keys_preserved() {
+		// Arrange
+		let widget = TextInput::new();
+		let mut attrs = HashMap::new();
+		attrs.insert("class".to_string(), "form-control".to_string());
+		attrs.insert("data-value".to_string(), "123".to_string());
+		attrs.insert("aria-label".to_string(), "Name".to_string());
+
+		// Act
+		let html = widget.render("field", None, &attrs);
+
+		// Assert
+		assert!(html.contains(r#"class="form-control""#));
+		assert!(html.contains(r#"data-value="123""#));
+		assert!(html.contains(r#"aria-label="Name""#));
 	}
 }

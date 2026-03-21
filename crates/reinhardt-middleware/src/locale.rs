@@ -19,6 +19,7 @@ pub const LOCALE_HEADER: &str = "X-Locale";
 pub const LOCALE_COOKIE_NAME: &str = "django_language";
 
 /// Locale middleware configuration
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocaleConfig {
 	/// Default locale to use when none is detected
@@ -282,9 +283,12 @@ impl Middleware for LocaleMiddleware {
 		let locale = self.detect_locale(&request);
 
 		// Add locale to request headers for downstream handlers
-		request
-			.headers
-			.insert(LOCALE_HEADER, locale.parse().unwrap());
+		request.headers.insert(
+			LOCALE_HEADER,
+			locale
+				.parse()
+				.unwrap_or_else(|_| hyper::header::HeaderValue::from_static("en")),
+		);
 
 		// Process request with handler
 		handler.handle(request).await

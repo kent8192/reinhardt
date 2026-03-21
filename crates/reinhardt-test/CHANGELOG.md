@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.1.0-rc.4...reinhardt-test@v0.1.0-rc.5) - 2026-03-07
+
+### Changed
+
+- *(reinhardt-test)* delegate to reinhardt-testkit with re-exports
+
+### Other
+
+- resolve conflict with main branch version bump to rc.4
+
+## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.1.0-rc.1...reinhardt-test@v0.1.0-rc.2) - 2026-03-04
+
+### Fixed
+
+- *(deps)* update reinhardt-test outdated deps
+- *(deps)* convert Vec to Bytes for tungstenite message types
+
+## [0.1.0-rc.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.1.0-alpha.20...reinhardt-test@v0.1.0-rc.1) - 2026-02-24
+
+### Maintenance
+
+- updated the following local packages: reinhardt-db, reinhardt-auth, reinhardt-rest, reinhardt-views, reinhardt-urls, reinhardt-pages, reinhardt-admin, reinhardt-websockets
+
 ## [0.1.0-alpha.20](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.1.0-alpha.19...reinhardt-test@v0.1.0-alpha.20) - 2026-02-24
 
 ### Maintenance

@@ -154,22 +154,6 @@ async fn handler_with_di(req: reinhardt::Request) -> Response {
 }
 ```
 
-### Typed DI Parameters
-
-```rust
-use reinhardt::Depends;
-
-#[derive(Clone)]
-struct Database {
-    // ...
-}
-
-async fn handler_with_db(Depends(db): Depends<Arc<Database>>) -> Response {
-    // Use db for database operations
-    Response::ok()
-}
-```
-
 ---
 
 ## Middleware Order
@@ -223,9 +207,9 @@ Preflight requests (OPTIONS) are failing.
 use reinhardt::{CorsMiddleware, cors::CorsConfig};
 
 let config = CorsConfig {
-    allow_origins: vec!["https://app.example.com".to_string()],
-    allow_methods: vec!["GET".to_string(), "POST".to_string()],
-    allow_headers: vec!["Content-Type".to_string(), "Authorization".to_string()],
+    allow_origins: vec!["https://app.example.com"],
+    allow_methods: vec!["GET", "POST"],
+    allow_headers: vec!["Content-Type", "Authorization"],
     allow_credentials: true,  // true when sending cookies/auth headers
     max_age: Some(3600),
 };

@@ -2,15 +2,61 @@ name: Test Examples
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
+
+concurrency:
+  group: test-examples-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 env:
   RUST_BACKTRACE: 1
   CARGO_TERM_COLOR: always
 
 jobs:
+  detect-examples-changed:
+    name: Detect Examples Changes
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.detect.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect
+        id: detect
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # Issue #1828: Release PRs always run examples tests
+          if [[ "$HEAD_REF" == release-plz-* ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Normal PRs: run only when examples/** changed
+          if [[ -n "${HEAD_REF:-}" ]]; then
+            COMPARE_REF="origin/$HEAD_REF"
+          else
+            COMPARE_REF="HEAD"
+          fi
+          BASE_REF_VAL="${BASE_REF:-main}"
+          CHANGED=$(git log --name-only --format="" --no-merges \
+            "origin/$BASE_REF_VAL..$COMPARE_REF" \
+            | grep -v '^$' | grep '^examples/' | head -1 || true)
+          if [[ -n "$CHANGED" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   test-local-examples:
     name: Test ${{ matrix.example }}
+    needs: [detect-examples-changed]
+    # Issue #1828: Skip when no examples/** changes on non-release PRs
+    if: needs.detect-examples-changed.outputs.run == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -34,7 +80,10 @@ jobs:
           components: rustfmt, clippy
 
       - name: Setup protoc
-        uses: ./.github/actions/setup-protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache Cargo Registry
         uses: actions/cache@v5
@@ -82,6 +131,14 @@ jobs:
         working-directory: examples/${{ matrix.example }}
         run: cargo build --all-features
 
+      - name: Install wasm32 target
+        if: contains(fromJSON('["examples-twitter", "examples-tutorial-basis"]'), matrix.example)
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Check WASM compilation (framework crates)
+        if: contains(fromJSON('["examples-twitter", "examples-tutorial-basis"]'), matrix.example)
+        run: cargo check --target wasm32-unknown-unknown -p reinhardt-core -p reinhardt-urls --features reinhardt-core/full,reinhardt-urls/client-router
+
       - name: Test
         working-directory: examples/${{ matrix.example }}
         run: cargo nextest run --all-features
@@ -89,3 +146,7 @@ jobs:
       - name: Doc Test
         working-directory: examples/${{ matrix.example }}
         run: cargo test --doc --all-features
+
+      - name: Cleanup local config
+        if: always()
+        run: rm -f examples/.cargo/config.toml

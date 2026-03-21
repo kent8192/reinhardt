@@ -259,6 +259,7 @@ pub struct InsertBuilder {
 }
 
 impl InsertBuilder {
+	/// Creates a new instance.
 	pub fn new(backend: Arc<dyn DatabaseBackend>, table: impl Into<String>) -> Self {
 		Self {
 			backend,
@@ -271,12 +272,14 @@ impl InsertBuilder {
 		}
 	}
 
+	/// Performs the value operation.
 	pub fn value(mut self, column: impl Into<String>, value: impl Into<QueryValue>) -> Self {
 		self.columns.push(column.into());
 		self.values.push(value.into());
 		self
 	}
 
+	/// Performs the returning operation.
 	pub fn returning(mut self, columns: Vec<&str>) -> Self {
 		if self.backend.supports_returning() {
 			self.returning = Some(columns.iter().map(|s| (*s).to_owned()).collect());
@@ -364,6 +367,7 @@ impl InsertBuilder {
 		self
 	}
 
+	/// Builds the final result.
 	pub fn build(&self) -> Result<(String, Vec<QueryValue>)> {
 		use super::types::DatabaseType;
 		use reinhardt_query::prelude::{
@@ -381,7 +385,11 @@ impl InsertBuilder {
 		// Add values
 		if !self.values.is_empty() {
 			let sea_values: Vec<Value> = self.values.iter().map(query_value_to_sea_value).collect();
-			stmt.values(sea_values).unwrap();
+			stmt.values(sea_values).map_err(|e| {
+				super::error::DatabaseError::QueryError(format!(
+					"failed to set insert values (column/value count mismatch): {e}"
+				))
+			})?;
 		}
 
 		// Add RETURNING clause if supported
@@ -653,11 +661,13 @@ impl InsertBuilder {
 		Ok(sql)
 	}
 
+	/// Executes the operation.
 	pub async fn execute(&self) -> Result<QueryResult> {
 		let (sql, params) = self.build()?;
 		self.backend.execute(&sql, params).await
 	}
 
+	/// Fetches one.
 	pub async fn fetch_one(&self) -> Result<Row> {
 		let (sql, params) = self.build()?;
 		self.backend.fetch_one(&sql, params).await
@@ -729,6 +739,7 @@ pub struct InsertFromSelectBuilder {
 }
 
 impl InsertFromSelectBuilder {
+	/// Creates a new instance.
 	pub fn new(
 		backend: Arc<dyn DatabaseBackend>,
 		table: impl Into<String>,
@@ -755,6 +766,7 @@ impl InsertFromSelectBuilder {
 		self
 	}
 
+	/// Performs the returning operation.
 	pub fn returning(mut self, columns: Vec<&str>) -> Self {
 		if self.backend.supports_returning() {
 			self.returning = Some(columns.iter().map(|s| (*s).to_owned()).collect());
@@ -762,11 +774,13 @@ impl InsertFromSelectBuilder {
 		self
 	}
 
+	/// Performs the on conflict do nothing operation.
 	pub fn on_conflict_do_nothing(mut self, conflict_columns: Option<Vec<String>>) -> Self {
 		self.on_conflict = Some(OnConflictAction::DoNothing { conflict_columns });
 		self
 	}
 
+	/// Performs the on conflict do update operation.
 	pub fn on_conflict_do_update(
 		mut self,
 		conflict_columns: Option<Vec<String>>,
@@ -779,6 +793,7 @@ impl InsertFromSelectBuilder {
 		self
 	}
 
+	/// Builds the final result.
 	pub fn build(&self) -> (String, Vec<QueryValue>) {
 		use super::types::DatabaseType;
 		use reinhardt_query::prelude::{
@@ -897,11 +912,13 @@ impl InsertFromSelectBuilder {
 		sql
 	}
 
+	/// Executes the operation.
 	pub async fn execute(&self) -> Result<QueryResult> {
 		let (sql, params) = self.build();
 		self.backend.execute(&sql, params).await
 	}
 
+	/// Fetches one.
 	pub async fn fetch_one(&self) -> Result<Row> {
 		let (sql, params) = self.build();
 		self.backend.fetch_one(&sql, params).await
@@ -917,6 +934,7 @@ pub struct UpdateBuilder {
 }
 
 impl UpdateBuilder {
+	/// Creates a new instance.
 	pub fn new(backend: Arc<dyn DatabaseBackend>, table: impl Into<String>) -> Self {
 		Self {
 			backend,
@@ -926,22 +944,26 @@ impl UpdateBuilder {
 		}
 	}
 
+	/// Performs the set operation.
 	pub fn set(mut self, column: impl Into<String>, value: impl Into<QueryValue>) -> Self {
 		self.sets.push((column.into(), value.into()));
 		self
 	}
 
+	/// Sets the now.
 	pub fn set_now(mut self, column: impl Into<String>) -> Self {
 		self.sets.push((column.into(), QueryValue::Now));
 		self
 	}
 
+	/// Performs the where eq operation.
 	pub fn where_eq(mut self, column: impl Into<String>, value: impl Into<QueryValue>) -> Self {
 		self.wheres
 			.push((column.into(), "=".to_string(), value.into()));
 		self
 	}
 
+	/// Builds the final result.
 	pub fn build(&self) -> (String, Vec<QueryValue>) {
 		use super::types::DatabaseType;
 		use reinhardt_query::prelude::{
@@ -996,6 +1018,7 @@ impl UpdateBuilder {
 		(sql, params)
 	}
 
+	/// Executes the operation.
 	pub async fn execute(&self) -> Result<QueryResult> {
 		let (sql, params) = self.build();
 		self.backend.execute(&sql, params).await
@@ -1012,6 +1035,7 @@ pub struct SelectBuilder {
 }
 
 impl SelectBuilder {
+	/// Creates a new instance.
 	pub fn new(backend: Arc<dyn DatabaseBackend>) -> Self {
 		Self {
 			backend,
@@ -1022,27 +1046,32 @@ impl SelectBuilder {
 		}
 	}
 
+	/// Performs the columns operation.
 	pub fn columns(mut self, columns: Vec<&str>) -> Self {
 		self.columns = columns.iter().map(|s| s.to_string()).collect();
 		self
 	}
 
+	/// Performs the from operation.
 	pub fn from(mut self, table: impl Into<String>) -> Self {
 		self.table = table.into();
 		self
 	}
 
+	/// Performs the where eq operation.
 	pub fn where_eq(mut self, column: impl Into<String>, value: impl Into<QueryValue>) -> Self {
 		self.wheres
 			.push((column.into(), "=".to_string(), value.into()));
 		self
 	}
 
+	/// Performs the limit operation.
 	pub fn limit(mut self, limit: i64) -> Self {
 		self.limit = Some(limit);
 		self
 	}
 
+	/// Builds the final result.
 	pub fn build(&self) -> (String, Vec<QueryValue>) {
 		use super::types::DatabaseType;
 		use reinhardt_query::prelude::{
@@ -1089,11 +1118,13 @@ impl SelectBuilder {
 		(sql, params)
 	}
 
+	/// Fetches all.
 	pub async fn fetch_all(&self) -> Result<Vec<Row>> {
 		let (sql, params) = self.build();
 		self.backend.fetch_all(&sql, params).await
 	}
 
+	/// Fetches one.
 	pub async fn fetch_one(&self) -> Result<Row> {
 		let (sql, params) = self.build();
 		self.backend.fetch_one(&sql, params).await
@@ -1108,6 +1139,7 @@ pub struct DeleteBuilder {
 }
 
 impl DeleteBuilder {
+	/// Creates a new instance.
 	pub fn new(backend: Arc<dyn DatabaseBackend>, table: impl Into<String>) -> Self {
 		Self {
 			backend,
@@ -1116,12 +1148,14 @@ impl DeleteBuilder {
 		}
 	}
 
+	/// Performs the where eq operation.
 	pub fn where_eq(mut self, column: impl Into<String>, value: impl Into<QueryValue>) -> Self {
 		self.wheres
 			.push((column.into(), "=".to_string(), value.into()));
 		self
 	}
 
+	/// Performs the where in operation.
 	pub fn where_in(mut self, column: impl Into<String> + Clone, values: Vec<QueryValue>) -> Self {
 		for value in values {
 			self.wheres
@@ -1130,6 +1164,7 @@ impl DeleteBuilder {
 		self
 	}
 
+	/// Builds the final result.
 	pub fn build(&self) -> (String, Vec<QueryValue>) {
 		use super::types::DatabaseType;
 		use reinhardt_query::prelude::{
@@ -1171,6 +1206,7 @@ impl DeleteBuilder {
 		(sql, params)
 	}
 
+	/// Executes the operation.
 	pub async fn execute(&self) -> Result<QueryResult> {
 		let (sql, params) = self.build();
 		self.backend.execute(&sql, params).await
@@ -2625,5 +2661,44 @@ mod tests {
 
 		// Assert: Should succeed for PostgreSQL
 		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	fn test_insert_build_succeeds_with_matching_columns_and_values() {
+		// Arrange
+		let backend: Arc<dyn DatabaseBackend> = Arc::new(MockBackend);
+		let builder = InsertBuilder::new(backend, "users")
+			.value("name", QueryValue::String("Alice".to_string()))
+			.value("email", QueryValue::String("alice@example.com".to_string()));
+
+		// Act
+		let result = builder.build();
+
+		// Assert
+		assert!(result.is_ok());
+		let (sql, params) = result.unwrap();
+		assert!(sql.contains("\"name\""));
+		assert!(sql.contains("\"email\""));
+		assert_eq!(params.len(), 2);
+	}
+
+	#[rstest]
+	fn test_insert_build_returns_error_on_column_value_mismatch() {
+		// Arrange: manually create a mismatch between columns and values
+		let backend: Arc<dyn DatabaseBackend> = Arc::new(MockBackend);
+		let mut builder = InsertBuilder::new(backend, "users");
+		builder.columns = vec!["name".to_string(), "email".to_string()];
+		// Only one value for two columns
+		builder.values = vec![QueryValue::String("Alice".to_string())];
+
+		// Act
+		let result = builder.build();
+
+		// Assert: should return an error, not panic
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(
+			matches!(err, DatabaseError::QueryError(ref msg) if msg.contains("column/value count mismatch"))
+		);
 	}
 }

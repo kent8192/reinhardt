@@ -10,6 +10,7 @@ use std::time::Duration;
 use crate::backends::error::{DatabaseError, Result};
 
 /// CockroachDB connection configuration
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct CockroachDBConnectionConfig {
 	/// Connection URL
@@ -182,10 +183,7 @@ impl CockroachDBConnection {
 	/// # }
 	/// ```
 	pub async fn connect(config: CockroachDBConnectionConfig) -> Result<Self> {
-		let mut url = config.url.clone();
-		if let Some(app_name) = config.application_name {
-			url = format!("{}?application_name={}", url, app_name);
-		}
+		let url = build_connection_url(&config.url, config.application_name.as_deref());
 
 		let pool = PgPool::connect(&url).await.map_err(DatabaseError::from)?;
 
@@ -385,11 +383,39 @@ impl CockroachDBConnection {
 	}
 }
 
+/// Build connection URL with optional application_name parameter
+///
+/// URL-encodes the application_name and uses the correct query parameter
+/// separator based on whether the URL already contains query parameters.
+fn build_connection_url(base_url: &str, application_name: Option<&str>) -> String {
+	let mut url = base_url.to_string();
+	if let Some(app_name) = application_name {
+		// Percent-encode characters that are not URL-safe in query parameter values
+		let encoded: String = app_name
+			.chars()
+			.map(|c| match c {
+				' ' => "%20".to_string(),
+				'&' => "%26".to_string(),
+				'=' => "%3D".to_string(),
+				'?' => "%3F".to_string(),
+				'#' => "%23".to_string(),
+				'%' => "%25".to_string(),
+				'+' => "%2B".to_string(),
+				_ => c.to_string(),
+			})
+			.collect();
+		let separator = if url.contains('?') { '&' } else { '?' };
+		url = format!("{}{}application_name={}", url, separator, encoded);
+	}
+	url
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	#[test]
+	#[rstest]
 	fn test_config_default() {
 		let config = CockroachDBConnectionConfig::default();
 		assert_eq!(config.url, "postgresql://localhost:26257/defaultdb");
@@ -397,48 +423,48 @@ mod tests {
 		assert_eq!(config.min_connections, 2);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_config_new() {
 		let config = CockroachDBConnectionConfig::new("postgresql://localhost:26257/mydb");
 		assert_eq!(config.url, "postgresql://localhost:26257/mydb");
 	}
 
-	#[test]
+	#[rstest]
 	fn test_config_with_max_connections() {
 		let config = CockroachDBConnectionConfig::new("postgresql://localhost:26257/mydb")
 			.with_max_connections(20);
 		assert_eq!(config.max_connections, 20);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_config_with_min_connections() {
 		let config = CockroachDBConnectionConfig::new("postgresql://localhost:26257/mydb")
 			.with_min_connections(5);
 		assert_eq!(config.min_connections, 5);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_config_with_connect_timeout() {
 		let config = CockroachDBConnectionConfig::new("postgresql://localhost:26257/mydb")
 			.with_connect_timeout(Duration::from_secs(10));
 		assert_eq!(config.connect_timeout, Duration::from_secs(10));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_config_with_idle_timeout() {
 		let config = CockroachDBConnectionConfig::new("postgresql://localhost:26257/mydb")
 			.with_idle_timeout(Duration::from_secs(300));
 		assert_eq!(config.idle_timeout, Duration::from_secs(300));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_config_with_application_name() {
 		let config = CockroachDBConnectionConfig::new("postgresql://localhost:26257/mydb")
 			.with_application_name("my-app");
 		assert_eq!(config.application_name, Some("my-app".to_string()));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_config_chaining() {
 		let config = CockroachDBConnectionConfig::new("postgresql://localhost:26257/mydb")
 			.with_max_connections(20)
@@ -472,5 +498,92 @@ mod tests {
 
 		// Both should reference the same pool
 		assert!(Arc::ptr_eq(&conn1.pool, &conn2.pool));
+	}
+
+	#[rstest]
+	fn test_build_connection_url_no_app_name() {
+		// Arrange
+		let base_url = "postgresql://localhost:26257/mydb";
+
+		// Act
+		let result = build_connection_url(base_url, None);
+
+		// Assert
+		assert_eq!(result, "postgresql://localhost:26257/mydb");
+	}
+
+	#[rstest]
+	fn test_build_connection_url_simple_app_name() {
+		// Arrange
+		let base_url = "postgresql://localhost:26257/mydb";
+
+		// Act
+		let result = build_connection_url(base_url, Some("my-app"));
+
+		// Assert
+		assert_eq!(
+			result,
+			"postgresql://localhost:26257/mydb?application_name=my-app"
+		);
+	}
+
+	#[rstest]
+	fn test_build_connection_url_special_chars_encoded() {
+		// Arrange
+		let base_url = "postgresql://localhost:26257/mydb";
+
+		// Act
+		let result = build_connection_url(base_url, Some("my app&name=v1"));
+
+		// Assert
+		assert_eq!(
+			result,
+			"postgresql://localhost:26257/mydb?application_name=my%20app%26name%3Dv1"
+		);
+	}
+
+	#[rstest]
+	fn test_build_connection_url_existing_query_params() {
+		// Arrange
+		let base_url = "postgresql://localhost:26257/mydb?sslmode=require";
+
+		// Act
+		let result = build_connection_url(base_url, Some("my-app"));
+
+		// Assert
+		assert_eq!(
+			result,
+			"postgresql://localhost:26257/mydb?sslmode=require&application_name=my-app"
+		);
+	}
+
+	#[rstest]
+	fn test_build_connection_url_percent_in_name() {
+		// Arrange
+		let base_url = "postgresql://localhost:26257/mydb";
+
+		// Act
+		let result = build_connection_url(base_url, Some("100%done"));
+
+		// Assert
+		assert_eq!(
+			result,
+			"postgresql://localhost:26257/mydb?application_name=100%25done"
+		);
+	}
+
+	#[rstest]
+	fn test_build_connection_url_hash_and_question_mark() {
+		// Arrange
+		let base_url = "postgresql://localhost:26257/mydb";
+
+		// Act
+		let result = build_connection_url(base_url, Some("app#1?v2"));
+
+		// Assert
+		assert_eq!(
+			result,
+			"postgresql://localhost:26257/mydb?application_name=app%231%3Fv2"
+		);
 	}
 }

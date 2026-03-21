@@ -3,8 +3,9 @@
 use std::fmt;
 
 /// Signal errors
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignalError {
+	/// Human-readable error description.
 	pub message: String,
 }
 
@@ -17,6 +18,7 @@ impl fmt::Display for SignalError {
 impl std::error::Error for SignalError {}
 
 impl SignalError {
+	/// Creates a new signal error with the given message.
 	pub fn new(msg: impl Into<String>) -> Self {
 		Self {
 			message: msg.into(),

@@ -37,14 +37,21 @@ use std::collections::HashMap;
 use std::fmt;
 
 /// Validation errors that can occur during migration operations
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ValidationError {
 	/// Composite primary key list is empty
-	EmptyCompositePrimaryKey { table_name: String },
+	EmptyCompositePrimaryKey {
+		/// The table name.
+		table_name: String,
+	},
 	/// Field specified in composite primary key does not exist in table
 	NonExistentField {
+		/// The missing field name.
 		field_name: String,
+		/// The table name.
 		table_name: String,
+		/// The available field names in the table.
 		available_fields: Vec<String>,
 	},
 }
@@ -138,59 +145,82 @@ pub fn quote_identifier(identifier: &str, database_type: DatabaseType) -> String
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FieldDefinition {
+	/// The name.
 	pub name: String,
+	/// The field type.
 	pub field_type: crate::migrations::FieldType,
+	/// The primary key.
 	pub primary_key: bool,
+	/// The unique.
 	pub unique: bool,
+	/// The default.
 	pub default: Option<String>,
+	/// The null.
 	pub null: bool,
 
 	// Generated Columns (all DBMS)
+	/// The generated.
 	pub generated: Option<String>,
+	/// The generated stored.
 	pub generated_stored: Option<bool>,
+	/// Whether the generated column is virtual (MySQL/SQLite).
 	#[cfg(any(feature = "db-mysql", feature = "db-sqlite"))]
 	pub generated_virtual: Option<bool>,
 
 	// Identity/Auto-increment
+	/// Whether IDENTITY ALWAYS is set (PostgreSQL).
 	#[cfg(feature = "db-postgres")]
 	pub identity_always: Option<bool>,
+	/// Whether IDENTITY BY DEFAULT is set (PostgreSQL).
 	#[cfg(feature = "db-postgres")]
 	pub identity_by_default: Option<bool>,
+	/// Whether AUTO_INCREMENT is set (MySQL).
 	#[cfg(feature = "db-mysql")]
 	pub auto_increment: Option<bool>,
+	/// Whether AUTOINCREMENT is set (SQLite).
 	#[cfg(feature = "db-sqlite")]
 	pub autoincrement: Option<bool>,
 
 	// Character Set & Collation
+	/// The collation for the column.
 	pub collate: Option<String>,
+	/// The character set (MySQL).
 	#[cfg(feature = "db-mysql")]
 	pub character_set: Option<String>,
 
 	// Comment
+	/// Optional column comment (PostgreSQL/MySQL).
 	#[cfg(any(feature = "db-postgres", feature = "db-mysql"))]
 	pub comment: Option<String>,
 
 	// Storage Optimization (PostgreSQL)
+	/// The storage strategy (PostgreSQL).
 	#[cfg(feature = "db-postgres")]
 	pub storage: Option<String>,
+	/// The compression method (PostgreSQL).
 	#[cfg(feature = "db-postgres")]
 	pub compression: Option<String>,
 
 	// ON UPDATE Trigger (MySQL)
+	/// Whether ON UPDATE CURRENT_TIMESTAMP is set (MySQL).
 	#[cfg(feature = "db-mysql")]
 	pub on_update_current_timestamp: Option<bool>,
 
 	// Invisible Columns (MySQL)
+	/// Whether the column is invisible (MySQL).
 	#[cfg(feature = "db-mysql")]
 	pub invisible: Option<bool>,
 
 	// Full-Text Index (PostgreSQL, MySQL)
+	/// Whether fulltext indexing is enabled (PostgreSQL/MySQL).
 	#[cfg(any(feature = "db-postgres", feature = "db-mysql"))]
 	pub fulltext: Option<bool>,
 
 	// Numeric Attributes (MySQL, deprecated)
+	/// Whether the numeric column is unsigned (MySQL, deprecated).
 	#[cfg(feature = "db-mysql")]
 	pub unsigned: Option<bool>,
+	/// Whether zerofill is set (MySQL, deprecated).
 	#[cfg(feature = "db-mysql")]
 	pub zerofill: Option<bool>,
 }
@@ -423,9 +453,13 @@ impl FieldDefinition {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateModel {
+	/// The name.
 	pub name: String,
+	/// The fields.
 	pub fields: Vec<FieldDefinition>,
+	/// The options.
 	pub options: HashMap<String, String>,
+	/// The bases.
 	pub bases: Vec<String>,
 	/// Composite primary key fields (field names)
 	pub composite_primary_key: Option<Vec<String>>,
@@ -540,7 +574,7 @@ impl CreateModel {
 	///     ],
 	/// );
 	///
-	// Convert to SQL - actual DB operations would use schema editor
+	/// // Convert to SQL - actual DB operations would use schema editor
 	/// let columns: Vec<(&str, String)> = create.fields
 	///     .iter()
 	///     .map(|f| (f.name.as_str(), f.to_sql_definition()))
@@ -667,7 +701,7 @@ impl CreateModel {
 ///
 /// let mut state = ProjectState::new();
 ///
-// First create a model
+/// // First create a model
 /// let create = CreateModel::new(
 ///     "User",
 ///     vec![FieldDefinition::new("id", FieldType::Integer, true, false, Option::<&str>::None)],
@@ -675,13 +709,14 @@ impl CreateModel {
 /// create.state_forwards("myapp", &mut state);
 /// assert!(state.get_model("myapp", "User").is_some());
 ///
-// Then delete it
+/// // Then delete it
 /// let delete = DeleteModel::new("User");
 /// delete.state_forwards("myapp", &mut state);
 /// assert!(state.get_model("myapp", "User").is_none());
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeleteModel {
+	/// The name.
 	pub name: String,
 }
 
@@ -730,14 +765,14 @@ impl DeleteModel {
 ///
 /// let mut state = ProjectState::new();
 ///
-// Create a model
+/// // Create a model
 /// let create = CreateModel::new(
 ///     "User",
 ///     vec![FieldDefinition::new("id", FieldType::Integer, true, false, Option::<&str>::None)],
 /// );
 /// create.state_forwards("myapp", &mut state);
 ///
-// Rename it
+/// // Rename it
 /// let rename = RenameModel::new("User", "Customer");
 /// rename.state_forwards("myapp", &mut state);
 ///
@@ -746,7 +781,9 @@ impl DeleteModel {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenameModel {
+	/// The old name.
 	pub old_name: String,
+	/// The new name.
 	pub new_name: String,
 }
 
@@ -823,11 +860,17 @@ impl RenameModel {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MoveModel {
+	/// The model name.
 	pub model_name: String,
+	/// The from app.
 	pub from_app: String,
+	/// The to app.
 	pub to_app: String,
+	/// The rename table.
 	pub rename_table: bool,
+	/// The old table name.
 	pub old_table_name: Option<String>,
+	/// The new table name.
 	pub new_table_name: Option<String>,
 }
 

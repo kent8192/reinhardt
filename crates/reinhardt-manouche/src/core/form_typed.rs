@@ -136,11 +136,16 @@ pub enum TypedFormAction {
 /// HTTP method for form submission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FormMethod {
+	/// HTTP POST method (default).
 	#[default]
 	Post,
+	/// HTTP GET method.
 	Get,
+	/// HTTP PUT method.
 	Put,
+	/// HTTP DELETE method.
 	Delete,
+	/// HTTP PATCH method.
 	Patch,
 }
 
@@ -761,25 +766,45 @@ impl TypedFieldType {
 /// | `SelectMultiple` | `<select multiple>` | - |
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypedWidget {
+	/// Standard text input (`<input type="text">`).
 	TextInput,
+	/// Email input with built-in validation (`<input type="email">`).
 	EmailInput,
+	/// Password input with masked characters (`<input type="password">`).
 	PasswordInput,
+	/// Numeric input (`<input type="number">`).
 	NumberInput,
+	/// URL input (`<input type="url">`).
 	UrlInput,
+	/// Telephone number input (`<input type="tel">`).
 	TelInput,
+	/// Date picker input (`<input type="date">`).
 	DateInput,
+	/// Time picker input (`<input type="time">`).
 	TimeInput,
+	/// Date and time picker input (`<input type="datetime-local">`).
 	DateTimeInput,
+	/// Color picker input (`<input type="color">`).
 	ColorInput,
+	/// Range slider input (`<input type="range">`).
 	RangeInput,
+	/// Hidden input field (`<input type="hidden">`).
 	HiddenInput,
+	/// Multi-line text area (`<textarea>`).
 	Textarea,
+	/// Dropdown select (`<select>`).
 	Select,
+	/// Multi-select dropdown (`<select multiple>`).
 	SelectMultiple,
+	/// Checkbox input (`<input type="checkbox">`).
 	CheckboxInput,
+	/// Radio button input (`<input type="radio">`).
 	RadioInput,
+	/// Radio button group rendered as a selection list.
 	RadioSelect,
+	/// File upload input (`<input type="file">`).
 	FileInput,
+	/// Search input (`<input type="search">`).
 	SearchInput,
 }
 
@@ -1070,7 +1095,7 @@ impl TypedCustomAttr {
 	/// assert_eq!(attr.html_name(), "aria-label");
 	/// ```
 	pub fn html_name(&self) -> String {
-		self.name.replace('_', "-")
+		crate::core::attr_utils::ident_to_html_attr_name(&self.name)
 	}
 
 	/// Returns true if this is an aria-* attribute.

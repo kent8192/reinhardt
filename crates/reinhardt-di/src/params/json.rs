@@ -6,7 +6,9 @@ use serde::de::DeserializeOwned;
 use std::fmt::{self, Debug};
 use std::ops::Deref;
 
-use super::{ParamContext, ParamError, ParamResult, extract::FromRequest};
+use super::{
+	ParamContext, ParamError, ParamErrorContext, ParamResult, ParamType, extract::FromRequest,
+};
 
 /// Default maximum JSON body size: 2 MiB
 const DEFAULT_MAX_JSON_BODY_SIZE: usize = 2 * 1024 * 1024;
@@ -88,6 +90,26 @@ where
 	T: DeserializeOwned + Send,
 {
 	async fn from_request(req: &Request, _ctx: &ParamContext) -> ParamResult<Self> {
+		// Check Content-Type header
+		let content_type = req
+			.headers
+			.get(http::header::CONTENT_TYPE)
+			.and_then(|h| h.to_str().ok())
+			.unwrap_or("");
+
+		// Allow empty Content-Type for backward compatibility,
+		// but reject explicit non-JSON content types
+		if !content_type.is_empty() && !content_type.contains("application/json") {
+			return Err(ParamError::InvalidParameter(Box::new(
+				ParamErrorContext::new(
+					ParamType::Json,
+					format!("Expected application/json, got {}", content_type),
+				)
+				.with_field("Content-Type")
+				.with_expected_type::<T>(),
+			)));
+		}
+
 		// Read body bytes from request
 		let body_bytes = req
 			.read_body()

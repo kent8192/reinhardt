@@ -53,6 +53,7 @@ fn safe_client_error_detail(error: &crate::Error) -> Option<String> {
 		Error::InvalidCursor(_) => Some("Invalid cursor value".to_string()),
 		Error::InvalidLimit(msg) => Some(format!("Invalid limit: {}", msg)),
 		Error::MissingParameter(name) => Some(format!("Missing parameter: {}", name)),
+		Error::Conflict(msg) => Some(msg.clone()),
 		Error::ParamValidation(ctx) => {
 			Some(format!("{} parameter extraction failed", ctx.param_type))
 		}

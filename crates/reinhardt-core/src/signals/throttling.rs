@@ -237,13 +237,13 @@ impl<T> ThrottleState<T> {
 		}
 	}
 
-	fn can_emit_token_bucket(&mut self, refill_rate: u32) -> bool {
+	fn can_emit_token_bucket(&mut self, refill_rate: u32, max_emissions: u32) -> bool {
 		let now = Instant::now();
 		let elapsed = now.duration_since(self.last_refill).as_secs_f64();
 
-		// Refill tokens based on elapsed time
+		// Refill tokens based on elapsed time, capped by max_emissions (bucket capacity)
 		let tokens_to_add = elapsed * refill_rate as f64;
-		self.tokens = (self.tokens + tokens_to_add).min(refill_rate as f64);
+		self.tokens = (self.tokens + tokens_to_add).min(max_emissions as f64);
 		self.last_refill = now;
 
 		if self.tokens >= 1.0 {
@@ -259,11 +259,11 @@ impl<T> ThrottleState<T> {
 			ThrottleStrategy::FixedWindow => self.can_emit_fixed_window(config),
 			ThrottleStrategy::SlidingWindow => self.can_emit_sliding_window(config),
 			ThrottleStrategy::TokenBucket { refill_rate } => {
-				self.can_emit_token_bucket(refill_rate)
+				self.can_emit_token_bucket(refill_rate, config.max_emissions)
 			}
 			ThrottleStrategy::LeakyBucket { leak_rate } => {
 				// Leaky bucket is similar to token bucket but with constant processing
-				self.can_emit_token_bucket(leak_rate)
+				self.can_emit_token_bucket(leak_rate, config.max_emissions)
 			}
 		}
 	}

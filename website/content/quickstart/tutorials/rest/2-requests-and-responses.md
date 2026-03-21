@@ -34,7 +34,7 @@ async fn my_view(request: Request) -> ViewResult<Response> {
     }
 
     // Access query parameters
-    let query = request.query_string();
+    let query = &request.query_params;
 
     // Access request body
     let body_bytes = request.body();
@@ -172,8 +172,7 @@ let data: CreateSnippet = request.json()?;
 
 **Available Helper Methods:**
 - `request.json::<T>().await?` - Parse JSON body into type T
-- `request.parse_form().await?` - Parse URL-encoded form data
-- `request.body` - Access raw body bytes
+- `request.body()` - Access raw body bytes
 
 **Benefits:**
 - Automatic Content-Type header validation
@@ -228,7 +227,7 @@ async fn handle_request(mut request: Request) -> ViewResult<Response> {
                 .with_json(&data)
         }
         "application/x-www-form-urlencoded" => {
-            let form_data = request.parse_form().await?;
+            let form_data: serde_json::Value = serde_urlencoded::from_bytes(body_bytes)?;
             Response::ok()
                 .with_json(&form_data)
         }
@@ -336,7 +335,7 @@ async fn snippet_list(mut request: Request) -> ViewResult<Response> {
                 .with_json(&snippet)
         }
         _ => {
-            Response::method_not_allowed()
+            Response::new(StatusCode::METHOD_NOT_ALLOWED)
                 .with_body("Method not allowed")
         }
     }

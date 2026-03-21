@@ -61,9 +61,11 @@
 //! | `signals` | enabled | Async signal/slot system |
 //! | `macros` | enabled | Procedural macros re-export |
 //! | `security` | enabled | Password hashing and security utilities |
+//! | `validators` | enabled | Comprehensive input validation |
 //! | `serializers` | enabled | Data serialization framework |
-//! | `parsers` | enabled | Request body parsers |
-//! | `pagination` | enabled | Pagination strategies |
+//! | `parsers` | disabled | Request body parsers |
+//! | `pagination` | disabled | Pagination strategies |
+//! | `negotiation` | disabled | HTTP content negotiation |
 //! | `messages` | disabled | Flash message storage |
 //! | `page` | disabled | Server-side page rendering types |
 

@@ -247,10 +247,14 @@ fn generate_wrapper_with_both(
 	// Generate DI context extraction
 	let di_context_extraction = if !inject_params.is_empty() {
 		quote! {
-			let __di_ctx = req.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
-				.ok_or_else(|| #core_crate::exception::Error::Internal(
-					"DI context not set. Ensure the router is configured with .with_di_context()".to_string()
-				))?;
+			let __di_ctx = {
+				let __shared_ctx = req.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
+					.ok_or_else(|| #core_crate::exception::Error::Internal(
+						"DI context not set. Ensure the router is configured with .with_di_context()".to_string()
+					))?;
+				let __di_request = req.clone_for_di();
+				::std::sync::Arc::new((*__shared_ctx).fork_for_request(__di_request))
+			};
 		}
 	} else {
 		quote! {}

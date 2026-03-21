@@ -257,8 +257,9 @@ middleware-rate-limit = [
 reinhardt-pages = { workspace = true, optional = true }
 reinhardt-urls = { workspace = true }
 
-# Server-side dependencies (NOT for WASM)
 reinhardt-core = {workspace = true, features = ["types"]}
+
+# Server-side dependencies (NOT for WASM)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Core dependencies
 reinhardt-utils = { workspace = true }
@@ -568,6 +569,9 @@ redis = { version = "0.32", features = ["tokio-comp", "connection-manager"] }
 # Connection pooling & migrations
 refinery = { version = "0.9.0", features = ["tokio-postgres"] }
 rust_decimal = "1.37"
+
+# E2E browser testing
+fantoccini = "0.22"
 
 # Testing
 testcontainers = { version = "0.26.3", features = ["blocking"] }

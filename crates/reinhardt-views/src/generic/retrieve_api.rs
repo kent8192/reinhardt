@@ -163,11 +163,14 @@ where
 			))
 		})?;
 
-		let filter = Filter::new(
-			self.lookup_field.clone(),
-			FilterOperator::Eq,
-			FilterValue::String(lookup_value.clone()),
-		);
+		// Try to parse as i64 first (common for primary keys), fallback to string
+		let filter_value = if let Ok(int_value) = lookup_value.parse::<i64>() {
+			FilterValue::Integer(int_value)
+		} else {
+			FilterValue::String(lookup_value.clone())
+		};
+
+		let filter = Filter::new(self.lookup_field.clone(), FilterOperator::Eq, filter_value);
 
 		self.get_queryset()
 			.filter(filter)
@@ -217,5 +220,48 @@ where
 
 	fn allowed_methods(&self) -> Vec<&'static str> {
 		vec!["GET", "HEAD", "OPTIONS"]
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	#[rstest]
+	#[case("42", true)]
+	#[case("0", true)]
+	#[case("-1", true)]
+	#[case("9999999999", true)]
+	#[case("abc", false)]
+	#[case("12abc", false)]
+	#[case("", false)]
+	#[case("3.14", false)]
+	#[case("9223372036854775808", false)] // i64::MAX + 1 overflow
+	fn test_lookup_value_integer_parsing(#[case] input: &str, #[case] should_be_integer: bool) {
+		// Arrange
+		let lookup_value = input.to_string();
+
+		// Act
+		let filter_value = if let Ok(int_value) = lookup_value.parse::<i64>() {
+			FilterValue::Integer(int_value)
+		} else {
+			FilterValue::String(lookup_value.clone())
+		};
+
+		// Assert
+		match filter_value {
+			FilterValue::Integer(_) => assert!(
+				should_be_integer,
+				"Expected String variant for input '{}'",
+				input
+			),
+			FilterValue::String(_) => assert!(
+				!should_be_integer,
+				"Expected Integer variant for input '{}'",
+				input
+			),
+			_ => panic!("Unexpected FilterValue variant"),
+		}
 	}
 }

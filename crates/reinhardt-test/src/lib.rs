@@ -33,6 +33,7 @@
 //! - **`server-fn-test`**: Enable server function testing utilities
 //! - **`tasks`**: Enable task queue testing utilities
 //! - **`admin`**: Enable admin panel testing utilities
+//! - **`e2e`**: Enable E2E browser testing utilities via fantoccini/WebDriver
 
 // Re-export modules from reinhardt-testkit for backward-compatible module paths
 pub use reinhardt_testkit::{
@@ -128,6 +129,12 @@ pub use reinhardt_testkit::containers::{
 
 #[cfg(feature = "static")]
 pub use reinhardt_testkit::static_files::*;
+
+// E2E browser testing re-exports (native target only)
+#[cfg(all(feature = "e2e", not(target_arch = "wasm32")))]
+pub use fixtures::wasm::e2e::{
+	BrowserClient, BrowserConfig, BrowserType, browser_client, browser_config,
+};
 
 /// Re-export commonly used testing types
 pub mod prelude {

@@ -418,6 +418,26 @@ impl InjectionContext {
 		}
 	}
 
+	/// Creates a per-request fork of this context without an HTTP request.
+	///
+	/// The forked context shares the same singleton scope but has a fresh
+	/// request scope. Unlike `fork_for_request`, this method does not store
+	/// an HTTP request, so path parameter extraction is not available.
+	///
+	/// This is intended for non-HTTP protocols (gRPC, GraphQL) where
+	/// request-scoped isolation is needed but HTTP request data is not available.
+	pub fn fork(&self) -> InjectionContext {
+		InjectionContext {
+			request_scope: RequestScope::new(),
+			singleton_scope: self.singleton_scope.clone(),
+			override_registry: self.override_registry.clone(),
+			#[cfg(feature = "params")]
+			request: None,
+			#[cfg(feature = "params")]
+			param_context: None,
+		}
+	}
+
 	/// Returns a reference to the override registry.
 	///
 	/// The override registry stores function-level overrides that take

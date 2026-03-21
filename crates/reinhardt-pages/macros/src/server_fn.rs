@@ -717,9 +717,13 @@ fn generate_server_handler(
 		let di_crate = get_reinhardt_di_crate();
 
 		quote! {
-			// Get DI context from request
-			let __di_ctx = __req.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
-				.ok_or_else(|| "DI context not set. Ensure the router is configured with .with_di_context()".to_string())?;
+			// Get DI context from request and fork for per-request isolation
+			let __di_ctx = {
+				let __shared_ctx = __req.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
+					.ok_or_else(|| "DI context not set. Ensure the router is configured with .with_di_context()".to_string())?;
+				let __di_request = __req.clone_for_di();
+				::std::sync::Arc::new((*__shared_ctx).fork_for_request(__di_request))
+			};
 
 			// Resolve each #[inject] parameter using reinhardt_di::Injected<T>
 			#(

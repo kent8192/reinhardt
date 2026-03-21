@@ -115,7 +115,7 @@ jobs:
           cargo llvm-cov clean --workspace
           rm -rf "${CARGO_TARGET_DIR}/llvm-cov-target"
 
-      - name: Configure cargo for coverage
+      - name: Configure mold linker for coverage
         run: |
           cat > /tmp/clang-mold-wrapper << 'WRAPPER'
           #!/bin/sh
@@ -124,17 +124,14 @@ jobs:
           chmod +x /tmp/clang-mold-wrapper
           ARCH=$(uname -m)
           if [ "$ARCH" = "aarch64" ]; then
-            TARGET="aarch64-unknown-linux-gnu"
+            ENV_KEY="CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER"
           elif [ "$ARCH" = "x86_64" ]; then
-            TARGET="x86_64-unknown-linux-gnu"
+            ENV_KEY="CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER"
+          else
+            echo "Unsupported architecture for mold linker configuration: $ARCH" >&2
+            exit 1
           fi
-          cat > .cargo/config.toml << EOF
-          [env]
-          RUST_ANALYZER_CARGO_FEATURES = "all"
-
-          [target.${TARGET}]
-          linker = "/tmp/clang-mold-wrapper"
-          EOF
+          echo "${ENV_KEY}=/tmp/clang-mold-wrapper" >> "$GITHUB_ENV"
 
       - name: Run unit tests with coverage
         env:
@@ -267,7 +264,7 @@ jobs:
         with:
           images-file: .github/docker-images-intra-crate.txt
 
-      - name: Configure cargo for coverage
+      - name: Configure mold linker for coverage
         run: |
           cat > /tmp/clang-mold-wrapper << 'WRAPPER'
           #!/bin/sh
@@ -276,17 +273,14 @@ jobs:
           chmod +x /tmp/clang-mold-wrapper
           ARCH=$(uname -m)
           if [ "$ARCH" = "aarch64" ]; then
-            TARGET="aarch64-unknown-linux-gnu"
+            ENV_KEY="CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER"
           elif [ "$ARCH" = "x86_64" ]; then
-            TARGET="x86_64-unknown-linux-gnu"
+            ENV_KEY="CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER"
+          else
+            echo "Unsupported architecture for mold linker configuration: $ARCH" >&2
+            exit 1
           fi
-          cat > .cargo/config.toml << EOF
-          [env]
-          RUST_ANALYZER_CARGO_FEATURES = "all"
-
-          [target.${TARGET}]
-          linker = "/tmp/clang-mold-wrapper"
-          EOF
+          echo "${ENV_KEY}=/tmp/clang-mold-wrapper" >> "$GITHUB_ENV"
 
       - name: Clean coverage artifacts
         run: |
@@ -426,7 +420,7 @@ jobs:
         with:
           images-file: .github/docker-images-cross-crate.txt
 
-      - name: Configure cargo for coverage
+      - name: Configure mold linker for coverage
         run: |
           cat > /tmp/clang-mold-wrapper << 'WRAPPER'
           #!/bin/sh
@@ -435,17 +429,14 @@ jobs:
           chmod +x /tmp/clang-mold-wrapper
           ARCH=$(uname -m)
           if [ "$ARCH" = "aarch64" ]; then
-            TARGET="aarch64-unknown-linux-gnu"
+            ENV_KEY="CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER"
           elif [ "$ARCH" = "x86_64" ]; then
-            TARGET="x86_64-unknown-linux-gnu"
+            ENV_KEY="CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER"
+          else
+            echo "Unsupported architecture for mold linker configuration: $ARCH" >&2
+            exit 1
           fi
-          cat > .cargo/config.toml << EOF
-          [env]
-          RUST_ANALYZER_CARGO_FEATURES = "all"
-
-          [target.${TARGET}]
-          linker = "/tmp/clang-mold-wrapper"
-          EOF
+          echo "${ENV_KEY}=/tmp/clang-mold-wrapper" >> "$GITHUB_ENV"
 
       - name: Clean coverage artifacts
         run: |

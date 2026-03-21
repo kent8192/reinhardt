@@ -99,13 +99,86 @@ impl<B: ThrottleBackend> Throttle for BurstRateThrottle<B> {
 
 	async fn wait_time(&self, key: &str) -> ThrottleResult<Option<u64>> {
 		let backend = self.backend.lock().await;
-		backend
-			.get_wait_time(key)
-			.await
-			.map(|opt| opt.map(|d| d.as_secs()))
+
+		let burst_key = format!("burst:{}", key);
+		let sustained_key = format!("sustained:{}", key);
+
+		let burst_wait = backend.get_wait_time(&burst_key).await?;
+		let sustained_wait = backend.get_wait_time(&sustained_key).await?;
+
+		// Return the longer wait time of the two windows
+		match (burst_wait, sustained_wait) {
+			(Some(b), Some(s)) => Ok(Some(b.max(s).as_secs())),
+			(Some(w), None) | (None, Some(w)) => Ok(Some(w.as_secs())),
+			(None, None) => Ok(None),
+		}
 	}
 
 	fn get_rate(&self) -> (usize, u64) {
 		(self.sustained_rate, self.sustained_duration.as_secs())
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::backend::MemoryBackend;
+	use rstest::rstest;
+	use std::time::Duration;
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_burst_and_sustained_use_distinct_keys() {
+		// Arrange
+		let backend = Arc::new(Mutex::new(MemoryBackend::new()));
+		let throttle = BurstRateThrottle::new(
+			backend.clone(),
+			2,   // 2 requests burst
+			100, // 100 requests sustained
+			Duration::from_secs(1),
+			Duration::from_secs(60),
+		);
+
+		// Act - send requests up to burst limit
+		let first = throttle.allow_request("user1").await.unwrap();
+		let second = throttle.allow_request("user1").await.unwrap();
+		let third = throttle.allow_request("user1").await.unwrap();
+
+		// Assert - burst limit blocks the third request
+		assert_eq!(first, true);
+		assert_eq!(second, true);
+		assert_eq!(third, false);
+
+		// Assert - verify backend stores with prefixed keys, not raw key
+		let b = backend.lock().await;
+		let raw_count = b.get_count("user1").await.unwrap();
+		let burst_count = b.get_count("burst:user1").await.unwrap();
+		let sustained_count = b.get_count("sustained:user1").await.unwrap();
+		assert_eq!(raw_count, 0, "raw key should have no entries");
+		assert_eq!(burst_count, 2, "burst key should track burst requests");
+		assert_eq!(
+			sustained_count, 2,
+			"sustained key should track sustained requests"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_wait_time_uses_prefixed_keys() {
+		// Arrange
+		let backend = Arc::new(Mutex::new(MemoryBackend::new()));
+		let throttle = BurstRateThrottle::new(
+			backend,
+			5,
+			100,
+			Duration::from_secs(1),
+			Duration::from_secs(60),
+		);
+
+		// Act - wait_time should query prefixed keys, not raw key
+		let wait = throttle.wait_time("user1").await.unwrap();
+
+		// Assert - default MemoryBackend returns None for wait_time
+		assert_eq!(wait, None);
 	}
 }

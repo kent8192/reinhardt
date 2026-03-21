@@ -79,6 +79,12 @@ impl ServerFnRouterExt for ServerRouter {
 		let handler = S::handler();
 		let path = S::PATH;
 		let name = S::NAME;
+		// Response Content-Type based on codec.
+		// "url" codec still returns JSON responses (only request format differs).
+		let response_content_type = match S::CODEC {
+			"msgpack" => "application/msgpack",
+			_ => "application/json",
+		};
 
 		let wrapper = move |req: Request| -> Pin<
 			Box<dyn Future<Output = Result<Response, reinhardt_http::Error>> + Send>,
@@ -86,7 +92,7 @@ impl ServerFnRouterExt for ServerRouter {
 			Box::pin(async move {
 				match handler(req).await {
 					Ok(body) => Ok(Response::ok()
-						.with_header("Content-Type", "application/json")
+						.with_header("Content-Type", response_content_type)
 						.with_body(body)),
 					Err(error_body) => {
 						// Log the error to stderr for debugging
@@ -105,7 +111,7 @@ impl ServerFnRouterExt for ServerRouter {
 							.unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
 
 						Ok(Response::new(status_code)
-							.with_header("Content-Type", "application/json")
+							.with_header("Content-Type", response_content_type)
 							.with_body(error_body))
 					}
 				}

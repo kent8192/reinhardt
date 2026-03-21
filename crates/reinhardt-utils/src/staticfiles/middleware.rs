@@ -15,7 +15,6 @@ use super::caching::CacheControlConfig;
 use super::handler::{StaticError, StaticFileHandler};
 
 /// Configuration for the static files middleware.
-#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct StaticFilesConfig {
 	/// Root directory for static files

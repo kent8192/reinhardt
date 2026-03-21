@@ -80,7 +80,10 @@ jobs:
           components: rustfmt, clippy
 
       - name: Setup protoc
-        uses: ./.github/actions/setup-protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache Cargo Registry
         uses: actions/cache@v5

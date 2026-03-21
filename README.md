@@ -112,22 +112,22 @@ For the full stability policy, see [API Stability Policy](docs/API_STABILITY.md)
 
 Reinhardt is a modular framework. Choose your starting point:
 
-> **New here?** Start with the default full-featured setup unless you specifically want a smaller build.
+> **New here?** Start with the default standard setup. Use `full` if you need all features, or `minimal` for lightweight APIs.
 
-### Default: Full-Featured (Batteries Included) ⚠️ New Default
+### Default: Standard Setup (Balanced) ⚠️ Default Preset
 
-Get all features with zero configuration:
+Get a well-balanced feature set with zero configuration:
 
 ```toml
 [dependencies]
 # Import as 'reinhardt', published as 'reinhardt-web'
-# Default enables ALL features (full bundle)
+# Default enables the "standard" preset (balanced feature set)
 reinhardt = { version = "0.1.0-rc.9", package = "reinhardt-web" }
 ```
 
-**Includes:** Database, Auth, REST API, Admin, GraphQL, WebSockets, Cache, i18n, Mail, Sessions, Static Files, Storage
+**Includes:** Core, Database (PostgreSQL), REST API (serializers, parsers, pagination, filters, throttling, versioning, metadata, content negotiation), Auth, Middleware (sessions), Pages (WASM Frontend with SSR), Signals
 
-**Binary**: ~50+ MB | **Compile**: Slower, but everything works out of the box
+**Binary**: ~20-30 MB | **Compile**: Medium
 
 Then use in your code:
 ```rust
@@ -135,18 +135,18 @@ use reinhardt::prelude::*;
 use reinhardt::{Request, Response, StatusCode};
 ```
 
-### Option 1: Standard Setup (Balanced)
+### Option 1: Full-Featured (All Batteries Included)
 
-For most projects that don't need all features:
+For projects that need every available component:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.9", package = "reinhardt-web", default-features = false, features = ["standard"] }
+reinhardt = { version = "0.1.0-rc.9", package = "reinhardt-web", default-features = false, features = ["full"] }
 ```
 
-**Includes:** Core, Database (PostgreSQL), REST API, Auth, Middleware, Pages (WASM Frontend with SSR)
+**Includes:** Everything in Standard, plus Admin, GraphQL, WebSockets, Cache, i18n, Mail, Static Files, Storage, and more
 
-**Binary**: ~20-30 MB | **Compile**: Medium
+**Binary**: ~50+ MB | **Compile**: Slower, but everything works out of the box
 
 ### Option 2: Microservices (Minimal Setup)
 

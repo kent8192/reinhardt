@@ -18,11 +18,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", features = ["apps"] }
+reinhardt = { version = "0.1.0-rc.13", package = "reinhardt-web", features = ["apps"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.13", package = "reinhardt-web", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.13", package = "reinhardt-web", features = ["full"] }      # All features
 ```
 
 Then import app features:
@@ -51,7 +51,7 @@ installed_apps! {
 ```toml
 [dependencies]
 reinhardt = {
-	version = "0.1.0-alpha.1",
+	version = "0.1.0-rc.13",
 	package = "reinhardt-web",
 	features = ["auth", "sessions", "admin"]
 }
@@ -145,7 +145,7 @@ pub fn get_installed_apps() -> Vec<String> {
 ```toml
 [dependencies]
 reinhardt = {
-	version = "0.1.0-alpha.1",
+	version = "0.1.0-rc.13",
 	package = "reinhardt-web",
 	features = ["auth", "sessions", "admin", "static-files"]
 }
@@ -236,7 +236,7 @@ pub fn get_installed_apps() -> Vec<String> {
 # Cargo.toml
 [dependencies]
 reinhardt = {
-	version = "0.1.0-alpha.1",
+	version = "0.1.0-rc.13",
 	package = "reinhardt-web",
 	features = ["auth", "sessions", "database"]
 }
@@ -295,7 +295,7 @@ INSTALLED_APPS = [
 ```toml
 # Cargo.toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web", features = ["auth", "admin"] }
+reinhardt = { version = "0.1.0-rc.13", package = "reinhardt-web", features = ["auth", "admin"] }
 ```
 
 ```rust

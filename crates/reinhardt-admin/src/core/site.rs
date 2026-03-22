@@ -8,6 +8,7 @@ use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use parking_lot::RwLock;
+use reinhardt_core::macros::injectable;
 use reinhardt_db::orm::DatabaseConnection;
 use reinhardt_di::{DiResult, Injectable, InjectionContext, SingletonScope};
 use reinhardt_urls::routers::ServerRouter;
@@ -23,6 +24,7 @@ use std::sync::Arc;
 /// let admin = AdminSite::new("My Application");
 /// assert_eq!(admin.name(), "My Application");
 /// ```
+#[injectable(scope = Singleton, prebuilt = true)]
 #[derive(Clone)]
 pub struct AdminSite {
 	/// Site name displayed in the admin interface
@@ -404,11 +406,11 @@ impl AdminSite {
 			site.set_favicon(data);
 		}
 
-		// Register AdminSite as singleton
-		singleton.set(site);
+		// Register AdminSite as singleton (use set_arc to store with correct TypeId)
+		singleton.set_arc(site);
 
-		// Register AdminDatabase as singleton
-		singleton.set(Arc::new(db));
+		// Register AdminDatabase as singleton (use set_arc to store with correct TypeId)
+		singleton.set_arc(Arc::new(db));
 	}
 }
 
@@ -559,5 +561,37 @@ mod tests {
 		assert_eq!(config.list_per_page, 100);
 		assert!(config.enable_search);
 		assert!(config.enable_filters);
+	}
+
+	#[rstest]
+	fn test_set_arc_stores_admin_site_with_correct_type_id() {
+		// Arrange
+		let singleton = SingletonScope::new();
+		let site = Arc::new(AdminSite::new("Test Admin"));
+
+		// Act - use set_arc which stores with TypeId::of::<AdminSite>()
+		singleton.set_arc(site);
+
+		// Assert - should be retrievable as AdminSite (not Arc<AdminSite>)
+		assert!(
+			singleton.get::<AdminSite>().is_some(),
+			"AdminSite should be retrievable via get::<AdminSite>()"
+		);
+	}
+
+	#[rstest]
+	fn test_set_arc_preserves_favicon_data() {
+		// Arrange
+		let singleton = SingletonScope::new();
+		let site = Arc::new(AdminSite::new("Test Admin"));
+		let favicon = vec![0x89, 0x50, 0x4E, 0x47]; // PNG magic bytes
+
+		// Act
+		site.set_favicon(favicon.clone());
+		singleton.set_arc(site);
+
+		// Assert
+		let retrieved = singleton.get::<AdminSite>().unwrap();
+		assert_eq!(retrieved.favicon_data(), Some(favicon));
 	}
 }

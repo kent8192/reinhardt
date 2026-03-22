@@ -5,6 +5,7 @@
 
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
+use reinhardt_core::macros::injectable;
 use reinhardt_db::orm::execution::convert_values;
 use reinhardt_db::orm::{
 	DatabaseConnection, Filter, FilterCondition, FilterOperator, FilterValue, Model,
@@ -435,6 +436,7 @@ pub fn build_composite_filter_condition_with_depth(
 /// # Ok(())
 /// # }
 /// ```
+#[injectable(scope = Singleton, prebuilt = true)]
 #[derive(Clone)]
 pub struct AdminDatabase {
 	connection: Arc<DatabaseConnection>,

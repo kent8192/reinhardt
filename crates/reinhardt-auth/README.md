@@ -406,7 +406,7 @@ assert!(permission.has_permission(&context).await);
 - **Cookie Integration**: Secure session cookie handling
 
 ```rust
-use reinhardt::auth::{SessionAuthentication, Authentication};
+use reinhardt::auth::{SessionAuthentication, AuthenticationBackend};
 use reinhardt::auth::sessions::backends::InMemorySessionBackend;
 
 let session_backend = InMemorySessionBackend::new();

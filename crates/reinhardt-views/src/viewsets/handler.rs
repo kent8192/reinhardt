@@ -1108,14 +1108,9 @@ where
 		let mut existing_value: serde_json::Value = serde_json::from_str(&existing_json)
 			.map_err(|e| ViewError::Serialization(format!("Failed to parse existing: {}", e)))?;
 
-		// Merge patch data into existing object (only overwrites provided fields)
-		if let (Some(existing_obj_map), Some(patch_obj)) =
-			(existing_value.as_object_mut(), patch_data.as_object())
-		{
-			for (key, value) in patch_obj {
-				existing_obj_map.insert(key.clone(), value.clone());
-			}
-		}
+		// Validate and merge patch data into existing object (only overwrites provided fields)
+		crate::generic::patch_utils::merge_patch_object_into(&mut existing_value, &patch_data)
+			.map_err(ViewError::BadRequest)?;
 
 		// Deserialize merged object back to model type
 		let merged_json = serde_json::to_string(&existing_value)

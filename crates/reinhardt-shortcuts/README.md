@@ -334,7 +334,7 @@ async fn old_url_handler() -> Response {
 
 - `reinhardt-http` - HTTP primitives
 - `reinhardt-views` - View layer
-- `reinhardt-orm` - Database ORM (for future direct integration)
+- `reinhardt-db` - Database layer (for future direct integration)
 
 ## License
 

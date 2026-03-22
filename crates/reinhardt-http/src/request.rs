@@ -738,9 +738,45 @@ impl Request {
 
 	/// Check if the request originates from a trusted proxy.
 	///
-	/// Returns `true` only if trusted proxies are configured AND the
-	/// remote address is in the trusted set.
-	fn is_from_trusted_proxy(&self) -> bool {
+	/// Returns `true` only if [`TrustedProxies`] are configured (via
+	/// [`set_trusted_proxies`](Self::set_trusted_proxies)) **and** the
+	/// remote address of the connection is contained in the trusted set.
+	///
+	/// # Security
+	///
+	/// This method gates whether proxy-forwarded headers (e.g.
+	/// `X-Forwarded-For`, `X-Forwarded-Proto`) should be honoured.
+	/// Trusting headers from a non-proxy source allows clients to spoof
+	/// their IP address or protocol, which can bypass IP-based access
+	/// controls and HTTPS enforcement.
+	///
+	/// **Callers must ensure that [`TrustedProxies`] is configured only
+	/// with IP addresses of reverse proxies actually deployed in front
+	/// of the application.** Misconfiguration (e.g. trusting `0.0.0.0/0`)
+	/// re-introduces header-spoofing vulnerabilities.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_http::Request;
+	/// use reinhardt_http::TrustedProxies;
+	/// use bytes::Bytes;
+	/// use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+	/// use hyper::Method;
+	///
+	/// let proxy_ip: IpAddr = Ipv4Addr::new(10, 0, 0, 1).into();
+	/// let request = Request::builder()
+	///     .method(Method::GET)
+	///     .uri("/")
+	///     .remote_addr(SocketAddr::new(proxy_ip, 8080))
+	///     .body(Bytes::new())
+	///     .build()
+	///     .unwrap();
+	/// request.set_trusted_proxies(TrustedProxies::new(vec![proxy_ip]));
+	///
+	/// assert!(request.is_from_trusted_proxy());
+	/// ```
+	pub fn is_from_trusted_proxy(&self) -> bool {
 		if let Some(trusted) = self.extensions.get::<TrustedProxies>()
 			&& let Some(addr) = self.remote_addr
 		{

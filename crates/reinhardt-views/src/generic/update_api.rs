@@ -189,13 +189,20 @@ where
 	}
 
 	/// Performs the object update
+	///
+	/// Determines partial vs full update based on the actual HTTP method:
+	/// PATCH always performs partial update, PUT always performs full replacement.
 	async fn perform_update(&self, request: &Request) -> Result<M>
 	where
 		M: serde::de::DeserializeOwned,
 	{
 		let mut object = self.get_object(request).await?;
 
-		if self.partial {
+		// Determine partial update from the HTTP method, not the `self.partial` field.
+		// PATCH = partial update, PUT = full replacement.
+		let is_partial = request.method == Method::PATCH;
+
+		if is_partial {
 			// PATCH: partial update - merge provided fields into existing object
 			let serializer = S::default();
 			let current_json = serializer
@@ -209,14 +216,9 @@ where
 				.json()
 				.map_err(|e| Error::Http(format!("Invalid request body: {}", e)))?;
 
-			// Merge patch data into current object
-			if let (Some(current_obj), Some(patch_obj)) =
-				(current.as_object_mut(), patch_data.as_object())
-			{
-				for (key, value) in patch_obj {
-					current_obj.insert(key.clone(), value.clone());
-				}
-			}
+			// Validate and merge patch data into current object
+			crate::generic::patch_utils::merge_patch_object_into(&mut current, &patch_data)
+				.map_err(Error::Http)?;
 
 			object = serde_json::from_value(current)
 				.map_err(|e| Error::Http(format!("Failed to merge patch: {}", e)))?;
@@ -278,7 +280,10 @@ where
 					.with_json(&json_value)
 					.map_err(|e| Error::Http(e.to_string()))
 			}
-			_ => Err(Error::Http("Method not allowed".to_string())),
+			_ => Err(Error::MethodNotAllowed(format!(
+				"Method {} not allowed",
+				request.method
+			))),
 		}
 	}
 

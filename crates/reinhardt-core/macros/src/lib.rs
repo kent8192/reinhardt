@@ -448,7 +448,7 @@ pub fn derive_schema(input: TokenStream) -> TokenStream {
 /// - All `#[inject]` field types must implement `Injectable`
 ///
 #[proc_macro_attribute]
-pub fn injectable(_args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
 	// Try to parse as ItemFn first
 	if let Ok(item_fn) = syn::parse::<ItemFn>(input.clone()) {
 		return injectable_fn_impl(proc_macro2::TokenStream::new(), item_fn)
@@ -471,7 +471,7 @@ pub fn injectable(_args: TokenStream, input: TokenStream) -> TokenStream {
 			}),
 		};
 
-		return injectable_struct_impl(derive_input)
+		return injectable_struct_impl(args.into(), derive_input)
 			.unwrap_or_else(|e| e.to_compile_error())
 			.into();
 	}

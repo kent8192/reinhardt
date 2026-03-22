@@ -10,6 +10,7 @@ use crate::injectable_common::{
 };
 use proc_macro2::TokenStream;
 use quote::quote;
+use syn::parse::Parser;
 use syn::{Data, DeriveInput, Fields, Result, Type};
 
 /// Field information for processing
@@ -22,10 +23,138 @@ struct FieldInfo {
 	scope: InjectionScope,
 }
 
+/// Scope for struct-level `#[injectable]` registration
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StructScope {
+	Singleton,
+	Request,
+	Transient,
+}
+
+/// Parsed arguments for `#[injectable(scope = Singleton, prebuilt = true)]`
+struct StructInjectableArgs {
+	scope: Option<StructScope>,
+	prebuilt: bool,
+}
+
+impl StructInjectableArgs {
+	fn parse(args: proc_macro2::TokenStream) -> Result<Self> {
+		if args.is_empty() {
+			return Ok(Self {
+				scope: None,
+				prebuilt: false,
+			});
+		}
+
+		let mut scope = None;
+		let mut prebuilt = false;
+		let mut seen_scope = false;
+		let mut seen_prebuilt = false;
+
+		let parsed = syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated
+			.parse2(args)?;
+
+		for meta in &parsed {
+			match meta {
+				syn::Meta::NameValue(nv) if nv.path.is_ident("scope") => {
+					if seen_scope {
+						return Err(syn::Error::new_spanned(
+							&nv.path,
+							"duplicate argument: scope was already specified",
+						));
+					}
+					seen_scope = true;
+					if let syn::Expr::Path(expr_path) = &nv.value {
+						let ident = expr_path.path.get_ident().ok_or_else(|| {
+							syn::Error::new_spanned(
+								&nv.value,
+								"scope must be Singleton, Request, or Transient",
+							)
+						})?;
+						scope = Some(match ident.to_string().as_str() {
+							"Singleton" => StructScope::Singleton,
+							"Request" => StructScope::Request,
+							"Transient" => StructScope::Transient,
+							_ => {
+								return Err(syn::Error::new_spanned(
+									ident,
+									"scope must be Singleton, Request, or Transient",
+								));
+							}
+						});
+					} else {
+						return Err(syn::Error::new_spanned(
+							&nv.value,
+							"scope must be Singleton, Request, or Transient",
+						));
+					}
+				}
+				syn::Meta::NameValue(nv) if nv.path.is_ident("prebuilt") => {
+					if seen_prebuilt {
+						return Err(syn::Error::new_spanned(
+							&nv.path,
+							"duplicate argument: prebuilt was already specified",
+						));
+					}
+					seen_prebuilt = true;
+					if let syn::Expr::Lit(expr_lit) = &nv.value {
+						if let syn::Lit::Bool(lit_bool) = &expr_lit.lit {
+							prebuilt = lit_bool.value;
+						} else {
+							return Err(syn::Error::new_spanned(
+								&nv.value,
+								"prebuilt must be true or false",
+							));
+						}
+					} else {
+						return Err(syn::Error::new_spanned(
+							&nv.value,
+							"prebuilt must be true or false",
+						));
+					}
+				}
+				_ => {
+					return Err(syn::Error::new_spanned(
+						meta,
+						"unknown argument; expected scope or prebuilt",
+					));
+				}
+			}
+		}
+
+		Ok(Self { scope, prebuilt })
+	}
+
+	fn scope_tokens(
+		&self,
+		di_crate: &proc_macro2::TokenStream,
+	) -> Option<proc_macro2::TokenStream> {
+		self.scope.map(|s| match s {
+			StructScope::Singleton => quote! { #di_crate::DependencyScope::Singleton },
+			StructScope::Request => quote! { #di_crate::DependencyScope::Request },
+			StructScope::Transient => quote! { #di_crate::DependencyScope::Transient },
+		})
+	}
+}
+
 /// Implementation of the `#[injectable]` attribute macro for structs
 ///
 /// Generates an `Injectable` trait implementation for structs with `#[inject]` fields.
-pub(crate) fn injectable_struct_impl(mut input: DeriveInput) -> Result<TokenStream> {
+/// Supports optional `scope` and `prebuilt` arguments for auto-registration.
+pub(crate) fn injectable_struct_impl(
+	args: proc_macro2::TokenStream,
+	mut input: DeriveInput,
+) -> Result<TokenStream> {
+	let struct_args = StructInjectableArgs::parse(args)?;
+
+	// prebuilt requires scope
+	if struct_args.prebuilt && struct_args.scope.is_none() {
+		return Err(syn::Error::new(
+			proc_macro2::Span::call_site(),
+			"prebuilt = true requires scope to be specified",
+		));
+	}
+
 	// Remove #[injectable] attribute from the struct definition
 	input
 		.attrs
@@ -34,6 +163,15 @@ pub(crate) fn injectable_struct_impl(mut input: DeriveInput) -> Result<TokenStre
 	let struct_name = &input.ident;
 	let generics = &input.generics;
 	let where_clause = &generics.where_clause;
+
+	// Prebuilt mode: skip field validation and Injectable impl generation.
+	// The struct is expected to have a manual Injectable impl and to be
+	// manually registered in SingletonScope via set_arc() before resolution.
+	// No inventory registration is emitted because the value is placed
+	// into the scope cache explicitly (e.g., in configure_di()).
+	if struct_args.prebuilt {
+		return Ok(quote! { #input });
+	}
 
 	// Only support structs
 	let fields = match &mut input.data {
@@ -222,6 +360,34 @@ pub(crate) fn injectable_struct_impl(mut input: DeriveInput) -> Result<TokenStre
 		}
 	};
 
+	// Generate optional inventory registration when scope is specified.
+	// Uses a named async fn instead of a closure because inventory::submit!
+	// requires expressions valid in a static context.
+	let registration = if let Some(scope_tokens) = struct_args.scope_tokens(&di_crate) {
+		let type_name_str = struct_name.to_string();
+		let factory_fn_name = syn::Ident::new(
+			&format!("__injectable_factory_{}", struct_name),
+			proc_macro2::Span::call_site(),
+		);
+		quote! {
+			async fn #factory_fn_name(
+				ctx: ::std::sync::Arc<#di_crate::InjectionContext>,
+			) -> #di_crate::DiResult<#struct_name> {
+				<#struct_name as #di_crate::Injectable>::inject(&ctx).await
+			}
+
+			#di_crate::inventory::submit! {
+				#di_crate::DependencyRegistration::new::<#struct_name, _, _>(
+					#type_name_str,
+					#scope_tokens,
+					#factory_fn_name
+				)
+			}
+		}
+	} else {
+		quote! {}
+	};
+
 	// Keep the original struct definition and add Injectable implementation
 	let expanded = quote! {
 		#input
@@ -236,6 +402,8 @@ pub(crate) fn injectable_struct_impl(mut input: DeriveInput) -> Result<TokenStre
 				Ok(#struct_init)
 			}
 		}
+
+		#registration
 	};
 
 	Ok(expanded)
@@ -254,4 +422,151 @@ fn validate_option_type(ty: &Type, field: &syn::Field) -> Result<()> {
 		field,
 		"Field with #[no_inject] but no default value must have type Option<T>",
 	))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use quote::quote;
+
+	#[test]
+	fn test_injectable_struct_no_args_unchanged() {
+		// Arrange
+		let args = quote! {};
+		let input: DeriveInput = syn::parse2(quote! {
+			struct Foo;
+		})
+		.unwrap();
+
+		// Act
+		let result = injectable_struct_impl(args, input);
+
+		// Assert
+		assert!(result.is_ok());
+		let output = result.unwrap().to_string();
+		// Should generate Injectable impl but no inventory::submit
+		assert!(output.contains("Injectable"));
+		assert!(!output.contains("inventory"));
+	}
+
+	#[test]
+	fn test_injectable_struct_with_scope_generates_registration() {
+		// Arrange
+		let args = quote! { scope = Singleton };
+		let input: DeriveInput = syn::parse2(quote! {
+			struct Foo;
+		})
+		.unwrap();
+
+		// Act
+		let result = injectable_struct_impl(args, input);
+
+		// Assert
+		assert!(result.is_ok());
+		let output = result.unwrap().to_string();
+		assert!(output.contains("Injectable"));
+		assert!(output.contains("inventory"));
+		assert!(output.contains("DependencyRegistration"));
+	}
+
+	#[test]
+	fn test_injectable_struct_prebuilt_skips_injectable_impl() {
+		// Arrange
+		let args = quote! { scope = Singleton, prebuilt = true };
+		let input: DeriveInput = syn::parse2(quote! {
+			struct Foo {
+				name: String,
+			}
+		})
+		.unwrap();
+
+		// Act
+		let result = injectable_struct_impl(args, input);
+
+		// Assert
+		assert!(result.is_ok());
+		let output = result.unwrap().to_string();
+		// Prebuilt mode emits only the struct definition
+		assert!(!output.contains("Injectable for"));
+		// No inventory registration -- value is manually placed in scope cache
+		assert!(!output.contains("inventory"));
+		assert!(!output.contains("DependencyRegistration"));
+		// Should contain the struct definition
+		assert!(output.contains("struct Foo"));
+	}
+
+	#[test]
+	fn test_injectable_struct_prebuilt_emits_only_struct() {
+		// Arrange
+		let args = quote! { scope = Singleton, prebuilt = true };
+		let input: DeriveInput = syn::parse2(quote! {
+			struct MyService;
+		})
+		.unwrap();
+
+		// Act
+		let result = injectable_struct_impl(args, input);
+
+		// Assert
+		assert!(result.is_ok());
+		let output = result.unwrap().to_string();
+		// Prebuilt mode only emits the struct definition, no generated code
+		assert!(output.contains("struct MyService"));
+		assert!(!output.contains("Injectable for"));
+		assert!(!output.contains("inventory"));
+	}
+
+	#[test]
+	fn test_injectable_struct_prebuilt_without_scope_errors() {
+		// Arrange
+		let args = quote! { prebuilt = true };
+		let input: DeriveInput = syn::parse2(quote! {
+			struct Foo;
+		})
+		.unwrap();
+
+		// Act
+		let result = injectable_struct_impl(args, input);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(err.contains("scope"));
+	}
+
+	#[test]
+	fn test_injectable_struct_duplicate_scope_errors() {
+		// Arrange
+		let args = quote! { scope = Singleton, scope = Request };
+		let input: DeriveInput = syn::parse2(quote! {
+			struct Foo;
+		})
+		.unwrap();
+
+		// Act
+		let result = injectable_struct_impl(args, input);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(err.contains("duplicate"));
+	}
+
+	#[test]
+	fn test_injectable_struct_duplicate_prebuilt_errors() {
+		// Arrange
+		let args = quote! { scope = Singleton, prebuilt = true, prebuilt = false };
+		let input: DeriveInput = syn::parse2(quote! {
+			struct Foo;
+		})
+		.unwrap();
+
+		// Act
+		let result = injectable_struct_impl(args, input);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(err.contains("duplicate"));
+	}
 }

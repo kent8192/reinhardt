@@ -26,6 +26,9 @@ impl FormSet {
 	/// assert!(!formset.can_delete());
 	/// ```
 	pub fn new(prefix: String) -> Self {
+		// Normalize: strip trailing delimiter so that `format!("{}-", prefix)`
+		// in `process_data` never produces a double-dash (e.g. "form--")
+		let prefix = prefix.strip_suffix('-').map_or(prefix.clone(), |s| s.to_owned());
 		Self {
 			forms: vec![],
 			prefix,
@@ -229,8 +232,11 @@ impl FormSet {
 		keys.sort();
 
 		// Each form should have a key like "form-0", "form-1", etc.
+		// Use exact prefix matching with delimiter to prevent collisions
+		// (e.g., prefix "item" should not match "item_extra-0")
+		let prefix_with_delimiter = format!("{}-", self.prefix);
 		for key in keys {
-			if key.starts_with(&self.prefix) {
+			if key.starts_with(&prefix_with_delimiter) {
 				// Enforce max_num limit during data processing
 				if let Some(max) = self.max_num
 					&& self.forms.len() >= max
@@ -398,6 +404,56 @@ mod tests {
 		assert_eq!(formset.form_count(), 1);
 		let cleaned = formset.cleaned_data();
 		assert_eq!(cleaned[0].get("name"), Some(&serde_json::json!("Alice")));
+	}
+
+	#[rstest]
+	fn test_process_data_prefix_collision_prevented() {
+		// Arrange: prefix "item" should NOT match "item_extra-0"
+		let mut formset = FormSet::new("item".to_string());
+		let mut data = HashMap::new();
+
+		let mut matching = HashMap::new();
+		matching.insert("name".to_string(), serde_json::json!("Apple"));
+		data.insert("item-0".to_string(), matching);
+
+		let mut colliding = HashMap::new();
+		colliding.insert("name".to_string(), serde_json::json!("Banana"));
+		data.insert("item_extra-0".to_string(), colliding);
+
+		// Act
+		formset.process_data(&data);
+
+		// Assert: only "item-0" should be processed, not "item_extra-0"
+		assert_eq!(formset.form_count(), 1);
+		let cleaned = formset.cleaned_data();
+		assert_eq!(cleaned[0].get("name"), Some(&serde_json::json!("Apple")));
+	}
+
+	#[rstest]
+	fn test_process_data_similar_prefix_no_collision() {
+		// Arrange: prefix "form" should NOT match "formset-0" or "form2-0"
+		let mut formset = FormSet::new("form".to_string());
+		let mut data = HashMap::new();
+
+		let mut matching = HashMap::new();
+		matching.insert("name".to_string(), serde_json::json!("Valid"));
+		data.insert("form-0".to_string(), matching);
+
+		let mut similar1 = HashMap::new();
+		similar1.insert("name".to_string(), serde_json::json!("Invalid1"));
+		data.insert("formset-0".to_string(), similar1);
+
+		let mut similar2 = HashMap::new();
+		similar2.insert("name".to_string(), serde_json::json!("Invalid2"));
+		data.insert("form2-0".to_string(), similar2);
+
+		// Act
+		formset.process_data(&data);
+
+		// Assert: only "form-0" should be processed
+		assert_eq!(formset.form_count(), 1);
+		let cleaned = formset.cleaned_data();
+		assert_eq!(cleaned[0].get("name"), Some(&serde_json::json!("Valid")));
 	}
 
 	#[test]

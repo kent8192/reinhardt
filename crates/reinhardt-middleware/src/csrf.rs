@@ -254,8 +254,12 @@ impl CsrfMiddleware {
 	}
 
 	/// Check if request is from secure connection
+	///
+	/// Uses `Request::is_secure()` which checks both the actual TLS connection
+	/// and X-Forwarded-Proto from trusted proxies. Also falls back to URI scheme
+	/// for cases where the full URI is available.
 	fn is_secure_request(&self, request: &Request) -> bool {
-		request.uri.scheme_str() == Some("https")
+		request.is_secure() || request.uri.scheme_str() == Some("https")
 	}
 
 	/// Get or create CSRF secret
@@ -357,8 +361,16 @@ impl Default for CsrfMiddleware {
 impl Middleware for CsrfMiddleware {
 	async fn process(&self, request: Request, handler: Arc<dyn Handler>) -> Result<Response> {
 		// Check if path is exempt
+		// Use path-segment boundary matching to prevent false prefix matches.
+		// For example, exempt "/api" should match "/api" and "/api/webhook"
+		// but NOT "/api2" or "/application".
 		let path = request.uri.path();
-		if self.config.exempt_paths.contains(path) {
+		if self
+			.config
+			.exempt_paths
+			.iter()
+			.any(|exempt| path == exempt.as_str() || path.starts_with(&format!("{}/", exempt)))
+		{
 			return handler.handle(request).await;
 		}
 
@@ -385,7 +397,8 @@ impl Middleware for CsrfMiddleware {
 		let cookie_header = self.build_set_cookie_header(&token);
 		match cookie_header.parse() {
 			Ok(value) => {
-				response.headers.insert("Set-Cookie", value);
+				// Use append instead of insert to preserve existing Set-Cookie headers
+				response.headers.append(hyper::header::SET_COOKIE, value);
 			}
 			Err(e) => {
 				warn!(
@@ -403,6 +416,7 @@ mod tests {
 	use super::*;
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method, StatusCode, Version};
+	use rstest::rstest;
 
 	struct TestHandler;
 
@@ -991,6 +1005,122 @@ mod tests {
 			session_id1, session_id2,
 			"Fallback session IDs should differ because they use random generation, \
 			not deterministic derivation from request metadata"
+		);
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_csrf_exempt_paths_uses_prefix_match() {
+		// Arrange - exempt "/api" should also exempt "/api/subpath"
+		let mut config = CsrfMiddlewareConfig::default();
+		config.exempt_paths.insert("/api".to_string());
+
+		let middleware = CsrfMiddleware::with_config(config);
+		let handler = Arc::new(TestHandler);
+
+		let request = Request::builder()
+			.method(Method::POST)
+			.uri("/api/webhook/github")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await;
+
+		// Assert - sub-path should be exempt via prefix matching
+		assert!(
+			response.is_ok(),
+			"Sub-path /api/webhook/github should be exempt when /api is in exempt_paths"
+		);
+		assert_eq!(response.unwrap().status, StatusCode::OK);
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_csrf_exempt_paths_no_false_prefix_match() {
+		// Arrange - exempt "/api" should NOT exempt "/application"
+		let mut config = CsrfMiddlewareConfig::default();
+		config.exempt_paths.insert("/api".to_string());
+
+		let middleware = CsrfMiddleware::with_config(config);
+		let handler = Arc::new(TestHandler);
+
+		let request = Request::builder()
+			.method(Method::POST)
+			.uri("/application/form")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await;
+
+		// Assert - /application should NOT be exempt (not a prefix of /api)
+		assert!(
+			response.is_err(),
+			"Path /application/form should NOT be exempt when only /api is in exempt_paths"
+		);
+	}
+
+	/// Handler that returns a response with an existing Set-Cookie header
+	struct HandlerWithSetCookie;
+
+	#[async_trait]
+	impl Handler for HandlerWithSetCookie {
+		async fn handle(&self, _request: Request) -> reinhardt_http::Result<Response> {
+			let mut response = Response::ok().with_body("Test response");
+			response.headers.insert(
+				"Set-Cookie",
+				hyper::header::HeaderValue::from_static("session=abc123; Path=/"),
+			);
+			Ok(response)
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_csrf_set_cookie_appends_not_replaces() {
+		// Arrange
+		let middleware = CsrfMiddleware::new();
+		let handler = Arc::new(HandlerWithSetCookie);
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert - both Set-Cookie headers should be present
+		let set_cookies: Vec<&hyper::header::HeaderValue> = response
+			.headers
+			.get_all(hyper::header::SET_COOKIE)
+			.iter()
+			.collect();
+		assert_eq!(
+			set_cookies.len(),
+			2,
+			"Expected both the original session cookie and CSRF cookie"
+		);
+
+		let cookies_str: Vec<&str> = set_cookies.iter().map(|v| v.to_str().unwrap()).collect();
+		assert!(
+			cookies_str.iter().any(|c| c.contains("session=abc123")),
+			"Original Set-Cookie header should be preserved"
+		);
+		assert!(
+			cookies_str.iter().any(|c| c.contains("csrftoken=")),
+			"CSRF Set-Cookie header should be appended"
 		);
 	}
 }

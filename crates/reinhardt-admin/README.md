@@ -12,7 +12,7 @@ This crate provides two main components:
 
 ## Features
 
-### Admin Panel (`reinhardt-panel`)
+### Admin Panel (`reinhardt-admin`)
 
 - ✅ **Model Management Interface**: Web-based CRUD operations for database
   models

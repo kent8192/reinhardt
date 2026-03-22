@@ -83,7 +83,7 @@ impl ParamErrorContext {
 	/// Set the raw value (truncated if too long)
 	pub fn with_raw_value(mut self, value: impl Into<String>) -> Self {
 		let value = value.into();
-		// Truncate to ~500 chars max to avoid log spam.
+		// Truncate to ~500 bytes max to avoid log spam.
 		// Use char_indices to find a safe truncation point on a char boundary,
 		// preventing panics on multi-byte UTF-8 strings (e.g., Japanese, emoji).
 		if value.len() > 500 {

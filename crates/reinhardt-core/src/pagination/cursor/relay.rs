@@ -465,18 +465,14 @@ mod tests {
 
 	#[rstest]
 	fn relay_pagination_does_not_panic_on_out_of_range_after_cursor() {
-		// Arrange
+		// Arrange - use the same encoder instance for both cursor generation and paginator
 		let encoder = crate::pagination::cursor::Base64CursorEncoder::with_secret_key(
 			b"test-secret-key-for-unit-tests!!",
-		);
-		let paginator = RelayPagination::new().with_encoder(
-			crate::pagination::cursor::Base64CursorEncoder::with_secret_key(
-				b"test-secret-key-for-unit-tests!!",
-			),
 		);
 		let items: Vec<i32> = (1..=10).collect();
 		// Encode a cursor pointing beyond data length
 		let out_of_range_cursor = encoder.encode(100).unwrap();
+		let paginator = RelayPagination::new().with_encoder(encoder);
 
 		// Act
 		let result = paginator.paginate(&items, Some(5), Some(&out_of_range_cursor), None, None);
@@ -490,18 +486,14 @@ mod tests {
 
 	#[rstest]
 	fn relay_pagination_does_not_panic_on_out_of_range_before_cursor() {
-		// Arrange
+		// Arrange - use the same encoder instance for both cursor generation and paginator
 		let encoder = crate::pagination::cursor::Base64CursorEncoder::with_secret_key(
 			b"test-secret-key-for-unit-tests!!",
-		);
-		let paginator = RelayPagination::new().with_encoder(
-			crate::pagination::cursor::Base64CursorEncoder::with_secret_key(
-				b"test-secret-key-for-unit-tests!!",
-			),
 		);
 		let items: Vec<i32> = (1..=10).collect();
 		// Encode a cursor pointing beyond data length
 		let out_of_range_cursor = encoder.encode(100).unwrap();
+		let paginator = RelayPagination::new().with_encoder(encoder);
 
 		// Act
 		let result = paginator.paginate(&items, None, None, Some(5), Some(&out_of_range_cursor));
@@ -512,17 +504,13 @@ mod tests {
 
 	#[rstest]
 	fn relay_pagination_empty_dataset_with_after_cursor() {
-		// Arrange
+		// Arrange - use the same encoder instance for both cursor generation and paginator
 		let encoder = crate::pagination::cursor::Base64CursorEncoder::with_secret_key(
 			b"test-secret-key-for-unit-tests!!",
 		);
-		let paginator = RelayPagination::new().with_encoder(
-			crate::pagination::cursor::Base64CursorEncoder::with_secret_key(
-				b"test-secret-key-for-unit-tests!!",
-			),
-		);
 		let items: Vec<i32> = vec![];
 		let cursor = encoder.encode(0).unwrap();
+		let paginator = RelayPagination::new().with_encoder(encoder);
 
 		// Act
 		let result = paginator.paginate(&items, Some(10), Some(&cursor), None, None);

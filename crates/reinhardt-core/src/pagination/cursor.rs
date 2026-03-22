@@ -348,15 +348,13 @@ mod tests {
 
 	#[rstest]
 	fn paginate_returns_empty_results_for_out_of_range_cursor() {
-		// Arrange
+		// Arrange - use the same encoder instance for both cursor generation and paginator
 		let encoder =
 			encoder::Base64CursorEncoder::with_secret_key(b"test-secret-key-for-unit-tests!!");
-		let paginator = CursorPagination::new().with_encoder(
-			encoder::Base64CursorEncoder::with_secret_key(b"test-secret-key-for-unit-tests!!"),
-		);
 		let items: Vec<i32> = (1..=10).collect();
 		// Encode a cursor pointing beyond data length
 		let out_of_range_cursor = encoder.encode(100).unwrap();
+		let paginator = CursorPagination::new().with_encoder(encoder);
 
 		// Act
 		let result = paginator.paginate(
@@ -373,14 +371,12 @@ mod tests {
 
 	#[rstest]
 	fn paginate_returns_empty_results_for_cursor_on_empty_dataset() {
-		// Arrange
+		// Arrange - use the same encoder instance for both cursor generation and paginator
 		let encoder =
 			encoder::Base64CursorEncoder::with_secret_key(b"test-secret-key-for-unit-tests!!");
-		let paginator = CursorPagination::new().with_encoder(
-			encoder::Base64CursorEncoder::with_secret_key(b"test-secret-key-for-unit-tests!!"),
-		);
 		let items: Vec<i32> = vec![];
 		let cursor = encoder.encode(0).unwrap();
+		let paginator = CursorPagination::new().with_encoder(encoder);
 
 		// Act
 		let result = paginator.paginate(&items, Some(&cursor), "http://example.com/items");

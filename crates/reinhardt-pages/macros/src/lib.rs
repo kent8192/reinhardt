@@ -73,7 +73,7 @@ mod server_fn;
 ///
 /// ## Options
 ///
-/// - `use_inject = true` - (**Deprecated**) Enable dependency injection (now auto-detected)
+/// - `use_inject = true` - (**Deprecated**) No longer needed; kept for backwards compatibility (emits warning)
 /// - `endpoint = "/custom/path"` - Custom endpoint path
 /// - `codec = "json"` - Serialization codec (json, url, msgpack)
 ///

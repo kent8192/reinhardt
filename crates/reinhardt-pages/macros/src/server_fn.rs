@@ -314,8 +314,8 @@ impl ServerFnInfo {
 		&self.options.codec
 	}
 
-	/// Check if `use_inject = true` was explicitly specified (for deprecation warning)
-	fn has_explicit_use_inject(&self) -> bool {
+	/// Check if the deprecated `use_inject` option is enabled (for deprecation warning)
+	fn use_inject_enabled(&self) -> bool {
 		self.options.use_inject
 	}
 }
@@ -408,8 +408,8 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 		func.clone()
 	};
 
-	// Emit deprecation warning if use_inject = true was explicitly specified
-	let deprecation_warning = if info.has_explicit_use_inject() {
+	// Emit deprecation warning if use_inject = true is enabled
+	let deprecation_warning = if info.use_inject_enabled() {
 		quote! {
 			#[cfg(not(target_arch = "wasm32"))]
 			const _: () = {
@@ -419,7 +419,7 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 				#[allow(non_upper_case_globals, dead_code)]
 				const __use_inject_deprecated: () = ();
 
-				#[allow(deprecated, dead_code)]
+				#[allow(dead_code)]
 				const _trigger: () = __use_inject_deprecated;
 			};
 		}

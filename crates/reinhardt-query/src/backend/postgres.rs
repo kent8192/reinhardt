@@ -117,6 +117,87 @@ impl PostgresQueryBuilder {
 		format!("${}", index)
 	}
 
+	/// Adjust placeholder indices in SQL by adding an offset.
+	///
+	/// Uses a single-pass token-based approach to avoid false-positive replacements
+	/// that can occur when identifiers or string literals contain `$N` patterns.
+	/// The naive `sql.replace("$1", "$2")` approach can corrupt SQL when:
+	/// - Identifiers contain dollar signs (e.g., `"col$1"`)
+	/// - String literals contain dollar signs (e.g., `'price$1'`)
+	/// - Intermediate replacements collide (e.g., `$1` -> `$2` then `$2` -> `$3`)
+	fn adjust_placeholder_offsets(sql: &str, num_params: usize, offset: usize) -> String {
+		if offset == 0 || num_params == 0 {
+			return sql.to_string();
+		}
+
+		let mut result = String::with_capacity(sql.len() + num_params * 2);
+		let bytes = sql.as_bytes();
+		let len = bytes.len();
+		let mut i = 0;
+		// Track whether we are inside a quoted identifier or string literal
+		let mut in_single_quote = false;
+		let mut in_double_quote = false;
+
+		while i < len {
+			let ch = bytes[i];
+
+			// Toggle single-quote state (string literals)
+			if ch == b'\'' && !in_double_quote {
+				// Handle escaped single quotes ('')
+				if in_single_quote && i + 1 < len && bytes[i + 1] == b'\'' {
+					result.push('\'');
+					result.push('\'');
+					i += 2;
+					continue;
+				}
+				in_single_quote = !in_single_quote;
+				result.push('\'');
+				i += 1;
+				continue;
+			}
+
+			// Toggle double-quote state (identifiers)
+			if ch == b'"' && !in_single_quote {
+				// Handle escaped double quotes ("")
+				if in_double_quote && i + 1 < len && bytes[i + 1] == b'"' {
+					result.push('"');
+					result.push('"');
+					i += 2;
+					continue;
+				}
+				in_double_quote = !in_double_quote;
+				result.push('"');
+				i += 1;
+				continue;
+			}
+
+			// Only process `$N` placeholders outside of quotes
+			if ch == b'$' && !in_single_quote && !in_double_quote {
+				// Parse the number following `$`
+				let start = i + 1;
+				let mut end = start;
+				while end < len && bytes[end].is_ascii_digit() {
+					end += 1;
+				}
+				if end > start
+					&& let Ok(n) = sql[start..end].parse::<usize>()
+					&& n >= 1 && n <= num_params
+				{
+					// Write adjusted placeholder
+					use std::fmt::Write;
+					let _ = write!(result, "${}", n + offset);
+					i = end;
+					continue;
+				}
+			}
+
+			result.push(ch as char);
+			i += 1;
+		}
+
+		result
+	}
+
 	/// Write a table reference
 	fn write_table_ref(&self, writer: &mut SqlWriter, table_ref: &TableRef) {
 		match table_ref {
@@ -152,17 +233,10 @@ impl PostgresQueryBuilder {
 			TableRef::SubQuery(query, alias) => {
 				let (subquery_sql, subquery_values) = self.build_select(query);
 
-				// Adjust placeholders for PostgreSQL ($1, $2, ... -> $N, $N+1, ...)
+				// Adjust placeholders using token-based approach to avoid false-positive replacements
 				let offset = writer.param_index() - 1;
-				let adjusted_sql = if offset > 0 {
-					let mut sql = subquery_sql;
-					for i in (1..=subquery_values.len()).rev() {
-						sql = sql.replace(&format!("${}", i), &format!("${}", i + offset));
-					}
-					sql
-				} else {
-					subquery_sql
-				};
+				let adjusted_sql =
+					Self::adjust_placeholder_offsets(&subquery_sql, subquery_values.len(), offset);
 
 				writer.push("(");
 				writer.push(&adjusted_sql);
@@ -298,17 +372,10 @@ impl PostgresQueryBuilder {
 				// Recursively build the subquery
 				let (subquery_sql, subquery_values) = self.build_select(select_stmt);
 
-				// Adjust placeholders for PostgreSQL ($1, $2, ... -> $N, $N+1, ...)
+				// Adjust placeholders using token-based approach to avoid false-positive replacements
 				let offset = writer.param_index() - 1;
-				let adjusted_sql = if offset > 0 {
-					let mut sql = subquery_sql;
-					for i in (1..=subquery_values.len()).rev() {
-						sql = sql.replace(&format!("${}", i), &format!("${}", i + offset));
-					}
-					sql
-				} else {
-					subquery_sql
-				};
+				let adjusted_sql =
+					Self::adjust_placeholder_offsets(&subquery_sql, subquery_values.len(), offset);
 
 				writer.push(&adjusted_sql);
 				writer.push(")");
@@ -391,6 +458,12 @@ impl PostgresQueryBuilder {
 				self.write_simple_expr(writer, expr);
 				writer.push("::");
 				writer.push_identifier(&name.to_string(), |s| self.escape_iden(s));
+			}
+			SimpleExpr::ExprAlias(expr, alias) => {
+				self.write_simple_expr(writer, expr);
+				writer.push_keyword("AS");
+				writer.push_space();
+				writer.push_identifier(&alias.to_string(), |s| self.escape_iden(s));
 			}
 			SimpleExpr::Cast(expr, type_name) => {
 				writer.push("CAST(");
@@ -624,6 +697,12 @@ impl PostgresQueryBuilder {
 				self.write_simple_expr_unquoted(writer, expr);
 				writer.push("::");
 				writer.push_identifier(&name.to_string(), |s| self.escape_iden(s));
+			}
+			SimpleExpr::ExprAlias(expr, alias) => {
+				self.write_simple_expr_unquoted(writer, expr);
+				writer.push_keyword("AS");
+				writer.push_space();
+				writer.push_identifier(&alias.to_string(), |s| self.escape_iden(s));
 			}
 			SimpleExpr::Cast(expr, type_name) => {
 				writer.push("CAST(");
@@ -864,17 +943,10 @@ impl QueryBuilder for PostgresQueryBuilder {
 				// Recursively build the CTE query
 				let (cte_sql, cte_values) = self.build_select(&cte.query);
 
-				// Adjust placeholders for PostgreSQL ($1, $2, ... -> $N, $N+1, ...)
+				// Adjust placeholders using token-based approach to avoid false-positive replacements
 				let offset = w.param_index() - 1;
-				let adjusted_sql = if offset > 0 {
-					let mut sql = cte_sql;
-					for i in (1..=cte_values.len()).rev() {
-						sql = sql.replace(&format!("${}", i), &format!("${}", i + offset));
-					}
-					sql
-				} else {
-					cte_sql
-				};
+				let adjusted_sql =
+					Self::adjust_placeholder_offsets(&cte_sql, cte_values.len(), offset);
 
 				w.push(&adjusted_sql);
 				w.push(")");
@@ -1058,15 +1130,12 @@ impl QueryBuilder for PostgresQueryBuilder {
 			writer.push_space();
 
 			// Recursively build the union query
-			let (mut union_sql, union_values) = self.build_select(union_stmt);
+			let (union_sql, union_values) = self.build_select(union_stmt);
 
-			// Adjust placeholders for PostgreSQL ($1, $2, ... -> $N, $N+1, ...)
+			// Adjust placeholders using token-based approach to avoid false-positive replacements
 			let offset = writer.param_index() - 1;
-			if offset > 0 {
-				for i in (1..=union_values.len()).rev() {
-					union_sql = union_sql.replace(&format!("${}", i), &format!("${}", i + offset));
-				}
-			}
+			let union_sql =
+				Self::adjust_placeholder_offsets(&union_sql, union_values.len(), offset);
 
 			// Append the union SQL (wrapped in parentheses if it has unions itself)
 			if !union_stmt.unions.is_empty() {
@@ -9559,6 +9628,98 @@ mod tests {
 
 		// Assert: $1tag$ is not a valid delimiter
 		assert!(!delimiters.contains("$1tag$"));
+	}
+
+	// =========================================================================
+	// Issue #2560: Placeholder adjustment avoids false-positive replacements
+	// =========================================================================
+
+	#[rstest]
+	fn test_adjust_placeholder_offsets_basic() {
+		// Arrange
+		let sql = "SELECT * FROM t WHERE a = $1 AND b = $2";
+
+		// Act
+		let adjusted = PostgresQueryBuilder::adjust_placeholder_offsets(sql, 2, 3);
+
+		// Assert
+		assert_eq!(adjusted, "SELECT * FROM t WHERE a = $4 AND b = $5");
+	}
+
+	#[rstest]
+	fn test_adjust_placeholder_offsets_zero_offset() {
+		// Arrange
+		let sql = "SELECT * FROM t WHERE a = $1";
+
+		// Act
+		let adjusted = PostgresQueryBuilder::adjust_placeholder_offsets(sql, 1, 0);
+
+		// Assert - no change when offset is 0
+		assert_eq!(adjusted, "SELECT * FROM t WHERE a = $1");
+	}
+
+	#[rstest]
+	fn test_adjust_placeholder_offsets_skips_quoted_identifiers() {
+		// Arrange - identifier contains $1 pattern
+		let sql = r#"SELECT "col$1" FROM t WHERE a = $1"#;
+
+		// Act
+		let adjusted = PostgresQueryBuilder::adjust_placeholder_offsets(sql, 1, 5);
+
+		// Assert - $1 inside quotes is NOT adjusted, only outside
+		assert_eq!(adjusted, r#"SELECT "col$1" FROM t WHERE a = $6"#);
+	}
+
+	#[rstest]
+	fn test_adjust_placeholder_offsets_skips_string_literals() {
+		// Arrange - string literal contains $1 pattern
+		let sql = "SELECT * FROM t WHERE a = $1 AND b = 'price$1'";
+
+		// Act
+		let adjusted = PostgresQueryBuilder::adjust_placeholder_offsets(sql, 1, 2);
+
+		// Assert - $1 inside single quotes is NOT adjusted
+		assert_eq!(adjusted, "SELECT * FROM t WHERE a = $3 AND b = 'price$1'");
+	}
+
+	#[rstest]
+	fn test_adjust_placeholder_offsets_no_collision() {
+		// Arrange - this was the original bug: $1->$2 then $2->$3 caused collisions
+		let sql = "SELECT * FROM t WHERE a = $1 AND b = $2";
+
+		// Act
+		let adjusted = PostgresQueryBuilder::adjust_placeholder_offsets(sql, 2, 1);
+
+		// Assert - single-pass avoids collision
+		assert_eq!(adjusted, "SELECT * FROM t WHERE a = $2 AND b = $3");
+	}
+
+	// =========================================================================
+	// Issue #2570: expr_as renders AS alias (not ::type_cast)
+	// =========================================================================
+
+	#[rstest]
+	fn test_expr_as_renders_as_alias() {
+		// Arrange
+		let builder = PostgresQueryBuilder::new();
+		let mut stmt = Query::select();
+		stmt.expr(Expr::col("name").expr_as("display_name"))
+			.from("users");
+
+		// Act
+		let (sql, _) = builder.build_select(&stmt);
+
+		// Assert - should contain AS alias, not ::type_cast
+		assert!(
+			sql.contains("AS \"display_name\""),
+			"Expected AS alias in SQL, got: {}",
+			sql
+		);
+		assert!(
+			!sql.contains("::\"display_name\""),
+			"Should NOT contain type cast syntax, got: {}",
+			sql
+		);
 	}
 }
 

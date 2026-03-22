@@ -50,22 +50,28 @@ fn to_pascal_case_ident(ident: &proc_macro2::Ident) -> proc_macro2::Ident {
 #[derive(Debug, Clone, FromMeta)]
 #[darling(default)]
 pub(crate) struct ServerFnOptions {
-	/// Enable DI functionality with `use_inject = true`
+	/// **Deprecated**: `#[inject]` parameters are now auto-detected.
 	///
-	/// When enabled, parameters marked with `#[inject]` will be resolved
-	/// via dependency injection on the server side.
+	/// Previously required `use_inject = true` to enable DI parameter detection.
+	/// Now `#[inject]` attributes are detected unconditionally, matching the
+	/// behavior of route macros (`#[get]`, `#[post]`, etc.).
 	///
-	/// # Example
+	/// # Migration
 	///
 	/// ```ignore
+	/// // Before (deprecated):
 	/// #[server_fn(use_inject = true)]
 	/// async fn get_user(
 	///     id: u32,
 	///     #[inject] db: Database,
-	/// ) -> Result<User, ServerFnError> {
-	///     // db is injected automatically
-	///     User::find_by_id(&db, id).await
-	/// }
+	/// ) -> Result<User, ServerFnError> { /* ... */ }
+	///
+	/// // After (recommended):
+	/// #[server_fn]
+	/// async fn get_user(
+	///     id: u32,
+	///     #[inject] db: Database,
+	/// ) -> Result<User, ServerFnError> { /* ... */ }
 	/// ```
 	pub use_inject: bool,
 
@@ -308,8 +314,8 @@ impl ServerFnInfo {
 		&self.options.codec
 	}
 
-	/// Check if DI is enabled
-	fn use_inject(&self) -> bool {
+	/// Check if `use_inject = true` was explicitly specified (for deprecation warning)
+	fn has_explicit_use_inject(&self) -> bool {
 		self.options.use_inject
 	}
 }
@@ -386,22 +392,39 @@ pub(crate) fn server_fn_impl(args: TokenStream, input: TokenStream) -> TokenStre
 /// Generate server function code
 ///
 /// This generates both client and server code with conditional compilation.
+/// `#[inject]` parameters are always auto-detected, matching the behavior of
+/// route macros (`#[get]`, `#[post]`, etc.).
 fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 	let func = &info.func;
 
-	// Detect #[inject] parameters if use_inject is enabled
-	let inject_params = if info.use_inject() {
-		detect_inject_params(&func.sig.inputs)
-	} else {
-		Vec::new()
-	};
+	// Auto-detect #[inject] parameters unconditionally
+	let inject_params = detect_inject_params(&func.sig.inputs);
 
 	// Remove #[inject] attributes from original function
 	// This ensures the server-side code compiles without unknown attributes
-	let clean_func = if info.use_inject() && !inject_params.is_empty() {
+	let clean_func = if !inject_params.is_empty() {
 		remove_inject_attrs(func)
 	} else {
 		func.clone()
+	};
+
+	// Emit deprecation warning if use_inject = true was explicitly specified
+	let deprecation_warning = if info.has_explicit_use_inject() {
+		quote! {
+			#[cfg(not(target_arch = "wasm32"))]
+			const _: () = {
+				#[deprecated(
+					note = "use_inject = true is deprecated. #[inject] parameters are now auto-detected. Remove `use_inject = true` from #[server_fn] attribute."
+				)]
+				#[allow(non_upper_case_globals, dead_code)]
+				const __use_inject_deprecated: () = ();
+
+				#[allow(deprecated, dead_code)]
+				const _trigger: () = __use_inject_deprecated;
+			};
+		}
+	} else {
+		quote! {}
 	};
 
 	// Dynamically resolve reinhardt_pages crate path for client stub
@@ -414,6 +437,9 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 	let server_handler = generate_server_handler(info, &inject_params);
 
 	quote! {
+		// Deprecation warning for use_inject = true (if specified)
+		#deprecation_warning
+
 		// Server-side: Original function (with #[inject] attributes removed)
 		#[cfg(not(target_arch = "wasm32"))]
 		#clean_func
@@ -1025,6 +1051,27 @@ mod tests {
 		use darling::ast::NestedMeta;
 		use syn::parse_quote;
 
+		// Test with endpoint only (use_inject is no longer needed)
+		let attr: syn::Attribute = parse_quote!(#[server_fn(endpoint = "/custom")]);
+		let meta_list = attr.meta.require_list().unwrap();
+		let nested: Vec<NestedMeta> = NestedMeta::parse_meta_list(meta_list.tokens.clone())
+			.unwrap()
+			.into_iter()
+			.collect();
+		let options = ServerFnOptions::from_list(&nested).unwrap();
+
+		assert_eq!(options.use_inject, false);
+		assert_eq!(options.endpoint, Some("/custom".to_string()));
+		assert_eq!(options.codec, "json");
+	}
+
+	#[test]
+	fn test_server_fn_options_parse_deprecated_use_inject() {
+		use darling::FromMeta;
+		use darling::ast::NestedMeta;
+		use syn::parse_quote;
+
+		// use_inject = true is still accepted (deprecated but functional)
 		let attr: syn::Attribute =
 			parse_quote!(#[server_fn(use_inject = true, endpoint = "/custom")]);
 		let meta_list = attr.meta.require_list().unwrap();

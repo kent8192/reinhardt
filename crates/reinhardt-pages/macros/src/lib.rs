@@ -73,7 +73,7 @@ mod server_fn;
 ///
 /// ## Options
 ///
-/// - `use_inject = true` - Enable dependency injection
+/// - `use_inject = true` - (**Deprecated**) Enable dependency injection (now auto-detected)
 /// - `endpoint = "/custom/path"` - Custom endpoint path
 /// - `codec = "json"` - Serialization codec (json, url, msgpack)
 ///
@@ -1990,7 +1990,7 @@ pub fn head(input: TokenStream) -> TokenStream {
 /// };
 ///
 /// // Server function must accept individual String parameters
-/// #[server_fn(use_inject = true)]
+/// #[server_fn]
 /// pub async fn submit_vote(
 ///     question_id: String,   // From HiddenField
 ///     choice_id: String,     // From ChoiceField
@@ -2019,7 +2019,7 @@ pub fn head(input: TokenStream) -> TokenStream {
 /// }
 ///
 /// // Wrapper for form! compatibility
-/// #[server_fn(use_inject = true)]
+/// #[server_fn]
 /// pub async fn submit_vote(
 ///     question_id: String,
 ///     choice_id: String,

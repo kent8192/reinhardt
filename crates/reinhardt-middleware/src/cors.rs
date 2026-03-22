@@ -201,7 +201,7 @@ impl Middleware for CorsMiddleware {
 				|| !self.config.allow_origins.contains(&"*".to_string())
 				|| self.config.allow_credentials
 			{
-				response.headers.insert(
+				response.headers.append(
 					hyper::header::VARY,
 					hyper::header::HeaderValue::from_static("Origin"),
 				);
@@ -233,7 +233,7 @@ impl Middleware for CorsMiddleware {
 			|| !self.config.allow_origins.contains(&"*".to_string())
 			|| self.config.allow_credentials
 		{
-			response.headers.insert(
+			response.headers.append(
 				hyper::header::VARY,
 				hyper::header::HeaderValue::from_static("Origin"),
 			);
@@ -706,5 +706,90 @@ mod tests {
 		);
 		// Vary: Origin MUST be present when credentials + wildcard causes origin reflection
 		assert_eq!(response.headers.get(hyper::header::VARY).unwrap(), "Origin");
+	}
+
+	/// Handler that returns a response with an existing Vary header
+	struct VaryHandler;
+
+	#[async_trait]
+	impl Handler for VaryHandler {
+		async fn handle(&self, _request: Request) -> Result<Response> {
+			let mut response =
+				Response::new(StatusCode::OK).with_body(Bytes::from("test response"));
+			response.headers.insert(
+				hyper::header::VARY,
+				hyper::header::HeaderValue::from_static("Accept-Encoding"),
+			);
+			Ok(response)
+		}
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_cors_preserves_existing_vary_header() {
+		// Arrange
+		let config = CorsConfig {
+			allow_origins: vec!["https://example.com".to_string()],
+			allow_methods: vec!["GET".to_string()],
+			allow_headers: vec![],
+			allow_credentials: false,
+			max_age: None,
+		};
+		let middleware = CorsMiddleware::new(config);
+		let handler = Arc::new(VaryHandler);
+
+		let request = create_request_with_origin(Method::GET, "/api/test", "https://example.com");
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert - both the existing Vary: Accept-Encoding and the appended Vary: Origin
+		let vary_values: Vec<&str> = response
+			.headers
+			.get_all(hyper::header::VARY)
+			.iter()
+			.map(|v| v.to_str().unwrap())
+			.collect();
+		assert!(
+			vary_values.contains(&"Accept-Encoding"),
+			"Existing Vary header should be preserved"
+		);
+		assert!(
+			vary_values.contains(&"Origin"),
+			"CORS Vary: Origin should be appended"
+		);
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_cors_preserves_existing_vary_header_preflight() {
+		// Arrange
+		let config = CorsConfig {
+			allow_origins: vec!["https://example.com".to_string()],
+			allow_methods: vec!["GET".to_string(), "POST".to_string()],
+			allow_headers: vec!["Content-Type".to_string()],
+			allow_credentials: true,
+			max_age: None,
+		};
+		let middleware = CorsMiddleware::new(config);
+		let handler = Arc::new(TestHandler);
+
+		let request =
+			create_request_with_origin(Method::OPTIONS, "/api/test", "https://example.com");
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert - Vary: Origin should be present via append (not insert)
+		let vary_values: Vec<&str> = response
+			.headers
+			.get_all(hyper::header::VARY)
+			.iter()
+			.map(|v| v.to_str().unwrap())
+			.collect();
+		assert!(
+			vary_values.contains(&"Origin"),
+			"CORS Vary: Origin should be present in preflight"
+		);
 	}
 }

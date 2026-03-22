@@ -55,6 +55,26 @@ impl std::fmt::Display for SessionId {
 	}
 }
 
+/// Newtype wrapper for the configured session cookie name.
+///
+/// Stored in request extensions by `SessionMiddleware` so that
+/// `Injectable` implementations can retrieve the configured cookie name
+/// instead of hardcoding it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionCookieName(String);
+
+impl SessionCookieName {
+	/// Create a new `SessionCookieName`.
+	pub fn new(name: String) -> Self {
+		Self(name)
+	}
+
+	/// Returns the cookie name as a string slice.
+	pub fn as_str(&self) -> &str {
+		&self.0
+	}
+}
+
 /// Session data
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionData {
@@ -555,10 +575,14 @@ impl Middleware for SessionMiddleware {
 		// Save the session
 		self.store.save(session.clone());
 
-		// Inject session ID into request extensions so downstream handlers can access it
+		// Inject session ID and cookie name into request extensions
+		// so downstream handlers and Injectable impls can access them
 		request
 			.extensions
 			.insert(SessionId::new(session.id.clone()));
+		request
+			.extensions
+			.insert(SessionCookieName::new(self.config.cookie_name.clone()));
 
 		// Call the handler
 		let mut response = handler.handle(request).await?;
@@ -1144,6 +1168,56 @@ mod tests {
 		assert_eq!(session_id.as_str(), original_session_id);
 	}
 
+	/// Handler that captures the cookie name from request extensions
+	struct CookieNameCapturingHandler {
+		captured: Arc<RwLock<Option<SessionCookieName>>>,
+	}
+
+	#[async_trait]
+	impl Handler for CookieNameCapturingHandler {
+		async fn handle(&self, request: Request) -> Result<Response> {
+			let cookie_name = request.extensions.get::<SessionCookieName>();
+			let mut guard = self.captured.write().unwrap();
+			*guard = cookie_name;
+			Ok(Response::new(StatusCode::OK).with_body(Bytes::from("OK")))
+		}
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_session_cookie_name_injected_into_extensions() {
+		// Arrange
+		let config = SessionConfig::new("custom_session".to_string(), Duration::from_secs(3600));
+		let middleware = SessionMiddleware::new(config);
+		let captured = Arc::new(RwLock::new(None));
+		let handler = Arc::new(CookieNameCapturingHandler {
+			captured: Arc::clone(&captured),
+		});
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let _response = middleware.process(request, handler).await.unwrap();
+
+		// Assert - handler received the configured cookie name in extensions
+		let guard = captured.read().unwrap();
+		let cookie_name = guard
+			.as_ref()
+			.expect("SessionCookieName should be present in extensions");
+		assert_eq!(
+			cookie_name.as_str(),
+			"custom_session",
+			"Cookie name should match configured value, not hardcoded 'sessionid'"
+		);
+	}
+
 	/// Handler that returns a response with an existing Set-Cookie header
 	struct HandlerWithSetCookie;
 
@@ -1207,6 +1281,9 @@ mod tests {
 // Injectable Implementations for Dependency Injection
 // ============================================================================
 
+/// Default session cookie name used when no `SessionCookieName` extension is present.
+const DEFAULT_SESSION_COOKIE_NAME: &str = "sessionid";
+
 /// Helper function to extract session ID from HTTP request cookies.
 ///
 /// Searches for a cookie with the specified name in the Cookie header.
@@ -1260,8 +1337,17 @@ impl Injectable for SessionData {
 			DiError::NotFound("Request not found in InjectionContext".to_string())
 		})?;
 
+		// Extract configured cookie name from request extensions.
+		// Extensions::get returns an owned value, so we extract it once and
+		// use a reference for the lookup to avoid additional allocation.
+		let ext_cookie_name = request.extensions.get::<SessionCookieName>();
+		let cookie_name = ext_cookie_name
+			.as_ref()
+			.map(|cn| cn.as_str())
+			.unwrap_or(DEFAULT_SESSION_COOKIE_NAME);
+
 		// Extract session ID from Cookie header
-		let session_id = extract_session_id_from_request(&request, "sessionid")?;
+		let session_id = extract_session_id_from_request(&request, cookie_name)?;
 
 		// Load SessionData from store
 		store

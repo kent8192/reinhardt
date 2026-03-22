@@ -200,22 +200,31 @@ impl<B: ThrottleBackend> RateLimitPermission<B> {
 	}
 
 	/// Generate rate limit key based on strategy
+	///
+	/// If a custom key function is configured, it takes priority over
+	/// the built-in strategy. The built-in strategy is only used as a
+	/// fallback when no custom key function is set.
 	fn generate_key(&self, context: &PermissionContext) -> Option<String> {
-		let base_key = match self.config.strategy {
-			RateLimitStrategy::PerIp => self.extract_ip(context),
-			RateLimitStrategy::PerUser => self.extract_user_id(context),
-			RateLimitStrategy::PerIpAndUser => {
-				if let (Some(ip), Some(user_id)) =
-					(self.extract_ip(context), self.extract_user_id(context))
-				{
-					Some(format!("{}:{}", ip, user_id))
-				} else {
-					None
+		// Check custom key function first; fall back to built-in strategy
+		let base_key = if let Some(ref custom_fn) = self.custom_key_fn {
+			custom_fn(context)
+		} else {
+			match self.config.strategy {
+				RateLimitStrategy::PerIp => self.extract_ip(context),
+				RateLimitStrategy::PerUser => self.extract_user_id(context),
+				RateLimitStrategy::PerIpAndUser => {
+					if let (Some(ip), Some(user_id)) =
+						(self.extract_ip(context), self.extract_user_id(context))
+					{
+						Some(format!("{}:{}", ip, user_id))
+					} else {
+						None
+					}
 				}
-			}
-			RateLimitStrategy::PerRoute => {
-				// Use request path as key
-				Some(context.request.uri.path().to_string())
+				RateLimitStrategy::PerRoute => {
+					// Use request path as key
+					Some(context.request.uri.path().to_string())
+				}
 			}
 		};
 
@@ -333,6 +342,7 @@ mod tests {
 	use hyper::{HeaderMap, Method};
 	use reinhardt_http::Request;
 	use reinhardt_throttling::MemoryBackend;
+	use rstest::rstest;
 
 	fn create_test_request(headers: HeaderMap) -> Request {
 		Request::builder()
@@ -513,6 +523,71 @@ mod tests {
 		// First request allowed
 		assert!(permission.has_permission(&context).await);
 		// Second request denied
+		assert!(!permission.has_permission(&context).await);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_custom_key_fn_takes_priority_over_builtin_strategy() {
+		// Arrange
+		let backend = Arc::new(MemoryBackend::new());
+		// Use PerIp strategy as the built-in, but override with custom key fn
+		let permission = RateLimitPermission::new(backend, RateLimitStrategy::PerIp, 2.0, 1.0)
+			.with_custom_key(|_ctx| Some("my_custom_key".to_string()));
+
+		// Create two requests with different IPs -- they should share the
+		// same rate limit because the custom key function returns a fixed key
+		let mut headers_a = HeaderMap::new();
+		headers_a.insert("X-Forwarded-For", "10.0.0.1".parse().unwrap());
+		let request_a = create_test_request(headers_a);
+		let ctx_a = PermissionContext {
+			request: &request_a,
+			is_authenticated: false,
+			is_admin: false,
+			is_active: false,
+			user: None,
+		};
+
+		let mut headers_b = HeaderMap::new();
+		headers_b.insert("X-Forwarded-For", "10.0.0.2".parse().unwrap());
+		let request_b = create_test_request(headers_b);
+		let ctx_b = PermissionContext {
+			request: &request_b,
+			is_authenticated: false,
+			is_admin: false,
+			is_active: false,
+			user: None,
+		};
+
+		// Act & Assert
+		// Both IPs share a single bucket via the custom key
+		assert!(permission.has_permission(&ctx_a).await);
+		assert!(permission.has_permission(&ctx_b).await);
+
+		// Third request from either IP should be denied (shared limit of 2)
+		assert!(!permission.has_permission(&ctx_a).await);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_custom_key_fn_returning_none_denies_request() {
+		// Arrange
+		let backend = Arc::new(MemoryBackend::new());
+		let permission = RateLimitPermission::new(backend, RateLimitStrategy::PerIp, 10.0, 1.0)
+			.with_custom_key(|_ctx| None);
+
+		let headers = HeaderMap::new();
+		let request = create_test_request(headers);
+		let context = PermissionContext {
+			request: &request,
+			is_authenticated: false,
+			is_admin: false,
+			is_active: false,
+			user: None,
+		};
+
+		// Act & Assert
+		// Custom key fn returns None, so request should be denied
 		assert!(!permission.has_permission(&context).await);
 	}
 }

@@ -285,13 +285,24 @@ impl<B: ThrottleBackend, T: TimeProvider> Throttle for AdaptiveThrottle<B, T> {
 	async fn allow_request(&self, key: &str) -> ThrottleResult<bool> {
 		let (rate, period) = self.get_current_rate();
 
+		// Check current count before incrementing to avoid inflating the
+		// counter for denied requests
 		let count = self
 			.backend
+			.get_count(key)
+			.await
+			.map_err(ThrottleError::ThrottleError)?;
+
+		if count >= rate {
+			return Ok(false);
+		}
+
+		self.backend
 			.increment(key, period)
 			.await
 			.map_err(ThrottleError::ThrottleError)?;
 
-		Ok(count <= rate)
+		Ok(true)
 	}
 
 	async fn wait_time(&self, key: &str) -> ThrottleResult<Option<u64>> {
@@ -452,5 +463,28 @@ mod tests {
 		assert_eq!(config.min_rate, (10, 60));
 		assert_eq!(config.max_rate, (1000, 60));
 		assert_eq!(config.initial_rate, (100, 60));
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_denied_request_does_not_increment_counter() {
+		// Arrange
+		let backend = Arc::new(MemoryBackend::new());
+		let config = AdaptiveConfig::new((10, 60), (100, 60), (3, 60), 0.1, 0.7);
+		let throttle = AdaptiveThrottle::new(backend.clone(), config);
+
+		// Act - exhaust the rate limit
+		for _ in 0..3 {
+			assert!(throttle.allow_request("test_key").await.unwrap());
+		}
+
+		// Act - attempt several denied requests
+		for _ in 0..5 {
+			assert!(!throttle.allow_request("test_key").await.unwrap());
+		}
+
+		// Assert - counter should be exactly at the rate limit (3), not inflated
+		let count = backend.get_count("test_key").await.unwrap();
+		assert_eq!(count, 3);
 	}
 }

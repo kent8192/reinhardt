@@ -356,7 +356,17 @@ impl<T: TimeProvider> Throttle for LeakyBucketThrottle<T> {
 	}
 
 	fn get_rate(&self) -> (usize, u64) {
-		(self.config.leak_rate as usize, 1)
+		let rate = self.config.leak_rate;
+		if rate >= 1.0 {
+			(rate as usize, 1)
+		} else {
+			// Scale sub-1.0 rates to a whole number representation.
+			// e.g., 0.5 req/sec becomes (1, 2) meaning 1 request per 2 seconds.
+			let period = (1.0 / rate).ceil() as u64;
+			let requests = (rate * period as f64).round() as usize;
+			// Ensure at least 1 request in the computed period
+			(requests.max(1), period)
+		}
 	}
 }
 
@@ -747,5 +757,42 @@ mod tests {
 
 		// Assert
 		assert_eq!(throttle.max_entries(), DEFAULT_MAX_ENTRIES);
+	}
+
+	#[rstest]
+	#[case(0.5, 1, 2)]
+	#[case(0.1, 1, 10)]
+	#[case(0.25, 1, 4)]
+	#[case(2.0, 2, 1)]
+	#[case(10.0, 10, 1)]
+	fn test_get_rate_handles_sub_one_leak_rate(
+		#[case] leak_rate: f64,
+		#[case] expected_requests: usize,
+		#[case] expected_period: u64,
+	) {
+		// Arrange
+		let config = LeakyBucketConfig::new(10, leak_rate).unwrap();
+		let throttle = LeakyBucketThrottle::new(config);
+
+		// Act
+		let (requests, period) = throttle.get_rate();
+
+		// Assert
+		assert_eq!(requests, expected_requests);
+		assert_eq!(period, expected_period);
+	}
+
+	#[rstest]
+	fn test_get_rate_sub_one_never_returns_zero_requests() {
+		// Arrange
+		let config = LeakyBucketConfig::new(10, 0.01).unwrap();
+		let throttle = LeakyBucketThrottle::new(config);
+
+		// Act
+		let (requests, period) = throttle.get_rate();
+
+		// Assert - requests must never be zero
+		assert!(requests >= 1);
+		assert!(period >= 1);
 	}
 }

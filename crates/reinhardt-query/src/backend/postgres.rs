@@ -40,6 +40,8 @@
 //! For more details on SQL syntax, see the
 //! [PostgreSQL Documentation](https://www.postgresql.org/docs/current/sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS).
 
+use std::fmt::Write as FmtWrite;
+
 use super::{QueryBuilder, SqlWriter};
 use crate::{
 	expr::{Condition, SimpleExpr},
@@ -452,7 +454,61 @@ impl PostgresQueryBuilder {
 					Value::Double(Some(d)) => {
 						writer.push(&d.to_string());
 					}
-					// None values render as NULL
+					Value::Char(Some(c)) => {
+						let escaped = c.to_string().replace('\'', "''");
+						writer.push(&format!("'{}'", escaped));
+					}
+					Value::Bytes(Some(b)) => {
+						let mut hex = String::with_capacity(b.as_ref().len() * 2);
+						for byte in b.as_ref() {
+							write!(hex, "{:02x}", byte).unwrap();
+						}
+						writer.push("E'\\\\x");
+						writer.push(&hex);
+						writer.push("'");
+					}
+					#[cfg(feature = "with-chrono")]
+					Value::ChronoDate(Some(d)) => {
+						writer.push(&format!("'{}'", d));
+					}
+					#[cfg(feature = "with-chrono")]
+					Value::ChronoTime(Some(t)) => {
+						writer.push(&format!("'{}'", t));
+					}
+					#[cfg(feature = "with-chrono")]
+					Value::ChronoDateTime(Some(dt)) => {
+						writer.push(&format!("'{}'", dt));
+					}
+					#[cfg(feature = "with-chrono")]
+					Value::ChronoDateTimeUtc(Some(dt)) => {
+						writer.push(&format!("'{}'", dt));
+					}
+					#[cfg(feature = "with-chrono")]
+					Value::ChronoDateTimeLocal(Some(dt)) => {
+						writer.push(&format!("'{}'", dt));
+					}
+					#[cfg(feature = "with-chrono")]
+					Value::ChronoDateTimeWithTimeZone(Some(dt)) => {
+						writer.push(&format!("'{}'", dt));
+					}
+					#[cfg(feature = "with-uuid")]
+					Value::Uuid(Some(u)) => {
+						writer.push(&format!("'{}'", u));
+					}
+					#[cfg(feature = "with-json")]
+					Value::Json(Some(j)) => {
+						let escaped = j.to_string().replace('\'', "''");
+						writer.push(&format!("'{}'", escaped));
+					}
+					#[cfg(feature = "with-rust_decimal")]
+					Value::Decimal(Some(d)) => {
+						writer.push(&d.to_string());
+					}
+					#[cfg(feature = "with-bigdecimal")]
+					Value::BigDecimal(Some(d)) => {
+						writer.push(&d.to_string());
+					}
+					// None values and arrays render as NULL
 					_ => {
 						writer.push("NULL");
 					}
@@ -2471,11 +2527,12 @@ impl QueryBuilder for PostgresQueryBuilder {
 					});
 				}
 				RoleAttribute::ValidUntil(timestamp) => {
+					// PostgreSQL VALID UNTIL requires a string constant (Sconst),
+					// not a bind parameter. Use inline literal with single-quote escaping.
+					let escaped = timestamp.replace('\'', "''");
 					writer.push("VALID UNTIL");
 					writer.push_space();
-					writer.push("'");
-					writer.push(timestamp);
-					writer.push("'");
+					writer.push(&format!("'{}'", escaped));
 				}
 				RoleAttribute::InRole(roles) => {
 					writer.push("IN ROLE");
@@ -2599,11 +2656,12 @@ impl QueryBuilder for PostgresQueryBuilder {
 					});
 				}
 				RoleAttribute::ValidUntil(timestamp) => {
+					// PostgreSQL VALID UNTIL requires a string constant (Sconst),
+					// not a bind parameter. Use inline literal with single-quote escaping.
+					let escaped = timestamp.replace('\'', "''");
 					writer.push("VALID UNTIL");
 					writer.push_space();
-					writer.push("'");
-					writer.push(timestamp);
-					writer.push("'");
+					writer.push(&format!("'{}'", escaped));
 				}
 				RoleAttribute::InRole(roles) => {
 					writer.push("IN ROLE");

@@ -1109,6 +1109,11 @@ pub use reinhardt_websockets::room::RoomManager;
 pub use reinhardt_websockets::{
 	ConsumerContext, Message, WebSocketConsumer, WebSocketError, WebSocketResult,
 };
+#[cfg(all(feature = "websockets", not(target_arch = "wasm32")))]
+pub use reinhardt_websockets::{
+	RouteError, RouteResult, WebSocketRoute, WebSocketRouter, clear_websocket_router,
+	get_websocket_router, register_websocket_router, reverse_websocket_url,
+};
 
 /// SQL query builder module.
 ///

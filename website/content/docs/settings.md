@@ -23,10 +23,12 @@ production.
    staging, production, etc.
 3. **Priority System**: Integrates settings from multiple sources with clear
    priority rules
-4. **No Recompilation Required**: No need to rebuild Rust code when changing
+4. **Composable Fragments**: Build your settings struct from reusable fragments
+   with the `#[settings]` macro
+5. **No Recompilation Required**: No need to rebuild Rust code when changing
    settings
-5. **Secure**: Protects sensitive information with `.gitignore`
-6. **Extensible**: Easy to add custom sources and configuration items
+6. **Secure**: Protects sensitive information with `.gitignore`
+7. **Extensible**: Easy to add custom sources and configuration items
 
 ---
 
@@ -89,7 +91,37 @@ name = "mydb_dev"
 password = "local-password"
 ```
 
-### 4. Starting the Application
+### 4. Settings Loading Code
+
+`src/config/settings.rs`:
+
+```rust
+use reinhardt::settings;
+use reinhardt::{DefaultSource, LowPriorityEnvSource, Profile, SettingsBuilder, TomlFileSource};
+use std::env;
+
+#[settings(/* add fragments here, e.g.: cache: CacheSettings | session: SessionSettings */)]
+pub struct ProjectSettings;
+
+pub fn get_settings() -> ProjectSettings {
+	let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| "local".to_string());
+	let profile = Profile::parse(&profile_str);
+	let settings_dir = env::current_dir().expect("Failed to get current directory").join("settings");
+
+	SettingsBuilder::new()
+		.profile(profile)
+		.add_source(DefaultSource::new())
+		.add_source(LowPriorityEnvSource::new().with_prefix("REINHARDT_"))
+		.add_source(TomlFileSource::new(settings_dir.join("base.toml")))
+		.add_source(TomlFileSource::new(settings_dir.join(format!("{}.toml", profile_str))))
+		.build()
+		.expect("Failed to build settings")
+		.into_typed()
+		.expect("Failed to convert settings")
+}
+```
+
+### 5. Starting the Application
 
 ```bash
 # Start in local environment (default)
@@ -313,6 +345,149 @@ format = "json"
 
 ---
 
+## Composable Settings Architecture
+
+Reinhardt's settings system is built on a composable fragment architecture. Instead
+of a monolithic `Settings` struct, you compose your `ProjectSettings` from reusable
+fragments using the `#[settings]` macro.
+
+### The `SettingsFragment` Trait
+
+Every settings fragment implements the `SettingsFragment` trait, which defines the
+TOML section name and optional profile-based validation:
+
+```rust
+pub trait SettingsFragment: Default + Serialize + DeserializeOwned {
+	/// The TOML section key for this fragment (e.g., "core", "cache").
+	fn section() -> &'static str;
+
+	/// Optional validation that runs after deserialization.
+	/// Override this to add profile-specific validation logic.
+	fn validate(&self, _profile: &Profile) -> Result<(), String> {
+		Ok(())
+	}
+}
+```
+
+### Available Fragments
+
+Reinhardt provides 12 built-in fragments:
+
+| Fragment             | Field Name     | TOML Section   | Has Trait               |
+| -------------------- | -------------- | -------------- | ----------------------- |
+| `CoreSettings`       | `core`         | (flattened)    | `HasCoreSettings`       |
+| `SecuritySettings`   | `security`     | `[security]`   | `HasSecuritySettings`   |
+| `CacheSettings`      | `cache`        | `[cache]`      | `HasCacheSettings`      |
+| `SessionSettings`    | `session`      | `[session]`    | `HasSessionSettings`    |
+| `CorsSettings`       | `cors`         | `[cors]`       | `HasCorsSettings`       |
+| `StaticSettings`     | `static_files` | `[static]`     | `HasStaticSettings`     |
+| `MediaSettings`      | `media`        | `[media]`      | `HasMediaSettings`      |
+| `EmailSettings`      | `email`        | `[email]`      | `HasEmailSettings`      |
+| `LoggingSettings`    | `logging`      | `[logging]`    | `HasLoggingSettings`    |
+| `I18nSettings`       | `i18n`         | `[i18n]`       | `HasI18nSettings`       |
+| `TemplateSettings`   | `templates`    | `[templates]`  | `HasTemplateSettings`   |
+| `ContactSettings`    | `contacts`     | `[contacts]`   | `HasContactSettings`    |
+
+**Note:** `CoreSettings` uses `#[serde(flatten)]`, so its fields (`debug`,
+`secret_key`, `database`, etc.) appear at the top level in TOML files rather
+than under a `[core]` section.
+
+### The `#[settings]` Macro
+
+The `#[settings]` macro generates a `ProjectSettings` struct with the specified
+fragments. `CoreSettings` is always included by default.
+
+#### Basic Usage (CoreSettings only)
+
+```rust
+use reinhardt::settings;
+
+#[settings()]
+pub struct ProjectSettings;
+
+// Generated struct has a `core` field of type CoreSettings.
+// Access: settings.core.debug, settings.core.secret_key, etc.
+```
+
+#### Adding Fragments
+
+Use `field_name: FragmentType` syntax, separated by `|`:
+
+```rust
+use reinhardt::settings;
+use reinhardt::conf::{CacheSettings, SessionSettings, CorsSettings};
+
+#[settings(cache: CacheSettings | session: SessionSettings | cors: CorsSettings)]
+pub struct ProjectSettings;
+
+// Access:
+// settings.core.debug
+// settings.cache.backend
+// settings.session.cookie_name
+// settings.cors.allowed_origins
+```
+
+#### Excluding CoreSettings
+
+In rare cases where you don't need `CoreSettings`, exclude it with `!`:
+
+```rust
+use reinhardt::settings;
+use reinhardt::conf::CacheSettings;
+
+#[settings(!CoreSettings, cache: CacheSettings)]
+pub struct ProjectSettings;
+
+// Only has settings.cache, no settings.core
+```
+
+### Has\* Accessor Traits
+
+Each fragment has a corresponding `Has*` trait that enables generic programming
+over settings types. This is useful for writing functions that only require
+specific fragments:
+
+```rust
+use reinhardt::conf::{HasCoreSettings, HasCacheSettings};
+
+fn configure_app<S: HasCoreSettings + HasCacheSettings>(settings: &S) {
+	let debug = settings.core().debug;
+	let cache_backend = &settings.cache().backend;
+	// Use settings without knowing the concrete ProjectSettings type
+}
+```
+
+### Profile-Based Validation
+
+Fragments can implement custom validation logic that runs based on the active
+profile:
+
+```rust
+use reinhardt::conf::settings::fragment::SettingsFragment;
+use reinhardt::Profile;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ApiSettings {
+	pub timeout: u64,
+	pub max_retries: u32,
+	pub base_url: String,
+}
+
+impl SettingsFragment for ApiSettings {
+	fn section() -> &'static str { "api" }
+
+	fn validate(&self, profile: &Profile) -> Result<(), String> {
+		if profile.is_production() && self.base_url.starts_with("http://") {
+			return Err("Production API base_url must use HTTPS".to_string());
+		}
+		Ok(())
+	}
+}
+```
+
+---
+
 ## Configuration via Environment Variables
 
 You can configure settings using environment variables. The priority of
@@ -392,16 +567,20 @@ If you want to manage configuration using only environment variables without
 TOML files, use `EnvSource`:
 
 ```rust
-use reinhardt::{Settings, SettingsBuilder, EnvSource, DefaultSource};
+use reinhardt::settings;
+use reinhardt::{SettingsBuilder, EnvSource, DefaultSource};
 
-pub fn get_settings() -> Settings {
-    SettingsBuilder::new()
-        .add_source(DefaultSource::new())
-        .add_source(EnvSource::new().with_prefix("REINHARDT_"))
-        .build()
-        .expect("Failed to build settings")
-        .into_typed()
-        .expect("Failed to convert settings")
+#[settings()]
+pub struct ProjectSettings;
+
+pub fn get_settings() -> ProjectSettings {
+	SettingsBuilder::new()
+		.add_source(DefaultSource::new())
+		.add_source(EnvSource::new().with_prefix("REINHARDT_"))
+		.build()
+		.expect("Failed to build settings")
+		.into_typed()
+		.expect("Failed to convert settings")
 }
 ```
 
@@ -414,25 +593,28 @@ pub fn get_settings() -> Settings {
 `src/config/settings.rs`:
 
 ```rust
-use reinhardt::{Settings, SettingsBuilder, EnvSource, DefaultSource, TomlFileSource, Profile};
+use reinhardt::settings;
+use reinhardt::{DefaultSource, LowPriorityEnvSource, Profile, SettingsBuilder, TomlFileSource};
 use std::env;
-use std::path::PathBuf;
 
-pub fn get_settings() -> Settings {
-    let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| "local".to_string());
-    let profile = Profile::parse(&profile_str);
+#[settings()]
+pub struct ProjectSettings;
 
-    let settings_dir = PathBuf::from("settings");
+pub fn get_settings() -> ProjectSettings {
+	let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| "local".to_string());
+	let profile = Profile::parse(&profile_str);
+	let settings_dir = env::current_dir().expect("Failed to get current directory").join("settings");
 
-    SettingsBuilder::new()
-        .profile(profile)
-        .add_source(LowPriorityEnvSource::new().with_prefix("REINHARDT_"))
-        .add_source(TomlFileSource::new(settings_dir.join("base.toml")))
-        .add_source(TomlFileSource::new(settings_dir.join(format!("{}.toml", profile_str))))
-        .build()
-        .expect("Failed to build settings")
-        .into_typed()
-        .expect("Failed to convert settings")
+	SettingsBuilder::new()
+		.profile(profile)
+		.add_source(DefaultSource::new())
+		.add_source(LowPriorityEnvSource::new().with_prefix("REINHARDT_"))
+		.add_source(TomlFileSource::new(settings_dir.join("base.toml")))
+		.add_source(TomlFileSource::new(settings_dir.join(format!("{}.toml", profile_str))))
+		.build()
+		.expect("Failed to build settings")
+		.into_typed()
+		.expect("Failed to convert settings")
 }
 ```
 
@@ -445,9 +627,8 @@ use crate::config::settings::get_settings;
 
 let settings = get_settings();
 
-println!("Debug mode: {}", settings.debug);
-println!("Database host: {}", settings.database.host);
-println!("Database port: {}", settings.database.port);
+println!("Debug mode: {}", settings.core.debug);
+println!("Secret key: {}", settings.core.secret_key);
 ```
 
 ---
@@ -493,11 +674,11 @@ cp production.toml production.example.toml
 **Important:** Remove sensitive information from `*.example.toml` files:
 
 ```toml
-# ❌ Don't include production secrets
+# Don't include production secrets
 secret_key = "actual-production-secret-key"
 password = "real-database-password"
 
-# ✅ Use placeholders
+# Use placeholders
 secret_key = "CHANGE_THIS_IN_PRODUCTION"
 password = "CHANGE_THIS"
 ```
@@ -525,50 +706,66 @@ custom `ConfigSource` that fetches secrets at startup. See
 
 ## Adding Custom Settings
 
-### 1. Extending Settings Structures
+### Creating a Custom Fragment
 
-`src/config/settings.rs`:
+Define a struct that implements `SettingsFragment` to add project-specific
+configuration:
+
+`src/config/api_settings.rs`:
 
 ```rust
+use reinhardt::conf::settings::fragment::SettingsFragment;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CustomSettings {
-    pub api_timeout: u64,
-    pub max_retries: u32,
-    pub features: FeatureFlags,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ApiSettings {
+	pub timeout: u64,
+	pub max_retries: u32,
+	pub base_url: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FeatureFlags {
-    pub enable_graphql: bool,
-    pub enable_websockets: bool,
+impl Default for ApiSettings {
+	fn default() -> Self {
+		Self {
+			timeout: 30,
+			max_retries: 3,
+			base_url: "http://localhost:8080".to_string(),
+		}
+	}
+}
+
+impl SettingsFragment for ApiSettings {
+	fn section() -> &'static str { "api" }
 }
 ```
 
-### 2. Adding to TOML Files
+### Composing with the `#[settings]` Macro
+
+```rust
+use reinhardt::settings;
+use reinhardt::conf::CacheSettings;
+use crate::config::api_settings::ApiSettings;
+
+#[settings(api: ApiSettings | cache: CacheSettings)]
+pub struct ProjectSettings;
+```
+
+### Adding to TOML Files
 
 `settings/base.toml`:
 
 ```toml
-[custom]
-api_timeout = 30
+[api]
+timeout = 30
 max_retries = 3
-
-[custom.features]
-enable_graphql = false
-enable_websockets = false
+base_url = "http://localhost:8080"
 ```
 
 `settings/local.toml`:
 
 ```toml
-[custom]
-api_timeout = 60
-
-[custom.features]
-enable_graphql = true
-enable_websockets = true
+[api]
+timeout = 60
 ```
 
 ---
@@ -578,17 +775,17 @@ enable_websockets = true
 ### Using Multiple File Sources
 
 ```rust
-pub fn get_settings() -> Settings {
-    SettingsBuilder::new()
-        .add_source(LowPriorityEnvSource::new().with_prefix("REINHARDT_"))
-        .add_source(TomlFileSource::new("settings/base.toml"))
-        .add_source(TomlFileSource::new("settings/database.toml"))
-        .add_source(TomlFileSource::new("settings/cache.toml"))
-        .add_source(TomlFileSource::new("settings/local.toml"))
-        .build()
-        .expect("Failed to build settings")
-        .into_typed()
-        .expect("Failed to convert settings")
+pub fn get_settings() -> ProjectSettings {
+	SettingsBuilder::new()
+		.add_source(LowPriorityEnvSource::new().with_prefix("REINHARDT_"))
+		.add_source(TomlFileSource::new("settings/base.toml"))
+		.add_source(TomlFileSource::new("settings/database.toml"))
+		.add_source(TomlFileSource::new("settings/cache.toml"))
+		.add_source(TomlFileSource::new("settings/local.toml"))
+		.build()
+		.expect("Failed to build settings")
+		.into_typed()
+		.expect("Failed to convert settings")
 }
 ```
 
@@ -597,14 +794,14 @@ pub fn get_settings() -> Settings {
 ```rust
 use reinhardt::settings::sources::JsonFileSource;
 
-pub fn get_settings() -> Settings {
-    SettingsBuilder::new()
-        .add_source(JsonFileSource::new("settings/base.json"))
-        .add_source(JsonFileSource::new("settings/local.json"))
-        .build()
-        .expect("Failed to build settings")
-        .into_typed()
-        .expect("Failed to convert settings")
+pub fn get_settings() -> ProjectSettings {
+	SettingsBuilder::new()
+		.add_source(JsonFileSource::new("settings/base.json"))
+		.add_source(JsonFileSource::new("settings/local.json"))
+		.build()
+		.expect("Failed to build settings")
+		.into_typed()
+		.expect("Failed to convert settings")
 }
 ```
 
@@ -616,41 +813,41 @@ use indexmap::IndexMap;
 use serde_json::Value;
 
 struct RemoteConfigSource {
-    url: String,
+	url: String,
 }
 
 impl ConfigSource for RemoteConfigSource {
-    fn load(&self) -> Result<IndexMap<String, Value>, SourceError> {
-        // Implementation to fetch configuration from remote server
-        // Example: HTTP request to fetch JSON configuration
-        todo!("Implement remote config loading - fetch from {}", self.url)
-    }
+	fn load(&self) -> Result<IndexMap<String, Value>, SourceError> {
+		// Implementation to fetch configuration from remote server
+		// Example: HTTP request to fetch JSON configuration
+		todo!("Implement remote config loading - fetch from {}", self.url)
+	}
 
-    fn priority(&self) -> u8 {
-        // Custom priority between TOML files and high-priority env vars
-        // 0 = lowest, 100 = highest
-        // 75 = higher than TOML (50) but lower than EnvSource (100)
-        75
-    }
+	fn priority(&self) -> u8 {
+		// Custom priority between TOML files and high-priority env vars
+		// 0 = lowest, 100 = highest
+		// 75 = higher than TOML (50) but lower than EnvSource (100)
+		75
+	}
 
-    fn description(&self) -> String {
-        format!("Remote configuration from: {}", self.url)
-    }
+	fn description(&self) -> String {
+		format!("Remote configuration from: {}", self.url)
+	}
 }
 ```
 
 **Usage:**
 
 ```rust
-pub fn get_settings() -> Settings {
-    SettingsBuilder::new()
-        .add_source(DefaultSource::new())
-        .add_source(TomlFileSource::new("settings/base.toml"))
-        .add_source(RemoteConfigSource { url: "https://config.example.com/api/settings".to_string() })
-        .build()
-        .expect("Failed to build settings")
-        .into_typed()
-        .expect("Failed to convert settings")
+pub fn get_settings() -> ProjectSettings {
+	SettingsBuilder::new()
+		.add_source(DefaultSource::new())
+		.add_source(TomlFileSource::new("settings/base.toml"))
+		.add_source(RemoteConfigSource { url: "https://config.example.com/api/settings".to_string() })
+		.build()
+		.expect("Failed to build settings")
+		.into_typed()
+		.expect("Failed to convert settings")
 }
 // Priority order: RemoteConfigSource (75) > TomlFileSource (50) > DefaultSource (0)
 ```
@@ -722,13 +919,13 @@ Failed to deserialize key 'debug': invalid type
 **Solution:**
 
 ```toml
-# ✅ Correct types
+# Correct types
 debug = true          # Boolean
 port = 5432           # Integer
 timeout = 30.5        # Float
 name = "mydb"         # String
 
-# ❌ Wrong types
+# Wrong types
 debug = "true"        # String (Boolean expected)
 port = "5432"         # String (Integer expected)
 ```
@@ -738,7 +935,7 @@ port = "5432"         # String (Integer expected)
 **Error:**
 
 ```
-Failed to convert to Settings: missing field 'secret_key'
+Failed to convert to ProjectSettings: missing field 'secret_key'
 ```
 
 **Cause:**
@@ -768,8 +965,8 @@ secret_key = "your-secret-key-here"
 echo $REINHARDT_DATABASE_HOST
 
 # 3. Use correct prefix
-export REINHARDT_DATABASE_HOST=localhost  # ✅ Correct
-export DATABASE_HOST=localhost            # ❌ No prefix
+export REINHARDT_DATABASE_HOST=localhost  # Correct
+export DATABASE_HOST=localhost            # No prefix
 ```
 
 ---
@@ -794,14 +991,9 @@ schema = "public"
 ```rust
 #[derive(Debug, Deserialize)]
 pub struct TenantConfig {
-    pub name: String,
-    pub database: String,
-    pub schema: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Settings {
-    pub tenants: Vec<TenantConfig>,
+	pub name: String,
+	pub database: String,
+	pub schema: String,
 }
 ```
 
@@ -850,56 +1042,56 @@ hosts = ["http://localhost:9200"]
 ### 1. Initialize Settings Only Once
 
 ```rust
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
-static SETTINGS: Lazy<Settings> = Lazy::new(|| {
-    get_settings()
+static SETTINGS: LazyLock<ProjectSettings> = LazyLock::new(|| {
+	get_settings()
 });
 
 // Settings are loaded only once, even if accessed multiple times
 // Access from anywhere in your application:
-// SETTINGS.debug
-// SETTINGS.database.host
+// SETTINGS.core.debug
+// SETTINGS.core.secret_key
 ```
 
 ### 2. Settings Validation
 
+Fragments support profile-based validation via the `SettingsFragment::validate()`
+method. Validation runs automatically during `into_typed()` when a profile is set.
+
+You can also add application-level validation:
+
 ```rust
-pub fn get_settings() -> Settings {
-    let settings = SettingsBuilder::new()
-        // ... add sources ...
-        .build()
-        .expect("Failed to build settings")
-        .into_typed()
-        .expect("Failed to convert settings");
+pub fn get_settings() -> ProjectSettings {
+	let settings: ProjectSettings = SettingsBuilder::new()
+		// ... add sources ...
+		.build()
+		.expect("Failed to build settings")
+		.into_typed()
+		.expect("Failed to convert settings");
+	// Fragment-level validation has already run at this point.
 
-    // Validate settings
-    validate_settings(&settings).expect("Invalid settings");
+	// Additional application-level validation
+	validate_settings(&settings).expect("Invalid settings");
 
-    settings
+	settings
 }
 
-fn validate_settings(settings: &Settings) -> Result<(), String> {
-    if settings.secret_key == "CHANGE_THIS_IN_PRODUCTION" {
-        return Err("Secret key not set!".to_string());
-    }
+fn validate_settings(settings: &ProjectSettings) -> Result<(), String> {
+	if settings.core.secret_key == "CHANGE_THIS_IN_PRODUCTION" {
+		return Err("Secret key not set!".to_string());
+	}
 
-    if settings.database.max_connections < settings.database.min_connections {
-        return Err("max_connections must be >= min_connections".to_string());
-    }
-
-    Ok(())
+	Ok(())
 }
 ```
 
 ### 3. Type-Safe Settings Access
 
 ```rust
-// ❌ Access via string key (not type-safe)
-let debug = settings.get("debug").unwrap();
-
-// ✅ Access via struct field (type-safe)
-let debug = settings.debug;
+// Access via struct field (type-safe)
+let debug = settings.core.debug;
+let secret = settings.core.secret_key.clone();
 ```
 
 ---
@@ -908,14 +1100,15 @@ let debug = settings.debug;
 
 Reinhardt's settings system is:
 
-- ✅ **Flexible**: Supports multiple sources including TOML, JSON, and
+- **Flexible**: Supports multiple sources including TOML, JSON, and
   environment variables
-- ✅ **Secure**: Protects sensitive information with `.gitignore`, type-safe
+- **Composable**: Build your settings from reusable fragments with `#[settings]`
+- **Secure**: Protects sensitive information with `.gitignore`, type-safe
   access
-- ✅ **Efficient**: No recompilation required, settings loaded only once
-- ✅ **Environment-Aware**: Separates configuration for local, staging,
+- **Efficient**: No recompilation required, settings loaded only once
+- **Environment-Aware**: Separates configuration for local, staging,
   production, etc.
-- ✅ **Extensible**: Easy to add custom sources and configuration items
+- **Extensible**: Easy to add custom sources and configuration items
 
 ## Next Steps
 

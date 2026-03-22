@@ -690,7 +690,7 @@ impl Expr {
 	/// ```
 	#[must_use]
 	pub fn expr_as<T: IntoIden>(self, alias: T) -> SimpleExpr {
-		SimpleExpr::AsEnum(alias.into_iden(), Box::new(self.0))
+		SimpleExpr::ExprAlias(Box::new(self.0), alias.into_iden())
 	}
 }
 

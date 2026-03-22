@@ -204,16 +204,9 @@ impl CommonMiddleware {
 			return None;
 		}
 
-		// Build the full URL
-		let scheme = if request.headers.contains_key("X-Forwarded-Proto") {
-			request
-				.headers
-				.get("X-Forwarded-Proto")
-				.and_then(|h| h.to_str().ok())
-				.unwrap_or("http")
-		} else {
-			"http"
-		};
+		// Build the full URL using Request::scheme() which validates trusted proxies
+		// before honoring X-Forwarded-Proto headers
+		let scheme = request.scheme();
 
 		let url = if let Some(q) = query {
 			format!("{}://{}{}?{}", scheme, new_host, new_path, q)

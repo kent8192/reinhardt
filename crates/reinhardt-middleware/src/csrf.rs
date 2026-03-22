@@ -247,8 +247,12 @@ impl CsrfMiddleware {
 	}
 
 	/// Check if request is from secure connection
+	///
+	/// Uses `Request::is_secure()` which checks both the actual TLS connection
+	/// and X-Forwarded-Proto from trusted proxies. Also falls back to URI scheme
+	/// for cases where the full URI is available.
 	fn is_secure_request(&self, request: &Request) -> bool {
-		request.uri.scheme_str() == Some("https")
+		request.is_secure() || request.uri.scheme_str() == Some("https")
 	}
 
 	/// Get or create CSRF secret

@@ -740,7 +740,7 @@ impl Request {
 	///
 	/// Returns `true` only if trusted proxies are configured AND the
 	/// remote address is in the trusted set.
-	fn is_from_trusted_proxy(&self) -> bool {
+	pub fn is_from_trusted_proxy(&self) -> bool {
 		if let Some(trusted) = self.extensions.get::<TrustedProxies>()
 			&& let Some(addr) = self.remote_addr
 		{

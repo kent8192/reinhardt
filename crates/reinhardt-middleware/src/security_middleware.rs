@@ -109,14 +109,12 @@ impl SecurityMiddleware {
 	/// let middleware = SecurityMiddleware::new();
 	/// let handler = Arc::new(TestHandler);
 	///
-	/// let mut headers = HeaderMap::new();
-	/// headers.insert("x-forwarded-proto", "https".parse().unwrap());
-	///
 	/// let request = Request::builder()
 	///     .method(Method::GET)
 	///     .uri("/api/data")
 	///     .version(Version::HTTP_11)
-	///     .headers(headers)
+	///     .headers(HeaderMap::new())
+	///     .secure(true)
 	///     .body(Bytes::new())
 	///     .build()
 	///     .unwrap();
@@ -167,14 +165,12 @@ impl SecurityMiddleware {
 	/// let middleware = SecurityMiddleware::with_config(config);
 	/// let handler = Arc::new(TestHandler);
 	///
-	/// let mut headers = HeaderMap::new();
-	/// headers.insert("x-forwarded-proto", "https".parse().unwrap());
-	///
 	/// let request = Request::builder()
 	///     .method(Method::GET)
 	///     .uri("/secure")
 	///     .version(Version::HTTP_11)
-	///     .headers(headers)
+	///     .headers(HeaderMap::new())
+	///     .secure(true)
 	///     .body(Bytes::new())
 	///     .build()
 	///     .unwrap();
@@ -215,24 +211,27 @@ impl SecurityMiddleware {
 	}
 
 	/// Check if request is secure (HTTPS)
+	///
+	/// Delegates to `Request::is_secure()` which already validates trusted proxies
+	/// before honoring X-Forwarded-Proto headers. If a custom `secure_proxy_ssl_header`
+	/// is configured, it is only trusted when the request comes from a trusted proxy.
 	fn is_secure(&self, request: &Request) -> bool {
-		// Check configured proxy SSL header first
+		// Check configured proxy SSL header (only from trusted proxies)
 		if let Some((ref header_name, ref header_value)) = self.config.secure_proxy_ssl_header
 			&& let Some(val) = request.headers.get(header_name.as_str())
 			&& let Ok(val_str) = val.to_str()
 		{
-			return val_str.eq_ignore_ascii_case(header_value);
+			// Only trust the custom header when request is from a trusted proxy
+			if request.is_from_trusted_proxy() {
+				return val_str.eq_ignore_ascii_case(header_value);
+			}
+			// Untrusted source: ignore the spoofable header
 		}
 
-		// Check X-Forwarded-Proto header
-		if let Some(proto) = request.headers.get("x-forwarded-proto")
-			&& let Ok(proto_str) = proto.to_str()
-		{
-			return proto_str.eq_ignore_ascii_case("https");
-		}
-
-		// Check if URI scheme is https
-		request.uri.scheme_str() == Some("https")
+		// Delegate to Request::is_secure() which checks:
+		// 1. Actual TLS connection (is_secure flag)
+		// 2. X-Forwarded-Proto only from trusted proxies
+		request.is_secure()
 	}
 
 	/// Build HSTS header value
@@ -351,6 +350,8 @@ mod tests {
 	use super::*;
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method, Version};
+	use reinhardt_http::TrustedProxies;
+	use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 	struct TestHandler;
 
@@ -378,14 +379,13 @@ mod tests {
 		let middleware = SecurityMiddleware::with_config(config);
 		let handler = Arc::new(TestHandler);
 
-		let mut headers = HeaderMap::new();
-		headers.insert("x-forwarded-proto", "https".parse().unwrap());
-
+		// Use secure(true) to indicate actual TLS connection
 		let request = Request::builder()
 			.method(Method::GET)
 			.uri("/test")
 			.version(Version::HTTP_11)
-			.headers(headers)
+			.headers(HeaderMap::new())
+			.secure(true)
 			.body(Bytes::new())
 			.build()
 			.unwrap();
@@ -416,14 +416,13 @@ mod tests {
 		let middleware = SecurityMiddleware::with_config(config);
 		let handler = Arc::new(TestHandler);
 
-		let mut headers = HeaderMap::new();
-		headers.insert("x-forwarded-proto", "https".parse().unwrap());
-
+		// Use secure(true) to indicate actual TLS connection
 		let request = Request::builder()
 			.method(Method::GET)
 			.uri("/test")
 			.version(Version::HTTP_11)
-			.headers(headers)
+			.headers(HeaderMap::new())
+			.secure(true)
 			.body(Bytes::new())
 			.build()
 			.unwrap();
@@ -677,14 +676,12 @@ mod tests {
 		let middleware = SecurityMiddleware::with_config(config);
 		let handler = Arc::new(TestHandler);
 
-		let mut headers = HeaderMap::new();
-		headers.insert("x-forwarded-proto", "https".parse().unwrap());
-
 		let request = Request::builder()
 			.method(Method::GET)
 			.uri("/test")
 			.version(Version::HTTP_11)
-			.headers(headers)
+			.headers(HeaderMap::new())
+			.secure(true)
 			.body(Bytes::new())
 			.build()
 			.unwrap();
@@ -765,14 +762,12 @@ mod tests {
 		let middleware = SecurityMiddleware::from_settings(&settings);
 		let handler = Arc::new(TestHandler);
 
-		let mut headers = HeaderMap::new();
-		headers.insert("x-forwarded-proto", "https".parse().unwrap());
-
 		let request = Request::builder()
 			.method(Method::GET)
 			.uri("/test")
 			.version(Version::HTTP_11)
-			.headers(headers)
+			.headers(HeaderMap::new())
+			.secure(true)
 			.body(Bytes::new())
 			.build()
 			.unwrap();
@@ -788,7 +783,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_is_secure_with_proxy_ssl_header() {
-		// Arrange
+		// Arrange - custom proxy SSL header from a trusted proxy
 		let config = SecurityConfig {
 			hsts_enabled: true,
 			hsts_seconds: 31536000,
@@ -804,6 +799,9 @@ mod tests {
 		let middleware = SecurityMiddleware::with_config(config);
 		let handler = Arc::new(TestHandler);
 
+		let proxy_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+		let proxy_addr = SocketAddr::new(proxy_ip, 8080);
+
 		let mut headers = HeaderMap::new();
 		headers.insert("X-Custom-Proto", "https".parse().unwrap());
 
@@ -812,9 +810,11 @@ mod tests {
 			.uri("/test")
 			.version(Version::HTTP_11)
 			.headers(headers)
+			.remote_addr(proxy_addr)
 			.body(Bytes::new())
 			.build()
 			.unwrap();
+		request.set_trusted_proxies(TrustedProxies::new(vec![proxy_ip]));
 
 		// Act
 		let response = middleware.process(request, handler).await.unwrap();
@@ -829,7 +829,52 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_is_secure_proxy_ssl_header_mismatch() {
-		// Arrange
+		// Arrange - custom proxy header with wrong value from trusted proxy
+		let config = SecurityConfig {
+			hsts_enabled: true,
+			hsts_seconds: 31536000,
+			hsts_include_subdomains: false,
+			hsts_preload: false,
+			ssl_redirect: false,
+			content_type_nosniff: true,
+			referrer_policy: None,
+			cross_origin_opener_policy: None,
+			x_frame_options: None,
+			secure_proxy_ssl_header: Some(("X-Custom-Proto".to_string(), "https".to_string())),
+		};
+		let middleware = SecurityMiddleware::with_config(config);
+		let handler = Arc::new(TestHandler);
+
+		let proxy_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+		let proxy_addr = SocketAddr::new(proxy_ip, 8080);
+
+		let mut headers = HeaderMap::new();
+		// Header present but with wrong value
+		headers.insert("X-Custom-Proto", "http".parse().unwrap());
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(headers)
+			.remote_addr(proxy_addr)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+		request.set_trusted_proxies(TrustedProxies::new(vec![proxy_ip]));
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert - HSTS should not be set because request is not secure
+		assert_eq!(response.status, StatusCode::OK);
+		assert!(!response.headers.contains_key("Strict-Transport-Security"));
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_is_secure_proxy_ssl_header_untrusted_source_ignored() {
+		// Arrange - custom proxy header from UNTRUSTED source should be ignored
 		let config = SecurityConfig {
 			hsts_enabled: true,
 			hsts_seconds: 31536000,
@@ -846,8 +891,49 @@ mod tests {
 		let handler = Arc::new(TestHandler);
 
 		let mut headers = HeaderMap::new();
-		// Header present but with wrong value
-		headers.insert("X-Custom-Proto", "http".parse().unwrap());
+		// Attacker sends the header directly (no trusted proxy)
+		headers.insert("X-Custom-Proto", "https".parse().unwrap());
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(headers)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+		// No trusted proxies configured
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert - HSTS should NOT be set because header is from untrusted source
+		assert_eq!(response.status, StatusCode::OK);
+		assert!(!response.headers.contains_key("Strict-Transport-Security"));
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_x_forwarded_proto_ignored_without_trusted_proxy() {
+		// Arrange - X-Forwarded-Proto from direct (untrusted) connection
+		let config = SecurityConfig {
+			hsts_enabled: true,
+			hsts_seconds: 31536000,
+			hsts_include_subdomains: false,
+			hsts_preload: false,
+			ssl_redirect: false,
+			content_type_nosniff: false,
+			referrer_policy: None,
+			cross_origin_opener_policy: None,
+			x_frame_options: None,
+			secure_proxy_ssl_header: None,
+		};
+		let middleware = SecurityMiddleware::with_config(config);
+		let handler = Arc::new(TestHandler);
+
+		let mut headers = HeaderMap::new();
+		// Attacker spoofs X-Forwarded-Proto
+		headers.insert("x-forwarded-proto", "https".parse().unwrap());
 
 		let request = Request::builder()
 			.method(Method::GET)
@@ -861,7 +947,7 @@ mod tests {
 		// Act
 		let response = middleware.process(request, handler).await.unwrap();
 
-		// Assert - HSTS should not be set because request is not secure
+		// Assert - HSTS should NOT be set because X-Forwarded-Proto is not trusted
 		assert_eq!(response.status, StatusCode::OK);
 		assert!(!response.headers.contains_key("Strict-Transport-Security"));
 	}

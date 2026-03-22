@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.13...reinhardt-web@v0.1.0-rc.14) - 2026-03-22
+
+### Added
+
+- *(infra)* add custom runner Docker image with Rust toolchain
+- *(infra)* add Terraform GitHub config for MAC_RUNNER_ENABLED variable
+- *(infra)* add Terraform configuration for Mac local runner
+- *(ci)* extend determine-runner with Mac local runner priority
+- *(reinhardt-di)* add protocol-agnostic `fork()` method to `InjectionContext`
+
+### Changed
+
+- *(infra)* rename cancel-runner to hotpath-runner
+- *(ci)* replace custom setup-protoc with arduino/setup-protoc@v3
+
+### Documentation
+
+- update CRATE_STRUCTURE.md with accurate crate count and descriptions
+- fix broken links, typos, and outdated info in root docs
+- *(infra)* add Mac local runner README with setup instructions
+- correct git_release_enable and semver_check values in release process documentation
+- clarify GitHub Releases are enabled only for reinhardt-web
+
+### Fixed
+
+- *(migrations)* resolve multi-element dependency parsing and deterministic sort
+- *(rest)* correct module path in versioning macro
+- *(ci)* use atomic dpkg lock timeout and add missing environment key
+- *(testkit)* unify PostgreSQL version, add pool close, and cleanup backoff
+- *(pages)* protect textarea, style, and script from minification
+- *(db-macros)* emit compile error for unknown field attributes
+- *(examples)* use /api/ mount point for URL consistency
+- *(ci)* add actor check to workflow_dispatch Mac runner gate
+- *(infra)* use pre-built binaries for nextest and mold in Dockerfile
+- *(infra)* use canonical repo URL (reinhardt-web) for runner registration
+- *(infra)* update runner base image to v2.333.0 (v2.322.0 deprecated)
+- *(infra)* add OpenSSL dev packages to Mac runner Docker image
+- *(ci)* pass explicit config path to tfprovidercheck
+- resolve merge conflict keeping both escape tracking and char count tests
+- *(ci)* add RUSTSEC-2026-0049 to security audit ignore list
+- *(ci)* install protoc from GitHub Releases and fix DinD TLS hostname
+- *(ci)* address protoc setup review feedback
+- *(infra)* upgrade runner base image to Ubuntu Jammy for GLIBC 2.35
+- *(reinhardt-db)* remove unnecessary dereference in pool connection
+- *(reinhardt-core)* fork DI context per-request in route and action macros
+- *(reinhardt-pages)* fork DI context per-request in server function macros
+- *(reinhardt-grpc)* fork DI context per-request in gRPC handler macros
+- *(reinhardt-graphql)* fork DI context per-request in GraphQL handler macros
+- *(reinhardt-pages,reinhardt-di)* add Content-Type negotiation for server_fn and Json<T> extractor
+- *(reinhardt-di)* address Copilot review on Content-Type handling
+- *(db)* escape double quotes in PostgreSQL quote_identifier
+- *(db)* quote column names in ON CONFLICT clauses
+- *(db)* quote identifiers in BatchInsertBuilder::build_sql
+- *(query)* escape single quotes in MySQL user/role formatting
+- *(query)* escape double quotes in SqlWriter identifier examples
+- *(query,db)* address copilot review on SQL injection PR
+
+### Maintenance
+
+- add workflow to auto-delete release-plz branches on PR close
+- remove accidentally committed tfplan binary
+
+### Styling
+
+- *(infra)* apply terraform fmt to all .tf files
+- *(i18n)* format method chain in po_parser tests
+- reformat long lines in effect and burst modules
+- *(core)* apply rustfmt formatting to profiler.rs
+
 ## [0.1.0-rc.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.12...reinhardt-web@v0.1.0-rc.13) - 2026-03-18
 
 ### Added

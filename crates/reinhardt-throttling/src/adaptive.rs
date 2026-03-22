@@ -297,6 +297,13 @@ impl<B: ThrottleBackend, T: TimeProvider> Throttle for AdaptiveThrottle<B, T> {
 			return Ok(false);
 		}
 
+		// NOTE: The check-then-increment pattern is not atomic. Under concurrent
+		// requests, multiple callers may observe count < rate and all increment,
+		// allowing slightly more than `rate` requests through. An atomic
+		// `increment_if_below` operation would solve this, but that would require
+		// changing the Backend trait which is out of scope for this fix. The current
+		// approach is still an improvement over the previous increment-always pattern
+		// and is acceptable for advisory rate limiting.
 		self.backend
 			.increment(key, period)
 			.await

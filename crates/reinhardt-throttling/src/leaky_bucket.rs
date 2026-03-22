@@ -363,7 +363,7 @@ impl<T: TimeProvider> Throttle for LeakyBucketThrottle<T> {
 			// Scale sub-1.0 rates to a whole number representation.
 			// e.g., 0.5 req/sec becomes (1, 2) meaning 1 request per 2 seconds.
 			let period = (1.0 / rate).ceil() as u64;
-			let requests = (rate * period as f64).round() as usize;
+			let requests = (rate * period as f64).floor() as usize;
 			// Ensure at least 1 request in the computed period
 			(requests.max(1), period)
 		}

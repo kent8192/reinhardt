@@ -44,6 +44,73 @@ use reinhardt_query::prelude::{
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Find a SQL keyword in `sql` using ASCII case-insensitive matching followed by whitespace.
+///
+/// Returns the byte position of the keyword start if found.
+/// Uses byte-level ASCII comparison to avoid allocation and Unicode case-folding issues
+/// (e.g., "ß" uppercasing to "SS" which would shift byte indices).
+///
+/// NOTE: This naive scan can match keywords inside string literals, identifiers,
+/// comments, or subqueries. A full SQL parser is out of scope for this filter layer;
+/// callers should be aware of this limitation.
+fn find_sql_keyword(sql: &str, keyword: &str) -> Option<usize> {
+	let sql_bytes = sql.as_bytes();
+	let kw_bytes = keyword.as_bytes();
+	let kw_len = kw_bytes.len();
+
+	if sql_bytes.len() < kw_len {
+		return None;
+	}
+
+	for i in 0..=(sql_bytes.len() - kw_len) {
+		// Check that the keyword matches (ASCII case-insensitive)
+		let matched = sql_bytes[i..i + kw_len]
+			.iter()
+			.zip(kw_bytes.iter())
+			.all(|(s, k)| s.to_ascii_uppercase() == k.to_ascii_uppercase());
+
+		if !matched {
+			continue;
+		}
+
+		// Keyword must be followed by whitespace or end of string
+		let after_ok = if i + kw_len >= sql_bytes.len() {
+			true
+		} else {
+			sql_bytes[i + kw_len].is_ascii_whitespace()
+		};
+
+		// Keyword must be preceded by whitespace, start of string, or ')'
+		let before_ok = if i == 0 {
+			true
+		} else {
+			let prev = sql_bytes[i - 1];
+			prev.is_ascii_whitespace() || prev == b')'
+		};
+
+		if after_ok && before_ok {
+			return Some(i);
+		}
+	}
+
+	None
+}
+
+/// Find the end position of a SQL clause by locating the next top-level keyword.
+///
+/// Searches for each keyword in `end_keywords` after `start_pos` in `sql`,
+/// returning the earliest match position. If no keyword is found, returns `sql.len()`.
+///
+/// NOTE: This naive scan can match keywords inside string literals, identifiers,
+/// comments, or subqueries. A full SQL parser is out of scope for this filter layer.
+fn find_clause_end(sql: &str, start_pos: usize, end_keywords: &[&str]) -> usize {
+	end_keywords
+		.iter()
+		.filter_map(|kw| find_sql_keyword(&sql[start_pos..], kw).map(|pos| start_pos + pos))
+		.min()
+		.unwrap_or(sql.len())
+}
+
 /// A composable filter backend that chains multiple filters
 ///
 /// # Examples
@@ -357,21 +424,24 @@ impl FilterBackend for SimpleSearchBackend {
 			let where_clause = format!("WHERE ({})", condition_str);
 
 			// Append search condition using proper SQL composition
-			// instead of string replacement which can corrupt complex WHERE clauses
-			let upper_sql = sql.to_uppercase();
-			if let Some(where_pos) = upper_sql.find("WHERE ") {
+			// instead of string replacement which can corrupt complex WHERE clauses.
+			// Uses ASCII case-insensitive keyword scanning to avoid allocation and
+			// Unicode case-folding byte-length divergence from to_uppercase().
+			if let Some(where_pos) = find_sql_keyword(&sql, "WHERE") {
+				// Skip past "WHERE" keyword and any trailing whitespace
+				let after_keyword = where_pos + "WHERE".len();
+				let content_start = sql[after_keyword..]
+					.bytes()
+					.position(|b| !b.is_ascii_whitespace())
+					.map(|p| after_keyword + p)
+					.unwrap_or(after_keyword);
+
 				// Find the end of the existing WHERE clause by locating
 				// the next top-level SQL keyword (GROUP BY, ORDER BY, LIMIT, etc.)
-				let after_where = &upper_sql[where_pos + 6..];
 				let clause_end_keywords = ["GROUP BY", "ORDER BY", "LIMIT", "OFFSET", "HAVING"];
-				let end_pos = clause_end_keywords
-					.iter()
-					.filter_map(|kw| after_where.find(kw))
-					.min()
-					.map(|pos| where_pos + 6 + pos)
-					.unwrap_or(sql.len());
+				let end_pos = find_clause_end(&sql, content_start, &clause_end_keywords);
 
-				let existing_where = sql[where_pos + 6..end_pos].trim();
+				let existing_where = sql[content_start..end_pos].trim();
 				let remainder = &sql[end_pos..];
 				let prefix = &sql[..where_pos];
 
@@ -499,21 +569,23 @@ impl FilterBackend for SimpleOrderingBackend {
 			let order_clause = format!("ORDER BY {}", order_expr);
 
 			// Append new ordering criteria to existing ORDER BY clause
-			// instead of replacing it, which would destroy previous orderings
-			let upper_sql = sql.to_uppercase();
-			if let Some(order_pos) = upper_sql.find("ORDER BY ") {
-				// Insert new ordering after the existing ORDER BY entries
-				let after_order = &upper_sql[order_pos + 9..];
+			// instead of replacing it, which would destroy previous orderings.
+			// Uses ASCII case-insensitive keyword scanning to avoid allocation and
+			// Unicode case-folding byte-length divergence from to_uppercase().
+			if let Some(order_pos) = find_sql_keyword(&sql, "ORDER BY") {
+				// Skip past "ORDER BY" keyword and any trailing whitespace
+				let after_keyword = order_pos + "ORDER BY".len();
+				let content_start = sql[after_keyword..]
+					.bytes()
+					.position(|b| !b.is_ascii_whitespace())
+					.map(|p| after_keyword + p)
+					.unwrap_or(after_keyword);
+
 				// Find end of existing ORDER BY clause (next top-level keyword)
 				let clause_end_keywords = ["LIMIT", "OFFSET"];
-				let end_pos = clause_end_keywords
-					.iter()
-					.filter_map(|kw| after_order.find(kw))
-					.min()
-					.map(|pos| order_pos + 9 + pos)
-					.unwrap_or(sql.len());
+				let end_pos = find_clause_end(&sql, content_start, &clause_end_keywords);
 
-				let existing_order = sql[order_pos + 9..end_pos].trim_end();
+				let existing_order = sql[content_start..end_pos].trim_end();
 				let remainder = &sql[end_pos..];
 				let prefix = &sql[..order_pos];
 

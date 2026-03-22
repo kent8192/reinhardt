@@ -84,6 +84,9 @@ impl PageNumberPagination {
 	}
 	/// Sets the default page size for pagination
 	///
+	/// A page size of 0 is treated as 1 to prevent division-by-zero errors
+	/// in pagination calculations.
+	///
 	/// # Examples
 	///
 	/// ```
@@ -91,9 +94,15 @@ impl PageNumberPagination {
 	///
 	/// let paginator = PageNumberPagination::new().page_size(20);
 	/// assert_eq!(paginator.page_size, 20);
+	///
+	/// // page_size=0 is normalized to 1
+	/// let paginator = PageNumberPagination::new().page_size(0);
+	/// assert_eq!(paginator.page_size, 1);
 	/// ```
 	pub fn page_size(mut self, size: usize) -> Self {
-		self.page_size = size;
+		// Enforce non-zero page size at the configuration boundary
+		// to prevent division-by-zero in both get_page() and paginate()
+		self.page_size = if size == 0 { 1 } else { size };
 		self
 	}
 	/// Sets the maximum allowed page size
@@ -211,12 +220,15 @@ impl PageNumberPagination {
 	pub fn get_page<T: Clone>(&self, items: &[T], page_param: Option<&str>) -> Page<T> {
 		let total_count = items.len();
 
+		// page_size is guaranteed non-zero by the page_size() setter
+		let effective_page_size = self.page_size;
+
 		// Calculate total pages (same logic as paginate)
-		let total_pages = if total_count <= self.page_size {
+		let total_pages = if total_count <= effective_page_size {
 			1
 		} else {
-			let pages = total_count / self.page_size;
-			let remainder = total_count % self.page_size;
+			let pages = total_count / effective_page_size;
+			let remainder = total_count % effective_page_size;
 			if remainder > 0 && remainder <= self.orphans {
 				pages
 			} else if remainder > 0 {
@@ -244,11 +256,11 @@ impl PageNumberPagination {
 		let (start, end) = if total_count == 0 {
 			(0, 0)
 		} else if page_number == total_pages {
-			let start = (page_number - 1) * self.page_size;
+			let start = (page_number - 1) * effective_page_size;
 			(start, total_count)
 		} else {
-			let start = (page_number - 1) * self.page_size;
-			let end = std::cmp::min(start + self.page_size, total_count);
+			let start = (page_number - 1) * effective_page_size;
+			let end = std::cmp::min(start + effective_page_size, total_count);
 			(start, end)
 		};
 
@@ -259,7 +271,7 @@ impl PageNumberPagination {
 			number: page_number,
 			num_pages: total_pages,
 			count: total_count,
-			page_size: self.page_size,
+			page_size: effective_page_size,
 		}
 	}
 	/// Async version of get_page
@@ -351,6 +363,7 @@ impl Paginator for PageNumberPagination {
 		page_param: Option<&str>,
 		base_url: &str,
 	) -> Result<PaginatedResponse<T>> {
+		// page_size is guaranteed non-zero by the page_size() setter
 		let total_count = items.len();
 
 		// Handle empty list with allow_empty_first_page=false
@@ -476,6 +489,61 @@ mod tests {
 	use rstest::rstest;
 
 	use super::*;
+
+	#[rstest]
+	fn page_size_setter_normalizes_zero_to_one() {
+		// Arrange & Act
+		let paginator = PageNumberPagination::new().page_size(0);
+
+		// Assert - page_size=0 is normalized to 1 at the setter boundary
+		assert_eq!(paginator.page_size, 1);
+	}
+
+	#[rstest]
+	fn paginate_works_when_page_size_set_to_zero() {
+		// Arrange - page_size(0) is normalized to 1 by the setter
+		let paginator = PageNumberPagination::new().page_size(0);
+		let items: Vec<i32> = (1..=5).collect();
+
+		// Act
+		let result = paginator.paginate(&items, None, "http://example.com/items");
+
+		// Assert - should succeed with effective page_size=1
+		assert!(result.is_ok());
+		let response = result.unwrap();
+		assert_eq!(response.results, vec![1]);
+		assert_eq!(response.count, 5);
+	}
+
+	#[rstest]
+	fn get_page_works_when_page_size_set_to_zero() {
+		// Arrange - page_size(0) is normalized to 1 by the setter
+		let paginator = PageNumberPagination::new().page_size(0);
+		let items: Vec<i32> = (1..=5).collect();
+
+		// Act
+		let page = paginator.get_page(&items, Some("1"));
+
+		// Assert - consistent behavior: effective page_size=1
+		assert_eq!(page.page_size, 1);
+		assert_eq!(page.count, 5);
+	}
+
+	#[rstest]
+	fn paginate_works_with_page_size_one() {
+		// Arrange
+		let paginator = PageNumberPagination::new().page_size(1);
+		let items: Vec<i32> = (1..=3).collect();
+
+		// Act
+		let result = paginator
+			.paginate(&items, Some("2"), "http://example.com/items")
+			.unwrap();
+
+		// Assert
+		assert_eq!(result.results, vec![2]);
+		assert_eq!(result.count, 3);
+	}
 
 	#[rstest]
 	#[case("not a valid url at all \x00\x01")]

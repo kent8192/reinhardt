@@ -264,6 +264,9 @@ impl RelayPagination {
 			total_count.saturating_sub(page_size)
 		};
 
+		// Clamp start position to data length to prevent out-of-range panic
+		let start = std::cmp::min(start, total_count);
+
 		// Calculate slice bounds
 		let end = std::cmp::min(start + page_size, total_count);
 
@@ -328,9 +331,11 @@ impl std::fmt::Debug for RelayPagination {
 
 #[cfg(test)]
 mod tests {
+	use rstest::rstest;
+
 	use super::*;
 
-	#[test]
+	#[rstest]
 	fn test_relay_pagination_forward() {
 		let items: Vec<i32> = (1..=100).collect();
 		let paginator = RelayPagination::new().default_page_size(10);
@@ -347,7 +352,7 @@ mod tests {
 		assert_eq!(connection.total_count, Some(100));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_relay_pagination_forward_with_after() {
 		let items: Vec<i32> = (1..=100).collect();
 		let paginator = RelayPagination::new();
@@ -370,7 +375,7 @@ mod tests {
 		assert!(page2.page_info.has_next_page);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_relay_pagination_backward() {
 		let items: Vec<i32> = (1..=100).collect();
 		let paginator = RelayPagination::new();
@@ -386,7 +391,7 @@ mod tests {
 		assert!(connection.page_info.has_previous_page);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_relay_pagination_edge_structure() {
 		let items = vec!["a", "b", "c"];
 		let paginator = RelayPagination::new();
@@ -402,7 +407,7 @@ mod tests {
 		assert!(!connection.edges[1].cursor.is_empty());
 	}
 
-	#[test]
+	#[rstest]
 	fn test_relay_pagination_page_info() {
 		let items: Vec<i32> = (1..=5).collect();
 		let paginator = RelayPagination::new();
@@ -417,7 +422,7 @@ mod tests {
 		assert!(!connection.page_info.has_previous_page);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_relay_pagination_max_page_size() {
 		let items: Vec<i32> = (1..=100).collect();
 		let paginator = RelayPagination::new().max_page_size(20);
@@ -430,7 +435,7 @@ mod tests {
 		assert_eq!(connection.edges.len(), 20);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_relay_pagination_without_total_count() {
 		let items: Vec<i32> = (1..=100).collect();
 		let paginator = RelayPagination::new().include_total_count(false);
@@ -442,7 +447,7 @@ mod tests {
 		assert_eq!(connection.total_count, None);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_relay_pagination_empty_list() {
 		let items: Vec<i32> = vec![];
 		let paginator = RelayPagination::new();
@@ -456,5 +461,63 @@ mod tests {
 		assert!(!connection.page_info.has_previous_page);
 		assert!(connection.page_info.start_cursor.is_none());
 		assert!(connection.page_info.end_cursor.is_none());
+	}
+
+	#[rstest]
+	fn relay_pagination_does_not_panic_on_out_of_range_after_cursor() {
+		// Arrange - use the same encoder instance for both cursor generation and paginator
+		let encoder = crate::pagination::cursor::Base64CursorEncoder::with_secret_key(
+			b"test-secret-key-for-unit-tests!!",
+		);
+		let items: Vec<i32> = (1..=10).collect();
+		// Encode a cursor pointing beyond data length
+		let out_of_range_cursor = encoder.encode(100).unwrap();
+		let paginator = RelayPagination::new().with_encoder(encoder);
+
+		// Act
+		let result = paginator.paginate(&items, Some(5), Some(&out_of_range_cursor), None, None);
+
+		// Assert - should return empty edges, not panic
+		assert!(result.is_ok());
+		let connection = result.unwrap();
+		assert!(connection.edges.is_empty());
+		assert!(!connection.page_info.has_next_page);
+	}
+
+	#[rstest]
+	fn relay_pagination_does_not_panic_on_out_of_range_before_cursor() {
+		// Arrange - use the same encoder instance for both cursor generation and paginator
+		let encoder = crate::pagination::cursor::Base64CursorEncoder::with_secret_key(
+			b"test-secret-key-for-unit-tests!!",
+		);
+		let items: Vec<i32> = (1..=10).collect();
+		// Encode a cursor pointing beyond data length
+		let out_of_range_cursor = encoder.encode(100).unwrap();
+		let paginator = RelayPagination::new().with_encoder(encoder);
+
+		// Act
+		let result = paginator.paginate(&items, None, None, Some(5), Some(&out_of_range_cursor));
+
+		// Assert - should not panic
+		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	fn relay_pagination_empty_dataset_with_after_cursor() {
+		// Arrange - use the same encoder instance for both cursor generation and paginator
+		let encoder = crate::pagination::cursor::Base64CursorEncoder::with_secret_key(
+			b"test-secret-key-for-unit-tests!!",
+		);
+		let items: Vec<i32> = vec![];
+		let cursor = encoder.encode(0).unwrap();
+		let paginator = RelayPagination::new().with_encoder(encoder);
+
+		// Act
+		let result = paginator.paginate(&items, Some(10), Some(&cursor), None, None);
+
+		// Assert
+		assert!(result.is_ok());
+		let connection = result.unwrap();
+		assert!(connection.edges.is_empty());
 	}
 }

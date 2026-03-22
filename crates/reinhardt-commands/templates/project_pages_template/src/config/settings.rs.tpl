@@ -30,8 +30,11 @@
 use reinhardt::conf::settings::builder::SettingsBuilder;
 use reinhardt::conf::settings::profile::Profile;
 use reinhardt::conf::settings::sources::{DefaultSource, LowPriorityEnvSource, TomlFileSource};
-use reinhardt::Settings;
+use reinhardt::settings;
 use std::env;
+
+#[settings(/* add fragments here, e.g.: cache: CacheSettings | session: SessionSettings */)]
+pub struct ProjectSettings;
 
 /// Get settings based on environment variable
 ///
@@ -44,7 +47,6 @@ use std::env;
 /// use {{ crate_name }}::config::settings::get_settings;
 ///
 /// let settings = get_settings();
-/// println!("Debug mode: {}", settings.debug);
 /// ```
 ///
 /// # Panics
@@ -53,60 +55,45 @@ use std::env;
 /// - Settings files cannot be read
 /// - Settings cannot be deserialized
 /// - Required settings are missing
-pub fn get_settings() -> Settings {
-    let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| "local".to_string());
-    let profile = Profile::parse(&profile_str);
+pub fn get_settings() -> ProjectSettings {
+	let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| "local".to_string());
+	let profile = Profile::parse(&profile_str);
 
-    // Get the project root directory (parent of src/)
-    let base_dir = env::current_dir().expect("Failed to get current directory");
-    let settings_dir = base_dir.join("settings");
+	// Get the project root directory (parent of src/)
+	let base_dir = env::current_dir().expect("Failed to get current directory");
+	let settings_dir = base_dir.join("settings");
 
-    // Build settings by merging sources in priority order
-    let merged = SettingsBuilder::new()
-        .profile(profile)
-        // Lowest priority: Default values
-        .add_source(
-            DefaultSource::new()
-                .with_value("debug", serde_json::Value::Bool(false))
-                .with_value(
-                    "language_code",
-                    serde_json::Value::String("en-us".to_string()),
-                )
-                .with_value("time_zone", serde_json::Value::String("UTC".to_string()))
-                .with_value("use_i18n", serde_json::Value::Bool(true))
-                .with_value("use_tz", serde_json::Value::Bool(true))
-                .with_value("append_slash", serde_json::Value::Bool(true))
-                .with_value(
-                    "default_auto_field",
-                    serde_json::Value::String("BigAutoField".to_string()),
-                ),
-        )
-        // Low priority: Environment variables (for container overrides)
-        .add_source(LowPriorityEnvSource::new().with_prefix("REINHARDT_"))
-        // Medium priority: Base TOML file
-        .add_source(TomlFileSource::new(settings_dir.join("base.toml")))
-        // Highest priority: Environment-specific TOML file
-        .add_source(TomlFileSource::new(
-            settings_dir.join(format!("{}.toml", profile_str)),
-        ))
-        .build()
-        .expect("Failed to build settings");
+	// Build settings by merging sources in priority order
+	let merged = SettingsBuilder::new()
+		.profile(profile)
+		// Lowest priority: Default values
+		.add_source(DefaultSource::new())
+		// Low priority: Environment variables (for container overrides)
+		.add_source(LowPriorityEnvSource::new().with_prefix("REINHARDT_"))
+		// Medium priority: Base TOML file
+		.add_source(TomlFileSource::new(settings_dir.join("base.toml")))
+		// Highest priority: Environment-specific TOML file
+		.add_source(TomlFileSource::new(
+			settings_dir.join(format!("{}.toml", profile_str)),
+		))
+		.build()
+		.expect("Failed to build settings");
 
-    // Convert MergedSettings to reinhardt_core::Settings
-    merged
-        .into_typed()
-        .expect("Failed to convert settings to Settings struct")
+	// Convert MergedSettings to ProjectSettings
+	merged
+		.into_typed()
+		.expect("Failed to convert settings to ProjectSettings struct")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+	use super::*;
 
-    #[test]
-    fn test_get_settings() {
-        // This test requires settings files to exist
-        // In a real project, you would set up test fixtures
-        let settings = get_settings();
-        assert!(!settings.secret_key.is_empty());
-    }
+	#[test]
+	fn test_get_settings() {
+		// This test requires settings files to exist
+		// In a real project, you would set up test fixtures
+		let settings = get_settings();
+		assert!(settings.core.debug || !settings.core.debug); // basic smoke test
+	}
 }

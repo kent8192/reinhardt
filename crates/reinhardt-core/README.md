@@ -112,22 +112,21 @@ Available features:
 - `security` (default): Security primitives
 - `validators` (default): Data validation
 - `serializers` (default): Serialization utilities
-- `http`: HTTP types and traits (requires `types`)
 - `messages`: Flash messaging system
-- `di`: Dependency injection with parameter extraction
 - `negotiation`: Content negotiation
 - `parsers`: Request body parsers
 - `pagination`: Pagination strategies
+- `page`: Page types (requires `types`)
+- `reactive`: Reactive types
 
 ## Usage
 
 ### Handler and Middleware
 
 ```rust
-// Import from modules
-use reinhardt::core::types::{Handler, Middleware};
-use reinhardt::http::{Request, Response};
-use reinhardt::core::exception::Result;
+// Handler and Middleware have been moved to reinhardt-http
+use reinhardt_http::{Handler, Middleware, Request, Response};
+use reinhardt_core::exception::Result;
 use async_trait::async_trait;
 
 // Define a handler
@@ -194,7 +193,7 @@ async fn setup_signal() {
 `` `reinhardt-core` `` is organized into the following modules:
 
 ### Core Modules
-- `` `types` `` - Core type definitions (Handler, Middleware, type aliases)
+- `` `types` `` - Core type definitions (page types; Handler/Middleware moved to `reinhardt-http`)
 - `` `exception` `` - Error handling and exception types
 - `` `signals` `` - Event-driven hooks for lifecycle events
 - `` `macros` `` - Procedural macros for code generation
@@ -211,9 +210,9 @@ async fn setup_signal() {
 ### Using Modules
 
 ```rust
-use reinhardt::core::types::{Handler, Middleware};
-use reinhardt::core::exception::Result;
-use reinhardt::core::signals::Signal;
+use reinhardt_http::{Handler, Middleware};
+use reinhardt_core::exception::Result;
+use reinhardt_core::signals::Signal;
 ```
 
 **Note**: `` `reinhardt-di` `` and `` `reinhardt-http` `` are separate workspace-level crates that provide dependency injection and HTTP utilities. They can be used independently or alongside `` `reinhardt-core` ``.
@@ -234,7 +233,7 @@ use reinhardt::core::signals::Signal;
 - **thiserror integration** - Full integration with `thiserror` for derived error impl
 - **anyhow integration** - `Other` variant wraps any `anyhow::Error` for compatibility
 - **Error categorization** - `ErrorKind` enum for categorical classification
-- **Standard conversions** - `From` implementations for `serde_json::Error`, `std::io::Error`, `http::Error`, `String`, `&str`, `reinhardt::ValidationErrors`
+- **Standard conversions** - `From` implementations for `serde_json::Error`, `std::io::Error`, `http::Error`, `String`, `&str`, `reinhardt_core::validators::ValidationErrors`
 - **Parameter validation context** - `ParamErrorContext` struct with detailed parameter extraction error information
 - **Parameter type enumeration** - `ParamType` enum (`Json`, `Query`, `Path`, `Form`, `Header`, `Cookie`, `Body`)
 - **Additional error types** - `TemplateNotFound` (404), `MissingContentType` (400), `MethodNotAllowed` (405), `Conflict` (409)
@@ -446,7 +445,7 @@ The `utils` module provides internal security utilities:
   - Performance optimizations:
     - O(k) complexity where k ≤ n (skips unnecessary middleware)
     - Short-circuiting with `Response::with_stop_chain(true)`
-- **Type aliases** - Re-export of `Request` and `Response` from `reinhardt-http`
+- **Type aliases** - `Request` and `Response` are available in `reinhardt-http`
 - **Async trait support** - Full async/await support via `async_trait`
 - **Zero-cost abstractions** - All traits compile to efficient code with no runtime overhead
 

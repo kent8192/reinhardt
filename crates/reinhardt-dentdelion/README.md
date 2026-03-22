@@ -373,7 +373,7 @@ flowchart TB
 - `reinhardt-commands`: CLI command integration
 - `reinhardt-di`: Dependency injection for services
 - `reinhardt-middleware`: Middleware integration
-- `reinhardt-signals`: Signal system
+- `reinhardt-core`: Signal system (signals module)
 
 ## License
 

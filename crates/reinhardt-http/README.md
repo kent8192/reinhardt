@@ -361,7 +361,7 @@ let response = StreamingResponse::with_status(
 
 - `parsers` - Enable request body parsing (JSON, form data, multipart)
   - Adds `parse_json()`, `parse_form()` methods to Request
-  - Requires `reinhardt-parsers` crate
+  - Requires `reinhardt-core` crate (parsers module)
 
 ## Dependencies
 
@@ -369,8 +369,7 @@ let response = StreamingResponse::with_status(
 - `bytes` - Efficient byte buffer handling
 - `futures` - Stream support for streaming responses
 - `serde` - Serialization support (with `serde_json` for JSON)
-- `reinhardt-exception` - Error handling
-- `reinhardt-parsers` - Request body parsing (optional, with `parsers` feature)
+- `reinhardt-core` - Core types, error handling, and optional request body parsing (parsers module enabled via the `parsers` feature)
 
 ## Testing
 

@@ -8,6 +8,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Main application settings
+#[deprecated(
+	since = "0.2.0",
+	note = "use individual fragments (CacheSettings, SessionSettings, etc.) with ProjectSettings instead"
+)]
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdvancedSettings {
@@ -60,6 +64,7 @@ pub struct AdvancedSettings {
 	pub custom: HashMap<String, serde_json::Value>,
 }
 
+#[allow(deprecated)]
 impl Default for AdvancedSettings {
 	fn default() -> Self {
 		Self {
@@ -79,6 +84,7 @@ impl Default for AdvancedSettings {
 	}
 }
 
+#[allow(deprecated)]
 impl AdvancedSettings {
 	/// Create new settings with defaults
 	pub fn new() -> Self {
@@ -463,6 +469,7 @@ pub enum SettingsError {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
 	use super::*;
 

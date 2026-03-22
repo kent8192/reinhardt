@@ -21,13 +21,14 @@
 //! use reinhardt_conf::Settings;
 //!
 //! // Create settings with defaults and override specific fields
+//! #[allow(deprecated)]
 //! let mut settings = Settings::default();
-//! settings.secret_key = "my-secret-key".to_string();
-//! settings.debug = false;
-//! settings.allowed_hosts = vec!["example.com".to_string()];
+//! settings.core.secret_key = "my-secret-key".to_string();
+//! settings.core.debug = false;
+//! settings.core.allowed_hosts = vec!["example.com".to_string()];
 //!
-//! assert!(!settings.debug);
-//! assert_eq!(settings.allowed_hosts[0], "example.com");
+//! assert!(!settings.core.debug);
+//! assert_eq!(settings.core.allowed_hosts[0], "example.com");
 //! ```
 //!
 //! ## Architecture
@@ -67,4 +68,19 @@ pub mod settings;
 
 // Re-export commonly used types at the crate root for convenience
 #[cfg(feature = "settings")]
+#[allow(deprecated)] // Settings is deprecated but re-exported for backward compatibility
 pub use settings::{DatabaseConfig, MiddlewareConfig, Settings, TemplateConfig};
+
+// Re-export fragment system types at the crate root
+#[cfg(feature = "settings")]
+pub use settings::{
+	cache::CacheSettings, cache::HasCacheSettings, contacts::ContactSettings,
+	contacts::HasContactSettings, core_settings::CoreSettings, core_settings::HasCoreSettings,
+	cors::CorsSettings, cors::HasCorsSettings, email::EmailSettings, email::HasEmailSettings,
+	fragment::SettingsFragment, i18n::HasI18nSettings, i18n::I18nSettings,
+	logging::HasLoggingSettings, logging::LoggingSettings, media::HasMediaSettings,
+	media::MediaSettings, security::HasSecuritySettings, security::SecuritySettings,
+	session::HasSessionSettings, session::SessionSettings, static_files::HasStaticSettings,
+	static_files::StaticSettings, template_settings::HasTemplateSettings,
+	template_settings::TemplateSettings,
+};

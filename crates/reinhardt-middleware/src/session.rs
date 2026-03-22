@@ -4,6 +4,7 @@
 //! Supports various backends including Cookie, Redis, and database.
 
 use async_trait::async_trait;
+#[allow(deprecated)]
 use reinhardt_conf::Settings;
 use reinhardt_di::{DiError, DiResult, Injectable, InjectionContext};
 use reinhardt_http::{Handler, Middleware, Request, Response, Result};
@@ -362,7 +363,7 @@ impl SessionConfig {
 
 	/// Create a `SessionConfig` from application `Settings`
 	///
-	/// Maps `Settings.session_cookie_secure` to `SessionConfig.secure`.
+	/// Maps `Settings.core.security.session_cookie_secure` to `SessionConfig.secure`.
 	///
 	/// # Examples
 	///
@@ -370,13 +371,16 @@ impl SessionConfig {
 	/// use reinhardt_conf::Settings;
 	/// use reinhardt_middleware::session::SessionConfig;
 	///
+	/// #[allow(deprecated)]
 	/// let settings = Settings::default();
+	/// #[allow(deprecated)]
 	/// let config = SessionConfig::from_settings(&settings);
 	/// assert!(!config.secure);
 	/// ```
+	#[allow(deprecated)] // Settings is deprecated in favor of composable fragments
 	pub fn from_settings(settings: &Settings) -> Self {
 		Self {
-			secure: settings.session_cookie_secure,
+			secure: settings.core.security.session_cookie_secure,
 			..Self::default()
 		}
 	}
@@ -459,9 +463,12 @@ impl SessionMiddleware {
 	/// use reinhardt_conf::Settings;
 	/// use reinhardt_middleware::session::SessionMiddleware;
 	///
+	/// #[allow(deprecated)]
 	/// let settings = Settings::default();
+	/// #[allow(deprecated)]
 	/// let middleware = SessionMiddleware::from_settings(&settings);
 	/// ```
+	#[allow(deprecated)] // Settings is deprecated in favor of composable fragments
 	pub fn from_settings(settings: &Settings) -> Self {
 		Self::new(SessionConfig::from_settings(settings))
 	}
@@ -935,11 +942,12 @@ mod tests {
 	#[tokio::test]
 	async fn test_session_config_from_settings_secure_enabled() {
 		// Arrange
-		let mut settings =
-			Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
-		settings.session_cookie_secure = true;
+		#[allow(deprecated)]
+		let mut settings = Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
+		settings.core.security.session_cookie_secure = true;
 
 		// Act
+		#[allow(deprecated)]
 		let config = SessionConfig::from_settings(&settings);
 
 		// Assert
@@ -950,9 +958,11 @@ mod tests {
 	#[tokio::test]
 	async fn test_session_config_from_settings_defaults() {
 		// Arrange
+		#[allow(deprecated)]
 		let settings = Settings::default();
 
 		// Act
+		#[allow(deprecated)]
 		let config = SessionConfig::from_settings(&settings);
 
 		// Assert
@@ -965,9 +975,10 @@ mod tests {
 	#[tokio::test]
 	async fn test_session_middleware_from_settings() {
 		// Arrange
-		let mut settings =
-			Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
-		settings.session_cookie_secure = true;
+		#[allow(deprecated)]
+		let mut settings = Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
+		settings.core.security.session_cookie_secure = true;
+		#[allow(deprecated)]
 		let middleware = SessionMiddleware::from_settings(&settings);
 		let handler = Arc::new(TestHandler);
 

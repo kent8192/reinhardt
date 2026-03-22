@@ -747,6 +747,7 @@ async fn execute_check(
 }
 
 /// Execute the collectstatic command
+#[allow(deprecated)] // Uses Settings which is deprecated; retained for backward compatibility
 async fn execute_collectstatic(
 	clear: bool,
 	no_input: bool,

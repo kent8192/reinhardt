@@ -9,3 +9,9 @@ mod hot_reload_integration;
 
 #[path = "settings/settings_system_integration.rs"]
 mod settings_system_integration;
+
+#[path = "settings/composable_use_cases.rs"]
+mod composable_use_cases;
+
+#[path = "settings/composable_macro_pass.rs"]
+mod composable_macro_pass;

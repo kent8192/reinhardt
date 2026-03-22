@@ -39,6 +39,9 @@ mod rel;
 mod routes;
 mod routes_registration;
 mod schema;
+mod settings_compose;
+mod settings_fragment;
+pub(crate) mod settings_parser;
 mod use_inject;
 mod validate_derive;
 
@@ -761,4 +764,42 @@ pub fn derive_validate(input: TokenStream) -> TokenStream {
 	validate_derive::validate_derive_impl(input)
 		.unwrap_or_else(|e| e.to_compile_error())
 		.into()
+}
+
+/// Settings attribute macro for composable configuration.
+///
+/// # Fragment mode
+///
+/// Marks a struct as a settings fragment:
+///
+/// ```rust,ignore
+/// #[settings(fragment = true, section = "cache")]
+/// pub struct CacheSettings {
+///     pub backend: String,
+/// }
+/// ```
+///
+/// # Composition mode
+///
+/// Composes fragments into a project settings struct:
+///
+/// ```rust,ignore
+/// #[settings(cache: CacheSettings | session: SessionSettings | !CorsSettings)]
+/// pub struct ProjectSettings;
+/// ```
+#[proc_macro_attribute]
+pub fn settings(args: TokenStream, input: TokenStream) -> TokenStream {
+	let input_struct = parse_macro_input!(input as ItemStruct);
+
+	// Detect mode: if args contain "fragment", use fragment handler
+	let args_str = args.to_string();
+	if args_str.contains("fragment") {
+		settings_fragment::settings_fragment_impl(args.into(), input_struct)
+			.unwrap_or_else(|e| e.to_compile_error())
+			.into()
+	} else {
+		settings_compose::settings_compose_impl(args.into(), input_struct)
+			.unwrap_or_else(|e| e.to_compile_error())
+			.into()
+	}
 }

@@ -16,6 +16,7 @@ pub struct CommandContext {
 	/// Verbosity level (0 = quiet, higher = more output).
 	pub verbosity: u8,
 	/// Optional reference to application settings
+	#[allow(deprecated)] // Settings is deprecated; retained for backward compatibility
 	pub settings: Option<Arc<reinhardt_conf::settings::Settings>>,
 }
 
@@ -43,6 +44,7 @@ impl CommandContext {
 	}
 
 	/// Set the application settings reference
+	#[allow(deprecated)] // Settings is deprecated; retained for backward compatibility
 	pub fn with_settings(mut self, settings: Arc<reinhardt_conf::settings::Settings>) -> Self {
 		self.settings = Some(settings);
 		self

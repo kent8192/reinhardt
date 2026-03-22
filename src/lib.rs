@@ -275,6 +275,8 @@ pub use reinhardt_macros::admin;
 
 // Re-export settings from dedicated crate
 #[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
+#[allow(deprecated)]
+// Re-exports deprecated Settings and AdvancedSettings for backward compatibility
 pub use reinhardt_conf::settings::{
 	AdvancedSettings, CacheSettings, CorsSettings, DatabaseConfig, EmailSettings, LoggingSettings,
 	MediaSettings, MiddlewareConfig, SessionSettings, Settings, SettingsError, StaticSettings,
@@ -1077,6 +1079,7 @@ pub mod prelude {
 
 	// Settings feature
 	#[cfg(feature = "conf")]
+	#[allow(deprecated)] // Re-exports deprecated Settings for backward compatibility
 	pub use crate::Settings;
 
 	// Middleware

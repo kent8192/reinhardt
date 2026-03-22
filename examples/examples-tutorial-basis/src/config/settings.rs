@@ -1,10 +1,14 @@
 use reinhardt::core::serde::json;
+use reinhardt::settings;
 use reinhardt::{
-	DefaultSource, LowPriorityEnvSource, Profile, Settings, SettingsBuilder, TomlFileSource,
+	DefaultSource, LowPriorityEnvSource, Profile, SettingsBuilder, TomlFileSource,
 };
 use std::env;
 
-pub fn get_settings() -> Settings {
+#[settings()]
+struct ProjectSettings;
+
+pub fn get_settings() -> ProjectSettings {
 	let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| {
 		if env::var("CI").is_ok() {
 			"ci".to_string()
@@ -68,5 +72,5 @@ pub fn get_settings() -> Settings {
 
 	merged
 		.into_typed()
-		.expect("Failed to convert settings to Settings struct")
+		.expect("Failed to convert settings to ProjectSettings")
 }

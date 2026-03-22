@@ -3,6 +3,8 @@
 //! These tests verify that reinhardt-conf settings works correctly with loading,
 //! validation, and access patterns.
 
+#![allow(deprecated)]
+
 use reinhardt_conf::settings::{DatabaseConfig, Settings, TemplateConfig};
 use std::path::PathBuf;
 
@@ -15,23 +17,23 @@ fn test_load_default_settings() {
 	let settings = Settings::default();
 
 	// Verify default values
-	assert!(settings.debug);
+	assert!(settings.core.debug);
 	assert_eq!(settings.language_code, "en-us");
 	assert_eq!(settings.time_zone, "UTC");
 	assert!(settings.use_i18n);
 	assert!(settings.use_tz);
 	assert_eq!(settings.static_url, "/static/");
 	assert_eq!(settings.media_url, "/media/");
-	assert!(settings.append_slash);
+	assert!(settings.core.security.append_slash);
 }
 
 #[test]
 fn test_load_custom_settings() {
 	let settings = Settings::new(PathBuf::from("/app"), "super-secret-key".to_string());
 
-	assert_eq!(settings.base_dir, PathBuf::from("/app"));
-	assert_eq!(settings.secret_key, "super-secret-key");
-	assert!(settings.debug); // Still defaults to true
+	assert_eq!(settings.core.base_dir, PathBuf::from("/app"));
+	assert_eq!(settings.core.secret_key, "super-secret-key");
+	assert!(settings.core.debug); // Still defaults to true
 }
 
 // ============================================================================
@@ -39,33 +41,32 @@ fn test_load_custom_settings() {
 // ============================================================================
 
 #[test]
-#[allow(deprecated)] // Test: verifies deprecated `add_app` and `installed_apps` behavior
 fn test_add_installed_app() {
 	let mut settings = Settings::default();
 
-	let initial_count = settings.installed_apps.len();
+	let initial_count = settings.core.installed_apps.len();
 	settings.add_app("myapp");
 
-	assert_eq!(settings.installed_apps.len(), initial_count + 1);
-	assert!(settings.installed_apps.contains(&"myapp".to_string()));
+	assert_eq!(settings.core.installed_apps.len(), initial_count + 1);
+	assert!(settings.core.installed_apps.contains(&"myapp".to_string()));
 }
 
 #[test]
 fn test_modify_security_settings() {
 	// Arrange - use field mutation because Settings is #[non_exhaustive]
 	let mut settings = Settings::default();
-	settings.debug = false;
-	settings.secure_ssl_redirect = true;
-	settings.secure_hsts_seconds = Some(31536000);
-	settings.session_cookie_secure = true;
-	settings.csrf_cookie_secure = true;
+	settings.core.debug = false;
+	settings.core.security.secure_ssl_redirect = true;
+	settings.core.security.secure_hsts_seconds = Some(31536000);
+	settings.core.security.session_cookie_secure = true;
+	settings.core.security.csrf_cookie_secure = true;
 
 	// Assert - verify security configuration
-	assert!(!settings.debug);
-	assert!(settings.secure_ssl_redirect);
-	assert_eq!(settings.secure_hsts_seconds, Some(31536000));
-	assert!(settings.session_cookie_secure);
-	assert!(settings.csrf_cookie_secure);
+	assert!(!settings.core.debug);
+	assert!(settings.core.security.secure_ssl_redirect);
+	assert_eq!(settings.core.security.secure_hsts_seconds, Some(31536000));
+	assert!(settings.core.security.session_cookie_secure);
+	assert!(settings.core.security.csrf_cookie_secure);
 }
 
 // ============================================================================
@@ -81,17 +82,18 @@ fn test_multiple_database_configs() {
 
 	// Add additional databases
 	settings
+		.core
 		.databases
 		.insert("cache".to_string(), DatabaseConfig::sqlite("cache.db"));
-	settings.databases.insert(
+	settings.core.databases.insert(
 		"analytics".to_string(),
 		DatabaseConfig::postgresql("analytics", "user", "pass", "localhost", 5432),
 	);
 
-	assert_eq!(settings.databases.len(), 3); // default + cache + analytics
-	assert!(settings.databases.contains_key("default"));
-	assert!(settings.databases.contains_key("cache"));
-	assert!(settings.databases.contains_key("analytics"));
+	assert_eq!(settings.core.databases.len(), 3); // default + cache + analytics
+	assert!(settings.core.databases.contains_key("default"));
+	assert!(settings.core.databases.contains_key("cache"));
+	assert!(settings.core.databases.contains_key("analytics"));
 }
 
 // ============================================================================
@@ -179,9 +181,9 @@ fn test_settings_deserialization() {
     }"#;
 
 	let settings: Settings = serde_json::from_str(json).unwrap();
-	assert!(!settings.debug);
-	assert_eq!(settings.secret_key, "test-key");
-	assert_eq!(settings.allowed_hosts, vec!["example.com"]);
+	assert!(!settings.core.debug);
+	assert_eq!(settings.core.secret_key, "test-key");
+	assert_eq!(settings.core.allowed_hosts, vec!["example.com"]);
 }
 
 // ============================================================================
@@ -192,31 +194,30 @@ fn test_settings_deserialization() {
 fn test_production_settings_validation() {
 	// Arrange - use field mutation because Settings is #[non_exhaustive]
 	let mut settings = Settings::default();
-	settings.debug = false;
-	settings.allowed_hosts = vec!["example.com".to_string(), "www.example.com".to_string()];
-	settings.secure_ssl_redirect = true;
-	settings.session_cookie_secure = true;
-	settings.csrf_cookie_secure = true;
+	settings.core.debug = false;
+	settings.core.allowed_hosts = vec!["example.com".to_string(), "www.example.com".to_string()];
+	settings.core.security.secure_ssl_redirect = true;
+	settings.core.security.session_cookie_secure = true;
+	settings.core.security.csrf_cookie_secure = true;
 
 	// Assert - verify production settings
-	assert!(!settings.debug);
-	assert!(!settings.allowed_hosts.is_empty());
-	assert!(settings.secure_ssl_redirect);
-	assert!(settings.session_cookie_secure);
-	assert!(settings.csrf_cookie_secure);
+	assert!(!settings.core.debug);
+	assert!(!settings.core.allowed_hosts.is_empty());
+	assert!(settings.core.security.secure_ssl_redirect);
+	assert!(settings.core.security.session_cookie_secure);
+	assert!(settings.core.security.csrf_cookie_secure);
 }
 
 #[test]
-#[allow(deprecated)] // Test: verifies deprecated `installed_apps` field is present
 fn test_required_settings_present() {
 	let settings = Settings::default();
 
 	// Verify required fields are present
-	assert!(!settings.secret_key.is_empty());
-	assert!(settings.installed_apps.is_empty());
-	assert!(settings.middleware.is_empty());
+	assert!(!settings.core.secret_key.is_empty());
+	assert!(settings.core.installed_apps.is_empty());
+	assert!(settings.core.middleware.is_empty());
 
-	assert!(!settings.databases.is_empty());
+	assert!(!settings.core.databases.is_empty());
 }
 
 // ============================================================================
@@ -228,15 +229,16 @@ fn test_nested_settings_access() {
 	let mut settings = Settings::default();
 
 	// Access nested database configuration
-	let default_db = settings.databases.get("default").unwrap();
+	let default_db = settings.core.databases.get("default").unwrap();
 	assert_eq!(default_db.engine, "reinhardt.db.backends.sqlite3");
 	assert_eq!(default_db.name, "db.sqlite3");
 
 	// Modify nested setting
 	settings
+		.core
 		.databases
 		.insert("test".to_string(), DatabaseConfig::sqlite("test.db"));
-	assert_eq!(settings.databases.len(), 2);
+	assert_eq!(settings.core.databases.len(), 2);
 }
 
 #[test]
@@ -245,9 +247,9 @@ fn test_settings_immutability_pattern() {
 
 	// Clone for immutability pattern
 	let mut modified_settings = settings.clone();
-	modified_settings.debug = false;
+	modified_settings.core.debug = false;
 
 	// Original remains unchanged
-	assert!(settings.debug);
-	assert!(!modified_settings.debug);
+	assert!(settings.core.debug);
+	assert!(!modified_settings.core.debug);
 }

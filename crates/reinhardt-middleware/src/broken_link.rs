@@ -246,6 +246,7 @@ impl BrokenLinkEmailsMiddleware {
 	}
 
 	/// Log a broken link and send email notifications
+	#[allow(deprecated)]
 	async fn log_broken_link(&self, path: &str, referer: &str) {
 		// Log to standard logging system
 		log::warn!("Broken link detected: {} (from: {})", path, referer);

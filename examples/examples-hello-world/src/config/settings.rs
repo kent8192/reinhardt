@@ -22,10 +22,14 @@
 //! If `REINHARDT_ENV` is not set, it defaults to `local`.
 
 use reinhardt::core::serde::json;
+use reinhardt::settings;
 use reinhardt::{
-	DefaultSource, LowPriorityEnvSource, Profile, Settings, SettingsBuilder, TomlFileSource,
+	DefaultSource, LowPriorityEnvSource, Profile, SettingsBuilder, TomlFileSource,
 };
 use std::env;
+
+#[settings()]
+struct ProjectSettings;
 
 /// Get settings based on environment variable
 ///
@@ -38,7 +42,7 @@ use std::env;
 /// use examples_hello_world::config::settings::get_settings;
 ///
 /// let settings = get_settings();
-/// println!("Debug mode: {}", settings.debug);
+/// println!("Debug mode: {}", settings.core.debug);
 /// ```
 ///
 /// # Panics
@@ -47,7 +51,7 @@ use std::env;
 /// - Settings files cannot be read
 /// - Settings cannot be deserialized
 /// - Required settings are missing
-pub fn get_settings() -> Settings {
+pub fn get_settings() -> ProjectSettings {
 	let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| {
 		if env::var("CI").is_ok() {
 			"ci".to_string()
@@ -111,7 +115,7 @@ pub fn get_settings() -> Settings {
 
 	merged
 		.into_typed()
-		.expect("Failed to convert settings to Settings struct")
+		.expect("Failed to convert settings to ProjectSettings")
 }
 
 #[cfg(test)]
@@ -122,6 +126,6 @@ mod tests {
 	#[rstest]
 	fn test_get_settings() {
 		let settings = get_settings();
-		assert!(!settings.secret_key.is_empty());
+		assert!(!settings.core.secret_key.is_empty(), "secret_key should be populated");
 	}
 }

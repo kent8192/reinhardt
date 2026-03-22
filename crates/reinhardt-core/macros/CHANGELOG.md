@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.1.0-rc.13...reinhardt-macros@v0.1.0-rc.14) - 2026-03-22
+
+### Added
+
+- *(macros)* add nom v8.0.0 parser for settings composition syntax
+- *(macros)* implement #[settings] attribute macro (fragment + composition)
+
+### Documentation
+
+- *(crates)* update version references from 0.1.0-alpha.1 to 0.1.0-rc.13 across all READMEs
+
+### Fixed
+
+- *(reinhardt-core)* fork DI context per-request in route and action macros
+- suppress deprecated Settings warnings and fix unreachable pub visibility
+
+### Styling
+
+- apply rustfmt formatting
+
+### Testing
+
+- *(macros)* add trybuild fail tests for #[settings] proc macro
+
 ## [0.1.0-rc.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.1.0-rc.12...reinhardt-macros@v0.1.0-rc.13) - 2026-03-18
 
 ### Fixed

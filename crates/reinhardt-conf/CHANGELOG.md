@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.1.0-rc.13...reinhardt-conf@v0.1.0-rc.14) - 2026-03-22
+
+### Added
+
+- *(conf)* define SettingsFragment trait for composable settings
+- *(conf)* define SecuritySettings fragment
+- *(conf)* extract built-in fragments from AdvancedSettings
+- *(conf)* define Django-compat fragments (I18n, Template, Contact)
+- *(conf)* define CoreSettings fragment with nested SecuritySettings
+- *(conf)* re-export fragment types and Has* traits from crate root
+
+### Changed
+
+- *(conf)* deprecate AdvancedSettings in favor of fragment system
+- *(conf)* deprecate Settings, add HasCoreSettings bridge via serde(flatten)
+
+### Fixed
+
+- *(conf)* add else branch for SSL redirect validation
+- address copilot review feedback and merge main
+- suppress deprecated Settings warnings and fix unreachable pub visibility
+- address Copilot review feedback
+
+### Styling
+
+- apply rustfmt formatting
+
+### Testing
+
+- *(conf)* add comprehensive composable settings tests (12 categories, 120+ scenarios)
+
 ## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.1.0-rc.11...reinhardt-conf@v0.1.0-rc.12) - 2026-03-18
 
 ### Deprecated

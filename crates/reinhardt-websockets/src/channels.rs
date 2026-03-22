@@ -240,13 +240,17 @@ impl ChannelLayer for InMemoryChannelLayer {
 	}
 
 	async fn group_send(&self, group: &str, message: ChannelMessage) -> ChannelResult<()> {
-		let groups = self.groups.read().await;
+		// Collect channel IDs while holding the groups lock, then release it
+		// before calling self.send() to avoid ABBA deadlock with clear()
+		let channel_ids = {
+			let groups = self.groups.read().await;
+			groups
+				.get(group)
+				.ok_or_else(|| ChannelError::GroupNotFound(group.to_string()))?
+				.clone()
+		};
 
-		let channels = groups
-			.get(group)
-			.ok_or_else(|| ChannelError::GroupNotFound(group.to_string()))?;
-
-		for channel in channels {
+		for channel in &channel_ids {
 			self.send(channel, message.clone()).await?;
 		}
 

@@ -69,6 +69,14 @@ pub fn document() -> Document {
 /// Locates the form by its HTML `id` attribute from
 /// [`StaticFormMetadata`](crate::form_generated::StaticFormMetadata)
 /// and triggers native browser form submission.
+///
+/// # Panics
+///
+/// - No global `window` exists
+/// - `window` has no `document`
+/// - No element with `metadata.id` found in the document
+/// - Element is not an `HtmlFormElement`
+/// - `request_submit()` fails (JS exception)
 #[cfg(target_arch = "wasm32")]
 pub fn submit_form(metadata: &crate::form_generated::StaticFormMetadata) {
 	use wasm_bindgen::JsCast;
@@ -81,5 +89,5 @@ pub fn submit_form(metadata: &crate::form_generated::StaticFormMetadata) {
 	let form: web_sys::HtmlFormElement = element
 		.dyn_into()
 		.expect("Element is not an HtmlFormElement");
-	form.submit().expect("Failed to submit form");
+	form.request_submit().expect("Failed to submit form");
 }

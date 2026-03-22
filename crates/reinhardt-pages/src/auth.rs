@@ -195,10 +195,17 @@ impl AuthState {
 	}
 
 	/// Sets the state to authenticated with the given user data.
+	///
+	/// Resets `email`, `is_staff`, `is_superuser`, and `permissions` to defaults
+	/// to prevent stale data from a previous session.
 	pub fn login(&self, user_id: i64, username: impl Into<String>) {
 		self.is_authenticated.set(true);
 		self.user_id.set(Some(user_id));
 		self.username.set(Some(username.into()));
+		self.email.set(None);
+		self.is_staff.set(false);
+		self.is_superuser.set(false);
+		self.permissions.set(HashSet::new());
 	}
 
 	/// Sets the state to authenticated with full user data.

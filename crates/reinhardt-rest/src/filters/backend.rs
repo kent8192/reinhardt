@@ -67,7 +67,7 @@ fn find_sql_keyword(sql: &str, keyword: &str) -> Option<usize> {
 		let matched = sql_bytes[i..i + kw_len]
 			.iter()
 			.zip(kw_bytes.iter())
-			.all(|(s, k)| s.to_ascii_uppercase() == k.to_ascii_uppercase());
+			.all(|(s, k)| s.eq_ignore_ascii_case(k));
 
 		if !matched {
 			continue;

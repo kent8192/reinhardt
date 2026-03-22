@@ -501,7 +501,8 @@ fn minify_html(html: &str) -> String {
 		// Detect closing tag for the currently preserved tag (case-insensitive)
 		if let Some(tag) = preserved_tag {
 			let close = format!("</{tag}>");
-			if c == '<' && remaining.len() >= close.len()
+			if c == '<'
+				&& remaining.len() >= close.len()
 				&& remaining[..close.len()].eq_ignore_ascii_case(&close)
 			{
 				// Push the original-cased closing tag from the source
@@ -800,14 +801,8 @@ mod tests {
 		"<div>  hello  </div>  <pre>  keep  </pre>  <div>  world  </div>",
 		"<div> hello </div> <pre>  keep  </pre> <div> world </div>"
 	)]
-	#[case::pre_uppercase(
-		"<PRE>  hello\n  world  </PRE>",
-		"<PRE>  hello\n  world  </PRE>"
-	)]
-	#[case::pre_mixed_case(
-		"<Pre>  hello\n  world  </Pre>",
-		"<Pre>  hello\n  world  </Pre>"
-	)]
+	#[case::pre_uppercase("<PRE>  hello\n  world  </PRE>", "<PRE>  hello\n  world  </PRE>")]
+	#[case::pre_mixed_case("<Pre>  hello\n  world  </Pre>", "<Pre>  hello\n  world  </Pre>")]
 	#[case::textarea_uppercase(
 		"<TEXTAREA>  multi\n  line  </TEXTAREA>",
 		"<TEXTAREA>  multi\n  line  </TEXTAREA>"

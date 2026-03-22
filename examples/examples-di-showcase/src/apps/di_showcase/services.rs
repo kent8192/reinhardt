@@ -133,7 +133,9 @@ impl Injectable for DashboardService {
 	async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
 		// Resolve nested dependencies using Injected<T> for cycle detection
 		let app_config = Injected::<AppConfig>::resolve(ctx).await?.into_inner();
-		let greeting = Injected::<GreetingService>::resolve(ctx).await?.into_inner();
+		let greeting = Injected::<GreetingService>::resolve(ctx)
+			.await?
+			.into_inner();
 
 		Ok(Self {
 			app_config,

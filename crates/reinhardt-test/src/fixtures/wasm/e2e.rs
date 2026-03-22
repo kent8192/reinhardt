@@ -429,24 +429,20 @@ impl BrowserClient {
 			}}
 			return false;
 			"#,
-			css = serde_json::to_string(select_css)
-				.expect("failed to JSON-encode CSS selector"),
-			text = serde_json::to_string(text)
-				.expect("failed to JSON-encode option text"),
+			css = serde_json::to_string(select_css).expect("failed to JSON-encode CSS selector"),
+			text = serde_json::to_string(text).expect("failed to JSON-encode option text"),
 		);
 		let result = self.client.execute(&script, vec![]).await?;
 		// The script returns false when the select element or option text is not found
 		let success = result.as_bool().unwrap_or(false);
 		if !success {
-			return Err(fantoccini::error::CmdError::NotW3C(
-				serde_json::json!({
-					"error": "select_by_text failed",
-					"message": format!(
-						"Could not find option with text {:?} in select {:?}",
-						text, select_css
-					),
-				}),
-			));
+			return Err(fantoccini::error::CmdError::NotW3C(serde_json::json!({
+				"error": "select_by_text failed",
+				"message": format!(
+					"Could not find option with text {:?} in select {:?}",
+					text, select_css
+				),
+			})));
 		}
 		Ok(())
 	}

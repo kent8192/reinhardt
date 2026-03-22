@@ -395,6 +395,26 @@ impl InjectionContext {
 		&self.singleton_scope
 	}
 
+	/// Internal helper for creating forked contexts.
+	///
+	/// Centralizes the construction logic shared between `fork()` and
+	/// `fork_for_request()` to prevent field-drift when new fields are added.
+	fn fork_inner(
+		&self,
+		#[cfg(feature = "params")] request: Option<Arc<HttpRequest>>,
+		#[cfg(feature = "params")] param_context: Option<Arc<ParamContext>>,
+	) -> InjectionContext {
+		InjectionContext {
+			request_scope: RequestScope::new(),
+			singleton_scope: self.singleton_scope.clone(),
+			override_registry: self.override_registry.clone(),
+			#[cfg(feature = "params")]
+			request,
+			#[cfg(feature = "params")]
+			param_context,
+		}
+	}
+
 	/// Creates a per-request fork of this context with an HTTP request.
 	///
 	/// The forked context shares the same singleton scope but has a fresh
@@ -407,15 +427,12 @@ impl InjectionContext {
 			request.path_params.clone(),
 		)));
 
-		InjectionContext {
-			request_scope: RequestScope::new(),
-			singleton_scope: self.singleton_scope.clone(),
-			override_registry: self.override_registry.clone(),
+		self.fork_inner(
 			#[cfg(feature = "params")]
-			request: Some(Arc::new(request)),
+			Some(Arc::new(request)),
 			#[cfg(feature = "params")]
 			param_context,
-		}
+		)
 	}
 
 	/// Creates a per-request fork of this context without an HTTP request.
@@ -427,15 +444,12 @@ impl InjectionContext {
 	/// This is intended for non-HTTP protocols (gRPC, GraphQL) where
 	/// request-scoped isolation is needed but HTTP request data is not available.
 	pub fn fork(&self) -> InjectionContext {
-		InjectionContext {
-			request_scope: RequestScope::new(),
-			singleton_scope: self.singleton_scope.clone(),
-			override_registry: self.override_registry.clone(),
+		self.fork_inner(
 			#[cfg(feature = "params")]
-			request: None,
+			None,
 			#[cfg(feature = "params")]
-			param_context: None,
-		}
+			None,
+		)
 	}
 
 	/// Returns a reference to the override registry.

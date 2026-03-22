@@ -262,3 +262,158 @@ fn test_nested_macros() {
 		panic!("Expected nested Condition");
 	}
 }
+
+// =============================================================================
+// Issue #2568: is_in/is_not_in with empty iterator
+// =============================================================================
+
+#[rstest]
+fn test_is_in_empty_returns_false() {
+	// Arrange
+	let empty: Vec<i32> = vec![];
+
+	// Act
+	let expr = Expr::col("status").is_in(empty);
+
+	// Assert
+	assert!(
+		matches!(expr, SimpleExpr::Constant(simple_expr::Keyword::False)),
+		"Empty IN () should produce FALSE, got: {:?}",
+		expr
+	);
+}
+
+#[rstest]
+fn test_is_not_in_empty_returns_true() {
+	// Arrange
+	let empty: Vec<i32> = vec![];
+
+	// Act
+	let expr = Expr::col("status").is_not_in(empty);
+
+	// Assert
+	assert!(
+		matches!(expr, SimpleExpr::Constant(simple_expr::Keyword::True)),
+		"Empty NOT IN () should produce TRUE, got: {:?}",
+		expr
+	);
+}
+
+#[rstest]
+fn test_is_in_nonempty_works_normally() {
+	// Arrange / Act
+	let expr = Expr::col("status").is_in(["active", "pending"]);
+
+	// Assert
+	assert!(matches!(expr, SimpleExpr::Binary(_, BinOper::In, _)));
+}
+
+#[rstest]
+fn test_is_not_in_nonempty_works_normally() {
+	// Arrange / Act
+	let expr = Expr::col("status").is_not_in(["deleted"]);
+
+	// Assert
+	assert!(matches!(expr, SimpleExpr::Binary(_, BinOper::NotIn, _)));
+}
+
+// =============================================================================
+// Issue #2565: LIKE helpers escape SQL wildcards
+// =============================================================================
+
+#[rstest]
+fn test_starts_with_escapes_wildcards() {
+	// Arrange / Act
+	let expr = Expr::col("name").starts_with("100%_done");
+
+	// Assert
+	if let SimpleExpr::Binary(_, BinOper::Like, rhs) = expr {
+		if let SimpleExpr::Value(Value::String(Some(s))) = *rhs {
+			assert_eq!(*s, "100\\%\\_done%");
+		} else {
+			panic!("Expected String value in LIKE pattern");
+		}
+	} else {
+		panic!("Expected LIKE expression");
+	}
+}
+
+#[rstest]
+fn test_ends_with_escapes_wildcards() {
+	// Arrange / Act
+	let expr = Expr::col("name").ends_with("test%");
+
+	// Assert
+	if let SimpleExpr::Binary(_, BinOper::Like, rhs) = expr {
+		if let SimpleExpr::Value(Value::String(Some(s))) = *rhs {
+			assert_eq!(*s, "%test\\%");
+		} else {
+			panic!("Expected String value in LIKE pattern");
+		}
+	} else {
+		panic!("Expected LIKE expression");
+	}
+}
+
+#[rstest]
+fn test_contains_escapes_wildcards() {
+	// Arrange / Act
+	let expr = Expr::col("name").contains("50%_off");
+
+	// Assert
+	if let SimpleExpr::Binary(_, BinOper::Like, rhs) = expr {
+		if let SimpleExpr::Value(Value::String(Some(s))) = *rhs {
+			assert_eq!(*s, "%50\\%\\_off%");
+		} else {
+			panic!("Expected String value in LIKE pattern");
+		}
+	} else {
+		panic!("Expected LIKE expression");
+	}
+}
+
+#[rstest]
+fn test_contains_escapes_backslash() {
+	// Arrange / Act
+	let expr = Expr::col("path").contains("C:\\Users");
+
+	// Assert
+	if let SimpleExpr::Binary(_, BinOper::Like, rhs) = expr {
+		if let SimpleExpr::Value(Value::String(Some(s))) = *rhs {
+			assert_eq!(*s, "%C:\\\\Users%");
+		} else {
+			panic!("Expected String value in LIKE pattern");
+		}
+	} else {
+		panic!("Expected LIKE expression");
+	}
+}
+
+// =============================================================================
+// Issue #2570: Expr::expr_as uses ExprAlias (not AsEnum)
+// =============================================================================
+
+#[rstest]
+fn test_expr_as_produces_alias() {
+	// Arrange / Act
+	let expr = Expr::col("name").expr_as("alias_name");
+
+	// Assert
+	assert!(
+		matches!(expr, SimpleExpr::ExprAlias(_, _)),
+		"expr_as should produce ExprAlias, got: {:?}",
+		expr
+	);
+}
+
+#[rstest]
+fn test_expr_as_not_as_enum() {
+	// Arrange / Act
+	let expr = Expr::col("name").expr_as("alias_name");
+
+	// Assert - ensure it is NOT AsEnum (which was the bug)
+	assert!(
+		!matches!(expr, SimpleExpr::AsEnum(_, _)),
+		"expr_as should NOT produce AsEnum (type cast)"
+	);
+}

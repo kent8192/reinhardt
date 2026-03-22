@@ -128,3 +128,11 @@ fn test_validate_macro_fail() {
 	let t = trybuild::TestCases::new();
 	t.compile_fail("tests/ui/validate/fail/*.rs");
 }
+
+// ===== Settings =====
+
+#[test]
+fn test_settings_macro_fail() {
+	let t = trybuild::TestCases::new();
+	t.compile_fail("tests/ui/settings/fail/*.rs");
+}

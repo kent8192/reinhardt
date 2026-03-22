@@ -1,0 +1,7 @@
+error: Cannot both include and exclude `CoreSettings`.
+ --> tests/ui/settings/fail/composition_include_and_exclude_same.rs:3:1
+  |
+3 | #[settings(core: CoreSettings | !CoreSettings)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `settings` (in Nightly builds, run with -Z macro-backtrace for more info)

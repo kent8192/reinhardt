@@ -90,12 +90,7 @@ pub trait TaskLock: Send + Sync {
 	/// Implementors should override this with a backend-specific atomic operation
 	/// to avoid race conditions where another worker could steal the lock between
 	/// release and re-acquire.
-	async fn extend(
-		&self,
-		task_id: TaskId,
-		token: &LockToken,
-		ttl: Duration,
-	) -> TaskResult<bool> {
+	async fn extend(&self, task_id: TaskId, token: &LockToken, ttl: Duration) -> TaskResult<bool> {
 		// Default: check-then-release-then-acquire is non-atomic.
 		// Concrete implementations should override with atomic operations.
 		if self.is_locked(task_id).await? {
@@ -216,12 +211,7 @@ impl TaskLock for MemoryTaskLock {
 	/// Unlike the default trait implementation which releases then re-acquires,
 	/// this holds the write lock throughout the operation to prevent another
 	/// worker from stealing the lock in between.
-	async fn extend(
-		&self,
-		task_id: TaskId,
-		token: &LockToken,
-		ttl: Duration,
-	) -> TaskResult<bool> {
+	async fn extend(&self, task_id: TaskId, token: &LockToken, ttl: Duration) -> TaskResult<bool> {
 		let mut locks = self.locks.write().await;
 		let now = chrono::Utc::now().timestamp_millis() as i128;
 
@@ -399,12 +389,7 @@ impl TaskLock for RedisTaskLock {
 	/// Atomically extend the TTL using a Lua script with millisecond precision.
 	///
 	/// Verifies ownership before extending, preventing unauthorized extensions.
-	async fn extend(
-		&self,
-		task_id: TaskId,
-		token: &LockToken,
-		ttl: Duration,
-	) -> TaskResult<bool> {
+	async fn extend(&self, task_id: TaskId, token: &LockToken, ttl: Duration) -> TaskResult<bool> {
 		use crate::TaskError;
 
 		let mut conn = (*self.connection).clone();

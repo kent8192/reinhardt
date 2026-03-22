@@ -356,8 +356,32 @@ impl FilterBackend for SimpleSearchBackend {
 
 			let where_clause = format!("WHERE ({})", condition_str);
 
-			if sql.to_uppercase().contains("WHERE") {
-				Ok(sql.replace("WHERE", &format!("{} AND", where_clause)))
+			// Append search condition using proper SQL composition
+			// instead of string replacement which can corrupt complex WHERE clauses
+			let upper_sql = sql.to_uppercase();
+			if let Some(where_pos) = upper_sql.find("WHERE ") {
+				// Find the end of the existing WHERE clause by locating
+				// the next top-level SQL keyword (GROUP BY, ORDER BY, LIMIT, etc.)
+				let after_where = &upper_sql[where_pos + 6..];
+				let clause_end_keywords = ["GROUP BY", "ORDER BY", "LIMIT", "OFFSET", "HAVING"];
+				let end_pos = clause_end_keywords
+					.iter()
+					.filter_map(|kw| after_where.find(kw))
+					.min()
+					.map(|pos| where_pos + 6 + pos)
+					.unwrap_or(sql.len());
+
+				let existing_where = sql[where_pos + 6..end_pos].trim();
+				let remainder = &sql[end_pos..];
+				let prefix = &sql[..where_pos];
+
+				Ok(format!(
+					"{}WHERE ({}) AND ({}) {}",
+					prefix,
+					existing_where,
+					condition_str,
+					remainder.trim()
+				))
 			} else {
 				Ok(format!("{} {}", sql, where_clause))
 			}
@@ -474,8 +498,34 @@ impl FilterBackend for SimpleOrderingBackend {
 			let order_expr = self.build_order_clause(field, order);
 			let order_clause = format!("ORDER BY {}", order_expr);
 
-			if sql.to_uppercase().contains("ORDER BY") {
-				Ok(sql.replace("ORDER BY", &format!("{},", order_clause)))
+			// Append new ordering criteria to existing ORDER BY clause
+			// instead of replacing it, which would destroy previous orderings
+			let upper_sql = sql.to_uppercase();
+			if let Some(order_pos) = upper_sql.find("ORDER BY ") {
+				// Insert new ordering after the existing ORDER BY entries
+				let after_order = &upper_sql[order_pos + 9..];
+				// Find end of existing ORDER BY clause (next top-level keyword)
+				let clause_end_keywords = ["LIMIT", "OFFSET"];
+				let end_pos = clause_end_keywords
+					.iter()
+					.filter_map(|kw| after_order.find(kw))
+					.min()
+					.map(|pos| order_pos + 9 + pos)
+					.unwrap_or(sql.len());
+
+				let existing_order = sql[order_pos + 9..end_pos].trim_end();
+				let remainder = &sql[end_pos..];
+				let prefix = &sql[..order_pos];
+
+				Ok(format!(
+					"{}ORDER BY {}, {} {}",
+					prefix,
+					existing_order,
+					order_expr,
+					remainder.trim()
+				)
+				.trim_end()
+				.to_string())
 			} else {
 				Ok(format!("{} {}", sql, order_clause))
 			}
@@ -488,194 +538,220 @@ impl FilterBackend for SimpleOrderingBackend {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_custom_filter_backend_empty() {
+		// Arrange
 		let backend = CustomFilterBackend::new();
-		assert_eq!(backend.filter_count(), 0);
-
 		let params = HashMap::new();
 		let sql = "SELECT * FROM users".to_string();
+
+		// Act
+		let count = backend.filter_count();
 		let result = backend.filter_queryset(&params, sql.clone()).await.unwrap();
+
+		// Assert
+		assert_eq!(count, 0);
 		assert_eq!(result, sql);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_custom_filter_backend_with_filters() {
+		// Arrange
 		let mut backend = CustomFilterBackend::new();
 		backend.add_filter(Box::new(
 			SimpleSearchBackend::new("search").with_field("name"),
 		));
-
-		assert_eq!(backend.filter_count(), 1);
-
 		let mut params = HashMap::new();
 		params.insert("search".to_string(), "john".to_string());
-
 		let sql = "SELECT * FROM users".to_string();
+
+		// Act
+		let count = backend.filter_count();
 		let result = backend.filter_queryset(&params, sql).await.unwrap();
+
+		// Assert
+		assert_eq!(count, 1);
 		assert!(result.contains("WHERE"));
-		// SeaQuery generates backtick-quoted column names for MySQL
 		assert!(result.contains("`name` LIKE '%john%'"));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_simple_search_backend() {
+		// Arrange
 		let backend = SimpleSearchBackend::new("search")
 			.with_field("title")
 			.with_field("content");
-
 		let mut params = HashMap::new();
 		params.insert("search".to_string(), "rust".to_string());
-
 		let sql = "SELECT * FROM articles".to_string();
+
+		// Act
 		let result = backend.filter_queryset(&params, sql).await.unwrap();
 
+		// Assert
 		assert!(result.contains("WHERE"));
-		// SeaQuery generates backtick-quoted column names for MySQL
 		assert!(result.contains("`title` LIKE '%rust%'"));
 		assert!(result.contains("`content` LIKE '%rust%'"));
 		assert!(result.contains("OR"));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_simple_search_backend_no_query() {
+		// Arrange
 		let backend = SimpleSearchBackend::new("search").with_field("title");
-
 		let params = HashMap::new();
 		let sql = "SELECT * FROM articles".to_string();
+
+		// Act
 		let result = backend.filter_queryset(&params, sql.clone()).await.unwrap();
 
+		// Assert
 		assert_eq!(result, sql);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_simple_search_backend_no_fields() {
+		// Arrange
 		let backend = SimpleSearchBackend::new("search");
-
 		let mut params = HashMap::new();
 		params.insert("search".to_string(), "rust".to_string());
-
 		let sql = "SELECT * FROM articles".to_string();
+
+		// Act
 		let result = backend.filter_queryset(&params, sql).await;
 
+		// Assert
 		assert!(result.is_err());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_simple_search_backend_postgres() {
+		// Arrange
 		let backend = SimpleSearchBackend::new("search")
 			.with_field("title")
 			.with_dialect(DatabaseDialect::PostgreSQL);
-
 		let mut params = HashMap::new();
 		params.insert("search".to_string(), "rust".to_string());
-
 		let sql = "SELECT * FROM articles".to_string();
+
+		// Act
 		let result = backend.filter_queryset(&params, sql).await.unwrap();
 
+		// Assert
 		assert!(result.contains("WHERE"));
-		// PostgreSQL uses double quotes for identifiers
 		assert!(result.contains("\"title\" LIKE '%rust%'"));
 	}
 
+	#[rstest]
+	#[case("' OR '1'='1")]
+	#[case("'; DROP TABLE articles; --")]
+	#[case("' UNION SELECT * FROM users --")]
 	#[tokio::test]
-	async fn test_simple_search_backend_sql_injection_prevention() {
+	async fn test_simple_search_backend_sql_injection_prevention(#[case] payload: &str) {
+		// Arrange
 		let backend = SimpleSearchBackend::new("search").with_field("title");
+		let mut params = HashMap::new();
+		params.insert("search".to_string(), payload.to_string());
+		let sql = "SELECT * FROM articles".to_string();
 
-		// Test SQL injection payloads with single quotes
-		// SeaQuery should properly escape single quotes when generating SQL
-		let injection_payloads = [
-			"' OR '1'='1",
-			"'; DROP TABLE articles; --",
-			"' UNION SELECT * FROM users --",
-		];
+		// Act
+		let result = backend.filter_queryset(&params, sql).await.unwrap();
 
-		for payload in injection_payloads {
-			let mut params = HashMap::new();
-			params.insert("search".to_string(), payload.to_string());
-
-			let sql = "SELECT * FROM articles".to_string();
-			let result = backend.filter_queryset(&params, sql.clone()).await.unwrap();
-
-			// Verify that the result contains a properly formatted LIKE clause
-			// The key protection is that SeaQuery escapes single quotes within the LIKE pattern
-			assert!(
-				result.contains("LIKE"),
-				"Result should contain LIKE clause for payload: {}",
-				payload
-			);
-
-			// Count single quotes in the result - they should be balanced (even count)
-			// If SQL injection succeeded, there would be unbalanced quotes
-			let single_quote_count = result.matches('\'').count();
-			assert!(
-				single_quote_count % 2 == 0,
-				"SQL injection vulnerability: unbalanced single quotes in result for payload: {}. Result: {}",
-				payload,
-				result
-			);
-		}
+		// Assert
+		assert!(
+			result.contains("LIKE"),
+			"Result should contain LIKE clause for payload: {}",
+			payload
+		);
+		// Single quotes must be balanced (even count) to prevent SQL injection
+		let single_quote_count = result.matches('\'').count();
+		assert!(
+			single_quote_count % 2 == 0,
+			"SQL injection vulnerability: unbalanced single quotes in result for payload: {}. Result: {}",
+			payload,
+			result
+		);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_simple_ordering_backend_asc() {
+		// Arrange
 		let backend = SimpleOrderingBackend::new("ordering")
 			.allow_field("created_at")
 			.allow_field("title");
-
 		let mut params = HashMap::new();
 		params.insert("ordering".to_string(), "created_at".to_string());
-
 		let sql = "SELECT * FROM articles".to_string();
+
+		// Act
 		let result = backend.filter_queryset(&params, sql).await.unwrap();
 
-		// reinhardt-query generates backtick-quoted column names for MySQL
+		// Assert
 		assert!(result.contains("ORDER BY created_at ASC"));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_simple_ordering_backend_desc() {
+		// Arrange
 		let backend = SimpleOrderingBackend::new("ordering")
 			.allow_field("created_at")
 			.allow_field("title");
-
 		let mut params = HashMap::new();
 		params.insert("ordering".to_string(), "-created_at".to_string());
-
 		let sql = "SELECT * FROM articles".to_string();
+
+		// Act
 		let result = backend.filter_queryset(&params, sql).await.unwrap();
 
-		// reinhardt-query generates backtick-quoted column names for MySQL
+		// Assert
 		assert!(result.contains("ORDER BY created_at DESC"));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_simple_ordering_backend_invalid_field() {
+		// Arrange
 		let backend = SimpleOrderingBackend::new("ordering").allow_field("created_at");
-
 		let mut params = HashMap::new();
 		params.insert("ordering".to_string(), "invalid_field".to_string());
-
 		let sql = "SELECT * FROM articles".to_string();
+
+		// Act
 		let result = backend.filter_queryset(&params, sql).await;
 
+		// Assert
 		assert!(result.is_err());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_simple_ordering_backend_no_query() {
+		// Arrange
 		let backend = SimpleOrderingBackend::new("ordering").allow_field("created_at");
-
 		let params = HashMap::new();
 		let sql = "SELECT * FROM articles".to_string();
+
+		// Act
 		let result = backend.filter_queryset(&params, sql.clone()).await.unwrap();
 
+		// Assert
 		assert_eq!(result, sql);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_chained_filters() {
+		// Arrange
 		let mut backend = CustomFilterBackend::new();
 		backend.add_filter(Box::new(
 			SimpleSearchBackend::new("search").with_field("title"),
@@ -683,17 +759,172 @@ mod tests {
 		backend.add_filter(Box::new(
 			SimpleOrderingBackend::new("ordering").allow_field("created_at"),
 		));
-
 		let mut params = HashMap::new();
 		params.insert("search".to_string(), "rust".to_string());
 		params.insert("ordering".to_string(), "-created_at".to_string());
-
 		let sql = "SELECT * FROM articles".to_string();
+
+		// Act
 		let result = backend.filter_queryset(&params, sql).await.unwrap();
 
+		// Assert
 		assert!(result.contains("WHERE"));
-		// SeaQuery generates backtick-quoted column names for MySQL
 		assert!(result.contains("`title` LIKE '%rust%'"));
 		assert!(result.contains("ORDER BY created_at DESC"));
+	}
+
+	// Regression test for #2685: SimpleOrderingBackend must preserve existing ORDER BY
+	#[rstest]
+	#[tokio::test]
+	async fn test_ordering_preserves_existing_order_by() {
+		// Arrange
+		let backend = SimpleOrderingBackend::new("ordering").allow_field("title");
+		let mut params = HashMap::new();
+		params.insert("ordering".to_string(), "title".to_string());
+		let sql = "SELECT * FROM articles ORDER BY created_at ASC".to_string();
+
+		// Act
+		let result = backend.filter_queryset(&params, sql).await.unwrap();
+
+		// Assert - both ordering criteria must be present
+		assert!(
+			result.contains("ORDER BY created_at ASC, title ASC"),
+			"Expected existing ORDER BY to be preserved with new criteria appended, got: {}",
+			result
+		);
+	}
+
+	// Regression test for #2685: ORDER BY with LIMIT must be preserved correctly
+	#[rstest]
+	#[tokio::test]
+	async fn test_ordering_preserves_existing_order_by_with_limit() {
+		// Arrange
+		let backend = SimpleOrderingBackend::new("ordering").allow_field("title");
+		let mut params = HashMap::new();
+		params.insert("ordering".to_string(), "-title".to_string());
+		let sql = "SELECT * FROM articles ORDER BY created_at ASC LIMIT 10".to_string();
+
+		// Act
+		let result = backend.filter_queryset(&params, sql).await.unwrap();
+
+		// Assert - both ordering criteria and LIMIT must be present
+		assert!(
+			result.contains("ORDER BY created_at ASC, title DESC"),
+			"Expected existing ORDER BY to be preserved, got: {}",
+			result
+		);
+		assert!(
+			result.contains("LIMIT 10"),
+			"Expected LIMIT clause to be preserved, got: {}",
+			result
+		);
+	}
+
+	// Regression test for #2687: SimpleSearchBackend must preserve existing WHERE clause
+	#[rstest]
+	#[tokio::test]
+	async fn test_search_preserves_existing_where_clause() {
+		// Arrange
+		let backend = SimpleSearchBackend::new("search").with_field("title");
+		let mut params = HashMap::new();
+		params.insert("search".to_string(), "rust".to_string());
+		let sql = "SELECT * FROM articles WHERE status = 'published'".to_string();
+
+		// Act
+		let result = backend.filter_queryset(&params, sql).await.unwrap();
+
+		// Assert - both the original WHERE condition and search condition must be present
+		assert!(
+			result.contains("status = 'published'"),
+			"Expected original WHERE condition to be preserved, got: {}",
+			result
+		);
+		assert!(
+			result.contains("`title` LIKE '%rust%'"),
+			"Expected search condition to be added, got: {}",
+			result
+		);
+		assert!(
+			result.contains("AND"),
+			"Expected AND joining original and search conditions, got: {}",
+			result
+		);
+	}
+
+	// Regression test for #2687: Complex WHERE clause must not be corrupted
+	#[rstest]
+	#[tokio::test]
+	async fn test_search_preserves_complex_where_clause() {
+		// Arrange
+		let backend = SimpleSearchBackend::new("search").with_field("name");
+		let mut params = HashMap::new();
+		params.insert("search".to_string(), "john".to_string());
+		let sql = "SELECT * FROM users WHERE (age > 18 AND active = true) ORDER BY id".to_string();
+
+		// Act
+		let result = backend.filter_queryset(&params, sql).await.unwrap();
+
+		// Assert - original complex condition, search condition, and ORDER BY must all be present
+		assert!(
+			result.contains("age > 18 AND active = true"),
+			"Expected complex WHERE condition to be preserved, got: {}",
+			result
+		);
+		assert!(
+			result.contains("`name` LIKE '%john%'"),
+			"Expected search condition to be added, got: {}",
+			result
+		);
+		assert!(
+			result.contains("ORDER BY"),
+			"Expected ORDER BY clause to be preserved, got: {}",
+			result
+		);
+	}
+
+	// Regression test for #2687: Empty query (no WHERE) should add WHERE normally
+	#[rstest]
+	#[tokio::test]
+	async fn test_search_adds_where_to_empty_query() {
+		// Arrange
+		let backend = SimpleSearchBackend::new("search").with_field("title");
+		let mut params = HashMap::new();
+		params.insert("search".to_string(), "rust".to_string());
+		let sql = "SELECT * FROM articles".to_string();
+
+		// Act
+		let result = backend.filter_queryset(&params, sql).await.unwrap();
+
+		// Assert
+		assert!(
+			result.contains("WHERE"),
+			"Expected WHERE clause to be added, got: {}",
+			result
+		);
+		assert!(
+			result.contains("`title` LIKE '%rust%'"),
+			"Expected search condition, got: {}",
+			result
+		);
+	}
+
+	// Regression test for #2685: Empty query (no ORDER BY) should add ORDER BY normally
+	#[rstest]
+	#[tokio::test]
+	async fn test_ordering_adds_order_by_to_empty_query() {
+		// Arrange
+		let backend = SimpleOrderingBackend::new("ordering").allow_field("created_at");
+		let mut params = HashMap::new();
+		params.insert("ordering".to_string(), "-created_at".to_string());
+		let sql = "SELECT * FROM articles".to_string();
+
+		// Act
+		let result = backend.filter_queryset(&params, sql).await.unwrap();
+
+		// Assert
+		assert_eq!(
+			result, "SELECT * FROM articles ORDER BY created_at DESC",
+			"Expected ORDER BY to be appended to query without existing ORDER BY"
+		);
 	}
 }

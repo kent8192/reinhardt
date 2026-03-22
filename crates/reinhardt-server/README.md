@@ -92,8 +92,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```rust
 use reinhardt::server::HttpServer;
-use reinhardt_http::{Handler, Middleware, Request, Response};
-use reinhardt_core::exception::Error;
+use reinhardt::http::{Handler, Middleware, Request, Response};
+use reinhardt::core::exception::Error;
 use std::sync::Arc;
 
 struct MyHandler;

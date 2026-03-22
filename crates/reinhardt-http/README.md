@@ -369,8 +369,7 @@ let response = StreamingResponse::with_status(
 - `bytes` - Efficient byte buffer handling
 - `futures` - Stream support for streaming responses
 - `serde` - Serialization support (with `serde_json` for JSON)
-- `reinhardt-core` - Core types and error handling
-- `reinhardt-core` - Request body parsing (parsers module, optional with `parsers` feature)
+- `reinhardt-core` - Core types, error handling, and optional request body parsing (parsers module enabled via the `parsers` feature)
 
 ## Testing
 

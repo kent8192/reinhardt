@@ -285,7 +285,7 @@ migration.apply(db).await?;
 use reinhardt_db::pool::ConnectionPool;
 
 // Create a connection pool
-let pool = Pool::new("postgres://user:pass@localhost/db")
+let pool = ConnectionPool::new("postgres://user:pass@localhost/db")
     .max_connections(10)
     .build()
     .await?;

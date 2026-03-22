@@ -3,11 +3,13 @@
 //! This module provides router integration for admin panel,
 //! generating ServerRouter from AdminSite configuration.
 //!
-//! All endpoints are registered automatically using the `.endpoint()` method
-//! with HTTP method macros from handlers module.
+//! Server functions are explicitly registered via `.server_fn()` in `admin_routes()`.
+
+#[cfg(not(target_arch = "wasm32"))]
+use reinhardt_pages::server_fn::ServerFnRouterExt;
+use reinhardt_urls::routers::ServerRouter;
 
 use crate::core::AdminSite;
-use reinhardt_urls::routers::ServerRouter;
 use std::sync::Arc;
 
 /// Admin router builder
@@ -25,21 +27,31 @@ use std::sync::Arc;
 /// let router = admin_routes();
 /// ```
 pub fn admin_routes() -> ServerRouter {
-	// Server Functions are automatically registered via #[server_fn] macro
-	// No manual route registration needed - the macro generates routes at /api/server_fn/{function_name}
-	//
-	// Available Server Functions (from reinhardt-admin-server crate):
-	// - get_dashboard() -> DashboardResponse
-	// - get_list() -> ListResponse
-	// - get_detail() -> DetailResponse
-	// - create_record() -> MutationResponse
-	// - update_record() -> MutationResponse
-	// - delete_record() -> MutationResponse
-	// - bulk_delete_records() -> BulkDeleteResponse
-	// - export_data() -> ExportResponse
-	// - import_data() -> ImportResponse
-	// - get_fields() -> FieldsResponse
-	ServerRouter::new().with_namespace("admin")
+	let router = ServerRouter::new().with_namespace("admin");
+
+	// Register all admin server functions on server-side targets.
+	// #[server_fn] generates marker structs but does not auto-register routes;
+	// explicit .server_fn(marker) calls are required.
+	#[cfg(not(target_arch = "wasm32"))]
+	let router = {
+		use crate::server::{
+			bulk_delete_records, create_record, delete_record, export_data, get_dashboard,
+			get_detail, get_fields, get_list, import_data, update_record,
+		};
+		router
+			.server_fn(get_dashboard::marker)
+			.server_fn(get_list::marker)
+			.server_fn(get_detail::marker)
+			.server_fn(get_fields::marker)
+			.server_fn(create_record::marker)
+			.server_fn(update_record::marker)
+			.server_fn(delete_record::marker)
+			.server_fn(bulk_delete_records::marker)
+			.server_fn(export_data::marker)
+			.server_fn(import_data::marker)
+	};
+
+	router
 }
 
 /// Admin router builder (for backward compatibility)
@@ -148,6 +160,17 @@ mod tests {
 
 		// Assert
 		assert_eq!(router.namespace(), Some("admin"));
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_admin_routes_registers_all_server_functions() {
+		// Arrange & Act
+		let router = admin_routes();
+
+		// Assert - 10 server functions should be registered
+		let routes = router.get_all_routes();
+		assert_eq!(routes.len(), 10);
 	}
 
 	#[rstest]

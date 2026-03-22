@@ -483,14 +483,15 @@ fn minify_html(html: &str) -> String {
 
 		// Detect opening preserved tag (case-insensitive, e.g. <pre>, <PRE>, <Pre class="...">)
 		if preserved_tag.is_none() && c == '<' {
-			let remaining_lower = remaining.to_ascii_lowercase();
 			for tag in &PRESERVED_TAGS {
-				if remaining_lower
-					.strip_prefix(&format!("<{tag}"))
-					.is_some_and(|after| {
-						after.starts_with(|ch: char| ch == '>' || ch.is_ascii_whitespace())
-							|| after.is_empty()
-					}) {
+				// Bounded, allocation-free case-insensitive comparison:
+				// only inspect `<` + tag length + 1 char instead of lowercasing all remaining input
+				let open_len = 1 + tag.len(); // "<" + tag name
+				if remaining.len() >= open_len
+					&& remaining[1..open_len].eq_ignore_ascii_case(tag)
+					&& remaining[open_len..]
+						.starts_with(|ch: char| ch == '>' || ch.is_ascii_whitespace())
+				{
 					preserved_tag = Some(tag);
 					break;
 				}

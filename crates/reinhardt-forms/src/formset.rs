@@ -26,6 +26,9 @@ impl FormSet {
 	/// assert!(!formset.can_delete());
 	/// ```
 	pub fn new(prefix: String) -> Self {
+		// Normalize: strip trailing delimiter so that `format!("{}-", prefix)`
+		// in `process_data` never produces a double-dash (e.g. "form--")
+		let prefix = prefix.strip_suffix('-').map_or(prefix.clone(), |s| s.to_owned());
 		Self {
 			forms: vec![],
 			prefix,

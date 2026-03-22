@@ -14,6 +14,35 @@ use reinhardt_urls::routers::ServerRouter;
 use crate::core::AdminSite;
 use std::sync::Arc;
 
+/// Serves the admin SPA HTML shell for client-side routing
+#[cfg(not(target_arch = "wasm32"))]
+async fn admin_spa_handler(
+	_request: reinhardt_http::Request,
+) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
+	Ok(reinhardt_http::Response::ok()
+		.with_header("Content-Type", "text/html; charset=utf-8")
+		.with_body(admin_spa_html()))
+}
+
+/// Generates the HTML shell for the admin SPA
+#[cfg(not(target_arch = "wasm32"))]
+fn admin_spa_html() -> String {
+	r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Reinhardt Admin</title>
+	<link rel="stylesheet" href="/static/admin/style.css" />
+</head>
+<body>
+	<div id="app"></div>
+	<script type="module" src="/static/admin/main.js"></script>
+</body>
+</html>"#
+		.to_string()
+}
+
 /// Admin router builder
 ///
 /// Builds a ServerRouter from an AdminSite with all CRUD endpoints.
@@ -51,6 +80,8 @@ pub fn admin_routes() -> ServerRouter {
 			.server_fn(bulk_delete_records::marker)
 			.server_fn(export_data::marker)
 			.server_fn(import_data::marker)
+			.function("/", hyper::Method::GET, admin_spa_handler)
+			.function("/{*tail}", hyper::Method::GET, admin_spa_handler)
 	};
 
 	router
@@ -179,6 +210,8 @@ mod tests {
 			"/api/server_fn/bulk_delete_records",
 			"/api/server_fn/export_data",
 			"/api/server_fn/import_data",
+			"/",
+			"/{*tail}",
 		];
 
 		// Act
@@ -186,8 +219,8 @@ mod tests {
 		let routes = router.get_all_routes();
 		let paths: Vec<&str> = routes.iter().map(|(path, _, _, _)| path.as_str()).collect();
 
-		// Assert - 10 server functions should be registered
-		assert_eq!(routes.len(), 10);
+		// Assert - 10 server functions + 2 GET routes should be registered
+		assert_eq!(routes.len(), 12);
 		for expected in &expected_paths {
 			assert_eq!(
 				paths.iter().filter(|p| p == &expected).count(),
@@ -242,5 +275,51 @@ mod tests {
 		let stored = site.favicon_data();
 		assert!(stored.is_some());
 		assert_eq!(stored.unwrap(), favicon_data);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_admin_routes_includes_html_get_routes() {
+		// Arrange & Act
+		let router = admin_routes();
+		let routes = router.get_all_routes();
+
+		// Assert - GET routes should be registered
+		let get_routes: Vec<_> = routes
+			.iter()
+			.filter(|(_, _, _, methods)| methods.contains(&hyper::Method::GET))
+			.collect();
+		assert!(get_routes.len() >= 2, "Should have at least 2 GET routes");
+
+		let paths: Vec<&str> = get_routes
+			.iter()
+			.map(|(path, _, _, _)| path.as_str())
+			.collect();
+		assert!(paths.contains(&"/"), "Should have root GET route");
+		assert!(
+			paths.contains(&"/{*tail}"),
+			"Should have catch-all GET route"
+		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_admin_spa_html_contains_mount_point() {
+		// Arrange & Act
+		let html = admin_spa_html();
+
+		// Assert
+		assert!(
+			html.contains(r#"id="app""#),
+			"HTML should contain app mount point"
+		);
+		assert!(
+			html.contains("/static/admin/"),
+			"HTML should reference admin static files"
+		);
+		assert!(
+			html.contains("<!DOCTYPE html>"),
+			"HTML should be valid HTML5"
+		);
 	}
 }

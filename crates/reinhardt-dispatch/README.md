@@ -62,7 +62,7 @@ async fn handle_request(request: Request) -> Result<Response, DispatchError> {
 
 ```rust
 use reinhardt::dispatch::{BaseHandler, MiddlewareChain};
-use reinhardt::core::types::{Handler, Middleware};
+use reinhardt_http::{Handler, Middleware};
 use std::sync::Arc;
 
 async fn setup_handler() -> Arc<dyn Handler> {
@@ -141,7 +141,7 @@ The exception module provides:
 
 ## Implementation Notes
 
-This crate focuses on HTTP request dispatching, while signal dispatching is handled by the separate `reinhardt-signals` crate. This separation provides:
+This crate focuses on HTTP request dispatching, while signal dispatching is handled by `reinhardt-core`'s signals module. This separation provides:
 
 - Clear responsibility boundaries
 - Independent signal system that can be used outside HTTP context

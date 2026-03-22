@@ -77,9 +77,8 @@ impl ReceiverProfile {
 		self.total_duration += duration;
 		self.min_duration = self.min_duration.min(duration);
 		self.max_duration = self.max_duration.max(duration);
-		self.avg_duration = Duration::from_nanos(
-			(self.total_duration.as_nanos() / self.call_count as u128) as u64,
-		);
+		self.avg_duration =
+			Duration::from_nanos((self.total_duration.as_nanos() / self.call_count as u128) as u64);
 		self.last_execution = Some(SystemTime::now());
 
 		if !success {

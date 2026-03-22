@@ -563,9 +563,9 @@ impl Middleware for SessionMiddleware {
 		// Call the handler
 		let mut response = handler.handle(request).await?;
 
-		// Add Set-Cookie header
+		// Append Set-Cookie header (use append to preserve existing Set-Cookie headers)
 		let cookie = self.build_cookie_header(&session.id);
-		response.headers.insert(
+		response.headers.append(
 			hyper::header::SET_COOKIE,
 			hyper::header::HeaderValue::from_str(&cookie).map_err(|e| {
 				reinhardt_core::exception::Error::Internal(format!(
@@ -1142,6 +1142,64 @@ mod tests {
 		let guard = captured.read().unwrap();
 		let session_id = guard.as_ref().expect("SessionId should be present");
 		assert_eq!(session_id.as_str(), original_session_id);
+	}
+
+	/// Handler that returns a response with an existing Set-Cookie header
+	struct HandlerWithSetCookie;
+
+	#[async_trait]
+	impl Handler for HandlerWithSetCookie {
+		async fn handle(&self, _request: Request) -> Result<Response> {
+			let mut response = Response::new(StatusCode::OK).with_body(Bytes::from("OK"));
+			response.headers.insert(
+				hyper::header::SET_COOKIE,
+				hyper::header::HeaderValue::from_static("csrftoken=xyz789; Path=/"),
+			);
+			Ok(response)
+		}
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_session_set_cookie_appends_not_replaces() {
+		// Arrange
+		let config = SessionConfig::new("sessionid".to_string(), Duration::from_secs(3600));
+		let middleware = SessionMiddleware::new(config);
+		let handler = Arc::new(HandlerWithSetCookie);
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert - both Set-Cookie headers should be present
+		let set_cookies: Vec<&hyper::header::HeaderValue> = response
+			.headers
+			.get_all(hyper::header::SET_COOKIE)
+			.iter()
+			.collect();
+		assert_eq!(
+			set_cookies.len(),
+			2,
+			"Expected both the original CSRF cookie and session cookie"
+		);
+
+		let cookies_str: Vec<&str> = set_cookies.iter().map(|v| v.to_str().unwrap()).collect();
+		assert!(
+			cookies_str.iter().any(|c| c.contains("csrftoken=xyz789")),
+			"Original Set-Cookie header should be preserved"
+		);
+		assert!(
+			cookies_str.iter().any(|c| c.contains("sessionid=")),
+			"Session Set-Cookie header should be appended"
+		);
 	}
 }
 

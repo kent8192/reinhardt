@@ -16,11 +16,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.9", features = ["views"] }
+reinhardt = { version = "0.1.0-rc.13", features = ["views"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.9", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.9", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
 ```
 
 Then import view features:
@@ -123,7 +123,7 @@ use reinhardt::views::viewsets::{ViewSet, ModelViewSet};
 - Admin change view support
 - Integration with Django-style admin interface
 
-#### ViewSets (from `reinhardt-viewsets`)
+#### ViewSets (from `reinhardt-views`)
 
 - **ModelViewSet** - Complete CRUD operations for models
   - List, Create, Retrieve, Update, Partial Update, Destroy actions
@@ -268,13 +268,9 @@ let spec = OpenAPISpec::new(Info::new(
 
 - `reinhardt-core` - Core types, serializers, pagination, and exception handling
 - `reinhardt-db` - Database and ORM integration
-- `reinhardt-rest` - REST framework (filters, serializers, OpenAPI)
 - `reinhardt-http` - HTTP request/response types
 - `reinhardt-di` - Dependency injection
-- `reinhardt-auth` - Authentication support
 - `async-trait` - Async trait support
-- `serde` - Serialization framework
-- `serde_json` - JSON serialization
 
 ## Testing
 

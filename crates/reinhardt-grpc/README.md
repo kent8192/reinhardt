@@ -190,8 +190,8 @@ Enable the `di` feature to use dependency injection in gRPC handlers:
 
 ```toml
 [dependencies]
-reinhardt-grpc = { version = "0.1", features = ["di"] }
-reinhardt-di = "0.1"
+reinhardt-grpc = { version = "0.1.0-rc.13", features = ["di"] }
+reinhardt-di = "0.1.0-rc.13"
 ```
 
 #### Basic Usage

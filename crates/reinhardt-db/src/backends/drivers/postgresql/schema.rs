@@ -26,8 +26,10 @@ use sqlx::PgPool;
 use std::sync::Arc;
 
 /// Quote a PostgreSQL identifier by wrapping it in double quotes
+///
+/// Embedded double quotes are escaped by doubling them to prevent SQL injection.
 fn quote_identifier(name: &str) -> String {
-	format!("\"{}\"", name)
+	format!("\"{}\"", name.replace('"', "\"\""))
 }
 
 /// PostgreSQL-specific schema editor
@@ -441,5 +443,43 @@ mod tests {
 		// varchar array should not create index
 		let array_sql = editor.create_like_index_sql("users", "tags", "varchar[100]");
 		assert!(array_sql.is_none());
+	}
+
+	#[rstest]
+	fn test_quote_identifier_simple() {
+		// Arrange
+		let name = "users";
+
+		// Act
+		let result = quote_identifier(name);
+
+		// Assert
+		assert_eq!(result, "\"users\"");
+	}
+
+	#[rstest]
+	fn test_quote_identifier_escapes_double_quotes() {
+		// Arrange - identifier containing double quotes (SQL injection attempt)
+		let name = "table\"; DROP TABLE users; --";
+
+		// Act
+		let result = quote_identifier(name);
+
+		// Assert - double quotes must be escaped by doubling them
+		assert_eq!(result, "\"table\"\"; DROP TABLE users; --\"");
+		// The injection relies on the unescaped pattern `"` closing the identifier.
+		// With escaping, `""` is a literal double-quote inside the identifier, not a delimiter.
+	}
+
+	#[rstest]
+	fn test_quote_identifier_with_embedded_double_quotes() {
+		// Arrange
+		let name = "my\"table";
+
+		// Act
+		let result = quote_identifier(name);
+
+		// Assert
+		assert_eq!(result, "\"my\"\"table\"");
 	}
 }

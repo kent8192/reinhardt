@@ -317,9 +317,14 @@ fn counter() -> View {
 | Feature | Description |
 |---------|-------------|
 | `msgpack` | MessagePack serialization support |
-| `pages-full` | All features enabled |
+| `pages-full` | All features enabled (`msgpack` + `web-sys-full`) |
 | `static` | Static file serving |
 | `urls` | URL routing integration |
+| `debug-hooks` | Debug hooks for development |
+| `uuid` | UUID type support |
+| `chrono` | Chrono date/time type support |
+| `ast` | AST processing support |
+| `web-sys-full` | All required web-sys features for WASM applications |
 
 ## License
 

@@ -454,7 +454,7 @@ logger.log_disallowed_host("malicious.com");
   - ✓ Copy files to STATIC_ROOT with optional processing
   - ✓ Integration with deployment workflows
   - ✓ Progress reporting and verbose output
-  - See [reinhardt-commands](../../commands/README.md) for details
+  - See [reinhardt-commands](../reinhardt-commands/README.md) for details
 
 - **GZip Compression** (implemented in `reinhardt-middleware`)
   - ✓ Response compression for bandwidth optimization
@@ -463,7 +463,7 @@ logger.log_disallowed_host("malicious.com");
   - ✓ Content-type filtering (text/\*, application/json, etc.)
   - ✓ Automatic Accept-Encoding detection
   - ✓ Compression only when beneficial (size check)
-  - See [reinhardt-middleware](../../../reinhardt-middleware/README.md) for details
+  - See [reinhardt-middleware](../reinhardt-middleware/README.md) for details
 
 - **Brotli Compression** (implemented in `reinhardt-middleware`)
   - ✓ Advanced compression with better ratios than gzip
@@ -472,7 +472,7 @@ logger.log_disallowed_host("malicious.com");
   - ✓ Content-type filtering
   - ✓ Automatic Accept-Encoding: br detection
   - ✓ Intelligent compression (only when beneficial)
-  - See [reinhardt-middleware](../../../reinhardt-middleware/README.md) for details
+  - See [reinhardt-middleware](../reinhardt-middleware/README.md) for details
 
 - **Cache-Control Header Management**
   - ✓ Configurable cache policies per file type

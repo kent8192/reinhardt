@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-throttling"
-version = "0.1.0-rc.13"
+version = "0.1.0-rc.14"
 description = "Throttling and rate limiting for Reinhardt framework"
 edition.workspace = true
 authors.workspace = true

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.13...reinhardt-db@v0.1.0-rc.14) - 2026-03-22
+
+### Fixed
+
+- *(migrations)* handle `.to_string()` in dependency tuple parsing
+- *(migrations)* resolve multi-element dependency parsing and deterministic sort
+- *(reinhardt-db)* remove unnecessary dereference in pool connection
+- *(db)* apply ManuallyDrop to backends_pool PooledConnection Drop
+- *(reinhardt-db)* fix dependency collection, table tracking, BFS ordering, and lock pattern in migrations
+- *(reinhardt-db)* fix cache value in next_number_cached and optimize squash dedup
+
+### Styling
+
+- *(docs)* apply auto-fix formatting and lint corrections
+
 ## [0.1.0-rc.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.12...reinhardt-db@v0.1.0-rc.13) - 2026-03-18
 
 ### Fixed

@@ -701,7 +701,7 @@ use reinhardt::pages::server_fn::{ServerFnError, server_fn};
 use crate::shared::types::{QuestionInfo, ChoiceInfo};
 
 /// Get all questions
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_questions(
     #[inject] _db: reinhardt::DatabaseConnection,
 ) -> Result<Vec<QuestionInfo>, ServerFnError> {
@@ -719,7 +719,7 @@ pub async fn get_questions(
 }
 
 /// Get question detail with choices
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_question_detail(
     question_id: i64,
     #[inject] _db: reinhardt::DatabaseConnection,
@@ -756,7 +756,7 @@ pub async fn get_question_detail(
 
 **Key features:**
 
-- `#[server_fn(use_inject = true)]` - Enables dependency injection
+- `#[server_fn]` - Enables dependency injection
 - `#[inject] _db: reinhardt::DatabaseConnection` - Auto-injected database connection
 - `Result<T, ServerFnError>` - Required return type for server functions
 - Type conversion (`QuestionInfo::from(question)`) - Convert models to DTOs

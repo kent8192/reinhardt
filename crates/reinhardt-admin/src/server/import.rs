@@ -42,7 +42,7 @@ use super::limits::{MAX_IMPORT_FILE_SIZE, MAX_IMPORT_RECORDS};
 /// ).await?;
 /// println!("Imported {} records", response.imported);
 /// ```
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn import_data(
 	model_name: String,
 	format: ImportFormat,

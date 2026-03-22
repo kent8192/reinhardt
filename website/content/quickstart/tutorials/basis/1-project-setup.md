@@ -206,7 +206,7 @@ A server function is a Rust async function annotated with `#[server_fn]` that:
 use reinhardt::pages::server_fn::{ServerFnError, server_fn};
 use crate::shared::types::QuestionInfo;
 
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_questions(
     #[inject] _db: reinhardt::DatabaseConnection,
 ) -> Result<Vec<QuestionInfo>, ServerFnError> {
@@ -224,7 +224,7 @@ pub async fn get_questions(
 
 **Key features:**
 
-- `#[server_fn(use_inject = true)]` - Enables dependency injection for this server function
+- `#[server_fn]` - Defines a server function (auto-detects `#[inject]` parameters)
 - `#[inject]` - Automatically injects the database connection
 - `Result<T, ServerFnError>` - Required return type for all server functions
 - Server-only code - Database queries, file operations, etc.
@@ -262,10 +262,10 @@ load_questions.dispatch(());
 
 ### Dependency Injection in Server Functions
 
-The `use_inject = true` option enables FastAPI-style dependency injection:
+The `#[inject]` attribute enables FastAPI-style dependency injection:
 
 ```rust
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn create_question(
     question_text: String,
     #[inject] db: reinhardt::DatabaseConnection,
@@ -673,7 +673,7 @@ use reinhardt::pages::server_fn::{ServerFnError, server_fn};
 use crate::shared::types::QuestionInfo;
 
 /// Get all questions
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_questions(
     #[inject] _db: reinhardt::DatabaseConnection,
 ) -> Result<Vec<QuestionInfo>, ServerFnError> {
@@ -918,7 +918,7 @@ Add to `src/server_fn/polls.rs`:
 
 ```rust
 /// Get question detail with choices
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_question_detail(
     question_id: i64,
     #[inject] _db: reinhardt::DatabaseConnection,
@@ -946,7 +946,7 @@ pub async fn get_question_detail(
 }
 
 /// Submit a vote
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn vote(
     question_id: i64,
     choice_id: i64,

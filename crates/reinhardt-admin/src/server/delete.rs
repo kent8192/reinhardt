@@ -37,7 +37,7 @@ use super::error::{AdminAuth, MapServerFnError};
 /// let response = delete_record("User".to_string(), "42".to_string()).await?;
 /// println!("Deleted: {}", response.message);
 /// ```
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn delete_record(
 	model_name: String,
 	id: String,
@@ -100,7 +100,7 @@ pub async fn delete_record(
 /// let response = bulk_delete_records("User".to_string(), request).await?;
 /// println!("Deleted {} items", response.deleted);
 /// ```
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn bulk_delete_records(
 	model_name: String,
 	request: BulkDeleteRequest,

@@ -35,7 +35,7 @@ use super::limits::MAX_EXPORT_RECORDS;
 /// let response = export_data("User".to_string(), ExportFormat::JSON).await?;
 /// println!("Downloaded {}", response.filename);
 /// ```
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn export_data(
 	model_name: String,
 	format: ExportFormat,

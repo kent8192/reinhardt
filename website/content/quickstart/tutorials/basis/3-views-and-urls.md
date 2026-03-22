@@ -280,7 +280,7 @@ use {
 };
 
 /// Get all questions (latest 5)
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_questions(
 	#[inject] _db: reinhardt::DatabaseConnection,
 ) -> std::result::Result<Vec<QuestionInfo>, ServerFnError> {
@@ -305,7 +305,7 @@ pub async fn get_questions(
 }
 
 /// Get question detail with choices
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_question_detail(
 	question_id: i64,
 	#[inject] _db: reinhardt::DatabaseConnection,
@@ -344,7 +344,7 @@ pub async fn get_question_detail(
 /// Get question results
 ///
 /// Returns the question and all its choices with vote counts.
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_question_results(
 	question_id: i64,
 	#[inject] _db: reinhardt::DatabaseConnection,
@@ -386,7 +386,7 @@ pub async fn get_question_results(
 /// Vote for a choice
 ///
 /// Increments the vote count for the selected choice.
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn vote(
 	request: VoteRequest,
 	#[inject] db: reinhardt::DatabaseConnection,
@@ -408,7 +408,7 @@ pub async fn get_vote_form_metadata() -> std::result::Result<FormMetadata, Serve
 ///
 /// Wrapper function that accepts individual field values from form! macro's submit.
 /// Converts String field values to the required types and calls the underlying vote function.
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn submit_vote(
 	question_id: String,
 	choice_id: String,
@@ -477,7 +477,7 @@ async fn vote_internal(
 
 **Key points:**
 
-- `#[server_fn(use_inject = true)]`: Enables dependency injection for database connections
+- `#[server_fn]`: Enables dependency injection for database connections
 - `#[inject]` attribute: Automatically injects dependencies like `DatabaseConnection`
 - The `#[server_fn]` macro automatically generates WASM client stubs — no manual conditional compilation needed
 - Type-safe RPC: Client calls server functions as regular async functions
@@ -521,7 +521,7 @@ pub struct VoteRequest {
 	pub choice_id: i64,
 }
 
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn vote(
 	request: VoteRequest,  // Automatically deserialized from JSON
 	#[inject] db: DatabaseConnection,
@@ -547,7 +547,7 @@ pub async fn vote(
 ```rust
 use reinhardt::pages::server_fn::ServerFnError;
 
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_question(
 	id: i64,
 	#[inject] db: DatabaseConnection,
@@ -594,7 +594,7 @@ page!(|vote_action: Action<ChoiceInfo, String>| {
 The `#[server_fn]` macro automatically handles conditional compilation. You only need to write the server-side implementation — the macro generates the WASM client stub automatically:
 
 ```rust
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn vote(
 	request: VoteRequest,
 	#[inject] db: DatabaseConnection,

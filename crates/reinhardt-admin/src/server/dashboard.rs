@@ -33,7 +33,7 @@ use super::security::generate_csrf_token;
 /// let dashboard = get_dashboard().await?;
 /// println!("Site: {}", dashboard.site_name);
 /// ```
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_dashboard(
 	#[inject] site: Arc<AdminSite>,
 	#[inject] http_request: ServerFnRequest,

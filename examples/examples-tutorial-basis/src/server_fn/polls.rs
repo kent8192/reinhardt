@@ -18,7 +18,7 @@ use {
 /// Get all questions (latest 5)
 ///
 /// Returns the 5 most recent poll questions.
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_questions(
 	#[inject] _db: reinhardt::DatabaseConnection,
 ) -> std::result::Result<Vec<QuestionInfo>, ServerFnError> {
@@ -45,7 +45,7 @@ pub async fn get_questions(
 /// Get question detail with choices
 ///
 /// Returns the question and all its choices.
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_question_detail(
 	question_id: i64,
 	#[inject] _db: reinhardt::DatabaseConnection,
@@ -84,7 +84,7 @@ pub async fn get_question_detail(
 /// Get question results
 ///
 /// Returns the question and all its choices with vote counts.
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_question_results(
 	question_id: i64,
 	#[inject] _db: reinhardt::DatabaseConnection,
@@ -126,7 +126,7 @@ pub async fn get_question_results(
 /// Vote for a choice
 ///
 /// Increments the vote count for the selected choice.
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn vote(
 	request: VoteRequest,
 	#[inject] db: reinhardt::DatabaseConnection,
@@ -148,7 +148,7 @@ pub async fn get_vote_form_metadata() -> std::result::Result<FormMetadata, Serve
 ///
 /// Wrapper function that accepts individual field values from form! macro's submit.
 /// Converts String field values to the required types and calls the underlying vote function.
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn submit_vote(
 	question_id: String,
 	choice_id: String,

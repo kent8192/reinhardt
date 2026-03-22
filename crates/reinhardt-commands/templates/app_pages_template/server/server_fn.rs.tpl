@@ -7,7 +7,7 @@
 // use reinhardt::pages::server_fn;
 // use std::sync::Arc;
 //
-// #[server_fn(use_inject = true)]
+// #[server_fn]
 // pub async fn get_items(
 //     #[inject] db: Arc<DatabaseConnection>,
 // ) -> Result<Vec<DataItem>, String> {

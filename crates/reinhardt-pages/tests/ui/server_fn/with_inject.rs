@@ -46,7 +46,7 @@ impl From<serde_json::Error> for ServerFnError {
 }
 
 // Test: Basic server function with one #[inject] parameter
-#[server_fn(use_inject = true)]
+#[server_fn]
 async fn get_user(
 	id: u32,                 // Regular parameter (included in client Args)
 	#[inject] _db: Database, // DI parameter (excluded from client Args)
@@ -58,7 +58,7 @@ async fn get_user(
 }
 
 // Test: Server function with multiple #[inject] parameters
-#[server_fn(use_inject = true)]
+#[server_fn]
 async fn create_user(
 	name: String,             // Regular parameter
 	_email: String,           // Regular parameter
@@ -68,8 +68,8 @@ async fn create_user(
 	Ok(User { id: 1, name })
 }
 
-// Test: Server function with no #[inject] parameters (use_inject = true but no actual injections)
-#[server_fn(use_inject = true)]
+// Test: Server function with no #[inject] parameters (no actual injections)
+#[server_fn]
 async fn simple_function(value: u32) -> Result<u32, ServerFnError> {
 	Ok(value * 2)
 }

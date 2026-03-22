@@ -49,7 +49,7 @@ use super::validation::validate_mutation_data;
 /// println!("Created: {}", response.message);
 /// ```
 #[allow(deprecated)] // CurrentUser will be migrated to AuthUser in 0.2.0
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn create_record(
 	model_name: String,
 	request: MutationRequest,

@@ -96,7 +96,7 @@ fn build_columns(model_admin: &Arc<dyn ModelAdmin>) -> Vec<ColumnInfo> {
 /// println!("Found {} users", response.count);
 /// ```
 #[allow(deprecated)] // CurrentUser will be migrated to AuthUser in 0.2.0
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_list(
 	model_name: String,
 	params: ListQueryParams,

@@ -533,7 +533,7 @@ use reinhardt::atomic;
 /// Vote for a choice
 ///
 /// Server-side validation and atomic database update.
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn vote(
 	request: VoteRequest,
 	#[inject] db: reinhardt::DatabaseConnection,

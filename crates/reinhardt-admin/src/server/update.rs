@@ -45,7 +45,7 @@ use super::validation::validate_mutation_data;
 /// let response = update_record("User".to_string(), "42".to_string(), request).await?;
 /// println!("Updated: {}", response.message);
 /// ```
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn update_record(
 	model_name: String,
 	id: String,

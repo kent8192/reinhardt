@@ -32,7 +32,7 @@ use super::error::{AdminAuth, MapServerFnError};
 /// let response = get_detail("User".to_string(), "42".to_string()).await?;
 /// println!("User data: {:?}", response.data);
 /// ```
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_detail(
 	model_name: String,
 	id: String,

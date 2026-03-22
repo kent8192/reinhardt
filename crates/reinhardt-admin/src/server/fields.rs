@@ -37,7 +37,7 @@ use reinhardt_utils::utils_core::text::humanize_field_name;
 /// let response = get_fields("User".to_string(), Some("42".to_string())).await?;
 /// println!("Existing values: {:?}", response.values);
 /// ```
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_fields(
 	model_name: String,
 	id: Option<String>,

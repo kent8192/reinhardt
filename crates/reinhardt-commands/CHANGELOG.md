@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.13...reinhardt-commands@v0.1.0-rc.14) - 2026-03-22
+
+### Changed
+
+- *(commands)* update project templates to use ProjectSettings
+
+### Fixed
+
+- *(deps)* consolidate colored and criterion versions to workspace dependencies
+- *(middleware)* update Settings field access for CoreSettings restructuring
+- suppress deprecated Settings warnings and fix unreachable pub visibility
+- address Copilot review feedback
+
 ## [0.1.0-rc.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.12...reinhardt-commands@v0.1.0-rc.13) - 2026-03-18
 
 ### Added

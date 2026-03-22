@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-apps@v0.1.0-rc.13...reinhardt-apps@v0.1.0-rc.14) - 2026-03-22
+
+### Documentation
+
+- *(crates)* update version references from 0.1.0-alpha.1 to 0.1.0-rc.13 across all READMEs
+
+### Fixed
+
+- suppress deprecated Settings warnings and fix unreachable pub visibility
+
 ## [0.1.0-rc.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-apps@v0.1.0-rc.2...reinhardt-apps@v0.1.0-rc.3) - 2026-03-05
 
 ### Fixed

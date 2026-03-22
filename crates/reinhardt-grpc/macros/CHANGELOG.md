@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc-macros@v0.1.0-rc.13...reinhardt-grpc-macros@v0.1.0-rc.14) - 2026-03-22
+
+### Fixed
+
+- *(deps)* update native-tls pin and use workspace versions in proc-macro crates
+- *(reinhardt-grpc)* fork DI context per-request in gRPC handler macros
+
 ## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc-macros@v0.1.0-rc.1...reinhardt-grpc-macros@v0.1.0-rc.2) - 2026-03-04
 
 ### Fixed

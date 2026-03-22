@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.13...reinhardt-core@v0.1.0-rc.14) - 2026-03-22
+
+### Fixed
+
+- *(reinhardt-core)* fork DI context per-request in route and action macros
+- *(reinhardt-core)* fix DLQ lock ordering, send_async filtering, overflow, and counter bugs in signals
+- *(reinhardt-core)* pre-allocate results vector and fix profiler average calculation
+- *(core)* prevent panics from user-controlled pagination and string inputs
+- *(core)* address Copilot review feedback on panic-safety PR
+
+### Styling
+
+- reformat long lines in effect and burst modules
+
 ## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.11...reinhardt-core@v0.1.0-rc.12) - 2026-03-18
 
 ### Added

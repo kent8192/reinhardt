@@ -5,6 +5,7 @@
 
 use async_trait::async_trait;
 use hyper::StatusCode;
+#[allow(deprecated)]
 use reinhardt_conf::Settings;
 use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use std::sync::Arc;

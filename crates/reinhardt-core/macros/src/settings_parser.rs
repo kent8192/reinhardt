@@ -12,7 +12,7 @@ use nom::sequence::{delimited, pair, preceded, separated_pair};
 
 /// A parsed entry from the settings composition attribute.
 #[derive(Debug, Clone)]
-pub enum FragmentEntry {
+pub(crate) enum FragmentEntry {
 	/// `key: TypeName` — include with explicit field name.
 	Include {
 		/// Field name in the composed struct.
@@ -35,16 +35,12 @@ fn ident(input: &str) -> nom::IResult<&str, &str> {
 
 /// Parse `key: TypeName`.
 fn include_entry(input: &str) -> nom::IResult<&str, FragmentEntry> {
-	separated_pair(
-		ident,
-		delimited(multispace0, char(':'), multispace0),
-		ident,
-	)
-	.map(|(key, type_name)| FragmentEntry::Include {
-		key: key.to_string(),
-		type_name: type_name.to_string(),
-	})
-	.parse(input)
+	separated_pair(ident, delimited(multispace0, char(':'), multispace0), ident)
+		.map(|(key, type_name)| FragmentEntry::Include {
+			key: key.to_string(),
+			type_name: type_name.to_string(),
+		})
+		.parse(input)
 }
 
 /// Parse `!TypeName`.
@@ -60,7 +56,7 @@ fn fragment_entry(input: &str) -> nom::IResult<&str, FragmentEntry> {
 }
 
 /// Parse the full settings attribute: `key: Type | key: Type | !Type`.
-pub fn parse_settings_attr(input: &str) -> nom::IResult<&str, Vec<FragmentEntry>> {
+pub(crate) fn parse_settings_attr(input: &str) -> nom::IResult<&str, Vec<FragmentEntry>> {
 	complete(separated_list1(
 		delimited(multispace0, char('|'), multispace0),
 		fragment_entry,

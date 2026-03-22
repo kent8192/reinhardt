@@ -2,6 +2,9 @@
 //!
 //! Starts the development server.
 
+// Uses deprecated Settings type; retained for backward compatibility until migration is complete.
+#![allow(deprecated)]
+
 use clap::Parser;
 use colored::Colorize;
 use http_body_util::Full;

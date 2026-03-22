@@ -22,6 +22,7 @@ pub use super::validation::{
 	ChoiceValidator, PatternValidator, RangeValidator, RequiredValidator, SecurityValidator,
 	SettingsValidator, ValidationError, ValidationResult, Validator,
 };
+#[allow(deprecated)]
 pub use super::{DatabaseConfig, MiddlewareConfig, Settings, TemplateConfig};
 
 // Dynamic settings (async feature)

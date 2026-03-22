@@ -297,6 +297,7 @@ fn collect_database_metadata() -> Vec<DatabaseMetadata> {
 /// This avoids duplicating the default-value configuration across multiple
 /// call sites. The caller provides `base_dir` and `settings_dir` so that
 /// file-based sources can be added.
+#[allow(deprecated)] // Uses Settings which is deprecated; retained for backward compatibility
 fn build_settings(
 	base_dir: &std::path::Path,
 	settings_dir: &std::path::Path,
@@ -381,6 +382,7 @@ fn build_settings(
 
 /// Load database configurations from settings, returning (alias, engine) pairs.
 /// Returns empty vec if settings cannot be loaded.
+#[allow(deprecated)] // Uses Settings which is deprecated; retained for backward compatibility
 fn load_settings_databases() -> Vec<(String, String)> {
 	use reinhardt_conf::settings::profile::Profile;
 
@@ -470,6 +472,7 @@ fn collect_settings_metadata() -> SettingsMetadata {
 }
 
 /// Load security-related settings. Returns defaults if settings cannot be loaded.
+#[allow(deprecated)] // Uses Settings which is deprecated; retained for backward compatibility
 fn load_security_settings() -> (bool, bool, bool, bool, bool) {
 	use reinhardt_conf::settings::profile::Profile;
 

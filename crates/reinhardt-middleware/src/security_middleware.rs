@@ -11,6 +11,7 @@
 use async_trait::async_trait;
 use hyper::StatusCode;
 use hyper::header::{HeaderValue, LOCATION};
+#[allow(deprecated)]
 use reinhardt_conf::Settings;
 use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use std::sync::Arc;
@@ -715,8 +716,7 @@ mod tests {
 	async fn test_from_settings_conversion() {
 		// Arrange
 		#[allow(deprecated)]
-		let mut settings =
-			Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
+		let mut settings = Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
 		settings.core.security.secure_ssl_redirect = true;
 		settings.core.security.secure_hsts_seconds = Some(63072000);
 		settings.core.security.secure_hsts_include_subdomains = true;
@@ -766,8 +766,7 @@ mod tests {
 	async fn test_from_settings_constructor() {
 		// Arrange
 		#[allow(deprecated)]
-		let mut settings =
-			Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
+		let mut settings = Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
 		settings.core.security.secure_ssl_redirect = true;
 		settings.core.security.secure_hsts_seconds = Some(31536000);
 

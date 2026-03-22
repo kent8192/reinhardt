@@ -4,6 +4,7 @@
 //! Supports various backends including Cookie, Redis, and database.
 
 use async_trait::async_trait;
+#[allow(deprecated)]
 use reinhardt_conf::Settings;
 use reinhardt_di::{DiError, DiResult, Injectable, InjectionContext};
 use reinhardt_http::{Handler, Middleware, Request, Response, Result};
@@ -918,8 +919,7 @@ mod tests {
 	async fn test_session_config_from_settings_secure_enabled() {
 		// Arrange
 		#[allow(deprecated)]
-		let mut settings =
-			Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
+		let mut settings = Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
 		settings.core.security.session_cookie_secure = true;
 
 		// Act
@@ -952,8 +952,7 @@ mod tests {
 	async fn test_session_middleware_from_settings() {
 		// Arrange
 		#[allow(deprecated)]
-		let mut settings =
-			Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
+		let mut settings = Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
 		settings.core.security.session_cookie_secure = true;
 		#[allow(deprecated)]
 		let middleware = SessionMiddleware::from_settings(&settings);

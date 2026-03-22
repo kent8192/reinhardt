@@ -9,6 +9,7 @@
 
 use async_trait::async_trait;
 use hyper::Method;
+#[allow(deprecated)]
 use reinhardt_conf::Settings;
 use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use sha2::{Digest, Sha256};
@@ -862,8 +863,7 @@ mod tests {
 	async fn test_csrf_config_from_settings_secure() {
 		// Arrange
 		#[allow(deprecated)]
-		let mut settings =
-			Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
+		let mut settings = Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
 		settings.core.security.csrf_cookie_secure = true;
 
 		// Act
@@ -896,8 +896,7 @@ mod tests {
 	async fn test_csrf_middleware_from_settings() {
 		// Arrange
 		#[allow(deprecated)]
-		let mut settings =
-			Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
+		let mut settings = Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
 		settings.core.security.csrf_cookie_secure = true;
 		#[allow(deprecated)]
 		let middleware = CsrfMiddleware::from_settings(&settings);

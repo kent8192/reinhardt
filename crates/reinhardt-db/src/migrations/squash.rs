@@ -156,18 +156,25 @@ impl MigrationSquasher {
 				.push((migration.app_label.clone(), migration.name.clone()));
 		}
 
-		// Collect dependencies from first migration (external dependencies only)
-		if let Some(first) = migrations.first() {
-			for (dep_app, dep_name) in &first.dependencies {
+		// Collect dependencies from all migrations (external dependencies only)
+		for migration in migrations {
+			for (dep_app, dep_name) in &migration.dependencies {
 				// Only include dependencies outside the squashed range
 				if *dep_app != *app_label
 					|| !migrations
 						.iter()
 						.any(|m| m.app_label == *dep_app && m.name == *dep_name)
 				{
-					squashed
+					// Avoid duplicate dependencies
+					if !squashed
 						.dependencies
-						.push((dep_app.clone(), dep_name.clone()));
+						.iter()
+						.any(|(a, n)| a == dep_app && n == dep_name)
+					{
+						squashed
+							.dependencies
+							.push((dep_app.clone(), dep_name.clone()));
+					}
 				}
 			}
 		}
@@ -211,13 +218,10 @@ impl MigrationSquasher {
 		for operation in operations {
 			let should_push = match &operation {
 				Operation::CreateTable { name, .. } => {
-					// Skip if this table will be dropped later
-					if !dropped_tables.contains(name) {
-						created_tables.insert(name.clone());
-						true
-					} else {
-						false
-					}
+					// Remove from dropped_tables if re-created
+					dropped_tables.remove(name);
+					created_tables.insert(name.clone());
+					true
 				}
 				Operation::DropTable { name } => {
 					// If table was just created, remove both operations

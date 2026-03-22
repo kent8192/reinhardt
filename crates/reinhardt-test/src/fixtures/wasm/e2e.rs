@@ -210,11 +210,13 @@ impl BrowserClient {
 	///
 	/// Retries connection with exponential backoff when the WebDriver
 	/// server is not immediately available (e.g., during CI startup).
+	/// The first attempt is always made, followed by up to `retries`
+	/// additional attempts (for a total of `retries + 1` attempts).
 	///
 	/// # Arguments
 	///
 	/// * `config` - Browser configuration
-	/// * `max_retries` - Maximum number of retry attempts
+	/// * `retries` - Number of additional retry attempts after the first failure
 	///
 	/// # Example
 	///
@@ -226,12 +228,14 @@ impl BrowserClient {
 	/// ```
 	pub async fn connect_with_retries(
 		config: BrowserConfig,
-		max_retries: u32,
+		retries: u32,
 	) -> Result<Self, fantoccini::error::NewSessionError> {
+		let base_caps = Self::build_capabilities(&config);
 		let mut last_error = None;
+		let total_attempts = retries + 1;
 
-		for attempt in 0..=max_retries {
-			let caps = Self::build_capabilities(&config);
+		for attempt in 0..total_attempts {
+			let caps = base_caps.clone();
 			match ClientBuilder::native()
 				.capabilities(caps)
 				.connect(&config.webdriver_url)
@@ -239,7 +243,7 @@ impl BrowserClient {
 			{
 				Ok(client) => return Ok(Self { client, config }),
 				Err(e) => {
-					if attempt < max_retries {
+					if attempt + 1 < total_attempts {
 						// Cap backoff at 8 seconds to avoid excessive waits
 						let delay = Duration::from_millis(
 							BASE_RETRY_DELAY_MS
@@ -249,7 +253,7 @@ impl BrowserClient {
 						eprintln!(
 							"[e2e] WebDriver connection attempt {}/{} failed: {}. Retrying in {:?}...",
 							attempt + 1,
-							max_retries + 1,
+							total_attempts,
 							e,
 							delay,
 						);
@@ -425,10 +429,25 @@ impl BrowserClient {
 			}}
 			return false;
 			"#,
-			css = serde_json::to_string(select_css).unwrap_or_default(),
-			text = serde_json::to_string(text).unwrap_or_default(),
+			css = serde_json::to_string(select_css)
+				.expect("failed to JSON-encode CSS selector"),
+			text = serde_json::to_string(text)
+				.expect("failed to JSON-encode option text"),
 		);
-		self.client.execute(&script, vec![]).await?;
+		let result = self.client.execute(&script, vec![]).await?;
+		// The script returns false when the select element or option text is not found
+		let success = result.as_bool().unwrap_or(false);
+		if !success {
+			return Err(fantoccini::error::CmdError::NotW3C(
+				serde_json::json!({
+					"error": "select_by_text failed",
+					"message": format!(
+						"Could not find option with text {:?} in select {:?}",
+						text, select_css
+					),
+				}),
+			));
+		}
 		Ok(())
 	}
 

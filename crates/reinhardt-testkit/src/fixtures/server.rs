@@ -112,7 +112,9 @@ impl TestServerGuard {
 
 		// Probe server readiness with TCP connect attempts instead of fixed sleep.
 		// This avoids flaky failures when the system is under heavy load.
-		wait_for_server_ready(actual_addr).await;
+		wait_for_server_ready(actual_addr)
+			.await
+			.expect("Test server failed to become ready");
 
 		Self {
 			url,
@@ -679,7 +681,9 @@ impl TestServerBuilder {
 
 		// Probe server readiness with TCP connect attempts instead of fixed sleep.
 		// This avoids flaky failures when the system is under heavy load.
-		wait_for_server_ready(actual_addr).await;
+		wait_for_server_ready(actual_addr)
+			.await
+			.expect("Test server failed to become ready");
 
 		Ok(TestServer {
 			url,
@@ -704,23 +708,36 @@ const SERVER_READY_PROBE_INTERVAL_MS: u64 = 50;
 ///
 /// This replaces a fixed `sleep(100ms)` with an active readiness check,
 /// eliminating flaky test failures caused by slow server startup under load.
-async fn wait_for_server_ready(addr: SocketAddr) {
+///
+/// # Errors
+///
+/// Returns an error if the server does not accept a TCP connection within
+/// the configured number of probe attempts.
+async fn wait_for_server_ready(addr: SocketAddr) -> Result<(), std::io::Error> {
 	for attempt in 1..=SERVER_READY_MAX_ATTEMPTS {
 		// Try to establish a TCP connection to verify the server is accepting
 		match tokio::net::TcpStream::connect(addr).await {
-			Ok(_) => return,
+			Ok(_) => return Ok(()),
 			Err(_) if attempt < SERVER_READY_MAX_ATTEMPTS => {
 				tokio::time::sleep(Duration::from_millis(SERVER_READY_PROBE_INTERVAL_MS)).await;
 			}
 			Err(e) => {
-				eprintln!(
-					"[test-server] Server at {} not ready after {} attempts: {}",
-					addr, SERVER_READY_MAX_ATTEMPTS, e
-				);
-				// Fall through instead of panicking -- the test will fail
-				// with a more descriptive error when it tries to make a request.
-				return;
+				return Err(std::io::Error::new(
+					std::io::ErrorKind::TimedOut,
+					format!(
+						"Server at {} not ready after {} attempts: {}",
+						addr, SERVER_READY_MAX_ATTEMPTS, e
+					),
+				));
 			}
 		}
 	}
+
+	Err(std::io::Error::new(
+		std::io::ErrorKind::TimedOut,
+		format!(
+			"Server at {} not ready after {} attempts",
+			addr, SERVER_READY_MAX_ATTEMPTS
+		),
+	))
 }

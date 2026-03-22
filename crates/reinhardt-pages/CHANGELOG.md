@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.13...reinhardt-pages@v0.1.0-rc.14) - 2026-03-22
+
+### Fixed
+
+- *(pages)* protect textarea, style, and script from minification
+- *(reinhardt-pages)* fork DI context per-request in server function macros
+- *(reinhardt-pages,reinhardt-di)* add Content-Type negotiation for server_fn and Json<T> extractor
+- *(reinhardt-di)* address Copilot review on Content-Type handling
+
+### Styling
+
+- *(pages)* fix formatting in renderer.rs
+
 ## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.11...reinhardt-pages@v0.1.0-rc.12) - 2026-03-18
 
 ### Fixed

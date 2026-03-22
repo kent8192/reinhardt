@@ -115,7 +115,7 @@ pub use backends::{RabbitMQBackend, RabbitMQConfig};
 pub use chain::{ChainStatus, TaskChain, TaskChainBuilder};
 pub use dag::{TaskDAG, TaskNode, TaskNodeStatus};
 pub use load_balancer::{LoadBalancer, LoadBalancingStrategy, WorkerId, WorkerInfo, WorkerMetrics};
-pub use locking::{MemoryTaskLock, TaskLock};
+pub use locking::{LockToken, MemoryTaskLock, TaskLock};
 
 #[cfg(feature = "redis-backend")]
 pub use locking::RedisTaskLock;

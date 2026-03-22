@@ -77,7 +77,7 @@ impl ReceiverProfile {
 		self.total_duration += duration;
 		self.min_duration = self.min_duration.min(duration);
 		self.max_duration = self.max_duration.max(duration);
-		self.avg_duration = self.total_duration / self.call_count as u32;
+		self.avg_duration = self.total_duration / u32::try_from(self.call_count).unwrap_or(u32::MAX);
 		self.last_execution = Some(SystemTime::now());
 
 		if !success {
@@ -441,7 +441,8 @@ impl<T: Send + Sync + 'static> SignalMiddleware<T> for SignalProfiler<T> {
 
 			stats.total_sends += 1;
 			stats.total_duration += duration;
-			stats.avg_send_duration = stats.total_duration / stats.total_sends as u32;
+			let divisor = u32::try_from(stats.total_sends).unwrap_or(u32::MAX);
+			stats.avg_send_duration = stats.total_duration / divisor;
 			stats.slowest_send = stats.slowest_send.max(duration);
 			stats.fastest_send = stats.fastest_send.min(duration);
 		}

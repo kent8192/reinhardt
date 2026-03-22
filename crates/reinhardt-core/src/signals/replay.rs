@@ -408,15 +408,13 @@ impl<T: Send + Sync + Clone + 'static> SignalReplayer<T> {
 			// Replay the signal
 			let result = self.signal.send(stored_signal.payload).await;
 
-			match result {
-				Ok(_) => {
-					stats.total_replayed += 1;
-				}
-				Err(e) => {
-					stats.errors += 1;
-					if config.stop_on_error {
-						return Err(e);
-					}
+			// Always count as replayed regardless of success/failure
+			stats.total_replayed += 1;
+
+			if let Err(e) = result {
+				stats.errors += 1;
+				if config.stop_on_error {
+					return Err(e);
 				}
 			}
 		}

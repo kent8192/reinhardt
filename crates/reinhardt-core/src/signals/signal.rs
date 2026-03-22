@@ -623,7 +623,7 @@ impl<T: Send + Sync + 'static> Signal<T> {
 				}
 			}
 
-			let mut results = Vec::new();
+			let mut results = Vec::with_capacity(receivers.len());
 
 			for receiver_info in receivers {
 				// Check predicate condition

@@ -34,6 +34,7 @@ serial_test = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 linkme = { workspace = true }
+rstest = { workspace = true }
 # Note: Internal workspace crates (reinhardt-db, reinhardt-di, reinhardt-core, etc.)
 # are excluded from dev-dependencies to avoid circular dependency issues during publishing.
 # Tests that require these crates have been moved to reinhardt-integration-tests.

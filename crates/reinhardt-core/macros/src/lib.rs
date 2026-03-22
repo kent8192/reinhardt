@@ -41,6 +41,7 @@ mod routes_registration;
 mod schema;
 mod use_inject;
 mod validate_derive;
+pub(crate) mod settings_parser;
 
 use action::action_impl;
 use admin::admin_impl;

@@ -171,9 +171,32 @@ impl PostgresQueryBuilder {
 				continue;
 			}
 
-			// Only process `$N` placeholders outside of quotes
+			// Handle dollar-quoted strings outside of single/double quotes.
+			// Dollar-quoted delimiters have the form $tag$ where tag is empty or
+			// matches [a-zA-Z_][a-zA-Z0-9_]*. We skip the entire dollar-quoted
+			// body verbatim so that $N patterns inside are not adjusted.
 			if ch == b'$' && !in_single_quote && !in_double_quote {
-				// Parse the number following `$`
+				// Try to parse a dollar-quote opening delimiter
+				if let Some((delimiter, delim_end)) =
+					Self::try_parse_dollar_quote_delimiter(bytes, i, len)
+				{
+					// Copy the opening delimiter verbatim
+					result.push_str(&sql[i..delim_end]);
+					// Find the matching closing delimiter and copy body + closer
+					let body_start = delim_end;
+					if let Some(close_pos) = sql[body_start..].find(&delimiter) {
+						let close_end = body_start + close_pos + delimiter.len();
+						result.push_str(&sql[body_start..close_end]);
+						i = close_end;
+					} else {
+						// No closing delimiter found; copy the rest verbatim
+						result.push_str(&sql[body_start..]);
+						i = len;
+					}
+					continue;
+				}
+
+				// Not a dollar-quote delimiter -- try to parse $N placeholder
 				let start = i + 1;
 				let mut end = start;
 				while end < len && bytes[end].is_ascii_digit() {
@@ -191,11 +214,51 @@ impl PostgresQueryBuilder {
 				}
 			}
 
-			result.push(ch as char);
-			i += 1;
+			// Copy the current UTF-8 character by its byte length to preserve
+			// multi-byte characters (avoids byte-as-char corruption).
+			let ch_len = utf8_char_width(ch);
+			result.push_str(&sql[i..i + ch_len]);
+			i += ch_len;
 		}
 
 		result
+	}
+
+	/// Try to parse a dollar-quote delimiter starting at position `pos`.
+	///
+	/// Returns `Some((delimiter, end_pos))` where `delimiter` is the full
+	/// delimiter string (e.g. `$$` or `$tag$`) and `end_pos` is the byte
+	/// index immediately after the delimiter.
+	fn try_parse_dollar_quote_delimiter(
+		bytes: &[u8],
+		pos: usize,
+		len: usize,
+	) -> Option<(String, usize)> {
+		debug_assert!(bytes[pos] == b'$');
+		let mut j = pos + 1;
+
+		// Empty tag: `$$`
+		if j < len && bytes[j] == b'$' {
+			return Some(("$$".to_string(), j + 1));
+		}
+
+		// Non-empty tag must start with [a-zA-Z_]
+		if j < len && (bytes[j].is_ascii_alphabetic() || bytes[j] == b'_') {
+			j += 1;
+			while j < len && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+				j += 1;
+			}
+			// Must end with closing '$'
+			if j < len && bytes[j] == b'$' {
+				// Safety: all characters in the tag are ASCII, so this is valid UTF-8
+				let delimiter = std::str::from_utf8(&bytes[pos..=j])
+					.expect("dollar-quote tag is ASCII")
+					.to_string();
+				return Some((delimiter, j + 1));
+			}
+		}
+
+		None
 	}
 
 	/// Write a table reference
@@ -9803,6 +9866,23 @@ fn generate_safe_dollar_quote_delimiter(body: &str) -> String {
 
 	// Unreachable in practice, but satisfy the compiler
 	"$$".to_string()
+}
+
+/// Determine the byte width of a UTF-8 character from its leading byte.
+///
+/// This avoids pushing individual bytes as `char` (which corrupts multi-byte
+/// UTF-8 sequences). The function assumes valid UTF-8 input, which is
+/// guaranteed because the input is a Rust `&str`.
+fn utf8_char_width(leading_byte: u8) -> usize {
+	if leading_byte < 0x80 {
+		1
+	} else if leading_byte < 0xE0 {
+		2
+	} else if leading_byte < 0xF0 {
+		3
+	} else {
+		4
+	}
 }
 
 impl crate::query::QueryBuilderTrait for PostgresQueryBuilder {

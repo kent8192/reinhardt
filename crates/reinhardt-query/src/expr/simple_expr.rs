@@ -52,6 +52,7 @@ pub enum SubQueryOper {
 /// );
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum SimpleExpr {
 	/// A column reference (e.g., `name`, `users.name`, `public.users.name`)
 	Column(ColumnRef),

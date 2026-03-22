@@ -284,10 +284,7 @@ fn use_case_settings_builder_flat_keys_into_typed() {
 		settings.core.secret_key, "test-secret-key",
 		"secret_key should be in core via flatten"
 	);
-	assert!(
-		settings.core.debug,
-		"debug should be in core via flatten"
-	);
+	assert!(settings.core.debug, "debug should be in core via flatten");
 	assert!(
 		settings.core.security.secure_ssl_redirect,
 		"Flat secure_ssl_redirect should map to core.security via double flatten"

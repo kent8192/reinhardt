@@ -23,9 +23,7 @@
 
 use reinhardt::core::serde::json;
 use reinhardt::settings;
-use reinhardt::{
-	DefaultSource, LowPriorityEnvSource, Profile, SettingsBuilder, TomlFileSource,
-};
+use reinhardt::{DefaultSource, LowPriorityEnvSource, Profile, SettingsBuilder, TomlFileSource};
 use std::env;
 
 #[settings()]
@@ -126,6 +124,9 @@ mod tests {
 	#[rstest]
 	fn test_get_settings() {
 		let settings = get_settings();
-		assert!(!settings.core.secret_key.is_empty(), "secret_key should be populated");
+		assert!(
+			!settings.core.secret_key.is_empty(),
+			"secret_key should be populated"
+		);
 	}
 }

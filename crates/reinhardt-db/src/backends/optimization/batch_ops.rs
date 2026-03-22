@@ -6,6 +6,7 @@
 //! - Transaction batching
 
 use crate::backends::error::Result;
+use crate::backends::types::DatabaseType;
 use async_trait::async_trait;
 
 /// Batch operations trait
@@ -30,12 +31,45 @@ pub trait BatchOperations {
 	async fn batch_delete(&self, table: &str, ids: Vec<i64>) -> Result<u64>;
 }
 
+/// Identifier quoting style for different database backends
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuoteStyle {
+	/// ANSI SQL: double quotes (`"identifier"`)
+	Ansi,
+	/// MySQL: backticks (`` `identifier` ``)
+	Backtick,
+}
+
+impl QuoteStyle {
+	/// Quote an identifier using this style, escaping embedded quote characters
+	fn quote_identifier(&self, ident: &str) -> String {
+		match self {
+			QuoteStyle::Ansi => format!("\"{}\"", ident.replace('"', "\"\"")),
+			QuoteStyle::Backtick => format!("`{}`", ident.replace('`', "``")),
+		}
+	}
+}
+
+impl From<DatabaseType> for QuoteStyle {
+	/// Convert a [`DatabaseType`] to the appropriate [`QuoteStyle`]
+	///
+	/// - MySQL uses backtick quoting
+	/// - PostgreSQL and SQLite use ANSI double-quote quoting
+	fn from(db_type: DatabaseType) -> Self {
+		match db_type {
+			DatabaseType::Mysql => QuoteStyle::Backtick,
+			DatabaseType::Postgres | DatabaseType::Sqlite => QuoteStyle::Ansi,
+		}
+	}
+}
+
 /// Builder for batch insert operations
 pub struct BatchInsertBuilder {
 	table: String,
 	columns: Vec<String>,
 	rows: Vec<Vec<String>>,
 	batch_size: usize,
+	quote_style: QuoteStyle,
 }
 
 impl BatchInsertBuilder {
@@ -46,6 +80,7 @@ impl BatchInsertBuilder {
 			columns: Vec::new(),
 			rows: Vec::new(),
 			batch_size: 1000,
+			quote_style: QuoteStyle::Ansi,
 		}
 	}
 
@@ -67,18 +102,28 @@ impl BatchInsertBuilder {
 		self
 	}
 
+	/// Set the identifier quoting style for the target database backend
+	///
+	/// Defaults to [`QuoteStyle::Ansi`] (double quotes). Use
+	/// [`QuoteStyle::Backtick`] for MySQL.
+	pub fn quote_style(mut self, style: QuoteStyle) -> Self {
+		self.quote_style = style;
+		self
+	}
+
 	/// Build SQL statements for batch insert
 	///
-	/// Identifiers (table name and column names) are quoted with double quotes
-	/// and embedded double quotes are escaped to prevent SQL injection.
+	/// Identifiers (table name and column names) are quoted using the
+	/// configured [`QuoteStyle`] (defaults to ANSI double quotes).
+	/// Embedded quote characters are escaped to prevent SQL injection.
 	pub fn build_sql(&self) -> Vec<String> {
 		let mut statements = Vec::new();
 
-		let quoted_table = format!("\"{}\"", self.table.replace('"', "\"\""));
+		let quoted_table = self.quote_style.quote_identifier(&self.table);
 		let quoted_columns = self
 			.columns
 			.iter()
-			.map(|c| format!("\"{}\"", c.replace('"', "\"\"")))
+			.map(|c| self.quote_style.quote_identifier(c))
 			.collect::<Vec<_>>()
 			.join(", ");
 
@@ -483,5 +528,63 @@ mod tests {
 		// Assert - column names must be properly quoted
 		assert!(sql_statements[0].contains("\"name\""));
 		assert!(sql_statements[0].contains("\"col\"\"; DROP TABLE users; --\""));
+	}
+
+	#[rstest]
+	fn test_batch_insert_mysql_backtick_quoting() {
+		// Arrange - use backtick quoting for MySQL
+		let builder = BatchInsertBuilder::new("users")
+			.columns(vec!["name".to_string(), "email".to_string()])
+			.add_row(vec!["Alice".to_string(), "alice@example.com".to_string()])
+			.quote_style(QuoteStyle::Backtick);
+
+		// Act
+		let sql_statements = builder.build_sql();
+
+		// Assert - identifiers should use backticks, not double quotes
+		assert_eq!(sql_statements.len(), 1);
+		assert!(sql_statements[0].contains("INSERT INTO `users`"));
+		assert!(sql_statements[0].contains("`name`"));
+		assert!(sql_statements[0].contains("`email`"));
+	}
+
+	#[rstest]
+	fn test_batch_insert_mysql_backtick_escaping() {
+		// Arrange - backtick in identifier should be escaped by doubling
+		let builder = BatchInsertBuilder::new("my`table")
+			.columns(vec!["col`name".to_string()])
+			.add_row(vec!["value".to_string()])
+			.quote_style(QuoteStyle::Backtick);
+
+		// Act
+		let sql_statements = builder.build_sql();
+
+		// Assert - embedded backticks must be doubled
+		assert!(sql_statements[0].contains("INSERT INTO `my``table`"));
+		assert!(sql_statements[0].contains("`col``name`"));
+	}
+
+	#[rstest]
+	fn test_quote_style_from_database_type() {
+		// Arrange & Act & Assert
+		assert_eq!(QuoteStyle::from(DatabaseType::Mysql), QuoteStyle::Backtick);
+		assert_eq!(QuoteStyle::from(DatabaseType::Postgres), QuoteStyle::Ansi);
+		assert_eq!(QuoteStyle::from(DatabaseType::Sqlite), QuoteStyle::Ansi);
+	}
+
+	#[rstest]
+	fn test_batch_insert_with_database_type() {
+		// Arrange - use DatabaseType to select quoting style
+		let builder = BatchInsertBuilder::new("users")
+			.columns(vec!["name".to_string()])
+			.add_row(vec!["Alice".to_string()])
+			.quote_style(QuoteStyle::from(DatabaseType::Mysql));
+
+		// Act
+		let sql_statements = builder.build_sql();
+
+		// Assert - MySQL should use backticks
+		assert!(sql_statements[0].contains("INSERT INTO `users`"));
+		assert!(sql_statements[0].contains("`name`"));
 	}
 }

@@ -101,6 +101,16 @@ pub struct FormComponent {
 ///
 /// These patterns are blocked because validation expressions should only contain
 /// simple comparison and property access logic, not arbitrary code execution.
+///
+/// # Limitations
+///
+/// This is a substring-based denylist which provides defense-in-depth but is not
+/// a complete security boundary on its own. Sophisticated bypass techniques
+/// (e.g., string concatenation, comment insertion) may circumvent these checks.
+/// The primary security boundary is the IIFE sandbox combined with the
+/// `validate_js_expression` structural checks (semicolons, assignments).
+/// A token-level allowlist parser would be a stronger approach and is tracked
+/// for future improvement.
 const DANGEROUS_JS_PATTERNS: &[(&str, &str)] = &[
 	("eval(", "eval() is not allowed in validation expressions"),
 	("eval (", "eval() is not allowed in validation expressions"),
@@ -259,10 +269,19 @@ pub fn validate_js_expression(expression: &str) -> Result<(), String> {
 		}
 	}
 
-	// Check for dangerous patterns
+	// Check for dangerous patterns, but skip matches that are part of `fields.` member access
+	// to avoid false positives (e.g., `fields.location` or `fields.document.length`)
 	for (pattern, description) in DANGEROUS_JS_PATTERNS {
-		if expression.contains(pattern) {
-			return Err(description.to_string());
+		let mut search_from = 0;
+		while let Some(pos) = expression[search_from..].find(pattern) {
+			let abs_pos = search_from + pos;
+			// Check if this match is preceded by "fields." - if so, it's a legitimate
+			// field access, not a global object reference
+			let is_field_access = abs_pos >= 7 && &expression[abs_pos - 7..abs_pos] == "fields.";
+			if !is_field_access {
+				return Err(description.to_string());
+			}
+			search_from = abs_pos + pattern.len();
 		}
 	}
 
@@ -629,8 +648,10 @@ impl FormComponent {
 			expression
 		);
 
-		// Evaluate the expression using Function constructor instead of eval
-		// Function constructor creates a new scope, preventing access to local variables
+		// Evaluate the expression using Function constructor to run the IIFE.
+		// Note: Function constructor still executes in the global scope and is eval-like.
+		// The actual security boundary is provided by `validate_js_expression` above,
+		// which rejects dangerous patterns before code reaches this point.
 		let func = Function::new_no_args(&format!("return ({});", safe_code));
 		let result = func
 			.call0(&JsValue::NULL)
@@ -685,7 +706,9 @@ impl FormComponent {
 			expression
 		);
 
-		// Evaluate the expression using Function constructor instead of eval
+		// Evaluate the expression using Function constructor to run the IIFE.
+		// Note: Function constructor still executes in the global scope and is eval-like.
+		// The actual security boundary is provided by `validate_js_expression` above.
 		let func = Function::new_no_args(&format!("return ({});", safe_code));
 		let result = func
 			.call0(&JsValue::NULL)
@@ -957,6 +980,10 @@ mod tests {
 	#[case("value.trim().length > 0", "trimmed length check")]
 	#[case("value >= 0 && value <= 100", "range check")]
 	#[case("fields.password === fields.password_confirm", "cross-field equality")]
+	#[case("fields.location === 'NY'", "field named location (not global)")]
+	#[case("fields.document.length > 0", "field named document (not global)")]
+	#[case("fields.navigator !== ''", "field named navigator (not global)")]
+	#[case("fields.self === 'active'", "field named self (not global)")]
 	fn test_validate_js_expression_allows_safe_expressions(
 		#[case] expression: &str,
 		#[case] _desc: &str,

@@ -546,6 +546,16 @@ if (root) {{
 /// assert!(!escaped.contains("</script>"));
 /// assert!(escaped.contains("<\\/script>"));
 ///
+/// // Whitespace variant is also escaped
+/// let ws_variant = "</script >";
+/// let escaped_ws = escape_for_script(ws_variant);
+/// assert!(!escaped_ws.contains("</script"));
+/// assert!(escaped_ws.contains("<\\/script >"));
+///
+/// // Non-ASCII content is preserved correctly
+/// let unicode = r#"{"name": "日本語テスト"}"#;
+/// assert_eq!(escape_for_script(unicode), unicode);
+///
 /// // Normal content is unchanged
 /// let normal = r#"{"name": "Alice"}"#;
 /// assert_eq!(escape_for_script(normal), normal);
@@ -554,14 +564,21 @@ pub fn escape_for_script(s: &str) -> String {
 	// Comprehensive escaping for safe embedding inside <script> tags.
 	//
 	// Defense layers:
-	// 1. Escape backslashes first (prevents attackers from using \<\/script> to bypass)
-	// 2. Escape </script> case-insensitively (HTML parser terminates on any case variant)
-	// 3. Escape <!-- and --> (HTML comment sequences can break script context)
+	// 1. Escape </script> case-insensitively, including variants with optional
+	//    whitespace after `</` and before `>` (HTML parser terminates on any
+	//    case/whitespace variant per the HTML spec)
+	// 2. Escape <!-- and --> (HTML comment sequences can break script context)
 	//
 	// The escaped forms are safe because:
 	// - <\/script> is not recognized as a closing tag by the HTML parser
 	// - JavaScript treats \/ as just / in string literals
 	// - \u003C and \u002D are JavaScript unicode escapes, invisible to HTML parser
+	//
+	// All indexing in this function operates on ASCII byte patterns only.
+	// The matched characters (<, /, >, !, -, whitespace, and ASCII letters) are
+	// all single-byte in UTF-8, so byte indexing is safe. Non-ASCII content is
+	// advanced character-by-character at the bottom of the loop to preserve
+	// multi-byte boundaries.
 
 	let mut result = String::with_capacity(s.len());
 	let bytes = s.as_bytes();
@@ -569,36 +586,55 @@ pub fn escape_for_script(s: &str) -> String {
 	let mut i = 0;
 
 	while i < len {
-		// Check for </script> (case-insensitive) - HTML spec requires case-insensitive matching
-		if i + 9 <= len && bytes[i] == b'<' && bytes[i + 1] == b'/' {
-			let candidate = &s[i + 2..i + 9.min(len)];
-			if candidate.len() >= 7 && candidate[..7].eq_ignore_ascii_case("script>") {
-				// Preserve original casing but escape the forward slash
-				result.push('<');
-				result.push('\\');
-				// Push the rest of the original closing tag preserving case
-				result.push_str(&s[i + 1..i + 9]);
-				i += 9;
-				continue;
+		// Check for </ followed by optional whitespace, then "script" (case-insensitive),
+		// then optional whitespace, then >.
+		// Browsers parse `</ script>` and `</ script >` as closing tags per HTML spec.
+		if bytes[i] == b'<' && i + 1 < len && bytes[i + 1] == b'/' {
+			let mut j = i + 2;
+			// Skip optional whitespace between `</` and tag name
+			while j < len && bytes[j].is_ascii_whitespace() {
+				j += 1;
+			}
+			// Check for "script" (case-insensitive, 6 ASCII bytes)
+			if j + 6 <= len && bytes[j..j + 6].eq_ignore_ascii_case(b"script") {
+				let after_name = j + 6;
+				let mut end = after_name;
+				// Skip optional whitespace between tag name and >
+				while end < len && bytes[end].is_ascii_whitespace() {
+					end += 1;
+				}
+				if end < len && bytes[end] == b'>' {
+					// Escape the entire </...script...> sequence by inserting backslash
+					// after `<` to produce `<\/...script...>`, which the HTML parser
+					// does not recognize as a closing tag.
+					result.push('<');
+					result.push('\\');
+					// All bytes from i+1..=end are ASCII, so this slice is valid UTF-8
+					result.push_str(&s[i + 1..=end]);
+					i = end + 1;
+					continue;
+				}
 			}
 		}
 
-		// Check for <!-- (HTML comment open)
-		if i + 4 <= len && &bytes[i..i + 4] == b"<!--" {
+		// Check for <!-- (HTML comment open, all ASCII)
+		if i + 3 < len && &bytes[i..i + 4] == b"<!--" {
 			result.push_str("\\u003C!--");
 			i += 4;
 			continue;
 		}
 
-		// Check for --> (HTML comment close)
-		if i + 3 <= len && &bytes[i..i + 3] == b"-->" {
+		// Check for --> (HTML comment close, all ASCII)
+		if i + 2 < len && &bytes[i..i + 3] == b"-->" {
 			result.push_str("--\\u003E");
 			i += 3;
 			continue;
 		}
 
-		result.push(s.as_bytes()[i] as char);
-		i += 1;
+		// Advance by one UTF-8 character to avoid splitting multi-byte chars
+		let ch = s[i..].chars().next().unwrap();
+		result.push(ch);
+		i += ch.len_utf8();
 	}
 
 	result
@@ -1063,6 +1099,42 @@ mod tests {
 		// Assert - --> should be escaped
 		assert!(!escaped.contains("-->"));
 		assert!(escaped.contains("--\\u003E"));
+	}
+
+	#[rstest]
+	#[case("</script >", "single space before >")]
+	#[case("</script\t>", "tab before >")]
+	#[case("</script  >", "multiple spaces before >")]
+	#[case("</SCRIPT >", "uppercase with space")]
+	fn test_escape_for_script_whitespace_before_close(#[case] tag: &str, #[case] _desc: &str) {
+		// Arrange & Act
+		let escaped = escape_for_script(tag);
+
+		// Assert - the whitespace variant should be escaped
+		assert!(
+			!escaped.contains("</"),
+			"Whitespace variant '{}' was not escaped, got: {}",
+			tag,
+			escaped
+		);
+		assert!(
+			escaped.contains("<\\"),
+			"Missing escape backslash for '{}', got: {}",
+			tag,
+			escaped
+		);
+	}
+
+	#[rstest]
+	fn test_escape_for_script_preserves_non_ascii() {
+		// Arrange - non-ASCII UTF-8 content
+		let unicode = r#"{"name": "日本語テスト"}"#;
+
+		// Act
+		let escaped = escape_for_script(unicode);
+
+		// Assert - non-ASCII content is preserved unchanged
+		assert_eq!(escaped, unicode);
 	}
 
 	#[rstest]

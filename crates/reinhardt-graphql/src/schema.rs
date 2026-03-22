@@ -202,17 +202,44 @@ fn is_field_identifier(token: &str) -> bool {
 /// (brace depth > 0). Each identifier token is evaluated immediately
 /// during character processing, so multiple fields on the same line
 /// are counted correctly.
+///
+/// Handles inline fragment type conditions (`... on Type { }`) by
+/// tracking the `on` keyword and skipping the subsequent type name.
+/// Also handles block strings (`"""..."""`) to avoid miscounting
+/// content inside them as fields.
 fn count_query_fields(query: &str) -> usize {
 	let mut count = 0;
 	let mut in_string = false;
+	let mut in_block_string = false;
 	let mut depth: usize = 0;
 	let mut token = String::new();
 	let mut in_comment = false;
 	let mut escaped = false;
+	// Track whether the last flushed token was the `on` keyword,
+	// so the next identifier (a type condition) is not counted as a field.
+	let mut after_on_keyword = false;
 
-	for ch in query.chars() {
+	let chars: Vec<char> = query.chars().collect();
+	let len = chars.len();
+	let mut i = 0;
+
+	while i < len {
+		let ch = chars[i];
+
 		if escaped {
 			escaped = false;
+			i += 1;
+			continue;
+		}
+
+		// Handle block strings: skip everything until closing """
+		if in_block_string {
+			if ch == '"' && i + 2 < len && chars[i + 1] == '"' && chars[i + 2] == '"' {
+				in_block_string = false;
+				i += 3; // skip closing """
+			} else {
+				i += 1;
+			}
 			continue;
 		}
 
@@ -221,13 +248,22 @@ fn count_query_fields(query: &str) -> usize {
 			in_comment = false;
 			// Flush any accumulated token at end of line
 			if depth > 0 && !in_string && is_field_identifier(&token) {
-				count += 1;
+				if after_on_keyword {
+					after_on_keyword = false;
+				} else {
+					count += 1;
+				}
+			}
+			if !is_field_identifier(&token) {
+				after_on_keyword = false;
 			}
 			token.clear();
+			i += 1;
 			continue;
 		}
 
 		if in_comment {
+			i += 1;
 			continue;
 		}
 
@@ -237,6 +273,7 @@ fn count_query_fields(query: &str) -> usize {
 				'"' => in_string = false,
 				_ => {}
 			}
+			i += 1;
 			continue;
 		}
 
@@ -244,15 +281,38 @@ fn count_query_fields(query: &str) -> usize {
 			'#' => {
 				// Flush token before comment starts
 				if depth > 0 && is_field_identifier(&token) {
-					count += 1;
+					if after_on_keyword {
+						after_on_keyword = false;
+					} else {
+						count += 1;
+					}
 				}
 				token.clear();
 				in_comment = true;
 			}
 			'"' => {
+				// Check for block string opening: """
+				if i + 2 < len && chars[i + 1] == '"' && chars[i + 2] == '"' {
+					// Flush token before block string starts
+					if depth > 0 && is_field_identifier(&token) {
+						if after_on_keyword {
+							after_on_keyword = false;
+						} else {
+							count += 1;
+						}
+					}
+					token.clear();
+					in_block_string = true;
+					i += 3; // skip opening """
+					continue;
+				}
 				// Flush token before string starts
 				if depth > 0 && is_field_identifier(&token) {
-					count += 1;
+					if after_on_keyword {
+						after_on_keyword = false;
+					} else {
+						count += 1;
+					}
 				}
 				token.clear();
 				in_string = true;
@@ -260,7 +320,11 @@ fn count_query_fields(query: &str) -> usize {
 			'{' => {
 				// Flush token — the identifier before '{' is a field with sub-selection
 				if depth > 0 && is_field_identifier(&token) {
-					count += 1;
+					if after_on_keyword {
+						after_on_keyword = false;
+					} else {
+						count += 1;
+					}
 				}
 				token.clear();
 				depth += 1;
@@ -268,7 +332,11 @@ fn count_query_fields(query: &str) -> usize {
 			'}' => {
 				// Flush token before closing brace
 				if depth > 0 && is_field_identifier(&token) {
-					count += 1;
+					if after_on_keyword {
+						after_on_keyword = false;
+					} else {
+						count += 1;
+					}
 				}
 				token.clear();
 				depth = depth.saturating_sub(1);
@@ -276,14 +344,30 @@ fn count_query_fields(query: &str) -> usize {
 			'(' => {
 				// Flush token — the identifier before '(' is a field with arguments
 				if depth > 0 && is_field_identifier(&token) {
-					count += 1;
+					if after_on_keyword {
+						after_on_keyword = false;
+					} else {
+						count += 1;
+					}
 				}
 				token.clear();
 			}
 			c if c.is_ascii_whitespace() || c == ',' => {
 				// Token delimiter: evaluate accumulated token
 				if depth > 0 && is_field_identifier(&token) {
-					count += 1;
+					if after_on_keyword {
+						after_on_keyword = false;
+					} else {
+						// Set after_on_keyword when flushing the `on` keyword itself
+						if token == "on" {
+							after_on_keyword = true;
+						}
+						count += 1;
+					}
+				} else if token == "on" {
+					// `on` is in GRAPHQL_KEYWORDS so is_field_identifier returns false,
+					// but we still need to track it for inline fragment detection
+					after_on_keyword = true;
 				}
 				token.clear();
 			}
@@ -295,11 +379,16 @@ fn count_query_fields(query: &str) -> usize {
 				token.push(ch);
 			}
 		}
+		i += 1;
 	}
 
 	// Flush final token (query may not end with newline)
 	if depth > 0 && !in_string && is_field_identifier(&token) {
-		count += 1;
+		if after_on_keyword {
+			// Type condition at end of query — do not count
+		} else {
+			count += 1;
+		}
 	}
 
 	count
@@ -1211,6 +1300,56 @@ mod tests {
 		"two parent fields plus their sub-selection fields on same line"
 	)]
 	fn test_count_query_fields_same_line(
+		#[case] query: &str,
+		#[case] expected: usize,
+		#[case] description: &str,
+	) {
+		// Arrange — query and expected count provided by rstest parametrization
+
+		// Act
+		let count = count_query_fields(query);
+
+		// Assert
+		assert_eq!(count, expected, "{}", description);
+	}
+
+	#[rstest::rstest]
+	#[case(
+		"{ ... on User { id name } }",
+		2,
+		"inline fragment type condition should not be counted as a field"
+	)]
+	#[case(
+		"{ users { ... on Admin { role } ... on Member { level } } }",
+		3,
+		"multiple inline fragments: users + role + level, type names excluded"
+	)]
+	fn test_count_query_fields_inline_fragments(
+		#[case] query: &str,
+		#[case] expected: usize,
+		#[case] description: &str,
+	) {
+		// Arrange — query and expected count provided by rstest parametrization
+
+		// Act
+		let count = count_query_fields(query);
+
+		// Assert
+		assert_eq!(count, expected, "{}", description);
+	}
+
+	#[rstest::rstest]
+	#[case(
+		"{ user(bio: \"\"\"multi\nline\"\"\") { id } }",
+		2,
+		"block string argument content should not be counted as fields"
+	)]
+	#[case(
+		"{ user(desc: \"\"\"has identifier inside\"\"\") { id name } }",
+		3,
+		"block string with identifier-like content should not affect field count"
+	)]
+	fn test_count_query_fields_block_strings(
 		#[case] query: &str,
 		#[case] expected: usize,
 		#[case] description: &str,

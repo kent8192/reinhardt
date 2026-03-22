@@ -13,6 +13,7 @@ pub mod profile;
 pub mod secret_types;
 pub mod sources;
 pub mod validation;
+pub mod fragment;
 
 // Dynamic settings (async feature required)
 #[cfg(feature = "async")]

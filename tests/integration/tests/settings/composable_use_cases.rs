@@ -191,3 +191,46 @@ fn use_case_all_has_traits_implemented_for_settings() {
 		"Default debug should be true through HasCoreSettings"
 	);
 }
+
+#[rstest]
+#[allow(deprecated)]
+fn use_case_legacy_flat_security_keys_deserialize() {
+	// Arrange — start from default Settings, serialize, then inject flat security keys
+	let mut default_json: serde_json::Value = serde_json::to_value(Settings::default()).unwrap();
+	let obj = default_json.as_object_mut().unwrap();
+	obj.insert(
+		"secure_ssl_redirect".to_string(),
+		serde_json::Value::Bool(true),
+	);
+	obj.insert(
+		"session_cookie_secure".to_string(),
+		serde_json::Value::Bool(true),
+	);
+	obj.insert(
+		"csrf_cookie_secure".to_string(),
+		serde_json::Value::Bool(true),
+	);
+	obj.insert("append_slash".to_string(), serde_json::Value::Bool(false));
+	let json = default_json;
+
+	// Act
+	let settings: Settings = serde_json::from_value(json).unwrap();
+
+	// Assert — security fields should be accessible via core.security
+	assert!(
+		settings.core.security.secure_ssl_redirect,
+		"Legacy flat secure_ssl_redirect should deserialize into core.security"
+	);
+	assert!(
+		settings.core.security.session_cookie_secure,
+		"Legacy flat session_cookie_secure should deserialize into core.security"
+	);
+	assert!(
+		settings.core.security.csrf_cookie_secure,
+		"Legacy flat csrf_cookie_secure should deserialize into core.security"
+	);
+	assert!(
+		!settings.core.security.append_slash,
+		"Legacy flat append_slash should deserialize into core.security"
+	);
+}

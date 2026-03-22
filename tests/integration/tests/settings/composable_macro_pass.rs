@@ -43,7 +43,10 @@ fn fragment_basic_section_is_correct() {
 	let section = CustomDbSettings::section();
 
 	// Assert
-	assert_eq!(section, "custom_db", "Fragment section should match the attribute value");
+	assert_eq!(
+		section, "custom_db",
+		"Fragment section should match the attribute value"
+	);
 }
 
 #[rstest]
@@ -71,7 +74,10 @@ fn fragment_with_existing_derives_has_partial_eq() {
 	};
 
 	// Act / Assert
-	assert_eq!(a, b, "PartialEq should work for fragment with custom derives");
+	assert_eq!(
+		a, b,
+		"PartialEq should work for fragment with custom derives"
+	);
 }
 
 #[rstest]
@@ -80,7 +86,10 @@ fn fragment_empty_struct_section_is_correct() {
 	let section = EmptySettings::section();
 
 	// Assert
-	assert_eq!(section, "empty_section", "Empty fragment should implement SettingsFragment");
+	assert_eq!(
+		section, "empty_section",
+		"Empty fragment should implement SettingsFragment"
+	);
 }
 
 #[rstest]
@@ -108,8 +117,14 @@ fn fragment_generates_has_trait() {
 	let db = wrapper.custom_db();
 
 	// Assert
-	assert_eq!(db.host, "localhost", "HasCustomDbSettings trait should provide access");
-	assert_eq!(db.port, 5432, "HasCustomDbSettings trait should provide access to all fields");
+	assert_eq!(
+		db.host, "localhost",
+		"HasCustomDbSettings trait should provide access"
+	);
+	assert_eq!(
+		db.port, 5432,
+		"HasCustomDbSettings trait should provide access to all fields"
+	);
 }
 
 #[rstest]
@@ -131,10 +146,22 @@ fn fragment_auto_derives_clone_debug_serde() {
 	let deserialized: CustomDbSettings = serde_json::from_str(&json).unwrap();
 
 	// Assert
-	assert_eq!(cloned.host, "db.example.com", "Clone should preserve fields");
-	assert!(debug_str.contains("CustomDbSettings"), "Debug should include type name");
-	assert_eq!(deserialized.host, "db.example.com", "Serde roundtrip should preserve fields");
-	assert_eq!(deserialized.port, 3306, "Serde roundtrip should preserve all fields");
+	assert_eq!(
+		cloned.host, "db.example.com",
+		"Clone should preserve fields"
+	);
+	assert!(
+		debug_str.contains("CustomDbSettings"),
+		"Debug should include type name"
+	);
+	assert_eq!(
+		deserialized.host, "db.example.com",
+		"Serde roundtrip should preserve fields"
+	);
+	assert_eq!(
+		deserialized.port, 3306,
+		"Serde roundtrip should preserve all fields"
+	);
 }
 
 // ============================================================================
@@ -174,7 +201,10 @@ fn compose_single_fragment_has_core_and_custom() {
 
 	// Assert
 	assert!(core.debug, "Implicit CoreSettings should be included");
-	assert_eq!(db.host, "localhost", "Explicit fragment should be accessible via Has trait");
+	assert_eq!(
+		db.host, "localhost",
+		"Explicit fragment should be accessible via Has trait"
+	);
 }
 
 #[rstest]
@@ -200,7 +230,10 @@ fn compose_multi_fragment_has_all_three() {
 	// Assert
 	assert!(core.debug, "CoreSettings should be implicit");
 	assert_eq!(db.port, 5432, "CustomDbSettings should be accessible");
-	assert_eq!(rl.max_requests, 1000, "RateLimitSettings should be accessible");
+	assert_eq!(
+		rl.max_requests, 1000,
+		"RateLimitSettings should be accessible"
+	);
 }
 
 #[rstest]
@@ -217,7 +250,10 @@ fn compose_exclude_core_only_has_explicit() {
 	let db = settings.custom_db();
 
 	// Assert
-	assert_eq!(db.host, "remote.db", "Excluded CoreSettings should not be present");
+	assert_eq!(
+		db.host, "remote.db",
+		"Excluded CoreSettings should not be present"
+	);
 	assert_eq!(db.port, 3306, "Only explicit fragment should exist");
 }
 
@@ -235,7 +271,10 @@ fn compose_core_only_has_core() {
 	let core = settings.core();
 
 	// Assert
-	assert_eq!(core.secret_key, "test-key", "Empty attribute should include only CoreSettings");
+	assert_eq!(
+		core.secret_key, "test-key",
+		"Empty attribute should include only CoreSettings"
+	);
 	assert!(core.debug, "CoreSettings default debug should be true");
 }
 

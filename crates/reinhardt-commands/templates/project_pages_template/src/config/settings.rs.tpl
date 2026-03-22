@@ -91,9 +91,11 @@ mod tests {
 
 	#[test]
 	fn test_get_settings() {
-		// This test requires settings files to exist
-		// In a real project, you would set up test fixtures
+		// Smoke test: ensures settings load without panic and required fields are present
 		let settings = get_settings();
-		assert!(settings.core.debug || !settings.core.debug); // basic smoke test
+		assert!(
+			!settings.core.secret_key.is_empty(),
+			"secret_key should be populated from settings sources"
+		);
 	}
 }

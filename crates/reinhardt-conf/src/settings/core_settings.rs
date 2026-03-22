@@ -32,7 +32,11 @@ pub struct CoreSettings {
 	#[serde(default = "default_databases")]
 	pub databases: HashMap<String, DatabaseConfig>,
 	/// Security settings (nested fragment).
-	#[serde(default)]
+	///
+	/// Flattened for backward-compatible deserialization: legacy TOML keys like
+	/// `secure_ssl_redirect` at the top level are accepted alongside the nested
+	/// `[security]` section form.
+	#[serde(default, flatten)]
 	pub security: SecuritySettings,
 	/// Middleware class paths.
 	#[serde(default)]

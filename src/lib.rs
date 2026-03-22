@@ -236,6 +236,10 @@ pub use reinhardt_apps::{AppConfig, AppError, AppResult, Apps};
 #[cfg(all(feature = "core", not(target_arch = "wasm32")))]
 pub use reinhardt_macros::{AppConfig, app_config, installed_apps};
 
+// Re-export settings attribute macro (requires conf feature)
+#[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
+pub use reinhardt_macros::settings;
+
 // Re-export Model derive macro and model attribute macro (requires database feature)
 #[cfg(all(feature = "database", not(target_arch = "wasm32")))]
 pub use reinhardt_macros::{Model, model};

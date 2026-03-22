@@ -1884,6 +1884,12 @@ pub async fn postgres_with_migrations_from_dir(
 			.map_err(|e| format!("Failed to apply migrations: {}", e))?;
 	}
 
+	// Initialize the ORM global database connection so that E2E tests
+	// using ORM models can access the database without manual setup.
+	reinhardt_db::orm::reinitialize_database(&url)
+		.await
+		.map_err(|e| format!("Failed to initialize ORM global state: {}", e))?;
+
 	Ok((container, Arc::new(connection)))
 }
 

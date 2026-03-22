@@ -554,14 +554,25 @@ impl Worker {
 		// Always release lock if acquired, regardless of store_result outcome
 		if let Some(ref lock) = self.task_lock
 			&& let Some(ref token) = lock_token
-			&& let Err(e) = lock.release(task_id, token).await
 		{
-			tracing::error!(
-				worker = %self.config.name,
-				task_id = %task_id,
-				error = %e,
-				"Failed to release task lock"
-			);
+			match lock.release(task_id, token).await {
+				Ok(false) => {
+					tracing::warn!(
+						worker = %self.config.name,
+						task_id = %task_id,
+						"Lock release returned false: token mismatch or lock already expired"
+					);
+				}
+				Err(e) => {
+					tracing::error!(
+						worker = %self.config.name,
+						task_id = %task_id,
+						error = %e,
+						"Failed to release task lock"
+					);
+				}
+				Ok(true) => {}
+			}
 		}
 
 		// Propagate store_result error after lock is released

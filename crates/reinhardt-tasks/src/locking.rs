@@ -94,7 +94,11 @@ pub trait TaskLock: Send + Sync {
 		// Default: check-then-release-then-acquire is non-atomic.
 		// Concrete implementations should override with atomic operations.
 		if self.is_locked(task_id).await? {
-			self.release(task_id, token).await?;
+			let released = self.release(task_id, token).await?;
+			if !released {
+				// Token did not match — caller does not own the lock
+				return Ok(false);
+			}
 			self.acquire(task_id, ttl).await.map(|t| t.is_some())
 		} else {
 			Ok(false)
@@ -166,6 +170,12 @@ impl Default for MemoryTaskLock {
 #[async_trait]
 impl TaskLock for MemoryTaskLock {
 	async fn acquire(&self, task_id: TaskId, ttl: Duration) -> TaskResult<Option<LockToken>> {
+		// Zero TTL would create a lock that expires immediately, causing
+		// inconsistency between acquire (returns Some) and is_locked (returns false).
+		if ttl.is_zero() {
+			return Ok(None);
+		}
+
 		self.cleanup_expired().await;
 
 		let mut locks = self.locks.write().await;
@@ -317,15 +327,38 @@ impl RedisTaskLock {
 }
 
 #[cfg(feature = "redis-backend")]
+/// Convert a `Duration` to milliseconds as `i64`, rejecting zero and overflow.
+///
+/// Zero TTL is invalid because Redis `PX 0` causes an error and a zero-duration
+/// lock is semantically meaningless. Overflow is possible because
+/// `Duration::as_millis()` returns `u128` but Redis expects `i64`.
+fn validate_ttl_ms(ttl: Duration) -> TaskResult<i64> {
+	use crate::TaskError;
+
+	if ttl.is_zero() {
+		return Err(TaskError::ExecutionFailed(
+			"TTL must be greater than zero".to_string(),
+		));
+	}
+
+	i64::try_from(ttl.as_millis()).map_err(|_| {
+		TaskError::ExecutionFailed(format!(
+			"TTL overflow: {} ms exceeds i64::MAX",
+			ttl.as_millis()
+		))
+	})
+}
+
+#[cfg(feature = "redis-backend")]
 #[async_trait]
 impl TaskLock for RedisTaskLock {
 	async fn acquire(&self, task_id: TaskId, ttl: Duration) -> TaskResult<Option<LockToken>> {
 		use crate::TaskError;
 
+		let ttl_ms = validate_ttl_ms(ttl)?;
 		let mut conn = (*self.connection).clone();
 		let key = self.lock_key(task_id);
 		let token = LockToken::generate();
-		let ttl_ms = ttl.as_millis() as i64;
 
 		// Atomic SET key value PX ms NX
 		let result: Result<Option<String>, redis::RedisError> = redis::cmd("SET")
@@ -392,9 +425,9 @@ impl TaskLock for RedisTaskLock {
 	async fn extend(&self, task_id: TaskId, token: &LockToken, ttl: Duration) -> TaskResult<bool> {
 		use crate::TaskError;
 
+		let ttl_ms = validate_ttl_ms(ttl)?;
 		let mut conn = (*self.connection).clone();
 		let key = self.lock_key(task_id);
-		let ttl_ms = ttl.as_millis() as i64;
 
 		// Lua script: compare token, pexpire only if matching
 		let script = redis::Script::new(

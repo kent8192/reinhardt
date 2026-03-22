@@ -243,8 +243,12 @@ impl MySqlSuiteResource {
 						break;
 					}
 					Err(e) if attempt < MAX_RETRIES - 1 => {
-						let delay =
-							Duration::from_millis(BASE_DELAY_MS * 2_u64.pow(attempt.min(6)));
+						// Cap backoff at 10 seconds to prevent overflow if MAX_RETRIES is increased
+						let delay = Duration::from_millis(
+							BASE_DELAY_MS
+								.saturating_mul(2u64.saturating_pow(attempt))
+								.min(10_000),
+						);
 						eprintln!(
 							"Connection attempt {} failed: {}. Retrying after {:?}...",
 							attempt + 1,

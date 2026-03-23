@@ -451,9 +451,10 @@ Each fragment has a corresponding `Has*` trait that enables generic programming
 over settings types. This is useful for writing functions that only require
 specific fragments.
 
-**Note:** You do not need to import `Has*Settings` traits manually. The
+**Note:** You do not need to implement `Has*Settings` traits manually. The
 `#[settings]` macro automatically provides blanket implementations for all
-declared fragments. Simply use the traits in generic bounds:
+declared fragments. To use method-call syntax like `settings.core()` in
+generic bounds, import the specific `Has*Settings` trait:
 
 ```rust
 use reinhardt::conf::{HasCoreSettings, HasCacheSettings};
@@ -464,6 +465,10 @@ fn configure_app<S: HasCoreSettings + HasCacheSettings>(settings: &S) {
 	// Use settings without knowing the concrete ProjectSettings type
 }
 ```
+
+When using the `#[settings]` macro, you only need to import the fragment types
+(e.g., `CoreSettings`), not the accessor traits — the macro generates all
+necessary trait implementations automatically.
 
 ### Profile-Based Validation
 

@@ -97,7 +97,10 @@ password = "local-password"
 
 ```rust
 use reinhardt::settings;
-use reinhardt::{DefaultSource, LowPriorityEnvSource, Profile, SettingsBuilder, TomlFileSource};
+use reinhardt::{
+	CoreSettings, DefaultSource, HasCoreSettings, LowPriorityEnvSource, Profile, SettingsBuilder,
+	TomlFileSource,
+};
 use std::env;
 
 #[settings(core: CoreSettings /* add fragments here, e.g.: | cache: CacheSettings | session: SessionSettings */)]
@@ -401,6 +404,7 @@ fragments. All fragments, including `CoreSettings`, must be declared explicitly.
 
 ```rust
 use reinhardt::settings;
+use reinhardt::{CoreSettings, HasCoreSettings};
 
 #[settings(core: CoreSettings)]
 pub struct ProjectSettings;
@@ -415,7 +419,9 @@ Use `field_name: FragmentType` syntax, separated by `|`:
 
 ```rust
 use reinhardt::settings;
+use reinhardt::{CoreSettings, HasCoreSettings};
 use reinhardt::conf::{CacheSettings, SessionSettings, CorsSettings};
+use reinhardt::conf::{HasCacheSettings, HasSessionSettings, HasCorsSettings};
 
 #[settings(core: CoreSettings | cache: CacheSettings | session: SessionSettings | cors: CorsSettings)]
 pub struct ProjectSettings;
@@ -433,7 +439,7 @@ If you don't need `CoreSettings`, simply omit it:
 
 ```rust
 use reinhardt::settings;
-use reinhardt::conf::CacheSettings;
+use reinhardt::conf::{CacheSettings, HasCacheSettings};
 
 #[settings(cache: CacheSettings)]
 pub struct ProjectSettings;
@@ -568,7 +574,7 @@ TOML files, use `EnvSource`:
 
 ```rust
 use reinhardt::settings;
-use reinhardt::{SettingsBuilder, EnvSource, DefaultSource};
+use reinhardt::{CoreSettings, DefaultSource, EnvSource, HasCoreSettings, SettingsBuilder};
 
 #[settings(core: CoreSettings)]
 pub struct ProjectSettings;
@@ -594,7 +600,10 @@ pub fn get_settings() -> ProjectSettings {
 
 ```rust
 use reinhardt::settings;
-use reinhardt::{DefaultSource, LowPriorityEnvSource, Profile, SettingsBuilder, TomlFileSource};
+use reinhardt::{
+	CoreSettings, DefaultSource, HasCoreSettings, LowPriorityEnvSource, Profile, SettingsBuilder,
+	TomlFileSource,
+};
 use std::env;
 
 #[settings(core: CoreSettings)]

@@ -1,6 +1,9 @@
 use reinhardt::core::serde::json;
 use reinhardt::settings;
-use reinhardt::{DefaultSource, LowPriorityEnvSource, Profile, SettingsBuilder, TomlFileSource};
+use reinhardt::{
+	CoreSettings, DefaultSource, HasCoreSettings, LowPriorityEnvSource, Profile, SettingsBuilder,
+	TomlFileSource,
+};
 use std::env;
 
 #[settings(core: CoreSettings)]

@@ -288,6 +288,12 @@ pub use reinhardt_conf::settings::{
 };
 
 #[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
+pub use reinhardt_conf::settings::core_settings::{CoreSettings, HasCoreSettings};
+
+#[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
+pub use reinhardt_conf::settings::fragment::SettingsFragment;
+
+#[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
 pub use reinhardt_conf::settings::builder::SettingsBuilder;
 
 #[cfg(all(feature = "conf", not(target_arch = "wasm32")))]

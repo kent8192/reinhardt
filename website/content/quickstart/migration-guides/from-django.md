@@ -179,7 +179,7 @@ Reinhardt uses a composable, macro-based settings system with multiple sources:
 ```rust
 // config/settings.rs
 use reinhardt::settings;
-use reinhardt::{SettingsBuilder, EnvSource, DefaultSource};
+use reinhardt::{CoreSettings, DefaultSource, EnvSource, HasCoreSettings, SettingsBuilder};
 
 #[settings(core: CoreSettings)]
 pub struct ProjectSettings;

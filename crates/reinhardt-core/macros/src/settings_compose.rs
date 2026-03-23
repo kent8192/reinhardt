@@ -6,6 +6,27 @@ use quote::{format_ident, quote};
 use std::collections::HashSet;
 use syn::{ItemStruct, Result};
 
+/// Built-in fragment types that are re-exported from `reinhardt_conf`.
+///
+/// These types are resolved via the `reinhardt_conf` crate path in generated
+/// code so that users do not need to manually import them.  User-defined
+/// fragment types (not in this list) are emitted as bare identifiers and must
+/// be imported by the caller.
+const BUILTIN_FRAGMENTS: &[&str] = &[
+	"CoreSettings",
+	"CacheSettings",
+	"ContactSettings",
+	"CorsSettings",
+	"EmailSettings",
+	"I18nSettings",
+	"LoggingSettings",
+	"MediaSettings",
+	"SecuritySettings",
+	"SessionSettings",
+	"StaticSettings",
+	"TemplateSettings",
+];
+
 /// Implementation for `#[settings(key: Type)]`.
 pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Result<TokenStream> {
 	let conf_crate = crate::crate_paths::get_reinhardt_conf_crate();
@@ -65,12 +86,20 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 	}
 
 	// Generate struct fields
+	//
+	// Each fragment field is `#[serde(flatten)]`-ed so that flat settings
+	// sources (TOML files, DefaultSource key-value pairs) deserialize
+	// directly into the fragment without requiring a nested section key.
+	// This mirrors the behavior of the deprecated `Settings` struct.
 	let field_defs: Vec<_> = includes
 		.iter()
 		.map(|(key, type_name)| {
 			let key_ident = format_ident!("{}", key);
-			let type_ident = format_ident!("{}", type_name);
-			quote! { pub #key_ident: #type_ident }
+			let type_path = resolve_fragment_type(type_name, &conf_crate);
+			quote! {
+				#[serde(flatten)]
+				pub #key_ident: #type_path
+			}
 		})
 		.collect();
 
@@ -79,11 +108,11 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 		.iter()
 		.map(|(key, type_name)| {
 			let key_ident = format_ident!("{}", key);
-			let type_ident = format_ident!("{}", type_name);
-			let trait_name = format_ident!("Has{}", type_name);
+			let type_path = resolve_fragment_type(type_name, &conf_crate);
+			let trait_path = resolve_fragment_trait(type_name, &conf_crate);
 			quote! {
-				impl #trait_name for #struct_name {
-					fn #key_ident(&self) -> &#type_ident {
+				impl #trait_path for #struct_name {
+					fn #key_ident(&self) -> &#type_path {
 						&self.#key_ident
 					}
 				}
@@ -123,4 +152,31 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 			}
 		}
 	})
+}
+
+/// Returns a token stream for a fragment type path.
+///
+/// Built-in fragment types (defined in [`BUILTIN_FRAGMENTS`]) are emitted as
+/// fully qualified paths through `conf_crate` (e.g. `reinhardt_conf::CoreSettings`).
+/// User-defined types are emitted as bare identifiers.
+fn resolve_fragment_type(type_name: &str, conf_crate: &TokenStream) -> TokenStream {
+	let type_ident = format_ident!("{}", type_name);
+	if BUILTIN_FRAGMENTS.contains(&type_name) {
+		quote! { #conf_crate::#type_ident }
+	} else {
+		quote! { #type_ident }
+	}
+}
+
+/// Returns a token stream for a `Has{Fragment}` trait path.
+///
+/// Built-in fragment traits are emitted as fully qualified paths through
+/// `conf_crate`.  User-defined traits are emitted as bare identifiers.
+fn resolve_fragment_trait(type_name: &str, conf_crate: &TokenStream) -> TokenStream {
+	let trait_ident = format_ident!("Has{}", type_name);
+	if BUILTIN_FRAGMENTS.contains(&type_name) {
+		quote! { #conf_crate::#trait_ident }
+	} else {
+		quote! { #trait_ident }
+	}
 }

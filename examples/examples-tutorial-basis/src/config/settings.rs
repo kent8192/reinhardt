@@ -1,13 +1,13 @@
 use reinhardt::core::serde::json;
 use reinhardt::settings;
 use reinhardt::{
-	CoreSettings, DefaultSource, HasCoreSettings, LowPriorityEnvSource, Profile, SettingsBuilder,
+	DefaultSource, LowPriorityEnvSource, Profile, SettingsBuilder,
 	TomlFileSource,
 };
 use std::env;
 
 #[settings(core: CoreSettings)]
-struct ProjectSettings;
+pub struct ProjectSettings;
 
 pub fn get_settings() -> ProjectSettings {
 	let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| {

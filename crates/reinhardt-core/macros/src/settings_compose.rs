@@ -46,10 +46,10 @@ fn camel_to_snake(s: &str) -> String {
 
 /// Rust keywords that cannot be used as field names.
 const RUST_KEYWORDS: &[&str] = &[
-	"as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
-	"extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod",
-	"move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super",
-	"trait", "true", "type", "unsafe", "use", "where", "while", "yield",
+	"as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
+	"false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
+	"ref", "return", "self", "Self", "static", "struct", "super", "trait", "true", "type",
+	"unsafe", "use", "where", "while", "yield",
 ];
 
 /// Strip `Settings` suffix and convert CamelCase prefix to snake_case.
@@ -131,9 +131,8 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 				includes.push((key.clone(), type_name.clone()));
 			}
 			FragmentEntry::TypeOnly(type_name) => {
-				let key = infer_field_name(type_name).map_err(|msg| {
-					syn::Error::new(proc_macro2::Span::call_site(), msg)
-				})?;
+				let key = infer_field_name(type_name)
+					.map_err(|msg| syn::Error::new(proc_macro2::Span::call_site(), msg))?;
 				if !seen_keys.insert(key.clone()) {
 					return Err(syn::Error::new(
 						proc_macro2::Span::call_site(),

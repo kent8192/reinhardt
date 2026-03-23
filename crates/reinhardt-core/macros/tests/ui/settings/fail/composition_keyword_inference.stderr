@@ -1,0 +1,7 @@
+error: Type `StaticSettings` infers field name `static`, which is a Rust keyword. Use explicit syntax: `static_field: StaticSettings`
+ --> tests/ui/settings/fail/composition_keyword_inference.rs:3:1
+  |
+3 | #[settings(StaticSettings)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `settings` (in Nightly builds, run with -Z macro-backtrace for more info)

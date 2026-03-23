@@ -781,12 +781,32 @@ pub fn derive_validate(input: TokenStream) -> TokenStream {
 ///
 /// # Composition mode
 ///
-/// Composes fragments into a project settings struct:
+/// Composes fragments into a project settings struct.
+///
+/// Supports two syntax forms:
+/// - **Explicit**: `key: Type` — specify field name explicitly
+/// - **Implicit**: `Type` — infer field name from type (requires `Settings` suffix)
+///
+/// Both forms can be mixed freely:
 ///
 /// ```rust,ignore
-/// #[settings(core: CoreSettings | cache: CacheSettings | session: SessionSettings)]
+/// // All implicit (XxxSettings → xxx)
+/// #[settings(CoreSettings | CacheSettings | SessionSettings)]
+/// pub struct ProjectSettings;
+///
+/// // Mixed implicit + explicit
+/// #[settings(CoreSettings | CacheSettings | static_files: StaticSettings)]
+/// pub struct ProjectSettings;
+///
+/// // Explicit only (original syntax, still fully supported)
+/// #[settings(core: CoreSettings | cache: CacheSettings)]
 /// pub struct ProjectSettings;
 /// ```
+///
+/// Types without `Settings` suffix require explicit `key: Type` syntax. Note that
+/// even for `*Settings` types, if the inferred field name would be a Rust keyword
+/// (e.g. `StaticSettings` → `static`), you must use explicit `key: Type` syntax,
+/// as in `static_files: StaticSettings` above.
 #[proc_macro_attribute]
 pub fn settings(args: TokenStream, input: TokenStream) -> TokenStream {
 	let input_struct = parse_macro_input!(input as ItemStruct);

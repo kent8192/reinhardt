@@ -1,6 +1,7 @@
 //! nom v8.0.0 parser for `#[settings(...)]` attribute syntax.
 //!
-//! Parses `key: Type | key: Type | !Type` composition syntax.
+//! Parses `key: Type | Type | !Type` composition syntax.
+//! `Type` without `key:` is a type-only entry with inferred field name.
 
 use nom::Parser;
 use nom::branch::alt;
@@ -20,6 +21,8 @@ pub(crate) enum FragmentEntry {
 		/// Type name of the fragment.
 		type_name: String,
 	},
+	/// `TypeName` — type-only entry, field name to be inferred.
+	TypeOnly(String),
 	/// `!TypeName` — exclude an implicit fragment.
 	Exclude(String),
 }
@@ -50,12 +53,19 @@ fn exclude_entry(input: &str) -> nom::IResult<&str, FragmentEntry> {
 		.parse(input)
 }
 
-/// Parse a single entry (include or exclude).
-fn fragment_entry(input: &str) -> nom::IResult<&str, FragmentEntry> {
-	alt((exclude_entry, include_entry)).parse(input)
+/// Parse `TypeName` (type-only, no `key:` prefix, no `!` prefix).
+fn type_only_entry(input: &str) -> nom::IResult<&str, FragmentEntry> {
+	ident
+		.map(|s: &str| FragmentEntry::TypeOnly(s.to_string()))
+		.parse(input)
 }
 
-/// Parse the full settings attribute: `key: Type | key: Type | !Type`.
+/// Parse a single entry (include, exclude, or type-only).
+fn fragment_entry(input: &str) -> nom::IResult<&str, FragmentEntry> {
+	alt((exclude_entry, include_entry, type_only_entry)).parse(input)
+}
+
+/// Parse the full settings attribute: `key: Type | Type | !Type`.
 pub(crate) fn parse_settings_attr(input: &str) -> nom::IResult<&str, Vec<FragmentEntry>> {
 	complete(separated_list1(
 		delimited(multispace0, char('|'), multispace0),
@@ -142,6 +152,73 @@ mod tests {
 
 		// Assert
 		assert_eq!(entries.len(), 2);
+	}
+
+	#[rstest]
+	fn test_parse_single_type_only() {
+		// Arrange
+		let input = "CacheSettings";
+
+		// Act
+		let (remaining, entries) = parse_settings_attr(input).unwrap();
+
+		// Assert
+		assert!(remaining.is_empty());
+		assert_eq!(entries.len(), 1);
+		assert!(matches!(
+			&entries[0],
+			FragmentEntry::TypeOnly(name) if name == "CacheSettings"
+		));
+	}
+
+	#[rstest]
+	fn test_parse_multiple_type_only() {
+		// Arrange
+		let input = "CoreSettings | CacheSettings";
+
+		// Act
+		let (remaining, entries) = parse_settings_attr(input).unwrap();
+
+		// Assert
+		assert!(remaining.is_empty());
+		assert_eq!(entries.len(), 2);
+		assert!(matches!(&entries[0], FragmentEntry::TypeOnly(name) if name == "CoreSettings"));
+		assert!(matches!(&entries[1], FragmentEntry::TypeOnly(name) if name == "CacheSettings"));
+	}
+
+	#[rstest]
+	fn test_parse_mixed_syntax() {
+		// Arrange
+		let input = "CoreSettings | custom: MyConfig";
+
+		// Act
+		let (remaining, entries) = parse_settings_attr(input).unwrap();
+
+		// Assert
+		assert!(remaining.is_empty());
+		assert_eq!(entries.len(), 2);
+		assert!(matches!(&entries[0], FragmentEntry::TypeOnly(name) if name == "CoreSettings"));
+		assert!(matches!(
+			&entries[1],
+			FragmentEntry::Include { key, type_name }
+				if key == "custom" && type_name == "MyConfig"
+		));
+	}
+
+	#[rstest]
+	fn test_parse_mixed_with_exclude() {
+		// Arrange
+		let input = "CoreSettings | !CacheSettings | custom: MyConfig";
+
+		// Act
+		let (remaining, entries) = parse_settings_attr(input).unwrap();
+
+		// Assert
+		assert!(remaining.is_empty());
+		assert_eq!(entries.len(), 3);
+		assert!(matches!(&entries[0], FragmentEntry::TypeOnly(name) if name == "CoreSettings"));
+		assert!(matches!(&entries[1], FragmentEntry::Exclude(name) if name == "CacheSettings"));
+		assert!(matches!(&entries[2], FragmentEntry::Include { key, .. } if key == "custom"));
 	}
 
 	#[rstest]

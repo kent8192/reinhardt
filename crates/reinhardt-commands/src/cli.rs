@@ -1395,4 +1395,70 @@ mod tests {
 			panic!("Expected Runserver command");
 		}
 	}
+
+	#[rstest]
+	fn test_runserver_index_with_no_spa() {
+		// Arrange & Act
+		let command = Commands::Runserver {
+			address: "127.0.0.1:8000".to_string(),
+			noreload: false,
+			insecure: false,
+			no_docs: false,
+			with_pages: true,
+			static_dir: "dist".to_string(),
+			no_spa: true,
+			index: Some("./index.html".to_string()),
+		};
+
+		// Assert
+		if let Commands::Runserver { no_spa, index, .. } = command {
+			assert!(no_spa);
+			assert_eq!(index, Some("./index.html".to_string()));
+		} else {
+			panic!("Expected Runserver command");
+		}
+	}
+
+	#[rstest]
+	fn test_runserver_index_without_with_pages() {
+		// Arrange & Act
+		let command = Commands::Runserver {
+			address: "127.0.0.1:8000".to_string(),
+			noreload: false,
+			insecure: false,
+			no_docs: false,
+			with_pages: false,
+			static_dir: "dist".to_string(),
+			no_spa: false,
+			index: Some("./index.html".to_string()),
+		};
+
+		// Assert
+		if let Commands::Runserver { with_pages, index, .. } = command {
+			assert!(!with_pages);
+			assert_eq!(index, Some("./index.html".to_string()));
+		} else {
+			panic!("Expected Runserver command");
+		}
+	}
+
+	#[rstest]
+	fn test_collectstatic_with_index_option() {
+		// Arrange & Act
+		let command = Commands::Collectstatic {
+			clear: false,
+			no_input: false,
+			dry_run: false,
+			link: false,
+			ignore: vec![],
+			index: Some("./index.html".to_string()),
+		};
+
+		// Assert
+		if let Commands::Collectstatic { index, .. } = command {
+			assert_eq!(index, Some("./index.html".to_string()));
+		} else {
+			panic!("Expected Collectstatic command");
+		}
+	}
 }

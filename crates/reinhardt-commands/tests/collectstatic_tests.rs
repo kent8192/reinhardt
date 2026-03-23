@@ -1050,3 +1050,98 @@ fn test_collectstatic_html_template_cdn_url(temp_dir: TempDir) {
 		output_html
 	);
 }
+
+// ============================================================================
+// Index Source Tests — Refs #2869
+// ============================================================================
+
+/// Test: collectstatic with index_source copies the file to static_root
+///
+/// Category: Happy Path
+/// Spec group: G1
+#[rstest]
+fn test_collectstatic_with_index_source_copies_file() {
+	// Arrange
+	let dir = tempfile::tempdir().unwrap();
+	let static_root = dir.path().join("staticfiles");
+	let index_source = dir.path().join("index.html");
+	fs::write(&index_source, "<html>test</html>").unwrap();
+
+	let config = StaticFilesConfig {
+		static_root: static_root.clone(),
+		static_url: "/static/".to_string(),
+		staticfiles_dirs: vec![],
+		media_url: None,
+	};
+	let options = CollectStaticOptions {
+		no_input: true,
+		..Default::default()
+	};
+
+	let mut cmd = CollectStaticCommand::new(config, options);
+	cmd.set_index_source(Some(index_source));
+
+	// Act
+	let stats = cmd.execute().unwrap();
+
+	// Assert
+	assert!(static_root.join("index.html").exists());
+	assert!(stats.copied >= 1);
+}
+
+/// Test: collectstatic with nonexistent index_source returns error
+///
+/// Category: Error Path
+/// Spec group: G2
+#[rstest]
+fn test_collectstatic_index_source_not_found_returns_error() {
+	// Arrange
+	let dir = tempfile::tempdir().unwrap();
+	let config = StaticFilesConfig {
+		static_root: dir.path().join("staticfiles"),
+		static_url: "/static/".to_string(),
+		staticfiles_dirs: vec![],
+		media_url: None,
+	};
+	let options = CollectStaticOptions {
+		no_input: true,
+		..Default::default()
+	};
+
+	let mut cmd = CollectStaticCommand::new(config, options);
+	cmd.set_index_source(Some(PathBuf::from("/nonexistent/index.html")));
+
+	// Act
+	let result = cmd.execute();
+
+	// Assert
+	assert!(result.is_err());
+}
+
+/// Test: collectstatic without index_source uses existing behavior
+///
+/// Category: Backward Compatibility
+/// Spec group: H1
+#[rstest]
+fn test_collectstatic_without_index_source_uses_existing_behavior() {
+	// Arrange
+	let dir = tempfile::tempdir().unwrap();
+	let config = StaticFilesConfig {
+		static_root: dir.path().join("staticfiles"),
+		static_url: "/static/".to_string(),
+		staticfiles_dirs: vec![],
+		media_url: None,
+	};
+	let options = CollectStaticOptions {
+		no_input: true,
+		..Default::default()
+	};
+
+	let mut cmd = CollectStaticCommand::new(config, options);
+
+	// Act
+	let stats = cmd.execute().unwrap();
+
+	// Assert
+	assert_eq!(stats.copied, 0);
+}

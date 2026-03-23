@@ -57,13 +57,16 @@ impl PathResolver {
 			.unwrap_or(path)
 	}
 
-	/// Searches for Cargo.toml upward from the current directory
+	/// Searches for `Cargo.toml` upward from the current directory.
 	///
-	/// If Cargo.toml is found, that directory is returned as the project root.
+	/// Starting from `std::env::current_dir()`, traverses parent directories
+	/// until a `Cargo.toml` containing `[[bin]]` or `[package]` is found.
+	/// Symlinks are not explicitly followed beyond default OS behaviour.
 	///
 	/// # Returns
 	///
-	/// The project root path (None if not found)
+	/// The project root directory, or `None` if no matching `Cargo.toml` is found
+	/// before reaching the filesystem root.
 	pub fn find_project_root() -> Option<PathBuf> {
 		let mut current = env::current_dir().ok()?;
 

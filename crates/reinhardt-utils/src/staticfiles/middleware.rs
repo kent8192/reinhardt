@@ -232,10 +232,12 @@ impl StaticFilesMiddleware {
 		None
 	}
 
-	/// Serve a file directly from an absolute path (bypasses root_dir security check).
+	/// Serve a file directly from a configured filesystem path (bypasses `root_dir` security check).
 	///
-	/// This is safe because the path is a fixed, user-specified value from CLI
-	/// or configuration — not derived from the request URL.
+	/// The path may be absolute or relative, depending on how it was configured (e.g. via CLI
+	/// or configuration file); relative paths are resolved by the OS at runtime.
+	/// This is safe because the path is a fixed, user-specified value — not derived
+	/// from the request URL.
 	///
 	/// Generates ETag and Cache-Control headers consistent with `try_serve`.
 	async fn serve_direct_file(&self, path: &Path) -> Option<Response> {
@@ -528,9 +530,10 @@ mod tests {
 	#[tokio::test]
 	async fn test_serve_direct_file_nonexistent_returns_none() {
 		// Arrange
+		let dir = tempfile::tempdir().unwrap();
 		let config = StaticFilesConfig::new("dist");
 		let middleware = StaticFilesMiddleware::new(config);
-		let nonexistent = PathBuf::from("/tmp/nonexistent_index_2869.html");
+		let nonexistent = dir.path().join("nonexistent_index_2869.html");
 
 		// Act
 		let response = middleware.serve_direct_file(&nonexistent).await;

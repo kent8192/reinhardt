@@ -1348,7 +1348,15 @@ impl BaseCommand for RunServerCommand {
 			if with_pages
 				&& !no_spa && let Some(index_str) = ctx.option("index")
 			{
-				ctx.info(&format!("📄 Index:   {} (specified)", index_str));
+				let path = std::path::Path::new(&index_str);
+				if path.exists() {
+					ctx.info(&format!("📄 Index:   {} (specified)", index_str));
+				} else {
+					ctx.warning(&format!(
+						"📄 Index:   {} (specified, missing — will be ignored)",
+						index_str
+					));
+				}
 			}
 
 			#[cfg(feature = "openapi-router")]

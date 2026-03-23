@@ -391,14 +391,6 @@ impl UnifiedRouter {
 		self
 	}
 
-	/// Exclude a URL path from the most recently added server middleware.
-	///
-	/// This is a convenience method that delegates to [`ServerRouter::exclude`].
-	pub fn exclude(mut self, pattern: &str) -> Self {
-		self.server = self.server.exclude(pattern);
-		self
-	}
-
 	/// Mount a child server router on this router.
 	pub fn mount(mut self, prefix: &str, child: ServerRouter) -> Self {
 		self.server = self.server.mount(prefix, child);

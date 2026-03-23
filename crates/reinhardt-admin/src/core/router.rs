@@ -14,14 +14,21 @@ use reinhardt_urls::routers::ServerRouter;
 use crate::core::AdminSite;
 use std::sync::Arc;
 
-/// Serves the admin SPA HTML shell for client-side routing
+/// Serves the admin SPA HTML shell for client-side routing.
+///
+/// Applies admin-specific security headers (CSP, X-Frame-Options, etc.)
+/// to prevent XSS, clickjacking, and other browser-side attacks.
 #[cfg(not(target_arch = "wasm32"))]
 async fn admin_spa_handler(
 	_request: reinhardt_http::Request,
 ) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
-	Ok(reinhardt_http::Response::ok()
-		.with_header("Content-Type", "text/html; charset=utf-8")
-		.with_body(admin_spa_html()))
+	let security_headers = crate::server::security::SecurityHeaders::default();
+	let mut response =
+		reinhardt_http::Response::ok().with_header("Content-Type", "text/html; charset=utf-8");
+	for (name, value) in security_headers.to_header_map() {
+		response = response.with_header(name, &value);
+	}
+	Ok(response.with_body(admin_spa_html()))
 }
 
 /// Generates the HTML shell for the admin SPA
@@ -320,6 +327,36 @@ mod tests {
 		assert!(
 			html.contains("<!DOCTYPE html>"),
 			"HTML should be valid HTML5"
+		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	#[tokio::test]
+	async fn test_admin_spa_handler_includes_csp_headers() {
+		// Arrange
+		let request = reinhardt_http::Request::builder()
+			.method(hyper::Method::GET)
+			.uri("/")
+			.build()
+			.unwrap();
+
+		// Act
+		let response = admin_spa_handler(request).await.unwrap();
+
+		// Assert
+		let headers = response.headers;
+		assert!(
+			headers.contains_key("content-security-policy"),
+			"Response should include CSP header"
+		);
+		assert!(
+			headers.contains_key("x-frame-options"),
+			"Response should include X-Frame-Options header"
+		);
+		assert!(
+			headers.contains_key("x-content-type-options"),
+			"Response should include X-Content-Type-Options header"
 		);
 	}
 }

@@ -39,3 +39,7 @@ mod plugin_integration;
 // Edge case E2E tests for makemigrations command
 #[path = "commands/makemigrations_e2e_edge_cases.rs"]
 mod makemigrations_e2e_edge_cases;
+
+// Collectstatic admin asset auto-discovery integration tests
+#[path = "commands/collectstatic_admin_integration.rs"]
+mod collectstatic_admin_integration;

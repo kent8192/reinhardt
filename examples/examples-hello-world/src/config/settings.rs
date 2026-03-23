@@ -23,14 +23,11 @@
 
 use reinhardt::core::serde::json;
 use reinhardt::settings;
-use reinhardt::{
-	CoreSettings, DefaultSource, HasCoreSettings, LowPriorityEnvSource, Profile, SettingsBuilder,
-	TomlFileSource,
-};
+use reinhardt::{DefaultSource, LowPriorityEnvSource, Profile, SettingsBuilder, TomlFileSource};
 use std::env;
 
 #[settings(core: CoreSettings)]
-struct ProjectSettings;
+pub struct ProjectSettings;
 
 /// Get settings based on environment variable
 ///

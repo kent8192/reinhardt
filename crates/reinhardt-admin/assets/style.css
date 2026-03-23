@@ -1,0 +1,115 @@
+/*
+ * Reinhardt Admin Panel - UnoCSS Pre-generated Styles
+ *
+ * This file contains pre-generated UnoCSS utility classes used by the
+ * admin panel placeholder UI. When the full WASM SPA is built with
+ * UnoCSS, this file will be replaced by the build output.
+ *
+ * UnoCSS preset: @unocss/preset-wind (Tailwind CSS compatible)
+ */
+
+/* === UnoCSS Preflight (based on preset-wind) === */
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+	border-width: 0;
+	border-style: solid;
+	border-color: currentColor;
+}
+
+html {
+	line-height: 1.5;
+	-webkit-text-size-adjust: 100%;
+	tab-size: 4;
+	font-family: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+}
+
+body {
+	margin: 0;
+	line-height: inherit;
+}
+
+h1, h2, h3, h4, h5, h6 {
+	font-size: inherit;
+	font-weight: inherit;
+}
+
+a {
+	color: inherit;
+	text-decoration: inherit;
+}
+
+button, input, textarea, select {
+	font: inherit;
+	color: inherit;
+}
+
+img, svg, video {
+	display: block;
+	max-width: 100%;
+}
+
+/* === UnoCSS Utility Classes (pre-generated for placeholder UI) === */
+
+/* Layout */
+.min-h-screen { min-height: 100vh; }
+.flex { display: flex; }
+.flex-col { flex-direction: column; }
+.flex-1 { flex: 1 1 0%; }
+.items-center { align-items: center; }
+.justify-center { justify-content: center; }
+.gap-4 { gap: 1rem; }
+
+/* Sizing */
+.w-full { width: 100%; }
+.max-w-5xl { max-width: 64rem; }
+.mx-auto { margin-left: auto; margin-right: auto; }
+.h-10 { height: 2.5rem; }
+.w-10 { width: 2.5rem; }
+
+/* Spacing */
+.p-4 { padding: 1rem; }
+.p-6 { padding: 1.5rem; }
+.px-6 { padding-left: 1.5rem; padding-right: 1.5rem; }
+.py-4 { padding-top: 1rem; padding-bottom: 1rem; }
+.py-16 { padding-top: 4rem; padding-bottom: 4rem; }
+.mt-1 { margin-top: 0.25rem; }
+.mt-2 { margin-top: 0.5rem; }
+.mb-4 { margin-bottom: 1rem; }
+
+/* Typography */
+.text-sm { font-size: 0.875rem; line-height: 1.25rem; }
+.text-xl { font-size: 1.25rem; line-height: 1.75rem; }
+.text-2xl { font-size: 1.5rem; line-height: 2rem; }
+.font-semibold { font-weight: 600; }
+.font-bold { font-weight: 700; }
+.uppercase { text-transform: uppercase; }
+.tracking-wide { letter-spacing: 0.025em; }
+
+/* Colors */
+.text-white { color: #ffffff; }
+.text-slate-500 { color: #64748b; }
+.text-slate-800 { color: #1e293b; }
+.bg-white { background-color: #ffffff; }
+.bg-slate-50 { background-color: #f8fafc; }
+.bg-blue-600 { background-color: #2563eb; }
+
+/* Borders */
+.rounded-lg { border-radius: 0.5rem; }
+.rounded-full { border-radius: 9999px; }
+.border { border-width: 1px; }
+.border-slate-200 { border-color: #e2e8f0; }
+.border-3 { border-width: 3px; }
+.border-solid { border-style: solid; }
+.border-t-blue-600 { border-top-color: #2563eb; }
+
+/* Effects */
+.shadow-sm { box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); }
+
+/* Animation */
+@keyframes spin {
+	to { transform: rotate(360deg); }
+}
+.animate-spin { animation: spin 0.8s linear infinite; }

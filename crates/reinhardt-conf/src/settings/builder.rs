@@ -3,6 +3,7 @@
 //! Provides a builder pattern for constructing settings from multiple sources
 //! with priority-based merging.
 
+use super::composed::ComposedSettings;
 use super::profile::Profile;
 use super::sources::{ConfigSource, DotEnvSource, EnvSource, SourceError};
 use indexmap::IndexMap;
@@ -132,6 +133,22 @@ impl SettingsBuilder {
 		}
 		self.add_source(source)
 	}
+	/// Build and validate a composed settings struct.
+	///
+	/// This method:
+	/// 1. Merges all configuration sources
+	/// 2. Validates that all required fields have values
+	/// 3. Deserializes the merged data into the target type
+	///
+	/// Fragment-level validation (`validate_fragments()`) should be called
+	/// separately by the caller with the appropriate profile.
+	pub fn build_composed<T: ComposedSettings>(self) -> Result<T, BuildError> {
+		let merged = self.build()?;
+		T::validate_requirements(merged.as_map())?;
+		let settings: T = merged.into_typed().map_err(BuildError::from)?;
+		Ok(settings)
+	}
+
 	/// Build the configuration by merging all sources
 	///
 	/// # Examples
@@ -416,6 +433,28 @@ pub enum BuildError {
 	/// A validation check on the built settings failed.
 	#[error("Validation error: {0}")]
 	Validation(String),
+
+	/// A required field was not provided by any configuration source.
+	#[error(
+		"missing required field `{field}` in section `[{section}]`. \
+		 Provide it via TOML, environment variable, or .set()"
+	)]
+	MissingRequiredField {
+		/// The settings section name.
+		section: &'static str,
+		/// The field name that is missing.
+		field: &'static str,
+	},
+
+	/// Failed to deserialize merged settings into the target type.
+	#[error("settings deserialization failed: {0}")]
+	Deserialization(String),
+}
+
+impl From<GetError> for BuildError {
+	fn from(err: GetError) -> Self {
+		BuildError::Deserialization(err.to_string())
+	}
 }
 
 /// Error type for getting values
@@ -440,6 +479,7 @@ pub enum GetError {
 mod tests {
 	use super::*;
 	use crate::settings::sources::DefaultSource;
+	use rstest::rstest;
 	use serde::Deserialize;
 
 	#[test]
@@ -533,6 +573,22 @@ mod tests {
 
 		assert!(settings.contains_key("key1"));
 		assert!(!settings.contains_key("key2"));
+	}
+
+	#[rstest]
+	fn test_build_error_missing_required_field_message() {
+		// Arrange
+		let error = BuildError::MissingRequiredField {
+			section: "core",
+			field: "secret_key",
+		};
+
+		// Act
+		let message = error.to_string();
+
+		// Assert
+		assert!(message.contains("missing required field `secret_key`"));
+		assert!(message.contains("section `[core]`"));
 	}
 
 	#[test]

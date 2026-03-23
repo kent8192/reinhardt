@@ -606,6 +606,7 @@ impl MiddlewareConfig {
 #[allow(deprecated)] // Tests exercise deprecated Settings for backward-compatibility verification
 mod tests {
 	use super::*;
+	use crate::settings::core_settings::HasCoreSettings;
 	use rstest::rstest;
 
 	#[rstest]

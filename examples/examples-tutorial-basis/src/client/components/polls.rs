@@ -351,37 +351,37 @@ pub fn polls_results(question_id: i64) -> Page {
 									class: "divide-y divide-gray-200",
 									{
 										Page::Fragment(
-										        load_results_signal
-										            .result()
-										            .map(|(_, choices, total)| {
-										                choices
-										                    .iter()
-										                    .map(|choice| {
-										                        let percentage = if total > 0 {
-										                            (choice.votes as f64 / total as f64 * 100.0) as i32
-										                        } else {
-										                            0
-										                        };
-										                        let choice_text = choice.choice_text.clone();
-										                        let votes = choice.votes;
-										                        page!(
-										                            | choice_text : String, votes : i32, percentage : i32 | { div
-										                            { class : "py-4", div { class :
-										                            "flex justify-between items-center mb-2", strong { {
-										                            choice_text } } span { class :
-										                            "inline-flex items-center bg-brand rounded-full px-2.5 py-0.5 text-xs font-medium text-white",
-										                            { format!("{} votes", votes) } } } div { class :
-										                            "w-full bg-gray-200 rounded-full h-2.5", div { class :
-										                            "bg-brand h-2.5 rounded-full", role : "progressbar", style :
-										                            format!("width: {}%", percentage), aria_valuenow : percentage
-										                            .to_string(), aria_valuemin : "0", aria_valuemax : "100", {
-										                            format!("{}%", percentage) } } } } }
-										                        )(choice_text, votes, percentage)
-										                    })
-										                    .collect::<Vec<_>>()
-										            })
-										            .unwrap_or_default(),
-										    )
+												load_results_signal
+													.result()
+													.map(|(_, choices, total)| {
+														choices
+															.iter()
+															.map(|choice| {
+																let percentage = if total > 0 {
+																	(choice.votes as f64 / total as f64 * 100.0) as i32
+																} else {
+																	0
+																};
+																let choice_text = choice.choice_text.clone();
+																let votes = choice.votes;
+																page!(
+																	| choice_text : String, votes : i32, percentage : i32 | { div
+																	{ class : "py-4", div { class :
+																	"flex justify-between items-center mb-2", strong { {
+																	choice_text } } span { class :
+																	"inline-flex items-center bg-brand rounded-full px-2.5 py-0.5 text-xs font-medium text-white",
+																	{ format!("{} votes", votes) } } } div { class :
+																	"w-full bg-gray-200 rounded-full h-2.5", div { class :
+																	"bg-brand h-2.5 rounded-full", role : "progressbar", style :
+																	format!("width: {}%", percentage), aria_valuenow : percentage
+																	.to_string(), aria_valuemin : "0", aria_valuemax : "100", {
+																	format!("{}%", percentage) } } } } }
+																)(choice_text, votes, percentage)
+															})
+															.collect::<Vec<_>>()
+													})
+													.unwrap_or_default(),
+											)
 									}
 								}
 								div {

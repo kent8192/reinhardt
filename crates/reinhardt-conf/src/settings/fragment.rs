@@ -22,6 +22,13 @@ use std::fmt::Debug;
 pub trait SettingsFragment:
 	Clone + Debug + Serialize + DeserializeOwned + Send + Sync + 'static
 {
+	/// The accessor trait for this fragment.
+	///
+	/// Expresses the type-level association between a settings fragment
+	/// and its `Has*Settings` accessor trait. Use `()` for fragments
+	/// without a dedicated accessor trait.
+	type Accessor: ?Sized;
+
 	/// TOML section name (e.g., `"cache"`, `"core"`).
 	fn section() -> &'static str;
 
@@ -31,6 +38,19 @@ pub trait SettingsFragment:
 	fn validate(&self, _profile: &Profile) -> ValidationResult {
 		Ok(())
 	}
+}
+
+/// Generic accessor trait for settings fragments.
+///
+/// The `#[settings]` macro generates implementations of this trait
+/// using fully-qualified paths, so users do not need to manually
+/// import individual `Has*Settings` traits.
+///
+/// Blanket implementations bridge `HasSettings<F>` to the specific
+/// `Has*Settings` traits for each built-in fragment.
+pub trait HasSettings<F: SettingsFragment> {
+	/// Returns a reference to the contained fragment.
+	fn get_settings(&self) -> &F;
 }
 
 #[cfg(test)]
@@ -45,6 +65,8 @@ mod tests {
 	}
 
 	impl SettingsFragment for TestFragment {
+		type Accessor = ();
+
 		fn section() -> &'static str {
 			"test"
 		}

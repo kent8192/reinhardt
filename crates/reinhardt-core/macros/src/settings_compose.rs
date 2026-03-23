@@ -267,7 +267,6 @@ fn resolve_fragment_type(type_name: &str, conf_crate: &TokenStream) -> TokenStre
 	}
 }
 
-
 #[cfg(test)]
 mod tests {
 	use super::*;

@@ -115,7 +115,7 @@ pub use advanced::{
 ///
 /// **Deprecated since 0.2.0**: Use [`CoreSettings`] fragment with
 /// `ProjectSettings` instead. This struct is retained as a migration bridge
-/// and implements [`HasCoreSettings`] so existing code can be gradually
+/// and implements `HasCoreSettings` so existing code can be gradually
 /// moved to the composable settings system.
 #[deprecated(
 	since = "0.2.0",
@@ -596,6 +596,7 @@ impl MiddlewareConfig {
 #[allow(deprecated)] // Tests exercise deprecated Settings for backward-compatibility verification
 mod tests {
 	use super::*;
+	use crate::settings::core_settings::HasCoreSettings;
 	use rstest::rstest;
 
 	#[rstest]

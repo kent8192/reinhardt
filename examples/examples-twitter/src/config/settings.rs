@@ -24,7 +24,7 @@
 use reinhardt::core::serde::json;
 use reinhardt::settings;
 use reinhardt::{
-	CoreSettings, DefaultSource, HasCoreSettings, LowPriorityEnvSource, Profile, SettingsBuilder,
+	CoreSettings, DefaultSource, LowPriorityEnvSource, Profile, SettingsBuilder,
 	TomlFileSource,
 };
 use std::env;

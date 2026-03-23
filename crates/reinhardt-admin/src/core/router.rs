@@ -50,13 +50,13 @@ fn admin_spa_html() -> String {
 		.to_string()
 }
 
-/// Embedded admin CSS asset
+/// Embedded admin CSS asset (bytes for zero-copy `Bytes::from_static`)
 #[cfg(not(target_arch = "wasm32"))]
-const ADMIN_CSS: &str = include_str!("../../assets/style.css");
+const ADMIN_CSS: &[u8] = include_bytes!("../../assets/style.css");
 
-/// Embedded admin JS asset
+/// Embedded admin JS asset (bytes for zero-copy `Bytes::from_static`)
 #[cfg(not(target_arch = "wasm32"))]
-const ADMIN_JS: &str = include_str!("../../assets/main.js");
+const ADMIN_JS: &[u8] = include_bytes!("../../assets/main.js");
 
 /// Serves the embedded admin CSS stylesheet
 #[cfg(not(target_arch = "wasm32"))]
@@ -66,7 +66,7 @@ async fn admin_css_handler(
 	Ok(reinhardt_http::Response::ok()
 		.with_header("Content-Type", "text/css; charset=utf-8")
 		.with_header("Cache-Control", "public, max-age=3600")
-		.with_body(ADMIN_CSS))
+		.with_body(bytes::Bytes::from_static(ADMIN_CSS)))
 }
 
 /// Serves the embedded admin JS entry point
@@ -77,7 +77,7 @@ async fn admin_js_handler(
 	Ok(reinhardt_http::Response::ok()
 		.with_header("Content-Type", "application/javascript; charset=utf-8")
 		.with_header("Cache-Control", "public, max-age=3600")
-		.with_body(ADMIN_JS))
+		.with_body(bytes::Bytes::from_static(ADMIN_JS)))
 }
 
 /// Returns a `ServerRouter` that serves the admin panel's static assets.
@@ -405,13 +405,13 @@ mod tests {
 	#[cfg(not(target_arch = "wasm32"))]
 	#[rstest]
 	fn test_embedded_admin_css_is_not_empty() {
+		// Arrange
+		let css = std::str::from_utf8(ADMIN_CSS).expect("CSS should be valid UTF-8");
+
 		// Assert
+		assert!(!css.is_empty(), "Embedded admin CSS should not be empty");
 		assert!(
-			!ADMIN_CSS.is_empty(),
-			"Embedded admin CSS should not be empty"
-		);
-		assert!(
-			ADMIN_CSS.contains("box-sizing"),
+			css.contains("box-sizing"),
 			"CSS should contain UnoCSS preflight reset"
 		);
 	}
@@ -419,13 +419,13 @@ mod tests {
 	#[cfg(not(target_arch = "wasm32"))]
 	#[rstest]
 	fn test_embedded_admin_js_is_not_empty() {
+		// Arrange
+		let js = std::str::from_utf8(ADMIN_JS).expect("JS should be valid UTF-8");
+
 		// Assert
+		assert!(!js.is_empty(), "Embedded admin JS should not be empty");
 		assert!(
-			!ADMIN_JS.is_empty(),
-			"Embedded admin JS should not be empty"
-		);
-		assert!(
-			ADMIN_JS.contains("Reinhardt Admin"),
+			js.contains("Reinhardt Admin"),
 			"JS should contain admin panel identifier"
 		);
 	}

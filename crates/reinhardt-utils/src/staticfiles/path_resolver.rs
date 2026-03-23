@@ -64,7 +64,7 @@ impl PathResolver {
 	/// # Returns
 	///
 	/// The project root path (None if not found)
-	fn find_project_root() -> Option<PathBuf> {
+	pub fn find_project_root() -> Option<PathBuf> {
 		let mut current = env::current_dir().ok()?;
 
 		loop {

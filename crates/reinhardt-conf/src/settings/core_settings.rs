@@ -4,6 +4,7 @@
 
 use super::database_config::DatabaseConfig;
 use super::fragment::{HasSettings, SettingsFragment};
+use super::policy::{FieldPolicy, FieldRequirement};
 use super::profile::Profile;
 use super::security::SecuritySettings;
 use super::validation::{ValidationError, ValidationResult};
@@ -84,6 +85,23 @@ impl SettingsFragment for CoreSettings {
 
 	fn section() -> &'static str {
 		"core"
+	}
+
+	fn field_policies() -> &'static [FieldPolicy] {
+		// secret_key has no default and must be explicitly provided by the user.
+		// All other fields have serde defaults or implement Default.
+		static POLICIES: [FieldPolicy; 9] = [
+			FieldPolicy { name: "base_dir", requirement: FieldRequirement::Optional, has_default: true },
+			FieldPolicy { name: "secret_key", requirement: FieldRequirement::Required, has_default: false },
+			FieldPolicy { name: "debug", requirement: FieldRequirement::Optional, has_default: true },
+			FieldPolicy { name: "allowed_hosts", requirement: FieldRequirement::Optional, has_default: true },
+			FieldPolicy { name: "databases", requirement: FieldRequirement::Optional, has_default: true },
+			FieldPolicy { name: "security", requirement: FieldRequirement::Optional, has_default: true },
+			FieldPolicy { name: "middleware", requirement: FieldRequirement::Optional, has_default: true },
+			FieldPolicy { name: "root_urlconf", requirement: FieldRequirement::Optional, has_default: true },
+			FieldPolicy { name: "installed_apps", requirement: FieldRequirement::Optional, has_default: true },
+		];
+		&POLICIES
 	}
 
 	fn validate(&self, profile: &Profile) -> ValidationResult {
@@ -231,5 +249,67 @@ mod tests {
 
 		// Assert
 		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_core_settings_field_policies_secret_key_required() {
+		use crate::settings::policy::FieldRequirement;
+
+		// Arrange / Act
+		let policies = CoreSettings::field_policies();
+
+		// Assert: secret_key must be marked as Required with no default
+		let secret_key_policy = policies.iter().find(|p| p.name == "secret_key");
+		assert!(
+			secret_key_policy.is_some(),
+			"secret_key must have an explicit field policy"
+		);
+		let policy = secret_key_policy.unwrap();
+		assert_eq!(
+			policy.requirement,
+			FieldRequirement::Required,
+			"secret_key must be Required"
+		);
+		assert!(
+			!policy.has_default,
+			"secret_key must not have a default value"
+		);
+	}
+
+	#[rstest]
+	fn test_core_settings_field_policies_other_fields_optional() {
+		use crate::settings::policy::FieldRequirement;
+
+		// Arrange / Act
+		let policies = CoreSettings::field_policies();
+
+		// Assert: all fields except secret_key are Optional with defaults
+		let optional_fields = [
+			"base_dir",
+			"debug",
+			"allowed_hosts",
+			"databases",
+			"security",
+			"middleware",
+			"root_urlconf",
+			"installed_apps",
+		];
+		for field_name in optional_fields {
+			let policy = policies.iter().find(|p| p.name == field_name);
+			assert!(
+				policy.is_some(),
+				"field '{field_name}' must have a field policy"
+			);
+			let policy = policy.unwrap();
+			assert_eq!(
+				policy.requirement,
+				FieldRequirement::Optional,
+				"field '{field_name}' must be Optional"
+			);
+			assert!(
+				policy.has_default,
+				"field '{field_name}' must have a default value"
+			);
+		}
 	}
 }

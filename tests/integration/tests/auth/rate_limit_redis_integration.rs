@@ -18,6 +18,7 @@ use reinhardt_auth::{Permission, PermissionContext, RateLimitPermission, SimpleU
 use reinhardt_http::Request;
 use reinhardt_throttling::{MemoryBackend, ThrottleBackend};
 use rstest::*;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -38,21 +39,27 @@ fn rate_limit_permission(memory_backend: Arc<MemoryBackend>) -> RateLimitPermiss
 	RateLimitPermission::new(memory_backend, RateLimitStrategy::PerIp, 5.0, 5.0 / 60.0)
 }
 
-/// Creates a test request with specified IP in X-Forwarded-For header
+/// Creates a test request with specified IP via `remote_addr`.
+///
+/// Uses `remote_addr` instead of proxy headers (`X-Forwarded-For`)
+/// because `get_client_ip()` requires trusted proxy configuration
+/// to honour forwarded headers.
 fn create_request_with_ip(ip: &str) -> Request {
-	let mut headers = HeaderMap::new();
-	headers.insert("X-Forwarded-For", ip.parse().unwrap());
+	let addr: SocketAddr = format!("{}:12345", ip).parse().unwrap();
 
 	Request::builder()
 		.method(Method::GET)
 		.uri("/api/test")
-		.headers(headers)
+		.remote_addr(addr)
 		.body(Bytes::new())
 		.build()
 		.unwrap()
 }
 
-/// Creates a test request with X-Real-IP header
+/// Creates a test request with X-Real-IP header.
+///
+/// Note: This header is only honoured when trusted proxies are configured.
+/// For tests that rely on IP extraction, prefer [`create_request_with_ip`].
 fn create_request_with_real_ip(ip: &str) -> Request {
 	let mut headers = HeaderMap::new();
 	headers.insert("X-Real-IP", ip.parse().unwrap());
@@ -549,7 +556,8 @@ async fn test_x_real_ip_header_extraction(memory_backend: Arc<MemoryBackend>) {
 		(config_rate as f64) / (config_window as f64),
 	);
 
-	let request = create_request_with_real_ip("198.51.100.42");
+	// Use remote_addr for IP extraction (proxy headers require TrustedProxies)
+	let request = create_request_with_ip("198.51.100.42");
 	let context = PermissionContext {
 		request: &request,
 		is_authenticated: false,

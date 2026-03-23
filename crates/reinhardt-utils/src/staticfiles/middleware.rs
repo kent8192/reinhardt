@@ -16,6 +16,7 @@ use super::handler::{StaticError, StaticFileHandler};
 
 /// Configuration for the static files middleware.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct StaticFilesConfig {
 	/// Root directory for static files
 	pub root_dir: PathBuf,

@@ -270,8 +270,8 @@ impl Handler for MiddlewareChain {
 ///   (e.g., `"/health"` excludes only `"/health"`, not `"/health/check"`)
 ///
 /// This struct is typically not used directly. Instead, use
-/// [`ServerRouter::exclude()`](crate::ServerRouter::exclude) or
-/// [`UnifiedRouter::exclude()`](crate::UnifiedRouter::exclude) for
+/// `ServerRouter::exclude()` or
+/// `UnifiedRouter::exclude()` for
 /// declarative route exclusion at the router level.
 ///
 /// # Examples

@@ -120,6 +120,7 @@ pub enum Commands {
 	},
 
 	/// Start the development server
+	#[non_exhaustive]
 	Runserver {
 		/// Server address (default: 127.0.0.1:8000)
 		#[arg(value_name = "ADDRESS", default_value = "127.0.0.1:8000")]
@@ -173,6 +174,7 @@ pub enum Commands {
 	},
 
 	/// Collect static files into STATIC_ROOT
+	#[non_exhaustive]
 	Collectstatic {
 		/// Clear existing files before collecting
 		#[arg(long)]

@@ -65,7 +65,7 @@ fn fragment_entry(input: &str) -> nom::IResult<&str, FragmentEntry> {
 	alt((exclude_entry, include_entry, type_only_entry)).parse(input)
 }
 
-/// Parse the full settings attribute: `key: Type | key: Type | !Type`.
+/// Parse the full settings attribute: `key: Type | Type | !Type`.
 pub(crate) fn parse_settings_attr(input: &str) -> nom::IResult<&str, Vec<FragmentEntry>> {
 	complete(separated_list1(
 		delimited(multispace0, char('|'), multispace0),

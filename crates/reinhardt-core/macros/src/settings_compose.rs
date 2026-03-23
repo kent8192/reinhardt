@@ -42,11 +42,19 @@ fn camel_to_snake(s: &str) -> String {
 }
 
 /// Rust keywords that cannot be used as field names.
+///
+/// Includes strict keywords, reserved keywords, and weak keywords.
+/// Mirrors the keyword set in `crates/reinhardt-db/src/migrations/introspect/naming.rs`.
 const RUST_KEYWORDS: &[&str] = &[
+	// Strict keywords
 	"as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
 	"false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
 	"ref", "return", "self", "Self", "static", "struct", "super", "trait", "true", "type",
-	"unsafe", "use", "where", "while", "yield",
+	"unsafe", "use", "where", "while",
+	// Reserved keywords (may be used in future)
+	"abstract", "become", "box", "do", "final", "macro", "override", "priv", "try", "typeof",
+	"unsized", "virtual", "yield", // Weak keywords (context-sensitive)
+	"union",
 ];
 
 /// Strip `Settings` suffix and convert CamelCase prefix to snake_case.

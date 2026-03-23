@@ -1,8 +1,11 @@
 //! Compile-success tests for `#[settings]` proc macro.
 //!
 //! These tests verify that the `#[settings(fragment = true, section = "...")]`
-//! and `#[settings(key: Type | !Type)]` macros compile correctly and produce
-//! the expected traits, fields, and validation methods.
+//! and `#[settings(key: Type | Type | key: Type)]` macros compile correctly
+//! and produce the expected traits, fields, and validation methods.
+//!
+//! Composition supports both explicit (`key: Type`) and implicit (`Type`)
+//! syntax, where implicit entries infer the field name from the type name.
 //!
 //! Placed in the integration test crate because the macros generate code
 //! referencing `reinhardt_conf`, which is not available in the macro crate's

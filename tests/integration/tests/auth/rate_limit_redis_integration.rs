@@ -16,8 +16,10 @@ use hyper::{HeaderMap, Method};
 use reinhardt_auth::rate_limit_permission::RateLimitStrategy;
 use reinhardt_auth::{Permission, PermissionContext, RateLimitPermission, SimpleUser};
 use reinhardt_http::Request;
+use reinhardt_http::request::TrustedProxies;
 use reinhardt_throttling::{MemoryBackend, ThrottleBackend};
 use rstest::*;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -38,32 +40,44 @@ fn rate_limit_permission(memory_backend: Arc<MemoryBackend>) -> RateLimitPermiss
 	RateLimitPermission::new(memory_backend, RateLimitStrategy::PerIp, 5.0, 5.0 / 60.0)
 }
 
-/// Creates a test request with specified IP in X-Forwarded-For header
+/// Creates a test request with specified IP set as remote_addr.
+///
+/// After the security hardening in `08ea076a6`, `get_client_ip()` only trusts
+/// proxy headers when `is_from_trusted_proxy()` is true. For tests that simply
+/// need a client IP for rate limiting, `remote_addr` is the correct approach.
 fn create_request_with_ip(ip: &str) -> Request {
-	let mut headers = HeaderMap::new();
-	headers.insert("X-Forwarded-For", ip.parse().unwrap());
+	let addr: SocketAddr = format!("{}:0", ip).parse().unwrap();
 
 	Request::builder()
 		.method(Method::GET)
 		.uri("/api/test")
-		.headers(headers)
+		.remote_addr(addr)
 		.body(Bytes::new())
 		.build()
 		.unwrap()
 }
 
-/// Creates a test request with X-Real-IP header
+/// Creates a test request with X-Real-IP header and trusted proxy setup.
+///
+/// Configures the request with a loopback `remote_addr` as trusted proxy
+/// so that `get_client_ip()` reads the X-Real-IP header.
 fn create_request_with_real_ip(ip: &str) -> Request {
 	let mut headers = HeaderMap::new();
 	headers.insert("X-Real-IP", ip.parse().unwrap());
 
-	Request::builder()
+	let proxy_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+	let request = Request::builder()
 		.method(Method::GET)
 		.uri("/api/test")
+		.remote_addr(proxy_addr)
 		.headers(headers)
 		.body(Bytes::new())
 		.build()
-		.unwrap()
+		.unwrap();
+
+	let proxy_ip: IpAddr = "127.0.0.1".parse().unwrap();
+	request.set_trusted_proxies(TrustedProxies::new(vec![proxy_ip]));
+	request
 }
 
 /// Creates a basic test request without IP headers
@@ -514,13 +528,19 @@ async fn test_x_forwarded_for_with_multiple_ips(memory_backend: Arc<MemoryBacken
 			.unwrap(),
 	);
 
+	let proxy_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
 	let request = Request::builder()
 		.method(Method::GET)
 		.uri("/api/test")
+		.remote_addr(proxy_addr)
 		.headers(headers)
 		.body(Bytes::new())
 		.build()
 		.unwrap();
+
+	// Trust the loopback address as a proxy so X-Forwarded-For is honored
+	let proxy_ip: IpAddr = "127.0.0.1".parse().unwrap();
+	request.set_trusted_proxies(TrustedProxies::new(vec![proxy_ip]));
 
 	let context = PermissionContext {
 		request: &request,

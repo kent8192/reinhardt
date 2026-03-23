@@ -1,4 +1,4 @@
-//! Handler for `#[settings(key: Type | key: Type)]`
+//! Handler for `#[settings(key: Type | Type | key: Type)]`
 
 use crate::settings_parser::{FragmentEntry, parse_settings_attr};
 use proc_macro2::TokenStream;
@@ -26,6 +26,89 @@ const BUILTIN_FRAGMENTS: &[&str] = &[
 	"StaticSettings",
 	"TemplateSettings",
 ];
+
+/// Convert CamelCase to snake_case.
+///
+/// Walk characters left to right. Insert `_` before an uppercase letter
+/// when the previous character is lowercase, or when it begins a new word
+/// after a run of uppercase letters.
+///
+/// Examples: `"Core"` → `"core"`, `"StaticFiles"` → `"static_files"`,
+/// `"I18n"` → `"i18n"`, `"HTTPSProxy"` → `"https_proxy"`.
+fn camel_to_snake(s: &str) -> String {
+	let mut result = String::with_capacity(s.len() + 4);
+	let chars: Vec<char> = s.chars().collect();
+
+	for (i, &ch) in chars.iter().enumerate() {
+		if ch.is_uppercase() {
+			if i > 0 {
+				let prev = chars[i - 1];
+				if prev.is_lowercase() || prev.is_ascii_digit() {
+					// aB → a_b
+					result.push('_');
+				} else if prev.is_uppercase()
+					&& chars.get(i + 1).is_some_and(|next| next.is_lowercase())
+				{
+					// ABc → a_bc (acronym boundary)
+					result.push('_');
+				}
+			}
+			result.push(ch.to_lowercase().next().unwrap());
+		} else {
+			result.push(ch);
+		}
+	}
+
+	result
+}
+
+/// Rust keywords that cannot be used as field names.
+///
+/// Includes strict keywords, reserved keywords, and weak keywords.
+/// Mirrors the keyword set in `crates/reinhardt-db/src/migrations/introspect/naming.rs`.
+const RUST_KEYWORDS: &[&str] = &[
+	// Strict keywords
+	"as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
+	"false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
+	"ref", "return", "self", "Self", "static", "struct", "super", "trait", "true", "type",
+	"unsafe", "use", "where", "while",
+	// Reserved keywords (may be used in future)
+	"abstract", "become", "box", "do", "final", "macro", "override", "priv", "try", "typeof",
+	"unsized", "virtual", "yield", // Weak keywords (context-sensitive)
+	"union",
+];
+
+/// Strip `Settings` suffix and convert CamelCase prefix to snake_case.
+///
+/// Returns error if:
+/// - Type does not end with `Settings`
+/// - Prefix is empty (type is exactly `Settings`)
+/// - Inferred name is a Rust keyword
+fn infer_field_name(type_name: &str) -> std::result::Result<String, String> {
+	let prefix = type_name.strip_suffix("Settings").ok_or_else(|| {
+		format!(
+			"Type `{}` does not end with `Settings`. Use explicit syntax: `field_name: {}`",
+			type_name, type_name
+		)
+	})?;
+
+	if prefix.is_empty() {
+		return Err(
+			"Type `Settings` has an empty prefix after stripping `Settings` suffix.".to_string(),
+		);
+	}
+
+	let field_name = camel_to_snake(prefix);
+
+	if RUST_KEYWORDS.contains(&field_name.as_str()) {
+		return Err(format!(
+			"Type `{}` infers field name `{}`, which is a Rust keyword. Use explicit syntax: `{}_field: {}`",
+			type_name, field_name, field_name, type_name
+		));
+	}
+
+	Ok(field_name)
+}
 
 /// Implementation for `#[settings(key: Type)]`.
 pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Result<TokenStream> {
@@ -72,6 +155,23 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 					));
 				}
 				includes.push((key.clone(), type_name.clone()));
+			}
+			FragmentEntry::TypeOnly(type_name) => {
+				let key = infer_field_name(type_name)
+					.map_err(|msg| syn::Error::new(proc_macro2::Span::call_site(), msg))?;
+				if !seen_keys.insert(key.clone()) {
+					return Err(syn::Error::new(
+						proc_macro2::Span::call_site(),
+						format!("Duplicate field name `{}`.", key),
+					));
+				}
+				if !seen_types.insert(type_name.clone()) {
+					return Err(syn::Error::new(
+						proc_macro2::Span::call_site(),
+						format!("Duplicate fragment type `{}`.", type_name),
+					));
+				}
+				includes.push((key, type_name.clone()));
 			}
 			FragmentEntry::Exclude(type_name) => {
 				return Err(syn::Error::new(
@@ -178,5 +278,63 @@ fn resolve_fragment_trait(type_name: &str, conf_crate: &TokenStream) -> TokenStr
 		quote! { #conf_crate::#trait_ident }
 	} else {
 		quote! { #trait_ident }
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	#[rstest]
+	#[case("Core", "core")]
+	#[case("Cache", "cache")]
+	#[case("StaticFiles", "static_files")]
+	#[case("I18n", "i18n")]
+	#[case("Cors", "cors")]
+	#[case("X", "x")]
+	#[case("HTTPSProxy", "https_proxy")]
+	fn test_camel_to_snake(#[case] input: &str, #[case] expected: &str) {
+		// Act
+		let result = camel_to_snake(input);
+
+		// Assert
+		assert_eq!(result, expected);
+	}
+
+	#[rstest]
+	#[case("CoreSettings", Ok("core"))]
+	#[case("CacheSettings", Ok("cache"))]
+	#[case("StaticFilesSettings", Ok("static_files"))]
+	#[case("I18nSettings", Ok("i18n"))]
+	#[case("CorsSettings", Ok("cors"))]
+	#[case("XSettings", Ok("x"))]
+	fn test_infer_field_name_success(
+		#[case] input: &str,
+		#[case] expected: std::result::Result<&str, &str>,
+	) {
+		// Act
+		let result = infer_field_name(input);
+
+		// Assert
+		assert_eq!(result, expected.map(String::from).map_err(String::from));
+	}
+
+	#[rstest]
+	#[case("MyCustomConfig", "does not end with `Settings`")]
+	#[case("Settings", "empty prefix")]
+	#[case("StaticSettings", "Rust keyword")]
+	fn test_infer_field_name_error(#[case] input: &str, #[case] expected_contains: &str) {
+		// Act
+		let result = infer_field_name(input);
+
+		// Assert
+		assert!(result.is_err());
+		assert!(
+			result.as_ref().unwrap_err().contains(expected_contains),
+			"Error message {:?} should contain {:?}",
+			result.unwrap_err(),
+			expected_contains
+		);
 	}
 }

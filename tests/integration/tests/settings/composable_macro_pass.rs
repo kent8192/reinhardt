@@ -1,13 +1,17 @@
 //! Compile-success tests for `#[settings]` proc macro.
 //!
 //! These tests verify that the `#[settings(fragment = true, section = "...")]`
-//! and `#[settings(key: Type | !Type)]` macros compile correctly and produce
-//! the expected traits, fields, and validation methods.
+//! and `#[settings(key: Type | Type | key: Type)]` macros compile correctly
+//! and produce the expected traits, fields, and validation methods.
+//!
+//! Composition supports both explicit (`key: Type`) and implicit (`Type`)
+//! syntax, where implicit entries infer the field name from the type name.
 //!
 //! Placed in the integration test crate because the macros generate code
 //! referencing `reinhardt_conf`, which is not available in the macro crate's
 //! dev-dependencies due to circular dependency constraints.
 
+use reinhardt_conf::settings::cache::{CacheSettings, HasCacheSettings};
 use reinhardt_conf::settings::core_settings::{CoreSettings, HasCoreSettings};
 use reinhardt_conf::settings::fragment::SettingsFragment;
 use reinhardt_conf::settings::profile::Profile;
@@ -382,5 +386,110 @@ fn compose_has_trait_as_generic_bound() {
 	assert_eq!(
 		host, "generic-bound.test",
 		"Has* trait should work as generic bound with composed settings"
+	);
+}
+
+// ============================================================================
+// Type-only syntax (implicit field name inference) pass tests
+// ============================================================================
+
+/// Type-only syntax: CoreSettings | CacheSettings (field names inferred).
+#[settings(CoreSettings | CacheSettings)]
+struct TypeOnlySettings;
+
+/// Mixed syntax: implicit CoreSettings + explicit custom_db.
+#[settings(CoreSettings | custom_db: CustomDbSettings)]
+struct MixedSyntaxSettings;
+
+#[rstest]
+fn compose_type_only_infers_field_names() {
+	// Arrange
+	let settings = TypeOnlySettings {
+		core: reinhardt_conf::CoreSettings::default(),
+		cache: reinhardt_conf::CacheSettings::default(),
+	};
+
+	// Act
+	let core = settings.core();
+	let cache = settings.cache();
+
+	// Assert
+	assert!(
+		core.debug,
+		"Type-only CoreSettings should be accessible via inferred field name"
+	);
+	assert_eq!(
+		cache.backend,
+		reinhardt_conf::CacheSettings::default().backend,
+		"Type-only CacheSettings should be accessible via inferred field name"
+	);
+}
+
+#[rstest]
+fn compose_mixed_syntax_combines_implicit_and_explicit() {
+	// Arrange
+	let settings = MixedSyntaxSettings {
+		core: reinhardt_conf::CoreSettings::default(),
+		custom_db: CustomDbSettings {
+			host: "mixed.test".to_string(),
+			port: 5432,
+		},
+	};
+
+	// Act
+	let core = settings.core();
+	let db = settings.custom_db();
+
+	// Assert
+	assert!(
+		core.debug,
+		"Implicit CoreSettings should work alongside explicit fragments"
+	);
+	assert_eq!(
+		db.host, "mixed.test",
+		"Explicit fragment should be accessible in mixed syntax"
+	);
+}
+
+#[rstest]
+fn compose_type_only_validate_works() {
+	// Arrange
+	let settings = TypeOnlySettings {
+		core: reinhardt_conf::CoreSettings {
+			secret_key: "test-key".to_string(),
+			..Default::default()
+		},
+		cache: reinhardt_conf::CacheSettings::default(),
+	};
+
+	// Act
+	let result = settings.validate(&Profile::Development);
+
+	// Assert
+	assert!(
+		result.is_ok(),
+		"validate() should work with type-only syntax: {result:?}"
+	);
+}
+
+#[rstest]
+fn compose_type_only_serde_roundtrip() {
+	// Arrange
+	let original = TypeOnlySettings {
+		core: reinhardt_conf::CoreSettings {
+			secret_key: "roundtrip".to_string(),
+			..Default::default()
+		},
+		cache: reinhardt_conf::CacheSettings::default(),
+	};
+
+	// Act
+	let json = serde_json::to_string(&original).unwrap();
+	let deserialized: TypeOnlySettings = serde_json::from_str(&json).unwrap();
+
+	// Assert
+	assert_eq!(
+		deserialized.core.secret_key, "roundtrip",
+		"Type-only syntax should survive serde roundtrip"
 	);
 }

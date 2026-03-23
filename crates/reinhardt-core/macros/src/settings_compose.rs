@@ -1,6 +1,6 @@
 //! Handler for `#[settings(key: Type | Type | key: Type)]`
 
-use crate::settings_parser::{FragmentEntry, parse_settings_attr};
+use crate::settings_parser::{FieldOverride, FragmentEntry, PolicyKind, parse_settings_attr};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use std::collections::HashSet;
@@ -134,14 +134,14 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 		)
 	})?;
 
-	// Collect includes; exclusion syntax is no longer supported
-	let mut includes: Vec<(String, String)> = vec![];
+	// Collect includes with overrides; exclusion syntax is no longer supported
+	let mut includes: Vec<(String, String, Vec<FieldOverride>)> = vec![];
 	let mut seen_keys: HashSet<String> = HashSet::new();
 	let mut seen_types: HashSet<String> = HashSet::new();
 
 	for entry in &entries {
 		match entry {
-			FragmentEntry::Include { key, type_name, overrides: _ } => {
+			FragmentEntry::Include { key, type_name, overrides } => {
 				if !seen_keys.insert(key.clone()) {
 					return Err(syn::Error::new(
 						proc_macro2::Span::call_site(),
@@ -154,7 +154,20 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 						format!("Duplicate fragment type `{}`.", type_name),
 					));
 				}
-				includes.push((key.clone(), type_name.clone()));
+				// Check for duplicate field names within the override block
+				let mut seen_override_fields: HashSet<String> = HashSet::new();
+				for ovr in overrides {
+					if !seen_override_fields.insert(ovr.field_name.clone()) {
+						return Err(syn::Error::new(
+							proc_macro2::Span::call_site(),
+							format!(
+								"Duplicate override for field `{}` in fragment `{}`.",
+								ovr.field_name, type_name,
+							),
+						));
+					}
+				}
+				includes.push((key.clone(), type_name.clone(), overrides.clone()));
 			}
 			FragmentEntry::TypeOnly(type_name) => {
 				let key = infer_field_name(type_name)
@@ -171,7 +184,7 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 						format!("Duplicate fragment type `{}`.", type_name),
 					));
 				}
-				includes.push((key, type_name.clone()));
+				includes.push((key, type_name.clone(), vec![]));
 			}
 			FragmentEntry::Exclude(type_name) => {
 				return Err(syn::Error::new(
@@ -193,7 +206,7 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 	// This mirrors the behavior of the deprecated `Settings` struct.
 	let field_defs: Vec<_> = includes
 		.iter()
-		.map(|(key, type_name)| {
+		.map(|(key, type_name, _)| {
 			let key_ident = format_ident!("{}", key);
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
 			quote! {
@@ -206,7 +219,7 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 	// Generate HasSettings<F> impls for each fragment
 	let trait_impls: Vec<_> = includes
 		.iter()
-		.map(|(key, type_name)| {
+		.map(|(key, type_name, _)| {
 			let key_ident = format_ident!("{}", key);
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
 			quote! {
@@ -223,10 +236,111 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 	// to avoid requiring SettingsFragment import at the call site
 	let validate_calls: Vec<_> = includes
 		.iter()
-		.map(|(key, _)| {
+		.map(|(key, _, _)| {
 			let key_ident = format_ident!("{}", key);
 			quote! {
 				#conf_crate::settings::fragment::SettingsFragment::validate(&self.#key_ident, profile)?;
+			}
+		})
+		.collect();
+
+	// Generate resolved_*_policies() methods for fragments with overrides,
+	// and compile-time field existence assertions for override targets.
+	let mut resolved_methods: Vec<TokenStream> = vec![];
+	let mut field_assertions: Vec<TokenStream> = vec![];
+
+	for (key, type_name, overrides) in &includes {
+		if overrides.is_empty() {
+			continue;
+		}
+
+		let type_path = resolve_fragment_type(type_name, &conf_crate);
+		let method_name = format_ident!("resolved_{}_policies", key);
+
+		// Generate match arms for each override
+		let match_arms: Vec<_> = overrides
+			.iter()
+			.map(|ovr| {
+				let field_name_str = &ovr.field_name;
+				let requirement_tokens = policy_kind_to_tokens(&ovr.policy, &conf_crate);
+				quote! {
+					#field_name_str => p.requirement = #requirement_tokens,
+				}
+			})
+			.collect();
+
+		resolved_methods.push(quote! {
+			/// Returns field policies for this fragment with composition-level overrides applied.
+			fn #method_name() -> ::std::vec::Vec<#conf_crate::settings::policy::FieldPolicy> {
+				let mut policies = <#type_path as #conf_crate::settings::fragment::SettingsFragment>::field_policies().to_vec();
+				for p in &mut policies {
+					match p.name {
+						#(#match_arms)*
+						_ => {}
+					}
+				}
+				policies
+			}
+		});
+
+		// Generate compile-time field existence assertion
+		let field_access_checks: Vec<_> = overrides
+			.iter()
+			.map(|ovr| {
+				let field_ident = format_ident!("{}", ovr.field_name);
+				quote! {
+					let _ = &_s.#field_ident;
+				}
+			})
+			.collect();
+
+		field_assertions.push(quote! {
+			const _: () = {
+				#[allow(unused)] // Compile-time field existence check, not runtime
+				fn _assert_fields_exist(_s: &#type_path) {
+					#(#field_access_checks)*
+				}
+			};
+		});
+	}
+
+	// Generate ComposedSettings trait implementation
+	//
+	// For fragments WITH overrides, use the resolved_*_policies() method.
+	// For fragments WITHOUT overrides, use field_policies() directly.
+	let requirement_checks: Vec<_> = includes
+		.iter()
+		.map(|(key, type_name, overrides)| {
+			let type_path = resolve_fragment_type(type_name, &conf_crate);
+			if overrides.is_empty() {
+				// Use base field_policies() directly
+				quote! {
+					for policy in <#type_path as #conf_crate::settings::fragment::SettingsFragment>::field_policies() {
+						if policy.requirement == #conf_crate::settings::policy::FieldRequirement::Required
+							&& !merged.contains_key(policy.name)
+						{
+							return ::std::result::Result::Err(#conf_crate::settings::builder::BuildError::MissingRequiredField {
+								section: <#type_path as #conf_crate::settings::fragment::SettingsFragment>::section(),
+								field: policy.name,
+							});
+						}
+					}
+				}
+			} else {
+				// Use the resolved method with overrides applied
+				let method_name = format_ident!("resolved_{}_policies", key);
+				quote! {
+					for policy in &Self::#method_name() {
+						if policy.requirement == #conf_crate::settings::policy::FieldRequirement::Required
+							&& !merged.contains_key(policy.name)
+						{
+							return ::std::result::Result::Err(#conf_crate::settings::builder::BuildError::MissingRequiredField {
+								section: <#type_path as #conf_crate::settings::fragment::SettingsFragment>::section(),
+								field: policy.name,
+							});
+						}
+					}
+				}
 			}
 		})
 		.collect();
@@ -240,7 +354,11 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 
 		#(#trait_impls)*
 
+		#(#field_assertions)*
+
 		impl #struct_name {
+			#(#resolved_methods)*
+
 			/// Validate all fragments against the given profile.
 			pub fn validate(
 				&self,
@@ -250,7 +368,36 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 				Ok(())
 			}
 		}
+
+		impl #conf_crate::settings::composed::ComposedSettings for #struct_name {
+			fn validate_requirements(
+				merged: &#conf_crate::indexmap::IndexMap<::std::string::String, #conf_crate::serde_json::Value>,
+			) -> ::std::result::Result<(), #conf_crate::settings::builder::BuildError> {
+				#(#requirement_checks)*
+				::std::result::Result::Ok(())
+			}
+
+			fn validate_fragments(
+				&self,
+				profile: &#conf_crate::settings::profile::Profile,
+			) -> #conf_crate::settings::validation::ValidationResult {
+				#(#validate_calls)*
+				::std::result::Result::Ok(())
+			}
+		}
 	})
+}
+
+/// Convert a parsed `PolicyKind` to its fully-qualified `FieldRequirement` token stream.
+fn policy_kind_to_tokens(kind: &PolicyKind, conf_crate: &TokenStream) -> TokenStream {
+	match kind {
+		PolicyKind::Required => {
+			quote! { #conf_crate::settings::policy::FieldRequirement::Required }
+		}
+		PolicyKind::Optional => {
+			quote! { #conf_crate::settings::policy::FieldRequirement::Optional }
+		}
+	}
 }
 
 /// Returns a token stream for a fragment type path.

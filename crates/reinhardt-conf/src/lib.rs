@@ -71,6 +71,15 @@ pub mod settings;
 #[allow(deprecated)] // Settings is deprecated but re-exported for backward compatibility
 pub use settings::{DatabaseConfig, MiddlewareConfig, Settings, TemplateConfig};
 
+// Re-export third-party types used in macro-generated code.
+// The `#[settings(...)]` composition macro generates `ComposedSettings` impls
+// that reference these types; re-exporting here avoids requiring downstream
+// crates to add direct dependencies on `indexmap` and `serde_json`.
+#[doc(hidden)]
+pub use indexmap;
+#[doc(hidden)]
+pub use serde_json;
+
 // Re-export fragment system types at the crate root
 #[cfg(feature = "settings")]
 pub use settings::{

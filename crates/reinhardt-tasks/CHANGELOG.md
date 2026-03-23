@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-tasks@v0.1.0-rc.13...reinhardt-tasks@v0.1.0-rc.14) - 2026-03-23
+
+### Documentation
+
+- *(crates)* update version references from 0.1.0-alpha.1 to 0.1.0-rc.13 across all READMEs
+
+### Fixed
+
+- *(reinhardt-tasks)* atomic lock acquisition with ownership verification and DAG edge rollback
+- *(reinhardt-tasks)* address Copilot review on TTL validation and lock release handling
+
+### Styling
+
+- *(reinhardt-tasks)* fix rustfmt formatting on extend method signatures
+
 ## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-tasks@v0.1.0-rc.8...reinhardt-tasks@v0.1.0-rc.9) - 2026-03-15
 
 ### Styling

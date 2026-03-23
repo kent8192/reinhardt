@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-throttling@v0.1.0-rc.13...reinhardt-throttling@v0.1.0-rc.14) - 2026-03-23
+
+### Fixed
+
+- *(throttling)* resolve token bucket validation and timing bugs
+- *(throttling)* avoid last_accessed side-effect in wait_time and centralize builder validation
+- *(auth,throttling)* resolve rate limiting and throttling bugs ([[#2572](https://github.com/kent8192/reinhardt-web/issues/2572)](https://github.com/kent8192/reinhardt-web/issues/2572), [[#2686](https://github.com/kent8192/reinhardt-web/issues/2686)](https://github.com/kent8192/reinhardt-web/issues/2686), [[#2689](https://github.com/kent8192/reinhardt-web/issues/2689)](https://github.com/kent8192/reinhardt-web/issues/2689))
+- *(throttling)* address Copilot review feedback on rate limiting
+
+### Styling
+
+- apply auto-fix after main merge
+- reformat long lines in effect and burst modules
+
 ## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-throttling@v0.1.0-rc.8...reinhardt-throttling@v0.1.0-rc.9) - 2026-03-15
 
 ### Fixed

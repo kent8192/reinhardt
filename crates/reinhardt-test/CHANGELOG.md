@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.1.0-rc.13...reinhardt-test@v0.1.0-rc.14) - 2026-03-23
+
+### Added
+
+- *(test)* add fantoccini E2E browser testing utility fixtures
+
+### Fixed
+
+- address copilot review feedback and merge main
+- *(test)* wrap env var calls in unsafe blocks for Rust 2024 edition
+- *(test)* improve test infrastructure reliability and E2E fixtures
+- *(test,testkit)* address Copilot review feedback on test infrastructure
+
+### Styling
+
+- apply rustfmt formatting fixes
+
 ## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.1.0-rc.4...reinhardt-test@v0.1.0-rc.5) - 2026-03-07
 
 ### Changed

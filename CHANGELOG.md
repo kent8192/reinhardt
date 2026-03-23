@@ -7,6 +7,109 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.13...reinhardt-web@v0.1.0-rc.14) - 2026-03-23
+
+### Added
+
+- *(infra)* add custom runner Docker image with Rust toolchain
+- *(infra)* add Terraform GitHub config for MAC_RUNNER_ENABLED variable
+- *(infra)* add Terraform configuration for Mac local runner
+- *(ci)* extend determine-runner with Mac local runner priority
+- *(reinhardt-di)* add protocol-agnostic `fork()` method to `InjectionContext`
+- *(conf)* define SettingsFragment trait for composable settings
+- *(macros)* add nom v8.0.0 parser for settings composition syntax
+- *(conf)* define SecuritySettings fragment
+- *(macros)* implement #[settings] attribute macro (fragment + composition)
+- *(conf)* extract built-in fragments from AdvancedSettings
+- *(conf)* define Django-compat fragments (I18n, Template, Contact)
+- *(conf)* define CoreSettings fragment with nested SecuritySettings
+- *(conf)* re-export fragment types and Has* traits from crate root
+
+### Changed
+
+- *(infra)* rename cancel-runner to hotpath-runner
+- *(ci)* replace custom setup-protoc with arduino/setup-protoc@v3
+- *(conf)* deprecate AdvancedSettings in favor of fragment system
+- *(commands)* update project templates to use ProjectSettings
+- *(conf)* deprecate Settings, add HasCoreSettings bridge via serde(flatten)
+- *(examples)* migrate all examples from Settings to ProjectSettings
+- *(macros)* require explicit CoreSettings in #[settings] macro
+
+### Documentation
+
+- update CRATE_STRUCTURE.md with accurate crate count and descriptions
+- fix broken links, typos, and outdated info in root docs
+- *(infra)* add Mac local runner README with setup instructions
+- correct git_release_enable and semver_check values in release process documentation
+- clarify GitHub Releases are enabled only for reinhardt-web
+- *(website)* update settings documentation for composable settings system
+- *(settings)* update docs and examples for explicit CoreSettings
+
+### Fixed
+
+- *(migrations)* resolve multi-element dependency parsing and deterministic sort
+- *(rest)* correct module path in versioning macro
+- *(ci)* use atomic dpkg lock timeout and add missing environment key
+- *(testkit)* unify PostgreSQL version, add pool close, and cleanup backoff
+- *(pages)* protect textarea, style, and script from minification
+- *(db-macros)* emit compile error for unknown field attributes
+- *(examples)* use /api/ mount point for URL consistency
+- *(ci)* add actor check to workflow_dispatch Mac runner gate
+- *(infra)* use pre-built binaries for nextest and mold in Dockerfile
+- *(infra)* use canonical repo URL (reinhardt-web) for runner registration
+- *(infra)* update runner base image to v2.333.0 (v2.322.0 deprecated)
+- *(infra)* add OpenSSL dev packages to Mac runner Docker image
+- *(ci)* pass explicit config path to tfprovidercheck
+- resolve merge conflict keeping both escape tracking and char count tests
+- *(ci)* add RUSTSEC-2026-0049 to security audit ignore list
+- *(ci)* install protoc from GitHub Releases and fix DinD TLS hostname
+- *(ci)* address protoc setup review feedback
+- *(infra)* upgrade runner base image to Ubuntu Jammy for GLIBC 2.35
+- *(reinhardt-db)* remove unnecessary dereference in pool connection
+- *(reinhardt-core)* fork DI context per-request in route and action macros
+- *(reinhardt-pages)* fork DI context per-request in server function macros
+- *(reinhardt-grpc)* fork DI context per-request in gRPC handler macros
+- *(reinhardt-graphql)* fork DI context per-request in GraphQL handler macros
+- *(reinhardt-pages,reinhardt-di)* add Content-Type negotiation for server_fn and Json<T> extractor
+- *(reinhardt-di)* address Copilot review on Content-Type handling
+- *(middleware)* update Settings field access for CoreSettings restructuring
+- *(tests)* update integration tests for CoreSettings restructuring
+- suppress deprecated Settings warnings and fix unreachable pub visibility
+- address Copilot review feedback
+- *(macros)* add missing CoreSettings and HasCoreSettings imports for explicit settings
+- *(examples)* remove unused CoreSettings/HasCoreSettings imports
+
+### Maintenance
+
+- add workflow to auto-delete release-plz branches on PR close
+- remove accidentally committed tfplan binary
+
+### Other
+
+- resolve conflict with main after explicit CoreSettings refactor
+- resolve conflict with main (BUILTIN_FRAGMENTS + resolve helpers)
+- resolve conflict with main (implicit inference tests from PR [[#2860](https://github.com/kent8192/reinhardt-web/issues/2860)](https://github.com/kent8192/reinhardt-web/issues/2860))
+
+### Styling
+
+- *(infra)* apply terraform fmt to all .tf files
+- *(i18n)* format method chain in po_parser tests
+- reformat long lines in effect and burst modules
+- apply rustfmt formatting
+- apply rustfmt formatting fixes to examples and integration tests
+- apply rustfmt formatting fixes to examples
+- apply page! macro DSL formatting via fmt-all
+- fix page! macro DSL formatting in relationship components
+
+### Testing
+
+- *(conf)* add comprehensive composable settings tests (12 categories, 120+ scenarios)
+- *(macros)* add trybuild fail tests for #[settings] proc macro
+- *(integration)* add use case tests for composable settings cross-crate interactions
+- *(integration)* add macro pass tests for #[settings] proc macro
+- *(integration)* verify SettingsBuilder flat keys map correctly via serde flatten
+- *(settings)* update tests for explicit CoreSettings requirement
+
 ## [0.1.0-rc.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.12...reinhardt-web@v0.1.0-rc.13) - 2026-03-18
 
 ### Added

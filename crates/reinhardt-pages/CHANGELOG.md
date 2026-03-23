@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.13...reinhardt-pages@v0.1.0-rc.14) - 2026-03-23
+
+### Fixed
+
+- *(pages)* protect textarea, style, and script from minification
+- *(reinhardt-pages)* fork DI context per-request in server function macros
+- *(reinhardt-pages,reinhardt-di)* add Content-Type negotiation for server_fn and Json<T> extractor
+- *(reinhardt-di)* address Copilot review on Content-Type handling
+- *(reinhardt-pages)* add submit_form function for WASM form submission
+- *(reinhardt-pages)* use request_submit and document panic conditions in submit_form
+- *(pages)* add expression validation to prevent code injection in form validation
+- *(dentdelion,pages)* address Copilot review feedback on XSS/injection defenses
+- *(dentdelion,pages)* address remaining Copilot review on expression validation and tests
+
+### Styling
+
+- *(pages)* fix formatting in renderer.rs
+- apply rustfmt formatting fixes
+
 ## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.11...reinhardt-pages@v0.1.0-rc.12) - 2026-03-18
 
 ### Fixed

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.13...reinhardt-urls@v0.1.0-rc.14) - 2026-03-23
+
+### Documentation
+
+- *(crates)* update version references from 0.1.0-alpha.1 to 0.1.0-rc.13 across all READMEs
+
+### Fixed
+
+- *(reinhardt-urls)* normalize path slashes to prevent double-slash in URL joining
+- *(reinhardt-urls)* restrict join_path visibility to pub(crate)
+
 ## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.11...reinhardt-urls@v0.1.0-rc.12) - 2026-03-18
 
 ### Added

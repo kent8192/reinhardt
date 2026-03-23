@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-testkit@v0.1.0-rc.13...reinhardt-testkit@v0.1.0-rc.14) - 2026-03-23
+
+### Fixed
+
+- *(testkit)* unify PostgreSQL version, add pool close, and cleanup backoff
+- *(test)* improve test infrastructure reliability and E2E fixtures
+- *(test,testkit)* address Copilot review feedback on test infrastructure
+- *(testkit)* initialize ORM global state in postgres_with_migrations_from_dir
+
 ## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-testkit@v0.1.0-rc.11...reinhardt-testkit@v0.1.0-rc.12) - 2026-03-18
 
 ### Added

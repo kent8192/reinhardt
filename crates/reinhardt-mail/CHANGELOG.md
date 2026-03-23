@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-mail@v0.1.0-rc.13...reinhardt-mail@v0.1.0-rc.14) - 2026-03-23
+
+### Fixed
+
+- *(mail)* validate pool configuration parameters
+- address copilot review feedback and merge main
+- *(mail)* use existing BackendError variant instead of adding new enum variant
+
 ## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-mail@v0.1.0-rc.4...reinhardt-mail@v0.1.0-rc.5) - 2026-03-07
 
 ### Documentation

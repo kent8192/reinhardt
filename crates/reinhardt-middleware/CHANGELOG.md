@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.13...reinhardt-middleware@v0.1.0-rc.14) - 2026-03-23
+
+### Fixed
+
+- *(middleware)* inject session ID into request extensions before handler
+- address copilot review feedback for session-id-inject
+- address Copilot review comments on security documentation and validation
+
+### Security
+
+- harden header trust and authorization checks
+
 ## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.11...reinhardt-middleware@v0.1.0-rc.12) - 2026-03-18
 
 ### Security

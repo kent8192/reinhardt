@@ -527,10 +527,12 @@ fn test_collectstatic_file_collision(temp_dir: TempDir) {
 	);
 }
 
-/// Test: CollectStaticCommand no sources
+/// Test: CollectStaticCommand no user-configured sources
 ///
 /// Category: Edge Case
-/// Verifies handling of empty source directories.
+/// Verifies handling of empty `staticfiles_dirs`. Auto-discovered app static
+/// files (e.g., from `reinhardt-admin`) are still collected because the
+/// `inventory`-based discovery runs independently of user configuration.
 #[rstest]
 fn test_collectstatic_no_sources(temp_dir: TempDir) {
 	let dest_dir = temp_dir.path().join("static_root");
@@ -551,11 +553,31 @@ fn test_collectstatic_no_sources(temp_dir: TempDir) {
 	let mut command = CollectStaticCommand::new(config, options);
 	let result = command.execute();
 
-	assert!(result.is_ok(), "Execute should succeed with no sources");
+	assert!(
+		result.is_ok(),
+		"Execute should succeed with no user-configured sources"
+	);
 
-	// Note: stats.copied may be > 0 due to auto-discovered app static files
-	// registered via inventory. The key assertion is that execute() succeeds.
-	let _stats = result.unwrap();
+	let stats = result.unwrap();
+	// Auto-discovered app static files (e.g., reinhardt-admin assets) are
+	// collected even when staticfiles_dirs is empty.
+	let app_static_count: usize = ::reinhardt_apps::get_app_static_files()
+		.iter()
+		.map(|config| {
+			let dir = std::path::Path::new(config.static_dir);
+			if dir.exists() {
+				std::fs::read_dir(dir)
+					.map(|entries| entries.count())
+					.unwrap_or(0)
+			} else {
+				0
+			}
+		})
+		.sum();
+	assert_eq!(
+		stats.copied, app_static_count,
+		"Should have copied only auto-discovered app static files"
+	);
 }
 
 // ============================================================================

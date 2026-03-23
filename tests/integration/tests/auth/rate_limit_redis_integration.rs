@@ -15,10 +15,10 @@ use bytes::Bytes;
 use hyper::{HeaderMap, Method};
 use reinhardt_auth::rate_limit_permission::RateLimitStrategy;
 use reinhardt_auth::{Permission, PermissionContext, RateLimitPermission, SimpleUser};
-use reinhardt_http::Request;
+use reinhardt_http::{Request, TrustedProxies};
 use reinhardt_throttling::{MemoryBackend, ThrottleBackend};
 use rstest::*;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -39,41 +39,58 @@ fn rate_limit_permission(memory_backend: Arc<MemoryBackend>) -> RateLimitPermiss
 	RateLimitPermission::new(memory_backend, RateLimitStrategy::PerIp, 5.0, 5.0 / 60.0)
 }
 
-/// Creates a test request with specified IP via `remote_addr`.
-///
-/// Uses `remote_addr` instead of proxy headers (`X-Forwarded-For`)
-/// because `get_client_ip()` requires trusted proxy configuration
-/// to honour forwarded headers.
-fn create_request_with_ip(ip: &str) -> Request {
-	let addr: SocketAddr = format!("{}:12345", ip).parse().unwrap();
+/// Trusted proxy address used in test requests (127.0.0.1:8080)
+const PROXY_IP: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 1);
+const PROXY_PORT: u16 = 8080;
 
-	Request::builder()
+/// Creates a test request with specified IP in X-Forwarded-For header.
+///
+/// Configures trusted proxies so `get_client_ip()` reads proxy headers.
+fn create_request_with_ip(ip: &str) -> Request {
+	let mut headers = HeaderMap::new();
+	headers.insert("X-Forwarded-For", ip.parse().unwrap());
+
+	let proxy_addr = SocketAddr::new(IpAddr::V4(PROXY_IP), PROXY_PORT);
+	let trusted = TrustedProxies::new(vec![IpAddr::V4(PROXY_IP)]);
+
+	let request = Request::builder()
 		.method(Method::GET)
 		.uri("/api/test")
-		.remote_addr(addr)
+		.headers(headers)
+		.remote_addr(proxy_addr)
 		.body(Bytes::new())
 		.build()
-		.unwrap()
+		.unwrap();
+	request.set_trusted_proxies(trusted);
+	request
 }
 
 /// Creates a test request with X-Real-IP header.
 ///
-/// Note: This header is only honoured when trusted proxies are configured.
-/// For tests that rely on IP extraction, prefer [`create_request_with_ip`].
+/// Configures trusted proxies so `get_client_ip()` reads proxy headers.
 fn create_request_with_real_ip(ip: &str) -> Request {
 	let mut headers = HeaderMap::new();
 	headers.insert("X-Real-IP", ip.parse().unwrap());
 
-	Request::builder()
+	let proxy_addr = SocketAddr::new(IpAddr::V4(PROXY_IP), PROXY_PORT);
+	let trusted = TrustedProxies::new(vec![IpAddr::V4(PROXY_IP)]);
+
+	let request = Request::builder()
 		.method(Method::GET)
 		.uri("/api/test")
 		.headers(headers)
+		.remote_addr(proxy_addr)
 		.body(Bytes::new())
 		.build()
-		.unwrap()
+		.unwrap();
+	request.set_trusted_proxies(trusted);
+	request
 }
 
-/// Creates a basic test request without IP headers
+/// Creates a basic test request without IP headers or remote address.
+///
+/// Used for tests where IP extraction is not needed (e.g., `PerUser`,
+/// `PerRoute` strategies) or where the absence of IP is tested explicitly.
 fn create_basic_request() -> Request {
 	Request::builder()
 		.method(Method::GET)
@@ -521,13 +538,18 @@ async fn test_x_forwarded_for_with_multiple_ips(memory_backend: Arc<MemoryBacken
 			.unwrap(),
 	);
 
+	let proxy_addr = SocketAddr::new(IpAddr::V4(PROXY_IP), PROXY_PORT);
+	let trusted = TrustedProxies::new(vec![IpAddr::V4(PROXY_IP)]);
+
 	let request = Request::builder()
 		.method(Method::GET)
 		.uri("/api/test")
 		.headers(headers)
+		.remote_addr(proxy_addr)
 		.body(Bytes::new())
 		.build()
 		.unwrap();
+	request.set_trusted_proxies(trusted);
 
 	let context = PermissionContext {
 		request: &request,
@@ -556,8 +578,7 @@ async fn test_x_real_ip_header_extraction(memory_backend: Arc<MemoryBackend>) {
 		(config_rate as f64) / (config_window as f64),
 	);
 
-	// Use remote_addr for IP extraction (proxy headers require TrustedProxies)
-	let request = create_request_with_ip("198.51.100.42");
+	let request = create_request_with_real_ip("198.51.100.42");
 	let context = PermissionContext {
 		request: &request,
 		is_authenticated: false,

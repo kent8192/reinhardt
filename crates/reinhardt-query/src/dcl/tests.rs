@@ -1352,7 +1352,7 @@ mod revoke_statement_tests {
 			.to(RoleSpecification::new("'alice'@'localhost'"));
 
 		let (sql, values) = builder.build_grant_role(&stmt);
-		assert!(sql.contains(r#"GRANT `developer` TO `'alice'@'localhost'`"#));
+		assert!(sql.contains(r#"GRANT `developer` TO 'alice'@'localhost'"#));
 		assert!(values.is_empty());
 	}
 
@@ -1366,7 +1366,7 @@ mod revoke_statement_tests {
 			.from(RoleSpecification::new("'alice'@'localhost'"));
 
 		let (sql, values) = builder.build_revoke_role(&stmt);
-		assert!(sql.contains(r#"REVOKE `developer` FROM `'alice'@'localhost'`"#));
+		assert!(sql.contains(r#"REVOKE `developer` FROM 'alice'@'localhost'"#));
 		assert!(values.is_empty());
 	}
 

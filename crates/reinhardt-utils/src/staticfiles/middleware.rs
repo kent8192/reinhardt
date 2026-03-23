@@ -25,6 +25,11 @@ pub struct StaticFilesConfig {
 	pub spa_mode: bool,
 	/// Index files to serve for directories
 	pub index_files: Vec<String>,
+	/// Explicit path to the SPA fallback index file.
+	///
+	/// Can be outside `root_dir` (e.g., project root). When set,
+	/// takes priority over `index_files` for SPA fallback.
+	pub index_file: Option<PathBuf>,
 	/// File extensions to serve (empty = all)
 	pub allowed_extensions: Vec<String>,
 	/// Path prefixes to exclude from SPA fallback (e.g., ["/api/", "/docs"])
@@ -40,6 +45,7 @@ impl Default for StaticFilesConfig {
 			url_prefix: "/".to_string(),
 			spa_mode: true,
 			index_files: vec!["index.html".to_string()],
+			index_file: None,
 			allowed_extensions: vec![],
 			excluded_prefixes: vec!["/api/".to_string()],
 			cache_config: CacheControlConfig::new(),
@@ -71,6 +77,15 @@ impl StaticFilesConfig {
 	/// Set custom index files.
 	pub fn index_files(mut self, files: Vec<String>) -> Self {
 		self.index_files = files;
+		self
+	}
+
+	/// Set a specific index file path for SPA fallback.
+	///
+	/// This path can be outside `root_dir` (e.g., project root).
+	/// When set, this takes priority over `index_files` for SPA fallback.
+	pub fn index_file(mut self, path: impl Into<PathBuf>) -> Self {
+		self.index_file = Some(path.into());
 		self
 	}
 
@@ -400,6 +415,38 @@ mod tests {
 		assert_eq!(
 			html_policy.to_header_value(),
 			"no-cache, no-store, must-revalidate"
+		);
+	}
+
+	#[rstest]
+	fn test_config_index_file_default_is_none() {
+		// Arrange & Act
+		let config = StaticFilesConfig::default();
+
+		// Assert
+		assert!(config.index_file.is_none());
+	}
+
+	#[rstest]
+	fn test_config_index_file_builder_sets_path() {
+		// Arrange & Act
+		let config = StaticFilesConfig::new("dist")
+			.index_file("./index.html");
+
+		// Assert
+		assert_eq!(config.index_file, Some(PathBuf::from("./index.html")));
+	}
+
+	#[rstest]
+	fn test_config_index_file_absolute_path_preserved() {
+		// Arrange & Act
+		let config = StaticFilesConfig::new("dist")
+			.index_file("/absolute/path/index.html");
+
+		// Assert
+		assert_eq!(
+			config.index_file,
+			Some(PathBuf::from("/absolute/path/index.html"))
 		);
 	}
 }

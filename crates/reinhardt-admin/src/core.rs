@@ -27,5 +27,5 @@ pub use import::{
 	CsvImporter, ImportBuilder, ImportConfig, ImportError, ImportFormat, ImportResult, JsonImporter,
 };
 pub use model_admin::{ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder};
-pub use router::{AdminRouter, admin_routes};
+pub use router::{AdminRouter, admin_routes, admin_static_routes};
 pub use site::{AdminSite, AdminSiteConfig};

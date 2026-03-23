@@ -38,6 +38,7 @@ sha2 = "0.10"
 tracing = { workspace = true }
 inventory = { workspace = true }
 reinhardt-pages = { workspace = true }
+bytes = { workspace = true }
 hyper = { workspace = true }
 wasm-bindgen = "0.2.106"
 console_error_panic_hook = { version = "0.1", optional = true }

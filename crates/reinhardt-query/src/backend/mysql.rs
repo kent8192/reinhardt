@@ -51,8 +51,9 @@ pub struct MySqlQueryBuilder;
 fn parse_user_host(user_name: &str) -> (String, String) {
 	let parts: Vec<&str> = user_name.splitn(2, '@').collect();
 	if parts.len() == 2 {
+		let user = parts[0].trim_matches('\'');
 		let host = parts[1].trim_matches('\'');
-		(parts[0].to_string(), host.to_string())
+		(user.to_string(), host.to_string())
 	} else {
 		(user_name.to_string(), "%".to_string())
 	}

@@ -2,7 +2,7 @@
 //!
 //! Provides composable email configuration as a [`SettingsFragment`].
 
-use super::fragment::SettingsFragment;
+use super::fragment::{HasSettings, SettingsFragment};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -90,6 +90,8 @@ impl Default for EmailSettings {
 }
 
 impl SettingsFragment for EmailSettings {
+	type Accessor = dyn HasEmailSettings;
+
 	fn section() -> &'static str {
 		"email"
 	}
@@ -99,6 +101,12 @@ impl SettingsFragment for EmailSettings {
 pub trait HasEmailSettings {
 	/// Returns a reference to the email settings.
 	fn email(&self) -> &EmailSettings;
+}
+
+impl<T: HasSettings<EmailSettings>> HasEmailSettings for T {
+	fn email(&self) -> &EmailSettings {
+		self.get_settings()
+	}
 }
 
 #[cfg(test)]

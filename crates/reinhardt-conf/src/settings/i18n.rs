@@ -2,7 +2,7 @@
 //!
 //! Django compatibility fields for i18n/l10n configuration.
 
-use super::fragment::SettingsFragment;
+use super::fragment::{HasSettings, SettingsFragment};
 use serde::{Deserialize, Serialize};
 
 /// Internationalization and localization settings.
@@ -48,6 +48,8 @@ impl Default for I18nSettings {
 }
 
 impl SettingsFragment for I18nSettings {
+	type Accessor = dyn HasI18nSettings;
+
 	fn section() -> &'static str {
 		"i18n"
 	}
@@ -57,6 +59,12 @@ impl SettingsFragment for I18nSettings {
 pub trait HasI18nSettings {
 	/// Get a reference to the i18n settings.
 	fn i18n(&self) -> &I18nSettings;
+}
+
+impl<T: HasSettings<I18nSettings>> HasI18nSettings for T {
+	fn i18n(&self) -> &I18nSettings {
+		self.get_settings()
+	}
 }
 
 #[cfg(test)]

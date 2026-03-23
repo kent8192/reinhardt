@@ -2,7 +2,7 @@
 //!
 //! Provides composable media file serving configuration as a [`SettingsFragment`].
 
-use super::fragment::SettingsFragment;
+use super::fragment::{HasSettings, SettingsFragment};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -28,6 +28,8 @@ impl Default for MediaSettings {
 }
 
 impl SettingsFragment for MediaSettings {
+	type Accessor = dyn HasMediaSettings;
+
 	fn section() -> &'static str {
 		"media"
 	}
@@ -37,6 +39,12 @@ impl SettingsFragment for MediaSettings {
 pub trait HasMediaSettings {
 	/// Returns a reference to the media settings.
 	fn media(&self) -> &MediaSettings;
+}
+
+impl<T: HasSettings<MediaSettings>> HasMediaSettings for T {
+	fn media(&self) -> &MediaSettings {
+		self.get_settings()
+	}
 }
 
 #[cfg(test)]

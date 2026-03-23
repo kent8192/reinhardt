@@ -2,7 +2,7 @@
 //!
 //! Provides composable static file serving configuration as a [`SettingsFragment`].
 
-use super::fragment::SettingsFragment;
+use super::fragment::{HasSettings, SettingsFragment};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -28,6 +28,8 @@ impl Default for StaticSettings {
 }
 
 impl SettingsFragment for StaticSettings {
+	type Accessor = dyn HasStaticSettings;
+
 	fn section() -> &'static str {
 		"static_files"
 	}
@@ -37,6 +39,12 @@ impl SettingsFragment for StaticSettings {
 pub trait HasStaticSettings {
 	/// Returns a reference to the static files settings.
 	fn static_files(&self) -> &StaticSettings;
+}
+
+impl<T: HasSettings<StaticSettings>> HasStaticSettings for T {
+	fn static_files(&self) -> &StaticSettings {
+		self.get_settings()
+	}
 }
 
 #[cfg(test)]

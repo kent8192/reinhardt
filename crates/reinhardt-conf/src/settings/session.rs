@@ -2,7 +2,7 @@
 //!
 //! Provides composable session configuration as a [`SettingsFragment`].
 
-use super::fragment::SettingsFragment;
+use super::fragment::{HasSettings, SettingsFragment};
 use serde::{Deserialize, Serialize};
 
 /// Session configuration fragment.
@@ -39,6 +39,8 @@ impl Default for SessionSettings {
 }
 
 impl SettingsFragment for SessionSettings {
+	type Accessor = dyn HasSessionSettings;
+
 	fn section() -> &'static str {
 		"session"
 	}
@@ -48,6 +50,12 @@ impl SettingsFragment for SessionSettings {
 pub trait HasSessionSettings {
 	/// Returns a reference to the session settings.
 	fn session(&self) -> &SessionSettings;
+}
+
+impl<T: HasSettings<SessionSettings>> HasSessionSettings for T {
+	fn session(&self) -> &SessionSettings {
+		self.get_settings()
+	}
 }
 
 #[cfg(test)]

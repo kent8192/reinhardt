@@ -3,7 +3,7 @@
 //! Administrator and manager contact information for notifications.
 
 use super::Contact;
-use super::fragment::SettingsFragment;
+use super::fragment::{HasSettings, SettingsFragment};
 use serde::{Deserialize, Serialize};
 
 /// Administrator and manager contact information.
@@ -20,6 +20,8 @@ pub struct ContactSettings {
 }
 
 impl SettingsFragment for ContactSettings {
+	type Accessor = dyn HasContactSettings;
+
 	fn section() -> &'static str {
 		"contacts"
 	}
@@ -29,6 +31,12 @@ impl SettingsFragment for ContactSettings {
 pub trait HasContactSettings {
 	/// Get a reference to the contact settings.
 	fn contacts(&self) -> &ContactSettings;
+}
+
+impl<T: HasSettings<ContactSettings>> HasContactSettings for T {
+	fn contacts(&self) -> &ContactSettings {
+		self.get_settings()
+	}
 }
 
 #[cfg(test)]

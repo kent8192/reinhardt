@@ -2,7 +2,7 @@
 //!
 //! Provides composable cache configuration as a [`SettingsFragment`].
 
-use super::fragment::SettingsFragment;
+use super::fragment::{HasSettings, SettingsFragment};
 use serde::{Deserialize, Serialize};
 
 /// Cache configuration fragment.
@@ -30,6 +30,8 @@ impl Default for CacheSettings {
 }
 
 impl SettingsFragment for CacheSettings {
+	type Accessor = dyn HasCacheSettings;
+
 	fn section() -> &'static str {
 		"cache"
 	}
@@ -39,6 +41,12 @@ impl SettingsFragment for CacheSettings {
 pub trait HasCacheSettings {
 	/// Returns a reference to the cache settings.
 	fn cache(&self) -> &CacheSettings;
+}
+
+impl<T: HasSettings<CacheSettings>> HasCacheSettings for T {
+	fn cache(&self) -> &CacheSettings {
+		self.get_settings()
+	}
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 //!
 //! Provides composable logging configuration as a [`SettingsFragment`].
 
-use super::fragment::SettingsFragment;
+use super::fragment::{HasSettings, SettingsFragment};
 use serde::{Deserialize, Serialize};
 
 /// Logging configuration fragment.
@@ -27,6 +27,8 @@ impl Default for LoggingSettings {
 }
 
 impl SettingsFragment for LoggingSettings {
+	type Accessor = dyn HasLoggingSettings;
+
 	fn section() -> &'static str {
 		"logging"
 	}
@@ -36,6 +38,12 @@ impl SettingsFragment for LoggingSettings {
 pub trait HasLoggingSettings {
 	/// Returns a reference to the logging settings.
 	fn logging(&self) -> &LoggingSettings;
+}
+
+impl<T: HasSettings<LoggingSettings>> HasLoggingSettings for T {
+	fn logging(&self) -> &LoggingSettings {
+		self.get_settings()
+	}
 }
 
 #[cfg(test)]

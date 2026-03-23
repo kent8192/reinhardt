@@ -2,7 +2,7 @@
 //!
 //! Provides composable CORS configuration as a [`SettingsFragment`].
 
-use super::fragment::SettingsFragment;
+use super::fragment::{HasSettings, SettingsFragment};
 use serde::{Deserialize, Serialize};
 
 /// CORS configuration fragment.
@@ -42,6 +42,8 @@ impl Default for CorsSettings {
 }
 
 impl SettingsFragment for CorsSettings {
+	type Accessor = dyn HasCorsSettings;
+
 	fn section() -> &'static str {
 		"cors"
 	}
@@ -51,6 +53,12 @@ impl SettingsFragment for CorsSettings {
 pub trait HasCorsSettings {
 	/// Returns a reference to the CORS settings.
 	fn cors(&self) -> &CorsSettings;
+}
+
+impl<T: HasSettings<CorsSettings>> HasCorsSettings for T {
+	fn cors(&self) -> &CorsSettings {
+		self.get_settings()
+	}
 }
 
 #[cfg(test)]

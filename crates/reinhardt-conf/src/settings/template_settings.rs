@@ -2,7 +2,7 @@
 //!
 //! Composable fragment for template engine configuration.
 
-use super::fragment::SettingsFragment;
+use super::fragment::{HasSettings, SettingsFragment};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -34,6 +34,8 @@ pub struct TemplateSettings {
 }
 
 impl SettingsFragment for TemplateSettings {
+	type Accessor = dyn HasTemplateSettings;
+
 	fn section() -> &'static str {
 		"templates"
 	}
@@ -43,6 +45,12 @@ impl SettingsFragment for TemplateSettings {
 pub trait HasTemplateSettings {
 	/// Get a reference to the template settings.
 	fn templates(&self) -> &TemplateSettings;
+}
+
+impl<T: HasSettings<TemplateSettings>> HasTemplateSettings for T {
+	fn templates(&self) -> &TemplateSettings {
+		self.get_settings()
+	}
 }
 
 #[cfg(test)]

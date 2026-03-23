@@ -2,7 +2,7 @@
 //!
 //! Controls HTTPS enforcement, HSTS policy, cookie security, and URL handling.
 
-use super::fragment::SettingsFragment;
+use super::fragment::{HasSettings, SettingsFragment};
 use super::profile::Profile;
 use super::validation::{ValidationError, ValidationResult};
 use serde::{Deserialize, Serialize};
@@ -62,6 +62,8 @@ impl Default for SecuritySettings {
 }
 
 impl SettingsFragment for SecuritySettings {
+	type Accessor = dyn HasSecuritySettings;
+
 	fn section() -> &'static str {
 		"security"
 	}
@@ -92,6 +94,12 @@ impl SettingsFragment for SecuritySettings {
 pub trait HasSecuritySettings {
 	/// Get a reference to the security settings.
 	fn security(&self) -> &SecuritySettings;
+}
+
+impl<T: HasSettings<SecuritySettings>> HasSecuritySettings for T {
+	fn security(&self) -> &SecuritySettings {
+		self.get_settings()
+	}
 }
 
 #[cfg(test)]

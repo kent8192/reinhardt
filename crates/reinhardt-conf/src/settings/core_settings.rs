@@ -3,7 +3,7 @@
 //! Essential configuration shared by all reinhardt applications.
 
 use super::database_config::DatabaseConfig;
-use super::fragment::SettingsFragment;
+use super::fragment::{HasSettings, SettingsFragment};
 use super::profile::Profile;
 use super::security::SecuritySettings;
 use super::validation::{ValidationError, ValidationResult};
@@ -80,6 +80,8 @@ impl Default for CoreSettings {
 }
 
 impl SettingsFragment for CoreSettings {
+	type Accessor = dyn HasCoreSettings;
+
 	fn section() -> &'static str {
 		"core"
 	}
@@ -113,6 +115,12 @@ impl SettingsFragment for CoreSettings {
 pub trait HasCoreSettings {
 	/// Get a reference to the core settings.
 	fn core(&self) -> &CoreSettings;
+}
+
+impl<T: HasSettings<CoreSettings>> HasCoreSettings for T {
+	fn core(&self) -> &CoreSettings {
+		self.get_settings()
+	}
 }
 
 #[cfg(test)]

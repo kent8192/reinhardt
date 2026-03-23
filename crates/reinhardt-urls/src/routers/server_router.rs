@@ -455,21 +455,21 @@ impl ServerRouter {
 
 	/// Build middleware list, wrapping any with exclusions in `ExcludeMiddleware`.
 	fn build_middleware_with_exclusions(&self) -> Vec<Arc<dyn Middleware>> {
-		self.middleware
-			.iter()
-			.zip(self.middleware_exclusions.iter())
-			.map(|(mw, exclusions)| {
-				if exclusions.is_empty() {
-					mw.clone()
-				} else {
-					let mut exclude_mw = ExcludeMiddleware::new(mw.clone());
-					for pattern in exclusions {
-						exclude_mw.add_exclusion_mut(pattern);
-					}
-					Arc::new(exclude_mw) as Arc<dyn Middleware>
+		let mut result: Vec<Arc<dyn Middleware>> = Vec::with_capacity(self.middleware.len());
+
+		for (mw, exclusions) in self.middleware.iter().zip(self.middleware_exclusions.iter()) {
+			if exclusions.is_empty() {
+				result.push(mw.clone());
+			} else {
+				let mut exclude_mw = ExcludeMiddleware::new(mw.clone());
+				for pattern in exclusions {
+					exclude_mw.add_exclusion_mut(pattern);
 				}
-			})
-			.collect()
+				result.push(Arc::new(exclude_mw) as Arc<dyn Middleware>);
+			}
+		}
+
+		result
 	}
 
 	/// Mount a child router at the given prefix

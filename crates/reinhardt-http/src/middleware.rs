@@ -269,10 +269,10 @@ impl Handler for MiddlewareChain {
 /// - Paths without trailing `/` require an **exact match**
 ///   (e.g., `"/health"` excludes only `"/health"`, not `"/health/check"`)
 ///
-/// This struct is typically not used directly. Instead, use
-/// `ServerRouter::exclude()` or
-/// `UnifiedRouter::exclude()` for
-/// declarative route exclusion at the router level.
+/// This struct is typically not used directly. Instead, use the
+/// `exclude` methods on the `ServerRouter` or `UnifiedRouter` types
+/// from the `reinhardt_urls::routers` module for declarative
+/// route exclusion at the router level.
 ///
 /// # Examples
 ///

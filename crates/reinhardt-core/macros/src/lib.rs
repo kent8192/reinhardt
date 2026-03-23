@@ -784,7 +784,7 @@ pub fn derive_validate(input: TokenStream) -> TokenStream {
 /// Composes fragments into a project settings struct:
 ///
 /// ```rust,ignore
-/// #[settings(cache: CacheSettings | session: SessionSettings | !CorsSettings)]
+/// #[settings(core: CoreSettings | cache: CacheSettings | session: SessionSettings)]
 /// pub struct ProjectSettings;
 /// ```
 #[proc_macro_attribute]

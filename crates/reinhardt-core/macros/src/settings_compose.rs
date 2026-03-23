@@ -1,4 +1,4 @@
-//! Handler for `#[settings(key: Type | key: Type | !Type)]`
+//! Handler for `#[settings(key: Type | key: Type)]`
 
 use crate::settings_parser::{FragmentEntry, parse_settings_attr};
 use proc_macro2::TokenStream;
@@ -6,12 +6,7 @@ use quote::{format_ident, quote};
 use std::collections::HashSet;
 use syn::{ItemStruct, Result};
 
-/// The only implicit fragment type name.
-const IMPLICIT_FRAGMENT: &str = "CoreSettings";
-/// The default key for the implicit CoreSettings fragment.
-const IMPLICIT_KEY: &str = "core";
-
-/// Implementation for `#[settings(key: Type | !Type)]`.
+/// Implementation for `#[settings(key: Type)]`.
 pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Result<TokenStream> {
 	let conf_crate = crate::crate_paths::get_reinhardt_conf_crate();
 	let struct_name = &input.ident;
@@ -20,22 +15,23 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 
 	let args_str = args.to_string();
 
-	// Parse entries (empty attr means empty list, just CoreSettings)
-	let entries = if args_str.trim().is_empty() {
-		vec![]
-	} else {
-		let (_, entries) = parse_settings_attr(&args_str).map_err(|e| {
-			syn::Error::new(
-				proc_macro2::Span::call_site(),
-				format!("failed to parse settings attribute: {}", e),
-			)
-		})?;
-		entries
-	};
+	// Empty attribute is an error — at least one fragment must be specified
+	if args_str.trim().is_empty() {
+		return Err(syn::Error::new(
+			proc_macro2::Span::call_site(),
+			"#[settings()] requires at least one fragment. Use `#[settings(core: CoreSettings)]` for core-only settings.",
+		));
+	}
 
-	// Separate includes and excludes
+	let (_, entries) = parse_settings_attr(&args_str).map_err(|e| {
+		syn::Error::new(
+			proc_macro2::Span::call_site(),
+			format!("failed to parse settings attribute: {}", e),
+		)
+	})?;
+
+	// Collect includes; exclusion syntax is no longer supported
 	let mut includes: Vec<(String, String)> = vec![];
-	let mut excludes: HashSet<String> = HashSet::new();
 	let mut seen_keys: HashSet<String> = HashSet::new();
 	let mut seen_types: HashSet<String> = HashSet::new();
 
@@ -54,44 +50,22 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 						format!("Duplicate fragment type `{}`.", type_name),
 					));
 				}
-				if excludes.contains(type_name) {
-					return Err(syn::Error::new(
-						proc_macro2::Span::call_site(),
-						format!("Cannot both include and exclude `{}`.", type_name),
-					));
-				}
 				includes.push((key.clone(), type_name.clone()));
 			}
 			FragmentEntry::Exclude(type_name) => {
-				if type_name != IMPLICIT_FRAGMENT {
-					return Err(syn::Error::new(
-						proc_macro2::Span::call_site(),
-						format!(
-							"Cannot exclude `{}`: it is not implicitly included. Remove the `!` prefix.",
-							type_name,
-						),
-					));
-				}
-				if seen_types.contains(type_name) {
-					return Err(syn::Error::new(
-						proc_macro2::Span::call_site(),
-						format!("Cannot both include and exclude `{}`.", type_name),
-					));
-				}
-				excludes.insert(type_name.clone());
+				return Err(syn::Error::new(
+					proc_macro2::Span::call_site(),
+					format!(
+						"Exclusion syntax `!{}` is no longer supported. Simply omit the fragment instead.",
+						type_name,
+					),
+				));
 			}
 		}
 	}
 
-	// Add implicit CoreSettings if not excluded
-	let mut all_fragments: Vec<(String, String)> = vec![];
-	if !excludes.contains(IMPLICIT_FRAGMENT) && !seen_types.contains(IMPLICIT_FRAGMENT) {
-		all_fragments.push((IMPLICIT_KEY.to_string(), IMPLICIT_FRAGMENT.to_string()));
-	}
-	all_fragments.extend(includes);
-
 	// Generate struct fields
-	let field_defs: Vec<_> = all_fragments
+	let field_defs: Vec<_> = includes
 		.iter()
 		.map(|(key, type_name)| {
 			let key_ident = format_ident!("{}", key);
@@ -101,7 +75,7 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 		.collect();
 
 	// Generate Has* trait impls
-	let trait_impls: Vec<_> = all_fragments
+	let trait_impls: Vec<_> = includes
 		.iter()
 		.map(|(key, type_name)| {
 			let key_ident = format_ident!("{}", key);
@@ -117,13 +91,14 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 		})
 		.collect();
 
-	// Generate validate() method calls
-	let validate_calls: Vec<_> = all_fragments
+	// Generate validate() method calls using fully-qualified path
+	// to avoid requiring SettingsFragment import at the call site
+	let validate_calls: Vec<_> = includes
 		.iter()
 		.map(|(key, _)| {
 			let key_ident = format_ident!("{}", key);
 			quote! {
-				self.#key_ident.validate(profile)?;
+				#conf_crate::settings::fragment::SettingsFragment::validate(&self.#key_ident, profile)?;
 			}
 		})
 		.collect();

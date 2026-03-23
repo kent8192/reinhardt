@@ -97,10 +97,13 @@ password = "local-password"
 
 ```rust
 use reinhardt::settings;
-use reinhardt::{DefaultSource, LowPriorityEnvSource, Profile, SettingsBuilder, TomlFileSource};
+use reinhardt::{
+	CoreSettings, DefaultSource, HasCoreSettings, LowPriorityEnvSource, Profile, SettingsBuilder,
+	TomlFileSource,
+};
 use std::env;
 
-#[settings(/* add fragments here, e.g.: cache: CacheSettings | session: SessionSettings */)]
+#[settings(core: CoreSettings /* add fragments here, e.g.: | cache: CacheSettings | session: SessionSettings */)]
 pub struct ProjectSettings;
 
 pub fn get_settings() -> ProjectSettings {
@@ -395,14 +398,15 @@ than under a `[core]` section.
 ### The `#[settings]` Macro
 
 The `#[settings]` macro generates a `ProjectSettings` struct with the specified
-fragments. `CoreSettings` is always included by default.
+fragments. All fragments, including `CoreSettings`, must be declared explicitly.
 
 #### Basic Usage (CoreSettings only)
 
 ```rust
 use reinhardt::settings;
+use reinhardt::{CoreSettings, HasCoreSettings};
 
-#[settings()]
+#[settings(core: CoreSettings)]
 pub struct ProjectSettings;
 
 // Generated struct has a `core` field of type CoreSettings.
@@ -415,9 +419,11 @@ Use `field_name: FragmentType` syntax, separated by `|`:
 
 ```rust
 use reinhardt::settings;
+use reinhardt::{CoreSettings, HasCoreSettings};
 use reinhardt::conf::{CacheSettings, SessionSettings, CorsSettings};
+use reinhardt::conf::{HasCacheSettings, HasSessionSettings, HasCorsSettings};
 
-#[settings(cache: CacheSettings | session: SessionSettings | cors: CorsSettings)]
+#[settings(core: CoreSettings | cache: CacheSettings | session: SessionSettings | cors: CorsSettings)]
 pub struct ProjectSettings;
 
 // Access:
@@ -427,15 +433,15 @@ pub struct ProjectSettings;
 // settings.cors.allowed_origins
 ```
 
-#### Excluding CoreSettings
+#### Without CoreSettings
 
-In rare cases where you don't need `CoreSettings`, exclude it with `!`:
+If you don't need `CoreSettings`, simply omit it:
 
 ```rust
 use reinhardt::settings;
-use reinhardt::conf::CacheSettings;
+use reinhardt::conf::{CacheSettings, HasCacheSettings};
 
-#[settings(!CoreSettings, cache: CacheSettings)]
+#[settings(cache: CacheSettings)]
 pub struct ProjectSettings;
 
 // Only has settings.cache, no settings.core
@@ -568,9 +574,9 @@ TOML files, use `EnvSource`:
 
 ```rust
 use reinhardt::settings;
-use reinhardt::{SettingsBuilder, EnvSource, DefaultSource};
+use reinhardt::{CoreSettings, DefaultSource, EnvSource, HasCoreSettings, SettingsBuilder};
 
-#[settings()]
+#[settings(core: CoreSettings)]
 pub struct ProjectSettings;
 
 pub fn get_settings() -> ProjectSettings {
@@ -594,10 +600,13 @@ pub fn get_settings() -> ProjectSettings {
 
 ```rust
 use reinhardt::settings;
-use reinhardt::{DefaultSource, LowPriorityEnvSource, Profile, SettingsBuilder, TomlFileSource};
+use reinhardt::{
+	CoreSettings, DefaultSource, HasCoreSettings, LowPriorityEnvSource, Profile, SettingsBuilder,
+	TomlFileSource,
+};
 use std::env;
 
-#[settings()]
+#[settings(core: CoreSettings)]
 pub struct ProjectSettings;
 
 pub fn get_settings() -> ProjectSettings {

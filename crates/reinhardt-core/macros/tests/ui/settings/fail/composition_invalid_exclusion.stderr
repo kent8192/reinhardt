@@ -1,4 +1,4 @@
-error: Cannot exclude `SomeRandomType`: it is not implicitly included. Remove the `!` prefix.
+error: Exclusion syntax `!SomeRandomType` is no longer supported. Simply omit the fragment instead.
  --> tests/ui/settings/fail/composition_invalid_exclusion.rs:3:1
   |
 3 | #[settings(!SomeRandomType)]

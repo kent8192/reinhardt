@@ -1,4 +1,4 @@
-error: Cannot both include and exclude `CoreSettings`.
+error: Exclusion syntax `!CoreSettings` is no longer supported. Simply omit the fragment instead.
  --> tests/ui/settings/fail/composition_include_and_exclude_same.rs:3:1
   |
 3 | #[settings(core: CoreSettings | !CoreSettings)]

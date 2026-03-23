@@ -168,20 +168,20 @@ fn fragment_auto_derives_clone_debug_serde() {
 // Composition macro pass tests
 // ============================================================================
 
-/// Compose with a single explicit fragment — CoreSettings is implicit.
-#[settings(custom_db: CustomDbSettings)]
+/// Compose with CoreSettings and a single explicit fragment.
+#[settings(core: CoreSettings | custom_db: CustomDbSettings)]
 struct SingleFragmentSettings;
 
-/// Compose with multiple fragments — CoreSettings is implicit.
-#[settings(custom_db: CustomDbSettings | rate_limit: RateLimitSettings)]
+/// Compose with CoreSettings and multiple fragments.
+#[settings(core: CoreSettings | custom_db: CustomDbSettings | rate_limit: RateLimitSettings)]
 struct MultiFragmentSettings;
 
-/// Compose excluding CoreSettings — only explicit fragments remain.
-#[settings(custom_db: CustomDbSettings | !CoreSettings)]
+/// Compose without CoreSettings — only explicit fragments.
+#[settings(custom_db: CustomDbSettings)]
 struct NoCoreSettings;
 
-/// Compose with only CoreSettings (empty attribute).
-#[settings()]
+/// Compose with only CoreSettings (explicit declaration required).
+#[settings(core: CoreSettings)]
 struct CoreOnlySettings;
 
 #[rstest]
@@ -200,7 +200,7 @@ fn compose_single_fragment_has_core_and_custom() {
 	let db = settings.custom_db();
 
 	// Assert
-	assert!(core.debug, "Implicit CoreSettings should be included");
+	assert!(core.debug, "Explicit CoreSettings should be included");
 	assert_eq!(
 		db.host, "localhost",
 		"Explicit fragment should be accessible via Has trait"
@@ -228,7 +228,7 @@ fn compose_multi_fragment_has_all_three() {
 	let rl = settings.rate_limit();
 
 	// Assert
-	assert!(core.debug, "CoreSettings should be implicit");
+	assert!(core.debug, "CoreSettings should be included");
 	assert_eq!(db.port, 5432, "CustomDbSettings should be accessible");
 	assert_eq!(
 		rl.max_requests, 1000,
@@ -252,7 +252,7 @@ fn compose_exclude_core_only_has_explicit() {
 	// Assert
 	assert_eq!(
 		db.host, "remote.db",
-		"Excluded CoreSettings should not be present"
+		"Only explicit fragment should be present when CoreSettings is omitted"
 	);
 	assert_eq!(db.port, 3306, "Only explicit fragment should exist");
 }
@@ -273,7 +273,7 @@ fn compose_core_only_has_core() {
 	// Assert
 	assert_eq!(
 		core.secret_key, "test-key",
-		"Empty attribute should include only CoreSettings"
+		"Explicit CoreSettings should be the only fragment"
 	);
 	assert!(core.debug, "CoreSettings default debug should be true");
 }

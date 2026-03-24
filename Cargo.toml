@@ -597,19 +597,6 @@ colored = "3.0.0"
 criterion = { version = "0.8", features = ["html_reports"] }
 insta = { version = "1.41", features = ["json", "toml"] }
 
-# SQL Query Builder
-sea-query = { version = "1.0.0-rc.29", features = [
-  "with-json",
-  "with-chrono",
-  "with-rust_decimal",
-  "with-uuid",
-  "postgres-array",
-  "sqlx-utils",
-  "backend-postgres",
-  "backend-mysql",
-  "backend-sqlite",
-] }
-
 # Documentation
 aquamarine = "0.5"
 

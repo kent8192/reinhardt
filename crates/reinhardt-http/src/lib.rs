@@ -105,7 +105,7 @@ pub use chunked_upload::{
 pub use extensions::Extensions;
 #[cfg(feature = "messages")]
 pub use messages_middleware::MessagesMiddleware;
-pub use middleware::{Handler, Middleware, MiddlewareChain};
+pub use middleware::{ExcludeMiddleware, Handler, Middleware, MiddlewareChain};
 pub use request::{Request, RequestBuilder, TrustedProxies};
 pub use response::{Response, SafeErrorResponse, StreamBody, StreamingResponse};
 pub use upload::{FileUploadError, FileUploadHandler, MemoryFileUpload, TemporaryFileUpload};

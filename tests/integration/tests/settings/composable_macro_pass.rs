@@ -38,9 +38,9 @@ struct RateLimitSettings {
 	pub window_seconds: u64,
 }
 
-/// Fragment with no fields (unit-like struct body).
+/// Fragment with no fields (empty named-field struct).
 #[settings(fragment = true, section = "empty_section")]
-struct EmptySettings;
+struct EmptySettings {}
 
 #[rstest]
 fn fragment_basic_section_is_correct() {

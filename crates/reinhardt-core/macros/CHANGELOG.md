@@ -7,48 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.1.0-rc.13...reinhardt-macros@v0.1.0-rc.14) - 2026-03-24
-
-### Added
-
-- *(macros)* add nom v8.0.0 parser for settings composition syntax
-- *(macros)* implement #[settings] attribute macro (fragment + composition)
-- *(macros)* extend nom parser for { field: policy } override blocks
-- *(macros)* add #[setting()] attribute parsing and field_policies() generation
-- *(macros)* add composition override blocks and ComposedSettings generation
-
-### Changed
-
-- *(macros)* require explicit CoreSettings in #[settings] macro
-- *(macros)* generate HasSettings<F> in both settings macros
-
-### Documentation
-
-- *(crates)* update version references from 0.1.0-alpha.1 to 0.1.0-rc.13 across all READMEs
-
-### Fixed
-
-- *(reinhardt-core)* fork DI context per-request in route and action macros
-- suppress deprecated Settings warnings and fix unreachable pub visibility
-- *(macros)* add missing CoreSettings and HasCoreSettings imports for explicit settings
-- *(settings)* address Copilot review feedback for field policy system
-- *(settings)* use section-nested keys in #[settings] macro validation and deserialization
-
-### Other
-
-- resolve conflict with main (BUILTIN_FRAGMENTS + resolve helpers)
-- resolve conflict with main (implicit inference tests from PR [[#2860](https://github.com/kent8192/reinhardt-web/issues/2860)](https://github.com/kent8192/reinhardt-web/issues/2860))
-
-### Styling
-
-- apply rustfmt formatting
-- apply formatting fixes for field policy changes
-
-### Testing
-
-- *(macros)* add trybuild fail tests for #[settings] proc macro
-- *(settings)* update tests for explicit CoreSettings requirement
-
 ## [0.1.0-rc.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.1.0-rc.12...reinhardt-macros@v0.1.0-rc.13) - 2026-03-18
 
 ### Fixed

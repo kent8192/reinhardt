@@ -7,12 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query-macros@v0.1.0-rc.13...reinhardt-query-macros@v0.1.0-rc.14) - 2026-03-24
-
-### Fixed
-
-- *(deps)* update native-tls pin and use workspace versions in proc-macro crates
-
 ## [0.1.0-rc.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query-macros@v0.1.0-rc.1...reinhardt-query-macros@v0.1.0-rc.2) - 2026-03-04
 
 ### Fixed

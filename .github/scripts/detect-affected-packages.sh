@@ -214,7 +214,7 @@ else
   PARTITION_COUNT=8
 fi
 # Build JSON array for dynamic matrix (e.g., [1,2,3])
-PARTITIONS_JSON=$(seq 1 "$PARTITION_COUNT" | jq -s .)
+PARTITIONS_JSON=$(seq 1 "$PARTITION_COUNT" | jq -cs .)
 echo "::notice::Partition count: $PARTITION_COUNT (partitions: $PARTITIONS_JSON)"
 
 echo "run-all=false" >> "$GITHUB_OUTPUT"

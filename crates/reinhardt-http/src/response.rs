@@ -477,10 +477,122 @@ impl Response {
 		Ok(self)
 	}
 
+	/// Add a custom header to the response only if it is not already present.
+	///
+	/// If the header already exists, the existing value is preserved.
+	/// Invalid header names or values are silently ignored.
+	/// Use [`try_with_header_if_absent`](Self::try_with_header_if_absent) if you need error
+	/// reporting.
+	///
+	/// This is useful in middleware that should not overwrite headers already set
+	/// by handlers (e.g., handler-specific CSP headers should survive middleware processing).
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_http::Response;
+	///
+	/// // Inserts the header when it is not already present
+	/// let response = Response::ok().with_header_if_absent("X-Custom", "first");
+	/// assert_eq!(
+	///     response.headers.get("X-Custom").unwrap().to_str().unwrap(),
+	///     "first"
+	/// );
+	/// ```
+	///
+	/// ```
+	/// use reinhardt_http::Response;
+	///
+	/// // Preserves the existing header value
+	/// let response = Response::ok()
+	///     .with_header("X-Custom", "original")
+	///     .with_header_if_absent("X-Custom", "overwrite-attempt");
+	/// assert_eq!(
+	///     response.headers.get("X-Custom").unwrap().to_str().unwrap(),
+	///     "original"
+	/// );
+	/// ```
+	///
+	/// ```
+	/// use reinhardt_http::Response;
+	///
+	/// // Invalid header names are silently ignored (no panic)
+	/// let response = Response::ok().with_header_if_absent("Invalid Header", "value");
+	/// assert!(response.headers.is_empty());
+	/// ```
+	pub fn with_header_if_absent(mut self, name: &str, value: &str) -> Self {
+		if let Ok(header_name) = hyper::header::HeaderName::from_bytes(name.as_bytes())
+			&& !self.headers.contains_key(&header_name)
+			&& let Ok(header_value) = hyper::header::HeaderValue::from_str(value)
+		{
+			self.headers.insert(header_name, header_value);
+		}
+		self
+	}
+
+	/// Add a custom header to the response only if it is not already present,
+	/// returning an error for invalid header names or values.
+	///
+	/// If the header already exists, the existing value is preserved and `Ok(self)`
+	/// is returned without modification.
+	///
+	/// # Errors
+	///
+	/// Returns an error if the header name or value is invalid.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_http::Response;
+	///
+	/// // Inserts when absent
+	/// let response = Response::ok()
+	///     .try_with_header_if_absent("X-Custom", "value")
+	///     .unwrap();
+	/// assert_eq!(
+	///     response.headers.get("X-Custom").unwrap().to_str().unwrap(),
+	///     "value"
+	/// );
+	/// ```
+	///
+	/// ```
+	/// use reinhardt_http::Response;
+	///
+	/// // Preserves existing header value
+	/// let response = Response::ok()
+	///     .try_with_header("X-Custom", "original")
+	///     .unwrap()
+	///     .try_with_header_if_absent("X-Custom", "overwrite-attempt")
+	///     .unwrap();
+	/// assert_eq!(
+	///     response.headers.get("X-Custom").unwrap().to_str().unwrap(),
+	///     "original"
+	/// );
+	/// ```
+	///
+	/// ```
+	/// use reinhardt_http::Response;
+	///
+	/// // Invalid header names return an error
+	/// let result = Response::ok().try_with_header_if_absent("Invalid Header", "value");
+	/// assert!(result.is_err());
+	/// ```
+	pub fn try_with_header_if_absent(mut self, name: &str, value: &str) -> crate::Result<Self> {
+		let header_name = hyper::header::HeaderName::from_bytes(name.as_bytes())
+			.map_err(|e| crate::Error::Http(format!("Invalid header name '{}': {}", name, e)))?;
+		if !self.headers.contains_key(&header_name) {
+			let header_value = hyper::header::HeaderValue::from_str(value).map_err(|e| {
+				crate::Error::Http(format!("Invalid header value for '{}': {}", name, e))
+			})?;
+			self.headers.insert(header_name, header_value);
+		}
+		Ok(self)
+	}
+
 	/// Add a custom header to the response.
 	///
 	/// Invalid header names or values are silently ignored.
-	/// Use `try_with_header` if you need error reporting.
+	/// Use [`try_with_header`](Self::try_with_header) if you need error reporting.
 	///
 	/// # Examples
 	///
@@ -509,6 +621,7 @@ impl Response {
 		}
 		self
 	}
+
 	/// Add a Location header to the response (typically used for redirects)
 	///
 	/// # Examples

@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::warn;
+use tracing::{debug, warn};
 
 /// Type wrapper for CSP nonce stored in Request extensions
 #[derive(Debug, Clone)]
@@ -315,17 +315,25 @@ impl Middleware for CspMiddleware {
 		// Call handler
 		let mut response = handler.handle(request).await?;
 
-		// Add CSP header
-		let csp_value = self.build_csp_header(nonce.as_deref());
-		match csp_value.parse() {
-			Ok(value) => {
-				response.headers.insert(self.get_header_name(), value);
-			}
-			Err(e) => {
-				warn!(
-					error = %e,
-					"Failed to parse CSP header value, skipping header insertion"
-				);
+		// Add CSP header only if handler has not already set one
+		let header_name = self.get_header_name();
+		if response.headers.contains_key(header_name) {
+			debug!(
+				header = header_name,
+				"CSP header already present in response, skipping middleware insertion"
+			);
+		} else {
+			let csp_value = self.build_csp_header(nonce.as_deref());
+			match csp_value.parse() {
+				Ok(value) => {
+					response.headers.insert(header_name, value);
+				}
+				Err(e) => {
+					warn!(
+						error = %e,
+						"Failed to parse CSP header value, skipping header insertion"
+					);
+				}
 			}
 		}
 
@@ -839,6 +847,100 @@ mod tests {
 			nonces.len(),
 			100,
 			"All 100 nonces should be unique (statistical randomness)"
+		);
+	}
+
+	#[tokio::test]
+	async fn test_does_not_override_existing_csp_header() {
+		// Arrange
+		struct HandlerWithCsp;
+
+		#[async_trait]
+		impl Handler for HandlerWithCsp {
+			async fn handle(&self, _request: Request) -> Result<Response> {
+				Ok(Response::new(StatusCode::OK).with_header(
+					"Content-Security-Policy",
+					"default-src 'self'; style-src 'self' 'unsafe-inline'",
+				))
+			}
+		}
+
+		let middleware = CspMiddleware::strict();
+		let handler = Arc::new(HandlerWithCsp);
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/admin/")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert - handler's CSP should be preserved, not overwritten by middleware
+		let csp = response
+			.headers
+			.get("Content-Security-Policy")
+			.unwrap()
+			.to_str()
+			.unwrap();
+		assert!(
+			csp.contains("'unsafe-inline'"),
+			"Handler-set CSP should be preserved, got: {}",
+			csp
+		);
+	}
+
+	#[tokio::test]
+	async fn test_does_not_override_existing_csp_report_only_header() {
+		// Arrange
+		struct HandlerWithReportOnlyCsp;
+
+		#[async_trait]
+		impl Handler for HandlerWithReportOnlyCsp {
+			async fn handle(&self, _request: Request) -> Result<Response> {
+				Ok(Response::new(StatusCode::OK)
+					.with_header("Content-Security-Policy-Report-Only", "default-src 'none'"))
+			}
+		}
+
+		let config = CspConfig {
+			directives: {
+				let mut d = HashMap::new();
+				d.insert("default-src".to_string(), vec!["'self'".to_string()]);
+				d
+			},
+			report_only: true,
+			include_nonce: false,
+		};
+		let middleware = CspMiddleware::with_config(config);
+		let handler = Arc::new(HandlerWithReportOnlyCsp);
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert - handler's report-only CSP should be preserved
+		let csp = response
+			.headers
+			.get("Content-Security-Policy-Report-Only")
+			.unwrap()
+			.to_str()
+			.unwrap();
+		assert_eq!(
+			csp, "default-src 'none'",
+			"Handler-set report-only CSP should be preserved"
 		);
 	}
 }

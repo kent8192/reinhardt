@@ -114,7 +114,7 @@ impl MFAAuthentication {
 			// Get current timestamp
 			let current_time = std::time::SystemTime::now()
 				.duration_since(std::time::UNIX_EPOCH)
-				.unwrap()
+				.unwrap_or_default()
 				.as_secs();
 
 			// Calculate time step
@@ -268,7 +268,7 @@ mod tests {
 
 		let current_time = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
-			.unwrap()
+			.unwrap_or_default()
 			.as_secs();
 		let time_step = current_time / 30;
 		let secret_bytes = data_encoding::BASE32_NOPAD
@@ -295,7 +295,7 @@ mod tests {
 
 		let current_time = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
-			.unwrap()
+			.unwrap_or_default()
 			.as_secs();
 		let time_step = current_time / 30;
 		let secret_bytes = data_encoding::BASE32_NOPAD
@@ -328,7 +328,7 @@ mod tests {
 
 		let current_time = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
-			.unwrap()
+			.unwrap_or_default()
 			.as_secs();
 		let time_step = current_time / 30;
 		let secret_bytes = data_encoding::BASE32_NOPAD
@@ -394,7 +394,7 @@ mod tests {
 
 		let current_time = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
-			.unwrap()
+			.unwrap_or_default()
 			.as_secs();
 		let time_step = current_time / 30;
 		let secret_bytes = data_encoding::BASE32_NOPAD

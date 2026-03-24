@@ -533,7 +533,7 @@ impl MockTimers {
 			.borrow()
 			.iter()
 			.map(|cb| cb.scheduled_time)
-			.max_by(|a, b| a.partial_cmp(b).unwrap())
+			.max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
 			.unwrap_or(0.0);
 
 		if max_time > *self.current_time.borrow() {

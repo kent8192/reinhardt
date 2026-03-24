@@ -109,7 +109,7 @@ impl MetricsStore {
 
 				// Calculate percentiles
 				let mut sorted_times = times.clone();
-				sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+				sorted_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 				let p50 = sorted_times[count / 2];
 				let p95 = sorted_times[(count * 95) / 100];
 				let p99 = sorted_times[(count * 99) / 100];

@@ -136,15 +136,21 @@ jobs:
           PARTITION_COUNT: ${{ inputs.partition-count || '8' }}
         run: |
           # Build package selection args. Issue #2878
+          # --exclude requires --workspace; when using -p flags, filter the
+          # package list instead. Issue #2878
           PKG_ARGS=()
+          EXCLUDE_ARGS=()
           if [[ "$RUN_ALL" != "true" && -n "$CARGO_PACKAGES" ]]; then
             while IFS= read -r pkg; do
               [[ -z "$pkg" ]] && continue
+              # Cross-crate integration tests run in a separate workflow
+              [[ "$pkg" == "reinhardt-integration-tests" ]] && continue
               PKG_ARGS+=(-p "$pkg")
             done <<< "$CARGO_PACKAGES"
           fi
           if [[ ${#PKG_ARGS[@]} -eq 0 ]]; then
             PKG_ARGS=(--workspace)
+            EXCLUDE_ARGS=(--exclude reinhardt-integration-tests)
           fi
 
           if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
@@ -154,8 +160,8 @@ jobs:
           fi
           cargo nextest run \
             "${PKG_ARGS[@]}" \
+            "${EXCLUDE_ARGS[@]}" \
             --test "*" \
-            --exclude reinhardt-integration-tests \
             -E "$FILTER_EXPR" \
             --all-features \
             --partition hash:${{ matrix.partition }}/$PARTITION_COUNT \

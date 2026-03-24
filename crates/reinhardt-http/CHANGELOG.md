@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-http@v0.1.0-rc.13...reinhardt-http@v0.1.0-rc.14) - 2026-03-24
+
+### Added
+
+- *(http)* add with_header_if_absent and try_with_header_if_absent to Response
+- *(http)* add ExcludeMiddleware for declarative route exclusion
+
+### Changed
+
+- *(urls)* address Copilot review feedback
+
+### Documentation
+
+- *(crates)* update version references from 0.1.0-alpha.1 to 0.1.0-rc.13 across all READMEs
+
+### Fixed
+
+- address Copilot review comments on security documentation and validation
+- resolve CI failures and remove sea-query dependency
+
+### Security
+
+- harden header trust and authorization checks
+
 ## [0.1.0-rc.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-http@v0.1.0-rc.12...reinhardt-http@v0.1.0-rc.13) - 2026-03-18
 
 ### Fixed

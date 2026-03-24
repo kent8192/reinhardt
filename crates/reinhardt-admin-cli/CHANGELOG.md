@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.1.0-rc.13...reinhardt-admin-cli@v0.1.0-rc.14) - 2026-03-24
+
+### Fixed
+
+- *(deps)* consolidate colored and criterion versions to workspace dependencies
+
 ## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.1.0-rc.8...reinhardt-admin-cli@v0.1.0-rc.9) - 2026-03-15
 
 ### Styling

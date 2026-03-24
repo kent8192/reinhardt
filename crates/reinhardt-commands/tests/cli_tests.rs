@@ -1248,14 +1248,7 @@ fn test_all_command_variants_creatable() {
 		deploy: true,
 	};
 
-	let collectstatic = Commands::Collectstatic {
-		clear: true,
-		no_input: true,
-		dry_run: true,
-		link: true,
-		ignore: vec!["*.txt".to_string()],
-		index: None,
-	};
+	let collectstatic = create_collectstatic(true, true, true, true, &["*.txt"], None);
 
 	let showurls = Commands::Showurls { names: true };
 

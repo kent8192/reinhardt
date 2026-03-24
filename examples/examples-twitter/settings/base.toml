@@ -1,4 +1,5 @@
 # Base settings
+[core]
 debug = false
 secret_key = "CHANGE_THIS_IN_PRODUCTION_MUST_BE_KEPT_SECRET"
 language_code = "en-us"

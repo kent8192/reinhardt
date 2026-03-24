@@ -51,11 +51,25 @@ pub struct MySqlQueryBuilder;
 fn parse_user_host(user_name: &str) -> (String, String) {
 	let parts: Vec<&str> = user_name.splitn(2, '@').collect();
 	if parts.len() == 2 {
-		let user = parts[0].trim_matches('\'');
+		// Only strip outer quotes from user when they form a matched pair,
+		// preserving embedded quotes that are part of the actual username.
+		let user = strip_matched_quotes(parts[0]);
 		let host = parts[1].trim_matches('\'');
 		(user.to_string(), host.to_string())
 	} else {
 		(user_name.to_string(), "%".to_string())
+	}
+}
+
+/// Strip outer single quotes only when they form a matched pair.
+///
+/// Returns the inner content if the string starts and ends with `'`,
+/// otherwise returns the original string unchanged.
+fn strip_matched_quotes(s: &str) -> &str {
+	if s.len() >= 2 && s.starts_with('\'') && s.ends_with('\'') {
+		&s[1..s.len() - 1]
+	} else {
+		s
 	}
 }
 

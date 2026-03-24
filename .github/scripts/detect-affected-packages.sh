@@ -41,16 +41,24 @@ if [[ -z "$CHANGED_FILES" ]]; then
   echo "has-affected=false" >> "$GITHUB_OUTPUT"
   echo "nextest-filter=" >> "$GITHUB_OUTPUT"
   echo "affected-packages=" >> "$GITHUB_OUTPUT"
+  echo "cargo-packages=" >> "$GITHUB_OUTPUT"
+  echo "partition-count=0" >> "$GITHUB_OUTPUT"
+  echo "partitions-json=[]" >> "$GITHUB_OUTPUT"
   exit 0
 fi
 
-# Global file patterns that trigger full test run
+# Global file patterns that trigger full test run.
+# Only match files that actually affect the build or test execution.
+# Non-build files (labels.yml, issue templates, PR templates, CODEOWNERS,
+# dependabot.yml, FUNDING.yml) are excluded. Issue #2880
 RUN_ALL=false
 while IFS= read -r file; do
   case "$file" in
     Cargo.toml|Cargo.lock|rust-toolchain*|Makefile.toml)
       RUN_ALL=true; break ;;
-    .cargo/*|.config/*|.github/*)
+    .cargo/*|.config/*)
+      RUN_ALL=true; break ;;
+    .github/workflows/*|.github/actions/*|.github/scripts/*|.github/docker-images-*.txt)
       RUN_ALL=true; break ;;
   esac
 done <<< "$CHANGED_FILES"
@@ -60,6 +68,9 @@ if [[ "$RUN_ALL" == "true" ]]; then
   echo "has-affected=true" >> "$GITHUB_OUTPUT"
   echo "nextest-filter=" >> "$GITHUB_OUTPUT"
   echo "affected-packages=" >> "$GITHUB_OUTPUT"
+  echo "cargo-packages=" >> "$GITHUB_OUTPUT"
+  echo "partition-count=8" >> "$GITHUB_OUTPUT"
+  echo "partitions-json=[1,2,3,4,5,6,7,8]" >> "$GITHUB_OUTPUT"
   exit 0
 fi
 
@@ -78,6 +89,9 @@ if ! METADATA=$(cargo metadata --format-version 1 --no-deps) \
   echo "has-affected=true" >> "$GITHUB_OUTPUT"
   echo "nextest-filter=" >> "$GITHUB_OUTPUT"
   echo "affected-packages=" >> "$GITHUB_OUTPUT"
+  echo "cargo-packages=" >> "$GITHUB_OUTPUT"
+  echo "partition-count=8" >> "$GITHUB_OUTPUT"
+  echo "partitions-json=[1,2,3,4,5,6,7,8]" >> "$GITHUB_OUTPUT"
   exit 0
 fi
 
@@ -116,6 +130,9 @@ if [[ ${#AFFECTED_PKGS[@]} -eq 0 ]]; then
   echo "has-affected=false" >> "$GITHUB_OUTPUT"
   echo "nextest-filter=" >> "$GITHUB_OUTPUT"
   echo "affected-packages=" >> "$GITHUB_OUTPUT"
+  echo "cargo-packages=" >> "$GITHUB_OUTPUT"
+  echo "partition-count=0" >> "$GITHUB_OUTPUT"
+  echo "partitions-json=[]" >> "$GITHUB_OUTPUT"
   exit 0
 fi
 
@@ -129,9 +146,82 @@ for pkg in "${AFFECTED_PKGS[@]}"; do
   fi
 done
 
+# Compute reverse dependencies (rdeps) of affected packages using cargo metadata.
+# This determines which workspace packages need to be compiled (via -p flags)
+# instead of compiling the entire workspace (--workspace). Issue #2878
+#
+# Algorithm: build a workspace-internal reverse dependency graph from the
+# packages[].dependencies field, then compute the transitive closure starting
+# from the affected packages.
+RDEPS_PKGS=$(echo "$METADATA" | jq -r --argjson affected \
+  "$(printf '%s\n' "${AFFECTED_PKGS[@]}" | jq -R . | jq -s .)" '
+  # Get all workspace package names
+  [.packages[].name] as $ws_names |
+
+  # Build forward dependency graph (workspace-internal edges only)
+  (reduce .packages[] as $p ({};
+    . + {($p.name): [($p.dependencies[].name |
+      select(. as $n | $ws_names | index($n) != null))]}
+  )) as $fwd |
+
+  # Build reverse dependency graph from forward deps
+  (reduce ($fwd | keys[]) as $pkg ({};
+    reduce ($fwd[$pkg][]) as $dep (.;
+      .[$dep] = ((.[$dep] // []) + [$pkg])
+    )
+  )) as $rdeps |
+
+  # Compute transitive closure from affected packages (BFS)
+  {queue: $affected, visited: ($affected | map({(.): true}) | add // {})} |
+  until(.queue | length == 0;
+    .queue[0] as $current |
+    .queue[1:] as $rest |
+    ($rdeps[$current] // []) as $neighbors |
+    reduce $neighbors[] as $n ({queue: $rest, visited: .visited};
+      if .visited[$n] then .
+      else {queue: (.queue + [$n]), visited: (.visited + {($n): true})}
+      end
+    )
+  ) |
+  .visited | keys[]
+')
+
+# Collect rdeps into array, falling back to affected packages if computation fails
+declare -A RDEPS_MAP
+if [[ -n "$RDEPS_PKGS" ]]; then
+  while IFS= read -r pkg; do
+    [[ -z "$pkg" ]] && continue
+    RDEPS_MAP["$pkg"]=1
+  done <<< "$RDEPS_PKGS"
+else
+  for pkg in "${AFFECTED_PKGS[@]}"; do
+    RDEPS_MAP["$pkg"]=1
+  done
+fi
+ALL_RDEPS_PKGS=(${!RDEPS_MAP[@]})
+RDEPS_COUNT=${#ALL_RDEPS_PKGS[@]}
+
+echo "::notice::Packages to compile (${RDEPS_COUNT} total, including rdeps): ${ALL_RDEPS_PKGS[*]}"
+
+# Compute dynamic partition count based on rdeps scope. Issue #2881
+# Fewer affected packages → fewer partitions to avoid wasting runners.
+# Max partition count is 8 (matching the largest fixed partition count in CI).
+if (( RDEPS_COUNT <= 2 )); then
+  PARTITION_COUNT=2
+elif (( RDEPS_COUNT <= 8 )); then
+  PARTITION_COUNT=$RDEPS_COUNT
+else
+  PARTITION_COUNT=8
+fi
+# Build JSON array for dynamic matrix (e.g., [1,2,3])
+PARTITIONS_JSON=$(seq 1 "$PARTITION_COUNT" | jq -s .)
+echo "::notice::Partition count: $PARTITION_COUNT (partitions: $PARTITIONS_JSON)"
+
 echo "run-all=false" >> "$GITHUB_OUTPUT"
 echo "has-affected=true" >> "$GITHUB_OUTPUT"
 echo "nextest-filter=$NEXTEST_FILTER" >> "$GITHUB_OUTPUT"
+echo "partition-count=$PARTITION_COUNT" >> "$GITHUB_OUTPUT"
+echo "partitions-json=$PARTITIONS_JSON" >> "$GITHUB_OUTPUT"
 
 # affected-packages as multi-line output (for doc-test per-package execution)
 {
@@ -140,4 +230,13 @@ echo "nextest-filter=$NEXTEST_FILTER" >> "$GITHUB_OUTPUT"
     echo "$pkg"
   done
   echo "AFFECTED_EOF"
+} >> "$GITHUB_OUTPUT"
+
+# cargo-packages as multi-line output (affected + rdeps, for -p flag compilation)
+{
+  echo "cargo-packages<<CARGO_PKG_EOF"
+  for pkg in "${ALL_RDEPS_PKGS[@]}"; do
+    echo "$pkg"
+  done
+  echo "CARGO_PKG_EOF"
 } >> "$GITHUB_OUTPUT"

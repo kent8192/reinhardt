@@ -15,6 +15,15 @@ on:
       affected-packages:
         description: "Newline-separated list of affected package names"
         value: ${{ jobs.detect.outputs.affected-packages }}
+      cargo-packages:
+        description: "Newline-separated list of packages to compile (affected + rdeps). Issue #2878"
+        value: ${{ jobs.detect.outputs.cargo-packages }}
+      partition-count:
+        description: "Dynamic partition count based on affected scope. Issue #2881"
+        value: ${{ jobs.detect.outputs.partition-count }}
+      partitions-json:
+        description: "JSON array of partition indices for dynamic matrix. Issue #2881"
+        value: ${{ jobs.detect.outputs.partitions-json }}
       run-examples:
         description: "Whether to run examples tests (true for release PRs, global changes, or examples/** changes)"
         value: ${{ jobs.detect.outputs.run-examples }}
@@ -29,6 +38,9 @@ jobs:
       has-affected: ${{ steps.detect.outputs.has-affected }}
       nextest-filter: ${{ steps.detect.outputs.nextest-filter }}
       affected-packages: ${{ steps.detect.outputs.affected-packages }}
+      cargo-packages: ${{ steps.detect.outputs.cargo-packages }}
+      partition-count: ${{ steps.detect.outputs.partition-count }}
+      partitions-json: ${{ steps.detect.outputs.partitions-json }}
       run-examples: ${{ steps.detect-examples.outputs.run-examples }}
     steps:
       - uses: actions/checkout@v6
@@ -51,6 +63,9 @@ jobs:
             echo "has-affected=true" >> "$GITHUB_OUTPUT"
             echo "nextest-filter=" >> "$GITHUB_OUTPUT"
             echo "affected-packages=" >> "$GITHUB_OUTPUT"
+            echo "cargo-packages=" >> "$GITHUB_OUTPUT"
+            echo "partition-count=8" >> "$GITHUB_OUTPUT"
+            echo "partitions-json=[1,2,3,4,5,6,7,8]" >> "$GITHUB_OUTPUT"
           else
             bash .github/scripts/detect-affected-packages.sh \
               "origin/$BASE_REF"
@@ -104,6 +119,8 @@ jobs:
           HAS_AFFECTED: ${{ steps.detect.outputs.has-affected }}
           NEXTEST_FILTER: ${{ steps.detect.outputs.nextest-filter }}
           AFFECTED_PACKAGES: ${{ steps.detect.outputs.affected-packages }}
+          CARGO_PACKAGES: ${{ steps.detect.outputs.cargo-packages }}
+          PARTITION_COUNT: ${{ steps.detect.outputs.partition-count }}
           RUN_EXAMPLES: ${{ steps.detect-examples.outputs.run-examples }}
         run: |
           echo "### Affected Package Detection" >> "$GITHUB_STEP_SUMMARY"
@@ -111,6 +128,7 @@ jobs:
           echo "- **Run all**: \`$RUN_ALL\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Has affected**: \`$HAS_AFFECTED\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Run examples**: \`$RUN_EXAMPLES\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Partition count**: \`$PARTITION_COUNT\`" >> "$GITHUB_STEP_SUMMARY"
           if [[ -n "$NEXTEST_FILTER" ]]; then
             echo "- **Nextest filter**: \`$NEXTEST_FILTER\`" >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -120,4 +138,11 @@ jobs:
               [[ -z "$pkg" ]] && continue
               echo "  - \`$pkg\`" >> "$GITHUB_STEP_SUMMARY"
             done <<< "$AFFECTED_PACKAGES"
+          fi
+          if [[ -n "$CARGO_PACKAGES" ]]; then
+            echo "- **Packages to compile** (affected + rdeps):" >> "$GITHUB_STEP_SUMMARY"
+            while IFS= read -r pkg; do
+              [[ -z "$pkg" ]] && continue
+              echo "  - \`$pkg\`" >> "$GITHUB_STEP_SUMMARY"
+            done <<< "$CARGO_PACKAGES"
           fi

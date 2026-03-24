@@ -279,6 +279,9 @@ jobs:
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
       nextest-filter: ${{ needs.detect-affected.outputs.nextest-filter }}
       run-all: ${{ needs.detect-affected.outputs.run-all }}
+      cargo-packages: ${{ needs.detect-affected.outputs.cargo-packages }}
+      partitions-json: ${{ needs.detect-affected.outputs.partitions-json }}
+      partition-count: ${{ needs.detect-affected.outputs.partition-count }}
 
   intra-crate-integration-test:
     name: Intra-Crate Integration Tests
@@ -291,6 +294,9 @@ jobs:
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
       nextest-filter: ${{ needs.detect-affected.outputs.nextest-filter }}
       run-all: ${{ needs.detect-affected.outputs.run-all }}
+      cargo-packages: ${{ needs.detect-affected.outputs.cargo-packages }}
+      partitions-json: ${{ needs.detect-affected.outputs.partitions-json }}
+      partition-count: ${{ needs.detect-affected.outputs.partition-count }}
 
   cross-crate-integration-test:
     name: Cross-Crate Integration Tests

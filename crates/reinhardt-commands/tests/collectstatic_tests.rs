@@ -1145,6 +1145,9 @@ fn test_collectstatic_index_source_not_found_returns_error() {
 ///
 /// Category: Backward Compatibility
 /// Spec group: H1
+/// Auto-discovered app static files (e.g., from `reinhardt-admin`) are still
+/// collected because the `inventory`-based discovery runs independently of
+/// user configuration.
 #[rstest]
 fn test_collectstatic_without_index_source_uses_existing_behavior() {
 	// Arrange
@@ -1166,5 +1169,18 @@ fn test_collectstatic_without_index_source_uses_existing_behavior() {
 	let stats = cmd.execute().unwrap();
 
 	// Assert
-	assert_eq!(stats.copied, 0);
+	let app_static_count: usize = ::reinhardt_apps::get_app_static_files()
+		.iter()
+		.map(|config| {
+			let dir = std::path::Path::new(config.static_dir);
+			if dir.exists() {
+				std::fs::read_dir(dir)
+					.map(|entries| entries.count())
+					.unwrap_or(0)
+			} else {
+				0
+			}
+		})
+		.sum();
+	assert_eq!(stats.copied, app_static_count);
 }

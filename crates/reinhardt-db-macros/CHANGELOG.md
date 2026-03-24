@@ -7,12 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db-macros@v0.1.0-rc.13...reinhardt-db-macros@v0.1.0-rc.14) - 2026-03-24
-
-### Fixed
-
-- *(db-macros)* emit compile error for unknown field attributes
-
 ## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db-macros@v0.1.0-rc.8...reinhardt-db-macros@v0.1.0-rc.9) - 2026-03-15
 
 ### Documentation

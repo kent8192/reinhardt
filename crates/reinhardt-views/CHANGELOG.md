@@ -7,20 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.1.0-rc.13...reinhardt-views@v0.1.0-rc.14) - 2026-03-24
-
-### Changed
-
-- *(views,middleware)* extract PATCH merge helper and use typed SET_COOKIE header
-
-### Fixed
-
-- *(views)* use actual total count for pagination instead of page length
-- use saturating arithmetic for pagination overflow safety
-- *(views)* determine partial update from HTTP method, not config field
-- *(views)* return 405 instead of 400 for unsupported HTTP methods
-- *(views)* reject non-object PATCH body with 400 Bad Request
-
 ## [0.1.0-rc.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.1.0-rc.9...reinhardt-views@v0.1.0-rc.10) - 2026-03-15
 
 ### Documentation

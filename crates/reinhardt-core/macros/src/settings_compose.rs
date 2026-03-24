@@ -204,17 +204,15 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 
 	// Generate struct fields
 	//
-	// Each fragment field is `#[serde(flatten)]`-ed so that flat settings
-	// sources (TOML files, DefaultSource key-value pairs) deserialize
-	// directly into the fragment without requiring a nested section key.
-	// This mirrors the behavior of the deprecated `Settings` struct.
+	// Each fragment field is deserialized from a TOML section matching
+	// the fragment's `section()` name (e.g., `[core]` → `core: CoreSettings`).
+	// This allows TOML files to use the conventional `[section]` structure.
 	let field_defs: Vec<_> = includes
 		.iter()
 		.map(|(key, type_name, _)| {
 			let key_ident = format_ident!("{}", key);
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
 			quote! {
-				#[serde(flatten)]
 				pub #key_ident: #type_path
 			}
 		})
@@ -335,36 +333,38 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 	//
 	// For fragments WITH overrides, use the resolved_*_policies() method.
 	// For fragments WITHOUT overrides, use field_policies() directly.
+	//
+	// Validation checks inside the section sub-map (e.g., merged["core"]["secret_key"])
+	// rather than at the root level, matching the TOML `[section]` convention.
 	let requirement_checks: Vec<_> = includes
 		.iter()
 		.map(|(key, type_name, overrides)| {
+			let key_str = key.to_string();
 			let type_path = resolve_fragment_type(type_name, &conf_crate);
-			if overrides.is_empty() {
-				// Use base field_policies() directly
+			let policies_expr = if overrides.is_empty() {
 				quote! {
-					for policy in <#type_path as #conf_crate::settings::fragment::SettingsFragment>::field_policies() {
-						if policy.requirement == #conf_crate::settings::policy::FieldRequirement::Required
-							&& !merged.contains_key(policy.name)
-						{
-							return ::std::result::Result::Err(#conf_crate::settings::builder::BuildError::MissingRequiredField {
-								section: <#type_path as #conf_crate::settings::fragment::SettingsFragment>::section(),
-								field: policy.name,
-							});
-						}
-					}
+					<#type_path as #conf_crate::settings::fragment::SettingsFragment>::field_policies()
 				}
 			} else {
-				// Use the resolved method with overrides applied
 				let method_name = format_ident!("resolved_{}_policies", key);
-				quote! {
-					for policy in &Self::#method_name() {
-						if policy.requirement == #conf_crate::settings::policy::FieldRequirement::Required
-							&& !merged.contains_key(policy.name)
-						{
-							return ::std::result::Result::Err(#conf_crate::settings::builder::BuildError::MissingRequiredField {
-								section: <#type_path as #conf_crate::settings::fragment::SettingsFragment>::section(),
-								field: policy.name,
-							});
+				quote! { &Self::#method_name() }
+			};
+			quote! {
+				{
+					// Look up the section sub-map (e.g., merged["core"])
+					let section_map = merged.get(#key_str)
+						.and_then(|v| v.as_object());
+					for policy in #policies_expr {
+						if policy.requirement == #conf_crate::settings::policy::FieldRequirement::Required {
+							let found = section_map
+								.map(|m| m.contains_key(policy.name))
+								.unwrap_or(false);
+							if !found {
+								return ::std::result::Result::Err(#conf_crate::settings::builder::BuildError::MissingRequiredField {
+									section: <#type_path as #conf_crate::settings::fragment::SettingsFragment>::section(),
+									field: policy.name,
+								});
+							}
 						}
 					}
 				}

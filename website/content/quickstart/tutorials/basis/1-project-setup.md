@@ -287,18 +287,18 @@ pub async fn create_question(
 
 ## Creating Your First Component
 
-In reinhardt-pages, UI is built using **components** - Rust functions that return `View` objects. Components use the `page!` macro for JSX-like syntax and reactive `Signal`s for state management.
+In reinhardt-pages, UI is built using **components** - Rust functions that return `Page` objects. Components use the `page!` macro for JSX-like syntax and reactive `Signal`s for state management.
 
 ### Component Structure
 
 A basic component follows this pattern:
 
 ```rust
-use reinhardt::pages::component::View;
+use reinhardt::pages::component::Page;
 use reinhardt::pages::page;
 use reinhardt::pages::reactive::hooks::use_state;
 
-pub fn my_component() -> View {
+pub fn my_component() -> Page {
     // 1. Local state with use_state (for simple values)
     let (message, _set_message) = use_state("Hello, world!".to_string());
 
@@ -320,7 +320,7 @@ pub fn my_component() -> View {
 Let's create a simple polls index component. Create `src/client/components/polls.rs`:
 
 ```rust
-use reinhardt::pages::component::View;
+use reinhardt::pages::component::Page;
 use reinhardt::pages::page;
 use reinhardt::pages::reactive::hooks::{Action, use_action};
 use crate::shared::types::QuestionInfo;
@@ -328,7 +328,7 @@ use crate::shared::types::QuestionInfo;
 #[cfg(client)]
 use crate::server_fn::polls::get_questions;
 
-pub fn polls_index() -> View {
+pub fn polls_index() -> Page {
     // Load questions with use_action (combines loading, error, and data states)
     let load_questions = use_action(|_: ()| async move {
         get_questions().await.map_err(|e| e.to_string())
@@ -449,27 +449,23 @@ pub fn create_router() -> Router {
 Page functions connect routes to components. Create `src/client/pages.rs`:
 
 ```rust
-use reinhardt::pages::component::View;
+use reinhardt::pages::component::Page;
 use crate::client::components::polls::{polls_index, polls_detail};
 
 /// Home page
-pub fn index_page() -> View {
+pub fn index_page() -> Page {
     polls_index()
 }
 
 /// Polls list page
-pub fn polls_page() -> View {
+pub fn polls_page() -> Page {
     polls_index()
 }
 
 /// Poll detail page (with dynamic :id parameter)
-pub fn poll_detail_page() -> View {
-    // Extract route parameter
-    let params = use_route_params();
-    let question_id = params.get("id")
-        .and_then(|id| id.parse::<i64>().ok())
-        .unwrap_or(0);
-
+pub fn poll_detail_page() -> Page {
+    // Route parameters are accessed via Router::current_params()
+    // In practice, use Router::route_params() for type-safe parameter extraction
     polls_detail(question_id)
 }
 ```
@@ -512,9 +508,7 @@ poll_detail_page() → polls_detail(5) → Render UI with question #5
 
 ```rust
 // Programmatic navigation
-use reinhardt::pages::router::navigate;
-
-navigate("/polls/5/");  // Changes URL and renders new component
+// Use Router::push("/polls/5/") to change URL and render new component
 ```
 
 **4. Link Elements**
@@ -535,8 +529,8 @@ Clicking the link triggers client-side navigation (no page reload).
 | **Where** | Server (HTTP handlers) | Client (WASM) |
 | **Route Match** | Per HTTP request | Per URL change in browser |
 | **Page Load** | Full page reload | Single Page App (SPA) |
-| **URL Parameters** | `Request.path_params` | `use_route_params()` |
-| **Handler** | `async fn(Request) -> Response` | `fn() -> View` |
+| **URL Parameters** | `Request.path_params` | `Router::current_params()` |
+| **Handler** | `async fn(Request) -> Response` | `fn() -> Page` |
 
 **Note**: Reinhardt projects generated with `--with-pages` already include client routing configuration. You don't need to manually create routing files for development.
 
@@ -697,7 +691,7 @@ pub async fn get_questions(
 Create `src/client/components/polls.rs`:
 
 ```rust
-use reinhardt::pages::component::View;
+use reinhardt::pages::component::Page;
 use reinhardt::pages::page;
 use reinhardt::pages::reactive::hooks::{Action, use_action};
 use crate::shared::types::QuestionInfo;
@@ -705,7 +699,7 @@ use crate::shared::types::QuestionInfo;
 #[cfg(client)]
 use crate::server_fn::polls::get_questions;
 
-pub fn polls_index() -> View {
+pub fn polls_index() -> Page {
     let load_questions = use_action(|_: ()| async move {
         get_questions().await.map_err(|e| e.to_string())
     });
@@ -753,10 +747,10 @@ pub fn create_router() -> Router {
 Create `src/client/pages.rs`:
 
 ```rust
-use reinhardt::pages::component::View;
+use reinhardt::pages::component::Page;
 use crate::client::components::polls::polls_index;
 
-pub fn polls_index_page() -> View {
+pub fn polls_index_page() -> Page {
     polls_index()
 }
 ```
@@ -974,7 +968,7 @@ Add to `src/client/components/polls.rs`:
 
 ```rust
 /// Poll detail page with voting form
-pub fn polls_detail(question_id: i64) -> View {
+pub fn polls_detail(question_id: i64) -> Page {
     let load_detail = use_action(move |_: ()| async move {
         get_question_detail(question_id).await.map_err(|e| e.to_string())
     });
@@ -1036,28 +1030,23 @@ pub fn create_router() -> Router {
 Update `src/client/pages.rs`:
 
 ```rust
-use reinhardt::pages::component::View;
-use reinhardt::pages::router::use_route_params;
+use reinhardt::pages::component::Page;
 use crate::client::components::polls::{polls_index, polls_detail, polls_results};
 
-pub fn polls_index_page() -> View {
+pub fn polls_index_page() -> Page {
     polls_index()
 }
 
-pub fn poll_detail_page() -> View {
-    let params = use_route_params();
-    let id = params.get("id")
-        .and_then(|id| id.parse::<i64>().ok())
-        .unwrap_or(0);
+pub fn poll_detail_page() -> Page {
+    // Route parameters are accessed via Router::current_params()
+    // In practice, use Router::route_params() for type-safe parameter extraction
 
     polls_detail(id)
 }
 
-pub fn poll_results_page() -> View {
-    let params = use_route_params();
-    let id = params.get("id")
-        .and_then(|id| id.parse::<i64>().ok())
-        .unwrap_or(0);
+pub fn poll_results_page() -> Page {
+    // Route parameters are accessed via Router::current_params()
+    // In practice, use Router::route_params() for type-safe parameter extraction
 
     polls_results(id)
 }
@@ -1109,7 +1098,7 @@ In this tutorial, you learned:
 - Support dependency injection with `#[inject]`
 
 **Components:**
-- Pure Rust functions that return `View` objects
+- Pure Rust functions that return `Page` objects
 - Use `page!` macro for JSX-like UI syntax
 - Load async data with `use_action` (combines loading, error, and result states)
 - Use `use_state` for simple local state (selections, toggles, form inputs)

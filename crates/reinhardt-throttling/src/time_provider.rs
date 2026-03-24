@@ -19,7 +19,7 @@ pub trait TimeProvider: Send + Sync {
 		use std::time::{SystemTime, UNIX_EPOCH};
 		let secs = SystemTime::now()
 			.duration_since(UNIX_EPOCH)
-			.expect("system clock is before UNIX epoch")
+			.unwrap_or_default()
 			.as_secs();
 		((secs % 86400) / 3600) as u8
 	}

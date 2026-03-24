@@ -16,17 +16,13 @@ Generate URLs for named routes using the router's `reverse()` method:
 
 ```rust
 use reinhardt::prelude::*;
-use std::collections::HashMap;
 
 let router = ServerRouter::new();
 
-// Define route parameters
-let mut params = HashMap::new();
-params.insert("id".to_string(), "42".to_string());
-
 // Generate URL from route name
-let url = router.reverse("snippet-detail", &params)?;
-// url: "/snippets/42/"
+let url = router.reverse("snippet-detail", &[("id", "42")]);
+// Returns Option<String>
+// url: Some("/snippets/42/")
 ```
 
 ## Hyperlinked Relations
@@ -47,11 +43,7 @@ struct SnippetSerializer {
 }
 
 // Generate hyperlink
-let owner_url = router.reverse("user-detail", &{
-    let mut params = HashMap::new();
-    params.insert("id".to_string(), owner_id.to_string());
-    params
-})?;
+let owner_url = router.reverse("user-detail", &[("id", &owner_id.to_string())]);
 ```
 
 ## HyperlinkedModelSerializer
@@ -138,7 +130,6 @@ Create responses with hyperlinks:
 
 ```rust
 use reinhardt::prelude::*;
-use std::collections::HashMap;
 
 async fn snippet_detail(
     request: Request,
@@ -149,21 +140,16 @@ async fn snippet_detail(
     let snippet = get_snippet(id).await?;
 
     // Generate hyperlinks
-    let mut params = HashMap::new();
-    params.insert("id".to_string(), snippet.id.to_string());
-    let self_url = router.reverse("snippet-detail", &params)?;
-
-    params.clear();
-    params.insert("id".to_string(), snippet.owner_id.to_string());
-    let owner_url = router.reverse("user-detail", &params)?;
+    let self_url = router.reverse("snippet-detail", &[("id", &snippet.id.to_string())]);
+    let owner_url = router.reverse("user-detail", &[("id", &snippet.owner_id.to_string())]);
 
     // Build response with hyperlinks
     let response_data = SnippetHyperlinked {
-        url: self_url,
+        url: self_url.unwrap_or_default(),
         id: snippet.id,
         title: snippet.title,
         code: snippet.code,
-        owner: owner_url,
+        owner: owner_url.unwrap_or_default(),
     };
 
     Ok(Response::ok(response_data))
@@ -194,10 +180,8 @@ struct SnippetWithTags {
 // Generate tag URLs
 let tag_urls: Vec<String> = snippet.tags
     .iter()
-    .map(|tag| {
-        let mut params = HashMap::new();
-        params.insert("id".to_string(), tag.id.to_string());
-        router.reverse("tag-detail", &params).unwrap()
+    .filter_map(|tag| {
+        router.reverse("tag-detail", &[("id", &tag.id.to_string())])
     })
     .collect();
 ```
@@ -209,7 +193,6 @@ Full hyperlinked API implementation:
 ```rust
 use reinhardt::prelude::*;
 use serde::{Serialize, Deserialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct User {
@@ -257,14 +240,11 @@ pub fn url_patterns() -> ServerRouter {
 }
 
 // Example: Generate snippet URL via router.reverse()
-// let mut params = HashMap::new();
-// params.insert("id".to_string(), "1".to_string());
-// let snippet_url = router.reverse("snippet-detail", &params)?;
-// => "/api/snippets/1/"
+// let snippet_url = router.reverse("snippet-detail", &[("id", "1")]);
+// => Some("/api/snippets/1/")
 //
-// params.insert("id".to_string(), "42".to_string());
-// let user_url = router.reverse("user-detail", &params)?;
-// => "/api/users/42/"
+// let user_url = router.reverse("user-detail", &[("id", "42")]);
+// => Some("/api/users/42/")
 ```
 
 ## Benefits of Hyperlinked APIs

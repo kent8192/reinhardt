@@ -281,7 +281,9 @@ impl<T: Send + Sync + 'static> SignalProfiler<T> {
 		profiles.sort_by(|a, b| {
 			let a_rate = a.success_rate();
 			let b_rate = b.success_rate();
-			a_rate.partial_cmp(&b_rate).unwrap()
+			a_rate
+				.partial_cmp(&b_rate)
+				.unwrap_or(std::cmp::Ordering::Equal)
 		});
 		profiles.truncate(count);
 		profiles

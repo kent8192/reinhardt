@@ -120,6 +120,7 @@ pub enum Commands {
 	},
 
 	/// Start the development server
+	#[non_exhaustive]
 	Runserver {
 		/// Server address (default: 127.0.0.1:8000)
 		#[arg(value_name = "ADDRESS", default_value = "127.0.0.1:8000")]
@@ -148,6 +149,10 @@ pub enum Commands {
 		/// Disable SPA mode (no index.html fallback)
 		#[arg(long)]
 		no_spa: bool,
+
+		/// Path to index.html for SPA fallback (auto-detected from project root)
+		#[arg(long)]
+		index: Option<String>,
 	},
 
 	/// Run an interactive Rust shell (REPL)
@@ -169,6 +174,7 @@ pub enum Commands {
 	},
 
 	/// Collect static files into STATIC_ROOT
+	#[non_exhaustive]
 	Collectstatic {
 		/// Clear existing files before collecting
 		#[arg(long)]
@@ -189,6 +195,10 @@ pub enum Commands {
 		/// Ignore file patterns (glob)
 		#[arg(long, value_name = "PATTERN")]
 		ignore: Vec<String>,
+
+		/// Path to index.html source file (auto-detected from project root)
+		#[arg(long)]
+		index: Option<String>,
 	},
 
 	/// Display all registered URL patterns
@@ -460,6 +470,7 @@ pub async fn run_command_with_registry(
 			with_pages,
 			static_dir,
 			no_spa,
+			index,
 		} => {
 			execute_runserver(RunServerOptions {
 				address,
@@ -469,6 +480,7 @@ pub async fn run_command_with_registry(
 				with_pages,
 				static_dir,
 				no_spa,
+				index,
 				verbosity,
 			})
 			.await
@@ -481,7 +493,8 @@ pub async fn run_command_with_registry(
 			dry_run,
 			link,
 			ignore,
-		} => execute_collectstatic(clear, no_input, dry_run, link, ignore, verbosity).await,
+			index,
+		} => execute_collectstatic(clear, no_input, dry_run, link, ignore, index, verbosity).await,
 		Commands::Showurls { names } => execute_showurls(names, verbosity).await,
 		#[cfg(feature = "introspect")]
 		Commands::Introspect { format, section } => execute_introspect(format, section, verbosity).await,
@@ -679,6 +692,7 @@ struct RunServerOptions {
 	with_pages: bool,
 	static_dir: String,
 	no_spa: bool,
+	index: Option<String>,
 	verbosity: u8,
 }
 
@@ -703,6 +717,9 @@ async fn execute_runserver(options: RunServerOptions) -> Result<(), Box<dyn std:
 	ctx.set_option("static-dir".to_string(), options.static_dir);
 	if options.no_spa {
 		ctx.set_option("no-spa".to_string(), "true".to_string());
+	}
+	if let Some(ref index) = options.index {
+		ctx.set_option("index".to_string(), index.clone());
 	}
 
 	let cmd = RunServerCommand;
@@ -754,6 +771,7 @@ async fn execute_collectstatic(
 	dry_run: bool,
 	link: bool,
 	ignore: Vec<String>,
+	index: Option<String>,
 	verbosity: u8,
 ) -> Result<(), Box<dyn std::error::Error>> {
 	// Load settings from TOML files
@@ -847,8 +865,24 @@ async fn execute_collectstatic(
 		fast_compare: false,
 	};
 
+	// Resolve index source path
+	// Refs #2869: Auto-detect index.html from project root for collectstatic
+	let index_source = match &index {
+		Some(path) => Some(PathBuf::from(path)),
+		None => {
+			// Auto-detect from project root
+			let candidate = base_dir.join("index.html");
+			if candidate.exists() {
+				Some(candidate)
+			} else {
+				None
+			}
+		}
+	};
+
 	// Create and execute command in blocking context
 	let mut cmd = CollectStaticCommand::new(config, options);
+	cmd.set_index_source(index_source);
 	let result = tokio::task::spawn_blocking(move || {
 		// Call the sync execute() method directly (not the BaseCommand trait method)
 		CollectStaticCommand::execute(&mut cmd)
@@ -1149,6 +1183,7 @@ mod tests {
 			with_pages: false,
 			static_dir: "dist".to_string(),
 			no_spa: false,
+			index: None,
 		};
 
 		// Act
@@ -1243,6 +1278,7 @@ mod tests {
 			dry_run: false,
 			link: false,
 			ignore: vec![],
+			index: None,
 		};
 
 		// Act
@@ -1316,5 +1352,118 @@ mod tests {
 			"Expected lib+bin hint in error message, got: {}",
 			error_msg
 		);
+	}
+
+	#[rstest]
+	fn test_runserver_with_index_option() {
+		// Arrange
+		let command = Commands::Runserver {
+			address: "127.0.0.1:8000".to_string(),
+			noreload: false,
+			insecure: false,
+			no_docs: false,
+			with_pages: true,
+			static_dir: "dist".to_string(),
+			no_spa: false,
+			index: Some("./index.html".to_string()),
+		};
+
+		// Act & Assert
+		if let Commands::Runserver { index, .. } = command {
+			assert_eq!(index, Some("./index.html".to_string()));
+		} else {
+			panic!("Expected Runserver command");
+		}
+	}
+
+	#[rstest]
+	fn test_runserver_without_index_option() {
+		// Arrange
+		let command = Commands::Runserver {
+			address: "127.0.0.1:8000".to_string(),
+			noreload: false,
+			insecure: false,
+			no_docs: false,
+			with_pages: false,
+			static_dir: "dist".to_string(),
+			no_spa: false,
+			index: None,
+		};
+
+		// Act & Assert
+		if let Commands::Runserver { index, .. } = command {
+			assert!(index.is_none());
+		} else {
+			panic!("Expected Runserver command");
+		}
+	}
+
+	#[rstest]
+	fn test_runserver_index_with_no_spa() {
+		// Arrange & Act
+		let command = Commands::Runserver {
+			address: "127.0.0.1:8000".to_string(),
+			noreload: false,
+			insecure: false,
+			no_docs: false,
+			with_pages: true,
+			static_dir: "dist".to_string(),
+			no_spa: true,
+			index: Some("./index.html".to_string()),
+		};
+
+		// Assert
+		if let Commands::Runserver { no_spa, index, .. } = command {
+			assert!(no_spa);
+			assert_eq!(index, Some("./index.html".to_string()));
+		} else {
+			panic!("Expected Runserver command");
+		}
+	}
+
+	#[rstest]
+	fn test_runserver_index_without_with_pages() {
+		// Arrange & Act
+		let command = Commands::Runserver {
+			address: "127.0.0.1:8000".to_string(),
+			noreload: false,
+			insecure: false,
+			no_docs: false,
+			with_pages: false,
+			static_dir: "dist".to_string(),
+			no_spa: false,
+			index: Some("./index.html".to_string()),
+		};
+
+		// Assert
+		if let Commands::Runserver {
+			with_pages, index, ..
+		} = command
+		{
+			assert!(!with_pages);
+			assert_eq!(index, Some("./index.html".to_string()));
+		} else {
+			panic!("Expected Runserver command");
+		}
+	}
+
+	#[rstest]
+	fn test_collectstatic_with_index_option() {
+		// Arrange & Act
+		let command = Commands::Collectstatic {
+			clear: false,
+			no_input: false,
+			dry_run: false,
+			link: false,
+			ignore: vec![],
+			index: Some("./index.html".to_string()),
+		};
+
+		// Assert
+		if let Commands::Collectstatic { index, .. } = command {
+			assert_eq!(index, Some("./index.html".to_string()));
+		} else {
+			panic!("Expected Collectstatic command");
+		}
 	}
 }

@@ -3,7 +3,7 @@
 //! This middleware intercepts requests and serves static files from a configured directory.
 //! It supports SPA (Single Page Application) mode for WASM frontend applications.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -16,6 +16,7 @@ use super::handler::{StaticError, StaticFileHandler};
 
 /// Configuration for the static files middleware.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct StaticFilesConfig {
 	/// Root directory for static files
 	pub root_dir: PathBuf,
@@ -25,6 +26,11 @@ pub struct StaticFilesConfig {
 	pub spa_mode: bool,
 	/// Index files to serve for directories
 	pub index_files: Vec<String>,
+	/// Explicit path to the SPA fallback index file.
+	///
+	/// Can be outside `root_dir` (e.g., project root). When set,
+	/// takes priority over `index_files` for SPA fallback.
+	pub index_file: Option<PathBuf>,
 	/// File extensions to serve (empty = all)
 	pub allowed_extensions: Vec<String>,
 	/// Path prefixes to exclude from SPA fallback (e.g., ["/api/", "/docs"])
@@ -40,6 +46,7 @@ impl Default for StaticFilesConfig {
 			url_prefix: "/".to_string(),
 			spa_mode: true,
 			index_files: vec!["index.html".to_string()],
+			index_file: None,
 			allowed_extensions: vec![],
 			excluded_prefixes: vec!["/api/".to_string()],
 			cache_config: CacheControlConfig::new(),
@@ -71,6 +78,15 @@ impl StaticFilesConfig {
 	/// Set custom index files.
 	pub fn index_files(mut self, files: Vec<String>) -> Self {
 		self.index_files = files;
+		self
+	}
+
+	/// Set a specific index file path for SPA fallback.
+	///
+	/// This path can be outside `root_dir` (e.g., project root).
+	/// When set, this takes priority over `index_files` for SPA fallback.
+	pub fn index_file(mut self, path: impl Into<PathBuf>) -> Self {
+		self.index_file = Some(path.into());
 		self
 	}
 
@@ -197,13 +213,69 @@ impl StaticFilesMiddleware {
 	}
 
 	/// Serve the SPA fallback (index.html).
+	///
+	/// Priority:
+	/// 1. `index_file` — explicit path (can be outside `root_dir`)
+	/// 2. `index_files` — searched within `root_dir`
 	async fn serve_spa_fallback(&self) -> Option<Response> {
+		// Priority 1: Explicit index file path (can be outside root_dir)
+		if let Some(ref index_path) = self.config.index_file {
+			return self.serve_direct_file(index_path).await;
+		}
+
+		// Priority 2: Search within root_dir (existing behavior)
 		for index_file in &self.config.index_files {
 			if let Some(response) = self.try_serve(index_file).await {
 				return Some(response);
 			}
 		}
 		None
+	}
+
+	/// Serve a file directly from a configured filesystem path (bypasses `root_dir` security check).
+	///
+	/// The path may be absolute or relative, depending on how it was configured (e.g. via CLI
+	/// or configuration file); relative paths are resolved by the OS at runtime.
+	/// This is safe because the path is a fixed, user-specified value — not derived
+	/// from the request URL.
+	///
+	/// Generates ETag and Cache-Control headers consistent with `try_serve`.
+	async fn serve_direct_file(&self, path: &Path) -> Option<Response> {
+		let content = tokio::fs::read(path).await.ok()?;
+		let mime = mime_guess::from_path(path)
+			.first_or_octet_stream()
+			.to_string();
+
+		// Generate ETag from content hash (consistent with StaticFileHandler::etag)
+		let etag = {
+			use std::collections::hash_map::DefaultHasher;
+			use std::hash::{Hash, Hasher};
+			let mut hasher = DefaultHasher::new();
+			content.hash(&mut hasher);
+			format!("\"{}\"", hasher.finish())
+		};
+
+		let filename = path
+			.file_name()
+			.and_then(|n| n.to_str())
+			.unwrap_or("index.html");
+
+		let mut response = Response::ok()
+			.with_header("Content-Type", &mime)
+			.with_header("ETag", &etag);
+
+		if self.config.cache_config.enabled {
+			let policy = self.config.cache_config.get_policy(filename);
+			let cache_value = policy.to_header_value();
+			response = response.with_header("Cache-Control", &cache_value);
+
+			if let Some(vary) = &policy.vary {
+				response = response.with_header("Vary", vary);
+			}
+		}
+
+		response = response.with_body(content);
+		Some(response)
 	}
 }
 
@@ -401,5 +473,264 @@ mod tests {
 			html_policy.to_header_value(),
 			"no-cache, no-store, must-revalidate"
 		);
+	}
+
+	#[rstest]
+	fn test_config_index_file_default_is_none() {
+		// Arrange & Act
+		let config = StaticFilesConfig::default();
+
+		// Assert
+		assert!(config.index_file.is_none());
+	}
+
+	#[rstest]
+	fn test_config_index_file_builder_sets_path() {
+		// Arrange & Act
+		let config = StaticFilesConfig::new("dist").index_file("./index.html");
+
+		// Assert
+		assert_eq!(config.index_file, Some(PathBuf::from("./index.html")));
+	}
+
+	#[rstest]
+	fn test_config_index_file_absolute_path_preserved() {
+		// Arrange & Act
+		let config = StaticFilesConfig::new("dist").index_file("/absolute/path/index.html");
+
+		// Assert
+		assert_eq!(
+			config.index_file,
+			Some(PathBuf::from("/absolute/path/index.html"))
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_serve_direct_file_existing_html() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		let index_path = dir.path().join("index.html");
+		std::fs::write(&index_path, "<html>hello</html>").unwrap();
+
+		let config = StaticFilesConfig::new(dir.path().join("dist")).index_file(&index_path);
+		let middleware = StaticFilesMiddleware::new(config);
+
+		// Act
+		let response = middleware.serve_direct_file(&index_path).await;
+
+		// Assert
+		let response = response.expect("should return Some");
+		assert_eq!(response.headers.get("Content-Type").unwrap(), "text/html");
+		assert!(response.headers.contains_key("ETag"));
+		assert!(response.headers.contains_key("Cache-Control"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_serve_direct_file_nonexistent_returns_none() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		let config = StaticFilesConfig::new("dist");
+		let middleware = StaticFilesMiddleware::new(config);
+		let nonexistent = dir.path().join("nonexistent_index_2869.html");
+
+		// Act
+		let response = middleware.serve_direct_file(&nonexistent).await;
+
+		// Assert
+		assert!(response.is_none());
+	}
+
+	#[rstest]
+	fn test_config_index_file_with_spa_mode_false() {
+		// Arrange & Act
+		let config = StaticFilesConfig::new("dist")
+			.index_file("./index.html")
+			.spa_mode(false);
+
+		// Assert
+		assert_eq!(config.index_file, Some(PathBuf::from("./index.html")));
+		assert!(!config.spa_mode);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_serve_spa_fallback_with_index_file_serves_direct_path() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		let index_path = dir.path().join("index.html");
+		std::fs::write(&index_path, "<html>direct</html>").unwrap();
+
+		// Create dist/ with a DIFFERENT index.html to verify priority
+		let dist = dir.path().join("dist");
+		std::fs::create_dir_all(&dist).unwrap();
+		std::fs::write(dist.join("index.html"), "<html>dist</html>").unwrap();
+
+		let config = StaticFilesConfig::new(&dist).index_file(&index_path);
+		let middleware = StaticFilesMiddleware::new(config);
+
+		// Act
+		let response = middleware.serve_spa_fallback().await;
+
+		// Assert
+		let response = response.expect("should return Some");
+		let body = std::str::from_utf8(&response.body).unwrap();
+		assert_eq!(body, "<html>direct</html>");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_serve_spa_fallback_without_index_file_searches_root_dir() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		let dist = dir.path().join("dist");
+		std::fs::create_dir_all(&dist).unwrap();
+		std::fs::write(dist.join("index.html"), "<html>dist fallback</html>").unwrap();
+
+		let config = StaticFilesConfig::new(&dist);
+		let middleware = StaticFilesMiddleware::new(config);
+
+		// Act
+		let response = middleware.serve_spa_fallback().await;
+
+		// Assert
+		let response = response.expect("should return Some");
+		let body = std::str::from_utf8(&response.body).unwrap();
+		assert_eq!(body, "<html>dist fallback</html>");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_etag_matches_static_file_handler_format() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		let index_path = dir.path().join("index.html");
+		std::fs::write(&index_path, "<html>etag test</html>").unwrap();
+
+		let config = StaticFilesConfig::new(dir.path().join("dist")).index_file(&index_path);
+		let middleware = StaticFilesMiddleware::new(config);
+
+		// Act
+		let response = middleware.serve_direct_file(&index_path).await.unwrap();
+		let etag = response.headers.get("ETag").unwrap().to_str().unwrap();
+
+		// Assert — ETag must be quoted and contain a numeric hash
+		assert!(etag.starts_with('"'));
+		assert!(etag.ends_with('"'));
+		assert!(etag.len() > 2);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_etag_consistent_between_serve_direct_and_try_serve() {
+		// Arrange — same file accessible via both paths
+		let dir = tempfile::tempdir().unwrap();
+		let index_path = dir.path().join("index.html");
+		std::fs::write(&index_path, "<html>consistency</html>").unwrap();
+
+		let config = StaticFilesConfig::new(dir.path()).index_file(&index_path);
+		let middleware = StaticFilesMiddleware::new(config);
+
+		// Act
+		let direct_response = middleware.serve_direct_file(&index_path).await.unwrap();
+		let try_response = middleware.try_serve("index.html").await.unwrap();
+
+		// Assert
+		let direct_etag = direct_response.headers.get("ETag").unwrap();
+		let try_etag = try_response.headers.get("ETag").unwrap();
+		assert_eq!(direct_etag, try_etag);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_backward_compat_no_index_file_uses_root_dir() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		std::fs::write(dir.path().join("index.html"), "<html>compat</html>").unwrap();
+
+		let config = StaticFilesConfig::new(dir.path());
+		let middleware = StaticFilesMiddleware::new(config);
+
+		// Act
+		let response = middleware.serve_spa_fallback().await;
+
+		// Assert
+		let response = response.expect("should serve from root_dir");
+		let body = std::str::from_utf8(&response.body).unwrap();
+		assert_eq!(body, "<html>compat</html>");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_backward_compat_custom_index_files() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		std::fs::write(dir.path().join("default.html"), "<html>custom</html>").unwrap();
+
+		let config =
+			StaticFilesConfig::new(dir.path()).index_files(vec!["default.html".to_string()]);
+		let middleware = StaticFilesMiddleware::new(config);
+
+		// Act
+		let response = middleware.serve_spa_fallback().await;
+
+		// Assert
+		let response = response.expect("should serve custom index file");
+		let body = std::str::from_utf8(&response.body).unwrap();
+		assert_eq!(body, "<html>custom</html>");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_serve_direct_file_request_path_independent() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		let index_path = dir.path().join("index.html");
+		std::fs::write(&index_path, "<html>safe</html>").unwrap();
+
+		let config = StaticFilesConfig::new(dir.path().join("dist"))
+			.index_file(&index_path)
+			.spa_mode(true);
+		let middleware = StaticFilesMiddleware::new(config);
+
+		// Act
+		let response1 = middleware.serve_direct_file(&index_path).await;
+		let response2 = middleware.serve_direct_file(&index_path).await;
+
+		// Assert
+		let body1 = std::str::from_utf8(&response1.unwrap().body)
+			.unwrap()
+			.to_string();
+		let body2 = std::str::from_utf8(&response2.unwrap().body)
+			.unwrap()
+			.to_string();
+		assert_eq!(body1, body2);
+		assert_eq!(body1, "<html>safe</html>");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_serve_direct_file_cache_disabled_no_cache_header() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		let index_path = dir.path().join("index.html");
+		std::fs::write(&index_path, "<html>hello</html>").unwrap();
+
+		let mut cache_config = CacheControlConfig::new();
+		cache_config.enabled = false;
+
+		let config = StaticFilesConfig::new(dir.path().join("dist"))
+			.index_file(&index_path)
+			.cache_config(cache_config);
+		let middleware = StaticFilesMiddleware::new(config);
+
+		// Act
+		let response = middleware.serve_direct_file(&index_path).await;
+
+		// Assert
+		let response = response.expect("should return Some");
+		assert!(response.headers.contains_key("ETag"));
+		assert!(!response.headers.contains_key("Cache-Control"));
 	}
 }

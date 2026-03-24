@@ -1572,8 +1572,14 @@ impl RunServerCommand {
 			let mut static_config = StaticFilesConfig::new(resolved_static_dir.clone())
 				.url_prefix("/")
 				.spa_mode(!no_spa)
-				// All API and documentation endpoints are under /api/ prefix
-				.excluded_prefixes(vec!["/api/".to_string()]);
+				// Exclude framework-managed route prefixes from SPA fallback
+				// so that API endpoints and admin panel are handled by the
+				// application router instead of receiving index.html.
+				.excluded_prefixes(vec![
+					"/api/".to_string(),
+					"/admin/".to_string(),
+					"/static/admin/".to_string(),
+				]);
 
 			// Resolve index file for SPA fallback (only when SPA mode is enabled)
 			// Refs #2869: Separate index.html (source) from dist/ (build output)

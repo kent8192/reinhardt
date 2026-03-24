@@ -41,10 +41,10 @@ tutorial/
     ├── config/
     │   ├── settings.rs
     │   ├── settings/
-    │   │   ├── base.rs
-    │   │   ├── local.rs
-    │   │   ├── staging.rs
-    │   │   └── production.rs
+    │   │   ├── base.toml
+    │   │   ├── local.toml
+    │   │   ├── staging.toml
+    │   │   └── production.toml
     │   ├── urls.rs
     │   └── apps.rs
     └── bin/

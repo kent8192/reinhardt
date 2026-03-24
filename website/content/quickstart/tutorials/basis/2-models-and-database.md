@@ -466,7 +466,7 @@ Create `polls/tests.rs`:
 ```rust
 use super::models::{Question, Choice};
 use reinhardt::prelude::*;
-use reinhardt::test::fixtures::postgres_fixture;
+use reinhardt_testkit::fixtures::testcontainers::postgres_container;
 use chrono::Utc;
 use rstest::*;
 use testcontainers::{ContainerAsync, GenericImage};
@@ -476,9 +476,9 @@ use std::sync::Arc;
 #[rstest]
 #[tokio::test]
 async fn test_create_question_and_choices(
-    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>)
+    #[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String)
 ) {
-    let (_container, conn) = postgres_fixture.await;
+    let (_container, pool, _port, _db_url) = postgres_container.await;
 
     // Create a question using the auto-generated new() function
     // pub_date is auto-set by #[field(auto_now_add = true)]
@@ -528,9 +528,9 @@ async fn test_create_question_and_choices(
 #[rstest]
 #[tokio::test]
 async fn test_increment_votes(
-    #[future] postgres_fixture: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>)
+    #[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String)
 ) {
-    let (_container, conn) = postgres_fixture.await;
+    let (_container, pool, _port, _db_url) = postgres_container.await;
 
     // Create question and choice
     let mut question = Question::new("Test question");

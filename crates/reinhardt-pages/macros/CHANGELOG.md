@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.1.0-rc.13...reinhardt-pages-macros@v0.1.0-rc.14) - 2026-03-24
+
+### Changed
+
+- *(reinhardt-pages)* auto-detect #[inject] in server_fn macro
+
+### Fixed
+
+- *(manouche,pages)* support standalone boolean attributes in page! macro
+- *(manouche,pages)* align boolean attribute lists with canonical definition
+- *(reinhardt-pages)* fork DI context per-request in server function macros
+- *(reinhardt-pages,reinhardt-di)* add Content-Type negotiation for server_fn and Json<T> extractor
+- *(reinhardt-pages)* address Copilot review feedback on server_fn macro
+
+### Styling
+
+- *(manouche,pages)* apply auto-fix formatting
+
 ## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.1.0-rc.8...reinhardt-pages-macros@v0.1.0-rc.9) - 2026-03-15
 
 ### Fixed

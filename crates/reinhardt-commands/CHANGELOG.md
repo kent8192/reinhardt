@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.13...reinhardt-commands@v0.1.0-rc.14) - 2026-03-24
+
+### Added
+
+- *(commands)* add --index CLI option to runserver command
+- *(commands)* integrate --index into runserver execution and autoreload
+- *(commands)* add --index option to collectstatic for index.html source
+
+### Changed
+
+- *(commands)* update project templates to use ProjectSettings
+- *(templates)* remove index.html copy from wasm-finalize tasks
+
+### Fixed
+
+- *(deps)* consolidate colored and criterion versions to workspace dependencies
+- *(middleware)* update Settings field access for CoreSettings restructuring
+- suppress deprecated Settings warnings and fix unreachable pub visibility
+- address Copilot review feedback
+- *(ci)* resolve docs.rs and semver CI failures
+- address Copilot review feedback for PR [[#2874](https://github.com/kent8192/reinhardt-web/issues/2874)](https://github.com/kent8192/reinhardt-web/issues/2874)
+- *(commands)* use CLI parsing for non-exhaustive enum variants in integration tests
+- *(commands)* use helper function to construct non_exhaustive Collectstatic in tests
+- *(test)* account for auto-discovered app static files in backward compatibility test
+
+### Other
+
+- resolve conflict with main in middleware.rs
+
+### Styling
+
+- *(commands)* fix formatting and clippy warnings in staticfiles changes
+
+### Testing
+
+- *(staticfiles)* add comprehensive test coverage for index file separation
+
 ## [0.1.0-rc.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.12...reinhardt-commands@v0.1.0-rc.13) - 2026-03-18
 
 ### Added

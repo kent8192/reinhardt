@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.1.0-rc.13...reinhardt-utils@v0.1.0-rc.14) - 2026-03-24
+
+### Added
+
+- *(staticfiles)* add index_file field to middleware StaticFilesConfig
+- *(staticfiles)* add serve_direct_file for SPA fallback from external path
+- *(commands)* integrate --index into runserver execution and autoreload
+
+### Documentation
+
+- *(readme)* fix documentation discrepancies across crate READMEs
+
+### Fixed
+
+- *(utils)* use CacheControlConfig for static file cache headers instead of hardcoded values
+- *(utils)* address review comments for static file cache headers
+- *(utils)* remove #[non_exhaustive] from StaticFilesConfig to comply with RC semver policy
+- *(ci)* resolve docs.rs and semver CI failures
+- address Copilot review feedback for PR [[#2874](https://github.com/kent8192/reinhardt-web/issues/2874)](https://github.com/kent8192/reinhardt-web/issues/2874)
+
+### Styling
+
+- *(utils)* apply auto-fix formatting
+- *(commands)* fix formatting and clippy warnings in staticfiles changes
+
+### Testing
+
+- *(staticfiles)* add comprehensive test coverage for index file separation
+
 ## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.1.0-rc.8...reinhardt-utils@v0.1.0-rc.9) - 2026-03-15
 
 ### Changed

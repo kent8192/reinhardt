@@ -290,6 +290,54 @@ impl StaticFilesMiddleware {
 		Some(WasmEntry { js_file, wasm_file })
 	}
 
+	/// Resolve the URL for a WASM-related file, applying manifest lookup if available.
+	fn resolve_wasm_url(
+		filename: &str,
+		url_prefix: &str,
+		manifest: Option<&HashMap<String, String>>,
+	) -> String {
+		let resolved = manifest
+			.and_then(|m| m.get(filename))
+			.map(|s| s.as_str())
+			.unwrap_or(filename);
+		format!("{url_prefix}{resolved}")
+	}
+
+	/// Inject a WASM auto-loader script into HTML content before `</body>`.
+	///
+	/// If no `</body>` tag is found (case-insensitive), the script is appended to the end.
+	fn inject_wasm_script(
+		html: &str,
+		entry: &WasmEntry,
+		url_prefix: &str,
+		manifest: Option<&HashMap<String, String>>,
+	) -> String {
+		let js_url = Self::resolve_wasm_url(&entry.js_file, url_prefix, manifest);
+		let wasm_url = Self::resolve_wasm_url(&entry.wasm_file, url_prefix, manifest);
+
+		let script = format!(
+			"\n<!-- Reinhardt WASM Auto-Loader -->\n\
+			 <script type=\"module\">\n\
+			 const {{ default: init }} = await import('{js_url}');\n\
+			 await init('{wasm_url}');\n\
+			 </script>\n"
+		);
+
+		// Case-insensitive search for </body>
+		if let Some(pos) = html.to_lowercase().rfind("</body>") {
+			let mut result = String::with_capacity(html.len() + script.len());
+			result.push_str(&html[..pos]);
+			result.push_str(&script);
+			result.push_str(&html[pos..]);
+			result
+		} else {
+			let mut result = String::with_capacity(html.len() + script.len());
+			result.push_str(html);
+			result.push_str(&script);
+			result
+		}
+	}
+
 	/// Check if the request path matches the URL prefix.
 	fn matches_prefix(&self, path: &str) -> bool {
 		if self.config.url_prefix == "/" {
@@ -1048,6 +1096,133 @@ mod tests {
 
 		// Assert
 		assert!(entry.is_none());
+	}
+
+	#[rstest]
+	fn test_resolve_wasm_url_no_manifest() {
+		// Arrange & Act
+		let url = StaticFilesMiddleware::resolve_wasm_url("app.js", "/static/", None);
+
+		// Assert
+		assert_eq!(url, "/static/app.js");
+	}
+
+	#[rstest]
+	fn test_resolve_wasm_url_with_manifest_match() {
+		// Arrange
+		let mut manifest = HashMap::new();
+		manifest.insert("app.js".to_string(), "app.abc123.js".to_string());
+
+		// Act
+		let url = StaticFilesMiddleware::resolve_wasm_url("app.js", "/static/", Some(&manifest));
+
+		// Assert
+		assert_eq!(url, "/static/app.abc123.js");
+	}
+
+	#[rstest]
+	fn test_resolve_wasm_url_with_manifest_no_match() {
+		// Arrange
+		let mut manifest = HashMap::new();
+		manifest.insert("other.js".to_string(), "other.xyz.js".to_string());
+
+		// Act
+		let url = StaticFilesMiddleware::resolve_wasm_url("app.js", "/static/", Some(&manifest));
+
+		// Assert
+		assert_eq!(url, "/static/app.js");
+	}
+
+	#[rstest]
+	fn test_inject_wasm_script_before_body() {
+		// Arrange
+		let html = "<html><body><h1>Hello</h1></body></html>";
+		let entry = WasmEntry {
+			js_file: "app.js".to_string(),
+			wasm_file: "app_bg.wasm".to_string(),
+		};
+
+		// Act
+		let result = StaticFilesMiddleware::inject_wasm_script(html, &entry, "/", None);
+
+		// Assert — generated HTML with dynamic URLs
+		assert!(result.contains("<!-- Reinhardt WASM Auto-Loader -->"));
+		assert!(result.contains("await import('/app.js')"));
+		assert!(result.contains("await init('/app_bg.wasm')"));
+		assert!(result.contains("</body></html>"));
+	}
+
+	#[rstest]
+	fn test_inject_wasm_script_case_insensitive_body() {
+		// Arrange
+		let html = "<html><body><h1>Hello</h1></BODY></html>";
+		let entry = WasmEntry {
+			js_file: "app.js".to_string(),
+			wasm_file: "app_bg.wasm".to_string(),
+		};
+
+		// Act
+		let result = StaticFilesMiddleware::inject_wasm_script(html, &entry, "/", None);
+
+		// Assert — generated HTML with dynamic URLs
+		assert!(result.contains("<!-- Reinhardt WASM Auto-Loader -->"));
+		assert!(result.contains("</BODY></html>"));
+	}
+
+	#[rstest]
+	fn test_inject_wasm_script_no_body_tag_appends() {
+		// Arrange
+		let html = "<html><h1>No body tag</h1></html>";
+		let entry = WasmEntry {
+			js_file: "app.js".to_string(),
+			wasm_file: "app_bg.wasm".to_string(),
+		};
+
+		// Act
+		let result = StaticFilesMiddleware::inject_wasm_script(html, &entry, "/", None);
+
+		// Assert — generated HTML with dynamic URLs
+		assert!(result.ends_with("</script>\n"));
+		assert!(result.contains("<!-- Reinhardt WASM Auto-Loader -->"));
+	}
+
+	#[rstest]
+	fn test_inject_wasm_script_with_manifest() {
+		// Arrange
+		let html = "<html><body></body></html>";
+		let entry = WasmEntry {
+			js_file: "app.js".to_string(),
+			wasm_file: "app_bg.wasm".to_string(),
+		};
+		let mut manifest = HashMap::new();
+		manifest.insert("app.js".to_string(), "app.h4sh.js".to_string());
+		manifest.insert("app_bg.wasm".to_string(), "app_bg.h4sh.wasm".to_string());
+
+		// Act
+		let result =
+			StaticFilesMiddleware::inject_wasm_script(html, &entry, "/", Some(&manifest));
+
+		// Assert — generated HTML with dynamic URLs
+		assert!(result.contains("await import('/app.h4sh.js')"));
+		assert!(result.contains("await init('/app_bg.h4sh.wasm')"));
+	}
+
+	#[rstest]
+	fn test_inject_wasm_script_with_url_prefix() {
+		// Arrange
+		let html = "<html><body></body></html>";
+		let entry = WasmEntry {
+			js_file: "app.js".to_string(),
+			wasm_file: "app_bg.wasm".to_string(),
+		};
+
+		// Act
+		let result =
+			StaticFilesMiddleware::inject_wasm_script(html, &entry, "/static/", None);
+
+		// Assert — generated HTML with dynamic URLs
+		assert!(result.contains("await import('/static/app.js')"));
+		assert!(result.contains("await init('/static/app_bg.wasm')"));
 	}
 
 	#[rstest]

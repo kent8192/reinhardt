@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.14...reinhardt-web@v0.1.0-rc.15) - 2026-03-25
+
+### Added
+
+- *(staticfiles)* add WasmEntry struct and auto-inject config fields
+- *(staticfiles)* implement WASM entry point detection
+- *(staticfiles)* implement WASM script injection into HTML
+- *(staticfiles)* wire WASM auto-injection into SPA fallback
+- *(examples)* remove manual WASM scripts for auto-injection
+
+### Documentation
+
+- *(tutorials)* fix incorrect API references in tutorial code examples
+
+### Fixed
+
+- *(query)* preserve single quotes in MySQL user identifier parsing
+- fix!(auth): add JwtError enum and reject expired tokens by default
+- *(staticfiles)* address security and spec compliance review issues
+- *(staticfiles)* add empty wasm_entry check and fix log levels
+
+### Maintenance
+
+- *(staticfiles)* fix formatting and dead code warning
+
 ## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.13...reinhardt-web@v0.1.0-rc.14) - 2026-03-24
 
 ### Added

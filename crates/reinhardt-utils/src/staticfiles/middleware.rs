@@ -179,6 +179,7 @@ impl StaticFilesConfig {
 pub struct StaticFilesMiddleware {
 	config: StaticFilesConfig,
 	handler: StaticFileHandler,
+	wasm_entry: Option<WasmEntry>,
 }
 
 impl StaticFilesMiddleware {
@@ -186,12 +187,107 @@ impl StaticFilesMiddleware {
 	pub fn new(config: StaticFilesConfig) -> Self {
 		let handler = StaticFileHandler::new(config.root_dir.clone())
 			.with_index_files(config.index_files.clone());
-		Self { config, handler }
+		let wasm_entry = if config.auto_inject_wasm {
+			Self::detect_wasm_entry(&config)
+		} else {
+			tracing::debug!("WASM auto-injection is disabled");
+			None
+		};
+		Self {
+			config,
+			handler,
+			wasm_entry,
+		}
 	}
 
 	/// Create a middleware with default configuration for the given directory.
 	pub fn for_directory(root_dir: impl Into<PathBuf>) -> Self {
 		Self::new(StaticFilesConfig::new(root_dir))
+	}
+
+	/// Detect WASM entry point by scanning `root_dir` for `{name}.js` + `{name}_bg.wasm` pairs.
+	///
+	/// Falls back to `config.wasm_entry` when zero or multiple pairs are found.
+	fn detect_wasm_entry(config: &StaticFilesConfig) -> Option<WasmEntry> {
+		let root = &config.root_dir;
+		tracing::debug!("scanning {:?} for WASM entry points", root);
+
+		// Scan top-level files in root_dir for {name}.js + {name}_bg.wasm pairs
+		let mut pairs: Vec<(String, String)> = Vec::new();
+		if let Ok(entries) = std::fs::read_dir(root) {
+			let mut js_stems: Vec<String> = Vec::new();
+			let mut wasm_stems: Vec<String> = Vec::new();
+
+			for entry in entries.flatten() {
+				let path = entry.path();
+				if !path.is_file() {
+					continue;
+				}
+				if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+					if let Some(stem) = name.strip_suffix(".js") {
+						js_stems.push(stem.to_string());
+					} else if let Some(stem) = name.strip_suffix("_bg.wasm") {
+						wasm_stems.push(stem.to_string());
+					}
+				}
+			}
+
+			for stem in &js_stems {
+				if wasm_stems.contains(stem) {
+					pairs.push((format!("{stem}.js"), format!("{stem}_bg.wasm")));
+				}
+			}
+		}
+
+		match pairs.len() {
+			1 => {
+				let (js_file, wasm_file) = pairs.into_iter().next().unwrap();
+				tracing::info!(
+					"auto-detected WASM entry: js={}, wasm={}",
+					js_file,
+					wasm_file
+				);
+				Some(WasmEntry { js_file, wasm_file })
+			}
+			0 => {
+				tracing::debug!("no WASM pairs found in {:?}, trying fallback", root);
+				Self::try_wasm_entry_fallback(config)
+			}
+			n => {
+				tracing::warn!(
+					"found {} WASM pairs in {:?}, cannot auto-detect; trying fallback",
+					n,
+					root
+				);
+				Self::try_wasm_entry_fallback(config)
+			}
+		}
+	}
+
+	/// Try to resolve WASM entry from `config.wasm_entry` fallback.
+	fn try_wasm_entry_fallback(config: &StaticFilesConfig) -> Option<WasmEntry> {
+		let entry_name = config.wasm_entry.as_ref()?;
+		let js_file = format!("{entry_name}.js");
+		let wasm_file = format!("{entry_name}_bg.wasm");
+
+		let js_path = config.root_dir.join(&js_file);
+		let wasm_path = config.root_dir.join(&wasm_file);
+
+		if !js_path.exists() {
+			tracing::warn!("fallback WASM JS file not found: {:?}", js_path);
+			return None;
+		}
+		if !wasm_path.exists() {
+			tracing::warn!("fallback WASM binary not found: {:?}", wasm_path);
+			return None;
+		}
+
+		tracing::info!(
+			"using fallback WASM entry: js={}, wasm={}",
+			js_file,
+			wasm_file
+		);
+		Some(WasmEntry { js_file, wasm_file })
 	}
 
 	/// Check if the request path matches the URL prefix.
@@ -855,5 +951,121 @@ mod tests {
 
 		// Assert
 		assert_eq!(config.wasm_entry, Some("sub/my_app".to_string()));
+	}
+
+	#[rstest]
+	fn test_detect_wasm_entry_single_pair() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		std::fs::write(dir.path().join("my_app.js"), "// js").unwrap();
+		std::fs::write(dir.path().join("my_app_bg.wasm"), &[0u8; 4]).unwrap();
+		let config = StaticFilesConfig::new(dir.path());
+
+		// Act
+		let entry = StaticFilesMiddleware::detect_wasm_entry(&config);
+
+		// Assert
+		let entry = entry.expect("should detect single pair");
+		assert_eq!(entry.js_file, "my_app.js");
+		assert_eq!(entry.wasm_file, "my_app_bg.wasm");
+	}
+
+	#[rstest]
+	fn test_detect_wasm_entry_no_pair() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		std::fs::write(dir.path().join("app.js"), "// js").unwrap();
+		// No matching _bg.wasm file
+		let config = StaticFilesConfig::new(dir.path());
+
+		// Act
+		let entry = StaticFilesMiddleware::detect_wasm_entry(&config);
+
+		// Assert
+		assert!(entry.is_none());
+	}
+
+	#[rstest]
+	fn test_detect_wasm_entry_multiple_pairs_falls_back_to_wasm_entry() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		std::fs::write(dir.path().join("app_a.js"), "// js a").unwrap();
+		std::fs::write(dir.path().join("app_a_bg.wasm"), &[0u8; 4]).unwrap();
+		std::fs::write(dir.path().join("app_b.js"), "// js b").unwrap();
+		std::fs::write(dir.path().join("app_b_bg.wasm"), &[0u8; 4]).unwrap();
+		let config = StaticFilesConfig::new(dir.path()).wasm_entry("app_a");
+
+		// Act
+		let entry = StaticFilesMiddleware::detect_wasm_entry(&config);
+
+		// Assert
+		let entry = entry.expect("should fall back to wasm_entry");
+		assert_eq!(entry.js_file, "app_a.js");
+		assert_eq!(entry.wasm_file, "app_a_bg.wasm");
+	}
+
+	#[rstest]
+	fn test_detect_wasm_entry_fallback_missing_file() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		// Only create js, not the wasm file
+		std::fs::write(dir.path().join("missing_app.js"), "// js").unwrap();
+		let config = StaticFilesConfig::new(dir.path()).wasm_entry("missing_app");
+
+		// Act
+		let entry = StaticFilesMiddleware::detect_wasm_entry(&config);
+
+		// Assert
+		assert!(entry.is_none());
+	}
+
+	#[rstest]
+	fn test_detect_wasm_entry_disabled() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		std::fs::write(dir.path().join("my_app.js"), "// js").unwrap();
+		std::fs::write(dir.path().join("my_app_bg.wasm"), &[0u8; 4]).unwrap();
+		let config = StaticFilesConfig::new(dir.path()).auto_inject_wasm(false);
+
+		// Act
+		let middleware = StaticFilesMiddleware::new(config);
+
+		// Assert
+		assert!(middleware.wasm_entry.is_none());
+	}
+
+	#[rstest]
+	fn test_detect_wasm_entry_ignores_non_wasm_js_files() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		std::fs::write(dir.path().join("utils.js"), "// utility").unwrap();
+		std::fs::write(dir.path().join("style.css"), "body{}").unwrap();
+		std::fs::write(dir.path().join("data.json"), "{}").unwrap();
+		let config = StaticFilesConfig::new(dir.path());
+
+		// Act
+		let entry = StaticFilesMiddleware::detect_wasm_entry(&config);
+
+		// Assert
+		assert!(entry.is_none());
+	}
+
+	#[rstest]
+	fn test_detect_wasm_entry_fallback_with_path_separator() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		let sub = dir.path().join("pkg");
+		std::fs::create_dir_all(&sub).unwrap();
+		std::fs::write(sub.join("my_app.js"), "// js").unwrap();
+		std::fs::write(sub.join("my_app_bg.wasm"), &[0u8; 4]).unwrap();
+		let config = StaticFilesConfig::new(dir.path()).wasm_entry("pkg/my_app");
+
+		// Act
+		let entry = StaticFilesMiddleware::detect_wasm_entry(&config);
+
+		// Assert
+		let entry = entry.expect("should resolve path with separator");
+		assert_eq!(entry.js_file, "pkg/my_app.js");
+		assert_eq!(entry.wasm_file, "pkg/my_app_bg.wasm");
 	}
 }

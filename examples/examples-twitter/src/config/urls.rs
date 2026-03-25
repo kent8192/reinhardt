@@ -8,7 +8,7 @@
 
 use reinhardt::UnifiedRouter;
 #[cfg(not(target_arch = "wasm32"))]
-use reinhardt::admin::admin_routes;
+use reinhardt::admin::{admin_routes, admin_static_routes};
 #[cfg(server)]
 use reinhardt::routes;
 
@@ -44,19 +44,13 @@ use reinhardt::LoggingMiddleware;
 /// server and client routes defined.
 #[cfg_attr(server, routes)]
 pub fn routes() -> UnifiedRouter {
-	// Configure admin site (registration only, no DB needed yet)
+	// Configure admin site (registration only, no DB needed yet).
+	// Note: The returned AdminSite is not stored because configure_di()
+	// requires an async DatabaseConnection, which cannot be obtained in
+	// this synchronous routes() function (see Issue #2918).
+	// The #[admin(model)] macro registers models via inventory as a side effect.
 	#[cfg(server)]
 	let _admin = configure_admin();
-
-	// Admin routes require DatabaseConnection for query execution.
-	// In production, mount admin routes like this:
-	//
-	//   let db = DatabaseConnection::connect("postgres://...").await?;
-	//   let admin_router = admin.get_urls(db);
-	//   router.mount("/admin", admin_router)
-	//
-	// For this example, admin is configured but not mounted since
-	// get_urls() requires an async DatabaseConnection.
 
 	let router = UnifiedRouter::new()
 		// Mount each app's unified routes
@@ -65,9 +59,11 @@ pub fn routes() -> UnifiedRouter {
 		.mount_unified("/", profile::urls::routes())
 		.mount_unified("/", relationship::urls::routes())
 		.mount_unified("/", dm::urls::routes());
-	// Mount admin panel routes (server-only, not available on wasm32)
+	// Mount admin panel routes and static assets (server-only, not available on wasm32)
 	#[cfg(not(target_arch = "wasm32"))]
-	let router = router.mount("/admin/", admin_routes());
+	let router = router
+		.mount("/admin/", admin_routes())
+		.mount("/static/admin/", admin_static_routes());
 	// Apply middleware stack (server-only)
 	#[cfg(server)]
 	let router = router

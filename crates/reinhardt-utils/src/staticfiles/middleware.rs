@@ -405,7 +405,7 @@ impl StaticFilesMiddleware {
 		}
 	}
 
-	/// Serve the SPA fallback (index.html).
+	/// Serve the SPA fallback (index.html), optionally injecting WASM auto-loader script.
 	///
 	/// Priority:
 	/// 1. `index_file` — explicit path (can be outside `root_dir`)
@@ -413,16 +413,83 @@ impl StaticFilesMiddleware {
 	async fn serve_spa_fallback(&self) -> Option<Response> {
 		// Priority 1: Explicit index file path (can be outside root_dir)
 		if let Some(ref index_path) = self.config.index_file {
-			return self.serve_direct_file(index_path).await;
+			let content = tokio::fs::read(index_path).await.ok()?;
+			return self.build_spa_response(content, index_path);
 		}
 
 		// Priority 2: Search within root_dir (existing behavior)
 		for index_file in &self.config.index_files {
-			if let Some(response) = self.try_serve(index_file).await {
-				return Some(response);
+			let path = self.config.root_dir.join(index_file);
+			if let Ok(content) = tokio::fs::read(&path).await {
+				return self.build_spa_response(content, &path);
 			}
 		}
 		None
+	}
+
+	/// Build a SPA response from raw file content, injecting WASM script if applicable.
+	///
+	/// Computes ETag from the final (post-injection) content to ensure cache correctness.
+	fn build_spa_response(&self, content: Vec<u8>, path: &Path) -> Option<Response> {
+		let mime = mime_guess::from_path(path)
+			.first_or_octet_stream()
+			.to_string();
+
+		let filename = path
+			.file_name()
+			.and_then(|n| n.to_str())
+			.unwrap_or("index.html");
+
+		// Apply WASM injection if entry is detected
+		let final_content = if let Some(ref entry) = self.wasm_entry {
+			match String::from_utf8(content) {
+				Ok(html) => {
+					let injected = Self::inject_wasm_script(
+						&html,
+						entry,
+						&self.config.url_prefix,
+						self.config.wasm_manifest.as_ref(),
+					);
+					tracing::debug!("injected WASM auto-loader into SPA response");
+					injected.into_bytes()
+				}
+				Err(e) => {
+					tracing::warn!(
+						"SPA fallback is not valid UTF-8, serving raw content: {}",
+						e
+					);
+					e.into_bytes()
+				}
+			}
+		} else {
+			content
+		};
+
+		// Generate ETag from final content (post-injection)
+		let etag = {
+			use std::collections::hash_map::DefaultHasher;
+			use std::hash::{Hash, Hasher};
+			let mut hasher = DefaultHasher::new();
+			final_content.hash(&mut hasher);
+			format!("\"{}\"", hasher.finish())
+		};
+
+		let mut response = Response::ok()
+			.with_header("Content-Type", &mime)
+			.with_header("ETag", &etag);
+
+		if self.config.cache_config.enabled {
+			let policy = self.config.cache_config.get_policy(filename);
+			let cache_value = policy.to_header_value();
+			response = response.with_header("Cache-Control", &cache_value);
+
+			if let Some(vary) = &policy.vary {
+				response = response.with_header("Vary", vary);
+			}
+		}
+
+		response = response.with_body(final_content);
+		Some(response)
 	}
 
 	/// Serve a file directly from a configured filesystem path (bypasses `root_dir` security check).
@@ -1242,5 +1309,158 @@ mod tests {
 		let entry = entry.expect("should resolve path with separator");
 		assert_eq!(entry.js_file, "pkg/my_app.js");
 		assert_eq!(entry.wasm_file, "pkg/my_app_bg.wasm");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_serve_spa_fallback_auto_injects_wasm() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		std::fs::write(
+			dir.path().join("index.html"),
+			"<html><body><h1>App</h1></body></html>",
+		)
+		.unwrap();
+		std::fs::write(dir.path().join("my_app.js"), "// js").unwrap();
+		std::fs::write(dir.path().join("my_app_bg.wasm"), &[0u8; 4]).unwrap();
+
+		let config = StaticFilesConfig::new(dir.path());
+		let middleware = StaticFilesMiddleware::new(config);
+
+		// Act
+		let response = middleware.serve_spa_fallback().await;
+
+		// Assert — generated HTML with dynamic URLs
+		let response = response.expect("should return Some");
+		let body = std::str::from_utf8(&response.body).unwrap();
+		assert!(body.contains("<!-- Reinhardt WASM Auto-Loader -->"));
+		assert!(body.contains("await import('/my_app.js')"));
+		assert!(body.contains("await init('/my_app_bg.wasm')"));
+		assert!(body.contains("</body></html>"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_serve_spa_fallback_no_inject_when_disabled() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		std::fs::write(
+			dir.path().join("index.html"),
+			"<html><body><h1>App</h1></body></html>",
+		)
+		.unwrap();
+		std::fs::write(dir.path().join("my_app.js"), "// js").unwrap();
+		std::fs::write(dir.path().join("my_app_bg.wasm"), &[0u8; 4]).unwrap();
+
+		let config = StaticFilesConfig::new(dir.path()).auto_inject_wasm(false);
+		let middleware = StaticFilesMiddleware::new(config);
+
+		// Act
+		let response = middleware.serve_spa_fallback().await;
+
+		// Assert
+		let response = response.expect("should return Some");
+		let body = std::str::from_utf8(&response.body).unwrap();
+		assert!(!body.contains("Reinhardt WASM Auto-Loader"));
+		assert_eq!(body, "<html><body><h1>App</h1></body></html>");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_serve_spa_fallback_etag_reflects_injected_content() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		std::fs::write(
+			dir.path().join("index.html"),
+			"<html><body></body></html>",
+		)
+		.unwrap();
+		std::fs::write(dir.path().join("my_app.js"), "// js").unwrap();
+		std::fs::write(dir.path().join("my_app_bg.wasm"), &[0u8; 4]).unwrap();
+
+		let config_with = StaticFilesConfig::new(dir.path());
+		let mw_with = StaticFilesMiddleware::new(config_with);
+
+		let config_without = StaticFilesConfig::new(dir.path()).auto_inject_wasm(false);
+		let mw_without = StaticFilesMiddleware::new(config_without);
+
+		// Act
+		let resp_with = mw_with.serve_spa_fallback().await.unwrap();
+		let resp_without = mw_without.serve_spa_fallback().await.unwrap();
+
+		// Assert — ETags must differ because content differs after injection
+		let etag_with = resp_with.headers.get("ETag").unwrap();
+		let etag_without = resp_without.headers.get("ETag").unwrap();
+		assert_ne!(etag_with, etag_without);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_serve_spa_fallback_no_inject_when_spa_mode_false() {
+		// Arrange — spa_mode gate is in process(), not serve_spa_fallback()
+		// This test verifies that serve_spa_fallback still works independently
+		let dir = tempfile::tempdir().unwrap();
+		std::fs::write(
+			dir.path().join("index.html"),
+			"<html><body></body></html>",
+		)
+		.unwrap();
+
+		let config = StaticFilesConfig::new(dir.path()).spa_mode(false);
+		let middleware = StaticFilesMiddleware::new(config);
+
+		// Act — calling serve_spa_fallback directly bypasses the spa_mode check in process()
+		let response = middleware.serve_spa_fallback().await;
+
+		// Assert — response is still produced (spa_mode gating is in process())
+		assert!(response.is_some());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_serve_spa_fallback_invalid_utf8_serves_raw() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		// Write invalid UTF-8 content as an index file
+		let invalid_bytes: Vec<u8> = vec![0xFF, 0xFE, 0x00, 0x3C, 0x68, 0x74, 0x6D, 0x6C];
+		std::fs::write(dir.path().join("index.html"), &invalid_bytes).unwrap();
+		std::fs::write(dir.path().join("my_app.js"), "// js").unwrap();
+		std::fs::write(dir.path().join("my_app_bg.wasm"), &[0u8; 4]).unwrap();
+
+		let config = StaticFilesConfig::new(dir.path());
+		let middleware = StaticFilesMiddleware::new(config);
+
+		// Act
+		let response = middleware.serve_spa_fallback().await;
+
+		// Assert — should serve raw content without injection
+		let response = response.expect("should return Some");
+		assert_eq!(response.body, invalid_bytes);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_serve_spa_fallback_preserves_content_type_and_cache_headers() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		std::fs::write(
+			dir.path().join("index.html"),
+			"<html><body></body></html>",
+		)
+		.unwrap();
+		std::fs::write(dir.path().join("my_app.js"), "// js").unwrap();
+		std::fs::write(dir.path().join("my_app_bg.wasm"), &[0u8; 4]).unwrap();
+
+		let config = StaticFilesConfig::new(dir.path());
+		let middleware = StaticFilesMiddleware::new(config);
+
+		// Act
+		let response = middleware.serve_spa_fallback().await;
+
+		// Assert
+		let response = response.expect("should return Some");
+		assert_eq!(response.headers.get("Content-Type").unwrap(), "text/html");
+		assert!(response.headers.contains_key("ETag"));
+		assert!(response.headers.contains_key("Cache-Control"));
 	}
 }

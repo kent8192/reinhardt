@@ -49,7 +49,7 @@ pub struct StaticFilesConfig {
 	pub cache_config: CacheControlConfig,
 	/// Enable automatic WASM script injection into SPA HTML responses
 	pub auto_inject_wasm: bool,
-	/// Explicit WASM entry point name (e.g., "my_app") for fallback detection
+	/// Explicit WASM entry point filename (e.g., "my_app.js") for fallback detection
 	pub wasm_entry: Option<String>,
 	/// Manifest mapping original filenames to hashed filenames
 	pub wasm_manifest: Option<HashMap<String, String>>,
@@ -133,14 +133,23 @@ impl StaticFilesConfig {
 		self
 	}
 
-	/// Set the explicit WASM entry point name for fallback detection.
+	/// Set the explicit WASM entry point filename for fallback detection.
+	///
+	/// The entry must be a `.js` filename (e.g., `"my_app.js"` or `"pkg/my_app.js"`).
+	/// The corresponding WASM file is inferred by stripping `.js` and appending `_bg.wasm`.
 	///
 	/// # Panics
 	///
 	/// Panics if `entry` contains invalid characters. Only alphanumeric characters,
 	/// `-`, `_`, `.`, and `/` are allowed.
+	///
+	/// Panics if `entry` contains `..` path traversal sequences.
 	pub fn wasm_entry(mut self, entry: impl Into<String>) -> Self {
 		let entry = entry.into();
+		assert!(
+			!entry.contains(".."),
+			"wasm_entry must not contain '..' path traversal sequences: {entry}"
+		);
 		if !entry
 			.chars()
 			.all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '/')
@@ -265,10 +274,14 @@ impl StaticFilesMiddleware {
 	}
 
 	/// Try to resolve WASM entry from `config.wasm_entry` fallback.
+	///
+	/// Accepts a `.js` filename (e.g., `"my_app.js"`) and infers the WASM file
+	/// by stripping `.js` and appending `_bg.wasm`.
 	fn try_wasm_entry_fallback(config: &StaticFilesConfig) -> Option<WasmEntry> {
 		let entry_name = config.wasm_entry.as_ref()?;
-		let js_file = format!("{entry_name}.js");
-		let wasm_file = format!("{entry_name}_bg.wasm");
+		let js_file = entry_name.clone();
+		let stem = js_file.strip_suffix(".js").unwrap_or(&js_file);
+		let wasm_file = format!("{stem}_bg.wasm");
 
 		let js_path = config.root_dir.join(&js_file);
 		let wasm_path = config.root_dir.join(&wasm_file);
@@ -291,6 +304,10 @@ impl StaticFilesMiddleware {
 	}
 
 	/// Resolve the URL for a WASM-related file, applying manifest lookup if available.
+	///
+	/// Manifest values are validated to contain only safe characters (alphanumeric,
+	/// `-`, `_`, `.`, `/`). Unsafe values are rejected and the original filename is
+	/// used as a fallback to prevent HTML injection.
 	fn resolve_wasm_url(
 		filename: &str,
 		url_prefix: &str,
@@ -298,6 +315,10 @@ impl StaticFilesMiddleware {
 	) -> String {
 		let resolved = manifest
 			.and_then(|m| m.get(filename))
+			.filter(|v| {
+				v.chars()
+					.all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
+			})
 			.map(|s| s.as_str())
 			.unwrap_or(filename);
 		format!("{url_prefix}{resolved}")
@@ -1024,10 +1045,10 @@ mod tests {
 	#[rstest]
 	fn test_config_wasm_entry_builder() {
 		// Arrange & Act
-		let config = StaticFilesConfig::new("dist").wasm_entry("my_app");
+		let config = StaticFilesConfig::new("dist").wasm_entry("my_app.js");
 
 		// Assert
-		assert_eq!(config.wasm_entry, Some("my_app".to_string()));
+		assert_eq!(config.wasm_entry, Some("my_app.js".to_string()));
 	}
 
 	#[rstest]
@@ -1056,16 +1077,16 @@ mod tests {
 	#[should_panic(expected = "invalid characters")]
 	fn test_config_wasm_entry_rejects_unsafe_chars() {
 		// Arrange & Act & Assert
-		StaticFilesConfig::new("dist").wasm_entry("my app;rm -rf");
+		StaticFilesConfig::new("dist").wasm_entry("my app;rm -rf.js");
 	}
 
 	#[rstest]
 	fn test_config_wasm_entry_allows_path_separators() {
 		// Arrange & Act
-		let config = StaticFilesConfig::new("dist").wasm_entry("sub/my_app");
+		let config = StaticFilesConfig::new("dist").wasm_entry("sub/my_app.js");
 
 		// Assert
-		assert_eq!(config.wasm_entry, Some("sub/my_app".to_string()));
+		assert_eq!(config.wasm_entry, Some("sub/my_app.js".to_string()));
 	}
 
 	#[rstest]
@@ -1108,7 +1129,7 @@ mod tests {
 		std::fs::write(dir.path().join("app_a_bg.wasm"), &[0u8; 4]).unwrap();
 		std::fs::write(dir.path().join("app_b.js"), "// js b").unwrap();
 		std::fs::write(dir.path().join("app_b_bg.wasm"), &[0u8; 4]).unwrap();
-		let config = StaticFilesConfig::new(dir.path()).wasm_entry("app_a");
+		let config = StaticFilesConfig::new(dir.path()).wasm_entry("app_a.js");
 
 		// Act
 		let entry = StaticFilesMiddleware::detect_wasm_entry(&config);
@@ -1125,7 +1146,7 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		// Only create js, not the wasm file
 		std::fs::write(dir.path().join("missing_app.js"), "// js").unwrap();
-		let config = StaticFilesConfig::new(dir.path()).wasm_entry("missing_app");
+		let config = StaticFilesConfig::new(dir.path()).wasm_entry("missing_app.js");
 
 		// Act
 		let entry = StaticFilesMiddleware::detect_wasm_entry(&config);
@@ -1300,7 +1321,7 @@ mod tests {
 		std::fs::create_dir_all(&sub).unwrap();
 		std::fs::write(sub.join("my_app.js"), "// js").unwrap();
 		std::fs::write(sub.join("my_app_bg.wasm"), &[0u8; 4]).unwrap();
-		let config = StaticFilesConfig::new(dir.path()).wasm_entry("pkg/my_app");
+		let config = StaticFilesConfig::new(dir.path()).wasm_entry("pkg/my_app.js");
 
 		// Act
 		let entry = StaticFilesMiddleware::detect_wasm_entry(&config);
@@ -1309,6 +1330,26 @@ mod tests {
 		let entry = entry.expect("should resolve path with separator");
 		assert_eq!(entry.js_file, "pkg/my_app.js");
 		assert_eq!(entry.wasm_file, "pkg/my_app_bg.wasm");
+	}
+
+	#[rstest]
+	#[should_panic(expected = "path traversal")]
+	fn test_config_wasm_entry_rejects_path_traversal() {
+		// Arrange & Act & Assert
+		StaticFilesConfig::new("dist").wasm_entry("../../etc/passwd.js");
+	}
+
+	#[rstest]
+	fn test_resolve_wasm_url_rejects_unsafe_manifest_values() {
+		// Arrange
+		let mut manifest = HashMap::new();
+		manifest.insert("app.js".to_string(), "');alert('xss".to_string());
+
+		// Act
+		let url = StaticFilesMiddleware::resolve_wasm_url("app.js", "/", Some(&manifest));
+
+		// Assert — falls back to original filename due to unsafe manifest value
+		assert_eq!(url, "/app.js");
 	}
 
 	#[rstest]

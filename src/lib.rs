@@ -658,7 +658,7 @@ pub use reinhardt_auth::{
 pub use reinhardt_auth::Argon2Hasher;
 
 #[cfg(all(feature = "auth-jwt", not(target_arch = "wasm32")))]
-pub use reinhardt_auth::{Claims, JwtAuth};
+pub use reinhardt_auth::{Claims, JwtAuth, JwtError};
 
 // Re-export auth management
 //

@@ -172,7 +172,7 @@ pub use group_management::{
 pub use handlers::{LoginCredentials, LoginHandler, LogoutHandler, SESSION_COOKIE_NAME};
 pub use ip_permission::{CidrRange, IpBlacklistPermission, IpWhitelistPermission};
 #[cfg(feature = "jwt")]
-pub use jwt::{Claims, JwtAuth};
+pub use jwt::{Claims, JwtAuth, JwtError};
 pub use mfa::MFAAuthentication as MfaManager;
 pub use model_permissions::{
 	DjangoModelPermissions, DjangoModelPermissionsOrAnonReadOnly, ModelPermission,
@@ -230,6 +230,8 @@ pub enum AuthenticationError {
 	SessionExpired,
 	/// The provided authentication token is invalid or malformed.
 	InvalidToken,
+	/// The JWT token has expired.
+	TokenExpired,
 	/// The request lacks valid authentication credentials.
 	NotAuthenticated,
 	/// A database error occurred during authentication.
@@ -245,6 +247,7 @@ impl std::fmt::Display for AuthenticationError {
 			AuthenticationError::UserNotFound => write!(f, "User not found"),
 			AuthenticationError::SessionExpired => write!(f, "Session expired"),
 			AuthenticationError::InvalidToken => write!(f, "Invalid token"),
+			AuthenticationError::TokenExpired => write!(f, "Token expired"),
 			AuthenticationError::NotAuthenticated => write!(f, "User is not authenticated"),
 			AuthenticationError::DatabaseError(msg) => write!(f, "Database error: {}", msg),
 			AuthenticationError::Unknown(msg) => write!(f, "Authentication error: {}", msg),
@@ -253,6 +256,19 @@ impl std::fmt::Display for AuthenticationError {
 }
 
 impl std::error::Error for AuthenticationError {}
+
+#[cfg(feature = "jwt")]
+impl From<JwtError> for AuthenticationError {
+	fn from(err: JwtError) -> Self {
+		match err {
+			JwtError::TokenExpired => AuthenticationError::TokenExpired,
+			JwtError::InvalidSignature(_) | JwtError::InvalidToken(_) => {
+				AuthenticationError::InvalidToken
+			}
+			JwtError::EncodingError(msg) => AuthenticationError::Unknown(msg),
+		}
+	}
+}
 
 /// Authentication backend trait
 ///

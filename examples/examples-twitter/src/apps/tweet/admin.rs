@@ -10,6 +10,8 @@ use reinhardt::admin;
 /// - Filtering by created_at
 /// - Search by content
 /// - Sorted by creation date (newest first)
+/// - Read-only fields: id, created_at (auto-generated, not editable)
+/// - 25 items per page
 #[admin(model,
 	for = Tweet,
 	name = "Tweet",
@@ -17,6 +19,8 @@ use reinhardt::admin;
 	fields = [id, user_id, content, created_at],
 	list_filter = [created_at],
 	search_fields = [content],
-	ordering = [(created_at, desc)]
+	ordering = [(created_at, desc)],
+	readonly_fields = [id, created_at],
+	list_per_page = 25
 )]
 pub struct TweetAdmin;

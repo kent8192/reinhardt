@@ -574,8 +574,8 @@ rust_decimal = "1.37"
 fantoccini = "0.22"
 
 # Testing
-testcontainers = { version = "0.26.3", features = ["blocking"] }
-testcontainers-modules = { version = "0.14.0", features = [
+testcontainers = { version = "0.27.2", features = ["blocking"] }
+testcontainers-modules = { version = "0.15.0", features = [
   "postgres",
   "mysql",
   "redis",

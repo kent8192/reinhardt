@@ -24,7 +24,8 @@ Guide to configuring Cross-Origin Resource Sharing (CORS).
 Use `CorsMiddleware` to configure CORS.
 
 ```rust
-use reinhardt::{CorsMiddleware, cors::CorsConfig};
+use reinhardt::CorsMiddleware;
+use reinhardt_middleware::cors::CorsConfig;
 
 let config = CorsConfig {
     allow_origins: vec!["https://example.com"],
@@ -100,7 +101,7 @@ let middleware = CorsMiddleware::permissive();
 This is equivalent to:
 
 ```rust
-use reinhardt::cors::CorsConfig;
+use reinhardt_middleware::cors::CorsConfig;
 
 let config = CorsConfig {
     allow_origins: vec!["*"],
@@ -127,7 +128,7 @@ let config = CorsConfig {
 Allow only a specific origin.
 
 ```rust
-use reinhardt::cors::CorsConfig;
+use reinhardt_middleware::cors::CorsConfig;
 
 let config = CorsConfig {
     allow_origins: vec!["https://app.example.com"],
@@ -143,7 +144,7 @@ let config = CorsConfig {
 Allow multiple origins (comma-separated).
 
 ```rust
-use reinhardt::cors::CorsConfig;
+use reinhardt_middleware::cors::CorsConfig;
 
 let config = CorsConfig {
     allow_origins: vec![
@@ -161,7 +162,7 @@ Allow requests with cookies and authentication headers.
 **Note**: When `allow_credentials: true`, you cannot use `"*"` in `allow_origins`.
 
 ```rust
-use reinhardt::cors::CorsConfig;
+use reinhardt_middleware::cors::CorsConfig;
 
 let config = CorsConfig {
     // Cannot use wildcard with credentials

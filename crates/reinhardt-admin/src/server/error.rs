@@ -176,7 +176,7 @@ impl AdminAuth {
 	/// `ModelAdmin`'s permission method for the specified permission type.
 	///
 	/// The caller is responsible for providing the actual user object extracted
-	/// from the DI context (e.g., via `CurrentUser<DefaultUser>`). This ensures
+	/// from the DI context (e.g., via `AuthUser<DefaultUser>`). This ensures
 	/// the same concrete type is passed to `ModelAdmin::has_*_permission` as in
 	/// other endpoints (e.g., `list.rs`, `create.rs`), allowing `downcast_ref`
 	/// calls inside `ModelAdmin` implementations to succeed.

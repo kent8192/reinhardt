@@ -3,8 +3,7 @@
 //! Provides export operations for admin models.
 
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, ExportFormat, ExportResponse};
-#[allow(deprecated)] // CurrentUser is deprecated, will migrate to AuthUser in 0.2.0
-use reinhardt_auth::{CurrentUser, DefaultUser};
+use reinhardt_auth::{AuthUser, DefaultUser};
 use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 use std::sync::Arc;
 
@@ -37,7 +36,6 @@ use super::limits::MAX_EXPORT_RECORDS;
 /// let response = export_data("User".to_string(), ExportFormat::JSON).await?;
 /// println!("Downloaded {}", response.filename);
 /// ```
-#[allow(deprecated)] // CurrentUser will be migrated to AuthUser in 0.2.0
 #[server_fn]
 pub async fn export_data(
 	model_name: String,
@@ -45,17 +43,14 @@ pub async fn export_data(
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
-	#[inject] current_user: CurrentUser<DefaultUser>,
+	#[inject] AuthUser(user): AuthUser<DefaultUser>,
 ) -> Result<ExportResponse, ServerFnError> {
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
-	let user = current_user
-		.user()
-		.map_err(|_| ServerFnError::server(401, "Authentication required"))?;
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(
 		model_admin.as_ref(),
-		user as &(dyn std::any::Any + Send + Sync),
+		&user as &(dyn std::any::Any + Send + Sync),
 		ModelPermission::View,
 	)
 	.await?;

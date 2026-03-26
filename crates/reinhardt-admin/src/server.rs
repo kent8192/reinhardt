@@ -52,7 +52,7 @@ pub mod fields;
 pub mod import;
 /// Request size and rate limits for server functions.
 pub mod limits;
-#[allow(missing_docs, deprecated)] // CurrentUser deprecated, will migrate to AuthUser in 0.2.0
+#[allow(missing_docs)]
 pub mod list;
 #[allow(missing_docs)]
 pub mod update;

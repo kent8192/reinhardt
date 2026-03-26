@@ -13,6 +13,8 @@ use std::sync::Arc;
 use super::audit;
 #[cfg(not(target_arch = "wasm32"))]
 use super::error::{AdminAuth, MapServerFnError};
+#[cfg(not(target_arch = "wasm32"))]
+use super::limits::MAX_BULK_DELETE_IDS;
 
 /// Delete a single model instance by ID
 ///
@@ -119,6 +121,14 @@ pub async fn bulk_delete_records(
 	let user_id = auth.user_id().unwrap_or("unknown").to_string();
 
 	let ids = request.ids;
+	if ids.len() > MAX_BULK_DELETE_IDS {
+		return Err(ServerFnError::application(format!(
+			"Too many IDs for bulk delete: {} exceeds maximum of {}",
+			ids.len(),
+			MAX_BULK_DELETE_IDS
+		)));
+	}
+
 	let result = db
 		.bulk_delete::<AdminRecord>(table_name, pk_field, ids.clone())
 		.await

@@ -6,7 +6,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
-	Ident, ItemStruct, LitInt, LitStr, Result, Token, Type, bracketed, parenthesized,
+	Ident, ItemStruct, LitBool, LitInt, LitStr, Result, Token, Type, bracketed, parenthesized,
 	parse::{Parse, ParseStream},
 	punctuated::Punctuated,
 };
@@ -16,6 +16,7 @@ mod kw {
 	syn::custom_keyword!(model);
 	syn::custom_keyword!(asc);
 	syn::custom_keyword!(desc);
+	syn::custom_keyword!(allow_all);
 }
 
 /// Order direction for sorting
@@ -79,6 +80,13 @@ pub(crate) struct AdminModelConfig {
 	pub ordering: Option<Vec<OrderingSpec>>,
 	/// Number of items per page
 	pub list_per_page: Option<usize>,
+	/// Individual permission flags
+	pub allow_view: Option<bool>,
+	pub allow_add: Option<bool>,
+	pub allow_change: Option<bool>,
+	pub allow_delete: Option<bool>,
+	/// Permission preset (e.g., "allow_all")
+	pub permissions: Option<String>,
 }
 
 impl Parse for AdminModelConfig {
@@ -108,6 +116,11 @@ impl Parse for AdminModelConfig {
 		let mut readonly_fields: Option<Vec<Ident>> = None;
 		let mut ordering: Option<Vec<OrderingSpec>> = None;
 		let mut list_per_page: Option<usize> = None;
+		let mut allow_view: Option<bool> = None;
+		let mut allow_add: Option<bool> = None;
+		let mut allow_change: Option<bool> = None;
+		let mut allow_delete: Option<bool> = None;
+		let mut permissions: Option<String> = None;
 
 		while !input.is_empty() {
 			// Handle 'for' keyword specially since it's a reserved keyword
@@ -153,11 +166,44 @@ impl Parse for AdminModelConfig {
 					let lit: LitInt = input.parse()?;
 					list_per_page = Some(lit.base10_parse()?);
 				}
+				"allow_view" => {
+					let lit: LitBool = input.parse()?;
+					allow_view = Some(lit.value());
+				}
+				"allow_add" => {
+					let lit: LitBool = input.parse()?;
+					allow_add = Some(lit.value());
+				}
+				"allow_change" => {
+					let lit: LitBool = input.parse()?;
+					allow_change = Some(lit.value());
+				}
+				"allow_delete" => {
+					let lit: LitBool = input.parse()?;
+					allow_delete = Some(lit.value());
+				}
+				"permissions" => {
+					let ident: Ident = input.parse()?;
+					match ident.to_string().as_str() {
+						"allow_all" => {
+							permissions = Some("allow_all".to_string());
+						}
+						other => {
+							return Err(syn::Error::new(
+								ident.span(),
+								format!(
+									"unknown permission preset `{}`\n\n  = help: valid presets are: allow_all",
+									other
+								),
+							));
+						}
+					}
+				}
 				unknown => {
 					return Err(syn::Error::new(
 						key.span(),
 						format!(
-							"unknown attribute `{}` for model admin\n\n  = help: valid attributes are: for, name, list_display, list_filter, search_fields, fields, readonly_fields, ordering, list_per_page",
+							"unknown attribute `{}` for model admin\n\n  = help: valid attributes are: for, name, list_display, list_filter, search_fields, fields, readonly_fields, ordering, list_per_page, allow_view, allow_add, allow_change, allow_delete, permissions",
 							unknown
 						),
 					));
@@ -195,6 +241,11 @@ impl Parse for AdminModelConfig {
 			readonly_fields,
 			ordering,
 			list_per_page,
+			allow_view,
+			allow_add,
+			allow_change,
+			allow_delete,
+			permissions,
 		})
 	}
 }
@@ -229,6 +280,7 @@ fn parse_ordering_array(input: ParseStream) -> Result<Vec<OrderingSpec>> {
 pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenStream> {
 	let admin_api = crate::crate_paths::get_reinhardt_admin_adapters_crate();
 	let async_trait = crate::crate_paths::get_async_trait_crate();
+	let orm_crate = crate::crate_paths::get_reinhardt_orm_crate();
 
 	let config: AdminModelConfig = syn::parse2(args)?;
 	let struct_name = &input.ident;
@@ -269,6 +321,13 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 			}
 		})
 		.collect();
+
+	// Generate table_name method from Model trait (Issue #2929)
+	let table_name_impl = quote! {
+		fn table_name(&self) -> &str {
+			<#model_type as #orm_crate::Model>::table_name()
+		}
+	};
 
 	// Generate list_display method
 	let list_display_impl = if let Some(ref fields) = config.list_display {
@@ -359,6 +418,37 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 		quote! {}
 	};
 
+	// Generate permission methods (Issue #2931)
+	let (perm_view, perm_add, perm_change, perm_delete) =
+		if config.permissions.as_deref() == Some("allow_all") {
+			(true, true, true, true)
+		} else {
+			(
+				config.allow_view.unwrap_or(false),
+				config.allow_add.unwrap_or(false),
+				config.allow_change.unwrap_or(false),
+				config.allow_delete.unwrap_or(false),
+			)
+		};
+
+	let permission_impls = quote! {
+		async fn has_view_permission(&self, _user: &dyn #admin_api::AdminUser) -> bool {
+			#perm_view
+		}
+
+		async fn has_add_permission(&self, _user: &dyn #admin_api::AdminUser) -> bool {
+			#perm_add
+		}
+
+		async fn has_change_permission(&self, _user: &dyn #admin_api::AdminUser) -> bool {
+			#perm_change
+		}
+
+		async fn has_delete_permission(&self, _user: &dyn #admin_api::AdminUser) -> bool {
+			#perm_delete
+		}
+	};
+
 	Ok(quote! {
 		#(#struct_attrs)*
 		#struct_vis struct #struct_name;
@@ -374,6 +464,7 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 				#name
 			}
 
+			#table_name_impl
 			#list_display_impl
 			#list_filter_impl
 			#search_fields_impl
@@ -381,6 +472,7 @@ pub(crate) fn admin_impl(args: TokenStream, input: ItemStruct) -> Result<TokenSt
 			#readonly_fields_impl
 			#ordering_impl
 			#list_per_page_impl
+			#permission_impls
 		}
 	})
 }

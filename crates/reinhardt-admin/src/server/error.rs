@@ -46,6 +46,22 @@ impl<T> MapServerFnError<T> for Result<T, AdminError> {
 	}
 }
 
+/// Permission types for model-level access control.
+///
+/// Used with [`AdminAuth::require_model_permission`] to specify which
+/// permission to check against the `ModelAdmin`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelPermission {
+	/// Permission to view model instances
+	View,
+	/// Permission to add (create) model instances
+	Add,
+	/// Permission to change (update) model instances
+	Change,
+	/// Permission to delete model instances
+	Delete,
+}
+
 /// Authentication and authorization checker for admin panel.
 ///
 /// This struct extracts authentication state from the HTTP request
@@ -154,53 +170,48 @@ impl AdminAuth {
 		Ok(())
 	}
 
-	/// Checks if the user has permission to view the model.
+	/// Checks model-level permission using `ModelAdmin`, returning an error if denied.
 	///
-	/// This uses the default admin permission logic: authenticated staff users
-	/// must be explicitly granted view permission. Override
-	/// `ModelAdmin::has_view_permission` for custom permission logic.
+	/// This method first verifies staff status, then delegates to the
+	/// `ModelAdmin`'s permission method for the specified permission type.
+	///
+	/// The caller is responsible for providing the actual user object extracted
+	/// from the DI context (e.g., via `CurrentUser<DefaultUser>`). This ensures
+	/// the same concrete type is passed to `ModelAdmin::has_*_permission` as in
+	/// other endpoints (e.g., `list.rs`, `create.rs`), allowing `downcast_ref`
+	/// calls inside `ModelAdmin` implementations to succeed.
+	///
+	/// # Arguments
+	///
+	/// * `model_admin` - The model admin to check permissions against
+	/// * `user` - The authenticated user object as a trait object
+	/// * `permission` - The type of permission to check
 	///
 	/// # Errors
 	///
-	/// Returns `ServerFnError` with status 403 if permission denied
-	pub fn require_view_permission(&self, model_name: &str) -> Result<(), ServerFnError> {
+	/// Returns `ServerFnError` with status 401 if not authenticated,
+	/// 403 if not staff or if model-level permission is denied
+	pub async fn require_model_permission(
+		&self,
+		model_admin: &dyn crate::core::ModelAdmin,
+		user: &(dyn std::any::Any + Send + Sync),
+		permission: ModelPermission,
+	) -> Result<(), ServerFnError> {
 		self.require_staff()?;
-		// Default: staff users have view permission
-		// Custom permission checks would call ModelAdmin::has_view_permission here
-		let _ = model_name; // Will be used for ModelAdmin permission checks
-		Ok(())
-	}
 
-	/// Checks if the user has permission to add (create) the model.
-	///
-	/// # Errors
-	///
-	/// Returns `ServerFnError` with status 403 if permission denied
-	pub fn require_add_permission(&self, model_name: &str) -> Result<(), ServerFnError> {
-		self.require_staff()?;
-		let _ = model_name;
-		Ok(())
-	}
+		// require_staff() already guarantees auth_state is Some and authenticated,
+		// so we can proceed directly to the permission check.
+		let has_permission = match permission {
+			ModelPermission::View => model_admin.has_view_permission(user).await,
+			ModelPermission::Add => model_admin.has_add_permission(user).await,
+			ModelPermission::Change => model_admin.has_change_permission(user).await,
+			ModelPermission::Delete => model_admin.has_delete_permission(user).await,
+		};
 
-	/// Checks if the user has permission to change (update) the model.
-	///
-	/// # Errors
-	///
-	/// Returns `ServerFnError` with status 403 if permission denied
-	pub fn require_change_permission(&self, model_name: &str) -> Result<(), ServerFnError> {
-		self.require_staff()?;
-		let _ = model_name;
-		Ok(())
-	}
+		if !has_permission {
+			return Err(ServerFnError::server(403, "Permission denied"));
+		}
 
-	/// Checks if the user has permission to delete the model.
-	///
-	/// # Errors
-	///
-	/// Returns `ServerFnError` with status 403 if permission denied
-	pub fn require_delete_permission(&self, model_name: &str) -> Result<(), ServerFnError> {
-		self.require_staff()?;
-		let _ = model_name;
 		Ok(())
 	}
 }

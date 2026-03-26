@@ -44,14 +44,12 @@ Reinhardt employs a **highly granular feature flag system** with **70+ features*
 
 ## Basic Usage
 
-### Default (full) ⚠️ Changed in v0.1.0-alpha.2
+### Default (standard)
 
 {% versioned_code(lang="toml") %}
 [dependencies]
-reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web" }  # Enables full bundle (all features)
+reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web" }  # Enables standard bundle
 {% end %}
-
-**Note**: The default has changed from `standard` to `full`. See [Migration Guide](#migration-guide) for details.
 
 ### Standard Configuration
 
@@ -124,15 +122,13 @@ reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web", default-fea
 
 ---
 
-### full (default) ⚠️ Now the default
+### full
 
 All features enabled (batteries-included).
 
 **Includes**: `standard` + admin, graphql, websockets, cache, i18n, mail, sessions, static-files, storage
 
 {% versioned_code(lang="toml") %}
-reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web" }  # default enables full
-# Or explicitly:
 reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web", features = ["full"] }
 {% end %}
 
@@ -186,7 +182,7 @@ reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web", features = 
 | `reinhardt-auth` | `auth-full` | Sessions sub-crate + all auth features |
 | `reinhardt-di` | `di-full` | Params sub-crate + DI features |
 | `reinhardt-utils` | `utils-full` | All 4 utility sub-crates with their `full` features |
-| `reinhardt-admin` | `admin-full` | Panel sub-crate with `full` feature |
+| `reinhardt-admin` | `full` | Panel sub-crate with `full` feature |
 | `reinhardt-server` | `server-full` | Server sub-crate with `full` feature |
 
 **Direct Usage of Module-Specific Features:**
@@ -385,10 +381,10 @@ WASM-based reactive frontend framework with server-side rendering (SSR) support.
 
 ```bash
 # Create a pages-based project
-reinhardt-admin startproject myapp --with-pages
+reinhardt-admin startproject myapp --template-type mtv
 
 # Create a pages-based app
-reinhardt-admin startapp myfeature --with-pages
+reinhardt-admin startapp myfeature --template-type mtv
 ```
 
 **Architecture:**
@@ -427,30 +423,27 @@ tokio = { version = "1", features = ["full"] }
 **Development Workflow:**
 
 ```bash
-# Install WASM build tools (first time only)
-cargo make install-wasm-tools
-
 # Build WASM and start development server
 cargo make dev
 
 # Or watch mode with auto-rebuild
 cargo make dev-watch
 
-# Production build
-cargo make dev-release
+# Production binary build
+cargo make build-release
 ```
 
 **RunServer Options for WASM Projects:**
 
 ```bash
 # Start server with WASM frontend
-cargo run --bin manage runserver --with-pages
+cargo run --bin manage runserver --template-type mtv
 
 # Custom static directory
-cargo run --bin manage runserver --with-pages --static-dir build
+cargo run --bin manage runserver --template-type mtv --static-dir build
 
 # Disable SPA mode (no index.html fallback)
-cargo run --bin manage runserver --with-pages --no-spa
+cargo run --bin manage runserver --template-type mtv --no-spa
 ```
 
 See [examples/examples-twitter](https://github.com/kent8192/reinhardt-web/tree/main/examples/examples-twitter) for a complete implementation.
@@ -547,29 +540,7 @@ See [Task Backends Documentation](https://github.com/kent8192/reinhardt-web/blob
 
 ### Breaking Changes in v0.1.0-alpha.2
 
-#### 1. Default Feature Changed: `standard` → `full`
-
-**Before (v0.1.0-alpha.1):**
-```toml
-reinhardt = { version = "0.1.0-alpha.1", package = "reinhardt-web" }  # Enabled: standard bundle
-```
-
-**Now (v0.1.0-alpha.2):**
-{% versioned_code(lang="toml") %}
-reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web" }  # Enables: full bundle (all features)
-{% end %}
-
-**Impact:**
-- ⚠️ **Longer compile time**: Full bundle includes all features (admin, graphql, websockets, etc.)
-- ⚠️ **Larger binary size**: ~50+ MB (was ~20-30 MB with standard)
-- ✅ **More features available**: All Reinhardt features are immediately usable
-
-**To keep previous behavior:**
-{% versioned_code(lang="toml") %}
-reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web", default-features = false, features = ["standard"] }
-{% end %}
-
-#### 2. `minimal` Feature Now Includes Core Functionality
+#### 1. `minimal` Feature Now Includes Core Functionality
 
 **Before (v0.1.0-alpha.1):**
 ```toml
@@ -652,7 +623,7 @@ features = ["reinhardt-rest", "reinhardt-rest/serializers"]
 
 Reinhardt provides **70+ features** with **3 granularity levels** (bundle, group, individual).
 
-**Default**: `full` bundle (all features) ⚠️ Changed from `standard`
+**Default**: `standard` bundle
 
 **Key bundles**: `minimal` (microservice), `standard` (balanced), `full` (all features, default), `api-only`, `graphql-server`, `cli-tools`
 

@@ -8,7 +8,7 @@
 //! ## Installation
 //!
 //! ```bash
-//! cargo install reinhardt-commands
+//! cargo install reinhardt-admin-cli
 //! ```
 //!
 //! ## Usage

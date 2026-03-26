@@ -145,6 +145,8 @@ jobs:
               [[ -z "$pkg" ]] && continue
               # Cross-crate integration tests run in a separate workflow
               [[ "$pkg" == "reinhardt-integration-tests" ]] && continue
+              # reinhardt-test-support has no test targets (lib-only crate)
+              [[ "$pkg" == "reinhardt-test-support" ]] && continue
               PKG_ARGS+=(-p "$pkg")
             done <<< "$CARGO_PACKAGES"
           fi

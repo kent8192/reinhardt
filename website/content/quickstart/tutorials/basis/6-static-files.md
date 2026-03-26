@@ -29,25 +29,26 @@ Static files are assets like CSS, JavaScript, images, and fonts that don't chang
 
 Reinhardt provides three ways to reference static files, each optimized for different use cases:
 
-### 1. Compile-Time: `static_url!` Macro
+### 1. Compile-Time: `static_url!` Macro (Planned)
 
-For static paths known at compile time:
+> **Note**: The `static_url!` macro is planned for a future release. Currently, use the runtime `resolve_static()` function instead.
 
 ```rust
+// Future API (not yet available)
 use reinhardt::static_url;
 
 page!(|| {
 	link {
 		rel: "stylesheet",
 		href: static_url!("css/polls.css")
-		// Resolved at compile time to "/static/css/polls.css"
+		// Will be resolved at compile time to "/static/css/polls.css"
 	}
 })
 ```
 
-**When to use**: Fixed asset paths that don't change at runtime
+**When available**: Fixed asset paths that don't change at runtime
 
-**Benefits**:
+**Planned benefits**:
 - Zero runtime overhead
 - Compile-time path validation
 - Optimal for CDN integration

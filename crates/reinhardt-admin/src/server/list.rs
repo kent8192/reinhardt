@@ -167,6 +167,21 @@ pub async fn get_list(
 		.as_deref()
 		.or_else(|| model_admin.ordering().first().copied());
 
+	// Validate sort_by against allowed fields to prevent arbitrary column access
+	if let Some(sort_field) = sort_by {
+		let raw_field = sort_field.strip_prefix('-').unwrap_or(sort_field);
+		let allowed_sort_fields = model_admin.list_display();
+		if !allowed_sort_fields.contains(&raw_field) {
+			return Err(ServerFnError::server(
+				400,
+				format!(
+					"Unknown sort field '{}'. Allowed sort fields: {:?}",
+					raw_field, allowed_sort_fields
+				),
+			));
+		}
+	}
+
 	// Calculate pagination with upper bound enforcement
 	let page = params.page.unwrap_or(1).max(1); // Ensure page is at least 1
 	let page_size = params

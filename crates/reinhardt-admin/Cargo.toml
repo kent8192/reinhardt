@@ -63,6 +63,7 @@ js-sys = "0.3.83"
 serde-wasm-bindgen = "0.6"
 serde_urlencoded = { workspace = true }  # Needed for URL codec in server functions
 serde_bytes = { workspace = true }
+percent-encoding = "2.3"
 
 [features]
 default = []

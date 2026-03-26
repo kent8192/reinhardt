@@ -4,15 +4,17 @@
 
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite};
 use crate::types::{MutationRequest, MutationResponse};
+#[allow(deprecated)] // CurrentUser is deprecated, will migrate to AuthUser in 0.2.0
+use reinhardt_auth::{CurrentUser, DefaultUser};
 use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::audit;
 #[cfg(not(target_arch = "wasm32"))]
-use super::error::{AdminAuth, MapServerFnError};
+use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(not(target_arch = "wasm32"))]
-use super::security::sanitize_mutation_values;
+use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(not(target_arch = "wasm32"))]
 use super::validation::validate_mutation_data;
 
@@ -41,10 +43,11 @@ use super::validation::validate_mutation_data;
 /// let mut data = HashMap::new();
 /// data.insert("email".to_string(), serde_json::json!("alice.new@example.com"));
 ///
-/// let request = MutationRequest { data };
+/// let request = MutationRequest { csrf_token: "token".to_string(), data };
 /// let response = update_record("User".to_string(), "42".to_string(), request).await?;
 /// println!("Updated: {}", response.message);
 /// ```
+#[allow(deprecated)] // CurrentUser will be migrated to AuthUser in 0.2.0
 #[server_fn]
 pub async fn update_record(
 	model_name: String,
@@ -53,12 +56,24 @@ pub async fn update_record(
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
+	#[inject] current_user: CurrentUser<DefaultUser>,
 ) -> Result<MutationResponse, ServerFnError> {
+	// CSRF token validation (double-submit cookie pattern)
+	require_csrf_token(&request.csrf_token, &http_request.inner().headers)?;
+
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
-	auth.require_change_permission(&model_name)?;
-
+	let user = current_user
+		.user()
+		.map_err(|_| ServerFnError::server(401, "Authentication required"))?;
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	auth.require_model_permission(
+		model_admin.as_ref(),
+		user as &(dyn std::any::Any + Send + Sync),
+		ModelPermission::Change,
+	)
+	.await?;
+
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
 
@@ -76,10 +91,26 @@ pub async fn update_record(
 		.await
 		.map_server_fn_error();
 
-	let success = result.is_ok();
-	audit::log_update(&user_id, &model_name, &id, &sanitized_data, success);
+	// Check for database errors first, logging failure before returning
+	let affected = match result {
+		Err(e) => {
+			audit::log_update(&user_id, &model_name, &id, &sanitized_data, false);
+			return Err(e);
+		}
+		Ok(n) => n,
+	};
 
-	let affected = result?;
+	// Return 404 error when no record was found with the given ID.
+	// Only log success=true after confirming the record was actually updated.
+	if affected == 0 {
+		audit::log_update(&user_id, &model_name, &id, &sanitized_data, false);
+		return Err(ServerFnError::server(
+			404,
+			format!("{} not found", model_name),
+		));
+	}
+
+	audit::log_update(&user_id, &model_name, &id, &sanitized_data, true);
 
 	Ok(MutationResponse {
 		success: true,

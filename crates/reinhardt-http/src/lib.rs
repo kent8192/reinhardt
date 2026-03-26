@@ -98,6 +98,9 @@ pub mod response;
 /// File upload handling and validation.
 pub mod upload;
 
+/// Response cookies for server functions to set via request extensions.
+pub mod response_cookies;
+
 pub use auth_state::AuthState;
 pub use chunked_upload::{
 	ChunkedUploadError, ChunkedUploadManager, ChunkedUploadSession, UploadProgress,
@@ -108,6 +111,7 @@ pub use messages_middleware::MessagesMiddleware;
 pub use middleware::{ExcludeMiddleware, Handler, Middleware, MiddlewareChain};
 pub use request::{Request, RequestBuilder, TrustedProxies};
 pub use response::{Response, SafeErrorResponse, StreamBody, StreamingResponse};
+pub use response_cookies::ResponseCookies;
 pub use upload::{FileUploadError, FileUploadHandler, MemoryFileUpload, TemporaryFileUpload};
 
 // Re-export error types from reinhardt-exception for consistency across the framework

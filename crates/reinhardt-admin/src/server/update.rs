@@ -81,6 +81,14 @@ pub async fn update_record(
 
 	let affected = result?;
 
+	// Return 404 error when no record was found with the given ID
+	if affected == 0 {
+		return Err(ServerFnError::server(
+			404,
+			format!("{} not found", model_name),
+		));
+	}
+
 	Ok(MutationResponse {
 		success: true,
 		message: format!("{} updated successfully", model_name),

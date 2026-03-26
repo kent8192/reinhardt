@@ -65,6 +65,14 @@ pub async fn delete_record(
 
 	let affected = result?;
 
+	// Return 404 error when no record was found with the given ID
+	if affected == 0 {
+		return Err(ServerFnError::server(
+			404,
+			format!("{} not found", model_name),
+		));
+	}
+
 	Ok(MutationResponse {
 		success: true,
 		message: format!("{} deleted successfully", model_name),
@@ -131,7 +139,7 @@ pub async fn bulk_delete_records(
 	let affected = result?;
 
 	Ok(BulkDeleteResponse {
-		success: true,
+		success: affected > 0,
 		deleted: affected,
 		message: format!("Deleted {} {} items", affected, model_name),
 	})

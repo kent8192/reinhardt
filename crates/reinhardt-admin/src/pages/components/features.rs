@@ -9,17 +9,40 @@
 //! - `DataTable` - Data table component
 
 use crate::types::{FilterInfo, FilterType, ModelInfo};
-use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use reinhardt_pages::Signal;
 use reinhardt_pages::component::{IntoPage, Page, PageElement};
 use std::collections::HashMap;
 
+/// Characters that must be percent-encoded in URL path segments.
+///
+/// This set encodes characters that are unsafe or reserved in URL paths,
+/// while preserving RFC 3986 unreserved characters (`A-Z`, `a-z`, `0-9`, `-`, `_`, `.`, `~`).
+/// Encoded characters: space, `"`, `#`, `%`, `/`, `<`, `>`, `?`, `[`, `]`, `^`, `` ` ``, `{`, `|`, `}`.
+const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
+	.add(b' ')
+	.add(b'"')
+	.add(b'#')
+	.add(b'%')
+	.add(b'/')
+	.add(b'<')
+	.add(b'>')
+	.add(b'?')
+	.add(b'[')
+	.add(b']')
+	.add(b'^')
+	.add(b'`')
+	.add(b'{')
+	.add(b'|')
+	.add(b'}');
+
 /// Percent-encode a string for safe use in URL path segments.
 ///
-/// Encodes all non-alphanumeric characters to prevent path traversal
-/// and other URL injection attacks via malformed model names or IDs.
+/// Encodes characters that are unsafe for URL path segments while preserving
+/// RFC 3986 unreserved characters (`-`, `_`, `.`, `~`) to avoid unnecessarily
+/// mangling valid route segments such as `user-management`.
 fn encode_path_segment(s: &str) -> String {
-	utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
+	utf8_percent_encode(s, PATH_SEGMENT_ENCODE_SET).to_string()
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -418,7 +441,10 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 		format!("Create {}", model_name)
 	};
 
-	let list_url = format!("/admin/{}/", encode_path_segment(&model_name.to_lowercase()));
+	let list_url = format!(
+		"/admin/{}/",
+		encode_path_segment(&model_name.to_lowercase())
+	);
 
 	// Add form fields
 	let form_groups: Vec<Page> = fields.iter().map(form_group).collect();

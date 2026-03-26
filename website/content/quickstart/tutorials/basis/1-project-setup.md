@@ -67,11 +67,8 @@ For a modern WASM-based frontend with SSR:
 
 ```bash
 # Create a pages project
-reinhardt-admin startproject my-app --with-pages
+reinhardt-admin startproject my-app --template-type mtv
 cd my-app
-
-# Install WASM build tools (first time only)
-cargo make install-wasm-tools
 
 # Build WASM and start development server
 cargo make dev
@@ -87,7 +84,7 @@ my-app/
 ├── index.html
 ├── src/
 │   ├── client/       # WASM UI (runs in browser)
-│   ├── server_fn/    # Server functions (runs on server)
+│   ├── server/       # Server functions (runs on server)
 │   ├── shared/       # Shared types (used by both)
 │   └── ...
 ```
@@ -95,7 +92,7 @@ my-app/
 **Available commands:**
 - `cargo make dev` - Build WASM and start development server
 - `cargo make dev-watch` - Watch mode with auto-rebuild
-- `cargo make dev-release` - Production build with optimized WASM
+- `cargo make build-release` - Production binary build
 - `cargo make wasm-build-dev` - Build WASM only (debug)
 - `cargo make wasm-build-release` - Build WASM only (release, with wasm-opt)
 
@@ -532,7 +529,7 @@ Clicking the link triggers client-side navigation (no page reload).
 | **URL Parameters** | `Request.path_params` | `Router::current_params()` |
 | **Handler** | `async fn(Request) -> Response` | `fn() -> Page` |
 
-**Note**: Reinhardt projects generated with `--with-pages` already include client routing configuration. You don't need to manually create routing files for development.
+**Note**: Reinhardt projects generated with `--template-type mtv` already include client routing configuration. You don't need to manually create routing files for development.
 
 ## Running the Development Server
 
@@ -562,14 +559,7 @@ cargo make wasm-build-release
 cargo make dev-watch
 
 # Production build
-cargo make dev-release
-```
-
-**First-time setup:**
-
-```bash
-# Install WASM build tools (one-time)
-cargo make install-wasm-tools
+cargo make build-release
 ```
 
 You should see output similar to:

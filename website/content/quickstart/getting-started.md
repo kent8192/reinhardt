@@ -72,11 +72,8 @@ For a modern WASM-based frontend with SSR:
 
 ```bash
 # Create a reinhardt-pages project
-reinhardt-admin startproject my-app --with-pages
+reinhardt-admin startproject my-app --template-type mtv
 cd my-app
-
-# Install WASM build tools (first time only)
-cargo make install-wasm-tools
 
 # Build WASM and start development server
 cargo make dev
@@ -125,7 +122,7 @@ Visit `http://127.0.0.1:8000/` in your browser.
 **Available commands:**
 - `cargo make dev` - Build WASM and start development server
 - `cargo make dev-watch` - Watch mode with auto-rebuild
-- `cargo make dev-release` - Production build with optimized WASM
+- `cargo make build-release` - Production binary build
 - `cargo make wasm-build-dev` - Build WASM only (debug)
 - `cargo make wasm-build-release` - Build WASM only (release, with wasm-opt)
 
@@ -135,9 +132,9 @@ See [examples/examples-twitter](https://github.com/kent8192/reinhardt-web/tree/m
 
 Reinhardt comes in three flavors. Choose the one that fits your needs:
 
-#### Option A: Full (Everything Included) - Default ⚠️ New Default
+#### Option A: Standard (Balanced) - Default
 
-All features enabled, best for learning and rapid prototyping:
+Balanced setup for most production projects:
 
 {% versioned_code(lang="toml") %}
 [dependencies]
@@ -147,21 +144,19 @@ tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 {% end %}
 
-**Includes:** Database, Auth, REST API, Admin, GraphQL, WebSockets, Cache, i18n,
-Mail, Sessions, Static Files, Storage
+**Includes:** Core, Database (PostgreSQL), REST API, Auth, Middleware, Templates
 
-#### Option B: Standard (Balanced)
-
-Balanced setup for most production projects:
+#### Option B: Full (Everything Included)
 
 {% versioned_code(lang="toml") %}
 [dependencies]
-reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web", default-features = false, features = ["standard"] }
+reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 {% end %}
 
-**Includes:** Core, Database (PostgreSQL), REST API, Auth, Middleware, Templates
+**Includes:** Database, Auth, REST API, Admin, GraphQL, WebSockets, Cache, i18n,
+Mail, Sessions, Static Files, Storage
 
 #### Option C: Minimal (Lightweight)
 
@@ -176,7 +171,7 @@ serde = { version = "1.0", features = ["derive"] }
 
 **Includes:** HTTP, routing, DI, parameter extraction, server
 
-For this guide, we'll use the **Full** flavor (default).
+For this guide, we'll use the **Standard** flavor (default).
 
 **💡 Want more control?** See the [Feature Flags Guide](/docs/feature-flags/) for
 detailed information on 70+ individual feature flags to fine-tune your build.

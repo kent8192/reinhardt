@@ -343,7 +343,7 @@ impl TsvExporter {
 				.map(|field| {
 					// Escape tabs, newlines, and carriage returns to prevent field corruption
 					row.get(field)
-						.map(|v| v.replace(['\t', '\n'], " ").replace('\r', ""))
+						.map(|v| v.replace(['\t', '\n', '\r'], " "))
 						.unwrap_or_default()
 				})
 				.collect();
@@ -479,6 +479,7 @@ impl ExportBuilder {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_export_format_extension() {
@@ -578,7 +579,7 @@ mod tests {
 		assert!(output.contains("1\tAlice\r\n"));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_tsv_exporter_escapes_newlines() {
 		let fields = vec!["id".to_string(), "bio".to_string()];
 		let mut row = HashMap::new();
@@ -638,5 +639,37 @@ mod tests {
 			.with_ordering(vec!["name".to_string(), "-created_at".to_string()]);
 
 		assert_eq!(config.ordering().len(), 2);
+	}
+
+	#[rstest]
+	fn test_export_builder_max_rows_truncates_output() {
+		// Arrange
+		let mut row1 = HashMap::new();
+		row1.insert("id".to_string(), "1".to_string());
+		row1.insert("name".to_string(), "Alice".to_string());
+
+		let mut row2 = HashMap::new();
+		row2.insert("id".to_string(), "2".to_string());
+		row2.insert("name".to_string(), "Bob".to_string());
+
+		let mut row3 = HashMap::new();
+		row3.insert("id".to_string(), "3".to_string());
+		row3.insert("name".to_string(), "Carol".to_string());
+
+		// Act
+		let result = ExportBuilder::new("User", ExportFormat::CSV)
+			.field("id")
+			.field("name")
+			.data(vec![row1, row2, row3])
+			.max_rows(2)
+			.build();
+
+		// Assert
+		let export = result.unwrap();
+		assert_eq!(export.row_count, 2);
+		let output = String::from_utf8(export.data).unwrap();
+		assert!(output.contains("1,Alice"));
+		assert!(output.contains("2,Bob"));
+		assert!(!output.contains("3,Carol"));
 	}
 }

@@ -9,14 +9,40 @@
 //! - `DataTable` - Data table component
 
 use crate::types::{FilterInfo, FilterType, ModelInfo};
-use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use reinhardt_pages::Signal;
 use reinhardt_pages::component::{IntoPage, Page, PageElement};
 use std::collections::HashMap;
 
-/// Encodes a string for safe use in URL path segments
+/// Characters that must be percent-encoded in URL path segments.
+///
+/// This set encodes characters that are unsafe or reserved in URL paths,
+/// while preserving RFC 3986 unreserved characters (`A-Z`, `a-z`, `0-9`, `-`, `_`, `.`, `~`).
+/// Encoded characters: space, `"`, `#`, `%`, `/`, `<`, `>`, `?`, `[`, `]`, `^`, `` ` ``, `{`, `|`, `}`.
+const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
+	.add(b' ')
+	.add(b'"')
+	.add(b'#')
+	.add(b'%')
+	.add(b'/')
+	.add(b'<')
+	.add(b'>')
+	.add(b'?')
+	.add(b'[')
+	.add(b']')
+	.add(b'^')
+	.add(b'`')
+	.add(b'{')
+	.add(b'|')
+	.add(b'}');
+
+/// Percent-encode a string for safe use in URL path segments.
+///
+/// Encodes characters that are unsafe for URL path segments while preserving
+/// RFC 3986 unreserved characters (`-`, `_`, `.`, `~`) to avoid unnecessarily
+/// mangling valid route segments such as `user-management`.
 fn encode_path_segment(s: &str) -> String {
-	utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
+	utf8_percent_encode(s, PATH_SEGMENT_ENCODE_SET).to_string()
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -270,16 +296,10 @@ fn action_buttons(model_name: &str, record_id: &str) -> Page {
 	use reinhardt_pages::component::Component;
 	use reinhardt_pages::router::Link;
 
-	let detail_url = format!(
-		"/admin/{}/{}/",
-		encode_path_segment(&model_name.to_lowercase()),
-		encode_path_segment(record_id)
-	);
-	let edit_url = format!(
-		"/admin/{}/{}/change/",
-		encode_path_segment(&model_name.to_lowercase()),
-		encode_path_segment(record_id)
-	);
+	let encoded_model = encode_path_segment(&model_name.to_lowercase());
+	let encoded_id = encode_path_segment(record_id);
+	let detail_url = format!("/admin/{}/{}/", encoded_model, encoded_id);
+	let edit_url = format!("/admin/{}/{}/change/", encoded_model, encoded_id);
 
 	PageElement::new("div")
 		.attr("class", "btn-group btn-group-sm")
@@ -335,15 +355,10 @@ pub fn detail_view(
 	use reinhardt_pages::component::Component;
 	use reinhardt_pages::router::Link;
 
-	let edit_url = format!(
-		"/admin/{}/{}/change/",
-		encode_path_segment(&model_name.to_lowercase()),
-		encode_path_segment(record_id)
-	);
-	let list_url = format!(
-		"/admin/{}/",
-		encode_path_segment(&model_name.to_lowercase())
-	);
+	let encoded_model = encode_path_segment(&model_name.to_lowercase());
+	let encoded_id = encode_path_segment(record_id);
+	let edit_url = format!("/admin/{}/{}/change/", encoded_model, encoded_id);
+	let list_url = format!("/admin/{}/", encoded_model);
 
 	PageElement::new("div")
 		.attr("class", "detail-view")

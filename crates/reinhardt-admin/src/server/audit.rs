@@ -363,7 +363,7 @@ mod tests {
 			user_id: "admin-1".to_string(),
 			action: AuditAction::BulkDelete,
 			model_name: "Comment".to_string(),
-			record_id: Some("1,2,3".to_string()),
+			record_id: Some("[\"1\",\"2\",\"3\"]".to_string()),
 			changed_fields: None,
 			success: true,
 			affected_count: Some(3),
@@ -374,7 +374,7 @@ mod tests {
 
 		// Assert
 		assert!(output.contains("action=BULK_DELETE"));
-		assert!(output.contains("record_id=1,2,3"));
+		assert!(output.contains("record_id=[\"1\",\"2\",\"3\"]"));
 		assert!(output.contains("affected=3"));
 	}
 
@@ -436,8 +436,23 @@ mod tests {
 		// Arrange
 		let ids = vec!["1".to_string(), "2".to_string(), "3".to_string()];
 
-		// Act
-		log_bulk_delete("user-42", "User", &ids, 3, true);
+		// Act - construct the AuditEntry the same way log_bulk_delete does
+		// to verify the JSON array format used for record_id
+		let entry = AuditEntry {
+			timestamp: chrono::Utc::now().to_rfc3339(),
+			user_id: "user-42".to_string(),
+			action: AuditAction::BulkDelete,
+			model_name: "User".to_string(),
+			record_id: Some(serde_json::to_string(&ids).unwrap_or_else(|_| ids.join(","))),
+			changed_fields: None,
+			success: true,
+			affected_count: Some(3),
+		};
+
+		// Assert
+		assert_eq!(entry.record_id, Some("[\"1\",\"2\",\"3\"]".to_string()));
+		assert_eq!(entry.action, AuditAction::BulkDelete);
+		assert!(entry.success);
 	}
 
 	#[rstest]

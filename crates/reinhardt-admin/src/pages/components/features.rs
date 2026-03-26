@@ -351,16 +351,20 @@ pub fn detail_view(
 
 /// Generates a detail table for record fields
 fn detail_table(record: &std::collections::HashMap<String, String>) -> Page {
-	let rows: Vec<Page> = record
+	// Sort keys alphabetically for deterministic field display order
+	let mut keys: Vec<&String> = record.keys().collect();
+	keys.sort();
+	let rows: Vec<Page> = keys
 		.iter()
-		.map(|(key, value)| {
+		.map(|key| {
+			let value = record.get(*key).map(|s| s.as_str()).unwrap_or("");
 			PageElement::new("tr")
 				.child(
 					PageElement::new("th")
 						.attr("class", "w-25")
-						.child(key.clone()),
+						.child((*key).clone()),
 				)
-				.child(PageElement::new("td").child(value.clone()))
+				.child(PageElement::new("td").child(value.to_owned()))
 				.into_page()
 		})
 		.collect();

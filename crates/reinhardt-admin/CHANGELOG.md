@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- release-plz-separator -->
 <!-- Entries below this line were created before release-plz adoption -->
 
+## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.1.0-rc.14...reinhardt-admin@v0.1.0-rc.15) - 2026-03-26
+
+### Fixed
+
+- *(admin)* preserve query string in popstate navigation handler
+- *(admin)* replace missing permission methods with require_model_permission
+
+### Other
+
+- resolve conflict with main in delete.rs
+- resolve conflicts with main in features.rs
+- resolve conflict with main in delete.rs
+
 ## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.1.0-rc.13...reinhardt-admin@v0.1.0-rc.14) - 2026-03-24
 
 ### Added

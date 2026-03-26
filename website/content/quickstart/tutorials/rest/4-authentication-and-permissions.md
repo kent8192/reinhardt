@@ -44,7 +44,7 @@ let permissions = vec![
 **Available Standard Permissions:**
 - `AllowAny` - Allows access to any user (authenticated or not)
 - `IsAuthenticated` - Only allows access to authenticated users
-- (Future) `IsAdminUser` - Only allows access to admin users
+- `IsAdminUser` - Only allows access to admin users
 
 ### Custom Permission Implementation (Advanced)
 
@@ -116,12 +116,11 @@ impl Permission for IsAuthenticated {
 }
 ```
 
-### IsAdminUser (Future)
+### IsAdminUser
 
-Admin-only permission (implementation planned):
+Admin-only permission:
 
 ```rust
-// Future implementation - not yet available
 use reinhardt::IsAdminUser;
 
 let permission = Box::new(IsAdminUser) as Box<dyn Permission>;

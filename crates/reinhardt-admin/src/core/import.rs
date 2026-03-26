@@ -345,30 +345,70 @@ impl CsvImporter {
 	/// assert!(result.is_ok());
 	/// ```
 	pub fn import(data: &[u8], skip_header: bool) -> AdminResult<Vec<HashMap<String, String>>> {
-		// Use csv crate for RFC 4180 compliant parsing
+		// Use csv crate for RFC 4180 compliant parsing.
+		// When skip_header is true, the first row is treated as headers and skipped.
+		// When skip_header is false, all rows (including the first) are treated as data,
+		// so we use has_headers(false) and generate synthetic column names.
 		let mut reader = ReaderBuilder::new()
-			.has_headers(true) // Always expect headers
+			.has_headers(skip_header)
 			.flexible(false) // Strict column count validation
 			.trim(csv::Trim::All) // Trim whitespace
 			.from_reader(Cursor::new(data));
 
-		// Get headers
-		let headers = reader
-			.headers()
-			.map_err(|e| AdminError::ValidationError(format!("Failed to read CSV headers: {}", e)))?
-			.iter()
-			.map(|h| h.to_string())
-			.collect::<Vec<_>>();
+		// Determine headers based on skip_header mode
+		let headers = if skip_header {
+			// First row is a header row — extract column names from it
+			let hdrs = reader
+				.headers()
+				.map_err(|e| {
+					AdminError::ValidationError(format!("Failed to read CSV headers: {}", e))
+				})?
+				.iter()
+				.map(|h| h.to_string())
+				.collect::<Vec<_>>();
 
-		if headers.is_empty() {
-			return Err(AdminError::ValidationError(
-				"CSV header is empty".to_string(),
-			));
-		}
+			if hdrs.is_empty() {
+				return Err(AdminError::ValidationError(
+					"CSV header is empty".to_string(),
+				));
+			}
+			hdrs
+		} else {
+			// No header row — read the first record to determine column count,
+			// then generate synthetic column names (column_0, column_1, ...).
+			let mut peek_reader = ReaderBuilder::new()
+				.has_headers(false)
+				.flexible(false)
+				.trim(csv::Trim::All)
+				.from_reader(Cursor::new(data));
+
+			let first_record = peek_reader.records().next();
+			let col_count = match first_record {
+				Some(Ok(ref rec)) => rec.len(),
+				Some(Err(e)) => {
+					return Err(AdminError::ValidationError(format!(
+						"Row 1: CSV parse error: {}",
+						e
+					)));
+				}
+				None => return Ok(Vec::new()),
+			};
+
+			// Re-create the main reader for actual parsing
+			reader = ReaderBuilder::new()
+				.has_headers(false)
+				.flexible(false)
+				.trim(csv::Trim::All)
+				.from_reader(Cursor::new(data));
+
+			(0..col_count)
+				.map(|i| format!("column_{}", i))
+				.collect::<Vec<_>>()
+		};
 
 		// Parse records
 		let mut records = Vec::new();
-		let mut row_num = 1; // Start from 1 (after header)
+		let mut row_num = if skip_header { 1 } else { 0 };
 
 		for result in reader.records() {
 			row_num += 1;
@@ -394,18 +434,6 @@ impl CsvImporter {
 			}
 
 			records.push(map);
-		}
-
-		// If skip_header is false, we need to include the header as a data row
-		// (but csv crate already skipped it as headers)
-		// This is unusual but matches the original behavior
-		if !skip_header && !headers.is_empty() {
-			// Insert header row at the beginning
-			let mut header_record = HashMap::new();
-			for header in &headers {
-				header_record.insert(header.clone(), header.clone());
-			}
-			records.insert(0, header_record);
 		}
 
 		Ok(records)
@@ -519,7 +547,9 @@ impl TsvImporter {
 		// Parse header
 		let headers: Vec<String> = lines[0].split('\t').map(|s| s.to_string()).collect();
 
-		if headers.is_empty() {
+		// split('\t') always yields at least one element, so check for a single empty string
+		// which indicates an empty or whitespace-only header line
+		if headers.iter().all(|h| h.is_empty()) {
 			return Err(AdminError::ValidationError(
 				"TSV header is empty".to_string(),
 			));
@@ -661,6 +691,7 @@ impl ImportBuilder {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_import_format_from_filename() {
@@ -914,6 +945,43 @@ mod tests {
 		assert_eq!(
 			ImportFormat::from_content_type("application/json ;charset=utf-8"),
 			Some(ImportFormat::JSON)
+		);
+	}
+
+	#[rstest]
+	fn test_csv_import_without_skip_header() {
+		// Arrange
+		// CSV data with no header row — all rows are data rows
+		let csv_data = b"1,Alice\n2,Bob\n3,Charlie";
+
+		// Act
+		let result = CsvImporter::import(csv_data, false);
+
+		// Assert
+		let records = result.unwrap();
+		assert_eq!(records.len(), 3);
+		assert_eq!(records[0].get("column_0"), Some(&"1".to_string()));
+		assert_eq!(records[0].get("column_1"), Some(&"Alice".to_string()));
+		assert_eq!(records[1].get("column_0"), Some(&"2".to_string()));
+		assert_eq!(records[1].get("column_1"), Some(&"Bob".to_string()));
+		assert_eq!(records[2].get("column_0"), Some(&"3".to_string()));
+		assert_eq!(records[2].get("column_1"), Some(&"Charlie".to_string()));
+	}
+
+	#[rstest]
+	fn test_tsv_import_rejects_empty_headers() {
+		// Arrange
+		// TSV data whose first line contains only tab characters (all-empty headers)
+		let tsv_data = b"\t\t\n1\tAlice\teng";
+
+		// Act
+		let result = TsvImporter::import(tsv_data, true);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(
+			matches!(err, AdminError::ValidationError(ref msg) if msg == "TSV header is empty")
 		);
 	}
 }

@@ -3,13 +3,15 @@
 //! Provides import operations for admin models from various formats (JSON, CSV, TSV).
 
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, ImportFormat, ImportResponse};
+#[allow(deprecated)] // CurrentUser is deprecated, will migrate to AuthUser in 0.2.0
+use reinhardt_auth::{CurrentUser, DefaultUser};
 use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
-use super::error::{AdminAuth, MapServerFnError};
+use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(not(target_arch = "wasm32"))]
 use super::limits::{MAX_IMPORT_FILE_SIZE, MAX_IMPORT_RECORDS};
 
@@ -42,6 +44,7 @@ use super::limits::{MAX_IMPORT_FILE_SIZE, MAX_IMPORT_RECORDS};
 /// ).await?;
 /// println!("Imported {} records", response.imported);
 /// ```
+#[allow(deprecated)] // CurrentUser will be migrated to AuthUser in 0.2.0
 #[server_fn]
 pub async fn import_data(
 	model_name: String,
@@ -50,10 +53,20 @@ pub async fn import_data(
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
+	#[inject] current_user: CurrentUser<DefaultUser>,
 ) -> Result<ImportResponse, ServerFnError> {
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
-	auth.require_add_permission(&model_name)?;
+	let user = current_user
+		.user()
+		.map_err(|_| ServerFnError::server(401, "Authentication required"))?;
+	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	auth.require_model_permission(
+		model_admin.as_ref(),
+		user as &(dyn std::any::Any + Send + Sync),
+		ModelPermission::Add,
+	)
+	.await?;
 
 	// Validate import file size to prevent memory exhaustion
 	if data.len() > MAX_IMPORT_FILE_SIZE {
@@ -64,7 +77,6 @@ pub async fn import_data(
 		)));
 	}
 
-	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	let table_name = model_admin.table_name();
 
 	// Parse data based on format

@@ -6,13 +6,17 @@ use crate::adapters::{
 	AdminDatabase, AdminRecord, AdminSite, BulkDeleteRequest, BulkDeleteResponse,
 };
 use crate::types::MutationResponse;
+#[allow(deprecated)] // CurrentUser is deprecated, will migrate to AuthUser in 0.2.0
+use reinhardt_auth::{CurrentUser, DefaultUser};
 use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::audit;
 #[cfg(not(target_arch = "wasm32"))]
-use super::error::{AdminAuth, MapServerFnError};
+use super::error::{AdminAuth, MapServerFnError, ModelPermission};
+#[cfg(not(target_arch = "wasm32"))]
+use super::limits::MAX_BULK_DELETE_IDS;
 
 /// Delete a single model instance by ID
 ///
@@ -37,6 +41,7 @@ use super::error::{AdminAuth, MapServerFnError};
 /// let response = delete_record("User".to_string(), "42".to_string()).await?;
 /// println!("Deleted: {}", response.message);
 /// ```
+#[allow(deprecated)] // CurrentUser will be migrated to AuthUser in 0.2.0
 #[server_fn]
 pub async fn delete_record(
 	model_name: String,
@@ -44,12 +49,21 @@ pub async fn delete_record(
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
+	#[inject] current_user: CurrentUser<DefaultUser>,
 ) -> Result<MutationResponse, ServerFnError> {
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
-	auth.require_delete_permission(&model_name)?;
-
+	let user = current_user
+		.user()
+		.map_err(|_| ServerFnError::server(401, "Authentication required"))?;
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	auth.require_model_permission(
+		model_admin.as_ref(),
+		user as &(dyn std::any::Any + Send + Sync),
+		ModelPermission::Delete,
+	)
+	.await?;
+
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
 
@@ -100,6 +114,7 @@ pub async fn delete_record(
 /// let response = bulk_delete_records("User".to_string(), request).await?;
 /// println!("Deleted {} items", response.deleted);
 /// ```
+#[allow(deprecated)] // CurrentUser will be migrated to AuthUser in 0.2.0
 #[server_fn]
 pub async fn bulk_delete_records(
 	model_name: String,
@@ -107,18 +122,35 @@ pub async fn bulk_delete_records(
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
+	#[inject] current_user: CurrentUser<DefaultUser>,
 ) -> Result<BulkDeleteResponse, ServerFnError> {
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
-	auth.require_delete_permission(&model_name)?;
-
+	let user = current_user
+		.user()
+		.map_err(|_| ServerFnError::server(401, "Authentication required"))?;
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	auth.require_model_permission(
+		model_admin.as_ref(),
+		user as &(dyn std::any::Any + Send + Sync),
+		ModelPermission::Delete,
+	)
+	.await?;
+
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
 
 	let user_id = auth.user_id().unwrap_or("unknown").to_string();
 
 	let ids = request.ids;
+	if ids.len() > MAX_BULK_DELETE_IDS {
+		return Err(ServerFnError::application(format!(
+			"Too many IDs for bulk delete: {} exceeds maximum of {}",
+			ids.len(),
+			MAX_BULK_DELETE_IDS
+		)));
+	}
+
 	let result = db
 		.bulk_delete::<AdminRecord>(table_name, pk_field, ids.clone())
 		.await

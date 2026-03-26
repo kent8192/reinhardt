@@ -441,6 +441,19 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 		format!("Create {}", model_name)
 	};
 
+	let action_url = if let Some(rid) = record_id {
+		format!(
+			"/admin/{}/{}/change/",
+			encode_path_segment(&model_name.to_lowercase()),
+			encode_path_segment(rid)
+		)
+	} else {
+		format!(
+			"/admin/{}/add/",
+			encode_path_segment(&model_name.to_lowercase())
+		)
+	};
+
 	let list_url = format!(
 		"/admin/{}/",
 		encode_path_segment(&model_name.to_lowercase())
@@ -459,7 +472,8 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 		.child(
 			PageElement::new("form")
 				.attr("class", "needs-validation")
-				.attr("novalidate", "true")
+				.attr("method", "POST")
+				.attr("action", action_url)
 				.children(form_groups)
 				.child(
 					PageElement::new("div")

@@ -100,7 +100,12 @@ pub fn main() -> Result<(), JsValue> {
 		// Use replace() since browser has already changed the history
 		router::with_router(|r| {
 			let current_path = web_sys::window()
-				.and_then(|w| w.location().pathname().ok())
+				.and_then(|w| {
+					let location = w.location();
+					let pathname = location.pathname().ok()?;
+					let search = location.search().ok().unwrap_or_default();
+					Some(format!("{}{}", pathname, search))
+				})
 				.unwrap_or_else(|| "/".to_string());
 			let _ = r.replace(&current_path);
 		});

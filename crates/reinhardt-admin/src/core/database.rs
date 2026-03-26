@@ -363,9 +363,11 @@ pub const MAX_FILTER_DEPTH: usize = 100;
 ///
 /// To prevent stack overflow with deeply nested filter conditions, this function
 /// limits recursion depth to `MAX_FILTER_DEPTH` (100 levels). If the depth limit
-/// is exceeded, the function returns `None`.
+/// is exceeded, the function returns an error.
 #[doc(hidden)]
-pub fn build_composite_filter_condition(filter_condition: &FilterCondition) -> Option<Condition> {
+pub fn build_composite_filter_condition(
+	filter_condition: &FilterCondition,
+) -> AdminResult<Option<Condition>> {
 	build_composite_filter_condition_with_depth(filter_condition, 0)
 }
 
@@ -374,46 +376,52 @@ pub fn build_composite_filter_condition(filter_condition: &FilterCondition) -> O
 pub fn build_composite_filter_condition_with_depth(
 	filter_condition: &FilterCondition,
 	depth: usize,
-) -> Option<Condition> {
+) -> AdminResult<Option<Condition>> {
 	// Prevent stack overflow by limiting recursion depth
 	if depth >= MAX_FILTER_DEPTH {
-		return None;
+		return Err(AdminError::ValidationError(format!(
+			"Filter condition exceeded maximum depth of {} levels",
+			MAX_FILTER_DEPTH
+		)));
 	}
 
 	match filter_condition {
 		FilterCondition::Single(filter) => {
-			build_single_filter_expr(filter).map(|expr| Condition::all().add(expr))
+			Ok(build_single_filter_expr(filter).map(|expr| Condition::all().add(expr)))
 		}
 		FilterCondition::And(conditions) => {
 			if conditions.is_empty() {
-				return None;
+				return Ok(None);
 			}
 			let mut and_condition = Condition::all();
 			for cond in conditions {
-				if let Some(sub_cond) = build_composite_filter_condition_with_depth(cond, depth + 1)
+				if let Some(sub_cond) =
+					build_composite_filter_condition_with_depth(cond, depth + 1)?
 				{
 					and_condition = and_condition.add(sub_cond);
 				}
 			}
-			Some(and_condition)
+			Ok(Some(and_condition))
 		}
 		FilterCondition::Or(conditions) => {
 			if conditions.is_empty() {
-				return None;
+				return Ok(None);
 			}
 			let mut or_condition = Condition::any();
 			for cond in conditions {
-				if let Some(sub_cond) = build_composite_filter_condition_with_depth(cond, depth + 1)
+				if let Some(sub_cond) =
+					build_composite_filter_condition_with_depth(cond, depth + 1)?
 				{
 					or_condition = or_condition.add(sub_cond);
 				}
 			}
-			Some(or_condition)
+			Ok(Some(or_condition))
 		}
-		FilterCondition::Not(inner) => {
-			build_composite_filter_condition_with_depth(inner, depth + 1)
-				.map(|inner_cond| inner_cond.not())
-		}
+		FilterCondition::Not(inner) => Ok(build_composite_filter_condition_with_depth(
+			inner,
+			depth + 1,
+		)?
+		.map(|inner_cond| inner_cond.not())),
 	}
 }
 
@@ -579,7 +587,7 @@ impl AdminDatabase {
 
 		// Add composite filter condition (e.g., OR search across fields)
 		if let Some(fc) = filter_condition
-			&& let Some(cond) = build_composite_filter_condition(fc)
+			&& let Some(cond) = build_composite_filter_condition(fc)?
 		{
 			combined = combined.add(cond);
 		}
@@ -661,7 +669,7 @@ impl AdminDatabase {
 
 		// Add composite filter condition
 		if let Some(fc) = filter_condition
-			&& let Some(cond) = build_composite_filter_condition(fc)
+			&& let Some(cond) = build_composite_filter_condition(fc)?
 		{
 			combined = combined.add(cond);
 		}
@@ -1244,6 +1252,8 @@ mod tests {
 
 		let result = build_composite_filter_condition(&condition);
 
+		assert!(result.is_ok());
+		let result = result.unwrap();
 		assert!(result.is_some());
 		// The condition should produce valid SQL when used
 		let cond = result.unwrap();
@@ -1276,6 +1286,8 @@ mod tests {
 
 		let result = build_composite_filter_condition(&condition);
 
+		assert!(result.is_ok());
+		let result = result.unwrap();
 		assert!(result.is_some());
 		let cond = result.unwrap();
 		let query = Query::select()
@@ -1309,6 +1321,8 @@ mod tests {
 
 		let result = build_composite_filter_condition(&condition);
 
+		assert!(result.is_ok());
+		let result = result.unwrap();
 		assert!(result.is_some());
 		let cond = result.unwrap();
 		let query = Query::select()
@@ -1351,6 +1365,8 @@ mod tests {
 
 		let result = build_composite_filter_condition(&and_condition);
 
+		assert!(result.is_ok());
+		let result = result.unwrap();
 		assert!(result.is_some());
 		let cond = result.unwrap();
 		let query = Query::select()
@@ -1372,8 +1388,9 @@ mod tests {
 
 		let result = build_composite_filter_condition(&condition);
 
-		// Empty OR should return None
-		assert!(result.is_none());
+		// Empty OR should return Ok(None)
+		assert!(result.is_ok());
+		assert!(result.unwrap().is_none());
 	}
 
 	#[test]
@@ -1382,8 +1399,36 @@ mod tests {
 
 		let result = build_composite_filter_condition(&condition);
 
-		// Empty AND should return None
-		assert!(result.is_none());
+		// Empty AND should return Ok(None)
+		assert!(result.is_ok());
+		assert!(result.unwrap().is_none());
+	}
+
+	#[test]
+	fn test_build_composite_depth_overflow_returns_error() {
+		// Build a filter condition that exceeds MAX_FILTER_DEPTH by nesting
+		let base_filter = Filter::new(
+			"name".to_string(),
+			FilterOperator::Eq,
+			FilterValue::String("Alice".to_string()),
+		);
+		let mut condition = FilterCondition::Single(base_filter);
+		// Wrap in And() nesting MAX_FILTER_DEPTH + 1 times to exceed the limit
+		for _ in 0..=MAX_FILTER_DEPTH {
+			condition = FilterCondition::And(vec![condition]);
+		}
+
+		let result = build_composite_filter_condition(&condition);
+
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(matches!(err, AdminError::ValidationError(_)));
+		let err_msg = err.to_string();
+		assert!(
+			err_msg.contains("exceeded maximum depth"),
+			"Error message should mention exceeded depth, got: {}",
+			err_msg
+		);
 	}
 
 	// ==================== FieldRef/OuterRef/Expression filter tests ====================

@@ -173,6 +173,8 @@ fn test_build_composite_single_condition() {
 	let result = build_composite_filter_condition(&condition);
 
 	// Assert
+	assert!(result.is_ok());
+	let result = result.unwrap();
 	assert!(result.is_some());
 	let cond = result.unwrap();
 	let query = Query::select()
@@ -206,6 +208,8 @@ fn test_build_composite_or_condition() {
 	let result = build_composite_filter_condition(&condition);
 
 	// Assert
+	assert!(result.is_ok());
+	let result = result.unwrap();
 	assert!(result.is_some());
 	let cond = result.unwrap();
 	let query = Query::select()
@@ -240,6 +244,8 @@ fn test_build_composite_and_condition() {
 	let result = build_composite_filter_condition(&condition);
 
 	// Assert
+	assert!(result.is_ok());
+	let result = result.unwrap();
 	assert!(result.is_some());
 	let cond = result.unwrap();
 	let query = Query::select()
@@ -281,6 +287,8 @@ fn test_build_composite_nested_condition() {
 	let result = build_composite_filter_condition(&and_condition);
 
 	// Assert
+	assert!(result.is_ok());
+	let result = result.unwrap();
 	assert!(result.is_some());
 	let cond = result.unwrap();
 	let query = Query::select()
@@ -304,7 +312,8 @@ fn test_build_composite_empty_or() {
 	let result = build_composite_filter_condition(&condition);
 
 	// Assert
-	assert!(result.is_none());
+	assert!(result.is_ok());
+	assert!(result.unwrap().is_none());
 }
 
 #[rstest]
@@ -316,7 +325,8 @@ fn test_build_composite_empty_and() {
 	let result = build_composite_filter_condition(&condition);
 
 	// Assert
-	assert!(result.is_none());
+	assert!(result.is_ok());
+	assert!(result.unwrap().is_none());
 }
 
 // ==================== list_with_condition / count_with_condition tests ====================

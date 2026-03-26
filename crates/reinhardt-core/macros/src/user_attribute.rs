@@ -114,12 +114,12 @@ fn inject_skip_getter(input: &mut ItemStruct, mapping: &FieldMapping, args: &Use
 
 	if let syn::Fields::Named(ref mut fields) = input.fields {
 		for field in &mut fields.named {
-			if let Some(ref ident) = field.ident {
-				if skip_fields.contains(&ident.to_string()) {
-					field
-						.attrs
-						.push(syn::parse_quote!(#[field(skip_getter = true)]));
-				}
+			if let Some(ref ident) = field.ident
+				&& skip_fields.contains(&ident.to_string())
+			{
+				field
+					.attrs
+					.push(syn::parse_quote!(#[field(skip_getter = true)]));
 			}
 		}
 	}
@@ -258,10 +258,7 @@ fn generate_permissions_mixin_impl(
 	})
 }
 
-fn generate_auth_identity_impl(
-	struct_name: &Ident,
-	mapping: &FieldMapping,
-) -> TokenStream {
+fn generate_auth_identity_impl(struct_name: &Ident, mapping: &FieldMapping) -> TokenStream {
 	let auth_crate = get_reinhardt_auth_crate();
 	let pk_field = mapping.pk_field.as_ref().expect("PK validated");
 	let is_superuser_field = mapping.get(FieldRole::IsSuperuser).expect("validated");
@@ -283,10 +280,7 @@ fn generate_auth_identity_impl(
 	}
 }
 
-pub(crate) fn user_attribute_impl(
-	args: TokenStream,
-	mut input: ItemStruct,
-) -> Result<TokenStream> {
+pub(crate) fn user_attribute_impl(args: TokenStream, mut input: ItemStruct) -> Result<TokenStream> {
 	let parsed_args = parse_user_args(args)?;
 	let has_model = has_model_attribute(&input);
 

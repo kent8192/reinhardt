@@ -99,17 +99,14 @@ impl FieldMapping {
 	}
 }
 
-pub(crate) fn resolve_field_mapping(
-	fields: &Fields,
-	has_model_attr: bool,
-) -> Result<FieldMapping> {
+pub(crate) fn resolve_field_mapping(fields: &Fields, has_model_attr: bool) -> Result<FieldMapping> {
 	let named_fields = match fields {
 		Fields::Named(f) => &f.named,
 		_ => {
 			return Err(syn::Error::new(
 				Span::call_site(),
 				"#[user] can only be applied to structs with named fields",
-			))
+			));
 		}
 	};
 
@@ -241,7 +238,7 @@ pub(crate) fn validate_required_fields(
 
 	let username_exists = named_fields
 		.iter()
-		.any(|f| f.ident.as_ref().map_or(false, |i| i == username_field));
+		.any(|f| f.ident.as_ref().is_some_and(|i| i == username_field));
 	if !username_exists {
 		return Err(syn::Error::new(
 			Span::call_site(),

@@ -3,13 +3,13 @@
 //! This project uses reinhardt-pages with Server Functions for API communication.
 //! Each app defines unified routes (server + client) in `urls.rs`, which are mounted here.
 //!
-//! Admin panel routes are integrated via `admin_routes()`, which auto-registers
+//! Admin panel routes are integrated via `admin_routes_with_di()`, which auto-registers
 //! `AdminSite` in the DI singleton scope. `AdminDatabase` is lazily constructed
 //! from `DatabaseConnection` at first request.
 
 use reinhardt::UnifiedRouter;
 #[cfg(not(target_arch = "wasm32"))]
-use reinhardt::admin::admin_routes;
+use reinhardt::admin::admin_routes_with_di;
 #[cfg(server)]
 use reinhardt::routes;
 
@@ -31,10 +31,10 @@ use reinhardt::LoggingMiddleware;
 /// - Server Functions (`#[server_fn]`) for API communication
 /// - Client routing for SPA navigation
 /// - Production-ready middleware stack for security and performance
-/// - Admin panel mounted at `/admin/` via `admin_routes()`
+/// - Admin panel mounted at `/admin/` via `admin_routes_with_di()`
 ///
 /// Admin DI setup:
-/// - `AdminSite` is auto-registered in the singleton scope by `admin_routes()`
+/// - `AdminSite` is auto-registered in the singleton scope by `admin_routes_with_di()`
 /// - `AdminDatabase` is lazily constructed from `DatabaseConnection` at first request
 ///
 /// Middleware stack (in execution order):
@@ -71,9 +71,9 @@ pub fn routes() -> UnifiedRouter {
 	#[cfg(not(target_arch = "wasm32"))]
 	let router = {
 		#[cfg(server)]
-		let admin_router = admin_routes(admin_site, &singleton_scope);
+		let admin_router = admin_routes_with_di(admin_site, &singleton_scope);
 		#[cfg(not(server))]
-		let admin_router = admin_routes(
+		let admin_router = admin_routes_with_di(
 			std::sync::Arc::new(reinhardt::admin::AdminSite::new("Twitter Admin")),
 			&singleton_scope,
 		);

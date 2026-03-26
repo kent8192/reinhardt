@@ -137,6 +137,9 @@ pub mod permission_operators;
 /// Mixin for adding permission fields to user models.
 #[path = "core/permissions_mixin.rs"]
 pub mod permissions_mixin;
+/// Authentication identity trait (replaces deprecated User trait).
+#[path = "core/auth_identity.rs"]
+pub mod auth_identity;
 /// Core user types (SimpleUser, AnonymousUser).
 #[path = "core/user.rs"]
 pub mod user;
@@ -150,6 +153,7 @@ pub use permission::{
 	AllowAny, IsActiveUser, IsAdminUser, IsAuthenticated, IsAuthenticatedOrReadOnly, Permission,
 	PermissionContext,
 };
+pub use auth_identity::AuthIdentity;
 pub use permissions_mixin::PermissionsMixin;
 pub use user::{AnonymousUser, SimpleUser, User};
 

@@ -166,6 +166,7 @@ fn dashboard_view() -> Page {
 #[cfg(target_arch = "wasm32")]
 fn list_view_component(model_name: String) -> Page {
 	use reinhardt_pages::component::{IntoPage, PageElement};
+	use reinhardt_pages::use_effect;
 
 	let list_resource = create_resource(move || {
 		let model_name = model_name.clone();
@@ -181,6 +182,21 @@ fn list_view_component(model_name: String) -> Page {
 	let page_signal = Signal::new(1u64);
 	let filters_signal = Signal::new(HashMap::new());
 
+	// Sync page_signal from the completed resource outside the rendering closure.
+	// Updating signals inside a rendering closure is an anti-pattern: it causes
+	// a state change during render and could create an infinite loop if the
+	// resource ever reads page_signal. Using use_effect keeps side-effects
+	// separate from the render path.
+	{
+		let resource = list_resource.clone();
+		let page_signal = page_signal.clone();
+		use_effect(move || {
+			if let ResourceState::Success(ref response) = resource.get() {
+				page_signal.set(response.page);
+			}
+		});
+	}
+
 	PageElement::new("div")
 		.attr("class", "list-container")
 		.child({
@@ -190,9 +206,6 @@ fn list_view_component(model_name: String) -> Page {
 			move || match resource.get() {
 				ResourceState::Loading => loading_view(),
 				ResourceState::Success(response) => {
-					// Update page signal from response without recreating it
-					page_signal.set(response.page);
-
 					// Convert ListResponse to ListViewData
 					let data = ListViewData {
 						model_name: response.model_name.clone(),
@@ -525,7 +538,8 @@ fn field_type_to_html_input_type(field_type: &reinhardt_admin::types::FieldType)
 		FieldType::Email => "email".to_string(),
 		FieldType::Date => "date".to_string(),
 		FieldType::DateTime => "datetime-local".to_string(),
-		FieldType::Select { .. } => "select".to_string(),
+		// Select should render as <select>, not <input>; fall back to "text" for now
+		FieldType::Select { .. } => "text".to_string(),
 		// MultiSelect should render as <select multiple>, not <input>; fall back to "text" for now
 		FieldType::MultiSelect { .. } => "text".to_string(),
 		FieldType::File => "file".to_string(),

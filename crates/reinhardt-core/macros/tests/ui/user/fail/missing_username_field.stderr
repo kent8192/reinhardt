@@ -1,0 +1,7 @@
+error: #[user] requires 'username_field' argument: #[user(username_field = "email")]
+ --> tests/ui/user/fail/missing_username_field.rs:7:1
+  |
+7 | #[user(hasher = Argon2Hasher)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `user` (in Nightly builds, run with -Z macro-backtrace for more info)

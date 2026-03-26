@@ -1,3 +1,7 @@
+// The `User` trait is deprecated in favour of the new `#[model]`-based user macro system.
+// Re-exported here for downstream compatibility during the transition period.
+#![allow(deprecated)]
+
 //! REST API authentication
 //!
 //! Re-exports authentication types from reinhardt-core::auth.

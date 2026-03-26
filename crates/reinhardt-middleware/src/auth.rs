@@ -1,3 +1,7 @@
+// The `User` trait is deprecated in favour of the new `#[model]`-based user macro system.
+// Downstream crates still reference it during the transition period.
+#![allow(deprecated)]
+
 #[cfg(feature = "sessions")]
 use async_trait::async_trait;
 #[cfg(feature = "sessions")]

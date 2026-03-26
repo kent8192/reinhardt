@@ -7,7 +7,7 @@ use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
-use super::error::{AdminAuth, MapServerFnError};
+use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(not(target_arch = "wasm32"))]
 use super::limits::MAX_EXPORT_RECORDS;
 
@@ -45,9 +45,9 @@ pub async fn export_data(
 ) -> Result<ExportResponse, ServerFnError> {
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
-	auth.require_view_permission(&model_name)?;
-
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	auth.require_model_permission(model_admin.as_ref(), ModelPermission::View)
+		.await?;
 	let table_name = model_admin.table_name();
 
 	// Fetch records with export limit to prevent memory exhaustion

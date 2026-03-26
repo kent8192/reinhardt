@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
-use super::error::{AdminAuth, MapServerFnError};
+use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(not(target_arch = "wasm32"))]
 use super::limits::{MAX_IMPORT_FILE_SIZE, MAX_IMPORT_RECORDS};
 
@@ -53,7 +53,9 @@ pub async fn import_data(
 ) -> Result<ImportResponse, ServerFnError> {
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
-	auth.require_add_permission(&model_name)?;
+	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	auth.require_model_permission(model_admin.as_ref(), ModelPermission::Add)
+		.await?;
 
 	// Validate import file size to prevent memory exhaustion
 	if data.len() > MAX_IMPORT_FILE_SIZE {
@@ -64,7 +66,6 @@ pub async fn import_data(
 		)));
 	}
 
-	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	let table_name = model_admin.table_name();
 
 	// Parse data based on format

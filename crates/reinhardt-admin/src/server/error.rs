@@ -46,6 +46,22 @@ impl<T> MapServerFnError<T> for Result<T, AdminError> {
 	}
 }
 
+/// Permission types for model-level access control.
+///
+/// Used with [`AdminAuth::require_model_permission`] to specify which
+/// permission to check against the `ModelAdmin`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelPermission {
+	/// Permission to view model instances
+	View,
+	/// Permission to add (create) model instances
+	Add,
+	/// Permission to change (update) model instances
+	Change,
+	/// Permission to delete model instances
+	Delete,
+}
+
 /// Authentication and authorization checker for admin panel.
 ///
 /// This struct extracts authentication state from the HTTP request
@@ -154,53 +170,57 @@ impl AdminAuth {
 		Ok(())
 	}
 
-	/// Checks if the user has permission to view the model.
+	/// Returns the `AuthState` as a trait object for permission checking.
 	///
-	/// This uses the default admin permission logic: authenticated staff users
-	/// must be explicitly granted view permission. Override
-	/// `ModelAdmin::has_view_permission` for custom permission logic.
+	/// This is used to pass the auth state to `ModelAdmin` permission methods
+	/// that accept `&(dyn Any + Send + Sync)`.
 	///
-	/// # Errors
+	/// # Returns
 	///
-	/// Returns `ServerFnError` with status 403 if permission denied
-	pub fn require_view_permission(&self, model_name: &str) -> Result<(), ServerFnError> {
-		self.require_staff()?;
-		// Default: staff users have view permission
-		// Custom permission checks would call ModelAdmin::has_view_permission here
-		let _ = model_name; // Will be used for ModelAdmin permission checks
-		Ok(())
+	/// Returns `Some` with a reference to the `AuthState` as a trait object
+	/// if authenticated, or `None` if anonymous.
+	pub fn as_any_user(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+		self.auth_state
+			.as_ref()
+			.map(|s| s as &(dyn std::any::Any + Send + Sync))
 	}
 
-	/// Checks if the user has permission to add (create) the model.
+	/// Checks model-level permission using `ModelAdmin`, returning an error if denied.
+	///
+	/// This method first verifies staff status, then delegates to the
+	/// `ModelAdmin`'s permission method for the specified permission type.
+	///
+	/// # Arguments
+	///
+	/// * `model_admin` - The model admin to check permissions against
+	/// * `permission` - The type of permission to check
 	///
 	/// # Errors
 	///
-	/// Returns `ServerFnError` with status 403 if permission denied
-	pub fn require_add_permission(&self, model_name: &str) -> Result<(), ServerFnError> {
+	/// Returns `ServerFnError` with status 401 if not authenticated,
+	/// 403 if not staff or if model-level permission is denied
+	pub async fn require_model_permission(
+		&self,
+		model_admin: &dyn crate::core::ModelAdmin,
+		permission: ModelPermission,
+	) -> Result<(), ServerFnError> {
 		self.require_staff()?;
-		let _ = model_name;
-		Ok(())
-	}
 
-	/// Checks if the user has permission to change (update) the model.
-	///
-	/// # Errors
-	///
-	/// Returns `ServerFnError` with status 403 if permission denied
-	pub fn require_change_permission(&self, model_name: &str) -> Result<(), ServerFnError> {
-		self.require_staff()?;
-		let _ = model_name;
-		Ok(())
-	}
+		let user = self
+			.as_any_user()
+			.ok_or_else(|| ServerFnError::server(401, "Authentication required"))?;
 
-	/// Checks if the user has permission to delete the model.
-	///
-	/// # Errors
-	///
-	/// Returns `ServerFnError` with status 403 if permission denied
-	pub fn require_delete_permission(&self, model_name: &str) -> Result<(), ServerFnError> {
-		self.require_staff()?;
-		let _ = model_name;
+		let has_permission = match permission {
+			ModelPermission::View => model_admin.has_view_permission(user).await,
+			ModelPermission::Add => model_admin.has_add_permission(user).await,
+			ModelPermission::Change => model_admin.has_change_permission(user).await,
+			ModelPermission::Delete => model_admin.has_delete_permission(user).await,
+		};
+
+		if !has_permission {
+			return Err(ServerFnError::server(403, "Permission denied"));
+		}
+
 		Ok(())
 	}
 }

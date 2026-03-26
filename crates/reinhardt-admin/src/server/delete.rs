@@ -12,7 +12,7 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use super::audit;
 #[cfg(not(target_arch = "wasm32"))]
-use super::error::{AdminAuth, MapServerFnError};
+use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 
 /// Delete a single model instance by ID
 ///
@@ -47,9 +47,10 @@ pub async fn delete_record(
 ) -> Result<MutationResponse, ServerFnError> {
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
-	auth.require_delete_permission(&model_name)?;
-
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	auth.require_model_permission(model_admin.as_ref(), ModelPermission::Delete)
+		.await?;
+
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
 
@@ -110,9 +111,10 @@ pub async fn bulk_delete_records(
 ) -> Result<BulkDeleteResponse, ServerFnError> {
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
-	auth.require_delete_permission(&model_name)?;
-
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	auth.require_model_permission(model_admin.as_ref(), ModelPermission::Delete)
+		.await?;
+
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
 

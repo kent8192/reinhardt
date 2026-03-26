@@ -4,13 +4,15 @@
 
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite};
 use crate::types::{MutationRequest, MutationResponse};
+#[allow(deprecated)] // CurrentUser is deprecated, will migrate to AuthUser in 0.2.0
+use reinhardt_auth::{CurrentUser, DefaultUser};
 use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::audit;
 #[cfg(not(target_arch = "wasm32"))]
-use super::error::{AdminAuth, MapServerFnError};
+use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(not(target_arch = "wasm32"))]
 use super::security::sanitize_mutation_values;
 #[cfg(not(target_arch = "wasm32"))]
@@ -45,6 +47,7 @@ use super::validation::validate_mutation_data;
 /// let response = update_record("User".to_string(), "42".to_string(), request).await?;
 /// println!("Updated: {}", response.message);
 /// ```
+#[allow(deprecated)] // CurrentUser will be migrated to AuthUser in 0.2.0
 #[server_fn]
 pub async fn update_record(
 	model_name: String,
@@ -53,12 +56,21 @@ pub async fn update_record(
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
+	#[inject] current_user: CurrentUser<DefaultUser>,
 ) -> Result<MutationResponse, ServerFnError> {
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
-	auth.require_change_permission(&model_name)?;
-
+	let user = current_user
+		.user()
+		.map_err(|_| ServerFnError::server(401, "Authentication required"))?;
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	auth.require_model_permission(
+		model_admin.as_ref(),
+		user as &(dyn std::any::Any + Send + Sync),
+		ModelPermission::Change,
+	)
+	.await?;
+
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
 

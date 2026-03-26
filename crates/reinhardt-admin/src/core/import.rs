@@ -374,11 +374,8 @@ impl CsvImporter {
 			}
 			hdrs
 		} else {
-			// No header row — peek at the first record to determine column count,
+			// No header row — read the first record to determine column count,
 			// then generate synthetic column names (column_0, column_1, ...).
-			let first_peek = reader.records().peekable();
-			// Re-create reader since we can't peek without consuming
-			drop(first_peek);
 			let mut peek_reader = ReaderBuilder::new()
 				.has_headers(false)
 				.flexible(false)
@@ -694,6 +691,7 @@ impl ImportBuilder {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_import_format_from_filename() {
@@ -947,6 +945,43 @@ mod tests {
 		assert_eq!(
 			ImportFormat::from_content_type("application/json ;charset=utf-8"),
 			Some(ImportFormat::JSON)
+		);
+	}
+
+	#[rstest]
+	fn test_csv_import_without_skip_header() {
+		// Arrange
+		// CSV data with no header row — all rows are data rows
+		let csv_data = b"1,Alice\n2,Bob\n3,Charlie";
+
+		// Act
+		let result = CsvImporter::import(csv_data, false);
+
+		// Assert
+		let records = result.unwrap();
+		assert_eq!(records.len(), 3);
+		assert_eq!(records[0].get("column_0"), Some(&"1".to_string()));
+		assert_eq!(records[0].get("column_1"), Some(&"Alice".to_string()));
+		assert_eq!(records[1].get("column_0"), Some(&"2".to_string()));
+		assert_eq!(records[1].get("column_1"), Some(&"Bob".to_string()));
+		assert_eq!(records[2].get("column_0"), Some(&"3".to_string()));
+		assert_eq!(records[2].get("column_1"), Some(&"Charlie".to_string()));
+	}
+
+	#[rstest]
+	fn test_tsv_import_rejects_empty_headers() {
+		// Arrange
+		// TSV data whose first line contains only tab characters (all-empty headers)
+		let tsv_data = b"\t\t\n1\tAlice\teng";
+
+		// Act
+		let result = TsvImporter::import(tsv_data, true);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(
+			matches!(err, AdminError::ValidationError(ref msg) if msg == "TSV header is empty")
 		);
 	}
 }

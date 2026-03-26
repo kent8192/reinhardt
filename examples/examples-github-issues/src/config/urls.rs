@@ -5,13 +5,13 @@
 
 use std::env;
 
+use reinhardt::admin::{admin_routes, admin_static_routes};
 use reinhardt::graphql::{
 	MergedObject, MergedSubscription, Schema,
 	http::{GraphQLPlaygroundConfig, playground_source},
 };
 use reinhardt::middleware::CorsMiddleware;
 use reinhardt::middleware::cors::CorsConfig;
-use reinhardt::admin::{admin_routes, admin_static_routes};
 use reinhardt::routes;
 use reinhardt::{JwtAuth, Request, Response, StatusCode, UnifiedRouter, ViewResult};
 

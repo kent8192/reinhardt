@@ -1,0 +1,7 @@
+error: #[user(full = true)] requires 'first_name' field. Add 'first_name' or annotate a field with #[user_field(first_name)]
+ --> tests/ui/user/fail/full_missing_first_name.rs:7:1
+  |
+7 | #[user(hasher = Argon2Hasher, username_field = "username", full = true)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `user` (in Nightly builds, run with -Z macro-backtrace for more info)

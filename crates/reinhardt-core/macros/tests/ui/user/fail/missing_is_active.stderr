@@ -1,0 +1,7 @@
+error: #[user] requires a field for 'is_active'. Add a field named 'is_active' or annotate a field with #[user_field(is_active)]
+ --> tests/ui/user/fail/missing_is_active.rs:7:1
+  |
+7 | #[user(hasher = Argon2Hasher, username_field = "email")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `user` (in Nightly builds, run with -Z macro-backtrace for more info)

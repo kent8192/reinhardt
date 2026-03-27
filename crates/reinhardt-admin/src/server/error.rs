@@ -194,7 +194,7 @@ impl AdminAuth {
 	pub async fn require_model_permission(
 		&self,
 		model_admin: &dyn crate::core::ModelAdmin,
-		user: &(dyn std::any::Any + Send + Sync),
+		user: &dyn crate::core::AdminUser,
 		permission: ModelPermission,
 	) -> Result<(), ServerFnError> {
 		self.require_staff()?;

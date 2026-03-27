@@ -34,21 +34,21 @@ This generates a complete project structure:
 tutorial/
 ├── Cargo.toml
 ├── README.md
+├── Makefile.toml
+├── settings/
+│   ├── base.toml
+│   ├── local.toml
+│   ├── staging.toml
+│   └── production.toml
 └── src/
-    ├── main.rs
+    ├── lib.rs
     ├── config.rs
     ├── apps.rs
     ├── config/
     │   ├── settings.rs
-    │   ├── settings/
-    │   │   ├── base.rs
-    │   │   ├── local.rs
-    │   │   ├── staging.rs
-    │   │   └── production.rs
     │   ├── urls.rs
     │   └── apps.rs
     └── bin/
-        ├── runserver.rs
         └── manage.rs
 ```
 
@@ -86,8 +86,7 @@ This example uses simple data structures. In real applications, you can implemen
 Implement API endpoints using HTTP method decorators. Add to `users/views.rs`:
 
 ```rust
-use json::json;
-use reinhardt::core::serde::json;
+use serde_json::{self as json, json};
 use reinhardt::ViewResult;
 use reinhardt::{get, post, Json, Response, StatusCode};
 use crate::models::User;
@@ -95,7 +94,7 @@ use crate::serializers::UserSerializer;
 
 #[get("/users", name = "list_users")]
 pub async fn list_users() -> ViewResult<Response> {
-    let users = User::objects().all().all().await?;
+    let users = User::objects().all().await?;
     let serialized: Vec<UserSerializer> = users.into_iter()
         .map(|u| UserSerializer::from(u))
         .collect();
@@ -173,8 +172,7 @@ pub struct UserSerializer {
 Edit `users/views.rs` to implement full CRUD operations:
 
 ```rust
-use json::json;
-use reinhardt::core::serde::json;
+use serde_json::{self as json, json};
 use reinhardt::ViewResult;
 use reinhardt::{get, post, Json, Path, Response, StatusCode};
 use crate::models::User;
@@ -182,7 +180,7 @@ use crate::serializers::UserSerializer;
 
 #[get("/users", name = "list_users")]
 pub async fn list_users() -> ViewResult<Response> {
-    let users = User::objects().all().all().await?;
+    let users = User::objects().all().await?;
     let serialized: Vec<UserSerializer> = users.into_iter()
         .map(|u| UserSerializer::from(u))
         .collect();

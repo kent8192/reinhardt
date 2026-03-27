@@ -533,7 +533,7 @@ impl MockTimers {
 			.borrow()
 			.iter()
 			.map(|cb| cb.scheduled_time)
-			.max_by(|a, b| a.partial_cmp(b).unwrap())
+			.max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
 			.unwrap_or(0.0);
 
 		if max_time > *self.current_time.borrow() {
@@ -651,11 +651,16 @@ impl MutationTracker {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	#[test]
+	// ==================== MockStorage tests ====================
+
+	#[rstest]
 	fn test_mock_storage_operations() {
+		// Arrange
 		let storage = MockStorage::new();
 
+		// Act & Assert
 		assert_eq!(storage.length(), 0);
 
 		storage.set_item("key1", "value1");
@@ -674,10 +679,153 @@ mod tests {
 		assert_eq!(storage.length(), 0);
 	}
 
-	#[test]
+	#[rstest]
+	fn test_mock_storage_with_data() {
+		// Arrange
+		let mut data = HashMap::new();
+		data.insert("a".to_string(), "1".to_string());
+		data.insert("b".to_string(), "2".to_string());
+
+		// Act
+		let storage = MockStorage::with_data(data);
+
+		// Assert
+		assert_eq!(storage.length(), 2);
+		assert_eq!(storage.get_item("a"), Some("1".to_string()));
+		assert_eq!(storage.get_item("b"), Some("2".to_string()));
+	}
+
+	#[rstest]
+	fn test_mock_storage_key_by_index() {
+		// Arrange
+		let storage = MockStorage::new();
+		storage.set_item("alpha", "val");
+
+		// Act
+		let key_0 = storage.key(0);
+		let key_out_of_bounds = storage.key(99);
+
+		// Assert
+		assert_eq!(key_0, Some("alpha".to_string()));
+		assert_eq!(key_out_of_bounds, None);
+	}
+
+	#[rstest]
+	fn test_mock_storage_keys_values_entries() {
+		// Arrange
+		let storage = MockStorage::new();
+		storage.set_item("x", "10");
+		storage.set_item("y", "20");
+
+		// Act
+		let keys = storage.keys();
+		let values = storage.values();
+		let entries = storage.entries();
+
+		// Assert
+		assert_eq!(keys.len(), 2);
+		assert!(keys.contains(&"x".to_string()));
+		assert!(keys.contains(&"y".to_string()));
+		assert_eq!(values.len(), 2);
+		assert!(values.contains(&"10".to_string()));
+		assert!(values.contains(&"20".to_string()));
+		assert_eq!(entries.len(), 2);
+	}
+
+	#[rstest]
+	fn test_mock_storage_contains_key() {
+		// Arrange
+		let storage = MockStorage::new();
+		storage.set_item("present", "yes");
+
+		// Act & Assert
+		assert!(storage.contains_key("present"));
+		assert!(!storage.contains_key("absent"));
+	}
+
+	#[rstest]
+	fn test_mock_storage_length_after_ops() {
+		// Arrange
+		let storage = MockStorage::new();
+
+		// Act & Assert
+		assert_eq!(storage.length(), 0);
+		storage.set_item("a", "1");
+		assert_eq!(storage.length(), 1);
+		storage.set_item("b", "2");
+		assert_eq!(storage.length(), 2);
+		storage.remove_item("a");
+		assert_eq!(storage.length(), 1);
+		storage.clear();
+		assert_eq!(storage.length(), 0);
+	}
+
+	#[rstest]
+	fn test_mock_storage_overwrite() {
+		// Arrange
+		let storage = MockStorage::new();
+		storage.set_item("key", "old_value");
+
+		// Act
+		storage.set_item("key", "new_value");
+
+		// Assert
+		assert_eq!(storage.length(), 1);
+		assert_eq!(storage.get_item("key"), Some("new_value".to_string()));
+	}
+
+	#[rstest]
+	fn test_mock_storage_remove_nonexistent() {
+		// Arrange
+		let storage = MockStorage::new();
+		storage.set_item("key", "value");
+
+		// Act
+		storage.remove_item("nonexistent");
+
+		// Assert
+		assert_eq!(storage.length(), 1);
+		assert_eq!(storage.get_item("key"), Some("value".to_string()));
+	}
+
+	#[rstest]
+	fn test_mock_storage_empty_key_and_value() {
+		// Arrange
+		let storage = MockStorage::new();
+
+		// Act
+		storage.set_item("", "empty_key");
+		storage.set_item("empty_value", "");
+
+		// Assert
+		assert_eq!(storage.get_item(""), Some("empty_key".to_string()));
+		assert_eq!(storage.get_item("empty_value"), Some(String::new()));
+		assert_eq!(storage.length(), 2);
+	}
+
+	#[rstest]
+	fn test_mock_storage_clone_independence() {
+		// Arrange
+		let storage = MockStorage::new();
+		storage.set_item("shared", "data");
+		let cloned = storage.clone();
+
+		// Act
+		cloned.set_item("extra", "value");
+
+		// Assert: Rc<RefCell> means clones share the same data
+		assert_eq!(storage.length(), 2);
+		assert_eq!(storage.get_item("extra"), Some("value".to_string()));
+	}
+
+	// ==================== MockCookies tests ====================
+
+	#[rstest]
 	fn test_mock_cookies_operations() {
+		// Arrange
 		let cookies = MockCookies::new();
 
+		// Act & Assert
 		assert!(cookies.is_empty());
 
 		cookies.set("session", "abc123");
@@ -704,27 +852,227 @@ mod tests {
 		assert!(cookies.has("auth"));
 	}
 
-	#[test]
+	#[rstest]
+	fn test_mock_cookies_with_cookies_constructor() {
+		// Arrange
+		let mut initial = HashMap::new();
+		initial.insert("a".to_string(), "1".to_string());
+		initial.insert("b".to_string(), "2".to_string());
+
+		// Act
+		let cookies = MockCookies::with_cookies(initial);
+
+		// Assert
+		assert_eq!(cookies.len(), 2);
+		assert_eq!(cookies.get("a"), Some("1".to_string()));
+		assert_eq!(cookies.get("b"), Some("2".to_string()));
+	}
+
+	#[rstest]
+	fn test_mock_cookies_names_and_all() {
+		// Arrange
+		let cookies = MockCookies::new();
+		cookies.set("x", "10");
+		cookies.set("y", "20");
+
+		// Act
+		let names = cookies.names();
+		let all = cookies.all();
+
+		// Assert
+		assert_eq!(names.len(), 2);
+		assert!(names.contains(&"x".to_string()));
+		assert!(names.contains(&"y".to_string()));
+		assert_eq!(all.len(), 2);
+		assert_eq!(all.get("x"), Some(&"10".to_string()));
+		assert_eq!(all.get("y"), Some(&"20".to_string()));
+	}
+
+	#[rstest]
+	fn test_mock_cookies_is_empty_transitions() {
+		// Arrange
+		let cookies = MockCookies::new();
+
+		// Assert: initially empty
+		assert!(cookies.is_empty());
+
+		// Act: add a cookie
+		cookies.set("k", "v");
+
+		// Assert: no longer empty
+		assert!(!cookies.is_empty());
+
+		// Act: remove the cookie
+		cookies.remove("k");
+
+		// Assert: empty again
+		assert!(cookies.is_empty());
+	}
+
+	#[rstest]
+	fn test_mock_cookies_get_entry_with_options() {
+		// Arrange
+		let cookies = MockCookies::new();
+		cookies.set_with_options(
+			"tracking",
+			"abc",
+			CookieOptions {
+				max_age: Some(3600),
+				path: Some("/app".to_string()),
+				domain: Some("example.com".to_string()),
+				secure: true,
+				http_only: false,
+				same_site: Some(SameSite::Lax),
+				expires: None,
+			},
+		);
+
+		// Act
+		let entry = cookies.get_entry("tracking").unwrap();
+
+		// Assert
+		assert_eq!(entry.value, "abc");
+		assert_eq!(entry.options.max_age, Some(3600));
+		assert_eq!(entry.options.path, Some("/app".to_string()));
+		assert_eq!(entry.options.domain, Some("example.com".to_string()));
+		assert!(entry.options.secure);
+		assert!(!entry.options.http_only);
+		assert_eq!(entry.options.same_site, Some(SameSite::Lax));
+	}
+
+	#[rstest]
+	fn test_mock_cookies_get_entry_nonexistent() {
+		// Arrange
+		let cookies = MockCookies::new();
+
+		// Act
+		let entry = cookies.get_entry("missing");
+
+		// Assert
+		assert!(entry.is_none());
+	}
+
+	#[rstest]
+	fn test_mock_cookies_to_cookie_string_format() {
+		// Arrange
+		let mut initial = HashMap::new();
+		initial.insert("a".to_string(), "1".to_string());
+		let cookies = MockCookies::with_cookies(initial);
+
+		// Act
+		let cookie_str = cookies.to_cookie_string();
+
+		// Assert
+		assert_eq!(cookie_str, "a=1");
+	}
+
+	#[rstest]
+	fn test_mock_cookies_to_cookie_string_empty() {
+		// Arrange
+		let cookies = MockCookies::new();
+
+		// Act
+		let cookie_str = cookies.to_cookie_string();
+
+		// Assert
+		assert_eq!(cookie_str, "");
+	}
+
+	#[rstest]
+	fn test_mock_cookies_to_cookie_string_multiple() {
+		// Arrange
+		let cookies = MockCookies::new();
+		cookies.set("a", "1");
+		cookies.set("b", "2");
+
+		// Act
+		let cookie_str = cookies.to_cookie_string();
+
+		// Assert: order is not guaranteed, but format should be "key=value; key=value"
+		assert!(cookie_str.contains("a=1"));
+		assert!(cookie_str.contains("b=2"));
+		assert!(cookie_str.contains("; "));
+	}
+
+	#[rstest]
+	fn test_cookie_options_default() {
+		// Arrange & Act
+		let opts = CookieOptions::default();
+
+		// Assert
+		assert_eq!(opts.max_age, None);
+		assert_eq!(opts.expires, None);
+		assert_eq!(opts.path, None);
+		assert_eq!(opts.domain, None);
+		assert!(!opts.secure);
+		assert!(!opts.http_only);
+		assert!(opts.same_site.is_none());
+	}
+
+	#[rstest]
+	fn test_same_site_variants() {
+		// Arrange & Act & Assert
+		assert_eq!(SameSite::Strict, SameSite::Strict);
+		assert_eq!(SameSite::Lax, SameSite::Lax);
+		assert_eq!(SameSite::None, SameSite::None);
+		assert_ne!(SameSite::Strict, SameSite::Lax);
+		assert_ne!(SameSite::Lax, SameSite::None);
+		assert_ne!(SameSite::Strict, SameSite::None);
+	}
+
+	#[rstest]
+	fn test_mock_cookies_clear() {
+		// Arrange
+		let cookies = MockCookies::new();
+		cookies.set("a", "1");
+		cookies.set("b", "2");
+		assert_eq!(cookies.len(), 2);
+
+		// Act
+		cookies.clear();
+
+		// Assert
+		assert_eq!(cookies.len(), 0);
+		assert!(cookies.is_empty());
+	}
+
+	// ==================== MockFetch tests ====================
+
+	#[rstest]
 	fn test_mock_fetch_response_builders() {
+		// Arrange & Act
 		let json_response = MockFetchResponse::json(serde_json::json!({"status": "ok"}));
+
+		// Assert
 		assert_eq!(json_response.status, 200);
 		assert!(json_response.body.contains("status"));
 
+		// Arrange & Act
 		let text_response = MockFetchResponse::text("Hello, World!");
+
+		// Assert
 		assert_eq!(text_response.body, "Hello, World!");
 
+		// Arrange & Act
 		let error_response = MockFetchResponse::error(404, "Not found");
+
+		// Assert
 		assert_eq!(error_response.status, 404);
 		assert_eq!(error_response.status_text, "Not Found");
 
+		// Arrange & Act
 		let network_error = MockFetchResponse::network_error();
+
+		// Assert
 		assert!(network_error.network_error);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_mock_fetch_recording() {
+		// Arrange
 		let fetch = MockFetch::new();
 
+		// Act
 		fetch.record_call(MockFetchCall {
 			url: "/api/users".to_string(),
 			method: "GET".to_string(),
@@ -739,11 +1087,285 @@ mod tests {
 			body: Some(r#"{"title":"Test"}"#.to_string()),
 		});
 
+		// Assert
 		assert!(fetch.was_called("/api/users"));
 		assert!(fetch.was_called("/api/posts"));
 		assert!(!fetch.was_called("/api/comments"));
 
 		assert_eq!(fetch.call_count("/api/users"), 1);
 		assert_eq!(fetch.calls().len(), 2);
+	}
+
+	#[rstest]
+	fn test_mock_fetch_get_response_matching() {
+		// Arrange
+		let fetch = MockFetch::new();
+		let response = MockFetchResponse::json(serde_json::json!({"id": 1}));
+		fetch.mock_response("/api/data", response);
+
+		// Act
+		let result = fetch.get_response("/api/data");
+
+		// Assert
+		assert!(result.is_some());
+		let resp = result.unwrap();
+		assert_eq!(resp.status, 200);
+		assert!(resp.body.contains("id"));
+	}
+
+	#[rstest]
+	fn test_mock_fetch_get_response_unregistered_returns_none() {
+		// Arrange
+		let fetch = MockFetch::new();
+
+		// Act
+		let result = fetch.get_response("/unknown");
+
+		// Assert
+		assert!(result.is_none());
+	}
+
+	#[rstest]
+	fn test_mock_fetch_remove_mock() {
+		// Arrange
+		let fetch = MockFetch::new();
+		fetch.mock_response("/api/x", MockFetchResponse::text("hello"));
+		assert!(fetch.get_response("/api/x").is_some());
+
+		// Act
+		fetch.remove_mock("/api/x");
+
+		// Assert
+		assert!(fetch.get_response("/api/x").is_none());
+	}
+
+	#[rstest]
+	fn test_mock_fetch_clear_mocks() {
+		// Arrange
+		let fetch = MockFetch::new();
+		fetch.mock_response("/a", MockFetchResponse::text("1"));
+		fetch.mock_response("/b", MockFetchResponse::text("2"));
+
+		// Act
+		fetch.clear_mocks();
+
+		// Assert
+		assert!(fetch.get_response("/a").is_none());
+		assert!(fetch.get_response("/b").is_none());
+	}
+
+	#[rstest]
+	fn test_mock_fetch_calls_to_filtering() {
+		// Arrange
+		let fetch = MockFetch::new();
+		fetch.record_call(MockFetchCall {
+			url: "/api/a".to_string(),
+			method: "GET".to_string(),
+			headers: HashMap::new(),
+			body: None,
+		});
+		fetch.record_call(MockFetchCall {
+			url: "/api/b".to_string(),
+			method: "GET".to_string(),
+			headers: HashMap::new(),
+			body: None,
+		});
+		fetch.record_call(MockFetchCall {
+			url: "/api/a".to_string(),
+			method: "POST".to_string(),
+			headers: HashMap::new(),
+			body: Some("data".to_string()),
+		});
+
+		// Act
+		let calls_a = fetch.calls_to("/api/a");
+		let calls_b = fetch.calls_to("/api/b");
+		let calls_c = fetch.calls_to("/api/c");
+
+		// Assert
+		assert_eq!(calls_a.len(), 2);
+		assert_eq!(calls_b.len(), 1);
+		assert_eq!(calls_c.len(), 0);
+	}
+
+	#[rstest]
+	fn test_mock_fetch_clear_calls() {
+		// Arrange
+		let fetch = MockFetch::new();
+		fetch.record_call(MockFetchCall {
+			url: "/api/x".to_string(),
+			method: "GET".to_string(),
+			headers: HashMap::new(),
+			body: None,
+		});
+		assert_eq!(fetch.calls().len(), 1);
+
+		// Act
+		fetch.clear_calls();
+
+		// Assert
+		assert_eq!(fetch.calls().len(), 0);
+		assert!(!fetch.was_called("/api/x"));
+	}
+
+	#[rstest]
+	fn test_mock_fetch_call_count_multiple() {
+		// Arrange
+		let fetch = MockFetch::new();
+		for _ in 0..5 {
+			fetch.record_call(MockFetchCall {
+				url: "/api/repeat".to_string(),
+				method: "GET".to_string(),
+				headers: HashMap::new(),
+				body: None,
+			});
+		}
+		fetch.record_call(MockFetchCall {
+			url: "/api/other".to_string(),
+			method: "GET".to_string(),
+			headers: HashMap::new(),
+			body: None,
+		});
+
+		// Act & Assert
+		assert_eq!(fetch.call_count("/api/repeat"), 5);
+		assert_eq!(fetch.call_count("/api/other"), 1);
+		assert_eq!(fetch.call_count("/api/none"), 0);
+	}
+
+	// ==================== MockFetchResponse tests ====================
+
+	#[rstest]
+	fn test_mock_fetch_response_json_content_type() {
+		// Arrange & Act
+		let resp = MockFetchResponse::json(serde_json::json!([1, 2, 3]));
+
+		// Assert
+		assert_eq!(
+			resp.headers.get("content-type"),
+			Some(&"application/json".to_string())
+		);
+		assert_eq!(resp.status, 200);
+		assert_eq!(resp.status_text, "OK");
+		assert!(!resp.network_error);
+	}
+
+	#[rstest]
+	fn test_mock_fetch_response_text_content_type() {
+		// Arrange & Act
+		let resp = MockFetchResponse::text("plain text");
+
+		// Assert
+		assert_eq!(
+			resp.headers.get("content-type"),
+			Some(&"text/plain".to_string())
+		);
+		assert_eq!(resp.body, "plain text");
+		assert_eq!(resp.status, 200);
+		assert!(!resp.network_error);
+	}
+
+	#[rstest]
+	fn test_mock_fetch_response_with_status() {
+		// Arrange
+		let resp = MockFetchResponse::text("created");
+
+		// Act
+		let resp = resp.with_status(201);
+
+		// Assert
+		assert_eq!(resp.status, 201);
+		assert_eq!(resp.status_text, "Created");
+	}
+
+	#[rstest]
+	fn test_mock_fetch_response_with_header() {
+		// Arrange
+		let resp = MockFetchResponse::text("body");
+
+		// Act
+		let resp = resp
+			.with_header("X-Custom", "value1")
+			.with_header("X-Another", "value2");
+
+		// Assert
+		assert_eq!(resp.headers.get("X-Custom"), Some(&"value1".to_string()));
+		assert_eq!(resp.headers.get("X-Another"), Some(&"value2".to_string()));
+		// Original content-type header should still be present
+		assert_eq!(
+			resp.headers.get("content-type"),
+			Some(&"text/plain".to_string())
+		);
+	}
+
+	#[rstest]
+	fn test_mock_fetch_response_error_various_statuses() {
+		// Arrange & Act & Assert
+		let resp_400 = MockFetchResponse::error(400, "bad");
+		assert_eq!(resp_400.status, 400);
+		assert_eq!(resp_400.status_text, "Bad Request");
+
+		let resp_500 = MockFetchResponse::error(500, "fail");
+		assert_eq!(resp_500.status, 500);
+		assert_eq!(resp_500.status_text, "Internal Server Error");
+
+		let resp_unknown = MockFetchResponse::error(999, "mystery");
+		assert_eq!(resp_unknown.status, 999);
+		assert_eq!(resp_unknown.status_text, "Unknown");
+	}
+
+	#[rstest]
+	fn test_mock_fetch_response_network_error_fields() {
+		// Arrange & Act
+		let resp = MockFetchResponse::network_error();
+
+		// Assert
+		assert!(resp.network_error);
+		assert_eq!(resp.status, 0);
+		assert_eq!(resp.status_text, "");
+		assert!(resp.headers.is_empty());
+		assert_eq!(resp.body, "");
+	}
+
+	// ==================== MockTimers tests ====================
+
+	#[rstest]
+	fn test_mock_timers_initial_state() {
+		// Arrange & Act
+		let timers = MockTimers::new();
+
+		// Assert
+		assert_eq!(timers.now(), 0.0);
+		assert_eq!(timers.pending_count(), 0);
+	}
+
+	#[rstest]
+	fn test_mock_timers_advance_by() {
+		// Arrange
+		let timers = MockTimers::new();
+
+		// Act
+		timers.advance_by(100);
+
+		// Assert
+		assert_eq!(timers.now(), 100.0);
+
+		// Act
+		timers.advance_by(50);
+
+		// Assert
+		assert_eq!(timers.now(), 150.0);
+	}
+
+	#[rstest]
+	fn test_mock_timers_clear_all() {
+		// Arrange
+		let timers = MockTimers::new();
+
+		// Act
+		timers.clear_all();
+
+		// Assert
+		assert_eq!(timers.pending_count(), 0);
 	}
 }

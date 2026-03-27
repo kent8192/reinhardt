@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-query-macros"
-version = "0.1.0-rc.11"
+version = "0.1.0-rc.14"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -11,7 +11,7 @@ repository.workspace = true
 proc-macro = true
 
 [dependencies]
-syn = { version = "2.0", features = ["full", "extra-traits"] }
-quote = "1.0"
-proc-macro2 = "1.0"
+syn = { workspace = true, features = ["full", "extra-traits"] }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
 heck = "0.5"

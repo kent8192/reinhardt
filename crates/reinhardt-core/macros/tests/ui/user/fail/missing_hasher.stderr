@@ -1,0 +1,7 @@
+error: #[user] requires 'hasher' argument: #[user(hasher = YourHasher)]
+ --> tests/ui/user/fail/missing_hasher.rs:4:1
+  |
+4 | #[user(username_field = "email")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `user` (in Nightly builds, run with -Z macro-backtrace for more info)

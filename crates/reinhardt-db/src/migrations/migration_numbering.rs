@@ -47,28 +47,20 @@ impl MigrationNumbering {
 	pub fn next_number_cached(migrations_dir: &Path, app_label: &str) -> String {
 		let cache_key = format!("{}:{}", migrations_dir.display(), app_label);
 
-		// Try to get from cache
-		{
-			let cache = NUMBERING_CACHE.read().unwrap_or_else(|e| e.into_inner());
-			if let Some(&cached_num) = cache.get(&cache_key) {
-				// Increment and update cache
-				drop(cache); // Release read lock
-				let next = cached_num + 1;
-				NUMBERING_CACHE
-					.write()
-					.unwrap_or_else(|e| e.into_inner())
-					.insert(cache_key, next);
-				return Self::format_number(next);
-			}
-		}
+		// Acquire write lock once for the entire read-modify-write operation
+		let mut cache = NUMBERING_CACHE.write().unwrap_or_else(|e| e.into_inner());
 
-		// Cache miss - scan filesystem
-		let highest = Self::get_highest_number(migrations_dir, app_label);
-		NUMBERING_CACHE
-			.write()
-			.unwrap_or_else(|e| e.into_inner())
-			.insert(cache_key, highest);
-		Self::format_number(highest + 1)
+		if let Some(cached_num) = cache.get_mut(&cache_key) {
+			let next = *cached_num + 1;
+			*cached_num = next;
+			Self::format_number(next)
+		} else {
+			// Cache miss - scan filesystem
+			let highest = Self::get_highest_number(migrations_dir, app_label);
+			// Store highest + 1 so the next cache hit returns the correct next number
+			cache.insert(cache_key, highest + 1);
+			Self::format_number(highest + 1)
+		}
 	}
 
 	/// Get next migration number for an app (non-cached version)

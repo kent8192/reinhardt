@@ -975,7 +975,7 @@ fn test_insert_builder_with_on_conflict_constraint_postgres() {
 		.unwrap();
 
 	// Assert
-	assert!(sql.contains("ON CONSTRAINT users_email_key"));
+	assert!(sql.contains(r#"ON CONSTRAINT "users_email_key""#));
 }
 
 #[rstest]
@@ -1122,8 +1122,9 @@ fn test_select_builder_with_limit() {
 	let (sql, _) = SelectBuilder::new(backend).from("users").limit(10).build();
 
 	// Assert
+	// LIMIT is parameterized as $1 by build_select() (commit 0c337c302)
 	assert!(sql.contains("LIMIT"));
-	assert!(sql.contains("10"));
+	assert!(sql.contains("$1"));
 }
 
 #[rstest]
@@ -1340,7 +1341,7 @@ fn test_insert_builder_legacy_on_conflict_do_nothing() {
 		.unwrap();
 
 	// Assert
-	assert!(sql.contains("ON CONFLICT (email) DO NOTHING"));
+	assert!(sql.contains(r#"ON CONFLICT ("email") DO NOTHING"#));
 }
 
 #[rstest]
@@ -1357,8 +1358,8 @@ fn test_insert_builder_legacy_on_conflict_do_update() {
 		.unwrap();
 
 	// Assert
-	assert!(sql.contains("ON CONFLICT (email) DO UPDATE SET"));
-	assert!(sql.contains("name = EXCLUDED.name"));
+	assert!(sql.contains(r#"ON CONFLICT ("email") DO UPDATE SET"#));
+	assert!(sql.contains(r#""name" = EXCLUDED."name""#));
 }
 
 // ==================== OnConflictClauseAction tests ====================

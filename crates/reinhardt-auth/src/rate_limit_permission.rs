@@ -3,12 +3,13 @@
 //! Provides permission checking based on rate limits, integrating with
 //! the throttling backend for distributed rate limiting support.
 
+// This module uses the deprecated User trait for backward compatibility.
+// RateLimitPermission reads user.id() from PermissionContext which holds Box<dyn User>.
+#![allow(deprecated)]
 use crate::{Permission, PermissionContext};
 use async_trait::async_trait;
 pub use reinhardt_core::RateLimitStrategy;
 use reinhardt_throttling::ThrottleBackend;
-use std::net::IpAddr;
-use std::str::FromStr;
 use std::sync::Arc;
 
 // Type alias to simplify custom key extraction function signature
@@ -165,33 +166,12 @@ impl<B: ThrottleBackend> RateLimitPermission<B> {
 	}
 
 	/// Extract IP address from request
+	///
+	/// Delegates to `Request::get_client_ip()` which only trusts proxy headers
+	/// (X-Forwarded-For, X-Real-IP) when the request originates from a configured
+	/// trusted proxy. Falls back to the actual connection IP otherwise.
 	fn extract_ip(&self, context: &PermissionContext) -> Option<String> {
-		// Try X-Forwarded-For header first
-		if let Some(forwarded) = context.request.headers.get("X-Forwarded-For")
-			&& let Ok(forwarded_str) = forwarded.to_str()
-		{
-			// Take the first IP in the chain
-			if let Some(first_ip) = forwarded_str.split(',').next()
-				&& let Ok(ip) = IpAddr::from_str(first_ip.trim())
-			{
-				return Some(ip.to_string());
-			}
-		}
-
-		// Try X-Real-IP header
-		if let Some(real_ip) = context.request.headers.get("X-Real-IP")
-			&& let Ok(ip_str) = real_ip.to_str()
-			&& let Ok(ip) = IpAddr::from_str(ip_str.trim())
-		{
-			return Some(ip.to_string());
-		}
-
-		// Extract from socket address if available
-		if let Some(remote_addr) = context.request.remote_addr {
-			return Some(remote_addr.ip().to_string());
-		}
-
-		None
+		context.request.get_client_ip().map(|ip| ip.to_string())
 	}
 
 	/// Extract user ID from context
@@ -200,22 +180,31 @@ impl<B: ThrottleBackend> RateLimitPermission<B> {
 	}
 
 	/// Generate rate limit key based on strategy
+	///
+	/// If a custom key function is configured, it takes priority over
+	/// the built-in strategy. The built-in strategy is only used as a
+	/// fallback when no custom key function is set.
 	fn generate_key(&self, context: &PermissionContext) -> Option<String> {
-		let base_key = match self.config.strategy {
-			RateLimitStrategy::PerIp => self.extract_ip(context),
-			RateLimitStrategy::PerUser => self.extract_user_id(context),
-			RateLimitStrategy::PerIpAndUser => {
-				if let (Some(ip), Some(user_id)) =
-					(self.extract_ip(context), self.extract_user_id(context))
-				{
-					Some(format!("{}:{}", ip, user_id))
-				} else {
-					None
+		// Check custom key function first; fall back to built-in strategy
+		let base_key = if let Some(ref custom_fn) = self.custom_key_fn {
+			custom_fn(context)
+		} else {
+			match self.config.strategy {
+				RateLimitStrategy::PerIp => self.extract_ip(context),
+				RateLimitStrategy::PerUser => self.extract_user_id(context),
+				RateLimitStrategy::PerIpAndUser => {
+					if let (Some(ip), Some(user_id)) =
+						(self.extract_ip(context), self.extract_user_id(context))
+					{
+						Some(format!("{}:{}", ip, user_id))
+					} else {
+						None
+					}
 				}
-			}
-			RateLimitStrategy::PerRoute => {
-				// Use request path as key
-				Some(context.request.uri.path().to_string())
+				RateLimitStrategy::PerRoute => {
+					// Use request path as key
+					Some(context.request.uri.path().to_string())
+				}
 			}
 		};
 
@@ -331,8 +320,10 @@ mod tests {
 	use super::*;
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method};
-	use reinhardt_http::Request;
+	use reinhardt_http::{Request, TrustedProxies};
 	use reinhardt_throttling::MemoryBackend;
+	use rstest::rstest;
+	use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 	fn create_test_request(headers: HeaderMap) -> Request {
 		Request::builder()
@@ -344,15 +335,26 @@ mod tests {
 			.unwrap()
 	}
 
+	/// Create a test request with remote_addr set for IP-based tests
+	fn create_test_request_with_addr(headers: HeaderMap, addr: SocketAddr) -> Request {
+		Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.headers(headers)
+			.remote_addr(addr)
+			.body(Bytes::new())
+			.build()
+			.unwrap()
+	}
+
 	#[tokio::test]
 	async fn test_rate_limit_permission_ip_strategy() {
+		// Arrange - use remote_addr directly (no proxy headers)
 		let backend = Arc::new(MemoryBackend::new());
 		let permission = RateLimitPermission::new(backend, RateLimitStrategy::PerIp, 2.0, 1.0);
 
-		let mut headers = HeaderMap::new();
-		headers.insert("X-Forwarded-For", "192.168.1.100".parse().unwrap());
-
-		let request = create_test_request(headers);
+		let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)), 12345);
+		let request = create_test_request_with_addr(HeaderMap::new(), addr);
 		let context = PermissionContext {
 			request: &request,
 			is_authenticated: false,
@@ -361,11 +363,73 @@ mod tests {
 			user: None,
 		};
 
+		// Act & Assert
 		// First two requests should be allowed
 		assert!(permission.has_permission(&context).await);
 		assert!(permission.has_permission(&context).await);
 
 		// Third request should be denied
+		assert!(!permission.has_permission(&context).await);
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_rate_limit_permission_ip_strategy_trusted_proxy() {
+		// Arrange - X-Forwarded-For from a trusted proxy
+		let backend = Arc::new(MemoryBackend::new());
+		let permission = RateLimitPermission::new(backend, RateLimitStrategy::PerIp, 2.0, 1.0);
+
+		let proxy_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+		let proxy_addr = SocketAddr::new(proxy_ip, 8080);
+
+		let mut headers = HeaderMap::new();
+		headers.insert("X-Forwarded-For", "192.168.1.100".parse().unwrap());
+
+		let request = create_test_request_with_addr(headers, proxy_addr);
+		request.set_trusted_proxies(TrustedProxies::new(vec![proxy_ip]));
+
+		let context = PermissionContext {
+			request: &request,
+			is_authenticated: false,
+			is_admin: false,
+			is_active: false,
+			user: None,
+		};
+
+		// Act & Assert - uses 192.168.1.100 from X-Forwarded-For (trusted proxy)
+		assert!(permission.has_permission(&context).await);
+		assert!(permission.has_permission(&context).await);
+		assert!(!permission.has_permission(&context).await);
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_rate_limit_permission_ip_strategy_untrusted_proxy_header_ignored() {
+		// Arrange - X-Forwarded-For from an UNTRUSTED source
+		let backend = Arc::new(MemoryBackend::new());
+		let permission = RateLimitPermission::new(backend, RateLimitStrategy::PerIp, 2.0, 1.0);
+
+		let actual_ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50));
+		let actual_addr = SocketAddr::new(actual_ip, 12345);
+
+		let mut headers = HeaderMap::new();
+		// Attacker spoofs X-Forwarded-For to bypass rate limiting
+		headers.insert("X-Forwarded-For", "1.2.3.4".parse().unwrap());
+
+		let request = create_test_request_with_addr(headers, actual_addr);
+		// No trusted proxies configured
+
+		let context = PermissionContext {
+			request: &request,
+			is_authenticated: false,
+			is_admin: false,
+			is_active: false,
+			user: None,
+		};
+
+		// Act & Assert - should use actual connection IP (203.0.113.50), NOT spoofed 1.2.3.4
+		assert!(permission.has_permission(&context).await);
+		assert!(permission.has_permission(&context).await);
 		assert!(!permission.has_permission(&context).await);
 	}
 
@@ -472,13 +536,12 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_rate_limit_permission_with_scope() {
+		// Arrange - use remote_addr directly
 		let backend = Arc::new(MemoryBackend::new());
 		let permission = RateLimitPermission::new(backend, RateLimitStrategy::PerIp, 2.0, 1.0);
 
-		let mut headers = HeaderMap::new();
-		headers.insert("X-Real-IP", "10.0.0.1".parse().unwrap());
-
-		let request = create_test_request(headers);
+		let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 12345);
+		let request = create_test_request_with_addr(HeaderMap::new(), addr);
 		let context = PermissionContext {
 			request: &request,
 			is_authenticated: false,
@@ -487,7 +550,7 @@ mod tests {
 			user: None,
 		};
 
-		// Should work with scoped keys
+		// Act & Assert
 		assert!(permission.has_permission(&context).await);
 		assert!(permission.has_permission(&context).await);
 		assert!(!permission.has_permission(&context).await);
@@ -495,12 +558,85 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_rate_limit_permission_x_real_ip_header() {
+		// Arrange - X-Real-IP from trusted proxy
 		let backend = Arc::new(MemoryBackend::new());
 		let permission = RateLimitPermission::new(backend, RateLimitStrategy::PerIp, 1.0, 1.0);
+
+		let proxy_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+		let proxy_addr = SocketAddr::new(proxy_ip, 8080);
 
 		let mut headers = HeaderMap::new();
 		headers.insert("X-Real-IP", "172.16.0.1".parse().unwrap());
 
+		let request = create_test_request_with_addr(headers, proxy_addr);
+		request.set_trusted_proxies(TrustedProxies::new(vec![proxy_ip]));
+
+		let context = PermissionContext {
+			request: &request,
+			is_authenticated: false,
+			is_admin: false,
+			is_active: false,
+			user: None,
+		};
+
+		// Act & Assert
+		// First request allowed
+		assert!(permission.has_permission(&context).await);
+		// Second request denied
+		assert!(!permission.has_permission(&context).await);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_custom_key_fn_takes_priority_over_builtin_strategy() {
+		// Arrange
+		let backend = Arc::new(MemoryBackend::new());
+		// Use PerIp strategy as the built-in, but override with custom key fn
+		let permission = RateLimitPermission::new(backend, RateLimitStrategy::PerIp, 2.0, 1.0)
+			.with_custom_key(|_ctx| Some("my_custom_key".to_string()));
+
+		// Create two requests with different IPs -- they should share the
+		// same rate limit because the custom key function returns a fixed key
+		let mut headers_a = HeaderMap::new();
+		headers_a.insert("X-Forwarded-For", "10.0.0.1".parse().unwrap());
+		let request_a = create_test_request(headers_a);
+		let ctx_a = PermissionContext {
+			request: &request_a,
+			is_authenticated: false,
+			is_admin: false,
+			is_active: false,
+			user: None,
+		};
+
+		let mut headers_b = HeaderMap::new();
+		headers_b.insert("X-Forwarded-For", "10.0.0.2".parse().unwrap());
+		let request_b = create_test_request(headers_b);
+		let ctx_b = PermissionContext {
+			request: &request_b,
+			is_authenticated: false,
+			is_admin: false,
+			is_active: false,
+			user: None,
+		};
+
+		// Act & Assert
+		// Both IPs share a single bucket via the custom key
+		assert!(permission.has_permission(&ctx_a).await);
+		assert!(permission.has_permission(&ctx_b).await);
+
+		// Third request from either IP should be denied (shared limit of 2)
+		assert!(!permission.has_permission(&ctx_a).await);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_custom_key_fn_returning_none_denies_request() {
+		// Arrange
+		let backend = Arc::new(MemoryBackend::new());
+		let permission = RateLimitPermission::new(backend, RateLimitStrategy::PerIp, 10.0, 1.0)
+			.with_custom_key(|_ctx| None);
+
+		let headers = HeaderMap::new();
 		let request = create_test_request(headers);
 		let context = PermissionContext {
 			request: &request,
@@ -510,9 +646,8 @@ mod tests {
 			user: None,
 		};
 
-		// First request allowed
-		assert!(permission.has_permission(&context).await);
-		// Second request denied
+		// Act & Assert
+		// Custom key fn returns None, so request should be denied
 		assert!(!permission.has_permission(&context).await);
 	}
 }

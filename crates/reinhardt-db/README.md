@@ -154,7 +154,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt-db = "0.1.0-alpha.1"
+reinhardt-db = "0.1.0-rc.13"
 ```
 
 ### Optional Features
@@ -163,21 +163,23 @@ Enable specific features based on your needs:
 
 ```toml
 [dependencies]
-reinhardt-db = { version = "0.1.0-alpha.1", features = ["postgres", "orm", "migrations"] }
+reinhardt-db = { version = "0.1.0-rc.13", features = ["postgres", "orm", "migrations"] }
 ```
 
 Available features:
 
-- `database` (default): Low-level database layer
 - `backends` (default): Backend implementations
 - `pool` (default): Connection pooling
+- `postgres` (default): PostgreSQL support
 - `orm` (default): ORM functionality
 - `migrations` (default): Migration system
 - `hybrid` (default): Multi-database support
 - `associations` (default): Relationship management
-- `postgres`: PostgreSQL support
 - `sqlite`: SQLite support
 - `mysql`: MySQL support
+- `nosql`: NoSQL database support (MongoDB)
+- `di`: DI integration for `DatabaseConnection`
+- `contenttypes`: Generic relations support
 - `all-databases`: All database backends
 
 ## Usage
@@ -260,7 +262,7 @@ let user = User::objects()
 ### Create Migrations
 
 ```rust
-use reinhardt::db::{Migration, CreateModel, AddField};
+use reinhardt::db::migrations::{Migration, CreateModel, AddField};
 
 // Create a new migration
 let migration = Migration::new("0001_initial")
@@ -280,10 +282,10 @@ migration.apply(db).await?;
 ### Connection Pooling
 
 ```rust
-use reinhardt::db::Pool;
+use reinhardt_db::pool::ConnectionPool;
 
 // Create a connection pool
-let pool = Pool::new("postgres://user:pass@localhost/db")
+let pool = ConnectionPool::new("postgres://user:pass@localhost/db")
     .max_connections(10)
     .build()
     .await?;
@@ -354,12 +356,8 @@ If both Docker and Podman are installed:
 # Run all database tests (requires Docker)
 cargo test --package reinhardt-db --all-features
 
-# Run tests for specific module
-cargo test --package reinhardt-orm --all-features
-cargo test --package reinhardt-migrations --all-features
-
 # Run with PostgreSQL container (TestContainers automatically starts PostgreSQL)
-cargo test --package reinhardt-orm --test orm_integration_tests
+cargo test --package reinhardt-db --test orm_integration_tests
 ```
 
 ### TestContainers Integration
@@ -750,8 +748,8 @@ Optimize how related objects are loaded:
 
 - **Database Backend Support**
   - SQLite support via sqlx
-  - PostgreSQL support via reinhardt-backends
-  - MySQL support via reinhardt-backends
+  - PostgreSQL support via sqlx
+  - MySQL support via sqlx
   - SQL dialect abstraction for cross-database compatibility
 
 - **Dependency Injection Integration**

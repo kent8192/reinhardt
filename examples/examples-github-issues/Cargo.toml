@@ -14,7 +14,7 @@ reinhardt = { workspace = true, features = [
 	"minimal",        # Core HTTP/Routing/DI/Server
 	"graphql",        # GraphQL support
 	"auth-jwt",       # JWT authentication
-	"argon2-hasher",  # Required for DefaultUser
+	"argon2-hasher",  # Required for Argon2Hasher (User model password hashing)
 	"client-router",  # Client-side routing support (required for #[routes] macro)
 	"conf",           # Settings configuration (DefaultSource, Settings, SettingsBuilder)
 	"commands",       # Management commands (runserver, etc.)
@@ -43,6 +43,7 @@ tokio = { version = "1", features = ["full"] }
 [dev-dependencies]
 rstest = "0.26.1"
 reqwest = { version = "0.12", features = ["json"] }
+serial_test = "3"
 tokio = { version = "1", features = ["full"] }
 argon2 = { version = "0.5", features = ["std"] }
 

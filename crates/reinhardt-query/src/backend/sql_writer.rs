@@ -18,10 +18,10 @@ use crate::value::{Value, Values};
 /// let mut writer = SqlWriter::new();
 /// writer.push("SELECT");
 /// writer.push_space();
-/// writer.push_identifier("id", |s| format!("\"{}\"", s));
+/// writer.push_identifier("id", |s| format!("\"{}\"", s.replace('"', "\"\"")));
 /// writer.push(",");
 /// writer.push_space();
-/// writer.push_identifier("name", |s| format!("\"{}\"", s));
+/// writer.push_identifier("name", |s| format!("\"{}\"", s.replace('"', "\"\"")));
 ///
 /// let sql = writer.into_string();
 /// // sql: "SELECT \"id\", \"name\""
@@ -232,7 +232,7 @@ mod tests {
 	#[test]
 	fn test_sql_writer_identifier() {
 		let mut writer = SqlWriter::new();
-		writer.push_identifier("user", |s| format!("\"{}\"", s));
+		writer.push_identifier("user", |s| format!("\"{}\"", s.replace('"', "\"\"")));
 
 		assert_eq!(writer.sql(), "\"user\"");
 	}
@@ -277,7 +277,7 @@ mod tests {
 	fn test_sql_writer_list() {
 		let mut writer = SqlWriter::new();
 		writer.push_list(vec!["a", "b", "c"], ", ", |w, item| {
-			w.push_identifier(item, |s| format!("\"{}\"", s));
+			w.push_identifier(item, |s| format!("\"{}\"", s.replace('"', "\"\"")));
 		});
 
 		assert_eq!(writer.sql(), "\"a\", \"b\", \"c\"");
@@ -303,5 +303,34 @@ mod tests {
 		let (sql, values) = writer.finish();
 		assert_eq!(sql, "SELECT $1");
 		assert_eq!(values.len(), 1);
+	}
+
+	#[test]
+	fn test_sql_writer_identifier_with_embedded_double_quotes() {
+		// Arrange
+		let mut writer = SqlWriter::new();
+
+		// Act - identifier containing double quotes (SQL injection attempt)
+		writer.push_identifier("table\"; DROP TABLE users; --", |s| {
+			format!("\"{}\"", s.replace('"', "\"\""))
+		});
+
+		// Assert - double quotes must be escaped
+		assert_eq!(writer.sql(), "\"table\"\"; DROP TABLE users; --\"");
+	}
+
+	#[test]
+	fn test_sql_writer_list_with_special_identifiers() {
+		// Arrange
+		let mut writer = SqlWriter::new();
+		let items = vec!["normal", "has\"quote"];
+
+		// Act
+		writer.push_list(items, ", ", |w, item| {
+			w.push_identifier(item, |s| format!("\"{}\"", s.replace('"', "\"\"")));
+		});
+
+		// Assert
+		assert_eq!(writer.sql(), "\"normal\", \"has\"\"quote\"");
 	}
 }

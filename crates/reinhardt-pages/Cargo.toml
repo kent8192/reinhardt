@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-pages"
-version = "0.1.0-rc.11"
+version = "0.1.0-rc.14"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -175,7 +175,7 @@ reinhardt-forms = { workspace = true }
 wasm-bindgen-test = "0.3.56"
 serial_test = "3"
 trybuild = "1.0"
-criterion = "0.5"
+criterion = { workspace = true }
 rstest = { workspace = true }
 proptest = { workspace = true }
 tempfile = { workspace = true }

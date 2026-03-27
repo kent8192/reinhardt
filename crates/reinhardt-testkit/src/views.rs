@@ -278,3 +278,417 @@ impl reinhardt_views::View for ErrorTestView {
 		}
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	// ========================================================================
+	// create_request tests
+	// ========================================================================
+
+	#[rstest]
+	fn test_create_request_basic_get() {
+		// Arrange
+		let method = Method::GET;
+		let path = "/api/items/";
+
+		// Act
+		let request = create_request(method.clone(), path, None, None, None);
+
+		// Assert
+		assert_eq!(request.method, Method::GET);
+		assert_eq!(request.uri.path(), "/api/items/");
+		assert!(request.uri.query().is_none());
+	}
+
+	#[rstest]
+	fn test_create_request_with_query_params() {
+		// Arrange
+		let method = Method::GET;
+		let path = "/api/items/";
+		let mut params = HashMap::new();
+		params.insert("page".to_string(), "2".to_string());
+		params.insert("limit".to_string(), "10".to_string());
+
+		// Act
+		let request = create_request(method, path, Some(params), None, None);
+
+		// Assert
+		let query = request.uri.query().expect("query string should be present");
+		assert!(query.contains("page=2"));
+		assert!(query.contains("limit=10"));
+	}
+
+	#[rstest]
+	fn test_create_request_with_body() {
+		// Arrange
+		let method = Method::POST;
+		let path = "/api/items/";
+		let body = Bytes::from(b"hello body".to_vec());
+
+		// Act
+		let request = create_request(method, path, None, None, Some(body.clone()));
+
+		// Assert
+		assert_eq!(request.method, Method::POST);
+		assert_eq!(request.body(), &body);
+	}
+
+	#[rstest]
+	fn test_create_request_with_headers_param() {
+		// Arrange
+		let method = Method::GET;
+		let path = "/api/items/";
+		let mut headers = HeaderMap::new();
+		headers.insert(
+			hyper::header::ACCEPT,
+			hyper::header::HeaderValue::from_static("application/json"),
+		);
+
+		// Act
+		let request = create_request(method, path, None, Some(headers), None);
+
+		// Assert
+		assert_eq!(
+			request.headers.get(hyper::header::ACCEPT).unwrap(),
+			"application/json"
+		);
+	}
+
+	#[rstest]
+	fn test_create_request_with_path_params() {
+		// Arrange
+		let method = Method::GET;
+		let path = "/api/items/1/";
+		let mut path_params = HashMap::new();
+		path_params.insert("id".to_string(), "1".to_string());
+
+		// Act
+		let request =
+			create_request_with_path_params(method, path, path_params.clone(), None, None, None);
+
+		// Assert
+		assert_eq!(request.path_params.get("id").unwrap(), "1");
+		assert_eq!(request.path_params.len(), 1);
+	}
+
+	#[rstest]
+	fn test_create_request_with_headers_fn() {
+		// Arrange
+		let method = Method::POST;
+		let path = "/api/items/";
+		let mut headers = HashMap::new();
+		headers.insert("x-custom-header".to_string(), "custom-value".to_string());
+		headers.insert("authorization".to_string(), "Bearer token123".to_string());
+
+		// Act
+		let request = create_request_with_headers(method, path, headers, None);
+
+		// Assert
+		assert_eq!(
+			request.headers.get("x-custom-header").unwrap(),
+			"custom-value"
+		);
+		assert_eq!(
+			request.headers.get("authorization").unwrap(),
+			"Bearer token123"
+		);
+	}
+
+	#[rstest]
+	fn test_create_json_request() {
+		// Arrange
+		let method = Method::POST;
+		let path = "/api/items/";
+		let json_data = serde_json::json!({"name": "test", "value": 42});
+
+		// Act
+		let request = create_json_request(method, path, &json_data);
+
+		// Assert
+		assert_eq!(request.method, Method::POST);
+		assert_eq!(
+			request.headers.get(hyper::header::CONTENT_TYPE).unwrap(),
+			"application/json"
+		);
+		let body_bytes = request.body();
+		let parsed: serde_json::Value = serde_json::from_slice(body_bytes).unwrap();
+		assert_eq!(parsed, json_data);
+	}
+
+	// ========================================================================
+	// Test data generation tests
+	// ========================================================================
+
+	#[rstest]
+	fn test_create_test_objects_count() {
+		// Arrange & Act
+		let objects = create_test_objects();
+
+		// Assert
+		assert_eq!(objects.len(), 3);
+	}
+
+	#[rstest]
+	fn test_create_test_objects_fields() {
+		// Arrange & Act
+		let objects = create_test_objects();
+
+		// Assert
+		for (i, obj) in objects.iter().enumerate() {
+			assert_eq!(obj.id, Some((i + 1) as i64));
+			assert!(
+				!obj.name.is_empty(),
+				"name should not be empty for object {}",
+				i
+			);
+			assert!(
+				!obj.slug.is_empty(),
+				"slug should not be empty for object {}",
+				i
+			);
+			assert!(
+				!obj.created_at.is_empty(),
+				"created_at should not be empty for object {}",
+				i
+			);
+		}
+	}
+
+	#[rstest]
+	fn test_create_api_test_objects_count() {
+		// Arrange & Act
+		let objects = create_api_test_objects();
+
+		// Assert
+		assert_eq!(objects.len(), 3);
+	}
+
+	#[rstest]
+	fn test_create_large_test_objects_100() {
+		// Arrange
+		let count = 100;
+
+		// Act
+		let objects = create_large_test_objects(count);
+
+		// Assert
+		assert_eq!(objects.len(), 100);
+		for (i, obj) in objects.iter().enumerate() {
+			assert_eq!(obj.id, Some(i as i64));
+			assert_eq!(obj.name, format!("Object {}", i));
+			assert_eq!(obj.slug, format!("object-{}", i));
+		}
+	}
+
+	// ========================================================================
+	// SimpleTestView tests
+	// ========================================================================
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_simple_test_view_new_dispatch_get() {
+		// Arrange
+		let view = SimpleTestView::new("Hello, World!");
+		let request = create_request(Method::GET, "/test/", None, None, None);
+
+		// Act
+		let response = reinhardt_views::View::dispatch(&view, request).await;
+
+		// Assert
+		assert!(response.is_ok());
+		let resp = response.unwrap();
+		assert_eq!(resp.body.as_ref(), b"Hello, World!");
+	}
+
+	#[rstest]
+	fn test_simple_test_view_with_methods() {
+		// Arrange & Act
+		let view = SimpleTestView::new("content").with_methods(vec![
+			Method::GET,
+			Method::POST,
+			Method::PUT,
+		]);
+
+		// Assert
+		assert_eq!(view.allowed_methods.len(), 3);
+		assert!(view.allowed_methods.contains(&Method::GET));
+		assert!(view.allowed_methods.contains(&Method::POST));
+		assert!(view.allowed_methods.contains(&Method::PUT));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_simple_test_view_method_not_allowed() {
+		// Arrange
+		let view = SimpleTestView::new("content");
+		let request = create_request(Method::POST, "/test/", None, None, None);
+
+		// Act
+		let result = reinhardt_views::View::dispatch(&view, request).await;
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		let err_msg = err.to_string();
+		assert!(
+			err_msg.contains("Method POST not allowed"),
+			"Expected method not allowed error, got: {}",
+			err_msg
+		);
+	}
+
+	// ========================================================================
+	// ErrorTestView tests
+	// ========================================================================
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_error_test_view_not_found() {
+		// Arrange
+		let view = ErrorTestView::not_found("Resource not found");
+		let request = create_request(Method::GET, "/missing/", None, None, None);
+
+		// Act
+		let result = reinhardt_views::View::dispatch(&view, request).await;
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(err.to_string().contains("Resource not found"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_error_test_view_validation() {
+		// Arrange
+		let view = ErrorTestView::validation("Invalid input data");
+		let request = create_request(Method::POST, "/validate/", None, None, None);
+
+		// Act
+		let result = reinhardt_views::View::dispatch(&view, request).await;
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(err.to_string().contains("Invalid input data"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_error_test_view_internal() {
+		// Arrange
+		let view = ErrorTestView::new("Server failure".to_string(), ErrorKind::Internal);
+		let request = create_request(Method::GET, "/error/", None, None, None);
+
+		// Act
+		let result = reinhardt_views::View::dispatch(&view, request).await;
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(err.to_string().contains("Server failure"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_error_test_view_authentication() {
+		// Arrange
+		let view = ErrorTestView::new("Not authenticated".to_string(), ErrorKind::Authentication);
+		let request = create_request(Method::GET, "/protected/", None, None, None);
+
+		// Act
+		let result = reinhardt_views::View::dispatch(&view, request).await;
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(err.to_string().contains("Not authenticated"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_error_test_view_authorization() {
+		// Arrange
+		let view = ErrorTestView::new("Forbidden".to_string(), ErrorKind::Authorization);
+		let request = create_request(Method::GET, "/admin/", None, None, None);
+
+		// Act
+		let result = reinhardt_views::View::dispatch(&view, request).await;
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(err.to_string().contains("Forbidden"));
+	}
+
+	// ========================================================================
+	// Edge case tests
+	// ========================================================================
+
+	#[rstest]
+	fn test_create_request_empty_query_params() {
+		// Arrange
+		let params: HashMap<String, String> = HashMap::new();
+
+		// Act
+		let request = create_request(Method::GET, "/api/items/", Some(params), None, None);
+
+		// Assert
+		// Empty params still produces a "?" but no key=value pairs
+		let uri_str = request.uri.to_string();
+		assert!(
+			uri_str == "/api/items/?" || uri_str == "/api/items/",
+			"URI should be path with empty or no query: {}",
+			uri_str
+		);
+	}
+
+	#[rstest]
+	fn test_create_request_query_special_chars() {
+		// Arrange
+		let mut params = HashMap::new();
+		params.insert("search".to_string(), "hello world&foo=bar".to_string());
+
+		// Act
+		let request = create_request(Method::GET, "/api/search/", Some(params), None, None);
+
+		// Assert
+		let query = request.uri.query().expect("query string should be present");
+		// URL-encoded: space becomes %20, & becomes %26, = becomes %3D
+		assert!(
+			query.contains("hello%20world%26foo%3Dbar"),
+			"Special characters should be URL-encoded, got: {}",
+			query
+		);
+	}
+
+	#[rstest]
+	fn test_create_large_test_objects_zero() {
+		// Arrange & Act
+		let objects = create_large_test_objects(0);
+
+		// Assert
+		assert!(objects.is_empty());
+	}
+
+	#[rstest]
+	fn test_test_model_serialization() {
+		// Arrange
+		let model = TestModel {
+			id: Some(42),
+			name: "Test Item".to_string(),
+			slug: "test-item".to_string(),
+			created_at: "2023-06-15T12:00:00Z".to_string(),
+		};
+
+		// Act
+		let json = serde_json::to_string(&model).unwrap();
+		let deserialized: TestModel = serde_json::from_str(&json).unwrap();
+
+		// Assert
+		assert_eq!(model, deserialized);
+	}
+}

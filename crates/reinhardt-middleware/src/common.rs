@@ -3,8 +3,8 @@
 //! Provides URL normalization and common request processing patterns.
 
 use async_trait::async_trait;
-use hyper::StatusCode;
 use hyper::header::HOST;
+use hyper::{Method, StatusCode};
 use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -204,16 +204,9 @@ impl CommonMiddleware {
 			return None;
 		}
 
-		// Build the full URL
-		let scheme = if request.headers.contains_key("X-Forwarded-Proto") {
-			request
-				.headers
-				.get("X-Forwarded-Proto")
-				.and_then(|h| h.to_str().ok())
-				.unwrap_or("http")
-		} else {
-			"http"
-		};
+		// Build the full URL using Request::scheme() which validates trusted proxies
+		// before honoring X-Forwarded-Proto headers
+		let scheme = request.scheme();
 
 		let url = if let Some(q) = query {
 			format!("{}://{}{}?{}", scheme, new_host, new_path, q)
@@ -236,7 +229,14 @@ impl Middleware for CommonMiddleware {
 	async fn process(&self, request: Request, handler: Arc<dyn Handler>) -> Result<Response> {
 		// Check if we need to redirect
 		if let Some(redirect_url) = self.build_redirect_url(&request) {
-			let mut response = Response::new(StatusCode::MOVED_PERMANENTLY);
+			// Use 307 Temporary Redirect for non-GET/HEAD methods to preserve
+			// the request method and body. Use 301 Moved Permanently for GET/HEAD.
+			let status = if matches!(request.method, Method::GET | Method::HEAD) {
+				StatusCode::MOVED_PERMANENTLY
+			} else {
+				StatusCode::TEMPORARY_REDIRECT
+			};
+			let mut response = Response::new(status);
 			response.headers.insert(
 				hyper::header::LOCATION,
 				redirect_url
@@ -256,6 +256,7 @@ mod tests {
 	use super::*;
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method, Version};
+	use rstest::rstest;
 
 	struct TestHandler;
 
@@ -498,5 +499,42 @@ mod tests {
 		let response = middleware.process(request, handler).await.unwrap();
 
 		assert_eq!(response.status, StatusCode::OK);
+	}
+
+	#[rstest]
+	#[case::get_returns_301(Method::GET, StatusCode::MOVED_PERMANENTLY)]
+	#[case::head_returns_301(Method::HEAD, StatusCode::MOVED_PERMANENTLY)]
+	#[case::post_returns_307(Method::POST, StatusCode::TEMPORARY_REDIRECT)]
+	#[case::put_returns_307(Method::PUT, StatusCode::TEMPORARY_REDIRECT)]
+	#[case::patch_returns_307(Method::PATCH, StatusCode::TEMPORARY_REDIRECT)]
+	#[case::delete_returns_307(Method::DELETE, StatusCode::TEMPORARY_REDIRECT)]
+	#[tokio::test]
+	async fn test_redirect_status_by_method(
+		#[case] method: Method,
+		#[case] expected_status: StatusCode,
+	) {
+		// Arrange
+		let config = CommonConfig {
+			append_slash: true,
+			prepend_www: false,
+		};
+		let middleware = CommonMiddleware::with_config(config);
+		let handler = Arc::new(TestHandler);
+
+		let request = Request::builder()
+			.method(method)
+			.uri("/path/to/page")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, expected_status);
+		assert!(response.headers.contains_key(hyper::header::LOCATION));
 	}
 }

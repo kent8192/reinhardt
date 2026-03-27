@@ -21,11 +21,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", features = ["dentdelion"] }
+reinhardt = { version = "0.1.0-rc.13", features = ["dentdelion"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-alpha.1", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-alpha.1", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
 ```
 
 Then import dentdelion features:
@@ -373,7 +373,7 @@ flowchart TB
 - `reinhardt-commands`: CLI command integration
 - `reinhardt-di`: Dependency injection for services
 - `reinhardt-middleware`: Middleware integration
-- `reinhardt-signals`: Signal system
+- `reinhardt-core`: Signal system (signals module)
 
 ## License
 

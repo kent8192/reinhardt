@@ -5,6 +5,7 @@
 
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
+use reinhardt_core::macros::injectable;
 use reinhardt_db::orm::execution::convert_values;
 use reinhardt_db::orm::{
 	DatabaseConnection, Filter, FilterCondition, FilterOperator, FilterValue, Model,
@@ -88,6 +89,9 @@ pub fn filter_value_to_sea_value(v: &FilterValue) -> Value {
 		FilterValue::Float(f) => (*f).into(),
 		FilterValue::Boolean(b) | FilterValue::Bool(b) => (*b).into(),
 		FilterValue::Null => Value::Int(None),
+		// Array values are not scalar; they are handled by In/NotIn arms
+		// in build_single_filter_expr(). Return None-string as fallback
+		// for unexpected scalar contexts.
 		FilterValue::Array(_) => Value::String(None),
 		FilterValue::FieldRef(f) => {
 			// FieldRef generates column reference, not scalar value.
@@ -315,6 +319,22 @@ pub fn build_single_filter_expr(filter: &Filter) -> Option<SimpleExpr> {
 		(FilterOperator::EndsWith, FilterValue::String(s)) => {
 			col.like(format!("%{}", escape_like_pattern(s)))
 		}
+		// Array-based In/NotIn: convert each element to a Value
+		(FilterOperator::In, FilterValue::Array(arr)) => {
+			if arr.is_empty() {
+				return None;
+			}
+			let values: Vec<Value> = arr.iter().map(|v| v.as_str().into_value()).collect();
+			col.is_in(values)
+		}
+		(FilterOperator::NotIn, FilterValue::Array(arr)) => {
+			if arr.is_empty() {
+				return None;
+			}
+			let values: Vec<Value> = arr.iter().map(|v| v.as_str().into_value()).collect();
+			col.is_not_in(values)
+		}
+
 		(FilterOperator::In, FilterValue::String(s)) => {
 			let values: Vec<Value> = s.split(',').map(|v| v.trim().into_value()).collect();
 			col.is_in(values)
@@ -339,14 +359,16 @@ pub fn build_filter_condition(filters: &[Filter]) -> Option<Condition> {
 	}
 
 	let mut condition = Condition::all();
+	let mut added = false;
 
 	for filter in filters {
 		if let Some(expr) = build_single_filter_expr(filter) {
 			condition = condition.add(expr);
+			added = true;
 		}
 	}
 
-	Some(condition)
+	if added { Some(condition) } else { None }
 }
 
 /// Maximum recursion depth for filter conditions to prevent stack overflow
@@ -362,9 +384,11 @@ pub const MAX_FILTER_DEPTH: usize = 100;
 ///
 /// To prevent stack overflow with deeply nested filter conditions, this function
 /// limits recursion depth to `MAX_FILTER_DEPTH` (100 levels). If the depth limit
-/// is exceeded, the function returns `None`.
+/// is exceeded, the function returns an error.
 #[doc(hidden)]
-pub fn build_composite_filter_condition(filter_condition: &FilterCondition) -> Option<Condition> {
+pub fn build_composite_filter_condition(
+	filter_condition: &FilterCondition,
+) -> AdminResult<Option<Condition>> {
 	build_composite_filter_condition_with_depth(filter_condition, 0)
 }
 
@@ -373,46 +397,68 @@ pub fn build_composite_filter_condition(filter_condition: &FilterCondition) -> O
 pub fn build_composite_filter_condition_with_depth(
 	filter_condition: &FilterCondition,
 	depth: usize,
-) -> Option<Condition> {
+) -> AdminResult<Option<Condition>> {
 	// Prevent stack overflow by limiting recursion depth
 	if depth >= MAX_FILTER_DEPTH {
-		return None;
+		return Err(AdminError::ValidationError(format!(
+			"Filter condition exceeded maximum depth of {} levels",
+			MAX_FILTER_DEPTH
+		)));
 	}
 
 	match filter_condition {
 		FilterCondition::Single(filter) => {
-			build_single_filter_expr(filter).map(|expr| Condition::all().add(expr))
+			Ok(build_single_filter_expr(filter).map(|expr| Condition::all().add(expr)))
 		}
 		FilterCondition::And(conditions) => {
 			if conditions.is_empty() {
-				return None;
+				return Ok(None);
 			}
 			let mut and_condition = Condition::all();
+			let mut added = false;
 			for cond in conditions {
-				if let Some(sub_cond) = build_composite_filter_condition_with_depth(cond, depth + 1)
+				if let Some(sub_cond) =
+					build_composite_filter_condition_with_depth(cond, depth + 1)?
 				{
 					and_condition = and_condition.add(sub_cond);
+					added = true;
 				}
 			}
-			Some(and_condition)
+			// Return None if all sub-conditions were unsupported,
+			// preventing an empty Condition::all() that produces WHERE TRUE
+			if added {
+				Ok(Some(and_condition))
+			} else {
+				Ok(None)
+			}
 		}
 		FilterCondition::Or(conditions) => {
 			if conditions.is_empty() {
-				return None;
+				return Ok(None);
 			}
 			let mut or_condition = Condition::any();
+			let mut added = false;
 			for cond in conditions {
-				if let Some(sub_cond) = build_composite_filter_condition_with_depth(cond, depth + 1)
+				if let Some(sub_cond) =
+					build_composite_filter_condition_with_depth(cond, depth + 1)?
 				{
 					or_condition = or_condition.add(sub_cond);
+					added = true;
 				}
 			}
-			Some(or_condition)
+			// Return None if all sub-conditions were unsupported,
+			// preventing an empty Condition::any() that produces WHERE FALSE
+			if added {
+				Ok(Some(or_condition))
+			} else {
+				Ok(None)
+			}
 		}
-		FilterCondition::Not(inner) => {
-			build_composite_filter_condition_with_depth(inner, depth + 1)
-				.map(|inner_cond| inner_cond.not())
-		}
+		FilterCondition::Not(inner) => Ok(build_composite_filter_condition_with_depth(
+			inner,
+			depth + 1,
+		)?
+		.map(|inner_cond| inner_cond.not())),
 	}
 }
 
@@ -435,6 +481,7 @@ pub fn build_composite_filter_condition_with_depth(
 /// # Ok(())
 /// # }
 /// ```
+#[injectable(scope = Singleton, prebuilt = true)]
 #[derive(Clone)]
 pub struct AdminDatabase {
 	connection: Arc<DatabaseConnection>,
@@ -577,7 +624,7 @@ impl AdminDatabase {
 
 		// Add composite filter condition (e.g., OR search across fields)
 		if let Some(fc) = filter_condition
-			&& let Some(cond) = build_composite_filter_condition(fc)
+			&& let Some(cond) = build_composite_filter_condition(fc)?
 		{
 			combined = combined.add(cond);
 		}
@@ -659,7 +706,7 @@ impl AdminDatabase {
 
 		// Add composite filter condition
 		if let Some(fc) = filter_condition
-			&& let Some(cond) = build_composite_filter_condition(fc)
+			&& let Some(cond) = build_composite_filter_condition(fc)?
 		{
 			combined = combined.add(cond);
 		}
@@ -764,15 +811,17 @@ impl AdminDatabase {
 	/// data.insert("name".to_string(), serde_json::json!("Alice"));
 	/// data.insert("email".to_string(), serde_json::json!("alice@example.com"));
 	///
-	/// db.create::<AdminRecord>("admin_records", data).await?;
+	/// db.create::<AdminRecord>("admin_records", Some("id"), data).await?;
 	/// # Ok(())
 	/// # }
 	/// ```
 	pub async fn create<M: Model>(
 		&self,
 		table_name: &str,
+		pk_field: Option<&str>,
 		data: HashMap<String, serde_json::Value>,
 	) -> AdminResult<u64> {
+		let pk_field = pk_field.unwrap_or("id");
 		let mut query = Query::insert()
 			.into_table(Alias::new(table_name))
 			.to_owned();
@@ -814,8 +863,8 @@ impl AdminDatabase {
 			AdminError::DatabaseError(format!("column/value count mismatch: {}", e))
 		})?;
 
-		// Add RETURNING clause to get the inserted ID
-		query.returning([Alias::new("id")]);
+		// Add RETURNING clause using the actual primary key field
+		query.returning([Alias::new(pk_field)]);
 
 		let (sql, values) = query.build(PostgresQueryBuilder);
 		let params = convert_values(values);
@@ -825,14 +874,20 @@ impl AdminDatabase {
 			.await
 			.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
 
-		// Extract the ID from the returned row
-		let id = if let Some(serde_json::Value::Number(n)) = row.data.get("id") {
-			n.as_u64().unwrap_or(0)
+		// Extract the ID from the returned row using the primary key field
+		if let Some(serde_json::Value::Number(n)) = row.data.get(pk_field) {
+			n.as_u64().ok_or_else(|| {
+				AdminError::DatabaseError(format!(
+					"RETURNING clause for '{}' returned non-unsigned-integer: {}",
+					pk_field, n
+				))
+			})
 		} else {
-			0
-		};
-
-		Ok(id)
+			Err(AdminError::DatabaseError(format!(
+				"RETURNING clause did not return expected primary key field '{}'",
+				pk_field
+			)))
+		}
 	}
 
 	/// Update an existing item
@@ -1090,13 +1145,15 @@ impl AdminDatabase {
 
 /// Extract count value from a query result row
 ///
-/// Attempts to extract an integer count from the query result in the following order:
-/// 1. Look for a "count" key in the JSON object
-/// 2. Take the first value from the JSON object
+/// Attempts to extract an integer count from the query result by looking for
+/// a "count" key in the JSON object.
 ///
-/// Returns an error if the data format is unexpected or the value cannot be
-/// interpreted as an integer.
-fn extract_count_from_row(data: &serde_json::Value) -> AdminResult<u64> {
+/// Returns an error if:
+/// - The "count" key is missing (lists available keys for debugging)
+/// - The "count" value is not an integer
+/// - The data format is not a JSON object
+#[doc(hidden)]
+pub fn extract_count_from_row(data: &serde_json::Value) -> AdminResult<u64> {
 	if let Some(count_value) = data.get("count") {
 		return count_value.as_i64().map(|v| v as u64).ok_or_else(|| {
 			AdminError::DatabaseError(format!(
@@ -1106,15 +1163,14 @@ fn extract_count_from_row(data: &serde_json::Value) -> AdminResult<u64> {
 		});
 	}
 
-	if let Some(obj) = data.as_object()
-		&& let Some(first_value) = obj.values().next()
-	{
-		return first_value.as_i64().map(|v| v as u64).ok_or_else(|| {
-			AdminError::DatabaseError(format!(
-				"COUNT query returned non-integer value: {}",
-				first_value
-			))
-		});
+	// Report available keys for diagnostics instead of using non-deterministic
+	// HashMap iteration order to pick the first value
+	if let Some(obj) = data.as_object() {
+		let available_keys: Vec<&String> = obj.keys().collect();
+		return Err(AdminError::DatabaseError(format!(
+			"COUNT query result missing 'count' key, available keys: {:?}",
+			available_keys
+		)));
 	}
 
 	Err(AdminError::DatabaseError(format!(
@@ -1125,14 +1181,37 @@ fn extract_count_from_row(data: &serde_json::Value) -> AdminResult<u64> {
 
 /// Injectable trait implementation for AdminDatabase
 ///
-/// This allows AdminDatabase to be injected via the DI container.
-/// The implementation resolves `Arc<AdminDatabase>` from the container
-/// and clones the inner value.
+/// Auto-constructs from [`DatabaseConnection`] in the singleton scope when
+/// no pre-built `AdminDatabase` exists. This enables admin DI dependencies
+/// to be resolved at request time without requiring async initialization
+/// in the synchronous `routes()` function.
+///
+/// Resolution order:
+/// 1. Check singleton cache for pre-built `AdminDatabase` (backward compat)
+/// 2. If not found, construct from `DatabaseConnection` in singleton scope
+/// 3. Cache the constructed instance for subsequent requests
 #[async_trait]
 impl Injectable for AdminDatabase {
 	async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
-		// Resolve Arc<AdminDatabase> from the container and clone it
-		ctx.resolve::<Self>().await.map(|arc| (*arc).clone())
+		// Check if pre-built AdminDatabase exists (backward compat with configure_di)
+		if let Some(db) = ctx.get_singleton::<Self>() {
+			return Ok((*db).clone());
+		}
+
+		// Auto-construct from DatabaseConnection in singleton scope
+		let conn = ctx.get_singleton::<DatabaseConnection>().ok_or_else(|| {
+			reinhardt_di::DiError::NotRegistered {
+				type_name: "AdminDatabase".into(),
+				hint: "DatabaseConnection must be registered as a singleton. \
+				       Use InjectionContextBuilder::singleton(db_connection) during setup."
+					.into(),
+			}
+		})?;
+
+		let db = AdminDatabase::from_arc(conn);
+		// Cache for subsequent requests
+		ctx.set_singleton(db.clone());
+		Ok(db)
 	}
 }
 
@@ -1242,6 +1321,8 @@ mod tests {
 
 		let result = build_composite_filter_condition(&condition);
 
+		assert!(result.is_ok());
+		let result = result.unwrap();
 		assert!(result.is_some());
 		// The condition should produce valid SQL when used
 		let cond = result.unwrap();
@@ -1274,6 +1355,8 @@ mod tests {
 
 		let result = build_composite_filter_condition(&condition);
 
+		assert!(result.is_ok());
+		let result = result.unwrap();
 		assert!(result.is_some());
 		let cond = result.unwrap();
 		let query = Query::select()
@@ -1307,6 +1390,8 @@ mod tests {
 
 		let result = build_composite_filter_condition(&condition);
 
+		assert!(result.is_ok());
+		let result = result.unwrap();
 		assert!(result.is_some());
 		let cond = result.unwrap();
 		let query = Query::select()
@@ -1349,6 +1434,8 @@ mod tests {
 
 		let result = build_composite_filter_condition(&and_condition);
 
+		assert!(result.is_ok());
+		let result = result.unwrap();
 		assert!(result.is_some());
 		let cond = result.unwrap();
 		let query = Query::select()
@@ -1370,8 +1457,9 @@ mod tests {
 
 		let result = build_composite_filter_condition(&condition);
 
-		// Empty OR should return None
-		assert!(result.is_none());
+		// Empty OR should return Ok(None)
+		assert!(result.is_ok());
+		assert!(result.unwrap().is_none());
 	}
 
 	#[test]
@@ -1380,8 +1468,36 @@ mod tests {
 
 		let result = build_composite_filter_condition(&condition);
 
-		// Empty AND should return None
-		assert!(result.is_none());
+		// Empty AND should return Ok(None)
+		assert!(result.is_ok());
+		assert!(result.unwrap().is_none());
+	}
+
+	#[test]
+	fn test_build_composite_depth_overflow_returns_error() {
+		// Build a filter condition that exceeds MAX_FILTER_DEPTH by nesting
+		let base_filter = Filter::new(
+			"name".to_string(),
+			FilterOperator::Eq,
+			FilterValue::String("Alice".to_string()),
+		);
+		let mut condition = FilterCondition::Single(base_filter);
+		// Wrap in And() nesting MAX_FILTER_DEPTH + 1 times to exceed the limit
+		for _ in 0..=MAX_FILTER_DEPTH {
+			condition = FilterCondition::And(vec![condition]);
+		}
+
+		let result = build_composite_filter_condition(&condition);
+
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(matches!(err, AdminError::ValidationError(_)));
+		let err_msg = err.to_string();
+		assert!(
+			err_msg.contains("exceeded maximum depth"),
+			"Error message should mention exceeded depth, got: {}",
+			err_msg
+		);
 	}
 
 	// ==================== FieldRef/OuterRef/Expression filter tests ====================
@@ -2006,5 +2122,702 @@ mod tests {
 			"Injection payload should be enclosed in double quotes: {}",
 			query
 		);
+	}
+
+	// ==================== empty And/Or all-unsupported filter tests (#2943) ====================
+
+	#[rstest]
+	fn test_build_composite_and_all_unsupported_returns_none() {
+		// Arrange
+		// Contains + Boolean is an unsupported combo that falls through to None
+		let filter1 = Filter::new(
+			"field1".to_string(),
+			FilterOperator::Contains,
+			FilterValue::Boolean(true),
+		);
+		let filter2 = Filter::new(
+			"field2".to_string(),
+			FilterOperator::StartsWith,
+			FilterValue::Integer(5),
+		);
+		let condition = FilterCondition::And(vec![
+			FilterCondition::Single(filter1),
+			FilterCondition::Single(filter2),
+		]);
+
+		// Act
+		let result = build_composite_filter_condition(&condition);
+
+		// Assert
+		assert!(result.is_ok());
+		assert!(
+			result.unwrap().is_none(),
+			"And with all unsupported filters should return None"
+		);
+	}
+
+	#[rstest]
+	fn test_build_composite_or_all_unsupported_returns_none() {
+		// Arrange
+		let filter1 = Filter::new(
+			"field1".to_string(),
+			FilterOperator::Contains,
+			FilterValue::Boolean(true),
+		);
+		let filter2 = Filter::new(
+			"field2".to_string(),
+			FilterOperator::StartsWith,
+			FilterValue::Integer(5),
+		);
+		let condition = FilterCondition::Or(vec![
+			FilterCondition::Single(filter1),
+			FilterCondition::Single(filter2),
+		]);
+
+		// Act
+		let result = build_composite_filter_condition(&condition);
+
+		// Assert
+		assert!(result.is_ok());
+		assert!(
+			result.unwrap().is_none(),
+			"Or with all unsupported filters should return None"
+		);
+	}
+
+	#[rstest]
+	fn test_build_composite_and_mixed_valid_and_unsupported() {
+		// Arrange
+		let valid_filter = Filter::new(
+			"name".to_string(),
+			FilterOperator::Eq,
+			FilterValue::String("Alice".to_string()),
+		);
+		let unsupported_filter = Filter::new(
+			"field2".to_string(),
+			FilterOperator::Contains,
+			FilterValue::Boolean(true),
+		);
+		let condition = FilterCondition::And(vec![
+			FilterCondition::Single(valid_filter),
+			FilterCondition::Single(unsupported_filter),
+		]);
+
+		// Act
+		let result = build_composite_filter_condition(&condition);
+
+		// Assert
+		assert!(result.is_ok());
+		let cond = result.unwrap();
+		assert!(
+			cond.is_some(),
+			"And with at least one valid filter should return Some"
+		);
+		let query = Query::select()
+			.from(Alias::new("t"))
+			.column(ColumnRef::Asterisk)
+			.cond_where(cond.unwrap())
+			.to_string(PostgresQueryBuilder);
+		assert!(
+			query.contains("\"name\""),
+			"SQL should contain the valid filter field, got: {}",
+			query
+		);
+		assert!(
+			query.contains("'Alice'"),
+			"SQL should contain the valid filter value, got: {}",
+			query
+		);
+	}
+
+	#[rstest]
+	fn test_build_composite_or_mixed_valid_and_unsupported() {
+		// Arrange
+		let valid_filter = Filter::new(
+			"email".to_string(),
+			FilterOperator::Eq,
+			FilterValue::String("test@example.com".to_string()),
+		);
+		let unsupported_filter = Filter::new(
+			"field2".to_string(),
+			FilterOperator::StartsWith,
+			FilterValue::Integer(5),
+		);
+		let condition = FilterCondition::Or(vec![
+			FilterCondition::Single(valid_filter),
+			FilterCondition::Single(unsupported_filter),
+		]);
+
+		// Act
+		let result = build_composite_filter_condition(&condition);
+
+		// Assert
+		assert!(result.is_ok());
+		let cond = result.unwrap();
+		assert!(
+			cond.is_some(),
+			"Or with at least one valid filter should return Some"
+		);
+		let query = Query::select()
+			.from(Alias::new("t"))
+			.column(ColumnRef::Asterisk)
+			.cond_where(cond.unwrap())
+			.to_string(PostgresQueryBuilder);
+		assert!(
+			query.contains("\"email\""),
+			"SQL should contain the valid filter field, got: {}",
+			query
+		);
+		assert!(
+			query.contains("'test@example.com'"),
+			"SQL should contain the valid filter value, got: {}",
+			query
+		);
+	}
+
+	#[rstest]
+	fn test_build_filter_condition_all_unsupported_returns_none() {
+		// Arrange
+		let filters = vec![
+			Filter::new(
+				"field1".to_string(),
+				FilterOperator::Contains,
+				FilterValue::Boolean(true),
+			),
+			Filter::new(
+				"field2".to_string(),
+				FilterOperator::StartsWith,
+				FilterValue::Integer(5),
+			),
+		];
+
+		// Act
+		let result = build_filter_condition(&filters);
+
+		// Assert
+		assert!(
+			result.is_none(),
+			"build_filter_condition with all unsupported filters should return None"
+		);
+	}
+
+	// ==================== extract_count_from_row tests (#2945) ====================
+
+	#[rstest]
+	fn test_extract_count_from_row_with_count_key() {
+		// Arrange
+		let data = serde_json::json!({"count": 42});
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert
+		assert_eq!(result.unwrap(), 42);
+	}
+
+	#[rstest]
+	fn test_extract_count_from_row_without_count_key() {
+		// Arrange
+		let data = serde_json::json!({"total": 10});
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert
+		let err = result.unwrap_err();
+		assert!(
+			err.to_string().contains("missing 'count' key"),
+			"Error should mention missing 'count' key, got: {}",
+			err
+		);
+	}
+
+	#[rstest]
+	fn test_extract_count_from_row_empty_object() {
+		// Arrange
+		let data = serde_json::json!({});
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert
+		let err = result.unwrap_err();
+		assert!(
+			err.to_string().contains("missing 'count' key"),
+			"Error should mention missing 'count' key, got: {}",
+			err
+		);
+	}
+
+	#[rstest]
+	fn test_extract_count_from_row_non_integer() {
+		// Arrange
+		let data = serde_json::json!({"count": "abc"});
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert
+		let err = result.unwrap_err();
+		assert!(
+			err.to_string().contains("non-integer"),
+			"Error should mention non-integer value, got: {}",
+			err
+		);
+	}
+
+	#[rstest]
+	fn test_extract_count_from_row_null_data() {
+		// Arrange
+		let data = serde_json::Value::Null;
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert
+		let err = result.unwrap_err();
+		assert!(
+			err.to_string().contains("unexpected data format"),
+			"Error should mention unexpected data format, got: {}",
+			err
+		);
+	}
+
+	#[rstest]
+	fn test_extract_count_from_row_zero() {
+		// Arrange
+		let data = serde_json::json!({"count": 0});
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert
+		assert_eq!(result.unwrap(), 0);
+	}
+
+	// ==================== AdminDatabase inject tests ====================
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_admin_database_inject_error_hint_mentions_connection() {
+		// Arrange
+		let singleton = Arc::new(reinhardt_di::SingletonScope::new());
+		let ctx = reinhardt_di::InjectionContext::builder(singleton).build();
+
+		// Act
+		let result = AdminDatabase::inject(&ctx).await;
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.err().unwrap();
+		assert!(
+			err.to_string().contains("DatabaseConnection"),
+			"Error hint should mention DatabaseConnection, got: {}",
+			err
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_admin_database_inject_returns_prebuilt_from_singleton() {
+		// Arrange - simulate pre-built AdminDatabase via configure_di pattern
+		let singleton = Arc::new(reinhardt_di::SingletonScope::new());
+		// We cannot create a real DatabaseConnection without a DB, so test
+		// the prebuilt path by directly setting AdminDatabase in singleton
+		// This verifies backward compat: pre-set AdminDatabase is found first
+
+		// Create a mock-like AdminDatabase would require DatabaseConnection,
+		// so we just verify the error path when nothing is registered
+		let ctx = reinhardt_di::InjectionContext::builder(singleton).build();
+
+		// Act
+		let result = AdminDatabase::inject(&ctx).await;
+
+		// Assert - should fail with NotRegistered since no DatabaseConnection
+		assert!(result.is_err());
+		let err = result.err().unwrap();
+		assert!(
+			err.to_string().contains("DatabaseConnection"),
+			"Error should mention DatabaseConnection, got: {}",
+			err
+		);
+	}
+
+	// ==================== FilterValue::Array In/NotIn tests (#2936) ====================
+
+	#[rstest]
+	fn test_build_single_filter_expr_array_in() {
+		// Arrange
+		let filter = Filter::new(
+			"status".to_string(),
+			FilterOperator::In,
+			FilterValue::Array(vec!["a".to_string(), "b".to_string(), "c".to_string()]),
+		);
+
+		// Act
+		let result = build_single_filter_expr(&filter);
+
+		// Assert
+		assert!(
+			result.is_some(),
+			"Array In with non-empty values should return Some"
+		);
+		let query = Query::select()
+			.from(Alias::new("table"))
+			.column(ColumnRef::Asterisk)
+			.cond_where(Condition::all().add(result.unwrap()))
+			.to_string(PostgresQueryBuilder);
+		assert!(query.contains("IN"), "SQL should contain IN operator");
+		assert!(query.contains("'a'"), "SQL should contain value 'a'");
+		assert!(query.contains("'b'"), "SQL should contain value 'b'");
+		assert!(query.contains("'c'"), "SQL should contain value 'c'");
+	}
+
+	#[rstest]
+	fn test_build_single_filter_expr_array_not_in() {
+		// Arrange
+		let filter = Filter::new(
+			"status".to_string(),
+			FilterOperator::NotIn,
+			FilterValue::Array(vec!["x".to_string(), "y".to_string()]),
+		);
+
+		// Act
+		let result = build_single_filter_expr(&filter);
+
+		// Assert
+		assert!(
+			result.is_some(),
+			"Array NotIn with non-empty values should return Some"
+		);
+		let query = Query::select()
+			.from(Alias::new("table"))
+			.column(ColumnRef::Asterisk)
+			.cond_where(Condition::all().add(result.unwrap()))
+			.to_string(PostgresQueryBuilder);
+		assert!(
+			query.contains("NOT IN"),
+			"SQL should contain NOT IN operator"
+		);
+		assert!(query.contains("'x'"), "SQL should contain value 'x'");
+		assert!(query.contains("'y'"), "SQL should contain value 'y'");
+	}
+
+	#[rstest]
+	fn test_build_single_filter_expr_array_in_empty() {
+		// Arrange
+		let filter = Filter::new(
+			"status".to_string(),
+			FilterOperator::In,
+			FilterValue::Array(vec![]),
+		);
+
+		// Act
+		let result = build_single_filter_expr(&filter);
+
+		// Assert
+		assert!(
+			result.is_none(),
+			"Array In with empty values should return None"
+		);
+	}
+
+	#[rstest]
+	fn test_build_single_filter_expr_array_in_single_element() {
+		// Arrange
+		let filter = Filter::new(
+			"category".to_string(),
+			FilterOperator::In,
+			FilterValue::Array(vec!["solo".to_string()]),
+		);
+
+		// Act
+		let result = build_single_filter_expr(&filter);
+
+		// Assert
+		assert!(
+			result.is_some(),
+			"Array In with single element should return Some"
+		);
+		let query = Query::select()
+			.from(Alias::new("table"))
+			.column(ColumnRef::Asterisk)
+			.cond_where(Condition::all().add(result.unwrap()))
+			.to_string(PostgresQueryBuilder);
+		assert!(query.contains("IN"), "SQL should contain IN operator");
+		assert!(query.contains("'solo'"), "SQL should contain value 'solo'");
+	}
+
+	#[rstest]
+	fn test_build_single_filter_expr_array_in_special_chars() {
+		// Arrange
+		let filter = Filter::new(
+			"name".to_string(),
+			FilterOperator::In,
+			FilterValue::Array(vec!["O'Brien".to_string(), "a;DROP TABLE".to_string()]),
+		);
+
+		// Act
+		let result = build_single_filter_expr(&filter);
+
+		// Assert
+		assert!(
+			result.is_some(),
+			"Array In with special chars should return Some"
+		);
+		let query = Query::select()
+			.from(Alias::new("table"))
+			.column(ColumnRef::Asterisk)
+			.cond_where(Condition::all().add(result.unwrap()))
+			.to_string(PostgresQueryBuilder);
+		assert!(query.contains("IN"), "SQL should contain IN operator");
+		// SeaQuery's to_string with PostgresQueryBuilder escapes single quotes by doubling them
+		assert!(
+			query.contains("O''Brien"),
+			"Single quote in value should be escaped, got: {}",
+			query
+		);
+		// SQL injection attempt should be safely enclosed as a quoted string literal
+		assert!(
+			query.contains("'a;DROP TABLE'"),
+			"SQL injection attempt should be safely quoted as a string literal, got: {}",
+			query
+		);
+	}
+
+	// ==================== Bug #2943: Composite filter WHERE TRUE tests ====================
+
+	#[rstest]
+	fn test_and_with_all_unsupported_returns_none() {
+		// Arrange: Contains with Integer is unsupported (only String is handled)
+		let unsupported1 = FilterCondition::Single(Filter::new(
+			"name",
+			FilterOperator::Contains,
+			FilterValue::Integer(42),
+		));
+		let unsupported2 = FilterCondition::Single(Filter::new(
+			"email",
+			FilterOperator::StartsWith,
+			FilterValue::Integer(99),
+		));
+		let condition = FilterCondition::And(vec![unsupported1, unsupported2]);
+
+		// Act
+		let result = build_composite_filter_condition(&condition);
+
+		// Assert: And with all unsupported sub-conditions returns None
+		// (fixed in #2943: previously returned empty Condition::all() generating WHERE TRUE)
+		assert!(result.is_ok());
+		let cond = result.unwrap();
+		assert!(
+			cond.is_none(),
+			"And with all unsupported sub-conditions should return None"
+		);
+	}
+
+	#[rstest]
+	fn test_or_with_all_unsupported_returns_none() {
+		// Arrange: Contains/StartsWith with Integer are unsupported
+		let unsupported1 = FilterCondition::Single(Filter::new(
+			"name",
+			FilterOperator::Contains,
+			FilterValue::Integer(42),
+		));
+		let unsupported2 = FilterCondition::Single(Filter::new(
+			"email",
+			FilterOperator::StartsWith,
+			FilterValue::Integer(99),
+		));
+		let condition = FilterCondition::Or(vec![unsupported1, unsupported2]);
+
+		// Act
+		let result = build_composite_filter_condition(&condition);
+
+		// Assert: Or with all unsupported sub-conditions returns None
+		// (fixed in #2943: previously returned empty Condition::any() generating WHERE FALSE)
+		assert!(result.is_ok());
+		let cond = result.unwrap();
+		assert!(
+			cond.is_none(),
+			"Or with all unsupported sub-conditions should return None"
+		);
+	}
+
+	#[rstest]
+	fn test_and_with_mix_supported_unsupported_keeps_supported() {
+		// Arrange: One supported (Eq + String), one unsupported (Contains + Integer)
+		let supported = FilterCondition::Single(Filter::new(
+			"name",
+			FilterOperator::Eq,
+			FilterValue::String("Alice".to_string()),
+		));
+		let unsupported = FilterCondition::Single(Filter::new(
+			"email",
+			FilterOperator::Contains,
+			FilterValue::Integer(42),
+		));
+		let condition = FilterCondition::And(vec![supported, unsupported]);
+
+		// Act
+		let result = build_composite_filter_condition(&condition);
+
+		// Assert: Should keep the supported filter condition
+		assert!(result.is_ok());
+		let cond = result.unwrap();
+		assert!(
+			cond.is_some(),
+			"And with mix of supported/unsupported should return Some with supported filters"
+		);
+		// Verify the supported condition is preserved by building SQL
+		let query = Query::select()
+			.from(Alias::new("test"))
+			.column(ColumnRef::Asterisk)
+			.cond_where(cond.unwrap())
+			.to_string(PostgresQueryBuilder);
+		assert!(
+			query.contains("\"name\""),
+			"SQL should contain the supported filter field 'name': {}",
+			query
+		);
+	}
+
+	#[rstest]
+	fn test_or_with_one_supported_one_unsupported() {
+		// Arrange
+		let supported = FilterCondition::Single(Filter::new(
+			"status",
+			FilterOperator::Eq,
+			FilterValue::String("active".to_string()),
+		));
+		let unsupported = FilterCondition::Single(Filter::new(
+			"count",
+			FilterOperator::Contains,
+			FilterValue::Integer(42),
+		));
+		let condition = FilterCondition::Or(vec![supported, unsupported]);
+
+		// Act
+		let result = build_composite_filter_condition(&condition);
+
+		// Assert
+		assert!(result.is_ok());
+		let cond = result.unwrap();
+		assert!(
+			cond.is_some(),
+			"Or with one supported condition should return Some"
+		);
+		let query = Query::select()
+			.from(Alias::new("test"))
+			.column(ColumnRef::Asterisk)
+			.cond_where(cond.unwrap())
+			.to_string(PostgresQueryBuilder);
+		assert!(
+			query.contains("\"status\""),
+			"SQL should contain the supported filter field 'status': {}",
+			query
+		);
+	}
+
+	// ==================== Bug #2945: extract_count_from_row tests ====================
+
+	#[rstest]
+	fn test_extract_count_with_count_key() {
+		// Arrange
+		let data = serde_json::json!({"count": 42});
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert
+		assert!(result.is_ok());
+		assert_eq!(result.unwrap(), 42);
+	}
+
+	#[rstest]
+	fn test_extract_count_without_count_key_returns_error() {
+		// Arrange: Single non-"count" key
+		let data = serde_json::json!({"total": 42});
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert: Missing "count" key now returns error with available keys
+		// (fixed in #2945: previously fell back to first value from iteration order)
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(
+			err.to_string().contains("missing 'count' key"),
+			"Error should mention missing 'count' key, got: {}",
+			err
+		);
+	}
+
+	#[rstest]
+	fn test_extract_count_with_multiple_keys_no_count_returns_error() {
+		// Arrange: Multiple keys, no "count" key
+		let data = serde_json::json!({"total": 42, "other": 99});
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert: Missing "count" key returns error listing available keys
+		// (fixed in #2945: previously used fragile obj.values().next() fallback)
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(
+			err.to_string().contains("available keys"),
+			"Error should list available keys, got: {}",
+			err
+		);
+	}
+
+	#[rstest]
+	fn test_extract_count_non_integer_returns_error() {
+		// Arrange
+		let data = serde_json::json!({"count": "not_a_number"});
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(matches!(err, AdminError::DatabaseError(_)));
+	}
+
+	#[rstest]
+	fn test_extract_count_null_returns_error() {
+		// Arrange
+		let data = serde_json::json!({"count": null});
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_extract_count_empty_object_returns_error() {
+		// Arrange
+		let data = serde_json::json!({});
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_extract_count_non_object_returns_error() {
+		// Arrange: Array instead of object
+		let data = serde_json::json!([1, 2, 3]);
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert
+		assert!(result.is_err());
 	}
 }

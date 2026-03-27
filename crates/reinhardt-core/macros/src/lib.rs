@@ -39,7 +39,12 @@ mod rel;
 mod routes;
 mod routes_registration;
 mod schema;
+mod settings_compose;
+mod settings_fragment;
+pub(crate) mod settings_parser;
 mod use_inject;
+mod user_attribute;
+mod user_field_mapping;
 mod validate_derive;
 
 use action::action_impl;
@@ -62,6 +67,7 @@ use routes::{delete_impl, get_impl, patch_impl, post_impl, put_impl};
 use routes_registration::routes_impl;
 use schema::derive_schema_impl;
 use use_inject::use_inject_impl;
+use user_attribute::user_attribute_impl;
 
 /// Decorator for function-based API views
 #[proc_macro_attribute]
@@ -445,7 +451,7 @@ pub fn derive_schema(input: TokenStream) -> TokenStream {
 /// - All `#[inject]` field types must implement `Injectable`
 ///
 #[proc_macro_attribute]
-pub fn injectable(_args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
 	// Try to parse as ItemFn first
 	if let Ok(item_fn) = syn::parse::<ItemFn>(input.clone()) {
 		return injectable_fn_impl(proc_macro2::TokenStream::new(), item_fn)
@@ -468,7 +474,7 @@ pub fn injectable(_args: TokenStream, input: TokenStream) -> TokenStream {
 			}),
 		};
 
-		return injectable_struct_impl(derive_input)
+		return injectable_struct_impl(args.into(), derive_input)
 			.unwrap_or_else(|e| e.to_compile_error())
 			.into();
 	}
@@ -497,6 +503,41 @@ pub fn model(args: TokenStream, input: TokenStream) -> TokenStream {
 	let input = parse_macro_input!(input as ItemStruct);
 
 	model_attribute_impl(args.into(), input)
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
+}
+
+/// Attribute macro for generating auth trait implementations.
+///
+/// Generates `BaseUser`, `FullUser` (when `full = true`), `PermissionsMixin`
+/// (when `user_permissions` and `groups` fields exist), and `AuthIdentity`
+/// trait implementations based on struct fields.
+///
+/// # Arguments
+///
+/// - `hasher`: Type implementing `PasswordHasher + Default` (required)
+/// - `username_field`: Name of the field used as username (required)
+/// - `full`: Generate `FullUser` impl (default: `false`)
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// #[user(hasher = Argon2Hasher, username_field = "email", full = true)]
+/// #[derive(Serialize, Deserialize)]
+/// pub struct MyUser {
+///     pub id: Uuid,
+///     pub email: String,
+///     pub password_hash: Option<String>,
+///     pub last_login: Option<DateTime<Utc>>,
+///     pub is_active: bool,
+///     pub is_superuser: bool,
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn user(args: TokenStream, input: TokenStream) -> TokenStream {
+	let input = parse_macro_input!(input as ItemStruct);
+
+	user_attribute_impl(args.into(), input)
 		.unwrap_or_else(|e| e.to_compile_error())
 		.into()
 }
@@ -761,4 +802,62 @@ pub fn derive_validate(input: TokenStream) -> TokenStream {
 	validate_derive::validate_derive_impl(input)
 		.unwrap_or_else(|e| e.to_compile_error())
 		.into()
+}
+
+/// Settings attribute macro for composable configuration.
+///
+/// # Fragment mode
+///
+/// Marks a struct as a settings fragment:
+///
+/// ```rust,ignore
+/// #[settings(fragment = true, section = "cache")]
+/// pub struct CacheSettings {
+///     pub backend: String,
+/// }
+/// ```
+///
+/// # Composition mode
+///
+/// Composes fragments into a project settings struct.
+///
+/// Supports two syntax forms:
+/// - **Explicit**: `key: Type` — specify field name explicitly
+/// - **Implicit**: `Type` — infer field name from type (requires `Settings` suffix)
+///
+/// Both forms can be mixed freely:
+///
+/// ```rust,ignore
+/// // All implicit (XxxSettings → xxx)
+/// #[settings(CoreSettings | CacheSettings | SessionSettings)]
+/// pub struct ProjectSettings;
+///
+/// // Mixed implicit + explicit
+/// #[settings(CoreSettings | CacheSettings | static_files: StaticSettings)]
+/// pub struct ProjectSettings;
+///
+/// // Explicit only (original syntax, still fully supported)
+/// #[settings(core: CoreSettings | cache: CacheSettings)]
+/// pub struct ProjectSettings;
+/// ```
+///
+/// Types without `Settings` suffix require explicit `key: Type` syntax. Note that
+/// even for `*Settings` types, if the inferred field name would be a Rust keyword
+/// (e.g. `StaticSettings` → `static`), you must use explicit `key: Type` syntax,
+/// as in `static_files: StaticSettings` above.
+#[proc_macro_attribute]
+pub fn settings(args: TokenStream, input: TokenStream) -> TokenStream {
+	let input_struct = parse_macro_input!(input as ItemStruct);
+
+	// Detect mode: if args contain "fragment", use fragment handler
+	let args_str = args.to_string();
+	if args_str.contains("fragment") {
+		settings_fragment::settings_fragment_impl(args.into(), input_struct)
+			.unwrap_or_else(|e| e.to_compile_error())
+			.into()
+	} else {
+		settings_compose::settings_compose_impl(args.into(), input_struct)
+			.unwrap_or_else(|e| e.to_compile_error())
+			.into()
+	}
 }

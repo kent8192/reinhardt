@@ -216,7 +216,10 @@ where
 				// Return 204 No Content for successful deletion
 				Ok(Response::no_content())
 			}
-			_ => Err(Error::Http("Method not allowed".to_string())),
+			_ => Err(Error::MethodNotAllowed(format!(
+				"Method {} not allowed",
+				request.method
+			))),
 		}
 	}
 

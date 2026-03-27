@@ -1,3 +1,6 @@
+// This module uses the deprecated DefaultUser and User types for backward compatibility.
+// DefaultUserManager operates on DefaultUser which is deprecated in favor of #[user] macro.
+#![allow(deprecated)]
 #[cfg(feature = "argon2-hasher")]
 use crate::BaseUser;
 #[cfg(feature = "argon2-hasher")]

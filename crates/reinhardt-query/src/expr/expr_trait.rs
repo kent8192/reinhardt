@@ -7,6 +7,45 @@ use super::simple_expr::{Keyword, SimpleExpr};
 use crate::types::{BinOper, UnOper};
 use crate::value::Value;
 
+/// Escape SQL LIKE wildcard characters in user input.
+///
+/// Escapes `\` -> `\\`, `%` -> `\%`, and `_` -> `\_` so that user-supplied
+/// strings are treated as literal text in LIKE patterns.
+///
+/// This escaping relies on the `ESCAPE '\'` clause being present in the
+/// generated SQL. The helper functions [`ExprTrait::starts_with`],
+/// [`ExprTrait::ends_with`], and [`ExprTrait::contains`] automatically
+/// include this clause.
+fn escape_like_pattern(input: &str) -> String {
+	let mut escaped = String::with_capacity(input.len());
+	for ch in input.chars() {
+		match ch {
+			'\\' => escaped.push_str("\\\\"),
+			'%' => escaped.push_str("\\%"),
+			'_' => escaped.push_str("\\_"),
+			_ => escaped.push(ch),
+		}
+	}
+	escaped
+}
+
+/// Build a LIKE expression with an explicit `ESCAPE '\'` clause.
+///
+/// Produces: `<expr> LIKE <pattern> ESCAPE '\'`
+///
+/// The explicit ESCAPE clause ensures that backslash escaping works
+/// consistently across all SQL backends, including those that do not treat
+/// `\` as a LIKE escape character by default (e.g., SQLite).
+fn like_with_escape(expr: SimpleExpr, pattern: String) -> SimpleExpr {
+	SimpleExpr::CustomWithExpr(
+		"? LIKE ? ESCAPE '\\'".to_string(),
+		vec![
+			expr,
+			SimpleExpr::Value(Value::String(Some(Box::new(pattern)))),
+		],
+	)
+}
+
 /// Trait for expression operations.
 ///
 /// This trait provides methods for building complex expressions through
@@ -181,6 +220,8 @@ pub trait ExprTrait: Sized {
 
 	/// IN.
 	///
+	/// Returns `FALSE` when the iterator is empty, since `x IN ()` is invalid SQL.
+	///
 	/// # Example
 	///
 	/// ```rust,ignore
@@ -192,27 +233,36 @@ pub trait ExprTrait: Sized {
 		I: IntoIterator<Item = V>,
 		V: Into<SimpleExpr>,
 	{
+		let collected: Vec<SimpleExpr> = values.into_iter().map(|v| v.into()).collect();
+		if collected.is_empty() {
+			// Empty IN () is invalid SQL in all databases; use FALSE instead
+			return SimpleExpr::Constant(Keyword::False);
+		}
 		SimpleExpr::Binary(
 			Box::new(self.into_simple_expr()),
 			BinOper::In,
-			Box::new(SimpleExpr::Tuple(
-				values.into_iter().map(|v| v.into()).collect(),
-			)),
+			Box::new(SimpleExpr::Tuple(collected)),
 		)
 	}
 
 	/// NOT IN.
+	///
+	/// Returns `TRUE` when the iterator is empty, since `x NOT IN ()` is invalid SQL
+	/// and logically equivalent to `TRUE`.
 	fn is_not_in<I, V>(self, values: I) -> SimpleExpr
 	where
 		I: IntoIterator<Item = V>,
 		V: Into<SimpleExpr>,
 	{
+		let collected: Vec<SimpleExpr> = values.into_iter().map(|v| v.into()).collect();
+		if collected.is_empty() {
+			// Empty NOT IN () is invalid SQL in all databases; use TRUE instead
+			return SimpleExpr::Constant(Keyword::True);
+		}
 		SimpleExpr::Binary(
 			Box::new(self.into_simple_expr()),
 			BinOper::NotIn,
-			Box::new(SimpleExpr::Tuple(
-				values.into_iter().map(|v| v.into()).collect(),
-			)),
+			Box::new(SimpleExpr::Tuple(collected)),
 		)
 	}
 
@@ -276,30 +326,49 @@ pub trait ExprTrait: Sized {
 	}
 
 	/// Helper for LIKE with prefix wildcard.
+	///
+	/// SQL wildcard characters (`%`, `_`) and the escape character (`\`) in
+	/// user input are escaped before constructing the pattern. The generated
+	/// SQL includes an explicit `ESCAPE '\'` clause so that the backslash
+	/// escaping is portable across all backends (including SQLite, which does
+	/// not treat `\` as an escape character by default).
 	fn starts_with<S>(self, prefix: S) -> SimpleExpr
 	where
 		S: Into<String>,
 	{
-		let pattern = format!("{}%", prefix.into());
-		self.like(Value::String(Some(Box::new(pattern))))
+		let escaped = escape_like_pattern(&prefix.into());
+		let pattern = format!("{}%", escaped);
+		like_with_escape(self.into_simple_expr(), pattern)
 	}
 
 	/// Helper for LIKE with suffix wildcard.
+	///
+	/// SQL wildcard characters (`%`, `_`) and the escape character (`\`) in
+	/// user input are escaped before constructing the pattern. The generated
+	/// SQL includes an explicit `ESCAPE '\'` clause for cross-backend
+	/// portability.
 	fn ends_with<S>(self, suffix: S) -> SimpleExpr
 	where
 		S: Into<String>,
 	{
-		let pattern = format!("%{}", suffix.into());
-		self.like(Value::String(Some(Box::new(pattern))))
+		let escaped = escape_like_pattern(&suffix.into());
+		let pattern = format!("%{}", escaped);
+		like_with_escape(self.into_simple_expr(), pattern)
 	}
 
 	/// Helper for LIKE with both wildcards.
+	///
+	/// SQL wildcard characters (`%`, `_`) and the escape character (`\`) in
+	/// user input are escaped before constructing the pattern. The generated
+	/// SQL includes an explicit `ESCAPE '\'` clause for cross-backend
+	/// portability.
 	fn contains<S>(self, substring: S) -> SimpleExpr
 	where
 		S: Into<String>,
 	{
-		let pattern = format!("%{}%", substring.into());
-		self.like(Value::String(Some(Box::new(pattern))))
+		let escaped = escape_like_pattern(&substring.into());
+		let pattern = format!("%{}%", escaped);
+		like_with_escape(self.into_simple_expr(), pattern)
 	}
 
 	// =========================================================================
@@ -601,19 +670,31 @@ mod tests {
 	#[rstest]
 	fn test_starts_with() {
 		let expr = Expr::col("name").starts_with("John");
-		assert!(matches!(expr, SimpleExpr::Binary(_, BinOper::Like, _)));
+		// starts_with uses CustomWithExpr to include ESCAPE clause
+		assert!(matches!(expr, SimpleExpr::CustomWithExpr(_, _)));
+		if let SimpleExpr::CustomWithExpr(template, _) = &expr {
+			assert_eq!(template, "? LIKE ? ESCAPE '\\'");
+		}
 	}
 
 	#[rstest]
 	fn test_ends_with() {
 		let expr = Expr::col("email").ends_with("@example.com");
-		assert!(matches!(expr, SimpleExpr::Binary(_, BinOper::Like, _)));
+		// ends_with uses CustomWithExpr to include ESCAPE clause
+		assert!(matches!(expr, SimpleExpr::CustomWithExpr(_, _)));
+		if let SimpleExpr::CustomWithExpr(template, _) = &expr {
+			assert_eq!(template, "? LIKE ? ESCAPE '\\'");
+		}
 	}
 
 	#[rstest]
 	fn test_contains() {
 		let expr = Expr::col("description").contains("important");
-		assert!(matches!(expr, SimpleExpr::Binary(_, BinOper::Like, _)));
+		// contains uses CustomWithExpr to include ESCAPE clause
+		assert!(matches!(expr, SimpleExpr::CustomWithExpr(_, _)));
+		if let SimpleExpr::CustomWithExpr(template, _) = &expr {
+			assert_eq!(template, "? LIKE ? ESCAPE '\\'");
+		}
 	}
 
 	#[rstest]

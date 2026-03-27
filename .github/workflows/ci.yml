@@ -32,6 +32,7 @@ jobs:
   # When conflicts exist, skip all CI jobs to save runner costs.
   check-branch-status:
     name: Check Branch Status
+    timeout-minutes: 10
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
@@ -70,14 +71,20 @@ jobs:
             core.setOutput('infra-changed', infraChanged.toString());
 
   # Determine runner type for CI jobs.
-  # - release-plz PRs (branch: release-plz-*): auto-assigned self-hosted runner
-  # - Repository owner PRs: self-hosted via checkbox opt-in
-  # - Other contributors: GitHub-hosted ubuntu-latest (free but slower)
-  # Self-hosted runners require SELF_HOSTED_ENABLED variable to be explicitly "true".
-  # AWS Budget circuit breaker sets this to "false" when monthly cost is exceeded.
+  # Priority: Mac local → AWS Spot (opt-in) → GitHub-hosted (fallback)
+  #
+  # Mac local: auto-assigned when MAC_RUNNER_ENABLED=true and actor is trusted.
+  #   Trusted = repo owner, release-plz branch, workflow_dispatch.
+  #   Fork PRs are always excluded (security: untrusted code on local machine).
+  #
+  # AWS Spot: opt-in via PR checkbox when SELF_HOSTED_ENABLED=true.
+  #   Budget circuit breaker sets SELF_HOSTED_ENABLED to "false" when exceeded.
+  #
+  # GitHub-hosted: fallback for fork PRs or when self-hosted is unavailable.
   determine-runner:
     name: Determine Runner
-    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    runs-on: [self-hosted, linux, arm64, reinhardt-hotpath]
     outputs:
       runner: ${{ steps.set-runner.outputs.runner }}
       cargo-build-jobs: ${{ steps.set-runner.outputs.cargo-build-jobs }}
@@ -102,28 +109,50 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           SELF_HOSTED_REQUESTED: ${{ steps.parse-checkbox.outputs.self-hosted-requested }}
           HEAD_REF: ${{ github.head_ref }}
+          MAC_RUNNER_ENABLED: ${{ vars.MAC_RUNNER_ENABLED }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
         run: |
-          USE_SELF_HOSTED=false
+          USE_MAC=false
+          USE_AWS=false
 
-          # release-plz PRs: auto-assign self-hosted runner (bypass actor check).
-          # Only push-access users can create release-plz-* branches.
-          # Budget circuit breaker is still respected.
-          if [[ "$HEAD_REF" == release-plz-* ]] && [[ "$SELF_HOSTED_ENABLED" == "true" ]]; then
-            USE_SELF_HOSTED=true
-          elif [[ "$ACTOR" == "$REPO_OWNER" ]] && [[ "$SELF_HOSTED_ENABLED" == "true" ]]; then
-            if [[ "$EVENT_NAME" == "pull_request" ]]; then
-              # PR: require explicit checkbox opt-in (default: false)
-              if [[ "$SELF_HOSTED_REQUESTED" == "true" ]]; then
-                USE_SELF_HOSTED=true
+          # --- Mac local runner selection ---
+          # Security: only trusted actors can use Mac runner.
+          # Fork PRs are ALWAYS excluded regardless of actor.
+          if [[ "$MAC_RUNNER_ENABLED" == "true" ]] && [[ "$IS_FORK" != "true" ]]; then
+            if [[ "$EVENT_NAME" == "workflow_dispatch" ]] && [[ "$ACTOR" == "$REPO_OWNER" ]]; then
+              USE_MAC=true
+            elif [[ "$EVENT_NAME" == "pull_request" ]]; then
+              # release-plz PRs: trusted (only push-access users create these branches)
+              if [[ "$HEAD_REF" == release-plz-* ]]; then
+                USE_MAC=true
+              # Repo owner PRs: trusted
+              elif [[ "$ACTOR" == "$REPO_OWNER" ]]; then
+                USE_MAC=true
               fi
-            else
-              # Non-PR events (workflow_dispatch): use self-hosted by default
-              USE_SELF_HOSTED=true
+              # Other contributors: never use Mac runner
             fi
           fi
 
-          if [[ "$USE_SELF_HOSTED" == "true" ]]; then
-            # Self-hosted: faster CI with AWS Spot instances
+          # --- AWS Spot runner selection (opt-in) ---
+          if [[ "$USE_MAC" == "false" ]] && [[ "$SELF_HOSTED_ENABLED" == "true" ]]; then
+            if [[ "$HEAD_REF" == release-plz-* ]]; then
+              USE_AWS=true
+            elif [[ "$ACTOR" == "$REPO_OWNER" ]]; then
+              if [[ "$EVENT_NAME" == "pull_request" ]]; then
+                if [[ "$SELF_HOSTED_REQUESTED" == "true" ]]; then
+                  USE_AWS=true
+                fi
+              else
+                USE_AWS=true
+              fi
+            fi
+          fi
+
+          # --- Output runner configuration ---
+          if [[ "$USE_MAC" == "true" ]]; then
+            echo 'runner=["self-hosted","linux","arm64","mac-local"]' >> "$GITHUB_OUTPUT"
+            echo 'cargo-build-jobs=4' >> "$GITHUB_OUTPUT"
+          elif [[ "$USE_AWS" == "true" ]]; then
             echo 'runner=["self-hosted","linux","arm64","reinhardt-ci"]' >> "$GITHUB_OUTPUT"
             echo 'cargo-build-jobs=8' >> "$GITHUB_OUTPUT"
           else
@@ -221,6 +250,7 @@ jobs:
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
+      has-breaking-change-label: ${{ contains(github.event.pull_request.labels.*.name, 'breaking-change') && 'true' || 'false' }}
 
   release-dry-run:
     name: Release Dry-Run
@@ -250,6 +280,9 @@ jobs:
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
       nextest-filter: ${{ needs.detect-affected.outputs.nextest-filter }}
       run-all: ${{ needs.detect-affected.outputs.run-all }}
+      cargo-packages: ${{ needs.detect-affected.outputs.cargo-packages }}
+      partitions-json: ${{ needs.detect-affected.outputs.partitions-json }}
+      partition-count: ${{ needs.detect-affected.outputs.partition-count }}
 
   intra-crate-integration-test:
     name: Intra-Crate Integration Tests
@@ -262,6 +295,9 @@ jobs:
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
       nextest-filter: ${{ needs.detect-affected.outputs.nextest-filter }}
       run-all: ${{ needs.detect-affected.outputs.run-all }}
+      cargo-packages: ${{ needs.detect-affected.outputs.cargo-packages }}
+      partitions-json: ${{ needs.detect-affected.outputs.partitions-json }}
+      partition-count: ${{ needs.detect-affected.outputs.partition-count }}
 
   cross-crate-integration-test:
     name: Cross-Crate Integration Tests
@@ -303,7 +339,8 @@ jobs:
   # Phase 2b: Additional tests run after core tests complete.
   # This phased approach prevents exceeding the Spot vCPU quota by
   # ensuring Phase 2a runners have terminated before Phase 2b starts.
-  # Note: examples-test and coverage run as separate standalone workflows.
+  # Note: examples-test runs as a separate standalone workflow.
+  # Coverage runs only on main branch pushes (not on PRs).
   ui-test:
     name: UI Tests
     uses: ./.github/workflows/ui-test.yml
@@ -332,6 +369,7 @@ jobs:
   # All jobs must pass
   ci-success:
     name: CI Success
+    timeout-minutes: 10
     if: always()
     runs-on: ubuntu-latest
     needs:

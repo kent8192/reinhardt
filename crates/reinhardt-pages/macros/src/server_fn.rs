@@ -50,22 +50,28 @@ fn to_pascal_case_ident(ident: &proc_macro2::Ident) -> proc_macro2::Ident {
 #[derive(Debug, Clone, FromMeta)]
 #[darling(default)]
 pub(crate) struct ServerFnOptions {
-	/// Enable DI functionality with `use_inject = true`
+	/// **Deprecated**: `#[inject]` parameters are now auto-detected.
 	///
-	/// When enabled, parameters marked with `#[inject]` will be resolved
-	/// via dependency injection on the server side.
+	/// Previously required `use_inject = true` to enable DI parameter detection.
+	/// Now `#[inject]` attributes are detected unconditionally, matching the
+	/// behavior of route macros (`#[get]`, `#[post]`, etc.).
 	///
-	/// # Example
+	/// # Migration
 	///
 	/// ```ignore
+	/// // Before (deprecated):
 	/// #[server_fn(use_inject = true)]
 	/// async fn get_user(
 	///     id: u32,
 	///     #[inject] db: Database,
-	/// ) -> Result<User, ServerFnError> {
-	///     // db is injected automatically
-	///     User::find_by_id(&db, id).await
-	/// }
+	/// ) -> Result<User, ServerFnError> { /* ... */ }
+	///
+	/// // After (recommended):
+	/// #[server_fn]
+	/// async fn get_user(
+	///     id: u32,
+	///     #[inject] db: Database,
+	/// ) -> Result<User, ServerFnError> { /* ... */ }
 	/// ```
 	pub use_inject: bool,
 
@@ -308,8 +314,8 @@ impl ServerFnInfo {
 		&self.options.codec
 	}
 
-	/// Check if DI is enabled
-	fn use_inject(&self) -> bool {
+	/// Check if the deprecated `use_inject` option is enabled (for deprecation warning)
+	fn use_inject_enabled(&self) -> bool {
 		self.options.use_inject
 	}
 }
@@ -386,22 +392,39 @@ pub(crate) fn server_fn_impl(args: TokenStream, input: TokenStream) -> TokenStre
 /// Generate server function code
 ///
 /// This generates both client and server code with conditional compilation.
+/// `#[inject]` parameters are always auto-detected, matching the behavior of
+/// route macros (`#[get]`, `#[post]`, etc.).
 fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 	let func = &info.func;
 
-	// Detect #[inject] parameters if use_inject is enabled
-	let inject_params = if info.use_inject() {
-		detect_inject_params(&func.sig.inputs)
-	} else {
-		Vec::new()
-	};
+	// Auto-detect #[inject] parameters unconditionally
+	let inject_params = detect_inject_params(&func.sig.inputs);
 
 	// Remove #[inject] attributes from original function
 	// This ensures the server-side code compiles without unknown attributes
-	let clean_func = if info.use_inject() && !inject_params.is_empty() {
+	let clean_func = if !inject_params.is_empty() {
 		remove_inject_attrs(func)
 	} else {
 		func.clone()
+	};
+
+	// Emit deprecation warning if use_inject = true is enabled
+	let deprecation_warning = if info.use_inject_enabled() {
+		quote! {
+			#[cfg(not(target_arch = "wasm32"))]
+			const _: () = {
+				#[deprecated(
+					note = "use_inject = true is deprecated. #[inject] parameters are now auto-detected. Remove `use_inject = true` from #[server_fn] attribute."
+				)]
+				#[allow(non_upper_case_globals, dead_code)]
+				const __use_inject_deprecated: () = ();
+
+				#[allow(dead_code)]
+				const _trigger: () = __use_inject_deprecated;
+			};
+		}
+	} else {
+		quote! {}
 	};
 
 	// Dynamically resolve reinhardt_pages crate path for client stub
@@ -414,6 +437,9 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 	let server_handler = generate_server_handler(info, &inject_params);
 
 	quote! {
+		// Deprecation warning for use_inject = true (if specified)
+		#deprecation_warning
+
 		// Server-side: Original function (with #[inject] attributes removed)
 		#[cfg(not(target_arch = "wasm32"))]
 		#clean_func
@@ -717,9 +743,13 @@ fn generate_server_handler(
 		let di_crate = get_reinhardt_di_crate();
 
 		quote! {
-			// Get DI context from request
-			let __di_ctx = __req.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
-				.ok_or_else(|| "DI context not set. Ensure the router is configured with .with_di_context()".to_string())?;
+			// Get DI context from request and fork for per-request isolation
+			let __di_ctx = {
+				let __shared_ctx = __req.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
+					.ok_or_else(|| "DI context not set. Ensure the router is configured with .with_di_context()".to_string())?;
+				let __di_request = __req.clone_for_di();
+				::std::sync::Arc::new((*__shared_ctx).fork_for_request(__di_request))
+			};
 
 			// Resolve each #[inject] parameter using reinhardt_di::Injected<T>
 			#(
@@ -813,6 +843,9 @@ fn generate_server_handler(
 		}
 	};
 
+	// Dynamically resolve crate paths for body extraction and registration
+	let pages_crate = get_reinhardt_pages_crate();
+
 	// Generate handler signature based on whether DI is needed
 	let (handler_signature, handler_body_extraction, wrapper_body_extraction, wrapper_call_args) =
 		if !inject_params.is_empty() {
@@ -824,13 +857,14 @@ fn generate_server_handler(
 				quote! {
 					pub async fn #handler_name(__req: #http_crate::Request) -> ::std::result::Result<::std::string::String, ::std::string::String>
 				},
-				// Handler body extraction (from __req parameter)
+				// Handler body extraction (from __req parameter) with Content-Type negotiation
 				quote! {
-					// Extract body from request
+					let __content_type = __req.get_header("content-type").unwrap_or_default();
 					let body = __req.read_body()
 						.map_err(|e| format!("Failed to read body: {}", e))?;
 					let body = ::std::string::String::from_utf8(body.to_vec())
 						.map_err(|e| format!("Body is not valid UTF-8: {}", e))?;
+					let body = #pages_crate::server_fn::convert_body_for_codec(body, &__content_type, #codec)?;
 				},
 				// Wrapper doesn't extract body when DI is enabled; passes Request directly
 				quote! {
@@ -846,13 +880,14 @@ fn generate_server_handler(
 				},
 				// Handler doesn't need body extraction (body is already a parameter)
 				quote! {},
-				// Wrapper needs to extract body from req
+				// Wrapper needs to extract body from req with Content-Type negotiation
 				quote! {
-					// Extract body from request
+					let __content_type = req.get_header("content-type").unwrap_or_default();
 					let body = req.read_body()
 						.map_err(|e| format!("Failed to read body: {}", e))?;
 					let body = ::std::string::String::from_utf8(body.to_vec())
 						.map_err(|e| format!("Body is not valid UTF-8: {}", e))?;
+					let body = #pages_crate::server_fn::convert_body_for_codec(body, &__content_type, #codec)?;
 				},
 				vec![quote! { body }],
 			)
@@ -862,9 +897,8 @@ fn generate_server_handler(
 	let static_wrapper_name = quote::format_ident!("__server_fn_static_wrapper_{}", name);
 	let name_str = name.to_string();
 
-	// Dynamically resolve crate paths for all external dependencies
-	let pages_crate = get_reinhardt_pages_crate();
-	// Note: http_crate is already resolved above when inject_params is not empty,
+	// Note: pages_crate is already resolved above for body extraction.
+	// http_crate is resolved above when inject_params is not empty,
 	// but we need it for the static wrapper regardless
 	let http_crate_for_wrapper = get_reinhardt_http_crate();
 
@@ -989,6 +1023,7 @@ fn generate_server_handler(
 			impl #pages_crate::server_fn::ServerFnRegistration for marker {
 				const PATH: &'static str = #endpoint;
 				const NAME: &'static str = #name_str;
+				const CODEC: &'static str = #codec;
 
 				fn handler() -> #pages_crate::server_fn::ServerFnHandler {
 					super::#static_wrapper_name
@@ -1016,6 +1051,27 @@ mod tests {
 		use darling::ast::NestedMeta;
 		use syn::parse_quote;
 
+		// Test with endpoint only (use_inject is no longer needed)
+		let attr: syn::Attribute = parse_quote!(#[server_fn(endpoint = "/custom")]);
+		let meta_list = attr.meta.require_list().unwrap();
+		let nested: Vec<NestedMeta> = NestedMeta::parse_meta_list(meta_list.tokens.clone())
+			.unwrap()
+			.into_iter()
+			.collect();
+		let options = ServerFnOptions::from_list(&nested).unwrap();
+
+		assert_eq!(options.use_inject, false);
+		assert_eq!(options.endpoint, Some("/custom".to_string()));
+		assert_eq!(options.codec, "json");
+	}
+
+	#[test]
+	fn test_server_fn_options_parse_deprecated_use_inject() {
+		use darling::FromMeta;
+		use darling::ast::NestedMeta;
+		use syn::parse_quote;
+
+		// use_inject = true is still accepted (deprecated but functional)
 		let attr: syn::Attribute =
 			parse_quote!(#[server_fn(use_inject = true, endpoint = "/custom")]);
 		let meta_list = attr.meta.require_list().unwrap();

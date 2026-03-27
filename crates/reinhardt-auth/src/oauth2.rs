@@ -2,6 +2,9 @@
 //!
 //! Provides OAuth2 authorization flow support for third-party authentication.
 
+// This module uses the deprecated User trait for backward compatibility.
+// OAuth2Authentication returns Box<dyn User> to preserve existing authentication APIs.
+#![allow(deprecated)]
 use crate::repository::{SimpleUserRepository, UserRepository};
 use crate::{AuthenticationBackend, AuthenticationError, User};
 use async_trait::async_trait;

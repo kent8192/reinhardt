@@ -424,3 +424,201 @@ macro_rules! test_case_with_db {
         }
     };
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	// ========================================================================
+	// TeardownError Display tests
+	// ========================================================================
+
+	#[rstest]
+	fn test_teardown_error_transaction_rollback_display() {
+		// Arrange
+		let error = TeardownError::TransactionRollbackFailed("tx-123 failed".to_string());
+
+		// Act
+		let display = format!("{}", error);
+
+		// Assert
+		assert_eq!(display, "Failed to rollback transactions: tx-123 failed");
+	}
+
+	#[rstest]
+	fn test_teardown_error_connection_close_display() {
+		// Arrange
+		let error = TeardownError::ConnectionCloseFailed("connection refused".to_string());
+
+		// Act
+		let display = format!("{}", error);
+
+		// Assert
+		assert_eq!(
+			display,
+			"Failed to close database connection: connection refused"
+		);
+	}
+
+	#[rstest]
+	fn test_teardown_error_client_cleanup_display() {
+		// Arrange
+		let error = TeardownError::ClientCleanupFailed("timeout".to_string());
+
+		// Act
+		let display = format!("{}", error);
+
+		// Assert
+		assert_eq!(display, "Failed to cleanup client state: timeout");
+	}
+
+	#[rstest]
+	fn test_teardown_error_debug() {
+		// Arrange
+		let error = TeardownError::TransactionRollbackFailed("debug test".to_string());
+
+		// Act
+		let debug = format!("{:?}", error);
+
+		// Assert
+		assert!(
+			debug.contains("debug test"),
+			"Debug output should contain the message, got: {}",
+			debug
+		);
+	}
+
+	// ========================================================================
+	// APITestCase tests
+	// ========================================================================
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_api_test_case_setup_creates_client() {
+		// Arrange & Act
+		let test_case = APITestCase::setup().await;
+
+		// Assert
+		let client = test_case.client().await;
+		// Verify we can access the client (read guard obtained successfully)
+		drop(client);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_api_test_case_client_read_access() {
+		// Arrange
+		let test_case = APITestCase::setup().await;
+
+		// Act
+		let client = test_case.client().await;
+
+		// Assert
+		// Successfully obtained read guard - the client is accessible
+		assert!(
+			std::mem::size_of_val(&*client) > 0,
+			"Client should have non-zero size"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_api_test_case_teardown_completes() {
+		// Arrange
+		let test_case = APITestCase::setup().await;
+
+		// Act & Assert
+		// teardown should complete without panicking
+		test_case.teardown().await;
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_api_test_case_multiple_reads() {
+		// Arrange
+		let test_case = APITestCase::setup().await;
+
+		// Act
+		let client1 = test_case.client().await;
+		let client2 = test_case.client().await;
+
+		// Assert
+		// Both read guards should be held concurrently without deadlock
+		assert!(
+			std::mem::size_of_val(&*client1) > 0,
+			"First client read should succeed"
+		);
+		assert!(
+			std::mem::size_of_val(&*client2) > 0,
+			"Second client read should succeed"
+		);
+	}
+
+	// ========================================================================
+	// TransactionHandle tests (testcontainers feature)
+	// ========================================================================
+
+	#[cfg(feature = "testcontainers")]
+	mod testcontainers_tests {
+		use super::*;
+		use rstest::rstest;
+
+		#[rstest]
+		fn test_transaction_handle_new() {
+			// Arrange & Act
+			let handle = TransactionHandle::new();
+
+			// Assert
+			assert!(!handle.id().is_empty(), "ID should not be empty");
+			assert!(!handle.is_committed(), "New handle should not be committed");
+		}
+
+		#[rstest]
+		fn test_transaction_handle_mark_committed() {
+			// Arrange
+			let mut handle = TransactionHandle::new();
+
+			// Act
+			handle.mark_committed();
+
+			// Assert
+			assert!(handle.is_committed());
+		}
+
+		#[rstest]
+		fn test_transaction_handle_default() {
+			// Arrange & Act
+			let handle = TransactionHandle::default();
+
+			// Assert
+			assert!(!handle.id().is_empty(), "Default ID should not be empty");
+			assert!(
+				!handle.is_committed(),
+				"Default handle should not be committed"
+			);
+		}
+
+		#[rstest]
+		fn test_transaction_handle_id_is_uuid() {
+			// Arrange & Act
+			let handle = TransactionHandle::new();
+
+			// Assert
+			let id = handle.id();
+			// UUID v4 format: 8-4-4-4-12 hex characters
+			let parts: Vec<&str> = id.split('-').collect();
+			assert_eq!(
+				parts.len(),
+				5,
+				"UUID should have 5 parts separated by hyphens, got: {}",
+				id
+			);
+			assert_eq!(parts[0].len(), 8);
+			assert_eq!(parts[1].len(), 4);
+			assert_eq!(parts[2].len(), 4);
+			assert_eq!(parts[3].len(), 4);
+			assert_eq!(parts[4].len(), 12);
+		}
+	}
+}

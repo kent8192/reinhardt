@@ -2,13 +2,15 @@
 //!
 //! Provides field information for dynamic form generation.
 
+use super::user::AdminDefaultUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, FieldInfo, FieldType};
 use crate::types::FieldsResponse;
-use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+use reinhardt_auth::AuthUser;
+use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
-use super::error::MapServerFnError;
+use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::server::type_inference::{get_field_metadata, infer_admin_field_type, infer_required};
 #[cfg(not(target_arch = "wasm32"))]
@@ -37,14 +39,24 @@ use reinhardt_utils::utils_core::text::humanize_field_name;
 /// let response = get_fields("User".to_string(), Some("42".to_string())).await?;
 /// println!("Existing values: {:?}", response.values);
 /// ```
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_fields(
 	model_name: String,
 	id: Option<String>,
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
+	#[inject] http_request: ServerFnRequest,
+	#[inject] AuthUser(user): AuthUser<AdminDefaultUser>,
 ) -> Result<FieldsResponse, ServerFnError> {
+	// Authentication and authorization check
+	let auth = AdminAuth::from_request(&http_request);
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	auth.require_model_permission(
+		model_admin.as_ref(),
+		&user as &dyn crate::core::AdminUser,
+		ModelPermission::View,
+	)
+	.await?;
 	let field_names = model_admin
 		.fields()
 		.unwrap_or_else(|| model_admin.list_display());

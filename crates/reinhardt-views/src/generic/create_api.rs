@@ -219,7 +219,10 @@ where
 					.with_json(&json_value)
 					.map_err(|e| Error::Http(e.to_string()))
 			}
-			_ => Err(Error::Http("Method not allowed".to_string())),
+			_ => Err(Error::MethodNotAllowed(format!(
+				"Method {} not allowed",
+				request.method
+			))),
 		}
 	}
 

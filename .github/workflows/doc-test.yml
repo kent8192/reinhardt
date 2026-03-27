@@ -57,9 +57,14 @@ jobs:
 
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup protoc
-        uses: ./.github/actions/setup-protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install cargo-make
         uses: taiki-e/install-action@v2

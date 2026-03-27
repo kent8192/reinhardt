@@ -174,7 +174,7 @@ async fn test_admin_database_crud_operations(
 
 	// CREATE operation
 	let created_id = db
-		.create::<reinhardt_db::AdminRecord>(table_name, data.clone())
+		.create::<reinhardt_db::AdminRecord>(table_name, None, data.clone())
 		.await
 		.expect("Failed to create record");
 	assert!(created_id > 0);
@@ -256,7 +256,7 @@ async fn test_list_pagination(
 		data.insert("name".to_string(), json!(format!("Test Item {}", i)));
 		data.insert("status".to_string(), json!("active"));
 
-		db.create::<reinhardt_db::AdminRecord>(table_name, data)
+		db.create::<reinhardt_db::AdminRecord>(table_name, None, data)
 			.await
 			.expect("Failed to create test record");
 	}

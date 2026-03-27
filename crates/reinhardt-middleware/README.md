@@ -12,11 +12,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", features = ["middleware"] }
+reinhardt = { version = "0.1.0-rc.13", features = ["middleware"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-alpha.1", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-alpha.1", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
 ```
 
 Then import middleware features:
@@ -43,7 +43,7 @@ use reinhardt::middleware::{SecurityHeadersMiddleware, HttpsRedirectMiddleware};
   - Credentials support
   - Max-age caching
   - Permissive mode for development
-- **CSRF Protection** - Cross-Site Request Forgery protection via `reinhardt-security`
+- **CSRF Protection** - Cross-Site Request Forgery protection via `reinhardt-core` security module
   - Token generation and validation
   - Origin and referer checking
   - Secret management and rotation
@@ -196,7 +196,7 @@ The following middleware are implemented in separate crates:
 
 ```rust
 use reinhardt::middleware::csrf::{CsrfMiddleware, CsrfMiddlewareConfig};
-use reinhardt::core::types::{Handler, Middleware};
+use reinhardt_http::{Handler, Middleware};
 use std::sync::Arc;
 
 // Default configuration

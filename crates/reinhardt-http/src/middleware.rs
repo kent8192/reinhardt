@@ -258,6 +258,102 @@ impl Handler for MiddlewareChain {
 	}
 }
 
+/// Middleware wrapper that excludes specific URL paths from execution.
+///
+/// When a request matches an excluded path, the middleware is skipped
+/// and the request passes directly to the next handler in the chain.
+///
+/// Path matching follows Django URL conventions:
+/// - Paths ending with `/` are treated as **prefix matches**
+///   (e.g., `"/api/auth/"` excludes `"/api/auth/login"`, `"/api/auth/register"`)
+/// - Paths without trailing `/` require an **exact match**
+///   (e.g., `"/health"` excludes only `"/health"`, not `"/health/check"`)
+///
+/// This struct is typically not used directly. Instead, use the
+/// `exclude` methods on the `ServerRouter` or `UnifiedRouter` types
+/// from the `reinhardt_urls::routers` module for declarative
+/// route exclusion at the router level.
+///
+/// # Examples
+///
+/// ```rust
+/// use reinhardt_http::middleware::ExcludeMiddleware;
+/// use reinhardt_http::{Middleware, Request};
+/// use std::sync::Arc;
+///
+/// # struct MyMiddleware;
+/// # #[async_trait::async_trait]
+/// # impl Middleware for MyMiddleware {
+/// #     async fn process(
+/// #         &self,
+/// #         request: Request,
+/// #         next: Arc<dyn reinhardt_http::Handler>,
+/// #     ) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
+/// #         next.handle(request).await
+/// #     }
+/// # }
+/// let inner: Arc<dyn Middleware> = Arc::new(MyMiddleware);
+/// let excluded = ExcludeMiddleware::new(inner)
+///     .add_exclusion("/api/auth/")   // prefix match
+///     .add_exclusion("/health");     // exact match
+/// ```
+pub struct ExcludeMiddleware {
+	inner: Arc<dyn Middleware>,
+	exclusions: Vec<String>,
+}
+
+impl ExcludeMiddleware {
+	/// Creates a new `ExcludeMiddleware` wrapping the given middleware.
+	pub fn new(inner: Arc<dyn Middleware>) -> Self {
+		Self {
+			inner,
+			exclusions: Vec::new(),
+		}
+	}
+
+	/// Adds an exclusion pattern (builder pattern, consumes self).
+	///
+	/// Paths ending with `/` are prefix matches; others are exact matches.
+	pub fn add_exclusion(mut self, pattern: &str) -> Self {
+		self.exclusions.push(pattern.to_string());
+		self
+	}
+
+	/// Adds an exclusion pattern (mutable reference).
+	///
+	/// Paths ending with `/` are prefix matches; others are exact matches.
+	pub fn add_exclusion_mut(&mut self, pattern: &str) {
+		self.exclusions.push(pattern.to_string());
+	}
+
+	/// Checks whether the given path matches any exclusion pattern.
+	fn is_excluded(&self, path: &str) -> bool {
+		self.exclusions.iter().any(|pattern| {
+			if pattern.ends_with('/') {
+				// Prefix match: excluded if path starts with the pattern
+				path.starts_with(pattern.as_str())
+			} else {
+				// Exact match: excluded only if path equals the pattern
+				path == pattern
+			}
+		})
+	}
+}
+
+#[async_trait]
+impl Middleware for ExcludeMiddleware {
+	async fn process(&self, request: Request, next: Arc<dyn Handler>) -> Result<Response> {
+		self.inner.process(request, next).await
+	}
+
+	fn should_continue(&self, request: &Request) -> bool {
+		if self.is_excluded(request.uri.path()) {
+			return false;
+		}
+		self.inner.should_continue(request)
+	}
+}
+
 /// Optimized internal handler that composes middleware with next handler.
 ///
 /// Supports short-circuiting via `response.should_stop_chain()`.
@@ -618,5 +714,134 @@ mod tests {
 
 		let stopping_response = Response::unauthorized().with_stop_chain(true);
 		assert!(stopping_response.should_stop_chain());
+	}
+
+	// --- ExcludeMiddleware tests ---
+
+	fn create_request_with_path(path: &str) -> Request {
+		Request::builder()
+			.method(Method::GET)
+			.uri(path)
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap()
+	}
+
+	#[rstest::rstest]
+	#[case("/api/auth/login", true)]
+	#[case("/api/auth/register", true)]
+	#[case("/api/auth/", true)]
+	#[case("/api/users", false)]
+	#[case("/public", false)]
+	fn test_exclude_middleware_prefix_match(#[case] path: &str, #[case] should_exclude: bool) {
+		// Arrange
+		let inner: Arc<dyn Middleware> = Arc::new(MockMiddleware {
+			prefix: "MW:".to_string(),
+		});
+		let exclude_mw = ExcludeMiddleware::new(inner).add_exclusion("/api/auth/");
+
+		// Act
+		let request = create_request_with_path(path);
+		let result = exclude_mw.should_continue(&request);
+
+		// Assert
+		assert_eq!(result, !should_exclude);
+	}
+
+	#[rstest::rstest]
+	#[case("/health", true)]
+	#[case("/health/check", false)]
+	#[case("/healthz", false)]
+	#[case("/api/health", false)]
+	fn test_exclude_middleware_exact_match(#[case] path: &str, #[case] should_exclude: bool) {
+		// Arrange
+		let inner: Arc<dyn Middleware> = Arc::new(MockMiddleware {
+			prefix: "MW:".to_string(),
+		});
+		let exclude_mw = ExcludeMiddleware::new(inner).add_exclusion("/health");
+
+		// Act
+		let request = create_request_with_path(path);
+		let result = exclude_mw.should_continue(&request);
+
+		// Assert
+		assert_eq!(result, !should_exclude);
+	}
+
+	#[rstest::rstest]
+	fn test_exclude_middleware_no_match_passes_through() {
+		// Arrange
+		let inner: Arc<dyn Middleware> = Arc::new(MockMiddleware {
+			prefix: "MW:".to_string(),
+		});
+		let exclude_mw = ExcludeMiddleware::new(inner)
+			.add_exclusion("/api/auth/")
+			.add_exclusion("/health");
+
+		// Act
+		let request = create_request_with_path("/api/users");
+		let result = exclude_mw.should_continue(&request);
+
+		// Assert
+		assert!(result);
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_exclude_middleware_delegates_process() {
+		// Arrange
+		let inner: Arc<dyn Middleware> = Arc::new(MockMiddleware {
+			prefix: "INNER:".to_string(),
+		});
+		let exclude_mw = ExcludeMiddleware::new(inner).add_exclusion("/excluded/");
+
+		let handler = Arc::new(MockHandler {
+			response_body: "Response".to_string(),
+		});
+
+		// Act
+		let request = create_request_with_path("/api/test");
+		let response = exclude_mw.process(request, handler).await.unwrap();
+
+		// Assert
+		let body = String::from_utf8(response.body.to_vec()).unwrap();
+		assert_eq!(body, "INNER:Response");
+	}
+
+	#[rstest::rstest]
+	fn test_exclude_middleware_multiple_exclusions() {
+		// Arrange
+		let inner: Arc<dyn Middleware> = Arc::new(MockMiddleware {
+			prefix: "MW:".to_string(),
+		});
+		let mut exclude_mw = ExcludeMiddleware::new(inner);
+		exclude_mw.add_exclusion_mut("/api/auth/");
+		exclude_mw.add_exclusion_mut("/admin/");
+		exclude_mw.add_exclusion_mut("/health");
+
+		// Act & Assert
+		assert!(!exclude_mw.should_continue(&create_request_with_path("/api/auth/login")));
+		assert!(!exclude_mw.should_continue(&create_request_with_path("/admin/dashboard")));
+		assert!(!exclude_mw.should_continue(&create_request_with_path("/health")));
+		assert!(exclude_mw.should_continue(&create_request_with_path("/api/users")));
+	}
+
+	#[rstest::rstest]
+	fn test_exclude_middleware_respects_inner_should_continue() {
+		// Arrange - inner middleware that rejects non-/api/ paths
+		let inner: Arc<dyn Middleware> = Arc::new(ConditionalMiddleware {
+			prefix: "API:".to_string(),
+		});
+		let exclude_mw = ExcludeMiddleware::new(inner).add_exclusion("/api/auth/");
+
+		// Act & Assert
+		// Excluded path -> false (excluded by wrapper)
+		assert!(!exclude_mw.should_continue(&create_request_with_path("/api/auth/login")));
+		// Non-excluded, but inner rejects non-/api/ -> false (inner's should_continue)
+		assert!(!exclude_mw.should_continue(&create_request_with_path("/public")));
+		// Non-excluded, inner accepts /api/ -> true
+		assert!(exclude_mw.should_continue(&create_request_with_path("/api/users")));
 	}
 }

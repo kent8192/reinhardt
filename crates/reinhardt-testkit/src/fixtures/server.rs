@@ -61,7 +61,7 @@ impl TestServerGuard {
 	/// 1. Binds to a random port (127.0.0.1:0)
 	/// 2. Creates a ShutdownCoordinator
 	/// 3. Spawns the server task
-	/// 4. Waits 100ms for the server to start
+	/// 4. Probes the server port until it accepts connections
 	///
 	/// # Arguments
 	///
@@ -110,8 +110,11 @@ impl TestServerGuard {
 			}
 		});
 
-		// Wait for server to start
-		tokio::time::sleep(Duration::from_millis(100)).await;
+		// Probe server readiness with TCP connect attempts instead of fixed sleep.
+		// This avoids flaky failures when the system is under heavy load.
+		wait_for_server_ready(actual_addr)
+			.await
+			.expect("Test server failed to become ready");
 
 		Self {
 			url,
@@ -676,8 +679,11 @@ impl TestServerBuilder {
 			}
 		});
 
-		// Wait for server to start
-		tokio::time::sleep(Duration::from_millis(100)).await;
+		// Probe server readiness with TCP connect attempts instead of fixed sleep.
+		// This avoids flaky failures when the system is under heavy load.
+		wait_for_server_ready(actual_addr)
+			.await
+			.expect("Test server failed to become ready");
 
 		Ok(TestServer {
 			url,
@@ -685,5 +691,209 @@ impl TestServerBuilder {
 			coordinator,
 			server_task: Some(server_task),
 		})
+	}
+}
+
+// ============================================================================
+// Server Readiness Probe
+// ============================================================================
+
+/// Maximum number of TCP readiness probe attempts
+const SERVER_READY_MAX_ATTEMPTS: u32 = 20;
+
+/// Interval between TCP readiness probe attempts
+const SERVER_READY_PROBE_INTERVAL_MS: u64 = 50;
+
+/// Probe the server address with TCP connects until it accepts a connection.
+///
+/// This replaces a fixed `sleep(100ms)` with an active readiness check,
+/// eliminating flaky test failures caused by slow server startup under load.
+///
+/// # Errors
+///
+/// Returns an error if the server does not accept a TCP connection within
+/// the configured number of probe attempts.
+async fn wait_for_server_ready(addr: SocketAddr) -> Result<(), std::io::Error> {
+	for attempt in 1..=SERVER_READY_MAX_ATTEMPTS {
+		// Try to establish a TCP connection to verify the server is accepting
+		match tokio::net::TcpStream::connect(addr).await {
+			Ok(_) => return Ok(()),
+			Err(_) if attempt < SERVER_READY_MAX_ATTEMPTS => {
+				tokio::time::sleep(Duration::from_millis(SERVER_READY_PROBE_INTERVAL_MS)).await;
+			}
+			Err(e) => {
+				return Err(std::io::Error::new(
+					std::io::ErrorKind::TimedOut,
+					format!(
+						"Server at {} not ready after {} attempts: {}",
+						addr, SERVER_READY_MAX_ATTEMPTS, e
+					),
+				));
+			}
+		}
+	}
+
+	Err(std::io::Error::new(
+		std::io::ErrorKind::TimedOut,
+		format!(
+			"Server at {} not ready after {} attempts",
+			addr, SERVER_READY_MAX_ATTEMPTS
+		),
+	))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::*;
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_basic_handler_returns_ok() {
+		// Arrange
+		let handler = BasicHandler;
+		let request = Request::builder()
+			.method(hyper::Method::GET)
+			.uri("/")
+			.build()
+			.expect("Failed to build request");
+
+		// Act
+		let response = handler.handle(request).await;
+
+		// Assert
+		assert!(response.is_ok(), "Expected Ok response from BasicHandler");
+		let resp = response.unwrap();
+		assert_eq!(resp.status, hyper::StatusCode::OK);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_test_server_guard_starts() {
+		// Arrange
+		let router = Router::new();
+
+		// Act
+		let server = test_server_guard(router).await;
+
+		// Assert
+		assert!(
+			server.url.starts_with("http://127.0.0.1:"),
+			"Expected URL to start with 'http://127.0.0.1:', got: {}",
+			server.url
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_test_server_builder_default() {
+		// Arrange
+		let handler: Arc<dyn Handler> = Arc::new(BasicHandler);
+
+		// Act
+		let result = TestServer::builder().handler(handler).build().await;
+
+		// Assert
+		assert!(
+			result.is_ok(),
+			"Expected TestServer::builder().handler().build() to succeed"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_test_server_url_format() {
+		// Arrange
+		let handler: Arc<dyn Handler> = Arc::new(BasicHandler);
+
+		// Act
+		let server = TestServer::builder()
+			.handler(handler)
+			.build()
+			.await
+			.expect("Failed to build TestServer");
+
+		// Assert
+		assert!(
+			server.url.starts_with("http://127.0.0.1:"),
+			"Expected URL format 'http://127.0.0.1:<port>', got: {}",
+			server.url
+		);
+		assert!(
+			server.addr.port() > 0,
+			"Expected non-zero port, got: {}",
+			server.addr.port()
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_test_server_responds_to_request() {
+		// Arrange
+		let handler: Arc<dyn Handler> = Arc::new(BasicHandler);
+		let server = TestServer::builder()
+			.handler(handler)
+			.build()
+			.await
+			.expect("Failed to build TestServer");
+		let client = reqwest::Client::new();
+
+		// Act
+		let response = client.get(&server.url).send().await;
+
+		// Assert
+		assert!(response.is_ok(), "Expected GET request to succeed");
+		let resp = response.unwrap();
+		assert_eq!(resp.status(), reqwest::StatusCode::OK);
+	}
+
+	#[rstest]
+	fn test_http_client_fixture() {
+		// Arrange & Act
+		let client = http_client();
+
+		// Assert
+		// Verify client was created successfully by making a type assertion
+		let _: &reqwest::Client = &client;
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_test_server_shutdown_timeout() {
+		// Arrange
+		let handler: Arc<dyn Handler> = Arc::new(BasicHandler);
+		let custom_timeout = Duration::from_secs(10);
+
+		// Act
+		let result = TestServer::builder()
+			.handler(handler)
+			.shutdown_timeout(custom_timeout)
+			.build()
+			.await;
+
+		// Assert
+		assert!(
+			result.is_ok(),
+			"Expected TestServer with custom shutdown timeout to build successfully"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_wait_for_server_ready() {
+		// Arrange
+		let listener = TcpListener::bind("127.0.0.1:0")
+			.await
+			.expect("Failed to bind listener");
+		let addr = listener.local_addr().expect("Failed to get local addr");
+
+		// Act
+		let result = wait_for_server_ready(addr).await;
+
+		// Assert
+		assert!(
+			result.is_ok(),
+			"Expected wait_for_server_ready to succeed for a bound address"
+		);
 	}
 }

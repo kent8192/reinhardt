@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.13...reinhardt-db@v0.1.0-rc.14) - 2026-03-24
+
+### Fixed
+
+- *(migrations)* handle `.to_string()` in dependency tuple parsing
+- *(migrations)* resolve multi-element dependency parsing and deterministic sort
+- *(reinhardt-db)* remove unnecessary dereference in pool connection
+- *(db)* apply ManuallyDrop to backends_pool PooledConnection Drop
+- *(reinhardt-db)* fix dependency collection, table tracking, BFS ordering, and lock pattern in migrations
+- *(reinhardt-db)* fix cache value in next_number_cached and optimize squash dedup
+- *(db)* escape double quotes in PostgreSQL quote_identifier
+- *(db)* quote column names in ON CONFLICT clauses
+- *(db)* quote identifiers in BatchInsertBuilder::build_sql
+- *(query,db)* address copilot review on SQL injection PR
+- *(db)* update test expectations for quoted identifiers and parameterized LIMIT
+
+### Styling
+
+- *(docs)* apply auto-fix formatting and lint corrections
+
+## [0.1.0-rc.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.12...reinhardt-db@v0.1.0-rc.13) - 2026-03-18
+
+### Fixed
+
+- *(migrations)* skip duplicate operations check for empty-operations migrations
+
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.11...reinhardt-db@v0.1.0-rc.12) - 2026-03-18
+
+### Added
+
+- *(db)* add migration conflict detection and merge name generation
+
+### Documentation
+
+- *(db)* recommend CARGO_MANIFEST_DIR for workspace-safe migration paths
+
+### Fixed
+
+- *(db)* warn when FilesystemSource root directory does not exist
+
+### Other
+
+- incorporate main branch docs.rs fixes
+
+### Styling
+
+- *(db)* apply auto-fix formatting to filesystem source
+
 ## [0.1.0-rc.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.10...reinhardt-db@v0.1.0-rc.11) - 2026-03-16
 
 ### Fixed

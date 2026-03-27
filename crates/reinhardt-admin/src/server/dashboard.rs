@@ -9,7 +9,9 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use super::error::AdminAuth;
 #[cfg(not(target_arch = "wasm32"))]
-use super::security::generate_csrf_token;
+use super::security::{build_csrf_cookie, generate_csrf_token};
+#[cfg(not(target_arch = "wasm32"))]
+use reinhardt_http::ResponseCookies;
 
 /// Get dashboard data
 ///
@@ -33,7 +35,7 @@ use super::security::generate_csrf_token;
 /// let dashboard = get_dashboard().await?;
 /// println!("Site: {}", dashboard.site_name);
 /// ```
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_dashboard(
 	#[inject] site: Arc<AdminSite>,
 	#[inject] http_request: ServerFnRequest,
@@ -54,6 +56,16 @@ pub async fn get_dashboard(
 
 	// Build dashboard response with CSRF token for mutation requests
 	let csrf_token = generate_csrf_token();
+
+	// Set the CSRF token as a cookie via request extensions.
+	// The server function router extracts ResponseCookies and applies
+	// them as Set-Cookie headers on the HTTP response.
+	let is_secure = http_request.inner().is_secure;
+	let cookie_value = build_csrf_cookie(&csrf_token, is_secure);
+	let mut response_cookies = ResponseCookies::new();
+	response_cookies.add(cookie_value);
+	http_request.inner().extensions.insert(response_cookies);
+
 	Ok(DashboardResponse {
 		site_name: site.name().to_string(),
 		url_prefix: site.url_prefix().to_string(),

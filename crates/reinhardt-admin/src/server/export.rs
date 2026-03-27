@@ -2,12 +2,14 @@
 //!
 //! Provides export operations for admin models.
 
+use super::user::AdminDefaultUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, ExportFormat, ExportResponse};
+use reinhardt_auth::AuthUser;
 use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
-use super::error::{AdminAuth, MapServerFnError};
+use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(not(target_arch = "wasm32"))]
 use super::limits::MAX_EXPORT_RECORDS;
 
@@ -35,20 +37,41 @@ use super::limits::MAX_EXPORT_RECORDS;
 /// let response = export_data("User".to_string(), ExportFormat::JSON).await?;
 /// println!("Downloaded {}", response.filename);
 /// ```
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn export_data(
 	model_name: String,
 	format: ExportFormat,
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
+	#[inject] AuthUser(user): AuthUser<AdminDefaultUser>,
 ) -> Result<ExportResponse, ServerFnError> {
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
-	auth.require_view_permission(&model_name)?;
-
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	auth.require_model_permission(
+		model_admin.as_ref(),
+		&user as &dyn crate::core::AdminUser,
+		ModelPermission::View,
+	)
+	.await?;
 	let table_name = model_admin.table_name();
+
+	// Query total count to detect truncation
+	let total_count = db
+		.count::<AdminRecord>(table_name, vec![])
+		.await
+		.map_server_fn_error()?;
+	let truncated = total_count > MAX_EXPORT_RECORDS;
+
+	if truncated {
+		tracing::warn!(
+			"Export for model '{}' truncated: {} total records, limit is {}",
+			model_name,
+			total_count,
+			MAX_EXPORT_RECORDS
+		);
+	}
 
 	// Fetch records with export limit to prevent memory exhaustion
 	let results = db
@@ -126,5 +149,7 @@ pub async fn export_data(
 		data,
 		filename,
 		content_type: content_type.to_string(),
+		truncated,
+		total_count: Some(total_count),
 	})
 }

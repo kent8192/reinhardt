@@ -3,6 +3,7 @@
 //! Provides a builder pattern for constructing settings from multiple sources
 //! with priority-based merging.
 
+use super::composed::ComposedSettings;
 use super::profile::Profile;
 use super::sources::{ConfigSource, DotEnvSource, EnvSource, SourceError};
 use indexmap::IndexMap;
@@ -132,6 +133,22 @@ impl SettingsBuilder {
 		}
 		self.add_source(source)
 	}
+	/// Build and validate a composed settings struct.
+	///
+	/// This method:
+	/// 1. Merges all configuration sources
+	/// 2. Validates that all required fields have values
+	/// 3. Deserializes the merged data into the target type
+	///
+	/// Fragment-level validation (`validate_fragments()`) should be called
+	/// separately by the caller with the appropriate profile.
+	pub fn build_composed<T: ComposedSettings>(self) -> Result<T, BuildError> {
+		let merged = self.build()?;
+		T::validate_requirements(merged.as_map())?;
+		let settings: T = merged.into_typed().map_err(BuildError::from)?;
+		Ok(settings)
+	}
+
 	/// Build the configuration by merging all sources
 	///
 	/// # Examples
@@ -416,6 +433,28 @@ pub enum BuildError {
 	/// A validation check on the built settings failed.
 	#[error("Validation error: {0}")]
 	Validation(String),
+
+	/// A required field was not provided by any configuration source.
+	#[error(
+		"missing required field `{field}` in section `[{section}]`. \
+		 Provide it via TOML, environment variable, or .set()"
+	)]
+	MissingRequiredField {
+		/// The settings section name.
+		section: &'static str,
+		/// The field name that is missing.
+		field: &'static str,
+	},
+
+	/// Failed to deserialize merged settings into the target type.
+	#[error("settings deserialization failed: {0}")]
+	Deserialization(String),
+}
+
+impl From<GetError> for BuildError {
+	fn from(err: GetError) -> Self {
+		BuildError::Deserialization(err.to_string())
+	}
 }
 
 /// Error type for getting values
@@ -440,6 +479,7 @@ pub enum GetError {
 mod tests {
 	use super::*;
 	use crate::settings::sources::DefaultSource;
+	use rstest::rstest;
 	use serde::Deserialize;
 
 	#[test]
@@ -533,6 +573,107 @@ mod tests {
 
 		assert!(settings.contains_key("key1"));
 		assert!(!settings.contains_key("key2"));
+	}
+
+	#[rstest]
+	fn test_build_error_missing_required_field_message() {
+		// Arrange
+		let error = BuildError::MissingRequiredField {
+			section: "core",
+			field: "secret_key",
+		};
+
+		// Act
+		let message = error.to_string();
+
+		// Assert
+		assert!(message.contains("missing required field `secret_key`"));
+		assert!(message.contains("section `[core]`"));
+	}
+
+	#[rstest]
+	fn test_build_composed_missing_required_field() {
+		// Arrange
+		use crate::settings::composed::ComposedSettings;
+		use crate::settings::profile::Profile;
+		use crate::settings::validation::ValidationResult;
+		use serde::Serialize;
+
+		#[derive(Clone, Debug, Serialize, Deserialize)]
+		struct MinimalComposed {
+			#[serde(default)]
+			optional_field: String,
+		}
+
+		impl ComposedSettings for MinimalComposed {
+			fn validate_requirements(merged: &IndexMap<String, Value>) -> Result<(), BuildError> {
+				// Require "secret_key" to be present
+				if !merged.contains_key("secret_key") {
+					return Err(BuildError::MissingRequiredField {
+						section: "test",
+						field: "secret_key",
+					});
+				}
+				Ok(())
+			}
+
+			fn validate_fragments(&self, _profile: &Profile) -> ValidationResult {
+				Ok(())
+			}
+		}
+
+		// Act: build without providing required key
+		let result = SettingsBuilder::new().build_composed::<MinimalComposed>();
+
+		// Assert: should fail with MissingRequiredField
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(
+			matches!(
+				err,
+				BuildError::MissingRequiredField {
+					section: "test",
+					field: "secret_key"
+				}
+			),
+			"expected MissingRequiredField, got: {err:?}"
+		);
+	}
+
+	#[rstest]
+	fn test_build_composed_success() {
+		// Arrange
+		use crate::settings::composed::ComposedSettings;
+		use crate::settings::profile::Profile;
+		use crate::settings::validation::ValidationResult;
+		use serde::Serialize;
+
+		#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+		struct SimpleComposed {
+			#[serde(default)]
+			name: String,
+		}
+
+		impl ComposedSettings for SimpleComposed {
+			fn validate_requirements(_merged: &IndexMap<String, Value>) -> Result<(), BuildError> {
+				// No required fields
+				Ok(())
+			}
+
+			fn validate_fragments(&self, _profile: &Profile) -> ValidationResult {
+				Ok(())
+			}
+		}
+
+		// Act: build with a value
+		let result = SettingsBuilder::new()
+			.add_source(DefaultSource::new().with_value("name", Value::String("app".to_string())))
+			.build_composed::<SimpleComposed>();
+
+		// Assert
+		assert!(result.is_ok());
+		let composed = result.unwrap();
+		assert_eq!(composed.name, "app");
 	}
 
 	#[test]

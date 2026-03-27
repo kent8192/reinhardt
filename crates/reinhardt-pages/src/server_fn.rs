@@ -75,6 +75,8 @@ pub mod codec;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod injectable;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod negotiation;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod registration;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod registry;
@@ -88,6 +90,8 @@ pub use codec::MessagePackCodec;
 pub use codec::{Codec, JsonCodec, UrlCodec};
 #[cfg(not(target_arch = "wasm32"))]
 pub use injectable::{ServerFnBody, ServerFnRequest};
+#[cfg(not(target_arch = "wasm32"))]
+pub use negotiation::convert_body_for_codec;
 #[cfg(not(target_arch = "wasm32"))]
 pub use registration::ServerFnRegistration;
 #[cfg(not(target_arch = "wasm32"))]

@@ -50,14 +50,5 @@
 			</div>
 		</div>
 	</div>
-	<script type="module">
-		// WASM module initialization with cache-busted URLs
-		const jsUrl = '{{ static_url("examples_tutorial_basis.js") }}';
-		const wasmUrl = '{{ static_url("examples_tutorial_basis_bg.wasm") }}';
-
-		// Dynamic import
-		const { default: init } = await import(jsUrl);
-		await init(wasmUrl);
-	</script>
 </body>
 </html>

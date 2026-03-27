@@ -74,3 +74,7 @@ mod makemigrations_e2e_integration;
 // Merge Migration Tests
 #[path = "migrations/merge_migration_integration.rs"]
 mod merge_migration_integration;
+
+// Migration Overwrite Prevention Tests
+#[path = "migrations/migration_overwrite_prevention_test.rs"]
+mod migration_overwrite_prevention_test;

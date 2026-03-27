@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-admin"
-version = "0.1.0-rc.11"
+version = "0.1.0-rc.14"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -11,6 +11,7 @@ publish = true
 [dependencies]
 reinhardt-apps = { workspace = true }
 reinhardt-auth = { workspace = true, features = ["argon2-hasher", "params"] }
+reinhardt-macros = { workspace = true }
 reinhardt-core = { workspace = true, features = ["exception"]}
 reinhardt-db = { workspace = true, features = ["orm"] }
 reinhardt-di = { workspace = true }
@@ -38,6 +39,8 @@ sha2 = "0.10"
 tracing = { workspace = true }
 inventory = { workspace = true }
 reinhardt-pages = { workspace = true }
+bytes = { workspace = true }
+hyper = { workspace = true }
 wasm-bindgen = "0.2.106"
 console_error_panic_hook = { version = "0.1", optional = true }
 web-sys = { version = "0.3.83", features = [
@@ -61,6 +64,7 @@ js-sys = "0.3.83"
 serde-wasm-bindgen = "0.6"
 serde_urlencoded = { workspace = true }  # Needed for URL codec in server functions
 serde_bytes = { workspace = true }
+percent-encoding = "2.3"
 
 [features]
 default = []

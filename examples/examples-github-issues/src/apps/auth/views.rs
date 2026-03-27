@@ -142,16 +142,19 @@ impl AuthMutation {
 			return Err(GqlError::new("Email already in use"));
 		}
 
-		// Create new user with struct initialization instead of field reassignment
+		// Create new user with direct struct initialization
 		let mut user = User {
 			id: Uuid::new_v4(),
 			username: input.username,
 			email: input.email,
+			password_hash: None,
 			first_name: input.first_name.unwrap_or_default(),
 			last_name: input.last_name.unwrap_or_default(),
-			date_joined: Utc::now(),
 			is_active: true,
-			..Default::default()
+			is_staff: false,
+			is_superuser: false,
+			last_login: None,
+			date_joined: Utc::now(),
 		};
 		user.set_password(&input.password)
 			.map_err(|e| GqlError::new(e.to_string()))?;

@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-test"
-version = "0.1.0-rc.11"
+version = "0.1.0-rc.14"
 edition.workspace = true
 authors.workspace = true
 description = "Testing utilities and helpers for Reinhardt framework"
@@ -37,6 +37,8 @@ wasm = [
 wasm-full = ["wasm", "reinhardt-pages/web-sys-full"]
 # Server function testing utilities
 server-fn-test = []
+# E2E browser testing via WebDriver (fantoccini)
+e2e = ["dep:fantoccini", "dep:url"]
 full = ["testcontainers", "static", "websockets", "graphql", "property-based", "tasks", "admin"]
 
 [dependencies]
@@ -58,7 +60,6 @@ reinhardt-admin = { workspace = true, optional = true, features = ["adapters", "
 reinhardt-db = { workspace = true, features = ["backends", "migrations", "orm", "postgres"] }
 reinhardt-query = { workspace = true, features = ["derive"] }
 sqlx = { workspace = true, optional = true }
-sea-query = { workspace = true }
 
 # Testing framework dependencies (needed for fixtures)
 rstest = "0.26.1"
@@ -102,6 +103,10 @@ web-sys = { version = "0.3.83", optional = true, features = [
   "Location",
   "History",
 ] }
+
+# Optional E2E testing dependencies (feature-gated)
+fantoccini = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
 
 # Re-exported dependencies needed for backward compatibility
 tokio = { workspace = true }

@@ -44,7 +44,7 @@ let permissions = vec![
 **Available Standard Permissions:**
 - `AllowAny` - Allows access to any user (authenticated or not)
 - `IsAuthenticated` - Only allows access to authenticated users
-- (Future) `IsAdminUser` - Only allows access to admin users
+- `IsAdminUser` - Only allows access to admin users
 
 ### Custom Permission Implementation (Advanced)
 
@@ -71,10 +71,11 @@ The `PermissionContext` provides request information for permission checks:
 
 ```rust
 pub struct PermissionContext<'a> {
+    pub request: &'a reinhardt_http::Request,
     pub is_authenticated: bool,
-    pub user: Option<&'a User>,
-    pub method: &'a Method,
-    pub path: &'a str,
+    pub is_admin: bool,
+    pub is_active: bool,
+    pub user: Option<Box<dyn User>>,
 }
 ```
 
@@ -115,12 +116,11 @@ impl Permission for IsAuthenticated {
 }
 ```
 
-### IsAdminUser (Future)
+### IsAdminUser
 
-Admin-only permission (implementation planned):
+Admin-only permission:
 
 ```rust
-// Future implementation - not yet available
 use reinhardt::IsAdminUser;
 
 let permission = Box::new(IsAdminUser) as Box<dyn Permission>;
@@ -140,7 +140,7 @@ pub struct IsOwnerOrReadOnly;
 impl Permission for IsOwnerOrReadOnly {
     async fn has_permission(&self, context: &PermissionContext<'_>) -> bool {
         // Read permissions for any request
-        if context.method == &Method::GET {
+        if context.request.method() == Method::GET {
             return true;
         }
 
@@ -183,7 +183,7 @@ pub struct IsOwner;
 impl Permission for IsOwner {
     async fn has_permission(&self, context: &PermissionContext<'_>) -> bool {
         // Allow all GET requests
-        if context.method == &Method::GET {
+        if context.request.method() == Method::GET {
             return true;
         }
 
@@ -264,7 +264,7 @@ pub struct IsOwnerOrReadOnly;
 impl Permission for IsOwnerOrReadOnly {
     async fn has_permission(&self, context: &PermissionContext<'_>) -> bool {
         // Read operations are allowed for everyone
-        if matches!(context.method, Method::GET | Method::HEAD | Method::OPTIONS) {
+        if matches!(context.request.method(), &Method::GET | &Method::HEAD | &Method::OPTIONS) {
             return true;
         }
 

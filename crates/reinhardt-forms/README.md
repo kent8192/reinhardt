@@ -14,14 +14,13 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", features = ["forms"] }
+reinhardt = { version = "0.1.0-rc.13", features = ["forms"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-alpha.1", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-alpha.1", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
 
-# Enable the form! macro:
-# reinhardt = { version = "0.1.0-alpha.1", features = ["forms", "form-macros"] }
+# Forms is included in the standard preset
 ```
 
 Then import form features:

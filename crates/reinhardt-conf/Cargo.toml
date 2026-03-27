@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-conf"
-version = "0.1.0-rc.11"
+version = "0.1.0-rc.14"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -80,7 +80,7 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 env_logger = "0.11"
 anyhow = { workspace = true }
 hex = "0.4"
-colored = "3.0.0"
+colored = { workspace = true }
 mockito = "1.5"
 mockall = { workspace = true }
 rstest = "0.26.1"
@@ -88,3 +88,4 @@ wiremock = "0.6"
 serial_test = { workspace = true }
 quickcheck = "1.0"
 quickcheck_macros = "1.0"
+proptest = { workspace = true }

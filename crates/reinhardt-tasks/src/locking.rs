@@ -8,13 +8,43 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
+use uuid::Uuid;
+
+/// Opaque token returned by a successful lock acquisition.
+///
+/// The token proves lock ownership and must be presented when releasing
+/// or extending the lock. This prevents workers from accidentally
+/// releasing locks they do not own.
+///
+/// # Examples
+///
+/// ```rust
+/// use reinhardt_tasks::LockToken;
+///
+/// let token = LockToken::generate();
+/// assert!(!token.as_str().is_empty());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockToken(String);
+
+impl LockToken {
+	/// Generate a new unique lock token
+	pub fn generate() -> Self {
+		Self(Uuid::new_v4().to_string())
+	}
+
+	/// Get the string representation of the token
+	pub fn as_str(&self) -> &str {
+		&self.0
+	}
+}
 
 /// Distributed lock trait for task synchronization
 ///
 /// # Examples
 ///
 /// ```rust,no_run
-/// use reinhardt_tasks::{TaskLock, TaskId};
+/// use reinhardt_tasks::{TaskLock, TaskId, LockToken};
 /// use async_trait::async_trait;
 /// use std::time::Duration;
 ///
@@ -22,14 +52,14 @@ use tokio::sync::RwLock;
 ///
 /// #[async_trait]
 /// impl TaskLock for MyLock {
-///     async fn acquire(&self, task_id: TaskId, ttl: Duration) -> reinhardt_tasks::TaskResult<bool> {
+///     async fn acquire(&self, task_id: TaskId, ttl: Duration) -> reinhardt_tasks::TaskResult<Option<LockToken>> {
 ///         // Acquire lock implementation
-///         Ok(true)
+///         Ok(Some(LockToken::generate()))
 ///     }
 ///
-///     async fn release(&self, task_id: TaskId) -> reinhardt_tasks::TaskResult<()> {
+///     async fn release(&self, task_id: TaskId, token: &LockToken) -> reinhardt_tasks::TaskResult<bool> {
 ///         // Release lock implementation
-///         Ok(())
+///         Ok(true)
 ///     }
 ///
 ///     async fn is_locked(&self, task_id: TaskId) -> reinhardt_tasks::TaskResult<bool> {
@@ -42,11 +72,15 @@ use tokio::sync::RwLock;
 pub trait TaskLock: Send + Sync {
 	/// Acquire a lock for a task
 	///
-	/// Returns `true` if lock was acquired, `false` if already locked by another worker
-	async fn acquire(&self, task_id: TaskId, ttl: Duration) -> TaskResult<bool>;
+	/// Returns `Some(LockToken)` if lock was acquired, `None` if already locked
+	/// by another worker.
+	async fn acquire(&self, task_id: TaskId, ttl: Duration) -> TaskResult<Option<LockToken>>;
 
 	/// Release a lock for a task
-	async fn release(&self, task_id: TaskId) -> TaskResult<()>;
+	///
+	/// Returns `true` if the lock was released, `false` if the token does not
+	/// match (i.e. the caller does not own the lock).
+	async fn release(&self, task_id: TaskId, token: &LockToken) -> TaskResult<bool>;
 
 	/// Check if a task is locked
 	async fn is_locked(&self, task_id: TaskId) -> TaskResult<bool>;
@@ -56,12 +90,16 @@ pub trait TaskLock: Send + Sync {
 	/// Implementors should override this with a backend-specific atomic operation
 	/// to avoid race conditions where another worker could steal the lock between
 	/// release and re-acquire.
-	async fn extend(&self, task_id: TaskId, ttl: Duration) -> TaskResult<bool> {
+	async fn extend(&self, task_id: TaskId, token: &LockToken, ttl: Duration) -> TaskResult<bool> {
 		// Default: check-then-release-then-acquire is non-atomic.
 		// Concrete implementations should override with atomic operations.
 		if self.is_locked(task_id).await? {
-			self.release(task_id).await?;
-			self.acquire(task_id, ttl).await
+			let released = self.release(task_id, token).await?;
+			if !released {
+				// Token did not match — caller does not own the lock
+				return Ok(false);
+			}
+			self.acquire(task_id, ttl).await.map(|t| t.is_some())
 		} else {
 			Ok(false)
 		}
@@ -81,21 +119,22 @@ pub trait TaskLock: Send + Sync {
 /// let task_id = TaskId::new();
 ///
 /// // Acquire lock
-/// let acquired = lock.acquire(task_id, Duration::from_secs(60)).await?;
-/// assert!(acquired);
+/// let token = lock.acquire(task_id, Duration::from_secs(60)).await?;
+/// assert!(token.is_some());
 ///
 /// // Check if locked
 /// let is_locked = lock.is_locked(task_id).await?;
 /// assert!(is_locked);
 ///
 /// // Release lock
-/// lock.release(task_id).await?;
+/// let released = lock.release(task_id, &token.unwrap()).await?;
+/// assert!(released);
 /// # Ok(())
 /// # }
 /// ```
 pub struct MemoryTaskLock {
-	/// Map of task ID to expiry timestamp in milliseconds since epoch
-	locks: Arc<RwLock<std::collections::HashMap<TaskId, i128>>>,
+	/// Map of task ID to (expiry timestamp in ms, token string)
+	locks: Arc<RwLock<std::collections::HashMap<TaskId, (i128, String)>>>,
 }
 
 impl MemoryTaskLock {
@@ -118,7 +157,7 @@ impl MemoryTaskLock {
 	async fn cleanup_expired(&self) {
 		let mut locks = self.locks.write().await;
 		let now = chrono::Utc::now().timestamp_millis() as i128;
-		locks.retain(|_, &mut expiry| expiry > now);
+		locks.retain(|_, (expiry, _)| *expiry > now);
 	}
 }
 
@@ -130,28 +169,39 @@ impl Default for MemoryTaskLock {
 
 #[async_trait]
 impl TaskLock for MemoryTaskLock {
-	async fn acquire(&self, task_id: TaskId, ttl: Duration) -> TaskResult<bool> {
+	async fn acquire(&self, task_id: TaskId, ttl: Duration) -> TaskResult<Option<LockToken>> {
+		// Zero TTL would create a lock that expires immediately, causing
+		// inconsistency between acquire (returns Some) and is_locked (returns false).
+		if ttl.is_zero() {
+			return Ok(None);
+		}
+
 		self.cleanup_expired().await;
 
 		let mut locks = self.locks.write().await;
 		let now = chrono::Utc::now().timestamp_millis() as i128;
-		// Use as_millis() instead of as_secs() to preserve sub-second durations
 		let expiry = now + ttl.as_millis() as i128;
 
-		if let Some(&existing_expiry) = locks.get(&task_id)
+		if let Some(&(existing_expiry, _)) = locks.get(&task_id)
 			&& existing_expiry > now
 		{
-			return Ok(false);
+			return Ok(None);
 		}
 
-		locks.insert(task_id, expiry);
-		Ok(true)
+		let token = LockToken::generate();
+		locks.insert(task_id, (expiry, token.as_str().to_string()));
+		Ok(Some(token))
 	}
 
-	async fn release(&self, task_id: TaskId) -> TaskResult<()> {
+	async fn release(&self, task_id: TaskId, token: &LockToken) -> TaskResult<bool> {
 		let mut locks = self.locks.write().await;
-		locks.remove(&task_id);
-		Ok(())
+		if let Some((_, stored_token)) = locks.get(&task_id)
+			&& stored_token == token.as_str()
+		{
+			locks.remove(&task_id);
+			return Ok(true);
+		}
+		Ok(false)
 	}
 
 	async fn is_locked(&self, task_id: TaskId) -> TaskResult<bool> {
@@ -162,7 +212,7 @@ impl TaskLock for MemoryTaskLock {
 
 		Ok(locks
 			.get(&task_id)
-			.map(|&expiry| expiry > now)
+			.map(|(expiry, _)| *expiry > now)
 			.unwrap_or(false))
 	}
 
@@ -171,14 +221,15 @@ impl TaskLock for MemoryTaskLock {
 	/// Unlike the default trait implementation which releases then re-acquires,
 	/// this holds the write lock throughout the operation to prevent another
 	/// worker from stealing the lock in between.
-	async fn extend(&self, task_id: TaskId, ttl: Duration) -> TaskResult<bool> {
+	async fn extend(&self, task_id: TaskId, token: &LockToken, ttl: Duration) -> TaskResult<bool> {
 		let mut locks = self.locks.write().await;
 		let now = chrono::Utc::now().timestamp_millis() as i128;
 
-		if let Some(expiry) = locks.get_mut(&task_id)
+		if let Some((expiry, stored_token)) = locks.get_mut(&task_id)
 			&& *expiry > now
+			&& stored_token.as_str() == token.as_str()
 		{
-			// Lock is still valid; atomically update its expiry
+			// Lock is still valid and owned by caller; atomically update its expiry
 			*expiry = now + ttl.as_millis() as i128;
 			return Ok(true);
 		}
@@ -189,6 +240,9 @@ impl TaskLock for MemoryTaskLock {
 
 #[cfg(feature = "redis-backend")]
 /// Redis-based distributed task lock
+///
+/// Uses atomic `SET key value PX ms NX` for lock acquisition and Lua scripts
+/// for ownership-verified release and extension.
 ///
 /// # Examples
 ///
@@ -201,11 +255,11 @@ impl TaskLock for MemoryTaskLock {
 /// let task_id = TaskId::new();
 ///
 /// // Acquire distributed lock
-/// let acquired = lock.acquire(task_id, Duration::from_secs(30)).await?;
-/// if acquired {
+/// let token = lock.acquire(task_id, Duration::from_secs(30)).await?;
+/// if let Some(token) = token {
 ///     // Execute task
 ///     // ...
-///     lock.release(task_id).await?;
+///     lock.release(task_id, &token).await?;
 /// }
 /// # Ok(())
 /// # }
@@ -273,25 +327,52 @@ impl RedisTaskLock {
 }
 
 #[cfg(feature = "redis-backend")]
+/// Convert a `Duration` to milliseconds as `i64`, rejecting zero and overflow.
+///
+/// Zero TTL is invalid because Redis `PX 0` causes an error and a zero-duration
+/// lock is semantically meaningless. Overflow is possible because
+/// `Duration::as_millis()` returns `u128` but Redis expects `i64`.
+fn validate_ttl_ms(ttl: Duration) -> TaskResult<i64> {
+	use crate::TaskError;
+
+	if ttl.is_zero() {
+		return Err(TaskError::ExecutionFailed(
+			"TTL must be greater than zero".to_string(),
+		));
+	}
+
+	i64::try_from(ttl.as_millis()).map_err(|_| {
+		TaskError::ExecutionFailed(format!(
+			"TTL overflow: {} ms exceeds i64::MAX",
+			ttl.as_millis()
+		))
+	})
+}
+
+#[cfg(feature = "redis-backend")]
 #[async_trait]
 impl TaskLock for RedisTaskLock {
-	async fn acquire(&self, task_id: TaskId, ttl: Duration) -> TaskResult<bool> {
+	async fn acquire(&self, task_id: TaskId, ttl: Duration) -> TaskResult<Option<LockToken>> {
 		use crate::TaskError;
-		use redis::AsyncCommands;
 
+		let ttl_ms = validate_ttl_ms(ttl)?;
 		let mut conn = (*self.connection).clone();
 		let key = self.lock_key(task_id);
+		let token = LockToken::generate();
 
-		let result: Result<bool, redis::RedisError> = conn.set_nx(&key, "1").await;
+		// Atomic SET key value PX ms NX
+		let result: Result<Option<String>, redis::RedisError> = redis::cmd("SET")
+			.arg(&key)
+			.arg(token.as_str())
+			.arg("PX")
+			.arg(ttl_ms)
+			.arg("NX")
+			.query_async(&mut conn)
+			.await;
 
 		match result {
-			Ok(acquired) => {
-				if acquired {
-					let _: Result<(), redis::RedisError> =
-						conn.expire(&key, ttl.as_secs() as i64).await;
-				}
-				Ok(acquired)
-			}
+			Ok(Some(_)) => Ok(Some(token)),
+			Ok(None) => Ok(None),
 			Err(e) => Err(TaskError::ExecutionFailed(format!(
 				"Failed to acquire lock: {}",
 				e
@@ -299,14 +380,31 @@ impl TaskLock for RedisTaskLock {
 		}
 	}
 
-	async fn release(&self, task_id: TaskId) -> TaskResult<()> {
-		use redis::AsyncCommands;
+	async fn release(&self, task_id: TaskId, token: &LockToken) -> TaskResult<bool> {
+		use crate::TaskError;
 
 		let mut conn = (*self.connection).clone();
 		let key = self.lock_key(task_id);
 
-		let _: Result<(), redis::RedisError> = conn.del(&key).await;
-		Ok(())
+		// Lua script: compare token, delete only if matching
+		let script = redis::Script::new(
+			"if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+		);
+
+		let result: Result<i32, redis::RedisError> = script
+			.key(&key)
+			.arg(token.as_str())
+			.invoke_async(&mut conn)
+			.await;
+
+		match result {
+			Ok(1) => Ok(true),
+			Ok(_) => Ok(false),
+			Err(e) => Err(TaskError::ExecutionFailed(format!(
+				"Failed to release lock: {}",
+				e
+			))),
+		}
 	}
 
 	async fn is_locked(&self, task_id: TaskId) -> TaskResult<bool> {
@@ -321,21 +419,36 @@ impl TaskLock for RedisTaskLock {
 		result.map_err(|e| TaskError::ExecutionFailed(format!("Failed to check lock: {}", e)))
 	}
 
-	/// Atomically extend the TTL using Redis EXPIRE command.
+	/// Atomically extend the TTL using a Lua script with millisecond precision.
 	///
-	/// This avoids the non-atomic release-then-acquire pattern in the default
-	/// implementation. If the key exists, its TTL is updated in a single command.
-	async fn extend(&self, task_id: TaskId, ttl: Duration) -> TaskResult<bool> {
+	/// Verifies ownership before extending, preventing unauthorized extensions.
+	async fn extend(&self, task_id: TaskId, token: &LockToken, ttl: Duration) -> TaskResult<bool> {
 		use crate::TaskError;
-		use redis::AsyncCommands;
 
+		let ttl_ms = validate_ttl_ms(ttl)?;
 		let mut conn = (*self.connection).clone();
 		let key = self.lock_key(task_id);
 
-		// EXPIRE returns true if the key exists and timeout was set
-		let result: Result<bool, redis::RedisError> = conn.expire(&key, ttl.as_secs() as i64).await;
+		// Lua script: compare token, pexpire only if matching
+		let script = redis::Script::new(
+			"if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end",
+		);
 
-		result.map_err(|e| TaskError::ExecutionFailed(format!("Failed to extend lock: {}", e)))
+		let result: Result<i32, redis::RedisError> = script
+			.key(&key)
+			.arg(token.as_str())
+			.arg(ttl_ms)
+			.invoke_async(&mut conn)
+			.await;
+
+		match result {
+			Ok(1) => Ok(true),
+			Ok(_) => Ok(false),
+			Err(e) => Err(TaskError::ExecutionFailed(format!(
+				"Failed to extend lock: {}",
+				e
+			))),
+		}
 	}
 }
 
@@ -353,13 +466,13 @@ mod tests {
 		let task_id = TaskId::new();
 
 		// Act
-		let acquired = lock
+		let token = lock
 			.acquire(task_id, Duration::from_secs(60))
 			.await
 			.unwrap();
 
 		// Assert
-		assert!(acquired);
+		assert!(token.is_some());
 	}
 
 	#[rstest]
@@ -373,13 +486,13 @@ mod tests {
 			.unwrap();
 
 		// Act
-		let acquired = lock
+		let token = lock
 			.acquire(task_id, Duration::from_secs(60))
 			.await
 			.unwrap();
 
 		// Assert
-		assert!(!acquired);
+		assert!(token.is_none());
 	}
 
 	#[rstest]
@@ -388,16 +501,39 @@ mod tests {
 		// Arrange
 		let lock = MemoryTaskLock::new();
 		let task_id = TaskId::new();
-		lock.acquire(task_id, Duration::from_secs(60))
+		let token = lock
+			.acquire(task_id, Duration::from_secs(60))
 			.await
+			.unwrap()
 			.unwrap();
 
 		// Act
-		lock.release(task_id).await.unwrap();
+		let released = lock.release(task_id, &token).await.unwrap();
 
 		// Assert
+		assert!(released);
 		let is_locked = lock.is_locked(task_id).await.unwrap();
 		assert!(!is_locked);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_memory_lock_release_wrong_token() {
+		// Arrange
+		let lock = MemoryTaskLock::new();
+		let task_id = TaskId::new();
+		lock.acquire(task_id, Duration::from_secs(60))
+			.await
+			.unwrap();
+		let wrong_token = LockToken::generate();
+
+		// Act
+		let released = lock.release(task_id, &wrong_token).await.unwrap();
+
+		// Assert - release must fail with wrong token
+		assert!(!released);
+		let is_locked = lock.is_locked(task_id).await.unwrap();
+		assert!(is_locked);
 	}
 
 	#[rstest]
@@ -424,13 +560,15 @@ mod tests {
 		// Arrange
 		let lock = MemoryTaskLock::new();
 		let task_id = TaskId::new();
-		lock.acquire(task_id, Duration::from_secs(60))
+		let token = lock
+			.acquire(task_id, Duration::from_secs(60))
 			.await
+			.unwrap()
 			.unwrap();
 
 		// Act
 		let extended = lock
-			.extend(task_id, Duration::from_secs(120))
+			.extend(task_id, &token, Duration::from_secs(120))
 			.await
 			.unwrap();
 
@@ -446,10 +584,11 @@ mod tests {
 		// Arrange
 		let lock = MemoryTaskLock::new();
 		let task_id = TaskId::new();
+		let token = LockToken::generate();
 
 		// Act - extend without acquiring first
 		let extended = lock
-			.extend(task_id, Duration::from_secs(120))
+			.extend(task_id, &token, Duration::from_secs(120))
 			.await
 			.unwrap();
 
@@ -463,14 +602,37 @@ mod tests {
 		// Arrange
 		let lock = MemoryTaskLock::new();
 		let task_id = TaskId::new();
-		lock.acquire(task_id, Duration::from_millis(50))
+		let token = lock
+			.acquire(task_id, Duration::from_millis(50))
 			.await
+			.unwrap()
 			.unwrap();
 		tokio::time::sleep(Duration::from_millis(100)).await;
 
 		// Act - extend an expired lock
 		let extended = lock
-			.extend(task_id, Duration::from_secs(120))
+			.extend(task_id, &token, Duration::from_secs(120))
+			.await
+			.unwrap();
+
+		// Assert
+		assert!(!extended);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_memory_lock_extend_returns_false_for_wrong_token() {
+		// Arrange
+		let lock = MemoryTaskLock::new();
+		let task_id = TaskId::new();
+		lock.acquire(task_id, Duration::from_secs(60))
+			.await
+			.unwrap();
+		let wrong_token = LockToken::generate();
+
+		// Act - extend with wrong token
+		let extended = lock
+			.extend(task_id, &wrong_token, Duration::from_secs(120))
 			.await
 			.unwrap();
 
@@ -484,12 +646,17 @@ mod tests {
 		// Arrange - verify that extend does not release the lock at any point
 		let lock = Arc::new(MemoryTaskLock::new());
 		let task_id = TaskId::new();
-		lock.acquire(task_id, Duration::from_millis(200))
+		let token = lock
+			.acquire(task_id, Duration::from_millis(200))
 			.await
+			.unwrap()
 			.unwrap();
 
 		// Act - extend the lock
-		let extended = lock.extend(task_id, Duration::from_secs(60)).await.unwrap();
+		let extended = lock
+			.extend(task_id, &token, Duration::from_secs(60))
+			.await
+			.unwrap();
 
 		// Assert - lock should still be held and not have been released
 		assert!(extended);
@@ -498,6 +665,6 @@ mod tests {
 			.acquire(task_id, Duration::from_secs(60))
 			.await
 			.unwrap();
-		assert!(!second_acquire);
+		assert!(second_acquire.is_none());
 	}
 }

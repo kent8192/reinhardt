@@ -195,11 +195,15 @@ impl SettingsValidator for SecurityValidator {
 		}
 
 		// Check HTTPS settings
-		if let Some(secure_ssl) = settings.get("secure_ssl_redirect")
-			&& secure_ssl.as_bool() != Some(true)
-		{
+		if let Some(secure_ssl) = settings.get("secure_ssl_redirect") {
+			if secure_ssl.as_bool() != Some(true) {
+				errors.push(ValidationError::Security(
+					"SECURE_SSL_REDIRECT should be true in production".to_string(),
+				));
+			}
+		} else {
 			errors.push(ValidationError::Security(
-				"SECURE_SSL_REDIRECT should be true in production".to_string(),
+				"SECURE_SSL_REDIRECT must be set in production".to_string(),
 			));
 		}
 
@@ -590,6 +594,7 @@ impl BaseSettingsValidator for ChoiceValidator {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn test_settings_validation_required() {
@@ -648,6 +653,88 @@ mod tests {
 			validator
 				.validate("key", &Value::Number(150.into()))
 				.is_err()
+		);
+	}
+
+	#[rstest]
+	fn test_security_validator_missing_ssl_redirect_in_production() {
+		// Arrange
+		let validator = SecurityValidator::new(Profile::Production);
+		let mut settings = HashMap::new();
+		settings.insert("debug".to_string(), Value::Bool(false));
+		settings.insert(
+			"secret_key".to_string(),
+			Value::String("a-very-long-secure-random-key-that-is-at-least-32-chars".to_string()),
+		);
+		settings.insert(
+			"allowed_hosts".to_string(),
+			Value::Array(vec![Value::String("example.com".to_string())]),
+		);
+		// Note: secure_ssl_redirect is intentionally omitted
+
+		// Act
+		let result = validator.validate_settings(&settings);
+
+		// Assert
+		let err = result.unwrap_err();
+		let error_msg = err.to_string();
+		assert!(
+			error_msg.contains("SECURE_SSL_REDIRECT must be set in production"),
+			"Expected error about missing SECURE_SSL_REDIRECT, got: {error_msg}"
+		);
+	}
+
+	#[rstest]
+	fn test_security_validator_ssl_redirect_false_in_production() {
+		// Arrange
+		let validator = SecurityValidator::new(Profile::Production);
+		let mut settings = HashMap::new();
+		settings.insert("debug".to_string(), Value::Bool(false));
+		settings.insert(
+			"secret_key".to_string(),
+			Value::String("a-very-long-secure-random-key-that-is-at-least-32-chars".to_string()),
+		);
+		settings.insert(
+			"allowed_hosts".to_string(),
+			Value::Array(vec![Value::String("example.com".to_string())]),
+		);
+		settings.insert("secure_ssl_redirect".to_string(), Value::Bool(false));
+
+		// Act
+		let result = validator.validate_settings(&settings);
+
+		// Assert
+		let err = result.unwrap_err();
+		let error_msg = err.to_string();
+		assert!(
+			error_msg.contains("SECURE_SSL_REDIRECT should be true in production"),
+			"Expected error about SECURE_SSL_REDIRECT being false, got: {error_msg}"
+		);
+	}
+
+	#[rstest]
+	fn test_security_validator_ssl_redirect_true_in_production() {
+		// Arrange
+		let validator = SecurityValidator::new(Profile::Production);
+		let mut settings = HashMap::new();
+		settings.insert("debug".to_string(), Value::Bool(false));
+		settings.insert(
+			"secret_key".to_string(),
+			Value::String("a-very-long-secure-random-key-that-is-at-least-32-chars".to_string()),
+		);
+		settings.insert(
+			"allowed_hosts".to_string(),
+			Value::Array(vec![Value::String("example.com".to_string())]),
+		);
+		settings.insert("secure_ssl_redirect".to_string(), Value::Bool(true));
+
+		// Act
+		let result = validator.validate_settings(&settings);
+
+		// Assert
+		assert!(
+			result.is_ok(),
+			"Expected validation to pass with valid production settings, got: {result:?}"
 		);
 	}
 

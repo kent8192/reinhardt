@@ -52,6 +52,7 @@ pub enum SubQueryOper {
 /// );
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum SimpleExpr {
 	/// A column reference (e.g., `name`, `users.name`, `public.users.name`)
 	Column(ColumnRef),
@@ -101,8 +102,11 @@ pub enum SimpleExpr {
 	/// A CASE WHEN expression
 	Case(Box<CaseStatement>),
 
-	/// An AS expression with alias (e.g., `expr AS alias`)
+	/// A PostgreSQL enum type cast (e.g., `expr::type_name`)
 	AsEnum(DynIden, Box<SimpleExpr>),
+
+	/// An aliased expression (e.g., `expr AS alias_name`)
+	ExprAlias(Box<SimpleExpr>, DynIden),
 
 	/// A CAST expression (e.g., `CAST(x AS INTEGER)`)
 	Cast(Box<SimpleExpr>, DynIden),

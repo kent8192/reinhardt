@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-openapi-macros"
-version = "0.1.0-rc.11"
+version = "0.1.0-rc.14"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -16,15 +16,15 @@ proc-macro = true
 full = []
 
 [dependencies]
-proc-macro2 = "1.0"
-quote = "1.0"
-syn = { version = "2.0", features = ["full", "extra-traits"] }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true, features = ["full", "extra-traits"] }
 proc-macro-crate = "3.1"
 
 [dev-dependencies]
 utoipa = "^5.4.0"
-trybuild = "1.0"
+trybuild = { workspace = true }
 serde = { workspace = true }
-serde_json = "1.0"
-inventory = "0.3"
+serde_json = { workspace = true }
+inventory = { workspace = true }
 # Note: Integration tests moved to /tests/integration crate to avoid circular dependency

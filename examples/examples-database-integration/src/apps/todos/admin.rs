@@ -18,6 +18,7 @@ use reinhardt::admin;
 	list_filter = [completed],
 	search_fields = [title, description],
 	ordering = [(created_at, desc)],
-	list_per_page = 50
+	list_per_page = 50,
+	permissions = allow_all,
 )]
 pub struct TodoAdmin;

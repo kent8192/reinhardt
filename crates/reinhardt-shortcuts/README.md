@@ -12,11 +12,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", features = ["shortcuts"] }
+reinhardt = { version = "0.1.0-rc.13", features = ["shortcuts"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-alpha.1", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-alpha.1", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
 ```
 
 Then import shortcuts features:
@@ -334,7 +334,7 @@ async fn old_url_handler() -> Response {
 
 - `reinhardt-http` - HTTP primitives
 - `reinhardt-views` - View layer
-- `reinhardt-orm` - Database ORM (for future direct integration)
+- `reinhardt-db` - Database layer (for future direct integration)
 
 ## License
 

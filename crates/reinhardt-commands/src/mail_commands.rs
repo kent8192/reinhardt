@@ -20,6 +20,7 @@ impl Default for SendTestEmailCommand {
 }
 
 #[async_trait]
+#[allow(deprecated)] // Uses Settings fields which are deprecated; retained for backward compatibility
 impl BaseCommand for SendTestEmailCommand {
 	fn name(&self) -> &str {
 		"sendtestemail"

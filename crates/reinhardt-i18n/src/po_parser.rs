@@ -63,6 +63,15 @@ impl PoEntry {
 	}
 }
 
+/// Tracks the last keyword parsed for continuation line dispatch
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LastKeyword {
+	Msgctxt,
+	Msgid,
+	MsgidPlural,
+	Msgstr,
+}
+
 /// Parse a .po file from a reader
 ///
 /// # Examples
@@ -84,6 +93,7 @@ pub fn parse_po_file<R: std::io::Read>(
 	let mut catalog = MessageCatalog::new(locale);
 	let mut current_entry = PoEntry::new();
 	let mut current_msgstr_index: Option<usize> = None;
+	let mut last_keyword: Option<LastKeyword> = None;
 	let mut entry_count: usize = 0;
 	let mut bytes_read: u64 = 0;
 
@@ -114,6 +124,7 @@ pub fn parse_po_file<R: std::io::Read>(
 			}
 			current_entry.msgctxt = Some(unescape_string(&value));
 			current_msgstr_index = None;
+			last_keyword = Some(LastKeyword::Msgctxt);
 		}
 		// Parse msgid
 		else if let Some(value) = parse_keyword(trimmed, "msgid") {
@@ -127,11 +138,13 @@ pub fn parse_po_file<R: std::io::Read>(
 			}
 			current_entry.msgid = unescape_string(&value);
 			current_msgstr_index = None;
+			last_keyword = Some(LastKeyword::Msgid);
 		}
 		// Parse msgid_plural
 		else if let Some(value) = parse_keyword(trimmed, "msgid_plural") {
 			current_entry.msgid_plural = Some(unescape_string(&value));
 			current_msgstr_index = None;
+			last_keyword = Some(LastKeyword::MsgidPlural);
 		}
 		// Parse msgstr[n]
 		else if let Some((index, value)) = parse_indexed_msgstr(trimmed) {
@@ -146,11 +159,13 @@ pub fn parse_po_file<R: std::io::Read>(
 			}
 			current_entry.msgstr[index] = value;
 			current_msgstr_index = Some(index);
+			last_keyword = Some(LastKeyword::Msgstr);
 		}
 		// Parse msgstr
 		else if let Some(value) = parse_keyword(trimmed, "msgstr") {
 			current_entry.msgstr = vec![unescape_string(&value)];
 			current_msgstr_index = Some(0);
+			last_keyword = Some(LastKeyword::Msgstr);
 		}
 		// Parse continuation string (quoted string on its own line)
 		else if trimmed.starts_with('"') && trimmed.ends_with('"') {
@@ -160,13 +175,22 @@ pub fn parse_po_file<R: std::io::Read>(
 					existing.push_str(&value);
 				}
 			} else {
-				// Continuation of msgid or msgid_plural
-				if current_entry.msgid_plural.is_some() {
-					if let Some(plural) = &mut current_entry.msgid_plural {
-						plural.push_str(&value);
+				// Dispatch continuation based on the last keyword parsed
+				match last_keyword {
+					Some(LastKeyword::Msgctxt) => {
+						if let Some(ctx) = &mut current_entry.msgctxt {
+							ctx.push_str(&value);
+						}
 					}
-				} else if !current_entry.msgid.is_empty() {
-					current_entry.msgid.push_str(&value);
+					Some(LastKeyword::MsgidPlural) => {
+						if let Some(plural) = &mut current_entry.msgid_plural {
+							plural.push_str(&value);
+						}
+					}
+					Some(LastKeyword::Msgid) => {
+						current_entry.msgid.push_str(&value);
+					}
+					_ => {}
 				}
 			}
 		}
@@ -469,5 +493,77 @@ msgstr[{}] "value"
 
 		let result = parse_po_file(po_content.as_bytes(), "fr");
 		assert!(result.is_ok());
+	}
+
+	/// Test parsing multiline msgctxt continuation
+	#[rstest]
+	fn test_parse_multiline_msgctxt_continuation() {
+		// Arrange
+		let po_content = r#"
+msgctxt ""
+"menu."
+"file"
+msgid "Open"
+msgstr "Ouvrir"
+"#;
+
+		// Act
+		let catalog = parse_po_file(po_content.as_bytes(), "fr").unwrap();
+
+		// Assert
+		assert_eq!(
+			catalog.get_context("menu.file", "Open").map(String::as_str),
+			Some("Ouvrir")
+		);
+	}
+
+	/// Test parsing single-line msgctxt still works
+	#[rstest]
+	fn test_parse_single_line_msgctxt() {
+		// Arrange
+		let po_content = r#"
+msgctxt "navigation"
+msgid "Back"
+msgstr "Retour"
+"#;
+
+		// Act
+		let catalog = parse_po_file(po_content.as_bytes(), "fr").unwrap();
+
+		// Assert
+		assert_eq!(
+			catalog
+				.get_context("navigation", "Back")
+				.map(String::as_str),
+			Some("Retour")
+		);
+	}
+
+	/// Test that continuation lines dispatch correctly between msgctxt, msgid, and msgstr
+	#[rstest]
+	fn test_parse_all_multiline_keywords() {
+		// Arrange
+		let po_content = r#"
+msgctxt ""
+"ctx."
+"part"
+msgid ""
+"hello "
+"world"
+msgstr ""
+"bonjour "
+"monde"
+"#;
+
+		// Act
+		let catalog = parse_po_file(po_content.as_bytes(), "fr").unwrap();
+
+		// Assert
+		assert_eq!(
+			catalog
+				.get_context("ctx.part", "hello world")
+				.map(String::as_str),
+			Some("bonjour monde")
+		);
 	}
 }

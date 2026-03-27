@@ -202,13 +202,24 @@ impl<B: ThrottleBackend> Throttle for GeoRateThrottle<B> {
 	async fn allow_request(&self, key: &str) -> ThrottleResult<bool> {
 		let (rate, period) = self.get_rate_for_key(key).await;
 
+		// Check current count before incrementing to avoid inflating the
+		// counter for denied requests
 		let count = self
 			.backend
+			.get_count(key)
+			.await
+			.map_err(ThrottleError::ThrottleError)?;
+
+		if count >= rate {
+			return Ok(false);
+		}
+
+		self.backend
 			.increment(key, period)
 			.await
 			.map_err(ThrottleError::ThrottleError)?;
 
-		Ok(count <= rate)
+		Ok(true)
 	}
 
 	async fn wait_time(&self, key: &str) -> ThrottleResult<Option<u64>> {

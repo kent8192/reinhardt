@@ -62,3 +62,32 @@ pub use event::EventType;
 pub fn document() -> Document {
 	Document::global()
 }
+
+/// Submit a form element by its metadata ID.
+///
+/// Called by `form!` macro-generated code for URL-action forms on WASM targets.
+/// Locates the form by its HTML `id` attribute from
+/// [`StaticFormMetadata`](crate::form_generated::StaticFormMetadata)
+/// and triggers native browser form submission.
+///
+/// # Panics
+///
+/// - No global `window` exists
+/// - `window` has no `document`
+/// - No element with `metadata.id` found in the document
+/// - Element is not an `HtmlFormElement`
+/// - `request_submit()` fails (JS exception)
+#[cfg(target_arch = "wasm32")]
+pub fn submit_form(metadata: &crate::form_generated::StaticFormMetadata) {
+	use wasm_bindgen::JsCast;
+
+	let window = web_sys::window().expect("No global window exists");
+	let document = window.document().expect("Window should have a document");
+	let element = document
+		.get_element_by_id(&metadata.id)
+		.unwrap_or_else(|| panic!("Form element with id '{}' not found", metadata.id));
+	let form: web_sys::HtmlFormElement = element
+		.dyn_into()
+		.expect("Element is not an HtmlFormElement");
+	form.request_submit().expect("Failed to submit form");
+}

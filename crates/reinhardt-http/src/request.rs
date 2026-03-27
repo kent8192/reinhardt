@@ -738,9 +738,45 @@ impl Request {
 
 	/// Check if the request originates from a trusted proxy.
 	///
-	/// Returns `true` only if trusted proxies are configured AND the
-	/// remote address is in the trusted set.
-	fn is_from_trusted_proxy(&self) -> bool {
+	/// Returns `true` only if [`TrustedProxies`] are configured (via
+	/// [`set_trusted_proxies`](Self::set_trusted_proxies)) **and** the
+	/// remote address of the connection is contained in the trusted set.
+	///
+	/// # Security
+	///
+	/// This method gates whether proxy-forwarded headers (e.g.
+	/// `X-Forwarded-For`, `X-Forwarded-Proto`) should be honoured.
+	/// Trusting headers from a non-proxy source allows clients to spoof
+	/// their IP address or protocol, which can bypass IP-based access
+	/// controls and HTTPS enforcement.
+	///
+	/// **Callers must ensure that [`TrustedProxies`] is configured only
+	/// with IP addresses of reverse proxies actually deployed in front
+	/// of the application.** Misconfiguration (e.g. trusting `0.0.0.0/0`)
+	/// re-introduces header-spoofing vulnerabilities.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_http::Request;
+	/// use reinhardt_http::TrustedProxies;
+	/// use bytes::Bytes;
+	/// use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+	/// use hyper::Method;
+	///
+	/// let proxy_ip: IpAddr = Ipv4Addr::new(10, 0, 0, 1).into();
+	/// let request = Request::builder()
+	///     .method(Method::GET)
+	///     .uri("/")
+	///     .remote_addr(SocketAddr::new(proxy_ip, 8080))
+	///     .body(Bytes::new())
+	///     .build()
+	///     .unwrap();
+	/// request.set_trusted_proxies(TrustedProxies::new(vec![proxy_ip]));
+	///
+	/// assert!(request.is_from_trusted_proxy());
+	/// ```
+	pub fn is_from_trusted_proxy(&self) -> bool {
 		if let Some(trusted) = self.extensions.get::<TrustedProxies>()
 			&& let Some(addr) = self.remote_addr
 		{
@@ -915,6 +951,32 @@ impl Request {
 			.map_err(|e| crate::Error::Http(format!("Failed to encode query parameters: {}", e)))?;
 		serde_urlencoded::from_str(&encoded)
 			.map_err(|e| crate::Error::Http(format!("Failed to parse query parameters: {}", e)))
+	}
+
+	/// Creates a lightweight copy of this request for dependency injection.
+	///
+	/// The clone shares the same extensions store (via internal `Arc`),
+	/// so `AuthState` and other extensions set on the original request
+	/// are accessible in the clone. Body and parsers are not copied
+	/// as they are not needed for DI resolution.
+	pub fn clone_for_di(&self) -> Self {
+		Request {
+			method: self.method.clone(),
+			uri: self.uri.clone(),
+			version: self.version,
+			headers: self.headers.clone(),
+			body: Bytes::new(),
+			path_params: self.path_params.clone(),
+			query_params: self.query_params.clone(),
+			is_secure: self.is_secure,
+			remote_addr: self.remote_addr,
+			#[cfg(feature = "parsers")]
+			parsers: Vec::new(),
+			#[cfg(feature = "parsers")]
+			parsed_data: Arc::new(Mutex::new(None)),
+			body_consumed: Arc::new(AtomicBool::new(false)),
+			extensions: self.extensions.clone(),
+		}
 	}
 }
 
@@ -1135,5 +1197,57 @@ mod tests {
 			.unwrap();
 
 		assert!(request.validate_content_type("application/json").is_err());
+	}
+
+	#[rstest]
+	fn test_clone_for_di_shares_extensions() {
+		// Arrange
+		let request = Request::builder()
+			.method(Method::POST)
+			.uri("/api/users/42?page=1")
+			.version(Version::HTTP_11)
+			.header(header::CONTENT_TYPE, "application/json")
+			.body(Bytes::from("request body"))
+			.build()
+			.unwrap();
+
+		request.extensions.insert(42u32);
+
+		// Act
+		let cloned = request.clone_for_di();
+
+		// Assert - extensions are shared (same Arc backing store)
+		assert_eq!(cloned.extensions.get::<u32>(), Some(42));
+
+		// Verify metadata is preserved
+		assert_eq!(cloned.method, Method::POST);
+		assert_eq!(cloned.uri.path(), "/api/users/42");
+		assert_eq!(cloned.version, Version::HTTP_11);
+		assert!(cloned.headers.contains_key(header::CONTENT_TYPE));
+		assert_eq!(cloned.query_params.get("page"), Some(&"1".to_string()));
+
+		// Body should be empty (not needed for DI)
+		assert!(cloned.body().is_empty());
+	}
+
+	#[rstest]
+	fn test_clone_for_di_shares_extensions_bidirectionally() {
+		// Arrange
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/")
+			.build()
+			.unwrap();
+
+		let cloned = request.clone_for_di();
+
+		// Act - insert into cloned extensions
+		cloned.extensions.insert("from_clone".to_string());
+
+		// Assert - original also sees it (shared backing store)
+		assert_eq!(
+			request.extensions.get::<String>(),
+			Some("from_clone".to_string())
+		);
 	}
 }

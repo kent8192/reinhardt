@@ -13,6 +13,10 @@ inputs:
     description: 'Additional cache key suffix to differentiate caches between parallel jobs (e.g. check target type). Issue #1845'
     required: false
     default: ''
+  save-if:
+    description: 'Condition for saving cache. Set to false for PR branches to avoid cache pollution. Issue #2879'
+    required: false
+    default: 'true'
 runs:
   using: composite
   steps:
@@ -54,3 +58,9 @@ runs:
         # Optional suffix to differentiate cache entries between parallel jobs
         # that check different target types (e.g. lib vs tests). Issue #1845
         key: ${{ inputs.cache-key }}
+        # Issue #2879: Only save cache on main branch to avoid PR cache pollution.
+        # PR branches restore from main's cache via prefix matching but don't
+        # save their own entries. This improves hit rates by keeping a single
+        # authoritative cache per workflow type. Workflow-type suffix (cache-key)
+        # is preserved to avoid cross-profile contamination (check vs test).
+        save-if: ${{ inputs.save-if }}

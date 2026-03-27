@@ -60,6 +60,7 @@ mod composite;
 mod create_api;
 mod destroy_api;
 mod list_api;
+pub(crate) mod patch_utils;
 mod retrieve_api;
 mod update_api;
 

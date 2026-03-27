@@ -1,0 +1,5 @@
+error: `required` and `default` are mutually exclusive in `#[setting(...)]`
+ --> tests/ui/settings/fail/settings_required_with_default.rs:5:4
+  |
+5 |     #[setting(required, default = "42")]
+  |       ^^^^^^^

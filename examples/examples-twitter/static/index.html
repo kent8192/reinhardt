@@ -143,7 +143,7 @@
 	<script src="https://cdn.jsdelivr.net/npm/@unocss/runtime"></script>
 
 	<!-- Custom styles -->
-	<link rel="stylesheet" href="{{ static_url("css/style.css") }}">
+	<link rel="stylesheet" href="/css/style.css">
 
 	<!-- Theme toggle script -->
 	<script>
@@ -182,14 +182,5 @@
 			</div>
 		</div>
 	</div>
-	<script type="module">
-		// WASM module initialization with cache-busted URLs
-		const jsUrl = '{{ static_url("examples_twitter.js") }}';
-		const wasmUrl = '{{ static_url("examples_twitter_bg.wasm") }}';
-
-		// Dynamic import
-		const { default: init } = await import(jsUrl);
-		await init(wasmUrl);
-	</script>
 </body>
 </html>

@@ -1,0 +1,5 @@
+error: invalid `default_policy` value, expected `"required"` or `"optional"`
+ --> tests/ui/settings/fail/settings_invalid_default_policy.rs:3:64
+  |
+3 | #[settings(fragment = true, section = "test", default_policy = "exclude")]
+  |                                                                ^^^^^^^^^

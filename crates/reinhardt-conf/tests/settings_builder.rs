@@ -1,6 +1,7 @@
 // Integration tests for reinhardt-conf SettingsBuilder API.
 // Covers: default values, overrides, validation, database config, middleware config,
 // installed apps, profile, and error cases.
+#![allow(deprecated)] // Tests exercise deprecated Settings for backward-compatibility verification
 
 use reinhardt_conf::settings::builder::SettingsBuilder;
 use reinhardt_conf::settings::profile::Profile;
@@ -429,7 +430,7 @@ fn settings_default_debug_is_true() {
 	let settings = Settings::default();
 
 	// Assert
-	assert!(settings.debug);
+	assert!(settings.core.debug);
 }
 
 #[rstest]
@@ -457,7 +458,7 @@ fn settings_default_installed_apps_is_empty() {
 	let settings = Settings::default();
 
 	// Assert
-	assert!(settings.installed_apps.is_empty());
+	assert!(settings.core.installed_apps.is_empty());
 }
 
 #[rstest]
@@ -466,7 +467,7 @@ fn settings_default_middleware_is_empty() {
 	let settings = Settings::default();
 
 	// Assert
-	assert!(settings.middleware.is_empty());
+	assert!(settings.core.middleware.is_empty());
 }
 
 #[rstest]
@@ -493,7 +494,7 @@ fn settings_default_databases_has_default_entry() {
 	let settings = Settings::default();
 
 	// Assert
-	assert!(settings.databases.contains_key("default"));
+	assert!(settings.core.databases.contains_key("default"));
 }
 
 #[rstest]
@@ -502,7 +503,7 @@ fn settings_default_append_slash_is_true() {
 	let settings = Settings::default();
 
 	// Assert
-	assert!(settings.append_slash);
+	assert!(settings.core.security.append_slash);
 }
 
 // ===========================================================================
@@ -519,8 +520,8 @@ fn settings_new_sets_base_dir_and_secret_key() {
 	let settings = Settings::new(base_dir.clone(), secret_key.clone());
 
 	// Assert
-	assert_eq!(settings.base_dir, base_dir);
-	assert_eq!(settings.secret_key, secret_key);
+	assert_eq!(settings.core.base_dir, base_dir);
+	assert_eq!(settings.core.secret_key, secret_key);
 }
 
 #[rstest]
@@ -529,7 +530,7 @@ fn settings_new_debug_defaults_to_true() {
 	let settings = Settings::new(PathBuf::from("/app"), "some-key".to_string());
 
 	// Assert
-	assert!(settings.debug);
+	assert!(settings.core.debug);
 }
 
 // ===========================================================================
@@ -546,8 +547,8 @@ fn settings_add_app_increases_count() {
 	settings.add_app("myapp");
 
 	// Assert
-	assert_eq!(settings.installed_apps.len(), 1);
-	assert!(settings.installed_apps.contains(&"myapp".to_string()));
+	assert_eq!(settings.core.installed_apps.len(), 1);
+	assert!(settings.core.installed_apps.contains(&"myapp".to_string()));
 }
 
 #[rstest]
@@ -562,10 +563,10 @@ fn settings_add_multiple_apps() {
 	settings.add_app("app_c");
 
 	// Assert
-	assert_eq!(settings.installed_apps.len(), 3);
-	assert!(settings.installed_apps.contains(&"app_a".to_string()));
-	assert!(settings.installed_apps.contains(&"app_b".to_string()));
-	assert!(settings.installed_apps.contains(&"app_c".to_string()));
+	assert_eq!(settings.core.installed_apps.len(), 3);
+	assert!(settings.core.installed_apps.contains(&"app_a".to_string()));
+	assert!(settings.core.installed_apps.contains(&"app_b".to_string()));
+	assert!(settings.core.installed_apps.contains(&"app_c".to_string()));
 }
 
 #[rstest]
@@ -580,9 +581,19 @@ fn settings_with_validated_apps_replaces_apps_list() {
 		settings.with_validated_apps(|| vec!["new_app_one".to_string(), "new_app_two".to_string()]);
 
 	// Assert
-	assert_eq!(settings.installed_apps.len(), 2);
-	assert!(!settings.installed_apps.contains(&"old_app".to_string()));
-	assert!(settings.installed_apps.contains(&"new_app_one".to_string()));
+	assert_eq!(settings.core.installed_apps.len(), 2);
+	assert!(
+		!settings
+			.core
+			.installed_apps
+			.contains(&"old_app".to_string())
+	);
+	assert!(
+		settings
+			.core
+			.installed_apps
+			.contains(&"new_app_one".to_string())
+	);
 }
 
 // ===========================================================================
@@ -595,15 +606,15 @@ fn settings_middleware_field_can_be_set_directly() {
 	let mut settings = Settings::default();
 
 	// Act
-	settings.middleware = vec![
+	settings.core.middleware = vec![
 		"reinhardt.middleware.SecurityMiddleware".to_string(),
 		"reinhardt.middleware.SessionMiddleware".to_string(),
 	];
 
 	// Assert
-	assert_eq!(settings.middleware.len(), 2);
+	assert_eq!(settings.core.middleware.len(), 2);
 	assert_eq!(
-		settings.middleware[0],
+		settings.core.middleware[0],
 		"reinhardt.middleware.SecurityMiddleware"
 	);
 }

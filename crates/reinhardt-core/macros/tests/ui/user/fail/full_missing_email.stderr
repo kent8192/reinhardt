@@ -1,0 +1,7 @@
+error: #[user(full = true)] requires 'email' field. Add 'email' or annotate a field with #[user_field(email)]
+ --> tests/ui/user/fail/full_missing_email.rs:8:1
+  |
+8 | #[user(hasher = Argon2Hasher, username_field = "username", full = true)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `user` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -638,7 +638,7 @@ impl SelectDateWidget {
 			use std::time::{SystemTime, UNIX_EPOCH};
 			let secs = SystemTime::now()
 				.duration_since(UNIX_EPOCH)
-				.expect("system clock is before UNIX epoch")
+				.unwrap_or_default()
 				.as_secs();
 			// 365.25 days/year * 86400 secs/day = 31_557_600 secs/year
 			1970 + (secs / 31_557_600) as i32

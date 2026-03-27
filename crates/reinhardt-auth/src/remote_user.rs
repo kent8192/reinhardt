@@ -3,6 +3,9 @@
 //! Authentication backend that trusts HTTP headers set by upstream
 //! authentication systems (e.g., Apache mod_auth, nginx auth_request).
 
+// This module uses the deprecated User trait for backward compatibility.
+// RemoteUserAuthentication returns Box<dyn User> to preserve existing authentication APIs.
+#![allow(deprecated)]
 use crate::{AuthenticationBackend, AuthenticationError, SimpleUser, User};
 use reinhardt_http::Request;
 use uuid::Uuid;

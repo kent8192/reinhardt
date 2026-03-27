@@ -10,7 +10,7 @@ permissions:
 jobs:
   cancel-stale-runs:
     name: Cancel Stale Workflow Runs
-    runs-on: [self-hosted, linux, arm64, reinhardt-cancel]
+    runs-on: [self-hosted, linux, arm64, reinhardt-hotpath]
     timeout-minutes: 8
     steps:
       - name: Cancel and force-cancel stale runs
@@ -20,7 +20,7 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const branch = context.payload.pull_request.head.ref;
-            const targetWorkflows = ['ci.yml', 'test-examples.yml', 'coverage-main.yml'];
+            const targetWorkflows = ['ci.yml', 'test-examples.yml'];
 
             // Phase 1: Find and cancel all non-completed runs
             const cancelledRunIds = [];

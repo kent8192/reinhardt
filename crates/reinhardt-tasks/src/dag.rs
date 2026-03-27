@@ -176,6 +176,11 @@ impl TaskNode {
 	pub fn set_status(&mut self, status: TaskNodeStatus) {
 		self.status = status;
 	}
+
+	/// Remove a dependency from this node
+	pub(crate) fn remove_dependency(&mut self, task_id: TaskId) {
+		self.dependencies.retain(|&id| id != task_id);
+	}
 }
 
 /// Directed Acyclic Graph for task dependencies
@@ -297,8 +302,16 @@ impl TaskDAG {
 			deps.push(task_id);
 		}
 
-		// Verify no cycles were created
-		self.detect_cycle()?;
+		// Verify no cycles were created; roll back the edge on failure
+		if let Err(e) = self.detect_cycle() {
+			if let Some(node) = self.nodes.get_mut(&task_id) {
+				node.remove_dependency(depends_on);
+			}
+			if let Some(deps) = self.dependents.get_mut(&depends_on) {
+				deps.retain(|&id| id != task_id);
+			}
+			return Err(e);
+		}
 
 		Ok(())
 	}

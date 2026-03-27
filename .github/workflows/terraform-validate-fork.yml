@@ -141,9 +141,9 @@ jobs:
       - name: Install and run tfprovidercheck
         if: steps.should-run.outputs.skip == 'false'
         run: |
-          go install github.com/suzuki-shunsuke/tfprovidercheck@v1.0.7
+          go install github.com/suzuki-shunsuke/tfprovidercheck/cmd/tfprovidercheck@v1.0.7
           if [ -f .terraform.lock.hcl ]; then
-            tfprovidercheck
+            terraform version -json | tfprovidercheck -c "$GITHUB_WORKSPACE/.tfprovidercheck.yml"
           else
             echo "No .terraform.lock.hcl found — skipping provider check"
           fi

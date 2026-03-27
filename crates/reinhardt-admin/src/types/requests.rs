@@ -97,6 +97,13 @@ where
 /// Request body for create/update
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MutationRequest {
+	/// CSRF token for mutation verification (double-submit cookie pattern).
+	///
+	/// The client must send the CSRF token received from the dashboard response
+	/// in this field. The server validates this value against the `__csrf_token`
+	/// cookie set by the dashboard endpoint. An attacker on a different origin
+	/// cannot read the cookie, preventing CSRF attacks.
+	pub csrf_token: String,
 	/// Data to create/update
 	#[serde(flatten)]
 	pub data: HashMap<String, serde_json::Value>,
@@ -105,6 +112,13 @@ pub struct MutationRequest {
 /// Request body for bulk delete
 #[derive(Debug, Deserialize)]
 pub struct BulkDeleteRequest {
+	/// CSRF token for mutation verification (double-submit cookie pattern).
+	///
+	/// The client must send the CSRF token received from the dashboard response
+	/// in this field. The server validates this value against the `__csrf_token`
+	/// cookie set by the dashboard endpoint. An attacker on a different origin
+	/// cannot read the cookie, preventing CSRF attacks.
+	pub csrf_token: String,
 	/// IDs to delete
 	pub ids: Vec<String>,
 }
@@ -121,4 +135,198 @@ pub enum ExportFormat {
 	Csv,
 	/// Tab-separated values format.
 	Tsv,
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+	use serde_json;
+
+	// Helper to deserialize ListQueryParams from JSON
+	fn parse_list_query(json: &str) -> Result<ListQueryParams, serde_json::Error> {
+		serde_json::from_str(json)
+	}
+
+	// ==================== Filter count validation ====================
+
+	#[rstest]
+	fn test_filters_within_limit_accepted() {
+		// Arrange: 5 filters (well within limit of 20)
+		let json = r#"{"filters": {"a": "1", "b": "2", "c": "3", "d": "4", "e": "5"}}"#;
+
+		// Act
+		let result = parse_list_query(json);
+
+		// Assert
+		assert!(result.is_ok());
+		assert_eq!(result.unwrap().filters.len(), 5);
+	}
+
+	#[rstest]
+	fn test_filters_at_exact_limit_accepted() {
+		// Arrange: Exactly 20 filters
+		let mut filters = serde_json::Map::new();
+		for i in 0..20 {
+			filters.insert(
+				format!("field_{}", i),
+				serde_json::Value::String(format!("value_{}", i)),
+			);
+		}
+		let json = serde_json::json!({"filters": filters}).to_string();
+
+		// Act
+		let result = parse_list_query(&json);
+
+		// Assert
+		assert!(result.is_ok());
+		assert_eq!(result.unwrap().filters.len(), 20);
+	}
+
+	#[rstest]
+	fn test_filters_exceeding_max_count_rejected() {
+		// Arrange: 21 filters (exceeds limit of 20)
+		let mut filters = serde_json::Map::new();
+		for i in 0..21 {
+			filters.insert(
+				format!("field_{}", i),
+				serde_json::Value::String(format!("value_{}", i)),
+			);
+		}
+		let json = serde_json::json!({"filters": filters}).to_string();
+
+		// Act
+		let result = parse_list_query(&json);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(
+			err.contains("too many filter parameters"),
+			"Error should mention filter count limit: {}",
+			err
+		);
+	}
+
+	// ==================== Filter key/value length validation ====================
+
+	#[rstest]
+	fn test_filter_key_exceeding_max_length_rejected() {
+		// Arrange: Key of 501 bytes
+		let long_key = "a".repeat(501);
+		let json = serde_json::json!({"filters": {long_key: "value"}}).to_string();
+
+		// Act
+		let result = parse_list_query(&json);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(
+			err.contains("exceeds maximum length"),
+			"Error should mention length limit: {}",
+			err
+		);
+	}
+
+	#[rstest]
+	fn test_filter_value_exceeding_max_length_rejected() {
+		// Arrange: Value of 501 bytes
+		let long_value = "v".repeat(501);
+		let json = serde_json::json!({"filters": {"field": long_value}}).to_string();
+
+		// Act
+		let result = parse_list_query(&json);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(
+			err.contains("exceeds maximum length"),
+			"Error should mention length limit: {}",
+			err
+		);
+	}
+
+	// ==================== Filter key format validation ====================
+
+	#[rstest]
+	fn test_empty_filter_key_rejected() {
+		// Arrange: Empty key
+		let json = r#"{"filters": {"": "value"}}"#;
+
+		// Act
+		let result = parse_list_query(json);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(
+			err.contains("must not be empty"),
+			"Error should mention empty key: {}",
+			err
+		);
+	}
+
+	#[rstest]
+	#[case("field_name", true)] // underscore allowed
+	#[case("field-name", true)] // hyphen allowed
+	#[case("field.name", true)] // period allowed
+	#[case("fieldName123", true)] // alphanumeric allowed
+	fn test_filter_key_with_valid_chars_accepted(#[case] key: &str, #[case] _expected_valid: bool) {
+		// Arrange
+		let json = serde_json::json!({"filters": {key: "value"}}).to_string();
+
+		// Act
+		let result = parse_list_query(&json);
+
+		// Assert
+		assert!(result.is_ok(), "Key '{}' should be accepted", key);
+	}
+
+	#[rstest]
+	fn test_filter_key_with_invalid_chars_rejected() {
+		// Arrange: Key with semicolon (potential SQL injection vector)
+		let json = r#"{"filters": {"field;DROP TABLE users": "value"}}"#;
+
+		// Act
+		let result = parse_list_query(json);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err().to_string();
+		assert!(
+			err.contains("invalid character"),
+			"Error should mention invalid character: {}",
+			err
+		);
+	}
+
+	// ==================== Default behavior ====================
+
+	#[rstest]
+	fn test_empty_filters_accepted() {
+		// Arrange
+		let json = r#"{"filters": {}}"#;
+
+		// Act
+		let result = parse_list_query(json);
+
+		// Assert
+		assert!(result.is_ok());
+		assert!(result.unwrap().filters.is_empty());
+	}
+
+	#[rstest]
+	fn test_missing_filters_uses_default() {
+		// Arrange: No filters field at all
+		let json = r#"{}"#;
+
+		// Act
+		let result = parse_list_query(json);
+
+		// Assert
+		assert!(result.is_ok());
+		assert!(result.unwrap().filters.is_empty());
+	}
 }

@@ -34,7 +34,7 @@
 
 // The `#[server_fn]` proc macro generates internal modules that cannot have doc comments.
 // Allow missing docs for all server function submodules.
-#[allow(missing_docs, deprecated)] // CurrentUser deprecated, will migrate to AuthUser in 0.2.0
+#[allow(missing_docs)]
 pub mod create;
 #[allow(missing_docs)]
 pub mod dashboard;
@@ -52,10 +52,11 @@ pub mod fields;
 pub mod import;
 /// Request size and rate limits for server functions.
 pub mod limits;
-#[allow(missing_docs, deprecated)] // CurrentUser deprecated, will migrate to AuthUser in 0.2.0
+#[allow(missing_docs)]
 pub mod list;
 #[allow(missing_docs)]
 pub mod update;
+pub(crate) mod user;
 
 pub mod audit;
 pub mod security;

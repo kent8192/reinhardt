@@ -166,6 +166,7 @@ fn dashboard_view() -> Page {
 #[cfg(target_arch = "wasm32")]
 fn list_view_component(model_name: String) -> Page {
 	use reinhardt_pages::component::{IntoPage, PageElement};
+	use reinhardt_pages::use_effect;
 
 	let list_resource = create_resource(move || {
 		let model_name = model_name.clone();
@@ -177,15 +178,34 @@ fn list_view_component(model_name: String) -> Page {
 		}
 	});
 
+	// Create signals outside the reactive closure so they persist across re-renders
+	let page_signal = Signal::new(1u64);
+	let filters_signal = Signal::new(HashMap::new());
+
+	// Sync page_signal from the completed resource outside the rendering closure.
+	// Updating signals inside a rendering closure is an anti-pattern: it causes
+	// a state change during render and could create an infinite loop if the
+	// resource ever reads page_signal. Using use_effect keeps side-effects
+	// separate from the render path.
+	{
+		let resource = list_resource.clone();
+		let page_signal = page_signal.clone();
+		use_effect(move || {
+			if let ResourceState::Success(ref response) = resource.get() {
+				page_signal.set(response.page);
+			}
+		});
+	}
+
 	PageElement::new("div")
 		.attr("class", "list-container")
 		.child({
 			let resource = list_resource.clone();
+			let page_signal = page_signal.clone();
+			let filters_signal = filters_signal.clone();
 			move || match resource.get() {
 				ResourceState::Loading => loading_view(),
 				ResourceState::Success(response) => {
-					use std::collections::HashMap;
-
 					// Convert ListResponse to ListViewData
 					let data = ListViewData {
 						model_name: response.model_name.clone(),
@@ -202,9 +222,7 @@ fn list_view_component(model_name: String) -> Page {
 						total_count: response.count,
 						filters: response.available_filters.unwrap_or_default(),
 					};
-					let page_signal = Signal::new(response.page);
-					let filters_signal = Signal::new(HashMap::new());
-					list_view(&data, page_signal, filters_signal)
+					list_view(&data, page_signal.clone(), filters_signal.clone())
 				}
 				ResourceState::Error(err) => error_view(&err),
 			}
@@ -513,20 +531,39 @@ fn field_type_to_html_input_type(field_type: &reinhardt_admin::types::FieldType)
 
 	match field_type {
 		FieldType::Text => "text".to_string(),
-		FieldType::TextArea => "textarea".to_string(),
+		// TextArea should render as <textarea>, not <input>; fall back to "text" for now
+		FieldType::TextArea => "text".to_string(),
 		FieldType::Number => "number".to_string(),
 		FieldType::Boolean => "checkbox".to_string(),
 		FieldType::Email => "email".to_string(),
 		FieldType::Date => "date".to_string(),
 		FieldType::DateTime => "datetime-local".to_string(),
-		FieldType::Select { .. } => "select".to_string(),
-		FieldType::MultiSelect { .. } => "select-multiple".to_string(),
+		// Select should render as <select>, not <input>; fall back to "text" for now
+		FieldType::Select { .. } => "text".to_string(),
+		// MultiSelect should render as <select multiple>, not <input>; fall back to "text" for now
+		FieldType::MultiSelect { .. } => "text".to_string(),
 		FieldType::File => "file".to_string(),
 		FieldType::Hidden => "hidden".to_string(),
 	}
 }
 
 /// Initialize the admin router
+///
+/// # Route registration order
+///
+/// Routes are registered in a specific order to ensure correct matching.
+/// More specific routes (with literal path segments) must be registered
+/// before less specific routes (with only dynamic parameters):
+///
+/// 1. `/admin/` - dashboard (exact match)
+/// 2. `/admin/{model}/add/` - create (literal `add` segment)
+/// 3. `/admin/{model}/{id}/change/` - edit (literal `change` segment)
+/// 4. `/admin/{model}/{id}/` - detail (all dynamic segments)
+/// 5. `/admin/{model}/` - list (all dynamic segments)
+///
+/// If `detail` were registered before `create`, a request to
+/// `/admin/users/add/` would incorrectly match the detail route
+/// with `id="add"`.
 ///
 /// # Example
 ///
@@ -536,6 +573,7 @@ fn field_type_to_html_input_type(field_type: &reinhardt_admin::types::FieldType)
 /// let router = init_router();
 /// ```
 pub fn init_router() -> Router {
+	// IMPORTANT: Route registration order matters. See doc comment above.
 	Router::new()
 		.named_route("dashboard", "/admin/", dashboard_view)
 		.named_route("create", "/admin/{model}/add/", || {

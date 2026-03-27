@@ -1,3 +1,7 @@
+// The `User` trait is deprecated in favour of the new `#[model]`-based user macro system.
+// This crate re-exports it for downstream compatibility during the transition period.
+#![allow(deprecated)]
+
 //! # Reinhardt
 //!
 //! A full-stack API framework for Rust, inspired by Django and Django REST Framework.
@@ -236,6 +240,10 @@ pub use reinhardt_apps::{AppConfig, AppError, AppResult, Apps};
 #[cfg(all(feature = "core", not(target_arch = "wasm32")))]
 pub use reinhardt_macros::{AppConfig, app_config, installed_apps};
 
+// Re-export settings attribute macro (requires conf feature)
+#[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
+pub use reinhardt_macros::settings;
+
 // Re-export Model derive macro and model attribute macro (requires database feature)
 #[cfg(all(feature = "database", not(target_arch = "wasm32")))]
 pub use reinhardt_macros::{Model, model};
@@ -275,11 +283,22 @@ pub use reinhardt_macros::admin;
 
 // Re-export settings from dedicated crate
 #[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
+#[allow(deprecated)]
+// Re-exports deprecated Settings and AdvancedSettings for backward compatibility
 pub use reinhardt_conf::settings::{
 	AdvancedSettings, CacheSettings, CorsSettings, DatabaseConfig, EmailSettings, LoggingSettings,
 	MediaSettings, MiddlewareConfig, SessionSettings, Settings, SettingsError, StaticSettings,
 	TemplateConfig,
 };
+
+#[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
+pub use reinhardt_conf::settings::core_settings::{CoreSettings, HasCoreSettings};
+
+#[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
+pub use reinhardt_conf::settings::fragment::SettingsFragment;
+
+#[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
+pub use reinhardt_conf::settings::fragment::HasSettings;
 
 #[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
 pub use reinhardt_conf::settings::builder::SettingsBuilder;
@@ -643,7 +662,7 @@ pub use reinhardt_auth::{
 pub use reinhardt_auth::Argon2Hasher;
 
 #[cfg(all(feature = "auth-jwt", not(target_arch = "wasm32")))]
-pub use reinhardt_auth::{Claims, JwtAuth};
+pub use reinhardt_auth::{Claims, JwtAuth, JwtError};
 
 // Re-export auth management
 //
@@ -697,7 +716,13 @@ pub use reinhardt_auth::{
 };
 
 // Re-export middleware
-#[cfg(all(feature = "sessions", not(target_arch = "wasm32")))]
+// AuthenticationMiddleware requires both sessions (for session backend) and
+// middleware (for the reinhardt-middleware crate dependency)
+#[cfg(all(
+	feature = "sessions",
+	feature = "middleware",
+	not(target_arch = "wasm32")
+))]
 pub use reinhardt_middleware::AuthenticationMiddleware;
 
 #[cfg(all(
@@ -1071,6 +1096,7 @@ pub mod prelude {
 
 	// Settings feature
 	#[cfg(feature = "conf")]
+	#[allow(deprecated)] // Re-exports deprecated Settings for backward compatibility
 	pub use crate::Settings;
 
 	// Middleware
@@ -1078,8 +1104,14 @@ pub mod prelude {
 	pub use crate::LoggingMiddleware;
 
 	// Sessions feature
+	#[cfg(all(
+		feature = "sessions",
+		feature = "middleware",
+		not(target_arch = "wasm32")
+	))]
+	pub use crate::AuthenticationMiddleware;
 	#[cfg(feature = "sessions")]
-	pub use crate::{AuthenticationMiddleware, Session};
+	pub use crate::Session;
 
 	// Cache feature
 	#[cfg(feature = "cache")]
@@ -1096,6 +1128,11 @@ pub use reinhardt_websockets::room::RoomManager;
 #[cfg(all(feature = "websockets", not(target_arch = "wasm32")))]
 pub use reinhardt_websockets::{
 	ConsumerContext, Message, WebSocketConsumer, WebSocketError, WebSocketResult,
+};
+#[cfg(all(feature = "websockets", not(target_arch = "wasm32")))]
+pub use reinhardt_websockets::{
+	RouteError, RouteResult, WebSocketRoute, WebSocketRouter, clear_websocket_router,
+	get_websocket_router, register_websocket_router, reverse_websocket_url,
 };
 
 /// SQL query builder module.

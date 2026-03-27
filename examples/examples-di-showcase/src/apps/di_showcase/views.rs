@@ -9,11 +9,11 @@
 //! - Path parameter extraction combined with DI
 
 use reinhardt::Injected;
+use reinhardt::core::serde::Serialize;
 use reinhardt::core::serde::json;
 use reinhardt::di::{InjectionContext, SingletonScope};
 use reinhardt::http::ViewResult;
 use reinhardt::{Path, Response, StatusCode, get, post};
-use reinhardt::core::serde::Serialize;
 use std::sync::Arc;
 
 use super::services::{AppConfig, DashboardService, GreetingService, RequestCounter};

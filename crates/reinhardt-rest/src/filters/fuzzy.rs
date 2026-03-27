@@ -348,7 +348,7 @@ impl<M> FuzzySearchFilter<M> {
 
 	fn levenshtein_similarity(&self, a: &str, b: &str) -> f64 {
 		let distance = self.levenshtein_distance(a, b);
-		let max_len = a.len().max(b.len());
+		let max_len = a.chars().count().max(b.chars().count());
 		if max_len == 0 {
 			return 1.0;
 		}
@@ -441,7 +441,7 @@ impl<M> FuzzySearchFilter<M> {
 
 	fn damerau_levenshtein_similarity(&self, a: &str, b: &str) -> f64 {
 		let distance = self.damerau_levenshtein_distance(a, b);
-		let max_len = a.len().max(b.len());
+		let max_len = a.chars().count().max(b.chars().count());
 		if max_len == 0 {
 			return 1.0;
 		}

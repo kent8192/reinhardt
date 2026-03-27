@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-auth"
-version = "0.1.0-rc.11"
+version = "0.1.0-rc.14"
 description = "Authentication and authorization system"
 keywords = ["auth", "jwt", "authentication", "django", "web"]
 categories = ["authentication", "web-programming"]
@@ -133,3 +133,4 @@ tempfile = { workspace = true }
 filetime = "0.2"
 reinhardt-query = { workspace = true }
 reinhardt-db = {workspace = true, features = ["orm"]}
+reinhardt-macros = { workspace = true }

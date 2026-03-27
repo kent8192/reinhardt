@@ -4,6 +4,12 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
+variable "excluded_zone_ids" {
+  description = "Zone IDs to exclude (AZs that do not support required Graviton instance types). Use zone IDs (e.g. 'use1-az3') for cross-account consistency."
+  type        = list(string)
+  default     = []
+}
+
 variable "aws_account_id" {
   description = "AWS Account ID for the CI sub-account. Used by init.sh to auto-generate backend.tfvars with the correct S3 bucket name."
   type        = string
@@ -85,14 +91,14 @@ variable "runner_ami_ssm_parameter_name" {
   default     = "/reinhardt-ci/runner-ami-id"
 }
 
-variable "enable_cancel_runner" {
-  description = "Enable the always-on cancel runner (t4g.nano) for event-driven cancel workflows"
+variable "enable_hotpath_runner" {
+  description = "Enable the always-on hotpath runner for lightweight CI control jobs"
   type        = bool
   default     = true
 }
 
-variable "cancel_runner_instance_type" {
-  description = "EC2 instance type for the cancel runner (API-only jobs, minimal resources needed)"
+variable "hotpath_runner_instance_type" {
+  description = "EC2 instance type for the hotpath runner (lightweight CI control jobs)"
   type        = string
   default     = "t4g.micro"
 }

@@ -285,6 +285,7 @@ impl MultiTermSearch {
 							operator: current_operator.clone(),
 						});
 						current_term.clear();
+						current_operator = Operator::And;
 					}
 				}
 				' ' if !in_quotes => {
@@ -305,6 +306,7 @@ impl MultiTermSearch {
 									&current_term,
 									current_operator.clone(),
 								));
+								current_operator = Operator::And;
 							}
 						}
 						current_term.clear();
@@ -346,6 +348,7 @@ impl MultiTermSearch {
 						operator: current_operator.clone(),
 					});
 					current_term.clear();
+					current_operator = Operator::And;
 				}
 				_ => {
 					current_term.push(ch);

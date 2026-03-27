@@ -170,19 +170,29 @@ impl TestSavepoint {
 	}
 }
 
-// Fixes #872: Migrate SQL utility functions to use SeaQuery instead of raw
-// string interpolation to prevent SQL injection.
+// Fixes #872: Migrate SQL utility functions to use reinhardt-query instead of
+// raw string interpolation to prevent SQL injection.
 /// Test database utilities for common operations.
 pub mod utils {
-	use sea_query::{Alias, Asterisk, Expr, PostgresQueryBuilder, Query};
+	use reinhardt_query::{
+		Alias, ColumnRef, Expr, Iden, PostgresQueryBuilder, Query, QueryStatementBuilder,
+	};
+
+	/// Quote an identifier for PostgreSQL using `reinhardt_query::Iden`.
+	fn quote_ident(name: &str) -> String {
+		let alias = Alias::new(name);
+		let mut buf = String::new();
+		alias.quoted('"', &mut buf);
+		buf
+	}
 
 	/// Truncate all tables in the given list.
 	///
 	/// This is useful for cleaning up between tests when not using
 	/// transaction rollback.
 	///
-	/// Note: SeaQuery does not natively support TRUNCATE, so this uses
-	/// properly quoted identifiers via `sea_query::Alias`.
+	/// Note: reinhardt-query does not natively support TRUNCATE, so this uses
+	/// properly quoted identifiers via `Alias`.
 	pub fn truncate_tables_sql(tables: &[&str]) -> String {
 		if tables.is_empty() {
 			return String::new();
@@ -193,7 +203,7 @@ pub mod utils {
 			.map(|t| {
 				// Use a SELECT query to get the properly quoted identifier
 				let query = Query::select()
-					.column(Asterisk)
+					.column(ColumnRef::asterisk())
 					.from(Alias::new(*t))
 					.to_string(PostgresQueryBuilder);
 				// Extract quoted table name from "SELECT * FROM <table>"
@@ -216,25 +226,26 @@ pub mod utils {
 		query.from_table(Alias::new(table));
 
 		if let Some(clause) = where_clause {
-			query.cond_where(Expr::cust(clause.to_string()));
+			query.and_where(Expr::cust(clause.to_string()));
 		}
 
 		query.to_string(PostgresQueryBuilder)
 	}
 
 	/// Generate an INSERT statement for test data.
+	///
+	/// Values are inserted as raw SQL expressions (e.g., `'Alice'`, `NOW()`),
+	/// so they are NOT parameterised. Table and column names are properly quoted
+	/// via `reinhardt_query::Iden`.
 	pub fn insert_test_data_sql(table: &str, columns: &[&str], values: &[&str]) -> String {
-		let mut query = Query::insert();
-		query.into_table(Alias::new(table));
-
-		let cols: Vec<Alias> = columns.iter().map(|c| Alias::new(*c)).collect();
-		query.columns(cols);
-
-		let exprs: Vec<sea_query::SimpleExpr> =
-			values.iter().map(|v| Expr::cust(v.to_string())).collect();
-		query.values_panic(exprs);
-
-		query.to_string(PostgresQueryBuilder)
+		let quoted_table = quote_ident(table);
+		let quoted_cols: Vec<String> = columns.iter().map(|c| quote_ident(c)).collect();
+		format!(
+			"INSERT INTO {} ({}) VALUES ({})",
+			quoted_table,
+			quoted_cols.join(", "),
+			values.join(", ")
+		)
 	}
 }
 

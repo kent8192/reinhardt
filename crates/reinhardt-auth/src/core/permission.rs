@@ -1,3 +1,6 @@
+// This module uses the deprecated User trait for backward compatibility.
+// PermissionContext holds an optional Box<dyn User> for existing permission APIs.
+#![allow(deprecated)]
 use async_trait::async_trait;
 
 use crate::core::user::User;

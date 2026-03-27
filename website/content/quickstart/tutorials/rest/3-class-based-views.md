@@ -36,12 +36,9 @@ struct SnippetSerializer {
     language: String,
 }
 
-let snippets = vec![
-    Snippet { id: 1, code: "print('hello')".to_string(), language: "python".to_string() },
-];
-
+let queryset = QuerySet::<Snippet>::new();
 let view = ListAPIView::<Snippet, SnippetSerializer>::new()
-    .with_objects(snippets)
+    .with_queryset(queryset)
     .with_paginate_by(10);
 ```
 

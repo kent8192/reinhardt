@@ -1,0 +1,7 @@
+error: #[user] username_field 'nonexistent' not found. Add a field named 'nonexistent: String'
+ --> tests/ui/user/fail/username_field_not_found.rs:7:1
+  |
+7 | #[user(hasher = Argon2Hasher, username_field = "nonexistent")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `user` (in Nightly builds, run with -Z macro-backtrace for more info)

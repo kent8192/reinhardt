@@ -63,9 +63,8 @@ fi
 dependencies = ["collectstatic-wasm"]
 
 [tasks.wasm-finalize-dev]
-description = "Finalize WASM build (copy index.html)"
+description = "Finalize WASM build"
 script = '''
-[ -f index.html ] && cp index.html dist/
 echo "✓ WASM build completed: dist/"
 '''
 dependencies = ["wasm-bindgen-dev"]
@@ -94,10 +93,8 @@ fi
 dependencies = ["collectstatic-wasm"]
 
 [tasks.wasm-finalize-release]
-description = "Finalize WASM build (copy index.html, optimize with wasm-opt)"
+description = "Finalize WASM build (optimize with wasm-opt)"
 script = '''
-[ -f index.html ] && cp index.html dist/
-
 # Optimize with wasm-opt if available
 if command -v wasm-opt &> /dev/null; then
 	echo "Running wasm-opt..."

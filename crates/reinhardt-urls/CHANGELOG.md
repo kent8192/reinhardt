@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.13...reinhardt-urls@v0.1.0-rc.14) - 2026-03-24
+
+### Added
+
+- *(urls)* add exclude() builder method for middleware route exclusion
+
+### Changed
+
+- *(urls)* address Copilot review feedback
+
+### Documentation
+
+- *(crates)* update version references from 0.1.0-alpha.1 to 0.1.0-rc.13 across all READMEs
+
+### Fixed
+
+- *(reinhardt-urls)* normalize path slashes to prevent double-slash in URL joining
+- *(reinhardt-urls)* restrict join_path visibility to pub(crate)
+
+### Other
+
+- resolve conflict with main in middleware.rs
+
+### Styling
+
+- *(urls)* apply formatting to server_router.rs
+
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.11...reinhardt-urls@v0.1.0-rc.12) - 2026-03-18
+
+### Added
+
+- *(urls)* add middleware registry for type discovery
+
+### Fixed
+
+- *(commands)* address Copilot review feedback on introspect command
+
 ## [0.1.0-rc.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.9...reinhardt-urls@v0.1.0-rc.10) - 2026-03-15
 
 ### Fixed

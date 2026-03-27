@@ -604,10 +604,73 @@ impl<T: Send + Sync + 'static> Signal<T> {
 	pub fn send_async(&self, instance: T) {
 		let instance = Arc::new(instance);
 		let receivers = self.receivers.read().clone();
+		let middlewares = self.middlewares.read().clone();
+		let metrics = Arc::clone(&self.metrics);
+
+		// Record send event
+		metrics.record_send();
 
 		tokio::spawn(async move {
+			// Execute before_send middleware hooks
+			for middleware in &middlewares {
+				match middleware.before_send(&instance).await {
+					Ok(should_continue) => {
+						if !should_continue {
+							return;
+						}
+					}
+					Err(_) => return,
+				}
+			}
+
+			let mut results = Vec::with_capacity(receivers.len());
+
 			for receiver_info in receivers {
-				let _ = (receiver_info.receiver)(Arc::clone(&instance)).await;
+				// Check predicate condition
+				if let Some(ref predicate) = receiver_info.predicate
+					&& !predicate(&instance)
+				{
+					continue;
+				}
+
+				// Execute before_receiver middleware hooks
+				let dispatch_uid_ref = receiver_info.dispatch_uid.as_deref();
+				let mut should_execute = true;
+				for middleware in &middlewares {
+					if let Ok(can_execute) = middleware
+						.before_receiver(&instance, dispatch_uid_ref)
+						.await && !can_execute
+					{
+						should_execute = false;
+						break;
+					}
+				}
+
+				if !should_execute {
+					continue;
+				}
+
+				// Execute receiver and measure time
+				let start = Instant::now();
+				let result = (receiver_info.receiver)(Arc::clone(&instance)).await;
+				let duration = start.elapsed();
+
+				// Record metrics
+				metrics.record_receiver_execution(duration, result.is_ok());
+
+				// Execute after_receiver middleware hooks (ignore errors)
+				for middleware in &middlewares {
+					let _ = middleware
+						.after_receiver(&instance, dispatch_uid_ref, &result)
+						.await;
+				}
+
+				results.push(result);
+			}
+
+			// Execute after_send middleware hooks
+			for middleware in &middlewares {
+				let _ = middleware.after_send(&instance, &results).await;
 			}
 		});
 	}

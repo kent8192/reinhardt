@@ -19,9 +19,6 @@ fn escape_json_for_html(json: &str) -> String {
 		.replace('&', "\\u0026")
 }
 
-/// The global JavaScript variable name for SSR state.
-pub(super) const SSR_STATE_VAR: &str = "__REINHARDT_SSR_STATE__";
-
 /// Represents the serialized SSR state.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SsrState {
@@ -111,8 +108,8 @@ impl SsrState {
 		// Escape HTML-sensitive characters to prevent XSS via </script> injection
 		let escaped = escape_json_for_html(&json);
 		format!(
-			r#"<script id="ssr-state" type="application/json">window.{} = {};</script>"#,
-			SSR_STATE_VAR, escaped
+			r#"<script id="ssr-state" type="application/json">{}</script>"#,
+			escaped
 		)
 	}
 
@@ -227,9 +224,9 @@ mod tests {
 		let mut state = SsrState::new();
 		state.add_signal("test", true);
 		let script = state.to_script_tag();
-		assert!(script.starts_with("<script"));
-		assert!(script.contains("__REINHARDT_SSR_STATE__"));
-		assert!(script.contains("</script>"));
+		assert!(script.starts_with(r#"<script id="ssr-state" type="application/json">"#));
+		assert!(script.ends_with("</script>"));
+		assert!(!script.contains("window."));
 	}
 
 	#[test]
@@ -328,9 +325,11 @@ mod xss_prevention_tests {
 		// Act
 		let script = state.to_script_tag();
 
-		// Assert: Normal data should be preserved
+		// Assert: Normal data should be preserved as pure JSON
 		assert!(script.contains("Alice"));
 		assert!(script.contains("42"));
-		assert!(script.contains("__REINHARDT_SSR_STATE__"));
+		assert!(script.starts_with(r#"<script id="ssr-state" type="application/json">"#));
+		assert!(script.ends_with("</script>"));
+		assert!(!script.contains("window."));
 	}
 }

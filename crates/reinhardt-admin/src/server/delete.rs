@@ -2,17 +2,23 @@
 //!
 //! Provides delete operations for admin models (single and bulk).
 
+use super::user::AdminDefaultUser;
 use crate::adapters::{
 	AdminDatabase, AdminRecord, AdminSite, BulkDeleteRequest, BulkDeleteResponse,
 };
 use crate::types::MutationResponse;
+use reinhardt_auth::AuthUser;
 use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::audit;
 #[cfg(not(target_arch = "wasm32"))]
-use super::error::{AdminAuth, MapServerFnError};
+use super::error::{AdminAuth, MapServerFnError, ModelPermission};
+#[cfg(not(target_arch = "wasm32"))]
+use super::limits::MAX_BULK_DELETE_IDS;
+#[cfg(not(target_arch = "wasm32"))]
+use super::security::require_csrf_token;
 
 /// Delete a single model instance by ID
 ///
@@ -34,22 +40,32 @@ use super::error::{AdminAuth, MapServerFnError};
 /// use reinhardt_admin::server::delete_record;
 ///
 /// // Client-side usage (automatically generates HTTP request)
-/// let response = delete_record("User".to_string(), "42".to_string()).await?;
+/// let response = delete_record("User".to_string(), "42".to_string(), "token".to_string()).await?;
 /// println!("Deleted: {}", response.message);
 /// ```
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn delete_record(
 	model_name: String,
 	id: String,
+	csrf_token: String,
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
+	#[inject] AuthUser(user): AuthUser<AdminDefaultUser>,
 ) -> Result<MutationResponse, ServerFnError> {
+	// CSRF token validation (double-submit cookie pattern)
+	require_csrf_token(&csrf_token, &http_request.inner().headers)?;
+
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
-	auth.require_delete_permission(&model_name)?;
-
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	auth.require_model_permission(
+		model_admin.as_ref(),
+		&user as &dyn crate::core::AdminUser,
+		ModelPermission::Delete,
+	)
+	.await?;
+
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
 
@@ -60,10 +76,26 @@ pub async fn delete_record(
 		.await
 		.map_server_fn_error();
 
-	let success = result.is_ok();
-	audit::log_delete(&user_id, &model_name, &id, success);
+	// Check for database errors first, logging failure before returning
+	let affected = match result {
+		Err(e) => {
+			audit::log_delete(&user_id, &model_name, &id, false);
+			return Err(e);
+		}
+		Ok(n) => n,
+	};
 
-	let affected = result?;
+	// Return 404 error when no record was found with the given ID.
+	// Only log success=true after confirming the record was actually deleted.
+	if affected == 0 {
+		audit::log_delete(&user_id, &model_name, &id, false);
+		return Err(ServerFnError::server(
+			404,
+			format!("{} not found", model_name),
+		));
+	}
+
+	audit::log_delete(&user_id, &model_name, &id, true);
 
 	Ok(MutationResponse {
 		success: true,
@@ -95,30 +127,48 @@ pub async fn delete_record(
 ///
 /// // Client-side usage (automatically generates HTTP request)
 /// let request = BulkDeleteRequest {
+///     csrf_token: "token".to_string(),
 ///     ids: vec!["1".to_string(), "2".to_string(), "3".to_string()],
 /// };
 /// let response = bulk_delete_records("User".to_string(), request).await?;
 /// println!("Deleted {} items", response.deleted);
 /// ```
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn bulk_delete_records(
 	model_name: String,
 	request: BulkDeleteRequest,
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
+	#[inject] AuthUser(user): AuthUser<AdminDefaultUser>,
 ) -> Result<BulkDeleteResponse, ServerFnError> {
+	// CSRF token validation (double-submit cookie pattern)
+	require_csrf_token(&request.csrf_token, &http_request.inner().headers)?;
+
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
-	auth.require_delete_permission(&model_name)?;
-
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	auth.require_model_permission(
+		model_admin.as_ref(),
+		&user as &dyn crate::core::AdminUser,
+		ModelPermission::Delete,
+	)
+	.await?;
+
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
 
 	let user_id = auth.user_id().unwrap_or("unknown").to_string();
 
 	let ids = request.ids;
+	if ids.len() > MAX_BULK_DELETE_IDS {
+		return Err(ServerFnError::application(format!(
+			"Too many IDs for bulk delete: {} exceeds maximum of {}",
+			ids.len(),
+			MAX_BULK_DELETE_IDS
+		)));
+	}
+
 	let result = db
 		.bulk_delete::<AdminRecord>(table_name, pk_field, ids.clone())
 		.await
@@ -131,7 +181,7 @@ pub async fn bulk_delete_records(
 	let affected = result?;
 
 	Ok(BulkDeleteResponse {
-		success: true,
+		success: affected > 0,
 		deleted: affected,
 		message: format!("Deleted {} {} items", affected, model_name),
 	})

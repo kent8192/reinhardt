@@ -77,7 +77,8 @@ impl ReceiverProfile {
 		self.total_duration += duration;
 		self.min_duration = self.min_duration.min(duration);
 		self.max_duration = self.max_duration.max(duration);
-		self.avg_duration = self.total_duration / self.call_count as u32;
+		self.avg_duration =
+			Duration::from_nanos((self.total_duration.as_nanos() / self.call_count as u128) as u64);
 		self.last_execution = Some(SystemTime::now());
 
 		if !success {
@@ -280,7 +281,9 @@ impl<T: Send + Sync + 'static> SignalProfiler<T> {
 		profiles.sort_by(|a, b| {
 			let a_rate = a.success_rate();
 			let b_rate = b.success_rate();
-			a_rate.partial_cmp(&b_rate).unwrap()
+			a_rate
+				.partial_cmp(&b_rate)
+				.unwrap_or(std::cmp::Ordering::Equal)
 		});
 		profiles.truncate(count);
 		profiles
@@ -441,7 +444,8 @@ impl<T: Send + Sync + 'static> SignalMiddleware<T> for SignalProfiler<T> {
 
 			stats.total_sends += 1;
 			stats.total_duration += duration;
-			stats.avg_send_duration = stats.total_duration / stats.total_sends as u32;
+			let divisor = u32::try_from(stats.total_sends).unwrap_or(u32::MAX);
+			stats.avg_send_duration = stats.total_duration / divisor;
 			stats.slowest_send = stats.slowest_send.max(duration);
 			stats.fastest_send = stats.fastest_send.min(duration);
 		}

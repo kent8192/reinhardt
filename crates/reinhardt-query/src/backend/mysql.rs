@@ -51,17 +51,39 @@ pub struct MySqlQueryBuilder;
 fn parse_user_host(user_name: &str) -> (String, String) {
 	let parts: Vec<&str> = user_name.splitn(2, '@').collect();
 	if parts.len() == 2 {
-		let host = parts[1].trim_matches('\'');
-		(parts[0].to_string(), host.to_string())
+		// Only strip quotes that form a complete pair (both leading AND trailing)
+		// to avoid stripping data characters that happen to be single quotes.
+		// For example, "admin'" should keep the trailing quote (it's part of the username),
+		// while "'admin'" should strip both (they're wrapper quotes).
+		let user = strip_matched_quotes(parts[0]);
+		let host = strip_matched_quotes(parts[1]);
+		(user.to_string(), host.to_string())
 	} else {
 		(user_name.to_string(), "%".to_string())
 	}
 }
 
+/// Strip single quotes only when they form a matched pair (both leading and trailing).
+///
+/// This prevents stripping data characters that happen to be single quotes
+/// while still handling the MySQL `'user'@'host'` quoted format correctly.
+fn strip_matched_quotes(s: &str) -> &str {
+	s.strip_prefix('\'')
+		.and_then(|inner| inner.strip_suffix('\''))
+		.unwrap_or(s)
+}
+
 /// Format a MySQL user identifier as `'user'@'host'`.
+///
+/// Single quotes in user and host parts are escaped by doubling them
+/// to prevent SQL injection.
 fn format_mysql_user(user_name: &str) -> String {
 	let (user, host) = parse_user_host(user_name);
-	format!("'{}'@'{}'", user, host)
+	format!(
+		"'{}'@'{}'",
+		user.replace('\'', "''"),
+		host.replace('\'', "''")
+	)
 }
 
 impl MySqlQueryBuilder {
@@ -355,6 +377,12 @@ impl MySqlQueryBuilder {
 				// MySQL does not support PostgreSQL-style enum casting (::type),
 				// so we render only the inner expression.
 				self.write_simple_expr(writer, expr);
+			}
+			SimpleExpr::ExprAlias(expr, alias) => {
+				self.write_simple_expr(writer, expr);
+				writer.push_keyword("AS");
+				writer.push_space();
+				writer.push_identifier(&alias.to_string(), |s| self.escape_iden(s));
 			}
 			SimpleExpr::Cast(expr, type_name) => {
 				writer.push("CAST(");
@@ -2108,7 +2136,7 @@ impl QueryBuilder for MySqlQueryBuilder {
 
 		// Grantees
 		writer.push_list(&stmt.grantees, ", ", |w, grantee| {
-			w.push(Self::format_role_specification(grantee));
+			w.push(&Self::format_role_specification(grantee));
 		});
 
 		// WITH ADMIN OPTION
@@ -2146,7 +2174,7 @@ impl QueryBuilder for MySqlQueryBuilder {
 
 		// Grantees
 		writer.push_list(&stmt.grantees, ", ", |w, grantee| {
-			w.push(Self::format_role_specification(grantee));
+			w.push(&Self::format_role_specification(grantee));
 		});
 
 		// GRANTED BY is NOT SUPPORTED in MySQL
@@ -3282,23 +3310,39 @@ impl MySqlQueryBuilder {
 impl MySqlQueryBuilder {
 	/// Format a role specification for MySQL
 	///
+	/// User specifications (containing `@`) are formatted via
+	/// [`format_mysql_user`] as `'user'@'host'`. Plain role names are
+	/// quoted with backticks. Special role keywords (`CURRENT_USER`)
+	/// are returned as borrowed `&str` to avoid allocation.
+	///
 	/// # Arguments
 	///
 	/// * `spec` - The role specification to format
 	///
 	/// # Returns
 	///
-	/// The SQL representation of the role specification
-	fn format_role_specification(spec: &crate::dcl::RoleSpecification) -> &str {
+	/// The SQL representation of the role specification as `Cow<'_, str>`
+	fn format_role_specification(
+		spec: &crate::dcl::RoleSpecification,
+	) -> std::borrow::Cow<'_, str> {
 		use crate::dcl::RoleSpecification;
+		use std::borrow::Cow;
 
 		match spec {
-			RoleSpecification::RoleName(name) => name,
+			RoleSpecification::RoleName(name) => {
+				if name.contains('@') {
+					// User specification (e.g. "alice@localhost") -> 'alice'@'localhost'
+					Cow::Owned(format_mysql_user(name))
+				} else {
+					// Plain role name -> backtick-quoted identifier
+					Cow::Owned(format!("`{}`", name.replace('`', "``")))
+				}
+			}
 			// MySQL does not support CURRENT_ROLE or SESSION_USER
 			// Use CURRENT_USER as fallback
-			RoleSpecification::CurrentRole => "CURRENT_USER",
-			RoleSpecification::CurrentUser => "CURRENT_USER",
-			RoleSpecification::SessionUser => "CURRENT_USER",
+			RoleSpecification::CurrentRole => Cow::Borrowed("CURRENT_USER"),
+			RoleSpecification::CurrentUser => Cow::Borrowed("CURRENT_USER"),
+			RoleSpecification::SessionUser => Cow::Borrowed("CURRENT_USER"),
 		}
 	}
 }
@@ -7537,6 +7581,93 @@ mod tests {
 		// Assert
 		assert!(sql.contains("`orders`.`status`"));
 		assert!(sql.contains("WHERE"));
+	}
+
+	#[rstest]
+	fn test_format_mysql_user_simple() {
+		// Arrange & Act
+		let result = format_mysql_user("admin@localhost");
+
+		// Assert
+		assert_eq!(result, "'admin'@'localhost'");
+	}
+
+	#[rstest]
+	fn test_format_mysql_user_escapes_single_quotes_in_user() {
+		// Arrange - user name with single quote in user part
+		// parse_user_host splits on first '@': user="admin'", host="'localhost"
+		// Both single quotes are preserved as data and escaped by doubling
+		let result = format_mysql_user("admin'@'localhost");
+
+		// Act & Assert - single quotes in both user and host parts must be escaped
+		assert_eq!(result, "'admin'''@'''localhost'");
+	}
+
+	#[rstest]
+	fn test_format_mysql_user_escapes_single_quotes_in_host() {
+		// Arrange - host with single quote injection
+		let result = format_mysql_user("admin@host'; DROP USER root; --");
+
+		// Act & Assert
+		assert_eq!(result, "'admin'@'host''; DROP USER root; --'");
+	}
+
+	#[rstest]
+	fn test_format_mysql_user_no_host() {
+		// Arrange & Act
+		let result = format_mysql_user("admin");
+
+		// Assert - default host is '%'
+		assert_eq!(result, "'admin'@'%'");
+	}
+
+	#[rstest]
+	fn test_format_role_specification_escapes_backticks() {
+		// Arrange
+		let spec = crate::dcl::RoleSpecification::RoleName("my`role".to_string());
+
+		// Act
+		let result = MySqlQueryBuilder::format_role_specification(&spec);
+
+		// Assert - backticks must be escaped by doubling
+		assert_eq!(result, "`my``role`");
+	}
+
+	#[rstest]
+	fn test_format_role_specification_current_user() {
+		// Arrange
+		let spec = crate::dcl::RoleSpecification::CurrentUser;
+
+		// Act
+		let result = MySqlQueryBuilder::format_role_specification(&spec);
+
+		// Assert
+		assert_eq!(result, "CURRENT_USER");
+	}
+
+	#[rstest]
+	fn test_format_role_specification_user_spec() {
+		// Arrange - user specification with @ should use format_mysql_user
+		let spec = crate::dcl::RoleSpecification::RoleName("alice@localhost".to_string());
+
+		// Act
+		let result = MySqlQueryBuilder::format_role_specification(&spec);
+
+		// Assert - should produce quoted user spec, not backtick-quoted identifier
+		assert_eq!(result, "'alice'@'localhost'");
+	}
+
+	#[rstest]
+	fn test_format_role_specification_user_spec_with_injection() {
+		// Arrange - user spec with single quotes in host should be escaped
+		let spec =
+			crate::dcl::RoleSpecification::RoleName("admin@host'; DROP USER root; --".to_string());
+
+		// Act
+		let result = MySqlQueryBuilder::format_role_specification(&spec);
+
+		// Assert - single quotes in host must be escaped by doubling
+		assert_eq!(result, "'admin'@'host''; DROP USER root; --'");
 	}
 }
 

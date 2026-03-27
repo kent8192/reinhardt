@@ -86,11 +86,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = "0.1.0-alpha.1"
+reinhardt = "0.1.0-rc.13"
 
 # Or use a preset with parsers support:
-# reinhardt = { version = "0.1.0-alpha.1", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-alpha.1", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
 ```
 
 **Note:** HTTP types are available through the main `reinhardt` crate, which provides a unified interface to all framework components.
@@ -361,7 +361,7 @@ let response = StreamingResponse::with_status(
 
 - `parsers` - Enable request body parsing (JSON, form data, multipart)
   - Adds `parse_json()`, `parse_form()` methods to Request
-  - Requires `reinhardt-parsers` crate
+  - Requires `reinhardt-core` crate (parsers module)
 
 ## Dependencies
 
@@ -369,8 +369,7 @@ let response = StreamingResponse::with_status(
 - `bytes` - Efficient byte buffer handling
 - `futures` - Stream support for streaming responses
 - `serde` - Serialization support (with `serde_json` for JSON)
-- `reinhardt-exception` - Error handling
-- `reinhardt-parsers` - Request body parsing (optional, with `parsers` feature)
+- `reinhardt-core` - Core types, error handling, and optional request body parsing (parsers module enabled via the `parsers` feature)
 
 ## Testing
 

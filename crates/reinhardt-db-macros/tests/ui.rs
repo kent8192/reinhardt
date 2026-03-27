@@ -13,4 +13,5 @@ fn ui_tests() {
 	t.compile_fail("tests/ui/fail/missing_collection.rs");
 	t.compile_fail("tests/ui/fail/unsupported_backend.rs");
 	t.compile_fail("tests/ui/fail/missing_primary_key.rs");
+	t.compile_fail("tests/ui/fail/unknown_field_attribute.rs");
 }

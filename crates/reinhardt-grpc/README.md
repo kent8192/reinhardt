@@ -14,11 +14,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", features = ["grpc"] }
+reinhardt = { version = "0.1.0-rc.13", features = ["grpc"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-alpha.1", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-alpha.1", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
 ```
 
 Then import gRPC features:
@@ -158,7 +158,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```toml
 [dependencies]
-reinhardt-grpc = "0.1.0-alpha.1"
+reinhardt-grpc = "0.1.0-rc.13"
 tonic = "0.12"
 prost = "0.13"
 
@@ -190,8 +190,8 @@ Enable the `di` feature to use dependency injection in gRPC handlers:
 
 ```toml
 [dependencies]
-reinhardt-grpc = { version = "0.1", features = ["di"] }
-reinhardt-di = "0.1"
+reinhardt-grpc = { version = "0.1.0-rc.13", features = ["di"] }
+reinhardt-di = "0.1.0-rc.13"
 ```
 
 #### Basic Usage

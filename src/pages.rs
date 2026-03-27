@@ -39,7 +39,7 @@
 //! }
 //!
 //! // Define a server function
-//! #[server_fn(use_inject = true)]
+//! #[server_fn]
 //! pub async fn get_data(
 //!     #[inject] db: DatabaseConnection,
 //! ) -> std::result::Result<String, ServerFnError> {

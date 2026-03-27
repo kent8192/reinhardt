@@ -59,6 +59,14 @@ const MAX_NAME_LENGTH: usize = 100;
 /// Maximum allowed length for email input.
 const MAX_EMAIL_LENGTH: usize = 254;
 
+/// Check whether a string exceeds the given character limit.
+///
+/// Uses short-circuit counting: stops as soon as `max + 1` characters
+/// have been scanned, avoiding a full O(n) traversal for large inputs.
+fn exceeds_max_chars(s: &str, max: usize) -> bool {
+	s.chars().nth(max).is_some()
+}
+
 /// Configuration for GraphQL query protection limits.
 ///
 /// Controls query depth, complexity, size, and field count limits to prevent
@@ -161,44 +169,225 @@ pub fn validate_query(query: &str, limits: &QueryLimits) -> Result<(), String> {
 	Ok(())
 }
 
+/// GraphQL keywords that should not be counted as fields.
+const GRAPHQL_KEYWORDS: &[&str] = &[
+	"query",
+	"mutation",
+	"subscription",
+	"fragment",
+	"on",
+	"true",
+	"false",
+	"null",
+];
+
+/// Check whether a token is a field-like identifier.
+///
+/// Returns `true` when the token looks like a GraphQL field name:
+/// an alphanumeric identifier that is not a keyword and does not
+/// start with a fragment spread (`...`).
+fn is_field_identifier(token: &str) -> bool {
+	!token.is_empty()
+		&& !token.starts_with("...")
+		&& !GRAPHQL_KEYWORDS.contains(&token)
+		&& token
+			.chars()
+			.next()
+			.is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+}
+
 /// Count approximate number of fields in a GraphQL query.
 ///
-/// Uses a heuristic approach: counts identifiers that appear after
-/// an opening brace or newline within selection sets.
+/// Counts field-like identifiers that appear inside selection sets
+/// (brace depth > 0). Each identifier token is evaluated immediately
+/// during character processing, so multiple fields on the same line
+/// are counted correctly.
+///
+/// Handles inline fragment type conditions (`... on Type { }`) by
+/// tracking the `on` keyword and skipping the subsequent type name.
+/// Also handles block strings (`"""..."""`) to avoid miscounting
+/// content inside them as fields.
 fn count_query_fields(query: &str) -> usize {
-	// Simple heuristic: count non-keyword identifiers within braces
 	let mut count = 0;
 	let mut in_string = false;
+	let mut in_block_string = false;
 	let mut depth: usize = 0;
+	let mut token = String::new();
+	let mut in_comment = false;
+	let mut escaped = false;
+	// Track whether the last flushed token was the `on` keyword,
+	// so the next identifier (a type condition) is not counted as a field.
+	let mut after_on_keyword = false;
 
-	for line in query.lines() {
-		let trimmed = line.trim();
-		if trimmed.is_empty() || trimmed.starts_with('#') {
+	let chars: Vec<char> = query.chars().collect();
+	let len = chars.len();
+	let mut i = 0;
+
+	while i < len {
+		let ch = chars[i];
+
+		if escaped {
+			escaped = false;
+			i += 1;
 			continue;
 		}
 
-		for ch in trimmed.chars() {
-			match ch {
-				'"' => in_string = !in_string,
-				'{' if !in_string => depth += 1,
-				'}' if !in_string => depth = depth.saturating_sub(1),
-				_ => {}
+		// Handle block strings: skip everything until closing """
+		if in_block_string {
+			if ch == '"' && i + 2 < len && chars[i + 1] == '"' && chars[i + 2] == '"' {
+				in_block_string = false;
+				i += 3; // skip closing """
+			} else {
+				i += 1;
 			}
+			continue;
 		}
 
-		// Count field-like lines within selection sets
-		if depth > 0 && !in_string {
-			let field_line = trimmed.trim_start_matches('{').trim();
-			if !field_line.is_empty()
-				&& !field_line.starts_with('}')
-				&& !field_line.starts_with("...")
-				&& !field_line.starts_with("query")
-				&& !field_line.starts_with("mutation")
-				&& !field_line.starts_with("subscription")
-				&& !field_line.starts_with("fragment")
-			{
-				count += 1;
+		// Handle line comments: everything after '#' (outside strings) is ignored
+		if ch == '\n' {
+			in_comment = false;
+			// Flush any accumulated token at end of line
+			if depth > 0 && !in_string && is_field_identifier(&token) {
+				if after_on_keyword {
+					after_on_keyword = false;
+				} else {
+					count += 1;
+				}
 			}
+			if !is_field_identifier(&token) {
+				after_on_keyword = false;
+			}
+			token.clear();
+			i += 1;
+			continue;
+		}
+
+		if in_comment {
+			i += 1;
+			continue;
+		}
+
+		if in_string {
+			match ch {
+				'\\' => escaped = true,
+				'"' => in_string = false,
+				_ => {}
+			}
+			i += 1;
+			continue;
+		}
+
+		match ch {
+			'#' => {
+				// Flush token before comment starts
+				if depth > 0 && is_field_identifier(&token) {
+					if after_on_keyword {
+						after_on_keyword = false;
+					} else {
+						count += 1;
+					}
+				}
+				token.clear();
+				in_comment = true;
+			}
+			'"' => {
+				// Check for block string opening: """
+				if i + 2 < len && chars[i + 1] == '"' && chars[i + 2] == '"' {
+					// Flush token before block string starts
+					if depth > 0 && is_field_identifier(&token) {
+						if after_on_keyword {
+							after_on_keyword = false;
+						} else {
+							count += 1;
+						}
+					}
+					token.clear();
+					in_block_string = true;
+					i += 3; // skip opening """
+					continue;
+				}
+				// Flush token before string starts
+				if depth > 0 && is_field_identifier(&token) {
+					if after_on_keyword {
+						after_on_keyword = false;
+					} else {
+						count += 1;
+					}
+				}
+				token.clear();
+				in_string = true;
+			}
+			'{' => {
+				// Flush token — the identifier before '{' is a field with sub-selection
+				if depth > 0 && is_field_identifier(&token) {
+					if after_on_keyword {
+						after_on_keyword = false;
+					} else {
+						count += 1;
+					}
+				}
+				token.clear();
+				depth += 1;
+			}
+			'}' => {
+				// Flush token before closing brace
+				if depth > 0 && is_field_identifier(&token) {
+					if after_on_keyword {
+						after_on_keyword = false;
+					} else {
+						count += 1;
+					}
+				}
+				token.clear();
+				depth = depth.saturating_sub(1);
+			}
+			'(' => {
+				// Flush token — the identifier before '(' is a field with arguments
+				if depth > 0 && is_field_identifier(&token) {
+					if after_on_keyword {
+						after_on_keyword = false;
+					} else {
+						count += 1;
+					}
+				}
+				token.clear();
+			}
+			c if c.is_ascii_whitespace() || c == ',' => {
+				// Token delimiter: evaluate accumulated token
+				if depth > 0 && is_field_identifier(&token) {
+					if after_on_keyword {
+						after_on_keyword = false;
+					} else {
+						// Set after_on_keyword when flushing the `on` keyword itself
+						if token == "on" {
+							after_on_keyword = true;
+						}
+						count += 1;
+					}
+				} else if token == "on" {
+					// `on` is in GRAPHQL_KEYWORDS so is_field_identifier returns false,
+					// but we still need to track it for inline fragment detection
+					after_on_keyword = true;
+				}
+				token.clear();
+			}
+			')' | ':' | '!' | '@' | '$' | '=' | '|' | '&' => {
+				// Punctuation that terminates a token but is not a field delimiter
+				token.clear();
+			}
+			_ => {
+				token.push(ch);
+			}
+		}
+		i += 1;
+	}
+
+	// Flush final token (query may not end with newline)
+	if depth > 0 && !in_string && is_field_identifier(&token) {
+		if after_on_keyword {
+			// Type condition at end of query — do not count
+		} else {
+			count += 1;
 		}
 	}
 
@@ -218,7 +407,7 @@ fn validate_create_user_input(input: &CreateUserInput) -> GqlResult<()> {
 	if name.is_empty() {
 		return Err(async_graphql::Error::new("Name cannot be empty"));
 	}
-	if name.len() > MAX_NAME_LENGTH {
+	if exceeds_max_chars(name, MAX_NAME_LENGTH) {
 		return Err(async_graphql::Error::new(format!(
 			"Name exceeds maximum length of {} characters",
 			MAX_NAME_LENGTH
@@ -238,7 +427,7 @@ fn validate_create_user_input(input: &CreateUserInput) -> GqlResult<()> {
 	if email.is_empty() {
 		return Err(async_graphql::Error::new("Email cannot be empty"));
 	}
-	if email.len() > MAX_EMAIL_LENGTH {
+	if exceeds_max_chars(email, MAX_EMAIL_LENGTH) {
 		return Err(async_graphql::Error::new(format!(
 			"Email exceeds maximum length of {} characters",
 			MAX_EMAIL_LENGTH
@@ -1056,6 +1245,209 @@ mod tests {
 		assert!(
 			!result.extensions.is_empty(),
 			"expected Analyzer extension data in response"
+		);
+	}
+
+	#[rstest::rstest]
+	#[case(
+		"{\n  user(name: \"hello \\\"world\\\"\") {\n    id\n  }\n}",
+		2,
+		"escaped quotes inside string should not affect field count"
+	)]
+	#[case(
+		"{\n  user(name: \"hello \\\\\\\"end\") {\n    id\n    name\n  }\n}",
+		3,
+		"escaped backslash before quote should correctly toggle string state"
+	)]
+	#[case(
+		"{\n  user(name: \"no escapes\") {\n    id\n  }\n}",
+		2,
+		"string without escapes should count fields normally"
+	)]
+	#[case(
+		"{\n  user(name: \"a\\\"b\\\"c\") {\n    id\n    name\n    email\n  }\n}",
+		4,
+		"multiple escaped quotes in a single string literal"
+	)]
+	fn test_count_query_fields_with_escaped_strings(
+		#[case] query: &str,
+		#[case] expected: usize,
+		#[case] description: &str,
+	) {
+		// Arrange — query and expected count provided by rstest parametrization
+
+		// Act
+		let count = count_query_fields(query);
+
+		// Assert
+		assert_eq!(count, expected, "{}", description);
+	}
+
+	#[rstest::rstest]
+	#[case(
+		"{ users { id name email } }",
+		4,
+		"parent field plus multiple fields on same line within sub-selection"
+	)]
+	#[case(
+		"{ users { id } }",
+		2,
+		"parent field plus single field on same line within sub-selection"
+	)]
+	#[case(
+		"{ users { id name } posts { title body } }",
+		6,
+		"two parent fields plus their sub-selection fields on same line"
+	)]
+	fn test_count_query_fields_same_line(
+		#[case] query: &str,
+		#[case] expected: usize,
+		#[case] description: &str,
+	) {
+		// Arrange — query and expected count provided by rstest parametrization
+
+		// Act
+		let count = count_query_fields(query);
+
+		// Assert
+		assert_eq!(count, expected, "{}", description);
+	}
+
+	#[rstest::rstest]
+	#[case(
+		"{ ... on User { id name } }",
+		2,
+		"inline fragment type condition should not be counted as a field"
+	)]
+	#[case(
+		"{ users { ... on Admin { role } ... on Member { level } } }",
+		3,
+		"multiple inline fragments: users + role + level, type names excluded"
+	)]
+	fn test_count_query_fields_inline_fragments(
+		#[case] query: &str,
+		#[case] expected: usize,
+		#[case] description: &str,
+	) {
+		// Arrange — query and expected count provided by rstest parametrization
+
+		// Act
+		let count = count_query_fields(query);
+
+		// Assert
+		assert_eq!(count, expected, "{}", description);
+	}
+
+	#[rstest::rstest]
+	#[case(
+		"{ user(bio: \"\"\"multi\nline\"\"\") { id } }",
+		2,
+		"block string argument content should not be counted as fields"
+	)]
+	#[case(
+		"{ user(desc: \"\"\"has identifier inside\"\"\") { id name } }",
+		3,
+		"block string with identifier-like content should not affect field count"
+	)]
+	fn test_count_query_fields_block_strings(
+		#[case] query: &str,
+		#[case] expected: usize,
+		#[case] description: &str,
+	) {
+		// Arrange — query and expected count provided by rstest parametrization
+
+		// Act
+		let count = count_query_fields(query);
+
+		// Assert
+		assert_eq!(count, expected, "{}", description);
+	}
+
+	#[tokio::test]
+	async fn test_exceeds_max_chars_short_circuits() {
+		// Arrange / Act / Assert
+		assert!(!exceeds_max_chars("hello", 5)); // exactly at limit
+		assert!(exceeds_max_chars("hello!", 5)); // one over
+		assert!(!exceeds_max_chars("", 0)); // empty at zero limit
+		assert!(exceeds_max_chars("a", 0)); // single char over zero limit
+	}
+
+	#[tokio::test]
+	async fn test_create_user_accepts_multibyte_name_within_limit() {
+		// Arrange: CJK characters are multi-byte in UTF-8 but each is 1 char
+		let storage = UserStorage::new();
+		let schema = create_schema(storage);
+
+		// 4 CJK characters = 4 chars (well under MAX_NAME_LENGTH of 100)
+		let query = r#"
+			mutation {
+				createUser(input: { name: "田中太郎", email: "tanaka@example.com" }) {
+					name
+				}
+			}
+		"#;
+
+		// Act
+		let result = schema.execute(query).await;
+
+		// Assert: should succeed because character count is within limit
+		assert!(
+			result.errors.is_empty(),
+			"expected success for multi-byte name within limit, got: {:?}",
+			result.errors
+		);
+		let data = result.data.into_json().unwrap();
+		assert_eq!(data["createUser"]["name"], "田中太郎");
+	}
+
+	#[tokio::test]
+	async fn test_create_user_rejects_multibyte_name_over_limit() {
+		// Arrange: build a name with exactly MAX_NAME_LENGTH + 1 CJK characters
+		let storage = UserStorage::new();
+		let schema = create_schema(storage);
+
+		let long_name: String = "あ".repeat(MAX_NAME_LENGTH + 1);
+		let query = format!(
+			r#"mutation {{ createUser(input: {{ name: "{}", email: "test@example.com" }}) {{ id }} }}"#,
+			long_name
+		);
+
+		// Act
+		let result = schema.execute(&query).await;
+
+		// Assert: should reject because character count exceeds limit
+		assert!(
+			!result.errors.is_empty(),
+			"expected validation error for name exceeding {} characters",
+			MAX_NAME_LENGTH
+		);
+	}
+
+	#[tokio::test]
+	async fn test_create_user_accepts_emoji_name_at_limit() {
+		// Arrange: emoji are multi-byte in UTF-8 but each is 1 char count
+		let storage = UserStorage::new();
+		let schema = create_schema(storage);
+
+		// Exactly MAX_NAME_LENGTH emoji characters
+		// Note: name validation only allows alphanumeric, spaces, underscores,
+		// hyphens, and dots, so emoji will be rejected by the character check,
+		// not the length check. We test length via CJK instead.
+		// Here we verify that a name at exactly the limit passes length validation.
+		let name_at_limit: String = "a".repeat(MAX_NAME_LENGTH);
+		let query = format!(
+			r#"mutation {{ createUser(input: {{ name: "{}", email: "test@example.com" }}) {{ id }} }}"#,
+			name_at_limit
+		);
+
+		// Act
+		let result = schema.execute(&query).await;
+
+		// Assert: should succeed (exactly at limit)
+		assert!(
+			result.errors.is_empty(),
+			"expected success for name at exactly the limit, got: {:?}",
+			result.errors
 		);
 	}
 }

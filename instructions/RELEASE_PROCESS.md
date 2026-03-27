@@ -32,7 +32,7 @@ Reinhardt uses **release-plz** for fully automated release management:
 - **Automated CHANGELOGs**: Generated from commit messages
 - **Release PRs**: Automatically created when changes are detected
 - **Git Tags**: Format `[crate-name]@v[version]`
-- **GitHub Releases**: Created automatically upon merge
+- **GitHub Releases**: Created for `reinhardt-web` only (other crates are disabled at workspace level)
 
 ### Key Principles
 
@@ -181,7 +181,7 @@ Upon merge, release-plz:
    - Automatically skips already-published versions
    - Handles workspace dependency ordering correctly
 2. Creates Git tags (`[crate-name]@v[version]`)
-3. Creates GitHub Releases
+3. Creates GitHub Releases (for `reinhardt-web` only; `git_release_enable` is `false` at workspace level)
 
 **Note**: The `release-plz release` command handles publishing gracefully:
 - Already-published crate versions are skipped automatically (no errors on retry)
@@ -238,15 +238,20 @@ changelog_update = true
 pr_branch_prefix = "release-plz-"
 pr_labels = ["release", "automated"]
 pr_name = "chore: release"
-git_release_enable = true
+git_release_enable = false
 git_tag_enable = true
 git_tag_name = "{{ package }}@v{{ version }}"
 git_release_type = "auto"
-semver_check = false
+semver_check = true
 publish_timeout = "10m"
 dependencies_update = true
 release_always = true
 publish_no_verify = true
+
+# Only reinhardt-web gets GitHub Releases
+[[package]]
+name = "reinhardt-web"
+git_release_enable = true
 
 # Exclude packages from release
 [[package]]

@@ -1,0 +1,5 @@
+error: unknown setting attribute, expected one of: `required`, `optional`, `default`
+ --> tests/ui/settings/fail/settings_unknown_setting_attr.rs:5:12
+  |
+5 |     #[setting(require)]
+  |               ^^^^^^^

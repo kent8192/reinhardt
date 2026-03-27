@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di@v0.1.0-rc.13...reinhardt-di@v0.1.0-rc.14) - 2026-03-24
+
+### Added
+
+- *(reinhardt-di)* add protocol-agnostic `fork()` method to `InjectionContext`
+
+### Changed
+
+- *(reinhardt-di)* extract fork_inner helper for InjectionContext fork methods
+
+### Documentation
+
+- fix outdated references in SECURITY.md, CONTRIBUTING.md, and documentation standards
+- *(readme)* fix documentation discrepancies across crate READMEs
+
+### Fixed
+
+- *(reinhardt-pages,reinhardt-di)* add Content-Type negotiation for server_fn and Json<T> extractor
+- *(reinhardt-di)* address Copilot review on Content-Type handling
+
+## [0.1.0-rc.13](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di@v0.1.0-rc.12...reinhardt-di@v0.1.0-rc.13) - 2026-03-18
+
+### Fixed
+
+- *(di)* set HTTP request on per-request InjectionContext in use_inject macro
+
+## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di@v0.1.0-rc.11...reinhardt-di@v0.1.0-rc.12) - 2026-03-18
+
+### Added
+
+- *(di)* add Option<T> blanket Injectable impl for optional injection
+
 ## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di@v0.1.0-rc.8...reinhardt-di@v0.1.0-rc.9) - 2026-03-15
 
 ### Styling

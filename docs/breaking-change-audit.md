@@ -40,7 +40,7 @@ non-`#[non_exhaustive]` structs).
 
 | Item | Change | Status | Notes |
 |------|--------|--------|-------|
-| — | — | Mitigated by `#[non_exhaustive]` | All public structs/enums now marked |
+| — | — | Mitigated by `#[non_exhaustive]` | Applied to public error enums and config structs |
 
 ### Pass 5: Behavioral Changes
 
@@ -59,8 +59,9 @@ targeting `main`. See `.github/workflows/semver-check.yml`.
 ## Findings Summary
 
 - No breaking changes detected in current RC audit
-- `#[non_exhaustive]` added to all public error enums and config structs as
-  preventative measure
+- `#[non_exhaustive]` added to public error enums and config structs as
+  a preventative measure (not yet applied to all public structs such as
+  data transfer types and manager types)
 - All public APIs maintain backward compatibility with 0.1.x baseline
 
 ## References

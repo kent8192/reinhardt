@@ -386,3 +386,444 @@ impl RequestBuilder {
 		Ok(req)
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+	use serde_json::json;
+
+	// ========================================================================
+	// Normal: APIRequestFactory
+	// ========================================================================
+
+	#[rstest]
+	fn test_factory_new() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+
+		// Act
+		let request = factory.get("/api/users/").build().unwrap();
+
+		// Assert
+		assert_eq!(request.method(), Method::GET);
+	}
+
+	#[rstest]
+	fn test_factory_default() {
+		// Arrange
+		let factory_new = APIRequestFactory::new();
+		let factory_default = APIRequestFactory::default();
+
+		// Act
+		let req_new = factory_new.get("/test").build().unwrap();
+		let req_default = factory_default.get("/test").build().unwrap();
+
+		// Assert
+		assert_eq!(req_new.method(), req_default.method());
+		assert_eq!(req_new.uri(), req_default.uri());
+	}
+
+	#[rstest]
+	fn test_factory_with_format() {
+		// Arrange
+		let factory = APIRequestFactory::new().with_format("xml");
+
+		// Act
+		let request = factory.post("/api/data/").body("payload").build().unwrap();
+
+		// Assert
+		assert_eq!(
+			request.headers().get("Content-Type").unwrap(),
+			"application/octet-stream"
+		);
+	}
+
+	#[rstest]
+	fn test_factory_with_header() {
+		// Arrange
+		let factory = APIRequestFactory::new()
+			.with_header("X-Custom", "value123")
+			.unwrap();
+
+		// Act
+		let request = factory.get("/api/items/").build().unwrap();
+
+		// Assert
+		assert_eq!(request.headers().get("x-custom").unwrap(), "value123");
+	}
+
+	#[rstest]
+	fn test_factory_get() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+
+		// Act
+		let request = factory.get("/api/users/").build().unwrap();
+
+		// Assert
+		assert_eq!(request.method(), Method::GET);
+	}
+
+	#[rstest]
+	fn test_factory_post() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+
+		// Act
+		let request = factory.post("/api/users/").build().unwrap();
+
+		// Assert
+		assert_eq!(request.method(), Method::POST);
+	}
+
+	#[rstest]
+	fn test_factory_put() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+
+		// Act
+		let request = factory.put("/api/users/1/").build().unwrap();
+
+		// Assert
+		assert_eq!(request.method(), Method::PUT);
+	}
+
+	#[rstest]
+	fn test_factory_patch() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+
+		// Act
+		let request = factory.patch("/api/users/1/").build().unwrap();
+
+		// Assert
+		assert_eq!(request.method(), Method::PATCH);
+	}
+
+	#[rstest]
+	fn test_factory_delete() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+
+		// Act
+		let request = factory.delete("/api/users/1/").build().unwrap();
+
+		// Assert
+		assert_eq!(request.method(), Method::DELETE);
+	}
+
+	#[rstest]
+	fn test_factory_head() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+
+		// Act
+		let request = factory.head("/api/users/").build().unwrap();
+
+		// Assert
+		assert_eq!(request.method(), Method::HEAD);
+	}
+
+	#[rstest]
+	fn test_factory_options() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+
+		// Act
+		let request = factory.options("/api/users/").build().unwrap();
+
+		// Assert
+		assert_eq!(request.method(), Method::OPTIONS);
+	}
+
+	#[rstest]
+	fn test_factory_request_custom() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+
+		// Act
+		let request = factory
+			.request(Method::TRACE, "/api/trace/")
+			.build()
+			.unwrap();
+
+		// Assert
+		assert_eq!(request.method(), Method::TRACE);
+	}
+
+	// ========================================================================
+	// Normal: RequestBuilder
+	// ========================================================================
+
+	#[rstest]
+	fn test_builder_json() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+		let data = json!({"name": "test"});
+
+		// Act
+		let request = factory
+			.post("/api/users/")
+			.json(&data)
+			.unwrap()
+			.build()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			request.headers().get("Content-Type").unwrap(),
+			"application/json"
+		);
+		assert_eq!(request.method(), Method::POST);
+	}
+
+	#[rstest]
+	fn test_builder_form() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+		let data = json!({"name": "test", "age": 30});
+
+		// Act
+		let request = factory
+			.post("/api/users/")
+			.form(&data)
+			.unwrap()
+			.build()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			request.headers().get("Content-Type").unwrap(),
+			"application/x-www-form-urlencoded"
+		);
+	}
+
+	#[rstest]
+	fn test_builder_raw_body() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+
+		// Act
+		let request = factory
+			.post("/api/upload/")
+			.body("raw data")
+			.build()
+			.unwrap();
+
+		// Assert
+		assert_eq!(request.method(), Method::POST);
+		assert_eq!(
+			request.headers().get("Content-Type").unwrap(),
+			"application/json"
+		);
+	}
+
+	#[rstest]
+	fn test_builder_query_single() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+
+		// Act
+		let request = factory
+			.get("/api/users/")
+			.query("page", "1")
+			.build()
+			.unwrap();
+
+		// Assert
+		assert_eq!(request.uri().to_string(), "/api/users/?page=1");
+	}
+
+	#[rstest]
+	fn test_builder_query_multiple() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+
+		// Act
+		let request = factory
+			.get("/api/users/")
+			.query("page", "1")
+			.query_param("limit", "10")
+			.build()
+			.unwrap();
+
+		// Assert
+		let uri = request.uri().to_string();
+		assert!(uri.contains("page=1"));
+		assert!(uri.contains("limit=10"));
+		assert!(uri.contains('&'));
+	}
+
+	#[rstest]
+	fn test_builder_force_authenticate() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+		let user = json!({"id": 1, "username": "testuser"});
+
+		// Act
+		let request = factory
+			.get("/api/profile/")
+			.force_authenticate(user)
+			.build()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			request.headers().get("X-Test-User").unwrap(),
+			"authenticated"
+		);
+	}
+
+	#[rstest]
+	fn test_builder_method_getter() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+
+		// Act
+		let builder = factory.get("/test");
+
+		// Assert
+		assert_eq!(builder.method(), Method::GET);
+	}
+
+	#[rstest]
+	fn test_builder_path_getter() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+
+		// Act
+		let builder = factory.get("/api/items/");
+
+		// Assert
+		assert_eq!(builder.path(), "/api/items/");
+	}
+
+	#[rstest]
+	fn test_builder_with_format() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+
+		// Act
+		let request = factory
+			.post("/api/data/")
+			.with_format("form")
+			.body("key=val")
+			.build()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			request.headers().get("Content-Type").unwrap(),
+			"application/x-www-form-urlencoded"
+		);
+	}
+
+	// ========================================================================
+	// Error cases
+	// ========================================================================
+
+	#[rstest]
+	fn test_factory_with_header_invalid_name() {
+		// Arrange / Act
+		let result = APIRequestFactory::new().with_header("invalid header!", "value");
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_builder_form_non_object() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+		let data = json!([1, 2, 3]);
+
+		// Act
+		let result = factory.post("/api/users/").form(&data);
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_builder_header_invalid_name() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+
+		// Act
+		let result = factory.get("/test").header("bad header!", "value");
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	// ========================================================================
+	// Edge cases
+	// ========================================================================
+
+	#[rstest]
+	fn test_builder_no_body_no_content_type() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+
+		// Act
+		let request = factory.get("/api/users/").build().unwrap();
+
+		// Assert
+		assert!(request.headers().get("Content-Type").is_none());
+	}
+
+	#[rstest]
+	fn test_builder_json_empty_object() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+		let data = json!({});
+
+		// Act
+		let request = factory
+			.post("/api/data/")
+			.json(&data)
+			.unwrap()
+			.build()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			request.headers().get("Content-Type").unwrap(),
+			"application/json"
+		);
+	}
+
+	#[rstest]
+	fn test_builder_query_special_chars() {
+		// Arrange
+		let factory = APIRequestFactory::new();
+
+		// Act
+		let request = factory
+			.get("/api/search/")
+			.query("q", "hello world&foo=bar")
+			.build()
+			.unwrap();
+
+		// Assert
+		let uri = request.uri().to_string();
+		assert!(uri.contains("hello+world"));
+		assert!(!uri.contains("hello world&foo=bar"));
+	}
+
+	#[rstest]
+	fn test_builder_unknown_format() {
+		// Arrange
+		let factory = APIRequestFactory::new().with_format("xml");
+
+		// Act
+		let request = factory.post("/api/data/").body("<xml/>").build().unwrap();
+
+		// Assert
+		assert_eq!(
+			request.headers().get("Content-Type").unwrap(),
+			"application/octet-stream"
+		);
+	}
+}

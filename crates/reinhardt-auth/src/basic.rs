@@ -3,6 +3,9 @@
 //! Passwords are hashed with Argon2id on storage and verified using
 //! constant-time comparison provided by the `argon2` crate.
 
+// This module uses the deprecated User trait for backward compatibility.
+// BasicAuthentication returns Box<dyn User> to preserve existing authentication APIs.
+#![allow(deprecated)]
 use crate::core::hasher::PasswordHasher;
 use crate::rest_authentication::RestAuthentication;
 use crate::{AuthenticationBackend, AuthenticationError, SimpleUser, User};

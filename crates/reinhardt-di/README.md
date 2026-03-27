@@ -14,11 +14,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", features = ["di"] }
+reinhardt = { version = "0.1.0-rc.13", features = ["di"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-alpha.1", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-alpha.1", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
 ```
 
 Then import DI features:
@@ -679,7 +679,7 @@ async fn create_service(
   - `validate_number()`: Numeric validation
   - Support for combining multiple constraints
 - **Type aliases**: `ValidatedPath<T>`, `ValidatedQuery<T>`, `ValidatedForm<T>`
-- **Integration with `reinhardt-validators`**
+- **Integration with `reinhardt-core` validators module**
 
 ## License
 

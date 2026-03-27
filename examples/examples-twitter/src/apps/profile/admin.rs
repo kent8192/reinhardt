@@ -16,6 +16,7 @@ use reinhardt::admin;
 	list_display = [id, user_id, bio, location, created_at],
 	list_filter = [created_at],
 	search_fields = [bio, location],
-	ordering = [(created_at, desc)]
+	ordering = [(created_at, desc)],
+	permissions = allow_all,
 )]
 pub struct ProfileAdmin;

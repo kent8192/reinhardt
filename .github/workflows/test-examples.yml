@@ -17,6 +17,7 @@ jobs:
   detect-examples-changed:
     name: Detect Examples Changes
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       run: ${{ steps.detect.outputs.run }}
     steps:
@@ -54,6 +55,7 @@ jobs:
 
   test-local-examples:
     name: Test ${{ matrix.example }}
+    timeout-minutes: 30
     needs: [detect-examples-changed]
     # Issue #1828: Skip when no examples/** changes on non-release PRs
     if: needs.detect-examples-changed.outputs.run == 'true'
@@ -80,7 +82,10 @@ jobs:
           components: rustfmt, clippy
 
       - name: Setup protoc
-        uses: ./.github/actions/setup-protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache Cargo Registry
         uses: actions/cache@v5

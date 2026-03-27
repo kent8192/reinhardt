@@ -42,7 +42,7 @@ prefix = "reinhardt-ci"
 # Organizations module variable (for terraform-plan CI)
 organizations_account_email = "<your-email+reinhardt-ci@example.com>"
 
-# Cancel runner (always-on, for event-driven cancel workflows)
+# Hotpath runner (always-on, for lightweight CI control jobs)
 # Set to true after initial CI setup is confirmed working.
-enable_cancel_runner        = true
-cancel_runner_instance_type = "t4g.nano"
+enable_hotpath_runner        = true
+hotpath_runner_instance_type = "t4g.micro"

@@ -14,11 +14,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-alpha.1", features = ["auth"] }
+reinhardt = { version = "0.1.0-rc.13", features = ["auth"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-alpha.1", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-alpha.1", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
 ```
 
 Then import authentication features:
@@ -406,7 +406,7 @@ assert!(permission.has_permission(&context).await);
 - **Cookie Integration**: Secure session cookie handling
 
 ```rust
-use reinhardt::auth::{SessionAuthentication, Authentication};
+use reinhardt::auth::{SessionAuthentication, AuthenticationBackend};
 use reinhardt::auth::sessions::backends::InMemorySessionBackend;
 
 let session_backend = InMemorySessionBackend::new();

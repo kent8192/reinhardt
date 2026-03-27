@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-commands"
-version = "0.1.0-rc.11"
+version = "0.1.0-rc.14"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -26,7 +26,7 @@ clap = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
-colored = "3.0.0"
+colored = { workspace = true }
 dialoguer = "0.12.0"
 hyper = { workspace = true }
 hyper-util = { workspace = true }

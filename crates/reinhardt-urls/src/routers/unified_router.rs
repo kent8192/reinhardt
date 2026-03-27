@@ -86,6 +86,7 @@ use std::sync::Arc;
 pub struct UnifiedRouter {
 	server: ServerRouter,
 	client: ClientRouter,
+	di_registrations: reinhardt_di::DiRegistrationList,
 }
 
 #[cfg(all(feature = "client-router", not(target_arch = "wasm32")))]
@@ -95,6 +96,7 @@ impl UnifiedRouter {
 		Self {
 			server: ServerRouter::new(),
 			client: ClientRouter::new(),
+			di_registrations: reinhardt_di::DiRegistrationList::new(),
 		}
 	}
 
@@ -159,17 +161,29 @@ impl UnifiedRouter {
 	}
 
 	/// Consumes the router and returns the server router.
+	///
+	/// If this router has deferred DI registrations, they are stashed
+	/// in the global registry for later application by the server.
 	pub fn into_server(self) -> ServerRouter {
+		if !self.di_registrations.is_empty() {
+			crate::routers::register_di_registrations(self.di_registrations);
+		}
 		self.server
 	}
 
 	/// Consumes the router and returns the client router.
 	pub fn into_client(self) -> ClientRouter {
+		if !self.di_registrations.is_empty() {
+			crate::routers::register_di_registrations(self.di_registrations);
+		}
 		self.client
 	}
 
 	/// Consumes the router and returns both parts.
 	pub fn into_parts(self) -> (ServerRouter, ClientRouter) {
+		if !self.di_registrations.is_empty() {
+			crate::routers::register_di_registrations(self.di_registrations);
+		}
 		(self.server, self.client)
 	}
 
@@ -194,6 +208,18 @@ impl UnifiedRouter {
 		let (server, client) = self.into_parts();
 		crate::routers::register_router(server);
 		client
+	}
+
+	/// Attach deferred DI registrations to this router.
+	///
+	/// These registrations will be stashed globally when the router is
+	/// consumed (via [`into_server`](Self::into_server),
+	/// [`into_parts`](Self::into_parts), or
+	/// [`register_globally`](Self::register_globally)),
+	/// and applied to the server's singleton scope during startup.
+	pub fn with_di_registrations(mut self, list: reinhardt_di::DiRegistrationList) -> Self {
+		self.di_registrations.merge(list);
+		self
 	}
 
 	// ========================================================================
@@ -229,6 +255,14 @@ impl UnifiedRouter {
 	/// This is a convenience method that delegates to [`ServerRouter::with_middleware`].
 	pub fn with_middleware<M: Middleware + 'static>(mut self, middleware: M) -> Self {
 		self.server = self.server.with_middleware(middleware);
+		self
+	}
+
+	/// Exclude a URL path from the most recently added server middleware.
+	///
+	/// This is a convenience method that delegates to [`ServerRouter::exclude`].
+	pub fn exclude(mut self, pattern: &str) -> Self {
+		self.server = self.server.exclude(pattern);
 		self
 	}
 
@@ -315,6 +349,7 @@ impl Default for UnifiedRouter {
 #[cfg(not(feature = "client-router"))]
 pub struct UnifiedRouter {
 	server: ServerRouter,
+	di_registrations: reinhardt_di::DiRegistrationList,
 }
 
 #[cfg(not(feature = "client-router"))]
@@ -323,6 +358,7 @@ impl UnifiedRouter {
 	pub fn new() -> Self {
 		Self {
 			server: ServerRouter::new(),
+			di_registrations: reinhardt_di::DiRegistrationList::new(),
 		}
 	}
 
@@ -346,13 +382,34 @@ impl UnifiedRouter {
 	}
 
 	/// Consumes the router and returns the server router.
+	///
+	/// If this router has deferred DI registrations, they are stashed
+	/// in the global registry for later application by the server.
 	pub fn into_server(self) -> ServerRouter {
+		if !self.di_registrations.is_empty() {
+			crate::routers::register_di_registrations(self.di_registrations);
+		}
 		self.server
 	}
 
 	/// Registers server router globally.
 	pub fn register_globally(self) {
+		let di = self.di_registrations;
+		if !di.is_empty() {
+			crate::routers::register_di_registrations(di);
+		}
 		crate::routers::register_router(self.server);
+	}
+
+	/// Attach deferred DI registrations to this router.
+	///
+	/// These registrations will be stashed globally when the router is
+	/// consumed (via [`into_server`](Self::into_server) or
+	/// [`register_globally`](Self::register_globally)),
+	/// and applied to the server's singleton scope during startup.
+	pub fn with_di_registrations(mut self, list: reinhardt_di::DiRegistrationList) -> Self {
+		self.di_registrations.merge(list);
+		self
 	}
 
 	// ========================================================================

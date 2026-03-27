@@ -1,0 +1,7 @@
+error: #[user] could not detect primary key field. Add #[field(primary_key = true)] or a field named 'id'
+ --> tests/ui/user/fail/no_pk_field.rs:7:1
+  |
+7 | #[user(hasher = Argon2Hasher, username_field = "email")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `user` (in Nightly builds, run with -Z macro-backtrace for more info)

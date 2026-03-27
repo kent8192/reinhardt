@@ -7,6 +7,7 @@
 use crate::MakeMigrationsCommand;
 use crate::base::BaseCommand;
 use crate::collectstatic::{CollectStaticCommand, CollectStaticOptions};
+use crate::registry::CommandRegistry;
 use crate::{CheckCommand, CommandContext, MigrateCommand, RunServerCommand, ShellCommand};
 #[cfg(feature = "introspect")]
 use clap::ValueEnum;
@@ -119,6 +120,7 @@ pub enum Commands {
 	},
 
 	/// Start the development server
+	#[non_exhaustive]
 	Runserver {
 		/// Server address (default: 127.0.0.1:8000)
 		#[arg(value_name = "ADDRESS", default_value = "127.0.0.1:8000")]
@@ -147,6 +149,10 @@ pub enum Commands {
 		/// Disable SPA mode (no index.html fallback)
 		#[arg(long)]
 		no_spa: bool,
+
+		/// Path to index.html for SPA fallback (auto-detected from project root)
+		#[arg(long)]
+		index: Option<String>,
 	},
 
 	/// Run an interactive Rust shell (REPL)
@@ -168,6 +174,7 @@ pub enum Commands {
 	},
 
 	/// Collect static files into STATIC_ROOT
+	#[non_exhaustive]
 	Collectstatic {
 		/// Clear existing files before collecting
 		#[arg(long)]
@@ -188,6 +195,10 @@ pub enum Commands {
 		/// Ignore file patterns (glob)
 		#[arg(long, value_name = "PATTERN")]
 		ignore: Vec<String>,
+
+		/// Path to index.html source file (auto-detected from project root)
+		#[arg(long)]
+		index: Option<String>,
 	},
 
 	/// Display all registered URL patterns
@@ -223,6 +234,19 @@ pub enum Commands {
 		/// Also generate Postman Collection
 		#[arg(long)]
 		postman: bool,
+	},
+
+	/// Execute a custom command registered in a `CommandRegistry`
+	///
+	/// This variant is not exposed in the CLI help. It is used internally
+	/// by [`execute_from_command_line_with_registry`] to dispatch commands
+	/// that are not built-in but were registered by the downstream project.
+	#[command(skip)]
+	Custom {
+		/// The name of the custom command to execute.
+		name: String,
+		/// Positional arguments forwarded to the custom command.
+		args: Vec<String>,
 	},
 }
 
@@ -260,16 +284,78 @@ pub enum Commands {
 /// }
 /// ```
 pub async fn execute_from_command_line() -> Result<(), Box<dyn std::error::Error>> {
-	let cli = Cli::parse();
+	execute_from_command_line_with_registry(CommandRegistry::new()).await
+}
+
+/// Execute commands from command-line arguments with a custom command registry.
+///
+/// This entry point works like [`execute_from_command_line`] but additionally
+/// accepts a [`CommandRegistry`] containing user-defined management commands.
+/// If the subcommand parsed from CLI arguments does not match any built-in
+/// command, the registry is consulted for a matching custom command.
+///
+/// # Arguments
+///
+/// * `registry` - A [`CommandRegistry`] holding custom commands to make available.
+///
+/// # Returns
+///
+/// Returns `Ok(())` on success, or an error message on failure.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use reinhardt_commands::{execute_from_command_line_with_registry, CommandRegistry};
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     unsafe {
+///         std::env::set_var("REINHARDT_SETTINGS_MODULE", "myproject.config.settings");
+///     }
+///
+///     let mut registry = CommandRegistry::new();
+///     // registry.register(Box::new(MyCustomCommand));
+///
+///     if let Err(e) = execute_from_command_line_with_registry(registry).await {
+///         eprintln!("Error: {}", e);
+///         std::process::exit(1);
+///     }
+///     Ok(())
+/// }
+/// ```
+pub async fn execute_from_command_line_with_registry(
+	registry: CommandRegistry,
+) -> Result<(), Box<dyn std::error::Error>> {
+	// Attempt normal clap parsing first. If it fails (e.g., unknown subcommand),
+	// fall back to checking the registry for a matching custom command.
+	let (command, verbosity) = match Cli::try_parse() {
+		Ok(cli) => (cli.command, cli.verbosity),
+		Err(clap_err) => {
+			// Only intercept "unknown subcommand" errors; re-raise others (--help, --version, etc.)
+			if !is_unknown_subcommand(&clap_err) {
+				clap_err.exit();
+			}
+
+			// Extract the raw arguments and try to find a matching custom command.
+			let raw_args: Vec<String> = env::args().collect();
+			match resolve_custom_command(&raw_args, &registry) {
+				Some((name, args, verbosity)) => (Commands::Custom { name, args }, verbosity),
+				None => {
+					// No custom command matched either; let clap display its error.
+					clap_err.exit();
+				}
+			}
+		}
+	};
 
 	// Only register router for commands that serve HTTP traffic.
 	// DB-only commands (migrate, makemigrations) and utility commands
 	// (shell, check, collectstatic) must not require route registration.
-	if requires_router(&cli.command) {
+	if requires_router(&command) {
 		auto_register_router().await?;
 	}
 
-	run_command(cli.command, cli.verbosity).await
+	run_command_with_registry(command, verbosity, registry).await
 }
 
 /// Returns `true` for commands that require HTTP route registration.
@@ -290,10 +376,14 @@ fn requires_router(command: &Commands) -> bool {
 	}
 }
 
-/// Execute a command with the given verbosity level
+/// Execute a command with the given verbosity level.
 ///
-/// This is the internal entry point for executing commands.
-/// For most use cases, prefer using `execute_from_command_line()` instead.
+/// This is the internal entry point for executing built-in commands.
+/// For most use cases, prefer using [`execute_from_command_line`] or
+/// [`execute_from_command_line_with_registry`] instead.
+///
+/// Note: this function does **not** dispatch [`Commands::Custom`] variants.
+/// Use [`run_command_with_registry`] when custom commands may be present.
 ///
 /// # Arguments
 ///
@@ -306,6 +396,28 @@ fn requires_router(command: &Commands) -> bool {
 pub async fn run_command(
 	command: Commands,
 	verbosity: u8,
+) -> Result<(), Box<dyn std::error::Error>> {
+	run_command_with_registry(command, verbosity, CommandRegistry::new()).await
+}
+
+/// Execute a command with the given verbosity level and a custom command registry.
+///
+/// This extends [`run_command`] by also checking the provided [`CommandRegistry`]
+/// when a [`Commands::Custom`] variant is encountered.
+///
+/// # Arguments
+///
+/// * `command` - The command to execute
+/// * `verbosity` - Verbosity level (0-3, higher is more verbose)
+/// * `registry` - A [`CommandRegistry`] for resolving custom commands
+///
+/// # Returns
+///
+/// Returns `Ok(())` on success, or an error message on failure.
+pub async fn run_command_with_registry(
+	command: Commands,
+	verbosity: u8,
+	registry: CommandRegistry,
 ) -> Result<(), Box<dyn std::error::Error>> {
 	match command {
 		#[cfg(feature = "migrations")]
@@ -358,6 +470,7 @@ pub async fn run_command(
 			with_pages,
 			static_dir,
 			no_spa,
+			index,
 		} => {
 			execute_runserver(RunServerOptions {
 				address,
@@ -367,6 +480,7 @@ pub async fn run_command(
 				with_pages,
 				static_dir,
 				no_spa,
+				index,
 				verbosity,
 			})
 			.await
@@ -379,7 +493,8 @@ pub async fn run_command(
 			dry_run,
 			link,
 			ignore,
-		} => execute_collectstatic(clear, no_input, dry_run, link, ignore, verbosity).await,
+			index,
+		} => execute_collectstatic(clear, no_input, dry_run, link, ignore, index, verbosity).await,
 		Commands::Showurls { names } => execute_showurls(names, verbosity).await,
 		#[cfg(feature = "introspect")]
 		Commands::Introspect { format, section } => execute_introspect(format, section, verbosity).await,
@@ -389,7 +504,96 @@ pub async fn run_command(
 			output,
 			postman,
 		} => execute_generateopenapi(format, output, postman, verbosity).await,
+		Commands::Custom { name, args } => {
+			execute_custom_command(&name, &args, verbosity, &registry).await
+		}
 	}
+}
+
+/// Returns `true` when the clap error represents an unrecognised subcommand.
+///
+/// Only `InvalidSubcommand` is intercepted. `UnknownArgument` is intentionally
+/// excluded because it fires for unknown flags/options (e.g. `--bogus-flag`)
+/// which should still produce the normal clap error output.
+fn is_unknown_subcommand(err: &clap::Error) -> bool {
+	matches!(err.kind(), clap::error::ErrorKind::InvalidSubcommand)
+}
+
+/// Known global options that accept a separate value argument.
+///
+/// When skipping leading flags we must also consume the following token for
+/// options that take a value (e.g. `--verbosity 2`). Without this, the value
+/// would be mistaken for the subcommand name.
+const GLOBAL_OPTIONS_WITH_VALUE: &[&str] = &["--verbosity"];
+
+/// Try to resolve raw CLI arguments into a custom command from the registry.
+///
+/// The convention is: `manage <subcommand> [args...]`.  Global flags that
+/// appear before the subcommand (e.g., `-v`) are skipped.  The function also
+/// extracts the verbosity level so it can be forwarded to the custom command.
+fn resolve_custom_command(
+	raw_args: &[String],
+	registry: &CommandRegistry,
+) -> Option<(String, Vec<String>, u8)> {
+	let mut verbosity: u8 = 0;
+
+	// Skip the binary name (argv[0]) and parse leading global flags.
+	let mut iter = raw_args.iter().skip(1).peekable();
+	while let Some(arg) = iter.peek() {
+		if !arg.starts_with('-') {
+			break;
+		}
+		let flag = iter.next().unwrap(); // safe: peeked above
+
+		if flag == "-v" || flag == "--verbose" {
+			verbosity = verbosity.saturating_add(1);
+		} else if flag == "--verbosity" {
+			// Consume the next token as the value.
+			if let Some(val) = iter.peek()
+				&& !val.starts_with('-')
+			{
+				verbosity = val.parse().unwrap_or(0);
+				iter.next();
+			}
+		} else if let Some(val) = flag.strip_prefix("--verbosity=") {
+			verbosity = val.parse().unwrap_or(0);
+		} else if GLOBAL_OPTIONS_WITH_VALUE.contains(&flag.as_str()) {
+			// Skip the value for other known options that take one.
+			iter.next();
+		}
+	}
+
+	let subcommand = iter.next()?;
+	if registry.get(subcommand).is_some() {
+		let remaining: Vec<String> = iter.cloned().collect();
+		Some((subcommand.clone(), remaining, verbosity))
+	} else {
+		None
+	}
+}
+
+/// Execute a custom command looked up from the registry.
+async fn execute_custom_command(
+	name: &str,
+	args: &[String],
+	verbosity: u8,
+	registry: &CommandRegistry,
+) -> Result<(), Box<dyn std::error::Error>> {
+	let cmd = registry.get(name).ok_or_else(|| {
+		format!(
+			"Custom command '{}' not found in registry.\nRegistered commands: {}",
+			name,
+			registry.list().join(", ")
+		)
+	})?;
+
+	let mut ctx = CommandContext::default();
+	ctx.set_verbosity(verbosity);
+	for arg in args {
+		ctx.add_arg(arg.clone());
+	}
+
+	cmd.execute(&ctx).await.map_err(|e| e.into())
 }
 
 /// Execute the makemigrations command
@@ -488,6 +692,7 @@ struct RunServerOptions {
 	with_pages: bool,
 	static_dir: String,
 	no_spa: bool,
+	index: Option<String>,
 	verbosity: u8,
 }
 
@@ -512,6 +717,9 @@ async fn execute_runserver(options: RunServerOptions) -> Result<(), Box<dyn std:
 	ctx.set_option("static-dir".to_string(), options.static_dir);
 	if options.no_spa {
 		ctx.set_option("no-spa".to_string(), "true".to_string());
+	}
+	if let Some(ref index) = options.index {
+		ctx.set_option("index".to_string(), index.clone());
 	}
 
 	let cmd = RunServerCommand;
@@ -556,12 +764,14 @@ async fn execute_check(
 }
 
 /// Execute the collectstatic command
+#[allow(deprecated)] // Uses Settings which is deprecated; retained for backward compatibility
 async fn execute_collectstatic(
 	clear: bool,
 	no_input: bool,
 	dry_run: bool,
 	link: bool,
 	ignore: Vec<String>,
+	index: Option<String>,
 	verbosity: u8,
 ) -> Result<(), Box<dyn std::error::Error>> {
 	// Load settings from TOML files
@@ -655,8 +865,24 @@ async fn execute_collectstatic(
 		fast_compare: false,
 	};
 
+	// Resolve index source path
+	// Refs #2869: Auto-detect index.html from project root for collectstatic
+	let index_source = match &index {
+		Some(path) => Some(PathBuf::from(path)),
+		None => {
+			// Auto-detect from project root
+			let candidate = base_dir.join("index.html");
+			if candidate.exists() {
+				Some(candidate)
+			} else {
+				None
+			}
+		}
+	};
+
 	// Create and execute command in blocking context
 	let mut cmd = CollectStaticCommand::new(config, options);
+	cmd.set_index_source(index_source);
 	let result = tokio::task::spawn_blocking(move || {
 		// Call the sync execute() method directly (not the BaseCommand trait method)
 		CollectStaticCommand::execute(&mut cmd)
@@ -957,6 +1183,7 @@ mod tests {
 			with_pages: false,
 			static_dir: "dist".to_string(),
 			no_spa: false,
+			index: None,
 		};
 
 		// Act
@@ -1051,6 +1278,7 @@ mod tests {
 			dry_run: false,
 			link: false,
 			ignore: vec![],
+			index: None,
 		};
 
 		// Act
@@ -1124,5 +1352,118 @@ mod tests {
 			"Expected lib+bin hint in error message, got: {}",
 			error_msg
 		);
+	}
+
+	#[rstest]
+	fn test_runserver_with_index_option() {
+		// Arrange
+		let command = Commands::Runserver {
+			address: "127.0.0.1:8000".to_string(),
+			noreload: false,
+			insecure: false,
+			no_docs: false,
+			with_pages: true,
+			static_dir: "dist".to_string(),
+			no_spa: false,
+			index: Some("./index.html".to_string()),
+		};
+
+		// Act & Assert
+		if let Commands::Runserver { index, .. } = command {
+			assert_eq!(index, Some("./index.html".to_string()));
+		} else {
+			panic!("Expected Runserver command");
+		}
+	}
+
+	#[rstest]
+	fn test_runserver_without_index_option() {
+		// Arrange
+		let command = Commands::Runserver {
+			address: "127.0.0.1:8000".to_string(),
+			noreload: false,
+			insecure: false,
+			no_docs: false,
+			with_pages: false,
+			static_dir: "dist".to_string(),
+			no_spa: false,
+			index: None,
+		};
+
+		// Act & Assert
+		if let Commands::Runserver { index, .. } = command {
+			assert!(index.is_none());
+		} else {
+			panic!("Expected Runserver command");
+		}
+	}
+
+	#[rstest]
+	fn test_runserver_index_with_no_spa() {
+		// Arrange & Act
+		let command = Commands::Runserver {
+			address: "127.0.0.1:8000".to_string(),
+			noreload: false,
+			insecure: false,
+			no_docs: false,
+			with_pages: true,
+			static_dir: "dist".to_string(),
+			no_spa: true,
+			index: Some("./index.html".to_string()),
+		};
+
+		// Assert
+		if let Commands::Runserver { no_spa, index, .. } = command {
+			assert!(no_spa);
+			assert_eq!(index, Some("./index.html".to_string()));
+		} else {
+			panic!("Expected Runserver command");
+		}
+	}
+
+	#[rstest]
+	fn test_runserver_index_without_with_pages() {
+		// Arrange & Act
+		let command = Commands::Runserver {
+			address: "127.0.0.1:8000".to_string(),
+			noreload: false,
+			insecure: false,
+			no_docs: false,
+			with_pages: false,
+			static_dir: "dist".to_string(),
+			no_spa: false,
+			index: Some("./index.html".to_string()),
+		};
+
+		// Assert
+		if let Commands::Runserver {
+			with_pages, index, ..
+		} = command
+		{
+			assert!(!with_pages);
+			assert_eq!(index, Some("./index.html".to_string()));
+		} else {
+			panic!("Expected Runserver command");
+		}
+	}
+
+	#[rstest]
+	fn test_collectstatic_with_index_option() {
+		// Arrange & Act
+		let command = Commands::Collectstatic {
+			clear: false,
+			no_input: false,
+			dry_run: false,
+			link: false,
+			ignore: vec![],
+			index: Some("./index.html".to_string()),
+		};
+
+		// Assert
+		if let Commands::Collectstatic { index, .. } = command {
+			assert_eq!(index, Some("./index.html".to_string()));
+		} else {
+			panic!("Expected Collectstatic command");
+		}
 	}
 }

@@ -292,7 +292,7 @@ mod tests {
 	use rstest::*;
 
 	#[rstest]
-	#[tokio::test]
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 	async fn test_postgres_suite_resource_url_format(
 		postgres_suite: SuiteGuard<PostgresSuiteResource>,
 	) {
@@ -310,7 +310,7 @@ mod tests {
 	}
 
 	#[rstest]
-	#[tokio::test]
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 	async fn test_postgres_suite_resource_port_nonzero(
 		postgres_suite: SuiteGuard<PostgresSuiteResource>,
 	) {
@@ -324,7 +324,7 @@ mod tests {
 	}
 
 	#[rstest]
-	#[tokio::test]
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 	async fn test_postgres_suite_resource_pool_query(
 		postgres_suite: SuiteGuard<PostgresSuiteResource>,
 	) {
@@ -342,7 +342,7 @@ mod tests {
 	}
 
 	#[rstest]
-	#[tokio::test]
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 	async fn test_mysql_suite_resource_url_format(mysql_suite: SuiteGuard<MySqlSuiteResource>) {
 		// Arrange
 		let url = &mysql_suite.database_url;

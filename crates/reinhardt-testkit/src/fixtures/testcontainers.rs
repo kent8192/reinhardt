@@ -2290,7 +2290,7 @@ mod tests {
 	}
 
 	#[rstest]
-	#[tokio::test]
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 	async fn test_create_test_any_pool(
 		#[future] postgres_container: (
 			ContainerAsync<GenericImage>,
@@ -2301,6 +2301,7 @@ mod tests {
 	) {
 		// Arrange
 		let (_container, _pool, _port, url) = postgres_container.await;
+		sqlx::any::install_default_drivers();
 
 		// Act
 		let any_pool = create_test_any_pool(&url).await;

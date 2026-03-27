@@ -89,6 +89,9 @@ pub fn filter_value_to_sea_value(v: &FilterValue) -> Value {
 		FilterValue::Float(f) => (*f).into(),
 		FilterValue::Boolean(b) | FilterValue::Bool(b) => (*b).into(),
 		FilterValue::Null => Value::Int(None),
+		// Array values are not scalar; they are handled by In/NotIn arms
+		// in build_single_filter_expr(). Return None-string as fallback
+		// for unexpected scalar contexts.
 		FilterValue::Array(_) => Value::String(None),
 		FilterValue::FieldRef(f) => {
 			// FieldRef generates column reference, not scalar value.
@@ -316,16 +319,7 @@ pub fn build_single_filter_expr(filter: &Filter) -> Option<SimpleExpr> {
 		(FilterOperator::EndsWith, FilterValue::String(s)) => {
 			col.like(format!("%{}", escape_like_pattern(s)))
 		}
-		(FilterOperator::In, FilterValue::String(s)) => {
-			let values: Vec<Value> = s.split(',').map(|v| v.trim().into_value()).collect();
-			col.is_in(values)
-		}
-		(FilterOperator::NotIn, FilterValue::String(s)) => {
-			let values: Vec<Value> = s.split(',').map(|v| v.trim().into_value()).collect();
-			col.is_not_in(values)
-		}
-
-		// Array: Direct multi-value filtering (Issue #2936)
+		// Array-based In/NotIn: convert each element to a Value
 		(FilterOperator::In, FilterValue::Array(arr)) => {
 			if arr.is_empty() {
 				return None;
@@ -338,6 +332,15 @@ pub fn build_single_filter_expr(filter: &Filter) -> Option<SimpleExpr> {
 				return None;
 			}
 			let values: Vec<Value> = arr.iter().map(|v| v.as_str().into_value()).collect();
+			col.is_not_in(values)
+		}
+
+		(FilterOperator::In, FilterValue::String(s)) => {
+			let values: Vec<Value> = s.split(',').map(|v| v.trim().into_value()).collect();
+			col.is_in(values)
+		}
+		(FilterOperator::NotIn, FilterValue::String(s)) => {
+			let values: Vec<Value> = s.split(',').map(|v| v.trim().into_value()).collect();
 			col.is_not_in(values)
 		}
 
@@ -421,6 +424,8 @@ pub fn build_composite_filter_condition_with_depth(
 					added = true;
 				}
 			}
+			// Return None if all sub-conditions were unsupported,
+			// preventing an empty Condition::all() that produces WHERE TRUE
 			if added {
 				Ok(Some(and_condition))
 			} else {
@@ -441,6 +446,8 @@ pub fn build_composite_filter_condition_with_depth(
 					added = true;
 				}
 			}
+			// Return None if all sub-conditions were unsupported,
+			// preventing an empty Condition::any() that produces WHERE FALSE
 			if added {
 				Ok(Some(or_condition))
 			} else {
@@ -804,15 +811,17 @@ impl AdminDatabase {
 	/// data.insert("name".to_string(), serde_json::json!("Alice"));
 	/// data.insert("email".to_string(), serde_json::json!("alice@example.com"));
 	///
-	/// db.create::<AdminRecord>("admin_records", data).await?;
+	/// db.create::<AdminRecord>("admin_records", Some("id"), data).await?;
 	/// # Ok(())
 	/// # }
 	/// ```
 	pub async fn create<M: Model>(
 		&self,
 		table_name: &str,
+		pk_field: Option<&str>,
 		data: HashMap<String, serde_json::Value>,
 	) -> AdminResult<u64> {
+		let pk_field = pk_field.unwrap_or("id");
 		let mut query = Query::insert()
 			.into_table(Alias::new(table_name))
 			.to_owned();
@@ -854,8 +863,8 @@ impl AdminDatabase {
 			AdminError::DatabaseError(format!("column/value count mismatch: {}", e))
 		})?;
 
-		// Add RETURNING clause to get the inserted ID
-		query.returning([Alias::new("id")]);
+		// Add RETURNING clause using the actual primary key field
+		query.returning([Alias::new(pk_field)]);
 
 		let (sql, values) = query.build(PostgresQueryBuilder);
 		let params = convert_values(values);
@@ -865,14 +874,20 @@ impl AdminDatabase {
 			.await
 			.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
 
-		// Extract the ID from the returned row
-		let id = if let Some(serde_json::Value::Number(n)) = row.data.get("id") {
-			n.as_u64().unwrap_or(0)
+		// Extract the ID from the returned row using the primary key field
+		if let Some(serde_json::Value::Number(n)) = row.data.get(pk_field) {
+			n.as_u64().ok_or_else(|| {
+				AdminError::DatabaseError(format!(
+					"RETURNING clause for '{}' returned non-unsigned-integer: {}",
+					pk_field, n
+				))
+			})
 		} else {
-			0
-		};
-
-		Ok(id)
+			Err(AdminError::DatabaseError(format!(
+				"RETURNING clause did not return expected primary key field '{}'",
+				pk_field
+			)))
+		}
 	}
 
 	/// Update an existing item
@@ -1148,6 +1163,8 @@ pub fn extract_count_from_row(data: &serde_json::Value) -> AdminResult<u64> {
 		});
 	}
 
+	// Report available keys for diagnostics instead of using non-deterministic
+	// HashMap iteration order to pick the first value
 	if let Some(obj) = data.as_object() {
 		let available_keys: Vec<&String> = obj.keys().collect();
 		return Err(AdminError::DatabaseError(format!(

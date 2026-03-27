@@ -250,6 +250,7 @@ jobs:
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
+      has-breaking-change-label: ${{ contains(github.event.pull_request.labels.*.name, 'breaking-change') && 'true' || 'false' }}
 
   release-dry-run:
     name: Release Dry-Run

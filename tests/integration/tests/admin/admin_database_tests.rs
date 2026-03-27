@@ -96,7 +96,7 @@ async fn test_create(mock_connection: DatabaseConnection) {
 	data.insert("email".to_string(), serde_json::json!("alice@example.com"));
 
 	// Act
-	let result = db.create::<User>("users", data).await;
+	let result = db.create::<User>("users", None, data).await;
 
 	// Assert
 	assert!(result.is_ok());

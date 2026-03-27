@@ -69,6 +69,7 @@ pub async fn create_record(
 	)
 	.await?;
 	let table_name = model_admin.table_name();
+	let pk_field = model_admin.pk_field();
 
 	// Validate input data before database operation
 	validate_mutation_data(&request.data, model_admin.as_ref(), false).map_server_fn_error()?;
@@ -80,7 +81,7 @@ pub async fn create_record(
 	let user_id = auth.user_id().unwrap_or("unknown").to_string();
 
 	let result = db
-		.create::<AdminRecord>(table_name, sanitized_data.clone())
+		.create::<AdminRecord>(table_name, Some(pk_field), sanitized_data.clone())
 		.await
 		.map_server_fn_error();
 

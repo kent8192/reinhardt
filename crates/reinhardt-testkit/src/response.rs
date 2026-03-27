@@ -251,3 +251,424 @@ impl ResponseExt for TestResponse {
 		self.assert_status(StatusCode::NOT_FOUND)
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	// ========================================================================
+	// Helper: build a TestResponse from parts
+	// ========================================================================
+
+	fn make_response(status: u16, body: &[u8]) -> TestResponse {
+		TestResponse::with_body(
+			StatusCode::from_u16(status).unwrap(),
+			HeaderMap::new(),
+			Bytes::from(body.to_vec()),
+		)
+	}
+
+	// ========================================================================
+	// Construction
+	// ========================================================================
+
+	#[rstest]
+	fn test_with_body() {
+		// Arrange
+		let body = Bytes::from("hello");
+
+		// Act
+		let resp = TestResponse::with_body(StatusCode::OK, HeaderMap::new(), body.clone());
+
+		// Assert
+		assert_eq!(resp.status(), StatusCode::OK);
+		assert_eq!(resp.body(), &body);
+		assert_eq!(resp.version(), Version::HTTP_11);
+	}
+
+	#[rstest]
+	fn test_with_body_and_version() {
+		// Arrange / Act
+		let resp = TestResponse::with_body_and_version(
+			StatusCode::CREATED,
+			HeaderMap::new(),
+			Bytes::from("data"),
+			Version::HTTP_2,
+		);
+
+		// Assert
+		assert_eq!(resp.status(), StatusCode::CREATED);
+		assert_eq!(resp.version(), Version::HTTP_2);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_new_async() {
+		// Arrange
+		let response = Response::builder()
+			.status(StatusCode::OK)
+			.body(Full::new(Bytes::from("Hello World")))
+			.unwrap();
+
+		// Act
+		let test_resp = TestResponse::new(response).await;
+
+		// Assert
+		assert_eq!(test_resp.status(), StatusCode::OK);
+		assert_eq!(test_resp.text(), "Hello World");
+	}
+
+	// ========================================================================
+	// Getters
+	// ========================================================================
+
+	#[rstest]
+	fn test_status() {
+		// Arrange
+		let resp = make_response(404, b"");
+
+		// Act / Assert
+		assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+	}
+
+	#[rstest]
+	fn test_status_code() {
+		// Arrange
+		let resp = make_response(201, b"");
+
+		// Act / Assert
+		assert_eq!(resp.status_code(), 201);
+	}
+
+	#[rstest]
+	fn test_version() {
+		// Arrange
+		let resp = TestResponse::with_body(StatusCode::OK, HeaderMap::new(), Bytes::new());
+
+		// Act / Assert
+		assert_eq!(resp.version(), Version::HTTP_11);
+	}
+
+	#[rstest]
+	fn test_headers() {
+		// Arrange
+		let mut headers = HeaderMap::new();
+		headers.insert("x-custom", "value".parse().unwrap());
+		let resp = TestResponse::with_body(StatusCode::OK, headers, Bytes::new());
+
+		// Act / Assert
+		assert!(resp.headers().contains_key("x-custom"));
+	}
+
+	#[rstest]
+	fn test_body() {
+		// Arrange
+		let resp = make_response(200, b"body-content");
+
+		// Act / Assert
+		assert_eq!(resp.body().as_ref(), b"body-content");
+	}
+
+	#[rstest]
+	fn test_text() {
+		// Arrange
+		let resp = make_response(200, b"hello text");
+
+		// Act / Assert
+		assert_eq!(resp.text(), "hello text");
+	}
+
+	#[rstest]
+	fn test_text_non_utf8_lossy() {
+		// Arrange
+		let resp = TestResponse::with_body(
+			StatusCode::OK,
+			HeaderMap::new(),
+			Bytes::from(vec![0xFF, 0xFE, 0x68, 0x69]),
+		);
+
+		// Act
+		let text = resp.text();
+
+		// Assert - lossy conversion replaces invalid bytes with replacement character
+		assert!(text.contains("hi"));
+		assert!(text.contains('\u{FFFD}'));
+	}
+
+	// ========================================================================
+	// JSON parsing
+	// ========================================================================
+
+	#[rstest]
+	fn test_json_valid() {
+		// Arrange
+		#[derive(serde::Deserialize, PartialEq, Debug)]
+		struct Item {
+			id: i32,
+		}
+		let resp = make_response(200, br#"{"id": 42}"#);
+
+		// Act
+		let item: Item = resp.json().unwrap();
+
+		// Assert
+		assert_eq!(item.id, 42);
+	}
+
+	#[rstest]
+	fn test_json_invalid() {
+		// Arrange
+		#[derive(serde::Deserialize)]
+		struct Item {
+			#[allow(dead_code)] // Field used for deserialization target verification
+			id: i32,
+		}
+		let resp = make_response(200, b"not json");
+
+		// Act
+		let result: Result<Item, _> = resp.json();
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_json_value_valid() {
+		// Arrange
+		let resp = make_response(200, br#"{"key": "value"}"#);
+
+		// Act
+		let val = resp.json_value().unwrap();
+
+		// Assert
+		assert_eq!(val["key"], "value");
+	}
+
+	#[rstest]
+	fn test_json_value_invalid() {
+		// Arrange
+		let resp = make_response(200, b"broken");
+
+		// Act
+		let result = resp.json_value();
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	// ========================================================================
+	// Status category checks
+	// ========================================================================
+
+	#[rstest]
+	fn test_is_success_200() {
+		// Arrange / Act / Assert
+		assert!(make_response(200, b"").is_success());
+	}
+
+	#[rstest]
+	fn test_is_success_299() {
+		// Arrange / Act / Assert
+		assert!(make_response(299, b"").is_success());
+	}
+
+	#[rstest]
+	fn test_is_success_boundary_199() {
+		// Arrange / Act / Assert
+		assert!(!make_response(199, b"").is_success());
+	}
+
+	#[rstest]
+	fn test_is_success_boundary_300() {
+		// Arrange / Act / Assert
+		assert!(!make_response(300, b"").is_success());
+	}
+
+	#[rstest]
+	fn test_is_client_error_400() {
+		// Arrange / Act / Assert
+		assert!(make_response(400, b"").is_client_error());
+	}
+
+	#[rstest]
+	fn test_is_client_error_boundary_399() {
+		// Arrange / Act / Assert
+		assert!(!make_response(399, b"").is_client_error());
+	}
+
+	#[rstest]
+	fn test_is_client_error_boundary_499() {
+		// Arrange / Act / Assert
+		assert!(make_response(499, b"").is_client_error());
+	}
+
+	#[rstest]
+	fn test_is_server_error_500() {
+		// Arrange / Act / Assert
+		assert!(make_response(500, b"").is_server_error());
+	}
+
+	#[rstest]
+	fn test_is_server_error_boundary_499() {
+		// Arrange / Act / Assert
+		assert!(!make_response(499, b"").is_server_error());
+	}
+
+	// ========================================================================
+	// content_type and header
+	// ========================================================================
+
+	#[rstest]
+	fn test_content_type() {
+		// Arrange
+		let mut headers = HeaderMap::new();
+		headers.insert("content-type", "application/json".parse().unwrap());
+		let resp = TestResponse::with_body(StatusCode::OK, headers, Bytes::new());
+
+		// Act / Assert
+		assert_eq!(resp.content_type(), Some("application/json"));
+	}
+
+	#[rstest]
+	fn test_content_type_absent() {
+		// Arrange
+		let resp = make_response(200, b"");
+
+		// Act / Assert
+		assert_eq!(resp.content_type(), None);
+	}
+
+	#[rstest]
+	fn test_header_present() {
+		// Arrange
+		let mut headers = HeaderMap::new();
+		headers.insert("x-request-id", "abc123".parse().unwrap());
+		let resp = TestResponse::with_body(StatusCode::OK, headers, Bytes::new());
+
+		// Act / Assert
+		assert_eq!(resp.header("x-request-id"), Some("abc123"));
+	}
+
+	#[rstest]
+	fn test_header_absent() {
+		// Arrange
+		let resp = make_response(200, b"");
+
+		// Act / Assert
+		assert_eq!(resp.header("x-missing"), None);
+	}
+
+	// ========================================================================
+	// ResponseExt assertions
+	// ========================================================================
+
+	#[rstest]
+	fn test_assert_ok() {
+		// Arrange
+		let resp = make_response(200, b"");
+
+		// Act / Assert (should not panic)
+		resp.assert_ok();
+	}
+
+	#[rstest]
+	fn test_assert_created() {
+		// Arrange
+		let resp = make_response(201, b"");
+
+		// Act / Assert
+		resp.assert_created();
+	}
+
+	#[rstest]
+	fn test_assert_no_content() {
+		// Arrange
+		let resp = make_response(204, b"");
+
+		// Act / Assert
+		resp.assert_no_content();
+	}
+
+	#[rstest]
+	fn test_assert_bad_request() {
+		// Arrange
+		let resp = make_response(400, b"");
+
+		// Act / Assert
+		resp.assert_bad_request();
+	}
+
+	#[rstest]
+	fn test_assert_unauthorized() {
+		// Arrange
+		let resp = make_response(401, b"");
+
+		// Act / Assert
+		resp.assert_unauthorized();
+	}
+
+	#[rstest]
+	fn test_assert_forbidden() {
+		// Arrange
+		let resp = make_response(403, b"");
+
+		// Act / Assert
+		resp.assert_forbidden();
+	}
+
+	#[rstest]
+	fn test_assert_not_found() {
+		// Arrange
+		let resp = make_response(404, b"");
+
+		// Act / Assert
+		resp.assert_not_found();
+	}
+
+	#[rstest]
+	fn test_assert_success() {
+		// Arrange
+		let resp = make_response(200, b"");
+
+		// Act / Assert
+		resp.assert_success();
+	}
+
+	#[rstest]
+	fn test_assert_client_error() {
+		// Arrange
+		let resp = make_response(404, b"");
+
+		// Act / Assert
+		resp.assert_client_error();
+	}
+
+	#[rstest]
+	fn test_assert_server_error() {
+		// Arrange
+		let resp = make_response(500, b"");
+
+		// Act / Assert
+		resp.assert_server_error();
+	}
+
+	#[rstest]
+	fn test_fluent_chaining() {
+		// Arrange
+		let resp = make_response(200, b"");
+
+		// Act / Assert - fluent chaining should return &Self
+		resp.assert_ok().assert_success();
+	}
+
+	#[rstest]
+	#[should_panic(expected = "Expected status")]
+	fn test_assert_status_mismatch() {
+		// Arrange
+		let resp = make_response(200, b"");
+
+		// Act (should panic)
+		resp.assert_status(StatusCode::NOT_FOUND);
+	}
+}

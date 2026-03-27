@@ -113,7 +113,7 @@ use uuid::Uuid;
 #[cfg(feature = "argon2-hasher")]
 #[deprecated(
 	since = "0.1.0-rc.15",
-	note = "Define your own user struct with #[user] macro instead"
+	note = "Use the `user` attribute macro to define your own user struct instead"
 )]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DefaultUser {

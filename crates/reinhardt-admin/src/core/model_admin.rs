@@ -579,6 +579,70 @@ mod tests {
 		assert_eq!(delete, false);
 	}
 
+	// ==================== ModelAdminConfig field tests ====================
+
+	#[rstest]
+	fn test_model_admin_config_custom_pk_field() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("User")
+			.pk_field("uuid")
+			.build()
+			.unwrap();
+
+		// Act
+		let pk = admin.pk_field();
+
+		// Assert
+		assert_eq!(pk, "uuid");
+	}
+
+	#[rstest]
+	fn test_model_admin_config_default_pk_field() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("User")
+			.build()
+			.unwrap();
+
+		// Act
+		let pk = admin.pk_field();
+
+		// Assert
+		assert_eq!(pk, "id");
+	}
+
+	#[rstest]
+	fn test_model_admin_config_custom_table_name() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("User")
+			.table_name("my_users")
+			.build()
+			.unwrap();
+
+		// Act
+		let table = admin.table_name();
+
+		// Assert
+		assert_eq!(table, "my_users");
+	}
+
+	#[rstest]
+	fn test_model_admin_config_table_name_defaults_to_model_name() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("User")
+			.build()
+			.unwrap();
+
+		// Act
+		let table = admin.table_name();
+
+		// Assert
+		assert_eq!(table, "User");
+	}
+
 	#[rstest]
 	#[tokio::test]
 	async fn test_model_admin_config_builder_inherits_deny_by_default() {

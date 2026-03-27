@@ -569,7 +569,7 @@ pub mod fire_event {
 		KeyboardEvent::new_with_keyboard_event_init_dict(event_type, &init).unwrap()
 	}
 
-	fn key_to_code(key: &str) -> String {
+	pub(super) fn key_to_code(key: &str) -> String {
 		match key {
 			"Enter" => "Enter".to_string(),
 			"Escape" => "Escape".to_string(),
@@ -603,41 +603,180 @@ pub mod fire_event {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	#[test]
-	fn test_key_modifiers_default() {
+	#[rstest]
+	fn key_modifiers_default_has_all_false() {
+		// Arrange
 		let mods = KeyModifiers::default();
+
+		// Act & Assert
 		assert!(!mods.ctrl);
 		assert!(!mods.shift);
 		assert!(!mods.alt);
 		assert!(!mods.meta);
 	}
 
-	#[test]
-	fn test_key_modifiers_ctrl() {
+	#[rstest]
+	fn key_modifiers_ctrl_sets_only_ctrl() {
+		// Arrange & Act
 		let mods = KeyModifiers::ctrl();
+
+		// Assert
 		assert!(mods.ctrl);
 		assert!(!mods.shift);
+		assert!(!mods.alt);
+		assert!(!mods.meta);
 	}
 
-	#[test]
-	fn test_key_modifiers_ctrl_shift() {
+	#[rstest]
+	fn key_modifiers_shift_sets_only_shift() {
+		// Arrange & Act
+		let mods = KeyModifiers::shift();
+
+		// Assert
+		assert!(!mods.ctrl);
+		assert!(mods.shift);
+		assert!(!mods.alt);
+		assert!(!mods.meta);
+	}
+
+	#[rstest]
+	fn key_modifiers_alt_sets_only_alt() {
+		// Arrange & Act
+		let mods = KeyModifiers::alt();
+
+		// Assert
+		assert!(!mods.ctrl);
+		assert!(!mods.shift);
+		assert!(mods.alt);
+		assert!(!mods.meta);
+	}
+
+	#[rstest]
+	fn key_modifiers_meta_sets_only_meta() {
+		// Arrange & Act
+		let mods = KeyModifiers::meta();
+
+		// Assert
+		assert!(!mods.ctrl);
+		assert!(!mods.shift);
+		assert!(!mods.alt);
+		assert!(mods.meta);
+	}
+
+	#[rstest]
+	fn key_modifiers_ctrl_shift_sets_both() {
+		// Arrange & Act
 		let mods = KeyModifiers::ctrl_shift();
+
+		// Assert
 		assert!(mods.ctrl);
 		assert!(mods.shift);
 		assert!(!mods.alt);
 		assert!(!mods.meta);
 	}
 
-	#[test]
-	fn test_select_option_variants() {
+	#[rstest]
+	fn key_modifiers_copy_trait_preserves_values() {
+		// Arrange
+		let original = KeyModifiers::ctrl();
+
+		// Act
+		let copied = original;
+		// original is still usable because KeyModifiers implements Copy
+		let _also_original = original;
+
+		// Assert
+		assert!(copied.ctrl);
+		assert!(original.ctrl);
+	}
+
+	#[rstest]
+	fn key_modifiers_debug_format_contains_field_names() {
+		// Arrange
+		let mods = KeyModifiers {
+			ctrl: true,
+			shift: false,
+			alt: true,
+			meta: false,
+		};
+
+		// Act
+		let debug_str = format!("{:?}", mods);
+
+		// Assert
+		assert!(debug_str.contains("ctrl: true"));
+		assert!(debug_str.contains("shift: false"));
+		assert!(debug_str.contains("alt: true"));
+		assert!(debug_str.contains("meta: false"));
+	}
+
+	#[rstest]
+	#[case("Enter", "Enter")]
+	#[case("Escape", "Escape")]
+	#[case("Tab", "Tab")]
+	#[case("Backspace", "Backspace")]
+	#[case(" ", "Space")]
+	#[case("a", "KeyA")]
+	#[case("A", "KeyA")]
+	#[case("5", "Digit5")]
+	#[case("ArrowUp", "ArrowUp")]
+	fn key_to_code_maps_key_to_expected_code(#[case] key: &str, #[case] expected: &str) {
+		// Arrange & Act
+		let code = fire_event::key_to_code(key);
+
+		// Assert
+		assert_eq!(code, expected);
+	}
+
+	#[rstest]
+	fn key_to_code_passes_through_unknown_multichar_string() {
+		// Arrange
+		let unknown = "F13";
+
+		// Act
+		let code = fire_event::key_to_code(unknown);
+
+		// Assert
+		assert_eq!(code, "F13");
+	}
+
+	#[rstest]
+	fn select_option_variants_can_be_created() {
+		// Arrange & Act
 		let by_value = SelectOption::ByValue("test");
 		let by_text = SelectOption::ByText("Test Option");
 		let by_index = SelectOption::ByIndex(0);
 
-		// Just verify they can be created
-		assert!(matches!(by_value, SelectOption::ByValue(_)));
-		assert!(matches!(by_text, SelectOption::ByText(_)));
-		assert!(matches!(by_index, SelectOption::ByIndex(_)));
+		// Assert
+		assert!(matches!(by_value, SelectOption::ByValue("test")));
+		assert!(matches!(by_text, SelectOption::ByText("Test Option")));
+		assert!(matches!(by_index, SelectOption::ByIndex(0)));
+	}
+
+	#[rstest]
+	fn select_option_debug_format_shows_variant_and_value() {
+		// Arrange
+		let option = SelectOption::ByValue("option1");
+
+		// Act
+		let debug_str = format!("{:?}", option);
+
+		// Assert
+		assert!(debug_str.contains("ByValue"));
+		assert!(debug_str.contains("option1"));
+	}
+
+	#[rstest]
+	fn select_option_clone_produces_equal_variant() {
+		// Arrange
+		let original = SelectOption::ByIndex(42);
+
+		// Act
+		let cloned = original.clone();
+
+		// Assert
+		assert!(matches!(cloned, SelectOption::ByIndex(42)));
 	}
 }

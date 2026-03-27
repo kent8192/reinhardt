@@ -507,3 +507,330 @@ pub fn assert_header_contains(response: &Response, header_name: &str, substring:
 		actual
 	);
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	// ========================================================================
+	// create_request
+	// ========================================================================
+
+	#[rstest]
+	fn test_create_request_get_basic() {
+		// Arrange / Act
+		let request = create_request(Method::GET, "/api/users", None, vec![]);
+
+		// Assert
+		assert_eq!(request.method, Method::GET);
+		assert_eq!(request.uri.path(), "/api/users");
+		assert!(request.body().is_empty());
+	}
+
+	#[rstest]
+	fn test_create_request_post_with_body() {
+		// Arrange
+		let body = r#"{"name": "Alice"}"#;
+
+		// Act
+		let request = create_request(Method::POST, "/api/users", Some(body.to_string()), vec![]);
+
+		// Assert
+		assert_eq!(request.method, Method::POST);
+		assert_eq!(request.body().len(), body.len());
+	}
+
+	#[rstest]
+	fn test_create_request_with_headers() {
+		// Arrange
+		let headers = vec![
+			("Content-Type", "application/json"),
+			("X-API-Key", "secret"),
+		];
+
+		// Act
+		let request = create_request(Method::GET, "/api/users", None, headers);
+
+		// Assert
+		assert!(request.headers.contains_key("content-type"));
+		assert!(request.headers.contains_key("x-api-key"));
+	}
+
+	// ========================================================================
+	// create_test_request
+	// ========================================================================
+
+	#[rstest]
+	fn test_create_test_request_secure() {
+		// Arrange / Act
+		let request = create_test_request("POST", "/api/login", true);
+
+		// Assert
+		assert!(request.is_secure);
+		assert!(request.headers.contains_key("x-forwarded-proto"));
+		assert_eq!(request.method, Method::POST);
+	}
+
+	#[rstest]
+	fn test_create_test_request_insecure() {
+		// Arrange / Act
+		let request = create_test_request("GET", "/api/users", false);
+
+		// Assert
+		assert!(!request.is_secure);
+		assert!(!request.headers.contains_key("x-forwarded-proto"));
+	}
+
+	// ========================================================================
+	// create_secure_request / create_insecure_request
+	// ========================================================================
+
+	#[rstest]
+	fn test_create_secure_request() {
+		// Arrange / Act
+		let request = create_secure_request("GET", "/api/users");
+
+		// Assert
+		assert!(request.is_secure);
+		assert_eq!(request.method, Method::GET);
+	}
+
+	#[rstest]
+	fn test_create_insecure_request() {
+		// Arrange / Act
+		let request = create_insecure_request("GET", "/api/users");
+
+		// Assert
+		assert!(!request.is_secure);
+		assert_eq!(request.method, Method::GET);
+	}
+
+	// ========================================================================
+	// Response creation helpers
+	// ========================================================================
+
+	#[rstest]
+	fn test_create_test_response() {
+		// Arrange / Act
+		let response = create_test_response();
+
+		// Assert
+		assert_eq!(response.status, StatusCode::OK);
+	}
+
+	#[rstest]
+	fn test_create_response_with_status() {
+		// Arrange / Act
+		let response = create_response_with_status(StatusCode::NOT_FOUND);
+
+		// Assert
+		assert_eq!(response.status, StatusCode::NOT_FOUND);
+	}
+
+	#[rstest]
+	fn test_create_response_with_headers() {
+		// Arrange
+		let mut headers = HeaderMap::new();
+		headers.insert(
+			HeaderName::from_static("x-custom-header"),
+			HeaderValue::from_static("custom-value"),
+		);
+
+		// Act
+		let response = create_response_with_headers(headers);
+
+		// Assert
+		assert!(response.headers.contains_key("x-custom-header"));
+	}
+
+	// ========================================================================
+	// extract_json
+	// ========================================================================
+
+	#[rstest]
+	fn test_extract_json_valid() {
+		// Arrange
+		#[derive(serde::Deserialize, PartialEq, Debug)]
+		struct User {
+			id: i64,
+			name: String,
+		}
+		let response = Response::ok()
+			.with_header("Content-Type", "application/json")
+			.with_body(r#"{"id": 1, "name": "Alice"}"#);
+
+		// Act
+		let user: User = extract_json(response).unwrap();
+
+		// Assert
+		assert_eq!(user.id, 1);
+		assert_eq!(user.name, "Alice");
+	}
+
+	#[rstest]
+	fn test_extract_json_invalid() {
+		// Arrange
+		#[derive(serde::Deserialize)]
+		struct User {
+			#[allow(dead_code)] // Field used for deserialization target verification
+			id: i64,
+		}
+		let response = Response::ok().with_body("not json");
+
+		// Act
+		let result: Result<User> = extract_json(response);
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	// ========================================================================
+	// Header inspection helpers
+	// ========================================================================
+
+	#[rstest]
+	fn test_has_header_present() {
+		// Arrange
+		let response = create_test_response().with_header("x-api-version", "v1");
+
+		// Act / Assert
+		assert!(has_header(&response, "x-api-version"));
+	}
+
+	#[rstest]
+	fn test_has_header_absent() {
+		// Arrange
+		let response = create_test_response();
+
+		// Act / Assert
+		assert!(!has_header(&response, "x-missing"));
+	}
+
+	#[rstest]
+	fn test_get_header_present() {
+		// Arrange
+		let response = create_test_response().with_header("x-api-version", "v1");
+
+		// Act
+		let value = get_header(&response, "x-api-version");
+
+		// Assert
+		assert_eq!(value, Some("v1"));
+	}
+
+	#[rstest]
+	fn test_get_header_absent() {
+		// Arrange
+		let response = create_test_response();
+
+		// Act
+		let value = get_header(&response, "x-missing");
+
+		// Assert
+		assert_eq!(value, None);
+	}
+
+	#[rstest]
+	fn test_header_equals_match() {
+		// Arrange
+		let response = create_test_response().with_header("content-type", "application/json");
+
+		// Act / Assert
+		assert!(header_equals(&response, "content-type", "application/json"));
+	}
+
+	#[rstest]
+	fn test_header_equals_mismatch() {
+		// Arrange
+		let response = create_test_response().with_header("content-type", "application/json");
+
+		// Act / Assert
+		assert!(!header_equals(&response, "content-type", "text/html"));
+	}
+
+	#[rstest]
+	fn test_header_contains_substring() {
+		// Arrange
+		let response =
+			create_test_response().with_header("content-type", "application/json; charset=utf-8");
+
+		// Act / Assert
+		assert!(header_contains(
+			&response,
+			"content-type",
+			"application/json"
+		));
+		assert!(header_contains(&response, "content-type", "charset"));
+	}
+
+	#[rstest]
+	fn test_header_contains_no_match() {
+		// Arrange
+		let response = create_test_response().with_header("content-type", "application/json");
+
+		// Act / Assert
+		assert!(!header_contains(&response, "content-type", "text/html"));
+	}
+
+	// ========================================================================
+	// Response assertions
+	// ========================================================================
+
+	#[rstest]
+	fn test_assert_status_pass() {
+		// Arrange
+		let response = create_test_response();
+
+		// Act / Assert (should not panic)
+		assert_status(&response, StatusCode::OK);
+	}
+
+	#[rstest]
+	#[should_panic(expected = "Expected status")]
+	fn test_assert_status_fail() {
+		// Arrange
+		let response = create_test_response();
+
+		// Act (should panic)
+		assert_status(&response, StatusCode::NOT_FOUND);
+	}
+
+	#[rstest]
+	fn test_assert_has_header_pass() {
+		// Arrange
+		let response = create_test_response().with_header("x-api-version", "v1");
+
+		// Act / Assert (should not panic)
+		assert_has_header(&response, "x-api-version");
+	}
+
+	#[rstest]
+	#[should_panic(expected = "Expected response to have header")]
+	fn test_assert_has_header_fail() {
+		// Arrange
+		let response = create_test_response();
+
+		// Act (should panic)
+		assert_has_header(&response, "x-missing");
+	}
+
+	#[rstest]
+	fn test_assert_no_header_pass() {
+		// Arrange
+		let response = create_test_response();
+
+		// Act / Assert (should not panic)
+		assert_no_header(&response, "x-missing");
+	}
+
+	#[rstest]
+	#[should_panic(expected = "Expected response to NOT have header")]
+	fn test_assert_no_header_fail() {
+		// Arrange
+		let response = create_test_response().with_header("x-api-version", "v1");
+
+		// Act (should panic)
+		assert_no_header(&response, "x-api-version");
+	}
+}

@@ -3829,6 +3829,7 @@ fn generate_new_function(
 			/// - The related model instance (e.g., `User { ... }`)
 			/// - A reference to the related model (e.g., `&user`)
 			/// - The primary key value directly (e.g., `user_id: Uuid`)
+			#[allow(clippy::too_many_arguments)]
 			pub fn new #generic_signature(#(#params),*) -> Self
 			#where_clause
 			{

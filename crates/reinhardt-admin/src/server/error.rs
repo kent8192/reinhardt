@@ -194,7 +194,7 @@ impl AdminAuth {
 	pub async fn require_model_permission(
 		&self,
 		model_admin: &dyn crate::core::ModelAdmin,
-		user: &(dyn std::any::Any + Send + Sync),
+		user: &dyn crate::core::AdminUser,
 		permission: ModelPermission,
 	) -> Result<(), ServerFnError> {
 		self.require_staff()?;
@@ -219,7 +219,239 @@ impl AdminAuth {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use async_trait::async_trait;
+	use rstest::rstest;
+	use std::sync::Arc;
 
+	// --- Helper structs for require_model_permission tests ---
+
+	/// Test user implementing AdminUser for permission tests
+	struct TestUser;
+
+	impl crate::core::AdminUser for TestUser {
+		fn is_active(&self) -> bool {
+			true
+		}
+		fn is_staff(&self) -> bool {
+			true
+		}
+		fn is_superuser(&self) -> bool {
+			false
+		}
+		fn get_username(&self) -> &str {
+			"test_user"
+		}
+	}
+
+	/// Always denies all permissions (uses default trait behavior)
+	struct DenyAllAdmin;
+
+	#[async_trait]
+	impl crate::core::ModelAdmin for DenyAllAdmin {
+		fn model_name(&self) -> &str {
+			"DenyModel"
+		}
+	}
+
+	/// Always grants all permissions
+	struct AllowAllAdmin;
+
+	#[async_trait]
+	impl crate::core::ModelAdmin for AllowAllAdmin {
+		fn model_name(&self) -> &str {
+			"AllowModel"
+		}
+
+		async fn has_view_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
+			true
+		}
+		async fn has_add_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
+			true
+		}
+		async fn has_change_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
+			true
+		}
+		async fn has_delete_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
+			true
+		}
+	}
+
+	/// Grants only a specific permission type
+	struct SelectiveAdmin {
+		allowed: ModelPermission,
+	}
+
+	#[async_trait]
+	impl crate::core::ModelAdmin for SelectiveAdmin {
+		fn model_name(&self) -> &str {
+			"SelectiveModel"
+		}
+
+		async fn has_view_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
+			self.allowed == ModelPermission::View
+		}
+		async fn has_add_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
+			self.allowed == ModelPermission::Add
+		}
+		async fn has_change_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
+			self.allowed == ModelPermission::Change
+		}
+		async fn has_delete_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
+			self.allowed == ModelPermission::Delete
+		}
+	}
+
+	/// Create AdminAuth from an optional AuthState
+	fn make_admin_auth(auth_state: Option<AuthState>) -> AdminAuth {
+		let request = reinhardt_http::Request::builder()
+			.uri("/admin/test")
+			.build()
+			.expect("Failed to build test request");
+		if let Some(state) = auth_state {
+			request.extensions.insert(state);
+		}
+		AdminAuth::from_arc_request(&Arc::new(request))
+	}
+
+	// --- require_model_permission tests ---
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_require_model_permission_staff_with_permission() {
+		// Arrange
+		let auth = make_admin_auth(Some(AuthState::authenticated("user1", true, true)));
+		let admin = AllowAllAdmin;
+		let user_obj = TestUser;
+
+		// Act
+		let result = auth
+			.require_model_permission(
+				&admin,
+				&user_obj as &dyn crate::core::AdminUser,
+				ModelPermission::View,
+			)
+			.await;
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_require_model_permission_staff_denied_by_model() {
+		// Arrange
+		let auth = make_admin_auth(Some(AuthState::authenticated("user1", true, true)));
+		let admin = DenyAllAdmin;
+		let user_obj = TestUser;
+
+		// Act
+		let result = auth
+			.require_model_permission(
+				&admin,
+				&user_obj as &dyn crate::core::AdminUser,
+				ModelPermission::View,
+			)
+			.await;
+
+		// Assert
+		assert!(result.is_err());
+		match result.unwrap_err() {
+			ServerFnError::Server { status, message } => {
+				assert_eq!(status, 403);
+				assert_eq!(message, "Permission denied");
+			}
+			other => panic!("Expected Server error with 403, got: {other:?}"),
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_require_model_permission_non_staff_denied() {
+		// Arrange
+		let auth = make_admin_auth(Some(AuthState::authenticated("user1", false, true)));
+		let admin = AllowAllAdmin;
+		let user_obj = TestUser;
+
+		// Act
+		let result = auth
+			.require_model_permission(
+				&admin,
+				&user_obj as &dyn crate::core::AdminUser,
+				ModelPermission::View,
+			)
+			.await;
+
+		// Assert
+		assert!(result.is_err());
+		match result.unwrap_err() {
+			ServerFnError::Server { status, message } => {
+				assert_eq!(status, 403);
+				assert_eq!(message, "Staff access required for admin panel");
+			}
+			other => panic!("Expected Server error with 403, got: {other:?}"),
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_require_model_permission_unauthenticated() {
+		// Arrange
+		let auth = make_admin_auth(None);
+		let admin = AllowAllAdmin;
+		let user_obj = TestUser;
+
+		// Act
+		let result = auth
+			.require_model_permission(
+				&admin,
+				&user_obj as &dyn crate::core::AdminUser,
+				ModelPermission::View,
+			)
+			.await;
+
+		// Assert
+		assert!(result.is_err());
+		match result.unwrap_err() {
+			ServerFnError::Server { status, message } => {
+				assert_eq!(status, 401);
+				assert_eq!(message, "Authentication required to access admin panel");
+			}
+			other => panic!("Expected Server error with 401, got: {other:?}"),
+		}
+	}
+
+	#[rstest]
+	#[case::view_matches_view(ModelPermission::View, ModelPermission::View, true)]
+	#[case::view_does_not_match_add(ModelPermission::View, ModelPermission::Add, false)]
+	#[case::add_matches_add(ModelPermission::Add, ModelPermission::Add, true)]
+	#[case::change_does_not_match_delete(ModelPermission::Change, ModelPermission::Delete, false)]
+	#[tokio::test]
+	async fn test_require_model_permission_selective_permissions(
+		#[case] granted: ModelPermission,
+		#[case] requested: ModelPermission,
+		#[case] expected_ok: bool,
+	) {
+		// Arrange
+		let auth = make_admin_auth(Some(AuthState::authenticated("user1", true, true)));
+		let admin = SelectiveAdmin { allowed: granted };
+		let user_obj = TestUser;
+
+		// Act
+		let result = auth
+			.require_model_permission(&admin, &user_obj as &dyn crate::core::AdminUser, requested)
+			.await;
+
+		// Assert
+		assert_eq!(
+			result.is_ok(),
+			expected_ok,
+			"granted={granted:?}, requested={requested:?}: expected is_ok()={expected_ok}"
+		);
+	}
+
+	// --- Error conversion tests ---
+
+	#[rstest]
 	#[test]
 	fn test_model_not_registered_converts_to_404() {
 		let admin_err = AdminError::ModelNotRegistered("User".into());
@@ -234,6 +466,7 @@ mod tests {
 		}
 	}
 
+	#[rstest]
 	#[test]
 	fn test_permission_denied_converts_to_403() {
 		let admin_err = AdminError::PermissionDenied("Access denied".into());
@@ -248,6 +481,7 @@ mod tests {
 		}
 	}
 
+	#[rstest]
 	#[test]
 	fn test_validation_error_converts_to_application() {
 		let admin_err = AdminError::ValidationError("Invalid input".into());
@@ -261,6 +495,7 @@ mod tests {
 		}
 	}
 
+	#[rstest]
 	#[test]
 	fn test_database_error_hides_details() {
 		let admin_err = AdminError::DatabaseError("SQL syntax error at line 42".into());
@@ -278,6 +513,7 @@ mod tests {
 		}
 	}
 
+	#[rstest]
 	#[test]
 	fn test_result_conversion() {
 		let result: Result<String, AdminError> = Err(AdminError::ModelNotRegistered("Post".into()));

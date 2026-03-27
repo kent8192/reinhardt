@@ -16,7 +16,8 @@ use reinhardt::admin;
 	list_display = [id, name, is_group, created_at],
 	list_filter = [is_group],
 	search_fields = [name],
-	ordering = [(created_at, desc)]
+	ordering = [(created_at, desc)],
+	permissions = allow_all,
 )]
 pub struct DMRoomAdmin;
 
@@ -33,6 +34,7 @@ pub struct DMRoomAdmin;
 	list_display = [id, room_id, sender_id, content, is_read, created_at],
 	list_filter = [is_read, created_at],
 	search_fields = [content],
-	ordering = [(created_at, desc)]
+	ordering = [(created_at, desc)],
+	permissions = allow_all,
 )]
 pub struct DMMessageAdmin;

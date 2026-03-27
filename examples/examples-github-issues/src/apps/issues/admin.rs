@@ -12,6 +12,7 @@ use reinhardt::admin;
 	search_fields = [title, body],
 	ordering = [(created_at, desc)],
 	readonly_fields = [id, number, created_at, updated_at],
-	list_per_page = 50
+	list_per_page = 50,
+	permissions = allow_all,
 )]
 pub struct IssueAdmin;

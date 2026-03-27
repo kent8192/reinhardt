@@ -21,6 +21,7 @@ use reinhardt::admin;
 	search_fields = [content],
 	ordering = [(created_at, desc)],
 	readonly_fields = [id, created_at],
-	list_per_page = 25
+	list_per_page = 25,
+	permissions = allow_all,
 )]
 pub struct TweetAdmin;

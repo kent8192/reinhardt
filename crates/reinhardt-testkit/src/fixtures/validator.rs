@@ -141,3 +141,57 @@ impl TestResource for ValidatorDbGuard {
 pub fn validator_db_guard() -> TeardownGuard<ValidatorDbGuard> {
 	TeardownGuard::new()
 }
+
+#[cfg(all(test, feature = "testcontainers"))]
+mod tests {
+	use super::*;
+	use rstest::*;
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_validator_test_db_connects(
+		#[future] validator_test_db: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String),
+	) {
+		// Arrange
+		let (_container, pool, _port, _url) = validator_test_db.await;
+
+		// Act
+		let row: (i32,) = sqlx::query_as("SELECT 1")
+			.fetch_one(pool.as_ref())
+			.await
+			.expect("Failed to execute SELECT 1 on validator test db");
+
+		// Assert
+		assert_eq!(row.0, 1);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_validator_test_db_url_format(
+		#[future] validator_test_db: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String),
+	) {
+		// Arrange
+		let (_container, _pool, _port, url) = validator_test_db.await;
+
+		// Act (no-op: URL is set at initialization)
+
+		// Assert
+		assert!(
+			url.starts_with("postgres://"),
+			"Expected database_url to start with 'postgres://', got: {}",
+			url
+		);
+	}
+
+	#[rstest]
+	fn test_validator_db_guard_lifecycle() {
+		// Arrange & Act
+		let guard = validator_db_guard();
+
+		// Assert
+		// ValidatorDbGuard implements TestResource with setup/teardown.
+		// Verify guard was created successfully (setup completed).
+		// TeardownGuard will call teardown on drop.
+		let _: &TeardownGuard<ValidatorDbGuard> = &guard;
+	}
+}

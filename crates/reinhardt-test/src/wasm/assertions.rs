@@ -831,12 +831,11 @@ pub mod assert {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	// Note: WASM tests should use wasm_bindgen_test
-	// These tests are for compile-time verification only
-
-	#[test]
-	fn test_assertion_error_display() {
+	#[rstest]
+	fn assertion_error_display_with_element_info() {
+		// Arrange
 		let error = AssertionError {
 			assertion: "should_be_visible".to_string(),
 			expected: "visible".to_string(),
@@ -844,10 +843,147 @@ mod tests {
 			element_info: Some("<div#test>".to_string()),
 		};
 
+		// Act
 		let display = error.to_string();
+
+		// Assert
 		assert!(display.contains("should_be_visible"));
 		assert!(display.contains("visible"));
 		assert!(display.contains("hidden"));
 		assert!(display.contains("<div#test>"));
+	}
+
+	#[rstest]
+	fn assertion_error_display_without_element_info() {
+		// Arrange
+		let error = AssertionError {
+			assertion: "should_have_text".to_string(),
+			expected: "Hello".to_string(),
+			actual: "World".to_string(),
+			element_info: None,
+		};
+
+		// Act
+		let display = error.to_string();
+
+		// Assert
+		assert!(display.contains("should_have_text"));
+		assert!(display.contains("Hello"));
+		assert!(display.contains("World"));
+		assert!(!display.contains("Element:"));
+	}
+
+	#[rstest]
+	fn assertion_error_display_with_empty_strings() {
+		// Arrange
+		let error = AssertionError {
+			assertion: "".to_string(),
+			expected: "".to_string(),
+			actual: "".to_string(),
+			element_info: None,
+		};
+
+		// Act
+		let display = error.to_string();
+
+		// Assert
+		assert!(display.contains("Assertion failed:"));
+		assert!(display.contains("Expected:"));
+		assert!(display.contains("Actual:"));
+	}
+
+	#[rstest]
+	fn assertion_error_display_with_special_characters() {
+		// Arrange
+		let error = AssertionError {
+			assertion: "check <div> & \"quotes\"".to_string(),
+			expected: "a < b && c > d".to_string(),
+			actual: "x\ny\tz".to_string(),
+			element_info: Some("<input#id.class>".to_string()),
+		};
+
+		// Act
+		let display = error.to_string();
+
+		// Assert
+		assert!(display.contains("check <div> & \"quotes\""));
+		assert!(display.contains("a < b && c > d"));
+		assert!(display.contains("x\ny\tz"));
+	}
+
+	#[rstest]
+	fn assertion_error_display_with_long_strings() {
+		// Arrange
+		let long_text = "a".repeat(1000);
+		let error = AssertionError {
+			assertion: long_text.clone(),
+			expected: "short".to_string(),
+			actual: "also short".to_string(),
+			element_info: None,
+		};
+
+		// Act
+		let display = error.to_string();
+
+		// Assert
+		assert!(display.contains(&long_text));
+	}
+
+	#[rstest]
+	fn assertion_error_source_returns_none() {
+		// Arrange
+		let error = AssertionError {
+			assertion: "test".to_string(),
+			expected: "a".to_string(),
+			actual: "b".to_string(),
+			element_info: None,
+		};
+
+		// Act
+		let source = std::error::Error::source(&error);
+
+		// Assert
+		assert!(source.is_none());
+	}
+
+	#[rstest]
+	fn assertion_error_debug_format_contains_fields() {
+		// Arrange
+		let error = AssertionError {
+			assertion: "should_be_enabled".to_string(),
+			expected: "enabled".to_string(),
+			actual: "disabled".to_string(),
+			element_info: Some("<button>".to_string()),
+		};
+
+		// Act
+		let debug_str = format!("{:?}", error);
+
+		// Assert
+		assert!(debug_str.contains("AssertionError"));
+		assert!(debug_str.contains("should_be_enabled"));
+		assert!(debug_str.contains("enabled"));
+		assert!(debug_str.contains("disabled"));
+		assert!(debug_str.contains("<button>"));
+	}
+
+	#[rstest]
+	fn assertion_error_clone_produces_equal_values() {
+		// Arrange
+		let original = AssertionError {
+			assertion: "should_be_visible".to_string(),
+			expected: "visible".to_string(),
+			actual: "hidden".to_string(),
+			element_info: Some("<div>".to_string()),
+		};
+
+		// Act
+		let cloned = original.clone();
+
+		// Assert
+		assert_eq!(cloned.assertion, original.assertion);
+		assert_eq!(cloned.expected, original.expected);
+		assert_eq!(cloned.actual, original.actual);
+		assert_eq!(cloned.element_info, original.element_info);
 	}
 }

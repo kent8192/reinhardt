@@ -751,35 +751,172 @@ impl Future for WaitForHiddenFuture {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	// Note: WASM tests should use wasm_bindgen_test
 	// These tests are for compile-time verification only
 
-	#[test]
-	fn test_wait_options_builder() {
+	// ==================== WaitOptions tests ====================
+
+	#[rstest]
+	fn test_wait_options_default_values() {
+		// Arrange & Act
+		let opts = WaitOptions::default();
+
+		// Assert
+		assert_eq!(opts.timeout, Duration::from_secs(5));
+		assert_eq!(opts.interval, Duration::from_millis(50));
+		assert_eq!(opts.description, None);
+	}
+
+	#[rstest]
+	fn test_wait_options_new_equals_default() {
+		// Arrange & Act
+		let from_new = WaitOptions::new();
+		let from_default = WaitOptions::default();
+
+		// Assert
+		assert_eq!(from_new.timeout, from_default.timeout);
+		assert_eq!(from_new.interval, from_default.interval);
+		assert_eq!(from_new.description, from_default.description);
+	}
+
+	#[rstest]
+	fn test_wait_options_with_timeout() {
+		// Arrange & Act
+		let opts = WaitOptions::new().with_timeout(Duration::from_secs(30));
+
+		// Assert
+		assert_eq!(opts.timeout, Duration::from_secs(30));
+		// Other fields remain default
+		assert_eq!(opts.interval, Duration::from_millis(50));
+		assert_eq!(opts.description, None);
+	}
+
+	#[rstest]
+	fn test_wait_options_with_interval() {
+		// Arrange & Act
+		let opts = WaitOptions::new().with_interval(Duration::from_millis(200));
+
+		// Assert
+		assert_eq!(opts.interval, Duration::from_millis(200));
+		// Other fields remain default
+		assert_eq!(opts.timeout, Duration::from_secs(5));
+		assert_eq!(opts.description, None);
+	}
+
+	#[rstest]
+	fn test_wait_options_with_description() {
+		// Arrange & Act
+		let opts = WaitOptions::new().with_description("loading spinner");
+
+		// Assert
+		assert_eq!(opts.description, Some("loading spinner".to_string()));
+		// Other fields remain default
+		assert_eq!(opts.timeout, Duration::from_secs(5));
+		assert_eq!(opts.interval, Duration::from_millis(50));
+	}
+
+	#[rstest]
+	fn test_wait_options_builder_chaining() {
+		// Arrange & Act
 		let opts = WaitOptions::new()
 			.with_timeout(Duration::from_secs(10))
 			.with_interval(Duration::from_millis(100))
 			.with_description("test wait");
 
+		// Assert
 		assert_eq!(opts.timeout, Duration::from_secs(10));
 		assert_eq!(opts.interval, Duration::from_millis(100));
 		assert_eq!(opts.description, Some("test wait".to_string()));
 	}
 
-	#[test]
-	fn test_wait_error_display() {
-		let timeout_error = WaitError::Timeout {
+	// ==================== WaitError Display tests ====================
+
+	#[rstest]
+	fn test_wait_error_timeout_with_description() {
+		// Arrange
+		let error = WaitError::Timeout {
 			timeout: Duration::from_secs(5),
 			description: Some("element to appear".to_string()),
 		};
-		assert!(timeout_error.to_string().contains("5s"));
-		assert!(timeout_error.to_string().contains("element to appear"));
 
-		let js_error = WaitError::JsError("test error".to_string());
-		assert!(js_error.to_string().contains("test error"));
+		// Act
+		let msg = error.to_string();
 
-		let not_found = WaitError::ElementNotFound("#missing".to_string());
-		assert!(not_found.to_string().contains("#missing"));
+		// Assert
+		assert!(msg.contains("5s"));
+		assert!(msg.contains("element to appear"));
+		assert!(msg.contains("Timed out"));
+	}
+
+	#[rstest]
+	fn test_wait_error_timeout_without_description() {
+		// Arrange
+		let error = WaitError::Timeout {
+			timeout: Duration::from_secs(3),
+			description: None,
+		};
+
+		// Act
+		let msg = error.to_string();
+
+		// Assert
+		assert!(msg.contains("3s"));
+		assert!(msg.contains("Timed out"));
+		// Should not contain "waiting for:" when description is None
+		assert!(!msg.contains("waiting for:"));
+	}
+
+	#[rstest]
+	fn test_wait_error_js_error_display() {
+		// Arrange
+		let error = WaitError::JsError("TypeError: undefined is not a function".to_string());
+
+		// Act
+		let msg = error.to_string();
+
+		// Assert
+		assert!(msg.contains("JavaScript error"));
+		assert!(msg.contains("TypeError: undefined is not a function"));
+	}
+
+	#[rstest]
+	fn test_wait_error_element_not_found_display() {
+		// Arrange
+		let error = WaitError::ElementNotFound("#missing-element".to_string());
+
+		// Act
+		let msg = error.to_string();
+
+		// Assert
+		assert!(msg.contains("Element not found"));
+		assert!(msg.contains("#missing-element"));
+	}
+
+	#[rstest]
+	fn test_wait_error_implements_std_error() {
+		// Arrange
+		let error = WaitError::JsError("test".to_string());
+
+		// Act
+		let std_error: &dyn std::error::Error = &error;
+
+		// Assert: source() returns None for all WaitError variants
+		assert!(std_error.source().is_none());
+	}
+
+	// ==================== Constants tests ====================
+
+	#[rstest]
+	fn test_default_timeout_constant() {
+		// Arrange & Act & Assert
+		assert_eq!(DEFAULT_TIMEOUT, Duration::from_secs(5));
+	}
+
+	#[rstest]
+	fn test_default_interval_constant() {
+		// Arrange & Act & Assert
+		assert_eq!(DEFAULT_INTERVAL, Duration::from_millis(50));
 	}
 }

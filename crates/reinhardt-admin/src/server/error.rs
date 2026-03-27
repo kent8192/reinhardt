@@ -194,7 +194,7 @@ impl AdminAuth {
 	pub async fn require_model_permission(
 		&self,
 		model_admin: &dyn crate::core::ModelAdmin,
-		user: &(dyn std::any::Any + Send + Sync),
+		user: &dyn crate::core::AdminUser,
 		permission: ModelPermission,
 	) -> Result<(), ServerFnError> {
 		self.require_staff()?;
@@ -225,6 +225,24 @@ mod tests {
 
 	// --- Helper structs for require_model_permission tests ---
 
+	/// Test user implementing AdminUser for permission tests
+	struct TestUser;
+
+	impl crate::core::AdminUser for TestUser {
+		fn is_active(&self) -> bool {
+			true
+		}
+		fn is_staff(&self) -> bool {
+			true
+		}
+		fn is_superuser(&self) -> bool {
+			false
+		}
+		fn get_username(&self) -> &str {
+			"test_user"
+		}
+	}
+
 	/// Always denies all permissions (uses default trait behavior)
 	struct DenyAllAdmin;
 
@@ -244,16 +262,16 @@ mod tests {
 			"AllowModel"
 		}
 
-		async fn has_view_permission(&self, _: &(dyn std::any::Any + Send + Sync)) -> bool {
+		async fn has_view_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
 			true
 		}
-		async fn has_add_permission(&self, _: &(dyn std::any::Any + Send + Sync)) -> bool {
+		async fn has_add_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
 			true
 		}
-		async fn has_change_permission(&self, _: &(dyn std::any::Any + Send + Sync)) -> bool {
+		async fn has_change_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
 			true
 		}
-		async fn has_delete_permission(&self, _: &(dyn std::any::Any + Send + Sync)) -> bool {
+		async fn has_delete_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
 			true
 		}
 	}
@@ -269,16 +287,16 @@ mod tests {
 			"SelectiveModel"
 		}
 
-		async fn has_view_permission(&self, _: &(dyn std::any::Any + Send + Sync)) -> bool {
+		async fn has_view_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
 			self.allowed == ModelPermission::View
 		}
-		async fn has_add_permission(&self, _: &(dyn std::any::Any + Send + Sync)) -> bool {
+		async fn has_add_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
 			self.allowed == ModelPermission::Add
 		}
-		async fn has_change_permission(&self, _: &(dyn std::any::Any + Send + Sync)) -> bool {
+		async fn has_change_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
 			self.allowed == ModelPermission::Change
 		}
-		async fn has_delete_permission(&self, _: &(dyn std::any::Any + Send + Sync)) -> bool {
+		async fn has_delete_permission(&self, _: &dyn crate::core::AdminUser) -> bool {
 			self.allowed == ModelPermission::Delete
 		}
 	}
@@ -303,13 +321,13 @@ mod tests {
 		// Arrange
 		let auth = make_admin_auth(Some(AuthState::authenticated("user1", true, true)));
 		let admin = AllowAllAdmin;
-		let user_obj: String = "test_user".to_string();
+		let user_obj = TestUser;
 
 		// Act
 		let result = auth
 			.require_model_permission(
 				&admin,
-				&user_obj as &(dyn std::any::Any + Send + Sync),
+				&user_obj as &dyn crate::core::AdminUser,
 				ModelPermission::View,
 			)
 			.await;
@@ -324,13 +342,13 @@ mod tests {
 		// Arrange
 		let auth = make_admin_auth(Some(AuthState::authenticated("user1", true, true)));
 		let admin = DenyAllAdmin;
-		let user_obj: String = "test_user".to_string();
+		let user_obj = TestUser;
 
 		// Act
 		let result = auth
 			.require_model_permission(
 				&admin,
-				&user_obj as &(dyn std::any::Any + Send + Sync),
+				&user_obj as &dyn crate::core::AdminUser,
 				ModelPermission::View,
 			)
 			.await;
@@ -352,13 +370,13 @@ mod tests {
 		// Arrange
 		let auth = make_admin_auth(Some(AuthState::authenticated("user1", false, true)));
 		let admin = AllowAllAdmin;
-		let user_obj: String = "test_user".to_string();
+		let user_obj = TestUser;
 
 		// Act
 		let result = auth
 			.require_model_permission(
 				&admin,
-				&user_obj as &(dyn std::any::Any + Send + Sync),
+				&user_obj as &dyn crate::core::AdminUser,
 				ModelPermission::View,
 			)
 			.await;
@@ -380,13 +398,13 @@ mod tests {
 		// Arrange
 		let auth = make_admin_auth(None);
 		let admin = AllowAllAdmin;
-		let user_obj: String = "test_user".to_string();
+		let user_obj = TestUser;
 
 		// Act
 		let result = auth
 			.require_model_permission(
 				&admin,
-				&user_obj as &(dyn std::any::Any + Send + Sync),
+				&user_obj as &dyn crate::core::AdminUser,
 				ModelPermission::View,
 			)
 			.await;
@@ -416,15 +434,11 @@ mod tests {
 		// Arrange
 		let auth = make_admin_auth(Some(AuthState::authenticated("user1", true, true)));
 		let admin = SelectiveAdmin { allowed: granted };
-		let user_obj: String = "test_user".to_string();
+		let user_obj = TestUser;
 
 		// Act
 		let result = auth
-			.require_model_permission(
-				&admin,
-				&user_obj as &(dyn std::any::Any + Send + Sync),
-				requested,
-			)
+			.require_model_permission(&admin, &user_obj as &dyn crate::core::AdminUser, requested)
 			.await;
 
 		// Assert

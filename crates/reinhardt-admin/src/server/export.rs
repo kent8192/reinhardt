@@ -50,7 +50,7 @@ pub async fn export_data(
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	auth.require_model_permission(
 		model_admin.as_ref(),
-		&user as &(dyn std::any::Any + Send + Sync),
+		&user as &dyn crate::core::AdminUser,
 		ModelPermission::View,
 	)
 	.await?;

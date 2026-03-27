@@ -17,6 +17,7 @@ use reinhardt::admin;
 	fields = [id, user_id, content, created_at],
 	list_filter = [created_at],
 	search_fields = [content],
-	ordering = [(created_at, desc)]
+	ordering = [(created_at, desc)],
+	permissions = allow_all,
 )]
 pub struct TweetAdmin;

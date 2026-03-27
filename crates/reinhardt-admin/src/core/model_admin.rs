@@ -5,6 +5,51 @@
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
 
+/// Object-safe trait for admin permission checks.
+///
+/// This trait provides the minimum user information needed for admin
+/// permission decisions, without exposing generic type parameters
+/// from [`BaseUser`](reinhardt_auth::BaseUser) or [`FullUser`](reinhardt_auth::FullUser).
+///
+/// A blanket implementation is provided for all types implementing
+/// [`FullUser`](reinhardt_auth::FullUser), so [`DefaultUser`](reinhardt_auth::DefaultUser)
+/// and any custom user model with `FullUser` will automatically satisfy this trait.
+pub trait AdminUser: Send + Sync {
+	/// Whether the user account is active
+	fn is_active(&self) -> bool;
+
+	/// Whether the user is a staff member (can access admin)
+	fn is_staff(&self) -> bool;
+
+	/// Whether the user is a superuser (all permissions granted)
+	fn is_superuser(&self) -> bool;
+
+	/// The username for audit logging
+	fn get_username(&self) -> &str;
+}
+
+/// Blanket implementation for all types implementing [`FullUser`](reinhardt_auth::FullUser).
+///
+/// This ensures that [`DefaultUser`](reinhardt_auth::DefaultUser) and any custom user model
+/// with `FullUser` implementation automatically satisfies `AdminUser`.
+impl<T: reinhardt_auth::FullUser> AdminUser for T {
+	fn is_active(&self) -> bool {
+		reinhardt_auth::BaseUser::is_active(self)
+	}
+
+	fn is_staff(&self) -> bool {
+		reinhardt_auth::FullUser::is_staff(self)
+	}
+
+	fn is_superuser(&self) -> bool {
+		reinhardt_auth::FullUser::is_superuser(self)
+	}
+
+	fn get_username(&self) -> &str {
+		reinhardt_auth::FullUser::username(self)
+	}
+}
+
 /// Trait for configuring model administration
 ///
 /// Implement this trait to customize how a model is displayed and edited in the admin.
@@ -72,10 +117,9 @@ pub trait ModelAdmin: Send + Sync {
 	///
 	/// # Migration from previous versions
 	///
-	/// Previously, this method defaulted to `true` (allow-all).
-	/// If you relied on the default, explicitly override this method to return `true`
-	/// or implement proper permission logic.
-	async fn has_view_permission(&self, _user: &(dyn std::any::Any + Send + Sync)) -> bool {
+	/// Previously, this method accepted `&(dyn std::any::Any + Send + Sync)`.
+	/// It now accepts `&dyn AdminUser` for type-safe permission checks.
+	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
 		false
 	}
 
@@ -83,13 +127,7 @@ pub trait ModelAdmin: Send + Sync {
 	///
 	/// Default implementation denies all access (deny-by-default).
 	/// Override this method to grant add permission based on user attributes.
-	///
-	/// # Migration from previous versions
-	///
-	/// Previously, this method defaulted to `true` (allow-all).
-	/// If you relied on the default, explicitly override this method to return `true`
-	/// or implement proper permission logic.
-	async fn has_add_permission(&self, _user: &(dyn std::any::Any + Send + Sync)) -> bool {
+	async fn has_add_permission(&self, _user: &dyn AdminUser) -> bool {
 		false
 	}
 
@@ -97,13 +135,7 @@ pub trait ModelAdmin: Send + Sync {
 	///
 	/// Default implementation denies all access (deny-by-default).
 	/// Override this method to grant change permission based on user attributes.
-	///
-	/// # Migration from previous versions
-	///
-	/// Previously, this method defaulted to `true` (allow-all).
-	/// If you relied on the default, explicitly override this method to return `true`
-	/// or implement proper permission logic.
-	async fn has_change_permission(&self, _user: &(dyn std::any::Any + Send + Sync)) -> bool {
+	async fn has_change_permission(&self, _user: &dyn AdminUser) -> bool {
 		false
 	}
 
@@ -111,13 +143,7 @@ pub trait ModelAdmin: Send + Sync {
 	///
 	/// Default implementation denies all access (deny-by-default).
 	/// Override this method to grant delete permission based on user attributes.
-	///
-	/// # Migration from previous versions
-	///
-	/// Previously, this method defaulted to `true` (allow-all).
-	/// If you relied on the default, explicitly override this method to return `true`
-	/// or implement proper permission logic.
-	async fn has_delete_permission(&self, _user: &(dyn std::any::Any + Send + Sync)) -> bool {
+	async fn has_delete_permission(&self, _user: &dyn AdminUser) -> bool {
 		false
 	}
 }
@@ -136,6 +162,7 @@ pub trait ModelAdmin: Send + Sync {
 ///     .list_display(vec!["id", "username", "email"])
 ///     .list_filter(vec!["is_active"])
 ///     .search_fields(vec!["username", "email"])
+///     .allow_all(true)
 ///     .build()
 ///     .unwrap();
 ///
@@ -153,6 +180,10 @@ pub struct ModelAdminConfig {
 	readonly_fields: Vec<String>,
 	ordering: Vec<String>,
 	list_per_page: Option<usize>,
+	allow_view: bool,
+	allow_add: bool,
+	allow_change: bool,
+	allow_delete: bool,
 }
 
 impl ModelAdminConfig {
@@ -178,6 +209,10 @@ impl ModelAdminConfig {
 			readonly_fields: vec![],
 			ordering: vec!["-id".into()],
 			list_per_page: None,
+			allow_view: false,
+			allow_add: false,
+			allow_change: false,
+			allow_delete: false,
 		}
 	}
 
@@ -262,6 +297,22 @@ impl ModelAdmin for ModelAdminConfig {
 	fn list_per_page(&self) -> Option<usize> {
 		self.list_per_page
 	}
+
+	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
+		self.allow_view
+	}
+
+	async fn has_add_permission(&self, _user: &dyn AdminUser) -> bool {
+		self.allow_add
+	}
+
+	async fn has_change_permission(&self, _user: &dyn AdminUser) -> bool {
+		self.allow_change
+	}
+
+	async fn has_delete_permission(&self, _user: &dyn AdminUser) -> bool {
+		self.allow_delete
+	}
 }
 
 /// Builder for ModelAdminConfig
@@ -277,6 +328,10 @@ pub struct ModelAdminConfigBuilder {
 	readonly_fields: Option<Vec<String>>,
 	ordering: Option<Vec<String>>,
 	list_per_page: Option<usize>,
+	allow_view: Option<bool>,
+	allow_add: Option<bool>,
+	allow_change: Option<bool>,
+	allow_delete: Option<bool>,
 }
 
 impl ModelAdminConfigBuilder {
@@ -344,6 +399,61 @@ impl ModelAdminConfigBuilder {
 		self
 	}
 
+	/// Set view permission
+	///
+	/// If not set, defaults to `false` (deny-by-default).
+	pub fn allow_view(mut self, allow: bool) -> Self {
+		self.allow_view = Some(allow);
+		self
+	}
+
+	/// Set add permission
+	///
+	/// If not set, defaults to `false` (deny-by-default).
+	pub fn allow_add(mut self, allow: bool) -> Self {
+		self.allow_add = Some(allow);
+		self
+	}
+
+	/// Set change permission
+	///
+	/// If not set, defaults to `false` (deny-by-default).
+	pub fn allow_change(mut self, allow: bool) -> Self {
+		self.allow_change = Some(allow);
+		self
+	}
+
+	/// Set delete permission
+	///
+	/// If not set, defaults to `false` (deny-by-default).
+	pub fn allow_delete(mut self, allow: bool) -> Self {
+		self.allow_delete = Some(allow);
+		self
+	}
+
+	/// Set all permissions (view, add, change, delete) at once
+	///
+	/// Convenience method for granting or denying all operations.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_admin::core::ModelAdminConfig;
+	///
+	/// let admin = ModelAdminConfig::builder()
+	///     .model_name("User")
+	///     .allow_all(true)
+	///     .build()
+	///     .unwrap();
+	/// ```
+	pub fn allow_all(mut self, allow: bool) -> Self {
+		self.allow_view = Some(allow);
+		self.allow_add = Some(allow);
+		self.allow_change = Some(allow);
+		self.allow_delete = Some(allow);
+		self
+	}
+
 	/// Build the configuration
 	///
 	/// # Errors
@@ -365,6 +475,10 @@ impl ModelAdminConfigBuilder {
 			readonly_fields: self.readonly_fields.unwrap_or_default(),
 			ordering: self.ordering.unwrap_or_else(|| vec!["-id".into()]),
 			list_per_page: self.list_per_page,
+			allow_view: self.allow_view.unwrap_or(false),
+			allow_add: self.allow_add.unwrap_or(false),
+			allow_change: self.allow_change.unwrap_or(false),
+			allow_delete: self.allow_delete.unwrap_or(false),
 		})
 	}
 }
@@ -373,6 +487,43 @@ impl ModelAdminConfigBuilder {
 mod tests {
 	use super::*;
 	use rstest::rstest;
+
+	/// Dummy AdminUser for testing permission methods
+	struct TestAdminUser {
+		active: bool,
+		staff: bool,
+		superuser: bool,
+		username: String,
+	}
+
+	impl TestAdminUser {
+		fn new() -> Self {
+			Self {
+				active: true,
+				staff: true,
+				superuser: false,
+				username: "test_user".to_string(),
+			}
+		}
+	}
+
+	impl AdminUser for TestAdminUser {
+		fn is_active(&self) -> bool {
+			self.active
+		}
+
+		fn is_staff(&self) -> bool {
+			self.staff
+		}
+
+		fn is_superuser(&self) -> bool {
+			self.superuser
+		}
+
+		fn get_username(&self) -> &str {
+			&self.username
+		}
+	}
 
 	#[rstest]
 	fn test_model_admin_config_creation() {
@@ -442,19 +593,19 @@ mod tests {
 			"AllowedModel"
 		}
 
-		async fn has_view_permission(&self, _user: &(dyn std::any::Any + Send + Sync)) -> bool {
+		async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
 			true
 		}
 
-		async fn has_add_permission(&self, _user: &(dyn std::any::Any + Send + Sync)) -> bool {
+		async fn has_add_permission(&self, _user: &dyn AdminUser) -> bool {
 			true
 		}
 
-		async fn has_change_permission(&self, _user: &(dyn std::any::Any + Send + Sync)) -> bool {
+		async fn has_change_permission(&self, _user: &dyn AdminUser) -> bool {
 			true
 		}
 
-		async fn has_delete_permission(&self, _user: &(dyn std::any::Any + Send + Sync)) -> bool {
+		async fn has_delete_permission(&self, _user: &dyn AdminUser) -> bool {
 			true
 		}
 	}
@@ -464,12 +615,10 @@ mod tests {
 	async fn test_default_permissions_deny_view() {
 		// Arrange
 		let admin = DefaultPermissionAdmin;
-		let user = String::from("any_user");
+		let user = TestAdminUser::new();
 
 		// Act
-		let result = admin
-			.has_view_permission(&user as &(dyn std::any::Any + Send + Sync))
-			.await;
+		let result = admin.has_view_permission(&user as &dyn AdminUser).await;
 
 		// Assert
 		assert_eq!(result, false);
@@ -480,12 +629,10 @@ mod tests {
 	async fn test_default_permissions_deny_add() {
 		// Arrange
 		let admin = DefaultPermissionAdmin;
-		let user = String::from("any_user");
+		let user = TestAdminUser::new();
 
 		// Act
-		let result = admin
-			.has_add_permission(&user as &(dyn std::any::Any + Send + Sync))
-			.await;
+		let result = admin.has_add_permission(&user as &dyn AdminUser).await;
 
 		// Assert
 		assert_eq!(result, false);
@@ -496,12 +643,10 @@ mod tests {
 	async fn test_default_permissions_deny_change() {
 		// Arrange
 		let admin = DefaultPermissionAdmin;
-		let user = String::from("any_user");
+		let user = TestAdminUser::new();
 
 		// Act
-		let result = admin
-			.has_change_permission(&user as &(dyn std::any::Any + Send + Sync))
-			.await;
+		let result = admin.has_change_permission(&user as &dyn AdminUser).await;
 
 		// Assert
 		assert_eq!(result, false);
@@ -512,12 +657,10 @@ mod tests {
 	async fn test_default_permissions_deny_delete() {
 		// Arrange
 		let admin = DefaultPermissionAdmin;
-		let user = String::from("any_user");
+		let user = TestAdminUser::new();
 
 		// Act
-		let result = admin
-			.has_delete_permission(&user as &(dyn std::any::Any + Send + Sync))
-			.await;
+		let result = admin.has_delete_permission(&user as &dyn AdminUser).await;
 
 		// Assert
 		assert_eq!(result, false);
@@ -528,21 +671,13 @@ mod tests {
 	async fn test_explicit_override_grants_all_permissions() {
 		// Arrange
 		let admin = AllowAllPermissionAdmin;
-		let user = String::from("admin_user");
+		let user = TestAdminUser::new();
 
 		// Act
-		let view = admin
-			.has_view_permission(&user as &(dyn std::any::Any + Send + Sync))
-			.await;
-		let add = admin
-			.has_add_permission(&user as &(dyn std::any::Any + Send + Sync))
-			.await;
-		let change = admin
-			.has_change_permission(&user as &(dyn std::any::Any + Send + Sync))
-			.await;
-		let delete = admin
-			.has_delete_permission(&user as &(dyn std::any::Any + Send + Sync))
-			.await;
+		let view = admin.has_view_permission(&user as &dyn AdminUser).await;
+		let add = admin.has_add_permission(&user as &dyn AdminUser).await;
+		let change = admin.has_change_permission(&user as &dyn AdminUser).await;
+		let delete = admin.has_delete_permission(&user as &dyn AdminUser).await;
 
 		// Assert
 		assert_eq!(view, true);
@@ -556,21 +691,13 @@ mod tests {
 	async fn test_model_admin_config_inherits_deny_by_default() {
 		// Arrange
 		let admin = ModelAdminConfig::new("User");
-		let user = String::from("any_user");
+		let user = TestAdminUser::new();
 
 		// Act
-		let view = admin
-			.has_view_permission(&user as &(dyn std::any::Any + Send + Sync))
-			.await;
-		let add = admin
-			.has_add_permission(&user as &(dyn std::any::Any + Send + Sync))
-			.await;
-		let change = admin
-			.has_change_permission(&user as &(dyn std::any::Any + Send + Sync))
-			.await;
-		let delete = admin
-			.has_delete_permission(&user as &(dyn std::any::Any + Send + Sync))
-			.await;
+		let view = admin.has_view_permission(&user as &dyn AdminUser).await;
+		let add = admin.has_add_permission(&user as &dyn AdminUser).await;
+		let change = admin.has_change_permission(&user as &dyn AdminUser).await;
+		let delete = admin.has_delete_permission(&user as &dyn AdminUser).await;
 
 		// Assert
 		assert_eq!(view, false);
@@ -652,18 +779,105 @@ mod tests {
 			.list_display(vec!["id", "title"])
 			.build()
 			.unwrap();
-		let user = String::from("any_user");
+		let user = TestAdminUser::new();
 
 		// Act
-		let view = admin
-			.has_view_permission(&user as &(dyn std::any::Any + Send + Sync))
-			.await;
-		let add = admin
-			.has_add_permission(&user as &(dyn std::any::Any + Send + Sync))
-			.await;
+		let view = admin.has_view_permission(&user as &dyn AdminUser).await;
+		let add = admin.has_add_permission(&user as &dyn AdminUser).await;
 
 		// Assert
 		assert_eq!(view, false);
 		assert_eq!(add, false);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_builder_allow_view_grants_view_permission() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("Post")
+			.allow_view(true)
+			.build()
+			.unwrap();
+		let user = TestAdminUser::new();
+
+		// Act
+		let view = admin.has_view_permission(&user as &dyn AdminUser).await;
+		let add = admin.has_add_permission(&user as &dyn AdminUser).await;
+
+		// Assert
+		assert_eq!(view, true);
+		assert_eq!(add, false);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_builder_allow_all_grants_all_permissions() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("Post")
+			.allow_all(true)
+			.build()
+			.unwrap();
+		let user = TestAdminUser::new();
+
+		// Act
+		let view = admin.has_view_permission(&user as &dyn AdminUser).await;
+		let add = admin.has_add_permission(&user as &dyn AdminUser).await;
+		let change = admin.has_change_permission(&user as &dyn AdminUser).await;
+		let delete = admin.has_delete_permission(&user as &dyn AdminUser).await;
+
+		// Assert
+		assert_eq!(view, true);
+		assert_eq!(add, true);
+		assert_eq!(change, true);
+		assert_eq!(delete, true);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_builder_allow_all_false_denies_all() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("Post")
+			.allow_all(false)
+			.build()
+			.unwrap();
+		let user = TestAdminUser::new();
+
+		// Act
+		let view = admin.has_view_permission(&user as &dyn AdminUser).await;
+		let add = admin.has_add_permission(&user as &dyn AdminUser).await;
+
+		// Assert
+		assert_eq!(view, false);
+		assert_eq!(add, false);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_builder_individual_permissions() {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("Post")
+			.allow_view(true)
+			.allow_add(true)
+			.allow_change(false)
+			.allow_delete(false)
+			.build()
+			.unwrap();
+		let user = TestAdminUser::new();
+
+		// Act
+		let view = admin.has_view_permission(&user as &dyn AdminUser).await;
+		let add = admin.has_add_permission(&user as &dyn AdminUser).await;
+		let change = admin.has_change_permission(&user as &dyn AdminUser).await;
+		let delete = admin.has_delete_permission(&user as &dyn AdminUser).await;
+
+		// Assert
+		assert_eq!(view, true);
+		assert_eq!(add, true);
+		assert_eq!(change, false);
+		assert_eq!(delete, false);
 	}
 }

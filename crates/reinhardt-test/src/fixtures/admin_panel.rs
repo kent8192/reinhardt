@@ -505,6 +505,70 @@ mod tests {
 		assert_eq!(config.list_display(), vec!["id", "name", "created_at"]);
 	}
 
+	#[rstest]
+	#[tokio::test]
+	async fn test_model_admin_config_table_name(#[future] model_admin_config: ModelAdminConfig) {
+		// Arrange
+		let config = model_admin_config.await;
+
+		// Act
+		let table_name = config.table_name();
+
+		// Assert
+		assert_eq!(table_name, "test_models");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_model_admin_config_search_fields(#[future] model_admin_config: ModelAdminConfig) {
+		// Arrange
+		let config = model_admin_config.await;
+
+		// Act
+		let search_fields = config.search_fields();
+
+		// Assert
+		assert!(
+			search_fields.contains(&"name"),
+			"search_fields should contain 'name'"
+		);
+		assert!(
+			search_fields.contains(&"description"),
+			"search_fields should contain 'description'"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_model_admin_config_list_filter(#[future] model_admin_config: ModelAdminConfig) {
+		// Arrange
+		let config = model_admin_config.await;
+
+		// Act
+		let list_filter = config.list_filter();
+
+		// Assert
+		assert!(
+			list_filter.contains(&"status"),
+			"list_filter should contain 'status'"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_model_admin_config_list_display_count(
+		#[future] model_admin_config: ModelAdminConfig,
+	) {
+		// Arrange
+		let config = model_admin_config.await;
+
+		// Act
+		let list_display = config.list_display();
+
+		// Assert
+		assert_eq!(list_display.len(), 3, "list_display should have 3 items");
+	}
+
 	// Note: Tests for database fixtures require testcontainers feature
 	// and are typically run in integration tests rather than unit tests
 }

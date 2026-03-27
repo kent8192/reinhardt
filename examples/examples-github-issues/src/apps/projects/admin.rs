@@ -12,7 +12,8 @@ use reinhardt::admin;
 	search_fields = [name, description],
 	ordering = [(created_at, desc)],
 	readonly_fields = [id, created_at],
-	list_per_page = 25
+	list_per_page = 25,
+	permissions = allow_all,
 )]
 pub struct ProjectAdmin;
 
@@ -25,6 +26,7 @@ pub struct ProjectAdmin;
 	search_fields = [project_id, user_id],
 	ordering = [(joined_at, desc)],
 	readonly_fields = [id, joined_at],
-	list_per_page = 50
+	list_per_page = 50,
+	permissions = allow_all,
 )]
 pub struct ProjectMemberAdmin;

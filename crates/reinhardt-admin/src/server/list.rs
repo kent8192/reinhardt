@@ -105,7 +105,7 @@ pub async fn get_list(
 	// Get model admin and check permission
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	if !model_admin
-		.has_view_permission(&user as &(dyn std::any::Any + Send + Sync))
+		.has_view_permission(&user as &dyn crate::core::AdminUser)
 		.await
 	{
 		return Err(ServerFnError::server(403, "Permission denied"));

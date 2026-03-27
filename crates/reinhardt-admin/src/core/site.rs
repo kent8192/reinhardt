@@ -637,4 +637,24 @@ mod tests {
 			err
 		);
 	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_admin_site_inject_error_hint_mentions_routes_with_di() {
+		// Arrange
+		let singleton = Arc::new(SingletonScope::new());
+		let ctx = reinhardt_di::InjectionContext::builder(singleton).build();
+
+		// Act
+		let result = AdminSite::inject(&ctx).await;
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.err().unwrap();
+		assert!(
+			err.to_string().contains("admin_routes_with_di"),
+			"Error hint should mention admin_routes_with_di, got: {}",
+			err
+		);
+	}
 }

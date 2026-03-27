@@ -1497,6 +1497,12 @@ impl RunServerCommand {
 		// Create DI context for dependency injection
 		let singleton_scope = std::sync::Arc::new(reinhardt_di::SingletonScope::new());
 
+		// Apply deferred DI registrations from route configuration (e.g., AdminSite from admin_routes_with_di_deferred)
+		if let Some(registrations) = reinhardt_urls::routers::take_di_registrations() {
+			ctx.verbose("Applying deferred DI registrations from route configuration");
+			registrations.apply_to(&singleton_scope);
+		}
+
 		// Register DatabaseConnection as singleton when database feature is enabled
 		#[cfg(feature = "reinhardt-db")]
 		{

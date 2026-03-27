@@ -248,6 +248,7 @@ pub mod injectable;
 pub mod injected;
 pub mod override_registry;
 pub mod provider;
+pub mod registration;
 pub mod registry;
 pub mod scope;
 
@@ -268,6 +269,7 @@ pub use injected::{
 	DependencyScope as InjectedScope, Injected, InjectionMetadata, OptionalInjected,
 };
 pub use provider::{Provider, ProviderFn};
+pub use registration::DiRegistrationList;
 pub use registry::{
 	DependencyRegistration, DependencyRegistry, DependencyScope, FactoryTrait, global_registry,
 };

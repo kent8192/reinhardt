@@ -333,6 +333,7 @@ impl AdminSite {
 		since = "0.1.0-rc.10",
 		note = "Use admin_routes_with_di(site, &singleton_scope) instead"
 	)]
+	#[allow(deprecated)]
 	pub fn get_urls(self, _db: DatabaseConnection) -> ServerRouter {
 		let url_prefix = self.url_prefix.clone();
 		let singleton = SingletonScope::new();

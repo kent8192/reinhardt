@@ -438,11 +438,7 @@ mod tests {
 
 		// Act
 		let result = auth
-			.require_model_permission(
-				&admin,
-				&user_obj as &dyn crate::core::AdminUser,
-				requested,
-			)
+			.require_model_permission(&admin, &user_obj as &dyn crate::core::AdminUser, requested)
 			.await;
 
 		// Assert

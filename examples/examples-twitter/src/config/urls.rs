@@ -9,7 +9,7 @@
 
 use reinhardt::UnifiedRouter;
 #[cfg(not(target_arch = "wasm32"))]
-use reinhardt::admin::admin_routes_with_di;
+use reinhardt::admin::{admin_routes_with_di, admin_static_routes};
 #[cfg(server)]
 use reinhardt::routes;
 
@@ -67,7 +67,7 @@ pub fn routes() -> UnifiedRouter {
 		.mount_unified("/", profile::urls::routes())
 		.mount_unified("/", relationship::urls::routes())
 		.mount_unified("/", dm::urls::routes());
-	// Mount admin panel routes with auto-DI registration (server-only)
+	// Mount admin panel routes and static assets with auto-DI registration (server-only)
 	#[cfg(not(target_arch = "wasm32"))]
 	let router = {
 		#[cfg(server)]
@@ -77,7 +77,9 @@ pub fn routes() -> UnifiedRouter {
 			std::sync::Arc::new(reinhardt::admin::AdminSite::new("Twitter Admin")),
 			&singleton_scope,
 		);
-		router.mount("/admin/", admin_router)
+		router
+			.mount("/admin/", admin_router)
+			.mount("/static/admin/", admin_static_routes())
 	};
 	// Apply middleware stack (server-only)
 	#[cfg(server)]

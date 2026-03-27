@@ -100,6 +100,12 @@ echo "::notice::Workspace packages: $PKG_COUNT"
 
 declare -A AFFECTED_MAP
 while IFS= read -r file; do
+  # Skip files in workspace-excluded directories (tested by separate workflows)
+  case "$file" in
+    examples/*)
+      echo "::notice::File $file is in excluded 'examples/' directory, skipping"
+      continue ;;
+  esac
   ABS_FILE="$WORKSPACE_ROOT/$file"
   # Map file to the most specific (longest path match) workspace package.
   # Bind the package object to $pkg so that .manifest_path resolves correctly

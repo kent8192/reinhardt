@@ -7,7 +7,7 @@
 use std::env;
 use std::sync::Arc;
 
-use reinhardt::admin::{AdminSite, admin_routes_with_di_deferred, admin_static_routes};
+use reinhardt::admin::{admin_routes_with_di_deferred, admin_static_routes};
 use reinhardt::graphql::{
 	MergedObject, MergedSubscription, Schema,
 	http::{GraphQLPlaygroundConfig, playground_source},

@@ -741,3 +741,159 @@ async fn wait_for_server_ready(addr: SocketAddr) -> Result<(), std::io::Error> {
 		),
 	))
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::*;
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_basic_handler_returns_ok() {
+		// Arrange
+		let handler = BasicHandler;
+		let request = Request::builder()
+			.method(hyper::Method::GET)
+			.uri("/")
+			.build()
+			.expect("Failed to build request");
+
+		// Act
+		let response = handler.handle(request).await;
+
+		// Assert
+		assert!(response.is_ok(), "Expected Ok response from BasicHandler");
+		let resp = response.unwrap();
+		assert_eq!(resp.status, hyper::StatusCode::OK);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_test_server_guard_starts() {
+		// Arrange
+		let router = Router::new();
+
+		// Act
+		let server = test_server_guard(router).await;
+
+		// Assert
+		assert!(
+			server.url.starts_with("http://127.0.0.1:"),
+			"Expected URL to start with 'http://127.0.0.1:', got: {}",
+			server.url
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_test_server_builder_default() {
+		// Arrange
+		let handler: Arc<dyn Handler> = Arc::new(BasicHandler);
+
+		// Act
+		let result = TestServer::builder().handler(handler).build().await;
+
+		// Assert
+		assert!(
+			result.is_ok(),
+			"Expected TestServer::builder().handler().build() to succeed"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_test_server_url_format() {
+		// Arrange
+		let handler: Arc<dyn Handler> = Arc::new(BasicHandler);
+
+		// Act
+		let server = TestServer::builder()
+			.handler(handler)
+			.build()
+			.await
+			.expect("Failed to build TestServer");
+
+		// Assert
+		assert!(
+			server.url.starts_with("http://127.0.0.1:"),
+			"Expected URL format 'http://127.0.0.1:<port>', got: {}",
+			server.url
+		);
+		assert!(
+			server.addr.port() > 0,
+			"Expected non-zero port, got: {}",
+			server.addr.port()
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_test_server_responds_to_request() {
+		// Arrange
+		let handler: Arc<dyn Handler> = Arc::new(BasicHandler);
+		let server = TestServer::builder()
+			.handler(handler)
+			.build()
+			.await
+			.expect("Failed to build TestServer");
+		let client = reqwest::Client::new();
+
+		// Act
+		let response = client.get(&server.url).send().await;
+
+		// Assert
+		assert!(response.is_ok(), "Expected GET request to succeed");
+		let resp = response.unwrap();
+		assert_eq!(resp.status(), reqwest::StatusCode::OK);
+	}
+
+	#[rstest]
+	fn test_http_client_fixture() {
+		// Arrange & Act
+		let client = http_client();
+
+		// Assert
+		// Verify client was created successfully by making a type assertion
+		let _: &reqwest::Client = &client;
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_test_server_shutdown_timeout() {
+		// Arrange
+		let handler: Arc<dyn Handler> = Arc::new(BasicHandler);
+		let custom_timeout = Duration::from_secs(10);
+
+		// Act
+		let result = TestServer::builder()
+			.handler(handler)
+			.shutdown_timeout(custom_timeout)
+			.build()
+			.await;
+
+		// Assert
+		assert!(
+			result.is_ok(),
+			"Expected TestServer with custom shutdown timeout to build successfully"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_wait_for_server_ready() {
+		// Arrange
+		let listener = TcpListener::bind("127.0.0.1:0")
+			.await
+			.expect("Failed to bind listener");
+		let addr = listener.local_addr().expect("Failed to get local addr");
+
+		// Act
+		let result = wait_for_server_ready(addr).await;
+
+		// Assert
+		assert!(
+			result.is_ok(),
+			"Expected wait_for_server_ready to succeed for a bound address"
+		);
+	}
+}

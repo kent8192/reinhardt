@@ -1137,7 +1137,8 @@ impl AdminDatabase {
 /// - The "count" key is missing (lists available keys for debugging)
 /// - The "count" value is not an integer
 /// - The data format is not a JSON object
-fn extract_count_from_row(data: &serde_json::Value) -> AdminResult<u64> {
+#[doc(hidden)]
+pub fn extract_count_from_row(data: &serde_json::Value) -> AdminResult<u64> {
 	if let Some(count_value) = data.get("count") {
 		return count_value.as_i64().map(|v| v as u64).ok_or_else(|| {
 			AdminError::DatabaseError(format!(
@@ -2565,5 +2566,241 @@ mod tests {
 			"SQL injection attempt should be safely quoted as a string literal, got: {}",
 			query
 		);
+	}
+
+	// ==================== Bug #2943: Composite filter WHERE TRUE tests ====================
+
+	#[rstest]
+	fn test_and_with_all_unsupported_returns_none() {
+		// Arrange: Contains with Integer is unsupported (only String is handled)
+		let unsupported1 = FilterCondition::Single(Filter::new(
+			"name",
+			FilterOperator::Contains,
+			FilterValue::Integer(42),
+		));
+		let unsupported2 = FilterCondition::Single(Filter::new(
+			"email",
+			FilterOperator::StartsWith,
+			FilterValue::Integer(99),
+		));
+		let condition = FilterCondition::And(vec![unsupported1, unsupported2]);
+
+		// Act
+		let result = build_composite_filter_condition(&condition);
+
+		// Assert: And with all unsupported sub-conditions returns None
+		// (fixed in #2943: previously returned empty Condition::all() generating WHERE TRUE)
+		assert!(result.is_ok());
+		let cond = result.unwrap();
+		assert!(
+			cond.is_none(),
+			"And with all unsupported sub-conditions should return None"
+		);
+	}
+
+	#[rstest]
+	fn test_or_with_all_unsupported_returns_none() {
+		// Arrange: Contains/StartsWith with Integer are unsupported
+		let unsupported1 = FilterCondition::Single(Filter::new(
+			"name",
+			FilterOperator::Contains,
+			FilterValue::Integer(42),
+		));
+		let unsupported2 = FilterCondition::Single(Filter::new(
+			"email",
+			FilterOperator::StartsWith,
+			FilterValue::Integer(99),
+		));
+		let condition = FilterCondition::Or(vec![unsupported1, unsupported2]);
+
+		// Act
+		let result = build_composite_filter_condition(&condition);
+
+		// Assert: Or with all unsupported sub-conditions returns None
+		// (fixed in #2943: previously returned empty Condition::any() generating WHERE FALSE)
+		assert!(result.is_ok());
+		let cond = result.unwrap();
+		assert!(
+			cond.is_none(),
+			"Or with all unsupported sub-conditions should return None"
+		);
+	}
+
+	#[rstest]
+	fn test_and_with_mix_supported_unsupported_keeps_supported() {
+		// Arrange: One supported (Eq + String), one unsupported (Contains + Integer)
+		let supported = FilterCondition::Single(Filter::new(
+			"name",
+			FilterOperator::Eq,
+			FilterValue::String("Alice".to_string()),
+		));
+		let unsupported = FilterCondition::Single(Filter::new(
+			"email",
+			FilterOperator::Contains,
+			FilterValue::Integer(42),
+		));
+		let condition = FilterCondition::And(vec![supported, unsupported]);
+
+		// Act
+		let result = build_composite_filter_condition(&condition);
+
+		// Assert: Should keep the supported filter condition
+		assert!(result.is_ok());
+		let cond = result.unwrap();
+		assert!(
+			cond.is_some(),
+			"And with mix of supported/unsupported should return Some with supported filters"
+		);
+		// Verify the supported condition is preserved by building SQL
+		let query = Query::select()
+			.from(Alias::new("test"))
+			.column(ColumnRef::Asterisk)
+			.cond_where(cond.unwrap())
+			.to_string(PostgresQueryBuilder);
+		assert!(
+			query.contains("\"name\""),
+			"SQL should contain the supported filter field 'name': {}",
+			query
+		);
+	}
+
+	#[rstest]
+	fn test_or_with_one_supported_one_unsupported() {
+		// Arrange
+		let supported = FilterCondition::Single(Filter::new(
+			"status",
+			FilterOperator::Eq,
+			FilterValue::String("active".to_string()),
+		));
+		let unsupported = FilterCondition::Single(Filter::new(
+			"count",
+			FilterOperator::Contains,
+			FilterValue::Integer(42),
+		));
+		let condition = FilterCondition::Or(vec![supported, unsupported]);
+
+		// Act
+		let result = build_composite_filter_condition(&condition);
+
+		// Assert
+		assert!(result.is_ok());
+		let cond = result.unwrap();
+		assert!(
+			cond.is_some(),
+			"Or with one supported condition should return Some"
+		);
+		let query = Query::select()
+			.from(Alias::new("test"))
+			.column(ColumnRef::Asterisk)
+			.cond_where(cond.unwrap())
+			.to_string(PostgresQueryBuilder);
+		assert!(
+			query.contains("\"status\""),
+			"SQL should contain the supported filter field 'status': {}",
+			query
+		);
+	}
+
+	// ==================== Bug #2945: extract_count_from_row tests ====================
+
+	#[rstest]
+	fn test_extract_count_with_count_key() {
+		// Arrange
+		let data = serde_json::json!({"count": 42});
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert
+		assert!(result.is_ok());
+		assert_eq!(result.unwrap(), 42);
+	}
+
+	#[rstest]
+	fn test_extract_count_without_count_key_returns_error() {
+		// Arrange: Single non-"count" key
+		let data = serde_json::json!({"total": 42});
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert: Missing "count" key now returns error with available keys
+		// (fixed in #2945: previously fell back to first value from iteration order)
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(
+			err.to_string().contains("missing 'count' key"),
+			"Error should mention missing 'count' key, got: {}",
+			err
+		);
+	}
+
+	#[rstest]
+	fn test_extract_count_with_multiple_keys_no_count_returns_error() {
+		// Arrange: Multiple keys, no "count" key
+		let data = serde_json::json!({"total": 42, "other": 99});
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert: Missing "count" key returns error listing available keys
+		// (fixed in #2945: previously used fragile obj.values().next() fallback)
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(
+			err.to_string().contains("available keys"),
+			"Error should list available keys, got: {}",
+			err
+		);
+	}
+
+	#[rstest]
+	fn test_extract_count_non_integer_returns_error() {
+		// Arrange
+		let data = serde_json::json!({"count": "not_a_number"});
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(matches!(err, AdminError::DatabaseError(_)));
+	}
+
+	#[rstest]
+	fn test_extract_count_null_returns_error() {
+		// Arrange
+		let data = serde_json::json!({"count": null});
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_extract_count_empty_object_returns_error() {
+		// Arrange
+		let data = serde_json::json!({});
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_extract_count_non_object_returns_error() {
+		// Arrange: Array instead of object
+		let data = serde_json::json!([1, 2, 3]);
+
+		// Act
+		let result = extract_count_from_row(&data);
+
+		// Assert
+		assert!(result.is_err());
 	}
 }

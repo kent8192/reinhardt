@@ -4,6 +4,7 @@
 
 mod admin {
 	mod admin_database_tests;
+	mod admin_handler_logic_tests;
 	mod server_fn_create_tests;
 	mod server_fn_delete_tests;
 	mod server_fn_detail_tests;

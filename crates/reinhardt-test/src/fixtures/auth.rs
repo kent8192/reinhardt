@@ -338,3 +338,280 @@ pub fn staff_user() -> TestUser {
 		is_superuser: false,
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+	use std::collections::HashSet;
+
+	// =========================================================================
+	// Normal: test_user fixture
+	// =========================================================================
+
+	#[rstest]
+	fn test_test_user_default_fields(test_user: TestUser) {
+		// Arrange
+		// (fixture provides the test user)
+
+		// Act
+		let user = test_user;
+
+		// Assert
+		assert_eq!(user.username, "testuser");
+		assert_eq!(user.email, "test@example.com");
+		assert!(user.is_active);
+		assert!(!user.is_admin);
+		assert!(!user.is_staff);
+		assert!(!user.is_superuser);
+	}
+
+	#[rstest]
+	fn test_test_user_has_valid_uuid(test_user: TestUser) {
+		// Arrange
+		let user = test_user;
+
+		// Act
+		let id = user.id;
+
+		// Assert
+		assert!(!id.is_nil(), "test_user id should be a non-nil UUID");
+	}
+
+	// =========================================================================
+	// Normal: admin_user fixture
+	// =========================================================================
+
+	#[rstest]
+	fn test_admin_user_all_privileges(admin_user: TestUser) {
+		// Arrange
+		let user = admin_user;
+
+		// Act & Assert
+		assert!(user.is_admin);
+		assert!(user.is_staff);
+		assert!(user.is_superuser);
+		assert!(user.is_active);
+	}
+
+	#[rstest]
+	fn test_admin_user_credentials(admin_user: TestUser) {
+		// Arrange
+		let user = admin_user;
+
+		// Act & Assert
+		assert_eq!(user.username, "admin");
+		assert_eq!(user.email, "admin@example.com");
+	}
+
+	// =========================================================================
+	// Normal: inactive_user fixture
+	// =========================================================================
+
+	#[rstest]
+	fn test_inactive_user_is_not_active(inactive_user: TestUser) {
+		// Arrange
+		let user = inactive_user;
+
+		// Act & Assert
+		assert!(!user.is_active);
+		assert!(!user.is_admin);
+		assert!(!user.is_staff);
+		assert!(!user.is_superuser);
+	}
+
+	#[rstest]
+	fn test_inactive_user_credentials(inactive_user: TestUser) {
+		// Arrange
+		let user = inactive_user;
+
+		// Act & Assert
+		assert_eq!(user.username, "inactive");
+	}
+
+	// =========================================================================
+	// Normal: staff_user fixture
+	// =========================================================================
+
+	#[rstest]
+	fn test_staff_user_is_staff_not_admin(staff_user: TestUser) {
+		// Arrange
+		let user = staff_user;
+
+		// Act & Assert
+		assert!(user.is_staff);
+		assert!(!user.is_admin);
+		assert!(!user.is_superuser);
+	}
+
+	#[rstest]
+	fn test_staff_user_is_active(staff_user: TestUser) {
+		// Arrange
+		let user = staff_user;
+
+		// Act & Assert
+		assert!(user.is_active);
+	}
+
+	// =========================================================================
+	// Normal: test_users fixture
+	// =========================================================================
+
+	#[rstest]
+	fn test_test_users_count(test_users: Vec<TestUser>) {
+		// Arrange
+		let users = test_users;
+
+		// Act
+		let count = users.len();
+
+		// Assert
+		assert_eq!(count, 5);
+	}
+
+	#[rstest]
+	fn test_test_users_contains_inactive(test_users: Vec<TestUser>) {
+		// Arrange
+		let users = test_users;
+
+		// Act
+		let inactive_count = users.iter().filter(|u| !u.is_active).count();
+
+		// Assert
+		assert_eq!(inactive_count, 1, "exactly one user should be inactive");
+	}
+
+	#[rstest]
+	fn test_test_users_contains_staff(test_users: Vec<TestUser>) {
+		// Arrange
+		let users = test_users;
+
+		// Act
+		let staff_non_admin_count = users.iter().filter(|u| u.is_staff && !u.is_admin).count();
+
+		// Assert
+		assert_eq!(
+			staff_non_admin_count, 1,
+			"exactly one user should be staff but not admin"
+		);
+	}
+
+	#[rstest]
+	fn test_test_users_contains_superuser(test_users: Vec<TestUser>) {
+		// Arrange
+		let users = test_users;
+
+		// Act
+		let superuser_count = users.iter().filter(|u| u.is_superuser).count();
+
+		// Assert
+		assert_eq!(superuser_count, 1, "exactly one user should be a superuser");
+	}
+
+	// =========================================================================
+	// Normal: auth component construction fixtures
+	// =========================================================================
+
+	#[rstest]
+	fn test_jwt_auth_construction(jwt_auth: JwtAuth) {
+		// Arrange & Act
+		let _auth = jwt_auth;
+
+		// Assert
+		// Construction succeeded without panic
+	}
+
+	#[rstest]
+	fn test_argon2_hasher_construction(argon2_hasher: Argon2Hasher) {
+		// Arrange & Act
+		let _hasher = argon2_hasher;
+
+		// Assert
+		// Argon2Hasher is a unit struct; successful construction is the assertion
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_in_memory_token_storage_empty(in_memory_token_storage: InMemoryTokenStorage) {
+		// Arrange & Act
+		let storage = in_memory_token_storage;
+
+		// Assert
+		assert!(storage.is_empty().await);
+	}
+
+	#[rstest]
+	fn test_mfa_authentication_construction(mfa_authentication: MfaManager) {
+		// Arrange & Act
+		let _mfa = mfa_authentication;
+
+		// Assert
+		// Construction succeeded without panic
+	}
+
+	// =========================================================================
+	// Edge: uniqueness and trait tests
+	// =========================================================================
+
+	#[rstest]
+	fn test_test_users_unique_ids(test_users: Vec<TestUser>) {
+		// Arrange
+		let users = test_users;
+
+		// Act
+		let id_set: HashSet<Uuid> = users.iter().map(|u| u.id).collect();
+
+		// Assert
+		assert_eq!(id_set.len(), 5, "all 5 users should have distinct UUIDs");
+	}
+
+	#[rstest]
+	fn test_test_users_unique_usernames(test_users: Vec<TestUser>) {
+		// Arrange
+		let users = test_users;
+
+		// Act
+		let name_set: HashSet<&str> = users.iter().map(|u| u.username.as_str()).collect();
+
+		// Assert
+		assert_eq!(
+			name_set.len(),
+			5,
+			"all 5 users should have distinct usernames"
+		);
+	}
+
+	#[rstest]
+	fn test_test_user_clone(test_user: TestUser) {
+		// Arrange
+		let original = test_user;
+
+		// Act
+		let cloned = original.clone();
+
+		// Assert
+		assert_eq!(cloned.id, original.id);
+		assert_eq!(cloned.username, original.username);
+		assert_eq!(cloned.email, original.email);
+		assert_eq!(cloned.is_active, original.is_active);
+		assert_eq!(cloned.is_admin, original.is_admin);
+		assert_eq!(cloned.is_staff, original.is_staff);
+		assert_eq!(cloned.is_superuser, original.is_superuser);
+	}
+
+	#[rstest]
+	fn test_test_user_debug(test_user: TestUser) {
+		// Arrange
+		let user = test_user;
+
+		// Act
+		let debug_str = format!("{:?}", user);
+
+		// Assert
+		assert!(!debug_str.is_empty(), "Debug output should be non-empty");
+		assert!(
+			debug_str.contains("TestUser"),
+			"Debug output should contain the struct name"
+		);
+	}
+}

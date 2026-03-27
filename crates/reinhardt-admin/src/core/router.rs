@@ -168,6 +168,13 @@ pub fn admin_routes() -> ServerRouter {
 /// `AdminDatabase` is **not** registered here; it is lazily constructed
 /// from `DatabaseConnection` at first request via its `Injectable` impl.
 ///
+/// # Deprecation
+///
+/// This function registers `AdminSite` in a caller-provided scope, which
+/// may not survive past the `routes()` function boundary. Use
+/// [`admin_routes_with_di_deferred`] instead, which captures registrations
+/// for later application to the server's singleton scope.
+///
 /// # Examples
 ///
 /// ```rust,no_run
@@ -182,10 +189,51 @@ pub fn admin_routes() -> ServerRouter {
 /// let di_ctx = Arc::new(InjectionContext::builder(singleton).build());
 /// // Mount router and attach DI context to UnifiedRouter
 /// ```
+#[deprecated(
+	since = "0.1.0-rc.10",
+	note = "Use admin_routes_with_di_deferred() which correctly propagates DI registrations to the server's singleton scope"
+)]
 pub fn admin_routes_with_di(site: Arc<AdminSite>, singleton: &SingletonScope) -> ServerRouter {
 	// Auto-register AdminSite in singleton scope for DI resolution
 	singleton.set_arc(site);
 	build_admin_router()
+}
+
+/// Admin router builder with deferred DI registration
+///
+/// Builds a `ServerRouter` from an `AdminSite` with all CRUD endpoints,
+/// and returns a [`DiRegistrationList`] containing the `AdminSite`
+/// registration. The list should be attached to the [`UnifiedRouter`] via
+/// [`with_di_registrations`], which ensures it reaches the server's
+/// singleton scope during startup.
+///
+/// `AdminDatabase` is **not** registered here; it is lazily constructed
+/// from `DatabaseConnection` at first request via its `Injectable` impl.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use reinhardt_admin::core::{AdminSite, admin_routes_with_di_deferred};
+/// use reinhardt_urls::routers::UnifiedRouter;
+/// use std::sync::Arc;
+///
+/// let site = Arc::new(AdminSite::new("My Admin"));
+/// let (admin_router, admin_di) = admin_routes_with_di_deferred(site);
+///
+/// let router = UnifiedRouter::new()
+///     .mount("/admin/", admin_router)
+///     .with_di_registrations(admin_di);
+/// ```
+///
+/// [`DiRegistrationList`]: reinhardt_di::DiRegistrationList
+/// [`UnifiedRouter`]: reinhardt_urls::routers::UnifiedRouter
+/// [`with_di_registrations`]: reinhardt_urls::routers::UnifiedRouter::with_di_registrations
+pub fn admin_routes_with_di_deferred(
+	site: Arc<AdminSite>,
+) -> (ServerRouter, reinhardt_di::DiRegistrationList) {
+	let mut registrations = reinhardt_di::DiRegistrationList::new();
+	registrations.register_arc(site);
+	(build_admin_router(), registrations)
 }
 
 /// Admin router builder (for backward compatibility)
@@ -280,6 +328,7 @@ impl AdminRouter {
 		since = "0.1.0-rc.10",
 		note = "Use admin_routes_with_di(site, &singleton_scope) instead"
 	)]
+	#[allow(deprecated)]
 	pub fn routes(&self) -> ServerRouter {
 		// Create a temporary singleton scope for backward compat
 		let singleton = SingletonScope::new();
@@ -290,6 +339,11 @@ impl AdminRouter {
 	///
 	/// Registers the `AdminSite` in the provided singleton scope
 	/// and returns a `ServerRouter` with all admin endpoints.
+	///
+	/// # Deprecation
+	///
+	/// Use `admin_routes_with_di_deferred()` which correctly propagates
+	/// DI registrations to the server's singleton scope.
 	///
 	/// # Examples
 	///
@@ -303,6 +357,11 @@ impl AdminRouter {
 	/// let router = AdminRouter::from_arc(site)
 	///     .build_with_di(&singleton);
 	/// ```
+	#[deprecated(
+		since = "0.1.0-rc.10",
+		note = "Use admin_routes_with_di_deferred() which correctly propagates DI registrations to the server's singleton scope"
+	)]
+	#[allow(deprecated)]
 	pub fn build_with_di(self, singleton: &SingletonScope) -> ServerRouter {
 		admin_routes_with_di(self.site, singleton)
 	}
@@ -316,6 +375,7 @@ impl AdminRouter {
 		since = "0.1.0-rc.10",
 		note = "Use build_with_di(&singleton_scope) or admin_routes_with_di(site, &singleton_scope) instead"
 	)]
+	#[allow(deprecated)]
 	pub fn build(self) -> ServerRouter {
 		let singleton = SingletonScope::new();
 		admin_routes_with_di(self.site, &singleton)
@@ -342,6 +402,7 @@ mod tests {
 	}
 
 	#[rstest]
+	#[allow(deprecated)]
 	fn test_admin_routes_with_di_auto_registers_site_in_singleton() {
 		// Arrange
 		let site = Arc::new(AdminSite::new("Auto-Registered Admin"));
@@ -357,6 +418,39 @@ mod tests {
 			"AdminSite should be auto-registered in singleton scope"
 		);
 		assert_eq!(registered.unwrap().name(), "Auto-Registered Admin");
+	}
+
+	#[rstest]
+	fn test_admin_routes_with_di_deferred_returns_router_and_registrations() {
+		// Arrange
+		let site = Arc::new(AdminSite::new("Deferred Admin"));
+
+		// Act
+		let (router, registrations) = admin_routes_with_di_deferred(site);
+
+		// Assert - router is valid
+		assert_eq!(router.namespace(), Some("admin"));
+		// Assert - registrations are non-empty
+		assert!(!registrations.is_empty());
+	}
+
+	#[rstest]
+	fn test_admin_routes_with_di_deferred_applies_site_to_scope() {
+		// Arrange
+		let site = Arc::new(AdminSite::new("Applied Admin"));
+		let scope = SingletonScope::new();
+
+		// Act
+		let (_router, registrations) = admin_routes_with_di_deferred(site);
+		registrations.apply_to(&scope);
+
+		// Assert - AdminSite should be registered after apply_to
+		let registered = scope.get::<AdminSite>();
+		assert!(
+			registered.is_some(),
+			"AdminSite should be registered after apply_to"
+		);
+		assert_eq!(registered.unwrap().name(), "Applied Admin");
 	}
 
 	#[cfg(not(target_arch = "wasm32"))]

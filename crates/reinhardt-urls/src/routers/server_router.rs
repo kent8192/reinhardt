@@ -39,7 +39,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};
 
 pub use self::global::{
-	clear_router, get_router, is_router_registered, register_router, register_router_arc,
+	clear_router, get_router, is_router_registered, register_di_registrations, register_router,
+	register_router_arc, take_di_registrations,
 };
 pub use self::handlers::FunctionHandler;
 pub use self::matching::{extract_params, path_matches};

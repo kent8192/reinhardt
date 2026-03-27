@@ -3,13 +3,13 @@
 //! This project uses reinhardt-pages with Server Functions for API communication.
 //! Each app defines unified routes (server + client) in `urls.rs`, which are mounted here.
 //!
-//! Admin panel routes are integrated via `admin_routes_with_di()`, which auto-registers
-//! `AdminSite` in the DI singleton scope. `AdminDatabase` is lazily constructed
-//! from `DatabaseConnection` at first request.
+//! Admin panel routes are integrated via `admin_routes_with_di_deferred()`, which
+//! captures `AdminSite` DI registration for later application by the server.
+//! `AdminDatabase` is lazily constructed from `DatabaseConnection` at first request.
 
 use reinhardt::UnifiedRouter;
 #[cfg(not(target_arch = "wasm32"))]
-use reinhardt::admin::admin_routes_with_di;
+use reinhardt::admin::admin_routes_with_di_deferred;
 #[cfg(server)]
 use reinhardt::routes;
 
@@ -31,10 +31,11 @@ use reinhardt::LoggingMiddleware;
 /// - Server Functions (`#[server_fn]`) for API communication
 /// - Client routing for SPA navigation
 /// - Production-ready middleware stack for security and performance
-/// - Admin panel mounted at `/admin/` via `admin_routes_with_di()`
+/// - Admin panel mounted at `/admin/` via `admin_routes_with_di_deferred()`
 ///
 /// Admin DI setup:
-/// - `AdminSite` is auto-registered in the singleton scope by `admin_routes_with_di()`
+/// - `AdminSite` registration is deferred via `DiRegistrationList` and
+///   applied to the server's singleton scope during startup
 /// - `AdminDatabase` is lazily constructed from `DatabaseConnection` at first request
 ///
 /// Middleware stack (in execution order):
@@ -56,10 +57,6 @@ pub fn routes() -> UnifiedRouter {
 		std::sync::Arc::new(site)
 	};
 
-	// Create singleton scope for DI
-	#[cfg(not(target_arch = "wasm32"))]
-	let singleton_scope = reinhardt::di::SingletonScope::new();
-
 	let router = UnifiedRouter::new()
 		// Mount each app's unified routes
 		.mount_unified("/", auth::urls::routes())
@@ -67,17 +64,18 @@ pub fn routes() -> UnifiedRouter {
 		.mount_unified("/", profile::urls::routes())
 		.mount_unified("/", relationship::urls::routes())
 		.mount_unified("/", dm::urls::routes());
-	// Mount admin panel routes with auto-DI registration (server-only)
+	// Mount admin panel routes with deferred DI registration (server-only)
 	#[cfg(not(target_arch = "wasm32"))]
 	let router = {
 		#[cfg(server)]
-		let admin_router = admin_routes_with_di(admin_site, &singleton_scope);
+		let (admin_router, admin_di) = admin_routes_with_di_deferred(admin_site);
 		#[cfg(not(server))]
-		let admin_router = admin_routes_with_di(
-			std::sync::Arc::new(reinhardt::admin::AdminSite::new("Twitter Admin")),
-			&singleton_scope,
-		);
-		router.mount("/admin/", admin_router)
+		let (admin_router, admin_di) = admin_routes_with_di_deferred(std::sync::Arc::new(
+			reinhardt::admin::AdminSite::new("Twitter Admin"),
+		));
+		router
+			.mount("/admin/", admin_router)
+			.with_di_registrations(admin_di)
 	};
 	// Apply middleware stack (server-only)
 	#[cfg(server)]

@@ -2,8 +2,9 @@
 //!
 //! Provides import operations for admin models from various formats (JSON, CSV, TSV).
 
+use super::user::AdminDefaultUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, ImportFormat, ImportResponse};
-use reinhardt_auth::{AuthUser, DefaultUser};
+use reinhardt_auth::AuthUser;
 use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
@@ -51,7 +52,7 @@ pub async fn import_data(
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
-	#[inject] AuthUser(user): AuthUser<DefaultUser>,
+	#[inject] AuthUser(user): AuthUser<AdminDefaultUser>,
 ) -> Result<ImportResponse, ServerFnError> {
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);

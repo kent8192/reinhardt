@@ -56,6 +56,7 @@ pub mod limits;
 pub mod list;
 #[allow(missing_docs)]
 pub mod update;
+pub(crate) mod user;
 
 pub mod audit;
 pub mod security;

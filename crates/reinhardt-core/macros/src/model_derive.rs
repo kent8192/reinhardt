@@ -437,6 +437,11 @@ struct FieldConfig {
 	#[cfg(feature = "db-mysql")]
 	zerofill: Option<bool>,
 
+	// Getter/setter generation control
+	/// Skip getter and setter generation for this field.
+	/// Used by `#[user]` macro to avoid conflicts with trait method signatures.
+	skip_getter: bool,
+
 	// Constructor generation control
 	/// Whether to include this field in the new() function arguments
 	/// When true, field is included even if it would normally be auto-generated
@@ -819,6 +824,9 @@ impl FieldConfig {
 						Err(meta
 							.error("array_base_type is only available with db-postgres feature"))
 					}
+				} else if meta.path.is_ident("skip_getter") {
+					config.skip_getter = meta.value()?.parse::<syn::LitBool>()?.value();
+					Ok(())
 				} else {
 					Err(meta.error("unsupported field attribute"))
 				}
@@ -1553,9 +1561,11 @@ fn is_copy_type(ty: &Type) -> bool {
 fn generate_getter_methods(struct_name: &syn::Ident, field_infos: &[FieldInfo]) -> TokenStream {
 	let getter_methods: Vec<_> = field_infos
 		.iter()
-		// Exclude ForeignKey and OneToOne fields (accessor methods are generated separately)
+		// Exclude ForeignKey, OneToOne, and skip_getter fields
 		.filter(|field| {
-			!is_foreign_key_field_type(&field.ty) && !is_one_to_one_field_type(&field.ty)
+			!is_foreign_key_field_type(&field.ty)
+				&& !is_one_to_one_field_type(&field.ty)
+				&& !field.config.skip_getter
 		})
 		.map(|field| {
 			let field_name = &field.name;
@@ -1592,7 +1602,7 @@ fn generate_getter_methods(struct_name: &syn::Ident, field_infos: &[FieldInfo]) 
 fn generate_setter_methods(struct_name: &syn::Ident, field_infos: &[FieldInfo]) -> TokenStream {
 	let setter_methods: Vec<_> = field_infos
 		.iter()
-		.filter(|f| !is_auto_generated_field(f))
+		.filter(|f| !is_auto_generated_field(f) && !f.config.skip_getter)
 		.map(|field| {
 			let field_name = &field.name;
 			let field_type = &field.ty;

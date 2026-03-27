@@ -43,6 +43,8 @@ mod settings_compose;
 mod settings_fragment;
 pub(crate) mod settings_parser;
 mod use_inject;
+mod user_attribute;
+mod user_field_mapping;
 mod validate_derive;
 
 use action::action_impl;
@@ -65,6 +67,7 @@ use routes::{delete_impl, get_impl, patch_impl, post_impl, put_impl};
 use routes_registration::routes_impl;
 use schema::derive_schema_impl;
 use use_inject::use_inject_impl;
+use user_attribute::user_attribute_impl;
 
 /// Decorator for function-based API views
 #[proc_macro_attribute]
@@ -500,6 +503,41 @@ pub fn model(args: TokenStream, input: TokenStream) -> TokenStream {
 	let input = parse_macro_input!(input as ItemStruct);
 
 	model_attribute_impl(args.into(), input)
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
+}
+
+/// Attribute macro for generating auth trait implementations.
+///
+/// Generates `BaseUser`, `FullUser` (when `full = true`), `PermissionsMixin`
+/// (when `user_permissions` and `groups` fields exist), and `AuthIdentity`
+/// trait implementations based on struct fields.
+///
+/// # Arguments
+///
+/// - `hasher`: Type implementing `PasswordHasher + Default` (required)
+/// - `username_field`: Name of the field used as username (required)
+/// - `full`: Generate `FullUser` impl (default: `false`)
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// #[user(hasher = Argon2Hasher, username_field = "email", full = true)]
+/// #[derive(Serialize, Deserialize)]
+/// pub struct MyUser {
+///     pub id: Uuid,
+///     pub email: String,
+///     pub password_hash: Option<String>,
+///     pub last_login: Option<DateTime<Utc>>,
+///     pub is_active: bool,
+///     pub is_superuser: bool,
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn user(args: TokenStream, input: TokenStream) -> TokenStream {
+	let input = parse_macro_input!(input as ItemStruct);
+
+	user_attribute_impl(args.into(), input)
 		.unwrap_or_else(|e| e.to_compile_error())
 		.into()
 }

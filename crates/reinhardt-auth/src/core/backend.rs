@@ -1,3 +1,7 @@
+// This module uses the deprecated User trait for backward compatibility.
+// AuthBackend and CompositeAuthBackend are keyed on User to preserve existing APIs
+// until a full migration to AuthIdentity is complete.
+#![allow(deprecated)]
 use async_trait::async_trait;
 
 use crate::core::user::User;

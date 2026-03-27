@@ -1,3 +1,8 @@
+// The `User` trait and `DefaultUser` struct are deprecated in favour of the new
+// `#[model]`-based user macro system. This file references them during the
+// transition period until viewsets are migrated to `AuthIdentity`.
+#![allow(deprecated)]
+
 /// ViewSetHandler - wraps a ViewSet as a Handler
 use crate::{Action, ViewSet};
 use async_trait::async_trait;

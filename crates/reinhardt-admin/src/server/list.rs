@@ -2,11 +2,12 @@
 //!
 //! Provides list view operations for admin models.
 
+use super::user::AdminDefaultUser;
 use crate::adapters::{
 	AdminDatabase, AdminRecord, AdminSite, ColumnInfo, FilterInfo, FilterType, ListQueryParams,
 	ListResponse, ModelAdmin,
 };
-use reinhardt_auth::{AuthUser, DefaultUser};
+use reinhardt_auth::AuthUser;
 #[cfg(not(target_arch = "wasm32"))]
 use reinhardt_db::orm::{Filter, FilterCondition, FilterOperator, FilterValue};
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
@@ -100,7 +101,7 @@ pub async fn get_list(
 	params: ListQueryParams,
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
-	#[inject] AuthUser(user): AuthUser<DefaultUser>,
+	#[inject] AuthUser(user): AuthUser<AdminDefaultUser>,
 ) -> Result<ListResponse, ServerFnError> {
 	// Get model admin and check permission
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;

@@ -1,3 +1,6 @@
+// The `User` trait is deprecated in favour of the new `#[model]`-based user macro system.
+// This crate re-exports it for downstream compatibility during the transition period.
+#![allow(deprecated)]
 #![warn(missing_docs)]
 //! # Reinhardt REST
 //!

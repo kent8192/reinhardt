@@ -2,6 +2,9 @@
 //!
 //! Provides permissions based on model-level operations with Django-style permission checking.
 
+// This module uses the deprecated User trait for backward compatibility.
+// DjangoModelPermissions reads username from Box<dyn User> in PermissionContext.
+#![allow(deprecated)]
 use crate::{Permission, PermissionContext};
 use async_trait::async_trait;
 use std::collections::HashMap;

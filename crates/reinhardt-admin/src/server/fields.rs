@@ -2,9 +2,10 @@
 //!
 //! Provides field information for dynamic form generation.
 
+use super::user::AdminDefaultUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, FieldInfo, FieldType};
 use crate::types::FieldsResponse;
-use reinhardt_auth::{AuthUser, DefaultUser};
+use reinhardt_auth::AuthUser;
 use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 use std::sync::Arc;
 
@@ -45,7 +46,7 @@ pub async fn get_fields(
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
-	#[inject] AuthUser(user): AuthUser<DefaultUser>,
+	#[inject] AuthUser(user): AuthUser<AdminDefaultUser>,
 ) -> Result<FieldsResponse, ServerFnError> {
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);

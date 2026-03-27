@@ -2,6 +2,9 @@
 //!
 //! Provides TOTP (Time-based One-Time Password) support for MFA.
 
+// This module uses the deprecated User trait for backward compatibility.
+// MFAAuthentication returns Box<dyn User> to preserve existing authentication APIs.
+#![allow(deprecated)]
 use crate::{AuthenticationBackend, AuthenticationError, SimpleUser, User};
 use reinhardt_http::Request;
 use std::collections::HashMap;

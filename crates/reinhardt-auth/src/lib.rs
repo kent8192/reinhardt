@@ -1,4 +1,6 @@
 #![warn(missing_docs)]
+// Re-exports of deprecated User trait and DefaultUser struct are intentional for backward compatibility.
+#![allow(deprecated)]
 //! # Reinhardt Auth
 //!
 //! Authentication and authorization system for Reinhardt framework.
@@ -88,9 +90,9 @@ pub(crate) const USER_ID_NAMESPACE: uuid::Uuid =
 
 // Re-export core authentication types
 pub use core::{
-	AllowAny, AnonymousUser, AuthBackend, BaseUser, CompositeAuthBackend, FullUser, IsActiveUser,
-	IsAdminUser, IsAuthenticated, IsAuthenticatedOrReadOnly, PasswordHasher, Permission,
-	PermissionContext, PermissionsMixin, SimpleUser, User,
+	AllowAny, AnonymousUser, AuthBackend, AuthIdentity, BaseUser, CompositeAuthBackend, FullUser,
+	IsActiveUser, IsAdminUser, IsAuthenticated, IsAuthenticatedOrReadOnly, PasswordHasher,
+	Permission, PermissionContext, PermissionsMixin, SimpleUser, User,
 };
 
 #[cfg(feature = "argon2-hasher")]

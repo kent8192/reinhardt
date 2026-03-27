@@ -3,6 +3,9 @@
 //! Provides permission checking based on rate limits, integrating with
 //! the throttling backend for distributed rate limiting support.
 
+// This module uses the deprecated User trait for backward compatibility.
+// RateLimitPermission reads user.id() from PermissionContext which holds Box<dyn User>.
+#![allow(deprecated)]
 use crate::{Permission, PermissionContext};
 use async_trait::async_trait;
 pub use reinhardt_core::RateLimitStrategy;

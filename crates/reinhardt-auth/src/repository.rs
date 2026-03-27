@@ -3,6 +3,9 @@
 //! Provides the [`UserRepository`] trait for retrieving user data from storage backends,
 //! shared across multiple authentication backends.
 
+// This module uses the deprecated User trait for backward compatibility.
+// UserRepository returns Box<dyn User> to preserve existing authentication APIs.
+#![allow(deprecated)]
 use crate::{SimpleUser, User};
 use async_trait::async_trait;
 use uuid::Uuid;

@@ -1,3 +1,6 @@
+// This module uses the deprecated User trait for backward compatibility.
+// JwtAuth returns Box<dyn User> to preserve existing authentication APIs.
+#![allow(deprecated)]
 use crate::rest_authentication::RestAuthentication;
 use crate::{AuthenticationBackend, AuthenticationError, SimpleUser, User};
 use chrono::{Duration, Utc};

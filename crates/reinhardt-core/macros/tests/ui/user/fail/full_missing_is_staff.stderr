@@ -1,0 +1,7 @@
+error: #[user(full = true)] requires 'is_staff' field. Add 'is_staff' or annotate a field with #[user_field(is_staff)]
+ --> tests/ui/user/fail/full_missing_is_staff.rs:7:1
+  |
+7 | #[user(hasher = Argon2Hasher, username_field = "username", full = true)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `user` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -133,3 +133,4 @@ tempfile = { workspace = true }
 filetime = "0.2"
 reinhardt-query = { workspace = true }
 reinhardt-db = {workspace = true, features = ["orm"]}
+reinhardt-macros = { workspace = true }

@@ -2,6 +2,9 @@
 //!
 //! Provides REST API-compatible authentication wrappers and combinators.
 
+// This module uses the deprecated User and DefaultUser types for backward compatibility.
+// REST authentication backends return Box<dyn User> to preserve existing APIs.
+#![allow(deprecated)]
 #[cfg(feature = "argon2-hasher")]
 use crate::DefaultUser;
 use crate::sessions::{Session, backends::SessionBackend};

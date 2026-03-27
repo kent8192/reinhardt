@@ -1,0 +1,7 @@
+error: #[user] requires a field for 'last_login'. Add a field named 'last_login' or annotate a field with #[user_field(last_login)]
+ --> tests/ui/user/fail/missing_last_login.rs:6:1
+  |
+6 | #[user(hasher = Argon2Hasher, username_field = "email")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `user` (in Nightly builds, run with -Z macro-backtrace for more info)

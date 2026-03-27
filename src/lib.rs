@@ -1,3 +1,7 @@
+// The `User` trait is deprecated in favour of the new `#[model]`-based user macro system.
+// This crate re-exports it for downstream compatibility during the transition period.
+#![allow(deprecated)]
+
 //! # Reinhardt
 //!
 //! A full-stack API framework for Rust, inspired by Django and Django REST Framework.

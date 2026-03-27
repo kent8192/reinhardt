@@ -679,7 +679,7 @@ async fn create_service(
   - `validate_number()`: Numeric validation
   - Support for combining multiple constraints
 - **Type aliases**: `ValidatedPath<T>`, `ValidatedQuery<T>`, `ValidatedForm<T>`
-- **Integration with `reinhardt-validators`**
+- **Integration with `reinhardt-core` validators module**
 
 ## License
 

@@ -19,6 +19,18 @@ on:
         description: "Whether to run all tests"
         type: string
         default: "true"
+      cargo-packages:
+        description: "Newline-separated list of packages to compile (affected + rdeps). Issue #2878"
+        type: string
+        default: ""
+      partitions-json:
+        description: "JSON array of partition indices for dynamic matrix. Issue #2881"
+        type: string
+        default: "[1,2,3,4,5,6,7,8]"
+      partition-count:
+        description: "Total partition count for nextest --partition. Issue #2881"
+        type: string
+        default: "8"
   workflow_dispatch:
 
 env:
@@ -33,13 +45,13 @@ env:
 
 jobs:
   intra-crate-integration-test:
-    name: Intra-Crate Integration Tests (${{ matrix.partition }}/6)
+    name: Intra-Crate Integration Tests (${{ matrix.partition }}/${{ inputs.partition-count || '8' }})
     runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        partition: [1, 2, 3, 4, 5, 6]
+        partition: ${{ fromJSON(inputs.partitions-json || '[1,2,3,4,5,6,7,8]') }}
     steps:
       - name: Free Disk Space (Ubuntu)
         if: ${{ !contains(inputs.runner, 'self-hosted') }}
@@ -64,6 +76,8 @@ jobs:
 
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup protoc
         uses: arduino/setup-protoc@v3
@@ -88,6 +102,11 @@ jobs:
         with:
           tool: nextest
 
+      - name: Pull Docker images
+        uses: ./.github/actions/pull-docker-images
+        with:
+          images-file: .github/docker-images-intra-crate.txt
+
       - name: Additional disk cleanup before tests
         if: ${{ !contains(inputs.runner, 'self-hosted') }}
         run: |
@@ -95,7 +114,8 @@ jobs:
           df -h
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/* || true
-          docker system prune -af --volumes || true
+          # Use -f (not -af) to preserve pre-pulled Docker images
+          docker system prune -f --volumes || true
           docker builder prune -af || true
           rm -rf ~/.cache/pip || true
           rm -rf ~/.npm || true
@@ -108,29 +128,46 @@ jobs:
           echo "Disk usage after additional cleanup:"
           df -h
 
-      - name: Pull Docker images
-        uses: ./.github/actions/pull-docker-images
-        with:
-          images-file: .github/docker-images-intra-crate.txt
-
-      - name: Run intra-crate integration tests (partition ${{ matrix.partition }}/6)
+      - name: Run intra-crate integration tests (partition ${{ matrix.partition }}/${{ inputs.partition-count || '8' }})
         env:
           RUSTFLAGS: "-C linker=clang -C link-arg=-fuse-ld=mold"
           NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
           RUN_ALL: ${{ inputs.run-all }}
+          CARGO_PACKAGES: ${{ inputs.cargo-packages }}
+          PARTITION_COUNT: ${{ inputs.partition-count || '8' }}
         run: |
+          # Build package selection args. Issue #2878
+          # --exclude requires --workspace; when using -p flags, filter the
+          # package list instead. Issue #2878
+          PKG_ARGS=()
+          EXCLUDE_ARGS=()
+          if [[ "$RUN_ALL" != "true" && -n "$CARGO_PACKAGES" ]]; then
+            while IFS= read -r pkg; do
+              [[ -z "$pkg" ]] && continue
+              # Cross-crate integration tests run in a separate workflow
+              [[ "$pkg" == "reinhardt-integration-tests" ]] && continue
+              # reinhardt-test-support has no test targets (lib-only crate)
+              [[ "$pkg" == "reinhardt-test-support" ]] && continue
+              PKG_ARGS+=(-p "$pkg")
+            done <<< "$CARGO_PACKAGES"
+          fi
+          if [[ ${#PKG_ARGS[@]} -eq 0 ]]; then
+            PKG_ARGS=(--workspace)
+            EXCLUDE_ARGS=(--exclude reinhardt-integration-tests)
+          fi
+
           if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
             FILTER_EXPR="(not binary(/ui/)) & ($NEXTEST_FILTER_EXPR)"
           else
             FILTER_EXPR="not binary(/ui/)"
           fi
           cargo nextest run \
-            --workspace \
+            "${PKG_ARGS[@]}" \
+            "${EXCLUDE_ARGS[@]}" \
             --test "*" \
-            --exclude reinhardt-integration-tests \
             -E "$FILTER_EXPR" \
             --all-features \
-            --partition hash:${{ matrix.partition }}/6 \
+            --partition hash:${{ matrix.partition }}/$PARTITION_COUNT \
             --no-fail-fast \
             --no-tests=warn \
             --status-level=none \

@@ -71,7 +71,7 @@ async fn update_profile_internal(
 }
 
 /// Fetch user profile
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn fetch_profile(
 	user_id: Uuid,
 	#[inject] _db: DatabaseConnection,
@@ -91,7 +91,7 @@ pub async fn fetch_profile(
 }
 
 /// Update user profile
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn update_profile(
 	request: UpdateProfileRequest,
 	#[inject] db: DatabaseConnection,
@@ -108,7 +108,7 @@ pub async fn update_profile(
 /// as expected by form! macro's submit() method.
 ///
 /// The argument order matches form! macro's field order: avatar_url, bio, location, website
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn update_profile_form(
 	avatar_url: String,
 	bio: String,

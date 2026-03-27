@@ -64,8 +64,8 @@ details.
 ### Feature Flags
 
 - `migrations` - Enable migration-related commands (requires
-  `reinhardt-migrations`)
-- `routers` - Enable URL-related commands (requires `reinhardt-routers`)
+  `reinhardt-db`)
+- `routers` - Enable URL-related commands (requires `reinhardt-urls`)
 
 ## Template System
 
@@ -227,7 +227,7 @@ Projects using `collect_migrations!` must add `linkme` as a dependency:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.10", features = ["standard"] }
+reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }
 linkme = "0.3"
 ```
 

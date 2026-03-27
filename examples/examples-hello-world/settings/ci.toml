@@ -1,3 +1,4 @@
 # CI environment settings (committed, used by GitHub Actions)
+[core]
 debug = false
 secret_key = "ci-testing-secret-key-not-for-production"

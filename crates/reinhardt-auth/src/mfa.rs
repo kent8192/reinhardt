@@ -2,6 +2,9 @@
 //!
 //! Provides TOTP (Time-based One-Time Password) support for MFA.
 
+// This module uses the deprecated User trait for backward compatibility.
+// MFAAuthentication returns Box<dyn User> to preserve existing authentication APIs.
+#![allow(deprecated)]
 use crate::{AuthenticationBackend, AuthenticationError, SimpleUser, User};
 use reinhardt_http::Request;
 use std::collections::HashMap;
@@ -114,7 +117,7 @@ impl MFAAuthentication {
 			// Get current timestamp
 			let current_time = std::time::SystemTime::now()
 				.duration_since(std::time::UNIX_EPOCH)
-				.unwrap()
+				.unwrap_or_default()
 				.as_secs();
 
 			// Calculate time step
@@ -268,7 +271,7 @@ mod tests {
 
 		let current_time = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
-			.unwrap()
+			.unwrap_or_default()
 			.as_secs();
 		let time_step = current_time / 30;
 		let secret_bytes = data_encoding::BASE32_NOPAD
@@ -295,7 +298,7 @@ mod tests {
 
 		let current_time = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
-			.unwrap()
+			.unwrap_or_default()
 			.as_secs();
 		let time_step = current_time / 30;
 		let secret_bytes = data_encoding::BASE32_NOPAD
@@ -328,7 +331,7 @@ mod tests {
 
 		let current_time = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
-			.unwrap()
+			.unwrap_or_default()
 			.as_secs();
 		let time_step = current_time / 30;
 		let secret_bytes = data_encoding::BASE32_NOPAD
@@ -394,7 +397,7 @@ mod tests {
 
 		let current_time = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
-			.unwrap()
+			.unwrap_or_default()
 			.as_secs();
 		let time_step = current_time / 30;
 		let secret_bytes = data_encoding::BASE32_NOPAD

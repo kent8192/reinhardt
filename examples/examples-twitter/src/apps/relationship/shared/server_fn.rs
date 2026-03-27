@@ -16,7 +16,7 @@ use {
 };
 
 /// Follow a user
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn follow_user(
 	target_user_id: Uuid,
 	#[inject] db: DatabaseConnection,
@@ -61,7 +61,7 @@ pub async fn follow_user(
 }
 
 /// Unfollow a user
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn unfollow_user(
 	target_user_id: Uuid,
 	#[inject] db: DatabaseConnection,
@@ -106,7 +106,7 @@ pub async fn unfollow_user(
 }
 
 /// Fetch followers of a user
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn fetch_followers(
 	user_id: Uuid,
 	#[inject] db: DatabaseConnection,
@@ -135,7 +135,7 @@ pub async fn fetch_followers(
 }
 
 /// Fetch users that the specified user is following
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn fetch_following(
 	user_id: Uuid,
 	#[inject] db: DatabaseConnection,

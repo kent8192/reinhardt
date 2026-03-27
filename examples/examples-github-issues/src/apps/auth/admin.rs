@@ -1,54 +1,24 @@
 //! Admin configurations for auth app
-//!
-//! DefaultUser is defined without `#[model(...)]` macro, so it lacks
-//! the `field_*()` accessors required by `#[admin(model, ...)]` macro.
-//! Instead, we use ModelAdminConfigBuilder for explicit configuration.
 
-use reinhardt::admin::{ModelAdminConfig, ModelAdminConfigBuilder};
+use crate::apps::auth::models::User;
+use reinhardt::admin;
 
-/// Creates admin configuration for DefaultUser
+/// Admin configuration for User model
 ///
-/// This function returns a ModelAdminConfig that can be registered
-/// with AdminSite for managing user records in the admin panel.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let site = AdminSite::new("Admin");
-/// site.register_config(user_admin_config());
-/// ```
-pub fn user_admin_config() -> ModelAdminConfig {
-	ModelAdminConfigBuilder::default()
-		.model_name("User")
-		.table_name("auth_user")
-		.pk_field("id")
-		.list_display(vec![
-			"id".to_string(),
-			"username".to_string(),
-			"email".to_string(),
-			"is_active".to_string(),
-			"is_staff".to_string(),
-			"date_joined".to_string(),
-		])
-		.list_filter(vec![
-			"is_active".to_string(),
-			"is_staff".to_string(),
-			"is_superuser".to_string(),
-			"date_joined".to_string(),
-		])
-		.search_fields(vec![
-			"username".to_string(),
-			"email".to_string(),
-			"first_name".to_string(),
-			"last_name".to_string(),
-		])
-		.ordering(vec!["-date_joined".to_string()])
-		.readonly_fields(vec![
-			"id".to_string(),
-			"date_joined".to_string(),
-			"last_login".to_string(),
-		])
-		.list_per_page(25)
-		.build()
-		.expect("valid user admin config")
-}
+/// Configures the admin panel display for User management:
+/// - List view with key user fields
+/// - Filtering by status and join date
+/// - Search by name and email
+/// - Sorted by join date (newest first)
+#[admin(model,
+	for = User,
+	name = "User",
+	list_display = [id, username, email, is_active, is_staff, date_joined],
+	list_filter = [is_active, is_staff, is_superuser, date_joined],
+	search_fields = [username, email, first_name, last_name],
+	ordering = [(date_joined, desc)],
+	readonly_fields = [id, date_joined, last_login],
+	list_per_page = 25,
+	permissions = allow_all,
+)]
+pub struct UserAdmin;

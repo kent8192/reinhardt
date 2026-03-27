@@ -322,7 +322,7 @@ mod rand {
 		static RNG: RefCell<u64> = RefCell::new(
 			SystemTime::now()
 				.duration_since(UNIX_EPOCH)
-				.unwrap()
+				.unwrap_or_default()
 				.as_nanos() as u64
 		);
 	}

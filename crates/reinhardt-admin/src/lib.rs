@@ -31,8 +31,8 @@ pub mod types;
 // Register admin static files for auto-discovery by collectstatic
 #[cfg(not(target_arch = "wasm32"))]
 const _: () = {
-	/// Path to WASM build artifacts directory
-	const ADMIN_STATIC_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/crates/pages/dist");
+	/// Path to admin static assets directory
+	const ADMIN_STATIC_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets");
 
 	// Register at compile time using inventory
 	reinhardt_apps::register_app_static_files!("admin", ADMIN_STATIC_DIR, "/static/admin/");

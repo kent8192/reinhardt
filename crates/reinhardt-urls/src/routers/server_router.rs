@@ -29,7 +29,9 @@ use hyper::Method;
 use matchit::Router as MatchitRouter;
 use reinhardt_core::endpoint::EndpointInfo;
 use reinhardt_di::InjectionContext;
-use reinhardt_http::{Error, Handler, MiddlewareChain, Request, Response, Result};
+use reinhardt_http::{
+	Error, ExcludeMiddleware, Handler, MiddlewareChain, Request, Response, Result,
+};
 use reinhardt_middleware::Middleware;
 use reinhardt_views::viewsets::{Action, ViewSet};
 use serde::{Deserialize, Serialize};
@@ -37,7 +39,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};
 
 pub use self::global::{
-	clear_router, get_router, is_router_registered, register_router, register_router_arc,
+	clear_router, get_router, is_router_registered, register_di_registrations, register_router,
+	register_router_arc, take_di_registrations,
 };
 pub use self::handlers::FunctionHandler;
 pub use self::matching::{extract_params, path_matches};
@@ -76,6 +79,38 @@ pub struct MiddlewareInfo {
 
 /// Route information tuple: (path, name, namespace, methods)
 pub type RouteInfo = Vec<(String, Option<String>, Option<String>, Vec<Method>)>;
+
+/// Join two path segments, normalizing any double slashes.
+///
+/// Concatenates `prefix` and `suffix`, then collapses consecutive `/` characters
+/// into a single `/`. The leading slash is always preserved.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // crate-internal usage only
+/// assert_eq!(join_path("/api/", "/users"), "/api/users");
+/// assert_eq!(join_path("/api", "/users"), "/api/users");
+/// assert_eq!(join_path("/api", "users"), "/apiusers");
+/// assert_eq!(join_path("", "/users"), "/users");
+/// ```
+pub(crate) fn join_path(prefix: &str, suffix: &str) -> String {
+	let raw = format!("{}{}", prefix, suffix);
+	let mut result = String::with_capacity(raw.len());
+	let mut prev_slash = false;
+	for ch in raw.chars() {
+		if ch == '/' {
+			if !prev_slash {
+				result.push(ch);
+			}
+			prev_slash = true;
+		} else {
+			result.push(ch);
+			prev_slash = false;
+		}
+	}
+	result
+}
 
 /// Handler information stored in matchit router
 #[derive(Clone)]
@@ -174,6 +209,10 @@ pub struct ServerRouter {
 
 	/// Middleware type information for runtime introspection
 	middleware_names: Vec<MiddlewareInfo>,
+
+	/// Per-middleware exclusion patterns, indexed parallel to `middleware` vec.
+	/// Each entry contains the exclusion path patterns for the corresponding middleware.
+	middleware_exclusions: Vec<Vec<String>>,
 
 	/// URL reverser
 	reverser: UrlReverser,
@@ -289,6 +328,7 @@ impl ServerRouter {
 			di_context: None,
 			middleware: Vec::new(),
 			middleware_names: Vec::new(),
+			middleware_exclusions: Vec::new(),
 			reverser: UrlReverser::new(),
 			get_router: RwLock::new(MatchitRouter::new()),
 			post_router: RwLock::new(MatchitRouter::new()),
@@ -373,7 +413,68 @@ impl ServerRouter {
 			type_name: full_type_name,
 		});
 		self.middleware.push(Arc::new(mw));
+		self.middleware_exclusions.push(Vec::new());
 		self
+	}
+
+	/// Exclude a URL path from the most recently added middleware.
+	///
+	/// Paths ending with `/` are treated as prefix matches: any request
+	/// path starting with the given prefix will skip the middleware.
+	/// Paths without trailing `/` require an exact match.
+	///
+	/// This method operates on the **last middleware** added via
+	/// [`with_middleware()`](Self::with_middleware). Multiple `.exclude()`
+	/// calls accumulate exclusions on the same middleware.
+	///
+	/// # Panics
+	///
+	/// Panics if no middleware has been added yet.
+	///
+	/// # Examples
+	///
+	/// ```rust,no_run
+	/// use reinhardt_urls::routers::ServerRouter;
+	/// use reinhardt_middleware::LoggingMiddleware;
+	///
+	/// let router = ServerRouter::new()
+	///     .with_middleware(LoggingMiddleware::new())
+	///         .exclude("/api/auth/")    // prefix: skips /api/auth/*
+	///         .exclude("/health");      // exact: skips only /health
+	/// ```
+	pub fn exclude(mut self, pattern: &str) -> Self {
+		assert!(
+			!self.middleware_exclusions.is_empty(),
+			"exclude() called with no middleware. Call with_middleware() first."
+		);
+		self.middleware_exclusions
+			.last_mut()
+			.unwrap()
+			.push(pattern.to_string());
+		self
+	}
+
+	/// Build middleware list, wrapping any with exclusions in `ExcludeMiddleware`.
+	fn build_middleware_with_exclusions(&self) -> Vec<Arc<dyn Middleware>> {
+		let mut result: Vec<Arc<dyn Middleware>> = Vec::with_capacity(self.middleware.len());
+
+		for (mw, exclusions) in self
+			.middleware
+			.iter()
+			.zip(self.middleware_exclusions.iter())
+		{
+			if exclusions.is_empty() {
+				result.push(mw.clone());
+			} else {
+				let mut exclude_mw = ExcludeMiddleware::new(mw.clone());
+				for pattern in exclusions {
+					exclude_mw.add_exclusion_mut(pattern);
+				}
+				result.push(Arc::new(exclude_mw) as Arc<dyn Middleware>);
+			}
+		}
+
+		result
 	}
 
 	/// Mount a child router at the given prefix
@@ -1249,7 +1350,7 @@ impl ServerRouter {
 			let full_path = if self.prefix.is_empty() {
 				route.path.clone()
 			} else {
-				format!("{}{}", self.prefix, route.path)
+				join_path(&self.prefix, &route.path)
 			};
 
 			routes.push((
@@ -1265,7 +1366,7 @@ impl ServerRouter {
 			let full_path = if self.prefix.is_empty() {
 				func_route.path.clone()
 			} else {
-				format!("{}{}", self.prefix, func_route.path)
+				join_path(&self.prefix, &func_route.path)
 			};
 
 			routes.push((
@@ -1281,7 +1382,7 @@ impl ServerRouter {
 			let full_path = if self.prefix.is_empty() {
 				view_route.path.clone()
 			} else {
-				format!("{}{}", self.prefix, view_route.path)
+				join_path(&self.prefix, &view_route.path)
 			};
 
 			routes.push((
@@ -1326,7 +1427,7 @@ impl ServerRouter {
 			} else if child.prefix.is_empty() {
 				self.prefix.clone()
 			} else {
-				format!("{}{}", self.prefix, child.prefix)
+				join_path(&self.prefix, &child.prefix)
 			};
 
 			for (path, name, namespace, methods) in child.get_all_routes() {
@@ -1334,7 +1435,7 @@ impl ServerRouter {
 				let full_path = if path.starts_with(&child.prefix) || child.prefix.is_empty() {
 					path
 				} else {
-					format!("{}{}", child_prefix, path)
+					join_path(&child_prefix, &path)
 				};
 
 				// Combine namespaces (parent:child)
@@ -1529,16 +1630,22 @@ impl ServerRouter {
 		};
 
 		// 2. Try child routers first
+		let own_middleware = self.build_middleware_with_exclusions();
 		for child in &self.children {
 			if let Some(route_match) =
-				child.resolve_internal(remaining_path, method, &self.middleware, &self.di_context)
+				child.resolve_internal(remaining_path, method, &own_middleware, &self.di_context)
 			{
 				return Some(route_match);
 			}
 		}
 
 		// 3. Try own routes
-		self.match_own_routes(remaining_path, method)
+		self.match_own_routes_with_context(
+			remaining_path,
+			method,
+			own_middleware,
+			self.di_context.clone(),
+		)
 	}
 
 	/// Internal route resolution with middleware and DI context inheritance
@@ -1561,7 +1668,7 @@ impl ServerRouter {
 
 		// Build middleware stack (parent → child order)
 		let mut middleware_stack = parent_middleware.to_vec();
-		middleware_stack.extend(self.middleware.iter().cloned());
+		middleware_stack.extend(self.build_middleware_with_exclusions());
 
 		// Inherit DI context
 		let di_context = self.di_context.clone().or_else(|| parent_di.clone());
@@ -1580,11 +1687,12 @@ impl ServerRouter {
 	}
 
 	/// Match routes in this router (without context)
+	#[cfg(test)]
 	fn match_own_routes(&self, path: &str, method: &Method) -> Option<RouteMatch> {
 		self.match_own_routes_with_context(
 			path,
 			method,
-			self.middleware.clone(),
+			self.build_middleware_with_exclusions(),
 			self.di_context.clone(),
 		)
 	}
@@ -2280,5 +2388,94 @@ mod tests {
 
 		// Assert - route matching should still work
 		assert!(result.is_some());
+	}
+
+	// --- ServerRouter::exclude() tests ---
+
+	// Simple no-op middleware for testing exclude()
+	struct NoopMiddleware;
+
+	#[async_trait::async_trait]
+	impl Middleware for NoopMiddleware {
+		async fn process(
+			&self,
+			request: reinhardt_http::Request,
+			next: std::sync::Arc<dyn reinhardt_http::Handler>,
+		) -> reinhardt_http::Result<reinhardt_http::Response> {
+			next.handle(request).await
+		}
+	}
+
+	fn create_test_request(path: &str) -> reinhardt_http::Request {
+		reinhardt_http::Request::builder()
+			.method(Method::GET)
+			.uri(path)
+			.version(hyper::Version::HTTP_11)
+			.headers(hyper::HeaderMap::new())
+			.body(bytes::Bytes::new())
+			.build()
+			.unwrap()
+	}
+
+	#[rstest]
+	fn test_server_router_exclude_stores_exclusion() {
+		// Arrange & Act
+		let router = ServerRouter::new()
+			.with_middleware(NoopMiddleware)
+			.exclude("/api/auth/")
+			.exclude("/health");
+
+		// Assert
+		assert_eq!(router.middleware_exclusions.len(), 1);
+		assert_eq!(router.middleware_exclusions[0].len(), 2);
+		assert_eq!(router.middleware_exclusions[0][0], "/api/auth/");
+		assert_eq!(router.middleware_exclusions[0][1], "/health");
+	}
+
+	#[rstest]
+	fn test_server_router_exclude_only_affects_last_middleware() {
+		// Arrange & Act
+		let router = ServerRouter::new()
+			.with_middleware(NoopMiddleware)
+			.exclude("/admin/")
+			.with_middleware(NoopMiddleware)
+			.exclude("/api/auth/");
+
+		// Assert
+		assert_eq!(router.middleware_exclusions.len(), 2);
+		assert_eq!(router.middleware_exclusions[0], vec!["/admin/"]);
+		assert_eq!(router.middleware_exclusions[1], vec!["/api/auth/"]);
+	}
+
+	#[rstest]
+	#[should_panic(expected = "exclude() called with no middleware")]
+	fn test_server_router_exclude_panics_without_middleware() {
+		// Arrange & Act & Assert
+		let _router = ServerRouter::new().exclude("/api/auth/");
+	}
+
+	#[rstest]
+	fn test_server_router_build_middleware_with_exclusions() {
+		// Arrange
+		let router = ServerRouter::new()
+			.with_middleware(NoopMiddleware)
+			.exclude("/admin/")
+			.with_middleware(NoopMiddleware);
+
+		// Act
+		let built = router.build_middleware_with_exclusions();
+
+		// Assert
+		assert_eq!(built.len(), 2);
+
+		let request_admin = create_test_request("/admin/dashboard");
+		let request_public = create_test_request("/public");
+
+		// First middleware (with exclusion) skips /admin/
+		assert!(!built[0].should_continue(&request_admin));
+		assert!(built[0].should_continue(&request_public));
+		// Second middleware (no exclusion) runs for all
+		assert!(built[1].should_continue(&request_admin));
+		assert!(built[1].should_continue(&request_public));
 	}
 }

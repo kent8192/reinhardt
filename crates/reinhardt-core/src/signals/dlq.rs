@@ -94,8 +94,16 @@ impl RetryStrategy {
 				initial_delay,
 				max_delay,
 			} => {
-				let exp_delay = initial_delay.mul_f64(2_f64.powi(attempt as i32));
-				exp_delay.min(*max_delay)
+				// Clamp exponent to prevent overflow (2^30 is already ~1 billion)
+				let clamped_attempt = attempt.min(30);
+				let multiplier = 2_f64.powi(clamped_attempt as i32);
+				// Guard against infinity from extremely large initial_delay
+				let exp_delay = initial_delay.mul_f64(multiplier);
+				if exp_delay.as_secs_f64().is_infinite() {
+					*max_delay
+				} else {
+					exp_delay.min(*max_delay)
+				}
 			}
 			RetryStrategy::LinearBackoff { base_delay } => base_delay.mul_f32(attempt as f32 + 1.0),
 		}
@@ -386,22 +394,26 @@ impl<T: Send + Sync + Clone + 'static> DeadLetterQueue<T> {
 
 	/// Enqueue a failed message
 	fn enqueue(&self, payload: T, error: String) {
-		let mut queue = self.queue.lock();
+		// Lock ordering: queue before stats to prevent deadlock
+		let queue_len = {
+			let mut queue = self.queue.lock();
 
-		// Check queue size limit
-		if queue.len() >= self.config.max_queue_size {
-			// Drop oldest message
-			queue.pop_front();
-		}
+			// Check queue size limit
+			if queue.len() >= self.config.max_queue_size {
+				// Drop oldest message
+				queue.pop_front();
+			}
 
-		let delay = self.config.retry_strategy.calculate_delay(0);
-		let next_retry_at = Instant::now() + delay;
+			let delay = self.config.retry_strategy.calculate_delay(0);
+			let next_retry_at = Instant::now() + delay;
 
-		let message = DlqMessage::new(payload, error, next_retry_at);
-		queue.push_back(message);
+			let message = DlqMessage::new(payload, error, next_retry_at);
+			queue.push_back(message);
+			queue.len()
+		};
 
-		// Update stats
-		self.stats.lock().queue_size = queue.len();
+		// Update stats after releasing queue lock
+		self.stats.lock().queue_size = queue_len;
 	}
 
 	/// Get current DLQ statistics
@@ -472,17 +484,21 @@ impl<T: Send + Sync + Clone + 'static> DeadLetterQueue<T> {
 					match result {
 						Ok(_) => {
 							// Success! Message recovered
+							// Lock ordering: queue before stats (consistent with enqueue)
+							let queue_len = queue.lock().len();
 							let mut stats_guard = stats.lock();
 							stats_guard.total_recovered += 1;
-							stats_guard.queue_size = queue.lock().len();
+							stats_guard.queue_size = queue_len;
 						}
 						Err(e) => {
 							// Failed again
 							if msg.retry_count >= config.max_retries {
 								// Max retries exceeded, mark as permanently failed
+								// Lock ordering: queue before stats (consistent with enqueue)
+								let queue_len = queue.lock().len();
 								let mut stats_guard = stats.lock();
 								stats_guard.total_failed += 1;
-								stats_guard.queue_size = queue.lock().len();
+								stats_guard.queue_size = queue_len;
 							} else {
 								// Re-queue for another retry
 								let delay =

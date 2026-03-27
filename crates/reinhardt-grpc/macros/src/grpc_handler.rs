@@ -288,12 +288,15 @@ pub(crate) fn expand_grpc_handler(input: ItemFn) -> Result<TokenStream> {
 	// Generate DI extraction code
 	// Fixes #820: Return generic error message, log details server-side
 	let di_context_extraction = quote! {
-		let __di_ctx = #request_pat
-			.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
-			.ok_or_else(|| {
-				::tracing::error!("DI context not found in request extensions");
-				::tonic::Status::internal("Internal server error")
-			})?;
+		let __di_ctx = {
+			let __shared_ctx = #request_pat
+				.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
+				.ok_or_else(|| {
+					::tracing::error!("DI context not found in request extensions");
+					::tonic::Status::internal("Internal server error")
+				})?;
+			::std::sync::Arc::new((*__shared_ctx).fork())
+		};
 	};
 
 	// Generate compile-time type assertions for injected types

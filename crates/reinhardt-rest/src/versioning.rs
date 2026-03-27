@@ -279,7 +279,7 @@ impl URLPathVersioning {
 			default_version: None,
 			allowed_versions: HashSet::new(),
 			version_param: "version".to_string(),
-			path_regex: Regex::new(r"/v?(\d+\.?\d*)").unwrap(),
+			path_regex: Regex::new(r"/v(\d+\.?\d*)(?:/|$)").unwrap(),
 		}
 	}
 	/// Set the default version to use when no version is found in the path

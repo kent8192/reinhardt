@@ -83,9 +83,17 @@ impl ParamErrorContext {
 	/// Set the raw value (truncated if too long)
 	pub fn with_raw_value(mut self, value: impl Into<String>) -> Self {
 		let value = value.into();
-		// Truncate to 500 chars max to avoid log spam
+		// Truncate to ~500 bytes max to avoid log spam.
+		// Use char_indices to find a safe truncation point on a char boundary,
+		// preventing panics on multi-byte UTF-8 strings (e.g., Japanese, emoji).
 		if value.len() > 500 {
-			self.raw_value = Some(format!("{}...[truncated]", &value[..500]));
+			let truncation_point = value
+				.char_indices()
+				.map(|(idx, _)| idx)
+				.take_while(|&idx| idx <= 500)
+				.last()
+				.unwrap_or(0);
+			self.raw_value = Some(format!("{}...[truncated]", &value[..truncation_point]));
 		} else {
 			self.raw_value = Some(value);
 		}
@@ -167,6 +175,83 @@ pub fn extract_field_from_serde_error(err: &serde_json::Error) -> Option<String>
 	}
 
 	None
+}
+
+#[cfg(test)]
+mod tests {
+	use rstest::rstest;
+
+	use super::*;
+
+	#[rstest]
+	fn with_raw_value_does_not_panic_on_multibyte_utf8() {
+		// Arrange - 500+ bytes of multi-byte Japanese characters
+		// Each character is 3 bytes in UTF-8, so 200 chars = 600 bytes
+		let japanese_str: String = std::iter::repeat('あ').take(200).collect();
+		assert!(japanese_str.len() > 500);
+
+		// Act - must not panic on multi-byte boundary
+		let ctx = ParamErrorContext::new(ParamType::Json, "test").with_raw_value(japanese_str);
+
+		// Assert
+		let raw = ctx.raw_value.unwrap();
+		assert!(raw.ends_with("...[truncated]"));
+	}
+
+	#[rstest]
+	fn with_raw_value_does_not_panic_on_emoji() {
+		// Arrange - emoji are 4 bytes each, 150 emojis = 600 bytes
+		let emoji_str: String = std::iter::repeat('\u{1F600}').take(150).collect();
+		assert!(emoji_str.len() > 500);
+
+		// Act - must not panic on 4-byte char boundary
+		let ctx = ParamErrorContext::new(ParamType::Query, "test").with_raw_value(emoji_str);
+
+		// Assert
+		let raw = ctx.raw_value.unwrap();
+		assert!(raw.ends_with("...[truncated]"));
+		// Verify truncated content is valid UTF-8 (would panic if not)
+		assert!(raw.is_char_boundary(0));
+	}
+
+	#[rstest]
+	fn with_raw_value_does_not_truncate_short_strings() {
+		// Arrange
+		let short = "hello world";
+
+		// Act
+		let ctx = ParamErrorContext::new(ParamType::Path, "test").with_raw_value(short);
+
+		// Assert
+		assert_eq!(ctx.raw_value.unwrap(), "hello world");
+	}
+
+	#[rstest]
+	fn with_raw_value_handles_mixed_multibyte_ascii() {
+		// Arrange - mix of ASCII and multi-byte characters totaling > 500 bytes
+		let mixed: String = "a".repeat(498) + "ああ"; // 498 + 6 = 504 bytes
+		assert!(mixed.len() > 500);
+
+		// Act
+		let ctx = ParamErrorContext::new(ParamType::Form, "test").with_raw_value(mixed);
+
+		// Assert
+		let raw = ctx.raw_value.unwrap();
+		assert!(raw.ends_with("...[truncated]"));
+	}
+
+	#[rstest]
+	fn with_raw_value_preserves_exactly_500_byte_string() {
+		// Arrange - exactly 500 ASCII bytes
+		let exact = "x".repeat(500);
+		assert_eq!(exact.len(), 500);
+
+		// Act
+		let ctx = ParamErrorContext::new(ParamType::Header, "test").with_raw_value(exact.clone());
+
+		// Assert - should NOT be truncated (len is not > 500)
+		assert_eq!(ctx.raw_value.unwrap(), exact);
+	}
 }
 
 /// Extract field name from serde_urlencoded error message

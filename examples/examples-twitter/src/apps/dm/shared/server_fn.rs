@@ -53,7 +53,7 @@ async fn is_room_member(
 }
 
 /// Create a new DM room
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn create_room(
 	participant_ids: Vec<Uuid>,
 	name: Option<String>,
@@ -178,7 +178,7 @@ pub async fn create_room(
 }
 
 /// List all DM rooms for the current user
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn list_rooms(
 	#[inject] db: DatabaseConnection,
 	#[inject] session: SessionData,
@@ -254,7 +254,7 @@ pub async fn list_rooms(
 }
 
 /// Get details of a specific DM room
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_room(
 	room_id: Uuid,
 	#[inject] db: DatabaseConnection,
@@ -290,7 +290,7 @@ pub async fn get_room(
 }
 
 /// Send a message to a DM room
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn send_message(
 	room_id: Uuid,
 	content: String,
@@ -356,7 +356,7 @@ pub async fn send_message(
 }
 
 /// List messages in a DM room with pagination
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn list_messages(
 	room_id: Uuid,
 	limit: Option<i32>,
@@ -455,7 +455,7 @@ pub async fn list_messages(
 }
 
 /// Mark all messages in a room as read for the current user
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn mark_as_read(
 	room_id: Uuid,
 	#[inject] db: DatabaseConnection,

@@ -156,18 +156,26 @@ impl MigrationSquasher {
 				.push((migration.app_label.clone(), migration.name.clone()));
 		}
 
-		// Collect dependencies from first migration (external dependencies only)
-		if let Some(first) = migrations.first() {
-			for (dep_app, dep_name) in &first.dependencies {
+		// Build a HashSet of squashed migration identities for O(1) lookup
+		let squashed_set: HashSet<(&str, &str)> = migrations
+			.iter()
+			.map(|m| (m.app_label.as_str(), m.name.as_str()))
+			.collect();
+
+		// Collect dependencies from all migrations (external dependencies only)
+		let mut seen_deps: HashSet<(&str, &str)> = HashSet::new();
+		for migration in migrations {
+			for (dep_app, dep_name) in &migration.dependencies {
 				// Only include dependencies outside the squashed range
 				if *dep_app != *app_label
-					|| !migrations
-						.iter()
-						.any(|m| m.app_label == *dep_app && m.name == *dep_name)
+					|| !squashed_set.contains(&(dep_app.as_str(), dep_name.as_str()))
 				{
-					squashed
-						.dependencies
-						.push((dep_app.clone(), dep_name.clone()));
+					// Avoid duplicate dependencies via HashSet lookup
+					if seen_deps.insert((dep_app.as_str(), dep_name.as_str())) {
+						squashed
+							.dependencies
+							.push((dep_app.clone(), dep_name.clone()));
+					}
 				}
 			}
 		}
@@ -211,13 +219,10 @@ impl MigrationSquasher {
 		for operation in operations {
 			let should_push = match &operation {
 				Operation::CreateTable { name, .. } => {
-					// Skip if this table will be dropped later
-					if !dropped_tables.contains(name) {
-						created_tables.insert(name.clone());
-						true
-					} else {
-						false
-					}
+					// Remove from dropped_tables if re-created
+					dropped_tables.remove(name);
+					created_tables.insert(name.clone());
+					true
 				}
 				Operation::DropTable { name } => {
 					// If table was just created, remove both operations

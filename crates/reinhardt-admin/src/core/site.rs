@@ -8,6 +8,7 @@ use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use parking_lot::RwLock;
+use reinhardt_core::macros::injectable;
 use reinhardt_db::orm::DatabaseConnection;
 use reinhardt_di::{DiResult, Injectable, InjectionContext, SingletonScope};
 use reinhardt_urls::routers::ServerRouter;
@@ -23,6 +24,7 @@ use std::sync::Arc;
 /// let admin = AdminSite::new("My Application");
 /// assert_eq!(admin.name(), "My Application");
 /// ```
+#[injectable(scope = Singleton, prebuilt = true)]
 #[derive(Clone)]
 pub struct AdminSite {
 	/// Site name displayed in the admin interface
@@ -311,60 +313,56 @@ impl AdminSite {
 
 	/// Build a ServerRouter from this admin site
 	///
-	/// Creates HTTP endpoints for all registered models including:
-	/// - `GET /` - Dashboard (list of registered models)
-	/// - `GET /favicon.ico` - Favicon
-	/// - `GET /{model}/` - List model instances
-	/// - `GET /{model}/{id}/` - Get model instance detail
-	/// - `POST /{model}/` - Create model instance
-	/// - `PUT /{model}/{id}/` - Update model instance
-	/// - `DELETE /{model}/{id}/` - Delete model instance
-	/// - `POST /{model}/bulk-delete/` - Bulk delete model instances
-	/// - `GET /{model}/export/` - Export model data
-	/// - `POST /{model}/import/` - Import model data
+	/// # Deprecation
+	///
+	/// Use `admin_routes_with_di()` instead, which auto-registers `AdminSite`
+	/// in the singleton scope and does not require `DatabaseConnection`.
 	///
 	/// # Examples
 	///
 	/// ```rust,no_run
-	/// use reinhardt_admin::core::{AdminSite, ModelAdminConfig};
-	/// use reinhardt_db::orm::DatabaseConnection;
+	/// use reinhardt_admin::core::{AdminSite, admin_routes_with_di};
+	/// use reinhardt_di::SingletonScope;
+	/// use std::sync::Arc;
 	///
-	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-	/// let admin = AdminSite::new("My Admin");
-	/// admin.register("User", ModelAdminConfig::new("User"))?;
-	///
-	/// let conn = DatabaseConnection::connect("postgres://localhost/mydb").await?;
-	/// let router = admin.get_urls(conn);
-	/// # Ok(())
-	/// # }
+	/// let site = Arc::new(AdminSite::new("My Admin"));
+	/// let singleton = SingletonScope::new();
+	/// let router = admin_routes_with_di(site, &singleton);
 	/// ```
+	#[deprecated(
+		since = "0.1.0-rc.10",
+		note = "Use admin_routes_with_di(site, &singleton_scope) instead"
+	)]
+	#[allow(deprecated)]
 	pub fn get_urls(self, _db: DatabaseConnection) -> ServerRouter {
 		let url_prefix = self.url_prefix.clone();
-		crate::core::router::admin_routes().with_prefix(&url_prefix)
+		let singleton = SingletonScope::new();
+		crate::core::router::admin_routes_with_di(Arc::new(self), &singleton)
+			.with_prefix(&url_prefix)
 	}
 
 	/// Get an AdminRouter for more control over route building
 	///
-	/// Use this when you need to customize the router before building,
-	/// such as setting a custom favicon.
+	/// # Deprecation
+	///
+	/// Use `admin_routes_with_di()` or [`AdminRouter::build_with_di()`] instead.
 	///
 	/// # Examples
 	///
 	/// ```rust,no_run
-	/// use reinhardt_admin::core::{AdminSite, ModelAdminConfig};
-	/// use reinhardt_db::orm::DatabaseConnection;
+	/// use reinhardt_admin::core::{AdminSite, AdminRouter};
+	/// use reinhardt_di::SingletonScope;
+	/// use std::sync::Arc;
 	///
-	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-	/// let admin = AdminSite::new("My Admin");
-	/// admin.register("User", ModelAdminConfig::new("User"))?;
-	///
-	/// let conn = DatabaseConnection::connect("postgres://localhost/mydb").await?;
-	/// let router = admin.get_router(conn)
-	///     .with_favicon_file("branding/logo.png")?
-	///     .build();
-	/// # Ok(())
-	/// # }
+	/// let site = Arc::new(AdminSite::new("My Admin"));
+	/// let singleton = SingletonScope::new();
+	/// let router = AdminRouter::from_arc(site)
+	///     .build_with_di(&singleton);
 	/// ```
+	#[deprecated(
+		since = "0.1.0-rc.10",
+		note = "Use AdminRouter::build_with_di(&singleton_scope) or admin_routes_with_di(site, &singleton_scope) instead"
+	)]
 	pub fn get_router(self, _db: DatabaseConnection) -> AdminRouter {
 		AdminRouter::from_arc(Arc::new(self))
 	}
@@ -375,24 +373,29 @@ impl AdminSite {
 	/// as singletons in the DI container. This allows handlers to use
 	/// `#[inject]` to automatically receive these dependencies.
 	///
+	/// # Deprecation
+	///
+	/// Use `admin_routes_with_di()` instead, which auto-registers `AdminSite`
+	/// in the singleton scope. `AdminDatabase` is now lazily constructed
+	/// from `DatabaseConnection` at request time.
+	///
 	/// # Examples
 	///
 	/// ```rust,no_run
-	/// use reinhardt_admin::core::{AdminSite, AdminDatabase};
-	/// use reinhardt_di::SingletonScope;
-	/// use reinhardt_db::orm::DatabaseConnection;
+	/// use reinhardt_admin::core::{AdminSite, admin_routes_with_di};
+	/// use reinhardt_di::{SingletonScope, InjectionContext};
 	/// use std::sync::Arc;
 	///
-	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-	/// let admin_site = Arc::new(AdminSite::new("My Admin"));
-	/// let conn = DatabaseConnection::connect("postgres://localhost/mydb").await?;
-	/// let admin_db = AdminDatabase::new(conn);
-	///
+	/// let site = Arc::new(AdminSite::new("My Admin"));
 	/// let singleton = Arc::new(SingletonScope::new());
-	/// AdminSite::configure_di(&singleton, Arc::clone(&admin_site), admin_db, None);
-	/// # Ok(())
-	/// # }
+	/// let router = admin_routes_with_di(Arc::clone(&site), &singleton);
+	/// // AdminDatabase auto-constructs from DatabaseConnection at request time
 	/// ```
+	#[deprecated(
+		since = "0.1.0-rc.10",
+		note = "Use admin_routes_with_di(site, &singleton_scope) instead. \
+		        AdminDatabase is now auto-constructed from DatabaseConnection."
+	)]
 	pub fn configure_di(
 		singleton: &SingletonScope,
 		site: Arc<AdminSite>,
@@ -404,24 +407,30 @@ impl AdminSite {
 			site.set_favicon(data);
 		}
 
-		// Register AdminSite as singleton
-		singleton.set(site);
+		// Register AdminSite as singleton (use set_arc to store with correct TypeId)
+		singleton.set_arc(site);
 
-		// Register AdminDatabase as singleton
-		singleton.set(Arc::new(db));
+		// Register AdminDatabase as singleton (use set_arc to store with correct TypeId)
+		singleton.set_arc(Arc::new(db));
 	}
 }
 
 /// Injectable trait implementation for AdminSite
 ///
-/// This allows AdminSite to be injected via the DI container.
-/// The implementation resolves `Arc<AdminSite>` from the container
-/// and clones the inner value.
+/// Resolves `AdminSite` directly from the singleton scope.
+/// The `AdminSite` must be registered via `admin_routes_with_di()` which
+/// auto-registers the site in the singleton scope during route creation.
 #[async_trait]
 impl Injectable for AdminSite {
 	async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
-		// Resolve Arc<AdminSite> from the container and clone it
-		ctx.resolve::<Self>().await.map(|arc| (*arc).clone())
+		ctx.get_singleton::<Self>()
+			.map(|arc| (*arc).clone())
+			.ok_or_else(|| reinhardt_di::DiError::NotRegistered {
+				type_name: "AdminSite".into(),
+				hint: "AdminSite must be registered as a singleton. \
+				       Use admin_routes_with_di(site, &singleton_scope) to auto-register."
+					.into(),
+			})
 	}
 }
 
@@ -559,5 +568,94 @@ mod tests {
 		assert_eq!(config.list_per_page, 100);
 		assert!(config.enable_search);
 		assert!(config.enable_filters);
+	}
+
+	#[rstest]
+	fn test_set_arc_stores_admin_site_with_correct_type_id() {
+		// Arrange
+		let singleton = SingletonScope::new();
+		let site = Arc::new(AdminSite::new("Test Admin"));
+
+		// Act - use set_arc which stores with TypeId::of::<AdminSite>()
+		singleton.set_arc(site);
+
+		// Assert - should be retrievable as AdminSite (not Arc<AdminSite>)
+		assert!(
+			singleton.get::<AdminSite>().is_some(),
+			"AdminSite should be retrievable via get::<AdminSite>()"
+		);
+	}
+
+	#[rstest]
+	fn test_set_arc_preserves_favicon_data() {
+		// Arrange
+		let singleton = SingletonScope::new();
+		let site = Arc::new(AdminSite::new("Test Admin"));
+		let favicon = vec![0x89, 0x50, 0x4E, 0x47]; // PNG magic bytes
+
+		// Act
+		site.set_favicon(favicon.clone());
+		singleton.set_arc(site);
+
+		// Assert
+		let retrieved = singleton.get::<AdminSite>().unwrap();
+		assert_eq!(retrieved.favicon_data(), Some(favicon));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_admin_site_inject_resolves_from_singleton() {
+		// Arrange
+		let singleton = Arc::new(SingletonScope::new());
+		let site = Arc::new(AdminSite::new("Injectable Admin"));
+		singleton.set_arc(site);
+		let ctx = reinhardt_di::InjectionContext::builder(singleton).build();
+
+		// Act
+		let result = AdminSite::inject(&ctx).await;
+
+		// Assert
+		assert!(result.is_ok());
+		assert_eq!(result.unwrap().name(), "Injectable Admin");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_admin_site_inject_returns_error_when_not_registered() {
+		// Arrange
+		let singleton = Arc::new(SingletonScope::new());
+		let ctx = reinhardt_di::InjectionContext::builder(singleton).build();
+
+		// Act
+		let result = AdminSite::inject(&ctx).await;
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.err().unwrap();
+		assert!(
+			err.to_string().contains("AdminSite"),
+			"Error should mention AdminSite, got: {}",
+			err
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_admin_site_inject_error_hint_mentions_routes_with_di() {
+		// Arrange
+		let singleton = Arc::new(SingletonScope::new());
+		let ctx = reinhardt_di::InjectionContext::builder(singleton).build();
+
+		// Act
+		let result = AdminSite::inject(&ctx).await;
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.err().unwrap();
+		assert!(
+			err.to_string().contains("admin_routes_with_di"),
+			"Error hint should mention admin_routes_with_di, got: {}",
+			err
+		);
 	}
 }

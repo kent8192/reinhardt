@@ -2,6 +2,9 @@
 //!
 //! Provides permission checking on individual object instances.
 
+// This module uses the deprecated User trait for backward compatibility.
+// ObjectPermission accepts &dyn User to preserve existing permission APIs.
+#![allow(deprecated)]
 use crate::User;
 use crate::{Permission, PermissionContext};
 use async_trait::async_trait;

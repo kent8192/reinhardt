@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-macros"
-version = "0.1.0-rc.13"
+version = "0.1.0-rc.14"
 edition.workspace = true
 license.workspace = true
 description = "Procedural macros for Reinhardt framework"
@@ -34,6 +34,12 @@ serial_test = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 linkme = { workspace = true }
+rstest = { workspace = true }
+uuid = { workspace = true }
+# reinhardt-auth uses path-only (no version) to avoid crates.io resolution failures
+# during `cargo publish`. This is safe because dev-dependencies are not required
+# for published crates, and publish_no_verify = true is configured.
+reinhardt-auth = { path = "../../reinhardt-auth", features = ["argon2-hasher"] }
 # Note: Internal workspace crates (reinhardt-db, reinhardt-di, reinhardt-core, etc.)
 # are excluded from dev-dependencies to avoid circular dependency issues during publishing.
 # Tests that require these crates have been moved to reinhardt-integration-tests.

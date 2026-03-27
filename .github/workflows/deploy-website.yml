@@ -25,6 +25,7 @@ concurrency:
 jobs:
   build-and-deploy:
     name: Build & Deploy
+    timeout-minutes: 15
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
@@ -77,6 +78,7 @@ jobs:
 
   cleanup-preview:
     name: Cleanup Preview
+    timeout-minutes: 10
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
     runs-on: ubuntu-latest
     steps:

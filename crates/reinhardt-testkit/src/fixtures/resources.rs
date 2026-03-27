@@ -243,8 +243,12 @@ impl MySqlSuiteResource {
 						break;
 					}
 					Err(e) if attempt < MAX_RETRIES - 1 => {
-						let delay =
-							Duration::from_millis(BASE_DELAY_MS * 2_u64.pow(attempt.min(6)));
+						// Cap backoff at 10 seconds to prevent overflow if MAX_RETRIES is increased
+						let delay = Duration::from_millis(
+							BASE_DELAY_MS
+								.saturating_mul(2u64.saturating_pow(attempt))
+								.min(10_000),
+						);
 						eprintln!(
 							"Connection attempt {} failed: {}. Retrying after {:?}...",
 							attempt + 1,
@@ -280,4 +284,76 @@ static MYSQL_SUITE: OnceLock<Mutex<Weak<MySqlSuiteResource>>> = OnceLock::new();
 #[fixture]
 pub fn mysql_suite() -> SuiteGuard<MySqlSuiteResource> {
 	acquire_suite(&MYSQL_SUITE)
+}
+
+#[cfg(all(test, feature = "testcontainers"))]
+mod tests {
+	use super::*;
+	use rstest::*;
+
+	#[rstest]
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn test_postgres_suite_resource_url_format(
+		postgres_suite: SuiteGuard<PostgresSuiteResource>,
+	) {
+		// Arrange
+		let url = &postgres_suite.database_url;
+
+		// Act (no-op: URL is set at initialization)
+
+		// Assert
+		assert!(
+			url.starts_with("postgres://"),
+			"Expected database_url to start with 'postgres://', got: {}",
+			url
+		);
+	}
+
+	#[rstest]
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn test_postgres_suite_resource_port_nonzero(
+		postgres_suite: SuiteGuard<PostgresSuiteResource>,
+	) {
+		// Arrange
+		let port = postgres_suite.port;
+
+		// Act (no-op: port is set at initialization)
+
+		// Assert
+		assert!(port > 0, "Expected port to be non-zero, got: {}", port);
+	}
+
+	#[rstest]
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn test_postgres_suite_resource_pool_query(
+		postgres_suite: SuiteGuard<PostgresSuiteResource>,
+	) {
+		// Arrange
+		let pool = &postgres_suite.pool;
+
+		// Act
+		let row: (i32,) = sqlx::query_as("SELECT 1")
+			.fetch_one(pool)
+			.await
+			.expect("Failed to execute SELECT 1");
+
+		// Assert
+		assert_eq!(row.0, 1);
+	}
+
+	#[rstest]
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn test_mysql_suite_resource_url_format(mysql_suite: SuiteGuard<MySqlSuiteResource>) {
+		// Arrange
+		let url = &mysql_suite.database_url;
+
+		// Act (no-op: URL is set at initialization)
+
+		// Assert
+		assert!(
+			url.starts_with("mysql://"),
+			"Expected database_url to start with 'mysql://', got: {}",
+			url
+		);
+	}
 }

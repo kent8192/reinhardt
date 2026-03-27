@@ -99,26 +99,27 @@ impl HydrationContext {
 		}
 	}
 
-	/// Restores state from the window's SSR state object.
+	/// Restores state from the `<script id="ssr-state">` element's JSON content.
 	#[cfg(target_arch = "wasm32")]
 	pub fn from_window() -> Result<Self, HydrationError> {
 		let window = web_sys::window()
 			.ok_or_else(|| HydrationError::StateParseError("Window not available".to_string()))?;
 
-		let global = window
-			.get("__REINHARDT_SSR_STATE__")
-			.ok_or_else(|| HydrationError::StateParseError("SSR state not found".to_string()))?;
+		let document = window
+			.document()
+			.ok_or_else(|| HydrationError::StateParseError("Document not available".to_string()))?;
 
-		if global.is_undefined() || global.is_null() {
+		let element = document.get_element_by_id("ssr-state").ok_or_else(|| {
+			HydrationError::StateParseError("SSR state element not found".to_string())
+		})?;
+
+		let json = element.text_content().ok_or_else(|| {
+			HydrationError::StateParseError("SSR state element is empty".to_string())
+		})?;
+
+		if json.trim().is_empty() {
 			return Ok(Self::new());
 		}
-
-		let json = js_sys::JSON::stringify(&global)
-			.map_err(|_| HydrationError::StateParseError("Failed to stringify state".to_string()))?
-			.as_string()
-			.ok_or_else(|| {
-				HydrationError::StateParseError("Failed to convert state to string".to_string())
-			})?;
 
 		let state = SsrState::from_json(&json)
 			.map_err(|e| HydrationError::StateParseError(e.to_string()))?;

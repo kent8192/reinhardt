@@ -51,6 +51,20 @@ pub fn header(site_name: &str, user_name: Option<&str>) -> Page {
 		.into_page()
 }
 
+/// Determines whether a nav item URL matches the current path.
+///
+/// Returns `true` when `current_path` equals the model URL exactly,
+/// equals it without a trailing slash, or starts with the model URL
+/// segment (to match sub-pages while avoiding similar-prefix collisions).
+fn is_active_path(model_url: &str, current_path: Option<&str>) -> bool {
+	current_path.is_some_and(|path| {
+		let normalized_url = model_url.trim_end_matches('/');
+		path == model_url
+			|| path == normalized_url
+			|| path.starts_with(&format!("{}/", normalized_url))
+	})
+}
+
 /// Sidebar component
 ///
 /// Displays the side navigation menu with model links.
@@ -74,7 +88,10 @@ pub fn sidebar(models: &[ModelInfo], current_path: Option<&str>) -> Page {
 	let nav_items: Vec<Page> = models
 		.iter()
 		.map(|model| {
-			let is_active = current_path.is_some_and(|path| path.starts_with(&model.url));
+			// Match both with and without trailing slash to handle browser URL normalization.
+			// Sub-pages like "/admin/users/42/change/" are also matched while
+			// similar prefixes like "/admin/usergroups/" are not.
+			let is_active = is_active_path(&model.url, current_path);
 			let item_class = if is_active {
 				"nav-link active"
 			} else {
@@ -157,10 +174,13 @@ pub fn main_layout(
 	use reinhardt_pages::component::Component;
 	use reinhardt_pages::router::RouterOutlet;
 
+	// Get the current path from the router for sidebar active-link highlighting
+	let current_path = router.current_path().get();
+
 	PageElement::new("div")
 		.attr("class", "admin-layout")
 		.child(header(site_name, user_name))
-		.child(sidebar(models, None))
+		.child(sidebar(models, Some(&current_path)))
 		.child(
 			PageElement::new("main")
 				.attr("class", "main-content")
@@ -177,4 +197,104 @@ pub fn main_layout(
 		)
 		.child(footer(version))
 		.into_page()
+}
+
+#[cfg(test)]
+mod tests {
+	use rstest::rstest;
+
+	use super::is_active_path;
+
+	// ==================== is_active_path tests ====================
+
+	#[rstest]
+	fn test_exact_match_with_trailing_slash() {
+		// Arrange
+		let model_url = "/admin/users/";
+		let current_path = Some("/admin/users/");
+
+		// Act
+		let result = is_active_path(model_url, current_path);
+
+		// Assert
+		assert!(result);
+	}
+
+	#[rstest]
+	fn test_match_without_trailing_slash() {
+		// Arrange
+		let model_url = "/admin/users/";
+		let current_path = Some("/admin/users");
+
+		// Act
+		let result = is_active_path(model_url, current_path);
+
+		// Assert
+		assert!(result);
+	}
+
+	#[rstest]
+	fn test_sub_page_matches() {
+		// Arrange
+		let model_url = "/admin/users/";
+		let current_path = Some("/admin/users/42/change/");
+
+		// Act
+		let result = is_active_path(model_url, current_path);
+
+		// Assert
+		assert!(result);
+	}
+
+	#[rstest]
+	fn test_similar_prefix_does_not_match() {
+		// Arrange
+		let model_url = "/admin/users/";
+		let current_path = Some("/admin/usergroups/");
+
+		// Act
+		let result = is_active_path(model_url, current_path);
+
+		// Assert
+		assert!(!result);
+	}
+
+	#[rstest]
+	fn test_root_admin_path_matches() {
+		// Arrange
+		let model_url = "/admin/";
+		let current_path = Some("/admin/");
+
+		// Act
+		let result = is_active_path(model_url, current_path);
+
+		// Assert
+		assert!(result);
+	}
+
+	#[rstest]
+	fn test_none_current_path_does_not_match() {
+		// Arrange
+		let model_url = "/admin/users/";
+		let current_path = None;
+
+		// Act
+		let result = is_active_path(model_url, current_path);
+
+		// Assert
+		assert!(!result);
+	}
+
+	#[rstest]
+	fn test_different_path_does_not_match() {
+		// Arrange
+		let model_url = "/admin/users/";
+		let current_path = Some("/admin/posts/");
+
+		// Act
+		let result = is_active_path(model_url, current_path);
+
+		// Assert
+		assert!(!result);
+	}
 }

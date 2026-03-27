@@ -128,3 +128,25 @@ fn test_validate_macro_fail() {
 	let t = trybuild::TestCases::new();
 	t.compile_fail("tests/ui/validate/fail/*.rs");
 }
+
+// ===== Settings =====
+
+#[test]
+fn test_settings_macro_fail() {
+	let t = trybuild::TestCases::new();
+	t.compile_fail("tests/ui/settings/fail/*.rs");
+}
+
+// ===== User =====
+
+#[test]
+fn test_user_macro_pass() {
+	let t = trybuild::TestCases::new();
+	t.pass("tests/ui/user/pass/*.rs");
+}
+
+#[test]
+fn test_user_macro_fail() {
+	let t = trybuild::TestCases::new();
+	t.compile_fail("tests/ui/user/fail/*.rs");
+}

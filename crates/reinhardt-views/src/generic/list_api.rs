@@ -433,7 +433,10 @@ where
 
 				Response::ok().with_json(&response_body)
 			}
-			_ => Err(Error::Http("Method not allowed".to_string())),
+			_ => Err(Error::MethodNotAllowed(format!(
+				"Method {} not allowed",
+				request.method
+			))),
 		}
 	}
 

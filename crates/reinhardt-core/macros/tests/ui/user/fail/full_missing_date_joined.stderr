@@ -1,0 +1,7 @@
+error: #[user(full = true)] requires 'date_joined' field. Add 'date_joined' or annotate a field with #[user_field(date_joined)]
+ --> tests/ui/user/fail/full_missing_date_joined.rs:6:1
+  |
+6 | #[user(hasher = Argon2Hasher, username_field = "username", full = true)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `user` (in Nightly builds, run with -Z macro-backtrace for more info)

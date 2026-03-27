@@ -174,16 +174,20 @@ DATABASES = {
 
 ### Reinhardt Settings
 
-Reinhardt uses a built-in settings system with multiple sources:
+Reinhardt uses a composable, macro-based settings system with multiple sources:
 
 ```rust
-// config.rs
-use reinhardt::{Settings, SettingsBuilder, EnvSource, DefaultSource};
+// config/settings.rs
+use reinhardt::settings;
+use reinhardt::{CoreSettings, DefaultSource, EnvSource, SettingsBuilder};
 
-pub fn get_settings() -> Settings {
+#[settings(core: CoreSettings)]
+pub struct ProjectSettings;
+
+pub fn get_settings() -> ProjectSettings {
     SettingsBuilder::new()
         .add_source(DefaultSource::new())
-        .add_source(EnvSource::new().with_prefix("APP_"))
+        .add_source(EnvSource::new().with_prefix("REINHARDT_"))
         .build()
         .expect("Failed to build settings")
         .into_typed()
@@ -192,9 +196,8 @@ pub fn get_settings() -> Settings {
 
 // main.rs
 let settings = get_settings();
-let debug = settings.get::<bool>("debug").unwrap_or(false);
-let secret_key = settings.get::<String>("secret_key").unwrap();
-let database_url = settings.get::<String>("database_url").unwrap();
+let debug = settings.core.debug;
+let secret_key = &settings.core.secret_key;
 ```
 
 ---

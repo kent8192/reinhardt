@@ -1,56 +1,19 @@
-# Always-on hotpath runner (t4g.micro, On-Demand).
+# Hotpath runner: Spot ASG (min=1, max=2, desired=1) with capacity rebalancing.
+#
 # Runs lightweight CI control jobs that require immediate execution without
 # queue delay: determine-runner, cancel-on-pr-close, cleanup-release-branch.
-# Unlike the JIT ephemeral CI runners, this instance is persistent and
-# uses a systemd service to keep the runner process alive across reboots.
-
-# --- Moved blocks: rename cancel_runner → hotpath_runner ---
-# These prevent Terraform from destroying and recreating existing resources.
-
-moved {
-  from = aws_ssm_parameter.cancel_runner_github_app_id
-  to   = aws_ssm_parameter.hotpath_runner_github_app_id
-}
-
-moved {
-  from = aws_ssm_parameter.cancel_runner_github_app_key
-  to   = aws_ssm_parameter.hotpath_runner_github_app_key
-}
-
-moved {
-  from = aws_ssm_parameter.cancel_runner_github_app_installation_id
-  to   = aws_ssm_parameter.hotpath_runner_github_app_installation_id
-}
-
-moved {
-  from = aws_security_group.cancel_runner
-  to   = aws_security_group.hotpath_runner
-}
-
-moved {
-  from = aws_iam_role.cancel_runner
-  to   = aws_iam_role.hotpath_runner
-}
-
-moved {
-  from = aws_iam_role_policy.cancel_runner_ssm_read
-  to   = aws_iam_role_policy.hotpath_runner_ssm_read
-}
-
-moved {
-  from = aws_iam_role_policy_attachment.cancel_runner_ssm_managed
-  to   = aws_iam_role_policy_attachment.hotpath_runner_ssm_managed
-}
-
-moved {
-  from = aws_iam_instance_profile.cancel_runner
-  to   = aws_iam_instance_profile.hotpath_runner
-}
-
-moved {
-  from = aws_instance.cancel_runner
-  to   = aws_instance.hotpath_runner
-}
+#
+# Architecture:
+#   - Launch Template defines the instance spec (t4g.micro Spot, base Ubuntu AMI)
+#   - ASG maintains exactly 1 running instance at all times
+#   - capacity_rebalance proactively launches a replacement before Spot interruption,
+#     so the switchover happens with near-zero downtime
+#   - max_size=2 allows temporary over-provisioning during rebalancing
+#   - Multiple instance type overrides (t4g.micro, t4g.small) improve Spot availability
+#
+# Cost: ~$2.83/month (t4g.micro Spot $2.19 + 8GB gp3 EBS $0.64)
+# Recovery: Spot rebalance recommendation → new instance launched while old still
+#           runs → config.sh --replace switches runner registration → old terminated.
 
 # --- SSM Parameters: GitHub App credentials for runner registration ---
 # The runner needs these at first boot to generate a registration token.
@@ -199,34 +162,91 @@ resource "aws_iam_instance_profile" "hotpath_runner" {
   role  = aws_iam_role.hotpath_runner[0].name
 }
 
-# --- EC2 Instance ---
+# --- Launch Template ---
 
-resource "aws_instance" "hotpath_runner" {
-  count         = var.enable_hotpath_runner ? 1 : 0
-  ami           = data.aws_ami.ubuntu_arm64_latest.id
-  instance_type = var.hotpath_runner_instance_type
+resource "aws_launch_template" "hotpath_runner" {
+  count                  = var.enable_hotpath_runner ? 1 : 0
+  name                   = "${var.prefix}-hotpath-runner"
+  update_default_version = true
 
-  subnet_id              = data.aws_subnets.default.ids[0]
+  image_id = data.aws_ami.ubuntu_arm64_latest.id
+
+  iam_instance_profile {
+    name = aws_iam_instance_profile.hotpath_runner[0].name
+  }
+
   vpc_security_group_ids = [aws_security_group.hotpath_runner[0].id]
-  iam_instance_profile   = aws_iam_instance_profile.hotpath_runner[0].name
 
-  user_data = templatefile("${path.module}/hotpath-runner-userdata.sh", {
+  user_data = base64encode(templatefile("${path.module}/hotpath-runner-userdata.sh", {
     aws_region        = var.aws_region
     prefix            = var.prefix
     github_owner      = var.github_owner
     github_repository = var.github_repository
     runner_labels     = "reinhardt-hotpath"
-  })
+  }))
 
-  tags = {
-    Name = "${var.prefix}-hotpath-runner"
+  tag_specifications {
+    resource_type = "instance"
+    tags = {
+      Name = "${var.prefix}-hotpath-runner"
+    }
   }
 
-  # Don't replace instance when AMI updates (base Ubuntu AMI is fine).
-  # user_data is NOT ignored: changes to the bootstrap script should
-  # trigger instance replacement to maintain IaC correctness.
+  # Don't replace launch template when AMI updates; the base Ubuntu AMI
+  # is only used for initial provisioning. user_data changes DO trigger
+  # a new template version (update_default_version = true).
   lifecycle {
-    ignore_changes        = [ami]
-    create_before_destroy = true
+    ignore_changes = [image_id]
+  }
+}
+
+# --- Auto Scaling Group (Spot, capacity rebalancing) ---
+
+resource "aws_autoscaling_group" "hotpath_runner" {
+  count = var.enable_hotpath_runner ? 1 : 0
+  name  = "${var.prefix}-hotpath-runner"
+
+  min_size         = 1
+  max_size         = 2
+  desired_capacity = 1
+
+  vpc_zone_identifier = data.aws_subnets.default.ids
+
+  # Proactive Spot replacement: when AWS detects elevated interruption risk,
+  # the ASG launches a new instance while the old one is still running.
+  # max_size=2 allows this temporary over-provisioning during switchover.
+  capacity_rebalance = true
+
+  # Allow 5 minutes for user-data to complete before health checks start
+  health_check_type         = "EC2"
+  health_check_grace_period = 300
+
+  mixed_instances_policy {
+    instances_distribution {
+      on_demand_base_capacity                  = 0
+      on_demand_percentage_above_base_capacity = 0
+      spot_allocation_strategy                 = "price-capacity-optimized"
+    }
+
+    launch_template {
+      launch_template_specification {
+        launch_template_id = aws_launch_template.hotpath_runner[0].id
+        version            = "$Latest"
+      }
+
+      # Primary instance type; fallback provides higher Spot availability
+      override {
+        instance_type = var.hotpath_runner_instance_type
+      }
+      override {
+        instance_type = "t4g.small"
+      }
+    }
+  }
+
+  tag {
+    key                 = "Name"
+    value               = "${var.prefix}-hotpath-runner"
+    propagate_at_launch = true
   }
 }

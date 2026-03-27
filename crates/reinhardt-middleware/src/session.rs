@@ -4,6 +4,7 @@
 //! Supports various backends including Cookie, Redis, and database.
 
 use async_trait::async_trait;
+#[allow(deprecated)]
 use reinhardt_conf::Settings;
 use reinhardt_di::{DiError, DiResult, Injectable, InjectionContext};
 use reinhardt_http::{Handler, Middleware, Request, Response, Result};
@@ -52,6 +53,26 @@ impl AsRef<str> for SessionId {
 impl std::fmt::Display for SessionId {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		f.write_str(self.as_str())
+	}
+}
+
+/// Newtype wrapper for the configured session cookie name.
+///
+/// Stored in request extensions by `SessionMiddleware` so that
+/// `Injectable` implementations can retrieve the configured cookie name
+/// instead of hardcoding it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionCookieName(String);
+
+impl SessionCookieName {
+	/// Create a new `SessionCookieName`.
+	pub fn new(name: String) -> Self {
+		Self(name)
+	}
+
+	/// Returns the cookie name as a string slice.
+	pub fn as_str(&self) -> &str {
+		&self.0
 	}
 }
 
@@ -342,7 +363,7 @@ impl SessionConfig {
 
 	/// Create a `SessionConfig` from application `Settings`
 	///
-	/// Maps `Settings.session_cookie_secure` to `SessionConfig.secure`.
+	/// Maps `Settings.core.security.session_cookie_secure` to `SessionConfig.secure`.
 	///
 	/// # Examples
 	///
@@ -350,13 +371,16 @@ impl SessionConfig {
 	/// use reinhardt_conf::Settings;
 	/// use reinhardt_middleware::session::SessionConfig;
 	///
+	/// #[allow(deprecated)]
 	/// let settings = Settings::default();
+	/// #[allow(deprecated)]
 	/// let config = SessionConfig::from_settings(&settings);
 	/// assert!(!config.secure);
 	/// ```
+	#[allow(deprecated)] // Settings is deprecated in favor of composable fragments
 	pub fn from_settings(settings: &Settings) -> Self {
 		Self {
-			secure: settings.session_cookie_secure,
+			secure: settings.core.security.session_cookie_secure,
 			..Self::default()
 		}
 	}
@@ -439,9 +463,12 @@ impl SessionMiddleware {
 	/// use reinhardt_conf::Settings;
 	/// use reinhardt_middleware::session::SessionMiddleware;
 	///
+	/// #[allow(deprecated)]
 	/// let settings = Settings::default();
+	/// #[allow(deprecated)]
 	/// let middleware = SessionMiddleware::from_settings(&settings);
 	/// ```
+	#[allow(deprecated)] // Settings is deprecated in favor of composable fragments
 	pub fn from_settings(settings: &Settings) -> Self {
 		Self::new(SessionConfig::from_settings(settings))
 	}
@@ -555,17 +582,21 @@ impl Middleware for SessionMiddleware {
 		// Save the session
 		self.store.save(session.clone());
 
-		// Inject session ID into request extensions so downstream handlers can access it
+		// Inject session ID and cookie name into request extensions
+		// so downstream handlers and Injectable impls can access them
 		request
 			.extensions
 			.insert(SessionId::new(session.id.clone()));
+		request
+			.extensions
+			.insert(SessionCookieName::new(self.config.cookie_name.clone()));
 
 		// Call the handler
 		let mut response = handler.handle(request).await?;
 
-		// Add Set-Cookie header
+		// Append Set-Cookie header (use append to preserve existing Set-Cookie headers)
 		let cookie = self.build_cookie_header(&session.id);
-		response.headers.insert(
+		response.headers.append(
 			hyper::header::SET_COOKIE,
 			hyper::header::HeaderValue::from_str(&cookie).map_err(|e| {
 				reinhardt_core::exception::Error::Internal(format!(
@@ -911,11 +942,12 @@ mod tests {
 	#[tokio::test]
 	async fn test_session_config_from_settings_secure_enabled() {
 		// Arrange
-		let mut settings =
-			Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
-		settings.session_cookie_secure = true;
+		#[allow(deprecated)]
+		let mut settings = Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
+		settings.core.security.session_cookie_secure = true;
 
 		// Act
+		#[allow(deprecated)]
 		let config = SessionConfig::from_settings(&settings);
 
 		// Assert
@@ -926,9 +958,11 @@ mod tests {
 	#[tokio::test]
 	async fn test_session_config_from_settings_defaults() {
 		// Arrange
+		#[allow(deprecated)]
 		let settings = Settings::default();
 
 		// Act
+		#[allow(deprecated)]
 		let config = SessionConfig::from_settings(&settings);
 
 		// Assert
@@ -941,9 +975,10 @@ mod tests {
 	#[tokio::test]
 	async fn test_session_middleware_from_settings() {
 		// Arrange
-		let mut settings =
-			Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
-		settings.session_cookie_secure = true;
+		#[allow(deprecated)]
+		let mut settings = Settings::new(std::path::PathBuf::from("/app"), "test-secret".to_string());
+		settings.core.security.session_cookie_secure = true;
+		#[allow(deprecated)]
 		let middleware = SessionMiddleware::from_settings(&settings);
 		let handler = Arc::new(TestHandler);
 
@@ -1143,11 +1178,122 @@ mod tests {
 		let session_id = guard.as_ref().expect("SessionId should be present");
 		assert_eq!(session_id.as_str(), original_session_id);
 	}
+
+	/// Handler that captures the cookie name from request extensions
+	struct CookieNameCapturingHandler {
+		captured: Arc<RwLock<Option<SessionCookieName>>>,
+	}
+
+	#[async_trait]
+	impl Handler for CookieNameCapturingHandler {
+		async fn handle(&self, request: Request) -> Result<Response> {
+			let cookie_name = request.extensions.get::<SessionCookieName>();
+			let mut guard = self.captured.write().unwrap();
+			*guard = cookie_name;
+			Ok(Response::new(StatusCode::OK).with_body(Bytes::from("OK")))
+		}
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_session_cookie_name_injected_into_extensions() {
+		// Arrange
+		let config = SessionConfig::new("custom_session".to_string(), Duration::from_secs(3600));
+		let middleware = SessionMiddleware::new(config);
+		let captured = Arc::new(RwLock::new(None));
+		let handler = Arc::new(CookieNameCapturingHandler {
+			captured: Arc::clone(&captured),
+		});
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let _response = middleware.process(request, handler).await.unwrap();
+
+		// Assert - handler received the configured cookie name in extensions
+		let guard = captured.read().unwrap();
+		let cookie_name = guard
+			.as_ref()
+			.expect("SessionCookieName should be present in extensions");
+		assert_eq!(
+			cookie_name.as_str(),
+			"custom_session",
+			"Cookie name should match configured value, not hardcoded 'sessionid'"
+		);
+	}
+
+	/// Handler that returns a response with an existing Set-Cookie header
+	struct HandlerWithSetCookie;
+
+	#[async_trait]
+	impl Handler for HandlerWithSetCookie {
+		async fn handle(&self, _request: Request) -> Result<Response> {
+			let mut response = Response::new(StatusCode::OK).with_body(Bytes::from("OK"));
+			response.headers.insert(
+				hyper::header::SET_COOKIE,
+				hyper::header::HeaderValue::from_static("csrftoken=xyz789; Path=/"),
+			);
+			Ok(response)
+		}
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_session_set_cookie_appends_not_replaces() {
+		// Arrange
+		let config = SessionConfig::new("sessionid".to_string(), Duration::from_secs(3600));
+		let middleware = SessionMiddleware::new(config);
+		let handler = Arc::new(HandlerWithSetCookie);
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert - both Set-Cookie headers should be present
+		let set_cookies: Vec<&hyper::header::HeaderValue> = response
+			.headers
+			.get_all(hyper::header::SET_COOKIE)
+			.iter()
+			.collect();
+		assert_eq!(
+			set_cookies.len(),
+			2,
+			"Expected both the original CSRF cookie and session cookie"
+		);
+
+		let cookies_str: Vec<&str> = set_cookies.iter().map(|v| v.to_str().unwrap()).collect();
+		assert!(
+			cookies_str.iter().any(|c| c.contains("csrftoken=xyz789")),
+			"Original Set-Cookie header should be preserved"
+		);
+		assert!(
+			cookies_str.iter().any(|c| c.contains("sessionid=")),
+			"Session Set-Cookie header should be appended"
+		);
+	}
 }
 
 // ============================================================================
 // Injectable Implementations for Dependency Injection
 // ============================================================================
+
+/// Default session cookie name used when no `SessionCookieName` extension is present.
+const DEFAULT_SESSION_COOKIE_NAME: &str = "sessionid";
 
 /// Helper function to extract session ID from HTTP request cookies.
 ///
@@ -1202,8 +1348,17 @@ impl Injectable for SessionData {
 			DiError::NotFound("Request not found in InjectionContext".to_string())
 		})?;
 
+		// Extract configured cookie name from request extensions.
+		// Extensions::get returns an owned value, so we extract it once and
+		// use a reference for the lookup to avoid additional allocation.
+		let ext_cookie_name = request.extensions.get::<SessionCookieName>();
+		let cookie_name = ext_cookie_name
+			.as_ref()
+			.map(|cn| cn.as_str())
+			.unwrap_or(DEFAULT_SESSION_COOKIE_NAME);
+
 		// Extract session ID from Cookie header
-		let session_id = extract_session_id_from_request(&request, "sessionid")?;
+		let session_id = extract_session_id_from_request(&request, cookie_name)?;
 
 		// Load SessionData from store
 		store

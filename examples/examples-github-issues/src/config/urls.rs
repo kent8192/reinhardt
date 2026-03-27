@@ -1,10 +1,13 @@
 //! URL configuration for examples-github-issues project
 //!
 //! This module configures the unified GraphQL schema and URL patterns.
-//! Admin panel routes are integrated via `AdminSite::get_urls()`.
+//! Admin panel routes are integrated via `admin_routes_with_di_deferred()`,
+//! which captures `AdminSite` DI registration for later application by the server.
 
 use std::env;
+use std::sync::Arc;
 
+use reinhardt::admin::{admin_routes_with_di_deferred, admin_static_routes};
 use reinhardt::graphql::{
 	MergedObject, MergedSubscription, Schema,
 	http::{GraphQLPlaygroundConfig, playground_source},
@@ -112,25 +115,25 @@ fn create_cors_middleware() -> CorsMiddleware {
 /// Build URL patterns for the application
 ///
 /// Includes GraphQL endpoints and admin panel integration.
-/// Admin routes require a `DatabaseConnection` via `AdminSite::get_urls()`.
+/// Admin routes use `admin_routes_with_di_deferred()` for deferred DI registration.
 #[routes]
 pub fn routes() -> UnifiedRouter {
-	// Configure admin site (registration only, no DB needed yet)
-	let _admin = configure_admin();
+	// Configure admin site (registration only, no DB needed yet).
+	// The #[admin(model)] macro registers models via inventory as a side effect.
+	let admin_site = Arc::new(configure_admin());
 
-	// Admin routes require DatabaseConnection for query execution.
-	// In production, mount admin routes like this:
-	//
-	//   let db = DatabaseConnection::connect("postgres://...").await?;
-	//   let admin_router = admin.get_urls(db);
-	//   router.mount("/admin", admin_router)
-	//
-	// For this example, admin is configured but not mounted since
-	// get_urls() requires an async DatabaseConnection.
+	// Build admin router with deferred DI registration.
+	// AdminSite registration is captured in DiRegistrationList and
+	// applied to the server's singleton scope during startup.
+	let (admin_router, admin_di) = admin_routes_with_di_deferred(admin_site);
 
 	UnifiedRouter::new()
 		.endpoint(views::health_check)
 		.function("/graphql", reinhardt::Method::POST, graphql_handler)
 		.function("/graphql", reinhardt::Method::GET, graphql_playground)
+		// Mount admin panel routes with deferred DI and static assets
+		.mount("/admin/", admin_router)
+		.with_di_registrations(admin_di)
+		.mount("/static/admin/", admin_static_routes())
 		.with_middleware(create_cors_middleware())
 }

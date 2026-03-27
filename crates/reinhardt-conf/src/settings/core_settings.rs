@@ -1,0 +1,351 @@
+//! Core settings fragment
+//!
+//! Essential configuration shared by all reinhardt applications.
+
+use super::database_config::DatabaseConfig;
+use super::fragment::{HasSettings, SettingsFragment};
+use super::policy::{FieldPolicy, FieldRequirement};
+use super::profile::Profile;
+use super::security::SecuritySettings;
+use super::validation::{ValidationError, ValidationResult};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+/// Core application settings.
+///
+/// Contains essential configuration: base directory, secret key, debug mode,
+/// allowed hosts, database configs, security settings, middleware, and apps.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CoreSettings {
+	/// Base directory of the project.
+	#[serde(default = "default_base_dir")]
+	pub base_dir: PathBuf,
+	/// Secret key for cryptographic signing.
+	pub secret_key: String,
+	/// Debug mode flag.
+	#[serde(default = "default_debug")]
+	pub debug: bool,
+	/// List of allowed host/domain names.
+	#[serde(default)]
+	pub allowed_hosts: Vec<String>,
+	/// Database configurations keyed by alias.
+	#[serde(default = "default_databases")]
+	pub databases: HashMap<String, DatabaseConfig>,
+	/// Security settings (nested fragment).
+	///
+	/// Flattened for backward-compatible deserialization: legacy TOML keys like
+	/// `secure_ssl_redirect` at the top level are accepted alongside the nested
+	/// `[security]` section form.
+	#[serde(default, flatten)]
+	pub security: SecuritySettings,
+	/// Middleware class paths.
+	#[serde(default)]
+	pub middleware: Vec<String>,
+	/// Root URL configuration module.
+	#[serde(default)]
+	pub root_urlconf: String,
+	/// List of installed application paths.
+	#[serde(default)]
+	pub installed_apps: Vec<String>,
+}
+
+fn default_base_dir() -> PathBuf {
+	PathBuf::from(".")
+}
+
+fn default_debug() -> bool {
+	true
+}
+
+fn default_databases() -> HashMap<String, DatabaseConfig> {
+	let mut map = HashMap::new();
+	map.insert("default".to_string(), DatabaseConfig::default());
+	map
+}
+
+impl Default for CoreSettings {
+	fn default() -> Self {
+		Self {
+			base_dir: default_base_dir(),
+			secret_key: String::new(),
+			debug: true,
+			allowed_hosts: Vec::new(),
+			databases: default_databases(),
+			security: SecuritySettings::default(),
+			middleware: Vec::new(),
+			root_urlconf: String::new(),
+			installed_apps: Vec::new(),
+		}
+	}
+}
+
+impl SettingsFragment for CoreSettings {
+	type Accessor = dyn HasCoreSettings;
+
+	fn section() -> &'static str {
+		"core"
+	}
+
+	fn field_policies() -> &'static [FieldPolicy] {
+		// secret_key has no default and must be explicitly provided by the user.
+		// All other fields have serde defaults or implement Default.
+		static POLICIES: [FieldPolicy; 9] = [
+			FieldPolicy {
+				name: "base_dir",
+				requirement: FieldRequirement::Optional,
+				has_default: true,
+			},
+			FieldPolicy {
+				name: "secret_key",
+				requirement: FieldRequirement::Required,
+				has_default: false,
+			},
+			FieldPolicy {
+				name: "debug",
+				requirement: FieldRequirement::Optional,
+				has_default: true,
+			},
+			FieldPolicy {
+				name: "allowed_hosts",
+				requirement: FieldRequirement::Optional,
+				has_default: true,
+			},
+			FieldPolicy {
+				name: "databases",
+				requirement: FieldRequirement::Optional,
+				has_default: true,
+			},
+			FieldPolicy {
+				name: "security",
+				requirement: FieldRequirement::Optional,
+				has_default: true,
+			},
+			FieldPolicy {
+				name: "middleware",
+				requirement: FieldRequirement::Optional,
+				has_default: true,
+			},
+			FieldPolicy {
+				name: "root_urlconf",
+				requirement: FieldRequirement::Optional,
+				has_default: true,
+			},
+			FieldPolicy {
+				name: "installed_apps",
+				requirement: FieldRequirement::Optional,
+				has_default: true,
+			},
+		];
+		&POLICIES
+	}
+
+	fn validate(&self, profile: &Profile) -> ValidationResult {
+		if self.secret_key.is_empty() {
+			return Err(ValidationError::MissingRequired("secret_key".to_string()));
+		}
+
+		if profile.is_production() {
+			if self.debug {
+				return Err(ValidationError::Security(
+					"debug must be false in production".to_string(),
+				));
+			}
+			if self.allowed_hosts.is_empty() {
+				return Err(ValidationError::MissingRequired(
+					"allowed_hosts".to_string(),
+				));
+			}
+		}
+
+		// Delegate to nested security fragment
+		self.security.validate(profile)?;
+
+		Ok(())
+	}
+}
+
+/// Trait for accessing [`CoreSettings`] from a composed settings type.
+pub trait HasCoreSettings {
+	/// Get a reference to the core settings.
+	fn core(&self) -> &CoreSettings;
+}
+
+impl<T: HasSettings<CoreSettings>> HasCoreSettings for T {
+	fn core(&self) -> &CoreSettings {
+		self.get_settings()
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::settings::fragment::SettingsFragment;
+	use crate::settings::profile::Profile;
+	use rstest::rstest;
+
+	#[rstest]
+	fn test_core_settings_section() {
+		// Arrange / Act / Assert
+		assert_eq!(CoreSettings::section(), "core");
+	}
+
+	#[rstest]
+	fn test_core_settings_default() {
+		// Arrange / Act
+		let settings = CoreSettings::default();
+
+		// Assert
+		assert!(settings.debug);
+		assert!(settings.secret_key.is_empty());
+		assert!(settings.allowed_hosts.is_empty());
+		assert!(settings.databases.contains_key("default"));
+		assert!(!settings.security.secure_ssl_redirect);
+	}
+
+	#[rstest]
+	fn test_core_settings_validate_missing_secret_key() {
+		// Arrange
+		let settings = CoreSettings::default();
+
+		// Act
+		let result = settings.validate(&Profile::Development);
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_core_settings_validate_development_ok() {
+		// Arrange
+		let settings = CoreSettings {
+			secret_key: "test-secret-key".to_string(),
+			..Default::default()
+		};
+
+		// Act
+		let result = settings.validate(&Profile::Development);
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	fn test_core_settings_validate_production_debug_fails() {
+		// Arrange
+		let settings = CoreSettings {
+			secret_key: "production-secret-key".to_string(),
+			debug: true,
+			..Default::default()
+		};
+
+		// Act
+		let result = settings.validate(&Profile::Production);
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_core_settings_validate_production_ok() {
+		// Arrange
+		let settings = CoreSettings {
+			secret_key: "production-secret-key".to_string(),
+			debug: false,
+			allowed_hosts: vec!["example.com".to_string()],
+			security: SecuritySettings {
+				secure_ssl_redirect: true,
+				session_cookie_secure: true,
+				csrf_cookie_secure: true,
+				..Default::default()
+			},
+			..Default::default()
+		};
+
+		// Act
+		let result = settings.validate(&Profile::Production);
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	fn test_core_settings_delegates_security_validation() {
+		// Arrange - security validation fails in production
+		let settings = CoreSettings {
+			secret_key: "production-secret-key".to_string(),
+			debug: false,
+			allowed_hosts: vec!["example.com".to_string()],
+			security: SecuritySettings::default(), // SSL redirect is false
+			..Default::default()
+		};
+
+		// Act
+		let result = settings.validate(&Profile::Production);
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_core_settings_field_policies_secret_key_required() {
+		use crate::settings::policy::FieldRequirement;
+
+		// Arrange / Act
+		let policies = CoreSettings::field_policies();
+
+		// Assert: secret_key must be marked as Required with no default
+		let secret_key_policy = policies.iter().find(|p| p.name == "secret_key");
+		assert!(
+			secret_key_policy.is_some(),
+			"secret_key must have an explicit field policy"
+		);
+		let policy = secret_key_policy.unwrap();
+		assert_eq!(
+			policy.requirement,
+			FieldRequirement::Required,
+			"secret_key must be Required"
+		);
+		assert!(
+			!policy.has_default,
+			"secret_key must not have a default value"
+		);
+	}
+
+	#[rstest]
+	fn test_core_settings_field_policies_other_fields_optional() {
+		use crate::settings::policy::FieldRequirement;
+
+		// Arrange / Act
+		let policies = CoreSettings::field_policies();
+
+		// Assert: all fields except secret_key are Optional with defaults
+		let optional_fields = [
+			"base_dir",
+			"debug",
+			"allowed_hosts",
+			"databases",
+			"security",
+			"middleware",
+			"root_urlconf",
+			"installed_apps",
+		];
+		for field_name in optional_fields {
+			let policy = policies.iter().find(|p| p.name == field_name);
+			assert!(
+				policy.is_some(),
+				"field '{field_name}' must have a field policy"
+			);
+			let policy = policy.unwrap();
+			assert_eq!(
+				policy.requirement,
+				FieldRequirement::Optional,
+				"field '{field_name}' must be Optional"
+			);
+			assert!(
+				policy.has_default,
+				"field '{field_name}' must have a default value"
+			);
+		}
+	}
+}

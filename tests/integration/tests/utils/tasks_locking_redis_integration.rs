@@ -41,11 +41,11 @@ async fn test_redis_lock_acquire() {
 		.expect("Failed to connect to Redis");
 	let task_id = TaskId::new();
 
-	let acquired = lock
+	let token = lock
 		.acquire(task_id, Duration::from_secs(60))
 		.await
 		.unwrap();
-	assert!(acquired);
+	assert!(token.is_some());
 }
 
 #[tokio::test]
@@ -66,11 +66,11 @@ async fn test_redis_lock_already_locked() {
 	lock.acquire(task_id, Duration::from_secs(60))
 		.await
 		.unwrap();
-	let acquired = lock
+	let token = lock
 		.acquire(task_id, Duration::from_secs(60))
 		.await
 		.unwrap();
-	assert!(!acquired);
+	assert!(token.is_none());
 }
 
 #[tokio::test]
@@ -88,10 +88,13 @@ async fn test_redis_lock_release() {
 		.expect("Failed to connect to Redis");
 	let task_id = TaskId::new();
 
-	lock.acquire(task_id, Duration::from_secs(60))
+	let token = lock
+		.acquire(task_id, Duration::from_secs(60))
 		.await
+		.unwrap()
 		.unwrap();
-	lock.release(task_id).await.unwrap();
+	let released = lock.release(task_id, &token).await.unwrap();
+	assert!(released);
 
 	let is_locked = lock.is_locked(task_id).await.unwrap();
 	assert!(!is_locked);

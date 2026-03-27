@@ -34,21 +34,21 @@ This generates a complete project structure:
 tutorial/
 ├── Cargo.toml
 ├── README.md
+├── Makefile.toml
+├── settings/
+│   ├── base.toml
+│   ├── local.toml
+│   ├── staging.toml
+│   └── production.toml
 └── src/
-    ├── main.rs
+    ├── lib.rs
     ├── config.rs
     ├── apps.rs
     ├── config/
     │   ├── settings.rs
-    │   ├── settings/
-    │   │   ├── base.rs
-    │   │   ├── local.rs
-    │   │   ├── staging.rs
-    │   │   └── production.rs
     │   ├── urls.rs
     │   └── apps.rs
     └── bin/
-        ├── runserver.rs
         └── manage.rs
 ```
 

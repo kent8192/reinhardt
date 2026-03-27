@@ -12,11 +12,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.9", features = ["rest"] }
+reinhardt = { version = "0.1.0-rc.13", features = ["rest"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.9", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.9", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
 ```
 
 Then import REST features:
@@ -59,7 +59,7 @@ use reinhardt::rest::{PaginatedResponse};
   - `AuthResult<U>` - Result type for authentication operations
   - `AuthBackend` - Authentication backend trait
 
-#### Routing (from `reinhardt-http`)
+#### Routing (from `reinhardt-urls`)
 
 - **Router Types**:
   - `DefaultRouter` - Default router with automatic ViewSet URL generation
@@ -130,7 +130,7 @@ use reinhardt::rest::{PaginatedResponse};
 This crate does not contain tests. All functionality is tested in the underlying specialized crates:
 
 - Authentication tests: `reinhardt-auth/tests/`
-- Router tests: `reinhardt-http/tests/`
+- Router tests: `reinhardt-urls/tests/`
 - Browsable API tests: `reinhardt-rest/src/browsable_api/`
 - Response handling tests: Documentation tests in `src/response.rs`
 - Integration tests: `tests/integration/`

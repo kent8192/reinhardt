@@ -68,28 +68,38 @@ pub fn button(text: &str, variant: ButtonVariant, disabled: bool, _on_click: Sig
 
 	#[cfg(target_arch = "wasm32")]
 	let button_view = {
-		PageElement::new("button")
+		let mut element = PageElement::new("button")
 			.attr("class", classes.clone())
 			.attr("type", "button")
-			.attr("disabled", if disabled { "true" } else { "false" })
 			.on(
 				EventType::Click,
 				Arc::new(move |_event: web_sys::Event| {
 					_on_click.set(true);
 				}),
 			)
-			.child(text.to_string())
+			.child(text.to_string());
+		// Only add disabled attribute when actually disabled
+		// (in HTML, disabled="false" is still truthy)
+		if disabled {
+			element = element.attr("disabled", "");
+		}
+		element
 	};
 
 	#[cfg(not(target_arch = "wasm32"))]
 	let button_view = {
 		// SSR: No event handler needed (will be hydrated on client)
-		PageElement::new("button")
+		let mut element = PageElement::new("button")
 			.attr("class", classes)
 			.attr("type", "button")
-			.attr("disabled", if disabled { "true" } else { "false" })
 			.attr("data-reactive", "true") // Marker for client-side hydration
-			.child(text.to_string())
+			.child(text.to_string());
+		// Only add disabled attribute when actually disabled
+		// (in HTML, disabled="false" is still truthy)
+		if disabled {
+			element = element.attr("disabled", "");
+		}
+		element
 	};
 
 	button_view.into_page()
@@ -248,26 +258,56 @@ where
 
 	#[cfg(target_arch = "wasm32")]
 	let link = {
-		PageElement::new("a")
-			.attr("class", "page-link")
-			.attr("href", "#")
-			.child(text.to_string())
-			.on(
-				EventType::Click,
-				Arc::new(move |_event: web_sys::Event| {
-					_handler(_signal.clone());
-				}),
-			)
+		if disabled {
+			// Disabled items use <span> to prevent click interaction and navigation
+			PageElement::new("span")
+				.attr("class", "page-link")
+				.attr("aria-disabled", "true")
+				.attr("tabindex", "-1")
+				.child(text.to_string())
+		} else if active {
+			// Active (current page) items use <span> to prevent redundant navigation
+			PageElement::new("span")
+				.attr("class", "page-link")
+				.attr("aria-current", "page")
+				.child(text.to_string())
+		} else {
+			PageElement::new("a")
+				.attr("class", "page-link")
+				.attr("href", "#")
+				.child(text.to_string())
+				.on(
+					EventType::Click,
+					Arc::new(move |_event: web_sys::Event| {
+						_handler(_signal.clone());
+					}),
+				)
+		}
 	};
 
 	#[cfg(not(target_arch = "wasm32"))]
 	let link = {
-		// SSR: No event handler needed (will be hydrated on client)
-		PageElement::new("a")
-			.attr("class", "page-link")
-			.attr("href", "#")
-			.attr("data-reactive", "true") // Marker for client-side hydration
-			.child(text.to_string())
+		if disabled {
+			// Disabled items use <span> to prevent click interaction and navigation
+			PageElement::new("span")
+				.attr("class", "page-link")
+				.attr("aria-disabled", "true")
+				.attr("tabindex", "-1")
+				.child(text.to_string())
+		} else if active {
+			// Active (current page) items use <span> to prevent redundant navigation
+			PageElement::new("span")
+				.attr("class", "page-link")
+				.attr("aria-current", "page")
+				.child(text.to_string())
+		} else {
+			// SSR: No event handler needed (will be hydrated on client)
+			PageElement::new("a")
+				.attr("class", "page-link")
+				.attr("href", "#")
+				.attr("data-reactive", "true") // Marker for client-side hydration
+				.child(text.to_string())
+		}
 	};
 
 	PageElement::new("li")

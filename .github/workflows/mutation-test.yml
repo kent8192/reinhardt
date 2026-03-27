@@ -28,14 +28,14 @@ env:
 
 jobs:
   mutation-test:
-    name: "Shard ${{ matrix.shard }}/${{ env.TOTAL_SHARDS }}"
+    name: "Shard ${{ matrix.shard }}/5"
     runs-on: ubuntu-latest
-    if: inputs.shard == '0' || inputs.shard == '' || inputs.shard == matrix.shard
+    if: github.event_name != 'workflow_dispatch' || inputs.shard == '0' || inputs.shard == matrix.shard
     timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5]
+        shard: ['1', '2', '3', '4', '5']
     steps:
       - name: Checkout
         uses: actions/checkout@v6

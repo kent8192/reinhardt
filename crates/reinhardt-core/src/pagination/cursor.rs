@@ -250,8 +250,8 @@ impl Paginator for CursorPagination {
 			0
 		};
 
-		// Calculate slice bounds
-		let start = position;
+		// Clamp start position to data length to prevent out-of-range panic
+		let start = std::cmp::min(position, total_count);
 		let end = std::cmp::min(start + page_size, total_count);
 
 		// Get results
@@ -344,5 +344,47 @@ mod tests {
 			result.is_ok(),
 			"paginate should not panic with malformed URL: {malformed_url:?}"
 		);
+	}
+
+	#[rstest]
+	fn paginate_returns_empty_results_for_out_of_range_cursor() {
+		// Arrange - use the same encoder instance for both cursor generation and paginator
+		let encoder =
+			encoder::Base64CursorEncoder::with_secret_key(b"test-secret-key-for-unit-tests!!");
+		let items: Vec<i32> = (1..=10).collect();
+		// Encode a cursor pointing beyond data length
+		let out_of_range_cursor = encoder.encode(100).unwrap();
+		let paginator = CursorPagination::new().with_encoder(encoder);
+
+		// Act
+		let result = paginator.paginate(
+			&items,
+			Some(&out_of_range_cursor),
+			"http://example.com/items",
+		);
+
+		// Assert - should return empty results, not panic
+		assert!(result.is_ok());
+		let response = result.unwrap();
+		assert!(response.results.is_empty());
+	}
+
+	#[rstest]
+	fn paginate_returns_empty_results_for_cursor_on_empty_dataset() {
+		// Arrange - use the same encoder instance for both cursor generation and paginator
+		let encoder =
+			encoder::Base64CursorEncoder::with_secret_key(b"test-secret-key-for-unit-tests!!");
+		let items: Vec<i32> = vec![];
+		let cursor = encoder.encode(0).unwrap();
+		let paginator = CursorPagination::new().with_encoder(encoder);
+
+		// Act
+		let result = paginator.paginate(&items, Some(&cursor), "http://example.com/items");
+
+		// Assert
+		assert!(result.is_ok());
+		let response = result.unwrap();
+		assert!(response.results.is_empty());
+		assert_eq!(response.count, 0);
 	}
 }

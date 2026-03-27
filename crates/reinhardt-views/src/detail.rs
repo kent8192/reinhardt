@@ -505,7 +505,7 @@ where
 		// Support GET and HEAD methods
 		let is_head = request.method == "HEAD";
 		if !matches!(request.method.as_str(), "GET" | "HEAD") {
-			return Err(Error::Validation(format!(
+			return Err(Error::MethodNotAllowed(format!(
 				"Method {} not allowed",
 				request.method
 			)));

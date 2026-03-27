@@ -9,9 +9,41 @@
 //! - `DataTable` - Data table component
 
 use crate::types::{FilterInfo, FilterType, ModelInfo};
+use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use reinhardt_pages::Signal;
 use reinhardt_pages::component::{IntoPage, Page, PageElement};
 use std::collections::HashMap;
+
+/// Characters that must be percent-encoded in URL path segments.
+///
+/// This set encodes characters that are unsafe or reserved in URL paths,
+/// while preserving RFC 3986 unreserved characters (`A-Z`, `a-z`, `0-9`, `-`, `_`, `.`, `~`).
+/// Encoded characters: space, `"`, `#`, `%`, `/`, `<`, `>`, `?`, `[`, `]`, `^`, `` ` ``, `{`, `|`, `}`.
+const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
+	.add(b' ')
+	.add(b'"')
+	.add(b'#')
+	.add(b'%')
+	.add(b'/')
+	.add(b'<')
+	.add(b'>')
+	.add(b'?')
+	.add(b'[')
+	.add(b']')
+	.add(b'^')
+	.add(b'`')
+	.add(b'{')
+	.add(b'|')
+	.add(b'}');
+
+/// Percent-encode a string for safe use in URL path segments.
+///
+/// Encodes characters that are unsafe for URL path segments while preserving
+/// RFC 3986 unreserved characters (`-`, `_`, `.`, `~`) to avoid unnecessarily
+/// mangling valid route segments such as `user-management`.
+fn encode_path_segment(s: &str) -> String {
+	utf8_percent_encode(s, PATH_SEGMENT_ENCODE_SET).to_string()
+}
 
 #[cfg(target_arch = "wasm32")]
 use reinhardt_pages::dom::EventType;
@@ -264,8 +296,10 @@ fn action_buttons(model_name: &str, record_id: &str) -> Page {
 	use reinhardt_pages::component::Component;
 	use reinhardt_pages::router::Link;
 
-	let detail_url = format!("/admin/{}/{}/", model_name.to_lowercase(), record_id);
-	let edit_url = format!("/admin/{}/{}/change/", model_name.to_lowercase(), record_id);
+	let encoded_model = encode_path_segment(&model_name.to_lowercase());
+	let encoded_id = encode_path_segment(record_id);
+	let detail_url = format!("/admin/{}/{}/", encoded_model, encoded_id);
+	let edit_url = format!("/admin/{}/{}/change/", encoded_model, encoded_id);
 
 	PageElement::new("div")
 		.attr("class", "btn-group btn-group-sm")
@@ -321,8 +355,10 @@ pub fn detail_view(
 	use reinhardt_pages::component::Component;
 	use reinhardt_pages::router::Link;
 
-	let edit_url = format!("/admin/{}/{}/change/", model_name.to_lowercase(), record_id);
-	let list_url = format!("/admin/{}/", model_name.to_lowercase());
+	let encoded_model = encode_path_segment(&model_name.to_lowercase());
+	let encoded_id = encode_path_segment(record_id);
+	let edit_url = format!("/admin/{}/{}/change/", encoded_model, encoded_id);
+	let list_url = format!("/admin/{}/", encoded_model);
 
 	PageElement::new("div")
 		.attr("class", "detail-view")
@@ -351,8 +387,11 @@ pub fn detail_view(
 
 /// Generates a detail table for record fields
 fn detail_table(record: &std::collections::HashMap<String, String>) -> Page {
-	let rows: Vec<Page> = record
-		.iter()
+	// Collect key-value pairs and sort by key for deterministic field display order
+	let mut entries: Vec<(&String, &String)> = record.iter().collect();
+	entries.sort_by_key(|(k, _)| *k);
+	let rows: Vec<Page> = entries
+		.into_iter()
 		.map(|(key, value)| {
 			PageElement::new("tr")
 				.child(
@@ -405,7 +444,23 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 		format!("Create {}", model_name)
 	};
 
-	let list_url = format!("/admin/{}/", model_name.to_lowercase());
+	let action_url = if let Some(rid) = record_id {
+		format!(
+			"/admin/{}/{}/change/",
+			encode_path_segment(&model_name.to_lowercase()),
+			encode_path_segment(rid)
+		)
+	} else {
+		format!(
+			"/admin/{}/add/",
+			encode_path_segment(&model_name.to_lowercase())
+		)
+	};
+
+	let list_url = format!(
+		"/admin/{}/",
+		encode_path_segment(&model_name.to_lowercase())
+	);
 
 	// Add form fields
 	let form_groups: Vec<Page> = fields.iter().map(form_group).collect();
@@ -420,7 +475,8 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 		.child(
 			PageElement::new("form")
 				.attr("class", "needs-validation")
-				.attr("novalidate", "true")
+				.attr("method", "POST")
+				.attr("action", action_url)
 				.children(form_groups)
 				.child(
 					PageElement::new("div")
@@ -666,4 +722,67 @@ pub fn filters(
 				.children(filter_controls),
 		)
 		.into_page()
+}
+
+#[cfg(test)]
+mod tests {
+	use super::detail_table;
+	use rstest::rstest;
+	use std::collections::HashMap;
+
+	/// Verifies that detail_table renders fields in alphabetical order regardless
+	/// of HashMap insertion order.
+	#[rstest]
+	fn test_detail_table_renders_fields_in_alphabetical_order() {
+		// Arrange
+		let mut record = HashMap::new();
+		record.insert("zebra".to_string(), "z_value".to_string());
+		record.insert("alpha".to_string(), "a_value".to_string());
+		record.insert("middle".to_string(), "m_value".to_string());
+
+		// Act
+		let page = detail_table(&record);
+		let html = page.render_to_string();
+
+		// Assert: alpha must appear before middle, and middle before zebra
+		let pos_alpha = html.find("alpha").expect("alpha field must be present");
+		let pos_middle = html.find("middle").expect("middle field must be present");
+		let pos_zebra = html.find("zebra").expect("zebra field must be present");
+		assert!(
+			pos_alpha < pos_middle,
+			"alpha must appear before middle in rendered output"
+		);
+		assert!(
+			pos_middle < pos_zebra,
+			"middle must appear before zebra in rendered output"
+		);
+	}
+
+	/// Verifies that detail_table renders associated values alongside their keys.
+	#[rstest]
+	fn test_detail_table_renders_key_value_pairs() {
+		// Arrange
+		let mut record = HashMap::new();
+		record.insert("username".to_string(), "john_doe".to_string());
+		record.insert("email".to_string(), "john@example.com".to_string());
+
+		// Act
+		let page = detail_table(&record);
+		let html = page.render_to_string();
+
+		// Assert
+		assert!(
+			html.contains("username"),
+			"key 'username' must appear in output"
+		);
+		assert!(
+			html.contains("john_doe"),
+			"value 'john_doe' must appear in output"
+		);
+		assert!(html.contains("email"), "key 'email' must appear in output");
+		assert!(
+			html.contains("john@example.com"),
+			"value 'john@example.com' must appear in output"
+		);
+	}
 }

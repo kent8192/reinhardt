@@ -22,7 +22,7 @@ use {
 ///
 /// Accepts `content` as a String parameter (form! macro passes individual field values).
 /// Internally constructs CreateTweetRequest for validation.
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn create_tweet(
 	content: String,
 	#[inject] db: DatabaseConnection,
@@ -68,7 +68,7 @@ pub async fn create_tweet(
 }
 
 /// List tweets
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn list_tweets(
 	user_id: Option<Uuid>,
 	page: u32,
@@ -146,7 +146,7 @@ pub async fn list_tweets(
 }
 
 /// Delete a tweet
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn delete_tweet(
 	tweet_id: Uuid,
 	#[inject] db: DatabaseConnection,

@@ -159,17 +159,23 @@ impl DatabaseBackend for MySqlBackend {
 		&self,
 		isolation_level: IsolationLevel,
 	) -> Result<Box<dyn TransactionExecutor>> {
-		// MySQL requires SET TRANSACTION before starting the transaction
-		// First set the isolation level for the next transaction
+		// MySQL requires SET TRANSACTION ISOLATION LEVEL before BEGIN.
+		// We must set isolation and start the transaction on the same connection
+		// to avoid a race condition where they run on different pool connections.
+		//
+		// Strategy: acquire a connection, set isolation level, send BEGIN manually,
+		// then wrap the connection in a raw transaction executor that manages
+		// COMMIT/ROLLBACK explicitly.
+		let mut conn = self.pool.acquire().await?;
+
 		let set_sql = format!(
 			"SET TRANSACTION ISOLATION LEVEL {}",
 			isolation_level.to_sql(DatabaseType::Mysql)
 		);
-		sqlx::query(&set_sql).execute(self.pool.as_ref()).await?;
+		sqlx::query(&set_sql).execute(&mut *conn).await?;
+		sqlx::query("BEGIN").execute(&mut *conn).await?;
 
-		// Then start the transaction
-		let tx = self.pool.begin().await?;
-		Ok(Box::new(MySqlTransactionExecutor::new(tx)))
+		Ok(Box::new(MySqlRawTransactionExecutor::new(conn)))
 	}
 
 	fn as_any(&self) -> &dyn std::any::Any {
@@ -364,6 +370,156 @@ impl TransactionExecutor for MySqlTransactionExecutor {
 
 		let sp = Savepoint::new(name);
 		sqlx::query(&sp.rollback_sql()).execute(&mut **tx).await?;
+		Ok(())
+	}
+}
+
+/// MySQL raw transaction executor for isolation-level-aware transactions.
+///
+/// Unlike `MySqlTransactionExecutor` which wraps sqlx's `Transaction`, this type
+/// manages a manually-started transaction on a pool connection. This is necessary
+/// when we need to execute `SET TRANSACTION ISOLATION LEVEL` before `BEGIN` on
+/// the same connection to avoid the race condition with connection pools.
+struct MySqlRawTransactionExecutor {
+	conn: Option<sqlx::pool::PoolConnection<MySql>>,
+}
+
+impl MySqlRawTransactionExecutor {
+	/// Creates a new raw transaction executor wrapping a pool connection
+	/// that already has an active transaction (BEGIN was sent manually).
+	fn new(conn: sqlx::pool::PoolConnection<MySql>) -> Self {
+		Self { conn: Some(conn) }
+	}
+
+	fn bind_value<'q>(
+		query: sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>,
+		value: &'q QueryValue,
+	) -> sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments> {
+		MySqlTransactionExecutor::bind_value(query, value)
+	}
+
+	fn convert_row(mysql_row: MySqlRow) -> Result<Row> {
+		MySqlTransactionExecutor::convert_row(mysql_row)
+	}
+}
+
+#[async_trait]
+impl TransactionExecutor for MySqlRawTransactionExecutor {
+	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult> {
+		let conn = self.conn.as_mut().ok_or_else(|| {
+			crate::backends::error::DatabaseError::TransactionError(
+				"Transaction already consumed".to_string(),
+			)
+		})?;
+
+		let mut query = sqlx::query(sql);
+		for param in &params {
+			query = Self::bind_value(query, param);
+		}
+		let result = query.execute(&mut **conn).await?;
+		Ok(QueryResult {
+			rows_affected: result.rows_affected(),
+		})
+	}
+
+	async fn fetch_one(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Row> {
+		let conn = self.conn.as_mut().ok_or_else(|| {
+			crate::backends::error::DatabaseError::TransactionError(
+				"Transaction already consumed".to_string(),
+			)
+		})?;
+
+		let mut query = sqlx::query(sql);
+		for param in &params {
+			query = Self::bind_value(query, param);
+		}
+		let row = query.fetch_one(&mut **conn).await?;
+		Self::convert_row(row)
+	}
+
+	async fn fetch_all(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Vec<Row>> {
+		let conn = self.conn.as_mut().ok_or_else(|| {
+			crate::backends::error::DatabaseError::TransactionError(
+				"Transaction already consumed".to_string(),
+			)
+		})?;
+
+		let mut query = sqlx::query(sql);
+		for param in &params {
+			query = Self::bind_value(query, param);
+		}
+		let rows = query.fetch_all(&mut **conn).await?;
+		rows.into_iter().map(Self::convert_row).collect()
+	}
+
+	async fn fetch_optional(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>> {
+		let conn = self.conn.as_mut().ok_or_else(|| {
+			crate::backends::error::DatabaseError::TransactionError(
+				"Transaction already consumed".to_string(),
+			)
+		})?;
+
+		let mut query = sqlx::query(sql);
+		for param in &params {
+			query = Self::bind_value(query, param);
+		}
+		let row = query.fetch_optional(&mut **conn).await?;
+		row.map(Self::convert_row).transpose()
+	}
+
+	async fn commit(mut self: Box<Self>) -> Result<()> {
+		let mut conn = self.conn.take().ok_or_else(|| {
+			crate::backends::error::DatabaseError::TransactionError(
+				"Transaction already consumed".to_string(),
+			)
+		})?;
+		sqlx::query("COMMIT").execute(&mut *conn).await?;
+		Ok(())
+	}
+
+	async fn rollback(mut self: Box<Self>) -> Result<()> {
+		let mut conn = self.conn.take().ok_or_else(|| {
+			crate::backends::error::DatabaseError::TransactionError(
+				"Transaction already consumed".to_string(),
+			)
+		})?;
+		sqlx::query("ROLLBACK").execute(&mut *conn).await?;
+		Ok(())
+	}
+
+	async fn savepoint(&mut self, name: &str) -> Result<()> {
+		let conn = self.conn.as_mut().ok_or_else(|| {
+			crate::backends::error::DatabaseError::TransactionError(
+				"Transaction already consumed".to_string(),
+			)
+		})?;
+
+		let sp = Savepoint::new(name);
+		sqlx::query(&sp.to_sql()).execute(&mut **conn).await?;
+		Ok(())
+	}
+
+	async fn release_savepoint(&mut self, name: &str) -> Result<()> {
+		let conn = self.conn.as_mut().ok_or_else(|| {
+			crate::backends::error::DatabaseError::TransactionError(
+				"Transaction already consumed".to_string(),
+			)
+		})?;
+
+		let sp = Savepoint::new(name);
+		sqlx::query(&sp.release_sql()).execute(&mut **conn).await?;
+		Ok(())
+	}
+
+	async fn rollback_to_savepoint(&mut self, name: &str) -> Result<()> {
+		let conn = self.conn.as_mut().ok_or_else(|| {
+			crate::backends::error::DatabaseError::TransactionError(
+				"Transaction already consumed".to_string(),
+			)
+		})?;
+
+		let sp = Savepoint::new(name);
+		sqlx::query(&sp.rollback_sql()).execute(&mut **conn).await?;
 		Ok(())
 	}
 }

@@ -136,40 +136,43 @@ fn test_arithmetic_expression_chain() {
 
 #[rstest]
 fn test_pattern_matching_helpers() {
-	// Test starts_with
+	// Test starts_with - now uses CustomWithExpr with ESCAPE clause
 	let expr1 = Expr::col("name").starts_with("John");
-	if let SimpleExpr::Binary(_, BinOper::Like, rhs) = expr1 {
-		if let SimpleExpr::Value(Value::String(Some(s))) = *rhs {
-			assert_eq!(*s, "John%");
+	if let SimpleExpr::CustomWithExpr(template, args) = &expr1 {
+		assert_eq!(template, "? LIKE ? ESCAPE '\\'");
+		if let SimpleExpr::Value(Value::String(Some(s))) = &args[1] {
+			assert_eq!(**s, "John%");
 		} else {
 			panic!("Expected String value in LIKE pattern");
 		}
 	} else {
-		panic!("Expected LIKE with 'John%' pattern");
+		panic!("Expected CustomWithExpr with 'John%' pattern");
 	}
 
 	// Test ends_with
 	let expr2 = Expr::col("email").ends_with("@example.com");
-	if let SimpleExpr::Binary(_, BinOper::Like, rhs) = expr2 {
-		if let SimpleExpr::Value(Value::String(Some(s))) = *rhs {
-			assert_eq!(*s, "%@example.com");
+	if let SimpleExpr::CustomWithExpr(template, args) = &expr2 {
+		assert_eq!(template, "? LIKE ? ESCAPE '\\'");
+		if let SimpleExpr::Value(Value::String(Some(s))) = &args[1] {
+			assert_eq!(**s, "%@example.com");
 		} else {
 			panic!("Expected String value in LIKE pattern");
 		}
 	} else {
-		panic!("Expected LIKE with '%@example.com' pattern");
+		panic!("Expected CustomWithExpr with '%@example.com' pattern");
 	}
 
 	// Test contains
 	let expr3 = Expr::col("description").contains("important");
-	if let SimpleExpr::Binary(_, BinOper::Like, rhs) = expr3 {
-		if let SimpleExpr::Value(Value::String(Some(s))) = *rhs {
-			assert_eq!(*s, "%important%");
+	if let SimpleExpr::CustomWithExpr(template, args) = &expr3 {
+		assert_eq!(template, "? LIKE ? ESCAPE '\\'");
+		if let SimpleExpr::Value(Value::String(Some(s))) = &args[1] {
+			assert_eq!(**s, "%important%");
 		} else {
 			panic!("Expected String value in LIKE pattern");
 		}
 	} else {
-		panic!("Expected LIKE with '%important%' pattern");
+		panic!("Expected CustomWithExpr with '%important%' pattern");
 	}
 }
 
@@ -261,4 +264,167 @@ fn test_nested_macros() {
 	} else {
 		panic!("Expected nested Condition");
 	}
+}
+
+// =============================================================================
+// Issue #2568: is_in/is_not_in with empty iterator
+// =============================================================================
+
+#[rstest]
+fn test_is_in_empty_returns_false() {
+	// Arrange
+	let empty: Vec<i32> = vec![];
+
+	// Act
+	let expr = Expr::col("status").is_in(empty);
+
+	// Assert
+	assert!(
+		matches!(expr, SimpleExpr::Constant(simple_expr::Keyword::False)),
+		"Empty IN () should produce FALSE, got: {:?}",
+		expr
+	);
+}
+
+#[rstest]
+fn test_is_not_in_empty_returns_true() {
+	// Arrange
+	let empty: Vec<i32> = vec![];
+
+	// Act
+	let expr = Expr::col("status").is_not_in(empty);
+
+	// Assert
+	assert!(
+		matches!(expr, SimpleExpr::Constant(simple_expr::Keyword::True)),
+		"Empty NOT IN () should produce TRUE, got: {:?}",
+		expr
+	);
+}
+
+#[rstest]
+fn test_is_in_nonempty_works_normally() {
+	// Arrange / Act
+	let expr = Expr::col("status").is_in(["active", "pending"]);
+
+	// Assert
+	assert!(matches!(expr, SimpleExpr::Binary(_, BinOper::In, _)));
+}
+
+#[rstest]
+fn test_is_not_in_nonempty_works_normally() {
+	// Arrange / Act
+	let expr = Expr::col("status").is_not_in(["deleted"]);
+
+	// Assert
+	assert!(matches!(expr, SimpleExpr::Binary(_, BinOper::NotIn, _)));
+}
+
+// =============================================================================
+// Issue #2565: LIKE helpers escape SQL wildcards
+// =============================================================================
+
+#[rstest]
+fn test_starts_with_escapes_wildcards() {
+	// Arrange / Act
+	let expr = Expr::col("name").starts_with("100%_done");
+
+	// Assert - now uses CustomWithExpr with ESCAPE clause
+	if let SimpleExpr::CustomWithExpr(template, args) = &expr {
+		assert_eq!(template, "? LIKE ? ESCAPE '\\'");
+		assert_eq!(args.len(), 2);
+		if let SimpleExpr::Value(Value::String(Some(s))) = &args[1] {
+			assert_eq!(**s, "100\\%\\_done%");
+		} else {
+			panic!("Expected String value in LIKE pattern");
+		}
+	} else {
+		panic!("Expected CustomWithExpr expression, got: {:?}", expr);
+	}
+}
+
+#[rstest]
+fn test_ends_with_escapes_wildcards() {
+	// Arrange / Act
+	let expr = Expr::col("name").ends_with("test%");
+
+	// Assert - now uses CustomWithExpr with ESCAPE clause
+	if let SimpleExpr::CustomWithExpr(template, args) = &expr {
+		assert_eq!(template, "? LIKE ? ESCAPE '\\'");
+		assert_eq!(args.len(), 2);
+		if let SimpleExpr::Value(Value::String(Some(s))) = &args[1] {
+			assert_eq!(**s, "%test\\%");
+		} else {
+			panic!("Expected String value in LIKE pattern");
+		}
+	} else {
+		panic!("Expected CustomWithExpr expression, got: {:?}", expr);
+	}
+}
+
+#[rstest]
+fn test_contains_escapes_wildcards() {
+	// Arrange / Act
+	let expr = Expr::col("name").contains("50%_off");
+
+	// Assert - now uses CustomWithExpr with ESCAPE clause
+	if let SimpleExpr::CustomWithExpr(template, args) = &expr {
+		assert_eq!(template, "? LIKE ? ESCAPE '\\'");
+		assert_eq!(args.len(), 2);
+		if let SimpleExpr::Value(Value::String(Some(s))) = &args[1] {
+			assert_eq!(**s, "%50\\%\\_off%");
+		} else {
+			panic!("Expected String value in LIKE pattern");
+		}
+	} else {
+		panic!("Expected CustomWithExpr expression, got: {:?}", expr);
+	}
+}
+
+#[rstest]
+fn test_contains_escapes_backslash() {
+	// Arrange / Act
+	let expr = Expr::col("path").contains("C:\\Users");
+
+	// Assert - now uses CustomWithExpr with ESCAPE clause
+	if let SimpleExpr::CustomWithExpr(template, args) = &expr {
+		assert_eq!(template, "? LIKE ? ESCAPE '\\'");
+		assert_eq!(args.len(), 2);
+		if let SimpleExpr::Value(Value::String(Some(s))) = &args[1] {
+			assert_eq!(**s, "%C:\\\\Users%");
+		} else {
+			panic!("Expected String value in LIKE pattern");
+		}
+	} else {
+		panic!("Expected CustomWithExpr expression, got: {:?}", expr);
+	}
+}
+
+// =============================================================================
+// Issue #2570: Expr::expr_as uses ExprAlias (not AsEnum)
+// =============================================================================
+
+#[rstest]
+fn test_expr_as_produces_alias() {
+	// Arrange / Act
+	let expr = Expr::col("name").expr_as("alias_name");
+
+	// Assert
+	assert!(
+		matches!(expr, SimpleExpr::ExprAlias(_, _)),
+		"expr_as should produce ExprAlias, got: {:?}",
+		expr
+	);
+}
+
+#[rstest]
+fn test_expr_as_not_as_enum() {
+	// Arrange / Act
+	let expr = Expr::col("name").expr_as("alias_name");
+
+	// Assert - ensure it is NOT AsEnum (which was the bug)
+	assert!(
+		!matches!(expr, SimpleExpr::AsEnum(_, _)),
+		"expr_as should NOT produce AsEnum (type cast)"
+	);
 }

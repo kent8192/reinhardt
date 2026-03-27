@@ -232,9 +232,9 @@ fn test_full_ssr_flow() {
 	// 4. Serialize state
 	let state_json = state.to_json().expect("State serialization failed");
 
-	// 5. Create script tag for hydration
+	// 5. Create script tag for hydration (pure JSON, non-executable)
 	let script = format!(
-		"<script>window.__REINHARDT_SSR_STATE__ = {};</script>",
+		r#"<script id="ssr-state" type="application/json">{}</script>"#,
 		state_json
 	);
 
@@ -242,7 +242,7 @@ fn test_full_ssr_flow() {
 	let page = format!("{}{}", script, html);
 
 	// Verify page structure
-	assert!(page.contains("__REINHARDT_SSR_STATE__"));
+	assert!(page.contains(r#"type="application/json""#));
 	assert!(page.contains("100"));
 	assert!(page.contains("Count: 100"));
 }
@@ -276,8 +276,8 @@ fn test_ssr_state_script_tag() {
 	// to_script_tag returns String directly
 	let script = state.to_script_tag();
 
-	assert!(script.starts_with("<script"));
+	assert!(script.starts_with(r#"<script id="ssr-state" type="application/json">"#));
 	assert!(script.ends_with("</script>"));
-	assert!(script.contains("__REINHARDT_SSR_STATE__"));
+	assert!(!script.contains("window."));
 	assert!(script.contains("42"));
 }

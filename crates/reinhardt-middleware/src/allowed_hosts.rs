@@ -5,6 +5,7 @@
 
 use async_trait::async_trait;
 use hyper::StatusCode;
+#[allow(deprecated)]
 use reinhardt_conf::Settings;
 use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use std::sync::Arc;
@@ -29,7 +30,7 @@ impl AllowedHostsConfig {
 
 	/// Create from application `Settings`
 	///
-	/// Maps `Settings.allowed_hosts` to `AllowedHostsConfig.allowed_hosts`.
+	/// Maps `Settings.core.allowed_hosts` to `AllowedHostsConfig.allowed_hosts`.
 	///
 	/// # Examples
 	///
@@ -38,15 +39,18 @@ impl AllowedHostsConfig {
 	/// use reinhardt_middleware::allowed_hosts::AllowedHostsConfig;
 	/// use std::path::PathBuf;
 	///
+	/// #[allow(deprecated)]
 	/// let mut settings = Settings::new(PathBuf::from("/app"), "secret".to_string());
-	/// settings.allowed_hosts = vec!["example.com".to_string(), "*.example.com".to_string()];
+	/// settings.core.allowed_hosts = vec!["example.com".to_string(), "*.example.com".to_string()];
 	///
+	/// #[allow(deprecated)]
 	/// let config = AllowedHostsConfig::from_settings(&settings);
 	/// assert_eq!(config.allowed_hosts.len(), 2);
 	/// ```
+	#[allow(deprecated)] // Settings is deprecated in favor of composable fragments
 	pub fn from_settings(settings: &Settings) -> Self {
 		Self {
-			allowed_hosts: settings.allowed_hosts.clone(),
+			allowed_hosts: settings.core.allowed_hosts.clone(),
 		}
 	}
 
@@ -116,9 +120,12 @@ impl AllowedHostsMiddleware {
 	/// use reinhardt_conf::Settings;
 	/// use reinhardt_middleware::AllowedHostsMiddleware;
 	///
+	/// #[allow(deprecated)]
 	/// let settings = Settings::default();
+	/// #[allow(deprecated)]
 	/// let middleware = AllowedHostsMiddleware::from_settings(&settings);
 	/// ```
+	#[allow(deprecated)] // Settings is deprecated in favor of composable fragments
 	pub fn from_settings(settings: &Settings) -> Self {
 		Self::new(AllowedHostsConfig::from_settings(settings))
 	}
@@ -258,10 +265,12 @@ mod tests {
 	#[tokio::test]
 	async fn test_from_settings_conversion() {
 		// Arrange
+		#[allow(deprecated)]
 		let mut settings = Settings::new(std::path::PathBuf::from("/app"), "secret".to_string());
-		settings.allowed_hosts = vec!["example.com".to_string(), "*.example.com".to_string()];
+		settings.core.allowed_hosts = vec!["example.com".to_string(), "*.example.com".to_string()];
 
 		// Act
+		#[allow(deprecated)]
 		let config = AllowedHostsConfig::from_settings(&settings);
 
 		// Assert
@@ -354,8 +363,10 @@ mod tests {
 	#[tokio::test]
 	async fn test_from_settings_middleware_creation() {
 		// Arrange
+		#[allow(deprecated)]
 		let mut settings = Settings::new(std::path::PathBuf::from("/app"), "secret".to_string());
-		settings.allowed_hosts = vec!["example.com".to_string()];
+		settings.core.allowed_hosts = vec!["example.com".to_string()];
+		#[allow(deprecated)]
 		let middleware = AllowedHostsMiddleware::from_settings(&settings);
 		let handler = Arc::new(TestHandler);
 		let request = build_request_with_host("example.com");

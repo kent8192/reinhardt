@@ -1,13 +1,15 @@
 //! Settings module for examples-di-showcase
 
 use reinhardt::core::serde::json;
-use reinhardt::{
-	DefaultSource, LowPriorityEnvSource, Profile, Settings, SettingsBuilder, TomlFileSource,
-};
+use reinhardt::settings;
+use reinhardt::{DefaultSource, LowPriorityEnvSource, Profile, SettingsBuilder, TomlFileSource};
 use std::env;
 
+#[settings(core: CoreSettings)]
+pub struct ProjectSettings;
+
 /// Get settings based on environment variable
-pub fn get_settings() -> Settings {
+pub fn get_settings() -> ProjectSettings {
 	let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| {
 		if env::var("CI").is_ok() {
 			"ci".to_string()
@@ -70,5 +72,5 @@ pub fn get_settings() -> Settings {
 
 	merged
 		.into_typed()
-		.expect("Failed to convert settings to Settings struct")
+		.expect("Failed to convert settings to ProjectSettings")
 }

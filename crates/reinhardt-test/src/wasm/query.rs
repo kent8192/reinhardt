@@ -754,57 +754,130 @@ pub fn scoped_screen(root: Element) -> Screen {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
-	#[test]
-	fn test_query_result_empty() {
+	#[rstest]
+	fn query_result_empty_has_zero_count_and_no_existence() {
+		// Arrange & Act
 		let result = QueryResult::empty("test");
+
+		// Assert
 		assert!(!result.exists());
 		assert_eq!(result.count(), 0);
 	}
 
-	#[test]
-	fn test_query_result_description() {
+	#[rstest]
+	fn query_result_description_returns_stored_description() {
+		// Arrange & Act
 		let result = QueryResult::empty("role=\"button\"");
+
+		// Assert
 		assert_eq!(result.description(), "role=\"button\"");
 	}
 
-	#[test]
+	#[rstest]
 	#[should_panic(expected = "No element found")]
-	fn test_query_result_get_panics_when_empty() {
+	fn query_result_get_panics_when_empty() {
+		// Arrange
 		let result = QueryResult::empty("test");
+
+		// Act & Assert
 		result.get();
 	}
 
-	#[test]
-	fn test_query_result_query_returns_none_when_empty() {
+	#[rstest]
+	fn query_result_query_returns_none_when_empty() {
+		// Arrange
 		let result = QueryResult::empty("test");
-		assert!(result.query().is_none());
+
+		// Act
+		let queried = result.query();
+
+		// Assert
+		assert!(queried.is_none());
 	}
 
-	#[test]
-	fn test_screen_default() {
+	#[rstest]
+	fn screen_default_has_no_root() {
+		// Arrange & Act
 		let screen = Screen::default();
+
+		// Assert
 		assert!(screen.root.is_none());
 	}
 
-	#[test]
-	fn test_escape_css_selector_no_special_chars() {
+	#[rstest]
+	fn escape_css_selector_no_special_chars() {
+		// Arrange & Act & Assert
 		assert_eq!(escape_css_selector("button"), "button");
 	}
 
-	#[test]
-	fn test_escape_css_selector_with_metacharacters() {
+	#[rstest]
+	fn escape_css_selector_with_metacharacters() {
+		// Arrange & Act & Assert
 		assert_eq!(
 			escape_css_selector("a\"] , body *{display:none}"),
 			r#"a\"\] \, body \*\{display\:none\}"#
 		);
 	}
 
-	#[test]
-	fn test_escape_css_selector_quotes() {
+	#[rstest]
+	fn escape_css_selector_quotes() {
+		// Arrange & Act & Assert
 		assert_eq!(
 			escape_css_selector(r#"it's "quoted""#),
 			r#"it\'s \"quoted\""#
 		);
+	}
+
+	#[rstest]
+	fn should_not_exist_succeeds_for_empty_result() {
+		// Arrange
+		let result = QueryResult::empty("nonexistent");
+
+		// Act & Assert (should not panic)
+		result.should_not_exist();
+	}
+
+	#[rstest]
+	#[should_panic(expected = "Expected element to exist")]
+	fn should_exist_panics_for_empty_result() {
+		// Arrange
+		let result = QueryResult::empty("missing");
+
+		// Act & Assert
+		result.should_exist();
+	}
+
+	#[rstest]
+	fn get_all_returns_empty_vec_for_empty_result() {
+		// Arrange
+		let result = QueryResult::empty("nothing");
+
+		// Act
+		let all = result.get_all();
+
+		// Assert
+		assert!(all.is_empty());
+	}
+
+	#[rstest]
+	#[should_panic(expected = "No element found")]
+	fn get_only_panics_for_empty_result() {
+		// Arrange
+		let result = QueryResult::empty("single");
+
+		// Act & Assert
+		result.get_only();
+	}
+
+	#[rstest]
+	fn screen_new_is_equivalent_to_default() {
+		// Arrange & Act
+		let from_new = Screen::new();
+		let from_default = Screen::default();
+
+		// Assert
+		assert_eq!(from_new.root.is_none(), from_default.root.is_none());
 	}
 }

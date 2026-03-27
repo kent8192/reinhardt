@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.13...reinhardt-core@v0.1.0-rc.14) - 2026-03-24
+
+### Added
+
+- *(macros)* extend nom parser for { field: policy } override blocks
+- *(macros)* add #[setting()] attribute parsing and field_policies() generation
+- *(macros)* add composition override blocks and ComposedSettings generation
+
+### Changed
+
+- *(macros)* require explicit CoreSettings in #[settings] macro
+- *(macros)* generate HasSettings<F> in both settings macros
+
+### Fixed
+
+- *(reinhardt-core)* fork DI context per-request in route and action macros
+- *(reinhardt-core)* fix DLQ lock ordering, send_async filtering, overflow, and counter bugs in signals
+- *(reinhardt-core)* pre-allocate results vector and fix profiler average calculation
+- *(core)* prevent panics from user-controlled pagination and string inputs
+- *(core)* address Copilot review feedback on panic-safety PR
+- *(macros)* add missing CoreSettings and HasCoreSettings imports for explicit settings
+- *(settings)* address Copilot review feedback for field policy system
+- *(settings)* use section-nested keys in #[settings] macro validation and deserialization
+
+### Other
+
+- resolve conflict with main (BUILTIN_FRAGMENTS + resolve helpers)
+- resolve conflict with main (implicit inference tests from PR [[#2860](https://github.com/kent8192/reinhardt-web/issues/2860)](https://github.com/kent8192/reinhardt-web/issues/2860))
+
+### Styling
+
+- reformat long lines in effect and burst modules
+- apply formatting fixes for field policy changes
+
+### Testing
+
+- *(settings)* update tests for explicit CoreSettings requirement
+
 ## [0.1.0-rc.12](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.11...reinhardt-core@v0.1.0-rc.12) - 2026-03-18
 
 ### Added

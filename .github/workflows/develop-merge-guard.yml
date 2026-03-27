@@ -20,6 +20,7 @@ concurrency:
 jobs:
   develop-merge-guard:
     name: Develop Merge Guard
+    timeout-minutes: 10
     if: >-
       github.event.action != 'labeled' && github.event.action != 'unlabeled' ||
       github.event.label.name == 'migration-approved'

@@ -115,7 +115,12 @@
 //! # });
 //! ```
 
+// Re-exports the deprecated User trait for backward compatibility.
+#![allow(deprecated)]
 // Rust 2024 module system: use module.rs + module/ pattern
+/// Authentication identity trait (replaces deprecated User trait).
+#[path = "core/auth_identity.rs"]
+pub mod auth_identity;
 /// Authentication backend trait and composite backend.
 #[path = "core/backend.rs"]
 pub mod backend;
@@ -142,6 +147,7 @@ pub mod permissions_mixin;
 pub mod user;
 
 // Re-export main types
+pub use auth_identity::AuthIdentity;
 pub use backend::{AuthBackend, CompositeAuthBackend};
 pub use base_user::BaseUser;
 pub use full_user::FullUser;

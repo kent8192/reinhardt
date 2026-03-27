@@ -1344,6 +1344,21 @@ impl BaseCommand for RunServerCommand {
 				));
 			}
 
+			// Display index file info (Refs #2869)
+			if with_pages
+				&& !no_spa && let Some(index_str) = ctx.option("index")
+			{
+				let path = std::path::Path::new(&index_str);
+				if path.exists() {
+					ctx.info(&format!("📄 Index:   {} (specified)", index_str));
+				} else {
+					ctx.warning(&format!(
+						"📄 Index:   {} (specified, missing — will be ignored)",
+						index_str
+					));
+				}
+			}
+
 			#[cfg(feature = "openapi-router")]
 			if !no_docs {
 				ctx.info(&format!("📖 Docs:    http://{}/api/docs", actual_address));
@@ -1482,6 +1497,12 @@ impl RunServerCommand {
 		// Create DI context for dependency injection
 		let singleton_scope = std::sync::Arc::new(reinhardt_di::SingletonScope::new());
 
+		// Apply deferred DI registrations from route configuration (e.g., AdminSite from admin_routes_with_di_deferred)
+		if let Some(registrations) = reinhardt_urls::routers::take_di_registrations() {
+			ctx.verbose("Applying deferred DI registrations from route configuration");
+			registrations.apply_to(&singleton_scope);
+		}
+
 		// Register DatabaseConnection as singleton when database feature is enabled
 		#[cfg(feature = "reinhardt-db")]
 		{
@@ -1554,11 +1575,49 @@ impl RunServerCommand {
 			// Automatically resolve static directory path
 			let resolved_static_dir = PathResolver::resolve_static_dir(static_dir);
 
-			let static_config = StaticFilesConfig::new(resolved_static_dir.clone())
+			let mut static_config = StaticFilesConfig::new(resolved_static_dir.clone())
 				.url_prefix("/")
 				.spa_mode(!no_spa)
-				// All API and documentation endpoints are under /api/ prefix
-				.excluded_prefixes(vec!["/api/".to_string()]);
+				// Exclude framework-managed route prefixes from SPA fallback
+				// so that API endpoints and admin panel are handled by the
+				// application router instead of receiving index.html.
+				.excluded_prefixes(vec![
+					"/api/".to_string(),
+					"/admin/".to_string(),
+					"/static/admin/".to_string(),
+				]);
+
+			// Resolve index file for SPA fallback (only when SPA mode is enabled)
+			// Refs #2869: Separate index.html (source) from dist/ (build output)
+			if !no_spa {
+				let index_option = ctx.option("index").map(|s| s.to_string());
+				let index_path = match &index_option {
+					Some(path) => {
+						let resolved = PathResolver::resolve_static_dir(path);
+						if resolved.exists() {
+							Some(resolved)
+						} else {
+							ctx.warning(&format!("Index file not found: {}", path));
+							None
+						}
+					}
+					None => {
+						// Auto-detect from project root
+						let candidate = PathResolver::find_project_root()
+							.unwrap_or_else(|| std::env::current_dir().unwrap())
+							.join("index.html");
+						if candidate.exists() {
+							Some(candidate)
+						} else {
+							None // Fallback to existing behavior
+						}
+					}
+				};
+
+				if let Some(ref path) = index_path {
+					static_config = static_config.index_file(path.clone());
+				}
+			}
 
 			server = server.with_middleware(StaticFilesMiddleware::new(static_config));
 			ctx.verbose(&format!(
@@ -1572,8 +1631,16 @@ impl RunServerCommand {
 		if !noreload {
 			#[cfg(feature = "autoreload")]
 			{
+				let index_raw = ctx.option("index").map(|s| s.to_string());
 				Self::run_with_autoreload(
-					ctx, address, _insecure, no_docs, with_pages, static_dir, no_spa,
+					ctx,
+					address,
+					_insecure,
+					no_docs,
+					with_pages,
+					static_dir,
+					no_spa,
+					index_raw.as_deref(),
 				)
 				.await
 			}
@@ -1594,6 +1661,8 @@ impl RunServerCommand {
 
 	/// Run server with file watching and auto-reload
 	#[cfg(all(feature = "server", feature = "autoreload"))]
+	// Allow many arguments: autoreload handler mirrors run_server configuration options
+	#[allow(clippy::too_many_arguments)]
 	async fn run_with_autoreload(
 		ctx: &CommandContext,
 		address: &str,
@@ -1602,6 +1671,7 @@ impl RunServerCommand {
 		with_pages: bool,
 		static_dir: &str,
 		no_spa: bool,
+		index: Option<&str>,
 	) -> CommandResult<()> {
 		use std::time::{Duration, Instant};
 
@@ -1643,7 +1713,7 @@ impl RunServerCommand {
 			// Start child process
 			ctx.verbose("Starting server subprocess...");
 			let mut child = Self::spawn_server_process(
-				address, insecure, no_docs, with_pages, static_dir, no_spa,
+				address, insecure, no_docs, with_pages, static_dir, no_spa, index,
 			)?;
 			restart_count += 1;
 
@@ -1715,6 +1785,7 @@ impl RunServerCommand {
 		with_pages: bool,
 		static_dir: &str,
 		no_spa: bool,
+		index: Option<&str>,
 	) -> CommandResult<tokio::process::Child> {
 		let current_exe = std::env::current_exe().map_err(|e| {
 			crate::CommandError::ExecutionError(format!("Failed to get current executable: {}", e))
@@ -1737,6 +1808,9 @@ impl RunServerCommand {
 		}
 		if no_spa {
 			cmd.arg("--no-spa");
+		}
+		if let Some(index_path) = index {
+			cmd.arg("--index").arg(index_path);
 		}
 
 		// Set environment variable to indicate this is a child process (prevent log duplication, etc.)

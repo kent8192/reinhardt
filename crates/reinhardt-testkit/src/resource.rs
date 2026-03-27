@@ -293,9 +293,17 @@ impl<T: SuiteResource> Deref for SuiteGuard<T> {
 /// ```
 pub fn acquire_suite<T: SuiteResource>(cell: &'static OnceLock<Mutex<Weak<T>>>) -> SuiteGuard<T> {
 	let mutex = cell.get_or_init(|| Mutex::new(Weak::new()));
-	let mut weak = mutex
-		.lock()
-		.expect("Suite resource mutex poisoned - a test panicked while holding the lock");
+
+	// Recover from poisoned mutex to prevent test suite cascade failures.
+	// A poisoned mutex means a previous test panicked while holding the lock,
+	// but the Weak<T> inside is still safe to read and upgrade.
+	let mut weak = mutex.lock().unwrap_or_else(|poisoned| {
+		eprintln!(
+			"[suite-resource] Recovering from poisoned mutex \
+			 (a previous test panicked while holding the lock)"
+		);
+		poisoned.into_inner()
+	});
 
 	// Try to upgrade existing Weak reference
 	if let Some(existing) = weak.upgrade() {

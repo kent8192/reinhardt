@@ -2,6 +2,7 @@
 //!
 //! Import this module to get access to the most commonly used types and traits.
 
+#[allow(deprecated)]
 pub use super::advanced::{
 	AdvancedSettings, CacheSettings, CorsSettings, DatabaseSettings as AdvancedDatabaseSettings,
 	EmailSettings, LoggingSettings, MediaSettings, SessionSettings, SettingsError, StaticSettings,
@@ -21,6 +22,7 @@ pub use super::validation::{
 	ChoiceValidator, PatternValidator, RangeValidator, RequiredValidator, SecurityValidator,
 	SettingsValidator, ValidationError, ValidationResult, Validator,
 };
+#[allow(deprecated)]
 pub use super::{DatabaseConfig, MiddlewareConfig, Settings, TemplateConfig};
 
 // Dynamic settings (async feature)

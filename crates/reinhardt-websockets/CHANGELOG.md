@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.1.0-rc.13...reinhardt-websockets@v0.1.0-rc.14) - 2026-03-24
+
+### Documentation
+
+- *(crates)* update version references from 0.1.0-alpha.1 to 0.1.0-rc.13 across all READMEs
+
+### Fixed
+
+- *(reinhardt-websockets)* resolve ABBA deadlock in group_send by reordering lock acquisition
+
 ## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.1.0-rc.8...reinhardt-websockets@v0.1.0-rc.9) - 2026-03-15
 
 ### Fixed

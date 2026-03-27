@@ -2,6 +2,9 @@
 //!
 //! Provides ready-to-use handlers for common authentication workflows
 
+// This module uses the deprecated User trait for backward compatibility.
+// Login handler accepts Box<dyn User> to preserve existing authentication APIs.
+#![allow(deprecated)]
 use crate::AuthenticationBackend;
 use crate::User;
 use crate::session::{SESSION_KEY_USER_ID, Session, SessionId, SessionStore};

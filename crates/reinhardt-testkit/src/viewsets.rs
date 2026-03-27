@@ -113,3 +113,157 @@ impl ViewSet for SimpleViewSet {
 		Ok(response)
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::views::create_request;
+	use hyper::Method;
+	use rstest::rstest;
+
+	// ========================================================================
+	// TestViewSet tests
+	// ========================================================================
+
+	#[rstest]
+	fn test_test_viewset_new_basename() {
+		// Arrange & Act
+		let viewset = TestViewSet::new("items");
+
+		// Assert
+		assert_eq!(viewset.get_basename(), "items");
+	}
+
+	#[rstest]
+	fn test_test_viewset_default_no_login() {
+		// Arrange & Act
+		let viewset = TestViewSet::new("items");
+
+		// Assert
+		assert!(!viewset.requires_login());
+	}
+
+	#[rstest]
+	fn test_test_viewset_with_login_required() {
+		// Arrange & Act
+		let viewset = TestViewSet::new("items").with_login_required(true);
+
+		// Assert
+		assert!(viewset.requires_login());
+	}
+
+	#[rstest]
+	fn test_test_viewset_with_permissions() {
+		// Arrange
+		let perms = vec!["read".to_string(), "write".to_string()];
+
+		// Act
+		let viewset = TestViewSet::new("items").with_permissions(perms.clone());
+
+		// Assert
+		assert_eq!(viewset.get_required_permissions(), perms);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_test_viewset_dispatch_returns_ok() {
+		// Arrange
+		let viewset = TestViewSet::new("items");
+		let request = create_request(Method::GET, "/api/items/", None, None, None);
+		let action = Action::list();
+
+		// Act
+		let result = viewset.dispatch(request, action).await;
+
+		// Assert
+		assert!(result.is_ok());
+		let response = result.unwrap();
+		assert_eq!(response.status, hyper::StatusCode::OK);
+	}
+
+	#[rstest]
+	fn test_test_viewset_no_middleware_by_default() {
+		// Arrange & Act
+		let viewset = TestViewSet::new("items");
+
+		// Assert
+		assert!(viewset.get_middleware().is_none());
+	}
+
+	#[rstest]
+	fn test_test_viewset_middleware_with_login() {
+		// Arrange & Act
+		let viewset = TestViewSet::new("items").with_login_required(true);
+
+		// Assert
+		assert!(viewset.get_middleware().is_some());
+	}
+
+	#[rstest]
+	fn test_test_viewset_middleware_with_permissions() {
+		// Arrange
+		let perms = vec!["admin".to_string()];
+
+		// Act
+		let viewset = TestViewSet::new("items").with_permissions(perms);
+
+		// Assert
+		assert!(viewset.get_middleware().is_some());
+	}
+
+	// ========================================================================
+	// SimpleViewSet tests
+	// ========================================================================
+
+	#[rstest]
+	fn test_simple_viewset_new() {
+		// Arrange & Act
+		let viewset = SimpleViewSet::new("posts");
+
+		// Assert
+		assert_eq!(viewset.get_basename(), "posts");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_simple_viewset_dispatch() {
+		// Arrange
+		let viewset = SimpleViewSet::new("posts");
+		let request = create_request(Method::GET, "/api/posts/", None, None, None);
+		let action = Action::list();
+
+		// Act
+		let result = viewset.dispatch(request, action).await;
+
+		// Assert
+		assert!(result.is_ok());
+		let response = result.unwrap();
+		assert_eq!(response.status, hyper::StatusCode::OK);
+	}
+
+	// ========================================================================
+	// Edge case tests
+	// ========================================================================
+
+	#[rstest]
+	fn test_test_viewset_empty_permissions_no_middleware() {
+		// Arrange & Act
+		let viewset = TestViewSet::new("items").with_permissions(vec![]);
+
+		// Assert
+		assert!(viewset.get_middleware().is_none());
+	}
+
+	#[rstest]
+	fn test_test_viewset_get_required_permissions() {
+		// Arrange
+		let perms = vec!["read".to_string(), "write".to_string(), "admin".to_string()];
+		let viewset = TestViewSet::new("items").with_permissions(perms.clone());
+
+		// Act
+		let result = viewset.get_required_permissions();
+
+		// Assert
+		assert_eq!(result, perms);
+	}
+}

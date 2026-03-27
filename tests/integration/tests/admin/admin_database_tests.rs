@@ -18,6 +18,7 @@ use reinhardt_query::{
 use reinhardt_test::fixtures::mock_connection;
 use rstest::*;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 // Mock User model for testing
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -95,7 +96,7 @@ async fn test_create(mock_connection: DatabaseConnection) {
 	data.insert("email".to_string(), serde_json::json!("alice@example.com"));
 
 	// Act
-	let result = db.create::<User>("users", data).await;
+	let result = db.create::<User>("users", None, data).await;
 
 	// Assert
 	assert!(result.is_ok());
@@ -173,6 +174,8 @@ fn test_build_composite_single_condition() {
 	let result = build_composite_filter_condition(&condition);
 
 	// Assert
+	assert!(result.is_ok());
+	let result = result.unwrap();
 	assert!(result.is_some());
 	let cond = result.unwrap();
 	let query = Query::select()
@@ -206,6 +209,8 @@ fn test_build_composite_or_condition() {
 	let result = build_composite_filter_condition(&condition);
 
 	// Assert
+	assert!(result.is_ok());
+	let result = result.unwrap();
 	assert!(result.is_some());
 	let cond = result.unwrap();
 	let query = Query::select()
@@ -240,6 +245,8 @@ fn test_build_composite_and_condition() {
 	let result = build_composite_filter_condition(&condition);
 
 	// Assert
+	assert!(result.is_ok());
+	let result = result.unwrap();
 	assert!(result.is_some());
 	let cond = result.unwrap();
 	let query = Query::select()
@@ -281,6 +288,8 @@ fn test_build_composite_nested_condition() {
 	let result = build_composite_filter_condition(&and_condition);
 
 	// Assert
+	assert!(result.is_ok());
+	let result = result.unwrap();
 	assert!(result.is_some());
 	let cond = result.unwrap();
 	let query = Query::select()
@@ -304,7 +313,8 @@ fn test_build_composite_empty_or() {
 	let result = build_composite_filter_condition(&condition);
 
 	// Assert
-	assert!(result.is_none());
+	assert!(result.is_ok());
+	assert!(result.unwrap().is_none());
 }
 
 #[rstest]
@@ -316,7 +326,8 @@ fn test_build_composite_empty_and() {
 	let result = build_composite_filter_condition(&condition);
 
 	// Assert
-	assert!(result.is_none());
+	assert!(result.is_ok());
+	assert!(result.unwrap().is_none());
 }
 
 // ==================== list_with_condition / count_with_condition tests ====================
@@ -723,4 +734,192 @@ fn test_filter_value_to_sea_value_expression_fallback() {
 		}
 		_ => panic!("Expected String value"),
 	}
+}
+
+// ==================== Bug #2946: create() RETURNING clause tests ====================
+
+#[rstest]
+#[tokio::test]
+async fn test_create_returns_zero_when_response_has_no_id_field(
+	mock_connection: DatabaseConnection,
+) {
+	// Arrange
+	// Default mock_connection.fetch_one returns Row with {"count": Int(0)}, no "id" field
+	let db = AdminDatabase::new(mock_connection);
+	let mut data = HashMap::new();
+	data.insert("name".to_string(), serde_json::json!("Alice"));
+
+	// Act
+	let result = db.create::<User>("users", data).await;
+
+	// Assert
+	// Bug #2946: When the RETURNING clause returns a row without "id" field,
+	// the function silently returns 0 instead of an error
+	assert!(result.is_ok());
+	assert_eq!(
+		result.unwrap(),
+		0,
+		"Bug #2946: create() returns 0 when 'id' field is missing from response"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_create_returns_id_when_response_has_id_field() {
+	// Arrange: Create a mock that returns a row with "id" field
+	use reinhardt_db::backends::{
+		backend::DatabaseBackend as BackendTrait,
+		connection::DatabaseConnection as BackendsConnection,
+		types::{DatabaseType, QueryResult, QueryValue, Row},
+	};
+	use reinhardt_test::fixtures::mock::MockDatabaseBackend;
+
+	let mut mock = MockDatabaseBackend::new();
+	mock.expect_database_type()
+		.return_const(DatabaseType::Postgres);
+	mock.expect_placeholder()
+		.returning(|idx| format!("${}", idx));
+	mock.expect_supports_returning().return_const(true);
+	mock.expect_supports_on_conflict().return_const(true);
+	mock.expect_execute()
+		.returning(|_, _| Ok(QueryResult { rows_affected: 1 }));
+	mock.expect_fetch_all().returning(|_, _| Ok(Vec::new()));
+	mock.expect_fetch_optional().returning(|_, _| Ok(None));
+
+	// Return a row with "id" field
+	mock.expect_fetch_one().returning(|_, _| {
+		let mut row = Row::new();
+		row.data.insert("id".to_string(), QueryValue::Int(42));
+		Ok(row)
+	});
+
+	let backends_conn = BackendsConnection::new(Arc::new(mock));
+	let conn = DatabaseConnection::new(DatabaseBackend::Postgres, backends_conn);
+	let db = AdminDatabase::new(conn);
+
+	let mut data = HashMap::new();
+	data.insert("name".to_string(), serde_json::json!("Alice"));
+
+	// Act
+	let result = db.create::<User>("users", data).await;
+
+	// Assert
+	assert!(result.is_ok());
+	assert_eq!(
+		result.unwrap(),
+		42,
+		"create() should return the ID from the response"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_create_returns_zero_when_id_is_non_number() {
+	// Arrange: Create a mock that returns "id" as a string (non-number)
+	use reinhardt_db::backends::{
+		backend::DatabaseBackend as BackendTrait,
+		connection::DatabaseConnection as BackendsConnection,
+		types::{DatabaseType, QueryResult, QueryValue, Row},
+	};
+	use reinhardt_test::fixtures::mock::MockDatabaseBackend;
+
+	let mut mock = MockDatabaseBackend::new();
+	mock.expect_database_type()
+		.return_const(DatabaseType::Postgres);
+	mock.expect_placeholder()
+		.returning(|idx| format!("${}", idx));
+	mock.expect_supports_returning().return_const(true);
+	mock.expect_supports_on_conflict().return_const(true);
+	mock.expect_execute()
+		.returning(|_, _| Ok(QueryResult { rows_affected: 1 }));
+	mock.expect_fetch_all().returning(|_, _| Ok(Vec::new()));
+	mock.expect_fetch_optional().returning(|_, _| Ok(None));
+
+	// Return "id" as a string value (e.g., UUID)
+	mock.expect_fetch_one().returning(|_, _| {
+		let mut row = Row::new();
+		row.data
+			.insert("id".to_string(), QueryValue::String("uuid-123".to_string()));
+		Ok(row)
+	});
+
+	let backends_conn = BackendsConnection::new(Arc::new(mock));
+	let conn = DatabaseConnection::new(DatabaseBackend::Postgres, backends_conn);
+	let db = AdminDatabase::new(conn);
+
+	let mut data = HashMap::new();
+	data.insert("name".to_string(), serde_json::json!("Bob"));
+
+	// Act
+	let result = db.create::<User>("users", data).await;
+
+	// Assert
+	// Bug #2946: Non-numeric ID values silently return 0
+	assert!(result.is_ok());
+	assert_eq!(
+		result.unwrap(),
+		0,
+		"Bug #2946: create() returns 0 when 'id' is not a number"
+	);
+}
+
+// ==================== update/delete affected count tests ====================
+
+#[rstest]
+#[tokio::test]
+async fn test_update_returns_affected_count(mock_connection: DatabaseConnection) {
+	// Arrange
+	// Default mock returns rows_affected: 0
+	let db = AdminDatabase::new(mock_connection);
+	let mut data = HashMap::new();
+	data.insert("name".to_string(), serde_json::json!("Updated Name"));
+
+	// Act
+	let result = db.update::<User>("users", "id", "999", data).await;
+
+	// Assert
+	assert!(result.is_ok());
+	assert_eq!(
+		result.unwrap(),
+		0,
+		"Update with mock should return 0 affected rows"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_delete_returns_affected_count(mock_connection: DatabaseConnection) {
+	// Arrange
+	// Default mock returns rows_affected: 0
+	let db = AdminDatabase::new(mock_connection);
+
+	// Act
+	let result = db.delete::<User>("users", "id", "999").await;
+
+	// Assert
+	assert!(result.is_ok());
+	assert_eq!(
+		result.unwrap(),
+		0,
+		"Delete with mock should return 0 affected rows"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_bulk_delete_with_many_ids(mock_connection: DatabaseConnection) {
+	// Arrange
+	let db = AdminDatabase::new(mock_connection);
+	let ids: Vec<String> = (1..=10).map(|i| i.to_string()).collect();
+
+	// Act
+	let result = db.bulk_delete::<User>("users", "id", ids).await;
+
+	// Assert
+	assert!(result.is_ok());
+	assert_eq!(
+		result.unwrap(),
+		0,
+		"Bulk delete with mock should return 0 affected rows"
+	);
 }

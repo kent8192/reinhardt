@@ -424,7 +424,7 @@ impl<DB: sqlx::Database> PooledConnection<DB> {
 	/// Documentation for `inner`
 	///
 	pub fn inner(&mut self) -> &mut sqlx::pool::PoolConnection<DB> {
-		&mut *self.conn
+		&mut self.conn
 	}
 	/// Get the unique identifier for this connection
 	///

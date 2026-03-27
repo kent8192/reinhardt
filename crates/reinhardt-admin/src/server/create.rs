@@ -2,19 +2,19 @@
 //!
 //! Provides create operations for admin models.
 
+use super::user::AdminDefaultUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite};
 use crate::types::{MutationRequest, MutationResponse};
-#[allow(deprecated)] // CurrentUser is deprecated, will migrate to AuthUser in 0.2.0
-use reinhardt_auth::{CurrentUser, DefaultUser};
-use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+use reinhardt_auth::AuthUser;
+use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::audit;
 #[cfg(not(target_arch = "wasm32"))]
-use super::error::MapServerFnError;
+use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(not(target_arch = "wasm32"))]
-use super::security::sanitize_mutation_values;
+use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(not(target_arch = "wasm32"))]
 use super::validation::validate_mutation_data;
 
@@ -44,34 +44,33 @@ use super::validation::validate_mutation_data;
 /// data.insert("username".to_string(), serde_json::json!("alice"));
 /// data.insert("email".to_string(), serde_json::json!("alice@example.com"));
 ///
-/// let request = MutationRequest { data };
+/// let request = MutationRequest { csrf_token: "token".to_string(), data };
 /// let response = create_record("User".to_string(), request).await?;
 /// println!("Created: {}", response.message);
 /// ```
-#[allow(deprecated)] // CurrentUser will be migrated to AuthUser in 0.2.0
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn create_record(
 	model_name: String,
 	request: MutationRequest,
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
-	#[inject] current_user: CurrentUser<DefaultUser>,
+	#[inject] http_request: ServerFnRequest,
+	#[inject] AuthUser(user): AuthUser<AdminDefaultUser>,
 ) -> Result<MutationResponse, ServerFnError> {
-	// Authentication check
-	let user = current_user
-		.user()
-		.map_err(|_| ServerFnError::server(401, "Authentication required"))?;
+	// CSRF token validation (double-submit cookie pattern)
+	require_csrf_token(&request.csrf_token, &http_request.inner().headers)?;
 
-	// Get model admin and check permission
+	// Authentication and authorization check
+	let auth = AdminAuth::from_request(&http_request);
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
-	if !model_admin
-		.has_add_permission(user as &(dyn std::any::Any + Send + Sync))
-		.await
-	{
-		return Err(ServerFnError::server(403, "Permission denied"));
-	}
-
+	auth.require_model_permission(
+		model_admin.as_ref(),
+		&user as &dyn crate::core::AdminUser,
+		ModelPermission::Add,
+	)
+	.await?;
 	let table_name = model_admin.table_name();
+	let pk_field = model_admin.pk_field();
 
 	// Validate input data before database operation
 	validate_mutation_data(&request.data, model_admin.as_ref(), false).map_server_fn_error()?;
@@ -80,13 +79,10 @@ pub async fn create_record(
 	let mut sanitized_data = request.data;
 	sanitize_mutation_values(&mut sanitized_data);
 
-	let user_id = current_user
-		.id()
-		.map(|id| id.to_string())
-		.unwrap_or_else(|_| "unknown".to_string());
+	let user_id = auth.user_id().unwrap_or("unknown").to_string();
 
 	let result = db
-		.create::<AdminRecord>(table_name, sanitized_data.clone())
+		.create::<AdminRecord>(table_name, Some(pk_field), sanitized_data.clone())
 		.await
 		.map_server_fn_error();
 

@@ -20,8 +20,7 @@ reinhardt = { version = "0.1.0-rc.13", features = ["forms"] }
 # reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
 # reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
 
-# Enable the form! macro:
-# reinhardt = { version = "0.1.0-rc.13", features = ["forms", "form-macros"] }
+# Forms is included in the standard preset
 ```
 
 Then import form features:

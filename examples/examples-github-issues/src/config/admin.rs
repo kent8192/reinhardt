@@ -1,10 +1,9 @@
 //! Admin panel configuration for examples-github-issues
 //!
 //! Configures and builds the admin interface with all app model admins.
-//! Demonstrates both macro-based (`#[admin(model, ...)]`) and builder-based
-//! (`ModelAdminConfigBuilder`) admin registration approaches.
+//! Uses the `#[admin(model, ...)]` macro for admin registration.
 
-use crate::apps::auth::admin::user_admin_config;
+use crate::apps::auth::admin::UserAdmin;
 use crate::apps::issues::admin::IssueAdmin;
 use crate::apps::projects::admin::{ProjectAdmin, ProjectMemberAdmin};
 use reinhardt::admin::AdminSite;
@@ -24,16 +23,14 @@ pub fn configure_admin() -> AdminSite {
 	});
 
 	// Register macro-based model admins from each app
+	site.register("User", UserAdmin)
+		.expect("Failed to register UserAdmin");
 	site.register("Project", ProjectAdmin)
 		.expect("Failed to register ProjectAdmin");
 	site.register("Project Member", ProjectMemberAdmin)
 		.expect("Failed to register ProjectMemberAdmin");
 	site.register("Issue", IssueAdmin)
 		.expect("Failed to register IssueAdmin");
-
-	// Register builder-based admin config (for models without #[model] macro)
-	site.register("User", user_admin_config())
-		.expect("Failed to register user admin config");
 
 	site
 }

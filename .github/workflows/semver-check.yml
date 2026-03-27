@@ -11,6 +11,10 @@ on:
         description: "Parallel cargo build jobs"
         type: string
         default: "1"
+      has-breaking-change-label:
+        description: "Whether the PR has the breaking-change label (SP-3 approved breaking change)"
+        type: string
+        default: 'false'
   workflow_dispatch:
 
 env:
@@ -113,19 +117,29 @@ jobs:
           fi
 
       # On normal PRs with RC versions, enforce minor release type to block breaking
-      # breaking changes. Per stability policy (SP-1), the API surface is frozen
-      # during RC -- only bug fixes and deprecation-alias renames are permitted.
+      # changes. Per stability policy (SP-1), the API surface is frozen during RC --
+      # only bug fixes and deprecation-alias renames are permitted.
+      # Exception: PRs with the 'breaking-change' label have SP-3 approved breaking
+      # changes and use --release-type major to allow them through while still
+      # validating SemVer correctness.
       - name: Run cargo-semver-checks (normal PR - RC versions)
         if: ${{ !startsWith(github.head_ref || github.ref_name, 'release-plz-') && steps.detect-prerelease.outputs.phase == 'rc' }}
         env:
           BASELINE_REV: ${{ github.event.pull_request.base.sha }}
+          HAS_BREAKING_CHANGE: ${{ inputs.has-breaking-change-label }}
         run: |
+          if [ "$HAS_BREAKING_CHANGE" = "true" ]; then
+            echo "::notice::SP-3 approved breaking change detected (breaking-change label). Using --release-type major."
+            RELEASE_TYPE="major"
+          else
+            RELEASE_TYPE="minor"
+          fi
           cargo semver-checks check-release \
             --workspace \
             --exclude reinhardt-web \
             --exclude reinhardt-pages \
             --all-features \
-            --release-type minor \
+            --release-type "$RELEASE_TYPE" \
             --baseline-rev "${BASELINE_REV:-HEAD~1}"
 
       # On normal PRs with stable versions, enforce minor release type to block

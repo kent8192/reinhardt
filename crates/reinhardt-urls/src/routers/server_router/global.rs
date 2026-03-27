@@ -9,6 +9,10 @@ use std::sync::RwLock as StdRwLock;
 /// Global router registry
 static GLOBAL_ROUTER: OnceCell<StdRwLock<Option<Arc<ServerRouter>>>> = OnceCell::new();
 
+/// Global deferred DI registrations from route configuration
+static GLOBAL_DI_REGISTRATIONS: OnceCell<StdRwLock<Option<reinhardt_di::DiRegistrationList>>> =
+	OnceCell::new();
+
 /// Register the application's main router globally
 ///
 /// This allows commands like `showurls` to inspect registered routes.
@@ -87,6 +91,33 @@ pub fn is_router_registered() -> bool {
 		.unwrap_or(false)
 }
 
+/// Register deferred DI registrations globally
+///
+/// These registrations are captured during route configuration (e.g., in
+/// `routes()` functions) and applied to the server's [`SingletonScope`]
+/// during startup. This bridges the lifecycle gap between synchronous
+/// route setup and the server's DI context creation.
+///
+/// [`SingletonScope`]: reinhardt_di::SingletonScope
+pub fn register_di_registrations(list: reinhardt_di::DiRegistrationList) {
+	let cell = GLOBAL_DI_REGISTRATIONS.get_or_init(|| StdRwLock::new(None));
+	let mut guard = cell.write().unwrap_or_else(PoisonError::into_inner);
+	match guard.as_mut() {
+		Some(existing) => existing.merge(list),
+		None => *guard = Some(list),
+	}
+}
+
+/// Take the globally registered DI registrations
+///
+/// Returns `None` if no registrations have been stored.
+/// After this call, the global cell is emptied (subsequent calls return `None`).
+pub fn take_di_registrations() -> Option<reinhardt_di::DiRegistrationList> {
+	GLOBAL_DI_REGISTRATIONS
+		.get()
+		.and_then(|cell| cell.write().unwrap_or_else(PoisonError::into_inner).take())
+}
+
 /// Clear the registered router (useful for tests)
 ///
 /// # Examples
@@ -99,6 +130,11 @@ pub fn is_router_registered() -> bool {
 /// ```
 pub fn clear_router() {
 	if let Some(cell) = GLOBAL_ROUTER.get() {
+		let mut guard = cell.write().unwrap_or_else(PoisonError::into_inner);
+		*guard = None;
+	}
+	// Also clear deferred DI registrations
+	if let Some(cell) = GLOBAL_DI_REGISTRATIONS.get() {
 		let mut guard = cell.write().unwrap_or_else(PoisonError::into_inner);
 		*guard = None;
 	}

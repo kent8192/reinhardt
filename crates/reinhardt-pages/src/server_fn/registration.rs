@@ -48,6 +48,7 @@ use super::registry::ServerFnHandler;
 /// impl ServerFnRegistration for login {
 ///     const PATH: &'static str = "/api/server_fn/login";
 ///     const NAME: &'static str = "login";
+///     const CODEC: &'static str = "json";
 ///
 ///     fn handler() -> ServerFnHandler {
 ///         __server_fn_static_wrapper_login
@@ -63,6 +64,14 @@ pub trait ServerFnRegistration: Send + Sync + 'static {
 
 	/// The name of the server function (for debugging and logging).
 	const NAME: &'static str;
+
+	/// The codec this server function uses (e.g., `"json"`, `"url"`, `"msgpack"`).
+	///
+	/// Controls how the server expects to decode the incoming request body.
+	/// The actual response `Content-Type` may differ depending on the codec;
+	/// for example, the `"url"` codec still returns JSON responses while only
+	/// the request format differs. Defaults to `"json"` for backward compatibility.
+	const CODEC: &'static str = "json";
 
 	/// Returns the handler function pointer.
 	///

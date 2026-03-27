@@ -17,6 +17,7 @@ permissions:
 jobs:
   update-version-refs:
     name: Update docs/examples version references
+    timeout-minutes: 10
     # Only trigger for reinhardt-web releases (release-plz creates GitHub Release for reinhardt-web only)
     if: >
       github.event_name == 'workflow_dispatch' ||
@@ -25,13 +26,16 @@ jobs:
     steps:
       - name: Extract version from tag or input
         id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ inputs.version }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
           else
             # Extract version from tag: reinhardt-web@v0.1.0-rc.8 → 0.1.0-rc.8
-            TAG="${{ github.event.release.tag_name }}"
-            VERSION="${TAG#reinhardt-web@v}"
+            VERSION="${RELEASE_TAG#reinhardt-web@v}"
           fi
 
           # Validate version format

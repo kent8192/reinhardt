@@ -220,10 +220,14 @@ pub(crate) fn generate_di_context_extraction(request_ident: &syn::Ident) -> Toke
 	let core_crate = get_reinhardt_core_crate();
 
 	quote::quote! {
-		let __di_ctx = #request_ident.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
-			.ok_or_else(|| #core_crate::exception::Error::Internal(
-				"DI context not set. Ensure the router is configured with .with_di_context()".to_string()
-			))?;
+		let __di_ctx = {
+			let __shared_ctx = #request_ident.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
+				.ok_or_else(|| #core_crate::exception::Error::Internal(
+					"DI context not set. Ensure the router is configured with .with_di_context()".to_string()
+				))?;
+			let __di_request = #request_ident.clone_for_di();
+			::std::sync::Arc::new((*__shared_ctx).fork_for_request(__di_request))
+		};
 	}
 }
 

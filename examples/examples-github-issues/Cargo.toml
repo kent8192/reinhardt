@@ -14,7 +14,7 @@ reinhardt = { workspace = true, features = [
 	"minimal",        # Core HTTP/Routing/DI/Server
 	"graphql",        # GraphQL support
 	"auth-jwt",       # JWT authentication
-	"argon2-hasher",  # Required for DefaultUser
+	"argon2-hasher",  # Required for Argon2Hasher (User model password hashing)
 	"client-router",  # Client-side routing support (required for #[routes] macro)
 	"conf",           # Settings configuration (DefaultSource, Settings, SettingsBuilder)
 	"commands",       # Management commands (runserver, etc.)

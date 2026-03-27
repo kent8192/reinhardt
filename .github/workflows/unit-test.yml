@@ -19,6 +19,18 @@ on:
         description: "Whether to run all tests"
         type: string
         default: "true"
+      cargo-packages:
+        description: "Newline-separated list of packages to compile (affected + rdeps). Issue #2878"
+        type: string
+        default: ""
+      partitions-json:
+        description: "JSON array of partition indices for dynamic matrix. Issue #2881"
+        type: string
+        default: "[1,2,3,4,5,6,7,8]"
+      partition-count:
+        description: "Total partition count for nextest --partition. Issue #2881"
+        type: string
+        default: "8"
   workflow_dispatch:
 
 env:
@@ -33,13 +45,13 @@ env:
 
 jobs:
   unit-test:
-    name: Unit Tests (${{ matrix.partition }}/6)
+    name: Unit Tests (${{ matrix.partition }}/${{ inputs.partition-count || '8' }})
     runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        partition: [1, 2, 3, 4, 5, 6]
+        partition: ${{ fromJSON(inputs.partitions-json || '[1,2,3,4,5,6,7,8]') }}
     steps:
       - name: Free Disk Space (Ubuntu)
         if: ${{ !contains(inputs.runner, 'self-hosted') }}
@@ -64,6 +76,8 @@ jobs:
 
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup protoc
         uses: arduino/setup-protoc@v3
@@ -124,21 +138,37 @@ jobs:
             done < .github/docker-images-unit-test.txt
           fi
 
-      - name: Run unit tests (partition ${{ matrix.partition }}/6)
+      - name: Run unit tests (partition ${{ matrix.partition }}/${{ inputs.partition-count || '8' }})
         env:
           RUSTFLAGS: "-C linker=clang -C link-arg=-fuse-ld=mold"
           NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
           RUN_ALL: ${{ inputs.run-all }}
+          CARGO_PACKAGES: ${{ inputs.cargo-packages }}
+          PARTITION_COUNT: ${{ inputs.partition-count || '8' }}
         run: |
+          # Build package selection args. Issue #2878
+          # When run-all is true or no cargo-packages provided, use --workspace.
+          # Otherwise, use -p flags to compile only affected packages + rdeps.
+          PKG_ARGS=()
+          if [[ "$RUN_ALL" != "true" && -n "$CARGO_PACKAGES" ]]; then
+            while IFS= read -r pkg; do
+              [[ -z "$pkg" ]] && continue
+              PKG_ARGS+=(-p "$pkg")
+            done <<< "$CARGO_PACKAGES"
+          fi
+          if [[ ${#PKG_ARGS[@]} -eq 0 ]]; then
+            PKG_ARGS=(--workspace)
+          fi
+
           FILTER_ARGS=()
           if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
             FILTER_ARGS+=(-E "$NEXTEST_FILTER_EXPR")
           fi
           cargo nextest run \
-            --workspace \
+            "${PKG_ARGS[@]}" \
             --lib \
             --all-features \
-            --partition hash:${{ matrix.partition }}/6 \
+            --partition hash:${{ matrix.partition }}/$PARTITION_COUNT \
             --no-fail-fast \
             --no-tests=warn \
             --status-level=none \

@@ -1884,6 +1884,12 @@ pub async fn postgres_with_migrations_from_dir(
 			.map_err(|e| format!("Failed to apply migrations: {}", e))?;
 	}
 
+	// Initialize the ORM global database connection so that E2E tests
+	// using ORM models can access the database without manual setup.
+	reinhardt_db::orm::reinitialize_database(&url)
+		.await
+		.map_err(|e| format!("Failed to initialize ORM global state: {}", e))?;
+
 	Ok((container, Arc::new(connection)))
 }
 
@@ -2196,4 +2202,115 @@ async fn try_start_rabbitmq_container()
 	let url = format!("amqp://localhost:{}/%2f", port);
 
 	Ok((rabbitmq, port, url))
+}
+
+#[cfg(all(test, feature = "testcontainers"))]
+mod tests {
+	use super::*;
+	use rstest::*;
+
+	#[rstest]
+	fn test_get_pool_config_defaults() {
+		// Arrange (uses default env — no TEST_MAX_CONNECTIONS or TEST_ACQUIRE_TIMEOUT_SECS set)
+
+		// Act
+		let (max_connections, acquire_timeout) = get_pool_config();
+
+		// Assert
+		assert!(
+			max_connections > 0,
+			"Expected max_connections > 0, got: {}",
+			max_connections
+		);
+		assert!(
+			acquire_timeout > 0,
+			"Expected acquire_timeout > 0, got: {}",
+			acquire_timeout
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_is_port_available() {
+		// Arrange
+		// Bind to port 0 to get an OS-assigned free port, then release it
+		let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+			.await
+			.expect("Failed to bind to random port");
+		let port = listener.local_addr().unwrap().port();
+		drop(listener);
+
+		// Act
+		let available = is_port_available(port).await;
+
+		// Assert
+		assert!(available, "Expected released port {} to be available", port);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_postgres_container_connects(
+		#[future] postgres_container: (
+			ContainerAsync<GenericImage>,
+			Arc<sqlx::PgPool>,
+			u16,
+			String,
+		),
+	) {
+		// Arrange
+		let (_container, pool, _port, _url) = postgres_container.await;
+
+		// Act
+		let row: (i32,) = sqlx::query_as("SELECT 1")
+			.fetch_one(pool.as_ref())
+			.await
+			.expect("Failed to execute SELECT 1 on postgres container");
+
+		// Assert
+		assert_eq!(row.0, 1);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_postgres_container_port_nonzero(
+		#[future] postgres_container: (
+			ContainerAsync<GenericImage>,
+			Arc<sqlx::PgPool>,
+			u16,
+			String,
+		),
+	) {
+		// Arrange
+		let (_container, _pool, port, _url) = postgres_container.await;
+
+		// Act (no-op: port is set at initialization)
+
+		// Assert
+		assert!(port > 0, "Expected port to be non-zero, got: {}", port);
+	}
+
+	#[rstest]
+	#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+	async fn test_create_test_any_pool(
+		#[future] postgres_container: (
+			ContainerAsync<GenericImage>,
+			Arc<sqlx::PgPool>,
+			u16,
+			String,
+		),
+	) {
+		// Arrange
+		let (_container, _pool, _port, url) = postgres_container.await;
+		sqlx::any::install_default_drivers();
+
+		// Act
+		let any_pool = create_test_any_pool(&url).await;
+
+		// Assert
+		assert!(
+			any_pool.is_ok(),
+			"Expected create_test_any_pool to succeed, got: {:?}",
+			any_pool.err()
+		);
+	}
 }

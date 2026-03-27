@@ -1,0 +1,5 @@
+error: duplicate user_field mapping: 'password_hash' is mapped to both 'pwd' and 'pwd2'
+  --> tests/ui/user/fail/duplicate_role.rs:20:15
+   |
+20 |     #[user_field(password_hash)]
+   |                  ^^^^^^^^^^^^^

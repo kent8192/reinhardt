@@ -18,7 +18,7 @@ use {
 };
 
 /// Login user, persist session, and return user info
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn login(
 	email: String,
 	password: String,
@@ -80,7 +80,7 @@ pub async fn login(
 }
 
 /// Register new user
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn register(
 	username: String,
 	email: String,
@@ -147,7 +147,7 @@ pub async fn register(
 }
 
 /// Logout user
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn logout(
 	#[inject] session: SessionData,
 	#[inject] store: SessionStoreRef,
@@ -158,7 +158,7 @@ pub async fn logout(
 }
 
 /// Get current logged-in user
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn current_user(
 	#[inject] _db: DatabaseConnection,
 	#[inject] session: SessionData,

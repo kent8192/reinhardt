@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-conf"
-version = "0.1.0-rc.13"
+version = "0.1.0-rc.14"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -88,3 +88,4 @@ wiremock = "0.6"
 serial_test = { workspace = true }
 quickcheck = "1.0"
 quickcheck_macros = "1.0"
+proptest = { workspace = true }

@@ -413,7 +413,7 @@ Instead of template files, customize the admin panel using Rust code. Update you
 
 ```rust
 use reinhardt::admin::{AdminSite, ModelAdmin, AdminConfig};
-use reinhardt::pages::component::View;
+use reinhardt::pages::component::Page;
 use reinhardt::pages::page;
 
 pub struct QuestionAdmin;
@@ -449,10 +449,10 @@ For advanced customization, create custom components:
 
 ```rust
 use reinhardt::pages::admin::AdminPanel;
-use reinhardt::pages::component::View;
+use reinhardt::pages::component::Page;
 use reinhardt::pages::page;
 
-pub fn custom_admin_index() -> View {
+pub fn custom_admin_index() -> Page {
     page!(|| {
         div {
             class: "admin-dashboard",

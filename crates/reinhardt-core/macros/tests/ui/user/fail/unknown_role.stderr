@@ -1,0 +1,5 @@
+error: unknown user_field role 'nonexistent_role'. Valid roles: password_hash, last_login, is_active, is_superuser, is_staff, email, first_name, last_name, date_joined, user_permissions, groups
+  --> tests/ui/user/fail/unknown_role.rs:16:15
+   |
+16 |     #[user_field(nonexistent_role)]
+   |                  ^^^^^^^^^^^^^^^^

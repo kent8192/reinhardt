@@ -21,6 +21,13 @@ pub const MAX_IMPORT_FILE_SIZE: usize = 10 * 1024 * 1024;
 /// Default: 1,000 records
 pub const MAX_IMPORT_RECORDS: usize = 1_000;
 
+/// Maximum number of IDs that can be deleted in a single bulk delete request
+///
+/// This prevents DoS attacks through extremely large ID lists
+/// that could exhaust database resources.
+/// Default: 1,000 IDs
+pub const MAX_BULK_DELETE_IDS: usize = 1_000;
+
 /// Maximum page size for list views
 ///
 /// This prevents memory exhaustion from large page requests.
@@ -114,5 +121,22 @@ mod tests {
 	fn default_page_size_is_expected_value() {
 		// Assert
 		assert_eq!(DEFAULT_PAGE_SIZE, 25);
+	}
+
+	#[rstest]
+	fn bulk_delete_ids_limit_is_within_reasonable_bounds() {
+		// Arrange
+		let min = 1_usize;
+		let max = 10_000_usize;
+
+		// Act & Assert
+		assert!(MAX_BULK_DELETE_IDS >= min);
+		assert!(MAX_BULK_DELETE_IDS <= max);
+	}
+
+	#[rstest]
+	fn bulk_delete_ids_limit_is_expected_value() {
+		// Assert
+		assert_eq!(MAX_BULK_DELETE_IDS, 1_000);
 	}
 }

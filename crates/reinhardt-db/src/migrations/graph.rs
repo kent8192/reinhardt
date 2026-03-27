@@ -342,17 +342,25 @@ impl MigrationGraph {
 		while let Some(key) = queue.pop_front() {
 			result.push(key.clone());
 
-			// Reduce in-degree for all dependents
+			// Reduce in-degree for all dependents and collect newly freed nodes
+			let mut newly_freed = Vec::new();
 			for (other_key, node) in &self.nodes {
 				if node.dependencies.contains(&key)
 					&& let Some(degree) = in_degree.get_mut(other_key)
 				{
 					*degree -= 1;
 					if *degree == 0 {
-						queue.push_back(other_key.clone());
+						newly_freed.push(other_key.clone());
 					}
 				}
 			}
+			// Sort newly freed nodes for deterministic BFS order
+			newly_freed.sort_by(|a, b| {
+				a.app_label
+					.cmp(&b.app_label)
+					.then_with(|| a.name.cmp(&b.name))
+			});
+			queue.extend(newly_freed);
 		}
 
 		// Check for circular dependencies

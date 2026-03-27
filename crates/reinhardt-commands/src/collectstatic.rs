@@ -90,6 +90,9 @@ pub struct CollectStaticCommand {
 	config: StaticFilesConfig,
 	options: CollectStaticOptions,
 	manifest: HashMap<String, String>,
+	/// Source path for index.html (copies to static_root with template processing).
+	/// Refs #2869
+	index_source: Option<PathBuf>,
 }
 
 impl CollectStaticCommand {
@@ -99,7 +102,16 @@ impl CollectStaticCommand {
 			config,
 			options,
 			manifest: HashMap::new(),
+			index_source: None,
 		}
+	}
+
+	/// Set the source path for index.html.
+	///
+	/// When set, `execute()` copies this file to `static_root/index.html`
+	/// with `{{ static_url() }}` template processing applied.
+	pub fn set_index_source(&mut self, path: Option<PathBuf>) {
+		self.index_source = path;
 	}
 
 	/// Execute the collectstatic command
@@ -179,6 +191,37 @@ impl CollectStaticCommand {
 		// Save manifest if hashing is enabled
 		if self.options.enable_hashing && !self.options.dry_run {
 			self.save_manifest()?;
+		}
+
+		// Process index.html from explicit source path
+		// Refs #2869: Copy index.html from project root to dist/ with template processing
+		if let Some(ref index_source) = self.index_source {
+			if index_source.exists() {
+				let dest_path = self.config.static_root.join("index.html");
+				if !self.options.dry_run {
+					if let Some(parent) = dest_path.parent() {
+						fs::create_dir_all(parent)?;
+					}
+					if self.options.link {
+						self.create_symlink(index_source, &dest_path)?;
+					} else {
+						self.process_html_template(index_source, &dest_path)?;
+					}
+				}
+				if self.options.verbosity > 0 {
+					println!(
+						"Index: {} → {}",
+						index_source.display(),
+						dest_path.display()
+					);
+				}
+				stats.copied += 1;
+			} else {
+				return Err(io::Error::new(
+					io::ErrorKind::NotFound,
+					format!("Index source file not found: {}", index_source.display()),
+				));
+			}
 		}
 
 		// Print summary
@@ -538,6 +581,7 @@ impl Clone for CollectStaticCommand {
 			config: self.config.clone(),
 			options: self.options.clone(),
 			manifest: HashMap::new(),
+			index_source: self.index_source.clone(),
 		}
 	}
 }

@@ -2,12 +2,14 @@
 //!
 //! Provides detail view operations for admin models.
 
+use super::user::AdminDefaultUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, DetailResponse};
+use reinhardt_auth::AuthUser;
 use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
-use super::error::{AdminAuth, MapServerFnError};
+use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 
 /// Get detail view data for a single model instance
 ///
@@ -32,19 +34,24 @@ use super::error::{AdminAuth, MapServerFnError};
 /// let response = get_detail("User".to_string(), "42".to_string()).await?;
 /// println!("User data: {:?}", response.data);
 /// ```
-#[server_fn(use_inject = true)]
+#[server_fn]
 pub async fn get_detail(
 	model_name: String,
 	id: String,
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
+	#[inject] AuthUser(user): AuthUser<AdminDefaultUser>,
 ) -> Result<DetailResponse, ServerFnError> {
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
-	auth.require_view_permission(&model_name)?;
-
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	auth.require_model_permission(
+		model_admin.as_ref(),
+		&user as &dyn crate::core::AdminUser,
+		ModelPermission::View,
+	)
+	.await?;
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
 

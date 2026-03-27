@@ -64,6 +64,8 @@ jobs:
 
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup protoc
         uses: arduino/setup-protoc@v3
@@ -88,6 +90,11 @@ jobs:
         with:
           tool: nextest
 
+      - name: Pull Docker images
+        uses: ./.github/actions/pull-docker-images
+        with:
+          images-file: .github/docker-images-cross-crate.txt
+
       - name: Additional disk cleanup before tests
         if: ${{ !contains(inputs.runner, 'self-hosted') }}
         run: |
@@ -95,7 +102,8 @@ jobs:
           df -h
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/* || true
-          docker system prune -af --volumes || true
+          # Use -f (not -af) to preserve pre-pulled Docker images
+          docker system prune -f --volumes || true
           docker builder prune -af || true
           rm -rf ~/.cache/pip || true
           rm -rf ~/.npm || true
@@ -107,11 +115,6 @@ jobs:
           rm -rf ~/.cargo/git/db || true
           echo "Disk usage after additional cleanup:"
           df -h
-
-      - name: Pull Docker images
-        uses: ./.github/actions/pull-docker-images
-        with:
-          images-file: .github/docker-images-cross-crate.txt
 
       - name: Run cross-crate integration tests (partition ${{ matrix.partition }}/3)
         env:

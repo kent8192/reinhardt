@@ -418,7 +418,11 @@ pub fn build_composite_filter_condition_with_depth(
 			}
 			// Return None if all sub-conditions were unsupported,
 			// preventing an empty Condition::all() that produces WHERE TRUE
-			if added { Ok(Some(and_condition)) } else { Ok(None) }
+			if added {
+				Ok(Some(and_condition))
+			} else {
+				Ok(None)
+			}
 		}
 		FilterCondition::Or(conditions) => {
 			if conditions.is_empty() {
@@ -436,7 +440,11 @@ pub fn build_composite_filter_condition_with_depth(
 			}
 			// Return None if all sub-conditions were unsupported,
 			// preventing an empty Condition::any() that produces WHERE FALSE
-			if added { Ok(Some(or_condition)) } else { Ok(None) }
+			if added {
+				Ok(Some(or_condition))
+			} else {
+				Ok(None)
+			}
 		}
 		FilterCondition::Not(inner) => Ok(build_composite_filter_condition_with_depth(
 			inner,

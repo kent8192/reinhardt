@@ -111,7 +111,10 @@ pub async fn import_data(
 	let mut errors = Vec::new();
 
 	for (index, record) in records.into_iter().enumerate() {
-		match db.create::<AdminRecord>(table_name, Some(pk_field), record).await {
+		match db
+			.create::<AdminRecord>(table_name, Some(pk_field), record)
+			.await
+		{
 			Ok(_) => imported += 1,
 			Err(_) => {
 				// Hide internal error details (SQL fragments, table structures, column names)

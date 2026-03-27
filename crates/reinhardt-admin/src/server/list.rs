@@ -6,8 +6,7 @@ use crate::adapters::{
 	AdminDatabase, AdminRecord, AdminSite, ColumnInfo, FilterInfo, FilterType, ListQueryParams,
 	ListResponse, ModelAdmin,
 };
-#[allow(deprecated)] // CurrentUser is deprecated, will migrate to AuthUser in 0.2.0
-use reinhardt_auth::{CurrentUser, DefaultUser};
+use reinhardt_auth::{AuthUser, DefaultUser};
 #[cfg(not(target_arch = "wasm32"))]
 use reinhardt_db::orm::{Filter, FilterCondition, FilterOperator, FilterValue};
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
@@ -95,24 +94,18 @@ fn build_columns(model_admin: &Arc<dyn ModelAdmin>) -> Vec<ColumnInfo> {
 /// let response = get_list("User".to_string(), params).await?;
 /// println!("Found {} users", response.count);
 /// ```
-#[allow(deprecated)] // CurrentUser will be migrated to AuthUser in 0.2.0
 #[server_fn]
 pub async fn get_list(
 	model_name: String,
 	params: ListQueryParams,
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
-	#[inject] current_user: CurrentUser<DefaultUser>,
+	#[inject] AuthUser(user): AuthUser<DefaultUser>,
 ) -> Result<ListResponse, ServerFnError> {
-	// Authentication check
-	let user = current_user
-		.user()
-		.map_err(|_| ServerFnError::server(401, "Authentication required"))?;
-
 	// Get model admin and check permission
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
 	if !model_admin
-		.has_view_permission(user as &(dyn std::any::Any + Send + Sync))
+		.has_view_permission(&user as &(dyn std::any::Any + Send + Sync))
 		.await
 	{
 		return Err(ServerFnError::server(403, "Permission denied"));

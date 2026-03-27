@@ -27,5 +27,6 @@ pub use import::{
 	CsvImporter, ImportBuilder, ImportConfig, ImportError, ImportFormat, ImportResult, JsonImporter,
 };
 pub use model_admin::{ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder};
-pub use router::{AdminRouter, admin_routes, admin_static_routes};
+#[allow(deprecated)] // re-exporting deprecated admin_routes for backward compatibility
+pub use router::{AdminRouter, admin_routes, admin_routes_with_di, admin_static_routes};
 pub use site::{AdminSite, AdminSiteConfig};

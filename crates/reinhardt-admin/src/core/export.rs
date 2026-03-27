@@ -342,8 +342,9 @@ impl TsvExporter {
 				.iter()
 				.map(|field| {
 					// Escape tabs, newlines, and carriage returns to prevent field corruption
+					// Replace \r\n first to avoid double-space from individual \r and \n replacements
 					row.get(field)
-						.map(|v| v.replace(['\t', '\n', '\r'], " "))
+						.map(|v| v.replace("\r\n", " ").replace(['\t', '\n', '\r'], " "))
 						.unwrap_or_default()
 				})
 				.collect();

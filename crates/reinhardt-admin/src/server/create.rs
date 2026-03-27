@@ -4,13 +4,14 @@
 
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite};
 use crate::types::{MutationRequest, MutationResponse};
+use reinhardt_auth::{AuthUser, DefaultUser};
 use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::audit;
 #[cfg(not(target_arch = "wasm32"))]
-use super::error::{AdminAuth, MapServerFnError};
+use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(not(target_arch = "wasm32"))]
 use super::security::{require_csrf_token, sanitize_mutation_values};
 #[cfg(not(target_arch = "wasm32"))]
@@ -53,17 +54,20 @@ pub async fn create_record(
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
+	#[inject] AuthUser(user): AuthUser<DefaultUser>,
 ) -> Result<MutationResponse, ServerFnError> {
-	// Authentication and authorization check (before CSRF to avoid
-	// leaking CSRF validation errors to unauthenticated users)
-	let auth = AdminAuth::from_request(&http_request);
-	auth.require_add_permission(&model_name)?;
-
 	// CSRF token validation (double-submit cookie pattern)
 	require_csrf_token(&request.csrf_token, &http_request.inner().headers)?;
 
-	// Get model admin and check permission
+	// Authentication and authorization check
+	let auth = AdminAuth::from_request(&http_request);
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	auth.require_model_permission(
+		model_admin.as_ref(),
+		&user as &(dyn std::any::Any + Send + Sync),
+		ModelPermission::Add,
+	)
+	.await?;
 	let table_name = model_admin.table_name();
 
 	// Validate input data before database operation

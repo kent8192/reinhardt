@@ -4,11 +4,12 @@
 
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, FieldInfo, FieldType};
 use crate::types::FieldsResponse;
+use reinhardt_auth::{AuthUser, DefaultUser};
 use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
-use super::error::{AdminAuth, MapServerFnError};
+use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::server::type_inference::{get_field_metadata, infer_admin_field_type, infer_required};
 #[cfg(not(target_arch = "wasm32"))]
@@ -44,12 +45,17 @@ pub async fn get_fields(
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
+	#[inject] AuthUser(user): AuthUser<DefaultUser>,
 ) -> Result<FieldsResponse, ServerFnError> {
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
-	auth.require_view_permission(&model_name)?;
-
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
+	auth.require_model_permission(
+		model_admin.as_ref(),
+		&user as &(dyn std::any::Any + Send + Sync),
+		ModelPermission::View,
+	)
+	.await?;
 	let field_names = model_admin
 		.fields()
 		.unwrap_or_else(|| model_admin.list_display());

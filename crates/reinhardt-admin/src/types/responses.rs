@@ -98,6 +98,7 @@ pub struct ImportResponse {
 
 /// Response for export endpoint
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ExportResponse {
 	/// Exported data (binary)
 	#[serde(with = "serde_bytes")]
@@ -106,6 +107,11 @@ pub struct ExportResponse {
 	pub filename: String,
 	/// Content type (e.g., "application/json", "text/csv")
 	pub content_type: String,
+	/// Whether the export was truncated due to exceeding the maximum record limit
+	pub truncated: bool,
+	/// Total number of records in the table (before truncation)
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub total_count: Option<u64>,
 }
 
 /// Response for fields endpoint

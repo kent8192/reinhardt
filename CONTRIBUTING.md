@@ -552,6 +552,10 @@ For detailed commit guidelines, see [COMMIT_GUIDELINE.md](instructions/COMMIT_GU
 
    ```bash
    git checkout -b feature/your-feature-name
+   # For issue-linked branches:
+   git checkout -b fix/issue-123-your-fix-description
+   # For consecutive issue ranges:
+   git checkout -b fix/issue-100-to-105-batch-fix-description
    ```
 
 2. **Make your changes** following the guidelines in this document

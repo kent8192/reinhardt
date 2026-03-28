@@ -100,6 +100,25 @@ fix/xss-sanitization
 security/input-validation
 ```
 
+**Issue-linked branch naming:**
+
+When a branch addresses specific GitHub Issues, include the issue number(s):
+
+```
+# Single issue
+fix/issue-2636-retrieve-view-integer-pk
+
+# Consecutive range (use "to")
+fix/issue-3017-to-3019-feature-gate-compilation
+
+# Multiple consecutive ranges (use "to" and "and")
+fix/issue-1570-to-1572-and-1591-to-1596-workspace-deps
+```
+
+- Use `to` for consecutive issue number ranges
+- Use `and` to separate multiple ranges
+- Do NOT use hyphens between issue numbers for ranges (e.g., ~~`issue-1732-1733-1738`~~)
+
 **Rules:**
 - One branch per logical work unit (see WU-1)
 - Branch names MUST NOT include internal metadata such as phase numbers, agent states, or workflow identifiers

@@ -134,6 +134,7 @@ See instructions/DOCUMENTATION_STANDARDS.md for comprehensive documentation stan
 **Branch Operations:**
 - When merging branches and resolving conflicts, execute immediately without entering Plan Mode
 - Before creating branches, verify names don't conflict with existing ones using `git worktree list` and `git branch -a`
+- Issue-linked branches: `<type>/issue-XXXX-to-YYYY-<desc>` (range), `<type>/issue-XXXX-to-YYYY-and-WWWW-to-ZZZZ-<desc>` (multiple ranges)
 
 **PR Conflict Resolution:**
 - **MUST** use worktree-based merge strategy for resolving PR conflicts (NOT rebase or force-push)
@@ -507,6 +508,7 @@ Before submitting code:
 - Provide structured agent context using AC-2 template format
 - Fall back to `gh` CLI when GitHub MCP tools return errors
 - Verify branch name uniqueness before creation (`git worktree list` and `git branch -a`)
+- Use `issue-XXXX-to-YYYY` for consecutive issue ranges and `and` for multiple ranges in branch names
 - Check known CI failure patterns before deep investigation
 - Run `cargo doc --no-deps` locally before pushing doc-related fixes
 - Execute merge/conflict resolution and straightforward operations immediately without Plan Mode
@@ -582,6 +584,7 @@ Before submitting code:
 - Enter Plan Mode for merge operations, branch deletion, or worktree cleanup
 - Retry GitHub MCP tools after errors instead of falling back to `gh` CLI
 - Create branches without checking for name conflicts
+- Use hyphens between issue numbers for ranges in branch names (use `to` and `and` instead)
 - Use rebase or force-push to resolve PR conflicts (use worktree merge instead)
 - Merge develop/* branches into main without `migration-approved` label and CI version validation
 - Remove `agent-suspect` label without independent verification (separate agent or human)

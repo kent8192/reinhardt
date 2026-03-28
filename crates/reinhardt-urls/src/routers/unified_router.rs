@@ -160,30 +160,45 @@ impl UnifiedRouter {
 		&mut self.client
 	}
 
+	/// Apply or stash deferred DI registrations.
+	///
+	/// If the server router already has a DI context, registrations are applied
+	/// directly to its singleton scope. Otherwise they are stashed globally
+	/// for later application (e.g., by the `runall` command).
+	fn flush_di_registrations(&mut self) {
+		if self.di_registrations.is_empty() {
+			return;
+		}
+		let registrations = std::mem::take(&mut self.di_registrations);
+		match self
+			.server
+			.di_context()
+			.map(|ctx| Arc::clone(ctx.singleton_scope()))
+		{
+			Some(scope) => registrations.apply_to(&scope),
+			None => crate::routers::register_di_registrations(registrations),
+		}
+	}
+
 	/// Consumes the router and returns the server router.
 	///
-	/// If this router has deferred DI registrations, they are stashed
-	/// in the global registry for later application by the server.
-	pub fn into_server(self) -> ServerRouter {
-		if !self.di_registrations.is_empty() {
-			crate::routers::register_di_registrations(self.di_registrations);
-		}
+	/// If this router has a DI context, deferred DI registrations are applied
+	/// directly to its singleton scope. Otherwise they are stashed in the
+	/// global registry for later application by the server.
+	pub fn into_server(mut self) -> ServerRouter {
+		self.flush_di_registrations();
 		self.server
 	}
 
 	/// Consumes the router and returns the client router.
-	pub fn into_client(self) -> ClientRouter {
-		if !self.di_registrations.is_empty() {
-			crate::routers::register_di_registrations(self.di_registrations);
-		}
+	pub fn into_client(mut self) -> ClientRouter {
+		self.flush_di_registrations();
 		self.client
 	}
 
 	/// Consumes the router and returns both parts.
-	pub fn into_parts(self) -> (ServerRouter, ClientRouter) {
-		if !self.di_registrations.is_empty() {
-			crate::routers::register_di_registrations(self.di_registrations);
-		}
+	pub fn into_parts(mut self) -> (ServerRouter, ClientRouter) {
+		self.flush_di_registrations();
 		(self.server, self.client)
 	}
 
@@ -212,11 +227,10 @@ impl UnifiedRouter {
 
 	/// Attach deferred DI registrations to this router.
 	///
-	/// These registrations will be stashed globally when the router is
-	/// consumed (via [`into_server`](Self::into_server),
-	/// [`into_parts`](Self::into_parts), or
-	/// [`register_globally`](Self::register_globally)),
-	/// and applied to the server's singleton scope during startup.
+	/// When the router is consumed, these registrations are applied directly
+	/// to the DI context's singleton scope if one has been set via
+	/// [`with_di_context`](Self::with_di_context). Otherwise they are stashed
+	/// globally for later application (e.g., by the `runall` command).
 	pub fn with_di_registrations(mut self, list: reinhardt_di::DiRegistrationList) -> Self {
 		self.di_registrations.merge(list);
 		self
@@ -381,32 +395,48 @@ impl UnifiedRouter {
 		&mut self.server
 	}
 
+	/// Apply or stash deferred DI registrations.
+	///
+	/// If the server router already has a DI context, registrations are applied
+	/// directly to its singleton scope. Otherwise they are stashed globally
+	/// for later application (e.g., by the `runall` command).
+	fn flush_di_registrations(&mut self) {
+		if self.di_registrations.is_empty() {
+			return;
+		}
+		let registrations = std::mem::take(&mut self.di_registrations);
+		match self
+			.server
+			.di_context()
+			.map(|ctx| Arc::clone(ctx.singleton_scope()))
+		{
+			Some(scope) => registrations.apply_to(&scope),
+			None => crate::routers::register_di_registrations(registrations),
+		}
+	}
+
 	/// Consumes the router and returns the server router.
 	///
-	/// If this router has deferred DI registrations, they are stashed
-	/// in the global registry for later application by the server.
-	pub fn into_server(self) -> ServerRouter {
-		if !self.di_registrations.is_empty() {
-			crate::routers::register_di_registrations(self.di_registrations);
-		}
+	/// If this router has a DI context, deferred DI registrations are applied
+	/// directly to its singleton scope. Otherwise they are stashed in the
+	/// global registry for later application by the server.
+	pub fn into_server(mut self) -> ServerRouter {
+		self.flush_di_registrations();
 		self.server
 	}
 
 	/// Registers server router globally.
-	pub fn register_globally(self) {
-		let di = self.di_registrations;
-		if !di.is_empty() {
-			crate::routers::register_di_registrations(di);
-		}
+	pub fn register_globally(mut self) {
+		self.flush_di_registrations();
 		crate::routers::register_router(self.server);
 	}
 
 	/// Attach deferred DI registrations to this router.
 	///
-	/// These registrations will be stashed globally when the router is
-	/// consumed (via [`into_server`](Self::into_server) or
-	/// [`register_globally`](Self::register_globally)),
-	/// and applied to the server's singleton scope during startup.
+	/// When the router is consumed, these registrations are applied directly
+	/// to the DI context's singleton scope if one has been set via
+	/// [`with_di_context`](Self::with_di_context). Otherwise they are stashed
+	/// globally for later application (e.g., by the `runall` command).
 	pub fn with_di_registrations(mut self, list: reinhardt_di::DiRegistrationList) -> Self {
 		self.di_registrations.merge(list);
 		self
@@ -665,5 +695,73 @@ mod tests {
 
 		let client = router.into_client();
 		assert_eq!(client.route_count(), 1);
+	}
+
+	mod flush_di_registrations {
+		use super::*;
+		use reinhardt_di::{DiRegistrationList, InjectionContext, SingletonScope};
+		use rstest::rstest;
+		use std::sync::Arc;
+
+		#[rstest]
+		fn applies_registrations_to_di_context_singleton_scope() {
+			// Arrange
+			let singleton_scope = Arc::new(SingletonScope::new());
+			let di_ctx = Arc::new(InjectionContext::builder(Arc::clone(&singleton_scope)).build());
+
+			let mut registrations = DiRegistrationList::new();
+			registrations.register(42i32);
+
+			// Act
+			let _server = UnifiedRouter::new()
+				.with_di_registrations(registrations)
+				.with_di_context(di_ctx)
+				.into_server();
+
+			// Assert
+			let value = singleton_scope
+				.get::<i32>()
+				.expect("i32 should be registered");
+			assert_eq!(*value, 42);
+		}
+
+		#[rstest]
+		fn applies_registrations_regardless_of_builder_order() {
+			// Arrange
+			let singleton_scope = Arc::new(SingletonScope::new());
+			let di_ctx = Arc::new(InjectionContext::builder(Arc::clone(&singleton_scope)).build());
+
+			let mut registrations = DiRegistrationList::new();
+			registrations.register(99u64);
+
+			// Act: with_di_context BEFORE with_di_registrations
+			let _server = UnifiedRouter::new()
+				.with_di_context(di_ctx)
+				.with_di_registrations(registrations)
+				.into_server();
+
+			// Assert
+			let value = singleton_scope
+				.get::<u64>()
+				.expect("u64 should be registered");
+			assert_eq!(*value, 99);
+		}
+
+		#[rstest]
+		#[serial_test::serial(global_di)]
+		fn stashes_globally_when_no_di_context() {
+			// Arrange
+			let mut registrations = DiRegistrationList::new();
+			registrations.register(7u8);
+
+			// Act
+			let _server = UnifiedRouter::new()
+				.with_di_registrations(registrations)
+				.into_server();
+
+			// Assert: registrations stashed globally
+			let taken = crate::routers::take_di_registrations();
+			assert!(taken.is_some(), "registrations should be stashed globally");
+		}
 	}
 }

@@ -418,8 +418,8 @@ impl AdminSite {
 /// Injectable trait implementation for AdminSite
 ///
 /// Resolves `AdminSite` directly from the singleton scope.
-/// The `AdminSite` must be registered via `admin_routes_with_di()` which
-/// auto-registers the site in the singleton scope during route creation.
+/// The `AdminSite` must be registered via `admin_routes_with_di_deferred()` which
+/// returns a `DiRegistrationList` to be attached to the router.
 #[async_trait]
 impl Injectable for AdminSite {
 	async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
@@ -428,7 +428,8 @@ impl Injectable for AdminSite {
 			.ok_or_else(|| reinhardt_di::DiError::NotRegistered {
 				type_name: "AdminSite".into(),
 				hint: "AdminSite must be registered as a singleton. \
-				       Use admin_routes_with_di(site, &singleton_scope) to auto-register."
+				       Use admin_routes_with_di_deferred(site) and attach the returned \
+				       DiRegistrationList via .with_di_registrations() on UnifiedRouter."
 					.into(),
 			})
 	}

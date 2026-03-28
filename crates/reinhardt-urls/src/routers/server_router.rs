@@ -390,6 +390,11 @@ impl ServerRouter {
 		self
 	}
 
+	/// Returns a reference to the DI context, if set.
+	pub(crate) fn di_context(&self) -> Option<&Arc<InjectionContext>> {
+		self.di_context.as_ref()
+	}
+
 	/// Add middleware to this router
 	///
 	/// # Examples

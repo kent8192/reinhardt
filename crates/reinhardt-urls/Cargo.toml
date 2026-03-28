@@ -60,3 +60,4 @@ tokio = { version = "1.41", features = ["full"] }
 bytes = { workspace = true }
 hyper = { workspace = true }
 rstest = { workspace = true }
+serial_test = { workspace = true }

@@ -648,18 +648,21 @@ pub use reinhardt_urls::routers::Path as ClientPath;
 #[cfg(all(feature = "auth", not(target_arch = "wasm32")))]
 #[allow(deprecated)] // CurrentUser is deprecated in favor of AuthUser
 pub use reinhardt_auth::{
-	AllowAny, AnonymousUser, AuthBackend, AuthInfo, AuthUser, BaseUser, CurrentUser, DefaultUser,
-	FullUser, IsAdminUser, IsAuthenticated, PasswordHasher, Permission, PermissionsMixin,
-	SimpleUser, User, validate_auth_extractors,
+	AllowAny, AnonymousUser, AuthBackend, AuthInfo, AuthUser, BaseUser, CurrentUser, FullUser,
+	IsAdminUser, IsAuthenticated, PasswordHasher, Permission, PermissionsMixin, SimpleUser, User,
+	validate_auth_extractors,
 };
 
+// Re-export argon2-hasher gated types (DefaultUser, DefaultUserManager, Argon2Hasher)
+// These require the argon2-hasher feature because the entire default_user module
+// in reinhardt-auth is conditionally compiled with #[cfg(feature = "argon2-hasher")]
 #[cfg(all(
 	feature = "auth",
 	feature = "argon2-hasher",
 	not(target_arch = "wasm32")
 ))]
 #[cfg_attr(docsrs, doc(cfg(all(feature = "auth", feature = "argon2-hasher"))))]
-pub use reinhardt_auth::Argon2Hasher;
+pub use reinhardt_auth::{Argon2Hasher, DefaultUser, DefaultUserManager};
 
 #[cfg(all(feature = "auth-jwt", not(target_arch = "wasm32")))]
 pub use reinhardt_auth::{Claims, JwtAuth, JwtError};

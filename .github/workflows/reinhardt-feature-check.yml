@@ -11,11 +11,11 @@ on:
         description: "Parallel cargo build jobs"
         type: string
         default: "1"
-  # Seed feature-check caches on main so release-plz PRs get cache hits.
+  # Seed feature-check cache on main so release-plz PRs get cache hits.
   # GitHub Actions branch scoping: PR branches can only restore caches
-  # from the default branch (main). Without this trigger, feature-*
-  # cache keys would never exist on main, causing cold starts on every
-  # release-plz PR.
+  # from the default branch (main). This trigger runs a single
+  # --all-features check on main to populate the shared cache that all
+  # 25 feature-check matrix entries restore from.
   push:
     branches: [main]
     paths:
@@ -30,19 +30,63 @@ env:
   RUST_BACKTRACE: 1
   CARGO_TARGET_DIR: /tmp/cargo_target
   CARGO_INCREMENTAL: 0
-  CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
 
 jobs:
+  # Cache seeding: runs ONE --all-features check on main push to populate
+  # the shared cache. Uses the same self-hosted runner architecture
+  # (aarch64) as release-plz PRs so cache artifacts are compatible.
+  # All feature-check jobs share a single cache via shared-key, keeping
+  # total cache usage at ~1-2 GB instead of 25 × ~300 MB = ~7.5 GB.
+  cache-seed:
+    name: Cache Seed (all-features)
+    if: github.event_name == 'push'
+    runs-on: [self-hosted, linux, arm64, reinhardt-ci]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache: 'false'
+
+      - name: Cache Rust dependencies (shared)
+        uses: Swatinem/rust-cache@v2
+        with:
+          # shared-key replaces the automatic job-based key, allowing
+          # all feature-check matrix entries to restore from this cache.
+          shared-key: "feature-check"
+          cache-targets: "false"
+          cache-directories: /tmp/cargo_target
+          cache-on-failure: "true"
+
+      - name: Setup protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Seed cache with all-features check
+        run: |
+          cargo check \
+            --workspace \
+            --all-features \
+            --quiet
+
   # Validate representative feature combinations compile correctly.
   # Catches issues where feature subsets (minimal, api-only, etc.) break
   # while --all-features still passes. Each entry targets only the affected
   # crate (-p) to minimize compilation scope and CI time.
-  # Runs only on release PRs (release-plz branches) to avoid CI overhead
-  # on regular PRs.
+  # Runs only on release PRs (release-plz branches via workflow_call from
+  # ci.yml) and manual workflow_dispatch.
   feature-check:
     name: Feature Check (${{ matrix.combo.name }})
+    if: github.event_name != 'push'
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
     timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
     strategy:
       fail-fast: false
       matrix:
@@ -77,25 +121,28 @@ jobs:
           - { name: "rest-minimal",      pkg: "reinhardt-rest", features: "",                    no_default: "true"  }
           - { name: "rest-full",         pkg: "reinhardt-rest", features: "rest-full",           no_default: "true"  }
     steps:
-      - name: Free Disk Space (Ubuntu)
-        if: ${{ !contains(inputs.runner || '', 'self-hosted') }}
-        uses: jlumbroso/free-disk-space@v1.3.1
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
       - name: Checkout repository
         uses: actions/checkout@v6
 
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
         with:
-          cache-key: "feature-${{ matrix.combo.name }}"
+          cache: 'false'
+
+      - name: Cache Rust dependencies (shared)
+        uses: Swatinem/rust-cache@v2
+        with:
+          # shared-key replaces the automatic job-based key so all matrix
+          # entries restore from the single cache seeded on main push.
+          # This keeps total cache usage at ~1-2 GB (one entry) instead
+          # of 25 × ~300 MB with per-entry keys.
+          shared-key: "feature-check"
+          cache-targets: "false"
+          cache-directories: /tmp/cargo_target
+          cache-on-failure: "true"
+          # Don't save on PR branches - restore from main's cache only.
+          # Avoids 25 matrix entries competing to save the same key.
+          save-if: "false"
 
       - name: Setup protoc
         uses: arduino/setup-protoc@v3

@@ -83,18 +83,21 @@ async fn admin_js_handler(
 
 /// Returns a `ServerRouter` that serves the admin panel's static assets.
 ///
-/// Mount this router at `/static/admin/` alongside the main `admin_routes_with_di()`:
+/// Mount this router at `/static/admin/` alongside the main admin router:
 ///
 /// ```rust,no_run
-/// use reinhardt_admin::core::{AdminSite, admin_routes_with_di, admin_static_routes};
-/// use reinhardt_di::SingletonScope;
+/// use reinhardt_admin::core::{AdminSite, admin_routes_with_di_deferred, admin_static_routes};
+/// use reinhardt_urls::routers::UnifiedRouter;
 /// use std::sync::Arc;
 ///
 /// let site = Arc::new(AdminSite::new("Admin"));
-/// let singleton = SingletonScope::new();
-/// // Mount admin views and static assets
-/// let admin = admin_routes_with_di(site, &singleton);  // mount at /admin/
-/// let assets = admin_static_routes();                   // mount at /static/admin/
+/// let (admin_router, admin_di) = admin_routes_with_di_deferred(site);
+/// let assets = admin_static_routes();
+///
+/// let router = UnifiedRouter::new()
+///     .mount("/admin/", admin_router)
+///     .mount("/static/admin/", assets)
+///     .with_di_registrations(admin_di);
 /// ```
 ///
 /// The admin HTML page references `/static/admin/style.css` and
@@ -160,10 +163,14 @@ pub fn admin_routes() -> ServerRouter {
 	build_admin_router()
 }
 
-/// Admin router builder with automatic DI registration
+/// Admin router builder with automatic DI registration (deprecated)
 ///
 /// Builds a `ServerRouter` from an `AdminSite` with all CRUD endpoints,
-/// and auto-registers the `AdminSite` in the singleton scope for DI.
+/// and auto-registers the `AdminSite` in the provided singleton scope.
+///
+/// Internally delegates to [`admin_routes_with_di_deferred`] and applies
+/// the resulting registrations to the caller-provided scope. This ensures
+/// the same code path is used regardless of which API is called.
 ///
 /// `AdminDatabase` is **not** registered here; it is lazily constructed
 /// from `DatabaseConnection` at first request via its `Injectable` impl.
@@ -194,9 +201,9 @@ pub fn admin_routes() -> ServerRouter {
 	note = "Use admin_routes_with_di_deferred() which correctly propagates DI registrations to the server's singleton scope"
 )]
 pub fn admin_routes_with_di(site: Arc<AdminSite>, singleton: &SingletonScope) -> ServerRouter {
-	// Auto-register AdminSite in singleton scope for DI resolution
-	singleton.set_arc(site);
-	build_admin_router()
+	let (router, registrations) = admin_routes_with_di_deferred(site);
+	registrations.apply_to(singleton);
+	router
 }
 
 /// Admin router builder with deferred DI registration
@@ -505,6 +512,7 @@ mod tests {
 	}
 
 	#[rstest]
+	#[allow(deprecated)] // testing backward compat of deprecated method
 	fn test_admin_router_build_with_di() {
 		// Arrange
 		let site = Arc::new(AdminSite::new("DI Admin"));
@@ -537,6 +545,7 @@ mod tests {
 	}
 
 	#[rstest]
+	#[allow(deprecated)] // testing backward compat of deprecated method
 	fn test_with_favicon_bytes_succeeds() {
 		// Arrange
 		let site = Arc::new(AdminSite::new("Test Admin"));

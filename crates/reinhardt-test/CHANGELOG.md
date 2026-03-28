@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.1.0-rc.14...reinhardt-test@v0.1.0-rc.15) - 2026-03-28
+
+### Testing
+
+- *(test)* add fixture output validation tests for auth and admin_panel
+- *(test)* add WASM module tests and convert existing tests to rstest
+
 ## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.1.0-rc.13...reinhardt-test@v0.1.0-rc.14) - 2026-03-24
 
 ### Added

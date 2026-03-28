@@ -62,6 +62,7 @@
 pub mod browsable_api;
 pub mod filters;
 pub mod metadata;
+#[cfg(feature = "serializers")]
 pub mod serializers;
 pub mod throttling;
 pub mod versioning;

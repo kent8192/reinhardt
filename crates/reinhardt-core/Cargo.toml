@@ -82,17 +82,17 @@ default = [
   "serializers",
 ]
 
-# Module features (modules are always compiled, features for backwards compatibility)
+# Module features (conditionally compiled when feature is enabled)
 types = []
 exception = []
 signals = ["serde"]
 security = []
 validators = ["serde"]
 serializers = ["serde"]
-messages = []
+messages = ["serde"]
 negotiation = []
 parsers = []
-pagination = []
+pagination = ["serde"]
 reactive = []
 
 # Page types feature

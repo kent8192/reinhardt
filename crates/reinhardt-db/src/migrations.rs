@@ -64,6 +64,7 @@ pub mod state_loader;
 pub mod visualization;
 pub mod zero_downtime;
 
+#[cfg(feature = "contenttypes")]
 pub use crate::contenttypes::migration::MigrationRecord;
 pub use autodetector::{
 	// Pattern Learning and Inference

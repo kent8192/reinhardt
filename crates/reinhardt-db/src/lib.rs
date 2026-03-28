@@ -131,15 +131,23 @@
 //! | `mysql` | disabled | MySQL backend |
 //! | `all-databases` | disabled | Enable all database backends |
 
+#[cfg(feature = "associations")]
 pub mod associations;
+#[cfg(feature = "backends")]
 pub mod backends;
+#[cfg(any(feature = "backends", feature = "backends-pool"))]
 pub mod backends_pool;
+#[cfg(feature = "contenttypes")]
 pub mod contenttypes;
+#[cfg(feature = "hybrid")]
 pub mod hybrid;
+#[cfg(feature = "migrations")]
 pub mod migrations;
 #[cfg(feature = "nosql")]
 pub mod nosql;
+#[cfg(feature = "orm")]
 pub mod orm;
+#[cfg(feature = "pool")]
 pub mod pool;
 
 /// Prelude module for convenient imports

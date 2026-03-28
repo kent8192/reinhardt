@@ -39,6 +39,7 @@ reinhardt-core = {workspace = true, features = ["types"]}
 default = []
 full = ["di"]
 di = ["dep:reinhardt-di"]
+testing = []
 
 [dev-dependencies]
 insta = { workspace = true }

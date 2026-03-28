@@ -101,7 +101,7 @@ default = [
   "associations",
 ]
 
-# Module features (modules are always compiled, features for backwards compatibility)
+# Module features (conditionally compiled when feature is enabled)
 backends = []
 backends-pool = []
 pool = []

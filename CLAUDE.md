@@ -125,6 +125,12 @@ See instructions/DOCUMENTATION_STANDARDS.md for comprehensive documentation stan
 - Use `git apply <patchfile name>.patch` for partial file commits
 - **NEVER** execute batch commits without user confirmation
 
+**Draft PR Policy:**
+- **NEVER** convert a Draft PR to Ready for Review without explicit user instruction
+- **NO EXCEPTIONS**: Plan Mode approval does NOT authorize Draft PR conversion (unlike commits/pushes)
+- Before converting, ensure all CI checks pass and tests pass locally
+- Use `gh pr ready <number>` for conversion
+
 **Branch Operations:**
 - When merging branches and resolving conflicts, execute immediately without entering Plan Mode
 - Before creating branches, verify names don't conflict with existing ones using `git worktree list` and `git branch -a`
@@ -455,6 +461,7 @@ Before submitting code:
 - Delete temp files from `/tmp` immediately
 - Wait for explicit user instruction before commits
 - Understand that Plan Mode approval authorizes both implementation and commits
+- Wait for explicit user instruction before converting Draft PRs to Ready for Review (Plan Mode approval does NOT authorize conversion)
 - Mark placeholders with `todo!()` or `// TODO:`
 - Use `#[serial(group_name)]` for global state tests
 - Split commits by specific intent, not features
@@ -518,6 +525,7 @@ Before submitting code:
 ### ❌ NEVER DO
 - Use `mod.rs` files (deprecated pattern)
 - Commit without user instruction (except Plan Mode approval)
+- Convert Draft PRs to Ready for Review without explicit user instruction (Plan Mode approval does NOT count)
 - Leave docs outdated after code changes
 - Document user requests or AI interactions in project documentation
 - Save files to project directory (use `/tmp`)

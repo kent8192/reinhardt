@@ -61,7 +61,7 @@ Reinhardt takes a different approach: integrated batteries when you want them, c
 
 We call this **polylithic**: many building blocks that still feel like one coherent framework.
 
-Reinhardt brings together the best of three worlds:
+Reinhardt brings together the best of four worlds:
 
 | Inspiration        | What We Borrowed                        | What We Improved                           |
 |--------------------|-----------------------------------------|--------------------------------------------|
@@ -75,7 +75,7 @@ Reinhardt brings together the best of three worlds:
 ## ✨ Key Features
 
 - **Type-Safe ORM** with compile-time validation (reinhardt-query)
-- **Powerful Serializers** with automatic validation (serde + validator)
+- **Powerful Serializers** with automatic validation (serde + built-in validation)
 - **FastAPI-Style DI** with type-safe dependency injection and caching
 - **ViewSets** for rapid CRUD API development
 - **Multi-Auth** (JWT, Token, Session, Basic) with BaseUser/FullUser traits
@@ -97,7 +97,7 @@ Reinhardt follows a **three-phase lifecycle** for every crate:
 | **RC** (`0.x.0-rc.N`) | API frozen. Bug fixes only. Safe to build against. |
 | **Stable** (`0.x.0`) | Full SemVer 2.0 guarantees. |
 
-**Current status:** All crates are at `0.1.0-rc.8` (Release Candidate).
+**Current status:** All crates are at `0.1.0-rc.9` (Release Candidate).
 
 **What this means for you:**
 - Public APIs will only change to fix critical bugs -- no new features or additions
@@ -122,7 +122,7 @@ Get all features with zero configuration:
 [dependencies]
 # Import as 'reinhardt', published as 'reinhardt-web'
 # Default enables ALL features (full bundle)
-reinhardt = { version = "0.1.0-rc.8", package = "reinhardt-web" }
+reinhardt = { version = "0.1.0-rc.9", package = "reinhardt-web" }
 ```
 
 **Includes:** Database, Auth, REST API, Admin, GraphQL, WebSockets, Cache, i18n, Mail, Sessions, Static Files, Storage
@@ -141,7 +141,7 @@ For most projects that don't need all features:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.8", package = "reinhardt-web", default-features = false, features = ["standard"] }
+reinhardt = { version = "0.1.0-rc.9", package = "reinhardt-web", default-features = false, features = ["standard"] }
 ```
 
 **Includes:** Core, Database (PostgreSQL), REST API, Auth, Middleware, Pages (WASM Frontend with SSR)
@@ -154,7 +154,7 @@ Lightweight and fast, perfect for simple APIs:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.8", package = "reinhardt-web", default-features = false, features = ["minimal"] }
+reinhardt = { version = "0.1.0-rc.9", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 ```
 
 **Includes:** HTTP, routing, DI, parameter extraction, server
@@ -168,24 +168,24 @@ Install only the components you need:
 ```toml
 [dependencies]
 # Core components
-reinhardt-http = "0.1.0-rc.8"
-reinhardt-urls = "0.1.0-rc.8"
+reinhardt-http = "0.1.0-rc.9"
+reinhardt-urls = "0.1.0-rc.9"
 
 # Optional: Database
-reinhardt-db = "0.1.0-rc.8"
+reinhardt-db = "0.1.0-rc.9"
 
 # Optional: Authentication
-reinhardt-auth = "0.1.0-rc.8"
+reinhardt-auth = "0.1.0-rc.9"
 
 # Optional: REST API features
-reinhardt-rest = "0.1.0-rc.8"
+reinhardt-rest = "0.1.0-rc.9"
 
 # Optional: Admin panel
-reinhardt-admin = "0.1.0-rc.8"
+reinhardt-admin = "0.1.0-rc.9"
 
 # Optional: Advanced features
-reinhardt-graphql = "0.1.0-rc.8"
-reinhardt-websockets = "0.1.0-rc.8"
+reinhardt-graphql = "0.1.0-rc.9"
+reinhardt-websockets = "0.1.0-rc.9"
 ```
 
 **Note on Crate Naming:**
@@ -651,12 +651,12 @@ async fn manage_users() -> Result<(), Box<dyn std::error::Error>> {
 		username: "alice".to_string(),
 		email: "alice@example.com".to_string(),
 		password: "secure_password".to_string(),
-		first_name: Some("Alice".to_string()),
-		last_name: Some("Smith".to_string()),
+		is_active: true,
+		is_admin: false,
 	}).await?;
 
 	// Update user information
-	user_manager.update_user(user.id, UpdateUserData {
+	user_manager.update_user(&user.id.to_string(), UpdateUserData {
 		email: Some("alice.smith@example.com".to_string()),
 		is_active: Some(true),
 		..Default::default()
@@ -669,11 +669,10 @@ async fn manage_users() -> Result<(), Box<dyn std::error::Error>> {
 	}).await?;
 
 	// Assign object-level permissions
-	let permission = ObjectPermission::new("edit", user.id, article.id);
-	let perm_checker = ObjectPermissionChecker::new();
-	if perm_checker.has_permission(&user, "edit", &article).await? {
-		// User can edit the article
-	}
+	let mut perm_manager = ObjectPermissionManager::new();
+	perm_manager.grant_permission("alice", "article:123", "edit");
+	let perm = ObjectPermission::new(perm_manager, "article:123", "edit");
+	// Use perm with the permission system to check access
 
 	Ok(())
 }
@@ -701,7 +700,7 @@ If you need additional fields beyond DefaultUser, define your own:
 
 ```rust
 // users/models.rs
-use reinhardt::auth::{BaseUser, FullUser, PermissionsMixin};
+use reinhardt::auth::{BaseUser, FullUser, PermissionsMixin, Argon2Hasher};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use serde::{Serialize, Deserialize};
@@ -746,6 +745,7 @@ pub struct CustomUser {
 
 impl BaseUser for CustomUser {
 	type PrimaryKey = Uuid;
+	type Hasher = Argon2Hasher;
 
 	fn get_username_field() -> &'static str { "username" }
 	fn get_username(&self) -> &str { &self.username }
@@ -946,7 +946,7 @@ In your app's `serializers/user.rs`:
 ```rust
 // users/serializers/user.rs
 use serde::{Serialize, Deserialize};
-use validator::Validate;
+use reinhardt::Validate;
 
 #[derive(Serialize, Deserialize, Validate)]
 pub struct CreateUserRequest {
@@ -986,7 +986,7 @@ use reinhardt::{Request, Response, StatusCode, ViewResult, post};
 use reinhardt::db::DatabaseConnection;
 use crate::models::User;
 use crate::serializers::{CreateUserRequest, UserResponse};
-use validator::Validate;
+use reinhardt::Validate;
 use std::sync::Arc;
 
 #[post("/users", name = "create_user")]
@@ -1048,7 +1048,7 @@ Reinhardt offers modular components you can mix and match:
 | HTTP & Routing      | `reinhardt-http`          | Request/Response, HTTP handling             |
 | URL Routing         | `reinhardt-urls`          | Function-based and class-based routes       |
 | Server              | `reinhardt-server`        | HTTP server implementation                  |
-| Middleware          | `reinhardt-dispatch`      | Middleware chain, signal dispatch           |
+| Dispatch            | `reinhardt-dispatch`      | HTTP request dispatching, handler composition |
 | Configuration       | `reinhardt-conf`          | Settings management, environment loading    |
 | Commands            | `reinhardt-commands`      | Management CLI tools (startproject, etc.)   |
 | Shortcuts           | `reinhardt-shortcuts`     | Common utility functions                    |
@@ -1057,7 +1057,7 @@ Reinhardt offers modular components you can mix and match:
 | **Authentication**  |                           |                                             |
 | Auth                | `reinhardt-auth`          | JWT, Token, Session, Basic auth, User models|
 | **REST API**        |                           |                                             |
-| Serializers         | `reinhardt-rest`          | serde/validator integration, ViewSets       |
+| Serializers         | `reinhardt-rest`          | built-in serialization and validation, ViewSets |
 | **Forms**           |                           |                                             |
 | Forms               | `reinhardt-forms`         | Form handling and validation                |
 | **Advanced**        |                           |                                             |
@@ -1067,6 +1067,11 @@ Reinhardt offers modular components you can mix and match:
 | GraphQL             | `reinhardt-graphql`       | Schema generation, subscriptions            |
 | WebSockets          | `reinhardt-websockets`    | Real-time communication                     |
 | i18n                | `reinhardt-i18n`          | Multi-language support                      |
+| Mail                | `reinhardt-mail`          | Email sending and templating                |
+| gRPC                | `reinhardt-grpc`          | gRPC services, protobuf types               |
+| Deep Link           | `reinhardt-deeplink`      | iOS Universal Links, Android App Links      |
+| **Middleware**       |                           |                                             |
+| Middleware          | `reinhardt-middleware`    | HTTP middleware components, CORS, security  |
 | **Testing**         |                           |                                             |
 | Test Utilities      | `reinhardt-test`          | Testing helpers, fixtures, TestContainers   |
 
@@ -1078,7 +1083,7 @@ Reinhardt offers modular components you can mix and match:
 
 - 📚 [Getting Started Guide](https://reinhardt-web.dev/quickstart/getting-started/) - Step-by-step tutorial for beginners
 - 🎛️ [Feature Flags Guide](https://reinhardt-web.dev/docs/feature-flags/) - Optimize your build with granular feature control
-- 📖 [API Reference](https://docs.rs/reinhardt) (Coming soon)
+- 📖 [API Reference](https://docs.rs/reinhardt-web) (Coming soon)
 - 📝 [Tutorials](https://reinhardt-web.dev/quickstart/tutorials/) - Learn by building real applications
 
 **For AI Assistants**: See [CLAUDE.md](CLAUDE.md) for project-specific coding standards, testing guidelines, and development conventions.

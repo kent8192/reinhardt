@@ -302,7 +302,7 @@ pub fn routes() -> UnifiedRouter {
 
 ## References
 
-- [Reinhardt Documentation](https://docs.rs/reinhardt)
+- [Reinhardt Documentation](https://docs.rs/reinhardt-web)
 - [Django Settings Best Practices](https://docs.djangoproject.com/en/stable/topics/settings/)
 - [12 Factor App](https://12factor.net/)
 

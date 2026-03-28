@@ -1,0 +1,17 @@
+[
+	{
+		"model": "test.Model",
+		"pk": 1,
+		"fields": {
+			"name": "test"
+		}
+	},
+	INVALID JSON HERE
+	{
+		"model": "test.Model",
+		"pk": 2,
+		"fields": {
+			"name": "another"
+		}
+	}
+]

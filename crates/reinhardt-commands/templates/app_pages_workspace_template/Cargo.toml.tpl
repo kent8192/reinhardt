@@ -17,7 +17,6 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
-validator = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { workspace = true }

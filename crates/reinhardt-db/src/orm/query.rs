@@ -2882,6 +2882,7 @@ where
 	}
 
 	/// Convert FilterValue to String representation
+	// Allow dead_code: internal conversion helper for filter value stringification in queries
 	#[allow(dead_code)]
 	fn value_to_string(v: &FilterValue) -> String {
 		match v {
@@ -2936,6 +2937,7 @@ where
 	}
 
 	/// Convert FilterValue to array of reinhardt_query::value::Value
+	// Allow dead_code: internal conversion for IN clause array parameter binding
 	#[allow(dead_code)]
 	fn value_to_array(v: &FilterValue) -> Vec<reinhardt_query::value::Value> {
 		match v {
@@ -2961,6 +2963,7 @@ where
 	///
 	/// This method generates a complete SELECT statement internally and extracts only
 	/// the WHERE portion, which is less efficient than using `build_where_condition()`.
+	// Allow dead_code: backward-compatible string-based WHERE clause builder for legacy code paths
 	#[allow(dead_code)]
 	fn build_where_clause(&self) -> (String, Vec<String>) {
 		if self.filters.is_empty() {

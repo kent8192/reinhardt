@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-views"
-version = "0.1.0-rc.8"
+version = "0.1.0-rc.11"
 description = "View layer aggregator for viewsets and views-core"
 edition.workspace = true
 license.workspace = true
@@ -43,6 +43,7 @@ inventory = "0.3"
 urlencoding = "2.1"
 reinhardt-query = { workspace = true }
 parking_lot = { workspace = true }
+tracing = { workspace = true }
 utoipa = { version = "5.4", features = ["url", "uuid", "yaml"] }
 
 [features]

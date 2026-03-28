@@ -525,6 +525,99 @@ mod tests {
 
 	#[rstest]
 	#[tokio::test]
+	async fn test_openapi_json_response_body_is_valid_openapi_json() {
+		// Arrange
+		let handler = DummyHandler;
+		let wrapped = OpenApiRouter::wrap(handler).unwrap();
+
+		// Act
+		let request = Request::builder().uri("/api/openapi.json").build().unwrap();
+		let response = wrapped.handle(request).await.unwrap();
+
+		// Assert: body is valid JSON with an openapi version field starting with "3."
+		assert_eq!(response.status, StatusCode::OK);
+		let body_bytes = response.body.to_vec();
+		let json: serde_json::Value =
+			serde_json::from_slice(&body_bytes).expect("Response body should be valid JSON");
+		let openapi_version = json["openapi"]
+			.as_str()
+			.expect("JSON should have an 'openapi' string field");
+		assert!(
+			openapi_version.starts_with("3."),
+			"openapi field should start with '3.', got: {}",
+			openapi_version
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_openapi_json_response_content_type_header() {
+		// Arrange
+		let handler = DummyHandler;
+		let wrapped = OpenApiRouter::wrap(handler).unwrap();
+
+		// Act
+		let request = Request::builder().uri("/api/openapi.json").build().unwrap();
+		let response = wrapped.handle(request).await.unwrap();
+
+		// Assert: Content-Type header contains application/json
+		assert_eq!(response.status, StatusCode::OK);
+		let content_type = response
+			.headers
+			.get("Content-Type")
+			.and_then(|v| v.to_str().ok())
+			.unwrap_or("");
+		assert!(
+			content_type.contains("application/json"),
+			"Content-Type should contain 'application/json', got: {}",
+			content_type
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_swagger_docs_response_body_contains_swagger_ui_marker() {
+		// Arrange
+		let handler = DummyHandler;
+		let wrapped = OpenApiRouter::wrap(handler).unwrap();
+
+		// Act
+		let request = Request::builder().uri("/api/docs").build().unwrap();
+		let response = wrapped.handle(request).await.unwrap();
+
+		// Assert: HTML body contains the swagger-ui marker
+		assert_eq!(response.status, StatusCode::OK);
+		let body_str = String::from_utf8(response.body.to_vec()).unwrap();
+		assert!(
+			body_str.contains("swagger-ui"),
+			"Swagger docs HTML should contain 'swagger-ui'"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_redoc_docs_response_body_contains_redoc_marker() {
+		// Arrange
+		let handler = DummyHandler;
+		let wrapped = OpenApiRouter::wrap(handler).unwrap();
+
+		// Act
+		let request = Request::builder().uri("/api/redoc").build().unwrap();
+		let response = wrapped.handle(request).await.unwrap();
+
+		// Assert: HTML body contains the redoc marker (case-insensitive)
+		assert_eq!(response.status, StatusCode::OK);
+		let body_str = String::from_utf8(response.body.to_vec())
+			.unwrap()
+			.to_lowercase();
+		assert!(
+			body_str.contains("redoc"),
+			"Redoc docs HTML should contain 'redoc' (case-insensitive)"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
 	async fn test_auth_guard_inspects_request_headers() {
 		// Arrange: Guard checks for a specific header value
 		let handler = DummyHandler;

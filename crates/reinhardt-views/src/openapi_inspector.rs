@@ -687,6 +687,7 @@ mod tests {
 	use crate::viewsets::ModelViewSet;
 
 	#[derive(Debug, Clone)]
+	// Allow dead_code: test model used as type parameter for ModelViewSet, fields not read directly
 	#[allow(dead_code)]
 	struct TestModel {
 		id: i64,
@@ -755,6 +756,7 @@ mod tests {
 		// Define a test model with ToSchema implementation
 		#[derive(Debug, Clone)]
 		struct User {
+			// Allow dead_code: fields define schema structure for ToSchema impl, not accessed directly
 			#[allow(dead_code)]
 			id: i64,
 			#[allow(dead_code)]
@@ -828,6 +830,7 @@ mod tests {
 
 		#[derive(Debug, Clone)]
 		struct Product {
+			// Allow dead_code: fields define schema structure for ToSchema impl, not accessed directly
 			#[allow(dead_code)]
 			id: i64,
 			#[allow(dead_code)]

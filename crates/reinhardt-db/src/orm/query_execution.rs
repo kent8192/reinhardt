@@ -116,6 +116,7 @@ impl QueryCompiler {
 	}
 
 	/// Parse IN clause values
+	// Allow dead_code: utility for parsing IN clause array syntax in query execution
 	#[allow(dead_code)]
 	fn parse_in_values(value: &str) -> Vec<String> {
 		let trimmed = value.trim();

@@ -122,6 +122,7 @@ impl BaseCommand for MigrateCommand {
 				&& !database_url.starts_with("postgresql://")
 				&& !database_url.starts_with("sqlite://")
 				&& !database_url.starts_with("sqlite:")
+				&& !database_url.starts_with("mysql://")
 			{
 				return Err(crate::CommandError::ExecutionError(format!(
 					"Unsupported database URL scheme: {}",
@@ -132,13 +133,42 @@ impl BaseCommand for MigrateCommand {
 			// 4. Connect to database (auto-create if it doesn't exist for PostgreSQL)
 			// This is done before filtering migrations to ensure connection errors are detected
 			// even when no migrations need to be applied
-			let connection = if database_url.starts_with("postgres://")
+			let connection: DatabaseConnection = if database_url.starts_with("postgres://")
 				|| database_url.starts_with("postgresql://")
 			{
-				DatabaseConnection::connect_postgres_or_create(&database_url).await
+				#[cfg(feature = "postgres")]
+				{
+					DatabaseConnection::connect_postgres_or_create(&database_url).await
+				}
+				#[cfg(not(feature = "postgres"))]
+				{
+					return Err(crate::CommandError::ExecutionError(
+						"PostgreSQL support not enabled. Enable 'postgres' feature.".to_string(),
+					));
+				}
+			} else if database_url.starts_with("mysql://") {
+				#[cfg(feature = "mysql")]
+				{
+					DatabaseConnection::connect_mysql(&database_url).await
+				}
+				#[cfg(not(feature = "mysql"))]
+				{
+					return Err(crate::CommandError::ExecutionError(
+						"MySQL support not enabled. Enable 'mysql' feature.".to_string(),
+					));
+				}
 			} else {
 				// Must be SQLite (validated above)
-				DatabaseConnection::connect_sqlite(&database_url).await
+				#[cfg(feature = "sqlite")]
+				{
+					DatabaseConnection::connect_sqlite(&database_url).await
+				}
+				#[cfg(not(feature = "sqlite"))]
+				{
+					return Err(crate::CommandError::ExecutionError(
+						"SQLite support not enabled. Enable 'sqlite' feature.".to_string(),
+					));
+				}
 			}
 			.map_err(|e| {
 				crate::CommandError::ExecutionError(format!(
@@ -1168,6 +1198,7 @@ impl BaseCommand for RunServerCommand {
 				));
 			}
 
+			#[cfg(feature = "openapi-router")]
 			if !no_docs {
 				ctx.info(&format!("📖 Docs:    http://{}/api/docs", actual_address));
 			}
@@ -2165,21 +2196,42 @@ async fn connect_database(url: &str) -> CommandResult<(DatabaseType, DatabaseCon
 
 	match db_type {
 		DatabaseType::Postgres => {
-			let conn = DatabaseConnection::connect_postgres(url)
-				.await
-				.map_err(|e| {
+			#[cfg(feature = "postgres")]
+			{
+				let conn = DatabaseConnection::connect_postgres(url)
+					.await
+					.map_err(|e| {
+						crate::CommandError::ExecutionError(format!(
+							"Database connection failed: {}",
+							e
+						))
+					})?;
+				Ok((db_type, conn))
+			}
+			#[cfg(not(feature = "postgres"))]
+			{
+				return Err(crate::CommandError::ExecutionError(
+					"PostgreSQL support not enabled. Enable 'postgres' feature.".to_string(),
+				));
+			}
+		}
+		DatabaseType::Sqlite => {
+			#[cfg(feature = "sqlite")]
+			{
+				let conn = DatabaseConnection::connect_sqlite(url).await.map_err(|e| {
 					crate::CommandError::ExecutionError(format!(
 						"Database connection failed: {}",
 						e
 					))
 				})?;
-			Ok((db_type, conn))
-		}
-		DatabaseType::Sqlite => {
-			let conn = DatabaseConnection::connect_sqlite(url).await.map_err(|e| {
-				crate::CommandError::ExecutionError(format!("Database connection failed: {}", e))
-			})?;
-			Ok((db_type, conn))
+				Ok((db_type, conn))
+			}
+			#[cfg(not(feature = "sqlite"))]
+			{
+				return Err(crate::CommandError::ExecutionError(
+					"SQLite support not enabled. Enable 'sqlite' feature.".to_string(),
+				));
+			}
 		}
 		_ => {
 			// MySQL or other database types
@@ -2378,7 +2430,7 @@ impl BaseCommand for IntrospectCommand {
 		// Connect and introspect
 		ctx.info("Connecting to database...");
 
-		let schema = match db_type {
+		let schema: reinhardt_db::migrations::introspection::DatabaseSchema = match db_type {
 			DatabaseType::Postgres => {
 				#[cfg(feature = "postgres")]
 				{

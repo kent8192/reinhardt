@@ -137,6 +137,7 @@ examples/examples-twitter/static/admin/
 
 # Design/planning documents (local only)
 docs/plans/
+docs/superpowers/
 website/public/
 website/static/giallo*.css
 

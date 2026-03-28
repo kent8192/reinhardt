@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.1.0-rc.9...reinhardt-macros@v0.1.0-rc.10) - 2026-03-15
+
+### Added
+
+- *(macros)* add range(min, max) support to #[derive(Validate)]
+
+### Fixed
+
+- *(macros)* remove feature-dependent code generation from #[routes] macro
+- *(urls)* restore semver-compatible new() and add __macro_new()
+
+### Testing
+
+- *(macros)* add integration and UI tests for validate range attribute
+
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.1.0-rc.8...reinhardt-macros@v0.1.0-rc.9) - 2026-03-15
+
+### Added
+
+- feat!(macros): add #[derive(Validate)] proc macro for field-level validation
+
+### Changed
+
+- refactor!(macros): replace external validator crate in pre_validate codegen
+
 ## [0.1.0-rc.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.1.0-rc.4...reinhardt-macros@v0.1.0-rc.5) - 2026-03-07
 
 ### Fixed

@@ -1,0 +1,54 @@
+[package]
+name = "reinhardt-debug-toolbar"
+version = "0.1.0-alpha.1"
+edition.workspace = true
+license.workspace = true
+description = "Debug toolbar for Reinhardt web framework (inspired by Django Debug Toolbar)"
+repository.workspace = true
+authors.workspace = true
+autotests = false
+
+[[test]]
+name = "reinhardt_debug_toolbar_tests"
+path = "tests/lib.rs"
+
+[features]
+default = []
+full = ["sql-panel", "template-panel", "cache-panel", "performance-panel"]
+sql-panel = []
+template-panel = []
+cache-panel = []
+performance-panel = []
+
+[dependencies]
+# Core dependencies
+reinhardt-core = { workspace = true, features = ["types"] }
+reinhardt-http = { workspace = true }
+reinhardt-db = { workspace = true, optional = true }
+reinhardt-pages = { workspace = true, optional = true }
+reinhardt-utils = { workspace = true, optional = true }
+
+# Tower/Axum
+tokio = { workspace = true, features = ["rt", "macros", "sync"] }
+axum = "0.8.1"
+tower = { version = "0.5.2", features = ["util"] }
+hyper = { workspace = true }
+http = { workspace = true }
+http-body-util = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Utilities
+regex = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+reinhardt-test = { workspace = true }
+rstest = { workspace = true }
+tokio-test = { workspace = true }
+serial_test = { workspace = true }

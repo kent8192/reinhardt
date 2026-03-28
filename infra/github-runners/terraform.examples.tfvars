@@ -33,3 +33,11 @@ monthly_budget_limit_usd = "100"
 budget_alert_email       = "<your-email@example.com>"
 
 prefix = "reinhardt-ci"
+
+# Organizations module variable (for terraform-plan CI)
+organizations_account_email = "<your-email+reinhardt-ci@example.com>"
+
+# Cancel runner (always-on, for event-driven cancel workflows)
+# Set to true after initial CI setup is confirmed working.
+enable_cancel_runner        = true
+cancel_runner_instance_type = "t4g.nano"

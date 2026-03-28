@@ -4,9 +4,9 @@
 //! These types are serializable and can be sent between the WASM client
 //! and the Rust server via server functions.
 
-use serde::{Deserialize, Serialize};
+use reinhardt::Validate;
+use reinhardt::core::serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use validator::Validate;
 
 // OpenAPI schema generation (server-side only)
 #[cfg(server)]

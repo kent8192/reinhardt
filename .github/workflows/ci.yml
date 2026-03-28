@@ -60,7 +60,7 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            const { data: files } = await github.rest.pulls.listFiles({
+            const files = await github.paginate(github.rest.pulls.listFiles, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: context.payload.pull_request.number,
@@ -198,7 +198,7 @@ jobs:
   security-audit:
     name: Security Audit
     needs: [determine-runner, check-branch-status]
-    if: needs.check-branch-status.outputs.is-behind != 'true' && needs.check-branch-status.outputs.has-conflicts != 'true'
+    if: needs.check-branch-status.outputs.has-conflicts != 'true'
     uses: ./.github/workflows/security-audit.yml
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}

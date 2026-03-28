@@ -82,7 +82,7 @@ pub fn parse_dict(value: &str) -> HashMap<String, String> {
 }
 
 /// Database URL configuration parsed from a connection string
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct DatabaseUrl {
 	/// Database engine (postgresql, mysql, sqlite, etc.)
 	pub engine: String,
@@ -108,6 +108,29 @@ pub struct DatabaseUrl {
 	/// Original URL string
 	pub url: String,
 }
+
+impl std::fmt::Debug for DatabaseUrl {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("DatabaseUrl")
+			.field("engine", &self.engine)
+			.field("name", &self.name)
+			.field("user", &self.user)
+			.field(
+				"password",
+				if self.password.is_some() {
+					&"Some([REDACTED])"
+				} else {
+					&"None"
+				},
+			)
+			.field("host", &self.host)
+			.field("port", &self.port)
+			.field("options", &self.options)
+			.field("url", &"[REDACTED]")
+			.finish()
+	}
+}
+
 /// Parse a database URL
 ///
 /// Supports formats:

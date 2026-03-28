@@ -235,19 +235,19 @@ pub struct ForeignKeySchemaInfo {
 #[derive(Debug, Clone)]
 pub struct SchemaDiffResult {
 	/// Tables to add
-	pub tables_to_add: Vec<&'static str>,
+	pub tables_to_add: Vec<String>,
 	/// Tables to remove
-	pub tables_to_remove: Vec<&'static str>,
+	pub tables_to_remove: Vec<String>,
 	/// Columns to add (table_name, column_name)
-	pub columns_to_add: Vec<(&'static str, &'static str)>,
+	pub columns_to_add: Vec<(String, String)>,
 	/// Columns to remove (table_name, column_name)
-	pub columns_to_remove: Vec<(&'static str, &'static str)>,
+	pub columns_to_remove: Vec<(String, String)>,
 	/// Columns to modify (table_name, column_name, old, new)
-	pub columns_to_modify: Vec<(&'static str, &'static str, ColumnSchema, ColumnSchema)>,
+	pub columns_to_modify: Vec<(String, String, ColumnSchema, ColumnSchema)>,
 	/// Indexes to add
-	pub indexes_to_add: Vec<(&'static str, IndexSchema)>,
+	pub indexes_to_add: Vec<(String, IndexSchema)>,
 	/// Indexes to remove
-	pub indexes_to_remove: Vec<(&'static str, IndexSchema)>,
+	pub indexes_to_remove: Vec<(String, IndexSchema)>,
 }
 
 impl SchemaDiff {
@@ -277,9 +277,7 @@ impl SchemaDiff {
 		// Detect table additions
 		for table_name in self.target_schema.tables.keys() {
 			if !self.current_schema.tables.contains_key(table_name) {
-				result
-					.tables_to_add
-					.push(Box::leak(table_name.clone().into_boxed_str()));
+				result.tables_to_add.push(table_name.clone());
 			}
 		}
 
@@ -289,35 +287,31 @@ impl SchemaDiff {
 				continue; // Skip system tables
 			}
 			if !self.target_schema.tables.contains_key(table_name) {
-				result
-					.tables_to_remove
-					.push(Box::leak(table_name.clone().into_boxed_str()));
+				result.tables_to_remove.push(table_name.clone());
 			}
 		}
 
 		// Detect column changes for existing tables
 		for (table_name, target_table) in &self.target_schema.tables {
 			if let Some(current_table) = self.current_schema.tables.get(table_name) {
-				let table_name_static: &'static str =
-					Box::leak(table_name.clone().into_boxed_str());
+				// Clone table_name once for reuse across all change types
+				let table_name_owned = table_name.clone();
 
 				// Column additions
 				for col_name in target_table.columns.keys() {
 					if !current_table.columns.contains_key(col_name) {
-						result.columns_to_add.push((
-							table_name_static,
-							Box::leak(col_name.clone().into_boxed_str()),
-						));
+						result
+							.columns_to_add
+							.push((table_name_owned.clone(), col_name.clone()));
 					}
 				}
 
 				// Column removals
 				for col_name in current_table.columns.keys() {
 					if !target_table.columns.contains_key(col_name) {
-						result.columns_to_remove.push((
-							table_name_static,
-							Box::leak(col_name.clone().into_boxed_str()),
-						));
+						result
+							.columns_to_remove
+							.push((table_name_owned.clone(), col_name.clone()));
 					}
 				}
 
@@ -327,8 +321,8 @@ impl SchemaDiff {
 						&& current_col != target_col
 					{
 						result.columns_to_modify.push((
-							table_name_static,
-							Box::leak(col_name.clone().into_boxed_str()),
+							table_name_owned.clone(),
+							col_name.clone(),
 							current_col.clone(),
 							target_col.clone(),
 						));
@@ -340,7 +334,7 @@ impl SchemaDiff {
 					if !current_table.indexes.contains(target_index) {
 						result
 							.indexes_to_add
-							.push((table_name_static, target_index.clone()));
+							.push((table_name_owned.clone(), target_index.clone()));
 					}
 				}
 
@@ -348,7 +342,7 @@ impl SchemaDiff {
 					if !target_table.indexes.contains(current_index) {
 						result
 							.indexes_to_remove
-							.push((table_name_static, current_index.clone()));
+							.push((table_name_owned.clone(), current_index.clone()));
 					}
 				}
 			}
@@ -363,7 +357,7 @@ impl SchemaDiff {
 		let mut operations = Vec::new();
 
 		// Add tables
-		for table_name in diff.tables_to_add {
+		for table_name in &diff.tables_to_add {
 			if let Some(table_schema) = self.target_schema.tables.get(table_name) {
 				// Map columns to ColumnDefinition
 				let columns: Vec<_> = table_schema
@@ -389,7 +383,7 @@ impl SchemaDiff {
 				let constraints = self.extract_constraints(table_name);
 
 				operations.push(Operation::CreateTable {
-					name: table_name.to_string(),
+					name: table_name.clone(),
 					columns,
 					constraints,
 					without_rowid: None,
@@ -400,14 +394,14 @@ impl SchemaDiff {
 		}
 
 		// Remove tables
-		for table_name in diff.tables_to_remove {
+		for table_name in &diff.tables_to_remove {
 			operations.push(Operation::DropTable {
-				name: table_name.to_string(),
+				name: table_name.clone(),
 			});
 		}
 
 		// Add columns
-		for (table_name, col_name) in diff.columns_to_add {
+		for (table_name, col_name) in &diff.columns_to_add {
 			if let Some(table_schema) = self.target_schema.tables.get(table_name)
 				&& let Some(col_schema) = table_schema.columns.get(col_name)
 			{
@@ -415,9 +409,9 @@ impl SchemaDiff {
 				let auto_increment = Self::is_auto_increment(col_schema);
 
 				operations.push(Operation::AddColumn {
-					table: table_name.to_string(),
+					table: table_name.clone(),
 					column: ColumnDefinition {
-						name: col_name.to_string(),
+						name: col_name.clone(),
 						type_definition: col_schema.data_type.clone(),
 						not_null: !col_schema.nullable,
 						default: col_schema.default.as_ref().cloned(),
@@ -431,10 +425,10 @@ impl SchemaDiff {
 		}
 
 		// Remove columns
-		for (table_name, col_name) in diff.columns_to_remove {
+		for (table_name, col_name) in &diff.columns_to_remove {
 			operations.push(Operation::DropColumn {
-				table: table_name.to_string(),
-				column: col_name.to_string(),
+				table: table_name.clone(),
+				column: col_name.clone(),
 			});
 		}
 
@@ -671,7 +665,10 @@ mod tests {
 		let result = diff.detect();
 
 		assert_eq!(result.columns_to_add.len(), 1);
-		assert_eq!(result.columns_to_add[0], ("users", "email"));
+		assert_eq!(
+			result.columns_to_add[0],
+			("users".to_string(), "email".to_string())
+		);
 	}
 
 	#[test]

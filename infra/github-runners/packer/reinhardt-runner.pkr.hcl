@@ -4,7 +4,7 @@
 packer {
 	required_plugins {
 		amazon = {
-			version = ">= 1.0.0"
+			version = "~> 1.0.0"
 			source  = "github.com/hashicorp/amazon"
 		}
 	}
@@ -16,7 +16,10 @@ packer {
 
 variable "runner_arch" {
 	type        = string
-	default     = "x64"
+	# Default to arm64 (AWS Graviton) for better price-performance ratio.
+	# Graviton instances are ~20% cheaper than x86 equivalents with
+	# comparable or better performance for CI workloads.
+	default     = "arm64"
 	description = "Runner architecture: x64 or arm64"
 
 	validation {

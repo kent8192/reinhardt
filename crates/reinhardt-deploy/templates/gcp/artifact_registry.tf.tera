@@ -1,0 +1,9 @@
+resource "google_artifact_registry_repository" "app" {
+  location      = "{{ region }}"
+  repository_id = "{{ project_name }}"
+  format        = "DOCKER"
+
+  labels = {
+    app = "{{ project_name }}"
+  }
+}

@@ -49,9 +49,7 @@ impl RegexField {
 		// Validate the pattern eagerly so callers get errors at construction time
 		let compiled = Regex::new(pattern)?;
 		let cache = OnceLock::new();
-		cache
-			.set(compiled)
-			.unwrap_or_else(|_| panic!("OnceLock should be empty at construction"));
+		let _ = cache.set(compiled);
 		Ok(Self {
 			name,
 			label: None,
@@ -77,6 +75,45 @@ impl RegexField {
 	pub fn with_error_message(mut self, message: String) -> Self {
 		self.error_message = message;
 		self
+	}
+}
+
+impl std::fmt::Debug for RegexField {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("RegexField")
+			.field("name", &self.name)
+			.field("label", &self.label)
+			.field("required", &self.required)
+			.field("help_text", &self.help_text)
+			.field("widget", &self.widget)
+			.field("initial", &self.initial)
+			.field("pattern", &self.pattern)
+			.field("error_message", &self.error_message)
+			.field("max_length", &self.max_length)
+			.field("min_length", &self.min_length)
+			.finish()
+	}
+}
+
+impl Clone for RegexField {
+	fn clone(&self) -> Self {
+		let cache = OnceLock::new();
+		if let Some(regex) = self.regex_cache.get() {
+			let _ = cache.set(regex.clone());
+		}
+		Self {
+			name: self.name.clone(),
+			label: self.label.clone(),
+			required: self.required,
+			help_text: self.help_text.clone(),
+			widget: self.widget.clone(),
+			initial: self.initial.clone(),
+			regex_cache: cache,
+			pattern: self.pattern.clone(),
+			error_message: self.error_message.clone(),
+			max_length: self.max_length,
+			min_length: self.min_length,
+		}
 	}
 }
 
@@ -154,6 +191,7 @@ impl FormField for RegexField {
 }
 
 /// SlugField for URL-safe slugs
+#[derive(Debug, Clone)]
 pub struct SlugField {
 	/// The field name used as the form data key.
 	pub name: String,
@@ -267,6 +305,7 @@ impl FormField for SlugField {
 }
 
 /// GenericIPAddressField for IPv4 and IPv6 addresses
+#[derive(Debug, Clone)]
 pub struct GenericIPAddressField {
 	/// The field name used as the form data key.
 	pub name: String,

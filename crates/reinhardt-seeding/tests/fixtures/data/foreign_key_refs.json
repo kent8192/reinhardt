@@ -1,0 +1,28 @@
+[
+	{
+		"model": "auth.User",
+		"pk": 1,
+		"fields": {
+			"username": "author_user",
+			"email": "author@example.com"
+		}
+	},
+	{
+		"model": "blog.Post",
+		"pk": 1,
+		"fields": {
+			"title": "Test Post with Foreign Key",
+			"content": "Content here",
+			"author_id": 1
+		}
+	},
+	{
+		"model": "blog.Comment",
+		"pk": 1,
+		"fields": {
+			"text": "Great post!",
+			"post_id": 1,
+			"user_id": 1
+		}
+	}
+]

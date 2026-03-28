@@ -1,0 +1,12 @@
+output "app_url" {
+  description = "Application URL"
+  value       = "deployed"
+}
+
+{% if has_database %}
+output "database_endpoint" {
+  description = "Database connection endpoint"
+  value       = "db-endpoint"
+  sensitive   = true
+}
+{% endif %}

@@ -37,9 +37,17 @@
 //! compile-time registration systems in Reinhardt (DI, Signals, OpenAPI, ViewSets):
 //!
 //! 1. User code uses the `#[routes]` attribute macro on a function returning [`UnifiedRouter`]
-//! 2. Macro generates an `inventory::submit!` call with function pointers for both routers
+//! 2. Macro generates an `inventory::submit!` call with a server router function pointer
 //! 3. Framework code retrieves registrations via `inventory::iter::<UrlPatternsRegistration>()`
-//! 4. Framework calls the registered functions to get [`ServerRouter`] and `ClientRouter`
+//! 4. Framework calls the registered functions to get [`ServerRouter`] and optionally `ClientRouter`
+//!
+//! # Feature Independence
+//!
+//! The `#[routes]` macro always generates feature-independent code. The macro output
+//! only contains `UrlPatternsRegistration::new(__get_server_router)` without any
+//! `#[cfg]` attributes. The client router is set via `with_client_router()` within
+//! library code that is properly feature-gated, avoiding feature context mismatches
+//! between the library and downstream crates.
 //!
 //! # Examples
 //!
@@ -77,7 +85,7 @@ use std::sync::Arc;
 /// # Fields
 ///
 /// * `get_server_router` - Function pointer to get the server router
-/// * `get_client_router` - Function pointer to get the client router (when `client-router` feature is enabled)
+/// * `get_client_router` - Optional function pointer to get the client router (when `client-router` feature is enabled)
 ///
 /// # Implementation Details
 ///
@@ -102,15 +110,16 @@ pub struct UrlPatternsRegistration {
 	/// [`UnifiedRouter`]: crate::routers::UnifiedRouter
 	pub get_server_router: fn() -> Arc<ServerRouter>,
 
-	/// Function to get the client router
+	/// Optional function to get the client router
 	///
 	/// This function returns an `Arc<ClientRouter>` with all client-side routes.
-	/// The `#[routes]` macro extracts the client router from [`UnifiedRouter`]
-	/// using `into_client()` and wraps it in `Arc::new()` automatically.
+	/// Set via `with_client_router()` builder method. The field is `Option` to
+	/// allow feature-independent construction from macro-generated code, avoiding
+	/// feature context mismatches between the library and downstream crates.
 	///
 	/// [`UnifiedRouter`]: crate::routers::UnifiedRouter
 	#[cfg(feature = "client-router")]
-	pub get_client_router: fn() -> Arc<ClientRouter>,
+	pub get_client_router: Option<fn() -> Arc<ClientRouter>>,
 }
 
 impl UrlPatternsRegistration {
@@ -124,7 +133,7 @@ impl UrlPatternsRegistration {
 	///
 	/// let registration = UrlPatternsRegistration::new(
 	///     || Arc::new(routes().into_server()),
-	///     || Arc::new(routes().into_client()),
+	///     Some(|| Arc::new(routes().into_client())),
 	/// );
 	/// ```
 	///
@@ -134,7 +143,7 @@ impl UrlPatternsRegistration {
 	#[cfg(feature = "client-router")]
 	pub const fn new(
 		get_server_router: fn() -> Arc<ServerRouter>,
-		get_client_router: fn() -> Arc<ClientRouter>,
+		get_client_router: Option<fn() -> Arc<ClientRouter>>,
 	) -> Self {
 		Self {
 			get_server_router,
@@ -152,15 +161,48 @@ impl UrlPatternsRegistration {
 		Self { get_server_router }
 	}
 
+	/// Internal constructor used by the `#[routes]` macro.
+	///
+	/// Always takes a single argument regardless of feature flags, ensuring
+	/// the macro output is feature-independent. This avoids feature context
+	/// mismatches between the library and downstream crates.
+	#[doc(hidden)]
+	pub const fn __macro_new(get_server_router: fn() -> Arc<ServerRouter>) -> Self {
+		Self {
+			get_server_router,
+			#[cfg(feature = "client-router")]
+			get_client_router: None,
+		}
+	}
+
+	/// Set the client router factory function (builder pattern)
+	///
+	/// This method is called within library code that is properly feature-gated,
+	/// avoiding the feature context mismatch that would occur if the macro
+	/// generated `#[cfg(feature = "client-router")]` code (which would be
+	/// evaluated in the downstream crate's feature context).
+	///
+	/// # Note
+	///
+	/// You typically don't call this directly. Use the `#[routes]` macro instead.
+	#[cfg(feature = "client-router")]
+	pub const fn with_client_router(
+		mut self,
+		get_client_router: fn() -> Arc<ClientRouter>,
+	) -> Self {
+		self.get_client_router = Some(get_client_router);
+		self
+	}
+
 	/// Get the server router from the registration
 	pub fn server_router(&self) -> Arc<ServerRouter> {
 		(self.get_server_router)()
 	}
 
-	/// Get the client router from the registration
+	/// Get the client router from the registration, if available
 	#[cfg(feature = "client-router")]
-	pub fn client_router(&self) -> Arc<ClientRouter> {
-		(self.get_client_router)()
+	pub fn client_router(&self) -> Option<Arc<ClientRouter>> {
+		self.get_client_router.map(|f| f())
 	}
 }
 

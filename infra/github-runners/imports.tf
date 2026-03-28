@@ -27,7 +27,7 @@ import {
 # Idempotent: no-op if already managed by this workspace.
 import {
   to = aws_iam_openid_connect_provider.github_actions
-  id = "arn:aws:iam::819171434490:oidc-provider/token.actions.githubusercontent.com"
+  id = "arn:aws:iam::${var.aws_account_id}:oidc-provider/token.actions.githubusercontent.com"
 }
 
 import {

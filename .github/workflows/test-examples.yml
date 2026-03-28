@@ -2,7 +2,7 @@ name: Test Examples
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 concurrency:
@@ -16,7 +16,6 @@ env:
 jobs:
   detect-examples-changed:
     name: Detect Examples Changes
-    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     outputs:
       run: ${{ steps.detect.outputs.run }}
@@ -57,7 +56,7 @@ jobs:
     name: Test ${{ matrix.example }}
     needs: [detect-examples-changed]
     # Issue #1828: Skip when no examples/** changes on non-release PRs
-    if: github.event.action != 'closed' && needs.detect-examples-changed.outputs.run == 'true'
+    if: needs.detect-examples-changed.outputs.run == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -144,3 +143,7 @@ jobs:
       - name: Doc Test
         working-directory: examples/${{ matrix.example }}
         run: cargo test --doc --all-features
+
+      - name: Cleanup local config
+        if: always()
+        run: rm -f examples/.cargo/config.toml

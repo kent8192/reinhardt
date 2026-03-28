@@ -1,0 +1,338 @@
+name: Terraform Plan Privileged
+
+# Stage 2: Privileged plan workflow for fork PRs.
+# Triggered after Stage 1 (terraform-validate-fork) completes successfully.
+#
+# Security model:
+# - workflow_run guarantees this YAML comes from the base branch (main), not the fork
+# - Re-validates all checks from Stage 1 to prevent TOCTOU / artifact poisoning
+# - Uses immutable commit SHA (not branch ref) for checkout
+# - Requires maintainer approval via fork-review environment before plan execution
+# - No GitHub Actions cache usage (prevents cache poisoning)
+
+on:
+  workflow_run:
+    workflows: ["Terraform Validate (Fork PR)"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request'
+    outputs:
+      pr_number: ${{ steps.pr.outputs.number }}
+      head_sha: ${{ steps.pr.outputs.sha }}
+      is_fork: ${{ steps.pr.outputs.is_fork }}
+    steps:
+      - name: Get PR info
+        id: pr
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const pr = run.pull_requests[0];
+            if (!pr) {
+              core.setOutput('is_fork', 'false');
+              return;
+            }
+
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+            });
+
+            const isFork = pullRequest.head.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`;
+            core.setOutput('number', pr.number.toString());
+            core.setOutput('sha', run.head_sha);
+            core.setOutput('is_fork', isFork.toString());
+
+  validate:
+    name: Re-validate (${{ matrix.module }})
+    needs: gate
+    if: needs.gate.outputs.is_fork == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: github-runners
+            dir: infra/github-runners
+            backend: s3
+          - module: bootstrap
+            dir: infra/github-runners/bootstrap
+            backend: local
+          - module: website
+            dir: infra/website
+            backend: local
+          - module: organizations
+            dir: infra/organizations
+            backend: local
+          - module: repository
+            dir: infra/repository
+            backend: local
+    steps:
+      # Checkout using immutable commit SHA to prevent TOCTOU attacks
+      - name: Checkout at head SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.gate.outputs.head_sha }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: Terraform Format Check
+        working-directory: ${{ matrix.dir }}
+        run: terraform fmt -check -recursive -diff
+
+      - name: Terraform Init (backend-free)
+        working-directory: ${{ matrix.dir }}
+        run: terraform init -backend=false -input=false
+
+      - name: Terraform Validate
+        working-directory: ${{ matrix.dir }}
+        run: terraform validate
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+          cache: false
+
+      - name: Install and run tfprovidercheck
+        working-directory: ${{ matrix.dir }}
+        run: |
+          go install github.com/suzuki-shunsuke/tfprovidercheck@v1.0.7
+          if [ -f .terraform.lock.hcl ]; then
+            tfprovidercheck
+          else
+            echo "No .terraform.lock.hcl found — skipping provider check"
+          fi
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Semgrep terraform security scan
+        run: |
+          pip install semgrep==1.155.0
+          semgrep scan \
+            --config "$GITHUB_WORKSPACE/.semgrep/terraform-security.yml" \
+            --error \
+            --metrics off \
+            "$GITHUB_WORKSPACE/${{ matrix.dir }}"
+        working-directory: .
+
+  plan:
+    name: Plan (${{ matrix.module }})
+    needs: [gate, validate]
+    if: needs.gate.outputs.is_fork == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: fork-review
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: github-runners
+            dir: infra/github-runners
+            backend: s3
+          - module: bootstrap
+            dir: infra/github-runners/bootstrap
+            backend: local
+          - module: website
+            dir: infra/website
+            backend: local
+          - module: organizations
+            dir: infra/organizations
+            backend: local
+          - module: repository
+            dir: infra/repository
+            backend: local
+    steps:
+      # Checkout using immutable commit SHA to prevent TOCTOU attacks
+      - name: Checkout at head SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.gate.outputs.head_sha }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: Terraform Init (S3 backend)
+        if: matrix.backend == 's3'
+        working-directory: ${{ matrix.dir }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.TF_AWS_REGION }}
+        run: |
+          if [ -z "$AWS_ACCESS_KEY_ID" ]; then
+            echo "::warning::AWS credentials not configured — skipping ${{ matrix.module }}"
+            echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=${{ matrix.module }}/terraform.tfstate" \
+            -backend-config="region=${{ secrets.TF_AWS_REGION }}" \
+            -input=false
+
+      - name: Terraform Init (local backend)
+        if: matrix.backend == 'local'
+        working-directory: ${{ matrix.dir }}
+        run: |
+          terraform init -input=false
+
+      - name: Download Lambda zip files
+        if: env.SKIP_PLAN != 'true' && matrix.module == 'github-runners'
+        working-directory: ${{ matrix.dir }}
+        run: |
+          MODULES_JSON=".terraform/modules/modules.json"
+          if [ ! -f "$MODULES_JSON" ]; then
+            echo "::warning::modules.json not found — skipping Lambda download"
+            exit 0
+          fi
+
+          MODULE_VERSION=$(python3 -c "
+          import json, sys
+          data = json.load(open('$MODULES_JSON'))
+          for m in data.get('Modules', []):
+              if m.get('Key') == 'github_runner':
+                  print(m['Version'])
+                  sys.exit(0)
+          sys.exit(1)
+          " 2>/dev/null || echo "")
+
+          if [ -z "$MODULE_VERSION" ]; then
+            echo "::warning::Could not detect module version — skipping Lambda download"
+            exit 0
+          fi
+
+          echo "Downloading Lambda zips for v${MODULE_VERSION}..."
+          mkdir -p lambdas
+          BASE_URL="https://github.com/github-aws-runners/terraform-aws-github-runner/releases/download/v${MODULE_VERSION}"
+          for name in webhook runners runner-binaries-syncer; do
+            curl -fsSL -o "lambdas/${name}.zip" "${BASE_URL}/${name}.zip"
+            echo "  Downloaded ${name}.zip"
+          done
+
+      - name: Terraform Plan
+        if: env.SKIP_PLAN != 'true'
+        id: plan
+        working-directory: ${{ matrix.dir }}
+        env:
+          # AWS credentials
+          AWS_ACCESS_KEY_ID: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.TF_AWS_REGION }}
+          # Provider tokens
+          CLOUDFLARE_API_TOKEN: ${{ secrets.TF_CLOUDFLARE_API_TOKEN }}
+          # TF_VAR_ mappings (unused vars are safely ignored by Terraform)
+          TF_VAR_aws_account_id: ${{ secrets.TF_AWS_ACCOUNT_ID }}
+          TF_VAR_github_app_id: ${{ secrets.TF_GITHUB_APP_ID }}
+          TF_VAR_github_app_installation_id: ${{ secrets.TF_GITHUB_APP_INSTALLATION_ID }}
+          TF_VAR_github_app_key_base64: ${{ secrets.TF_GITHUB_APP_KEY_BASE64 }}
+          TF_VAR_github_owner: ${{ secrets.TF_GITHUB_OWNER }}
+          TF_VAR_github_repository: ${{ secrets.TF_GITHUB_REPOSITORY }}
+          TF_VAR_github_token: ${{ secrets.TF_GITHUB_TOKEN }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.TF_CLOUDFLARE_API_TOKEN }}
+          TF_VAR_cloudflare_account_id: ${{ secrets.TF_CLOUDFLARE_ACCOUNT_ID }}
+          TF_VAR_budget_alert_email: ${{ secrets.TF_BUDGET_ALERT_EMAIL }}
+          TF_VAR_tf_plan_aws_access_key_id: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
+          TF_VAR_tf_plan_aws_secret_access_key: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
+          TF_VAR_pages_project_name: ${{ secrets.TF_PAGES_PROJECT_NAME }}
+          TF_VAR_custom_domain: ${{ secrets.TF_CUSTOM_DOMAIN }}
+          TF_VAR_google_site_verification: ${{ secrets.TF_GOOGLE_SITE_VERIFICATION }}
+          TF_VAR_dns_record_apex_id: ${{ secrets.TF_DNS_RECORD_APEX_ID }}
+          TF_VAR_dns_record_www_id: ${{ secrets.TF_DNS_RECORD_WWW_ID }}
+          TF_VAR_dns_record_google_verification_id: ${{ secrets.TF_DNS_RECORD_GOOGLE_VERIFICATION_ID }}
+          TF_VAR_account_email: ${{ secrets.TF_ACCOUNT_EMAIL }}
+          TF_VAR_organizations_account_email: ${{ secrets.TF_ACCOUNT_EMAIL }}
+          TF_VAR_environment_reviewer: ${{ secrets.TF_ENVIRONMENT_REVIEWER }}
+        run: |
+          terraform plan -detailed-exitcode -no-color -input=false 2>&1 | tee plan-output.txt
+          echo "exitcode=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: Post plan to PR
+        if: env.SKIP_PLAN != 'true'
+        uses: actions/github-script@v8
+        env:
+          MODULE: ${{ matrix.module }}
+          PLAN_EXIT: ${{ steps.plan.outputs.exitcode }}
+          PR_NUMBER: ${{ needs.gate.outputs.pr_number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const moduleName = process.env.MODULE;
+            const exitCode = process.env.PLAN_EXIT;
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+            const marker = `<!-- terraform-plan-fork-${moduleName} -->`;
+
+            let planOutput = '';
+            const planFile = `${{ matrix.dir }}/plan-output.txt`;
+            try {
+              planOutput = fs.readFileSync(planFile, 'utf8');
+            } catch {
+              planOutput = 'Plan output not available.';
+            }
+
+            // Truncate at 60,000 chars to stay within GitHub comment limit
+            if (planOutput.length > 60000) {
+              planOutput = planOutput.substring(0, 60000) + '\n\n... (truncated)';
+            }
+
+            const status = exitCode === '0' ? '✅' : exitCode === '2' ? '⚠️ Changes detected' : '❌ Error';
+
+            const body = [
+              marker,
+              `### Terraform Plan (Fork PR): \`${moduleName}\` ${status}`,
+              '',
+              '<details>',
+              '<summary>Show plan output</summary>',
+              '',
+              '```',
+              planOutput,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+
+            // Find existing comment with this marker
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: body,
+              });
+            }
+
+      - name: Fail on plan error
+        if: env.SKIP_PLAN != 'true' && steps.plan.outputs.exitcode == '1'
+        run: exit 1

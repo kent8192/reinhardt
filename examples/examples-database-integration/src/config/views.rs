@@ -3,10 +3,10 @@
 //! Root endpoints and demo endpoints
 
 use reinhardt::core::serde::json;
+use reinhardt::core::serde::{Deserialize, Serialize};
 use reinhardt::get;
 use reinhardt::http::ViewResult;
 use reinhardt::{Response, StatusCode};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct User {

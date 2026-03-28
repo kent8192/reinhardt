@@ -6,8 +6,8 @@
 mod tests {
 	use crate::config::schema::get_schema;
 	use crate::config::urls::AppSchema;
-	use async_graphql::Request;
 	use reinhardt::Claims;
+	use reinhardt::graphql::Request;
 	use std::sync::Arc;
 
 	/// Helper to create a schema with an authenticated user

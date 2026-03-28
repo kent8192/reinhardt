@@ -362,16 +362,26 @@ impl Middleware for CacheControlMiddleware {
 		let policy = self.config.get_policy(&path);
 
 		// Add Cache-Control header
-		let cache_control_header: HeaderName = "cache-control".parse().unwrap();
+		// These header name/value parses use known-valid static strings, so expect() is appropriate
+		let cache_control_header: HeaderName = "cache-control"
+			.parse()
+			.expect("valid header name: cache-control");
 		response.headers.insert(
 			cache_control_header,
-			policy.to_header_value().parse().unwrap(),
+			policy
+				.to_header_value()
+				.parse()
+				.expect("valid header value for cache-control"),
 		);
 
 		// Add Vary header if specified
 		if let Some(vary) = &policy.vary {
-			let vary_header: HeaderName = "vary".parse().unwrap();
-			response.headers.insert(vary_header, vary.parse().unwrap());
+			let vary_header: HeaderName = "vary".parse().expect("valid header name: vary");
+			if let Ok(vary_value) = vary.parse() {
+				response.headers.insert(vary_header, vary_value);
+			} else {
+				tracing::warn!("Invalid Vary header value: {}", vary);
+			}
 		}
 
 		Ok(response)

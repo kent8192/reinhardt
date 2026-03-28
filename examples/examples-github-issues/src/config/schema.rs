@@ -26,7 +26,7 @@ fn create_schema_internal() -> AppSchema {
 		.into_bytes();
 	let jwt_auth = reinhardt::JwtAuth::new(&jwt_secret);
 
-	async_graphql::Schema::build(
+	reinhardt::graphql::Schema::build(
 		Query::default(),
 		Mutation::default(),
 		Subscription::default(),

@@ -24,6 +24,7 @@ use crate::types::DynIden;
 /// let target = CommentTarget::Column("users".into_iden(), "email".into_iden());
 /// ```
 #[derive(Debug, Clone)]
+// Allow dead_code: enum variants define all COMMENT ON target types; not all consumed yet by backend SQL generation
 #[allow(dead_code)]
 pub enum CommentTarget {
 	/// COMMENT ON TABLE table_name

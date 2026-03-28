@@ -99,7 +99,7 @@ async fn contact(Form(form): Form<ContactForm>) -> reinhardt::Response {
 ```rust
 use reinhardt_di::params::Form;
 use serde::{Deserialize, Serialize};
-use validator::Validate;
+use reinhardt::Validate;
 
 #[derive(Deserialize, Validate)]
 struct ContactForm {

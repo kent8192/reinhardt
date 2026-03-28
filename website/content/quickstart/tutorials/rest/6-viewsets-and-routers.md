@@ -239,7 +239,7 @@ cargo make runserver
 ```rust
 // ~200 lines of code for full CRUD operations
 use reinhardt::{get, post, put, delete, Json, Path, Response, StatusCode, ViewResult};
-use validator::Validate;
+use reinhardt::Validate;
 
 #[get("/snippets/", name = "snippets_list")]
 pub async fn list() -> ViewResult<Response> {

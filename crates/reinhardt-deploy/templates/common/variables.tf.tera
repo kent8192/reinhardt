@@ -1,0 +1,31 @@
+variable "project_name" {
+  description = "Project name"
+  type        = string
+  default     = "{{ project_name }}"
+}
+
+variable "environment" {
+  description = "Deployment environment"
+  type        = string
+  default     = "production"
+}
+
+{% if region %}
+variable "region" {
+  description = "Deployment region"
+  type        = string
+  default     = "{{ region }}"
+}
+{% endif %}
+
+variable "app_port" {
+  description = "Application port"
+  type        = number
+  default     = {{ app_port }}
+}
+
+variable "app_instances" {
+  description = "Number of application instances"
+  type        = number
+  default     = {{ app_instances }}
+}

@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-middleware"
-version = "0.1.0-rc.8"
+version = "0.1.0-rc.11"
 description = "Middleware system for request/response processing pipeline"
 keywords = ["middleware", "web", "cors", "security", "http"]
 categories = ["web-programming", "web-programming::http-server"]
@@ -60,6 +60,7 @@ uuid = { workspace = true }
 tokio = { workspace = true }
 colored = "3.0"
 base64 = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

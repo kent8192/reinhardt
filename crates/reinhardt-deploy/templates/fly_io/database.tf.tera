@@ -1,0 +1,22 @@
+resource "fly_app" "db" {
+  name = "{{ project_name }}-db"
+  org  = "personal"
+}
+
+resource "fly_machine" "db" {
+  app    = fly_app.db.name
+  region = "{{ region }}"
+  name   = "{{ project_name }}-db"
+
+  image = "flyio/postgres:{{ db_version }}"
+
+  cpus     = 1
+  memorymb = 256
+
+  services = [
+    {
+      internal_port = 5432
+      protocol      = "tcp"
+    }
+  ]
+}

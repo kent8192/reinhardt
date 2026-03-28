@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use crate::social::core::{OAuth2Client, ProviderConfig, SocialAuthError, TokenResponse};
+use crate::social::url_validation::validate_endpoint_url;
 
 /// Token refresh flow handler
 pub struct RefreshFlow {
@@ -33,6 +34,8 @@ impl RefreshFlow {
 		token_endpoint: &str,
 		refresh_token: &str,
 	) -> Result<TokenResponse, SocialAuthError> {
+		validate_endpoint_url(token_endpoint)?;
+
 		let mut params = HashMap::new();
 		params.insert("grant_type", "refresh_token");
 		params.insert("refresh_token", refresh_token);

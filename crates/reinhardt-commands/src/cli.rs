@@ -730,7 +730,8 @@ async fn execute_generateopenapi(
 }
 
 #[cfg(not(feature = "openapi"))]
-#[allow(dead_code)] // Entry point when openapi feature is disabled
+// Allow dead_code: stub entry point when openapi feature is disabled
+#[allow(dead_code)]
 async fn execute_generateopenapi(
 	_format: String,
 	_output: PathBuf,

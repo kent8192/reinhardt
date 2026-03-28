@@ -10,11 +10,11 @@ permissions:
 jobs:
   cancel-stale-runs:
     name: Cancel Stale Workflow Runs
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, arm64, reinhardt-cancel]
     timeout-minutes: 8
     steps:
       - name: Cancel and force-cancel stale runs
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const owner = context.repo.owner;

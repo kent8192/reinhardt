@@ -2,8 +2,8 @@
 //!
 //! This module defines GraphQL types and inputs for user operations.
 
-use async_graphql::{ID, InputObject, Object};
 use chrono::{DateTime, Utc};
+use reinhardt::graphql::{ID, InputObject, Object};
 
 use crate::apps::auth::models::User;
 

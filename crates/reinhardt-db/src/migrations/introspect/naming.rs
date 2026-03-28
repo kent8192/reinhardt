@@ -54,7 +54,8 @@ pub fn escape_rust_keyword(name: &str) -> String {
 }
 
 /// Check if a string is a Rust keyword.
-#[allow(dead_code)] // Utility function for future keyword validation features
+// Allow dead_code: keyword check used during SQL-to-Rust identifier mapping in introspection
+#[allow(dead_code)]
 pub(super) fn is_rust_keyword(name: &str) -> bool {
 	RUST_KEYWORDS.contains(name)
 }
@@ -250,7 +251,8 @@ pub(super) fn column_to_field_name(column_name: &str, convention: NamingConventi
 }
 
 /// Check if a string is a valid Rust identifier.
-#[allow(dead_code)] // Utility function for future identifier validation features
+// Allow dead_code: identifier validation used during SQL column name to Rust field name conversion
+#[allow(dead_code)]
 pub(super) fn is_valid_rust_identifier(s: &str) -> bool {
 	if s.is_empty() {
 		return false;

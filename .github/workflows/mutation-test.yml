@@ -80,7 +80,7 @@ jobs:
 
       - name: Upload artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: mutants-shard-${{ matrix.shard }}
           path: /tmp/mutants-shard-${{ matrix.shard }}/

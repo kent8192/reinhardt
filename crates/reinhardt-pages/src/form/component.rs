@@ -89,11 +89,11 @@ pub struct FormComponent {
 	errors: Signal<HashMap<String, Vec<String>>>,
 
 	/// Form submission URL (used in WASM render() method)
-	#[allow(dead_code)]
+	#[allow(dead_code)] // Field read by WASM render() via cfg(target_arch = "wasm32")
 	action: String,
 
 	/// HTTP method (GET or POST, used in WASM render() method)
-	#[allow(dead_code)]
+	#[allow(dead_code)] // Field read by WASM render() via cfg(target_arch = "wasm32")
 	method: String,
 }
 
@@ -626,7 +626,12 @@ impl FormComponent {
 
 						// Get validator from registry
 						let registry = ValidatorRegistry::global();
-						let registry = registry.lock().unwrap();
+						let registry = registry.lock().unwrap_or_else(|e| {
+							crate::warn_log!(
+								"ValidatorRegistry mutex was poisoned, recovering with potentially inconsistent state"
+							);
+							e.into_inner()
+						});
 
 						match registry.validate(validator_id, &value, params) {
 							Ok(_) => {

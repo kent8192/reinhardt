@@ -272,9 +272,11 @@ impl SecurityMiddleware {
 		// HSTS header (only on HTTPS)
 		if self.config.hsts_enabled && is_secure {
 			let hsts_value = self.build_hsts_header();
-			response
-				.headers
-				.insert("Strict-Transport-Security", hsts_value.parse().unwrap());
+			if let Ok(header_value) = hsts_value.parse() {
+				response
+					.headers
+					.insert("Strict-Transport-Security", header_value);
+			}
 		}
 
 		// X-Content-Type-Options
@@ -286,24 +288,26 @@ impl SecurityMiddleware {
 		}
 
 		// Referrer-Policy
-		if let Some(ref policy) = self.config.referrer_policy {
-			response
-				.headers
-				.insert("Referrer-Policy", policy.parse().unwrap());
+		if let Some(ref policy) = self.config.referrer_policy
+			&& let Ok(header_value) = policy.parse()
+		{
+			response.headers.insert("Referrer-Policy", header_value);
 		}
 
 		// Cross-Origin-Opener-Policy
-		if let Some(ref policy) = self.config.cross_origin_opener_policy {
+		if let Some(ref policy) = self.config.cross_origin_opener_policy
+			&& let Ok(header_value) = policy.parse()
+		{
 			response
 				.headers
-				.insert("Cross-Origin-Opener-Policy", policy.parse().unwrap());
+				.insert("Cross-Origin-Opener-Policy", header_value);
 		}
 
 		// X-Frame-Options
-		if let Some(ref value) = self.config.x_frame_options {
-			response
-				.headers
-				.insert("X-Frame-Options", value.parse().unwrap());
+		if let Some(ref value) = self.config.x_frame_options
+			&& let Ok(header_value) = value.parse()
+		{
+			response.headers.insert("X-Frame-Options", header_value);
 		}
 	}
 }
@@ -323,9 +327,12 @@ impl Middleware for SecurityMiddleware {
 		if self.config.ssl_redirect && !is_secure {
 			let redirect_url = self.build_https_url(&request);
 			let mut response = Response::new(StatusCode::PERMANENT_REDIRECT);
-			response
-				.headers
-				.insert(LOCATION, redirect_url.parse().unwrap());
+			response.headers.insert(
+				LOCATION,
+				redirect_url
+					.parse()
+					.unwrap_or_else(|_| HeaderValue::from_static("/")),
+			);
 			return Ok(response);
 		}
 

@@ -178,12 +178,9 @@ impl PostgresTwoPhaseParticipant {
 	/// # }
 	/// ```
 	pub async fn prepare(&self, session: &mut PgSession) -> Result<()> {
-		// Use Box::leak to convert String to &'static str for sqlx compatibility
-		// This is acceptable as prepared transaction IDs are typically short-lived
 		let xid_escaped = pg_escape::quote_literal(&session.xid);
 		let sql = format!("PREPARE TRANSACTION {}", xid_escaped);
-		let sql_static: &'static str = Box::leak(sql.into_boxed_str());
-		sqlx::query(sql_static)
+		sqlx::raw_sql(&sql)
 			.execute(&mut *session.connection)
 			.await
 			.map_err(DatabaseError::from)?;
@@ -215,11 +212,9 @@ impl PostgresTwoPhaseParticipant {
 	/// # }
 	/// ```
 	pub async fn commit(&self, mut session: PgSession) -> Result<()> {
-		// Use Box::leak to convert String to &'static str for sqlx compatibility
 		let xid_escaped = pg_escape::quote_literal(&session.xid);
 		let sql = format!("COMMIT PREPARED {}", xid_escaped);
-		let sql_static: &'static str = Box::leak(sql.into_boxed_str());
-		sqlx::query(sql_static)
+		sqlx::raw_sql(&sql)
 			.execute(&mut *session.connection)
 			.await
 			.map_err(DatabaseError::from)?;
@@ -250,8 +245,7 @@ impl PostgresTwoPhaseParticipant {
 		let mut conn = self.pool.acquire().await.map_err(DatabaseError::from)?;
 		let xid_escaped = pg_escape::quote_literal(xid);
 		let sql = format!("COMMIT PREPARED {}", xid_escaped);
-		let sql_static: &'static str = Box::leak(sql.into_boxed_str());
-		sqlx::query(sql_static)
+		sqlx::raw_sql(&sql)
 			.execute(&mut *conn)
 			.await
 			.map_err(DatabaseError::from)?;
@@ -277,11 +271,9 @@ impl PostgresTwoPhaseParticipant {
 	/// # }
 	/// ```
 	pub async fn rollback(&self, mut session: PgSession) -> Result<()> {
-		// Use Box::leak to convert String to &'static str for sqlx compatibility
 		let xid_escaped = pg_escape::quote_literal(&session.xid);
 		let sql = format!("ROLLBACK PREPARED {}", xid_escaped);
-		let sql_static: &'static str = Box::leak(sql.into_boxed_str());
-		sqlx::query(sql_static)
+		sqlx::raw_sql(&sql)
 			.execute(&mut *session.connection)
 			.await
 			.map_err(DatabaseError::from)?;
@@ -312,8 +304,7 @@ impl PostgresTwoPhaseParticipant {
 		let mut conn = self.pool.acquire().await.map_err(DatabaseError::from)?;
 		let xid_escaped = pg_escape::quote_literal(xid);
 		let sql = format!("ROLLBACK PREPARED {}", xid_escaped);
-		let sql_static: &'static str = Box::leak(sql.into_boxed_str());
-		sqlx::query(sql_static)
+		sqlx::raw_sql(&sql)
 			.execute(&mut *conn)
 			.await
 			.map_err(DatabaseError::from)?;
@@ -449,6 +440,26 @@ impl PostgresTwoPhaseParticipant {
 		Ok(cleaned)
 	}
 
+	/// Acquire the sessions mutex lock with poison recovery and logging
+	///
+	/// On poison, clears all sessions to prevent inconsistent state and returns
+	/// an error if the state cannot be recovered.
+	fn acquire_sessions_lock(
+		sessions: &std::sync::Mutex<std::collections::HashMap<String, PgSession>>,
+	) -> Result<std::sync::MutexGuard<'_, std::collections::HashMap<String, PgSession>>> {
+		match sessions.lock() {
+			Ok(guard) => Ok(guard),
+			Err(poisoned) => {
+				tracing::warn!(
+					"2PC sessions mutex was poisoned, clearing all sessions to prevent inconsistent state"
+				);
+				let mut guard = poisoned.into_inner();
+				guard.clear();
+				Ok(guard)
+			}
+		}
+	}
+
 	// XID-based wrapper methods for ORM layer compatibility
 	// These methods manage sessions internally using the sessions HashMap
 
@@ -457,10 +468,8 @@ impl PostgresTwoPhaseParticipant {
 	/// Creates a session and stores it internally for later use.
 	pub async fn begin_by_xid(&self, xid: &str) -> Result<()> {
 		let session = self.begin(xid).await?;
-		self.sessions
-			.lock()
-			.unwrap()
-			.insert(xid.to_string(), session);
+		let mut sessions = Self::acquire_sessions_lock(&self.sessions)?;
+		sessions.insert(xid.to_string(), session);
 		Ok(())
 	}
 
@@ -470,7 +479,7 @@ impl PostgresTwoPhaseParticipant {
 	pub async fn prepare_by_xid(&self, xid: &str) -> Result<()> {
 		// Extract the session temporarily to avoid holding the lock across await
 		let mut session = {
-			let mut sessions = self.sessions.lock().unwrap();
+			let mut sessions = Self::acquire_sessions_lock(&self.sessions)?;
 			sessions.remove(xid).ok_or_else(|| {
 				DatabaseError::QueryError(format!("No active session for XID: {}", xid))
 			})?
@@ -479,18 +488,15 @@ impl PostgresTwoPhaseParticipant {
 		// Perform the prepare operation directly without calling self.prepare()
 		let xid_escaped = pg_escape::quote_literal(xid);
 		let sql = format!("PREPARE TRANSACTION {}", xid_escaped);
-		let sql_static: &'static str = Box::leak(sql.into_boxed_str());
-		sqlx::query(sql_static)
+		sqlx::raw_sql(&sql)
 			.execute(&mut *session.connection)
 			.await
 			.map_err(DatabaseError::from)?;
 
 		// Update state and re-insert
 		session.state = PgTwoPhaseState::Prepared;
-		self.sessions
-			.lock()
-			.unwrap()
-			.insert(xid.to_string(), session);
+		let mut sessions = Self::acquire_sessions_lock(&self.sessions)?;
+		sessions.insert(xid.to_string(), session);
 
 		Ok(())
 	}
@@ -499,15 +505,16 @@ impl PostgresTwoPhaseParticipant {
 	///
 	/// Removes the session from internal storage, executes COMMIT PREPARED, and consumes the session.
 	pub async fn commit_managed(&self, xid: &str) -> Result<()> {
-		let mut session = self.sessions.lock().unwrap().remove(xid).ok_or_else(|| {
-			DatabaseError::QueryError(format!("No active session for XID: {}", xid))
-		})?;
+		let mut session = Self::acquire_sessions_lock(&self.sessions)?
+			.remove(xid)
+			.ok_or_else(|| {
+				DatabaseError::QueryError(format!("No active session for XID: {}", xid))
+			})?;
 
 		// Execute commit directly without calling self.commit()
 		let xid_escaped = pg_escape::quote_literal(xid);
 		let sql = format!("COMMIT PREPARED {}", xid_escaped);
-		let sql_static: &'static str = Box::leak(sql.into_boxed_str());
-		sqlx::query(sql_static)
+		sqlx::raw_sql(&sql)
 			.execute(&mut *session.connection)
 			.await
 			.map_err(DatabaseError::from)?;
@@ -520,15 +527,16 @@ impl PostgresTwoPhaseParticipant {
 	///
 	/// Removes the session from internal storage, executes ROLLBACK PREPARED, and consumes the session.
 	pub async fn rollback_managed(&self, xid: &str) -> Result<()> {
-		let mut session = self.sessions.lock().unwrap().remove(xid).ok_or_else(|| {
-			DatabaseError::QueryError(format!("No active session for XID: {}", xid))
-		})?;
+		let mut session = Self::acquire_sessions_lock(&self.sessions)?
+			.remove(xid)
+			.ok_or_else(|| {
+				DatabaseError::QueryError(format!("No active session for XID: {}", xid))
+			})?;
 
 		// Execute rollback directly without calling self.rollback()
 		let xid_escaped = pg_escape::quote_literal(xid);
 		let sql = format!("ROLLBACK PREPARED {}", xid_escaped);
-		let sql_static: &'static str = Box::leak(sql.into_boxed_str());
-		sqlx::query(sql_static)
+		sqlx::raw_sql(&sql)
 			.execute(&mut *session.connection)
 			.await
 			.map_err(DatabaseError::from)?;

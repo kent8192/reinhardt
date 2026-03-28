@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use super::pkce::CodeVerifier;
 use crate::social::core::{OAuth2Client, ProviderConfig, SocialAuthError, TokenResponse};
+use crate::social::url_validation::validate_endpoint_url;
 
 /// Token exchange flow handler
 pub struct TokenExchangeFlow {
@@ -36,6 +37,8 @@ impl TokenExchangeFlow {
 		code: &str,
 		code_verifier: Option<&CodeVerifier>,
 	) -> Result<TokenResponse, SocialAuthError> {
+		validate_endpoint_url(token_endpoint)?;
+
 		let mut params = HashMap::new();
 		params.insert("grant_type", "authorization_code");
 		params.insert("code", code);

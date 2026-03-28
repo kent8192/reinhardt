@@ -27,19 +27,26 @@ pub mod caching;
 
 pub mod highlighting;
 
-// Type-safe filtering system
+// Type-safe filtering system (DB-dependent modules gated on serializers feature)
+#[cfg(feature = "serializers")]
 pub mod field_extensions;
 pub mod fulltext;
 pub mod fuzzy;
 pub mod geo;
+#[cfg(feature = "serializers")]
 pub mod multi_term;
+#[cfg(feature = "serializers")]
 pub mod ordering_field;
+#[cfg(feature = "serializers")]
 pub mod query_filter;
 pub mod range;
+#[cfg(feature = "serializers")]
 pub mod searchable;
 
 // Advanced filtering features
+#[cfg(feature = "serializers")]
 pub mod index_hint;
+#[cfg(feature = "serializers")]
 pub mod optimizer;
 pub mod relevance;
 pub mod synonym;
@@ -59,18 +66,25 @@ pub use highlighting::{
 };
 
 // Type-safe exports
+#[cfg(feature = "serializers")]
 pub use field_extensions::FieldOrderingExt;
 pub use fulltext::{FullTextSearchFilter, FullTextSearchMode};
 pub use fuzzy::{FuzzyAlgorithm, FuzzySearchFilter};
 pub use geo::{BoundingBoxFilter, DistanceFilter, DistanceUnit, NearbyFilter, PolygonFilter};
+#[cfg(feature = "serializers")]
 pub use multi_term::{MultiTermSearch, Operator, SearchTerm, TermType};
+#[cfg(feature = "serializers")]
 pub use ordering_field::{OrderDirection, OrderingField};
+#[cfg(feature = "serializers")]
 pub use query_filter::QueryFilter;
 pub use range::{DateRangeFilter, NumericRangeFilter, RangeFilter};
+#[cfg(feature = "serializers")]
 pub use searchable::SearchableModel;
 
 // Advanced filtering exports
+#[cfg(feature = "serializers")]
 pub use index_hint::{IndexHint, IndexHintFilter, IndexStrategy};
+#[cfg(feature = "serializers")]
 pub use optimizer::{
 	DatabaseType, OptimizationHint, QueryAnalysis, QueryComplexity, QueryOptimizer, QueryPlan,
 };

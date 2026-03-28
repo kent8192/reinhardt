@@ -31,7 +31,7 @@ async fn test_get_detail_happy_path(
 	data.insert("status".to_string(), json!("active"));
 
 	let created_id = db
-		.create::<AdminRecord>("test_models", data)
+		.create::<AdminRecord>("test_models", None, data)
 		.await
 		.expect("Failed to create test record");
 
@@ -70,7 +70,7 @@ async fn test_get_detail_returns_all_fields(
 	data.insert("status".to_string(), json!("pending"));
 
 	let created_id = db
-		.create::<AdminRecord>("test_models", data)
+		.create::<AdminRecord>("test_models", None, data)
 		.await
 		.expect("Failed to create test record");
 
@@ -117,7 +117,7 @@ async fn test_get_detail_with_various_data_types(
 	data.insert("status".to_string(), json!("active"));
 
 	let created_id = db
-		.create::<AdminRecord>("test_models", data)
+		.create::<AdminRecord>("test_models", None, data)
 		.await
 		.expect("Failed to create test record");
 

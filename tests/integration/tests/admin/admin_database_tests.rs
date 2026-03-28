@@ -750,7 +750,7 @@ async fn test_create_returns_zero_when_response_has_no_id_field(
 	data.insert("name".to_string(), serde_json::json!("Alice"));
 
 	// Act
-	let result = db.create::<User>("users", data).await;
+	let result = db.create::<User>("users", None, data).await;
 
 	// Assert
 	// Bug #2946: When the RETURNING clause returns a row without "id" field,
@@ -801,7 +801,7 @@ async fn test_create_returns_id_when_response_has_id_field() {
 	data.insert("name".to_string(), serde_json::json!("Alice"));
 
 	// Act
-	let result = db.create::<User>("users", data).await;
+	let result = db.create::<User>("users", None, data).await;
 
 	// Assert
 	assert!(result.is_ok());
@@ -851,7 +851,7 @@ async fn test_create_returns_zero_when_id_is_non_number() {
 	data.insert("name".to_string(), serde_json::json!("Bob"));
 
 	// Act
-	let result = db.create::<User>("users", data).await;
+	let result = db.create::<User>("users", None, data).await;
 
 	// Assert
 	// Bug #2946: Non-numeric ID values silently return 0

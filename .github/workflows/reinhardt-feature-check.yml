@@ -11,6 +11,18 @@ on:
         description: "Parallel cargo build jobs"
         type: string
         default: "1"
+  # Seed feature-check caches on main so release-plz PRs get cache hits.
+  # GitHub Actions branch scoping: PR branches can only restore caches
+  # from the default branch (main). Without this trigger, feature-*
+  # cache keys would never exist on main, causing cold starts on every
+  # release-plz PR.
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'crates/*/Cargo.toml'
+      - 'crates/*/src/**'
   workflow_dispatch:
 
 env:

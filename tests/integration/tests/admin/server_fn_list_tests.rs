@@ -31,7 +31,7 @@ async fn test_get_list_happy_path(
 		let mut data = HashMap::new();
 		data.insert("name".to_string(), json!(format!("Item {}", i)));
 		data.insert("status".to_string(), json!("active"));
-		db.create::<AdminRecord>("test_models", data)
+		db.create::<AdminRecord>("test_models", None, data)
 			.await
 			.expect("Failed to create test record");
 	}
@@ -64,7 +64,7 @@ async fn test_get_list_with_search(
 	let mut data = HashMap::new();
 	data.insert("name".to_string(), json!("UniqueSearchTarget"));
 	data.insert("status".to_string(), json!("active"));
-	db.create::<AdminRecord>("test_models", data)
+	db.create::<AdminRecord>("test_models", None, data)
 		.await
 		.expect("Failed to create test record");
 
@@ -97,7 +97,7 @@ async fn test_get_list_with_filter(
 	let mut data = HashMap::new();
 	data.insert("name".to_string(), json!("Filter Test"));
 	data.insert("status".to_string(), json!("filterable_status"));
-	db.create::<AdminRecord>("test_models", data)
+	db.create::<AdminRecord>("test_models", None, data)
 		.await
 		.expect("Failed to create test record");
 

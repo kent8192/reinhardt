@@ -77,3 +77,4 @@ pub use fields::*;
 pub use import::*;
 pub use list::*;
 pub use update::*;
+pub use user::AdminDefaultUser;

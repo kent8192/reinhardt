@@ -33,7 +33,7 @@ async fn test_delete_record_happy_path(
 	data.insert("name".to_string(), json!("To Delete"));
 	data.insert("status".to_string(), json!("active"));
 	let created_id = db
-		.create::<AdminRecord>("test_models", data)
+		.create::<AdminRecord>("test_models", None, data)
 		.await
 		.expect("Failed to create test record");
 
@@ -71,7 +71,7 @@ async fn test_delete_record_actually_removes(
 	data.insert("name".to_string(), json!("Will Be Deleted"));
 	data.insert("status".to_string(), json!("active"));
 	let created_id = db
-		.create::<AdminRecord>("test_models", data)
+		.create::<AdminRecord>("test_models", None, data)
 		.await
 		.expect("Failed to create test record");
 
@@ -186,7 +186,7 @@ async fn test_bulk_delete_happy_path(
 		data.insert("name".to_string(), json!(format!("Bulk Delete {}", i)));
 		data.insert("status".to_string(), json!("active"));
 		let id = db
-			.create::<AdminRecord>("test_models", data)
+			.create::<AdminRecord>("test_models", None, data)
 			.await
 			.expect("Failed to create test record");
 		ids.push(id.to_string());
@@ -230,7 +230,7 @@ async fn test_bulk_delete_single_id(
 	data.insert("name".to_string(), json!("Single Bulk Delete"));
 	data.insert("status".to_string(), json!("active"));
 	let id = db
-		.create::<AdminRecord>("test_models", data)
+		.create::<AdminRecord>("test_models", None, data)
 		.await
 		.expect("Failed to create test record");
 
@@ -358,7 +358,7 @@ async fn test_bulk_delete_partial_match(
 	data.insert("name".to_string(), json!("Partial Match"));
 	data.insert("status".to_string(), json!("active"));
 	let existing_id = db
-		.create::<AdminRecord>("test_models", data)
+		.create::<AdminRecord>("test_models", None, data)
 		.await
 		.expect("Failed to create test record");
 

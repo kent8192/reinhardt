@@ -3,8 +3,9 @@
 //! Provides helper functions to construct `ServerFnRequest`, `AuthUser<DefaultUser>`,
 //! and a permission-granting ModelAdmin for testing server functions.
 
-use reinhardt_admin::core::{AdminDatabase, AdminSite, ModelAdmin};
-use reinhardt_auth::{AuthUser, DefaultUser};
+use reinhardt_admin::core::{AdminDatabase, AdminSite, AdminUser, ModelAdmin};
+use reinhardt_admin::server::AdminDefaultUser;
+use reinhardt_auth::AuthUser;
 use reinhardt_db::backends::connection::DatabaseConnection as BackendsConnection;
 use reinhardt_db::backends::dialect::PostgresBackend;
 use reinhardt_db::orm::connection::{DatabaseBackend, DatabaseConnection};
@@ -39,9 +40,9 @@ pub fn make_staff_request() -> ServerFnRequest {
 	ServerFnRequest(Arc::new(request))
 }
 
-/// Creates a `DefaultUser` with staff privileges for testing.
-pub fn make_staff_user() -> DefaultUser {
-	DefaultUser {
+/// Creates an `AdminDefaultUser` with staff privileges for testing.
+pub fn make_staff_user() -> AdminDefaultUser {
+	AdminDefaultUser {
 		id: Uuid::new_v4(),
 		username: "test_staff".to_string(),
 		email: "staff@test.example".to_string(),
@@ -58,8 +59,8 @@ pub fn make_staff_user() -> DefaultUser {
 	}
 }
 
-/// Creates an `AuthUser<DefaultUser>` with staff privileges for testing.
-pub fn make_auth_user() -> AuthUser<DefaultUser> {
+/// Creates an `AuthUser<AdminDefaultUser>` with staff privileges for testing.
+pub fn make_auth_user() -> AuthUser<AdminDefaultUser> {
 	AuthUser(make_staff_user())
 }
 
@@ -126,19 +127,19 @@ impl ModelAdmin for AllPermissionsModelAdmin {
 		Some(vec!["id", "name", "status", "description", "created_at"])
 	}
 
-	async fn has_view_permission(&self, _user: &(dyn std::any::Any + Send + Sync)) -> bool {
+	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
 		true
 	}
 
-	async fn has_add_permission(&self, _user: &(dyn std::any::Any + Send + Sync)) -> bool {
+	async fn has_add_permission(&self, _user: &dyn AdminUser) -> bool {
 		true
 	}
 
-	async fn has_change_permission(&self, _user: &(dyn std::any::Any + Send + Sync)) -> bool {
+	async fn has_change_permission(&self, _user: &dyn AdminUser) -> bool {
 		true
 	}
 
-	async fn has_delete_permission(&self, _user: &(dyn std::any::Any + Send + Sync)) -> bool {
+	async fn has_delete_permission(&self, _user: &dyn AdminUser) -> bool {
 		true
 	}
 }

@@ -20,18 +20,31 @@ use uuid::Uuid;
 #[user(hasher = reinhardt_auth::Argon2Hasher, username_field = "username", full = true)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminDefaultUser {
+	/// Unique identifier.
 	pub id: Uuid,
+	/// Login username.
 	pub username: String,
+	/// Email address.
 	pub email: String,
+	/// First name.
 	pub first_name: String,
+	/// Last name.
 	pub last_name: String,
+	/// Hashed password (None if not set).
 	pub password_hash: Option<String>,
+	/// Timestamp of last login.
 	pub last_login: Option<DateTime<Utc>>,
+	/// Whether the user account is active.
 	pub is_active: bool,
+	/// Whether the user has staff privileges.
 	pub is_staff: bool,
+	/// Whether the user has superuser privileges.
 	pub is_superuser: bool,
+	/// Timestamp when the user joined.
 	pub date_joined: DateTime<Utc>,
+	/// List of permission codenames assigned to this user.
 	pub user_permissions: Vec<String>,
+	/// List of group names this user belongs to.
 	pub groups: Vec<String>,
 }
 

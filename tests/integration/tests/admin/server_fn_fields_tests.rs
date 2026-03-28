@@ -71,7 +71,7 @@ async fn test_get_fields_edit_form(
 	data.insert("name".to_string(), json!("Edit Form Item"));
 	data.insert("status".to_string(), json!("active"));
 	let created_id = db
-		.create::<AdminRecord>("test_models", data)
+		.create::<AdminRecord>("test_models", None, data)
 		.await
 		.expect("Failed to create test record");
 

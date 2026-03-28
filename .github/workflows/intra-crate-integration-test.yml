@@ -139,6 +139,14 @@ jobs:
           # Build package selection args. Issue #2878
           # --exclude requires --workspace; when using -p flags, filter the
           # package list instead. Issue #2878
+          # Build set of packages that have integration test targets (kind == "test").
+          # Packages without test targets (e.g., reinhardt-web, reinhardt-test-support)
+          # cause `cargo test --no-run --test '*'` to fail with exit code 101.
+          # Fixes #3026
+          PKGS_WITH_TEST_TARGETS=$(cargo metadata --format-version 1 --no-deps \
+            | jq -r '.packages[] | select(.targets[] | .kind[] == "test") | .name' \
+            | sort -u)
+
           PKG_ARGS=()
           EXCLUDE_ARGS=()
           if [[ "$RUN_ALL" != "true" && -n "$CARGO_PACKAGES" ]]; then
@@ -146,8 +154,11 @@ jobs:
               [[ -z "$pkg" ]] && continue
               # Cross-crate integration tests run in a separate workflow
               [[ "$pkg" == "reinhardt-integration-tests" ]] && continue
-              # reinhardt-test-support has no test targets (lib-only crate)
-              [[ "$pkg" == "reinhardt-test-support" ]] && continue
+              # Skip packages without integration test targets
+              if ! echo "$PKGS_WITH_TEST_TARGETS" | grep -qx "$pkg"; then
+                echo "Skipping $pkg (no integration test targets)"
+                continue
+              fi
               PKG_ARGS+=(-p "$pkg")
             done <<< "$CARGO_PACKAGES"
           fi

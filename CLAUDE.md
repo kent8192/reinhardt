@@ -283,6 +283,7 @@ See instructions/ISSUE_HANDLING.md for comprehensive issue handling principles i
 ```bash
 cargo check --workspace --all --all-features
 cargo build --workspace --all --all-features
+cargo make feature-check  # Check representative feature combinations (18 patterns)
 ```
 
 **Testing:**

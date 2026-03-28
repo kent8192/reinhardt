@@ -321,6 +321,72 @@ command = "cargo"
 args = ["llvm-cov", "nextest", "--workspace", "--lib", "--all-features", "--no-fail-fast"]
 
 # ============================================================================
+# Feature Combination Check Tasks
+# ============================================================================
+
+[tasks.feature-check]
+description = "Check representative feature combinations (18 patterns)"
+dependencies = ["feature-check-facade", "feature-check-subcrate"]
+
+[tasks.feature-check-facade]
+description = "Check facade crate feature combinations (10 patterns)"
+script_runner = "bash"
+script = '''
+set -e
+echo "=== Feature Check: Facade Crate ==="
+
+combos=(
+	"no-default|reinhardt-web|--no-default-features"
+	"minimal|reinhardt-web|--no-default-features -F minimal"
+	"standard|reinhardt-web|"
+	"full|reinhardt-web|--no-default-features -F full"
+	"api-only|reinhardt-web|--no-default-features -F api-only"
+	"graphql-server|reinhardt-web|--no-default-features -F graphql-server"
+	"websocket-server|reinhardt-web|--no-default-features -F websocket-server"
+	"cli-tools|reinhardt-web|--no-default-features -F cli-tools"
+	"standard+mysql|reinhardt-web|--no-default-features -F standard,db-mysql"
+	"standard+sqlite|reinhardt-web|--no-default-features -F standard,db-sqlite"
+)
+
+for combo in "${combos[@]}"; do
+	IFS='|' read -r name pkg flags <<< "$combo"
+	echo "--- Checking: ${name} ---"
+	cargo check -p "${pkg}" ${flags} --quiet
+	echo "  OK: ${name}"
+done
+
+echo "=== All facade checks passed ==="
+'''
+
+[tasks.feature-check-subcrate]
+description = "Check key sub-crate feature combinations (8 patterns)"
+script_runner = "bash"
+script = '''
+set -e
+echo "=== Feature Check: Sub-Crates ==="
+
+combos=(
+	"core-minimal|reinhardt-core|--no-default-features"
+	"core-full|reinhardt-core|--no-default-features -F core-full"
+	"db-minimal|reinhardt-db|--no-default-features"
+	"db-full|reinhardt-db|--no-default-features -F database-full"
+	"auth-minimal|reinhardt-auth|--no-default-features"
+	"auth-full|reinhardt-auth|--no-default-features -F auth-full"
+	"rest-minimal|reinhardt-rest|--no-default-features"
+	"rest-full|reinhardt-rest|--no-default-features -F rest-full"
+)
+
+for combo in "${combos[@]}"; do
+	IFS='|' read -r name pkg flags <<< "$combo"
+	echo "--- Checking: ${name} ---"
+	cargo check -p "${pkg}" ${flags} --quiet
+	echo "  OK: ${name}"
+done
+
+echo "=== All sub-crate checks passed ==="
+'''
+
+# ============================================================================
 # CI Tasks
 # ============================================================================
 

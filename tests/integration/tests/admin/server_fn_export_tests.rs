@@ -30,7 +30,7 @@ async fn test_export_json_happy_path(
 	let mut data = HashMap::new();
 	data.insert("name".to_string(), json!("Export JSON Test"));
 	data.insert("status".to_string(), json!("active"));
-	db.create::<reinhardt_admin::core::AdminRecord>("test_models", data)
+	db.create::<reinhardt_admin::core::AdminRecord>("test_models", None, data)
 		.await
 		.expect("Failed to create test record");
 
@@ -72,7 +72,7 @@ async fn test_export_csv_returns_serialization_error(
 	let mut data = HashMap::new();
 	data.insert("name".to_string(), json!("Export CSV Test"));
 	data.insert("status".to_string(), json!("active"));
-	db.create::<reinhardt_admin::core::AdminRecord>("test_models", data)
+	db.create::<reinhardt_admin::core::AdminRecord>("test_models", None, data)
 		.await
 		.expect("Failed to create test record");
 
@@ -116,7 +116,7 @@ async fn test_export_tsv_returns_serialization_error(
 	let mut data = HashMap::new();
 	data.insert("name".to_string(), json!("Export TSV Test"));
 	data.insert("status".to_string(), json!("active"));
-	db.create::<reinhardt_admin::core::AdminRecord>("test_models", data)
+	db.create::<reinhardt_admin::core::AdminRecord>("test_models", None, data)
 		.await
 		.expect("Failed to create test record");
 

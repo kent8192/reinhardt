@@ -90,6 +90,8 @@ async fn test_get_by_id(mock_connection: DatabaseConnection) {
 #[tokio::test]
 async fn test_create(mock_connection: DatabaseConnection) {
 	// Arrange
+	// Default mock returns {"count": 0} without "id" field,
+	// so create() returns Err (missing pk field). Fixes #3029
 	let db = AdminDatabase::new(mock_connection);
 	let mut data = HashMap::new();
 	data.insert("name".to_string(), serde_json::json!("Alice"));
@@ -99,7 +101,13 @@ async fn test_create(mock_connection: DatabaseConnection) {
 	let result = db.create::<User>("users", None, data).await;
 
 	// Assert
-	assert!(result.is_ok());
+	assert!(result.is_err());
+	let err_msg = result.unwrap_err().to_string();
+	assert!(
+		err_msg.contains("RETURNING clause did not return expected primary key field"),
+		"Expected missing pk field error, got: {}",
+		err_msg
+	);
 }
 
 #[rstest]
@@ -740,7 +748,7 @@ fn test_filter_value_to_sea_value_expression_fallback() {
 
 #[rstest]
 #[tokio::test]
-async fn test_create_returns_zero_when_response_has_no_id_field(
+async fn test_create_returns_error_when_response_has_no_id_field(
 	mock_connection: DatabaseConnection,
 ) {
 	// Arrange
@@ -753,13 +761,14 @@ async fn test_create_returns_zero_when_response_has_no_id_field(
 	let result = db.create::<User>("users", None, data).await;
 
 	// Assert
-	// Bug #2946: When the RETURNING clause returns a row without "id" field,
-	// the function silently returns 0 instead of an error
-	assert!(result.is_ok());
-	assert_eq!(
-		result.unwrap(),
-		0,
-		"Bug #2946: create() returns 0 when 'id' field is missing from response"
+	// Bug #2946 was fixed: create() now returns Err when the RETURNING clause
+	// does not contain the expected primary key field. Fixes #3029
+	assert!(result.is_err());
+	let err_msg = result.unwrap_err().to_string();
+	assert!(
+		err_msg.contains("RETURNING clause did not return expected primary key field"),
+		"Expected missing pk field error, got: {}",
+		err_msg
 	);
 }
 
@@ -854,12 +863,14 @@ async fn test_create_returns_zero_when_id_is_non_number() {
 	let result = db.create::<User>("users", None, data).await;
 
 	// Assert
-	// Bug #2946: Non-numeric ID values silently return 0
-	assert!(result.is_ok());
-	assert_eq!(
-		result.unwrap(),
-		0,
-		"Bug #2946: create() returns 0 when 'id' is not a number"
+	// Bug #2946 was fixed: Non-numeric ID values now return Err instead of
+	// silently returning 0. Fixes #3029
+	assert!(result.is_err());
+	let err_msg = result.unwrap_err().to_string();
+	assert!(
+		err_msg.contains("RETURNING clause did not return expected primary key field"),
+		"Expected missing pk field error, got: {}",
+		err_msg
 	);
 }
 

@@ -145,6 +145,58 @@ gitGraph
 gh pr create --draft --title "feat(auth): add JWT validation (WIP)"
 ```
 
+### PC-4a (MUST): Draft PR Conversion Protection
+
+Converting a Draft PR to Ready for Review is a **visibility-affecting action** that exposes the PR to reviewers and triggers notifications. This conversion **MUST** require explicit user instruction.
+
+**Rules:**
+- **NEVER** convert a Draft PR to Ready for Review without explicit user instruction
+- **Plan Mode approval does NOT authorize Draft PR conversion** (unlike commits/pushes)
+  - Rationale: Plan Mode authorizes *implementation work* (code changes, commits, pushes), but Draft PR conversion is a *review readiness decision* that only the user can make
+- Before converting, ensure all CI checks pass and tests pass locally
+- Use `gh pr ready <number>` for conversion
+
+**Pre-Conversion Checklist:**
+- [ ] User has explicitly instructed conversion
+- [ ] All CI checks pass
+- [ ] All tests pass locally
+- [ ] PR description is complete and accurate
+- [ ] Code follows project style guidelines
+- [ ] Documentation is updated (if applicable)
+
+**Example:**
+```bash
+# Convert Draft PR to Ready for Review (ONLY after explicit user instruction)
+gh pr ready 123
+
+# Verify PR status after conversion
+gh pr view 123 --json isDraft
+```
+
+**Authorization Comparison:**
+
+| Action | Explicit Instruction | Plan Mode Approval |
+|--------|---------------------|-------------------|
+| Commit | ✅ Authorized | ✅ Authorized |
+| Push | ✅ Authorized | ✅ Authorized |
+| GitHub Comments | ✅ Authorized | ✅ Authorized |
+| Draft PR → Ready | ✅ Authorized | ❌ NOT Authorized |
+
+The following diagram illustrates the Draft PR lifecycle:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Draft: gh pr create --draft
+    Draft --> Draft: Implementation continues
+    Draft --> Draft: CI checks run
+    Draft --> ReadyForReview: User explicitly instructs conversion
+    note right of ReadyForReview: Requires explicit user instruction\nPlan Mode approval NOT sufficient
+    ReadyForReview --> Review: Reviewers notified
+    Review --> Merged: Approved and merged
+    Review --> Draft: Converted back to draft
+    Merged --> [*]
+```
+
 ### PC-5 (MUST): PR Labels
 
 - **MUST** add appropriate labels to every PR
@@ -746,6 +798,7 @@ docs(readme): add installation instructions
 - Address all review comments
 - Ensure all CI checks pass before merge
 - Use three-dot diff (`main...branch`) for PR verification to exclude merge history noise
+- Wait for explicit user instruction before converting Draft PRs to Ready for Review (Plan Mode approval does NOT authorize conversion)
 
 ### ❌ NEVER DO
 - Write PR titles or descriptions in non-English languages
@@ -758,6 +811,7 @@ docs(readme): add installation instructions
 - Force push after review has started (unless explicitly requested)
 - Use rebase or force-push to resolve PR conflicts (use worktree merge instead)
 - Use two-dot diff (`main..branch`) for PR verification (includes merge history noise)
+- Convert Draft PRs to Ready for Review without explicit user instruction (Plan Mode approval does NOT count)
 
 ---
 

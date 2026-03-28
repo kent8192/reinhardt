@@ -1,0 +1,54 @@
+name: Reinhardt Deploy
+
+on:
+  push:
+    branches: [{{ production_branch }}]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+env:
+  TERRAFORM_VERSION: "{{ terraform_version }}"
+
+jobs:
+  dry-run:
+    name: Dry Run
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ "{{" }} env.TERRAFORM_VERSION {{ "}}" }}
+      - name: Reinhardt Deploy Dry Run
+        run: cargo run --bin reinhardt-admin -- deploy --dry-run
+
+  preview:
+    name: Preview Deploy
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    needs: [dry-run]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ "{{" }} env.TERRAFORM_VERSION {{ "}}" }}
+      - name: Preview Deploy
+        run: cargo run --bin reinhardt-admin -- deploy --preview
+        env:
+          PR_NUMBER: ${{ "{{" }} github.event.pull_request.number {{ "}}" }}
+
+  deploy:
+    name: Deploy to Production
+    if: github.ref == 'refs/heads/{{ production_branch }}' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ "{{" }} env.TERRAFORM_VERSION {{ "}}" }}
+      - name: Deploy
+        run: cargo run --bin reinhardt-admin -- deploy --env production

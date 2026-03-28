@@ -241,7 +241,7 @@ impl Request {
 	pub(super) async fn parse_body_internal(&self) -> crate::Result<ParsedData> {
 		// Check cache first
 		{
-			let cache = self.parsed_data.lock().unwrap();
+			let cache = self.parsed_data.lock().unwrap_or_else(|e| e.into_inner());
 			if let Some(data) = &*cache {
 				return Ok(data.clone());
 			}
@@ -262,7 +262,7 @@ impl Request {
 				{
 					Ok(data) => {
 						// Cache the result
-						let mut cache = self.parsed_data.lock().unwrap();
+						let mut cache = self.parsed_data.lock().unwrap_or_else(|e| e.into_inner());
 						*cache = Some(data.clone());
 						return Ok(data);
 					}

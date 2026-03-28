@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.11](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.10...reinhardt-commands@v0.1.0-rc.11) - 2026-03-16
+
+### Documentation
+
+- *(reinhardt-commands)* document --force-empty-state flag and linkme dependency
+
+### Fixed
+
+- *(reinhardt-commands)* add mysql branch to migrate command connection logic
+
+## [0.1.0-rc.10](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.9...reinhardt-commands@v0.1.0-rc.10) - 2026-03-15
+
+### Fixed
+
+- *(commands)* propagate openapi-router feature to reinhardt-commands
+- *(commands)* gate docs banner on openapi-router feature
+
+## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.8...reinhardt-commands@v0.1.0-rc.9) - 2026-03-15
+
+### Fixed
+
+- *(commands)* add features section and fix router types in templates
+- *(commands)* remove redundant features section from restful template
+
+### Styling
+
+- add explanatory comments to remaining #[allow(dead_code)] attributes
+
 ## [0.1.0-rc.8](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.7...reinhardt-commands@v0.1.0-rc.8) - 2026-03-12
 
 ### Fixed

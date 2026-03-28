@@ -117,27 +117,29 @@ impl FilesystemRepository {
 
 	/// Generate Rust code for a migration file
 	fn generate_migration_code(&self, migration: &Migration) -> Result<String> {
-		// Build dependencies vector
+		// Build dependencies vector (tuple elements need .to_string() for String type)
 		let deps: Vec<_> = migration
 			.dependencies
 			.iter()
 			.map(|(app, name)| {
-				quote! { (#app, #name) }
+				quote! { (#app.to_string(), #name.to_string()) }
 			})
 			.collect();
 
-		// Build replaces vector
+		// Build replaces vector (tuple elements need .to_string() for String type)
 		let replaces: Vec<_> = migration
 			.replaces
 			.iter()
 			.map(|(app, name)| {
-				quote! { (#app, #name) }
+				quote! { (#app.to_string(), #name.to_string()) }
 			})
 			.collect();
 
 		let app_label = &migration.app_label;
 		let name = &migration.name;
 		let atomic = migration.atomic;
+		let state_only = migration.state_only;
+		let database_only = migration.database_only;
 
 		// Build initial field token
 		let initial_tokens = match migration.initial {
@@ -157,13 +159,17 @@ impl FilesystemRepository {
 
 			pub fn migration() -> Migration {
 				Migration {
-					app_label: #app_label,
-					name: #name,
+					app_label: #app_label.to_string(),
+					name: #name.to_string(),
 					operations: #operations_code,
 					dependencies: vec![#(#deps),*],
 					atomic: #atomic,
 					replaces: vec![#(#replaces),*],
 					initial: #initial_tokens,
+					state_only: #state_only,
+					database_only: #database_only,
+					swappable_dependencies: vec![],
+					optional_dependencies: vec![],
 				}
 			}
 		};

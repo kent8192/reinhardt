@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use hyper::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE};
+use hyper::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, HeaderValue};
 use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use std::io::Write;
 use std::sync::Arc;
@@ -235,11 +235,10 @@ impl Middleware for GZipMiddleware {
 			response.body = Bytes::from(compressed);
 			response
 				.headers
-				.insert(CONTENT_ENCODING, "gzip".parse().unwrap());
-			response.headers.insert(
-				CONTENT_LENGTH,
-				response.body.len().to_string().parse().unwrap(),
-			);
+				.insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+			if let Ok(len_value) = response.body.len().to_string().parse() {
+				response.headers.insert(CONTENT_LENGTH, len_value);
+			}
 		}
 
 		Ok(response)

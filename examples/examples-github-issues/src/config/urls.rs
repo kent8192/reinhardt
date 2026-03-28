@@ -5,7 +5,7 @@
 
 use std::env;
 
-use async_graphql::{
+use reinhardt::graphql::{
 	MergedObject, MergedSubscription, Schema,
 	http::{GraphQLPlaygroundConfig, playground_source},
 };
@@ -50,7 +50,7 @@ pub async fn graphql_handler(req: Request) -> ViewResult<Response> {
 	let schema = get_schema();
 
 	// Parse request body as GraphQL request
-	let graphql_request: async_graphql::Request = req
+	let graphql_request: reinhardt::graphql::Request = req
 		.json()
 		.map_err(|e| format!("Failed to parse GraphQL request: {}", e))?;
 

@@ -312,6 +312,7 @@ pub struct ModelReflector {
 	/// Table name
 	table_name: String,
 	/// Type ID for runtime type checking
+	// Allow dead_code: stored for future runtime type-safe downcasting in reflection API
 	#[allow(dead_code)]
 	type_id: TypeId,
 }

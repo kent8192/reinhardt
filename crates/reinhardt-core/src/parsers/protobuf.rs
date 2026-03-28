@@ -46,6 +46,7 @@ use super::parser::{ParseResult, ParsedData, Parser};
 #[derive(Debug, Clone, Default)]
 pub struct ProtobufParser {
 	/// Optional schema registry for type resolution
+	// Allow dead_code: schema_registry stored for future schema-aware deserialization; currently only dynamic wire-format parsing is implemented
 	#[allow(dead_code)]
 	schema_registry: HashMap<String, String>,
 }

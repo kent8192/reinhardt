@@ -6,6 +6,7 @@
 use async_trait::async_trait;
 use reinhardt_http::{Request, Response, Result};
 use std::sync::Arc;
+use tracing;
 
 /// Middleware trait for ViewSet processing
 ///
@@ -91,12 +92,24 @@ impl ViewSetMiddleware for AuthenticationMiddleware {
 			// Return 401 Unauthorized or redirect to login page
 			let response = if let Some(login_url) = &self.login_url {
 				// Redirect to login page
-				let mut response = Response::new(hyper::StatusCode::FOUND);
-				response
-					.headers
-					.insert("Location", login_url.parse().unwrap());
-				response.body = "Redirecting to login...".into();
-				response
+				match login_url.parse() {
+					Ok(header_value) => {
+						let mut response = Response::new(hyper::StatusCode::FOUND);
+						response.headers.insert("Location", header_value);
+						response.body = "Redirecting to login...".into();
+						response
+					}
+					Err(e) => {
+						tracing::warn!(
+							login_url = %login_url,
+							error = %e,
+							"Invalid login_url header value, returning 401 instead of redirect"
+						);
+						let mut response = Response::new(hyper::StatusCode::UNAUTHORIZED);
+						response.body = "Authentication required".into();
+						response
+					}
+				}
 			} else {
 				// Return 401 Unauthorized
 				let mut response = Response::new(hyper::StatusCode::UNAUTHORIZED);

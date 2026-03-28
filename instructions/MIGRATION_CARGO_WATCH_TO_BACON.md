@@ -5,7 +5,7 @@ reloading in Reinhardt projects.
 
 ## Overview
 
-As of Reinhardt version 0.1.0-alpha.2 (upcoming), cargo-watch support has been
+As of Reinhardt version 0.1.0-rc.9, cargo-watch support has been
 removed in favor of bacon. Bacon provides a better development experience with:
 
 - **Real-time feedback**: Displays build output and errors immediately
@@ -90,14 +90,14 @@ dependencies = ["install-bacon", "install-nextest"]
 
 ```toml
 [dependencies]
-reinhardt-commands = { version = "0.1.0-alpha.1", features = ["cargo-watch-reload"] }
+reinhardt-commands = { version = "0.1.0-rc.9", features = ["cargo-watch-reload"] }
 ```
 
 **After:**
 
 ```toml
 [dependencies]
-reinhardt-commands = { version = "0.1.0-alpha.2" }
+reinhardt-commands = { version = "0.1.0-rc.9" }
 # No feature flag needed - bacon is used externally
 ```
 

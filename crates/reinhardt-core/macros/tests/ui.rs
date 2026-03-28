@@ -120,3 +120,11 @@ fn test_app_config_fail() {
 	let t = trybuild::TestCases::new();
 	t.compile_fail("tests/ui/app_config/fail/*.rs");
 }
+
+// ===== Validate =====
+
+#[test]
+fn test_validate_macro_fail() {
+	let t = trybuild::TestCases::new();
+	t.compile_fail("tests/ui/validate/fail/*.rs");
+}

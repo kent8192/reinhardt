@@ -20,8 +20,8 @@
 //! ### Presets
 //!
 //! - `minimal` - Core functionality only (routing, DI, params)
-//! - `standard` (default) - Balanced for most projects
-//! - `full` - All features enabled
+//! - `full` (default) - All features enabled
+//! - `standard` - Balanced for most projects
 //! - `api-only` - REST API without templates/forms
 //! - `graphql-server` - GraphQL-focused setup
 //! - `websocket-server` - WebSocket-centric setup
@@ -50,7 +50,7 @@
 //! - `middleware-security` - Security headers (HSTS, XSS Protection, etc.)
 //! - `middleware-rate-limit` - Rate limiting and throttling
 //!
-//! See [docs/FEATURE_FLAGS.md](../docs/FEATURE_FLAGS.md) for detailed documentation.
+//! See [Cargo.toml feature definitions](https://github.com/kent8192/reinhardt/blob/main/Cargo.toml) for detailed documentation.
 //!
 //! ## Quick Example
 //!
@@ -183,14 +183,26 @@ pub mod commands;
 pub mod conf;
 #[cfg(all(feature = "core", not(target_arch = "wasm32")))]
 pub mod core;
+#[cfg(all(feature = "deeplink", not(target_arch = "wasm32")))]
+pub mod deeplink;
 #[cfg(all(feature = "dentdelion", not(target_arch = "wasm32")))]
 pub mod dentdelion;
 #[cfg(all(feature = "di", not(target_arch = "wasm32")))]
 pub mod di;
+#[cfg(all(feature = "dispatch", not(target_arch = "wasm32")))]
+pub mod dispatch;
 #[cfg(all(feature = "forms", not(target_arch = "wasm32")))]
 pub mod forms;
+#[cfg(all(feature = "graphql", not(target_arch = "wasm32")))]
+pub mod graphql;
+#[cfg(all(feature = "grpc", not(target_arch = "wasm32")))]
+pub mod grpc;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod http;
+#[cfg(all(feature = "i18n", not(target_arch = "wasm32")))]
+pub mod i18n;
+#[cfg(all(feature = "mail", not(target_arch = "wasm32")))]
+pub mod mail;
 #[cfg(all(
 	any(feature = "standard", feature = "middleware"),
 	not(target_arch = "wasm32")
@@ -734,7 +746,8 @@ pub use reinhardt_core::signals::{
 #[cfg(all(feature = "core", not(target_arch = "wasm32")))]
 pub use reinhardt_core::validators::{
 	CreditCardValidator, EmailValidator, IBANValidator, IPAddressValidator, PhoneNumberValidator,
-	UrlValidator, ValidationError as ValidatorError, ValidationResult, Validator,
+	UrlValidator, Validate, ValidationError as ValidatorError, ValidationErrors, ValidationResult,
+	Validator,
 };
 
 // Re-export views
@@ -802,6 +815,10 @@ pub use reinhardt_rest::browsable_api;
 // ```
 #[cfg(all(feature = "openapi", not(target_arch = "wasm32")))]
 pub use reinhardt_rest::openapi::*;
+
+// Re-export OpenApiRouter (requires openapi-router feature)
+#[cfg(all(feature = "openapi-router", not(target_arch = "wasm32")))]
+pub use reinhardt_openapi::OpenApiRouter;
 
 // Re-export shortcuts (Django-style convenience functions)
 #[cfg(all(feature = "shortcuts", not(target_arch = "wasm32")))]
@@ -1075,6 +1092,13 @@ pub use reinhardt_websockets::room::RoomManager;
 pub use reinhardt_websockets::{
 	ConsumerContext, Message, WebSocketConsumer, WebSocketError, WebSocketResult,
 };
+
+/// SQL query builder module.
+///
+/// Re-exports [`reinhardt_query`] for building type-safe SQL queries.
+/// Requires `database` feature.
+#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+pub mod query;
 
 /// Database re-exports for Model derive macro generated code.
 ///

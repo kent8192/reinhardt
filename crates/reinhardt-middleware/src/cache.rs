@@ -62,10 +62,11 @@ impl CacheEntry {
 		let mut response = Response::new(status).with_body(self.body.clone());
 
 		for (key, value) in &self.headers {
-			response.headers.insert(
-				hyper::header::HeaderName::try_from(key).unwrap(),
-				value.parse().unwrap(),
-			);
+			if let (Ok(header_name), Ok(header_value)) =
+				(hyper::header::HeaderName::try_from(key), value.parse())
+			{
+				response.headers.insert(header_name, header_value);
+			}
 		}
 
 		// Add cache header

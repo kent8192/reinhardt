@@ -304,7 +304,7 @@ class UserForm(forms.ModelForm):
 ```rust
 // forms.rs
 use serde::{Deserialize, Serialize};
-use validator::Validate;
+use reinhardt::Validate;
 
 #[derive(Deserialize, Serialize, Validate)]
 struct UserForm {

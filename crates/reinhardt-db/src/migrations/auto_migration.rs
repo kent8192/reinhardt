@@ -209,7 +209,8 @@ impl AutoMigrationGenerator {
 	}
 
 	/// Generate rollback operations
-	#[allow(dead_code)] // Planned for future rollback migration feature
+	// Allow dead_code: rollback operation generation planned for future migration reversal feature
+	#[allow(dead_code)]
 	fn generate_rollback(&self, operations: &[Operation]) -> Vec<Operation> {
 		operations
 			.iter()

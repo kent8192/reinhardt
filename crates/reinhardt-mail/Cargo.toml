@@ -40,6 +40,10 @@ tempfile = "3.8"
 testcontainers = { workspace = true }
 once_cell = "1.20"
 rstest = { workspace = true }
+# Workaround for KI-2 (rust-lang/cargo#4242, rust-lang/cargo#15151):
+# Path-only dev-dep (no version) is stripped from published manifest by cargo,
+# avoiding dev-dependency version resolution failure during `cargo publish`.
+# When upstream cargo resolves these issues, replace with `workspace = true`.
 reinhardt-testkit = { path = "../reinhardt-testkit", features = ["testcontainers"] }
 reqwest = { version = "0.12", features = ["json"] }
 futures = { workspace = true }

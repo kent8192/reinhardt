@@ -325,11 +325,11 @@ args = ["llvm-cov", "nextest", "--workspace", "--lib", "--all-features", "--no-f
 # ============================================================================
 
 [tasks.feature-check]
-description = "Check representative feature combinations (26 patterns)"
+description = "Check representative feature combinations (27 patterns)"
 dependencies = ["feature-check-facade", "feature-check-subcrate"]
 
 [tasks.feature-check-facade]
-description = "Check facade crate feature combinations (18 patterns)"
+description = "Check facade crate feature combinations (19 patterns)"
 script_runner = "bash"
 script = '''
 set -e
@@ -351,6 +351,7 @@ combos=(
 	"middleware-all|reinhardt-web|--no-default-features -F minimal,middleware-cors,middleware-compression,middleware-security,middleware-rate-limit"
 	"pages-graphql-ws|reinhardt-web|--no-default-features -F minimal,pages,graphql,websockets,database,db-postgres"
 	"auth-db|reinhardt-web|--no-default-features -F minimal,database,db-postgres,auth"
+	"shortcuts-db|reinhardt-web|--no-default-features -F minimal,database,db-postgres,shortcuts"
 	"admin-forms|reinhardt-web|--no-default-features -F minimal,admin,database,db-postgres,auth"
 	"plugins|reinhardt-web|--no-default-features -F minimal,dentdelion,deeplink,dispatch,grpc"
 	"openapi-router|reinhardt-web|--no-default-features -F minimal,openapi-router,database,db-postgres"

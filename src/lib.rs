@@ -858,9 +858,14 @@ pub use reinhardt_openapi::OpenApiRouter;
 
 // Re-export shortcuts (Django-style convenience functions)
 #[cfg(all(feature = "shortcuts", not(target_arch = "wasm32")))]
-pub use reinhardt_shortcuts::{
-	get_list_or_404, get_object_or_404, redirect, render_html, render_json, render_text,
-};
+pub use reinhardt_shortcuts::{redirect, render_html, render_json, render_text};
+// ORM-integrated shortcuts require database feature
+#[cfg(all(
+	feature = "shortcuts",
+	feature = "database",
+	not(target_arch = "wasm32")
+))]
+pub use reinhardt_shortcuts::{get_list_or_404, get_object_or_404};
 
 // Re-export URL utilities
 #[cfg(not(target_arch = "wasm32"))]

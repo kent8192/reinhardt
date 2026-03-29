@@ -1,0 +1,97 @@
+# Makefile.toml for reinhardt-admin WASM build
+#
+# This file provides cargo-make task definitions for WASM build operations.
+# Install cargo-make: `cargo install cargo-make`
+# Usage: `cargo make <task>`
+
+[config]
+default_to_workspace = false
+skip_core_tasks = true
+
+# ============================================================================
+# WASM Build Tasks
+# ============================================================================
+
+[tasks.wasm-compile-dev]
+description = "Compile WASM binary (debug mode)"
+command = "cargo"
+args = ["build", "-p", "reinhardt-admin", "--target", "wasm32-unknown-unknown"]
+
+[tasks.wasm-bindgen-dev]
+description = "Generate WASM bindings using wasm-pack (debug mode)"
+dependencies = ["wasm-compile-dev"]
+command = "wasm-pack"
+args = [
+	"build",
+	"--target", "web",
+	"--out-dir", "dist-wasm",
+	"--dev",
+	"--no-typescript"
+]
+
+[tasks.wasm-build-dev]
+description = "Build WASM in debug mode"
+dependencies = ["wasm-bindgen-dev"]
+
+[tasks.wasm-compile-release]
+description = "Compile WASM binary (release mode)"
+command = "cargo"
+args = ["build", "-p", "reinhardt-admin", "--target", "wasm32-unknown-unknown", "--release"]
+
+[tasks.wasm-bindgen-release]
+description = "Generate WASM bindings using wasm-pack (release mode)"
+dependencies = ["wasm-compile-release"]
+command = "wasm-pack"
+args = [
+	"build",
+	"--target", "web",
+	"--out-dir", "dist-wasm",
+	"--release"
+]
+
+[tasks.wasm-finalize-release]
+description = "Optimize WASM with wasm-opt"
+script = '''
+if command -v wasm-opt &> /dev/null; then
+	echo "Running wasm-opt..."
+	WASM_FILE="dist-wasm/reinhardt_admin_bg.wasm"
+	wasm-opt -O3 -o "$WASM_FILE.opt" "$WASM_FILE"
+	mv "$WASM_FILE.opt" "$WASM_FILE"
+	echo "✓ WASM optimized"
+else
+	echo "⚠️  wasm-opt not found, skipping optimization"
+fi
+'''
+dependencies = ["wasm-bindgen-release"]
+
+[tasks.wasm-build-release]
+description = "Build WASM in release mode with optimization"
+dependencies = ["wasm-finalize-release"]
+
+# ============================================================================
+# WASM Testing Tasks
+# ============================================================================
+
+[tasks.wasm-test]
+description = "Run WASM tests in headless Chrome"
+command = "wasm-pack"
+args = ["test", "--headless", "--chrome"]
+
+# ============================================================================
+# Clean Tasks
+# ============================================================================
+
+[tasks.wasm-clean]
+description = "Clean WASM build artifacts"
+script = '''
+rm -rf dist-wasm
+echo "✓ Cleaned WASM artifacts"
+'''
+
+[tasks.clean-cache]
+description = "Clean WASM artifacts and incremental build cache"
+script = '''
+rm -rf dist-wasm
+rm -rf target/wasm32-unknown-unknown
+echo "✓ Cleaned WASM artifacts and incremental cache"
+'''

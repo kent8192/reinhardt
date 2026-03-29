@@ -21,11 +21,14 @@ use std::sync::Arc;
 /// to prevent XSS, clickjacking, and other browser-side attacks.
 #[cfg(not(target_arch = "wasm32"))]
 async fn admin_spa_handler(
-	_request: reinhardt_http::Request,
+	request: reinhardt_http::Request,
 ) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
 	let security_headers = crate::server::security::SecurityHeaders::default();
-	let mut response =
-		reinhardt_http::Response::ok().with_header("Content-Type", "text/html; charset=utf-8");
+	let csrf_token = crate::server::security::generate_csrf_token();
+	let csrf_cookie = crate::server::security::build_csrf_cookie(&csrf_token, request.is_secure);
+	let mut response = reinhardt_http::Response::ok()
+		.with_header("Content-Type", "text/html; charset=utf-8")
+		.append_header("Set-Cookie", &csrf_cookie);
 	for (name, value) in security_headers.to_header_map() {
 		response = response.with_header(name, &value);
 	}
@@ -765,6 +768,73 @@ mod tests {
 			content_type.contains("javascript"),
 			"JS handler should return application/javascript content type, got: {}",
 			content_type
+		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	#[tokio::test]
+	async fn test_admin_spa_handler_sets_csrf_cookie() {
+		// Arrange
+		let request = reinhardt_http::Request::builder()
+			.method(hyper::Method::GET)
+			.uri("/")
+			.build()
+			.unwrap();
+
+		// Act
+		let response = admin_spa_handler(request).await.unwrap();
+
+		// Assert
+		let set_cookie = response
+			.headers
+			.get("set-cookie")
+			.expect("Response should include Set-Cookie header")
+			.to_str()
+			.unwrap();
+		assert!(
+			set_cookie.contains("__csrf_token="),
+			"Cookie should contain CSRF token name, got: {}",
+			set_cookie
+		);
+		assert!(
+			set_cookie.contains("SameSite=Strict"),
+			"Cookie should have SameSite=Strict, got: {}",
+			set_cookie
+		);
+		assert!(
+			set_cookie.contains("Path=/admin"),
+			"Cookie should be scoped to /admin, got: {}",
+			set_cookie
+		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	#[tokio::test]
+	async fn test_admin_spa_handler_csrf_cookie_no_secure_for_http() {
+		// Arrange
+		let request = reinhardt_http::Request::builder()
+			.method(hyper::Method::GET)
+			.uri("/")
+			.build()
+			.unwrap();
+		// is_secure defaults to false
+
+		// Act
+		let response = admin_spa_handler(request).await.unwrap();
+
+		// Assert
+		let set_cookie = response
+			.headers
+			.get("set-cookie")
+			.expect("Response should include Set-Cookie header")
+			.to_str()
+			.unwrap();
+		assert!(
+			!set_cookie.contains("Secure"),
+			"HTTP request should not set Secure flag, got: {}",
+			set_cookie
 		);
 	}
 }

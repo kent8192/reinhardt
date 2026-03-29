@@ -64,6 +64,7 @@ database = [
   "reinhardt-query",
   "linkme",
   "ctor",
+  "reinhardt-auth?/database",
 ]
 api = [
   "reinhardt-rest",

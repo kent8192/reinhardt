@@ -216,7 +216,7 @@ pub use token_blacklist::{
 };
 #[cfg(any(feature = "jwt", feature = "token"))]
 pub use token_rotation::{AutoTokenRotationManager, TokenRotationConfig, TokenRotationRecord};
-#[cfg(feature = "database")]
+#[cfg(all(feature = "database", any(feature = "jwt", feature = "token")))]
 pub use token_storage::DatabaseTokenStorage;
 #[cfg(any(feature = "jwt", feature = "token"))]
 pub use token_storage::{

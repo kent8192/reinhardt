@@ -20,7 +20,7 @@ Thank you for your interest in contributing to Reinhardt! This document provides
 
 ### Prerequisites
 
-- Rust 1.91.1+ (2024 Edition required)
+- Rust 1.94.1+ (2024 Edition required)
 - Docker (required for TestContainers-based integration tests)
 - PostgreSQL (optional - can use TestContainers instead)
 

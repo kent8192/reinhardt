@@ -225,7 +225,7 @@ impl DatabaseMigrationExecutor {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_db::migrations::executor::DatabaseMigrationExecutor;
 	/// use reinhardt_db::backends::DatabaseConnection;
 	///
@@ -234,7 +234,6 @@ impl DatabaseMigrationExecutor {
 	/// let executor = DatabaseMigrationExecutor::new(db);
 	/// let exists = executor.table_exists("users").await.unwrap();
 	/// # }
-	/// ```
 	async fn table_exists(&self, table_name: &str) -> Result<bool> {
 		use reinhardt_query::prelude::{
 			Alias, Cond, Expr, ExprTrait, MySqlQueryBuilder, PostgresQueryBuilder, Query,

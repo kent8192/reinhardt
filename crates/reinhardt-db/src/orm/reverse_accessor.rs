@@ -161,9 +161,8 @@ where
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let tweets = accessor.all().await?;
-	/// ```
 	pub async fn all(&self) -> Result<Vec<T>, String> {
 		let mut query = Query::select();
 		query
@@ -207,9 +206,8 @@ where
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let total_tweets = accessor.count().await?;
-	/// ```
 	pub async fn count(&self) -> Result<usize, String> {
 		let query = Query::select()
 			.from(Alias::new(T::table_name()))
@@ -243,9 +241,8 @@ where
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let tweets = accessor.limit(10).all().await?;
-	/// ```
 	pub fn limit(mut self, limit: usize) -> Self {
 		self.limit = Some(limit);
 		self
@@ -257,9 +254,8 @@ where
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let tweets = accessor.offset(20).limit(10).all().await?;
-	/// ```
 	pub fn offset(mut self, offset: usize) -> Self {
 		self.offset = Some(offset);
 		self
@@ -271,10 +267,9 @@ where
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// // Page 3, 10 items per page (offset=20, limit=10)
 	/// let tweets = accessor.paginate(3, 10).all().await?;
-	/// ```
 	pub fn paginate(self, page: usize, page_size: usize) -> Self {
 		let offset = page.saturating_sub(1) * page_size;
 		self.offset(offset).limit(page_size)

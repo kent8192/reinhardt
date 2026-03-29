@@ -167,13 +167,12 @@ impl Engine {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_db::orm::Engine;
 	///
 	/// # tokio::runtime::Runtime::new().unwrap().block_on(async {
 	/// let engine = Engine::new("sqlite::memory:").await.unwrap();
 	/// # });
-	/// ```
 	///
 	/// **Note:** This requires the appropriate sqlx driver feature to be enabled.
 	/// For simpler usage, see `DatabaseEngine::from_sqlite` or other database-specific constructors.
@@ -271,7 +270,7 @@ impl DatabaseEngine {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 	/// use reinhardt_db::orm::engine::DatabaseEngine;
 	/// use reinhardt_db::reinhardt_db::backends::drivers::{DatabaseConnection, DatabaseType};
@@ -281,7 +280,6 @@ impl DatabaseEngine {
 	/// // Engine is ready to execute queries
 	/// # Ok(())
 	/// # }
-	/// ```
 	pub fn new(connection: DatabaseConnection, db_type: DatabaseType) -> Self {
 		Self {
 			connection,

@@ -47,14 +47,13 @@ pub use traits::{Comparable, Date, DateTime, DateTimeType, NumericType, StringTy
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// QuerySet::<User>::new()
 ///     .group_by(|f| {
 ///         GroupByFields::new()
 ///             .add(&f.user_id)
 ///             .add(&f.category)
 ///     })
-/// ```
 #[derive(Debug, Clone)]
 pub struct GroupByFields {
 	paths: Vec<String>,

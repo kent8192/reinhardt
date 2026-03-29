@@ -34,12 +34,11 @@ impl<S, C, T> AssociationCollection<S, C, T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let proxy = AssociationCollection::new(
 	///     |user: &User| &user.orders,
 	///     |order: &Order| &order.product_name
 	/// );
-	/// ```
 	pub fn new<F1, F2>(collection_getter: F1, attribute_getter: F2) -> Self
 	where
 		F1: Fn(&S) -> &Vec<C> + 'static,

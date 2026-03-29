@@ -203,13 +203,27 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// # use reinhardt_db::orm::expressions::FieldRef;
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// // String literal
 	/// User::objects().filter("email", FilterOperator::Eq, FilterValue::String("alice@example.com".to_string()))
 	///
 	/// // Type-safe FieldRef
 	/// User::objects().filter(User::field_email(), FilterOperator::Eq, FilterValue::String("alice@example.com".to_string()))
-	/// ```
 	pub fn filter<F: Into<String>>(
 		&self,
 		field: F,
@@ -224,12 +238,25 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let users = User::objects()
 	///     .filter_by(User::field_name().eq("Alice"))
 	///     .all(&db)
 	///     .await?;
-	/// ```
 	pub fn filter_by(&self, filter: super::query::Filter) -> QuerySet<M> {
 		QuerySet::new().filter(filter)
 	}
@@ -262,9 +289,22 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let users = User::objects().limit(10).all().await?;
-	/// ```
 	pub fn limit(&self, limit: usize) -> QuerySet<M> {
 		QuerySet::new().limit(limit)
 	}
@@ -277,7 +317,26 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// #     salary: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     department: String,
+	/// #     #[field(max_length = 255)]
+	/// #     created_at: String,
+	/// # }
 	/// // Ascending by name
 	/// let users = User::objects().order_by(&["name"]).all().await?;
 	///
@@ -286,7 +345,6 @@ impl<M: Model> Manager<M> {
 	///
 	/// // Multiple fields
 	/// let users = User::objects().order_by(&["department", "-salary"]).all().await?;
-	/// ```
 	pub fn order_by(&self, fields: &[&str]) -> QuerySet<M> {
 		QuerySet::new().order_by(fields)
 	}
@@ -298,7 +356,21 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// use reinhardt_db::orm::annotation::{Annotation, AnnotationValue};
 	/// use reinhardt_db::orm::aggregation::Aggregate;
 	///
@@ -307,7 +379,6 @@ impl<M: Model> Manager<M> {
 	///         AnnotationValue::Aggregate(Aggregate::count(Some("orders")))))
 	///     .all()
 	///     .await?;
-	/// ```
 	pub fn annotate(&self, annotation: super::annotation::Annotation) -> QuerySet<M> {
 		QuerySet::new().annotate(annotation)
 	}
@@ -319,9 +390,22 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let users = User::objects().defer(&["bio", "profile_picture"]).all().await?;
-	/// ```
 	pub fn defer(&self, fields: &[&str]) -> QuerySet<M> {
 		QuerySet::new().defer(fields)
 	}
@@ -333,9 +417,22 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let users = User::objects().only(&["id", "username"]).all().await?;
-	/// ```
 	pub fn only(&self, fields: &[&str]) -> QuerySet<M> {
 		QuerySet::new().only(fields)
 	}
@@ -347,9 +444,22 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let user_data = User::objects().values(&["id", "username", "email"]).all().await?;
-	/// ```
 	pub fn values(&self, fields: &[&str]) -> QuerySet<M> {
 		QuerySet::new().values(fields)
 	}
@@ -361,9 +471,22 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let posts = Post::objects().select_related(&["author", "category"]).all().await?;
-	/// ```
 	pub fn select_related(&self, fields: &[&str]) -> QuerySet<M> {
 		QuerySet::new().select_related(fields)
 	}
@@ -375,9 +498,22 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let users = User::objects().offset(20).all().await?;
-	/// ```
 	pub fn offset(&self, offset: usize) -> QuerySet<M> {
 		QuerySet::new().offset(offset)
 	}
@@ -389,9 +525,23 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// #     age: i64,
+	/// # }
 	/// let users = User::objects().paginate(3, 10).all().await?;  // page 3, 10 items per page
-	/// ```
 	pub fn paginate(&self, page: usize, page_size: usize) -> QuerySet<M> {
 		QuerySet::new().paginate(page, page_size)
 	}
@@ -403,9 +553,22 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let posts = Post::objects().prefetch_related(&["comments", "tags"]).all().await?;
-	/// ```
 	pub fn prefetch_related(&self, fields: &[&str]) -> QuerySet<M> {
 		QuerySet::new().prefetch_related(fields)
 	}
@@ -417,9 +580,22 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let user_data = User::objects().values_list(&["id", "username"]).all().await?;
-	/// ```
 	pub fn values_list(&self, fields: &[&str]) -> QuerySet<M> {
 		QuerySet::new().values_list(fields)
 	}
@@ -431,9 +607,22 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let posts = Post::objects().filter_array_overlap("tags", &["rust", "web"]).all().await?;
-	/// ```
 	pub fn filter_array_overlap(&self, field: &str, values: &[&str]) -> QuerySet<M> {
 		QuerySet::new().filter_array_overlap(field, values)
 	}
@@ -445,9 +634,22 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let posts = Post::objects().filter_array_contains("tags", &["rust", "web"]).all().await?;
-	/// ```
 	pub fn filter_array_contains(&self, field: &str, values: &[&str]) -> QuerySet<M> {
 		QuerySet::new().filter_array_contains(field, values)
 	}
@@ -459,9 +661,22 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let users = User::objects().filter_jsonb_contains("metadata", r#"{"role": "admin"}"#).all().await?;
-	/// ```
 	pub fn filter_jsonb_contains(&self, field: &str, json: &str) -> QuerySet<M> {
 		QuerySet::new().filter_jsonb_contains(field, json)
 	}
@@ -473,9 +688,22 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let users = User::objects().filter_jsonb_key_exists("metadata", "email").all().await?;
-	/// ```
 	pub fn filter_jsonb_key_exists(&self, field: &str, key: &str) -> QuerySet<M> {
 		QuerySet::new().filter_jsonb_key_exists(field, key)
 	}
@@ -487,9 +715,22 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let events = Event::objects().filter_range_contains("date_range", "2024-01-15").all().await?;
-	/// ```
 	pub fn filter_range_contains(&self, field: &str, value: &str) -> QuerySet<M> {
 		QuerySet::new().filter_range_contains(field, value)
 	}
@@ -500,7 +741,21 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let authors = Author::objects()
 	///     .filter_in_subquery("id", |subq: QuerySet<Book>| {
 	///         subq.filter(Filter::new("price", FilterOperator::Gt, FilterValue::Int(1500)))
@@ -508,7 +763,6 @@ impl<M: Model> Manager<M> {
 	///     })
 	///     .all()
 	///     .await?;
-	/// ```
 	pub fn filter_in_subquery<R: super::Model, F>(&self, field: &str, subquery_fn: F) -> QuerySet<M>
 	where
 		F: FnOnce(QuerySet<R>) -> QuerySet<R>,
@@ -522,7 +776,23 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// #     #[field(max_length = 50)]
+	/// #     status: String,
+	/// # }
 	/// let authors = Author::objects()
 	///     .filter_not_in_subquery("id", |subq: QuerySet<Book>| {
 	///         subq.filter(Filter::new("status", FilterOperator::Eq, FilterValue::String("archived".into())))
@@ -530,7 +800,6 @@ impl<M: Model> Manager<M> {
 	///     })
 	///     .all()
 	///     .await?;
-	/// ```
 	pub fn filter_not_in_subquery<R: super::Model, F>(
 		&self,
 		field: &str,
@@ -548,14 +817,28 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// # use reinhardt_db::orm::expressions::FieldRef;
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let authors = Author::objects()
 	///     .filter_exists(|subq: QuerySet<Book>| {
 	///         subq.filter(Filter::new("author_id", FilterOperator::Eq, FilterValue::FieldRef(F::new("authors.id"))))
 	///     })
 	///     .all()
 	///     .await?;
-	/// ```
 	pub fn filter_exists<R: super::Model, F>(&self, subquery_fn: F) -> QuerySet<M>
 	where
 		F: FnOnce(QuerySet<R>) -> QuerySet<R>,
@@ -569,14 +852,28 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// # use reinhardt_db::orm::expressions::FieldRef;
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let authors = Author::objects()
 	///     .filter_not_exists(|subq: QuerySet<Book>| {
 	///         subq.filter(Filter::new("author_id", FilterOperator::Eq, FilterValue::FieldRef(F::new("authors.id"))))
 	///     })
 	///     .all()
 	///     .await?;
-	/// ```
 	pub fn filter_not_exists<R: super::Model, F>(&self, subquery_fn: F) -> QuerySet<M>
 	where
 		F: FnOnce(QuerySet<R>) -> QuerySet<R>,
@@ -590,13 +887,27 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// #     salary: i64,
+	/// # }
 	/// let high_earners = CTE::new("high_earners", "SELECT * FROM employees WHERE salary > 100000");
 	/// let results = Employee::objects()
 	///     .with_cte(high_earners)
 	///     .all()
 	///     .await?;
-	/// ```
 	pub fn with_cte(&self, cte: super::cte::CTE) -> QuerySet<M> {
 		QuerySet::new().with_cte(cte)
 	}
@@ -607,12 +918,25 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let articles = Article::objects()
 	///     .full_text_search("search_vector", "rust programming")
 	///     .all()
 	///     .await?;
-	/// ```
 	pub fn full_text_search(&self, field: &str, query: &str) -> QuerySet<M> {
 		QuerySet::new().full_text_search(field, query)
 	}
@@ -623,7 +947,21 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let authors = Author::objects()
 	///     .annotate_subquery::<Book, _>("book_count", |subq| {
 	///         subq.filter("author_id", FilterOperator::Eq, FilterValue::OuterRef(OuterRef::new("authors.id")))
@@ -631,7 +969,6 @@ impl<M: Model> Manager<M> {
 	///     })
 	///     .all()
 	///     .await?;
-	/// ```
 	pub fn annotate_subquery<R, F>(&self, name: &str, builder: F) -> QuerySet<M>
 	where
 		R: super::Model + 'static,
@@ -646,12 +983,25 @@ impl<M: Model> Manager<M> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// let mut pk_values = HashMap::new();
 	/// pk_values.insert("post_id".to_string(), PkValue::Int(1));
 	/// pk_values.insert("tag_id".to_string(), PkValue::Int(5));
 	/// let post_tag = PostTag::objects().get_composite(&pk_values).await?;
-	/// ```
 	pub async fn get_composite(
 		&self,
 		pk_values: &std::collections::HashMap<String, super::composite_pk::PkValue>,

@@ -84,7 +84,7 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_db::orm::Model;
 	///
 	/// struct User {
@@ -101,7 +101,6 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 	///         ]
 	///     }
 	/// }
-	/// ```
 	fn field_metadata() -> Vec<super::inspection::FieldInfo> {
 		Vec::new()
 	}

@@ -28,12 +28,11 @@ impl<S, A, T> AssociationProxy<S, A, T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let proxy = AssociationProxy::new(
 	///     |user: &User| &user.address,
 	///     |address: &Address| &address.city
 	/// );
-	/// ```
 	pub fn new<F1, F2>(association_getter: F1, attribute_getter: F2) -> Self
 	where
 		F1: Fn(&S) -> &A + 'static,

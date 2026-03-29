@@ -183,9 +183,8 @@ where
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// accessor.add(&group).await?;
-	/// ```
 	pub async fn add(&self, target: &T) -> Result<(), String> {
 		let target_id = target
 			.primary_key()
@@ -229,9 +228,8 @@ where
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// accessor.remove(&group).await?;
-	/// ```
 	pub async fn remove(&self, target: &T) -> Result<(), String> {
 		let target_id = target
 			.primary_key()
@@ -265,9 +263,8 @@ where
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let followers = accessor.limit(10).all().await?;
-	/// ```
 	pub fn limit(mut self, limit: usize) -> Self {
 		self.limit = Some(limit);
 		self
@@ -279,9 +276,8 @@ where
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let followers = accessor.offset(20).limit(10).all().await?;
-	/// ```
 	pub fn offset(mut self, offset: usize) -> Self {
 		self.offset = Some(offset);
 		self
@@ -293,10 +289,9 @@ where
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// // Page 3, 10 items per page (offset=20, limit=10)
 	/// let followers = accessor.paginate(3, 10).all().await?;
-	/// ```
 	pub fn paginate(self, page: usize, page_size: usize) -> Self {
 		let offset = page.saturating_sub(1) * page_size;
 		self.offset(offset).limit(page_size)
@@ -313,9 +308,8 @@ where
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let total_followers = accessor.count().await?;
-	/// ```
 	pub async fn count(&self) -> Result<usize, String> {
 		let mut query = Query::select();
 		query
@@ -355,9 +349,8 @@ where
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let groups = accessor.all().await?;
-	/// ```
 	pub async fn all(&self) -> Result<Vec<T>, String> {
 		let mut query = Query::select();
 		query.from(Alias::new(T::table_name()));
@@ -426,9 +419,8 @@ where
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// accessor.clear().await?;
-	/// ```
 	pub async fn clear(&self) -> Result<(), String> {
 		let query = Query::delete()
 			.from_table(Alias::new(&self.through_table))
@@ -464,9 +456,8 @@ where
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// accessor.set(&[group1, group2, group3]).await?;
-	/// ```
 	pub async fn set(&self, targets: &[T]) -> Result<(), String> {
 		// Use transaction for atomicity
 		let mut tx = self.db.begin().await.map_err(|e| e.to_string())?;
@@ -546,7 +537,21 @@ where
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_core::macros::model;
+	/// # use reinhardt_db::orm::Model;
+	/// # use serde::{Serialize, Deserialize};
+	/// #
+	/// # #[model(app_label = "test", table_name = "users")]
+	/// # #[derive(Serialize, Deserialize)]
+	/// # struct User {
+	/// #     #[field(primary_key = true)]
+	/// #     id: i64,
+	/// #     #[field(max_length = 255)]
+	/// #     name: String,
+	/// #     #[field(max_length = 255)]
+	/// #     email: String,
+	/// # }
 	/// // Find all rooms where a specific user is a member
 	/// let user = User::find_by_id(&db, user_id).await?;
 	/// let rooms = ManyToManyAccessor::<DMRoom, User>::filter_by_target(
@@ -555,7 +560,6 @@ where
 	///     &user,
 	///     db.clone()
 	/// ).await?;
-	/// ```
 	///
 	/// SQL equivalent:
 	/// ```sql

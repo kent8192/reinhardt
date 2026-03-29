@@ -446,11 +446,10 @@ impl<T: Model> SelectQuery<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let query1 = select::<User>().filter(User::is_active.eq(true));
 	/// let query2 = select::<User>().filter(User::is_admin.eq(true));
 	/// let combined = query1.union(query2);
-	/// ```
 	pub fn union(self, other: SelectQuery<T>) -> CombinedQuery {
 		CombinedQuery::new(self.to_sql()).union(other.to_sql())
 	}
@@ -462,11 +461,10 @@ impl<T: Model> SelectQuery<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let query1 = select::<User>().filter(User::is_active.eq(true));
 	/// let query2 = select::<User>().filter(User::is_admin.eq(true));
 	/// let combined = query1.union_all(query2);
-	/// ```
 	pub fn union_all(self, other: SelectQuery<T>) -> CombinedQuery {
 		CombinedQuery::new(self.to_sql()).union_all(other.to_sql())
 	}
@@ -478,11 +476,10 @@ impl<T: Model> SelectQuery<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let query1 = select::<User>().filter(User::is_active.eq(true));
 	/// let query2 = select::<User>().filter(User::department.eq("Engineering"));
 	/// let combined = query1.intersect(query2);  // Active engineers
-	/// ```
 	pub fn intersect(self, other: SelectQuery<T>) -> CombinedQuery {
 		CombinedQuery::new(self.to_sql()).intersect(other.to_sql())
 	}
@@ -494,11 +491,10 @@ impl<T: Model> SelectQuery<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let query1 = select::<User>();  // All users
 	/// let query2 = select::<User>().filter(User::is_deleted.eq(true));  // Deleted users
 	/// let combined = query1.except(query2);  // Active users only
-	/// ```
 	pub fn except(self, other: SelectQuery<T>) -> CombinedQuery {
 		CombinedQuery::new(self.to_sql()).except(other.to_sql())
 	}

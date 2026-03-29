@@ -803,7 +803,6 @@ impl ProjectState {
 	///
 	/// let pk_type = state.get_primary_key_type("myapp", "User");
 	/// assert_eq!(pk_type, FieldType::Integer);
-	/// ```
 	fn get_primary_key_type(&self, app_label: &str, model_name: &str) -> super::FieldType {
 		// JSON update
 		if let Some(model_state) = self.get_model(app_label, model_name) {

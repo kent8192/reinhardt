@@ -20,7 +20,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_db::migrations::schema_editor::SchemaEditor;
 //! use reinhardt_db::backends::{DatabaseConnection, DatabaseType};
 //!
@@ -32,7 +32,6 @@
 //!
 //! // Commit all changes atomically
 //! editor.finish().await?;
-//! ```
 
 use super::Result;
 use crate::backends::{

@@ -52,14 +52,13 @@ impl SqlConditionParser {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let q = SqlConditionParser::parse("age > 18");
 	/// let q = SqlConditionParser::parse("name LIKE '%John%'");
 	/// let q = SqlConditionParser::parse("email IS NOT NULL");
 	/// let q = SqlConditionParser::parse("status IN ('active', 'pending')");
 	/// let q = SqlConditionParser::parse("age BETWEEN 18 AND 65");
 	/// let q = SqlConditionParser::parse("active = true AND verified = true");
-	/// ```
 	pub fn parse(sql: &str) -> Q {
 		let trimmed = sql.trim();
 

@@ -72,7 +72,22 @@ impl FieldRef {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
+/// # use reinhardt_core::macros::model;
+/// # use reinhardt_db::orm::Model;
+/// # use serde::{Serialize, Deserialize};
+/// # use reinhardt_db::orm::expressions::FieldRef;
+/// #
+/// # #[model(app_label = "test", table_name = "users")]
+/// # #[derive(Serialize, Deserialize)]
+/// # struct User {
+/// #     #[field(primary_key = true)]
+/// #     id: i64,
+/// #     #[field(max_length = 255)]
+/// #     name: String,
+/// #     #[field(max_length = 255)]
+/// #     email: String,
+/// # }
 /// use reinhardt_db::orm::query_fields::comparison::*;
 ///
 /// // u1.id < u2.id
@@ -81,7 +96,6 @@ impl FieldRef {
 ///     FieldRef::field_with_alias("u2".to_string(), vec!["id".to_string()]),
 ///     ComparisonOperator::Lt,
 /// );
-/// ```
 #[derive(Debug, Clone)]
 pub struct FieldComparison {
 	/// Left-hand side field reference

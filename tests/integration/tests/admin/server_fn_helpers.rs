@@ -1,6 +1,6 @@
 //! Shared test helpers for admin server function integration tests
 //!
-//! Provides helper functions to construct `ServerFnRequest`, `AuthUser<DefaultUser>`,
+//! Provides helper functions to construct `ServerFnRequest`, `AdminAuthenticatedUser`,
 //! and a permission-granting ModelAdmin for testing server functions.
 
 use reinhardt_admin::core::{AdminDatabase, AdminSite, AdminUser, ModelAdmin};
@@ -66,8 +66,8 @@ pub fn make_staff_user() -> AdminDefaultUser {
 
 /// Creates an `AdminAuthenticatedUser` with staff privileges for testing.
 ///
-/// Wraps an `AdminDefaultUser` in `Arc<dyn AdminUser>` to match the
-/// type-erased `AdminAuthenticatedUser` expected by admin server functions.
+/// Wraps the staff user in `Arc<dyn AdminUser>` to match the type-erased
+/// authentication used by admin server functions.
 pub fn make_auth_user() -> AdminAuthenticatedUser {
 	AdminAuthenticatedUser(Arc::new(make_staff_user()))
 }

@@ -125,7 +125,7 @@ impl ServerFnRouterExt for ServerRouter {
 				// (e.g., for CSRF double-submit cookie pattern).
 				if let Some(cookies) = extensions.remove::<ResponseCookies>() {
 					for cookie in cookies.cookies() {
-						response = response.with_header("Set-Cookie", cookie);
+						response = response.append_header("Set-Cookie", cookie);
 					}
 				}
 

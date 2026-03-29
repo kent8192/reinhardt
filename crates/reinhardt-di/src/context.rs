@@ -420,19 +420,33 @@ impl InjectionContext {
 	/// The forked context shares the same singleton scope but has a fresh
 	/// request scope. When the `params` feature is enabled, the HTTP request
 	/// and its path parameters are made available for parameter extraction.
-	#[allow(unused_variables)] // `request` is unused when `params` feature is disabled
+	///
+	/// The HTTP request is stored in both the dedicated `request` field
+	/// (for [`get_http_request()`](Self::get_http_request)) and the
+	/// `request_scope` (for [`get_request::<HttpRequest>()`](Self::get_request)),
+	/// ensuring that `Injectable` types such as `ServerFnRequest` can
+	/// retrieve it via either accessor.
 	pub fn fork_for_request(&self, request: HttpRequest) -> InjectionContext {
+		let request_arc = Arc::new(request);
+
 		#[cfg(feature = "params")]
 		let param_context = Some(Arc::new(ParamContext::with_path_params(
-			request.path_params.clone(),
+			request_arc.path_params.clone(),
 		)));
 
-		self.fork_inner(
+		let ctx = self.fork_inner(
 			#[cfg(feature = "params")]
-			Some(Arc::new(request)),
+			Some(Arc::clone(&request_arc)),
 			#[cfg(feature = "params")]
 			param_context,
-		)
+		);
+
+		// Also register in request_scope so that Injectable types
+		// (e.g. ServerFnRequest, ServerFnBody) can retrieve it via
+		// get_request::<HttpRequest>()
+		ctx.set_request_arc(request_arc);
+
+		ctx
 	}
 
 	/// Creates a per-request fork of this context without an HTTP request.
@@ -781,5 +795,29 @@ mod tests {
 		let http_req = forked.get_http_request();
 		assert!(http_req.is_some());
 		assert_eq!(http_req.unwrap().method, hyper::Method::POST);
+	}
+
+	#[rstest]
+	fn test_fork_for_request_registers_http_request_in_request_scope() {
+		// Arrange
+		let singleton_scope = Arc::new(SingletonScope::new());
+		let ctx = InjectionContext::builder(singleton_scope).build();
+
+		let request = HttpRequest::builder()
+			.method(hyper::Method::POST)
+			.uri("/admin/api/server_fn/get_dashboard")
+			.build()
+			.unwrap();
+
+		// Act
+		let forked = ctx.fork_for_request(request);
+
+		// Assert - HTTP request is retrievable via get_request::<HttpRequest>()
+		// This is the accessor used by Injectable types like ServerFnRequest
+		let req_from_scope: Option<Arc<HttpRequest>> = forked.get_request();
+		assert!(req_from_scope.is_some());
+		let req = req_from_scope.unwrap();
+		assert_eq!(req.method, hyper::Method::POST);
+		assert_eq!(req.uri.path(), "/admin/api/server_fn/get_dashboard");
 	}
 }

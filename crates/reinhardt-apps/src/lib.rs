@@ -29,11 +29,11 @@
 //! ## Quick Start
 //!
 //! ```rust,ignore
-//! use reinhardt_apps::{ApplicationBuilder, AppConfig, Settings};
+//! use reinhardt_apps::{ApplicationBuilder, AppConfig};
 //!
 //! // Build an application with multiple apps
 //! let app = ApplicationBuilder::new()
-//!     .settings(Settings::default())
+//!     .add_setting("DEBUG", "true")
 //!     .add_app(AppConfig::new("users", "myproject.users"))
 //!     .add_app(AppConfig::new("blog", "myproject.blog"))
 //!     .build()

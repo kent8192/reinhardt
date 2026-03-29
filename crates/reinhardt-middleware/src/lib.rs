@@ -63,7 +63,7 @@
 //!
 //! ```rust,ignore
 //! use reinhardt_middleware::{LoggingMiddleware, CsrfMiddleware};
-//! use reinhardt_core::types::MiddlewareChain;
+//! use reinhardt_middleware::MiddlewareChain;
 //! use std::sync::Arc;
 //!
 //! // Create individual middleware instances

@@ -509,6 +509,31 @@ let auth = JwtAuth::new(secret_key);
 // Protect endpoints with IsAuthenticated
 ```
 
+**Database Models** (requires `database` feature):
+
+- `AuthPermission` — Database-backed permission model (`auth_permission` table).
+  Fields: `id` (UUID), `name`, `codename`, `app_label`.
+- `Group` — User group model (`auth_group` table) with conditional `#[model]` support.
+  Fields: `id` (UUID), `name`, `description`.
+
+**Group Management:**
+
+- `GroupManager` — In-memory group management with permission assignment.
+- `register_group_manager(Arc<GroupManager>)` — Register a global `GroupManager`.
+  Once registered, `PermissionsMixin::get_group_permissions()` automatically resolves
+  group permissions.
+- `get_group_manager()` — Retrieve the global `GroupManager`.
+
+**PermissionsMixin Integration:**
+
+- `user_permissions(&self) -> &[String]` — Direct user permissions
+- `groups(&self) -> &[String]` — User's group memberships
+- `get_group_permissions(&self) -> HashSet<String>` — Resolves permissions from groups
+  via global `GroupManager` (returns empty set if no manager registered)
+- `has_perm(&str) -> bool` — Check single permission (superuser always true)
+- `has_perms(&[&str]) -> bool` — Check multiple permissions (AND)
+- `has_module_perms(&str) -> bool` — Check app-level permissions
+
 **Documentation:**
 
 - [Module documentation](https://docs.rs/reinhardt-auth) (available after crates.io publish)

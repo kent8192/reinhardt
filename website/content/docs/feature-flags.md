@@ -236,10 +236,12 @@ reinhardt = {
 
 #### database
 
-Enables general database functionality.
+Enables general database functionality. Also enables database-backed models in
+`reinhardt-auth`: `AuthPermission` (permission model) and `Group` (group model
+with `#[model]` support).
 
 ```toml
-features = ["database"]  # Includes: ORM, migrations, contenttypes
+features = ["database"]  # Includes: ORM, migrations, contenttypes, auth models
 ```
 
 #### Database-Specific

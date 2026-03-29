@@ -204,6 +204,38 @@ age: i32,
 
 **Supported DBMS**: All **SQL Output**: `CHECK (age >= 0 AND age <= 150)`
 
+### Model Processing Control
+
+#### `skip: bool`
+
+Completely excludes a field from model processing. The field is not included in
+type validation, metadata, registration, getter/setter generation, or constructor
+parameters. Skipped fields are initialized with `Default::default()`.
+
+Used by the `#[user]` macro for non-database cache fields (e.g., `Vec<String>`
+permissions) when combined with `#[model]`.
+
+```rust
+#[field(skip = true)]
+cached_data: Vec<String>,
+```
+
+**Supported DBMS**: All (meta-attribute) **SQL Output**: None — field is excluded from schema
+
+#### `skip_getter: bool`
+
+Skips getter and setter method generation for this field. The field still
+participates in model processing (type validation, metadata, constructor).
+
+Used by the `#[user]` macro to avoid conflicts with trait method signatures.
+
+```rust
+#[field(skip_getter = true)]
+password_hash: Option<String>,
+```
+
+**Supported DBMS**: All (meta-attribute) **SQL Output**: None
+
 ### Relations
 
 #### `foreign_key: Type or &str`
@@ -236,6 +268,73 @@ user: ForeignKeyField<User>,
 ```
 
 **Supported DBMS**: All **SQL Output**: `ON DELETE CASCADE`
+
+#### Many-to-Many Relationships
+
+Use `ManyToManyField<Source, Target>` with `#[rel(many_to_many, ...)]` for
+bidirectional N:N relationships. An intermediate table is auto-generated.
+
+```rust
+use reinhardt::db::associations::ManyToManyField;
+
+#[model(app_label = "blog", table_name = "blog_article")]
+pub struct Article {
+    #[field(primary_key = true)]
+    pub id: i64,
+
+    #[serde(skip, default)]
+    #[rel(many_to_many, related_name = "articles")]
+    pub tags: ManyToManyField<Article, Tag>,
+}
+```
+
+**Required attributes:**
+- `related_name` — reverse accessor name on the target model
+
+**Intermediate table:** Named `{app_label}_{source_model}_{field_name}`
+(e.g., `blog_article_tags`), containing `{source}_id` and `{target}_id` columns.
+
+**Supported DBMS**: All **SQL Output**: Creates intermediate table with foreign keys
+
+### PostgreSQL-Specific Types
+
+#### `Vec<T>` → ArrayField
+
+`Vec<T>` maps to PostgreSQL ARRAY columns. The element type is inferred automatically:
+
+```rust
+// Inferred: TEXT[] array
+pub tags: Vec<String>,
+
+// Inferred: INTEGER[] array
+pub scores: Vec<i32>,
+
+// Explicit base type override
+#[field(array_base_type = "VARCHAR(50)")]
+pub labels: Vec<String>,
+```
+
+**Supported DBMS**: PostgreSQL only **SQL Output**: `TEXT[]`, `INTEGER[]`, etc.
+
+#### `Value` → JsonField (JSONB)
+
+`serde_json::Value` maps to PostgreSQL JSONB columns:
+
+```rust
+pub metadata: serde_json::Value,
+```
+
+**Supported DBMS**: PostgreSQL only **SQL Output**: `JSONB`
+
+#### `HashMap` → HStoreField
+
+`HashMap<String, String>` maps to PostgreSQL HStore columns:
+
+```rust
+pub attributes: std::collections::HashMap<String, String>,
+```
+
+**Supported DBMS**: PostgreSQL only (requires hstore extension) **SQL Output**: `HSTORE`
 
 ### Other
 

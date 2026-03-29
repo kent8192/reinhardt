@@ -298,6 +298,7 @@ pub const CSRF_COOKIE_NAME: &str = "__csrf_token";
 /// # Arguments
 ///
 /// * `headers` - The HTTP request headers
+#[cfg(not(target_arch = "wasm32"))]
 pub fn extract_csrf_header(headers: &hyper::HeaderMap) -> Option<String> {
 	headers
 		.get(CSRF_HEADER_NAME)
@@ -313,6 +314,7 @@ pub fn extract_csrf_header(headers: &hyper::HeaderMap) -> Option<String> {
 /// # Arguments
 ///
 /// * `headers` - The HTTP request headers
+#[cfg(not(target_arch = "wasm32"))]
 pub fn extract_csrf_cookie(headers: &hyper::HeaderMap) -> Option<String> {
 	headers
 		.get("cookie")
@@ -368,6 +370,7 @@ pub fn build_csrf_cookie(token: &str, is_secure: bool) -> String {
 /// - The `__csrf_token` cookie is missing
 /// - The body token is empty
 /// - The tokens do not match
+#[cfg(not(target_arch = "wasm32"))]
 pub fn require_csrf_token(
 	body_token: &str,
 	headers: &hyper::HeaderMap,

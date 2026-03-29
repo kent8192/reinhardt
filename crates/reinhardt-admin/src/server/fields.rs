@@ -2,10 +2,13 @@
 //!
 //! Provides field information for dynamic form generation.
 
+#[cfg(not(target_arch = "wasm32"))]
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, FieldInfo, FieldType};
 use crate::types::FieldsResponse;
-use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
+#[cfg(not(target_arch = "wasm32"))]
+use reinhardt_pages::server_fn::ServerFnRequest;
+use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]

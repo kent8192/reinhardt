@@ -19,7 +19,7 @@ const MAX_FILTER_STRING_LENGTH: usize = 500;
 /// Filter parameters are explicitly provided via the `filters` field rather than
 /// captured via `serde(flatten)`, preventing unrecognized query parameters from
 /// silently becoming database filters.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ListQueryParams {
 	/// Page number (1-indexed)
 	pub page: Option<u64>,
@@ -110,7 +110,7 @@ pub struct MutationRequest {
 }
 
 /// Request body for bulk delete
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct BulkDeleteRequest {
 	/// CSRF token for mutation verification (double-submit cookie pattern).
 	///

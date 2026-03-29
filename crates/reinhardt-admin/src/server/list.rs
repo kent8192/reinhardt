@@ -2,6 +2,7 @@
 //!
 //! Provides list view operations for admin models.
 
+#[cfg(not(target_arch = "wasm32"))]
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{
 	AdminDatabase, AdminRecord, AdminSite, ColumnInfo, FilterInfo, FilterType, ListQueryParams,

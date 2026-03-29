@@ -2,12 +2,11 @@
 //!
 //! Provides delete operations for admin models (single and bulk).
 
-use super::user::AdminDefaultUser;
+use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{
 	AdminDatabase, AdminRecord, AdminSite, BulkDeleteRequest, BulkDeleteResponse,
 };
 use crate::types::MutationResponse;
-use reinhardt_auth::AuthUser;
 use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
 use std::sync::Arc;
 
@@ -51,7 +50,7 @@ pub async fn delete_record(
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
-	#[inject] AuthUser(user): AuthUser<AdminDefaultUser>,
+	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
 ) -> Result<MutationResponse, ServerFnError> {
 	// CSRF token validation (double-submit cookie pattern)
 	require_csrf_token(&csrf_token, &http_request.inner().headers)?;
@@ -59,12 +58,8 @@ pub async fn delete_record(
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
-	auth.require_model_permission(
-		model_admin.as_ref(),
-		&user as &dyn crate::core::AdminUser,
-		ModelPermission::Delete,
-	)
-	.await?;
+	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Delete)
+		.await?;
 
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
@@ -140,7 +135,7 @@ pub async fn bulk_delete_records(
 	#[inject] site: Arc<AdminSite>,
 	#[inject] db: Arc<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
-	#[inject] AuthUser(user): AuthUser<AdminDefaultUser>,
+	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
 ) -> Result<BulkDeleteResponse, ServerFnError> {
 	// CSRF token validation (double-submit cookie pattern)
 	require_csrf_token(&request.csrf_token, &http_request.inner().headers)?;
@@ -148,12 +143,8 @@ pub async fn bulk_delete_records(
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
-	auth.require_model_permission(
-		model_admin.as_ref(),
-		&user as &dyn crate::core::AdminUser,
-		ModelPermission::Delete,
-	)
-	.await?;
+	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Delete)
+		.await?;
 
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();

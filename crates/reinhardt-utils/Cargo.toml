@@ -3,6 +3,7 @@ name = "reinhardt-utils"
 version = "0.1.0-rc.14"
 description = "Utility functions aggregator for Reinhardt"
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

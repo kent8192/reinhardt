@@ -3,6 +3,7 @@ name = "reinhardt-websockets"
 version = "0.1.0-rc.14"
 description = "WebSocket support for real-time bidirectional communication"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true

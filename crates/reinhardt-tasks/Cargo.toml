@@ -3,6 +3,7 @@ name = "reinhardt-tasks"
 version = "0.1.0-rc.14"
 description = "Background task execution and scheduling"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true

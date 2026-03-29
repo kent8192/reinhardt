@@ -2,6 +2,7 @@
 name = "reinhardt-web"
 version = "0.1.0-rc.14"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "A full-stack API framework for Rust, inspired by Django and Django REST Framework"
 repository.workspace = true
@@ -382,6 +383,7 @@ default-members = [
 [workspace.package]
 version = "0.1.0-rc.14"
 edition = "2024"
+rust-version = "1.94.0"
 license = "BSD-3-Clause"
 repository = "https://github.com/kent8192/reinhardt-web"
 homepage = "https://github.com/kent8192/reinhardt-web"

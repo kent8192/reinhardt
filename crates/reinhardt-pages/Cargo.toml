@@ -2,6 +2,7 @@
 name = "reinhardt-pages"
 version = "0.1.0-rc.14"
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "WASM-based frontend framework for Reinhardt with Django-like API"

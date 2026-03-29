@@ -3,6 +3,7 @@ name = "reinhardt-throttling"
 version = "0.1.0-rc.14"
 description = "Throttling and rate limiting for Reinhardt framework"
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

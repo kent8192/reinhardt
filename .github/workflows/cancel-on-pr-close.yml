@@ -20,7 +20,7 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const branch = context.payload.pull_request.head.ref;
-            const targetWorkflows = ['ci.yml', 'test-examples.yml'];
+            const targetWorkflows = ['ci.yml', 'examples-test-standalone.yml'];
 
             // Phase 1: Find and cancel all non-completed runs
             const cancelledRunIds = [];

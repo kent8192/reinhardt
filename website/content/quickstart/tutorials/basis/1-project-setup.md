@@ -463,7 +463,8 @@ pub fn polls_page() -> Page {
 pub fn poll_detail_page() -> Page {
     // Route parameters are accessed via Router::current_params()
     // In practice, use Router::route_params() for type-safe parameter extraction
-    polls_detail(question_id)
+    let id = Router::current_params().get::<i64>("id").unwrap_or_default();
+    polls_detail(id)
 }
 ```
 
@@ -1030,14 +1031,14 @@ pub fn polls_index_page() -> Page {
 pub fn poll_detail_page() -> Page {
     // Route parameters are accessed via Router::current_params()
     // In practice, use Router::route_params() for type-safe parameter extraction
-
+    let id = Router::current_params().get::<i64>("id").unwrap_or_default();
     polls_detail(id)
 }
 
 pub fn poll_results_page() -> Page {
     // Route parameters are accessed via Router::current_params()
     // In practice, use Router::route_params() for type-safe parameter extraction
-
+    let id = Router::current_params().get::<i64>("id").unwrap_or_default();
     polls_results(id)
 }
 ```

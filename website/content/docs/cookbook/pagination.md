@@ -45,8 +45,8 @@ async fn list_users(
     let total_count = fetch_user_count().await;
     let users = fetch_users_page(page, page_size).await;
 
-    let page_data = Page::new(users, page, total_count, page_size);
     let num_pages = (total_count + page_size - 1) / page_size;
+    let page_data = Page::new(users, page, num_pages, total_count, page_size);
 
     let metadata = PaginationMetadata {
         count: total_count,

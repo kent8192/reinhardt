@@ -133,6 +133,9 @@ pub mod model_permissions;
 pub mod oauth2;
 /// Object-level permission checking.
 pub mod object_permissions;
+/// Database-backed permission model.
+#[cfg(feature = "database")]
+pub mod permission;
 /// Rate-limiting permission class.
 #[cfg(feature = "rate-limit")]
 pub mod rate_limit_permission;
@@ -169,6 +172,7 @@ pub use default_user::DefaultUser;
 pub use default_user_manager::DefaultUserManager;
 pub use group_management::{
 	CreateGroupData, Group, GroupManagementError, GroupManagementResult, GroupManager,
+	get_group_manager, register_group_manager,
 };
 #[cfg(feature = "sessions")]
 pub use handlers::{LoginCredentials, LoginHandler, LogoutHandler, SESSION_COOKIE_NAME};
@@ -185,6 +189,8 @@ pub use oauth2::{
 	OAuth2Authentication, OAuth2TokenStore,
 };
 pub use object_permissions::{ObjectPermission, ObjectPermissionChecker, ObjectPermissionManager};
+#[cfg(feature = "database")]
+pub use permission::AuthPermission;
 pub use permission_operators::{AndPermission, NotPermission, OrPermission};
 #[cfg(feature = "social")]
 pub use social::{
@@ -210,7 +216,7 @@ pub use token_blacklist::{
 };
 #[cfg(any(feature = "jwt", feature = "token"))]
 pub use token_rotation::{AutoTokenRotationManager, TokenRotationConfig, TokenRotationRecord};
-#[cfg(feature = "database")]
+#[cfg(all(feature = "database", any(feature = "jwt", feature = "token")))]
 pub use token_storage::DatabaseTokenStorage;
 #[cfg(any(feature = "jwt", feature = "token"))]
 pub use token_storage::{

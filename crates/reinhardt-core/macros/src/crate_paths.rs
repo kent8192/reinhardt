@@ -222,6 +222,44 @@ pub(crate) fn get_reinhardt_openapi_crate() -> TokenStream {
 	quote!(::reinhardt_openapi)
 }
 
+/// Resolves the path to the reinhardt_db crate dynamically.
+pub(crate) fn get_reinhardt_db_crate() -> TokenStream {
+	use proc_macro_crate::{FoundCrate, crate_name};
+
+	// Try direct crate first
+	match crate_name("reinhardt-db") {
+		Ok(FoundCrate::Itself) => return quote!(crate),
+		Ok(FoundCrate::Name(name)) => {
+			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+			return quote!(::#ident);
+		}
+		Err(_) => {}
+	}
+
+	// Try via reinhardt crate
+	match crate_name("reinhardt") {
+		Ok(FoundCrate::Itself) => return quote!(crate::db),
+		Ok(FoundCrate::Name(name)) => {
+			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+			return quote!(::#ident::db);
+		}
+		Err(_) => {}
+	}
+
+	// Try via reinhardt-web (published package name)
+	match crate_name("reinhardt-web") {
+		Ok(FoundCrate::Itself) => return quote!(crate::db),
+		Ok(FoundCrate::Name(name)) => {
+			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+			return quote!(::#ident::db);
+		}
+		Err(_) => {}
+	}
+
+	// Final fallback
+	quote!(::reinhardt_db)
+}
+
 /// Resolves the path to the reinhardt_orm module dynamically.
 /// Note: reinhardt-orm has been merged into reinhardt-db as a submodule.
 pub(crate) fn get_reinhardt_orm_crate() -> TokenStream {

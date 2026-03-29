@@ -68,6 +68,13 @@
 //! | `negotiation` | disabled | HTTP content negotiation |
 //! | `messages` | disabled | Flash message storage |
 //! | `page` | disabled | Server-side page rendering types |
+//! | `reactive` | disabled | Reactive state management |
+//! | `serde` | disabled | Serde serialization support |
+//! | `json` | disabled | JSON serialization support |
+//! | `xml` | disabled | XML serialization support |
+//! | `yaml` | disabled | YAML serialization support |
+//! | `parallel` | disabled | Parallel processing with Rayon |
+//! | `i18n` | disabled | Internationalization with Fluent |
 
 pub mod apply_update;
 pub use apply_update::ApplyUpdate;

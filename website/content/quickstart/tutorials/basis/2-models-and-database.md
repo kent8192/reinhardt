@@ -304,7 +304,7 @@ Running migrations:
 ## Playing with the Database API
 
 Now let's use Reinhardt's ORM to interact with the database. With
-`#[derive(Model)]`, many common operations are automatically available. Here are
+`#[model(...)]`, many common operations are automatically available. Here are
 some examples:
 
 ### Creating Records

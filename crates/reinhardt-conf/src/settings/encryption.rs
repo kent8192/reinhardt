@@ -77,7 +77,7 @@ impl ConfigEncryptor {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let key = vec![0u8; 32]; // Use a proper random key in production
 	/// let encryptor = ConfigEncryptor::new(key)?;
 	/// let encrypted = encryptor.encrypt(b"secret data")?;
@@ -121,7 +121,7 @@ impl ConfigEncryptor {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let key = vec![0u8; 32]; // Use the same key as encryption
 	/// let encryptor = ConfigEncryptor::new(key)?;
 	/// let encrypted = encryptor.encrypt(b"secret data")?;

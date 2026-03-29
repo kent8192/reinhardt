@@ -16,7 +16,7 @@ mod utils;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_di_macros::injectable;
 ///
 /// #[injectable]
@@ -45,7 +45,7 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_di_macros::injectable_factory;
 ///
 /// #[injectable_factory]

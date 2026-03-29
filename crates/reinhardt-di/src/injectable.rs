@@ -72,7 +72,7 @@ pub trait Injectable: Sized + Send + Sync + 'static {
 ///
 /// This allows using `Arc<T>` directly in endpoint handlers with `#[inject]`:
 ///
-/// ```ignore
+/// ```no_run
 /// # use reinhardt_di::Injectable;
 /// # use std::sync::Arc;
 /// # struct DatabaseConnection;
@@ -115,7 +115,7 @@ where
 /// For security-critical endpoints, use `T` directly to ensure
 /// errors are surfaced as HTTP 401/500.
 ///
-/// ```ignore
+/// ```no_run
 /// # use reinhardt_di::Injectable;
 /// # struct AuthInfo;
 /// # struct Response;

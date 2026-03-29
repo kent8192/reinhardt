@@ -420,7 +420,7 @@ impl Settings {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_conf::settings::Settings;
 	/// use std::path::PathBuf;
 	///

@@ -130,6 +130,11 @@
 //! | `sqlite` | disabled | SQLite backend |
 //! | `mysql` | disabled | MySQL backend |
 //! | `all-databases` | disabled | Enable all database backends |
+//! | `backends-pool` | disabled | Connection pool backend abstractions |
+//! | `contenttypes` | disabled | Generic foreign key support |
+//! | `nosql` | disabled | NoSQL/BSON type support |
+//! | `di` | disabled | Dependency injection integration |
+//! | `database-full` | disabled | Enable all database features |
 
 #[cfg(feature = "associations")]
 pub mod associations;

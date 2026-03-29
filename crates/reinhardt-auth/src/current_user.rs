@@ -189,12 +189,18 @@ where
 		let model_pk: <U as Model>::PrimaryKey = base_pk.into();
 
 		// 5. Get DatabaseConnection from DI context
+		// Resolve DatabaseConnection from DI (singleton-first, request-scope fallback)
+		// Uses get_singleton/get_request directly instead of ctx.resolve() because
+		// DatabaseConnection is pre-seeded into the singleton scope at server startup,
+		// not registered in the global DependencyRegistry.
 		#[cfg(feature = "params")]
-		let db: Arc<DatabaseConnection> = match ctx.resolve::<DatabaseConnection>().await {
-			Ok(conn) => conn,
-			Err(e) => {
+		let db: Arc<DatabaseConnection> = match ctx
+			.get_singleton::<DatabaseConnection>()
+			.or_else(|| ctx.get_request::<DatabaseConnection>())
+		{
+			Some(conn) => conn,
+			None => {
 				::tracing::warn!(
-					error = %e,
 					"DatabaseConnection not registered in DI context. \
 					 CurrentUser will be anonymous. \
 					 Hint: Register DatabaseConnection as a singleton in InjectionContext."

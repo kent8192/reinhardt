@@ -127,6 +127,12 @@ pub mod reinhardt_di {
 	pub use reinhardt_di::*;
 }
 
+#[cfg(all(feature = "auth", not(target_arch = "wasm32")))]
+#[doc(hidden)]
+pub mod reinhardt_auth {
+	pub use reinhardt_auth::*;
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub mod reinhardt_core {

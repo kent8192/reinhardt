@@ -70,10 +70,10 @@ fn has_model_attribute(input: &ItemStruct) -> bool {
 }
 
 fn inject_skip_getter(input: &mut ItemStruct, mapping: &FieldMapping, args: &UserMacroArgs) {
-	let mut skip_fields: Vec<String> = Vec::new();
+	let mut skip_getter_fields: Vec<String> = Vec::new();
 
 	// Username field (always)
-	skip_fields.push(args.username_field.clone());
+	skip_getter_fields.push(args.username_field.clone());
 
 	// BaseUser fields (always)
 	for role in &[
@@ -82,7 +82,7 @@ fn inject_skip_getter(input: &mut ItemStruct, mapping: &FieldMapping, args: &Use
 		FieldRole::IsActive,
 	] {
 		if let Some(ident) = mapping.get(*role) {
-			skip_fields.push(ident.to_string());
+			skip_getter_fields.push(ident.to_string());
 		}
 	}
 
@@ -96,17 +96,19 @@ fn inject_skip_getter(input: &mut ItemStruct, mapping: &FieldMapping, args: &Use
 			FieldRole::DateJoined,
 		] {
 			if let Some(ident) = mapping.get(*role) {
-				skip_fields.push(ident.to_string());
+				skip_getter_fields.push(ident.to_string());
 			}
 		}
 	}
 
-	// PermissionsMixin fields
-	for role in &[
-		FieldRole::IsSuperuser,
-		FieldRole::UserPermissions,
-		FieldRole::Groups,
-	] {
+	// IsSuperuser — DB field, skip_getter only
+	if let Some(ident) = mapping.get(FieldRole::IsSuperuser) {
+		skip_getter_fields.push(ident.to_string());
+	}
+
+	// UserPermissions and Groups — non-DB cache fields, fully skipped by model
+	let mut skip_fields: Vec<String> = Vec::new();
+	for role in &[FieldRole::UserPermissions, FieldRole::Groups] {
 		if let Some(ident) = mapping.get(*role) {
 			skip_fields.push(ident.to_string());
 		}
@@ -114,13 +116,71 @@ fn inject_skip_getter(input: &mut ItemStruct, mapping: &FieldMapping, args: &Use
 
 	if let syn::Fields::Named(ref mut fields) = input.fields {
 		for field in &mut fields.named {
-			if let Some(ref ident) = field.ident
-				&& skip_fields.contains(&ident.to_string())
-			{
-				field
-					.attrs
-					.push(syn::parse_quote!(#[field(skip_getter = true)]));
+			if let Some(ref ident) = field.ident {
+				let name = ident.to_string();
+				if skip_fields.contains(&name) {
+					field.attrs.push(syn::parse_quote!(#[field(skip = true)]));
+				} else if skip_getter_fields.contains(&name) {
+					field
+						.attrs
+						.push(syn::parse_quote!(#[field(skip_getter = true)]));
+				}
 			}
+		}
+	}
+}
+
+/// When `#[model]` is present, inject `ManyToManyField` relationships for
+/// `Permission` and `Group` models alongside the existing `Vec<String>` fields.
+fn inject_m2m_relationships(input: &mut ItemStruct, mapping: &FieldMapping) {
+	let auth_crate = get_reinhardt_auth_crate();
+	let db_crate = crate::crate_paths::get_reinhardt_db_crate();
+
+	if let syn::Fields::Named(ref mut fields) = input.fields {
+		let mut new_fields: Vec<syn::Field> = Vec::new();
+
+		for field in fields.named.iter_mut() {
+			if let Some(ref ident) = field.ident {
+				let name = ident.to_string();
+
+				if mapping
+					.get(FieldRole::UserPermissions)
+					.map(|i| *i == name)
+					.unwrap_or(false)
+				{
+					// Mark original Vec<String> field as serde-skipped (non-serialized cache)
+					field.attrs.push(syn::parse_quote!(#[serde(skip)]));
+
+					// Inject ManyToManyField for DB relationship
+					let m2m_field: syn::Field = syn::parse_quote! {
+						#[serde(skip, default)]
+						#[rel(many_to_many, related_name = "users")]
+						#[field(skip_getter = true)]
+						_permissions_rel: #db_crate::associations::ManyToManyField<Self, #auth_crate::AuthPermission>
+					};
+					new_fields.push(m2m_field);
+				}
+
+				if mapping
+					.get(FieldRole::Groups)
+					.map(|i| *i == name)
+					.unwrap_or(false)
+				{
+					field.attrs.push(syn::parse_quote!(#[serde(skip)]));
+
+					let m2m_field: syn::Field = syn::parse_quote! {
+						#[serde(skip, default)]
+						#[rel(many_to_many, related_name = "members")]
+						#[field(skip_getter = true)]
+						_groups_rel: #db_crate::associations::ManyToManyField<Self, #auth_crate::Group>
+					};
+					new_fields.push(m2m_field);
+				}
+			}
+		}
+
+		for new_field in new_fields {
+			fields.named.push(new_field);
 		}
 	}
 }
@@ -294,6 +354,7 @@ pub(crate) fn user_attribute_impl(args: TokenStream, mut input: ItemStruct) -> R
 
 	if has_model {
 		inject_skip_getter(&mut input, &mapping, &parsed_args);
+		inject_m2m_relationships(&mut input, &mapping);
 	}
 
 	strip_user_field_attrs(&mut input);

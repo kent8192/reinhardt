@@ -11,11 +11,8 @@
 //! - Issue #3046: DI resolution pipeline verification for all 10 admin handlers
 //! - Issue #3049: CSRF cookie-to-header parsing and auth middleware E2E verification
 //!
-//! Note: Tests that require `AuthUser<AdminDefaultUser>` DB lookup are `#[ignore]`
-//! because the ORM deserialization of `AdminDefaultUser` from the `auth_user` table
-//! requires a matching schema that is tightly coupled to the `#[user]` macro's
-//! generated `FromRow`/serde implementation. These tests will be enabled once
-//! a shared auth_user table fixture is established (see #3046).
+//! All tests exercise `AuthUser<AdminDefaultUser>` DB lookup through the full
+//! DI pipeline, including ORM deserialization from the `auth_user` table.
 
 use super::server_fn_helpers::{
 	TEST_CSRF_TOKEN, e2e_router_context, make_e2e_request, make_e2e_request_no_auth,
@@ -80,7 +77,6 @@ async fn test_e2e_get_dashboard_resolves_di(
 /// Injects: Arc<AdminSite>, Arc<AdminDatabase>, AuthUser<AdminDefaultUser>
 #[rstest]
 #[tokio::test]
-#[ignore = "Requires AdminDefaultUser ORM-compatible auth_user table schema (#3046)"]
 async fn test_e2e_get_list_resolves_di(
 	#[future] e2e_router_context: (ServerRouter, Arc<AdminDatabase>),
 ) {
@@ -116,7 +112,6 @@ async fn test_e2e_get_list_resolves_di(
 /// Injects: Arc<AdminSite>, Arc<AdminDatabase>, ServerFnRequest, AuthUser<AdminDefaultUser>
 #[rstest]
 #[tokio::test]
-#[ignore = "Requires AdminDefaultUser ORM-compatible auth_user table schema (#3046)"]
 async fn test_e2e_get_detail_resolves_di(
 	#[future] e2e_router_context: (ServerRouter, Arc<AdminDatabase>),
 ) {
@@ -153,7 +148,6 @@ async fn test_e2e_get_detail_resolves_di(
 /// Injects: Arc<AdminSite>, Arc<AdminDatabase>, ServerFnRequest, AuthUser<AdminDefaultUser>
 #[rstest]
 #[tokio::test]
-#[ignore = "Requires AdminDefaultUser ORM-compatible auth_user table schema (#3046)"]
 async fn test_e2e_get_fields_resolves_di(
 	#[future] e2e_router_context: (ServerRouter, Arc<AdminDatabase>),
 ) {
@@ -189,7 +183,6 @@ async fn test_e2e_get_fields_resolves_di(
 /// Injects: Arc<AdminSite>, Arc<AdminDatabase>, ServerFnRequest, AuthUser<AdminDefaultUser>
 #[rstest]
 #[tokio::test]
-#[ignore = "Requires AdminDefaultUser ORM-compatible auth_user table schema (#3046)"]
 async fn test_e2e_create_record_resolves_di(
 	#[future] e2e_router_context: (ServerRouter, Arc<AdminDatabase>),
 ) {
@@ -234,7 +227,6 @@ async fn test_e2e_create_record_resolves_di(
 /// Injects: Arc<AdminSite>, Arc<AdminDatabase>, ServerFnRequest, AuthUser<AdminDefaultUser>
 #[rstest]
 #[tokio::test]
-#[ignore = "Requires AdminDefaultUser ORM-compatible auth_user table schema (#3046)"]
 async fn test_e2e_update_record_resolves_di(
 	#[future] e2e_router_context: (ServerRouter, Arc<AdminDatabase>),
 ) {
@@ -281,7 +273,6 @@ async fn test_e2e_update_record_resolves_di(
 /// Injects: Arc<AdminSite>, Arc<AdminDatabase>, ServerFnRequest, AuthUser<AdminDefaultUser>
 #[rstest]
 #[tokio::test]
-#[ignore = "Requires AdminDefaultUser ORM-compatible auth_user table schema (#3046)"]
 async fn test_e2e_delete_record_resolves_di(
 	#[future] e2e_router_context: (ServerRouter, Arc<AdminDatabase>),
 ) {
@@ -320,7 +311,6 @@ async fn test_e2e_delete_record_resolves_di(
 /// Injects: Arc<AdminSite>, Arc<AdminDatabase>, ServerFnRequest, AuthUser<AdminDefaultUser>
 #[rstest]
 #[tokio::test]
-#[ignore = "Requires AdminDefaultUser ORM-compatible auth_user table schema (#3046)"]
 async fn test_e2e_bulk_delete_resolves_di(
 	#[future] e2e_router_context: (ServerRouter, Arc<AdminDatabase>),
 ) {
@@ -361,7 +351,6 @@ async fn test_e2e_bulk_delete_resolves_di(
 /// Injects: Arc<AdminSite>, Arc<AdminDatabase>, ServerFnRequest, AuthUser<AdminDefaultUser>
 #[rstest]
 #[tokio::test]
-#[ignore = "Requires AdminDefaultUser ORM-compatible auth_user table schema (#3046)"]
 async fn test_e2e_export_data_resolves_di(
 	#[future] e2e_router_context: (ServerRouter, Arc<AdminDatabase>),
 ) {
@@ -371,7 +360,7 @@ async fn test_e2e_export_data_resolves_di(
 		"/admin/api/server_fn/export_data",
 		json!({
 			"model_name": "TestModel",
-			"format": "json"
+			"format": "JSON"
 		}),
 	);
 
@@ -397,19 +386,20 @@ async fn test_e2e_export_data_resolves_di(
 /// Injects: Arc<AdminSite>, Arc<AdminDatabase>, ServerFnRequest, AuthUser<AdminDefaultUser>
 #[rstest]
 #[tokio::test]
-#[ignore = "Requires AdminDefaultUser ORM-compatible auth_user table schema (#3046)"]
 async fn test_e2e_import_data_resolves_di(
 	#[future] e2e_router_context: (ServerRouter, Arc<AdminDatabase>),
 ) {
 	// Arrange
 	let (router, _db) = e2e_router_context.await;
-	let import_data = json!([{"name": "Imported", "status": "active"}]).to_string();
+	let import_bytes: Vec<u8> =
+		serde_json::to_vec(&json!([{"name": "Imported", "status": "active"}]))
+			.expect("Failed to serialize import data");
 	let request = make_e2e_request(
 		"/admin/api/server_fn/import_data",
 		json!({
 			"model_name": "TestModel",
-			"format": "json",
-			"data": import_data
+			"format": "JSON",
+			"data": import_bytes
 		}),
 	);
 
@@ -436,7 +426,6 @@ async fn test_e2e_import_data_resolves_di(
 /// Verify mutation succeeds with valid CSRF cookie and body token through HTTP pipeline.
 #[rstest]
 #[tokio::test]
-#[ignore = "Requires AdminDefaultUser ORM-compatible auth_user table schema (#3049)"]
 async fn test_e2e_mutation_csrf_valid(
 	#[future] e2e_router_context: (ServerRouter, Arc<AdminDatabase>),
 ) {
@@ -475,7 +464,6 @@ async fn test_e2e_mutation_csrf_valid(
 /// Verify mutation fails when CSRF cookie is missing from the HTTP request.
 #[rstest]
 #[tokio::test]
-#[ignore = "Requires AdminDefaultUser ORM-compatible auth_user table schema (#3049)"]
 async fn test_e2e_mutation_csrf_missing_cookie(
 	#[future] e2e_router_context: (ServerRouter, Arc<AdminDatabase>),
 ) {
@@ -515,7 +503,6 @@ async fn test_e2e_mutation_csrf_missing_cookie(
 /// Verify mutation fails when CSRF cookie value doesn't match body token.
 #[rstest]
 #[tokio::test]
-#[ignore = "Requires AdminDefaultUser ORM-compatible auth_user table schema (#3049)"]
 async fn test_e2e_mutation_csrf_mismatch(
 	#[future] e2e_router_context: (ServerRouter, Arc<AdminDatabase>),
 ) {

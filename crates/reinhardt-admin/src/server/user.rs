@@ -43,8 +43,10 @@ pub struct AdminDefaultUser {
 	/// Timestamp when the user joined.
 	pub date_joined: DateTime<Utc>,
 	/// List of permission codenames assigned to this user.
+	#[serde(deserialize_with = "super::serde_helpers::string_or_vec", default)]
 	pub user_permissions: Vec<String>,
 	/// List of group names this user belongs to.
+	#[serde(deserialize_with = "super::serde_helpers::string_or_vec", default)]
 	pub groups: Vec<String>,
 }
 

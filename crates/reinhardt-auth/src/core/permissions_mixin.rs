@@ -106,12 +106,16 @@ pub trait PermissionsMixin: Send + Sync {
 
 	/// Returns all permissions from groups this user belongs to
 	///
-	/// In a full implementation, this would query the group permissions from a database.
-	/// Currently returns an empty set as a placeholder.
+	/// When a global `GroupManager` is registered via
+	/// [`register_group_manager`](crate::register_group_manager), this method
+	/// automatically resolves permissions for the groups returned by
+	/// [`groups()`](Self::groups). Otherwise returns an empty set.
 	fn get_group_permissions(&self) -> HashSet<String> {
-		// Default implementation returns empty set.
-		// Override this method to integrate with GroupManager for database-backed permissions.
-		HashSet::new()
+		if let Some(manager) = crate::group_management::get_group_manager() {
+			manager.get_permissions_for_groups_sync(self.groups())
+		} else {
+			HashSet::new()
+		}
 	}
 
 	/// Returns all permissions for this user (user permissions + group permissions)

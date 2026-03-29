@@ -486,4 +486,111 @@ mod tests {
 		assert_eq!(user.get_username(), "custom@example.com");
 		assert_eq!(user.username(), "custom@example.com");
 	}
+
+	// --- GroupManager integration tests ---
+	// Note: These tests share a single OnceLock-based global GroupManager.
+	// The manager is registered once and persists for the process lifetime.
+
+	use std::sync::Once;
+
+	static INIT_GROUP_MANAGER: Once = Once::new();
+
+	fn ensure_group_manager() {
+		INIT_GROUP_MANAGER.call_once(|| {
+			let rt = tokio::runtime::Runtime::new().unwrap();
+			rt.block_on(async {
+				use reinhardt_auth::group_management::{CreateGroupData, GroupManager};
+				use std::sync::Arc;
+
+				let mut manager = GroupManager::new();
+				let group = manager
+					.create_group(CreateGroupData {
+						name: "editors".to_string(),
+						description: None,
+					})
+					.await
+					.unwrap();
+				manager
+					.add_group_permission(&group.id.to_string(), "blog.add_post")
+					.await
+					.unwrap();
+				manager
+					.add_group_permission(&group.id.to_string(), "blog.edit_post")
+					.await
+					.unwrap();
+
+				reinhardt_auth::register_group_manager(Arc::new(manager));
+			});
+		});
+	}
+
+	#[rstest]
+	#[serial_test::serial(global_group_manager)]
+	fn test_group_permissions_resolved_via_manager() {
+		// Arrange
+		ensure_group_manager();
+		let mut user = make_test_user();
+		user.groups = vec!["editors".to_string()];
+
+		// Act
+		let group_perms = user.get_group_permissions();
+
+		// Assert
+		assert_eq!(group_perms.len(), 2);
+		assert!(group_perms.contains("blog.add_post"));
+		assert!(group_perms.contains("blog.edit_post"));
+
+		// has_perm includes group permissions
+		assert!(user.has_perm("blog.add_post"));
+		assert!(user.has_perm("blog.edit_post"));
+		assert!(!user.has_perm("blog.delete_post"));
+	}
+
+	#[rstest]
+	#[serial_test::serial(global_group_manager)]
+	fn test_get_all_permissions_merges_user_and_group() {
+		// Arrange
+		ensure_group_manager();
+		let mut user = make_test_user();
+		user.user_permissions = vec!["blog.delete_post".to_string()];
+		user.groups = vec!["editors".to_string()];
+
+		// Act
+		let all_perms = user.get_all_permissions();
+
+		// Assert — user perm + group perms
+		assert!(all_perms.contains("blog.delete_post")); // direct
+		assert!(all_perms.contains("blog.add_post")); // from group
+		assert!(all_perms.contains("blog.edit_post")); // from group
+		assert_eq!(all_perms.len(), 3);
+	}
+
+	#[rstest]
+	#[serial_test::serial(global_group_manager)]
+	fn test_superuser_bypasses_group_check() {
+		// Arrange
+		ensure_group_manager();
+		let mut user = make_test_user();
+		user.is_superuser = true;
+		user.groups = vec![];
+
+		// Act / Assert — superuser has all permissions regardless
+		assert!(user.has_perm("any.permission"));
+		assert!(user.has_module_perms("any"));
+	}
+
+	#[rstest]
+	#[serial_test::serial(global_group_manager)]
+	fn test_non_member_group_returns_no_permissions() {
+		// Arrange
+		ensure_group_manager();
+		let mut user = make_test_user();
+		user.groups = vec!["nonexistent_group".to_string()];
+
+		// Act
+		let group_perms = user.get_group_permissions();
+
+		// Assert — group not in GroupManager, no permissions
+		assert!(group_perms.is_empty());
+	}
 }

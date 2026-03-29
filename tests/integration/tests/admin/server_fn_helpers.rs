@@ -294,29 +294,8 @@ pub async fn e2e_router_context(
 	// Build admin router with deferred DI
 	let (admin_router, admin_di) = admin_routes_with_di_deferred(site);
 
-	// Register DatabaseConnection in the global DI registry so ctx.resolve() works.
-	// AuthUser::inject() calls ctx.resolve::<DatabaseConnection>() which requires
-	// both a global registry scope entry AND a value in the singleton cache.
-	{
-		use reinhardt_di::registry::{DependencyScope, global_registry};
-		let registry = global_registry();
-		registry.register_async::<DatabaseConnection, _, _>(
-			DependencyScope::Singleton,
-			|ctx| async move {
-				// On cache miss, try to get from singleton scope (pre-seeded below)
-				ctx.get_singleton::<DatabaseConnection>()
-					.map(|arc| (*arc).clone())
-					.ok_or_else(|| {
-						reinhardt_di::DiError::NotFound(
-							"DatabaseConnection not in singleton cache".to_string(),
-						)
-					})
-			},
-		);
-	}
-
 	// Build the complete router using UnifiedRouter API.
-	// Pre-seed singleton scope with DatabaseConnection so resolve() finds it.
+	// Pre-seed singleton scope with DatabaseConnection so get_singleton() finds it.
 	let singleton = Arc::new(SingletonScope::new());
 	singleton.set_arc(db_conn);
 	let di_ctx = Arc::new(InjectionContext::builder(singleton).build());

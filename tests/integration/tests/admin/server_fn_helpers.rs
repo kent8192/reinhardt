@@ -102,6 +102,18 @@ impl AllPermissionsModelAdmin {
 			search_fields: vec!["name".to_string(), "description".to_string()],
 		}
 	}
+
+	/// Creates a new instance configured for a UUID primary key test model.
+	pub fn uuid_pk_model(table_name: &str) -> Self {
+		Self {
+			model_name: "UuidModel".to_string(),
+			table_name: table_name.to_string(),
+			pk_field: "id".to_string(),
+			list_display: vec!["id".to_string(), "name".to_string(), "status".to_string()],
+			list_filter: vec!["status".to_string()],
+			search_fields: vec!["name".to_string()],
+		}
+	}
 }
 
 #[async_trait::async_trait]
@@ -388,4 +400,63 @@ pub fn make_e2e_request_no_auth(path: &str, body: serde_json::Value) -> reinhard
 		.body(hyper::body::Bytes::from(body_bytes))
 		.build()
 		.expect("Failed to build E2E request")
+}
+
+/// Composite fixture providing AdminSite + AdminDatabase + PgPool with a UUID primary key table.
+///
+/// Creates a PostgreSQL table with a UUID PK column and registers an
+/// `AllPermissionsModelAdmin` configured for UUID lookups.
+/// Returns the PgPool alongside AdminSite and AdminDatabase so tests can
+/// insert records with UUID PKs directly via SQL.
+#[fixture]
+pub async fn uuid_pk_context(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) -> (Arc<AdminSite>, Arc<AdminDatabase>, sqlx::PgPool) {
+	let (pool, _) = shared_db_pool.await;
+
+	// Create a table with UUID primary key
+	pool.execute(
+		"CREATE TABLE IF NOT EXISTS uuid_test_models (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			name VARCHAR(255) NOT NULL,
+			status VARCHAR(50) DEFAULT 'active'
+		)",
+	)
+	.await
+	.expect("Failed to create uuid_test_models table");
+
+	pool.execute("TRUNCATE TABLE uuid_test_models CASCADE")
+		.await
+		.expect("Failed to truncate uuid_test_models table");
+
+	// Register the UUID field type in the migration registry so that
+	// parse_pk_value can look up the correct type at runtime.
+	use reinhardt_db::migrations::FieldType;
+	use reinhardt_db::migrations::model_registry::{FieldMetadata, ModelMetadata, global_registry};
+	let mut model_meta = ModelMetadata::new("test", "UuidModel", "uuid_test_models");
+	model_meta
+		.fields
+		.insert("id".to_string(), FieldMetadata::new(FieldType::Uuid));
+	model_meta.fields.insert(
+		"name".to_string(),
+		FieldMetadata::new(FieldType::VarChar(255)),
+	);
+	model_meta.fields.insert(
+		"status".to_string(),
+		FieldMetadata::new(FieldType::VarChar(50)),
+	);
+	global_registry().register_model(model_meta);
+
+	let pool_clone = pool.clone();
+	let backend = Arc::new(PostgresBackend::new(pool));
+	let backends_conn = BackendsConnection::new(backend);
+	let connection = DatabaseConnection::new(DatabaseBackend::Postgres, backends_conn);
+	let db = Arc::new(AdminDatabase::new(connection));
+
+	let site = Arc::new(AdminSite::new("UUID Test Admin Site"));
+	let admin = AllPermissionsModelAdmin::uuid_pk_model("uuid_test_models");
+	site.register("UuidModel", admin)
+		.expect("Failed to register UuidModel");
+
+	(site, db, pool_clone)
 }

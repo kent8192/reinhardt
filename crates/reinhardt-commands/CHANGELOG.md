@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.14...reinhardt-commands@v0.1.0-rc.15) - 2026-03-29
+
+### Added
+
+- *(examples)* remove manual WASM scripts for auto-injection
+
+### Fixed
+
+- *(admin)* add deferred DI registration to bridge route-server scope gap
+- *(di)* register DatabaseConnection in user-provided DI context
+
 ## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.13...reinhardt-commands@v0.1.0-rc.14) - 2026-03-24
 
 ### Added

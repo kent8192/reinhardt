@@ -13,7 +13,7 @@
 //! to be compatible with `UnifiedRouter::function()`. The DI context is
 //! extracted from `Request.di_context()` inside the wrapper:
 //!
-//! ```ignore
+//! ```no_run
 //! // Generated signature (router-compatible):
 //! async fn handler(request: Request) -> Result<T>
 //!

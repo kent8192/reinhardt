@@ -21,9 +21,10 @@
 //! let count = Signal::new(0);
 //!
 //! // Create an effect that automatically tracks dependencies
+//! let count_for_effect = count.clone();
 //! Effect::new(move || {
 //!     // This get() call automatically registers the dependency
-//!     println!("Count is: {}", count.get());
+//!     println!("Count is: {}", count_for_effect.get());
 //! });
 //!
 //! // Update the signal - the effect will automatically re-run

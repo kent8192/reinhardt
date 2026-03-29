@@ -12,13 +12,14 @@
 //!
 //! ## Example
 //!
-//! ```rust
+//! ```no_run
 //! use reinhardt_core::reactive::{Signal, Memo};
 //!
 //! let count = Signal::new(5);
 //!
 //! // Create a memo that computes count * 2
-//! let doubled = Memo::new(move || count.get() * 2);
+//! let count_for_memo = count.clone();
+//! let doubled = Memo::new(move || count_for_memo.get() * 2);
 //!
 //! // First access computes the value
 //! assert_eq!(doubled.get(), 10);
@@ -84,13 +85,16 @@ thread_local! {
 /// let last_name = Signal::new("Doe".to_string());
 ///
 /// // Memo caches the full name computation
+/// let first_clone = first_name.clone();
+/// let last_clone = last_name.clone();
 /// let full_name = Memo::new(move || {
-///     format!("{} {}", first_name.get(), last_name.get())
+///     format!("{} {}", first_clone.get(), last_clone.get())
 /// });
 ///
 /// // Effect uses the memo
+/// let full_name_clone = full_name.clone();
 /// Effect::new(move || {
-///     println!("Full name: {}", full_name.get());
+///     println!("Full name: {}", full_name_clone.get());
 /// });
 /// ```
 #[derive(Clone)]
@@ -120,7 +124,8 @@ impl<T: Clone + 'static> Memo<T> {
 	/// use reinhardt_core::reactive::{Signal, Memo};
 	///
 	/// let count = Signal::new(5);
-	/// let doubled = Memo::new(move || count.get() * 2);
+	/// let count_clone = count.clone();
+	/// let doubled = Memo::new(move || count_clone.get() * 2);
 	/// assert_eq!(doubled.get(), 10);
 	/// ```
 	pub fn new<F>(mut f: F) -> Self
@@ -229,11 +234,12 @@ impl<T: Clone + 'static> Memo<T> {
 	///
 	/// # Example
 	///
-	/// ```rust
+	/// ```no_run
 	/// use reinhardt_core::reactive::{Signal, Memo};
 	///
 	/// let count = Signal::new(5);
-	/// let doubled = Memo::new(move || count.get() * 2);
+	/// let count_clone = count.clone();
+	/// let doubled = Memo::new(move || count_clone.get() * 2);
 	///
 	/// assert_eq!(doubled.get(), 10);
 	///

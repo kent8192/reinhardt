@@ -249,10 +249,14 @@ pub fn admin_routes_with_di(site: Arc<AdminSite>, singleton: &SingletonScope) ->
 /// Admin router builder with deferred DI registration
 ///
 /// Builds a `ServerRouter` from an `AdminSite` with all CRUD endpoints,
-/// and returns a [`DiRegistrationList`] containing the `AdminSite`
-/// registration. The list should be attached to the [`UnifiedRouter`] via
-/// [`with_di_registrations`], which ensures it reaches the server's
-/// singleton scope during startup.
+/// and returns a [`DiRegistrationList`] containing the `AdminSite` and
+/// `AdminUserLoader` registrations. The list should be attached to the
+/// [`UnifiedRouter`] via [`with_di_registrations`], which ensures it reaches
+/// the server's singleton scope during startup.
+///
+/// If a custom user type was configured via [`AdminSite::set_user_type`],
+/// that type is used for admin authentication. Otherwise,
+/// [`AdminDefaultUser`] (table `auth_user`) is registered as a fallback.
 ///
 /// `AdminDatabase` is **not** registered here; it is lazily constructed
 /// from `DatabaseConnection` at first request via its `Injectable` impl.
@@ -264,6 +268,7 @@ pub fn admin_routes_with_di(site: Arc<AdminSite>, singleton: &SingletonScope) ->
 /// use reinhardt_urls::routers::UnifiedRouter;
 /// use std::sync::Arc;
 ///
+/// // Default: uses AdminDefaultUser (table "auth_user")
 /// let site = Arc::new(AdminSite::new("My Admin"));
 /// let (admin_router, admin_di) = admin_routes_with_di_deferred(site);
 ///
@@ -272,6 +277,16 @@ pub fn admin_routes_with_di(site: Arc<AdminSite>, singleton: &SingletonScope) ->
 ///     .with_di_registrations(admin_di);
 /// ```
 ///
+/// ```rust,ignore
+/// // Custom user type
+/// let mut site = AdminSite::new("My Admin");
+/// site.set_user_type::<MyCustomUser>();
+/// let site = Arc::new(site);
+/// let (admin_router, admin_di) = admin_routes_with_di_deferred(site);
+/// ```
+///
+/// [`AdminSite::set_user_type`]: AdminSite::set_user_type
+/// [`AdminDefaultUser`]: crate::server::user::AdminDefaultUser
 /// [`DiRegistrationList`]: reinhardt_di::DiRegistrationList
 /// [`UnifiedRouter`]: reinhardt_urls::routers::UnifiedRouter
 /// [`with_di_registrations`]: reinhardt_urls::routers::UnifiedRouter::with_di_registrations
@@ -279,6 +294,17 @@ pub fn admin_routes_with_di_deferred(
 	site: Arc<AdminSite>,
 ) -> (ServerRouter, reinhardt_di::DiRegistrationList) {
 	let mut registrations = reinhardt_di::DiRegistrationList::new();
+
+	// Register the user loader for admin authentication.
+	// If the site has a custom user type (set via set_user_type::<U>()),
+	// use that; otherwise fall back to AdminDefaultUser.
+	let loader = site.user_loader().unwrap_or_else(|| {
+		Arc::new(crate::server::admin_auth::create_admin_user_loader::<
+			crate::server::user::AdminDefaultUser,
+		>())
+	});
+	registrations.register_arc(loader);
+
 	registrations.register_arc(site);
 	(build_admin_router(), registrations)
 }

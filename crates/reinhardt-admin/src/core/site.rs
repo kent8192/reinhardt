@@ -4,6 +4,7 @@
 //! routing, authentication, and rendering functionality.
 
 use crate::core::{AdminRouter, ModelAdmin};
+use crate::server::admin_auth::AdminUserLoader;
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -41,6 +42,13 @@ pub struct AdminSite {
 
 	/// Favicon data (PNG, ICO, etc.)
 	favicon_data: Arc<RwLock<Option<Vec<u8>>>>,
+
+	/// Type-erased user loader for admin authentication.
+	///
+	/// When `None`, [`AdminDefaultUser`] is used as a fallback.
+	///
+	/// [`AdminDefaultUser`]: crate::server::user::AdminDefaultUser
+	user_loader: Option<Arc<AdminUserLoader>>,
 }
 
 /// Configuration for the admin site
@@ -95,6 +103,7 @@ impl AdminSite {
 			registry: Arc::new(DashMap::new()),
 			config: Arc::new(RwLock::new(AdminSiteConfig::default())),
 			favicon_data: Arc::new(RwLock::new(None)),
+			user_loader: None,
 		}
 	}
 
@@ -179,6 +188,52 @@ impl AdminSite {
 	/// Get the current configuration
 	pub fn config(&self) -> AdminSiteConfig {
 		self.config.read().clone()
+	}
+
+	/// Set the user type for admin authentication.
+	///
+	/// This determines which database table and model is used to load the
+	/// authenticated user in admin server functions. The type `U` must
+	/// implement both auth traits (`BaseUser`, `FullUser`) and the ORM
+	/// trait (`Model`), which is guaranteed for any type annotated with
+	/// both `#[model(...)]` and `#[user(full = true)]`.
+	///
+	/// If this method is not called, [`AdminDefaultUser`] (table `auth_user`)
+	/// is used as the default.
+	///
+	/// # Examples
+	///
+	/// ```rust,ignore
+	/// use reinhardt_admin::core::AdminSite;
+	///
+	/// let mut site = AdminSite::new("My Admin");
+	/// site.set_user_type::<MyCustomUser>();
+	/// ```
+	///
+	/// [`AdminDefaultUser`]: crate::server::user::AdminDefaultUser
+	pub fn set_user_type<U>(&mut self) -> &mut Self
+	where
+		U: reinhardt_auth::BaseUser
+			+ reinhardt_auth::FullUser
+			+ reinhardt_db::orm::Model
+			+ Clone
+			+ Send
+			+ Sync
+			+ 'static,
+		<U as reinhardt_auth::BaseUser>::PrimaryKey: std::str::FromStr + ToString + Send + Sync,
+		<<U as reinhardt_auth::BaseUser>::PrimaryKey as std::str::FromStr>::Err: std::fmt::Debug,
+		<U as reinhardt_db::orm::Model>::PrimaryKey:
+			From<<U as reinhardt_auth::BaseUser>::PrimaryKey>,
+	{
+		self.user_loader = Some(Arc::new(
+			crate::server::admin_auth::create_admin_user_loader::<U>(),
+		));
+		self
+	}
+
+	/// Returns the registered user loader, if any.
+	pub(crate) fn user_loader(&self) -> Option<Arc<AdminUserLoader>> {
+		self.user_loader.clone()
 	}
 
 	/// Register a model with the admin site

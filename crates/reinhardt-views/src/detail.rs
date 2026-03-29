@@ -138,7 +138,7 @@ where
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_views::{DetailView, SingleObjectMixin};
 	/// use reinhardt_db::orm::Model;
 	/// use serde::{Serialize, Deserialize};

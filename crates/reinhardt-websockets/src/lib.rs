@@ -99,7 +99,7 @@
 //!
 //! **Server-side setup:**
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_websockets::{PagesAuthenticator, WebSocketRouter, WebSocketRoute};
 //! use std::sync::Arc;
 //!
@@ -118,7 +118,7 @@
 //!
 //! On the client side, use the `use_websocket` hook from reinhardt-pages:
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_pages::reactive::hooks::{use_websocket, UseWebSocketOptions};
 //!
 //! let ws = use_websocket("ws://localhost:8000/ws/chat", UseWebSocketOptions::default());

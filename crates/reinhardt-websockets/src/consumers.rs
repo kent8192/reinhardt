@@ -114,7 +114,7 @@ impl ConsumerContext {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_websockets::consumers::ConsumerContext;
 	/// use reinhardt_di::{InjectionContext, SingletonScope};
 	/// use std::sync::Arc;
@@ -193,7 +193,7 @@ impl ConsumerContext {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let db: Arc<DatabaseConnection> = ctx.resolve().await?;
 	/// ```
 	#[cfg(feature = "di")]
@@ -225,7 +225,7 @@ impl ConsumerContext {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let fresh_service: MyService = ctx.resolve_uncached().await?;
 	/// ```
 	#[cfg(feature = "di")]
@@ -251,7 +251,7 @@ impl ConsumerContext {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// if let Some(cache) = ctx.try_resolve::<CacheService>().await {
 	///     // Use cache
 	/// } else {

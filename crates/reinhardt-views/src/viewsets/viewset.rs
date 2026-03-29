@@ -521,7 +521,7 @@ impl<M: 'static, S: 'static> ReadOnlyModelViewSet<M, S> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_views::viewsets::{ReadOnlyModelViewSet, FilterConfig};
 	///
 	/// let viewset = ReadOnlyModelViewSet::<MyModel, MySerializer>::new("items")
@@ -540,7 +540,7 @@ impl<M: 'static, S: 'static> ReadOnlyModelViewSet<M, S> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_views::viewsets::{ReadOnlyModelViewSet, OrderingConfig};
 	///
 	/// let viewset = ReadOnlyModelViewSet::<MyModel, MySerializer>::new("items")

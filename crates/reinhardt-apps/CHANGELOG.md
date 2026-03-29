@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-apps@v0.1.0-rc.14...reinhardt-apps@v0.1.0-rc.15) - 2026-03-29
+
+### Added
+
+- *(reinhardt-apps,reinhardt-pages)* expose test reset functions behind testing feature
+
 ## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-apps@v0.1.0-rc.13...reinhardt-apps@v0.1.0-rc.14) - 2026-03-24
 
 ### Documentation

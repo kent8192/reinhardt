@@ -22,7 +22,10 @@ static = ["reinhardt-utils/staticfiles"]
 websockets = ["dep:reinhardt-websockets", "reinhardt-server/websocket"]
 graphql = ["reinhardt-server/graphql", "dep:async-graphql"]
 property-based = ["dep:proptest"]
-full = ["testcontainers", "static", "websockets", "graphql", "property-based"]
+viewsets = []
+admin = ["dep:reinhardt-conf"]
+messages = ["reinhardt-core/messages"]
+full = ["testcontainers", "static", "websockets", "graphql", "property-based", "viewsets", "admin", "messages"]
 
 [dependencies]
 reinhardt-db = { workspace = true, features = ["backends", "migrations", "mysql", "orm", "postgres", "sqlite"] }
@@ -77,11 +80,9 @@ async-graphql = { workspace = true, optional = true }
 # WebSocket and messaging
 tokio-tungstenite = "0.28.0"
 lapin = "3.7.2"
-reinhardt-rest = { workspace = true, features = ["serializers", "parsers"] }
 reinhardt-core = { workspace = true, features = [
   "types",
   "exception",
-  "messages",
 ] }
 reinhardt-utils = { workspace = true, features = ["cache", "staticfiles"] }
 
@@ -95,7 +96,7 @@ rstest = "0.26.1"
 mockall = { workspace = true }
 
 reinhardt-urls = { workspace = true, features = ["routers"] }
-reinhardt-conf = { workspace = true, features = ["settings", "async"] }
+reinhardt-conf = { workspace = true, features = ["settings", "async"], optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

@@ -48,6 +48,7 @@ pub mod http;
 /// Test logging initialization utilities.
 pub mod logging;
 /// Test message assertion utilities.
+#[cfg(feature = "messages")]
 pub mod messages;
 /// Mock function and spy utilities for testing.
 pub mod mock;
@@ -62,6 +63,7 @@ pub mod testcase;
 /// Test view implementations for integration testing.
 pub mod views;
 /// Test ViewSet implementations for integration testing.
+#[cfg(feature = "viewsets")]
 pub mod viewsets;
 
 /// TestContainers integration (PostgreSQL, MySQL, Redis, etc.).
@@ -117,6 +119,7 @@ pub use http::{
 	extract_json, get_header, has_header, header_contains, header_equals,
 };
 pub use logging::init_test_logging;
+#[cfg(feature = "messages")]
 pub use messages::{
 	MessagesTestMixin, assert_message_count, assert_message_exists, assert_message_level,
 	assert_message_tags, assert_messages,
@@ -137,6 +140,7 @@ pub use views::{
 	create_json_request, create_large_test_objects, create_request as create_view_request,
 	create_request_with_headers, create_request_with_path_params, create_test_objects,
 };
+#[cfg(feature = "viewsets")]
 pub use viewsets::{SimpleViewSet, TestViewSet};
 
 #[cfg(feature = "testcontainers")]
@@ -170,6 +174,7 @@ pub mod prelude {
 		create_test_response, extract_json, get_header, has_header, header_contains, header_equals,
 	};
 	pub use super::logging::init_test_logging;
+	#[cfg(feature = "messages")]
 	pub use super::messages::{
 		MessagesTestMixin, assert_message_count, assert_message_exists, assert_messages,
 	};
@@ -191,6 +196,7 @@ pub mod prelude {
 		ApiTestModel, ErrorTestView, SimpleTestView, TestModel, create_api_test_objects,
 		create_test_objects,
 	};
+	#[cfg(feature = "viewsets")]
 	pub use super::viewsets::{SimpleViewSet, TestViewSet};
 
 	#[cfg(feature = "testcontainers")]

@@ -75,6 +75,7 @@ pub mod shared_postgres;
 pub mod testcontainers;
 
 // Admin settings fixtures (depends only on reinhardt-conf, not reinhardt-admin)
+#[cfg(feature = "admin")]
 pub mod admin;
 
 #[cfg(feature = "testcontainers")]

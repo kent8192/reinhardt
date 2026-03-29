@@ -14,7 +14,8 @@ pub use reinhardt_testkit::fixtures::{
 
 pub use reinhardt_testkit::fixtures::migrations;
 
-// Admin settings fixtures (re-exported from testkit)
+// Admin settings fixtures (re-exported from testkit, requires admin feature)
+#[cfg(feature = "admin")]
 pub use reinhardt_testkit::fixtures::admin;
 
 // Server function fixtures (re-exported from testkit)

@@ -14,6 +14,8 @@ static = ["reinhardt-testkit/static"]
 websockets = ["reinhardt-testkit/websockets"]
 graphql = ["reinhardt-testkit/graphql"]
 property-based = ["reinhardt-testkit/property-based"]
+viewsets = ["reinhardt-testkit/viewsets"]
+messages = ["reinhardt-testkit/messages"]
 tasks = ["dep:reinhardt-tasks"]
 admin = [
   "dep:reinhardt-admin",
@@ -23,6 +25,7 @@ admin = [
   "reinhardt-admin/types",
   "reinhardt-admin/adapters",
   "reinhardt-testkit/testcontainers",
+  "reinhardt-testkit/admin",
   "reinhardt-conf/async",
 ]
 # WASM frontend testing utilities
@@ -39,7 +42,7 @@ wasm-full = ["wasm", "reinhardt-pages/web-sys-full"]
 server-fn-test = []
 # E2E browser testing via WebDriver (fantoccini)
 e2e = ["dep:fantoccini", "dep:url"]
-full = ["testcontainers", "static", "websockets", "graphql", "property-based", "tasks", "admin"]
+full = ["testcontainers", "static", "websockets", "graphql", "property-based", "viewsets", "messages", "tasks", "admin"]
 
 [dependencies]
 # Core: delegate to reinhardt-testkit

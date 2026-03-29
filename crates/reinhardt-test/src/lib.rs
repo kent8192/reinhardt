@@ -37,9 +37,15 @@
 
 // Re-export modules from reinhardt-testkit for backward-compatible module paths
 pub use reinhardt_testkit::{
-	assertions, client, debug, factory, http, logging, messages, mock, resource, response, server,
-	testcase, views, viewsets, websocket,
+	assertions, client, debug, factory, http, logging, mock, resource, response, server, testcase,
+	views, websocket,
 };
+
+#[cfg(feature = "messages")]
+pub use reinhardt_testkit::messages;
+
+#[cfg(feature = "viewsets")]
+pub use reinhardt_testkit::viewsets;
 
 #[cfg(feature = "testcontainers")]
 pub use reinhardt_testkit::containers;
@@ -90,11 +96,10 @@ pub use reinhardt_testkit::{
 	APIClient, APIClientBuilder, APIRequestFactory, APITestCase, AsyncTeardownGuard,
 	AsyncTestResource, BodyEchoHandler, CallRecord, ClientError, DebugEntry, DebugPanel,
 	DebugToolbar, DelayedHandler, EchoPathHandler, ErrorKind, HttpVersion, LargeResponseHandler,
-	MessagesTestMixin, MethodEchoHandler, MockFunction, RequestBuilder, ResponseExt, RouterHandler,
-	SimpleHandler, Spy, SqlQuery, StatusCodeHandler, SuiteGuard, SuiteResource, TeardownGuard,
-	TestResource, TestResponse, TimingInfo, WebSocketTestClient, acquire_suite, assert_has_header,
-	assert_header_contains, assert_header_equals, assert_message_count, assert_message_exists,
-	assert_message_level, assert_message_tags, assert_messages, assert_no_header, assert_status,
+	MethodEchoHandler, MockFunction, RequestBuilder, ResponseExt, RouterHandler, SimpleHandler, Spy,
+	SqlQuery, StatusCodeHandler, SuiteGuard, SuiteResource, TeardownGuard, TestResource,
+	TestResponse, TimingInfo, WebSocketTestClient, acquire_suite, assert_has_header,
+	assert_header_contains, assert_header_equals, assert_no_header, assert_status,
 	create_api_test_objects, create_insecure_request, create_json_request,
 	create_large_test_objects, create_request, create_request_with_headers,
 	create_request_with_path_params, create_response_with_headers, create_response_with_status,
@@ -103,11 +108,18 @@ pub use reinhardt_testkit::{
 	shutdown_test_server, spawn_test_server,
 };
 
+#[cfg(feature = "messages")]
+pub use reinhardt_testkit::{
+	MessagesTestMixin, assert_message_count, assert_message_exists, assert_message_level,
+	assert_message_tags, assert_messages,
+};
+
 // Re-export view types (avoid conflict with create_request)
 pub use reinhardt_testkit::create_view_request;
-pub use reinhardt_testkit::{
-	ApiTestModel, ErrorTestView, SimpleTestView, SimpleViewSet, TestModel, TestViewSet,
-};
+pub use reinhardt_testkit::{ApiTestModel, ErrorTestView, SimpleTestView, TestModel};
+
+#[cfg(feature = "viewsets")]
+pub use reinhardt_testkit::{SimpleViewSet, TestViewSet};
 
 // Re-export commonly used types for testing
 pub use reinhardt_testkit::ServerRouter;

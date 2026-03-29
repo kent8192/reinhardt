@@ -42,6 +42,9 @@ pub type GroupManagementResult<T> = Result<T, GroupManagementError>;
 
 /// User group
 ///
+/// When the `database` feature is enabled, this struct is also a database model
+/// mapped to the `auth_group` table.
+///
 /// # Examples
 ///
 /// ```
@@ -56,13 +59,21 @@ pub type GroupManagementResult<T> = Result<T, GroupManagementError>;
 ///
 /// assert_eq!(group.name, "Editors");
 /// ```
+#[cfg_attr(
+	feature = "database",
+	reinhardt_core::macros::model(app_label = "auth", table_name = "auth_group")
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "database", derive(serde::Serialize, serde::Deserialize))]
 pub struct Group {
 	/// Unique identifier for the group.
+	#[cfg_attr(feature = "database", field(primary_key = true))]
 	pub id: Uuid,
 	/// Name of the group.
+	#[cfg_attr(feature = "database", field(max_length = 150, unique = true))]
 	pub name: String,
 	/// Optional description of the group's purpose.
+	#[cfg_attr(feature = "database", field(max_length = 500, null = true))]
 	pub description: Option<String>,
 }
 

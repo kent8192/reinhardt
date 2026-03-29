@@ -316,7 +316,7 @@ impl TypedFormCallbacks {
 ///
 /// ## Example Generated Code
 ///
-/// ```ignore
+/// ```no_run
 /// impl LoginForm {
 ///     pub fn error_display(&self) -> impl IntoView {
 ///         let form = self.clone();
@@ -373,7 +373,7 @@ pub struct TypedFormWatchItem {
 ///
 /// ## Generated Code Example
 ///
-/// ```ignore
+/// ```no_run
 /// // Given:
 /// derived: {
 ///     char_count: |form| form.content().get().len(),
@@ -1090,7 +1090,7 @@ impl TypedCustomAttr {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let attr = TypedCustomAttr { name: "aria_label".to_string(), ... };
 	/// assert_eq!(attr.html_name(), "aria-label");
 	/// ```

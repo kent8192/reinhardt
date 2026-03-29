@@ -175,7 +175,7 @@ impl FormFieldEntry {
 /// A single field definition in the form macro.
 ///
 /// Example:
-/// ```ignore
+/// ```no_run
 /// username: CharField {
 ///     required,
 ///     max_length: 100,
@@ -203,7 +203,7 @@ pub struct FormFieldDef {
 ///
 /// ## Example DSL
 ///
-/// ```ignore
+/// ```no_run
 /// address_group: FieldGroup {
 ///     label: "Address",
 ///     class: "address-section",
@@ -361,7 +361,7 @@ pub enum FormFieldProperty {
 ///
 /// ## Example DSL
 ///
-/// ```ignore
+/// ```no_run
 /// attrs: {
 ///     aria_label: "Email address",
 ///     aria_required: "true",
@@ -385,7 +385,7 @@ pub struct CustomAttr {
 ///
 /// ## Example DSL
 ///
-/// ```ignore
+/// ```no_run
 /// wrapper: div {
 ///     class: "relative flex items-center",
 /// }
@@ -418,7 +418,7 @@ pub struct WrapperAttr {
 ///
 /// ## Example DSL
 ///
-/// ```ignore
+/// ```no_run
 /// icon: svg {
 ///     class: "w-5 h-5 text-gray-400",
 ///     viewBox: "0 0 24 24",
@@ -656,7 +656,7 @@ pub struct ClientValidatorRule {
 ///
 /// ## Example DSL
 ///
-/// ```ignore
+/// ```no_run
 /// form! {
 ///     name: ProfileForm,
 ///     server_fn: update_profile,
@@ -718,7 +718,7 @@ impl FormCallbacks {
 ///
 /// ## Example DSL
 ///
-/// ```ignore
+/// ```no_run
 /// state: { loading, error, success },
 /// ```
 ///
@@ -789,7 +789,7 @@ impl FormState {
 ///
 /// ## Example DSL
 ///
-/// ```ignore
+/// ```no_run
 /// watch: {
 ///     error_display: |form| {
 ///         if let Some(err) = form.error().get() {
@@ -850,7 +850,7 @@ pub struct FormWatchItem {
 ///
 /// ## Example DSL
 ///
-/// ```ignore
+/// ```no_run
 /// derived: {
 ///     char_count: |form| form.content().get().len(),
 ///     is_over_limit: |form| form.char_count().get() > 280,
@@ -862,7 +862,7 @@ pub struct FormWatchItem {
 ///
 /// Each derived item generates a `Memo<T>` accessor on the form struct:
 ///
-/// ```ignore
+/// ```no_run
 /// impl MyForm {
 ///     pub fn char_count(&self) -> Memo<usize> {
 ///         Memo::new(move || self.content().get().len())

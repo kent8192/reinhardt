@@ -287,7 +287,7 @@ impl<T: FormModel> ModelForm<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::{ModelForm, ModelFormConfig};
 	///
 	/// // Assuming we have a model that implements the Model trait
@@ -345,7 +345,7 @@ impl<T: FormModel> ModelForm<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::{ModelForm, ModelFormConfig};
 	///
 	/// let config = ModelFormConfig::new();
@@ -358,7 +358,7 @@ impl<T: FormModel> ModelForm<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::{ModelForm, ModelFormConfig};
 	/// use std::collections::HashMap;
 	/// use serde_json::json;
@@ -378,7 +378,7 @@ impl<T: FormModel> ModelForm<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::{ModelForm, ModelFormConfig};
 	///
 	/// let config = ModelFormConfig::new();
@@ -401,7 +401,7 @@ impl<T: FormModel> ModelForm<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::{ModelForm, ModelFormConfig};
 	///
 	/// let config = ModelFormConfig::new();
@@ -506,7 +506,7 @@ impl<T: FormModel> ModelFormBuilder<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::{ModelFormBuilder, ModelFormConfig};
 	///
 	/// let config = ModelFormConfig::new();

@@ -17,7 +17,7 @@ use crate::core::{HeadAttr, HeadContent, HeadElement, HeadMacro};
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_manouche::parser::parse_head;
 /// use quote::quote;
 ///

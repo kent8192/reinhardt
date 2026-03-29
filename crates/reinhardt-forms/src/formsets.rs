@@ -31,7 +31,7 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let parent = Author { id: 1, name: "John".to_string() };
 	/// let formset = InlineFormSet::new(parent, "author_id".to_string());
 	/// ```
@@ -134,7 +134,7 @@ impl<T: FormModel> ModelFormSet<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let formset = ModelFormSet::<User>::new("user".to_string());
 	/// ```
 	pub fn new(prefix: String) -> Self {
@@ -432,7 +432,7 @@ impl FormSetFactory {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::FormSetFactory;
 	///
 	/// let factory = FormSetFactory::new("user".to_string())

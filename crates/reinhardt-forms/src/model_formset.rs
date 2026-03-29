@@ -154,7 +154,7 @@ impl<T: FormModel> ModelFormSet<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::{ModelFormSet, ModelFormSetConfig};
 	///
 	/// let config = ModelFormSetConfig::new();
@@ -195,7 +195,7 @@ impl<T: FormModel> ModelFormSet<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::{ModelFormSet, ModelFormSetConfig};
 	///
 	/// let config = ModelFormSetConfig::new().with_extra(3);
@@ -233,7 +233,7 @@ impl<T: FormModel> ModelFormSet<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::{ModelFormSet, ModelFormSetConfig};
 	///
 	/// let config = ModelFormSetConfig::new();
@@ -262,7 +262,7 @@ impl<T: FormModel> ModelFormSet<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::{ModelFormSet, ModelFormSetConfig};
 	///
 	/// let config = ModelFormSetConfig::new();
@@ -292,7 +292,7 @@ impl<T: FormModel> ModelFormSet<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::{ModelFormSet, ModelFormSetConfig};
 	///
 	/// let config = ModelFormSetConfig::new().with_extra(2);
@@ -318,7 +318,7 @@ impl<T: FormModel> ModelFormSetBuilder<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::ModelFormSetBuilder;
 	///
 	/// let builder = ModelFormSetBuilder::<MyModel>::new();
@@ -333,7 +333,7 @@ impl<T: FormModel> ModelFormSetBuilder<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::ModelFormSetBuilder;
 	///
 	/// let builder = ModelFormSetBuilder::<MyModel>::new().extra(5);
@@ -346,7 +346,7 @@ impl<T: FormModel> ModelFormSetBuilder<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::ModelFormSetBuilder;
 	///
 	/// let builder = ModelFormSetBuilder::<MyModel>::new().can_delete(true);
@@ -359,7 +359,7 @@ impl<T: FormModel> ModelFormSetBuilder<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::ModelFormSetBuilder;
 	///
 	/// let builder = ModelFormSetBuilder::<MyModel>::new().can_order(true);
@@ -372,7 +372,7 @@ impl<T: FormModel> ModelFormSetBuilder<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::ModelFormSetBuilder;
 	///
 	/// let builder = ModelFormSetBuilder::<MyModel>::new().max_num(10);
@@ -385,7 +385,7 @@ impl<T: FormModel> ModelFormSetBuilder<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::ModelFormSetBuilder;
 	///
 	/// let builder = ModelFormSetBuilder::<MyModel>::new().min_num(1);
@@ -398,7 +398,7 @@ impl<T: FormModel> ModelFormSetBuilder<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::ModelFormSetBuilder;
 	///
 	/// let instances = vec![]; // Empty list of model instances
@@ -412,7 +412,7 @@ impl<T: FormModel> ModelFormSetBuilder<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_forms::ModelFormSetBuilder;
 	///
 	/// let builder = ModelFormSetBuilder::<MyModel>::new().extra(3);

@@ -151,7 +151,7 @@ jobs:
 
       - name: Test
         working-directory: examples/${{ matrix.example }}
-        run: cargo nextest run --all-features
+        run: cargo nextest run --all-features --no-tests=warn
 
       - name: Doc Test
         working-directory: examples/${{ matrix.example }}

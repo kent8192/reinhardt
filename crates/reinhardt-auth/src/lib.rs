@@ -172,6 +172,7 @@ pub use default_user::DefaultUser;
 pub use default_user_manager::DefaultUserManager;
 pub use group_management::{
 	CreateGroupData, Group, GroupManagementError, GroupManagementResult, GroupManager,
+	get_group_manager, register_group_manager,
 };
 #[cfg(feature = "sessions")]
 pub use handlers::{LoginCredentials, LoginHandler, LogoutHandler, SESSION_COOKIE_NAME};

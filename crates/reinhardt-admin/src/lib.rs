@@ -14,10 +14,13 @@
 //!
 //! ## Examples
 //!
-//! See individual subcrates for usage examples:
-//! - `reinhardt-admin-types` - Type definitions
-//! - `reinhardt-admin-api` - Backend API
-//! - `reinhardt-admin-ui` - Frontend UI
+//! ## Available Modules
+//!
+//! - [`adapters`] - Admin adapter implementations
+//! - [`core`] - Admin core functionality
+//! - [`pages`] - Admin page rendering
+//! - [`server`] - Admin HTTP server
+//! - [`types`] - Shared type definitions
 
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]

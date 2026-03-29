@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.14...reinhardt-web@v0.1.0-rc.15) - 2026-03-29
+
+### Added
+
+- *(staticfiles)* add WasmEntry struct and auto-inject config fields
+- *(staticfiles)* implement WASM entry point detection
+- *(staticfiles)* implement WASM script injection into HTML
+- *(staticfiles)* wire WASM auto-injection into SPA fallback
+- *(examples)* remove manual WASM scripts for auto-injection
+
+### Changed
+
+- *(admin)* migrate CurrentUser to AuthUser in server functions
+
+### Documentation
+
+- *(tutorials)* fix incorrect API references in tutorial code examples
+- fix documentation-implementation inconsistencies across website and codebase
+- *(website)* fix compilation-breaking code examples in getting-started guide
+- *(website)* fix incorrect SettingsFragment trait and import paths in settings reference
+- *(website)* fix incorrect feature names and crate defaults in feature-flags reference
+- *(website)* fix non-existent types and incorrect paths in API reference
+- *(website)* fix unimplemented attributes and wrong macro systems in field-attributes reference
+- *(website)* fix incorrect imports and API usage in cookbook and tutorials
+
+### Fixed
+
+- *(query)* preserve single quotes in MySQL user identifier parsing
+- fix!(auth): add JwtError enum and reject expired tokens by default
+- *(staticfiles)* address security and spec compliance review issues
+- *(staticfiles)* add empty wasm_entry check and fix log levels
+- *(admin)* add admin_static_routes to reinhardt re-exports
+- *(admin)* preserve query string in popstate navigation handler
+- *(admin)* migrate remaining CurrentUser to AuthUser and update example
+- *(admin)* replace CRLF before individual char replacement in TSV export
+- *(testkit)* use multi-thread runtime and install any drivers in fixture tests
+- *(admin)* update integration tests to match new admin API signatures
+- *(test)* update admin create tests to match fixed implementation
+- *(di)* register HTTP request in request_scope during fork_for_request
+
+### Maintenance
+
+- *(staticfiles)* fix formatting and dead code warning
+
+### Other
+
+- resolve conflict with main in delete.rs
+- resolve conflicts with main in features.rs
+- resolve conflict with main in delete.rs
+- resolve conflict with main in tweet admin config
+- resolve conflicts with main branch
+
+### Testing
+
+- *(testkit)* add comprehensive tests for core utility modules
+- *(testkit)* add tests for fixture modules (server, testcontainers, resources, validator)
+- *(test)* add fixture output validation tests for auth and admin_panel
+- *(test)* add WASM module tests and convert existing tests to rstest
+- *(admin)* add update_record integration tests
+- *(admin)* add E2E integration tests for DI resolution pipeline
+
 ## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.13...reinhardt-web@v0.1.0-rc.14) - 2026-03-24
 
 ### Added

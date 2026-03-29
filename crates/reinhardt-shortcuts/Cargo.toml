@@ -26,7 +26,7 @@ reinhardt-test = { workspace = true, optional = true }
 
 [features]
 default = []
-database = ["reinhardt-db", "reinhardt-db/backends", "reinhardt-db/pool", "reinhardt-db/orm", "reinhardt-db/postgres"]
+database = ["reinhardt-db", "reinhardt-db/orm"]
 full = ["database"]
 # Test utilities
 test-utils = ["dep:reinhardt-test", "reinhardt-test/testcontainers"]

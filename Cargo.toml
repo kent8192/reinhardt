@@ -65,6 +65,7 @@ database = [
   "linkme",
   "ctor",
   "reinhardt-auth?/database",
+  "reinhardt-shortcuts?/database",
 ]
 api = [
   "reinhardt-rest",

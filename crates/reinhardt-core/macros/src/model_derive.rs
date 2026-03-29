@@ -979,6 +979,13 @@ fn field_type_to_metadata_string(ty: &Type, _config: &FieldConfig) -> Result<Str
 				"Time" => "TimeField",
 				"Decimal" => "DecimalField",
 				"Uuid" => "UuidField",
+				// PostgreSQL-specific types (aligned with map_type_to_field_type)
+				#[cfg(feature = "db-postgres")]
+				"Vec" => "ArrayField",
+				#[cfg(feature = "db-postgres")]
+				"Value" => "JsonField",
+				#[cfg(feature = "db-postgres")]
+				"HashMap" => "HStoreField",
 				other => {
 					return Err(syn::Error::new_spanned(
 						ty,

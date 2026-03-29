@@ -9,7 +9,7 @@
 //!
 //! ## Example
 //!
-//! ```ignore
+//! ```rust
 //! use reinhardt_core::types::page::EventType;
 //!
 //! let event_type = EventType::Click;
@@ -106,7 +106,9 @@ impl EventType {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
+	/// use reinhardt_core::types::page::EventType;
+	///
 	/// assert_eq!(EventType::Click.as_str(), "click");
 	/// assert_eq!(EventType::MouseDown.as_str(), "mousedown");
 	/// ```
@@ -180,7 +182,9 @@ impl std::str::FromStr for EventType {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
+	/// use reinhardt_core::types::page::EventType;
+	///
 	/// let click: EventType = "click".parse().unwrap();
 	/// assert_eq!(click, EventType::Click);
 	/// ```

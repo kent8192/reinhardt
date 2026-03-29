@@ -14,7 +14,7 @@
 //!
 //! ## Example
 //!
-//! ```ignore
+//! ```rust
 //! use reinhardt_core::reactive::{Signal, Effect, Runtime};
 //!
 //! // Create a signal
@@ -385,9 +385,10 @@ thread_local! {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use reinhardt_core::reactive::runtime::with_runtime;
+/// ```rust
+/// use reinhardt_core::reactive::runtime::{with_runtime, NodeId};
 ///
+/// let signal_id = NodeId::new();
 /// with_runtime(|rt| {
 ///     rt.track_dependency(signal_id);
 /// });

@@ -13,7 +13,7 @@
 //!
 //! ## Example
 //!
-//! ```ignore
+//! ```rust
 //! use reinhardt_core::reactive::{Signal, Effect};
 //!
 //! let count = Signal::new(0);
@@ -73,7 +73,7 @@ pub(crate) fn get_effect_timing(effect_id: NodeId) -> Option<EffectTiming> {
 ///
 /// ## Example
 ///
-/// ```ignore
+/// ```rust
 /// use reinhardt_core::reactive::{Signal, Effect};
 ///
 /// let count = Signal::new(0);
@@ -106,7 +106,9 @@ impl Effect {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
+	/// use reinhardt_core::reactive::{Signal, Effect};
+	///
 	/// let count = Signal::new(0);
 	///
 	/// Effect::new(move || {
@@ -156,7 +158,9 @@ impl Effect {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
+	/// use reinhardt_core::reactive::{Signal, Effect, EffectTiming};
+	///
 	/// let count = Signal::new(0);
 	///
 	/// Effect::new_with_timing(move || {

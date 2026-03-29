@@ -22,7 +22,7 @@
 //!
 //! ## Example
 //!
-//! ```ignore
+//! ```rust
 //! use reinhardt_core::reactive::{Signal, Effect, Memo};
 //!
 //! // Create signals

@@ -12,7 +12,7 @@
 //!
 //! ## Example
 //!
-//! ```ignore
+//! ```rust
 //! use reinhardt_core::reactive::{Signal, Memo};
 //!
 //! let count = Signal::new(5);
@@ -77,7 +77,7 @@ thread_local! {
 ///
 /// ## Example
 ///
-/// ```ignore
+/// ```rust
 /// use reinhardt_core::reactive::{Signal, Memo, Effect};
 ///
 /// let first_name = Signal::new("John".to_string());
@@ -116,7 +116,9 @@ impl<T: Clone + 'static> Memo<T> {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
+	/// use reinhardt_core::reactive::{Signal, Memo};
+	///
 	/// let count = Signal::new(5);
 	/// let doubled = Memo::new(move || count.get() * 2);
 	/// assert_eq!(doubled.get(), 10);
@@ -227,7 +229,9 @@ impl<T: Clone + 'static> Memo<T> {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
+	/// use reinhardt_core::reactive::{Signal, Memo};
+	///
 	/// let count = Signal::new(5);
 	/// let doubled = Memo::new(move || count.get() * 2);
 	///

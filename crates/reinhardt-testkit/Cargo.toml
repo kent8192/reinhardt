@@ -2,6 +2,7 @@
 name = "reinhardt-testkit"
 version = "0.1.0-rc.14"
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 description = "Core testing infrastructure for Reinhardt framework (no functional crate dependencies)"
 license.workspace = true

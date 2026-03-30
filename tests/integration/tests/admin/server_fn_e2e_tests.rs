@@ -15,8 +15,9 @@
 //! DI pipeline, including ORM deserialization from the `auth_user` table.
 
 use super::server_fn_helpers::{
-	TEST_CSRF_TOKEN, e2e_router_context, make_e2e_request, make_e2e_request_no_auth,
-	make_e2e_request_no_csrf, make_e2e_request_wrong_csrf,
+	TEST_CSRF_TOKEN, e2e_router_context, make_e2e_request, make_e2e_request_inactive,
+	make_e2e_request_no_auth, make_e2e_request_no_csrf, make_e2e_request_non_staff,
+	make_e2e_request_wrong_csrf,
 };
 use hyper::StatusCode;
 use reinhardt_admin::adapters::MutationRequest;
@@ -571,5 +572,68 @@ async fn test_e2e_unauthenticated_request(
 		response.status,
 		StatusCode::OK,
 		"Unauthenticated request should not succeed"
+	);
+}
+
+/// Verify non-staff user is denied at the middleware level.
+/// The user is authenticated and active but is_admin=false (not staff).
+/// AdminAuthenticatedUser::inject() should reject non-staff users before
+/// the handler is invoked.
+#[rstest]
+#[tokio::test]
+async fn test_e2e_non_staff_user_denied(
+	#[future] e2e_router_context: (ServerRouter, Arc<AdminDatabase>),
+) {
+	// Arrange
+	let (router, _db) = e2e_router_context.await;
+
+	let request = make_e2e_request_non_staff(
+		"/admin/api/server_fn/get_list",
+		json!({
+			"model_name": "TestModel",
+			"params": {}
+		}),
+	);
+
+	// Act
+	let response = router.handle(request).await;
+
+	// Assert - non-staff user should not get 200
+	let response = response.expect("Router should handle request");
+	assert_ne!(
+		response.status,
+		StatusCode::OK,
+		"Non-staff user should not succeed"
+	);
+}
+
+/// Verify inactive user is denied at the middleware level.
+/// The user is authenticated and staff but is_active=false.
+/// The auth pipeline should reject inactive users.
+#[rstest]
+#[tokio::test]
+async fn test_e2e_inactive_user_denied(
+	#[future] e2e_router_context: (ServerRouter, Arc<AdminDatabase>),
+) {
+	// Arrange
+	let (router, _db) = e2e_router_context.await;
+
+	let request = make_e2e_request_inactive(
+		"/admin/api/server_fn/get_list",
+		json!({
+			"model_name": "TestModel",
+			"params": {}
+		}),
+	);
+
+	// Act
+	let response = router.handle(request).await;
+
+	// Assert - inactive user should not get 200
+	let response = response.expect("Router should handle request");
+	assert_ne!(
+		response.status,
+		StatusCode::OK,
+		"Inactive user should not succeed"
 	);
 }

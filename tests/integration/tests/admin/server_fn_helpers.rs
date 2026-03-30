@@ -31,6 +31,12 @@ pub const TEST_USER_UUID: &str = "00000000-0000-0000-0000-000000000001";
 /// The request has:
 /// - `AuthState::authenticated` with is_admin=true, is_active=true
 /// - `Cookie` header containing `__csrf_token={TEST_CSRF_TOKEN}`
+///
+/// **Note on middleware bypass**: This function injects `AuthState` directly into
+/// request extensions, intentionally bypassing the authentication middleware pipeline.
+/// This is correct for unit-level server function testing where we want to test
+/// business logic in isolation. For middleware-level integration tests (CSRF validation,
+/// auth rejection, etc.), see `make_e2e_request*()` helpers and `server_fn_e2e_tests.rs`.
 pub fn make_staff_request() -> ServerFnRequest {
 	let request = reinhardt_http::Request::builder()
 		.uri("/admin/test")
@@ -627,6 +633,54 @@ pub fn make_e2e_request_wrong_csrf(path: &str, body: serde_json::Value) -> reinh
 	request
 		.extensions
 		.insert(AuthState::authenticated(TEST_USER_UUID, true, true));
+
+	request
+}
+
+/// Builds an HTTP POST request for a non-staff user for testing staff check rejection.
+///
+/// The user is authenticated and active, but `is_admin` (is_staff) is false.
+/// This tests the middleware-level staff check that rejects non-staff users.
+pub fn make_e2e_request_non_staff(path: &str, body: serde_json::Value) -> reinhardt_http::Request {
+	let body_bytes = serde_json::to_vec(&body).expect("Failed to serialize request body");
+
+	let request = reinhardt_http::Request::builder()
+		.method(hyper::Method::POST)
+		.uri(path)
+		.header("content-type", "application/json")
+		.header("cookie", format!("__csrf_token={}", TEST_CSRF_TOKEN))
+		.body(hyper::body::Bytes::from(body_bytes))
+		.build()
+		.expect("Failed to build E2E request");
+
+	// Authenticated but NOT staff (is_admin=false)
+	request
+		.extensions
+		.insert(AuthState::authenticated(TEST_USER_UUID, false, true));
+
+	request
+}
+
+/// Builds an HTTP POST request for an inactive user for testing active check rejection.
+///
+/// The user is authenticated and staff, but `is_active` is false.
+/// This tests the middleware-level active check that rejects inactive users.
+pub fn make_e2e_request_inactive(path: &str, body: serde_json::Value) -> reinhardt_http::Request {
+	let body_bytes = serde_json::to_vec(&body).expect("Failed to serialize request body");
+
+	let request = reinhardt_http::Request::builder()
+		.method(hyper::Method::POST)
+		.uri(path)
+		.header("content-type", "application/json")
+		.header("cookie", format!("__csrf_token={}", TEST_CSRF_TOKEN))
+		.body(hyper::body::Bytes::from(body_bytes))
+		.build()
+		.expect("Failed to build E2E request");
+
+	// Authenticated and staff but NOT active
+	request
+		.extensions
+		.insert(AuthState::authenticated(TEST_USER_UUID, true, false));
 
 	request
 }

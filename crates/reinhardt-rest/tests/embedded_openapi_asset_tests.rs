@@ -34,10 +34,7 @@ fn swagger_png_has_valid_header() {
 #[rstest]
 fn redoc_png_is_not_empty() {
 	// Assert
-	assert!(
-		!REDOC_FAVICON.is_empty(),
-		"redoc.png should not be empty"
-	);
+	assert!(!REDOC_FAVICON.is_empty(), "redoc.png should not be empty");
 }
 
 #[rstest]

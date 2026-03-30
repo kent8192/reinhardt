@@ -11,10 +11,7 @@ const PREACT_RENDER_TO_STRING: &str = include_str!("../src/wasm/js/preact-render
 #[rstest]
 fn preact_core_is_not_empty() {
 	// Assert
-	assert!(
-		!PREACT_CORE.is_empty(),
-		"preact.min.js should not be empty"
-	);
+	assert!(!PREACT_CORE.is_empty(), "preact.min.js should not be empty");
 	assert!(
 		PREACT_CORE.len() > 100,
 		"preact.min.js should have substantial content (got {} bytes)",

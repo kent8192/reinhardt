@@ -368,7 +368,10 @@ fn inspector_find_by_path_prefix_matches_multiple() {
 
 	// Assert
 	assert_eq!(routes.len(), 2);
-	assert!(routes.iter().all(|r| r.path.starts_with("/api/v1")), "all matched routes should have /api/v1 prefix");
+	assert!(
+		routes.iter().all(|r| r.path.starts_with("/api/v1")),
+		"all matched routes should have /api/v1 prefix"
+	);
 }
 
 #[rstest]
@@ -397,7 +400,10 @@ fn inspector_find_by_path_prefix_exact_match_included() {
 	// Assert
 	assert_eq!(routes.len(), 2);
 	let paths: Vec<&str> = routes.iter().map(|r| r.path.as_str()).collect();
-	assert!(paths.contains(&"/api/"), "should include exact prefix match");
+	assert!(
+		paths.contains(&"/api/"),
+		"should include exact prefix match"
+	);
 	assert!(paths.contains(&"/api/users/"), "should include sub-path");
 }
 
@@ -445,7 +451,12 @@ fn inspector_find_by_namespace_exact_match() {
 
 	// Assert
 	assert_eq!(routes.len(), 2);
-	assert!(routes.iter().all(|r| r.name.as_deref().unwrap_or("").starts_with("api:v1:")), "all matched routes should be in api:v1 namespace");
+	assert!(
+		routes
+			.iter()
+			.all(|r| r.name.as_deref().unwrap_or("").starts_with("api:v1:")),
+		"all matched routes should be in api:v1 namespace"
+	);
 }
 
 #[rstest]

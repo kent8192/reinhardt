@@ -1997,6 +1997,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("format!"));
 		assert!(result.contains_page_macro);
 	}
@@ -2013,6 +2014,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("get_message()"));
 		assert!(result.contains_page_macro);
 	}
@@ -2029,6 +2031,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("user.get_name()"));
 		assert!(result.contains_page_macro);
 	}

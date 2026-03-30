@@ -7,13 +7,13 @@ use super::server_fn_helpers::{
 	deny_all_context, make_auth_user, make_staff_request, view_only_context,
 };
 use reinhardt_admin::adapters::ListQueryParams;
+use reinhardt_admin::adapters::{BulkDeleteRequest, ImportFormat, MutationRequest};
 use reinhardt_admin::core::ExportFormat;
 use reinhardt_admin::core::{AdminDatabase, AdminSite};
 use reinhardt_admin::server::{
 	bulk_delete_records, create_record, delete_record, export_data, get_detail, get_fields,
 	get_list, import_data, update_record,
 };
-use reinhardt_admin::adapters::{BulkDeleteRequest, ImportFormat, MutationRequest};
 use rstest::*;
 use serde_json::json;
 use std::sync::Arc;
@@ -25,9 +25,7 @@ use super::server_fn_helpers::TEST_CSRF_TOKEN;
 /// Verify get_list is denied when view permission is false
 #[rstest]
 #[tokio::test]
-async fn test_deny_all_get_list(
-	#[future] deny_all_context: (Arc<AdminSite>, Arc<AdminDatabase>),
-) {
+async fn test_deny_all_get_list(#[future] deny_all_context: (Arc<AdminSite>, Arc<AdminDatabase>)) {
 	// Arrange
 	let (site, db) = deny_all_context.await;
 	let auth_user = make_auth_user();
@@ -113,9 +111,7 @@ async fn test_deny_all_get_fields(
 /// Verify export_data is denied when view permission is false
 #[rstest]
 #[tokio::test]
-async fn test_deny_all_export(
-	#[future] deny_all_context: (Arc<AdminSite>, Arc<AdminDatabase>),
-) {
+async fn test_deny_all_export(#[future] deny_all_context: (Arc<AdminSite>, Arc<AdminDatabase>)) {
 	// Arrange
 	let (site, db) = deny_all_context.await;
 	let http_request = make_staff_request();
@@ -145,9 +141,7 @@ async fn test_deny_all_export(
 /// Verify create_record is denied when add permission is false
 #[rstest]
 #[tokio::test]
-async fn test_deny_all_create(
-	#[future] deny_all_context: (Arc<AdminSite>, Arc<AdminDatabase>),
-) {
+async fn test_deny_all_create(#[future] deny_all_context: (Arc<AdminSite>, Arc<AdminDatabase>)) {
 	// Arrange
 	let (site, db) = deny_all_context.await;
 	let http_request = make_staff_request();
@@ -185,9 +179,7 @@ async fn test_deny_all_create(
 /// Verify update_record is denied when change permission is false
 #[rstest]
 #[tokio::test]
-async fn test_deny_all_update(
-	#[future] deny_all_context: (Arc<AdminSite>, Arc<AdminDatabase>),
-) {
+async fn test_deny_all_update(#[future] deny_all_context: (Arc<AdminSite>, Arc<AdminDatabase>)) {
 	// Arrange
 	let (site, db) = deny_all_context.await;
 	let http_request = make_staff_request();
@@ -223,9 +215,7 @@ async fn test_deny_all_update(
 /// Verify delete_record is denied when delete permission is false
 #[rstest]
 #[tokio::test]
-async fn test_deny_all_delete(
-	#[future] deny_all_context: (Arc<AdminSite>, Arc<AdminDatabase>),
-) {
+async fn test_deny_all_delete(#[future] deny_all_context: (Arc<AdminSite>, Arc<AdminDatabase>)) {
 	// Arrange
 	let (site, db) = deny_all_context.await;
 	let http_request = make_staff_request();
@@ -293,9 +283,7 @@ async fn test_deny_all_bulk_delete(
 /// Verify import_data is denied when add permission is false
 #[rstest]
 #[tokio::test]
-async fn test_deny_all_import(
-	#[future] deny_all_context: (Arc<AdminSite>, Arc<AdminDatabase>),
-) {
+async fn test_deny_all_import(#[future] deny_all_context: (Arc<AdminSite>, Arc<AdminDatabase>)) {
 	// Arrange
 	let (site, db) = deny_all_context.await;
 	let http_request = make_staff_request();
@@ -412,7 +400,10 @@ async fn test_view_only_create_denied(
 	.await;
 
 	// Assert
-	assert!(result.is_err(), "create_record should be denied with view-only");
+	assert!(
+		result.is_err(),
+		"create_record should be denied with view-only"
+	);
 	let err = format!("{}", result.unwrap_err());
 	assert!(
 		err.contains("Permission denied") || err.contains("403"),
@@ -450,7 +441,10 @@ async fn test_view_only_update_denied(
 	.await;
 
 	// Assert
-	assert!(result.is_err(), "update_record should be denied with view-only");
+	assert!(
+		result.is_err(),
+		"update_record should be denied with view-only"
+	);
 	let err = format!("{}", result.unwrap_err());
 	assert!(
 		err.contains("Permission denied") || err.contains("403"),
@@ -483,7 +477,10 @@ async fn test_view_only_delete_denied(
 	.await;
 
 	// Assert
-	assert!(result.is_err(), "delete_record should be denied with view-only");
+	assert!(
+		result.is_err(),
+		"delete_record should be denied with view-only"
+	);
 	let err = format!("{}", result.unwrap_err());
 	assert!(
 		err.contains("Permission denied") || err.contains("403"),

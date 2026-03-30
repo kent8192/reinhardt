@@ -38,7 +38,7 @@
 //!
 //! ### Basic Component
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_pages::{Signal, Page, page};
 //!
 //! fn counter() -> Page {

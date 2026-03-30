@@ -75,7 +75,7 @@ impl PluginMetadata {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
 	/// use reinhardt_dentdelion::metadata::PluginMetadata;
 	///
 	/// let metadata = PluginMetadata::builder("auth-delion", "1.0.0")

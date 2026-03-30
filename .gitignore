@@ -132,7 +132,8 @@ db.sqlite3
 # Git worktrees
 .worktrees/
 
-# WASM build artifacts (examples)
+# WASM build artifacts
+dist-wasm/
 examples/examples-twitter/static/admin/
 
 # Design/planning documents (local only)

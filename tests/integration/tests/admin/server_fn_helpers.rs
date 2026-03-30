@@ -102,6 +102,18 @@ impl AllPermissionsModelAdmin {
 			search_fields: vec!["name".to_string(), "description".to_string()],
 		}
 	}
+
+	/// Creates a new instance configured for a UUID primary key test model.
+	pub fn uuid_pk_model(table_name: &str) -> Self {
+		Self {
+			model_name: "UuidModel".to_string(),
+			table_name: table_name.to_string(),
+			pk_field: "id".to_string(),
+			list_display: vec!["id".to_string(), "name".to_string(), "status".to_string()],
+			list_filter: vec!["status".to_string()],
+			search_fields: vec!["name".to_string()],
+		}
+	}
 }
 
 #[async_trait::async_trait]
@@ -311,6 +323,40 @@ pub async fn e2e_router_context(
 	(router, admin_db)
 }
 
+/// Composite fixture providing a `ServerRouter` WITHOUT `DatabaseConnection`.
+///
+/// Intentionally omits `DatabaseConnection` from the singleton scope to test
+/// error behavior when DI dependencies are missing. All admin routes and
+/// `AdminUserLoader` are still registered via `admin_routes_with_di_deferred()`.
+///
+/// Unlike `e2e_router_context`, this fixture:
+/// - Does NOT require a database pool
+/// - Does NOT create any tables
+/// - Returns only `ServerRouter` (no `AdminDatabase`)
+#[fixture]
+pub async fn e2e_router_context_no_db() -> ServerRouter {
+	use reinhardt_admin::core::admin_routes_with_di_deferred;
+
+	// Build AdminSite and register test model
+	let site = Arc::new(AdminSite::new("E2E Test Admin (No DB)"));
+	let admin = AllPermissionsModelAdmin::test_model("test_models");
+	site.register("TestModel", admin)
+		.expect("Failed to register TestModel");
+
+	// Build admin router with deferred DI
+	let (admin_router, admin_di) = admin_routes_with_di_deferred(site);
+
+	// Build singleton scope WITHOUT DatabaseConnection
+	let singleton = Arc::new(SingletonScope::new());
+	let di_ctx = Arc::new(InjectionContext::builder(singleton).build());
+
+	reinhardt_urls::routers::UnifiedRouter::new()
+		.with_di_context(di_ctx)
+		.mount("/admin/", admin_router)
+		.with_di_registrations(admin_di)
+		.into_server()
+}
+
 /// Builds an HTTP POST request suitable for E2E server function tests.
 ///
 /// Includes:
@@ -388,4 +434,63 @@ pub fn make_e2e_request_no_auth(path: &str, body: serde_json::Value) -> reinhard
 		.body(hyper::body::Bytes::from(body_bytes))
 		.build()
 		.expect("Failed to build E2E request")
+}
+
+/// Composite fixture providing AdminSite + AdminDatabase + PgPool with a UUID primary key table.
+///
+/// Creates a PostgreSQL table with a UUID PK column and registers an
+/// `AllPermissionsModelAdmin` configured for UUID lookups.
+/// Returns the PgPool alongside AdminSite and AdminDatabase so tests can
+/// insert records with UUID PKs directly via SQL.
+#[fixture]
+pub async fn uuid_pk_context(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) -> (Arc<AdminSite>, Arc<AdminDatabase>, sqlx::PgPool) {
+	let (pool, _) = shared_db_pool.await;
+
+	// Create a table with UUID primary key
+	pool.execute(
+		"CREATE TABLE IF NOT EXISTS uuid_test_models (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			name VARCHAR(255) NOT NULL,
+			status VARCHAR(50) DEFAULT 'active'
+		)",
+	)
+	.await
+	.expect("Failed to create uuid_test_models table");
+
+	pool.execute("TRUNCATE TABLE uuid_test_models CASCADE")
+		.await
+		.expect("Failed to truncate uuid_test_models table");
+
+	// Register the UUID field type in the migration registry so that
+	// parse_pk_value can look up the correct type at runtime.
+	use reinhardt_db::migrations::FieldType;
+	use reinhardt_db::migrations::model_registry::{FieldMetadata, ModelMetadata, global_registry};
+	let mut model_meta = ModelMetadata::new("test", "UuidModel", "uuid_test_models");
+	model_meta
+		.fields
+		.insert("id".to_string(), FieldMetadata::new(FieldType::Uuid));
+	model_meta.fields.insert(
+		"name".to_string(),
+		FieldMetadata::new(FieldType::VarChar(255)),
+	);
+	model_meta.fields.insert(
+		"status".to_string(),
+		FieldMetadata::new(FieldType::VarChar(50)),
+	);
+	global_registry().register_model(model_meta);
+
+	let pool_clone = pool.clone();
+	let backend = Arc::new(PostgresBackend::new(pool));
+	let backends_conn = BackendsConnection::new(backend);
+	let connection = DatabaseConnection::new(DatabaseBackend::Postgres, backends_conn);
+	let db = Arc::new(AdminDatabase::new(connection));
+
+	let site = Arc::new(AdminSite::new("UUID Test Admin Site"));
+	let admin = AllPermissionsModelAdmin::uuid_pk_model("uuid_test_models");
+	site.register("UuidModel", admin)
+		.expect("Failed to register UuidModel");
+
+	(site, db, pool_clone)
 }

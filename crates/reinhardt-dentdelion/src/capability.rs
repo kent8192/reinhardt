@@ -12,7 +12,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```rust
 //! use reinhardt_dentdelion::capability::{Capability, PluginCapability};
 //!
 //! // Core capabilities
@@ -389,12 +389,12 @@ impl std::str::FromStr for Capability {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```rust
 /// use reinhardt_dentdelion::capability::PluginTier;
 ///
 /// let tier = PluginTier::Premium;
-/// let limits = tier.limits();
-/// println!("Memory limit: {} MB", limits.memory_limit_bytes / 1024 / 1024);
+/// let memory_limit = tier.memory_limit_bytes();
+/// println!("Memory limit: {} MB", memory_limit / 1024 / 1024);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -498,7 +498,7 @@ impl std::str::FromStr for PluginTier {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```rust
 /// use reinhardt_dentdelion::capability::TrustLevel;
 ///
 /// let trust = TrustLevel::Verified;

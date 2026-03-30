@@ -2,12 +2,15 @@
 //!
 //! Provides delete operations for admin models (single and bulk).
 
+#[cfg(not(target_arch = "wasm32"))]
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{
 	AdminDatabase, AdminRecord, AdminSite, BulkDeleteRequest, BulkDeleteResponse,
 };
 use crate::types::MutationResponse;
-use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
+#[cfg(not(target_arch = "wasm32"))]
+use reinhardt_pages::server_fn::ServerFnRequest;
+use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]

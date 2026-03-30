@@ -37,6 +37,7 @@ mod wasm_only {
 	/// Dummy ExportFormat type for WASM type checking
 	///
 	/// This type is never actually used in WASM code.
+	#[derive(serde::Serialize, serde::Deserialize)]
 	pub struct ExportFormat;
 
 	/// Dummy ImportBuilder type for WASM type checking
@@ -52,6 +53,7 @@ mod wasm_only {
 	/// Dummy ImportFormat type for WASM type checking
 	///
 	/// This type is never actually used in WASM code.
+	#[derive(serde::Serialize, serde::Deserialize)]
 	pub struct ImportFormat;
 
 	/// Dummy ImportResult type for WASM type checking

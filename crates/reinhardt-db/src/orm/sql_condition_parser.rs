@@ -52,7 +52,9 @@ impl SqlConditionParser {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// use reinhardt_db::orm::sql_condition_parser::SqlConditionParser;
+	///
 	/// let q = SqlConditionParser::parse("age > 18");
 	/// let q = SqlConditionParser::parse("name LIKE '%John%'");
 	/// let q = SqlConditionParser::parse("email IS NOT NULL");

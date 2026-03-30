@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-pages"
-version = "0.1.0-rc.14"
+version = "0.1.0-rc.15"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -135,6 +135,8 @@ web-sys = { version = "0.3.83", features = [
 	# History API (for router)
 	"History",
 	"Location",
+	# Storage API (for JWT token management)
+	"Storage",
 	# WebSocket API
 	"WebSocket",
 	"MessageEvent",

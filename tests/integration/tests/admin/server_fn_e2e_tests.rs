@@ -15,8 +15,8 @@
 //! DI pipeline, including ORM deserialization from the `auth_user` table.
 
 use super::server_fn_helpers::{
-	TEST_CSRF_TOKEN, e2e_router_context, make_e2e_request, make_e2e_request_no_auth,
-	make_e2e_request_no_csrf, make_e2e_request_wrong_csrf,
+	TEST_CSRF_TOKEN, e2e_router_context, e2e_router_context_no_db, make_e2e_request,
+	make_e2e_request_no_auth, make_e2e_request_no_csrf, make_e2e_request_wrong_csrf,
 };
 use hyper::StatusCode;
 use reinhardt_admin::adapters::MutationRequest;
@@ -571,5 +571,118 @@ async fn test_e2e_unauthenticated_request(
 		response.status,
 		StatusCode::OK,
 		"Unauthenticated request should not succeed"
+	);
+}
+
+// ==================== Category 4: Missing DI Dependency Tests (#3085) ====================
+
+/// Verify get_list fails gracefully when DatabaseConnection is missing from singleton scope.
+/// The handler should return an HTTP error (not panic) with a meaningful DI error message.
+#[rstest]
+#[tokio::test]
+async fn test_e2e_get_list_fails_without_database_connection(
+	#[future] e2e_router_context_no_db: ServerRouter,
+) {
+	// Arrange
+	let router = e2e_router_context_no_db.await;
+	let request = make_e2e_request(
+		"/admin/api/server_fn/get_list",
+		json!({
+			"model_name": "TestModel",
+			"params": {}
+		}),
+	);
+
+	// Act
+	let response = router.handle(request).await;
+
+	// Assert - should return error status, not panic
+	let response = response.expect("Router should handle request without panicking");
+	assert_ne!(
+		response.status,
+		StatusCode::OK,
+		"get_list should not succeed without DatabaseConnection"
+	);
+	assert!(
+		response.status.is_server_error() || response.status.is_client_error(),
+		"Expected 4xx/5xx error status, got: {}",
+		response.status
+	);
+	let body = String::from_utf8_lossy(&response.body);
+	assert!(
+		body.contains("DatabaseConnection") || body.contains("injection"),
+		"Error body should mention DI failure, got: {}",
+		body
+	);
+}
+
+/// Verify create_record fails gracefully when DatabaseConnection is missing.
+/// Mutation handlers require both AdminDatabase (needs DB) and AdminAuthenticatedUser (needs DB).
+#[rstest]
+#[tokio::test]
+async fn test_e2e_create_record_fails_without_database_connection(
+	#[future] e2e_router_context_no_db: ServerRouter,
+) {
+	// Arrange
+	let router = e2e_router_context_no_db.await;
+	let mut data = HashMap::new();
+	data.insert("name".to_string(), json!("Should Fail"));
+	data.insert("status".to_string(), json!("active"));
+
+	let mutation = MutationRequest {
+		csrf_token: TEST_CSRF_TOKEN.to_string(),
+		data,
+	};
+
+	let request = make_e2e_request(
+		"/admin/api/server_fn/create_record",
+		json!({
+			"model_name": "TestModel",
+			"request": mutation
+		}),
+	);
+
+	// Act
+	let response = router.handle(request).await;
+
+	// Assert - should return error status, not panic
+	let response = response.expect("Router should handle request without panicking");
+	assert_ne!(
+		response.status,
+		StatusCode::OK,
+		"create_record should not succeed without DatabaseConnection"
+	);
+	assert!(
+		response.status.is_server_error() || response.status.is_client_error(),
+		"Expected 4xx/5xx error status, got: {}",
+		response.status
+	);
+}
+
+/// Verify get_dashboard behavior when DatabaseConnection is missing.
+/// get_dashboard injects Arc<AdminSite> and ServerFnRequest but NOT AdminDatabase
+/// or AuthUser, so it may still succeed depending on its DI requirements.
+#[rstest]
+#[tokio::test]
+async fn test_e2e_get_dashboard_without_database_connection(
+	#[future] e2e_router_context_no_db: ServerRouter,
+) {
+	// Arrange
+	let router = e2e_router_context_no_db.await;
+	let request = make_e2e_request("/admin/api/server_fn/get_dashboard", json!({}));
+
+	// Act
+	let response = router.handle(request).await;
+
+	// Assert - should not panic regardless of success/failure
+	let response = response.expect("Router should handle request without panicking");
+	// get_dashboard may succeed (no DB dependency) or fail (if it uses AdminDatabase).
+	// The key assertion is that it doesn't panic and returns a valid HTTP response.
+	assert!(
+		response.status.is_success()
+			|| response.status.is_server_error()
+			|| response.status.is_client_error(),
+		"Expected a valid HTTP status, got: {}",
+		response.status
 	);
 }

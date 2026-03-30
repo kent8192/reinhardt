@@ -522,7 +522,8 @@ fn generate_derived_methods(
 				/// The value is computed fresh on each call, reading current signal values.
 				///
 				/// For memoization, wrap in a `Memo`:
-				/// ```ignore
+				/// ```no_run
+				/// # use reinhardt_pages::reactive::Memo;
 				/// let form = form.clone();
 				/// let memo = Memo::new(move || form.char_count());
 				/// ```

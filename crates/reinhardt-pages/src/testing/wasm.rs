@@ -21,7 +21,7 @@ use web_sys::{Document, Element, HtmlDocument, HtmlInputElement, window};
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::testing::wasm::setup_csrf_cookie;
 ///
 /// setup_csrf_cookie("test_token_abc123");
@@ -48,7 +48,7 @@ pub fn setup_csrf_cookie(token: &str) {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::testing::wasm::setup_csrf_meta_tag;
 ///
 /// setup_csrf_meta_tag("test_token_abc123");
@@ -90,7 +90,7 @@ pub fn setup_csrf_meta_tag(token: &str) {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::testing::wasm::setup_csrf_input;
 ///
 /// setup_csrf_input("test_token_abc123");
@@ -135,7 +135,7 @@ pub fn setup_csrf_input(token: &str) {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::testing::wasm::{setup_csrf_cookie, cleanup_csrf_fixtures};
 ///
 /// setup_csrf_cookie("test_token");

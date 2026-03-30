@@ -1,6 +1,7 @@
 //! Client-side router for Reinhardt Admin Panel
 //!
 //! Handles routing between different admin pages:
+//! - `/admin/login/` - Login form
 //! - `/admin/` - Dashboard
 //! - `/admin/{model}/` - List view
 //! - `/admin/{model}/{id}/` - Detail view
@@ -10,13 +11,15 @@
 use crate::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, detail_view, list_view, model_form,
 };
+pub use crate::pages::components::login;
 #[cfg(target_arch = "wasm32")]
-use crate::server::{get_dashboard, get_model_detail, get_model_fields, list_models};
+use crate::server::{get_dashboard, get_detail, get_fields, get_list};
 #[cfg(target_arch = "wasm32")]
 use crate::types::ListQueryParams;
 use crate::types::ModelInfo;
 use reinhardt_pages::Signal;
 use reinhardt_pages::component::{Component, Page};
+use reinhardt_pages::page;
 use reinhardt_pages::router::{Link, Router};
 #[cfg(target_arch = "wasm32")]
 use reinhardt_pages::{ResourceState, create_resource};
@@ -25,6 +28,7 @@ use std::collections::HashMap;
 
 /// Admin route enum
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum AdminRoute {
 	/// Dashboard route
 	Dashboard,
@@ -54,6 +58,8 @@ pub enum AdminRoute {
 	},
 	/// Not found route
 	NotFound,
+	/// Login route
+	Login,
 }
 
 // Global Router instance
@@ -68,7 +74,7 @@ thread_local! {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_admin::pages::router::init_global_router;
 ///
 /// init_global_router();
@@ -85,7 +91,7 @@ pub fn init_global_router() {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_admin::pages::router::try_with_router;
 ///
 /// if let Some(count) = try_with_router(|router| router.route_count()) {
@@ -108,7 +114,7 @@ where
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_admin::pages::router::with_router;
 ///
 /// with_router(|router| {
@@ -133,14 +139,14 @@ fn dashboard_view() -> Page {
 
 	PageElement::new("div")
 		.attr("class", "dashboard-container")
-		.child({
+		.child(Page::reactive({
 			let resource = dashboard_resource.clone();
 			move || match resource.get() {
 				ResourceState::Loading => loading_view(),
 				ResourceState::Success(data) => dashboard(&data.site_name, &data.models),
 				ResourceState::Error(err) => error_view(&err),
 			}
-		})
+		}))
 		.into_page()
 }
 
@@ -172,7 +178,7 @@ fn list_view_component(model_name: String) -> Page {
 		let model_name = model_name.clone();
 		async move {
 			let params = ListQueryParams::default();
-			list_models(model_name, params)
+			get_list(model_name, params)
 				.await
 				.map_err(|e| e.to_string())
 		}
@@ -199,7 +205,7 @@ fn list_view_component(model_name: String) -> Page {
 
 	PageElement::new("div")
 		.attr("class", "list-container")
-		.child({
+		.child(Page::reactive({
 			let resource = list_resource.clone();
 			let page_signal = page_signal.clone();
 			let filters_signal = filters_signal.clone();
@@ -209,14 +215,34 @@ fn list_view_component(model_name: String) -> Page {
 					// Convert ListResponse to ListViewData
 					let data = ListViewData {
 						model_name: response.model_name.clone(),
-						columns: response.columns.unwrap_or_else(|| {
-							vec![Column {
-								field: "id".to_string(),
-								label: "ID".to_string(),
-								sortable: true,
-							}]
-						}),
-						records: response.results,
+						columns: response
+							.columns
+							.map(|cols| {
+								cols.into_iter()
+									.map(|c| Column {
+										field: c.field,
+										label: c.label,
+										sortable: c.sortable,
+									})
+									.collect()
+							})
+							.unwrap_or_else(|| {
+								vec![Column {
+									field: "id".to_string(),
+									label: "ID".to_string(),
+									sortable: true,
+								}]
+							}),
+						records: response
+							.results
+							.into_iter()
+							.map(|record| {
+								record
+									.into_iter()
+									.map(|(k, v)| (k, v.as_str().unwrap_or("").to_string()))
+									.collect()
+							})
+							.collect(),
 						current_page: response.page,
 						total_pages: response.total_pages,
 						total_count: response.count,
@@ -226,7 +252,7 @@ fn list_view_component(model_name: String) -> Page {
 				}
 				ResourceState::Error(err) => error_view(&err),
 			}
-		})
+		}))
 		.into_page()
 }
 
@@ -267,11 +293,13 @@ fn list_view_component(model_name: String) -> Page {
 fn detail_view_component(model_name: String, record_id: String) -> Page {
 	use reinhardt_pages::component::{IntoPage, PageElement};
 
+	let model_name_for_view = model_name.clone();
+	let record_id_for_view = record_id.clone();
 	let detail_resource = create_resource(move || {
 		let model_name = model_name.clone();
 		let record_id = record_id.clone();
 		async move {
-			get_model_detail(model_name, record_id)
+			get_detail(model_name, record_id)
 				.await
 				.map_err(|e| e.to_string())
 		}
@@ -279,18 +307,23 @@ fn detail_view_component(model_name: String, record_id: String) -> Page {
 
 	PageElement::new("div")
 		.attr("class", "detail-container")
-		.child({
+		.child(Page::reactive({
 			let resource = detail_resource.clone();
-			let model_name = model_name.clone();
-			let record_id = record_id.clone();
+			let model_name = model_name_for_view;
+			let record_id = record_id_for_view;
 			move || match resource.get() {
 				ResourceState::Loading => loading_view(),
 				ResourceState::Success(response) => {
-					detail_view(&model_name, &record_id, &response.data)
+					let data: std::collections::HashMap<String, String> = response
+						.data
+						.iter()
+						.map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+						.collect();
+					detail_view(&model_name, &record_id, &data)
 				}
 				ResourceState::Error(err) => error_view(&err),
 			}
-		})
+		}))
 		.into_page()
 }
 
@@ -310,10 +343,11 @@ fn detail_view_component(model_name: String, record_id: String) -> Page {
 fn create_view_component(model_name: String) -> Page {
 	use reinhardt_pages::component::{IntoPage, PageElement};
 
+	let model_name_for_view = model_name.clone();
 	let fields_resource = create_resource(move || {
 		let model_name = model_name.clone();
 		async move {
-			get_model_fields(model_name, None)
+			get_fields(model_name, None)
 				.await
 				.map_err(|e| e.to_string())
 		}
@@ -321,9 +355,9 @@ fn create_view_component(model_name: String) -> Page {
 
 	PageElement::new("div")
 		.attr("class", "form-container")
-		.child({
+		.child(Page::reactive({
 			let resource = fields_resource.clone();
-			let model_name = model_name.clone();
+			let model_name = model_name_for_view;
 			move || match resource.get() {
 				ResourceState::Loading => loading_view(),
 				ResourceState::Success(response) => {
@@ -343,7 +377,7 @@ fn create_view_component(model_name: String) -> Page {
 				}
 				ResourceState::Error(err) => error_view(&err),
 			}
-		})
+		}))
 		.into_page()
 }
 
@@ -376,11 +410,13 @@ fn create_view_component(model_name: String) -> Page {
 fn edit_view_component(model_name: String, record_id: String) -> Page {
 	use reinhardt_pages::component::{IntoPage, PageElement};
 
+	let model_name_for_view = model_name.clone();
+	let record_id_for_view = record_id.clone();
 	let fields_resource = create_resource(move || {
 		let model_name = model_name.clone();
 		let record_id = record_id.clone();
 		async move {
-			get_model_fields(model_name, Some(record_id))
+			get_fields(model_name, Some(record_id))
 				.await
 				.map_err(|e| e.to_string())
 		}
@@ -388,10 +424,10 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 
 	PageElement::new("div")
 		.attr("class", "form-container")
-		.child({
+		.child(Page::reactive({
 			let resource = fields_resource.clone();
-			let model_name = model_name.clone();
-			let record_id = record_id.clone();
+			let model_name = model_name_for_view;
+			let record_id = record_id_for_view;
 			move || match resource.get() {
 				ResourceState::Loading => loading_view(),
 				ResourceState::Success(response) => {
@@ -424,7 +460,7 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 				}
 				ResourceState::Error(err) => error_view(&err),
 			}
-		})
+		}))
 		.into_page()
 }
 
@@ -454,26 +490,26 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 
 /// Not found view component for router
 fn not_found_view() -> Page {
-	use reinhardt_pages::component::{IntoPage, PageElement};
+	let dashboard_link = Link::new("/admin/", "Go to Dashboard")
+		.class("admin-btn admin-btn-primary")
+		.render();
 
-	PageElement::new("div")
-		.attr("class", "not-found")
-		.child(
-			PageElement::new("h1")
-				.attr("class", "text-center mt-5")
-				.child("404 - Page Not Found"),
-		)
-		.child(
-			PageElement::new("p")
-				.attr("class", "text-center")
-				.child("The requested page could not be found."),
-		)
-		.child(
-			PageElement::new("div")
-				.attr("class", "text-center mt-3")
-				.child(Link::new("/admin/", "Go to Dashboard").render()),
-		)
-		.into_page()
+	page!(|| {
+		div {
+			class: "not-found text-center py-16 animate__animated animate__fadeIn",
+			h1 {
+				class: "font-display text-4xl font-bold text-slate-300 mb-2",
+				"404"
+			}
+			p {
+				class: "text-slate-500 mb-6",
+				"The requested page could not be found."
+			}
+			div {
+				{ dashboard_link }
+			}
+		}
+	})()
 }
 
 /// Loading view component
@@ -481,53 +517,73 @@ fn not_found_view() -> Page {
 /// Displays a loading indicator while data is being fetched.
 #[cfg(target_arch = "wasm32")]
 fn loading_view() -> Page {
-	use reinhardt_pages::component::{IntoPage, PageElement};
-
-	PageElement::new("div")
-		.attr("class", "loading-spinner text-center mt-5")
-		.child(
-			PageElement::new("div")
-				.attr("class", "spinner-border")
-				.attr("role", "status")
-				.child(
-					PageElement::new("span")
-						.attr("class", "visually-hidden")
-						.child("Loading..."),
-				),
-		)
-		.into_page()
+	page!(|| {
+		div {
+			class: "flex justify-center items-center py-16",
+			div {
+				class: "admin-spinner",
+				role: "status",
+				span {
+					class: "sr-only",
+					"Loading..."
+				}
+			}
+		}
+	})()
 }
 
 /// Error view component
 ///
 /// Displays an error message when data fetch fails.
+/// If the error indicates a 401 Unauthorized response, clears the JWT
+/// token and redirects to the login page.
 #[cfg(target_arch = "wasm32")]
 fn error_view(message: &str) -> Page {
-	use reinhardt_pages::component::{IntoPage, PageElement};
+	use reinhardt_pages::component::IntoPage;
 
-	PageElement::new("div")
-		.attr("class", "error-message alert alert-danger mt-5")
-		.attr("role", "alert")
-		.child(
-			PageElement::new("h4")
-				.attr("class", "alert-heading")
-				.child("Error"),
-		)
-		.child(PageElement::new("p").child(message.to_string()))
-		.child(
-			PageElement::new("div")
-				.attr("class", "mt-3")
-				.child(Link::new("/admin/", "Go to Dashboard").render()),
-		)
-		.into_page()
+	// Detect 401 Unauthorized — clear token and redirect to login
+	if message.contains("401") {
+		reinhardt_pages::auth::clear_jwt_token();
+		reinhardt_pages::auth::auth_state().logout();
+		with_router(|r| {
+			let _ = r.push("/admin/login/");
+		});
+		return page!(|| {
+			div {
+				class: "text-center py-12 text-slate-500",
+				"Redirecting to login..."
+			}
+		})();
+	}
+
+	let message = message.to_string();
+	let dashboard_link = Link::new("/admin/", "Go to Dashboard")
+		.class("admin-btn admin-btn-primary")
+		.render();
+
+	page!(|| {
+		div {
+			class: "admin-alert admin-alert-danger mt-8 animate__animated animate__shakeX",
+			role: "alert",
+			h4 {
+				class: "font-semibold mb-2",
+				"Error"
+			}
+			p {
+				class: "mb-4",
+				{ message }
+			}
+			{ dashboard_link }
+		}
+	})()
 }
 
 /// Convert FieldType to HTML input type string
 ///
-/// Maps reinhardt_admin::types::FieldType to HTML input type attributes.
+/// Maps crate::types::FieldType to HTML input type attributes.
 #[cfg(target_arch = "wasm32")]
-fn field_type_to_html_input_type(field_type: &reinhardt_admin::types::FieldType) -> String {
-	use reinhardt_admin::types::FieldType;
+fn field_type_to_html_input_type(field_type: &crate::types::FieldType) -> String {
+	use crate::types::FieldType;
 
 	match field_type {
 		FieldType::Text => "text".to_string(),
@@ -567,14 +623,17 @@ fn field_type_to_html_input_type(field_type: &reinhardt_admin::types::FieldType)
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_admin::pages::router::init_router;
 ///
 /// let router = init_router();
 /// ```
 pub fn init_router() -> Router {
 	// IMPORTANT: Route registration order matters. See doc comment above.
+	// Login route must be registered before dynamic routes to prevent
+	// /admin/login/ from matching the list route with model="login".
 	Router::new()
+		.named_route("login", "/admin/login/", login::login_view)
 		.named_route("dashboard", "/admin/", dashboard_view)
 		.named_route("create", "/admin/{model}/add/", || {
 			with_router(|router| {
@@ -639,12 +698,23 @@ mod tests {
 	#[test]
 	fn test_init_router_creates_routes() {
 		let router = init_router();
-		assert_eq!(router.route_count(), 5); // dashboard + list + detail + create + edit
+		assert_eq!(router.route_count(), 6); // login + dashboard + list + detail + create + edit
+		assert!(router.has_route("login"));
 		assert!(router.has_route("dashboard"));
 		assert!(router.has_route("list"));
 		assert!(router.has_route("detail"));
 		assert!(router.has_route("create"));
 		assert!(router.has_route("edit"));
+	}
+
+	#[test]
+	fn test_login_route_match() {
+		let router = init_router();
+		let route_match = router.match_path("/admin/login/");
+		assert!(route_match.is_some());
+
+		let route_match = route_match.unwrap();
+		assert_eq!(route_match.route.name(), Some("login"));
 	}
 
 	#[test]
@@ -731,7 +801,8 @@ mod tests {
 		init_global_router();
 
 		with_router(|router| {
-			assert_eq!(router.route_count(), 5);
+			assert_eq!(router.route_count(), 6);
+			assert!(router.has_route("login"));
 			assert!(router.has_route("dashboard"));
 			assert!(router.has_route("list"));
 			assert!(router.has_route("detail"));
@@ -745,7 +816,7 @@ mod tests {
 		init_global_router();
 
 		let route_count = with_router(|router| router.route_count());
-		assert_eq!(route_count, 5);
+		assert_eq!(route_count, 6);
 
 		let has_dashboard = with_router(|router| router.has_route("dashboard"));
 		assert!(has_dashboard);
@@ -774,7 +845,7 @@ mod tests {
 		init_global_router();
 
 		let result = try_with_router(|router| router.route_count());
-		assert_eq!(result, Some(5));
+		assert_eq!(result, Some(6));
 	}
 
 	#[test]

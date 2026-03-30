@@ -7,7 +7,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_test::wasm::assertions::ElementAssertions;
 //!
 //! let element = document.get_element_by_id("submit-button").unwrap();

@@ -7,7 +7,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_test::wasm::mock::{MockStorage, MockCookies};
 //!
 //! // Mock localStorage
@@ -42,7 +42,7 @@ pub use reinhardt_pages::testing::{
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_test::wasm::mock::MockStorage;
 ///
 /// let storage = MockStorage::new();
@@ -128,7 +128,7 @@ impl MockStorage {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_test::wasm::mock::MockCookies;
 ///
 /// let cookies = MockCookies::new();
@@ -296,7 +296,7 @@ impl MockCookies {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_test::wasm::mock::{MockFetch, MockFetchResponse};
 ///
 /// let fetch = MockFetch::new();

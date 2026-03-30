@@ -35,7 +35,7 @@ type EventArg = crate::component::DummyEvent;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::reactive::hooks::{use_state, use_memo};
 ///
 /// let (items, set_items) = use_state(vec![1, 2, 3, 4, 5]);
@@ -153,7 +153,7 @@ where
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::reactive::hooks::use_callback_with;
 ///
 /// let add = use_callback_with(|x: i32| x + 1);

@@ -509,9 +509,15 @@ impl UserStorage {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # fn main() {
+	/// # tokio::runtime::Runtime::new().unwrap().block_on(async {
+	/// use reinhardt_graphql::schema::UserStorage;
+	/// let storage = UserStorage::new();
 	/// // Retrieve user
 	/// let user = storage.get_user("user-1").await;
+	/// # });
+	/// # }
 	/// ```
 	pub async fn get_user(&self, id: &str) -> Option<User> {
 		self.users.read().await.get(id).cloned()
@@ -520,9 +526,15 @@ impl UserStorage {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # fn main() {
+	/// # tokio::runtime::Runtime::new().unwrap().block_on(async {
+	/// use reinhardt_graphql::schema::UserStorage;
+	/// let storage = UserStorage::new();
 	/// // List all users
 	/// let users = storage.list_users().await;
+	/// # });
+	/// # }
 	/// ```
 	pub async fn list_users(&self) -> Vec<User> {
 		self.users.read().await.values().cloned().collect()

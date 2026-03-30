@@ -12,7 +12,7 @@ use syn::{Expr, ExprLit, Lit, LitBool, LitFloat, LitInt, LitStr};
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// // String literal: src: "/image.png"
 /// AttrValue::StringLit(syn::LitStr)
 ///
@@ -56,7 +56,7 @@ impl AttrValue {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use syn::parse_quote;
 	///
 	/// let expr = parse_quote!("hello");
@@ -92,7 +92,7 @@ impl AttrValue {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use syn::parse_quote;
 	///
 	/// let value = AttrValue::from_expr(parse_quote!("hello"));
@@ -152,7 +152,7 @@ impl AttrValue {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use syn::parse_quote;
 	///
 	/// let original: Expr = parse_quote!("hello");

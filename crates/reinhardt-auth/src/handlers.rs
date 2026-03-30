@@ -46,7 +46,7 @@ pub const SESSION_COOKIE_NAME: &str = "sessionid";
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```ignore
 /// use reinhardt_auth::handlers::LoginHandler;
 /// use reinhardt_auth::session::InMemorySessionStore;
 /// use reinhardt_auth::core::backend::AuthenticationBackend;

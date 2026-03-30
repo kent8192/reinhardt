@@ -250,7 +250,7 @@ pub trait BaseUser: Send + Sync + Serialize + for<'de> Deserialize<'de> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// # use reinhardt_auth::BaseUser;
 	/// # use reinhardt_auth::PasswordHasher;
 	/// # #[cfg(feature = "argon2-hasher")]

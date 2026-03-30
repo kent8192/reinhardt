@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- release-plz-separator -->
 <!-- Entries below this line were created before release-plz adoption -->
 
+## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-openapi@v0.1.0-rc.14...reinhardt-openapi@v0.1.0-rc.15) - 2026-03-29
+
+### Maintenance
+
+- update rust toolchain to 1.94.1 and set MSRV 1.94.0
+
 ## [0.1.0-rc.9](https://github.com/kent8192/reinhardt-web/compare/reinhardt-openapi@v0.1.0-rc.8...reinhardt-openapi@v0.1.0-rc.9) - 2026-03-15
 
 ### Testing

@@ -10,7 +10,7 @@
 //!
 //! ## Example
 //!
-//! ```ignore
+//! ```rust
 //! use reinhardt_core::types::page::{Page, PageElement, IntoPage};
 //!
 //! let view = PageElement::new("div")
@@ -283,10 +283,13 @@ impl PageElement {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
+	/// use reinhardt_core::types::page::PageElement;
+	///
+	/// let is_disabled = true;
 	/// PageElement::new("button")
 	///     .bool_attr("disabled", is_disabled)
-	///     .child("Click me")
+	///     .child("Click me");
 	/// ```
 	pub fn bool_attr(self, name: impl Into<Cow<'static, str>>, value: bool) -> Self {
 		if value {
@@ -470,7 +473,7 @@ impl Page {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
 	/// use reinhardt_core::types::page::{Page, Head};
 	///
 	/// let view = Page::text("Hello, World!");

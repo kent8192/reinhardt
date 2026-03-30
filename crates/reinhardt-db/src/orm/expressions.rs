@@ -124,7 +124,8 @@ impl<M, T> FieldRef<M, T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # struct User;
 	/// use reinhardt_db::orm::expressions::FieldRef;
 	///
 	/// const USER_ID: FieldRef<User, i64> = FieldRef::new("id");

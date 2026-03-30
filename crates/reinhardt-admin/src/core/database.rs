@@ -6,6 +6,7 @@
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
 use reinhardt_core::macros::injectable;
+use reinhardt_db::migrations::FieldType as DbFieldType;
 use reinhardt_db::orm::execution::convert_values;
 use reinhardt_db::orm::{
 	DatabaseConnection, Filter, FilterCondition, FilterOperator, FilterValue, Model,
@@ -78,6 +79,55 @@ impl Model for AdminRecord {
 	fn set_primary_key(&mut self, pk: Self::PrimaryKey) {
 		self.id = Some(pk);
 	}
+}
+
+/// Converts a string primary key value to the appropriate SeaQuery `Value`
+/// based on the field's registered database type.
+///
+/// Looks up the field type from the migration registry. When the registry has
+/// metadata for the given table/field, the conversion is type-aware (e.g.
+/// UUID strings become `Value::Uuid`). Falls back to the i64-then-String
+/// heuristic when metadata is unavailable.
+fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> Value {
+	if let Some(field_meta) =
+		crate::server::type_inference::get_field_metadata(table_name, pk_field)
+	{
+		match field_meta.field_type {
+			DbFieldType::Uuid => {
+				if let Ok(uuid) = uuid::Uuid::parse_str(id) {
+					return Value::Uuid(Some(Box::new(uuid)));
+				}
+			}
+			DbFieldType::BigInteger => {
+				if let Ok(num) = id.parse::<i64>() {
+					return Value::BigInt(Some(num));
+				}
+			}
+			DbFieldType::Integer
+			| DbFieldType::SmallInteger
+			| DbFieldType::TinyInt
+			| DbFieldType::MediumInt => {
+				if let Ok(num) = id.parse::<i32>() {
+					return Value::Int(Some(num));
+				}
+			}
+			_ => {}
+		}
+	}
+
+	// Fallback: existing heuristic for backward compatibility
+	if let Ok(num_id) = id.parse::<i64>() {
+		Value::BigInt(Some(num_id))
+	} else {
+		Value::String(Some(Box::new(id.to_string())))
+	}
+}
+
+/// Batch version of `parse_pk_value` for bulk operations.
+fn parse_pk_values(table_name: &str, pk_field: &str, ids: &[String]) -> Vec<Value> {
+	ids.iter()
+		.map(|id| parse_pk_value(table_name, pk_field, id))
+		.collect()
 }
 
 /// Convert FilterValue to Value
@@ -757,12 +807,7 @@ impl AdminDatabase {
 		pk_field: &str,
 		id: &str,
 	) -> AdminResult<Option<HashMap<String, serde_json::Value>>> {
-		// Convert id to appropriate type for WHERE clause
-		let pk_value: Value = if let Ok(num_id) = id.parse::<i64>() {
-			Value::BigInt(Some(num_id))
-		} else {
-			Value::String(Some(Box::new(id.to_string())))
-		};
+		let pk_value = parse_pk_value(table_name, pk_field, id);
 
 		// SELECT * is intentional: admin detail view displays all fields from the
 		// model. The admin panel operates on dynamic schemas where the column set
@@ -944,12 +989,7 @@ impl AdminDatabase {
 			query.value(Alias::new(&key), sea_value);
 		}
 
-		// Convert id to appropriate type for WHERE clause
-		let pk_value: Value = if let Ok(num_id) = id.parse::<i64>() {
-			Value::BigInt(Some(num_id))
-		} else {
-			Value::String(Some(Box::new(id.to_string())))
-		};
+		let pk_value = parse_pk_value(table_name, pk_field, id);
 		query.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value));
 
 		let (sql, values) = query.build(PostgresQueryBuilder);
@@ -985,12 +1025,7 @@ impl AdminDatabase {
 		pk_field: &str,
 		id: &str,
 	) -> AdminResult<u64> {
-		// Convert id to appropriate type for WHERE clause
-		let pk_value: Value = if let Ok(num_id) = id.parse::<i64>() {
-			Value::BigInt(Some(num_id))
-		} else {
-			Value::String(Some(Box::new(id.to_string())))
-		};
+		let pk_value = parse_pk_value(table_name, pk_field, id);
 
 		let query = Query::delete()
 			.from_table(Alias::new(table_name))
@@ -1065,17 +1100,7 @@ impl AdminDatabase {
 			return Ok(0);
 		}
 
-		// Convert each id to appropriate type for WHERE clause
-		let pk_values: Vec<Value> = ids
-			.iter()
-			.map(|id| {
-				if let Ok(num_id) = id.parse::<i64>() {
-					Value::BigInt(Some(num_id))
-				} else {
-					Value::String(Some(Box::new(id.to_string())))
-				}
-			})
-			.collect();
+		let pk_values = parse_pk_values(table_name, pk_field, &ids);
 
 		let query = Query::delete()
 			.from_table(Alias::new(table_name))
@@ -2819,5 +2844,66 @@ mod tests {
 
 		// Assert
 		assert!(result.is_err());
+	}
+
+	// ==================== parse_pk_value tests ====================
+
+	#[rstest]
+	fn test_parse_pk_value_integer_falls_back_to_bigint() {
+		// Arrange: No registry entry for this table, integer string input
+
+		// Act
+		let val = parse_pk_value("nonexistent_table", "id", "42");
+
+		// Assert
+		assert_eq!(val, Value::BigInt(Some(42)));
+	}
+
+	#[rstest]
+	fn test_parse_pk_value_uuid_string_without_registry_falls_back_to_string() {
+		// Arrange: No registry entry, UUID string input
+
+		// Act
+		let val = parse_pk_value(
+			"nonexistent_table",
+			"id",
+			"c1a363b1-cc42-4dea-81f0-9dc1cedf0083",
+		);
+
+		// Assert: Without registry metadata, UUID falls back to Value::String
+		assert!(matches!(val, Value::String(Some(_))));
+	}
+
+	#[rstest]
+	fn test_parse_pk_value_non_numeric_string_falls_back_to_string() {
+		// Arrange: No registry entry, non-numeric string input
+
+		// Act
+		let val = parse_pk_value("nonexistent_table", "id", "hello-world");
+
+		// Assert
+		assert!(matches!(val, Value::String(Some(_))));
+	}
+
+	#[rstest]
+	fn test_parse_pk_value_negative_integer() {
+		// Arrange: Negative integer string
+
+		// Act
+		let val = parse_pk_value("nonexistent_table", "id", "-1");
+
+		// Assert
+		assert_eq!(val, Value::BigInt(Some(-1)));
+	}
+
+	#[rstest]
+	fn test_parse_pk_value_zero() {
+		// Arrange: Zero as string
+
+		// Act
+		let val = parse_pk_value("nonexistent_table", "id", "0");
+
+		// Assert
+		assert_eq!(val, Value::BigInt(Some(0)));
 	}
 }

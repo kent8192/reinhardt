@@ -114,6 +114,21 @@ pub struct ExportResponse {
 	pub total_count: Option<u64>,
 }
 
+/// Response for admin login endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoginResponse {
+	/// JWT token for subsequent authenticated requests
+	pub token: String,
+	/// Authenticated username
+	pub username: String,
+	/// User's primary key as string
+	pub user_id: String,
+	/// Whether the user is staff
+	pub is_staff: bool,
+	/// Whether the user is a superuser
+	pub is_superuser: bool,
+}
+
 /// Response for fields endpoint
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldsResponse {

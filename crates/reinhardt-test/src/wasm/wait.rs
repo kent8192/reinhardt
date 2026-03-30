@@ -8,7 +8,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_test::wasm::wait::{wait_for, sleep, WaitOptions};
 //!
 //! // Wait for a condition
@@ -215,7 +215,7 @@ where
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_test::wasm::wait::wait_for;
 /// use std::time::Duration;
 ///
@@ -243,7 +243,7 @@ where
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_test::wasm::wait::wait_for_element_visible;
 ///
 /// let element = wait_for_element_visible("#loading-spinner", None).await?;
@@ -291,7 +291,7 @@ pub async fn wait_for_element_visible(
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_test::wasm::wait::wait_for_element_hidden;
 ///
 /// wait_for_element_hidden("#loading-spinner", None).await?;
@@ -416,7 +416,7 @@ pub async fn wait_for_element_removed(
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_test::wasm::wait::sleep;
 /// use std::time::Duration;
 ///
@@ -433,7 +433,7 @@ pub async fn sleep(duration: Duration) {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_test::wasm::wait::flush_microtasks;
 ///
 /// // After triggering some async operation
@@ -452,7 +452,7 @@ pub async fn flush_microtasks() {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_test::wasm::wait::flush_effects;
 ///
 /// signal.set(new_value);

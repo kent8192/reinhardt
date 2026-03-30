@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.1.0-rc.14...reinhardt-utils@v0.1.0-rc.15) - 2026-03-29
+
+### Added
+
+- *(staticfiles)* add WasmEntry struct and auto-inject config fields
+- *(staticfiles)* implement WASM entry point detection
+- *(staticfiles)* implement WASM script injection into HTML
+- *(staticfiles)* wire WASM auto-injection into SPA fallback
+
+### Fixed
+
+- *(staticfiles)* address security and spec compliance review issues
+- *(staticfiles)* add empty wasm_entry check and fix log levels
+
+### Maintenance
+
+- *(staticfiles)* fix formatting and dead code warning
+- update rust toolchain to 1.94.1 and set MSRV 1.94.0
+
 ## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-utils@v0.1.0-rc.13...reinhardt-utils@v0.1.0-rc.14) - 2026-03-24
 
 ### Added

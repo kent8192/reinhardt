@@ -9,7 +9,7 @@ use crate::core::base_user::BaseUser;
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```no_run
 /// use reinhardt_auth::{BaseUser, FullUser, PasswordHasher};
 /// #[cfg(feature = "argon2-hasher")]
 /// use reinhardt_auth::Argon2Hasher;
@@ -107,7 +107,7 @@ pub trait FullUser: BaseUser {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// # use reinhardt_auth::{BaseUser, FullUser, PasswordHasher};
 	/// # #[cfg(feature = "argon2-hasher")]
 	/// # use reinhardt_auth::Argon2Hasher;
@@ -170,7 +170,7 @@ pub trait FullUser: BaseUser {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// # use reinhardt_auth::{BaseUser, FullUser, PasswordHasher};
 	/// # #[cfg(feature = "argon2-hasher")]
 	/// # use reinhardt_auth::Argon2Hasher;

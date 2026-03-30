@@ -638,7 +638,7 @@ fn generate_client_stub(
 			#serialize_code
 
 			// Build HTTP POST request with headers
-			let mut __request_builder = ::gloo_net::http::Request::post(__endpoint)
+			let mut __request_builder = ::gloo_net::http::Request::post(&__endpoint)
 				.header("Content-Type", #content_type);
 
 			#csrf_injection_code

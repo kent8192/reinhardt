@@ -140,7 +140,11 @@ async fn admin_static_file_handler(
 ) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
 	use reinhardt_utils::staticfiles::handler::StaticFileHandler;
 
-	let path = request.uri.path().trim_start_matches('/');
+	let path = request
+		.path_params
+		.get("path")
+		.map(|p| p.trim_start_matches('/'))
+		.unwrap_or("");
 
 	// 1. Try STATIC_ROOT/admin/ first (production: after collectstatic)
 	if let Some(admin_dir) = resolve_static_root_admin() {
@@ -825,10 +829,14 @@ mod tests {
 	#[rstest]
 	#[tokio::test]
 	async fn test_admin_static_file_handler_serves_css() {
-		// Arrange
+		// Arrange - use realistic URI matching production mount at /static/admin/
 		let request = reinhardt_http::Request::builder()
 			.method(hyper::Method::GET)
-			.uri("/style.css")
+			.uri("/static/admin/style.css")
+			.path_params(std::collections::HashMap::from([(
+				"path".to_string(),
+				"style.css".to_string(),
+			)]))
 			.build()
 			.unwrap();
 
@@ -853,10 +861,14 @@ mod tests {
 	#[rstest]
 	#[tokio::test]
 	async fn test_admin_static_file_handler_serves_js() {
-		// Arrange
+		// Arrange - use realistic URI matching production mount at /static/admin/
 		let request = reinhardt_http::Request::builder()
 			.method(hyper::Method::GET)
-			.uri("/main.js")
+			.uri("/static/admin/main.js")
+			.path_params(std::collections::HashMap::from([(
+				"path".to_string(),
+				"main.js".to_string(),
+			)]))
 			.build()
 			.unwrap();
 
@@ -881,10 +893,14 @@ mod tests {
 	#[rstest]
 	#[tokio::test]
 	async fn test_admin_static_file_handler_returns_404_for_missing_file() {
-		// Arrange
+		// Arrange - use realistic URI matching production mount at /static/admin/
 		let request = reinhardt_http::Request::builder()
 			.method(hyper::Method::GET)
-			.uri("/nonexistent.txt")
+			.uri("/static/admin/nonexistent.txt")
+			.path_params(std::collections::HashMap::from([(
+				"path".to_string(),
+				"nonexistent.txt".to_string(),
+			)]))
 			.build()
 			.unwrap();
 
@@ -903,10 +919,14 @@ mod tests {
 	#[rstest]
 	#[tokio::test]
 	async fn test_admin_static_file_handler_returns_404_for_wasm_when_not_built() {
-		// Arrange
+		// Arrange - use realistic URI matching production mount at /static/admin/
 		let request = reinhardt_http::Request::builder()
 			.method(hyper::Method::GET)
-			.uri("/reinhardt_admin_bg.wasm")
+			.uri("/static/admin/reinhardt_admin_bg.wasm")
+			.path_params(std::collections::HashMap::from([(
+				"path".to_string(),
+				"reinhardt_admin_bg.wasm".to_string(),
+			)]))
 			.build()
 			.unwrap();
 

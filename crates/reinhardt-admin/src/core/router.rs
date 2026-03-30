@@ -134,8 +134,33 @@ const ADMIN_ASSETS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets");
 ///
 /// Returns 404 if the file is not found in any directory.
 /// MIME types are detected automatically via `mime_guess`.
+///
+/// This handler catches all internal errors and returns a plain-text error
+/// response instead of propagating `Err`. This prevents the server-layer
+/// error conversion (`Response::from(Error)`) from replacing the intended
+/// `Content-Type` with `application/json`. See issue #3135.
 #[cfg(not(target_arch = "wasm32"))]
 async fn admin_static_file_handler(
+	request: reinhardt_http::Request,
+) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
+	match admin_static_file_handler_inner(request).await {
+		Ok(response) => Ok(response),
+		Err(e) => {
+			tracing::error!(error = %e, "Unexpected error in admin static file handler");
+			Ok(reinhardt_http::Response::internal_server_error()
+				.with_header("Content-Type", "text/plain; charset=utf-8")
+				.with_body("Internal Server Error"))
+		}
+	}
+}
+
+/// Inner implementation for [`admin_static_file_handler`].
+///
+/// Separated to allow the outer function to catch errors defensively,
+/// preventing `Content-Type: application/json` from the server-layer
+/// error conversion path.
+#[cfg(not(target_arch = "wasm32"))]
+async fn admin_static_file_handler_inner(
 	request: reinhardt_http::Request,
 ) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
 	use reinhardt_utils::staticfiles::handler::StaticFileHandler;
@@ -1104,6 +1129,120 @@ mod tests {
 			!set_cookie.contains("Secure"),
 			"HTTP request should not set Secure flag, got: {}",
 			set_cookie
+		);
+	}
+
+	/// Full-stack test: verifies Content-Type through `ServerRouter::handle()`
+	/// route resolution, not just direct handler invocation. Regression test
+	/// for #3135 where the server-layer error conversion produced
+	/// `Content-Type: application/json` for static file responses.
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	#[tokio::test]
+	async fn test_admin_static_routes_full_stack_css_content_type() {
+		use reinhardt_http::Handler;
+
+		// Arrange — mount admin_static_routes() exactly as production does
+		let router = ServerRouter::new().mount("/static/admin/", admin_static_routes());
+
+		let request = reinhardt_http::Request::builder()
+			.method(hyper::Method::GET)
+			.uri("/static/admin/style.css")
+			.build()
+			.unwrap();
+
+		// Act
+		let response = router.handle(request).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, hyper::StatusCode::OK);
+		let content_type = response
+			.headers
+			.get("content-type")
+			.map(|v| v.to_str().unwrap_or(""))
+			.unwrap_or("");
+		assert!(
+			content_type.contains("text/css"),
+			"Full-stack CSS should return text/css, got: {}",
+			content_type
+		);
+		assert!(
+			!content_type.contains("application/json"),
+			"Static file must never return application/json (#3135), got: {}",
+			content_type
+		);
+	}
+
+	/// Full-stack test for JS files through the mounted router.
+	/// Regression test for #3135.
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	#[tokio::test]
+	async fn test_admin_static_routes_full_stack_js_content_type() {
+		use reinhardt_http::Handler;
+
+		// Arrange
+		let router = ServerRouter::new().mount("/static/admin/", admin_static_routes());
+
+		let request = reinhardt_http::Request::builder()
+			.method(hyper::Method::GET)
+			.uri("/static/admin/main.js")
+			.build()
+			.unwrap();
+
+		// Act
+		let response = router.handle(request).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, hyper::StatusCode::OK);
+		let content_type = response
+			.headers
+			.get("content-type")
+			.map(|v| v.to_str().unwrap_or(""))
+			.unwrap_or("");
+		assert!(
+			content_type.contains("javascript"),
+			"Full-stack JS should return application/javascript, got: {}",
+			content_type
+		);
+		assert!(
+			!content_type.contains("application/json"),
+			"Static file must never return application/json (#3135), got: {}",
+			content_type
+		);
+	}
+
+	/// Full-stack test: 404 responses must not have application/json Content-Type.
+	/// Regression test for #3135.
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	#[tokio::test]
+	async fn test_admin_static_routes_full_stack_404_not_json() {
+		use reinhardt_http::Handler;
+
+		// Arrange
+		let router = ServerRouter::new().mount("/static/admin/", admin_static_routes());
+
+		let request = reinhardt_http::Request::builder()
+			.method(hyper::Method::GET)
+			.uri("/static/admin/nonexistent.wasm")
+			.build()
+			.unwrap();
+
+		// Act
+		let response = router.handle(request).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, hyper::StatusCode::NOT_FOUND);
+		let content_type = response
+			.headers
+			.get("content-type")
+			.map(|v| v.to_str().unwrap_or(""))
+			.unwrap_or("");
+		assert!(
+			!content_type.contains("application/json"),
+			"Static file 404 must not return application/json (#3135), got: {}",
+			content_type
 		);
 	}
 }

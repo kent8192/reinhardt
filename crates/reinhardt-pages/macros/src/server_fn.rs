@@ -548,6 +548,18 @@ fn generate_client_stub(
 		}
 	};
 
+	// Generate JWT auth header injection code (always enabled).
+	// If a JWT token exists in sessionStorage, it is attached as
+	// an Authorization: Bearer header. When no token is stored, this
+	// is a no-op — backward compatible with unauthenticated calls.
+	let auth_injection_code = quote! {
+		// Inject Authorization header if JWT token is available
+		use #pages_crate::auth::auth_headers;
+		if let Some((__auth_header_name, __auth_header_value)) = auth_headers() {
+			__request_builder = __request_builder.header(__auth_header_name, &__auth_header_value);
+		}
+	};
+
 	// Generate codec-specific serialization and deserialization code
 	let (content_type, serialize_code, deserialize_code) = match codec {
 		"json" => (
@@ -630,6 +642,7 @@ fn generate_client_stub(
 				.header("Content-Type", #content_type);
 
 			#csrf_injection_code
+			#auth_injection_code
 
 			// Send request
 			let __response = __request_builder

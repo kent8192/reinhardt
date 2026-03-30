@@ -47,10 +47,10 @@ fn resolve_static_root_admin() -> Option<std::path::PathBuf> {
 #[cfg(not(target_arch = "wasm32"))]
 fn is_wasm_built() -> bool {
 	// Check STATIC_ROOT/admin/ first (production: after collectstatic)
-	if let Some(admin_dir) = resolve_static_root_admin() {
-		if admin_dir.join("reinhardt_admin.js").is_file() {
-			return true;
-		}
+	if let Some(admin_dir) = resolve_static_root_admin()
+		&& admin_dir.join("reinhardt_admin.js").is_file()
+	{
+		return true;
 	}
 	// Fallback to build output directory (development)
 	resolve_wasm_dir().join("reinhardt_admin.js").is_file()
@@ -121,85 +121,55 @@ fn admin_spa_html() -> String {
 	)
 }
 
-/// Embedded admin CSS asset (bytes for zero-copy `Bytes::from_static`)
+/// Path to the admin assets directory (compile-time resolved)
 #[cfg(not(target_arch = "wasm32"))]
-const ADMIN_CSS: &[u8] = include_bytes!("../../assets/style.css");
+const ADMIN_ASSETS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets");
 
-/// Embedded admin JS asset (bytes for zero-copy `Bytes::from_static`)
-#[cfg(not(target_arch = "wasm32"))]
-const ADMIN_JS: &[u8] = include_bytes!("../../assets/main.js");
-
-/// Serves the embedded admin CSS stylesheet
-#[cfg(not(target_arch = "wasm32"))]
-async fn admin_css_handler(
-	_request: reinhardt_http::Request,
-) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
-	Ok(reinhardt_http::Response::ok()
-		.with_header("Content-Type", "text/css; charset=utf-8")
-		.with_header("Cache-Control", "public, max-age=3600")
-		.with_body(bytes::Bytes::from_static(ADMIN_CSS)))
-}
-
-/// Serves the embedded admin JS entry point
-#[cfg(not(target_arch = "wasm32"))]
-async fn admin_js_handler(
-	_request: reinhardt_http::Request,
-) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
-	Ok(reinhardt_http::Response::ok()
-		.with_header("Content-Type", "application/javascript; charset=utf-8")
-		.with_header("Cache-Control", "public, max-age=3600")
-		.with_body(bytes::Bytes::from_static(ADMIN_JS)))
-}
-
-/// Reads a file from STATIC_ROOT/admin/ first, then falls back to dist-wasm/.
+/// Serves admin static files from multiple directories with priority-based resolution.
 ///
-/// This ensures collected (and potentially hashed) files are preferred in
-/// production, while development builds from dist-wasm/ still work.
+/// File resolution order:
+/// 1. `STATIC_ROOT/admin/` — production (after collectstatic, manifest-hashed)
+/// 2. `dist-wasm/` — WASM build output (development)
+/// 3. `assets/` — built-in admin assets (CSS, JS placeholder)
+///
+/// Returns 404 if the file is not found in any directory.
+/// MIME types are detected automatically via `mime_guess`.
 #[cfg(not(target_arch = "wasm32"))]
-async fn read_admin_wasm_file(filename: &str) -> Option<Vec<u8>> {
-	// 1. Try STATIC_ROOT/admin/ (production: after collectstatic)
+async fn admin_static_file_handler(
+	request: reinhardt_http::Request,
+) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
+	use reinhardt_utils::staticfiles::handler::StaticFileHandler;
+
+	let path = request.uri.path().trim_start_matches('/');
+
+	// 1. Try STATIC_ROOT/admin/ first (production: after collectstatic)
 	if let Some(admin_dir) = resolve_static_root_admin() {
-		if let Ok(data) = tokio::fs::read(admin_dir.join(filename)).await {
-			return Some(data);
+		let handler = StaticFileHandler::new(admin_dir);
+		if let Ok(file) = handler.serve(path).await {
+			return Ok(reinhardt_http::Response::ok()
+				.with_header("Content-Type", &file.mime_type)
+				.with_header("Cache-Control", "public, max-age=3600")
+				.with_body(file.content));
 		}
 	}
-	// 2. Fallback to dist-wasm/ (development: build output)
-	tokio::fs::read(resolve_wasm_dir().join(filename))
-		.await
-		.ok()
-}
 
-/// Serves the WASM JavaScript entry point.
-///
-/// Checks STATIC_ROOT/admin/ first (production), then dist-wasm/ (development).
-/// Returns 404 if the WASM SPA has not been built or collected.
-#[cfg(not(target_arch = "wasm32"))]
-async fn admin_wasm_js_handler(
-	_request: reinhardt_http::Request,
-) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
-	match read_admin_wasm_file("reinhardt_admin.js").await {
-		Some(data) => Ok(reinhardt_http::Response::ok()
-			.with_header("Content-Type", "application/javascript; charset=utf-8")
+	// 2. Try dist-wasm/ (development: WASM build output)
+	let wasm_handler = StaticFileHandler::new(resolve_wasm_dir());
+	if let Ok(file) = wasm_handler.serve(path).await {
+		return Ok(reinhardt_http::Response::ok()
+			.with_header("Content-Type", &file.mime_type)
 			.with_header("Cache-Control", "public, max-age=3600")
-			.with_body(bytes::Bytes::from(data))),
-		None => Ok(reinhardt_http::Response::not_found()),
+			.with_body(file.content));
 	}
-}
 
-/// Serves the WASM binary.
-///
-/// Checks STATIC_ROOT/admin/ first (production), then dist-wasm/ (development).
-/// Returns 404 if the WASM SPA has not been built or collected.
-#[cfg(not(target_arch = "wasm32"))]
-async fn admin_wasm_bg_handler(
-	_request: reinhardt_http::Request,
-) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
-	match read_admin_wasm_file("reinhardt_admin_bg.wasm").await {
-		Some(data) => Ok(reinhardt_http::Response::ok()
-			.with_header("Content-Type", "application/wasm")
+	// 3. Fall back to assets/ directory (built-in CSS/JS placeholder)
+	let assets_handler = StaticFileHandler::new(std::path::PathBuf::from(ADMIN_ASSETS_DIR));
+	match assets_handler.serve(path).await {
+		Ok(file) => Ok(reinhardt_http::Response::ok()
+			.with_header("Content-Type", &file.mime_type)
 			.with_header("Cache-Control", "public, max-age=3600")
-			.with_body(bytes::Bytes::from(data))),
-		None => Ok(reinhardt_http::Response::not_found()),
+			.with_body(file.content)),
+		Err(_) => Ok(reinhardt_http::Response::not_found()),
 	}
 }
 
@@ -222,29 +192,17 @@ async fn admin_wasm_bg_handler(
 ///     .with_di_registrations(admin_di);
 /// ```
 ///
-/// The admin HTML page references `/static/admin/style.css` and
-/// `/static/admin/main.js` (or `/static/admin/reinhardt_admin.js` when the
-/// WASM SPA is built). This router serves those assets.
+/// Files are served from multiple directories in priority order:
+/// 1. `STATIC_ROOT/admin/` — production (after collectstatic)
+/// 2. `dist-wasm/` — WASM build output (development)
+/// 3. `assets/` — built-in admin assets (CSS, JS placeholder)
 ///
-/// WASM assets (`reinhardt_admin.js` and `reinhardt_admin_bg.wasm`) are served
-/// from the `dist-wasm/` directory at runtime, returning 404 if not built.
+/// MIME types are detected automatically via `mime_guess`.
 pub fn admin_static_routes() -> ServerRouter {
 	let router = ServerRouter::new();
 
 	#[cfg(not(target_arch = "wasm32"))]
-	let router = router
-		.function("/style.css", hyper::Method::GET, admin_css_handler)
-		.function("/main.js", hyper::Method::GET, admin_js_handler)
-		.function(
-			"/reinhardt_admin.js",
-			hyper::Method::GET,
-			admin_wasm_js_handler,
-		)
-		.function(
-			"/reinhardt_admin_bg.wasm",
-			hyper::Method::GET,
-			admin_wasm_bg_handler,
-		);
+	let router = router.function("/{*path}", hyper::Method::GET, admin_static_file_handler);
 
 	router
 }
@@ -824,34 +782,6 @@ mod tests {
 		);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
-	#[rstest]
-	fn test_embedded_admin_css_is_not_empty() {
-		// Arrange
-		let css = std::str::from_utf8(ADMIN_CSS).expect("CSS should be valid UTF-8");
-
-		// Assert
-		assert!(!css.is_empty(), "Embedded admin CSS should not be empty");
-		assert!(
-			css.contains("box-sizing"),
-			"CSS should contain UnoCSS preflight reset"
-		);
-	}
-
-	#[cfg(not(target_arch = "wasm32"))]
-	#[rstest]
-	fn test_embedded_admin_js_is_not_empty() {
-		// Arrange
-		let js = std::str::from_utf8(ADMIN_JS).expect("JS should be valid UTF-8");
-
-		// Assert
-		assert!(!js.is_empty(), "Embedded admin JS should not be empty");
-		assert!(
-			js.contains("Reinhardt Admin"),
-			"JS should contain admin panel identifier"
-		);
-	}
-
 	#[rstest]
 	fn test_admin_static_routes_creates_router() {
 		// Arrange & Act
@@ -863,32 +793,118 @@ mod tests {
 
 	#[cfg(not(target_arch = "wasm32"))]
 	#[rstest]
-	fn test_admin_static_routes_registers_asset_routes() {
+	fn test_admin_static_routes_registers_catch_all_route() {
 		// Arrange & Act
 		let router = admin_static_routes();
 		let routes = router.get_all_routes();
 		let paths: Vec<&str> = routes.iter().map(|(path, _, _, _)| path.as_str()).collect();
 
+		// Assert - single catch-all route for directory-based serving
+		assert_eq!(routes.len(), 1, "Should have exactly 1 catch-all route");
+		assert!(
+			paths.contains(&"/{*path}"),
+			"Should have catch-all path route, found: {:?}",
+			paths
+		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	#[tokio::test]
+	async fn test_admin_static_file_handler_serves_css() {
+		// Arrange
+		let request = reinhardt_http::Request::builder()
+			.method(hyper::Method::GET)
+			.uri("/style.css")
+			.build()
+			.unwrap();
+
+		// Act
+		let response = admin_static_file_handler(request).await.unwrap();
+
 		// Assert
+		assert_eq!(response.status, hyper::StatusCode::OK);
+		let content_type = response
+			.headers
+			.get("content-type")
+			.map(|v| v.to_str().unwrap_or(""))
+			.unwrap_or("");
 		assert!(
-			paths.contains(&"/style.css"),
-			"Should serve style.css, found: {:?}",
-			paths
+			content_type.contains("text/css"),
+			"Should return text/css content type, got: {}",
+			content_type
 		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	#[tokio::test]
+	async fn test_admin_static_file_handler_serves_js() {
+		// Arrange
+		let request = reinhardt_http::Request::builder()
+			.method(hyper::Method::GET)
+			.uri("/main.js")
+			.build()
+			.unwrap();
+
+		// Act
+		let response = admin_static_file_handler(request).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, hyper::StatusCode::OK);
+		let content_type = response
+			.headers
+			.get("content-type")
+			.map(|v| v.to_str().unwrap_or(""))
+			.unwrap_or("");
 		assert!(
-			paths.contains(&"/main.js"),
-			"Should serve main.js, found: {:?}",
-			paths
+			content_type.contains("javascript"),
+			"Should return application/javascript content type, got: {}",
+			content_type
 		);
-		assert!(
-			paths.contains(&"/reinhardt_admin.js"),
-			"Should serve reinhardt_admin.js (WASM entry), found: {:?}",
-			paths
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	#[tokio::test]
+	async fn test_admin_static_file_handler_returns_404_for_missing_file() {
+		// Arrange
+		let request = reinhardt_http::Request::builder()
+			.method(hyper::Method::GET)
+			.uri("/nonexistent.txt")
+			.build()
+			.unwrap();
+
+		// Act
+		let response = admin_static_file_handler(request).await.unwrap();
+
+		// Assert
+		assert_eq!(
+			response.status,
+			hyper::StatusCode::NOT_FOUND,
+			"Should return 404 for nonexistent files"
 		);
-		assert!(
-			paths.contains(&"/reinhardt_admin_bg.wasm"),
-			"Should serve reinhardt_admin_bg.wasm, found: {:?}",
-			paths
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	#[tokio::test]
+	async fn test_admin_static_file_handler_returns_404_for_wasm_when_not_built() {
+		// Arrange
+		let request = reinhardt_http::Request::builder()
+			.method(hyper::Method::GET)
+			.uri("/reinhardt_admin_bg.wasm")
+			.build()
+			.unwrap();
+
+		// Act
+		let response = admin_static_file_handler(request).await.unwrap();
+
+		// Assert - dist-wasm/ does not exist in test environment
+		assert_eq!(
+			response.status,
+			hyper::StatusCode::NOT_FOUND,
+			"Should return 404 when WASM is not built"
 		);
 	}
 
@@ -919,60 +935,6 @@ mod tests {
 		assert!(
 			headers.contains_key("x-content-type-options"),
 			"Response should include X-Content-Type-Options header"
-		);
-	}
-
-	#[cfg(not(target_arch = "wasm32"))]
-	#[rstest]
-	#[tokio::test]
-	async fn test_admin_css_handler_returns_css_content_type() {
-		// Arrange
-		let request = reinhardt_http::Request::builder()
-			.method(hyper::Method::GET)
-			.uri("/style.css")
-			.build()
-			.unwrap();
-
-		// Act
-		let response = admin_css_handler(request).await.unwrap();
-
-		// Assert
-		let content_type = response
-			.headers
-			.get("content-type")
-			.map(|v| v.to_str().unwrap_or(""))
-			.unwrap_or("");
-		assert!(
-			content_type.contains("text/css"),
-			"CSS handler should return text/css content type, got: {}",
-			content_type
-		);
-	}
-
-	#[cfg(not(target_arch = "wasm32"))]
-	#[rstest]
-	#[tokio::test]
-	async fn test_admin_js_handler_returns_js_content_type() {
-		// Arrange
-		let request = reinhardt_http::Request::builder()
-			.method(hyper::Method::GET)
-			.uri("/main.js")
-			.build()
-			.unwrap();
-
-		// Act
-		let response = admin_js_handler(request).await.unwrap();
-
-		// Assert
-		let content_type = response
-			.headers
-			.get("content-type")
-			.map(|v| v.to_str().unwrap_or(""))
-			.unwrap_or("");
-		assert!(
-			content_type.contains("javascript"),
-			"JS handler should return application/javascript content type, got: {}",
-			content_type
 		);
 	}
 

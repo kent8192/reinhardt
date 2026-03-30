@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.15...reinhardt-web@v0.1.0-rc.16) - 2026-03-30
+
+### Added
+
+- *(admin)* add wasm-unsafe-eval to CSP for WASM SPA execution
+- *(admin)* add WASM build-to-serving pipeline with runtime detection
+- *(admin)* register dist-wasm for collectstatic auto-discovery
+- *(admin)* integrate collectstatic API for manifest-aware URL resolution
+
+### Changed
+
+- *(admin)* replace individual handlers with StaticFileHandler catch-all
+
+### Documentation
+
+- *(admin)* fix broken intra-doc link to CspMiddleware
+
+### Fixed
+
+- *(ci)* stop unattended-upgrades before apt-get to prevent dpkg lock
+
+### Maintenance
+
+- *(admin)* add dev workflow tasks and gitignore dist-wasm
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.14...reinhardt-web@v0.1.0-rc.15) - 2026-03-29
 
 ### Added

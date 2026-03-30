@@ -122,6 +122,7 @@ fn admin_spa_html() -> String {
 <head>
 	<meta charset="utf-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<meta name="server-fn-prefix" content="/admin" />
 	<title>Reinhardt Admin</title>
 	<link rel="stylesheet" href="{css_url}" />
 </head>
@@ -817,6 +818,10 @@ mod tests {
 		assert!(
 			html.contains("<!DOCTYPE html>"),
 			"HTML should be valid HTML5"
+		);
+		assert!(
+			html.contains(r#"<meta name="server-fn-prefix" content="/admin" />"#),
+			"HTML should contain server-fn-prefix meta tag for WASM endpoint resolution"
 		);
 	}
 

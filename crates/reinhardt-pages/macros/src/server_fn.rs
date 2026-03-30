@@ -629,7 +629,7 @@ fn generate_client_stub(
 				#(#param_names: #param_types),*
 			}
 
-			let __endpoint = #endpoint;
+			let __endpoint = #pages_crate::server_fn::resolve_endpoint(#endpoint);
 			let __args = #args_struct_name {
 				#(#param_names),*
 			};

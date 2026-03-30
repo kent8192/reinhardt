@@ -496,7 +496,7 @@ fn not_found_view() -> Page {
 
 	page!(|| {
 		div {
-			class: "not-found text-center py-16",
+			class: "not-found text-center py-16 animate__animated animate__fadeIn",
 			h1 {
 				class: "font-display text-4xl font-bold text-slate-300 mb-2",
 				"404"
@@ -563,7 +563,7 @@ fn error_view(message: &str) -> Page {
 
 	page!(|| {
 		div {
-			class: "admin-alert admin-alert-danger mt-8",
+			class: "admin-alert admin-alert-danger mt-8 animate__animated animate__shakeX",
 			role: "alert",
 			h4 {
 				class: "font-semibold mb-2",

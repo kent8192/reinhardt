@@ -74,7 +74,7 @@ pub fn dashboard(site_name: &str, models: &[ModelInfo]) -> Page {
 
 	page!(|| {
 		div {
-			class: "dashboard",
+			class: "dashboard animate__animated animate__fadeIn",
 			h1 {
 				class: "font-display text-2xl font-bold text-slate-900 mb-6",
 				{ format!("{} Dashboard", site_name) }
@@ -117,7 +117,7 @@ fn model_card(name: &str, url: &str) -> Page {
 
 	page!(|| {
 		div {
-			class: "admin-card p-5 flex flex-col",
+			class: "admin-card p-5 flex flex-col animate__animated animate__fadeInUp",
 			h3 {
 				class: "font-display text-lg font-bold text-slate-900 mb-1",
 				{ name.clone() }
@@ -209,7 +209,7 @@ pub fn list_view(
 
 	page!(|| {
 		div {
-			class: "list-view",
+			class: "list-view animate__animated animate__fadeIn",
 			h1 {
 				class: "font-display text-2xl font-bold text-slate-900 mb-6",
 				{ title }
@@ -373,7 +373,7 @@ pub fn detail_view(
 
 	page!(|| {
 		div {
-			class: "detail-view",
+			class: "detail-view animate__animated animate__fadeIn",
 			h1 {
 				class: "font-display text-2xl font-bold text-slate-900 mb-6",
 				{ title }
@@ -481,7 +481,10 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 		.render();
 
 	PageElement::new("div")
-		.attr("class", "model-form max-w-2xl")
+		.attr(
+			"class",
+			"model-form max-w-2xl animate__animated animate__fadeIn",
+		)
 		.child(
 			PageElement::new("h1")
 				.attr(

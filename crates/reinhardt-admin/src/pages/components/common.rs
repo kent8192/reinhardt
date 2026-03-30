@@ -145,7 +145,7 @@ pub fn error_display(message: &str, dismissible: bool) -> Page {
 	if dismissible {
 		page!(|| {
 			div {
-				class: "admin-alert admin-alert-danger flex items-start justify-between",
+				class: "admin-alert admin-alert-danger flex items-start justify-between animate__animated animate__shakeX",
 				role: "alert",
 				span {
 					{ message }
@@ -161,7 +161,7 @@ pub fn error_display(message: &str, dismissible: bool) -> Page {
 	} else {
 		page!(|| {
 			div {
-				class: "admin-alert admin-alert-danger",
+				class: "admin-alert admin-alert-danger animate__animated animate__shakeX",
 				role: "alert",
 				{ message }
 			}

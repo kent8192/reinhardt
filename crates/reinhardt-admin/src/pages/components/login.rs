@@ -38,7 +38,7 @@ pub fn login_form(error_message: Option<&str>) -> Page {
 	let mut container = PageElement::new("div")
 		.attr(
 			"class",
-			"flex justify-center items-center min-h-screen bg-slate-50",
+			"flex justify-center items-center min-h-screen bg-slate-50 animate__animated animate__fadeIn",
 		)
 		.child(
 			PageElement::new("div")

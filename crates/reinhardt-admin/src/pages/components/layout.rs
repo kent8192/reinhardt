@@ -35,7 +35,7 @@ pub fn header(site_name: &str, user_name: Option<&str>) -> Page {
 
 	page!(|| {
 		nav {
-			class: "flex items-center justify-between px-6 py-3 bg-slate-900 text-white",
+			class: "flex items-center justify-between px-6 py-3 bg-slate-900 text-white animate__animated animate__fadeInDown",
 			style: "position: fixed; top: 0; left: 0; right: 0; z-index: 50; height: 56px;",
 			div {
 				class: "flex items-center gap-3",
@@ -112,7 +112,7 @@ pub fn sidebar(models: &[ModelInfo], current_path: Option<&str>) -> Page {
 
 	page!(|| {
 		div {
-			class: "admin-sidebar bg-slate-900 border-r border-slate-800",
+			class: "admin-sidebar bg-slate-900 border-r border-slate-800 animate__animated animate__fadeInLeft",
 			style: "width: 240px; height: 100vh; position: fixed; top: 56px; left: 0; overflow-y: auto; padding-top: 1rem;",
 			div {
 				class: "px-4 pb-3 mb-2 border-b border-slate-800",
@@ -147,7 +147,7 @@ pub fn footer(version: &str) -> Page {
 
 	page!(|| {
 		footer {
-			class: "text-center py-4 text-xs text-slate-400 border-t border-slate-200",
+			class: "text-center py-4 text-xs text-slate-400 border-t border-slate-200 animate__animated animate__fadeIn",
 			style: "margin-left: 240px;",
 			{ format!("Reinhardt Admin v{}", version) }
 		}

@@ -1,6 +1,7 @@
 //! Client-side router for Reinhardt Admin Panel
 //!
 //! Handles routing between different admin pages:
+//! - `/admin/login/` - Login form
 //! - `/admin/` - Dashboard
 //! - `/admin/{model}/` - List view
 //! - `/admin/{model}/{id}/` - Detail view
@@ -10,6 +11,7 @@
 use crate::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, detail_view, list_view, model_form,
 };
+pub use crate::pages::components::login;
 #[cfg(target_arch = "wasm32")]
 use crate::server::{get_dashboard, get_detail, get_fields, get_list};
 #[cfg(target_arch = "wasm32")]
@@ -25,6 +27,7 @@ use std::collections::HashMap;
 
 /// Admin route enum
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum AdminRoute {
 	/// Dashboard route
 	Dashboard,
@@ -54,6 +57,8 @@ pub enum AdminRoute {
 	},
 	/// Not found route
 	NotFound,
+	/// Login route
+	Login,
 }
 
 // Global Router instance
@@ -531,9 +536,25 @@ fn loading_view() -> Page {
 /// Error view component
 ///
 /// Displays an error message when data fetch fails.
+/// If the error indicates a 401 Unauthorized response, clears the JWT
+/// token and redirects to the login page.
 #[cfg(target_arch = "wasm32")]
 fn error_view(message: &str) -> Page {
 	use reinhardt_pages::component::{IntoPage, PageElement};
+
+	// Detect 401 Unauthorized — clear token and redirect to login
+	if message.contains("401") {
+		reinhardt_pages::auth::clear_jwt_token();
+		reinhardt_pages::auth::auth_state().logout();
+		with_router(|r| {
+			let _ = r.push("/admin/login/");
+		});
+		// Return a minimal view while the redirect is processed
+		return PageElement::new("div")
+			.attr("class", "text-center mt-5")
+			.child("Redirecting to login...")
+			.into_page();
+	}
 
 	PageElement::new("div")
 		.attr("class", "error-message alert alert-danger mt-5")
@@ -604,7 +625,10 @@ fn field_type_to_html_input_type(field_type: &crate::types::FieldType) -> String
 /// ```
 pub fn init_router() -> Router {
 	// IMPORTANT: Route registration order matters. See doc comment above.
+	// Login route must be registered before dynamic routes to prevent
+	// /admin/login/ from matching the list route with model="login".
 	Router::new()
+		.named_route("login", "/admin/login/", login::login_view)
 		.named_route("dashboard", "/admin/", dashboard_view)
 		.named_route("create", "/admin/{model}/add/", || {
 			with_router(|router| {
@@ -669,12 +693,23 @@ mod tests {
 	#[test]
 	fn test_init_router_creates_routes() {
 		let router = init_router();
-		assert_eq!(router.route_count(), 5); // dashboard + list + detail + create + edit
+		assert_eq!(router.route_count(), 6); // login + dashboard + list + detail + create + edit
+		assert!(router.has_route("login"));
 		assert!(router.has_route("dashboard"));
 		assert!(router.has_route("list"));
 		assert!(router.has_route("detail"));
 		assert!(router.has_route("create"));
 		assert!(router.has_route("edit"));
+	}
+
+	#[test]
+	fn test_login_route_match() {
+		let router = init_router();
+		let route_match = router.match_path("/admin/login/");
+		assert!(route_match.is_some());
+
+		let route_match = route_match.unwrap();
+		assert_eq!(route_match.route.name(), Some("login"));
 	}
 
 	#[test]
@@ -761,7 +796,8 @@ mod tests {
 		init_global_router();
 
 		with_router(|router| {
-			assert_eq!(router.route_count(), 5);
+			assert_eq!(router.route_count(), 6);
+			assert!(router.has_route("login"));
 			assert!(router.has_route("dashboard"));
 			assert!(router.has_route("list"));
 			assert!(router.has_route("detail"));
@@ -775,7 +811,7 @@ mod tests {
 		init_global_router();
 
 		let route_count = with_router(|router| router.route_count());
-		assert_eq!(route_count, 5);
+		assert_eq!(route_count, 6);
 
 		let has_dashboard = with_router(|router| router.has_route("dashboard"));
 		assert!(has_dashboard);
@@ -804,7 +840,7 @@ mod tests {
 		init_global_router();
 
 		let result = try_with_router(|router| router.route_count());
-		assert_eq!(result, Some(5));
+		assert_eq!(result, Some(6));
 	}
 
 	#[test]

@@ -201,6 +201,137 @@ where
 	AdminUserLoader(loader)
 }
 
+/// Authenticated user info returned by [`AdminLoginAuthenticator`].
+///
+/// Contains the minimal user data needed to generate a JWT token
+/// and populate client-side auth state.
+pub(crate) struct AuthenticatedUserInfo {
+	/// Primary key as string (typically a UUID).
+	pub(crate) user_id: String,
+	/// Username used for login.
+	pub(crate) username: String,
+	/// Whether the user is a staff member.
+	pub(crate) is_staff: bool,
+	/// Whether the user is a superuser.
+	pub(crate) is_superuser: bool,
+}
+
+/// Type-erased async function that authenticates a user by username and password.
+///
+/// Returns user info on success, or `None` if credentials are invalid
+/// (wrong username, wrong password, or user is not active/staff).
+pub(crate) type AdminLoginAuthenticatorFn = Arc<
+	dyn Fn(
+			String,
+			String,
+			Arc<DatabaseConnection>,
+		)
+			-> Pin<Box<dyn Future<Output = Result<Option<AuthenticatedUserInfo>, DiError>> + Send>>
+		+ Send
+		+ Sync,
+>;
+
+/// Newtype wrapper around [`AdminLoginAuthenticatorFn`] for DI registration.
+///
+/// This type is public because the `#[server_fn]` macro generates a public
+/// function signature that references it via `#[inject]`. The inner function
+/// pointer is `pub(crate)` to prevent external use.
+#[derive(Clone)]
+pub struct AdminLoginAuthenticator(pub(crate) AdminLoginAuthenticatorFn);
+
+#[async_trait]
+impl Injectable for AdminLoginAuthenticator {
+	async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
+		ctx.get_singleton::<AdminLoginAuthenticator>()
+			.map(|arc| (*arc).clone())
+			.ok_or_else(|| DiError::NotRegistered {
+				type_name: "AdminLoginAuthenticator".into(),
+				hint:
+					"Call AdminSite::set_user_type::<U>() or use admin_routes_with_di_deferred() \
+				       which registers AdminDefaultUser as a fallback."
+						.into(),
+			})
+	}
+}
+
+/// Creates an [`AdminLoginAuthenticator`] for user type `U`.
+///
+/// The authenticator:
+/// 1. Queries the user by username using ORM filter
+/// 2. Verifies the password using `BaseUser::check_password()`
+/// 3. Checks that the user is active and has staff privileges
+/// 4. Returns user info for JWT token generation
+pub(crate) fn create_admin_login_authenticator<U>() -> AdminLoginAuthenticator
+where
+	U: BaseUser + FullUser + Model + Clone + Send + Sync + 'static,
+	<U as BaseUser>::PrimaryKey: ToString + Send + Sync,
+{
+	use reinhardt_db::orm::{Filter, FilterOperator, FilterValue};
+
+	let authenticator: AdminLoginAuthenticatorFn = Arc::new(move |username, password, db| {
+		Box::pin(async move {
+			// Query user by username
+			let user: Option<U> = U::objects()
+				.filter_by(Filter::new(
+					"username",
+					FilterOperator::Eq,
+					FilterValue::String(username.clone()),
+				))
+				.first_with_db(&db)
+				.await
+				.map_err(|e| {
+					::tracing::warn!(error = ?e, "AdminLoginAuthenticator: Database query failed");
+					DiError::Internal {
+						message: "AdminLoginAuthenticator: Database query failed".to_string(),
+					}
+				})?;
+
+			let Some(user) = user else {
+				::tracing::debug!(username = %username, "AdminLoginAuthenticator: User not found");
+				return Ok(None);
+			};
+
+			// Verify password
+			let password_valid = user.check_password(&password).map_err(|e| {
+				::tracing::warn!(error = ?e, "AdminLoginAuthenticator: Password check failed");
+				DiError::Internal {
+					message: "AdminLoginAuthenticator: Password verification error".to_string(),
+				}
+			})?;
+
+			if !password_valid {
+				::tracing::debug!(username = %username, "AdminLoginAuthenticator: Invalid password");
+				return Ok(None);
+			}
+
+			// Check active and staff status
+			if !user.is_active() {
+				::tracing::debug!(username = %username, "AdminLoginAuthenticator: User is not active");
+				return Ok(None);
+			}
+
+			if !user.is_staff() {
+				::tracing::debug!(username = %username, "AdminLoginAuthenticator: User is not staff");
+				return Ok(None);
+			}
+
+			let user_id = user
+				.primary_key()
+				.map(|pk| pk.to_string())
+				.unwrap_or_default();
+
+			Ok(Some(AuthenticatedUserInfo {
+				user_id,
+				username: user.username().to_string(),
+				is_staff: user.is_staff(),
+				is_superuser: user.is_superuser(),
+			}))
+		})
+	});
+
+	AdminLoginAuthenticator(authenticator)
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

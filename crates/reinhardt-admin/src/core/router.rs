@@ -253,7 +253,7 @@ fn build_admin_router() -> ServerRouter {
 	let router = {
 		use crate::server::{
 			bulk_delete_records, create_record, delete_record, export_data, get_dashboard,
-			get_detail, get_fields, get_list, import_data, update_record,
+			get_detail, get_fields, get_list, import_data, login::admin_login, update_record,
 		};
 		router
 			.server_fn(get_dashboard::marker)
@@ -266,6 +266,7 @@ fn build_admin_router() -> ServerRouter {
 			.server_fn(bulk_delete_records::marker)
 			.server_fn(export_data::marker)
 			.server_fn(import_data::marker)
+			.server_fn(admin_login::marker)
 			.function("/", hyper::Method::GET, admin_spa_handler)
 			.function("/{*tail}", hyper::Method::GET, admin_spa_handler)
 	};
@@ -393,6 +394,17 @@ pub fn admin_routes_with_di_deferred(
 		>())
 	});
 	registrations.register_arc(loader);
+
+	// Register the login authenticator for admin login.
+	// Falls back to AdminDefaultUser if no custom user type was set.
+	let login_auth = site.login_authenticator().unwrap_or_else(|| {
+		Arc::new(
+			crate::server::admin_auth::create_admin_login_authenticator::<
+				crate::server::user::AdminDefaultUser,
+			>(),
+		)
+	});
+	registrations.register_arc(login_auth);
 
 	registrations.register_arc(site);
 	(build_admin_router(), registrations)
@@ -630,6 +642,7 @@ mod tests {
 			"/api/server_fn/bulk_delete_records",
 			"/api/server_fn/export_data",
 			"/api/server_fn/import_data",
+			"/api/server_fn/admin_login",
 			"/",
 			"/{*tail}",
 		];
@@ -639,8 +652,8 @@ mod tests {
 		let routes = router.get_all_routes();
 		let paths: Vec<&str> = routes.iter().map(|(path, _, _, _)| path.as_str()).collect();
 
-		// Assert - 10 server functions + 2 GET routes should be registered
-		assert_eq!(routes.len(), 12);
+		// Assert - 11 server functions + 2 GET routes should be registered
+		assert_eq!(routes.len(), 13);
 		for expected in &expected_paths {
 			assert_eq!(
 				paths.iter().filter(|p| p == &expected).count(),

@@ -99,10 +99,22 @@ fn resolve_admin_static(path: &str) -> String {
 #[cfg(not(target_arch = "wasm32"))]
 fn admin_spa_html() -> String {
 	let css_url = resolve_admin_static("style.css");
-	let js_url = if is_wasm_built() {
+	let wasm_built = is_wasm_built();
+	let js_url = if wasm_built {
 		resolve_admin_static("reinhardt_admin.js")
 	} else {
 		resolve_admin_static("main.js")
+	};
+	// wasm-pack --target web requires explicit init() call to load the WASM binary
+	let script_tag = if wasm_built {
+		format!(
+			r#"<script type="module">
+		import init from '{js_url}';
+		await init();
+	</script>"#
+		)
+	} else {
+		format!(r#"<script type="module" src="{js_url}"></script>"#)
 	};
 	format!(
 		r#"<!DOCTYPE html>
@@ -115,7 +127,7 @@ fn admin_spa_html() -> String {
 </head>
 <body>
 	<div id="app"></div>
-	<script type="module" src="{js_url}"></script>
+	{script_tag}
 </body>
 </html>"#
 	)
@@ -231,7 +243,9 @@ pub fn admin_static_routes() -> ServerRouter {
 	let router = ServerRouter::new();
 
 	#[cfg(not(target_arch = "wasm32"))]
-	let router = router.function("/{*path}", hyper::Method::GET, admin_static_file_handler);
+	let router = router
+		.function("/{*path}", hyper::Method::GET, admin_static_file_handler)
+		.function("/{*path}", hyper::Method::HEAD, admin_static_file_handler);
 
 	router
 }

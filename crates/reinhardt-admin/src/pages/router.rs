@@ -27,9 +27,8 @@ use std::collections::HashMap;
 
 /// Admin route enum
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum AdminRoute {
-	/// Login route
-	Login,
 	/// Dashboard route
 	Dashboard,
 	/// List view route for a specific model.
@@ -58,6 +57,8 @@ pub enum AdminRoute {
 	},
 	/// Not found route
 	NotFound,
+	/// Login route
+	Login,
 }
 
 // Global Router instance

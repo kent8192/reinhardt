@@ -21,6 +21,7 @@ reinhardt-http = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 reinhardt-server = { workspace = true, optional = true }
 reinhardt-middleware = { workspace = true, optional = true }
+reinhardt-auth = { workspace = true, optional = true }
 reinhardt-pages = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
@@ -28,6 +29,7 @@ tokio = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 colored = { workspace = true }
+console = "0.16.1"
 dialoguer = "0.12.0"
 hyper = { workspace = true }
 hyper-util = { workspace = true }
@@ -95,6 +97,7 @@ sqlite = ["reinhardt-db?/sqlite", "dep:sqlx", "sqlx/sqlite"]
 mysql = ["reinhardt-db?/mysql", "dep:sqlx", "sqlx/mysql"]
 testcontainers = ["dep:reinhardt-test", "reinhardt-test?/testcontainers"]
 plugins = ["dep:reinhardt-dentdelion"]
+auth = ["dep:reinhardt-auth", "reinhardt-auth?/database", "reinhardt-db"]
 full = [
   "migrations",
   "routers",
@@ -112,4 +115,5 @@ full = [
   "mysql",
   "testcontainers",
   "plugins",
+  "auth",
 ]

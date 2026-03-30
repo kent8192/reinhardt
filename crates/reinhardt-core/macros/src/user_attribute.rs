@@ -318,6 +318,62 @@ fn generate_permissions_mixin_impl(
 	})
 }
 
+fn generate_superuser_init_impl(
+	struct_name: &Ident,
+	mapping: &FieldMapping,
+	args: &UserMacroArgs,
+) -> TokenStream {
+	let auth_crate = get_reinhardt_auth_crate();
+	let username_field_ident = Ident::new(&args.username_field, proc_macro2::Span::call_site());
+
+	// email field: use mapping if available, fall back to convention name
+	let email_setter = if let Some(email_ident) = mapping.get(FieldRole::Email) {
+		quote! { user.#email_ident = email.to_string(); }
+	} else {
+		quote! {}
+	};
+
+	let is_staff_setter = if let Some(ident) = mapping.get(FieldRole::IsStaff) {
+		quote! { user.#ident = true; }
+	} else {
+		quote! {}
+	};
+
+	let is_superuser_setter = if let Some(ident) = mapping.get(FieldRole::IsSuperuser) {
+		quote! { user.#ident = true; }
+	} else {
+		// IsSuperuser is required by validate_required_fields, so this is unreachable
+		quote! {}
+	};
+
+	let is_active_setter = if let Some(ident) = mapping.get(FieldRole::IsActive) {
+		quote! { user.#ident = true; }
+	} else {
+		quote! {}
+	};
+
+	let date_joined_setter = if let Some(ident) = mapping.get(FieldRole::DateJoined) {
+		quote! { user.#ident = chrono::Utc::now(); }
+	} else {
+		quote! {}
+	};
+
+	quote! {
+		impl #auth_crate::SuperuserInit for #struct_name {
+			fn init_superuser(username: &str, email: &str) -> Self {
+				let mut user = Self::default();
+				user.#username_field_ident = username.to_string();
+				#email_setter
+				#is_staff_setter
+				#is_superuser_setter
+				#is_active_setter
+				#date_joined_setter
+				user
+			}
+		}
+	}
+}
+
 fn generate_auth_identity_impl(struct_name: &Ident, mapping: &FieldMapping) -> TokenStream {
 	let auth_crate = get_reinhardt_auth_crate();
 	let pk_field = mapping.pk_field.as_ref().expect("PK validated");
@@ -369,6 +425,14 @@ pub(crate) fn user_attribute_impl(args: TokenStream, mut input: ItemStruct) -> R
 	let permissions_impl =
 		generate_permissions_mixin_impl(struct_name, &mapping).unwrap_or_else(|| quote! {});
 	let auth_identity_impl = generate_auth_identity_impl(struct_name, &mapping);
+	// SuperuserInit is only generated for full user types with #[model].
+	// The user type must also implement Default (typically via #[derive(Default)]
+	// or a manual impl).
+	let superuser_init_impl = if parsed_args.full && has_model {
+		generate_superuser_init_impl(struct_name, &mapping, &parsed_args)
+	} else {
+		quote! {}
+	};
 
 	Ok(quote! {
 		#input
@@ -377,5 +441,6 @@ pub(crate) fn user_attribute_impl(args: TokenStream, mut input: ItemStruct) -> R
 		#full_user_impl
 		#permissions_impl
 		#auth_identity_impl
+		#superuser_init_impl
 	})
 }

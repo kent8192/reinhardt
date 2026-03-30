@@ -236,6 +236,30 @@ pub enum Commands {
 		postman: bool,
 	},
 
+	/// Create a superuser account
+	#[cfg(feature = "auth")]
+	Createsuperuser {
+		/// Username for the superuser
+		#[arg(long, value_name = "USERNAME")]
+		username: Option<String>,
+
+		/// Email address for the superuser
+		#[arg(long, value_name = "EMAIL")]
+		email: Option<String>,
+
+		/// Skip the password prompt (use with caution)
+		#[arg(long)]
+		no_password: bool,
+
+		/// Non-interactive mode (requires --username and --email)
+		#[arg(long)]
+		noinput: bool,
+
+		/// Database connection string
+		#[arg(long, value_name = "DATABASE")]
+		database: Option<String>,
+	},
+
 	/// Execute a custom command registered in a `CommandRegistry`
 	///
 	/// This variant is not exposed in the CLI help. It is used internally
@@ -504,6 +528,24 @@ pub async fn run_command_with_registry(
 			output,
 			postman,
 		} => execute_generateopenapi(format, output, postman, verbosity).await,
+		#[cfg(feature = "auth")]
+		Commands::Createsuperuser {
+			username,
+			email,
+			no_password,
+			noinput,
+			database,
+		} => {
+			crate::createsuperuser::execute_createsuperuser(
+				username,
+				email,
+				no_password,
+				noinput,
+				database,
+				verbosity,
+			)
+			.await
+		}
 		Commands::Custom { name, args } => {
 			execute_custom_command(&name, &args, verbosity, &registry).await
 		}

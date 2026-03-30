@@ -1,6 +1,13 @@
 //! createsuperuser CLI command
 //!
 //! Creates a superuser account interactively.
+//!
+//! **Deprecated**: Use the management command instead:
+//! ```bash
+//! cargo run --bin manage createsuperuser
+//! ```
+//! The management command supports custom user models via
+//! [`reinhardt_auth::register_superuser_creator`].
 
 use clap::Parser;
 use console::style;

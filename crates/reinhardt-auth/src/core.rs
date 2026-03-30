@@ -142,6 +142,9 @@ pub mod permission_operators;
 /// Mixin for adding permission fields to user models.
 #[path = "core/permissions_mixin.rs"]
 pub mod permissions_mixin;
+/// Superuser creation support for management commands.
+#[path = "core/superuser_creator.rs"]
+pub mod superuser_creator;
 /// Core user types (SimpleUser, AnonymousUser).
 #[path = "core/user.rs"]
 pub mod user;
@@ -157,6 +160,10 @@ pub use permission::{
 	PermissionContext,
 };
 pub use permissions_mixin::PermissionsMixin;
+pub use superuser_creator::{
+	SuperuserCreator, SuperuserInit, TypedSuperuserCreator, get_superuser_creator,
+	register_superuser_creator, superuser_creator_for,
+};
 pub use user::{AnonymousUser, SimpleUser, User};
 
 // Re-export Argon2Hasher when feature is enabled

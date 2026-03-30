@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.15...reinhardt-web@v0.1.0-rc.16) - 2026-03-30
+
+### Added
+
+- *(pages)* add JWT token management and auth header injection for WASM SPA
+- *(admin)* add login server function with JWT authentication
+- *(admin)* add login page, auth gate, and 401 redirect for WASM SPA
+
+### Changed
+
+- *(admin)* [**breaking**] mark AdminRoute as non_exhaustive and reorder Login variant
+
+### Documentation
+
+- *(admin)* fix broken intra-doc link to CspMiddleware
+
+### Fixed
+
+- *(ci)* stop unattended-upgrades before apt-get to prevent dpkg lock
+- *(pages)* add web-sys Storage feature for sessionStorage access
+- *(admin)* use path_params instead of full URI in static file handler
+- *(admin)* call WASM init() in SPA HTML for web target output
+- *(admin)* support HEAD requests for static file handler
+- *(pages)* resolve server_fn endpoint URL with mount prefix in WASM
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.14...reinhardt-web@v0.1.0-rc.15) - 2026-03-29
 
 ### Added

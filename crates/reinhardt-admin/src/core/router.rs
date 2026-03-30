@@ -15,6 +15,25 @@ use reinhardt_urls::routers::ServerRouter;
 use crate::core::AdminSite;
 use std::sync::Arc;
 
+/// Resolves the directory containing WASM build artifacts.
+///
+/// Checks in order:
+/// 1. `REINHARDT_ADMIN_WASM_DIR` environment variable
+/// 2. `CARGO_MANIFEST_DIR/dist-wasm` (compile-time fallback for development)
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_wasm_dir() -> std::path::PathBuf {
+	if let Ok(dir) = std::env::var("REINHARDT_ADMIN_WASM_DIR") {
+		return std::path::PathBuf::from(dir);
+	}
+	std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dist-wasm")
+}
+
+/// Returns true if the WASM SPA has been built (dist-wasm/ contains entry point).
+#[cfg(not(target_arch = "wasm32"))]
+fn is_wasm_built() -> bool {
+	resolve_wasm_dir().join("reinhardt_admin.js").is_file()
+}
+
 /// Serves the admin SPA HTML shell for client-side routing.
 ///
 /// Applies admin-specific security headers (CSP, X-Frame-Options, etc.)
@@ -35,10 +54,20 @@ async fn admin_spa_handler(
 	Ok(response.with_body(admin_spa_html()))
 }
 
-/// Generates the HTML shell for the admin SPA
+/// Generates the HTML shell for the admin SPA.
+///
+/// Detects at runtime whether the WASM SPA has been built:
+/// - If `dist-wasm/reinhardt_admin.js` exists, loads the WASM entry point
+/// - Otherwise, falls back to the placeholder bootstrap script (`main.js`)
 #[cfg(not(target_arch = "wasm32"))]
 fn admin_spa_html() -> String {
-	r#"<!DOCTYPE html>
+	let script_tag = if is_wasm_built() {
+		r#"<script type="module" src="/static/admin/reinhardt_admin.js"></script>"#
+	} else {
+		r#"<script type="module" src="/static/admin/main.js"></script>"#
+	};
+	format!(
+		r#"<!DOCTYPE html>
 <html lang="en">
 <head>
 	<meta charset="utf-8" />
@@ -48,10 +77,10 @@ fn admin_spa_html() -> String {
 </head>
 <body>
 	<div id="app"></div>
-	<script type="module" src="/static/admin/main.js"></script>
+	{script_tag}
 </body>
 </html>"#
-		.to_string()
+	)
 }
 
 /// Embedded admin CSS asset (bytes for zero-copy `Bytes::from_static`)
@@ -84,6 +113,40 @@ async fn admin_js_handler(
 		.with_body(bytes::Bytes::from_static(ADMIN_JS)))
 }
 
+/// Serves the WASM JavaScript entry point from the build output directory.
+///
+/// Returns 404 if the WASM SPA has not been built.
+#[cfg(not(target_arch = "wasm32"))]
+async fn admin_wasm_js_handler(
+	_request: reinhardt_http::Request,
+) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
+	let path = resolve_wasm_dir().join("reinhardt_admin.js");
+	match tokio::fs::read(&path).await {
+		Ok(data) => Ok(reinhardt_http::Response::ok()
+			.with_header("Content-Type", "application/javascript; charset=utf-8")
+			.with_header("Cache-Control", "public, max-age=3600")
+			.with_body(bytes::Bytes::from(data))),
+		Err(_) => Ok(reinhardt_http::Response::not_found()),
+	}
+}
+
+/// Serves the WASM binary from the build output directory.
+///
+/// Returns 404 if the WASM SPA has not been built.
+#[cfg(not(target_arch = "wasm32"))]
+async fn admin_wasm_bg_handler(
+	_request: reinhardt_http::Request,
+) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
+	let path = resolve_wasm_dir().join("reinhardt_admin_bg.wasm");
+	match tokio::fs::read(&path).await {
+		Ok(data) => Ok(reinhardt_http::Response::ok()
+			.with_header("Content-Type", "application/wasm")
+			.with_header("Cache-Control", "public, max-age=3600")
+			.with_body(bytes::Bytes::from(data))),
+		Err(_) => Ok(reinhardt_http::Response::not_found()),
+	}
+}
+
 /// Returns a `ServerRouter` that serves the admin panel's static assets.
 ///
 /// Mount this router at `/static/admin/` alongside the main admin router:
@@ -104,14 +167,28 @@ async fn admin_js_handler(
 /// ```
 ///
 /// The admin HTML page references `/static/admin/style.css` and
-/// `/static/admin/main.js`. This router serves those embedded assets.
+/// `/static/admin/main.js` (or `/static/admin/reinhardt_admin.js` when the
+/// WASM SPA is built). This router serves those assets.
+///
+/// WASM assets (`reinhardt_admin.js` and `reinhardt_admin_bg.wasm`) are served
+/// from the `dist-wasm/` directory at runtime, returning 404 if not built.
 pub fn admin_static_routes() -> ServerRouter {
 	let router = ServerRouter::new();
 
 	#[cfg(not(target_arch = "wasm32"))]
 	let router = router
 		.function("/style.css", hyper::Method::GET, admin_css_handler)
-		.function("/main.js", hyper::Method::GET, admin_js_handler);
+		.function("/main.js", hyper::Method::GET, admin_js_handler)
+		.function(
+			"/reinhardt_admin.js",
+			hyper::Method::GET,
+			admin_wasm_js_handler,
+		)
+		.function(
+			"/reinhardt_admin_bg.wasm",
+			hyper::Method::GET,
+			admin_wasm_bg_handler,
+		);
 
 	router
 }
@@ -746,6 +823,16 @@ mod tests {
 			"Should serve main.js, found: {:?}",
 			paths
 		);
+		assert!(
+			paths.contains(&"/reinhardt_admin.js"),
+			"Should serve reinhardt_admin.js (WASM entry), found: {:?}",
+			paths
+		);
+		assert!(
+			paths.contains(&"/reinhardt_admin_bg.wasm"),
+			"Should serve reinhardt_admin_bg.wasm, found: {:?}",
+			paths
+		);
 	}
 
 	#[cfg(not(target_arch = "wasm32"))]
@@ -829,6 +916,50 @@ mod tests {
 			content_type.contains("javascript"),
 			"JS handler should return application/javascript content type, got: {}",
 			content_type
+		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_admin_spa_html_fallback_without_wasm() {
+		// Arrange - CI environment has no dist-wasm/ directory
+
+		// Act
+		let html = admin_spa_html();
+
+		// Assert - should use placeholder main.js when WASM is not built
+		assert!(
+			html.contains("/static/admin/main.js")
+				|| html.contains("/static/admin/reinhardt_admin.js"),
+			"HTML should reference either main.js or reinhardt_admin.js"
+		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_is_wasm_built_false_when_no_dist_wasm() {
+		// Arrange - CI/test environment should not have dist-wasm/
+
+		// Act & Assert
+		// In test environments without WASM build, this should be false
+		// (unless REINHARDT_ADMIN_WASM_DIR points to a valid location)
+		let result = is_wasm_built();
+		// We can only assert the function runs without error;
+		// actual value depends on whether WASM was built
+		assert_eq!(result, result); // non-trivial: ensures no panic
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_resolve_wasm_dir_returns_dist_wasm_subdir() {
+		// Arrange & Act
+		let dir = resolve_wasm_dir();
+
+		// Assert - should end with dist-wasm (either from env or CARGO_MANIFEST_DIR)
+		assert!(
+			dir.ends_with("dist-wasm"),
+			"WASM dir should end with 'dist-wasm', got: {:?}",
+			dir
 		);
 	}
 

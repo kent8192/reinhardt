@@ -19,6 +19,7 @@ use crate::types::ListQueryParams;
 use crate::types::ModelInfo;
 use reinhardt_pages::Signal;
 use reinhardt_pages::component::{Component, Page};
+use reinhardt_pages::page;
 use reinhardt_pages::router::{Link, Router};
 #[cfg(target_arch = "wasm32")]
 use reinhardt_pages::{ResourceState, create_resource};
@@ -489,26 +490,26 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 
 /// Not found view component for router
 fn not_found_view() -> Page {
-	use reinhardt_pages::component::{IntoPage, PageElement};
+	let dashboard_link = Link::new("/admin/", "Go to Dashboard")
+		.class("admin-btn admin-btn-primary")
+		.render();
 
-	PageElement::new("div")
-		.attr("class", "not-found")
-		.child(
-			PageElement::new("h1")
-				.attr("class", "text-center mt-5")
-				.child("404 - Page Not Found"),
-		)
-		.child(
-			PageElement::new("p")
-				.attr("class", "text-center")
-				.child("The requested page could not be found."),
-		)
-		.child(
-			PageElement::new("div")
-				.attr("class", "text-center mt-3")
-				.child(Link::new("/admin/", "Go to Dashboard").render()),
-		)
-		.into_page()
+	page!(|| {
+		div {
+			class: "not-found text-center py-16 animate__animated animate__fadeIn",
+			h1 {
+				class: "font-display text-4xl font-bold text-slate-300 mb-2",
+				"404"
+			}
+			p {
+				class: "text-slate-500 mb-6",
+				"The requested page could not be found."
+			}
+			div {
+				{ dashboard_link }
+			}
+		}
+	})()
 }
 
 /// Loading view component
@@ -516,21 +517,19 @@ fn not_found_view() -> Page {
 /// Displays a loading indicator while data is being fetched.
 #[cfg(target_arch = "wasm32")]
 fn loading_view() -> Page {
-	use reinhardt_pages::component::{IntoPage, PageElement};
-
-	PageElement::new("div")
-		.attr("class", "loading-spinner text-center mt-5")
-		.child(
-			PageElement::new("div")
-				.attr("class", "spinner-border")
-				.attr("role", "status")
-				.child(
-					PageElement::new("span")
-						.attr("class", "visually-hidden")
-						.child("Loading..."),
-				),
-		)
-		.into_page()
+	page!(|| {
+		div {
+			class: "flex justify-center items-center py-16",
+			div {
+				class: "admin-spinner",
+				role: "status",
+				span {
+					class: "sr-only",
+					"Loading..."
+				}
+			}
+		}
+	})()
 }
 
 /// Error view component
@@ -540,7 +539,7 @@ fn loading_view() -> Page {
 /// token and redirects to the login page.
 #[cfg(target_arch = "wasm32")]
 fn error_view(message: &str) -> Page {
-	use reinhardt_pages::component::{IntoPage, PageElement};
+	use reinhardt_pages::component::IntoPage;
 
 	// Detect 401 Unauthorized — clear token and redirect to login
 	if message.contains("401") {
@@ -549,28 +548,34 @@ fn error_view(message: &str) -> Page {
 		with_router(|r| {
 			let _ = r.push("/admin/login/");
 		});
-		// Return a minimal view while the redirect is processed
-		return PageElement::new("div")
-			.attr("class", "text-center mt-5")
-			.child("Redirecting to login...")
-			.into_page();
+		return page!(|| {
+			div {
+				class: "text-center py-12 text-slate-500",
+				"Redirecting to login..."
+			}
+		})();
 	}
 
-	PageElement::new("div")
-		.attr("class", "error-message alert alert-danger mt-5")
-		.attr("role", "alert")
-		.child(
-			PageElement::new("h4")
-				.attr("class", "alert-heading")
-				.child("Error"),
-		)
-		.child(PageElement::new("p").child(message.to_string()))
-		.child(
-			PageElement::new("div")
-				.attr("class", "mt-3")
-				.child(Link::new("/admin/", "Go to Dashboard").render()),
-		)
-		.into_page()
+	let message = message.to_string();
+	let dashboard_link = Link::new("/admin/", "Go to Dashboard")
+		.class("admin-btn admin-btn-primary")
+		.render();
+
+	page!(|| {
+		div {
+			class: "admin-alert admin-alert-danger mt-8 animate__animated animate__shakeX",
+			role: "alert",
+			h4 {
+				class: "font-semibold mb-2",
+				"Error"
+			}
+			p {
+				class: "mb-4",
+				{ message }
+			}
+			{ dashboard_link }
+		}
+	})()
 }
 
 /// Convert FieldType to HTML input type string

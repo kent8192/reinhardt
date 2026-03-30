@@ -3,6 +3,7 @@
 //! Provides a login form that authenticates admin users via JWT.
 
 use reinhardt_pages::component::{IntoPage, Page, PageElement};
+use reinhardt_pages::page;
 
 #[cfg(target_arch = "wasm32")]
 use reinhardt_pages::Signal;
@@ -21,96 +22,108 @@ use reinhardt_pages::Signal;
 /// let page = login_form(None);
 /// ```
 pub fn login_form(error_message: Option<&str>) -> Page {
-	let mut form = PageElement::new("div")
+	let error_html = error_message.map(|msg| {
+		PageElement::new("div")
+			.attr(
+				"class",
+				"admin-alert admin-alert-danger mt-4 text-center text-sm",
+			)
+			.attr("role", "alert")
+			.child(msg.to_string())
+			.into_page()
+	});
+
+	let form_page = build_login_form();
+
+	let mut container = PageElement::new("div")
 		.attr(
 			"class",
-			"login-container d-flex justify-content-center align-items-center min-vh-100",
+			"flex justify-center items-center min-h-screen bg-slate-50 animate__animated animate__fadeIn",
 		)
 		.child(
 			PageElement::new("div")
-				.attr("class", "card shadow-sm")
-				.attr("style", "width: 100%; max-width: 400px;")
+				.attr("class", "admin-login-card")
 				.child(
 					PageElement::new("div")
-						.attr("class", "card-body p-4")
+						.attr("class", "p-8")
 						.child(
 							PageElement::new("h2")
-								.attr("class", "card-title text-center mb-4")
+								.attr(
+									"class",
+									"font-display text-2xl font-bold text-center mb-1 text-slate-900",
+								)
 								.child("Admin Login"),
 						)
-						.child(build_login_form(error_message)),
+						.child(
+							PageElement::new("p")
+								.attr("class", "text-sm text-slate-500 text-center mb-6")
+								.child("Sign in to manage your application"),
+						)
+						.child(form_page),
 				),
 		);
 
-	if let Some(msg) = error_message {
-		form = form.child(
-			PageElement::new("div")
-				.attr("class", "alert alert-danger mt-3 text-center")
-				.attr("role", "alert")
-				.child(msg.to_string()),
-		);
+	if let Some(err) = error_html {
+		container = container.child(err);
 	}
 
-	form.into_page()
+	container.into_page()
 }
 
 /// Builds the login form HTML structure.
-fn build_login_form(_error_message: Option<&str>) -> PageElement {
-	PageElement::new("form")
-		.attr("id", "admin-login-form")
-		.attr("method", "post")
-		.child(
-			PageElement::new("div")
-				.attr("class", "mb-3")
-				.child(
-					PageElement::new("label")
-						.attr("for", "username")
-						.attr("class", "form-label")
-						.child("Username"),
-				)
-				.child(
-					PageElement::new("input")
-						.attr("type", "text")
-						.attr("class", "form-control")
-						.attr("id", "username")
-						.attr("name", "username")
-						.attr("required", "true")
-						.attr("autocomplete", "username")
-						.attr("autofocus", "true"),
-				),
-		)
-		.child(
-			PageElement::new("div")
-				.attr("class", "mb-3")
-				.child(
-					PageElement::new("label")
-						.attr("for", "password")
-						.attr("class", "form-label")
-						.child("Password"),
-				)
-				.child(
-					PageElement::new("input")
-						.attr("type", "password")
-						.attr("class", "form-control")
-						.attr("id", "password")
-						.attr("name", "password")
-						.attr("required", "true")
-						.attr("autocomplete", "current-password"),
-				),
-		)
-		.child(
-			PageElement::new("div")
-				.attr("id", "login-error")
-				.attr("class", "alert alert-danger d-none")
-				.attr("role", "alert"),
-		)
-		.child(
-			PageElement::new("button")
-				.attr("type", "submit")
-				.attr("class", "btn btn-primary w-100")
-				.attr("id", "login-submit-btn")
-				.child("Log in"),
-		)
+fn build_login_form() -> Page {
+	page!(|| {
+		form {
+			id: "admin-login-form",
+			method: "post",
+			div {
+				class: "mb-4",
+				label {
+					r#for: "username",
+					class: "admin-label",
+					"Username"
+				}
+				input {
+					r#type: "text",
+					class: "admin-input",
+					id: "username",
+					name: "username",
+					required: true,
+					autocomplete: "username",
+					autofocus: true,
+					placeholder: "Enter your username",
+				}
+			}
+			div {
+				class: "mb-5",
+				label {
+					r#for: "password",
+					class: "admin-label",
+					"Password"
+				}
+				input {
+					r#type: "password",
+					class: "admin-input",
+					id: "password",
+					name: "password",
+					required: true,
+					autocomplete: "current-password",
+					placeholder: "Enter your password",
+				}
+			}
+			div {
+				id: "login-error",
+				class: "admin-alert admin-alert-danger hidden mb-4",
+				role: "alert",
+			}
+			button {
+				r#type: "submit",
+				class: "admin-btn admin-btn-primary w-full py-2.5 text-base",
+				id: "login-submit-btn",
+				"Sign in"
+			}
+		}
+	})()
 }
 
 /// Login view component for the WASM router.
@@ -206,12 +219,12 @@ pub fn setup_login_handler() {
 		// Disable submit button during request
 		if let Some(btn) = document.get_element_by_id("login-submit-btn") {
 			let _ = btn.set_attribute("disabled", "true");
-			btn.set_text_content(Some("Logging in..."));
+			btn.set_text_content(Some("Signing in..."));
 		}
 
 		// Hide previous error
 		if let Some(error_div) = document.get_element_by_id("login-error") {
-			let _ = error_div.class_list().add_1("d-none");
+			let _ = error_div.class_list().add_1("hidden");
 		}
 
 		spawn_local(async move {
@@ -243,7 +256,7 @@ pub fn setup_login_handler() {
 					if let Some(doc) = document {
 						// Show error message
 						if let Some(error_div) = doc.get_element_by_id("login-error") {
-							let _ = error_div.class_list().remove_1("d-none");
+							let _ = error_div.class_list().remove_1("hidden");
 							error_div.set_text_content(Some(if error_msg.contains("401") {
 								"Invalid username or password"
 							} else {
@@ -254,7 +267,7 @@ pub fn setup_login_handler() {
 						// Re-enable submit button
 						if let Some(btn) = doc.get_element_by_id("login-submit-btn") {
 							let _ = btn.remove_attribute("disabled");
-							btn.set_text_content(Some("Log in"));
+							btn.set_text_content(Some("Sign in"));
 						}
 					}
 				}
@@ -287,7 +300,7 @@ mod tests {
 		assert!(html.contains("Admin Login"));
 		assert!(html.contains("username"));
 		assert!(html.contains("password"));
-		assert!(html.contains("Log in"));
+		assert!(html.contains("Sign in"));
 	}
 
 	#[rstest]
@@ -298,7 +311,7 @@ mod tests {
 
 		// Assert
 		assert!(html.contains("Invalid credentials"));
-		assert!(html.contains("alert-danger"));
+		assert!(html.contains("admin-alert-danger"));
 	}
 
 	#[rstest]

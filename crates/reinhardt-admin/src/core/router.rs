@@ -99,10 +99,22 @@ fn resolve_admin_static(path: &str) -> String {
 #[cfg(not(target_arch = "wasm32"))]
 fn admin_spa_html() -> String {
 	let css_url = resolve_admin_static("style.css");
-	let js_url = if is_wasm_built() {
+	let wasm_built = is_wasm_built();
+	let js_url = if wasm_built {
 		resolve_admin_static("reinhardt_admin.js")
 	} else {
 		resolve_admin_static("main.js")
+	};
+	// wasm-pack --target web requires explicit init() call to load the WASM binary
+	let script_tag = if wasm_built {
+		format!(
+			r#"<script type="module">
+		import init from '{js_url}';
+		await init();
+	</script>"#
+		)
+	} else {
+		format!(r#"<script type="module" src="{js_url}"></script>"#)
 	};
 	format!(
 		r#"<!DOCTYPE html>
@@ -110,12 +122,27 @@ fn admin_spa_html() -> String {
 <head>
 	<meta charset="utf-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<meta name="server-fn-prefix" content="/admin" />
 	<title>Reinhardt Admin</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/open-props/open-props.min.css" />
+	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/animate.css@4/animate.min.css" />
+	<script src="https://cdn.jsdelivr.net/npm/@unocss/runtime/preset-wind.global.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/@unocss/runtime/core.global.js"></script>
+	<script>
+		// Initialize UnoCSS runtime with preset-wind (v66+ API)
+		if (window.__unocss_runtime && window.__unocss_runtime.presets.presetWind) {{
+			window.__unocss_runtime.uno.setConfig({{ presets: [window.__unocss_runtime.presets.presetWind()] }});
+			window.__unocss_runtime.extractAll();
+		}}
+	</script>
 	<link rel="stylesheet" href="{css_url}" />
 </head>
-<body>
+<body class="bg-slate-50 text-slate-900 antialiased">
 	<div id="app"></div>
-	<script type="module" src="{js_url}"></script>
+	{script_tag}
 </body>
 </html>"#
 	)
@@ -134,13 +161,42 @@ const ADMIN_ASSETS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets");
 ///
 /// Returns 404 if the file is not found in any directory.
 /// MIME types are detected automatically via `mime_guess`.
+///
+/// This handler catches all internal errors and returns a plain-text error
+/// response instead of propagating `Err`. This prevents the server-layer
+/// error conversion (`Response::from(Error)`) from replacing the intended
+/// `Content-Type` with `application/json`. See issue #3135.
 #[cfg(not(target_arch = "wasm32"))]
 async fn admin_static_file_handler(
 	request: reinhardt_http::Request,
 ) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
+	match admin_static_file_handler_inner(request).await {
+		Ok(response) => Ok(response),
+		Err(e) => {
+			tracing::error!(error = %e, "Unexpected error in admin static file handler");
+			Ok(reinhardt_http::Response::internal_server_error()
+				.with_header("Content-Type", "text/plain; charset=utf-8")
+				.with_body("Internal Server Error"))
+		}
+	}
+}
+
+/// Inner implementation for [`admin_static_file_handler`].
+///
+/// Separated to allow the outer function to catch errors defensively,
+/// preventing `Content-Type: application/json` from the server-layer
+/// error conversion path.
+#[cfg(not(target_arch = "wasm32"))]
+async fn admin_static_file_handler_inner(
+	request: reinhardt_http::Request,
+) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
 	use reinhardt_utils::staticfiles::handler::StaticFileHandler;
 
-	let path = request.uri.path().trim_start_matches('/');
+	let path = request
+		.path_params
+		.get("path")
+		.map(|p| p.trim_start_matches('/'))
+		.unwrap_or("");
 
 	// 1. Try STATIC_ROOT/admin/ first (production: after collectstatic)
 	if let Some(admin_dir) = resolve_static_root_admin() {
@@ -202,7 +258,9 @@ pub fn admin_static_routes() -> ServerRouter {
 	let router = ServerRouter::new();
 
 	#[cfg(not(target_arch = "wasm32"))]
-	let router = router.function("/{*path}", hyper::Method::GET, admin_static_file_handler);
+	let router = router
+		.function("/{*path}", hyper::Method::GET, admin_static_file_handler)
+		.function("/{*path}", hyper::Method::HEAD, admin_static_file_handler);
 
 	router
 }
@@ -775,6 +833,10 @@ mod tests {
 			html.contains("<!DOCTYPE html>"),
 			"HTML should be valid HTML5"
 		);
+		assert!(
+			html.contains(r#"<meta name="server-fn-prefix" content="/admin" />"#),
+			"HTML should contain server-fn-prefix meta tag for WASM endpoint resolution"
+		);
 	}
 
 	#[cfg(not(target_arch = "wasm32"))]
@@ -793,6 +855,45 @@ mod tests {
 			html.contains("main.js") || html.contains("reinhardt_admin.js"),
 			"HTML should reference admin JS (placeholder or WASM)"
 		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_admin_spa_html_includes_unocss_runtime() {
+		// Arrange & Act
+		let html = admin_spa_html();
+
+		// Assert
+		assert!(
+			html.contains("@unocss/runtime/preset-wind.global.js"),
+			"HTML should load UnoCSS preset-wind runtime"
+		);
+		assert!(
+			html.contains("@unocss/runtime/core.global.js"),
+			"HTML should load UnoCSS core runtime"
+		);
+		assert!(
+			html.contains("__unocss_runtime.presets.presetWind()"),
+			"HTML should use v66+ runtime API to configure presetWind"
+		);
+		assert!(
+			html.contains("extractAll()"),
+			"HTML should call extractAll() to apply styles on page load"
+		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_admin_spa_html_includes_open_props_and_animate_css() {
+		// Arrange & Act
+		let html = admin_spa_html();
+
+		// Assert
+		assert!(
+			html.contains("open-props/open-props.min.css"),
+			"HTML should load Open Props design tokens"
+		);
+		assert!(html.contains("animate.css"), "HTML should load Animate.css");
 	}
 
 	#[rstest]
@@ -825,10 +926,14 @@ mod tests {
 	#[rstest]
 	#[tokio::test]
 	async fn test_admin_static_file_handler_serves_css() {
-		// Arrange
+		// Arrange - use realistic URI matching production mount at /static/admin/
 		let request = reinhardt_http::Request::builder()
 			.method(hyper::Method::GET)
-			.uri("/style.css")
+			.uri("/static/admin/style.css")
+			.path_params(std::collections::HashMap::from([(
+				"path".to_string(),
+				"style.css".to_string(),
+			)]))
 			.build()
 			.unwrap();
 
@@ -853,10 +958,14 @@ mod tests {
 	#[rstest]
 	#[tokio::test]
 	async fn test_admin_static_file_handler_serves_js() {
-		// Arrange
+		// Arrange - use realistic URI matching production mount at /static/admin/
 		let request = reinhardt_http::Request::builder()
 			.method(hyper::Method::GET)
-			.uri("/main.js")
+			.uri("/static/admin/main.js")
+			.path_params(std::collections::HashMap::from([(
+				"path".to_string(),
+				"main.js".to_string(),
+			)]))
 			.build()
 			.unwrap();
 
@@ -881,10 +990,14 @@ mod tests {
 	#[rstest]
 	#[tokio::test]
 	async fn test_admin_static_file_handler_returns_404_for_missing_file() {
-		// Arrange
+		// Arrange - use realistic URI matching production mount at /static/admin/
 		let request = reinhardt_http::Request::builder()
 			.method(hyper::Method::GET)
-			.uri("/nonexistent.txt")
+			.uri("/static/admin/nonexistent.txt")
+			.path_params(std::collections::HashMap::from([(
+				"path".to_string(),
+				"nonexistent.txt".to_string(),
+			)]))
 			.build()
 			.unwrap();
 
@@ -903,10 +1016,14 @@ mod tests {
 	#[rstest]
 	#[tokio::test]
 	async fn test_admin_static_file_handler_returns_404_for_wasm_when_not_built() {
-		// Arrange
+		// Arrange - use realistic URI matching production mount at /static/admin/
 		let request = reinhardt_http::Request::builder()
 			.method(hyper::Method::GET)
-			.uri("/reinhardt_admin_bg.wasm")
+			.uri("/static/admin/reinhardt_admin_bg.wasm")
+			.path_params(std::collections::HashMap::from([(
+				"path".to_string(),
+				"reinhardt_admin_bg.wasm".to_string(),
+			)]))
 			.build()
 			.unwrap();
 
@@ -1084,6 +1201,120 @@ mod tests {
 			!set_cookie.contains("Secure"),
 			"HTTP request should not set Secure flag, got: {}",
 			set_cookie
+		);
+	}
+
+	/// Full-stack test: verifies Content-Type through `ServerRouter::handle()`
+	/// route resolution, not just direct handler invocation. Regression test
+	/// for #3135 where the server-layer error conversion produced
+	/// `Content-Type: application/json` for static file responses.
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	#[tokio::test]
+	async fn test_admin_static_routes_full_stack_css_content_type() {
+		use reinhardt_http::Handler;
+
+		// Arrange — mount admin_static_routes() exactly as production does
+		let router = ServerRouter::new().mount("/static/admin/", admin_static_routes());
+
+		let request = reinhardt_http::Request::builder()
+			.method(hyper::Method::GET)
+			.uri("/static/admin/style.css")
+			.build()
+			.unwrap();
+
+		// Act
+		let response = router.handle(request).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, hyper::StatusCode::OK);
+		let content_type = response
+			.headers
+			.get("content-type")
+			.map(|v| v.to_str().unwrap_or(""))
+			.unwrap_or("");
+		assert!(
+			content_type.contains("text/css"),
+			"Full-stack CSS should return text/css, got: {}",
+			content_type
+		);
+		assert!(
+			!content_type.contains("application/json"),
+			"Static file must never return application/json (#3135), got: {}",
+			content_type
+		);
+	}
+
+	/// Full-stack test for JS files through the mounted router.
+	/// Regression test for #3135.
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	#[tokio::test]
+	async fn test_admin_static_routes_full_stack_js_content_type() {
+		use reinhardt_http::Handler;
+
+		// Arrange
+		let router = ServerRouter::new().mount("/static/admin/", admin_static_routes());
+
+		let request = reinhardt_http::Request::builder()
+			.method(hyper::Method::GET)
+			.uri("/static/admin/main.js")
+			.build()
+			.unwrap();
+
+		// Act
+		let response = router.handle(request).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, hyper::StatusCode::OK);
+		let content_type = response
+			.headers
+			.get("content-type")
+			.map(|v| v.to_str().unwrap_or(""))
+			.unwrap_or("");
+		assert!(
+			content_type.contains("javascript"),
+			"Full-stack JS should return application/javascript, got: {}",
+			content_type
+		);
+		assert!(
+			!content_type.contains("application/json"),
+			"Static file must never return application/json (#3135), got: {}",
+			content_type
+		);
+	}
+
+	/// Full-stack test: 404 responses must not have application/json Content-Type.
+	/// Regression test for #3135.
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	#[tokio::test]
+	async fn test_admin_static_routes_full_stack_404_not_json() {
+		use reinhardt_http::Handler;
+
+		// Arrange
+		let router = ServerRouter::new().mount("/static/admin/", admin_static_routes());
+
+		let request = reinhardt_http::Request::builder()
+			.method(hyper::Method::GET)
+			.uri("/static/admin/nonexistent.wasm")
+			.build()
+			.unwrap();
+
+		// Act
+		let response = router.handle(request).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, hyper::StatusCode::NOT_FOUND);
+		let content_type = response
+			.headers
+			.get("content-type")
+			.map(|v| v.to_str().unwrap_or(""))
+			.unwrap_or("");
+		assert!(
+			!content_type.contains("application/json"),
+			"Static file 404 must not return application/json (#3135), got: {}",
+			content_type
 		);
 	}
 }

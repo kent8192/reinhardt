@@ -148,6 +148,9 @@ pub mod cli;
 pub mod collectstatic;
 /// Command execution context (settings, output, verbosity).
 pub mod context;
+/// Superuser creation command.
+#[cfg(feature = "auth")]
+pub(crate) mod createsuperuser;
 /// Embedded Tera templates for project/app scaffolding.
 pub mod embedded_templates;
 /// Code formatting utilities for generated code.

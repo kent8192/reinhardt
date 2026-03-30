@@ -120,7 +120,7 @@ pub fn admin_static_routes() -> ServerRouter {
 ///
 /// The admin panel sets its own `Content-Security-Policy` headers on HTML
 /// responses (allowing `'unsafe-inline'` for styles, `data:` for images,
-/// etc.). If your application uses [`CspMiddleware`] with strict directives,
+/// etc.). If your application uses `CspMiddleware` with strict directives,
 /// add these paths to its `exempt_paths` so the middleware does not override
 /// the admin's CSP.
 ///
@@ -134,8 +134,6 @@ pub fn admin_static_routes() -> ServerRouter {
 /// Reinhardt's own `CspMiddleware` already checks for an existing CSP header
 /// and skips insertion if one is present. This helper is primarily useful when
 /// a third-party or custom CSP middleware unconditionally sets headers.
-///
-/// [`CspMiddleware`]: reinhardt_middleware::CspMiddleware
 ///
 /// # Examples
 ///

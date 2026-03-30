@@ -982,11 +982,12 @@ fn generate_server_handler(
 		///
 		/// # Example
 		///
-		/// ```no_run
-		/// use axum::{Router, routing::post};
+		/// ```text
+		/// use reinhardt_pages::server_fn::ServerFnRouterExt;
+		/// use reinhardt_urls::routers::ServerRouter;
 		///
-		/// let app = Router::new()
-		///     .route("/api/server_fn/get_user", post(register_server_fn_get_user));
+		/// let router = ServerRouter::new()
+		///     .server_fn(get_user);
 		/// ```
 		pub fn #register_fn_name() -> &'static str {
 			#endpoint

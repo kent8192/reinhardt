@@ -2,9 +2,12 @@
 //!
 //! Provides import operations for admin models from various formats (JSON, CSV, TSV).
 
+#[cfg(not(target_arch = "wasm32"))]
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, ImportFormat, ImportResponse};
-use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
+#[cfg(not(target_arch = "wasm32"))]
+use reinhardt_pages::server_fn::ServerFnRequest;
+use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 use std::sync::Arc;

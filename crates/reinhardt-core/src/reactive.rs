@@ -22,7 +22,7 @@
 //!
 //! ## Example
 //!
-//! ```ignore
+//! ```rust
 //! use reinhardt_core::reactive::{Signal, Effect, Memo};
 //!
 //! // Create signals
@@ -30,12 +30,16 @@
 //! let name = Signal::new("Alice".to_string());
 //!
 //! // Create a memo (derived value)
-//! let doubled = Memo::new(move || count.get() * 2);
+//! let count_for_memo = count.clone();
+//! let doubled = Memo::new(move || count_for_memo.get() * 2);
 //!
 //! // Create an effect (side effect)
+//! let count_for_effect = count.clone();
+//! let name_for_effect = name.clone();
+//! let doubled_for_effect = doubled.clone();
 //! Effect::new(move || {
 //!     println!("{}: count = {}, doubled = {}",
-//!         name.get(), count.get(), doubled.get());
+//!         name_for_effect.get(), count_for_effect.get(), doubled_for_effect.get());
 //! });
 //!
 //! // Update signals - effect automatically reruns

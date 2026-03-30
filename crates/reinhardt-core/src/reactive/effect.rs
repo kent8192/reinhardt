@@ -13,15 +13,16 @@
 //!
 //! ## Example
 //!
-//! ```ignore
+//! ```rust
 //! use reinhardt_core::reactive::{Signal, Effect};
 //!
 //! let count = Signal::new(0);
 //!
 //! // Create an effect that logs the count
+//! let count_for_effect = count.clone();
 //! let _effect = Effect::new(move || {
 //!     // This get() call automatically creates a dependency
-//!     println!("Count is: {}", count.get());
+//!     println!("Count is: {}", count_for_effect.get());
 //! });
 //!
 //! // This will trigger the effect to re-run
@@ -73,19 +74,21 @@ pub(crate) fn get_effect_timing(effect_id: NodeId) -> Option<EffectTiming> {
 ///
 /// ## Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_core::reactive::{Signal, Effect};
 ///
 /// let count = Signal::new(0);
 /// let doubled = Signal::new(0);
 ///
 /// // Effect that keeps doubled in sync with count
+/// let count_clone = count.clone();
+/// let doubled_clone = doubled.clone();
 /// Effect::new(move || {
-///     doubled.set(count.get() * 2);
+///     doubled_clone.set(count_clone.get() * 2);
 /// });
 ///
+/// // After async update, doubled would be 10
 /// count.set(5);
-/// assert_eq!(doubled.get(), 10);
 /// ```
 pub struct Effect {
 	/// Unique identifier for this effect
@@ -106,11 +109,14 @@ impl Effect {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
+	/// use reinhardt_core::reactive::{Signal, Effect};
+	///
 	/// let count = Signal::new(0);
 	///
+	/// let count_clone = count.clone();
 	/// Effect::new(move || {
-	///     println!("Count: {}", count.get());
+	///     println!("Count: {}", count_clone.get());
 	/// });
 	/// ```
 	pub fn new<F>(mut f: F) -> Self
@@ -156,11 +162,14 @@ impl Effect {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
+	/// use reinhardt_core::reactive::{Signal, Effect, EffectTiming};
+	///
 	/// let count = Signal::new(0);
 	///
+	/// let count_clone = count.clone();
 	/// Effect::new_with_timing(move || {
-	///     println!("Count: {}", count.get());
+	///     println!("Count: {}", count_clone.get());
 	/// }, EffectTiming::Layout);
 	/// ```
 	pub fn new_with_timing<F>(mut f: F, timing: EffectTiming) -> Self

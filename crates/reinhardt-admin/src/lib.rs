@@ -26,6 +26,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod adapters;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod core;
 pub mod pages;
 pub mod server;
@@ -34,9 +35,20 @@ pub mod types;
 // Register admin static files for auto-discovery by collectstatic
 #[cfg(not(target_arch = "wasm32"))]
 const _: () = {
-	/// Path to admin static assets directory
+	/// Path to admin static assets directory (embedded CSS/JS placeholder)
 	const ADMIN_STATIC_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets");
 
 	// Register at compile time using inventory
 	reinhardt_apps::register_app_static_files!("admin", ADMIN_STATIC_DIR, "/static/admin/");
+};
+
+// Register WASM build output for auto-discovery by collectstatic.
+// The dist-wasm/ directory may not exist if the WASM SPA has not been built;
+// collectstatic gracefully skips non-existent directories.
+#[cfg(not(target_arch = "wasm32"))]
+const _: () = {
+	/// Path to admin WASM build output directory
+	const ADMIN_WASM_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/dist-wasm");
+
+	reinhardt_apps::register_app_static_files!("admin-wasm", ADMIN_WASM_DIR, "/static/admin/");
 };

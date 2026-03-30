@@ -548,6 +548,18 @@ fn generate_client_stub(
 		}
 	};
 
+	// Generate JWT auth header injection code (always enabled).
+	// If a JWT token exists in sessionStorage, it is attached as
+	// an Authorization: Bearer header. When no token is stored, this
+	// is a no-op — backward compatible with unauthenticated calls.
+	let auth_injection_code = quote! {
+		// Inject Authorization header if JWT token is available
+		use #pages_crate::auth::auth_headers;
+		if let Some((__auth_header_name, __auth_header_value)) = auth_headers() {
+			__request_builder = __request_builder.header(__auth_header_name, &__auth_header_value);
+		}
+	};
+
 	// Generate codec-specific serialization and deserialization code
 	let (content_type, serialize_code, deserialize_code) = match codec {
 		"json" => (
@@ -617,7 +629,7 @@ fn generate_client_stub(
 				#(#param_names: #param_types),*
 			}
 
-			let __endpoint = #endpoint;
+			let __endpoint = #pages_crate::server_fn::resolve_endpoint(#endpoint);
 			let __args = #args_struct_name {
 				#(#param_names),*
 			};
@@ -630,6 +642,7 @@ fn generate_client_stub(
 				.header("Content-Type", #content_type);
 
 			#csrf_injection_code
+			#auth_injection_code
 
 			// Send request
 			let __response = __request_builder
@@ -969,11 +982,12 @@ fn generate_server_handler(
 		///
 		/// # Example
 		///
-		/// ```ignore
-		/// use axum::{Router, routing::post};
+		/// ```text
+		/// use reinhardt_pages::server_fn::ServerFnRouterExt;
+		/// use reinhardt_urls::routers::ServerRouter;
 		///
-		/// let app = Router::new()
-		///     .route("/api/server_fn/get_user", post(register_server_fn_get_user));
+		/// let router = ServerRouter::new()
+		///     .server_fn(get_user);
 		/// ```
 		pub fn #register_fn_name() -> &'static str {
 			#endpoint

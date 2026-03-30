@@ -75,7 +75,7 @@ macro_rules! debug_log {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// info_log!("Form submitted successfully");
 /// ```
 #[macro_export]
@@ -113,7 +113,7 @@ macro_rules! info_log {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// warn_log!("Performance warning: slow render");
 /// ```
 #[macro_export]

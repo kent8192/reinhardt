@@ -526,7 +526,7 @@ impl Router {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let router = Router::new()
 	///     .route("/", home_page)
 	///     .route("/users/{id}/", user_detail);

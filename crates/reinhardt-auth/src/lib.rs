@@ -92,7 +92,9 @@ pub(crate) const USER_ID_NAMESPACE: uuid::Uuid =
 pub use core::{
 	AllowAny, AnonymousUser, AuthBackend, AuthIdentity, BaseUser, CompositeAuthBackend, FullUser,
 	IsActiveUser, IsAdminUser, IsAuthenticated, IsAuthenticatedOrReadOnly, PasswordHasher,
-	Permission, PermissionContext, PermissionsMixin, SimpleUser, User,
+	Permission, PermissionContext, PermissionsMixin, SimpleUser, SuperuserCreator, SuperuserInit,
+	TypedSuperuserCreator, User, get_superuser_creator, register_superuser_creator,
+	superuser_creator_for,
 };
 
 #[cfg(feature = "argon2-hasher")]

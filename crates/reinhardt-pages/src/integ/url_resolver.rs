@@ -6,7 +6,7 @@
 //!
 //! ## Usage
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_pages::integ::url_resolver;
 //! use std::collections::HashMap;
 //!
@@ -42,7 +42,7 @@ static URL_ROUTES: OnceLock<HashMap<String, String>> = OnceLock::new();
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::integ::url_resolver;
 /// use std::collections::HashMap;
 ///

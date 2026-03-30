@@ -325,7 +325,7 @@ args = ["llvm-cov", "nextest", "--workspace", "--lib", "--all-features", "--no-f
 # ============================================================================
 
 [tasks.feature-check]
-description = "Check representative feature combinations (27 patterns)"
+description = "Check representative feature combinations (30 patterns)"
 dependencies = ["feature-check-facade", "feature-check-subcrate"]
 
 [tasks.feature-check-facade]
@@ -368,7 +368,7 @@ echo "=== All facade checks passed ==="
 '''
 
 [tasks.feature-check-subcrate]
-description = "Check key sub-crate feature combinations (8 patterns)"
+description = "Check key sub-crate feature combinations (11 patterns)"
 script_runner = "bash"
 script = '''
 set -e
@@ -379,8 +379,11 @@ combos=(
 	"core-full|reinhardt-core|--no-default-features -F core-full"
 	"db-minimal|reinhardt-db|--no-default-features"
 	"db-full|reinhardt-db|--no-default-features -F database-full"
+	"db-no-di|reinhardt-db|--no-default-features -F backends,orm"
 	"auth-minimal|reinhardt-auth|--no-default-features"
 	"auth-full|reinhardt-auth|--no-default-features -F auth-full"
+	"auth-jwt-no-db|reinhardt-auth|--no-default-features -F jwt"
+	"auth-sessions-no-db|reinhardt-auth|--no-default-features -F sessions"
 	"rest-minimal|reinhardt-rest|--no-default-features"
 	"rest-full|reinhardt-rest|--no-default-features -F rest-full"
 )

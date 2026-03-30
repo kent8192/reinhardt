@@ -5,7 +5,7 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
+//! ```ignore
 //! use reinhardt_views::viewsets::{InjectableViewSet, ModelViewSet, ViewSet};
 //! use reinhardt_di::Injectable;
 //! use std::sync::Arc;
@@ -36,7 +36,7 @@ use std::sync::Arc;
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```ignore
 /// # #[tokio::main]
 /// # async fn main() {
 /// use reinhardt_views::viewsets::{InjectableViewSet, ModelViewSet, ViewSet};

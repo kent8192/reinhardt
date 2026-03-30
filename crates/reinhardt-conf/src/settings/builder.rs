@@ -246,9 +246,17 @@ impl MergedSettings {
 	///
 	/// # Examples
 	///
-	/// ```ignore
-	/// // Retrieve configuration value
-	/// let value = settings.get_or("key", "default");
+	/// ```no_run
+	/// use reinhardt_conf::settings::builder::SettingsBuilder;
+	/// use reinhardt_conf::settings::sources::DefaultSource;
+	/// use serde_json::Value;
+	///
+	/// let settings = SettingsBuilder::new()
+	///     .add_source(DefaultSource::new().with_value("key", Value::String("value".into())))
+	///     .build()
+	///     .unwrap();
+	/// // Retrieve configuration value with default
+	/// let value: String = settings.get_or("key", "default".to_string());
 	/// ```
 	pub fn get_or<T: DeserializeOwned>(&self, key: &str, default: T) -> T {
 		self.get(key).unwrap_or(default)
@@ -279,8 +287,16 @@ impl MergedSettings {
 	///
 	/// # Examples
 	///
-	/// ```ignore
-	/// // Retrieve configuration value
+	/// ```no_run
+	/// use reinhardt_conf::settings::builder::SettingsBuilder;
+	/// use reinhardt_conf::settings::sources::DefaultSource;
+	/// use serde_json::Value;
+	///
+	/// let settings = SettingsBuilder::new()
+	///     .add_source(DefaultSource::new().with_value("key", Value::String("value".into())))
+	///     .build()
+	///     .unwrap();
+	/// // Retrieve raw configuration value
 	/// let value = settings.get_raw("key");
 	/// ```
 	pub fn get_raw(&self, key: &str) -> Option<&Value> {

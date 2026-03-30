@@ -6,7 +6,7 @@
 //!
 //! ## Usage
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_pages::integ::static_context;
 //! use std::collections::HashMap;
 //!
@@ -41,7 +41,7 @@ static STATIC_MANIFEST: OnceLock<HashMap<String, String>> = OnceLock::new();
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::integ::static_context;
 /// use std::collections::HashMap;
 ///

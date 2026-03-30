@@ -14,7 +14,7 @@
 //!
 //! ## Example
 //!
-//! ```ignore
+//! ```rust
 //! use reinhardt_core::reactive::Signal;
 //!
 //! // Create a signal
@@ -71,7 +71,9 @@ impl<T: 'static> Signal<T> {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
+	/// use reinhardt_core::reactive::Signal;
+	///
 	/// let count = Signal::new(0);
 	/// assert_eq!(count.get(), 0);
 	/// ```
@@ -88,7 +90,9 @@ impl<T: 'static> Signal<T> {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
+	/// use reinhardt_core::reactive::Signal;
+	///
 	/// let count = Signal::new(42);
 	/// assert_eq!(count.get(), 42);
 	/// ```
@@ -110,7 +114,9 @@ impl<T: 'static> Signal<T> {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
+	/// use reinhardt_core::reactive::Signal;
+	///
 	/// let count = Signal::new(42);
 	/// // This won't create a dependency
 	/// let value = count.get_untracked();
@@ -132,7 +138,9 @@ impl<T: 'static> Signal<T> {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
+	/// use reinhardt_core::reactive::Signal;
+	///
 	/// let count = Signal::new(0);
 	/// count.set(42);
 	/// assert_eq!(count.get(), 42);
@@ -153,7 +161,9 @@ impl<T: 'static> Signal<T> {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
+	/// use reinhardt_core::reactive::Signal;
+	///
 	/// let count = Signal::new(0);
 	/// count.update(|n| *n += 1);
 	/// assert_eq!(count.get(), 1);

@@ -102,3 +102,80 @@ pub use server_fn_trait::{ServerFn, ServerFnError};
 
 // Re-export the macro for convenience
 pub use reinhardt_pages_macros::server_fn;
+
+/// Resolves a server function endpoint path by prepending the mount prefix.
+///
+/// On WASM targets, reads the `<meta name="server-fn-prefix">` tag from the
+/// document to determine the mount prefix. The prefix is cached after the first
+/// DOM lookup for performance.
+///
+/// On non-WASM targets, returns the path unchanged (server-side routing handles
+/// prefix resolution via router mounting).
+///
+/// # Examples
+///
+/// ```ignore
+/// // With <meta name="server-fn-prefix" content="/admin"> in the document:
+/// assert_eq!(resolve_endpoint("/api/server_fn/get_list"), "/admin/api/server_fn/get_list");
+///
+/// // Without the meta tag:
+/// assert_eq!(resolve_endpoint("/api/server_fn/get_list"), "/api/server_fn/get_list");
+/// ```
+#[cfg(target_arch = "wasm32")]
+pub fn resolve_endpoint(path: &str) -> String {
+	use std::cell::RefCell;
+
+	thread_local! {
+		static CACHED_PREFIX: RefCell<Option<String>> = const { RefCell::new(None) };
+	}
+
+	CACHED_PREFIX.with(|cache| {
+		let mut cache = cache.borrow_mut();
+		if cache.is_none() {
+			let prefix = web_sys::window()
+				.and_then(|w| w.document())
+				.and_then(|d| {
+					d.query_selector("meta[name='server-fn-prefix']")
+						.ok()
+						.flatten()
+				})
+				.and_then(|el| el.get_attribute("content"))
+				.unwrap_or_default();
+			*cache = Some(prefix);
+		}
+		let prefix = cache.as_deref().unwrap_or("");
+		if prefix.is_empty() {
+			path.to_string()
+		} else {
+			let prefix = prefix.trim_end_matches('/');
+			format!("{}{}", prefix, path)
+		}
+	})
+}
+
+/// Non-WASM identity implementation - returns the path unchanged.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn resolve_endpoint(path: &str) -> String {
+	path.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use rstest::rstest;
+
+	#[rstest]
+	#[case("/api/server_fn/get_list", "/api/server_fn/get_list")]
+	#[case("/api/server_fn/admin_login", "/api/server_fn/admin_login")]
+	#[case("/custom/endpoint", "/custom/endpoint")]
+	fn test_resolve_endpoint_returns_path_unchanged_on_server(
+		#[case] input: &str,
+		#[case] expected: &str,
+	) {
+		// Arrange & Act
+		let result = resolve_endpoint(input);
+
+		// Assert
+		assert_eq!(result, expected);
+	}
+}

@@ -14,16 +14,17 @@
 //!
 //! ## Example
 //!
-//! ```ignore
+//! ```rust
 //! use reinhardt_core::reactive::{Signal, Effect, Runtime};
 //!
 //! // Create a signal
 //! let count = Signal::new(0);
 //!
 //! // Create an effect that automatically tracks dependencies
+//! let count_for_effect = count.clone();
 //! Effect::new(move || {
 //!     // This get() call automatically registers the dependency
-//!     println!("Count is: {}", count.get());
+//!     println!("Count is: {}", count_for_effect.get());
 //! });
 //!
 //! // Update the signal - the effect will automatically re-run
@@ -385,9 +386,10 @@ thread_local! {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use reinhardt_core::reactive::runtime::with_runtime;
+/// ```rust
+/// use reinhardt_core::reactive::runtime::{with_runtime, NodeId};
 ///
+/// let signal_id = NodeId::new();
 /// with_runtime(|rt| {
 ///     rt.track_dependency(signal_id);
 /// });

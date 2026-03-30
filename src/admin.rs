@@ -31,7 +31,7 @@
 //!
 //! ## Example (Submodule Access)
 //!
-//! ```ignore
+//! ```no_run
 //! // Server-side (non-wasm32):
 //! use reinhardt::admin::adapters::AdminSite;
 //! use reinhardt::admin::server::get_dashboard;

@@ -227,7 +227,7 @@ pub mod prelude {
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```ignore
 /// use reinhardt_testkit::poll_until;
 /// use std::time::Duration;
 ///

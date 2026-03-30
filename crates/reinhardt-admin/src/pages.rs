@@ -31,6 +31,9 @@
 //! }
 //! ```
 
+#[cfg(target_arch = "wasm32")]
+mod main;
+
 pub mod components;
 pub mod router;
 

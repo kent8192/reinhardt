@@ -318,7 +318,8 @@ impl ElementBuilder {
 	///
 	/// ## Example
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_pages::builder::html::{div};
 	/// let element = div().class("container").build();
 	/// ```
 	pub fn build(self) -> Element {
@@ -375,7 +376,8 @@ define_element!(
 	///
 	/// ## Example
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_pages::builder::html::{div, p};
 	/// let container = div()
 	///     .class("container")
 	///     .child(p().text("Content").build())
@@ -389,7 +391,8 @@ define_element!(
 	///
 	/// ## Example
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_pages::builder::html::{span};
 	/// let label = span().text("Label").class("badge").build();
 	/// ```
 	span, "span"
@@ -400,7 +403,8 @@ define_element!(
 	///
 	/// ## Example
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_pages::builder::html::{p};
 	/// let paragraph = p().text("This is a paragraph.").build();
 	/// ```
 	p, "p"
@@ -440,7 +444,8 @@ define_element!(
 	///
 	/// ## Example
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_pages::builder::html::{textarea};
 	/// let textarea = textarea()
 	///     .attr("rows", "5")
 	///     .attr("placeholder", "Enter long text...")
@@ -454,7 +459,8 @@ define_element!(
 	///
 	/// ## Example
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_pages::builder::html::{option, select};
 	/// let select = select()
 	///     .child(option().attr("value", "1").text("Option 1").build())
 	///     .child(option().attr("value", "2").text("Option 2").build())
@@ -468,7 +474,8 @@ define_element!(
 	///
 	/// ## Example
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_pages::builder::html::{option};
 	/// let option = option()
 	///     .attr("value", "1")
 	///     .text("Option 1")
@@ -497,7 +504,8 @@ define_element!(
 	///
 	/// ## Example
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_pages::builder::html::{a};
 	/// let link = a()
 	///     .attr("href", "https://example.com")
 	///     .text("Visit Example")
@@ -511,7 +519,8 @@ define_element!(
 	///
 	/// ## Example
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_pages::builder::html::{img};
 	/// let image = img()
 	///     .attr("src", "/images/logo.png")
 	///     .attr("alt", "Logo")
@@ -525,7 +534,8 @@ define_element!(
 	///
 	/// ## Example
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_pages::builder::html::{h1};
 	/// let heading = h1().text("Page Title").build();
 	/// ```
 	h1, "h1"
@@ -546,7 +556,8 @@ define_element!(
 	///
 	/// ## Example
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # use reinhardt_pages::builder::html::{li, ul};
 	/// let list = ul()
 	///     .child(li().text("Item 1").build())
 	///     .child(li().text("Item 2").build())

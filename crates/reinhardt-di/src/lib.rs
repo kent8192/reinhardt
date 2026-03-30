@@ -88,7 +88,7 @@
 //!
 //! Optional request and param context can be added:
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_di::{InjectionContext, SingletonScope};
 //! use reinhardt_http::Request;
 //! use std::sync::Arc;
@@ -162,7 +162,7 @@
 //!
 //! ## Development Tools Example
 //!
-//! ```ignore
+//! ```no_run
 //! # #[cfg(feature = "dev-tools")]
 //! # use reinhardt_di::{visualization::DependencyGraph, profiling::DependencyProfiler};
 //! # #[cfg(feature = "dev-tools")]
@@ -204,7 +204,7 @@
 //!
 //! Returns an injection error if any requirement is missing (fail-fast behavior).
 //!
-//! ```rust,ignore
+//! ```ignore
 //! use reinhardt_auth::AuthUser;
 //! use reinhardt_auth::DefaultUser;
 //!

@@ -4,7 +4,7 @@
 //! routing, authentication, and rendering functionality.
 
 use crate::core::{AdminRouter, ModelAdmin};
-use crate::server::admin_auth::AdminUserLoader;
+use crate::server::admin_auth::{AdminLoginAuthenticator, AdminUserLoader};
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -49,6 +49,18 @@ pub struct AdminSite {
 	///
 	/// [`AdminDefaultUser`]: crate::server::user::AdminDefaultUser
 	user_loader: Option<Arc<AdminUserLoader>>,
+
+	/// Type-erased login authenticator for admin login.
+	///
+	/// When `None`, [`AdminDefaultUser`] is used as a fallback.
+	///
+	/// [`AdminDefaultUser`]: crate::server::user::AdminDefaultUser
+	login_authenticator: Option<Arc<AdminLoginAuthenticator>>,
+
+	/// JWT secret for token generation during admin login.
+	///
+	/// When `None`, admin login is disabled.
+	jwt_secret: Option<Vec<u8>>,
 }
 
 /// Configuration for the admin site
@@ -104,6 +116,8 @@ impl AdminSite {
 			config: Arc::new(RwLock::new(AdminSiteConfig::default())),
 			favicon_data: Arc::new(RwLock::new(None)),
 			user_loader: None,
+			login_authenticator: None,
+			jwt_secret: None,
 		}
 	}
 
@@ -228,12 +242,43 @@ impl AdminSite {
 		self.user_loader = Some(Arc::new(
 			crate::server::admin_auth::create_admin_user_loader::<U>(),
 		));
+		self.login_authenticator = Some(Arc::new(
+			crate::server::admin_auth::create_admin_login_authenticator::<U>(),
+		));
 		self
 	}
 
 	/// Returns the registered user loader, if any.
 	pub(crate) fn user_loader(&self) -> Option<Arc<AdminUserLoader>> {
 		self.user_loader.clone()
+	}
+
+	/// Returns the registered login authenticator, if any.
+	pub(crate) fn login_authenticator(&self) -> Option<Arc<AdminLoginAuthenticator>> {
+		self.login_authenticator.clone()
+	}
+
+	/// Sets the JWT secret used for token generation during admin login.
+	///
+	/// The secret should be at least 32 bytes for adequate security.
+	/// Without this, admin login functionality will be disabled.
+	///
+	/// # Example
+	///
+	/// ```ignore
+	/// use reinhardt_admin::core::AdminSite;
+	///
+	/// let mut site = AdminSite::new("Admin");
+	/// site.set_jwt_secret(b"my-very-secret-key-at-least-32-bytes!");
+	/// ```
+	pub fn set_jwt_secret(&mut self, secret: &[u8]) -> &mut Self {
+		self.jwt_secret = Some(secret.to_vec());
+		self
+	}
+
+	/// Returns the JWT secret, if configured.
+	pub(crate) fn jwt_secret(&self) -> Option<&[u8]> {
+		self.jwt_secret.as_deref()
 	}
 
 	/// Register a model with the admin site
@@ -274,7 +319,7 @@ impl AdminSite {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_admin::core::AdminSite;
 	///
 	/// let admin = AdminSite::new("Admin");
@@ -306,7 +351,7 @@ impl AdminSite {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_admin::core::AdminSite;
 	///
 	/// let admin = AdminSite::new("Admin");

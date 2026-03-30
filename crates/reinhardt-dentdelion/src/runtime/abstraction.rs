@@ -288,7 +288,7 @@ impl RuntimeLimits {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
 	/// use reinhardt_dentdelion::capability::PluginTier;
 	/// use reinhardt_dentdelion::runtime::RuntimeLimits;
 	///

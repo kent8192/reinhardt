@@ -499,6 +499,98 @@ impl std::fmt::Display for AuthError {
 
 impl std::error::Error for AuthError {}
 
+// ============================================================================
+// JWT Token Management for Client-side WASM
+// ============================================================================
+
+/// The HTTP header name for JWT Bearer token authentication.
+pub const AUTH_HEADER_NAME: &str = "Authorization";
+
+/// The sessionStorage key for the admin JWT token.
+///
+/// sessionStorage is preferred over localStorage for admin panels because:
+/// - Tokens are scoped per tab and cleared when the tab closes
+/// - Reduces exposure from XSS attacks on other tabs
+pub const JWT_STORAGE_KEY: &str = "__admin_jwt";
+
+/// Creates HTTP headers with JWT Bearer token for authenticated requests.
+///
+/// Returns a tuple of (header_name, header_value) if a JWT token is available
+/// in sessionStorage. This follows the same pattern as [`crate::csrf::csrf_headers`].
+///
+/// # Example
+///
+/// ```ignore
+/// use reinhardt_pages::auth::auth_headers;
+///
+/// if let Some((header_name, header_value)) = auth_headers() {
+///     // header_name = "Authorization"
+///     // header_value = "Bearer eyJhbGciOi..."
+/// }
+/// ```
+#[cfg(target_arch = "wasm32")]
+pub fn auth_headers() -> Option<(&'static str, String)> {
+	get_jwt_token().map(|token| (AUTH_HEADER_NAME, format!("Bearer {}", token)))
+}
+
+/// Creates HTTP headers with JWT Bearer token (non-WASM stub).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn auth_headers() -> Option<(&'static str, String)> {
+	None
+}
+
+/// Retrieves the JWT token from sessionStorage.
+///
+/// Returns `None` if no token is stored or if sessionStorage is unavailable.
+#[cfg(target_arch = "wasm32")]
+pub fn get_jwt_token() -> Option<String> {
+	let window = web_sys::window()?;
+	let storage = window.session_storage().ok()??;
+	storage.get_item(JWT_STORAGE_KEY).ok()?
+}
+
+/// Retrieves the JWT token (non-WASM stub).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn get_jwt_token() -> Option<String> {
+	None
+}
+
+/// Stores a JWT token in sessionStorage.
+///
+/// The token persists for the lifetime of the browser tab.
+#[cfg(target_arch = "wasm32")]
+pub fn set_jwt_token(token: &str) {
+	if let Some(window) = web_sys::window() {
+		if let Ok(Some(storage)) = window.session_storage() {
+			let _ = storage.set_item(JWT_STORAGE_KEY, token);
+		}
+	}
+}
+
+/// Stores a JWT token (non-WASM stub).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn set_jwt_token(_token: &str) {
+	// No-op on non-WASM targets
+}
+
+/// Removes the JWT token from sessionStorage.
+///
+/// This should be called on logout or when a 401 response is received.
+#[cfg(target_arch = "wasm32")]
+pub fn clear_jwt_token() {
+	if let Some(window) = web_sys::window() {
+		if let Ok(Some(storage)) = window.session_storage() {
+			let _ = storage.remove_item(JWT_STORAGE_KEY);
+		}
+	}
+}
+
+/// Removes the JWT token (non-WASM stub).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn clear_jwt_token() {
+	// No-op on non-WASM targets
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -695,5 +787,35 @@ mod tests {
 
 		assert!(state.has_permission("blog.view"));
 		assert!(!state.has_permission("blog.edit"));
+	}
+
+	#[test]
+	fn test_auth_headers_non_wasm() {
+		// On non-WASM targets, auth_headers always returns None
+		assert!(auth_headers().is_none());
+	}
+
+	#[test]
+	fn test_get_jwt_token_non_wasm() {
+		// On non-WASM targets, get_jwt_token always returns None
+		assert!(get_jwt_token().is_none());
+	}
+
+	#[test]
+	fn test_set_jwt_token_non_wasm() {
+		// On non-WASM targets, set_jwt_token is a no-op (should not panic)
+		set_jwt_token("test-token");
+	}
+
+	#[test]
+	fn test_clear_jwt_token_non_wasm() {
+		// On non-WASM targets, clear_jwt_token is a no-op (should not panic)
+		clear_jwt_token();
+	}
+
+	#[test]
+	fn test_jwt_constants() {
+		assert_eq!(AUTH_HEADER_NAME, "Authorization");
+		assert_eq!(JWT_STORAGE_KEY, "__admin_jwt");
 	}
 }

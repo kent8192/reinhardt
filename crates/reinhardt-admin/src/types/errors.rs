@@ -34,6 +34,7 @@ pub enum AdminError {
 pub type AdminResult<T> = Result<T, AdminError>;
 
 /// Convert AdminError to reinhardt_core::exception::Error for seamless error handling
+#[cfg(not(target_arch = "wasm32"))]
 impl From<AdminError> for reinhardt_core::exception::Error {
 	fn from(err: AdminError) -> Self {
 		match err {

@@ -93,7 +93,7 @@ impl<Args, Ret> Callback<Args, Ret> {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let handler = Callback::new(|event| {
 	///     // Handle event
 	/// });

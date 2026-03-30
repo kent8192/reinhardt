@@ -14,6 +14,7 @@
 
 use reinhardt_pages::Signal;
 use reinhardt_pages::component::{IntoPage, Page, PageElement};
+use reinhardt_pages::page;
 
 #[cfg(target_arch = "wasm32")]
 use reinhardt_pages::dom::EventType;
@@ -32,7 +33,7 @@ pub enum ButtonVariant {
 	Success,
 	/// Danger action button (red)
 	Danger,
-	/// Warning action button (yellow)
+	/// Warning action button (yellow/amber)
 	Warning,
 }
 
@@ -40,11 +41,11 @@ impl ButtonVariant {
 	/// Get CSS class for this variant
 	pub fn class(&self) -> &'static str {
 		match self {
-			ButtonVariant::Primary => "btn-primary",
-			ButtonVariant::Secondary => "btn-secondary",
-			ButtonVariant::Success => "btn-success",
-			ButtonVariant::Danger => "btn-danger",
-			ButtonVariant::Warning => "btn-warning",
+			ButtonVariant::Primary => "admin-btn-primary",
+			ButtonVariant::Secondary => "admin-btn-secondary",
+			ButtonVariant::Success => "admin-btn-success",
+			ButtonVariant::Danger => "admin-btn-danger",
+			ButtonVariant::Warning => "admin-btn-warning",
 		}
 	}
 }
@@ -64,7 +65,7 @@ impl ButtonVariant {
 /// button("Click me", ButtonVariant::Primary, false, clicked)
 /// ```
 pub fn button(text: &str, variant: ButtonVariant, disabled: bool, _on_click: Signal<bool>) -> Page {
-	let classes = format!("btn {}", variant.class());
+	let classes = format!("admin-btn {}", variant.class());
 
 	#[cfg(target_arch = "wasm32")]
 	let button_view = {
@@ -78,8 +79,6 @@ pub fn button(text: &str, variant: ButtonVariant, disabled: bool, _on_click: Sig
 				}),
 			)
 			.child(text.to_string());
-		// Only add disabled attribute when actually disabled
-		// (in HTML, disabled="false" is still truthy)
 		if disabled {
 			element = element.attr("disabled", "");
 		}
@@ -88,14 +87,11 @@ pub fn button(text: &str, variant: ButtonVariant, disabled: bool, _on_click: Sig
 
 	#[cfg(not(target_arch = "wasm32"))]
 	let button_view = {
-		// SSR: No event handler needed (will be hydrated on client)
 		let mut element = PageElement::new("button")
 			.attr("class", classes)
 			.attr("type", "button")
-			.attr("data-reactive", "true") // Marker for client-side hydration
+			.attr("data-reactive", "true")
 			.child(text.to_string());
-		// Only add disabled attribute when actually disabled
-		// (in HTML, disabled="false" is still truthy)
 		if disabled {
 			element = element.attr("disabled", "");
 		}
@@ -117,19 +113,19 @@ pub fn button(text: &str, variant: ButtonVariant, disabled: bool, _on_click: Sig
 /// loading_spinner()
 /// ```
 pub fn loading_spinner() -> Page {
-	PageElement::new("div")
-		.attr("class", "loading-spinner")
-		.child(
-			PageElement::new("div")
-				.attr("class", "spinner-border")
-				.attr("role", "status")
-				.child(
-					PageElement::new("span")
-						.attr("class", "visually-hidden")
-						.child("Loading..."),
-				),
-		)
-		.into_page()
+	page!(|| {
+		div {
+			class: "flex justify-center items-center py-12",
+			div {
+				class: "admin-spinner",
+				role: "status",
+				span {
+					class: "sr-only",
+					"Loading..."
+				}
+			}
+		}
+	})()
 }
 
 /// Error display component
@@ -144,21 +140,33 @@ pub fn loading_spinner() -> Page {
 /// error_display("An error occurred", true)
 /// ```
 pub fn error_display(message: &str, dismissible: bool) -> Page {
-	let mut container = PageElement::new("div")
-		.attr("class", "alert alert-danger")
-		.attr("role", "alert");
+	let message = message.to_string();
 
 	if dismissible {
-		container = container.child(
-			PageElement::new("button")
-				.attr("class", "btn-close")
-				.attr("type", "button")
-				.attr("data-bs-dismiss", "alert")
-				.attr("aria-label", "Close"),
-		);
+		page!(|| {
+			div {
+				class: "admin-alert admin-alert-danger flex items-start justify-between",
+				role: "alert",
+				span {
+					{ message }
+				}
+				button {
+					class: "ml-4 text-red-400 hover:text-red-600 cursor-pointer",
+					r#type: "button",
+					aria_label: "Close",
+					"×"
+				}
+			}
+		})()
+	} else {
+		page!(|| {
+			div {
+				class: "admin-alert admin-alert-danger",
+				role: "alert",
+				{ message }
+			}
+		})()
 	}
-
-	container.child(message.to_string()).into_page()
 }
 
 /// Pagination component
@@ -228,12 +236,8 @@ pub fn pagination(current_page: Signal<u64>, total_pages: u64) -> Page {
 	));
 
 	PageElement::new("div")
-		.attr("class", "d-flex justify-content-center")
-		.child(
-			PageElement::new("ul")
-				.attr("class", "pagination")
-				.children(nav_items),
-		)
+		.attr("class", "flex justify-center gap-1 mt-6")
+		.children(nav_items)
 		.into_page()
 }
 
@@ -249,31 +253,29 @@ where
 	F: Fn(Signal<u64>) + 'static,
 {
 	let class_name = if active {
-		"page-item active"
+		"admin-page-link admin-page-link-active"
 	} else if disabled {
-		"page-item disabled"
+		"admin-page-link admin-page-link-disabled"
 	} else {
-		"page-item"
+		"admin-page-link"
 	};
 
 	#[cfg(target_arch = "wasm32")]
 	let link = {
 		if disabled {
-			// Disabled items use <span> to prevent click interaction and navigation
 			PageElement::new("span")
-				.attr("class", "page-link")
+				.attr("class", class_name)
 				.attr("aria-disabled", "true")
 				.attr("tabindex", "-1")
 				.child(text.to_string())
 		} else if active {
-			// Active (current page) items use <span> to prevent redundant navigation
 			PageElement::new("span")
-				.attr("class", "page-link")
+				.attr("class", class_name)
 				.attr("aria-current", "page")
 				.child(text.to_string())
 		} else {
 			PageElement::new("a")
-				.attr("class", "page-link")
+				.attr("class", class_name)
 				.attr("href", "#")
 				.child(text.to_string())
 				.on(
@@ -288,32 +290,26 @@ where
 	#[cfg(not(target_arch = "wasm32"))]
 	let link = {
 		if disabled {
-			// Disabled items use <span> to prevent click interaction and navigation
 			PageElement::new("span")
-				.attr("class", "page-link")
+				.attr("class", class_name)
 				.attr("aria-disabled", "true")
 				.attr("tabindex", "-1")
 				.child(text.to_string())
 		} else if active {
-			// Active (current page) items use <span> to prevent redundant navigation
 			PageElement::new("span")
-				.attr("class", "page-link")
+				.attr("class", class_name)
 				.attr("aria-current", "page")
 				.child(text.to_string())
 		} else {
-			// SSR: No event handler needed (will be hydrated on client)
 			PageElement::new("a")
-				.attr("class", "page-link")
+				.attr("class", class_name)
 				.attr("href", "#")
-				.attr("data-reactive", "true") // Marker for client-side hydration
+				.attr("data-reactive", "true")
 				.child(text.to_string())
 		}
 	};
 
-	PageElement::new("li")
-		.attr("class", class_name)
-		.child(link)
-		.into_page()
+	link.into_page()
 }
 
 /// Search bar component
@@ -335,20 +331,21 @@ where
 /// ```
 pub fn search_bar(value: Signal<String>, placeholder: &str) -> Page {
 	let current_value = value.get();
+	let placeholder = placeholder.to_string();
 
-	PageElement::new("div")
-		.attr("class", "input-group")
-		.child(
-			PageElement::new("span")
-				.attr("class", "input-group-text")
-				.child(PageElement::new("i").attr("class", "bi bi-search")),
-		)
-		.child(
-			PageElement::new("input")
-				.attr("class", "form-control")
-				.attr("type", "text")
-				.attr("placeholder", placeholder.to_string())
-				.attr("value", current_value),
-		)
-		.into_page()
+	page!(|| {
+		div {
+			class: "flex",
+			span {
+				class: "flex items-center px-3 bg-slate-100 border border-r-0 border-slate-200 rounded-l-lg text-slate-400 text-sm",
+				"🔍"
+			}
+			input {
+				class: "admin-input rounded-l-none border-l-0",
+				r#type: "text",
+				placeholder: placeholder,
+				value: current_value,
+			}
+		}
+	})()
 }

@@ -12,6 +12,7 @@ use crate::types::{FilterInfo, FilterType, ModelInfo};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use reinhardt_pages::Signal;
 use reinhardt_pages::component::{IntoPage, Page, PageElement};
+use reinhardt_pages::page;
 use std::collections::HashMap;
 
 /// Characters that must be percent-encoded in URL path segments.
@@ -68,79 +69,70 @@ use std::sync::Arc;
 /// dashboard("My Admin Panel", &models)
 /// ```
 pub fn dashboard(site_name: &str, models: &[ModelInfo]) -> Page {
-	PageElement::new("div")
-		.attr("class", "dashboard")
-		.child(
-			PageElement::new("h1")
-				.attr("class", "mb-4")
-				.child(format!("{} Dashboard", site_name)),
-		)
-		.child(
-			PageElement::new("div")
-				.attr("class", "row")
-				.child(models_grid(models)),
-		)
-		.into_page()
+	let site_name = site_name.to_string();
+	let grid = models_grid(models);
+
+	page!(|| {
+		div {
+			class: "dashboard",
+			h1 {
+				class: "font-display text-2xl font-bold text-slate-900 mb-6",
+				{ format!("{} Dashboard", site_name) }
+			}
+			{ grid }
+		}
+	})()
 }
 
 /// Generates a grid of model cards
 fn models_grid(models: &[ModelInfo]) -> Page {
 	if models.is_empty() {
-		return PageElement::new("div")
-			.attr("class", "col-12")
-			.child(
-				PageElement::new("div")
-					.attr("class", "alert alert-info")
-					.child("No models registered. Add models to AdminSite to see them here."),
-			)
-			.into_page();
+		return page!(|| {
+			div {
+				class: "admin-alert admin-alert-info",
+				"No models registered. Add models to AdminSite to see them here."
+			}
+		})();
 	}
 
 	let card_views: Vec<Page> = models
 		.iter()
-		.map(|model| {
-			PageElement::new("div")
-				.attr("class", "col-md-4")
-				.child(model_card(&model.name, &model.list_url))
-				.into_page()
-		})
+		.map(|model| model_card(&model.name, &model.list_url))
 		.collect();
 
 	PageElement::new("div")
-		.attr("class", "col-12")
-		.child(
-			PageElement::new("div")
-				.attr("class", "row g-4")
-				.children(card_views),
+		.attr(
+			"class",
+			"grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4",
 		)
+		.children(card_views)
 		.into_page()
 }
 
 /// Generates a single model card
 fn model_card(name: &str, url: &str) -> Page {
-	PageElement::new("div")
-		.attr("class", "card h-100")
-		.child(
-			PageElement::new("div")
-				.attr("class", "card-body")
-				.child(
-					PageElement::new("h5")
-						.attr("class", "card-title")
-						.child(name.to_string()),
-				)
-				.child(
-					PageElement::new("p")
-						.attr("class", "card-text")
-						.child(format!("Manage {} records", name)),
-				)
-				.child(
-					PageElement::new("a")
-						.attr("class", "btn btn-primary")
-						.attr("href", url.to_string())
-						.child(format!("View {}", name)),
-				),
-		)
-		.into_page()
+	let name = name.to_string();
+	let url = url.to_string();
+	let label = format!("View {}", &name);
+
+	page!(|| {
+		div {
+			class: "admin-card p-5 flex flex-col",
+			h3 {
+				class: "font-display text-lg font-bold text-slate-900 mb-1",
+				{ name.clone() }
+			}
+			p {
+				class: "text-sm text-slate-500 mb-4 flex-1",
+				{ format!("Manage {} records", name) }
+			}
+			a {
+				class: "admin-btn admin-btn-primary text-center",
+				href: url,
+				{ label }
+			}
+		}
+	})()
 }
 
 /// Column definition for list view
@@ -205,24 +197,32 @@ pub fn list_view(
 	current_page_signal: reinhardt_pages::Signal<u64>,
 	filters_signal: Signal<HashMap<String, String>>,
 ) -> Page {
-	PageElement::new("div")
-		.attr("class", "list-view")
-		.child(
-			PageElement::new("h1")
-				.attr("class", "mb-4")
-				.child(format!("{} List", data.model_name)),
-		)
-		.child(filters(&data.filters, filters_signal))
-		.child(PageElement::new("div").attr("class", "mb-3").child(format!(
-			"Showing {} {} (Page {} of {})",
-			data.total_count, data.model_name, data.current_page, data.total_pages
-		)))
-		.child(data_table(&data.columns, &data.records, &data.model_name))
-		.child(crate::pages::components::common::pagination(
-			current_page_signal,
-			data.total_pages,
-		))
-		.into_page()
+	let title = format!("{} List", data.model_name);
+	let summary = format!(
+		"Showing {} {} (Page {} of {})",
+		data.total_count, data.model_name, data.current_page, data.total_pages
+	);
+	let filters_page = filters(&data.filters, filters_signal);
+	let table_page = data_table(&data.columns, &data.records, &data.model_name);
+	let pagination_page =
+		crate::pages::components::common::pagination(current_page_signal, data.total_pages);
+
+	page!(|| {
+		div {
+			class: "list-view",
+			h1 {
+				class: "font-display text-2xl font-bold text-slate-900 mb-6",
+				{ title }
+			}
+			{ filters_page }
+			div {
+				class: "text-sm text-slate-500 mb-4",
+				{ summary }
+			}
+			{ table_page }
+			{ pagination_page }
+		}
+	})()
 }
 
 /// Generates a data table
@@ -251,10 +251,13 @@ fn data_table(
 	let tbody = PageElement::new("tbody").children(body_rows);
 
 	PageElement::new("div")
-		.attr("class", "table-responsive")
+		.attr(
+			"class",
+			"overflow-x-auto rounded-lg border border-slate-200",
+		)
 		.child(
 			PageElement::new("table")
-				.attr("class", "table table-striped table-hover")
+				.attr("class", "admin-table")
 				.child(thead)
 				.child(tbody),
 		)
@@ -302,16 +305,15 @@ fn action_buttons(model_name: &str, record_id: &str) -> Page {
 	let edit_url = format!("/admin/{}/{}/change/", encoded_model, encoded_id);
 
 	PageElement::new("div")
-		.attr("class", "btn-group btn-group-sm")
-		.attr("role", "group")
+		.attr("class", "flex gap-1")
 		.child(
 			Link::new(detail_url.clone(), "View")
-				.class("btn btn-outline-primary")
+				.class("admin-btn admin-btn-outline admin-btn-sm")
 				.render(),
 		)
 		.child(
 			Link::new(edit_url.clone(), "Edit")
-				.class("btn btn-outline-secondary")
+				.class("admin-btn admin-btn-outline admin-btn-sm")
 				.render(),
 		)
 		.into_page()
@@ -360,29 +362,30 @@ pub fn detail_view(
 	let edit_url = format!("/admin/{}/{}/change/", encoded_model, encoded_id);
 	let list_url = format!("/admin/{}/", encoded_model);
 
-	PageElement::new("div")
-		.attr("class", "detail-view")
-		.child(
-			PageElement::new("h1")
-				.attr("class", "mb-4")
-				.child(format!("{} Detail", model_name)),
-		)
-		.child(detail_table(record))
-		.child(
-			PageElement::new("div")
-				.attr("class", "mt-4")
-				.child(
-					Link::new(edit_url, "Edit")
-						.class("btn btn-primary me-2")
-						.render(),
-				)
-				.child(
-					Link::new(list_url, "Back to List")
-						.class("btn btn-secondary")
-						.render(),
-				),
-		)
-		.into_page()
+	let title = format!("{} Detail", model_name);
+	let table_page = detail_table(record);
+	let edit_link = Link::new(edit_url, "Edit")
+		.class("admin-btn admin-btn-primary mr-2")
+		.render();
+	let back_link = Link::new(list_url, "Back to List")
+		.class("admin-btn admin-btn-secondary")
+		.render();
+
+	page!(|| {
+		div {
+			class: "detail-view",
+			h1 {
+				class: "font-display text-2xl font-bold text-slate-900 mb-6",
+				{ title }
+			}
+			{ table_page }
+			div {
+				class: "mt-6 flex gap-2",
+				{ edit_link }
+				{ back_link }
+			}
+		}
+	})()
 }
 
 /// Generates a detail table for record fields
@@ -396,19 +399,29 @@ fn detail_table(record: &std::collections::HashMap<String, String>) -> Page {
 			PageElement::new("tr")
 				.child(
 					PageElement::new("th")
-						.attr("class", "w-25")
+						.attr(
+							"class",
+							"w-1/4 text-left text-sm font-medium text-slate-500 py-3 px-4 bg-slate-50",
+						)
 						.child(key.clone()),
 				)
-				.child(PageElement::new("td").child(value.clone()))
+				.child(
+					PageElement::new("td")
+						.attr("class", "text-sm text-slate-800 py-3 px-4")
+						.child(value.clone()),
+				)
 				.into_page()
 		})
 		.collect();
 
 	PageElement::new("div")
-		.attr("class", "table-responsive")
+		.attr(
+			"class",
+			"overflow-x-auto rounded-lg border border-slate-200",
+		)
 		.child(
 			PageElement::new("table")
-				.attr("class", "table table-bordered")
+				.attr("class", "admin-table")
 				.child(PageElement::new("tbody").children(rows)),
 		)
 		.into_page()
@@ -462,36 +475,40 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 		encode_path_segment(&model_name.to_lowercase())
 	);
 
-	// Add form fields
 	let form_groups: Vec<Page> = fields.iter().map(form_group).collect();
+	let cancel_link = Link::new(list_url, "Cancel")
+		.class("admin-btn admin-btn-secondary")
+		.render();
 
 	PageElement::new("div")
-		.attr("class", "model-form")
+		.attr("class", "model-form max-w-2xl")
 		.child(
 			PageElement::new("h1")
-				.attr("class", "mb-4")
+				.attr(
+					"class",
+					"font-display text-2xl font-bold text-slate-900 mb-6",
+				)
 				.child(form_title),
 		)
 		.child(
 			PageElement::new("form")
-				.attr("class", "needs-validation")
 				.attr("method", "POST")
 				.attr("action", action_url)
-				.children(form_groups)
 				.child(
 					PageElement::new("div")
-						.attr("class", "mt-4")
+						.attr("class", "admin-card p-6")
+						.children(form_groups),
+				)
+				.child(
+					PageElement::new("div")
+						.attr("class", "mt-6 flex gap-2")
 						.child(
 							PageElement::new("button")
-								.attr("class", "btn btn-primary me-2")
+								.attr("class", "admin-btn admin-btn-primary")
 								.attr("type", "submit")
 								.child("Save"),
 						)
-						.child(
-							Link::new(list_url, "Cancel")
-								.class("btn btn-secondary")
-								.render(),
-						),
+						.child(cancel_link),
 				),
 		)
 		.into_page()
@@ -500,23 +517,26 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 /// Generates a form group (label + input) for a field
 fn form_group(field: &FormField) -> Page {
 	let input_id = format!("field-{}", field.name);
+	let label = field.label.clone();
+	let input = form_element(field, &input_id);
 
-	PageElement::new("div")
-		.attr("class", "mb-3")
-		.child(
-			PageElement::new("label")
-				.attr("class", "form-label")
-				.attr("for", input_id.clone())
-				.child(field.label.clone()),
-		)
-		.child(form_element(field, &input_id))
-		.into_page()
+	page!(|| {
+		div {
+			class: "mb-4",
+			label {
+				r#for: input_id,
+				class: "admin-label",
+				{ label }
+			}
+			{ input }
+		}
+	})()
 }
 
 /// Generates an input element for a form field
 fn form_element(field: &FormField, input_id: &str) -> Page {
 	let mut input_builder = PageElement::new("input")
-		.attr("class", "form-control")
+		.attr("class", "admin-input")
 		.attr("type", field.field_type.clone())
 		.attr("id", input_id.to_string())
 		.attr("name", field.name.clone())
@@ -602,7 +622,7 @@ fn create_filter_select(
 		let filters_signal = _filters_signal;
 
 		PageElement::new("select")
-			.attr("class", "form-select form-select-sm")
+			.attr("class", "admin-select")
 			.attr("data-filter-field", field.to_string())
 			.children(options)
 			.on(
@@ -630,9 +650,9 @@ fn create_filter_select(
 	#[cfg(not(target_arch = "wasm32"))]
 	let select_view = {
 		PageElement::new("select")
-			.attr("class", "form-select form-select-sm")
+			.attr("class", "admin-select")
 			.attr("data-filter-field", field.to_string())
-			.attr("data-reactive", "true") // Marker for client-side hydration
+			.attr("data-reactive", "true")
 			.children(options)
 	};
 
@@ -647,24 +667,24 @@ fn create_filter_control(
 	current_value: Option<&str>,
 	filters_signal: Signal<HashMap<String, String>>,
 ) -> Page {
-	PageElement::new("div")
-		.attr("class", "col-md-3")
-		.child(
-			PageElement::new("div")
-				.attr("class", "mb-2")
-				.child(
-					PageElement::new("label")
-						.attr("class", "form-label")
-						.child(filter_info.title.clone()),
-				)
-				.child(create_filter_select(
-					&filter_info.field,
-					&filter_info.filter_type,
-					current_value,
-					filters_signal,
-				)),
-		)
-		.into_page()
+	let label = filter_info.title.clone();
+	let select = create_filter_select(
+		&filter_info.field,
+		&filter_info.filter_type,
+		current_value,
+		filters_signal,
+	);
+
+	page!(|| {
+		div {
+			class: "min-w-48",
+			label {
+				class: "admin-label",
+				{ label }
+			}
+			{ select }
+		}
+	})()
 }
 
 /// Filters component
@@ -710,15 +730,18 @@ pub fn filters(
 		.collect();
 
 	PageElement::new("div")
-		.attr("class", "filters mb-3")
+		.attr("class", "admin-card p-4 mb-4")
 		.child(
 			PageElement::new("h5")
-				.attr("class", "mb-2")
+				.attr(
+					"class",
+					"text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3",
+				)
 				.child("Filters"),
 		)
 		.child(
 			PageElement::new("div")
-				.attr("class", "row g-2")
+				.attr("class", "flex flex-wrap gap-4")
 				.children(filter_controls),
 		)
 		.into_page()

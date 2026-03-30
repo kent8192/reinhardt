@@ -8,6 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- release-plz-separator -->
 <!-- Entries below this line were created before release-plz adoption -->
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.1.0-rc.15...reinhardt-admin@v0.1.0-rc.16) - 2026-03-30
+
+### Added
+
+- *(admin)* add login server function with JWT authentication
+- *(admin)* add login page, auth gate, and 401 redirect for WASM SPA
+- *(admin)* add UnoCSS runtime and Google Fonts CDN for admin panel styling
+
+### Changed
+
+- *(admin)* [**breaking**] mark AdminRoute as non_exhaustive and reorder Login variant
+- *(admin)* migrate page components to page! macro and Tailwind classes
+
+### Documentation
+
+- *(admin)* fix broken intra-doc link to CspMiddleware
+
+### Fixed
+
+- *(admin)* use path_params instead of full URI in static file handler
+- *(admin)* call WASM init() in SPA HTML for web target output
+- *(admin)* support HEAD requests for static file handler
+- *(admin)* remove broken presetWind() global function call for UnoCSS v66+
+- *(admin)* initialize UnoCSS runtime with v66+ API for preset-wind
+
+### Styling
+
+- *(admin)* add Open Props and Animate.css CDN, refactor style.css with design tokens
+- *(admin)* add Animate.css entrance animations to page components
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.1.0-rc.14...reinhardt-admin@v0.1.0-rc.15) - 2026-03-29
 
 ### Changed

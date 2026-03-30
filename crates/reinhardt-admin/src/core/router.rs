@@ -126,6 +126,8 @@ fn admin_spa_html() -> String {
 	<link rel="preconnect" href="https://fonts.googleapis.com" />
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 	<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/open-props/open-props.min.css" />
+	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/animate.css@4/animate.min.css" />
 	<script src="https://cdn.jsdelivr.net/npm/@unocss/runtime/preset-wind.global.js"></script>
 	<script>
 		window.__unocss = {{ presets: [presetWind()] }};
@@ -865,6 +867,20 @@ mod tests {
 			html.contains("presetWind()"),
 			"HTML should configure UnoCSS with preset-wind"
 		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_admin_spa_html_includes_open_props_and_animate_css() {
+		// Arrange & Act
+		let html = admin_spa_html();
+
+		// Assert
+		assert!(
+			html.contains("open-props/open-props.min.css"),
+			"HTML should load Open Props design tokens"
+		);
+		assert!(html.contains("animate.css"), "HTML should load Animate.css");
 	}
 
 	#[rstest]

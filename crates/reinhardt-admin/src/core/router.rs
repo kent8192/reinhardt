@@ -123,9 +123,17 @@ fn admin_spa_html() -> String {
 	<meta charset="utf-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 	<title>Reinhardt Admin</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+	<script src="https://cdn.jsdelivr.net/npm/@unocss/runtime/preset-wind.global.js"></script>
+	<script>
+		window.__unocss = {{ presets: [presetWind()] }};
+	</script>
+	<script src="https://cdn.jsdelivr.net/npm/@unocss/runtime/core.global.js"></script>
 	<link rel="stylesheet" href="{css_url}" />
 </head>
-<body>
+<body class="bg-slate-50 text-slate-900 antialiased">
 	<div id="app"></div>
 	{script_tag}
 </body>
@@ -835,6 +843,27 @@ mod tests {
 		assert!(
 			html.contains("main.js") || html.contains("reinhardt_admin.js"),
 			"HTML should reference admin JS (placeholder or WASM)"
+		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_admin_spa_html_includes_unocss_runtime() {
+		// Arrange & Act
+		let html = admin_spa_html();
+
+		// Assert
+		assert!(
+			html.contains("@unocss/runtime/preset-wind.global.js"),
+			"HTML should load UnoCSS preset-wind runtime"
+		);
+		assert!(
+			html.contains("@unocss/runtime/core.global.js"),
+			"HTML should load UnoCSS core runtime"
+		);
+		assert!(
+			html.contains("presetWind()"),
+			"HTML should configure UnoCSS with preset-wind"
 		);
 	}
 

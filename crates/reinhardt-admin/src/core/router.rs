@@ -130,9 +130,6 @@ fn admin_spa_html() -> String {
 	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/open-props/open-props.min.css" />
 	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/animate.css@4/animate.min.css" />
 	<script src="https://cdn.jsdelivr.net/npm/@unocss/runtime/preset-wind.global.js"></script>
-	<script>
-		window.__unocss = {{ presets: [presetWind()] }};
-	</script>
 	<script src="https://cdn.jsdelivr.net/npm/@unocss/runtime/core.global.js"></script>
 	<link rel="stylesheet" href="{css_url}" />
 </head>
@@ -869,8 +866,8 @@ mod tests {
 			"HTML should load UnoCSS core runtime"
 		);
 		assert!(
-			html.contains("presetWind()"),
-			"HTML should configure UnoCSS with preset-wind"
+			!html.contains("presetWind()"),
+			"HTML should not use deprecated presetWind() global function (v66+ auto-registers)"
 		);
 	}
 

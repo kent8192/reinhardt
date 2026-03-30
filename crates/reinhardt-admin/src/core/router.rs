@@ -675,18 +675,22 @@ mod tests {
 
 	#[cfg(not(target_arch = "wasm32"))]
 	#[rstest]
-	fn test_admin_spa_html_references_css_and_js() {
+	fn test_admin_spa_html_references_css_and_wasm_entry_point() {
 		// Arrange & Act
 		let html = admin_spa_html();
 
-		// Assert
+		// Assert - CSS reference
 		assert!(
 			html.contains("/static/admin/style.css"),
 			"HTML should reference admin CSS"
 		);
+		// Assert - HTML must reference the WASM-compiled JS entry point,
+		// not the placeholder main.js (#3115)
 		assert!(
-			html.contains("/static/admin/main.js"),
-			"HTML should reference admin JS"
+			html.contains("/static/admin/reinhardt_admin.js"),
+			"HTML should reference WASM entry point (reinhardt_admin.js), \
+			 not placeholder main.js. Got:\n{}",
+			html
 		);
 	}
 
@@ -706,15 +710,18 @@ mod tests {
 
 	#[cfg(not(target_arch = "wasm32"))]
 	#[rstest]
-	fn test_embedded_admin_js_is_not_empty() {
+	fn test_embedded_admin_js_is_wasm_bootstrap() {
 		// Arrange
 		let js = std::str::from_utf8(ADMIN_JS).expect("JS should be valid UTF-8");
 
-		// Assert
+		// Assert - JS must not be empty
 		assert!(!js.is_empty(), "Embedded admin JS should not be empty");
+		// Assert - JS must be a WASM bootstrap, not a placeholder (#3115)
 		assert!(
-			js.contains("Reinhardt Admin"),
-			"JS should contain admin panel identifier"
+			js.contains("wasm") || js.contains("init(") || js.contains("wasm_bindgen"),
+			"Embedded JS should contain WASM initialization code \
+			 (wasm/init/wasm_bindgen), not a placeholder. First 200 chars:\n{}",
+			&js[..js.len().min(200)]
 		);
 	}
 
@@ -878,6 +885,80 @@ mod tests {
 			set_cookie.contains("Path=/admin"),
 			"Cookie should be scoped to /admin, got: {}",
 			set_cookie
+		);
+	}
+
+	// ==================== Spec-based tests for #3115 ====================
+
+	/// Verify static routes serve the WASM binary file.
+	/// The admin SPA is a WASM application; its binary must be
+	/// served alongside JS and CSS (#3115).
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_admin_static_routes_serves_wasm_binary() {
+		// Arrange & Act
+		let router = admin_static_routes();
+		let routes = router.get_all_routes();
+		let paths: Vec<&str> = routes.iter().map(|(path, _, _, _)| path.as_str()).collect();
+
+		// Assert - a .wasm route must exist for the WASM SPA binary
+		assert!(
+			paths.iter().any(|p| p.ends_with(".wasm")),
+			"Admin static routes must serve a .wasm file for the WASM SPA. \
+			 Found routes: {:?}",
+			paths
+		);
+	}
+
+	/// Verify the embedded admin JS is not a placeholder stub.
+	/// The placeholder contains fallback text indicating the WASM SPA
+	/// has not been built (#3115).
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_embedded_admin_js_is_not_placeholder() {
+		// Arrange
+		let js = std::str::from_utf8(ADMIN_JS).expect("JS should be valid UTF-8");
+
+		// Assert - must not contain placeholder indicators
+		assert!(
+			!js.contains("placeholder"),
+			"Embedded admin JS must not be a placeholder. First 200 chars:\n{}",
+			&js[..js.len().min(200)]
+		);
+		assert!(
+			!js.contains("WASM frontend may not be built yet"),
+			"Embedded admin JS must not contain 'not built yet' fallback message"
+		);
+	}
+
+	/// Verify the JS filename referenced in the HTML is a registered
+	/// static route, ensuring the reference chain is consistent (#3115).
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_html_js_reference_matches_static_route() {
+		// Arrange
+		let html = admin_spa_html();
+		let router = admin_static_routes();
+		let routes = router.get_all_routes();
+		let paths: Vec<&str> = routes.iter().map(|(path, _, _, _)| path.as_str()).collect();
+
+		// Act - the WASM entry point JS must be both referenced in HTML
+		// and served by a static route
+		let wasm_js_path = "/reinhardt_admin.js";
+
+		// Assert - HTML references the WASM JS entry point
+		assert!(
+			html.contains(&format!("/static/admin{}", wasm_js_path)),
+			"HTML must reference /static/admin{}, got:\n{}",
+			wasm_js_path,
+			html
+		);
+		// Assert - static route serves that file
+		assert!(
+			paths.contains(&wasm_js_path),
+			"Static routes must serve {}, found: {:?}",
+			wasm_js_path,
+			paths
 		);
 	}
 

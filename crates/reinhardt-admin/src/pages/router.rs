@@ -822,4 +822,40 @@ mod tests {
 		let html = view.render_to_string();
 		assert!(!html.is_empty());
 	}
+
+	// ==================== Spec-based tests for #3114 ====================
+
+	/// Verify the admin SPA router has a login route.
+	/// The WASM SPA must provide a login form for JWT authentication
+	/// when the user is unauthenticated (#3114).
+	#[test]
+	fn test_admin_router_has_login_route() {
+		// Arrange & Act
+		let router = init_router();
+
+		// Assert - a login route must exist for the auth flow
+		assert!(
+			router.has_route("login"),
+			"Admin router must have a 'login' route for authentication flow. \
+			 The SPA needs a login form to obtain JWT tokens (#3114)."
+		);
+	}
+
+	/// Verify the /admin/login/ path matches the login route (#3114).
+	#[test]
+	fn test_login_route_match() {
+		// Arrange
+		let router = init_router();
+
+		// Act
+		let route_match = router.match_path("/admin/login/");
+
+		// Assert
+		assert!(
+			route_match.is_some(),
+			"Path /admin/login/ should match the login route (#3114)"
+		);
+		let route_match = route_match.unwrap();
+		assert_eq!(route_match.route.name(), Some("login"));
+	}
 }

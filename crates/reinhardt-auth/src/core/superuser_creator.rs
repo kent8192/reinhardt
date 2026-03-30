@@ -12,7 +12,7 @@
 //!
 //! The [`SuperuserCreator`] trait provides the async database persistence
 //! layer, and [`TypedSuperuserCreator<U>`] bridges the two by combining
-//! [`SuperuserInit`] for construction with [`Model`] for ORM operations.
+//! [`SuperuserInit`] for construction with `Model` for ORM operations.
 //!
 //! # Global Registry
 //!
@@ -162,7 +162,7 @@ static SUPERUSER_CREATOR: OnceLock<Box<dyn SuperuserCreator>> = OnceLock::new();
 /// Register a [`SuperuserCreator`] for use by the `createsuperuser` command.
 ///
 /// This should be called early in program startup (e.g., in `main()`)
-/// before [`execute_from_command_line`](reinhardt_commands::execute_from_command_line).
+/// before `execute_from_command_line`.
 ///
 /// # Panics
 ///

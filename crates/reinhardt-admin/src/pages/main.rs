@@ -29,11 +29,21 @@ pub fn main() -> Result<(), JsValue> {
 	// Initialize global router
 	router::init_global_router();
 
+	// Auth gate: if no JWT token is stored, redirect to login page
+	if reinhardt_pages::auth::get_jwt_token().is_none() {
+		router::with_router(|r| {
+			let _ = r.push("/admin/login/");
+		});
+	}
+
 	// Initial render
 	// SAFETY(XSS): render_to_string() HTML-escapes all dynamic text content
 	// and attribute values via html_escape(), preventing XSS injection.
 	let view = router::with_router(|r| r.render_current());
 	app_element.set_inner_html(&view.render_to_string());
+
+	// Set up login form handler if login view is currently displayed
+	router::login::setup_login_handler();
 
 	// Set up reactive effect for route changes
 	// Effect will automatically re-render when route changes
@@ -47,6 +57,9 @@ pub fn main() -> Result<(), JsValue> {
 			r.render_current()
 		});
 		app_clone.set_inner_html(&view.render_to_string());
+
+		// Re-attach login form handler after re-render if login view is showing
+		router::login::setup_login_handler();
 	});
 	// Intentional memory leak: WASM entry points run for the entire application
 	// lifetime and never terminate. The Effect must persist to keep reactive

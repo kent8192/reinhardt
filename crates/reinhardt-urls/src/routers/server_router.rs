@@ -87,7 +87,7 @@ pub type RouteInfo = Vec<(String, Option<String>, Option<String>, Vec<Method>)>;
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```ignore
 /// // crate-internal usage only
 /// assert_eq!(join_path("/api/", "/users"), "/api/users");
 /// assert_eq!(join_path("/api", "/users"), "/api/users");

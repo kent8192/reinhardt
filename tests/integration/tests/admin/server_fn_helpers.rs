@@ -323,6 +323,40 @@ pub async fn e2e_router_context(
 	(router, admin_db)
 }
 
+/// Composite fixture providing a `ServerRouter` WITHOUT `DatabaseConnection`.
+///
+/// Intentionally omits `DatabaseConnection` from the singleton scope to test
+/// error behavior when DI dependencies are missing. All admin routes and
+/// `AdminUserLoader` are still registered via `admin_routes_with_di_deferred()`.
+///
+/// Unlike `e2e_router_context`, this fixture:
+/// - Does NOT require a database pool
+/// - Does NOT create any tables
+/// - Returns only `ServerRouter` (no `AdminDatabase`)
+#[fixture]
+pub async fn e2e_router_context_no_db() -> ServerRouter {
+	use reinhardt_admin::core::admin_routes_with_di_deferred;
+
+	// Build AdminSite and register test model
+	let site = Arc::new(AdminSite::new("E2E Test Admin (No DB)"));
+	let admin = AllPermissionsModelAdmin::test_model("test_models");
+	site.register("TestModel", admin)
+		.expect("Failed to register TestModel");
+
+	// Build admin router with deferred DI
+	let (admin_router, admin_di) = admin_routes_with_di_deferred(site);
+
+	// Build singleton scope WITHOUT DatabaseConnection
+	let singleton = Arc::new(SingletonScope::new());
+	let di_ctx = Arc::new(InjectionContext::builder(singleton).build());
+
+	reinhardt_urls::routers::UnifiedRouter::new()
+		.with_di_context(di_ctx)
+		.mount("/admin/", admin_router)
+		.with_di_registrations(admin_di)
+		.into_server()
+}
+
 /// Builds an HTTP POST request suitable for E2E server function tests.
 ///
 /// Includes:

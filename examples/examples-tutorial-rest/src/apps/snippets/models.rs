@@ -30,7 +30,7 @@ impl Snippet {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let snippet = Snippet {
 	///     id: 1,
 	///     title: "Hello World".to_string(),

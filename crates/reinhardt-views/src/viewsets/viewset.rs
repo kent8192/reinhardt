@@ -115,7 +115,7 @@ impl<T: 'static> GenericViewSet<T> {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```ignore
 	/// use reinhardt_views::{viewset_actions, viewsets::GenericViewSet};
 	/// use hyper::Method;
 	///

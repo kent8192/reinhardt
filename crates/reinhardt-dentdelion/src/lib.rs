@@ -24,7 +24,7 @@
 //!
 //! ## Creating a Plugin
 //!
-//! ```ignore
+//! ```rust
 //! use reinhardt_dentdelion::prelude::*;
 //! use std::sync::Arc;
 //!
@@ -60,9 +60,23 @@
 //!
 //! ## Using the Registry
 //!
-//! ```ignore
+//! ```rust
 //! use reinhardt_dentdelion::prelude::*;
+//! use std::sync::Arc;
 //!
+//! # struct MyPlugin { metadata: PluginMetadata }
+//! # impl MyPlugin {
+//! #     fn new() -> Self {
+//! #         Self {
+//! #             metadata: PluginMetadata::builder("my-delion", "1.0.0")
+//! #                 .build().unwrap(),
+//! #         }
+//! #     }
+//! # }
+//! # impl Plugin for MyPlugin {
+//! #     fn metadata(&self) -> &PluginMetadata { &self.metadata }
+//! #     fn capabilities(&self) -> &[Capability] { &[] }
+//! # }
 //! let registry = PluginRegistry::new();
 //!
 //! // Register plugins

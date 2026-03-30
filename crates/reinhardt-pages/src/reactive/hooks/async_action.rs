@@ -20,7 +20,7 @@ use crate::reactive::Signal;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::reactive::hooks::ActionPhase;
 ///
 /// let phase: ActionPhase<String, String> = ActionPhase::Idle;

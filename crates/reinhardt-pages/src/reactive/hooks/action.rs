@@ -72,7 +72,7 @@ impl<S: Clone + 'static, P> Clone for ActionState<S, P> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::reactive::hooks::use_action_state;
 ///
 /// #[derive(Clone, Default)]

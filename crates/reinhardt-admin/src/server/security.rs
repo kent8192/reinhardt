@@ -113,7 +113,7 @@ impl ContentSecurityPolicy {
 	/// Creates a default CSP suitable for admin panel usage.
 	///
 	/// Allows:
-	/// - Scripts and styles from same origin
+	/// - Scripts from same origin with WASM evaluation
 	/// - Inline styles (required for admin UI components)
 	/// - Images from same origin and data URIs (for favicons)
 	/// - Connections to same origin only (for API calls)
@@ -121,7 +121,7 @@ impl ContentSecurityPolicy {
 	pub fn admin_default() -> Self {
 		Self {
 			default_src: vec!["'self'".to_string()],
-			script_src: vec!["'self'".to_string()],
+			script_src: vec!["'self'".to_string(), "'wasm-unsafe-eval'".to_string()],
 			style_src: vec!["'self'".to_string(), "'unsafe-inline'".to_string()],
 			img_src: vec!["'self'".to_string(), "data:".to_string()],
 			font_src: vec!["'self'".to_string()],
@@ -606,6 +606,22 @@ mod tests {
 
 		// Assert
 		assert!(csp_string.contains("form-action 'self'"));
+	}
+
+	#[rstest]
+	fn test_csp_admin_default_allows_wasm_eval() {
+		// Arrange
+		let csp = ContentSecurityPolicy::admin_default();
+
+		// Act
+		let csp_string = csp.to_header_value();
+
+		// Assert
+		assert!(
+			csp_string.contains("'wasm-unsafe-eval'"),
+			"CSP should allow WASM evaluation for admin SPA, got: {}",
+			csp_string
+		);
 	}
 
 	// ============================================================

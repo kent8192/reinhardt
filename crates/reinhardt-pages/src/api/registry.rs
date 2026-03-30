@@ -12,7 +12,7 @@ use serde::{Serialize, de::DeserializeOwned};
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::api::{ApiModel, ApiQuerySet};
 /// use serde::{Deserialize, Serialize};
 ///

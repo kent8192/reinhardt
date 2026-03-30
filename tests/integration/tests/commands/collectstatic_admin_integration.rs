@@ -174,14 +174,14 @@ fn test_collectstatic_admin_css_content_integrity(temp_dir: TempDir) {
 	let collected_css =
 		fs::read_to_string(dest_dir.join("style.css")).expect("Should read collected style.css");
 
-	// Assert - verify UnoCSS preflight content
+	// Assert - verify theme content (utility classes are generated at runtime by UnoCSS)
 	assert!(
 		collected_css.contains("box-sizing"),
-		"Collected CSS should contain UnoCSS preflight reset"
+		"Collected CSS should contain box-sizing reset"
 	);
 	assert!(
-		collected_css.contains(".min-h-screen"),
-		"Collected CSS should contain UnoCSS utility classes"
+		collected_css.contains("--admin-amber"),
+		"Collected CSS should contain admin theme tokens"
 	);
 }
 

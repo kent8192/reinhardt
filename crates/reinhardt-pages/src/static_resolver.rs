@@ -31,7 +31,7 @@
 //!
 //! Once initialized, use `resolve_static` to get the final URL:
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_pages::static_resolver::resolve_static;
 //!
 //! let css_url = resolve_static("css/style.css");
@@ -235,7 +235,7 @@ pub fn init_static_resolver(config: TemplateStaticConfig) {
 ///
 /// ## Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::static_resolver::init_static_resolver;
 ///
 /// init_static_resolver("/static/".to_string());
@@ -261,7 +261,7 @@ pub fn init_static_resolver(static_url: String) {
 ///
 /// ## Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::static_resolver::resolve_static;
 ///
 /// let css_url = resolve_static("css/style.css");

@@ -2,7 +2,17 @@
 #
 # This file provides cargo-make task definitions for WASM build operations.
 # Install cargo-make: `cargo install cargo-make`
-# Usage: `cargo make <task>`
+# Usage: `cd crates/reinhardt-admin && cargo make <task>`
+#
+# Development workflow:
+#   1. cargo make dev           -- Build WASM (debug) for development
+#   2. cargo make dev-release   -- Build WASM (release) with optimization
+#
+# After building WASM, run collectstatic from your application project:
+#   cargo run --bin <your-app> collectstatic --no-input
+#
+# Then start your development server:
+#   cargo run --bin <your-app> -- runserver
 
 [config]
 default_to_workspace = false
@@ -95,3 +105,15 @@ rm -rf dist-wasm
 rm -rf target/wasm32-unknown-unknown
 echo "✓ Cleaned WASM artifacts and incremental cache"
 '''
+
+# ============================================================================
+# Development Workflow
+# ============================================================================
+
+[tasks.dev]
+description = "Clean and build WASM in debug mode for development"
+dependencies = ["clean-cache", "wasm-build-dev"]
+
+[tasks.dev-release]
+description = "Clean and build optimized WASM for production"
+dependencies = ["clean-cache", "wasm-build-release"]

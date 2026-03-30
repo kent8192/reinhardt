@@ -19,6 +19,8 @@ use crate::AuthenticationError;
 use crate::BaseUser;
 use async_trait::async_trait;
 use reinhardt_db::orm::{DatabaseConnection, Model};
+#[cfg(not(feature = "params"))]
+use reinhardt_di::DiError;
 use reinhardt_di::{DiResult, Injectable, InjectionContext};
 use reinhardt_http::AuthState;
 use std::sync::Arc;
@@ -162,7 +164,9 @@ where
 		};
 
 		#[cfg(not(feature = "params"))]
-		return Ok(Self::anonymous());
+		return Err(DiError::NotFound(
+			"CurrentUser requires the 'params' feature to be enabled".to_string(),
+		));
 
 		// 2. Get AuthState from request extensions
 		#[cfg(feature = "params")]

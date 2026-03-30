@@ -22,7 +22,7 @@ use std::collections::HashMap;
 ///
 /// Implementing a simple in-memory user manager:
 ///
-/// ```rust,ignore
+/// ```no_run
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use reinhardt_auth::{BaseUser, BaseUserManager, Argon2Hasher};

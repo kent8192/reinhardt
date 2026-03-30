@@ -57,6 +57,8 @@ pub mod import;
 pub mod limits;
 #[allow(missing_docs)]
 pub mod list;
+#[allow(missing_docs)]
+pub mod login;
 mod serde_helpers;
 #[allow(missing_docs)]
 pub mod update;

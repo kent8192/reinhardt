@@ -104,7 +104,13 @@ impl PluginContext {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
+	/// use reinhardt_dentdelion::context::PluginContext;
+	/// use std::sync::Arc;
+	///
+	/// # struct MyService;
+	/// # impl MyService { fn new() -> Self { MyService } }
+	/// let ctx = PluginContext::new(std::path::PathBuf::from("/tmp"));
 	/// ctx.register_service(Arc::new(MyService::new()));
 	/// ```
 	pub fn register_service<T: Any + Send + Sync>(&self, service: Arc<T>) {
@@ -116,7 +122,14 @@ impl PluginContext {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
+	/// use reinhardt_dentdelion::context::PluginContext;
+	/// use std::sync::Arc;
+	///
+	/// # struct MyService;
+	/// # impl MyService { fn new() -> Self { MyService } }
+	/// let ctx = PluginContext::new(std::path::PathBuf::from("/tmp"));
+	/// ctx.register_service(Arc::new(MyService::new()));
 	/// let service: Option<Arc<MyService>> = ctx.get_service();
 	/// ```
 	pub fn get_service<T: Any + Send + Sync>(&self) -> Option<Arc<T>> {

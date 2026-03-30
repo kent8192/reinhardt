@@ -30,7 +30,7 @@ getrandom = { workspace = true }
 # Server-only dependencies (native target)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 reinhardt-apps = { workspace = true }
-reinhardt-auth = { workspace = true, features = ["argon2-hasher", "params"] }
+reinhardt-auth = { workspace = true, features = ["argon2-hasher", "params", "jwt"] }
 reinhardt-macros = { workspace = true }
 reinhardt-core = { workspace = true, features = ["exception"] }
 reinhardt-db = { workspace = true, features = ["orm"] }

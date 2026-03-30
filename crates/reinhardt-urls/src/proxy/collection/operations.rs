@@ -29,7 +29,7 @@ impl CollectionOperations {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::{CollectionProxy, ScalarValue, collection::CollectionOperations};
 	///
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -52,7 +52,7 @@ impl CollectionOperations {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::{CollectionProxy, ScalarValue, collection::CollectionOperations};
 	///
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -78,7 +78,7 @@ impl CollectionOperations {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::{CollectionProxy, collection::CollectionOperations};
 	///
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -101,7 +101,7 @@ impl CollectionOperations {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::{CollectionProxy, collection::CollectionOperations};
 	///
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {

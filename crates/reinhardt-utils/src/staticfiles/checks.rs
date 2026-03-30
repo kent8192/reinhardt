@@ -58,7 +58,8 @@ impl CheckMessage {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// use reinhardt_utils::staticfiles::checks::CheckMessage;
 	/// let msg = CheckMessage::error("E001", "Error").with_hint("Try this");
 	/// ```
 	pub fn with_hint(mut self, hint: impl Into<String>) -> Self {

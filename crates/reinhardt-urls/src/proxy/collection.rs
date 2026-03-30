@@ -224,7 +224,7 @@ impl CollectionProxy {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::CollectionProxy;
 	///
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -269,7 +269,7 @@ impl CollectionProxy {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::{CollectionProxy, ScalarValue};
 	///
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -318,7 +318,7 @@ impl CollectionProxy {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::{CollectionProxy, ScalarValue};
 	///
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -363,7 +363,7 @@ impl CollectionProxy {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::{CollectionProxy, ScalarValue};
 	///
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -403,7 +403,7 @@ impl CollectionProxy {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::{CollectionProxy, ScalarValue};
 	///
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -424,7 +424,7 @@ impl CollectionProxy {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::CollectionProxy;
 	///
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -489,7 +489,7 @@ impl CollectionProxy {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::{CollectionProxy, ScalarValue};
 	///
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -630,7 +630,7 @@ impl CollectionProxy {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::CollectionProxy;
 	///
 	/// // Example: Filter posts where any tag matches "rust"
@@ -684,7 +684,7 @@ impl CollectionProxy {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::CollectionProxy;
 	///
 	/// // Example: Filter posts that have comments from "Alice"
@@ -766,7 +766,7 @@ impl CollectionProxy {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::CollectionProxy;
 	///
 	/// // Merge values from two different relationships
@@ -820,7 +820,7 @@ impl CollectionProxy {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::CollectionProxy;
 	///
 	/// let proxy = CollectionProxy::new("posts", "title")
@@ -835,7 +835,7 @@ impl CollectionProxy {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::CollectionProxy;
 	///
 	/// let proxy = CollectionProxy::new("logs", "message")
@@ -850,7 +850,7 @@ impl CollectionProxy {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::CollectionProxy;
 	///
 	/// let proxy = CollectionProxy::new("posts", "title")
@@ -865,7 +865,7 @@ impl CollectionProxy {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::CollectionProxy;
 	///
 	/// let proxy = CollectionProxy::new("posts", "title")
@@ -896,7 +896,7 @@ impl CollectionProxy {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::CollectionProxy;
 	///
 	/// let proxy = CollectionProxy::new("posts", "title")
@@ -911,7 +911,7 @@ impl CollectionProxy {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::CollectionProxy;
 	///
 	/// let proxy = CollectionProxy::new("posts", "title")
@@ -945,7 +945,7 @@ impl CollectionProxy {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::{CollectionProxy, ScalarValue};
 	///
 	/// // Requires factory to be configured
@@ -999,7 +999,7 @@ impl CollectionProxy {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::CollectionProxy;
 	///
 	/// // Requires a mutable source object with Reflectable trait
@@ -1069,7 +1069,7 @@ impl CollectionProxy {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::{CollectionProxy, ScalarValue};
 	///
 	/// // Requires version tracking to be enabled

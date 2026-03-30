@@ -12,7 +12,7 @@
 //!
 //! ## Usage
 //!
-//! ```ignore
+//! ```rust
 //! use reinhardt_core::types::page::Head;
 //!
 //! let head = Head::new()
@@ -461,7 +461,7 @@ impl StyleTag {
 ///
 /// ## Example
 ///
-/// ```ignore
+/// ```rust
 /// use reinhardt_core::types::page::Head;
 ///
 /// let head = Head::new()

@@ -398,9 +398,7 @@ impl Service<hyper::Request<Incoming>> for RequestService {
 			// static files) this is unexpected, so log a warning to aid debugging.
 			let request_path = request.uri.path().to_string();
 			let response = handler.handle(request).await.unwrap_or_else(|e| {
-				if request_path.contains('.')
-					&& !request_path.ends_with(".json")
-				{
+				if request_path.contains('.') && !request_path.ends_with(".json") {
 					eprintln!(
 						"[reinhardt WARN] Non-API request hit error-to-JSON conversion: path={}, error={}",
 						request_path, e

@@ -130,10 +130,14 @@ fn admin_spa_html() -> String {
 	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/open-props/open-props.min.css" />
 	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/animate.css@4/animate.min.css" />
 	<script src="https://cdn.jsdelivr.net/npm/@unocss/runtime/preset-wind.global.js"></script>
-	<script>
-		window.__unocss = {{ presets: [presetWind()] }};
-	</script>
 	<script src="https://cdn.jsdelivr.net/npm/@unocss/runtime/core.global.js"></script>
+	<script>
+		// Initialize UnoCSS runtime with preset-wind (v66+ API)
+		if (window.__unocss_runtime && window.__unocss_runtime.presets.presetWind) {{
+			window.__unocss_runtime.uno.setConfig({{ presets: [window.__unocss_runtime.presets.presetWind()] }});
+			window.__unocss_runtime.extractAll();
+		}}
+	</script>
 	<link rel="stylesheet" href="{css_url}" />
 </head>
 <body class="bg-slate-50 text-slate-900 antialiased">
@@ -869,8 +873,12 @@ mod tests {
 			"HTML should load UnoCSS core runtime"
 		);
 		assert!(
-			html.contains("presetWind()"),
-			"HTML should configure UnoCSS with preset-wind"
+			html.contains("__unocss_runtime.presets.presetWind()"),
+			"HTML should use v66+ runtime API to configure presetWind"
+		);
+		assert!(
+			html.contains("extractAll()"),
+			"HTML should call extractAll() to apply styles on page load"
 		);
 	}
 

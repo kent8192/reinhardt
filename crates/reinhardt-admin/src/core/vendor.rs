@@ -28,9 +28,9 @@ pub struct VendorAsset {
 /// successful download using `verify_integrity`.
 #[cfg(not(target_arch = "wasm32"))]
 const ADMIN_VENDOR_ASSETS: &[VendorAsset] = &[
-	// Open Props v2.0.5 — CSS custom property design tokens
+	// Open Props v1.7.23 — CSS custom property design tokens
 	VendorAsset {
-		url: "https://cdn.jsdelivr.net/npm/open-props@2.0.5/open-props.min.css",
+		url: "https://cdn.jsdelivr.net/npm/open-props@1.7.23/open-props.min.css",
 		target: "vendor/open-props.min.css",
 		sha256: "",
 	},

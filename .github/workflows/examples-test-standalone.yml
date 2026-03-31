@@ -10,7 +10,11 @@ permissions:
 
 concurrency:
   group: examples-test-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: true
+  # Use false to prevent long-running example tests (up to 40 min) from being
+  # cancelled by new pushes. With false, a new run queues behind the current one
+  # and intermediate pushes are replaced by the latest, ensuring at least one
+  # run always completes.
+  cancel-in-progress: false
 
 jobs:
   detect-affected:

@@ -102,15 +102,15 @@ fn resolve_admin_static(path: &str) -> String {
 ///
 /// All static file URLs are resolved via [`resolve_admin_static`], which
 /// integrates with the collectstatic manifest for cache-busted filenames
-/// in production. CSS dependencies (Open Props, Animate.css, UnoCSS) are
-/// served from local vendor/ directory instead of external CDNs to satisfy
-/// CSP and eliminate external network dependencies.
+/// in production. CSS dependencies (Open Props, Animate.css) and the UnoCSS
+/// runtime engine are served from local vendor/ directory instead of external
+/// CDNs to satisfy CSP and eliminate external network dependencies.
 #[cfg(not(target_arch = "wasm32"))]
 fn admin_spa_html() -> String {
 	let css_url = resolve_admin_static("style.css");
 	let vendor_open_props = resolve_admin_static("vendor/open-props.min.css");
 	let vendor_animate = resolve_admin_static("vendor/animate.min.css");
-	let vendor_unocss = resolve_admin_static("vendor/unocss.generated.css");
+	let vendor_unocss_runtime = resolve_admin_static("vendor/unocss-runtime.js");
 	let wasm_built = is_wasm_built();
 	let js_url = if wasm_built {
 		resolve_admin_static("reinhardt_admin.js")
@@ -138,8 +138,8 @@ fn admin_spa_html() -> String {
 	<title>Reinhardt Admin</title>
 	<link rel="stylesheet" href="{vendor_open_props}" />
 	<link rel="stylesheet" href="{vendor_animate}" />
-	<link rel="stylesheet" href="{vendor_unocss}" />
 	<link rel="stylesheet" href="{css_url}" />
+	<script src="{vendor_unocss_runtime}"></script>
 </head>
 <body class="bg-slate-50 text-slate-900 antialiased">
 	<div id="app"></div>
@@ -895,8 +895,8 @@ mod tests {
 			"HTML should reference local Animate.css"
 		);
 		assert!(
-			html.contains("vendor/unocss"),
-			"HTML should reference local UnoCSS generated CSS"
+			html.contains("vendor/unocss-runtime"),
+			"HTML should reference local UnoCSS runtime JS"
 		);
 	}
 

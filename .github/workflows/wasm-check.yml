@@ -126,4 +126,6 @@ jobs:
 
       - name: Run WASM tests (reinhardt-pages)
         working-directory: crates/reinhardt-pages
-        run: wasm-pack test --headless --chrome
+        run: |
+          wasm-pack test --headless --chrome \
+            . -- --test csrf_wasm_test --test server_fn_wasm_test

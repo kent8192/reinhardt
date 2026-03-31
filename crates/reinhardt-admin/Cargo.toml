@@ -40,6 +40,7 @@ reinhardt-urls = { workspace = true, features = ["routers"] }
 reinhardt-utils = { workspace = true, features = ["storage", "utils-core"] }
 reinhardt-query = { workspace = true }
 reqwest = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }

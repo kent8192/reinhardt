@@ -131,6 +131,60 @@ impl CollectStaticCommand {
 			fs::create_dir_all(&self.config.static_root)?;
 		}
 
+		// Download vendor assets for the admin panel before collecting static files.
+		// This step is only active when the "server" feature is enabled.
+		#[cfg(feature = "server")]
+		{
+			let admin_assets_dir = std::path::PathBuf::from(
+				concat!(env!("CARGO_MANIFEST_DIR"), "/../reinhardt-admin/assets"),
+			);
+
+			if admin_assets_dir.exists() {
+				use reinhardt_admin::core::vendor::{Verbosity, download_vendor_assets};
+
+				let verbosity = match self.options.verbosity {
+					0 => Verbosity::Silent,
+					1 => Verbosity::Normal,
+					_ => Verbosity::Verbose,
+				};
+
+				// Bridge sync→async: try the current tokio runtime handle first,
+				// then fall back to a freshly created single-threaded runtime.
+				let result: Result<(), String> = match tokio::runtime::Handle::try_current() {
+					Ok(handle) => tokio::task::block_in_place(|| {
+						handle
+							.block_on(download_vendor_assets(&admin_assets_dir, verbosity))
+							.map_err(|e| e.to_string())
+					}),
+					Err(_) => match tokio::runtime::Builder::new_current_thread()
+						.enable_all()
+						.build()
+					{
+						Ok(rt) => rt
+							.block_on(download_vendor_assets(&admin_assets_dir, verbosity))
+							.map_err(|e| e.to_string()),
+						Err(e) => Err(format!("failed to create tokio runtime: {}", e)),
+					},
+				};
+
+				match result {
+					Ok(()) => {
+						if self.options.verbosity > 0 {
+							println!("All vendor assets up-to-date");
+						}
+					}
+					Err(e) => {
+						// Vendor download failures are non-fatal; warn and continue
+						// with whatever assets already exist in the directory.
+						eprintln!(
+							"Warning: vendor asset download failed (continuing with existing files): {}",
+							e
+						);
+					}
+				}
+			}
+		}
+
 		// Collect files from all source directories
 		// Start with manually configured directories
 		let mut all_dirs = self.config.staticfiles_dirs.clone();

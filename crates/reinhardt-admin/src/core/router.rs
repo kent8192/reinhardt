@@ -95,10 +95,15 @@ fn resolve_admin_static(path: &str) -> String {
 ///
 /// All static file URLs are resolved via [`resolve_admin_static`], which
 /// integrates with the collectstatic manifest for cache-busted filenames
-/// in production.
+/// in production. CSS dependencies (Open Props, Animate.css, UnoCSS) are
+/// served from local vendor/ directory instead of external CDNs to satisfy
+/// CSP and eliminate external network dependencies.
 #[cfg(not(target_arch = "wasm32"))]
 fn admin_spa_html() -> String {
 	let css_url = resolve_admin_static("style.css");
+	let vendor_open_props = resolve_admin_static("vendor/open-props.min.css");
+	let vendor_animate = resolve_admin_static("vendor/animate.min.css");
+	let vendor_unocss = resolve_admin_static("vendor/unocss.generated.css");
 	let wasm_built = is_wasm_built();
 	let js_url = if wasm_built {
 		resolve_admin_static("reinhardt_admin.js")
@@ -124,20 +129,9 @@ fn admin_spa_html() -> String {
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 	<meta name="server-fn-prefix" content="/admin" />
 	<title>Reinhardt Admin</title>
-	<link rel="preconnect" href="https://fonts.googleapis.com" />
-	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-	<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
-	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/open-props/open-props.min.css" />
-	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/animate.css@4/animate.min.css" />
-	<script src="https://cdn.jsdelivr.net/npm/@unocss/runtime/preset-wind.global.js"></script>
-	<script src="https://cdn.jsdelivr.net/npm/@unocss/runtime/core.global.js"></script>
-	<script>
-		// Initialize UnoCSS runtime with preset-wind (v66+ API)
-		if (window.__unocss_runtime && window.__unocss_runtime.presets.presetWind) {{
-			window.__unocss_runtime.uno.setConfig({{ presets: [window.__unocss_runtime.presets.presetWind()] }});
-			window.__unocss_runtime.extractAll();
-		}}
-	</script>
+	<link rel="stylesheet" href="{vendor_open_props}" />
+	<link rel="stylesheet" href="{vendor_animate}" />
+	<link rel="stylesheet" href="{vendor_unocss}" />
 	<link rel="stylesheet" href="{css_url}" />
 </head>
 <body class="bg-slate-50 text-slate-900 antialiased">
@@ -859,26 +853,14 @@ mod tests {
 
 	#[cfg(not(target_arch = "wasm32"))]
 	#[rstest]
-	fn test_admin_spa_html_includes_unocss_runtime() {
+	fn test_admin_spa_html_includes_unocss_vendor_css() {
 		// Arrange & Act
 		let html = admin_spa_html();
 
-		// Assert
+		// Assert — local vendor UnoCSS generated CSS is referenced
 		assert!(
-			html.contains("@unocss/runtime/preset-wind.global.js"),
-			"HTML should load UnoCSS preset-wind runtime"
-		);
-		assert!(
-			html.contains("@unocss/runtime/core.global.js"),
-			"HTML should load UnoCSS core runtime"
-		);
-		assert!(
-			html.contains("__unocss_runtime.presets.presetWind()"),
-			"HTML should use v66+ runtime API to configure presetWind"
-		);
-		assert!(
-			html.contains("extractAll()"),
-			"HTML should call extractAll() to apply styles on page load"
+			html.contains("vendor/unocss"),
+			"HTML should reference local UnoCSS generated CSS from vendor/"
 		);
 	}
 
@@ -888,12 +870,15 @@ mod tests {
 		// Arrange & Act
 		let html = admin_spa_html();
 
-		// Assert
+		// Assert — local vendor paths are referenced
 		assert!(
-			html.contains("open-props/open-props.min.css"),
-			"HTML should load Open Props design tokens"
+			html.contains("vendor/open-props"),
+			"HTML should reference local Open Props CSS from vendor/"
 		);
-		assert!(html.contains("animate.css"), "HTML should load Animate.css");
+		assert!(
+			html.contains("vendor/animate"),
+			"HTML should reference local Animate.css from vendor/"
+		);
 	}
 
 	#[rstest]
@@ -913,8 +898,12 @@ mod tests {
 		let routes = router.get_all_routes();
 		let paths: Vec<&str> = routes.iter().map(|(path, _, _, _)| path.as_str()).collect();
 
-		// Assert - single catch-all route for directory-based serving
-		assert_eq!(routes.len(), 1, "Should have exactly 1 catch-all route");
+		// Assert - catch-all routes for GET and HEAD methods
+		assert_eq!(
+			routes.len(),
+			2,
+			"Should have exactly 2 catch-all routes (GET + HEAD)"
+		);
 		assert!(
 			paths.contains(&"/{*path}"),
 			"Should have catch-all path route, found: {:?}",
@@ -1315,6 +1304,61 @@ mod tests {
 			!content_type.contains("application/json"),
 			"Static file 404 must not return application/json (#3135), got: {}",
 			content_type
+		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_admin_spa_html_no_external_cdn_urls() {
+		// Arrange
+		let html = admin_spa_html();
+
+		// Assert — no external CDN references
+		assert!(
+			!html.contains("fonts.googleapis.com"),
+			"HTML should not reference Google Fonts CDN"
+		);
+		assert!(
+			!html.contains("fonts.gstatic.com"),
+			"HTML should not reference Google Fonts static CDN"
+		);
+		assert!(
+			!html.contains("cdn.jsdelivr.net"),
+			"HTML should not reference jsDelivr CDN"
+		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_admin_spa_html_references_vendor_assets() {
+		// Arrange
+		let html = admin_spa_html();
+
+		// Assert — local vendor assets are referenced
+		assert!(
+			html.contains("vendor/open-props"),
+			"HTML should reference local Open Props CSS"
+		);
+		assert!(
+			html.contains("vendor/animate"),
+			"HTML should reference local Animate.css"
+		);
+		assert!(
+			html.contains("vendor/unocss"),
+			"HTML should reference local UnoCSS generated CSS"
+		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_admin_spa_html_no_inline_script() {
+		// Arrange
+		let html = admin_spa_html();
+
+		// Assert — no UnoCSS runtime inline script
+		assert!(
+			!html.contains("__unocss_runtime"),
+			"HTML should not contain UnoCSS runtime initialization"
 		);
 	}
 }

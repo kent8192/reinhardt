@@ -2,14 +2,14 @@
 //!
 //! Database models for TODO list
 
-use reinhardt::core::serde::{Deserialize, Serialize};
 use reinhardt::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// Todo model
 ///
 /// Represents a single TODO item
-#[derive(Serialize, Deserialize)]
 #[model(app_label = "todos", table_name = "todos")]
+#[derive(Serialize, Deserialize)]
 pub struct Todo {
 	/// Primary key (None for auto-increment on insert)
 	#[field(primary_key = true)]

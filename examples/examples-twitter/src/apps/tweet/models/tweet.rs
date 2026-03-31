@@ -1,9 +1,9 @@
 //! Tweet model
 
 use chrono::{DateTime, Utc};
-use reinhardt::core::serde::{Deserialize, Serialize};
 use reinhardt::db::associations::ForeignKeyField;
 use reinhardt::model;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // Used by #[model] macro for type inference in ForeignKeyField<T> relationship fields.
@@ -21,24 +21,24 @@ use sqlx::FromRow;
 #[cfg_attr(all(test, server), derive(FromRow))]
 pub struct Tweet {
 	#[field(primary_key = true)]
-	id: Uuid,
+	pub id: Uuid,
 
 	#[cfg_attr(all(test, server), sqlx(skip))]
 	#[rel(foreign_key, related_name = "tweets")]
-	user: ForeignKeyField<User>,
+	pub user: ForeignKeyField<User>,
 
 	#[field(max_length = 280)]
-	content: String,
+	pub content: String,
 
 	#[field(default = 0)]
-	like_count: i32,
+	pub like_count: i32,
 
 	#[field(default = 0)]
-	retweet_count: i32,
+	pub retweet_count: i32,
 
 	#[field(auto_now_add = true)]
-	created_at: DateTime<Utc>,
+	pub created_at: DateTime<Utc>,
 
 	#[field(auto_now = true)]
-	updated_at: DateTime<Utc>,
+	pub updated_at: DateTime<Utc>,
 }

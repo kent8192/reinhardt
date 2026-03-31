@@ -2,7 +2,7 @@
 //!
 //! Types shared between client and server for direct messaging.
 
-use reinhardt::core::serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[cfg(server)]

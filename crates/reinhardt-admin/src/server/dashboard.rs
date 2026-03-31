@@ -68,9 +68,14 @@ pub async fn get_dashboard(
 	response_cookies.add(cookie_value);
 	http_request.inner().extensions.insert(response_cookies);
 
+	let admin_settings = crate::settings::get_admin_settings();
+
 	Ok(DashboardResponse {
 		site_name: site.name().to_string(),
+		site_header: admin_settings.site_header.clone(),
 		url_prefix: site.url_prefix().to_string(),
+		login_url: admin_settings.login_url.clone(),
+		logout_url: admin_settings.logout_url.clone(),
 		models,
 		csrf_token: Some(csrf_token),
 	})

@@ -9,8 +9,14 @@ use std::collections::HashMap;
 pub struct DashboardResponse {
 	/// Site name
 	pub site_name: String,
+	/// Header text shown in admin navigation bar
+	pub site_header: String,
 	/// URL prefix
 	pub url_prefix: String,
+	/// Login page URL for authentication redirects
+	pub login_url: String,
+	/// Logout page URL for sign-out redirects
+	pub logout_url: String,
 	/// Registered models with their metadata
 	pub models: Vec<ModelInfo>,
 	/// CSRF token for mutation requests (POST, PUT, DELETE)

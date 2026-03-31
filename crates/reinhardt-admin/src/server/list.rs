@@ -177,7 +177,12 @@ pub async fn get_list(
 	let page = params.page.unwrap_or(1).max(1); // Ensure page is at least 1
 	let page_size = params
 		.page_size
-		.unwrap_or_else(|| model_admin.list_per_page().unwrap_or(25) as u64)
+		.unwrap_or_else(|| {
+			let admin_settings = crate::settings::get_admin_settings();
+			model_admin
+				.list_per_page()
+				.unwrap_or(admin_settings.list_per_page) as u64
+		})
 		.min(MAX_PAGE_SIZE); // Enforce maximum page size to prevent memory exhaustion
 	let offset = (page - 1) * page_size;
 

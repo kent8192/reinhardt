@@ -29,10 +29,12 @@ pub fn main() -> Result<(), JsValue> {
 	// Initialize global router
 	router::init_global_router();
 
-	// Auth gate: if no JWT token is stored, redirect to login page
+	// Auth gate: if no JWT token is stored, redirect to login page.
+	// Uses AdminUrls default since dashboard data has not been fetched yet.
 	if reinhardt_pages::auth::get_jwt_token().is_none() {
+		let login_url = crate::pages::router::get_login_url();
 		router::with_router(|r| {
-			let _ = r.push("/admin/login/");
+			let _ = r.push(&login_url);
 		});
 	}
 

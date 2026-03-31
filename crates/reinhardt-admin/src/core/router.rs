@@ -20,13 +20,13 @@ use crate::core::AdminSite;
 ///
 /// Checks in order:
 /// 1. `REINHARDT_ADMIN_WASM_DIR` environment variable
-/// 2. `CARGO_MANIFEST_DIR/dist-wasm` (compile-time fallback for development)
+/// 2. `CARGO_MANIFEST_DIR/dist-admin` (compile-time fallback for development)
 #[cfg(not(target_arch = "wasm32"))]
 fn resolve_wasm_dir() -> std::path::PathBuf {
 	if let Ok(dir) = std::env::var("REINHARDT_ADMIN_WASM_DIR") {
 		return std::path::PathBuf::from(dir);
 	}
-	std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dist-wasm")
+	std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dist-admin")
 }
 
 /// Resolves the collected static files root directory (STATIC_ROOT).
@@ -41,10 +41,10 @@ fn resolve_static_root_admin() -> Option<std::path::PathBuf> {
 		.filter(|p| p.is_dir())
 }
 
-/// Returns true if the WASM SPA has been built (dist-wasm/ contains entry point).
+/// Returns true if the WASM SPA has been built (dist-admin/ contains entry point).
 ///
 /// Checks the collected STATIC_ROOT first, then falls back to the build
-/// output directory (dist-wasm/).
+/// output directory (dist-admin/).
 #[cfg(not(target_arch = "wasm32"))]
 fn is_wasm_built() -> bool {
 	// Check STATIC_ROOT/admin/ first (production: after collectstatic)
@@ -61,11 +61,18 @@ fn is_wasm_built() -> bool {
 ///
 /// Applies admin-specific security headers (CSP, X-Frame-Options, etc.)
 /// to prevent XSS, clickjacking, and other browser-side attacks.
+///
+/// Uses the [`AdminSettings`] registered via [`configure()`], or
+/// falls back to safe defaults if no custom settings were configured.
+///
+/// [`AdminSettings`]: crate::settings::AdminSettings
+/// [`configure()`]: crate::settings::configure
 #[cfg(not(target_arch = "wasm32"))]
 async fn admin_spa_handler(
 	request: reinhardt_http::Request,
 ) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
-	let security_headers = crate::server::security::SecurityHeaders::default();
+	let settings = crate::settings::get_admin_settings();
+	let security_headers = settings.to_security_headers();
 	let csrf_token = crate::server::security::generate_csrf_token();
 	let csrf_cookie = crate::server::security::build_csrf_cookie(&csrf_token, request.is_secure);
 	let mut response = reinhardt_http::Response::ok()
@@ -91,7 +98,7 @@ fn resolve_admin_static(path: &str) -> String {
 /// Generates the HTML shell for the admin SPA.
 ///
 /// Detects at runtime whether the WASM SPA has been built:
-/// - If `dist-wasm/reinhardt_admin.js` exists, loads the WASM entry point
+/// - If `dist-admin/reinhardt_admin.js` exists, loads the WASM entry point
 /// - Otherwise, falls back to the placeholder bootstrap script (`main.js`)
 ///
 /// All static file URLs are resolved via [`resolve_admin_static`], which
@@ -151,7 +158,7 @@ const ADMIN_ASSETS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets");
 ///
 /// File resolution order:
 /// 1. `STATIC_ROOT/admin/` — production (after collectstatic, manifest-hashed)
-/// 2. `dist-wasm/` — WASM build output (development)
+/// 2. `dist-admin/` — WASM build output (development)
 /// 3. `assets/` — built-in admin assets (CSS, JS placeholder)
 ///
 /// Returns 404 if the file is not found in any directory.
@@ -204,7 +211,7 @@ async fn admin_static_file_handler_inner(
 		}
 	}
 
-	// 2. Try dist-wasm/ (development: WASM build output)
+	// 2. Try dist-admin/ (development: WASM build output)
 	let wasm_handler = StaticFileHandler::new(resolve_wasm_dir());
 	if let Ok(file) = wasm_handler.serve(path).await {
 		return Ok(reinhardt_http::Response::ok()
@@ -245,7 +252,7 @@ async fn admin_static_file_handler_inner(
 ///
 /// Files are served from multiple directories in priority order:
 /// 1. `STATIC_ROOT/admin/` — production (after collectstatic)
-/// 2. `dist-wasm/` — WASM build output (development)
+/// 2. `dist-admin/` — WASM build output (development)
 /// 3. `assets/` — built-in admin assets (CSS, JS placeholder)
 ///
 /// MIME types are detected automatically via `mime_guess`.
@@ -870,31 +877,56 @@ mod tests {
 
 	#[cfg(not(target_arch = "wasm32"))]
 	#[rstest]
-	fn test_admin_spa_html_includes_unocss_vendor_css() {
-		// Arrange & Act
+	fn test_admin_spa_html_no_external_cdn_urls() {
+		// Arrange
 		let html = admin_spa_html();
 
-		// Assert — local vendor UnoCSS generated CSS is referenced
+		// Assert — no external CDN references
 		assert!(
-			html.contains("vendor/unocss"),
-			"HTML should reference local UnoCSS generated CSS from vendor/"
+			!html.contains("fonts.googleapis.com"),
+			"HTML should not reference Google Fonts CDN"
+		);
+		assert!(
+			!html.contains("fonts.gstatic.com"),
+			"HTML should not reference Google Fonts static CDN"
+		);
+		assert!(
+			!html.contains("cdn.jsdelivr.net"),
+			"HTML should not reference jsDelivr CDN"
 		);
 	}
 
 	#[cfg(not(target_arch = "wasm32"))]
 	#[rstest]
-	fn test_admin_spa_html_includes_open_props_and_animate_css() {
-		// Arrange & Act
+	fn test_admin_spa_html_references_vendor_assets() {
+		// Arrange
 		let html = admin_spa_html();
 
-		// Assert — local vendor paths are referenced
+		// Assert — local vendor assets are referenced
 		assert!(
 			html.contains("vendor/open-props"),
-			"HTML should reference local Open Props CSS from vendor/"
+			"HTML should reference local Open Props CSS"
 		);
 		assert!(
 			html.contains("vendor/animate"),
-			"HTML should reference local Animate.css from vendor/"
+			"HTML should reference local Animate.css"
+		);
+		assert!(
+			html.contains("vendor/unocss"),
+			"HTML should reference local UnoCSS generated CSS"
+		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_admin_spa_html_no_inline_script() {
+		// Arrange
+		let html = admin_spa_html();
+
+		// Assert — no UnoCSS runtime inline script
+		assert!(
+			!html.contains("__unocss_runtime"),
+			"HTML should not contain UnoCSS runtime initialization"
 		);
 	}
 
@@ -1053,7 +1085,7 @@ mod tests {
 		// Act
 		let response = admin_static_file_handler(request).await.unwrap();
 
-		// Assert - dist-wasm/ does not exist in test environment
+		// Assert - dist-admin/ does not exist in test environment
 		assert_eq!(
 			response.status,
 			hyper::StatusCode::NOT_FOUND,
@@ -1094,7 +1126,7 @@ mod tests {
 	#[cfg(not(target_arch = "wasm32"))]
 	#[rstest]
 	fn test_admin_spa_html_fallback_without_wasm() {
-		// Arrange - CI environment has no dist-wasm/ directory
+		// Arrange - CI environment has no dist-admin/ directory
 
 		// Act
 		let html = admin_spa_html();
@@ -1110,7 +1142,7 @@ mod tests {
 	#[cfg(not(target_arch = "wasm32"))]
 	#[rstest]
 	fn test_is_wasm_built_false_when_no_dist_wasm() {
-		// Arrange - CI/test environment should not have dist-wasm/
+		// Arrange - CI/test environment should not have dist-admin/
 
 		// Act & Assert
 		// In test environments without WASM build, this should be false
@@ -1127,10 +1159,10 @@ mod tests {
 		// Arrange & Act
 		let dir = resolve_wasm_dir();
 
-		// Assert - should end with dist-wasm (either from env or CARGO_MANIFEST_DIR)
+		// Assert - should end with dist-admin (either from env or CARGO_MANIFEST_DIR)
 		assert!(
-			dir.ends_with("dist-wasm"),
-			"WASM dir should end with 'dist-wasm', got: {:?}",
+			dir.ends_with("dist-admin"),
+			"WASM dir should end with 'dist-admin', got: {:?}",
 			dir
 		);
 	}
@@ -1418,61 +1450,6 @@ mod tests {
 			!content_type.contains("application/json"),
 			"Static file 404 must not return application/json (#3135), got: {}",
 			content_type
-		);
-	}
-
-	#[cfg(not(target_arch = "wasm32"))]
-	#[rstest]
-	fn test_admin_spa_html_no_external_cdn_urls() {
-		// Arrange
-		let html = admin_spa_html();
-
-		// Assert — no external CDN references
-		assert!(
-			!html.contains("fonts.googleapis.com"),
-			"HTML should not reference Google Fonts CDN"
-		);
-		assert!(
-			!html.contains("fonts.gstatic.com"),
-			"HTML should not reference Google Fonts static CDN"
-		);
-		assert!(
-			!html.contains("cdn.jsdelivr.net"),
-			"HTML should not reference jsDelivr CDN"
-		);
-	}
-
-	#[cfg(not(target_arch = "wasm32"))]
-	#[rstest]
-	fn test_admin_spa_html_references_vendor_assets() {
-		// Arrange
-		let html = admin_spa_html();
-
-		// Assert — local vendor assets are referenced
-		assert!(
-			html.contains("vendor/open-props"),
-			"HTML should reference local Open Props CSS"
-		);
-		assert!(
-			html.contains("vendor/animate"),
-			"HTML should reference local Animate.css"
-		);
-		assert!(
-			html.contains("vendor/unocss"),
-			"HTML should reference local UnoCSS generated CSS"
-		);
-	}
-
-	#[cfg(not(target_arch = "wasm32"))]
-	#[rstest]
-	fn test_admin_spa_html_no_inline_script() {
-		// Arrange
-		let html = admin_spa_html();
-
-		// Assert — no UnoCSS runtime inline script
-		assert!(
-			!html.contains("__unocss_runtime"),
-			"HTML should not contain UnoCSS runtime initialization"
 		);
 	}
 }

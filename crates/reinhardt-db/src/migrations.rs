@@ -136,7 +136,7 @@ pub use source::{
 	registry::RegistrySource,
 };
 pub use squash::{MigrationSquasher, SquashOptions};
-pub use state_loader::MigrationStateLoader;
+pub use state_loader::{MigrationStateLoader, build_state_from_files};
 pub use visualization::{HistoryEntry, MigrationStats, MigrationVisualizer, OutputFormat};
 pub use zero_downtime::{MigrationPhase, Strategy, ZeroDowntimeMigration};
 

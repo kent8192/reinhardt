@@ -34,14 +34,14 @@ command = "wasm-pack"
 args = [
 	"build",
 	"--target", "web",
-	"--out-dir", "dist-wasm",
+	"--out-dir", "dist-admin",
 	"--dev",
 	"--no-typescript"
 ]
 
 [tasks.wasm-build-dev]
 description = "Build WASM in debug mode"
-dependencies = ["wasm-bindgen-dev"]
+dependencies = ["wasm-bindgen-dev", "unocss-generate"]
 
 [tasks.wasm-compile-release]
 description = "Compile WASM binary (release mode)"
@@ -55,7 +55,7 @@ command = "wasm-pack"
 args = [
 	"build",
 	"--target", "web",
-	"--out-dir", "dist-wasm",
+	"--out-dir", "dist-admin",
 	"--release"
 ]
 
@@ -64,7 +64,7 @@ description = "Optimize WASM with wasm-opt"
 script = '''
 if command -v wasm-opt &> /dev/null; then
 	echo "Running wasm-opt..."
-	WASM_FILE="dist-wasm/reinhardt_admin_bg.wasm"
+	WASM_FILE="dist-admin/reinhardt_admin_bg.wasm"
 	wasm-opt -O3 -o "$WASM_FILE.opt" "$WASM_FILE"
 	mv "$WASM_FILE.opt" "$WASM_FILE"
 	echo "✓ WASM optimized"
@@ -76,7 +76,21 @@ dependencies = ["wasm-bindgen-release"]
 
 [tasks.wasm-build-release]
 description = "Build WASM in release mode with optimization"
-dependencies = ["wasm-finalize-release"]
+dependencies = ["wasm-finalize-release", "unocss-generate"]
+
+# ============================================================================
+# CSS Generation Tasks
+# ============================================================================
+
+[tasks.unocss-generate]
+description = "Generate UnoCSS utility CSS from admin sources"
+command = "npx"
+args = [
+	"unocss",
+	"src/**/*.rs",
+	"assets/main.js",
+	"--out-file", "assets/vendor/unocss.generated.css"
+]
 
 # ============================================================================
 # WASM Testing Tasks
@@ -94,14 +108,14 @@ args = ["test", "--headless", "--chrome"]
 [tasks.wasm-clean]
 description = "Clean WASM build artifacts"
 script = '''
-rm -rf dist-wasm
+rm -rf dist-admin
 echo "✓ Cleaned WASM artifacts"
 '''
 
 [tasks.clean-cache]
 description = "Clean WASM artifacts and incremental build cache"
 script = '''
-rm -rf dist-wasm
+rm -rf dist-admin
 rm -rf target/wasm32-unknown-unknown
 echo "✓ Cleaned WASM artifacts and incremental cache"
 '''

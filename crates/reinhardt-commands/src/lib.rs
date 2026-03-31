@@ -202,6 +202,7 @@ pub use start_commands::{StartAppCommand, StartProjectCommand};
 pub use template::{TemplateCommand, TemplateContext, generate_secret_key, to_camel_case};
 pub use wasm_builder::{
 	WasmBuildConfig, WasmBuildError, WasmBuildOutput, WasmBuilder, check_wasm_tools_installed,
+	detect_cdylib_in_cargo_toml, detect_cdylib_in_cargo_toml_content,
 };
 pub use welcome_page::WelcomePage;
 

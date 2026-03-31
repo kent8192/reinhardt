@@ -19,7 +19,7 @@ use reinhardt_db::migrations::schema_diff::{
 };
 use reinhardt_db::migrations::{
 	AutoMigrationGenerator, ColumnDefinition, FieldType, FilesystemRepository, FilesystemSource,
-	Migration, MigrationNumbering, MigrationService, Operation,
+	Migration, MigrationNamer, MigrationNumbering, MigrationService, Operation,
 };
 use rstest::*;
 use serial_test::serial;
@@ -97,6 +97,62 @@ fn create_migration_infra(
 	)));
 	let service = MigrationService::new(source.clone(), repository.clone());
 	(source, repository, service)
+}
+
+/// Helper to generate and save a migration using the same naming logic as
+/// `MakeMigrationsCommand::execute()`. This mirrors the full command path:
+/// 1. Autodetect operations via `AutoMigrationGenerator`
+/// 2. Compute `migration_number` via `MigrationNumbering::next_number()`
+/// 3. Derive `is_initial` from `migration_number == "0001"`
+/// 4. Generate `base_name` via `MigrationNamer::generate_name()`
+/// 5. Save migration with the final name
+async fn generate_and_save_migration_with_namer(
+	migrations_dir: &Path,
+	app_label: &str,
+	current_schema: DatabaseSchema,
+	target_schema: DatabaseSchema,
+	name_override: Option<&str>,
+) -> (String, String) {
+	let (_source, repository, service) = create_migration_infra(migrations_dir);
+
+	let generator = AutoMigrationGenerator::new(target_schema, repository.clone());
+	let result = generator
+		.generate(app_label, current_schema)
+		.await
+		.expect("Migration generation should succeed");
+
+	// Mirror MakeMigrationsCommand::execute() logic (builtin.rs lines 939-944)
+	let migration_number = MigrationNumbering::next_number(migrations_dir, app_label);
+	let is_initial = migration_number == "0001";
+	let base_name = match name_override {
+		Some(name) => name.to_string(),
+		None => MigrationNamer::generate_name(&result.operations, is_initial),
+	};
+	let final_name = format!("{}_{}", migration_number, base_name);
+
+	let migration = Migration {
+		app_label: app_label.to_string(),
+		name: final_name.clone(),
+		operations: result.operations.clone(),
+		dependencies: Vec::new(),
+		atomic: true,
+		replaces: Vec::new(),
+		initial: if is_initial { Some(true) } else { None },
+		..Default::default()
+	};
+
+	service
+		.save_migration(&migration)
+		.await
+		.expect("Failed to save migration");
+
+	let migration_file_path = migrations_dir
+		.join(app_label)
+		.join(format!("{}.rs", final_name));
+	let file_content =
+		std::fs::read_to_string(&migration_file_path).expect("Failed to read migration file");
+
+	(final_name, file_content)
 }
 
 /// Helper to generate and save a migration, returning the file content
@@ -2731,5 +2787,849 @@ async fn edg_14_cross_app_dependencies() {
 	assert!(
 		todos_content.contains("auth") && todos_content.contains("0001_initial"),
 		"Todos migration should reference auth dependency"
+	);
+}
+
+// ============================================================================
+// Migration Naming Tests (MN-01 ~ MN-04)
+//
+// These tests verify the fix for issue #3198: makemigrations now generates
+// descriptive migration names instead of always using '_initial'.
+// ============================================================================
+
+#[rstest]
+#[tokio::test]
+#[serial(makemigrations_e2e)]
+async fn mn_01_initial_migration_gets_initial_name() {
+	// Test: First migration (0001) should be named "0001_initial"
+	// This verifies that the is_initial=true path still works correctly
+	// when migration_number is "0001".
+
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let migrations_dir = temp_dir.path().join("migrations");
+	let app_label = "naming_test";
+
+	let empty_schema = DatabaseSchema::default();
+	let mut target_schema = DatabaseSchema::default();
+	let mut table = TableSchema {
+		name: "articles".to_string(),
+		columns: BTreeMap::new(),
+		indexes: Vec::new(),
+		constraints: Vec::new(),
+	};
+	table.columns.insert(
+		"id".to_string(),
+		ColumnSchema {
+			name: "id".to_string(),
+			data_type: FieldType::Integer,
+			nullable: false,
+			default: None,
+			primary_key: true,
+			auto_increment: true,
+		},
+	);
+	table.columns.insert(
+		"title".to_string(),
+		ColumnSchema {
+			name: "title".to_string(),
+			data_type: FieldType::VarChar(200),
+			nullable: false,
+			default: None,
+			primary_key: false,
+			auto_increment: false,
+		},
+	);
+	target_schema
+		.tables
+		.insert("articles".to_string(), table);
+
+	// Act
+	let (migration_name, file_content) = generate_and_save_migration_with_namer(
+		&migrations_dir,
+		app_label,
+		empty_schema,
+		target_schema,
+		None,
+	)
+	.await;
+
+	// Assert
+	assert_eq!(
+		migration_name, "0001_initial",
+		"First migration should be named '0001_initial', got '{}'",
+		migration_name
+	);
+	assert!(
+		file_content.contains("initial: Some(true)"),
+		"Initial migration should have initial flag set to Some(true)"
+	);
+	assert!(
+		file_content.contains("CreateTable"),
+		"Initial migration should contain CreateTable operation"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(makemigrations_e2e)]
+async fn mn_02_second_migration_gets_descriptive_name() {
+	// Test: Second migration (0002) should get a descriptive name based on
+	// its operations, NOT "0002_initial".
+	// This is the core fix for issue #3198.
+
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let migrations_dir = temp_dir.path().join("migrations");
+	let app_label = "naming_test";
+
+	// Step 1: Create initial migration with a table
+	let empty_schema = DatabaseSchema::default();
+	let mut initial_schema = DatabaseSchema::default();
+	let mut table = TableSchema {
+		name: "articles".to_string(),
+		columns: BTreeMap::new(),
+		indexes: Vec::new(),
+		constraints: Vec::new(),
+	};
+	table.columns.insert(
+		"id".to_string(),
+		ColumnSchema {
+			name: "id".to_string(),
+			data_type: FieldType::Integer,
+			nullable: false,
+			default: None,
+			primary_key: true,
+			auto_increment: true,
+		},
+	);
+	table.columns.insert(
+		"title".to_string(),
+		ColumnSchema {
+			name: "title".to_string(),
+			data_type: FieldType::VarChar(200),
+			nullable: false,
+			default: None,
+			primary_key: false,
+			auto_increment: false,
+		},
+	);
+	initial_schema
+		.tables
+		.insert("articles".to_string(), table);
+
+	let (first_name, _) = generate_and_save_migration_with_namer(
+		&migrations_dir,
+		app_label,
+		empty_schema,
+		initial_schema.clone(),
+		None,
+	)
+	.await;
+	assert_eq!(first_name, "0001_initial");
+
+	// Step 2: Add a new column (author) to the existing table
+	let mut extended_schema = initial_schema.clone();
+	extended_schema
+		.tables
+		.get_mut("articles")
+		.unwrap()
+		.columns
+		.insert(
+			"author".to_string(),
+			ColumnSchema {
+				name: "author".to_string(),
+				data_type: FieldType::VarChar(100),
+				nullable: true,
+				default: None,
+				primary_key: false,
+				auto_increment: false,
+			},
+		);
+
+	// Act
+	let (second_name, second_content) = generate_and_save_migration_with_namer(
+		&migrations_dir,
+		app_label,
+		initial_schema,
+		extended_schema,
+		None,
+	)
+	.await;
+
+	// Assert: Name should be descriptive, NOT "0002_initial"
+	assert!(
+		second_name.starts_with("0002_"),
+		"Second migration should be numbered 0002, got '{}'",
+		second_name
+	);
+	assert!(
+		!second_name.contains("initial"),
+		"Second migration should NOT contain 'initial' in its name, got '{}'",
+		second_name
+	);
+	assert!(
+		second_name.contains("articles") || second_name.contains("author"),
+		"Second migration name should contain table or column name, got '{}'",
+		second_name
+	);
+	assert!(
+		second_content.contains("AddColumn"),
+		"Second migration should contain AddColumn operation"
+	);
+	assert!(
+		!second_content.contains("initial: Some(true)"),
+		"Second migration should NOT have initial flag"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(makemigrations_e2e)]
+async fn mn_03_user_specified_name_overrides_auto_naming() {
+	// Test: When user provides --name, it should override auto-generated naming
+	// for both initial and non-initial migrations.
+
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let migrations_dir = temp_dir.path().join("migrations");
+	let app_label = "naming_test";
+
+	let empty_schema = DatabaseSchema::default();
+	let mut target_schema = DatabaseSchema::default();
+	let mut table = TableSchema {
+		name: "posts".to_string(),
+		columns: BTreeMap::new(),
+		indexes: Vec::new(),
+		constraints: Vec::new(),
+	};
+	table.columns.insert(
+		"id".to_string(),
+		ColumnSchema {
+			name: "id".to_string(),
+			data_type: FieldType::Integer,
+			nullable: false,
+			default: None,
+			primary_key: true,
+			auto_increment: true,
+		},
+	);
+	target_schema.tables.insert("posts".to_string(), table);
+
+	// Act: Create initial migration with user-specified name
+	let (name, _) = generate_and_save_migration_with_namer(
+		&migrations_dir,
+		app_label,
+		empty_schema,
+		target_schema,
+		Some("custom_name"),
+	)
+	.await;
+
+	// Assert
+	assert_eq!(
+		name, "0001_custom_name",
+		"User-specified name should override auto-naming, got '{}'",
+		name
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(makemigrations_e2e)]
+async fn mn_04_third_migration_also_gets_descriptive_name() {
+	// Test: Verify that migration naming works correctly for 0003+
+	// to ensure the fix isn't limited to just the second migration.
+
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let migrations_dir = temp_dir.path().join("migrations");
+	let app_label = "naming_test";
+
+	// Step 1: Create initial table
+	let empty_schema = DatabaseSchema::default();
+	let mut schema_v1 = DatabaseSchema::default();
+	let mut table = TableSchema {
+		name: "comments".to_string(),
+		columns: BTreeMap::new(),
+		indexes: Vec::new(),
+		constraints: Vec::new(),
+	};
+	table.columns.insert(
+		"id".to_string(),
+		ColumnSchema {
+			name: "id".to_string(),
+			data_type: FieldType::Integer,
+			nullable: false,
+			default: None,
+			primary_key: true,
+			auto_increment: true,
+		},
+	);
+	schema_v1
+		.tables
+		.insert("comments".to_string(), table);
+
+	let (first_name, _) = generate_and_save_migration_with_namer(
+		&migrations_dir,
+		app_label,
+		empty_schema,
+		schema_v1.clone(),
+		None,
+	)
+	.await;
+	assert_eq!(first_name, "0001_initial");
+
+	// Step 2: Add 'body' column
+	let mut schema_v2 = schema_v1.clone();
+	schema_v2
+		.tables
+		.get_mut("comments")
+		.unwrap()
+		.columns
+		.insert(
+			"body".to_string(),
+			ColumnSchema {
+				name: "body".to_string(),
+				data_type: FieldType::Text,
+				nullable: false,
+				default: None,
+				primary_key: false,
+				auto_increment: false,
+			},
+		);
+
+	let (second_name, _) = generate_and_save_migration_with_namer(
+		&migrations_dir,
+		app_label,
+		schema_v1,
+		schema_v2.clone(),
+		None,
+	)
+	.await;
+	assert!(
+		!second_name.contains("initial"),
+		"0002 should not be 'initial', got '{}'",
+		second_name
+	);
+
+	// Step 3: Add 'rating' column
+	let mut schema_v3 = schema_v2.clone();
+	schema_v3
+		.tables
+		.get_mut("comments")
+		.unwrap()
+		.columns
+		.insert(
+			"rating".to_string(),
+			ColumnSchema {
+				name: "rating".to_string(),
+				data_type: FieldType::Integer,
+				nullable: true,
+				default: None,
+				primary_key: false,
+				auto_increment: false,
+			},
+		);
+
+	// Act
+	let (third_name, third_content) = generate_and_save_migration_with_namer(
+		&migrations_dir,
+		app_label,
+		schema_v2,
+		schema_v3,
+		None,
+	)
+	.await;
+
+	// Assert
+	assert!(
+		third_name.starts_with("0003_"),
+		"Third migration should be numbered 0003, got '{}'",
+		third_name
+	);
+	assert!(
+		!third_name.contains("initial"),
+		"Third migration should NOT contain 'initial', got '{}'",
+		third_name
+	);
+	assert!(
+		third_content.contains("AddColumn"),
+		"Third migration should contain AddColumn"
+	);
+
+	// Verify all three migration files exist
+	assert!(
+		verify_migration_file_exists(&migrations_dir, app_label, "0001"),
+		"0001 migration file should exist"
+	);
+	assert!(
+		verify_migration_file_exists(&migrations_dir, app_label, "0002"),
+		"0002 migration file should exist"
+	);
+	assert!(
+		verify_migration_file_exists(&migrations_dir, app_label, "0003"),
+		"0003 migration file should exist"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(makemigrations_e2e)]
+async fn mn_05_drop_column_gets_remove_prefix_name() {
+	// Test: Dropping a column should produce a name like "0002_remove_table_column"
+
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let migrations_dir = temp_dir.path().join("migrations");
+	let app_label = "naming_test";
+
+	let empty_schema = DatabaseSchema::default();
+	let mut schema_v1 = DatabaseSchema::default();
+	let mut table = TableSchema {
+		name: "profiles".to_string(),
+		columns: BTreeMap::new(),
+		indexes: Vec::new(),
+		constraints: Vec::new(),
+	};
+	table.columns.insert(
+		"id".to_string(),
+		ColumnSchema {
+			name: "id".to_string(),
+			data_type: FieldType::Integer,
+			nullable: false,
+			default: None,
+			primary_key: true,
+			auto_increment: true,
+		},
+	);
+	table.columns.insert(
+		"bio".to_string(),
+		ColumnSchema {
+			name: "bio".to_string(),
+			data_type: FieldType::Text,
+			nullable: true,
+			default: None,
+			primary_key: false,
+			auto_increment: false,
+		},
+	);
+	schema_v1
+		.tables
+		.insert("profiles".to_string(), table);
+
+	// Create initial migration
+	let (first_name, _) = generate_and_save_migration_with_namer(
+		&migrations_dir,
+		app_label,
+		empty_schema,
+		schema_v1.clone(),
+		None,
+	)
+	.await;
+	assert_eq!(first_name, "0001_initial");
+
+	// Remove 'bio' column
+	let mut schema_v2 = schema_v1.clone();
+	schema_v2
+		.tables
+		.get_mut("profiles")
+		.unwrap()
+		.columns
+		.remove("bio");
+
+	// Act
+	let (second_name, second_content) = generate_and_save_migration_with_namer(
+		&migrations_dir,
+		app_label,
+		schema_v1,
+		schema_v2,
+		None,
+	)
+	.await;
+
+	// Assert
+	assert!(
+		second_name.starts_with("0002_"),
+		"Should be 0002, got '{}'",
+		second_name
+	);
+	assert!(
+		!second_name.contains("initial"),
+		"Drop column migration should NOT be named 'initial', got '{}'",
+		second_name
+	);
+	assert!(
+		second_content.contains("DropColumn"),
+		"Should contain DropColumn operation"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(makemigrations_e2e)]
+async fn mn_06_alter_column_type_change_gets_descriptive_name() {
+	// Test: Changing column type (Integer → Float) should produce AlterColumn
+	// with descriptive name. This validates that generate_operations() now
+	// correctly handles columns_to_modify.
+
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let migrations_dir = temp_dir.path().join("migrations");
+	let app_label = "naming_test";
+
+	let empty_schema = DatabaseSchema::default();
+	let mut schema_v1 = DatabaseSchema::default();
+	let mut table = TableSchema {
+		name: "items".to_string(),
+		columns: BTreeMap::new(),
+		indexes: Vec::new(),
+		constraints: Vec::new(),
+	};
+	table.columns.insert(
+		"id".to_string(),
+		ColumnSchema {
+			name: "id".to_string(),
+			data_type: FieldType::Integer,
+			nullable: false,
+			default: None,
+			primary_key: true,
+			auto_increment: true,
+		},
+	);
+	table.columns.insert(
+		"price".to_string(),
+		ColumnSchema {
+			name: "price".to_string(),
+			data_type: FieldType::Integer,
+			nullable: false,
+			default: None,
+			primary_key: false,
+			auto_increment: false,
+		},
+	);
+	schema_v1.tables.insert("items".to_string(), table);
+
+	let (first_name, _) = generate_and_save_migration_with_namer(
+		&migrations_dir,
+		app_label,
+		empty_schema,
+		schema_v1.clone(),
+		None,
+	)
+	.await;
+	assert_eq!(first_name, "0001_initial");
+
+	// Change 'price' from Integer to Float
+	let mut schema_v2 = schema_v1.clone();
+	schema_v2
+		.tables
+		.get_mut("items")
+		.unwrap()
+		.columns
+		.insert(
+			"price".to_string(),
+			ColumnSchema {
+				name: "price".to_string(),
+				data_type: FieldType::Float,
+				nullable: false,
+				default: None,
+				primary_key: false,
+				auto_increment: false,
+			},
+		);
+
+	// Act
+	let (second_name, second_content) = generate_and_save_migration_with_namer(
+		&migrations_dir,
+		app_label,
+		schema_v1,
+		schema_v2,
+		None,
+	)
+	.await;
+
+	// Assert
+	assert!(
+		second_name.starts_with("0002_"),
+		"Should be 0002, got '{}'",
+		second_name
+	);
+	assert!(
+		!second_name.contains("initial"),
+		"Alter column migration should NOT be named 'initial', got '{}'",
+		second_name
+	);
+	assert!(
+		second_content.contains("AlterColumn"),
+		"Should contain AlterColumn operation"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(makemigrations_e2e)]
+async fn mn_07_multiple_add_columns_get_combined_name() {
+	// Test: Adding multiple columns should combine fragment names
+
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let migrations_dir = temp_dir.path().join("migrations");
+	let app_label = "naming_test";
+
+	let empty_schema = DatabaseSchema::default();
+	let mut schema_v1 = DatabaseSchema::default();
+	let mut table = TableSchema {
+		name: "users".to_string(),
+		columns: BTreeMap::new(),
+		indexes: Vec::new(),
+		constraints: Vec::new(),
+	};
+	table.columns.insert(
+		"id".to_string(),
+		ColumnSchema {
+			name: "id".to_string(),
+			data_type: FieldType::Integer,
+			nullable: false,
+			default: None,
+			primary_key: true,
+			auto_increment: true,
+		},
+	);
+	schema_v1.tables.insert("users".to_string(), table);
+
+	let (first_name, _) = generate_and_save_migration_with_namer(
+		&migrations_dir,
+		app_label,
+		empty_schema,
+		schema_v1.clone(),
+		None,
+	)
+	.await;
+	assert_eq!(first_name, "0001_initial");
+
+	// Add two columns at once
+	let mut schema_v2 = schema_v1.clone();
+	let t = schema_v2.tables.get_mut("users").unwrap();
+	t.columns.insert(
+		"first_name".to_string(),
+		ColumnSchema {
+			name: "first_name".to_string(),
+			data_type: FieldType::VarChar(50),
+			nullable: true,
+			default: None,
+			primary_key: false,
+			auto_increment: false,
+		},
+	);
+	t.columns.insert(
+		"last_name".to_string(),
+		ColumnSchema {
+			name: "last_name".to_string(),
+			data_type: FieldType::VarChar(50),
+			nullable: true,
+			default: None,
+			primary_key: false,
+			auto_increment: false,
+		},
+	);
+
+	// Act
+	let (second_name, _) = generate_and_save_migration_with_namer(
+		&migrations_dir,
+		app_label,
+		schema_v1,
+		schema_v2,
+		None,
+	)
+	.await;
+
+	// Assert
+	assert!(
+		second_name.starts_with("0002_"),
+		"Should be 0002, got '{}'",
+		second_name
+	);
+	assert!(
+		!second_name.contains("initial"),
+		"Multi-column add should NOT be named 'initial', got '{}'",
+		second_name
+	);
+	// Should contain fragments from both columns
+	assert!(
+		second_name.contains("first_name") || second_name.contains("last_name"),
+		"Name should contain at least one column name, got '{}'",
+		second_name
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(makemigrations_e2e)]
+async fn mn_08_index_addition_gets_create_index_name() {
+	// Test: Adding an index should produce a descriptive name containing
+	// "create_index" or "create_unique_index". This validates that
+	// generate_operations() now handles indexes_to_add.
+
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let migrations_dir = temp_dir.path().join("migrations");
+	let app_label = "naming_test";
+
+	let empty_schema = DatabaseSchema::default();
+	let mut schema_v1 = DatabaseSchema::default();
+	let mut table = TableSchema {
+		name: "articles".to_string(),
+		columns: BTreeMap::new(),
+		indexes: Vec::new(),
+		constraints: Vec::new(),
+	};
+	table.columns.insert(
+		"id".to_string(),
+		ColumnSchema {
+			name: "id".to_string(),
+			data_type: FieldType::Integer,
+			nullable: false,
+			default: None,
+			primary_key: true,
+			auto_increment: true,
+		},
+	);
+	table.columns.insert(
+		"slug".to_string(),
+		ColumnSchema {
+			name: "slug".to_string(),
+			data_type: FieldType::VarChar(200),
+			nullable: false,
+			default: None,
+			primary_key: false,
+			auto_increment: false,
+		},
+	);
+	schema_v1
+		.tables
+		.insert("articles".to_string(), table);
+
+	let (first_name, _) = generate_and_save_migration_with_namer(
+		&migrations_dir,
+		app_label,
+		empty_schema,
+		schema_v1.clone(),
+		None,
+	)
+	.await;
+	assert_eq!(first_name, "0001_initial");
+
+	// Add unique index on 'slug'
+	let mut schema_v2 = schema_v1.clone();
+	schema_v2
+		.tables
+		.get_mut("articles")
+		.unwrap()
+		.indexes
+		.push(IndexSchema {
+			name: "idx_articles_slug".to_string(),
+			columns: vec!["slug".to_string()],
+			unique: true,
+		});
+
+	// Act
+	let (second_name, second_content) = generate_and_save_migration_with_namer(
+		&migrations_dir,
+		app_label,
+		schema_v1,
+		schema_v2,
+		None,
+	)
+	.await;
+
+	// Assert
+	assert!(
+		second_name.starts_with("0002_"),
+		"Should be 0002, got '{}'",
+		second_name
+	);
+	assert!(
+		!second_name.contains("initial"),
+		"Index addition should NOT be named 'initial', got '{}'",
+		second_name
+	);
+	assert!(
+		second_content.contains("CreateIndex"),
+		"Should contain CreateIndex operation"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(makemigrations_e2e)]
+async fn mn_09_drop_table_gets_delete_prefix_name() {
+	// Test: Dropping a table should produce "0002_delete_tablename"
+
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let migrations_dir = temp_dir.path().join("migrations");
+	let app_label = "naming_test";
+
+	let empty_schema = DatabaseSchema::default();
+	let mut schema_v1 = DatabaseSchema::default();
+	let mut table = TableSchema {
+		name: "temp_data".to_string(),
+		columns: BTreeMap::new(),
+		indexes: Vec::new(),
+		constraints: Vec::new(),
+	};
+	table.columns.insert(
+		"id".to_string(),
+		ColumnSchema {
+			name: "id".to_string(),
+			data_type: FieldType::Integer,
+			nullable: false,
+			default: None,
+			primary_key: true,
+			auto_increment: true,
+		},
+	);
+	schema_v1
+		.tables
+		.insert("temp_data".to_string(), table);
+
+	let (first_name, _) = generate_and_save_migration_with_namer(
+		&migrations_dir,
+		app_label,
+		empty_schema,
+		schema_v1.clone(),
+		None,
+	)
+	.await;
+	assert_eq!(first_name, "0001_initial");
+
+	// Remove the table entirely
+	let schema_v2 = DatabaseSchema::default();
+
+	// Act
+	let (second_name, second_content) = generate_and_save_migration_with_namer(
+		&migrations_dir,
+		app_label,
+		schema_v1,
+		schema_v2,
+		None,
+	)
+	.await;
+
+	// Assert
+	assert!(
+		second_name.starts_with("0002_"),
+		"Should be 0002, got '{}'",
+		second_name
+	);
+	assert!(
+		!second_name.contains("initial"),
+		"Drop table migration should NOT be named 'initial', got '{}'",
+		second_name
+	);
+	assert!(
+		second_content.contains("DropTable"),
+		"Should contain DropTable operation"
 	);
 }

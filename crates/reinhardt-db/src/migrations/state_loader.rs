@@ -243,6 +243,76 @@ impl<S: MigrationSource> MigrationStateLoader<S> {
 	}
 }
 
+/// Build `ProjectState` from all migration files without a database connection.
+///
+/// This function loads all migrations from the given source, builds a
+/// dependency graph from ALL of them (not just applied ones), topologically
+/// sorts them, and replays their operations to reconstruct the full schema state.
+///
+/// This is the offline fallback for `makemigrations` when neither a
+/// database nor TestContainers is available. It assumes all migration files
+/// on disk represent the current schema state.
+///
+/// # Arguments
+///
+/// * `source` - A migration source (e.g., `FilesystemSource`) to load migrations from
+///
+/// # Returns
+///
+/// The `ProjectState` representing the schema as defined by all migration files.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Failed to load migrations from the source
+/// - Circular dependency is detected in the migration graph
+pub async fn build_state_from_files<S: MigrationSource>(source: &S) -> Result<ProjectState> {
+	// 1. Load all available migrations from source
+	let all_migrations = source.all_migrations().await?;
+
+	// If no migration files exist, return empty state (genuinely initial migration)
+	if all_migrations.is_empty() {
+		return Ok(ProjectState::default());
+	}
+
+	// 2. Build a graph from ALL migrations (not filtered by applied status)
+	let mut graph = MigrationGraph::new();
+	for migration in &all_migrations {
+		let key = MigrationKey::new(migration.app_label.clone(), migration.name.clone());
+
+		let dependencies: Vec<MigrationKey> = migration
+			.dependencies
+			.iter()
+			.map(|(app, name)| MigrationKey::new(app.clone(), name.clone()))
+			.collect();
+
+		let replaces: Vec<MigrationKey> = migration
+			.replaces
+			.iter()
+			.map(|(app, name)| MigrationKey::new(app.clone(), name.clone()))
+			.collect();
+
+		graph.add_migration_with_replaces(key, dependencies, replaces);
+	}
+
+	// 3. Get topologically sorted order
+	let sorted_keys = graph.topological_sort()?;
+
+	// 4. Build ProjectState by replaying all migrations in order
+	let mut state = ProjectState::default();
+
+	for key in sorted_keys {
+		if let Some(migration) = all_migrations
+			.iter()
+			.find(|m| m.app_label == key.app_label && m.name == key.name)
+		{
+			state.apply_migration_operations(&migration.operations, &migration.app_label);
+		}
+	}
+
+	Ok(state)
+}
+
 #[cfg(test)]
 #[cfg(feature = "sqlite")]
 mod tests {
@@ -722,5 +792,1752 @@ mod tests {
 			assert!(model.fields.contains_key("email"));
 			assert!(model.fields.contains_key("created_at"));
 		}
+	}
+}
+
+#[cfg(test)]
+mod build_state_from_files_tests {
+	use super::*;
+	use crate::migrations::FieldType;
+	use crate::migrations::operations::{ColumnDefinition, Operation};
+	use rstest::rstest;
+
+	/// Mock migration source for testing (no database required)
+	#[derive(Clone)]
+	struct MockMigrationSource {
+		migrations: Vec<Migration>,
+	}
+
+	#[async_trait::async_trait]
+	impl MigrationSource for MockMigrationSource {
+		async fn all_migrations(&self) -> Result<Vec<Migration>> {
+			Ok(self.migrations.clone())
+		}
+	}
+
+	/// Helper function to create a Migration for testing
+	fn create_migration(
+		app_label: &str,
+		name: &str,
+		operations: Vec<Operation>,
+		dependencies: Vec<(&str, &str)>,
+	) -> Migration {
+		Migration {
+			app_label: app_label.to_string(),
+			name: name.to_string(),
+			operations,
+			dependencies: dependencies
+				.into_iter()
+				.map(|(a, n)| (a.to_string(), n.to_string()))
+				.collect(),
+			replaces: vec![],
+			atomic: true,
+			initial: None,
+			state_only: false,
+			database_only: false,
+			swappable_dependencies: vec![],
+			optional_dependencies: vec![],
+		}
+	}
+
+	/// Helper function to create a CreateTable operation
+	fn create_table_operation(table_name: &str, columns: Vec<&str>) -> Operation {
+		Operation::CreateTable {
+			name: table_name.to_string(),
+			columns: columns
+				.into_iter()
+				.map(|col_name| ColumnDefinition {
+					name: col_name.to_string(),
+					type_definition: FieldType::VarChar(255),
+					not_null: false,
+					primary_key: col_name == "id",
+					unique: false,
+					auto_increment: col_name == "id",
+					default: None,
+				})
+				.collect(),
+			constraints: vec![],
+			without_rowid: None,
+			partition: None,
+			interleave_in_parent: None,
+		}
+	}
+
+	/// Helper function to create an AddColumn operation
+	fn add_column_operation(table_name: &str, column_name: &str) -> Operation {
+		Operation::AddColumn {
+			table: table_name.to_string(),
+			column: ColumnDefinition {
+				name: column_name.to_string(),
+				type_definition: FieldType::VarChar(255),
+				not_null: false,
+				primary_key: false,
+				unique: false,
+				auto_increment: false,
+				default: None,
+			},
+			mysql_options: None,
+		}
+	}
+
+	/// Empty source returns empty ProjectState
+	#[rstest]
+	#[tokio::test]
+	async fn test_empty_source_returns_empty_state() {
+		// Arrange
+		let source = MockMigrationSource { migrations: vec![] };
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert
+		assert!(state.models.is_empty());
+	}
+
+	/// Single CreateTable migration produces one model in state
+	#[rstest]
+	#[tokio::test]
+	async fn test_single_create_table() {
+		// Arrange
+		let source = MockMigrationSource {
+			migrations: vec![create_migration(
+				"auth",
+				"0001_initial",
+				vec![create_table_operation("auth_users", vec!["id", "username"])],
+				vec![],
+			)],
+		};
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert
+		assert_eq!(state.models.len(), 1);
+		let model = state.find_model_by_table("auth_users").unwrap();
+		assert_eq!(model.fields.len(), 2);
+		assert!(model.fields.contains_key("id"));
+		assert!(model.fields.contains_key("username"));
+	}
+
+	/// Chained migrations: CreateTable then AddColumn produces correct state
+	#[rstest]
+	#[tokio::test]
+	async fn test_chained_create_and_add_column() {
+		// Arrange
+		let source = MockMigrationSource {
+			migrations: vec![
+				create_migration(
+					"auth",
+					"0001_initial",
+					vec![create_table_operation("auth_users", vec!["id", "username"])],
+					vec![],
+				),
+				create_migration(
+					"auth",
+					"0002_add_email",
+					vec![add_column_operation("auth_users", "email")],
+					vec![("auth", "0001_initial")],
+				),
+			],
+		};
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert
+		assert_eq!(state.models.len(), 1);
+		let model = state.find_model_by_table("auth_users").unwrap();
+		assert_eq!(model.fields.len(), 3);
+		assert!(model.fields.contains_key("id"));
+		assert!(model.fields.contains_key("username"));
+		assert!(model.fields.contains_key("email"));
+	}
+
+	/// Cross-app dependencies are resolved correctly via topological sort
+	#[rstest]
+	#[tokio::test]
+	async fn test_cross_app_dependencies() {
+		// Arrange
+		let source = MockMigrationSource {
+			migrations: vec![
+				create_migration(
+					"auth",
+					"0001_initial",
+					vec![create_table_operation("auth_users", vec!["id", "username"])],
+					vec![],
+				),
+				create_migration(
+					"posts",
+					"0001_initial",
+					vec![create_table_operation(
+						"posts_post",
+						vec!["id", "title", "author_id"],
+					)],
+					vec![("auth", "0001_initial")],
+				),
+			],
+		};
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert
+		assert_eq!(state.models.len(), 2);
+		assert!(state.find_model_by_table("auth_users").is_some());
+		assert!(state.find_model_by_table("posts_post").is_some());
+	}
+
+	/// CreateTable followed by DropTable results in empty state
+	#[rstest]
+	#[tokio::test]
+	async fn test_create_then_drop_results_in_empty() {
+		// Arrange
+		let source = MockMigrationSource {
+			migrations: vec![
+				create_migration(
+					"temp",
+					"0001_initial",
+					vec![create_table_operation("temp_data", vec!["id", "value"])],
+					vec![],
+				),
+				create_migration(
+					"temp",
+					"0002_drop",
+					vec![Operation::DropTable {
+						name: "temp_data".to_string(),
+					}],
+					vec![("temp", "0001_initial")],
+				),
+			],
+		};
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert
+		assert!(state.models.is_empty());
+	}
+
+	/// Multiple apps with no dependencies are all present in state
+	#[rstest]
+	#[tokio::test]
+	async fn test_multiple_independent_apps() {
+		// Arrange
+		let source = MockMigrationSource {
+			migrations: vec![
+				create_migration(
+					"auth",
+					"0001_initial",
+					vec![create_table_operation("auth_users", vec!["id", "username"])],
+					vec![],
+				),
+				create_migration(
+					"clusters",
+					"0001_initial",
+					vec![create_table_operation(
+						"clusters_cluster",
+						vec!["id", "name"],
+					)],
+					vec![],
+				),
+				create_migration(
+					"deployments",
+					"0001_initial",
+					vec![create_table_operation(
+						"deployments_deployment",
+						vec!["id", "status"],
+					)],
+					vec![],
+				),
+			],
+		};
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert
+		assert_eq!(state.models.len(), 3);
+		assert!(state.find_model_by_table("auth_users").is_some());
+		assert!(state.find_model_by_table("clusters_cluster").is_some());
+		assert!(
+			state
+				.find_model_by_table("deployments_deployment")
+				.is_some()
+		);
+	}
+
+	/// RenameColumn is correctly reflected in state
+	#[rstest]
+	#[tokio::test]
+	async fn test_rename_column_reflected() {
+		// Arrange
+		let source = MockMigrationSource {
+			migrations: vec![
+				create_migration(
+					"auth",
+					"0001_initial",
+					vec![create_table_operation("auth_users", vec!["id", "name"])],
+					vec![],
+				),
+				create_migration(
+					"auth",
+					"0002_rename",
+					vec![Operation::RenameColumn {
+						table: "auth_users".to_string(),
+						old_name: "name".to_string(),
+						new_name: "full_name".to_string(),
+					}],
+					vec![("auth", "0001_initial")],
+				),
+			],
+		};
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert
+		let model = state.find_model_by_table("auth_users").unwrap();
+		assert_eq!(model.fields.len(), 2);
+		assert!(model.fields.contains_key("id"));
+		assert!(!model.fields.contains_key("name"));
+		assert!(model.fields.contains_key("full_name"));
+	}
+
+	/// RenameTable is correctly reflected in state
+	#[rstest]
+	#[tokio::test]
+	async fn test_rename_table_reflected() {
+		// Arrange
+		let source = MockMigrationSource {
+			migrations: vec![
+				create_migration(
+					"auth",
+					"0001_initial",
+					vec![create_table_operation("auth_users", vec!["id", "name"])],
+					vec![],
+				),
+				create_migration(
+					"auth",
+					"0002_rename_table",
+					vec![Operation::RenameTable {
+						old_name: "auth_users".to_string(),
+						new_name: "auth_accounts".to_string(),
+					}],
+					vec![("auth", "0001_initial")],
+				),
+			],
+		};
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert
+		assert_eq!(state.models.len(), 1);
+		assert!(state.find_model_by_table("auth_users").is_none());
+		assert!(state.find_model_by_table("auth_accounts").is_some());
+	}
+
+	/// DropColumn removes the field from state
+	#[rstest]
+	#[tokio::test]
+	async fn test_drop_column_reflected() {
+		// Arrange
+		let source = MockMigrationSource {
+			migrations: vec![
+				create_migration(
+					"auth",
+					"0001_initial",
+					vec![create_table_operation(
+						"auth_users",
+						vec!["id", "username", "legacy_field"],
+					)],
+					vec![],
+				),
+				create_migration(
+					"auth",
+					"0002_drop_legacy",
+					vec![Operation::DropColumn {
+						table: "auth_users".to_string(),
+						column: "legacy_field".to_string(),
+					}],
+					vec![("auth", "0001_initial")],
+				),
+			],
+		};
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert
+		let model = state.find_model_by_table("auth_users").unwrap();
+		assert_eq!(model.fields.len(), 2);
+		assert!(model.fields.contains_key("id"));
+		assert!(model.fields.contains_key("username"));
+		assert!(!model.fields.contains_key("legacy_field"));
+	}
+
+	/// AlterColumn changes the field type in state
+	#[rstest]
+	#[tokio::test]
+	async fn test_alter_column_reflected() {
+		// Arrange
+		let source = MockMigrationSource {
+			migrations: vec![
+				create_migration(
+					"auth",
+					"0001_initial",
+					vec![create_table_operation("auth_users", vec!["id", "email"])],
+					vec![],
+				),
+				create_migration(
+					"auth",
+					"0002_alter_email",
+					vec![Operation::AlterColumn {
+						table: "auth_users".to_string(),
+						column: "email".to_string(),
+						old_definition: Some(ColumnDefinition {
+							name: "email".to_string(),
+							type_definition: FieldType::VarChar(255),
+							not_null: false,
+							primary_key: false,
+							unique: false,
+							auto_increment: false,
+							default: None,
+						}),
+						new_definition: ColumnDefinition {
+							name: "email".to_string(),
+							type_definition: FieldType::Text,
+							not_null: true,
+							primary_key: false,
+							unique: true,
+							auto_increment: false,
+							default: None,
+						},
+						mysql_options: None,
+					}],
+					vec![("auth", "0001_initial")],
+				),
+			],
+		};
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert
+		let model = state.find_model_by_table("auth_users").unwrap();
+		let email_field = model.fields.get("email").unwrap();
+		assert_eq!(email_field.field_type, FieldType::Text);
+	}
+
+	/// Complex multi-app multi-migration scenario matching Issue #3199
+	///
+	/// Reproduces the exact scenario from Issue #3199: auth, clusters, and
+	/// deployments apps with existing migrations, then a new field is added
+	/// to auth. The reconstructed state should contain all three tables
+	/// with correct columns, proving that the autodetector would generate
+	/// AddColumn instead of CreateTable.
+	#[rstest]
+	#[tokio::test]
+	async fn test_issue_3199_scenario_reconstruction() {
+		// Arrange
+		let source = MockMigrationSource {
+			migrations: vec![
+				// auth app: initial + add field
+				create_migration(
+					"auth",
+					"0001_initial",
+					vec![create_table_operation(
+						"auth_users",
+						vec!["id", "username", "password"],
+					)],
+					vec![],
+				),
+				create_migration(
+					"auth",
+					"0002_add_names",
+					vec![
+						add_column_operation("auth_users", "first_name"),
+						add_column_operation("auth_users", "last_name"),
+					],
+					vec![("auth", "0001_initial")],
+				),
+				// clusters app: initial only
+				create_migration(
+					"clusters",
+					"0001_initial",
+					vec![create_table_operation(
+						"clusters_cluster",
+						vec!["id", "name", "region"],
+					)],
+					vec![],
+				),
+				// deployments app: initial only, depends on clusters
+				create_migration(
+					"deployments",
+					"0001_initial",
+					vec![create_table_operation(
+						"deployments_deployment",
+						vec!["id", "cluster_id", "status"],
+					)],
+					vec![("clusters", "0001_initial")],
+				),
+			],
+		};
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert: all 3 tables exist with correct columns
+		assert_eq!(state.models.len(), 3);
+
+		// auth_users: id, username, password, first_name, last_name
+		let auth_model = state.find_model_by_table("auth_users").unwrap();
+		assert_eq!(auth_model.fields.len(), 5);
+		assert!(auth_model.fields.contains_key("first_name"));
+		assert!(auth_model.fields.contains_key("last_name"));
+
+		// clusters_cluster: id, name, region (unchanged)
+		let clusters_model = state.find_model_by_table("clusters_cluster").unwrap();
+		assert_eq!(clusters_model.fields.len(), 3);
+
+		// deployments_deployment: id, cluster_id, status (unchanged)
+		let deployments_model = state.find_model_by_table("deployments_deployment").unwrap();
+		assert_eq!(deployments_model.fields.len(), 3);
+	}
+
+	/// Long migration chain with multiple operations per migration
+	#[rstest]
+	#[tokio::test]
+	async fn test_long_migration_chain() {
+		// Arrange
+		let source = MockMigrationSource {
+			migrations: vec![
+				create_migration(
+					"blog",
+					"0001_initial",
+					vec![create_table_operation("blog_post", vec!["id", "title"])],
+					vec![],
+				),
+				create_migration(
+					"blog",
+					"0002_add_body",
+					vec![add_column_operation("blog_post", "body")],
+					vec![("blog", "0001_initial")],
+				),
+				create_migration(
+					"blog",
+					"0003_add_author",
+					vec![add_column_operation("blog_post", "author_id")],
+					vec![("blog", "0002_add_body")],
+				),
+				create_migration(
+					"blog",
+					"0004_add_timestamps",
+					vec![
+						add_column_operation("blog_post", "created_at"),
+						add_column_operation("blog_post", "updated_at"),
+					],
+					vec![("blog", "0003_add_author")],
+				),
+				create_migration(
+					"blog",
+					"0005_add_category",
+					vec![
+						create_table_operation("blog_category", vec!["id", "name"]),
+						add_column_operation("blog_post", "category_id"),
+					],
+					vec![("blog", "0004_add_timestamps")],
+				),
+			],
+		};
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert
+		assert_eq!(state.models.len(), 2);
+
+		let post = state.find_model_by_table("blog_post").unwrap();
+		assert_eq!(post.fields.len(), 7); // id, title, body, author_id, created_at, updated_at, category_id
+
+		let category = state.find_model_by_table("blog_category").unwrap();
+		assert_eq!(category.fields.len(), 2); // id, name
+	}
+
+	/// Merge migration (empty operations, multiple dependencies) does not affect state
+	///
+	/// After a migration conflict (two branches adding different columns),
+	/// a merge migration resolves the conflict. The merge migration has empty
+	/// operations and depends on both conflicting leaves. The final state
+	/// should contain all columns from both branches.
+	#[rstest]
+	#[tokio::test]
+	async fn test_merge_migration_preserves_state() {
+		// Arrange: simulate branch conflict + merge
+		// 0001_initial: CreateTable
+		// 0002_add_email (branch A): AddColumn email
+		// 0002_add_phone (branch B): AddColumn phone
+		// 0003_merge: empty operations, depends on both 0002s
+		let source = MockMigrationSource {
+			migrations: vec![
+				create_migration(
+					"contacts",
+					"0001_initial",
+					vec![create_table_operation(
+						"contacts_person",
+						vec!["id", "name"],
+					)],
+					vec![],
+				),
+				create_migration(
+					"contacts",
+					"0002_add_email",
+					vec![add_column_operation("contacts_person", "email")],
+					vec![("contacts", "0001_initial")],
+				),
+				create_migration(
+					"contacts",
+					"0002_add_phone",
+					vec![add_column_operation("contacts_person", "phone")],
+					vec![("contacts", "0001_initial")],
+				),
+				// Merge migration: empty operations, depends on both branches
+				create_migration(
+					"contacts",
+					"0003_merge_0002_add_email_0002_add_phone",
+					vec![],
+					vec![
+						("contacts", "0002_add_email"),
+						("contacts", "0002_add_phone"),
+					],
+				),
+			],
+		};
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert: table has all columns from both branches
+		assert_eq!(state.models.len(), 1);
+		let model = state.find_model_by_table("contacts_person").unwrap();
+		assert_eq!(model.fields.len(), 4); // id, name, email, phone
+		assert!(model.fields.contains_key("id"));
+		assert!(model.fields.contains_key("name"));
+		assert!(model.fields.contains_key("email"));
+		assert!(model.fields.contains_key("phone"));
+	}
+
+	/// Merge migration with subsequent migrations after the merge point
+	#[rstest]
+	#[tokio::test]
+	async fn test_merge_then_continue_adding_columns() {
+		// Arrange
+		let source = MockMigrationSource {
+			migrations: vec![
+				create_migration(
+					"auth",
+					"0001_initial",
+					vec![create_table_operation("auth_users", vec!["id", "username"])],
+					vec![],
+				),
+				create_migration(
+					"auth",
+					"0002_add_email",
+					vec![add_column_operation("auth_users", "email")],
+					vec![("auth", "0001_initial")],
+				),
+				create_migration(
+					"auth",
+					"0002_add_avatar",
+					vec![add_column_operation("auth_users", "avatar_url")],
+					vec![("auth", "0001_initial")],
+				),
+				// Merge migration
+				create_migration(
+					"auth",
+					"0003_merge",
+					vec![],
+					vec![("auth", "0002_add_email"), ("auth", "0002_add_avatar")],
+				),
+				// Post-merge migration
+				create_migration(
+					"auth",
+					"0004_add_bio",
+					vec![add_column_operation("auth_users", "bio")],
+					vec![("auth", "0003_merge")],
+				),
+			],
+		};
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert: all columns present including post-merge addition
+		let model = state.find_model_by_table("auth_users").unwrap();
+		assert_eq!(model.fields.len(), 5); // id, username, email, avatar_url, bio
+		assert!(model.fields.contains_key("bio"));
+	}
+
+	/// Cross-app merge: two apps each have a branch conflict, resolved by merge
+	#[rstest]
+	#[tokio::test]
+	async fn test_cross_app_merge_migrations() {
+		// Arrange
+		let source = MockMigrationSource {
+			migrations: vec![
+				// auth app: initial + branch conflict + merge
+				create_migration(
+					"auth",
+					"0001_initial",
+					vec![create_table_operation("auth_users", vec!["id", "name"])],
+					vec![],
+				),
+				create_migration(
+					"auth",
+					"0002_add_email",
+					vec![add_column_operation("auth_users", "email")],
+					vec![("auth", "0001_initial")],
+				),
+				create_migration(
+					"auth",
+					"0002_add_role",
+					vec![add_column_operation("auth_users", "role")],
+					vec![("auth", "0001_initial")],
+				),
+				create_migration(
+					"auth",
+					"0003_merge",
+					vec![],
+					vec![("auth", "0002_add_email"), ("auth", "0002_add_role")],
+				),
+				// posts app: depends on auth, has its own branch conflict + merge
+				create_migration(
+					"posts",
+					"0001_initial",
+					vec![create_table_operation(
+						"posts_post",
+						vec!["id", "title", "author_id"],
+					)],
+					vec![("auth", "0001_initial")],
+				),
+				create_migration(
+					"posts",
+					"0002_add_body",
+					vec![add_column_operation("posts_post", "body")],
+					vec![("posts", "0001_initial")],
+				),
+				create_migration(
+					"posts",
+					"0002_add_slug",
+					vec![add_column_operation("posts_post", "slug")],
+					vec![("posts", "0001_initial")],
+				),
+				create_migration(
+					"posts",
+					"0003_merge",
+					vec![],
+					vec![("posts", "0002_add_body"), ("posts", "0002_add_slug")],
+				),
+			],
+		};
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert
+		assert_eq!(state.models.len(), 2);
+
+		let users = state.find_model_by_table("auth_users").unwrap();
+		assert_eq!(users.fields.len(), 4); // id, name, email, role
+
+		let posts = state.find_model_by_table("posts_post").unwrap();
+		assert_eq!(posts.fields.len(), 5); // id, title, author_id, body, slug
+	}
+}
+
+/// Full-path integration tests using `FilesystemSource` with real migration files on disk.
+///
+/// These tests verify the complete pipeline: write `.rs` migration files to a temp directory,
+/// load them via `FilesystemSource`, and reconstruct `ProjectState` via `build_state_from_files`.
+#[cfg(test)]
+mod filesystem_integration_tests {
+	use super::*;
+	use crate::migrations::FilesystemSource;
+	use rstest::rstest;
+	use tempfile::TempDir;
+
+	/// Helper to write a migration file to the expected directory structure
+	fn write_migration_file(base: &std::path::Path, app: &str, name: &str, content: &str) {
+		let dir = base.join(app);
+		std::fs::create_dir_all(&dir).unwrap();
+		let file_path = dir.join(format!("{}.rs", name));
+		std::fs::write(file_path, content).unwrap();
+	}
+
+	/// Single app with one initial migration file on disk
+	#[rstest]
+	#[tokio::test]
+	async fn test_single_app_initial_migration_from_files() {
+		// Arrange
+		let tmp = TempDir::new().unwrap();
+		write_migration_file(
+			tmp.path(),
+			"todos",
+			"0001_initial",
+			r#"
+use reinhardt_db::migrations::prelude::*;
+
+pub fn migration() -> Migration {
+	Migration {
+		name: "0001_initial".to_string(),
+		app_label: "todos".to_string(),
+		operations: vec![
+			Operation::CreateTable {
+				name: "todos_task".to_string(),
+				columns: vec![
+					ColumnDefinition {
+						name: "id".to_string(),
+						type_definition: FieldType::Serial,
+						not_null: true,
+						primary_key: true,
+						unique: false,
+						auto_increment: true,
+						default: None,
+					},
+					ColumnDefinition {
+						name: "title".to_string(),
+						type_definition: FieldType::VarChar(255),
+						not_null: true,
+						primary_key: false,
+						unique: false,
+						auto_increment: false,
+						default: None,
+					},
+				],
+				constraints: vec![],
+				without_rowid: None,
+				interleave_in_parent: None,
+				partition: None,
+			},
+		],
+		dependencies: vec![],
+		replaces: vec![],
+		atomic: true,
+		initial: Some(true),
+		state_only: false,
+		database_only: false,
+		swappable_dependencies: vec![],
+		optional_dependencies: vec![],
+	}
+}
+
+pub fn dependencies() -> Vec<(String, String)> {
+	vec![]
+}
+
+pub fn atomic() -> bool {
+	true
+}
+
+pub fn replaces() -> Vec<(String, String)> {
+	vec![]
+}
+"#,
+		);
+
+		let source = FilesystemSource::new(tmp.path());
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert
+		assert_eq!(state.models.len(), 1);
+		let model = state.find_model_by_table("todos_task").unwrap();
+		assert!(model.fields.contains_key("id"));
+		assert!(model.fields.contains_key("title"));
+	}
+
+	/// Two apps with cross-app dependency, loaded from disk
+	#[rstest]
+	#[tokio::test]
+	async fn test_cross_app_migrations_from_files() {
+		// Arrange
+		let tmp = TempDir::new().unwrap();
+
+		// auth app: 0001_initial
+		write_migration_file(
+			tmp.path(),
+			"auth",
+			"0001_initial",
+			r#"
+use reinhardt_db::migrations::prelude::*;
+
+pub fn migration() -> Migration {
+	Migration {
+		name: "0001_initial".to_string(),
+		app_label: "auth".to_string(),
+		operations: vec![
+			Operation::CreateTable {
+				name: "auth_users".to_string(),
+				columns: vec![
+					ColumnDefinition {
+						name: "id".to_string(),
+						type_definition: FieldType::Serial,
+						not_null: true,
+						primary_key: true,
+						unique: false,
+						auto_increment: true,
+						default: None,
+					},
+					ColumnDefinition {
+						name: "username".to_string(),
+						type_definition: FieldType::VarChar(150),
+						not_null: true,
+						primary_key: false,
+						unique: true,
+						auto_increment: false,
+						default: None,
+					},
+				],
+				constraints: vec![],
+				without_rowid: None,
+				interleave_in_parent: None,
+				partition: None,
+			},
+		],
+		dependencies: vec![],
+		replaces: vec![],
+		atomic: true,
+		initial: Some(true),
+		state_only: false,
+		database_only: false,
+		swappable_dependencies: vec![],
+		optional_dependencies: vec![],
+	}
+}
+
+pub fn dependencies() -> Vec<(String, String)> {
+	vec![]
+}
+
+pub fn atomic() -> bool {
+	true
+}
+
+pub fn replaces() -> Vec<(String, String)> {
+	vec![]
+}
+"#,
+		);
+
+		// posts app: 0001_initial (depends on auth/0001_initial)
+		write_migration_file(
+			tmp.path(),
+			"posts",
+			"0001_initial",
+			r#"
+use reinhardt_db::migrations::prelude::*;
+
+pub fn migration() -> Migration {
+	Migration {
+		name: "0001_initial".to_string(),
+		app_label: "posts".to_string(),
+		operations: vec![
+			Operation::CreateTable {
+				name: "posts_post".to_string(),
+				columns: vec![
+					ColumnDefinition {
+						name: "id".to_string(),
+						type_definition: FieldType::Serial,
+						not_null: true,
+						primary_key: true,
+						unique: false,
+						auto_increment: true,
+						default: None,
+					},
+					ColumnDefinition {
+						name: "title".to_string(),
+						type_definition: FieldType::VarChar(200),
+						not_null: true,
+						primary_key: false,
+						unique: false,
+						auto_increment: false,
+						default: None,
+					},
+					ColumnDefinition {
+						name: "author_id".to_string(),
+						type_definition: FieldType::Integer,
+						not_null: true,
+						primary_key: false,
+						unique: false,
+						auto_increment: false,
+						default: None,
+					},
+				],
+				constraints: vec![],
+				without_rowid: None,
+				interleave_in_parent: None,
+				partition: None,
+			},
+		],
+		dependencies: vec![
+			("auth".to_string(), "0001_initial".to_string()),
+		],
+		replaces: vec![],
+		atomic: true,
+		initial: Some(true),
+		state_only: false,
+		database_only: false,
+		swappable_dependencies: vec![],
+		optional_dependencies: vec![],
+	}
+}
+
+pub fn dependencies() -> Vec<(String, String)> {
+	vec![
+		("auth".to_string(), "0001_initial".to_string()),
+	]
+}
+
+pub fn atomic() -> bool {
+	true
+}
+
+pub fn replaces() -> Vec<(String, String)> {
+	vec![]
+}
+"#,
+		);
+
+		let source = FilesystemSource::new(tmp.path());
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert
+		assert_eq!(state.models.len(), 2);
+		assert!(state.find_model_by_table("auth_users").is_some());
+		assert!(state.find_model_by_table("posts_post").is_some());
+		let posts_model = state.find_model_by_table("posts_post").unwrap();
+		assert_eq!(posts_model.fields.len(), 3);
+	}
+
+	/// Issue #3199 reproduction: chained migrations with AddColumn from disk
+	#[rstest]
+	#[tokio::test]
+	async fn test_issue_3199_add_column_from_files() {
+		// Arrange
+		let tmp = TempDir::new().unwrap();
+
+		// auth/0001_initial: CreateTable
+		write_migration_file(
+			tmp.path(),
+			"auth",
+			"0001_initial",
+			r#"
+use reinhardt_db::migrations::prelude::*;
+
+pub fn migration() -> Migration {
+	Migration {
+		name: "0001_initial".to_string(),
+		app_label: "auth".to_string(),
+		operations: vec![
+			Operation::CreateTable {
+				name: "auth_users".to_string(),
+				columns: vec![
+					ColumnDefinition {
+						name: "id".to_string(),
+						type_definition: FieldType::Serial,
+						not_null: true,
+						primary_key: true,
+						unique: false,
+						auto_increment: true,
+						default: None,
+					},
+					ColumnDefinition {
+						name: "username".to_string(),
+						type_definition: FieldType::VarChar(150),
+						not_null: true,
+						primary_key: false,
+						unique: true,
+						auto_increment: false,
+						default: None,
+					},
+				],
+				constraints: vec![],
+				without_rowid: None,
+				interleave_in_parent: None,
+				partition: None,
+			},
+		],
+		dependencies: vec![],
+		replaces: vec![],
+		atomic: true,
+		initial: Some(true),
+		state_only: false,
+		database_only: false,
+		swappable_dependencies: vec![],
+		optional_dependencies: vec![],
+	}
+}
+
+pub fn dependencies() -> Vec<(String, String)> {
+	vec![]
+}
+
+pub fn atomic() -> bool {
+	true
+}
+
+pub fn replaces() -> Vec<(String, String)> {
+	vec![]
+}
+"#,
+		);
+
+		// auth/0002_add_names: AddColumn (first_name, last_name)
+		write_migration_file(
+			tmp.path(),
+			"auth",
+			"0002_add_names",
+			r#"
+use reinhardt_db::migrations::prelude::*;
+
+pub fn migration() -> Migration {
+	Migration {
+		name: "0002_add_names".to_string(),
+		app_label: "auth".to_string(),
+		operations: vec![
+			Operation::AddColumn {
+				table: "auth_users".to_string(),
+				column: ColumnDefinition {
+					name: "first_name".to_string(),
+					type_definition: FieldType::VarChar(100),
+					not_null: false,
+					primary_key: false,
+					unique: false,
+					auto_increment: false,
+					default: None,
+				},
+				mysql_options: None,
+			},
+			Operation::AddColumn {
+				table: "auth_users".to_string(),
+				column: ColumnDefinition {
+					name: "last_name".to_string(),
+					type_definition: FieldType::VarChar(100),
+					not_null: false,
+					primary_key: false,
+					unique: false,
+					auto_increment: false,
+					default: None,
+				},
+				mysql_options: None,
+			},
+		],
+		dependencies: vec![
+			("auth".to_string(), "0001_initial".to_string()),
+		],
+		replaces: vec![],
+		atomic: true,
+		initial: None,
+		state_only: false,
+		database_only: false,
+		swappable_dependencies: vec![],
+		optional_dependencies: vec![],
+	}
+}
+
+pub fn dependencies() -> Vec<(String, String)> {
+	vec![
+		("auth".to_string(), "0001_initial".to_string()),
+	]
+}
+
+pub fn atomic() -> bool {
+	true
+}
+
+pub fn replaces() -> Vec<(String, String)> {
+	vec![]
+}
+"#,
+		);
+
+		let source = FilesystemSource::new(tmp.path());
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert: auth_users has all 4 columns (not a duplicate CreateTable)
+		assert_eq!(state.models.len(), 1);
+		let model = state.find_model_by_table("auth_users").unwrap();
+		assert_eq!(model.fields.len(), 4);
+		assert!(model.fields.contains_key("id"));
+		assert!(model.fields.contains_key("username"));
+		assert!(model.fields.contains_key("first_name"));
+		assert!(model.fields.contains_key("last_name"));
+	}
+
+	/// Empty migrations directory returns empty state
+	#[rstest]
+	#[tokio::test]
+	async fn test_empty_directory_returns_empty_state() {
+		// Arrange
+		let tmp = TempDir::new().unwrap();
+		let source = FilesystemSource::new(tmp.path());
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert
+		assert!(state.models.is_empty());
+	}
+
+	/// Merge migration scenario: branch conflict resolved by a merge migration,
+	/// all loaded from real `.rs` files on disk via FilesystemSource.
+	///
+	/// Simulates the --merge workflow:
+	/// 1. 0001_initial: CreateTable with id, username
+	/// 2. 0002_add_email (branch A): AddColumn email
+	/// 3. 0002_add_phone (branch B): AddColumn phone
+	/// 4. 0003_merge: empty operations, depends on both 0002s
+	#[rstest]
+	#[tokio::test]
+	async fn test_merge_migration_from_files() {
+		// Arrange
+		let tmp = TempDir::new().unwrap();
+
+		// 0001_initial
+		write_migration_file(
+			tmp.path(),
+			"contacts",
+			"0001_initial",
+			r#"
+use reinhardt_db::migrations::prelude::*;
+
+pub fn migration() -> Migration {
+	Migration {
+		name: "0001_initial".to_string(),
+		app_label: "contacts".to_string(),
+		operations: vec![
+			Operation::CreateTable {
+				name: "contacts_person".to_string(),
+				columns: vec![
+					ColumnDefinition {
+						name: "id".to_string(),
+						type_definition: FieldType::Serial,
+						not_null: true,
+						primary_key: true,
+						unique: false,
+						auto_increment: true,
+						default: None,
+					},
+					ColumnDefinition {
+						name: "username".to_string(),
+						type_definition: FieldType::VarChar(150),
+						not_null: true,
+						primary_key: false,
+						unique: true,
+						auto_increment: false,
+						default: None,
+					},
+				],
+				constraints: vec![],
+				without_rowid: None,
+				interleave_in_parent: None,
+				partition: None,
+			},
+		],
+		dependencies: vec![],
+		replaces: vec![],
+		atomic: true,
+		initial: Some(true),
+		state_only: false,
+		database_only: false,
+		swappable_dependencies: vec![],
+		optional_dependencies: vec![],
+	}
+}
+
+pub fn dependencies() -> Vec<(String, String)> {
+	vec![]
+}
+
+pub fn atomic() -> bool {
+	true
+}
+
+pub fn replaces() -> Vec<(String, String)> {
+	vec![]
+}
+"#,
+		);
+
+		// 0002_add_email (branch A)
+		write_migration_file(
+			tmp.path(),
+			"contacts",
+			"0002_add_email",
+			r#"
+use reinhardt_db::migrations::prelude::*;
+
+pub fn migration() -> Migration {
+	Migration {
+		name: "0002_add_email".to_string(),
+		app_label: "contacts".to_string(),
+		operations: vec![
+			Operation::AddColumn {
+				table: "contacts_person".to_string(),
+				column: ColumnDefinition {
+					name: "email".to_string(),
+					type_definition: FieldType::VarChar(255),
+					not_null: false,
+					primary_key: false,
+					unique: false,
+					auto_increment: false,
+					default: None,
+				},
+				mysql_options: None,
+			},
+		],
+		dependencies: vec![
+			("contacts".to_string(), "0001_initial".to_string()),
+		],
+		replaces: vec![],
+		atomic: true,
+		initial: None,
+		state_only: false,
+		database_only: false,
+		swappable_dependencies: vec![],
+		optional_dependencies: vec![],
+	}
+}
+
+pub fn dependencies() -> Vec<(String, String)> {
+	vec![
+		("contacts".to_string(), "0001_initial".to_string()),
+	]
+}
+
+pub fn atomic() -> bool {
+	true
+}
+
+pub fn replaces() -> Vec<(String, String)> {
+	vec![]
+}
+"#,
+		);
+
+		// 0002_add_phone (branch B)
+		write_migration_file(
+			tmp.path(),
+			"contacts",
+			"0002_add_phone",
+			r#"
+use reinhardt_db::migrations::prelude::*;
+
+pub fn migration() -> Migration {
+	Migration {
+		name: "0002_add_phone".to_string(),
+		app_label: "contacts".to_string(),
+		operations: vec![
+			Operation::AddColumn {
+				table: "contacts_person".to_string(),
+				column: ColumnDefinition {
+					name: "phone".to_string(),
+					type_definition: FieldType::VarChar(20),
+					not_null: false,
+					primary_key: false,
+					unique: false,
+					auto_increment: false,
+					default: None,
+				},
+				mysql_options: None,
+			},
+		],
+		dependencies: vec![
+			("contacts".to_string(), "0001_initial".to_string()),
+		],
+		replaces: vec![],
+		atomic: true,
+		initial: None,
+		state_only: false,
+		database_only: false,
+		swappable_dependencies: vec![],
+		optional_dependencies: vec![],
+	}
+}
+
+pub fn dependencies() -> Vec<(String, String)> {
+	vec![
+		("contacts".to_string(), "0001_initial".to_string()),
+	]
+}
+
+pub fn atomic() -> bool {
+	true
+}
+
+pub fn replaces() -> Vec<(String, String)> {
+	vec![]
+}
+"#,
+		);
+
+		// 0003_merge: empty operations, depends on both branches
+		write_migration_file(
+			tmp.path(),
+			"contacts",
+			"0003_merge_0002_add_email_0002_add_phone",
+			r#"
+use reinhardt_db::migrations::prelude::*;
+
+pub fn migration() -> Migration {
+	Migration {
+		name: "0003_merge_0002_add_email_0002_add_phone".to_string(),
+		app_label: "contacts".to_string(),
+		operations: vec![],
+		dependencies: vec![
+			("contacts".to_string(), "0002_add_email".to_string()),
+			("contacts".to_string(), "0002_add_phone".to_string()),
+		],
+		replaces: vec![],
+		atomic: true,
+		initial: None,
+		state_only: false,
+		database_only: false,
+		swappable_dependencies: vec![],
+		optional_dependencies: vec![],
+	}
+}
+
+pub fn dependencies() -> Vec<(String, String)> {
+	vec![
+		("contacts".to_string(), "0002_add_email".to_string()),
+		("contacts".to_string(), "0002_add_phone".to_string()),
+	]
+}
+
+pub fn atomic() -> bool {
+	true
+}
+
+pub fn replaces() -> Vec<(String, String)> {
+	vec![]
+}
+"#,
+		);
+
+		let source = FilesystemSource::new(tmp.path());
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert: table has all columns from both branches
+		assert_eq!(state.models.len(), 1);
+		let model = state.find_model_by_table("contacts_person").unwrap();
+		assert_eq!(model.fields.len(), 4); // id, username, email, phone
+		assert!(model.fields.contains_key("id"));
+		assert!(model.fields.contains_key("username"));
+		assert!(model.fields.contains_key("email"));
+		assert!(model.fields.contains_key("phone"));
+	}
+
+	/// Post-merge workflow: merge migration followed by additional migrations,
+	/// loaded from real `.rs` files on disk.
+	#[rstest]
+	#[tokio::test]
+	async fn test_post_merge_migration_from_files() {
+		// Arrange
+		let tmp = TempDir::new().unwrap();
+
+		// 0001_initial
+		write_migration_file(
+			tmp.path(),
+			"auth",
+			"0001_initial",
+			r#"
+use reinhardt_db::migrations::prelude::*;
+
+pub fn migration() -> Migration {
+	Migration {
+		name: "0001_initial".to_string(),
+		app_label: "auth".to_string(),
+		operations: vec![
+			Operation::CreateTable {
+				name: "auth_users".to_string(),
+				columns: vec![
+					ColumnDefinition {
+						name: "id".to_string(),
+						type_definition: FieldType::Serial,
+						not_null: true,
+						primary_key: true,
+						unique: false,
+						auto_increment: true,
+						default: None,
+					},
+					ColumnDefinition {
+						name: "username".to_string(),
+						type_definition: FieldType::VarChar(150),
+						not_null: true,
+						primary_key: false,
+						unique: true,
+						auto_increment: false,
+						default: None,
+					},
+				],
+				constraints: vec![],
+				without_rowid: None,
+				interleave_in_parent: None,
+				partition: None,
+			},
+		],
+		dependencies: vec![],
+		replaces: vec![],
+		atomic: true,
+		initial: Some(true),
+		state_only: false,
+		database_only: false,
+		swappable_dependencies: vec![],
+		optional_dependencies: vec![],
+	}
+}
+
+pub fn dependencies() -> Vec<(String, String)> {
+	vec![]
+}
+
+pub fn atomic() -> bool {
+	true
+}
+
+pub fn replaces() -> Vec<(String, String)> {
+	vec![]
+}
+"#,
+		);
+
+		// 0002_add_email (branch A)
+		write_migration_file(
+			tmp.path(),
+			"auth",
+			"0002_add_email",
+			r#"
+use reinhardt_db::migrations::prelude::*;
+
+pub fn migration() -> Migration {
+	Migration {
+		name: "0002_add_email".to_string(),
+		app_label: "auth".to_string(),
+		operations: vec![
+			Operation::AddColumn {
+				table: "auth_users".to_string(),
+				column: ColumnDefinition {
+					name: "email".to_string(),
+					type_definition: FieldType::VarChar(255),
+					not_null: false,
+					primary_key: false,
+					unique: false,
+					auto_increment: false,
+					default: None,
+				},
+				mysql_options: None,
+			},
+		],
+		dependencies: vec![
+			("auth".to_string(), "0001_initial".to_string()),
+		],
+		replaces: vec![],
+		atomic: true,
+		initial: None,
+		state_only: false,
+		database_only: false,
+		swappable_dependencies: vec![],
+		optional_dependencies: vec![],
+	}
+}
+
+pub fn dependencies() -> Vec<(String, String)> {
+	vec![("auth".to_string(), "0001_initial".to_string())]
+}
+
+pub fn atomic() -> bool {
+	true
+}
+
+pub fn replaces() -> Vec<(String, String)> {
+	vec![]
+}
+"#,
+		);
+
+		// 0002_add_avatar (branch B)
+		write_migration_file(
+			tmp.path(),
+			"auth",
+			"0002_add_avatar",
+			r#"
+use reinhardt_db::migrations::prelude::*;
+
+pub fn migration() -> Migration {
+	Migration {
+		name: "0002_add_avatar".to_string(),
+		app_label: "auth".to_string(),
+		operations: vec![
+			Operation::AddColumn {
+				table: "auth_users".to_string(),
+				column: ColumnDefinition {
+					name: "avatar_url".to_string(),
+					type_definition: FieldType::VarChar(500),
+					not_null: false,
+					primary_key: false,
+					unique: false,
+					auto_increment: false,
+					default: None,
+				},
+				mysql_options: None,
+			},
+		],
+		dependencies: vec![
+			("auth".to_string(), "0001_initial".to_string()),
+		],
+		replaces: vec![],
+		atomic: true,
+		initial: None,
+		state_only: false,
+		database_only: false,
+		swappable_dependencies: vec![],
+		optional_dependencies: vec![],
+	}
+}
+
+pub fn dependencies() -> Vec<(String, String)> {
+	vec![("auth".to_string(), "0001_initial".to_string())]
+}
+
+pub fn atomic() -> bool {
+	true
+}
+
+pub fn replaces() -> Vec<(String, String)> {
+	vec![]
+}
+"#,
+		);
+
+		// 0003_merge
+		write_migration_file(
+			tmp.path(),
+			"auth",
+			"0003_merge",
+			r#"
+use reinhardt_db::migrations::prelude::*;
+
+pub fn migration() -> Migration {
+	Migration {
+		name: "0003_merge".to_string(),
+		app_label: "auth".to_string(),
+		operations: vec![],
+		dependencies: vec![
+			("auth".to_string(), "0002_add_email".to_string()),
+			("auth".to_string(), "0002_add_avatar".to_string()),
+		],
+		replaces: vec![],
+		atomic: true,
+		initial: None,
+		state_only: false,
+		database_only: false,
+		swappable_dependencies: vec![],
+		optional_dependencies: vec![],
+	}
+}
+
+pub fn dependencies() -> Vec<(String, String)> {
+	vec![
+		("auth".to_string(), "0002_add_email".to_string()),
+		("auth".to_string(), "0002_add_avatar".to_string()),
+	]
+}
+
+pub fn atomic() -> bool {
+	true
+}
+
+pub fn replaces() -> Vec<(String, String)> {
+	vec![]
+}
+"#,
+		);
+
+		// 0004_add_bio (post-merge)
+		write_migration_file(
+			tmp.path(),
+			"auth",
+			"0004_add_bio",
+			r#"
+use reinhardt_db::migrations::prelude::*;
+
+pub fn migration() -> Migration {
+	Migration {
+		name: "0004_add_bio".to_string(),
+		app_label: "auth".to_string(),
+		operations: vec![
+			Operation::AddColumn {
+				table: "auth_users".to_string(),
+				column: ColumnDefinition {
+					name: "bio".to_string(),
+					type_definition: FieldType::Text,
+					not_null: false,
+					primary_key: false,
+					unique: false,
+					auto_increment: false,
+					default: None,
+				},
+				mysql_options: None,
+			},
+		],
+		dependencies: vec![
+			("auth".to_string(), "0003_merge".to_string()),
+		],
+		replaces: vec![],
+		atomic: true,
+		initial: None,
+		state_only: false,
+		database_only: false,
+		swappable_dependencies: vec![],
+		optional_dependencies: vec![],
+	}
+}
+
+pub fn dependencies() -> Vec<(String, String)> {
+	vec![("auth".to_string(), "0003_merge".to_string())]
+}
+
+pub fn atomic() -> bool {
+	true
+}
+
+pub fn replaces() -> Vec<(String, String)> {
+	vec![]
+}
+"#,
+		);
+
+		let source = FilesystemSource::new(tmp.path());
+
+		// Act
+		let state = build_state_from_files(&source).await.unwrap();
+
+		// Assert: all columns present including post-merge addition
+		assert_eq!(state.models.len(), 1);
+		let model = state.find_model_by_table("auth_users").unwrap();
+		assert_eq!(model.fields.len(), 5); // id, username, email, avatar_url, bio
+		assert!(model.fields.contains_key("id"));
+		assert!(model.fields.contains_key("username"));
+		assert!(model.fields.contains_key("email"));
+		assert!(model.fields.contains_key("avatar_url"));
+		assert!(model.fields.contains_key("bio"));
 	}
 }

@@ -936,11 +936,12 @@ impl BaseCommand for MakeMigrationsCommand {
 				for migration in generated_migrations {
 					if migration.app_label == app_name.as_str() {
 						// Generate migration name
-						let base_name = migration_name_opt.clone().unwrap_or_else(|| {
-							MigrationNamer::generate_name(&migration.operations, true)
-						});
 						let migration_number =
 							MigrationNumbering::next_number(&migrations_dir, app_name);
+						let is_initial = migration_number == "0001";
+						let base_name = migration_name_opt.clone().unwrap_or_else(|| {
+							MigrationNamer::generate_name(&migration.operations, is_initial)
+						});
 						let final_name = format!("{}_{}", migration_number, base_name);
 
 						// Determine dependencies

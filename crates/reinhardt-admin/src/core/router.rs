@@ -913,8 +913,8 @@ mod tests {
 		let routes = router.get_all_routes();
 		let paths: Vec<&str> = routes.iter().map(|(path, _, _, _)| path.as_str()).collect();
 
-		// Assert - single catch-all route for directory-based serving
-		assert_eq!(routes.len(), 1, "Should have exactly 1 catch-all route");
+		// Assert - catch-all routes for GET and HEAD methods
+		assert_eq!(routes.len(), 2, "Should have exactly 2 catch-all routes (GET + HEAD)");
 		assert!(
 			paths.contains(&"/{*path}"),
 			"Should have catch-all path route, found: {:?}",

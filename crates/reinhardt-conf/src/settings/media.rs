@@ -13,9 +13,19 @@ use std::path::PathBuf;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MediaSettings {
 	/// URL prefix for serving user-uploaded media files (e.g., `"/media/"`).
+	#[serde(default = "default_media_url")]
 	pub url: String,
 	/// Root directory for user-uploaded media files.
+	#[serde(default = "default_media_root")]
 	pub root: PathBuf,
+}
+
+fn default_media_url() -> String {
+	"/media/".to_string()
+}
+
+fn default_media_root() -> PathBuf {
+	PathBuf::from("media")
 }
 
 impl Default for MediaSettings {

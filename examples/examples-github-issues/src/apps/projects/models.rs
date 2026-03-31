@@ -1,7 +1,7 @@
 //! Project and ProjectMember models
 
 use chrono::{DateTime, Utc};
-use reinhardt::core::serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use reinhardt::model;
 use uuid::Uuid;
 
@@ -23,27 +23,27 @@ pub enum ProjectVisibility {
 pub struct Project {
 	/// Primary key
 	#[field(primary_key = true)]
-	id: Uuid,
+	pub id: Uuid,
 
 	/// Project name (unique)
 	#[field(max_length = 255, unique = true)]
-	name: String,
+	pub name: String,
 
 	/// Project description
 	#[field(max_length = 1000)]
-	description: String,
+	pub description: String,
 
 	/// Project visibility (public or private)
 	/// Stored as string: "public" or "private"
 	#[field(max_length = 20, default = "public")]
-	visibility: String,
+	pub visibility: String,
 
 	/// Owner user ID (references User model)
-	owner_id: Uuid,
+	pub owner_id: Uuid,
 
 	/// Creation timestamp
 	#[field(auto_now_add = true)]
-	created_at: DateTime<Utc>,
+	pub created_at: DateTime<Utc>,
 }
 
 /// ProjectMember role levels
@@ -69,20 +69,20 @@ pub enum MemberRole {
 pub struct ProjectMember {
 	/// Primary key
 	#[field(primary_key = true)]
-	id: Uuid,
+	pub id: Uuid,
 
 	/// Project ID (references Project model)
-	project_id: Uuid,
+	pub project_id: Uuid,
 
 	/// User ID (references User model)
-	user_id: Uuid,
+	pub user_id: Uuid,
 
 	/// Member role in the project
 	/// Stored as string: "owner", "maintainer", "member", or "viewer"
 	#[field(max_length = 20, default = "member")]
-	role: String,
+	pub role: String,
 
 	/// Join timestamp
 	#[field(auto_now_add = true)]
-	joined_at: DateTime<Utc>,
+	pub joined_at: DateTime<Utc>,
 }

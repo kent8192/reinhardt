@@ -3,7 +3,7 @@
 //! Data serialization and validation
 
 use reinhardt::Validate;
-use reinhardt::core::serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 /// Article creation request serializer
 #[derive(Serialize, Deserialize, Validate, Debug)]

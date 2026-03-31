@@ -1,7 +1,7 @@
 use json::json;
 use reinhardt::Model;
 use reinhardt::StatusCode;
-use reinhardt::core::serde::Deserialize;
+use serde::Deserialize;
 use reinhardt::core::serde::json;
 use reinhardt::db::orm::{FilterOperator, FilterValue};
 use reinhardt::http::ViewResult;

@@ -2316,6 +2316,42 @@ fn sanitize_database_url(url: &str) -> String {
 	url.to_string()
 }
 
+/// Initialize the ORM database connection from reinhardt-conf settings.
+///
+/// Resolves the database URL via [`get_database_url()`] (reinhardt-conf
+/// settings as primary source, `DATABASE_URL` env var as fallback),
+/// syncs the resolved URL to the `DATABASE_URL` environment variable,
+/// and initializes the ORM global connection pool.
+///
+/// This function does **not** handle DI registration — that remains
+/// the responsibility of `runserver` since only HTTP-serving commands
+/// need the `DatabaseConnection` registered in the DI context.
+///
+/// # Errors
+///
+/// Returns [`CommandError::ExecutionError`] if the database URL cannot
+/// be resolved or the ORM connection pool fails to initialize.
+#[cfg(feature = "reinhardt-db")]
+pub(crate) async fn initialize_orm_database(
+	ctx: &CommandContext,
+) -> Result<(), crate::CommandError> {
+	let env_database_url = std::env::var("DATABASE_URL").ok();
+	let url = get_database_url()?;
+
+	sync_database_url_to_env(env_database_url.as_deref(), &url, ctx);
+
+	reinhardt_db::orm::init_database(&url).await.map_err(|e| {
+		crate::CommandError::ExecutionError(format!("Failed to initialize ORM database: {}", e))
+	})?;
+
+	ctx.verbose("ORM database initialized");
+	ctx.info(&format!(
+		"💾 Database: {} (connected)",
+		sanitize_database_url(&url)
+	));
+	Ok(())
+}
+
 /// Helper function to get DATABASE_URL from environment or settings
 #[cfg(feature = "reinhardt-db")]
 fn get_database_url() -> Result<String, crate::CommandError> {

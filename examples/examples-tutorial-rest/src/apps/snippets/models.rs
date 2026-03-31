@@ -31,13 +31,13 @@ impl Snippet {
 	/// # Example
 	///
 	/// ```no_run
-	/// let snippet = Snippet {
-	///     id: 1,
-	///     title: "Hello World".to_string(),
-	///     code: "fn main() { println!(\"Hello!\"); }".to_string(),
-	///     language: "rust".to_string(),
-	///     created_at: Utc::now(),
-	/// };
+	/// use examples_tutorial_rest::apps::snippets::models::Snippet;
+	///
+	/// let snippet = Snippet::new(
+	///     "Hello World".to_string(),
+	///     "fn main() { println!(\"Hello!\"); }".to_string(),
+	///     "rust".to_string(),
+	/// );
 	/// let html = snippet.highlighted();
 	/// assert!(html.contains("<span"));
 	/// ```

@@ -98,6 +98,8 @@ mysql = ["reinhardt-db?/mysql", "dep:sqlx", "sqlx/mysql"]
 testcontainers = ["dep:reinhardt-test", "reinhardt-test?/testcontainers"]
 plugins = ["dep:reinhardt-dentdelion"]
 auth = ["dep:reinhardt-auth", "reinhardt-auth?/database", "reinhardt-db"]
+admin = []
+pages = []
 full = [
   "migrations",
   "routers",
@@ -116,4 +118,6 @@ full = [
   "testcontainers",
   "plugins",
   "auth",
+  "admin",
+  "pages",
 ]

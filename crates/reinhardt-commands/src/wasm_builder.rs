@@ -347,6 +347,36 @@ pub fn check_wasm_tools_installed() -> Result<(), Vec<String>> {
 	}
 }
 
+/// Check if a Cargo.toml content string declares `cdylib` in `crate-type`.
+///
+/// Parses the `[lib]` section looking for a `crate-type` array that
+/// includes `"cdylib"`. Returns `false` if no `[lib]` section or no
+/// `crate-type` key is found.
+pub fn detect_cdylib_in_cargo_toml_content(content: &str) -> bool {
+	let mut in_lib_section = false;
+	for line in content.lines() {
+		let trimmed = line.trim();
+		if trimmed.starts_with('[') {
+			in_lib_section = trimmed == "[lib]";
+			continue;
+		}
+		if in_lib_section
+			&& trimmed.starts_with("crate-type")
+			&& trimmed.contains("cdylib")
+		{
+			return true;
+		}
+	}
+	false
+}
+
+/// Check if the Cargo.toml at the given path declares `cdylib` in `crate-type`.
+pub fn detect_cdylib_in_cargo_toml(path: &Path) -> bool {
+	std::fs::read_to_string(path)
+		.map(|content| detect_cdylib_in_cargo_toml_content(&content))
+		.unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -372,5 +402,42 @@ mod tests {
 		assert!(config.release);
 		assert!(!config.optimize);
 		assert_eq!(config.target_name, Some("my-app".to_string()));
+	}
+
+	#[test]
+	fn test_detect_cdylib_present() {
+		let content = r#"
+[lib]
+crate-type = ["cdylib", "rlib"]
+"#;
+		assert!(detect_cdylib_in_cargo_toml_content(content));
+	}
+
+	#[test]
+	fn test_detect_cdylib_absent() {
+		let content = r#"
+[lib]
+name = "my_lib"
+"#;
+		assert!(!detect_cdylib_in_cargo_toml_content(content));
+	}
+
+	#[test]
+	fn test_detect_cdylib_only_rlib() {
+		let content = r#"
+[lib]
+crate-type = ["rlib"]
+"#;
+		assert!(!detect_cdylib_in_cargo_toml_content(content));
+	}
+
+	#[test]
+	fn test_detect_cdylib_no_lib_section() {
+		let content = r#"
+[package]
+name = "my-app"
+version = "0.1.0"
+"#;
+		assert!(!detect_cdylib_in_cargo_toml_content(content));
 	}
 }

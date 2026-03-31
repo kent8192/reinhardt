@@ -133,7 +133,7 @@ db.sqlite3
 .worktrees/
 
 # WASM build artifacts
-dist-wasm/
+dist-admin/
 examples/examples-twitter/static/admin/
 
 # Design/planning documents (local only)

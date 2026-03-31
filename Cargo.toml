@@ -82,10 +82,11 @@ admin = [
   "reinhardt-admin/pages",
   "reinhardt-forms",
   "reinhardt-pages",
+  "reinhardt-commands/admin",
 ]
 forms = ["reinhardt-forms"]
 graphql = ["reinhardt-graphql"]
-pages = ["reinhardt-pages"]
+pages = ["reinhardt-pages", "reinhardt-commands/pages"]
 templates = ["reinhardt-pages"]
 # pages + web-sys full features for WASM applications
 pages-web-sys-full = ["pages", "reinhardt-pages/web-sys-full"]

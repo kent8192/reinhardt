@@ -84,6 +84,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
+inventory = { workspace = true }
 tokio = { workspace = true, features = ["fs", "macros", "rt", "sync", "time"]}
 base64 = "0.22"
 sha2 = { workspace = true }

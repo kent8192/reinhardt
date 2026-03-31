@@ -11,6 +11,9 @@ use reinhardt_db::orm::connection::{DatabaseBackend, DatabaseConnection};
 use reinhardt_di::{InjectionContext, SingletonScope};
 use reinhardt_http::AuthState;
 use reinhardt_pages::server_fn::ServerFnRequest;
+use reinhardt_query::prelude::{
+	Alias, ColumnDef, Expr, PostgresQueryBuilder, Query, QueryStatementBuilder,
+};
 use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use reinhardt_urls::routers::ServerRouter;
 use rstest::*;
@@ -328,6 +331,57 @@ impl ModelAdmin for AllPermissionsModelAdmin {
 	}
 }
 
+/// Builds the CREATE TABLE SQL for the standard `test_models` table using SeaQuery.
+fn build_test_models_create_table_sql() -> String {
+	Query::create_table()
+		.table(Alias::new("test_models"))
+		.if_not_exists()
+		.col(
+			ColumnDef::new(Alias::new("id"))
+				.integer()
+				.not_null(true)
+				.auto_increment(true)
+				.primary_key(true),
+		)
+		.col(
+			ColumnDef::new(Alias::new("name"))
+				.string_len(255)
+				.not_null(true),
+		)
+		.col(
+			ColumnDef::new(Alias::new("status"))
+				.string_len(50)
+				.default("active".into()),
+		)
+		.col(ColumnDef::new(Alias::new("description")).text())
+		.col(
+			ColumnDef::new(Alias::new("created_at"))
+				.timestamp_with_time_zone()
+				.default(Expr::current_timestamp().into()),
+		)
+		.to_string(PostgresQueryBuilder::new())
+}
+
+/// Builds the TRUNCATE TABLE SQL for the standard `test_models` table using SeaQuery.
+fn build_test_models_truncate_sql() -> String {
+	Query::truncate_table()
+		.table(Alias::new("test_models"))
+		.restart_identity()
+		.cascade()
+		.to_string(PostgresQueryBuilder::new())
+}
+
+/// Creates the test_models table and truncates any leftover data.
+async fn setup_test_models_table(pool: &sqlx::PgPool) {
+	pool.execute(build_test_models_create_table_sql().as_str())
+		.await
+		.expect("Failed to create test_models table");
+
+	pool.execute(build_test_models_truncate_sql().as_str())
+		.await
+		.expect("Failed to truncate test_models table");
+}
+
 /// Composite fixture providing AdminSite + AdminDatabase + test table for server function tests.
 ///
 /// Creates a real PostgreSQL table with columns (id, name, status, description, created_at)
@@ -339,23 +393,7 @@ pub async fn server_fn_context(
 ) -> (Arc<AdminSite>, Arc<AdminDatabase>) {
 	let (pool, _) = shared_db_pool.await;
 
-	// Create the test_models table
-	pool.execute(
-		"CREATE TABLE IF NOT EXISTS test_models (
-			id SERIAL PRIMARY KEY,
-			name VARCHAR(255) NOT NULL,
-			status VARCHAR(50) DEFAULT 'active',
-			description TEXT,
-			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-		)",
-	)
-	.await
-	.expect("Failed to create test_models table");
-
-	// Truncate any leftover data from previous test runs
-	pool.execute("TRUNCATE TABLE test_models RESTART IDENTITY CASCADE")
-		.await
-		.expect("Failed to truncate test_models table");
+	setup_test_models_table(&pool).await;
 
 	// Create AdminDatabase from the SAME pool
 	let backend = Arc::new(PostgresBackend::new(pool));
@@ -459,27 +497,85 @@ pub async fn view_only_context(
 
 // ==================== E2E Test Infrastructure ====================
 
-/// SQL to create the auth_user table required by `AuthUser<AdminDefaultUser>::inject()`.
+/// Builds the CREATE TABLE SQL for the `auth_user` table using SeaQuery.
 ///
 /// The ORM generates `SELECT * FROM auth_user WHERE id = $1` and deserializes ALL columns
 /// into `AdminDefaultUser`. Every field in the struct must have a matching column.
 /// Note: `user_permissions` and `groups` use `TEXT` (not `TEXT[]`) because the ORM
-/// row-mapping uses JSON deserialization for Vec<String> fields.
-const AUTH_USER_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS auth_user (
-	id UUID PRIMARY KEY,
-	username VARCHAR(150) NOT NULL,
-	email VARCHAR(254) NOT NULL DEFAULT '',
-	first_name VARCHAR(150) NOT NULL DEFAULT '',
-	last_name VARCHAR(150) NOT NULL DEFAULT '',
-	password_hash TEXT,
-	last_login TIMESTAMP WITH TIME ZONE,
-	is_active BOOLEAN NOT NULL DEFAULT TRUE,
-	is_staff BOOLEAN NOT NULL DEFAULT FALSE,
-	is_superuser BOOLEAN NOT NULL DEFAULT FALSE,
-	date_joined TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-	user_permissions TEXT NOT NULL DEFAULT '[]',
-	groups TEXT NOT NULL DEFAULT '[]'
-)";
+/// row-mapping uses JSON deserialization for `Vec<String>` fields.
+fn build_auth_user_create_table_sql() -> String {
+	Query::create_table()
+		.table(Alias::new("auth_user"))
+		.if_not_exists()
+		.col(
+			ColumnDef::new(Alias::new("id"))
+				.uuid()
+				.not_null(true)
+				.primary_key(true),
+		)
+		.col(
+			ColumnDef::new(Alias::new("username"))
+				.string_len(150)
+				.not_null(true),
+		)
+		.col(
+			ColumnDef::new(Alias::new("email"))
+				.string_len(254)
+				.not_null(true)
+				.default("".into()),
+		)
+		.col(
+			ColumnDef::new(Alias::new("first_name"))
+				.string_len(150)
+				.not_null(true)
+				.default("".into()),
+		)
+		.col(
+			ColumnDef::new(Alias::new("last_name"))
+				.string_len(150)
+				.not_null(true)
+				.default("".into()),
+		)
+		.col(ColumnDef::new(Alias::new("password_hash")).text())
+		.col(ColumnDef::new(Alias::new("last_login")).timestamp_with_time_zone())
+		.col(
+			ColumnDef::new(Alias::new("is_active"))
+				.boolean()
+				.not_null(true)
+				.default(true.into()),
+		)
+		.col(
+			ColumnDef::new(Alias::new("is_staff"))
+				.boolean()
+				.not_null(true)
+				.default(false.into()),
+		)
+		.col(
+			ColumnDef::new(Alias::new("is_superuser"))
+				.boolean()
+				.not_null(true)
+				.default(false.into()),
+		)
+		.col(
+			ColumnDef::new(Alias::new("date_joined"))
+				.timestamp_with_time_zone()
+				.not_null(true)
+				.default(Expr::current_timestamp().into()),
+		)
+		.col(
+			ColumnDef::new(Alias::new("user_permissions"))
+				.text()
+				.not_null(true)
+				.default("[]".into()),
+		)
+		.col(
+			ColumnDef::new(Alias::new("groups"))
+				.text()
+				.not_null(true)
+				.default("[]".into()),
+		)
+		.to_string(PostgresQueryBuilder::new())
+}
 
 /// Composite fixture providing a fully-wired `ServerRouter` for E2E tests.
 ///
@@ -500,41 +596,32 @@ pub async fn e2e_router_context(
 	let (pool, _) = shared_db_pool.await;
 
 	// Create test_models table (same as server_fn_context)
-	pool.execute(
-		"CREATE TABLE IF NOT EXISTS test_models (
-			id SERIAL PRIMARY KEY,
-			name VARCHAR(255) NOT NULL,
-			status VARCHAR(50) DEFAULT 'active',
-			description TEXT,
-			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-		)",
-	)
-	.await
-	.expect("Failed to create test_models table");
-
-	pool.execute("TRUNCATE TABLE test_models RESTART IDENTITY CASCADE")
-		.await
-		.expect("Failed to truncate test_models table");
+	setup_test_models_table(&pool).await;
 
 	// Create auth_user table for AuthUser::inject() DB lookup.
 	// DROP and re-create to ensure schema matches AdminDefaultUser fields exactly.
-	pool.execute("DROP TABLE IF EXISTS auth_user CASCADE")
+	let drop_sql = Query::drop_table()
+		.table(Alias::new("auth_user"))
+		.if_exists()
+		.cascade()
+		.to_string(PostgresQueryBuilder::new());
+	pool.execute(drop_sql.as_str())
 		.await
 		.expect("Failed to drop auth_user table");
-	pool.execute(AUTH_USER_TABLE_SQL)
+
+	let create_auth_sql = build_auth_user_create_table_sql();
+	pool.execute(create_auth_sql.as_str())
 		.await
 		.expect("Failed to create auth_user table");
 
 	// Insert test staff user (upsert to avoid conflicts across test runs)
 	pool.execute(
-		sqlx::query(
-			"INSERT INTO auth_user (id, username, email, is_active, is_staff, is_superuser, date_joined)
-			 VALUES ($1, 'test_staff', 'staff@test.example', true, true, false, NOW())
-			 ON CONFLICT (id) DO UPDATE SET is_staff = true, is_active = true",
-		)
-		.bind(
-			Uuid::parse_str(TEST_USER_UUID).expect("Invalid TEST_USER_UUID"),
-		),
+		sqlx::query(&format!(
+			"INSERT INTO auth_user (id, username, email, is_active, is_staff, is_superuser, date_joined) \
+				 VALUES ($1, 'test_staff', 'staff@test.example', true, true, false, NOW()) \
+				 ON CONFLICT (id) DO UPDATE SET is_staff = true, is_active = true"
+		))
+		.bind(Uuid::parse_str(TEST_USER_UUID).expect("Invalid TEST_USER_UUID")),
 	)
 	.await
 	.expect("Failed to insert test staff user");
@@ -745,18 +832,37 @@ pub async fn uuid_pk_context(
 ) -> (Arc<AdminSite>, Arc<AdminDatabase>, sqlx::PgPool) {
 	let (pool, _) = shared_db_pool.await;
 
-	// Create a table with UUID primary key
-	pool.execute(
-		"CREATE TABLE IF NOT EXISTS uuid_test_models (
-			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			name VARCHAR(255) NOT NULL,
-			status VARCHAR(50) DEFAULT 'active'
-		)",
-	)
-	.await
-	.expect("Failed to create uuid_test_models table");
+	// Create a table with UUID primary key using SeaQuery
+	let create_uuid_table_sql = Query::create_table()
+		.table(Alias::new("uuid_test_models"))
+		.if_not_exists()
+		.col(
+			ColumnDef::new(Alias::new("id"))
+				.uuid()
+				.not_null(true)
+				.primary_key(true)
+				.default(Expr::cust("gen_random_uuid()").into()),
+		)
+		.col(
+			ColumnDef::new(Alias::new("name"))
+				.string_len(255)
+				.not_null(true),
+		)
+		.col(
+			ColumnDef::new(Alias::new("status"))
+				.string_len(50)
+				.default("active".into()),
+		)
+		.to_string(PostgresQueryBuilder::new());
+	pool.execute(create_uuid_table_sql.as_str())
+		.await
+		.expect("Failed to create uuid_test_models table");
 
-	pool.execute("TRUNCATE TABLE uuid_test_models CASCADE")
+	let truncate_uuid_sql = Query::truncate_table()
+		.table(Alias::new("uuid_test_models"))
+		.cascade()
+		.to_string(PostgresQueryBuilder::new());
+	pool.execute(truncate_uuid_sql.as_str())
 		.await
 		.expect("Failed to truncate uuid_test_models table");
 
@@ -790,4 +896,224 @@ pub async fn uuid_pk_context(
 		.expect("Failed to register UuidModel");
 
 	(site, db, pool_clone)
+}
+
+// ==================== Permission Denial Test Infrastructure ====================
+
+/// A ModelAdmin implementation that denies ALL permissions.
+///
+/// Used for testing that server functions correctly reject unauthorized operations.
+/// All `has_*_permission` methods return `false`.
+pub struct DenyAllPermissionsModelAdmin {
+	model_name: String,
+	table_name: String,
+	pk_field: String,
+	list_display: Vec<String>,
+	list_filter: Vec<String>,
+	search_fields: Vec<String>,
+}
+
+impl DenyAllPermissionsModelAdmin {
+	/// Creates a new instance configured for the standard test model.
+	pub fn test_model(table_name: &str) -> Self {
+		Self {
+			model_name: "TestModel".to_string(),
+			table_name: table_name.to_string(),
+			pk_field: "id".to_string(),
+			list_display: vec![
+				"id".to_string(),
+				"name".to_string(),
+				"status".to_string(),
+				"created_at".to_string(),
+			],
+			list_filter: vec!["status".to_string()],
+			search_fields: vec!["name".to_string(), "description".to_string()],
+		}
+	}
+}
+
+#[async_trait::async_trait]
+impl ModelAdmin for DenyAllPermissionsModelAdmin {
+	fn model_name(&self) -> &str {
+		&self.model_name
+	}
+
+	fn table_name(&self) -> &str {
+		&self.table_name
+	}
+
+	fn pk_field(&self) -> &str {
+		&self.pk_field
+	}
+
+	fn list_display(&self) -> Vec<&str> {
+		self.list_display.iter().map(|s| s.as_str()).collect()
+	}
+
+	fn list_filter(&self) -> Vec<&str> {
+		self.list_filter.iter().map(|s| s.as_str()).collect()
+	}
+
+	fn search_fields(&self) -> Vec<&str> {
+		self.search_fields.iter().map(|s| s.as_str()).collect()
+	}
+
+	fn fields(&self) -> Option<Vec<&str>> {
+		Some(vec!["id", "name", "status", "description", "created_at"])
+	}
+
+	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
+		false
+	}
+
+	async fn has_add_permission(&self, _user: &dyn AdminUser) -> bool {
+		false
+	}
+
+	async fn has_change_permission(&self, _user: &dyn AdminUser) -> bool {
+		false
+	}
+
+	async fn has_delete_permission(&self, _user: &dyn AdminUser) -> bool {
+		false
+	}
+}
+
+/// A ModelAdmin implementation that grants only view permission.
+///
+/// Used for testing partial permission scenarios where a user can
+/// view/export records but cannot create, update, or delete them.
+pub struct ViewOnlyModelAdmin {
+	model_name: String,
+	table_name: String,
+	pk_field: String,
+	list_display: Vec<String>,
+	list_filter: Vec<String>,
+	search_fields: Vec<String>,
+}
+
+impl ViewOnlyModelAdmin {
+	/// Creates a new instance configured for the standard test model.
+	pub fn test_model(table_name: &str) -> Self {
+		Self {
+			model_name: "TestModel".to_string(),
+			table_name: table_name.to_string(),
+			pk_field: "id".to_string(),
+			list_display: vec![
+				"id".to_string(),
+				"name".to_string(),
+				"status".to_string(),
+				"created_at".to_string(),
+			],
+			list_filter: vec!["status".to_string()],
+			search_fields: vec!["name".to_string(), "description".to_string()],
+		}
+	}
+}
+
+#[async_trait::async_trait]
+impl ModelAdmin for ViewOnlyModelAdmin {
+	fn model_name(&self) -> &str {
+		&self.model_name
+	}
+
+	fn table_name(&self) -> &str {
+		&self.table_name
+	}
+
+	fn pk_field(&self) -> &str {
+		&self.pk_field
+	}
+
+	fn list_display(&self) -> Vec<&str> {
+		self.list_display.iter().map(|s| s.as_str()).collect()
+	}
+
+	fn list_filter(&self) -> Vec<&str> {
+		self.list_filter.iter().map(|s| s.as_str()).collect()
+	}
+
+	fn search_fields(&self) -> Vec<&str> {
+		self.search_fields.iter().map(|s| s.as_str()).collect()
+	}
+
+	fn fields(&self) -> Option<Vec<&str>> {
+		Some(vec!["id", "name", "status", "description", "created_at"])
+	}
+
+	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
+	}
+
+	async fn has_add_permission(&self, _user: &dyn AdminUser) -> bool {
+		false
+	}
+
+	async fn has_change_permission(&self, _user: &dyn AdminUser) -> bool {
+		false
+	}
+
+	async fn has_delete_permission(&self, _user: &dyn AdminUser) -> bool {
+		false
+	}
+}
+
+/// Composite fixture providing AdminSite + AdminDatabase with ALL permissions denied.
+///
+/// Same structure as `server_fn_context` but registers `DenyAllPermissionsModelAdmin`
+/// instead. Used for testing permission rejection at the server function level.
+#[fixture]
+pub async fn server_fn_context_deny_all(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) -> (Arc<AdminSite>, Arc<AdminDatabase>) {
+	let (pool, _) = shared_db_pool.await;
+
+	setup_test_models_table(&pool).await;
+
+	let backend = Arc::new(PostgresBackend::new(pool));
+	let backends_conn = BackendsConnection::new(backend);
+	let connection = DatabaseConnection::new(DatabaseBackend::Postgres, backends_conn);
+	let db = Arc::new(AdminDatabase::new(connection));
+
+	let site = Arc::new(AdminSite::new("Deny All Test Site"));
+	let admin = DenyAllPermissionsModelAdmin::test_model("test_models");
+	site.register("TestModel", admin)
+		.expect("Failed to register TestModel");
+
+	(site, db)
+}
+
+/// Composite fixture providing AdminSite + AdminDatabase with view-only permissions.
+///
+/// Registers `ViewOnlyModelAdmin` that grants only view permission.
+/// Used for testing partial permission scenarios.
+#[fixture]
+pub async fn server_fn_context_view_only(
+	#[future] shared_db_pool: (sqlx::PgPool, String),
+) -> (Arc<AdminSite>, Arc<AdminDatabase>) {
+	let (pool, _) = shared_db_pool.await;
+
+	setup_test_models_table(&pool).await;
+
+	// Seed one record so view tests have data to read
+	let seed_sql = Query::insert()
+		.into_table(Alias::new("test_models"))
+		.columns([Alias::new("name"), Alias::new("status")])
+		.values_panic(["Seeded Record".into(), "active".into()])
+		.to_string(PostgresQueryBuilder::new());
+	pool.execute(seed_sql.as_str())
+		.await
+		.expect("Failed to seed test record");
+
+	let backend = Arc::new(PostgresBackend::new(pool));
+	let backends_conn = BackendsConnection::new(backend);
+	let connection = DatabaseConnection::new(DatabaseBackend::Postgres, backends_conn);
+	let db = Arc::new(AdminDatabase::new(connection));
+
+	let site = Arc::new(AdminSite::new("View Only Test Site"));
+	let admin = ViewOnlyModelAdmin::test_model("test_models");
+	site.register("TestModel", admin)
+		.expect("Failed to register TestModel");
+
+	(site, db)
 }

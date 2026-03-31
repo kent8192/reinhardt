@@ -1096,6 +1096,201 @@ mod tests {
 	}
 
 	// ============================================================
+	// CSRF token uniqueness and entropy tests
+	// ============================================================
+
+	#[rstest]
+	fn test_csrf_token_generation_uniqueness() {
+		// Arrange
+		let mut tokens = std::collections::HashSet::new();
+
+		// Act
+		for _ in 0..100 {
+			let token = generate_csrf_token();
+			tokens.insert(token);
+		}
+
+		// Assert
+		assert_eq!(
+			tokens.len(),
+			100,
+			"All 100 generated CSRF tokens should be unique"
+		);
+	}
+
+	#[rstest]
+	fn test_csrf_token_minimum_entropy() {
+		// Act
+		let token = generate_csrf_token();
+
+		// Assert
+		// CSRF_TOKEN_BYTES is 32, base64 encoding of 32 bytes = 43 chars (URL_SAFE_NO_PAD)
+		assert!(
+			token.len() >= 32,
+			"CSRF token length {} should be at least 32 characters for sufficient entropy",
+			token.len()
+		);
+	}
+
+	// ============================================================
+	// CSRF validation edge case tests
+	// ============================================================
+
+	#[rstest]
+	fn test_csrf_validation_accepts_matching_tokens() {
+		// Arrange
+		let token = generate_csrf_token();
+		let mut headers = hyper::HeaderMap::new();
+		let cookie_value = format!("__csrf_token={}", token);
+		headers.insert("cookie", cookie_value.parse().unwrap());
+
+		// Act
+		let result = require_csrf_token(&token, &headers);
+
+		// Assert
+		assert!(
+			result.is_ok(),
+			"Matching tokens should pass CSRF validation"
+		);
+	}
+
+	#[rstest]
+	fn test_csrf_validation_rejects_empty_token() {
+		// Arrange
+		let cookie_token = generate_csrf_token();
+		let mut headers = hyper::HeaderMap::new();
+		let cookie_value = format!("__csrf_token={}", cookie_token);
+		headers.insert("cookie", cookie_value.parse().unwrap());
+
+		// Act
+		let result = require_csrf_token("", &headers);
+
+		// Assert
+		assert!(result.is_err(), "Empty body token should be rejected");
+		let err = result.unwrap_err();
+		match err {
+			reinhardt_pages::server_fn::ServerFnError::Server { status, .. } => {
+				assert_eq!(status, 403);
+			}
+			other => panic!("Expected Server error with status 403, got: {:?}", other),
+		}
+	}
+
+	#[rstest]
+	fn test_csrf_validation_rejects_whitespace_only_token() {
+		// Arrange
+		let cookie_token = generate_csrf_token();
+		let mut headers = hyper::HeaderMap::new();
+		let cookie_value = format!("__csrf_token={}", cookie_token);
+		headers.insert("cookie", cookie_value.parse().unwrap());
+
+		// Act
+		let result = require_csrf_token("   ", &headers);
+
+		// Assert
+		assert!(
+			result.is_err(),
+			"Whitespace-only body token should be rejected"
+		);
+	}
+
+	// ============================================================
+	// Sanitization additional tests
+	// ============================================================
+
+	#[rstest]
+	fn test_sanitize_html_removes_script_tags() {
+		// Arrange
+		let mut data = HashMap::new();
+		data.insert(
+			"content".to_string(),
+			serde_json::json!("<script>document.cookie</script>"),
+		);
+
+		// Act
+		sanitize_mutation_values(&mut data);
+
+		// Assert
+		let content = data.get("content").unwrap().as_str().unwrap();
+		assert!(
+			!content.contains("<script>"),
+			"Script tags should be escaped, got: {}",
+			content
+		);
+		assert!(
+			content.contains("&lt;script&gt;"),
+			"Script tags should be HTML-escaped, got: {}",
+			content
+		);
+	}
+
+	#[rstest]
+	#[case("hello world", "hello world")]
+	#[case("", "")]
+	#[case(
+		"normal text without special chars",
+		"normal text without special chars"
+	)]
+	fn test_sanitize_html_idempotent_safe_strings(#[case] input: &str, #[case] expected: &str) {
+		// Arrange
+		let mut data = HashMap::new();
+		data.insert("val".to_string(), serde_json::json!(input));
+
+		// Act — first pass
+		sanitize_mutation_values(&mut data);
+		let after_first = data.get("val").unwrap().as_str().unwrap().to_string();
+
+		// Act — second pass on already-sanitized output
+		let mut data2 = HashMap::new();
+		data2.insert("val".to_string(), serde_json::json!(after_first));
+		sanitize_mutation_values(&mut data2);
+		let after_second = data2.get("val").unwrap().as_str().unwrap().to_string();
+
+		// Assert — safe strings are unchanged through both passes
+		assert_eq!(after_first, expected);
+		assert_eq!(after_first, after_second);
+	}
+
+	#[rstest]
+	#[case("<b>bold</b>", "&lt;b&gt;bold&lt;/b&gt;")]
+	#[case("<script>alert(1)</script>", "&lt;script&gt;alert(1)&lt;/script&gt;")]
+	fn test_sanitize_html_escapes_dangerous_input(
+		#[case] input: &str,
+		#[case] expected_escaped: &str,
+	) {
+		// Arrange
+		let mut data = HashMap::new();
+		data.insert("val".to_string(), serde_json::json!(input));
+
+		// Act
+		sanitize_mutation_values(&mut data);
+
+		// Assert
+		let result = data.get("val").unwrap().as_str().unwrap();
+		assert_eq!(result, expected_escaped);
+	}
+
+	// ============================================================
+	// Security headers count test
+	// ============================================================
+
+	#[rstest]
+	fn test_security_headers_count() {
+		// Arrange
+		let headers = SecurityHeaders::default();
+
+		// Act
+		let map = headers.to_header_map();
+
+		// Assert
+		assert_eq!(
+			map.len(),
+			6,
+			"SecurityHeaders should produce exactly 6 headers: CSP, X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy"
+		);
+	}
+
+	// ============================================================
 	// FrameOptions from_str tests
 	// ============================================================
 

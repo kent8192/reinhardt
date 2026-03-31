@@ -474,10 +474,8 @@ impl SchemaDiff {
 
 		// Alter columns (type changes, nullability changes, etc.)
 		for (table_name, col_name, old_col, new_col) in &diff.columns_to_modify {
-			let old_unique =
-				Self::column_has_unique(&self.current_schema, table_name, col_name);
-			let new_unique =
-				Self::column_has_unique(&self.target_schema, table_name, col_name);
+			let old_unique = Self::column_has_unique(&self.current_schema, table_name, col_name);
+			let new_unique = Self::column_has_unique(&self.target_schema, table_name, col_name);
 
 			operations.push(Operation::AlterColumn {
 				table: table_name.clone(),
@@ -558,11 +556,7 @@ impl SchemaDiff {
 	}
 
 	/// Check if a column has a unique constraint or index in a given schema
-	fn column_has_unique(
-		schema: &DatabaseSchema,
-		table_name: &str,
-		column_name: &str,
-	) -> bool {
+	fn column_has_unique(schema: &DatabaseSchema, table_name: &str, column_name: &str) -> bool {
 		let table_schema = match schema.tables.get(table_name) {
 			Some(t) => t,
 			None => return false,
@@ -920,10 +914,13 @@ mod tests {
 		let mut target = DatabaseSchema::default();
 		target.tables.insert(
 			"users".to_string(),
-			table_with_cols("users", vec![
-				("id", pk_col("id")),
-				("name", col("name", FieldType::VarChar(100), false)),
-			]),
+			table_with_cols(
+				"users",
+				vec![
+					("id", pk_col("id")),
+					("name", col("name", FieldType::VarChar(100), false)),
+				],
+			),
 		);
 
 		// Act
@@ -971,10 +968,13 @@ mod tests {
 		let mut target = DatabaseSchema::default();
 		target.tables.insert(
 			"users".to_string(),
-			table_with_cols("users", vec![
-				("id", pk_col("id")),
-				("email", col("email", FieldType::VarChar(255), false)),
-			]),
+			table_with_cols(
+				"users",
+				vec![
+					("id", pk_col("id")),
+					("email", col("email", FieldType::VarChar(255), false)),
+				],
+			),
 		);
 
 		// Act
@@ -996,10 +996,13 @@ mod tests {
 		let mut current = DatabaseSchema::default();
 		current.tables.insert(
 			"users".to_string(),
-			table_with_cols("users", vec![
-				("id", pk_col("id")),
-				("bio", col("bio", FieldType::Text, true)),
-			]),
+			table_with_cols(
+				"users",
+				vec![
+					("id", pk_col("id")),
+					("bio", col("bio", FieldType::Text, true)),
+				],
+			),
 		);
 		let mut target = DatabaseSchema::default();
 		target.tables.insert(
@@ -1026,18 +1029,24 @@ mod tests {
 		let mut current = DatabaseSchema::default();
 		current.tables.insert(
 			"items".to_string(),
-			table_with_cols("items", vec![
-				("id", pk_col("id")),
-				("price", col("price", FieldType::Integer, false)),
-			]),
+			table_with_cols(
+				"items",
+				vec![
+					("id", pk_col("id")),
+					("price", col("price", FieldType::Integer, false)),
+				],
+			),
 		);
 		let mut target = DatabaseSchema::default();
 		target.tables.insert(
 			"items".to_string(),
-			table_with_cols("items", vec![
-				("id", pk_col("id")),
-				("price", col("price", FieldType::Float, false)),
-			]),
+			table_with_cols(
+				"items",
+				vec![
+					("id", pk_col("id")),
+					("price", col("price", FieldType::Float, false)),
+				],
+			),
 		);
 
 		// Act
@@ -1077,18 +1086,24 @@ mod tests {
 		let mut current = DatabaseSchema::default();
 		current.tables.insert(
 			"users".to_string(),
-			table_with_cols("users", vec![
-				("id", pk_col("id")),
-				("email", col("email", FieldType::VarChar(255), true)),
-			]),
+			table_with_cols(
+				"users",
+				vec![
+					("id", pk_col("id")),
+					("email", col("email", FieldType::VarChar(255), true)),
+				],
+			),
 		);
 		let mut target = DatabaseSchema::default();
 		target.tables.insert(
 			"users".to_string(),
-			table_with_cols("users", vec![
-				("id", pk_col("id")),
-				("email", col("email", FieldType::VarChar(255), false)),
-			]),
+			table_with_cols(
+				"users",
+				vec![
+					("id", pk_col("id")),
+					("email", col("email", FieldType::VarChar(255), false)),
+				],
+			),
 		);
 
 		// Act
@@ -1126,24 +1141,28 @@ mod tests {
 		let mut current = DatabaseSchema::default();
 		current.tables.insert(
 			"users".to_string(),
-			table_with_cols("users", vec![
-				("id", pk_col("id")),
-				("email", col("email", FieldType::VarChar(255), false)),
-			]),
+			table_with_cols(
+				"users",
+				vec![
+					("id", pk_col("id")),
+					("email", col("email", FieldType::VarChar(255), false)),
+				],
+			),
 		);
 		let mut target = DatabaseSchema::default();
-		let mut target_table = table_with_cols("users", vec![
-			("id", pk_col("id")),
-			("email", col("email", FieldType::VarChar(255), false)),
-		]);
+		let mut target_table = table_with_cols(
+			"users",
+			vec![
+				("id", pk_col("id")),
+				("email", col("email", FieldType::VarChar(255), false)),
+			],
+		);
 		target_table.indexes.push(IndexSchema {
 			name: "idx_users_email".to_string(),
 			columns: vec!["email".to_string()],
 			unique: true,
 		});
-		target
-			.tables
-			.insert("users".to_string(), target_table);
+		target.tables.insert("users".to_string(), target_table);
 
 		// Act
 		let diff = SchemaDiff::new(current, target);
@@ -1170,26 +1189,30 @@ mod tests {
 	fn test_generate_operations_drop_index() {
 		// Arrange
 		let mut current = DatabaseSchema::default();
-		let mut current_table = table_with_cols("users", vec![
-			("id", pk_col("id")),
-			("email", col("email", FieldType::VarChar(255), false)),
-		]);
+		let mut current_table = table_with_cols(
+			"users",
+			vec![
+				("id", pk_col("id")),
+				("email", col("email", FieldType::VarChar(255), false)),
+			],
+		);
 		current_table.indexes.push(IndexSchema {
 			name: "idx_users_email".to_string(),
 			columns: vec!["email".to_string()],
 			unique: false,
 		});
-		current
-			.tables
-			.insert("users".to_string(), current_table);
+		current.tables.insert("users".to_string(), current_table);
 
 		let mut target = DatabaseSchema::default();
 		target.tables.insert(
 			"users".to_string(),
-			table_with_cols("users", vec![
-				("id", pk_col("id")),
-				("email", col("email", FieldType::VarChar(255), false)),
-			]),
+			table_with_cols(
+				"users",
+				vec![
+					("id", pk_col("id")),
+					("email", col("email", FieldType::VarChar(255), false)),
+				],
+			),
 		);
 
 		// Act
@@ -1221,7 +1244,10 @@ mod tests {
 		let ops = diff.generate_operations();
 
 		// Assert
-		assert!(ops.is_empty(), "Identical schemas should produce no operations");
+		assert!(
+			ops.is_empty(),
+			"Identical schemas should produce no operations"
+		);
 	}
 
 	#[test]
@@ -1234,9 +1260,7 @@ mod tests {
 			columns: vec!["email".to_string()],
 			unique: false,
 		});
-		current
-			.tables
-			.insert("users".to_string(), current_table);
+		current.tables.insert("users".to_string(), current_table);
 
 		let mut target = DatabaseSchema::default();
 		target.tables.insert(
@@ -1258,18 +1282,24 @@ mod tests {
 		let mut current = DatabaseSchema::default();
 		current.tables.insert(
 			"items".to_string(),
-			table_with_cols("items", vec![
-				("id", pk_col("id")),
-				("price", col("price", FieldType::Integer, false)),
-			]),
+			table_with_cols(
+				"items",
+				vec![
+					("id", pk_col("id")),
+					("price", col("price", FieldType::Integer, false)),
+				],
+			),
 		);
 		let mut target = DatabaseSchema::default();
 		target.tables.insert(
 			"items".to_string(),
-			table_with_cols("items", vec![
-				("id", pk_col("id")),
-				("price", col("price", FieldType::Float, false)),
-			]),
+			table_with_cols(
+				"items",
+				vec![
+					("id", pk_col("id")),
+					("price", col("price", FieldType::Float, false)),
+				],
+			),
 		);
 
 		// Act & Assert
@@ -1285,10 +1315,13 @@ mod tests {
 		// Arrange: new table with an index should generate both CreateTable and CreateIndex
 		let current = DatabaseSchema::default();
 		let mut target = DatabaseSchema::default();
-		let mut table = table_with_cols("users", vec![
-			("id", pk_col("id")),
-			("email", col("email", FieldType::VarChar(255), false)),
-		]);
+		let mut table = table_with_cols(
+			"users",
+			vec![
+				("id", pk_col("id")),
+				("email", col("email", FieldType::VarChar(255), false)),
+			],
+		);
 		table.indexes.push(IndexSchema {
 			name: "idx_users_email".to_string(),
 			columns: vec!["email".to_string()],
@@ -1336,12 +1369,7 @@ mod tests {
 		}
 	}
 
-	fn fk_constraint(
-		name: &str,
-		col: &str,
-		ref_table: &str,
-		ref_col: &str,
-	) -> ConstraintSchema {
+	fn fk_constraint(name: &str, col: &str, ref_table: &str, ref_col: &str) -> ConstraintSchema {
 		ConstraintSchema {
 			name: name.to_string(),
 			constraint_type: "FOREIGN KEY".to_string(),
@@ -1362,23 +1390,27 @@ mod tests {
 		let mut current = DatabaseSchema::default();
 		current.tables.insert(
 			"orders".to_string(),
-			table_with_cols("orders", vec![
-				("id", pk_col("id")),
-				("amount", col("amount", FieldType::Integer, false)),
-			]),
+			table_with_cols(
+				"orders",
+				vec![
+					("id", pk_col("id")),
+					("amount", col("amount", FieldType::Integer, false)),
+				],
+			),
 		);
 
 		let mut target = DatabaseSchema::default();
-		let mut target_table = table_with_cols("orders", vec![
-			("id", pk_col("id")),
-			("amount", col("amount", FieldType::Integer, false)),
-		]);
+		let mut target_table = table_with_cols(
+			"orders",
+			vec![
+				("id", pk_col("id")),
+				("amount", col("amount", FieldType::Integer, false)),
+			],
+		);
 		target_table
 			.constraints
 			.push(check_constraint("ck_amount_positive", "amount > 0"));
-		target
-			.tables
-			.insert("orders".to_string(), target_table);
+		target.tables.insert("orders".to_string(), target_table);
 
 		// Act
 		let diff = SchemaDiff::new(current, target);
@@ -1395,24 +1427,28 @@ mod tests {
 	fn test_detect_constraint_removal() {
 		// Arrange
 		let mut current = DatabaseSchema::default();
-		let mut current_table = table_with_cols("orders", vec![
-			("id", pk_col("id")),
-			("amount", col("amount", FieldType::Integer, false)),
-		]);
+		let mut current_table = table_with_cols(
+			"orders",
+			vec![
+				("id", pk_col("id")),
+				("amount", col("amount", FieldType::Integer, false)),
+			],
+		);
 		current_table
 			.constraints
 			.push(check_constraint("ck_amount_positive", "amount > 0"));
-		current
-			.tables
-			.insert("orders".to_string(), current_table);
+		current.tables.insert("orders".to_string(), current_table);
 
 		let mut target = DatabaseSchema::default();
 		target.tables.insert(
 			"orders".to_string(),
-			table_with_cols("orders", vec![
-				("id", pk_col("id")),
-				("amount", col("amount", FieldType::Integer, false)),
-			]),
+			table_with_cols(
+				"orders",
+				vec![
+					("id", pk_col("id")),
+					("amount", col("amount", FieldType::Integer, false)),
+				],
+			),
 		);
 
 		// Act
@@ -1429,28 +1465,30 @@ mod tests {
 	fn test_detect_constraint_modification() {
 		// Arrange: changing CHECK expression is detected as remove old + add new
 		let mut current = DatabaseSchema::default();
-		let mut current_table = table_with_cols("orders", vec![
-			("id", pk_col("id")),
-			("amount", col("amount", FieldType::Integer, false)),
-		]);
+		let mut current_table = table_with_cols(
+			"orders",
+			vec![
+				("id", pk_col("id")),
+				("amount", col("amount", FieldType::Integer, false)),
+			],
+		);
 		current_table
 			.constraints
 			.push(check_constraint("ck_amount", "amount > 0"));
-		current
-			.tables
-			.insert("orders".to_string(), current_table);
+		current.tables.insert("orders".to_string(), current_table);
 
 		let mut target = DatabaseSchema::default();
-		let mut target_table = table_with_cols("orders", vec![
-			("id", pk_col("id")),
-			("amount", col("amount", FieldType::Integer, false)),
-		]);
+		let mut target_table = table_with_cols(
+			"orders",
+			vec![
+				("id", pk_col("id")),
+				("amount", col("amount", FieldType::Integer, false)),
+			],
+		);
 		target_table
 			.constraints
 			.push(check_constraint("ck_amount", "amount >= 0"));
-		target
-			.tables
-			.insert("orders".to_string(), target_table);
+		target.tables.insert("orders".to_string(), target_table);
 
 		// Act
 		let diff = SchemaDiff::new(current, target);
@@ -1459,14 +1497,8 @@ mod tests {
 		// Assert: old constraint removed, new added (same name, different definition)
 		assert_eq!(result.constraints_to_remove.len(), 1);
 		assert_eq!(result.constraints_to_add.len(), 1);
-		assert_eq!(
-			result.constraints_to_remove[0].1.definition,
-			"amount > 0"
-		);
-		assert_eq!(
-			result.constraints_to_add[0].1.definition,
-			"amount >= 0"
-		);
+		assert_eq!(result.constraints_to_remove[0].1.definition, "amount > 0");
+		assert_eq!(result.constraints_to_add[0].1.definition, "amount >= 0");
 	}
 
 	#[test]
@@ -1475,23 +1507,27 @@ mod tests {
 		let mut current = DatabaseSchema::default();
 		current.tables.insert(
 			"orders".to_string(),
-			table_with_cols("orders", vec![
-				("id", pk_col("id")),
-				("amount", col("amount", FieldType::Integer, false)),
-			]),
+			table_with_cols(
+				"orders",
+				vec![
+					("id", pk_col("id")),
+					("amount", col("amount", FieldType::Integer, false)),
+				],
+			),
 		);
 
 		let mut target = DatabaseSchema::default();
-		let mut target_table = table_with_cols("orders", vec![
-			("id", pk_col("id")),
-			("amount", col("amount", FieldType::Integer, false)),
-		]);
+		let mut target_table = table_with_cols(
+			"orders",
+			vec![
+				("id", pk_col("id")),
+				("amount", col("amount", FieldType::Integer, false)),
+			],
+		);
 		target_table
 			.constraints
 			.push(check_constraint("ck_amount_positive", "amount > 0"));
-		target
-			.tables
-			.insert("orders".to_string(), target_table);
+		target.tables.insert("orders".to_string(), target_table);
 
 		// Act
 		let diff = SchemaDiff::new(current, target);
@@ -1529,24 +1565,28 @@ mod tests {
 	fn test_generate_operations_drop_constraint() {
 		// Arrange
 		let mut current = DatabaseSchema::default();
-		let mut current_table = table_with_cols("orders", vec![
-			("id", pk_col("id")),
-			("amount", col("amount", FieldType::Integer, false)),
-		]);
+		let mut current_table = table_with_cols(
+			"orders",
+			vec![
+				("id", pk_col("id")),
+				("amount", col("amount", FieldType::Integer, false)),
+			],
+		);
 		current_table
 			.constraints
 			.push(unique_constraint("uq_orders_amount", "amount"));
-		current
-			.tables
-			.insert("orders".to_string(), current_table);
+		current.tables.insert("orders".to_string(), current_table);
 
 		let mut target = DatabaseSchema::default();
 		target.tables.insert(
 			"orders".to_string(),
-			table_with_cols("orders", vec![
-				("id", pk_col("id")),
-				("amount", col("amount", FieldType::Integer, false)),
-			]),
+			table_with_cols(
+				"orders",
+				vec![
+					("id", pk_col("id")),
+					("amount", col("amount", FieldType::Integer, false)),
+				],
+			),
 		);
 
 		// Act
@@ -1573,23 +1613,27 @@ mod tests {
 		let mut current = DatabaseSchema::default();
 		current.tables.insert(
 			"users".to_string(),
-			table_with_cols("users", vec![
-				("id", pk_col("id")),
-				("email", col("email", FieldType::VarChar(255), false)),
-			]),
+			table_with_cols(
+				"users",
+				vec![
+					("id", pk_col("id")),
+					("email", col("email", FieldType::VarChar(255), false)),
+				],
+			),
 		);
 
 		let mut target = DatabaseSchema::default();
-		let mut target_table = table_with_cols("users", vec![
-			("id", pk_col("id")),
-			("email", col("email", FieldType::VarChar(255), false)),
-		]);
+		let mut target_table = table_with_cols(
+			"users",
+			vec![
+				("id", pk_col("id")),
+				("email", col("email", FieldType::VarChar(255), false)),
+			],
+		);
 		target_table
 			.constraints
 			.push(unique_constraint("uq_users_email", "email"));
-		target
-			.tables
-			.insert("users".to_string(), target_table);
+		target.tables.insert("users".to_string(), target_table);
 
 		// Act
 		let diff = SchemaDiff::new(current, target);
@@ -1616,23 +1660,27 @@ mod tests {
 		let mut current = DatabaseSchema::default();
 		current.tables.insert(
 			"orders".to_string(),
-			table_with_cols("orders", vec![
-				("id", pk_col("id")),
-				("user_id", col("user_id", FieldType::Integer, false)),
-			]),
+			table_with_cols(
+				"orders",
+				vec![
+					("id", pk_col("id")),
+					("user_id", col("user_id", FieldType::Integer, false)),
+				],
+			),
 		);
 
 		let mut target = DatabaseSchema::default();
-		let mut target_table = table_with_cols("orders", vec![
-			("id", pk_col("id")),
-			("user_id", col("user_id", FieldType::Integer, false)),
-		]);
+		let mut target_table = table_with_cols(
+			"orders",
+			vec![
+				("id", pk_col("id")),
+				("user_id", col("user_id", FieldType::Integer, false)),
+			],
+		);
 		target_table
 			.constraints
 			.push(fk_constraint("fk_orders_user", "user_id", "users", "id"));
-		target
-			.tables
-			.insert("orders".to_string(), target_table);
+		target.tables.insert("orders".to_string(), target_table);
 
 		// Act
 		let diff = SchemaDiff::new(current, target);
@@ -1666,9 +1714,7 @@ mod tests {
 		current_table
 			.constraints
 			.push(check_constraint("ck_test", "id > 0"));
-		current
-			.tables
-			.insert("orders".to_string(), current_table);
+		current.tables.insert("orders".to_string(), current_table);
 
 		let mut target = DatabaseSchema::default();
 		target.tables.insert(
@@ -1692,16 +1738,12 @@ mod tests {
 		let mut current = DatabaseSchema::default();
 		let mut current_table = table_with_cols("orders", vec![("id", pk_col("id"))]);
 		current_table.constraints.push(constraint.clone());
-		current
-			.tables
-			.insert("orders".to_string(), current_table);
+		current.tables.insert("orders".to_string(), current_table);
 
 		let mut target = DatabaseSchema::default();
 		let mut target_table = table_with_cols("orders", vec![("id", pk_col("id"))]);
 		target_table.constraints.push(constraint);
-		target
-			.tables
-			.insert("orders".to_string(), target_table);
+		target.tables.insert("orders".to_string(), target_table);
 
 		// Act
 		let diff = SchemaDiff::new(current, target);

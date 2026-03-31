@@ -7,13 +7,14 @@
 //! in `admin_routes_with_di()`. On wasm32 targets, only the namespaced router is returned
 //! (server function registration is server-side only).
 
+use std::sync::Arc;
+
 use reinhardt_di::SingletonScope;
 #[cfg(not(target_arch = "wasm32"))]
 use reinhardt_pages::server_fn::ServerFnRouterExt;
 use reinhardt_urls::routers::ServerRouter;
 
 use crate::core::AdminSite;
-use std::sync::Arc;
 
 /// Resolves the directory containing WASM build artifacts.
 ///
@@ -80,7 +81,7 @@ async fn admin_spa_handler(
 	for (name, value) in security_headers.to_header_map() {
 		response = response.with_header(name, &value);
 	}
-	Ok(response.with_body(admin_spa_html()))
+	Ok(response.with_body(admin_spa_html(&settings.site_title)))
 }
 
 /// Resolves an admin static file path to its final URL.
@@ -102,15 +103,15 @@ fn resolve_admin_static(path: &str) -> String {
 ///
 /// All static file URLs are resolved via [`resolve_admin_static`], which
 /// integrates with the collectstatic manifest for cache-busted filenames
-/// in production. CSS dependencies (Open Props, Animate.css, UnoCSS) are
-/// served from local vendor/ directory instead of external CDNs to satisfy
-/// CSP and eliminate external network dependencies.
+/// in production. CSS dependencies (Open Props, Animate.css) and the UnoCSS
+/// runtime engine are served from local vendor/ directory instead of external
+/// CDNs to satisfy CSP and eliminate external network dependencies.
 #[cfg(not(target_arch = "wasm32"))]
-fn admin_spa_html() -> String {
+fn admin_spa_html(site_title: &str) -> String {
 	let css_url = resolve_admin_static("style.css");
 	let vendor_open_props = resolve_admin_static("vendor/open-props.min.css");
 	let vendor_animate = resolve_admin_static("vendor/animate.min.css");
-	let vendor_unocss = resolve_admin_static("vendor/unocss.generated.css");
+	let vendor_unocss_runtime = resolve_admin_static("vendor/unocss-runtime.js");
 	let wasm_built = is_wasm_built();
 	let js_url = if wasm_built {
 		resolve_admin_static("reinhardt_admin.js")
@@ -135,11 +136,11 @@ fn admin_spa_html() -> String {
 	<meta charset="utf-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 	<meta name="server-fn-prefix" content="/admin" />
-	<title>Reinhardt Admin</title>
+	<title>{site_title}</title>
 	<link rel="stylesheet" href="{vendor_open_props}" />
 	<link rel="stylesheet" href="{vendor_animate}" />
-	<link rel="stylesheet" href="{vendor_unocss}" />
 	<link rel="stylesheet" href="{css_url}" />
+	<script src="{vendor_unocss_runtime}"></script>
 </head>
 <body class="bg-slate-50 text-slate-900 antialiased">
 	<div id="app"></div>
@@ -620,6 +621,9 @@ mod tests {
 	use super::*;
 	use rstest::rstest;
 
+	/// Embedded admin JavaScript file for test assertions.
+	const ADMIN_JS: &[u8] = include_bytes!("../../assets/main.js");
+
 	/// Helper to create test admin router
 	fn test_admin_routes() -> ServerRouter {
 		build_admin_router()
@@ -819,7 +823,7 @@ mod tests {
 	#[rstest]
 	fn test_admin_spa_html_contains_mount_point() {
 		// Arrange & Act
-		let html = admin_spa_html();
+		let html = admin_spa_html("Reinhardt Admin");
 
 		// Assert
 		assert!(
@@ -842,27 +846,40 @@ mod tests {
 
 	#[cfg(not(target_arch = "wasm32"))]
 	#[rstest]
-	fn test_admin_spa_html_references_css_and_js() {
+	fn test_admin_spa_html_references_css_and_js_entry_point() {
 		// Arrange & Act
-		let html = admin_spa_html();
+		let html = admin_spa_html("Reinhardt Admin");
+		let wasm_built = is_wasm_built();
 
-		// Assert - URLs are resolved via resolve_admin_static, which falls back
-		// to /static/ prefix when the resolver is not initialized (test env)
+		// Assert - CSS reference (URLs resolved via resolve_admin_static,
+		// which falls back to /static/ prefix when resolver is not initialized)
 		assert!(
 			html.contains("style.css"),
 			"HTML should reference admin CSS"
 		);
-		assert!(
-			html.contains("main.js") || html.contains("reinhardt_admin.js"),
-			"HTML should reference admin JS (placeholder or WASM)"
-		);
+		// Assert - JS reference depends on whether WASM has been built (#3115)
+		if wasm_built {
+			assert!(
+				html.contains("/static/admin/reinhardt_admin.js"),
+				"HTML should reference WASM entry point (reinhardt_admin.js) \
+				 when WASM is built. Got:\n{}",
+				html
+			);
+		} else {
+			assert!(
+				html.contains("/static/admin/main.js"),
+				"HTML should reference placeholder (main.js) \
+				 when WASM is not built. Got:\n{}",
+				html
+			);
+		}
 	}
 
 	#[cfg(not(target_arch = "wasm32"))]
 	#[rstest]
 	fn test_admin_spa_html_no_external_cdn_urls() {
 		// Arrange
-		let html = admin_spa_html();
+		let html = admin_spa_html("Reinhardt Admin");
 
 		// Assert — no external CDN references
 		assert!(
@@ -883,7 +900,7 @@ mod tests {
 	#[rstest]
 	fn test_admin_spa_html_references_vendor_assets() {
 		// Arrange
-		let html = admin_spa_html();
+		let html = admin_spa_html("Reinhardt Admin");
 
 		// Assert — local vendor assets are referenced
 		assert!(
@@ -895,8 +912,8 @@ mod tests {
 			"HTML should reference local Animate.css"
 		);
 		assert!(
-			html.contains("vendor/unocss"),
-			"HTML should reference local UnoCSS generated CSS"
+			html.contains("vendor/unocss-runtime"),
+			"HTML should reference local UnoCSS runtime JS"
 		);
 	}
 
@@ -904,12 +921,29 @@ mod tests {
 	#[rstest]
 	fn test_admin_spa_html_no_inline_script() {
 		// Arrange
-		let html = admin_spa_html();
+		let html = admin_spa_html("Reinhardt Admin");
 
 		// Assert — no UnoCSS runtime inline script
 		assert!(
 			!html.contains("__unocss_runtime"),
 			"HTML should not contain UnoCSS runtime initialization"
+		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_embedded_admin_js_is_valid_utf8_and_nonempty() {
+		// Arrange
+		let js = std::str::from_utf8(ADMIN_JS).expect("JS should be valid UTF-8");
+
+		// Assert - JS must not be empty
+		assert!(!js.is_empty(), "Embedded admin JS should not be empty");
+		// Assert - JS must contain executable code (either WASM bootstrap
+		// or placeholder shell) (#3115)
+		assert!(
+			js.contains("function") || js.contains("init(") || js.contains("wasm_bindgen"),
+			"Embedded JS should contain executable code. First 200 chars:\n{}",
+			&js[..js.len().min(200)]
 		);
 	}
 
@@ -1095,13 +1129,33 @@ mod tests {
 		// Arrange - CI environment has no dist-admin/ directory
 
 		// Act
-		let html = admin_spa_html();
+		let html = admin_spa_html("Reinhardt Admin");
 
 		// Assert - should use placeholder main.js when WASM is not built
 		assert!(
 			html.contains("/static/admin/main.js")
 				|| html.contains("/static/admin/reinhardt_admin.js"),
 			"HTML should reference either main.js or reinhardt_admin.js"
+		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_admin_spa_html_uses_configured_site_title() {
+		// Arrange
+		let custom_title = "My Custom Admin";
+
+		// Act
+		let html = admin_spa_html(custom_title);
+
+		// Assert
+		assert!(
+			html.contains("<title>My Custom Admin</title>"),
+			"HTML <title> should reflect the configured site_title"
+		);
+		assert!(
+			!html.contains("<title>Reinhardt Admin</title>"),
+			"HTML should not contain the hardcoded default title"
 		);
 	}
 
@@ -1193,6 +1247,86 @@ mod tests {
 			set_cookie.contains("Path=/admin"),
 			"Cookie should be scoped to /admin, got: {}",
 			set_cookie
+		);
+	}
+
+	// ==================== Spec-based tests for #3115 ====================
+
+	/// Verify static routes serve the WASM binary file.
+	/// The admin SPA is a WASM application; its binary must be
+	/// served alongside JS and CSS (#3115).
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_admin_static_routes_serves_wasm_binary() {
+		// Arrange & Act
+		let router = admin_static_routes();
+		let routes = router.get_all_routes();
+		let paths: Vec<&str> = routes.iter().map(|(path, _, _, _)| path.as_str()).collect();
+
+		// Assert - catch-all route must exist to serve WASM binaries at runtime
+		assert!(
+			paths.iter().any(|p| p.contains("{*path}")),
+			"Admin static routes must have a catch-all route to serve WASM files. \
+			 Found routes: {:?}",
+			paths
+		);
+	}
+
+	/// Verify the embedded admin JS is not a placeholder stub when WASM
+	/// has been built. Requires `dist-wasm/reinhardt_admin.js` to exist;
+	/// skipped in environments without a WASM build (#3115).
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_embedded_admin_js_is_not_placeholder() {
+		if !is_wasm_built() {
+			// WASM SPA has not been built — placeholder is expected.
+			// This test validates production artifacts only.
+			return;
+		}
+
+		// Arrange
+		let js = std::str::from_utf8(ADMIN_JS).expect("JS should be valid UTF-8");
+
+		// Assert - must not contain placeholder indicators
+		assert!(
+			!js.contains("placeholder"),
+			"Embedded admin JS must not be a placeholder. First 200 chars:\n{}",
+			&js[..js.len().min(200)]
+		);
+		assert!(
+			!js.contains("WASM frontend may not be built yet"),
+			"Embedded admin JS must not contain 'not built yet' fallback message"
+		);
+	}
+
+	/// Verify the JS filename referenced in the HTML is a registered
+	/// static route, ensuring the reference chain is consistent (#3115).
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_html_js_reference_matches_static_route() {
+		// Arrange
+		let html = admin_spa_html();
+		let router = admin_static_routes();
+		let routes = router.get_all_routes();
+		let paths: Vec<&str> = routes.iter().map(|(path, _, _, _)| path.as_str()).collect();
+
+		// Act - the WASM entry point JS must be both referenced in HTML
+		// and served by a static route
+		let wasm_js_path = "/reinhardt_admin.js";
+
+		// Assert - HTML references the WASM JS entry point
+		assert!(
+			html.contains(&format!("/static/admin{}", wasm_js_path)),
+			"HTML must reference /static/admin{}, got:\n{}",
+			wasm_js_path,
+			html
+		);
+		// Assert - static route serves that file
+		assert!(
+			paths.contains(&wasm_js_path),
+			"Static routes must serve {}, found: {:?}",
+			wasm_js_path,
+			paths
 		);
 	}
 

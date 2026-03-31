@@ -542,19 +542,16 @@ async fn test_e2e_mutation_csrf_mismatch(
 
 // ==================== Category 3: Auth Pipeline Tests (#3049) ====================
 
-/// Verify request without AuthState fails at DI resolution level.
-/// AuthUser::inject() requires AuthState in request extensions.
-/// This test does NOT need a real auth_user table because the failure
-/// occurs before the DB lookup (at the AuthState extraction step).
+/// Verify request without AuthState returns 401 Unauthorized.
+/// Spec: all auth-protected endpoints must return exactly HTTP 401
+/// when no authentication is provided, not 500 or other status (#3114).
 #[rstest]
 #[tokio::test]
-async fn test_e2e_unauthenticated_request(
+async fn test_e2e_unauthenticated_request_returns_401(
 	#[future] e2e_router_context: (ServerRouter, Arc<AdminDatabase>),
 ) {
 	// Arrange
 	let (router, _db) = e2e_router_context.await;
-
-	// Request WITHOUT AuthState in extensions
 	let request = make_e2e_request_no_auth(
 		"/admin/api/server_fn/get_list",
 		json!({
@@ -566,12 +563,47 @@ async fn test_e2e_unauthenticated_request(
 	// Act
 	let response = router.handle(request).await;
 
-	// Assert - should fail (auth error, not 200)
+	// Assert - must be exactly 401, not just "not 200"
 	let response = response.expect("Router should handle request");
-	assert_ne!(
+	assert_eq!(
 		response.status,
-		StatusCode::OK,
-		"Unauthenticated request should not succeed"
+		StatusCode::UNAUTHORIZED,
+		"Unauthenticated request must return 401 Unauthorized, got: {}",
+		response.status
+	);
+}
+
+/// Verify ALL auth-protected server function endpoints return 401
+/// for unauthenticated requests. Each endpoint is tested individually
+/// to ensure consistent auth enforcement across the API (#3114).
+#[rstest]
+#[case::get_list("/admin/api/server_fn/get_list", json!({"model_name": "TestModel", "params": {}}))]
+#[case::get_detail("/admin/api/server_fn/get_detail", json!({"model_name": "TestModel", "id": "1"}))]
+#[case::get_fields("/admin/api/server_fn/get_fields", json!({"model_name": "TestModel", "id": null}))]
+#[case::create_record("/admin/api/server_fn/create_record", json!({"model_name": "TestModel", "request": {"csrf_token": "x", "data": {}}}))]
+#[case::delete_record("/admin/api/server_fn/delete_record", json!({"model_name": "TestModel", "id": "1", "csrf_token": "x"}))]
+#[case::export_data("/admin/api/server_fn/export_data", json!({"model_name": "TestModel", "format": "JSON"}))]
+#[tokio::test]
+async fn test_e2e_auth_protected_endpoints_return_401(
+	#[future] e2e_router_context: (ServerRouter, Arc<AdminDatabase>),
+	#[case] path: &str,
+	#[case] body: serde_json::Value,
+) {
+	// Arrange
+	let (router, _db) = e2e_router_context.await;
+	let request = make_e2e_request_no_auth(path, body);
+
+	// Act
+	let response = router.handle(request).await;
+
+	// Assert - all auth-protected endpoints must return exactly 401
+	let response = response.expect("Router should handle request");
+	assert_eq!(
+		response.status,
+		StatusCode::UNAUTHORIZED,
+		"Endpoint {} must return 401 for unauthenticated requests, got: {}",
+		path,
+		response.status
 	);
 }
 

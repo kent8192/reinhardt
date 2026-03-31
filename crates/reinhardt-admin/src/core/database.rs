@@ -717,6 +717,9 @@ impl AdminDatabase {
 			.await
 			.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
 
+		// Sensitive fields that must never be exposed in admin API responses
+		const SENSITIVE_FIELDS: &[&str] = &["password_hash", "password_salt"];
+
 		// Convert QueryRow to HashMap
 		Ok(rows
 			.into_iter()
@@ -724,6 +727,7 @@ impl AdminDatabase {
 				if let serde_json::Value::Object(map) = row.data {
 					Some(
 						map.into_iter()
+							.filter(|(key, _)| !SENSITIVE_FIELDS.contains(&key.as_str()))
 							.collect::<HashMap<String, serde_json::Value>>(),
 					)
 				} else {

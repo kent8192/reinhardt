@@ -1514,54 +1514,26 @@ impl RunServerCommand {
 				(scope, None)
 			};
 
-		// Register DatabaseConnection as singleton when database feature is enabled
+		// Register DatabaseConnection in DI context when database feature is enabled.
+		// ORM is already initialized by run_command_with_registry() via
+		// initialize_orm_database(), so we only need to get the connection
+		// and register it in the DI singleton scope. (#3186)
 		#[cfg(feature = "reinhardt-db")]
 		{
-			// Check if DATABASE_URL was explicitly set in the environment before resolution
-			let env_database_url = std::env::var("DATABASE_URL").ok();
-
-			// Try to connect to database and register connection
-			match get_database_url() {
-				Ok(url) => {
-					// Sync DATABASE_URL to environment so all connection paths use the same URL.
-					// This prevents divergence where the ORM uses settings.toml but other code
-					// (e.g., sqlx::AnyPool, ModelViewSetHandler) reads DATABASE_URL directly.
-					sync_database_url_to_env(env_database_url.as_deref(), &url, ctx);
-
-					// Initialize ORM global database first, which also creates the connection pool
-					match reinhardt_db::orm::init_database(&url).await {
-						Ok(()) => {
-							ctx.verbose("ORM database initialized");
-							// Get the connection from ORM and register in DI context for dependency injection
-							match reinhardt_db::orm::get_connection().await {
-								Ok(db_conn) => {
-									// Register DatabaseConnection directly (not wrapped in Arc)
-									// The DI system wraps it in Arc internally via SingletonScope::set
-									singleton_scope.set(db_conn);
-									ctx.info(&format!(
-										"💾 Database: {} (connected)",
-										sanitize_database_url(&url)
-									));
-								}
-								Err(e) => {
-									ctx.warning(&format!(
-										"⚠️ Failed to get database connection for DI: {}",
-										e
-									));
-								}
-							}
-						}
-						Err(e) => {
-							ctx.warning(&format!(
-								"⚠️ Failed to initialize ORM database: {}. DI injection for DatabaseConnection will fail.",
-								e
-							));
-						}
-					}
+			match reinhardt_db::orm::get_connection().await {
+				Ok(db_conn) => {
+					// Register DatabaseConnection directly (not wrapped in Arc)
+					// The DI system wraps it in Arc internally via SingletonScope::set
+					singleton_scope.set(db_conn);
+					let url = get_database_url().unwrap_or_default();
+					ctx.info(&format!(
+						"💾 Database: {} (DI registered)",
+						sanitize_database_url(&url)
+					));
 				}
 				Err(e) => {
 					ctx.warning(&format!(
-						"⚠️ No DATABASE_URL configured: {}. DI injection for DatabaseConnection will fail.",
+						"⚠️ Failed to get database connection for DI: {}",
 						e
 					));
 				}

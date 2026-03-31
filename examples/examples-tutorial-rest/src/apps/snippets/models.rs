@@ -1,10 +1,10 @@
 use chrono::{DateTime, Utc};
-use reinhardt::core::serde::{Deserialize, Serialize};
 use reinhardt::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// Snippet model representing a code snippet
-#[derive(Serialize, Deserialize)]
 #[model(app_label = "snippets", table_name = "snippets")]
+#[derive(Serialize, Deserialize)]
 pub struct Snippet {
 	#[field(primary_key = true)]
 	pub id: i64,

@@ -2,14 +2,14 @@
 //!
 //! Database models for REST API example
 
-use reinhardt::core::serde::{Deserialize, Serialize};
 use reinhardt::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// Article model
 ///
 /// Represents a blog article or post
-#[derive(Serialize, Deserialize)]
 #[model(app_label = "api", table_name = "articles")]
+#[derive(Serialize, Deserialize)]
 pub struct Article {
 	/// Primary key
 	#[field(primary_key = true)]

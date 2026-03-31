@@ -13,6 +13,8 @@ pub mod import;
 pub mod model_admin;
 pub mod router;
 pub mod site;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod vendor;
 
 // Re-exports
 pub use crate::types::{

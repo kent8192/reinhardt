@@ -400,6 +400,22 @@ fn requires_router(command: &Commands) -> bool {
 	}
 }
 
+/// Returns `true` for commands that require ORM database initialization.
+///
+/// Database-requiring commands get automatic ORM initialization
+/// before execution via [`initialize_orm_database()`](crate::builtin::initialize_orm_database).
+/// This is symmetric with [`requires_router()`] which controls HTTP route registration.
+#[cfg(feature = "reinhardt-db")]
+fn requires_database(command: &Commands) -> bool {
+	match command {
+		Commands::Runserver { .. } => true,
+		Commands::Migrate { .. } => true,
+		#[cfg(feature = "auth")]
+		Commands::Createsuperuser { .. } => true,
+		_ => false,
+	}
+}
+
 /// Execute a command with the given verbosity level.
 ///
 /// This is the internal entry point for executing built-in commands.
@@ -443,6 +459,16 @@ pub async fn run_command_with_registry(
 	verbosity: u8,
 	registry: CommandRegistry,
 ) -> Result<(), Box<dyn std::error::Error>> {
+	// Initialize ORM database for commands that require it.
+	// This must happen before command dispatch so that commands like
+	// createsuperuser can use the ORM connection pool. (#3186)
+	#[cfg(feature = "reinhardt-db")]
+	if requires_database(&command) {
+		let mut ctx = crate::CommandContext::new(vec![]);
+		ctx.verbosity = verbosity;
+		crate::builtin::initialize_orm_database(&ctx).await?;
+	}
+
 	match command {
 		#[cfg(feature = "migrations")]
 		Commands::Makemigrations {
@@ -1507,5 +1533,115 @@ mod tests {
 		} else {
 			panic!("Expected Collectstatic command");
 		}
+	}
+
+	#[cfg(feature = "reinhardt-db")]
+	#[rstest]
+	fn test_requires_database_for_runserver() {
+		// Arrange
+		let command = Commands::Runserver {
+			address: "127.0.0.1:8000".to_string(),
+			noreload: false,
+			insecure: false,
+			no_docs: false,
+			with_pages: false,
+			static_dir: "dist".to_string(),
+			no_spa: false,
+			index: None,
+		};
+
+		// Act
+		let result = requires_database(&command);
+
+		// Assert
+		assert!(result);
+	}
+
+	#[cfg(feature = "auth")]
+	#[rstest]
+	fn test_requires_database_for_createsuperuser() {
+		// Arrange
+		let command = Commands::Createsuperuser {
+			username: Some("admin".to_string()),
+			email: Some("admin@example.com".to_string()),
+			no_password: true,
+			noinput: true,
+			database: None,
+		};
+
+		// Act
+		let result = requires_database(&command);
+
+		// Assert
+		assert!(result);
+	}
+
+	#[cfg(feature = "reinhardt-db")]
+	#[rstest]
+	fn test_requires_database_for_migrate() {
+		// Arrange
+		let command = Commands::Migrate {
+			app_label: None,
+			migration_name: None,
+			database: None,
+			fake: false,
+			fake_initial: false,
+			plan: false,
+		};
+
+		// Act
+		let result = requires_database(&command);
+
+		// Assert
+		assert!(result);
+	}
+
+	#[cfg(feature = "reinhardt-db")]
+	#[rstest]
+	fn test_does_not_require_database_for_shell() {
+		// Arrange
+		let command = Commands::Shell { command: None };
+
+		// Act
+		let result = requires_database(&command);
+
+		// Assert
+		assert!(!result);
+	}
+
+	#[cfg(feature = "reinhardt-db")]
+	#[rstest]
+	fn test_does_not_require_database_for_check() {
+		// Arrange
+		let command = Commands::Check {
+			app_label: None,
+			deploy: false,
+		};
+
+		// Act
+		let result = requires_database(&command);
+
+		// Assert
+		assert!(!result);
+	}
+
+	#[cfg(feature = "reinhardt-db")]
+	#[rstest]
+	fn test_does_not_require_database_for_collectstatic() {
+		// Arrange
+		let command = Commands::Collectstatic {
+			clear: false,
+			no_input: false,
+			dry_run: false,
+			link: false,
+			ignore: vec![],
+			index: None,
+		};
+
+		// Act
+		let result = requires_database(&command);
+
+		// Assert
+		assert!(!result);
 	}
 }

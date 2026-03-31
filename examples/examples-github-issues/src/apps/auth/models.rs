@@ -4,9 +4,9 @@
 //! Uses reinhardt ORM for database operations.
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use reinhardt::prelude::*;
 use reinhardt::{Argon2Hasher, BaseUser, FullUser};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// User model for authentication

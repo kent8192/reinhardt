@@ -226,6 +226,80 @@ fn test_collectstatic_admin_js_content_integrity(temp_dir: TempDir) {
 }
 
 // ============================================================================
+// Spec-based tests for #3116: WASM build-to-serving pipeline
+// ============================================================================
+
+/// Test: Admin static directory contains WASM build artifacts.
+/// Spec: after WASM build, the admin assets directory must contain
+/// the WASM JS bindings and binary, not just the placeholder (#3116).
+#[rstest]
+fn test_admin_static_dir_contains_wasm_artifacts() {
+	// Arrange
+	let configs = get_app_static_files();
+	let admin_config = configs
+		.iter()
+		.find(|c| c.app_label == "admin")
+		.expect("Admin config should be registered");
+	let static_dir = PathBuf::from(admin_config.static_dir);
+
+	// Assert - WASM JS bindings must exist
+	assert!(
+		static_dir.join("reinhardt_admin.js").exists(),
+		"reinhardt_admin.js (WASM JS bindings) should exist in admin \
+		 static directory: {}",
+		static_dir.display()
+	);
+	// Assert - WASM binary must exist
+	assert!(
+		static_dir.join("reinhardt_admin_bg.wasm").exists(),
+		"reinhardt_admin_bg.wasm (WASM binary) should exist in admin \
+		 static directory: {}",
+		static_dir.display()
+	);
+}
+
+/// Test: CollectStatic collects WASM build artifacts via auto-discovery.
+/// Spec: the collectstatic pipeline must discover and collect WASM
+/// output files so the server can serve them to clients (#3116).
+#[rstest]
+fn test_collectstatic_collects_wasm_artifacts(temp_dir: TempDir) {
+	// Arrange
+	let dest_dir = temp_dir.path().join("static_root");
+
+	let config = StaticFilesConfig {
+		static_url: "/static/".to_string(),
+		static_root: dest_dir.clone(),
+		staticfiles_dirs: vec![],
+		media_url: None,
+	};
+
+	let options = CollectStaticOptions {
+		verbosity: 0,
+		enable_hashing: false,
+		..Default::default()
+	};
+
+	let mut command = CollectStaticCommand::new(config, options);
+
+	// Act
+	let result = command.execute();
+
+	// Assert
+	assert!(result.is_ok(), "CollectStatic should succeed");
+
+	// Assert - WASM JS bindings must be collected
+	assert!(
+		dest_dir.join("reinhardt_admin.js").exists(),
+		"collectstatic must collect the WASM JS bindings (reinhardt_admin.js)"
+	);
+	// Assert - WASM binary must be collected
+	assert!(
+		dest_dir.join("reinhardt_admin_bg.wasm").exists(),
+		"collectstatic must collect the WASM binary (reinhardt_admin_bg.wasm)"
+	);
+}
+
+// ============================================================================
 // Fixtures
 // ============================================================================
 

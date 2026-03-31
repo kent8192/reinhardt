@@ -77,6 +77,10 @@ hot-reload = ["notify", "tokio", "async"]
 caching = ["moka", "async"]
 tbd = ["dep:winnow", "dep:rand", "dep:rand_regex", "dep:ulid"]
 
+# Backward-compatible feature alias: preserves implicit "rand" feature
+# that existed before dep:rand was introduced (SemVer compatibility)
+rand = ["dep:rand"]
+
 [dev-dependencies]
 insta = { workspace = true }
 futures = { workspace = true }

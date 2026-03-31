@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.15...reinhardt-db@v0.1.0-rc.16) - 2026-03-31
+
+### Changed
+
+- *(db)* remove redundant migration naming in autodetector
+
+### Fixed
+
+- *(db)* generate AlterColumn, CreateIndex, and DropIndex operations from schema diff
+- *(db)* generate CreateIndex for indexes on newly created tables
+- *(db)* detect and generate constraint changes in SchemaDiff
+
+### Testing
+
+- *(migrations)* expand coverage for all operation name fragments and edge cases
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.14...reinhardt-db@v0.1.0-rc.15) - 2026-03-29
 
 ### Documentation

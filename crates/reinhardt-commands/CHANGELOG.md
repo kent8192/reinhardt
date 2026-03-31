@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.15...reinhardt-commands@v0.1.0-rc.16) - 2026-03-31
+
+### Added
+
+- *(commands)* add createsuperuser as built-in management command
+- *(commands)* add requires_database() and auto-init ORM dispatch
+
+### Changed
+
+- *(commands)* extract initialize_orm_database() shared function
+- *(commands)* simplify run_server() ORM block to DI-only
+
+### Fixed
+
+- *(commands)* remove bare DB connect from createsuperuser
+- *(commands)* integrate file-based fallback into makemigrations
+
+### Other
+
+- resolve conflict with main (deduplicate tests)
+
+### Styling
+
+- *(commands)* fix formatting in createsuperuser deprecation warning
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.14...reinhardt-commands@v0.1.0-rc.15) - 2026-03-29
 
 ### Added

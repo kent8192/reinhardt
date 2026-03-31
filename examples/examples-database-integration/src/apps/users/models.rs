@@ -2,14 +2,14 @@
 //!
 //! Database models for user management
 
-use reinhardt::core::serde::{Deserialize, Serialize};
 use reinhardt::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// User model
 ///
 /// Represents a single user in the system
-#[derive(Serialize, Deserialize)]
 #[model(app_label = "users", table_name = "users")]
+#[derive(Serialize, Deserialize)]
 pub struct User {
 	/// Primary key (None for auto-increment on insert)
 	#[field(primary_key = true)]

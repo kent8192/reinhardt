@@ -73,7 +73,7 @@ api = [
   "reinhardt-rest/serializers",
   "reinhardt-views/viewsets",
 ]
-auth = ["reinhardt-auth"]
+auth = ["reinhardt-auth", "reinhardt-commands?/auth"]
 argon2-hasher = ["auth", "reinhardt-auth/argon2-hasher"]
 admin = [
   "reinhardt-admin",

@@ -2,16 +2,13 @@
 //!
 //! This module contains Query and Mutation resolvers for user authentication operations.
 
-use chrono::Utc;
+use crate::apps::auth::models::User;
+use crate::apps::auth::serializers::{AuthPayload, CreateUserInput, LoginInput, UserType};
 use reinhardt::graphql::{Context, Error as GqlError, GqlResult, ID, Object};
 use reinhardt::{BaseUser, JwtAuth};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use uuid::Uuid;
-
-use crate::apps::auth::models::User;
-use crate::apps::auth::serializers::{AuthPayload, CreateUserInput, LoginInput, UserType};
 
 /// In-memory user storage
 #[derive(Clone, Default)]
@@ -142,20 +139,17 @@ impl AuthMutation {
 			return Err(GqlError::new("Email already in use"));
 		}
 
-		// Create new user with direct struct initialization
-		let mut user = User {
-			id: Uuid::new_v4(),
-			username: input.username,
-			email: input.email,
-			password_hash: None,
-			first_name: input.first_name.unwrap_or_default(),
-			last_name: input.last_name.unwrap_or_default(),
-			is_active: true,
-			is_staff: false,
-			is_superuser: false,
-			last_login: None,
-			date_joined: Utc::now(),
-		};
+		// Create new user using macro-generated constructor
+		let mut user = User::new(
+			input.username,
+			input.email,
+			None,
+			input.first_name.unwrap_or_default(),
+			input.last_name.unwrap_or_default(),
+			true,
+			false,
+			false,
+		);
 		user.set_password(&input.password)
 			.map_err(|e| GqlError::new(e.to_string()))?;
 

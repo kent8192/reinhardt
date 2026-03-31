@@ -4,7 +4,7 @@
 //! and the Rust server via server functions.
 
 use reinhardt::Validate;
-use reinhardt::core::serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // OpenAPI schema generation (server-side only)

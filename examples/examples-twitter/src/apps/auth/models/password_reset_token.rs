@@ -4,9 +4,9 @@
 //! Uses ForeignKey relationship to User model.
 
 use chrono::{DateTime, Utc};
-use reinhardt::core::serde::{Deserialize, Serialize};
 use reinhardt::db::associations::ForeignKeyField;
 use reinhardt::prelude::*;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // Used by #[model] macro for type inference in ForeignKeyField<User> relationship field.
@@ -23,24 +23,24 @@ use super::user::User;
 #[derive(Serialize, Deserialize)]
 pub struct PasswordResetToken {
 	#[field(primary_key = true)]
-	id: Uuid,
+	pub id: Uuid,
 
 	/// User who requested password reset (generates user_id column)
 	#[rel(foreign_key, related_name = "password_reset_tokens", on_delete = Cascade)]
-	user: ForeignKeyField<User>,
+	pub user: ForeignKeyField<User>,
 
 	/// Reset token value (UUID v4 string)
 	#[field(max_length = 255, unique = true)]
-	token: String,
+	pub token: String,
 
 	/// Token expiration timestamp
-	expires_at: DateTime<Utc>,
+	pub expires_at: DateTime<Utc>,
 
 	/// Token creation timestamp
 	#[field(auto_now_add = true)]
-	created_at: DateTime<Utc>,
+	pub created_at: DateTime<Utc>,
 
 	/// Whether this token has been used
 	#[field(default = false)]
-	is_used: bool,
+	pub is_used: bool,
 }

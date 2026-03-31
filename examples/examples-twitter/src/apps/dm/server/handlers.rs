@@ -5,12 +5,12 @@
 
 use reinhardt::DatabaseConnection;
 use reinhardt::core::async_trait;
-use reinhardt::core::serde::{Deserialize, Serialize};
 use reinhardt::db::orm::Model;
 use reinhardt::{
 	ConsumerContext, InMemorySessionBackend, Message, PagesAuthenticator, RoomManager,
 	WebSocketConsumer, WebSocketError, WebSocketResult,
 };
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;

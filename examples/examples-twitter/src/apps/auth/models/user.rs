@@ -4,10 +4,10 @@
 //! Uses reinhardt ORM (Manager/QuerySet) for database operations.
 
 use chrono::{DateTime, Utc};
-use reinhardt::core::serde::{Deserialize, Serialize};
 use reinhardt::db::associations::ManyToManyField;
 use reinhardt::prelude::*;
 use reinhardt::{Argon2Hasher, BaseUser};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // Test-only dependency for sqlx::FromRow (server-side only)
@@ -19,28 +19,28 @@ use sqlx::FromRow;
 #[cfg_attr(all(test, server), derive(FromRow))]
 pub struct User {
 	#[field(primary_key = true)]
-	id: Uuid,
+	pub id: Uuid,
 
 	#[field(max_length = 150, unique = true)]
-	username: String,
+	pub username: String,
 
 	#[field(max_length = 255, unique = true)]
-	email: String,
+	pub email: String,
 
 	#[field(max_length = 255)]
-	password_hash: Option<String>,
+	pub password_hash: Option<String>,
 
 	#[field(default = true)]
-	is_active: bool,
+	pub is_active: bool,
 
 	#[field(include_in_new = false)]
-	last_login: Option<DateTime<Utc>>,
+	pub last_login: Option<DateTime<Utc>>,
 
 	#[field(auto_now_add = true)]
-	created_at: DateTime<Utc>,
+	pub created_at: DateTime<Utc>,
 
 	#[field(max_length = 500, null = true)]
-	bio: Option<String>,
+	pub bio: Option<String>,
 
 	// ManyToMany relationships for following/blocking functionality
 	// ManyToManyField<Source, Target> format - intermediate table auto-generated:
@@ -49,12 +49,12 @@ pub struct User {
 	#[serde(skip, default)]
 	#[cfg_attr(all(test, server), sqlx(skip))]
 	#[rel(many_to_many, related_name = "followers")]
-	following: ManyToManyField<User, User>,
+	pub following: ManyToManyField<User, User>,
 
 	#[serde(skip, default)]
 	#[cfg_attr(all(test, server), sqlx(skip))]
 	#[rel(many_to_many, related_name = "blocked_by")]
-	blocked_users: ManyToManyField<User, User>,
+	pub blocked_users: ManyToManyField<User, User>,
 }
 
 impl BaseUser for User {

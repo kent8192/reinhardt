@@ -30,6 +30,8 @@ pub mod adapters;
 pub mod core;
 pub mod pages;
 pub mod server;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod settings;
 pub mod types;
 
 // Register admin static files for auto-discovery by collectstatic

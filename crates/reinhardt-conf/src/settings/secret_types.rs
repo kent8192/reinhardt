@@ -9,10 +9,54 @@ use std::fmt;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// A secret string that won't be exposed in logs or debug output
-#[derive(Clone, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct SecretString {
-	#[serde(rename = "secret")]
 	inner: String,
+}
+
+impl<'de> Deserialize<'de> for SecretString {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: serde::Deserializer<'de>,
+	{
+		struct SecretStringVisitor;
+
+		impl<'de> serde::de::Visitor<'de> for SecretStringVisitor {
+			type Value = SecretString;
+
+			fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+				formatter.write_str("a string or a map with a 'secret' key")
+			}
+
+			fn visit_str<E>(self, value: &str) -> Result<SecretString, E>
+			where
+				E: serde::de::Error,
+			{
+				Ok(SecretString {
+					inner: value.to_owned(),
+				})
+			}
+
+			fn visit_map<M>(self, mut map: M) -> Result<SecretString, M::Error>
+			where
+				M: serde::de::MapAccess<'de>,
+			{
+				let mut secret = None;
+				while let Some(key) = map.next_key::<String>()? {
+					if key == "secret" {
+						secret = Some(map.next_value::<String>()?);
+					} else {
+						let _ = map.next_value::<serde::de::IgnoredAny>()?;
+					}
+				}
+				secret
+					.map(|s| SecretString { inner: s })
+					.ok_or_else(|| serde::de::Error::missing_field("secret"))
+			}
+		}
+
+		deserializer.deserialize_any(SecretStringVisitor)
+	}
 }
 
 impl Serialize for SecretString {

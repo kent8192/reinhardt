@@ -13,9 +13,19 @@ use std::path::PathBuf;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StaticSettings {
 	/// URL prefix for serving static files (e.g., `"/static/"`).
+	#[serde(default = "default_static_url")]
 	pub url: String,
 	/// Root directory for collected static files.
+	#[serde(default = "default_static_root")]
 	pub root: PathBuf,
+}
+
+fn default_static_url() -> String {
+	"/static/".to_string()
+}
+
+fn default_static_root() -> PathBuf {
+	PathBuf::from("static")
 }
 
 impl Default for StaticSettings {

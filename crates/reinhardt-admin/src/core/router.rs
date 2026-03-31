@@ -95,7 +95,9 @@ fn resolve_admin_static(path: &str) -> String {
 ///
 /// All static file URLs are resolved via [`resolve_admin_static`], which
 /// integrates with the collectstatic manifest for cache-busted filenames
-/// in production.
+/// in production. CSS dependencies (Open Props, Animate.css, UnoCSS) are
+/// served from local vendor/ directory instead of external CDNs to satisfy
+/// CSP and eliminate external network dependencies.
 #[cfg(not(target_arch = "wasm32"))]
 fn admin_spa_html() -> String {
 	let css_url = resolve_admin_static("style.css");
@@ -1329,4 +1331,5 @@ mod tests {
 			content_type
 		);
 	}
+
 }

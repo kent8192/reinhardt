@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use reinhardt::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// Snippet model representing a code snippet
 #[model(app_label = "snippets", table_name = "snippets")]

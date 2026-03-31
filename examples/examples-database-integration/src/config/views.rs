@@ -3,7 +3,7 @@
 //! Root endpoints and demo endpoints
 
 use reinhardt::core::serde::json;
-use reinhardt::core::serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use reinhardt::get;
 use reinhardt::http::ViewResult;
 use reinhardt::{Response, StatusCode};

@@ -54,6 +54,9 @@ notify = { version = "8.2.0", optional = true }
 moka = { version = "0.12", features = ["future"], optional = true }
 uuid = { version = "1.6", features = ["v4"] }
 reinhardt-utils = {workspace = true, features = ["staticfiles"]}
+winnow = { workspace = true, optional = true }
+rand_regex = { workspace = true, optional = true }
+ulid = { workspace = true, features = ["std"], optional = true }
 
 [features]
 default = ["settings"]
@@ -68,10 +71,11 @@ dynamic-database = ["async", "reinhardt-query", "sqlx"]
 vault = ["async", "reqwest"]
 aws-secrets = ["async", "aws-config", "aws-sdk-secretsmanager", "aws-smithy-runtime"]
 azure-keyvault = ["async", "azure_identity", "azure_security_keyvault_secrets", "futures"]
-secret-rotation = ["async", "rand"]
-encryption = ["aes-gcm", "base64", "pbkdf2", "rand", "sha2"]
+secret-rotation = ["async", "dep:rand"]
+encryption = ["aes-gcm", "base64", "pbkdf2", "dep:rand", "sha2"]
 hot-reload = ["notify", "tokio", "async"]
 caching = ["moka", "async"]
+tbd = ["dep:winnow", "dep:rand", "dep:rand_regex", "dep:ulid"]
 
 [dev-dependencies]
 insta = { workspace = true }

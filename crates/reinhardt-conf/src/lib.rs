@@ -66,6 +66,9 @@
 
 pub mod settings;
 
+#[cfg(feature = "tbd")]
+pub mod tbd;
+
 // Re-export commonly used types at the crate root for convenience
 #[cfg(feature = "settings")]
 #[allow(deprecated)] // Settings is deprecated but re-exported for backward compatibility

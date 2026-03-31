@@ -30,6 +30,7 @@ getrandom = { workspace = true }
 # Server-only dependencies (native target)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 reinhardt-apps = { workspace = true }
+reinhardt-conf = { workspace = true }
 reinhardt-auth = { workspace = true, features = ["argon2-hasher", "params", "jwt"] }
 reinhardt-macros = { workspace = true }
 reinhardt-core = { workspace = true, features = ["exception"] }
@@ -110,6 +111,7 @@ sqlx = { workspace = true, features = ["postgres", "runtime-tokio-native-tls"] }
 # Pin to avoid build failure in native-tls 0.2.17 (non-exhaustive pattern in openssl.rs)
 native-tls = { workspace = true }
 tempfile = { workspace = true }
+toml = { workspace = true }
 
 # WASM-only dev-dependencies
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

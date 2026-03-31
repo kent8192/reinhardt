@@ -39,6 +39,8 @@ pub struct SecurityHeaders {
 	pub frame_options: FrameOptions,
 	/// Referrer-Policy value
 	pub referrer_policy: ReferrerPolicy,
+	/// Permissions-Policy header value
+	pub permissions_policy: String,
 }
 
 impl Default for SecurityHeaders {
@@ -47,6 +49,7 @@ impl Default for SecurityHeaders {
 			csp: ContentSecurityPolicy::admin_default(),
 			frame_options: FrameOptions::Deny,
 			referrer_policy: ReferrerPolicy::StrictOriginWhenCrossOrigin,
+			permissions_policy: "camera=(), microphone=(), geolocation=(), payment=()".to_string(),
 		}
 	}
 }
@@ -74,10 +77,7 @@ impl SecurityHeaders {
 		headers.insert("X-Frame-Options", self.frame_options.to_string());
 		headers.insert("X-XSS-Protection", "1; mode=block".to_string());
 		headers.insert("Referrer-Policy", self.referrer_policy.to_string());
-		headers.insert(
-			"Permissions-Policy",
-			"camera=(), microphone=(), geolocation=(), payment=()".to_string(),
-		);
+		headers.insert("Permissions-Policy", self.permissions_policy.clone());
 
 		headers
 	}
@@ -208,6 +208,30 @@ impl std::fmt::Display for ReferrerPolicy {
 				write!(f, "strict-origin-when-cross-origin")
 			}
 			ReferrerPolicy::SameOrigin => write!(f, "same-origin"),
+		}
+	}
+}
+
+impl FrameOptions {
+	/// Parse from a string, falling back to `Deny` for unrecognized values.
+	pub fn from_str(s: &str) -> Self {
+		match s.to_lowercase().as_str() {
+			"deny" => Self::Deny,
+			"sameorigin" => Self::SameOrigin,
+			_ => Self::Deny,
+		}
+	}
+}
+
+impl ReferrerPolicy {
+	/// Parse from a string, falling back to `StrictOriginWhenCrossOrigin`
+	/// for unrecognized values.
+	pub fn from_str(s: &str) -> Self {
+		match s.to_lowercase().as_str() {
+			"no-referrer" => Self::NoReferrer,
+			"strict-origin-when-cross-origin" => Self::StrictOriginWhenCrossOrigin,
+			"same-origin" => Self::SameOrigin,
+			_ => Self::StrictOriginWhenCrossOrigin,
 		}
 	}
 }
@@ -1069,5 +1093,76 @@ mod tests {
 			}
 			other => panic!("Expected Server error with status 403, got: {:?}", other),
 		}
+	}
+
+	// ============================================================
+	// FrameOptions from_str tests
+	// ============================================================
+
+	#[rstest]
+	fn test_frame_options_from_str_deny() {
+		// Assert
+		assert_eq!(FrameOptions::from_str("deny"), FrameOptions::Deny);
+	}
+
+	#[rstest]
+	fn test_frame_options_from_str_deny_uppercase() {
+		// Assert
+		assert_eq!(FrameOptions::from_str("DENY"), FrameOptions::Deny);
+	}
+
+	#[rstest]
+	fn test_frame_options_from_str_sameorigin() {
+		// Assert
+		assert_eq!(
+			FrameOptions::from_str("sameorigin"),
+			FrameOptions::SameOrigin
+		);
+	}
+
+	#[rstest]
+	fn test_frame_options_from_str_unknown_falls_back_to_deny() {
+		// Assert
+		assert_eq!(FrameOptions::from_str("invalid"), FrameOptions::Deny);
+	}
+
+	// ============================================================
+	// ReferrerPolicy from_str tests
+	// ============================================================
+
+	#[rstest]
+	fn test_referrer_policy_from_str_no_referrer() {
+		// Assert
+		assert_eq!(
+			ReferrerPolicy::from_str("no-referrer"),
+			ReferrerPolicy::NoReferrer
+		);
+	}
+
+	#[rstest]
+	fn test_referrer_policy_from_str_strict_origin() {
+		// Assert
+		assert_eq!(
+			ReferrerPolicy::from_str("strict-origin-when-cross-origin"),
+			ReferrerPolicy::StrictOriginWhenCrossOrigin
+		);
+	}
+
+	#[rstest]
+	fn test_referrer_policy_from_str_same_origin() {
+		// Assert
+		assert_eq!(
+			ReferrerPolicy::from_str("same-origin"),
+			ReferrerPolicy::SameOrigin
+		);
+	}
+
+	#[rstest]
+	fn test_referrer_policy_from_str_unknown_falls_back() {
+		// Assert
+		assert_eq!(
+			ReferrerPolicy::from_str("invalid"),
+			ReferrerPolicy::StrictOriginWhenCrossOrigin
+		);
 	}
 }

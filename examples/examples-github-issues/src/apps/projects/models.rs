@@ -1,8 +1,8 @@
 //! Project and ProjectMember models
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use reinhardt::model;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Project visibility levels

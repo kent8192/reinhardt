@@ -2,13 +2,13 @@
 //!
 //! This module contains Query and Mutation resolvers for user authentication operations.
 
+use crate::apps::auth::models::User;
+use crate::apps::auth::serializers::{AuthPayload, CreateUserInput, LoginInput, UserType};
 use reinhardt::graphql::{Context, Error as GqlError, GqlResult, ID, Object};
 use reinhardt::{BaseUser, JwtAuth};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::apps::auth::models::User;
-use crate::apps::auth::serializers::{AuthPayload, CreateUserInput, LoginInput, UserType};
 
 /// In-memory user storage
 #[derive(Clone, Default)]

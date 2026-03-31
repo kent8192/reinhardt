@@ -382,6 +382,45 @@ async fn build_from_state_from_testcontainers(
 	))
 }
 
+/// Build from_state by replaying migration files from disk (offline fallback)
+///
+/// This approach requires no database or Docker. It reads all `.rs` migration files,
+/// builds a dependency graph, topologically sorts them, and replays all operations
+/// to reconstruct the current `ProjectState`.
+#[cfg(feature = "migrations")]
+async fn build_from_state_from_files(
+	migrations_dir: &std::path::Path,
+) -> Result<reinhardt_db::migrations::ProjectState, crate::CommandError> {
+	use reinhardt_db::migrations::{FilesystemSource, MigrationSource, build_state_from_files};
+
+	let source = FilesystemSource::new(migrations_dir);
+
+	// Check if there are any migrations on disk
+	let all_migrations = source.all_migrations().await.map_err(|e| {
+		crate::CommandError::ExecutionError(format!("Failed to load migrations from disk: {}", e))
+	})?;
+
+	if all_migrations.is_empty() {
+		// No migration files found -- this is genuinely an initial migration
+		return Ok(reinhardt_db::migrations::ProjectState::default());
+	}
+
+	eprintln!(
+		"[DEBUG] Building state from {} migration files on disk",
+		all_migrations.len()
+	);
+	for migration in &all_migrations {
+		eprintln!("[DEBUG]   - {}/{}", migration.app_label, migration.name);
+	}
+
+	build_state_from_files(&source).await.map_err(|e| {
+		crate::CommandError::ExecutionError(format!(
+			"Failed to build state from migration files: {}",
+			e
+		))
+	})
+}
+
 /// Make migrations command
 #[cfg(feature = "migrations")]
 pub struct MakeMigrationsCommand;
@@ -781,30 +820,45 @@ impl BaseCommand for MakeMigrationsCommand {
 								state
 							}
 							Err(e) => {
-								ctx.error(&format!("Failed to use TestContainers: {}", e));
-								ctx.error(
-									"⚠️  CRITICAL: Cannot build from_state from existing migrations!",
-								);
-								ctx.error(
-									"This will cause ALL tables to be regenerated, creating duplicate migrations.",
-								);
-								ctx.error("");
-								ctx.error("Possible solutions:");
-								ctx.error("  1. Fix TestContainers setup (recommended)");
-								ctx.error("  2. Use --from-db flag to build from database history");
-								ctx.error(
-									"  3. Use --force-empty-state to proceed anyway (dangerous)",
-								);
-								ctx.error("");
+								ctx.warning(&format!("Failed to use TestContainers: {}", e));
+								ctx.info("Falling back to file-based state reconstruction...");
+								match build_from_state_from_files(&migrations_dir).await {
+									Ok(state) => {
+										ctx.verbose("Built state from migration files (offline)");
+										state
+									}
+									Err(e_files) => {
+										ctx.error(&format!(
+											"Failed file-based reconstruction: {}",
+											e_files
+										));
+										ctx.error(
+											"⚠️  CRITICAL: Cannot build from_state from existing migrations!",
+										);
+										ctx.error(
+											"This will cause ALL tables to be regenerated, creating duplicate migrations.",
+										);
+										ctx.error("");
+										ctx.error("Possible solutions:");
+										ctx.error("  1. Fix TestContainers setup (recommended)");
+										ctx.error(
+											"  2. Use --from-db flag to build from database history",
+										);
+										ctx.error(
+											"  3. Use --force-empty-state to proceed anyway (dangerous)",
+										);
+										ctx.error("");
 
-								if ctx.has_option("force-empty-state") {
-									ctx.warning(
-										"⚠️  Using empty state as requested (--force-empty-state)",
-									);
-									ctx.warning("This may create duplicate migrations!");
-									ProjectState::new()
-								} else {
-									return Err("from_state construction failed. Please fix TestContainers, use --from-db, or use --force-empty-state to continue anyway.".to_string().into());
+										if ctx.has_option("force-empty-state") {
+											ctx.warning(
+												"⚠️  Using empty state as requested (--force-empty-state)",
+											);
+											ctx.warning("This may create duplicate migrations!");
+											ProjectState::new()
+										} else {
+											return Err("from_state construction failed. Please fix TestContainers, use --from-db, or use --force-empty-state to continue anyway.".to_string().into());
+										}
+									}
 								}
 							}
 						}
@@ -826,32 +880,45 @@ impl BaseCommand for MakeMigrationsCommand {
 								state
 							}
 							Err(e) => {
-								ctx.error(&format!("Failed to connect to database: {}", e));
-								ctx.error(
-									"⚠️  CRITICAL: Cannot build from_state from existing migrations!",
-								);
-								ctx.error(
-									"This will cause ALL tables to be regenerated, creating duplicate migrations.",
-								);
-								ctx.error("");
-								ctx.error("Possible solutions:");
-								ctx.error("  1. Fix database connection (recommended)");
-								ctx.error(
-									"  2. Use TestContainers (default behavior without --from-db)",
-								);
-								ctx.error(
-									"  3. Use --force-empty-state to proceed anyway (dangerous)",
-								);
-								ctx.error("");
+								ctx.warning(&format!("Failed to connect to database: {}", e));
+								ctx.info("Falling back to file-based state reconstruction...");
+								match build_from_state_from_files(&migrations_dir).await {
+									Ok(state) => {
+										ctx.verbose("Built state from migration files (offline)");
+										state
+									}
+									Err(e_files) => {
+										ctx.error(&format!(
+											"Failed file-based reconstruction: {}",
+											e_files
+										));
+										ctx.error(
+											"⚠️  CRITICAL: Cannot build from_state from existing migrations!",
+										);
+										ctx.error(
+											"This will cause ALL tables to be regenerated, creating duplicate migrations.",
+										);
+										ctx.error("");
+										ctx.error("Possible solutions:");
+										ctx.error("  1. Fix database connection (recommended)");
+										ctx.error(
+											"  2. Use TestContainers (default behavior without --from-db)",
+										);
+										ctx.error(
+											"  3. Use --force-empty-state to proceed anyway (dangerous)",
+										);
+										ctx.error("");
 
-								if ctx.has_option("force-empty-state") {
-									ctx.warning(
-										"⚠️  Using empty state as requested (--force-empty-state)",
-									);
-									ctx.warning("This may create duplicate migrations!");
-									ProjectState::new()
-								} else {
-									return Err("from_state construction failed. Please fix database connection, remove --from-db, or use --force-empty-state to continue anyway.".to_string().into());
+										if ctx.has_option("force-empty-state") {
+											ctx.warning(
+												"⚠️  Using empty state as requested (--force-empty-state)",
+											);
+											ctx.warning("This may create duplicate migrations!");
+											ProjectState::new()
+										} else {
+											return Err("from_state construction failed. Please fix database connection, remove --from-db, or use --force-empty-state to continue anyway.".to_string().into());
+										}
+									}
 								}
 							}
 						}

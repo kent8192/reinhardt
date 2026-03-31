@@ -1210,10 +1210,10 @@ mod tests {
 		let routes = router.get_all_routes();
 		let paths: Vec<&str> = routes.iter().map(|(path, _, _, _)| path.as_str()).collect();
 
-		// Assert - a .wasm route must exist for the WASM SPA binary
+		// Assert - catch-all route must exist to serve WASM binaries at runtime
 		assert!(
-			paths.iter().any(|p| p.ends_with(".wasm")),
-			"Admin static routes must serve a .wasm file for the WASM SPA. \
+			paths.iter().any(|p| p.contains("{*path}")),
+			"Admin static routes must have a catch-all route to serve WASM files. \
 			 Found routes: {:?}",
 			paths
 		);

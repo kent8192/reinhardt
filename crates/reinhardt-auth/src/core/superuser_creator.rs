@@ -1,7 +1,6 @@
 //! Superuser creation support for management commands.
 //!
-//! Provides type-erased superuser creation that works with any user model
-//! decorated with `#[user(...)]` + `#[model(...)]` macros.
+//! Provides type-erased superuser creation that works with any user model.
 //!
 //! # Architecture
 //!
@@ -14,18 +13,34 @@
 //! layer, and [`TypedSuperuserCreator<U>`] bridges the two by combining
 //! [`SuperuserInit`] for construction with `Model` for ORM operations.
 //!
-//! # Global Registry
+//! # Registration
 //!
-//! Projects register their user type at startup via
-//! [`register_superuser_creator`], and the `createsuperuser` management
-//! command retrieves it via [`get_superuser_creator`].
+//! When `#[user(full = true)]` and `#[model]` are both applied to a struct,
+//! the framework automatically registers a [`SuperuserCreator`] via the
+//! `inventory` crate. No manual registration is needed.
+//!
+//! For advanced use cases (e.g., custom creator logic), manual registration
+//! is still supported and takes priority over auto-registration:
+//!
+//! ## Recommended: Using `#[user]` macro
+//!
+//! The simplest path is to use `#[user(full=true)]` with `#[model]`,
+//! which auto-generates [`SuperuserInit`]:
 //!
 //! ```rust,ignore
 //! use reinhardt_auth::{register_superuser_creator, superuser_creator_for};
 //! use myapp::models::CustomUser;
 //!
+//! // CustomUser has #[user(hasher = Argon2Hasher, username_field = "username", full = true)]
+//! // and #[model(table_name = "auth_user")] — SuperuserInit is auto-generated.
 //! register_superuser_creator(superuser_creator_for::<CustomUser>());
 //! ```
+//!
+//! ## Manual `BaseUser` implementors
+//!
+//! If you implement [`BaseUser`] manually without the `#[user]` macro,
+//! you can still use `createsuperuser` by implementing [`SuperuserInit`]
+//! yourself. See the [`SuperuserInit`] documentation for an example.
 
 use async_trait::async_trait;
 use std::marker::PhantomData;
@@ -35,15 +50,42 @@ use crate::core::BaseUser;
 
 /// Trait for initializing a user struct as a superuser.
 ///
-/// This trait is automatically implemented by the `#[user]` attribute macro.
-/// It uses compile-time field name resolution, so field renames via
+/// # Auto-generation (recommended)
+///
+/// This trait is automatically implemented by the `#[user(full=true)]`
+/// attribute macro when `#[model]` is also present. The macro uses
+/// compile-time field name resolution, so field renames via
 /// `#[user_field(...)]` are handled correctly.
 ///
-/// # Example
+/// # Manual implementation
 ///
-/// Given a struct with `#[user_field(date_joined)]` on a field named
-/// `created_at`, the generated implementation will correctly set
-/// `self.created_at` rather than looking for `self.date_joined`.
+/// Projects that implement [`BaseUser`] manually (without the `#[user]`
+/// macro) can implement this trait directly. The struct must also
+/// implement `Default`.
+///
+/// ```rust,ignore
+/// use reinhardt_auth::SuperuserInit;
+///
+/// impl SuperuserInit for MyUser {
+///     fn init_superuser(username: &str, email: &str) -> Self {
+///         Self {
+///             username: username.to_string(),
+///             email: email.to_string(),
+///             is_superuser: true,
+///             is_staff: true,
+///             is_active: true,
+///             date_joined: chrono::Utc::now(),
+///             ..Default::default()
+///         }
+///     }
+/// }
+/// ```
+///
+/// Then register in `manage.rs`:
+///
+/// ```rust,ignore
+/// register_superuser_creator(superuser_creator_for::<MyUser>());
+/// ```
 pub trait SuperuserInit: Default + Send + Sync {
 	/// Create a new instance configured as a superuser.
 	///
@@ -175,7 +217,82 @@ pub fn register_superuser_creator(creator: Box<dyn SuperuserCreator>) {
 
 /// Retrieve the registered [`SuperuserCreator`].
 ///
-/// Returns `None` if [`register_superuser_creator`] has not been called.
+/// Returns `None` if [`register_superuser_creator`] has not been called
+/// and no auto-registration was found.
 pub fn get_superuser_creator() -> Option<&'static dyn SuperuserCreator> {
 	SUPERUSER_CREATOR.get().map(|b| b.as_ref())
+}
+
+// ============================================================================
+// Auto-registration via inventory
+// ============================================================================
+
+/// Compile-time registration entry for auto-discovered superuser creators.
+///
+/// Submitted via `inventory::submit!` by the `#[user]` macro when
+/// `full = true` and `#[model]` is present. The framework collects all
+/// submissions at startup and populates the global [`OnceLock`].
+///
+/// You typically do not create this struct directly — the `#[user]` macro
+/// generates the registration code automatically.
+pub struct SuperuserCreatorRegistration {
+	/// Factory function that produces a boxed [`SuperuserCreator`].
+	pub create: fn() -> Box<dyn SuperuserCreator>,
+
+	/// Type name of the user model (for diagnostics in duplicate detection).
+	pub type_name: &'static str,
+}
+
+impl SuperuserCreatorRegistration {
+	/// Internal constructor used by the `#[user]` macro.
+	#[doc(hidden)]
+	pub const fn __macro_new(
+		create: fn() -> Box<dyn SuperuserCreator>,
+		type_name: &'static str,
+	) -> Self {
+		Self { create, type_name }
+	}
+}
+
+inventory::collect!(SuperuserCreatorRegistration);
+
+/// Auto-register a [`SuperuserCreator`] from inventory submissions.
+///
+/// Called by the framework before command dispatch. If a creator was already
+/// registered manually via [`register_superuser_creator`], this is a no-op
+/// (preserving backwards compatibility).
+///
+/// # Panics
+///
+/// Panics if multiple `#[user(full = true)]` + `#[model]` types are found
+/// in the inventory. Only one user model can serve as superuser creator.
+pub fn auto_register_superuser_creator() {
+	let registrations: Vec<_> = inventory::iter::<SuperuserCreatorRegistration>().collect();
+
+	match registrations.len() {
+		0 => {
+			// No auto-registration available; manual registration or
+			// a later error in get_superuser_creator() will handle this.
+		}
+		1 => {
+			if SUPERUSER_CREATOR.get().is_some() {
+				// Manual registration already happened; respect it.
+				return;
+			}
+			let reg = &registrations[0];
+			let creator = (reg.create)();
+			// Ignore set failure: another thread may have registered
+			// between our check and set. The first one wins.
+			let _ = SUPERUSER_CREATOR.set(creator);
+		}
+		_ => {
+			let names: Vec<&str> = registrations.iter().map(|r| r.type_name).collect();
+			panic!(
+				"Multiple SuperuserCreator registrations found: {:?}. \
+				 Only one user model may have #[user(full = true)] with #[model]. \
+				 Remove `full = true` from all but one user model.",
+				names
+			);
+		}
+	}
 }

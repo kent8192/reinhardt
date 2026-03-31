@@ -81,7 +81,7 @@ async fn admin_spa_handler(
 	for (name, value) in security_headers.to_header_map() {
 		response = response.with_header(name, &value);
 	}
-	Ok(response.with_body(admin_spa_html()))
+	Ok(response.with_body(admin_spa_html(&settings.site_title)))
 }
 
 /// Resolves an admin static file path to its final URL.
@@ -103,15 +103,15 @@ fn resolve_admin_static(path: &str) -> String {
 ///
 /// All static file URLs are resolved via [`resolve_admin_static`], which
 /// integrates with the collectstatic manifest for cache-busted filenames
-/// in production. CSS dependencies (Open Props, Animate.css, UnoCSS) are
-/// served from local vendor/ directory instead of external CDNs to satisfy
-/// CSP and eliminate external network dependencies.
+/// in production. CSS dependencies (Open Props, Animate.css) and the UnoCSS
+/// runtime engine are served from local vendor/ directory instead of external
+/// CDNs to satisfy CSP and eliminate external network dependencies.
 #[cfg(not(target_arch = "wasm32"))]
-fn admin_spa_html() -> String {
+fn admin_spa_html(site_title: &str) -> String {
 	let css_url = resolve_admin_static("style.css");
 	let vendor_open_props = resolve_admin_static("vendor/open-props.min.css");
 	let vendor_animate = resolve_admin_static("vendor/animate.min.css");
-	let vendor_unocss = resolve_admin_static("vendor/unocss.generated.css");
+	let vendor_unocss_runtime = resolve_admin_static("vendor/unocss-runtime.js");
 	let wasm_built = is_wasm_built();
 	let js_url = if wasm_built {
 		resolve_admin_static("reinhardt_admin.js")
@@ -136,11 +136,11 @@ fn admin_spa_html() -> String {
 	<meta charset="utf-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 	<meta name="server-fn-prefix" content="/admin" />
-	<title>Reinhardt Admin</title>
+	<title>{site_title}</title>
 	<link rel="stylesheet" href="{vendor_open_props}" />
 	<link rel="stylesheet" href="{vendor_animate}" />
-	<link rel="stylesheet" href="{vendor_unocss}" />
 	<link rel="stylesheet" href="{css_url}" />
+	<script src="{vendor_unocss_runtime}"></script>
 </head>
 <body class="bg-slate-50 text-slate-900 antialiased">
 	<div id="app"></div>
@@ -823,7 +823,7 @@ mod tests {
 	#[rstest]
 	fn test_admin_spa_html_contains_mount_point() {
 		// Arrange & Act
-		let html = admin_spa_html();
+		let html = admin_spa_html("Reinhardt Admin");
 
 		// Assert
 		assert!(
@@ -848,7 +848,7 @@ mod tests {
 	#[rstest]
 	fn test_admin_spa_html_references_css_and_js_entry_point() {
 		// Arrange & Act
-		let html = admin_spa_html();
+		let html = admin_spa_html("Reinhardt Admin");
 		let wasm_built = is_wasm_built();
 
 		// Assert - CSS reference (URLs resolved via resolve_admin_static,
@@ -879,7 +879,7 @@ mod tests {
 	#[rstest]
 	fn test_admin_spa_html_no_external_cdn_urls() {
 		// Arrange
-		let html = admin_spa_html();
+		let html = admin_spa_html("Reinhardt Admin");
 
 		// Assert — no external CDN references
 		assert!(
@@ -900,7 +900,7 @@ mod tests {
 	#[rstest]
 	fn test_admin_spa_html_references_vendor_assets() {
 		// Arrange
-		let html = admin_spa_html();
+		let html = admin_spa_html("Reinhardt Admin");
 
 		// Assert — local vendor assets are referenced
 		assert!(
@@ -912,8 +912,8 @@ mod tests {
 			"HTML should reference local Animate.css"
 		);
 		assert!(
-			html.contains("vendor/unocss"),
-			"HTML should reference local UnoCSS generated CSS"
+			html.contains("vendor/unocss-runtime"),
+			"HTML should reference local UnoCSS runtime JS"
 		);
 	}
 
@@ -921,7 +921,7 @@ mod tests {
 	#[rstest]
 	fn test_admin_spa_html_no_inline_script() {
 		// Arrange
-		let html = admin_spa_html();
+		let html = admin_spa_html("Reinhardt Admin");
 
 		// Assert — no UnoCSS runtime inline script
 		assert!(
@@ -1129,13 +1129,33 @@ mod tests {
 		// Arrange - CI environment has no dist-admin/ directory
 
 		// Act
-		let html = admin_spa_html();
+		let html = admin_spa_html("Reinhardt Admin");
 
 		// Assert - should use placeholder main.js when WASM is not built
 		assert!(
 			html.contains("/static/admin/main.js")
 				|| html.contains("/static/admin/reinhardt_admin.js"),
 			"HTML should reference either main.js or reinhardt_admin.js"
+		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_admin_spa_html_uses_configured_site_title() {
+		// Arrange
+		let custom_title = "My Custom Admin";
+
+		// Act
+		let html = admin_spa_html(custom_title);
+
+		// Assert
+		assert!(
+			html.contains("<title>My Custom Admin</title>"),
+			"HTML <title> should reflect the configured site_title"
+		);
+		assert!(
+			!html.contains("<title>Reinhardt Admin</title>"),
+			"HTML should not contain the hardcoded default title"
 		);
 	}
 

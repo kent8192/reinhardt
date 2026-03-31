@@ -379,6 +379,12 @@ pub async fn execute_from_command_line_with_registry(
 		auto_register_router().await?;
 	}
 
+	// Auto-register SuperuserCreator from inventory (if available).
+	// This replaces the manual register_superuser_creator() call that
+	// users previously had to add in main(). (#3187)
+	#[cfg(feature = "auth")]
+	reinhardt_auth::auto_register_superuser_creator();
+
 	run_command_with_registry(command, verbosity, registry).await
 }
 

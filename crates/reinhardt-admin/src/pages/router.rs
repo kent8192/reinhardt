@@ -68,6 +68,39 @@ thread_local! {
 	static ROUTER: RefCell<Option<Router>> = const { RefCell::new(None) };
 }
 
+/// Admin URL configuration loaded from server at runtime.
+///
+/// Stored in a thread-local (safe because WASM is single-threaded) and
+/// populated when the dashboard response is received. Falls back to
+/// defaults if not yet initialized.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct AdminUrls {
+	login_url: String,
+	logout_url: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Default for AdminUrls {
+	fn default() -> Self {
+		Self {
+			login_url: "/admin/login/".to_string(),
+			logout_url: "/admin/logout/".to_string(),
+		}
+	}
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+	static ADMIN_URLS: RefCell<AdminUrls> = RefCell::new(AdminUrls::default());
+}
+
+/// Returns the configured login URL, with a trailing slash.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn get_login_url() -> String {
+	ADMIN_URLS.with(|u| u.borrow().login_url.clone())
+}
+
 /// Initialize the global router instance
 ///
 /// This must be called once at application startup before any routing operations.
@@ -143,7 +176,15 @@ fn dashboard_view() -> Page {
 			let resource = dashboard_resource.clone();
 			move || match resource.get() {
 				ResourceState::Loading => loading_view(),
-				ResourceState::Success(data) => dashboard(&data.site_name, &data.models),
+				ResourceState::Success(data) => {
+					// Store login/logout URLs from server settings
+					ADMIN_URLS.with(|urls| {
+						let mut urls = urls.borrow_mut();
+						urls.login_url = format!("{}/", data.login_url.trim_end_matches('/'));
+						urls.logout_url = format!("{}/", data.logout_url.trim_end_matches('/'));
+					});
+					dashboard(&data.site_header, &data.models)
+				}
 				ResourceState::Error(err) => error_view(&err),
 			}
 		}))
@@ -165,7 +206,7 @@ fn dashboard_view() -> Page {
 		},
 	];
 
-	dashboard("Admin Panel", &models)
+	dashboard("Administration", &models)
 }
 
 /// List view component for router
@@ -545,8 +586,9 @@ fn error_view(message: &str) -> Page {
 	if message.contains("401") {
 		reinhardt_pages::auth::clear_jwt_token();
 		reinhardt_pages::auth::auth_state().logout();
+		let login_url = get_login_url();
 		with_router(|r| {
-			let _ = r.push("/admin/login/");
+			let _ = r.push(&login_url);
 		});
 		return page!(|| {
 			div {

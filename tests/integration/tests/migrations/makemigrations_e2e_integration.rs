@@ -2840,9 +2840,7 @@ async fn mn_01_initial_migration_gets_initial_name() {
 			auto_increment: false,
 		},
 	);
-	target_schema
-		.tables
-		.insert("articles".to_string(), table);
+	target_schema.tables.insert("articles".to_string(), table);
 
 	// Act
 	let (migration_name, file_content) = generate_and_save_migration_with_namer(
@@ -2914,9 +2912,7 @@ async fn mn_02_second_migration_gets_descriptive_name() {
 			auto_increment: false,
 		},
 	);
-	initial_schema
-		.tables
-		.insert("articles".to_string(), table);
+	initial_schema.tables.insert("articles".to_string(), table);
 
 	let (first_name, _) = generate_and_save_migration_with_namer(
 		&migrations_dir,
@@ -3066,9 +3062,7 @@ async fn mn_04_third_migration_also_gets_descriptive_name() {
 			auto_increment: true,
 		},
 	);
-	schema_v1
-		.tables
-		.insert("comments".to_string(), table);
+	schema_v1.tables.insert("comments".to_string(), table);
 
 	let (first_name, _) = generate_and_save_migration_with_namer(
 		&migrations_dir,
@@ -3214,9 +3208,7 @@ async fn mn_05_drop_column_gets_remove_prefix_name() {
 			auto_increment: false,
 		},
 	);
-	schema_v1
-		.tables
-		.insert("profiles".to_string(), table);
+	schema_v1.tables.insert("profiles".to_string(), table);
 
 	// Create initial migration
 	let (first_name, _) = generate_and_save_migration_with_namer(
@@ -3322,22 +3314,17 @@ async fn mn_06_alter_column_type_change_gets_descriptive_name() {
 
 	// Change 'price' from Integer to Float
 	let mut schema_v2 = schema_v1.clone();
-	schema_v2
-		.tables
-		.get_mut("items")
-		.unwrap()
-		.columns
-		.insert(
-			"price".to_string(),
-			ColumnSchema {
-				name: "price".to_string(),
-				data_type: FieldType::Float,
-				nullable: false,
-				default: None,
-				primary_key: false,
-				auto_increment: false,
-			},
-		);
+	schema_v2.tables.get_mut("items").unwrap().columns.insert(
+		"price".to_string(),
+		ColumnSchema {
+			name: "price".to_string(),
+			data_type: FieldType::Float,
+			nullable: false,
+			default: None,
+			primary_key: false,
+			auto_increment: false,
+		},
+	);
 
 	// Act
 	let (second_name, second_content) = generate_and_save_migration_with_namer(
@@ -3506,9 +3493,7 @@ async fn mn_08_index_addition_gets_create_index_name() {
 			auto_increment: false,
 		},
 	);
-	schema_v1
-		.tables
-		.insert("articles".to_string(), table);
+	schema_v1.tables.insert("articles".to_string(), table);
 
 	let (first_name, _) = generate_and_save_migration_with_namer(
 		&migrations_dir,
@@ -3590,9 +3575,7 @@ async fn mn_09_drop_table_gets_delete_prefix_name() {
 			auto_increment: true,
 		},
 	);
-	schema_v1
-		.tables
-		.insert("temp_data".to_string(), table);
+	schema_v1.tables.insert("temp_data".to_string(), table);
 
 	let (first_name, _) = generate_and_save_migration_with_namer(
 		&migrations_dir,

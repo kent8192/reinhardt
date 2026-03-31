@@ -161,8 +161,9 @@ pub use permission::{
 };
 pub use permissions_mixin::PermissionsMixin;
 pub use superuser_creator::{
-	SuperuserCreator, SuperuserInit, TypedSuperuserCreator, get_superuser_creator,
-	register_superuser_creator, superuser_creator_for,
+	SuperuserCreator, SuperuserCreatorRegistration, SuperuserInit, TypedSuperuserCreator,
+	auto_register_superuser_creator, get_superuser_creator, register_superuser_creator,
+	superuser_creator_for,
 };
 pub use user::{AnonymousUser, SimpleUser, User};
 

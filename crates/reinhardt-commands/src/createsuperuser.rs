@@ -138,9 +138,15 @@ pub(crate) async fn execute_createsuperuser(
 		}
 	}
 
-	// Establish database connection if URL provided
-	if let Some(ref db_url) = database {
-		let _connection = reinhardt_db::DatabaseConnection::connect(db_url).await?;
+	// Warn if deprecated --database flag was used (#3186)
+	if database.is_some() {
+		eprintln!(
+			"{}",
+			style(
+				"Warning: --database flag is deprecated. Database URL is resolved from reinhardt-conf settings."
+			)
+			.yellow()
+		);
 	}
 
 	// Create the user via the registered SuperuserCreator

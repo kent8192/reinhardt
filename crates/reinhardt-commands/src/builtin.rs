@@ -382,6 +382,45 @@ async fn build_from_state_from_testcontainers(
 	))
 }
 
+/// Build from_state by replaying migration files from disk (offline fallback)
+///
+/// This approach requires no database or Docker. It reads all `.rs` migration files,
+/// builds a dependency graph, topologically sorts them, and replays all operations
+/// to reconstruct the current `ProjectState`.
+#[cfg(feature = "migrations")]
+async fn build_from_state_from_files(
+	migrations_dir: &std::path::Path,
+) -> Result<reinhardt_db::migrations::ProjectState, crate::CommandError> {
+	use reinhardt_db::migrations::{FilesystemSource, MigrationSource, build_state_from_files};
+
+	let source = FilesystemSource::new(migrations_dir);
+
+	// Check if there are any migrations on disk
+	let all_migrations = source.all_migrations().await.map_err(|e| {
+		crate::CommandError::ExecutionError(format!("Failed to load migrations from disk: {}", e))
+	})?;
+
+	if all_migrations.is_empty() {
+		// No migration files found -- this is genuinely an initial migration
+		return Ok(reinhardt_db::migrations::ProjectState::default());
+	}
+
+	eprintln!(
+		"[DEBUG] Building state from {} migration files on disk",
+		all_migrations.len()
+	);
+	for migration in &all_migrations {
+		eprintln!("[DEBUG]   - {}/{}", migration.app_label, migration.name);
+	}
+
+	build_state_from_files(&source).await.map_err(|e| {
+		crate::CommandError::ExecutionError(format!(
+			"Failed to build state from migration files: {}",
+			e
+		))
+	})
+}
+
 /// Make migrations command
 #[cfg(feature = "migrations")]
 pub struct MakeMigrationsCommand;
@@ -781,30 +820,45 @@ impl BaseCommand for MakeMigrationsCommand {
 								state
 							}
 							Err(e) => {
-								ctx.error(&format!("Failed to use TestContainers: {}", e));
-								ctx.error(
-									"⚠️  CRITICAL: Cannot build from_state from existing migrations!",
-								);
-								ctx.error(
-									"This will cause ALL tables to be regenerated, creating duplicate migrations.",
-								);
-								ctx.error("");
-								ctx.error("Possible solutions:");
-								ctx.error("  1. Fix TestContainers setup (recommended)");
-								ctx.error("  2. Use --from-db flag to build from database history");
-								ctx.error(
-									"  3. Use --force-empty-state to proceed anyway (dangerous)",
-								);
-								ctx.error("");
+								ctx.warning(&format!("Failed to use TestContainers: {}", e));
+								ctx.info("Falling back to file-based state reconstruction...");
+								match build_from_state_from_files(&migrations_dir).await {
+									Ok(state) => {
+										ctx.verbose("Built state from migration files (offline)");
+										state
+									}
+									Err(e_files) => {
+										ctx.error(&format!(
+											"Failed file-based reconstruction: {}",
+											e_files
+										));
+										ctx.error(
+											"⚠️  CRITICAL: Cannot build from_state from existing migrations!",
+										);
+										ctx.error(
+											"This will cause ALL tables to be regenerated, creating duplicate migrations.",
+										);
+										ctx.error("");
+										ctx.error("Possible solutions:");
+										ctx.error("  1. Fix TestContainers setup (recommended)");
+										ctx.error(
+											"  2. Use --from-db flag to build from database history",
+										);
+										ctx.error(
+											"  3. Use --force-empty-state to proceed anyway (dangerous)",
+										);
+										ctx.error("");
 
-								if ctx.has_option("force-empty-state") {
-									ctx.warning(
-										"⚠️  Using empty state as requested (--force-empty-state)",
-									);
-									ctx.warning("This may create duplicate migrations!");
-									ProjectState::new()
-								} else {
-									return Err("from_state construction failed. Please fix TestContainers, use --from-db, or use --force-empty-state to continue anyway.".to_string().into());
+										if ctx.has_option("force-empty-state") {
+											ctx.warning(
+												"⚠️  Using empty state as requested (--force-empty-state)",
+											);
+											ctx.warning("This may create duplicate migrations!");
+											ProjectState::new()
+										} else {
+											return Err("from_state construction failed. Please fix TestContainers, use --from-db, or use --force-empty-state to continue anyway.".to_string().into());
+										}
+									}
 								}
 							}
 						}
@@ -826,32 +880,45 @@ impl BaseCommand for MakeMigrationsCommand {
 								state
 							}
 							Err(e) => {
-								ctx.error(&format!("Failed to connect to database: {}", e));
-								ctx.error(
-									"⚠️  CRITICAL: Cannot build from_state from existing migrations!",
-								);
-								ctx.error(
-									"This will cause ALL tables to be regenerated, creating duplicate migrations.",
-								);
-								ctx.error("");
-								ctx.error("Possible solutions:");
-								ctx.error("  1. Fix database connection (recommended)");
-								ctx.error(
-									"  2. Use TestContainers (default behavior without --from-db)",
-								);
-								ctx.error(
-									"  3. Use --force-empty-state to proceed anyway (dangerous)",
-								);
-								ctx.error("");
+								ctx.warning(&format!("Failed to connect to database: {}", e));
+								ctx.info("Falling back to file-based state reconstruction...");
+								match build_from_state_from_files(&migrations_dir).await {
+									Ok(state) => {
+										ctx.verbose("Built state from migration files (offline)");
+										state
+									}
+									Err(e_files) => {
+										ctx.error(&format!(
+											"Failed file-based reconstruction: {}",
+											e_files
+										));
+										ctx.error(
+											"⚠️  CRITICAL: Cannot build from_state from existing migrations!",
+										);
+										ctx.error(
+											"This will cause ALL tables to be regenerated, creating duplicate migrations.",
+										);
+										ctx.error("");
+										ctx.error("Possible solutions:");
+										ctx.error("  1. Fix database connection (recommended)");
+										ctx.error(
+											"  2. Use TestContainers (default behavior without --from-db)",
+										);
+										ctx.error(
+											"  3. Use --force-empty-state to proceed anyway (dangerous)",
+										);
+										ctx.error("");
 
-								if ctx.has_option("force-empty-state") {
-									ctx.warning(
-										"⚠️  Using empty state as requested (--force-empty-state)",
-									);
-									ctx.warning("This may create duplicate migrations!");
-									ProjectState::new()
-								} else {
-									return Err("from_state construction failed. Please fix database connection, remove --from-db, or use --force-empty-state to continue anyway.".to_string().into());
+										if ctx.has_option("force-empty-state") {
+											ctx.warning(
+												"⚠️  Using empty state as requested (--force-empty-state)",
+											);
+											ctx.warning("This may create duplicate migrations!");
+											ProjectState::new()
+										} else {
+											return Err("from_state construction failed. Please fix database connection, remove --from-db, or use --force-empty-state to continue anyway.".to_string().into());
+										}
+									}
 								}
 							}
 						}
@@ -936,11 +1003,12 @@ impl BaseCommand for MakeMigrationsCommand {
 				for migration in generated_migrations {
 					if migration.app_label == app_name.as_str() {
 						// Generate migration name
-						let base_name = migration_name_opt.clone().unwrap_or_else(|| {
-							MigrationNamer::generate_name(&migration.operations, true)
-						});
 						let migration_number =
 							MigrationNumbering::next_number(&migrations_dir, app_name);
+						let is_initial = migration_number == "0001";
+						let base_name = migration_name_opt.clone().unwrap_or_else(|| {
+							MigrationNamer::generate_name(&migration.operations, is_initial)
+						});
 						let final_name = format!("{}_{}", migration_number, base_name);
 
 						// Determine dependencies
@@ -1514,54 +1582,26 @@ impl RunServerCommand {
 				(scope, None)
 			};
 
-		// Register DatabaseConnection as singleton when database feature is enabled
+		// Register DatabaseConnection in DI context when database feature is enabled.
+		// ORM is already initialized by run_command_with_registry() via
+		// initialize_orm_database(), so we only need to get the connection
+		// and register it in the DI singleton scope. (#3186)
 		#[cfg(feature = "reinhardt-db")]
 		{
-			// Check if DATABASE_URL was explicitly set in the environment before resolution
-			let env_database_url = std::env::var("DATABASE_URL").ok();
-
-			// Try to connect to database and register connection
-			match get_database_url() {
-				Ok(url) => {
-					// Sync DATABASE_URL to environment so all connection paths use the same URL.
-					// This prevents divergence where the ORM uses settings.toml but other code
-					// (e.g., sqlx::AnyPool, ModelViewSetHandler) reads DATABASE_URL directly.
-					sync_database_url_to_env(env_database_url.as_deref(), &url, ctx);
-
-					// Initialize ORM global database first, which also creates the connection pool
-					match reinhardt_db::orm::init_database(&url).await {
-						Ok(()) => {
-							ctx.verbose("ORM database initialized");
-							// Get the connection from ORM and register in DI context for dependency injection
-							match reinhardt_db::orm::get_connection().await {
-								Ok(db_conn) => {
-									// Register DatabaseConnection directly (not wrapped in Arc)
-									// The DI system wraps it in Arc internally via SingletonScope::set
-									singleton_scope.set(db_conn);
-									ctx.info(&format!(
-										"💾 Database: {} (connected)",
-										sanitize_database_url(&url)
-									));
-								}
-								Err(e) => {
-									ctx.warning(&format!(
-										"⚠️ Failed to get database connection for DI: {}",
-										e
-									));
-								}
-							}
-						}
-						Err(e) => {
-							ctx.warning(&format!(
-								"⚠️ Failed to initialize ORM database: {}. DI injection for DatabaseConnection will fail.",
-								e
-							));
-						}
-					}
+			match reinhardt_db::orm::get_connection().await {
+				Ok(db_conn) => {
+					// Register DatabaseConnection directly (not wrapped in Arc)
+					// The DI system wraps it in Arc internally via SingletonScope::set
+					singleton_scope.set(db_conn);
+					let url = get_database_url().unwrap_or_default();
+					ctx.info(&format!(
+						"💾 Database: {} (DI registered)",
+						sanitize_database_url(&url)
+					));
 				}
 				Err(e) => {
 					ctx.warning(&format!(
-						"⚠️ No DATABASE_URL configured: {}. DI injection for DatabaseConnection will fail.",
+						"⚠️ Failed to get database connection for DI: {}",
 						e
 					));
 				}
@@ -2314,6 +2354,42 @@ fn sanitize_database_url(url: &str) -> String {
 	}
 	// For non-URL formats (e.g., sqlite:file.db), return as-is
 	url.to_string()
+}
+
+/// Initialize the ORM database connection from reinhardt-conf settings.
+///
+/// Resolves the database URL via [`get_database_url()`] (reinhardt-conf
+/// settings as primary source, `DATABASE_URL` env var as fallback),
+/// syncs the resolved URL to the `DATABASE_URL` environment variable,
+/// and initializes the ORM global connection pool.
+///
+/// This function does **not** handle DI registration — that remains
+/// the responsibility of `runserver` since only HTTP-serving commands
+/// need the `DatabaseConnection` registered in the DI context.
+///
+/// # Errors
+///
+/// Returns [`CommandError::ExecutionError`] if the database URL cannot
+/// be resolved or the ORM connection pool fails to initialize.
+#[cfg(feature = "reinhardt-db")]
+pub(crate) async fn initialize_orm_database(
+	ctx: &CommandContext,
+) -> Result<(), crate::CommandError> {
+	let env_database_url = std::env::var("DATABASE_URL").ok();
+	let url = get_database_url()?;
+
+	sync_database_url_to_env(env_database_url.as_deref(), &url, ctx);
+
+	reinhardt_db::orm::init_database(&url).await.map_err(|e| {
+		crate::CommandError::ExecutionError(format!("Failed to initialize ORM database: {}", e))
+	})?;
+
+	ctx.verbose("ORM database initialized");
+	ctx.info(&format!(
+		"💾 Database: {} (connected)",
+		sanitize_database_url(&url)
+	));
+	Ok(())
 }
 
 /// Helper function to get DATABASE_URL from environment or settings

@@ -133,7 +133,11 @@ db.sqlite3
 .worktrees/
 
 # WASM build artifacts
-dist-wasm/
+dist-admin/
+
+# Admin vendor assets (downloaded/generated at build time or collectstatic)
+crates/reinhardt-admin/assets/vendor/*
+!crates/reinhardt-admin/assets/vendor/.gitkeep
 examples/examples-twitter/static/admin/
 
 # Design/planning documents (local only)

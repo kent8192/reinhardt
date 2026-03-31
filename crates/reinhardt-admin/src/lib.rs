@@ -30,6 +30,8 @@ pub mod adapters;
 pub mod core;
 pub mod pages;
 pub mod server;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod settings;
 pub mod types;
 
 // Register admin static files for auto-discovery by collectstatic
@@ -43,12 +45,12 @@ const _: () = {
 };
 
 // Register WASM build output for auto-discovery by collectstatic.
-// The dist-wasm/ directory may not exist if the WASM SPA has not been built;
+// The dist-admin/ directory may not exist if the WASM SPA has not been built;
 // collectstatic gracefully skips non-existent directories.
 #[cfg(not(target_arch = "wasm32"))]
 const _: () = {
 	/// Path to admin WASM build output directory
-	const ADMIN_WASM_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/dist-wasm");
+	const ADMIN_WASM_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/dist-admin");
 
 	reinhardt_apps::register_app_static_files!("admin-wasm", ADMIN_WASM_DIR, "/static/admin/");
 };

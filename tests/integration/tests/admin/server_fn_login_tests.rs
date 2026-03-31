@@ -14,7 +14,7 @@ use reinhardt_db::orm::connection::{DatabaseBackend, DatabaseConnection};
 use reinhardt_di::{InjectionContext, SingletonScope};
 use reinhardt_http::Handler;
 use reinhardt_query::prelude::{
-	Alias, ColumnDef, Expr, PostgresQueryBuilder, Query, QueryStatementBuilder, SimpleExpr,
+	Alias, ColumnDef, Expr, PostgresQueryBuilder, Query, QueryStatementBuilder,
 };
 use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use reinhardt_urls::routers::ServerRouter;
@@ -194,7 +194,7 @@ async fn build_login_router(pool: sqlx::PgPool, with_jwt_secret: bool) -> Server
 			Alias::new("is_superuser"),
 			Alias::new("date_joined"),
 		])
-		.values_panic::<[SimpleExpr; 8]>([
+		.values_panic([
 			"$1".into(),
 			"test_staff".into(),
 			"staff@test.example".into(),

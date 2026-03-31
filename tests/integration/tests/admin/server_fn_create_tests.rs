@@ -7,7 +7,7 @@ use super::server_fn_helpers::server_fn_context;
 use reinhardt_admin::adapters::MutationRequest;
 use reinhardt_admin::core::AdminRecord;
 use reinhardt_admin::core::{AdminDatabase, AdminSite};
-use reinhardt_admin::server::{create_record, get_detail};
+use reinhardt_admin::server::create_record;
 use rstest::*;
 use serde_json::json;
 use std::collections::HashMap;

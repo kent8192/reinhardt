@@ -1,8 +1,10 @@
 //! Settings module for examples-di-showcase
 
+use reinhardt::conf::settings::builder::SettingsBuilder;
+use reinhardt::conf::settings::profile::Profile;
+use reinhardt::conf::settings::sources::{DefaultSource, LowPriorityEnvSource, TomlFileSource};
 use reinhardt::core::serde::json;
 use reinhardt::settings;
-use reinhardt::{DefaultSource, LowPriorityEnvSource, Profile, SettingsBuilder, TomlFileSource};
 use std::env;
 
 #[settings(core: CoreSettings)]

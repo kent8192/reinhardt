@@ -41,8 +41,8 @@ root = "staticfiles"
 url = "/media/"
 root = "media"
 
-# Security settings
-[security]
+# Security settings (flattened into core settings via #[serde(flatten)],
+# so these keys go at the same level as other core settings, NOT under [security])
 session_cookie_secure = false
 csrf_cookie_secure = false
 secure_ssl_redirect = false

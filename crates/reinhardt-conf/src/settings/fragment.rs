@@ -2,6 +2,39 @@
 //!
 //! Defines the [`SettingsFragment`] trait that all composable settings units implement.
 //! Each fragment maps to a TOML section and can be validated independently.
+//!
+//! # TOML section mapping
+//!
+//! Each fragment's [`SettingsFragment::section()`] determines which TOML section it
+//! deserializes from. For example, `CoreSettings` (section `"core"`) reads from `[core]`,
+//! and `I18nSettings` (section `"i18n"`) reads from `[i18n]`.
+//!
+//! # `#[serde(flatten)]` behavior
+//!
+//! When a fragment contains a field annotated with `#[serde(flatten)]`, the nested
+//! struct's fields are placed **at the same level** as the parent, not as a sub-section.
+//!
+//! For example, `CoreSettings.security` is annotated with `#[serde(flatten)]`, so
+//! `SecuritySettings` fields like `secure_ssl_redirect` go directly under `[core]`:
+//!
+//! ```toml
+//! [core]
+//! secret_key = "..."
+//! debug = false
+//! # SecuritySettings fields (flattened, NOT under [core.security])
+//! secure_ssl_redirect = true
+//! session_cookie_secure = true
+//! ```
+//!
+//! Using `[core.security]` would be **incorrect** and cause deserialization to fail
+//! or silently ignore the values.
+//!
+//! # Shallow merge semantics
+//!
+//! When multiple TOML files are merged (e.g., `base.toml` + `local.toml`), each
+//! top-level section is replaced as a whole. If `local.toml` defines `[core]`, it
+//! replaces the entire `[core]` section from `base.toml`. Therefore, environment-specific
+//! files must be self-contained for any section they define.
 
 use super::policy::FieldPolicy;
 use super::profile::Profile;

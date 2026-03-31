@@ -27,8 +27,7 @@ password = "postgres"
 # engine = "sqlite"
 # name = "db.sqlite3"
 
-# Security settings (relaxed for development)
-[security]
+# Security settings (relaxed for development, flattened into core settings)
 session_cookie_secure = false
 csrf_cookie_secure = false
 secure_ssl_redirect = false

@@ -42,6 +42,7 @@ pub struct DatabaseConfig {
 	pub port: Option<u16>,
 
 	/// Additional options
+	#[serde(default)]
 	pub options: HashMap<String, String>,
 }
 

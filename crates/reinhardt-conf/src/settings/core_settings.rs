@@ -37,6 +37,20 @@ pub struct CoreSettings {
 	/// Flattened for backward-compatible deserialization: legacy TOML keys like
 	/// `secure_ssl_redirect` at the top level are accepted alongside the nested
 	/// `[security]` section form.
+	///
+	/// Because of `#[serde(flatten)]`, security fields are placed at the **same
+	/// level** as other `CoreSettings` fields in TOML, not under `[core.security]`:
+	///
+	/// ```toml
+	/// [core]
+	/// secret_key = "..."
+	/// debug = false
+	/// # Correct: security fields at the same level
+	/// secure_ssl_redirect = true
+	/// session_cookie_secure = true
+	/// ```
+	///
+	/// Using `[core.security]` is **incorrect** and will be silently ignored.
 	#[serde(default, flatten)]
 	pub security: SecuritySettings,
 	/// Middleware class paths.

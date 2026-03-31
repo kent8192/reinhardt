@@ -61,16 +61,16 @@ fn is_wasm_built() -> bool {
 /// Applies admin-specific security headers (CSP, X-Frame-Options, etc.)
 /// to prevent XSS, clickjacking, and other browser-side attacks.
 ///
-/// Security headers are derived from [`AdminSettings`] defaults. When
-/// custom settings support is needed (e.g. via DI), the handler can be
-/// updated to accept an `AdminSettings` instance.
+/// Uses the [`AdminSettings`] registered via [`configure()`], or
+/// falls back to safe defaults if no custom settings were configured.
 ///
 /// [`AdminSettings`]: crate::settings::AdminSettings
+/// [`configure()`]: crate::settings::configure
 #[cfg(not(target_arch = "wasm32"))]
 async fn admin_spa_handler(
 	request: reinhardt_http::Request,
 ) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
-	let settings = crate::settings::AdminSettings::default();
+	let settings = crate::settings::get_admin_settings();
 	let security_headers = settings.to_security_headers();
 	let csrf_token = crate::server::security::generate_csrf_token();
 	let csrf_cookie = crate::server::security::build_csrf_cookie(&csrf_token, request.is_secure);

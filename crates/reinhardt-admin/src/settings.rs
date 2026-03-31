@@ -329,6 +329,48 @@ mod inner {
 		}
 	}
 
+	// ============================================================
+	// Global settings accessor (OnceLock)
+	// ============================================================
+
+	use std::sync::OnceLock;
+
+	/// Global admin settings instance, set once at application startup.
+	static ADMIN_SETTINGS: OnceLock<AdminSettings> = OnceLock::new();
+
+	/// Register custom admin settings for the application.
+	///
+	/// Call this once during application startup to customize admin CSP,
+	/// security headers, and site configuration. If not called, the admin
+	/// panel uses [`AdminSettings::default()`].
+	///
+	/// # Panics
+	///
+	/// Panics if called more than once (settings are immutable after initialization).
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_admin::settings::{configure, AdminSettings};
+	///
+	/// let mut settings = AdminSettings::default();
+	/// settings.site_title = "My Admin".to_string();
+	/// configure(settings);
+	/// ```
+	pub fn configure(settings: AdminSettings) {
+		ADMIN_SETTINGS
+			.set(settings)
+			.expect("AdminSettings can only be configured once");
+	}
+
+	/// Get the current admin settings.
+	///
+	/// Returns the settings registered via [`configure()`], or
+	/// [`AdminSettings::default()`] if no custom settings were registered.
+	pub fn get_admin_settings() -> &'static AdminSettings {
+		ADMIN_SETTINGS.get_or_init(AdminSettings::default)
+	}
+
 	#[cfg(test)]
 	mod tests {
 		use super::*;

@@ -1,8 +1,8 @@
 //! Vendor asset manifest and download logic for the admin panel.
 //!
-//! This module defines the manifest of external CSS and font assets required
-//! by the admin panel, along with utilities for downloading and verifying them.
-//! All assets are version-pinned to ensure reproducible builds.
+//! This module defines the manifest of external CSS, JS, and font assets
+//! required by the admin panel, along with utilities for downloading and
+//! verifying them. All assets are version-pinned to ensure reproducible builds.
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
@@ -86,6 +86,14 @@ const ADMIN_VENDOR_ASSETS: &[VendorAsset] = &[
 	VendorAsset {
 		url: "https://cdn.jsdelivr.net/npm/@fontsource/syne@5.1.1/files/syne-latin-800-normal.woff2",
 		target: "vendor/fonts/syne-latin-800-normal.woff2",
+		sha256: "",
+	},
+	// UnoCSS Runtime v66.6.7 — browser-based utility CSS generation engine.
+	// Generates Tailwind-compatible utility CSS by observing DOM class names
+	// at runtime, eliminating the need for a build-time CLI step.
+	VendorAsset {
+		url: "https://cdn.jsdelivr.net/npm/@unocss/runtime@66.6.7/index.global.js",
+		target: "vendor/unocss-runtime.js",
 		sha256: "",
 	},
 ];

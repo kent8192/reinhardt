@@ -42,6 +42,10 @@ enum RuleValue {
 	/// A ULID generator.
 	Ulid,
 	/// An integer range generator.
+	/// Currently matched in `apply_range`, `apply_seed`, `set_strategy`, and
+	/// `generate_from_rule` but not yet constructed through the DSL pipe chain.
+	/// Construction will be added when the `int` generator function is implemented.
+	#[allow(dead_code)]
 	NumberRange {
 		/// Minimum value (inclusive).
 		min: i64,
@@ -98,9 +102,7 @@ fn evaluate_inner(expr: &SpannedExpr) -> Result<PipeResult, TbdError> {
 
 		Expr::Pipe { left, right } => evaluate_pipe(left, right, expr.span),
 
-		Expr::FunctionCall { name, args } => {
-			evaluate_function_call(name, args, expr.span)
-		}
+		Expr::FunctionCall { name, args } => evaluate_function_call(name, args, expr.span),
 
 		Expr::Identifier(ident) => evaluate_identifier(ident, expr.span),
 
@@ -208,11 +210,7 @@ fn evaluate_pipe(
 }
 
 /// Applies a bare identifier as a pipe stage.
-fn apply_pipe_ident(
-	left: &PipeResult,
-	ident: &str,
-	span: Span,
-) -> Result<PipeResult, TbdError> {
+fn apply_pipe_ident(left: &PipeResult, ident: &str, span: Span) -> Result<PipeResult, TbdError> {
 	match ident {
 		"fixed" => {
 			// Convert left value to Fixed rule
@@ -249,9 +247,7 @@ fn apply_pipe_ident(
 				}
 				PipeResult::Value(_) => {
 					return Err(TbdError::EvalError {
-						kind: EvalErrorKind::UnknownFunction(
-							"sequential on value".into(),
-						),
+						kind: EvalErrorKind::UnknownFunction("sequential on value".into()),
 						span,
 					});
 				}
@@ -324,9 +320,7 @@ fn apply_pipe_function(
 				}
 				PipeResult::Value(_) => {
 					return Err(TbdError::EvalError {
-						kind: EvalErrorKind::UnknownFunction(
-							"range on value".into(),
-						),
+						kind: EvalErrorKind::UnknownFunction("range on value".into()),
 						span,
 					});
 				}
@@ -336,9 +330,7 @@ fn apply_pipe_function(
 		"seed" => {
 			if args.len() != 1 {
 				return Err(TbdError::EvalError {
-					kind: EvalErrorKind::UnknownFunction(
-						"seed requires exactly 1 argument".into(),
-					),
+					kind: EvalErrorKind::UnknownFunction("seed requires exactly 1 argument".into()),
 					span,
 				});
 			}
@@ -362,9 +354,7 @@ fn apply_pipe_function(
 				}
 				PipeResult::Value(_) => {
 					return Err(TbdError::EvalError {
-						kind: EvalErrorKind::UnknownFunction(
-							"seed on value".into(),
-						),
+						kind: EvalErrorKind::UnknownFunction("seed on value".into()),
 						span,
 					});
 				}
@@ -437,12 +427,8 @@ fn evaluate_identifier(ident: &str, span: Span) -> Result<PipeResult, TbdError> 
 /// Sets the generation strategy on a rule value.
 fn set_strategy(rule: &mut RuleValue, strategy: Strategy) {
 	match rule {
-		RuleValue::Regex {
-			strategy: s, ..
-		} => *s = strategy,
-		RuleValue::NumberRange {
-			strategy: s, ..
-		} => *s = strategy,
+		RuleValue::Regex { strategy: s, .. } => *s = strategy,
+		RuleValue::NumberRange { strategy: s, .. } => *s = strategy,
 		RuleValue::Fixed(_) | RuleValue::Ulid => {
 			// Fixed and Ulid don't use strategies; silently ignore
 		}
@@ -502,10 +488,7 @@ fn build_regex_pattern(pattern: &str, min_len: usize, max_len: usize) -> String 
 }
 
 /// Generates a concrete TOML value from a fully-constructed rule.
-fn generate_from_rule(
-	rule: &RuleValue,
-	span: Span,
-) -> Result<toml::Value, TbdError> {
+fn generate_from_rule(rule: &RuleValue, span: Span) -> Result<toml::Value, TbdError> {
 	match rule {
 		RuleValue::Fixed(v) => Ok(v.clone()),
 
@@ -602,8 +585,7 @@ mod tests {
 
 	/// Helper to parse and generate a value from a DSL expression string.
 	fn run_generate(input: &str) -> Result<toml::Value, TbdError> {
-		let expr =
-			parse_expression(input).expect("parse should succeed");
+		let expr = parse_expression(input).expect("parse should succeed");
 		generate(&expr)
 	}
 
@@ -614,10 +596,7 @@ mod tests {
 	#[case("8080 | fixed | TBD", toml::Value::Integer(8080))]
 	#[case("3.14 | fixed | TBD", toml::Value::Float(3.14))]
 	#[case(r#""hello" | fixed | TBD"#, toml::Value::String("hello".into()))]
-	fn test_generate_fixed(
-		#[case] input: &str,
-		#[case] expected: toml::Value,
-	) {
+	fn test_generate_fixed(#[case] input: &str, #[case] expected: toml::Value) {
 		// Act
 		let result = run_generate(input).expect("should succeed");
 		// Assert
@@ -630,10 +609,7 @@ mod tests {
 	#[case("10 - 3", 7)]
 	#[case("4 * 5", 20)]
 	#[case("10 / 3", 3)]
-	fn test_generate_arithmetic(
-		#[case] input: &str,
-		#[case] expected: i64,
-	) {
+	fn test_generate_arithmetic(#[case] input: &str, #[case] expected: i64) {
 		// Act
 		let result = run_generate(input).expect("should succeed");
 		// Assert
@@ -695,8 +671,7 @@ mod tests {
 	#[rstest]
 	fn test_generate_range_invalid() {
 		// Act
-		let result =
-			run_generate("regex([a-z]*) | range(10, 5) | random | TBD");
+		let result = run_generate("regex([a-z]*) | range(10, 5) | random | TBD");
 		// Assert
 		assert!(result.is_err());
 		let err = result.unwrap_err();
@@ -716,17 +691,12 @@ mod tests {
 	#[rstest]
 	fn test_generate_range_boundary() {
 		// Arrange
-		let input =
-			"regex([a-z]*) | range(1, 1) | random | seed(99) | TBD";
+		let input = "regex([a-z]*) | range(1, 1) | random | seed(99) | TBD";
 		// Act
 		let result = run_generate(input).expect("should succeed");
 		// Assert
 		let s = result.as_str().expect("should be string");
-		assert_eq!(
-			s.len(),
-			1,
-			"range(1,1) should produce exactly 1 character"
-		);
+		assert_eq!(s.len(), 1, "range(1,1) should produce exactly 1 character");
 	}
 
 	mod proptests {

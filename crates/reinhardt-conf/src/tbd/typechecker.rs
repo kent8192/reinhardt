@@ -5,7 +5,7 @@
 //! operands of the correct types.
 
 use crate::tbd::ast::{Expr, Literal, SpannedExpr};
-use crate::tbd::error::{TbdError};
+use crate::tbd::error::TbdError;
 use crate::tbd::types::DslType;
 
 /// Type-checks a spanned expression and returns its inferred [`DslType`].
@@ -182,10 +182,7 @@ fn typecheck_binary_op(
 
 /// Type-checks a tuple by inferring the type of each element.
 fn typecheck_tuple(elements: &[SpannedExpr]) -> Result<DslType, TbdError> {
-	let types: Vec<DslType> = elements
-		.iter()
-		.map(typecheck)
-		.collect::<Result<_, _>>()?;
+	let types: Vec<DslType> = elements.iter().map(typecheck).collect::<Result<_, _>>()?;
 	Ok(DslType::Tuple(types))
 }
 

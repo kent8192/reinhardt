@@ -35,13 +35,15 @@ fn backtrack() -> ErrMode<ContextError> {
 /// error.
 pub fn parse_expression(input: &str) -> Result<SpannedExpr, TbdError> {
 	let mut remaining = input;
-	let result = parse_pipe_expr.parse_next(&mut remaining).map_err(|_| TbdError::ParseError {
-		message: "failed to parse expression".into(),
-		span: Span {
-			start: 0,
-			end: input.len(),
-		},
-	})?;
+	let result = parse_pipe_expr
+		.parse_next(&mut remaining)
+		.map_err(|_| TbdError::ParseError {
+			message: "failed to parse expression".into(),
+			span: Span {
+				start: 0,
+				end: input.len(),
+			},
+		})?;
 
 	// Skip trailing whitespace and ensure all input is consumed
 	let trimmed = remaining.trim();
@@ -249,10 +251,7 @@ fn parse_paren_expr(input: &mut &str) -> ModalResult<SpannedExpr> {
 		Ok(elements.into_iter().next().unwrap())
 	} else {
 		// Tuple
-		Ok(SpannedExpr::new(
-			Expr::Tuple(elements),
-			Span { start, end },
-		))
+		Ok(SpannedExpr::new(Expr::Tuple(elements), Span { start, end }))
 	}
 }
 
@@ -292,10 +291,7 @@ fn parse_array(input: &mut &str) -> ModalResult<SpannedExpr> {
 	"]".parse_next(input)?;
 	let end = offset_in(full, input);
 
-	Ok(SpannedExpr::new(
-		Expr::Array(elements),
-		Span { start, end },
-	))
+	Ok(SpannedExpr::new(Expr::Array(elements), Span { start, end }))
 }
 
 /// Parses a function call or bare identifier.
@@ -308,8 +304,9 @@ fn parse_func_or_ident(input: &mut &str) -> ModalResult<SpannedExpr> {
 	let start = offset_in(full, input);
 
 	// Parse the identifier name
-	let first: char =
-		winnow::token::any.verify(|c: &char| c.is_alphabetic()).parse_next(input)?;
+	let first: char = winnow::token::any
+		.verify(|c: &char| c.is_alphabetic())
+		.parse_next(input)?;
 
 	let rest: &str =
 		take_while(0.., |c: char| c.is_alphanumeric() || c == '_').parse_next(input)?;
@@ -458,10 +455,7 @@ fn parse_boolean(input: &mut &str) -> ModalResult<SpannedExpr> {
 
 	let end = offset_in(full, input);
 	let lit = Literal::Boolean(value == "true");
-	Ok(SpannedExpr::new(
-		Expr::Literal(lit),
-		Span { start, end },
-	))
+	Ok(SpannedExpr::new(Expr::Literal(lit), Span { start, end }))
 }
 
 /// Parses an integer or floating-point number with an optional leading `-`.

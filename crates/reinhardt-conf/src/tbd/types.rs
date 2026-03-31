@@ -122,7 +122,10 @@ mod tests {
 	#[case::rule(DslType::Rule(Box::new(DslType::String)), "Rule<String>")]
 	#[case::tuple(DslType::Tuple(vec![DslType::Number, DslType::String]), "(Number, String)")]
 	#[case::array(DslType::Array(Box::new(DslType::Number)), "[Number]")]
-	#[case::nested_rule(DslType::Rule(Box::new(DslType::Array(Box::new(DslType::Boolean)))), "Rule<[Boolean]>")]
+	#[case::nested_rule(
+		DslType::Rule(Box::new(DslType::Array(Box::new(DslType::Boolean)))),
+		"Rule<[Boolean]>"
+	)]
 	fn test_display(#[case] ty: DslType, #[case] expected: &str) {
 		// Arrange
 		// (provided via #[case] parameters)

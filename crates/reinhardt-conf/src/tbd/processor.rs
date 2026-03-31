@@ -32,15 +32,14 @@ pub fn process_template(input: &str) -> Result<String, TbdError> {
 
 			// Find the matching closing bracket
 			let expr_start = marker_pos + 2; // skip "!["
-			let close_pos = find_matching_bracket(input, expr_start).ok_or_else(|| {
-				TbdError::ParseError {
+			let close_pos =
+				find_matching_bracket(input, expr_start).ok_or_else(|| TbdError::ParseError {
 					message: "unclosed `![` marker: no matching `]` found".to_string(),
 					span: Span {
 						start: marker_pos,
 						end: input.len(),
 					},
-				}
-			})?;
+				})?;
 
 			let expr_text = &input[expr_start..close_pos];
 
@@ -193,11 +192,7 @@ fn serialize_toml_value(value: &toml::Value) -> String {
 		toml::Value::Float(f) => {
 			let s = f.to_string();
 			// Ensure a decimal point is present
-			if s.contains('.') {
-				s
-			} else {
-				format!("{s}.0")
-			}
+			if s.contains('.') { s } else { format!("{s}.0") }
 		}
 		toml::Value::Boolean(b) => b.to_string(),
 		toml::Value::Array(arr) => {
@@ -262,8 +257,7 @@ mod tests {
 	#[rstest]
 	fn test_process_multiple() {
 		// Arrange
-		let input =
-			"[settings]\ndebug = ![false | fixed | TBD]\nport = ![8080 | fixed | TBD]\n";
+		let input = "[settings]\ndebug = ![false | fixed | TBD]\nport = ![8080 | fixed | TBD]\n";
 
 		// Act
 		let output = process_template(input).unwrap();

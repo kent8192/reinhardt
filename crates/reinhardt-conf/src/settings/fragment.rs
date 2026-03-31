@@ -9,25 +9,32 @@
 //! deserializes from. For example, `CoreSettings` (section `"core"`) reads from `[core]`,
 //! and `I18nSettings` (section `"i18n"`) reads from `[i18n]`.
 //!
-//! # `#[serde(flatten)]` behavior
+//! # Nested structs within fragments
 //!
-//! When a fragment contains a field annotated with `#[serde(flatten)]`, the nested
-//! struct's fields are placed **at the same level** as the parent, not as a sub-section.
-//!
-//! For example, `CoreSettings.security` is annotated with `#[serde(flatten)]`, so
-//! `SecuritySettings` fields like `secure_ssl_redirect` go directly under `[core]`:
+//! When a fragment contains nested structs (e.g., `CoreSettings.security`), the
+//! nested struct maps to a TOML sub-section named after the field:
 //!
 //! ```toml
 //! [core]
 //! secret_key = "..."
 //! debug = false
-//! # SecuritySettings fields (flattened, NOT under [core.security])
+//!
+//! [core.security]
 //! secure_ssl_redirect = true
 //! session_cookie_secure = true
 //! ```
 //!
-//! Using `[core.security]` would be **incorrect** and cause deserialization to fail
-//! or silently ignore the values.
+//! In the legacy `Settings` format (where `CoreSettings` is flattened at the root),
+//! the sub-section becomes a top-level section:
+//!
+//! ```toml
+//! secret_key = "..."
+//! debug = false
+//!
+//! [security]
+//! secure_ssl_redirect = true
+//! session_cookie_secure = true
+//! ```
 //!
 //! # Shallow merge semantics
 //!

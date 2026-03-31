@@ -32,7 +32,8 @@ root = "/var/www/{{ project_name }}/staticfiles"
 url = "https://cdn-staging.example.com/media/"
 root = "/var/www/{{ project_name }}/media"
 
-# Security settings (moderate for staging, flattened into core settings)
+# Security settings (moderate for staging)
+[security]
 session_cookie_secure = true
 csrf_cookie_secure = true
 secure_ssl_redirect = true

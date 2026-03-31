@@ -32,26 +32,32 @@ pub struct CoreSettings {
 	/// Database configurations keyed by alias.
 	#[serde(default = "default_databases")]
 	pub databases: HashMap<String, DatabaseConfig>,
-	/// Security settings (nested fragment).
+	/// Security settings (nested sub-section).
 	///
-	/// Flattened for backward-compatible deserialization: legacy TOML keys like
-	/// `secure_ssl_redirect` at the top level are accepted alongside the nested
-	/// `[security]` section form.
-	///
-	/// Because of `#[serde(flatten)]`, security fields are placed at the **same
-	/// level** as other `CoreSettings` fields in TOML, not under `[core.security]`:
+	/// In TOML, security fields are placed under a `[core.security]` sub-section
+	/// (composable settings) or `[security]` section (legacy `Settings`):
 	///
 	/// ```toml
+	/// # Composable settings format
 	/// [core]
 	/// secret_key = "..."
 	/// debug = false
-	/// # Correct: security fields at the same level
+	///
+	/// [core.security]
 	/// secure_ssl_redirect = true
 	/// session_cookie_secure = true
 	/// ```
 	///
-	/// Using `[core.security]` is **incorrect** and will be silently ignored.
-	#[serde(default, flatten)]
+	/// ```toml
+	/// # Legacy Settings format (CoreSettings flattened at root)
+	/// secret_key = "..."
+	/// debug = false
+	///
+	/// [security]
+	/// secure_ssl_redirect = true
+	/// session_cookie_secure = true
+	/// ```
+	#[serde(default)]
 	pub security: SecuritySettings,
 	/// Middleware class paths.
 	#[serde(default)]
@@ -324,6 +330,73 @@ mod tests {
 			!policy.has_default,
 			"secret_key must not have a default value"
 		);
+	}
+
+	#[rstest]
+	fn test_core_settings_deserialize_nested_security_section() {
+		// Arrange — composable settings format with [core.security] sub-section
+		let toml_str = r#"
+secret_key = "test-secret"
+debug = false
+
+[security]
+secure_ssl_redirect = true
+session_cookie_secure = true
+csrf_cookie_secure = true
+secure_hsts_seconds = 31536000
+secure_hsts_include_subdomains = true
+secure_hsts_preload = true
+"#;
+
+		// Act
+		let settings: CoreSettings = toml::from_str(toml_str).expect("failed to parse TOML");
+
+		// Assert — security fields parsed from nested section
+		assert_eq!(settings.secret_key, "test-secret");
+		assert!(!settings.debug);
+		assert!(settings.security.secure_ssl_redirect);
+		assert!(settings.security.session_cookie_secure);
+		assert!(settings.security.csrf_cookie_secure);
+		assert_eq!(settings.security.secure_hsts_seconds, Some(31536000));
+		assert!(settings.security.secure_hsts_include_subdomains);
+		assert!(settings.security.secure_hsts_preload);
+	}
+
+	#[rstest]
+	fn test_core_settings_deserialize_omitted_security_uses_defaults() {
+		// Arrange — no security section at all
+		let toml_str = r#"
+secret_key = "test-secret"
+debug = true
+"#;
+
+		// Act
+		let settings: CoreSettings = toml::from_str(toml_str).expect("failed to parse TOML");
+
+		// Assert — security defaults applied
+		assert!(!settings.security.secure_ssl_redirect);
+		assert!(!settings.security.session_cookie_secure);
+		assert!(!settings.security.csrf_cookie_secure);
+		assert_eq!(settings.security.secure_hsts_seconds, None);
+	}
+
+	#[rstest]
+	fn test_core_settings_deserialize_partial_security_section() {
+		// Arrange — only some security fields specified
+		let toml_str = r#"
+secret_key = "test-secret"
+
+[security]
+secure_ssl_redirect = true
+"#;
+
+		// Act
+		let settings: CoreSettings = toml::from_str(toml_str).expect("failed to parse TOML");
+
+		// Assert — specified field overridden, others use defaults
+		assert!(settings.security.secure_ssl_redirect);
+		assert!(!settings.security.session_cookie_secure);
+		assert!(!settings.security.csrf_cookie_secure);
 	}
 
 	#[rstest]

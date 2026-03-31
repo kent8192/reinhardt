@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.15...reinhardt-web@v0.1.0-rc.16) - 2026-03-31
+
+### Added
+
+- *(pages)* add JWT token management and auth header injection for WASM SPA
+- *(admin)* add login server function with JWT authentication
+- *(admin)* add login page, auth gate, and 401 redirect for WASM SPA
+- *(auth)* add SuperuserInit trait and SuperuserCreator registry
+- *(commands)* add createsuperuser as built-in management command
+
+### Changed
+
+- *(admin)* [**breaking**] mark AdminRoute as non_exhaustive and reorder Login variant
+
+### Documentation
+
+- *(admin)* fix broken intra-doc link to CspMiddleware
+- *(auth)* add deprecation notice to standalone createsuperuser binary
+- *(conf)* fix composable settings TOML structure and add serde defaults
+
+### Fixed
+
+- *(ci)* stop unattended-upgrades before apt-get to prevent dpkg lock
+- *(pages)* add web-sys Storage feature for sessionStorage access
+- *(admin)* use path_params instead of full URI in static file handler
+- *(admin)* call WASM init() in SPA HTML for web target output
+- *(admin)* support HEAD requests for static file handler
+- *(admin)* remove broken presetWind() global function call for UnoCSS v66+
+- *(admin)* initialize UnoCSS runtime with v66+ API for preset-wind
+- *(docs)* resolve broken intra-doc links and incorrect test assertion
+- *(conf)* remove #[serde(flatten)] from SecuritySettings and fix TOML scoping
+- *(conf)* add missing newline at end of pages template base.example.toml
+- *(admin)* replace CDN references with local vendor paths
+- *(settings)* update tests to use nested security keys after [[#3176](https://github.com/kent8192/reinhardt-web/issues/3176)](https://github.com/kent8192/reinhardt-web/issues/3176) de-flatten
+- *(ci)* guard mutation-test if condition against undefined inputs context
+
+### Other
+
+- resolve conflict with main (deduplicate tests)
+
+### Styling
+
+- *(admin)* apply rustfmt to test assertion in router module
+- *(examples)* apply rustfmt import ordering and formatting fixes
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.14...reinhardt-web@v0.1.0-rc.15) - 2026-03-29
 
 ### Added

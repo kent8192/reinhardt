@@ -22,6 +22,8 @@ sqlx = { workspace = true, optional = true }
 reinhardt-server = { workspace = true, optional = true }
 reinhardt-middleware = { workspace = true, optional = true }
 reinhardt-auth = { workspace = true, optional = true }
+reinhardt-admin = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
 reinhardt-pages = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
@@ -87,7 +89,7 @@ di = ["dep:reinhardt-di"]
 openapi = ["dep:reinhardt-rest", "dep:reinhardt-http"]
 introspect = ["routers", "dep:cargo_metadata", "dep:serde_yaml"]
 openapi-router = ["dep:reinhardt-openapi", "openapi"]
-server = ["dep:reinhardt-server", "dep:reinhardt-middleware", "routers", "di"]
+server = ["dep:reinhardt-server", "dep:reinhardt-middleware", "routers", "di", "dep:reinhardt-admin", "dep:reqwest"]
 autoreload = ["dep:notify", "server"]
 shell = ["dep:rustyline"]
 shell-rhai = ["shell", "dep:rhai"]

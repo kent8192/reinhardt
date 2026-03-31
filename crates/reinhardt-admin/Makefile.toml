@@ -41,7 +41,7 @@ args = [
 
 [tasks.wasm-build-dev]
 description = "Build WASM in debug mode"
-dependencies = ["wasm-bindgen-dev"]
+dependencies = ["wasm-bindgen-dev", "unocss-generate"]
 
 [tasks.wasm-compile-release]
 description = "Compile WASM binary (release mode)"
@@ -76,7 +76,21 @@ dependencies = ["wasm-bindgen-release"]
 
 [tasks.wasm-build-release]
 description = "Build WASM in release mode with optimization"
-dependencies = ["wasm-finalize-release"]
+dependencies = ["wasm-finalize-release", "unocss-generate"]
+
+# ============================================================================
+# CSS Generation Tasks
+# ============================================================================
+
+[tasks.unocss-generate]
+description = "Generate UnoCSS utility CSS from admin sources"
+command = "npx"
+args = [
+	"unocss",
+	"src/**/*.rs",
+	"assets/main.js",
+	"--out-file", "assets/vendor/unocss.generated.css"
+]
 
 # ============================================================================
 # WASM Testing Tasks

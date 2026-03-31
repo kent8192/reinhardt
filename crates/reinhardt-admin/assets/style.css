@@ -2,12 +2,78 @@
  * Reinhardt Admin Panel — Design System
  *
  * Aesthetic: "Obsidian & Amber" — Swiss precision meets developer tool.
- * Typography: Syne (display) + DM Sans (body) via Google Fonts CDN.
- * Tokens: Open Props (shadows, radii, easing, animations) via CDN.
- * Entrance FX: Animate.css via CDN.
- * Utility classes: Generated at runtime by UnoCSS preset-wind.
+ * Typography: Syne (display) + DM Sans (body), self-hosted via Fontsource.
+ * Tokens: Open Props (shadows, radii, easing, animations), bundled locally.
+ * Entrance FX: Animate.css, bundled locally.
+ * Utility classes: Generated at build time by UnoCSS CLI.
  * This file provides theme overrides and component styles only.
  */
+
+/* === Web Fonts (self-hosted via Fontsource) === */
+
+@font-face {
+	font-family: 'DM Sans';
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url('vendor/fonts/dm-sans-latin-400.woff2') format('woff2');
+}
+
+@font-face {
+	font-family: 'DM Sans';
+	font-style: italic;
+	font-weight: 400;
+	font-display: swap;
+	src: url('vendor/fonts/dm-sans-latin-400-italic.woff2') format('woff2');
+}
+
+@font-face {
+	font-family: 'DM Sans';
+	font-style: normal;
+	font-weight: 500;
+	font-display: swap;
+	src: url('vendor/fonts/dm-sans-latin-500.woff2') format('woff2');
+}
+
+@font-face {
+	font-family: 'DM Sans';
+	font-style: normal;
+	font-weight: 600;
+	font-display: swap;
+	src: url('vendor/fonts/dm-sans-latin-600.woff2') format('woff2');
+}
+
+@font-face {
+	font-family: 'DM Sans';
+	font-style: normal;
+	font-weight: 700;
+	font-display: swap;
+	src: url('vendor/fonts/dm-sans-latin-700.woff2') format('woff2');
+}
+
+@font-face {
+	font-family: 'Syne';
+	font-style: normal;
+	font-weight: 600;
+	font-display: swap;
+	src: url('vendor/fonts/syne-latin-600.woff2') format('woff2');
+}
+
+@font-face {
+	font-family: 'Syne';
+	font-style: normal;
+	font-weight: 700;
+	font-display: swap;
+	src: url('vendor/fonts/syne-latin-700.woff2') format('woff2');
+}
+
+@font-face {
+	font-family: 'Syne';
+	font-style: normal;
+	font-weight: 800;
+	font-display: swap;
+	src: url('vendor/fonts/syne-latin-800.woff2') format('woff2');
+}
 
 /* ===  Theme tokens  === */
 

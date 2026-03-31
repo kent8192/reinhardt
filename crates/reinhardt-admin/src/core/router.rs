@@ -853,31 +853,56 @@ mod tests {
 
 	#[cfg(not(target_arch = "wasm32"))]
 	#[rstest]
-	fn test_admin_spa_html_includes_unocss_vendor_css() {
-		// Arrange & Act
+	fn test_admin_spa_html_no_external_cdn_urls() {
+		// Arrange
 		let html = admin_spa_html();
 
-		// Assert — local vendor UnoCSS generated CSS is referenced
+		// Assert — no external CDN references
 		assert!(
-			html.contains("vendor/unocss"),
-			"HTML should reference local UnoCSS generated CSS from vendor/"
+			!html.contains("fonts.googleapis.com"),
+			"HTML should not reference Google Fonts CDN"
+		);
+		assert!(
+			!html.contains("fonts.gstatic.com"),
+			"HTML should not reference Google Fonts static CDN"
+		);
+		assert!(
+			!html.contains("cdn.jsdelivr.net"),
+			"HTML should not reference jsDelivr CDN"
 		);
 	}
 
 	#[cfg(not(target_arch = "wasm32"))]
 	#[rstest]
-	fn test_admin_spa_html_includes_open_props_and_animate_css() {
-		// Arrange & Act
+	fn test_admin_spa_html_references_vendor_assets() {
+		// Arrange
 		let html = admin_spa_html();
 
-		// Assert — local vendor paths are referenced
+		// Assert — local vendor assets are referenced
 		assert!(
 			html.contains("vendor/open-props"),
-			"HTML should reference local Open Props CSS from vendor/"
+			"HTML should reference local Open Props CSS"
 		);
 		assert!(
 			html.contains("vendor/animate"),
-			"HTML should reference local Animate.css from vendor/"
+			"HTML should reference local Animate.css"
+		);
+		assert!(
+			html.contains("vendor/unocss"),
+			"HTML should reference local UnoCSS generated CSS"
+		);
+	}
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn test_admin_spa_html_no_inline_script() {
+		// Arrange
+		let html = admin_spa_html();
+
+		// Assert — no UnoCSS runtime inline script
+		assert!(
+			!html.contains("__unocss_runtime"),
+			"HTML should not contain UnoCSS runtime initialization"
 		);
 	}
 
@@ -1307,58 +1332,4 @@ mod tests {
 		);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
-	#[rstest]
-	fn test_admin_spa_html_no_external_cdn_urls() {
-		// Arrange
-		let html = admin_spa_html();
-
-		// Assert — no external CDN references
-		assert!(
-			!html.contains("fonts.googleapis.com"),
-			"HTML should not reference Google Fonts CDN"
-		);
-		assert!(
-			!html.contains("fonts.gstatic.com"),
-			"HTML should not reference Google Fonts static CDN"
-		);
-		assert!(
-			!html.contains("cdn.jsdelivr.net"),
-			"HTML should not reference jsDelivr CDN"
-		);
-	}
-
-	#[cfg(not(target_arch = "wasm32"))]
-	#[rstest]
-	fn test_admin_spa_html_references_vendor_assets() {
-		// Arrange
-		let html = admin_spa_html();
-
-		// Assert — local vendor assets are referenced
-		assert!(
-			html.contains("vendor/open-props"),
-			"HTML should reference local Open Props CSS"
-		);
-		assert!(
-			html.contains("vendor/animate"),
-			"HTML should reference local Animate.css"
-		);
-		assert!(
-			html.contains("vendor/unocss"),
-			"HTML should reference local UnoCSS generated CSS"
-		);
-	}
-
-	#[cfg(not(target_arch = "wasm32"))]
-	#[rstest]
-	fn test_admin_spa_html_no_inline_script() {
-		// Arrange
-		let html = admin_spa_html();
-
-		// Assert — no UnoCSS runtime inline script
-		assert!(
-			!html.contains("__unocss_runtime"),
-			"HTML should not contain UnoCSS runtime initialization"
-		);
-	}
 }

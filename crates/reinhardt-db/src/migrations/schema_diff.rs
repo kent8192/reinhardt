@@ -432,6 +432,61 @@ impl SchemaDiff {
 			});
 		}
 
+		// Alter columns (type changes, nullability changes, etc.)
+		for (table_name, col_name, old_col, new_col) in &diff.columns_to_modify {
+			let old_unique =
+				Self::column_has_unique(&self.current_schema, table_name, col_name);
+			let new_unique =
+				Self::column_has_unique(&self.target_schema, table_name, col_name);
+
+			operations.push(Operation::AlterColumn {
+				table: table_name.clone(),
+				column: col_name.clone(),
+				old_definition: Some(ColumnDefinition {
+					name: col_name.clone(),
+					type_definition: old_col.data_type.clone(),
+					not_null: !old_col.nullable,
+					default: old_col.default.as_ref().cloned(),
+					unique: old_unique,
+					primary_key: old_col.primary_key,
+					auto_increment: Self::is_auto_increment(old_col),
+				}),
+				new_definition: ColumnDefinition {
+					name: col_name.clone(),
+					type_definition: new_col.data_type.clone(),
+					not_null: !new_col.nullable,
+					default: new_col.default.as_ref().cloned(),
+					unique: new_unique,
+					primary_key: new_col.primary_key,
+					auto_increment: Self::is_auto_increment(new_col),
+				},
+				mysql_options: None,
+			});
+		}
+
+		// Add indexes
+		for (table_name, index) in &diff.indexes_to_add {
+			operations.push(Operation::CreateIndex {
+				table: table_name.clone(),
+				columns: index.columns.clone(),
+				unique: index.unique,
+				index_type: None,
+				where_clause: None,
+				concurrently: false,
+				expressions: None,
+				mysql_options: None,
+				operator_class: None,
+			});
+		}
+
+		// Remove indexes
+		for (table_name, index) in &diff.indexes_to_remove {
+			operations.push(Operation::DropIndex {
+				table: table_name.clone(),
+				columns: index.columns.clone(),
+			});
+		}
+
 		operations
 	}
 
@@ -441,27 +496,35 @@ impl SchemaDiff {
 		!diff.tables_to_remove.is_empty()
 			|| !diff.columns_to_remove.is_empty()
 			|| !diff.columns_to_modify.is_empty()
+			|| !diff.indexes_to_remove.is_empty()
 	}
 
-	/// Extract column-level constraints from table constraints and indexes
-	fn extract_column_constraints(&self, table_name: &str, column_name: &str) -> bool {
-		let table_schema = match self.target_schema.tables.get(table_name) {
+	/// Check if a column has a unique constraint or index in a given schema
+	fn column_has_unique(
+		schema: &DatabaseSchema,
+		table_name: &str,
+		column_name: &str,
+	) -> bool {
+		let table_schema = match schema.tables.get(table_name) {
 			Some(t) => t,
 			None => return false,
 		};
 
-		// Check if column is part of a unique constraint
 		let has_unique_constraint = table_schema.constraints.iter().any(|constraint| {
 			constraint.constraint_type.to_uppercase() == "UNIQUE"
 				&& constraint.definition.contains(column_name)
 		});
 
-		// Check if column has unique index (single-column unique index)
 		let has_unique_index = table_schema.indexes.iter().any(|index| {
 			index.unique && index.columns.len() == 1 && index.columns[0] == column_name
 		});
 
 		has_unique_constraint || has_unique_index
+	}
+
+	/// Extract column-level constraints from table constraints and indexes
+	fn extract_column_constraints(&self, table_name: &str, column_name: &str) -> bool {
+		Self::column_has_unique(&self.target_schema, table_name, column_name)
 	}
 
 	/// Detect if column is auto-increment based on column properties and data type
@@ -688,5 +751,435 @@ mod tests {
 
 		let diff = SchemaDiff::new(current, target);
 		assert!(diff.has_destructive_changes());
+	}
+
+	// ================================================================
+	// generate_operations() tests (issue #3198 related)
+	// ================================================================
+
+	/// Helper to create a simple column schema
+	fn col(name: &str, data_type: FieldType, nullable: bool) -> ColumnSchema {
+		ColumnSchema {
+			name: name.to_string(),
+			data_type,
+			nullable,
+			default: None,
+			primary_key: false,
+			auto_increment: false,
+		}
+	}
+
+	/// Helper to create a primary key column
+	fn pk_col(name: &str) -> ColumnSchema {
+		ColumnSchema {
+			name: name.to_string(),
+			data_type: FieldType::Integer,
+			nullable: false,
+			default: None,
+			primary_key: true,
+			auto_increment: true,
+		}
+	}
+
+	/// Helper to create a table with given columns
+	fn table_with_cols(name: &str, cols: Vec<(&str, ColumnSchema)>) -> TableSchema {
+		let mut columns = BTreeMap::new();
+		for (col_name, col_schema) in cols {
+			columns.insert(col_name.to_string(), col_schema);
+		}
+		TableSchema {
+			name: name.to_string(),
+			columns,
+			indexes: Vec::new(),
+			constraints: Vec::new(),
+		}
+	}
+
+	#[test]
+	fn test_generate_operations_create_table() {
+		// Arrange
+		let current = DatabaseSchema::default();
+		let mut target = DatabaseSchema::default();
+		target.tables.insert(
+			"users".to_string(),
+			table_with_cols("users", vec![
+				("id", pk_col("id")),
+				("name", col("name", FieldType::VarChar(100), false)),
+			]),
+		);
+
+		// Act
+		let diff = SchemaDiff::new(current, target);
+		let ops = diff.generate_operations();
+
+		// Assert
+		assert_eq!(ops.len(), 1);
+		assert!(
+			matches!(&ops[0], Operation::CreateTable { name, .. } if name == "users"),
+			"Should generate CreateTable for 'users'"
+		);
+	}
+
+	#[test]
+	fn test_generate_operations_drop_table() {
+		// Arrange
+		let mut current = DatabaseSchema::default();
+		current.tables.insert(
+			"old_table".to_string(),
+			table_with_cols("old_table", vec![("id", pk_col("id"))]),
+		);
+		let target = DatabaseSchema::default();
+
+		// Act
+		let diff = SchemaDiff::new(current, target);
+		let ops = diff.generate_operations();
+
+		// Assert
+		assert_eq!(ops.len(), 1);
+		assert!(
+			matches!(&ops[0], Operation::DropTable { name } if name == "old_table"),
+			"Should generate DropTable for 'old_table'"
+		);
+	}
+
+	#[test]
+	fn test_generate_operations_add_column() {
+		// Arrange
+		let mut current = DatabaseSchema::default();
+		current.tables.insert(
+			"users".to_string(),
+			table_with_cols("users", vec![("id", pk_col("id"))]),
+		);
+		let mut target = DatabaseSchema::default();
+		target.tables.insert(
+			"users".to_string(),
+			table_with_cols("users", vec![
+				("id", pk_col("id")),
+				("email", col("email", FieldType::VarChar(255), false)),
+			]),
+		);
+
+		// Act
+		let diff = SchemaDiff::new(current, target);
+		let ops = diff.generate_operations();
+
+		// Assert
+		assert_eq!(ops.len(), 1);
+		assert!(
+			matches!(&ops[0], Operation::AddColumn { table, column, .. }
+				if table == "users" && column.name == "email"),
+			"Should generate AddColumn for 'email' on 'users'"
+		);
+	}
+
+	#[test]
+	fn test_generate_operations_drop_column() {
+		// Arrange
+		let mut current = DatabaseSchema::default();
+		current.tables.insert(
+			"users".to_string(),
+			table_with_cols("users", vec![
+				("id", pk_col("id")),
+				("bio", col("bio", FieldType::Text, true)),
+			]),
+		);
+		let mut target = DatabaseSchema::default();
+		target.tables.insert(
+			"users".to_string(),
+			table_with_cols("users", vec![("id", pk_col("id"))]),
+		);
+
+		// Act
+		let diff = SchemaDiff::new(current, target);
+		let ops = diff.generate_operations();
+
+		// Assert
+		assert_eq!(ops.len(), 1);
+		assert!(
+			matches!(&ops[0], Operation::DropColumn { table, column }
+				if table == "users" && column == "bio"),
+			"Should generate DropColumn for 'bio' on 'users'"
+		);
+	}
+
+	#[test]
+	fn test_generate_operations_alter_column_type_change() {
+		// Arrange: change 'price' from Integer to Float
+		let mut current = DatabaseSchema::default();
+		current.tables.insert(
+			"items".to_string(),
+			table_with_cols("items", vec![
+				("id", pk_col("id")),
+				("price", col("price", FieldType::Integer, false)),
+			]),
+		);
+		let mut target = DatabaseSchema::default();
+		target.tables.insert(
+			"items".to_string(),
+			table_with_cols("items", vec![
+				("id", pk_col("id")),
+				("price", col("price", FieldType::Float, false)),
+			]),
+		);
+
+		// Act
+		let diff = SchemaDiff::new(current, target);
+		let ops = diff.generate_operations();
+
+		// Assert
+		assert_eq!(ops.len(), 1, "Should generate exactly one operation");
+		match &ops[0] {
+			Operation::AlterColumn {
+				table,
+				column,
+				old_definition,
+				new_definition,
+				..
+			} => {
+				assert_eq!(table, "items");
+				assert_eq!(column, "price");
+				assert_eq!(
+					old_definition.as_ref().unwrap().type_definition,
+					FieldType::Integer,
+					"Old definition should be Integer"
+				);
+				assert_eq!(
+					new_definition.type_definition,
+					FieldType::Float,
+					"New definition should be Float"
+				);
+			}
+			other => panic!("Expected AlterColumn, got {:?}", other),
+		}
+	}
+
+	#[test]
+	fn test_generate_operations_alter_column_nullability_change() {
+		// Arrange: change 'email' from nullable to non-nullable
+		let mut current = DatabaseSchema::default();
+		current.tables.insert(
+			"users".to_string(),
+			table_with_cols("users", vec![
+				("id", pk_col("id")),
+				("email", col("email", FieldType::VarChar(255), true)),
+			]),
+		);
+		let mut target = DatabaseSchema::default();
+		target.tables.insert(
+			"users".to_string(),
+			table_with_cols("users", vec![
+				("id", pk_col("id")),
+				("email", col("email", FieldType::VarChar(255), false)),
+			]),
+		);
+
+		// Act
+		let diff = SchemaDiff::new(current, target);
+		let ops = diff.generate_operations();
+
+		// Assert
+		assert_eq!(ops.len(), 1);
+		match &ops[0] {
+			Operation::AlterColumn {
+				table,
+				column,
+				old_definition,
+				new_definition,
+				..
+			} => {
+				assert_eq!(table, "users");
+				assert_eq!(column, "email");
+				assert!(
+					!old_definition.as_ref().unwrap().not_null,
+					"Old should be nullable (not_null=false)"
+				);
+				assert!(
+					new_definition.not_null,
+					"New should be non-nullable (not_null=true)"
+				);
+			}
+			other => panic!("Expected AlterColumn, got {:?}", other),
+		}
+	}
+
+	#[test]
+	fn test_generate_operations_add_index() {
+		// Arrange
+		let mut current = DatabaseSchema::default();
+		current.tables.insert(
+			"users".to_string(),
+			table_with_cols("users", vec![
+				("id", pk_col("id")),
+				("email", col("email", FieldType::VarChar(255), false)),
+			]),
+		);
+		let mut target = DatabaseSchema::default();
+		let mut target_table = table_with_cols("users", vec![
+			("id", pk_col("id")),
+			("email", col("email", FieldType::VarChar(255), false)),
+		]);
+		target_table.indexes.push(IndexSchema {
+			name: "idx_users_email".to_string(),
+			columns: vec!["email".to_string()],
+			unique: true,
+		});
+		target
+			.tables
+			.insert("users".to_string(), target_table);
+
+		// Act
+		let diff = SchemaDiff::new(current, target);
+		let ops = diff.generate_operations();
+
+		// Assert
+		assert_eq!(ops.len(), 1, "Should generate exactly one operation");
+		match &ops[0] {
+			Operation::CreateIndex {
+				table,
+				columns,
+				unique,
+				..
+			} => {
+				assert_eq!(table, "users");
+				assert_eq!(columns, &vec!["email".to_string()]);
+				assert!(unique, "Should be a unique index");
+			}
+			other => panic!("Expected CreateIndex, got {:?}", other),
+		}
+	}
+
+	#[test]
+	fn test_generate_operations_drop_index() {
+		// Arrange
+		let mut current = DatabaseSchema::default();
+		let mut current_table = table_with_cols("users", vec![
+			("id", pk_col("id")),
+			("email", col("email", FieldType::VarChar(255), false)),
+		]);
+		current_table.indexes.push(IndexSchema {
+			name: "idx_users_email".to_string(),
+			columns: vec!["email".to_string()],
+			unique: false,
+		});
+		current
+			.tables
+			.insert("users".to_string(), current_table);
+
+		let mut target = DatabaseSchema::default();
+		target.tables.insert(
+			"users".to_string(),
+			table_with_cols("users", vec![
+				("id", pk_col("id")),
+				("email", col("email", FieldType::VarChar(255), false)),
+			]),
+		);
+
+		// Act
+		let diff = SchemaDiff::new(current, target);
+		let ops = diff.generate_operations();
+
+		// Assert
+		assert_eq!(ops.len(), 1);
+		match &ops[0] {
+			Operation::DropIndex { table, columns } => {
+				assert_eq!(table, "users");
+				assert_eq!(columns, &vec!["email".to_string()]);
+			}
+			other => panic!("Expected DropIndex, got {:?}", other),
+		}
+	}
+
+	#[test]
+	fn test_generate_operations_no_changes_returns_empty() {
+		// Arrange: identical schemas
+		let mut schema = DatabaseSchema::default();
+		schema.tables.insert(
+			"users".to_string(),
+			table_with_cols("users", vec![("id", pk_col("id"))]),
+		);
+
+		// Act
+		let diff = SchemaDiff::new(schema.clone(), schema);
+		let ops = diff.generate_operations();
+
+		// Assert
+		assert!(ops.is_empty(), "Identical schemas should produce no operations");
+	}
+
+	#[test]
+	fn test_has_destructive_changes_index_drop() {
+		// Arrange: dropping an index is destructive
+		let mut current = DatabaseSchema::default();
+		let mut current_table = table_with_cols("users", vec![("id", pk_col("id"))]);
+		current_table.indexes.push(IndexSchema {
+			name: "idx_email".to_string(),
+			columns: vec!["email".to_string()],
+			unique: false,
+		});
+		current
+			.tables
+			.insert("users".to_string(), current_table);
+
+		let mut target = DatabaseSchema::default();
+		target.tables.insert(
+			"users".to_string(),
+			table_with_cols("users", vec![("id", pk_col("id"))]),
+		);
+
+		// Act & Assert
+		let diff = SchemaDiff::new(current, target);
+		assert!(
+			diff.has_destructive_changes(),
+			"Index removal should be flagged as destructive"
+		);
+	}
+
+	#[test]
+	fn test_has_destructive_changes_column_modify() {
+		// Arrange: modifying a column type is destructive
+		let mut current = DatabaseSchema::default();
+		current.tables.insert(
+			"items".to_string(),
+			table_with_cols("items", vec![
+				("id", pk_col("id")),
+				("price", col("price", FieldType::Integer, false)),
+			]),
+		);
+		let mut target = DatabaseSchema::default();
+		target.tables.insert(
+			"items".to_string(),
+			table_with_cols("items", vec![
+				("id", pk_col("id")),
+				("price", col("price", FieldType::Float, false)),
+			]),
+		);
+
+		// Act & Assert
+		let diff = SchemaDiff::new(current, target);
+		assert!(
+			diff.has_destructive_changes(),
+			"Column type modification should be flagged as destructive"
+		);
+	}
+
+	#[test]
+	fn test_no_destructive_changes_for_additions_only() {
+		// Arrange: only adding tables/columns/indexes is NOT destructive
+		let current = DatabaseSchema::default();
+		let mut target = DatabaseSchema::default();
+		let mut table = table_with_cols("users", vec![("id", pk_col("id"))]);
+		table.indexes.push(IndexSchema {
+			name: "idx_id".to_string(),
+			columns: vec!["id".to_string()],
+			unique: false,
+		});
+		target.tables.insert("users".to_string(), table);
+
+		// Act & Assert
+		let diff = SchemaDiff::new(current, target);
+		assert!(
+			!diff.has_destructive_changes(),
+			"Additions only should NOT be flagged as destructive"
+		);
 	}
 }

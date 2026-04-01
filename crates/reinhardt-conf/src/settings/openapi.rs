@@ -192,10 +192,7 @@ mod tests {
 		// Assert
 		assert_eq!(deserialized.title, "My API");
 		assert_eq!(deserialized.version, "2.0.0");
-		assert_eq!(
-			deserialized.description,
-			Some("Custom API".to_string())
-		);
+		assert_eq!(deserialized.description, Some("Custom API".to_string()));
 		assert!(deserialized.enabled);
 	}
 
@@ -231,8 +228,7 @@ description = "Full API documentation"
 "#;
 
 		// Act
-		let settings: OpenApiSettings =
-			toml::from_str(toml_str).expect("failed to parse TOML");
+		let settings: OpenApiSettings = toml::from_str(toml_str).expect("failed to parse TOML");
 
 		// Assert
 		assert!(settings.enabled);
@@ -255,8 +251,7 @@ title = "Partial API"
 "#;
 
 		// Act
-		let settings: OpenApiSettings =
-			toml::from_str(toml_str).expect("failed to parse TOML");
+		let settings: OpenApiSettings = toml::from_str(toml_str).expect("failed to parse TOML");
 
 		// Assert
 		assert!(settings.enabled);

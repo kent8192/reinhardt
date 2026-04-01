@@ -690,10 +690,8 @@ fn compose_openapi_custom_values() {
 #[rstest]
 fn compose_openapi_serde_roundtrip() {
 	// Arrange
-	let openapi: OpenApiSettings = serde_json::from_str(
-		r#"{"title":"Serde Test","description":"Roundtrip check"}"#,
-	)
-	.unwrap();
+	let openapi: OpenApiSettings =
+		serde_json::from_str(r#"{"title":"Serde Test","description":"Roundtrip check"}"#).unwrap();
 	let original = WithOpenApiSettings {
 		core: reinhardt_conf::CoreSettings {
 			secret_key: "roundtrip-key".to_string(),
@@ -764,8 +762,7 @@ struct TypeOnlyWithOpenApi;
 fn compose_openapi_type_only_syntax() {
 	// Arrange
 	// Type-only syntax infers field name `open_api` from `OpenApiSettings`
-	let openapi: OpenApiSettings =
-		serde_json::from_str(r#"{"title":"Type-Only Test"}"#).unwrap();
+	let openapi: OpenApiSettings = serde_json::from_str(r#"{"title":"Type-Only Test"}"#).unwrap();
 	let settings = TypeOnlyWithOpenApi {
 		core: reinhardt_conf::CoreSettings::default(),
 		open_api: openapi,

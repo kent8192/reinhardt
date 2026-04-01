@@ -284,6 +284,7 @@ pub use reinhardt_di_macros::{injectable, injectable_factory};
 
 /// Errors that can occur during dependency injection resolution.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum DiError {
 	/// The requested dependency was not found in the container.
 	#[error("Dependency not found: {0}")]

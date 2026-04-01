@@ -1,6 +1,6 @@
 //! OpenAPI documentation endpoint configuration
 //!
-//! Provides composable OpenAPI configuration as a [`SettingsFragment`].
+//! Provides composable OpenAPI configuration as a `SettingsFragment`.
 //!
 //! # TOML Configuration
 //!

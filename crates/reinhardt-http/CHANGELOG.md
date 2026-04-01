@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-http@v0.1.0-rc.15...reinhardt-http@v0.1.0-rc.16) - 2026-04-01
+
+### Fixed
+
+- *(http)* convert errors to responses within middleware chain
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-http@v0.1.0-rc.14...reinhardt-http@v0.1.0-rc.15) - 2026-03-29
 
 ### Added

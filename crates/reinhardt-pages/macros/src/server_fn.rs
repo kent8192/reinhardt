@@ -754,6 +754,7 @@ fn generate_server_handler(
 	let di_resolution = if !inject_params.is_empty() {
 		// Dynamically resolve crate paths
 		let di_crate = get_reinhardt_di_crate();
+		let pages_crate_for_di = get_reinhardt_pages_crate();
 
 		quote! {
 			// Get DI context from request and fork for per-request isolation
@@ -769,7 +770,17 @@ fn generate_server_handler(
 				let #inject_param_names: #inject_param_types =
 					#di_crate::Injected::<#inject_param_types>::resolve(&__di_ctx)
 						.await
-						.map_err(|e| format!("Dependency injection failed for {}: {:?}", stringify!(#inject_param_types), e))?
+						.map_err(|e| {
+							// Preserve HTTP status codes for auth-related DI errors
+							let (status, msg) = match &e {
+								#di_crate::DiError::Authentication(m) => (401u16, m.clone()),
+								#di_crate::DiError::Authorization(m) => (403u16, m.clone()),
+								other => (500u16, format!("Dependency injection failed for {}: {:?}", stringify!(#inject_param_types), other)),
+							};
+							let server_err = #pages_crate_for_di::server_fn::ServerFnError::server(status, msg);
+							::serde_json::to_string(&server_err)
+								.unwrap_or_else(|_| format!("Dependency injection failed for {}: {:?}", stringify!(#inject_param_types), e))
+						})?
 						.into_inner();
 			)*
 		}

@@ -393,9 +393,10 @@ impl Service<hyper::Request<Incoming>> for RequestService {
 			}
 
 			// Handle request.
-			// When Err is returned, Response::from(Error) produces a JSON error
-			// body with Content-Type: application/json. For non-API paths (e.g.
-			// static files) this is unexpected, so log a warning to aid debugging.
+			// The middleware chain converts handler errors to responses internally
+			// (in ConditionalComposedHandler) so that middleware post-processing
+			// always runs. This unwrap_or_else is a safety net for errors that
+			// escape the chain (e.g., middleware-internal failures without a chain).
 			let request_path = request.uri.path().to_string();
 			let response = handler.handle(request).await.unwrap_or_else(|e| {
 				if request_path.contains('.') && !request_path.ends_with(".json") {

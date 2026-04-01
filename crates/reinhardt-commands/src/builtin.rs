@@ -1321,6 +1321,8 @@ impl BaseCommand for RunServerCommand {
 			)
 			.with_default("dist"),
 			CommandOption::flag(None, "no-spa", "Disable SPA mode (no index.html fallback)"),
+			CommandOption::flag(None, "no-wasm", "Skip WASM build at startup"),
+			CommandOption::flag(None, "force-wasm", "Force rebuild WASM even if artifacts exist"),
 		]
 	}
 
@@ -1335,6 +1337,15 @@ impl BaseCommand for RunServerCommand {
 			.map(|s| s.to_string())
 			.unwrap_or_else(|| "dist".to_string());
 		let no_spa = ctx.has_option("no-spa");
+		// Build WASM frontend if --with-pages and not --no-wasm
+		#[cfg(feature = "pages")]
+		{
+			let no_wasm = ctx.has_option("no-wasm");
+			let force_wasm = ctx.has_option("force-wasm");
+			if with_pages && !no_wasm {
+				Self::build_pages_wasm(ctx, force_wasm);
+			}
+		}
 
 		// Find available port early (before displaying banner)
 		#[cfg(feature = "server")]
@@ -1929,6 +1940,74 @@ impl RunServerCommand {
 				&& !path_str.ends_with(".tmp")
 				&& (path_str.ends_with(".rs") || path_str.ends_with(".toml"))
 		})
+	}
+
+	/// Build the pages WASM bundle from the current project (if it declares cdylib).
+	///
+	/// Mirrors the logic in the standalone runserver binary. Build failure is
+	/// non-fatal — a warning is displayed but the server continues to start.
+	#[cfg(feature = "pages")]
+	fn build_pages_wasm(ctx: &CommandContext, force: bool) {
+		let cwd = match std::env::current_dir() {
+			Ok(d) => d,
+			Err(e) => {
+				ctx.warning(&format!("Failed to get current directory: {}", e));
+				return;
+			}
+		};
+		let cargo_toml_path = cwd.join("Cargo.toml");
+
+		// Only build if this project exports cdylib
+		if !crate::wasm_builder::detect_cdylib_in_cargo_toml(&cargo_toml_path) {
+			return;
+		}
+
+		// Parse the crate name from Cargo.toml
+		let crate_name = match std::fs::read_to_string(&cargo_toml_path) {
+			Ok(content) => {
+				let mut name = String::new();
+				for line in content.lines() {
+					let trimmed = line.trim();
+					if trimmed.starts_with("name")
+						&& trimmed.contains('=')
+						&& let Some(val) = trimmed.split('=').nth(1)
+					{
+						name = val.trim().trim_matches('"').trim_matches('\'').to_string();
+						break;
+					}
+				}
+				if name.is_empty() {
+					ctx.warning("Could not determine crate name from Cargo.toml");
+					return;
+				}
+				name
+			}
+			Err(e) => {
+				ctx.warning(&format!("Failed to read Cargo.toml: {}", e));
+				return;
+			}
+		};
+
+		let js_name = crate_name.replace('-', "_");
+		let artifact = cwd.join("dist").join(format!("{}.js", js_name));
+		if artifact.exists() && !force {
+			ctx.info("Pages WASM: artifacts exist, skipping build (use --force-wasm to rebuild)");
+			return;
+		}
+
+		ctx.info(&format!("Building pages WASM for {}...", crate_name));
+		let config = crate::wasm_builder::WasmBuildConfig::new(".").output_dir("dist");
+		match crate::wasm_builder::WasmBuilder::new(config).build() {
+			Ok(_) => {
+				ctx.info("Pages WASM build succeeded.");
+			}
+			Err(e) => {
+				ctx.warning(&format!(
+					"Pages WASM build failed: {}. Server will start without WASM frontend.",
+					e
+				));
+			}
+		}
 	}
 }
 

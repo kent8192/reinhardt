@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.15...reinhardt-commands@v0.1.0-rc.16) - 2026-04-01
+
+### Added
+
+- *(commands)* add createsuperuser as built-in management command
+- *(commands)* add requires_database() and auto-init ORM dispatch
+- *(auth)* auto-register SuperuserCreator via inventory for #[user(full = true)] + #[model] types
+- *(commands)* auto-build WASM when runserver --with-pages is used
+
+### Changed
+
+- *(commands)* extract initialize_orm_database() shared function
+- *(commands)* simplify run_server() ORM block to DI-only
+
+### Fixed
+
+- *(commands)* remove bare DB connect from createsuperuser
+- *(commands)* integrate file-based fallback into makemigrations
+- *(admin)* resolve CI failures blocking release-plz PR [[#3236](https://github.com/kent8192/reinhardt-web/issues/3236)](https://github.com/kent8192/reinhardt-web/issues/3236)
+- *(test)* use recursive file count in collectstatic tests
+- *(test)* skip hidden files in collectstatic test helper
+
+### Other
+
+- resolve conflict with main (deduplicate tests)
+- resolve conflict with main in createsuperuser error message
+
+### Styling
+
+- *(commands)* fix formatting in createsuperuser deprecation warning
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.14...reinhardt-commands@v0.1.0-rc.15) - 2026-03-29
 
 ### Added

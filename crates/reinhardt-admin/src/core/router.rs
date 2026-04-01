@@ -1325,11 +1325,10 @@ mod tests {
 			wasm_js_path,
 			html
 		);
-		// Assert - static route serves that file
+		// Assert - static route serves files via catch-all pattern
 		assert!(
-			paths.contains(&wasm_js_path),
-			"Static routes must serve {}, found: {:?}",
-			wasm_js_path,
+			paths.contains(&"/{*path}"),
+			"Static routes must serve files via catch-all pattern, found: {:?}",
 			paths
 		);
 	}

@@ -199,7 +199,7 @@ where
 
 impl<F> std::future::IntoFuture for WaitForBuilder<F>
 where
-	F: FnMut() -> bool,
+	F: FnMut() -> bool + 'static,
 {
 	type Output = WaitResult<()>;
 	type IntoFuture = Pin<Box<dyn Future<Output = Self::Output>>>;
@@ -581,13 +581,13 @@ fn is_element_visible(element: &Element) -> bool {
 		}
 
 		// Check computed visibility
-		if let Ok(Some(style)) = get_window()
+		if let Some(style) = get_window()
 			.ok()
-			.and_then(|w| Some(w.get_computed_style(element)))
+			.and_then(|w| w.get_computed_style(element).ok())
 			.flatten()
 		{
-			let visibility = style.get_property_value("visibility").unwrap_or_default();
-			let display = style.get_property_value("display").unwrap_or_default();
+			let visibility: String = style.get_property_value("visibility").unwrap_or_default();
+			let display: String = style.get_property_value("display").unwrap_or_default();
 
 			if visibility == "hidden" || display == "none" {
 				return false;

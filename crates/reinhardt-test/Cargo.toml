@@ -37,6 +37,7 @@ wasm = [
   "dep:web-sys",
   "dep:js-sys",
   "dep:gloo-timers",
+  "dep:regex",
 ]
 wasm-full = ["wasm", "reinhardt-pages/web-sys-full"]
 # Server function testing utilities
@@ -46,38 +47,26 @@ e2e = ["dep:fantoccini", "dep:url"]
 full = ["testcontainers", "static", "websockets", "graphql", "property-based", "viewsets", "messages", "tasks", "admin"]
 
 [dependencies]
-# Core: delegate to reinhardt-testkit
-reinhardt-testkit = { workspace = true }
-
-# Dependencies required by reinhardt-test's own modules (auth, admin, wasm, server_fn)
-reinhardt-auth = { workspace = true, features = ["jwt", "argon2-hasher", "sessions", "oauth", "token"] }
+# Cross-platform dependencies
 reinhardt-pages = { workspace = true }
-reinhardt-conf = { workspace = true, features = ["settings"] }
+reinhardt-core = { workspace = true }
 
-# Optional dependencies for tasks feature
-reinhardt-tasks = { workspace = true, optional = true }
-
-# Optional dependencies for admin feature
-reinhardt-admin = { workspace = true, optional = true, features = ["adapters", "core", "server", "types"] }
-
-# Dependencies used by admin_migrations and admin_panel modules
-reinhardt-db = { workspace = true, features = ["backends", "migrations", "orm", "postgres"] }
-reinhardt-query = { workspace = true, features = ["derive"] }
-sqlx = { workspace = true, optional = true }
-
-# Testing framework dependencies (needed for fixtures)
+# Testing framework dependencies (proc-macro, compiles on host)
 rstest = "0.26.1"
 
-# Dependencies needed by auth fixtures
+# Cross-platform serialization dependencies
 uuid = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+# Regex for WASM text matching queries
+regex = { version = "1", optional = true }
 
 # Optional WASM dependencies (feature-gated)
 wasm-bindgen = { version = "0.2.106", optional = true }
 wasm-bindgen-test = { version = "0.3.56", optional = true }
 wasm-bindgen-futures = { version = "0.4.56", optional = true }
-gloo-timers = { version = "0.3", optional = true }
+gloo-timers = { version = "0.3", optional = true, features = ["futures"] }
 js-sys = { version = "0.3.83", optional = true }
 web-sys = { version = "0.3.83", optional = true, features = [
   "Window",
@@ -89,15 +78,23 @@ web-sys = { version = "0.3.83", optional = true, features = [
   "HtmlSelectElement",
   "HtmlTextAreaElement",
   "HtmlButtonElement",
+  "HtmlOptionElement",
+  "HtmlOptionsCollection",
   "Node",
   "NodeList",
   "Event",
+  "EventInit",
   "EventTarget",
   "MouseEvent",
+  "MouseEventInit",
   "KeyboardEvent",
+  "KeyboardEventInit",
   "InputEvent",
+  "InputEventInit",
   "FocusEvent",
+  "FocusEventInit",
   "CustomEvent",
+  "CustomEventInit",
   "DomRect",
   "CssStyleDeclaration",
   "HtmlCollection",
@@ -112,10 +109,30 @@ web-sys = { version = "0.3.83", optional = true, features = [
 fantoccini = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 
+# Native-only dependencies (cannot compile on wasm32-unknown-unknown)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Core: delegate to reinhardt-testkit
+reinhardt-testkit = { workspace = true }
+
+# Dependencies required by reinhardt-test's own modules (auth, admin)
+reinhardt-auth = { workspace = true, features = ["jwt", "argon2-hasher", "sessions", "oauth", "token"] }
+reinhardt-conf = { workspace = true, features = ["settings"] }
+
+# Optional dependencies for tasks feature
+reinhardt-tasks = { workspace = true, optional = true }
+
+# Optional dependencies for admin feature
+reinhardt-admin = { workspace = true, optional = true, features = ["adapters", "core", "server", "types"] }
+
+# Dependencies used by admin_migrations and admin_panel modules
+reinhardt-db = { workspace = true, features = ["backends", "migrations", "orm", "postgres"] }
+reinhardt-query = { workspace = true, features = ["derive"] }
+sqlx = { workspace = true, optional = true }
+
 # Re-exported dependencies needed for backward compatibility
 tokio = { workspace = true }
 
-[dev-dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 tokio-test = "0.4"
 scopeguard = "1.2"

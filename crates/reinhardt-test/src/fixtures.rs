@@ -5,24 +5,27 @@
 //! reinhardt-admin).
 
 // Re-export all submodules from testkit for path compatibility
+#[cfg(not(target_arch = "wasm32"))]
 pub use reinhardt_testkit::fixtures::{client, dcl, di, loader, mock, server};
 
-#[cfg(feature = "testcontainers")]
+#[cfg(all(not(target_arch = "wasm32"), feature = "testcontainers"))]
 pub use reinhardt_testkit::fixtures::{
 	resources, schema, shared_postgres, testcontainers, validator,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use reinhardt_testkit::fixtures::migrations;
 
 // Admin settings fixtures (re-exported from testkit, requires admin feature)
-#[cfg(feature = "admin")]
+#[cfg(all(not(target_arch = "wasm32"), feature = "admin"))]
 pub use reinhardt_testkit::fixtures::admin;
 
 // Server function fixtures (re-exported from testkit)
-#[cfg(feature = "server-fn-test")]
+#[cfg(all(not(target_arch = "wasm32"), feature = "server-fn-test"))]
 pub use reinhardt_testkit::fixtures::server_fn;
 
 // Re-export all public items from testkit fixtures
+#[cfg(not(target_arch = "wasm32"))]
 pub use reinhardt_testkit::fixtures::*;
 
 // ============================================================================
@@ -30,14 +33,23 @@ pub use reinhardt_testkit::fixtures::*;
 // ============================================================================
 
 // Authentication fixtures (depends on reinhardt-auth)
+#[cfg(not(target_arch = "wasm32"))]
 pub mod auth;
 
 // Admin panel fixtures (depends on reinhardt-admin)
-#[cfg(all(feature = "admin", feature = "testcontainers"))]
+#[cfg(all(
+	not(target_arch = "wasm32"),
+	feature = "admin",
+	feature = "testcontainers"
+))]
 pub mod admin_panel;
 
 // Admin migration fixtures (depends on reinhardt-admin)
-#[cfg(all(feature = "admin", feature = "testcontainers"))]
+#[cfg(all(
+	not(target_arch = "wasm32"),
+	feature = "admin",
+	feature = "testcontainers"
+))]
 pub mod admin_migrations;
 
 // WASM frontend test fixtures and E2E browser testing fixtures
@@ -48,5 +60,9 @@ pub mod admin_migrations;
 pub mod wasm;
 
 // Admin integration fixtures (conditional on admin + testcontainers features)
-#[cfg(all(feature = "admin", feature = "testcontainers"))]
+#[cfg(all(
+	not(target_arch = "wasm32"),
+	feature = "admin",
+	feature = "testcontainers"
+))]
 pub use admin_migrations::{AdminTableCreator, admin_table_creator};

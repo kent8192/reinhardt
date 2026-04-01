@@ -20,8 +20,6 @@
 //! cookies.set("session", "abc123");
 //! ```
 
-#![cfg(target_arch = "wasm32")]
-
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -30,7 +28,7 @@ use wasm_bindgen::prelude::*;
 
 // Re-export server function mocking from reinhardt-pages
 pub use reinhardt_pages::testing::{
-	MockResponse, assert_server_fn_called, assert_server_fn_called_times,
+	MockResponse, assert_server_fn_call_count, assert_server_fn_called,
 	assert_server_fn_called_with, assert_server_fn_not_called, clear_mocks, get_call_history,
 	mock_server_fn, mock_server_fn_error,
 };
@@ -499,13 +497,24 @@ pub struct MockTimers {
 	current_time: Rc<RefCell<f64>>,
 }
 
-#[derive(Debug)]
 struct TimerCallback {
 	id: u32,
 	callback: Box<dyn FnOnce()>,
 	scheduled_time: f64,
 	is_interval: bool,
 	interval_ms: Option<u32>,
+}
+
+impl std::fmt::Debug for TimerCallback {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("TimerCallback")
+			.field("id", &self.id)
+			.field("callback", &"<FnOnce>")
+			.field("scheduled_time", &self.scheduled_time)
+			.field("is_interval", &self.is_interval)
+			.field("interval_ms", &self.interval_ms)
+			.finish()
+	}
 }
 
 impl MockTimers {

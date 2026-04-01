@@ -18,7 +18,7 @@ use reinhardt_http::{AuthState, Handler, Middleware, Request, Response, Result};
 /// [`AuthState::authenticated`], while missing or invalid tokens produce
 /// [`AuthState::anonymous`]. Requests are never rejected by this middleware —
 /// authorization is delegated to endpoint-level guards
-/// ([`Guard<P>`](reinhardt_auth::guard::Guard), [`Public`](reinhardt_auth::guard::Public)).
+/// (`Guard<P>`, `Public`).
 ///
 /// This is the JWT counterpart to the session-based [`AuthenticationMiddleware`](crate::AuthenticationMiddleware).
 ///
@@ -47,7 +47,7 @@ use reinhardt_http::{AuthState, Handler, Middleware, Request, Response, Result};
 ///     .with_middleware(Arc::new(middleware));
 /// ```
 ///
-/// Using a pre-built [`JwtAuth`](reinhardt_auth::jwt::JwtAuth) instance:
+/// Using a pre-built `JwtAuth` instance:
 ///
 /// ```rust,no_run
 /// use reinhardt_auth::jwt::JwtAuth;
@@ -64,7 +64,7 @@ pub struct JwtAuthMiddleware {
 #[cfg(feature = "auth-jwt")]
 impl JwtAuthMiddleware {
 	/// Creates a new JWT authentication middleware with a pre-built
-	/// [`JwtAuth`](reinhardt_auth::jwt::JwtAuth) instance.
+	/// `JwtAuth` instance.
 	///
 	/// Use this constructor when you need to share a `JwtAuth` instance
 	/// or want to configure custom validation settings.
@@ -88,7 +88,7 @@ impl JwtAuthMiddleware {
 
 	/// Creates a new JWT authentication middleware from a secret key.
 	///
-	/// This is a convenience constructor that creates a [`JwtAuth`](reinhardt_auth::jwt::JwtAuth)
+	/// This is a convenience constructor that creates a `JwtAuth`
 	/// instance internally. Secret management (environment variables,
 	/// config files) is the application's concern.
 	///

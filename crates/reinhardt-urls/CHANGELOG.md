@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.15...reinhardt-urls@v0.1.0-rc.16) - 2026-04-01
+
+### Fixed
+
+- *(urls)* route framework-level 404/405 responses through middleware chain
+
+### Testing
+
+- *(urls)* add integration tests for router-level 404 middleware
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.14...reinhardt-urls@v0.1.0-rc.15) - 2026-03-29
 
 ### Fixed

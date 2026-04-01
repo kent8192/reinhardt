@@ -11,12 +11,27 @@
 use async_trait::async_trait;
 use hyper::StatusCode;
 use hyper::header::{HeaderValue, LOCATION};
+use reinhardt_conf::SecuritySettings;
 #[allow(deprecated)]
 use reinhardt_conf::Settings;
 use reinhardt_http::{Handler, Middleware, Request, Response, Result};
 use std::sync::Arc;
 
 /// Security middleware configuration
+///
+/// # Deprecation
+///
+/// This type is deprecated in favor of [`SecuritySettings`] from `reinhardt-conf`.
+/// Use [`SecurityMiddleware::from_security_settings`] to construct middleware
+/// from a [`SecuritySettings`] fragment.
+///
+/// For advanced configuration with middleware-specific fields (e.g.,
+/// `referrer_policy`, `cross_origin_opener_policy`), use
+/// [`SecurityMiddleware::with_config`] which remains available as an escape hatch.
+#[deprecated(
+	since = "0.2.0",
+	note = "use SecuritySettings from reinhardt-conf with SecurityMiddleware::from_security_settings() instead"
+)]
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct SecurityConfig {
@@ -43,6 +58,7 @@ pub struct SecurityConfig {
 	pub secure_proxy_ssl_header: Option<(String, String)>,
 }
 
+#[allow(deprecated)]
 impl Default for SecurityConfig {
 	fn default() -> Self {
 		Self {
@@ -60,7 +76,7 @@ impl Default for SecurityConfig {
 	}
 }
 
-#[allow(deprecated)] // Settings is deprecated in favor of composable fragments
+#[allow(deprecated)] // Settings and SecurityConfig are both deprecated
 impl From<&Settings> for SecurityConfig {
 	fn from(settings: &Settings) -> Self {
 		let security = &settings.core.security;
@@ -82,11 +98,34 @@ impl From<&Settings> for SecurityConfig {
 	}
 }
 
+#[allow(deprecated)] // SecurityConfig is deprecated in favor of SecuritySettings
+impl From<&SecuritySettings> for SecurityConfig {
+	fn from(settings: &SecuritySettings) -> Self {
+		let hsts_enabled = settings.secure_hsts_seconds.is_some();
+		let hsts_seconds = settings
+			.secure_hsts_seconds
+			.map(|s| u32::try_from(s).unwrap_or(u32::MAX))
+			.unwrap_or(0);
+
+		Self {
+			ssl_redirect: settings.secure_ssl_redirect,
+			hsts_enabled,
+			hsts_seconds,
+			hsts_include_subdomains: settings.secure_hsts_include_subdomains,
+			hsts_preload: settings.secure_hsts_preload,
+			secure_proxy_ssl_header: settings.secure_proxy_ssl_header.clone(),
+			..Self::default()
+		}
+	}
+}
+
 /// Security middleware for HTTP security headers and redirects
 pub struct SecurityMiddleware {
+	#[allow(deprecated)] // SecurityConfig is deprecated; internal field retained
 	config: SecurityConfig,
 }
 
+#[allow(deprecated)] // SecurityConfig is deprecated; SecurityMiddleware methods still use it internally
 impl SecurityMiddleware {
 	/// Create a new SecurityMiddleware with default configuration
 	///
@@ -209,8 +248,38 @@ impl SecurityMiddleware {
 	/// #[allow(deprecated)]
 	/// let middleware = SecurityMiddleware::from_settings(&settings);
 	/// ```
+	#[deprecated(
+		since = "0.2.0",
+		note = "use SecurityMiddleware::from_security_settings() instead"
+	)]
 	#[allow(deprecated)] // Settings is deprecated in favor of composable fragments
 	pub fn from_settings(settings: &Settings) -> Self {
+		Self {
+			config: SecurityConfig::from(settings),
+		}
+	}
+
+	/// Create a new SecurityMiddleware from a [`SecuritySettings`] fragment
+	///
+	/// Maps security-related fields from `SecuritySettings` to the internal
+	/// configuration. Middleware-specific defaults (e.g., `content_type_nosniff`,
+	/// `referrer_policy`) are preserved from [`SecurityConfig::default`].
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_conf::SecuritySettings;
+	/// use reinhardt_middleware::SecurityMiddleware;
+	///
+	/// let settings = SecuritySettings {
+	///     secure_ssl_redirect: true,
+	///     secure_hsts_seconds: Some(31536000),
+	///     ..Default::default()
+	/// };
+	///
+	/// let middleware = SecurityMiddleware::from_security_settings(&settings);
+	/// ```
+	pub fn from_security_settings(settings: &SecuritySettings) -> Self {
 		Self {
 			config: SecurityConfig::from(settings),
 		}
@@ -323,6 +392,7 @@ impl Default for SecurityMiddleware {
 	}
 }
 
+#[allow(deprecated)] // SecurityConfig is deprecated; internal usage retained
 #[async_trait]
 impl Middleware for SecurityMiddleware {
 	async fn process(&self, request: Request, handler: Arc<dyn Handler>) -> Result<Response> {
@@ -356,10 +426,12 @@ impl Middleware for SecurityMiddleware {
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // Tests use deprecated SecurityConfig for backward compatibility testing
 mod tests {
 	use super::*;
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method, Version};
+	use reinhardt_conf::SecuritySettings;
 	use reinhardt_http::{Error, TrustedProxies};
 	use rstest::rstest;
 	use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -1006,5 +1078,92 @@ mod tests {
 			"same-origin"
 		);
 		assert_eq!(response.headers.get("X-Frame-Options").unwrap(), "DENY");
+	}
+
+	#[rstest]
+	fn test_from_security_settings_conversion() {
+		// Arrange
+		let settings = SecuritySettings {
+			secure_ssl_redirect: true,
+			secure_hsts_seconds: Some(63072000),
+			secure_hsts_include_subdomains: true,
+			secure_hsts_preload: true,
+			secure_proxy_ssl_header: Some(("X-Forwarded-Proto".to_string(), "https".to_string())),
+			..Default::default()
+		};
+
+		// Act
+		let config = SecurityConfig::from(&settings);
+
+		// Assert
+		assert!(config.ssl_redirect);
+		assert!(config.hsts_enabled);
+		assert_eq!(config.hsts_seconds, 63072000);
+		assert!(config.hsts_include_subdomains);
+		assert!(config.hsts_preload);
+		assert_eq!(
+			config.secure_proxy_ssl_header,
+			Some(("X-Forwarded-Proto".to_string(), "https".to_string()))
+		);
+		// Middleware-specific defaults preserved
+		assert!(config.content_type_nosniff);
+		assert_eq!(config.referrer_policy, Some("same-origin".to_string()));
+		assert_eq!(config.x_frame_options, Some("DENY".to_string()));
+	}
+
+	#[rstest]
+	fn test_from_security_settings_defaults() {
+		// Arrange
+		let settings = SecuritySettings::default();
+
+		// Act
+		let config = SecurityConfig::from(&settings);
+
+		// Assert
+		assert!(!config.ssl_redirect);
+		assert!(!config.hsts_enabled);
+		assert_eq!(config.hsts_seconds, 0);
+		assert!(!config.hsts_include_subdomains);
+		assert!(!config.hsts_preload);
+		assert!(config.secure_proxy_ssl_header.is_none());
+		// Middleware-specific defaults preserved
+		assert!(config.content_type_nosniff);
+		assert_eq!(config.referrer_policy, Some("same-origin".to_string()));
+	}
+
+	#[tokio::test]
+	async fn test_from_security_settings_constructor() {
+		// Arrange
+		let settings = SecuritySettings {
+			secure_ssl_redirect: false,
+			secure_hsts_seconds: Some(31536000),
+			..Default::default()
+		};
+
+		// Act
+		let middleware = SecurityMiddleware::from_security_settings(&settings);
+		let handler = Arc::new(TestHandler);
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.secure(true)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Assert
+		let response = middleware.process(request, handler).await.unwrap();
+		assert_eq!(response.status, StatusCode::OK);
+		assert_eq!(
+			response.headers.get("Strict-Transport-Security").unwrap(),
+			"max-age=31536000"
+		);
+		assert_eq!(
+			response.headers.get("X-Content-Type-Options").unwrap(),
+			"nosniff"
+		);
 	}
 }

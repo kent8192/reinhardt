@@ -206,6 +206,7 @@ pub use rate_limit::{RateLimitConfig, RateLimitMiddleware, RateLimitStore, RateL
 pub use redirect_fallback::{RedirectFallbackMiddleware, RedirectResponseConfig};
 pub use request_id::{REQUEST_ID_HEADER, RequestIdConfig, RequestIdMiddleware};
 #[cfg(feature = "security")]
+#[allow(deprecated)] // SecurityConfig is deprecated but still re-exported for compatibility
 pub use security_middleware::{SecurityConfig, SecurityMiddleware};
 pub use session::{SessionConfig, SessionData, SessionMiddleware, SessionStore};
 pub use site::{SITE_ID_HEADER, Site, SiteConfig, SiteMiddleware, SiteRegistry};

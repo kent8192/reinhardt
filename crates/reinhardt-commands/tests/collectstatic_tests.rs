@@ -10,6 +10,24 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
+/// Count files recursively in a directory (matching collectstatic's behavior).
+fn count_files_recursive(dir: &std::path::Path) -> usize {
+	if !dir.exists() {
+		return 0;
+	}
+	let mut count = 0;
+	for entry in std::fs::read_dir(dir).unwrap() {
+		let entry = entry.unwrap();
+		let path = entry.path();
+		if path.is_file() {
+			count += 1;
+		} else if path.is_dir() {
+			count += count_files_recursive(&path);
+		}
+	}
+	count
+}
+
 // ============================================================================
 // Fixtures
 // ============================================================================
@@ -563,16 +581,7 @@ fn test_collectstatic_no_sources(temp_dir: TempDir) {
 	// collected even when staticfiles_dirs is empty.
 	let app_static_count: usize = ::reinhardt_apps::get_app_static_files()
 		.iter()
-		.map(|config| {
-			let dir = std::path::Path::new(config.static_dir);
-			if dir.exists() {
-				std::fs::read_dir(dir)
-					.map(|entries| entries.count())
-					.unwrap_or(0)
-			} else {
-				0
-			}
-		})
+		.map(|config| count_files_recursive(std::path::Path::new(config.static_dir)))
 		.sum();
 	assert_eq!(
 		stats.copied, app_static_count,
@@ -1171,16 +1180,7 @@ fn test_collectstatic_without_index_source_uses_existing_behavior() {
 	// Assert
 	let app_static_count: usize = ::reinhardt_apps::get_app_static_files()
 		.iter()
-		.map(|config| {
-			let dir = std::path::Path::new(config.static_dir);
-			if dir.exists() {
-				std::fs::read_dir(dir)
-					.map(|entries| entries.count())
-					.unwrap_or(0)
-			} else {
-				0
-			}
-		})
+		.map(|config| count_files_recursive(std::path::Path::new(config.static_dir)))
 		.sum();
 	assert_eq!(stats.copied, app_static_count);
 }

@@ -14,12 +14,32 @@
 use proc_macro2::Span;
 use syn::{Expr, Result};
 
-use reinhardt_core::security::xss::is_safe_url;
 use reinhardt_manouche::core::{
 	PageAttr, PageBody, PageComponent, PageElement, PageElse, PageEvent, PageMacro, PageNode,
 	PageWatch, TypedPageAttr, TypedPageBody, TypedPageComponent, TypedPageElement, TypedPageElse,
 	TypedPageFor, TypedPageIf, TypedPageMacro, TypedPageNode, TypedPageWatch, types::AttrValue,
 };
+
+/// Check if a URL is safe (no dangerous schemes like javascript:).
+///
+/// Inlined from `reinhardt_core::security::xss::is_safe_url` to avoid
+/// pulling the full reinhardt-core dependency chain (hyper/tokio/mio)
+/// into this proc-macro crate, which breaks WASM builds. (Fixes #3226)
+fn is_safe_url(url: &str) -> bool {
+	let url_lower = url.to_lowercase();
+
+	// Allow relative URLs and anchor links (but NOT parent traversal)
+	if url.starts_with('/') || url.starts_with("./") || url.starts_with('#') {
+		return true;
+	}
+
+	// Allow only safe protocols
+	let safe_protocols = ["http://", "https://", "mailto:", "ftp://", "ftps://"];
+
+	safe_protocols
+		.iter()
+		.any(|protocol| url_lower.starts_with(protocol))
+}
 
 /// Validates and transforms the entire PageMacro AST into a typed AST.
 ///
@@ -818,6 +838,7 @@ fn validate_element_nesting(elem: &PageElement, parent_tags: &[String]) -> Resul
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 	use syn::parse_quote;
 
 	#[test]
@@ -1422,5 +1443,22 @@ mod tests {
 		let result =
 			validate_button_accessibility(&attrs, &children, proc_macro2::Span::call_site());
 		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	#[case("https://example.com", true)]
+	#[case("http://example.com", true)]
+	#[case("mailto:user@example.com", true)]
+	#[case("ftp://files.example.com", true)]
+	#[case("ftps://files.example.com", true)]
+	#[case("/relative/path", true)]
+	#[case("./local/path", true)]
+	#[case("#anchor", true)]
+	#[case("javascript:alert(1)", false)]
+	#[case("data:text/html,<script>alert(1)</script>", false)]
+	#[case("vbscript:msgbox", false)]
+	#[case("JAVASCRIPT:alert(1)", false)]
+	fn test_is_safe_url(#[case] url: &str, #[case] expected: bool) {
+		assert_eq!(is_safe_url(url), expected);
 	}
 }

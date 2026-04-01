@@ -3,6 +3,7 @@
 //! Tests authentication flow including CSRF validation, JWT generation,
 //! and error handling for various failure modes.
 
+use chrono::Utc;
 use reinhardt_admin::adapters::LoginResponse;
 use reinhardt_admin::core::{AdminSite, admin_routes_with_di_deferred};
 use reinhardt_admin::server::AdminDefaultUser;
@@ -202,7 +203,7 @@ async fn build_login_router(pool: sqlx::PgPool, with_jwt_secret: bool) -> Server
 			Value::from(true),
 			Value::from(true),
 			Value::from(false),
-			Expr::current_timestamp().into(),
+			Value::from(Utc::now()),
 		])
 		.on_conflict(
 			reinhardt_query::prelude::OnConflict::column(Alias::new("id"))

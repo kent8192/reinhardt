@@ -135,6 +135,20 @@ impl Injectable for AdminAuthenticatedUser {
 		// Call the type-erased loader to query the user from the database
 		let user = (loader.0)(user_id, db).await?;
 
+		// Verify user account is active
+		if !user.is_active() {
+			return Err(DiError::Authentication(
+				"User account is not active".to_string(),
+			));
+		}
+
+		// Verify user has staff privileges
+		if !user.is_staff() {
+			return Err(DiError::Authentication(
+				"User does not have staff privileges".to_string(),
+			));
+		}
+
 		Ok(AdminAuthenticatedUser(user))
 	}
 }

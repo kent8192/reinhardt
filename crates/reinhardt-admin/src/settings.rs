@@ -260,9 +260,7 @@ mod inner {
 		}
 	}
 
-	use crate::server::security::{
-		ContentSecurityPolicy, FrameOptions, ReferrerPolicy, SecurityHeaders,
-	};
+	use crate::server::security::{ContentSecurityPolicy, SecurityHeaders};
 
 	impl AdminSettings {
 		/// Build [`SecurityHeaders`] from these settings.
@@ -282,8 +280,8 @@ mod inner {
 					base_uri: self.csp.base_uri.clone(),
 					form_action: self.csp.form_action.clone(),
 				},
-				frame_options: FrameOptions::parse_or_default(&self.security.frame_options),
-				referrer_policy: ReferrerPolicy::parse_or_default(&self.security.referrer_policy),
+				frame_options: self.security.frame_options.parse().unwrap(),
+				referrer_policy: self.security.referrer_policy.parse().unwrap(),
 				permissions_policy: self.security.permissions_policy.clone(),
 			}
 		}

@@ -15,8 +15,7 @@
 //! description = "API documentation"
 //! ```
 
-use super::fragment::{HasSettings, SettingsFragment};
-use serde::{Deserialize, Serialize};
+use reinhardt_macros::settings;
 
 /// OpenAPI documentation endpoint configuration fragment.
 ///
@@ -39,8 +38,8 @@ use serde::{Deserialize, Serialize};
 /// assert!(settings.enabled);
 /// assert_eq!(OpenApiSettings::section(), "openapi");
 /// ```
+#[settings(fragment = true, section = "openapi")]
 #[non_exhaustive]
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OpenApiSettings {
 	/// Enable OpenAPI endpoints (default: true)
 	///
@@ -97,26 +96,6 @@ impl Default for OpenApiSettings {
 			version: "1.0.0".to_string(),
 			description: None,
 		}
-	}
-}
-
-impl SettingsFragment for OpenApiSettings {
-	type Accessor = dyn HasOpenApiSettings;
-
-	fn section() -> &'static str {
-		"openapi"
-	}
-}
-
-/// Trait for settings containers that include OpenAPI configuration.
-pub trait HasOpenApiSettings {
-	/// Returns a reference to the OpenAPI settings.
-	fn openapi(&self) -> &OpenApiSettings;
-}
-
-impl<T: HasSettings<OpenApiSettings>> HasOpenApiSettings for T {
-	fn openapi(&self) -> &OpenApiSettings {
-		self.get_settings()
 	}
 }
 

@@ -378,9 +378,10 @@ impl Handler for ErrorToResponseHandler {
 	}
 }
 
-/// Optimized internal handler that composes middleware with next handler.
+/// Internal handler that composes a single middleware with the next handler.
 ///
-/// Supports short-circuiting via `response.should_stop_chain()`.
+/// Converts middleware errors to HTTP responses so that outer middleware
+/// post-processing (e.g., adding security headers) always runs.
 struct ConditionalComposedHandler {
 	middleware: Arc<dyn Middleware>,
 	next: Arc<dyn Handler>,
@@ -397,12 +398,6 @@ impl Handler for ConditionalComposedHandler {
 			Ok(response) => response,
 			Err(e) => Response::from(e),
 		};
-
-		// Short-circuit: if response indicates chain should stop, return immediately
-		// This prevents further middleware/handlers from executing
-		if response.should_stop_chain() {
-			return Ok(response);
-		}
 
 		Ok(response)
 	}

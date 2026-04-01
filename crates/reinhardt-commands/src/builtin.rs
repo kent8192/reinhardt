@@ -1322,7 +1322,11 @@ impl BaseCommand for RunServerCommand {
 			.with_default("dist"),
 			CommandOption::flag(None, "no-spa", "Disable SPA mode (no index.html fallback)"),
 			CommandOption::flag(None, "no-wasm", "Skip WASM build at startup"),
-			CommandOption::flag(None, "force-wasm", "Force rebuild WASM even if artifacts exist"),
+			CommandOption::flag(
+				None,
+				"force-wasm",
+				"Force rebuild WASM even if artifacts exist",
+			),
 		]
 	}
 

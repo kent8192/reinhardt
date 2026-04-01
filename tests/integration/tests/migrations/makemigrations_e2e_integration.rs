@@ -515,9 +515,9 @@ async fn nc_03_field_deletion_creates_drop_column_migration() {
 #[serial(makemigrations_e2e)]
 async fn nc_04_field_type_change_creates_alter_column_migration() {
 	// Test: AlterColumn generation from field type change (E2E)
-	// SchemaDiff detects column modifications but generate_operations() does not yet
-	// emit AlterColumn operations. Verify that field type changes are detected
-	// in the diff result even though no migration operations are generated.
+	// SchemaDiff detects column modifications and generate_operations() emits
+	// AlterColumn operations. Verify that a field type change produces
+	// an AlterColumn operation for the correct table and column.
 
 	// Arrange
 	let temp_dir = TempDir::new().unwrap();
@@ -543,17 +543,13 @@ async fn nc_04_field_type_change_creates_alter_column_migration() {
 	let result = generator.generate(app_label, current_schema).await;
 
 	// Assert
-	// SchemaDiff detects the column modification but generate_operations() does not
-	// yet produce AlterColumn operations, so NoChangesDetected is returned
+	let migration_result = result.expect("Field type change should generate AlterColumn operation");
+	let has_alter_column = migration_result.operations.iter().any(|op| {
+		matches!(op, Operation::AlterColumn { table, column, .. } if table == "todos" && column == "title")
+	});
 	assert!(
-		result.is_err(),
-		"Field type change should return error since AlterColumn is not yet generated"
-	);
-	let err = result.unwrap_err();
-	assert_eq!(
-		err.to_string(),
-		"No schema changes detected",
-		"Should report no changes since AlterColumn generation is not implemented"
+		has_alter_column,
+		"Migration should contain AlterColumn operation for todos.title"
 	);
 }
 
@@ -646,8 +642,9 @@ async fn nc_05_field_rename_creates_rename_column_migration() {
 #[serial(makemigrations_e2e)]
 async fn nc_06_index_addition_creates_create_index_migration() {
 	// Test: Index addition detection (E2E)
-	// SchemaDiff detects index additions in detect() but generate_operations()
-	// does not emit CreateIndex operations yet. Verify detection works.
+	// SchemaDiff detects index additions and generate_operations() emits
+	// CreateIndex operations. Verify that adding an index produces the
+	// correct CreateIndex operation.
 
 	// Arrange
 	let temp_dir = TempDir::new().unwrap();
@@ -675,14 +672,13 @@ async fn nc_06_index_addition_creates_create_index_migration() {
 	let result = generator.generate(app_label, current_schema).await;
 
 	// Assert
-	// generate_operations() does not emit index operations, so NoChangesDetected
+	let migration_result = result.expect("Index addition should generate CreateIndex operation");
+	let has_create_index = migration_result.operations.iter().any(|op| {
+		matches!(op, Operation::CreateIndex { table, columns, .. } if table == "todos" && columns.contains(&"title".to_string()))
+	});
 	assert!(
-		result.is_err(),
-		"Index addition alone should return error (CreateIndex not yet generated)"
-	);
-	assert_eq!(
-		result.unwrap_err().to_string(),
-		"No schema changes detected"
+		has_create_index,
+		"Migration should contain CreateIndex operation for todos table on title column"
 	);
 }
 
@@ -1182,7 +1178,7 @@ async fn nc_12_one_to_one_creates_unique_foreign_key() {
 async fn nc_13_default_value_addition_creates_alter_column() {
 	// Test: Default value change detection (E2E)
 	// Changing default value is a column modification detected by SchemaDiff
-	// but not yet emitted as AlterColumn by generate_operations().
+	// and emitted as AlterColumn by generate_operations().
 
 	// Arrange
 	let temp_dir = TempDir::new().unwrap();
@@ -1208,14 +1204,14 @@ async fn nc_13_default_value_addition_creates_alter_column() {
 	let result = generator.generate(app_label, current_schema).await;
 
 	// Assert
-	// Column modification detected but AlterColumn not yet generated
+	let migration_result =
+		result.expect("Default value change should generate AlterColumn operation");
+	let has_alter_column = migration_result.operations.iter().any(|op| {
+		matches!(op, Operation::AlterColumn { table, column, .. } if table == "todos" && column == "title")
+	});
 	assert!(
-		result.is_err(),
-		"Default value change should return error (AlterColumn not yet generated)"
-	);
-	assert_eq!(
-		result.unwrap_err().to_string(),
-		"No schema changes detected"
+		has_alter_column,
+		"Migration should contain AlterColumn operation for todos.title"
 	);
 }
 
@@ -1225,7 +1221,7 @@ async fn nc_13_default_value_addition_creates_alter_column() {
 async fn nc_14_null_constraint_change_creates_alter_column() {
 	// Test: NULL constraint change detection (E2E)
 	// Changing nullable is a column modification detected by SchemaDiff
-	// but not yet emitted as AlterColumn by generate_operations().
+	// and emitted as AlterColumn by generate_operations().
 
 	// Arrange
 	let temp_dir = TempDir::new().unwrap();
@@ -1251,13 +1247,14 @@ async fn nc_14_null_constraint_change_creates_alter_column() {
 	let result = generator.generate(app_label, current_schema).await;
 
 	// Assert
+	let migration_result =
+		result.expect("NULL constraint change should generate AlterColumn operation");
+	let has_alter_column = migration_result.operations.iter().any(|op| {
+		matches!(op, Operation::AlterColumn { table, column, .. } if table == "todos" && column == "title")
+	});
 	assert!(
-		result.is_err(),
-		"NULL constraint change should return error (AlterColumn not yet generated)"
-	);
-	assert_eq!(
-		result.unwrap_err().to_string(),
-		"No schema changes detected"
+		has_alter_column,
+		"Migration should contain AlterColumn operation for todos.title"
 	);
 }
 
@@ -1266,8 +1263,8 @@ async fn nc_14_null_constraint_change_creates_alter_column() {
 #[serial(makemigrations_e2e)]
 async fn nc_15_unique_constraint_addition_creates_add_constraint() {
 	// Test: UNIQUE constraint addition detection (E2E)
-	// Adding a unique constraint is detected via constraints but does not
-	// yet generate AddConstraint operations from generate_operations().
+	// Adding a unique constraint is detected and emitted as AddConstraint
+	// by generate_operations().
 
 	// Arrange
 	let temp_dir = TempDir::new().unwrap();
@@ -1296,14 +1293,15 @@ async fn nc_15_unique_constraint_addition_creates_add_constraint() {
 	let result = generator.generate(app_label, current_schema).await;
 
 	// Assert
-	// Constraint changes alone do not generate operations
+	let migration_result =
+		result.expect("Unique constraint addition should generate AddConstraint operation");
+	let has_add_constraint = migration_result
+		.operations
+		.iter()
+		.any(|op| matches!(op, Operation::AddConstraint { table, .. } if table == "todos"));
 	assert!(
-		result.is_err(),
-		"Unique constraint addition alone should return error"
-	);
-	assert_eq!(
-		result.unwrap_err().to_string(),
-		"No schema changes detected"
+		has_add_constraint,
+		"Migration should contain AddConstraint operation for todos table"
 	);
 }
 
@@ -1312,7 +1310,7 @@ async fn nc_15_unique_constraint_addition_creates_add_constraint() {
 #[serial(makemigrations_e2e)]
 async fn nc_16_index_deletion_creates_drop_index() {
 	// Test: Index deletion detection (E2E)
-	// Removing an index is detected but not yet emitted as DropIndex.
+	// Removing an index is detected and emitted as DropIndex by generate_operations().
 
 	// Arrange
 	let temp_dir = TempDir::new().unwrap();
@@ -1341,13 +1339,14 @@ async fn nc_16_index_deletion_creates_drop_index() {
 	let result = generator.generate(app_label, current_schema).await;
 
 	// Assert
+	let migration_result = result.expect("Index deletion should generate DropIndex operation");
+	let has_drop_index = migration_result
+		.operations
+		.iter()
+		.any(|op| matches!(op, Operation::DropIndex { table, .. } if table == "todos"));
 	assert!(
-		result.is_err(),
-		"Index deletion alone should return error (DropIndex not yet generated)"
-	);
-	assert_eq!(
-		result.unwrap_err().to_string(),
-		"No schema changes detected"
+		has_drop_index,
+		"Migration should contain DropIndex operation for todos table"
 	);
 }
 
@@ -1356,7 +1355,8 @@ async fn nc_16_index_deletion_creates_drop_index() {
 #[serial(makemigrations_e2e)]
 async fn nc_17_constraint_deletion_creates_drop_constraint() {
 	// Test: Constraint deletion detection (E2E)
-	// Removing a constraint is detected but not yet emitted as DropConstraint.
+	// Removing a constraint is detected and emitted as DropConstraint
+	// by generate_operations().
 
 	// Arrange
 	let temp_dir = TempDir::new().unwrap();
@@ -1386,13 +1386,15 @@ async fn nc_17_constraint_deletion_creates_drop_constraint() {
 	let result = generator.generate(app_label, current_schema).await;
 
 	// Assert
+	let migration_result =
+		result.expect("Constraint deletion should generate DropConstraint operation");
+	let has_drop_constraint = migration_result
+		.operations
+		.iter()
+		.any(|op| matches!(op, Operation::DropConstraint { table, .. } if table == "todos"));
 	assert!(
-		result.is_err(),
-		"Constraint deletion alone should return error (DropConstraint not yet generated)"
-	);
-	assert_eq!(
-		result.unwrap_err().to_string(),
-		"No schema changes detected"
+		has_drop_constraint,
+		"Migration should contain DropConstraint operation for todos table"
 	);
 }
 

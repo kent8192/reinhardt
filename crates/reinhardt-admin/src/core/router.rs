@@ -1312,7 +1312,11 @@ mod tests {
 
 		// Act - the WASM entry point JS must be both referenced in HTML
 		// and served by a static route
-		let wasm_js_path = "/reinhardt_admin.js";
+		let wasm_js_path = if is_wasm_built() {
+			"/reinhardt_admin.js"
+		} else {
+			"/main.js"
+		};
 
 		// Assert - HTML references the WASM JS entry point
 		assert!(

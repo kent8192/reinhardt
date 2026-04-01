@@ -1,6 +1,6 @@
 //! OpenAPI configuration for endpoint mounting
 //!
-//! **Deprecated since 0.1.0-rc.16**: Use [`reinhardt_conf::settings::openapi::OpenApiSettings`]
+//! **Deprecated since 0.1.0-rc.16**: Use `reinhardt_conf::settings::openapi::OpenApiSettings`
 //! fragment with the composable settings system instead.
 //!
 //! This module is retained for backward compatibility. New code should use

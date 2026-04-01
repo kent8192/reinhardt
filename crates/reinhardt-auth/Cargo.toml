@@ -66,6 +66,7 @@ full = [
 ]
 
 [dependencies]
+reinhardt-auth-macros = { workspace = true }
 reinhardt-core = { workspace = true, features = ["exception", "macros", "types"] }
 reinhardt-di = { workspace = true }
 reinhardt-db = { workspace = true, features = ["migrations", "orm"] }

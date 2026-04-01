@@ -1,0 +1,18 @@
+[package]
+name = "reinhardt-auth-macros"
+version = "0.1.0-rc.15"
+description = "Procedural macros for reinhardt-auth (guard!)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+winnow = { workspace = true }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true }

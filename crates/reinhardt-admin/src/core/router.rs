@@ -1305,7 +1305,7 @@ mod tests {
 	#[rstest]
 	fn test_html_js_reference_matches_static_route() {
 		// Arrange
-		let html = admin_spa_html();
+		let html = admin_spa_html("Reinhardt Admin");
 		let router = admin_static_routes();
 		let routes = router.get_all_routes();
 		let paths: Vec<&str> = routes.iter().map(|(path, _, _, _)| path.as_str()).collect();

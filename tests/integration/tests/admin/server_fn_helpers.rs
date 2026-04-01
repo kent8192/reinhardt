@@ -12,7 +12,7 @@ use reinhardt_di::{InjectionContext, SingletonScope};
 use reinhardt_http::AuthState;
 use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_query::prelude::{
-	Alias, ColumnDef, Expr, PostgresQueryBuilder, Query, QueryStatementBuilder,
+	Alias, ColumnDef, Expr, PostgresQueryBuilder, Query, QueryStatementBuilder, Value,
 };
 use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use reinhardt_urls::routers::ServerRouter;
@@ -802,7 +802,7 @@ pub async fn server_fn_context_view_only(
 	let seed_sql = Query::insert()
 		.into_table(Alias::new("test_models"))
 		.columns([Alias::new("name"), Alias::new("status")])
-		.values_panic(["Seeded Record".into(), "active".into()])
+		.values_panic([Value::from("Seeded Record"), Value::from("active")])
 		.to_string(PostgresQueryBuilder::new());
 	pool.execute(seed_sql.as_str())
 		.await

@@ -212,27 +212,31 @@ impl std::fmt::Display for ReferrerPolicy {
 	}
 }
 
-impl FrameOptions {
+impl std::str::FromStr for FrameOptions {
+	type Err = std::convert::Infallible;
+
 	/// Parse from a string, falling back to `Deny` for unrecognized values.
-	pub fn parse_or_default(s: &str) -> Self {
-		match s.to_lowercase().as_str() {
+	fn from_str(s: &str) -> Result<Self, Self::Err> {
+		Ok(match s.to_lowercase().as_str() {
 			"deny" => Self::Deny,
 			"sameorigin" => Self::SameOrigin,
 			_ => Self::Deny,
-		}
+		})
 	}
 }
 
-impl ReferrerPolicy {
+impl std::str::FromStr for ReferrerPolicy {
+	type Err = std::convert::Infallible;
+
 	/// Parse from a string, falling back to `StrictOriginWhenCrossOrigin`
 	/// for unrecognized values.
-	pub fn parse_or_default(s: &str) -> Self {
-		match s.to_lowercase().as_str() {
+	fn from_str(s: &str) -> Result<Self, Self::Err> {
+		Ok(match s.to_lowercase().as_str() {
 			"no-referrer" => Self::NoReferrer,
 			"strict-origin-when-cross-origin" => Self::StrictOriginWhenCrossOrigin,
 			"same-origin" => Self::SameOrigin,
 			_ => Self::StrictOriginWhenCrossOrigin,
-		}
+		})
 	}
 }
 
@@ -489,6 +493,8 @@ fn escape_html(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+	use std::str::FromStr;
+
 	use super::*;
 	use rstest::rstest;
 
@@ -1297,20 +1303,20 @@ mod tests {
 	#[rstest]
 	fn test_frame_options_from_str_deny() {
 		// Assert
-		assert_eq!(FrameOptions::parse_or_default("deny"), FrameOptions::Deny);
+		assert_eq!(FrameOptions::from_str("deny").unwrap(), FrameOptions::Deny);
 	}
 
 	#[rstest]
 	fn test_frame_options_from_str_deny_uppercase() {
 		// Assert
-		assert_eq!(FrameOptions::parse_or_default("DENY"), FrameOptions::Deny);
+		assert_eq!(FrameOptions::from_str("DENY").unwrap(), FrameOptions::Deny);
 	}
 
 	#[rstest]
 	fn test_frame_options_from_str_sameorigin() {
 		// Assert
 		assert_eq!(
-			FrameOptions::parse_or_default("sameorigin"),
+			FrameOptions::from_str("sameorigin").unwrap(),
 			FrameOptions::SameOrigin
 		);
 	}
@@ -1318,7 +1324,10 @@ mod tests {
 	#[rstest]
 	fn test_frame_options_from_str_unknown_falls_back_to_deny() {
 		// Assert
-		assert_eq!(FrameOptions::parse_or_default("invalid"), FrameOptions::Deny);
+		assert_eq!(
+			FrameOptions::from_str("invalid").unwrap(),
+			FrameOptions::Deny
+		);
 	}
 
 	// ============================================================
@@ -1329,7 +1338,7 @@ mod tests {
 	fn test_referrer_policy_from_str_no_referrer() {
 		// Assert
 		assert_eq!(
-			ReferrerPolicy::parse_or_default("no-referrer"),
+			ReferrerPolicy::from_str("no-referrer").unwrap(),
 			ReferrerPolicy::NoReferrer
 		);
 	}
@@ -1338,7 +1347,7 @@ mod tests {
 	fn test_referrer_policy_from_str_strict_origin() {
 		// Assert
 		assert_eq!(
-			ReferrerPolicy::parse_or_default("strict-origin-when-cross-origin"),
+			ReferrerPolicy::from_str("strict-origin-when-cross-origin").unwrap(),
 			ReferrerPolicy::StrictOriginWhenCrossOrigin
 		);
 	}
@@ -1347,7 +1356,7 @@ mod tests {
 	fn test_referrer_policy_from_str_same_origin() {
 		// Assert
 		assert_eq!(
-			ReferrerPolicy::parse_or_default("same-origin"),
+			ReferrerPolicy::from_str("same-origin").unwrap(),
 			ReferrerPolicy::SameOrigin
 		);
 	}
@@ -1356,7 +1365,7 @@ mod tests {
 	fn test_referrer_policy_from_str_unknown_falls_back() {
 		// Assert
 		assert_eq!(
-			ReferrerPolicy::parse_or_default("invalid"),
+			ReferrerPolicy::from_str("invalid").unwrap(),
 			ReferrerPolicy::StrictOriginWhenCrossOrigin
 		);
 	}

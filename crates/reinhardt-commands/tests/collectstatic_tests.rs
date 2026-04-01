@@ -19,6 +19,12 @@ fn count_files_recursive(dir: &std::path::Path) -> usize {
 	for entry in std::fs::read_dir(dir).unwrap() {
 		let entry = entry.unwrap();
 		let path = entry.path();
+		// Skip hidden files (starting with '.') to match collectstatic's should_ignore()
+		if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+			if name.starts_with('.') {
+				continue;
+			}
+		}
 		if path.is_file() {
 			count += 1;
 		} else if path.is_dir() {

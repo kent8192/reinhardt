@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-rc.15...reinhardt-rest@v0.1.0-rc.16) - 2026-04-01
+
+### Deprecated
+
+- *(rest)* deprecate OpenApiConfig since 0.1.0-rc.16
+
+### Fixed
+
+- *(rest)* suppress deprecation warning on OpenApiConfig re-export
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-rc.14...reinhardt-rest@v0.1.0-rc.15) - 2026-03-29
 
 ### Fixed

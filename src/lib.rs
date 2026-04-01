@@ -1167,10 +1167,11 @@ pub mod prelude {
 #[cfg(all(feature = "websockets-pages", not(target_arch = "wasm32")))]
 pub use reinhardt_websockets::integration::pages::PagesAuthenticator;
 #[cfg(all(feature = "websockets", not(target_arch = "wasm32")))]
-pub use reinhardt_websockets::room::RoomManager;
+pub use reinhardt_websockets::room::{BroadcastResult, Room, RoomError, RoomManager, RoomResult};
 #[cfg(all(feature = "websockets", not(target_arch = "wasm32")))]
 pub use reinhardt_websockets::{
-	ConsumerContext, Message, WebSocketConsumer, WebSocketError, WebSocketResult,
+	ConsumerContext, Message, WebSocketConnection, WebSocketConsumer, WebSocketError,
+	WebSocketResult,
 };
 #[cfg(all(feature = "websockets", not(target_arch = "wasm32")))]
 pub use reinhardt_websockets::{

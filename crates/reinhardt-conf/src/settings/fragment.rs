@@ -50,6 +50,33 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
 
+/// Profile-aware validation for settings fragments.
+///
+/// Implement this trait to add custom validation logic to a settings fragment.
+/// The `#[settings(fragment = true)]` macro generates a default (no-op) implementation
+/// automatically. To provide custom validation, use `validate = false` in the macro
+/// and implement this trait manually:
+///
+/// ```ignore
+/// #[settings(fragment = true, section = "security", validate = false)]
+/// struct SecuritySettings { /* ... */ }
+///
+/// impl SettingsValidation for SecuritySettings {
+///     fn validate(&self, profile: &Profile) -> ValidationResult {
+///         // custom validation logic
+///         Ok(())
+///     }
+/// }
+/// ```
+pub trait SettingsValidation {
+	/// Validate this fragment against the given profile.
+	///
+	/// Default implementation: no-op (always valid).
+	fn validate(&self, _profile: &Profile) -> ValidationResult {
+		Ok(())
+	}
+}
+
 /// A composable unit of configuration.
 ///
 /// Each fragment maps to a TOML section and can be validated independently.
@@ -61,7 +88,7 @@ use std::fmt::Debug;
 /// Use `#[settings(fragment = true, section = "...")]` to auto-derive this trait,
 /// or implement it manually for custom validation.
 pub trait SettingsFragment:
-	Clone + Debug + Serialize + DeserializeOwned + Send + Sync + 'static
+	SettingsValidation + Clone + Debug + Serialize + DeserializeOwned + Send + Sync + 'static
 {
 	/// The accessor trait for this fragment.
 	///
@@ -80,13 +107,6 @@ pub trait SettingsFragment:
 	/// for backward compatibility with existing fragments.
 	fn field_policies() -> &'static [FieldPolicy] {
 		&[]
-	}
-
-	/// Validate this fragment against the given profile.
-	///
-	/// Default implementation: no-op (always valid).
-	fn validate(&self, _profile: &Profile) -> ValidationResult {
-		Ok(())
 	}
 }
 
@@ -113,6 +133,8 @@ mod tests {
 	struct TestFragment {
 		pub value: String,
 	}
+
+	impl SettingsValidation for TestFragment {}
 
 	impl SettingsFragment for TestFragment {
 		type Accessor = ();

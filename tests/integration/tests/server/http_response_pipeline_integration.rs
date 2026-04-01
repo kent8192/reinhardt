@@ -318,7 +318,7 @@ async fn test_security_headers_present_on_static_file_response() {
 
 #[rstest]
 #[tokio::test]
-async fn test_security_headers_absent_on_error_response() {
+async fn test_security_headers_present_on_error_response() {
 	// Arrange
 	let security_mw = Arc::new(SecurityMiddleware::new());
 	let chain = MiddlewareChain::new(Arc::new(ErrorHandler) as Arc<dyn Handler>)
@@ -330,17 +330,16 @@ async fn test_security_headers_absent_on_error_response() {
 		.await
 		.expect("Request failed");
 
-	// Assert: When a handler returns Err(...), SecurityMiddleware propagates the
-	// error via `?` (line 345 of security_middleware.rs). RequestService::call()
-	// then converts it to a JSON response via Response::from(Error), bypassing
-	// all middleware post-processing. This means security headers are NOT added
-	// to error responses — a known pipeline gap documented by issue #3135.
+	// Assert: ErrorToResponseHandler converts handler Err(...) into
+	// Ok(Response::from(Error)) before middleware post-processing runs.
+	// This means security headers ARE added to error responses, because
+	// the response flows back through the middleware chain normally.
 	assert_eq!(response.status(), 500);
 
 	let headers = response.headers();
 	assert!(
-		headers.get("x-content-type-options").is_none(),
-		"Security headers should be absent on error responses (middleware bypassed)"
+		headers.get("x-content-type-options").is_some(),
+		"Security headers should be present on error responses (ErrorToResponseHandler converts errors to responses before middleware post-processing)"
 	);
 
 	shutdown_test_server(handle).await;

@@ -341,8 +341,12 @@ impl Middleware for SecurityMiddleware {
 			return Ok(response);
 		}
 
-		// Call handler
-		let mut response = handler.handle(request).await?;
+		// Call handler — convert errors to responses so security headers are
+		// always applied, even when invoked outside MiddlewareChain.
+		let mut response = match handler.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 
 		// Add security headers
 		self.add_security_headers(&mut response, is_secure);
@@ -356,7 +360,8 @@ mod tests {
 	use super::*;
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method, Version};
-	use reinhardt_http::TrustedProxies;
+	use reinhardt_http::{Error, TrustedProxies};
+	use rstest::rstest;
 	use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 	struct TestHandler;
@@ -942,5 +947,64 @@ mod tests {
 		// Assert - HSTS should NOT be set because header is from untrusted source
 		assert_eq!(response.status, StatusCode::OK);
 		assert!(!response.headers.contains_key("Strict-Transport-Security"));
+	}
+
+	/// Handler that always returns an error to simulate inner handler failure.
+	struct ErrorHandler;
+
+	#[async_trait]
+	impl Handler for ErrorHandler {
+		async fn handle(&self, _request: Request) -> Result<Response> {
+			Err(Error::Http("handler error".to_string()))
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_security_headers_applied_on_handler_error() {
+		// Arrange
+		let config = SecurityConfig {
+			hsts_enabled: true,
+			hsts_seconds: 31536000,
+			hsts_include_subdomains: false,
+			hsts_preload: false,
+			ssl_redirect: false,
+			content_type_nosniff: true,
+			referrer_policy: Some("same-origin".to_string()),
+			cross_origin_opener_policy: None,
+			x_frame_options: Some("DENY".to_string()),
+			secure_proxy_ssl_header: None,
+		};
+		let middleware = SecurityMiddleware::with_config(config);
+		let handler: Arc<dyn Handler> = Arc::new(ErrorHandler);
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.secure(true)
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert — error is converted to response with security headers applied
+		assert!(response.status.is_client_error());
+		assert_eq!(
+			response.headers.get("X-Content-Type-Options").unwrap(),
+			"nosniff"
+		);
+		assert_eq!(
+			response.headers.get("Strict-Transport-Security").unwrap(),
+			"max-age=31536000"
+		);
+		assert_eq!(
+			response.headers.get("Referrer-Policy").unwrap(),
+			"same-origin"
+		);
+		assert_eq!(response.headers.get("X-Frame-Options").unwrap(), "DENY");
 	}
 }

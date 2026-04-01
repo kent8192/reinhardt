@@ -19,6 +19,8 @@ pub mod fragment;
 pub mod i18n;
 pub mod logging;
 pub mod media;
+/// OpenAPI documentation endpoint configuration.
+pub mod openapi;
 /// Field-level policy types for settings fragments.
 pub mod policy;
 pub mod prelude;

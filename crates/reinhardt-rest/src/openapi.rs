@@ -165,6 +165,7 @@ pub mod swagger;
 use thiserror::Error;
 
 pub use auto_schema::{SchemaObject, ToSchema};
+#[allow(deprecated)] // Re-export deprecated OpenApiConfig for backward compatibility
 pub use config::OpenApiConfig;
 pub use endpoint_inspector::EndpointInspector;
 pub use endpoints::generate_openapi_schema;

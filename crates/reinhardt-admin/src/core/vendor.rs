@@ -92,7 +92,7 @@ const ADMIN_VENDOR_ASSETS: &[VendorAsset] = &[
 	// Generates Tailwind-compatible utility CSS by observing DOM class names
 	// at runtime, eliminating the need for a build-time CLI step.
 	VendorAsset {
-		url: "https://cdn.jsdelivr.net/npm/@unocss/runtime@66.6.7/index.global.js",
+		url: "https://cdn.jsdelivr.net/npm/@unocss/runtime@66.6.7/uno.global.js",
 		target: "vendor/unocss-runtime.js",
 		sha256: "",
 	},
@@ -369,6 +369,39 @@ mod tests {
 			from_fn.len(),
 			ADMIN_VENDOR_ASSETS.len(),
 			"admin_vendor_assets() must return ADMIN_VENDOR_ASSETS"
+		);
+	}
+
+	/// Every font `url()` reference in `style.css` must correspond to a vendor
+	/// asset `target` path in `ADMIN_VENDOR_ASSETS`. This prevents filename
+	/// drift between the CSS and the download manifest.
+	#[cfg(not(target_arch = "wasm32"))]
+	#[rstest]
+	fn css_font_urls_match_vendor_targets() {
+		// Arrange
+		let css = include_str!("../../assets/style.css");
+		let vendor_targets: std::collections::HashSet<&str> =
+			ADMIN_VENDOR_ASSETS.iter().map(|a| a.target).collect();
+
+		// Act — extract all url('vendor/...') references from the CSS
+		let mut missing = Vec::new();
+		for line in css.lines() {
+			if let Some(start) = line.find("url('") {
+				let rest = &line[start + 5..];
+				if let Some(end) = rest.find("')") {
+					let url_path = &rest[..end];
+					if url_path.starts_with("vendor/") && !vendor_targets.contains(url_path) {
+						missing.push(url_path.to_string());
+					}
+				}
+			}
+		}
+
+		// Assert
+		assert!(
+			missing.is_empty(),
+			"style.css references font files not found in ADMIN_VENDOR_ASSETS: {:?}",
+			missing
 		);
 	}
 }

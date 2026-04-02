@@ -71,6 +71,13 @@ fn is_wasm_built() -> bool {
 async fn admin_spa_handler(
 	request: reinhardt_http::Request,
 ) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
+	// Ensure vendor assets (CSS, JS, fonts) are available on disk.
+	// In development, these files are not present until collectstatic runs;
+	// this lazy download guarantees the admin panel renders correctly on the
+	// very first request without requiring a manual collectstatic step.
+	let assets_dir = std::path::PathBuf::from(ADMIN_ASSETS_DIR);
+	crate::core::vendor::ensure_vendor_assets(&assets_dir).await;
+
 	let settings = crate::settings::get_admin_settings();
 	let security_headers = settings.to_security_headers();
 	let csrf_token = crate::server::security::generate_csrf_token();

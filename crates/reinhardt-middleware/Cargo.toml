@@ -21,12 +21,13 @@ compression = []
 security = []
 rate-limit = []
 sessions = []
+auth-jwt = ["reinhardt-auth/jwt"]
 
 # Database support for certain middleware
 sqlx = ["dep:sqlx"]
 
 # Aggregate all middleware features
-full = ["cors", "compression", "security", "rate-limit", "sessions", "sqlx"]
+full = ["cors", "compression", "security", "rate-limit", "sessions", "auth-jwt", "sqlx"]
 
 [dependencies]
 reinhardt-core = { workspace = true, features = [

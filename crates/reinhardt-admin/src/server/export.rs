@@ -18,7 +18,8 @@ use super::limits::MAX_EXPORT_RECORDS;
 /// Serialize records as delimiter-separated values (CSV or TSV).
 ///
 /// Uses `BTreeMap` for consistent column ordering across records and
-/// converts `serde_json::Value` to plain strings for csv crate compatibility.
+/// `write_record` for compatibility with the csv crate (which does not
+/// support serializing maps via `serialize`).
 #[cfg(not(target_arch = "wasm32"))]
 fn serialize_delimited(
 	results: &[std::collections::HashMap<String, serde_json::Value>],
@@ -26,23 +27,44 @@ fn serialize_delimited(
 ) -> Result<Vec<u8>, String> {
 	use std::collections::BTreeMap;
 
+	if results.is_empty() {
+		return Ok(Vec::new());
+	}
+
 	let mut wtr = csv::WriterBuilder::new()
 		.delimiter(delimiter)
 		.from_writer(vec![]);
 
-	for record in results {
-		let flat: BTreeMap<String, String> = record
+	// Convert all records to BTreeMap for consistent column ordering
+	let flat_records: Vec<BTreeMap<String, String>> = results
+		.iter()
+		.map(|record| {
+			record
+				.iter()
+				.map(|(k, v)| {
+					let s = match v {
+						serde_json::Value::String(s) => s.clone(),
+						serde_json::Value::Null => String::new(),
+						other => other.to_string(),
+					};
+					(k.clone(), s)
+				})
+				.collect()
+		})
+		.collect();
+
+	// Write header row from first record's keys
+	let headers: Vec<&str> = flat_records[0].keys().map(|k| k.as_str()).collect();
+	wtr.write_record(&headers)
+		.map_err(|e| format!("header serialization failed: {}", e))?;
+
+	// Write each record's values in header order
+	for record in &flat_records {
+		let values: Vec<&str> = headers
 			.iter()
-			.map(|(k, v)| {
-				let s = match v {
-					serde_json::Value::String(s) => s.clone(),
-					serde_json::Value::Null => String::new(),
-					other => other.to_string(),
-				};
-				(k.clone(), s)
-			})
+			.map(|h| record.get(*h).map(|v| v.as_str()).unwrap_or(""))
 			.collect();
-		wtr.serialize(&flat)
+		wtr.write_record(&values)
 			.map_err(|e| format!("record serialization failed: {}", e))?;
 	}
 

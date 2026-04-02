@@ -1312,7 +1312,11 @@ mod tests {
 
 		// Act - the WASM entry point JS must be both referenced in HTML
 		// and served by a static route
-		let wasm_js_path = "/reinhardt_admin.js";
+		let wasm_js_path = if is_wasm_built() {
+			"/reinhardt_admin.js"
+		} else {
+			"/main.js"
+		};
 
 		// Assert - HTML references the WASM JS entry point
 		assert!(
@@ -1321,11 +1325,10 @@ mod tests {
 			wasm_js_path,
 			html
 		);
-		// Assert - static route serves that file
+		// Assert - static route serves files via catch-all pattern
 		assert!(
-			paths.contains(&wasm_js_path),
-			"Static routes must serve {}, found: {:?}",
-			wasm_js_path,
+			paths.contains(&"/{*path}"),
+			"Static routes must serve files via catch-all pattern, found: {:?}",
 			paths
 		);
 	}

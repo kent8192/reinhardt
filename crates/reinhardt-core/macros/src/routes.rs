@@ -206,6 +206,161 @@ fn option_to_lit(opt: &Option<String>) -> TokenStream {
 	}
 }
 
+/// Result of auth parameter detection for a handler.
+struct AuthDetection {
+	/// The detected protection level for the endpoint.
+	protection: AuthProtectionKind,
+	/// The stringified guard expression for OpenAPI `x-guard`, if any.
+	guard_description: Option<String>,
+}
+
+/// Protection level detected from handler parameter types.
+///
+/// This mirrors `reinhardt_core::endpoint::AuthProtection` but lives in the
+/// macro crate where we cannot take a dependency on `reinhardt-auth`.
+enum AuthProtectionKind {
+	Protected,
+	Optional,
+	Public,
+	None,
+}
+
+/// Detect auth protection level from a list of type strings.
+///
+/// Each string is the stringified token stream of a parameter type.
+/// The first matching rule wins (rules are checked in priority order):
+///
+/// - Contains `"Guard"` → `Protected`; also captures `guard_description`
+/// - Contains `"AuthUser"` → `Protected`
+/// - Contains both `"Option"` and `"AuthInfo"` → `Optional`
+/// - Contains `"AuthInfo"` (alone) → `Protected`
+/// - Contains `"Public"` → `Public`
+/// - Otherwise → `None`
+fn detect_auth_from_type_strings(type_strings: &[String]) -> AuthDetection {
+	// Collect guard expression strings for guard_description
+	let mut guard_desc: Option<String> = None;
+	let mut found_protected = false;
+	let mut found_optional = false;
+	let mut found_public = false;
+
+	for ty_str in type_strings {
+		// Guard<...> or guard!(...) — highest priority
+		if ty_str.contains("Guard") || ty_str.contains("guard") {
+			found_protected = true;
+			// Capture the guard description for OpenAPI x-guard metadata.
+			// Use the full type string as the description.
+			if guard_desc.is_none() {
+				guard_desc = Some(ty_str.clone());
+			}
+			continue;
+		}
+
+		if ty_str.contains("AuthUser") {
+			found_protected = true;
+			continue;
+		}
+
+		// Option<AuthInfo<...>> → Optional
+		if ty_str.contains("Option") && ty_str.contains("AuthInfo") {
+			found_optional = true;
+			continue;
+		}
+
+		// Bare AuthInfo<...> → Protected
+		if ty_str.contains("AuthInfo") {
+			found_protected = true;
+			continue;
+		}
+
+		if ty_str.contains("Public") {
+			found_public = true;
+		}
+	}
+
+	// Priority: Protected > Optional > Public > None
+	if found_protected {
+		AuthDetection {
+			protection: AuthProtectionKind::Protected,
+			guard_description: guard_desc,
+		}
+	} else if found_optional {
+		AuthDetection {
+			protection: AuthProtectionKind::Optional,
+			guard_description: None,
+		}
+	} else if found_public {
+		AuthDetection {
+			protection: AuthProtectionKind::Public,
+			guard_description: None,
+		}
+	} else {
+		AuthDetection {
+			protection: AuthProtectionKind::None,
+			guard_description: None,
+		}
+	}
+}
+
+/// Detect auth protection from extractor and inject parameter types.
+///
+/// Inspects all parameter types (both regular extractors and `#[inject]` params)
+/// to determine the endpoint's auth protection level and guard description.
+fn detect_auth_protection(
+	extractors: &[ExtractorInfo],
+	inject_params: &[InjectInfo],
+) -> AuthDetection {
+	let type_strings: Vec<String> = extractors
+		.iter()
+		.map(|e| {
+			let ty = &e.ty;
+			quote!(#ty).to_string()
+		})
+		.chain(inject_params.iter().map(|p| {
+			let ty = &p.ty;
+			quote!(#ty).to_string()
+		}))
+		.collect();
+	detect_auth_from_type_strings(&type_strings)
+}
+
+/// Detect auth protection from raw function inputs (for simple routes without extractors/inject).
+fn detect_auth_protection_from_inputs(
+	inputs: &syn::punctuated::Punctuated<FnArg, Token![,]>,
+) -> AuthDetection {
+	let type_strings: Vec<String> = inputs
+		.iter()
+		.filter_map(|arg| {
+			if let FnArg::Typed(pat_type) = arg {
+				let ty = &pat_type.ty;
+				Some(quote!(#ty).to_string())
+			} else {
+				None
+			}
+		})
+		.collect();
+	detect_auth_from_type_strings(&type_strings)
+}
+
+/// Convert `AuthDetection` into the `auth_protection` and `guard_description` token streams.
+fn auth_detection_to_tokens(
+	detection: &AuthDetection,
+	core_crate: &TokenStream,
+) -> (TokenStream, TokenStream) {
+	let protection_ts = match detection.protection {
+		AuthProtectionKind::Protected => {
+			quote! { #core_crate::endpoint::AuthProtection::Protected }
+		}
+		AuthProtectionKind::Optional => quote! { #core_crate::endpoint::AuthProtection::Optional },
+		AuthProtectionKind::Public => quote! { #core_crate::endpoint::AuthProtection::Public },
+		AuthProtectionKind::None => quote! { #core_crate::endpoint::AuthProtection::None },
+	};
+	let guard_desc_ts = match &detection.guard_description {
+		Some(s) => quote! { Some(#s) },
+		None => quote! { None },
+	};
+	(protection_ts, guard_desc_ts)
+}
+
 /// Generate wrapper function with both extractors and inject params
 fn generate_wrapper_with_both(
 	original_fn: &ItemFn,
@@ -272,18 +427,14 @@ fn generate_wrapper_with_both(
 				quote! {
 					let #pat: #ty = #di_crate::Injected::<#ty>::resolve(&__di_ctx)
 						.await
-						.map_err(|e| #core_crate::exception::Error::Internal(
-							format!("Dependency injection failed for {}: {:?}", stringify!(#ty), e)
-						))?
+						.map_err(#core_crate::exception::Error::from)?
 						.into_inner();
 				}
 			} else {
 				quote! {
 					let #pat: #ty = #di_crate::Injected::<#ty>::resolve_uncached(&__di_ctx)
 						.await
-						.map_err(|e| #core_crate::exception::Error::Internal(
-							format!("Dependency injection failed for {}: {:?}", stringify!(#ty), e)
-						))?
+						.map_err(#core_crate::exception::Error::from)?
 						.into_inner();
 				}
 			}
@@ -460,6 +611,11 @@ fn generate_view_type(
 		.map(|(ty, ct)| (quote!(Some(#ty)), quote!(Some(#ct))))
 		.unwrap_or((quote!(None), quote!(None)));
 
+	// Detect auth protection level from parameter types
+	let auth_detection = detect_auth_protection(extractors, inject_params);
+	let (auth_protection_ts, guard_description_ts) =
+		auth_detection_to_tokens(&auth_detection, &core_crate);
+
 	let inventory_crate = crate::crate_paths::get_inventory_crate();
 	let metadata_submission = quote! {
 		#inventory_crate::submit! {
@@ -475,6 +631,8 @@ fn generate_view_type(
 				responses: &[],
 				headers: &[],
 				security: &[],
+				auth_protection: #auth_protection_ts,
+				guard_description: #guard_description_ts,
 			}
 		}
 	};
@@ -746,6 +904,11 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 		.map(|(ty, ct)| (quote!(Some(#ty)), quote!(Some(#ct))))
 		.unwrap_or((quote!(None), quote!(None)));
 
+	// Detect auth protection level from all function parameter types
+	let auth_detection = detect_auth_protection_from_inputs(&input.sig.inputs);
+	let (auth_protection_ts, guard_description_ts) =
+		auth_detection_to_tokens(&auth_detection, &core_crate);
+
 	let inventory_crate = crate::crate_paths::get_inventory_crate();
 	let metadata_submission = quote! {
 		#inventory_crate::submit! {
@@ -761,6 +924,8 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 				responses: &[],
 				headers: &[],
 				security: &[],
+				auth_protection: #auth_protection_ts,
+				guard_description: #guard_description_ts,
 			}
 		}
 	};

@@ -298,6 +298,9 @@ pub use reinhardt_conf::settings::{
 };
 
 #[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
+pub use reinhardt_conf::SecuritySettings;
+
+#[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
 pub use reinhardt_conf::settings::core_settings::{CoreSettings, HasCoreSettings};
 
 #[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
@@ -734,6 +737,25 @@ pub use reinhardt_auth::{
 ))]
 pub use reinhardt_middleware::AuthenticationMiddleware;
 
+// JWT authentication middleware (requires middleware-auth-jwt feature)
+#[cfg(all(feature = "middleware-auth-jwt", not(target_arch = "wasm32")))]
+pub use reinhardt_middleware::JwtAuthMiddleware;
+
+// Remote user authentication middleware (requires sessions + middleware)
+#[cfg(all(
+	feature = "sessions",
+	feature = "middleware",
+	not(target_arch = "wasm32")
+))]
+pub use reinhardt_middleware::{PersistentRemoteUserMiddleware, RemoteUserMiddleware};
+
+// Login required middleware (available with any middleware feature)
+#[cfg(all(
+	any(feature = "standard", feature = "middleware"),
+	not(target_arch = "wasm32")
+))]
+pub use reinhardt_middleware::{LoginRequiredConfig, LoginRequiredMiddleware};
+
 #[cfg(all(
 	any(feature = "standard", feature = "middleware"),
 	not(target_arch = "wasm32")
@@ -742,6 +764,28 @@ pub use reinhardt_middleware::LoggingMiddleware;
 
 #[cfg(all(feature = "middleware-cors", not(target_arch = "wasm32")))]
 pub use reinhardt_middleware::CorsMiddleware;
+
+// Security middleware (requires middleware-security feature)
+#[cfg(all(feature = "middleware-security", not(target_arch = "wasm32")))]
+pub use reinhardt_middleware::SecurityMiddleware;
+
+#[cfg(all(feature = "middleware-security", not(target_arch = "wasm32")))]
+#[allow(deprecated)] // SecurityConfig is deprecated but still re-exported for compatibility
+pub use reinhardt_middleware::SecurityConfig;
+
+// CSP middleware (available with any middleware feature)
+#[cfg(all(
+	any(feature = "standard", feature = "middleware"),
+	not(target_arch = "wasm32")
+))]
+pub use reinhardt_middleware::{CspConfig, CspMiddleware, CspNonce};
+
+// XFrame middleware (available with any middleware feature)
+#[cfg(all(
+	any(feature = "standard", feature = "middleware"),
+	not(target_arch = "wasm32")
+))]
+pub use reinhardt_middleware::{XFrameOptions, XFrameOptionsMiddleware};
 
 // Re-export HTTP types (additional commonly used types)
 #[cfg(all(feature = "core", not(target_arch = "wasm32")))]
@@ -1117,6 +1161,10 @@ pub mod prelude {
 	#[cfg(any(feature = "standard", feature = "middleware"))]
 	pub use crate::LoggingMiddleware;
 
+	// Security middleware
+	#[cfg(feature = "middleware-security")]
+	pub use crate::SecurityMiddleware;
+
 	// Sessions feature
 	#[cfg(all(
 		feature = "sessions",
@@ -1138,10 +1186,11 @@ pub mod prelude {
 #[cfg(all(feature = "websockets-pages", not(target_arch = "wasm32")))]
 pub use reinhardt_websockets::integration::pages::PagesAuthenticator;
 #[cfg(all(feature = "websockets", not(target_arch = "wasm32")))]
-pub use reinhardt_websockets::room::RoomManager;
+pub use reinhardt_websockets::room::{BroadcastResult, Room, RoomError, RoomManager, RoomResult};
 #[cfg(all(feature = "websockets", not(target_arch = "wasm32")))]
 pub use reinhardt_websockets::{
-	ConsumerContext, Message, WebSocketConsumer, WebSocketError, WebSocketResult,
+	ConsumerContext, Message, WebSocketConnection, WebSocketConsumer, WebSocketError,
+	WebSocketResult,
 };
 #[cfg(all(feature = "websockets", not(target_arch = "wasm32")))]
 pub use reinhardt_websockets::{

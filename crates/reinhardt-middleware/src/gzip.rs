@@ -205,8 +205,12 @@ impl Middleware for GZipMiddleware {
 		// Check if client accepts gzip
 		let accepts_gzip = self.accepts_gzip(&request);
 
-		// Call the next handler
-		let mut response = handler.handle(request).await?;
+		// Convert errors to responses so post-processing always runs,
+		// even when invoked outside MiddlewareChain. (#3244)
+		let mut response = match handler.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 
 		// Only compress if client accepts gzip and response is not already compressed
 		if !accepts_gzip || response.headers.contains_key(CONTENT_ENCODING) {

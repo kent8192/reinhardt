@@ -354,7 +354,10 @@ impl Middleware for CspMiddleware {
 				path = path,
 				"Path is CSP-exempt, skipping CSP header insertion"
 			);
-			return handler.handle(request).await;
+			return match handler.handle(request).await {
+				Ok(resp) => Ok(resp),
+				Err(e) => Ok(Response::from(e)),
+			};
 		}
 
 		// Generate nonce if enabled
@@ -368,7 +371,12 @@ impl Middleware for CspMiddleware {
 		};
 
 		// Call handler
-		let mut response = handler.handle(request).await?;
+		// Convert errors to responses so post-processing (e.g., security headers)
+		// always runs, even when invoked outside MiddlewareChain. (#3244)
+		let mut response = match handler.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 
 		// Add CSP header only if handler has not already set one
 		let header_name = self.get_header_name();
@@ -1128,6 +1136,83 @@ mod tests {
 		assert!(config.exempt_paths.contains("/admin"));
 		assert!(config.exempt_paths.contains("/static/admin"));
 		assert_eq!(config.exempt_paths.len(), 2);
+	}
+
+	/// Handler that always returns an error to simulate inner handler failure.
+	struct ErrorHandler;
+
+	#[async_trait]
+	impl Handler for ErrorHandler {
+		async fn handle(&self, _request: Request) -> Result<Response> {
+			Err(reinhardt_http::Error::Http("handler error".to_string()))
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_csp_header_applied_on_handler_error() {
+		// Arrange
+		let config = CspConfig {
+			directives: {
+				let mut d = HashMap::new();
+				d.insert("default-src".to_string(), vec!["'none'".to_string()]);
+				d
+			},
+			report_only: false,
+			include_nonce: false,
+			exempt_paths: HashSet::new(),
+		};
+		let middleware = CspMiddleware::with_config(config);
+		let handler: Arc<dyn Handler> = Arc::new(ErrorHandler);
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert — error is converted to response with CSP header applied
+		assert!(response.status.is_client_error() || response.status.is_server_error());
+		assert!(
+			response.headers.contains_key("Content-Security-Policy"),
+			"CSP header should be applied even when handler returns an error"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_csp_exempt_path_error_converted_to_response() {
+		// Arrange
+		let config = CspConfig::strict().add_exempt_path("/exempt".to_string());
+		let middleware = CspMiddleware::with_config(config);
+		let handler: Arc<dyn Handler> = Arc::new(ErrorHandler);
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/exempt/resource")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act — should return Ok even though handler errors, because errors are
+		// converted to responses
+		let result = middleware.process(request, handler).await;
+
+		// Assert
+		assert!(
+			result.is_ok(),
+			"Handler error should be converted to response for exempt path"
+		);
+		let response = result.unwrap();
+		assert!(response.status.is_client_error() || response.status.is_server_error());
 	}
 
 	#[rstest]

@@ -14,6 +14,13 @@
 //!
 //! - **`AuthenticationMiddleware`**: Session-based user authentication
 //!   (requires `sessions` feature)
+//! - **`JwtAuthMiddleware`**: JWT Bearer token authentication
+//!   (requires `auth-jwt` feature)
+//! - **`RemoteUserMiddleware`**: Reverse proxy `REMOTE_USER` header authentication
+//!   (requires `sessions` feature)
+//! - **`PersistentRemoteUserMiddleware`**: Persistent variant of `RemoteUserMiddleware`
+//!   (requires `sessions` feature)
+//! - **[`LoginRequiredMiddleware`]**: Redirect unauthenticated users to login page
 //!
 //! ### Security
 //!
@@ -82,6 +89,9 @@
 //!
 //! - [`allowed_hosts`]: Restrict requests to configured host names
 //! - [`auth`]: Session-based user authentication (requires `sessions` feature)
+//! - `jwt_auth`: JWT Bearer token authentication (requires `auth-jwt` feature)
+//! - `remote_user`: Reverse proxy remote user authentication (requires `sessions` feature)
+//! - [`login_required`]: Login required enforcement with redirect
 //! - [`cache`]: HTTP response caching with configurable key strategies
 //! - [`circuit_breaker`]: Circuit breaker pattern for fault-tolerant backends
 //! - [`common`]: Common HTTP functionality (trailing slash, URL normalization)
@@ -107,6 +117,7 @@
 //! | `rate-limit` | disabled | API rate limiting middleware |
 //! | `security` | disabled | Combined security headers middleware |
 //! | `sessions` | disabled | Session-based authentication middleware |
+//! | `auth-jwt` | disabled | JWT Bearer token authentication middleware |
 //! | `sqlx` | disabled | Database-backed session storage via SQLx |
 //! | `full` | disabled | Enables all middleware features |
 //!
@@ -120,10 +131,11 @@
 //! 4. `SecurityMiddleware` - Apply security headers
 //! 5. `CorsMiddleware` - Handle CORS preflight
 //! 6. `SessionMiddleware` - Load session
-//! 7. `AuthenticationMiddleware` - Authenticate user
-//! 8. `CsrfMiddleware` - Validate CSRF token
-//! 9. `RateLimitMiddleware` - Apply rate limits
-//! 10. Application handlers
+//! 7. `AuthenticationMiddleware` or `JwtAuthMiddleware` - Authenticate user
+//! 8. `LoginRequiredMiddleware` - Enforce login (optional)
+//! 9. `CsrfMiddleware` - Validate CSRF token
+//! 10. `RateLimitMiddleware` - Apply rate limits
+//! 11. Application handlers
 
 #![warn(missing_docs)]
 pub mod allowed_hosts;
@@ -148,14 +160,21 @@ pub mod flatpages;
 pub mod gzip;
 pub mod honeypot;
 pub mod https_redirect;
+#[cfg(feature = "auth-jwt")]
+/// JWT Bearer token authentication middleware (requires `auth-jwt` feature).
+pub mod jwt_auth;
 pub mod locale;
 /// Structured request/response logging with configurable formats.
 pub mod logging;
+/// Login required middleware that redirects unauthenticated users to a login page.
+pub mod login_required;
 pub mod messages;
 pub mod metrics;
 #[cfg(feature = "rate-limit")]
 pub mod rate_limit;
 pub mod redirect_fallback;
+/// Reverse proxy remote user authentication middleware (requires `sessions` feature).
+pub mod remote_user;
 pub mod request_id;
 #[cfg(feature = "security")]
 pub mod security_middleware;
@@ -197,15 +216,23 @@ pub use flatpages::{Flatpage, FlatpageStore, FlatpagesConfig, FlatpagesMiddlewar
 pub use gzip::{GZipConfig, GZipMiddleware};
 pub use honeypot::{HoneypotError, HoneypotField};
 pub use https_redirect::{HttpsRedirectConfig, HttpsRedirectMiddleware};
+#[cfg(feature = "auth-jwt")]
+pub use jwt_auth::JwtAuthMiddleware;
 pub use locale::{LocaleConfig, LocaleMiddleware};
 pub use logging::{LoggingConfig, LoggingMiddleware};
+pub use login_required::{
+	DEFAULT_LOGIN_URL, DEFAULT_REDIRECT_FIELD_NAME, LoginRequiredConfig, LoginRequiredMiddleware,
+};
 pub use messages::{CookieStorage, Message, MessageLevel, MessageStorage, SessionStorage};
 pub use metrics::{MetricsConfig, MetricsMiddleware, MetricsStore};
 #[cfg(feature = "rate-limit")]
 pub use rate_limit::{RateLimitConfig, RateLimitMiddleware, RateLimitStore, RateLimitStrategy};
 pub use redirect_fallback::{RedirectFallbackMiddleware, RedirectResponseConfig};
+#[cfg(feature = "sessions")]
+pub use remote_user::{PersistentRemoteUserMiddleware, REMOTE_USER_HEADER, RemoteUserMiddleware};
 pub use request_id::{REQUEST_ID_HEADER, RequestIdConfig, RequestIdMiddleware};
 #[cfg(feature = "security")]
+#[allow(deprecated)] // SecurityConfig is deprecated but still re-exported for compatibility
 pub use security_middleware::{SecurityConfig, SecurityMiddleware};
 pub use session::{SessionConfig, SessionData, SessionMiddleware, SessionStore};
 pub use site::{SITE_ID_HEADER, Site, SiteConfig, SiteMiddleware, SiteRegistry};

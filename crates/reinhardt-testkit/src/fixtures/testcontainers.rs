@@ -1705,7 +1705,7 @@ pub async fn sqlite_with_migrations_from<P: reinhardt_db::migrations::MigrationP
 /// ```
 #[cfg(feature = "testcontainers")]
 #[deprecated(
-	since = "0.2.0",
+	since = "0.1.0-rc.16",
 	note = "Use `postgres_with_migrations_from_dir()` instead. \
 			This fixture requires `collect_migrations!` macro registration \
 			which is being deprecated in favor of `FilesystemSource`."
@@ -1770,7 +1770,7 @@ pub async fn postgres_with_all_migrations() -> Result<
 /// ```
 #[cfg(feature = "testcontainers")]
 #[deprecated(
-	since = "0.2.0",
+	since = "0.1.0-rc.16",
 	note = "Use `postgres_with_migrations_from_dir()` instead. \
 			This function requires `collect_migrations!` macro registration \
 			which is being deprecated in favor of `FilesystemSource`."
@@ -1917,7 +1917,7 @@ pub async fn postgres_with_migrations_from_dir(
 /// ```
 #[cfg(feature = "testcontainers")]
 #[deprecated(
-	since = "0.2.0",
+	since = "0.1.0-rc.16",
 	note = "Use filesystem-based migration loading instead. \
 			This fixture requires `collect_migrations!` macro registration \
 			which is being deprecated in favor of `FilesystemSource`."
@@ -1962,7 +1962,7 @@ pub async fn mysql_with_all_migrations() -> (
 /// * `app_labels` - List of app labels to include
 #[cfg(feature = "testcontainers")]
 #[deprecated(
-	since = "0.2.0",
+	since = "0.1.0-rc.16",
 	note = "Use filesystem-based migration loading instead. \
 			This function requires `collect_migrations!` macro registration \
 			which is being deprecated in favor of `FilesystemSource`."
@@ -2028,7 +2028,7 @@ pub async fn mysql_with_apps_migrations(
 /// ```
 #[cfg(feature = "testcontainers")]
 #[deprecated(
-	since = "0.2.0",
+	since = "0.1.0-rc.16",
 	note = "Use filesystem-based migration loading instead. \
 			This fixture requires `collect_migrations!` macro registration \
 			which is being deprecated in favor of `FilesystemSource`."
@@ -2069,7 +2069,7 @@ pub async fn sqlite_with_all_migrations() -> std::sync::Arc<reinhardt_db::Databa
 /// * `app_labels` - List of app labels to include
 #[cfg(feature = "testcontainers")]
 #[deprecated(
-	since = "0.2.0",
+	since = "0.1.0-rc.16",
 	note = "Use filesystem-based migration loading instead. \
 			This function requires `collect_migrations!` macro registration \
 			which is being deprecated in favor of `FilesystemSource`."

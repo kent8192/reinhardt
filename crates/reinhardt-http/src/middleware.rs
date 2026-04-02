@@ -233,7 +233,11 @@ impl Handler for MiddlewareChain {
 		// - Condition check: O(1) per middleware
 		// - Skip unnecessary middleware: achieves O(k) where k <= n
 		// - Early return: stops processing on first stop_chain=true response
-		let mut current_handler = self.handler.clone();
+		// Wrap the base handler to convert errors to responses, ensuring
+		// all middleware post-processing runs even for error responses.
+		let mut current_handler: Arc<dyn Handler> = Arc::new(ErrorToResponseHandler {
+			inner: self.handler.clone(),
+		});
 
 		// Filter middleware based on should_continue condition
 		// This achieves the O(k) optimization where k is the number of middleware that should run
@@ -354,9 +358,30 @@ impl Middleware for ExcludeMiddleware {
 	}
 }
 
-/// Optimized internal handler that composes middleware with next handler.
+/// Internal handler wrapper that converts errors to HTTP responses.
 ///
-/// Supports short-circuiting via `response.should_stop_chain()`.
+/// Wraps the base handler so that middleware always receives `Ok(Response)`
+/// from `next.handle()`, even when the handler returns an error. This ensures
+/// middleware post-processing (e.g., adding security headers) runs for all
+/// responses, matching Django's `process_response` semantics.
+struct ErrorToResponseHandler {
+	inner: Arc<dyn Handler>,
+}
+
+#[async_trait]
+impl Handler for ErrorToResponseHandler {
+	async fn handle(&self, request: Request) -> Result<Response> {
+		match self.inner.handle(request).await {
+			Ok(response) => Ok(response),
+			Err(e) => Ok(Response::from(e)),
+		}
+	}
+}
+
+/// Internal handler that composes a single middleware with the next handler.
+///
+/// Converts middleware errors to HTTP responses so that outer middleware
+/// post-processing (e.g., adding security headers) always runs.
 struct ConditionalComposedHandler {
 	middleware: Arc<dyn Middleware>,
 	next: Arc<dyn Handler>,
@@ -365,14 +390,14 @@ struct ConditionalComposedHandler {
 #[async_trait]
 impl Handler for ConditionalComposedHandler {
 	async fn handle(&self, request: Request) -> Result<Response> {
-		// Process the request through this middleware
-		let response = self.middleware.process(request, self.next.clone()).await?;
-
-		// Short-circuit: if response indicates chain should stop, return immediately
-		// This prevents further middleware/handlers from executing
-		if response.should_stop_chain() {
-			return Ok(response);
-		}
+		// Process the request through this middleware.
+		// Convert errors to responses so that outer middleware post-processing
+		// (e.g., security headers) always runs — matching Django's process_response
+		// semantics where the response hook executes for both success and error cases.
+		let response = match self.middleware.process(request, self.next.clone()).await {
+			Ok(response) => response,
+			Err(e) => Response::from(e),
+		};
 
 		Ok(response)
 	}
@@ -843,5 +868,143 @@ mod tests {
 		assert!(!exclude_mw.should_continue(&create_request_with_path("/public")));
 		// Non-excluded, inner accepts /api/ -> true
 		assert!(exclude_mw.should_continue(&create_request_with_path("/api/users")));
+	}
+
+	// ========================================================================
+	// Error-to-response conversion tests (issue #3230)
+	// ========================================================================
+
+	/// Handler that always returns an error.
+	struct NotFoundHandler;
+
+	#[async_trait]
+	impl Handler for NotFoundHandler {
+		async fn handle(&self, _request: Request) -> Result<Response> {
+			Err(reinhardt_core::exception::Error::NotFound(
+				"not found".into(),
+			))
+		}
+	}
+
+	struct UnauthorizedHandler;
+
+	#[async_trait]
+	impl Handler for UnauthorizedHandler {
+		async fn handle(&self, _request: Request) -> Result<Response> {
+			Err(reinhardt_core::exception::Error::Authentication(
+				"unauthorized".into(),
+			))
+		}
+	}
+
+	/// Middleware that adds a custom header to the response after calling next.
+	struct HeaderAddingMiddleware {
+		header_name: &'static str,
+		header_value: &'static str,
+	}
+
+	#[async_trait]
+	impl Middleware for HeaderAddingMiddleware {
+		async fn process(&self, request: Request, next: Arc<dyn Handler>) -> Result<Response> {
+			let response = next.handle(request).await?;
+			Ok(response.with_header(self.header_name, self.header_value))
+		}
+	}
+
+	/// Middleware that always returns an error (simulates CSRF rejection).
+	struct RejectingMiddleware;
+
+	#[async_trait]
+	impl Middleware for RejectingMiddleware {
+		async fn process(&self, _request: Request, _next: Arc<dyn Handler>) -> Result<Response> {
+			Err(reinhardt_core::exception::Error::Authorization(
+				"CSRF check failed".into(),
+			))
+		}
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_chain_post_processing_runs_on_handler_error() {
+		// Arrange: handler returns 404 error, outer middleware adds header
+		let handler: Arc<dyn Handler> = Arc::new(NotFoundHandler);
+		let mut chain = MiddlewareChain::new(handler);
+		chain.add_middleware(Arc::new(HeaderAddingMiddleware {
+			header_name: "X-Custom-Security",
+			header_value: "applied",
+		}));
+
+		// Act
+		let request = create_test_request();
+		let response = chain.handle(request).await.unwrap();
+
+		// Assert: error converted to 404 response AND header is present
+		assert_eq!(response.status, hyper::StatusCode::NOT_FOUND);
+		assert_eq!(
+			response
+				.headers
+				.get("X-Custom-Security")
+				.map(|v| v.to_str().unwrap()),
+			Some("applied")
+		);
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_chain_post_processing_runs_on_middleware_error() {
+		// Arrange: outer middleware adds header, inner middleware rejects.
+		// First add = outermost in this framework's chain ordering.
+		let handler = Arc::new(MockHandler {
+			response_body: "OK".into(),
+		});
+		let mut chain = MiddlewareChain::new(handler);
+		// Outer middleware adds a security header (post-processing)
+		chain.add_middleware(Arc::new(HeaderAddingMiddleware {
+			header_name: "X-Frame-Options",
+			header_value: "DENY",
+		}));
+		// Inner middleware rejects the request
+		chain.add_middleware(Arc::new(RejectingMiddleware));
+
+		// Act
+		let request = create_test_request();
+		let response = chain.handle(request).await.unwrap();
+
+		// Assert: inner middleware error converted to 403, outer middleware header present
+		assert_eq!(response.status, hyper::StatusCode::FORBIDDEN);
+		assert_eq!(
+			response
+				.headers
+				.get("X-Frame-Options")
+				.map(|v| v.to_str().unwrap()),
+			Some("DENY")
+		);
+	}
+
+	/// Passthrough middleware that does not modify the response.
+	struct PassthroughMiddleware;
+
+	#[async_trait]
+	impl Middleware for PassthroughMiddleware {
+		async fn process(&self, request: Request, next: Arc<dyn Handler>) -> Result<Response> {
+			next.handle(request).await
+		}
+	}
+
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn test_chain_error_preserves_correct_status_code() {
+		// Arrange: handler returns 401 Unauthorized, with at least one middleware
+		// so that ConditionalComposedHandler is used (empty chain bypasses it)
+		let handler: Arc<dyn Handler> = Arc::new(UnauthorizedHandler);
+		let mut chain = MiddlewareChain::new(handler);
+		chain.add_middleware(Arc::new(PassthroughMiddleware));
+
+		// Act
+		let request = create_test_request();
+		let response = chain.handle(request).await.unwrap();
+
+		// Assert: status code correctly reflects the error
+		assert_eq!(response.status, hyper::StatusCode::UNAUTHORIZED);
 	}
 }

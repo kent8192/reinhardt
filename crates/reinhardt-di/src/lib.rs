@@ -284,6 +284,7 @@ pub use reinhardt_di_macros::{injectable, injectable_factory};
 
 /// Errors that can occur during dependency injection resolution.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum DiError {
 	/// The requested dependency was not found in the container.
 	#[error("Dependency not found: {0}")]
@@ -332,6 +333,14 @@ pub enum DiError {
 		/// A description of the internal error.
 		message: String,
 	},
+
+	/// An authorization error (insufficient permissions).
+	#[error("Authorization error: {0}")]
+	Authorization(String),
+
+	/// An authentication error (user not authenticated).
+	#[error("Authentication error: {0}")]
+	Authentication(String),
 }
 
 impl From<DiError> for reinhardt_core::exception::Error {
@@ -342,6 +351,12 @@ impl From<DiError> for reinhardt_core::exception::Error {
 			| DiError::DependencyNotRegistered { .. } => reinhardt_core::exception::Error::NotFound(
 				format!("Dependency injection error: {}", err),
 			),
+			DiError::Authorization(msg) => {
+				reinhardt_core::exception::Error::Authorization(msg.clone())
+			}
+			DiError::Authentication(msg) => {
+				reinhardt_core::exception::Error::Authentication(msg.clone())
+			}
 			_ => reinhardt_core::exception::Error::Internal(format!(
 				"Dependency injection error: {}",
 				err
@@ -356,6 +371,37 @@ pub type DiResult<T> = std::result::Result<T, DiError>;
 // Generator support
 #[cfg(feature = "generator")]
 pub mod generator;
+
+#[cfg(test)]
+mod tests {
+	use rstest::rstest;
+
+	use super::*;
+
+	#[rstest]
+	#[case::not_found(DiError::NotFound("missing".to_string()), 404)]
+	#[case::not_registered(DiError::NotRegistered { type_name: "Foo".to_string(), hint: "".to_string() }, 404)]
+	#[case::dependency_not_registered(DiError::DependencyNotRegistered { type_name: "Bar".to_string() }, 404)]
+	#[case::authorization(DiError::Authorization("forbidden".to_string()), 403)]
+	#[case::authentication(DiError::Authentication("not authenticated".to_string()), 401)]
+	#[case::circular_dependency(DiError::CircularDependency("A -> B -> A".to_string()), 500)]
+	#[case::provider_error(DiError::ProviderError("boom".to_string()), 500)]
+	#[case::type_mismatch(DiError::TypeMismatch { expected: "A".to_string(), actual: "B".to_string() }, 500)]
+	#[case::scope_error(DiError::ScopeError("wrong scope".to_string()), 500)]
+	#[case::internal(DiError::Internal { message: "oops".to_string() }, 500)]
+	fn test_di_error_to_http_error_status_mapping(
+		#[case] di_err: DiError,
+		#[case] expected_status: u16,
+	) {
+		// Arrange (provided by #[case])
+
+		// Act
+		let err: reinhardt_core::exception::Error = di_err.into();
+
+		// Assert
+		assert_eq!(err.status_code(), expected_status);
+	}
+}
 
 // Development tools
 #[cfg(feature = "dev-tools")]

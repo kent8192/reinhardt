@@ -574,8 +574,12 @@ impl Middleware for RateLimitMiddleware {
 				// Record request
 				self.store.record_request(&key);
 
-				// Call handler
-				let mut response = handler.handle(request).await?;
+				// Convert errors to responses so post-processing always runs,
+				// even when invoked outside MiddlewareChain. (#3244)
+				let mut response = match handler.handle(request).await {
+					Ok(resp) => resp,
+					Err(e) => Response::from(e),
+				};
 
 				// Add rate limiting headers
 				response.headers.insert(

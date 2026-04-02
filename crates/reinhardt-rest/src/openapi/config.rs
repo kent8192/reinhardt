@@ -1,27 +1,32 @@
 //! OpenAPI configuration for endpoint mounting
 //!
-//! This module provides configuration options for automatic OpenAPI endpoint
-//! mounting via the `runserver` command.
+//! **Deprecated since 0.1.0-rc.16**: Use `reinhardt_conf::settings::openapi::OpenApiSettings`
+//! fragment with the composable settings system instead.
 //!
-//! # Example
-//!
-//! ```rust
-//! use reinhardt_rest::openapi::config::OpenApiConfig;
-//!
-//! // Use default configuration
-//! let config = OpenApiConfig::default();
-//! assert_eq!(config.swagger_path, "/api/docs");
-//! assert_eq!(config.json_path, "/api/openapi.json");
-//!
-//! // Custom configuration
-//! let mut custom = OpenApiConfig::default();
-//! custom.title = "My API".to_string();
-//! custom.version = "2.0.0".to_string();
-//! custom.description = Some("Custom API description".to_string());
-//! custom.swagger_path = "/api/swagger".to_string();
-//! ```
+//! This module is retained for backward compatibility. New code should use
+//! `OpenApiSettings` from `reinhardt-conf`.
 
 use serde::{Deserialize, Serialize};
+
+/// A security scheme entry for OpenAPI documentation.
+#[derive(Clone)]
+pub struct SecuritySchemeEntry {
+	/// Name of the scheme (e.g., "bearer", "session", "oauth2")
+	pub name: String,
+	/// The OpenAPI security scheme definition
+	pub scheme: utoipa::openapi::security::SecurityScheme,
+	/// OAuth2 scopes (if applicable)
+	pub scopes: Vec<(String, String)>,
+}
+
+impl std::fmt::Debug for SecuritySchemeEntry {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("SecuritySchemeEntry")
+			.field("name", &self.name)
+			.field("scopes", &self.scopes)
+			.finish_non_exhaustive()
+	}
+}
 
 /// Configuration for OpenAPI endpoint mounting
 ///
@@ -42,6 +47,10 @@ use serde::{Deserialize, Serialize};
 /// let config = OpenApiConfig::default();
 /// assert!(config.enabled);
 /// ```
+#[deprecated(
+	since = "0.1.0-rc.16",
+	note = "use `OpenApiSettings` from `reinhardt_conf::settings::openapi` instead"
+)]
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenApiConfig {
@@ -87,8 +96,17 @@ pub struct OpenApiConfig {
 	/// An optional description displayed in the OpenAPI schema and documentation UIs.
 	#[serde(default)]
 	pub description: Option<String>,
+
+	/// Security schemes for OpenAPI documentation.
+	///
+	/// Derived from application auth backend configuration.
+	/// Each entry defines a security scheme (e.g., Bearer, Cookie, OAuth2)
+	/// that will appear in the OpenAPI `components.securitySchemes`.
+	#[serde(skip)]
+	pub security_schemes: Vec<SecuritySchemeEntry>,
 }
 
+#[allow(deprecated)] // Internal: OpenApiConfig is deprecated but we still need Default
 impl Default for OpenApiConfig {
 	fn default() -> Self {
 		Self {
@@ -99,6 +117,7 @@ impl Default for OpenApiConfig {
 			title: "API Documentation".to_string(),
 			version: "1.0.0".to_string(),
 			description: None,
+			security_schemes: Vec::new(),
 		}
 	}
 }
@@ -129,6 +148,7 @@ fn default_version() -> String {
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // Tests exercise deprecated OpenApiConfig for backward-compatibility verification
 mod tests {
 	use super::*;
 

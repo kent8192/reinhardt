@@ -2,8 +2,9 @@
 //!
 //! Production-ready middleware stack for the Twitter clone example.
 
+use reinhardt::SecuritySettings;
 use reinhardt::middleware::cors::CorsConfig;
-use reinhardt::middleware::security_middleware::{SecurityConfig, SecurityMiddleware};
+use reinhardt::middleware::security_middleware::SecurityMiddleware;
 use reinhardt::middleware::session::{SessionConfig, SessionMiddleware};
 use reinhardt::middleware::{CorsMiddleware, LoggingMiddleware};
 use reinhardt::prelude::*;
@@ -49,7 +50,7 @@ pub fn create_cors_middleware() -> CorsMiddleware {
 /// - X-Content-Type-Options: nosniff
 /// - Referrer-Policy: same-origin
 pub fn create_security_middleware() -> SecurityMiddleware {
-	SecurityMiddleware::with_config(SecurityConfig::default())
+	SecurityMiddleware::from_security_settings(&SecuritySettings::default())
 }
 
 /// Create CacheControlMiddleware with optimized settings for API responses.

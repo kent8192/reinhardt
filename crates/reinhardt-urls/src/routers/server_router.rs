@@ -1863,6 +1863,19 @@ impl Default for ServerRouter {
 	}
 }
 
+/// Handler that always returns a pre-built response.
+///
+/// Used internally to route framework-level error responses (404/405)
+/// through the middleware chain for post-processing. (#3234)
+struct FixedResponseHandler(Response);
+
+#[async_trait]
+impl Handler for FixedResponseHandler {
+	async fn handle(&self, _request: Request) -> Result<Response> {
+		Ok(self.0.clone())
+	}
+}
+
 /// Handler implementation for ServerRouter
 #[async_trait]
 impl Handler for ServerRouter {
@@ -1876,14 +1889,28 @@ impl Handler for ServerRouter {
 			None => {
 				// Route not found for this method
 				// Check if path exists for any other method to determine 404 vs 405
-				if self.path_exists_for_any_method(path) {
-					return Err(Error::MethodNotAllowed(format!(
-						"Method {} not allowed for {}",
-						method, path
-					)));
+				let error = if self.path_exists_for_any_method(path) {
+					Error::MethodNotAllowed(format!("Method {} not allowed for {}", method, path))
 				} else {
-					return Err(Error::NotFound(format!("No route for {} {}", method, path)));
+					Error::NotFound(format!("No route for {} {}", method, path))
+				};
+
+				// If router has middleware, route the error response through the
+				// middleware chain so post-processing (e.g., security headers) is
+				// applied to framework-level 404/405 responses. (#3234)
+				let own_middleware = self.build_middleware_with_exclusions();
+				if own_middleware.is_empty() {
+					return Err(error);
 				}
+
+				let response = Response::from(error);
+				let handler: Arc<dyn Handler> = Arc::new(FixedResponseHandler(response));
+				let chain = own_middleware
+					.iter()
+					.fold(MiddlewareChain::new(handler), |chain, mw| {
+						chain.with_middleware(mw.clone())
+					});
+				return chain.handle(req).await;
 			}
 		};
 
@@ -2482,5 +2509,120 @@ mod tests {
 		// Second middleware (no exclusion) runs for all
 		assert!(built[1].should_continue(&request_admin));
 		assert!(built[1].should_continue(&request_public));
+	}
+
+	// --- Framework-level 404/405 middleware tests (#3234) ---
+
+	// Middleware that adds a security header to responses
+	struct SecurityHeaderTestMiddleware;
+
+	#[async_trait::async_trait]
+	impl Middleware for SecurityHeaderTestMiddleware {
+		async fn process(
+			&self,
+			request: reinhardt_http::Request,
+			next: std::sync::Arc<dyn reinhardt_http::Handler>,
+		) -> reinhardt_http::Result<reinhardt_http::Response> {
+			let mut response = next.handle(request).await?;
+			response.headers.insert(
+				hyper::header::HeaderName::from_static("x-security-test"),
+				hyper::header::HeaderValue::from_static("applied"),
+			);
+			Ok(response)
+		}
+	}
+
+	async fn dummy_handler(_req: reinhardt_http::Request) -> reinhardt_http::Result<Response> {
+		Ok(Response::ok())
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_404_response_gets_middleware_headers() {
+		// Arrange: router with middleware and a registered route
+		let router = ServerRouter::new()
+			.with_middleware(SecurityHeaderTestMiddleware)
+			.route("/api/users/", Method::GET, dummy_handler);
+
+		// Act: request a non-existent path
+		let request = create_test_request("/nonexistent");
+		let response = Handler::handle(&router, request).await.unwrap();
+
+		// Assert: 404 response has security header from middleware
+		assert_eq!(response.status, hyper::StatusCode::NOT_FOUND);
+		assert_eq!(
+			response
+				.headers
+				.get("x-security-test")
+				.map(|v| v.to_str().unwrap()),
+			Some("applied"),
+			"Framework-level 404 response should have middleware security header"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_405_response_gets_middleware_headers() {
+		// Arrange: router with middleware and a GET-only route
+		let router = ServerRouter::new()
+			.with_middleware(SecurityHeaderTestMiddleware)
+			.route("/api/users/", Method::GET, dummy_handler);
+
+		// Act: send POST to a GET-only route
+		let request = reinhardt_http::Request::builder()
+			.method(Method::POST)
+			.uri("/api/users/")
+			.version(hyper::Version::HTTP_11)
+			.headers(hyper::HeaderMap::new())
+			.body(bytes::Bytes::new())
+			.build()
+			.unwrap();
+		let response = Handler::handle(&router, request).await.unwrap();
+
+		// Assert: 405 response has security header from middleware
+		assert_eq!(response.status, hyper::StatusCode::METHOD_NOT_ALLOWED);
+		assert_eq!(
+			response
+				.headers
+				.get("x-security-test")
+				.map(|v| v.to_str().unwrap()),
+			Some("applied"),
+			"Framework-level 405 response should have middleware security header"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_404_without_middleware_returns_error() {
+		// Arrange: router with no middleware
+		let router = ServerRouter::new().route("/api/users/", Method::GET, dummy_handler);
+
+		// Act: request a non-existent path
+		let request = create_test_request("/nonexistent");
+		let result = Handler::handle(&router, request).await;
+
+		// Assert: returns Err (not wrapped in middleware chain)
+		assert!(result.is_err(), "404 without middleware should return Err");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_404_respects_middleware_exclusions() {
+		// Arrange: router with middleware excluded for /admin/
+		let router = ServerRouter::new()
+			.with_middleware(SecurityHeaderTestMiddleware)
+			.exclude("/admin/")
+			.route("/api/users/", Method::GET, dummy_handler);
+
+		// Act: request non-existent path under excluded prefix
+		let request = create_test_request("/admin/nonexistent");
+		let response = Handler::handle(&router, request).await.unwrap();
+
+		// Assert: 404 response but security header absent (middleware excluded)
+		assert_eq!(response.status, hyper::StatusCode::NOT_FOUND);
+		assert!(
+			response.headers.get("x-security-test").is_none(),
+			"404 under excluded path should NOT have middleware security header"
+		);
 	}
 }

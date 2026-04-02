@@ -85,20 +85,20 @@ impl Injectable for AdminAuthenticatedUser {
 	async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
 		// Get HTTP request from context
 		let request = ctx.get_http_request().ok_or_else(|| {
-			DiError::NotFound(
+			DiError::Authentication(
 				"AdminAuthenticatedUser: No HTTP request available in InjectionContext".to_string(),
 			)
 		})?;
 
 		// Get AuthState from request extensions
 		let auth_state: AuthState = request.extensions.get().ok_or_else(|| {
-			DiError::NotFound(
+			DiError::Authentication(
 				"AdminAuthenticatedUser: No AuthState found in request extensions".to_string(),
 			)
 		})?;
 
 		if !auth_state.is_authenticated() {
-			return Err(DiError::NotFound(
+			return Err(DiError::Authentication(
 				"AdminAuthenticatedUser: User is not authenticated".to_string(),
 			));
 		}
@@ -170,7 +170,7 @@ where
 						error = ?e,
 						"AdminUserLoader: failed to parse user_id"
 					);
-					DiError::NotFound("AdminUserLoader: Invalid user_id format".to_string())
+					DiError::Authentication("AdminUserLoader: Invalid user_id format".to_string())
 				})?;
 
 			let model_pk = <U as Model>::PrimaryKey::from(pk);

@@ -170,8 +170,12 @@ impl Middleware for RedirectFallbackMiddleware {
 	async fn process(&self, request: Request, handler: Arc<dyn Handler>) -> Result<Response> {
 		let path = request.uri.path().to_string();
 
-		// Call the handler
-		let response = handler.handle(request).await?;
+		// Convert errors to responses so post-processing always runs,
+		// even when invoked outside MiddlewareChain. (#3244)
+		let response = match handler.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 
 		// Only redirect on 404 errors
 		if response.status != StatusCode::NOT_FOUND {

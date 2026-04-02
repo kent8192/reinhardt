@@ -592,7 +592,12 @@ impl Middleware for SessionMiddleware {
 			.insert(SessionCookieName::new(self.config.cookie_name.clone()));
 
 		// Call the handler
-		let mut response = handler.handle(request).await?;
+		// Convert errors to responses so post-processing (e.g., security headers)
+		// always runs, even when invoked outside MiddlewareChain. (#3244)
+		let mut response = match handler.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 
 		// Append Set-Cookie header (use append to preserve existing Set-Cookie headers)
 		let cookie = self.build_cookie_header(&session.id);

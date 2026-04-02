@@ -139,16 +139,32 @@ impl Middleware for LoggingMiddleware {
 				let timestamp = Local::now().format("%d/%b/%Y %H:%M:%S");
 				let request_line = format!("\"{} {} {}\"", method, path, version);
 
-				println!(
-					"{} {} {} {} {}",
-					format!("[{timestamp}]").dimmed(),
-					request_line.white(),
-					status_colored,
-					response.body.len().to_string().cyan(),
-					format!("{}ms", duration.as_millis()).dimmed(),
-				);
+				// Use eprintln for error status codes (4xx/5xx) since the
+				// middleware chain converts errors to responses internally.
+				if response.status.is_client_error() || response.status.is_server_error() {
+					eprintln!(
+						"{} {} {} {} {}",
+						format!("[{timestamp}]").dimmed(),
+						request_line.white(),
+						status_colored,
+						response.body.len().to_string().cyan(),
+						format!("{}ms", duration.as_millis()).dimmed(),
+					);
+				} else {
+					println!(
+						"{} {} {} {} {}",
+						format!("[{timestamp}]").dimmed(),
+						request_line.white(),
+						status_colored,
+						response.body.len().to_string().cyan(),
+						format!("{}ms", duration.as_millis()).dimmed(),
+					);
+				}
 			}
 			Err(err) => {
+				// This branch is reached when LoggingMiddleware is used outside
+				// a MiddlewareChain (direct process() call). Within a chain,
+				// ConditionalComposedHandler converts errors to responses.
 				let status_code = err.status_code();
 				let status_colored = colorize_status(status_code);
 				let timestamp = Local::now().format("%d/%b/%Y %H:%M:%S");

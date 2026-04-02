@@ -255,6 +255,11 @@ middleware-rate-limit = [
   "reinhardt-middleware",
   "reinhardt-middleware/rate-limit",
 ]
+middleware-auth-jwt = [
+  "reinhardt-middleware",
+  "reinhardt-middleware/auth-jwt",
+  "auth-jwt",
+]
 
 [dependencies]
 # WASM-compatible dependencies (always included)
@@ -345,6 +350,7 @@ members = [
   "crates/reinhardt-rest/openapi-macros",
   "crates/reinhardt-throttling",
   "crates/reinhardt-auth",
+  "crates/reinhardt-auth/macros",
   "crates/reinhardt-admin",                            # Admin panel functionality
   "crates/reinhardt-admin-cli",                        # Admin CLI tool
   "crates/reinhardt-grpc",
@@ -425,6 +431,7 @@ reinhardt-utils = { path = "crates/reinhardt-utils", version = "0.1.0-rc.15" }
 reinhardt-rest = { path = "crates/reinhardt-rest", version = "0.1.0-rc.15" }
 reinhardt-throttling = { path = "crates/reinhardt-throttling", version = "0.1.0-rc.15" }
 reinhardt-auth = { path = "crates/reinhardt-auth", version = "0.1.0-rc.15" }
+reinhardt-auth-macros = { path = "crates/reinhardt-auth/macros", version = "0.1.0-rc.15" }
 reinhardt-admin = { path = "crates/reinhardt-admin", version = "0.1.0-rc.15" }
 reinhardt-admin-cli = { path = "crates/reinhardt-admin-cli", version = "0.1.0-rc.15" }
 reinhardt-grpc = { path = "crates/reinhardt-grpc", version = "0.1.0-rc.15" }
@@ -517,6 +524,7 @@ anyhow = "1.0.100"
 # Routing
 regex = "1.12.2"
 nom = "8.0.0"
+winnow = "0.7"
 
 # Utilities
 chrono = { version = "0.4.42", features = ["serde"] }

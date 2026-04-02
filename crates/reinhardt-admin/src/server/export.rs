@@ -15,6 +15,63 @@ use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 #[cfg(not(target_arch = "wasm32"))]
 use super::limits::MAX_EXPORT_RECORDS;
 
+/// Serialize records as delimiter-separated values (CSV or TSV).
+///
+/// Uses `BTreeMap` for consistent column ordering across records and
+/// `write_record` for compatibility with the csv crate (which does not
+/// support serializing maps via `serialize`).
+#[cfg(not(target_arch = "wasm32"))]
+fn serialize_delimited(
+	results: &[std::collections::HashMap<String, serde_json::Value>],
+	delimiter: u8,
+) -> Result<Vec<u8>, String> {
+	use std::collections::BTreeMap;
+
+	if results.is_empty() {
+		return Ok(Vec::new());
+	}
+
+	let mut wtr = csv::WriterBuilder::new()
+		.delimiter(delimiter)
+		.from_writer(vec![]);
+
+	// Convert all records to BTreeMap for consistent column ordering
+	let flat_records: Vec<BTreeMap<String, String>> = results
+		.iter()
+		.map(|record| {
+			record
+				.iter()
+				.map(|(k, v)| {
+					let s = match v {
+						serde_json::Value::String(s) => s.clone(),
+						serde_json::Value::Null => String::new(),
+						other => other.to_string(),
+					};
+					(k.clone(), s)
+				})
+				.collect()
+		})
+		.collect();
+
+	// Write header row from first record's keys
+	let headers: Vec<&str> = flat_records[0].keys().map(|k| k.as_str()).collect();
+	wtr.write_record(&headers)
+		.map_err(|e| format!("header serialization failed: {}", e))?;
+
+	// Write each record's values in header order
+	for record in &flat_records {
+		let values: Vec<&str> = headers
+			.iter()
+			.map(|h| record.get(*h).map(|v| v.as_str()).unwrap_or(""))
+			.collect();
+		wtr.write_record(&values)
+			.map_err(|e| format!("record serialization failed: {}", e))?;
+	}
+
+	wtr.into_inner()
+		.map_err(|e| format!("writer flush failed: {}", e))
+}
+
 /// Export model data in various formats
 ///
 /// Exports all records from a model table in the specified format (JSON, CSV, TSV).
@@ -90,18 +147,9 @@ pub async fn export_data(
 			)
 		}
 		ExportFormat::CSV => {
-			let mut wtr = csv::Writer::from_writer(vec![]);
-
-			// Write records to CSV
-			for record in results {
-				wtr.serialize(record).map_err(|e| {
-					ServerFnError::serialization(format!("CSV serialization failed: {}", e))
-				})?;
-			}
-
-			let data = wtr
-				.into_inner()
-				.map_err(|e| ServerFnError::serialization(format!("CSV write failed: {}", e)))?;
+			let data = serialize_delimited(&results, b',').map_err(|e| {
+				ServerFnError::serialization(format!("CSV serialization failed: {}", e))
+			})?;
 
 			(
 				data,
@@ -110,20 +158,9 @@ pub async fn export_data(
 			)
 		}
 		ExportFormat::TSV => {
-			let mut wtr = csv::WriterBuilder::new()
-				.delimiter(b'\t')
-				.from_writer(vec![]);
-
-			// Write records to TSV
-			for record in results {
-				wtr.serialize(record).map_err(|e| {
-					ServerFnError::serialization(format!("TSV serialization failed: {}", e))
-				})?;
-			}
-
-			let data = wtr
-				.into_inner()
-				.map_err(|e| ServerFnError::serialization(format!("TSV write failed: {}", e)))?;
+			let data = serialize_delimited(&results, b'\t').map_err(|e| {
+				ServerFnError::serialization(format!("TSV serialization failed: {}", e))
+			})?;
 
 			(
 				data,

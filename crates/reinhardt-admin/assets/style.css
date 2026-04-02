@@ -16,7 +16,7 @@
 	font-style: normal;
 	font-weight: 400;
 	font-display: swap;
-	src: url('vendor/fonts/dm-sans-latin-400.woff2') format('woff2');
+	src: url('vendor/fonts/dm-sans-latin-400-normal.woff2') format('woff2');
 }
 
 @font-face {
@@ -32,7 +32,7 @@
 	font-style: normal;
 	font-weight: 500;
 	font-display: swap;
-	src: url('vendor/fonts/dm-sans-latin-500.woff2') format('woff2');
+	src: url('vendor/fonts/dm-sans-latin-500-normal.woff2') format('woff2');
 }
 
 @font-face {
@@ -40,7 +40,7 @@
 	font-style: normal;
 	font-weight: 600;
 	font-display: swap;
-	src: url('vendor/fonts/dm-sans-latin-600.woff2') format('woff2');
+	src: url('vendor/fonts/dm-sans-latin-600-normal.woff2') format('woff2');
 }
 
 @font-face {
@@ -48,7 +48,7 @@
 	font-style: normal;
 	font-weight: 700;
 	font-display: swap;
-	src: url('vendor/fonts/dm-sans-latin-700.woff2') format('woff2');
+	src: url('vendor/fonts/dm-sans-latin-700-normal.woff2') format('woff2');
 }
 
 @font-face {
@@ -56,7 +56,7 @@
 	font-style: normal;
 	font-weight: 600;
 	font-display: swap;
-	src: url('vendor/fonts/syne-latin-600.woff2') format('woff2');
+	src: url('vendor/fonts/syne-latin-600-normal.woff2') format('woff2');
 }
 
 @font-face {
@@ -64,7 +64,7 @@
 	font-style: normal;
 	font-weight: 700;
 	font-display: swap;
-	src: url('vendor/fonts/syne-latin-700.woff2') format('woff2');
+	src: url('vendor/fonts/syne-latin-700-normal.woff2') format('woff2');
 }
 
 @font-face {
@@ -72,7 +72,7 @@
 	font-style: normal;
 	font-weight: 800;
 	font-display: swap;
-	src: url('vendor/fonts/syne-latin-800.woff2') format('woff2');
+	src: url('vendor/fonts/syne-latin-800-normal.woff2') format('woff2');
 }
 
 /* ===  Theme tokens  === */

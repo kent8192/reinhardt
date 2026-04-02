@@ -351,8 +351,12 @@ impl Middleware for BrokenLinkEmailsMiddleware {
 			.and_then(|ua| ua.to_str().ok())
 			.map(|s| s.to_string());
 
-		// Call the handler
-		let response = handler.handle(request).await?;
+		// Convert errors to responses so post-processing always runs,
+		// even when invoked outside MiddlewareChain. (#3244)
+		let response = match handler.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 
 		// Check if we should process this request/response
 		if !self.config.enabled || response.status != StatusCode::NOT_FOUND {

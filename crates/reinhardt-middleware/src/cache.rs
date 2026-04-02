@@ -441,8 +441,12 @@ impl Middleware for CacheMiddleware {
 			}
 		}
 
-		// Call handler
-		let response = handler.handle(request).await?;
+		// Convert errors to responses so post-processing always runs,
+		// even when invoked outside MiddlewareChain. (#3244)
+		let response = match handler.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 
 		// Save to cache if status code is cacheable
 		if self.is_cacheable_status(response.status.as_u16()) {

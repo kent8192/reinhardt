@@ -353,8 +353,12 @@ impl Middleware for CacheControlMiddleware {
 		// Get path before moving request
 		let path = request.uri.path().to_string();
 
-		// Call handler
-		let mut response = handler.handle(request).await?;
+		// Convert errors to responses so post-processing always runs,
+		// even when invoked outside MiddlewareChain. (#3244)
+		let mut response = match handler.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 
 		// Only add Cache-Control for successful responses
 		if !response.status.is_success() {

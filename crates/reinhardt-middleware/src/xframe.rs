@@ -189,7 +189,12 @@ const X_FRAME_OPTIONS: HeaderName = HeaderName::from_static("x-frame-options");
 #[async_trait]
 impl Middleware for XFrameOptionsMiddleware {
 	async fn process(&self, request: Request, handler: Arc<dyn Handler>) -> Result<Response> {
-		let mut response = handler.handle(request).await?;
+		// Convert errors to responses so post-processing (e.g., security headers)
+		// always runs, even when invoked outside MiddlewareChain. (#3244)
+		let mut response = match handler.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 
 		// Only add header if not already present
 		if !response.headers.contains_key(&X_FRAME_OPTIONS) {
@@ -209,6 +214,8 @@ mod tests {
 	use super::*;
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method, StatusCode, Version};
+	use reinhardt_http::Error;
+	use rstest::rstest;
 
 	struct TestHandler;
 
@@ -420,5 +427,39 @@ mod tests {
 			.unwrap();
 		let response3 = middleware.process(request3, handler).await.unwrap();
 		assert_eq!(response3.headers.get(&X_FRAME_OPTIONS).unwrap(), "DENY");
+	}
+
+	/// Handler that always returns an error to simulate inner handler failure.
+	struct ErrorHandler;
+
+	#[async_trait]
+	impl Handler for ErrorHandler {
+		async fn handle(&self, _request: Request) -> Result<Response> {
+			Err(Error::Http("handler error".to_string()))
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_xframe_header_applied_on_handler_error() {
+		// Arrange
+		let middleware = XFrameOptionsMiddleware::new(XFrameOptions::Deny);
+		let handler: Arc<dyn Handler> = Arc::new(ErrorHandler);
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert — error is converted to response with X-Frame-Options applied
+		assert!(response.status.is_client_error() || response.status.is_server_error());
+		assert_eq!(response.headers.get(&X_FRAME_OPTIONS).unwrap(), "DENY");
 	}
 }

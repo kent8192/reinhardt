@@ -4,9 +4,11 @@
 
 #[cfg(server)]
 use reinhardt::pages::server_fn::ServerFnRouterExt;
+#[cfg(server)]
 use reinhardt::prelude::*;
 #[cfg(server)]
 use reinhardt::routes;
+use reinhardt::UnifiedRouter;
 
 // Import server_fn marker modules (snake_case + ::marker)
 #[cfg(server)]

@@ -92,8 +92,8 @@ pub async fn admin_login(
 		.generate_token(
 			user_info.user_id.clone(),
 			user_info.username.clone(),
-			false,
-			false,
+			user_info.is_staff,
+			user_info.is_superuser,
 		)
 		.map_err(|e| {
 			::tracing::error!(error = ?e, "admin_login: JWT token generation failed");

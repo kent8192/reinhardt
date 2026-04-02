@@ -133,14 +133,28 @@ impl CollectStaticCommand {
 
 		// Download vendor assets for the admin panel before collecting static files.
 		// This step is only active when the "server" feature is enabled.
+		//
+		// The download target is resolved from the admin app's registered static_dir
+		// (via inventory) to ensure consistency with the path that find_all() will
+		// later walk. Falling back to a CARGO_MANIFEST_DIR-relative path would
+		// silently diverge when the crate is consumed from the cargo registry or
+		// across git worktrees.
 		#[cfg(feature = "server")]
 		{
-			let admin_assets_dir = std::path::PathBuf::from(concat!(
-				env!("CARGO_MANIFEST_DIR"),
-				"/../reinhardt-admin/assets"
-			));
+			let admin_assets_dir: Option<PathBuf> = {
+				let app_configs = ::reinhardt_apps::get_app_static_files();
+				app_configs
+					.iter()
+					.find(|c| c.app_label == "admin")
+					.map(|c| PathBuf::from(c.static_dir))
+			};
 
-			if admin_assets_dir.exists() {
+			if let Some(admin_assets_dir) = admin_assets_dir {
+				// Ensure the directory exists so vendor downloads have a target
+				if !self.options.dry_run {
+					fs::create_dir_all(&admin_assets_dir).ok();
+				}
+
 				use reinhardt_admin::core::vendor::{Verbosity, download_vendor_assets};
 
 				let verbosity = match self.options.verbosity {
@@ -149,7 +163,7 @@ impl CollectStaticCommand {
 					_ => Verbosity::Verbose,
 				};
 
-				// Bridge sync→async: try the current tokio runtime handle first,
+				// Bridge sync->async: try the current tokio runtime handle first,
 				// then fall back to a freshly created single-threaded runtime.
 				let result: Result<(), String> = match tokio::runtime::Handle::try_current() {
 					Ok(handle) => tokio::task::block_in_place(|| {
@@ -183,6 +197,8 @@ impl CollectStaticCommand {
 						);
 					}
 				}
+			} else if self.options.verbosity > 0 {
+				println!("Admin static files not registered; skipping vendor asset download");
 			}
 		}
 

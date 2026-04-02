@@ -70,22 +70,22 @@ const ADMIN_VENDOR_ASSETS: &[VendorAsset] = &[
 		target: "vendor/fonts/dm-sans-latin-700-normal.woff2",
 		sha256: "",
 	},
-	// Syne — Latin subset, weight 600 (semi-bold)
+	// Inter — Latin subset, weight 600 (semi-bold)
 	VendorAsset {
-		url: "https://cdn.jsdelivr.net/npm/@fontsource/syne@5.1.1/files/syne-latin-600-normal.woff2",
-		target: "vendor/fonts/syne-latin-600-normal.woff2",
+		url: "https://cdn.jsdelivr.net/fontsource/fonts/inter@latest/latin-600-normal.woff2",
+		target: "vendor/fonts/inter-latin-600-normal.woff2",
 		sha256: "",
 	},
-	// Syne — Latin subset, weight 700 (bold)
+	// Inter — Latin subset, weight 700 (bold)
 	VendorAsset {
-		url: "https://cdn.jsdelivr.net/npm/@fontsource/syne@5.1.1/files/syne-latin-700-normal.woff2",
-		target: "vendor/fonts/syne-latin-700-normal.woff2",
+		url: "https://cdn.jsdelivr.net/fontsource/fonts/inter@latest/latin-700-normal.woff2",
+		target: "vendor/fonts/inter-latin-700-normal.woff2",
 		sha256: "",
 	},
-	// Syne — Latin subset, weight 800 (extra-bold)
+	// Inter — Latin subset, weight 800 (extra-bold)
 	VendorAsset {
-		url: "https://cdn.jsdelivr.net/npm/@fontsource/syne@5.1.1/files/syne-latin-800-normal.woff2",
-		target: "vendor/fonts/syne-latin-800-normal.woff2",
+		url: "https://cdn.jsdelivr.net/fontsource/fonts/inter@latest/latin-800-normal.woff2",
+		target: "vendor/fonts/inter-latin-800-normal.woff2",
 		sha256: "",
 	},
 	// UnoCSS Runtime v66.6.7 — browser-based utility CSS generation engine.

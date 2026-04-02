@@ -2,7 +2,7 @@
  * Reinhardt Admin Panel — Design System
  *
  * Aesthetic: "Obsidian & Amber" — Swiss precision meets developer tool.
- * Typography: Syne (display) + DM Sans (body), self-hosted via Fontsource.
+ * Typography: Inter (display) + DM Sans (body), self-hosted via Fontsource.
  * Tokens: Open Props (shadows, radii, easing, animations), bundled locally.
  * Entrance FX: Animate.css, bundled locally.
  * Utility classes: Generated at build time by UnoCSS CLI.
@@ -52,27 +52,27 @@
 }
 
 @font-face {
-	font-family: 'Syne';
+	font-family: 'Inter';
 	font-style: normal;
 	font-weight: 600;
 	font-display: swap;
-	src: url('vendor/fonts/syne-latin-600-normal.woff2') format('woff2');
+	src: url('vendor/fonts/inter-latin-600-normal.woff2') format('woff2');
 }
 
 @font-face {
-	font-family: 'Syne';
+	font-family: 'Inter';
 	font-style: normal;
 	font-weight: 700;
 	font-display: swap;
-	src: url('vendor/fonts/syne-latin-700-normal.woff2') format('woff2');
+	src: url('vendor/fonts/inter-latin-700-normal.woff2') format('woff2');
 }
 
 @font-face {
-	font-family: 'Syne';
+	font-family: 'Inter';
 	font-style: normal;
 	font-weight: 800;
 	font-display: swap;
-	src: url('vendor/fonts/syne-latin-800-normal.woff2') format('woff2');
+	src: url('vendor/fonts/inter-latin-800-normal.woff2') format('woff2');
 }
 
 /* ===  Theme tokens  === */
@@ -109,7 +109,7 @@ html {
 body { margin: 0; line-height: inherit; }
 
 h1, h2, h3, h4, h5, h6 {
-	font-family: 'Syne', 'DM Sans', ui-sans-serif, sans-serif;
+	font-family: 'Inter', 'DM Sans', ui-sans-serif, sans-serif;
 	font-weight: 700;
 }
 
@@ -323,5 +323,5 @@ img, svg, video { display: block; max-width: 100%; }
 
 /* ===  Utility overrides  === */
 
-.font-display { font-family: 'Syne', 'DM Sans', sans-serif; }
+.font-display { font-family: 'Inter', 'DM Sans', sans-serif; }
 .text-amber-accent { color: var(--admin-amber); }

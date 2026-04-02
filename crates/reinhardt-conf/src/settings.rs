@@ -119,12 +119,12 @@ pub use advanced::{
 
 /// Main settings structure for a Reinhardt project
 ///
-/// **Deprecated since 0.2.0**: Use [`CoreSettings`] fragment with
+/// **Deprecated since 0.1.0-rc.16**: Use [`CoreSettings`] fragment with
 /// `ProjectSettings` instead. This struct is retained as a migration bridge
 /// and implements `HasCoreSettings` so existing code can be gradually
 /// moved to the composable settings system.
 #[deprecated(
-	since = "0.2.0",
+	since = "0.1.0-rc.16",
 	note = "use CoreSettings fragment with ProjectSettings instead"
 )]
 #[non_exhaustive]
@@ -265,7 +265,7 @@ impl Settings {
 	/// }
 	/// ```
 	#[deprecated(
-		since = "0.2.0",
+		since = "0.1.0-rc.16",
 		note = "Use `installed_apps!` macro with `ApplicationBuilder` instead"
 	)]
 	pub fn add_app(&mut self, app: impl Into<String>) {
@@ -298,7 +298,7 @@ impl Settings {
 	/// }
 	/// ```
 	#[deprecated(
-		since = "0.2.0",
+		since = "0.1.0-rc.16",
 		note = "Use `installed_apps!` macro with `ApplicationBuilder` instead"
 	)]
 	pub fn with_validated_apps<F>(mut self, app_provider: F) -> Self

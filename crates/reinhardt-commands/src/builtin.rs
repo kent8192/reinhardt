@@ -549,6 +549,19 @@ impl BaseCommand for MakeMigrationsCommand {
 			.unwrap_or_else(|| "migrations".to_string());
 		let migrations_dir = PathBuf::from(migrations_dir_str);
 
+		// Validate that we are running inside a Reinhardt project directory.
+		// A valid project must contain src/bin/manage.rs (the management command
+		// entry point). Running makemigrations from the wrong directory would
+		// silently create migration files in unexpected locations.
+		if !PathBuf::from("src/bin/manage.rs").exists() {
+			return Err(crate::CommandError::ExecutionError(
+				"Cannot find src/bin/manage.rs in the current directory. \
+				 Please run makemigrations from your Reinhardt project root \
+				 (the directory containing src/bin/manage.rs)."
+					.to_string(),
+			));
+		}
+
 		if is_dry_run {
 			ctx.warning("Dry run mode: No files will be created");
 		}

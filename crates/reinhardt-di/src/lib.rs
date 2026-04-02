@@ -379,15 +379,27 @@ mod tests {
 	use super::*;
 
 	#[rstest]
-	fn test_authorization_error_maps_to_403() {
-		// Arrange
-		let di_err = DiError::Authorization("Permission denied".to_string());
+	#[case::not_found(DiError::NotFound("missing".to_string()), 404)]
+	#[case::not_registered(DiError::NotRegistered { type_name: "Foo".to_string(), hint: "".to_string() }, 404)]
+	#[case::dependency_not_registered(DiError::DependencyNotRegistered { type_name: "Bar".to_string() }, 404)]
+	#[case::authorization(DiError::Authorization("forbidden".to_string()), 403)]
+	#[case::authentication(DiError::Authentication("not authenticated".to_string()), 401)]
+	#[case::circular_dependency(DiError::CircularDependency("A -> B -> A".to_string()), 500)]
+	#[case::provider_error(DiError::ProviderError("boom".to_string()), 500)]
+	#[case::type_mismatch(DiError::TypeMismatch { expected: "A".to_string(), actual: "B".to_string() }, 500)]
+	#[case::scope_error(DiError::ScopeError("wrong scope".to_string()), 500)]
+	#[case::internal(DiError::Internal { message: "oops".to_string() }, 500)]
+	fn test_di_error_to_http_error_status_mapping(
+		#[case] di_err: DiError,
+		#[case] expected_status: u16,
+	) {
+		// Arrange (provided by #[case])
 
 		// Act
 		let err: reinhardt_core::exception::Error = di_err.into();
 
 		// Assert
-		assert_eq!(err.status_code(), 403);
+		assert_eq!(err.status_code(), expected_status);
 	}
 }
 

@@ -59,7 +59,7 @@ impl Injectable for AuthInfo {
 		})?;
 
 		if !auth_state.is_authenticated() {
-			return Err(DiError::NotFound(
+			return Err(DiError::Authentication(
 				"AuthInfo: User is not authenticated".to_string(),
 			));
 		}

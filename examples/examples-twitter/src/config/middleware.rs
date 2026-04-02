@@ -2,9 +2,9 @@
 //!
 //! Production-ready middleware stack for the Twitter clone example.
 
+use reinhardt::SecuritySettings;
 use reinhardt::middleware::cors::CorsConfig;
 use reinhardt::middleware::security_middleware::SecurityMiddleware;
-use reinhardt::SecuritySettings;
 use reinhardt::middleware::session::{SessionConfig, SessionMiddleware};
 use reinhardt::middleware::{CorsMiddleware, LoggingMiddleware};
 use reinhardt::prelude::*;

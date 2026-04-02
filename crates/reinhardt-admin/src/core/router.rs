@@ -125,13 +125,14 @@ fn admin_spa_html(site_title: &str) -> String {
 	} else {
 		resolve_admin_static("main.js")
 	};
-	// wasm-pack --target web requires explicit init() call to load the WASM binary
+	// wasm-pack --target web requires explicit init() call to load the WASM binary.
+	// The init script is served as an external file to comply with CSP
+	// (no 'unsafe-inline' needed). The WASM entry URL is passed via a
+	// data attribute so the static init script can resolve it at runtime.
 	let script_tag = if wasm_built {
+		let init_js_url = resolve_admin_static("wasm-init.js");
 		format!(
-			r#"<script type="module">
-		import init from '{js_url}';
-		await init();
-	</script>"#
+			r#"<script type="module" src="{init_js_url}" data-wasm-entry="{js_url}"></script>"#
 		)
 	} else {
 		format!(r#"<script type="module" src="{js_url}"></script>"#)

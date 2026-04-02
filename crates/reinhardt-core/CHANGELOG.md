@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.15...reinhardt-core@v0.1.0-rc.16) - 2026-04-02
+
+### Added
+
+- *(auth)* add SuperuserInit trait and SuperuserCreator registry
+- *(auth)* auto-register SuperuserCreator via inventory for #[user(full = true)] + #[model] types
+- *(core)* add AuthProtection enum and EndpointMetadata extension
+- *(core)* detect auth parameters in route macros for metadata
+
+### Fixed
+
+- *(macros)* delegate DI injection errors to From<DiError> instead of hardcoding 500
+
+### Styling
+
+- *(core)* apply rustfmt formatting
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.14...reinhardt-core@v0.1.0-rc.15) - 2026-03-29
 
 ### Added

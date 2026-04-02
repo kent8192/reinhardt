@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.1.0-rc.15...reinhardt-conf@v0.1.0-rc.16) - 2026-04-02
+
+### Added
+
+- *(conf)* add OpenApiSettings fragment
+
+### Changed
+
+- *(conf)* use #[settings(fragment = true)] macro for OpenApiSettings
+
+### Documentation
+
+- *(conf)* fix composable settings TOML structure and add serde defaults
+- *(conf)* fix unresolved SettingsFragment link in openapi module doc
+
+### Fixed
+
+- *(conf)* remove #[serde(flatten)] from SecuritySettings and fix TOML scoping
+
+### Styling
+
+- fix formatting in OpenApiSettings files
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.1.0-rc.14...reinhardt-conf@v0.1.0-rc.15) - 2026-03-29
 
 ### Maintenance

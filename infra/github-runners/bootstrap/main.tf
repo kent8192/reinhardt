@@ -17,6 +17,12 @@ terraform {
 provider "aws" {
   region = var.aws_region
 
+  # Deploy state bucket into the CI sub-account via OrganizationAccountAccessRole.
+  # Requires non-root credentials in the management account (root cannot assume roles).
+  assume_role {
+    role_arn = "arn:aws:iam::${var.aws_account_id}:role/OrganizationAccountAccessRole"
+  }
+
   default_tags {
     tags = {
       Project   = "reinhardt"

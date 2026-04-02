@@ -63,7 +63,7 @@ where
 		})?;
 
 		if !auth_state.is_authenticated() {
-			return Err(DiError::NotFound(
+			return Err(DiError::Authentication(
 				"AuthUser: User is not authenticated".to_string(),
 			));
 		}
@@ -78,7 +78,7 @@ where
 					error = ?e,
 					"AuthUser: failed to parse user_id from AuthState"
 				);
-				DiError::NotFound("AuthUser: Invalid user_id format in AuthState".to_string())
+				DiError::Authentication("AuthUser: Invalid user_id format in AuthState".to_string())
 			})?;
 
 		let model_pk = <U as Model>::PrimaryKey::from(user_pk);

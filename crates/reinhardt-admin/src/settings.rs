@@ -507,8 +507,10 @@ img_src = ["'self'", "data:", "https://images.example.com"]
 
 			// Act
 			use reinhardt_conf::settings::fragment::SettingsValidation;
-			let result =
-				settings.validate(&reinhardt_conf::settings::profile::Profile::Development);
+			let result = SettingsValidation::validate(
+				&settings,
+				&reinhardt_conf::settings::profile::Profile::Development,
+			);
 
 			// Assert
 			assert!(result.is_ok());
@@ -522,8 +524,10 @@ img_src = ["'self'", "data:", "https://images.example.com"]
 
 			// Act
 			use reinhardt_conf::settings::fragment::SettingsValidation;
-			let result =
-				settings.validate(&reinhardt_conf::settings::profile::Profile::Development);
+			let result = SettingsValidation::validate(
+				&settings,
+				&reinhardt_conf::settings::profile::Profile::Development,
+			);
 
 			// Assert
 			assert!(result.is_ok());
@@ -537,7 +541,10 @@ img_src = ["'self'", "data:", "https://images.example.com"]
 
 			// Act
 			use reinhardt_conf::settings::fragment::SettingsValidation;
-			let result = settings.validate(&reinhardt_conf::settings::profile::Profile::Production);
+			let result = SettingsValidation::validate(
+				&settings,
+				&reinhardt_conf::settings::profile::Profile::Production,
+			);
 
 			// Assert
 			assert!(result.is_ok());
@@ -550,7 +557,10 @@ img_src = ["'self'", "data:", "https://images.example.com"]
 
 			// Act
 			use reinhardt_conf::settings::fragment::SettingsValidation;
-			let result = settings.validate(&reinhardt_conf::settings::profile::Profile::Production);
+			let result = SettingsValidation::validate(
+				&settings,
+				&reinhardt_conf::settings::profile::Profile::Production,
+			);
 
 			// Assert
 			assert!(result.is_ok());

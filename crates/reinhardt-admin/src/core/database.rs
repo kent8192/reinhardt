@@ -924,18 +924,22 @@ impl AdminDatabase {
 			.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
 
 		// Extract the ID from the returned row using the primary key field
-		if let Some(serde_json::Value::Number(n)) = row.data.get(pk_field) {
-			n.as_u64().ok_or_else(|| {
+		match row.data.get(pk_field) {
+			Some(serde_json::Value::Number(n)) => n.as_u64().ok_or_else(|| {
 				AdminError::DatabaseError(format!(
 					"RETURNING clause for '{}' returned non-unsigned-integer: {}",
 					pk_field, n
 				))
-			})
-		} else {
-			Err(AdminError::DatabaseError(format!(
+			}),
+			Some(serde_json::Value::String(_)) => {
+				// UUID and other string-based PKs: return 1 as affected count
+				// (the actual PK value is a string, not representable as u64)
+				Ok(1)
+			}
+			_ => Err(AdminError::DatabaseError(format!(
 				"RETURNING clause did not return expected primary key field '{}'",
 				pk_field
-			)))
+			))),
 		}
 	}
 

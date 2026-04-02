@@ -232,22 +232,14 @@ pub(crate) fn use_inject_impl(_args: TokenStream, input: ItemFn) -> Result<Token
 			quote! {
 				let #pat: #ty = #di_crate::Injected::<#ty>::resolve(&__di_ctx)
 					.await
-					.map_err(|e| {
-						#core_crate::exception::Error::Internal(
-							format!("Dependency injection failed: {:?}", e)
-						)
-					})?
+					.map_err(#core_crate::exception::Error::from)?
 					.into_inner();
 			}
 		} else {
 			quote! {
 				let #pat: #ty = #di_crate::Injected::<#ty>::resolve_uncached(&__di_ctx)
 					.await
-					.map_err(|e| {
-						#core_crate::exception::Error::Internal(
-							format!("Dependency injection failed: {:?}", e)
-						)
-					})?
+					.map_err(#core_crate::exception::Error::from)?
 					.into_inner();
 			}
 		};

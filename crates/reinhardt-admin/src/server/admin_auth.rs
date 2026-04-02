@@ -170,7 +170,7 @@ where
 						error = ?e,
 						"AdminUserLoader: failed to parse user_id"
 					);
-					DiError::NotFound("AdminUserLoader: Invalid user_id format".to_string())
+					DiError::Authentication("AdminUserLoader: Invalid user_id format".to_string())
 				})?;
 
 			let model_pk = <U as Model>::PrimaryKey::from(pk);

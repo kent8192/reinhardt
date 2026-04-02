@@ -33,11 +33,11 @@ pub const TEST_USER_UUID: &str = "00000000-0000-0000-0000-000000000001";
 ///
 /// The request has:
 /// - `AuthState::authenticated` with is_admin=true, is_active=true
-/// - `Cookie` header containing `__csrf_token={TEST_CSRF_TOKEN}`
+/// - `Cookie` header containing `csrftoken={TEST_CSRF_TOKEN}`
 pub fn make_staff_request() -> ServerFnRequest {
 	let request = reinhardt_http::Request::builder()
 		.uri("/admin/test")
-		.header("cookie", format!("__csrf_token={}", TEST_CSRF_TOKEN))
+		.header("cookie", format!("csrftoken={}", TEST_CSRF_TOKEN))
 		.build()
 		.expect("Failed to build test request");
 
@@ -448,7 +448,7 @@ pub async fn e2e_router_context_no_db() -> ServerRouter {
 ///
 /// Includes:
 /// - `Content-Type: application/json`
-/// - `Cookie: __csrf_token={TEST_CSRF_TOKEN}`
+/// - `Cookie: csrftoken={TEST_CSRF_TOKEN}`
 /// - `AuthState::authenticated` in request extensions (staff user)
 /// - JSON-serialized body
 pub fn make_e2e_request(path: &str, body: serde_json::Value) -> reinhardt_http::Request {
@@ -458,7 +458,7 @@ pub fn make_e2e_request(path: &str, body: serde_json::Value) -> reinhardt_http::
 		.method(hyper::Method::POST)
 		.uri(path)
 		.header("content-type", "application/json")
-		.header("cookie", format!("__csrf_token={}", TEST_CSRF_TOKEN))
+		.header("cookie", format!("csrftoken={}", TEST_CSRF_TOKEN))
 		.body(hyper::body::Bytes::from(body_bytes))
 		.build()
 		.expect("Failed to build E2E request");
@@ -497,7 +497,7 @@ pub fn make_e2e_request_wrong_csrf(path: &str, body: serde_json::Value) -> reinh
 		.method(hyper::Method::POST)
 		.uri(path)
 		.header("content-type", "application/json")
-		.header("cookie", "__csrf_token=wrong-token-value")
+		.header("cookie", "csrftoken=wrong-token-value")
 		.body(hyper::body::Bytes::from(body_bytes))
 		.build()
 		.expect("Failed to build E2E request");
@@ -517,7 +517,7 @@ pub fn make_e2e_request_no_auth(path: &str, body: serde_json::Value) -> reinhard
 		.method(hyper::Method::POST)
 		.uri(path)
 		.header("content-type", "application/json")
-		.header("cookie", format!("__csrf_token={}", TEST_CSRF_TOKEN))
+		.header("cookie", format!("csrftoken={}", TEST_CSRF_TOKEN))
 		.body(hyper::body::Bytes::from(body_bytes))
 		.build()
 		.expect("Failed to build E2E request")

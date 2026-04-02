@@ -100,7 +100,7 @@ pub struct MutationRequest {
 	/// CSRF token for mutation verification (double-submit cookie pattern).
 	///
 	/// The client must send the CSRF token received from the dashboard response
-	/// in this field. The server validates this value against the `__csrf_token`
+	/// in this field. The server validates this value against the `csrftoken`
 	/// cookie set by the dashboard endpoint. An attacker on a different origin
 	/// cannot read the cookie, preventing CSRF attacks.
 	pub csrf_token: String,
@@ -115,7 +115,7 @@ pub struct BulkDeleteRequest {
 	/// CSRF token for mutation verification (double-submit cookie pattern).
 	///
 	/// The client must send the CSRF token received from the dashboard response
-	/// in this field. The server validates this value against the `__csrf_token`
+	/// in this field. The server validates this value against the `csrftoken`
 	/// cookie set by the dashboard endpoint. An attacker on a different origin
 	/// cannot read the cookie, preventing CSRF attacks.
 	pub csrf_token: String,

@@ -317,7 +317,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 pub const CSRF_HEADER_NAME: &str = "x-csrf-token";
 
 /// The cookie name used for CSRF token storage (double-submit cookie pattern).
-pub const CSRF_COOKIE_NAME: &str = "__csrf_token";
+pub const CSRF_COOKIE_NAME: &str = "csrftoken";
 
 /// Extracts the CSRF token from the `X-CSRF-Token` request header.
 ///
@@ -334,9 +334,9 @@ pub fn extract_csrf_header(headers: &hyper::HeaderMap) -> Option<String> {
 		.map(|s| s.to_string())
 }
 
-/// Extracts the CSRF token from the `__csrf_token` cookie.
+/// Extracts the CSRF token from the `csrftoken` cookie.
 ///
-/// Parses the `Cookie` header and returns the value of the `__csrf_token`
+/// Parses the `Cookie` header and returns the value of the `csrftoken`
 /// cookie if present.
 ///
 /// # Arguments
@@ -383,7 +383,7 @@ pub fn build_csrf_cookie(token: &str, is_secure: bool) -> String {
 /// Validates CSRF tokens using the double-submit cookie pattern.
 ///
 /// Compares the token submitted in the request body (or `X-CSRF-Token` header)
-/// against the token stored in the `__csrf_token` cookie. The cookie is set by the
+/// against the token stored in the `csrftoken` cookie. The cookie is set by the
 /// server and cannot be read or forged by a cross-origin attacker, making this
 /// pattern secure against CSRF attacks.
 ///
@@ -395,7 +395,7 @@ pub fn build_csrf_cookie(token: &str, is_secure: bool) -> String {
 /// # Errors
 ///
 /// Returns a `ServerFnError` with status 403 if:
-/// - The `__csrf_token` cookie is missing
+/// - The `csrftoken` cookie is missing
 /// - The body token is empty
 /// - The tokens do not match
 #[cfg(not(target_arch = "wasm32"))]
@@ -941,7 +941,7 @@ mod tests {
 		let mut headers = hyper::HeaderMap::new();
 		headers.insert(
 			"cookie",
-			"session=abc; __csrf_token=test-token-value; other=xyz"
+			"session=abc; csrftoken=test-token-value; other=xyz"
 				.parse()
 				.unwrap(),
 		);
@@ -982,7 +982,7 @@ mod tests {
 	fn test_extract_csrf_cookie_only_csrf() {
 		// Arrange
 		let mut headers = hyper::HeaderMap::new();
-		headers.insert("cookie", "__csrf_token=solo-value".parse().unwrap());
+		headers.insert("cookie", "csrftoken=solo-value".parse().unwrap());
 
 		// Act
 		let result = extract_csrf_cookie(&headers);
@@ -1003,7 +1003,7 @@ mod tests {
 		// Assert
 		assert_eq!(
 			cookie,
-			"__csrf_token=token123; SameSite=Strict; Path=/admin; Secure"
+			"csrftoken=token123; SameSite=Strict; Path=/admin; Secure"
 		);
 	}
 
@@ -1013,10 +1013,7 @@ mod tests {
 		let cookie = build_csrf_cookie("token123", false);
 
 		// Assert
-		assert_eq!(
-			cookie,
-			"__csrf_token=token123; SameSite=Strict; Path=/admin"
-		);
+		assert_eq!(cookie, "csrftoken=token123; SameSite=Strict; Path=/admin");
 	}
 
 	// ============================================================
@@ -1028,7 +1025,7 @@ mod tests {
 		// Arrange
 		let token = generate_csrf_token();
 		let mut headers = hyper::HeaderMap::new();
-		let cookie_value = format!("__csrf_token={}", token);
+		let cookie_value = format!("csrftoken={}", token);
 		headers.insert("cookie", cookie_value.parse().unwrap());
 
 		// Act & Assert
@@ -1042,7 +1039,7 @@ mod tests {
 		let body_token = generate_csrf_token();
 		let cookie_token = generate_csrf_token();
 		let mut headers = hyper::HeaderMap::new();
-		let cookie_value = format!("__csrf_token={}", cookie_token);
+		let cookie_value = format!("csrftoken={}", cookie_token);
 		headers.insert("cookie", cookie_value.parse().unwrap());
 
 		// Act
@@ -1084,7 +1081,7 @@ mod tests {
 		// Arrange
 		let cookie_token = generate_csrf_token();
 		let mut headers = hyper::HeaderMap::new();
-		let cookie_value = format!("__csrf_token={}", cookie_token);
+		let cookie_value = format!("csrftoken={}", cookie_token);
 		headers.insert("cookie", cookie_value.parse().unwrap());
 
 		// Act
@@ -1147,7 +1144,7 @@ mod tests {
 		// Arrange
 		let token = generate_csrf_token();
 		let mut headers = hyper::HeaderMap::new();
-		let cookie_value = format!("__csrf_token={}", token);
+		let cookie_value = format!("csrftoken={}", token);
 		headers.insert("cookie", cookie_value.parse().unwrap());
 
 		// Act
@@ -1165,7 +1162,7 @@ mod tests {
 		// Arrange
 		let cookie_token = generate_csrf_token();
 		let mut headers = hyper::HeaderMap::new();
-		let cookie_value = format!("__csrf_token={}", cookie_token);
+		let cookie_value = format!("csrftoken={}", cookie_token);
 		headers.insert("cookie", cookie_value.parse().unwrap());
 
 		// Act
@@ -1187,7 +1184,7 @@ mod tests {
 		// Arrange
 		let cookie_token = generate_csrf_token();
 		let mut headers = hyper::HeaderMap::new();
-		let cookie_value = format!("__csrf_token={}", cookie_token);
+		let cookie_value = format!("csrftoken={}", cookie_token);
 		headers.insert("cookie", cookie_value.parse().unwrap());
 
 		// Act

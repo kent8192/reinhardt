@@ -1241,7 +1241,7 @@ mod tests {
 			.to_str()
 			.unwrap();
 		assert!(
-			set_cookie.contains("__csrf_token="),
+			set_cookie.contains("csrftoken="),
 			"Cookie should contain CSRF token name, got: {}",
 			set_cookie
 		);

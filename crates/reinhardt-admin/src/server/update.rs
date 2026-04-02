@@ -78,6 +78,9 @@ pub async fn update_record(
 	let mut sanitized_data = request.data;
 	sanitize_mutation_values(&mut sanitized_data);
 
+	// Inject current timestamp for auto_now fields (updated on every save)
+	super::create::inject_auto_now_timestamps(&mut sanitized_data, table_name);
+
 	let user_id = auth.user_id().unwrap_or("unknown").to_string();
 
 	let result = db

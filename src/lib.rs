@@ -737,6 +737,25 @@ pub use reinhardt_auth::{
 ))]
 pub use reinhardt_middleware::AuthenticationMiddleware;
 
+// JWT authentication middleware (requires middleware-auth-jwt feature)
+#[cfg(all(feature = "middleware-auth-jwt", not(target_arch = "wasm32")))]
+pub use reinhardt_middleware::JwtAuthMiddleware;
+
+// Remote user authentication middleware (requires sessions + middleware)
+#[cfg(all(
+	feature = "sessions",
+	feature = "middleware",
+	not(target_arch = "wasm32")
+))]
+pub use reinhardt_middleware::{PersistentRemoteUserMiddleware, RemoteUserMiddleware};
+
+// Login required middleware (available with any middleware feature)
+#[cfg(all(
+	any(feature = "standard", feature = "middleware"),
+	not(target_arch = "wasm32")
+))]
+pub use reinhardt_middleware::{LoginRequiredConfig, LoginRequiredMiddleware};
+
 #[cfg(all(
 	any(feature = "standard", feature = "middleware"),
 	not(target_arch = "wasm32")

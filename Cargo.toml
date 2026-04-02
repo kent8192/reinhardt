@@ -255,6 +255,11 @@ middleware-rate-limit = [
   "reinhardt-middleware",
   "reinhardt-middleware/rate-limit",
 ]
+middleware-auth-jwt = [
+  "reinhardt-middleware",
+  "reinhardt-middleware/auth-jwt",
+  "auth-jwt",
+]
 
 [dependencies]
 # WASM-compatible dependencies (always included)

@@ -127,7 +127,7 @@ impl Middleware for JwtAuthMiddleware {
 			&& let Ok(claims) = self.jwt_auth.verify_token(token)
 		{
 			let user_id = claims.sub;
-			let is_admin = false;
+			let is_admin = claims.is_staff || claims.is_superuser;
 			let is_active = true;
 
 			// Insert individual values for backward compatibility
@@ -346,5 +346,90 @@ mod tests {
 		let body_str = String::from_utf8(response.body.to_vec()).unwrap();
 		let body: serde_json::Value = serde_json::from_str(&body_str).unwrap();
 		assert_eq!(body["is_authenticated"], false);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_staff_user_produces_admin_state() {
+		// Arrange
+		let secret = b"test-secret-key-256bit!!";
+		let jwt_auth = JwtAuth::new(secret);
+		let token = jwt_auth
+			.generate_token(
+				"staff-user".to_string(),
+				"admin_alice".to_string(),
+				true,
+				false,
+			)
+			.unwrap();
+		let middleware = JwtAuthMiddleware::from_secret(secret);
+		let handler = Arc::new(TestHandler);
+		let request = create_request_with_header("Authorization", &format!("Bearer {}", token));
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert
+		let body_str = String::from_utf8(response.body.to_vec()).unwrap();
+		let body: serde_json::Value = serde_json::from_str(&body_str).unwrap();
+		assert_eq!(body["is_authenticated"], true);
+		assert_eq!(body["user_id"], "staff-user");
+		assert_eq!(body["is_admin"], true);
+		assert_eq!(body["is_active"], true);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_superuser_produces_admin_state() {
+		// Arrange
+		let secret = b"test-secret-key-256bit!!";
+		let jwt_auth = JwtAuth::new(secret);
+		let token = jwt_auth
+			.generate_token(
+				"super-user".to_string(),
+				"superadmin".to_string(),
+				false,
+				true,
+			)
+			.unwrap();
+		let middleware = JwtAuthMiddleware::from_secret(secret);
+		let handler = Arc::new(TestHandler);
+		let request = create_request_with_header("Authorization", &format!("Bearer {}", token));
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert
+		let body_str = String::from_utf8(response.body.to_vec()).unwrap();
+		let body: serde_json::Value = serde_json::from_str(&body_str).unwrap();
+		assert_eq!(body["is_authenticated"], true);
+		assert_eq!(body["user_id"], "super-user");
+		assert_eq!(body["is_admin"], true);
+		assert_eq!(body["is_active"], true);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_non_staff_non_superuser_produces_non_admin_state() {
+		// Arrange
+		let secret = b"test-secret-key-256bit!!";
+		let jwt_auth = JwtAuth::new(secret);
+		let token = jwt_auth
+			.generate_token("regular-user".to_string(), "bob".to_string(), false, false)
+			.unwrap();
+		let middleware = JwtAuthMiddleware::from_secret(secret);
+		let handler = Arc::new(TestHandler);
+		let request = create_request_with_header("Authorization", &format!("Bearer {}", token));
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert
+		let body_str = String::from_utf8(response.body.to_vec()).unwrap();
+		let body: serde_json::Value = serde_json::from_str(&body_str).unwrap();
+		assert_eq!(body["is_authenticated"], true);
+		assert_eq!(body["user_id"], "regular-user");
+		assert_eq!(body["is_admin"], false);
+		assert_eq!(body["is_active"], true);
 	}
 }

@@ -205,6 +205,8 @@ mod tests {
 			.generate_token(
 				"550e8400-e29b-41d4-a716-446655440000".to_string(),
 				"alice".to_string(),
+				false,
+				false,
 			)
 			.unwrap();
 		let middleware = JwtAuthMiddleware::from_secret(secret);
@@ -268,6 +270,8 @@ mod tests {
 			exp: chrono::Utc::now().timestamp() - 3600,
 			iat: chrono::Utc::now().timestamp() - 7200,
 			username: "alice".to_string(),
+			is_staff: false,
+			is_superuser: false,
 		};
 		let token = jwt_auth.encode(&claims).unwrap();
 		let middleware = JwtAuthMiddleware::from_secret(secret);
@@ -307,7 +311,7 @@ mod tests {
 		let secret = b"test-secret-key-256bit!!";
 		let jwt_auth = JwtAuth::new(secret);
 		let token = jwt_auth
-			.generate_token("user-42".to_string(), "bob".to_string())
+			.generate_token("user-42".to_string(), "bob".to_string(), false, false)
 			.unwrap();
 		let middleware = JwtAuthMiddleware::new(jwt_auth);
 		let handler = Arc::new(TestHandler);
@@ -329,7 +333,7 @@ mod tests {
 		// Arrange
 		let jwt_auth = JwtAuth::new(b"encoding-secret!!");
 		let token = jwt_auth
-			.generate_token("user-1".to_string(), "charlie".to_string())
+			.generate_token("user-1".to_string(), "charlie".to_string(), false, false)
 			.unwrap();
 		let middleware = JwtAuthMiddleware::from_secret(b"different-secret!");
 		let handler = Arc::new(TestHandler);

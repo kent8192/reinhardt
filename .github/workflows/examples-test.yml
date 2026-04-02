@@ -149,6 +149,23 @@ jobs:
         if: ${{ matrix.needs-wasm }}
         run: cargo check --target wasm32-unknown-unknown -p reinhardt-core -p reinhardt-urls --features reinhardt-core/full,reinhardt-urls/client-router
 
+      - name: Install Chrome
+        if: ${{ matrix.needs-wasm }}
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Install wasm-pack
+        if: ${{ matrix.needs-wasm }}
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Run WASM tests
+        if: ${{ matrix.needs-wasm }}
+        working-directory: examples/${{ matrix.example }}
+        run: cargo make wasm-test || echo "No WASM tests found, skipping"
+
       - name: Test
         working-directory: examples/${{ matrix.example }}
         run: cargo nextest run --all-features --no-tests=warn

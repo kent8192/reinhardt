@@ -247,6 +247,7 @@ impl WasmBuilder {
 	fn run_cargo_build(&self) -> Result<(), WasmBuildError> {
 		let mut cmd = Command::new("cargo");
 		cmd.arg("build")
+			.arg("--lib")
 			.arg("--target")
 			.arg("wasm32-unknown-unknown")
 			.current_dir(&self.config.project_dir);

@@ -551,7 +551,19 @@ fn build_pages_wasm(force: bool) -> bool {
 		"{}",
 		format!("Building pages WASM for {}...", crate_name).cyan()
 	);
-	let config = WasmBuildConfig::new(".").output_dir("dist");
+	// Resolve workspace root so wasm-bindgen finds the artifact in the
+	// workspace-level target directory, not relative to the member crate CWD.
+	let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+	let workspace_root = manifest_dir
+		.parent()
+		.and_then(|p| p.parent())
+		.and_then(|p| p.parent())
+		.and_then(|p| p.parent())
+		.map(PathBuf::from)
+		.unwrap_or_else(|| PathBuf::from("."));
+	let config = WasmBuildConfig::new(".")
+		.output_dir("dist")
+		.target_dir(workspace_root.join("target"));
 	match WasmBuilder::new(config).build() {
 		Ok(_) => {
 			println!("{}", "Pages WASM build succeeded.".green());

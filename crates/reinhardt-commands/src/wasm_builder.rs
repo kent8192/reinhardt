@@ -20,6 +20,10 @@ pub struct WasmBuildConfig {
 	pub optimize: bool,
 	/// Target name (crate name, used for output file naming)
 	pub target_name: Option<String>,
+	/// Override for the cargo target directory. When `None`, falls back to
+	/// `project_dir/target`. In workspace setups, this should point to the
+	/// workspace root's target directory.
+	pub target_dir: Option<PathBuf>,
 }
 
 impl Default for WasmBuildConfig {
@@ -30,6 +34,7 @@ impl Default for WasmBuildConfig {
 			release: false,
 			optimize: true,
 			target_name: None,
+			target_dir: None,
 		}
 	}
 }
@@ -64,6 +69,16 @@ impl WasmBuildConfig {
 	/// Set the target name explicitly.
 	pub fn target_name(mut self, name: impl Into<String>) -> Self {
 		self.target_name = Some(name.into());
+		self
+	}
+
+	/// Set the cargo target directory explicitly.
+	///
+	/// When building inside a Cargo workspace, the target directory is at
+	/// the workspace root, not relative to the member crate. Use this to
+	/// point wasm-bindgen at the correct artifact location.
+	pub fn target_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+		self.target_dir = Some(dir.into());
 		self
 	}
 }
@@ -146,10 +161,13 @@ impl WasmBuilder {
 		} else {
 			"debug"
 		};
-		let wasm_path = self
+		let target_base = self
 			.config
-			.project_dir
-			.join("target")
+			.target_dir
+			.as_ref()
+			.cloned()
+			.unwrap_or_else(|| self.config.project_dir.join("target"));
+		let wasm_path = target_base
 			.join("wasm32-unknown-unknown")
 			.join(profile)
 			.join(format!("{}.wasm", crate_name.replace('-', "_")));

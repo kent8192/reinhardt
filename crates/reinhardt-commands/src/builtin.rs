@@ -1365,20 +1365,20 @@ impl BaseCommand for RunServerCommand {
 			let no_wasm = ctx.has_option("no-wasm");
 			let force_wasm = ctx.has_option("force-wasm");
 			let wasm_optional = ctx.has_option("wasm-optional");
-			if with_pages && !no_wasm {
-				if let Err(e) = Self::build_pages_wasm(ctx, force_wasm) {
-					if wasm_optional {
-						ctx.warning(&format!(
-							"Pages WASM build failed: {}. Server will start without WASM frontend.",
-							e
-						));
-					} else {
-						ctx.error(&format!(
-							"WASM build failed: {}. Fix compilation errors or use --wasm-optional to start without WASM.",
-							e
-						));
-						return Ok(());
-					}
+			if with_pages
+				&& !no_wasm && let Err(e) = Self::build_pages_wasm(ctx, force_wasm)
+			{
+				if wasm_optional {
+					ctx.warning(&format!(
+						"Pages WASM build failed: {}. Server will start without WASM frontend.",
+						e
+					));
+				} else {
+					ctx.error(&format!(
+						"WASM build failed: {}. Fix compilation errors or use --wasm-optional to start without WASM.",
+						e
+					));
+					return Ok(());
 				}
 			}
 		}

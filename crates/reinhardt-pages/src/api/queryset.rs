@@ -319,7 +319,11 @@ where
 		if !response.status().is_success() {
 			return Err(ServerFnError::Server {
 				status: response.status().as_u16(),
-				message: response.status().canonical_reason().unwrap_or("Unknown").to_string(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 
@@ -379,7 +383,11 @@ where
 		if !response.status().is_success() {
 			return Err(ServerFnError::Server {
 				status: response.status().as_u16(),
-				message: response.status().canonical_reason().unwrap_or("Unknown").to_string(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 
@@ -420,7 +428,11 @@ where
 		if !response.status().is_success() {
 			return Err(ServerFnError::Server {
 				status: response.status().as_u16(),
-				message: response.status().canonical_reason().unwrap_or("Unknown").to_string(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 
@@ -476,7 +488,11 @@ where
 		if !response.status().is_success() {
 			return Err(ServerFnError::Server {
 				status: response.status().as_u16(),
-				message: response.status().canonical_reason().unwrap_or("Unknown").to_string(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 
@@ -517,7 +533,11 @@ where
 		if !response.status().is_success() {
 			return Err(ServerFnError::Server {
 				status: response.status().as_u16(),
-				message: response.status().canonical_reason().unwrap_or("Unknown").to_string(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 
@@ -562,7 +582,11 @@ where
 		if !response.status().is_success() {
 			return Err(ServerFnError::Server {
 				status: response.status().as_u16(),
-				message: response.status().canonical_reason().unwrap_or("Unknown").to_string(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 
@@ -606,7 +630,11 @@ where
 		if !response.status().is_success() {
 			return Err(ServerFnError::Server {
 				status: response.status().as_u16(),
-				message: response.status().canonical_reason().unwrap_or("Unknown").to_string(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 

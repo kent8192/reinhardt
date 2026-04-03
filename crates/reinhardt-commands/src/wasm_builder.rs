@@ -149,15 +149,12 @@ impl WasmBuilder {
 			.current_dir(&self.config.project_dir)
 			.output();
 
-		if let Ok(output) = output {
-			if output.status.success() {
-				if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
-					if let Some(target_dir) = json.get("target_directory").and_then(|v| v.as_str())
-					{
-						return PathBuf::from(target_dir);
-					}
-				}
-			}
+		if let Ok(output) = output
+			&& output.status.success()
+			&& let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+			&& let Some(target_dir) = json.get("target_directory").and_then(|v| v.as_str())
+		{
+			return PathBuf::from(target_dir);
 		}
 
 		self.config.project_dir.join("target")

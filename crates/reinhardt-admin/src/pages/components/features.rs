@@ -11,7 +11,7 @@
 use crate::types::{FilterInfo, FilterType, ModelInfo};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use reinhardt_pages::Signal;
-use reinhardt_pages::component::{IntoPage, Page, PageElement};
+use reinhardt_pages::component::Page;
 use reinhardt_pages::page;
 use std::collections::HashMap;
 
@@ -45,12 +45,6 @@ const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
 fn encode_path_segment(s: &str) -> String {
 	utf8_percent_encode(s, PATH_SEGMENT_ENCODE_SET).to_string()
 }
-
-#[cfg(target_arch = "wasm32")]
-use reinhardt_pages::dom::EventType;
-
-#[cfg(target_arch = "wasm32")]
-use std::sync::Arc;
 
 /// Dashboard component
 ///
@@ -100,13 +94,12 @@ fn models_grid(models: &[ModelInfo]) -> Page {
 		.map(|model| model_card(&model.name, &model.list_url))
 		.collect();
 
-	PageElement::new("div")
-		.attr(
-			"class",
-			"grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4",
-		)
-		.children(card_views)
-		.into_page()
+	page!(|| {
+		div {
+			class: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4",
+			{ card_views }
+		}
+	})()
 }
 
 /// Generates a single model card
@@ -231,37 +224,40 @@ fn data_table(
 	records: &[std::collections::HashMap<String, String>],
 	model_name: &str,
 ) -> Page {
-	// Table header
 	let header_cells: Vec<Page> = columns
 		.iter()
-		.map(|col| PageElement::new("th").child(col.label.clone()).into_page())
-		.chain(std::iter::once(
-			PageElement::new("th").child("Actions").into_page(),
-		))
+		.map(|col| {
+			let label = col.label.clone();
+			page!(|| { th { { label } } })()
+		})
+		.chain(std::iter::once(page!(|| { th { "Actions" } })()))
 		.collect();
 
-	let thead = PageElement::new("thead").child(PageElement::new("tr").children(header_cells));
+	let thead = page!(|| {
+		thead {
+			tr {
+				{ header_cells }
+			}
+		}
+	})();
 
-	// Table body
 	let body_rows: Vec<Page> = records
 		.iter()
 		.map(|record| table_row(columns, record, model_name))
 		.collect();
 
-	let tbody = PageElement::new("tbody").children(body_rows);
+	let tbody = page!(|| { tbody { { body_rows } } })();
 
-	PageElement::new("div")
-		.attr(
-			"class",
-			"overflow-x-auto rounded-lg border border-slate-200",
-		)
-		.child(
-			PageElement::new("table")
-				.attr("class", "admin-table")
-				.child(thead)
-				.child(tbody),
-		)
-		.into_page()
+	page!(|| {
+		div {
+			class: "overflow-x-auto rounded-lg border border-slate-200",
+			table {
+				class: "admin-table",
+				{ thead }
+				{ tbody }
+			}
+		}
+	})()
 }
 
 /// Generates a table row for a single record
@@ -270,7 +266,6 @@ fn table_row(
 	record: &std::collections::HashMap<String, String>,
 	model_name: &str,
 ) -> Page {
-	// Data cells
 	let data_cells: Vec<Page> = columns
 		.iter()
 		.map(|col| {
@@ -278,20 +273,20 @@ fn table_row(
 				.get(&col.field)
 				.cloned()
 				.unwrap_or_else(|| "-".to_string());
-			PageElement::new("td").child(value).into_page()
+			page!(|| { td { { value } } })()
 		})
 		.collect();
 
-	// Actions cell
 	let record_id = record.get("id").cloned().unwrap_or_else(|| "0".to_string());
-	let actions_cell = PageElement::new("td")
-		.child(action_buttons(model_name, &record_id))
-		.into_page();
+	let actions = action_buttons(model_name, &record_id);
+	let actions_cell = page!(|| { td { { actions } } })();
 
-	PageElement::new("tr")
-		.children(data_cells)
-		.child(actions_cell)
-		.into_page()
+	page!(|| {
+		tr {
+			{ data_cells }
+			{ actions_cell }
+		}
+	})()
 }
 
 /// Generates action buttons for a record
@@ -304,19 +299,20 @@ fn action_buttons(model_name: &str, record_id: &str) -> Page {
 	let detail_url = format!("/admin/{}/{}/", encoded_model, encoded_id);
 	let edit_url = format!("/admin/{}/{}/change/", encoded_model, encoded_id);
 
-	PageElement::new("div")
-		.attr("class", "flex gap-1")
-		.child(
-			Link::new(detail_url.clone(), "View")
-				.class("admin-btn admin-btn-outline admin-btn-sm")
-				.render(),
-		)
-		.child(
-			Link::new(edit_url.clone(), "Edit")
-				.class("admin-btn admin-btn-outline admin-btn-sm")
-				.render(),
-		)
-		.into_page()
+	let view_link = Link::new(detail_url, "View")
+		.class("admin-btn admin-btn-outline admin-btn-sm")
+		.render();
+	let edit_link = Link::new(edit_url, "Edit")
+		.class("admin-btn admin-btn-outline admin-btn-sm")
+		.render();
+
+	page!(|| {
+		div {
+			class: "flex gap-1",
+			{ view_link }
+			{ edit_link }
+		}
+	})()
 }
 
 /// Form field definition for model forms
@@ -396,35 +392,34 @@ fn detail_table(record: &std::collections::HashMap<String, String>) -> Page {
 	let rows: Vec<Page> = entries
 		.into_iter()
 		.map(|(key, value)| {
-			PageElement::new("tr")
-				.child(
-					PageElement::new("th")
-						.attr(
-							"class",
-							"w-1/4 text-left text-sm font-medium text-slate-500 py-3 px-4 bg-slate-50",
-						)
-						.child(key.clone()),
-				)
-				.child(
-					PageElement::new("td")
-						.attr("class", "text-sm text-slate-800 py-3 px-4")
-						.child(value.clone()),
-				)
-				.into_page()
+			let key = key.clone();
+			let value = value.clone();
+			page!(|| {
+				tr {
+					th {
+						class: "w-1/4 text-left text-sm font-medium text-slate-500 py-3 px-4 bg-slate-50",
+						{ key }
+					}
+					td {
+						class: "text-sm text-slate-800 py-3 px-4",
+						{ value }
+					}
+				}
+			})()
 		})
 		.collect();
 
-	PageElement::new("div")
-		.attr(
-			"class",
-			"overflow-x-auto rounded-lg border border-slate-200",
-		)
-		.child(
-			PageElement::new("table")
-				.attr("class", "admin-table")
-				.child(PageElement::new("tbody").children(rows)),
-		)
-		.into_page()
+	page!(|| {
+		div {
+			class: "overflow-x-auto rounded-lg border border-slate-200",
+			table {
+				class: "admin-table",
+				tbody {
+					{ rows }
+				}
+			}
+		}
+	})()
 }
 
 /// Model form component
@@ -475,46 +470,40 @@ pub fn model_form(model_name: &str, fields: &[FormField], record_id: Option<&str
 		encode_path_segment(&model_name.to_lowercase())
 	);
 
-	let form_groups: Vec<Page> = fields.iter().map(form_group).collect();
+	let form_fields: Vec<Page> = fields.iter().map(form_group).collect();
+	let form_groups = page!(|| {
+		div {
+			class: "admin-card p-6",
+			{ form_fields }
+		}
+	})();
 	let cancel_link = Link::new(list_url, "Cancel")
 		.class("admin-btn admin-btn-secondary")
 		.render();
 
-	PageElement::new("div")
-		.attr(
-			"class",
-			"model-form max-w-2xl animate__animated animate__fadeIn",
-		)
-		.child(
-			PageElement::new("h1")
-				.attr(
-					"class",
-					"font-display text-2xl font-bold text-slate-900 mb-6",
-				)
-				.child(form_title),
-		)
-		.child(
-			PageElement::new("form")
-				.attr("method", "POST")
-				.attr("action", action_url)
-				.child(
-					PageElement::new("div")
-						.attr("class", "admin-card p-6")
-						.children(form_groups),
-				)
-				.child(
-					PageElement::new("div")
-						.attr("class", "mt-6 flex gap-2")
-						.child(
-							PageElement::new("button")
-								.attr("class", "admin-btn admin-btn-primary")
-								.attr("type", "submit")
-								.child("Save"),
-						)
-						.child(cancel_link),
-				),
-		)
-		.into_page()
+	page!(|| {
+		div {
+			class: "model-form max-w-2xl animate__animated animate__fadeIn",
+			h1 {
+				class: "font-display text-2xl font-bold text-slate-900 mb-6",
+				{ form_title }
+			}
+			form {
+				method: "post",
+				action: action_url,
+				{ form_groups }
+				div {
+					class: "mt-6 flex gap-2",
+					button {
+						class: "admin-btn admin-btn-primary",
+						type: "submit",
+						"Save"
+					}
+					{ cancel_link }
+				}
+			}
+		}
+	})()
 }
 
 /// Generates a form group (label + input) for a field
@@ -527,7 +516,7 @@ fn form_group(field: &FormField) -> Page {
 		div {
 			class: "mb-4",
 			label {
-				r#for: input_id,
+				for: input_id,
 				class: "admin-label",
 				{ label }
 			}
@@ -538,18 +527,33 @@ fn form_group(field: &FormField) -> Page {
 
 /// Generates an input element for a form field
 fn form_element(field: &FormField, input_id: &str) -> Page {
-	let mut input_builder = PageElement::new("input")
-		.attr("class", "admin-input")
-		.attr("type", field.field_type.clone())
-		.attr("id", input_id.to_string())
-		.attr("name", field.name.clone())
-		.attr("value", field.value.clone());
+	let field_type = field.field_type.clone();
+	let input_id = input_id.to_string();
+	let name = field.name.clone();
+	let value = field.value.clone();
 
 	if field.required {
-		input_builder = input_builder.attr("required", "true");
+		page!(|| {
+			input {
+				class: "admin-input",
+				type: field_type,
+				id: input_id,
+				name: name,
+				value: value,
+				required,
+			}
+		})()
+	} else {
+		page!(|| {
+			input {
+				class: "admin-input",
+				type: field_type,
+				id: input_id,
+				name: name,
+				value: value,
+			}
+		})()
 	}
-
-	input_builder.into_page()
 }
 
 /// Convert FilterType to choice list
@@ -589,12 +593,13 @@ fn filter_type_to_choices(filter_type: &FilterType) -> Vec<(String, String)> {
 /// Create filter select element
 ///
 /// Generates a <select> element for a filter field.
-/// Includes SSR/WASM conditional compilation for event handlers.
+/// Uses `page!` macro's `@change` event for automatic WASM/SSR handling.
+#[allow(unused_variables)]
 fn create_filter_select(
 	field: &str,
 	filter_type: &FilterType,
 	current_value: Option<&str>,
-	_filters_signal: Signal<HashMap<String, String>>,
+	filters_signal: Signal<HashMap<String, String>>,
 ) -> Page {
 	let choices = filter_type_to_choices(filter_type);
 	let current_val = current_value.unwrap_or("");
@@ -603,63 +608,66 @@ fn create_filter_select(
 	let options: Vec<Page> = choices
 		.iter()
 		.map(|(value, label)| {
-			let mut opt = PageElement::new("option")
-				.attr("value", value.clone())
-				.child(label.clone());
-
+			let value = value.clone();
+			let label = label.clone();
 			if value == current_val {
-				opt = opt.attr("selected", "true");
+				page!(|| { option { value: value, selected: true, { label } } })()
+			} else {
+				page!(|| { option { value: value, { label } } })()
 			}
-
-			opt.into_page()
 		})
 		.collect();
+	let options_container = page!(|| {
+		span { { options } }
+	})();
+	let field_str = field.to_string();
 
-	// WASM: Add event handler for filter changes
+	// Workaround: Uses PageElement with #[cfg] for the @change handler because:
+	// 1. Platform-specific DOM casting (JsCast) requires manual #[cfg] (#3312)
+	// 2. Signal captures in @event closures fail non-WASM Send+Sync bounds (#3315)
 	#[cfg(target_arch = "wasm32")]
 	let select_view = {
-		use wasm_bindgen::JsCast;
-		use web_sys::HtmlSelectElement;
+		use reinhardt_pages::component::{IntoPage, PageElement};
+		use reinhardt_pages::dom::EventType;
 
-		let field_clone = field.to_string();
-		let filters_signal = _filters_signal;
-
+		let field_clone = field_str.clone();
 		PageElement::new("select")
 			.attr("class", "admin-select")
-			.attr("data-filter-field", field.to_string())
-			.children(options)
+			.attr("data-filter-field", field_str)
+			.child(options_container)
 			.on(
 				EventType::Change,
-				Arc::new(move |event: web_sys::Event| {
+				std::sync::Arc::new(move |event: web_sys::Event| {
+					use wasm_bindgen::JsCast;
 					if let Some(target) = event.target() {
-						if let Ok(select) = target.dyn_into::<HtmlSelectElement>() {
-							let value = select.value();
-							let field_name = field_clone.clone();
-
+						if let Ok(select_el) = target.dyn_into::<web_sys::HtmlSelectElement>() {
+							let value = select_el.value();
+							let field = field_clone.clone();
 							filters_signal.update(move |map| {
 								if value.is_empty() {
-									map.remove(&field_name);
+									map.remove(&field);
 								} else {
-									map.insert(field_name, value);
+									map.insert(field, value);
 								}
 							});
 						}
 					}
 				}),
 			)
+			.into_page()
 	};
 
-	// SSR: No event handler (will be hydrated on client)
 	#[cfg(not(target_arch = "wasm32"))]
 	let select_view = {
+		use reinhardt_pages::component::{IntoPage, PageElement};
 		PageElement::new("select")
 			.attr("class", "admin-select")
-			.attr("data-filter-field", field.to_string())
-			.attr("data-reactive", "true")
-			.children(options)
+			.attr("data-filter-field", field_str)
+			.child(options_container)
+			.into_page()
 	};
 
-	select_view.into_page()
+	select_view
 }
 
 /// Create filter control (label + select)
@@ -719,7 +727,7 @@ pub fn filters(
 	filters_signal: Signal<HashMap<String, String>>,
 ) -> Page {
 	if filters_info.is_empty() {
-		return PageElement::new("div").into_page();
+		return page!(|| { div {} })();
 	}
 
 	let current_filters = filters_signal.get();
@@ -732,22 +740,23 @@ pub fn filters(
 		})
 		.collect();
 
-	PageElement::new("div")
-		.attr("class", "admin-card p-4 mb-4")
-		.child(
-			PageElement::new("h5")
-				.attr(
-					"class",
-					"text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3",
-				)
-				.child("Filters"),
-		)
-		.child(
-			PageElement::new("div")
-				.attr("class", "flex flex-wrap gap-4")
-				.children(filter_controls),
-		)
-		.into_page()
+	let filter_controls = page!(|| {
+		div {
+			class: "flex flex-wrap gap-4",
+			{ filter_controls }
+		}
+	})();
+
+	page!(|| {
+		div {
+			class: "admin-card p-4 mb-4",
+			h5 {
+				class: "text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3",
+				"Filters"
+			}
+			{ filter_controls }
+		}
+	})()
 }
 
 #[cfg(test)]

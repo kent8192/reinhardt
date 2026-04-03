@@ -116,6 +116,7 @@ toml = { workspace = true }
 # WASM-only dev-dependencies
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3.56"
+reinhardt-test = { workspace = true, features = ["wasm"] }
 
 [build-dependencies]
 cfg_aliases = "0.2"

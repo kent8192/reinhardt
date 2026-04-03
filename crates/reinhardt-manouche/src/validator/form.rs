@@ -632,8 +632,11 @@ fn extract_display_properties(properties: &[FormFieldProperty]) -> Result<TypedF
 							Some(extract_string_value_from_expr(value, "help_text", *span)?);
 					}
 					"autocomplete" => {
-						autocomplete =
-							Some(extract_string_value_from_expr(value, "autocomplete", *span)?);
+						autocomplete = Some(extract_string_value_from_expr(
+							value,
+							"autocomplete",
+							*span,
+						)?);
 					}
 					"disabled" => {
 						if let syn::Expr::Lit(lit) = value

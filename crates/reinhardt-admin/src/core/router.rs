@@ -131,9 +131,7 @@ fn admin_spa_html(site_title: &str) -> String {
 	// data attribute so the static init script can resolve it at runtime.
 	let script_tag = if wasm_built {
 		let init_js_url = resolve_admin_static("wasm-init.js");
-		format!(
-			r#"<script type="module" src="{init_js_url}" data-wasm-entry="{js_url}"></script>"#
-		)
+		format!(r#"<script type="module" src="{init_js_url}" data-wasm-entry="{js_url}"></script>"#)
 	} else {
 		format!(r#"<script type="module" src="{js_url}"></script>"#)
 	};

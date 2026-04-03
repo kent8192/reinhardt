@@ -411,19 +411,14 @@ fn generate_event(event: &PageEvent, pages_crate: &TokenStream) -> TokenStream {
 	// For non-closure handlers (Callback, variables), we use into_event_handler.
 	if matches!(handler, syn::Expr::Closure(_)) {
 		// For closures, wrap in a typed closure to enable type inference.
-		// The wrapper calls the user's closure with a typed argument, which forces
-		// Rust to infer the closure parameter type.
+		// The entire .on() call is cfg-gated to wasm32 only, because event handlers
+		// are no-ops on SSR and DummyEvent lacks web_sys::Event methods (#3312),
+		// and Signal is !Send+!Sync which conflicts with non-WASM bounds (#3315).
 		quote! {
 			.on(
 				#pages_crate::dom::EventType::#event_type_ident,
 				{
-					#[cfg(target_arch = "wasm32")]
 					let __typed_wrapper = |__event: ::web_sys::Event| {
-						(#handler)(__event)
-					};
-
-					#[cfg(not(target_arch = "wasm32"))]
-					let __typed_wrapper = |__event: #pages_crate::component::DummyEvent| {
 						(#handler)(__event)
 					};
 
@@ -434,6 +429,7 @@ fn generate_event(event: &PageEvent, pages_crate: &TokenStream) -> TokenStream {
 	} else {
 		// For non-closure handlers (Callback, variables, etc.),
 		// use into_event_handler which handles all handler types correctly.
+		// Also cfg-gated to wasm32 only for the same reasons as above.
 		quote! {
 			.on(
 				#pages_crate::dom::EventType::#event_type_ident,

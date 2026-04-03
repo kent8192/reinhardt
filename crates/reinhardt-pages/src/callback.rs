@@ -212,7 +212,7 @@ where
 #[cfg(not(target_arch = "wasm32"))]
 impl<F> IntoEventHandler for F
 where
-	F: Fn(crate::component::DummyEvent) + Send + Sync + 'static,
+	F: Fn(crate::component::DummyEvent) + 'static,
 {
 	fn into_event_handler(self) -> PageEventHandler {
 		Arc::new(self)
@@ -273,7 +273,7 @@ pub fn event_handler(f: impl Fn(web_sys::Event) + 'static) -> PageEventHandler {
 /// See WASM version for documentation.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn event_handler(
-	f: impl Fn(crate::component::DummyEvent) + Send + Sync + 'static,
+	f: impl Fn(crate::component::DummyEvent) + 'static,
 ) -> PageEventHandler {
 	Arc::new(f)
 }

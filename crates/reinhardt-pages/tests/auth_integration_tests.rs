@@ -85,7 +85,13 @@ fn test_login_full_without_email() {
 #[test]
 fn test_logout_clears_all_fields() {
 	let state = AuthState::new();
-	state.login_full("1", "user", Some("user@example.com".to_string()), true, false);
+	state.login_full(
+		"1",
+		"user",
+		Some("user@example.com".to_string()),
+		true,
+		false,
+	);
 	state.logout();
 
 	assert!(!state.is_authenticated());

@@ -272,9 +272,7 @@ pub fn event_handler(f: impl Fn(web_sys::Event) + 'static) -> PageEventHandler {
 ///
 /// See WASM version for documentation.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn event_handler(
-	f: impl Fn(crate::component::DummyEvent) + 'static,
-) -> PageEventHandler {
+pub fn event_handler(f: impl Fn(crate::component::DummyEvent) + 'static) -> PageEventHandler {
 	Arc::new(f)
 }
 

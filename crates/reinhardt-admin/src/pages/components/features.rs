@@ -561,6 +561,7 @@ fn form_element(field: &FormField, input_id: &str) -> Page {
 				name: name,
 				value: value,
 				required: true,
+				autocomplete: "off",
 			}
 		})()
 	} else {
@@ -571,6 +572,7 @@ fn form_element(field: &FormField, input_id: &str) -> Page {
 				id: input_id,
 				name: name,
 				value: value,
+				autocomplete: "off",
 			}
 		})()
 	}
@@ -619,6 +621,7 @@ fn filter_type_to_choices(filter_type: &FilterType) -> Vec<(String, String)> {
 /// which are unavailable on non-WASM targets. The `page!` macro's auto-cfg-gating
 /// wraps the `.on()` call but still compiles the closure body on all platforms.
 /// Migrate when `page!` supports platform-gated handler bodies.
+/// See: <https://github.com/kent8192/reinhardt-web/issues/3322>
 #[allow(unused_variables)]
 fn create_filter_select(
 	field: &str,

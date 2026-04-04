@@ -79,6 +79,7 @@ pub fn button(text: &str, variant: ButtonVariant, disabled: bool, _on_click: Sig
 	// which prevents proper variable capture — `move` makes it FnOnce (wrapper can't
 	// re-invoke inner closure), and without `move` borrows aren't 'static.
 	// Use PageElement with #[cfg] until the macro supports direct capture propagation.
+	// See: https://github.com/kent8192/reinhardt-web/issues/3322
 	#[cfg(target_arch = "wasm32")]
 	let view = PageElement::new("button")
 		.attr("class", classes)
@@ -277,6 +278,7 @@ where
 		// which prevents proper variable capture — `move` makes it FnOnce (wrapper can't
 		// re-invoke inner closure), and without `move` borrows aren't 'static.
 		// Use PageElement with #[cfg] until the macro supports direct capture propagation.
+		// See: https://github.com/kent8192/reinhardt-web/issues/3322
 		use reinhardt_pages::component::{IntoPage, PageElement};
 
 		#[cfg(target_arch = "wasm32")]

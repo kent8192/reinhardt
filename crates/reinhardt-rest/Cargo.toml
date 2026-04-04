@@ -142,5 +142,5 @@ env_logger = "0.11"
 reinhardt-db = { workspace = true, features = ["orm"] }
 reinhardt-core = { workspace = true, features = ["exception"] }
 reinhardt-auth = { workspace = true, features = ["argon2-hasher"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { workspace = true }
 serial_test = { workspace = true }

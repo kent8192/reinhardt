@@ -75,9 +75,11 @@ pub fn button(text: &str, variant: ButtonVariant, disabled: bool, _on_click: Sig
 		})();
 	}
 
-	// Workaround: page! @event closures cannot satisfy both WASM (Fn(web_sys::Event))
-	// and non-WASM (Fn(DummyEvent) + Send + Sync) bounds simultaneously because
-	// Signal<T> is !Send + !Sync (Rc-based). Use PageElement with #[cfg] instead. (#3312)
+	// Workaround: page! @event codegen wraps user closures in a typed wrapper closure,
+	// which prevents proper variable capture — `move` makes it FnOnce (wrapper can't
+	// re-invoke inner closure), and without `move` borrows aren't 'static.
+	// Use PageElement with #[cfg] until the macro supports direct capture propagation.
+	// See: https://github.com/kent8192/reinhardt-web/issues/3322
 	#[cfg(target_arch = "wasm32")]
 	let view = PageElement::new("button")
 		.attr("class", classes)
@@ -85,7 +87,7 @@ pub fn button(text: &str, variant: ButtonVariant, disabled: bool, _on_click: Sig
 		.on(
 			reinhardt_pages::dom::EventType::Click,
 			std::sync::Arc::new(move |_: web_sys::Event| {
-				on_click.set(true);
+				_on_click.set(true);
 			}),
 		)
 		.child(text.to_string());
@@ -272,8 +274,11 @@ where
 			}
 		})()
 	} else {
-		// Workaround: page! @event closures with Signal captures cannot satisfy
-		// non-WASM Send + Sync bounds. Use PageElement with #[cfg] instead. (#3312)
+		// Workaround: page! @event codegen wraps user closures in a typed wrapper closure,
+		// which prevents proper variable capture — `move` makes it FnOnce (wrapper can't
+		// re-invoke inner closure), and without `move` borrows aren't 'static.
+		// Use PageElement with #[cfg] until the macro supports direct capture propagation.
+		// See: https://github.com/kent8192/reinhardt-web/issues/3322
 		use reinhardt_pages::component::{IntoPage, PageElement};
 
 		#[cfg(target_arch = "wasm32")]
@@ -284,7 +289,7 @@ where
 			.on(
 				reinhardt_pages::dom::EventType::Click,
 				std::sync::Arc::new(move |_: web_sys::Event| {
-					handler(signal.clone());
+					_handler(_signal.clone());
 				}),
 			);
 

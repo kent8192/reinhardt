@@ -561,6 +561,7 @@ fn form_element(field: &FormField, input_id: &str) -> Page {
 				name: name,
 				value: value,
 				required: true,
+				autocomplete: "off",
 			}
 		})()
 	} else {
@@ -571,6 +572,7 @@ fn form_element(field: &FormField, input_id: &str) -> Page {
 				id: input_id,
 				name: name,
 				value: value,
+				autocomplete: "off",
 			}
 		})()
 	}
@@ -613,7 +615,13 @@ fn filter_type_to_choices(filter_type: &FilterType) -> Vec<(String, String)> {
 /// Create filter select element
 ///
 /// Generates a <select> element for a filter field.
-/// Uses `page!` macro's `@change` event for automatic WASM/SSR handling.
+///
+/// Workaround: Uses PageElement with `#[cfg]` instead of `page!` `@change` because
+/// the handler body requires `wasm_bindgen::JsCast` and `web_sys::HtmlSelectElement`,
+/// which are unavailable on non-WASM targets. The `page!` macro's auto-cfg-gating
+/// wraps the `.on()` call but still compiles the closure body on all platforms.
+/// Migrate when `page!` supports platform-gated handler bodies.
+/// See: <https://github.com/kent8192/reinhardt-web/issues/3322>
 #[allow(unused_variables)]
 fn create_filter_select(
 	field: &str,
@@ -655,9 +663,6 @@ fn create_filter_select(
 	})();
 	let field_str = field.to_string();
 
-	// Workaround: Uses PageElement with #[cfg] for the @change handler because:
-	// 1. Platform-specific DOM casting (JsCast) requires manual #[cfg] (#3312)
-	// 2. Signal captures in @event closures fail non-WASM Send+Sync bounds (#3315)
 	#[cfg(target_arch = "wasm32")]
 	let select_view = {
 		use reinhardt_pages::component::{IntoPage, PageElement};

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This file defines the policy for reporting issues discovered in upstream dependencies during reinhardt-web development. reinhardt-web depends on several external crates, and issues found in these dependencies MUST be reported to the upstream repository promptly.
+This file defines the policy for reporting issues discovered in downstream projects during reinhardt-web development. reinhardt-web's downstream consumers (awesome-delions, reinhardt-cloud) may surface issues that originate in reinhardt-web, and conversely, issues in those projects may be discovered during reinhardt-web development. Such issues MUST be reported to the appropriate repository promptly.
 
 ---
 
@@ -10,17 +10,12 @@ This file defines the policy for reporting issues discovered in upstream depende
 
 ### US-1 (MUST): Target Repositories
 
-This policy applies to the following upstream repositories (non-exhaustive):
+This policy applies to the following upstream repositories:
 
 | Repository | URL | Relationship |
 |------------|-----|-------------|
-| tokio | `https://github.com/tokio-rs/tokio` | Async runtime |
-| hyper | `https://github.com/hyperium/hyper` | HTTP implementation |
-| serde | `https://github.com/serde-rs/serde` | Serialization framework |
-| sea-query | `https://github.com/SeaQL/sea-query` | SQL query builder |
-| tower | `https://github.com/tower-rs/tower` | Service middleware |
-| tracing | `https://github.com/tokio-rs/tracing` | Diagnostics/logging |
-| sqlx | `https://github.com/launchbadge/sqlx` | Database driver |
+| awesome-delions | `https://github.com/kent8192/awesome-delions` | Official collection of Reinhardt Dentdelion plugins |
+| reinhardt-cloud | `https://github.com/kent8192/reinhardt-cloud` | Kubernetes operator & CLI for Reinhardt apps |
 
 **Future upstream dependencies** should be added to this table as the project grows.
 
@@ -59,8 +54,8 @@ flowchart TD
 Issues in upstream repositories MUST be created using `gh issue create` with the `-R` flag:
 
 ```bash
-# Create issue in an upstream repository (example: sea-query)
-gh issue create -R SeaQL/sea-query \
+# Create issue in an upstream repository (example: awesome-delions)
+gh issue create -R kent8192/awesome-delions \
   --title "Bug: description of the issue" \
   --body "$(cat <<'EOF'
 ## Description
@@ -195,22 +190,22 @@ Apply appropriate labels to upstream issues based on the issue type:
 
 Report to the upstream repository when:
 
-- An upstream crate's API behaves unexpectedly or inconsistently with its documentation
-- An upstream crate is missing a feature that reinhardt-web requires for correct operation
-- Upstream crate documentation is incorrect, incomplete, or misleading
-- An upstream dependency causes a conflict or vulnerability
-- An upstream crate's build or test infrastructure has issues that affect downstream consumers
-- An upstream crate's type signatures or trait implementations are incorrect
+- An awesome-delions or reinhardt-cloud API behaves unexpectedly or inconsistently with its documentation
+- A downstream project is missing a feature that reinhardt-web integration requires
+- Documentation in a downstream project is incorrect, incomplete, or misleading
+- A dependency in a downstream project causes a conflict or vulnerability
+- A downstream project's build or test infrastructure has issues that affect reinhardt-web
+- A downstream project's type signatures or trait implementations are incorrect
 
 ### IC-2: What Does NOT Qualify
 
 Do **NOT** report to the upstream repository when:
 
 - The issue is in reinhardt-web-specific code (report in reinhardt-web repo)
-- The issue is a reinhardt-web design decision that differs from upstream conventions
-- The issue is a feature request specific to reinhardt-web's use case with no general applicability
-- The issue is a misunderstanding of the upstream crate's intended behavior (check docs and discussions first)
-- The upstream crate has a discussion forum — use that for usage questions instead of filing issues
+- The issue is a reinhardt-web design decision that differs from downstream project conventions
+- The issue is a feature request specific to reinhardt-web with no applicability to the downstream project
+- The issue is a misunderstanding of the downstream project's intended behavior (check docs and discussions first)
+- The downstream project has a discussion forum — use that for usage questions instead of filing issues
 
 ---
 
@@ -249,14 +244,12 @@ Every workaround comment MUST include the **ideal implementation** — the code 
 
 **Extended workaround comment template:**
 ```rust
-// Workaround for SeaQL/sea-query#42 (tracked in reinhardt-web#15)
+// Workaround for kent8192/awesome-delions#42 (tracked in reinhardt-web#15)
 // Remove this workaround when the upstream issue is resolved.
 //
 // Ideal implementation (without workaround):
-//   let query = Query::select()
-//       .from(Users::Table)
-//       .column(Users::Id)
-//       .build(PostgresQueryBuilder);
+//   let plugin = DentdelionPlugin::load("auth-plugin")?;
+//   plugin.register(&mut app)?;
 ```
 
 **Rules:**
@@ -266,12 +259,12 @@ Every workaround comment MUST include the **ideal implementation** — the code 
 
 **Example with pseudocode:**
 ```rust
-// Workaround for tokio-rs/tokio#99 (tracked in reinhardt-web#30)
+// Workaround for kent8192/reinhardt-cloud#99 (tracked in reinhardt-web#30)
 // Remove this workaround when the upstream issue is resolved.
 //
 // Ideal implementation (without workaround):
-//   // Requires tokio to expose `Runtime::shutdown_timeout_with_reason()`
-//   runtime.shutdown_timeout_with_reason(Duration::from_secs(5), "graceful").await;
+//   // Requires reinhardt-cloud to expose `CloudConfig::validate_manifest()`
+//   config.validate_manifest(&manifest)?;
 ```
 
 ---
@@ -279,8 +272,8 @@ Every workaround comment MUST include the **ideal implementation** — the code 
 ## Quick Reference
 
 ### MUST DO
-- Create issues in upstream repos immediately upon discovering dependency bugs (UR-1)
-- Use `gh issue create -R [owner]/[repo]` for upstream issue creation (UR-2)
+- Create issues in the appropriate repo immediately upon discovering cross-project bugs (UR-1)
+- Use `gh issue create -R [owner]/[repo]` for cross-project issue creation (UR-2)
 - Write all upstream issues in English (UR-3)
 - Follow upstream repository's issue templates and contribution guidelines when available (UR-3)
 - Create a tracking issue in reinhardt-web for every upstream issue with `upstream-tracking` label (UR-4)
@@ -294,8 +287,8 @@ Every workaround comment MUST include the **ideal implementation** — the code 
 - Introduce workaround code without an ideal implementation comment (WP-3)
 - Create upstream issues without corresponding reinhardt-web tracking issues (UR-4)
 - Include absolute local paths in upstream issues (UR-3)
-- Report reinhardt-web-specific issues to upstream repositories (IC-2)
-- File usage questions as issues when the upstream project has a discussion forum (IC-2)
+- Report reinhardt-web-specific issues to downstream project repositories (IC-2)
+- File usage questions as issues when the downstream project has a discussion forum (IC-2)
 
 ---
 

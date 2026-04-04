@@ -615,14 +615,6 @@ fn filter_type_to_choices(filter_type: &FilterType) -> Vec<(String, String)> {
 /// Create filter select element
 ///
 /// Generates a <select> element for a filter field.
-///
-/// Workaround: Uses PageElement with `#[cfg]` instead of `page!` `@change` because
-/// the handler body requires `wasm_bindgen::JsCast` and `web_sys::HtmlSelectElement`,
-/// which are unavailable on non-WASM targets. The `page!` macro's auto-cfg-gating
-/// wraps the `.on()` call but still compiles the closure body on all platforms.
-/// Migrate when `page!` supports platform-gated handler bodies.
-/// See: <https://github.com/kent8192/reinhardt-web/issues/3322>
-#[allow(unused_variables)]
 fn create_filter_select(
 	field: &str,
 	filter_type: &FilterType,
@@ -663,49 +655,29 @@ fn create_filter_select(
 	})();
 	let field_str = field.to_string();
 
-	#[cfg(target_arch = "wasm32")]
-	let select_view = {
-		use reinhardt_pages::component::{IntoPage, PageElement};
-		use reinhardt_pages::dom::EventType;
-
-		let field_clone = field_str.clone();
-		PageElement::new("select")
-			.attr("class", "admin-select")
-			.attr("data-filter-field", field_str)
-			.child(options_container)
-			.on(
-				EventType::Change,
-				std::sync::Arc::new(move |event: web_sys::Event| {
-					use wasm_bindgen::JsCast;
-					if let Some(target) = event.target() {
-						if let Ok(select_el) = target.dyn_into::<web_sys::HtmlSelectElement>() {
-							let value = select_el.value();
-							let field = field_clone.clone();
-							filters_signal.update(move |map| {
-								if value.is_empty() {
-									map.remove(&field);
-								} else {
-									map.insert(field, value);
-								}
-							});
-						}
+	page!(|field_str: String, filters_signal: Signal<HashMap<String, String>>| {
+		select {
+			class: "admin-select",
+			data_filter_field: field_str.clone(),
+			@change: move |event| {
+				use wasm_bindgen::JsCast;
+				if let Some(target) = event.target() {
+					if let Ok(select_el) = target.dyn_into::<web_sys::HtmlSelectElement>() {
+						let value = select_el.value();
+						let field = field_str.clone();
+						filters_signal.update(move |map| {
+							if value.is_empty() {
+								map.remove(&field);
+							} else {
+								map.insert(field, value);
+							}
+						});
 					}
-				}),
-			)
-			.into_page()
-	};
-
-	#[cfg(not(target_arch = "wasm32"))]
-	let select_view = {
-		use reinhardt_pages::component::{IntoPage, PageElement};
-		PageElement::new("select")
-			.attr("class", "admin-select")
-			.attr("data-filter-field", field_str)
-			.child(options_container)
-			.into_page()
-	};
-
-	select_view
+				}
+			},
+			{ options_container }
+		}
+	})(field_str, filters_signal)
 }
 
 /// Create filter control (label + select)

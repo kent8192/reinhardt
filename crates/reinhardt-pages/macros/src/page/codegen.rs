@@ -211,15 +211,11 @@ fn generate_element(elem: &TypedPageElement, pages_crate: &TokenStream) -> Token
 		.map(|handler| {
 			// Check if the handler is a closure expression
 			if matches!(handler, syn::Expr::Closure(_)) {
-				// For closures, wrap in a typed closure to enable type inference
-				quote! {
-					{
-						let __typed_wrapper = |__e: #pages_crate::component::DummyEvent| {
-							(#handler)(__e)
-						};
-						let _ = &__typed_wrapper;
-					}
-				}
+				// Closures now have explicit type annotations on their parameters,
+				// so no wrapper is needed for type inference. The closure body may
+				// reference WASM-only types (JsCast, web_sys::HtmlSelectElement),
+				// so we skip compiling it on non-WASM targets entirely.
+				quote! {}
 			} else {
 				// For non-closure handlers (Callback, variables, etc.),
 				// convert to ViewEventHandler first then reference it
@@ -407,23 +403,40 @@ fn generate_event(event: &PageEvent, pages_crate: &TokenStream) -> TokenStream {
 	}
 
 	// Generate event handler code.
-	// For closure expressions, we use a typed wrapper to enable type inference.
+	// For closure expressions, add explicit type annotation to the parameter and
+	// wrap directly in Arc — no nested wrapper closure needed.
 	// For non-closure handlers (Callback, variables), we use into_event_handler.
-	if matches!(handler, syn::Expr::Closure(_)) {
-		// For closures, wrap in a typed closure to enable type inference.
+	if let syn::Expr::Closure(closure) = handler {
+		// Add ::web_sys::Event type annotation to the closure's first parameter.
+		// This replaces the previous nested wrapper pattern that caused FnOnce issues
+		// when the user's closure captured variables via `move` (#3322).
+		let mut modified = closure.clone();
+		if let Some(first_param) = modified.inputs.first_mut() {
+			match first_param {
+				syn::Pat::Type(pat_type) => {
+					// Already has type annotation — replace with web_sys::Event
+					pat_type.ty = Box::new(syn::parse_quote!(::web_sys::Event));
+				}
+				other => {
+					// No type annotation — wrap in PatType
+					let pat = other.clone();
+					*other = syn::Pat::Type(syn::PatType {
+						attrs: vec![],
+						pat: Box::new(pat),
+						colon_token: Default::default(),
+						ty: Box::new(syn::parse_quote!(::web_sys::Event)),
+					});
+				}
+			}
+		}
+		let typed_closure = syn::Expr::Closure(modified);
 		// The entire .on() call is cfg-gated to wasm32 only, because event handlers
 		// are no-ops on SSR and DummyEvent lacks web_sys::Event methods (#3312),
 		// and Signal is !Send+!Sync which conflicts with non-WASM bounds (#3315).
 		quote! {
 			.on(
 				#pages_crate::dom::EventType::#event_type_ident,
-				{
-					let __typed_wrapper = |__event: ::web_sys::Event| {
-						(#handler)(__event)
-					};
-
-					::std::sync::Arc::new(__typed_wrapper)
-				}
+				::std::sync::Arc::new(#typed_closure)
 			)
 		}
 	} else {

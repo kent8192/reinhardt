@@ -543,6 +543,8 @@ pub enum TypedFormFieldEntry {
 	Field(Box<TypedFormFieldDef>),
 	/// A group of related fields
 	Group(TypedFormFieldGroup),
+	/// A submit button (not a data field — generates no Signal)
+	SubmitButton(TypedSubmitButtonDef),
 }
 
 impl TypedFormFieldEntry {
@@ -556,11 +558,17 @@ impl TypedFormFieldEntry {
 		matches!(self, TypedFormFieldEntry::Field(_))
 	}
 
+	/// Returns true if this is a submit button.
+	pub fn is_submit_button(&self) -> bool {
+		matches!(self, TypedFormFieldEntry::SubmitButton(_))
+	}
+
 	/// Returns the name of the entry.
 	pub fn name(&self) -> &Ident {
 		match self {
 			TypedFormFieldEntry::Field(f) => &f.as_ref().name,
 			TypedFormFieldEntry::Group(g) => &g.name,
+			TypedFormFieldEntry::SubmitButton(b) => &b.name,
 		}
 	}
 
@@ -569,6 +577,7 @@ impl TypedFormFieldEntry {
 		match self {
 			TypedFormFieldEntry::Field(f) => f.as_ref().span,
 			TypedFormFieldEntry::Group(g) => g.span,
+			TypedFormFieldEntry::SubmitButton(b) => b.span,
 		}
 	}
 
@@ -576,17 +585,45 @@ impl TypedFormFieldEntry {
 	pub fn as_field(&self) -> Option<&TypedFormFieldDef> {
 		match self {
 			TypedFormFieldEntry::Field(f) => Some(f.as_ref()),
-			TypedFormFieldEntry::Group(_) => None,
+			_ => None,
 		}
 	}
 
 	/// Returns a reference to the inner group if this is a Group variant.
 	pub fn as_group(&self) -> Option<&TypedFormFieldGroup> {
 		match self {
-			TypedFormFieldEntry::Field(_) => None,
 			TypedFormFieldEntry::Group(g) => Some(g),
+			_ => None,
 		}
 	}
+
+	/// Returns a reference to the inner submit button if this is a SubmitButton variant.
+	pub fn as_submit_button(&self) -> Option<&TypedSubmitButtonDef> {
+		match self {
+			TypedFormFieldEntry::SubmitButton(b) => Some(b),
+			_ => None,
+		}
+	}
+}
+
+/// A validated submit button definition.
+///
+/// Contains the resolved properties for a submit button element.
+/// Unlike regular fields, submit buttons do not generate Signal members.
+#[derive(Debug)]
+pub struct TypedSubmitButtonDef {
+	/// Button name identifier
+	pub name: Ident,
+	/// Button text (defaults to "Submit")
+	pub label: String,
+	/// Optional CSS class
+	pub class: Option<String>,
+	/// Optional HTML id attribute
+	pub id: Option<String>,
+	/// Whether the button is disabled
+	pub disabled: bool,
+	/// Span for error reporting
+	pub span: Span,
 }
 
 /// A validated group of related fields.

@@ -51,7 +51,7 @@ use reinhardt_manouche::core::{
 	FormMethod, TypedCustomAttr, TypedFieldType, TypedFormAction, TypedFormCallbacks,
 	TypedFormDerived, TypedFormFieldDef, TypedFormFieldEntry, TypedFormFieldGroup, TypedFormMacro,
 	TypedFormSlots, TypedFormState, TypedFormWatch, TypedIcon, TypedIconChild, TypedIconPosition,
-	TypedValidatorRule, TypedWidget, TypedWrapper,
+	TypedSubmitButtonDef, TypedValidatorRule, TypedWidget, TypedWrapper,
 };
 
 /// Collects all fields from field entries, flattening groups.
@@ -66,6 +66,7 @@ fn collect_all_fields(entries: &[TypedFormFieldEntry]) -> Vec<&TypedFormFieldDef
 			TypedFormFieldEntry::Group(group) => {
 				fields.extend(group.fields.iter());
 			}
+			TypedFormFieldEntry::SubmitButton(_) => {} // Not a data field
 		}
 	}
 	fields
@@ -1014,6 +1015,40 @@ fn generate_field_entry_view(
 		TypedFormFieldEntry::Group(group) => {
 			generate_field_group_view(group, pages_crate, all_fields)
 		}
+		TypedFormFieldEntry::SubmitButton(btn) => {
+			generate_submit_button_view(btn)
+		}
+	}
+}
+
+/// Generates view code for a submit button.
+///
+/// Produces a `<button type="submit">` element with optional class, id, and disabled attributes.
+/// No wrapper div or label — just the bare button element.
+fn generate_submit_button_view(btn: &TypedSubmitButtonDef) -> TokenStream {
+	let label = &btn.label;
+
+	let class_attr = btn.class.as_deref().map(|c| {
+		quote! { .attr("class", #c) }
+	});
+
+	let id_attr = btn.id.as_deref().map(|id| {
+		quote! { .attr("id", #id) }
+	});
+
+	let disabled_attr = if btn.disabled {
+		Some(quote! { .attr("disabled", "disabled") })
+	} else {
+		None
+	};
+
+	quote! {
+		PageElement::new("button")
+			.attr("type", "submit")
+			#class_attr
+			#id_attr
+			#disabled_attr
+			.child(#label)
 	}
 }
 

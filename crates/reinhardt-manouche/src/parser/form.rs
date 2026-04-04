@@ -13,6 +13,7 @@ use syn::{
 use crate::{
 	ClientValidator, ClientValidatorRule, CustomAttr, FormAction, FormDerived, FormDerivedItem,
 	FormFieldDef, FormFieldEntry, FormFieldGroup, FormFieldProperty, FormMacro, FormSlots,
+	FormSubmitButtonDef,
 	FormState, FormStateField, FormValidator, FormWatch, FormWatchItem, IconAttr, IconChild,
 	IconElement, IconPosition, ValidatorRule, WrapperAttr, WrapperElement,
 };
@@ -198,6 +199,21 @@ fn parse_field_definitions(input: ParseStream) -> Result<Vec<FormFieldEntry>> {
 			braced!(content in input);
 			let group = parse_field_group(name, &content, span)?;
 			entries.push(FormFieldEntry::Group(group));
+		} else if field_type == "SubmitButton" {
+			// Parse submit button: SubmitButton { label: "Sign in", class: "btn-primary" }
+			let properties = if input.peek(token::Brace) {
+				let content;
+				braced!(content in input);
+				parse_field_properties(&content)?
+			} else {
+				Vec::new()
+			};
+
+			entries.push(FormFieldEntry::SubmitButton(FormSubmitButtonDef {
+				name,
+				properties,
+				span,
+			}));
 		} else {
 			// Parse regular field properties in braces: { required, max_length: 100, ... }
 			let properties = if input.peek(token::Brace) {
@@ -3282,5 +3298,75 @@ mod tests {
 			status_field.get_choice_label().unwrap().value(),
 			"description"
 		);
+	}
+
+	// --- SubmitButton tests (Fixes #3331) ---
+
+	#[rstest]
+	fn test_parse_submit_button_basic() {
+		let input = quote! {
+			name: TestForm,
+			action: "/test",
+
+			fields: {
+				username: CharField { required },
+				submit: SubmitButton { label: "Sign in", class: "btn-primary" },
+			},
+		};
+
+		let result: Result<FormMacro> = syn::parse2(input);
+		assert!(result.is_ok());
+		let form = result.unwrap();
+
+		assert_eq!(form.fields.len(), 2);
+		assert!(form.fields[0].is_field());
+		assert!(form.fields[1].is_submit_button());
+
+		let btn = form.fields[1].as_submit_button().unwrap();
+		assert_eq!(btn.name, "submit");
+		assert_eq!(btn.properties.len(), 2);
+	}
+
+	#[rstest]
+	fn test_parse_submit_button_minimal() {
+		let input = quote! {
+			name: TestForm,
+			action: "/test",
+
+			fields: {
+				email: EmailField { required },
+				go: SubmitButton {},
+			},
+		};
+
+		let result: Result<FormMacro> = syn::parse2(input);
+		assert!(result.is_ok());
+		let form = result.unwrap();
+
+		assert_eq!(form.fields.len(), 2);
+		let btn = form.fields[1].as_submit_button().unwrap();
+		assert_eq!(btn.name, "go");
+		assert_eq!(btn.properties.len(), 0);
+	}
+
+	#[rstest]
+	fn test_parse_submit_button_no_braces() {
+		let input = quote! {
+			name: TestForm,
+			action: "/test",
+
+			fields: {
+				name: CharField {},
+				submit: SubmitButton,
+			},
+		};
+
+		let result: Result<FormMacro> = syn::parse2(input);
+		assert!(result.is_ok());
+		let form = result.unwrap();
+
+		assert_eq!(form.fields.len(), 2);
+		let btn = form.fields[1].as_submit_button().unwrap();
+		assert_eq!(btn.properties.len(), 0);
 	}
 }

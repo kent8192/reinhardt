@@ -77,7 +77,7 @@ pub fn document() -> Document {
 /// - No element with `metadata.id` found in the document
 /// - Element is not an `HtmlFormElement`
 /// - `request_submit()` fails (JS exception)
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn submit_form(metadata: &crate::form_generated::StaticFormMetadata) {
 	use wasm_bindgen::JsCast;
 

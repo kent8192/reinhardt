@@ -2,29 +2,29 @@
 //!
 //! Provides list view operations for admin models.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{
 	AdminDatabase, AdminRecord, AdminSite, ColumnInfo, FilterInfo, FilterType, ListQueryParams,
 	ListResponse, ModelAdmin,
 };
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use reinhardt_db::orm::{Filter, FilterCondition, FilterOperator, FilterValue};
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use std::sync::Arc;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::error::MapServerFnError;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::limits::MAX_PAGE_SIZE;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use crate::server::type_inference::{
 	get_field_metadata, infer_admin_field_type, infer_filter_type,
 };
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use reinhardt_utils::utils_core::text::humanize_field_name;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 fn build_filters(model_admin: &Arc<dyn ModelAdmin>) -> Vec<FilterInfo> {
 	let table_name = model_admin.table_name();
 	model_admin
@@ -49,7 +49,7 @@ fn build_filters(model_admin: &Arc<dyn ModelAdmin>) -> Vec<FilterInfo> {
 		.collect()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 fn build_columns(model_admin: &Arc<dyn ModelAdmin>) -> Vec<ColumnInfo> {
 	model_admin
 		.list_display()

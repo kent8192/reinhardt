@@ -19,7 +19,7 @@ pub(crate) struct CratePathInfo {
 /// Resolves the path to the reinhardt_pages crate dynamically.
 ///
 /// Since proc macros cannot detect the target architecture at runtime (they run on the host),
-/// this function generates conditional code using `#[cfg(target_arch = "wasm32")]` that the
+/// this function generates conditional code using `#[cfg(all(target_family = "wasm", target_os = "unknown"))]` that the
 /// Rust compiler will select at compile time.
 ///
 /// # Strategy
@@ -57,9 +57,9 @@ pub(crate) fn get_reinhardt_pages_crate_info() -> CratePathInfo {
 		return CratePathInfo {
 			needs_conditional: true,
 			use_statement: quote! {
-				#[cfg(target_arch = "wasm32")]
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 				use ::reinhardt_pages as __reinhardt_pages;
-				#[cfg(not(target_arch = "wasm32"))]
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				use ::reinhardt::pages as __reinhardt_pages;
 			},
 			ident: quote!(__reinhardt_pages),

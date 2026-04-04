@@ -15,5 +15,5 @@
 pub use reinhardt_testkit::server_fn::*;
 
 // Re-export commonly used types from reinhardt-pages for convenience
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use reinhardt_pages::testing::{ServerFnTestable, TestSessionData};

@@ -31,7 +31,7 @@
 //! }
 //! ```
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 mod main;
 
 pub mod components;

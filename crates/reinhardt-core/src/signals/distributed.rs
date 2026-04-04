@@ -1,4 +1,4 @@
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg(native)]
 
 //! Distributed Signals - Cross-service signal dispatch via message brokers
 //!

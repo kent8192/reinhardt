@@ -3,7 +3,7 @@
 //! Provides [`AdminSettings`], [`AdminCspSettings`], and [`AdminSecuritySettings`]
 //! for configuring the admin panel via TOML configuration files.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 mod inner {
 	use reinhardt_conf::settings::fragment::{HasSettings, SettingsFragment};
 	use reinhardt_conf::settings::profile::Profile;
@@ -650,5 +650,5 @@ img_src = ["'self'", "data:", "https://images.example.com"]
 	}
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 pub use inner::*;

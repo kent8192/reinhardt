@@ -41,11 +41,11 @@
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod proxy;
 pub mod routers;
 
-#[cfg(all(feature = "routers-macros", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "routers-macros", native))]
 #[cfg_attr(docsrs, doc(cfg(feature = "routers-macros")))]
 pub use reinhardt_routers_macros as routers_macros;
 
@@ -72,7 +72,7 @@ pub use reinhardt_routers_macros as routers_macros;
 ///   [dependencies]
 ///   reinhardt-urls = { version = "...", features = ["full"] }
 ///   ```
-#[cfg(all(feature = "routers", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "routers", native))]
 #[cfg_attr(docsrs, doc(cfg(feature = "routers")))]
 pub mod prelude {
 	pub use crate::routers::{

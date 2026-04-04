@@ -4,7 +4,7 @@
 //! Note: Full trybuild testing would require test fixture files.
 //! This file contains basic integration tests for macro usage.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 mod macro_compile_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use reinhardt_utils::staticfiles::TemplateStaticConfig;
@@ -188,7 +188,7 @@ mod macro_compile_tests {
 	}
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 mod wasm_macro_compile_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use wasm_bindgen_test::*;

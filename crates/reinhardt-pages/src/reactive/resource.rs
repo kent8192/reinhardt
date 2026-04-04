@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use crate::spawn::{defer_yield, spawn_task};
 
 /// Type alias for the refetch callback function
@@ -175,7 +175,7 @@ impl<T: Clone + 'static, E: Clone + 'static> Resource<T, E> {
 ///     fetch_user_from_api(42).await
 /// });
 /// ```
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn create_resource<T, E, F, Fut>(fetcher: F) -> Resource<T, E>
 where
 	T: Clone + 'static,
@@ -252,7 +252,7 @@ where
 /// // When user_id changes, the resource automatically refetches
 /// user_id.set(100);
 /// ```
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn create_resource_with_deps<T, E, D, F, Fut>(deps: Signal<D>, fetcher: F) -> Resource<T, E>
 where
 	T: Clone + 'static,

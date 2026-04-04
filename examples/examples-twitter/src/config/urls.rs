@@ -8,7 +8,7 @@
 //! `AdminDatabase` is lazily constructed from `DatabaseConnection` at first request.
 
 use reinhardt::UnifiedRouter;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use reinhardt::admin::{admin_routes_with_di_deferred, admin_static_routes};
 #[cfg(server)]
 use reinhardt::routes;
@@ -65,7 +65,7 @@ pub fn routes() -> UnifiedRouter {
 		.mount_unified("/", relationship::urls::routes())
 		.mount_unified("/", dm::urls::routes());
 	// Mount admin panel routes and static assets with deferred DI registration (server-only)
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	let router = {
 		#[cfg(server)]
 		let (admin_router, admin_di) = admin_routes_with_di_deferred(admin_site);

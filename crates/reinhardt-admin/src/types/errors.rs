@@ -71,7 +71,7 @@ mod tests {
 		assert_eq!(display, expected);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	#[case::model_not_registered(
 		AdminError::ModelNotRegistered("Article".to_string()),
@@ -171,7 +171,7 @@ mod tests {
 }
 
 /// Convert AdminError to reinhardt_core::exception::Error for seamless error handling
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 impl From<AdminError> for reinhardt_core::exception::Error {
 	fn from(err: AdminError) -> Self {
 		match err {

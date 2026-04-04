@@ -72,15 +72,15 @@
 //! ```
 
 pub mod codec;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod injectable;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod negotiation;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod registration;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod registry;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod router_ext;
 pub mod server_fn_trait;
 
@@ -88,15 +88,15 @@ pub mod server_fn_trait;
 #[cfg(feature = "msgpack")]
 pub use codec::MessagePackCodec;
 pub use codec::{Codec, JsonCodec, UrlCodec};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use injectable::{ServerFnBody, ServerFnRequest};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use negotiation::convert_body_for_codec;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use registration::ServerFnRegistration;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use registry::{ServerFnHandler, ServerFnRoute};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use router_ext::ServerFnRouterExt;
 pub use server_fn_trait::{ServerFn, ServerFnError};
 
@@ -121,7 +121,7 @@ pub use reinhardt_pages_macros::server_fn;
 /// // Without the meta tag:
 /// assert_eq!(resolve_endpoint("/api/server_fn/get_list"), "/api/server_fn/get_list");
 /// ```
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn resolve_endpoint(path: &str) -> String {
 	use std::cell::RefCell;
 
@@ -154,7 +154,7 @@ pub fn resolve_endpoint(path: &str) -> String {
 }
 
 /// Non-WASM identity implementation - returns the path unchanged.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn resolve_endpoint(path: &str) -> String {
 	path.to_string()
 }

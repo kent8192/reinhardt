@@ -24,7 +24,7 @@
 //! }
 //! ```
 
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg(native)]
 
 use std::collections::HashMap;
 use std::sync::Arc;

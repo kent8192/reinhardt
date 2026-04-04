@@ -307,7 +307,7 @@ impl AuthState {
 	/// Fetches permissions from the server and updates the cache.
 	///
 	/// Default endpoint: `/api/auth/permissions`
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn fetch_permissions(&self, endpoint: Option<&str>) -> Result<(), AuthError> {
 		use crate::csrf::csrf_headers;
 		use reqwest::Client;
@@ -346,7 +346,7 @@ impl AuthState {
 	}
 
 	/// Fetches permissions from the server (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn fetch_permissions(&self, _endpoint: Option<&str>) -> Result<(), AuthError> {
 		Ok(())
 	}
@@ -355,7 +355,7 @@ impl AuthState {
 	///
 	/// This looks for a `<script id="auth-data">` element containing
 	/// JSON-encoded authentication data.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub fn init_from_page(&self) {
 		use web_sys::window;
 
@@ -379,7 +379,7 @@ impl AuthState {
 	}
 
 	/// Initializes the auth state (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub fn init_from_page(&self) {
 		// No-op on non-WASM targets
 	}
@@ -388,7 +388,7 @@ impl AuthState {
 	///
 	/// This makes an AJAX request to the auth status endpoint
 	/// and updates the state with the response.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn fetch_from_server(&self, endpoint: &str) -> Result<(), AuthError> {
 		use crate::csrf::csrf_headers;
 		use reqwest::Client;
@@ -427,7 +427,7 @@ impl AuthState {
 	}
 
 	/// Fetches the current auth state (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn fetch_from_server(&self, _endpoint: &str) -> Result<(), AuthError> {
 		Ok(())
 	}
@@ -558,13 +558,13 @@ pub const JWT_STORAGE_KEY: &str = "__admin_jwt";
 ///     // header_value = "Bearer eyJhbGciOi..."
 /// }
 /// ```
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn auth_headers() -> Option<(&'static str, String)> {
 	get_jwt_token().map(|token| (AUTH_HEADER_NAME, format!("Bearer {}", token)))
 }
 
 /// Creates HTTP headers with JWT Bearer token (non-WASM stub).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn auth_headers() -> Option<(&'static str, String)> {
 	None
 }
@@ -572,7 +572,7 @@ pub fn auth_headers() -> Option<(&'static str, String)> {
 /// Retrieves the JWT token from sessionStorage.
 ///
 /// Returns `None` if no token is stored or if sessionStorage is unavailable.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn get_jwt_token() -> Option<String> {
 	let window = web_sys::window()?;
 	let storage = window.session_storage().ok()??;
@@ -580,7 +580,7 @@ pub fn get_jwt_token() -> Option<String> {
 }
 
 /// Retrieves the JWT token (non-WASM stub).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn get_jwt_token() -> Option<String> {
 	None
 }
@@ -588,7 +588,7 @@ pub fn get_jwt_token() -> Option<String> {
 /// Stores a JWT token in sessionStorage.
 ///
 /// The token persists for the lifetime of the browser tab.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn set_jwt_token(token: &str) {
 	if let Some(window) = web_sys::window() {
 		if let Ok(Some(storage)) = window.session_storage() {
@@ -598,7 +598,7 @@ pub fn set_jwt_token(token: &str) {
 }
 
 /// Stores a JWT token (non-WASM stub).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn set_jwt_token(_token: &str) {
 	// No-op on non-WASM targets
 }
@@ -606,7 +606,7 @@ pub fn set_jwt_token(_token: &str) {
 /// Removes the JWT token from sessionStorage.
 ///
 /// This should be called on logout or when a 401 response is received.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn clear_jwt_token() {
 	if let Some(window) = web_sys::window() {
 		if let Ok(Some(storage)) = window.session_storage() {
@@ -616,7 +616,7 @@ pub fn clear_jwt_token() {
 }
 
 /// Removes the JWT token (non-WASM stub).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn clear_jwt_token() {
 	// No-op on non-WASM targets
 }

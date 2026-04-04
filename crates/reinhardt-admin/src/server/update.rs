@@ -2,22 +2,22 @@
 //!
 //! Provides update operations for admin models.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite};
 use crate::types::{MutationRequest, MutationResponse};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use std::sync::Arc;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::audit;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::validation::validate_mutation_data;
 
 /// Update an existing model instance

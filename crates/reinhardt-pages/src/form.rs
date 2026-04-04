@@ -54,9 +54,9 @@ pub mod generated;
 pub mod validators;
 
 // Server-side only modules for HTML rendering and asset management
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod media;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod rendering;
 
 pub use binding::FormBinding;
@@ -69,9 +69,9 @@ pub use validators::{ClientValidator, ValidatorRegistry};
 pub use reinhardt_forms::wasm_compat::{FieldMetadata, FormMetadata};
 
 // Server-side only exports
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use media::{Media, MediaDefiningWidget};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use rendering::{
 	BootstrapRenderer, CheckboxInput, CheckboxSelectMultiple, CssFramework, DateInput, FileInput,
 	RadioSelect, Select, SelectDateWidget, SelectMultiple, SplitDateTimeWidget, TailwindRenderer,

@@ -5,10 +5,10 @@
 //! in Server Function signatures but are automatically injected and
 //! filtered out by the `#[server_fn]` macro on the client side.
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 pub use wasm_only::*;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 mod wasm_only {
 	/// Dummy AdminSite type for WASM type checking
 	///

@@ -8,7 +8,7 @@ use super::handler::{
 	RouteHandler, no_params_handler, result_handler, single_path_handler, three_path_handler,
 	two_path_handler, with_params_handler,
 };
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use super::history::setup_popstate_listener;
 use super::history::{HistoryState, NavigationType, current_path, push_state, replace_state};
 use super::params::{FromPath, ParamContext, Path, SingleFromPath};
@@ -602,7 +602,7 @@ impl ClientRouter {
 	/// The listener closure is kept alive using `.forget()`, meaning it will
 	/// persist for the lifetime of the page. This is intentional for SPA
 	/// navigation handling.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub fn setup_history_listener(&self) {
 		let path_signal = self.current_path.clone();
 		let params_signal = self.current_params.clone();
@@ -630,7 +630,7 @@ impl ClientRouter {
 	}
 
 	/// Non-WASM version of `setup_history_listener`.
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub fn setup_history_listener(&self) {
 		// No-op on non-WASM targets
 	}

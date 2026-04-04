@@ -600,7 +600,7 @@ impl<T: Send + Sync + 'static> Signal<T> {
 	}
 
 	/// Send signal asynchronously (fire and forget)
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub fn send_async(&self, instance: T) {
 		let instance = Arc::new(instance);
 		let receivers = self.receivers.read().clone();

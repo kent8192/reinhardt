@@ -3,7 +3,7 @@
 //! Tests are organized by equivalence classes: file types, path formats, and base URL formats.
 //! Uses rstest #[case] for systematic coverage of each partition.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 mod equivalence_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use reinhardt_utils::staticfiles::TemplateStaticConfig;
@@ -171,7 +171,7 @@ mod equivalence_tests {
 	}
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 mod wasm_equivalence_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use wasm_bindgen_test::*;

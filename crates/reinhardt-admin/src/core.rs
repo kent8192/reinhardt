@@ -13,7 +13,7 @@ pub mod import;
 pub mod model_admin;
 pub mod router;
 pub mod site;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 pub mod vendor;
 
 // Re-exports

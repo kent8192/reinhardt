@@ -18,7 +18,7 @@
 //! }
 //! ```
 
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg(native)]
 
 use std::ops::Deref;
 

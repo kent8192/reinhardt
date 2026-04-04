@@ -1,4 +1,4 @@
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg(native)]
 
 //! Signal replay system for replaying past signals for debugging and testing
 //!

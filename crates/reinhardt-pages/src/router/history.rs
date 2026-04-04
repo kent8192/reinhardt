@@ -108,7 +108,7 @@ struct HistoryStateJson {
 }
 
 /// Pushes a new state to the browser history.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub(super) fn push_state(state: &HistoryState) -> Result<(), String> {
 	use wasm_bindgen::JsValue;
 
@@ -124,13 +124,13 @@ pub(super) fn push_state(state: &HistoryState) -> Result<(), String> {
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub(super) fn push_state(_state: &HistoryState) -> Result<(), String> {
 	Ok(())
 }
 
 /// Replaces the current state in the browser history.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub(super) fn replace_state(state: &HistoryState) -> Result<(), String> {
 	use wasm_bindgen::JsValue;
 
@@ -146,13 +146,13 @@ pub(super) fn replace_state(state: &HistoryState) -> Result<(), String> {
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub(super) fn replace_state(_state: &HistoryState) -> Result<(), String> {
 	Ok(())
 }
 
 /// Navigates back in the browser history.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 // Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn go_back() -> Result<(), String> {
@@ -163,7 +163,7 @@ pub(super) fn go_back() -> Result<(), String> {
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 // Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn go_back() -> Result<(), String> {
@@ -171,7 +171,7 @@ pub(super) fn go_back() -> Result<(), String> {
 }
 
 /// Navigates forward in the browser history.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 // Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn go_forward() -> Result<(), String> {
@@ -184,7 +184,7 @@ pub(super) fn go_forward() -> Result<(), String> {
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 // Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn go_forward() -> Result<(), String> {
@@ -192,7 +192,7 @@ pub(super) fn go_forward() -> Result<(), String> {
 }
 
 /// Navigates to a specific position in the history.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 // Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn go(delta: i32) -> Result<(), String> {
@@ -205,7 +205,7 @@ pub(super) fn go(delta: i32) -> Result<(), String> {
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 // Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn go(_delta: i32) -> Result<(), String> {
@@ -213,7 +213,7 @@ pub(super) fn go(_delta: i32) -> Result<(), String> {
 }
 
 /// Gets the current pathname from the browser.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub(super) fn current_path() -> Result<String, String> {
 	let window = web_sys::window().ok_or("Window not available")?;
 	let location = window.location();
@@ -223,13 +223,13 @@ pub(super) fn current_path() -> Result<String, String> {
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub(super) fn current_path() -> Result<String, String> {
 	Ok("/".to_string())
 }
 
 /// Gets the current search query from the browser.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 // Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn current_search() -> Result<String, String> {
@@ -241,7 +241,7 @@ pub(super) fn current_search() -> Result<String, String> {
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 // Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn current_search() -> Result<String, String> {
@@ -249,7 +249,7 @@ pub(super) fn current_search() -> Result<String, String> {
 }
 
 /// Gets the current hash from the browser.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 // Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn current_hash() -> Result<String, String> {
@@ -261,7 +261,7 @@ pub(super) fn current_hash() -> Result<String, String> {
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 // Allow dead_code: pub(super) API reserved for future router navigation features
 #[allow(dead_code)]
 pub(super) fn current_hash() -> Result<String, String> {
@@ -292,7 +292,7 @@ pub(super) fn current_hash() -> Result<String, String> {
 /// # Errors
 ///
 /// Returns an error if the window object is not available.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn setup_popstate_listener<F>(
 	callback: F,
 ) -> Result<wasm_bindgen::closure::Closure<dyn FnMut(web_sys::PopStateEvent)>, wasm_bindgen::JsValue>
@@ -326,7 +326,7 @@ where
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn setup_popstate_listener<F>(_callback: F) -> Result<(), String>
 where
 	F: Fn(String, Option<HistoryState>) + 'static,

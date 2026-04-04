@@ -5,7 +5,7 @@
 use reinhardt_pages::component::Page;
 use reinhardt_pages::page;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 use reinhardt_pages::Signal;
 
 /// Login form component
@@ -120,7 +120,7 @@ fn build_login_form() -> Page {
 /// On WASM targets, this sets up an event handler that intercepts form
 /// submission, calls the `admin_login` server function, and handles
 /// the authentication flow (token storage, auth state update, redirect).
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 pub fn login_view() -> Page {
 	use crate::server::login::admin_login;
 	use reinhardt_pages::auth::{auth_state, set_jwt_token};
@@ -148,7 +148,7 @@ pub fn login_view() -> Page {
 }
 
 /// Login view component for non-WASM targets (static form rendering).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 pub fn login_view() -> Page {
 	login_form(None)
 }
@@ -158,7 +158,7 @@ pub fn login_view() -> Page {
 /// This function is called after the login view is mounted to the DOM.
 /// It attaches an event listener to the form that intercepts submission,
 /// calls the server function, and handles the response.
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 pub fn setup_login_handler() {
 	use crate::server::login::admin_login;
 	use reinhardt_pages::auth::{auth_state, set_jwt_token};
@@ -272,7 +272,7 @@ pub fn setup_login_handler() {
 }
 
 /// Sets up the login form submission handler (non-WASM stub).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 pub fn setup_login_handler() {
 	// No-op on non-WASM targets
 }

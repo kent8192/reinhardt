@@ -4,14 +4,14 @@
 //! required by the admin panel, along with utilities for downloading and
 //! verifying them. All assets are version-pinned to ensure reproducible builds.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use std::path::Path;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use sha2::{Digest, Sha256};
 
 /// A single vendor asset with a version-pinned URL, target path, and SHA-256 checksum.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 pub struct VendorAsset {
 	/// The version-pinned CDN URL to download the asset from.
 	pub url: &'static str,
@@ -26,7 +26,7 @@ pub struct VendorAsset {
 ///
 /// SHA-256 values are left empty here and will be populated after the first
 /// successful download using `verify_integrity`.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 const ADMIN_VENDOR_ASSETS: &[VendorAsset] = &[
 	// Open Props v1.7.23 — CSS custom property design tokens
 	VendorAsset {
@@ -99,7 +99,7 @@ const ADMIN_VENDOR_ASSETS: &[VendorAsset] = &[
 ];
 
 /// Returns the full list of vendor assets required by the admin panel.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 pub fn admin_vendor_assets() -> &'static [VendorAsset] {
 	ADMIN_VENDOR_ASSETS
 }
@@ -109,7 +109,7 @@ pub fn admin_vendor_assets() -> &'static [VendorAsset] {
 /// Returns `Ok(())` if `expected_sha256` is empty (checksum not yet known),
 /// or if the computed digest matches `expected_sha256`.
 /// Returns `Err` if the file cannot be read or the digest does not match.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 pub fn verify_integrity(path: &Path, expected_sha256: &str) -> Result<(), String> {
 	// Skip verification when no expected hash is provided
 	if expected_sha256.is_empty() {
@@ -136,7 +136,7 @@ pub fn verify_integrity(path: &Path, expected_sha256: &str) -> Result<(), String
 }
 
 /// Verbosity level for download progress output.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verbosity {
 	/// No output.
@@ -154,7 +154,7 @@ pub enum Verbosity {
 ///
 /// Returns an error if any HTTP request fails, the response body cannot be
 /// read, a file cannot be written, or an integrity check fails after download.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 pub async fn download_vendor_assets(
 	base_dir: &Path,
 	verbosity: Verbosity,
@@ -237,7 +237,7 @@ pub async fn download_vendor_assets(
 ///
 /// * `base_dir` — The directory containing vendor assets (typically the admin
 ///   `assets/` directory).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 pub async fn ensure_vendor_assets(base_dir: &std::path::Path) {
 	use std::sync::OnceLock;
 
@@ -278,11 +278,11 @@ pub async fn ensure_vendor_assets(base_dir: &std::path::Path) {
 mod tests {
 	use rstest::rstest;
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	use super::{ADMIN_VENDOR_ASSETS, admin_vendor_assets, verify_integrity};
 
 	/// The manifest must contain at least one entry.
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn manifest_not_empty() {
 		// Arrange / Act
@@ -296,7 +296,7 @@ mod tests {
 	}
 
 	/// Every entry must have a non-empty URL and a non-empty target path.
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn all_assets_have_url_and_target() {
 		// Arrange
@@ -318,7 +318,7 @@ mod tests {
 	}
 
 	/// Every URL must contain `@` which indicates a pinned version.
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn all_urls_are_versioned() {
 		// Arrange
@@ -335,7 +335,7 @@ mod tests {
 	}
 
 	/// No two assets may share the same target path.
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn no_duplicate_targets() {
 		// Arrange
@@ -353,7 +353,7 @@ mod tests {
 	}
 
 	/// `verify_integrity` must return `Ok` when the expected hash is empty.
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn verify_integrity_with_empty_hash() {
 		// Arrange
@@ -369,7 +369,7 @@ mod tests {
 	}
 
 	/// `verify_integrity` must return `Ok` when the hash matches.
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn verify_integrity_with_correct_hash() {
 		use sha2::{Digest, Sha256};
@@ -390,7 +390,7 @@ mod tests {
 	}
 
 	/// `verify_integrity` must return `Err` when the hash does not match.
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn verify_integrity_with_wrong_hash() {
 		// Arrange
@@ -409,7 +409,7 @@ mod tests {
 	}
 
 	/// Sanity-check: the constant and the function return the same slice.
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn admin_vendor_assets_matches_const() {
 		// Arrange / Act
@@ -426,7 +426,7 @@ mod tests {
 	/// Every font `url()` reference in `style.css` must correspond to a vendor
 	/// asset `target` path in `ADMIN_VENDOR_ASSETS`. This prevents filename
 	/// drift between the CSS and the download manifest.
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn css_font_urls_match_vendor_targets() {
 		// Arrange

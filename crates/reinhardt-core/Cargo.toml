@@ -57,7 +57,7 @@ fluent-bundle = { version = "0.15", optional = true }
 image = "0.25"
 
 # Server-side dependencies (not available on WASM)
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 hyper = { workspace = true }
 jsonschema = { version = "0.26", optional = true }
@@ -66,7 +66,7 @@ unic-langid = { version = "0.9", optional = true }
 uuid = { version = "1.0", features = ["v4", "serde"] }
 
 # WASM-specific dependencies
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 web-sys = { version = "0.3", features = ["Event"] }
 wasm-bindgen = "0.2"
 uuid = { version = "1.0", features = ["v4", "serde", "js"] }
@@ -130,6 +130,9 @@ serde = ["dep:serde"]
 jsonschema = ["dep:jsonschema"]
 parallel = ["dep:rayon"]
 i18n = ["dep:fluent-bundle", "dep:unic-langid"]
+
+[build-dependencies]
+cfg_aliases = "0.2"
 
 [dev-dependencies]
 insta = { workspace = true }

@@ -18,7 +18,7 @@
 //! assert_server_fn_returns(&result, &expected);
 //! ```
 
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg(native)]
 
 use std::fmt::Debug;
 

@@ -190,7 +190,7 @@ fn generate_element(elem: &TypedPageElement, pages_crate: &TokenStream) -> Token
 	}
 
 	// Has events - generate conditional compilation code
-	// This eliminates the need for users to write #[cfg(target_arch = "wasm32")] blocks
+	// This eliminates the need for users to write #[cfg(all(target_family = "wasm", target_os = "unknown"))] blocks
 
 	// Generate event bindings for WASM target
 	let event_bindings: Vec<TokenStream> = elem
@@ -233,10 +233,10 @@ fn generate_element(elem: &TypedPageElement, pages_crate: &TokenStream) -> Token
 		{
 			let __elem_base = #base_builder;
 
-			#[cfg(target_arch = "wasm32")]
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 			let __elem_with_events = __elem_base #(#event_bindings)*;
 
-			#[cfg(not(target_arch = "wasm32"))]
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			let __elem_with_events = {
 				// Create typed wrappers to enable closure parameter type inference.
 				// The wrapper calls the user's handler with a typed argument, which forces

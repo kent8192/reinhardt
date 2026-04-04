@@ -3,7 +3,7 @@
 //! Tests that the resolver never panics with arbitrary inputs (fuzzing).
 //! Uses proptest to generate random inputs.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 mod fuzz_tests {
 	use proptest::prelude::*;
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
@@ -111,7 +111,7 @@ mod fuzz_tests {
 	}
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 mod wasm_fuzz_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use wasm_bindgen_test::*;

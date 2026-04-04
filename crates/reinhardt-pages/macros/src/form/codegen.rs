@@ -867,7 +867,7 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 					.on(
 					#pages_crate::dom::event::EventType::Submit,
 					{
-						#[cfg(target_arch = "wasm32")]
+						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 						{
 							::std::sync::Arc::new(move |event: web_sys::Event| {
 								// Prevent default form submission by handling it ourselves
@@ -882,7 +882,7 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 									let #field_names = #field_value_getters;
 								)*
 
-								#[cfg(target_arch = "wasm32")]
+								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 								{
 									// Clone loading/error signals for async block if they exist
 									#async_signal_clones
@@ -903,7 +903,7 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 								}
 							})
 						}
-						#[cfg(not(target_arch = "wasm32"))]
+						#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 						{
 							::std::sync::Arc::new(move |event: #pages_crate::component::DummyEvent| {
 								// Prevent default form submission by handling it ourselves (no-op in non-WASM)
@@ -917,7 +917,7 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 									let #field_names = #field_value_getters;
 								)*
 
-								#[cfg(target_arch = "wasm32")]
+								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 								{
 									// Clone loading/error signals for async block if they exist
 									#async_signal_clones
@@ -1383,7 +1383,7 @@ fn generate_bind_listener(
 		.listener(#event_name, {
 			let signal = #signal_ident.clone();
 			move |event| {
-				#[cfg(target_arch = "wasm32")]
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 				{
 					use wasm_bindgen::JsCast;
 					if let Some(target) = event.target() {
@@ -1392,7 +1392,7 @@ fn generate_bind_listener(
 						}
 					}
 				}
-				#[cfg(not(target_arch = "wasm32"))]
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				{
 					let _ = event;
 					let _ = &#pages_crate::component::DummyEvent;
@@ -1481,7 +1481,7 @@ fn generate_submit_method(macro_ast: &TypedFormMacro, pages_crate: &TokenStream)
 			let redirect_code = generate_redirect_code(redirect);
 
 			quote! {
-				#[cfg(target_arch = "wasm32")]
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 				pub async fn submit(&self) -> Result<(), #pages_crate::ServerFnError> {
 					// Call on_submit callback before submission
 					#on_submit_code
@@ -1509,7 +1509,7 @@ fn generate_submit_method(macro_ast: &TypedFormMacro, pages_crate: &TokenStream)
 					}
 				}
 
-				#[cfg(not(target_arch = "wasm32"))]
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				pub async fn submit(&self) -> Result<(), #pages_crate::ServerFnError> {
 					// On server, submit is a no-op (form is submitted via HTTP)
 					Ok(())
@@ -1522,7 +1522,7 @@ fn generate_submit_method(macro_ast: &TypedFormMacro, pages_crate: &TokenStream)
 			let on_submit_code = generate_on_submit_callback(callbacks);
 
 			quote! {
-				#[cfg(target_arch = "wasm32")]
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 				pub fn submit(&self) {
 					// Call on_submit callback before submission
 					#on_submit_code
@@ -1532,7 +1532,7 @@ fn generate_submit_method(macro_ast: &TypedFormMacro, pages_crate: &TokenStream)
 					#pages_crate::dom::submit_form(&self.metadata());
 				}
 
-				#[cfg(not(target_arch = "wasm32"))]
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				pub fn submit(&self) {
 					// On server, submit is a no-op
 				}
@@ -1606,13 +1606,13 @@ fn generate_load_initial_values(
 			///
 			/// Note: No fields have `initial_from` specified, so this method
 			/// only calls the loader without populating any fields.
-			#[cfg(target_arch = "wasm32")]
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 			pub async fn load_initial_values(&self) -> Result<(), #pages_crate::ServerFnError> {
 				let _data = #initial_loader().await?;
 				Ok(())
 			}
 
-			#[cfg(not(target_arch = "wasm32"))]
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			pub async fn load_initial_values(&self) -> Result<(), #pages_crate::ServerFnError> {
 				// On server, this is a no-op since initial values are typically
 				// loaded differently in SSR context
@@ -1625,14 +1625,14 @@ fn generate_load_initial_values(
 			///
 			/// Calls the configured initial_loader and populates fields
 			/// that have `initial_from` specified with values from the result.
-			#[cfg(target_arch = "wasm32")]
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 			pub async fn load_initial_values(&self) -> Result<(), #pages_crate::ServerFnError> {
 				let data = #initial_loader().await?;
 				#(#field_setters)*
 				Ok(())
 			}
 
-			#[cfg(not(target_arch = "wasm32"))]
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			pub async fn load_initial_values(&self) -> Result<(), #pages_crate::ServerFnError> {
 				// On server, this is a no-op since initial values are typically
 				// loaded differently in SSR context
@@ -1714,13 +1714,13 @@ fn generate_load_choices(macro_ast: &TypedFormMacro, pages_crate: &TokenStream) 
 			///
 			/// Note: No fields have `choices_from` specified, so this method
 			/// only calls the loader without populating any choices.
-			#[cfg(target_arch = "wasm32")]
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 			pub async fn load_choices(&self) -> Result<(), #pages_crate::ServerFnError> {
 				let _data = #choices_loader().await?;
 				Ok(())
 			}
 
-			#[cfg(not(target_arch = "wasm32"))]
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			pub async fn load_choices(&self) -> Result<(), #pages_crate::ServerFnError> {
 				// On server, this is a no-op since choices are typically
 				// loaded differently in SSR context
@@ -1733,14 +1733,14 @@ fn generate_load_choices(macro_ast: &TypedFormMacro, pages_crate: &TokenStream) 
 			///
 			/// Calls the configured choices_loader and populates the choices signals
 			/// for fields that have `choices_from` specified.
-			#[cfg(target_arch = "wasm32")]
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 			pub async fn load_choices(&self) -> Result<(), #pages_crate::ServerFnError> {
 				let data = #choices_loader().await?;
 				#(#field_setters)*
 				Ok(())
 			}
 
-			#[cfg(not(target_arch = "wasm32"))]
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			pub async fn load_choices(&self) -> Result<(), #pages_crate::ServerFnError> {
 				// On server, this is a no-op since choices are typically
 				// loaded differently in SSR context

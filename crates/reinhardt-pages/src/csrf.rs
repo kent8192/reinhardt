@@ -97,7 +97,7 @@ impl CsrfManager {
 	/// 1. Return the cached token if available
 	/// 2. Otherwise, try to fetch from cookie, meta tag, or form input
 	/// 3. Cache the result for future use
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub fn get_or_fetch_token(&self) -> Option<String> {
 		// Return cached if available
 		if let Some(token) = self.token.get() {
@@ -114,13 +114,13 @@ impl CsrfManager {
 	}
 
 	/// Gets or fetches the CSRF token (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub fn get_or_fetch_token(&self) -> Option<String> {
 		self.token.get()
 	}
 
 	/// Forces a refresh of the CSRF token from the browser.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub fn refresh(&self) -> Option<String> {
 		if let Some(token) = get_csrf_token() {
 			self.token.set(Some(token.clone()));
@@ -131,7 +131,7 @@ impl CsrfManager {
 	}
 
 	/// Forces a refresh of the CSRF token (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub fn refresh(&self) -> Option<String> {
 		None
 	}
@@ -165,7 +165,7 @@ impl CsrfManager {
 /// 3. Hidden form input (`<input name="csrfmiddlewaretoken">`)
 ///
 /// Returns `None` if no token is found.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn get_csrf_token() -> Option<String> {
 	// Try cookie first (most common)
 	if let Some(token) = get_csrf_token_from_cookie() {
@@ -182,13 +182,13 @@ pub fn get_csrf_token() -> Option<String> {
 }
 
 /// Retrieves the CSRF token (non-WASM stub).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn get_csrf_token() -> Option<String> {
 	None
 }
 
 /// Retrieves the CSRF token from the cookie.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn get_csrf_token_from_cookie() -> Option<String> {
 	use wasm_bindgen::JsCast;
 	use web_sys::{HtmlDocument, window};
@@ -202,13 +202,13 @@ pub fn get_csrf_token_from_cookie() -> Option<String> {
 }
 
 /// Retrieves the CSRF token from cookie (non-WASM stub).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn get_csrf_token_from_cookie() -> Option<String> {
 	None
 }
 
 /// Retrieves the CSRF token from a meta tag.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn get_csrf_token_from_meta() -> Option<String> {
 	use web_sys::window;
 
@@ -222,13 +222,13 @@ pub fn get_csrf_token_from_meta() -> Option<String> {
 }
 
 /// Retrieves the CSRF token from meta tag (non-WASM stub).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn get_csrf_token_from_meta() -> Option<String> {
 	None
 }
 
 /// Retrieves the CSRF token from a hidden form input.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn get_csrf_token_from_input() -> Option<String> {
 	use wasm_bindgen::JsCast;
 	use web_sys::{HtmlInputElement, window};
@@ -244,7 +244,7 @@ pub fn get_csrf_token_from_input() -> Option<String> {
 }
 
 /// Retrieves the CSRF token from hidden input (non-WASM stub).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn get_csrf_token_from_input() -> Option<String> {
 	None
 }
@@ -268,13 +268,13 @@ pub fn parse_cookie_value(cookie_str: &str, name: &str) -> Option<String> {
 /// Creates HTTP headers with CSRF token for AJAX requests.
 ///
 /// Returns a tuple of (header_name, header_value) if a token is available.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn csrf_headers() -> Option<(&'static str, String)> {
 	get_csrf_token().map(|token| (CSRF_HEADER_NAME, token))
 }
 
 /// Creates HTTP headers with CSRF token (non-WASM stub).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn csrf_headers() -> Option<(&'static str, String)> {
 	None
 }

@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use reinhardt_di::SingletonScope;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use reinhardt_pages::server_fn::ServerFnRouterExt;
 use reinhardt_urls::routers::ServerRouter;
 
@@ -21,7 +21,7 @@ use crate::core::AdminSite;
 /// Checks in order:
 /// 1. `REINHARDT_ADMIN_WASM_DIR` environment variable
 /// 2. `CARGO_MANIFEST_DIR/dist-admin` (compile-time fallback for development)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 fn resolve_wasm_dir() -> std::path::PathBuf {
 	if let Ok(dir) = std::env::var("REINHARDT_ADMIN_WASM_DIR") {
 		return std::path::PathBuf::from(dir);
@@ -33,7 +33,7 @@ fn resolve_wasm_dir() -> std::path::PathBuf {
 ///
 /// Checks `STATIC_ROOT` environment variable. Returns `None` if not set
 /// or the `admin/` subdirectory does not exist within it.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 fn resolve_static_root_admin() -> Option<std::path::PathBuf> {
 	std::env::var("STATIC_ROOT")
 		.ok()
@@ -45,7 +45,7 @@ fn resolve_static_root_admin() -> Option<std::path::PathBuf> {
 ///
 /// Checks the collected STATIC_ROOT first, then falls back to the build
 /// output directory (dist-admin/).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 fn is_wasm_built() -> bool {
 	// Check STATIC_ROOT/admin/ first (production: after collectstatic)
 	if let Some(admin_dir) = resolve_static_root_admin()
@@ -67,7 +67,7 @@ fn is_wasm_built() -> bool {
 ///
 /// [`AdminSettings`]: crate::settings::AdminSettings
 /// [`configure()`]: crate::settings::configure
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 async fn admin_spa_handler(
 	request: reinhardt_http::Request,
 ) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
@@ -96,7 +96,7 @@ async fn admin_spa_handler(
 /// Uses the global static resolver (initialized by the application) for
 /// manifest-aware URL resolution. Falls back to `/static/admin/` prefix
 /// if the resolver has not been initialized.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 fn resolve_admin_static(path: &str) -> String {
 	let admin_path = format!("admin/{}", path);
 	reinhardt_pages::static_resolver::resolve_static(&admin_path)
@@ -113,7 +113,7 @@ fn resolve_admin_static(path: &str) -> String {
 /// in production. CSS dependencies (Open Props, Animate.css) and the UnoCSS
 /// runtime engine are served from local vendor/ directory instead of external
 /// CDNs to satisfy CSP and eliminate external network dependencies.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 fn admin_spa_html(site_title: &str) -> String {
 	let css_url = resolve_admin_static("style.css");
 	let vendor_open_props = resolve_admin_static("vendor/open-props.min.css");
@@ -162,7 +162,7 @@ fn admin_spa_html(site_title: &str) -> String {
 }
 
 /// Path to the admin assets directory (compile-time resolved)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 const ADMIN_ASSETS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets");
 
 /// Serves admin static files from multiple directories with priority-based resolution.
@@ -179,7 +179,7 @@ const ADMIN_ASSETS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets");
 /// response instead of propagating `Err`. This prevents the server-layer
 /// error conversion (`Response::from(Error)`) from replacing the intended
 /// `Content-Type` with `application/json`. See issue #3135.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 async fn admin_static_file_handler(
 	request: reinhardt_http::Request,
 ) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
@@ -199,7 +199,7 @@ async fn admin_static_file_handler(
 /// Separated to allow the outer function to catch errors defensively,
 /// preventing `Content-Type: application/json` from the server-layer
 /// error conversion path.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 async fn admin_static_file_handler_inner(
 	request: reinhardt_http::Request,
 ) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
@@ -270,7 +270,7 @@ async fn admin_static_file_handler_inner(
 pub fn admin_static_routes() -> ServerRouter {
 	let router = ServerRouter::new();
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	let router = router
 		.function("/{*path}", hyper::Method::GET, admin_static_file_handler)
 		.function("/{*path}", hyper::Method::HEAD, admin_static_file_handler);
@@ -320,7 +320,7 @@ fn build_admin_router() -> ServerRouter {
 	// Register all admin server functions on server-side targets.
 	// #[server_fn] generates marker structs but does not auto-register routes;
 	// explicit .server_fn(marker) calls are required.
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	let router = {
 		use crate::server::{
 			bulk_delete_records, create_record, delete_record, export_data, get_dashboard,
@@ -701,7 +701,7 @@ mod tests {
 		assert_eq!(registered.unwrap().name(), "Applied Admin");
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn test_admin_routes_registers_all_server_functions() {
 		// Arrange
@@ -805,7 +805,7 @@ mod tests {
 		assert_eq!(stored.unwrap(), favicon_data);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn test_admin_routes_includes_html_get_routes() {
 		// Arrange & Act
@@ -830,7 +830,7 @@ mod tests {
 		);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn test_admin_spa_html_contains_mount_point() {
 		// Arrange & Act
@@ -855,7 +855,7 @@ mod tests {
 		);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn test_admin_spa_html_references_css_and_js_entry_point() {
 		// Arrange & Act
@@ -886,7 +886,7 @@ mod tests {
 		}
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn test_admin_spa_html_no_external_cdn_urls() {
 		// Arrange
@@ -907,7 +907,7 @@ mod tests {
 		);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn test_admin_spa_html_references_vendor_assets() {
 		// Arrange
@@ -928,7 +928,7 @@ mod tests {
 		);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn test_admin_spa_html_no_inline_script() {
 		// Arrange
@@ -941,7 +941,7 @@ mod tests {
 		);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn test_embedded_admin_js_is_valid_utf8_and_nonempty() {
 		// Arrange
@@ -967,7 +967,7 @@ mod tests {
 		assert_eq!(router.namespace(), None);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn test_admin_static_routes_registers_catch_all_route() {
 		// Arrange & Act
@@ -988,7 +988,7 @@ mod tests {
 		);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	#[tokio::test]
 	async fn test_admin_static_file_handler_serves_css() {
@@ -1020,7 +1020,7 @@ mod tests {
 		);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	#[tokio::test]
 	async fn test_admin_static_file_handler_serves_js() {
@@ -1052,7 +1052,7 @@ mod tests {
 		);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	#[tokio::test]
 	async fn test_admin_static_file_handler_returns_404_for_missing_file() {
@@ -1078,7 +1078,7 @@ mod tests {
 		);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	#[tokio::test]
 	async fn test_admin_static_file_handler_returns_404_for_wasm_when_not_built() {
@@ -1104,7 +1104,7 @@ mod tests {
 		);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	#[tokio::test]
 	async fn test_admin_spa_handler_includes_csp_headers() {
@@ -1134,7 +1134,7 @@ mod tests {
 		);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn test_admin_spa_html_fallback_without_wasm() {
 		// Arrange - CI environment has no dist-admin/ directory
@@ -1150,7 +1150,7 @@ mod tests {
 		);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn test_admin_spa_html_uses_configured_site_title() {
 		// Arrange
@@ -1170,7 +1170,7 @@ mod tests {
 		);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn test_is_wasm_built_false_when_no_dist_wasm() {
 		// Arrange - CI/test environment should not have dist-admin/
@@ -1184,7 +1184,7 @@ mod tests {
 		assert_eq!(result, result); // non-trivial: ensures no panic
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn test_resolve_wasm_dir_returns_dist_wasm_subdir() {
 		// Arrange & Act
@@ -1198,7 +1198,7 @@ mod tests {
 		);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn test_resolve_admin_static_uses_static_resolver() {
 		// Arrange & Act - resolver not initialized in test env, uses fallback
@@ -1223,7 +1223,7 @@ mod tests {
 		assert_eq!(paths.len(), 2);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	#[tokio::test]
 	async fn test_admin_spa_handler_sets_csrf_cookie() {
@@ -1266,7 +1266,7 @@ mod tests {
 	/// Verify static routes serve the WASM binary file.
 	/// The admin SPA is a WASM application; its binary must be
 	/// served alongside JS and CSS (#3115).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn test_admin_static_routes_serves_wasm_binary() {
 		// Arrange & Act
@@ -1286,7 +1286,7 @@ mod tests {
 	/// Verify the embedded admin JS is not a placeholder stub when WASM
 	/// has been built. Requires `dist-wasm/reinhardt_admin.js` to exist;
 	/// skipped in environments without a WASM build (#3115).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn test_embedded_admin_js_is_not_placeholder() {
 		if !is_wasm_built() {
@@ -1312,7 +1312,7 @@ mod tests {
 
 	/// Verify the JS filename referenced in the HTML is a registered
 	/// static route, ensuring the reference chain is consistent (#3115).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	fn test_html_js_reference_matches_static_route() {
 		// Arrange
@@ -1344,7 +1344,7 @@ mod tests {
 		);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	#[tokio::test]
 	async fn test_admin_spa_handler_csrf_cookie_no_secure_for_http() {
@@ -1377,7 +1377,7 @@ mod tests {
 	/// route resolution, not just direct handler invocation. Regression test
 	/// for #3135 where the server-layer error conversion produced
 	/// `Content-Type: application/json` for static file responses.
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	#[tokio::test]
 	async fn test_admin_static_routes_full_stack_css_content_type() {
@@ -1416,7 +1416,7 @@ mod tests {
 
 	/// Full-stack test for JS files through the mounted router.
 	/// Regression test for #3135.
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	#[tokio::test]
 	async fn test_admin_static_routes_full_stack_js_content_type() {
@@ -1455,7 +1455,7 @@ mod tests {
 
 	/// Full-stack test: 404 responses must not have application/json Content-Type.
 	/// Regression test for #3135.
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(server)]
 	#[rstest]
 	#[tokio::test]
 	async fn test_admin_static_routes_full_stack_404_not_json() {

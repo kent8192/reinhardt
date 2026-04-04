@@ -79,7 +79,7 @@ web-sys = { version = "0.3.83", features = [
 ] }
 js-sys = "0.3.83"
 serde-wasm-bindgen = "0.6"
-gloo-net = "0.6"
+reqwest = { workspace = true }
 wasm-bindgen-futures = "0.4"
 chrono = { workspace = true, features = ["wasmbind"] }
 uuid = { workspace = true, features = ["js"] }

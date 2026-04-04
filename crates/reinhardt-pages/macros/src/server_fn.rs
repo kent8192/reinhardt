@@ -638,7 +638,7 @@ fn generate_client_stub(
 			#serialize_code
 
 			// Build HTTP POST request with headers
-			let __client = ::reqwest::Client::new();
+			let __client = #pages_crate::__private::reqwest::Client::new();
 			let mut __request_builder = __client.post(&__endpoint)
 				.header("Content-Type", #content_type);
 

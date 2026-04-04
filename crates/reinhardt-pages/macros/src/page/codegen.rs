@@ -69,10 +69,13 @@ pub(super) fn generate(macro_ast: &TypedPageMacro) -> TokenStream {
 		body
 	};
 
-	// Wrap in a closure with conditional use statement if needed
+	// Wrap in a closure with conditional use statement if needed.
+	// #[allow(unused_variables)] suppresses warnings for closure parameters that are
+	// only used inside @event handlers, which are cfg-gated to wasm32 (#3327).
 	quote! {
 		{
 			#use_statement
+			#[allow(unused_variables)]
 			#params -> #pages_crate::component::Page {
 				#body_with_head
 			}

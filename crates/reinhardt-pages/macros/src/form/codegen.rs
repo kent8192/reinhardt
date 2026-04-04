@@ -3994,4 +3994,163 @@ mod tests {
 			"Expected path element to be generated"
 		);
 	}
+
+	// --- SubmitButton rendering regression tests (Fixes #3334) ---
+
+	#[rstest::rstest]
+	fn test_submit_button_rendered_in_url_action_form() {
+		// Arrange
+		let input = quote! {
+			name: LoginForm,
+			action: "/api/login",
+
+			fields: {
+				username: CharField { required, label: "Username" },
+				password: CharField { required, widget: PasswordInput, label: "Password" },
+				submit: SubmitButton { label: "Sign in", class: "btn-primary" },
+			},
+		};
+
+		// Act
+		let output = parse_validate_generate(input);
+		let output_str = output.to_string();
+
+		// Assert
+		assert!(
+			output_str.contains("\"button\""),
+			"URL action form: codegen must emit a <button> element for SubmitButton"
+		);
+		assert!(
+			output_str.contains("\"submit\""),
+			"URL action form: codegen must set type=\"submit\" on the button"
+		);
+		assert!(
+			output_str.contains("Sign in"),
+			"URL action form: codegen must include the button label"
+		);
+		assert!(
+			output_str.contains("btn-primary"),
+			"URL action form: codegen must include the button class"
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_submit_button_rendered_in_server_fn_form() {
+		// Arrange
+		let input = quote! {
+			name: LoginForm,
+			server_fn: login,
+
+			fields: {
+				username: CharField { required, label: "Username" },
+				password: CharField { required, widget: PasswordInput, label: "Password" },
+				submit: SubmitButton { label: "Sign in", class: "btn-primary" },
+			},
+		};
+
+		// Act
+		let output = parse_validate_generate(input);
+		let output_str = output.to_string();
+
+		// Assert
+		assert!(
+			output_str.contains("\"button\""),
+			"server_fn form: codegen must emit a <button> element for SubmitButton"
+		);
+		assert!(
+			output_str.contains("\"submit\""),
+			"server_fn form: codegen must set type=\"submit\" on the button"
+		);
+		assert!(
+			output_str.contains("Sign in"),
+			"server_fn form: codegen must include the button label"
+		);
+		assert!(
+			output_str.contains("btn-primary"),
+			"server_fn form: codegen must include the button class"
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_submit_button_with_id_and_disabled() {
+		// Arrange
+		let input = quote! {
+			name: TestForm,
+			action: "/test",
+
+			fields: {
+				name: CharField { required },
+				submit: SubmitButton { label: "Send", id: "submit-btn", disabled },
+			},
+		};
+
+		// Act
+		let output = parse_validate_generate(input);
+		let output_str = output.to_string();
+
+		// Assert
+		assert!(
+			output_str.contains("\"button\""),
+			"codegen must emit a <button> element"
+		);
+		assert!(
+			output_str.contains("submit-btn"),
+			"codegen must include the button id"
+		);
+		assert!(
+			output_str.contains("\"disabled\""),
+			"codegen must include the disabled attribute"
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_submit_button_with_default_label() {
+		// Arrange
+		let input = quote! {
+			name: MinimalForm,
+			action: "/test",
+
+			fields: {
+				name: CharField { required },
+				submit: SubmitButton {},
+			},
+		};
+
+		// Act
+		let output = parse_validate_generate(input);
+		let output_str = output.to_string();
+
+		// Assert
+		assert!(
+			output_str.contains("\"button\""),
+			"codegen must emit a <button> element even with no explicit label"
+		);
+		assert!(
+			output_str.contains("Submit"),
+			"codegen must use default label \"Submit\" when none specified"
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_no_submit_button_when_not_specified() {
+		// Arrange
+		let input = quote! {
+			name: NoButtonForm,
+			action: "/test",
+
+			fields: {
+				name: CharField { required },
+			},
+		};
+
+		// Act
+		let output = parse_validate_generate(input);
+		let output_str = output.to_string();
+
+		// Assert - no button element should be generated
+		assert!(
+			!output_str.contains("\"button\""),
+			"form without SubmitButton must not generate a <button> element"
+		);
+	}
 }

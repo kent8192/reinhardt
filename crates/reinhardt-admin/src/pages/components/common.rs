@@ -12,6 +12,8 @@
 //! These components use the `page!` macro DSL for SSR compatibility and Router integration.
 //! Interactive components with event handlers will be hydrated on the client side.
 
+use std::sync::Arc;
+
 use reinhardt_pages::Signal;
 use reinhardt_pages::component::Page;
 use reinhardt_pages::page;
@@ -58,13 +60,11 @@ impl ButtonVariant {
 /// let clicked = Signal::new(false);
 /// button("Click me", ButtonVariant::Primary, false, clicked)
 /// ```
-pub fn button(text: &str, variant: ButtonVariant, disabled: bool, _on_click: Signal<bool>) -> Page {
-	use reinhardt_pages::component::{IntoPage, PageElement};
-
+pub fn button(text: &str, variant: ButtonVariant, disabled: bool, on_click: Signal<bool>) -> Page {
 	let classes = format!("admin-btn {}", variant.class());
+	let text = text.to_string();
 
 	if disabled {
-		let text = text.to_string();
 		return page!(|| {
 			button {
 				class: classes,
@@ -75,30 +75,16 @@ pub fn button(text: &str, variant: ButtonVariant, disabled: bool, _on_click: Sig
 		})();
 	}
 
-	// Workaround: page! @event codegen wraps user closures in a typed wrapper closure,
-	// which prevents proper variable capture — `move` makes it FnOnce (wrapper can't
-	// re-invoke inner closure), and without `move` borrows aren't 'static.
-	// Use PageElement with #[cfg] until the macro supports direct capture propagation.
-	// See: https://github.com/kent8192/reinhardt-web/issues/3322
-	#[cfg(target_arch = "wasm32")]
-	let view = PageElement::new("button")
-		.attr("class", classes)
-		.attr("type", "button")
-		.on(
-			reinhardt_pages::dom::EventType::Click,
-			std::sync::Arc::new(move |_: web_sys::Event| {
-				_on_click.set(true);
-			}),
-		)
-		.child(text.to_string());
-
-	#[cfg(not(target_arch = "wasm32"))]
-	let view = PageElement::new("button")
-		.attr("class", classes)
-		.attr("type", "button")
-		.child(text.to_string());
-
-	view.into_page()
+	page!(|_on_click: Signal<bool>| {
+		button {
+			class: classes,
+			type: "button",
+			@click: move |_| {
+						_on_click.set(true);
+					},
+			{ text }
+		}
+	})(on_click)
 }
 
 /// Loading spinner component
@@ -248,8 +234,8 @@ fn create_page_item<F>(
 	text: &str,
 	disabled: bool,
 	active: bool,
-	_signal: Signal<u64>,
-	_handler: F,
+	signal: Signal<u64>,
+	handler: F,
 ) -> Page
 where
 	F: Fn(Signal<u64>) + 'static,
@@ -274,32 +260,17 @@ where
 			}
 		})()
 	} else {
-		// Workaround: page! @event codegen wraps user closures in a typed wrapper closure,
-		// which prevents proper variable capture — `move` makes it FnOnce (wrapper can't
-		// re-invoke inner closure), and without `move` borrows aren't 'static.
-		// Use PageElement with #[cfg] until the macro supports direct capture propagation.
-		// See: https://github.com/kent8192/reinhardt-web/issues/3322
-		use reinhardt_pages::component::{IntoPage, PageElement};
-
-		#[cfg(target_arch = "wasm32")]
-		let link = PageElement::new("a")
-			.attr("class", "admin-page-link")
-			.attr("href", "#")
-			.child(text)
-			.on(
-				reinhardt_pages::dom::EventType::Click,
-				std::sync::Arc::new(move |_: web_sys::Event| {
-					_handler(_signal.clone());
-				}),
-			);
-
-		#[cfg(not(target_arch = "wasm32"))]
-		let link = PageElement::new("a")
-			.attr("class", "admin-page-link")
-			.attr("href", "#")
-			.child(text);
-
-		link.into_page()
+		let handler: Arc<dyn Fn(Signal<u64>)> = Arc::new(handler);
+		page!(|_signal: Signal<u64>, _handler: Arc<dyn Fn(Signal<u64>)>| {
+			a {
+				class: "admin-page-link",
+				href: "#",
+				@click: move |_| {
+							_handler(_signal.clone());
+						},
+				{ text }
+			}
+		})(signal, handler)
 	}
 }
 

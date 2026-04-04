@@ -916,7 +916,11 @@ async fn test_create_returns_one_for_string_pk() {
 	let result = db.create::<User>("users", None, data).await;
 
 	// Assert: String PKs (UUIDs) return Ok(1) as affected count
-	assert!(result.is_ok(), "Expected Ok(1) for string PK, got: {:?}", result.err());
+	assert!(
+		result.is_ok(),
+		"Expected Ok(1) for string PK, got: {:?}",
+		result.err()
+	);
 	assert_eq!(result.unwrap(), 1);
 }
 

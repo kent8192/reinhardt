@@ -49,10 +49,9 @@ fn json_to_sea_value(value: serde_json::Value) -> Value {
 				Value::String(Some(Box::new(s)))
 			// UUID (8-4-4-4-12 hex pattern)
 			} else if s.len() == 36
-				&& s.chars()
-					.enumerate()
-					.all(|(i, c)| matches!(i, 8 | 13 | 18 | 23) && c == '-' || c.is_ascii_hexdigit())
-			{
+				&& s.chars().enumerate().all(|(i, c)| {
+					matches!(i, 8 | 13 | 18 | 23) && c == '-' || c.is_ascii_hexdigit()
+				}) {
 				if let Ok(uuid) = uuid::Uuid::parse_str(&s) {
 					return Value::Uuid(Some(Box::new(uuid)));
 				}

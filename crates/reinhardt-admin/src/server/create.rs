@@ -184,9 +184,7 @@ pub(crate) fn inject_auto_now_timestamps(
 				reinhardt_db::migrations::FieldType::Time => {
 					serde_json::Value::String(now.format("%H:%M:%S").to_string())
 				}
-				_ => {
-					serde_json::Value::String(now.format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string())
-				}
+				_ => serde_json::Value::String(now.format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string()),
 			};
 			data.insert(field_name.clone(), value);
 		}

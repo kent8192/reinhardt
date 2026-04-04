@@ -1,6 +1,10 @@
 //! Admin Login Server Function
 //!
 //! Provides JWT-based authentication for the admin WASM SPA.
+//!
+//! On successful login, the JWT token is set as an HTTP-Only cookie
+//! (`reinhardt_admin_token`) instead of being returned in the response body.
+//! This prevents XSS attacks from stealing the token.
 
 use crate::adapters::LoginResponse;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
@@ -8,7 +12,7 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 #[cfg(not(target_arch = "wasm32"))]
 use super::admin_auth::AdminLoginAuthenticator;
 #[cfg(not(target_arch = "wasm32"))]
-use super::security::require_csrf_token;
+use super::security::{build_admin_auth_cookie, require_csrf_token};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::adapters::AdminSite;
 #[cfg(not(target_arch = "wasm32"))]
@@ -16,15 +20,18 @@ use reinhardt_auth::JwtAuth;
 #[cfg(not(target_arch = "wasm32"))]
 use reinhardt_db::orm::DatabaseConnection;
 #[cfg(not(target_arch = "wasm32"))]
+use reinhardt_http::ResponseCookies;
+#[cfg(not(target_arch = "wasm32"))]
 use reinhardt_pages::server_fn::ServerFnRequest;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 
-/// Authenticate an admin user and return a JWT token.
+/// Authenticate an admin user and set a JWT cookie.
 ///
 /// This server function validates the provided credentials against the
-/// database and, on success, returns a JWT token that the WASM SPA stores
-/// in sessionStorage for subsequent authenticated requests.
+/// database and, on success, sets the JWT token as an HTTP-Only cookie.
+/// The browser automatically attaches this cookie to subsequent requests,
+/// eliminating the need for sessionStorage token management.
 ///
 /// # Authentication Flow
 ///
@@ -32,7 +39,8 @@ use std::sync::Arc;
 /// 2. Look up user by username in the database
 /// 3. Verify password using Argon2id
 /// 4. Check that the user is active and has staff privileges
-/// 5. Generate and return a JWT token
+/// 5. Generate JWT token and set as HTTP-Only cookie
+/// 6. Return user info (without the token) in the response body
 ///
 /// # Security
 ///
@@ -40,6 +48,8 @@ use std::sync::Arc;
 /// - Password verification uses constant-time Argon2id comparison
 /// - Generic error messages prevent username enumeration
 /// - Only active staff users can obtain tokens
+/// - JWT stored in HTTP-Only cookie (not accessible via JavaScript)
+/// - `SameSite=Strict` prevents cross-origin cookie sending
 ///
 /// # Example
 ///
@@ -52,7 +62,7 @@ use std::sync::Arc;
 ///     "password123".to_string(),
 ///     csrf_token.to_string(),
 /// ).await?;
-/// // Store response.token in sessionStorage
+/// // No need to store token — browser handles it via cookie
 /// ```
 #[server_fn]
 pub async fn admin_login(
@@ -100,8 +110,23 @@ pub async fn admin_login(
 			ServerFnError::server(500, "Token generation failed")
 		})?;
 
+	// Set JWT as HTTP-Only cookie via ResponseCookies extension.
+	// The server_fn router (router_ext.rs) extracts ResponseCookies from
+	// request extensions and applies them as Set-Cookie response headers.
+	let is_secure = http_request.inner().is_secure;
+	let cookie = build_admin_auth_cookie(&token, is_secure);
+	let mut response_cookies = http_request
+		.inner()
+		.extensions
+		.remove::<ResponseCookies>()
+		.unwrap_or_default();
+	response_cookies.add(cookie);
+	http_request.inner().extensions.insert(response_cookies);
+
+	// Return user info without the token — the browser receives the token
+	// via the Set-Cookie header, not the response body.
 	Ok(LoginResponse {
-		token,
+		token: String::new(),
 		username: user_info.username,
 		user_id: user_info.user_id,
 		is_staff: user_info.is_staff,

@@ -122,8 +122,6 @@ fn build_login_form() -> Page {
 /// the authentication flow (token storage, auth state update, redirect).
 #[cfg(target_arch = "wasm32")]
 pub fn login_view() -> Page {
-	use crate::server::login::admin_login;
-	use reinhardt_pages::auth::{auth_state, set_jwt_token};
 	use reinhardt_pages::csrf::get_csrf_token;
 	use wasm_bindgen::JsCast;
 	use wasm_bindgen::prelude::*;
@@ -161,7 +159,7 @@ pub fn login_view() -> Page {
 #[cfg(target_arch = "wasm32")]
 pub fn setup_login_handler() {
 	use crate::server::login::admin_login;
-	use reinhardt_pages::auth::{auth_state, set_jwt_token};
+	use reinhardt_pages::auth::auth_state;
 	use reinhardt_pages::csrf::get_csrf_token;
 	use wasm_bindgen::JsCast;
 	use wasm_bindgen::prelude::*;
@@ -222,8 +220,8 @@ pub fn setup_login_handler() {
 		spawn_local(async move {
 			match admin_login(username, password, csrf_token).await {
 				Ok(response) => {
-					// Store JWT token
-					set_jwt_token(&response.token);
+					// JWT token is now set as HTTP-Only cookie by the server.
+					// No need to store in sessionStorage — browser handles it.
 
 					// Update reactive auth state
 					let auth = auth_state();

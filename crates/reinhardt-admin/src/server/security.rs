@@ -491,6 +491,93 @@ fn escape_html(input: &str) -> String {
 		.replace('\'', "&#x27;")
 }
 
+// --- Admin authentication cookie ---
+
+/// The cookie name used for admin JWT authentication.
+///
+/// This cookie stores the JWT token as an HTTP-Only, `SameSite=Strict` cookie,
+/// preventing JavaScript access (XSS protection) and cross-origin sending
+/// (CSRF protection).
+pub const ADMIN_AUTH_COOKIE_NAME: &str = "reinhardt_admin_token";
+
+/// Builds a `Set-Cookie` header value for the admin authentication JWT.
+///
+/// Cookie attributes:
+/// - `HttpOnly`: not accessible via JavaScript (XSS protection)
+/// - `SameSite=Strict`: never sent on cross-origin requests (CSRF protection)
+/// - `Secure`: HTTPS-only (skipped for localhost development)
+/// - `Path=/admin`: scoped to admin panel routes only
+/// - `Max-Age=86400`: 24-hour expiry (aligned with JWT expiry)
+///
+/// # Arguments
+///
+/// * `token` - The JWT token string
+/// * `is_secure` - Whether to add the `Secure` flag (false for localhost)
+///
+/// # Examples
+///
+/// ```
+/// use reinhardt_admin::server::security::build_admin_auth_cookie;
+///
+/// let cookie = build_admin_auth_cookie("eyJhbGciOiJIUzI1NiJ9.test", true);
+/// assert!(cookie.contains("HttpOnly"));
+/// assert!(cookie.contains("SameSite=Strict"));
+/// assert!(cookie.contains("Secure"));
+/// assert!(cookie.contains("Path=/admin"));
+/// ```
+pub fn build_admin_auth_cookie(token: &str, is_secure: bool) -> String {
+	let secure_flag = if is_secure { "; Secure" } else { "" };
+	format!(
+		"{}={}; HttpOnly; SameSite=Strict; Path=/admin; Max-Age=86400{}",
+		ADMIN_AUTH_COOKIE_NAME, token, secure_flag
+	)
+}
+
+/// Builds a `Set-Cookie` header value that clears the admin authentication cookie.
+///
+/// Sets `Max-Age=0` to instruct the browser to delete the cookie immediately.
+///
+/// # Examples
+///
+/// ```
+/// use reinhardt_admin::server::security::build_admin_auth_cookie_clear;
+///
+/// let cookie = build_admin_auth_cookie_clear();
+/// assert!(cookie.contains("Max-Age=0"));
+/// ```
+pub fn build_admin_auth_cookie_clear() -> String {
+	format!(
+		"{}=; HttpOnly; SameSite=Strict; Path=/admin; Max-Age=0",
+		ADMIN_AUTH_COOKIE_NAME
+	)
+}
+
+/// Extracts the admin JWT token from the `Cookie` header.
+///
+/// Parses the `Cookie` header and returns the value of the
+/// `reinhardt_admin_token` cookie if present.
+///
+/// # Arguments
+///
+/// * `headers` - The HTTP request headers
+#[cfg(not(target_arch = "wasm32"))]
+pub fn extract_admin_auth_cookie(headers: &hyper::HeaderMap) -> Option<String> {
+	headers
+		.get("cookie")
+		.and_then(|v| v.to_str().ok())
+		.and_then(|cookie_header| {
+			cookie_header.split(';').find_map(|pair| {
+				let pair = pair.trim();
+				let (name, value) = pair.split_once('=')?;
+				if name.trim() == ADMIN_AUTH_COOKIE_NAME {
+					Some(value.trim().to_string())
+				} else {
+					None
+				}
+			})
+		})
+}
+
 #[cfg(test)]
 mod tests {
 	use std::str::FromStr;

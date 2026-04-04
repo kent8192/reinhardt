@@ -135,24 +135,29 @@ fn admin_spa_html(site_title: &str) -> String {
 	} else {
 		format!(r#"<script type="module" src="{js_url}"></script>"#)
 	};
+	let head = reinhardt_pages::head!(|| {
+		meta { charset: "utf-8" }
+		meta { name: "viewport", content: "width=device-width, initial-scale=1.0" }
+		meta { name: "server-fn-prefix", content: "/admin" }
+		title { site_title.to_string() }
+		link { rel: "stylesheet", href: vendor_open_props }
+		link { rel: "stylesheet", href: vendor_animate }
+		link { rel: "stylesheet", href: css_url }
+		script { src: vendor_unocss_runtime }
+	});
+
 	format!(
 		r#"<!DOCTYPE html>
 <html lang="en">
 <head>
-	<meta charset="utf-8" />
-	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-	<meta name="server-fn-prefix" content="/admin" />
-	<title>{site_title}</title>
-	<link rel="stylesheet" href="{vendor_open_props}" />
-	<link rel="stylesheet" href="{vendor_animate}" />
-	<link rel="stylesheet" href="{css_url}" />
-	<script src="{vendor_unocss_runtime}"></script>
+{head_html}
 </head>
 <body class="bg-slate-50 text-slate-900 antialiased">
 	<div id="app"></div>
 	{script_tag}
 </body>
-</html>"#
+</html>"#,
+		head_html = head.to_html()
 	)
 }
 
@@ -845,7 +850,7 @@ mod tests {
 			"HTML should be valid HTML5"
 		);
 		assert!(
-			html.contains(r#"<meta name="server-fn-prefix" content="/admin" />"#),
+			html.contains(r#"name="server-fn-prefix""#) && html.contains(r#"content="/admin""#),
 			"HTML should contain server-fn-prefix meta tag for WASM endpoint resolution"
 		);
 	}

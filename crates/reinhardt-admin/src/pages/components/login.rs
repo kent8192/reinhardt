@@ -2,7 +2,7 @@
 //!
 //! Provides a login form that authenticates admin users via JWT.
 
-use reinhardt_pages::component::{IntoPage, Page, PageElement};
+use reinhardt_pages::component::Page;
 use reinhardt_pages::page;
 
 #[cfg(target_arch = "wasm32")]
@@ -23,51 +23,40 @@ use reinhardt_pages::Signal;
 /// ```
 pub fn login_form(error_message: Option<&str>) -> Page {
 	let error_html = error_message.map(|msg| {
-		PageElement::new("div")
-			.attr(
-				"class",
-				"admin-alert admin-alert-danger mt-4 text-center text-sm",
-			)
-			.attr("role", "alert")
-			.child(msg.to_string())
-			.into_page()
+		let msg = msg.to_string();
+		page!(|| {
+			div {
+				class: "admin-alert admin-alert-danger mt-4 text-center text-sm",
+				role: "alert",
+				{ msg }
+			}
+		})()
 	});
 
 	let form_page = build_login_form();
+	let error_page = error_html.unwrap_or_else(|| page!(|| { span {} })());
 
-	let mut container = PageElement::new("div")
-		.attr(
-			"class",
-			"flex justify-center items-center min-h-screen bg-slate-50 animate__animated animate__fadeIn",
-		)
-		.child(
-			PageElement::new("div")
-				.attr("class", "admin-login-card")
-				.child(
-					PageElement::new("div")
-						.attr("class", "p-8")
-						.child(
-							PageElement::new("h2")
-								.attr(
-									"class",
-									"font-display text-2xl font-bold text-center mb-1 text-slate-900",
-								)
-								.child("Admin Login"),
-						)
-						.child(
-							PageElement::new("p")
-								.attr("class", "text-sm text-slate-500 text-center mb-6")
-								.child("Sign in to manage your application"),
-						)
-						.child(form_page),
-				),
-		);
-
-	if let Some(err) = error_html {
-		container = container.child(err);
-	}
-
-	container.into_page()
+	page!(|| {
+		div {
+			class: "flex justify-center items-center min-h-screen bg-slate-50 animate__animated animate__fadeIn",
+			div {
+				class: "admin-login-card",
+				div {
+					class: "p-8",
+					h2 {
+						class: "font-display text-2xl font-bold text-center mb-1 text-slate-900",
+						"Admin Login"
+					}
+					p {
+						class: "text-sm text-slate-500 text-center mb-6",
+						"Sign in to manage your application"
+					}
+					{ form_page }
+				}
+			}
+			{ error_page }
+		}
+	})()
 }
 
 /// Builds the login form HTML structure.
@@ -79,12 +68,12 @@ fn build_login_form() -> Page {
 			div {
 				class: "mb-4",
 				label {
-					r#for: "username",
+					for: "username",
 					class: "admin-label",
 					"Username"
 				}
 				input {
-					r#type: "text",
+					type: "text",
 					class: "admin-input",
 					id: "username",
 					name: "username",
@@ -97,12 +86,12 @@ fn build_login_form() -> Page {
 			div {
 				class: "mb-5",
 				label {
-					r#for: "password",
+					for: "password",
 					class: "admin-label",
 					"Password"
 				}
 				input {
-					r#type: "password",
+					type: "password",
 					class: "admin-input",
 					id: "password",
 					name: "password",
@@ -117,7 +106,7 @@ fn build_login_form() -> Page {
 				role: "alert",
 			}
 			button {
-				r#type: "submit",
+				type: "submit",
 				class: "admin-btn admin-btn-primary w-full py-2.5 text-base",
 				id: "login-submit-btn",
 				"Sign in"
@@ -135,24 +124,27 @@ fn build_login_form() -> Page {
 pub fn login_view() -> Page {
 	use crate::server::login::admin_login;
 	use reinhardt_pages::auth::{auth_state, set_jwt_token};
-	use reinhardt_pages::component::PageElement;
 	use reinhardt_pages::csrf::get_csrf_token;
 	use wasm_bindgen::JsCast;
 	use wasm_bindgen::prelude::*;
 
 	let error_signal = Signal::new(Option::<String>::None);
 
-	PageElement::new("div")
-		.attr("class", "login-wrapper")
-		.child(Page::reactive({
-			let error_signal = error_signal.clone();
-			move || {
-				let error = error_signal.get();
-				login_form(error.as_deref())
-			}
-		}))
-		.attr("data-login-view", "true")
-		.into_page()
+	let reactive_form = Page::reactive({
+		let error_signal = error_signal.clone();
+		move || {
+			let error = error_signal.get();
+			login_form(error.as_deref())
+		}
+	});
+
+	page!(|| {
+		div {
+			class: "login-wrapper",
+			data_login_view: "true",
+			{ reactive_form }
+		}
+	})()
 }
 
 /// Login view component for non-WASM targets (static form rendering).

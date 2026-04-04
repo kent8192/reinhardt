@@ -472,8 +472,8 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 ///
 ///     let url = "/api/server_fn/get_user";
 ///     let args = Args { id };
-///     let response = gloo_net::http::Request::post(url)
-///         .json(&args)?
+///     let response = reqwest::Client::new().post(url)
+///         .json(&args)
 ///         .send()
 ///         .await?;
 ///     response.json().await
@@ -638,7 +638,8 @@ fn generate_client_stub(
 			#serialize_code
 
 			// Build HTTP POST request with headers
-			let mut __request_builder = ::gloo_net::http::Request::post(&__endpoint)
+			let __client = ::reqwest::Client::new();
+			let mut __request_builder = __client.post(&__endpoint)
 				.header("Content-Type", #content_type);
 
 			#csrf_injection_code
@@ -647,14 +648,13 @@ fn generate_client_stub(
 			// Send request
 			let __response = __request_builder
 				.body(__body)
-				.map_err(|e| #pages_crate::server_fn::ServerFnError::network(e.to_string()))?
 				.send()
 				.await
 				.map_err(|e| #pages_crate::server_fn::ServerFnError::network(e.to_string()))?;
 
 			// Check HTTP status
-			if !__response.ok() {
-				let __status = __response.status();
+			if !__response.status().is_success() {
+				let __status = __response.status().as_u16();
 				let __message = __response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
 				return Err(#pages_crate::server_fn::ServerFnError::server(__status, __message));
 			}

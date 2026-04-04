@@ -999,7 +999,6 @@ impl FormComponent {
 	/// ```
 	#[cfg(target_arch = "wasm32")]
 	pub async fn submit(&self) -> Result<(), String> {
-		use gloo_net::http::Request;
 		use serde_json::json;
 
 		// Collect form data
@@ -1016,18 +1015,21 @@ impl FormComponent {
 		}
 
 		// Send POST request
-		let response = Request::post(&self.action)
+		let response = reqwest::Client::new()
+			.post(&self.action)
 			.header("Content-Type", "application/json")
 			.json(&data)
-			.map_err(|e| format!("Failed to create request: {:?}", e))?
 			.send()
 			.await
 			.map_err(|e| format!("Failed to send request: {:?}", e))?;
 
-		if response.ok() {
+		if response.status().is_success() {
 			Ok(())
 		} else {
-			Err(format!("Submit failed with status: {}", response.status()))
+			Err(format!(
+				"Submit failed with status: {}",
+				response.status().as_u16()
+			))
 		}
 	}
 

@@ -310,13 +310,14 @@ impl AuthState {
 	#[cfg(target_arch = "wasm32")]
 	pub async fn fetch_permissions(&self, endpoint: Option<&str>) -> Result<(), AuthError> {
 		use crate::csrf::csrf_headers;
-		use gloo_net::http::Request;
+		use reqwest::Client;
 
 		let endpoint = endpoint.unwrap_or("/api/auth/permissions");
-		let mut request = Request::get(endpoint);
+		let client = Client::new();
+		let mut request = client.get(endpoint);
 
 		if let Some((header_name, header_value)) = csrf_headers() {
-			request = request.header(header_name, &header_value);
+			request = request.header(header_name, header_value);
 		}
 
 		let response = request
@@ -324,10 +325,14 @@ impl AuthState {
 			.await
 			.map_err(|e| AuthError::Network(e.to_string()))?;
 
-		if !response.ok() {
+		if !response.status().is_success() {
 			return Err(AuthError::Server {
-				status: response.status(),
-				message: response.status_text(),
+				status: response.status().as_u16(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 
@@ -386,13 +391,14 @@ impl AuthState {
 	#[cfg(target_arch = "wasm32")]
 	pub async fn fetch_from_server(&self, endpoint: &str) -> Result<(), AuthError> {
 		use crate::csrf::csrf_headers;
-		use gloo_net::http::Request;
+		use reqwest::Client;
 
-		let mut request = Request::get(endpoint);
+		let client = Client::new();
+		let mut request = client.get(endpoint);
 
 		// Add CSRF header if available
 		if let Some((header_name, header_value)) = csrf_headers() {
-			request = request.header(header_name, &header_value);
+			request = request.header(header_name, header_value);
 		}
 
 		let response = request
@@ -400,10 +406,14 @@ impl AuthState {
 			.await
 			.map_err(|e| AuthError::Network(e.to_string()))?;
 
-		if !response.ok() {
+		if !response.status().is_success() {
 			return Err(AuthError::Server {
-				status: response.status(),
-				message: response.status_text(),
+				status: response.status().as_u16(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 

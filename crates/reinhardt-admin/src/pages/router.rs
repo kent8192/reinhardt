@@ -165,30 +165,32 @@ where
 /// Dashboard view component for router
 #[cfg(target_arch = "wasm32")]
 fn dashboard_view() -> Page {
-	use reinhardt_pages::component::{IntoPage, PageElement};
-
 	let dashboard_resource =
 		create_resource(|| async { get_dashboard().await.map_err(|e| e.to_string()) });
 
-	PageElement::new("div")
-		.attr("class", "dashboard-container")
-		.child(Page::reactive({
-			let resource = dashboard_resource.clone();
-			move || match resource.get() {
-				ResourceState::Loading => loading_view(),
-				ResourceState::Success(data) => {
-					// Store login/logout URLs from server settings
-					ADMIN_URLS.with(|urls| {
-						let mut urls = urls.borrow_mut();
-						urls.login_url = format!("{}/", data.login_url.trim_end_matches('/'));
-						urls.logout_url = format!("{}/", data.logout_url.trim_end_matches('/'));
-					});
-					dashboard(&data.site_header, &data.models)
-				}
-				ResourceState::Error(err) => error_view(&err),
+	let reactive_content = Page::reactive({
+		let resource = dashboard_resource.clone();
+		move || match resource.get() {
+			ResourceState::Loading => loading_view(),
+			ResourceState::Success(data) => {
+				// Store login/logout URLs from server settings
+				ADMIN_URLS.with(|urls| {
+					let mut urls = urls.borrow_mut();
+					urls.login_url = format!("{}/", data.login_url.trim_end_matches('/'));
+					urls.logout_url = format!("{}/", data.logout_url.trim_end_matches('/'));
+				});
+				dashboard(&data.site_header, &data.models)
 			}
-		}))
-		.into_page()
+			ResourceState::Error(err) => error_view(&err),
+		}
+	});
+
+	page!(|| {
+		div {
+			class: "dashboard-container",
+			{ reactive_content }
+		}
+	})()
 }
 
 /// Dashboard view component for router (non-WASM fallback)
@@ -212,7 +214,6 @@ fn dashboard_view() -> Page {
 /// List view component for router
 #[cfg(target_arch = "wasm32")]
 fn list_view_component(model_name: String) -> Page {
-	use reinhardt_pages::component::{IntoPage, PageElement};
 	use reinhardt_pages::use_effect;
 
 	let list_resource = create_resource(move || {
@@ -244,57 +245,60 @@ fn list_view_component(model_name: String) -> Page {
 		});
 	}
 
-	PageElement::new("div")
-		.attr("class", "list-container")
-		.child(Page::reactive({
-			let resource = list_resource.clone();
-			let page_signal = page_signal.clone();
-			let filters_signal = filters_signal.clone();
-			move || match resource.get() {
-				ResourceState::Loading => loading_view(),
-				ResourceState::Success(response) => {
-					// Convert ListResponse to ListViewData
-					let data = ListViewData {
-						model_name: response.model_name.clone(),
-						columns: response
-							.columns
-							.map(|cols| {
-								cols.into_iter()
-									.map(|c| Column {
-										field: c.field,
-										label: c.label,
-										sortable: c.sortable,
-									})
-									.collect()
-							})
-							.unwrap_or_else(|| {
-								vec![Column {
-									field: "id".to_string(),
-									label: "ID".to_string(),
-									sortable: true,
-								}]
-							}),
-						records: response
-							.results
-							.into_iter()
-							.map(|record| {
-								record
-									.into_iter()
-									.map(|(k, v)| (k, v.as_str().unwrap_or("").to_string()))
-									.collect()
-							})
-							.collect(),
-						current_page: response.page,
-						total_pages: response.total_pages,
-						total_count: response.count,
-						filters: response.available_filters.unwrap_or_default(),
-					};
-					list_view(&data, page_signal.clone(), filters_signal.clone())
-				}
-				ResourceState::Error(err) => error_view(&err),
+	let reactive_content = Page::reactive({
+		let resource = list_resource.clone();
+		let page_signal = page_signal.clone();
+		let filters_signal = filters_signal.clone();
+		move || match resource.get() {
+			ResourceState::Loading => loading_view(),
+			ResourceState::Success(response) => {
+				let data = ListViewData {
+					model_name: response.model_name.clone(),
+					columns: response
+						.columns
+						.map(|cols| {
+							cols.into_iter()
+								.map(|c| Column {
+									field: c.field,
+									label: c.label,
+									sortable: c.sortable,
+								})
+								.collect()
+						})
+						.unwrap_or_else(|| {
+							vec![Column {
+								field: "id".to_string(),
+								label: "ID".to_string(),
+								sortable: true,
+							}]
+						}),
+					records: response
+						.results
+						.into_iter()
+						.map(|record| {
+							record
+								.into_iter()
+								.map(|(k, v)| (k, v.as_str().unwrap_or("").to_string()))
+								.collect()
+						})
+						.collect(),
+					current_page: response.page,
+					total_pages: response.total_pages,
+					total_count: response.count,
+					filters: response.available_filters.unwrap_or_default(),
+				};
+				list_view(&data, page_signal.clone(), filters_signal.clone())
 			}
-		}))
-		.into_page()
+			ResourceState::Error(err) => error_view(&err),
+		}
+	});
+
+	page!(|| {
+		div {
+			class: "list-container",
+			{ reactive_content }
+		}
+	})()
 }
 
 /// List view component for router (non-WASM fallback)
@@ -332,8 +336,6 @@ fn list_view_component(model_name: String) -> Page {
 /// Detail view component for router
 #[cfg(target_arch = "wasm32")]
 fn detail_view_component(model_name: String, record_id: String) -> Page {
-	use reinhardt_pages::component::{IntoPage, PageElement};
-
 	let model_name_for_view = model_name.clone();
 	let record_id_for_view = record_id.clone();
 	let detail_resource = create_resource(move || {
@@ -346,26 +348,30 @@ fn detail_view_component(model_name: String, record_id: String) -> Page {
 		}
 	});
 
-	PageElement::new("div")
-		.attr("class", "detail-container")
-		.child(Page::reactive({
-			let resource = detail_resource.clone();
-			let model_name = model_name_for_view;
-			let record_id = record_id_for_view;
-			move || match resource.get() {
-				ResourceState::Loading => loading_view(),
-				ResourceState::Success(response) => {
-					let data: std::collections::HashMap<String, String> = response
-						.data
-						.iter()
-						.map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
-						.collect();
-					detail_view(&model_name, &record_id, &data)
-				}
-				ResourceState::Error(err) => error_view(&err),
+	let reactive_content = Page::reactive({
+		let resource = detail_resource.clone();
+		let model_name = model_name_for_view;
+		let record_id = record_id_for_view;
+		move || match resource.get() {
+			ResourceState::Loading => loading_view(),
+			ResourceState::Success(response) => {
+				let data: std::collections::HashMap<String, String> = response
+					.data
+					.iter()
+					.map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+					.collect();
+				detail_view(&model_name, &record_id, &data)
 			}
-		}))
-		.into_page()
+			ResourceState::Error(err) => error_view(&err),
+		}
+	});
+
+	page!(|| {
+		div {
+			class: "detail-container",
+			{ reactive_content }
+		}
+	})()
 }
 
 /// Detail view component for router (non-WASM fallback)
@@ -382,8 +388,6 @@ fn detail_view_component(model_name: String, record_id: String) -> Page {
 /// Create form view component for router
 #[cfg(target_arch = "wasm32")]
 fn create_view_component(model_name: String) -> Page {
-	use reinhardt_pages::component::{IntoPage, PageElement};
-
 	let model_name_for_view = model_name.clone();
 	let fields_resource = create_resource(move || {
 		let model_name = model_name.clone();
@@ -394,32 +398,35 @@ fn create_view_component(model_name: String) -> Page {
 		}
 	});
 
-	PageElement::new("div")
-		.attr("class", "form-container")
-		.child(Page::reactive({
-			let resource = fields_resource.clone();
-			let model_name = model_name_for_view;
-			move || match resource.get() {
-				ResourceState::Loading => loading_view(),
-				ResourceState::Success(response) => {
-					// Convert FieldInfo to FormField
-					let fields: Vec<FormField> = response
-						.fields
-						.into_iter()
-						.map(|field_info| FormField {
-							name: field_info.name,
-							label: field_info.label,
-							field_type: field_type_to_html_input_type(&field_info.field_type),
-							required: field_info.required,
-							value: String::new(),
-						})
-						.collect();
-					model_form(&model_name, &fields, None)
-				}
-				ResourceState::Error(err) => error_view(&err),
+	let reactive_content = Page::reactive({
+		let resource = fields_resource.clone();
+		let model_name = model_name_for_view;
+		move || match resource.get() {
+			ResourceState::Loading => loading_view(),
+			ResourceState::Success(response) => {
+				let fields: Vec<FormField> = response
+					.fields
+					.into_iter()
+					.map(|field_info| FormField {
+						name: field_info.name,
+						label: field_info.label,
+						field_type: field_type_to_html_input_type(&field_info.field_type),
+						required: field_info.required,
+						value: String::new(),
+					})
+					.collect();
+				model_form(&model_name, &fields, None)
 			}
-		}))
-		.into_page()
+			ResourceState::Error(err) => error_view(&err),
+		}
+	});
+
+	page!(|| {
+		div {
+			class: "form-container",
+			{ reactive_content }
+		}
+	})()
 }
 
 /// Create form view component for router (non-WASM fallback)
@@ -449,8 +456,6 @@ fn create_view_component(model_name: String) -> Page {
 /// Edit form view component for router
 #[cfg(target_arch = "wasm32")]
 fn edit_view_component(model_name: String, record_id: String) -> Page {
-	use reinhardt_pages::component::{IntoPage, PageElement};
-
 	let model_name_for_view = model_name.clone();
 	let record_id_for_view = record_id.clone();
 	let fields_resource = create_resource(move || {
@@ -463,46 +468,48 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 		}
 	});
 
-	PageElement::new("div")
-		.attr("class", "form-container")
-		.child(Page::reactive({
-			let resource = fields_resource.clone();
-			let model_name = model_name_for_view;
-			let record_id = record_id_for_view;
-			move || match resource.get() {
-				ResourceState::Loading => loading_view(),
-				ResourceState::Success(response) => {
-					// Convert FieldInfo + values to FormField
-					let fields: Vec<FormField> = response
-						.fields
-						.into_iter()
-						.map(|field_info| {
-							// Get existing value
-							let value = if let Some(ref values) = response.values {
-								values
-									.get(&field_info.name)
-									.and_then(|v| v.as_str())
-									.unwrap_or("")
-									.to_string()
-							} else {
-								String::new()
-							};
+	let reactive_content = Page::reactive({
+		let resource = fields_resource.clone();
+		let model_name = model_name_for_view;
+		let record_id = record_id_for_view;
+		move || match resource.get() {
+			ResourceState::Loading => loading_view(),
+			ResourceState::Success(response) => {
+				let fields: Vec<FormField> = response
+					.fields
+					.into_iter()
+					.map(|field_info| {
+						let value = if let Some(ref values) = response.values {
+							values
+								.get(&field_info.name)
+								.and_then(|v| v.as_str())
+								.unwrap_or("")
+								.to_string()
+						} else {
+							String::new()
+						};
 
-							FormField {
-								name: field_info.name,
-								label: field_info.label,
-								field_type: field_type_to_html_input_type(&field_info.field_type),
-								required: field_info.required,
-								value,
-							}
-						})
-						.collect();
-					model_form(&model_name, &fields, Some(&record_id))
-				}
-				ResourceState::Error(err) => error_view(&err),
+						FormField {
+							name: field_info.name,
+							label: field_info.label,
+							field_type: field_type_to_html_input_type(&field_info.field_type),
+							required: field_info.required,
+							value,
+						}
+					})
+					.collect();
+				model_form(&model_name, &fields, Some(&record_id))
 			}
-		}))
-		.into_page()
+			ResourceState::Error(err) => error_view(&err),
+		}
+	});
+
+	page!(|| {
+		div {
+			class: "form-container",
+			{ reactive_content }
+		}
+	})()
 }
 
 /// Edit form view component for router (non-WASM fallback)

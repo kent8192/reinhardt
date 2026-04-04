@@ -79,7 +79,9 @@ pub fn button(text: &str, variant: ButtonVariant, disabled: bool, on_click: Sign
 		button {
 			class: classes,
 			type: "button",
-			@click: move |_| { _on_click.set(true); },
+			@click: move |_| {
+						_on_click.set(true);
+					},
 			{ text }
 		}
 	})(on_click)
@@ -263,7 +265,9 @@ where
 			a {
 				class: "admin-page-link",
 				href: "#",
-				@click: move |_| { _handler(_signal.clone()); },
+				@click: move |_| {
+							_handler(_signal.clone());
+						},
 				{ text }
 			}
 		})(signal, handler)

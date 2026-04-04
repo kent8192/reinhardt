@@ -415,7 +415,7 @@ fn generate_event(event: &PageEvent, pages_crate: &TokenStream) -> TokenStream {
 			match first_param {
 				syn::Pat::Type(pat_type) => {
 					// Already has type annotation — replace with web_sys::Event
-					pat_type.ty = Box::new(syn::parse_quote!(::web_sys::Event));
+					*pat_type.ty = syn::parse_quote!(::web_sys::Event);
 				}
 				other => {
 					// No type annotation — wrap in PatType

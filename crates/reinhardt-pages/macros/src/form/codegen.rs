@@ -899,7 +899,7 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 
 								// Get field values from cloned signals - allow non_snake_case for generated variable names
 								#(
-									#[allow(non_snake_case)]
+									#[allow(non_snake_case, unused_variables)]
 									let #field_names = #field_value_getters;
 								)*
 
@@ -934,7 +934,7 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 								#loading_start
 
 								#(
-									#[allow(non_snake_case)]
+									#[allow(non_snake_case, unused_variables)]
 									let #field_names = #field_value_getters;
 								)*
 

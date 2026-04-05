@@ -9,8 +9,8 @@ use reinhardt_pages::page;
 /// Login form component
 ///
 /// Renders a login form with username and password fields.
-/// On successful authentication, stores the JWT token in sessionStorage
-/// and updates the reactive auth state.
+/// On successful authentication, the server sets a JWT HTTP-Only cookie
+/// and the client updates the reactive auth state.
 ///
 /// # Example
 ///
@@ -63,9 +63,9 @@ pub fn login_form(error_message: Option<&str>) -> Page {
 /// form element. The `server_fn: admin_login` directive auto-generates the
 /// submit handler, replacing the manual `setup_login_handler()`.
 ///
-/// The `on_success` callback handles JWT storage, auth state update, and
-/// navigation to the dashboard. The `on_error` callback displays error
-/// messages in the `login-error` div.
+/// The `on_success` callback updates the auth state and navigates to the
+/// dashboard. JWT token storage is handled server-side via HTTP-Only cookie,
+/// so no client-side token storage is needed.
 fn build_login_form() -> Page {
 	#[allow(unused_imports)]
 	use crate::server::login::admin_login;
@@ -101,9 +101,10 @@ fn build_login_form() -> Page {
 		on_success: |response| {
 			#[cfg(client)]
 			{
-				use reinhardt_pages::auth::{auth_state, set_jwt_token};
+				use reinhardt_pages::auth::auth_state;
 
-				set_jwt_token(&response.token);
+				// JWT token is set as HTTP-Only cookie by the server.
+				// No need to store in sessionStorage — browser handles it.
 
 				let auth = auth_state();
 				auth.login_full(

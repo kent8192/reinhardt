@@ -314,8 +314,28 @@ pub fn admin_csp_exempt_paths() -> Vec<String> {
 }
 
 /// Internal route builder shared by `admin_routes_with_di` and the deprecated `admin_routes`.
-fn build_admin_router() -> ServerRouter {
+///
+/// When `jwt_secret` is provided, adds `AdminCookieAuthMiddleware` to extract
+/// JWT tokens from HTTP-Only cookies (and `Authorization` header as fallback).
+fn build_admin_router(
+	#[cfg(not(target_arch = "wasm32"))] jwt_secret: Option<&[u8]>,
+) -> ServerRouter {
 	let router = ServerRouter::new().with_namespace("admin");
+
+	// Apply origin guard middleware on server-side targets.
+	// This restricts admin server function access to same-origin requests.
+	#[cfg(not(target_arch = "wasm32"))]
+	let router = router.with_middleware(crate::server::origin_guard::AdminOriginGuardMiddleware);
+
+	// Apply cookie-based JWT authentication middleware when a secret is configured.
+	#[cfg(not(target_arch = "wasm32"))]
+	let router = if let Some(secret) = jwt_secret {
+		router.with_middleware(crate::server::cookie_auth::AdminCookieAuthMiddleware::new(
+			secret,
+		))
+	} else {
+		router
+	};
 
 	// Register all admin server functions on server-side targets.
 	// #[server_fn] generates marker structs but does not auto-register routes;
@@ -324,7 +344,8 @@ fn build_admin_router() -> ServerRouter {
 	let router = {
 		use crate::server::{
 			bulk_delete_records, create_record, delete_record, export_data, get_dashboard,
-			get_detail, get_fields, get_list, import_data, login::admin_login, update_record,
+			get_detail, get_fields, get_list, import_data, login::admin_login,
+			logout::admin_logout, update_record,
 		};
 		router
 			.server_fn(get_dashboard::marker)
@@ -338,6 +359,7 @@ fn build_admin_router() -> ServerRouter {
 			.server_fn(export_data::marker)
 			.server_fn(import_data::marker)
 			.server_fn(admin_login::marker)
+			.server_fn(admin_logout::marker)
 			.function("/", hyper::Method::GET, admin_spa_handler)
 			.function("/{*tail}", hyper::Method::GET, admin_spa_handler)
 	};
@@ -361,7 +383,10 @@ fn build_admin_router() -> ServerRouter {
 	        at runtime. Use admin_routes_with_di(site, &singleton_scope) instead."
 )]
 pub fn admin_routes() -> ServerRouter {
-	build_admin_router()
+	build_admin_router(
+		#[cfg(not(target_arch = "wasm32"))]
+		None,
+	)
 }
 
 /// Admin router builder with automatic DI registration (deprecated)
@@ -477,8 +502,15 @@ pub fn admin_routes_with_di_deferred(
 	});
 	registrations.register_arc(login_auth);
 
+	let jwt_secret = site.jwt_secret().map(|s| s.to_vec());
 	registrations.register_arc(site);
-	(build_admin_router(), registrations)
+	(
+		build_admin_router(
+			#[cfg(not(target_arch = "wasm32"))]
+			jwt_secret.as_deref(),
+		),
+		registrations,
+	)
 }
 
 /// Admin router builder (for backward compatibility)
@@ -637,7 +669,10 @@ mod tests {
 
 	/// Helper to create test admin router
 	fn test_admin_routes() -> ServerRouter {
-		build_admin_router()
+		build_admin_router(
+			#[cfg(not(target_arch = "wasm32"))]
+			Some(b"test-jwt-secret"),
+		)
 	}
 
 	#[rstest]
@@ -717,6 +752,7 @@ mod tests {
 			"/api/server_fn/export_data",
 			"/api/server_fn/import_data",
 			"/api/server_fn/admin_login",
+			"/api/server_fn/admin_logout",
 			"/",
 			"/{*tail}",
 		];
@@ -726,8 +762,8 @@ mod tests {
 		let routes = router.get_all_routes();
 		let paths: Vec<&str> = routes.iter().map(|(path, _, _, _)| path.as_str()).collect();
 
-		// Assert - 11 server functions + 2 GET routes should be registered
-		assert_eq!(routes.len(), 13);
+		// Assert - 12 server functions + 2 GET routes should be registered
+		assert_eq!(routes.len(), 14);
 		for expected in &expected_paths {
 			assert_eq!(
 				paths.iter().filter(|p| p == &expected).count(),

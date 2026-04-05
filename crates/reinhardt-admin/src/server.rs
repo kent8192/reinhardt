@@ -59,6 +59,8 @@ pub mod limits;
 pub mod list;
 #[allow(missing_docs)]
 pub mod login;
+#[allow(missing_docs)]
+pub mod logout;
 mod serde_helpers;
 #[allow(missing_docs)]
 pub mod update;
@@ -66,6 +68,12 @@ pub mod update;
 pub(crate) mod user;
 
 pub mod audit;
+/// Cookie-based JWT authentication middleware for admin panel.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod cookie_auth;
+/// Origin guard middleware restricting admin server functions to SPA-only access.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod origin_guard;
 pub mod security;
 
 // Server-side only modules

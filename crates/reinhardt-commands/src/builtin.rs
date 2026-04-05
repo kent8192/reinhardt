@@ -549,6 +549,19 @@ impl BaseCommand for MakeMigrationsCommand {
 			.unwrap_or_else(|| "migrations".to_string());
 		let migrations_dir = PathBuf::from(migrations_dir_str);
 
+		// Validate that we are running inside a Reinhardt project directory.
+		// A valid project must contain src/bin/manage.rs (the management command
+		// entry point). Running makemigrations from the wrong directory would
+		// silently create migration files in unexpected locations.
+		if !PathBuf::from("src/bin/manage.rs").exists() {
+			return Err(crate::CommandError::ExecutionError(
+				"Cannot find src/bin/manage.rs in the current directory. \
+				 Please run makemigrations from your Reinhardt project root \
+				 (the directory containing src/bin/manage.rs)."
+					.to_string(),
+			));
+		}
+
 		if is_dry_run {
 			ctx.warning("Dry run mode: No files will be created");
 		}
@@ -1327,6 +1340,11 @@ impl BaseCommand for RunServerCommand {
 				"force-wasm",
 				"Force rebuild WASM even if artifacts exist",
 			),
+			CommandOption::flag(
+				None,
+				"wasm-optional",
+				"Allow server to start even if WASM build fails",
+			),
 		]
 	}
 
@@ -1346,8 +1364,22 @@ impl BaseCommand for RunServerCommand {
 		{
 			let no_wasm = ctx.has_option("no-wasm");
 			let force_wasm = ctx.has_option("force-wasm");
-			if with_pages && !no_wasm {
-				Self::build_pages_wasm(ctx, force_wasm);
+			let wasm_optional = ctx.has_option("wasm-optional");
+			if with_pages
+				&& !no_wasm && let Err(e) = Self::build_pages_wasm(ctx, force_wasm)
+			{
+				if wasm_optional {
+					ctx.warning(&format!(
+						"Pages WASM build failed: {}. Server will start without WASM frontend.",
+						e
+					));
+				} else {
+					ctx.error(&format!(
+						"WASM build failed: {}. Fix compilation errors or use --wasm-optional to start without WASM.",
+						e
+					));
+					return Ok(());
+				}
 			}
 		}
 
@@ -1948,22 +1980,26 @@ impl RunServerCommand {
 
 	/// Build the pages WASM bundle from the current project (if it declares cdylib).
 	///
-	/// Mirrors the logic in the standalone runserver binary. Build failure is
-	/// non-fatal — a warning is displayed but the server continues to start.
+	/// Mirrors the logic in the standalone runserver binary. Returns an error
+	/// when the WASM compilation fails so the caller can decide whether to
+	/// abort or continue.
 	#[cfg(feature = "pages")]
-	fn build_pages_wasm(ctx: &CommandContext, force: bool) {
+	fn build_pages_wasm(
+		ctx: &CommandContext,
+		force: bool,
+	) -> Result<(), crate::wasm_builder::WasmBuildError> {
 		let cwd = match std::env::current_dir() {
 			Ok(d) => d,
 			Err(e) => {
 				ctx.warning(&format!("Failed to get current directory: {}", e));
-				return;
+				return Ok(());
 			}
 		};
 		let cargo_toml_path = cwd.join("Cargo.toml");
 
 		// Only build if this project exports cdylib
 		if !crate::wasm_builder::detect_cdylib_in_cargo_toml(&cargo_toml_path) {
-			return;
+			return Ok(());
 		}
 
 		// Parse the crate name from Cargo.toml
@@ -1982,13 +2018,13 @@ impl RunServerCommand {
 				}
 				if name.is_empty() {
 					ctx.warning("Could not determine crate name from Cargo.toml");
-					return;
+					return Ok(());
 				}
 				name
 			}
 			Err(e) => {
 				ctx.warning(&format!("Failed to read Cargo.toml: {}", e));
-				return;
+				return Ok(());
 			}
 		};
 
@@ -1996,7 +2032,7 @@ impl RunServerCommand {
 		let artifact = cwd.join("dist").join(format!("{}.js", js_name));
 		if artifact.exists() && !force {
 			ctx.info("Pages WASM: artifacts exist, skipping build (use --force-wasm to rebuild)");
-			return;
+			return Ok(());
 		}
 
 		ctx.info(&format!("Building pages WASM for {}...", crate_name));
@@ -2004,13 +2040,9 @@ impl RunServerCommand {
 		match crate::wasm_builder::WasmBuilder::new(config).build() {
 			Ok(_) => {
 				ctx.info("Pages WASM build succeeded.");
+				Ok(())
 			}
-			Err(e) => {
-				ctx.warning(&format!(
-					"Pages WASM build failed: {}. Server will start without WASM frontend.",
-					e
-				));
-			}
+			Err(e) => Err(e),
 		}
 	}
 }
@@ -3068,6 +3100,13 @@ mod tests {
 		use reinhardt_db::prelude::FieldType;
 		use tempfile::TempDir;
 
+		// Create a temporary project directory with the required structure
+		let project_dir = TempDir::new().unwrap();
+		std::fs::create_dir_all(project_dir.path().join("src/bin")).unwrap();
+		std::fs::write(project_dir.path().join("src/bin/manage.rs"), "fn main() {}").unwrap();
+		let original_dir = std::env::current_dir().unwrap();
+		std::env::set_current_dir(project_dir.path()).unwrap();
+
 		// Create a temporary directory for migrations
 		let temp_dir = TempDir::new().unwrap();
 		let migrations_dir = temp_dir.path();
@@ -3100,6 +3139,7 @@ mod tests {
 
 		let result = cmd.execute(&ctx).await;
 		unsafe { std::env::remove_var("DATABASE_URL") };
+		std::env::set_current_dir(&original_dir).unwrap();
 
 		// Should succeed (creates an empty migration)
 		assert!(result.is_ok(), "Failed with: {:?}", result.err());
@@ -3114,6 +3154,13 @@ mod tests {
 			prelude::FieldType,
 		};
 		use tempfile::TempDir;
+
+		// Create a temporary project directory with the required structure
+		let project_dir = TempDir::new().unwrap();
+		std::fs::create_dir_all(project_dir.path().join("src/bin")).unwrap();
+		std::fs::write(project_dir.path().join("src/bin/manage.rs"), "fn main() {}").unwrap();
+		let original_dir = std::env::current_dir().unwrap();
+		std::env::set_current_dir(project_dir.path()).unwrap();
 
 		// Create a temporary directory for migrations
 		let temp_dir = TempDir::new().unwrap();
@@ -3148,6 +3195,7 @@ mod tests {
 
 		let result = cmd.execute(&ctx).await;
 		unsafe { std::env::remove_var("DATABASE_URL") };
+		std::env::set_current_dir(&original_dir).unwrap();
 
 		// Should succeed (dry-run mode, no actual files created)
 		assert!(result.is_ok(), "Failed with: {:?}", result.err());

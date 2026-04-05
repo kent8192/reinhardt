@@ -31,6 +31,26 @@ use crate::reactive::Signal;
 use std::cell::RefCell;
 use std::collections::HashSet;
 
+/// Deserializes a user ID that may be either a JSON string or a JSON number.
+///
+/// This provides backward compatibility: existing clients that send `"user_id": 42`
+/// (integer) will have it converted to `Some("42")`, while new clients sending
+/// `"user_id": "550e8400-..."` (UUID string) work directly.
+fn deserialize_user_id<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+	D: serde::Deserializer<'de>,
+{
+	use serde::Deserialize;
+	let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+	Ok(value.and_then(|v| match v {
+		serde_json::Value::String(s) if s.is_empty() => None,
+		serde_json::Value::String(s) => Some(s),
+		serde_json::Value::Number(n) => Some(n.to_string()),
+		serde_json::Value::Null => None,
+		_ => None,
+	}))
+}
+
 /// Session key for user ID (matches reinhardt-auth).
 pub const SESSION_KEY_USER_ID: &str = "_auth_user_id";
 
@@ -68,8 +88,8 @@ pub fn auth_state() -> AuthState {
 pub struct AuthState {
 	/// Whether the user is authenticated.
 	is_authenticated: Signal<bool>,
-	/// The authenticated user's ID.
-	user_id: Signal<Option<i64>>,
+	/// The authenticated user's ID (string to support both integer and UUID PKs).
+	user_id: Signal<Option<String>>,
 	/// The authenticated user's username.
 	username: Signal<Option<String>>,
 	/// The authenticated user's email.
@@ -124,7 +144,7 @@ impl AuthState {
 	}
 
 	/// Returns the authenticated user's ID.
-	pub fn user_id(&self) -> Option<i64> {
+	pub fn user_id(&self) -> Option<String> {
 		self.user_id.get()
 	}
 
@@ -156,7 +176,7 @@ impl AuthState {
 	}
 
 	/// Returns the Signal for user ID.
-	pub fn user_id_signal(&self) -> Signal<Option<i64>> {
+	pub fn user_id_signal(&self) -> Signal<Option<String>> {
 		self.user_id.clone()
 	}
 
@@ -198,9 +218,9 @@ impl AuthState {
 	///
 	/// Resets `email`, `is_staff`, `is_superuser`, and `permissions` to defaults
 	/// to prevent stale data from a previous session.
-	pub fn login(&self, user_id: i64, username: impl Into<String>) {
+	pub fn login(&self, user_id: impl Into<String>, username: impl Into<String>) {
 		self.is_authenticated.set(true);
-		self.user_id.set(Some(user_id));
+		self.user_id.set(Some(user_id.into()));
 		self.username.set(Some(username.into()));
 		self.email.set(None);
 		self.is_staff.set(false);
@@ -211,14 +231,14 @@ impl AuthState {
 	/// Sets the state to authenticated with full user data.
 	pub fn login_full(
 		&self,
-		user_id: i64,
+		user_id: impl Into<String>,
 		username: impl Into<String>,
 		email: Option<String>,
 		is_staff: bool,
 		is_superuser: bool,
 	) {
 		self.is_authenticated.set(true);
-		self.user_id.set(Some(user_id));
+		self.user_id.set(Some(user_id.into()));
 		self.username.set(Some(username.into()));
 		self.email.set(email);
 		self.is_staff.set(is_staff);
@@ -290,13 +310,14 @@ impl AuthState {
 	#[cfg(target_arch = "wasm32")]
 	pub async fn fetch_permissions(&self, endpoint: Option<&str>) -> Result<(), AuthError> {
 		use crate::csrf::csrf_headers;
-		use gloo_net::http::Request;
+		use reqwest::Client;
 
 		let endpoint = endpoint.unwrap_or("/api/auth/permissions");
-		let mut request = Request::get(endpoint);
+		let client = Client::new();
+		let mut request = client.get(endpoint);
 
 		if let Some((header_name, header_value)) = csrf_headers() {
-			request = request.header(header_name, &header_value);
+			request = request.header(header_name, header_value);
 		}
 
 		let response = request
@@ -304,10 +325,14 @@ impl AuthState {
 			.await
 			.map_err(|e| AuthError::Network(e.to_string()))?;
 
-		if !response.ok() {
+		if !response.status().is_success() {
 			return Err(AuthError::Server {
-				status: response.status(),
-				message: response.status_text(),
+				status: response.status().as_u16(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 
@@ -366,13 +391,14 @@ impl AuthState {
 	#[cfg(target_arch = "wasm32")]
 	pub async fn fetch_from_server(&self, endpoint: &str) -> Result<(), AuthError> {
 		use crate::csrf::csrf_headers;
-		use gloo_net::http::Request;
+		use reqwest::Client;
 
-		let mut request = Request::get(endpoint);
+		let client = Client::new();
+		let mut request = client.get(endpoint);
 
 		// Add CSRF header if available
 		if let Some((header_name, header_value)) = csrf_headers() {
-			request = request.header(header_name, &header_value);
+			request = request.header(header_name, header_value);
 		}
 
 		let response = request
@@ -380,10 +406,14 @@ impl AuthState {
 			.await
 			.map_err(|e| AuthError::Network(e.to_string()))?;
 
-		if !response.ok() {
+		if !response.status().is_success() {
 			return Err(AuthError::Server {
-				status: response.status(),
-				message: response.status_text(),
+				status: response.status().as_u16(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 
@@ -413,9 +443,9 @@ impl AuthState {
 pub struct AuthData {
 	/// Whether the user is authenticated.
 	pub is_authenticated: bool,
-	/// The authenticated user's ID.
-	#[serde(default)]
-	pub user_id: Option<i64>,
+	/// The authenticated user's ID (string to support both integer and UUID PKs).
+	#[serde(default, deserialize_with = "deserialize_user_id")]
+	pub user_id: Option<String>,
 	/// The authenticated user's username.
 	#[serde(default)]
 	pub username: Option<String>,
@@ -440,10 +470,10 @@ impl AuthData {
 	}
 
 	/// Creates authenticated auth data with minimal info.
-	pub fn authenticated(user_id: i64, username: impl Into<String>) -> Self {
+	pub fn authenticated(user_id: impl Into<String>, username: impl Into<String>) -> Self {
 		Self {
 			is_authenticated: true,
-			user_id: Some(user_id),
+			user_id: Some(user_id.into()),
 			username: Some(username.into()),
 			..Default::default()
 		}
@@ -451,7 +481,7 @@ impl AuthData {
 
 	/// Creates authenticated auth data with full info.
 	pub fn full(
-		user_id: i64,
+		user_id: impl Into<String>,
 		username: impl Into<String>,
 		email: Option<String>,
 		is_staff: bool,
@@ -459,7 +489,7 @@ impl AuthData {
 	) -> Self {
 		Self {
 			is_authenticated: true,
-			user_id: Some(user_id),
+			user_id: Some(user_id.into()),
 			username: Some(username.into()),
 			email,
 			is_staff,
@@ -606,17 +636,17 @@ mod tests {
 	#[test]
 	fn test_auth_state_login() {
 		let state = AuthState::new();
-		state.login(42, "testuser");
+		state.login("42", "testuser");
 
 		assert!(state.is_authenticated());
-		assert_eq!(state.user_id(), Some(42));
+		assert_eq!(state.user_id(), Some("42".to_string()));
 		assert_eq!(state.username(), Some("testuser".to_string()));
 	}
 
 	#[test]
 	fn test_auth_state_logout() {
 		let state = AuthState::new();
-		state.login(42, "testuser");
+		state.login("42", "testuser");
 		state.logout();
 
 		assert!(!state.is_authenticated());
@@ -627,7 +657,7 @@ mod tests {
 	#[test]
 	fn test_auth_state_from_server_data() {
 		let data = AuthData::full(
-			1,
+			"1",
 			"admin",
 			Some("admin@example.com".to_string()),
 			true,
@@ -636,7 +666,7 @@ mod tests {
 		let state = AuthState::from_server_data(data);
 
 		assert!(state.is_authenticated());
-		assert_eq!(state.user_id(), Some(1));
+		assert_eq!(state.user_id(), Some("1".to_string()));
 		assert_eq!(state.username(), Some("admin".to_string()));
 		assert_eq!(state.email(), Some("admin@example.com".to_string()));
 		assert!(state.is_staff());
@@ -652,20 +682,20 @@ mod tests {
 
 	#[test]
 	fn test_auth_data_authenticated() {
-		let data = AuthData::authenticated(1, "user");
+		let data = AuthData::authenticated("1", "user");
 		assert!(data.is_authenticated);
-		assert_eq!(data.user_id, Some(1));
+		assert_eq!(data.user_id, Some("1".to_string()));
 		assert_eq!(data.username, Some("user".to_string()));
 	}
 
 	#[test]
 	fn test_auth_state_update() {
 		let state = AuthState::new();
-		let data = AuthData::authenticated(99, "updated");
+		let data = AuthData::authenticated("99", "updated");
 		state.update(data);
 
 		assert!(state.is_authenticated());
-		assert_eq!(state.user_id(), Some(99));
+		assert_eq!(state.user_id(), Some("99".to_string()));
 		assert_eq!(state.username(), Some("updated".to_string()));
 	}
 
@@ -674,7 +704,7 @@ mod tests {
 		let state1 = auth_state();
 		let state2 = auth_state();
 
-		state1.login(1, "test");
+		state1.login("1", "test");
 		assert!(state2.is_authenticated());
 	}
 
@@ -708,7 +738,7 @@ mod tests {
 	#[test]
 	fn test_superuser_has_all_permissions() {
 		let state = AuthState::new();
-		state.login_full(1, "admin", None, true, true);
+		state.login_full("1", "admin", None, true, true);
 
 		assert!(state.has_permission("any.permission"));
 		assert!(state.has_permission("another.permission"));
@@ -743,7 +773,7 @@ mod tests {
 		let mut perms = HashSet::new();
 		perms.insert("blog.add_post".to_string());
 		state.set_permissions(perms);
-		state.login(1, "user");
+		state.login("1", "user");
 
 		state.logout();
 
@@ -755,7 +785,7 @@ mod tests {
 	fn test_permissions_from_auth_data() {
 		let data = AuthData {
 			is_authenticated: true,
-			user_id: Some(1),
+			user_id: Some("1".to_string()),
 			username: Some("user".to_string()),
 			email: None,
 			is_staff: false,
@@ -772,11 +802,11 @@ mod tests {
 	#[test]
 	fn test_permissions_update() {
 		let state = AuthState::new();
-		state.login(1, "user");
+		state.login("1", "user");
 
 		let data = AuthData {
 			is_authenticated: true,
-			user_id: Some(1),
+			user_id: Some("1".to_string()),
 			username: Some("user".to_string()),
 			email: None,
 			is_staff: false,

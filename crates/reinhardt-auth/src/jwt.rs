@@ -72,6 +72,12 @@ pub struct Claims {
 	pub iat: i64,
 	/// The username associated with this token.
 	pub username: String,
+	/// Whether the user has staff access.
+	#[serde(default)]
+	pub is_staff: bool,
+	/// Whether the user has superuser access.
+	#[serde(default)]
+	pub is_superuser: bool,
 }
 
 impl Claims {
@@ -86,20 +92,30 @@ impl Claims {
 	/// let claims = Claims::new(
 	///     "user123".to_string(),
 	///     "john_doe".to_string(),
-	///     Duration::hours(24)
+	///     Duration::hours(24),
+	///     false,
+	///     false,
 	/// );
 	///
 	/// assert_eq!(claims.sub, "user123");
 	/// assert_eq!(claims.username, "john_doe");
 	/// assert!(claims.exp > claims.iat);
 	/// ```
-	pub fn new(user_id: String, username: String, expires_in: Duration) -> Self {
+	pub fn new(
+		user_id: String,
+		username: String,
+		expires_in: Duration,
+		is_staff: bool,
+		is_superuser: bool,
+	) -> Self {
 		let now = Utc::now();
 		Self {
 			sub: user_id,
 			username,
 			iat: now.timestamp(),
 			exp: (now + expires_in).timestamp(),
+			is_staff,
+			is_superuser,
 		}
 	}
 	/// Checks if the JWT claims have expired.
@@ -113,7 +129,9 @@ impl Claims {
 	/// let claims = Claims::new(
 	///     "user123".to_string(),
 	///     "john_doe".to_string(),
-	///     Duration::hours(24)
+	///     Duration::hours(24),
+	///     false,
+	///     false,
 	/// );
 	///
 	/// assert!(!claims.is_expired());
@@ -165,7 +183,9 @@ impl JwtAuth {
 	/// let claims = Claims::new(
 	///     "user123".to_string(),
 	///     "john".to_string(),
-	///     Duration::hours(1)
+	///     Duration::hours(1),
+	///     false,
+	///     false,
 	/// );
 	///
 	/// let token = jwt_auth.encode(&claims).unwrap();
@@ -187,7 +207,9 @@ impl JwtAuth {
 	/// let claims = Claims::new(
 	///     "user123".to_string(),
 	///     "john".to_string(),
-	///     Duration::hours(1)
+	///     Duration::hours(1),
+	///     false,
+	///     false,
 	/// );
 	///
 	/// let token = jwt_auth.encode(&claims).unwrap();
@@ -209,14 +231,28 @@ impl JwtAuth {
 	/// let jwt_auth = JwtAuth::new(b"secret");
 	/// let token = jwt_auth.generate_token(
 	///     "user123".to_string(),
-	///     "john_doe".to_string()
+	///     "john_doe".to_string(),
+	///     false,
+	///     false,
 	/// ).unwrap();
 	///
 	/// assert!(!token.is_empty());
 	/// assert!(token.contains('.'));
 	/// ```
-	pub fn generate_token(&self, user_id: String, username: String) -> Result<String, JwtError> {
-		let claims = Claims::new(user_id, username, Duration::hours(24));
+	pub fn generate_token(
+		&self,
+		user_id: String,
+		username: String,
+		is_staff: bool,
+		is_superuser: bool,
+	) -> Result<String, JwtError> {
+		let claims = Claims::new(
+			user_id,
+			username,
+			Duration::hours(24),
+			is_staff,
+			is_superuser,
+		);
 		self.encode(&claims)
 	}
 	/// Verifies a JWT token and returns the claims if valid and not expired.
@@ -232,7 +268,9 @@ impl JwtAuth {
 	/// let jwt_auth = JwtAuth::new(b"secret");
 	/// let token = jwt_auth.generate_token(
 	///     "user123".to_string(),
-	///     "john_doe".to_string()
+	///     "john_doe".to_string(),
+	///     false,
+	///     false,
 	/// ).unwrap();
 	///
 	/// let claims = jwt_auth.verify_token(&token).unwrap();
@@ -262,7 +300,9 @@ impl JwtAuth {
 	/// let jwt_auth = JwtAuth::new(b"secret");
 	/// let token = jwt_auth.generate_token(
 	///     "user123".to_string(),
-	///     "john_doe".to_string()
+	///     "john_doe".to_string(),
+	///     false,
+	///     false,
 	/// ).unwrap();
 	///
 	/// // Even after token expires, claims can be read for refresh
@@ -373,7 +413,7 @@ mod tests {
 		let user_id = "550e8400-e29b-41d4-a716-446655440000";
 		let username = "alice";
 		let token = jwt_auth
-			.generate_token(user_id.to_string(), username.to_string())
+			.generate_token(user_id.to_string(), username.to_string(), false, false)
 			.unwrap();
 		let request = create_request_with_bearer(&token);
 
@@ -398,6 +438,8 @@ mod tests {
 			"not-a-valid-uuid".to_string(),
 			"bob".to_string(),
 			Duration::hours(1),
+			false,
+			false,
 		);
 		let token = jwt_auth.encode(&claims).unwrap();
 		let request = create_request_with_bearer(&token);
@@ -417,7 +459,13 @@ mod tests {
 	async fn test_authenticate_with_empty_sub_claim_returns_invalid_token() {
 		// Arrange
 		let jwt_auth = JwtAuth::new(b"test-secret-key-256bit!");
-		let claims = Claims::new(String::new(), "charlie".to_string(), Duration::hours(1));
+		let claims = Claims::new(
+			String::new(),
+			"charlie".to_string(),
+			Duration::hours(1),
+			false,
+			false,
+		);
 		let token = jwt_auth.encode(&claims).unwrap();
 		let request = create_request_with_bearer(&token);
 
@@ -440,6 +488,8 @@ mod tests {
 			.generate_token(
 				"550e8400-e29b-41d4-a716-446655440000".to_string(),
 				"dave".to_string(),
+				false,
+				false,
 			)
 			.unwrap();
 		// Tamper with the token by modifying characters in the signature
@@ -504,6 +554,8 @@ mod tests {
 			.generate_token(
 				"550e8400-e29b-41d4-a716-446655440000".to_string(),
 				"eve".to_string(),
+				false,
+				false,
 			)
 			.unwrap();
 		let request = create_request_with_bearer(&token);
@@ -523,7 +575,7 @@ mod tests {
 		let user_id = "550e8400-e29b-41d4-a716-446655440000";
 		let username = "alice";
 		let token = jwt_auth
-			.generate_token(user_id.to_string(), username.to_string())
+			.generate_token(user_id.to_string(), username.to_string(), false, false)
 			.unwrap();
 		let request = create_request_with_bearer(&token);
 
@@ -559,6 +611,8 @@ mod tests {
 			.generate_token(
 				"550e8400-e29b-41d4-a716-446655440000".to_string(),
 				"alice".to_string(),
+				false,
+				false,
 			)
 			.unwrap();
 		let request = create_request_with_bearer(&token);
@@ -573,6 +627,8 @@ mod tests {
 			"550e8400-e29b-41d4-a716-446655440000".to_string(),
 			"alice".to_string(),
 			Duration::hours(1),
+			false,
+			false,
 		);
 		let serialized = serde_json::to_value(&claims).unwrap();
 		assert!(
@@ -595,6 +651,8 @@ mod tests {
 			exp: Utc::now().timestamp() - 3600, // expired 1 hour ago
 			iat: Utc::now().timestamp() - 7200,
 			username: "alice".to_string(),
+			is_staff: false,
+			is_superuser: false,
 		};
 		// encode() does not validate expiration, so this succeeds
 		let token = jwt_auth.encode(&claims).unwrap();
@@ -611,7 +669,7 @@ mod tests {
 		// Arrange
 		let jwt_auth = JwtAuth::new(b"test-secret-key-256bit!");
 		let token = jwt_auth
-			.generate_token("user123".to_string(), "alice".to_string())
+			.generate_token("user123".to_string(), "alice".to_string(), false, false)
 			.unwrap();
 		let tampered = format!("{}tampered", token);
 
@@ -655,6 +713,8 @@ mod tests {
 			exp: Utc::now().timestamp() - 3600, // expired 1 hour ago
 			iat: Utc::now().timestamp() - 7200,
 			username: "alice".to_string(),
+			is_staff: false,
+			is_superuser: false,
 		};
 		let token = jwt_auth.encode(&claims).unwrap();
 
@@ -673,7 +733,7 @@ mod tests {
 		// Arrange
 		let jwt_auth = JwtAuth::new(b"test-secret-key-256bit!");
 		let token = jwt_auth
-			.generate_token("user123".to_string(), "alice".to_string())
+			.generate_token("user123".to_string(), "alice".to_string(), false, false)
 			.unwrap();
 		let tampered = format!("{}tampered", token);
 
@@ -690,7 +750,7 @@ mod tests {
 		let jwt_auth_encode = JwtAuth::new(b"encoding-secret-key!!!");
 		let jwt_auth_decode = JwtAuth::new(b"different-secret-key!!");
 		let token = jwt_auth_encode
-			.generate_token("user123".to_string(), "alice".to_string())
+			.generate_token("user123".to_string(), "alice".to_string(), false, false)
 			.unwrap();
 
 		// Act
@@ -705,7 +765,7 @@ mod tests {
 		// Arrange
 		let jwt_auth = JwtAuth::new(b"test-secret-key-256bit!");
 		let token = jwt_auth
-			.generate_token("user123".to_string(), "alice".to_string())
+			.generate_token("user123".to_string(), "alice".to_string(), false, false)
 			.unwrap();
 
 		// Act
@@ -729,6 +789,8 @@ mod tests {
 			exp: Utc::now().timestamp() - 3600,
 			iat: Utc::now().timestamp() - 7200,
 			username: "alice".to_string(),
+			is_staff: false,
+			is_superuser: false,
 		};
 		let token = jwt_auth.encode(&claims).unwrap();
 		let request = create_request_with_bearer(&token);
@@ -762,5 +824,43 @@ mod tests {
 			AuthenticationError::from(JwtError::EncodingError("enc err".to_string())),
 			AuthenticationError::Unknown(_)
 		));
+	}
+
+	// === Backward compatibility tests ===
+
+	#[rstest]
+	fn test_serde_default_backward_compatibility_for_staff_fields() {
+		// Arrange
+		// Simulate a token created before is_staff/is_superuser fields existed
+		let jwt_auth = JwtAuth::new(b"test-secret-key-256bit!");
+		let legacy_payload = serde_json::json!({
+			"sub": "user123",
+			"exp": chrono::Utc::now().timestamp() + 3600,
+			"iat": chrono::Utc::now().timestamp(),
+			"username": "alice"
+		});
+		// Manually encode a token without staff fields
+		let header = jsonwebtoken::Header::default();
+		let token = jsonwebtoken::encode(
+			&header,
+			&legacy_payload,
+			&jsonwebtoken::EncodingKey::from_secret(b"test-secret-key-256bit!"),
+		)
+		.unwrap();
+
+		// Act
+		let claims = jwt_auth.decode(&token).unwrap();
+
+		// Assert - missing fields should default to false via #[serde(default)]
+		assert_eq!(claims.sub, "user123");
+		assert_eq!(claims.username, "alice");
+		assert!(
+			!claims.is_staff,
+			"is_staff should default to false for legacy tokens"
+		);
+		assert!(
+			!claims.is_superuser,
+			"is_superuser should default to false for legacy tokens"
+		);
 	}
 }

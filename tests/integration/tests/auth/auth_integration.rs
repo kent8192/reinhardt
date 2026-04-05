@@ -255,7 +255,9 @@ mod jwt_tests {
 		let user_id = "user_123".to_string();
 		let username = "alice".to_string();
 
-		let token = jwt_auth.generate_token(user_id, username).unwrap();
+		let token = jwt_auth
+			.generate_token(user_id, username, false, false)
+			.unwrap();
 
 		assert!(!token.is_empty());
 		assert!(token.contains('.'));
@@ -274,7 +276,7 @@ mod jwt_tests {
 		let username = "alice".to_string();
 
 		let token = jwt_auth
-			.generate_token(user_id.clone(), username.clone())
+			.generate_token(user_id.clone(), username.clone(), false, false)
 			.unwrap();
 		let claims = jwt_auth.verify_token(&token).unwrap();
 
@@ -295,7 +297,7 @@ mod jwt_tests {
 		let jwt_auth2 = JwtAuth::new(b"secret_key_2");
 
 		let token = jwt_auth1
-			.generate_token("user_123".to_string(), "alice".to_string())
+			.generate_token("user_123".to_string(), "alice".to_string(), false, false)
 			.unwrap();
 
 		// Verification with different secret should fail
@@ -316,6 +318,8 @@ mod jwt_tests {
 			"user_123".to_string(),
 			"alice".to_string(),
 			chrono::Duration::hours(24),
+			false,
+			false,
 		);
 		assert!(!claims.is_expired());
 
@@ -324,6 +328,8 @@ mod jwt_tests {
 			"user_123".to_string(),
 			"alice".to_string(),
 			chrono::Duration::seconds(-10),
+			false,
+			false,
 		);
 		assert!(expired_claims.is_expired());
 	}

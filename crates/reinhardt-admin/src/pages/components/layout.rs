@@ -6,7 +6,7 @@
 //! - `Footer` - Footer component
 //! - `MainLayout` - Main layout wrapper
 
-use reinhardt_pages::component::{IntoPage, Page, PageElement};
+use reinhardt_pages::component::Page;
 use reinhardt_pages::page;
 
 /// Model information for navigation
@@ -99,14 +99,16 @@ pub fn sidebar(models: &[ModelInfo], current_path: Option<&str>) -> Page {
 				"block px-4 py-2.5 text-sm text-slate-400 no-underline border-l-3 border-transparent hover:text-white hover:bg-slate-800"
 			};
 
-			PageElement::new("li")
-				.attr("class", "list-none")
-				.child(
-					Link::new(model.url.clone(), model.name.clone())
-						.class(item_class)
-						.render(),
-				)
-				.into_page()
+			let link = Link::new(model.url.clone(), model.name.clone())
+				.class(item_class)
+				.render();
+
+			page!(|| {
+				li {
+					class: "list-none",
+					{ link }
+				}
+			})()
 		})
 		.collect();
 
@@ -121,11 +123,9 @@ pub fn sidebar(models: &[ModelInfo], current_path: Option<&str>) -> Page {
 					"Models"
 				}
 			}
-			{
-				PageElement::new("ul")
-						.attr("class", "flex flex-col gap-0.5 px-0 m-0")
-						.children(nav_items)
-						.into_page()
+			ul {
+				class: "flex flex-col gap-0.5 px-0 m-0",
+				{ nav_items }
 			}
 		}
 	})()

@@ -71,6 +71,13 @@ fn is_wasm_built() -> bool {
 async fn admin_spa_handler(
 	request: reinhardt_http::Request,
 ) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
+	// Ensure vendor assets (CSS, JS, fonts) are available on disk.
+	// In development, these files are not present until collectstatic runs;
+	// this lazy download guarantees the admin panel renders correctly on the
+	// very first request without requiring a manual collectstatic step.
+	let assets_dir = std::path::PathBuf::from(ADMIN_ASSETS_DIR);
+	crate::core::vendor::ensure_vendor_assets(&assets_dir).await;
+
 	let settings = crate::settings::get_admin_settings();
 	let security_headers = settings.to_security_headers();
 	let csrf_token = crate::server::security::generate_csrf_token();
@@ -118,35 +125,39 @@ fn admin_spa_html(site_title: &str) -> String {
 	} else {
 		resolve_admin_static("main.js")
 	};
-	// wasm-pack --target web requires explicit init() call to load the WASM binary
+	// wasm-pack --target web requires explicit init() call to load the WASM binary.
+	// The init script is served as an external file to comply with CSP
+	// (no 'unsafe-inline' needed). The WASM entry URL is passed via a
+	// data attribute so the static init script can resolve it at runtime.
 	let script_tag = if wasm_built {
-		format!(
-			r#"<script type="module">
-		import init from '{js_url}';
-		await init();
-	</script>"#
-		)
+		let init_js_url = resolve_admin_static("wasm-init.js");
+		format!(r#"<script type="module" src="{init_js_url}" data-wasm-entry="{js_url}"></script>"#)
 	} else {
 		format!(r#"<script type="module" src="{js_url}"></script>"#)
 	};
+	let head = reinhardt_pages::head!(|| {
+		meta { charset: "utf-8" }
+		meta { name: "viewport", content: "width=device-width, initial-scale=1.0" }
+		meta { name: "server-fn-prefix", content: "/admin" }
+		title { site_title.to_string() }
+		link { rel: "stylesheet", href: vendor_open_props }
+		link { rel: "stylesheet", href: vendor_animate }
+		link { rel: "stylesheet", href: css_url }
+		script { src: vendor_unocss_runtime }
+	});
+
 	format!(
 		r#"<!DOCTYPE html>
 <html lang="en">
 <head>
-	<meta charset="utf-8" />
-	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-	<meta name="server-fn-prefix" content="/admin" />
-	<title>{site_title}</title>
-	<link rel="stylesheet" href="{vendor_open_props}" />
-	<link rel="stylesheet" href="{vendor_animate}" />
-	<link rel="stylesheet" href="{css_url}" />
-	<script src="{vendor_unocss_runtime}"></script>
+{head_html}
 </head>
 <body class="bg-slate-50 text-slate-900 antialiased">
 	<div id="app"></div>
 	{script_tag}
 </body>
-</html>"#
+</html>"#,
+		head_html = head.to_html()
 	)
 }
 
@@ -839,7 +850,7 @@ mod tests {
 			"HTML should be valid HTML5"
 		);
 		assert!(
-			html.contains(r#"<meta name="server-fn-prefix" content="/admin" />"#),
+			html.contains(r#"name="server-fn-prefix""#) && html.contains(r#"content="/admin""#),
 			"HTML should contain server-fn-prefix meta tag for WASM endpoint resolution"
 		);
 	}
@@ -1234,7 +1245,7 @@ mod tests {
 			.to_str()
 			.unwrap();
 		assert!(
-			set_cookie.contains("__csrf_token="),
+			set_cookie.contains("csrftoken="),
 			"Cookie should contain CSRF token name, got: {}",
 			set_cookie
 		);

@@ -33,13 +33,13 @@ chrono = { version = "0.4", features = ["serde"] }
 tempfile = "3.8"
 async-trait = { version = "0.1", optional = true }
 tokio = { workspace = true, features = ["sync"], optional = true }
-redis = { version = "0.32.7", features = [
+redis = { workspace = true, features = [
   "tokio-comp",
   "connection-manager",
 ], optional = true }
 sqlx = { workspace = true, features = ["any", "runtime-tokio", "tls-rustls", "postgres", "mysql"], optional = true }
 reinhardt-query = { workspace = true, optional = true }
-reqwest = { version = "0.12", features = ["json"], optional = true }
+reqwest = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 aws-config = { version = "1.5", optional = true }
 aws-sdk-secretsmanager = { version = "1.52", optional = true }

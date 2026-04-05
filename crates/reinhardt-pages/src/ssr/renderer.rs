@@ -642,7 +642,7 @@ mod tests {
 		let component = TestComponent {
 			message: "Auth".to_string(),
 		};
-		let auth = AuthData::authenticated(1, "testuser");
+		let auth = AuthData::authenticated("1", "testuser");
 		let opts = SsrOptions::new().auth(auth);
 		let mut renderer = SsrRenderer::with_options(opts);
 		let html = renderer.render_page(&component);
@@ -703,7 +703,7 @@ mod tests {
 		};
 		// Simulate a malicious username that contains </script>
 		let malicious_username = "</script><script>alert('xss')</script>";
-		let auth = AuthData::authenticated(1, malicious_username);
+		let auth = AuthData::authenticated("1", malicious_username);
 		let opts = SsrOptions::new().auth(auth);
 		let mut renderer = SsrRenderer::with_options(opts);
 		let html = renderer.render_page(&component);
@@ -745,7 +745,7 @@ mod tests {
 		};
 		// Simulate a malicious username
 		let malicious_username = "</script><img src=x onerror=alert(1)>";
-		let auth = AuthData::authenticated(1, malicious_username);
+		let auth = AuthData::authenticated("1", malicious_username);
 		let opts = SsrOptions::new().auth(auth);
 		let mut renderer = SsrRenderer::with_options(opts);
 		let view = component.render();

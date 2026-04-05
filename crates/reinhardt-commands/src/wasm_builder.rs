@@ -20,6 +20,10 @@ pub struct WasmBuildConfig {
 	pub optimize: bool,
 	/// Target name (crate name, used for output file naming)
 	pub target_name: Option<String>,
+	/// Override for the cargo target directory. When `None`, falls back to
+	/// `project_dir/target`. In workspace setups, this should point to the
+	/// workspace root's target directory.
+	pub target_dir: Option<PathBuf>,
 }
 
 impl Default for WasmBuildConfig {
@@ -30,6 +34,7 @@ impl Default for WasmBuildConfig {
 			release: false,
 			optimize: true,
 			target_name: None,
+			target_dir: None,
 		}
 	}
 }
@@ -64,6 +69,16 @@ impl WasmBuildConfig {
 	/// Set the target name explicitly.
 	pub fn target_name(mut self, name: impl Into<String>) -> Self {
 		self.target_name = Some(name.into());
+		self
+	}
+
+	/// Set the cargo target directory explicitly.
+	///
+	/// When building inside a Cargo workspace, the target directory is at
+	/// the workspace root, not relative to the member crate. Use this to
+	/// point wasm-bindgen at the correct artifact location.
+	pub fn target_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+		self.target_dir = Some(dir.into());
 		self
 	}
 }
@@ -120,6 +135,31 @@ impl WasmBuilder {
 		Self { config }
 	}
 
+	/// Detect the cargo target directory by running `cargo metadata`.
+	///
+	/// In workspace setups, Cargo places build artifacts in the workspace root's
+	/// `target/` directory, not the individual crate's directory. This method
+	/// queries `cargo metadata` for the canonical `target_directory` path, which
+	/// respects `CARGO_TARGET_DIR`, `.cargo/config.toml`, and workspace layout.
+	///
+	/// Falls back to `project_dir/target` if `cargo metadata` is unavailable.
+	fn detect_target_dir(&self) -> PathBuf {
+		let output = Command::new("cargo")
+			.args(["metadata", "--no-deps", "--format-version=1"])
+			.current_dir(&self.config.project_dir)
+			.output();
+
+		if let Ok(output) = output
+			&& output.status.success()
+			&& let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+			&& let Some(target_dir) = json.get("target_directory").and_then(|v| v.as_str())
+		{
+			return PathBuf::from(target_dir);
+		}
+
+		self.config.project_dir.join("target")
+	}
+
 	/// Build the WASM target.
 	pub fn build(&self) -> Result<WasmBuildOutput, WasmBuildError> {
 		// Ensure wasm32 target is installed
@@ -146,10 +186,13 @@ impl WasmBuilder {
 		} else {
 			"debug"
 		};
-		let wasm_path = self
+		let target_base = self
 			.config
-			.project_dir
-			.join("target")
+			.target_dir
+			.as_ref()
+			.cloned()
+			.unwrap_or_else(|| self.detect_target_dir());
+		let wasm_path = target_base
 			.join("wasm32-unknown-unknown")
 			.join(profile)
 			.join(format!("{}.wasm", crate_name.replace('-', "_")));
@@ -247,6 +290,7 @@ impl WasmBuilder {
 	fn run_cargo_build(&self) -> Result<(), WasmBuildError> {
 		let mut cmd = Command::new("cargo");
 		cmd.arg("build")
+			.arg("--lib")
 			.arg("--target")
 			.arg("wasm32-unknown-unknown")
 			.current_dir(&self.config.project_dir);

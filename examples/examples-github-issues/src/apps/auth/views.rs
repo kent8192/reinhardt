@@ -118,7 +118,7 @@ impl AuthMutation {
 
 		// Generate JWT token
 		let token = jwt_auth
-			.generate_token(user.id.to_string(), user.username.clone())
+			.generate_token(user.id.to_string(), user.username.clone(), false, false)
 			.map_err(|e| GqlError::new(e.to_string()))?;
 
 		Ok(AuthPayload { token, user })
@@ -157,7 +157,7 @@ impl AuthMutation {
 
 		// Generate JWT token
 		let token = jwt_auth
-			.generate_token(user.id.to_string(), user.username.clone())
+			.generate_token(user.id.to_string(), user.username.clone(), false, false)
 			.map_err(|e| GqlError::new(e.to_string()))?;
 
 		Ok(AuthPayload { token, user })

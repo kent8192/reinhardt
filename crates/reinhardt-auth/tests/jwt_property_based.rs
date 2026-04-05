@@ -56,7 +56,7 @@ proptest! {
 		let jwt_auth = JwtAuth::new(&secret);
 
 		let token = jwt_auth
-			.generate_token(user_id.clone(), username.clone())
+			.generate_token(user_id.clone(), username.clone(), false, false)
 			.expect("Token generation should succeed");
 
 		let claims = jwt_auth
@@ -77,7 +77,7 @@ proptest! {
 	) {
 		let jwt_auth = JwtAuth::new(&secret);
 		let duration = chrono::Duration::seconds(exp_seconds);
-		let claims = Claims::new(user_id.clone(), username.clone(), duration);
+		let claims = Claims::new(user_id.clone(), username.clone(), duration, false, false);
 
 		let token = jwt_auth.encode(&claims).expect("Encoding should succeed");
 		let decoded = jwt_auth.decode(&token).expect("Decoding should succeed");
@@ -109,7 +109,7 @@ proptest! {
 		let jwt_auth2 = JwtAuth::new(&secret2);
 
 		let token = jwt_auth1
-			.generate_token(user_id.clone(), username.clone())
+			.generate_token(user_id.clone(), username.clone(), false, false)
 			.expect("Token generation should succeed");
 
 		// Verification with different secret should fail
@@ -133,11 +133,11 @@ proptest! {
 		let jwt_auth = JwtAuth::new(&secret);
 
 		let token1 = jwt_auth
-			.generate_token(user_id1, username.clone())
+			.generate_token(user_id1, username.clone(), false, false)
 			.expect("Token1 generation should succeed");
 
 		let token2 = jwt_auth
-			.generate_token(user_id2, username)
+			.generate_token(user_id2, username, false, false)
 			.expect("Token2 generation should succeed");
 
 		// Tokens should be different (due to different claims and timestamps)
@@ -160,7 +160,7 @@ proptest! {
 		let jwt_auth = JwtAuth::new(&secret);
 
 		let token = jwt_auth
-			.generate_token(user_id, username)
+			.generate_token(user_id, username, false, false)
 			.expect("Token generation should succeed");
 
 		let parts: Vec<&str> = token.split('.').collect();
@@ -191,7 +191,7 @@ proptest! {
 		let jwt_auth = JwtAuth::new(&secret);
 
 		let token = jwt_auth
-			.generate_token(user_id, username)
+			.generate_token(user_id, username, false, false)
 			.expect("Token generation should succeed");
 
 		let parts: Vec<&str> = token.split('.').collect();
@@ -226,7 +226,7 @@ proptest! {
 	) {
 		let now = chrono::Utc::now().timestamp();
 		let duration = chrono::Duration::seconds(exp_seconds);
-		let claims = Claims::new(user_id, username, duration);
+		let claims = Claims::new(user_id, username, duration, false, false);
 
 		prop_assert!(
 			claims.exp > now,
@@ -249,7 +249,7 @@ proptest! {
 		exp_seconds in 1i64..10000i64,
 	) {
 		let duration = chrono::Duration::seconds(exp_seconds);
-		let claims = Claims::new(user_id, username, duration);
+		let claims = Claims::new(user_id, username, duration, false, false);
 
 		prop_assert!(
 			claims.iat <= claims.exp,
@@ -273,7 +273,7 @@ proptest! {
 		let jwt_auth = JwtAuth::new(&secret);
 
 		let token = jwt_auth
-			.generate_token(String::new(), String::new())
+			.generate_token(String::new(), String::new(), false, false)
 			.expect("Token generation with empty claims should succeed");
 
 		let claims = jwt_auth
@@ -294,7 +294,7 @@ proptest! {
 		let jwt_auth = JwtAuth::new(&secret);
 
 		let token = jwt_auth
-			.generate_token(user_id.clone(), username.clone())
+			.generate_token(user_id.clone(), username.clone(), false, false)
 			.expect("Token generation with unicode should succeed");
 
 		let claims = jwt_auth
@@ -315,7 +315,7 @@ proptest! {
 		let jwt_auth = JwtAuth::new(&secret);
 
 		let token = jwt_auth
-			.generate_token(user_id.clone(), username.clone())
+			.generate_token(user_id.clone(), username.clone(), false, false)
 			.expect("Token generation with long claims should succeed");
 
 		let claims = jwt_auth
@@ -343,7 +343,7 @@ proptest! {
 		let jwt_auth = JwtAuth::new(&secret);
 
 		let token = jwt_auth
-			.generate_token(user_id, username)
+			.generate_token(user_id, username, false, false)
 			.expect("Token generation should succeed");
 
 		// Only tamper if the index is within bounds
@@ -377,7 +377,7 @@ proptest! {
 		let jwt_auth = JwtAuth::new(&secret);
 
 		let token = jwt_auth
-			.generate_token(user_id.clone(), username.clone())
+			.generate_token(user_id.clone(), username.clone(), false, false)
 			.expect("Token generation with minimal secret should succeed");
 
 		let claims = jwt_auth
@@ -407,7 +407,7 @@ mod sanity_tests {
 	#[rstest]
 	fn test_basic_token_generation_and_verification(jwt_auth: JwtAuth) {
 		let token = jwt_auth
-			.generate_token("user123".to_string(), "alice".to_string())
+			.generate_token("user123".to_string(), "alice".to_string(), false, false)
 			.expect("Token generation should succeed");
 
 		let claims = jwt_auth
@@ -425,7 +425,7 @@ mod sanity_tests {
 		let username = "John Doe <admin>".to_string();
 
 		let token = jwt_auth
-			.generate_token(user_id.clone(), username.clone())
+			.generate_token(user_id.clone(), username.clone(), false, false)
 			.expect("Token generation should succeed");
 
 		let claims = jwt_auth

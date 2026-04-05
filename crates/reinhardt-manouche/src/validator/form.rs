@@ -19,14 +19,14 @@ use syn::{Error, Result};
 use crate::core::{
 	ClientValidator, ClientValidatorRule, FormAction, FormCallbacks, FormDerived, FormFieldDef,
 	FormFieldEntry, FormFieldGroup, FormFieldProperty, FormMacro, FormMethod, FormSlots, FormState,
-	FormValidator, FormWatch, IconAttr, IconChild, IconPosition, TypedChoicesConfig,
-	TypedClientValidator, TypedClientValidatorRule, TypedCustomAttr, TypedDerivedItem,
-	TypedFieldDisplay, TypedFieldStyling, TypedFieldType, TypedFieldValidation, TypedFormAction,
-	TypedFormCallbacks, TypedFormDerived, TypedFormFieldDef, TypedFormFieldEntry,
+	FormSubmitButtonDef, FormValidator, FormWatch, IconAttr, IconChild, IconPosition,
+	TypedChoicesConfig, TypedClientValidator, TypedClientValidatorRule, TypedCustomAttr,
+	TypedDerivedItem, TypedFieldDisplay, TypedFieldStyling, TypedFieldType, TypedFieldValidation,
+	TypedFormAction, TypedFormCallbacks, TypedFormDerived, TypedFormFieldDef, TypedFormFieldEntry,
 	TypedFormFieldGroup, TypedFormMacro, TypedFormSlots, TypedFormState, TypedFormStyling,
 	TypedFormValidator, TypedFormWatch, TypedFormWatchItem, TypedIcon, TypedIconAttr,
-	TypedIconChild, TypedIconPosition, TypedValidatorRule, TypedWidget, TypedWrapper,
-	TypedWrapperAttr, ValidatorRule,
+	TypedIconChild, TypedIconPosition, TypedSubmitButtonDef, TypedValidatorRule, TypedWidget,
+	TypedWrapper, TypedWrapperAttr, ValidatorRule,
 };
 
 /// Validates and transforms the FormMacro AST into a typed AST.
@@ -145,6 +145,15 @@ fn validate_unique_field_names(entries: &[FormFieldEntry]) -> Result<()> {
 							),
 						));
 					}
+				}
+			}
+			FormFieldEntry::SubmitButton(btn) => {
+				let name = btn.name.to_string();
+				if !seen.insert(name.clone()) {
+					return Err(Error::new(
+						btn.name.span(),
+						format!("duplicate field/button name: '{}'", name),
+					));
 				}
 			}
 		}
@@ -415,6 +424,10 @@ fn transform_field_entry(entry: &FormFieldEntry) -> Result<TypedFormFieldEntry> 
 			let typed_group = transform_field_group(group)?;
 			Ok(TypedFormFieldEntry::Group(typed_group))
 		}
+		FormFieldEntry::SubmitButton(btn) => {
+			let typed_btn = transform_submit_button(btn)?;
+			Ok(TypedFormFieldEntry::SubmitButton(typed_btn))
+		}
 	}
 }
 
@@ -433,6 +446,102 @@ fn transform_field_group(group: &FormFieldGroup) -> Result<TypedFormFieldGroup> 
 		class: group.class.as_ref().map(|c| c.value()),
 		fields: typed_fields,
 		span: group.span,
+	})
+}
+
+/// Transforms a submit button definition into a typed submit button.
+///
+/// Extracts `label`, `class`, `id`, and `disabled` from properties.
+/// Rejects properties that are not applicable to submit buttons.
+const ALLOWED_SUBMIT_BUTTON_PROPERTIES: &[&str] = &["label", "class", "id", "disabled"];
+
+fn transform_submit_button(btn: &FormSubmitButtonDef) -> Result<TypedSubmitButtonDef> {
+	let mut label = None;
+	let mut class = None;
+	let mut id = None;
+	let mut disabled = false;
+
+	for prop in &btn.properties {
+		match prop {
+			FormFieldProperty::Named { name, value, span } => {
+				let prop_name = name.to_string();
+				match prop_name.as_str() {
+					"label" => {
+						if let syn::Expr::Lit(syn::ExprLit {
+							lit: syn::Lit::Str(s),
+							..
+						}) = value
+						{
+							label = Some(s.value());
+						} else {
+							return Err(Error::new(*span, "label must be a string literal"));
+						}
+					}
+					"class" => {
+						if let syn::Expr::Lit(syn::ExprLit {
+							lit: syn::Lit::Str(s),
+							..
+						}) = value
+						{
+							class = Some(s.value());
+						} else {
+							return Err(Error::new(*span, "class must be a string literal"));
+						}
+					}
+					"id" => {
+						if let syn::Expr::Lit(syn::ExprLit {
+							lit: syn::Lit::Str(s),
+							..
+						}) = value
+						{
+							id = Some(s.value());
+						} else {
+							return Err(Error::new(*span, "id must be a string literal"));
+						}
+					}
+					_ => {
+						return Err(Error::new(
+							*span,
+							format!(
+								"unknown SubmitButton property: '{}'. Allowed: {}",
+								prop_name,
+								ALLOWED_SUBMIT_BUTTON_PROPERTIES.join(", ")
+							),
+						));
+					}
+				}
+			}
+			FormFieldProperty::Flag { name, span } => {
+				let prop_name = name.to_string();
+				match prop_name.as_str() {
+					"disabled" => disabled = true,
+					_ => {
+						return Err(Error::new(
+							*span,
+							format!(
+								"unknown SubmitButton flag: '{}'. Allowed flags: disabled",
+								prop_name
+							),
+						));
+					}
+				}
+			}
+			_ => {
+				return Err(Error::new(
+					btn.span,
+					"SubmitButton only supports: label, class, id, disabled",
+				));
+			}
+		}
+	}
+
+	Ok(TypedSubmitButtonDef {
+		name: btn.name.clone(),
+		label: label.unwrap_or_else(|| "Submit".to_string()),
+		class,
+		id,
+		disabled,
+		span: btn.span,
 	})
 }
 
@@ -604,6 +713,7 @@ fn extract_display_properties(properties: &[FormFieldProperty]) -> Result<TypedF
 	let mut disabled = false;
 	let mut readonly = false;
 	let mut autofocus = false;
+	let mut autocomplete = None;
 
 	for prop in properties {
 		match prop {
@@ -629,6 +739,13 @@ fn extract_display_properties(properties: &[FormFieldProperty]) -> Result<TypedF
 					"help_text" => {
 						help_text =
 							Some(extract_string_value_from_expr(value, "help_text", *span)?);
+					}
+					"autocomplete" => {
+						autocomplete = Some(extract_string_value_from_expr(
+							value,
+							"autocomplete",
+							*span,
+						)?);
 					}
 					"disabled" => {
 						if let syn::Expr::Lit(lit) = value
@@ -674,6 +791,7 @@ fn extract_display_properties(properties: &[FormFieldProperty]) -> Result<TypedF
 		disabled,
 		readonly,
 		autofocus,
+		autocomplete,
 	})
 }
 
@@ -1071,6 +1189,7 @@ fn field_exists(entries: &[FormFieldEntry], name: &syn::Ident) -> bool {
 					return true;
 				}
 			}
+			FormFieldEntry::SubmitButton(_) => {}
 		}
 	}
 	false

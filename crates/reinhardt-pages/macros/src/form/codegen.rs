@@ -51,7 +51,7 @@ use reinhardt_manouche::core::{
 	FormMethod, TypedCustomAttr, TypedFieldType, TypedFormAction, TypedFormCallbacks,
 	TypedFormDerived, TypedFormFieldDef, TypedFormFieldEntry, TypedFormFieldGroup, TypedFormMacro,
 	TypedFormSlots, TypedFormState, TypedFormWatch, TypedIcon, TypedIconChild, TypedIconPosition,
-	TypedValidatorRule, TypedWidget, TypedWrapper,
+	TypedSubmitButtonDef, TypedValidatorRule, TypedWidget, TypedWrapper,
 };
 
 /// Collects all fields from field entries, flattening groups.
@@ -66,6 +66,7 @@ fn collect_all_fields(entries: &[TypedFormFieldEntry]) -> Vec<&TypedFormFieldDef
 			TypedFormFieldEntry::Group(group) => {
 				fields.extend(group.fields.iter());
 			}
+			TypedFormFieldEntry::SubmitButton(_) => {} // Not a data field
 		}
 	}
 	fields
@@ -703,6 +704,13 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 	// Determine if CSRF protection is needed (non-GET methods)
 	let needs_csrf = !matches!(macro_ast.method, FormMethod::Get);
 
+	// Check if CSRF token should be auto-injected as a server_fn argument.
+	// This is needed when: non-GET method, using server_fn, and no explicit csrf_token field.
+	let has_explicit_csrf_field = all_fields.iter().any(|f| f.name == "csrf_token");
+	let auto_csrf_arg = needs_csrf
+		&& matches!(macro_ast.action, TypedFormAction::ServerFn(_))
+		&& !has_explicit_csrf_field;
+
 	// Generate CSRF token injection for non-GET methods
 	let csrf_injection = if needs_csrf {
 		quote! {
@@ -767,6 +775,19 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 					quote! { #signal_name.get() }
 				})
 				.collect();
+
+			// Generate server_fn call expression (with auto CSRF token if needed)
+			let server_fn_call = if auto_csrf_arg {
+				quote! {
+					{
+						let __csrf_token = #pages_crate::csrf::get_csrf_token()
+							.unwrap_or_default();
+						#server_fn_ident(#(#field_names,)* __csrf_token).await
+					}
+				}
+			} else {
+				quote! { #server_fn_ident(#(#field_names),*).await }
+			};
 
 			// Generate callbacks
 			let callbacks = &macro_ast.callbacks;
@@ -878,7 +899,7 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 
 								// Get field values from cloned signals - allow non_snake_case for generated variable names
 								#(
-									#[allow(non_snake_case)]
+									#[allow(non_snake_case, unused_variables)]
 									let #field_names = #field_value_getters;
 								)*
 
@@ -888,7 +909,7 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 									#async_signal_clones
 
 									#pages_crate::spawn::spawn_task(async move {
-										match #server_fn_ident(#(#field_names),*).await {
+										match #server_fn_call {
 											Ok(_value) => {
 												#on_success_code
 												#redirect_code
@@ -913,7 +934,7 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 								#loading_start
 
 								#(
-									#[allow(non_snake_case)]
+									#[allow(non_snake_case, unused_variables)]
 									let #field_names = #field_value_getters;
 								)*
 
@@ -923,7 +944,7 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 									#async_signal_clones
 
 									#pages_crate::spawn::spawn_task(async move {
-										match #server_fn_ident(#(#field_names),*).await {
+										match #server_fn_call {
 											Ok(_value) => {
 												#on_success_code
 												#redirect_code
@@ -1014,6 +1035,38 @@ fn generate_field_entry_view(
 		TypedFormFieldEntry::Group(group) => {
 			generate_field_group_view(group, pages_crate, all_fields)
 		}
+		TypedFormFieldEntry::SubmitButton(btn) => generate_submit_button_view(btn),
+	}
+}
+
+/// Generates view code for a submit button.
+///
+/// Produces a `<button type="submit">` element with optional class, id, and disabled attributes.
+/// No wrapper div or label — just the bare button element.
+fn generate_submit_button_view(btn: &TypedSubmitButtonDef) -> TokenStream {
+	let label = &btn.label;
+
+	let class_attr = btn.class.as_deref().map(|c| {
+		quote! { .attr("class", #c) }
+	});
+
+	let id_attr = btn.id.as_deref().map(|id| {
+		quote! { .attr("id", #id) }
+	});
+
+	let disabled_attr = if btn.disabled {
+		Some(quote! { .attr("disabled", "disabled") })
+	} else {
+		None
+	};
+
+	quote! {
+		PageElement::new("button")
+			.attr("type", "submit")
+			#class_attr
+			#id_attr
+			#disabled_attr
+			.child(#label)
 	}
 }
 
@@ -1080,6 +1133,10 @@ fn generate_field_view(
 	let placeholder = field.display.placeholder.as_deref().unwrap_or("");
 	let required = field.validation.required;
 
+	let autocomplete_attr = field.display.autocomplete.as_deref().map(|val| {
+		quote! { .attr("autocomplete", #val) }
+	});
+
 	let wrapper_class = field.styling.wrapper_class();
 	let label_class = field.styling.label_class();
 	let input_class = field.styling.input_class();
@@ -1100,6 +1157,7 @@ fn generate_field_view(
 					.attr("class", #input_class)
 					.attr("placeholder", #placeholder)
 					.bool_attr("required", #required)
+					#autocomplete_attr
 					#custom_attrs
 					#event_listener
 			}
@@ -1113,6 +1171,7 @@ fn generate_field_view(
 					.attr("class", #input_class)
 					.bool_attr("required", #required)
 					.bool_attr("multiple", #multiple)
+					#autocomplete_attr
 					#custom_attrs
 					#event_listener
 			}
@@ -1151,6 +1210,7 @@ fn generate_field_view(
 					.attr("class", #input_class)
 					.attr("placeholder", #placeholder)
 					.bool_attr("required", #required)
+					#autocomplete_attr
 					#custom_attrs
 					#event_listener
 			}
@@ -1465,6 +1525,21 @@ fn generate_submit_method(macro_ast: &TypedFormMacro, pages_crate: &TokenStream)
 			let all_fields = collect_all_fields(&macro_ast.fields);
 			let field_names: Vec<&syn::Ident> = all_fields.iter().map(|f| &f.name).collect();
 
+			// Check if CSRF token should be auto-injected as a server_fn argument
+			let has_explicit_csrf_field = all_fields.iter().any(|f| f.name == "csrf_token");
+			let needs_csrf = !matches!(macro_ast.method, FormMethod::Get);
+			let submit_server_fn_call = if needs_csrf && !has_explicit_csrf_field {
+				quote! {
+					{
+						let __csrf_token = #pages_crate::csrf::get_csrf_token()
+							.unwrap_or_default();
+						#server_fn_ident(#(self.#field_names.get(),)* __csrf_token).await
+					}
+				}
+			} else {
+				quote! { #server_fn_ident(#(self.#field_names.get()),*).await }
+			};
+
 			// Generate callback invocations
 			let on_submit_code = generate_on_submit_callback(callbacks);
 			let on_loading_start_code = generate_on_loading_callback(callbacks, state, true);
@@ -1483,7 +1558,7 @@ fn generate_submit_method(macro_ast: &TypedFormMacro, pages_crate: &TokenStream)
 					#on_loading_start_code
 
 					// Call the server function with individual field values as arguments
-					let result = #server_fn_ident(#(self.#field_names.get()),*).await;
+					let result = #submit_server_fn_call;
 
 					// Clear loading state
 					#on_loading_end_code
@@ -3952,6 +4027,165 @@ mod tests {
 		assert!(
 			output_str.contains("\"path\""),
 			"Expected path element to be generated"
+		);
+	}
+
+	// --- SubmitButton rendering regression tests (Fixes #3334) ---
+
+	#[rstest::rstest]
+	fn test_submit_button_rendered_in_url_action_form() {
+		// Arrange
+		let input = quote! {
+			name: LoginForm,
+			action: "/api/login",
+
+			fields: {
+				username: CharField { required, label: "Username" },
+				password: CharField { required, widget: PasswordInput, label: "Password" },
+				submit: SubmitButton { label: "Sign in", class: "btn-primary" },
+			},
+		};
+
+		// Act
+		let output = parse_validate_generate(input);
+		let output_str = output.to_string();
+
+		// Assert
+		assert!(
+			output_str.contains("\"button\""),
+			"URL action form: codegen must emit a <button> element for SubmitButton"
+		);
+		assert!(
+			output_str.contains("\"submit\""),
+			"URL action form: codegen must set type=\"submit\" on the button"
+		);
+		assert!(
+			output_str.contains("Sign in"),
+			"URL action form: codegen must include the button label"
+		);
+		assert!(
+			output_str.contains("btn-primary"),
+			"URL action form: codegen must include the button class"
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_submit_button_rendered_in_server_fn_form() {
+		// Arrange
+		let input = quote! {
+			name: LoginForm,
+			server_fn: login,
+
+			fields: {
+				username: CharField { required, label: "Username" },
+				password: CharField { required, widget: PasswordInput, label: "Password" },
+				submit: SubmitButton { label: "Sign in", class: "btn-primary" },
+			},
+		};
+
+		// Act
+		let output = parse_validate_generate(input);
+		let output_str = output.to_string();
+
+		// Assert
+		assert!(
+			output_str.contains("\"button\""),
+			"server_fn form: codegen must emit a <button> element for SubmitButton"
+		);
+		assert!(
+			output_str.contains("\"submit\""),
+			"server_fn form: codegen must set type=\"submit\" on the button"
+		);
+		assert!(
+			output_str.contains("Sign in"),
+			"server_fn form: codegen must include the button label"
+		);
+		assert!(
+			output_str.contains("btn-primary"),
+			"server_fn form: codegen must include the button class"
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_submit_button_with_id_and_disabled() {
+		// Arrange
+		let input = quote! {
+			name: TestForm,
+			action: "/test",
+
+			fields: {
+				name: CharField { required },
+				submit: SubmitButton { label: "Send", id: "submit-btn", disabled },
+			},
+		};
+
+		// Act
+		let output = parse_validate_generate(input);
+		let output_str = output.to_string();
+
+		// Assert
+		assert!(
+			output_str.contains("\"button\""),
+			"codegen must emit a <button> element"
+		);
+		assert!(
+			output_str.contains("submit-btn"),
+			"codegen must include the button id"
+		);
+		assert!(
+			output_str.contains("\"disabled\""),
+			"codegen must include the disabled attribute"
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_submit_button_with_default_label() {
+		// Arrange
+		let input = quote! {
+			name: MinimalForm,
+			action: "/test",
+
+			fields: {
+				name: CharField { required },
+				submit: SubmitButton {},
+			},
+		};
+
+		// Act
+		let output = parse_validate_generate(input);
+		let output_str = output.to_string();
+
+		// Assert
+		assert!(
+			output_str.contains("\"button\""),
+			"codegen must emit a <button> element even with no explicit label"
+		);
+		assert!(
+			output_str.contains("Submit"),
+			"codegen must use default label \"Submit\" when none specified"
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_no_submit_button_when_not_specified() {
+		// Arrange
+		let input = quote! {
+			name: NoButtonForm,
+			action: "/test",
+
+			fields: {
+				name: CharField { required },
+			},
+		};
+
+		// Act
+		let output = parse_validate_generate(input);
+		let output_str = output.to_string();
+
+		// Assert - no button element should be generated
+		assert!(
+			!output_str.contains("\"button\""),
+			"form without SubmitButton must not generate a <button> element"
 		);
 	}
 }

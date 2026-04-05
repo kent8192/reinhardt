@@ -46,5 +46,5 @@ rstest = { workspace = true }
 # avoiding dev-dependency version resolution failure during `cargo publish`.
 # When upstream cargo resolves these issues, replace with `workspace = true`.
 reinhardt-testkit = { path = "../reinhardt-testkit", features = ["testcontainers"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { workspace = true }
 futures = { workspace = true }

@@ -126,6 +126,8 @@ pub enum FormFieldEntry {
 	Field(FormFieldDef),
 	/// A group of related fields
 	Group(FormFieldGroup),
+	/// A submit button (not a data field — generates no Signal)
+	SubmitButton(FormSubmitButtonDef),
 }
 
 impl FormFieldEntry {
@@ -139,11 +141,17 @@ impl FormFieldEntry {
 		matches!(self, FormFieldEntry::Field(_))
 	}
 
+	/// Returns true if this is a submit button.
+	pub fn is_submit_button(&self) -> bool {
+		matches!(self, FormFieldEntry::SubmitButton(_))
+	}
+
 	/// Returns the name of the entry (field name or group name).
 	pub fn name(&self) -> &Ident {
 		match self {
 			FormFieldEntry::Field(f) => &f.name,
 			FormFieldEntry::Group(g) => &g.name,
+			FormFieldEntry::SubmitButton(b) => &b.name,
 		}
 	}
 
@@ -152,6 +160,7 @@ impl FormFieldEntry {
 		match self {
 			FormFieldEntry::Field(f) => f.span,
 			FormFieldEntry::Group(g) => g.span,
+			FormFieldEntry::SubmitButton(b) => b.span,
 		}
 	}
 
@@ -159,15 +168,23 @@ impl FormFieldEntry {
 	pub fn as_field(&self) -> Option<&FormFieldDef> {
 		match self {
 			FormFieldEntry::Field(f) => Some(f),
-			FormFieldEntry::Group(_) => None,
+			_ => None,
 		}
 	}
 
 	/// Returns a reference to the inner group if this is a Group variant.
 	pub fn as_group(&self) -> Option<&FormFieldGroup> {
 		match self {
-			FormFieldEntry::Field(_) => None,
 			FormFieldEntry::Group(g) => Some(g),
+			_ => None,
+		}
+	}
+
+	/// Returns a reference to the inner submit button if this is a SubmitButton variant.
+	pub fn as_submit_button(&self) -> Option<&FormSubmitButtonDef> {
+		match self {
+			FormFieldEntry::SubmitButton(b) => Some(b),
+			_ => None,
 		}
 	}
 }
@@ -191,6 +208,25 @@ pub struct FormFieldDef {
 	/// Field type identifier (e.g., CharField, EmailField)
 	pub field_type: Ident,
 	/// Field properties (validation and styling)
+	pub properties: Vec<FormFieldProperty>,
+	/// Span for error reporting
+	pub span: Span,
+}
+
+/// A submit button definition in the form macro.
+///
+/// Example:
+/// ```text
+/// submit: SubmitButton {
+///     label: "Sign in",
+///     class: "btn-primary",
+/// }
+/// ```
+#[derive(Debug, Clone)]
+pub struct FormSubmitButtonDef {
+	/// Button name identifier
+	pub name: Ident,
+	/// Button properties (label, class, id, disabled)
 	pub properties: Vec<FormFieldProperty>,
 	/// Span for error reporting
 	pub span: Span,

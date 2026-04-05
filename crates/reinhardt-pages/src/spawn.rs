@@ -35,6 +35,23 @@ where
 	// Non-WASM: just drop the future
 }
 
+/// Yields to the event loop by queuing a microtask.
+///
+/// On WASM, this resolves a `JsFuture` wrapping a `Promise.resolve()`,
+/// giving the browser event loop a chance to tick. This is necessary when
+/// spawning async work during initialization (e.g. inside `main()`),
+/// where `JsFuture`s from fetch would otherwise hang.
+#[cfg(target_arch = "wasm32")]
+pub async fn defer_yield() {
+	use wasm_bindgen::JsValue;
+	let promise = js_sys::Promise::resolve(&JsValue::UNDEFINED);
+	let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
+
+/// No-op stub for non-WASM targets.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn defer_yield() {}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

@@ -249,5 +249,12 @@ pub use reinhardt_pages_macros::form;
 pub use reinhardt_pages_macros::head;
 pub use reinhardt_pages_macros::page;
 
+// Private re-exports used by macro-generated code. Not part of the public API.
+#[doc(hidden)]
+#[cfg(target_arch = "wasm32")]
+pub mod __private {
+	pub use reqwest;
+}
+
 // Logging macros are automatically exported via #[macro_export]
 // Users can access them as: reinhardt_pages::debug_log!, reinhardt_pages::info_log!, etc.

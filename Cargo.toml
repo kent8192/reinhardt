@@ -467,24 +467,24 @@ reinhardt-openapi-macros = { path = "crates/reinhardt-rest/openapi-macros", vers
 reinhardt-routers-macros = { path = "crates/reinhardt-urls/routers-macros", version = "0.1.0-rc.15" }
 
 # Web framework
-tokio = { version = "1.48.0", features = ["full"] }
-tokio-stream = "0.1.17"
-futures = "0.3.31"
-futures-util = "0.3.31"
-hyper = { version = "1.8.1", features = ["full"] }
-hyper-util = { version = "0.1.17", features = ["full"] }
+tokio = { version = "1.51.0", features = ["full"] }
+tokio-stream = "0.1.18"
+futures = "0.3.32"
+futures-util = "0.3.32"
+hyper = { version = "1.9.0", features = ["full"] }
+hyper-util = { version = "0.1.20", features = ["full"] }
 http = "1.4.0"
 http-body-util = "0.1.3"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13.2", features = ["json", "form"] }
 
 # Serialization
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
+serde_json = "1.0.149"
 serde_bytes = "0.11"
 serde_yaml = "0.9"
-cargo_metadata = "0.19"
+cargo_metadata = "0.23.1"
 serde_urlencoded = "0.7.1"
-csv = "1.3"
+csv = "1.4.0"
 
 # Database
 sqlx = { version = "0.8", features = [
@@ -507,40 +507,40 @@ argon2 = { version = "0.5", features = ["std"] }
 password-hash = "0.5"
 rand = "0.9"
 getrandom = { version = "0.3", features = ["wasm_js"] }  # WASM support with wasm_js feature
-jsonwebtoken = { version = "10.2.0", features = ["aws_lc_rs"] }
-uuid = { version = "1.18.1", features = ["v4", "v5", "serde"] }
+jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
+uuid = { version = "1.23.0", features = ["v4", "v5", "serde"] }
 
 # GraphQL
-async-graphql = "7.0"
-async-graphql-warp = "7.0"
+async-graphql = "7.2.1"
+async-graphql-warp = "7.2.1"
 
 # Async traits
 async-trait = "0.1.89"
 
 # Error handling
-thiserror = "2.0.17"
-anyhow = "1.0.100"
+thiserror = "2.0.18"
+anyhow = "1.0.102"
 
 # Routing
-regex = "1.12.2"
+regex = "1.12.3"
 nom = "8.0.0"
-winnow = "0.7"
+winnow = "1.0.1"
 
 # Utilities
-chrono = { version = "0.4.42", features = ["serde"] }
+chrono = { version = "0.4.44", features = ["serde"] }
 inventory = "0.3"
 linkme = "0.3"
-ctor = "0.6.1"
+ctor = "0.8.0"
 chrono-tz = "0.10.4"
-bytes = "1.10.1"
-once_cell = "1.21.3"
-tracing = "0.1.41"
+bytes = "1.11.1"
+once_cell = "1.21.4"
+tracing = "0.1.44"
 parking_lot = "0.12"
 base64 = "0.22"
 
 # Template engine & syntax highlighting
-tera = { version = "1.20" }
-syntect = "5.2"
+tera = { version = "1.20.1" }
+syntect = "5.3.0"
 
 # Proc macro dependencies
 syn = { version = "2.0", features = ["full", "parsing", "extra-traits"] }
@@ -554,37 +554,35 @@ hmac = "0.12"
 subtle = "2.6"
 
 # Image Processing
-image = "0.25.8"
+image = "0.25.10"
 
 # Compression
-flate2 = "1.1.5"
+flate2 = "1.1.9"
 brotli = "8.0.2"
 
 # Phone Number Validation
-phonenumber = "0.3.7"
+phonenumber = "0.3.9"
 
 # Serialization formats
-toml = "0.9.8"
-rmp-serde = "1.3.0"
-prost = "0.14.1"
-prost-build = "0.14.1"
+toml = "1.1.2"
+rmp-serde = "1.3.1"
+prost = "0.14.3"
+prost-build = "0.14.3"
 
 # gRPC
-tonic = "0.14.2"
-tonic-build = "0.14.2"
-tonic-prost-build = "0.14.2"
+tonic = "0.14.5"
+tonic-build = "0.14.5"
+tonic-prost-build = "0.14.5"
 
 # Redis (for sessions)
-# Temporarily downgraded to 0.32 due to deadpool-redis compatibility
-# TODO: Upgrade to redis 1.0 when deadpool-redis supports it
-redis = { version = "0.32", features = ["tokio-comp", "connection-manager"] }
+redis = { version = "1.2.0", features = ["tokio-comp", "connection-manager"] }
 
 # Connection pooling & migrations
 refinery = { version = "0.9.0", features = ["tokio-postgres"] }
-rust_decimal = "1.37"
+rust_decimal = "1.41.0"
 
 # E2E browser testing
-fantoccini = "0.22"
+fantoccini = "0.22.1"
 
 # Testing
 testcontainers = { version = "0.27.2", features = ["blocking"] }
@@ -593,25 +591,25 @@ testcontainers-modules = { version = "0.15.0", features = [
   "mysql",
   "redis",
 ] }
-proptest = "1.8.0"
+proptest = "1.11.0"
 arbitrary = { version = "1.4", features = ["derive"] }
-tokio-test = "0.4.4"
-serial_test = "3.2.0"
+tokio-test = "0.4.5"
+serial_test = "3.4.0"
 rstest = "0.26.1"
-clap = { version = "4.5", features = ["derive", "cargo"] }
+clap = { version = "4.6.0", features = ["derive", "cargo"] }
 mockall = "0.14.0"
 assert-json-diff = "2.0.2"
-predicates = "3.1"
+predicates = "3.1.4"
 scopeguard = "1.2.0"
-tempfile = "3.15.0"
-trybuild = "1.0.114"
-url = "2.5.4"
-colored = "3.0.0"
+tempfile = "3.27.0"
+trybuild = "1.0.116"
+url = "2.5.8"
+colored = "3.1.1"
 criterion = { version = "0.8", features = ["html_reports"] }
-insta = { version = "1.41", features = ["json", "toml"] }
+insta = { version = "1.47.2", features = ["json", "toml"] }
 
 # Documentation
-aquamarine = "0.5"
+aquamarine = "0.6.0"
 
 # TODO: Monitor and upgrade when upstream fixes num-bigint-dig v0.8.x future incompatibility
 # Issue: https://github.com/rust-lang/rust/issues/120192

@@ -168,7 +168,7 @@ impl Cache for RedisSentinelCache {
 		let mut conn = self.get_connection().await?;
 
 		let values: Vec<Option<Vec<u8>>> = conn
-			.get(keys)
+			.mget(keys)
 			.await
 			.map_err(|e| Error::Http(format!("Failed to get multiple values from Redis: {}", e)))?;
 

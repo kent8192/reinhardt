@@ -79,7 +79,7 @@ web-sys = { version = "0.3.83", features = [
 ] }
 js-sys = "0.3.83"
 serde-wasm-bindgen = "0.6"
-gloo-net = "0.6"
+reqwest = { workspace = true }
 wasm-bindgen-futures = "0.4"
 chrono = { workspace = true, features = ["wasmbind"] }
 uuid = { workspace = true, features = ["js"] }
@@ -116,6 +116,7 @@ toml = { workspace = true }
 # WASM-only dev-dependencies
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3.56"
+reinhardt-test = { workspace = true, features = ["wasm"] }
 
 [build-dependencies]
 cfg_aliases = "0.2"

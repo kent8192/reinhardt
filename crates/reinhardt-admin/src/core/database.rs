@@ -18,6 +18,62 @@ use reinhardt_query::prelude::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// Converts a `serde_json::Value` into a reinhardt-query `Value`.
+///
+/// String values are inspected for ISO 8601 date/time patterns and converted
+/// to the appropriate chrono type so that PostgreSQL accepts them for
+/// `timestamptz`, `date`, and `time` columns without an explicit cast.
+fn json_to_sea_value(value: serde_json::Value) -> Value {
+	match value {
+		serde_json::Value::String(s) => {
+			// ISO 8601 datetime with timezone offset (e.g. "2026-04-02T16:45:50Z")
+			if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+				Value::ChronoDateTimeUtc(Some(Box::new(dt.with_timezone(&chrono::Utc))))
+			// ISO 8601 datetime with fractional seconds and Z suffix
+			} else if let Ok(dt) =
+				chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.fZ")
+			{
+				Value::ChronoDateTimeUtc(Some(Box::new(dt.and_utc())))
+			// Date only
+			} else if s.len() == 10 {
+				if let Ok(d) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+					return Value::ChronoDate(Some(Box::new(d)));
+				}
+				Value::String(Some(Box::new(s)))
+			// Time only
+			} else if s.len() == 8 && s.chars().filter(|c| *c == ':').count() == 2 {
+				if let Ok(t) = chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S") {
+					return Value::ChronoTime(Some(Box::new(t)));
+				}
+				Value::String(Some(Box::new(s)))
+			// UUID (8-4-4-4-12 hex pattern)
+			} else if s.len() == 36
+				&& s.chars().enumerate().all(|(i, c)| {
+					matches!(i, 8 | 13 | 18 | 23) && c == '-' || c.is_ascii_hexdigit()
+				}) {
+				if let Ok(uuid) = uuid::Uuid::parse_str(&s) {
+					return Value::Uuid(Some(Box::new(uuid)));
+				}
+				Value::String(Some(Box::new(s)))
+			} else {
+				Value::String(Some(Box::new(s)))
+			}
+		}
+		serde_json::Value::Number(n) => {
+			if let Some(i) = n.as_i64() {
+				Value::BigInt(Some(i))
+			} else if let Some(f) = n.as_f64() {
+				Value::Double(Some(f))
+			} else {
+				Value::String(Some(Box::new(n.to_string())))
+			}
+		}
+		serde_json::Value::Bool(b) => Value::Bool(Some(b)),
+		serde_json::Value::Null => Value::Int(None),
+		_ => Value::String(Some(Box::new(value.to_string()))),
+	}
+}
 use std::sync::Arc;
 
 /// Dummy record type for admin panel CRUD operations
@@ -889,21 +945,7 @@ impl AdminDatabase {
 			let value = data.get(&key).cloned().unwrap_or(serde_json::Value::Null);
 			columns.push(Alias::new(&key));
 
-			let sea_value = match value {
-				serde_json::Value::String(s) => Value::String(Some(Box::new(s))),
-				serde_json::Value::Number(n) => {
-					if let Some(i) = n.as_i64() {
-						Value::BigInt(Some(i))
-					} else if let Some(f) = n.as_f64() {
-						Value::Double(Some(f))
-					} else {
-						Value::String(Some(Box::new(n.to_string())))
-					}
-				}
-				serde_json::Value::Bool(b) => Value::Bool(Some(b)),
-				serde_json::Value::Null => Value::Int(None),
-				_ => Value::String(Some(Box::new(value.to_string()))),
-			};
+			let sea_value = json_to_sea_value(value);
 			values.push(sea_value);
 		}
 
@@ -979,21 +1021,7 @@ impl AdminDatabase {
 		// Build SET clauses in sorted order
 		for key in sorted_keys {
 			let value = data.get(&key).cloned().unwrap_or(serde_json::Value::Null);
-			let sea_value = match value {
-				serde_json::Value::String(s) => Value::String(Some(Box::new(s))),
-				serde_json::Value::Number(n) => {
-					if let Some(i) = n.as_i64() {
-						Value::BigInt(Some(i))
-					} else if let Some(f) = n.as_f64() {
-						Value::Double(Some(f))
-					} else {
-						Value::String(Some(Box::new(n.to_string())))
-					}
-				}
-				serde_json::Value::Bool(b) => Value::Bool(Some(b)),
-				serde_json::Value::Null => Value::Int(None),
-				_ => Value::String(Some(Box::new(value.to_string()))),
-			};
+			let sea_value = json_to_sea_value(value);
 			query.value(Alias::new(&key), sea_value);
 		}
 

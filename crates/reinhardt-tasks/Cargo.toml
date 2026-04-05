@@ -19,7 +19,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { workspace = true }
 cron = "0.15.0"
 rand = { workspace = true }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { workspace = true }
 url = { workspace = true }
 ipnet = "2.0"
 tracing = { workspace = true }

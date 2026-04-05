@@ -223,7 +223,7 @@ pub fn mfa_with_registered_user(test_user: TestUser) -> (MfaManager, String) {
 ///
 /// #[rstest]
 /// fn test_with_jwt(jwt_auth: JwtAuth) {
-///     let token = jwt_auth.generate_token("user123".to_string(), "alice".to_string()).unwrap();
+///     let token = jwt_auth.generate_token("user123".to_string(), "alice".to_string(), false, false).unwrap();
 ///     assert!(!token.is_empty());
 /// }
 /// ```

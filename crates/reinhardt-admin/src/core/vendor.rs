@@ -70,22 +70,22 @@ const ADMIN_VENDOR_ASSETS: &[VendorAsset] = &[
 		target: "vendor/fonts/dm-sans-latin-700-normal.woff2",
 		sha256: "",
 	},
-	// Syne — Latin subset, weight 600 (semi-bold)
+	// Inter — Latin subset, weight 600 (semi-bold)
 	VendorAsset {
-		url: "https://cdn.jsdelivr.net/npm/@fontsource/syne@5.1.1/files/syne-latin-600-normal.woff2",
-		target: "vendor/fonts/syne-latin-600-normal.woff2",
+		url: "https://cdn.jsdelivr.net/fontsource/fonts/inter@latest/latin-600-normal.woff2",
+		target: "vendor/fonts/inter-latin-600-normal.woff2",
 		sha256: "",
 	},
-	// Syne — Latin subset, weight 700 (bold)
+	// Inter — Latin subset, weight 700 (bold)
 	VendorAsset {
-		url: "https://cdn.jsdelivr.net/npm/@fontsource/syne@5.1.1/files/syne-latin-700-normal.woff2",
-		target: "vendor/fonts/syne-latin-700-normal.woff2",
+		url: "https://cdn.jsdelivr.net/fontsource/fonts/inter@latest/latin-700-normal.woff2",
+		target: "vendor/fonts/inter-latin-700-normal.woff2",
 		sha256: "",
 	},
-	// Syne — Latin subset, weight 800 (extra-bold)
+	// Inter — Latin subset, weight 800 (extra-bold)
 	VendorAsset {
-		url: "https://cdn.jsdelivr.net/npm/@fontsource/syne@5.1.1/files/syne-latin-800-normal.woff2",
-		target: "vendor/fonts/syne-latin-800-normal.woff2",
+		url: "https://cdn.jsdelivr.net/fontsource/fonts/inter@latest/latin-800-normal.woff2",
+		target: "vendor/fonts/inter-latin-800-normal.woff2",
 		sha256: "",
 	},
 	// UnoCSS Runtime v66.6.7 — browser-based utility CSS generation engine.
@@ -221,6 +221,57 @@ pub async fn download_vendor_assets(
 	}
 
 	Ok(())
+}
+
+/// Ensures all vendor assets exist on disk, downloading any that are missing.
+///
+/// This function is safe to call repeatedly — it uses a `std::sync::OnceLock` to
+/// guarantee that the download check executes at most once per process. Subsequent
+/// calls return immediately.
+///
+/// Intended to be called lazily on the first admin panel request so that vendor
+/// files are available during development without requiring a separate
+/// `collectstatic` step.
+///
+/// # Arguments
+///
+/// * `base_dir` — The directory containing vendor assets (typically the admin
+///   `assets/` directory).
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn ensure_vendor_assets(base_dir: &std::path::Path) {
+	use std::sync::OnceLock;
+
+	static ENSURED: OnceLock<()> = OnceLock::new();
+
+	// Fast path: already checked
+	if ENSURED.get().is_some() {
+		return;
+	}
+
+	// Check whether any vendor asset is missing
+	let any_missing = ADMIN_VENDOR_ASSETS
+		.iter()
+		.any(|asset| !base_dir.join(asset.target).exists());
+
+	if any_missing {
+		tracing::info!("Admin vendor assets missing — downloading on first request");
+		match download_vendor_assets(base_dir, Verbosity::Normal).await {
+			Ok(()) => {
+				tracing::info!("Admin vendor assets downloaded successfully");
+			}
+			Err(e) => {
+				tracing::warn!(
+					error = %e,
+					"Failed to download admin vendor assets; \
+					 the admin panel may render without styles"
+				);
+				// Still mark as ensured to avoid retrying every request
+			}
+		}
+	}
+
+	// Mark as ensured regardless of outcome to avoid repeated attempts
+	let _ = ENSURED.set(());
 }
 
 #[cfg(test)]

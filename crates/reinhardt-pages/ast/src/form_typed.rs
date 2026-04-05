@@ -887,6 +887,8 @@ pub struct TypedFieldDisplay {
 	pub readonly: bool,
 	/// Whether to autofocus this field
 	pub autofocus: bool,
+	/// Autocomplete hint for the browser
+	pub autocomplete: Option<String>,
 }
 
 /// Styling-related properties of a field.

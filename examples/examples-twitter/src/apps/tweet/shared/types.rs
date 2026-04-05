@@ -3,6 +3,7 @@
 //! These types are serializable and can be sent between the WASM client
 //! and the Rust server via server functions.
 
+#[cfg(server)]
 use reinhardt::Validate;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -67,12 +68,16 @@ impl From<crate::apps::tweet::models::Tweet> for TweetInfo {
 
 /// Create tweet request
 #[cfg_attr(server, derive(Schema))]
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[cfg_attr(server, derive(Validate))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTweetRequest {
-	#[validate(length(
-		min = 1,
-		max = 280,
-		message = "Tweet must be between 1 and 280 characters"
-	))]
+	#[cfg_attr(
+		server,
+		validate(length(
+			min = 1,
+			max = 280,
+			message = "Tweet must be between 1 and 280 characters"
+		))
+	)]
 	pub content: String,
 }

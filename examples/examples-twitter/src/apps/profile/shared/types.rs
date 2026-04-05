@@ -3,6 +3,7 @@
 //! These types are serializable and can be sent between the WASM client
 //! and the Rust server via server functions.
 
+#[cfg(server)]
 use reinhardt::Validate;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -40,17 +41,24 @@ impl From<crate::apps::profile::models::Profile> for ProfileResponse {
 
 /// Update profile request
 #[cfg_attr(server, derive(Schema))]
-#[derive(Debug, Clone, Serialize, Deserialize, Validate, Default)]
+#[cfg_attr(server, derive(Validate))]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UpdateProfileRequest {
-	#[validate(length(max = 500, message = "Bio must be less than 500 characters"))]
+	#[cfg_attr(
+		server,
+		validate(length(max = 500, message = "Bio must be less than 500 characters"))
+	)]
 	pub bio: Option<String>,
 
-	#[validate(url(message = "Invalid avatar URL"))]
+	#[cfg_attr(server, validate(url(message = "Invalid avatar URL")))]
 	pub avatar_url: Option<String>,
 
-	#[validate(length(max = 100, message = "Location must be less than 100 characters"))]
+	#[cfg_attr(
+		server,
+		validate(length(max = 100, message = "Location must be less than 100 characters"))
+	)]
 	pub location: Option<String>,
 
-	#[validate(url(message = "Invalid website URL"))]
+	#[cfg_attr(server, validate(url(message = "Invalid website URL")))]
 	pub website: Option<String>,
 }

@@ -76,6 +76,11 @@ source "amazon-ebs" "runner" {
 	subnet_id     = var.subnet_id
 	ssh_username  = "ubuntu"
 
+	# Ubuntu 22.04 AMIs from 2026-03 onwards require ed25519 keys for SSH.
+	# RSA keys are rejected by the updated OpenSSH default configuration.
+	temporary_key_pair_type = "ed25519"
+	ssh_timeout             = "5m"
+
 	source_ami_filter {
 		filters = {
 			name                = local.source_ami_filter

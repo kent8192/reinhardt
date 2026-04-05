@@ -27,8 +27,8 @@ impl std::error::Error for ServerFnError {}
 
 // Required for client-side error conversion (WASM only)
 #[cfg(target_arch = "wasm32")]
-impl From<gloo_net::Error> for ServerFnError {
-	fn from(err: gloo_net::Error) -> Self {
+impl From<reqwest::Error> for ServerFnError {
+	fn from(err: reqwest::Error) -> Self {
 		ServerFnError(format!("Network error: {:?}", err))
 	}
 }

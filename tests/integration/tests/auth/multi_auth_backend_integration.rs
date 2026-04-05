@@ -52,6 +52,8 @@ fn create_jwt_token(jwt_auth: &JwtAuth, user_id: &str, username: &str) -> String
 		user_id.to_string(),
 		username.to_string(),
 		Duration::hours(1),
+		false,
+		false,
 	);
 	jwt_auth.encode(&claims).unwrap()
 }

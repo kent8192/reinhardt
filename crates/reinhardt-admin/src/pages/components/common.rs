@@ -9,18 +9,14 @@
 //!
 //! ## Design Note
 //!
-//! These components use PageElement for SSR compatibility and Router integration.
+//! These components use the `page!` macro DSL for SSR compatibility and Router integration.
 //! Interactive components with event handlers will be hydrated on the client side.
 
-use reinhardt_pages::Signal;
-use reinhardt_pages::component::{IntoPage, Page, PageElement};
-use reinhardt_pages::page;
-
-#[cfg(target_arch = "wasm32")]
-use reinhardt_pages::dom::EventType;
-
-#[cfg(target_arch = "wasm32")]
 use std::sync::Arc;
+
+use reinhardt_pages::Signal;
+use reinhardt_pages::component::Page;
+use reinhardt_pages::page;
 
 /// Button variant styles
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,41 +60,31 @@ impl ButtonVariant {
 /// let clicked = Signal::new(false);
 /// button("Click me", ButtonVariant::Primary, false, clicked)
 /// ```
-pub fn button(text: &str, variant: ButtonVariant, disabled: bool, _on_click: Signal<bool>) -> Page {
+pub fn button(text: &str, variant: ButtonVariant, disabled: bool, on_click: Signal<bool>) -> Page {
 	let classes = format!("admin-btn {}", variant.class());
+	let text = text.to_string();
 
-	#[cfg(target_arch = "wasm32")]
-	let button_view = {
-		let mut element = PageElement::new("button")
-			.attr("class", classes.clone())
-			.attr("type", "button")
-			.on(
-				EventType::Click,
-				Arc::new(move |_event: web_sys::Event| {
-					_on_click.set(true);
-				}),
-			)
-			.child(text.to_string());
-		if disabled {
-			element = element.attr("disabled", "");
+	if disabled {
+		return page!(|| {
+			button {
+				class: classes,
+				type: "button",
+				disabled: true,
+				{ text }
+			}
+		})();
+	}
+
+	page!(|_on_click: Signal<bool>| {
+		button {
+			class: classes,
+			type: "button",
+			@click: move |_| {
+						_on_click.set(true);
+					},
+			{ text }
 		}
-		element
-	};
-
-	#[cfg(not(target_arch = "wasm32"))]
-	let button_view = {
-		let mut element = PageElement::new("button")
-			.attr("class", classes)
-			.attr("type", "button")
-			.attr("data-reactive", "true")
-			.child(text.to_string());
-		if disabled {
-			element = element.attr("disabled", "");
-		}
-		element
-	};
-
-	button_view.into_page()
+	})(on_click)
 }
 
 /// Loading spinner component
@@ -152,7 +138,7 @@ pub fn error_display(message: &str, dismissible: bool) -> Page {
 				}
 				button {
 					class: "ml-4 text-red-400 hover:text-red-600 cursor-pointer",
-					r#type: "button",
+					type: "button",
 					aria_label: "Close",
 					"×"
 				}
@@ -235,10 +221,12 @@ pub fn pagination(current_page: Signal<u64>, total_pages: u64) -> Page {
 		},
 	));
 
-	PageElement::new("div")
-		.attr("class", "flex justify-center gap-1 mt-6")
-		.children(nav_items)
-		.into_page()
+	page!(|| {
+		div {
+			class: "flex justify-center gap-1 mt-6",
+			{ nav_items }
+		}
+	})()
 }
 
 /// Helper function to create a pagination item with event handler
@@ -246,70 +234,44 @@ fn create_page_item<F>(
 	text: &str,
 	disabled: bool,
 	active: bool,
-	_signal: Signal<u64>,
-	_handler: F,
+	signal: Signal<u64>,
+	handler: F,
 ) -> Page
 where
 	F: Fn(Signal<u64>) + 'static,
 {
-	let class_name = if active {
-		"admin-page-link admin-page-link-active"
-	} else if disabled {
-		"admin-page-link admin-page-link-disabled"
+	let text = text.to_string();
+
+	if disabled {
+		page!(|| {
+			span {
+				class: "admin-page-link admin-page-link-disabled",
+				aria_disabled: "true",
+				tabindex: (- 1_i32).to_string(),
+				{ text }
+			}
+		})()
+	} else if active {
+		page!(|| {
+			span {
+				class: "admin-page-link admin-page-link-active",
+				aria_current: "page",
+				{ text }
+			}
+		})()
 	} else {
-		"admin-page-link"
-	};
-
-	#[cfg(target_arch = "wasm32")]
-	let link = {
-		if disabled {
-			PageElement::new("span")
-				.attr("class", class_name)
-				.attr("aria-disabled", "true")
-				.attr("tabindex", "-1")
-				.child(text.to_string())
-		} else if active {
-			PageElement::new("span")
-				.attr("class", class_name)
-				.attr("aria-current", "page")
-				.child(text.to_string())
-		} else {
-			PageElement::new("a")
-				.attr("class", class_name)
-				.attr("href", "#")
-				.child(text.to_string())
-				.on(
-					EventType::Click,
-					Arc::new(move |_event: web_sys::Event| {
-						_handler(_signal.clone());
-					}),
-				)
-		}
-	};
-
-	#[cfg(not(target_arch = "wasm32"))]
-	let link = {
-		if disabled {
-			PageElement::new("span")
-				.attr("class", class_name)
-				.attr("aria-disabled", "true")
-				.attr("tabindex", "-1")
-				.child(text.to_string())
-		} else if active {
-			PageElement::new("span")
-				.attr("class", class_name)
-				.attr("aria-current", "page")
-				.child(text.to_string())
-		} else {
-			PageElement::new("a")
-				.attr("class", class_name)
-				.attr("href", "#")
-				.attr("data-reactive", "true")
-				.child(text.to_string())
-		}
-	};
-
-	link.into_page()
+		let handler: Arc<dyn Fn(Signal<u64>)> = Arc::new(handler);
+		page!(|_signal: Signal<u64>, _handler: Arc<dyn Fn(Signal<u64>)>| {
+			a {
+				class: "admin-page-link",
+				href: "#",
+				@click: move |_| {
+							_handler(_signal.clone());
+						},
+				{ text }
+			}
+		})(signal, handler)
+	}
 }
 
 /// Search bar component
@@ -342,7 +304,7 @@ pub fn search_bar(value: Signal<String>, placeholder: &str) -> Page {
 			}
 			input {
 				class: "admin-input rounded-l-none border-l-0",
-				r#type: "text",
+				type: "text",
 				placeholder: placeholder,
 				value: current_value,
 			}

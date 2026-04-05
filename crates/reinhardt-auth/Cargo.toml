@@ -93,7 +93,7 @@ hmac = { workspace = true }
 hex = "0.4"
 subtle = { workspace = true }
 unicode-normalization = "0.1"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { workspace = true }
 url = "2.5"
 totp-lite = "2.0"
 data-encoding = "2.6"

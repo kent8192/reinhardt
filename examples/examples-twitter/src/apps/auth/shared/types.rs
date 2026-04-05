@@ -4,6 +4,7 @@
 //! These types are serializable and can be sent between the WASM client
 //! and the Rust server via server functions.
 
+#[cfg(server)]
 use reinhardt::Validate;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -37,36 +38,47 @@ impl From<crate::apps::auth::models::User> for UserInfo {
 
 /// Login request
 #[cfg_attr(server, derive(Schema))]
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[cfg_attr(server, derive(Validate))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginRequest {
-	#[validate(email(message = "Invalid email address"))]
+	#[cfg_attr(server, validate(email(message = "Invalid email address")))]
 	pub email: String,
 
-	#[validate(length(min = 1, message = "Password is required"))]
+	#[cfg_attr(server, validate(length(min = 1, message = "Password is required")))]
 	pub password: String,
 }
 
 /// Register request
 #[cfg_attr(server, derive(Schema))]
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[cfg_attr(server, derive(Validate))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterRequest {
-	#[validate(length(
-		min = 3,
-		max = 150,
-		message = "Username must be between 3 and 150 characters"
-	))]
+	#[cfg_attr(
+		server,
+		validate(length(
+			min = 3,
+			max = 150,
+			message = "Username must be between 3 and 150 characters"
+		))
+	)]
 	pub username: String,
 
-	#[validate(email(message = "Invalid email address"))]
+	#[cfg_attr(server, validate(email(message = "Invalid email address")))]
 	pub email: String,
 
-	#[validate(length(min = 8, message = "Password must be at least 8 characters"))]
+	#[cfg_attr(
+		server,
+		validate(length(min = 8, message = "Password must be at least 8 characters"))
+	)]
 	pub password: String,
 
-	#[validate(length(
-		min = 8,
-		message = "Password confirmation must be at least 8 characters"
-	))]
+	#[cfg_attr(
+		server,
+		validate(length(
+			min = 8,
+			message = "Password confirmation must be at least 8 characters"
+		))
+	)]
 	pub password_confirmation: String,
 }
 

@@ -360,7 +360,7 @@ impl PageElement {
 	#[cfg(not(target_arch = "wasm32"))]
 	pub fn listener<F>(self, event_name: &str, handler: F) -> Self
 	where
-		F: Fn(DummyEvent) + Send + Sync + 'static,
+		F: Fn(DummyEvent) + 'static,
 	{
 		use std::str::FromStr;
 		let event_type = EventType::from_str(event_name)

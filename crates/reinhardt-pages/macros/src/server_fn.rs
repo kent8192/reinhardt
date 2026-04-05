@@ -637,10 +637,22 @@ fn generate_client_stub(
 			// Serialize arguments based on codec
 			#serialize_code
 
-			// Build HTTP POST request with headers
-			let __client = #pages_crate::__private::reqwest::Client::new();
+			// Build HTTP client and POST request.
+			// WASM: fetch_credentials_include() sends browser cookies via
+			// the Fetch API's credentials: "include" mode, which is
+			// required for CSRF double-submit cookie validation.
+			let __client = #pages_crate::__private::reqwest::Client::builder()
+				.build()
+				.expect("Failed to build reqwest client");
+
 			let mut __request_builder = __client.post(&__endpoint)
 				.header("Content-Type", #content_type);
+
+			// WASM: include browser cookies (CSRF, auth session) via Fetch API
+			#[cfg(target_arch = "wasm32")]
+			{
+				__request_builder = __request_builder.fetch_credentials_include();
+			}
 
 			#csrf_injection_code
 			#auth_injection_code

@@ -5,6 +5,9 @@
 use reinhardt_pages::component::Page;
 use reinhardt_pages::form;
 use reinhardt_pages::page;
+use reinhardt_pages::ServerFnError;
+
+use crate::types::responses::LoginResponse;
 
 /// Login form component
 ///
@@ -98,7 +101,7 @@ fn build_login_form() -> Page {
 			},
 		},
 
-		on_success: |response| {
+		on_success: |response: LoginResponse| {
 			#[cfg(client)]
 			{
 				use reinhardt_pages::auth::auth_state;
@@ -121,7 +124,7 @@ fn build_login_form() -> Page {
 			}
 		},
 
-		on_error: |e| {
+		on_error: |e: ServerFnError| {
 			#[cfg(client)]
 			{
 				let error_msg = e.to_string();

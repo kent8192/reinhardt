@@ -837,7 +837,7 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 
 			// Generate on_error callback if present
 			let on_error_code = if let Some(callback) = &callbacks.on_error {
-				quote! { (#callback)(&e); }
+				quote! { (#callback)(e.clone()); }
 			} else {
 				quote! {}
 			};

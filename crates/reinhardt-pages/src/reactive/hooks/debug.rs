@@ -4,10 +4,10 @@
 
 use crate::callback::Callback;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 type EventArg = web_sys::Event;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 type EventArg = crate::component::DummyEvent;
 
 /// Adds a label to a custom hook in DevTools.
@@ -144,7 +144,7 @@ where
 /// implementation does not prevent dependency tracking within the callback.
 /// The callback provides stable identity but Signals accessed inside will
 /// still be tracked if called within an Effect context.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn use_effect_event<F>(f: F) -> Callback<EventArg, ()>
 where
 	F: Fn(EventArg) + 'static,
@@ -155,7 +155,7 @@ where
 /// Creates an event handler that always sees the latest props and state (server-side version).
 ///
 /// See the WASM version for full documentation.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn use_effect_event<F>(f: F) -> Callback<EventArg, ()>
 where
 	F: Fn(EventArg) + Send + Sync + 'static,
@@ -166,7 +166,7 @@ where
 /// Creates an effect event handler with custom argument types.
 ///
 /// This is a more flexible version that allows specifying custom argument types.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn use_effect_event_with<Args, Ret, F>(f: F) -> Callback<Args, Ret>
 where
 	F: Fn(Args) -> Ret + 'static,
@@ -192,7 +192,7 @@ where
 /// # Returns
 ///
 /// A `Callback<Args, Ret>` that always calls the latest version of `f`
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn use_effect_event_with<Args, Ret, F>(f: F) -> Callback<Args, Ret>
 where
 	F: Fn(Args) -> Ret + Send + Sync + 'static,
@@ -218,7 +218,7 @@ mod tests {
 		use_debug_value_with(vec![1, 2, 3], |v| format!("len: {}", v.len()));
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	#[test]
 	fn test_use_effect_event() {
 		use std::sync::{Arc, Mutex};
@@ -237,7 +237,7 @@ mod tests {
 		assert!(*called.lock().unwrap());
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	#[test]
 	fn test_use_effect_event_with() {
 		let add_one = use_effect_event_with(|x: i32| x + 1);

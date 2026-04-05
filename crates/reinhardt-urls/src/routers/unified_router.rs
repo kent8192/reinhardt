@@ -39,25 +39,25 @@
 //! - When `client-router` feature is **disabled**: Server-only [`UnifiedRouter`] with
 //!   only `.server()` method available.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use crate::routers::server_router::ServerRouter;
 
 #[cfg(feature = "client-router")]
 use crate::routers::client_router::ClientRouter;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use hyper::Method;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use reinhardt_core::exception::Result;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use reinhardt_di::InjectionContext;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use reinhardt_http::{Request, Response};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use reinhardt_middleware::Middleware;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use std::future::Future;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use std::sync::Arc;
 
 // ============================================================================
@@ -82,14 +82,14 @@ use std::sync::Arc;
 /// ```
 ///
 /// [`Page`]: reinhardt_core::page::Page
-#[cfg(all(feature = "client-router", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "client-router", native))]
 pub struct UnifiedRouter {
 	server: ServerRouter,
 	client: ClientRouter,
 	di_registrations: reinhardt_di::DiRegistrationList,
 }
 
-#[cfg(all(feature = "client-router", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "client-router", native))]
 impl UnifiedRouter {
 	/// Creates a new `UnifiedRouter` with default server and client routers.
 	pub fn new() -> Self {
@@ -332,7 +332,7 @@ impl UnifiedRouter {
 	}
 }
 
-#[cfg(all(feature = "client-router", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "client-router", native))]
 impl Default for UnifiedRouter {
 	fn default() -> Self {
 		Self::new()
@@ -537,7 +537,7 @@ impl reinhardt_http::Handler for UnifiedRouter {
 /// On WASM, server-side routing is not available. This stub allows
 /// `UnifiedRouter::server()` closures to compile by accepting and
 /// ignoring the server configuration closure.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub struct ServerRouterStub;
 
 /// Unified router for WASM targets with client-side routing.
@@ -545,12 +545,12 @@ pub struct ServerRouterStub;
 /// On WASM, only client-side routing is available. The `.server()` method
 /// accepts a closure but discards its result, allowing shared route
 /// definitions to compile on both server and client.
-#[cfg(all(target_arch = "wasm32", feature = "client-router"))]
+#[cfg(all(wasm, feature = "client-router"))]
 pub struct UnifiedRouter {
 	client: ClientRouter,
 }
 
-#[cfg(all(target_arch = "wasm32", feature = "client-router"))]
+#[cfg(all(wasm, feature = "client-router"))]
 impl UnifiedRouter {
 	/// Creates a new `UnifiedRouter` with a default client router.
 	pub fn new() -> Self {
@@ -617,7 +617,7 @@ impl UnifiedRouter {
 	}
 }
 
-#[cfg(all(target_arch = "wasm32", feature = "client-router"))]
+#[cfg(all(wasm, feature = "client-router"))]
 impl Default for UnifiedRouter {
 	fn default() -> Self {
 		Self::new()

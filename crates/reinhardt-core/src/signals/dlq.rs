@@ -1,4 +1,4 @@
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg(native)]
 
 //! Dead Letter Queue (DLQ) system for handling failed signals with retry logic
 //!

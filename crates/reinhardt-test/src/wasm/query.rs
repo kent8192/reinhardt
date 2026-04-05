@@ -1,4 +1,4 @@
-#![cfg(target_arch = "wasm32")]
+#![cfg(wasm)]
 
 //! DOM Query API for WASM Frontend Testing
 //!

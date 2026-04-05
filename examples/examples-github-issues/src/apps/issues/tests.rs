@@ -40,6 +40,8 @@ mod tests {
 			exp: now + 86400, // 24 hours
 			iat: now,
 			username: "issueauthor".to_string(),
+			is_staff: false,
+			is_superuser: false,
 		};
 
 		let create_project = r#"

@@ -40,9 +40,9 @@ fn main() {
 
 	cfg_aliases! {
 		// Platform aliases for simpler conditional compilation
-		// Use `#[cfg(client)]` instead of `#[cfg(target_arch = "wasm32")]`
-		client: { target_arch = "wasm32" },
-		// Use `#[cfg(server)]` instead of `#[cfg(not(target_arch = "wasm32"))]`
-		server: { not(target_arch = "wasm32") },
+		// Use `#[cfg(client)]` instead of `#[cfg(all(target_family = "wasm", target_os = "unknown"))]`
+		client: { all(target_family = "wasm", target_os = "unknown") },
+		// Use `#[cfg(server)]` instead of `#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]`
+		server: { not(all(target_family = "wasm", target_os = "unknown")) },
 	}
 }

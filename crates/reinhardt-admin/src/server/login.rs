@@ -5,19 +5,19 @@
 use crate::adapters::LoginResponse;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::admin_auth::AdminLoginAuthenticator;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::security::require_csrf_token;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use crate::adapters::AdminSite;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use reinhardt_auth::JwtAuth;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use reinhardt_db::orm::DatabaseConnection;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use reinhardt_pages::server_fn::ServerFnRequest;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use std::sync::Arc;
 
 /// Authenticate an admin user and return a JWT token.

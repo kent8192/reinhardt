@@ -61,22 +61,22 @@ pub use e2e::{
 	set_e2e_server_url,
 };
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use e2e::E2ETestEnv;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub use e2e::e2e_fetch;
 
 // Server-side testing utilities (Layer 1)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod server_fn_test;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use server_fn_test::*;
 
 // WASM DOM testing utilities (Layer 2 and 3)
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub mod wasm;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub use wasm::*;

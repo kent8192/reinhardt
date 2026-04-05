@@ -411,7 +411,7 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 	// Emit deprecation warning if use_inject = true is enabled
 	let deprecation_warning = if info.use_inject_enabled() {
 		quote! {
-			#[cfg(not(target_arch = "wasm32"))]
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			const _: () = {
 				#[deprecated(
 					note = "use_inject = true is deprecated. #[inject] parameters are now auto-detected. Remove `use_inject = true` from #[server_fn] attribute."
@@ -441,7 +441,7 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 		#deprecation_warning
 
 		// Server-side: Original function (with #[inject] attributes removed)
-		#[cfg(not(target_arch = "wasm32"))]
+		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 		#clean_func
 
 		// Client-side: HTTP request stub
@@ -616,7 +616,7 @@ fn generate_client_stub(
 	};
 
 	quote! {
-		#[cfg(target_arch = "wasm32")]
+		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 		#vis #client_sig {
 			use ::serde::{Serialize, Deserialize};
 
@@ -942,7 +942,7 @@ fn generate_server_handler(
 	let marker_module_name = name.clone();
 
 	quote! {
-		#[cfg(not(target_arch = "wasm32"))]
+		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 		/// Server-side handler function
 		///
 		/// This function is called by the router when the endpoint receives a request.
@@ -985,7 +985,7 @@ fn generate_server_handler(
 			}
 		}
 
-		#[cfg(not(target_arch = "wasm32"))]
+		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 		/// Register this server function with a router
 		///
 		/// This function should be called during application startup to register
@@ -1006,7 +1006,7 @@ fn generate_server_handler(
 
 		// Static wrapper function for explicit registration
 		// This is used by ServerFnRegistration::handler() to provide a function pointer.
-		#[cfg(not(target_arch = "wasm32"))]
+		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 		fn #static_wrapper_name(
 			req: #http_crate_for_wrapper::Request
 		) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::std::result::Result<::std::string::String, ::std::string::String>> + ::std::marker::Send>> {
@@ -1039,7 +1039,7 @@ fn generate_server_handler(
 		// use crate::server_fn::auth::login;  // Function (snake_case)
 		// login(email, password).await;
 		// ```
-		#[cfg(not(target_arch = "wasm32"))]
+		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 		#vis mod #marker_module_name {
 			#[doc = concat!("Marker struct for server function `", #name_str, "` (use with `.server_fn()`)")]
 			pub struct marker;

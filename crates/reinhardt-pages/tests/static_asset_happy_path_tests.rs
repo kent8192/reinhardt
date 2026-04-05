@@ -4,7 +4,7 @@
 //! These tests verify the normal operation of the static resolver when
 //! inputs are correct and the system operates as designed.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 mod happy_path_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use reinhardt_utils::staticfiles::TemplateStaticConfig;
@@ -196,7 +196,7 @@ mod happy_path_tests {
 	}
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 mod wasm_happy_path_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use wasm_bindgen_test::*;

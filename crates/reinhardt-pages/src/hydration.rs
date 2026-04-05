@@ -39,5 +39,5 @@ pub use runtime::{
 	is_hydration_complete, on_hydration_complete,
 };
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub use runtime::{attach_events_to_mounted_view, mark_hydration_complete};

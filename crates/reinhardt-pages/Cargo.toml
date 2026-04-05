@@ -151,14 +151,14 @@ reinhardt-core = {workspace = true, features = ["reactive", "page"]}
 syn = { version = "2.0", features = ["full", "extra-traits", "parsing"] }
 quote = "1.0"
 proc-macro2 = "1.0"
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 wasm-bindgen-futures = "0.4.56"
 reqwest = { workspace = true }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 uuid = { version = "1.0", features = ["js"] }
 
 # Server-side only dependencies (DI, HTTP, Forms, Server Function Registry)
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 reinhardt-forms = { workspace = true }
 reinhardt-di = { workspace = true }
 reinhardt-http = { workspace = true }

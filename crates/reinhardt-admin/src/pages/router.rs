@@ -12,16 +12,16 @@ use crate::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, detail_view, list_view, model_form,
 };
 pub use crate::pages::components::login;
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 use crate::server::{get_dashboard, get_detail, get_fields, get_list};
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 use crate::types::ListQueryParams;
 use crate::types::ModelInfo;
 use reinhardt_pages::Signal;
 use reinhardt_pages::component::{Component, Page};
 use reinhardt_pages::page;
 use reinhardt_pages::router::{Link, Router};
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 use reinhardt_pages::{ResourceState, create_resource};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -73,14 +73,14 @@ thread_local! {
 /// Stored in a thread-local (safe because WASM is single-threaded) and
 /// populated when the dashboard response is received. Falls back to
 /// defaults if not yet initialized.
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 #[derive(Clone)]
 struct AdminUrls {
 	login_url: String,
 	logout_url: String,
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 impl Default for AdminUrls {
 	fn default() -> Self {
 		Self {
@@ -90,13 +90,13 @@ impl Default for AdminUrls {
 	}
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 thread_local! {
 	static ADMIN_URLS: RefCell<AdminUrls> = RefCell::new(AdminUrls::default());
 }
 
 /// Returns the configured login URL, with a trailing slash.
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 pub(crate) fn get_login_url() -> String {
 	ADMIN_URLS.with(|u| u.borrow().login_url.clone())
 }
@@ -163,7 +163,7 @@ where
 }
 
 /// Dashboard view component for router
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 fn dashboard_view() -> Page {
 	let dashboard_resource =
 		create_resource(|| async { get_dashboard().await.map_err(|e| e.to_string()) });
@@ -194,7 +194,7 @@ fn dashboard_view() -> Page {
 }
 
 /// Dashboard view component for router (non-WASM fallback)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 fn dashboard_view() -> Page {
 	// Dummy data for non-WASM environments (tests, etc.)
 	let models = vec![
@@ -212,7 +212,7 @@ fn dashboard_view() -> Page {
 }
 
 /// List view component for router
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 fn list_view_component(model_name: String) -> Page {
 	use reinhardt_pages::use_effect;
 
@@ -302,7 +302,7 @@ fn list_view_component(model_name: String) -> Page {
 }
 
 /// List view component for router (non-WASM fallback)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 fn list_view_component(model_name: String) -> Page {
 	use std::collections::HashMap;
 
@@ -334,7 +334,7 @@ fn list_view_component(model_name: String) -> Page {
 }
 
 /// Detail view component for router
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 fn detail_view_component(model_name: String, record_id: String) -> Page {
 	let model_name_for_view = model_name.clone();
 	let record_id_for_view = record_id.clone();
@@ -375,7 +375,7 @@ fn detail_view_component(model_name: String, record_id: String) -> Page {
 }
 
 /// Detail view component for router (non-WASM fallback)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 fn detail_view_component(model_name: String, record_id: String) -> Page {
 	// Dummy data for non-WASM environments (tests, etc.)
 	let mut record = HashMap::new();
@@ -386,7 +386,7 @@ fn detail_view_component(model_name: String, record_id: String) -> Page {
 }
 
 /// Create form view component for router
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 fn create_view_component(model_name: String) -> Page {
 	let model_name_for_view = model_name.clone();
 	let fields_resource = create_resource(move || {
@@ -430,7 +430,7 @@ fn create_view_component(model_name: String) -> Page {
 }
 
 /// Create form view component for router (non-WASM fallback)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 fn create_view_component(model_name: String) -> Page {
 	// Dummy data for non-WASM environments (tests, etc.)
 	let fields = vec![
@@ -454,7 +454,7 @@ fn create_view_component(model_name: String) -> Page {
 }
 
 /// Edit form view component for router
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 fn edit_view_component(model_name: String, record_id: String) -> Page {
 	let model_name_for_view = model_name.clone();
 	let record_id_for_view = record_id.clone();
@@ -513,7 +513,7 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 }
 
 /// Edit form view component for router (non-WASM fallback)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 fn edit_view_component(model_name: String, record_id: String) -> Page {
 	// Dummy data for non-WASM environments (tests, etc.)
 	let fields = vec![
@@ -563,7 +563,7 @@ fn not_found_view() -> Page {
 /// Loading view component
 ///
 /// Displays a loading indicator while data is being fetched.
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 fn loading_view() -> Page {
 	page!(|| {
 		div {
@@ -585,7 +585,7 @@ fn loading_view() -> Page {
 /// Displays an error message when data fetch fails.
 /// If the error indicates a 401 Unauthorized response, clears the JWT
 /// token and redirects to the login page.
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 fn error_view(message: &str) -> Page {
 	use reinhardt_pages::component::IntoPage;
 
@@ -630,7 +630,7 @@ fn error_view(message: &str) -> Page {
 /// Convert FieldType to HTML input type string
 ///
 /// Maps crate::types::FieldType to HTML input type attributes.
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 fn field_type_to_html_input_type(field_type: &crate::types::FieldType) -> String {
 	use crate::types::FieldType;
 

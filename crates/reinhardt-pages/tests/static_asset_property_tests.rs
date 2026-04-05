@@ -3,7 +3,7 @@
 //!
 //! Uses proptest to verify properties that should hold for all valid inputs.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 mod property_tests {
 	use proptest::prelude::*;
 	use proptest::proptest;
@@ -128,7 +128,7 @@ mod property_tests {
 	}
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 mod wasm_property_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use wasm_bindgen_test::*;

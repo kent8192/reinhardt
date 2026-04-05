@@ -297,7 +297,7 @@ where
 	}
 
 	/// Fetches all matching results.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn all(&self) -> Result<Vec<T>, ServerFnError> {
 		use crate::csrf::csrf_headers;
 		use reqwest::Client;
@@ -334,7 +334,7 @@ where
 	}
 
 	/// Fetches all matching results (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn all(&self) -> Result<Vec<T>, ServerFnError> {
 		Err(ServerFnError::Network(
 			"API calls not supported outside WASM".to_string(),
@@ -342,7 +342,7 @@ where
 	}
 
 	/// Fetches the first matching result.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn first(&self) -> Result<Option<T>, ServerFnError>
 	where
 		T: Clone,
@@ -354,7 +354,7 @@ where
 	}
 
 	/// Fetches the first matching result (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn first(&self) -> Result<Option<T>, ServerFnError> {
 		Err(ServerFnError::Network(
 			"API calls not supported outside WASM".to_string(),
@@ -362,7 +362,7 @@ where
 	}
 
 	/// Fetches a single result by primary key.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn get(&self, pk: impl std::fmt::Display) -> Result<T, ServerFnError> {
 		use crate::csrf::csrf_headers;
 		use reqwest::Client;
@@ -398,7 +398,7 @@ where
 	}
 
 	/// Fetches a single result by primary key (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn get(&self, _pk: impl std::fmt::Display) -> Result<T, ServerFnError> {
 		Err(ServerFnError::Network(
 			"API calls not supported outside WASM".to_string(),
@@ -406,7 +406,7 @@ where
 	}
 
 	/// Returns the count of matching results.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn count(&self) -> Result<usize, ServerFnError> {
 		use crate::csrf::csrf_headers;
 		use reqwest::Client;
@@ -450,7 +450,7 @@ where
 	}
 
 	/// Returns the count of matching results (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn count(&self) -> Result<usize, ServerFnError> {
 		Err(ServerFnError::Network(
 			"API calls not supported outside WASM".to_string(),
@@ -467,7 +467,7 @@ where
 	}
 
 	/// Creates a new record.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn create(&self, data: &T) -> Result<T, ServerFnError> {
 		use crate::csrf::csrf_headers;
 		use reqwest::Client;
@@ -503,7 +503,7 @@ where
 	}
 
 	/// Creates a new record (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn create(&self, _data: &T) -> Result<T, ServerFnError> {
 		Err(ServerFnError::Network(
 			"API calls not supported outside WASM".to_string(),
@@ -511,7 +511,7 @@ where
 	}
 
 	/// Updates an existing record.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn update(&self, pk: impl std::fmt::Display, data: &T) -> Result<T, ServerFnError> {
 		use crate::csrf::csrf_headers;
 		use reqwest::Client;
@@ -548,7 +548,7 @@ where
 	}
 
 	/// Updates an existing record (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn update(&self, _pk: impl std::fmt::Display, _data: &T) -> Result<T, ServerFnError> {
 		Err(ServerFnError::Network(
 			"API calls not supported outside WASM".to_string(),
@@ -556,7 +556,7 @@ where
 	}
 
 	/// Partially updates an existing record.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn partial_update(
 		&self,
 		pk: impl std::fmt::Display,
@@ -597,7 +597,7 @@ where
 	}
 
 	/// Partially updates an existing record (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn partial_update(
 		&self,
 		_pk: impl std::fmt::Display,
@@ -609,7 +609,7 @@ where
 	}
 
 	/// Deletes a record by primary key.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn delete(&self, pk: impl std::fmt::Display) -> Result<(), ServerFnError> {
 		use crate::csrf::csrf_headers;
 		use reqwest::Client;
@@ -642,7 +642,7 @@ where
 	}
 
 	/// Deletes a record by primary key (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn delete(&self, _pk: impl std::fmt::Display) -> Result<(), ServerFnError> {
 		Err(ServerFnError::Network(
 			"API calls not supported outside WASM".to_string(),

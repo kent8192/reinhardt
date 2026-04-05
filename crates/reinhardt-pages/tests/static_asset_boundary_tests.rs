@@ -4,7 +4,7 @@
 //! Tests boundary conditions for path length, nesting depth, query string length, etc.
 //! Uses rstest #[case] for systematic boundary value testing.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 mod boundary_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use reinhardt_utils::staticfiles::TemplateStaticConfig;
@@ -195,7 +195,7 @@ mod boundary_tests {
 	}
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 mod wasm_boundary_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use wasm_bindgen_test::*;

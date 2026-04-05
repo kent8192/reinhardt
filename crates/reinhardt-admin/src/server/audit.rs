@@ -248,7 +248,7 @@ pub fn log_bulk_delete(
 /// Emits an audit log entry via the tracing infrastructure.
 ///
 /// Uses `info!` level for successful operations and `warn!` level for failures.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 fn emit_audit_log(entry: &AuditEntry) {
 	if entry.success {
 		tracing::info!("{}", entry);
@@ -258,7 +258,7 @@ fn emit_audit_log(entry: &AuditEntry) {
 }
 
 /// No-op audit log on WASM targets (tracing is server-only).
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 fn emit_audit_log(_entry: &AuditEntry) {}
 
 #[cfg(test)]

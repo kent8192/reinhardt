@@ -99,6 +99,9 @@ mockall = { workspace = true }
 reinhardt-urls = { workspace = true, features = ["routers"] }
 reinhardt-conf = { workspace = true, features = ["settings", "async"], optional = true }
 
+[build-dependencies]
+cfg_aliases = "0.2"
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 tokio-test = "0.4"

@@ -32,7 +32,7 @@
 //! }
 //! ```
 
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg(native)]
 
 use rstest::*;
 

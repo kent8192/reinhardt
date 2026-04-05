@@ -5,7 +5,7 @@
 //!
 //! Run with: `wasm-pack test --headless --chrome crates/reinhardt-admin`
 
-#![cfg(target_arch = "wasm32")]
+#![cfg(client)]
 
 use reinhardt_admin::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, detail_view, list_view, model_form,

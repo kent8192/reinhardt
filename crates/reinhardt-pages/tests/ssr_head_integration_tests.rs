@@ -17,7 +17,7 @@
 //!
 //! Total: 8 tests
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 mod ssr_tests {
 	use reinhardt_pages::component::{Head, IntoPage, LinkTag, MetaTag, PageElement};
 	use reinhardt_pages::head;

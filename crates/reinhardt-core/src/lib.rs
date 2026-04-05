@@ -79,7 +79,7 @@
 pub mod apply_update;
 pub use apply_update::ApplyUpdate;
 /// HTTP endpoint routing and handler registration.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod endpoint;
 /// Error types and exception handling.
 #[cfg(feature = "exception")]
@@ -132,7 +132,7 @@ pub use crate::rate_limit::RateLimitStrategy;
 pub use async_trait::async_trait;
 
 // Re-export tokio only on non-WASM targets
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use tokio;
 
 /// Re-export of serde serialization types and serde_json.

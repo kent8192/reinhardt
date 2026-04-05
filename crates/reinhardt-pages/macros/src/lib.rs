@@ -1944,7 +1944,7 @@ pub fn head(input: TokenStream) -> TokenStream {
 /// };
 ///
 /// // Fetch data externally and populate the Signal
-/// #[cfg(target_arch = "wasm32")]
+/// #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 /// {
 ///     let form_clone = voting_form.clone();
 ///     spawn_local(async move {

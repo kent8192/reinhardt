@@ -108,7 +108,7 @@ struct HistoryStateJson {
 }
 
 /// Pushes a new state to the browser history.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn push_state(state: &HistoryState) -> Result<(), String> {
 	use wasm_bindgen::JsValue;
 
@@ -124,13 +124,13 @@ pub fn push_state(state: &HistoryState) -> Result<(), String> {
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn push_state(_state: &HistoryState) -> Result<(), String> {
 	Ok(())
 }
 
 /// Replaces the current state in the browser history.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn replace_state(state: &HistoryState) -> Result<(), String> {
 	use wasm_bindgen::JsValue;
 
@@ -146,13 +146,13 @@ pub fn replace_state(state: &HistoryState) -> Result<(), String> {
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn replace_state(_state: &HistoryState) -> Result<(), String> {
 	Ok(())
 }
 
 /// Navigates back in the browser history.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 // Allow dead_code: public History API for WASM client-side back navigation
 #[allow(dead_code)]
 pub fn go_back() -> Result<(), String> {
@@ -163,7 +163,7 @@ pub fn go_back() -> Result<(), String> {
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 // Allow dead_code: non-WASM stub matching the WASM go_back() signature for cross-platform builds
 #[allow(dead_code)]
 pub fn go_back() -> Result<(), String> {
@@ -171,7 +171,7 @@ pub fn go_back() -> Result<(), String> {
 }
 
 /// Navigates forward in the browser history.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 // Allow dead_code: public History API for WASM client-side forward navigation
 #[allow(dead_code)]
 pub fn go_forward() -> Result<(), String> {
@@ -184,7 +184,7 @@ pub fn go_forward() -> Result<(), String> {
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 // Allow dead_code: non-WASM stub matching the WASM go_forward() signature for cross-platform builds
 #[allow(dead_code)]
 pub fn go_forward() -> Result<(), String> {
@@ -192,7 +192,7 @@ pub fn go_forward() -> Result<(), String> {
 }
 
 /// Navigates to a specific position in the history.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 // Allow dead_code: public History API for WASM relative history navigation by delta offset
 #[allow(dead_code)]
 pub fn go(delta: i32) -> Result<(), String> {
@@ -205,7 +205,7 @@ pub fn go(delta: i32) -> Result<(), String> {
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 // Allow dead_code: non-WASM stub matching the WASM go() signature for cross-platform builds
 #[allow(dead_code)]
 pub(crate) fn go(_delta: i32) -> Result<(), String> {
@@ -213,7 +213,7 @@ pub(crate) fn go(_delta: i32) -> Result<(), String> {
 }
 
 /// Gets the current pathname from the browser.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn current_path() -> Result<String, String> {
 	let window = web_sys::window().ok_or("Window not available")?;
 	let location = window.location();
@@ -223,13 +223,13 @@ pub fn current_path() -> Result<String, String> {
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn current_path() -> Result<String, String> {
 	Ok("/".to_string())
 }
 
 /// Gets the current search query from the browser.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 // Allow dead_code: public API for WASM query string retrieval from browser location
 #[allow(dead_code)]
 pub fn current_search() -> Result<String, String> {
@@ -241,7 +241,7 @@ pub fn current_search() -> Result<String, String> {
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 // Allow dead_code: non-WASM stub matching the WASM current_search() signature for cross-platform builds
 #[allow(dead_code)]
 pub(crate) fn current_search() -> Result<String, String> {
@@ -249,7 +249,7 @@ pub(crate) fn current_search() -> Result<String, String> {
 }
 
 /// Gets the current hash from the browser.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 // Allow dead_code: public API for WASM URL hash fragment retrieval from browser location
 #[allow(dead_code)]
 pub fn current_hash() -> Result<String, String> {
@@ -261,7 +261,7 @@ pub fn current_hash() -> Result<String, String> {
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 // Allow dead_code: non-WASM stub matching the WASM current_hash() signature for cross-platform builds
 #[allow(dead_code)]
 pub(crate) fn current_hash() -> Result<String, String> {
@@ -281,7 +281,7 @@ pub(crate) fn current_hash() -> Result<String, String> {
 /// # Errors
 ///
 /// Returns an error if the window object is not available.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn setup_popstate_listener<F>(
 	callback: F,
 ) -> Result<wasm_bindgen::closure::Closure<dyn FnMut(web_sys::PopStateEvent)>, wasm_bindgen::JsValue>
@@ -315,7 +315,7 @@ where
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 // Allow dead_code: non-WASM stub matching the WASM setup_popstate_listener() signature for cross-platform builds
 #[allow(dead_code)]
 pub(crate) fn setup_popstate_listener<F>(_callback: F) -> Result<(), String>

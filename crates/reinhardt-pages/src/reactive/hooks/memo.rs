@@ -5,10 +5,10 @@
 use crate::callback::Callback;
 use crate::reactive::Memo;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 type EventArg = web_sys::Event;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 type EventArg = crate::component::DummyEvent;
 
 /// Memoizes an expensive calculation.
@@ -112,7 +112,7 @@ where
 /// Unlike React's useCallback, this doesn't require a dependency array.
 /// The callback captures values at creation time. To use the latest values,
 /// capture Signals (which are cheap to clone) rather than their values.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn use_callback<F>(f: F) -> Callback<EventArg, ()>
 where
 	F: Fn(EventArg) + 'static,
@@ -124,7 +124,7 @@ where
 ///
 /// See the WASM version for full documentation.
 /// Requires `Send + Sync` bounds for thread-safe server-side usage.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn use_callback<F>(f: F) -> Callback<EventArg, ()>
 where
 	F: Fn(EventArg) + Send + Sync + 'static,
@@ -159,7 +159,7 @@ where
 /// let add = use_callback_with(|x: i32| x + 1);
 /// assert_eq!(add.call(5), 6);
 /// ```
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn use_callback_with<Args, Ret, F>(f: F) -> Callback<Args, Ret>
 where
 	F: Fn(Args) -> Ret + 'static,
@@ -171,7 +171,7 @@ where
 ///
 /// See the WASM version for full documentation.
 /// Requires `Send + Sync` bounds for thread-safe server-side usage.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn use_callback_with<Args, Ret, F>(f: F) -> Callback<Args, Ret>
 where
 	F: Fn(Args) -> Ret + Send + Sync + 'static,
@@ -218,7 +218,7 @@ mod tests {
 		assert_eq!(sum.get(), 15);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	#[test]
 	fn test_use_callback() {
 		use crate::component::DummyEvent;
@@ -227,7 +227,7 @@ mod tests {
 		callback.call(DummyEvent::default());
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	#[test]
 	fn test_use_callback_with() {
 		let add_one = use_callback_with(|x: i32| x + 1);

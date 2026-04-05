@@ -35,7 +35,7 @@ use crate::server_fn::ServerFnError;
 /// # Returns
 ///
 /// A tuple of (status_code, response_body) on success, or a ServerFnError on failure.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub async fn fetch_with_mock(
 	url: &str,
 	method: &str,
@@ -69,7 +69,7 @@ fn mock_response_to_result(response: MockResponse) -> Result<(u16, String), Serv
 }
 
 /// Perform a real HTTP fetch using reqwest
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 async fn real_fetch(
 	url: &str,
 	method: &str,
@@ -122,7 +122,7 @@ async fn real_fetch(
 }
 
 /// Non-WASM implementation for compilation purposes
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub async fn fetch_with_mock(
 	url: &str,
 	method: &str,

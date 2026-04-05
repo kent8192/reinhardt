@@ -65,7 +65,7 @@ impl Default for UseWebSocketOptions {
 /// On WASM targets, this holds the actual `Closure` instances so they remain
 /// alive as long as the `WebSocketHandle` exists, and are released when the
 /// handle is dropped (instead of being leaked via `forget()`).
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 struct WsClosures {
 	_onopen: Closure<dyn FnMut(JsValue)>,
 	_onmessage: Closure<dyn FnMut(MessageEvent)>,
@@ -88,7 +88,7 @@ pub struct WebSocketHandle {
 	close_fn: Rc<dyn Fn()>,
 	/// Stored closures to keep event listeners alive without leaking memory.
 	/// When the last `WebSocketHandle` clone is dropped, the closures are cleaned up.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	_closures: Rc<RefCell<Option<WsClosures>>>,
 }
 
@@ -151,7 +151,7 @@ impl Clone for WebSocketHandle {
 			latest_message: self.latest_message.clone(),
 			send_fn: Rc::clone(&self.send_fn),
 			close_fn: Rc::clone(&self.close_fn),
-			#[cfg(target_arch = "wasm32")]
+			#[cfg(wasm)]
 			_closures: Rc::clone(&self._closures),
 		}
 	}
@@ -161,7 +161,7 @@ impl Clone for WebSocketHandle {
 // WASM Implementation
 // ============================================================================
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use {
 	std::cell::RefCell,
 	wasm_bindgen::{JsCast, JsValue, closure::Closure},
@@ -222,7 +222,7 @@ use {
 ///     }
 /// });
 /// ```
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn use_websocket(url: &str, options: UseWebSocketOptions) -> WebSocketHandle {
 	// WebSocket instance holder
 	let ws_ref: Rc<RefCell<Option<WebSocket>>> = Rc::new(RefCell::new(None));
@@ -381,7 +381,7 @@ pub fn use_websocket(url: &str, options: UseWebSocketOptions) -> WebSocketHandle
 /// # Returns
 ///
 /// A `WebSocketHandle` with connection state always set to `Closed`.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn use_websocket(_url: &str, _options: UseWebSocketOptions) -> WebSocketHandle {
 	WebSocketHandle {
 		connection_state: Signal::new(ConnectionState::Closed),
@@ -396,7 +396,7 @@ mod tests {
 	use super::*;
 
 	#[test]
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	fn test_use_websocket_ssr_no_op() {
 		let ws = use_websocket("ws://test", UseWebSocketOptions::default());
 		assert!(matches!(

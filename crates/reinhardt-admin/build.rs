@@ -7,7 +7,7 @@ fn main() {
 
 	cfg_aliases! {
 		// Platform aliases for simpler conditional compilation
-		client: { target_arch = "wasm32" },
-		server: { not(target_arch = "wasm32") },
+		client: { all(target_family = "wasm", target_os = "unknown") },
+		server: { not(all(target_family = "wasm", target_os = "unknown")) },
 	}
 }

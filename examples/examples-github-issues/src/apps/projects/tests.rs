@@ -36,6 +36,8 @@ mod tests {
 			exp: now + 86400, // 24 hours
 			iat: now,
 			username: "projectowner".to_string(),
+			is_staff: false,
+			is_superuser: false,
 		};
 
 		(claims, user_id)

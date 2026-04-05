@@ -88,7 +88,7 @@ pub fn use_transition() -> TransitionState {
 		Rc::new(RefCell::new(Box::new(move |f: Box<dyn FnOnce()>| {
 			is_pending.set(true);
 
-			#[cfg(target_arch = "wasm32")]
+			#[cfg(wasm)]
 			{
 				use crate::spawn::spawn_task;
 				let is_pending = is_pending.clone();
@@ -98,7 +98,7 @@ pub fn use_transition() -> TransitionState {
 				});
 			}
 
-			#[cfg(not(target_arch = "wasm32"))]
+			#[cfg(native)]
 			{
 				f();
 				is_pending.set(false);
@@ -162,7 +162,7 @@ pub fn use_deferred_value<T: Clone + 'static>(value: Signal<T>) -> Signal<T> {
 		move || {
 			let new_value = value.get();
 
-			#[cfg(target_arch = "wasm32")]
+			#[cfg(wasm)]
 			{
 				use crate::spawn::spawn_task;
 				let deferred_clone = deferred_clone.clone();
@@ -171,7 +171,7 @@ pub fn use_deferred_value<T: Clone + 'static>(value: Signal<T>) -> Signal<T> {
 				});
 			}
 
-			#[cfg(not(target_arch = "wasm32"))]
+			#[cfg(native)]
 			{
 				deferred_clone.set(new_value);
 			}

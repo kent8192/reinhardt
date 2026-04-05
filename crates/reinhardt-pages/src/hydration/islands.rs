@@ -19,9 +19,9 @@
 //! IslandDetector → [IslandNode] → Selective Hydration
 //! ```
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use wasm_bindgen::JsCast;
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use web_sys::{Document, Element};
 
 /// Represents an interactive island in the DOM.
@@ -31,7 +31,7 @@ use web_sys::{Document, Element};
 #[derive(Debug, Clone)]
 pub struct IslandNode {
 	/// The DOM element representing this island.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub element: Element,
 	/// Hydration ID from data-rh-id attribute.
 	pub hydration_id: String,
@@ -39,7 +39,7 @@ pub struct IslandNode {
 	pub component_name: Option<String>,
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 impl IslandNode {
 	/// Creates a new IslandNode from a DOM element.
 	///
@@ -71,12 +71,12 @@ impl IslandNode {
 ///
 /// The detector scans the DOM for elements marked with `data-rh-island="true"`
 /// and creates `IslandNode` instances for selective hydration.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub struct IslandDetector {
 	document: Document,
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 impl IslandDetector {
 	/// Creates a new island detector.
 	///
@@ -170,7 +170,7 @@ impl IslandDetector {
 }
 
 // Compilation-only implementations for non-WASM targets
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 impl IslandNode {
 	/// Compilation-only implementation for non-WASM targets.
 	pub fn from_element(_element: ()) -> Option<Self> {
@@ -182,10 +182,10 @@ impl IslandNode {
 ///
 /// This provides type compatibility for cross-compilation scenarios.
 /// Actual island detection requires WASM environment with DOM access.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub struct IslandDetector;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 impl IslandDetector {
 	/// Compilation-only implementation for non-WASM targets.
 	pub fn new(_document: ()) -> Self {
@@ -215,14 +215,14 @@ mod tests {
 	#[test]
 	fn test_island_node_struct() {
 		// Test that IslandNode can be created (compilation test)
-		#[cfg(target_arch = "wasm32")]
+		#[cfg(wasm)]
 		{
 			use wasm_bindgen_test::*;
 			// Actual WASM tests would go here
 		}
 
 		// Non-WASM: just ensure the module compiles
-		#[cfg(not(target_arch = "wasm32"))]
+		#[cfg(native)]
 		{
 			let _detector = IslandDetector::new(());
 			let islands = _detector.find_islands();

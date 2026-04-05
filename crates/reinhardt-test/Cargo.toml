@@ -109,8 +109,11 @@ web-sys = { version = "0.3.83", optional = true, features = [
 fantoccini = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 
+[build-dependencies]
+cfg_aliases = "0.2"
+
 # Native-only dependencies (cannot compile on wasm32-unknown-unknown)
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 # Core: delegate to reinhardt-testkit
 reinhardt-testkit = { workspace = true }
 
@@ -132,7 +135,7 @@ sqlx = { workspace = true, optional = true }
 # Re-exported dependencies needed for backward compatibility
 tokio = { workspace = true }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 tokio-test = "0.4"
 scopeguard = "1.2"

@@ -1,4 +1,4 @@
-#![cfg(target_arch = "wasm32")]
+#![cfg(wasm)]
 
 //! Async utilities for WASM testing.
 //!
@@ -25,7 +25,7 @@
 //! sleep(Duration::from_millis(100)).await;
 //! ```
 
-#![cfg(target_arch = "wasm32")]
+#![cfg(wasm)]
 
 use std::future::Future;
 use std::pin::Pin;

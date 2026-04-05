@@ -62,13 +62,13 @@ pub mod validation_errors;
 #[cfg(feature = "serde")]
 pub mod serialization;
 
-#[cfg(all(feature = "jsonschema", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "jsonschema", native))]
 pub mod schema;
 
-#[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "parallel", native))]
 pub mod parallel;
 
-#[cfg(all(feature = "i18n", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "i18n", native))]
 pub mod i18n;
 
 pub use color::{ColorFormat, ColorValidator};

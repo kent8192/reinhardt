@@ -269,7 +269,7 @@ reinhardt-urls = { workspace = true }
 reinhardt-core = {workspace = true, features = ["types"]}
 
 # Server-side dependencies (NOT for WASM)
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 # Core dependencies
 reinhardt-utils = { workspace = true }
 reinhardt-views = { workspace = true }
@@ -317,7 +317,10 @@ reinhardt-query = { workspace = true, optional = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 
-[target.'cfg(not(target_arch = "wasm32"))'.build-dependencies]
+[build-dependencies]
+cfg_aliases = "0.2"
+
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.build-dependencies]
 tonic-prost-build = { workspace = true }
 
 [workspace]

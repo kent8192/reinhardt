@@ -8,17 +8,17 @@
 //!   externally via WebDriver/fantoccini (native target, `e2e` feature).
 
 // In-browser WASM test fixtures (wasm32 target only)
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#[cfg(all(wasm, feature = "wasm"))]
 mod browser;
 
 // Backward-compatible re-exports: all items previously in fixtures::wasm::*
 // remain accessible at the same path after the browser submodule extraction.
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#[cfg(all(wasm, feature = "wasm"))]
 pub use browser::{
 	WasmTestEnv, mock_cookies, mock_fetch, mock_local_storage, mock_session_storage,
 	populated_storage, screen, session_cookies, wasm_test_env,
 };
 
 // E2E browser testing fixtures via WebDriver (native target only)
-#[cfg(all(feature = "e2e", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "e2e", native))]
 pub mod e2e;

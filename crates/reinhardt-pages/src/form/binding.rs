@@ -271,7 +271,7 @@ impl FormBinding {
 	///     binding.submit().await?;
 	/// }
 	/// ```
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn submit(&self) -> Result<(), String> {
 		self.form_component.submit().await
 	}

@@ -1,4 +1,4 @@
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg(native)]
 
 //! GraphQL Subscriptions - Signal-based GraphQL subscription support
 //!

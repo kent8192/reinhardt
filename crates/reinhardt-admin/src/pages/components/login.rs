@@ -99,7 +99,7 @@ fn build_login_form() -> Page {
 		},
 
 		on_success: |response| {
-			#[cfg(target_arch = "wasm32")]
+			#[cfg(client)]
 			{
 				use reinhardt_pages::auth::{auth_state, set_jwt_token};
 
@@ -121,7 +121,7 @@ fn build_login_form() -> Page {
 		},
 
 		on_error: |e| {
-			#[cfg(target_arch = "wasm32")]
+			#[cfg(client)]
 			{
 				let error_msg = e.to_string();
 				if let Some(doc) = web_sys::window().and_then(|w| w.document()) {

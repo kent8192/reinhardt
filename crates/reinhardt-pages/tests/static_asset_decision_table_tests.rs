@@ -4,7 +4,7 @@
 //! Tests combinations of boolean and categorical conditions using decision tables.
 //! Uses rstest #[case] for systematic decision table coverage.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 mod decision_table_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use reinhardt_utils::staticfiles::TemplateStaticConfig;
@@ -261,7 +261,7 @@ mod decision_table_tests {
 	}
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 mod wasm_decision_table_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use wasm_bindgen_test::*;

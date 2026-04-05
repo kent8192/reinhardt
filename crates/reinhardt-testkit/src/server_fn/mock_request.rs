@@ -15,7 +15,7 @@
 //! // Use request in server function testing
 //! ```
 
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg(native)]
 
 use std::collections::HashMap;
 

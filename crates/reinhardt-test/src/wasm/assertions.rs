@@ -1,4 +1,4 @@
-#![cfg(target_arch = "wasm32")]
+#![cfg(wasm)]
 
 //! DOM assertion helpers for WASM testing.
 //!
@@ -17,7 +17,7 @@
 //! element.should_have_class("btn-primary");
 //! ```
 
-#![cfg(target_arch = "wasm32")]
+#![cfg(wasm)]
 
 use wasm_bindgen::JsCast;
 use web_sys::{Document, Element, HtmlElement, HtmlInputElement, Window};

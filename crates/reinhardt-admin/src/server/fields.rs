@@ -2,20 +2,20 @@
 //!
 //! Provides field information for dynamic form generation.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, FieldInfo, FieldType};
 use crate::types::FieldsResponse;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use std::sync::Arc;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use crate::server::type_inference::{get_field_metadata, infer_admin_field_type, infer_required};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use reinhardt_utils::utils_core::text::humanize_field_name;
 
 /// Get field definitions for dynamic form generation

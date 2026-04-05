@@ -1895,7 +1895,7 @@ fn generate_on_error_callback(
 		code.push(quote! {
 			{
 				let callback = #on_error;
-				callback(e.clone());
+				callback(&e);
 			}
 		});
 	}

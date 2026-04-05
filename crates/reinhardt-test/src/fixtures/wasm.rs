@@ -22,3 +22,7 @@ pub use browser::{
 // E2E browser testing fixtures via WebDriver (native target only)
 #[cfg(all(feature = "e2e", native))]
 pub mod e2e;
+
+// E2E browser testing fixtures via Chrome DevTools Protocol (native target only)
+#[cfg(all(feature = "e2e-cdp", not(target_arch = "wasm32")))]
+pub mod e2e_cdp;

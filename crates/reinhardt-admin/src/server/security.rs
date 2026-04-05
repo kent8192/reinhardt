@@ -403,11 +403,19 @@ pub fn require_csrf_token(
 	body_token: &str,
 	headers: &hyper::HeaderMap,
 ) -> Result<(), reinhardt_pages::server_fn::ServerFnError> {
-	let cookie_token = extract_csrf_cookie(headers).ok_or_else(|| {
-		reinhardt_pages::server_fn::ServerFnError::server(403, "CSRF token missing from cookie")
-	})?;
+	// Double-submit cookie pattern: compare body token with cookie token.
+	// Fallback: accept the X-CSRFToken header when cookies are unavailable
+	// (e.g. WASM reqwest client which does not send browser cookies).
+	let expected_token = extract_csrf_cookie(headers)
+		.or_else(|| extract_csrf_header(headers))
+		.ok_or_else(|| {
+			reinhardt_pages::server_fn::ServerFnError::server(
+				403,
+				"CSRF token missing from cookie and header",
+			)
+		})?;
 
-	if !validate_csrf_token(body_token, &cookie_token) {
+	if !validate_csrf_token(body_token, &expected_token) {
 		return Err(reinhardt_pages::server_fn::ServerFnError::server(
 			403,
 			"CSRF token validation failed",
@@ -416,6 +424,7 @@ pub fn require_csrf_token(
 
 	Ok(())
 }
+
 
 /// Sanitizes mutation data values to prevent stored XSS.
 ///

@@ -161,6 +161,10 @@ pub use fixtures::wasm::e2e::{
 	BrowserClient, BrowserConfig, BrowserType, browser_client, browser_config,
 };
 
+// E2E browser testing via CDP re-exports (native target only)
+#[cfg(all(feature = "e2e-cdp", not(target_arch = "wasm32")))]
+pub use fixtures::wasm::e2e_cdp::{CdpBrowser, CdpConfig, CdpPage, cdp_browser, cdp_config};
+
 /// Re-export commonly used testing types
 #[cfg(native)]
 pub mod prelude {

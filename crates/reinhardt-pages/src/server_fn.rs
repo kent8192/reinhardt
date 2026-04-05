@@ -144,12 +144,17 @@ pub fn resolve_endpoint(path: &str) -> String {
 			*cache = Some(prefix);
 		}
 		let prefix = cache.as_deref().unwrap_or("");
-		if prefix.is_empty() {
+		let relative = if prefix.is_empty() {
 			path.to_string()
 		} else {
 			let prefix = prefix.trim_end_matches('/');
 			format!("{}{}", prefix, path)
-		}
+		};
+		// reqwest requires absolute URLs; prepend the page origin for WASM.
+		web_sys::window()
+			.and_then(|w| w.location().origin().ok())
+			.map(|origin| format!("{}{}", origin, relative))
+			.unwrap_or(relative)
 	})
 }
 

@@ -586,6 +586,7 @@ rust_decimal = "1.41.0"
 
 # E2E browser testing
 fantoccini = "0.22.1"
+chromiumoxide = { version = "0.9.1", default-features = false }
 
 # Testing
 testcontainers = { version = "0.27.2", features = ["blocking"] }

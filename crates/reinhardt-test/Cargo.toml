@@ -44,6 +44,8 @@ wasm-full = ["wasm", "reinhardt-pages/web-sys-full"]
 server-fn-test = []
 # E2E browser testing via WebDriver (fantoccini)
 e2e = ["dep:fantoccini", "dep:url"]
+# E2E browser testing via Chrome DevTools Protocol (chromiumoxide) + containerized Chrome
+e2e-cdp = ["dep:chromiumoxide", "dep:futures", "dep:testcontainers", "dep:url"]
 full = ["testcontainers", "static", "websockets", "graphql", "property-based", "viewsets", "messages", "tasks", "admin"]
 
 [dependencies]
@@ -107,6 +109,9 @@ web-sys = { version = "0.3.83", optional = true, features = [
 
 # Optional E2E testing dependencies (feature-gated)
 fantoccini = { workspace = true, optional = true }
+chromiumoxide = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+testcontainers = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 
 [build-dependencies]

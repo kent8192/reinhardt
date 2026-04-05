@@ -104,12 +104,20 @@ console_error_panic_hook = ["dep:console_error_panic_hook"]
 # Server-only dev-dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
 insta = { workspace = true }
-reinhardt-db = { workspace = true }
+reinhardt-db = { workspace = true, features = ["orm", "backends"] }
+reinhardt-test = { workspace = true, features = ["e2e-cdp", "testcontainers"] }
+reinhardt-pages = { workspace = true, features = ["testing"] }
+reinhardt-server = { workspace = true }
+reinhardt-di = { workspace = true }
+reinhardt-testkit = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
 tokio-test = { workspace = true }
 rstest = { workspace = true }
 sqlx = { workspace = true, features = ["postgres", "runtime-tokio-native-tls"] }
 # Pin to avoid build failure in native-tls 0.2.17 (non-exhaustive pattern in openssl.rs)
 native-tls = { workspace = true }
+futures = { workspace = true }
+serial_test = { workspace = true }
 tempfile = { workspace = true }
 toml = { workspace = true }
 

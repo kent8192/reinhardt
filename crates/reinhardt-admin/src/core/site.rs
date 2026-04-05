@@ -303,16 +303,22 @@ impl AdminSite {
 		admin: impl ModelAdmin + 'static,
 	) -> AdminResult<()> {
 		let model_name = model_name.into();
-		// Use entry API for atomic check-and-insert to avoid TOCTOU race condition
-		match self.registry.entry(model_name) {
-			dashmap::mapref::entry::Entry::Occupied(entry) => Err(AdminError::ValidationError(
-				format!("Model '{}' is already registered", entry.key()),
-			)),
-			dashmap::mapref::entry::Entry::Vacant(entry) => {
-				entry.insert(Arc::new(admin));
-				Ok(())
-			}
+		// Reject case-insensitive duplicates (URLs are lowercased, so "User" and "user"
+		// would collide at /admin/user/).
+		let needle = model_name.to_lowercase();
+		if let Some(existing) = self
+			.registry
+			.iter()
+			.find(|e| e.key().to_lowercase() == needle)
+		{
+			return Err(AdminError::ValidationError(format!(
+				"Model '{}' is already registered (as '{}')",
+				model_name,
+				existing.key()
+			)));
 		}
+		self.registry.insert(model_name, Arc::new(admin));
+		Ok(())
 	}
 
 	/// Unregister a model from the admin site
@@ -327,9 +333,14 @@ impl AdminSite {
 	/// admin.unregister("User");
 	/// ```
 	pub fn unregister(&self, model_name: &str) -> AdminResult<()> {
-		self.registry
-			.remove(model_name)
+		let needle = model_name.to_lowercase();
+		let key = self
+			.registry
+			.iter()
+			.find(|entry| entry.key().to_lowercase() == needle)
+			.map(|entry| entry.key().clone())
 			.ok_or_else(|| AdminError::ModelNotRegistered(model_name.into()))?;
+		self.registry.remove(&key);
 		Ok(())
 	}
 
@@ -344,7 +355,10 @@ impl AdminSite {
 	/// assert!(!admin.is_registered("User"));
 	/// ```
 	pub fn is_registered(&self, model_name: &str) -> bool {
-		self.registry.contains_key(model_name)
+		let needle = model_name.to_lowercase();
+		self.registry
+			.iter()
+			.any(|entry| entry.key().to_lowercase() == needle)
 	}
 
 	/// Get the admin for a specific model
@@ -359,8 +373,10 @@ impl AdminSite {
 	/// let user_admin = admin.get_model_admin("User").unwrap();
 	/// ```
 	pub fn get_model_admin(&self, model_name: &str) -> AdminResult<Arc<dyn ModelAdmin>> {
+		let needle = model_name.to_lowercase();
 		self.registry
-			.get(model_name)
+			.iter()
+			.find(|entry| entry.key().to_lowercase() == needle)
 			.map(|entry| Arc::clone(entry.value()))
 			.ok_or_else(|| AdminError::ModelNotRegistered(model_name.into()))
 	}
@@ -758,5 +774,57 @@ mod tests {
 			"Error hint should mention admin_routes_with_di, got: {}",
 			err
 		);
+	}
+
+	// ---- Case-insensitive registry tests (Fixes #3353) ----
+
+	#[rstest]
+	fn test_get_model_admin_case_insensitive() {
+		let admin = AdminSite::new("Admin");
+		admin
+			.register("User", ModelAdminConfig::new("User"))
+			.unwrap();
+
+		assert!(admin.get_model_admin("User").is_ok());
+		assert!(admin.get_model_admin("user").is_ok());
+		assert!(admin.get_model_admin("USER").is_ok());
+		assert!(admin.get_model_admin("uSeR").is_ok());
+		assert!(admin.get_model_admin("nonexistent").is_err());
+	}
+
+	#[rstest]
+	fn test_is_registered_case_insensitive() {
+		let admin = AdminSite::new("Admin");
+		admin
+			.register("User", ModelAdminConfig::new("User"))
+			.unwrap();
+
+		assert!(admin.is_registered("User"));
+		assert!(admin.is_registered("user"));
+		assert!(admin.is_registered("USER"));
+		assert!(!admin.is_registered("Post"));
+	}
+
+	#[rstest]
+	fn test_register_rejects_case_insensitive_duplicate() {
+		let admin = AdminSite::new("Admin");
+		admin
+			.register("User", ModelAdminConfig::new("User"))
+			.unwrap();
+
+		let result = admin.register("user", ModelAdminConfig::new("user"));
+		assert!(result.is_err());
+		assert!(result.unwrap_err().to_string().contains("already registered"));
+	}
+
+	#[rstest]
+	fn test_unregister_case_insensitive() {
+		let admin = AdminSite::new("Admin");
+		admin
+			.register("User", ModelAdminConfig::new("User"))
+			.unwrap();
+
+		admin.unregister("user").unwrap();
+		assert!(!admin.is_registered("User"));
 	}
 }

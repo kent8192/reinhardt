@@ -289,23 +289,6 @@ impl Runtime {
 		}
 	}
 
-	/// Flush all pending updates (basic version)
-	///
-	/// This is a basic implementation that clears the pending updates queue.
-	/// For actual Effect execution, use `flush_updates()` which is
-	/// implemented in the effect module.
-	///
-	/// Note: This method is kept for backward compatibility and simple testing.
-	/// Production code should use `flush_updates()` instead.
-	pub fn flush_updates(&self) {
-		*self.update_scheduled.borrow_mut() = false;
-
-		// Take all pending updates
-		let pending = core::mem::take(&mut *self.pending_updates.borrow_mut());
-
-		// Clear the queue (actual execution is handled by flush_updates)
-		drop(pending);
-	}
 
 	/// Clear dependencies for a node
 	///

@@ -396,7 +396,7 @@ fn test_effect_triggered_by_auth_change() {
 
 	// Trigger effect by logging in
 	state.login("1", "effect_test");
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 
 	// Effect should be triggered
 	assert!(triggered.get());
@@ -416,7 +416,7 @@ fn test_effect_triggered_by_user_id_change() {
 	});
 
 	state.login("42", "user");
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 
 	assert_eq!(captured_id.get(), Some("42".to_string()));
 }
@@ -438,7 +438,7 @@ fn test_effect_triggered_by_permission_change() {
 	perms.insert("perm1".to_string());
 	perms.insert("perm2".to_string());
 	state.set_permissions(perms);
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 
 	assert_eq!(perm_count.get(), 2);
 }
@@ -469,7 +469,7 @@ fn test_multiple_effects_on_same_signal() {
 	});
 
 	state.login("1", "multi_effect");
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 
 	assert!(effect1_triggered.get());
 	assert!(effect2_triggered.get());

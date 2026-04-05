@@ -5,9 +5,11 @@
 use reinhardt_pages::component::Page;
 use reinhardt_pages::form;
 use reinhardt_pages::page;
-use reinhardt_pages::ServerFnError;
-
+// Used in form! macro closure type annotations (WASM-only codegen)
+#[cfg(client)]
 use crate::types::responses::LoginResponse;
+#[cfg(client)]
+use reinhardt_pages::ServerFnError;
 
 /// Login form component
 ///
@@ -102,41 +104,35 @@ fn build_login_form() -> Page {
 		},
 
 		on_success: |response: LoginResponse| {
-			#[cfg(client)]
-			{
-				use reinhardt_pages::auth::auth_state;
+			use reinhardt_pages::auth::auth_state;
 
-				// JWT token is set as HTTP-Only cookie by the server.
-				// No need to store in sessionStorage — browser handles it.
+			// JWT token is set as HTTP-Only cookie by the server.
+			// No need to store in sessionStorage — browser handles it.
 
-				let auth = auth_state();
-				auth.login_full(
-					response.user_id.clone(),
-					&response.username,
-					None,
-					response.is_staff,
-					response.is_superuser,
-				);
+			let auth = auth_state();
+			auth.login_full(
+				response.user_id.clone(),
+				&response.username,
+				None,
+				response.is_staff,
+				response.is_superuser,
+			);
 
-				crate::pages::router::with_router(|r| {
-					let _ = r.push("/admin/");
-				});
-			}
+			crate::pages::router::with_router(|r| {
+				let _ = r.push("/admin/");
+			});
 		},
 
 		on_error: |e: ServerFnError| {
-			#[cfg(client)]
-			{
-				let error_msg = e.to_string();
-				if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-					if let Some(error_div) = doc.get_element_by_id("login-error") {
-						let _ = error_div.class_list().remove_1("hidden");
-						error_div.set_text_content(Some(if error_msg.contains("401") {
-							"Invalid username or password"
-						} else {
-							"Login failed. Please try again."
-						}));
-					}
+			let error_msg = e.to_string();
+			if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+				if let Some(error_div) = doc.get_element_by_id("login-error") {
+					let _ = error_div.class_list().remove_1("hidden");
+					error_div.set_text_content(Some(if error_msg.contains("401") {
+						"Invalid username or password"
+					} else {
+						"Login failed. Please try again."
+					}));
 				}
 			}
 		},

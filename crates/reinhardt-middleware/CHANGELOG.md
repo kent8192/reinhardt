@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.15...reinhardt-middleware@v0.1.0-rc.16) - 2026-04-05
+
+### Added
+
+- *(middleware)* add JwtAuthMiddleware for stateless token-based auth
+- *(middleware)* add RemoteUserMiddleware and PersistentRemoteUserMiddleware
+- *(middleware)* add LoginRequiredMiddleware for unauthenticated redirect
+- *(middleware)* wire module declarations, re-exports, and feature flags
+
+### Fixed
+
+- *(http)* convert errors to responses within middleware chain
+- *(middleware)* ensure security headers on error responses from inner handlers
+- *(middleware)* convert errors to responses in security-critical middleware
+- *(middleware)* convert errors to responses in functional middleware
+- *(middleware)* resolve docs.rs build and feature gate issues
+- *(auth)* add is_staff and is_superuser fields to JWT Claims
+- *(middleware)* extract is_staff from JWT claims instead of hardcoding false
+
+### Testing
+
+- *(middleware)* add integration tests for error response headers
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.14...reinhardt-middleware@v0.1.0-rc.15) - 2026-03-29
 
 ### Added

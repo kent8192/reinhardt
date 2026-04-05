@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Property-based tests for static asset URL resolution
 //!
 //! Uses proptest to verify properties that should hold for all valid inputs.
@@ -129,7 +130,6 @@ mod property_tests {
 
 #[cfg(wasm)]
 mod wasm_property_tests {
-	use proptest::proptest;
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use wasm_bindgen_test::*;
 

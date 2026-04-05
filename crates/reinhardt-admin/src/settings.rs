@@ -5,7 +5,7 @@
 
 #[cfg(server)]
 mod inner {
-	use reinhardt_conf::settings::fragment::{HasSettings, SettingsFragment};
+	use reinhardt_conf::settings::fragment::{HasSettings, SettingsFragment, SettingsValidation};
 	use reinhardt_conf::settings::profile::Profile;
 	use reinhardt_conf::settings::validation::ValidationResult;
 	use serde::{Deserialize, Serialize};
@@ -234,6 +234,14 @@ mod inner {
 		}
 	}
 
+	impl SettingsValidation for AdminSettings {
+		fn validate(&self, _profile: &Profile) -> ValidationResult {
+			self.warn_csp_misconfigurations();
+			self.warn_security_misconfigurations();
+			Ok(())
+		}
+	}
+
 	impl SettingsFragment for AdminSettings {
 		type Accessor = dyn HasAdminSettings;
 
@@ -241,10 +249,8 @@ mod inner {
 			"admin"
 		}
 
-		fn validate(&self, _profile: &Profile) -> ValidationResult {
-			self.warn_csp_misconfigurations();
-			self.warn_security_misconfigurations();
-			Ok(())
+		fn validate(&self, profile: &Profile) -> ValidationResult {
+			<Self as SettingsValidation>::validate(self, profile)
 		}
 	}
 
@@ -500,9 +506,11 @@ img_src = ["'self'", "data:", "https://images.example.com"]
 			settings.csp.script_src = vec!["'wasm-unsafe-eval'".to_string()];
 
 			// Act
-			use reinhardt_conf::SettingsFragment;
-			let result =
-				settings.validate(&reinhardt_conf::settings::profile::Profile::Development);
+			use reinhardt_conf::settings::fragment::SettingsValidation;
+			let result = SettingsValidation::validate(
+				&settings,
+				&reinhardt_conf::settings::profile::Profile::Development,
+			);
 
 			// Assert
 			assert!(result.is_ok());
@@ -515,9 +523,11 @@ img_src = ["'self'", "data:", "https://images.example.com"]
 			settings.csp.script_src = vec!["'self'".to_string()];
 
 			// Act
-			use reinhardt_conf::SettingsFragment;
-			let result =
-				settings.validate(&reinhardt_conf::settings::profile::Profile::Development);
+			use reinhardt_conf::settings::fragment::SettingsValidation;
+			let result = SettingsValidation::validate(
+				&settings,
+				&reinhardt_conf::settings::profile::Profile::Development,
+			);
 
 			// Assert
 			assert!(result.is_ok());
@@ -530,8 +540,11 @@ img_src = ["'self'", "data:", "https://images.example.com"]
 			settings.security.frame_options = "invalid-value".to_string();
 
 			// Act
-			use reinhardt_conf::SettingsFragment;
-			let result = settings.validate(&reinhardt_conf::settings::profile::Profile::Production);
+			use reinhardt_conf::settings::fragment::SettingsValidation;
+			let result = SettingsValidation::validate(
+				&settings,
+				&reinhardt_conf::settings::profile::Profile::Production,
+			);
 
 			// Assert
 			assert!(result.is_ok());
@@ -543,8 +556,11 @@ img_src = ["'self'", "data:", "https://images.example.com"]
 			let settings = AdminSettings::default();
 
 			// Act
-			use reinhardt_conf::SettingsFragment;
-			let result = settings.validate(&reinhardt_conf::settings::profile::Profile::Production);
+			use reinhardt_conf::settings::fragment::SettingsValidation;
+			let result = SettingsValidation::validate(
+				&settings,
+				&reinhardt_conf::settings::profile::Profile::Production,
+			);
 
 			// Assert
 			assert!(result.is_ok());

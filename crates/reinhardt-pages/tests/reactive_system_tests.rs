@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Integration tests for Core Reactive System
 //!
 //! These tests verify the reactive system functionality:

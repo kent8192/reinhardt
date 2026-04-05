@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Form Binding Integration Tests
 //!
 //! Tests for the FormBinding system's two-way data binding between

@@ -1606,6 +1606,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("div {"));
 		assert!(result.content.contains("\"hello\""));
 		assert!(result.contains_page_macro);
@@ -1621,6 +1622,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("div"));
 		assert!(result.content.contains("class"));
 		assert!(result.contains_page_macro);
@@ -1636,6 +1638,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(input, result.content);
 		assert!(!result.contains_page_macro);
 	}
@@ -1650,6 +1653,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("page!(|| { div { } })"));
 		assert!(!result.contains_page_macro);
 	}
@@ -1665,6 +1669,7 @@ fn main() {}"#;
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("// page!(|| { div { } })"));
 		assert!(!result.contains_page_macro);
 	}
@@ -1679,6 +1684,7 @@ fn main() {}"#;
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("name: String"));
 		assert!(result.contains_page_macro);
 	}
@@ -1693,6 +1699,7 @@ fn main() {}"#;
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("div {"));
 		assert!(result.content.contains("p {"));
 		assert!(result.contains_page_macro);
@@ -1708,6 +1715,7 @@ fn main() {}"#;
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("@if"));
 		assert!(result.contains_page_macro);
 	}
@@ -1722,6 +1730,7 @@ fn main() {}"#;
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("@for"));
 		assert!(result.contains_page_macro);
 	}
@@ -1736,6 +1745,7 @@ fn main() {}"#;
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("<MyComponent"));
 		assert!(result.content.contains("/>"));
 		assert!(result.contains_page_macro);
@@ -1751,6 +1761,7 @@ fn main() {}"#;
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("@click"));
 		assert!(result.contains_page_macro);
 	}
@@ -1794,6 +1805,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(input, result.content);
 		assert!(!result.contains_page_macro);
 	}
@@ -1812,6 +1824,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("items: Vec<String>"));
 		assert!(result.contains_page_macro);
 	}
@@ -1826,6 +1839,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("value: Option<i32>"));
 		assert!(result.contains_page_macro);
 	}
@@ -1840,6 +1854,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("res: Result<String, Error>"));
 		assert!(result.contains_page_macro);
 	}
@@ -1854,6 +1869,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("items: Vec<Option<String>>"));
 		assert!(result.contains_page_macro);
 	}
@@ -1868,6 +1884,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("map: HashMap<String, i32>"));
 		assert!(result.contains_page_macro);
 	}
@@ -1882,6 +1899,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("s: &str"));
 		assert!(result.contains_page_macro);
 	}
@@ -1896,6 +1914,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("arr: [i32; 5]"));
 		assert!(result.contains_page_macro);
 	}
@@ -1910,6 +1929,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("t: (String, i32)"));
 		assert!(result.contains_page_macro);
 	}
@@ -1924,6 +1944,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("v: std::vec::Vec<String>"));
 		assert!(result.contains_page_macro);
 	}
@@ -1938,6 +1959,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(
 			result
 				.content
@@ -1958,6 +1980,7 @@ mod tests {
 		let result2 = formatter.format(&result.content).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(result.content, result2.content);
 		assert!(result2.contains_page_macro);
 	}
@@ -1974,6 +1997,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("format!"));
 		assert!(result.contains_page_macro);
 	}
@@ -1990,6 +2014,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("get_message()"));
 		assert!(result.contains_page_macro);
 	}
@@ -2006,6 +2031,7 @@ mod tests {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("user.get_name()"));
 		assert!(result.contains_page_macro);
 	}
@@ -2030,6 +2056,7 @@ mod tests {
 		let result2 = formatter.format(&result.content).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.content.contains("button"));
 		assert!(result.content.contains("@click"));
 		assert!(result.content.contains("|event|"));
@@ -2057,6 +2084,7 @@ mod tests {
 		let result2 = formatter.format(&result.content).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(result.content, result2.content);
 		assert!(result2.contains_page_macro);
 	}
@@ -2119,6 +2147,7 @@ div{badly}
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.contains_page_macro);
 		assert!(result.content.contains("div {"));
 		assert!(result.content.contains("badly"));
@@ -2258,6 +2287,7 @@ page!(|| { div{ignored} })"#;
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.contains_page_macro);
 		assert!(result.content.contains("div {"));
 		assert!(result.content.contains("ignored"));
@@ -2368,6 +2398,7 @@ page!(|| { div{ignored} })"#;
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(result.contains_page_macro);
 	}
 
@@ -2381,6 +2412,7 @@ page!(|| { div{ignored} })"#;
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert!(!result.contains_page_macro);
 	}
 
@@ -2719,6 +2751,7 @@ fn main() {
 		let result = formatter.format(r#"page!(|| { { some_value } })"#).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(result.content, "page!(|| {\n\t{ some_value }\n})");
 	}
 
@@ -2731,6 +2764,7 @@ fn main() {
 		let result = formatter.format(r#"page!(|| { some_value })"#).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(result.content, "page!(|| {\n\tsome_value\n})");
 	}
 
@@ -2745,6 +2779,7 @@ fn main() {
 			.unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(result.content, "page!(|| {\n\t{ items.len() }\n})");
 	}
 
@@ -2759,6 +2794,7 @@ fn main() {
 			.unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(result.content, "page!(|| {\n\t{ \"hello world\" }\n})");
 	}
 
@@ -2771,6 +2807,7 @@ fn main() {
 		let result = formatter.format(r#"page!(|| { { () } })"#).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(result.content, "page!(|| {\n\t{ () }\n})");
 	}
 
@@ -2783,6 +2820,7 @@ fn main() {
 		let result = formatter.format(r#"page!(|| { { 42 } })"#).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(result.content, "page!(|| {\n\t{ 42 }\n})");
 	}
 
@@ -2795,6 +2833,7 @@ fn main() {
 		let result = formatter.format(r#"page!(|| { { true } })"#).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(result.content, "page!(|| {\n\t{ true }\n})");
 	}
 
@@ -2807,6 +2846,7 @@ fn main() {
 		let result = formatter.format(r#"page!(|| { { x + y } })"#).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(result.content, "page!(|| {\n\t{ x + y }\n})");
 	}
 
@@ -2823,6 +2863,7 @@ fn main() {
 			.unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(
 			result.content,
 			"page!(|| {\n\t{ items.iter().map(|item| item.render()).collect::<Vec<_>>() }\n})"
@@ -2840,6 +2881,7 @@ fn main() {
 			.unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(
 			result.content,
 			"page!(|| {\n\tif condition {\n\t\t{ short_val }\n\t}\n})"
@@ -2875,6 +2917,7 @@ fn main() {
 		let result = formatter.format(&input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(
 			result.content,
 			"page!(|| {\n\t{\n\t\tView::fragment(\n\t\t\t\tsignal\n\t\t\t\t\t.result()\n\t\t\t\t\t.unwrap_or_default()\n\t\t\t\t\t.iter()\n\t\t\t\t\t.map(|item| View::text(item.clone()))\n\t\t\t\t\t.collect::<Vec<_>>(),\n\t\t\t)\n\t}\n})"
@@ -2894,6 +2937,7 @@ fn main() {
 		let result = formatter.format(&input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(
 			result.content,
 			"page!(|| {\n\t{\n\t\tdata\n\t\t\t\t.iter()\n\t\t\t\t.filter(|x| x.is_active())\n\t\t\t\t.map(|x| x.name.clone())\n\t\t\t\t.collect::<Vec<String>>()\n\t\t\t\t.join(\", \")\n\t}\n})"
@@ -2913,6 +2957,7 @@ fn main() {
 		let result = formatter.format(&input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(
 			result.content,
 			"page!(|| {\n\t{\n\t\tformat!(\n\t\t\t\t\"User: {} ({})\",\n\t\t\t\tuser.display_name().unwrap_or_default(),\n\t\t\t\tuser.email().unwrap_or(\"no email\".to_string())\n\t\t\t)\n\t}\n})"
@@ -2932,6 +2977,7 @@ fn main() {
 		let result = formatter.format(&input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(
 			result.content,
 			"page!(|| {\n\tdiv {\n\t\tspan {\n\t\t\t{\n\t\t\t\tView::fragment(\n\t\t\t\t\t\tsignal\n\t\t\t\t\t\t\t.result()\n\t\t\t\t\t\t\t.unwrap_or_default()\n\t\t\t\t\t\t\t.iter()\n\t\t\t\t\t\t\t.map(|item| View::text(item.clone()))\n\t\t\t\t\t\t\t.collect::<Vec<_>>(),\n\t\t\t\t\t)\n\t\t\t}\n\t\t}\n\t}\n})"
@@ -2952,6 +2998,7 @@ fn main() {
 		let result = formatter.format(&input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(
 			result.content,
 			"page!(|| {\n\t{ count }\n\t{\n\t\tView::fragment(\n\t\t\t\tsignal\n\t\t\t\t\t.result()\n\t\t\t\t\t.unwrap_or_default()\n\t\t\t\t\t.iter()\n\t\t\t\t\t.map(|item| View::text(item.clone()))\n\t\t\t\t\t.collect::<Vec<_>>(),\n\t\t\t)\n\t}\n})"
@@ -2974,6 +3021,7 @@ fn main() {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(
 			result.content,
 			"page!(|signal: Action<Vec<Item>, String>| {\n\tdiv {\n\t\t{\n\t\t\tView::fragment(\n\t\t\t\t\tsignal\n\t\t\t\t\t\t.result()\n\t\t\t\t\t\t.unwrap_or_default()\n\t\t\t\t\t\t.iter()\n\t\t\t\t\t\t.map(|item| {\n\t\t\t\t\t\t\tlet text = item.text.clone();\n\t\t\t\t\t\t\tpage!(| text : String | { span { { text } } })(text)\n\t\t\t\t\t\t})\n\t\t\t\t\t\t.collect::<Vec<_>>(),\n\t\t\t\t)\n\t\t}\n\t}\n})(signal)"
@@ -2998,6 +3046,7 @@ fn main() {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(
 			result.content,
 			"page!(|signal: Action<Vec<Item>, String>| {\n\tdiv {\n\t\tif signal.result().is_some() {\n\t\t\t{\n\t\t\t\tView::fragment(\n\t\t\t\t\t\tsignal\n\t\t\t\t\t\t\t.result()\n\t\t\t\t\t\t\t.unwrap_or_default()\n\t\t\t\t\t\t\t.iter()\n\t\t\t\t\t\t\t.map(|item| {\n\t\t\t\t\t\t\t\tlet text = item.text.clone();\n\t\t\t\t\t\t\t\tpage!(| text : String | { div class = \"item\" { { text } } })(text)\n\t\t\t\t\t\t\t})\n\t\t\t\t\t\t\t.collect::<Vec<_>>(),\n\t\t\t\t\t)\n\t\t\t}\n\t\t} else {\n\t\t\tp {\n\t\t\t\t\"Loading...\"\n\t\t\t}\n\t\t}\n\t}\n})(signal)"
@@ -3022,6 +3071,7 @@ fn main() {
 		let result = formatter.format(input).unwrap();
 
 		// Assert
+		assert!(result.skipped.is_none(), "formatting should not be skipped");
 		assert_eq!(
 			result.content,
 			"page!(|items: Vec<Item>| {\n\tdiv class=\"list\" {\n\t\tfor item in items {\n\t\t\tdiv class=\"card\" {\n\t\t\t\t{ View::fragment(item.tags.iter().map(|tag| { let t = tag.clone(); page!(|t: String| { span class=\"tag\" { { t } } })(t) }).collect::<Vec<_>>()) }\n\t\t\t}\n\t\t}\n\t}\n})(items)"

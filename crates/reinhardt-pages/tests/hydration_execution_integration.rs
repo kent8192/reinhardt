@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Hydration Execution Integration Tests
 //!
 //! This module contains comprehensive integration tests for the reinhardt-pages

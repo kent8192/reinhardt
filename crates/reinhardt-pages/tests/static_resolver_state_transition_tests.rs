@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! State transition tests for static resolver
 //!
 //! These tests verify that the resolver correctly transitions between states

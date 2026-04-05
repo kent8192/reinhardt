@@ -181,6 +181,7 @@ macro_rules! error_log {
 #[cfg(test)]
 mod tests {
 	// Import macros from crate root
+	#[allow(unused_imports)]
 	use crate::{debug_log, error_log, info_log, warn_log};
 
 	#[test]

@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Macro compilation tests for page! and head! with static assets
 //!
 //! These tests verify that macros compile correctly when used with resolve_static.

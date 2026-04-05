@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Edge case tests for static asset URL resolution
 //!
 //! These tests verify behavior with unusual but valid inputs that might

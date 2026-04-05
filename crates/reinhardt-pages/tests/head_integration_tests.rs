@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Head System integration tests
 //!
 //! Success Criteria:

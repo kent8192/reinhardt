@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! SSR Renderer Integration Tests
 //!
 //! This test suite validates the Server-Side Rendering functionality of reinhardt-pages.

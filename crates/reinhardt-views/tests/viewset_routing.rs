@@ -221,6 +221,10 @@ async fn model_viewset_list_returns_ok() {
 
 	// Assert
 	assert_eq!(response.status, StatusCode::OK);
+	assert!(
+		!response.body.is_empty(),
+		"list should return a response body"
+	);
 }
 
 #[rstest]
@@ -235,6 +239,10 @@ async fn model_viewset_retrieve_returns_ok() {
 
 	// Assert
 	assert_eq!(response.status, StatusCode::OK);
+	assert!(
+		!response.body.is_empty(),
+		"retrieve should return a response body"
+	);
 }
 
 #[rstest]
@@ -249,6 +257,10 @@ async fn model_viewset_create_returns_created() {
 
 	// Assert
 	assert_eq!(response.status, StatusCode::CREATED);
+	assert!(
+		!response.body.is_empty(),
+		"create should return a response body"
+	);
 }
 
 #[rstest]
@@ -263,6 +275,10 @@ async fn model_viewset_update_returns_ok() {
 
 	// Assert
 	assert_eq!(response.status, StatusCode::OK);
+	assert!(
+		!response.body.is_empty(),
+		"update should return a response body"
+	);
 }
 
 #[rstest]
@@ -280,6 +296,10 @@ async fn model_viewset_partial_update_returns_ok() {
 
 	// Assert
 	assert_eq!(response.status, StatusCode::OK);
+	assert!(
+		!response.body.is_empty(),
+		"partial_update should return a response body"
+	);
 }
 
 #[rstest]
@@ -294,6 +314,10 @@ async fn model_viewset_destroy_returns_no_content() {
 
 	// Assert
 	assert_eq!(response.status, StatusCode::NO_CONTENT);
+	assert!(
+		response.body.is_empty(),
+		"destroy should return empty body for 204"
+	);
 }
 
 #[rstest]

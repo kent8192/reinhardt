@@ -398,6 +398,30 @@ done
 echo "=== All sub-crate checks passed ==="
 '''
 
+[tasks.feature-test-critical]
+description = "Run cargo test for critical feature combinations (4 patterns)"
+script_runner = "bash"
+script = '''
+set -e
+echo "=== Feature Test: Critical Combinations ==="
+
+combos=(
+	"standard|reinhardt-web|"
+	"full|reinhardt-web|--no-default-features -F full"
+	"api-only|reinhardt-web|--no-default-features -F api-only"
+	"admin-forms|reinhardt-web|--no-default-features -F minimal,admin,database,db-postgres,auth"
+)
+
+for combo in "${combos[@]}"; do
+	IFS='|' read -r name pkg flags <<< "$combo"
+	echo "--- Testing: ${name} ---"
+	cargo test -p "${pkg}" ${flags} --lib --quiet
+	echo "  OK: ${name}"
+done
+
+echo "=== All critical feature tests passed ==="
+'''
+
 # ============================================================================
 # CI Tasks
 # ============================================================================

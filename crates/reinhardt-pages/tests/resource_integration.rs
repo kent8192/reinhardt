@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Resource Integration Tests
 //!
 //! This module contains comprehensive integration tests for the reinhardt-pages

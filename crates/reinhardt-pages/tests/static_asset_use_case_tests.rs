@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Use case tests for static asset URL resolution
 //!
 //! These tests verify real-world scenarios and integration patterns.

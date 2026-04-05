@@ -3,11 +3,11 @@
 //! Essential configuration shared by all reinhardt applications.
 
 use super::database_config::DatabaseConfig;
-use super::fragment::{HasSettings, SettingsFragment};
-use super::policy::{FieldPolicy, FieldRequirement};
+use super::fragment::SettingsValidation;
 use super::profile::Profile;
 use super::security::SecuritySettings;
 use super::validation::{ValidationError, ValidationResult};
+use reinhardt_core::macros::settings;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -16,12 +16,14 @@ use std::path::PathBuf;
 ///
 /// Contains essential configuration: base directory, secret key, debug mode,
 /// allowed hosts, database configs, security settings, middleware, and apps.
+#[settings(fragment = true, section = "core", validate = false)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CoreSettings {
 	/// Base directory of the project.
 	#[serde(default = "default_base_dir")]
 	pub base_dir: PathBuf,
 	/// Secret key for cryptographic signing.
+	#[setting(required)]
 	pub secret_key: String,
 	/// Debug mode flag.
 	#[serde(default = "default_debug")]
@@ -100,66 +102,7 @@ impl Default for CoreSettings {
 	}
 }
 
-impl SettingsFragment for CoreSettings {
-	type Accessor = dyn HasCoreSettings;
-
-	fn section() -> &'static str {
-		"core"
-	}
-
-	fn field_policies() -> &'static [FieldPolicy] {
-		// secret_key has no default and must be explicitly provided by the user.
-		// All other fields have serde defaults or implement Default.
-		static POLICIES: [FieldPolicy; 9] = [
-			FieldPolicy {
-				name: "base_dir",
-				requirement: FieldRequirement::Optional,
-				has_default: true,
-			},
-			FieldPolicy {
-				name: "secret_key",
-				requirement: FieldRequirement::Required,
-				has_default: false,
-			},
-			FieldPolicy {
-				name: "debug",
-				requirement: FieldRequirement::Optional,
-				has_default: true,
-			},
-			FieldPolicy {
-				name: "allowed_hosts",
-				requirement: FieldRequirement::Optional,
-				has_default: true,
-			},
-			FieldPolicy {
-				name: "databases",
-				requirement: FieldRequirement::Optional,
-				has_default: true,
-			},
-			FieldPolicy {
-				name: "security",
-				requirement: FieldRequirement::Optional,
-				has_default: true,
-			},
-			FieldPolicy {
-				name: "middleware",
-				requirement: FieldRequirement::Optional,
-				has_default: true,
-			},
-			FieldPolicy {
-				name: "root_urlconf",
-				requirement: FieldRequirement::Optional,
-				has_default: true,
-			},
-			FieldPolicy {
-				name: "installed_apps",
-				requirement: FieldRequirement::Optional,
-				has_default: true,
-			},
-		];
-		&POLICIES
-	}
-
+impl SettingsValidation for CoreSettings {
 	fn validate(&self, profile: &Profile) -> ValidationResult {
 		if self.secret_key.is_empty() {
 			return Err(ValidationError::MissingRequired("secret_key".to_string()));
@@ -185,21 +128,9 @@ impl SettingsFragment for CoreSettings {
 	}
 }
 
-/// Trait for accessing [`CoreSettings`] from a composed settings type.
-pub trait HasCoreSettings {
-	/// Get a reference to the core settings.
-	fn core(&self) -> &CoreSettings;
-}
-
-impl<T: HasSettings<CoreSettings>> HasCoreSettings for T {
-	fn core(&self) -> &CoreSettings {
-		self.get_settings()
-	}
-}
-
 #[cfg(test)]
 mod tests {
-	use super::*;
+	use super::{CoreSettings, SecuritySettings};
 	use crate::settings::fragment::SettingsFragment;
 	use crate::settings::profile::Profile;
 	use rstest::rstest;

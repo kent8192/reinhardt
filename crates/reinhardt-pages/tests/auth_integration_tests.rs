@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Authentication Integration Tests
 //!
 //! Tests for the authentication system's integration with reactive signals,

@@ -2,13 +2,14 @@
 //!
 //! Provides composable static file serving configuration as a [`SettingsFragment`].
 
-use super::fragment::{HasSettings, SettingsFragment};
+use reinhardt_core::macros::settings;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Static files configuration fragment.
 ///
 /// Controls the URL prefix and root directory for serving static files.
+#[settings(fragment = true, section = "static_files")]
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StaticSettings {
@@ -37,29 +38,10 @@ impl Default for StaticSettings {
 	}
 }
 
-impl SettingsFragment for StaticSettings {
-	type Accessor = dyn HasStaticSettings;
-
-	fn section() -> &'static str {
-		"static_files"
-	}
-}
-
-/// Trait for settings containers that include static files configuration.
-pub trait HasStaticSettings {
-	/// Returns a reference to the static files settings.
-	fn static_files(&self) -> &StaticSettings;
-}
-
-impl<T: HasSettings<StaticSettings>> HasStaticSettings for T {
-	fn static_files(&self) -> &StaticSettings {
-		self.get_settings()
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::settings::fragment::SettingsFragment;
 	use rstest::rstest;
 
 	#[rstest]

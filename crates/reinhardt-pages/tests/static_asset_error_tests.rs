@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Error path tests for static asset URL resolution
 //!
 //! These tests verify that the system gracefully handles error conditions

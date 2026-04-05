@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Hooks Integration Tests
 //!
 //! This module contains comprehensive integration tests for the reinhardt-pages Hooks system,
@@ -28,6 +29,7 @@
 //!
 //! Total: 30 test cases
 
+#[cfg(not(target_arch = "wasm32"))]
 use proptest::prelude::*;
 use reinhardt_pages::reactive::Signal;
 use reinhardt_pages::reactive::hooks::{use_effect, use_memo, use_ref, use_state};
@@ -335,6 +337,7 @@ fn test_hooks_use_case_form_validation() {
 // ============================================================================
 
 /// Property: Memo is deterministic
+#[cfg(not(target_arch = "wasm32"))]
 #[rstest]
 fn test_hooks_property_memo_deterministic() {
 	proptest!(|(input in -10000i32..10000i32)| {

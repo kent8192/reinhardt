@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Equivalence partitioning tests for static asset URL resolution
 //!
 //! Tests are organized by equivalence classes: file types, path formats, and base URL formats.

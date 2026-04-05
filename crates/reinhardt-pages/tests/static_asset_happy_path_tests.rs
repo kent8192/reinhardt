@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Happy path tests for static asset URL resolution
 //!
 //! These tests verify the normal operation of the static resolver when

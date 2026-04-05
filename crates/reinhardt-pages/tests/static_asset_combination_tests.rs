@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Combination tests for static asset URL resolution
 //!
 //! Tests combinations of multiple configuration options and input variations.

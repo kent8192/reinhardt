@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! SSR and Head integration tests
 //!
 //! Tests the integration between SsrRenderer and View's Head system.

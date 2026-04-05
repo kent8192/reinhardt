@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Form Component Integration Tests
 //!
 //! Tests for the FormComponent system's rendering, validation,

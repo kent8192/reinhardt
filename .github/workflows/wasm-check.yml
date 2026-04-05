@@ -72,7 +72,7 @@ jobs:
       - name: Run cargo check for WASM target (${{ matrix.target.name }})
         env:
           # Pass matrix values through env to avoid direct shell injection.
-          # Values are workflow-defined constants (not user input). Issue #2098
+          # Values are workflow-defined constants (not user input).
           TARGET_PACKAGE: ${{ matrix.target.package }}
           TARGET_FLAGS: ${{ matrix.target.flags }}
         run: |
@@ -81,3 +81,51 @@ jobs:
             -p "${TARGET_PACKAGE}" \
             ${TARGET_FLAGS} \
             --quiet
+
+  # Run existing wasm_bindgen_test tests in headless Chrome.
+  # Catches runtime errors in WASM code paths that cargo check cannot detect.
+  # Only triggered via workflow_call or workflow_dispatch (not on every push).
+  wasm-test:
+    name: WASM Test (headless Chrome)
+    if: github.event_name != 'push'
+    runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        if: ${{ !contains(inputs.runner || '', 'self-hosted') }}
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: "wasm-test"
+
+      - name: Install wasm32-unknown-unknown target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Setup Chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Run WASM tests (reinhardt-pages)
+        working-directory: crates/reinhardt-pages
+        run: |
+          wasm-pack test --headless --chrome \
+            . -- --test csrf_wasm_test --test server_fn_wasm_test

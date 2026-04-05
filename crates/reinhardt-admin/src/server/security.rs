@@ -493,8 +493,6 @@ fn escape_html(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-	use std::str::FromStr;
-
 	use super::*;
 	use rstest::rstest;
 
@@ -1300,20 +1298,20 @@ mod tests {
 	#[rstest]
 	fn test_frame_options_from_str_deny() {
 		// Assert
-		assert_eq!(FrameOptions::from_str("deny").unwrap(), FrameOptions::Deny);
+		assert_eq!("deny".parse::<FrameOptions>().unwrap(), FrameOptions::Deny);
 	}
 
 	#[rstest]
 	fn test_frame_options_from_str_deny_uppercase() {
 		// Assert
-		assert_eq!(FrameOptions::from_str("DENY").unwrap(), FrameOptions::Deny);
+		assert_eq!("DENY".parse::<FrameOptions>().unwrap(), FrameOptions::Deny);
 	}
 
 	#[rstest]
 	fn test_frame_options_from_str_sameorigin() {
 		// Assert
 		assert_eq!(
-			FrameOptions::from_str("sameorigin").unwrap(),
+			"sameorigin".parse::<FrameOptions>().unwrap(),
 			FrameOptions::SameOrigin
 		);
 	}
@@ -1322,7 +1320,7 @@ mod tests {
 	fn test_frame_options_from_str_unknown_falls_back_to_deny() {
 		// Assert
 		assert_eq!(
-			FrameOptions::from_str("invalid").unwrap(),
+			"invalid".parse::<FrameOptions>().unwrap(),
 			FrameOptions::Deny
 		);
 	}
@@ -1335,7 +1333,7 @@ mod tests {
 	fn test_referrer_policy_from_str_no_referrer() {
 		// Assert
 		assert_eq!(
-			ReferrerPolicy::from_str("no-referrer").unwrap(),
+			"no-referrer".parse::<ReferrerPolicy>().unwrap(),
 			ReferrerPolicy::NoReferrer
 		);
 	}
@@ -1344,7 +1342,9 @@ mod tests {
 	fn test_referrer_policy_from_str_strict_origin() {
 		// Assert
 		assert_eq!(
-			ReferrerPolicy::from_str("strict-origin-when-cross-origin").unwrap(),
+			"strict-origin-when-cross-origin"
+				.parse::<ReferrerPolicy>()
+				.unwrap(),
 			ReferrerPolicy::StrictOriginWhenCrossOrigin
 		);
 	}
@@ -1353,7 +1353,7 @@ mod tests {
 	fn test_referrer_policy_from_str_same_origin() {
 		// Assert
 		assert_eq!(
-			ReferrerPolicy::from_str("same-origin").unwrap(),
+			"same-origin".parse::<ReferrerPolicy>().unwrap(),
 			ReferrerPolicy::SameOrigin
 		);
 	}
@@ -1362,7 +1362,7 @@ mod tests {
 	fn test_referrer_policy_from_str_unknown_falls_back() {
 		// Assert
 		assert_eq!(
-			ReferrerPolicy::from_str("invalid").unwrap(),
+			"invalid".parse::<ReferrerPolicy>().unwrap(),
 			ReferrerPolicy::StrictOriginWhenCrossOrigin
 		);
 	}

@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Fuzz tests for static asset URL resolution
 //!
 //! Tests that the resolver never panics with arbitrary inputs (fuzzing).

@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Decision table tests for static asset URL resolution
 //!
 //! Tests combinations of boolean and categorical conditions using decision tables.

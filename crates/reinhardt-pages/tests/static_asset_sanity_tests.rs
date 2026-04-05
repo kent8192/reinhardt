@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Sanity tests for static asset URL resolution
 //!
 //! These tests verify basic functionality of the static resolver and related

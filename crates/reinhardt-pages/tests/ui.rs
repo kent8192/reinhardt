@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Compile-time tests for page! and form! macros using trybuild
 //!
 //! This test suite validates that:

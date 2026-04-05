@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Boundary value analysis tests for static asset URL resolution
 //!
 //! Tests boundary conditions for path length, nesting depth, query string length, etc.

@@ -2,9 +2,10 @@
 //!
 //! Controls HTTPS enforcement, HSTS policy, cookie security, and URL handling.
 
-use super::fragment::{HasSettings, SettingsFragment};
+use super::fragment::SettingsValidation;
 use super::profile::Profile;
 use super::validation::{ValidationError, ValidationResult};
+use reinhardt_core::macros::settings;
 use serde::{Deserialize, Serialize};
 
 /// Security-related configuration settings.
@@ -14,6 +15,7 @@ use serde::{Deserialize, Serialize};
 /// a top-level fragment.
 ///
 /// [`CoreSettings`]: super::core_settings::CoreSettings
+#[settings(fragment = true, section = "security", validate = false)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SecuritySettings {
 	/// Header name and value for identifying secure requests behind a proxy.
@@ -61,13 +63,7 @@ impl Default for SecuritySettings {
 	}
 }
 
-impl SettingsFragment for SecuritySettings {
-	type Accessor = dyn HasSecuritySettings;
-
-	fn section() -> &'static str {
-		"security"
-	}
-
+impl SettingsValidation for SecuritySettings {
 	fn validate(&self, profile: &Profile) -> ValidationResult {
 		if profile.is_production() {
 			if !self.secure_ssl_redirect {
@@ -90,21 +86,9 @@ impl SettingsFragment for SecuritySettings {
 	}
 }
 
-/// Trait for accessing [`SecuritySettings`] from a composed settings type.
-pub trait HasSecuritySettings {
-	/// Get a reference to the security settings.
-	fn security(&self) -> &SecuritySettings;
-}
-
-impl<T: HasSettings<SecuritySettings>> HasSecuritySettings for T {
-	fn security(&self) -> &SecuritySettings {
-		self.get_settings()
-	}
-}
-
 #[cfg(test)]
 mod tests {
-	use super::*;
+	use super::SecuritySettings;
 	use crate::settings::fragment::SettingsFragment;
 	use crate::settings::profile::Profile;
 	use rstest::rstest;

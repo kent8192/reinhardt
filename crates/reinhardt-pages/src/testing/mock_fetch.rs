@@ -146,7 +146,7 @@ pub async fn fetch_with_mock(
 	)))
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
 	use super::*;
 	use crate::testing::mock_http::{

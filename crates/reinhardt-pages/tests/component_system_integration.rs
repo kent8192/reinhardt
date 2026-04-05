@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Component System integration tests
 //!
 //! Success Criteria:
@@ -22,6 +23,7 @@
 //!
 //! Total: 30 tests
 
+#[cfg(not(target_arch = "wasm32"))]
 use proptest::prelude::*;
 #[cfg(native)]
 use reinhardt_pages::component::DummyEvent;
@@ -339,6 +341,7 @@ fn test_component_use_case_nested() {
 // ============================================================================
 
 /// Tests props immutability and consistency
+#[cfg(not(target_arch = "wasm32"))]
 #[rstest]
 fn test_component_property_props_immutability() {
 	proptest!(|(value in -1000i32..1000i32)| {

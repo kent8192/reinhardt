@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Integration tests for DOM Abstraction
 //!
 //! These tests verify the DOM abstraction layer:

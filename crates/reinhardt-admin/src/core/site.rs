@@ -814,7 +814,12 @@ mod tests {
 
 		let result = admin.register("user", ModelAdminConfig::new("user"));
 		assert!(result.is_err());
-		assert!(result.unwrap_err().to_string().contains("already registered"));
+		assert!(
+			result
+				.unwrap_err()
+				.to_string()
+				.contains("already registered")
+		);
 	}
 
 	#[rstest]

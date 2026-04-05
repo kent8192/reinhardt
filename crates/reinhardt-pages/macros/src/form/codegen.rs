@@ -903,60 +903,29 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 									let #field_names = #field_value_getters;
 								)*
 
-								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-								{
-									// Clone loading/error signals for async block if they exist
-									#async_signal_clones
+								// Clone loading/error signals for async block if they exist
+								#async_signal_clones
 
-									#pages_crate::spawn::spawn_task(async move {
-										match #server_fn_call {
-											Ok(_value) => {
-												#on_success_code
-												#redirect_code
-											}
-											Err(e) => {
-												#on_error_code
-												#async_error_handling
-											}
+								#pages_crate::spawn::spawn_task(async move {
+									match #server_fn_call {
+										Ok(_value) => {
+											#on_success_code
+											#redirect_code
 										}
-										#async_loading_end
-									});
-								}
+										Err(e) => {
+											#on_error_code
+											#async_error_handling
+										}
+									}
+									#async_loading_end
+								});
 							})
 						}
 						#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 						{
 							::std::sync::Arc::new(move |event: #pages_crate::component::DummyEvent| {
-								// Prevent default form submission by handling it ourselves (no-op in non-WASM)
+								// Non-WASM: form submission is handled via HTTP, not JavaScript
 								event.prevent_default();
-
-								// Get field values from cloned signals - allow non_snake_case for generated variable names
-								#loading_start
-
-								#(
-									#[allow(non_snake_case, unused_variables)]
-									let #field_names = #field_value_getters;
-								)*
-
-								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-								{
-									// Clone loading/error signals for async block if they exist
-									#async_signal_clones
-
-									#pages_crate::spawn::spawn_task(async move {
-										match #server_fn_call {
-											Ok(_value) => {
-												#on_success_code
-												#redirect_code
-											}
-											Err(e) => {
-												#on_error_code
-												#async_error_handling
-											}
-										}
-										#async_loading_end
-									});
-								}
 							})
 						}
 					}

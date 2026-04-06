@@ -160,6 +160,9 @@ pub mod flatpages;
 pub mod gzip;
 pub mod honeypot;
 pub mod https_redirect;
+#[cfg(feature = "sessions")]
+/// Cookie-based session authentication middleware (requires `sessions` feature).
+pub mod cookie_session_auth;
 #[cfg(feature = "auth-jwt")]
 /// JWT Bearer token authentication middleware (requires `auth-jwt` feature).
 pub mod jwt_auth;
@@ -218,6 +221,8 @@ pub use flatpages::{Flatpage, FlatpageStore, FlatpagesConfig, FlatpagesMiddlewar
 pub use gzip::{GZipConfig, GZipMiddleware};
 pub use honeypot::{HoneypotError, HoneypotField};
 pub use https_redirect::{HttpsRedirectConfig, HttpsRedirectMiddleware};
+#[cfg(feature = "sessions")]
+pub use cookie_session_auth::{CookieSessionAuthMiddleware, CookieSessionConfig};
 #[cfg(feature = "auth-jwt")]
 pub use jwt_auth::JwtAuthMiddleware;
 pub use locale::{LocaleConfig, LocaleMiddleware};

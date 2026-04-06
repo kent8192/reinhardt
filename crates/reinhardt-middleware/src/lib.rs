@@ -160,12 +160,16 @@ pub mod flatpages;
 pub mod gzip;
 pub mod honeypot;
 pub mod https_redirect;
+#[cfg(feature = "sessions")]
+/// Cookie-based session authentication middleware (requires `sessions` feature).
+pub mod cookie_session_auth;
 #[cfg(feature = "auth-jwt")]
 /// JWT Bearer token authentication middleware (requires `auth-jwt` feature).
 pub mod jwt_auth;
 pub mod locale;
 /// Structured request/response logging with configurable formats.
 pub mod logging;
+pub mod origin_guard;
 /// Login required middleware that redirects unauthenticated users to a login page.
 pub mod login_required;
 pub mod messages;
@@ -179,6 +183,8 @@ pub mod request_id;
 #[cfg(feature = "security")]
 pub mod security_middleware;
 pub mod session;
+#[cfg(feature = "session-redis")]
+pub mod redis_session;
 pub mod site;
 pub mod timeout;
 pub mod tracing;
@@ -216,9 +222,12 @@ pub use flatpages::{Flatpage, FlatpageStore, FlatpagesConfig, FlatpagesMiddlewar
 pub use gzip::{GZipConfig, GZipMiddleware};
 pub use honeypot::{HoneypotError, HoneypotField};
 pub use https_redirect::{HttpsRedirectConfig, HttpsRedirectMiddleware};
+#[cfg(feature = "sessions")]
+pub use cookie_session_auth::{CookieSessionAuthMiddleware, CookieSessionConfig};
 #[cfg(feature = "auth-jwt")]
 pub use jwt_auth::JwtAuthMiddleware;
 pub use locale::{LocaleConfig, LocaleMiddleware};
+pub use origin_guard::OriginGuardMiddleware;
 pub use logging::{LoggingConfig, LoggingMiddleware};
 pub use login_required::{
 	DEFAULT_LOGIN_URL, DEFAULT_REDIRECT_FIELD_NAME, LoginRequiredConfig, LoginRequiredMiddleware,
@@ -235,6 +244,8 @@ pub use request_id::{REQUEST_ID_HEADER, RequestIdConfig, RequestIdMiddleware};
 #[allow(deprecated)] // SecurityConfig is deprecated but still re-exported for compatibility
 pub use security_middleware::{SecurityConfig, SecurityMiddleware};
 pub use session::{SessionConfig, SessionData, SessionMiddleware, SessionStore};
+#[cfg(feature = "session-redis")]
+pub use redis_session::RedisSessionBackend;
 pub use site::{SITE_ID_HEADER, Site, SiteConfig, SiteMiddleware, SiteRegistry};
 pub use timeout::{TimeoutConfig, TimeoutMiddleware};
 pub use tracing::{

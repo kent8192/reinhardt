@@ -138,6 +138,7 @@ jobs:
         run: |
           RUNNER=$(find "${HOME}/.cache/.wasm-pack" -name "wasm-bindgen-test-runner" -type f 2>/dev/null | head -1)
           CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER="$RUNNER" \
+          CHROMEDRIVER="$(which chromedriver)" \
           WASM_BINDGEN_TEST_ONLY_WEB=1 \
             cargo test --target wasm32-unknown-unknown \
               --test csrf_wasm_test --test server_fn_wasm_test

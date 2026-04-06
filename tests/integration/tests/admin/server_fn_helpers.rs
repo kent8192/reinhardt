@@ -639,7 +639,7 @@ pub async fn e2e_router_context(
 		sqlx::query(
 			"INSERT INTO auth_user (id, username, email, is_active, is_staff, is_superuser, date_joined) \
 				 VALUES ($1, 'inactive_staff', 'inactive@test.example', false, true, false, NOW()) \
-				 ON CONFLICT (id) DO UPDATE SET is_active = false, is_staff = true"
+				 ON CONFLICT (id) DO UPDATE SET is_active = false, is_staff = true",
 		)
 		.bind(Uuid::parse_str(TEST_INACTIVE_USER_UUID).expect("Invalid TEST_INACTIVE_USER_UUID")),
 	)
@@ -829,9 +829,11 @@ pub fn make_e2e_request_inactive(path: &str, body: serde_json::Value) -> reinhar
 		.expect("Failed to build E2E request");
 
 	// Authenticated and staff but NOT active — uses the DB-inactive user (Fixes #3367)
-	request
-		.extensions
-		.insert(AuthState::authenticated(TEST_INACTIVE_USER_UUID, true, false));
+	request.extensions.insert(AuthState::authenticated(
+		TEST_INACTIVE_USER_UUID,
+		true,
+		false,
+	));
 
 	request
 }

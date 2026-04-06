@@ -3016,8 +3016,15 @@ mod tests {
 		let output_str = output.to_string();
 
 		// Generated code should have cfg attributes for platform-specific code
-		assert!(output_str.contains("# [cfg (target_arch = \"wasm32\")]"));
-		assert!(output_str.contains("# [cfg (not (target_arch = \"wasm32\"))]"));
+		assert!(
+			output_str
+				.contains("# [cfg (all (target_family = \"wasm\" , target_os = \"unknown\"))]")
+		);
+		assert!(
+			output_str.contains(
+				"# [cfg (not (all (target_family = \"wasm\" , target_os = \"unknown\")))]"
+			)
+		);
 	}
 
 	// ===========================================

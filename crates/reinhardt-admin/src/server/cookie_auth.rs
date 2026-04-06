@@ -1,7 +1,7 @@
 //! Admin Cookie-based JWT Authentication Middleware
 //!
 //! Extracts JWT tokens from the `reinhardt_admin_token` HTTP-Only cookie
-//! and populates the request's [`AuthState`] extension. This replaces the
+//! and populates the request's [`AuthState`](reinhardt_http::AuthState) extension. This replaces the
 //! `Authorization: Bearer` header approach for the admin panel, providing
 //! XSS protection since JavaScript cannot access HTTP-Only cookies.
 //!

@@ -1,6 +1,6 @@
 //! CORS settings fragment
 //!
-//! Provides composable CORS configuration as a [`SettingsFragment`].
+//! Provides composable CORS configuration as a [`SettingsFragment`](crate::settings::fragment::SettingsFragment).
 
 use reinhardt_core::macros::settings;
 use serde::{Deserialize, Serialize};

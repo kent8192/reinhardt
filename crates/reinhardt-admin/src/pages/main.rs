@@ -69,9 +69,7 @@ pub fn main() -> Result<(), JsValue> {
 		app_clone.set_inner_html("");
 		let wrapper = Element::new(app_clone.clone());
 		if let Err(e) = view.mount(&wrapper) {
-			web_sys::console::error_1(
-				&format!("Re-mount failed: {:?}", e).into(),
-			);
+			web_sys::console::error_1(&format!("Re-mount failed: {:?}", e).into());
 		}
 	});
 	// Intentional memory leak: WASM entry points run for the entire application

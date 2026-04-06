@@ -781,7 +781,7 @@ pub fn make_e2e_request_non_staff(path: &str, body: serde_json::Value) -> reinha
 		.header("host", TEST_HOST)
 		.header("origin", format!("http://{}", TEST_HOST))
 		.header("content-type", "application/json")
-		.header("cookie", format!("__csrf_token={}", TEST_CSRF_TOKEN))
+		.header("cookie", format!("csrftoken={}", TEST_CSRF_TOKEN))
 		.body(hyper::body::Bytes::from(body_bytes))
 		.build()
 		.expect("Failed to build E2E request");
@@ -807,7 +807,7 @@ pub fn make_e2e_request_inactive(path: &str, body: serde_json::Value) -> reinhar
 		.header("host", TEST_HOST)
 		.header("origin", format!("http://{}", TEST_HOST))
 		.header("content-type", "application/json")
-		.header("cookie", format!("__csrf_token={}", TEST_CSRF_TOKEN))
+		.header("cookie", format!("csrftoken={}", TEST_CSRF_TOKEN))
 		.body(hyper::body::Bytes::from(body_bytes))
 		.build()
 		.expect("Failed to build E2E request");

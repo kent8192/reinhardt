@@ -276,6 +276,8 @@ fn make_login_request(
 	let mut builder = reinhardt_http::Request::builder()
 		.method(hyper::Method::POST)
 		.uri("/admin/api/server_fn/admin_login")
+		.header("host", "localhost")
+		.header("origin", "http://localhost")
 		.header("content-type", "application/json");
 
 	if let Some(cookie_val) = cookie_token {

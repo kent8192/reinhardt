@@ -1,6 +1,6 @@
 //! Media settings fragment
 //!
-//! Provides composable media file serving configuration as a [`SettingsFragment`].
+//! Provides composable media file serving configuration as a [`SettingsFragment`](crate::settings::fragment::SettingsFragment).
 
 use reinhardt_core::macros::settings;
 use serde::{Deserialize, Serialize};

@@ -21,9 +21,6 @@ fn test_compile_fail_cases() {
 	// Test: Unknown macro argument should fail
 	t.compile_fail("tests/di/ui/fail/unknown_injectable_arg.rs");
 
-	// Test: scope attribute on struct injectable should fail (not yet supported)
-	t.compile_fail("tests/di/ui/fail/injectable_scope_unsupported.rs");
-
 	// Note: circular_dependency compiles but fails at runtime (tested in core_error_handling.rs)
 }
 
@@ -37,6 +34,9 @@ fn test_compile_pass_cases() {
 
 	// Test: Basic Injectable implementation
 	t.pass("tests/di/ui/pass/basic_injectable.rs");
+
+	// Test: Injectable with scope attribute
+	t.pass("tests/di/ui/pass/injectable_with_scope.rs");
 
 	// Test: Nested dependencies
 	t.pass("tests/di/ui/pass/nested_dependencies.rs");

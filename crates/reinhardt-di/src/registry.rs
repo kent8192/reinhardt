@@ -4,11 +4,12 @@
 //! dependencies. It uses the `inventory` crate to collect registrations at compile time
 //! and build a runtime registry that can be queried by type.
 
-use crate::{DiResult, InjectionContext};
+use crate::{DiResult, Injectable, InjectionContext};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use std::any::{Any, TypeId};
 use std::future::Future;
+use std::marker::PhantomData;
 use std::sync::{Arc, OnceLock};
 
 /// Scope for dependency injection
@@ -70,6 +71,34 @@ where
 		let ctx_arc = Arc::new(ctx.clone());
 		let instance = (self.factory)(ctx_arc).await?;
 		Ok(Arc::new(instance))
+	}
+}
+
+/// Factory that creates instances via the `Injectable` trait.
+///
+/// Bypasses `AsyncFactory`'s `Fut: Sync` bound by implementing `FactoryTrait`
+/// directly. This is necessary because `Injectable::inject` uses `async_trait`,
+/// which returns `Pin<Box<dyn Future + Send>>` (not `Sync`).
+pub struct InjectableFactory<T>(PhantomData<T>);
+
+impl<T> Default for InjectableFactory<T> {
+	fn default() -> Self {
+		Self(PhantomData)
+	}
+}
+
+impl<T> InjectableFactory<T> {
+	/// Create a new `InjectableFactory`.
+	pub fn new() -> Self {
+		Self::default()
+	}
+}
+
+#[async_trait]
+impl<T: Injectable + Any + Send + Sync + 'static> FactoryTrait for InjectableFactory<T> {
+	async fn create(&self, ctx: &InjectionContext) -> DiResult<Arc<dyn Any + Send + Sync>> {
+		let value = T::inject(ctx).await?;
+		Ok(Arc::new(value))
 	}
 }
 
@@ -326,9 +355,31 @@ impl DependencyRegistration {
 // Collect all dependency registrations at compile time
 inventory::collect!(DependencyRegistration);
 
+/// Const-constructible registration entry for `#[injectable]` structs with `#[scope]`.
+///
+/// Unlike `DependencyRegistration` which uses `Box<dyn Fn>` (non-const),
+/// this struct stores a plain function pointer so it can be used in
+/// `inventory::submit!` which requires const-evaluable expressions.
+pub struct InjectableRegistration {
+	/// A function that registers this type's factory with the registry.
+	pub register_fn: fn(&DependencyRegistry),
+}
+
+impl InjectableRegistration {
+	/// Create a new `InjectableRegistration` with a function pointer.
+	pub const fn new(register_fn: fn(&DependencyRegistry)) -> Self {
+		Self { register_fn }
+	}
+}
+
+inventory::collect!(InjectableRegistration);
+
 /// Initialize the registry with all collected registrations
 fn initialize_registry(registry: &DependencyRegistry) {
 	for registration in inventory::iter::<DependencyRegistration> {
+		(registration.register_fn)(registry);
+	}
+	for registration in inventory::iter::<InjectableRegistration> {
 		(registration.register_fn)(registry);
 	}
 }

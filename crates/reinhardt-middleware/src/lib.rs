@@ -148,6 +148,9 @@ pub mod cache;
 pub mod circuit_breaker;
 pub mod common;
 pub mod conditional;
+#[cfg(feature = "sessions")]
+/// Cookie-based session authentication middleware (requires `sessions` feature).
+pub mod cookie_session_auth;
 #[cfg(feature = "cors")]
 /// Cross-Origin Resource Sharing (CORS) middleware for handling preflight and CORS headers.
 pub mod cors;
@@ -170,9 +173,12 @@ pub mod logging;
 pub mod login_required;
 pub mod messages;
 pub mod metrics;
+pub mod origin_guard;
 #[cfg(feature = "rate-limit")]
 pub mod rate_limit;
 pub mod redirect_fallback;
+#[cfg(feature = "session-redis")]
+pub mod redis_session;
 /// Reverse proxy remote user authentication middleware (requires `sessions` feature).
 pub mod remote_user;
 pub mod request_id;
@@ -198,6 +204,8 @@ pub use cache::{CacheConfig, CacheKeyStrategy, CacheMiddleware, CacheStore};
 pub use circuit_breaker::{CircuitBreakerConfig, CircuitBreakerMiddleware, CircuitState};
 pub use common::{CommonConfig, CommonMiddleware};
 pub use conditional::ConditionalGetMiddleware;
+#[cfg(feature = "sessions")]
+pub use cookie_session_auth::{CookieSessionAuthMiddleware, CookieSessionConfig};
 #[cfg(feature = "cors")]
 pub use cors::CorsMiddleware;
 pub use csp::{CspConfig, CspMiddleware, CspNonce};
@@ -225,9 +233,12 @@ pub use login_required::{
 };
 pub use messages::{CookieStorage, Message, MessageLevel, MessageStorage, SessionStorage};
 pub use metrics::{MetricsConfig, MetricsMiddleware, MetricsStore};
+pub use origin_guard::OriginGuardMiddleware;
 #[cfg(feature = "rate-limit")]
 pub use rate_limit::{RateLimitConfig, RateLimitMiddleware, RateLimitStore, RateLimitStrategy};
 pub use redirect_fallback::{RedirectFallbackMiddleware, RedirectResponseConfig};
+#[cfg(feature = "session-redis")]
+pub use redis_session::RedisSessionBackend;
 #[cfg(feature = "sessions")]
 pub use remote_user::{PersistentRemoteUserMiddleware, REMOTE_USER_HEADER, RemoteUserMiddleware};
 pub use request_id::{REQUEST_ID_HEADER, RequestIdConfig, RequestIdMiddleware};

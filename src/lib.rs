@@ -730,6 +730,18 @@ pub use reinhardt_middleware::AuthenticationMiddleware;
 #[cfg(all(feature = "middleware-auth-jwt", native))]
 pub use reinhardt_middleware::JwtAuthMiddleware;
 
+// Cookie-based session authentication middleware (requires sessions + middleware)
+#[cfg(all(feature = "sessions", feature = "middleware", native))]
+pub use reinhardt_middleware::{CookieSessionAuthMiddleware, CookieSessionConfig};
+
+// Redis session backend (requires session-redis + middleware)
+#[cfg(all(feature = "session-redis", feature = "middleware", native))]
+pub use reinhardt_middleware::RedisSessionBackend;
+
+// Origin guard middleware for CSRF protection
+#[cfg(all(any(feature = "standard", feature = "middleware"), native))]
+pub use reinhardt_middleware::OriginGuardMiddleware;
+
 // Remote user authentication middleware (requires sessions + middleware)
 #[cfg(all(feature = "sessions", feature = "middleware", native))]
 pub use reinhardt_middleware::{PersistentRemoteUserMiddleware, RemoteUserMiddleware};

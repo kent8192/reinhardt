@@ -78,19 +78,39 @@ impl AllPermissionsModelAdmin {
 
 #[async_trait::async_trait]
 impl ModelAdmin for AllPermissionsModelAdmin {
-	fn model_name(&self) -> &str { &self.model_name }
-	fn table_name(&self) -> &str { &self.table_name }
-	fn pk_field(&self) -> &str { &self.pk_field }
-	fn list_display(&self) -> Vec<&str> { self.list_display.iter().map(|s| s.as_str()).collect() }
-	fn list_filter(&self) -> Vec<&str> { self.list_filter.iter().map(|s| s.as_str()).collect() }
-	fn search_fields(&self) -> Vec<&str> { self.search_fields.iter().map(|s| s.as_str()).collect() }
+	fn model_name(&self) -> &str {
+		&self.model_name
+	}
+	fn table_name(&self) -> &str {
+		&self.table_name
+	}
+	fn pk_field(&self) -> &str {
+		&self.pk_field
+	}
+	fn list_display(&self) -> Vec<&str> {
+		self.list_display.iter().map(|s| s.as_str()).collect()
+	}
+	fn list_filter(&self) -> Vec<&str> {
+		self.list_filter.iter().map(|s| s.as_str()).collect()
+	}
+	fn search_fields(&self) -> Vec<&str> {
+		self.search_fields.iter().map(|s| s.as_str()).collect()
+	}
 	fn fields(&self) -> Option<Vec<&str>> {
 		Some(vec!["id", "name", "status", "description", "created_at"])
 	}
-	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool { true }
-	async fn has_add_permission(&self, _user: &dyn AdminUser) -> bool { true }
-	async fn has_change_permission(&self, _user: &dyn AdminUser) -> bool { true }
-	async fn has_delete_permission(&self, _user: &dyn AdminUser) -> bool { true }
+	async fn has_view_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
+	}
+	async fn has_add_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
+	}
+	async fn has_change_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
+	}
+	async fn has_delete_permission(&self, _user: &dyn AdminUser) -> bool {
+		true
+	}
 }
 
 // ============================================================================
@@ -117,9 +137,8 @@ impl TestServer {
 		// Release the listener so the HTTP server can re-bind
 		drop(listener);
 
-		let coordinator = reinhardt_server::ShutdownCoordinator::new(
-			std::time::Duration::from_secs(5),
-		);
+		let coordinator =
+			reinhardt_server::ShutdownCoordinator::new(std::time::Duration::from_secs(5));
 		let router = Arc::new(router);
 		let server_task = tokio::spawn(async move {
 			let server = reinhardt_server::HttpServer::new(router);
@@ -141,9 +160,17 @@ impl TestServer {
 		format!("http://127.0.0.1:{}", self.port)
 	}
 
-	/// URL reachable from inside Docker containers (macOS Docker Desktop).
+	/// URL reachable from inside Docker containers.
+	///
+	/// On macOS/Windows Docker Desktop, `host.docker.internal` resolves automatically.
+	/// On Linux (CI), the Docker bridge gateway `172.17.0.1` provides host access.
 	fn container_url(&self) -> String {
-		format!("http://host.docker.internal:{}", self.port)
+		let host = if cfg!(target_os = "macos") || cfg!(target_os = "windows") {
+			"host.docker.internal"
+		} else {
+			"172.17.0.1"
+		};
+		format!("http://{}:{}", host, self.port)
 	}
 }
 
@@ -260,8 +287,11 @@ async fn e2e(
 	let mut site = AdminSite::new("E2E Test Admin");
 	site.set_jwt_secret(JWT_SECRET);
 	let site = Arc::new(site);
-	site.register("TestModel", AllPermissionsModelAdmin::test_model("test_models"))
-		.expect("Failed to register TestModel");
+	site.register(
+		"TestModel",
+		AllPermissionsModelAdmin::test_model("test_models"),
+	)
+	.expect("Failed to register TestModel");
 
 	let (admin_router, admin_di) = admin_routes_with_di_deferred(site);
 
@@ -397,13 +427,19 @@ async fn login_via_form(page: &CdpPage, server_url: &str) {
 #[tokio::test]
 async fn test_admin_html_shell_served(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
-	let page = ctx.browser.new_page(&format!("{}/admin/", ctx.server_url))
-		.await.expect("Failed to open page");
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
 
 	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 	let source = page.content().await.expect("Failed to get page source");
 
-	assert!(source.contains("id=\"app\""), "Should have #app mount point");
+	assert!(
+		source.contains("id=\"app\""),
+		"Should have #app mount point"
+	);
 	assert!(
 		source.contains("Admin") || source.contains("admin"),
 		"Should reference admin in title or content"
@@ -414,13 +450,19 @@ async fn test_admin_html_shell_served(#[future] e2e: E2eContext) {
 #[tokio::test]
 async fn test_admin_login_shell_served(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
-	let page = ctx.browser.new_page(&format!("{}/admin/login/", ctx.server_url))
-		.await.expect("Failed to open page");
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
 
 	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 	let source = page.content().await.expect("Failed to get page source");
 
-	assert!(source.contains("id=\"app\""), "Login route should serve SPA shell");
+	assert!(
+		source.contains("id=\"app\""),
+		"Login route should serve SPA shell"
+	);
 }
 
 // --- 2. Login Page Tests (require WASM) ---
@@ -429,8 +471,11 @@ async fn test_admin_login_shell_served(#[future] e2e: E2eContext) {
 #[tokio::test]
 async fn test_login_page_renders(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
-	let page = ctx.browser.new_page(&format!("{}/admin/login/", ctx.server_url))
-		.await.expect("Failed to open page");
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
 
 	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 	let source = page.content().await.expect("Failed to get page source");
@@ -448,15 +493,22 @@ async fn test_login_page_renders(#[future] e2e: E2eContext) {
 #[tokio::test]
 async fn test_login_invalid_credentials_shows_error(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
-	let page = ctx.browser.new_page(&format!("{}/admin/login/", ctx.server_url))
-		.await.expect("Failed to open page");
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
 
 	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 	let source = page.content().await.expect("Failed to get page source");
 	require_wasm!(&source);
 
-	page.type_into("input[name='username']", "wrong_user").await.unwrap();
-	page.type_into("input[name='password']", "wrong_password").await.unwrap();
+	page.type_into("input[name='username']", "wrong_user")
+		.await
+		.unwrap();
+	page.type_into("input[name='password']", "wrong_password")
+		.await
+		.unwrap();
 	page.click("button[type='submit']").await.unwrap();
 
 	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -464,10 +516,16 @@ async fn test_login_invalid_credentials_shows_error(#[future] e2e: E2eContext) {
 	let source = page.content().await.unwrap();
 	let current_url = page.url().await.unwrap().unwrap_or_default();
 
-	assert!(current_url.contains("login"), "Should stay on login page, got: {}", current_url);
 	assert!(
-		source.contains("Invalid") || source.contains("invalid")
-			|| source.contains("error") || source.contains("admin-alert-danger"),
+		current_url.contains("login"),
+		"Should stay on login page, got: {}",
+		current_url
+	);
+	assert!(
+		source.contains("Invalid")
+			|| source.contains("invalid")
+			|| source.contains("error")
+			|| source.contains("admin-alert-danger"),
 		"Should display error message"
 	);
 }
@@ -476,8 +534,11 @@ async fn test_login_invalid_credentials_shows_error(#[future] e2e: E2eContext) {
 #[tokio::test]
 async fn test_login_success_redirects_to_dashboard(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
-	let page = ctx.browser.new_page(&format!("{}/admin/login/", ctx.server_url))
-		.await.expect("Failed to open page");
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
 
 	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 	let source = page.content().await.unwrap();
@@ -488,7 +549,8 @@ async fn test_login_success_redirects_to_dashboard(#[future] e2e: E2eContext) {
 	let current_url = page.url().await.unwrap().unwrap_or_default();
 	assert!(
 		!current_url.contains("login") || current_url.ends_with("/admin/"),
-		"Should redirect to dashboard, got: {}", current_url
+		"Should redirect to dashboard, got: {}",
+		current_url
 	);
 }
 
@@ -498,8 +560,11 @@ async fn test_login_success_redirects_to_dashboard(#[future] e2e: E2eContext) {
 #[tokio::test]
 async fn test_dashboard_shows_model_cards(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
-	let page = ctx.browser.new_page(&format!("{}/admin/login/", ctx.server_url))
-		.await.expect("Failed to open page");
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
 
 	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 	let source = page.content().await.unwrap();
@@ -511,16 +576,25 @@ async fn test_dashboard_shows_model_cards(#[future] e2e: E2eContext) {
 	tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
 	let source = page.content().await.unwrap();
-	assert!(source.contains("TestModel") || source.contains("testmodel"), "Should display TestModel card");
-	assert!(source.contains("Dashboard"), "Should contain dashboard heading");
+	assert!(
+		source.contains("TestModel") || source.contains("testmodel"),
+		"Should display TestModel card"
+	);
+	assert!(
+		source.contains("Dashboard"),
+		"Should contain dashboard heading"
+	);
 }
 
 #[rstest]
 #[tokio::test]
 async fn test_dashboard_card_navigates_to_list(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
-	let page = ctx.browser.new_page(&format!("{}/admin/login/", ctx.server_url))
-		.await.expect("Failed to open page");
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
 
 	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 	let source = page.content().await.unwrap();
@@ -529,10 +603,18 @@ async fn test_dashboard_card_navigates_to_list(#[future] e2e: E2eContext) {
 	inject_auth_token(&page, &ctx.server_url).await;
 	tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
-	if page.click("a[href*='TestModel'], a[href*='testmodel']").await.is_ok() {
+	if page
+		.click("a[href*='TestModel'], a[href*='testmodel']")
+		.await
+		.is_ok()
+	{
 		tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 		let url = page.url().await.unwrap().unwrap_or_default();
-		assert!(url.to_lowercase().contains("testmodel"), "Should navigate to list, got: {}", url);
+		assert!(
+			url.to_lowercase().contains("testmodel"),
+			"Should navigate to list, got: {}",
+			url
+		);
 	}
 }
 
@@ -542,8 +624,11 @@ async fn test_dashboard_card_navigates_to_list(#[future] e2e: E2eContext) {
 #[tokio::test]
 async fn test_list_view_renders_table(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
-	let page = ctx.browser.new_page(&format!("{}/admin/login/", ctx.server_url))
-		.await.expect("Failed to open page");
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
 
 	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 	let source = page.content().await.unwrap();
@@ -553,7 +638,10 @@ async fn test_list_view_renders_table(#[future] e2e: E2eContext) {
 	spa_navigate(&page, "/admin/TestModel/").await;
 
 	let source = page.content().await.unwrap();
-	assert!(source.contains("TestModel") || source.contains("List"), "Should show list heading");
+	assert!(
+		source.contains("TestModel") || source.contains("List"),
+		"Should show list heading"
+	);
 	assert!(
 		source.contains("Alice") || source.contains("Bob") || source.contains("Charlie"),
 		"Should display test records"
@@ -564,8 +652,11 @@ async fn test_list_view_renders_table(#[future] e2e: E2eContext) {
 #[tokio::test]
 async fn test_list_view_row_navigates_to_detail(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
-	let page = ctx.browser.new_page(&format!("{}/admin/login/", ctx.server_url))
-		.await.expect("Failed to open page");
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
 
 	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 	let source = page.content().await.unwrap();
@@ -579,7 +670,8 @@ async fn test_list_view_row_navigates_to_detail(#[future] e2e: E2eContext) {
 		let url = page.url().await.unwrap().unwrap_or_default();
 		assert!(
 			url.contains("/admin/TestModel/") && url.len() > "/admin/TestModel/".len(),
-			"Should navigate to detail, got: {}", url
+			"Should navigate to detail, got: {}",
+			url
 		);
 	}
 }
@@ -590,8 +682,11 @@ async fn test_list_view_row_navigates_to_detail(#[future] e2e: E2eContext) {
 #[tokio::test]
 async fn test_detail_view_has_edit_and_back(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
-	let page = ctx.browser.new_page(&format!("{}/admin/login/", ctx.server_url))
-		.await.expect("Failed to open page");
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
 
 	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 	let source = page.content().await.unwrap();
@@ -601,9 +696,18 @@ async fn test_detail_view_has_edit_and_back(#[future] e2e: E2eContext) {
 	spa_navigate(&page, "/admin/TestModel/1/").await;
 
 	let source = page.content().await.unwrap();
-	assert!(source.contains("Alice") || source.contains("Detail"), "Should show record data");
-	assert!(source.contains("Edit") || source.contains("edit"), "Should have Edit link");
-	assert!(source.contains("Back") || source.contains("List"), "Should have Back link");
+	assert!(
+		source.contains("Alice") || source.contains("Detail"),
+		"Should show record data"
+	);
+	assert!(
+		source.contains("Edit") || source.contains("edit"),
+		"Should have Edit link"
+	);
+	assert!(
+		source.contains("Back") || source.contains("List"),
+		"Should have Back link"
+	);
 }
 
 // --- 6. Create Form Tests (require WASM) ---
@@ -612,8 +716,11 @@ async fn test_detail_view_has_edit_and_back(#[future] e2e: E2eContext) {
 #[tokio::test]
 async fn test_create_form_renders(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
-	let page = ctx.browser.new_page(&format!("{}/admin/login/", ctx.server_url))
-		.await.expect("Failed to open page");
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
 
 	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 	let source = page.content().await.unwrap();
@@ -623,8 +730,14 @@ async fn test_create_form_renders(#[future] e2e: E2eContext) {
 	spa_navigate(&page, "/admin/TestModel/add/").await;
 
 	let source = page.content().await.unwrap();
-	assert!(source.contains("Create") || source.contains("Add") || source.contains("form"), "Should show create form");
-	assert!(source.contains("name") || source.contains("Name"), "Should have name field");
+	assert!(
+		source.contains("Create") || source.contains("Add") || source.contains("form"),
+		"Should show create form"
+	);
+	assert!(
+		source.contains("name") || source.contains("Name"),
+		"Should have name field"
+	);
 }
 
 // --- 7. Auth Redirect Tests (require WASM) ---
@@ -633,8 +746,11 @@ async fn test_create_form_renders(#[future] e2e: E2eContext) {
 #[tokio::test]
 async fn test_unauthenticated_redirect_to_login(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
-	let page = ctx.browser.new_page(&format!("{}/admin/", ctx.server_url))
-		.await.expect("Failed to open page");
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
 
 	tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
@@ -642,7 +758,11 @@ async fn test_unauthenticated_redirect_to_login(#[future] e2e: E2eContext) {
 	require_wasm!(&source);
 
 	let url = page.url().await.unwrap().unwrap_or_default();
-	assert!(url.contains("login"), "Should redirect to login, got: {}", url);
+	assert!(
+		url.contains("login"),
+		"Should redirect to login, got: {}",
+		url
+	);
 }
 
 // --- 8. Edit Form Tests (require WASM) ---
@@ -651,8 +771,11 @@ async fn test_unauthenticated_redirect_to_login(#[future] e2e: E2eContext) {
 #[tokio::test]
 async fn test_edit_form_renders_with_values(#[future] e2e: E2eContext) {
 	let ctx = e2e.await;
-	let page = ctx.browser.new_page(&format!("{}/admin/login/", ctx.server_url))
-		.await.expect("Failed to open page");
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
 
 	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 	let source = page.content().await.unwrap();
@@ -663,6 +786,12 @@ async fn test_edit_form_renders_with_values(#[future] e2e: E2eContext) {
 	tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
 	let source = page.content().await.unwrap();
-	assert!(source.contains("Edit") || source.contains("Change") || source.contains("form"), "Should show edit form");
-	assert!(source.contains("Alice") || source.contains("alice") || source.contains("value="), "Should have pre-filled values");
+	assert!(
+		source.contains("Edit") || source.contains("Change") || source.contains("form"),
+		"Should show edit form"
+	);
+	assert!(
+		source.contains("Alice") || source.contains("alice") || source.contains("value="),
+		"Should have pre-filled values"
+	);
 }

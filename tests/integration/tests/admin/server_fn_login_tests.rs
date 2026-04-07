@@ -276,6 +276,8 @@ fn make_login_request(
 	let mut builder = reinhardt_http::Request::builder()
 		.method(hyper::Method::POST)
 		.uri("/admin/api/server_fn/admin_login")
+		.header("host", "localhost")
+		.header("origin", "http://localhost")
 		.header("content-type", "application/json");
 
 	if let Some(cookie_val) = cookie_token {
@@ -530,10 +532,24 @@ async fn test_admin_login_happy_path(#[future] shared_db_pool: (sqlx::PgPool, St
 	let login_response: LoginResponse =
 		serde_json::from_slice(&response.body).expect("Failed to deserialize LoginResponse");
 
+	// JWT is now set as an HTTP-Only cookie (not in the response body).
+	// Verify the Set-Cookie header contains the admin auth token.
+	let set_cookie = response
+		.headers
+		.get("set-cookie")
+		.expect("Set-Cookie header should be present on successful login");
+	let cookie_str = set_cookie.to_str().expect("Invalid Set-Cookie header");
 	assert!(
-		!login_response.token.is_empty(),
-		"Token should not be empty on successful login"
+		cookie_str.contains("reinhardt_admin_token="),
+		"Set-Cookie should contain reinhardt_admin_token, got: {}",
+		cookie_str
 	);
+	assert!(
+		cookie_str.contains("HttpOnly"),
+		"Admin auth cookie must be HttpOnly"
+	);
+
+	// Token field in response body is intentionally empty (security improvement).
 	assert_eq!(login_response.username, "test_staff");
 }
 
@@ -563,10 +579,25 @@ async fn test_admin_login_jwt_token_format(#[future] shared_db_pool: (sqlx::PgPo
 	let response = response.unwrap();
 	assert_eq!(response.status.as_u16(), 200);
 
-	let login_response: LoginResponse =
+	let _login_response: LoginResponse =
 		serde_json::from_slice(&response.body).expect("Failed to deserialize LoginResponse");
 
-	let parts: Vec<&str> = login_response.token.split('.').collect();
+	// JWT is now delivered via Set-Cookie header (HTTP-Only cookie).
+	let set_cookie = response
+		.headers
+		.get("set-cookie")
+		.expect("Set-Cookie header should be present on successful login");
+	let cookie_str = set_cookie.to_str().expect("Invalid Set-Cookie header");
+
+	// Extract token value from "reinhardt_admin_token=<token>; HttpOnly; ..."
+	let token = cookie_str
+		.strip_prefix("reinhardt_admin_token=")
+		.expect("Cookie should start with reinhardt_admin_token=")
+		.split(';')
+		.next()
+		.expect("Cookie should have a value");
+
+	let parts: Vec<&str> = token.split('.').collect();
 	assert_eq!(
 		parts.len(),
 		3,
@@ -574,7 +605,6 @@ async fn test_admin_login_jwt_token_format(#[future] shared_db_pool: (sqlx::PgPo
 		parts.len(),
 		parts
 	);
-	// Each part should be non-empty base64
 	for (i, part) in parts.iter().enumerate() {
 		assert!(!part.is_empty(), "JWT part {} should not be empty", i);
 	}

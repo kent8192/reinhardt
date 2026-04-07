@@ -124,8 +124,21 @@ jobs:
         with:
           chrome-version: stable
 
-      - name: Run WASM tests (reinhardt-pages)
+      - name: Run WASM lib tests (reinhardt-pages)
         working-directory: crates/reinhardt-pages
+        # Run lib-level wasm_bindgen_test tests via wasm-pack.
+        # This also caches the wasm-bindgen-test-runner binary for the next step.
+        run: wasm-pack test --headless --chrome --lib
+
+      - name: Run WASM integration tests (reinhardt-pages)
+        working-directory: crates/reinhardt-pages
+        # wasm-pack places extra args after `--` in cargo test (going to the test
+        # binary), but --test is a cargo flag. So we invoke cargo test directly
+        # with the runner that wasm-pack cached. (See #3365)
         run: |
-          wasm-pack test --headless --chrome \
-            . -- --test csrf_wasm_test --test server_fn_wasm_test
+          RUNNER=$(find "${HOME}/.cache/.wasm-pack" -name "wasm-bindgen-test-runner" -type f 2>/dev/null | head -1)
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER="$RUNNER" \
+          CHROMEDRIVER="$(which chromedriver)" \
+          WASM_BINDGEN_TEST_ONLY_WEB=1 \
+            cargo test --target wasm32-unknown-unknown \
+              --test csrf_wasm_test --test server_fn_wasm_test

@@ -57,3 +57,6 @@ mod provider_tests;
 
 #[path = "di/registry_tests.rs"]
 mod registry_tests;
+
+#[path = "di/ui.rs"]
+mod ui;

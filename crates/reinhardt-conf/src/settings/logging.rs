@@ -1,6 +1,6 @@
 //! Logging settings fragment
 //!
-//! Provides composable logging configuration as a [`SettingsFragment`].
+//! Provides composable logging configuration as a [`SettingsFragment`](crate::settings::fragment::SettingsFragment).
 
 use reinhardt_core::macros::settings;
 use serde::{Deserialize, Serialize};

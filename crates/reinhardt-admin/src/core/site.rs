@@ -3,16 +3,14 @@
 //! The `AdminSite` is the central registry for all admin models and provides
 //! routing, authentication, and rendering functionality.
 
-use crate::core::{AdminRouter, ModelAdmin};
+use crate::core::ModelAdmin;
 use crate::server::admin_auth::{AdminLoginAuthenticator, AdminUserLoader};
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use reinhardt_core::macros::injectable;
-use reinhardt_db::orm::DatabaseConnection;
-use reinhardt_di::{DiResult, Injectable, InjectionContext, SingletonScope};
-use reinhardt_urls::routers::ServerRouter;
+use reinhardt_di::{DiResult, Injectable, InjectionContext};
 use std::sync::Arc;
 
 /// The main admin site that manages all registered models
@@ -427,52 +425,6 @@ impl AdminSite {
 		self.registry.clear();
 	}
 
-	/// Build a ServerRouter from this admin site
-	///
-	/// # Deprecation
-	///
-	/// Use [`admin_routes_with_di()`] instead.
-	#[deprecated(since = "0.1.0-rc.15", note = "Use admin_routes_with_di(site) instead")]
-	pub fn get_urls(self, _db: DatabaseConnection) -> ServerRouter {
-		let url_prefix = self.url_prefix.clone();
-		let (router, _registrations) = crate::core::router::admin_routes_with_di(Arc::new(self));
-		router.with_prefix(&url_prefix)
-	}
-
-	/// Get an AdminRouter for more control over route building
-	///
-	/// # Deprecation
-	///
-	/// Use [`admin_routes_with_di()`] instead.
-	#[deprecated(since = "0.1.0-rc.15", note = "Use admin_routes_with_di(site) instead")]
-	#[allow(deprecated)]
-	pub fn get_router(self, _db: DatabaseConnection) -> AdminRouter {
-		AdminRouter::from_arc(Arc::new(self))
-	}
-
-	/// Configure dependency injection container for admin panel
-	///
-	/// # Deprecation
-	///
-	/// Use [`admin_routes_with_di()`] instead. `AdminDatabase` is now
-	/// lazily constructed from `DatabaseConnection` at request time.
-	#[deprecated(
-		since = "0.1.0-rc.15",
-		note = "Use admin_routes_with_di(site) instead. \
-		        AdminDatabase is now auto-constructed from DatabaseConnection."
-	)]
-	pub fn configure_di(
-		singleton: &SingletonScope,
-		site: Arc<AdminSite>,
-		db: crate::core::AdminDatabase,
-		favicon_data: Option<Vec<u8>>,
-	) {
-		if let Some(data) = favicon_data {
-			site.set_favicon(data);
-		}
-		singleton.set_arc(site);
-		singleton.set_arc(Arc::new(db));
-	}
 }
 
 /// Injectable trait implementation for AdminSite

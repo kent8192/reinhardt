@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+#[cfg(test)]
 use reinhardt_di::SingletonScope;
 #[cfg(server)]
 use reinhardt_pages::server_fn::ServerFnRouterExt;
@@ -448,114 +449,6 @@ pub fn admin_routes_with_di(
 	)
 }
 
-/// Admin router builder (for backward compatibility)
-///
-/// This struct is kept for backward compatibility with existing code.
-/// New code should use [`admin_routes_with_di()`] function directly.
-#[deprecated(since = "0.1.0-rc.15", note = "Use admin_routes_with_di(site) instead")]
-pub struct AdminRouter {
-	site: Arc<AdminSite>,
-}
-
-#[allow(deprecated)]
-impl std::fmt::Debug for AdminRouter {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.debug_struct("AdminRouter")
-			.field("site_name", &self.site.name())
-			.finish()
-	}
-}
-
-#[allow(deprecated)]
-impl AdminRouter {
-	/// Create a new admin router builder from Arc-wrapped site
-	pub fn from_arc(site: Arc<AdminSite>) -> Self {
-		Self { site }
-	}
-
-	/// Set favicon from file path
-	///
-	/// Returns an error if the file cannot be read.
-	///
-	/// # Examples
-	///
-	/// ```rust,no_run
-	/// use reinhardt_admin::core::{AdminSite, AdminRouter};
-	/// use std::sync::Arc;
-	///
-	/// let site = Arc::new(AdminSite::new("Admin"));
-	/// let router = AdminRouter::from_arc(site)
-	///     .with_favicon_file("static/favicon.ico")
-	///     .expect("Failed to read favicon file")
-	///     .build();
-	/// ```
-	///
-	/// # Errors
-	///
-	/// Returns `std::io::Error` if the file cannot be read.
-	pub fn with_favicon_file(
-		self,
-		path: impl AsRef<std::path::Path>,
-	) -> Result<Self, std::io::Error> {
-		let data = std::fs::read(path.as_ref())?;
-		self.site.set_favicon(data);
-		Ok(self)
-	}
-
-	/// Set favicon from raw bytes
-	///
-	/// # Examples
-	///
-	/// ```rust,ignore
-	/// // Cannot run: favicon.ico file does not exist
-	/// use reinhardt_admin::core::{AdminSite, AdminRouter};
-	/// use std::sync::Arc;
-	///
-	/// let favicon_bytes = include_bytes!("favicon.ico").to_vec();
-	/// let site = Arc::new(AdminSite::new("Admin"));
-	/// let router = AdminRouter::from_arc(site)
-	///     .with_favicon_bytes(favicon_bytes)
-	///     .build();
-	/// ```
-	pub fn with_favicon_bytes(self, data: Vec<u8>) -> Self {
-		self.site.set_favicon(data);
-		self
-	}
-
-	/// Build the ServerRouter with all admin endpoints
-	///
-	/// # Deprecation
-	///
-	/// Use [`admin_routes_with_di()`] instead.
-	#[deprecated(since = "0.1.0-rc.15", note = "Use admin_routes_with_di(site) instead")]
-	pub fn routes(&self) -> ServerRouter {
-		let (router, _registrations) = admin_routes_with_di(Arc::clone(&self.site));
-		router
-	}
-
-	/// Build the ServerRouter with DI auto-registration
-	///
-	/// # Deprecation
-	///
-	/// Use [`admin_routes_with_di()`] instead.
-	#[deprecated(since = "0.1.0-rc.15", note = "Use admin_routes_with_di(site) instead")]
-	pub fn build_with_di(self, singleton: &SingletonScope) -> ServerRouter {
-		let (router, registrations) = admin_routes_with_di(self.site);
-		registrations.apply_to(singleton);
-		router
-	}
-
-	/// Build the ServerRouter (alias for routes())
-	///
-	/// # Deprecation
-	///
-	/// Use [`admin_routes_with_di()`] instead.
-	#[deprecated(since = "0.1.0-rc.15", note = "Use admin_routes_with_di(site) instead")]
-	pub fn build(self) -> ServerRouter {
-		let (router, _registrations) = admin_routes_with_di(self.site);
-		router
-	}
-}
 
 #[cfg(test)]
 mod tests {
@@ -653,65 +546,14 @@ mod tests {
 		}
 	}
 
-	#[allow(deprecated)] // testing backward compat of deprecated method
 	#[rstest]
-	fn test_admin_router_backward_compat() {
+	fn test_set_favicon_stores_data() {
 		// Arrange
 		let site = Arc::new(AdminSite::new("Test Admin"));
-		let router_builder = AdminRouter::from_arc(site);
-
-		// Act
-		let router = router_builder.routes();
-
-		// Assert
-		assert_eq!(router.namespace(), Some("admin"));
-	}
-
-	#[rstest]
-	#[allow(deprecated)] // testing backward compat of deprecated method
-	fn test_admin_router_build_with_di() {
-		// Arrange
-		let site = Arc::new(AdminSite::new("DI Admin"));
-		let singleton = SingletonScope::new();
-		let router_builder = AdminRouter::from_arc(site);
-
-		// Act
-		let router = router_builder.build_with_di(&singleton);
-
-		// Assert
-		assert_eq!(router.namespace(), Some("admin"));
-		let registered = singleton.get::<AdminSite>();
-		assert!(registered.is_some());
-		assert_eq!(registered.unwrap().name(), "DI Admin");
-	}
-
-	#[rstest]
-	fn test_with_favicon_file_returns_error_for_missing_file() {
-		// Arrange
-		let site = Arc::new(AdminSite::new("Test Admin"));
-		let router_builder = AdminRouter::from_arc(site);
-
-		// Act
-		let result = router_builder.with_favicon_file("/nonexistent/path/favicon.ico");
-
-		// Assert
-		assert!(result.is_err());
-		let err = result.unwrap_err();
-		assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
-	}
-
-	#[rstest]
-	#[allow(deprecated)] // testing backward compat of deprecated method
-	fn test_with_favicon_bytes_succeeds() {
-		// Arrange
-		let site = Arc::new(AdminSite::new("Test Admin"));
-		let router_builder = AdminRouter::from_arc(site.clone());
 		let favicon_data = vec![0x89, 0x50, 0x4E, 0x47]; // PNG magic bytes
 
 		// Act
-		let singleton = SingletonScope::new();
-		let router_builder = router_builder.with_favicon_bytes(favicon_data.clone());
-		let _router = router_builder.build_with_di(&singleton);
+		site.set_favicon(favicon_data.clone());
 
 		// Assert
 		let stored = site.favicon_data();

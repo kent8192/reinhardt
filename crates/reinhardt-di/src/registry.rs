@@ -81,10 +81,16 @@ where
 /// which returns `Pin<Box<dyn Future + Send>>` (not `Sync`).
 pub struct InjectableFactory<T>(PhantomData<T>);
 
+impl<T> Default for InjectableFactory<T> {
+	fn default() -> Self {
+		Self(PhantomData)
+	}
+}
+
 impl<T> InjectableFactory<T> {
 	/// Create a new `InjectableFactory`.
 	pub fn new() -> Self {
-		Self(PhantomData)
+		Self::default()
 	}
 }
 

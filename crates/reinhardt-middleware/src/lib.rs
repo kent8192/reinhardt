@@ -148,6 +148,9 @@ pub mod cache;
 pub mod circuit_breaker;
 pub mod common;
 pub mod conditional;
+#[cfg(feature = "sessions")]
+/// Cookie-based session authentication middleware (requires `sessions` feature).
+pub mod cookie_session_auth;
 #[cfg(feature = "cors")]
 /// Cross-Origin Resource Sharing (CORS) middleware for handling preflight and CORS headers.
 pub mod cors;
@@ -160,31 +163,28 @@ pub mod flatpages;
 pub mod gzip;
 pub mod honeypot;
 pub mod https_redirect;
-#[cfg(feature = "sessions")]
-/// Cookie-based session authentication middleware (requires `sessions` feature).
-pub mod cookie_session_auth;
 #[cfg(feature = "auth-jwt")]
 /// JWT Bearer token authentication middleware (requires `auth-jwt` feature).
 pub mod jwt_auth;
 pub mod locale;
 /// Structured request/response logging with configurable formats.
 pub mod logging;
-pub mod origin_guard;
 /// Login required middleware that redirects unauthenticated users to a login page.
 pub mod login_required;
 pub mod messages;
 pub mod metrics;
+pub mod origin_guard;
 #[cfg(feature = "rate-limit")]
 pub mod rate_limit;
 pub mod redirect_fallback;
+#[cfg(feature = "session-redis")]
+pub mod redis_session;
 /// Reverse proxy remote user authentication middleware (requires `sessions` feature).
 pub mod remote_user;
 pub mod request_id;
 #[cfg(feature = "security")]
 pub mod security_middleware;
 pub mod session;
-#[cfg(feature = "session-redis")]
-pub mod redis_session;
 pub mod site;
 pub mod timeout;
 pub mod tracing;
@@ -204,6 +204,8 @@ pub use cache::{CacheConfig, CacheKeyStrategy, CacheMiddleware, CacheStore};
 pub use circuit_breaker::{CircuitBreakerConfig, CircuitBreakerMiddleware, CircuitState};
 pub use common::{CommonConfig, CommonMiddleware};
 pub use conditional::ConditionalGetMiddleware;
+#[cfg(feature = "sessions")]
+pub use cookie_session_auth::{CookieSessionAuthMiddleware, CookieSessionConfig};
 #[cfg(feature = "cors")]
 pub use cors::CorsMiddleware;
 pub use csp::{CspConfig, CspMiddleware, CspNonce};
@@ -222,21 +224,21 @@ pub use flatpages::{Flatpage, FlatpageStore, FlatpagesConfig, FlatpagesMiddlewar
 pub use gzip::{GZipConfig, GZipMiddleware};
 pub use honeypot::{HoneypotError, HoneypotField};
 pub use https_redirect::{HttpsRedirectConfig, HttpsRedirectMiddleware};
-#[cfg(feature = "sessions")]
-pub use cookie_session_auth::{CookieSessionAuthMiddleware, CookieSessionConfig};
 #[cfg(feature = "auth-jwt")]
 pub use jwt_auth::JwtAuthMiddleware;
 pub use locale::{LocaleConfig, LocaleMiddleware};
-pub use origin_guard::OriginGuardMiddleware;
 pub use logging::{LoggingConfig, LoggingMiddleware};
 pub use login_required::{
 	DEFAULT_LOGIN_URL, DEFAULT_REDIRECT_FIELD_NAME, LoginRequiredConfig, LoginRequiredMiddleware,
 };
 pub use messages::{CookieStorage, Message, MessageLevel, MessageStorage, SessionStorage};
 pub use metrics::{MetricsConfig, MetricsMiddleware, MetricsStore};
+pub use origin_guard::OriginGuardMiddleware;
 #[cfg(feature = "rate-limit")]
 pub use rate_limit::{RateLimitConfig, RateLimitMiddleware, RateLimitStore, RateLimitStrategy};
 pub use redirect_fallback::{RedirectFallbackMiddleware, RedirectResponseConfig};
+#[cfg(feature = "session-redis")]
+pub use redis_session::RedisSessionBackend;
 #[cfg(feature = "sessions")]
 pub use remote_user::{PersistentRemoteUserMiddleware, REMOTE_USER_HEADER, RemoteUserMiddleware};
 pub use request_id::{REQUEST_ID_HEADER, RequestIdConfig, RequestIdMiddleware};
@@ -244,8 +246,6 @@ pub use request_id::{REQUEST_ID_HEADER, RequestIdConfig, RequestIdMiddleware};
 #[allow(deprecated)] // SecurityConfig is deprecated but still re-exported for compatibility
 pub use security_middleware::{SecurityConfig, SecurityMiddleware};
 pub use session::{SessionConfig, SessionData, SessionMiddleware, SessionStore};
-#[cfg(feature = "session-redis")]
-pub use redis_session::RedisSessionBackend;
 pub use site::{SITE_ID_HEADER, Site, SiteConfig, SiteMiddleware, SiteRegistry};
 pub use timeout::{TimeoutConfig, TimeoutMiddleware};
 pub use tracing::{

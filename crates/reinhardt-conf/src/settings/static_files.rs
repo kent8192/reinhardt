@@ -1,6 +1,6 @@
 //! Static files settings fragment
 //!
-//! Provides composable static file serving configuration as a [`SettingsFragment`].
+//! Provides composable static file serving configuration as a [`SettingsFragment`](crate::settings::fragment::SettingsFragment).
 
 use reinhardt_core::macros::settings;
 use serde::{Deserialize, Serialize};

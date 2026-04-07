@@ -1,6 +1,6 @@
 //! Email settings fragment
 //!
-//! Provides composable email configuration as a [`SettingsFragment`].
+//! Provides composable email configuration as a [`SettingsFragment`](crate::settings::fragment::SettingsFragment).
 
 use reinhardt_core::macros::settings;
 use serde::{Deserialize, Serialize};

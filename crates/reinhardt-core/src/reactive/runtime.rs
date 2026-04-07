@@ -289,7 +289,6 @@ impl Runtime {
 		}
 	}
 
-
 	/// Clear dependencies for a node
 	///
 	/// This should be called before re-executing an Effect/Memo to clear old dependencies.

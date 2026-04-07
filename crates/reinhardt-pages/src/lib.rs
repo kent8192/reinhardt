@@ -206,12 +206,12 @@ pub use builder::{
 pub use callback::{Callback, IntoEventHandler, event_handler, into_event_handler};
 #[cfg(native)]
 pub use component::DummyEvent;
+#[cfg(wasm)]
+pub use component::cleanup_reactive_nodes;
 pub use component::{
 	Component, Head, IntoPage, LinkTag, MetaTag, Page, PageElement, PageExt, Props, ScriptTag,
 	StyleTag,
 };
-#[cfg(wasm)]
-pub use component::cleanup_reactive_nodes;
 pub use csrf::{CsrfManager, get_csrf_token};
 pub use dom::{Document, Element, EventHandle, EventType, document};
 #[cfg(native)]

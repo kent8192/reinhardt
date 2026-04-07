@@ -31,9 +31,9 @@
 
 use std::time::Duration;
 
+use chromiumoxide::Page;
 use chromiumoxide::browser::Browser;
 use chromiumoxide::error::CdpError;
-use chromiumoxide::Page;
 use futures::StreamExt;
 use rstest::*;
 use testcontainers::core::{ContainerPort, WaitFor};
@@ -75,15 +75,17 @@ impl CdpConfig {
 			.map(Duration::from_secs)
 			.unwrap_or_else(|| Duration::from_secs(10));
 
-		let (chrome_image, chrome_tag) =
-			if let Ok(full) = std::env::var("CDP_CHROME_IMAGE") {
-				match full.split_once(':') {
-					Some((img, tag)) => (img.to_string(), tag.to_string()),
-					None => (full, DEFAULT_CHROME_TAG.to_string()),
-				}
-			} else {
-				(DEFAULT_CHROME_IMAGE.to_string(), DEFAULT_CHROME_TAG.to_string())
-			};
+		let (chrome_image, chrome_tag) = if let Ok(full) = std::env::var("CDP_CHROME_IMAGE") {
+			match full.split_once(':') {
+				Some((img, tag)) => (img.to_string(), tag.to_string()),
+				None => (full, DEFAULT_CHROME_TAG.to_string()),
+			}
+		} else {
+			(
+				DEFAULT_CHROME_IMAGE.to_string(),
+				DEFAULT_CHROME_TAG.to_string(),
+			)
+		};
 
 		Self {
 			wait_timeout,
@@ -133,15 +135,12 @@ impl CdpBrowser {
 			))
 		})?;
 
-		let host_port = container
-			.get_host_port_ipv4(CDP_PORT)
-			.await
-			.map_err(|e| {
-				CdpError::Io(std::io::Error::new(
-					std::io::ErrorKind::AddrNotAvailable,
-					format!("Failed to get mapped port: {}", e),
-				))
-			})?;
+		let host_port = container.get_host_port_ipv4(CDP_PORT).await.map_err(|e| {
+			CdpError::Io(std::io::Error::new(
+				std::io::ErrorKind::AddrNotAvailable,
+				format!("Failed to get mapped port: {}", e),
+			))
+		})?;
 
 		let cdp_url = format!("http://127.0.0.1:{}", host_port);
 
@@ -166,10 +165,7 @@ impl CdpBrowser {
 	}
 
 	/// Start with retry logic for transient Docker/CDP failures.
-	pub async fn start_with_retries(
-		config: CdpConfig,
-		retries: u32,
-	) -> Result<Self, CdpError> {
+	pub async fn start_with_retries(config: CdpConfig, retries: u32) -> Result<Self, CdpError> {
 		let total = retries + 1;
 		let mut last_err = None;
 
@@ -179,11 +175,16 @@ impl CdpBrowser {
 				Err(e) => {
 					if attempt + 1 < total {
 						let delay = Duration::from_millis(
-							500u64.saturating_mul(2u64.saturating_pow(attempt)).min(8_000),
+							500u64
+								.saturating_mul(2u64.saturating_pow(attempt))
+								.min(8_000),
 						);
 						eprintln!(
 							"[e2e-cdp] Chrome container attempt {}/{} failed: {}. Retrying in {:?}...",
-							attempt + 1, total, e, delay,
+							attempt + 1,
+							total,
+							e,
+							delay,
 						);
 						tokio::time::sleep(delay).await;
 					}
@@ -333,10 +334,10 @@ impl CdpPage {
 		let poll_interval = Duration::from_millis(100);
 
 		loop {
-			if let Some(url) = self.page.url().await? {
-				if predicate(&url) {
-					return Ok(url);
-				}
+			if let Some(url) = self.page.url().await?
+				&& predicate(&url)
+			{
+				return Ok(url);
 			}
 			if start.elapsed() > self.wait_timeout {
 				return Err(CdpError::Timeout);

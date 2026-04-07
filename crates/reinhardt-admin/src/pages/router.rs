@@ -187,7 +187,7 @@ fn dashboard_view() -> Page {
 
 	page!(|| {
 		div {
-			class: "dashboard-container",
+			class: "dashboard-container p-6 md:p-8 max-w-7xl mx-auto",
 			{ reactive_content }
 		}
 	})()
@@ -295,7 +295,7 @@ fn list_view_component(model_name: String) -> Page {
 
 	page!(|| {
 		div {
-			class: "list-container",
+			class: "list-container p-6 md:p-8 max-w-7xl mx-auto",
 			{ reactive_content }
 		}
 	})()
@@ -368,7 +368,7 @@ fn detail_view_component(model_name: String, record_id: String) -> Page {
 
 	page!(|| {
 		div {
-			class: "detail-container",
+			class: "detail-container p-6 md:p-8 max-w-7xl mx-auto",
 			{ reactive_content }
 		}
 	})()
@@ -423,7 +423,7 @@ fn create_view_component(model_name: String) -> Page {
 
 	page!(|| {
 		div {
-			class: "form-container",
+			class: "form-container p-6 md:p-8 max-w-7xl mx-auto",
 			{ reactive_content }
 		}
 	})()
@@ -506,7 +506,7 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 
 	page!(|| {
 		div {
-			class: "form-container",
+			class: "form-container p-6 md:p-8 max-w-7xl mx-auto",
 			{ reactive_content }
 		}
 	})()

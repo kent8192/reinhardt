@@ -457,6 +457,7 @@ pub struct AdminRouter {
 	site: Arc<AdminSite>,
 }
 
+#[allow(deprecated)]
 impl std::fmt::Debug for AdminRouter {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		f.debug_struct("AdminRouter")
@@ -465,6 +466,7 @@ impl std::fmt::Debug for AdminRouter {
 	}
 }
 
+#[allow(deprecated)]
 impl AdminRouter {
 	/// Create a new admin router builder from Arc-wrapped site
 	pub fn from_arc(site: Arc<AdminSite>) -> Self {

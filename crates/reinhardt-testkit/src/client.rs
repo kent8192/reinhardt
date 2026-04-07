@@ -14,6 +14,11 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::RwLock;
 
+use reinhardt_di::InjectionContext;
+use reinhardt_http::{
+	Handler as HttpHandler, Request as HttpRequest, Response as HttpResponse,
+};
+
 use crate::response::TestResponse;
 
 /// HTTP version configuration for APIClient
@@ -111,6 +116,8 @@ pub struct APIClientBuilder {
 	timeout: Option<Duration>,
 	http_version: HttpVersion,
 	cookie_store: bool,
+	framework_handler: Option<Arc<dyn HttpHandler>>,
+	di_context: Option<Arc<InjectionContext>>,
 }
 
 impl APIClientBuilder {
@@ -121,6 +128,8 @@ impl APIClientBuilder {
 			timeout: None,
 			http_version: HttpVersion::Auto,
 			cookie_store: false,
+			framework_handler: None,
+			di_context: None,
 		}
 	}
 
@@ -160,6 +169,26 @@ impl APIClientBuilder {
 		self
 	}
 
+	/// Set a reinhardt `Handler` for in-process request dispatching.
+	///
+	/// When set, requests bypass the network and are handled directly
+	/// by the given Handler, running the full middleware stack in-process.
+	///
+	/// The calling test must run inside a tokio runtime (e.g., `#[tokio::test]`).
+	pub fn handler(mut self, handler: impl HttpHandler + 'static) -> Self {
+		self.framework_handler = Some(Arc::new(handler));
+		self
+	}
+
+	/// Set a DI context for in-process handler requests.
+	///
+	/// The context is injected into every reinhardt `Request` before
+	/// dispatching to the Handler.
+	pub fn di_context(mut self, ctx: Arc<InjectionContext>) -> Self {
+		self.di_context = Some(ctx);
+		self
+	}
+
 	/// Build the APIClient
 	pub fn build(self) -> APIClient {
 		let mut client_builder = reqwest::Client::builder();
@@ -191,15 +220,32 @@ impl APIClientBuilder {
 			.build()
 			.expect("Failed to build reqwest client");
 
-		APIClient {
+		let mut client = APIClient {
 			base_url: self.base_url,
 			default_headers: Arc::new(RwLock::new(HeaderMap::new())),
 			cookies: Arc::new(RwLock::new(HashMap::new())),
 			user: Arc::new(RwLock::new(None)),
 			handler: None,
+			async_handler: None,
+			handler_di_context: None,
 			http_client,
 			use_cookie_store: self.cookie_store,
+		};
+
+		// Wire up framework Handler for in-process dispatch
+		if let Some(fw_handler) = self.framework_handler {
+			client.async_handler = Some(fw_handler);
+			client.handler_di_context = self.di_context;
+
+			// Set default Origin header for OriginGuardMiddleware compatibility
+			if let Ok(mut headers) = client.default_headers.try_write()
+				&& let Ok(origin) = HeaderValue::from_str(&client.base_url)
+			{
+				headers.insert(http::header::ORIGIN, origin);
+			}
 		}
+
+		client
 	}
 }
 
@@ -240,8 +286,14 @@ pub struct APIClient {
 	/// Current authenticated user (if any)
 	user: Arc<RwLock<Option<Value>>>,
 
-	/// Handler function for processing requests
+	/// Handler function for processing requests (sync, for set_handler)
 	handler: Option<RequestHandler>,
+
+	/// In-process async handler for framework Handler trait dispatch
+	async_handler: Option<Arc<dyn HttpHandler>>,
+
+	/// DI context injected into requests when using async_handler
+	handler_di_context: Option<Arc<InjectionContext>>,
 
 	/// Reusable HTTP client with connection pooling
 	http_client: reqwest::Client,
@@ -277,6 +329,30 @@ impl APIClient {
 	/// ```
 	pub fn with_base_url(base_url: impl Into<String>) -> Self {
 		APIClientBuilder::new().base_url(base_url).build()
+	}
+
+	/// Create a test client that dispatches requests directly to a
+	/// reinhardt `Handler` without TCP.
+	///
+	/// The Handler runs the full middleware stack in-process.
+	/// Sets `base_url` to `"http://testserver"` and injects a default
+	/// `Origin` header for `OriginGuardMiddleware` compatibility.
+	///
+	/// # Panics
+	///
+	/// Panics if called outside a tokio runtime.
+	///
+	/// # Examples
+	///
+	/// ```rust,no_run
+	/// use reinhardt_testkit::APIClient;
+	///
+	/// // let router = build_routes(scope).into_server();
+	/// // let client = APIClient::from_handler(router);
+	/// // let resp = client.get("/api/health/").await.unwrap();
+	/// ```
+	pub fn from_handler(handler: impl HttpHandler + 'static) -> Self {
+		APIClientBuilder::new().handler(handler).build()
 	}
 
 	/// Create a builder for customizing the client configuration
@@ -746,8 +822,42 @@ impl APIClient {
 		};
 
 		// Execute request
-		let response = if let Some(handler) = &self.handler {
-			// Use custom handler if set
+		let response = if let Some(async_handler) = &self.async_handler {
+			// In-process dispatch via framework Handler trait
+			let (parts, body) = request.into_parts();
+			let body_bytes = body
+				.collect()
+				.await
+				.map(|c| c.to_bytes())
+				.unwrap_or_else(|_| Bytes::new());
+
+			let mut fw_request = HttpRequest::builder()
+				.method(parts.method)
+				.uri(parts.uri)
+				.version(parts.version)
+				.headers(parts.headers)
+				.body(body_bytes)
+				.build()
+				.expect("Failed to build reinhardt request");
+
+			if let Some(ctx) = &self.handler_di_context {
+				fw_request.set_di_context(Arc::clone(ctx));
+			}
+
+			let fw_response = async_handler
+				.handle(fw_request)
+				.await
+				.unwrap_or_else(HttpResponse::from);
+
+			let mut builder = http::Response::builder().status(fw_response.status);
+			for (key, value) in fw_response.headers.iter() {
+				builder = builder.header(key, value);
+			}
+			builder
+				.body(Full::new(fw_response.body))
+				.expect("Failed to build http::Response")
+		} else if let Some(handler) = &self.handler {
+			// Use custom sync handler if set
 			handler(request)
 		} else {
 			// Use reqwest for real HTTP requests when no handler is set
@@ -954,7 +1064,154 @@ mod urlencoding {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use async_trait::async_trait;
+	use reinhardt_core::exception::{Error as HttpError, Result as HttpResult};
 	use rstest::rstest;
+
+	/// Handler that echoes the request path in the response body
+	/// and reflects request headers as X-Echo-* response headers.
+	struct EchoHandler;
+
+	#[async_trait]
+	impl HttpHandler for EchoHandler {
+		async fn handle(&self, request: HttpRequest) -> HttpResult<HttpResponse> {
+			let path = request.uri.path().to_string();
+			let has_custom = request.headers.get("X-Custom").is_some();
+			let content_type = request
+				.headers
+				.get("Content-Type")
+				.and_then(|v| v.to_str().ok())
+				.unwrap_or("")
+				.to_string();
+
+			let mut response = HttpResponse::ok().with_body(path.clone());
+			response = response.try_with_header("X-Echo-Path", &path)?;
+
+			if has_custom {
+				response = response.try_with_header("X-Echo-Custom", "present")?;
+			}
+			if !content_type.is_empty() {
+				response = response.try_with_header("X-Echo-Content-Type", &content_type)?;
+			}
+			Ok(response)
+		}
+	}
+
+	/// Handler that always returns an error.
+	struct ErrorHandler;
+
+	#[async_trait]
+	impl HttpHandler for ErrorHandler {
+		async fn handle(&self, _request: HttpRequest) -> HttpResult<HttpResponse> {
+			Err(HttpError::NotFound("test resource".to_string()))
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_from_handler_basic() {
+		// Arrange
+		let client = APIClient::from_handler(EchoHandler);
+
+		// Act
+		let response = client.get("/test/path/").await.expect("request failed");
+
+		// Assert
+		assert_eq!(response.status(), http::StatusCode::OK);
+		assert_eq!(response.body().as_ref(), b"/test/path/");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_from_handler_post_body() {
+		// Arrange
+		let client = APIClient::from_handler(EchoHandler);
+		let body = serde_json::json!({"key": "value"});
+
+		// Act
+		let response = client
+			.post("/echo/", &body, "json")
+			.await
+			.expect("request failed");
+
+		// Assert
+		assert_eq!(response.status(), http::StatusCode::OK);
+		assert_eq!(
+			response.header("X-Echo-Content-Type").expect("missing header"),
+			"application/json"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_from_handler_headers() {
+		// Arrange
+		let client = APIClient::from_handler(EchoHandler);
+		client
+			.set_header("X-Custom", "test-value")
+			.await
+			.expect("set_header failed");
+
+		// Act
+		let response = client.get("/test/").await.expect("request failed");
+
+		// Assert
+		assert_eq!(response.status(), http::StatusCode::OK);
+		assert_eq!(
+			response.header("X-Echo-Custom").expect("missing header"),
+			"present"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_from_handler_error_conversion() {
+		// Arrange
+		let client = APIClient::from_handler(ErrorHandler);
+
+		// Act
+		let response = client.get("/anything/").await.expect("request failed");
+
+		// Assert
+		assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_from_handler_origin_header() {
+		// Arrange
+		let client = APIClient::from_handler(EchoHandler);
+
+		// Act
+		let headers = client.default_headers.read().await;
+
+		// Assert
+		let origin = headers
+			.get(http::header::ORIGIN)
+			.expect("Origin header not set");
+		assert_eq!(origin.to_str().unwrap(), "http://testserver");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_builder_with_handler() {
+		// Arrange
+		let client = APIClient::builder()
+			.base_url("http://mytest")
+			.handler(EchoHandler)
+			.build();
+
+		// Act
+		let response = client.get("/api/").await.expect("request failed");
+
+		// Assert
+		assert_eq!(response.status(), http::StatusCode::OK);
+		let headers = client.default_headers.read().await;
+		let origin = headers
+			.get(http::header::ORIGIN)
+			.expect("Origin header not set");
+		assert_eq!(origin.to_str().unwrap(), "http://mytest");
+	}
 
 	#[rstest]
 	fn test_validate_cookie_key_accepts_valid_key() {

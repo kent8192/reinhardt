@@ -271,7 +271,8 @@ pub use injected::{
 pub use provider::{Provider, ProviderFn};
 pub use registration::DiRegistrationList;
 pub use registry::{
-	DependencyRegistration, DependencyRegistry, DependencyScope, FactoryTrait, global_registry,
+	DependencyRegistration, DependencyRegistry, DependencyScope, FactoryTrait,
+	InjectableFactory, InjectableRegistration, global_registry,
 };
 pub use scope::{RequestScope, Scope, SingletonScope};
 

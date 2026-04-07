@@ -449,7 +449,6 @@ pub fn admin_routes_with_di(
 	)
 }
 
-
 #[cfg(test)]
 mod tests {
 	use super::*;

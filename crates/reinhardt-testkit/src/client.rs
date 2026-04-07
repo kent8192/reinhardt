@@ -15,9 +15,7 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 
 use reinhardt_di::InjectionContext;
-use reinhardt_http::{
-	Handler as HttpHandler, Request as HttpRequest, Response as HttpResponse,
-};
+use reinhardt_http::{Handler as HttpHandler, Request as HttpRequest, Response as HttpResponse};
 
 use crate::response::TestResponse;
 
@@ -1137,7 +1135,9 @@ mod tests {
 		// Assert
 		assert_eq!(response.status(), http::StatusCode::OK);
 		assert_eq!(
-			response.header("X-Echo-Content-Type").expect("missing header"),
+			response
+				.header("X-Echo-Content-Type")
+				.expect("missing header"),
 			"application/json"
 		);
 	}

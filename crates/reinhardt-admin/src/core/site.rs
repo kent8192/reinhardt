@@ -424,7 +424,6 @@ impl AdminSite {
 	pub fn clear(&self) {
 		self.registry.clear();
 	}
-
 }
 
 /// Injectable trait implementation for AdminSite
@@ -451,6 +450,7 @@ impl Injectable for AdminSite {
 mod tests {
 	use super::*;
 	use crate::core::ModelAdminConfig;
+	use reinhardt_di::SingletonScope;
 	use rstest::rstest;
 
 	#[rstest]

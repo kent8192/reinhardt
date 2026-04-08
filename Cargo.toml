@@ -120,7 +120,7 @@ messages = ["reinhardt-core/messages"]
 # DI feature: Uses reinhardt-core/di which internally enables reinhardt-di/params
 # Also directly enables reinhardt-di/params for macro support (extern crate reinhardt_di)
 # reinhardt-db/di enables Injectable implementation for DatabaseConnection
-di = ["reinhardt-di", "reinhardt-di/params", "reinhardt-db?/di"]
+di = ["reinhardt-di", "reinhardt-di/params", "reinhardt-di/macros", "reinhardt-db?/di"]
 test = ["reinhardt-test"]
 testcontainers = ["test", "reinhardt-test/testcontainers"]
 server-fn-test = ["test", "reinhardt-test/server-fn-test"]

@@ -250,6 +250,7 @@ pub mod override_registry;
 pub mod provider;
 pub mod registration;
 pub mod registry;
+pub mod resolve_context;
 pub mod scope;
 
 use thiserror::Error;
@@ -274,6 +275,7 @@ pub use registry::{
 	DependencyRegistration, DependencyRegistry, DependencyScope, FactoryTrait, InjectableFactory,
 	InjectableRegistration, global_registry,
 };
+pub use resolve_context::{ContextLevel, get_di_context, try_get_di_context};
 pub use scope::{RequestScope, Scope, SingletonScope};
 
 // Re-export inventory for macro use

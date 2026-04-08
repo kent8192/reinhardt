@@ -66,12 +66,7 @@ pub mod server {
 
 // Re-export core router for admin route mounting
 #[cfg(native)]
-#[allow(deprecated)]
-// re-exporting deprecated admin_routes and admin_routes_with_di for backward compatibility
-pub use reinhardt_admin::core::{
-	AdminRouter, AdminUser, admin_routes, admin_routes_with_di, admin_routes_with_di_deferred,
-	admin_static_routes,
-};
+pub use reinhardt_admin::core::{AdminUser, admin_routes_with_di, admin_static_routes};
 
 // Also re-export at top level for convenience
 pub use adapters::*;

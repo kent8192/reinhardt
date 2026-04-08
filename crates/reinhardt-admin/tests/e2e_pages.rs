@@ -21,8 +21,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use reinhardt_admin::core::{
-	AdminDatabase, AdminSite, AdminUser, ModelAdmin, admin_routes_with_di_deferred,
-	admin_static_routes,
+	AdminDatabase, AdminSite, AdminUser, ModelAdmin, admin_routes_with_di, admin_static_routes,
 };
 use reinhardt_auth::{Argon2Hasher, PasswordHasher};
 use reinhardt_db::backends::connection::DatabaseConnection as BackendsConnection;
@@ -160,9 +159,17 @@ impl TestServer {
 		format!("http://127.0.0.1:{}", self.port)
 	}
 
-	/// URL reachable from inside Docker containers (macOS Docker Desktop).
+	/// URL reachable from inside Docker containers.
+	///
+	/// On macOS/Windows Docker Desktop, `host.docker.internal` resolves automatically.
+	/// On Linux (CI), the Docker bridge gateway `172.17.0.1` provides host access.
 	fn container_url(&self) -> String {
-		format!("http://host.docker.internal:{}", self.port)
+		let host = if cfg!(target_os = "macos") || cfg!(target_os = "windows") {
+			"host.docker.internal"
+		} else {
+			"172.17.0.1"
+		};
+		format!("http://{}:{}", host, self.port)
 	}
 }
 
@@ -285,7 +292,7 @@ async fn e2e(
 	)
 	.expect("Failed to register TestModel");
 
-	let (admin_router, admin_di) = admin_routes_with_di_deferred(site);
+	let (admin_router, admin_di) = admin_routes_with_di(site);
 
 	let singleton = Arc::new(SingletonScope::new());
 	singleton.set_arc(db_conn);

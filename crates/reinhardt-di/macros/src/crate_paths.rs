@@ -5,42 +5,55 @@ use quote::quote;
 
 /// Resolves the path to the reinhardt_di crate dynamically.
 ///
-/// This supports different crate naming scenarios (reinhardt-di, renamed crates, etc.)
+/// This supports different crate naming scenarios (reinhardt-di, renamed crates,
+/// or access via the `reinhardt` facade crate).
 ///
-/// # Fallback behavior
+/// # Resolution order
 ///
-/// When `proc_macro_crate` cannot locate the crate (e.g. the macro is invoked
-/// from a context where `Cargo.toml` is not available, or the crate is
-/// re-exported under a different name), this function falls back to
-/// `::reinhardt_di`. This is an intentional design decision: the fallback
-/// allows the common case (direct `reinhardt-di` dependency) to work even
-/// when `proc_macro_crate` fails, while the generated code will produce a
-/// clear compile error if `::reinhardt_di` does not resolve.
+/// 1. Direct `reinhardt-di` dependency (exact match or renamed)
+/// 2. Via the `reinhardt` facade crate (`reinhardt::reinhardt_di`)
+/// 3. Via the `reinhardt-web` published package name (`reinhardt_web::reinhardt_di`)
+/// 4. Final fallback to `::reinhardt_di`
 ///
-/// A `proc_macro::Diagnostic` warning would be ideal here, but that API is
-/// nightly-only as of Rust 1.91. If it stabilizes in the future, we should
-/// emit a warning on fallback.
+/// The multi-step fallback ensures that consumers using the `reinhardt` facade
+/// crate (instead of depending on `reinhardt-di` directly) can still use
+/// DI macros without manual path configuration.
+///
+/// If none of the above resolve, the final `::reinhardt_di` fallback will
+/// produce a clear compile error for diagnosis.
 pub(crate) fn get_reinhardt_di_crate() -> TokenStream {
 	use proc_macro_crate::{FoundCrate, crate_name};
 
+	// Try direct crate first
 	match crate_name("reinhardt-di") {
-		Ok(FoundCrate::Itself) => quote!(crate),
+		Ok(FoundCrate::Itself) => return quote!(crate),
 		Ok(FoundCrate::Name(name)) => {
 			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
-			quote!(::#ident)
+			return quote!(::#ident);
 		}
-		Err(err) => {
-			// Intentional fallback: when `proc_macro_crate` cannot resolve the
-			// crate name (e.g. in doc-tests, non-standard build environments,
-			// or re-exported macro usage), we fall back to `::reinhardt_di`.
-			// If this path does not exist in the consumer's dependency graph,
-			// the compiler will emit an unresolved import error, which is a
-			// clear enough signal for diagnosis.
-			//
-			// We log the original error at eprintln level so it appears in
-			// `cargo build -vv` output for debugging.
-			let _ = err;
-			quote!(::reinhardt_di)
-		}
+		Err(_) => {}
 	}
+
+	// Try via reinhardt facade crate
+	match crate_name("reinhardt") {
+		Ok(FoundCrate::Itself) => return quote!(crate::reinhardt_di),
+		Ok(FoundCrate::Name(name)) => {
+			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+			return quote!(::#ident::reinhardt_di);
+		}
+		Err(_) => {}
+	}
+
+	// Try via reinhardt-web (published package name)
+	match crate_name("reinhardt-web") {
+		Ok(FoundCrate::Itself) => return quote!(crate::reinhardt_di),
+		Ok(FoundCrate::Name(name)) => {
+			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+			return quote!(::#ident::reinhardt_di);
+		}
+		Err(_) => {}
+	}
+
+	// Final fallback
+	quote!(::reinhardt_di)
 }

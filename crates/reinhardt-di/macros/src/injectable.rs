@@ -138,17 +138,13 @@ pub(crate) fn injectable_impl(args: TokenStream, input: DeriveInput) -> Result<T
 	let generics = &input.generics;
 	let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-	// Parse macro arguments and reject scope (not yet supported on struct injectable)
-	if !args.is_empty() {
+	// Parse macro arguments (scope is optional)
+	let scope = if !args.is_empty() {
 		let parsed_args: MacroArgs = syn::parse2(args)?;
-		if parsed_args.scope.is_some() {
-			return Err(syn::Error::new(
-				proc_macro2::Span::call_site(),
-				"the `scope` attribute is not yet supported on #[injectable] structs. \
-				 Scope configuration is only supported on #[injectable_factory] functions",
-			));
-		}
-	}
+		parsed_args.scope
+	} else {
+		None
+	};
 
 	// Validate that this is a struct and extract fields
 	let fields = match &input.data {
@@ -299,12 +295,44 @@ pub(crate) fn injectable_impl(args: TokenStream, input: DeriveInput) -> Result<T
 		}
 	};
 
-	// Combine cleaned struct (without #[inject] attributes) and Injectable impl
-	// Note: Global registry registration is removed to avoid const context issues
+	// Generate optional inventory registration when scope is specified.
+	// Uses InjectableRegistration (const-constructible) instead of
+	// DependencyRegistration (which uses Box and cannot be used in
+	// inventory::submit!'s static context).
+	// InjectableFactory<T> bypasses AsyncFactory's Fut: Sync bound by
+	// implementing FactoryTrait directly via Injectable::inject.
+	let registration = if let Some(scope) = scope {
+		let scope_tokens = scope.into_tokens();
+		let register_fn_name = syn::Ident::new(
+			&format!("__register_injectable_{}", struct_name),
+			proc_macro2::Span::call_site(),
+		);
+
+		quote! {
+			fn #register_fn_name(registry: &#di_crate::DependencyRegistry) {
+				registry.register::<#struct_name>(
+					#scope_tokens,
+					#di_crate::InjectableFactory::<#struct_name>::new(),
+				);
+			}
+
+			#di_crate::inventory::submit! {
+				#di_crate::InjectableRegistration::new(
+					#register_fn_name
+				)
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	// Combine cleaned struct, Injectable impl, and optional registration
 	let expanded = quote! {
 		#cleaned_input
 
 		#injectable_impl
+
+		#registration
 	};
 
 	Ok(expanded)

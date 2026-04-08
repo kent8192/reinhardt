@@ -28,6 +28,7 @@
 - [Installation](#installation)
 - [Getting Started Guide](#getting-started-guide)
 - [Available Components](#available-components)
+- [Ecosystem](#ecosystem)
 - [API Stability](#api-stability)
 
 ## Who is Reinhardt For?
@@ -1075,6 +1076,16 @@ Reinhardt offers modular components you can mix and match:
 | Test Utilities      | `reinhardt-test`          | Testing helpers, fixtures, TestContainers   |
 
 **For detailed feature flags within each crate, see the [Feature Flags Guide](https://reinhardt-web.dev/docs/feature-flags/).**
+
+---
+
+## Ecosystem
+
+| Project | Status | Description |
+|---------|--------|-------------|
+| [reinhardt-cloud](https://github.com/kent8192/reinhardt-cloud) | WIP | Kubernetes operator & CLI for deploying Reinhardt apps |
+
+> **Dog-fooding in progress:** We are actively developing reinhardt-cloud as the deployment infrastructure for Reinhardt applications, and using it to deploy reinhardt-web itself. As a work-in-progress project, APIs and features may change significantly.
 
 ---
 

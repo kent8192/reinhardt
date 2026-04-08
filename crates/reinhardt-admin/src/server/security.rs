@@ -1163,7 +1163,7 @@ mod tests {
 		match err {
 			reinhardt_pages::server_fn::ServerFnError::Server { status, message } => {
 				assert_eq!(status, 403);
-				assert_eq!(message, "CSRF token missing from cookie");
+				assert_eq!(message, "CSRF token missing from cookie and header");
 			}
 			other => panic!("Expected Server error with status 403, got: {:?}", other),
 		}

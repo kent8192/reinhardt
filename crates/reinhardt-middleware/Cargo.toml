@@ -26,8 +26,11 @@ auth-jwt = ["reinhardt-auth/jwt"]
 # Database support for certain middleware
 sqlx = ["dep:sqlx"]
 
+# Redis-backed session storage
+session-redis = ["sessions", "dep:redis"]
+
 # Aggregate all middleware features
-full = ["cors", "compression", "security", "rate-limit", "sessions", "auth-jwt", "sqlx"]
+full = ["cors", "compression", "security", "rate-limit", "sessions", "auth-jwt", "sqlx", "session-redis"]
 
 [dependencies]
 reinhardt-core = { workspace = true, features = [
@@ -53,6 +56,7 @@ rand = { workspace = true }
 httpdate = "1.0"
 bytes = { workspace = true }
 sqlx = { workspace = true, optional = true }
+redis = { version = "0.27", features = ["aio", "tokio-comp", "connection-manager"], optional = true }
 regex = "1.10"
 ipnet = "2.10"
 log = "0.4"

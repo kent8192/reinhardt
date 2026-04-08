@@ -1,13 +1,13 @@
 //! URL configuration for examples-github-issues project
 //!
 //! This module configures the unified GraphQL schema and URL patterns.
-//! Admin panel routes are integrated via `admin_routes_with_di_deferred()`,
+//! Admin panel routes are integrated via `admin_routes_with_di()`,
 //! which captures `AdminSite` DI registration for later application by the server.
 
 use std::env;
 use std::sync::Arc;
 
-use reinhardt::admin::{admin_routes_with_di_deferred, admin_static_routes};
+use reinhardt::admin::{admin_routes_with_di, admin_static_routes};
 use reinhardt::graphql::{
 	MergedObject, MergedSubscription, Schema,
 	http::{GraphQLPlaygroundConfig, playground_source},
@@ -115,7 +115,7 @@ fn create_cors_middleware() -> CorsMiddleware {
 /// Build URL patterns for the application
 ///
 /// Includes GraphQL endpoints and admin panel integration.
-/// Admin routes use `admin_routes_with_di_deferred()` for deferred DI registration.
+/// Admin routes use `admin_routes_with_di()` for deferred DI registration.
 #[routes]
 pub fn routes() -> UnifiedRouter {
 	// Configure admin site (registration only, no DB needed yet).
@@ -125,7 +125,7 @@ pub fn routes() -> UnifiedRouter {
 	// Build admin router with deferred DI registration.
 	// AdminSite registration is captured in DiRegistrationList and
 	// applied to the server's singleton scope during startup.
-	let (admin_router, admin_di) = admin_routes_with_di_deferred(admin_site);
+	let (admin_router, admin_di) = admin_routes_with_di(admin_site);
 
 	UnifiedRouter::new()
 		.endpoint(views::health_check)

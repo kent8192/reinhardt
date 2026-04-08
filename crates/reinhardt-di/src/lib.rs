@@ -110,6 +110,34 @@
 //!     .build();
 //! ```
 //!
+//! ## Resolve Context
+//!
+//! The [`get_di_context`] function provides access to the active
+//! [`InjectionContext`] within `#[injectable_factory]` and `#[injectable]`
+//! function bodies, without requiring `#[inject]`.
+//!
+//! This enables factories to access the DI context for purposes like
+//! passing it to downstream consumers:
+//!
+//! ```rust,ignore
+//! use reinhardt_di::{ContextLevel, get_di_context};
+//!
+//! #[injectable_factory(scope = "transient")]
+//! async fn make_router(
+//!     #[inject] config: Arc<AppConfig>,
+//! ) -> Router {
+//!     let di_ctx = get_di_context(ContextLevel::Current);
+//!     Router::new().with_di_context(di_ctx)
+//! }
+//! ```
+//!
+//! [`ContextLevel::Root`] returns the application-level context, while
+//! [`ContextLevel::Current`] returns the currently active context
+//! (which may be a request-scoped fork).
+//!
+//! Use [`try_get_di_context`] for a non-panicking variant that returns
+//! `None` when called outside of a DI resolution context.
+//!
 //! ## Circular Dependency Detection
 //!
 //! The DI system automatically detects circular dependencies at runtime using an optimized

@@ -154,8 +154,19 @@ pub(crate) fn injectable_factory_impl(args: TokenStream, input: ItemFn) -> Resul
 			// Resolve #[inject] dependencies
 			#(#inject_resolutions)*
 
-			// Call the original function
-			let result = #original_fn_name(#(#inject_param_names,)* #(#regular_param_names),*).await;
+			// Set task-local resolve context before calling implementation.
+			// Inherit root from outer scope (for nested factory calls),
+			// or default to ctx itself at the top level.
+			let __resolve_ctx = #di_crate::resolve_context::ResolveContext {
+				root: #di_crate::resolve_context::RESOLVE_CTX
+					.try_with(|__outer| ::std::sync::Arc::clone(&__outer.root))
+					.unwrap_or_else(|_| ::std::sync::Arc::clone(&ctx)),
+				current: ::std::sync::Arc::clone(&ctx),
+			};
+
+			let result = #di_crate::resolve_context::RESOLVE_CTX
+				.scope(__resolve_ctx, #original_fn_name(#(#inject_param_names,)* #(#regular_param_names),*))
+				.await;
 			Ok(result)
 		}
 

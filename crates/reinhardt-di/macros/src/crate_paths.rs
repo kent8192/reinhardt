@@ -31,27 +31,27 @@ pub(crate) fn get_reinhardt_di_crate() -> TokenStream {
 			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
 			return quote!(::#ident);
 		}
-		Err(_) => {
-			// Try via reinhardt crate
-			match crate_name("reinhardt") {
-				Ok(FoundCrate::Itself) => return quote!(crate::reinhardt_di),
-				Ok(FoundCrate::Name(name)) => {
-					let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
-					return quote!(::#ident::reinhardt_di);
-				}
-				Err(_) => {}
-			}
+		Err(_) => {}
+	}
 
-			// Try via reinhardt-web (published package name)
-			match crate_name("reinhardt-web") {
-				Ok(FoundCrate::Itself) => return quote!(crate::reinhardt_di),
-				Ok(FoundCrate::Name(name)) => {
-					let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
-					return quote!(::#ident::reinhardt_di);
-				}
-				Err(_) => {}
-			}
+	// Try via reinhardt facade crate
+	match crate_name("reinhardt") {
+		Ok(FoundCrate::Itself) => return quote!(crate::reinhardt_di),
+		Ok(FoundCrate::Name(name)) => {
+			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+			return quote!(::#ident::reinhardt_di);
 		}
+		Err(_) => {}
+	}
+
+	// Try via reinhardt-web (published package name)
+	match crate_name("reinhardt-web") {
+		Ok(FoundCrate::Itself) => return quote!(crate::reinhardt_di),
+		Ok(FoundCrate::Name(name)) => {
+			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+			return quote!(::#ident::reinhardt_di);
+		}
+		Err(_) => {}
 	}
 
 	// Final fallback

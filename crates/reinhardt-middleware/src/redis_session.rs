@@ -1,6 +1,6 @@
 //! Redis-backed session storage backend.
 //!
-//! Provides [`RedisSessionBackend`], an implementation of [`AsyncSessionBackend`]
+//! Provides [`RedisSessionBackend`], an implementation of `AsyncSessionBackend`
 //! that stores sessions in Redis using JSON serialization and native Redis TTL.
 
 #![cfg(feature = "session-redis")]

@@ -11,12 +11,12 @@ use reinhardt_http::{AuthState, Handler, Middleware, Request, Response, Result};
 /// JWT authentication middleware for stateless token-based auth.
 ///
 /// Extracts Bearer tokens from the `Authorization` header, verifies them
-/// using [`reinhardt_auth::jwt::JwtAuth`], and inserts an [`AuthState`]
+/// using [`reinhardt_auth::jwt::JwtAuth`], and inserts an `AuthState`
 /// into request extensions.
 ///
 /// This middleware uses **best-effort authentication**: valid tokens produce
-/// [`AuthState::authenticated`], while missing or invalid tokens produce
-/// [`AuthState::anonymous`]. Requests are never rejected by this middleware —
+/// `AuthState::authenticated()`, while missing or invalid tokens produce
+/// `AuthState::anonymous()`. Requests are never rejected by this middleware —
 /// authorization is delegated to endpoint-level guards
 /// (`Guard<P>`, `Public`).
 ///

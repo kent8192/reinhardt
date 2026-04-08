@@ -1,12 +1,12 @@
 //! Cookie-based session authentication middleware.
 //!
 //! Reads a session ID from an HTTP cookie, validates it against an
-//! [`AsyncSessionBackend`], and injects [`AuthState`] into request
+//! `AsyncSessionBackend`, and injects `AuthState` into request
 //! extensions.
 //!
 //! This middleware uses **best-effort authentication**: valid sessions
-//! produce [`AuthState::authenticated`], while missing or invalid
-//! sessions produce [`AuthState::anonymous`]. Requests are never
+//! produce `AuthState::authenticated()`, while missing or invalid
+//! sessions produce `AuthState::anonymous()`. Requests are never
 //! rejected — authorization is delegated to endpoint-level guards.
 
 #[cfg(feature = "sessions")]
@@ -57,9 +57,9 @@ impl Default for CookieSessionConfig {
 ///
 /// On each request the middleware:
 /// 1. Extracts the session ID from the configured cookie.
-/// 2. Loads the session from the [`AsyncSessionBackend`].
+/// 2. Loads the session from the `AsyncSessionBackend`.
 /// 3. Checks absolute expiry (`created_at + absolute_max`).
-/// 4. Builds an [`AuthState`] (authenticated or anonymous) and inserts
+/// 4. Builds an `AuthState` (authenticated or anonymous) and inserts
 ///    it into request extensions.
 /// 5. After the downstream handler responds, fires a background `touch()`
 ///    to refresh the sliding TTL.

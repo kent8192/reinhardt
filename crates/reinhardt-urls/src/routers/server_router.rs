@@ -1857,6 +1857,21 @@ impl ServerRouter {
 	}
 }
 
+impl std::fmt::Debug for ServerRouter {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("ServerRouter")
+			.field("prefix", &self.prefix)
+			.field("namespace", &self.namespace)
+			.field("routes", &self.routes.len())
+			.field("viewsets", &self.viewsets.len())
+			.field("functions", &self.functions.len())
+			.field("views", &self.views.len())
+			.field("children", &self.children.len())
+			.field("middleware", &self.middleware.len())
+			.finish_non_exhaustive()
+	}
+}
+
 impl Default for ServerRouter {
 	fn default() -> Self {
 		Self::new()

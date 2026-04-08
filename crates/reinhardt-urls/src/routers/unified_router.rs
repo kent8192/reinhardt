@@ -333,6 +333,17 @@ impl UnifiedRouter {
 }
 
 #[cfg(all(feature = "client-router", native))]
+impl std::fmt::Debug for UnifiedRouter {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("UnifiedRouter")
+			.field("server", &self.server)
+			.field("client", &self.client)
+			.field("di_registrations", &self.di_registrations)
+			.finish()
+	}
+}
+
+#[cfg(all(feature = "client-router", native))]
 impl Default for UnifiedRouter {
 	fn default() -> Self {
 		Self::new()
@@ -513,6 +524,16 @@ impl UnifiedRouter {
 }
 
 #[cfg(not(feature = "client-router"))]
+impl std::fmt::Debug for UnifiedRouter {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("UnifiedRouter")
+			.field("server", &self.server)
+			.field("di_registrations", &self.di_registrations)
+			.finish()
+	}
+}
+
+#[cfg(not(feature = "client-router"))]
 impl Default for UnifiedRouter {
 	fn default() -> Self {
 		Self::new()
@@ -614,6 +635,15 @@ impl UnifiedRouter {
 	/// No-op on WASM - server namespace is not applicable.
 	pub fn with_namespace(self, _namespace: impl Into<String>) -> Self {
 		self
+	}
+}
+
+#[cfg(all(wasm, feature = "client-router"))]
+impl std::fmt::Debug for UnifiedRouter {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("UnifiedRouter")
+			.field("client", &self.client)
+			.finish()
 	}
 }
 
@@ -762,6 +792,29 @@ mod tests {
 			// Assert: registrations stashed globally
 			let taken = crate::routers::take_di_registrations();
 			assert!(taken.is_some(), "registrations should be stashed globally");
+		}
+	}
+
+	mod debug_impl {
+		use super::*;
+		use rstest::rstest;
+		use std::sync::Arc;
+
+		#[rstest]
+		fn unified_router_implements_debug() {
+			let router = UnifiedRouter::new().with_prefix("/api");
+			let debug_output = format!("{:?}", router);
+			assert!(debug_output.contains("UnifiedRouter"));
+			assert!(debug_output.contains("ServerRouter"));
+		}
+
+		#[rstest]
+		fn arc_try_unwrap_with_expect() {
+			// This is the primary use case from #3391:
+			// Arc::try_unwrap().expect() requires Debug on the error type
+			let router = Arc::new(UnifiedRouter::new());
+			let unwrapped = Arc::try_unwrap(router).expect("should have single ref");
+			assert_eq!(unwrapped.server_ref().prefix(), "");
 		}
 	}
 }

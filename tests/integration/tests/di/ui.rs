@@ -43,4 +43,7 @@ fn test_compile_pass_cases() {
 
 	// Test: Complex types (Vec, HashMap, Option)
 	t.pass("tests/di/ui/pass/complex_types.rs");
+
+	// Test: #[injectable_factory] with #[inject] parameters (T and Arc<T>)
+	t.pass("tests/di/ui/pass/injectable_factory_inject_params.rs");
 }

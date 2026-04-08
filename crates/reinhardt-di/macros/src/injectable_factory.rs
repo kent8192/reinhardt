@@ -1,7 +1,7 @@
 //! Implementation of the `#[injectable_factory]` macro
 
 use crate::crate_paths::get_reinhardt_di_crate;
-use crate::utils::{extract_scope_from_args, is_inject_attr};
+use crate::utils::{extract_arc_inner_type, extract_scope_from_args, is_inject_attr};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{FnArg, ItemFn, Pat, PatType, Result};
@@ -70,12 +70,26 @@ pub(crate) fn injectable_factory_impl(args: TokenStream, input: ItemFn) -> Resul
 		));
 	}
 
-	// Generate dependency resolution code
+	// Generate dependency resolution code.
+	// `ctx.resolve::<T>()` returns `DiResult<Arc<T>>`, so we must handle two cases:
+	// - Parameter type is `Arc<T>`: resolve the inner `T`, result is already `Arc<T>`
+	// - Parameter type is `T` (non-Arc): resolve `T`, then clone out of the `Arc`
 	let inject_resolutions: Vec<_> = inject_params
 		.iter()
 		.map(|(pat, ty)| {
-			quote! {
-				let #pat: #ty = ctx.resolve::<#ty>().await?;
+			if let Some(inner_ty) = extract_arc_inner_type(ty) {
+				// Parameter is Arc<T>: resolve T, result Arc<T> matches directly
+				quote! {
+					let #pat: #ty = ctx.resolve::<#inner_ty>().await?;
+				}
+			} else {
+				// Parameter is T: resolve T, unwrap Arc<T> via clone
+				quote! {
+					let #pat: #ty = {
+						let __arc = ctx.resolve::<#ty>().await?;
+						(*__arc).clone()
+					};
+				}
 			}
 		})
 		.collect();

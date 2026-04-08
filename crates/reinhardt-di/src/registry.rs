@@ -4,11 +4,12 @@
 //! dependencies. It uses the `inventory` crate to collect registrations at compile time
 //! and build a runtime registry that can be queried by type.
 
-use crate::{DiResult, InjectionContext};
+use crate::{DiResult, Injectable, InjectionContext};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use std::any::{Any, TypeId};
 use std::future::Future;
+use std::marker::PhantomData;
 use std::sync::{Arc, OnceLock};
 
 /// Scope for dependency injection
@@ -70,6 +71,34 @@ where
 		let ctx_arc = Arc::new(ctx.clone());
 		let instance = (self.factory)(ctx_arc).await?;
 		Ok(Arc::new(instance))
+	}
+}
+
+/// Factory that creates instances via the `Injectable` trait.
+///
+/// Bypasses `AsyncFactory`'s `Fut: Sync` bound by implementing `FactoryTrait`
+/// directly. This is necessary because `Injectable::inject` uses `async_trait`,
+/// which returns `Pin<Box<dyn Future + Send>>` (not `Sync`).
+pub struct InjectableFactory<T>(PhantomData<T>);
+
+impl<T> Default for InjectableFactory<T> {
+	fn default() -> Self {
+		Self(PhantomData)
+	}
+}
+
+impl<T> InjectableFactory<T> {
+	/// Create a new `InjectableFactory`.
+	pub fn new() -> Self {
+		Self::default()
+	}
+}
+
+#[async_trait]
+impl<T: Injectable + Any + Send + Sync + 'static> FactoryTrait for InjectableFactory<T> {
+	async fn create(&self, ctx: &InjectionContext) -> DiResult<Arc<dyn Any + Send + Sync>> {
+		let value = T::inject(ctx).await?;
+		Ok(Arc::new(value))
 	}
 }
 
@@ -201,14 +230,18 @@ impl DependencyRegistry {
 	/// Register dependencies for a type
 	///
 	/// This is typically called automatically by the registration system.
-	pub(crate) fn register_dependencies(&self, type_id: TypeId, deps: Vec<TypeId>) {
-		self.dependencies.insert(type_id, deps);
+	/// Not intended for direct use; exposed for macro-generated code.
+	#[doc(hidden)]
+	pub fn register_dependencies(&self, type_id: TypeId, deps: impl AsRef<[TypeId]>) {
+		self.dependencies.insert(type_id, deps.as_ref().to_vec());
 	}
 
 	/// Register a type name for debugging
 	///
 	/// This is typically called automatically by the registration system.
-	pub(crate) fn register_type_name(&self, type_id: TypeId, type_name: &'static str) {
+	/// Not intended for direct use; exposed for macro-generated code.
+	#[doc(hidden)]
+	pub fn register_type_name(&self, type_id: TypeId, type_name: &'static str) {
 		self.type_names.insert(type_id, type_name);
 	}
 }
@@ -261,60 +294,36 @@ pub struct DependencyRegistration {
 	/// The scope (request or singleton) for this dependency.
 	pub scope: DependencyScope,
 	/// Direct dependencies of this type.
-	pub dependencies: Vec<TypeId>,
+	pub dependencies: &'static [TypeId],
 	/// A function that registers this dependency's factory with the registry.
-	pub register_fn: Box<dyn Fn(&DependencyRegistry) + Send + Sync>,
+	pub register_fn: fn(&DependencyRegistry),
 }
 
 impl DependencyRegistration {
 	/// Create a new registration entry
-	pub fn new<T, F, Fut>(type_name: &'static str, scope: DependencyScope, factory: F) -> Self
-	where
-		T: Any + Send + Sync + 'static,
-		F: Fn(Arc<InjectionContext>) -> Fut + Send + Sync + 'static + Clone,
-		Fut: Future<Output = DiResult<T>> + Send + Sync + 'static,
-	{
-		let type_id = TypeId::of::<T>();
-		let register_fn = Box::new(move |registry: &DependencyRegistry| {
-			let factory = factory.clone();
-			registry.register_async::<T, _, _>(scope, factory);
-			// Register type name for debugging
-			registry.register_type_name(type_id, type_name);
-		});
-
+	pub const fn new<T: Send + Sync + 'static>(
+		type_name: &'static str,
+		scope: DependencyScope,
+		register_fn: fn(&DependencyRegistry),
+	) -> Self {
 		Self {
-			type_id,
+			type_id: TypeId::of::<T>(),
 			type_name,
 			scope,
-			dependencies: Vec::new(), // Dependencies will be populated by macros in the future
+			dependencies: &[],
 			register_fn,
 		}
 	}
 
 	/// Create a new registration entry with explicit dependencies
-	pub fn new_with_deps<T, F, Fut>(
+	pub const fn new_with_deps<T: Send + Sync + 'static>(
 		type_name: &'static str,
 		scope: DependencyScope,
-		dependencies: Vec<TypeId>,
-		factory: F,
-	) -> Self
-	where
-		T: Any + Send + Sync + 'static,
-		F: Fn(Arc<InjectionContext>) -> Fut + Send + Sync + 'static + Clone,
-		Fut: Future<Output = DiResult<T>> + Send + Sync + 'static,
-	{
-		let type_id = TypeId::of::<T>();
-		let deps_clone = dependencies.clone();
-		let register_fn = Box::new(move |registry: &DependencyRegistry| {
-			let factory = factory.clone();
-			registry.register_async::<T, _, _>(scope, factory);
-			// Register type name and dependencies
-			registry.register_type_name(type_id, type_name);
-			registry.register_dependencies(type_id, deps_clone.clone());
-		});
-
+		dependencies: &'static [TypeId],
+		register_fn: fn(&DependencyRegistry),
+	) -> Self {
 		Self {
-			type_id,
+			type_id: TypeId::of::<T>(),
 			type_name,
 			scope,
 			dependencies,
@@ -326,9 +335,31 @@ impl DependencyRegistration {
 // Collect all dependency registrations at compile time
 inventory::collect!(DependencyRegistration);
 
+/// Const-constructible registration entry for `#[injectable]` structs with `#[scope]`.
+///
+/// Unlike `DependencyRegistration` which uses `Box<dyn Fn>` (non-const),
+/// this struct stores a plain function pointer so it can be used in
+/// `inventory::submit!` which requires const-evaluable expressions.
+pub struct InjectableRegistration {
+	/// A function that registers this type's factory with the registry.
+	pub register_fn: fn(&DependencyRegistry),
+}
+
+impl InjectableRegistration {
+	/// Create a new `InjectableRegistration` with a function pointer.
+	pub const fn new(register_fn: fn(&DependencyRegistry)) -> Self {
+		Self { register_fn }
+	}
+}
+
+inventory::collect!(InjectableRegistration);
+
 /// Initialize the registry with all collected registrations
 fn initialize_registry(registry: &DependencyRegistry) {
 	for registration in inventory::iter::<DependencyRegistration> {
+		(registration.register_fn)(registry);
+	}
+	for registration in inventory::iter::<InjectableRegistration> {
 		(registration.register_fn)(registry);
 	}
 }

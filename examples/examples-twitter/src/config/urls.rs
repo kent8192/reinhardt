@@ -3,13 +3,13 @@
 //! This project uses reinhardt-pages with Server Functions for API communication.
 //! Each app defines unified routes (server + client) in `urls.rs`, which are mounted here.
 //!
-//! Admin panel routes are integrated via `admin_routes_with_di_deferred()`, which
+//! Admin panel routes are integrated via `admin_routes_with_di()`, which
 //! captures `AdminSite` DI registration for later application by the server.
 //! `AdminDatabase` is lazily constructed from `DatabaseConnection` at first request.
 
 use reinhardt::UnifiedRouter;
 #[cfg(server)]
-use reinhardt::admin::{admin_routes_with_di_deferred, admin_static_routes};
+use reinhardt::admin::{admin_routes_with_di, admin_static_routes};
 #[cfg(server)]
 use reinhardt::routes;
 
@@ -31,7 +31,7 @@ use reinhardt::LoggingMiddleware;
 /// - Server Functions (`#[server_fn]`) for API communication
 /// - Client routing for SPA navigation
 /// - Production-ready middleware stack for security and performance
-/// - Admin panel mounted at `/admin/` via `admin_routes_with_di_deferred()`
+/// - Admin panel mounted at `/admin/` via `admin_routes_with_di()`
 ///
 /// Admin DI setup:
 /// - `AdminSite` registration is deferred via `DiRegistrationList` and
@@ -68,9 +68,9 @@ pub fn routes() -> UnifiedRouter {
 	#[cfg(server)]
 	let router = {
 		#[cfg(server)]
-		let (admin_router, admin_di) = admin_routes_with_di_deferred(admin_site);
+		let (admin_router, admin_di) = admin_routes_with_di(admin_site);
 		#[cfg(not(server))]
-		let (admin_router, admin_di) = admin_routes_with_di_deferred(std::sync::Arc::new(
+		let (admin_router, admin_di) = admin_routes_with_di(std::sync::Arc::new(
 			reinhardt::admin::AdminSite::new("Twitter Admin"),
 		));
 		router

@@ -9,7 +9,7 @@ use crate::injectable_common::{
 	parse_inject_options, parse_no_inject_options,
 };
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::parse::Parser;
 use syn::{Data, DeriveInput, Fields, Result, Type};
 
@@ -369,18 +369,29 @@ pub(crate) fn injectable_struct_impl(
 			&format!("__injectable_factory_{}", struct_name),
 			proc_macro2::Span::call_site(),
 		);
+		let register_fn_name = format_ident!("__reinhardt_register_{}", struct_name);
 		quote! {
+			#[allow(non_snake_case)]
 			async fn #factory_fn_name(
 				ctx: ::std::sync::Arc<#di_crate::InjectionContext>,
 			) -> #di_crate::DiResult<#struct_name> {
 				<#struct_name as #di_crate::Injectable>::inject(&ctx).await
 			}
 
+			#[allow(non_snake_case)]
+			fn #register_fn_name(registry: &#di_crate::DependencyRegistry) {
+				registry.register_async::<#struct_name, _, _>(#scope_tokens, #factory_fn_name);
+				registry.register_type_name(
+					::std::any::TypeId::of::<#struct_name>(),
+					#type_name_str,
+				);
+			}
+
 			#di_crate::inventory::submit! {
-				#di_crate::DependencyRegistration::new::<#struct_name, _, _>(
+				#di_crate::DependencyRegistration::new::<#struct_name>(
 					#type_name_str,
 					#scope_tokens,
-					#factory_fn_name
+					#register_fn_name
 				)
 			}
 		}

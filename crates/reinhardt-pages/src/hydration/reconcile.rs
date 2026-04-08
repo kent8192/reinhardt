@@ -522,6 +522,7 @@ fn test_reconcile_options_warn_on_mismatch() {
 }
 
 #[test]
+#[cfg(native)]
 fn test_reconcile_with_options_non_wasm() {
 	// Non-WASM version always succeeds
 	let view = Page::Empty;
@@ -575,6 +576,7 @@ mod tests {
 		assert_eq!(result.differences.len(), 2);
 	}
 
+	#[cfg(native)]
 	#[test]
 	fn test_structure_matches_non_wasm() {
 		// Non-WASM version always returns true
@@ -582,6 +584,7 @@ mod tests {
 		assert!(structure_matches("", &view));
 	}
 
+	#[cfg(native)]
 	#[test]
 	fn test_reconcile_non_wasm() {
 		// Non-WASM version always succeeds

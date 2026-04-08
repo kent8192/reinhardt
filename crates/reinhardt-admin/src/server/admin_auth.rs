@@ -112,7 +112,7 @@ impl Injectable for AdminAuthenticatedUser {
 				.ok_or_else(|| DiError::NotRegistered {
 					type_name: "AdminUserLoader".into(),
 					hint: "Call AdminSite::set_user_type::<U>() before building admin routes, \
-					       or use the default by calling admin_routes_with_di_deferred() which \
+					       or use the default by calling admin_routes_with_di() which \
 					       registers AdminDefaultUser as a fallback."
 						.into(),
 				})?;
@@ -260,10 +260,9 @@ impl Injectable for AdminLoginAuthenticator {
 			.map(|arc| (*arc).clone())
 			.ok_or_else(|| DiError::NotRegistered {
 				type_name: "AdminLoginAuthenticator".into(),
-				hint:
-					"Call AdminSite::set_user_type::<U>() or use admin_routes_with_di_deferred() \
+				hint: "Call AdminSite::set_user_type::<U>() or use admin_routes_with_di() \
 				       which registers AdminDefaultUser as a fallback."
-						.into(),
+					.into(),
 			})
 	}
 }

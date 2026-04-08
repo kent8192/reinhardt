@@ -11,7 +11,8 @@ use reinhardt::admin::AdminSite;
 /// Configure the admin site with all registered model admins
 ///
 /// Creates an AdminSite and registers model admins from each app.
-/// The returned AdminSite can be converted to routes via `get_urls()`.
+/// The returned `AdminSite` should be wrapped in `Arc` and passed to
+/// `admin_routes_with_di()` to build the admin router.
 pub fn configure_admin() -> AdminSite {
 	let site = AdminSite::new("GitHub Issues Admin");
 

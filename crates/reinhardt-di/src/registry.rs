@@ -97,7 +97,19 @@ impl<T> InjectableFactory<T> {
 #[async_trait]
 impl<T: Injectable + Any + Send + Sync + 'static> FactoryTrait for InjectableFactory<T> {
 	async fn create(&self, ctx: &InjectionContext) -> DiResult<Arc<dyn Any + Send + Sync>> {
-		let value = T::inject(ctx).await?;
+		// Set task-local resolve context for get_di_context() access.
+		// Since we only have &InjectionContext, clone into Arc (same pattern as AsyncFactory).
+		let ctx_arc = Arc::new(ctx.clone());
+		let resolve_ctx = crate::resolve_context::ResolveContext {
+			root: crate::resolve_context::RESOLVE_CTX
+				.try_with(|outer| Arc::clone(&outer.root))
+				.unwrap_or_else(|_| Arc::clone(&ctx_arc)),
+			current: Arc::clone(&ctx_arc),
+		};
+
+		let value = crate::resolve_context::RESOLVE_CTX
+			.scope(resolve_ctx, T::inject(ctx))
+			.await?;
 		Ok(Arc::new(value))
 	}
 }

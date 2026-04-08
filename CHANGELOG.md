@@ -7,6 +7,145 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.15...reinhardt-web@v0.1.0-rc.16) - 2026-04-08
+
+### Added
+
+- *(pages)* add JWT token management and auth header injection for WASM SPA
+- *(admin)* add login server function with JWT authentication
+- *(admin)* add login page, auth gate, and 401 redirect for WASM SPA
+- *(auth)* add SuperuserInit trait and SuperuserCreator registry
+- *(commands)* add createsuperuser as built-in management command
+- *(admin)* add reinhardt-conf and tracing dependencies
+- *(admin)* add AdminSettings type definitions with defaults
+- *(admin)* expose settings module from lib.rs
+- *(admin)* implement SettingsFragment for AdminSettings
+- *(admin)* add CSP and security header validation warnings
+- *(admin)* add from_str parsing for FrameOptions and ReferrerPolicy
+- *(admin)* add SecurityHeaders conversion from AdminSettings
+- *(admin)* route admin_spa_handler through AdminSettings
+- *(admin)* wire admin_spa_handler to use configurable AdminSettings
+- *(admin)* integrate UnoCSS generation into collectstatic
+- *(admin)* add UnoCSS runtime as CDN-downloaded vendor asset
+- *(conf)* add OpenApiSettings fragment
+- add SubmitButton support to form! macro fields
+- add CDP-based E2E browser testing infrastructure and WASM SPA fixes
+
+### Changed
+
+- *(admin)* [**breaking**] mark AdminRoute as non_exhaustive and reorder Login variant
+- *(db)* remove redundant migration naming in autodetector
+- *(conf)* use #[settings(fragment = true)] macro for OpenApiSettings
+- *(http)* remove dead should_stop_chain check in CCH
+- *(admin)* update workaround comments for page! @event closure capture limitation
+- *(admin)* add issue refs to workaround comments and autocomplete to form inputs
+
+### Deprecated
+
+- *(rest)* deprecate OpenApiConfig since 0.1.0-rc.16
+
+### Documentation
+
+- *(admin)* fix broken intra-doc link to CspMiddleware
+- *(auth)* add deprecation notice to standalone createsuperuser binary
+- *(conf)* fix composable settings TOML structure and add serde defaults
+- *(conf)* fix unresolved SettingsFragment link in openapi module doc
+- *(rest)* fix broken intra-doc link to OpenApiSettings
+- add ecosystem section mentioning reinhardt-cloud
+
+### Fixed
+
+- *(ci)* stop unattended-upgrades before apt-get to prevent dpkg lock
+- *(pages)* add web-sys Storage feature for sessionStorage access
+- *(admin)* use path_params instead of full URI in static file handler
+- *(admin)* call WASM init() in SPA HTML for web target output
+- *(admin)* support HEAD requests for static file handler
+- *(admin)* remove broken presetWind() global function call for UnoCSS v66+
+- *(admin)* initialize UnoCSS runtime with v66+ API for preset-wind
+- *(docs)* resolve broken intra-doc links and incorrect test assertion
+- *(conf)* remove #[serde(flatten)] from SecuritySettings and fix TOML scoping
+- *(conf)* add missing newline at end of pages template base.example.toml
+- *(admin)* replace CDN references with local vendor paths
+- *(settings)* update tests to use nested security keys after [[#3176](https://github.com/kent8192/reinhardt-web/issues/3176)](https://github.com/kent8192/reinhardt-web/issues/3176) de-flatten
+- *(ci)* guard mutation-test if condition against undefined inputs context
+- *(commands)* derive is_initial from migration number instead of hardcoding
+- *(db)* generate AlterColumn, CreateIndex, and DropIndex operations from schema diff
+- *(db)* generate CreateIndex for indexes on newly created tables
+- *(db)* detect and generate constraint changes in SchemaDiff
+- *(urls)* route framework-level 404/405 responses through middleware chain
+- *(rest)* suppress deprecation warning on OpenApiConfig re-export
+- *(middleware)* convert errors to responses in security-critical middleware
+- *(middleware)* convert errors to responses in functional middleware
+- *(middleware)* convert errors to responses in cross-crate middleware
+- *(di)* add Authentication variant to DiError for proper 401 responses
+- *(admin)* make WASM JS reference test dynamic based on build state
+- *(test)* use recursive file count in collectstatic tests
+- *(test)* update middleware tests for ErrorToResponseHandler behavior
+- *(test)* skip WASM artifact tests when WASM is not built
+- *(test)* update migration E2E tests for implemented operations
+- *(test)* update versioning test for ErrorToResponseHandler
+- *(admin)* use explicit headers and string conversion for CSV/TSV export
+- *(di)* add #[non_exhaustive] to DiError enum
+- *(examples)* replace deprecated SecurityConfig with SecuritySettings
+- *(admin)* correct static route assertion to match catch-all pattern
+- *(test)* skip hidden files in collectstatic test helper
+- *(pages)* preserve HTTP status codes for DI auth errors in server_fn
+- *(admin)* use write_record for CSV/TSV export to support map-based records
+- *(admin)* handle UUID primary keys in create RETURNING clause
+- *(commands)* exit with error when --with-pages WASM build fails
+- *(admin)* ensure vendor assets are available during development
+- *(auth)* add is_staff and is_superuser fields to JWT Claims
+- *(admin)* embed staff status in JWT token during admin login
+- *(tests)* fix makemigrations and admin create test regressions
+- *(pages)* inline @event closure capture to fix move semantics
+- *(admin)* prefix page! event params with underscore to suppress non-WASM warnings
+- auto-pass CSRF token as server_fn argument in form! macro
+- suppress unused_variables warnings in form! macro codegen
+- *(infra)* add ed25519 SSH key type for Packer AMI builds
+- resolve merge conflicts with main and fix CI failures
+- resolve merge conflicts with main, migrate login to form! macro
+- *(admin)* switch WASM SPA to mount() rendering with scheduler init
+- *(admin)* make AdminSite registry lookups case-insensitive
+- align E2E tests with upstream WASM SPA fixes from PR [[#3350](https://github.com/kent8192/reinhardt-web/issues/3350)](https://github.com/kent8192/reinhardt-web/issues/3350)/[[#3351](https://github.com/kent8192/reinhardt-web/issues/3351)](https://github.com/kent8192/reinhardt-web/issues/3351)/[[#3352](https://github.com/kent8192/reinhardt-web/issues/3352)](https://github.com/kent8192/reinhardt-web/issues/3352)
+- gate WASM-only imports with #[cfg(client)] to suppress unused warnings
+
+### Maintenance
+
+- upgrade workspace dependencies to latest versions
+
+### Other
+
+- resolve conflict with main (deduplicate tests)
+- resolve conflict with main in security tests
+- Fix CSP blocking admin WASM SPA init script
+- Change AuthState user_id from i64 to String for UUID support
+- Auto-inject timestamps for auto_now/auto_now_add fields in admin CRUD
+- Detect workspace target_dir via cargo metadata in WASM builder
+- Fix admin CRUD type coercion for timestamptz and uuid columns
+- Validate project directory before running makemigrations
+
+### Styling
+
+- *(admin)* apply rustfmt to test assertion in router module
+- *(examples)* apply rustfmt import ordering and formatting fixes
+- *(admin)* fix formatting in settings, security, and router
+- fix formatting in OpenApiSettings files
+- apply rustfmt formatting fixes
+- *(examples)* fix import ordering in twitter middleware
+- apply cargo make auto-fix (clippy + fmt)
+- apply rustfmt formatting via cargo make auto-fix
+- apply rustfmt formatting
+- apply rustfmt to site.rs
+
+### Testing
+
+- *(migrations)* add E2E tests for descriptive migration naming
+- *(migrations)* expand coverage for all operation name fragments and edge cases
+- *(migrations)* restore AlterColumn and CreateIndex E2E tests
+- *(urls)* add integration tests for router-level 404 middleware
+- *(integration)* add OpenApiSettings composition tests
+- add SubmitButton rendering regression tests
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.14...reinhardt-web@v0.1.0-rc.15) - 2026-03-29
 
 ### Added

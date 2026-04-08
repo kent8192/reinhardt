@@ -1066,6 +1066,20 @@ impl ServerRouter {
 				middleware: func_route.middleware.clone(),
 			};
 
+			// Strip prefix from route path to avoid double-prefix matching.
+			// Routes may be registered with absolute paths that already include the prefix
+			// (e.g., server functions register as "/api/server_fn/login"). Since resolve()
+			// strips the prefix from incoming request paths before matching against matchit,
+			// we must also strip the prefix here during compilation.
+			let route_path = if !self.prefix.is_empty() {
+				func_route
+					.path
+					.strip_prefix(&self.prefix)
+					.unwrap_or(&func_route.path)
+			} else {
+				&func_route.path
+			};
+
 			// matchit uses {name} format which matches our pattern
 			let router_lock = match func_route.method {
 				Method::GET => &self.get_router,
@@ -1080,7 +1094,7 @@ impl ServerRouter {
 			if let Err(e) = router_lock
 				.write()
 				.unwrap_or_else(PoisonError::into_inner)
-				.insert(&func_route.path, route_handler)
+				.insert(route_path, route_handler)
 			{
 				errors.push(format!(
 					"Failed to compile route '{}' ({}): {}",
@@ -1096,6 +1110,16 @@ impl ServerRouter {
 				middleware: view_route.middleware.clone(),
 			};
 
+			// Strip prefix from route path (same reason as function routes above)
+			let route_path = if !self.prefix.is_empty() {
+				view_route
+					.path
+					.strip_prefix(&self.prefix)
+					.unwrap_or(&view_route.path)
+			} else {
+				&view_route.path
+			};
+
 			// Register view for all common HTTP methods
 			for router_lock in &[
 				&self.get_router,
@@ -1107,7 +1131,7 @@ impl ServerRouter {
 				if let Err(e) = router_lock
 					.write()
 					.unwrap_or_else(PoisonError::into_inner)
-					.insert(&view_route.path, route_handler.clone())
+					.insert(route_path, route_handler.clone())
 				{
 					errors.push(format!(
 						"Failed to compile view route '{}': {}",
@@ -1124,6 +1148,16 @@ impl ServerRouter {
 				middleware: route.middleware.clone(),
 			};
 
+			// Strip prefix from route path (same reason as function routes above)
+			let route_path = if !self.prefix.is_empty() {
+				route
+					.path
+					.strip_prefix(&self.prefix)
+					.unwrap_or(&route.path)
+			} else {
+				&route.path
+			};
+
 			// Register raw route for all common HTTP methods
 			for router_lock in &[
 				&self.get_router,
@@ -1135,7 +1169,7 @@ impl ServerRouter {
 				if let Err(e) = router_lock
 					.write()
 					.unwrap_or_else(PoisonError::into_inner)
-					.insert(&route.path, route_handler.clone())
+					.insert(route_path, route_handler.clone())
 				{
 					errors.push(format!(
 						"Failed to compile raw route '{}': {}",
@@ -1146,12 +1180,10 @@ impl ServerRouter {
 		}
 
 		// Compile ViewSet routes
+		// ViewSet base_path must NOT include self.prefix because resolve() strips
+		// the prefix from incoming request paths before matching against matchit.
 		for (prefix, viewset) in &self.viewsets {
-			let base_path = if self.prefix.is_empty() {
-				format!("/{}", prefix.trim_start_matches('/'))
-			} else {
-				format!("{}/{}", self.prefix, prefix.trim_start_matches('/'))
-			};
+			let base_path = format!("/{}", prefix.trim_start_matches('/'));
 
 			// Collection route: GET /prefix/ (list), POST /prefix/ (create)
 			let collection_path = format!("{}/", base_path.trim_end_matches('/'));
@@ -2638,6 +2670,70 @@ mod tests {
 		assert!(
 			response.headers.get("x-security-test").is_none(),
 			"404 under excluded path should NOT have middleware security header"
+		);
+	}
+
+	// --- Prefix double-application fix tests (#3407, #3408) ---
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_function_route_with_prefix_strips_prefix_during_compilation() {
+		// Arrange: register a route whose path already contains the prefix,
+		// simulating server function registration (e.g., ServerFnRegistration::PATH)
+		let router = ServerRouter::new()
+			.with_prefix("/api")
+			.function("/api/server_fn/test", Method::POST, dummy_handler);
+
+		// Act: resolve the full path (resolve() strips "/api" before matchit lookup)
+		let result = router.resolve("/api/server_fn/test", &Method::POST);
+
+		// Assert: route matches without double-prefix issue
+		assert!(
+			result.is_some(),
+			"POST /api/server_fn/test should match when router has prefix /api"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_function_route_post_with_prefix_no_405() {
+		// Arrange: register a POST route with a path that includes the prefix
+		let router = ServerRouter::new()
+			.with_prefix("/api")
+			.function("/api/users", Method::POST, dummy_handler);
+
+		// Act: resolve POST request (verifies no 405 Method Not Allowed)
+		let result = router.resolve("/api/users", &Method::POST);
+
+		// Assert: POST route is reachable
+		assert!(
+			result.is_some(),
+			"POST /api/users should match when router has prefix /api (no 405)"
+		);
+
+		// Also verify GET returns None (route is POST-only)
+		let get_result = router.resolve("/api/users", &Method::GET);
+		assert!(
+			get_result.is_none(),
+			"GET /api/users should not match a POST-only route"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_function_route_without_prefix_overlap_still_works() {
+		// Arrange: route path does not start with the prefix
+		let router = ServerRouter::new()
+			.with_prefix("/api")
+			.function("/health", Method::GET, dummy_handler);
+
+		// Act: resolve a path under the prefix
+		let result = router.resolve("/api/health", &Method::GET);
+
+		// Assert: route matches (path kept as-is since it does not start with prefix)
+		assert!(
+			result.is_some(),
+			"/api/health should match /health route under /api prefix"
 		);
 	}
 }

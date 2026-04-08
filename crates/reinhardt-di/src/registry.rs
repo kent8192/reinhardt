@@ -203,8 +203,8 @@ impl DependencyRegistry {
 	/// This is typically called automatically by the registration system.
 	/// Not intended for direct use; exposed for macro-generated code.
 	#[doc(hidden)]
-	pub fn register_dependencies(&self, type_id: TypeId, deps: Vec<TypeId>) {
-		self.dependencies.insert(type_id, deps);
+	pub fn register_dependencies(&self, type_id: TypeId, deps: impl AsRef<[TypeId]>) {
+		self.dependencies.insert(type_id, deps.as_ref().to_vec());
 	}
 
 	/// Register a type name for debugging
@@ -272,7 +272,7 @@ pub struct DependencyRegistration {
 
 impl DependencyRegistration {
 	/// Create a new registration entry
-	pub const fn new<T: 'static>(
+	pub const fn new<T: Send + Sync + 'static>(
 		type_name: &'static str,
 		scope: DependencyScope,
 		register_fn: fn(&DependencyRegistry),
@@ -287,7 +287,7 @@ impl DependencyRegistration {
 	}
 
 	/// Create a new registration entry with explicit dependencies
-	pub const fn new_with_deps<T: 'static>(
+	pub const fn new_with_deps<T: Send + Sync + 'static>(
 		type_name: &'static str,
 		scope: DependencyScope,
 		dependencies: &'static [TypeId],

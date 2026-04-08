@@ -371,12 +371,14 @@ pub(crate) fn injectable_struct_impl(
 		);
 		let register_fn_name = format_ident!("__reinhardt_register_{}", struct_name);
 		quote! {
+			#[allow(non_snake_case)]
 			async fn #factory_fn_name(
 				ctx: ::std::sync::Arc<#di_crate::InjectionContext>,
 			) -> #di_crate::DiResult<#struct_name> {
 				<#struct_name as #di_crate::Injectable>::inject(&ctx).await
 			}
 
+			#[allow(non_snake_case)]
 			fn #register_fn_name(registry: &#di_crate::DependencyRegistry) {
 				registry.register_async::<#struct_name, _, _>(#scope_tokens, #factory_fn_name);
 				registry.register_type_name(

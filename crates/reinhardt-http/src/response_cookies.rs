@@ -7,19 +7,17 @@
 //!
 //! # How it works
 //!
-//! [`Extensions`](crate::Extensions) uses `Arc<Mutex<HashMap>>` internally,
-//! so cloning an `Extensions` value shares the same backing store. The
-//! server function router clones the request's extensions *before* calling
-//! the handler. Any [`ResponseCookies`] the handler inserts into
-//! `request.extensions` are therefore visible through the cloned reference,
-//! and the router can extract and apply them after the handler returns.
+//! The server function router creates a [`SharedResponseCookies`] jar and
+//! inserts it into the request's extensions before calling the handler.
+//! Because clones of `SharedResponseCookies` share the same backing store,
+//! cookies added by the handler are visible to the router after the handler
+//! returns.
 //!
 //! # Usage in a handler
 //!
-//! Insert a [`ResponseCookies`] into the request's extensions inside your
-//! server function handler. **Do not** construct `ResponseCookies`
-//! separately and return it — it must be placed into the request's
-//! extensions so the router can find it.
+//! The router inserts a [`SharedResponseCookies`] into the request's
+//! extensions before calling the handler. The handler retrieves it and
+//! adds cookies via [`SharedResponseCookies::add`].
 //!
 //! ```
 //! use reinhardt_http::SharedResponseCookies;
@@ -37,11 +35,9 @@ use std::sync::{Arc, Mutex};
 ///
 /// Server function handlers insert this into the request's
 /// [`Extensions`](crate::Extensions) to communicate cookies back to the
-/// response layer. Because `Extensions` is backed by `Arc<Mutex<HashMap>>`,
-/// cloning it shares the same underlying map. The server function router
-/// exploits this: it clones the extensions before invoking the handler, then
-/// extracts `ResponseCookies` from the clone afterwards. Each cookie is
-/// applied as a `Set-Cookie` header on the HTTP response.
+/// response layer. The server function router wraps the handler call so
+/// that any `ResponseCookies` added to the extensions are extracted
+/// afterwards and applied as `Set-Cookie` headers on the HTTP response.
 ///
 /// **Important:** `ResponseCookies` must be inserted into the request's
 /// extensions — not held separately — for the cookies to reach the

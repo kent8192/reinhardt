@@ -152,12 +152,11 @@ pub(crate) fn injectable_factory_impl(args: TokenStream, input: ItemFn) -> Resul
 			ctx: ::std::sync::Arc<#di_crate::InjectionContext>,
 		) -> #di_crate::DiResult<#return_type> {
 			#di_crate::with_cycle_detection_scope(async {
-				// Resolve #[inject] dependencies
-				#(#inject_resolutions)*
-
-				// Set task-local resolve context before calling implementation.
+				// Set task-local resolve context before resolving dependencies.
 				// Inherit root from outer scope (for nested factory calls),
 				// or default to ctx itself at the top level.
+				// This must be established first so that Depends::resolve() and
+				// any Injectable::inject() impl can use get_di_context().
 				let __resolve_ctx = #di_crate::resolve_context::ResolveContext {
 					root: #di_crate::resolve_context::RESOLVE_CTX
 						.try_with(|__outer| ::std::sync::Arc::clone(&__outer.root))
@@ -166,7 +165,12 @@ pub(crate) fn injectable_factory_impl(args: TokenStream, input: ItemFn) -> Resul
 				};
 
 				let result = #di_crate::resolve_context::RESOLVE_CTX
-					.scope(__resolve_ctx, #original_fn_name(#(#inject_param_names,)* #(#regular_param_names),*))
+					.scope(__resolve_ctx, async {
+						// Resolve #[inject] dependencies
+						#(#inject_resolutions)*
+
+						#original_fn_name(#(#inject_param_names,)* #(#regular_param_names),*).await
+					})
 					.await;
 				Ok(result)
 			}).await

@@ -20,9 +20,9 @@ use reinhardt_auth::JwtAuth;
 #[cfg(server)]
 use reinhardt_db::orm::DatabaseConnection;
 #[cfg(server)]
-use reinhardt_pages::server_fn::ServerFnRequest;
-#[cfg(server)]
 use reinhardt_di::Depends;
+#[cfg(server)]
+use reinhardt_pages::server_fn::ServerFnRequest;
 
 /// Authenticate an admin user and set a JWT cookie.
 ///

@@ -13,10 +13,10 @@ use reinhardt_admin::server::{
 	bulk_delete_records, create_record, delete_record, export_data, get_detail, get_list,
 	import_data, update_record,
 };
+use reinhardt_di::Depends;
 use rstest::*;
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 // ==================== Full lifecycle tests ====================
 
@@ -24,7 +24,7 @@ use std::sync::Arc;
 #[rstest]
 #[tokio::test]
 async fn test_create_then_update_then_delete_lifecycle(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -201,7 +201,7 @@ fn test_register_unregister_reregister() {
 #[rstest]
 #[tokio::test]
 async fn test_import_then_export_round_trip_json(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -302,7 +302,7 @@ fn test_configure_site_after_register() {
 #[rstest]
 #[tokio::test]
 async fn test_detail_nonexistent_id(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -331,7 +331,7 @@ async fn test_detail_nonexistent_id(
 #[rstest]
 #[tokio::test]
 async fn test_update_nonexistent_id(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -369,7 +369,7 @@ async fn test_update_nonexistent_id(
 #[rstest]
 #[tokio::test]
 async fn test_delete_nonexistent_id(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -399,7 +399,7 @@ async fn test_delete_nonexistent_id(
 #[rstest]
 #[tokio::test]
 async fn test_list_page_exceeds_total(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -444,7 +444,7 @@ async fn test_list_page_exceeds_total(
 #[rstest]
 #[tokio::test]
 async fn test_bulk_delete_empty_ids_list(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;

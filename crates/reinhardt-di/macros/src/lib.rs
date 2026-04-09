@@ -46,6 +46,7 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
 /// # Example
 ///
 /// ```ignore
+/// use reinhardt_di::Depends;
 /// use reinhardt_di_macros::injectable_factory;
 ///
 /// #[injectable_factory]

@@ -5,10 +5,10 @@
 #[cfg(server)]
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, DetailResponse};
+use reinhardt_di::Depends;
 #[cfg(server)]
 use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
-use reinhardt_di::Depends;
 
 #[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};

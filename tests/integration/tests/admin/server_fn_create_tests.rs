@@ -8,10 +8,10 @@ use reinhardt_admin::adapters::MutationRequest;
 use reinhardt_admin::core::AdminRecord;
 use reinhardt_admin::core::{AdminDatabase, AdminSite};
 use reinhardt_admin::server::create_record;
+use reinhardt_di::Depends;
 use rstest::*;
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use super::server_fn_helpers::{TEST_CSRF_TOKEN, make_auth_user, make_staff_request};
 
@@ -21,7 +21,7 @@ use super::server_fn_helpers::{TEST_CSRF_TOKEN, make_auth_user, make_staff_reque
 #[rstest]
 #[tokio::test]
 async fn test_create_record_happy_path(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -59,7 +59,7 @@ async fn test_create_record_happy_path(
 #[rstest]
 #[tokio::test]
 async fn test_create_record_returns_valid_response(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -105,7 +105,7 @@ async fn test_create_record_returns_valid_response(
 #[rstest]
 #[tokio::test]
 async fn test_create_record_persists_to_database(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -152,7 +152,7 @@ async fn test_create_record_persists_to_database(
 #[rstest]
 #[tokio::test]
 async fn test_create_record_multiple_fields(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -191,7 +191,7 @@ async fn test_create_record_multiple_fields(
 #[rstest]
 #[tokio::test]
 async fn test_create_record_special_characters(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -235,7 +235,7 @@ async fn test_create_record_special_characters(
 #[rstest]
 #[tokio::test]
 async fn test_create_record_model_not_registered(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;

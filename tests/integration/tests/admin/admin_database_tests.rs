@@ -12,6 +12,7 @@ use reinhardt_db::orm::expressions::{F, OuterRef};
 use reinhardt_db::orm::{
 	DatabaseBackend, DatabaseConnection, Filter, FilterCondition, FilterOperator, FilterValue,
 };
+use reinhardt_di::Depends;
 use reinhardt_query::{
 	Alias, ColumnRef, Condition, PostgresQueryBuilder, Query, QueryStatementBuilder, Value,
 };

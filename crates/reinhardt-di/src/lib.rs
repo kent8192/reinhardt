@@ -120,7 +120,7 @@
 //! passing it to downstream consumers:
 //!
 //! ```rust,ignore
-//! use reinhardt_di::{ContextLevel, get_di_context};
+//! use reinhardt_di::{ContextLevel, Depends, get_di_context};
 //!
 //! #[injectable_factory(scope = "transient")]
 //! async fn make_router(

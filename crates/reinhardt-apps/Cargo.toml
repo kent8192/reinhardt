@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-apps"
-version = "0.1.0-rc.15"
+version = "0.1.0-rc.16"
 description = "Application registry and management for Reinhardt framework"
 edition.workspace = true
 rust-version.workspace = true

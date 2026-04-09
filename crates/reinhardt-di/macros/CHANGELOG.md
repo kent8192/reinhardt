@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di-macros@v0.1.0-rc.15...reinhardt-di-macros@v0.1.0-rc.16) - 2026-04-09
+
+### Fixed
+
+- *(di)* resolve `#[inject]` type mismatch in `#[injectable_factory]` macro
+- *(di)* wrap injectable_factory body in cycle detection scope
+
+### Other
+
+- resolve conflict with main in di.rs ui module registration
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di-macros@v0.1.0-rc.14...reinhardt-di-macros@v0.1.0-rc.15) - 2026-03-29
 
 ### Maintenance

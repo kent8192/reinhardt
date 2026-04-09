@@ -5,7 +5,19 @@
 //! request extensions before calling the handler. The handler adds cookies
 //! via the shared jar, and the router extracts them after the handler returns.
 //!
-//! # Example
+//! # How it works
+//!
+//! The server function router creates a [`SharedResponseCookies`] jar and
+//! inserts it into the request's extensions before calling the handler.
+//! Because clones of `SharedResponseCookies` share the same backing store,
+//! cookies added by the handler are visible to the router after the handler
+//! returns.
+//!
+//! # Usage in a handler
+//!
+//! The router inserts a [`SharedResponseCookies`] into the request's
+//! extensions before calling the handler. The handler retrieves it and
+//! adds cookies via [`SharedResponseCookies::add`].
 //!
 //! ```
 //! use reinhardt_http::SharedResponseCookies;
@@ -21,10 +33,15 @@ use std::sync::{Arc, Mutex};
 
 /// A collection of `Set-Cookie` header values to include in the HTTP response.
 ///
-/// Server functions can insert this into the request's extensions to communicate
-/// cookies to the response layer. The server function router checks for this
-/// type in the request extensions and applies each cookie as a `Set-Cookie`
-/// header on the HTTP response.
+/// Server function handlers insert this into the request's
+/// [`Extensions`](crate::Extensions) to communicate cookies back to the
+/// response layer. The server function router wraps the handler call so
+/// that any `ResponseCookies` added to the extensions are extracted
+/// afterwards and applied as `Set-Cookie` headers on the HTTP response.
+///
+/// **Important:** `ResponseCookies` must be inserted into the request's
+/// extensions — not held separately — for the cookies to reach the
+/// response.
 #[derive(Debug, Clone, Default)]
 pub struct ResponseCookies {
 	/// Cookie header values to include in the response

@@ -91,8 +91,8 @@ impl ServerFnRouterExt for ServerRouter {
 		> {
 			Box::pin(async move {
 				// Insert a shared cookie jar so the handler can set response
-				// cookies.  SharedResponseCookies uses Arc<Mutex<>> internally,
-				// so the handler and this wrapper both access the same collection.
+				// cookies. Clones share the same backing store, so cookies
+				// added by the handler are visible to this wrapper afterwards.
 				let cookie_jar = SharedResponseCookies::new();
 				req.extensions.insert(cookie_jar.clone());
 

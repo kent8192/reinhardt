@@ -9,8 +9,8 @@
 //! can create valid instances, preventing type collision attacks where
 //! malicious code could insert a spoofed auth state into request extensions.
 
-use crate::extensions::{IsActive, IsAdmin, IsAuthenticated};
 use crate::Extensions;
+use crate::extensions::{IsActive, IsAdmin, IsAuthenticated};
 
 /// Private marker to validate that an `AuthState` was created through
 /// official constructors, not through external struct literal construction.

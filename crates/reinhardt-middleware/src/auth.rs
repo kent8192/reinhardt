@@ -8,7 +8,9 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 #[cfg(feature = "sessions")]
-use reinhardt_http::{Handler, IsActive, IsAdmin, IsAuthenticated, Middleware, Request, Response, Result};
+use reinhardt_http::{
+	Handler, IsActive, IsAdmin, IsAuthenticated, Middleware, Request, Response, Result,
+};
 
 #[cfg(feature = "sessions")]
 use reinhardt_auth::session::{SESSION_KEY_USER_ID, SessionStore};

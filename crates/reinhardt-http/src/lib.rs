@@ -111,7 +111,7 @@ pub use messages_middleware::MessagesMiddleware;
 pub use middleware::{ExcludeMiddleware, Handler, Middleware, MiddlewareChain};
 pub use request::{Request, RequestBuilder, TrustedProxies};
 pub use response::{Response, SafeErrorResponse, StreamBody, StreamingResponse};
-pub use response_cookies::ResponseCookies;
+pub use response_cookies::{ResponseCookies, SharedResponseCookies};
 pub use upload::{FileUploadError, FileUploadHandler, MemoryFileUpload, TemporaryFileUpload};
 
 // Re-export error types from reinhardt-exception for consistency across the framework

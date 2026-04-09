@@ -402,13 +402,15 @@ fn generate_wrapper_with_both(
 	// Generate DI context extraction
 	let di_context_extraction = if !inject_params.is_empty() {
 		quote! {
-			let __di_ctx = {
-				let __shared_ctx = req.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
-					.ok_or_else(|| #core_crate::exception::Error::Internal(
-						"DI context not set. Ensure the router is configured with .with_di_context()".to_string()
-					))?;
-				let __di_request = req.clone_for_di();
-				::std::sync::Arc::new((*__shared_ctx).fork_for_request(__di_request))
+			let __shared_ctx = req.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
+				.ok_or_else(|| #core_crate::exception::Error::Internal(
+					"DI context not set. Ensure the router is configured with .with_di_context()".to_string()
+				))?;
+			let __di_request = req.clone_for_di();
+			let __di_ctx = ::std::sync::Arc::new((*__shared_ctx).fork_for_request(__di_request));
+			let __resolve_ctx = #di_crate::resolve_context::ResolveContext {
+				root: ::std::sync::Arc::clone(&__shared_ctx),
+				current: ::std::sync::Arc::clone(&__di_ctx),
 			};
 		}
 	} else {
@@ -530,6 +532,35 @@ fn generate_wrapper_with_both(
 		(calls, quote! {}, quote! {}, args)
 	};
 
+	// Generate the handler body (injection + extraction + call)
+	let handler_body = quote! {
+		// Resolve injected dependencies
+		#(#injection_calls)*
+
+		// Extract request parameters
+		#(#extractor_calls)*
+
+		// Validate extracted parameters (when pre_validate = true)
+		#validation_calls
+
+		// Destructure into original patterns (when pre_validate = true)
+		#destructure_calls
+
+		// Call the original function
+		#original_fn_name(#(#extractor_args,)* #(#inject_args),*).await
+	};
+
+	// Wrap handler body in RESOLVE_CTX.scope() when DI is active
+	let scoped_handler_body = if !inject_params.is_empty() {
+		quote! {
+			#di_crate::resolve_context::RESOLVE_CTX.scope(__resolve_ctx, async {
+				#handler_body
+			}).await
+		}
+	} else {
+		handler_body
+	};
+
 	// Generate code
 	(
 		quote! {
@@ -546,20 +577,8 @@ fn generate_wrapper_with_both(
 			// Extract DI context (if needed)
 			#di_context_extraction
 
-			// Resolve injected dependencies
-			#(#injection_calls)*
-
-			// Extract request parameters
-			#(#extractor_calls)*
-
-			// Validate extracted parameters (when pre_validate = true)
-			#validation_calls
-
-			// Destructure into original patterns (when pre_validate = true)
-			#destructure_calls
-
-			// Call the original function
-			#original_fn_name(#(#extractor_args,)* #(#inject_args),*).await
+			// Execute handler within resolve context scope
+			#scoped_handler_body
 		},
 	)
 }

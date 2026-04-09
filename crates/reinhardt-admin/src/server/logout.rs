@@ -7,8 +7,6 @@ use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 #[cfg(not(target_arch = "wasm32"))]
 use super::security::build_admin_auth_cookie_clear;
 #[cfg(not(target_arch = "wasm32"))]
-use reinhardt_http::ResponseCookies;
-#[cfg(not(target_arch = "wasm32"))]
 use reinhardt_pages::server_fn::ServerFnRequest;
 
 /// Log out the current admin user by clearing the authentication cookie.
@@ -27,12 +25,6 @@ use reinhardt_pages::server_fn::ServerFnRequest;
 #[server_fn]
 pub async fn admin_logout(#[inject] http_request: ServerFnRequest) -> Result<(), ServerFnError> {
 	let cookie = build_admin_auth_cookie_clear();
-	let mut response_cookies = http_request
-		.inner()
-		.extensions
-		.remove::<ResponseCookies>()
-		.unwrap_or_default();
-	response_cookies.add(cookie);
-	http_request.inner().extensions.insert(response_cookies);
+	http_request.add_response_cookie(cookie);
 	Ok(())
 }

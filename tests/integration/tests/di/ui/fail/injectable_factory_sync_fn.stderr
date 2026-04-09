@@ -1,0 +1,5 @@
+error: #[injectable_factory] can only be applied to async functions
+ --> tests/di/ui/fail/injectable_factory_sync_fn.rs:9:1
+  |
+9 | fn make_service() -> MyService {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -20,8 +20,6 @@ use reinhardt_auth::JwtAuth;
 #[cfg(server)]
 use reinhardt_db::orm::DatabaseConnection;
 #[cfg(server)]
-use reinhardt_http::ResponseCookies;
-#[cfg(server)]
 use reinhardt_pages::server_fn::ServerFnRequest;
 #[cfg(server)]
 use std::sync::Arc;
@@ -110,18 +108,12 @@ pub async fn admin_login(
 			ServerFnError::server(500, "Token generation failed")
 		})?;
 
-	// Set JWT as HTTP-Only cookie via ResponseCookies extension.
-	// The server_fn router (router_ext.rs) extracts ResponseCookies from
-	// request extensions and applies them as Set-Cookie response headers.
+	// Set JWT as HTTP-Only cookie via the shared cookie jar.
+	// The server_fn router (router_ext.rs) reads SharedResponseCookies
+	// and applies them as Set-Cookie response headers.
 	let is_secure = http_request.inner().is_secure;
 	let cookie = build_admin_auth_cookie(&token, is_secure);
-	let mut response_cookies = http_request
-		.inner()
-		.extensions
-		.remove::<ResponseCookies>()
-		.unwrap_or_default();
-	response_cookies.add(cookie);
-	http_request.inner().extensions.insert(response_cookies);
+	http_request.add_response_cookie(cookie);
 
 	// Return user info without the token — the browser receives the token
 	// via the Set-Cookie header, not the response body.

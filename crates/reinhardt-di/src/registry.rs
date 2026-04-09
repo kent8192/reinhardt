@@ -38,7 +38,7 @@ pub trait FactoryTrait: Send + Sync {
 pub struct AsyncFactory<F, Fut, T>
 where
 	F: Fn(Arc<InjectionContext>) -> Fut + Send + Sync,
-	Fut: Future<Output = DiResult<T>> + Send + Sync,
+	Fut: Future<Output = DiResult<T>> + Send,
 	T: Any + Send + Sync + 'static,
 {
 	factory: F,
@@ -48,7 +48,7 @@ where
 impl<F, Fut, T> AsyncFactory<F, Fut, T>
 where
 	F: Fn(Arc<InjectionContext>) -> Fut + Send + Sync,
-	Fut: Future<Output = DiResult<T>> + Send + Sync,
+	Fut: Future<Output = DiResult<T>> + Send,
 	T: Any + Send + Sync + 'static,
 {
 	/// Creates a new async factory from the given closure.
@@ -64,7 +64,7 @@ where
 impl<F, Fut, T> FactoryTrait for AsyncFactory<F, Fut, T>
 where
 	F: Fn(Arc<InjectionContext>) -> Fut + Send + Sync,
-	Fut: Future<Output = DiResult<T>> + Send + Sync + 'static,
+	Fut: Future<Output = DiResult<T>> + Send + 'static,
 	T: Any + Send + Sync + 'static,
 {
 	async fn create(&self, ctx: &InjectionContext) -> DiResult<Arc<dyn Any + Send + Sync>> {
@@ -97,7 +97,19 @@ impl<T> InjectableFactory<T> {
 #[async_trait]
 impl<T: Injectable + Any + Send + Sync + 'static> FactoryTrait for InjectableFactory<T> {
 	async fn create(&self, ctx: &InjectionContext) -> DiResult<Arc<dyn Any + Send + Sync>> {
-		let value = T::inject(ctx).await?;
+		// Set task-local resolve context for get_di_context() access.
+		// Since we only have &InjectionContext, clone into Arc (same pattern as AsyncFactory).
+		let ctx_arc = Arc::new(ctx.clone());
+		let resolve_ctx = crate::resolve_context::ResolveContext {
+			root: crate::resolve_context::RESOLVE_CTX
+				.try_with(|outer| Arc::clone(&outer.root))
+				.unwrap_or_else(|_| Arc::clone(&ctx_arc)),
+			current: Arc::clone(&ctx_arc),
+		};
+
+		let value = crate::resolve_context::RESOLVE_CTX
+			.scope(resolve_ctx, T::inject(ctx))
+			.await?;
 		Ok(Arc::new(value))
 	}
 }
@@ -145,7 +157,7 @@ impl DependencyRegistry {
 	where
 		T: Any + Send + Sync + 'static,
 		F: Fn(Arc<InjectionContext>) -> Fut + Send + Sync + 'static,
-		Fut: Future<Output = DiResult<T>> + Send + Sync + 'static,
+		Fut: Future<Output = DiResult<T>> + Send + 'static,
 	{
 		self.register::<T>(scope, AsyncFactory::new(factory));
 	}

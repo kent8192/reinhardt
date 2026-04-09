@@ -12,8 +12,6 @@ use std::sync::Arc;
 use super::error::AdminAuth;
 #[cfg(server)]
 use super::security::{build_csrf_cookie, generate_csrf_token};
-#[cfg(server)]
-use reinhardt_http::ResponseCookies;
 
 /// Get dashboard data
 ///
@@ -59,14 +57,12 @@ pub async fn get_dashboard(
 	// Build dashboard response with CSRF token for mutation requests
 	let csrf_token = generate_csrf_token();
 
-	// Set the CSRF token as a cookie via request extensions.
-	// The server function router extracts ResponseCookies and applies
-	// them as Set-Cookie headers on the HTTP response.
+	// Set the CSRF token as a cookie via the shared cookie jar.
+	// The server function router reads SharedResponseCookies and
+	// applies them as Set-Cookie headers on the HTTP response.
 	let is_secure = http_request.inner().is_secure;
 	let cookie_value = build_csrf_cookie(&csrf_token, is_secure);
-	let mut response_cookies = ResponseCookies::new();
-	response_cookies.add(cookie_value);
-	http_request.inner().extensions.insert(response_cookies);
+	http_request.add_response_cookie(cookie_value);
 
 	let admin_settings = crate::settings::get_admin_settings();
 

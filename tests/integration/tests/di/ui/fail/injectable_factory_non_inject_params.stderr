@@ -1,0 +1,5 @@
+error: #[injectable_factory] functions must have all parameters marked with #[inject]. Non-inject parameters are not supported because the generated wrapper function only receives an InjectionContext.
+  --> tests/di/ui/fail/injectable_factory_non_inject_params.rs:11:1
+   |
+11 | async fn make_service(name: String) -> MyService {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

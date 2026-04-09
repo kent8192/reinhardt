@@ -106,6 +106,7 @@ docs/Gemfile.lock
 !.env.sample
 .ignore/
 .claude/
+.wtp.yml
 :memory:
 
 # Bacon export files

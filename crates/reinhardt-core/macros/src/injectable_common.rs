@@ -215,18 +215,21 @@ pub(crate) fn detect_inject_params(
 ///
 /// This function is used by `#[action]` and `#[receiver]` macros to extract
 /// the DI context from request objects for dependency resolution.
+/// Also sets up `__resolve_ctx` for use with `RESOLVE_CTX.scope()`.
 pub(crate) fn generate_di_context_extraction(request_ident: &syn::Ident) -> TokenStream {
 	let di_crate = get_reinhardt_di_crate();
 	let core_crate = get_reinhardt_core_crate();
 
 	quote::quote! {
-		let __di_ctx = {
-			let __shared_ctx = #request_ident.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
-				.ok_or_else(|| #core_crate::exception::Error::Internal(
-					"DI context not set. Ensure the router is configured with .with_di_context()".to_string()
-				))?;
-			let __di_request = #request_ident.clone_for_di();
-			::std::sync::Arc::new((*__shared_ctx).fork_for_request(__di_request))
+		let __shared_ctx = #request_ident.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
+			.ok_or_else(|| #core_crate::exception::Error::Internal(
+				"DI context not set. Ensure the router is configured with .with_di_context()".to_string()
+			))?;
+		let __di_request = #request_ident.clone_for_di();
+		let __di_ctx = ::std::sync::Arc::new((*__shared_ctx).fork_for_request(__di_request));
+		let __resolve_ctx = #di_crate::resolve_context::ResolveContext {
+			root: ::std::sync::Arc::clone(&__shared_ctx),
+			current: ::std::sync::Arc::clone(&__di_ctx),
 		};
 	}
 }

@@ -103,6 +103,41 @@ where
 	}
 }
 
+/// Blanket implementation of Injectable for `Depends<T>`
+///
+/// This allows using `Depends<T>` directly in endpoint handlers with `#[inject]`:
+///
+/// ```ignore
+/// # use reinhardt_di::{Depends, Injectable};
+/// # struct DatabaseConnection;
+/// # struct Response;
+/// # type ViewResult<T> = Result<T, Box<dyn std::error::Error>>;
+/// # use reinhardt_core::endpoint;
+/// #[endpoint]
+/// async fn handler(
+///     #[inject] db: Depends<DatabaseConnection>,
+/// ) -> ViewResult<Response> {
+///     // ...
+/// #   Ok(Response)
+/// }
+/// ```
+///
+/// The implementation delegates to `Depends::resolve()`, which injects `T`
+/// with caching and circular dependency detection.
+#[async_trait::async_trait]
+impl<T> Injectable for crate::depends::Depends<T>
+where
+	T: Injectable + Clone,
+{
+	async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
+		crate::depends::Depends::<T>::resolve(ctx, true).await
+	}
+
+	async fn inject_uncached(ctx: &InjectionContext) -> DiResult<Self> {
+		crate::depends::Depends::<T>::resolve(ctx, false).await
+	}
+}
+
 /// Blanket implementation of Injectable for `Option<T>`
 ///
 /// This allows optional injection where failure results in `None`

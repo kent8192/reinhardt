@@ -11,6 +11,7 @@ use crate::adapters::{
 #[cfg(server)]
 use reinhardt_db::orm::{Filter, FilterCondition, FilterOperator, FilterValue};
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+use reinhardt_di::Depends;
 use std::sync::Arc;
 
 #[cfg(server)]
@@ -99,8 +100,8 @@ fn build_columns(model_admin: &Arc<dyn ModelAdmin>) -> Vec<ColumnInfo> {
 pub async fn get_list(
 	model_name: String,
 	params: ListQueryParams,
-	#[inject] site: Arc<AdminSite>,
-	#[inject] db: Arc<AdminDatabase>,
+	#[inject] site: Depends<AdminSite>,
+	#[inject] db: Depends<AdminDatabase>,
 	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
 ) -> Result<ListResponse, ServerFnError> {
 	// Get model admin and check permission

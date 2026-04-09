@@ -9,7 +9,7 @@ use crate::types::FieldsResponse;
 #[cfg(server)]
 use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
-use std::sync::Arc;
+use reinhardt_di::Depends;
 
 #[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
@@ -45,8 +45,8 @@ use reinhardt_utils::utils_core::text::humanize_field_name;
 pub async fn get_fields(
 	model_name: String,
 	id: Option<String>,
-	#[inject] site: Arc<AdminSite>,
-	#[inject] db: Arc<AdminDatabase>,
+	#[inject] site: Depends<AdminSite>,
+	#[inject] db: Depends<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
 	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
 ) -> Result<FieldsResponse, ServerFnError> {

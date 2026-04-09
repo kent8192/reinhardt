@@ -6,7 +6,7 @@ use crate::adapters::{AdminSite, DashboardResponse, ModelInfo};
 #[cfg(server)]
 use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
-use std::sync::Arc;
+use reinhardt_di::Depends;
 
 #[cfg(server)]
 use super::error::AdminAuth;
@@ -37,7 +37,7 @@ use super::security::{build_csrf_cookie, generate_csrf_token};
 /// ```
 #[server_fn]
 pub async fn get_dashboard(
-	#[inject] site: Arc<AdminSite>,
+	#[inject] site: Depends<AdminSite>,
 	#[inject] http_request: ServerFnRequest,
 ) -> Result<DashboardResponse, ServerFnError> {
 	// Authentication and authorization check
@@ -81,6 +81,7 @@ pub async fn get_dashboard(
 mod tests {
 	use super::*;
 	use crate::types::ModelInfo;
+	use std::sync::Arc;
 
 	#[tokio::test]
 	async fn test_dashboard_response_structure() {

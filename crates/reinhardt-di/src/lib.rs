@@ -124,7 +124,7 @@
 //!
 //! #[injectable_factory(scope = "transient")]
 //! async fn make_router(
-//!     #[inject] config: Arc<AppConfig>,
+//!     #[inject] config: Depends<AppConfig>,
 //! ) -> Router {
 //!     let di_ctx = get_di_context(ContextLevel::Current);
 //!     Router::new().with_di_context(di_ctx)

@@ -22,7 +22,7 @@ use reinhardt_db::orm::DatabaseConnection;
 #[cfg(server)]
 use reinhardt_pages::server_fn::ServerFnRequest;
 #[cfg(server)]
-use std::sync::Arc;
+use reinhardt_di::Depends;
 
 /// Authenticate an admin user and set a JWT cookie.
 ///
@@ -68,9 +68,9 @@ pub async fn admin_login(
 	password: String,
 	csrf_token: String,
 	#[inject] http_request: ServerFnRequest,
-	#[inject] db: Arc<DatabaseConnection>,
-	#[inject] site: Arc<AdminSite>,
-	#[inject] authenticator: Arc<AdminLoginAuthenticator>,
+	#[inject] db: Depends<DatabaseConnection>,
+	#[inject] site: Depends<AdminSite>,
+	#[inject] authenticator: Depends<AdminLoginAuthenticator>,
 ) -> Result<LoginResponse, ServerFnError> {
 	// Validate CSRF token
 	require_csrf_token(&csrf_token, &http_request.inner().headers)?;
@@ -83,7 +83,7 @@ pub async fn admin_login(
 	let jwt_auth = JwtAuth::new(jwt_secret);
 
 	// Authenticate user (username lookup + password verification + staff check)
-	let user_info = (authenticator.0)(username.clone(), password, db)
+	let user_info = (authenticator.0)(username.clone(), password, db.as_arc().clone())
 		.await
 		.map_err(|e| {
 			::tracing::warn!(error = ?e, "admin_login: Authentication failed");

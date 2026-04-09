@@ -1,7 +1,7 @@
 //! Implementation of the `#[injectable_factory]` macro
 
 use crate::crate_paths::get_reinhardt_di_crate;
-use crate::utils::{extract_arc_inner_type, extract_scope_from_args, is_inject_attr};
+use crate::utils::{extract_depends_inner_type, extract_scope_from_args, is_inject_attr};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{FnArg, ItemFn, Pat, PatType, Result};
@@ -70,17 +70,20 @@ pub(crate) fn injectable_factory_impl(args: TokenStream, input: ItemFn) -> Resul
 		));
 	}
 
+	// Get dynamic crate path (needed by inject_resolutions below)
+	let di_crate = get_reinhardt_di_crate();
+
 	// Generate dependency resolution code.
 	// `ctx.resolve::<T>()` returns `DiResult<Arc<T>>`, so we must handle two cases:
-	// - Parameter type is `Arc<T>`: resolve the inner `T`, result is already `Arc<T>`
-	// - Parameter type is `T` (non-Arc): resolve `T`, then clone out of the `Arc`
+	// - Parameter type is `Depends<T>`: resolve via `Depends::resolve()` with caching
+	// - Parameter type is `T` (non-Depends): resolve `T`, then clone out of the `Arc`
 	let inject_resolutions: Vec<_> = inject_params
 		.iter()
 		.map(|(pat, ty)| {
-			if let Some(inner_ty) = extract_arc_inner_type(ty) {
-				// Parameter is Arc<T>: resolve T, result Arc<T> matches directly
+			if let Some(inner_ty) = extract_depends_inner_type(ty) {
+				// Parameter is Depends<T>: resolve via Depends::resolve()
 				quote! {
-					let #pat: #ty = ctx.resolve::<#inner_ty>().await?;
+					let #pat: #ty = #di_crate::Depends::<#inner_ty>::resolve(&*ctx, true).await?;
 				}
 			} else {
 				// Parameter is T: resolve T, unwrap Arc<T> via clone
@@ -129,9 +132,6 @@ pub(crate) fn injectable_factory_impl(args: TokenStream, input: ItemFn) -> Resul
 		.chain(regular_params.iter())
 		.map(|(pat, ty)| quote! { #pat: #ty })
 		.collect();
-
-	// Get dynamic crate path
-	let di_crate = get_reinhardt_di_crate();
 
 	// Generate type name for registration
 	let type_name = quote! { #return_type }.to_string();

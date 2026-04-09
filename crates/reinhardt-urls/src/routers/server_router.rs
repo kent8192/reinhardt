@@ -1560,7 +1560,8 @@ impl ServerRouter {
 					name.clone()
 				};
 
-				let full_path = super::path_utils::join_prefix_path(&current_prefix, &func_route.path);
+				let full_path =
+					super::path_utils::join_prefix_path(&current_prefix, &func_route.path);
 				registrations.push((qualified_name, full_path));
 			}
 		}
@@ -1574,7 +1575,8 @@ impl ServerRouter {
 					name.clone()
 				};
 
-				let full_path = super::path_utils::join_prefix_path(&current_prefix, &view_route.path);
+				let full_path =
+					super::path_utils::join_prefix_path(&current_prefix, &view_route.path);
 				registrations.push((qualified_name, full_path));
 			}
 		}

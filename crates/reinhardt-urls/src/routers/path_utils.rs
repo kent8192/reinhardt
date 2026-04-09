@@ -134,11 +134,7 @@ mod tests {
 	#[case("/api/", "/<id>", "/api/<id>")]
 	#[case("/users/", "/<user_id>/posts", "/users/<user_id>/posts")]
 	#[case("/api/v1/", "/items/{slug}/", "/api/v1/items/{slug}/")]
-	fn placeholders_preserved(
-		#[case] prefix: &str,
-		#[case] path: &str,
-		#[case] expected: &str,
-	) {
+	fn placeholders_preserved(#[case] prefix: &str, #[case] path: &str, #[case] expected: &str) {
 		assert_eq!(join_prefix_path(prefix, path), expected);
 	}
 
@@ -181,18 +177,12 @@ mod tests {
 	#[rstest]
 	fn multiple_internal_slashes_not_collapsed() {
 		// Only the boundary slash is collapsed; internal slashes are untouched
-		assert_eq!(
-			join_prefix_path("/api//v1/", "/users"),
-			"/api//v1/users"
-		);
+		assert_eq!(join_prefix_path("/api//v1/", "/users"), "/api//v1/users");
 	}
 
 	#[rstest]
 	fn prefix_is_long_path() {
-		assert_eq!(
-			join_prefix_path("/a/b/c/d/e/f/", "/g"),
-			"/a/b/c/d/e/f/g"
-		);
+		assert_eq!(join_prefix_path("/a/b/c/d/e/f/", "/g"), "/a/b/c/d/e/f/g");
 	}
 
 	#[rstest]

@@ -679,7 +679,7 @@ pub async fn e2e_router_context(
 		.expect("Failed to register TestModel");
 
 	// Build admin router with deferred DI
-	let (admin_router, admin_di) = admin_routes_with_di(site);
+	let (admin_router, admin_di) = admin_routes_with_di(Arc::clone(site.as_arc()));
 
 	// Build the complete router using UnifiedRouter API.
 	// Pre-seed singleton scope with DatabaseConnection so get_singleton() finds it.
@@ -717,7 +717,7 @@ pub async fn e2e_router_context_no_db() -> ServerRouter {
 		.expect("Failed to register TestModel");
 
 	// Build admin router with deferred DI
-	let (admin_router, admin_di) = admin_routes_with_di(site);
+	let (admin_router, admin_di) = admin_routes_with_di(Arc::clone(site.as_arc()));
 
 	// Build singleton scope WITHOUT DatabaseConnection
 	let singleton = Arc::new(SingletonScope::new());

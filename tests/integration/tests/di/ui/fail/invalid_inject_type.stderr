@@ -17,6 +17,11 @@ help: the following other types implement trait `Injectable`
    | |     T: Injectable + Clone,
    | |__________________________^ `Arc<T>`
 ...
+   | / impl<T> Injectable for crate::depends::Depends<T>
+   | | where
+   | |     T: Injectable + Clone,
+   | |__________________________^ `Depends<T>`
+...
    | / impl<T> Injectable for Option<T>
    | | where
    | |     T: Injectable + Clone + Send + Sync + 'static,

@@ -2,4 +2,4 @@ error: #[injectable_factory] functions must have all parameters marked with #[in
   --> tests/di/ui/fail/injectable_factory_mixed_params.rs:12:1
    |
 12 | async fn make_service(#[inject] _config: reinhardt_di::Depends<String>, extra: String) -> MyService {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

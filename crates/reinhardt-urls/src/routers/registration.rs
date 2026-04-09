@@ -77,6 +77,14 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+/// Function pointer type for async router factories.
+///
+/// Used by [`RouterFactory::Async`] and [`UrlPatternsRegistration::__macro_new_async`]
+/// when `#[routes]` is applied to an `async fn` with optional `#[inject]` DI parameters.
+type AsyncRouterFactoryFn = fn() -> Pin<
+	Box<dyn Future<Output = Result<Arc<ServerRouter>, Box<dyn std::error::Error + Send + Sync>>> + Send>,
+>;
+
 /// Factory for creating server routers, supporting both sync and async creation.
 ///
 /// The sync variant is used by existing `#[routes]` functions that return
@@ -87,18 +95,7 @@ pub enum RouterFactory {
 	/// Synchronous factory (existing behavior for `fn routes() -> UnifiedRouter`)
 	Sync(fn() -> Arc<ServerRouter>),
 	/// Async factory for `async fn routes()` with optional `#[inject]` DI resolution
-	Async(
-		fn() -> Pin<
-			Box<
-				dyn Future<
-						Output = Result<
-							Arc<ServerRouter>,
-							Box<dyn std::error::Error + Send + Sync>,
-						>,
-					> + Send,
-			>,
-		>,
-	),
+	Async(AsyncRouterFactoryFn),
 }
 
 /// URL patterns registration for compile-time discovery
@@ -209,18 +206,7 @@ impl UrlPatternsRegistration {
 	/// Used when `#[routes]` is applied to an `async fn`, enabling DI
 	/// resolution via `#[inject]` parameters.
 	#[doc(hidden)]
-	pub fn __macro_new_async(
-		factory: fn() -> Pin<
-			Box<
-				dyn Future<
-						Output = Result<
-							Arc<ServerRouter>,
-							Box<dyn std::error::Error + Send + Sync>,
-						>,
-					> + Send,
-			>,
-		>,
-	) -> Self {
+	pub fn __macro_new_async(factory: AsyncRouterFactoryFn) -> Self {
 		Self {
 			factory: RouterFactory::Async(factory),
 			#[cfg(feature = "client-router")]

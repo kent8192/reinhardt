@@ -1,8 +1,8 @@
-/// URL path utilities for route prefix joining and normalization.
-///
-/// These functions operate on URL path segments (e.g., `/api/v1/users/`),
-/// **not** filesystem paths. They are always `/`-separated and
-/// platform-independent.
+// URL path utilities for route prefix joining and normalization.
+//
+// These functions operate on URL path segments (e.g., `/api/v1/users/`),
+// **not** filesystem paths. They are always `/`-separated and
+// platform-independent.
 
 /// Join a URL prefix and path, collapsing a double slash at the boundary.
 ///

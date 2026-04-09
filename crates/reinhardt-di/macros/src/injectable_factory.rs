@@ -169,9 +169,9 @@ pub(crate) fn injectable_factory_impl(args: TokenStream, input: ItemFn) -> Resul
 						// Resolve #[inject] dependencies
 						#(#inject_resolutions)*
 
-						#original_fn_name(#(#inject_param_names,)* #(#regular_param_names),*).await
+						Ok(#original_fn_name(#(#inject_param_names,)* #(#regular_param_names),*).await)
 					})
-					.await;
+					.await?;
 				Ok(result)
 			}).await
 		}

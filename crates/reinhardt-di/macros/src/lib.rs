@@ -46,11 +46,12 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
 /// # Example
 ///
 /// ```ignore
+/// use reinhardt_di::Depends;
 /// use reinhardt_di_macros::injectable_factory;
 ///
 /// #[injectable_factory]
 /// #[scope(singleton)]
-/// async fn create_database(#[inject] config: Arc<Config>) -> DatabaseConnection {
+/// async fn create_database(#[inject] config: Depends<Config>) -> DatabaseConnection {
 ///     DatabaseConnection::connect(&config.database_url).await.unwrap()
 /// }
 /// ```

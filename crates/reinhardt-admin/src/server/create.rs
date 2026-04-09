@@ -6,10 +6,10 @@
 use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite};
 use crate::types::{MutationRequest, MutationResponse};
+use reinhardt_di::Depends;
 #[cfg(server)]
 use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
-use std::sync::Arc;
 
 #[cfg(server)]
 use super::audit;
@@ -54,8 +54,8 @@ use super::validation::validate_mutation_data;
 pub async fn create_record(
 	model_name: String,
 	request: MutationRequest,
-	#[inject] site: Arc<AdminSite>,
-	#[inject] db: Arc<AdminDatabase>,
+	#[inject] site: Depends<AdminSite>,
+	#[inject] db: Depends<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
 	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
 ) -> Result<MutationResponse, ServerFnError> {

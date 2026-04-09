@@ -1,5 +1,4 @@
-use reinhardt_di::{DiResult, Injectable, InjectionContext, injectable_factory};
-use std::sync::Arc;
+use reinhardt_di::{Depends, DiResult, Injectable, InjectionContext, injectable_factory};
 
 #[derive(Clone, Debug)]
 struct MyService {
@@ -29,15 +28,15 @@ impl Injectable for MyConfig {
     }
 }
 
-// Case 1: #[inject] with non-Arc type (requires Clone)
+// Case 1: #[inject] with non-Depends type (requires Clone)
 #[injectable_factory(scope = "transient")]
 async fn make_handler(#[inject] service: MyService) -> String {
     service.value
 }
 
-// Case 2: #[inject] with Arc<T> type
+// Case 2: #[inject] with Depends<T> type
 #[injectable_factory(scope = "transient")]
-async fn make_router(#[inject] config: Arc<MyConfig>) -> String {
+async fn make_router(#[inject] config: Depends<MyConfig>) -> String {
     config.host.clone()
 }
 
@@ -45,7 +44,7 @@ async fn make_router(#[inject] config: Arc<MyConfig>) -> String {
 #[injectable_factory(scope = "transient")]
 async fn make_app(
     #[inject] service: MyService,
-    #[inject] config: Arc<MyConfig>,
+    #[inject] config: Depends<MyConfig>,
 ) -> String {
     format!("{}:{}", config.host, service.value)
 }

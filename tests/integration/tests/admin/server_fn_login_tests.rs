@@ -11,6 +11,7 @@ use reinhardt_auth::BaseUser;
 use reinhardt_db::backends::connection::DatabaseConnection as BackendsConnection;
 use reinhardt_db::backends::dialect::PostgresBackend;
 use reinhardt_db::orm::connection::{DatabaseBackend, DatabaseConnection};
+use reinhardt_di::Depends;
 use reinhardt_di::{InjectionContext, SingletonScope};
 use reinhardt_http::Handler;
 use reinhardt_query::prelude::{

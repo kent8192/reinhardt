@@ -209,7 +209,7 @@ impl UrlPatternsRegistration {
 	/// Used when `#[routes]` is applied to an `async fn`, enabling DI
 	/// resolution via `#[inject]` parameters.
 	#[doc(hidden)]
-	pub fn __macro_new_async(
+	pub const fn __macro_new_async(
 		factory: fn() -> Pin<
 			Box<
 				dyn Future<

@@ -187,6 +187,7 @@ impl UnifiedRouter {
 	/// global registry for later application by the server.
 	pub fn into_server(mut self) -> ServerRouter {
 		self.flush_di_registrations();
+		self.server.register_all_routes();
 		self.server
 	}
 
@@ -199,6 +200,7 @@ impl UnifiedRouter {
 	/// Consumes the router and returns both parts.
 	pub fn into_parts(mut self) -> (ServerRouter, ClientRouter) {
 		self.flush_di_registrations();
+		self.server.register_all_routes();
 		(self.server, self.client)
 	}
 
@@ -433,12 +435,14 @@ impl UnifiedRouter {
 	/// global registry for later application by the server.
 	pub fn into_server(mut self) -> ServerRouter {
 		self.flush_di_registrations();
+		self.server.register_all_routes();
 		self.server
 	}
 
 	/// Registers server router globally.
 	pub fn register_globally(mut self) {
 		self.flush_di_registrations();
+		self.server.register_all_routes();
 		crate::routers::register_router(self.server);
 	}
 
@@ -815,6 +819,50 @@ mod tests {
 			let router = Arc::new(UnifiedRouter::new());
 			let unwrapped = Arc::try_unwrap(router).expect("should have single ref");
 			assert_eq!(unwrapped.server_ref().prefix(), "");
+		}
+	}
+
+	mod route_registration {
+		use super::*;
+		use hyper::Method;
+		use reinhardt_http::{Request, Response, Result};
+		use rstest::rstest;
+
+		async fn dummy_handler(_req: Request) -> Result<Response> {
+			Ok(Response::ok())
+		}
+
+		#[rstest]
+		fn into_server_registers_routes_for_reverse() {
+			// Arrange
+			let router = UnifiedRouter::new().server(|s| {
+				s.with_namespace("api")
+					.function_named("/health", Method::GET, "health", dummy_handler)
+			});
+
+			// Act
+			let server = router.into_server();
+
+			// Assert
+			let url = server.reverse("api:health", &[]);
+			assert_eq!(url, Some("/health".to_string()));
+		}
+
+		#[cfg(feature = "client-router")]
+		#[rstest]
+		fn into_parts_registers_routes_for_reverse() {
+			// Arrange
+			let router = UnifiedRouter::new().server(|s| {
+				s.with_namespace("api")
+					.function_named("/health", Method::GET, "health", dummy_handler)
+			});
+
+			// Act
+			let (server, _client) = router.into_parts();
+
+			// Assert
+			let url = server.reverse("api:health", &[]);
+			assert_eq!(url, Some("/health".to_string()));
 		}
 	}
 }

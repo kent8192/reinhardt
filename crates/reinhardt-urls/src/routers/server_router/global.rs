@@ -35,7 +35,8 @@ static GLOBAL_DI_REGISTRATIONS: OnceCell<StdRwLock<Option<reinhardt_di::DiRegist
 /// // No Arc::new() needed!
 /// register_router(router);
 /// ```
-pub fn register_router(router: ServerRouter) {
+pub fn register_router(mut router: ServerRouter) {
+	router.register_all_routes();
 	register_router_arc(Arc::new(router));
 }
 

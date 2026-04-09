@@ -1524,21 +1524,6 @@ impl ServerRouter {
 		}
 	}
 
-	/// Join a prefix and a path, collapsing any double slashes at the boundary.
-	fn join_prefix_path(prefix: &str, path: &str) -> String {
-		if prefix.is_empty() {
-			return path.to_string();
-		}
-		if path.is_empty() {
-			return prefix.to_string();
-		}
-		if prefix.ends_with('/') && path.starts_with('/') {
-			format!("{}{}", prefix, &path[1..])
-		} else {
-			format!("{}{}", prefix, path)
-		}
-	}
-
 	/// Recursively collect all routes with accumulated prefixes and namespaces.
 	///
 	/// Returns a list of `(qualified_name, full_path)` pairs to be registered
@@ -1549,7 +1534,7 @@ impl ServerRouter {
 		parent_prefix: &str,
 	) -> Vec<(String, String)> {
 		let full_namespace = self.get_full_namespace(parent_namespace);
-		let current_prefix = Self::join_prefix_path(parent_prefix, &self.prefix);
+		let current_prefix = super::path_utils::join_prefix_path(parent_prefix, &self.prefix);
 		let mut registrations = Vec::new();
 
 		// Collect routes from this router
@@ -1561,7 +1546,7 @@ impl ServerRouter {
 					name.clone()
 				};
 
-				let full_path = Self::join_prefix_path(&current_prefix, &route.path);
+				let full_path = super::path_utils::join_prefix_path(&current_prefix, &route.path);
 				registrations.push((qualified_name, full_path));
 			}
 		}
@@ -1575,7 +1560,7 @@ impl ServerRouter {
 					name.clone()
 				};
 
-				let full_path = Self::join_prefix_path(&current_prefix, &func_route.path);
+				let full_path = super::path_utils::join_prefix_path(&current_prefix, &func_route.path);
 				registrations.push((qualified_name, full_path));
 			}
 		}
@@ -1589,7 +1574,7 @@ impl ServerRouter {
 					name.clone()
 				};
 
-				let full_path = Self::join_prefix_path(&current_prefix, &view_route.path);
+				let full_path = super::path_utils::join_prefix_path(&current_prefix, &view_route.path);
 				registrations.push((qualified_name, full_path));
 			}
 		}

@@ -126,6 +126,9 @@ pub mod namespace;
 /// OpenAPI specification generation from registered routes.
 #[cfg(native)]
 pub mod openapi_integration;
+/// URL path joining and normalization utilities.
+#[cfg(native)]
+pub(crate) mod path_utils;
 /// Path pattern matching and radix tree routing.
 #[cfg(native)]
 pub mod pattern;

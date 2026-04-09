@@ -19,7 +19,9 @@ use std::time::{Duration, SystemTime};
 #[cfg(feature = "sessions")]
 use crate::session::AsyncSessionBackend;
 #[cfg(feature = "sessions")]
-use reinhardt_http::{AuthState, Handler, Middleware, Request, Response, Result};
+use reinhardt_http::{
+	AuthState, Handler, IsActive, IsAdmin, IsAuthenticated, Middleware, Request, Response, Result,
+};
 
 /// Configuration for cookie-based session authentication.
 #[cfg(feature = "sessions")]
@@ -191,9 +193,9 @@ impl<B: AsyncSessionBackend + 'static> Middleware for CookieSessionAuthMiddlewar
 
 								// Insert backward compat values
 								request.extensions.insert(user_id.clone());
-								request.extensions.insert(true); // is_authenticated
-								request.extensions.insert(is_admin);
-								request.extensions.insert(is_active);
+								request.extensions.insert(IsAuthenticated(true));
+								request.extensions.insert(IsAdmin(is_admin));
+								request.extensions.insert(IsActive(is_active));
 
 								AuthState::authenticated(user_id, is_admin, is_active)
 							}

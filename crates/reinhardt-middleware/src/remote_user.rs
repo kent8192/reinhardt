@@ -10,7 +10,9 @@ use std::sync::Arc;
 #[cfg(feature = "sessions")]
 use reinhardt_auth::{AuthenticationBackend, User};
 #[cfg(feature = "sessions")]
-use reinhardt_http::{AuthState, Handler, Middleware, Request, Response, Result};
+use reinhardt_http::{
+	AuthState, Handler, IsActive, IsAdmin, IsAuthenticated, Middleware, Request, Response, Result,
+};
 
 /// Default HTTP header name for the remote user.
 #[cfg(feature = "sessions")]
@@ -135,9 +137,9 @@ impl<A: AuthenticationBackend> RemoteUserMiddleware<A> {
 
 		// Insert individual values for backward compatibility
 		request.extensions.insert(user_id.clone());
-		request.extensions.insert(is_authenticated);
-		request.extensions.insert(is_admin);
-		request.extensions.insert(is_active);
+		request.extensions.insert(IsAuthenticated(is_authenticated));
+		request.extensions.insert(IsAdmin(is_admin));
+		request.extensions.insert(IsActive(is_active));
 
 		// Insert AuthState object
 		let auth_state = if is_authenticated {

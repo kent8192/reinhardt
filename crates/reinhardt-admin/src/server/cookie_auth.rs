@@ -19,7 +19,9 @@
 
 use async_trait::async_trait;
 use reinhardt_auth::JwtAuth;
-use reinhardt_http::{AuthState, Handler, Middleware, Request, Response, Result};
+use reinhardt_http::{
+	AuthState, Handler, IsActive, IsAdmin, IsAuthenticated, Middleware, Request, Response, Result,
+};
 use std::sync::Arc;
 
 use super::security::extract_admin_auth_cookie;
@@ -87,9 +89,9 @@ impl Middleware for AdminCookieAuthMiddleware {
 			// Insert individual values for backward compatibility with
 			// existing code that reads from extensions directly.
 			request.extensions.insert(user_id.clone());
-			request.extensions.insert(true); // is_authenticated
-			request.extensions.insert(is_admin);
-			request.extensions.insert(is_active);
+			request.extensions.insert(IsAuthenticated(true));
+			request.extensions.insert(IsAdmin(is_admin));
+			request.extensions.insert(IsActive(is_active));
 
 			AuthState::authenticated(user_id, is_admin, is_active)
 		} else {

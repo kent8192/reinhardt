@@ -6,7 +6,9 @@ use std::sync::Arc;
 #[cfg(feature = "auth-jwt")]
 use reinhardt_auth::jwt::JwtAuth;
 #[cfg(feature = "auth-jwt")]
-use reinhardt_http::{AuthState, Handler, Middleware, Request, Response, Result};
+use reinhardt_http::{
+	AuthState, Handler, IsActive, IsAdmin, IsAuthenticated, Middleware, Request, Response, Result,
+};
 
 /// JWT authentication middleware for stateless token-based auth.
 ///
@@ -132,9 +134,9 @@ impl Middleware for JwtAuthMiddleware {
 
 			// Insert individual values for backward compatibility
 			request.extensions.insert(user_id.clone());
-			request.extensions.insert(true); // is_authenticated
-			request.extensions.insert(is_admin);
-			request.extensions.insert(is_active);
+			request.extensions.insert(IsAuthenticated(true));
+			request.extensions.insert(IsAdmin(is_admin));
+			request.extensions.insert(IsActive(is_active));
 
 			AuthState::authenticated(user_id, is_admin, is_active)
 		} else {

@@ -518,10 +518,7 @@ mod tests {
 		let now = SystemTime::now();
 		let mut data = HashMap::new();
 		data.insert("is_staff".to_string(), serde_json::Value::Bool(false));
-		data.insert(
-			"is_superuser".to_string(),
-			serde_json::Value::Bool(false),
-		);
+		data.insert("is_superuser".to_string(), serde_json::Value::Bool(false));
 		SessionData {
 			id: id.to_string(),
 			data,

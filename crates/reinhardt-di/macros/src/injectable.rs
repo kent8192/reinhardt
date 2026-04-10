@@ -22,6 +22,20 @@ fn has_no_inject_attr(field: &syn::Field) -> bool {
 		.any(|attr| attr.path().is_ident("no_inject"))
 }
 
+/// Check if `Clone` is already in a `#[derive(...)]` attribute
+fn has_clone_derive(attrs: &[syn::Attribute]) -> bool {
+	attrs.iter().any(|attr| {
+		if !attr.path().is_ident("derive") {
+			return false;
+		}
+		attr.parse_args_with(
+			syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+		)
+		.map(|paths| paths.iter().any(|p| p.is_ident("Clone")))
+		.unwrap_or(false)
+	})
+}
+
 /// Check if field should use cache (always true by default)
 fn should_use_cache(_field: &syn::Field) -> bool {
 	// Always use cache for injected fields
@@ -262,6 +276,11 @@ pub(crate) fn injectable_impl(args: TokenStream, input: DeriveInput) -> Result<T
 				!attr.path().is_ident("inject") && !attr.path().is_ident("no_inject")
 			});
 		}
+	}
+
+	// Auto-derive Clone for DI-ready types (required by Depends<T>)
+	if !has_clone_derive(&cleaned_input.attrs) {
+		cleaned_input.attrs.push(syn::parse_quote!(#[derive(Clone)]));
 	}
 
 	// Get dynamic crate path

@@ -13,6 +13,20 @@ use quote::{format_ident, quote};
 use syn::parse::Parser;
 use syn::{Data, DeriveInput, Fields, Result, Type};
 
+/// Check if `Clone` is already in a `#[derive(...)]` attribute
+fn has_clone_derive(attrs: &[syn::Attribute]) -> bool {
+	attrs.iter().any(|attr| {
+		if !attr.path().is_ident("derive") {
+			return false;
+		}
+		attr.parse_args_with(
+			syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+		)
+		.map(|paths| paths.iter().any(|p| p.is_ident("Clone")))
+		.unwrap_or(false)
+	})
+}
+
 /// Field information for processing
 struct FieldInfo {
 	name: syn::Ident,
@@ -249,6 +263,11 @@ pub(crate) fn injectable_struct_impl(
 				scope: options.scope,
 			});
 		}
+	}
+
+	// Auto-derive Clone for DI-ready types (required by Depends<T>)
+	if !has_clone_derive(&input.attrs) {
+		input.attrs.push(syn::parse_quote!(#[derive(Clone)]));
 	}
 
 	// Get dynamic crate paths
@@ -579,5 +598,50 @@ mod tests {
 		assert!(result.is_err());
 		let err = result.unwrap_err().to_string();
 		assert!(err.contains("duplicate"));
+	}
+
+	#[test]
+	fn test_injectable_struct_auto_derives_clone() {
+		// Arrange
+		let args = quote! {};
+		let input: DeriveInput = syn::parse2(quote! {
+			#[derive(Default)]
+			struct Foo;
+		})
+		.unwrap();
+
+		// Act
+		let result = injectable_struct_impl(args, input);
+
+		// Assert
+		assert!(result.is_ok());
+		let output = result.unwrap().to_string();
+		// quote! emits "# [derive (Clone)]" with spaces; normalize for assertion
+		let normalized = output.replace(' ', "");
+		assert!(
+			normalized.contains("#[derive(Clone)]"),
+			"Output should contain Clone derive: {output}"
+		);
+	}
+
+	#[test]
+	fn test_injectable_struct_skips_clone_when_already_derived() {
+		// Arrange
+		let args = quote! {};
+		let input: DeriveInput = syn::parse2(quote! {
+			#[derive(Clone, Default)]
+			struct Foo;
+		})
+		.unwrap();
+
+		// Act
+		let result = injectable_struct_impl(args, input);
+
+		// Assert
+		assert!(result.is_ok());
+		let output = result.unwrap().to_string();
+		// Should contain exactly one Clone derive (the original), not two
+		let clone_count = output.matches("Clone").count();
+		assert_eq!(clone_count, 1, "Clone should appear exactly once: {output}");
 	}
 }

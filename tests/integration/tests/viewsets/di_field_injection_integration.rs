@@ -10,7 +10,6 @@ use reinhardt_views::viewsets::{Action, ViewSet};
 use std::sync::Arc;
 
 /// Mock database dependency
-#[derive(Clone)]
 #[injectable]
 struct Database {
 	#[no_inject]
@@ -26,7 +25,6 @@ impl Default for Database {
 }
 
 /// Mock cache dependency
-#[derive(Clone)]
 #[injectable]
 struct RedisCache {
 	#[no_inject]
@@ -42,7 +40,6 @@ impl Default for RedisCache {
 }
 
 /// ViewSet with field-level dependency injection
-#[derive(Clone)]
 #[injectable]
 struct UserViewSet {
 	#[inject]
@@ -126,7 +123,6 @@ async fn test_field_injection_with_viewset_dispatch() {
 }
 
 /// ViewSet with cache control on field injection
-#[derive(Clone)]
 #[injectable]
 struct ServiceViewSet {
 	#[inject]

@@ -618,11 +618,23 @@ impl InjectionContext {
 			register_type_name::<T>(type_name);
 
 			// [Fast path] Skip circular detection on cache hit
-			let scope = registry.get_scope::<T>().ok_or_else(|| {
-				crate::DiError::DependencyNotRegistered {
-					type_name: type_name.to_string(),
+			let scope = match registry.get_scope::<T>() {
+				Some(s) => s,
+				None => {
+					// Fallback: check scope caches for types pre-seeded via
+					// SingletonScope::set() / InjectionContext::set_request()
+					// (e.g., types registered through DiRegistrationList).
+					if let Some(cached) = self.get_singleton::<T>() {
+						return Ok(cached);
+					}
+					if let Some(cached) = self.get_request::<T>() {
+						return Ok(cached);
+					}
+					return Err(crate::DiError::DependencyNotRegistered {
+						type_name: type_name.to_string(),
+					});
 				}
-			})?;
+			};
 			match scope {
 				DependencyScope::Singleton => {
 					if let Some(cached) = self.get_singleton::<T>() {
@@ -665,12 +677,21 @@ impl InjectionContext {
 
 		let registry = global_registry();
 		let type_name = std::any::type_name::<T>();
-		let scope =
-			registry
-				.get_scope::<T>()
-				.ok_or_else(|| crate::DiError::DependencyNotRegistered {
+		let scope = match registry.get_scope::<T>() {
+			Some(s) => s,
+			None => {
+				// Fallback: check scope caches for pre-seeded types
+				if let Some(cached) = self.get_singleton::<T>() {
+					return Ok(cached);
+				}
+				if let Some(cached) = self.get_request::<T>() {
+					return Ok(cached);
+				}
+				return Err(crate::DiError::DependencyNotRegistered {
 					type_name: type_name.to_string(),
-				})?;
+				});
+			}
+		};
 
 		// Fast cache check (same as resolve)
 		match scope {

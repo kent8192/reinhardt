@@ -13,6 +13,20 @@ use quote::{format_ident, quote};
 use syn::parse::Parser;
 use syn::{Data, DeriveInput, Fields, Result, Type};
 
+/// Check if `Clone` is already in a `#[derive(...)]` attribute
+fn has_clone_derive(attrs: &[syn::Attribute]) -> bool {
+	attrs.iter().any(|attr| {
+		if !attr.path().is_ident("derive") {
+			return false;
+		}
+		attr.parse_args_with(
+			syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+		)
+		.map(|paths| paths.iter().any(|p| p.is_ident("Clone")))
+		.unwrap_or(false)
+	})
+}
+
 /// Field information for processing
 struct FieldInfo {
 	name: syn::Ident,
@@ -163,6 +177,11 @@ pub(crate) fn injectable_struct_impl(
 	let struct_name = &input.ident;
 	let generics = &input.generics;
 	let where_clause = &generics.where_clause;
+
+	// Auto-derive Clone for DI-ready types (required by Depends<T>)
+	if !has_clone_derive(&input.attrs) {
+		input.attrs.push(syn::parse_quote!(#[derive(Clone)]));
+	}
 
 	// Prebuilt mode: skip field validation and Injectable impl generation.
 	// The struct is expected to have a manual Injectable impl and to be
@@ -579,5 +598,77 @@ mod tests {
 		assert!(result.is_err());
 		let err = result.unwrap_err().to_string();
 		assert!(err.contains("duplicate"));
+	}
+
+	#[test]
+	fn test_injectable_struct_auto_derives_clone() {
+		// Arrange
+		let args = quote! {};
+		let input: DeriveInput = syn::parse2(quote! {
+			#[derive(Default)]
+			struct Foo;
+		})
+		.unwrap();
+
+		// Act
+		let result = injectable_struct_impl(args, input);
+
+		// Assert
+		let output = result.unwrap();
+		let file: syn::File = syn::parse2(output.clone()).expect("output should parse");
+		let item_struct = file
+			.items
+			.iter()
+			.find_map(|item| match item {
+				syn::Item::Struct(s) if s.ident == "Foo" => Some(s),
+				_ => None,
+			})
+			.expect("output should contain struct Foo");
+		assert!(
+			has_clone_derive(&item_struct.attrs),
+			"Output should derive Clone: {output}"
+		);
+	}
+
+	#[test]
+	fn test_injectable_struct_skips_clone_when_already_derived() {
+		// Arrange
+		let args = quote! {};
+		let input: DeriveInput = syn::parse2(quote! {
+			#[derive(Clone, Default)]
+			struct Foo;
+		})
+		.unwrap();
+
+		// Act
+		let result = injectable_struct_impl(args, input);
+
+		// Assert
+		let output = result.unwrap();
+		let file: syn::File = syn::parse2(output.clone()).expect("output should parse");
+		let item_struct = file
+			.items
+			.iter()
+			.find_map(|item| match item {
+				syn::Item::Struct(s) if s.ident == "Foo" => Some(s),
+				_ => None,
+			})
+			.expect("output should contain struct Foo");
+		let clone_count = item_struct
+			.attrs
+			.iter()
+			.filter(|attr| attr.path().is_ident("derive"))
+			.map(|attr| {
+				attr.parse_args_with(
+					syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+				)
+				.map(|paths| paths.iter().filter(|p| p.is_ident("Clone")).count())
+				.unwrap_or(0)
+			})
+			.sum::<usize>();
+		assert_eq!(
+			clone_count, 1,
+			"Clone should appear exactly once in derive attributes: {output}"
+		);
 	}
 }

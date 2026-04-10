@@ -1,0 +1,5 @@
+error: #[injectable] cannot be applied to tuple structs
+ --> tests/compile_fail/injectable_tuple_struct.rs:5:8
+  |
+5 | struct TupleService(String, u32);
+  |        ^^^^^^^^^^^^

@@ -497,8 +497,29 @@ pub fn derive_schema(input: TokenStream) -> TokenStream {
 /// - Struct must have named fields
 /// - All fields must have either `#[inject]` or `#[no_inject]` attribute
 /// - `#[no_inject]` without default value requires field type to be `Option<T>`
-/// - Struct must be `Clone` (required by `Injectable` trait)
+/// - `Clone` is auto-derived if not already present (required by `Depends<T>`)
 /// - All `#[inject]` field types must implement `Injectable`
+///
+/// # Attribute Ordering
+///
+/// **`#[injectable]` must be placed above `#[derive(...)]` attributes.**
+///
+/// In Rust 2024 edition, attribute macros can only see attributes listed
+/// below them. If `#[derive(Clone)]` appears above `#[injectable]`, the
+/// macro cannot detect it and will add a duplicate `#[derive(Clone)]`,
+/// causing a compilation error.
+///
+/// ```ignore
+/// // Correct
+/// #[injectable]
+/// #[derive(Default, Debug)]
+/// struct MyService { /* ... */ }
+///
+/// // Incorrect — may cause duplicate Clone derive
+/// #[derive(Default, Debug)]
+/// #[injectable]
+/// struct MyService { /* ... */ }
+/// ```
 ///
 #[proc_macro_attribute]
 pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {

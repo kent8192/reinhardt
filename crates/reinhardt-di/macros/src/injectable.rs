@@ -280,7 +280,9 @@ pub(crate) fn injectable_impl(args: TokenStream, input: DeriveInput) -> Result<T
 
 	// Auto-derive Clone for DI-ready types (required by Depends<T>)
 	if !has_clone_derive(&cleaned_input.attrs) {
-		cleaned_input.attrs.push(syn::parse_quote!(#[derive(Clone)]));
+		cleaned_input
+			.attrs
+			.push(syn::parse_quote!(#[derive(Clone)]));
 	}
 
 	// Get dynamic crate path

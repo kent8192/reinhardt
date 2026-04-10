@@ -149,7 +149,9 @@ async fn test_explicit_clone_derive_no_duplicate() {
 	let ctx = InjectionContext::builder(singleton_scope).build();
 
 	// Act
-	let config = <ExplicitCloneConfig as Injectable>::inject(&ctx).await.unwrap();
+	let config = <ExplicitCloneConfig as Injectable>::inject(&ctx)
+		.await
+		.unwrap();
 	let cloned = config.clone();
 
 	// Assert
@@ -194,7 +196,9 @@ async fn test_auto_derive_clone_with_many_existing_derives() {
 	let ctx = InjectionContext::builder(singleton_scope).build();
 
 	// Act
-	let config = <MultiDeriveConfig as Injectable>::inject(&ctx).await.unwrap();
+	let config = <MultiDeriveConfig as Injectable>::inject(&ctx)
+		.await
+		.unwrap();
 	let cloned = config.clone();
 
 	// Assert
@@ -203,8 +207,7 @@ async fn test_auto_derive_clone_with_many_existing_derives() {
 
 /// Struct with Clone in a separate derive group should be detected
 #[injectable]
-#[derive(Default, Debug)]
-#[derive(Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 struct SplitDeriveConfig {
 	#[no_inject(default = Default)]
 	value: u32,
@@ -218,7 +221,9 @@ async fn test_explicit_clone_in_separate_derive_group_no_duplicate() {
 	let ctx = InjectionContext::builder(singleton_scope).build();
 
 	// Act
-	let config = <SplitDeriveConfig as Injectable>::inject(&ctx).await.unwrap();
+	let config = <SplitDeriveConfig as Injectable>::inject(&ctx)
+		.await
+		.unwrap();
 	let cloned = config.clone();
 
 	// Assert
@@ -245,7 +250,9 @@ async fn test_auto_derive_clone_multi_field_struct() {
 	let ctx = InjectionContext::builder(singleton_scope).build();
 
 	// Act
-	let config = <MultiFieldConfig as Injectable>::inject(&ctx).await.unwrap();
+	let config = <MultiFieldConfig as Injectable>::inject(&ctx)
+		.await
+		.unwrap();
 	let cloned = config.clone();
 
 	// Assert

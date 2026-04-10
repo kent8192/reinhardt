@@ -30,7 +30,8 @@
 //! // Basic usage - with caching (default)
 //! let config = Depends::<Config>::builder().resolve(&ctx).await?;
 //!
-//! // Without caching - creates new instance every time
+//! // Without caching flag - caching behavior is determined by the registered
+//! // DependencyScope (Singleton/Request/Transient), not by this flag.
 //! let config = Depends::<Config>::builder_no_cache().resolve(&ctx).await?;
 //! # Ok(())
 //! # }
@@ -122,11 +123,13 @@ where
 	}
 	/// Resolve the dependency from the injection context.
 	///
-	/// This method will:
-	/// 1. Detect circular dependencies
-	/// 2. Check cache if `use_cache` is true
-	/// 3. Call `T::inject(ctx)` if not cached or cache is disabled
-	/// 4. Store in cache if `use_cache` is true
+	/// This method delegates to `ctx.resolve::<T>()` which:
+	/// 1. Detects circular dependencies
+	/// 2. Checks scope caches (singleton/request)
+	/// 3. Calls the registered factory if not cached
+	///
+	/// Caching behavior is determined by the registered `DependencyScope`,
+	/// not by the `use_cache` parameter.
 	///
 	/// # Examples
 	///
@@ -158,21 +161,14 @@ where
 		// Resolve via the global dependency registry.
 		// This does not require T: Injectable — any type registered via
 		// #[injectable_factory] or #[injectable] can be resolved.
-		// Cycle detection and caching are handled by ctx.resolve().
-		let arc = if use_cache {
-			ctx.resolve::<T>().await?
-		} else {
-			// For uncached resolution, go through resolve which handles
-			// cycle detection, then let the registry create a fresh instance.
-			// Note: ctx.resolve always caches for Singleton/Request scopes.
-			// For truly uncached behavior, Transient scope should be used.
-			ctx.resolve::<T>().await?
-		};
-
-		let value = Arc::try_unwrap(arc).unwrap_or_else(|a| (*a).clone());
+		// Cycle detection and caching are handled by ctx.resolve() based on
+		// the registered DependencyScope (Singleton/Request/Transient).
+		// The `use_cache` parameter is retained for API compatibility but
+		// does not affect resolution — use Transient scope for uncached behavior.
+		let arc = ctx.resolve::<T>().await?;
 
 		Ok(Self {
-			inner: Arc::new(value),
+			inner: arc,
 			metadata: InjectionMetadata {
 				scope: DependencyScope::Request,
 				cached: use_cache,

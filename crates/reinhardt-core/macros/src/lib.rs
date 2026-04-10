@@ -23,6 +23,7 @@ mod apply_update_attribute;
 mod apply_update_derive;
 mod collect_migrations;
 mod crate_paths;
+mod hook;
 mod injectable_common;
 mod injectable_fn;
 mod injectable_struct;
@@ -363,6 +364,34 @@ pub fn receiver(args: TokenStream, input: TokenStream) -> TokenStream {
 	let input = parse_macro_input!(input as ItemFn);
 
 	receiver_impl(args.into(), input)
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
+}
+
+/// Attribute macro for registering lifecycle hooks.
+///
+/// Currently supports `runserver` hooks for extending server startup behavior.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// use reinhardt::prelude::*;
+///
+/// #[hook(on = runserver)]
+/// struct MyValidationHook;
+///
+/// #[async_trait]
+/// impl RunserverHook for MyValidationHook {
+///     async fn validate(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
+///         // Fail-fast validation before server starts
+///         Ok(())
+///     }
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn hook(args: TokenStream, input: TokenStream) -> TokenStream {
+	let input = parse_macro_input!(input as ItemStruct);
+	hook::hook_impl(args.into(), input)
 		.unwrap_or_else(|e| e.to_compile_error())
 		.into()
 }

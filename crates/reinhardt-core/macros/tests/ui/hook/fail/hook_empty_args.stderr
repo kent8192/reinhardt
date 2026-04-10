@@ -1,0 +1,5 @@
+error: unexpected end of input, expected `on`
+ --> tests/ui/hook/fail/hook_empty_args.rs:3:7
+  |
+3 | #[hook()]
+  |        ^

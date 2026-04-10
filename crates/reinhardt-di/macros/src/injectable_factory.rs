@@ -193,17 +193,6 @@ pub(crate) fn injectable_factory_impl(args: TokenStream, input: ItemFn) -> Resul
 			)
 		}
 
-		// Bridge Injectable trait to registry-based resolution
-		// so that Depends<#return_type> works for factory-registered types.
-		// Uses __resolve_from_registry to bypass cycle detection (the caller,
-		// Depends::resolve, has already registered this type in the cycle stack).
-		#[#di_crate::async_trait::async_trait]
-		impl #di_crate::Injectable for #return_type {
-			async fn inject(ctx: &#di_crate::InjectionContext) -> #di_crate::DiResult<Self> {
-				let __arc = ctx.__resolve_from_registry::<Self>().await?;
-				Ok((*__arc).clone())
-			}
-		}
 	};
 
 	Ok(expanded)

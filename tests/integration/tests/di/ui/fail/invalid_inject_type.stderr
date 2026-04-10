@@ -1,54 +1,31 @@
-error[E0277]: the trait bound `NonInjectableService: Injectable` is not satisfied
+error[E0277]: the trait bound `NonInjectableService: Clone` is not satisfied
   --> tests/di/ui/fail/invalid_inject_type.rs:14:16
    |
 14 |     let service = Depends::<NonInjectableService>::resolve(&ctx)
-   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `NonInjectableService`
    |
-help: the trait `Injectable` is not implemented for `NonInjectableService`
-  --> tests/di/ui/fail/invalid_inject_type.rs:4:1
-   |
- 4 | struct NonInjectableService {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: the following other types implement trait `Injectable`
-  --> $WORKSPACE/crates/reinhardt-di/src/injectable.rs
-   |
-   | / impl<T> Injectable for std::sync::Arc<T>
-   | | where
-   | |     T: Injectable + Clone,
-   | |__________________________^ `Arc<T>`
-...
-   | / impl<T> Injectable for crate::depends::Depends<T>
-   | | where
-   | |     T: Injectable + Clone,
-   | |__________________________^ `Depends<T>`
-...
-   | / impl<T> Injectable for Option<T>
-   | | where
-   | |     T: Injectable + Clone + Send + Sync + 'static,
-   | |__________________________________________________^ `Option<T>`
 note: required by a bound in `Depends`
   --> $WORKSPACE/crates/reinhardt-di/src/depends.rs
    |
-   | pub struct Depends<T: Injectable> {
-   |                       ^^^^^^^^^^ required by this bound in `Depends`
+   | pub struct Depends<T: Clone + Send + Sync + 'static> {
+   |                       ^^^^^ required by this bound in `Depends`
+help: consider annotating `NonInjectableService` with `#[derive(Clone)]`
+   |
+ 4 + #[derive(Clone)]
+ 5 | struct NonInjectableService {
+   |
 
 error[E0599]: the function or associated item `resolve` exists for struct `Depends<NonInjectableService>`, but its trait bounds were not satisfied
   --> tests/di/ui/fail/invalid_inject_type.rs:14:49
    |
  4 | struct NonInjectableService {
-   | --------------------------- doesn't satisfy `NonInjectableService: Clone` or `NonInjectableService: Injectable`
+   | --------------------------- doesn't satisfy `NonInjectableService: Clone`
 ...
 14 |     let service = Depends::<NonInjectableService>::resolve(&ctx)
    |                                                    ^^^^^^^ function or associated item cannot be called on `Depends<NonInjectableService>` due to unsatisfied trait bounds
    |
    = note: the following trait bounds were not satisfied:
-           `NonInjectableService: Injectable`
            `NonInjectableService: Clone`
-note: the trait `Injectable` must be implemented
-  --> $WORKSPACE/crates/reinhardt-di/src/injectable.rs
-   |
-   | pub trait Injectable: Sized + Send + Sync + 'static {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: consider annotating `NonInjectableService` with `#[derive(Clone)]`
    |
  4 + #[derive(Clone)]

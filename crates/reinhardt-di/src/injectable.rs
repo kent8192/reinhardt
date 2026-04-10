@@ -122,12 +122,13 @@ where
 /// }
 /// ```
 ///
-/// The implementation delegates to `Depends::resolve()`, which injects `T`
-/// with caching and circular dependency detection.
+/// The implementation delegates to `Depends::resolve()`, which resolves `T`
+/// from the global registry with caching and circular dependency detection.
+/// `T` does not need to implement `Injectable` — only `Clone + Send + Sync + 'static`.
 #[async_trait::async_trait]
 impl<T> Injectable for crate::depends::Depends<T>
 where
-	T: Injectable + Clone,
+	T: Clone + Send + Sync + 'static,
 {
 	async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
 		crate::depends::Depends::<T>::resolve(ctx, true).await

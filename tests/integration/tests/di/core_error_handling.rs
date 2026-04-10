@@ -204,6 +204,15 @@ async fn test_injectable_async_timeout() {
 
 #[tokio::test]
 async fn test_depends_lifetime_management() {
+	// Register ResourceOwner in the global registry for Depends<T> resolution
+	let registry = reinhardt_di::global_registry();
+	if !registry.is_registered::<ResourceOwner>() {
+		registry.register::<ResourceOwner>(
+			reinhardt_di::DependencyScope::Request,
+			reinhardt_di::InjectableFactory::<ResourceOwner>::new(),
+		);
+	}
+
 	let singleton = Arc::new(SingletonScope::new());
 	let ctx = InjectionContext::builder(singleton).build();
 

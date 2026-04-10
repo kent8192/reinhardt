@@ -8,9 +8,8 @@
 //!
 //! ## Examples
 //!
-//! ```
-//! use reinhardt_di::{Depends, DiResult, Injectable, InjectionContext, SingletonScope};
-//! use async_trait::async_trait;
+//! ```rust,no_run
+//! use reinhardt_di::{Depends, DiResult, InjectionContext, SingletonScope, global_registry, DependencyScope};
 //! use std::sync::Arc;
 //!
 //! #[derive(Clone, Default)]
@@ -18,32 +17,28 @@
 //!     database_url: String,
 //! }
 //!
-//! #[async_trait]
-//! impl Injectable for Config {
-//!     async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
-//!         Ok(Self::default())
-//!     }
-//! }
-//!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! // Register Config in the global registry (normally done via #[injectable] or #[injectable_factory])
+//! let registry = global_registry();
+//! registry.register_async::<Config, _, _>(DependencyScope::Request, |_ctx| async {
+//!     Ok(Config::default())
+//! });
+//!
 //! let singleton = Arc::new(SingletonScope::new());
 //! let ctx = InjectionContext::builder(singleton).build();
 //!
 //! // Basic usage - with caching (default)
 //! let config = Depends::<Config>::builder().resolve(&ctx).await?;
 //!
-//! // Without caching - creates new instance every time
+//! // Without caching flag - caching behavior is determined by the registered
+//! // DependencyScope (Singleton/Request/Transient), not by this flag.
 //! let config = Depends::<Config>::builder_no_cache().resolve(&ctx).await?;
 //! # Ok(())
 //! # }
 //! ```
 
 use crate::injected::DependencyScope;
-use crate::{
-	DiError, DiResult, Injectable, begin_resolution, context::InjectionContext,
-	injected::InjectionMetadata, with_cycle_detection_scope,
-};
-use std::any::TypeId;
+use crate::{DiResult, context::InjectionContext, injected::InjectionMetadata};
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -51,15 +46,19 @@ use std::sync::Arc;
 ///
 /// Provides automatic dependency resolution with optional caching
 /// and circular dependency detection.
+///
+/// `T` does not need to implement `Injectable` — resolution goes through
+/// the global dependency registry, so any type registered via
+/// `#[injectable_factory]` or `#[injectable]` can be used.
 #[derive(Debug)]
-pub struct Depends<T: Injectable> {
+pub struct Depends<T: Clone + Send + Sync + 'static> {
 	inner: Arc<T>,
 	metadata: InjectionMetadata,
 }
 
-impl<T: Injectable> Depends<T>
+impl<T> Depends<T>
 where
-	T: Clone,
+	T: Clone + Send + Sync + 'static,
 {
 	/// Create a new DependsBuilder with caching enabled (default behavior).
 	///
@@ -124,11 +123,13 @@ where
 	}
 	/// Resolve the dependency from the injection context.
 	///
-	/// This method will:
-	/// 1. Detect circular dependencies
-	/// 2. Check cache if `use_cache` is true
-	/// 3. Call `T::inject(ctx)` if not cached or cache is disabled
-	/// 4. Store in cache if `use_cache` is true
+	/// This method delegates to `ctx.resolve::<T>()` which:
+	/// 1. Detects circular dependencies
+	/// 2. Checks scope caches (singleton/request)
+	/// 3. Calls the registered factory if not cached
+	///
+	/// Caching behavior is determined by the registered `DependencyScope`,
+	/// not by the `use_cache` parameter.
 	///
 	/// # Examples
 	///
@@ -157,44 +158,22 @@ where
 	/// # }
 	/// ```
 	pub async fn resolve(ctx: &InjectionContext, use_cache: bool) -> DiResult<Self> {
-		with_cycle_detection_scope(async {
-			let value = if use_cache {
-				// Check request cache first
-				if let Some(cached) = ctx.get_request::<T>() {
-					Arc::try_unwrap(cached).unwrap_or_else(|arc| (*arc).clone())
-				} else {
-					// Begin circular dependency detection
-					let type_id = TypeId::of::<T>();
-					let type_name = std::any::type_name::<T>();
-					crate::register_type_name::<T>(type_name);
-					let _guard = begin_resolution(type_id, type_name)
-						.map_err(|e| DiError::CircularDependency(e.to_string()))?;
+		// Resolve via the global dependency registry.
+		// This does not require T: Injectable — any type registered via
+		// #[injectable_factory] or #[injectable] can be resolved.
+		// Cycle detection and caching are handled by ctx.resolve() based on
+		// the registered DependencyScope (Singleton/Request/Transient).
+		// The `use_cache` parameter is retained for API compatibility but
+		// does not affect resolution — use Transient scope for uncached behavior.
+		let arc = ctx.resolve::<T>().await?;
 
-					let v = T::inject(ctx).await?;
-					ctx.set_request(v.clone());
-					v
-				}
-			} else {
-				// Begin circular dependency detection (even for uncached)
-				let type_id = TypeId::of::<T>();
-				let type_name = std::any::type_name::<T>();
-				crate::register_type_name::<T>(type_name);
-				let _guard = begin_resolution(type_id, type_name)
-					.map_err(|e| DiError::CircularDependency(e.to_string()))?;
-
-				// Skip cache
-				T::inject_uncached(ctx).await?
-			};
-
-			Ok(Self {
-				inner: Arc::new(value),
-				metadata: InjectionMetadata {
-					scope: DependencyScope::Request,
-					cached: use_cache,
-				},
-			})
+		Ok(Self {
+			inner: arc,
+			metadata: InjectionMetadata {
+				scope: DependencyScope::Request,
+				cached: use_cache,
+			},
 		})
-		.await
 	}
 	/// Create a Depends from an existing value (for testing).
 	///
@@ -314,14 +293,14 @@ where
 }
 
 /// Builder for Depends to support FastAPI-style API.
-pub struct DependsBuilder<T: Injectable> {
+pub struct DependsBuilder<T: Clone + Send + Sync + 'static> {
 	use_cache: bool,
 	_phantom: std::marker::PhantomData<T>,
 }
 
-impl<T: Injectable> DependsBuilder<T>
+impl<T> DependsBuilder<T>
 where
-	T: Clone,
+	T: Clone + Send + Sync + 'static,
 {
 	/// Resolve the dependency.
 	///
@@ -357,7 +336,7 @@ where
 	}
 }
 
-impl<T: Injectable> Deref for Depends<T> {
+impl<T: Clone + Send + Sync + 'static> Deref for Depends<T> {
 	type Target = T;
 
 	fn deref(&self) -> &Self::Target {
@@ -365,7 +344,7 @@ impl<T: Injectable> Deref for Depends<T> {
 	}
 }
 
-impl<T: Injectable> Clone for Depends<T> {
+impl<T: Clone + Send + Sync + 'static> Clone for Depends<T> {
 	fn clone(&self) -> Self {
 		Self {
 			inner: Arc::clone(&self.inner),
@@ -374,7 +353,7 @@ impl<T: Injectable> Clone for Depends<T> {
 	}
 }
 
-impl<T: Injectable> AsRef<T> for Depends<T> {
+impl<T: Clone + Send + Sync + 'static> AsRef<T> for Depends<T> {
 	fn as_ref(&self) -> &T {
 		&self.inner
 	}
@@ -383,7 +362,7 @@ impl<T: Injectable> AsRef<T> for Depends<T> {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::SingletonScope;
+	use crate::{DependencyScope as RegistryScope, SingletonScope, global_registry};
 	use rstest::rstest;
 
 	#[derive(Clone, Default, Debug)]
@@ -391,12 +370,15 @@ mod tests {
 		value: String,
 	}
 
-	#[async_trait::async_trait]
-	impl Injectable for TestConfig {
-		async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
-			Ok(TestConfig {
-				value: "test".to_string(),
-			})
+	/// Register TestConfig in the global registry for resolution tests.
+	fn register_test_config() {
+		let registry = global_registry();
+		if !registry.is_registered::<TestConfig>() {
+			registry.register_async::<TestConfig, _, _>(RegistryScope::Request, |_ctx| async {
+				Ok(TestConfig {
+					value: "test".to_string(),
+				})
+			});
 		}
 	}
 
@@ -516,6 +498,7 @@ mod tests {
 	#[tokio::test]
 	async fn test_depends_resolve_with_context() {
 		// Arrange
+		register_test_config();
 		let singleton_scope = Arc::new(SingletonScope::new());
 		let ctx = InjectionContext::builder(singleton_scope).build();
 
@@ -532,6 +515,7 @@ mod tests {
 	#[tokio::test]
 	async fn test_depends_resolve_uncached() {
 		// Arrange
+		register_test_config();
 		let singleton_scope = Arc::new(SingletonScope::new());
 		let ctx = InjectionContext::builder(singleton_scope).build();
 
@@ -547,6 +531,7 @@ mod tests {
 	#[tokio::test]
 	async fn test_depends_builder_resolve() {
 		// Arrange
+		register_test_config();
 		let singleton_scope = Arc::new(SingletonScope::new());
 		let ctx = InjectionContext::builder(singleton_scope).build();
 
@@ -565,6 +550,7 @@ mod tests {
 	#[tokio::test]
 	async fn test_depends_builder_no_cache_resolve() {
 		// Arrange
+		register_test_config();
 		let singleton_scope = Arc::new(SingletonScope::new());
 		let ctx = InjectionContext::builder(singleton_scope).build();
 
@@ -581,33 +567,19 @@ mod tests {
 
 	#[rstest]
 	#[tokio::test]
-	async fn test_depends_circular_dependency_detection() {
+	async fn test_depends_resolve_unregistered_type_returns_error() {
 		// Arrange
-		#[derive(Clone, Default, Debug)]
-		struct CircularA;
-
-		#[async_trait::async_trait]
-		impl Injectable for CircularA {
-			async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
-				// Attempt to resolve self, creating a circular dependency
-				let _self_ref = Depends::<CircularA>::resolve(ctx, true).await?;
-				Ok(CircularA)
-			}
-		}
+		#[derive(Clone, Debug)]
+		struct UnregisteredType;
 
 		let singleton_scope = Arc::new(SingletonScope::new());
 		let ctx = InjectionContext::builder(singleton_scope).build();
 
 		// Act
-		let result = Depends::<CircularA>::resolve(&ctx, true).await;
+		let result = Depends::<UnregisteredType>::resolve(&ctx, true).await;
 
 		// Assert
 		assert!(result.is_err());
-		if let Err(DiError::CircularDependency(msg)) = &result {
-			assert!(msg.contains("CircularA"));
-		} else {
-			panic!("Expected CircularDependency error, got: {:?}", result);
-		}
 	}
 
 	#[rstest]

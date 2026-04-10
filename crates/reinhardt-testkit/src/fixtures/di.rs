@@ -515,6 +515,17 @@ mod tests {
 	#[rstest]
 	#[tokio::test]
 	async fn test_depends_with_fixtures(injection_context: InjectionContext) {
+		// Register TestConfig in the global registry so Depends<T> can resolve it
+		let registry = reinhardt_di::global_registry();
+		registry.register_async::<TestConfig, _, _>(
+			reinhardt_di::DependencyScope::Request,
+			|_ctx| async {
+				Ok(TestConfig {
+					value: "test_config".to_string(),
+				})
+			},
+		);
+
 		// Test Depends<T> integration with fixtures
 		let config = Depends::<TestConfig>::builder()
 			.resolve(&injection_context)

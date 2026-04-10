@@ -133,6 +133,12 @@ pub mod reinhardt_auth {
 	pub use reinhardt_auth::*;
 }
 
+#[cfg(all(feature = "commands", native))]
+#[doc(hidden)]
+pub mod reinhardt_commands {
+	pub use reinhardt_commands::*;
+}
+
 #[cfg(native)]
 #[doc(hidden)]
 pub mod reinhardt_core {

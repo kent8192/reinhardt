@@ -295,6 +295,41 @@ impl<T: Injectable> Injected<T> {
 	pub fn metadata(&self) -> &InjectionMetadata {
 		&self.metadata
 	}
+
+	/// Attempt to unwrap the inner `Arc`, returning `T` if this is the only
+	/// strong reference. Returns `Err(Self)` if other references exist.
+	///
+	/// This mirrors [`Arc::try_unwrap`] semantics. Unlike
+	/// [`into_inner`](Injected::into_inner), this method does **not** require
+	/// `T: Clone`.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_di::{Injected, Injectable};
+	///
+	/// # #[derive(Clone, Debug, Default)]
+	/// # struct Config;
+	/// #
+	/// # #[async_trait::async_trait]
+	/// # impl Injectable for Config {
+	/// #     async fn inject(ctx: &reinhardt_di::InjectionContext) -> reinhardt_di::DiResult<Self> {
+	/// #         Ok(Config::default())
+	/// #     }
+	/// # }
+	/// #
+	/// let injected = Injected::from_value(Config::default());
+	/// let config = injected.try_unwrap().unwrap();
+	/// ```
+	pub fn try_unwrap(self) -> Result<T, Self> {
+		match Arc::try_unwrap(self.inner) {
+			Ok(val) => Ok(val),
+			Err(arc) => Err(Self {
+				inner: arc,
+				metadata: self.metadata,
+			}),
+		}
+	}
 }
 
 impl<T: Injectable + Clone> Injected<T> {
@@ -682,5 +717,41 @@ mod tests {
 		// With multiple references, Arc::try_unwrap fails, falls back to clone
 		let inner = injected1.into_inner();
 		assert_eq!(inner.value, "multiple");
+	}
+
+	/// `try_unwrap()` succeeds when there is only one strong reference.
+	#[tokio::test]
+	async fn test_injected_try_unwrap_success() {
+		// Arrange
+		let config = TestConfig {
+			value: "owned".to_string(),
+		};
+		let injected = Injected::from_value(config);
+
+		// Act
+		let result = injected.try_unwrap();
+
+		// Assert
+		assert!(result.is_ok());
+		assert_eq!(result.unwrap().value, "owned");
+	}
+
+	/// `try_unwrap()` returns `Err(Self)` when multiple references exist.
+	#[tokio::test]
+	async fn test_injected_try_unwrap_err_multiple_refs() {
+		// Arrange
+		let config = TestConfig {
+			value: "shared".to_string(),
+		};
+		let injected = Injected::from_value(config);
+		let _clone = injected.clone();
+
+		// Act
+		let result = injected.try_unwrap();
+
+		// Assert
+		let returned = result.unwrap_err();
+		assert_eq!(returned.value, "shared");
+		assert_eq!(returned.metadata().scope, DependencyScope::Request);
 	}
 }

@@ -98,30 +98,62 @@ impl RegistryValidator {
 		}
 	}
 
-	/// Check that no singleton depends on a request-scoped dependency.
+	/// Check that no singleton transitively depends on a request-scoped dependency.
+	///
+	/// Performs a BFS from each singleton through the full dependency graph,
+	/// flagging any reachable request-scoped type with the chain that leads to it.
 	fn check_scope_compatibility(&self, errors: &mut Vec<ValidationError>) {
 		let all_deps = self.registry.get_all_dependencies();
 
-		for (type_id, dep_ids) in &all_deps {
-			let parent_scope = self.registry.get_scope_by_id(*type_id);
-			if parent_scope != Some(DependencyScope::Singleton) {
+		for type_id in all_deps.keys() {
+			if self.registry.get_scope_by_id(*type_id) != Some(DependencyScope::Singleton) {
 				continue;
 			}
 
 			let parent_name = self.resolve_type_name(*type_id);
 
-			for &dep_id in dep_ids {
-				if self.registry.get_scope_by_id(dep_id) == Some(DependencyScope::Request) {
-					let dep_name = self.resolve_type_name(dep_id);
+			// BFS to find all reachable request-scoped types
+			let mut queue = std::collections::VecDeque::new();
+			let mut visited = std::collections::HashSet::new();
+			// (current_id, chain from singleton to current)
+			if let Some(direct_deps) = all_deps.get(type_id) {
+				for &dep_id in direct_deps {
+					queue.push_back((dep_id, vec![*type_id, dep_id]));
+				}
+			}
+			visited.insert(*type_id);
+
+			while let Some((current_id, chain)) = queue.pop_front() {
+				if !visited.insert(current_id) {
+					continue;
+				}
+
+				if self.registry.get_scope_by_id(current_id) == Some(DependencyScope::Request) {
+					let chain_names: Vec<String> =
+						chain.iter().map(|id| self.resolve_type_name(*id)).collect();
+					let dep_name = chain_names.last().unwrap().clone();
 					errors.push(ValidationError {
 						kind: ValidationErrorKind::ScopeIncompatibility,
 						type_name: parent_name.clone(),
 						type_id: *type_id,
 						message: format!(
-							"Singleton '{}' depends on request-scoped '{}'",
-							parent_name, dep_name
+							"Singleton '{}' transitively depends on request-scoped '{}' (chain: {})",
+							parent_name,
+							dep_name,
+							chain_names.join(" -> ")
 						),
 					});
+					continue;
+				}
+
+				if let Some(next_deps) = all_deps.get(&current_id) {
+					for &next_id in next_deps {
+						if !visited.contains(&next_id) {
+							let mut next_chain = chain.clone();
+							next_chain.push(next_id);
+							queue.push_back((next_id, next_chain));
+						}
+					}
 				}
 			}
 		}
@@ -133,6 +165,10 @@ impl RegistryValidator {
 		let cycles = graph.detect_cycles();
 
 		for cycle in &cycles {
+			if cycle.is_empty() {
+				continue;
+			}
+
 			let names: Vec<String> = cycle.iter().map(|id| self.resolve_type_name(*id)).collect();
 			let cycle_desc = format!("{} -> {}", names.join(" -> "), names[0]);
 			let first_id = cycle[0];
@@ -303,9 +339,43 @@ mod tests {
 
 		// Assert
 		let errors = result.unwrap_err();
-		assert!(errors
-			.iter()
-			.any(|e| e.kind == ValidationErrorKind::ScopeIncompatibility));
+		assert!(
+			errors
+				.iter()
+				.any(|e| e.kind == ValidationErrorKind::ScopeIncompatibility)
+		);
+	}
+
+	#[rstest]
+	fn validate_scope_singleton_transitively_depends_on_request() {
+		// Arrange: Singleton(A) -> Transient(B) -> Request(C)
+		let registry = Arc::new(DependencyRegistry::new());
+		let type_a = TypeId::of::<TypeA>();
+		let type_b = TypeId::of::<TypeB>();
+		let type_c = TypeId::of::<TypeC>();
+
+		register_dummy::<TypeA>(&registry, DependencyScope::Singleton);
+		register_dummy::<TypeB>(&registry, DependencyScope::Transient);
+		register_dummy::<TypeC>(&registry, DependencyScope::Request);
+		registry.register_type_name(type_a, "TypeA");
+		registry.register_type_name(type_b, "TypeB");
+		registry.register_type_name(type_c, "TypeC");
+		registry.register_dependencies(type_a, vec![type_b]);
+		registry.register_dependencies(type_b, vec![type_c]);
+		registry.register_dependencies(type_c, vec![]);
+
+		let validator = RegistryValidator::new(registry);
+
+		// Act
+		let result = validator.validate();
+
+		// Assert
+		let errors = result.unwrap_err();
+		assert_eq!(errors.len(), 1);
+		assert_eq!(errors[0].kind, ValidationErrorKind::ScopeIncompatibility);
+		assert!(errors[0].message.contains("TypeA"));
+		assert!(errors[0].message.contains("TypeC"));
+		assert!(errors[0].message.contains("TypeA -> TypeB -> TypeC"));
 	}
 
 	#[rstest]
@@ -352,9 +422,11 @@ mod tests {
 
 		// Assert
 		let errors = result.unwrap_err();
-		assert!(errors
-			.iter()
-			.any(|e| e.kind == ValidationErrorKind::CircularDependency));
+		assert!(
+			errors
+				.iter()
+				.any(|e| e.kind == ValidationErrorKind::CircularDependency)
+		);
 	}
 
 	#[rstest]
@@ -382,12 +454,16 @@ mod tests {
 		// Assert
 		let errors = result.unwrap_err();
 		assert!(errors.len() >= 2);
-		assert!(errors
-			.iter()
-			.any(|e| e.kind == ValidationErrorKind::MissingDependency));
-		assert!(errors
-			.iter()
-			.any(|e| e.kind == ValidationErrorKind::ScopeIncompatibility));
+		assert!(
+			errors
+				.iter()
+				.any(|e| e.kind == ValidationErrorKind::MissingDependency)
+		);
+		assert!(
+			errors
+				.iter()
+				.any(|e| e.kind == ValidationErrorKind::ScopeIncompatibility)
+		);
 	}
 
 	// --- Additional edge-case tests ---
@@ -496,9 +572,11 @@ mod tests {
 
 		// Assert
 		let errors = result.unwrap_err();
-		assert!(errors
-			.iter()
-			.any(|e| e.kind == ValidationErrorKind::CircularDependency));
+		assert!(
+			errors
+				.iter()
+				.any(|e| e.kind == ValidationErrorKind::CircularDependency)
+		);
 	}
 
 	#[rstest]

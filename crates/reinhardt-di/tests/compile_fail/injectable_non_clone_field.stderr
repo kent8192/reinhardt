@@ -1,0 +1,15 @@
+error[E0277]: the trait bound `NonCloneValue: Clone` is not satisfied
+  --> tests/compile_fail/injectable_non_clone_field.rs:20:5
+   |
+16 | #[injectable]
+   | ------------- in this attribute macro expansion
+...
+20 |     value: NonCloneValue,
+   |     ^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `Clone` is not implemented for `NonCloneValue`
+  --> tests/compile_fail/injectable_non_clone_field.rs:6:1
+   |
+ 6 | struct NonCloneValue(std::sync::Mutex<String>);
+   | ^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the derive macro `Clone` which comes from the expansion of the attribute macro `injectable` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -7,7 +7,6 @@ use reinhardt_di::{DiError, Injected, InjectionContext, SingletonScope, injectab
 use std::sync::Arc;
 
 /// Test fixture: ServiceA (depends on ServiceB)
-#[derive(Clone)]
 #[injectable]
 #[allow(dead_code)]
 struct ServiceA {
@@ -16,7 +15,6 @@ struct ServiceA {
 }
 
 /// Test fixture: ServiceB (depends on ServiceC)
-#[derive(Clone)]
 #[injectable]
 #[allow(dead_code)]
 struct ServiceB {
@@ -25,7 +23,6 @@ struct ServiceB {
 }
 
 /// Test fixture: ServiceC (depends on ServiceA - circular!)
-#[derive(Clone)]
 #[injectable]
 #[allow(dead_code)]
 struct ServiceC {
@@ -36,7 +33,6 @@ struct ServiceC {
 /// Direct circular dependency: A -> B -> A
 #[tokio::test]
 async fn test_direct_circular_dependency() {
-	#[derive(Clone)]
 	#[injectable]
 	#[allow(dead_code)]
 	struct DirectA {
@@ -44,7 +40,6 @@ async fn test_direct_circular_dependency() {
 		b: Injected<DirectB>,
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	#[allow(dead_code)]
 	struct DirectB {
@@ -101,7 +96,6 @@ async fn test_indirect_circular_dependency() {
 /// Self-reference: A -> A
 #[tokio::test]
 async fn test_self_dependency() {
-	#[derive(Clone)]
 	#[injectable]
 	#[allow(dead_code)]
 	struct SelfDependent {
@@ -123,7 +117,6 @@ async fn test_self_dependency() {
 /// Complex circular dependency: A -> B -> C -> D -> B
 #[tokio::test]
 async fn test_complex_circular_dependency() {
-	#[derive(Clone)]
 	#[injectable]
 	#[allow(dead_code)]
 	struct ComplexA {
@@ -131,7 +124,6 @@ async fn test_complex_circular_dependency() {
 		b: Injected<ComplexB>,
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	#[allow(dead_code)]
 	struct ComplexB {
@@ -139,7 +131,6 @@ async fn test_complex_circular_dependency() {
 		c: Injected<ComplexC>,
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	#[allow(dead_code)]
 	struct ComplexC {
@@ -147,7 +138,6 @@ async fn test_complex_circular_dependency() {
 		d: Injected<ComplexD>,
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	#[allow(dead_code)]
 	struct ComplexD {
@@ -172,7 +162,6 @@ async fn test_complex_circular_dependency() {
 /// No circular dependency should succeed
 #[tokio::test]
 async fn test_no_circular_dependency_succeeds() {
-	#[derive(Clone)]
 	#[injectable]
 	#[allow(dead_code)]
 	struct NoCycleA {
@@ -180,8 +169,8 @@ async fn test_no_circular_dependency_succeeds() {
 		b: Injected<NoCycleB>,
 	}
 
-	#[derive(Clone, Default)]
 	#[injectable]
+	#[derive(Default)]
 	#[allow(dead_code)]
 	struct NoCycleB {
 		#[no_inject]
@@ -198,32 +187,28 @@ async fn test_no_circular_dependency_succeeds() {
 /// Deep dependency chain (without cycle) should not error
 #[tokio::test]
 async fn test_deep_dependency_chain_without_cycle() {
-	#[derive(Clone, Default)]
 	#[injectable]
+	#[derive(Default)]
 	struct Level1;
 
-	#[derive(Clone)]
 	#[injectable]
 	struct Level2 {
 		#[inject]
 		_dep: Injected<Level1>,
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	struct Level3 {
 		#[inject]
 		_dep: Injected<Level2>,
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	struct Level4 {
 		#[inject]
 		_dep: Injected<Level3>,
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	struct Level5 {
 		#[inject]

@@ -169,6 +169,9 @@ pub mod output;
 pub mod plugin_commands;
 /// Command registry for discovery and dispatch.
 pub mod registry;
+/// Runserver lifecycle hooks for concurrent services and pre-listen validation.
+#[cfg(feature = "server")]
+pub mod runserver_hooks;
 /// Project and app scaffolding commands (startproject, startapp).
 pub mod start_commands;
 /// Template-based code generation utilities.
@@ -198,6 +201,8 @@ pub use introspect::IntrospectCommand;
 pub use mail_commands::SendTestEmailCommand;
 pub use output::OutputWrapper;
 pub use registry::CommandRegistry;
+#[cfg(feature = "server")]
+pub use runserver_hooks::{RunserverContext, RunserverHook, RunserverHookRegistration};
 pub use start_commands::{StartAppCommand, StartProjectCommand};
 pub use template::{TemplateCommand, TemplateContext, generate_secret_key, to_camel_case};
 pub use wasm_builder::{

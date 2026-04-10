@@ -1607,6 +1607,20 @@ impl RunServerCommand {
 			shutdown_tx.shutdown();
 		});
 
+		// Collect and validate runserver hooks (#3442)
+		let hooks = crate::runserver_hooks::collect_hooks();
+		if !hooks.is_empty() {
+			ctx.verbose(&format!("Found {} runserver hook(s)", hooks.len()));
+		}
+		for collected in &hooks {
+			collected.hook.validate().await.map_err(|e| {
+				crate::CommandError::ExecutionError(format!(
+					"Runserver hook validation failed for {}: {}",
+					collected.type_name, e
+				))
+			})?;
+		}
+
 		// OpenAPI documentation is shown in startup banner above
 
 		// Resolve DI context: reuse user-provided context from router, or create a new one.
@@ -1662,6 +1676,26 @@ impl RunServerCommand {
 				reinhardt_di::InjectionContext::builder(singleton_scope).build(),
 			),
 		};
+
+		// Invoke runserver hook startup phase (#3442)
+		if !hooks.is_empty() {
+			let runserver_ctx = crate::runserver_hooks::RunserverContext {
+				shutdown_coordinator: coordinator.clone(),
+				di_context: di_context.clone(),
+			};
+			for collected in &hooks {
+				collected
+					.hook
+					.on_server_start(&runserver_ctx)
+					.await
+					.map_err(|e| {
+						crate::CommandError::ExecutionError(format!(
+							"Runserver hook startup failed for {}: {}",
+							collected.type_name, e
+						))
+					})?;
+			}
+		}
 
 		// Create HTTP server with DI context and logging middleware
 		let mut server = HttpServer::new(router)

@@ -23,6 +23,7 @@ mod apply_update_attribute;
 mod apply_update_derive;
 mod collect_migrations;
 mod crate_paths;
+mod hook;
 mod injectable_common;
 mod injectable_fn;
 mod injectable_struct;
@@ -367,6 +368,34 @@ pub fn receiver(args: TokenStream, input: TokenStream) -> TokenStream {
 		.into()
 }
 
+/// Attribute macro for registering lifecycle hooks.
+///
+/// Currently supports `runserver` hooks for extending server startup behavior.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// use reinhardt::commands::{RunserverHook, RunserverContext};
+///
+/// #[reinhardt::hook(on = runserver)]
+/// struct MyValidationHook;
+///
+/// #[async_trait]
+/// impl RunserverHook for MyValidationHook {
+///     async fn validate(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
+///         // Fail-fast validation before server starts
+///         Ok(())
+///     }
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn hook(args: TokenStream, input: TokenStream) -> TokenStream {
+	let input = parse_macro_input!(input as ItemStruct);
+	hook::hook_impl(args.into(), input)
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
+}
+
 /// Automatic dependency injection macro
 ///
 /// This macro enables FastAPI-style dependency injection using parameter attributes.
@@ -468,8 +497,29 @@ pub fn derive_schema(input: TokenStream) -> TokenStream {
 /// - Struct must have named fields
 /// - All fields must have either `#[inject]` or `#[no_inject]` attribute
 /// - `#[no_inject]` without default value requires field type to be `Option<T>`
-/// - Struct must be `Clone` (required by `Injectable` trait)
+/// - `Clone` is auto-derived if not already present (required by `Depends<T>`)
 /// - All `#[inject]` field types must implement `Injectable`
+///
+/// # Attribute Ordering
+///
+/// **`#[injectable]` must be placed above `#[derive(...)]` attributes.**
+///
+/// In Rust 2024 edition, attribute macros can only see attributes listed
+/// below them. If `#[derive(Clone)]` appears above `#[injectable]`, the
+/// macro cannot detect it and will add a duplicate `#[derive(Clone)]`,
+/// causing a compilation error.
+///
+/// ```ignore
+/// // Correct
+/// #[injectable]
+/// #[derive(Default, Debug)]
+/// struct MyService { /* ... */ }
+///
+/// // Incorrect — may cause duplicate Clone derive
+/// #[derive(Default, Debug)]
+/// #[injectable]
+/// struct MyService { /* ... */ }
+/// ```
 ///
 #[proc_macro_attribute]
 pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {

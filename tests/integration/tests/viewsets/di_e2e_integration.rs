@@ -23,7 +23,6 @@ async fn test_complete_request_response_cycle() {
 
 	static REQUEST_COUNTER: LazyLock<AtomicUsize> = LazyLock::new(|| AtomicUsize::new(0));
 
-	#[derive(Clone)]
 	#[injectable]
 	#[allow(dead_code)]
 	struct RequestLogger {
@@ -39,7 +38,6 @@ async fn test_complete_request_response_cycle() {
 		}
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	#[allow(dead_code)]
 	struct LoggingViewSet {
@@ -84,7 +82,6 @@ async fn test_complete_request_response_cycle() {
 
 #[tokio::test]
 async fn test_post_request_with_body() {
-	#[derive(Clone)]
 	#[injectable]
 	struct BodyParser {
 		#[no_inject]
@@ -97,7 +94,6 @@ async fn test_post_request_with_body() {
 		}
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	struct ParsingViewSet {
 		#[inject]
@@ -145,7 +141,6 @@ async fn test_post_request_with_body() {
 
 #[tokio::test]
 async fn test_headers_extraction() {
-	#[derive(Clone)]
 	#[injectable]
 	struct HeaderValidator {
 		#[no_inject]
@@ -160,7 +155,6 @@ async fn test_headers_extraction() {
 		}
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	struct HeaderViewSet {
 		#[inject]
@@ -230,7 +224,6 @@ async fn test_headers_extraction() {
 async fn test_multiple_viewsets_shared_service() {
 	use std::sync::Mutex;
 
-	#[derive(Clone)]
 	#[injectable]
 	struct SharedCounter {
 		#[no_inject]
@@ -245,14 +238,12 @@ async fn test_multiple_viewsets_shared_service() {
 		}
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	struct ViewSetA {
 		#[inject]
 		counter: Injected<SharedCounter>,
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	struct ViewSetB {
 		#[inject]
@@ -319,7 +310,6 @@ async fn test_multiple_viewsets_shared_service() {
 
 #[tokio::test]
 async fn test_viewset_composition() {
-	#[derive(Clone)]
 	#[injectable]
 	struct ValidationService {
 		#[no_inject]
@@ -332,7 +322,6 @@ async fn test_viewset_composition() {
 		}
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	struct StorageService {
 		#[no_inject]
@@ -347,7 +336,6 @@ async fn test_viewset_composition() {
 		}
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	struct ComposedViewSet {
 		#[inject]
@@ -419,7 +407,6 @@ async fn test_viewset_composition() {
 
 #[tokio::test]
 async fn test_viewset_dependency_chain() {
-	#[derive(Clone)]
 	#[injectable]
 	struct Logger {
 		#[no_inject]
@@ -434,14 +421,12 @@ async fn test_viewset_dependency_chain() {
 		}
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	struct Auditor {
 		#[inject]
 		logger: Injected<Logger>,
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	struct ChainedViewSet {
 		#[inject]
@@ -486,7 +471,6 @@ async fn test_viewset_dependency_chain() {
 
 #[tokio::test]
 async fn test_action_based_routing() {
-	#[derive(Clone)]
 	#[injectable]
 	struct ActionRouter {
 		#[no_inject]
@@ -501,7 +485,6 @@ async fn test_action_based_routing() {
 		}
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	struct RoutedViewSet {
 		#[inject]
@@ -554,7 +537,6 @@ async fn test_action_based_routing() {
 
 #[tokio::test]
 async fn test_custom_action_handling() {
-	#[derive(Clone)]
 	#[injectable]
 	struct CustomActionHandler {
 		#[no_inject]
@@ -567,7 +549,6 @@ async fn test_custom_action_handling() {
 		}
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	struct CustomActionViewSet {
 		#[inject]
@@ -621,7 +602,6 @@ async fn test_custom_action_handling() {
 
 #[tokio::test]
 async fn test_method_based_routing() {
-	#[derive(Clone)]
 	#[injectable]
 	struct MethodRouter {
 		#[no_inject]
@@ -636,7 +616,6 @@ async fn test_method_based_routing() {
 		}
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	struct MethodViewSet {
 		#[inject]
@@ -702,7 +681,6 @@ async fn test_method_based_routing() {
 async fn test_request_scoped_state() {
 	use std::sync::Mutex;
 
-	#[derive(Clone)]
 	#[injectable]
 	struct RequestState {
 		#[no_inject]
@@ -717,7 +695,6 @@ async fn test_request_scoped_state() {
 		}
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	struct StateViewSet {
 		#[inject]
@@ -776,7 +753,6 @@ async fn test_request_scoped_state() {
 async fn test_singleton_state_persistence() {
 	use std::sync::Mutex;
 
-	#[derive(Clone)]
 	#[injectable]
 	struct SingletonCounter {
 		#[no_inject]
@@ -791,7 +767,6 @@ async fn test_singleton_state_persistence() {
 		}
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	struct CounterViewSet {
 		#[inject]
@@ -860,7 +835,6 @@ async fn test_singleton_state_persistence() {
 async fn test_session_state_isolation() {
 	use std::sync::Mutex;
 
-	#[derive(Clone)]
 	#[injectable]
 	struct SessionData {
 		#[no_inject]
@@ -875,7 +849,6 @@ async fn test_session_state_isolation() {
 		}
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	struct SessionViewSet {
 		#[inject]
@@ -943,14 +916,13 @@ async fn test_session_state_isolation() {
 
 #[tokio::test]
 async fn test_graceful_service_failure() {
-	#[derive(Clone, Default)]
 	#[injectable]
+	#[derive(Default)]
 	struct FallibleService {
 		#[no_inject]
 		fail: bool,
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	struct ResilientViewSet {
 		#[inject]
@@ -995,7 +967,6 @@ async fn test_graceful_service_failure() {
 
 #[tokio::test]
 async fn test_empty_request_handling() {
-	#[derive(Clone)]
 	#[injectable]
 	struct EmptyRequestHandler;
 
@@ -1005,7 +976,6 @@ async fn test_empty_request_handling() {
 		}
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	#[allow(dead_code)]
 	struct EmptyViewSet {
@@ -1050,7 +1020,6 @@ async fn test_empty_request_handling() {
 
 #[tokio::test]
 async fn test_large_payload_handling() {
-	#[derive(Clone)]
 	#[injectable]
 	struct PayloadLimiter {
 		#[no_inject]
@@ -1063,7 +1032,6 @@ async fn test_large_payload_handling() {
 		}
 	}
 
-	#[derive(Clone)]
 	#[injectable]
 	struct LimitedViewSet {
 		#[inject]

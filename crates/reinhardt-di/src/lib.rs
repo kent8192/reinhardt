@@ -280,6 +280,7 @@ pub mod registration;
 pub mod registry;
 pub mod resolve_context;
 pub mod scope;
+pub mod validation;
 
 use thiserror::Error;
 
@@ -305,6 +306,7 @@ pub use registry::{
 };
 pub use resolve_context::{ContextLevel, get_di_context, try_get_di_context};
 pub use scope::{RequestScope, Scope, SingletonScope};
+pub use validation::{RegistryValidator, ValidationError, ValidationErrorKind};
 
 // Re-export inventory for macro use
 pub use inventory;

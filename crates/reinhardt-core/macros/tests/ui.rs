@@ -137,6 +137,14 @@ fn test_validate_macro_fail() {
 	t.compile_fail("tests/ui/validate/fail/*.rs");
 }
 
+// ===== Hook =====
+
+#[test]
+fn test_hook_macro_fail() {
+	let t = trybuild::TestCases::new();
+	t.compile_fail("tests/ui/hook/fail/*.rs");
+}
+
 // ===== Settings =====
 
 #[test]

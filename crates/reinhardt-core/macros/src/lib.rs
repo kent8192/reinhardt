@@ -375,9 +375,9 @@ pub fn receiver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// # Usage
 ///
 /// ```rust,ignore
-/// use reinhardt::prelude::*;
+/// use reinhardt::commands::{RunserverHook, RunserverContext};
 ///
-/// #[hook(on = runserver)]
+/// #[reinhardt::hook(on = runserver)]
 /// struct MyValidationHook;
 ///
 /// #[async_trait]

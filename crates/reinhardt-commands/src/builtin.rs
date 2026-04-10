@@ -1612,11 +1612,11 @@ impl RunServerCommand {
 		if !hooks.is_empty() {
 			ctx.verbose(&format!("Found {} runserver hook(s)", hooks.len()));
 		}
-		for hook in &hooks {
-			hook.validate().await.map_err(|e| {
+		for collected in &hooks {
+			collected.hook.validate().await.map_err(|e| {
 				crate::CommandError::ExecutionError(format!(
-					"Runserver hook validation failed: {}",
-					e
+					"Runserver hook validation failed for {}: {}",
+					collected.type_name, e
 				))
 			})?;
 		}
@@ -1683,13 +1683,17 @@ impl RunServerCommand {
 				shutdown_coordinator: coordinator.clone(),
 				di_context: di_context.clone(),
 			};
-			for hook in &hooks {
-				hook.on_server_start(&runserver_ctx).await.map_err(|e| {
-					crate::CommandError::ExecutionError(format!(
-						"Runserver hook startup failed: {}",
-						e
-					))
-				})?;
+			for collected in &hooks {
+				collected
+					.hook
+					.on_server_start(&runserver_ctx)
+					.await
+					.map_err(|e| {
+						crate::CommandError::ExecutionError(format!(
+							"Runserver hook startup failed for {}: {}",
+							collected.type_name, e
+						))
+					})?;
 			}
 		}
 

@@ -1,5 +1,5 @@
 error: expected `on`
- --> tests/ui/hook/fail/hook_missing_on.rs:3:7
+ --> tests/ui/hook/fail/hook_missing_on.rs:3:8
   |
 3 | #[hook(runserver)]
   |        ^^^^^^^^^

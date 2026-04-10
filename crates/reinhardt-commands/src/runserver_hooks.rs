@@ -47,9 +47,9 @@ pub struct RunserverContext {
 /// # Examples
 ///
 /// ```rust,ignore
-/// use reinhardt::prelude::*;
+/// use reinhardt::commands::{RunserverHook, RunserverContext};
 ///
-/// #[hook(on = runserver)]
+/// #[reinhardt::hook(on = runserver)]
 /// struct MyHook;
 ///
 /// #[async_trait]
@@ -121,11 +121,24 @@ impl RunserverHookRegistration {
 
 inventory::collect!(RunserverHookRegistration);
 
-/// Collect all registered runserver hooks from inventory.
-pub(crate) fn collect_hooks() -> Vec<Box<dyn RunserverHook>> {
+/// A collected runserver hook paired with its registration metadata.
+pub(crate) struct CollectedRunserverHook {
+	/// Instantiated hook implementation.
+	pub hook: Box<dyn RunserverHook>,
+
+	/// Type name of the hook struct (for diagnostics).
+	pub type_name: &'static str,
+}
+
+/// Collect all registered runserver hooks from inventory, preserving
+/// diagnostic identity for error reporting.
+pub(crate) fn collect_hooks() -> Vec<CollectedRunserverHook> {
 	inventory::iter::<RunserverHookRegistration>
 		.into_iter()
-		.map(|reg| (reg.create)())
+		.map(|reg| CollectedRunserverHook {
+			hook: (reg.create)(),
+			type_name: reg.type_name,
+		})
 		.collect()
 }
 
@@ -357,8 +370,11 @@ mod tests {
 		// Act: collect hooks from inventory
 		let hooks = collect_hooks();
 
-		// Assert: returns a Vec (contents depend on linked registrations)
-		let _ = hooks.len();
+		// Assert: returns a Vec of CollectedRunserverHook
+		for collected in &hooks {
+			// type_name is preserved from registration
+			assert!(!collected.type_name.is_empty());
+		}
 	}
 
 	#[rstest]

@@ -30,6 +30,22 @@ pub(crate) fn hook_impl(args: TokenStream, input: ItemStruct) -> Result<TokenStr
 	let struct_name = &input.ident;
 	let type_name_str = struct_name.to_string();
 
+	// Validate: only unit structs (no fields) are supported
+	if !input.fields.is_empty() {
+		return Err(syn::Error::new_spanned(
+			&input.fields,
+			"#[hook] can only be applied to unit structs (structs without fields)",
+		));
+	}
+
+	// Validate: no generic parameters
+	if !input.generics.params.is_empty() {
+		return Err(syn::Error::new_spanned(
+			&input.generics,
+			"#[hook] does not support generic structs",
+		));
+	}
+
 	match args.target.to_string().as_str() {
 		"runserver" => {
 			let inventory_crate = get_inventory_crate();

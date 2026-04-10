@@ -134,6 +134,13 @@ async fn test_auto_derive_clone_makes_struct_cloneable() {
 #[tokio::test]
 async fn test_auto_derive_clone_works_with_depends() {
 	// Arrange
+	// Register AutoCloneConfig in the global registry for Depends<T> resolution
+	let registry = reinhardt_di::global_registry();
+	registry.register_async::<AutoCloneConfig, _, _>(
+		reinhardt_di::DependencyScope::Request,
+		|_ctx| async { Ok(AutoCloneConfig::default()) },
+	);
+
 	let singleton_scope = Arc::new(SingletonScope::new());
 	let ctx = InjectionContext::builder(singleton_scope).build();
 

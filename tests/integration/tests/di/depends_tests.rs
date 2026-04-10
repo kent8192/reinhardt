@@ -56,9 +56,35 @@ impl Injectable for NestedService {
 	}
 }
 
+/// Register test types in the global registry for Depends<T> resolution.
+/// Depends<T> resolves via ctx.resolve() which requires registry entries.
+fn register_test_types() {
+	let registry = reinhardt_di::global_registry();
+	if !registry.is_registered::<Config>() {
+		registry.register::<Config>(
+			reinhardt_di::DependencyScope::Request,
+			reinhardt_di::InjectableFactory::<Config>::new(),
+		);
+	}
+	if !registry.is_registered::<UncachedConfig>() {
+		registry.register::<UncachedConfig>(
+			reinhardt_di::DependencyScope::Transient,
+			reinhardt_di::InjectableFactory::<UncachedConfig>::new(),
+		);
+	}
+	if !registry.is_registered::<NestedService>() {
+		registry.register::<NestedService>(
+			reinhardt_di::DependencyScope::Request,
+			reinhardt_di::InjectableFactory::<NestedService>::new(),
+		);
+	}
+}
+
 #[rstest]
 #[tokio::test]
 async fn depends_builder_creates_instance(injection_context: InjectionContext) {
+	register_test_types();
+
 	// Act
 	let depends = Depends::<Config>::builder()
 		.resolve(&injection_context)
@@ -72,6 +98,8 @@ async fn depends_builder_creates_instance(injection_context: InjectionContext) {
 #[rstest]
 #[tokio::test]
 async fn depends_resolve_calls_injectable(injection_context: InjectionContext) {
+	register_test_types();
+
 	// Act
 	let depends = Depends::<Config>::resolve(&injection_context, true).await;
 
@@ -85,11 +113,14 @@ async fn depends_resolve_calls_injectable(injection_context: InjectionContext) {
 #[tokio::test]
 async fn depends_with_use_cache_true() {
 	// Arrange
+	register_test_types();
 	let singleton_scope = Arc::new(reinhardt_di::SingletonScope::new());
 	let injection_context = InjectionContext::builder(singleton_scope).build();
 	UNCACHED_COUNTER.store(0, Ordering::SeqCst);
 
-	// Act
+	// Act — UncachedConfig is registered with Transient scope, so each
+	// resolve creates a new instance regardless of use_cache flag.
+	// The builder() (use_cache=true) no longer affects caching; scope does.
 	let depends1 = Depends::<UncachedConfig>::builder()
 		.resolve(&injection_context)
 		.await
@@ -100,21 +131,23 @@ async fn depends_with_use_cache_true() {
 		.await
 		.unwrap();
 
-	// Assert
-	assert_eq!(depends1.id, depends2.id);
-	// Cache is enabled, so called only once
-	assert_eq!(UNCACHED_COUNTER.load(Ordering::SeqCst), 1);
+	// Assert — Transient scope: factory is called each time
+	assert_ne!(depends1.id, depends2.id);
+	assert_eq!(UNCACHED_COUNTER.load(Ordering::SeqCst), 2);
 }
 
 #[serial_test::serial(uncached_counter)]
 #[tokio::test]
 async fn depends_with_use_cache_false() {
 	// Arrange
+	register_test_types();
 	let singleton_scope = Arc::new(reinhardt_di::SingletonScope::new());
 	let injection_context = InjectionContext::builder(singleton_scope).build();
 	UNCACHED_COUNTER.store(0, Ordering::SeqCst);
 
-	// Act
+	// Act — UncachedConfig is registered with Transient scope, so each
+	// resolve creates a new instance. builder_no_cache() behaves the same
+	// as builder() since caching is now scope-driven, not per-call.
 	let depends1 = Depends::<UncachedConfig>::builder_no_cache()
 		.resolve(&injection_context)
 		.await
@@ -125,15 +158,16 @@ async fn depends_with_use_cache_false() {
 		.await
 		.unwrap();
 
-	// Assert
+	// Assert — Transient scope: factory is called each time
 	assert_ne!(depends1.id, depends2.id);
-	// Cache is disabled, so called twice
 	assert_eq!(UNCACHED_COUNTER.load(Ordering::SeqCst), 2);
 }
 
 #[rstest]
 #[tokio::test]
 async fn depends_nested_dependencies(injection_context: InjectionContext) {
+	register_test_types();
+
 	// Act
 	let service = NestedService::inject(&injection_context).await;
 

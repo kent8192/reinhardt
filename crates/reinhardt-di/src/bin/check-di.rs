@@ -11,8 +11,10 @@
 //!   cargo run --bin check-di -- --tree `<type>`    # Show dependency tree
 //!   cargo run --bin check-di -- --dot            # Generate DOT format
 //!   cargo run --bin check-di -- --check-cycles   # Check for cycles
+//!   cargo run --bin check-di -- --validate       # Validate registry integrity
 
 use reinhardt_di::graph::DependencyGraph;
+use reinhardt_di::validation::{RegistryValidator, format_validation_report};
 use std::env;
 use std::process;
 use std::sync::Arc;
@@ -44,6 +46,9 @@ fn main() {
 			}
 			"--check-cycles" => {
 				check_cycles(registry);
+			}
+			"--validate" => {
+				validate_registry(registry);
 			}
 			"--help" => {
 				print_help();
@@ -184,6 +189,23 @@ fn print_tree(node: &reinhardt_di::graph::DependencyNode, depth: usize) {
 	}
 }
 
+/// Validate the registry for missing deps, scope issues, and cycles
+fn validate_registry(registry: &Arc<reinhardt_di::DependencyRegistry>) {
+	println!("Validating DI registry...");
+	println!();
+
+	let validator = RegistryValidator::new(Arc::clone(registry));
+	match validator.validate() {
+		Ok(()) => {
+			println!("DI registry validation passed: no issues found");
+		}
+		Err(errors) => {
+			eprint!("{}", format_validation_report(&errors));
+			process::exit(1);
+		}
+	}
+}
+
 /// Print help message
 fn print_help() {
 	println!("DI Dependency Graph Verification Tool");
@@ -193,6 +215,7 @@ fn print_help() {
 	println!("  cargo run --bin check-di -- --tree <type_name>  # Show dependency tree");
 	println!("  cargo run --bin check-di -- --dot              # Generate DOT format");
 	println!("  cargo run --bin check-di -- --check-cycles     # Check for cycles");
+	println!("  cargo run --bin check-di -- --validate         # Validate registry integrity");
 	println!("  cargo run --bin check-di -- --help             # Show this help");
 	println!();
 	println!("Examples:");

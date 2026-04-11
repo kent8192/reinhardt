@@ -614,10 +614,10 @@ fn integer_field_stores_default_value() {
 #[rstest]
 fn float_field_stores_default_value() {
 	// Act
-	let field = FloatField::new().default(3.14);
+	let field = FloatField::new().default(2.78);
 
 	// Assert
-	assert_eq!(field.default, Some(3.14));
+	assert_eq!(field.default, Some(2.78));
 }
 
 #[rstest]

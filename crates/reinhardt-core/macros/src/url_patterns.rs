@@ -95,6 +95,7 @@ pub(crate) fn url_patterns_impl(
 	Ok(quote! {
 		#func
 
+		#[allow(unexpected_cfgs)]
 		#[cfg(feature = "url-resolver")]
 		#[doc(hidden)]
 		pub mod url_resolvers {

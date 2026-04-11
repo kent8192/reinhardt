@@ -54,6 +54,7 @@ standard = [
   "reinhardt-rest/versioning",
   "reinhardt-rest/metadata",
   "reinhardt-rest/negotiation",
+  "url-resolver",
 ]
 
 # Individual feature flags for fine-grained control
@@ -211,6 +212,7 @@ api-only = [
   "reinhardt-rest/pagination",
   "reinhardt-rest/filters",
   "reinhardt-rest/throttling",
+  "url-resolver",
 ]
 
 # GraphQL-focused preset

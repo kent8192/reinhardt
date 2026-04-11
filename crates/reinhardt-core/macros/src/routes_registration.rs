@@ -353,11 +353,13 @@ pub(crate) fn routes_impl(_args: TokenStream, input: ItemFn) -> Result<TokenStre
 		/// Provides URL resolution methods via extension traits generated
 		/// by view macros. Import `url_prelude::*` to bring all resolver
 		/// methods into scope.
+		#[allow(unexpected_cfgs)]
 		#[cfg(all(native, feature = "url-resolver"))]
 		pub struct ResolvedUrls {
 			router: ::std::sync::Arc<#reinhardt::ServerRouter>,
 		}
 
+		#[allow(unexpected_cfgs)]
 		#[cfg(all(native, feature = "url-resolver"))]
 		impl #reinhardt::UrlResolver for ResolvedUrls {
 			fn resolve_url(&self, name: &str, params: &[(&str, &str)]) -> String {
@@ -367,6 +369,7 @@ pub(crate) fn routes_impl(_args: TokenStream, input: ItemFn) -> Result<TokenStre
 			}
 		}
 
+		#[allow(unexpected_cfgs)]
 		#[cfg(all(native, feature = "url-resolver"))]
 		impl ResolvedUrls {
 			/// Create a `ResolvedUrls` from the globally registered router.
@@ -386,6 +389,7 @@ pub(crate) fn routes_impl(_args: TokenStream, input: ItemFn) -> Result<TokenStre
 			}
 		}
 
+		#[allow(unexpected_cfgs)]
 		#[cfg(all(native, feature = "url-resolver"))]
 		#[doc(hidden)]
 		macro_rules! __build_url_prelude {
@@ -398,6 +402,7 @@ pub(crate) fn routes_impl(_args: TokenStream, input: ItemFn) -> Result<TokenStre
 			};
 		}
 
+		#[allow(unexpected_cfgs)]
 		#[cfg(all(native, feature = "url-resolver"))]
 		crate::__reinhardt_for_each_app!(__build_url_prelude);
 	};

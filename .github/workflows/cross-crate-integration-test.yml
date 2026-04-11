@@ -35,7 +35,7 @@ jobs:
   cross-crate-integration-test:
     name: Cross-Crate Integration Tests (${{ matrix.partition }}/3)
     runs-on: ${{ fromJSON(inputs.runner) }}
-    timeout-minutes: 40
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:

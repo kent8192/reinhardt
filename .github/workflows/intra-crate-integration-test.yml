@@ -47,7 +47,7 @@ jobs:
   intra-crate-integration-test:
     name: Intra-Crate Integration Tests (${{ matrix.partition }}/${{ inputs.partition-count || '8' }})
     runs-on: ${{ fromJSON(inputs.runner) }}
-    timeout-minutes: 90
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:

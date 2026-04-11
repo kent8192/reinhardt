@@ -132,6 +132,7 @@ browsable-api = ["reinhardt-browsable-api"]
 # Client-router feature: Enables UnifiedRouter<V> with both .server() and .client() methods
 # Required for unified client/server routing in WASM applications
 client-router = ["reinhardt-urls/client-router"]
+url-resolver = ["reinhardt-urls/url-resolver"]
 
 # Plugin system
 dentdelion = ["reinhardt-dentdelion"]
@@ -191,6 +192,7 @@ full = [
   "dentdelion",
   "client-router",
   "openapi-router",
+  "url-resolver",
 ]
 
 # API-only preset - REST without templates/forms

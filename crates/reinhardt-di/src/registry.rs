@@ -128,6 +128,9 @@ pub struct DependencyRegistry {
 	dependencies: DashMap<TypeId, Vec<TypeId>>,
 	/// Maps type ID to its type name for debugging
 	type_names: DashMap<TypeId, &'static str>,
+	/// Maps type ID to its fully-qualified type name from `std::any::type_name`.
+	/// Used for framework type detection (pseudo orphan rule).
+	qualified_type_names: DashMap<TypeId, &'static str>,
 }
 
 impl DependencyRegistry {
@@ -138,16 +141,44 @@ impl DependencyRegistry {
 			scopes: DashMap::new(),
 			dependencies: DashMap::new(),
 			type_names: DashMap::new(),
+			qualified_type_names: DashMap::new(),
 		}
 	}
 
-	/// Register a factory for a type
+	/// Register a factory for a type.
+	///
+	/// # Panics
+	///
+	/// Panics if a factory for the same `TypeId` is already registered.
+	/// This prevents silent overwrites that lead to non-deterministic behavior
+	/// when multiple `#[injectable_factory]` or `#[injectable]` macros produce
+	/// the same return type. See [#3457].
+	///
+	/// To check before registering (e.g. in tests), use
+	/// [`is_registered`](Self::is_registered).
+	///
+	/// [#3457]: https://github.com/kent8192/reinhardt-web/issues/3457
 	pub fn register<T: Any + Send + Sync + 'static>(
 		&self,
 		scope: DependencyScope,
 		factory: impl FactoryTrait + 'static,
 	) {
 		let type_id = TypeId::of::<T>();
+		let type_name = std::any::type_name::<T>();
+		// Check for duplicates before inserting so that no state is mutated on the
+		// error path. This avoids leaving the registry inconsistent if the panic is
+		// caught (e.g. factories pointing to the new registration while scopes still
+		// reflects the old one).
+		if self.factories.contains_key(&type_id) {
+			let short = type_name.rsplit("::").next().unwrap_or(type_name);
+			panic!(
+				"Duplicate DependencyRegistry registration for type `{type_name}`.\n\
+\n\
+Hint: reinhardt DI uses TypeId as the sole registry key. Two factories\n\
+returning the same type will conflict regardless of function name or scope.\n\
+Use a distinct newtype (e.g., `struct Primary{short}({short})`) for each."
+			);
+		}
 		self.factories.insert(type_id, Box::new(factory));
 		self.scopes.insert(type_id, scope);
 	}
@@ -270,6 +301,28 @@ impl DependencyRegistry {
 	/// Get the type name for a `TypeId`.
 	pub(crate) fn get_type_name(&self, type_id: TypeId) -> Option<&'static str> {
 		self.type_names.get(&type_id).map(|entry| *entry.value())
+	}
+
+	/// Register the fully-qualified type name obtained from `std::any::type_name::<T>()`.
+	///
+	/// Used by the pseudo orphan rule to detect framework-managed types.
+	#[doc(hidden)]
+	pub fn register_qualified_type_name(&self, type_id: TypeId, qualified_name: &'static str) {
+		self.qualified_type_names.insert(type_id, qualified_name);
+	}
+
+	/// Get the fully-qualified type name for a given `TypeId`.
+	pub fn get_qualified_type_name(&self, type_id: &TypeId) -> Option<&'static str> {
+		self.qualified_type_names.get(type_id).map(|r| *r.value())
+	}
+
+	/// Iterate over all qualified type name mappings without allocating a new map.
+	pub fn iter_qualified_type_names(
+		&self,
+	) -> impl Iterator<Item = (TypeId, &'static str)> + '_ {
+		self.qualified_type_names
+			.iter()
+			.map(|entry| (*entry.key(), *entry.value()))
 	}
 }
 
@@ -407,12 +460,14 @@ macro_rules! submit_registration {
 mod tests {
 	use super::*;
 	use crate::scope::SingletonScope;
+	use rstest::*;
 
 	#[derive(Clone)]
 	struct TestService {
 		value: i32,
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_registry_basic() {
 		let registry = DependencyRegistry::new();
@@ -434,6 +489,7 @@ mod tests {
 		assert_eq!(service.value, 42);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_registry_not_registered() {
 		let registry = DependencyRegistry::new();
@@ -442,5 +498,61 @@ mod tests {
 
 		let result = registry.create::<TestService>(&ctx).await;
 		assert!(result.is_err());
+	}
+
+	// Fixes #3457
+	#[rstest]
+	fn test_duplicate_registration_panics() {
+		let registry = DependencyRegistry::new();
+
+		registry.register_async::<TestService, _, _>(DependencyScope::Singleton, |_ctx| async {
+			Ok(TestService { value: 1 })
+		});
+
+		// Act
+		let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			registry.register_async::<TestService, _, _>(DependencyScope::Request, |_ctx| async {
+				Ok(TestService { value: 2 })
+			});
+		}));
+
+		// Assert
+		let err = result.expect_err("expected panic on duplicate registration");
+		let msg = err
+			.downcast_ref::<String>()
+			.map(|s| s.as_str())
+			.or_else(|| err.downcast_ref::<&str>().copied())
+			.expect("panic payload should be a string");
+		assert!(
+			msg.contains("Duplicate DependencyRegistry registration"),
+			"missing duplicate prefix: {msg}"
+		);
+		assert!(
+			msg.contains("TestService"),
+			"missing type name in panic message: {msg}"
+		);
+		assert!(
+			msg.contains("newtype"),
+			"missing newtype hint in panic message: {msg}"
+		);
+	}
+
+	// Fixes #3457 — is_registered guard prevents panic (test helper pattern)
+	#[rstest]
+	fn test_is_registered_guard_allows_skip() {
+		let registry = DependencyRegistry::new();
+
+		registry.register_async::<TestService, _, _>(DependencyScope::Singleton, |_ctx| async {
+			Ok(TestService { value: 1 })
+		});
+
+		// Second registration guarded — no panic
+		if !registry.is_registered::<TestService>() {
+			registry.register_async::<TestService, _, _>(DependencyScope::Request, |_ctx| async {
+				Ok(TestService { value: 2 })
+			});
+		}
+
+		assert!(registry.is_registered::<TestService>());
 	}
 }

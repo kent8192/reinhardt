@@ -66,7 +66,9 @@ use query_fields::derive_query_fields_impl;
 use receiver::receiver_impl;
 use routes::{delete_impl, get_impl, patch_impl, post_impl, put_impl};
 use routes_registration::routes_impl;
+mod url_patterns;
 use schema::derive_schema_impl;
+use url_patterns::url_patterns_impl;
 use use_inject::use_inject_impl;
 use user_attribute::user_attribute_impl;
 
@@ -320,6 +322,19 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 	let input = parse_macro_input!(input as ItemFn);
 
 	routes_impl(args.into(), input)
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
+}
+
+/// Aggregate URL resolver traits from endpoint view modules.
+///
+/// When applied to a function returning `ServerRouter`, scans `.endpoint()` calls
+/// and generates a `url_resolvers` module re-exporting all resolver traits.
+///
+/// Requires the `url-resolver` feature in the consuming crate.
+#[proc_macro_attribute]
+pub fn url_patterns(args: TokenStream, input: TokenStream) -> TokenStream {
+	url_patterns_impl(args.into(), input.into())
 		.unwrap_or_else(|e| e.to_compile_error())
 		.into()
 }

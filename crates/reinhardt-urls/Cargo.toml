@@ -54,6 +54,7 @@ client-router = ["reinhardt-core/reactive", "routers"]
 urls-full = ["routers", "routers-macros", "proxy"]
 full = ["database", "unified-router"]
 unified-router = []
+url-resolver = []
 
 [build-dependencies]
 cfg_aliases = "0.2"

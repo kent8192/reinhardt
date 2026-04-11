@@ -8,6 +8,23 @@ error[E0428]: the name `auth` is defined multiple times
    |
    = note: `auth` must be defined only once in the type namespace of this enum
 
+warning: unexpected `cfg` condition value: `url-resolver`
+  --> tests/ui/fail/duplicate_labels.rs:8:2
+   |
+ 8 | /     installed_apps! {
+ 9 | |         auth: "myproject.auth",
+10 | |         auth: "myproject.sessions",
+11 | |     }
+   | |_____^
+   |
+   = note: expected values for `feature` are: `db-mysql`, `db-postgres`, `db-sqlite`, and `full`
+   = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+   = help: try referring to `installed_apps` crate for guidance on how handle this unexpected cfg
+   = help: the macro `installed_apps` may come from an old version of the `reinhardt_macros` crate, try updating your dependency with `cargo update -p reinhardt_macros`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: `#[warn(unexpected_cfgs)]` on by default
+   = note: this warning originates in the macro `installed_apps` (in Nightly builds, run with -Z macro-backtrace for more info)
+
 error[E0004]: non-exhaustive patterns: `&InstalledApp::auth` not covered
   --> tests/ui/fail/duplicate_labels.rs:8:2
    |

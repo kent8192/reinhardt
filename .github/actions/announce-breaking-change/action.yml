@@ -1,0 +1,134 @@
+name: Announce Breaking Change
+description: Create a GitHub Discussion in reinhardt-web for a breaking change PR
+
+inputs:
+  source-repo:
+    description: 'Source repository name (e.g., reinhardt-web)'
+    required: true
+  pr-number:
+    description: 'PR number'
+    required: true
+  pr-title:
+    description: 'PR title'
+    required: true
+  pr-url:
+    description: 'PR URL'
+    required: true
+  pr-body:
+    description: 'PR body text'
+    required: false
+    default: ''
+  merged-at:
+    description: 'Merge datetime (ISO 8601)'
+    required: true
+  github-token:
+    description: 'PAT with discussions:write permission on kent8192/reinhardt-web'
+    required: true
+
+outputs:
+  created:
+    description: 'Whether a discussion was created (true/false)'
+    value: ${{ steps.create.outputs.created || 'false' }}
+  discussion-url:
+    description: 'URL of the created discussion (empty if skipped)'
+    value: ${{ steps.create.outputs.discussion-url || '' }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check for duplicate discussion
+      id: duplicate-check
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        SOURCE_REPO: ${{ inputs.source-repo }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+      run: |
+        search_key="[${SOURCE_REPO}#${PR_NUMBER}]"
+        count=$(gh api graphql -f query="
+          {
+            search(type: DISCUSSION, query: \"repo:kent8192/reinhardt-web in:title \\\"${search_key}\\\"\", first: 1) {
+              discussionCount
+            }
+          }
+        " --jq '.data.search.discussionCount')
+
+        if [ "$count" -gt 0 ]; then
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::Discussion already exists for ${search_key}, skipping"
+        else
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Extract breaking change details and create discussion
+      id: create
+      if: steps.duplicate-check.outputs.skip == 'false'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        SOURCE_REPO: ${{ inputs.source-repo }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        PR_TITLE: ${{ inputs.pr-title }}
+        PR_URL: ${{ inputs.pr-url }}
+        PR_BODY: ${{ inputs.pr-body }}
+        MERGED_AT: ${{ inputs.merged-at }}
+      run: |
+        # Extract ## Breaking Changes section
+        details=$(printf '%s' "$PR_BODY" | awk '
+          /^## Breaking Changes/ { found=1; next }
+          /^## / { if (found) exit }
+          found { print }
+        ')
+        # Trim leading/trailing blank lines
+        details=$(echo "$details" | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba;}')
+
+        # Fall back to BREAKING CHANGE: footer
+        if [ -z "$details" ]; then
+          details=$(printf '%s' "$PR_BODY" | awk '
+            /^BREAKING CHANGE:/ { found=1 }
+            found { print }
+          ')
+        fi
+
+        # Fall back to full body (first 100 lines)
+        if [ -z "$details" ]; then
+          details=$(printf '%s' "$PR_BODY" | head -100)
+          line_count=$(printf '%s' "$PR_BODY" | wc -l)
+          if [ "$line_count" -gt 100 ]; then
+            details="${details}
+
+        ...*(truncated — see full PR for details)*"
+          fi
+        fi
+
+        merged_date="${MERGED_AT%%T*}"
+        disc_title="[${SOURCE_REPO}#${PR_NUMBER}] ${PR_TITLE}"
+
+        # Write body to temp file to preserve formatting
+        cat > /tmp/discussion-body.md <<EOF
+## Breaking Change: ${SOURCE_REPO}
+
+**PR**: ${SOURCE_REPO}#${PR_NUMBER} — ${PR_TITLE}
+**Merged**: ${merged_date}
+**Link**: ${PR_URL}
+
+### Details
+
+${details}
+EOF
+
+        if ! url=$(gh discussion create \
+          --repo kent8192/reinhardt-web \
+          --category "Breaking Changes" \
+          --title "$disc_title" \
+          --body-file /tmp/discussion-body.md); then
+          echo "::error::Failed to create discussion: ${disc_title}"
+          exit 1
+        fi
+
+        url=$(printf '%s' "$url" | tr -d '\r\n')
+
+        echo "created=true" >> "$GITHUB_OUTPUT"
+        echo "discussion-url=${url}" >> "$GITHUB_OUTPUT"
+        echo "::notice::Created discussion: ${disc_title}"
+        echo "::notice::URL: ${url}"

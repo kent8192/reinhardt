@@ -135,6 +135,10 @@ pub mod pattern;
 /// Compile-time URL pattern registration via `inventory`.
 #[cfg(native)]
 pub mod registration;
+/// URL resolver trait for type-safe URL generation.
+#[cfg(all(native, feature = "url-resolver"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "url-resolver")))]
+pub mod resolver;
 /// URL reverse resolution (name-to-URL mapping).
 #[cfg(native)]
 pub mod reverse;

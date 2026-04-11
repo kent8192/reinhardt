@@ -656,6 +656,9 @@ fn generate_view_type(
 		}
 	};
 
+	let url_resolver_tokens =
+		generate_url_resolver_tokens(&options.name, &fn_name.to_string(), path, &reinhardt_crate);
+
 	Ok(quote! {
 		// Submit endpoint metadata to global inventory
 		#metadata_submission
@@ -701,7 +704,151 @@ fn generate_view_type(
 		#fn_vis fn #fn_name() -> #view_type_name {
 			#view_type_name
 		}
+
+		#url_resolver_tokens
 	})
+}
+
+/// Convert a snake_case route name to a PascalCase trait name with "Resolve" prefix.
+///
+/// `auth_login` → `ResolveAuthLogin`
+/// `cluster_retrieve` → `ResolveClusterRetrieve`
+fn to_resolver_trait_name(route_name: &str) -> String {
+	let mut result = String::from("Resolve");
+	for segment in route_name.split('_') {
+		let mut chars = segment.chars();
+		if let Some(first) = chars.next() {
+			result.push(first.to_ascii_uppercase());
+			result.extend(chars);
+		}
+	}
+	result
+}
+
+/// Extract parameter names from a URL path pattern.
+///
+/// Handles both simple params `{id}` and typed params `{<int:id>}`.
+/// Skips wildcard `{*}` patterns.
+fn extract_url_params(path: &str) -> Vec<String> {
+	let mut params = Vec::new();
+	let mut chars = path.chars().peekable();
+	while let Some(ch) = chars.next() {
+		if ch == '{' {
+			let content: String = chars.by_ref().take_while(|&c| c != '}').collect();
+			if content == "*" {
+				continue;
+			}
+			// Handle typed params: `<type:name>` → extract `name`
+			let param_name = if content.starts_with('<') {
+				content
+					.split(':')
+					.nth(1)
+					.map(|s| s.trim_end_matches('>'))
+					.unwrap_or(&content)
+			} else {
+				&content
+			};
+			params.push(param_name.to_string());
+		}
+	}
+	params
+}
+
+/// Generate URL resolver extension trait and per-endpoint resolver module tokens.
+///
+/// Each endpoint gets a uniquely named `__url_resolver_<fn_name>` module to avoid
+/// name collisions when multiple routes are declared in the same Rust module.
+/// The `#[url_patterns]` macro references these modules by deriving the module name
+/// from the last segment of the endpoint path.
+///
+/// Returns empty tokens if:
+/// - No route name is set
+/// - The path contains a wildcard
+fn generate_url_resolver_tokens(
+	route_name: &Option<String>,
+	fn_name: &str,
+	path: &str,
+	reinhardt_crate: &TokenStream,
+) -> TokenStream {
+	let Some(name) = route_name.as_ref() else {
+		return quote! {};
+	};
+
+	// Skip wildcard routes
+	if path.contains('*') {
+		return quote! {};
+	}
+
+	// Validate that the route name is a valid Rust identifier before creating
+	// Ident values. `syn::Ident::new` panics on invalid identifiers, so we
+	// catch that early and emit a readable compile error instead.
+	if syn::parse_str::<syn::Ident>(name).is_err() {
+		let msg = format!(
+			"Route name `{name}` is not a valid Rust identifier. \
+			 Route names used with url-resolver must be valid identifiers \
+			 (no hyphens, dots, or leading digits)."
+		);
+		return quote! { ::core::compile_error!(#msg); };
+	}
+
+	let trait_name_str = to_resolver_trait_name(name);
+	let trait_ident = syn::Ident::new(&trait_name_str, Span::call_site());
+	let method_ident = syn::Ident::new(name, Span::call_site());
+	let resolver_mod_ident =
+		syn::Ident::new(&format!("__url_resolver_{fn_name}"), Span::call_site());
+	let params = extract_url_params(path);
+	let doc_str = format!("Resolve URL for route `{}` (pattern: `{}`).", name, path);
+
+	// Gate with `feature = "url-resolver"` only (not `native`).
+	// The `UrlResolver` trait itself is not `native`-gated, so extension traits
+	// that only reference `UrlResolver` don't need the `native` gate.
+	// The `native` gate belongs on `ResolvedUrls` (in `routes_registration.rs`)
+	// because it depends on `ServerRouter` which is `native`-only.
+	if params.is_empty() {
+		quote! {
+			#[cfg(feature = "url-resolver")]
+			#[doc = #doc_str]
+			pub trait #trait_ident: #reinhardt_crate::UrlResolver {
+				#[doc = #doc_str]
+				fn #method_ident(&self) -> String {
+					self.resolve_url(#name, &[])
+				}
+			}
+			#[cfg(feature = "url-resolver")]
+			impl<T: #reinhardt_crate::UrlResolver> #trait_ident for T {}
+
+			#[cfg(feature = "url-resolver")]
+			#[doc(hidden)]
+			pub mod #resolver_mod_ident {
+				pub use super::#trait_ident;
+			}
+		}
+	} else {
+		let param_idents: Vec<syn::Ident> = params
+			.iter()
+			.map(|p| syn::Ident::new(p, Span::call_site()))
+			.collect();
+		let param_strs: Vec<&str> = params.iter().map(|s| s.as_str()).collect();
+
+		quote! {
+			#[cfg(feature = "url-resolver")]
+			#[doc = #doc_str]
+			pub trait #trait_ident: #reinhardt_crate::UrlResolver {
+				#[doc = #doc_str]
+				fn #method_ident(&self, #(#param_idents: &str),*) -> String {
+					self.resolve_url(#name, &[#((#param_strs, #param_idents)),*])
+				}
+			}
+			#[cfg(feature = "url-resolver")]
+			impl<T: #reinhardt_crate::UrlResolver> #trait_ident for T {}
+
+			#[cfg(feature = "url-resolver")]
+			#[doc(hidden)]
+			pub mod #resolver_mod_ident {
+				pub use super::#trait_ident;
+			}
+		}
+	}
 }
 
 fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStream> {
@@ -949,6 +1096,9 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 		}
 	};
 
+	let url_resolver_tokens =
+		generate_url_resolver_tokens(&options.name, &fn_name.to_string(), &path_str, &reinhardt_crate);
+
 	Ok(quote! {
 		// Submit endpoint metadata to global inventory
 		#metadata_submission
@@ -998,6 +1148,8 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 		#fn_vis fn #fn_name() -> #view_type_name {
 			#view_type_name
 		}
+
+		#url_resolver_tokens
 	})
 }
 
@@ -1024,4 +1176,52 @@ pub(crate) fn patch_impl(args: TokenStream, input: ItemFn) -> Result<TokenStream
 /// Implementation of DELETE route macro
 pub(crate) fn delete_impl(args: TokenStream, input: ItemFn) -> Result<TokenStream> {
 	route_impl("DELETE", args, input)
+}
+
+#[cfg(test)]
+mod url_resolver_tests {
+	use super::*;
+
+	#[test]
+	fn route_name_to_trait_name() {
+		assert_eq!(to_resolver_trait_name("auth_login"), "ResolveAuthLogin");
+		assert_eq!(
+			to_resolver_trait_name("cluster_retrieve"),
+			"ResolveClusterRetrieve"
+		);
+		assert_eq!(to_resolver_trait_name("home"), "ResolveHome");
+		assert_eq!(
+			to_resolver_trait_name("deployment_logs"),
+			"ResolveDeploymentLogs"
+		);
+	}
+
+	#[test]
+	fn extract_path_params_none() {
+		assert_eq!(extract_url_params("/login/"), Vec::<String>::new());
+	}
+
+	#[test]
+	fn extract_path_params_single() {
+		assert_eq!(extract_url_params("/{id}/"), vec!["id"]);
+	}
+
+	#[test]
+	fn extract_path_params_multiple() {
+		assert_eq!(
+			extract_url_params("/{user_id}/posts/{post_id}/"),
+			vec!["user_id", "post_id"]
+		);
+	}
+
+	#[test]
+	fn extract_path_params_with_type_specifier() {
+		assert_eq!(extract_url_params("/{<int:id>}/"), vec!["id"]);
+		assert_eq!(extract_url_params("/{<uuid:item_id>}/"), vec!["item_id"]);
+	}
+
+	#[test]
+	fn extract_path_params_wildcard_skipped() {
+		assert_eq!(extract_url_params("/static/{*}"), Vec::<String>::new());
+	}
 }

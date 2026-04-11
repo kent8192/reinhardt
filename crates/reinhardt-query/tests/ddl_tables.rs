@@ -975,7 +975,7 @@ async fn test_postgres_integer_type_variants(
 		sqlx::query(&sql)
 			.execute(pool.as_ref())
 			.await
-			.expect(&format!(
+			.unwrap_or_else(|_| panic!(
 				"Failed to create table with integer type variant {}",
 				idx
 			));

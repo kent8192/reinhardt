@@ -412,7 +412,7 @@ async fn test_postgres_fk_on_delete_matrix(
 			columns: vec!["parent_id".to_string().into_iden()],
 			ref_table: Box::new(parent_table.clone().into_table_ref()),
 			ref_columns: vec!["id".to_string().into_iden()],
-			on_delete: Some(action.clone()),
+			on_delete: Some(action),
 			on_update: None,
 		});
 
@@ -492,7 +492,7 @@ async fn test_postgres_fk_on_update_matrix(
 			ref_table: Box::new(parent_table.clone().into_table_ref()),
 			ref_columns: vec!["id".to_string().into_iden()],
 			on_delete: None,
-			on_update: Some(action.clone()),
+			on_update: Some(action),
 		});
 
 	let (sql, _values) = builder.build_create_table(&create_child);

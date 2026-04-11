@@ -589,7 +589,7 @@ mod revoke_statement_tests {
 		let stmt = GrantRoleStatement::new();
 		assert_eq!(stmt.roles.len(), 0);
 		assert_eq!(stmt.grantees.len(), 0);
-		assert_eq!(stmt.with_admin_option, false);
+		assert!(!stmt.with_admin_option);
 		assert!(stmt.granted_by.is_none());
 	}
 
@@ -664,7 +664,7 @@ mod revoke_statement_tests {
 		let stmt = RevokeRoleStatement::new();
 		assert_eq!(stmt.roles.len(), 0);
 		assert_eq!(stmt.grantees.len(), 0);
-		assert_eq!(stmt.admin_option_for, false);
+		assert!(!stmt.admin_option_for);
 		assert!(stmt.granted_by.is_none());
 		assert!(stmt.drop_behavior.is_none());
 	}

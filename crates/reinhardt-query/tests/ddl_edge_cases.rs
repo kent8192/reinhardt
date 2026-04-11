@@ -232,7 +232,7 @@ async fn test_postgres_reserved_keyword_as_identifier(
 	sqlx::query(&sql)
 		.execute(pool.as_ref())
 		.await
-		.expect(&format!(
+		.unwrap_or_else(|_| panic!(
 			"Failed to create table with reserved keyword '{}' as column",
 			keyword
 		));
@@ -304,7 +304,7 @@ async fn test_postgres_varchar_length_boundaries(
 	sqlx::query(&sql)
 		.execute(pool.as_ref())
 		.await
-		.expect(&format!("Failed to create table with VARCHAR({})", length));
+		.unwrap_or_else(|_| panic!("Failed to create table with VARCHAR({})", length));
 
 	// Insert data of maximum allowed length
 	let test_data = "x".repeat(length as usize);
@@ -375,7 +375,7 @@ async fn test_postgres_decimal_precision_boundaries(
 	sqlx::query(&sql)
 		.execute(pool.as_ref())
 		.await
-		.expect(&format!(
+		.unwrap_or_else(|_| panic!(
 			"Failed to create table with DECIMAL({}, {})",
 			precision, scale
 		));
@@ -651,7 +651,7 @@ async fn test_mysql_reserved_keyword_as_identifier(
 	sqlx::query(&sql)
 		.execute(pool.as_ref())
 		.await
-		.expect(&format!(
+		.unwrap_or_else(|_| panic!(
 			"Failed to create table with reserved keyword '{}' as column",
 			keyword
 		));
@@ -708,7 +708,7 @@ async fn test_mysql_varchar_length_boundaries(
 	sqlx::query(&sql)
 		.execute(pool.as_ref())
 		.await
-		.expect(&format!("Failed to create table with VARCHAR({})", length));
+		.unwrap_or_else(|_| panic!("Failed to create table with VARCHAR({})", length));
 
 	// Cleanup
 	sqlx::query(&format!(

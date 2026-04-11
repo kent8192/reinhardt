@@ -25,7 +25,7 @@ fn test_set_role_new() {
 	let stmt = SetRoleStatement::new();
 
 	// Default should be None or not set
-	assert!(stmt.target.is_none() || matches!(stmt.target, None));
+	assert!(stmt.target.is_none());
 }
 
 #[rstest]

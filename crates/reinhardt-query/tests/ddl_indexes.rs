@@ -853,7 +853,7 @@ async fn test_postgres_index_combinations(
 	sqlx::query(&sql)
 		.execute(pool.as_ref())
 		.await
-		.expect(&format!(
+		.unwrap_or_else(|_| panic!(
 			"Failed to create index with unique={}, columns={}",
 			is_unique, column_count
 		));

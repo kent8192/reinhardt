@@ -147,8 +147,10 @@ fi
 echo "Found ${#PR_NUMBERS[@]} PRs in range"
 
 # --- Fetch PR details ---
+# Use a temp file to accumulate PR JSON objects (avoids ARG_MAX with large datasets)
 
-PRS_JSON="[]"
+PRS_TMPFILE=$(mktemp)
+echo '[]' > "$PRS_TMPFILE"
 
 for pr_num in "${PR_NUMBERS[@]}"; do
   echo "  Fetching PR #$pr_num..."
@@ -184,15 +186,23 @@ for pr_num in "${PR_NUMBERS[@]}"; do
   fi
 
   # Get human comments (exclude bots)
-  COMMENTS=$(gh api "repos/$REPO_OWNER/$REPO_NAME/issues/$pr_num/comments" \
+  COMMENTS_TMPFILE=$(mktemp)
+  gh api "repos/$REPO_OWNER/$REPO_NAME/issues/$pr_num/comments" \
     --jq "[.[] | select(.user.login | test(\"${BOT_AUTHORS}\") | not) | .body]" \
-    2>/dev/null || echo "[]")
+    > "$COMMENTS_TMPFILE" 2>/dev/null || echo "[]" > "$COMMENTS_TMPFILE"
 
-  # Merge PR data with comments
-  PR_WITH_COMMENTS=$(echo "$PR_DATA" | jq --argjson comments "$COMMENTS" '. + {human_comments: $comments}')
+  # Merge PR data with comments, append to accumulator file
+  PR_WITH_COMMENTS_TMPFILE=$(mktemp)
+  echo "$PR_DATA" | jq --slurpfile comments "$COMMENTS_TMPFILE" '. + {human_comments: $comments[0]}' \
+    > "$PR_WITH_COMMENTS_TMPFILE"
 
-  PRS_JSON=$(echo "$PRS_JSON" | jq --argjson pr "$PR_WITH_COMMENTS" '. += [$pr]')
+  jq --slurpfile pr "$PR_WITH_COMMENTS_TMPFILE" '. += $pr' "$PRS_TMPFILE" > "${PRS_TMPFILE}.new"
+  mv "${PRS_TMPFILE}.new" "$PRS_TMPFILE"
+
+  rm -f "$COMMENTS_TMPFILE" "$PR_WITH_COMMENTS_TMPFILE"
 done
+
+PRS_JSON_FILE="$PRS_TMPFILE"
 
 # --- Fetch Breaking Changes Discussions ---
 
@@ -231,25 +241,33 @@ BC_COUNT=$(echo "$BC_DISCUSSIONS" | jq 'length')
 echo "Found $BC_COUNT Breaking Changes Discussions since last release"
 
 # --- Assemble output JSON ---
+# Write intermediate data to temp files to avoid ARG_MAX limits with large PR data
+
+TMPDIR_ASSEMBLE=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_ASSEMBLE" "$PRS_JSON_FILE"' EXIT
+
+echo "$BC_DISCUSSIONS" > "$TMPDIR_ASSEMBLE/bc.json"
+printf '%s' "$CHANGELOG_SECTION" > "$TMPDIR_ASSEMBLE/changelog.txt"
 
 jq -n \
   --arg version "$VERSION" \
   --arg tag "$TAG" \
   --arg previous_tag "$PREV_TAG" \
   --arg date "$RELEASE_DATE" \
-  --arg changelog_section "$CHANGELOG_SECTION" \
-  --argjson pull_requests "$PRS_JSON" \
-  --argjson breaking_changes_discussions "$BC_DISCUSSIONS" \
+  --rawfile changelog_section "$TMPDIR_ASSEMBLE/changelog.txt" \
+  --slurpfile pull_requests "$PRS_JSON_FILE" \
+  --slurpfile breaking_changes_discussions "$TMPDIR_ASSEMBLE/bc.json" \
   '{
     version: $version,
     tag: $tag,
     previous_tag: $previous_tag,
     date: $date,
     changelog_section: $changelog_section,
-    pull_requests: $pull_requests,
-    breaking_changes_discussions: $breaking_changes_discussions
+    pull_requests: $pull_requests[0],
+    breaking_changes_discussions: $breaking_changes_discussions[0]
   }' > "$OUTPUT_FILE"
 
+PR_COUNT=$(jq 'length' "$PRS_JSON_FILE")
 echo "Release data written to $OUTPUT_FILE"
-echo "  PRs: $(echo "$PRS_JSON" | jq 'length')"
+echo "  PRs: $PR_COUNT"
 echo "  Breaking Changes Discussions: $BC_COUNT"

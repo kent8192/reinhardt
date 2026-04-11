@@ -95,10 +95,10 @@ impl LineString {
 	///
 	pub fn length(&self) -> f64 {
 		self.points
-			.windows(2)
-			.map(|pts| {
-				let dx = pts[1].x - pts[0].x;
-				let dy = pts[1].y - pts[0].y;
+			.array_windows::<2>()
+			.map(|[p1, p2]| {
+				let dx = p2.x - p1.x;
+				let dy = p2.y - p1.y;
 				(dx * dx + dy * dy).sqrt()
 			})
 			.sum()
@@ -109,8 +109,8 @@ impl LineString {
 		if self.srid == 4326 {
 			// WGS84 - use Haversine formula for better accuracy
 			self.points
-				.windows(2)
-				.map(|pts| haversine_distance(&pts[0], &pts[1]))
+				.array_windows::<2>()
+				.map(|[p1, p2]| haversine_distance(p1, p2))
 				.sum()
 		} else {
 			// For other SRIDs, fall back to planar distance

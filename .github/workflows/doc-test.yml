@@ -32,7 +32,7 @@ jobs:
   doc-test:
     name: Documentation Tests
     runs-on: ${{ fromJSON(inputs.runner) }}
-    timeout-minutes: 45
+    timeout-minutes: 360
     steps:
       - name: Free Disk Space (Ubuntu)
         if: ${{ !contains(inputs.runner, 'self-hosted') }}

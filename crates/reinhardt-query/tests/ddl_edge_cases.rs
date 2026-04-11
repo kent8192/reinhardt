@@ -232,10 +232,12 @@ async fn test_postgres_reserved_keyword_as_identifier(
 	sqlx::query(&sql)
 		.execute(pool.as_ref())
 		.await
-		.unwrap_or_else(|_| panic!(
-			"Failed to create table with reserved keyword '{}' as column",
-			keyword
-		));
+		.unwrap_or_else(|_| {
+			panic!(
+				"Failed to create table with reserved keyword '{}' as column",
+				keyword
+			)
+		});
 
 	// Verify we can insert and select using the keyword column
 	sqlx::query(&format!(
@@ -375,10 +377,12 @@ async fn test_postgres_decimal_precision_boundaries(
 	sqlx::query(&sql)
 		.execute(pool.as_ref())
 		.await
-		.unwrap_or_else(|_| panic!(
-			"Failed to create table with DECIMAL({}, {})",
-			precision, scale
-		));
+		.unwrap_or_else(|_| {
+			panic!(
+				"Failed to create table with DECIMAL({}, {})",
+				precision, scale
+			)
+		});
 
 	// Cleanup
 	sqlx::query(&format!(
@@ -651,10 +655,12 @@ async fn test_mysql_reserved_keyword_as_identifier(
 	sqlx::query(&sql)
 		.execute(pool.as_ref())
 		.await
-		.unwrap_or_else(|_| panic!(
-			"Failed to create table with reserved keyword '{}' as column",
-			keyword
-		));
+		.unwrap_or_else(|_| {
+			panic!(
+				"Failed to create table with reserved keyword '{}' as column",
+				keyword
+			)
+		});
 
 	// Verify we can insert and select
 	sqlx::query(&format!(

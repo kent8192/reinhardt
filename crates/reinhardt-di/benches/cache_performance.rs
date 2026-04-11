@@ -1,8 +1,8 @@
 //! Benchmark: Cache performance (hit vs miss)
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use std::hint::black_box;
 use reinhardt_di::{DiResult, Injectable, InjectionContext, SingletonScope};
+use std::hint::black_box;
 use std::sync::Arc;
 
 // Benchmark service

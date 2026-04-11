@@ -792,6 +792,9 @@ mod tests {
 		let result = should_rotate_token(timestamp, timestamp, Some(interval));
 
 		// Assert
-		assert!(!result, "Equal timestamps (0 elapsed) should not trigger rotation");
+		assert!(
+			!result,
+			"Equal timestamps (0 elapsed) should not trigger rotation"
+		);
 	}
 }

@@ -1,8 +1,8 @@
 //! Benchmark: Concurrent resolution and scope contention
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use std::hint::black_box;
 use reinhardt_di::{DiResult, Injectable, InjectionContext, SingletonScope};
+use std::hint::black_box;
 use std::sync::Arc;
 
 // Concurrent service

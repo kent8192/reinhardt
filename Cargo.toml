@@ -112,6 +112,7 @@ shortcuts = ["reinhardt-shortcuts"]
 tasks = ["reinhardt-tasks"]
 server = ["reinhardt-server"]
 commands = ["reinhardt-commands", "reinhardt-commands/migrations"]
+introspect = ["reinhardt-commands/introspect"]
 
 # Parent crate features (new module structure)
 conf = ["reinhardt-conf"]

@@ -779,6 +779,18 @@ fn generate_url_resolver_tokens(
 		return quote! {};
 	}
 
+	// Validate that the route name is a valid Rust identifier before creating
+	// Ident values. `syn::Ident::new` panics on invalid identifiers, so we
+	// catch that early and emit a readable compile error instead.
+	if syn::parse_str::<syn::Ident>(name).is_err() {
+		let msg = format!(
+			"Route name `{name}` is not a valid Rust identifier. \
+			 Route names used with url-resolver must be valid identifiers \
+			 (no hyphens, dots, or leading digits)."
+		);
+		return quote! { ::core::compile_error!(#msg); };
+	}
+
 	let trait_name_str = to_resolver_trait_name(name);
 	let trait_ident = syn::Ident::new(&trait_name_str, Span::call_site());
 	let method_ident = syn::Ident::new(name, Span::call_site());

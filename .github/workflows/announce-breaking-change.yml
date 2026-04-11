@@ -1,0 +1,159 @@
+name: Announce Breaking Change
+
+on:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Backfill mode'
+        type: choice
+        options: ['by-pr-number', 'all']
+        default: 'by-pr-number'
+      pr-numbers:
+        description: 'Comma-separated PR numbers (for by-pr-number mode)'
+        required: false
+        default: ''
+
+jobs:
+  announce:
+    name: Announce Breaking Change
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      (
+        contains(github.event.pull_request.labels.*.name, 'breaking-change')
+        || contains(github.event.pull_request.title, '!:')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/announce-breaking-change
+        with:
+          source-repo: reinhardt-web
+          pr-number: ${{ github.event.pull_request.number }}
+          pr-title: ${{ github.event.pull_request.title }}
+          pr-url: ${{ github.event.pull_request.html_url }}
+          pr-body: ${{ github.event.pull_request.body }}
+          merged-at: ${{ github.event.pull_request.merged_at }}
+          github-token: ${{ secrets.DISCUSSION_PAT }}
+
+  backfill:
+    name: Backfill Breaking Change Announcements
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.DISCUSSION_PAT }}
+      SOURCE_REPO: reinhardt-web
+      TARGET_REPO: kent8192/reinhardt-web
+      INPUT_MODE: ${{ inputs.mode }}
+      INPUT_PR_NUMBERS: ${{ inputs.pr-numbers }}
+    steps:
+      - name: Run backfill
+        run: |
+          process_pr() {
+            local pr_number="$1"
+            echo "--- Processing PR #${pr_number} ---"
+
+            local pr_data
+            pr_data=$(gh pr view "$pr_number" --repo "$TARGET_REPO" \
+              --json title,body,url,mergedAt 2>&1) || {
+              echo "ERROR: Failed to fetch PR #${pr_number}: ${pr_data}"
+              return 1
+            }
+
+            local pr_title pr_url merged_at
+            pr_title=$(echo "$pr_data" | jq -r '.title')
+            pr_url=$(echo "$pr_data" | jq -r '.url')
+            merged_at=$(echo "$pr_data" | jq -r '.mergedAt')
+
+            local search_key="[${SOURCE_REPO}#${pr_number}]"
+            local count
+            count=$(gh api graphql -f query="
+              {
+                search(type: DISCUSSION, query: \"repo:kent8192/reinhardt-web in:title \\\"${search_key}\\\"\", first: 1) {
+                  discussionCount
+                }
+              }
+            " --jq '.data.search.discussionCount')
+
+            if [ "$count" -gt 0 ]; then
+              echo "SKIP: Discussion already exists for ${search_key}"
+              return 0
+            fi
+
+            local pr_body
+            pr_body=$(echo "$pr_data" | jq -r '.body // ""')
+
+            local details
+            details=$(printf '%s' "$pr_body" | awk '
+              /^## Breaking Changes/ { found=1; next }
+              /^## / { if (found) exit }
+              found { print }
+            ')
+            details=$(echo "$details" | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba;}')
+
+            if [ -z "$details" ]; then
+              details=$(printf '%s' "$pr_body" | awk '
+                /^BREAKING CHANGE:/ { found=1 }
+                found { print }
+              ')
+            fi
+
+            if [ -z "$details" ]; then
+              details=$(printf '%s' "$pr_body" | head -100)
+            fi
+
+            local merged_date="${merged_at%%T*}"
+            local disc_title="${search_key} ${pr_title}"
+
+            cat > /tmp/discussion-body.md <<BODY_EOF
+## Breaking Change: ${SOURCE_REPO}
+
+**PR**: ${SOURCE_REPO}#${pr_number} — ${pr_title}
+**Merged**: ${merged_date}
+**Link**: ${pr_url}
+
+### Details
+
+${details}
+BODY_EOF
+
+            gh discussion create \
+              --repo kent8192/reinhardt-web \
+              --category "Breaking Changes" \
+              --title "$disc_title" \
+              --body-file /tmp/discussion-body.md
+
+            echo "CREATED: ${disc_title}"
+            sleep 2
+          }
+
+          if [ "$INPUT_MODE" = "by-pr-number" ]; then
+            if [ -z "$INPUT_PR_NUMBERS" ]; then
+              echo "ERROR: pr-numbers is required for by-pr-number mode"
+              exit 1
+            fi
+            IFS=',' read -ra NUMBERS <<< "$INPUT_PR_NUMBERS"
+            for num in "${NUMBERS[@]}"; do
+              num=$(echo "$num" | xargs)
+              process_pr "$num" || true
+            done
+
+          elif [ "$INPUT_MODE" = "all" ]; then
+            echo "Scanning all merged PRs for breaking changes..."
+            gh api --paginate "repos/${TARGET_REPO}/pulls?state=closed&per_page=100" \
+              | jq -sr 'add
+                | map(select(.merged_at != null))
+                | map(select(
+                    ([.labels[].name] | any(. == "breaking-change")) or
+                    (.title | test("!:")) or
+                    (.body | test("\\[x\\] Breaking change"; "i"))
+                  ))
+                | sort_by(.number)
+                | .[].number' \
+              | while read -r num; do
+                process_pr "$num" || true
+              done
+          fi
+
+          echo "Backfill complete."

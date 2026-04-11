@@ -266,13 +266,14 @@ jobs:
             fi
 
             # Stage 2: Generate announcement with Claude CLI
+            # Pass release data via stdin pipe (not command arg) to avoid ARG_MAX
             SYSTEM_PROMPT=$(cat scripts/prompts/announcement-system.md)
-            if claude --print \
+            if cat "/tmp/release-data-${VERSION}.json" \
+              | claude --print \
               --bare \
               --model sonnet \
               --system-prompt "$SYSTEM_PROMPT" \
               --tools "" \
-              "$(cat "/tmp/release-data-${VERSION}.json")" \
               > "$ANNOUNCEMENT_FILE" 2>/dev/null; then
               echo "Generated announcement for $TAG"
             else
@@ -314,14 +315,21 @@ jobs:
             fi
           done
 
-          if [ -n "$FAILED_TAGS" ]; then
-            echo "::warning::Failed tags:$FAILED_TAGS"
-          fi
-
           # Check if any announcements were generated
           GENERATED=$(find announcements -name '*.md' ! -name '.gitkeep' | wc -l)
+
+          if [ -n "$FAILED_TAGS" ]; then
+            echo "::error::Failed to process tags:$FAILED_TAGS"
+            if [ "$GENERATED" -eq 0 ]; then
+              echo "::error::All tags failed — no announcements generated"
+              exit 1
+            fi
+            # Some tags failed but others succeeded — continue with partial results
+            echo "::warning::Partial failure — $GENERATED announcement(s) generated, but some tags failed"
+          fi
+
           if [ "$GENERATED" -eq 0 ]; then
-            echo "::notice::No new announcements to create"
+            echo "::notice::No new announcements to create (all tags already have announcements or Discussions)"
             echo "no_announcements=true" >> "$GITHUB_ENV"
           else
             echo "Generated $GENERATED announcement(s)"

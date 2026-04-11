@@ -1,6 +1,6 @@
 //! URL resolver trait for type-safe URL generation.
 //!
-//! This module provides the [`UrlResolver`] trait, the foundation for
+//! This module provides the `UrlResolver` trait, the foundation for
 //! compile-time type-safe URL resolution. View macros (`#[get]`, `#[post]`,
 //! etc.) generate extension traits with blanket implementations that add
 //! named accessor methods to any `UrlResolver` implementor.

@@ -85,7 +85,7 @@ impl TestService {
 		let user = db
 			.fetch_user(user_id)
 			.await
-			.map_err(|e| Status::not_found(e))?;
+			.map_err(Status::not_found)?;
 		Ok(Response::new(user))
 	}
 
@@ -107,7 +107,7 @@ impl TestService {
 		let user = db
 			.fetch_user(user_id)
 			.await
-			.map_err(|e| Status::not_found(e))?;
+			.map_err(Status::not_found)?;
 		Ok(Response::new(user))
 	}
 
@@ -121,7 +121,7 @@ impl TestService {
 		let user = db
 			.fetch_user(user_id)
 			.await
-			.map_err(|e| Status::not_found(e))?;
+			.map_err(Status::not_found)?;
 		Ok(Response::new(user))
 	}
 }

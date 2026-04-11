@@ -226,7 +226,7 @@ async fn test_timestamp_edge_values(#[case] seconds: i64, #[case] nanos: i32) {
 	// Additional validation for non-negative seconds
 	if seconds >= 0 {
 		assert!(
-			nanos >= 0 && nanos <= 999_999_999,
+			(0..=999_999_999).contains(&nanos),
 			"For non-negative seconds, nanos should be in [0, 999_999_999]"
 		);
 	}

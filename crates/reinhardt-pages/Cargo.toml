@@ -14,6 +14,8 @@ categories = ["wasm", "web-programming"]
 default = []
 msgpack = ["dep:rmp-serde"]
 testing = []
+# Exposes MockableServerFn trait for MSW-style testing
+msw = []
 pages-full = ["msgpack", "web-sys-full"]
 static = []
 urls = []

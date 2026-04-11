@@ -1309,7 +1309,34 @@ impl ServerRouter {
 	/// assert!(router.validate_routes().is_ok());
 	/// ```
 	pub fn validate_routes(&self) -> std::result::Result<(), Vec<String>> {
-		let errors = self.compile_routes();
+		let mut errors = self.compile_routes();
+		if let Err(name_errors) = self.validate_route_names() {
+			errors.extend(name_errors);
+		}
+		if errors.is_empty() {
+			Ok(())
+		} else {
+			Err(errors)
+		}
+	}
+
+	/// Validate that no duplicate route names exist among all collected routes.
+	///
+	/// Returns `Ok(())` if all names are unique, or `Err(errors)` with details
+	/// about each duplicate.
+	pub fn validate_route_names(&self) -> std::result::Result<(), Vec<String>> {
+		let registrations = self.collect_routes_recursive(None, "");
+		let mut seen: std::collections::HashMap<String, String> =
+			std::collections::HashMap::new();
+		let mut errors = Vec::new();
+		for (name, path) in registrations {
+			if let Some(existing_path) = seen.insert(name.clone(), path.clone()) {
+				errors.push(format!(
+					"Duplicate route name '{}': path '{}' conflicts with existing path '{}'",
+					name, path, existing_path
+				));
+			}
+		}
 		if errors.is_empty() {
 			Ok(())
 		} else {
@@ -1517,11 +1544,16 @@ impl ServerRouter {
 	/// router.register_all_routes();
 	/// let url = router.reverse("v1:users:detail", &[("id", "123")]);
 	/// ```
-	pub fn register_all_routes(&mut self) {
+	#[must_use]
+	pub fn register_all_routes(&mut self) -> Vec<String> {
 		let registrations = self.collect_routes_recursive(None, "");
+		let mut errors = Vec::new();
 		for (name, path) in registrations {
-			self.reverser.register_path(&name, &path);
+			if let Err(e) = self.reverser.register_path(&name, &path) {
+				errors.push(e);
+			}
 		}
+		errors
 	}
 
 	/// Recursively collect all routes with accumulated prefixes and namespaces.
@@ -2152,7 +2184,8 @@ mod tests {
 		);
 
 		// Act
-		router.register_all_routes();
+		let errors = router.register_all_routes();
+		assert!(errors.is_empty());
 
 		// Assert
 		let url = router.reverse("api:health", &[]);
@@ -2182,7 +2215,8 @@ mod tests {
 			.mount("/users/", users);
 
 		// Act
-		api.register_all_routes();
+		let errors = api.register_all_routes();
+		assert!(errors.is_empty());
 
 		// Assert
 		let url = api.reverse("v1:users:list", &[]);
@@ -3229,5 +3263,78 @@ mod tests {
 			result.is_some(),
 			"Child with '/' prefix under trailing-slash parent should match"
 		);
+	}
+
+	// ===================================================================
+	// Duplicate route name detection tests (Issue #3462)
+	// ===================================================================
+
+	#[rstest]
+	fn test_register_all_routes_detects_duplicate_names() {
+		async fn handler_a(_req: Request) -> Result<Response> {
+			Ok(Response::ok())
+		}
+		async fn handler_b(_req: Request) -> Result<Response> {
+			Ok(Response::ok())
+		}
+
+		// Arrange — two routes with the same name in the same router
+		let mut router = ServerRouter::new()
+			.with_namespace("api")
+			.function_named("/users", Method::GET, "list", handler_a)
+			.function_named("/items", Method::GET, "list", handler_b);
+
+		// Act
+		let errors = router.register_all_routes();
+
+		// Assert
+		assert_eq!(errors.len(), 1);
+		assert!(errors[0].contains("Duplicate route name 'api:list'"));
+	}
+
+	#[rstest]
+	fn test_validate_route_names_succeeds_with_unique_names() {
+		async fn handler_a(_req: Request) -> Result<Response> {
+			Ok(Response::ok())
+		}
+		async fn handler_b(_req: Request) -> Result<Response> {
+			Ok(Response::ok())
+		}
+
+		// Arrange
+		let router = ServerRouter::new()
+			.with_namespace("api")
+			.function_named("/users", Method::GET, "users-list", handler_a)
+			.function_named("/items", Method::GET, "items-list", handler_b);
+
+		// Act
+		let result = router.validate_route_names();
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	fn test_validate_routes_includes_name_errors() {
+		async fn handler_a(_req: Request) -> Result<Response> {
+			Ok(Response::ok())
+		}
+		async fn handler_b(_req: Request) -> Result<Response> {
+			Ok(Response::ok())
+		}
+
+		// Arrange — duplicate name
+		let router = ServerRouter::new()
+			.with_namespace("api")
+			.function_named("/users", Method::GET, "list", handler_a)
+			.function_named("/items", Method::GET, "list", handler_b);
+
+		// Act
+		let result = router.validate_routes();
+
+		// Assert
+		assert!(result.is_err());
+		let errors = result.unwrap_err();
+		assert!(errors.iter().any(|e| e.contains("Duplicate route name")));
 	}
 }

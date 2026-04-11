@@ -446,8 +446,10 @@ impl Router for DefaultRouter {
 		self.matcher.add_pattern(pattern, handler_id.clone());
 
 		// Register route for reverse lookup if it has a name
-		if route.full_name().is_some() || route.name.is_some() {
-			self.reverser.register(route.clone());
+		if (route.full_name().is_some() || route.name.is_some())
+			&& let Err(e) = self.reverser.register(route.clone())
+		{
+			tracing::warn!("{}", e);
 		}
 
 		self.routes.push(route);

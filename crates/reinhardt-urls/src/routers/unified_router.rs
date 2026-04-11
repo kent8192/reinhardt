@@ -187,7 +187,10 @@ impl UnifiedRouter {
 	/// global registry for later application by the server.
 	pub fn into_server(mut self) -> ServerRouter {
 		self.flush_di_registrations();
-		self.server.register_all_routes();
+		let errors = self.server.register_all_routes();
+		for error in &errors {
+			tracing::warn!("{}", error);
+		}
 		self.server
 	}
 
@@ -200,7 +203,10 @@ impl UnifiedRouter {
 	/// Consumes the router and returns both parts.
 	pub fn into_parts(mut self) -> (ServerRouter, ClientRouter) {
 		self.flush_di_registrations();
-		self.server.register_all_routes();
+		let errors = self.server.register_all_routes();
+		for error in &errors {
+			tracing::warn!("{}", error);
+		}
 		(self.server, self.client)
 	}
 
@@ -435,7 +441,10 @@ impl UnifiedRouter {
 	/// global registry for later application by the server.
 	pub fn into_server(mut self) -> ServerRouter {
 		self.flush_di_registrations();
-		self.server.register_all_routes();
+		let errors = self.server.register_all_routes();
+		for error in &errors {
+			tracing::warn!("{}", error);
+		}
 		self.server
 	}
 

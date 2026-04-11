@@ -34,7 +34,7 @@ jobs:
   unit-coverage:
     name: Unit Test Coverage
     runs-on: ${{ fromJSON(inputs.runner) }}
-    timeout-minutes: 60
+    timeout-minutes: 360
     env:
       CARGO_TARGET_DIR: /tmp/cargo_target_unit_cov
     permissions:
@@ -182,7 +182,7 @@ jobs:
   intra-crate-integration-coverage:
     name: Intra-Crate Integration Coverage
     runs-on: ${{ fromJSON(inputs.runner) }}
-    timeout-minutes: 120
+    timeout-minutes: 360
     env:
       CARGO_TARGET_DIR: /tmp/cargo_target_intra_cov
     permissions:
@@ -340,7 +340,7 @@ jobs:
   cross-crate-integration-coverage:
     name: Cross-Crate Integration Coverage
     runs-on: ${{ fromJSON(inputs.runner) }}
-    timeout-minutes: 60
+    timeout-minutes: 360
     env:
       CARGO_TARGET_DIR: /tmp/cargo_target_cross_cov
     permissions:

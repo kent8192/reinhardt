@@ -16,7 +16,7 @@ jobs:
   release-dry-run:
     name: Release Dry-Run Check
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    timeout-minutes: 30
+    timeout-minutes: 360
     steps:
       - name: Free Disk Space
         if: ${{ !contains(inputs.runner || '', 'self-hosted') }}

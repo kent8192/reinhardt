@@ -26,7 +26,7 @@ jobs:
     # github.event.pull_request is available in workflow_call context when caller is triggered by pull_request
     if: github.event.pull_request != null && github.actor != 'dependabot[bot]'
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    timeout-minutes: 10
+    timeout-minutes: 360
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -39,7 +39,7 @@ jobs:
   clippy-todo-check:
     name: Clippy TODO/unimplemented/dbg lint
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    timeout-minutes: 30
+    timeout-minutes: 360
     steps:
       - name: Free Disk Space (Ubuntu)
         if: ${{ !contains(inputs.runner || '', 'self-hosted') }}

@@ -255,6 +255,39 @@ impl<T: Send + Sync + 'static> Depends<T> {
 	pub fn metadata(&self) -> &InjectionMetadata {
 		&self.metadata
 	}
+
+	/// Attempt to unwrap the inner `Arc`, returning `T` if this is the only
+	/// strong reference. Returns `Err(Self)` if other references exist.
+	///
+	/// This mirrors [`Arc::try_unwrap`] semantics. Unlike
+	/// [`into_inner`](Depends::into_inner), this method does **not** require
+	/// `T: Clone`.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_di::Depends;
+	///
+	/// // Success: single owner
+	/// let depends = Depends::from_value(42u32);
+	/// let value = depends.try_unwrap().unwrap();
+	/// assert_eq!(value, 42);
+	///
+	/// // Failure: multiple owners
+	/// let depends = Depends::from_value(42u32);
+	/// let _clone = depends.clone();
+	/// let err = depends.try_unwrap().unwrap_err();
+	/// assert_eq!(*err, 42); // still accessible via Deref
+	/// ```
+	pub fn try_unwrap(self) -> Result<T, Self> {
+		match Arc::try_unwrap(self.inner) {
+			Ok(val) => Ok(val),
+			Err(arc) => Err(Self {
+				inner: arc,
+				metadata: self.metadata,
+			}),
+		}
+	}
 }
 
 impl<T: Clone + Send + Sync + 'static> Depends<T> {
@@ -650,5 +683,70 @@ mod tests {
 		// Assert
 		assert_eq!(depends.prefix, "/api");
 		assert!(depends.metadata().cached);
+	}
+
+	/// `try_unwrap()` succeeds when there is only one strong reference.
+	#[rstest]
+	#[tokio::test]
+	async fn test_depends_try_unwrap_success() {
+		// Arrange
+		let config = TestConfig {
+			value: "owned".to_string(),
+		};
+		let depends = Depends::from_value(config);
+
+		// Act
+		let result = depends.try_unwrap();
+
+		// Assert
+		assert!(result.is_ok());
+		assert_eq!(result.unwrap().value, "owned");
+	}
+
+	/// `try_unwrap()` returns `Err(Self)` when multiple references exist.
+	#[rstest]
+	#[tokio::test]
+	async fn test_depends_try_unwrap_err_multiple_refs() {
+		// Arrange
+		let config = TestConfig {
+			value: "shared".to_string(),
+		};
+		let depends = Depends::from_value(config);
+		let _clone = depends.clone();
+
+		// Act
+		let result = depends.try_unwrap();
+
+		// Assert
+		let returned = result.unwrap_err();
+		assert_eq!(returned.value, "shared");
+		assert_eq!(returned.metadata().scope, DependencyScope::Request);
+	}
+
+	/// `try_unwrap()` works with non-Clone types (the primary use case).
+	#[rstest]
+	#[tokio::test]
+	async fn test_depends_try_unwrap_non_clone_type() {
+		// Arrange
+		#[derive(Debug, PartialEq)]
+		struct NonCloneRouter {
+			prefix: String,
+		}
+
+		let router = NonCloneRouter {
+			prefix: "/api".to_string(),
+		};
+		let depends = Depends::from_value(router);
+
+		// Act
+		let result = depends.try_unwrap();
+
+		// Assert
+		assert_eq!(
+			result.unwrap(),
+			NonCloneRouter {
+				prefix: "/api".to_string()
+			}
+		);
 	}
 }

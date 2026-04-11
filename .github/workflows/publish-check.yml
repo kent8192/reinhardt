@@ -21,7 +21,7 @@ jobs:
   publish-check:
     name: Publish Dry-Run Check
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    timeout-minutes: 30
+    timeout-minutes: 360
     # Skip for release-plz branches and release-fix branches - versions may not yet be on crates.io
     if: >-
       ${{

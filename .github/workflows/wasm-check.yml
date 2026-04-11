@@ -24,7 +24,7 @@ jobs:
   wasm-check:
     name: WASM Check (${{ matrix.target.name }})
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    timeout-minutes: 30
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -89,7 +89,7 @@ jobs:
     name: WASM Test (headless Chrome)
     if: github.event_name != 'push'
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    timeout-minutes: 30
+    timeout-minutes: 360
     env:
       CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
     steps:

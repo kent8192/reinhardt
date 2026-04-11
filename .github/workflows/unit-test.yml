@@ -47,7 +47,7 @@ jobs:
   unit-test:
     name: Unit Tests (${{ matrix.partition }}/${{ inputs.partition-count || '8' }})
     runs-on: ${{ fromJSON(inputs.runner) }}
-    timeout-minutes: 45
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:

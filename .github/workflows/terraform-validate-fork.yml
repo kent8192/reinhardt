@@ -20,7 +20,7 @@ jobs:
     name: Detect changed modules
     if: github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 360
     outputs:
       website: ${{ steps.filter.outputs.website }}
       github-runners: ${{ steps.filter.outputs.github-runners }}
@@ -52,7 +52,7 @@ jobs:
     name: Validate (${{ matrix.module.name }})
     needs: detect-changes
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:

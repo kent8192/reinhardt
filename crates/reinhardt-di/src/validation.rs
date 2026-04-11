@@ -19,6 +19,8 @@ pub enum ValidationErrorKind {
 	ScopeIncompatibility,
 	/// A circular dependency chain was detected.
 	CircularDependency,
+	/// A user-defined factory targets a framework-managed type.
+	FrameworkTypeOverride,
 }
 
 /// A single validation error discovered during registry validation.
@@ -40,9 +42,66 @@ impl fmt::Display for ValidationError {
 			ValidationErrorKind::MissingDependency => "[MISSING]",
 			ValidationErrorKind::ScopeIncompatibility => "[SCOPE]",
 			ValidationErrorKind::CircularDependency => "[CYCLE]",
+			ValidationErrorKind::FrameworkTypeOverride => "[OVERRIDE]",
 		};
 		write!(f, "{} {}", prefix, self.message)
 	}
+}
+
+/// Known framework crate prefixes used by the pseudo orphan rule.
+///
+/// Each entry is checked as a prefix against `std::any::type_name` output
+/// (e.g., `"reinhardt_di::"` matches `"reinhardt_di::context::InjectionContext"`).
+/// Update this list when adding new framework crates.
+const FRAMEWORK_CRATE_PREFIXES: &[&str] = &[
+	"reinhardt::",
+	"reinhardt_admin::",
+	"reinhardt_admin_cli::",
+	"reinhardt_apps::",
+	"reinhardt_auth::",
+	"reinhardt_commands::",
+	"reinhardt_conf::",
+	"reinhardt_core::",
+	"reinhardt_db::",
+	"reinhardt_db_macros::",
+	"reinhardt_deeplink::",
+	"reinhardt_dentdelion::",
+	"reinhardt_di::",
+	"reinhardt_dispatch::",
+	"reinhardt_forms::",
+	"reinhardt_graphql::",
+	"reinhardt_grpc::",
+	"reinhardt_http::",
+	"reinhardt_i18n::",
+	"reinhardt_mail::",
+	"reinhardt_manouche::",
+	"reinhardt_middleware::",
+	"reinhardt_openapi::",
+	"reinhardt_pages::",
+	"reinhardt_query::",
+	"reinhardt_rest::",
+	"reinhardt_server::",
+	"reinhardt_shortcuts::",
+	"reinhardt_tasks::",
+	"reinhardt_test::",
+	"reinhardt_testkit::",
+	"reinhardt_throttling::",
+	"reinhardt_urls::",
+	"reinhardt_utils::",
+	"reinhardt_views::",
+	"reinhardt_websockets::",
+];
+
+/// Check if a type belongs to the reinhardt framework based on its
+/// fully-qualified name from `std::any::type_name`.
+///
+/// Returns `true` for types whose qualified name starts with `reinhardt::`
+/// (the facade crate) or a known framework crate prefix such as
+/// `reinhardt_di::` or `reinhardt_db::`.
+fn is_framework_type(qualified_name: &str) -> bool {
+	FRAMEWORK_CRATE_PREFIXES
+		.iter()
+		.any(|prefix| qualified_name.starts_with(prefix))
 }
 
 /// Validates a [`DependencyRegistry`] for integrity at startup.
@@ -66,6 +125,7 @@ impl RegistryValidator {
 		self.check_missing_dependencies(&mut errors);
 		self.check_scope_compatibility(&mut errors);
 		self.check_circular_dependencies(&mut errors);
+		self.check_framework_type_override(&mut errors);
 
 		if errors.is_empty() {
 			Ok(())
@@ -183,6 +243,32 @@ impl RegistryValidator {
 		}
 	}
 
+	/// Detect user-defined factories that target framework-managed types.
+	///
+	/// Uses the fully-qualified type name from `std::any::type_name` to check
+	/// if the registered type belongs to the reinhardt framework (pseudo orphan rule).
+	fn check_framework_type_override(&self, errors: &mut Vec<ValidationError>) {
+		for (type_id, qualified_name) in self.registry.iter_qualified_type_names() {
+			if is_framework_type(qualified_name) {
+				let display_name = self.resolve_type_name(type_id);
+				errors.push(ValidationError {
+					kind: ValidationErrorKind::FrameworkTypeOverride,
+					type_name: display_name,
+					type_id,
+					message: format!(
+						concat!(
+							"Type `{}` is a framework-managed type and cannot be ",
+							"registered via #[injectable_factory] or #[injectable]. ",
+							"Framework-managed types are automatically provided by the framework. ",
+							"Help: Define your own wrapper type instead."
+						),
+						qualified_name
+					),
+				});
+			}
+		}
+	}
+
 	/// Resolve a human-readable name for a `TypeId`, falling back to debug format.
 	fn resolve_type_name(&self, type_id: TypeId) -> String {
 		self.registry
@@ -229,6 +315,19 @@ pub fn format_validation_report(errors: &[ValidationError]) -> String {
 	if !cycle.is_empty() {
 		report.push_str("Circular Dependencies:\n");
 		for err in &cycle {
+			report.push_str(&format!("  - {}\n", err.message));
+		}
+		report.push('\n');
+	}
+
+	let framework: Vec<_> = errors
+		.iter()
+		.filter(|e| e.kind == ValidationErrorKind::FrameworkTypeOverride)
+		.collect();
+
+	if !framework.is_empty() {
+		report.push_str("Framework Type Override:\n");
+		for err in &framework {
 			report.push_str(&format!("  - {}\n", err.message));
 		}
 		report.push('\n');
@@ -660,5 +759,329 @@ mod tests {
 		assert!(report.contains("Missing Dependencies:"));
 		assert!(report.contains("Scope Incompatibilities:"));
 		assert!(report.contains("2 error(s) found"));
+	}
+
+	#[rstest]
+	fn register_and_retrieve_qualified_type_name() {
+		// Arrange
+		let registry = Arc::new(DependencyRegistry::new());
+		let type_id = TypeId::of::<TypeA>();
+
+		// Act
+		registry.register_qualified_type_name(type_id, "my_crate::module::TypeA");
+
+		// Assert
+		assert_eq!(
+			registry.get_qualified_type_name(&type_id),
+			Some("my_crate::module::TypeA")
+		);
+	}
+
+	// === is_framework_type: abnormal cases (should detect) ===
+
+	#[rstest]
+	#[case("reinhardt::settings::Settings", "facade crate direct")]
+	#[case("reinhardt::SomeType", "facade crate top-level")]
+	#[case("reinhardt::deep::nested::module::Type", "facade deeply nested")]
+	#[case("reinhardt_db::pool::DatabasePool", "sub-crate direct")]
+	#[case("reinhardt_core::SomeType", "sub-crate top-level")]
+	#[case(
+		"reinhardt_di::context::scope::SingletonScope",
+		"sub-crate deeply nested"
+	)]
+	#[case("reinhardt_http::request::HttpRequest", "http sub-crate")]
+	#[case("reinhardt_auth::backend::AuthBackend", "auth sub-crate")]
+	#[case("reinhardt_views::View", "views sub-crate")]
+	#[case("reinhardt_rest::serializers::Serializer", "rest sub-crate")]
+	#[case("reinhardt_middleware::Middleware", "middleware sub-crate")]
+	#[case(
+		"reinhardt_di::injected::Injected<my_app::MyType>",
+		"generic framework type"
+	)]
+	fn test_framework_type_detected(#[case] type_name: &str, #[case] description: &str) {
+		assert!(
+			is_framework_type(type_name),
+			"should detect as framework type: {description}"
+		);
+	}
+
+	// === is_framework_type: normal cases (should allow) ===
+
+	#[rstest]
+	#[case("my_app::services::UserService", "user crate")]
+	#[case("my_app::MyType", "user crate top-level")]
+	#[case("my_app::deep::nested::module::Type", "user crate deeply nested")]
+	#[case("alloc::string::String", "std String")]
+	#[case("alloc::vec::Vec<i32>", "std Vec")]
+	#[case("core::option::Option<String>", "std Option")]
+	#[case("std::collections::HashMap<String, i32>", "std HashMap")]
+	#[case("serde::Serialize", "third-party crate")]
+	#[case("tokio::runtime::Runtime", "async runtime")]
+	#[case("sea_query::query::SelectStatement", "query builder")]
+	#[case("i32", "primitive type")]
+	#[case("bool", "primitive type bool")]
+	#[case("()", "unit type")]
+	fn test_non_framework_type_allowed(#[case] type_name: &str, #[case] description: &str) {
+		assert!(!is_framework_type(type_name), "should allow: {description}");
+	}
+
+	// === is_framework_type: edge cases ===
+
+	#[rstest]
+	#[case("reinhardtson::MyType", false, "similar prefix different crate")]
+	#[case("reinhardts::MyType", false, "similar prefix no separator")]
+	#[case("reinhardt_like_crate::MyType", false, "unknown crate starting with reinhardt_")]
+	#[case("REINHARDT::Type", false, "uppercase")]
+	#[case("Reinhardt::Type", false, "capitalized")]
+	#[case("my_reinhardt_app::Type", false, "reinhardt in middle")]
+	#[case("not_reinhardt::Type", false, "reinhardt as suffix")]
+	#[case("core::reinhardt::Type", false, "reinhardt as submodule")]
+	#[case("_reinhardt::Type", false, "underscore prefix")]
+	#[case(
+		"alloc::vec::Vec<reinhardt_db::DatabasePool>",
+		false,
+		"generic wrapping framework"
+	)]
+	#[case(
+		"core::option::Option<reinhardt_di::Injected<Foo>>",
+		false,
+		"option wrapping framework"
+	)]
+	#[case("reinhardt", false, "bare crate name")]
+	#[case("reinhardt_", false, "underscore without path")]
+	#[case("reinhardt::", true, "facade prefix empty path")]
+	#[case("", false, "empty string")]
+	fn test_is_framework_type_edge_cases(
+		#[case] type_name: &str,
+		#[case] expected: bool,
+		#[case] description: &str,
+	) {
+		assert_eq!(
+			is_framework_type(type_name),
+			expected,
+			"edge case failed: {description}"
+		);
+	}
+
+	// === Framework type override validation integration tests ===
+
+	#[rstest]
+	fn validate_framework_type_override_detected() {
+		// Arrange
+		let registry = Arc::new(DependencyRegistry::new());
+		let type_id = TypeId::of::<TypeA>();
+		register_dummy::<TypeA>(&registry, DependencyScope::Singleton);
+		registry.register_type_name(type_id, "TypeA");
+		registry.register_qualified_type_name(type_id, "reinhardt_db::pool::DatabasePool");
+
+		let validator = RegistryValidator::new(registry);
+
+		// Act
+		let result = validator.validate();
+
+		// Assert
+		let errors = result.unwrap_err();
+		assert_eq!(errors.len(), 1);
+		assert_eq!(errors[0].kind, ValidationErrorKind::FrameworkTypeOverride);
+	}
+
+	#[rstest]
+	fn validate_facade_crate_type_override_detected() {
+		// Arrange
+		let registry = Arc::new(DependencyRegistry::new());
+		let type_id = TypeId::of::<TypeA>();
+		register_dummy::<TypeA>(&registry, DependencyScope::Singleton);
+		registry.register_type_name(type_id, "TypeA");
+		registry.register_qualified_type_name(type_id, "reinhardt::settings::Settings");
+
+		let validator = RegistryValidator::new(registry);
+
+		// Act
+		let result = validator.validate();
+
+		// Assert
+		let errors = result.unwrap_err();
+		assert_eq!(errors.len(), 1);
+		assert_eq!(errors[0].kind, ValidationErrorKind::FrameworkTypeOverride);
+	}
+
+	#[rstest]
+	fn validate_user_type_passes() {
+		// Arrange
+		let registry = Arc::new(DependencyRegistry::new());
+		let type_id = TypeId::of::<TypeA>();
+		register_dummy::<TypeA>(&registry, DependencyScope::Singleton);
+		registry.register_type_name(type_id, "TypeA");
+		registry.register_qualified_type_name(type_id, "my_app::services::MyService");
+		registry.register_dependencies(type_id, vec![]);
+
+		let validator = RegistryValidator::new(registry);
+
+		// Act
+		let result = validator.validate();
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	fn validate_std_type_passes() {
+		// Arrange
+		let registry = Arc::new(DependencyRegistry::new());
+		let type_id = TypeId::of::<TypeA>();
+		register_dummy::<TypeA>(&registry, DependencyScope::Singleton);
+		registry.register_type_name(type_id, "TypeA");
+		registry.register_qualified_type_name(type_id, "alloc::string::String");
+		registry.register_dependencies(type_id, vec![]);
+
+		let validator = RegistryValidator::new(registry);
+
+		// Act
+		let result = validator.validate();
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	fn validate_multiple_framework_violations_reported() {
+		// Arrange
+		let registry = Arc::new(DependencyRegistry::new());
+
+		let type_a = TypeId::of::<TypeA>();
+		let type_b = TypeId::of::<TypeB>();
+		let type_c = TypeId::of::<TypeC>();
+
+		register_dummy::<TypeA>(&registry, DependencyScope::Singleton);
+		register_dummy::<TypeB>(&registry, DependencyScope::Request);
+		register_dummy::<TypeC>(&registry, DependencyScope::Singleton);
+
+		registry.register_type_name(type_a, "TypeA");
+		registry.register_type_name(type_b, "TypeB");
+		registry.register_type_name(type_c, "TypeC");
+
+		registry.register_qualified_type_name(type_a, "reinhardt_db::pool::DatabasePool");
+		registry.register_qualified_type_name(type_b, "reinhardt_http::request::HttpRequest");
+		registry.register_qualified_type_name(type_c, "my_app::MyService");
+
+		registry.register_dependencies(type_a, vec![]);
+		registry.register_dependencies(type_b, vec![]);
+		registry.register_dependencies(type_c, vec![]);
+
+		let validator = RegistryValidator::new(registry);
+
+		// Act
+		let result = validator.validate();
+
+		// Assert
+		let errors = result.unwrap_err();
+		let framework_errors: Vec<_> = errors
+			.iter()
+			.filter(|e| e.kind == ValidationErrorKind::FrameworkTypeOverride)
+			.collect();
+		assert_eq!(framework_errors.len(), 2);
+	}
+
+	#[rstest]
+	fn validate_framework_error_contains_type_name() {
+		// Arrange
+		let registry = Arc::new(DependencyRegistry::new());
+		let type_id = TypeId::of::<TypeA>();
+		register_dummy::<TypeA>(&registry, DependencyScope::Singleton);
+		registry.register_type_name(type_id, "TypeA");
+		registry.register_qualified_type_name(type_id, "reinhardt_db::pool::DatabasePool");
+
+		let validator = RegistryValidator::new(registry);
+
+		// Act
+		let errors = validator.validate().unwrap_err();
+
+		// Assert
+		assert!(
+			errors[0]
+				.message
+				.contains("reinhardt_db::pool::DatabasePool")
+		);
+	}
+
+	#[rstest]
+	fn validate_framework_error_contains_newtype_hint() {
+		// Arrange
+		let registry = Arc::new(DependencyRegistry::new());
+		let type_id = TypeId::of::<TypeA>();
+		register_dummy::<TypeA>(&registry, DependencyScope::Singleton);
+		registry.register_type_name(type_id, "TypeA");
+		registry.register_qualified_type_name(type_id, "reinhardt_db::pool::DatabasePool");
+
+		let validator = RegistryValidator::new(registry);
+
+		// Act
+		let errors = validator.validate().unwrap_err();
+
+		// Assert
+		assert!(errors[0].message.contains("wrapper type"));
+	}
+
+	#[rstest]
+	fn validate_framework_check_independent_of_duplicate() {
+		// Arrange
+		let registry = Arc::new(DependencyRegistry::new());
+		let type_id = TypeId::of::<TypeA>();
+		register_dummy::<TypeA>(&registry, DependencyScope::Singleton);
+		registry.register_type_name(type_id, "TypeA");
+		registry.register_qualified_type_name(type_id, "reinhardt_di::context::InjectionContext");
+		registry.register_dependencies(type_id, vec![]);
+
+		let validator = RegistryValidator::new(registry);
+
+		// Act
+		let result = validator.validate();
+
+		// Assert
+		let errors = result.unwrap_err();
+		assert!(
+			errors
+				.iter()
+				.any(|e| e.kind == ValidationErrorKind::FrameworkTypeOverride)
+		);
+	}
+
+	// === type_name format regression tests ===
+
+	#[rstest]
+	fn type_name_format_starts_with_crate_prefix() {
+		// Arrange & Act
+		let name = std::any::type_name::<crate::InjectionContext>();
+
+		// Assert
+		assert!(
+			name.starts_with("reinhardt_di::"),
+			"type_name format regression: expected 'reinhardt_di::...' but got '{name}'"
+		);
+	}
+
+	#[rstest]
+	fn type_name_contains_double_colon_separator() {
+		// Act
+		let name = std::any::type_name::<crate::InjectionContext>();
+
+		// Assert
+		assert!(
+			name.contains("::"),
+			"type_name format regression: expected '::' separator in '{name}'"
+		);
+	}
+
+	#[rstest]
+	fn type_name_not_affected_by_type_alias() {
+		// Arrange
+		type Alias = crate::InjectionContext;
+
+		// Act
+		let original = std::any::type_name::<crate::InjectionContext>();
+		let aliased = std::any::type_name::<Alias>();
+
+		// Assert
+		assert_eq!(original, aliased, "type alias should not affect type_name");
 	}
 }

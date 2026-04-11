@@ -128,6 +128,9 @@ pub struct DependencyRegistry {
 	dependencies: DashMap<TypeId, Vec<TypeId>>,
 	/// Maps type ID to its type name for debugging
 	type_names: DashMap<TypeId, &'static str>,
+	/// Maps type ID to its fully-qualified type name from `std::any::type_name`.
+	/// Used for framework type detection (pseudo orphan rule).
+	qualified_type_names: DashMap<TypeId, &'static str>,
 }
 
 impl DependencyRegistry {
@@ -138,6 +141,7 @@ impl DependencyRegistry {
 			scopes: DashMap::new(),
 			dependencies: DashMap::new(),
 			type_names: DashMap::new(),
+			qualified_type_names: DashMap::new(),
 		}
 	}
 
@@ -297,6 +301,28 @@ Use a distinct newtype (e.g., `struct Primary{short}({short})`) for each."
 	/// Get the type name for a `TypeId`.
 	pub(crate) fn get_type_name(&self, type_id: TypeId) -> Option<&'static str> {
 		self.type_names.get(&type_id).map(|entry| *entry.value())
+	}
+
+	/// Register the fully-qualified type name obtained from `std::any::type_name::<T>()`.
+	///
+	/// Used by the pseudo orphan rule to detect framework-managed types.
+	#[doc(hidden)]
+	pub fn register_qualified_type_name(&self, type_id: TypeId, qualified_name: &'static str) {
+		self.qualified_type_names.insert(type_id, qualified_name);
+	}
+
+	/// Get the fully-qualified type name for a given `TypeId`.
+	pub fn get_qualified_type_name(&self, type_id: &TypeId) -> Option<&'static str> {
+		self.qualified_type_names.get(type_id).map(|r| *r.value())
+	}
+
+	/// Iterate over all qualified type name mappings without allocating a new map.
+	pub fn iter_qualified_type_names(
+		&self,
+	) -> impl Iterator<Item = (TypeId, &'static str)> + '_ {
+		self.qualified_type_names
+			.iter()
+			.map(|entry| (*entry.key(), *entry.value()))
 	}
 }
 

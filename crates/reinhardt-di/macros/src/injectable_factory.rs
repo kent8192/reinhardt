@@ -183,6 +183,10 @@ pub(crate) fn injectable_factory_impl(args: TokenStream, input: ItemFn) -> Resul
 				::std::any::TypeId::of::<#return_type>(),
 				#type_name,
 			);
+			registry.register_qualified_type_name(
+				::std::any::TypeId::of::<#return_type>(),
+				::std::any::type_name::<#return_type>(),
+			);
 		}
 
 		#di_crate::inventory::submit! {

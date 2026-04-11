@@ -335,6 +335,10 @@ pub(crate) fn injectable_impl(args: TokenStream, input: DeriveInput) -> Result<T
 					#scope_tokens,
 					#di_crate::InjectableFactory::<#struct_name>::new(),
 				);
+				registry.register_qualified_type_name(
+					::std::any::TypeId::of::<#struct_name>(),
+					::std::any::type_name::<#struct_name>(),
+				);
 			}
 
 			#di_crate::inventory::submit! {

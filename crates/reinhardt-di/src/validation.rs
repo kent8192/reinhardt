@@ -980,4 +980,43 @@ mod tests {
 			.iter()
 			.any(|e| e.kind == ValidationErrorKind::FrameworkTypeOverride));
 	}
+
+	// === type_name format regression tests ===
+
+	#[rstest]
+	fn type_name_format_starts_with_crate_prefix() {
+		// Arrange & Act
+		let name = std::any::type_name::<crate::InjectionContext>();
+
+		// Assert
+		assert!(
+			name.starts_with("reinhardt_di::"),
+			"type_name format regression: expected 'reinhardt_di::...' but got '{name}'"
+		);
+	}
+
+	#[rstest]
+	fn type_name_contains_double_colon_separator() {
+		// Act
+		let name = std::any::type_name::<crate::InjectionContext>();
+
+		// Assert
+		assert!(
+			name.contains("::"),
+			"type_name format regression: expected '::' separator in '{name}'"
+		);
+	}
+
+	#[rstest]
+	fn type_name_not_affected_by_type_alias() {
+		// Arrange
+		type Alias = crate::InjectionContext;
+
+		// Act
+		let original = std::any::type_name::<crate::InjectionContext>();
+		let aliased = std::any::type_name::<Alias>();
+
+		// Assert
+		assert_eq!(original, aliased, "type alias should not affect type_name");
+	}
 }

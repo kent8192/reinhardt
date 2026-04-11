@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.15...reinhardt-pages@v0.1.0-rc.16) - 2026-04-11
+
+### Added
+
+- *(pages)* add JWT token management and auth header injection for WASM SPA
+- add SubmitButton support to form! macro fields
+
+### Documentation
+
+- *(http)* address Copilot review on [[#3417](https://github.com/kent8192/reinhardt-web/issues/3417)](https://github.com/kent8192/reinhardt-web/issues/3417)
+
+### Fixed
+
+- *(pages)* add web-sys Storage feature for sessionStorage access
+- *(pages)* resolve server_fn endpoint URL with mount prefix in WASM
+- *(docs)* resolve broken intra-doc links and incorrect test assertion
+- *(pages)* add reference to endpoint variable for gloo-net Request::post
+- *(pages-macros)* inline is_safe_url to remove reinhardt-core dependency
+- *(pages)* preserve HTTP status codes for DI auth errors in server_fn
+- *(pages)* cfg-gate @event handler compilation to wasm32 only
+- *(pages)* inline @event closure capture to fix move semantics
+- auto-pass CSRF token as server_fn argument in form! macro
+- suppress unused_variables warnings in form! macro codegen
+- resolve merge conflicts with main and fix CI failures
+- *(admin)* switch WASM SPA to mount() rendering with scheduler init
+- WASM SPA server_fn cookie credentials, absolute URL, and CSRF fallback
+- *(ci)* add CHROMEDRIVER to WASM integration tests and fix cfg assertion
+- *(server_fn)* use SharedResponseCookies for reliable cookie delivery
+- *(pages-macros)* resolve clippy len_zero and bool_assert_comparison warnings
+
+### Other
+
+- Change AuthState user_id from i64 to String for UUID support
+
+### Styling
+
+- apply auto-fix formatting
+- apply rustfmt formatting via cargo make auto-fix
+- apply rustfmt formatting
+
+### Testing
+
+- add SubmitButton rendering regression tests
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.14...reinhardt-pages@v0.1.0-rc.15) - 2026-03-29
 
 ### Added

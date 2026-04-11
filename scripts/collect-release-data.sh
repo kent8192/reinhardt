@@ -147,8 +147,12 @@ fi
 echo "Found ${#PR_NUMBERS[@]} PRs in range"
 
 # --- Fetch PR details ---
+# Collect each PR as a separate JSON file, then combine with jq -s at the end.
+# This avoids O(n^2) re-parsing of the accumulator on every iteration.
 
-PRS_JSON="[]"
+PRS_TMPDIR=$(mktemp -d)
+trap 'rm -rf "$PRS_TMPDIR"' EXIT
+PR_INDEX=0
 
 for pr_num in "${PR_NUMBERS[@]}"; do
   echo "  Fetching PR #$pr_num..."
@@ -170,29 +174,40 @@ for pr_num in "${PR_NUMBERS[@]}"; do
   fi
 
   # Check exclusions: skip release-plz PRs and bot authors
-  PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
-  PR_AUTHOR=$(echo "$PR_DATA" | jq -r '.author')
+  PR_TITLE=$(printf '%s' "$PR_DATA" | jq -r '.title')
+  PR_AUTHOR=$(printf '%s' "$PR_DATA" | jq -r '.author')
 
   if [ "$PR_TITLE" = "chore: release" ]; then
     echo "  Skipping release-plz PR #$pr_num"
     continue
   fi
 
-  if echo "$PR_AUTHOR" | grep -qE '\[bot\]$'; then
+  if printf '%s' "$PR_AUTHOR" | grep -qE '\[bot\]$'; then
     echo "  Skipping bot PR #$pr_num (author: $PR_AUTHOR)"
     continue
   fi
 
   # Get human comments (exclude bots)
-  COMMENTS=$(gh api "repos/$REPO_OWNER/$REPO_NAME/issues/$pr_num/comments" \
+  COMMENTS_TMPFILE=$(mktemp)
+  gh api "repos/$REPO_OWNER/$REPO_NAME/issues/$pr_num/comments" \
     --jq "[.[] | select(.user.login | test(\"${BOT_AUTHORS}\") | not) | .body]" \
-    2>/dev/null || echo "[]")
+    > "$COMMENTS_TMPFILE" 2>/dev/null || printf '%s' "[]" > "$COMMENTS_TMPFILE"
 
-  # Merge PR data with comments
-  PR_WITH_COMMENTS=$(echo "$PR_DATA" | jq --argjson comments "$COMMENTS" '. + {human_comments: $comments}')
+  # Merge PR data with comments, write as individual file
+  printf '%s' "$PR_DATA" | jq --slurpfile comments "$COMMENTS_TMPFILE" '. + {human_comments: $comments[0]}' \
+    > "$PRS_TMPDIR/pr_$(printf '%04d' $PR_INDEX).json"
+  PR_INDEX=$((PR_INDEX + 1))
 
-  PRS_JSON=$(echo "$PRS_JSON" | jq --argjson pr "$PR_WITH_COMMENTS" '. += [$pr]')
+  rm -f "$COMMENTS_TMPFILE"
 done
+
+# Combine all PR files into a single JSON array
+if [ "$PR_INDEX" -gt 0 ]; then
+  jq -s '.' "$PRS_TMPDIR"/pr_*.json > "$PRS_TMPDIR/all_prs.json"
+else
+  printf '%s' '[]' > "$PRS_TMPDIR/all_prs.json"
+fi
+PRS_JSON_FILE="$PRS_TMPDIR/all_prs.json"
 
 # --- Fetch Breaking Changes Discussions ---
 
@@ -223,33 +238,41 @@ if [ -n "$PREV_TAG" ]; then
     --jq '.data.repository.discussions.nodes' 2>/dev/null || echo "[]")
 
   # Filter to discussions created after previous release date
-  BC_DISCUSSIONS=$(echo "$BC_RESULT" | jq --arg after "$PREV_DATE" \
+  BC_DISCUSSIONS=$(printf '%s' "$BC_RESULT" | jq --arg after "$PREV_DATE" \
     '[.[] | select(.createdAt > $after) | {number, title, url}]')
 fi
 
-BC_COUNT=$(echo "$BC_DISCUSSIONS" | jq 'length')
+BC_COUNT=$(printf '%s' "$BC_DISCUSSIONS" | jq 'length')
 echo "Found $BC_COUNT Breaking Changes Discussions since last release"
 
 # --- Assemble output JSON ---
+# Write intermediate data to temp files to avoid ARG_MAX limits with large PR data
+
+TMPDIR_ASSEMBLE=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_ASSEMBLE" "$PRS_TMPDIR"' EXIT
+
+printf '%s' "$BC_DISCUSSIONS" > "$TMPDIR_ASSEMBLE/bc.json"
+printf '%s' "$CHANGELOG_SECTION" > "$TMPDIR_ASSEMBLE/changelog.txt"
 
 jq -n \
   --arg version "$VERSION" \
   --arg tag "$TAG" \
   --arg previous_tag "$PREV_TAG" \
   --arg date "$RELEASE_DATE" \
-  --arg changelog_section "$CHANGELOG_SECTION" \
-  --argjson pull_requests "$PRS_JSON" \
-  --argjson breaking_changes_discussions "$BC_DISCUSSIONS" \
+  --rawfile changelog_section "$TMPDIR_ASSEMBLE/changelog.txt" \
+  --slurpfile pull_requests "$PRS_JSON_FILE" \
+  --slurpfile breaking_changes_discussions "$TMPDIR_ASSEMBLE/bc.json" \
   '{
     version: $version,
     tag: $tag,
     previous_tag: $previous_tag,
     date: $date,
     changelog_section: $changelog_section,
-    pull_requests: $pull_requests,
-    breaking_changes_discussions: $breaking_changes_discussions
+    pull_requests: $pull_requests[0],
+    breaking_changes_discussions: $breaking_changes_discussions[0]
   }' > "$OUTPUT_FILE"
 
+PR_COUNT=$(jq 'length' "$PRS_JSON_FILE")
 echo "Release data written to $OUTPUT_FILE"
-echo "  PRs: $(echo "$PRS_JSON" | jq 'length')"
+echo "  PRs: $PR_COUNT"
 echo "  Breaking Changes Discussions: $BC_COUNT"

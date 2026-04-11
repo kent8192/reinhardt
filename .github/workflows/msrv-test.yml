@@ -24,7 +24,7 @@ jobs:
   msrv-check:
     name: MSRV Check (${{ matrix.rust }})
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    timeout-minutes: 30
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:

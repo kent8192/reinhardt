@@ -17,7 +17,7 @@ permissions:
 jobs:
   update-version-refs:
     name: Update docs/examples version references
-    timeout-minutes: 10
+    timeout-minutes: 360
     # Only trigger for reinhardt-web releases (release-plz creates GitHub Release for reinhardt-web only)
     if: >
       github.event_name == 'workflow_dispatch' ||

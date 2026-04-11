@@ -12,8 +12,9 @@
 fn test_injectable_compile_fail_cases() {
 	let t = trybuild::TestCases::new();
 
-	// Test: Non-Injectable type resolution should fail
-	t.compile_fail("tests/di/ui/fail/invalid_inject_type.rs");
+	// Note: Non-Injectable type resolution is now a runtime error (not compile-time)
+	// because Depends::resolve() no longer requires T: Injectable at compile time.
+	// Runtime detection is tested in core_error_handling.rs.
 
 	// Test: Missing Clone trait should fail
 	t.compile_fail("tests/di/ui/fail/missing_clone_trait.rs");

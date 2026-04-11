@@ -641,5 +641,21 @@ pub(crate) fn installed_apps_impl(input: TokenStream) -> Result<TokenStream> {
 
 		// Compile-time validation
 		#(#validations)*
+
+		/// Callback macro for iterating over installed app labels.
+		///
+		/// Invokes the given macro with all app labels as arguments.
+		/// Used by `#[routes]` to generate `url_prelude`.
+		///
+		/// Namespaced with `__reinhardt_` prefix to reduce collision risk
+		/// in the consuming crate's root macro namespace.
+		#[cfg(feature = "url-resolver")]
+		#[doc(hidden)]
+		#[macro_export]
+		macro_rules! __reinhardt_for_each_app {
+			($callback:ident) => {
+				$callback!(#(#labels),*);
+			};
+		}
 	})
 }

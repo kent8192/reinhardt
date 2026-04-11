@@ -151,7 +151,7 @@ pub trait SessionStore: Send + Sync {
 
 	/// Create a new session ID
 	fn create_session_id(&self) -> SessionId {
-		Uuid::now_v7().to_string()
+		Uuid::new_v4().to_string()
 	}
 }
 

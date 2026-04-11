@@ -293,7 +293,7 @@ impl OAuth2Authentication {
 		user_id: &str,
 		scope: Option<String>,
 	) -> Result<String, String> {
-		let code = format!("code_{}", Uuid::now_v7());
+		let code = format!("code_{}", Uuid::new_v4());
 
 		let auth_code = AuthorizationCode {
 			code: code.clone(),
@@ -341,10 +341,10 @@ impl OAuth2Authentication {
 
 		// Generate access token
 		let token = AccessToken {
-			token: format!("access_{}", Uuid::now_v7()),
+			token: format!("access_{}", Uuid::new_v4()),
 			token_type: "Bearer".to_string(),
 			expires_in: 3600,
-			refresh_token: Some(format!("refresh_{}", Uuid::now_v7())),
+			refresh_token: Some(format!("refresh_{}", Uuid::new_v4())),
 			scope: auth_code.scope.clone(),
 		};
 

@@ -410,7 +410,7 @@ impl FileUploadHandler {
 	/// Uses UUID v4 (CSPRNG-based) instead of timestamps to prevent
 	/// predictable filename enumeration.
 	fn generate_unique_filename(&self, field_name: &str, original_filename: &str) -> String {
-		let unique_id = uuid::Uuid::now_v7();
+		let unique_id = uuid::Uuid::new_v4();
 
 		// Extract only the extension from the basename (strip any directory components)
 		let basename = Path::new(original_filename)

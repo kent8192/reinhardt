@@ -249,7 +249,7 @@ impl<B: SessionBackend> Session<B> {
 	/// assert!(key.len() > 20);
 	/// ```
 	pub fn generate_key() -> String {
-		Uuid::now_v7().to_string()
+		Uuid::new_v4().to_string()
 	}
 
 	/// Flush the session (delete all data and create new key)

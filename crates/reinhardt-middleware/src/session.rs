@@ -96,7 +96,7 @@ impl SessionData {
 	pub fn new(ttl: Duration) -> Self {
 		let now = SystemTime::now();
 		Self {
-			id: Uuid::now_v7().to_string(),
+			id: Uuid::new_v4().to_string(),
 			data: HashMap::new(),
 			created_at: now,
 			last_accessed: now,

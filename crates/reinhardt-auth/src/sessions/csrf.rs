@@ -127,7 +127,7 @@ impl CsrfSessionManager {
 		&self,
 		session: &mut Session<B>,
 	) -> Result<String, serde_json::Error> {
-		let token = Uuid::now_v7().to_string();
+		let token = Uuid::new_v4().to_string();
 		let token_data = CsrfTokenData {
 			token: token.clone(),
 			created_at: SystemTime::now(),

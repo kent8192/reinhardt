@@ -30,7 +30,7 @@ pub struct LockToken(String);
 impl LockToken {
 	/// Generate a new unique lock token
 	pub fn generate() -> Self {
-		Self(Uuid::now_v7().to_string())
+		Self(Uuid::new_v4().to_string())
 	}
 
 	/// Get the string representation of the token

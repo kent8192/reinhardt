@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.1.0-rc.15...reinhardt-macros@v0.1.0-rc.16) - 2026-04-11
+
+### Added
+
+- *(auth)* add SuperuserInit trait and SuperuserCreator registry
+- *(auth)* auto-register SuperuserCreator via inventory for #[user(full = true)] + #[model] types
+- *(core)* set task-local resolve context in request dispatch macros
+- *(urls)* [**breaking**] support async functions in #[routes] macro
+- *(commands)* add RunserverHook for concurrent service startup and pre-listen validation
+- *(urls)* add compile-time type-safe URL resolution via extension traits
+
+### Changed
+
+- *(conf)* extract validate() into SettingsValidation trait
+- *(di)* remove unnecessary Clone bound from Depends<T> and Injected<T>
+
+### Fixed
+
+- *(conf)* maintain backward compatibility for SettingsFragment trait
+- *(di)* [**breaking**] make DependencyRegistration const-compatible for Rust 2024 edition
+- *(di)* address Copilot review feedback on const-compatible DependencyRegistration
+- *(commands)* address Copilot review feedback on RunserverHook
+- *(urls)* address Copilot review on URL resolver macro generation
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.1.0-rc.14...reinhardt-macros@v0.1.0-rc.15) - 2026-03-29
 
 ### Added

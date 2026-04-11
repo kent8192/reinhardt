@@ -24,10 +24,30 @@ pub enum Segment {
 	Param(String),
 }
 
+/// Extract the path portion from a URL string.
+///
+/// Handles both relative paths (`/api/users`) and full URLs
+/// (`http://localhost:8080/api/users?page=1`), stripping scheme, host, and query.
+fn extract_path(url: &str) -> &str {
+	// Strip query string first
+	let without_query = url.split('?').next().unwrap_or(url);
+	// If it starts with http:// or https://, extract path after host
+	if let Some(rest) = without_query.strip_prefix("http://") {
+		rest.find('/').map_or("", |i| &rest[i..])
+	} else if let Some(rest) = without_query.strip_prefix("https://") {
+		rest.find('/').map_or("", |i| &rest[i..])
+	} else {
+		without_query
+	}
+}
+
 impl UrlMatcher {
 	/// Returns true if the given URL matches this pattern.
+	///
+	/// Handles both relative paths (`/api/users`) and full URLs
+	/// (`http://localhost:8080/api/users?page=1`).
 	pub fn matches(&self, url: &str) -> bool {
-		let path = url.split('?').next().unwrap_or(url);
+		let path = extract_path(url);
 		match self {
 			UrlMatcher::Exact(expected) => path == expected,
 			UrlMatcher::Parameterized { segments } => {
@@ -49,7 +69,7 @@ impl UrlMatcher {
 
 	/// Extracts named parameters from a URL. Returns empty map if not parameterized.
 	pub fn extract_params(&self, url: &str) -> HashMap<String, String> {
-		let path = url.split('?').next().unwrap_or(url);
+		let path = extract_path(url);
 		let mut params = HashMap::new();
 		if let UrlMatcher::Parameterized { segments } = self {
 			let url_segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
@@ -133,6 +153,14 @@ mod tests {
 		let matcher = UrlMatcher::Regex(Regex::new(r"/api/users/\d+").unwrap());
 		assert!(matcher.matches("/api/users/42"));
 		assert!(!matcher.matches("/api/users/abc"));
+	}
+
+	#[rstest]
+	fn full_url_matches_path_pattern() {
+		let matcher = UrlMatcher::Exact("/api/users".to_string());
+		assert!(matcher.matches("http://127.0.0.1:8080/api/users"));
+		assert!(matcher.matches("https://example.com/api/users?page=1"));
+		assert!(!matcher.matches("http://localhost/api/posts"));
 	}
 
 	#[rstest]

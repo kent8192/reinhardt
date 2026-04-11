@@ -344,5 +344,66 @@ pub(crate) fn routes_impl(_args: TokenStream, input: ItemFn) -> Result<TokenStre
 		}
 	};
 
-	Ok(expanded)
+	// Generate ResolvedUrls struct + url_prelude module (url-resolver feature)
+	let url_resolver_code = quote! {
+		/// Type-safe URL resolver backed by the global `ServerRouter`.
+		///
+		/// Provides URL resolution methods via extension traits generated
+		/// by view macros. Import `url_prelude::*` to bring all resolver
+		/// methods into scope.
+		#[cfg(feature = "url-resolver")]
+		pub struct ResolvedUrls {
+			router: ::std::sync::Arc<#reinhardt::ServerRouter>,
+		}
+
+		#[cfg(feature = "url-resolver")]
+		impl #reinhardt::UrlResolver for ResolvedUrls {
+			fn resolve_url(&self, name: &str, params: &[(&str, &str)]) -> String {
+				self.router
+					.reverse(name, params)
+					.unwrap_or_else(|| panic!("Route '{}' not found in router", name))
+			}
+		}
+
+		#[cfg(feature = "url-resolver")]
+		impl ResolvedUrls {
+			/// Create a `ResolvedUrls` from the globally registered router.
+			///
+			/// # Panics
+			///
+			/// Panics if no global router has been registered via `#[routes]`.
+			pub fn from_global() -> Self {
+				let router = #reinhardt::get_router()
+					.expect("Global router not registered. Ensure the #[routes] function has been called.");
+				Self { router }
+			}
+
+			/// Create a `ResolvedUrls` from an explicit `ServerRouter`.
+			pub fn from_router(router: ::std::sync::Arc<#reinhardt::ServerRouter>) -> Self {
+				Self { router }
+			}
+		}
+
+		#[cfg(feature = "url-resolver")]
+		#[doc(hidden)]
+		macro_rules! __build_url_prelude {
+			($($app:ident),*) => {
+				/// Prelude module re-exporting all URL resolver traits and `ResolvedUrls`.
+				pub mod url_prelude {
+					pub use super::ResolvedUrls;
+					$(pub use crate::apps::$app::urls::url_resolvers::*;)*
+				}
+			};
+		}
+
+		#[cfg(feature = "url-resolver")]
+		crate::__for_each_app!(__build_url_prelude);
+	};
+
+	let combined = quote! {
+		#expanded
+		#url_resolver_code
+	};
+
+	Ok(combined)
 }

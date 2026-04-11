@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.15...reinhardt-core@v0.1.0-rc.16) - 2026-04-11
+
+### Added
+
+- *(auth)* add SuperuserInit trait and SuperuserCreator registry
+- *(auth)* auto-register SuperuserCreator via inventory for #[user(full = true)] + #[model] types
+- *(core)* add AuthProtection enum and EndpointMetadata extension
+- *(core)* detect auth parameters in route macros for metadata
+- *(core)* set task-local resolve context in request dispatch macros
+- *(urls)* [**breaking**] support async functions in #[routes] macro
+- *(commands)* add RunserverHook for concurrent service startup and pre-listen validation
+- *(urls)* add compile-time type-safe URL resolution via extension traits
+
+### Changed
+
+- *(di)* remove unnecessary Clone bound from Depends<T> and Injected<T>
+
+### Fixed
+
+- *(macros)* delegate DI injection errors to From<DiError> instead of hardcoding 500
+- *(pages)* cfg-gate @event handler compilation to wasm32 only
+- resolve merge conflicts with main and fix CI failures
+- *(core)* unify flush_updates to actually execute pending effects
+- *(di)* [**breaking**] make DependencyRegistration const-compatible for Rust 2024 edition
+- *(di)* address Copilot review feedback on const-compatible DependencyRegistration
+- *(commands)* address Copilot review feedback on RunserverHook
+- *(urls)* address Copilot review on URL resolver macro generation
+- *(query,core)* replace approx_constant test values to avoid clippy deny
+- *(core)* resolve clippy warnings in reactive, security, and exception modules
+
+### Styling
+
+- *(core)* apply rustfmt formatting
+- apply auto-fix formatting corrections
+- apply rustfmt formatting fixes
+- apply rustfmt to clippy-fixed files
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.14...reinhardt-core@v0.1.0-rc.15) - 2026-03-29
 
 ### Added

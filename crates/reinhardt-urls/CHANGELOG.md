@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.15...reinhardt-urls@v0.1.0-rc.16) - 2026-04-11
+
+### Added
+
+- *(urls)* implement Debug for UnifiedRouter and ServerRouter
+- *(urls)* [**breaking**] support async functions in #[routes] macro
+- *(urls)* add compile-time type-safe URL resolution via extension traits
+- *(macros)* add url-resolver to standard, api-only, and urls-full feature-sets
+
+### Changed
+
+- replace target_arch = "wasm32" with target_family/target_os best practice
+- *(urls)* extract join_prefix_path into path_utils module
+- *(urls)* extract `AsyncRouterFactoryFn` type alias to fix clippy type_complexity
+
+### Fixed
+
+- *(urls)* route framework-level 404/405 responses through middleware chain
+- *(urls)* strip prefix from routes during compilation to prevent double-prefix matching
+- *(urls)* normalize leading slash after prefix stripping in resolve()
+- *(urls)* register routes for reverse() lookup in into_server()
+- *(urls)* accumulate prefixes in register_all_routes() and address review
+- *(urls)* make `__macro_new_async` const fn for inventory compatibility
+- *(test)* resolve CI failures and address Copilot review feedback
+- *(docs)* use backticks instead of intra-doc link for UrlResolver in module doc
+
+### Styling
+
+- *(urls)* apply cargo make auto-fix formatting
+- *(urls)* apply cargo make auto-fix formatting
+- *(urls)* fix empty_line_after_doc_comments clippy lint
+
+### Testing
+
+- *(urls)* add integration tests for router-level 404 middleware
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.14...reinhardt-urls@v0.1.0-rc.15) - 2026-03-29
 
 ### Fixed

@@ -661,4 +661,20 @@ mod tests {
 		assert!(report.contains("Scope Incompatibilities:"));
 		assert!(report.contains("2 error(s) found"));
 	}
+
+	#[rstest]
+	fn register_and_retrieve_qualified_type_name() {
+		// Arrange
+		let registry = Arc::new(DependencyRegistry::new());
+		let type_id = TypeId::of::<TypeA>();
+
+		// Act
+		registry.register_qualified_type_name(type_id, "my_crate::module::TypeA");
+
+		// Assert
+		assert_eq!(
+			registry.get_qualified_type_name(&type_id),
+			Some("my_crate::module::TypeA")
+		);
+	}
 }

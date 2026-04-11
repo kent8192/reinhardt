@@ -84,3 +84,6 @@ with-reinhardt = []
 [[test]]
 name = "integration"
 required-features = ["with-reinhardt"]
+
+[lints]
+workspace = true

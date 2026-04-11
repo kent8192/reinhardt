@@ -126,3 +126,6 @@ features = ["full", "auth-jwt", "database", "test", "testcontainers", "server-fn
 
 [build-dependencies]
 cfg_aliases = "0.2"
+
+[lints]
+workspace = true

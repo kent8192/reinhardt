@@ -31,3 +31,6 @@ default = ["client-router"]
 client-router = []
 with-reinhardt = []
 
+[lints]
+workspace = true
+

@@ -38,3 +38,15 @@ chrono = { version = "0.4.42", features = ["serde"] }
 
 # Error handling
 anyhow = "1.0.100"
+
+# Shared lint configuration for all examples.
+# reinhardt_macros generates code with cfg(native), cfg(wasm), and
+# cfg(feature = "url-resolver") that are defined in the main workspace but not
+# in the examples workspace. Declare them here so check-cfg does not reject them.
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+	'cfg(native)',
+	'cfg(wasm)',
+	'cfg(with_reinhardt)',
+	'cfg(feature, values("url-resolver"))',
+] }

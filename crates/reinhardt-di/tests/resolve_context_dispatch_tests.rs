@@ -82,7 +82,7 @@ async fn nested_resolve_preserves_root_in_factory() {
 
 			// Inner factory gets its own current context but preserves root
 			let inner_current_ctx = build_context();
-			let inner_current_clone = Arc::clone(&inner_current_ctx);
+			let _inner_current_clone = Arc::clone(&inner_current_ctx);
 			let inner = ResolveContext {
 				root: Arc::clone(&root_clone),
 				current: inner_current_ctx,

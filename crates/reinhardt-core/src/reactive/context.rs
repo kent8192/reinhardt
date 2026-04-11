@@ -369,7 +369,7 @@ mod tests {
 	#[test]
 	fn test_context_clone() {
 		let ctx1: Context<i32> = Context::new();
-		let ctx2 = ctx1.clone();
+		let ctx2 = ctx1;
 
 		assert_eq!(ctx1.id(), ctx2.id());
 	}

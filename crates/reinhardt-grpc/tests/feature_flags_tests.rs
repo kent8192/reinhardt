@@ -19,8 +19,7 @@ mod di_feature_enabled {
 		// This test verifies that the code compiles when di feature is enabled
 		// Simply compiling this module is sufficient to test
 
-		// Verify that GrpcRequestExt is available
-		assert!(true, "GrpcRequestExt is available when di feature enabled");
+		// Verify that GrpcRequestExt is available (compile-test: if this builds, the feature works)
 	}
 
 	#[test]

@@ -1,7 +1,8 @@
 //! Benchmark: Concurrent resolution and scope contention
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use reinhardt_di::{DiResult, Injectable, InjectionContext, SingletonScope};
+use std::hint::black_box;
 use std::sync::Arc;
 
 // Concurrent service
@@ -87,7 +88,7 @@ fn benchmark_scope_contention(c: &mut Criterion) {
 
 			// Wait for all tasks
 			for handle in handles {
-				let _ = handle.await.unwrap();
+				handle.await.unwrap();
 			}
 
 			black_box(())

@@ -573,7 +573,7 @@ mod tests {
 		// Arrange
 		let handler = DevelopmentErrorHandler::new().with_stack_trace(false);
 		let xss_payload = "<script>alert('xss')</script>";
-		let error = io::Error::new(io::ErrorKind::Other, xss_payload);
+		let error = io::Error::other(xss_payload);
 
 		// Act
 		let html = handler.format_error(&error);
@@ -602,7 +602,7 @@ mod tests {
 		// Arrange
 		let handler = DevelopmentErrorHandler::new().with_stack_trace(false);
 		let xss_payload = "<img src=x onerror=alert(1)>";
-		let source = io::Error::new(io::ErrorKind::Other, xss_payload);
+		let source = io::Error::other(xss_payload);
 		let error = DevServerError::with_source("outer error", source);
 
 		// Act

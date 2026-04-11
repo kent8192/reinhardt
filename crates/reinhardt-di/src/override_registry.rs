@@ -247,9 +247,9 @@ mod tests {
 	fn test_set_and_get_override() {
 		let registry = OverrideRegistry::new();
 
-		registry.set(factory_a as usize, "mock_a".to_string());
+		registry.set(factory_a as *const () as usize, "mock_a".to_string());
 
-		let value: Option<String> = registry.get(factory_a as usize);
+		let value: Option<String> = registry.get(factory_a as *const () as usize);
 		assert_eq!(value, Some("mock_a".to_string()));
 	}
 
@@ -257,11 +257,11 @@ mod tests {
 	fn test_different_functions_same_return_type() {
 		let registry = OverrideRegistry::new();
 
-		registry.set(factory_a as usize, "mock_a".to_string());
-		registry.set(factory_b as usize, "mock_b".to_string());
+		registry.set(factory_a as *const () as usize, "mock_a".to_string());
+		registry.set(factory_b as *const () as usize, "mock_b".to_string());
 
-		let value_a: Option<String> = registry.get(factory_a as usize);
-		let value_b: Option<String> = registry.get(factory_b as usize);
+		let value_a: Option<String> = registry.get(factory_a as *const () as usize);
+		let value_b: Option<String> = registry.get(factory_b as *const () as usize);
 
 		assert_eq!(value_a, Some("mock_a".to_string()));
 		assert_eq!(value_b, Some("mock_b".to_string()));
@@ -271,7 +271,7 @@ mod tests {
 	fn test_get_nonexistent_returns_none() {
 		let registry = OverrideRegistry::new();
 
-		let value: Option<String> = registry.get(factory_a as usize);
+		let value: Option<String> = registry.get(factory_a as *const () as usize);
 		assert!(value.is_none());
 	}
 
@@ -279,13 +279,13 @@ mod tests {
 	fn test_remove_override() {
 		let registry = OverrideRegistry::new();
 
-		registry.set(factory_a as usize, "mock_a".to_string());
-		assert!(registry.has(factory_a as usize));
+		registry.set(factory_a as *const () as usize, "mock_a".to_string());
+		assert!(registry.has(factory_a as *const () as usize));
 
-		registry.remove(factory_a as usize);
-		assert!(!registry.has(factory_a as usize));
+		registry.remove(factory_a as *const () as usize);
+		assert!(!registry.has(factory_a as *const () as usize));
 
-		let value: Option<String> = registry.get(factory_a as usize);
+		let value: Option<String> = registry.get(factory_a as *const () as usize);
 		assert!(value.is_none());
 	}
 
@@ -293,8 +293,8 @@ mod tests {
 	fn test_clear_overrides() {
 		let registry = OverrideRegistry::new();
 
-		registry.set(factory_a as usize, "mock_a".to_string());
-		registry.set(factory_b as usize, "mock_b".to_string());
+		registry.set(factory_a as *const () as usize, "mock_a".to_string());
+		registry.set(factory_b as *const () as usize, "mock_b".to_string());
 		assert_eq!(registry.len(), 2);
 
 		registry.clear();
@@ -309,14 +309,14 @@ mod tests {
 			42
 		}
 
-		registry.set(int_factory as usize, 100i32);
+		registry.set(int_factory as *const () as usize, 100i32);
 
 		// Try to get as wrong type
-		let value: Option<String> = registry.get(int_factory as usize);
+		let value: Option<String> = registry.get(int_factory as *const () as usize);
 		assert!(value.is_none());
 
 		// Correct type works
-		let value: Option<i32> = registry.get(int_factory as usize);
+		let value: Option<i32> = registry.get(int_factory as *const () as usize);
 		assert_eq!(value, Some(100));
 	}
 }

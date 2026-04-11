@@ -145,9 +145,9 @@ mod tests {
 		let third = throttle.allow_request("user1").await.unwrap();
 
 		// Assert - burst limit blocks the third request
-		assert_eq!(first, true);
-		assert_eq!(second, true);
-		assert_eq!(third, false);
+		assert!(first);
+		assert!(second);
+		assert!(!third);
 
 		// Assert - verify backend stores with prefixed keys, not raw key
 		let b = backend.lock().await;

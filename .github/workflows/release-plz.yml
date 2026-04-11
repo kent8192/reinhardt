@@ -77,6 +77,8 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ["self-hosted","linux","arm64","reinhardt-ci"]
     timeout-minutes: 360
+    outputs:
+      released: ${{ steps.check-release.outputs.released }}
     concurrency:
       group: release-plz-release-${{ github.ref }}
       cancel-in-progress: false
@@ -117,6 +119,15 @@ jobs:
       # Workaround for gix slotmap overflow (GitoxideLabs/gitoxide#1788)
       - name: Clear cargo registry git index cache
         run: rm -rf ~/.cargo/registry/index/github.com-*
+
+      - name: Snapshot tags before release
+        id: tags-before
+        run: |
+          TAGS_BEFORE_FILE="${RUNNER_TEMP}/tags-before-${GITHUB_RUN_ID}.txt"
+          git tag --list 'reinhardt-web@v*' --sort=version:refname > "$TAGS_BEFORE_FILE"
+          echo "tags_file=$TAGS_BEFORE_FILE" >> "$GITHUB_OUTPUT"
+          echo "Tags before release:"
+          cat "$TAGS_BEFORE_FILE"
 
       - name: Publish to crates.io and create releases (attempt 1/3)
         id: release-attempt-1
@@ -168,15 +179,52 @@ jobs:
           GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
+      - name: Check if release was made
+        id: check-release
+        if: always()
+        env:
+          TAGS_BEFORE_FILE: ${{ steps.tags-before.outputs.tags_file }}
+        run: |
+          TAGS_AFTER_FILE="${RUNNER_TEMP}/tags-after-${GITHUB_RUN_ID}.txt"
+
+          git fetch --tags --force
+          git tag --list 'reinhardt-web@v*' --sort=version:refname > "$TAGS_AFTER_FILE"
+          echo "Tags after release:"
+          cat "$TAGS_AFTER_FILE"
+
+          if [ ! -f "$TAGS_BEFORE_FILE" ]; then
+            echo "::warning::Missing tag snapshot: $TAGS_BEFORE_FILE"
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! NEW_TAGS=$(comm -13 "$TAGS_BEFORE_FILE" "$TAGS_AFTER_FILE"); then
+            echo "::warning::Failed to compare tag snapshots"
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -n "$NEW_TAGS" ]; then
+            echo "New tags detected:"
+            echo "$NEW_TAGS"
+            echo "released=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No new tags detected"
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # --- Release Announcement Automation ---
   # Job 3: Generate announcement content and create PR for human review
   # Job 4: Post approved announcement to GitHub Discussions
 
   release-announcement-pr:
     name: Create Release Announcement PR
-    if: >
-      (github.event_name == 'push') ||
-      (github.event_name == 'workflow_dispatch')
+    if: |
+      always() &&
+      (
+        (github.event_name == 'push' && needs.release-plz-release.outputs.released == 'true') ||
+        (github.event_name == 'workflow_dispatch')
+      )
     needs: [release-plz-release]
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -266,13 +314,14 @@ jobs:
             fi
 
             # Stage 2: Generate announcement with Claude CLI
+            # Redirect stdin from file (not command arg) to avoid ARG_MAX
             SYSTEM_PROMPT=$(cat scripts/prompts/announcement-system.md)
             if claude --print \
               --bare \
               --model sonnet \
               --system-prompt "$SYSTEM_PROMPT" \
               --tools "" \
-              "$(cat "/tmp/release-data-${VERSION}.json")" \
+              < "/tmp/release-data-${VERSION}.json" \
               > "$ANNOUNCEMENT_FILE" 2>/dev/null; then
               echo "Generated announcement for $TAG"
             else
@@ -314,14 +363,21 @@ jobs:
             fi
           done
 
-          if [ -n "$FAILED_TAGS" ]; then
-            echo "::warning::Failed tags:$FAILED_TAGS"
-          fi
-
           # Check if any announcements were generated
           GENERATED=$(find announcements -name '*.md' ! -name '.gitkeep' | wc -l)
+
+          if [ -n "$FAILED_TAGS" ]; then
+            echo "::error::Failed to process tags: $FAILED_TAGS"
+            if [ "$GENERATED" -eq 0 ]; then
+              echo "::error::All tags failed — no announcements generated"
+              exit 1
+            fi
+            # Some tags failed but others succeeded — continue with partial results
+            echo "::warning::Partial failure — $GENERATED announcement(s) generated, but some tags failed"
+          fi
+
           if [ "$GENERATED" -eq 0 ]; then
-            echo "::notice::No new announcements to create"
+            echo "::notice::No new announcements to create (all tags already have announcements or Discussions)"
             echo "no_announcements=true" >> "$GITHUB_ENV"
           else
             echo "Generated $GENERATED announcement(s)"

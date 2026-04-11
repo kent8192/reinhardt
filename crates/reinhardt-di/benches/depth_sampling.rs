@@ -1,7 +1,8 @@
 //! Benchmark: Dependency depth sampling
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use reinhardt_di::{DiResult, InjectionContext, SingletonScope};
+use std::hint::black_box;
 use std::sync::Arc;
 
 // Nested dependency service

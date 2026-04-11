@@ -505,7 +505,7 @@ mod tests {
 
 		// Assert - memo returns the correct value and nested effect executed
 		assert_eq!(memo.get(), 42);
-		assert_eq!(*effect_ran.borrow(), true);
+		assert!(*effect_ran.borrow());
 	}
 
 	#[test]

@@ -1077,7 +1077,7 @@ mod tests {
 	#[test]
 	fn test_server_fn_options_default() {
 		let options = ServerFnOptions::default();
-		assert_eq!(options.use_inject, false);
+		assert!(!options.use_inject);
 		assert_eq!(options.endpoint, None);
 		assert_eq!(options.codec, "json");
 	}
@@ -1097,7 +1097,7 @@ mod tests {
 			.collect();
 		let options = ServerFnOptions::from_list(&nested).unwrap();
 
-		assert_eq!(options.use_inject, false);
+		assert!(!options.use_inject);
 		assert_eq!(options.endpoint, Some("/custom".to_string()));
 		assert_eq!(options.codec, "json");
 	}
@@ -1118,7 +1118,7 @@ mod tests {
 			.collect();
 		let options = ServerFnOptions::from_list(&nested).unwrap();
 
-		assert_eq!(options.use_inject, true);
+		assert!(options.use_inject);
 		assert_eq!(options.endpoint, Some("/custom".to_string()));
 		assert_eq!(options.codec, "json");
 	}

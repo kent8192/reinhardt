@@ -853,10 +853,12 @@ async fn test_postgres_index_combinations(
 	sqlx::query(&sql)
 		.execute(pool.as_ref())
 		.await
-		.expect(&format!(
-			"Failed to create index with unique={}, columns={}",
-			is_unique, column_count
-		));
+		.unwrap_or_else(|_| {
+			panic!(
+				"Failed to create index with unique={}, columns={}",
+				is_unique, column_count
+			)
+		});
 
 	// Verify index properties
 	let index_info: (bool, i64) = sqlx::query_as(

@@ -569,7 +569,7 @@ async fn test_mysql_create_trigger_before_insert(
 	let (sql, _values) = builder.build_create_trigger(&stmt);
 	// MySQL CREATE TRIGGER cannot use prepared statement protocol
 	// Execute the generated SQL directly via format! to bypass prepared statement limitations
-	sqlx::query(&format!("{}", sql))
+	sqlx::query(sql.as_str())
 		.execute(pool.as_ref())
 		.await
 		.expect("Failed to create trigger");
@@ -651,7 +651,7 @@ async fn test_mysql_drop_trigger(
 	let (sql, _values) = builder.build_drop_trigger(&stmt);
 	// MySQL DROP TRIGGER cannot use prepared statement protocol
 	// Execute the generated SQL directly via format! to bypass prepared statement limitations
-	sqlx::query(&format!("{}", sql))
+	sqlx::query(sql.as_str())
 		.execute(pool.as_ref())
 		.await
 		.expect("Failed to drop trigger");

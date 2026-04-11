@@ -245,6 +245,6 @@ mod tests {
 		let ctx = InjectionContext::builder(singleton).build();
 
 		let handle = ctx.dependency(create_string);
-		assert_eq!(handle.func_ptr(), create_string as usize);
+		assert_eq!(handle.func_ptr(), create_string as *const () as usize);
 	}
 }

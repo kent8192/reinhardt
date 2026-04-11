@@ -13,12 +13,6 @@ use reinhardt_di::{
 	ContextLevel, InjectionContext, SingletonScope, get_di_context, try_get_di_context,
 };
 
-/// Helper to build a fresh `InjectionContext` wrapped in `Arc`.
-fn build_context() -> Arc<InjectionContext> {
-	let scope = SingletonScope::new();
-	Arc::new(InjectionContext::builder(scope).build())
-}
-
 /// Helper to build a context with a shared singleton scope.
 fn build_context_with_scope(scope: Arc<SingletonScope>) -> Arc<InjectionContext> {
 	Arc::new(InjectionContext::builder(scope).build())
@@ -59,7 +53,7 @@ async fn factory_chain_context_propagation() {
 				// Factory A resolves type B, which triggers factory B
 				// Factory B gets a nested scope with the same root
 				let factory_b_current = build_context_with_scope(Arc::clone(&singleton_scope));
-				let factory_b_current_clone = Arc::clone(&factory_b_current);
+				let _factory_b_current_clone = Arc::clone(&factory_b_current);
 
 				let inner = ResolveContext {
 					root: Arc::clone(&root_clone),

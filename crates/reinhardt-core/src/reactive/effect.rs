@@ -497,8 +497,8 @@ mod tests {
 		});
 
 		// Assert - both effects should have executed without panic
-		assert_eq!(*outer_ran.borrow(), true);
-		assert_eq!(*inner_ran.borrow(), true);
+		assert!(*outer_ran.borrow());
+		assert!(*inner_ran.borrow());
 	}
 
 	#[rstest::rstest]
@@ -522,7 +522,7 @@ mod tests {
 		});
 
 		// Assert - outer ran and inner captured the signal value
-		assert_eq!(*outer_ran.borrow(), true);
+		assert!(*outer_ran.borrow());
 		assert_eq!(*inner_value.borrow(), 42);
 	}
 
@@ -579,14 +579,14 @@ mod tests {
 		use std::sync::{Arc, Mutex};
 
 		// Collect tasks scheduled via set_scheduler
-		let scheduled_tasks: Arc<Mutex<Vec<Box<dyn FnOnce() + Send>>>> =
-			Arc::new(Mutex::new(Vec::new()));
+		type ScheduledTasks = Arc<Mutex<Vec<Box<dyn FnOnce() + Send>>>>;
+		let scheduled_tasks: ScheduledTasks = Arc::new(Mutex::new(Vec::new()));
 		let tasks_clone = scheduled_tasks.clone();
 
 		// Install a scheduler that captures tasks instead of executing them
 		// Note: OnceLock means this only works once per process, but serial
 		// test ordering ensures no conflict
-		let _ = set_scheduler(move |task| {
+		set_scheduler(move |task| {
 			tasks_clone.lock().unwrap().push(task);
 		});
 

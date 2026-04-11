@@ -2409,7 +2409,7 @@ mod tests {
 		assert!(typed.initial_loader.is_some());
 		let loader = typed.initial_loader.as_ref().unwrap();
 		// Check that the path contains the expected identifier
-		assert!(loader.segments.len() > 0);
+		assert!(!loader.segments.is_empty());
 		assert_eq!(
 			loader.segments.last().unwrap().ident.to_string(),
 			"get_profile_data"

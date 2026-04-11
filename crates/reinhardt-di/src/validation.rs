@@ -55,8 +55,8 @@ impl fmt::Display for ValidationError {
 /// (the facade crate) or `reinhardt_` (any sub-crate like `reinhardt_di`,
 /// `reinhardt_db`, etc.).
 fn is_framework_type(qualified_name: &str) -> bool {
-    qualified_name.starts_with("reinhardt::")
-        || (qualified_name.starts_with("reinhardt_") && qualified_name.len() > "reinhardt_".len())
+	qualified_name.starts_with("reinhardt::")
+		|| (qualified_name.starts_with("reinhardt_") && qualified_name.len() > "reinhardt_".len())
 }
 
 /// Validates a [`DependencyRegistry`] for integrity at startup.
@@ -737,13 +737,19 @@ mod tests {
 	#[case("reinhardt::deep::nested::module::Type", "facade deeply nested")]
 	#[case("reinhardt_db::pool::DatabasePool", "sub-crate direct")]
 	#[case("reinhardt_core::SomeType", "sub-crate top-level")]
-	#[case("reinhardt_di::context::scope::SingletonScope", "sub-crate deeply nested")]
+	#[case(
+		"reinhardt_di::context::scope::SingletonScope",
+		"sub-crate deeply nested"
+	)]
 	#[case("reinhardt_http::request::HttpRequest", "http sub-crate")]
 	#[case("reinhardt_auth::backend::AuthBackend", "auth sub-crate")]
 	#[case("reinhardt_views::View", "views sub-crate")]
 	#[case("reinhardt_rest::serializers::Serializer", "rest sub-crate")]
 	#[case("reinhardt_middleware::Middleware", "middleware sub-crate")]
-	#[case("reinhardt_di::injected::Injected<my_app::MyType>", "generic framework type")]
+	#[case(
+		"reinhardt_di::injected::Injected<my_app::MyType>",
+		"generic framework type"
+	)]
 	fn test_framework_type_detected(#[case] type_name: &str, #[case] description: &str) {
 		assert!(
 			is_framework_type(type_name),
@@ -768,10 +774,7 @@ mod tests {
 	#[case("bool", "primitive type bool")]
 	#[case("()", "unit type")]
 	fn test_non_framework_type_allowed(#[case] type_name: &str, #[case] description: &str) {
-		assert!(
-			!is_framework_type(type_name),
-			"should allow: {description}"
-		);
+		assert!(!is_framework_type(type_name), "should allow: {description}");
 	}
 
 	// === is_framework_type: edge cases ===
@@ -786,8 +789,16 @@ mod tests {
 	#[case("not_reinhardt::Type", false, "reinhardt as suffix")]
 	#[case("core::reinhardt::Type", false, "reinhardt as submodule")]
 	#[case("_reinhardt::Type", false, "underscore prefix")]
-	#[case("alloc::vec::Vec<reinhardt_db::DatabasePool>", false, "generic wrapping framework")]
-	#[case("core::option::Option<reinhardt_di::Injected<Foo>>", false, "option wrapping framework")]
+	#[case(
+		"alloc::vec::Vec<reinhardt_db::DatabasePool>",
+		false,
+		"generic wrapping framework"
+	)]
+	#[case(
+		"core::option::Option<reinhardt_di::Injected<Foo>>",
+		false,
+		"option wrapping framework"
+	)]
 	#[case("reinhardt", false, "bare crate name")]
 	#[case("reinhardt_", false, "underscore without path")]
 	#[case("reinhardt::", true, "facade prefix empty path")]
@@ -938,7 +949,11 @@ mod tests {
 		let errors = validator.validate().unwrap_err();
 
 		// Assert
-		assert!(errors[0].message.contains("reinhardt_db::pool::DatabasePool"));
+		assert!(
+			errors[0]
+				.message
+				.contains("reinhardt_db::pool::DatabasePool")
+		);
 	}
 
 	#[rstest]
@@ -976,9 +991,11 @@ mod tests {
 
 		// Assert
 		let errors = result.unwrap_err();
-		assert!(errors
-			.iter()
-			.any(|e| e.kind == ValidationErrorKind::FrameworkTypeOverride));
+		assert!(
+			errors
+				.iter()
+				.any(|e| e.kind == ValidationErrorKind::FrameworkTypeOverride)
+		);
 	}
 
 	// === type_name format regression tests ===

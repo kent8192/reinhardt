@@ -497,7 +497,7 @@ pub fn derive_schema(input: TokenStream) -> TokenStream {
 /// - Struct must have named fields
 /// - All fields must have either `#[inject]` or `#[no_inject]` attribute
 /// - `#[no_inject]` without default value requires field type to be `Option<T>`
-/// - `Clone` is auto-derived if not already present (required by `Depends<T>`)
+/// - `Clone` is auto-derived if not already present (used by `into_inner()` and `injectable_factory` patterns)
 /// - All `#[inject]` field types must implement `Injectable`
 ///
 /// # Attribute Ordering

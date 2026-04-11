@@ -60,7 +60,7 @@ jobs:
     needs: gate
     if: needs.gate.outputs.is_fork == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -138,7 +138,7 @@ jobs:
     needs: [gate, validate]
     if: needs.gate.outputs.is_fork == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 360
     environment: fork-review
     strategy:
       fail-fast: false

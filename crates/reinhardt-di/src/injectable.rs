@@ -92,7 +92,7 @@ pub trait Injectable: Sized + Send + Sync + 'static {
 #[async_trait::async_trait]
 impl<T> Injectable for std::sync::Arc<T>
 where
-	T: Injectable + Clone,
+	T: Injectable,
 {
 	async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
 		T::inject(ctx).await.map(std::sync::Arc::new)
@@ -124,11 +124,11 @@ where
 ///
 /// The implementation delegates to `Depends::resolve()`, which resolves `T`
 /// from the global registry with caching and circular dependency detection.
-/// `T` does not need to implement `Injectable` — only `Clone + Send + Sync + 'static`.
+/// `T` does not need to implement `Injectable` — only `Send + Sync + 'static`.
 #[async_trait::async_trait]
 impl<T> Injectable for crate::depends::Depends<T>
 where
-	T: Clone + Send + Sync + 'static,
+	T: Send + Sync + 'static,
 {
 	async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
 		crate::depends::Depends::<T>::resolve(ctx, true).await
@@ -168,7 +168,7 @@ where
 #[async_trait::async_trait]
 impl<T> Injectable for Option<T>
 where
-	T: Injectable + Clone + Send + Sync + 'static,
+	T: Injectable,
 {
 	async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
 		match T::inject(ctx).await {

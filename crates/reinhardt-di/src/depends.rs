@@ -12,7 +12,7 @@
 //! use reinhardt_di::{Depends, DiResult, InjectionContext, SingletonScope, global_registry, DependencyScope};
 //! use std::sync::Arc;
 //!
-//! #[derive(Clone, Default)]
+//! #[derive(Default)]
 //! struct Config {
 //!     database_url: String,
 //! }
@@ -51,15 +51,12 @@ use std::sync::Arc;
 /// the global dependency registry, so any type registered via
 /// `#[injectable_factory]` or `#[injectable]` can be used.
 #[derive(Debug)]
-pub struct Depends<T: Clone + Send + Sync + 'static> {
+pub struct Depends<T: Send + Sync + 'static> {
 	inner: Arc<T>,
 	metadata: InjectionMetadata,
 }
 
-impl<T> Depends<T>
-where
-	T: Clone + Send + Sync + 'static,
-{
+impl<T: Send + Sync + 'static> Depends<T> {
 	/// Create a new DependsBuilder with caching enabled (default behavior).
 	///
 	/// Similar to FastAPI's `Depends(dependency, use_cache=True)`.
@@ -209,38 +206,6 @@ where
 		}
 	}
 
-	/// Extract the inner value from the Depends wrapper.
-	///
-	/// This method tries to unwrap the Arc. If the Arc has multiple strong references,
-	/// it clones the inner value instead.
-	///
-	/// # Examples
-	///
-	/// ```
-	/// use reinhardt_di::{Depends, Injectable, InjectionContext, DiResult};
-	/// # use async_trait::async_trait;
-	///
-	/// #[derive(Clone, Default)]
-	/// struct Config {
-	///     value: String,
-	/// }
-	///
-	/// # #[async_trait]
-	/// # impl Injectable for Config {
-	/// #     async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
-	/// #         Ok(Config::default())
-	/// #     }
-	/// # }
-	///
-	/// let config = Config { value: "test".to_string() };
-	/// let depends = Depends::from_value(config);
-	/// let inner = depends.into_inner();
-	/// assert_eq!(inner.value, "test");
-	/// ```
-	pub fn into_inner(self) -> T {
-		Arc::try_unwrap(self.inner).unwrap_or_else(|arc| (*arc).clone())
-	}
-
 	/// Get Arc reference
 	///
 	/// # Examples
@@ -290,18 +255,82 @@ where
 	pub fn metadata(&self) -> &InjectionMetadata {
 		&self.metadata
 	}
+
+	/// Attempt to unwrap the inner `Arc`, returning `T` if this is the only
+	/// strong reference. Returns `Err(Self)` if other references exist.
+	///
+	/// This mirrors [`Arc::try_unwrap`] semantics. Unlike
+	/// [`into_inner`](Depends::into_inner), this method does **not** require
+	/// `T: Clone`.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_di::Depends;
+	///
+	/// // Success: single owner
+	/// let depends = Depends::from_value(42u32);
+	/// let value = depends.try_unwrap().unwrap();
+	/// assert_eq!(value, 42);
+	///
+	/// // Failure: multiple owners
+	/// let depends = Depends::from_value(42u32);
+	/// let _clone = depends.clone();
+	/// let err = depends.try_unwrap().unwrap_err();
+	/// assert_eq!(*err, 42); // still accessible via Deref
+	/// ```
+	pub fn try_unwrap(self) -> Result<T, Self> {
+		match Arc::try_unwrap(self.inner) {
+			Ok(val) => Ok(val),
+			Err(arc) => Err(Self {
+				inner: arc,
+				metadata: self.metadata,
+			}),
+		}
+	}
+}
+
+impl<T: Clone + Send + Sync + 'static> Depends<T> {
+	/// Extract the inner value from the Depends wrapper.
+	///
+	/// This method tries to unwrap the Arc. If the Arc has multiple strong references,
+	/// it clones the inner value instead.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_di::{Depends, Injectable, InjectionContext, DiResult};
+	/// # use async_trait::async_trait;
+	///
+	/// #[derive(Clone, Default)]
+	/// struct Config {
+	///     value: String,
+	/// }
+	///
+	/// # #[async_trait]
+	/// # impl Injectable for Config {
+	/// #     async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
+	/// #         Ok(Config::default())
+	/// #     }
+	/// # }
+	///
+	/// let config = Config { value: "test".to_string() };
+	/// let depends = Depends::from_value(config);
+	/// let inner = depends.into_inner();
+	/// assert_eq!(inner.value, "test");
+	/// ```
+	pub fn into_inner(self) -> T {
+		Arc::try_unwrap(self.inner).unwrap_or_else(|arc| (*arc).clone())
+	}
 }
 
 /// Builder for Depends to support FastAPI-style API.
-pub struct DependsBuilder<T: Clone + Send + Sync + 'static> {
+pub struct DependsBuilder<T: Send + Sync + 'static> {
 	use_cache: bool,
 	_phantom: std::marker::PhantomData<T>,
 }
 
-impl<T> DependsBuilder<T>
-where
-	T: Clone + Send + Sync + 'static,
-{
+impl<T: Send + Sync + 'static> DependsBuilder<T> {
 	/// Resolve the dependency.
 	///
 	/// # Examples
@@ -336,7 +365,7 @@ where
 	}
 }
 
-impl<T: Clone + Send + Sync + 'static> Deref for Depends<T> {
+impl<T: Send + Sync + 'static> Deref for Depends<T> {
 	type Target = T;
 
 	fn deref(&self) -> &Self::Target {
@@ -344,7 +373,7 @@ impl<T: Clone + Send + Sync + 'static> Deref for Depends<T> {
 	}
 }
 
-impl<T: Clone + Send + Sync + 'static> Clone for Depends<T> {
+impl<T: Send + Sync + 'static> Clone for Depends<T> {
 	fn clone(&self) -> Self {
 		Self {
 			inner: Arc::clone(&self.inner),
@@ -353,7 +382,7 @@ impl<T: Clone + Send + Sync + 'static> Clone for Depends<T> {
 	}
 }
 
-impl<T: Clone + Send + Sync + 'static> AsRef<T> for Depends<T> {
+impl<T: Send + Sync + 'static> AsRef<T> for Depends<T> {
 	fn as_ref(&self) -> &T {
 		&self.inner
 	}
@@ -569,7 +598,7 @@ mod tests {
 	#[tokio::test]
 	async fn test_depends_resolve_unregistered_type_returns_error() {
 		// Arrange
-		#[derive(Clone, Debug)]
+		#[derive(Debug)]
 		struct UnregisteredType;
 
 		let singleton_scope = Arc::new(SingletonScope::new());
@@ -597,5 +626,127 @@ mod tests {
 		// Assert
 		assert_eq!(depends1.metadata().scope, depends2.metadata().scope);
 		assert_eq!(depends1.metadata().cached, depends2.metadata().cached);
+	}
+
+	/// Non-Clone type can be used with `Depends<T>` via `from_value()`,
+	/// `clone()` (Arc-based), `Deref`, and `AsRef`.
+	/// `into_inner()` is NOT available for non-Clone types.
+	#[rstest]
+	#[tokio::test]
+	async fn test_depends_non_clone_type() {
+		// Arrange
+		#[derive(Debug)]
+		struct NonCloneService {
+			id: u32,
+		}
+
+		let service = NonCloneService { id: 42 };
+
+		// Act
+		let depends = Depends::from_value(service);
+		let cloned_depends = depends.clone();
+
+		// Assert
+		assert_eq!(depends.id, 42);
+		assert_eq!(cloned_depends.id, 42);
+		assert!(Arc::ptr_eq(depends.as_arc(), cloned_depends.as_arc()));
+		assert_eq!(depends.as_ref().id, 42);
+	}
+
+	/// Non-Clone type can be resolved via the global registry.
+	#[rstest]
+	#[tokio::test]
+	async fn test_depends_non_clone_type_resolve() {
+		// Arrange
+		#[derive(Debug)]
+		struct NonCloneRouter {
+			prefix: String,
+		}
+
+		let registry = global_registry();
+		if !registry.is_registered::<NonCloneRouter>() {
+			registry.register_async::<NonCloneRouter, _, _>(RegistryScope::Request, |_ctx| async {
+				Ok(NonCloneRouter {
+					prefix: "/api".to_string(),
+				})
+			});
+		}
+
+		let singleton_scope = Arc::new(SingletonScope::new());
+		let ctx = InjectionContext::builder(singleton_scope).build();
+
+		// Act
+		let depends = Depends::<NonCloneRouter>::resolve(&ctx, true)
+			.await
+			.unwrap();
+
+		// Assert
+		assert_eq!(depends.prefix, "/api");
+		assert!(depends.metadata().cached);
+	}
+
+	/// `try_unwrap()` succeeds when there is only one strong reference.
+	#[rstest]
+	#[tokio::test]
+	async fn test_depends_try_unwrap_success() {
+		// Arrange
+		let config = TestConfig {
+			value: "owned".to_string(),
+		};
+		let depends = Depends::from_value(config);
+
+		// Act
+		let result = depends.try_unwrap();
+
+		// Assert
+		assert!(result.is_ok());
+		assert_eq!(result.unwrap().value, "owned");
+	}
+
+	/// `try_unwrap()` returns `Err(Self)` when multiple references exist.
+	#[rstest]
+	#[tokio::test]
+	async fn test_depends_try_unwrap_err_multiple_refs() {
+		// Arrange
+		let config = TestConfig {
+			value: "shared".to_string(),
+		};
+		let depends = Depends::from_value(config);
+		let _clone = depends.clone();
+
+		// Act
+		let result = depends.try_unwrap();
+
+		// Assert
+		let returned = result.unwrap_err();
+		assert_eq!(returned.value, "shared");
+		assert_eq!(returned.metadata().scope, DependencyScope::Request);
+	}
+
+	/// `try_unwrap()` works with non-Clone types (the primary use case).
+	#[rstest]
+	#[tokio::test]
+	async fn test_depends_try_unwrap_non_clone_type() {
+		// Arrange
+		#[derive(Debug, PartialEq)]
+		struct NonCloneRouter {
+			prefix: String,
+		}
+
+		let router = NonCloneRouter {
+			prefix: "/api".to_string(),
+		};
+		let depends = Depends::from_value(router);
+
+		// Act
+		let result = depends.try_unwrap();
+
+		// Assert
+		assert_eq!(
+			result.unwrap(),
+			NonCloneRouter {
+				prefix: "/api".to_string()
+			}
+		);
 	}
 }

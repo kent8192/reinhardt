@@ -15,7 +15,7 @@ mod utils;
 /// Mark a struct as injectable and register it with the global registry
 ///
 /// This macro automatically derives `Clone` for the annotated type if it is
-/// not already derived, because `Depends<T>` requires `T: Clone`.
+/// not already derived. `Clone` is used by `into_inner()` and `injectable_factory` patterns.
 ///
 /// # Attribute Ordering
 ///

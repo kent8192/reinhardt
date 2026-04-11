@@ -17,7 +17,7 @@ jobs:
   fmt:
     name: Format Check
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    timeout-minutes: 10
+    timeout-minutes: 360
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6

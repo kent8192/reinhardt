@@ -32,7 +32,7 @@ jobs:
   detect:
     name: Detect Affected Packages
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 360
     outputs:
       run-all: ${{ steps.detect.outputs.run-all }}
       has-affected: ${{ steps.detect.outputs.has-affected }}

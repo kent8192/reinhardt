@@ -178,7 +178,7 @@ pub(crate) fn injectable_struct_impl(
 	let generics = &input.generics;
 	let where_clause = &generics.where_clause;
 
-	// Auto-derive Clone for DI-ready types (required by Depends<T>)
+	// Auto-derive Clone for DI-ready types (used by into_inner() and injectable_factory patterns)
 	if !has_clone_derive(&input.attrs) {
 		input.attrs.push(syn::parse_quote!(#[derive(Clone)]));
 	}

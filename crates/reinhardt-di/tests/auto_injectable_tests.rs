@@ -96,7 +96,7 @@ async fn test_custom_injectable_override() {
 // --- Clone auto-derive tests ---
 
 /// Struct without explicit `#[derive(Clone)]` — the `#[injectable]` macro should
-/// auto-derive Clone so that `Depends<T>` (which requires `T: Clone`) works.
+/// auto-derive Clone for use with `into_inner()` and `injectable_factory` patterns.
 #[injectable]
 #[derive(Default, Debug, PartialEq)]
 struct AutoCloneConfig {

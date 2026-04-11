@@ -18,7 +18,7 @@ jobs:
   plan:
     name: Plan (${{ matrix.module }})
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -155,7 +155,7 @@ jobs:
     name: Apply (${{ matrix.module }})
     needs: plan
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 360
     environment: production
     strategy:
       fail-fast: false

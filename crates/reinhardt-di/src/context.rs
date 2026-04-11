@@ -336,7 +336,7 @@ impl InjectionContext {
 	///
 	/// This avoids the need to unwrap and re-wrap Arc values that are
 	/// already in Arc form, such as those returned by factory functions.
-	fn set_request_arc<T: Any + Send + Sync>(&self, value: Arc<T>) {
+	pub(crate) fn set_request_arc<T: Any + Send + Sync>(&self, value: Arc<T>) {
 		self.request_scope.set_arc(value);
 	}
 	/// Retrieves a singleton value from the context.

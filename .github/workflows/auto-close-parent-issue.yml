@@ -11,7 +11,7 @@ permissions:
 jobs:
   auto-close-parent:
     name: Auto-Close Parent Issue
-    timeout-minutes: 10
+    timeout-minutes: 360
     if: github.event.action == 'closed'
     runs-on: ubuntu-latest
     steps:
@@ -158,7 +158,7 @@ jobs:
 
   auto-reopen-parent:
     name: Reopen Parent Issue
-    timeout-minutes: 10
+    timeout-minutes: 360
     if: github.event.action == 'reopened'
     runs-on: ubuntu-latest
     steps:

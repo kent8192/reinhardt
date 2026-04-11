@@ -3,12 +3,24 @@ name: Release-plz
 permissions:
   contents: write
   pull-requests: write
+  discussions: write
 
 on:
   push:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run mode: release (normal) or backfill (generate announcements for all past releases)"
+        type: choice
+        options:
+          - release
+          - backfill
+        default: release
+  pull_request:
+    types: [closed]
+    paths: ['announcements/**']
 
 jobs:
   # Native two-step release workflow:
@@ -155,3 +167,237 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # --- Release Announcement Automation ---
+  # Job 3: Generate announcement content and create PR for human review
+  # Job 4: Post approved announcement to GitHub Discussions
+
+  release-announcement-pr:
+    name: Create Release Announcement PR
+    if: >
+      (github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch')
+    needs: [release-plz-release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Generate GitHub token
+        uses: actions/create-github-app-token@v2
+        id: generate-token
+        with:
+          app-id: ${{ secrets.RELEASE_PLZ_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ steps.generate-token.outputs.token }}
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Determine tags to process
+        id: tags
+        env:
+          BACKFILL_MODE: ${{ inputs.mode }}
+        run: |
+          if [ "$BACKFILL_MODE" = "backfill" ]; then
+            TAGS=$(git tag --list 'reinhardt-web@v*' --sort=version:refname | tr '\n' ' ')
+          else
+            TAGS=$(git tag --list 'reinhardt-web@v*' --sort=-version:refname | head -1)
+          fi
+
+          if [ -z "$TAGS" ]; then
+            echo "::notice::No reinhardt-web tags found. Skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Processing tags: $TAGS"
+          fi
+
+      - name: Collect data and generate announcements
+        if: steps.tags.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          BACKFILL_MODE: ${{ inputs.mode }}
+          TAGS_TO_PROCESS: ${{ steps.tags.outputs.tags }}
+        run: |
+          FAILED_TAGS=""
+
+          for TAG in $TAGS_TO_PROCESS; do
+            VERSION="${TAG#reinhardt-web@v}"
+            ANNOUNCEMENT_FILE="announcements/v${VERSION}.md"
+
+            echo "=== Processing $TAG ==="
+
+            # Skip if announcement file already exists
+            if [ -f "$ANNOUNCEMENT_FILE" ]; then
+              echo "Skipping $TAG: announcement file already exists"
+              continue
+            fi
+
+            # Skip if Discussion already exists
+            EXISTING=$(gh api graphql -f query='
+              query($owner: String!, $repo: String!, $categoryId: ID!) {
+                repository(owner: $owner, name: $repo) {
+                  discussions(first: 100, categoryId: $categoryId) {
+                    nodes { title }
+                  }
+                }
+              }' \
+              -f owner=kent8192 -f repo=reinhardt-web \
+              -f categoryId=DIC_kwDOP9Jw0c4C2aMg \
+              --jq ".data.repository.discussions.nodes[] | select(.title == \"reinhardt-web v${VERSION}\") | .title" \
+              2>/dev/null || true)
+
+            if [ -n "$EXISTING" ]; then
+              echo "Skipping $TAG: Discussion already exists"
+              continue
+            fi
+
+            # Stage 1: Collect release data
+            if ! ./scripts/collect-release-data.sh "$TAG" --output "/tmp/release-data-${VERSION}.json"; then
+              echo "::warning::Failed to collect data for $TAG"
+              FAILED_TAGS="$FAILED_TAGS $TAG"
+              continue
+            fi
+
+            # Stage 2: Generate announcement with Claude CLI
+            SYSTEM_PROMPT=$(cat scripts/prompts/announcement-system.md)
+            if claude --print \
+              --bare \
+              --model sonnet \
+              --system-prompt "$SYSTEM_PROMPT" \
+              --tools "" \
+              "$(cat "/tmp/release-data-${VERSION}.json")" \
+              > "$ANNOUNCEMENT_FILE" 2>/dev/null; then
+              echo "Generated announcement for $TAG"
+            else
+              # Fallback: template with CHANGELOG only
+              echo "::warning::Claude CLI failed for $TAG, using fallback template"
+              CHANGELOG_SECTION=$(jq -r '.changelog_section' "/tmp/release-data-${VERSION}.json")
+              PRS_TABLE=$(jq -r '.pull_requests[] | "| [#\(.number)](\(.url)) | \(.title) | @\(.author) |"' \
+                "/tmp/release-data-${VERSION}.json" || true)
+
+              cat > "$ANNOUNCEMENT_FILE" <<FALLBACK_EOF
+          # reinhardt-web v${VERSION}
+
+          ## Highlights
+
+          (Auto-generated summary unavailable — see CHANGELOG below)
+
+          ## Breaking Changes
+
+          No breaking changes in this release.
+
+          ## Related PRs
+
+          | PR | Title | Author |
+          |----|-------|--------|
+          ${PRS_TABLE}
+
+          <details><summary>Full CHANGELOG</summary>
+
+          ${CHANGELOG_SECTION}
+
+          </details>
+          FALLBACK_EOF
+              echo "Created fallback announcement for $TAG"
+            fi
+
+            # Rate limiting for backfill
+            if [ "$BACKFILL_MODE" = "backfill" ]; then
+              sleep 5
+            fi
+          done
+
+          if [ -n "$FAILED_TAGS" ]; then
+            echo "::warning::Failed tags:$FAILED_TAGS"
+          fi
+
+          # Check if any announcements were generated
+          GENERATED=$(find announcements -name '*.md' ! -name '.gitkeep' | wc -l)
+          if [ "$GENERATED" -eq 0 ]; then
+            echo "::notice::No new announcements to create"
+            echo "no_announcements=true" >> "$GITHUB_ENV"
+          else
+            echo "Generated $GENERATED announcement(s)"
+            echo "no_announcements=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Create Announcement PR
+        if: steps.tags.outputs.skip != 'true' && env.no_announcements != 'true'
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+          commit-message: "docs: add release announcement(s)"
+          branch: announcement/batch-${{ github.run_id }}
+          title: "docs: release announcement(s) for review"
+          labels: announcement,automated
+          body: |
+            ## Summary
+
+            Auto-generated release announcement(s) for human review.
+            Edit the files in `announcements/` before merging.
+            Merging this PR will automatically post the announcement(s) to GitHub Discussions.
+
+            ## Preview
+
+            See the changed files for announcement content.
+
+            ---
+
+            Generated by release-announcement-pr job in [release-plz workflow](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+  post-announcement:
+    name: Post Announcement to Discussions
+    if: >
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      contains(github.event.pull_request.labels.*.name, 'announcement')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Generate GitHub token
+        uses: actions/create-github-app-token@v2
+        id: generate-token
+        with:
+          app-id: ${{ secrets.RELEASE_PLZ_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+
+      - name: Post announcements to Discussions
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          POSTED=0
+          FAILED=0
+
+          for FILE in announcements/v*.md; do
+            [ -f "$FILE" ] || continue
+
+            echo "=== Posting $FILE ==="
+
+            if ./scripts/post-release-discussion.sh "$FILE"; then
+              POSTED=$((POSTED + 1))
+            else
+              FAILED=$((FAILED + 1))
+              echo "::warning::Failed to post $FILE"
+            fi
+
+            sleep 2
+          done
+
+          echo "Posted: $POSTED, Failed: $FAILED"
+
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::$FAILED announcement(s) failed to post"
+            exit 1
+          fi

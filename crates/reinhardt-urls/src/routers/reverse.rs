@@ -232,7 +232,9 @@ impl UrlReverser {
 			match self.routes.entry(full_name.clone()) {
 				Entry::Occupied(existing) => Err(format!(
 					"Duplicate route name '{}': path '{}' conflicts with existing path '{}'",
-					full_name, route.path, existing.get().path
+					full_name,
+					route.path,
+					existing.get().path
 				)),
 				Entry::Vacant(entry) => {
 					entry.insert(route);
@@ -304,7 +306,9 @@ impl UrlReverser {
 		match self.routes.entry(name.to_string()) {
 			Entry::Occupied(existing) => Err(format!(
 				"Duplicate route name '{}': path '{}' conflicts with existing path '{}'",
-				name, path, existing.get().path
+				name,
+				path,
+				existing.get().path
 			)),
 			Entry::Vacant(entry) => {
 				entry.insert(route);
@@ -1425,10 +1429,8 @@ mod tests {
 	fn test_register_duplicate_name_returns_error() {
 		// Arrange
 		let mut reverser = UrlReverser::new();
-		let route_a =
-			Route::new(path!("/users/"), Arc::new(TestHandler)).with_name("users-list");
-		let route_b =
-			Route::new(path!("/people/"), Arc::new(TestHandler)).with_name("users-list");
+		let route_a = Route::new(path!("/users/"), Arc::new(TestHandler)).with_name("users-list");
+		let route_b = Route::new(path!("/people/"), Arc::new(TestHandler)).with_name("users-list");
 
 		// Act
 		let first = reverser.register(route_a);
@@ -1463,10 +1465,8 @@ mod tests {
 	fn test_register_unique_names_succeeds() {
 		// Arrange
 		let mut reverser = UrlReverser::new();
-		let route_a =
-			Route::new(path!("/users/"), Arc::new(TestHandler)).with_name("users-list");
-		let route_b =
-			Route::new(path!("/posts/"), Arc::new(TestHandler)).with_name("posts-list");
+		let route_a = Route::new(path!("/users/"), Arc::new(TestHandler)).with_name("users-list");
+		let route_b = Route::new(path!("/posts/"), Arc::new(TestHandler)).with_name("posts-list");
 
 		// Act & Assert
 		assert!(reverser.register(route_a).is_ok());

@@ -56,8 +56,10 @@ fn build_resolver_reexport(path: &TokenStream) -> TokenStream {
 	}
 
 	let last_segment = &parsed.segments.last().unwrap().ident;
-	let resolver_mod =
-		syn::Ident::new(&format!("__url_resolver_{last_segment}"), last_segment.span());
+	let resolver_mod = syn::Ident::new(
+		&format!("__url_resolver_{last_segment}"),
+		last_segment.span(),
+	);
 
 	let first_segment = parsed.segments.first().unwrap().ident.to_string();
 	let is_absolute = first_segment == "crate" || first_segment == "super";

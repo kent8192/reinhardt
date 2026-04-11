@@ -830,7 +830,11 @@ mod tests {
 	#[rstest]
 	#[case("reinhardtson::MyType", false, "similar prefix different crate")]
 	#[case("reinhardts::MyType", false, "similar prefix no separator")]
-	#[case("reinhardt_like_crate::MyType", false, "unknown crate starting with reinhardt_")]
+	#[case(
+		"reinhardt_like_crate::MyType",
+		false,
+		"unknown crate starting with reinhardt_"
+	)]
 	#[case("REINHARDT::Type", false, "uppercase")]
 	#[case("Reinhardt::Type", false, "capitalized")]
 	#[case("my_reinhardt_app::Type", false, "reinhardt in middle")]

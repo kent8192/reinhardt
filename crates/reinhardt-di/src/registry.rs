@@ -317,9 +317,7 @@ Use a distinct newtype (e.g., `struct Primary{short}({short})`) for each."
 	}
 
 	/// Iterate over all qualified type name mappings without allocating a new map.
-	pub fn iter_qualified_type_names(
-		&self,
-	) -> impl Iterator<Item = (TypeId, &'static str)> + '_ {
+	pub fn iter_qualified_type_names(&self) -> impl Iterator<Item = (TypeId, &'static str)> + '_ {
 		self.qualified_type_names
 			.iter()
 			.map(|entry| (*entry.key(), *entry.value()))

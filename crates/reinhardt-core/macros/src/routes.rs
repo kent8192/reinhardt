@@ -1096,8 +1096,12 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 		}
 	};
 
-	let url_resolver_tokens =
-		generate_url_resolver_tokens(&options.name, &fn_name.to_string(), &path_str, &reinhardt_crate);
+	let url_resolver_tokens = generate_url_resolver_tokens(
+		&options.name,
+		&fn_name.to_string(),
+		&path_str,
+		&reinhardt_crate,
+	);
 
 	Ok(quote! {
 		// Submit endpoint metadata to global inventory

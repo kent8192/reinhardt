@@ -1326,8 +1326,7 @@ impl ServerRouter {
 	/// about each duplicate.
 	pub fn validate_route_names(&self) -> std::result::Result<(), Vec<String>> {
 		let registrations = self.collect_routes_recursive(None, "");
-		let mut seen: std::collections::HashMap<String, String> =
-			std::collections::HashMap::new();
+		let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 		let mut errors = Vec::new();
 		for (name, path) in registrations {
 			if let Some(existing_path) = seen.insert(name.clone(), path.clone()) {

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc@v0.1.0-rc.15...reinhardt-grpc@v0.1.0-rc.16) - 2026-04-12
+
+### Added
+
+- *(di)* [**breaking**] deprecate Injected<T> in favor of Depends<T> and remove auto-Clone
+
+### Fixed
+
+- *(grpc)* resolve clippy warnings in tests
+
+### Styling
+
+- apply rustfmt to clippy-fixed files
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc@v0.1.0-rc.14...reinhardt-grpc@v0.1.0-rc.15) - 2026-03-29
 
 ### Maintenance

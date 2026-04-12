@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.1.0-rc.15...reinhardt-test@v0.1.0-rc.16) - 2026-04-12
+
+### Added
+
+- add CDP-based E2E browser testing infrastructure and WASM SPA fixes
+- migrate UUID generation from v4 to v7 across entire codebase
+
+### Changed
+
+- replace target_arch = "wasm32" with target_family/target_os best practice
+
+### Fixed
+
+- *(test)* gate native-only dependencies for wasm32 target compilation
+- *(auth)* add is_staff and is_superuser fields to JWT Claims
+- *(ci)* apply rustfmt and fix collapsible_if clippy lint after main merge
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.1.0-rc.14...reinhardt-test@v0.1.0-rc.15) - 2026-03-29
 
 ### Maintenance

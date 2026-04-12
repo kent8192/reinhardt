@@ -56,3 +56,6 @@ features = ["minimal", "graphql", "auth-jwt", "argon2-hasher", "client-router", 
 default = ["client-router"]
 # client-router: Enable client-side routing support (required for #[routes] macro with UnifiedRouter)
 client-router = []
+
+[lints]
+workspace = true

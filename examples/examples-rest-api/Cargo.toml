@@ -52,3 +52,6 @@ with-admin = []
 [[test]]
 name = "api_tests"
 required-features = ["with-reinhardt"]
+
+[lints]
+workspace = true

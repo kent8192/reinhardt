@@ -806,25 +806,23 @@ fn generate_url_resolver_tokens(
 	// because it depends on `ServerRouter` which is `native`-only.
 	if params.is_empty() {
 		quote! {
-			#[allow(unexpected_cfgs)]
-			#[cfg(feature = "url-resolver")]
-			#[doc = #doc_str]
-			pub trait #trait_ident: #reinhardt_crate::UrlResolver {
-				#[doc = #doc_str]
-				fn #method_ident(&self) -> String {
-					self.resolve_url(#name, &[])
-				}
-			}
-			#[allow(unexpected_cfgs)]
-			#[cfg(feature = "url-resolver")]
-			impl<T: #reinhardt_crate::UrlResolver> #trait_ident for T {}
-
-			#[allow(unexpected_cfgs)]
-			#[cfg(feature = "url-resolver")]
 			#[doc(hidden)]
 			pub mod #resolver_mod_ident {
-				pub use super::#trait_ident;
+				#![allow(unexpected_cfgs)]
+
+				#[cfg(feature = "url-resolver")]
+				#[doc = #doc_str]
+				pub trait #trait_ident: #reinhardt_crate::UrlResolver {
+					#[doc = #doc_str]
+					fn #method_ident(&self) -> String {
+						self.resolve_url(#name, &[])
+					}
+				}
+				#[cfg(feature = "url-resolver")]
+				impl<T: #reinhardt_crate::UrlResolver> #trait_ident for T {}
 			}
+			#[doc(hidden)]
+			pub use #resolver_mod_ident::*;
 		}
 	} else {
 		let param_idents: Vec<syn::Ident> = params
@@ -834,25 +832,23 @@ fn generate_url_resolver_tokens(
 		let param_strs: Vec<&str> = params.iter().map(|s| s.as_str()).collect();
 
 		quote! {
-			#[allow(unexpected_cfgs)]
-			#[cfg(feature = "url-resolver")]
-			#[doc = #doc_str]
-			pub trait #trait_ident: #reinhardt_crate::UrlResolver {
-				#[doc = #doc_str]
-				fn #method_ident(&self, #(#param_idents: &str),*) -> String {
-					self.resolve_url(#name, &[#((#param_strs, #param_idents)),*])
-				}
-			}
-			#[allow(unexpected_cfgs)]
-			#[cfg(feature = "url-resolver")]
-			impl<T: #reinhardt_crate::UrlResolver> #trait_ident for T {}
-
-			#[allow(unexpected_cfgs)]
-			#[cfg(feature = "url-resolver")]
 			#[doc(hidden)]
 			pub mod #resolver_mod_ident {
-				pub use super::#trait_ident;
+				#![allow(unexpected_cfgs)]
+
+				#[cfg(feature = "url-resolver")]
+				#[doc = #doc_str]
+				pub trait #trait_ident: #reinhardt_crate::UrlResolver {
+					#[doc = #doc_str]
+					fn #method_ident(&self, #(#param_idents: &str),*) -> String {
+						self.resolve_url(#name, &[#((#param_strs, #param_idents)),*])
+					}
+				}
+				#[cfg(feature = "url-resolver")]
+				impl<T: #reinhardt_crate::UrlResolver> #trait_ident for T {}
 			}
+			#[doc(hidden)]
+			pub use #resolver_mod_ident::*;
 		}
 	}
 }

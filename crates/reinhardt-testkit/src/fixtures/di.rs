@@ -98,8 +98,8 @@
 //! }
 //! ```
 
-use reinhardt_di::{InjectionContext, SingletonScope};
 use reinhardt_di::resolve_context::{RESOLVE_CTX, ResolveContext};
+use reinhardt_di::{InjectionContext, SingletonScope};
 use rstest::*;
 use std::future::Future;
 use std::sync::Arc;
@@ -487,10 +487,7 @@ pub async fn injection_context_with_database(database_url: &str) -> InjectionCon
 ///     assert_eq!(result, 42);
 /// }
 /// ```
-pub async fn with_test_di_context<F, Fut, T>(
-	setup: impl FnOnce(&SingletonScope),
-	f: F,
-) -> T
+pub async fn with_test_di_context<F, Fut, T>(setup: impl FnOnce(&SingletonScope), f: F) -> T
 where
 	F: FnOnce(Arc<InjectionContext>) -> Fut,
 	Fut: Future<Output = T>,
@@ -754,7 +751,7 @@ mod tests {
 	#[rstest]
 	#[tokio::test]
 	async fn test_with_test_di_context_get_di_context_root() {
-		use reinhardt_di::resolve_context::{get_di_context, ContextLevel};
+		use reinhardt_di::resolve_context::{ContextLevel, get_di_context};
 
 		// Act & Assert
 		with_test_di_context(
@@ -770,7 +767,7 @@ mod tests {
 	#[rstest]
 	#[tokio::test]
 	async fn test_with_test_di_context_get_di_context_current() {
-		use reinhardt_di::resolve_context::{get_di_context, ContextLevel};
+		use reinhardt_di::resolve_context::{ContextLevel, get_di_context};
 
 		// Act & Assert
 		with_test_di_context(

@@ -14,6 +14,25 @@ use async_trait::async_trait;
 use std::env;
 use std::path::{Path, PathBuf};
 
+/// Validate that a name does not use the reserved `reinhardt_*` namespace.
+///
+/// Names starting with `reinhardt_` or `reinhardt-` conflict with the DI
+/// pseudo orphan rule (#3468, #3502) which treats `reinhardt_*::*` as
+/// framework-managed types.
+fn validate_not_reserved_namespace(name: &str) -> CommandResult<()> {
+	let normalized = name.replace('-', "_");
+	if normalized.starts_with("reinhardt_") || normalized == "reinhardt" {
+		return Err(CommandError::InvalidArguments(format!(
+			"Name '{}' is not allowed: names starting with 'reinhardt_' or 'reinhardt-' \
+			 are reserved for the Reinhardt framework. This conflicts with the DI pseudo \
+			 orphan rule which treats 'reinhardt_*' namespaces as framework-managed. \
+			 Please choose a different name.",
+			name
+		)));
+	}
+	Ok(())
+}
+
 /// Create a Reinhardt project directory structure
 ///
 /// Translation of Django's startproject command
@@ -61,6 +80,9 @@ impl BaseCommand for StartProjectCommand {
 				CommandError::InvalidArguments("You must provide a project name.".to_string())
 			})?
 			.clone();
+
+		// Reject reserved reinhardt_* namespace (#3502)
+		validate_not_reserved_namespace(&project_name)?;
 
 		let target = ctx.arg(1).map(PathBuf::from);
 
@@ -197,6 +219,9 @@ impl BaseCommand for StartAppCommand {
 				CommandError::InvalidArguments("You must provide an application name.".to_string())
 			})?
 			.clone();
+
+		// Reject reserved reinhardt_* namespace (#3502)
+		validate_not_reserved_namespace(&app_name)?;
 
 		let target = ctx.arg(1).map(PathBuf::from);
 
@@ -779,5 +804,32 @@ mod tests {
 			options.iter().any(|opt| opt.long == "with-pages"),
 			"--with-pages flag should exist in StartAppCommand for mtv type mapping"
 		);
+	}
+
+	#[rstest]
+	#[case("reinhardt_myapp")]
+	#[case("reinhardt-myapp")]
+	#[case("reinhardt_")]
+	#[case("reinhardt-")]
+	#[case("reinhardt")]
+	fn test_reserved_namespace_rejected(#[case] name: &str) {
+		// Act
+		let result = validate_not_reserved_namespace(name);
+
+		// Assert
+		assert!(result.is_err(), "should reject '{}'", name);
+	}
+
+	#[rstest]
+	#[case("myapp")]
+	#[case("my_reinhardt_app")]
+	#[case("cool_project")]
+	#[case("reinhard")]
+	fn test_non_reserved_namespace_accepted(#[case] name: &str) {
+		// Act
+		let result = validate_not_reserved_namespace(name);
+
+		// Assert
+		assert!(result.is_ok(), "should accept '{}'", name);
 	}
 }

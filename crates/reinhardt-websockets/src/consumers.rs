@@ -206,7 +206,7 @@ impl ConsumerContext {
 			.as_ref()
 			.ok_or_else(|| WebSocketError::Internal("DI context not available".to_string()))?;
 
-		Depends::<T>::resolve(ctx, true)
+		Depends::<T>::resolve_or_inject(ctx, true)
 			.await
 			.map(|injected| injected.into_inner())
 			.map_err(|_| WebSocketError::Internal("dependency resolution failed".to_string()))
@@ -238,7 +238,7 @@ impl ConsumerContext {
 			.as_ref()
 			.ok_or_else(|| WebSocketError::Internal("DI context not available".to_string()))?;
 
-		Depends::<T>::resolve(ctx, false)
+		Depends::<T>::resolve_or_inject(ctx, false)
 			.await
 			.map(|injected| injected.into_inner())
 			.map_err(|_| WebSocketError::Internal("dependency resolution failed".to_string()))
@@ -265,7 +265,7 @@ impl ConsumerContext {
 	{
 		let ctx = self.di_context.as_ref()?;
 
-		Depends::<T>::resolve(ctx, true)
+		Depends::<T>::resolve_or_inject(ctx, true)
 			.await
 			.ok()
 			.map(|injected| injected.into_inner())

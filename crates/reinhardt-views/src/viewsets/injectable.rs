@@ -92,13 +92,15 @@ pub trait InjectableViewSet: ViewSet {
 				)
 			})?;
 
-		let injected = Depends::<T>::resolve(&di_ctx, true).await.map_err(|e| {
-			reinhardt_core::exception::Error::Internal(format!(
-				"Dependency injection failed for {}: {:?}",
-				std::any::type_name::<T>(),
-				e
-			))
-		})?;
+		let injected = Depends::<T>::resolve_or_inject(&di_ctx, true)
+			.await
+			.map_err(|e| {
+				reinhardt_core::exception::Error::Internal(format!(
+					"Dependency injection failed for {}: {:?}",
+					std::any::type_name::<T>(),
+					e
+				))
+			})?;
 
 		Ok(injected.into_inner())
 	}
@@ -136,13 +138,15 @@ pub trait InjectableViewSet: ViewSet {
 				)
 			})?;
 
-		let injected = Depends::<T>::resolve(&di_ctx, false).await.map_err(|e| {
-			reinhardt_core::exception::Error::Internal(format!(
-				"Dependency injection failed for {}: {:?}",
-				std::any::type_name::<T>(),
-				e
-			))
-		})?;
+		let injected = Depends::<T>::resolve_or_inject(&di_ctx, false)
+			.await
+			.map_err(|e| {
+				reinhardt_core::exception::Error::Internal(format!(
+					"Dependency injection failed for {}: {:?}",
+					std::any::type_name::<T>(),
+					e
+				))
+			})?;
 
 		Ok(injected.into_inner())
 	}
@@ -167,7 +171,7 @@ pub trait InjectableViewSet: ViewSet {
 	{
 		let di_ctx = request.get_di_context::<Arc<InjectionContext>>()?;
 
-		Depends::<T>::resolve(&di_ctx, true)
+		Depends::<T>::resolve_or_inject(&di_ctx, true)
 			.await
 			.ok()
 			.map(|injected| injected.into_inner())

@@ -38,7 +38,9 @@
 //! ```
 
 use crate::injected::DependencyScope;
-use crate::{DiError, DiResult, Injectable, context::InjectionContext, injected::InjectionMetadata};
+use crate::{
+	DiError, DiResult, Injectable, context::InjectionContext, injected::InjectionMetadata,
+};
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -47,10 +49,12 @@ use std::sync::Arc;
 /// Provides automatic dependency resolution with optional caching
 /// and circular dependency detection.
 ///
-/// Resolution first tries the global dependency registry (for types
-/// registered via `#[injectable]` or `#[injectable_factory]`), then
-/// falls back to `T::inject()` for types with manual `Injectable`
-/// implementations.
+/// Two resolution methods are available:
+/// - [`resolve()`](Self::resolve): Resolves via the global registry only.
+///   Use for types registered via `#[injectable]` or `#[injectable_factory]`.
+/// - [`resolve_or_inject()`](Self::resolve_or_inject): Resolves via the global
+///   registry first, falling back to `T::inject()` for types with manual
+///   `Injectable` implementations.
 #[derive(Debug)]
 pub struct Depends<T: Send + Sync + 'static> {
 	inner: Arc<T>,
@@ -119,15 +123,67 @@ impl<T: Send + Sync + 'static> Depends<T> {
 			_phantom: std::marker::PhantomData,
 		}
 	}
-	/// Resolve the dependency from the injection context.
+	/// Resolve the dependency from the global registry.
 	///
 	/// This method delegates to `ctx.resolve::<T>()` which:
 	/// 1. Detects circular dependencies
 	/// 2. Checks scope caches (singleton/request)
 	/// 3. Calls the registered factory if not cached
 	///
-	/// Caching behavior is determined by the registered `DependencyScope`,
-	/// not by the `use_cache` parameter.
+	/// Unlike [`resolve_or_inject()`](Self::resolve_or_inject), this method does
+	/// **not** require `T: Injectable` and does **not** fall back to
+	/// `T::inject()`. It returns an error if the type is not registered in the
+	/// global registry.
+	///
+	/// This is the method used by `#[injectable_factory]` and other macros for
+	/// dependency resolution, allowing factory-produced types to be injected
+	/// without an `Injectable` implementation.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_di::{Depends, InjectionContext, SingletonScope, DiResult, global_registry, DependencyScope};
+	/// use std::sync::Arc;
+	///
+	/// #[derive(Clone, Default)]
+	/// struct Config {
+	///     value: String,
+	/// }
+	///
+	/// # async fn example() -> DiResult<()> {
+	/// // Register via factory (no Injectable impl needed)
+	/// let registry = global_registry();
+	/// registry.register_async::<Config, _, _>(DependencyScope::Singleton, |_ctx| async {
+	///     Ok(Config::default())
+	/// });
+	///
+	/// let singleton_scope = Arc::new(SingletonScope::new());
+	/// let ctx = InjectionContext::builder(singleton_scope).build();
+	/// let result = Depends::<Config>::resolve(&ctx, true).await?;
+	/// # Ok(())
+	/// # }
+	/// ```
+	pub async fn resolve(ctx: &InjectionContext, use_cache: bool) -> DiResult<Self> {
+		let arc = ctx.resolve::<T>().await?;
+
+		Ok(Self {
+			inner: arc,
+			metadata: InjectionMetadata {
+				scope: DependencyScope::Request,
+				cached: use_cache,
+			},
+		})
+	}
+
+	/// Resolve the dependency with fallback to `Injectable::inject()`.
+	///
+	/// First tries the global registry via `ctx.resolve::<T>()`. If the type
+	/// is not registered (e.g., manual `impl Injectable` without `#[injectable]`),
+	/// falls back to `T::inject()` directly.
+	///
+	/// This method requires `T: Injectable` and is used by the blanket
+	/// `Injectable for Depends<T>` implementation and runtime call sites that
+	/// need to support both registry-registered and manually-implemented types.
 	///
 	/// # Examples
 	///
@@ -141,21 +197,22 @@ impl<T: Send + Sync + 'static> Depends<T> {
 	///     value: String,
 	/// }
 	///
-	/// # #[async_trait]
-	/// # impl Injectable for Config {
-	/// #     async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
-	/// #         Ok(Config::default())
-	/// #     }
-	/// # }
+	/// #[async_trait]
+	/// impl Injectable for Config {
+	///     async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
+	///         Ok(Config::default())
+	///     }
+	/// }
 	///
 	/// # async fn example() -> DiResult<()> {
 	/// let singleton_scope = Arc::new(SingletonScope::new());
 	/// let ctx = InjectionContext::builder(singleton_scope).build();
-	/// let result = Depends::<Config>::resolve(&ctx, true).await?;
+	/// // Works even if Config is not in the global registry
+	/// let result = Depends::<Config>::resolve_or_inject(&ctx, true).await?;
 	/// # Ok(())
 	/// # }
 	/// ```
-	pub async fn resolve(ctx: &InjectionContext, use_cache: bool) -> DiResult<Self>
+	pub async fn resolve_or_inject(ctx: &InjectionContext, use_cache: bool) -> DiResult<Self>
 	where
 		T: Injectable,
 	{
@@ -335,13 +392,12 @@ pub struct DependsBuilder<T: Send + Sync + 'static> {
 }
 
 impl<T: Send + Sync + 'static> DependsBuilder<T> {
-	/// Resolve the dependency.
+	/// Resolve the dependency from the global registry.
 	///
 	/// # Examples
 	///
 	/// ```
-	/// use reinhardt_di::{Depends, InjectionContext, SingletonScope, Injectable, DiResult};
-	/// # use async_trait::async_trait;
+	/// use reinhardt_di::{Depends, InjectionContext, SingletonScope, DiResult, global_registry, DependencyScope};
 	/// use std::sync::Arc;
 	///
 	/// #[derive(Clone, Default)]
@@ -349,14 +405,12 @@ impl<T: Send + Sync + 'static> DependsBuilder<T> {
 	///     value: String,
 	/// }
 	///
-	/// # #[async_trait]
-	/// # impl Injectable for Config {
-	/// #     async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
-	/// #         Ok(Config::default())
-	/// #     }
-	/// # }
-	///
 	/// # async fn example() -> DiResult<()> {
+	/// let registry = global_registry();
+	/// registry.register_async::<Config, _, _>(DependencyScope::Singleton, |_ctx| async {
+	///     Ok(Config::default())
+	/// });
+	///
 	/// let singleton_scope = Arc::new(SingletonScope::new());
 	/// let ctx = InjectionContext::builder(singleton_scope).build();
 	/// let builder = Depends::<Config>::builder();
@@ -364,11 +418,18 @@ impl<T: Send + Sync + 'static> DependsBuilder<T> {
 	/// # Ok(())
 	/// # }
 	/// ```
-	pub async fn resolve(self, ctx: &InjectionContext) -> DiResult<Depends<T>>
+	pub async fn resolve(self, ctx: &InjectionContext) -> DiResult<Depends<T>> {
+		Depends::resolve(ctx, self.use_cache).await
+	}
+
+	/// Resolve the dependency with fallback to `Injectable::inject()`.
+	///
+	/// See [`Depends::resolve_or_inject()`] for details.
+	pub async fn resolve_or_inject(self, ctx: &InjectionContext) -> DiResult<Depends<T>>
 	where
 		T: Injectable,
 	{
-		Depends::resolve(ctx, self.use_cache).await
+		Depends::resolve_or_inject(ctx, self.use_cache).await
 	}
 }
 
@@ -612,8 +673,9 @@ mod tests {
 
 	#[rstest]
 	#[tokio::test]
-	async fn test_depends_resolve_failing_injectable_returns_error() {
-		// Arrange: type whose inject() always fails
+	async fn test_depends_resolve_or_inject_failing_injectable_returns_error() {
+		// Arrange: type whose inject() always fails and is not in the registry.
+		// resolve_or_inject() falls back to T::inject() which returns an error.
 		#[derive(Debug)]
 		struct FailingType;
 
@@ -631,10 +693,99 @@ mod tests {
 		let ctx = InjectionContext::builder(singleton_scope).build();
 
 		// Act
-		let result = Depends::<FailingType>::resolve(&ctx, true).await;
+		let result = Depends::<FailingType>::resolve_or_inject(&ctx, true).await;
 
 		// Assert
 		assert!(result.is_err());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_depends_resolve_unregistered_type_returns_error() {
+		// Arrange: type that is not in the registry and has no Injectable impl.
+		// resolve() (registry-only) returns DependencyNotRegistered.
+		#[derive(Debug)]
+		struct UnregisteredType;
+
+		let singleton_scope = Arc::new(SingletonScope::new());
+		let ctx = InjectionContext::builder(singleton_scope).build();
+
+		// Act
+		let result = Depends::<UnregisteredType>::resolve(&ctx, true).await;
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(
+			result.unwrap_err(),
+			DiError::DependencyNotRegistered { .. }
+		),);
+	}
+
+	/// Factory-registered type can be resolved via `Depends::resolve()` without
+	/// an `Injectable` implementation. This is the core fix for issue #3515.
+	#[rstest]
+	#[tokio::test]
+	async fn test_depends_resolve_factory_type_without_injectable() {
+		// Arrange: type registered via factory, no Injectable impl
+		#[derive(Debug, Clone)]
+		struct FactoryOnlyType {
+			value: String,
+		}
+
+		let registry = global_registry();
+		if !registry.is_registered::<FactoryOnlyType>() {
+			registry.register_async::<FactoryOnlyType, _, _>(
+				RegistryScope::Request,
+				|_ctx| async {
+					Ok(FactoryOnlyType {
+						value: "from_factory".to_string(),
+					})
+				},
+			);
+		}
+
+		let singleton_scope = Arc::new(SingletonScope::new());
+		let ctx = InjectionContext::builder(singleton_scope).build();
+
+		// Act
+		let depends = Depends::<FactoryOnlyType>::resolve(&ctx, true)
+			.await
+			.unwrap();
+
+		// Assert
+		assert_eq!(depends.value, "from_factory");
+	}
+
+	/// Manual Injectable impl can be resolved via `resolve_or_inject()` even
+	/// when the type is not in the global registry.
+	#[rstest]
+	#[tokio::test]
+	async fn test_depends_resolve_or_inject_manual_injectable_fallback() {
+		// Arrange: type with manual Injectable impl, not in registry
+		#[derive(Debug, Clone)]
+		struct ManualType {
+			origin: String,
+		}
+
+		#[async_trait::async_trait]
+		impl Injectable for ManualType {
+			async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
+				Ok(ManualType {
+					origin: "from_inject".to_string(),
+				})
+			}
+		}
+
+		let singleton_scope = Arc::new(SingletonScope::new());
+		let ctx = InjectionContext::builder(singleton_scope).build();
+
+		// Act
+		let depends = Depends::<ManualType>::resolve_or_inject(&ctx, true)
+			.await
+			.unwrap();
+
+		// Assert
+		assert_eq!(depends.origin, "from_inject");
 	}
 
 	#[rstest]

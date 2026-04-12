@@ -1187,4 +1187,40 @@ async fn test_djangoadmin_defaultsettings_custom_command_with_environment() {
 	// env_guard automatically cleans up on drop
 }
 
+// ===== Reserved namespace validation (#3502) =====
+
+#[serial]
+#[tokio::test]
+async fn test_startproject_rejects_reinhardt_prefix() {
+	let env = TestEnvironment::new();
+	std::env::set_current_dir(env.path()).expect("Failed to change directory");
+
+	for name in ["reinhardt_myapp", "reinhardt-myapp"] {
+		// Act
+		let ctx = CommandContext::new(vec![name.to_string()]);
+		let cmd = StartProjectCommand;
+		let result = cmd.execute(&ctx).await;
+
+		// Assert
+		assert!(result.is_err(), "startproject should reject '{}'", name);
+	}
+}
+
+#[serial]
+#[tokio::test]
+async fn test_startapp_rejects_reinhardt_prefix() {
+	let env = TestEnvironment::new();
+	std::env::set_current_dir(env.path()).expect("Failed to change directory");
+
+	for name in ["reinhardt_myapp", "reinhardt-myapp"] {
+		// Act
+		let ctx = CommandContext::new(vec![name.to_string()]);
+		let cmd = StartAppCommand;
+		let result = cmd.execute(&ctx).await;
+
+		// Assert
+		assert!(result.is_err(), "startapp should reject '{}'", name);
+	}
+}
+
 // See docs/IMPLEMENTATION_NOTES.md for complete test coverage index

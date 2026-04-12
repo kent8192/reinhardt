@@ -649,14 +649,18 @@ pub(crate) fn installed_apps_impl(input: TokenStream) -> Result<TokenStream> {
 		///
 		/// Namespaced with `__reinhardt_` prefix to reduce collision risk
 		/// in the consuming crate's root macro namespace.
-		#[allow(unexpected_cfgs)]
-		#[cfg(feature = "url-resolver")]
 		#[doc(hidden)]
-		#[macro_export]
-		macro_rules! __reinhardt_for_each_app {
-			($callback:ident) => {
-				$callback!(#(#labels),*);
-			};
+		mod __for_each_app_cfg {
+			#![allow(unexpected_cfgs)]
+
+			#[cfg(feature = "url-resolver")]
+			#[doc(hidden)]
+			#[macro_export]
+			macro_rules! __reinhardt_for_each_app {
+				($callback:ident) => {
+					$callback!(#(#labels),*);
+				};
+			}
 		}
 	})
 }

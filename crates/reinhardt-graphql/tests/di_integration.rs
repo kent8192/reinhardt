@@ -113,16 +113,14 @@ impl User {
 fn register_mock_types() {
 	let registry = global_registry();
 	if !registry.is_registered::<MockDatabase>() {
-		registry.register_async::<MockDatabase, _, _>(
-			DependencyScope::Request,
-			|_ctx| async { Ok(MockDatabase::new()) },
-		);
+		registry.register_async::<MockDatabase, _, _>(DependencyScope::Request, |_ctx| async {
+			Ok(MockDatabase::new())
+		});
 	}
 	if !registry.is_registered::<MockCache>() {
-		registry.register_async::<MockCache, _, _>(
-			DependencyScope::Request,
-			|_ctx| async { Ok(MockCache::new()) },
-		);
+		registry.register_async::<MockCache, _, _>(DependencyScope::Request, |_ctx| async {
+			Ok(MockCache::new())
+		});
 	}
 }
 

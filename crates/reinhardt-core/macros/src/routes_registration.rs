@@ -170,6 +170,10 @@ pub(crate) fn routes_impl(_args: TokenStream, input: ItemFn) -> Result<TokenStre
 		// Case 1: Sync, no #[inject] — existing behavior unchanged
 		let fn_sig = &input.sig;
 		quote! {
+			// private_interfaces: The macro forces `pub` visibility, but users
+			// legitimately use `pub(crate)` newtype wrappers for DI parameters
+			// (see #3498, #3468 DI pseudo orphan rule).
+			#[allow(private_interfaces)]
 			#(#fn_attrs)*
 			#fn_vis #fn_sig #fn_block
 
@@ -201,6 +205,7 @@ pub(crate) fn routes_impl(_args: TokenStream, input: ItemFn) -> Result<TokenStre
 		// Case 2: Async, no #[inject]
 		let fn_sig = &input.sig;
 		quote! {
+			#[allow(private_interfaces)]
 			#(#fn_attrs)*
 			#fn_vis #fn_sig #fn_block
 
@@ -300,6 +305,7 @@ pub(crate) fn routes_impl(_args: TokenStream, input: ItemFn) -> Result<TokenStre
 			.collect();
 
 		quote! {
+			#[allow(private_interfaces)]
 			#(#fn_attrs)*
 			#fn_vis async fn #fn_name #fn_generics(#(#stripped_params),*) #fn_return #fn_block
 

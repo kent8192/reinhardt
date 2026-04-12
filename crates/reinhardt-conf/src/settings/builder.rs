@@ -190,6 +190,11 @@ impl SettingsBuilder {
 			}
 		}
 
+		// Apply thread-local test overrides (highest priority, above all sources)
+		if let Some(overrides) = super::testing::overrides::current_overrides() {
+			super::testing::overrides::deep_merge(&mut merged, overrides);
+		}
+
 		Ok(MergedSettings {
 			data: Arc::new(merged),
 			profile: self.profile,

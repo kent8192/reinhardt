@@ -15,9 +15,10 @@ pub use super::env_parser::{
 };
 pub use super::profile::Profile;
 pub use super::sources::{
-	ConfigSource, DefaultSource, DotEnvSource, EnvSource, JsonFileSource, LowPriorityEnvSource,
-	SourceError, TomlFileSource, auto_source,
+	ConfigSource, DefaultSource, DotEnvSource, EnvSource, HighPriorityEnvSource, JsonFileSource,
+	LowPriorityEnvSource, SourceError, TomlFileSource, auto_source,
 };
+pub use super::testing::{SettingsOverride, SettingsOverrideGuard};
 pub use super::validation::{
 	ChoiceValidator, PatternValidator, RangeValidator, RequiredValidator, SecurityValidator,
 	SettingsValidator, ValidationError, ValidationResult, Validator,

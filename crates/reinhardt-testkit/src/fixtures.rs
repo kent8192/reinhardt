@@ -173,7 +173,7 @@ pub use migrations::{
 // From di module
 pub use di::{
 	injection_context, injection_context_with_database, injection_context_with_overrides,
-	injection_context_with_sqlite, singleton_scope,
+	injection_context_with_sqlite, singleton_scope, with_test_di_context,
 };
 
 // From schema module (conditional on feature)

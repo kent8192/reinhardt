@@ -38,7 +38,9 @@
 //! ```
 
 use crate::injected::DependencyScope;
-use crate::{DiError, DiResult, Injectable, context::InjectionContext, injected::InjectionMetadata};
+use crate::{
+	DiError, DiResult, Injectable, context::InjectionContext, injected::InjectionMetadata,
+};
 use std::ops::Deref;
 use std::sync::Arc;
 

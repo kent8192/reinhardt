@@ -81,9 +81,10 @@ pub(crate) fn injectable_factory_impl(args: TokenStream, input: ItemFn) -> Resul
 		.iter()
 		.map(|(pat, ty)| {
 			if let Some(inner_ty) = extract_depends_inner_type(ty) {
-				// Parameter is Depends<T>: resolve via Depends::resolve()
+				// Parameter is Depends<T>: resolve via registry only (no Injectable bound needed).
+				// Factory-produced types may not implement Injectable.
 				quote! {
-					let #pat: #ty = #di_crate::Depends::<#inner_ty>::resolve(&*ctx, true).await?;
+					let #pat: #ty = #di_crate::Depends::<#inner_ty>::resolve_from_registry(&*ctx, true).await?;
 				}
 			} else {
 				// Parameter is T: resolve T, unwrap Arc<T> via clone

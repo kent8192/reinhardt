@@ -130,11 +130,11 @@ where
 	T: Injectable,
 {
 	async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
-		crate::depends::Depends::<T>::resolve_or_inject(ctx, true).await
+		crate::depends::Depends::<T>::resolve(ctx, true).await
 	}
 
 	async fn inject_uncached(ctx: &InjectionContext) -> DiResult<Self> {
-		crate::depends::Depends::<T>::resolve_or_inject(ctx, false).await
+		crate::depends::Depends::<T>::resolve(ctx, false).await
 	}
 }
 

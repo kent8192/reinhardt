@@ -7,16 +7,26 @@ use crate::{DiResult, context::InjectionContext};
 /// This trait defines how a type can be injected as a dependency.
 /// Types implementing this trait can be used with `Depends<T>`.
 ///
-/// # Automatic Implementation
+/// # Blanket Implementations
 ///
-/// Types that implement `Default + Clone + Send + Sync + 'static` automatically
-/// get an `Injectable` implementation that:
-/// 1. Checks if the value is already cached in the request scope
-/// 2. Checks if the value is available in the singleton scope
-/// 3. Creates a new instance using `Default::default()`
+/// The following blanket implementations are provided:
 ///
-/// This automatic behavior is similar to FastAPI's dependency injection,
-/// where simple types can be auto-injected without explicit implementation.
+/// - **`Arc<T>`** where `T: Injectable` — injects the inner `T` and wraps it in `Arc`
+/// - **`Depends<T>`** where `T: Send + Sync + 'static` — resolves `T` via the global
+///   registry with caching and circular dependency detection
+/// - **`Option<T>`** where `T: Injectable` — returns `None` on injection failure
+///   instead of propagating the error
+///
+/// # Custom Implementation
+///
+/// To make a type injectable, use one of these approaches:
+///
+/// 1. **`#[injectable]` attribute macro** — generates an `Injectable` impl from
+///    a constructor function
+/// 2. **`#[injectable_factory]` attribute macro** — generates an `Injectable` impl
+///    from a factory function
+/// 3. **Manual `impl Injectable`** — implement the trait directly with
+///    `#[async_trait]`
 ///
 /// # Example
 ///
@@ -24,16 +34,6 @@ use crate::{DiResult, context::InjectionContext};
 /// use reinhardt_di::{Injectable, InjectionContext, DiResult, Depends};
 /// use async_trait::async_trait;
 ///
-/// // Automatic injection for types with Default + Clone
-/// #[derive(Default, Clone)]
-/// struct Config {
-///     api_key: String,
-/// }
-///
-// Config now has Injectable automatically
-// Can be used directly: Depends<Config>
-///
-// Custom injection logic
 /// # #[derive(Clone)]
 /// # struct DbPool;
 /// # impl DbPool {
@@ -46,7 +46,6 @@ use crate::{DiResult, context::InjectionContext};
 /// #[async_trait]
 /// impl Injectable for Database {
 ///     async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
-///         // Custom logic here
 ///         Ok(Database {
 ///             pool: DbPool::connect().await?,
 ///         })

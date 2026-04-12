@@ -1,18 +1,19 @@
-use super::error::TestAuthError;
 use super::identity::SessionIdentity;
-use super::secondary::SecondaryAuth;
 use super::traits::ForceLoginUser;
 use crate::server_fn::MockSession;
 use crate::server_fn::ServerFnTestContext;
 
 /// Builder for auth configuration in server_fn test contexts.
 ///
-/// Mirrors the [`crate::client::APIClient`] auth builder API. Uses [`MockSession`] instead of
-/// a real `AsyncSessionBackend`.
+/// Mirrors the [`crate::client::APIClient`] auth builder API for primary auth.
+/// Uses [`MockSession`] instead of a real `AsyncSessionBackend`.
+///
+/// Secondary auth layers (MFA, etc.) are not supported in server_fn contexts
+/// because `MockSession` does not process HTTP headers. Use
+/// [`crate::auth::SessionAuthBuilder`] with an `APIClient` for MFA testing.
 pub struct ServerFnAuthBuilder {
 	ctx: ServerFnTestContext,
 	identity: Option<SessionIdentity>,
-	secondary: Vec<Box<dyn SecondaryAuth>>,
 }
 
 impl ServerFnAuthBuilder {
@@ -20,7 +21,6 @@ impl ServerFnAuthBuilder {
 		Self {
 			ctx,
 			identity: None,
-			secondary: vec![],
 		}
 	}
 
@@ -33,6 +33,7 @@ impl ServerFnAuthBuilder {
 	}
 
 	/// Authenticate via JWT (sets identity for mock session).
+	#[cfg(feature = "auth-testing")]
 	pub fn jwt(
 		mut self,
 		user: &impl ForceLoginUser,
@@ -55,17 +56,6 @@ impl ServerFnAuthBuilder {
 		if let Some(ref mut id) = self.identity {
 			id.is_superuser = is_superuser;
 		}
-		self
-	}
-
-	/// Add TOTP MFA as a secondary auth layer with a pre-generated code.
-	pub fn with_mfa_code(self, code: impl Into<String>) -> Self {
-		self.with_secondary(super::secondary::TotpSecondaryAuth::with_code_only(code))
-	}
-
-	/// Add a custom secondary auth layer.
-	pub fn with_secondary(mut self, auth: impl SecondaryAuth + 'static) -> Self {
-		self.secondary.push(Box::new(auth));
 		self
 	}
 

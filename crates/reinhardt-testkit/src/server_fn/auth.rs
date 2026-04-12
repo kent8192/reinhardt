@@ -265,7 +265,7 @@ impl MockSession {
 	/// Creates a stub `TestUser` internally to maintain `is_authenticated()` compatibility.
 	pub fn from_identity(identity: &crate::auth::SessionIdentity) -> Self {
 		let stub_user = TestUser {
-			id: uuid::Uuid::parse_str(&identity.user_id).unwrap_or_else(|_| uuid::Uuid::now_v7()),
+			id: uuid::Uuid::parse_str(&identity.user_id).unwrap_or(uuid::Uuid::nil()),
 			username: identity.user_id.clone(),
 			email: String::new(),
 			permissions: Vec::new(),

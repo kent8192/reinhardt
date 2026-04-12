@@ -1,8 +1,3 @@
-use std::collections::HashMap;
-use std::time::{Duration, SystemTime};
-
-use serde_json::json;
-
 use super::traits::ForceLoginUser;
 
 /// Type-erased session identity, decoupled from the user's concrete type.
@@ -37,8 +32,13 @@ impl SessionIdentity {
 	pub fn to_session_data(
 		&self,
 		session_id: &str,
-		ttl: Duration,
+		ttl: std::time::Duration,
 	) -> reinhardt_middleware::session::SessionData {
+		use std::collections::HashMap;
+		use std::time::SystemTime;
+
+		use serde_json::json;
+
 		let now = SystemTime::now();
 		reinhardt_middleware::session::SessionData {
 			id: session_id.to_string(),
@@ -114,6 +114,10 @@ mod tests {
 
 	#[cfg(feature = "auth-testing")]
 	mod session_data_tests {
+		use std::time::Duration;
+
+		use serde_json::json;
+
 		use super::*;
 
 		#[rstest]

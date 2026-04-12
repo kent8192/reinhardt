@@ -660,6 +660,7 @@ mod tests {
 	}
 
 	#[rstest]
+	#[allow(deprecated)]
 	fn test_builder_force_authenticate() {
 		// Arrange
 		let factory = APIRequestFactory::new();

@@ -1,8 +1,6 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::Value;
 use uuid::Uuid;
 
 use super::error::TestAuthError;
@@ -33,12 +31,12 @@ impl<'a> AuthBuilder<'a> {
 	pub fn session(
 		self,
 		user: &impl ForceLoginUser,
-		backend: impl reinhardt_middleware::session::AsyncSessionBackend + 'static,
+		backend: Arc<dyn reinhardt_middleware::session::AsyncSessionBackend>,
 	) -> SessionAuthBuilder<'a> {
 		SessionAuthBuilder {
 			client: self.client,
 			identity: SessionIdentity::from_user(user),
-			backend: Arc::new(backend),
+			backend,
 			ttl: Duration::from_secs(30 * 60),
 			secondary: vec![],
 		}
@@ -50,7 +48,6 @@ impl<'a> AuthBuilder<'a> {
 			client: self.client,
 			identity: SessionIdentity::from_user(user),
 			config,
-			extra_claims: HashMap::new(),
 			secondary: vec![],
 		}
 	}
@@ -144,17 +141,10 @@ pub struct JwtAuthBuilder<'a> {
 	client: &'a APIClient,
 	identity: SessionIdentity,
 	config: JwtTestConfig,
-	extra_claims: HashMap<String, Value>,
 	secondary: Vec<Box<dyn SecondaryAuth>>,
 }
 
 impl<'a> JwtAuthBuilder<'a> {
-	/// Add an extra claim to the JWT payload.
-	pub fn with_claim(mut self, key: impl Into<String>, value: Value) -> Self {
-		self.extra_claims.insert(key.into(), value);
-		self
-	}
-
 	/// Add a custom secondary auth layer.
 	pub fn with_secondary(mut self, auth: impl SecondaryAuth + 'static) -> Self {
 		self.secondary.push(Box::new(auth));

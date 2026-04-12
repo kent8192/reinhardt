@@ -477,10 +477,20 @@ impl APIClient {
 		self.force_authenticate(None).await;
 		let mut cookies = self.cookies.write().await;
 		cookies.clear();
+		drop(cookies);
+		// Clear auth-related headers (Authorization, X-MFA-Code, X-Test-User)
+		let mut headers = self.default_headers.write().await;
+		headers.remove("authorization");
+		headers.remove("x-mfa-code");
+		headers.remove("x-test-user");
 		Ok(())
 	}
 
 	/// Set a cookie that will be sent with subsequent requests.
+	///
+	/// # Panics
+	///
+	/// Panics if `name` contains `=` or `;`, or if `value` contains `;`.
 	pub async fn set_cookie(&self, name: &str, value: &str) -> ClientResult<()> {
 		validate_cookie_key(name);
 		validate_cookie_value(value);
@@ -542,6 +552,7 @@ impl APIClient {
 	/// ```
 	pub async fn cleanup(&self) {
 		// Clear authentication
+		#[allow(deprecated)]
 		self.force_authenticate(None).await;
 
 		// Clear cookies

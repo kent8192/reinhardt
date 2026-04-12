@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.1.0-rc.15...reinhardt-admin-cli@v0.1.0-rc.16) - 2026-04-12
+
+### Styling
+
+- apply rustfmt and page! macro formatting
+
+### Testing
+
+- *(admin-cli)* add skip status validation to AST formatter tests
+- *(admin-cli)* extend skip status validation to remaining formatter tests
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.1.0-rc.14...reinhardt-admin-cli@v0.1.0-rc.15) - 2026-03-29
 
 ### Documentation

@@ -4,7 +4,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::time::Duration;
 
-use super::matcher::UrlMatcher;
+use super::matcher::{UrlMatcher, extract_path};
 use super::response::MockResponse;
 
 /// An intercepted HTTP request extracted from JS.
@@ -162,7 +162,7 @@ impl<S: MockableServerFn> ErasedHandler for ServerFnHandler<S> {
 		if self.consumed.get() {
 			return false;
 		}
-		req.method == "POST" && req.url.split('?').next().unwrap_or(&req.url) == S::PATH
+		req.method == "POST" && extract_path(&req.url) == S::PATH
 	}
 
 	fn respond(&self, req: &InterceptedRequest) -> Option<MockResponse> {
@@ -246,7 +246,7 @@ impl<S: MockableServerFn> ErasedHandler for ServerFnContextHandler<S> {
 		if self.consumed.get() {
 			return false;
 		}
-		req.method == "POST" && req.url.split('?').next().unwrap_or(&req.url) == S::PATH
+		req.method == "POST" && extract_path(&req.url) == S::PATH
 	}
 
 	fn respond(&self, req: &InterceptedRequest) -> Option<MockResponse> {

@@ -28,7 +28,7 @@ pub enum Segment {
 ///
 /// Handles both relative paths (`/api/users`) and full URLs
 /// (`http://localhost:8080/api/users?page=1`), stripping scheme, host, and query.
-fn extract_path(url: &str) -> &str {
+pub(crate) fn extract_path(url: &str) -> &str {
 	// Strip query string first
 	let without_query = url.split('?').next().unwrap_or(url);
 	// If it starts with http:// or https://, extract path after host
@@ -85,8 +85,15 @@ impl UrlMatcher {
 
 impl From<&str> for UrlMatcher {
 	fn from(pattern: &str) -> Self {
-		if pattern.contains(':') {
-			let segments = pattern
+		// Normalize the pattern using the same path-extraction logic used during matching,
+		// then check for parameterized segments (`:name`) in path segments only.
+		let path = extract_path(pattern);
+		let has_params = path
+			.split('/')
+			.filter(|s| !s.is_empty())
+			.any(|s| s.starts_with(':'));
+		if has_params {
+			let segments = path
 				.split('/')
 				.filter(|s| !s.is_empty())
 				.map(|s| {
@@ -99,7 +106,7 @@ impl From<&str> for UrlMatcher {
 				.collect();
 			UrlMatcher::Parameterized { segments }
 		} else {
-			UrlMatcher::Exact(pattern.to_string())
+			UrlMatcher::Exact(path.to_string())
 		}
 	}
 }
@@ -173,5 +180,20 @@ mod tests {
 	fn from_str_parameterized() {
 		let matcher: UrlMatcher = "/api/users/:id".into();
 		assert!(matches!(matcher, UrlMatcher::Parameterized { .. }));
+	}
+
+	#[rstest]
+	fn from_str_full_url_not_misclassified_as_parameterized() {
+		// The colon in `https:` must not trigger Parameterized classification.
+		let matcher: UrlMatcher = "https://example.com/api/users".into();
+		assert!(matches!(matcher, UrlMatcher::Exact(_)));
+		assert!(matcher.matches("/api/users"));
+	}
+
+	#[rstest]
+	fn from_str_full_url_with_params() {
+		let matcher: UrlMatcher = "https://example.com/api/users/:id".into();
+		assert!(matches!(matcher, UrlMatcher::Parameterized { .. }));
+		assert!(matcher.matches("/api/users/42"));
 	}
 }

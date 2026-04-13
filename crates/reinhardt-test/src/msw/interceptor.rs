@@ -171,10 +171,18 @@ mod wasm_impl {
 				Reflect::get(init, &"headers".into())
 					.ok()
 					.and_then(|h| {
-						if h.is_instance_of::<Headers>() {
+						if h.is_undefined() || h.is_null() {
+							None
+						} else if h.is_instance_of::<Headers>() {
 							Some(extract_headers(&h.unchecked_into()))
 						} else {
-							None
+							// Normalize plain objects and arrays by constructing a Headers
+							// instance, which accepts both `Record<string, string>` and
+							// `[string, string][]` forms per the Fetch spec.
+							Headers::new_with_str_sequence_sequence(&h)
+								.or_else(|_| Headers::new_with_str_mapping(&h))
+								.ok()
+								.map(|normalized| extract_headers(&normalized))
 						}
 					})
 					.unwrap_or_default()
@@ -243,10 +251,15 @@ mod wasm_impl {
 		init: &JsValue,
 	) -> Result<JsValue, JsValue> {
 		let func: &js_sys::Function = original.unchecked_ref();
+		// Use the window (or globalThis) as the receiver to avoid "Illegal invocation"
+		// errors that occur when calling `window.fetch` with `this = null`.
+		let receiver = web_sys::window()
+			.map(JsValue::from)
+			.unwrap_or_else(js_sys::global);
 		let result = if !init.is_undefined() && !init.is_null() {
-			func.call2(&JsValue::NULL, input, init)?
+			func.call2(&receiver, input, init)?
 		} else {
-			func.call1(&JsValue::NULL, input)?
+			func.call1(&receiver, input)?
 		};
 		let promise: Promise = result.unchecked_into();
 		JsFuture::from(promise).await

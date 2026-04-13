@@ -1088,7 +1088,7 @@ fn generate_server_handler(
 				use ::serde::{Serialize, Deserialize};
 
 				/// Public Args struct for MSW type-safe mocking.
-				#[derive(Serialize, Deserialize, Debug, PartialEq)]
+				#[derive(Serialize, Deserialize)]
 				pub struct Args {
 					#(pub #regular_param_names: #regular_param_types),*
 				}
@@ -1114,7 +1114,7 @@ fn generate_server_handler(
 			pub struct marker;
 
 			/// Public Args struct for MSW type-safe mocking.
-			#[derive(Serialize, Deserialize, Debug, PartialEq)]
+			#[derive(Serialize, Deserialize)]
 			pub struct Args {
 				#(pub #regular_param_names: #regular_param_types),*
 			}

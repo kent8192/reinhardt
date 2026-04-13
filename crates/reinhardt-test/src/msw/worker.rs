@@ -16,6 +16,13 @@ use super::interceptor;
 use super::matcher::UrlMatcher;
 use super::recorder::{CallQuery, RecordedRequest, RequestRecorder, ServerFnCallQuery};
 
+// Global guard to prevent multiple concurrent MockServiceWorker instances from
+// overriding `window.fetch`. Without this, a second worker would capture the
+// *already-overridden* fetch as its "original", leading to incorrect restoration.
+thread_local! {
+	static ACTIVE_WORKER_COUNT: Cell<u32> = const { Cell::new(0) };
+}
+
 /// Policy for requests that don't match any registered handler.
 #[derive(Debug, Clone)]
 pub enum UnhandledPolicy {
@@ -94,6 +101,16 @@ impl MockServiceWorker {
 			"MockServiceWorker: already started. Call stop() before starting again."
 		);
 
+		ACTIVE_WORKER_COUNT.with(|count| {
+			assert!(
+				count.get() == 0,
+				"MockServiceWorker: another worker is already active. \
+				 Only one MockServiceWorker can override window.fetch at a time. \
+				 Call stop() on the existing worker first."
+			);
+			count.set(count.get() + 1);
+		});
+
 		let original = interceptor::save_original_fetch();
 		let closure = interceptor::install_fetch_override(
 			self.handlers.clone(),
@@ -115,6 +132,9 @@ impl MockServiceWorker {
 			}
 			self.closure.borrow_mut().take();
 			self.active.set(false);
+			ACTIVE_WORKER_COUNT.with(|count| {
+				count.set(count.get().saturating_sub(1));
+			});
 		}
 	}
 
@@ -195,6 +215,9 @@ impl Drop for MockServiceWorker {
 			if let Some(original) = self.original_fetch.borrow().as_ref() {
 				interceptor::restore_fetch(original);
 			}
+			ACTIVE_WORKER_COUNT.with(|count| {
+				count.set(count.get().saturating_sub(1));
+			});
 		}
 	}
 }

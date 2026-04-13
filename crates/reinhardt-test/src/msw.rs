@@ -5,13 +5,13 @@
 //!
 //! # Overview
 //!
-//! This module provides [`MockServiceWorker`] which overrides `window.fetch`
+//! This module provides `MockServiceWorker` which overrides `window.fetch`
 //! to intercept HTTP requests and return mock responses. It supports:
 //!
 //! - Type-safe `server_fn` mocking via `MockableServerFn`
 //! - REST endpoint mocking via [`rest`] builder helpers
-//! - Request recording and assertion via [`CallQuery`] and `ServerFnCallQuery`
-//! - Configurable behavior for unhandled requests via [`UnhandledPolicy`]
+//! - Request recording and assertion via `CallQuery` and `ServerFnCallQuery`
+//! - Configurable behavior for unhandled requests via `UnhandledPolicy`
 //!
 //! # Example
 //!

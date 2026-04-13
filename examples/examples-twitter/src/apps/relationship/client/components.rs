@@ -134,11 +134,7 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> Page {
 					}
 				}
 			}
-		})(
-			is_following_signal,
-			toggle_follow,
-			toggle_follow_for_error,
-		)
+		})(is_following_signal, toggle_follow, toggle_follow_for_error)
 	}
 
 	#[cfg(server)]

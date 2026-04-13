@@ -82,18 +82,89 @@ fn build_resolver_reexport(path: &TokenStream) -> TokenStream {
 	}
 }
 
+/// Build a path to a URL resolver metadata macro from an endpoint path.
+///
+/// Given `views::login`, generates:
+/// `super::views::__url_resolver_login::__url_resolver_meta_login`
+fn build_meta_reexport(path: &TokenStream) -> TokenStream {
+	let parsed: syn::Path = match syn::parse2(path.clone()) {
+		Ok(p) => p,
+		Err(_) => return quote! {},
+	};
+
+	if parsed.segments.is_empty() {
+		return quote! {};
+	}
+
+	let last_segment = &parsed.segments.last().unwrap().ident;
+	let resolver_mod = syn::Ident::new(
+		&format!("__url_resolver_{last_segment}"),
+		last_segment.span(),
+	);
+	let meta_macro = syn::Ident::new(
+		&format!("__url_resolver_meta_{last_segment}"),
+		last_segment.span(),
+	);
+
+	let first_segment = parsed.segments.first().unwrap().ident.to_string();
+	let is_absolute = first_segment == "crate" || first_segment == "super";
+
+	let parent_segments: Vec<&syn::Ident> = parsed
+		.segments
+		.iter()
+		.take(parsed.segments.len() - 1)
+		.map(|s| &s.ident)
+		.collect();
+
+	if is_absolute {
+		quote! {
+			#(#parent_segments ::)* #resolver_mod :: #meta_macro
+		}
+	} else {
+		quote! {
+			super :: #(#parent_segments ::)* #resolver_mod :: #meta_macro
+		}
+	}
+}
+
 /// Implementation of the `#[url_patterns]` attribute macro.
+///
+/// Optionally accepts an app label string: `#[url_patterns("users")]`.
+/// When provided, the returned router is wrapped with `.with_namespace("users")`
+/// to enable per-app route name namespacing (Issue #3526).
 pub(crate) fn url_patterns_impl(
-	_args: TokenStream,
+	args: TokenStream,
 	input: TokenStream,
 ) -> syn::Result<TokenStream> {
 	let func: ItemFn = parse2(input)?;
 	let endpoint_paths = extract_endpoint_paths(&func);
 
 	let re_exports = endpoint_paths.iter().map(build_resolver_reexport);
+	let meta_paths: Vec<TokenStream> = endpoint_paths.iter().map(build_meta_reexport).collect();
+
+	// Parse optional app label: #[url_patterns("users")]
+	let func_output = if !args.is_empty() {
+		let app_label: syn::LitStr = syn::parse2(args)?;
+		let fn_vis = &func.vis;
+		let fn_attrs = &func.attrs;
+		let fn_sig = &func.sig;
+		let fn_block = &func.block;
+
+		// Wrap the function to apply with_namespace
+		quote! {
+			#(#fn_attrs)*
+			#fn_vis #fn_sig {
+				let __router = (|| #fn_block)();
+				__router.with_namespace(#app_label)
+			}
+		}
+	} else {
+		// No app label — emit function unchanged (backward compatible)
+		quote! { #func }
+	};
 
 	Ok(quote! {
-		#func
+		#func_output
 
 		#[doc(hidden)]
 		pub mod url_resolvers {
@@ -101,6 +172,19 @@ pub(crate) fn url_patterns_impl(
 				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				#re_exports
 			)*
+
+			/// Invoke a callback macro for each URL resolver in this app.
+			/// Used by the `#[routes]` macro to build per-app resolver structs.
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+			macro_rules! __for_each_url_resolver {
+				($callback:ident, $app:ident) => {
+					#(
+						#meta_paths ! ($callback, $app);
+					)*
+				};
+			}
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+			pub(crate) use __for_each_url_resolver;
 		}
 	})
 }
@@ -199,5 +283,88 @@ mod tests {
 		let result = build_resolver_reexport(&path);
 		let expected = "pub use super :: api :: v1 :: views :: __url_resolver_login :: * ;";
 		assert_eq!(result.to_string(), expected);
+	}
+
+	// --- Meta reexport tests (Issue #3526) ---
+
+	#[test]
+	fn build_meta_reexport_relative_path() {
+		let path: TokenStream = quote! { views::login };
+		let result = build_meta_reexport(&path);
+		let expected =
+			"super :: views :: __url_resolver_login :: __url_resolver_meta_login";
+		assert_eq!(result.to_string(), expected);
+	}
+
+	#[test]
+	fn build_meta_reexport_crate_path() {
+		let path: TokenStream = quote! { crate::views::login };
+		let result = build_meta_reexport(&path);
+		let expected =
+			"crate :: views :: __url_resolver_login :: __url_resolver_meta_login";
+		assert_eq!(result.to_string(), expected);
+	}
+
+	#[test]
+	fn url_patterns_impl_generates_for_each_macro() {
+		let input = quote! {
+			pub fn url_patterns() -> ServerRouter {
+				ServerRouter::new()
+					.endpoint(views::login)
+					.endpoint(views::register)
+			}
+		};
+
+		let result = url_patterns_impl(quote! {}, input).unwrap();
+		let output = result.to_string();
+
+		assert!(
+			output.contains("__for_each_url_resolver"),
+			"missing __for_each_url_resolver macro"
+		);
+		assert!(
+			output.contains("__url_resolver_meta_login"),
+			"missing login meta path"
+		);
+		assert!(
+			output.contains("__url_resolver_meta_register"),
+			"missing register meta path"
+		);
+	}
+
+	#[test]
+	fn url_patterns_with_app_label_wraps_namespace() {
+		let input = quote! {
+			pub fn url_patterns() -> ServerRouter {
+				ServerRouter::new()
+					.endpoint(views::login)
+			}
+		};
+
+		let result = url_patterns_impl(quote! { "users" }, input).unwrap();
+		let output = result.to_string();
+
+		assert!(
+			output.contains("with_namespace"),
+			"missing with_namespace call"
+		);
+	}
+
+	#[test]
+	fn url_patterns_without_app_label_no_namespace() {
+		let input = quote! {
+			pub fn url_patterns() -> ServerRouter {
+				ServerRouter::new()
+					.endpoint(views::login)
+			}
+		};
+
+		let result = url_patterns_impl(quote! {}, input).unwrap();
+		let output = result.to_string();
+
+		assert!(
+			!output.contains("with_namespace"),
+			"should not have with_namespace without label"
+		);
 	}
 }

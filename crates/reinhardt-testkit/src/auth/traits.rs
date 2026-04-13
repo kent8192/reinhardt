@@ -20,7 +20,7 @@ pub trait ForceLoginUser: Send + Sync {
 	}
 }
 
-#[cfg(feature = "auth-testing")]
+#[cfg(native)]
 impl<T: reinhardt_auth::AuthIdentity> ForceLoginUser for T {
 	fn session_user_id(&self) -> String {
 		self.id()

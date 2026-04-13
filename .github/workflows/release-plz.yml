@@ -277,6 +277,13 @@ jobs:
 
           for TAG in $TAGS_TO_PROCESS; do
             VERSION="${TAG#reinhardt-web@v}"
+
+            # Validate VERSION to prevent path traversal in temp file paths
+            if [[ "$VERSION" =~ [^a-zA-Z0-9._-] ]]; then
+              echo "::warning::Skipping $TAG: invalid version format '$VERSION'"
+              continue
+            fi
+
             ANNOUNCEMENT_FILE="announcements/v${VERSION}.md"
 
             echo "=== Processing $TAG ==="
@@ -316,17 +323,53 @@ jobs:
             # Stage 2: Generate announcement with Claude CLI
             # Redirect stdin from file (not command arg) to avoid ARG_MAX
             SYSTEM_PROMPT=$(cat scripts/prompts/announcement-system.md)
-            if claude --print \
-              --bare \
-              --model sonnet \
-              --system-prompt "$SYSTEM_PROMPT" \
-              --tools "" \
-              < "/tmp/release-data-${VERSION}.json" \
-              > "$ANNOUNCEMENT_FILE" 2>/dev/null; then
+
+            # Estimate input tokens and select context window (Fixes #3534)
+            # Rough estimate: 1 token ≈ 4 characters for English text
+            INPUT_CHARS=$(wc -c < "/tmp/release-data-${VERSION}.json")
+            SYSTEM_CHARS=${#SYSTEM_PROMPT}
+            ESTIMATED_TOKENS=$(( (INPUT_CHARS + SYSTEM_CHARS) / 4 ))
+            echo "Estimated input tokens: $ESTIMATED_TOKENS (input: $INPUT_CHARS chars, system: $SYSTEM_CHARS chars)"
+
+            CLAUDE_BETAS=""
+            if [ "$ESTIMATED_TOKENS" -gt 200000 ]; then
+              CLAUDE_BETAS="--betas context-1m-2025-08-07"
+              echo "Using 1M context window for large input (>200K tokens)"
+            fi
+
+            # Retry with exponential backoff (Fixes #3534)
+            CLAUDE_SUCCESS=false
+            for ATTEMPT in 1 2 3; do
+              echo "Claude CLI attempt $ATTEMPT/3..."
+              # shellcheck disable=SC2086
+              if claude --print \
+                --bare \
+                --model sonnet \
+                $CLAUDE_BETAS \
+                --system-prompt "$SYSTEM_PROMPT" \
+                --tools "" \
+                < "/tmp/release-data-${VERSION}.json" \
+                > "$ANNOUNCEMENT_FILE" 2>"/tmp/claude-stderr-${VERSION}.log"; then
+                CLAUDE_SUCCESS=true
+                break
+              else
+                CLAUDE_EXIT=$?
+                # Sanitize stderr to prevent log injection via workflow commands
+                CLAUDE_STDERR=$(tr -d '\n\r' < "/tmp/claude-stderr-${VERSION}.log" 2>/dev/null | head -c 200 || true)
+                echo "::warning::Claude CLI attempt $ATTEMPT failed (exit=$CLAUDE_EXIT): $CLAUDE_STDERR"
+                if [ "$ATTEMPT" -lt 3 ]; then
+                  BACKOFF=$((5 * ATTEMPT * ATTEMPT))
+                  echo "Retrying in ${BACKOFF}s..."
+                  sleep "$BACKOFF"
+                fi
+              fi
+            done
+
+            if $CLAUDE_SUCCESS; then
               echo "Generated announcement for $TAG"
             else
               # Fallback: template with CHANGELOG only
-              echo "::warning::Claude CLI failed for $TAG, using fallback template"
+              echo "::warning::Claude CLI failed for $TAG after 3 attempts, using fallback template"
               CHANGELOG_SECTION=$(jq -r '.changelog_section' "/tmp/release-data-${VERSION}.json")
               PRS_TABLE=$(jq -r '.pull_requests[] | "| [#\(.number)](\(.url)) | \(.title) | @\(.author) |"' \
                 "/tmp/release-data-${VERSION}.json" || true)

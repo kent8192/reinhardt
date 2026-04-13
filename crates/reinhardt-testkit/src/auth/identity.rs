@@ -28,7 +28,7 @@ impl SessionIdentity {
 	///
 	/// Creates a `SessionData` with the fields that `CookieSessionAuthMiddleware`
 	/// expects: `user_id`, `is_staff`, `is_superuser`.
-	#[cfg(feature = "auth-testing")]
+	#[cfg(native)]
 	pub fn to_session_data(
 		&self,
 		session_id: &str,
@@ -112,7 +112,7 @@ mod tests {
 		assert!(!identity.is_superuser);
 	}
 
-	#[cfg(feature = "auth-testing")]
+	#[cfg(native)]
 	mod session_data_tests {
 		use std::time::Duration;
 

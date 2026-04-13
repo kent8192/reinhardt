@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di-macros@v0.1.0-rc.15...reinhardt-di-macros@v0.1.0-rc.16) - 2026-04-13
+
+### Added
+
+- *(di)* [**breaking**] unify #[inject] parameter type from Arc<T> to Depends<T>
+- *(di)* auto-derive Clone in #[injectable] macro
+- *(di)* register qualified type names from macros
+- *(di)* [**breaking**] deprecate Injected<T> in favor of Depends<T> and remove auto-Clone
+
+### Changed
+
+- *(di)* remove unnecessary Clone bound from Depends<T> and Injected<T>
+
+### Documentation
+
+- *(di)* document attribute ordering requirement and add compile-fail tests
+
+### Fixed
+
+- *(di)* resolve `#[inject]` type mismatch in `#[injectable_factory]` macro
+- *(di)* wrap injectable_factory body in cycle detection scope
+- update integration tests and docs for Depends<T> unification
+- *(di)* generate `Injectable` impl in `#[injectable_factory]` for `Depends<T>` support
+- *(di)* use resolve_from_registry() in injectable_factory macro only
+
+### Other
+
+- resolve conflict with main in di.rs ui module registration
+- resolve conflict in registration.rs with main
+
+### Styling
+
+- *(di)* apply auto-fix formatting
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di-macros@v0.1.0-rc.14...reinhardt-di-macros@v0.1.0-rc.15) - 2026-03-29
 
 ### Maintenance

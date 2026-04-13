@@ -1,7 +1,7 @@
 //! URL routing for hello app
 
-use reinhardt::url_patterns;
 use reinhardt::ServerRouter;
+use reinhardt::url_patterns;
 
 use crate::apps::hello::views;
 

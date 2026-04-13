@@ -1,7 +1,7 @@
 //! URL configuration for api app
 
-use reinhardt::url_patterns;
 use reinhardt::ServerRouter;
+use reinhardt::url_patterns;
 
 use super::views;
 

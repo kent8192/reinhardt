@@ -45,13 +45,35 @@ runs:
         PR_NUMBER: ${{ inputs.pr-number }}
       run: |
         search_key="[${SOURCE_REPO}#${PR_NUMBER}]"
-        count=$(gh api graphql -f query="
+
+        # Fetch duplicate count, repository ID, and category ID in one query (#3547).
+        # The `gh discussion` CLI subcommand is unavailable on ubuntu-latest runners,
+        # so all Discussion operations use the GraphQL API instead.
+        result=$(gh api graphql -f query="
           {
             search(type: DISCUSSION, query: \"repo:kent8192/reinhardt-web in:title \\\"${search_key}\\\"\", first: 1) {
               discussionCount
             }
+            repository(owner: \"kent8192\", name: \"reinhardt-web\") {
+              id
+              discussionCategories(first: 30) {
+                nodes { id name }
+              }
+            }
           }
-        " --jq '.data.search.discussionCount')
+        ")
+
+        count=$(echo "$result" | jq -r '.data.search.discussionCount')
+        repo_id=$(echo "$result" | jq -r '.data.repository.id')
+        category_id=$(echo "$result" | jq -r '.data.repository.discussionCategories.nodes[] | select(.name == "Breaking Changes") | .id')
+
+        if [ -z "$repo_id" ] || [ -z "$category_id" ]; then
+          echo "::error::Failed to resolve repository ID or 'Breaking Changes' category ID"
+          exit 1
+        fi
+
+        echo "repo-id=${repo_id}" >> "$GITHUB_OUTPUT"
+        echo "category-id=${category_id}" >> "$GITHUB_OUTPUT"
 
         if [ "$count" -gt 0 ]; then
           echo "skip=true" >> "$GITHUB_OUTPUT"
@@ -72,6 +94,8 @@ runs:
         PR_URL: ${{ inputs.pr-url }}
         PR_BODY: ${{ inputs.pr-body }}
         MERGED_AT: ${{ inputs.merged-at }}
+        REPO_ID: ${{ steps.duplicate-check.outputs.repo-id }}
+        CATEGORY_ID: ${{ steps.duplicate-check.outputs.category-id }}
       run: |
         # Extract ## Breaking Changes section
         details=$(printf '%s' "$PR_BODY" | awk '
@@ -117,16 +141,32 @@ runs:
           printf '%s\n' "${details}"
         } > /tmp/discussion-body.md
 
-        if ! url=$(gh discussion create \
-          --repo kent8192/reinhardt-web \
-          --category "Breaking Changes" \
-          --title "$disc_title" \
-          --body-file /tmp/discussion-body.md); then
+        # Create discussion via GraphQL mutation (#3547).
+        # The `gh discussion` CLI subcommand is unavailable on ubuntu-latest runners.
+        body=$(cat /tmp/discussion-body.md)
+
+        if ! result=$(gh api graphql \
+          -f repositoryId="$REPO_ID" \
+          -f categoryId="$CATEGORY_ID" \
+          -f title="$disc_title" \
+          -f body="$body" \
+          -f query='
+            mutation($repositoryId: ID!, $categoryId: ID!, $title: String!, $body: String!) {
+              createDiscussion(input: {repositoryId: $repositoryId, categoryId: $categoryId, title: $title, body: $body}) {
+                discussion { url }
+              }
+            }
+          '); then
           echo "::error::Failed to create discussion: ${disc_title}"
           exit 1
         fi
 
-        url=$(printf '%s' "$url" | tr -d '\r\n')
+        url=$(echo "$result" | jq -r '.data.createDiscussion.discussion.url // empty')
+        if [ -z "$url" ]; then
+          echo "::error::GraphQL mutation returned no URL for: ${disc_title}"
+          echo "$result" >&2
+          exit 1
+        fi
 
         echo "created=true" >> "$GITHUB_OUTPUT"
         echo "discussion-url=${url}" >> "$GITHUB_OUTPUT"

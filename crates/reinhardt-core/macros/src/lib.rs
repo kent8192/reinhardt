@@ -312,6 +312,15 @@ pub fn installed_apps(input: TokenStream) -> TokenStream {
 /// a DI context (`SingletonScope` + `InjectionContext`) and resolves each
 /// injected dependency before calling the function.
 ///
+/// # Arguments
+///
+/// - `#[routes]` — Default mode. Generates `ResolvedUrls` and `url_prelude`
+///   module with URL resolver traits from all installed apps. Requires
+///   `installed_apps!` to be present in the crate.
+/// - `#[routes(standalone)]` — Standalone mode. Generates `ResolvedUrls` only,
+///   without `url_prelude` module. Use this for projects that don't use
+///   `installed_apps!` (e.g., reinhardt-cloud).
+///
 /// # Notes
 ///
 /// - The function can have any name (e.g., `routes`, `app_routes`, `url_patterns`)

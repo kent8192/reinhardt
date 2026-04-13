@@ -436,7 +436,7 @@ impl APIClient {
 	/// # });
 	/// ```
 	#[deprecated(
-		since = "0.2.0-rc.1",
+		since = "0.1.0-rc.16",
 		note = "use `client.auth().session()` or `client.auth().jwt()` instead"
 	)]
 	pub async fn force_authenticate(&self, user: Option<Value>) {

@@ -139,7 +139,7 @@ impl ServerFnTestContext {
 	///     .build();
 	/// ```
 	#[deprecated(
-		since = "0.2.0-rc.1",
+		since = "0.1.0-rc.16",
 		note = "use `.auth().session(&user).done()` instead"
 	)]
 	pub fn with_authenticated_user(mut self, user: TestUser) -> Self {

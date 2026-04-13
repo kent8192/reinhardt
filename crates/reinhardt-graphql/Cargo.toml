@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-graphql"
-version = "0.1.0-rc.15"
+version = "0.1.0-rc.16"
 description = "GraphQL API support for Reinhardt (facade crate)"
 edition.workspace = true
 rust-version.workspace = true

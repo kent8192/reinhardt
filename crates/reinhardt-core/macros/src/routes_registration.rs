@@ -371,133 +371,212 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 	// Generate namespaced resolvers + url_prelude only when not in standalone mode.
 	// Standalone mode skips these for projects that don't use
 	// `installed_apps!`. Fixes #3542.
-	let url_prelude_code = if standalone {
+	//
+	// Per-app URL resolver struct generation (Issue #3526).
+	// Reads installed app labels from the state file written by `installed_apps!`
+	// and generates directly:
+	//   1. Per-app struct XxxUrls<'a> with route methods
+	//   2. Accessor methods on ResolvedUrls
+	//   3. url_prelude module with re-exports
+	//
+	// This replaces the __reinhardt_for_each_app callback pattern that triggers
+	// macro_expanded_macro_exports_accessed_by_absolute_paths on Rust 1.94+.
+	// Fixes #3639.
+	let url_prelude_code = if standalone || crate::macro_state::is_wasm_target() {
+		// Standalone mode: projects that don't use installed_apps!.
+		// WASM target: URL resolvers are native-only; skip reading the state file
+		// to avoid failures when installed_apps! hasn't written it for WASM builds.
 		quote! {}
 	} else {
-		quote! {
-			// Per-app URL resolver struct generation (Issue #3526).
-			// __build_namespaced_resolvers! generates:
-			//   1. Per-app struct XxxUrls<'a> with route methods
-			//   2. Accessor methods on ResolvedUrls
-			//   3. url_prelude module with re-exports
-			//
-			// The callback macro __gen_app_method creates impl blocks
+		let app_labels = match crate::macro_state::read_installed_apps() {
+			Ok(labels) => labels,
+			Err(msg) => {
+				return Err(syn::Error::new(
+					proc_macro2::Span::call_site(),
+					format!(
+						"Failed to read installed apps: {msg}. \
+						 Ensure `installed_apps!` is invoked before `#[routes]`."
+					),
+				));
+			}
+		};
+
+		let app_idents: Vec<proc_macro2::Ident> = app_labels
+			.iter()
+			.filter(|s| !s.is_empty())
+			.map(|s| {
+				syn::parse_str::<syn::Ident>(s)
+					.map(Into::into)
+					.map_err(|_| {
+						syn::Error::new(
+							proc_macro2::Span::call_site(),
+							format!(
+								"Invalid installed app label `{s}`: expected a valid Rust identifier"
+							),
+						)
+					})
+			})
+			.collect::<Result<Vec<_>>>()?;
+
+		if app_idents.is_empty() {
+			quote! {
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				/// Prelude module re-exporting URL resolver types.
+				pub mod url_prelude {
+					pub use super::ResolvedUrls;
+				}
+			}
+		} else {
+			// Generate per-app resolver structs and methods.
+			// The callback macro __gen_<app>_method creates impl blocks
 			// for each route discovered via __for_each_url_resolver.
-			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-			#[doc(hidden)]
-			macro_rules! __build_namespaced_resolvers {
-				($($app:ident),*) => {
-					$(
-						// Generate per-app struct: UsersUrls, PostsUrls, etc.
-						#reinhardt::paste! {
-							/// Per-app URL resolver for the `$app` application.
-							///
-							/// Access via `ResolvedUrls::$app()`.
-							pub struct [<$app:camel Urls>]<'a> {
-								resolver: &'a ResolvedUrls,
-							}
+			let per_app_code: Vec<_> = app_idents.iter().map(|app| {
+				let urls_struct_name = crate::pascal_case::to_pascal_case_with_suffix(
+					&app.to_string(), "Urls",
+				);
+				let urls_struct = proc_macro2::Ident::new(
+					&urls_struct_name, proc_macro2::Span::call_site(),
+				);
+				let gen_method_macro = proc_macro2::Ident::new(
+					&format!("__gen_{}_method", app), proc_macro2::Span::call_site(),
+				);
 
-							// Callback macro for __for_each_url_resolver to generate methods.
-							macro_rules! [<__gen_ $app _method>] {
-								// No params
-								($app_label:ident, $method:ident, $route_name:literal, ) => {
-									impl [<$app:camel Urls>]<'_> {
-										pub fn $method(&self) -> String {
-											self.resolver.resolve_url(
-												concat!(stringify!($app_label), ":", $route_name),
-												&[],
-											)
-										}
-									}
-								};
-								// 1 param
-								($app_label:ident, $method:ident, $route_name:literal, $p1:literal) => {
-									impl [<$app:camel Urls>]<'_> {
-										pub fn $method(&self, p1: &str) -> String {
-											self.resolver.resolve_url(
-												concat!(stringify!($app_label), ":", $route_name),
-												&[($p1, p1)],
-											)
-										}
-									}
-								};
-								// 2 params
-								($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal) => {
-									impl [<$app:camel Urls>]<'_> {
-										pub fn $method(&self, p1: &str, p2: &str) -> String {
-											self.resolver.resolve_url(
-												concat!(stringify!($app_label), ":", $route_name),
-												&[($p1, p1), ($p2, p2)],
-											)
-										}
-									}
-								};
-								// 3 params
-								($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal, $p3:literal) => {
-									impl [<$app:camel Urls>]<'_> {
-										pub fn $method(&self, p1: &str, p2: &str, p3: &str) -> String {
-											self.resolver.resolve_url(
-												concat!(stringify!($app_label), ":", $route_name),
-												&[($p1, p1), ($p2, p2), ($p3, p3)],
-											)
-										}
-									}
-								};
-								// 4 params
-								($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal, $p3:literal, $p4:literal) => {
-									impl [<$app:camel Urls>]<'_> {
-										pub fn $method(&self, p1: &str, p2: &str, p3: &str, p4: &str) -> String {
-											self.resolver.resolve_url(
-												concat!(stringify!($app_label), ":", $route_name),
-												&[($p1, p1), ($p2, p2), ($p3, p3), ($p4, p4)],
-											)
-										}
-									}
-								};
-								// 5 params
-								($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal, $p3:literal, $p4:literal, $p5:literal) => {
-									impl [<$app:camel Urls>]<'_> {
-										pub fn $method(&self, p1: &str, p2: &str, p3: &str, p4: &str, p5: &str) -> String {
-											self.resolver.resolve_url(
-												concat!(stringify!($app_label), ":", $route_name),
-												&[($p1, p1), ($p2, p2), ($p3, p3), ($p4, p4), ($p5, p5)],
-											)
-										}
-									}
-								};
-							}
+				quote! {
+					/// Per-app URL resolver.
+					///
+					/// Access via `ResolvedUrls::#app()`.
+					pub struct #urls_struct<'a> {
+						resolver: &'a ResolvedUrls,
+					}
 
-							// Invoke __for_each_url_resolver to populate methods
-							crate::apps::$app::urls::url_resolvers::__for_each_url_resolver!(
-								[<__gen_ $app _method>], $app
-							);
-
-							// Accessor method on ResolvedUrls
-							impl ResolvedUrls {
-								pub fn $app(&self) -> [<$app:camel Urls>]<'_> {
-									[<$app:camel Urls>] { resolver: self }
+					// Callback macro for __for_each_url_resolver to generate methods.
+					macro_rules! #gen_method_macro {
+						// No params
+						($app_label:ident, $method:ident, $route_name:literal, ) => {
+							impl #urls_struct<'_> {
+								pub fn $method(&self) -> String {
+									self.resolver.resolve_url(
+										concat!(stringify!($app_label), ":", $route_name),
+										&[],
+									)
 								}
 							}
+						};
+						// 1 param
+						($app_label:ident, $method:ident, $route_name:literal, $p1:literal) => {
+							impl #urls_struct<'_> {
+								pub fn $method(&self, p1: &str) -> String {
+									self.resolver.resolve_url(
+										concat!(stringify!($app_label), ":", $route_name),
+										&[($p1, p1)],
+									)
+								}
+							}
+						};
+						// 2 params
+						($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal) => {
+							impl #urls_struct<'_> {
+								pub fn $method(&self, p1: &str, p2: &str) -> String {
+									self.resolver.resolve_url(
+										concat!(stringify!($app_label), ":", $route_name),
+										&[($p1, p1), ($p2, p2)],
+									)
+								}
+							}
+						};
+						// 3 params
+						($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal, $p3:literal) => {
+							impl #urls_struct<'_> {
+								pub fn $method(&self, p1: &str, p2: &str, p3: &str) -> String {
+									self.resolver.resolve_url(
+										concat!(stringify!($app_label), ":", $route_name),
+										&[($p1, p1), ($p2, p2), ($p3, p3)],
+									)
+								}
+							}
+						};
+						// 4 params
+						($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal, $p3:literal, $p4:literal) => {
+							impl #urls_struct<'_> {
+								pub fn $method(&self, p1: &str, p2: &str, p3: &str, p4: &str) -> String {
+									self.resolver.resolve_url(
+										concat!(stringify!($app_label), ":", $route_name),
+										&[($p1, p1), ($p2, p2), ($p3, p3), ($p4, p4)],
+									)
+								}
+							}
+						};
+						// 5 params
+						($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal, $p3:literal, $p4:literal, $p5:literal) => {
+							impl #urls_struct<'_> {
+								pub fn $method(&self, p1: &str, p2: &str, p3: &str, p4: &str, p5: &str) -> String {
+									self.resolver.resolve_url(
+										concat!(stringify!($app_label), ":", $route_name),
+										&[($p1, p1), ($p2, p2), ($p3, p3), ($p4, p4), ($p5, p5)],
+									)
+								}
+							}
+						};
+					}
+
+					// Invoke __for_each_url_resolver to populate methods
+					crate::apps::#app::urls::url_resolvers::__for_each_url_resolver!(
+						#gen_method_macro, #app
+					);
+
+					// Accessor method on ResolvedUrls
+					impl ResolvedUrls {
+						pub fn #app(&self) -> #urls_struct<'_> {
+							#urls_struct { resolver: self }
 						}
-					)*
+					}
+				}
+			}).collect();
+
+			// Generate url_prelude re-exports
+			let prelude_exports: Vec<_> = app_idents
+				.iter()
+				.map(|app| {
+					let urls_struct_name =
+						crate::pascal_case::to_pascal_case_with_suffix(&app.to_string(), "Urls");
+					let urls_struct =
+						proc_macro2::Ident::new(&urls_struct_name, proc_macro2::Span::call_site());
+					quote! {
+						pub use super::#urls_struct;
+						// Deprecated flat trait re-exports (backward compatibility)
+						#[allow(deprecated)]
+						pub use crate::apps::#app::urls::url_resolvers::*;
+					}
+				})
+				.collect();
+
+			quote! {
+				// Track state file for incremental compilation invalidation.
+				// When installed_apps! rewrites the file, the compiler re-expands #[routes].
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				const _: &[u8] = include_bytes!(
+					concat!(env!("CARGO_MANIFEST_DIR"), "/target/reinhardt/.installed_apps")
+				);
+
+				// All per-app resolvers and url_prelude are native-only.
+				// Wrapped in a cfg-gated module because each block contains
+				// multiple items (struct, macro_rules, impl) that all need gating.
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				#[doc(hidden)]
+				mod __namespaced_resolvers {
+					pub use super::ResolvedUrls;
+
+					#(#per_app_code)*
 
 					/// Prelude module re-exporting URL resolver types.
 					pub mod url_prelude {
 						pub use super::ResolvedUrls;
-						$(
-							#reinhardt::paste! {
-								pub use super::[<$app:camel Urls>];
-							}
-							// Deprecated flat trait re-exports (backward compatibility)
-							#[allow(deprecated)]
-							pub use crate::apps::$app::urls::url_resolvers::*;
-						)*
+						#(#prelude_exports)*
 					}
-				};
+				}
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				pub use __namespaced_resolvers::*;
 			}
-
-			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-			crate::__reinhardt_for_each_app!(__build_namespaced_resolvers);
 		}
 	};
 

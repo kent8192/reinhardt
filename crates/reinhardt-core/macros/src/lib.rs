@@ -28,6 +28,7 @@ mod injectable_common;
 mod injectable_fn;
 mod injectable_struct;
 mod installed_apps;
+mod macro_state;
 mod model_attribute;
 mod model_derive;
 mod orm_reflectable_derive;

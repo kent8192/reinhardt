@@ -1,9 +1,11 @@
 //! URL routing for di_showcase app
 
+use reinhardt::url_patterns;
 use reinhardt::ServerRouter;
 
 use crate::apps::di_showcase::views;
 
+#[url_patterns]
 pub fn url_patterns() -> ServerRouter {
 	ServerRouter::new()
 		.endpoint(views::config_info)

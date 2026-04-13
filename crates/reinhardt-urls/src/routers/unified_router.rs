@@ -330,12 +330,19 @@ impl UnifiedRouter {
 	/// Register a named function-based route on server router.
 	///
 	/// This is a convenience method that delegates to [`ServerRouter::function_named`].
+	#[deprecated(
+		since = "0.2.0",
+		note = "Use `#[get(\"/path\", name = \"name\")]` + `.endpoint()` instead"
+	)]
 	pub fn function_named<F, Fut>(mut self, path: &str, method: Method, name: &str, func: F) -> Self
 	where
 		F: Fn(Request) -> Fut + Send + Sync + 'static,
 		Fut: Future<Output = Result<Response>> + Send + 'static,
 	{
-		self.server = self.server.function_named(path, method, name, func);
+		#[allow(deprecated)]
+		{
+			self.server = self.server.function_named(path, method, name, func);
+		}
 		self
 	}
 }
@@ -525,12 +532,19 @@ impl UnifiedRouter {
 	}
 
 	/// Register a named function-based route on server router.
+	#[deprecated(
+		since = "0.2.0",
+		note = "Use `#[get(\"/path\", name = \"name\")]` + `.endpoint()` instead"
+	)]
 	pub fn function_named<F, Fut>(mut self, path: &str, method: Method, name: &str, func: F) -> Self
 	where
 		F: Fn(Request) -> Fut + Send + Sync + 'static,
 		Fut: Future<Output = Result<Response>> + Send + 'static,
 	{
-		self.server = self.server.function_named(path, method, name, func);
+		#[allow(deprecated)]
+		{
+			self.server = self.server.function_named(path, method, name, func);
+		}
 		self
 	}
 }
@@ -671,6 +685,7 @@ impl Default for UnifiedRouter {
 // ============================================================================
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
 	use super::*;
 	#[cfg(feature = "client-router")]

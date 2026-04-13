@@ -55,13 +55,10 @@ impl Injectable for CountedService {
 fn register_counted_service() {
 	let registry = global_registry();
 	if !registry.is_registered::<CountedService>() {
-		registry.register_async::<CountedService, _, _>(
-			DependencyScope::Request,
-			|_ctx| async {
-				let instance_id = INSTANCE_COUNTER.fetch_add(1, Ordering::SeqCst) + 1;
-				Ok(CountedService { instance_id })
-			},
-		);
+		registry.register_async::<CountedService, _, _>(DependencyScope::Request, |_ctx| async {
+			let instance_id = INSTANCE_COUNTER.fetch_add(1, Ordering::SeqCst) + 1;
+			Ok(CountedService { instance_id })
+		});
 	}
 }
 

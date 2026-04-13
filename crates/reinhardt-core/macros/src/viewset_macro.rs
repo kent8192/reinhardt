@@ -70,6 +70,10 @@ fn to_pascal_case(s: &str) -> String {
 /// For basename "snippet", generates:
 /// - `__url_resolver_snippet_list` with trait `ResolveSnippetList`
 /// - `__url_resolver_snippet_detail` with trait `ResolveSnippetDetail`
+///
+/// These modules are emitted at the same level as the annotated function.
+/// Because `mod` items are invalid inside `impl` blocks, `#[viewset]` must
+/// be applied to a free (module-level) function, not a method.
 fn generate_viewset_resolver_tokens(basename: &str) -> TokenStream {
 	let pascal = to_pascal_case(basename);
 

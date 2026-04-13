@@ -212,6 +212,9 @@ pub fn reverse_single_pass(pattern: &str, params: &HashMap<String, String>) -> S
 pub struct UrlReverser {
 	/// Map of route names (including namespace) to routes
 	routes: HashMap<String, Route>,
+	/// Alias map: alias name → canonical name.
+	/// Used for backward compatibility when route names change format.
+	aliases: HashMap<String, String>,
 }
 
 impl UrlReverser {
@@ -219,6 +222,7 @@ impl UrlReverser {
 	pub fn new() -> Self {
 		Self {
 			routes: HashMap::new(),
+			aliases: HashMap::new(),
 		}
 	}
 
@@ -356,9 +360,16 @@ impl UrlReverser {
 	/// assert_eq!(url, "/users/123/");
 	/// ```
 	pub fn reverse(&self, name: &str, params: &HashMap<String, String>) -> ReverseResult<String> {
+		// Resolve alias to canonical name if one exists
+		let resolved_name = self
+			.aliases
+			.get(name)
+			.map(|s| s.as_str())
+			.unwrap_or(name);
+
 		let route = self
 			.routes
-			.get(name)
+			.get(resolved_name)
 			.ok_or_else(|| Error::NotFound(name.to_string()))?;
 
 		// Parse the path pattern to find parameters
@@ -435,6 +446,17 @@ impl UrlReverser {
 	/// Get all registered route names
 	pub fn route_names(&self) -> Vec<String> {
 		self.routes.keys().cloned().collect()
+	}
+
+	/// Register an alias for a route name.
+	///
+	/// `reverse(alias)` will resolve to the same URL as `reverse(canonical)`.
+	/// If the alias already exists, it is overwritten (last-write-wins).
+	///
+	/// The canonical target is resolved lazily — if the canonical route does
+	/// not exist at the time of `reverse()`, the lookup returns `NotFound`.
+	pub fn add_name_alias(&mut self, alias: &str, canonical: &str) {
+		self.aliases.insert(alias.to_string(), canonical.to_string());
 	}
 }
 
@@ -1471,5 +1493,102 @@ mod tests {
 		// Act & Assert
 		assert!(reverser.register(route_a).is_ok());
 		assert!(reverser.register(route_b).is_ok());
+	}
+
+	// --- Name alias tests (Issue #3526) ---
+
+	#[test]
+	fn test_alias_resolves_to_canonical() {
+		// Arrange
+		let mut reverser = UrlReverser::new();
+		reverser
+			.register_path("users:list", path!("/users/"))
+			.unwrap();
+		reverser.add_name_alias("user_list", "users:list");
+
+		// Act
+		let result = reverser
+			.reverse_with("user_list", &[] as &[(&str, &str)])
+			.unwrap();
+
+		// Assert
+		assert_eq!(result, path!("/users/"));
+	}
+
+	#[test]
+	fn test_alias_and_canonical_return_same_result() {
+		// Arrange
+		let mut reverser = UrlReverser::new();
+		reverser
+			.register_path("users:detail", path!("/users/{id}/"))
+			.unwrap();
+		reverser.add_name_alias("user_detail", "users:detail");
+
+		// Act
+		let canonical = reverser
+			.reverse_with("users:detail", &[("id", "42")])
+			.unwrap();
+		let aliased = reverser
+			.reverse_with("user_detail", &[("id", "42")])
+			.unwrap();
+
+		// Assert
+		assert_eq!(canonical, aliased);
+	}
+
+	#[test]
+	fn test_alias_target_not_found() {
+		// Arrange
+		let mut reverser = UrlReverser::new();
+		reverser.add_name_alias("old_name", "nonexistent:route");
+
+		// Act
+		let result = reverser.reverse_with("old_name", &[] as &[(&str, &str)]);
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[test]
+	fn test_duplicate_alias_last_write_wins() {
+		// Arrange
+		let mut reverser = UrlReverser::new();
+		reverser
+			.register_path("users:list", path!("/users/"))
+			.unwrap();
+		reverser
+			.register_path("posts:list", path!("/posts/"))
+			.unwrap();
+
+		// Act
+		reverser.add_name_alias("the_list", "users:list");
+		reverser.add_name_alias("the_list", "posts:list");
+		let result = reverser
+			.reverse_with("the_list", &[] as &[(&str, &str)])
+			.unwrap();
+
+		// Assert
+		assert_eq!(result, path!("/posts/"));
+	}
+
+	#[test]
+	fn test_alias_with_params() {
+		// Arrange
+		let mut reverser = UrlReverser::new();
+		reverser
+			.register_path("users:detail", path!("/users/{id}/"))
+			.unwrap();
+		reverser.add_name_alias("user_detail", "users:detail");
+
+		// Act
+		let result = reverser
+			.reverse_with("user_detail", &[("id", "foo/bar")])
+			.unwrap_err();
+
+		// Assert — path separators are rejected by validation
+		assert!(
+			matches!(result, Error::Validation(_)),
+			"expected Validation error for dangerous param"
+		);
 	}
 }

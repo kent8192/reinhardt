@@ -1555,6 +1555,13 @@ impl ServerRouter {
 		errors
 	}
 
+	/// Register an alias for a route name in this router's reverser.
+	///
+	/// See [`UrlReverser::add_name_alias`] for details.
+	pub fn add_name_alias(&mut self, alias: &str, canonical: &str) {
+		self.reverser.add_name_alias(alias, canonical);
+	}
+
 	/// Recursively collect all routes with accumulated prefixes and namespaces.
 	///
 	/// Returns a list of `(qualified_name, full_path)` pairs to be registered

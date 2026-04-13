@@ -637,7 +637,11 @@ pub fn empty() -> Page {
 
 /// Divider component
 pub fn divider() -> Page {
-	page!(|| { div { class: "divider" } })()
+	page!(|| {
+		div {
+			class: "divider",
+		}
+	})()
 }
 
 /// Badge component

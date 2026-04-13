@@ -435,6 +435,10 @@ impl APIClient {
 	/// client.force_authenticate(Some(user)).await;
 	/// # });
 	/// ```
+	#[deprecated(
+		since = "0.1.0-rc.16",
+		note = "use `client.auth().session()` or `client.auth().jwt()` instead"
+	)]
 	pub async fn force_authenticate(&self, user: Option<Value>) {
 		let mut current_user = self.user.write().await;
 		*current_user = user;
@@ -469,10 +473,59 @@ impl APIClient {
 	/// # });
 	/// ```
 	pub async fn clear_auth(&self) -> ClientResult<()> {
+		#[allow(deprecated)]
 		self.force_authenticate(None).await;
 		let mut cookies = self.cookies.write().await;
 		cookies.clear();
+		drop(cookies);
+		// Clear auth-related headers (Authorization, X-MFA-Code, X-Test-User)
+		let mut headers = self.default_headers.write().await;
+		headers.remove("authorization");
+		headers.remove("x-mfa-code");
+		headers.remove("x-test-user");
 		Ok(())
+	}
+
+	/// Set a cookie that will be sent with subsequent requests.
+	///
+	/// # Panics
+	///
+	/// Panics if `name` contains `=` or `;`, or if `value` contains `;`.
+	pub async fn set_cookie(&self, name: &str, value: &str) -> ClientResult<()> {
+		validate_cookie_key(name);
+		validate_cookie_value(value);
+		let mut cookies = self.cookies.write().await;
+		cookies.insert(name.to_string(), value.to_string());
+		Ok(())
+	}
+
+	/// Remove a specific cookie.
+	pub async fn remove_cookie(&self, name: &str) -> ClientResult<()> {
+		let mut cookies = self.cookies.write().await;
+		cookies.remove(name);
+		Ok(())
+	}
+
+	/// Clear all authentication state (session cookies, auth headers, stored user).
+	///
+	/// This is the replacement for `force_authenticate(None)`.
+	pub async fn logout(&self) -> ClientResult<()> {
+		self.clear_auth().await
+	}
+
+	/// Start building an auth configuration for this client.
+	///
+	/// # Examples
+	///
+	/// ```rust,ignore
+	/// client.auth()
+	///     .session(&user, &session_store)
+	///     .with_staff(true)
+	///     .apply().await?;
+	/// ```
+	#[cfg(feature = "auth-testing")]
+	pub fn auth(&self) -> crate::auth::AuthBuilder<'_> {
+		crate::auth::AuthBuilder::new(self)
 	}
 
 	/// Clean up all client state for teardown
@@ -499,6 +552,7 @@ impl APIClient {
 	/// ```
 	pub async fn cleanup(&self) {
 		// Clear authentication
+		#[allow(deprecated)]
 		self.force_authenticate(None).await;
 
 		// Clear cookies
@@ -1020,20 +1074,14 @@ fn validate_cookie_key(key: &str) {
 ///
 /// Panics if the cookie value contains invalid characters.
 fn validate_cookie_value(value: &str) {
-	assert!(
-		!value.contains(';'),
-		"cookie value must not contain ';' (found in value: {:?})",
-		value
-	);
+	assert!(!value.contains(';'), "cookie value must not contain ';'");
 	assert!(
 		!value.contains('\r') && !value.contains('\n'),
-		"cookie value must not contain newlines (found in value: {:?})",
-		value
+		"cookie value must not contain newlines"
 	);
 	assert!(
 		!value.chars().any(|c| c.is_control()),
-		"cookie value must not contain control characters (found in value: {:?})",
-		value
+		"cookie value must not contain control characters"
 	);
 }
 

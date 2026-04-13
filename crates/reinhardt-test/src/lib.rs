@@ -71,6 +71,9 @@ pub mod fixtures;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
+#[cfg(feature = "msw")]
+pub mod msw;
+
 #[cfg(feature = "server-fn-test")]
 pub mod server_fn;
 

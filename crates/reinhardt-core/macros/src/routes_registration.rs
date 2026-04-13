@@ -246,9 +246,11 @@ pub(crate) fn routes_impl(_args: TokenStream, input: ItemFn) -> Result<TokenStre
 			.iter()
 			.map(|(pat, ty)| {
 				if let Some(inner_ty) = extract_depends_inner_type(ty) {
-					// Parameter is Depends<T>: resolve via Depends::resolve()
+					// Parameter is Depends<T>: resolve via registry only.
+					// Factory-produced types (via #[injectable_factory]) do not implement
+					// Injectable, so resolve_from_registry() is used to avoid requiring the bound.
 					quote! {
-						let #pat: #ty = #di_crate::Depends::<#inner_ty>::resolve(&*__ctx, true).await
+						let #pat: #ty = #di_crate::Depends::<#inner_ty>::resolve_from_registry(&*__ctx, true).await
 							.map_err(|e| -> ::std::boxed::Box<dyn ::std::error::Error + Send + Sync> {
 								::std::boxed::Box::new(e)
 							})?;

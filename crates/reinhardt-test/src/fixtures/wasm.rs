@@ -19,6 +19,13 @@ pub use browser::{
 	populated_storage, screen, session_cookies, wasm_test_env,
 };
 
+// MSW fixtures (requires wasm + msw features)
+#[cfg(all(wasm, feature = "msw"))]
+pub mod msw;
+
+#[cfg(all(wasm, feature = "msw"))]
+pub use msw::{msw_worker, msw_worker_passthrough};
+
 // E2E browser testing fixtures via WebDriver (native target only)
 #[cfg(all(feature = "e2e", native))]
 pub mod e2e;

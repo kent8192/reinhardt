@@ -31,6 +31,7 @@ mod installed_apps;
 mod model_attribute;
 mod model_derive;
 mod orm_reflectable_derive;
+mod pascal_case;
 mod path_macro;
 mod permission_macro;
 mod permissions;
@@ -319,7 +320,7 @@ pub fn installed_apps(input: TokenStream) -> TokenStream {
 ///   `installed_apps!` to be present in the crate.
 /// - `#[routes(standalone)]` — Standalone mode. Generates `ResolvedUrls` only,
 ///   without `url_prelude` module. Use this for projects that don't use
-///   `installed_apps!` (e.g., reinhardt-cloud).
+///   `installed_apps!`.
 ///
 /// # Notes
 ///

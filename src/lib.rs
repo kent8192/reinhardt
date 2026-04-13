@@ -177,6 +177,11 @@ pub mod ctor {
 	pub use ctor::*;
 }
 
+// Re-export paste for macro-generated code (Issue #3526: namespaced URL resolvers)
+#[cfg(native)]
+#[doc(hidden)]
+pub use paste::paste;
+
 #[cfg(all(feature = "database", native))]
 #[doc(hidden)]
 pub mod reinhardt_orm {

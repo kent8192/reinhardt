@@ -115,7 +115,7 @@ fn extract_depends_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
 ///
 /// # Parameters
 ///
-/// * `args` - Attribute arguments. Accepts `standalone` to skip `url_prelude`
+/// * `args` - Attribute arguments. Accepts `standalone` to skip URL resolver
 ///   generation (for projects that don't use `installed_apps!`)
 /// * `input` - The function to annotate
 ///
@@ -368,27 +368,136 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 		}
 	};
 
-	// Generate url_prelude module only when not in standalone mode.
-	// Standalone mode skips url_prelude generation for projects that don't
-	// use `installed_apps!` (e.g., reinhardt-cloud). Fixes #3542.
+	// Generate namespaced resolvers + url_prelude only when not in standalone mode.
+	// Standalone mode skips these for projects that don't use
+	// `installed_apps!`. Fixes #3542.
 	let url_prelude_code = if standalone {
 		quote! {}
 	} else {
 		quote! {
+			// Per-app URL resolver struct generation (Issue #3526).
+			// __build_namespaced_resolvers! generates:
+			//   1. Per-app struct XxxUrls<'a> with route methods
+			//   2. Accessor methods on ResolvedUrls
+			//   3. url_prelude module with re-exports
+			//
+			// The callback macro __gen_app_method creates impl blocks
+			// for each route discovered via __for_each_url_resolver.
 			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			#[doc(hidden)]
-			macro_rules! __build_url_prelude {
+			macro_rules! __build_namespaced_resolvers {
 				($($app:ident),*) => {
-					/// Prelude module re-exporting all URL resolver traits and `ResolvedUrls`.
+					$(
+						// Generate per-app struct: UsersUrls, PostsUrls, etc.
+						#reinhardt::paste! {
+							/// Per-app URL resolver for the `$app` application.
+							///
+							/// Access via `ResolvedUrls::$app()`.
+							pub struct [<$app:camel Urls>]<'a> {
+								resolver: &'a ResolvedUrls,
+							}
+
+							// Callback macro for __for_each_url_resolver to generate methods.
+							macro_rules! [<__gen_ $app _method>] {
+								// No params
+								($app_label:ident, $method:ident, $route_name:literal, ) => {
+									impl [<$app:camel Urls>]<'_> {
+										pub fn $method(&self) -> String {
+											self.resolver.resolve_url(
+												concat!(stringify!($app_label), ":", $route_name),
+												&[],
+											)
+										}
+									}
+								};
+								// 1 param
+								($app_label:ident, $method:ident, $route_name:literal, $p1:literal) => {
+									impl [<$app:camel Urls>]<'_> {
+										pub fn $method(&self, p1: &str) -> String {
+											self.resolver.resolve_url(
+												concat!(stringify!($app_label), ":", $route_name),
+												&[($p1, p1)],
+											)
+										}
+									}
+								};
+								// 2 params
+								($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal) => {
+									impl [<$app:camel Urls>]<'_> {
+										pub fn $method(&self, p1: &str, p2: &str) -> String {
+											self.resolver.resolve_url(
+												concat!(stringify!($app_label), ":", $route_name),
+												&[($p1, p1), ($p2, p2)],
+											)
+										}
+									}
+								};
+								// 3 params
+								($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal, $p3:literal) => {
+									impl [<$app:camel Urls>]<'_> {
+										pub fn $method(&self, p1: &str, p2: &str, p3: &str) -> String {
+											self.resolver.resolve_url(
+												concat!(stringify!($app_label), ":", $route_name),
+												&[($p1, p1), ($p2, p2), ($p3, p3)],
+											)
+										}
+									}
+								};
+								// 4 params
+								($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal, $p3:literal, $p4:literal) => {
+									impl [<$app:camel Urls>]<'_> {
+										pub fn $method(&self, p1: &str, p2: &str, p3: &str, p4: &str) -> String {
+											self.resolver.resolve_url(
+												concat!(stringify!($app_label), ":", $route_name),
+												&[($p1, p1), ($p2, p2), ($p3, p3), ($p4, p4)],
+											)
+										}
+									}
+								};
+								// 5 params
+								($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal, $p3:literal, $p4:literal, $p5:literal) => {
+									impl [<$app:camel Urls>]<'_> {
+										pub fn $method(&self, p1: &str, p2: &str, p3: &str, p4: &str, p5: &str) -> String {
+											self.resolver.resolve_url(
+												concat!(stringify!($app_label), ":", $route_name),
+												&[($p1, p1), ($p2, p2), ($p3, p3), ($p4, p4), ($p5, p5)],
+											)
+										}
+									}
+								};
+							}
+
+							// Invoke __for_each_url_resolver to populate methods
+							crate::apps::$app::urls::url_resolvers::__for_each_url_resolver!(
+								[<__gen_ $app _method>], $app
+							);
+
+							// Accessor method on ResolvedUrls
+							impl ResolvedUrls {
+								pub fn $app(&self) -> [<$app:camel Urls>]<'_> {
+									[<$app:camel Urls>] { resolver: self }
+								}
+							}
+						}
+					)*
+
+					/// Prelude module re-exporting URL resolver types.
 					pub mod url_prelude {
 						pub use super::ResolvedUrls;
-						$(pub use crate::apps::$app::urls::url_resolvers::*;)*
+						$(
+							#reinhardt::paste! {
+								pub use super::[<$app:camel Urls>];
+							}
+							// Deprecated flat trait re-exports (backward compatibility)
+							#[allow(deprecated)]
+							pub use crate::apps::$app::urls::url_resolvers::*;
+						)*
 					}
 				};
 			}
 
 			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-			crate::__reinhardt_for_each_app!(__build_url_prelude);
+			crate::__reinhardt_for_each_app!(__build_namespaced_resolvers);
 		}
 	};
 

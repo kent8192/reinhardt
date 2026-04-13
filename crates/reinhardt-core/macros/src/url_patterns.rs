@@ -175,7 +175,8 @@ fn build_resolver_reexport(path: &TokenStream) -> TokenStream {
 	);
 
 	let first_segment = parsed.segments.first().unwrap().ident.to_string();
-	let is_absolute = first_segment == "crate" || first_segment == "super";
+	let is_absolute =
+		first_segment == "crate" || first_segment == "super" || parsed.leading_colon.is_some();
 
 	let parent_segments: Vec<&syn::Ident> = parsed
 		.segments
@@ -199,14 +200,11 @@ fn build_resolver_reexport(path: &TokenStream) -> TokenStream {
 ///
 /// Given `views::login`, generates:
 /// `super::views::__url_resolver_login::__url_resolver_meta_login`
-fn build_meta_reexport(path: &TokenStream) -> TokenStream {
-	let parsed: syn::Path = match syn::parse2(path.clone()) {
-		Ok(p) => p,
-		Err(_) => return quote! {},
-	};
+fn build_meta_reexport(path: &TokenStream) -> Option<TokenStream> {
+	let parsed: syn::Path = syn::parse2(path.clone()).ok()?;
 
 	if parsed.segments.is_empty() {
-		return quote! {};
+		return None;
 	}
 
 	let last_segment = &parsed.segments.last().unwrap().ident;
@@ -220,7 +218,8 @@ fn build_meta_reexport(path: &TokenStream) -> TokenStream {
 	);
 
 	let first_segment = parsed.segments.first().unwrap().ident.to_string();
-	let is_absolute = first_segment == "crate" || first_segment == "super";
+	let is_absolute =
+		first_segment == "crate" || first_segment == "super" || parsed.leading_colon.is_some();
 
 	let parent_segments: Vec<&syn::Ident> = parsed
 		.segments
@@ -230,13 +229,13 @@ fn build_meta_reexport(path: &TokenStream) -> TokenStream {
 		.collect();
 
 	if is_absolute {
-		quote! {
+		Some(quote! {
 			#(#parent_segments ::)* #resolver_mod :: #meta_macro
-		}
+		})
 	} else {
-		quote! {
+		Some(quote! {
 			super :: #(#parent_segments ::)* #resolver_mod :: #meta_macro
-		}
+		})
 	}
 }
 
@@ -346,7 +345,10 @@ pub(crate) fn url_patterns_impl(args: TokenStream, input: TokenStream) -> syn::R
 	let endpoint_re_exports = endpoint_paths.iter().map(build_resolver_reexport);
 	let viewset_re_exports = viewset_calls.iter().map(build_viewset_reexport);
 	let mount_re_exports = mount_calls.iter().map(build_mount_reexport);
-	let meta_paths: Vec<TokenStream> = endpoint_paths.iter().map(build_meta_reexport).collect();
+	let meta_paths: Vec<TokenStream> = endpoint_paths
+		.iter()
+		.filter_map(build_meta_reexport)
+		.collect();
 
 	// Parse optional app label: #[url_patterns("users")]
 	let func_output = if !args.is_empty() {
@@ -508,7 +510,7 @@ mod tests {
 	#[test]
 	fn build_meta_reexport_relative_path() {
 		let path: TokenStream = quote! { views::login };
-		let result = build_meta_reexport(&path);
+		let result = build_meta_reexport(&path).unwrap();
 		let expected = "super :: views :: __url_resolver_login :: __url_resolver_meta_login";
 		assert_eq!(result.to_string(), expected);
 	}
@@ -516,7 +518,7 @@ mod tests {
 	#[test]
 	fn build_meta_reexport_crate_path() {
 		let path: TokenStream = quote! { crate::views::login };
-		let result = build_meta_reexport(&path);
+		let result = build_meta_reexport(&path).unwrap();
 		let expected = "crate :: views :: __url_resolver_login :: __url_resolver_meta_login";
 		assert_eq!(result.to_string(), expected);
 	}

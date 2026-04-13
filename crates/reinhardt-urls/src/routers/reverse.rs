@@ -360,13 +360,17 @@ impl UrlReverser {
 	/// assert_eq!(url, "/users/123/");
 	/// ```
 	pub fn reverse(&self, name: &str, params: &HashMap<String, String>) -> ReverseResult<String> {
-		// Resolve alias to canonical name if one exists
-		let resolved_name = self.aliases.get(name).map(|s| s.as_str()).unwrap_or(name);
-
-		let route = self
-			.routes
-			.get(resolved_name)
-			.ok_or_else(|| Error::NotFound(name.to_string()))?;
+		// Prefer canonical route name; fall back to alias resolution only
+		// when the direct lookup misses. This prevents an alias entry from
+		// shadowing a real route with the same key.
+		let route = if let Some(r) = self.routes.get(name) {
+			r
+		} else {
+			let resolved_name = self.aliases.get(name).map(|s| s.as_str()).unwrap_or(name);
+			self.routes
+				.get(resolved_name)
+				.ok_or_else(|| Error::NotFound(name.to_string()))?
+		};
 
 		// Parse the path pattern to find parameters
 		let pattern = PathPattern::new(&route.path)
@@ -1566,6 +1570,26 @@ mod tests {
 
 		// Assert
 		assert_eq!(result, path!("/posts/"));
+	}
+
+	#[test]
+	fn test_alias_does_not_shadow_canonical_route() {
+		// Arrange — register route "X", then add alias "X" -> "Y" (same key as route)
+		let mut reverser = UrlReverser::new();
+		reverser
+			.register_path("users:list", path!("/users/"))
+			.unwrap();
+		reverser
+			.register_path("posts:list", path!("/posts/"))
+			.unwrap();
+		// Alias "users:list" -> "posts:list" should NOT shadow the real "users:list" route
+		reverser.add_name_alias("users:list", "posts:list");
+
+		// Act
+		let result = reverser.reverse("users:list", &HashMap::new()).unwrap();
+
+		// Assert — canonical route takes precedence over alias
+		assert_eq!(result, "/users/");
 	}
 
 	#[test]

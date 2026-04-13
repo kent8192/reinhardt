@@ -115,7 +115,8 @@ fn extract_depends_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
 ///
 /// # Parameters
 ///
-/// * `_args` - Attribute arguments (currently unused, reserved for future use)
+/// * `args` - Attribute arguments. Accepts `standalone` to skip `url_prelude`
+///   generation (for projects that don't use `installed_apps!`)
 /// * `input` - The function to annotate
 ///
 /// # Returns
@@ -126,7 +127,22 @@ fn extract_depends_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
 ///
 /// Returns an error if the function signature is invalid (e.g., missing return type,
 /// sync function with `#[inject]` parameters)
-pub(crate) fn routes_impl(_args: TokenStream, input: ItemFn) -> Result<TokenStream> {
+pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStream> {
+	// Parse optional argument: #[routes] or #[routes(standalone)]
+	let standalone = if args.is_empty() {
+		false
+	} else {
+		let ident: syn::Ident = syn::parse2(args)?;
+		if ident == "standalone" {
+			true
+		} else {
+			return Err(syn::Error::new_spanned(
+				ident,
+				"unknown argument for #[routes]; expected `standalone` or no arguments",
+			));
+		}
+	};
+
 	let reinhardt = get_reinhardt_crate();
 
 	let fn_name = &input.sig.ident;
@@ -352,7 +368,31 @@ pub(crate) fn routes_impl(_args: TokenStream, input: ItemFn) -> Result<TokenStre
 		}
 	};
 
-	// Generate ResolvedUrls struct + url_prelude module (native-only).
+	// Generate url_prelude module only when not in standalone mode.
+	// Standalone mode skips url_prelude generation for projects that don't
+	// use `installed_apps!` (e.g., reinhardt-cloud). Fixes #3542.
+	let url_prelude_code = if standalone {
+		quote! {}
+	} else {
+		quote! {
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+			#[doc(hidden)]
+			macro_rules! __build_url_prelude {
+				($($app:ident),*) => {
+					/// Prelude module re-exporting all URL resolver traits and `ResolvedUrls`.
+					pub mod url_prelude {
+						pub use super::ResolvedUrls;
+						$(pub use crate::apps::$app::urls::url_resolvers::*;)*
+					}
+				};
+			}
+
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+			crate::__reinhardt_for_each_app!(__build_url_prelude);
+		}
+	};
+
+	// Generate ResolvedUrls struct (native-only).
 	// Gate on `not(wasm)` using raw platform check because this code expands
 	// in consuming crates that do not have the `native` cfg alias.
 	let url_resolver_code = quote! {
@@ -396,20 +436,7 @@ pub(crate) fn routes_impl(_args: TokenStream, input: ItemFn) -> Result<TokenStre
 				}
 			}
 
-			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-			#[doc(hidden)]
-			macro_rules! __build_url_prelude {
-				($($app:ident),*) => {
-					/// Prelude module re-exporting all URL resolver traits and `ResolvedUrls`.
-					pub mod url_prelude {
-						pub use super::ResolvedUrls;
-						$(pub use crate::apps::$app::urls::url_resolvers::*;)*
-					}
-				};
-			}
-
-			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-			crate::__reinhardt_for_each_app!(__build_url_prelude);
+			#url_prelude_code
 		}
 		pub use __url_resolver_support::*;
 	};

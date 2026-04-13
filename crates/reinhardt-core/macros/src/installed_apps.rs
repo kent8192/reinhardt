@@ -536,6 +536,12 @@ pub(crate) fn installed_apps_impl(input: TokenStream) -> Result<TokenStream> {
 	let paths: Vec<_> = apps.iter().map(|app| &app.path).collect();
 	let path_strings: Vec<String> = paths.iter().map(|p| p.value()).collect();
 
+	// Write app labels to state file for cross-macro communication with #[routes].
+	// This replaces the __reinhardt_for_each_app #[macro_export] callback pattern
+	// that triggers macro_expanded_macro_exports_accessed_by_absolute_paths on Rust 1.94+.
+	let label_strings: Vec<String> = labels.iter().map(|l| l.to_string()).collect();
+	crate::macro_state::write_installed_apps(&label_strings);
+
 	// Generate enum variants for each app
 	// Convert labels to CamelCase for enum variants
 	let enum_variants = labels.iter().map(|label| {
@@ -641,24 +647,5 @@ pub(crate) fn installed_apps_impl(input: TokenStream) -> Result<TokenStream> {
 
 		// Compile-time validation
 		#(#validations)*
-
-		/// Callback macro for iterating over installed app labels.
-		///
-		/// Invokes the given macro with all app labels as arguments.
-		/// Used by `#[routes]` to generate `url_prelude`.
-		///
-		/// Namespaced with `__reinhardt_` prefix to reduce collision risk
-		/// in the consuming crate's root macro namespace.
-		#[doc(hidden)]
-		mod __for_each_app_cfg {
-			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-			#[doc(hidden)]
-			#[macro_export]
-			macro_rules! __reinhardt_for_each_app {
-				($callback:ident) => {
-					$callback!(#(#labels),*);
-				};
-			}
-		}
 	})
 }

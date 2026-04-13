@@ -1,3 +1,4 @@
+use reinhardt::url_patterns;
 use reinhardt::ServerRouter;
 
 use super::views;

@@ -287,6 +287,8 @@ pub use reinhardt_macros::{api_view, delete, get, patch, post, put};
 pub use reinhardt_macros::routes;
 #[cfg(native)]
 pub use reinhardt_macros::url_patterns;
+#[cfg(native)]
+pub use reinhardt_macros::viewset;
 
 // Re-export admin attribute macro (requires admin feature)
 #[cfg(all(feature = "admin", native))]

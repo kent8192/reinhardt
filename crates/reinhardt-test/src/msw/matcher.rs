@@ -10,7 +10,10 @@ pub enum UrlMatcher {
 	/// Exact path match (query string is stripped before comparison).
 	Exact(String),
 	/// Parameterized path segments (e.g., `/api/users/:id`).
-	Parameterized { segments: Vec<Segment> },
+	Parameterized {
+		/// The parsed segments of the parameterized URL pattern.
+		segments: Vec<Segment>,
+	},
 	/// Regular expression match.
 	Regex(Regex),
 }

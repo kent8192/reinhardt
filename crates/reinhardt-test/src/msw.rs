@@ -28,6 +28,11 @@
 //! }
 //! ```
 
+// On native builds, worker.rs and interceptor.rs are behind #[cfg(wasm)],
+// making handler/recorder/context types appear unused in lib mode.
+// They ARE exercised in WASM builds and native unit tests.
+#![allow(dead_code, clippy::type_complexity)]
+
 mod context;
 pub(crate) mod handler;
 mod interceptor;

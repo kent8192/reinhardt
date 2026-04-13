@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 /// Lightweight type-keyed container for injecting test dependencies
 /// into server_fn mock handlers.
+#[derive(Default)]
 pub struct TestContext {
 	values: HashMap<TypeId, Box<dyn Any>>,
 }
@@ -12,9 +13,7 @@ pub struct TestContext {
 impl TestContext {
 	/// Create an empty context.
 	pub fn new() -> Self {
-		Self {
-			values: HashMap::new(),
-		}
+		Self::default()
 	}
 
 	/// Insert a value keyed by its type. Consumes self for builder pattern.

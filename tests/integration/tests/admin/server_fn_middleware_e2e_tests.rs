@@ -11,9 +11,9 @@
 //! 4. `AdminCookieAuthMiddleware` — JWT from cookie/header → `AuthState`
 //! 5. Route handler with `InjectionContext::fork_for_request()`
 
-use reinhardt_admin::server::security::ADMIN_AUTH_COOKIE_NAME;
 use super::server_fn_helpers::TEST_CSRF_TOKEN;
 use super::server_fn_middleware_helpers::*;
+use reinhardt_admin::server::security::ADMIN_AUTH_COOKIE_NAME;
 use rstest::*;
 
 // ── Category 5A: Full Pipeline Smoke Tests ──
@@ -24,7 +24,10 @@ use rstest::*;
 #[awt]
 #[tokio::test]
 async fn test_middleware_e2e_get_dashboard_through_pipeline(
-	#[future] middleware_e2e_context: (MiddlewareTestServer, reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>),
+	#[future] middleware_e2e_context: (
+		MiddlewareTestServer,
+		reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>,
+	),
 ) {
 	let (server, _db) = middleware_e2e_context.await;
 	let client = reqwest::Client::new();
@@ -49,7 +52,10 @@ async fn test_middleware_e2e_get_dashboard_through_pipeline(
 #[awt]
 #[tokio::test]
 async fn test_middleware_e2e_get_list_through_pipeline(
-	#[future] middleware_e2e_context: (MiddlewareTestServer, reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>),
+	#[future] middleware_e2e_context: (
+		MiddlewareTestServer,
+		reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>,
+	),
 ) {
 	let (server, _db) = middleware_e2e_context.await;
 	let client = reqwest::Client::new();
@@ -81,7 +87,10 @@ async fn test_middleware_e2e_get_list_through_pipeline(
 #[awt]
 #[tokio::test]
 async fn test_middleware_e2e_bearer_header_authenticates(
-	#[future] middleware_e2e_context: (MiddlewareTestServer, reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>),
+	#[future] middleware_e2e_context: (
+		MiddlewareTestServer,
+		reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>,
+	),
 ) {
 	let (server, _db) = middleware_e2e_context.await;
 	let client = reqwest::Client::new();
@@ -106,7 +115,10 @@ async fn test_middleware_e2e_bearer_header_authenticates(
 #[awt]
 #[tokio::test]
 async fn test_middleware_e2e_no_auth_returns_401(
-	#[future] middleware_e2e_context: (MiddlewareTestServer, reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>),
+	#[future] middleware_e2e_context: (
+		MiddlewareTestServer,
+		reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>,
+	),
 ) {
 	let (server, _db) = middleware_e2e_context.await;
 	let client = reqwest::Client::new();
@@ -133,7 +145,10 @@ async fn test_middleware_e2e_no_auth_returns_401(
 #[awt]
 #[tokio::test]
 async fn test_middleware_e2e_invalid_jwt_returns_401(
-	#[future] middleware_e2e_context: (MiddlewareTestServer, reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>),
+	#[future] middleware_e2e_context: (
+		MiddlewareTestServer,
+		reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>,
+	),
 ) {
 	let (server, _db) = middleware_e2e_context.await;
 	let client = reqwest::Client::new();
@@ -162,7 +177,10 @@ async fn test_middleware_e2e_invalid_jwt_returns_401(
 #[awt]
 #[tokio::test]
 async fn test_middleware_e2e_cross_origin_returns_403(
-	#[future] middleware_e2e_context: (MiddlewareTestServer, reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>),
+	#[future] middleware_e2e_context: (
+		MiddlewareTestServer,
+		reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>,
+	),
 ) {
 	let (server, _db) = middleware_e2e_context.await;
 	let client = reqwest::Client::new();
@@ -185,7 +203,10 @@ async fn test_middleware_e2e_cross_origin_returns_403(
 #[awt]
 #[tokio::test]
 async fn test_middleware_e2e_missing_origin_returns_403(
-	#[future] middleware_e2e_context: (MiddlewareTestServer, reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>),
+	#[future] middleware_e2e_context: (
+		MiddlewareTestServer,
+		reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>,
+	),
 ) {
 	let (server, _db) = middleware_e2e_context.await;
 	let client = reqwest::Client::new();
@@ -210,12 +231,18 @@ async fn test_middleware_e2e_missing_origin_returns_403(
 #[awt]
 #[tokio::test]
 async fn test_middleware_e2e_oversized_body_rejected(
-	#[future] middleware_e2e_context: (MiddlewareTestServer, reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>),
+	#[future] middleware_e2e_context: (
+		MiddlewareTestServer,
+		reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>,
+	),
 ) {
 	let (server, _db) = middleware_e2e_context.await;
 	let client = reqwest::Client::new();
 	let token = staff_jwt_token();
-	let host = server.base_url.strip_prefix("http://").unwrap_or(&server.base_url);
+	let host = server
+		.base_url
+		.strip_prefix("http://")
+		.unwrap_or(&server.base_url);
 
 	let oversized_data = vec![b'x'; 10 * 1024 * 1024 + 1];
 
@@ -226,7 +253,10 @@ async fn test_middleware_e2e_oversized_body_rejected(
 		.header("Origin", &server.base_url)
 		.header(
 			"Cookie",
-			format!("csrftoken={}; {}={}", TEST_CSRF_TOKEN, ADMIN_AUTH_COOKIE_NAME, token),
+			format!(
+				"csrftoken={}; {}={}",
+				TEST_CSRF_TOKEN, ADMIN_AUTH_COOKIE_NAME, token
+			),
 		)
 		.body(oversized_data)
 		.send()
@@ -244,7 +274,10 @@ async fn test_middleware_e2e_oversized_body_rejected(
 #[awt]
 #[tokio::test]
 async fn test_middleware_e2e_non_staff_jwt_denied(
-	#[future] middleware_e2e_context: (MiddlewareTestServer, reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>),
+	#[future] middleware_e2e_context: (
+		MiddlewareTestServer,
+		reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>,
+	),
 ) {
 	let (server, _db) = middleware_e2e_context.await;
 	let client = reqwest::Client::new();
@@ -273,7 +306,10 @@ async fn test_middleware_e2e_non_staff_jwt_denied(
 #[awt]
 #[tokio::test]
 async fn test_middleware_e2e_inactive_user_jwt_denied(
-	#[future] middleware_e2e_context: (MiddlewareTestServer, reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>),
+	#[future] middleware_e2e_context: (
+		MiddlewareTestServer,
+		reinhardt_di::Depends<reinhardt_admin::core::AdminDatabase>,
+	),
 ) {
 	let (server, _db) = middleware_e2e_context.await;
 	let client = reqwest::Client::new();

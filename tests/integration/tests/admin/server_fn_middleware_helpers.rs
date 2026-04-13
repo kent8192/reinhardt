@@ -5,7 +5,7 @@
 //! AdminCookieAuthMiddleware + AdminOriginGuardMiddleware), and helper
 //! functions for sending authenticated requests via `reqwest`.
 
-use reinhardt_admin::core::{admin_routes_with_di, AdminDatabase, AdminSite};
+use reinhardt_admin::core::{AdminDatabase, AdminSite, admin_routes_with_di};
 use reinhardt_admin::server::security::ADMIN_AUTH_COOKIE_NAME;
 use reinhardt_auth::JwtAuth;
 use reinhardt_db::backends::connection::DatabaseConnection as BackendsConnection;
@@ -24,8 +24,8 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use super::server_fn_helpers::{
-	build_auth_user_create_table_sql, setup_test_models_table, AllPermissionsModelAdmin,
-	TEST_CSRF_TOKEN, TEST_INACTIVE_USER_UUID, TEST_NON_STAFF_USER_UUID, TEST_USER_UUID,
+	AllPermissionsModelAdmin, TEST_CSRF_TOKEN, TEST_INACTIVE_USER_UUID, TEST_NON_STAFF_USER_UUID,
+	TEST_USER_UUID, build_auth_user_create_table_sql, setup_test_models_table,
 };
 
 /// JWT secret shared between `AdminSite` and test token generation.

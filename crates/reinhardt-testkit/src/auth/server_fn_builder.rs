@@ -33,7 +33,7 @@ impl ServerFnAuthBuilder {
 	}
 
 	/// Authenticate via JWT (sets identity for mock session).
-	#[cfg(feature = "auth-testing")]
+	#[cfg(native)]
 	pub fn jwt(
 		mut self,
 		user: &impl ForceLoginUser,

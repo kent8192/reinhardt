@@ -26,12 +26,7 @@ property-based = ["dep:proptest"]
 viewsets = []
 admin = ["dep:reinhardt-conf"]
 messages = ["reinhardt-core/messages"]
-auth-testing = [
-  "dep:reinhardt-auth",
-  "dep:reinhardt-middleware",
-  "dep:totp-lite",
-]
-full = ["testcontainers", "static", "websockets", "graphql", "property-based", "viewsets", "admin", "messages", "auth-testing"]
+full = ["testcontainers", "static", "websockets", "graphql", "property-based", "viewsets", "admin", "messages"]
 
 [dependencies]
 reinhardt-db = { workspace = true, features = ["backends", "migrations", "mysql", "orm", "postgres", "sqlite"] }
@@ -83,10 +78,6 @@ proptest = { workspace = true, optional = true }
 # Optional dependencies for graphql feature
 async-graphql = { workspace = true, optional = true }
 
-# Optional dependencies for auth-testing feature
-reinhardt-auth = { workspace = true, optional = true, features = ["jwt", "sessions"] }
-reinhardt-middleware = { workspace = true, optional = true, features = ["sessions"] }
-totp-lite = { version = "2.0", optional = true }
 
 # WebSocket and messaging
 tokio-tungstenite = "0.28.0"
@@ -108,6 +99,11 @@ mockall = { workspace = true }
 
 reinhardt-urls = { workspace = true, features = ["routers"] }
 reinhardt-conf = { workspace = true, features = ["settings", "async"], optional = true }
+
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+reinhardt-auth = { workspace = true, features = ["jwt", "sessions"] }
+reinhardt-middleware = { workspace = true, features = ["sessions"] }
+totp-lite = { version = "2.0" }
 
 [build-dependencies]
 cfg_aliases = "0.2"

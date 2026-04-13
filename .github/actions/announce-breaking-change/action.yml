@@ -105,17 +105,17 @@ runs:
         disc_title="[${SOURCE_REPO}#${PR_NUMBER}] ${PR_TITLE}"
 
         # Write body to temp file to preserve formatting
-        cat > /tmp/discussion-body.md <<EOF
-## Breaking Change: ${SOURCE_REPO}
-
-**PR**: ${SOURCE_REPO}#${PR_NUMBER} — ${PR_TITLE}
-**Merged**: ${merged_date}
-**Link**: ${PR_URL}
-
-### Details
-
-${details}
-EOF
+        {
+          echo "## Breaking Change: ${SOURCE_REPO}"
+          echo ""
+          echo "**PR**: ${SOURCE_REPO}#${PR_NUMBER} — ${PR_TITLE}"
+          echo "**Merged**: ${merged_date}"
+          echo "**Link**: ${PR_URL}"
+          echo ""
+          echo "### Details"
+          echo ""
+          printf '%s\n' "${details}"
+        } > /tmp/discussion-body.md
 
         if ! url=$(gh discussion create \
           --repo kent8192/reinhardt-web \

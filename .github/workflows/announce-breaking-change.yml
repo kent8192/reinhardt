@@ -106,17 +106,17 @@ jobs:
             local merged_date="${merged_at%%T*}"
             local disc_title="${search_key} ${pr_title}"
 
-            cat > /tmp/discussion-body.md <<BODY_EOF
-## Breaking Change: ${SOURCE_REPO}
-
-**PR**: ${SOURCE_REPO}#${pr_number} — ${pr_title}
-**Merged**: ${merged_date}
-**Link**: ${pr_url}
-
-### Details
-
-${details}
-BODY_EOF
+            {
+              echo "## Breaking Change: ${SOURCE_REPO}"
+              echo ""
+              echo "**PR**: ${SOURCE_REPO}#${pr_number} — ${pr_title}"
+              echo "**Merged**: ${merged_date}"
+              echo "**Link**: ${pr_url}"
+              echo ""
+              echo "### Details"
+              echo ""
+              printf '%s\n' "${details}"
+            } > /tmp/discussion-body.md
 
             gh discussion create \
               --repo kent8192/reinhardt-web \

@@ -704,6 +704,10 @@ impl ServerRouter {
 	/// let url = router.reverse("api:health", &[]).unwrap();
 	/// assert_eq!(url, "/health");
 	/// ```
+	#[deprecated(
+		since = "0.2.0",
+		note = "Use `#[get(\"/path\", name = \"name\")]` + `.endpoint()` instead"
+	)]
 	pub fn function_named<F, Fut>(mut self, path: &str, method: Method, name: &str, func: F) -> Self
 	where
 		F: Fn(Request) -> Fut + Send + Sync + 'static,
@@ -752,6 +756,10 @@ impl ServerRouter {
 	/// let url = router.reverse("api:list_articles", &[]).unwrap();
 	/// assert_eq!(url, "/articles");
 	/// ```
+	#[deprecated(
+		since = "0.2.0",
+		note = "Use `#[get(\"/path\", name = \"name\")]` + `.endpoint()` instead"
+	)]
 	pub fn handler_with_method_named<H: Handler + 'static>(
 		mut self,
 		path: &str,
@@ -792,12 +800,17 @@ impl ServerRouter {
 	/// let url = router.reverse("api:health", &[]).unwrap();
 	/// assert_eq!(url, "/health");
 	/// ```
+	#[deprecated(
+		since = "0.2.0",
+		note = "Use `#[get(\"/path\", name = \"name\")]` + `.endpoint()` instead"
+	)]
 	#[inline]
 	pub fn route_named<F, Fut>(self, path: &str, method: Method, name: &str, func: F) -> Self
 	where
 		F: Fn(Request) -> Fut + Send + Sync + 'static,
 		Fut: std::future::Future<Output = Result<Response>> + Send + 'static,
 	{
+		#[allow(deprecated)]
 		self.function_named(path, method, name, func)
 	}
 
@@ -936,6 +949,10 @@ impl ServerRouter {
 	/// let url = router.reverse("articles:list", &[]).unwrap();
 	/// assert_eq!(url, "/articles");
 	/// ```
+	#[deprecated(
+		since = "0.2.0",
+		note = "Use `#[get(\"/path\", name = \"name\")]` + `.endpoint()` instead"
+	)]
 	pub fn view_named<V>(mut self, path: &str, name: &str, view: V) -> Self
 	where
 		V: Handler + 'static,
@@ -1612,17 +1629,22 @@ impl ServerRouter {
 			}
 		}
 
-		// Collect ViewSet routes with standard names
-		for prefix in self.viewsets.keys() {
+		// Collect ViewSet routes with standard names (Django convention: basename, not prefix)
+		for (prefix, viewset) in &self.viewsets {
 			let base_path = if current_prefix.is_empty() {
 				format!("/{}", prefix)
 			} else {
 				format!("{}/{}", current_prefix, prefix)
 			};
 
+			let basename = viewset.get_basename();
+			let lookup_field = viewset.get_lookup_field();
 			let viewset_routes = [
-				(format!("{}-list", prefix), format!("{}/", base_path)),
-				(format!("{}-detail", prefix), format!("{}/<id>/", base_path)),
+				(format!("{}-list", basename), format!("{}/", base_path)),
+				(
+					format!("{}-detail", basename),
+					format!("{}/<{}>/", base_path, lookup_field),
+				),
 			];
 
 			for (name, path) in viewset_routes {
@@ -2027,6 +2049,7 @@ impl reinhardt_views::viewsets::RegisterViewSet for ServerRouter {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
 	use super::*;
 	use rstest::rstest;

@@ -236,6 +236,7 @@ impl SnippetViewSet {
 	/// - Pagination: 10 items per page (max 100)
 	/// - Filtering: by language and title fields
 	/// - Ordering: by created_at and title fields
+	#[reinhardt::viewset]
 	pub fn viewset() -> reinhardt::ModelViewSet<Snippet, SnippetSerializer> {
 		use reinhardt::ModelViewSet;
 		use reinhardt::views::viewsets::{FilterConfig, OrderingConfig, PaginationConfig};

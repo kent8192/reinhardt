@@ -110,6 +110,7 @@ rstest = "0.26.1"
 reqwest = { version = "0.12", features = ["json"] }
 tokio = { version = "1", features = ["full"] }
 argon2 = { version = "0.5", features = ["std"] }
+bytes = "1"
 proptest = "1.6"
 trybuild = "1.0"
 serial_test = "3.2"

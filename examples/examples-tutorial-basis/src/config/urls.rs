@@ -15,7 +15,7 @@ use crate::server_fn::polls::{
 	vote,
 };
 
-#[cfg_attr(server, routes)]
+#[cfg_attr(server, routes(standalone))]
 pub fn routes() -> UnifiedRouter {
 	// Server: register server functions and mount polls routes
 	#[cfg(server)]

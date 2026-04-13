@@ -138,6 +138,10 @@ impl ServerFnTestContext {
 	///     .with_authenticated_user(TestUser::admin())
 	///     .build();
 	/// ```
+	#[deprecated(
+		since = "0.1.0-rc.16",
+		note = "use `.auth().session(&user).done()` instead"
+	)]
 	pub fn with_authenticated_user(mut self, user: TestUser) -> Self {
 		self.test_user = Some(user.clone());
 		self.mock_session = Some(MockSession::authenticated(user));
@@ -285,6 +289,26 @@ impl ServerFnTestContext {
 	pub fn with_session(mut self, session: MockSession) -> Self {
 		self.mock_session = Some(session);
 		self
+	}
+
+	/// Start building auth configuration for this server_fn test context.
+	///
+	/// Mirrors [`crate::client::APIClient::auth()`] API for consistent developer experience.
+	///
+	/// # Examples
+	///
+	/// ```rust,ignore
+	/// let env = ServerFnTestContext::new(scope.clone())
+	///     .with_database(pool.clone())
+	///     .auth()
+	///         .session(&user)
+	///         .with_staff(true)
+	///     .done()
+	///     .build();
+	/// ```
+	#[cfg(feature = "auth-testing")]
+	pub fn auth(self) -> crate::auth::ServerFnAuthBuilder {
+		crate::auth::ServerFnAuthBuilder::new(self)
 	}
 
 	/// Add a mock session with default configuration.

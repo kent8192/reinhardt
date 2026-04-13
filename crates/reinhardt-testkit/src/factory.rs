@@ -322,6 +322,10 @@ impl RequestBuilder {
 	/// let user = json!({"id": 1, "username": "testuser"});
 	/// let request = factory.get("/api/profile/").force_authenticate(user).build().unwrap();
 	/// ```
+	#[deprecated(
+		since = "0.1.0-rc.16",
+		note = "use `client.auth().session()` or `client.auth().jwt()` instead"
+	)]
 	pub fn force_authenticate(mut self, user: Value) -> Self {
 		self.user = Some(user);
 		self
@@ -656,6 +660,7 @@ mod tests {
 	}
 
 	#[rstest]
+	#[allow(deprecated)]
 	fn test_builder_force_authenticate() {
 		// Arrange
 		let factory = APIRequestFactory::new();

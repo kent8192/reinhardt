@@ -26,7 +26,12 @@ property-based = ["dep:proptest"]
 viewsets = []
 admin = ["dep:reinhardt-conf"]
 messages = ["reinhardt-core/messages"]
-full = ["testcontainers", "static", "websockets", "graphql", "property-based", "viewsets", "admin", "messages"]
+auth-testing = [
+  "dep:reinhardt-auth",
+  "dep:reinhardt-middleware",
+  "dep:totp-lite",
+]
+full = ["testcontainers", "static", "websockets", "graphql", "property-based", "viewsets", "admin", "messages", "auth-testing"]
 
 [dependencies]
 reinhardt-db = { workspace = true, features = ["backends", "migrations", "mysql", "orm", "postgres", "sqlite"] }
@@ -77,6 +82,11 @@ proptest = { workspace = true, optional = true }
 
 # Optional dependencies for graphql feature
 async-graphql = { workspace = true, optional = true }
+
+# Optional dependencies for auth-testing feature
+reinhardt-auth = { workspace = true, optional = true, features = ["jwt", "sessions"] }
+reinhardt-middleware = { workspace = true, optional = true, features = ["sessions"] }
+totp-lite = { version = "2.0", optional = true }
 
 # WebSocket and messaging
 tokio-tungstenite = "0.28.0"

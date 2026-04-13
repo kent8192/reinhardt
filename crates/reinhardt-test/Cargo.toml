@@ -120,7 +120,7 @@ cfg_aliases = "0.2"
 # Native-only dependencies (cannot compile on wasm32-unknown-unknown)
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 # Core: delegate to reinhardt-testkit
-reinhardt-testkit = { workspace = true }
+reinhardt-testkit = { workspace = true, features = ["auth-testing"] }
 
 # Dependencies required by reinhardt-test's own modules (auth, admin)
 reinhardt-auth = { workspace = true, features = ["jwt", "argon2-hasher", "sessions", "oauth", "token"] }

@@ -117,6 +117,9 @@ pub use reinhardt_testkit::{
 	shutdown_test_server, spawn_test_server,
 };
 
+#[cfg(native)]
+pub use reinhardt_testkit::auth;
+
 #[cfg(all(native, feature = "messages"))]
 pub use reinhardt_testkit::{
 	MessagesTestMixin, assert_message_count, assert_message_exists, assert_message_level,

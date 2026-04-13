@@ -50,6 +50,16 @@ jobs:
     steps:
       - name: Run backfill
         run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::GH_TOKEN is not set. Ensure the DISCUSSION_PAT secret is configured."
+            exit 1
+          fi
+
+          failed=0
+          processed=0
+
           process_pr() {
             local pr_number="$1"
             echo "--- Processing PR #${pr_number} ---"
@@ -57,7 +67,7 @@ jobs:
             local pr_data
             pr_data=$(gh pr view "$pr_number" --repo "$TARGET_REPO" \
               --json title,body,url,mergedAt 2>&1) || {
-              echo "ERROR: Failed to fetch PR #${pr_number}: ${pr_data}"
+              echo "::warning::Failed to fetch PR #${pr_number}: ${pr_data}"
               return 1
             }
 
@@ -130,18 +140,22 @@ jobs:
 
           if [ "$INPUT_MODE" = "by-pr-number" ]; then
             if [ -z "$INPUT_PR_NUMBERS" ]; then
-              echo "ERROR: pr-numbers is required for by-pr-number mode"
+              echo "::error::pr-numbers is required for by-pr-number mode"
               exit 1
             fi
             IFS=',' read -ra NUMBERS <<< "$INPUT_PR_NUMBERS"
             for num in "${NUMBERS[@]}"; do
               num=$(echo "$num" | xargs)
-              process_pr "$num" || true
+              if process_pr "$num"; then
+                processed=$((processed + 1))
+              else
+                failed=$((failed + 1))
+              fi
             done
 
           elif [ "$INPUT_MODE" = "all" ]; then
             echo "Scanning all merged PRs for breaking changes..."
-            gh api --paginate "repos/${TARGET_REPO}/pulls?state=closed&per_page=100" \
+            pr_numbers=$(gh api --paginate "repos/${TARGET_REPO}/pulls?state=closed&per_page=100" \
               | jq -sr 'add
                 | map(select(.merged_at != null))
                 | map(select(
@@ -150,10 +164,19 @@ jobs:
                     (.body | test("\\[x\\] Breaking change"; "i"))
                   ))
                 | sort_by(.number)
-                | .[].number' \
-              | while read -r num; do
-                process_pr "$num" || true
-              done
+                | .[].number')
+
+            while read -r num; do
+              [ -z "$num" ] && continue
+              if process_pr "$num"; then
+                processed=$((processed + 1))
+              else
+                failed=$((failed + 1))
+              fi
+            done <<< "$pr_numbers"
           fi
 
-          echo "Backfill complete."
+          echo "Backfill complete. Processed: ${processed}, Failed: ${failed}"
+          if [ "$failed" -gt 0 ]; then
+            echo "::warning::${failed} PR(s) failed to process"
+          fi

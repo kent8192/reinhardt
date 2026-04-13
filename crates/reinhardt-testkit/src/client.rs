@@ -1076,18 +1076,15 @@ fn validate_cookie_key(key: &str) {
 fn validate_cookie_value(value: &str) {
 	assert!(
 		!value.contains(';'),
-		"cookie value must not contain ';' (found in value: {:?})",
-		value
+		"cookie value must not contain ';'"
 	);
 	assert!(
 		!value.contains('\r') && !value.contains('\n'),
-		"cookie value must not contain newlines (found in value: {:?})",
-		value
+		"cookie value must not contain newlines"
 	);
 	assert!(
 		!value.chars().any(|c| c.is_control()),
-		"cookie value must not contain control characters (found in value: {:?})",
-		value
+		"cookie value must not contain control characters"
 	);
 }
 

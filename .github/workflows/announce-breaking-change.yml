@@ -115,7 +115,7 @@ jobs:
               echo ""
               echo "### Details"
               echo ""
-              echo "${details}"
+              printf '%s\n' "${details}"
             } > /tmp/discussion-body.md
 
             gh discussion create \

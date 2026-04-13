@@ -60,6 +60,28 @@ jobs:
           failed=0
           processed=0
 
+          # Resolve repository node ID and "Breaking Changes" category ID once (#3547).
+          # The `gh discussion` CLI subcommand is unavailable on ubuntu-latest runners,
+          # so all Discussion operations use the GraphQL API instead.
+          repo_data=$(gh api graphql -f query='
+            {
+              repository(owner: "kent8192", name: "reinhardt-web") {
+                id
+                discussionCategories(first: 30) {
+                  nodes { id name }
+                }
+              }
+            }
+          ')
+          REPO_ID=$(echo "$repo_data" | jq -r '.data.repository.id')
+          CATEGORY_ID=$(echo "$repo_data" | jq -r '.data.repository.discussionCategories.nodes[] | select(.name == "Breaking Changes") | .id')
+
+          if [ -z "$REPO_ID" ] || [ -z "$CATEGORY_ID" ]; then
+            echo "::error::Failed to resolve repository ID or 'Breaking Changes' category ID"
+            exit 1
+          fi
+          echo "Resolved REPO_ID=${REPO_ID}, CATEGORY_ID=${CATEGORY_ID}"
+
           process_pr() {
             local pr_number="$1"
             echo "--- Processing PR #${pr_number} ---"
@@ -128,13 +150,38 @@ jobs:
               printf '%s\n' "${details}"
             } > /tmp/discussion-body.md
 
-            gh discussion create \
-              --repo kent8192/reinhardt-web \
-              --category "Breaking Changes" \
-              --title "$disc_title" \
-              --body-file /tmp/discussion-body.md
+            # Create discussion via GraphQL mutation (#3547).
+            # Explicit error checking is required because process_pr is called
+            # inside `if`, which disables `set -e` per POSIX errexit semantics.
+            local body
+            body=$(cat /tmp/discussion-body.md)
 
-            echo "CREATED: ${disc_title}"
+            local result
+            result=$(gh api graphql \
+              -f repositoryId="$REPO_ID" \
+              -f categoryId="$CATEGORY_ID" \
+              -f title="$disc_title" \
+              -f body="$body" \
+              -f query='
+                mutation($repositoryId: ID!, $categoryId: ID!, $title: String!, $body: String!) {
+                  createDiscussion(input: {repositoryId: $repositoryId, categoryId: $categoryId, title: $title, body: $body}) {
+                    discussion { url }
+                  }
+                }
+              ') || {
+              echo "::warning::Failed to create discussion: ${disc_title}"
+              return 1
+            }
+
+            local url
+            url=$(echo "$result" | jq -r '.data.createDiscussion.discussion.url // empty')
+            if [ -z "$url" ]; then
+              echo "::warning::GraphQL mutation returned no URL for: ${disc_title}"
+              echo "$result" >&2
+              return 1
+            fi
+
+            echo "CREATED: ${disc_title} -> ${url}"
             sleep 2
           }
 

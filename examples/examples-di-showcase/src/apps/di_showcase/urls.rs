@@ -1,7 +1,7 @@
 //! URL routing for di_showcase app
 
-use reinhardt::url_patterns;
 use reinhardt::ServerRouter;
+use reinhardt::url_patterns;
 
 use crate::apps::di_showcase::views;
 

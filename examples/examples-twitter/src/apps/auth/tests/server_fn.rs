@@ -97,16 +97,20 @@ fn make_request(path: &str, body: serde_json::Value, session_id: Option<&str>) -
 
 /// Extract session cookie value from response Set-Cookie headers.
 fn extract_session_cookie(response: &reinhardt::Response) -> Option<String> {
-	response.headers.get_all("set-cookie").iter().find_map(|val| {
-		let s = val.to_str().ok()?;
-		let prefix = format!("{}=", SESSION_COOKIE_NAME);
-		if s.starts_with(&prefix) {
-			let after = &s[prefix.len()..];
-			Some(after.split(';').next()?.to_string())
-		} else {
-			None
-		}
-	})
+	response
+		.headers
+		.get_all("set-cookie")
+		.iter()
+		.find_map(|val| {
+			let s = val.to_str().ok()?;
+			let prefix = format!("{}=", SESSION_COOKIE_NAME);
+			if s.starts_with(&prefix) {
+				let after = &s[prefix.len()..];
+				Some(after.split(';').next()?.to_string())
+			} else {
+				None
+			}
+		})
 }
 
 /// Parse a successful response body as `T`.
@@ -299,11 +303,7 @@ async fn test_current_user_authenticated(#[future] twitter_db_pool: (PgPool, Str
 	store.save(session);
 
 	// Act
-	let request = make_request(
-		"/api/server_fn/current_user",
-		json!({}),
-		Some(&session_id),
-	);
+	let request = make_request("/api/server_fn/current_user", json!({}), Some(&session_id));
 	let response = router
 		.handle(request)
 		.await
@@ -340,11 +340,7 @@ async fn test_current_user_unauthenticated(#[future] twitter_db_pool: (PgPool, S
 	store.save(session);
 
 	// Act
-	let request = make_request(
-		"/api/server_fn/current_user",
-		json!({}),
-		Some(&session_id),
-	);
+	let request = make_request("/api/server_fn/current_user", json!({}), Some(&session_id));
 	let response = router
 		.handle(request)
 		.await
@@ -393,11 +389,7 @@ async fn test_logout_server_fn(#[future] twitter_db_pool: (PgPool, String)) {
 	);
 
 	// Act
-	let request = make_request(
-		"/api/server_fn/logout",
-		json!({}),
-		Some(&session_id),
-	);
+	let request = make_request("/api/server_fn/logout", json!({}), Some(&session_id));
 	let response = router
 		.handle(request)
 		.await
@@ -504,8 +496,8 @@ async fn test_auth_flow_login_then_current_user(#[future] twitter_db_pool: (PgPo
 	// Step 2: current_user with the login session cookie.
 	// The login handler stores user_id in the new session and sets a Set-Cookie
 	// header. Extract the session ID from the response cookie.
-	let current_session_id = extract_session_cookie(&login_response)
-		.expect("Login response should set session cookie");
+	let current_session_id =
+		extract_session_cookie(&login_response).expect("Login response should set session cookie");
 	let post_login_session = store
 		.get(&current_session_id)
 		.expect("Post-login session should exist in store");

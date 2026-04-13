@@ -8,8 +8,8 @@
 //! - Default: Function-based views
 //! - USE_VIEWSET=1: ViewSet-based views
 
-use reinhardt::url_patterns;
 use reinhardt::ServerRouter;
+use reinhardt::url_patterns;
 
 use super::views;
 

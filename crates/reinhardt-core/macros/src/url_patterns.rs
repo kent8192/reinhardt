@@ -132,10 +132,7 @@ fn build_meta_reexport(path: &TokenStream) -> TokenStream {
 /// Optionally accepts an app label string: `#[url_patterns("users")]`.
 /// When provided, the returned router is wrapped with `.with_namespace("users")`
 /// to enable per-app route name namespacing (Issue #3526).
-pub(crate) fn url_patterns_impl(
-	args: TokenStream,
-	input: TokenStream,
-) -> syn::Result<TokenStream> {
+pub(crate) fn url_patterns_impl(args: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
 	let func: ItemFn = parse2(input)?;
 	let endpoint_paths = extract_endpoint_paths(&func);
 
@@ -291,8 +288,7 @@ mod tests {
 	fn build_meta_reexport_relative_path() {
 		let path: TokenStream = quote! { views::login };
 		let result = build_meta_reexport(&path);
-		let expected =
-			"super :: views :: __url_resolver_login :: __url_resolver_meta_login";
+		let expected = "super :: views :: __url_resolver_login :: __url_resolver_meta_login";
 		assert_eq!(result.to_string(), expected);
 	}
 
@@ -300,8 +296,7 @@ mod tests {
 	fn build_meta_reexport_crate_path() {
 		let path: TokenStream = quote! { crate::views::login };
 		let result = build_meta_reexport(&path);
-		let expected =
-			"crate :: views :: __url_resolver_login :: __url_resolver_meta_login";
+		let expected = "crate :: views :: __url_resolver_login :: __url_resolver_meta_login";
 		assert_eq!(result.to_string(), expected);
 	}
 

@@ -5,6 +5,9 @@
 /// - `to_pascal_case_with_suffix("users", "Urls")` → `"UsersUrls"`
 /// - `to_pascal_case_with_suffix("blog_posts", "Urls")` → `"BlogPostsUrls"`
 /// - `to_pascal_case_with_suffix("auth_v2", "Urls")` → `"AuthV2Urls"`
+// allow(dead_code): Available for proc-macro-level PascalCase conversion
+// where the paste crate cannot be used.
+#[allow(dead_code)]
 pub(crate) fn to_pascal_case_with_suffix(name: &str, suffix: &str) -> String {
 	let mut result = String::new();
 	for segment in name.split('_') {

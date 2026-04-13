@@ -361,11 +361,7 @@ impl UrlReverser {
 	/// ```
 	pub fn reverse(&self, name: &str, params: &HashMap<String, String>) -> ReverseResult<String> {
 		// Resolve alias to canonical name if one exists
-		let resolved_name = self
-			.aliases
-			.get(name)
-			.map(|s| s.as_str())
-			.unwrap_or(name);
+		let resolved_name = self.aliases.get(name).map(|s| s.as_str()).unwrap_or(name);
 
 		let route = self
 			.routes
@@ -456,7 +452,8 @@ impl UrlReverser {
 	/// The canonical target is resolved lazily — if the canonical route does
 	/// not exist at the time of `reverse()`, the lookup returns `NotFound`.
 	pub fn add_name_alias(&mut self, alias: &str, canonical: &str) {
-		self.aliases.insert(alias.to_string(), canonical.to_string());
+		self.aliases
+			.insert(alias.to_string(), canonical.to_string());
 	}
 }
 

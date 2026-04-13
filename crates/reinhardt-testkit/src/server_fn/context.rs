@@ -306,7 +306,7 @@ impl ServerFnTestContext {
 	///     .done()
 	///     .build();
 	/// ```
-	#[cfg(feature = "auth-testing")]
+	#[cfg(native)]
 	pub fn auth(self) -> crate::auth::ServerFnAuthBuilder {
 		crate::auth::ServerFnAuthBuilder::new(self)
 	}

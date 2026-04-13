@@ -24,13 +24,13 @@ pub trait SecondaryAuth: Send + Sync {
 ///
 /// When applied, sets the `X-MFA-Code` header with either an auto-generated
 /// valid TOTP code or a manually specified code.
-#[cfg(feature = "auth-testing")]
+#[cfg(native)]
 pub struct TotpSecondaryAuth {
 	manager: reinhardt_auth::mfa::MFAAuthentication,
 	code_override: Option<String>,
 }
 
-#[cfg(feature = "auth-testing")]
+#[cfg(native)]
 impl TotpSecondaryAuth {
 	/// Create a new TOTP secondary auth using the given MFA manager.
 	pub fn new(manager: reinhardt_auth::mfa::MFAAuthentication) -> Self {
@@ -60,7 +60,7 @@ impl TotpSecondaryAuth {
 	}
 }
 
-#[cfg(feature = "auth-testing")]
+#[cfg(native)]
 #[async_trait]
 impl SecondaryAuth for TotpSecondaryAuth {
 	async fn apply_to_client(
@@ -90,7 +90,7 @@ impl SecondaryAuth for TotpSecondaryAuth {
 
 /// Generate a TOTP code from a base32-encoded secret using the same
 /// algorithm as `MFAAuthentication` (SHA-256, 6 digits, 30s window).
-#[cfg(feature = "auth-testing")]
+#[cfg(native)]
 fn generate_totp_code(secret: &str) -> Result<String, String> {
 	use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -109,7 +109,7 @@ fn generate_totp_code(secret: &str) -> Result<String, String> {
 }
 
 /// Minimal base32 decoder (RFC 4648, no padding required).
-#[cfg(feature = "auth-testing")]
+#[cfg(native)]
 fn base32_decode(input: &str) -> Option<Vec<u8>> {
 	const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 	let mut bits = 0u64;
@@ -136,7 +136,7 @@ fn base32_decode(input: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-	#[cfg(feature = "auth-testing")]
+	#[cfg(native)]
 	mod totp_tests {
 		use super::super::*;
 		use rstest::*;

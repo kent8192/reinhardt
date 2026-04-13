@@ -6,14 +6,15 @@
 //! # Architecture
 //!
 //! - **[`ForceLoginUser`]**: Trait for extracting session identity from any user type.
-//!   Blanket-implemented for all `AuthIdentity` types (requires `auth-testing` feature).
+//!   Blanket-implemented for all `AuthIdentity` types (available on native targets).
 //! - **[`SessionIdentity`]**: Type-erased identity struct matching `CookieSessionAuthMiddleware` fields.
 //! - **[`AuthBuilder`]**: Entry point returned by `APIClient::auth()`.
 //! - **[`SecondaryAuth`]**: Open trait for secondary auth layers (MFA, PassKey, etc.).
 //!
-//! # Feature Flags
+//! # Platform Support
 //!
-//! - `auth-testing`: Enables session/JWT builders, TOTP secondary auth, and `AuthIdentity` blanket impl.
+//! Session/JWT builders, TOTP secondary auth, and `AuthIdentity` blanket impl are
+//! available unconditionally on native targets (non-wasm).
 
 mod error;
 mod identity;
@@ -25,15 +26,15 @@ pub use identity::SessionIdentity;
 pub use secondary::SecondaryAuth;
 pub use traits::ForceLoginUser;
 
-#[cfg(feature = "auth-testing")]
+#[cfg(native)]
 pub use secondary::TotpSecondaryAuth;
 
-#[cfg(feature = "auth-testing")]
+#[cfg(native)]
 mod builder;
-#[cfg(feature = "auth-testing")]
+#[cfg(native)]
 pub use builder::{AuthBuilder, JwtAuthBuilder, JwtTestConfig, SessionAuthBuilder};
 
-#[cfg(feature = "auth-testing")]
+#[cfg(native)]
 mod server_fn_builder;
-#[cfg(feature = "auth-testing")]
+#[cfg(native)]
 pub use server_fn_builder::ServerFnAuthBuilder;

@@ -523,7 +523,7 @@ impl APIClient {
 	///     .with_staff(true)
 	///     .apply().await?;
 	/// ```
-	#[cfg(feature = "auth-testing")]
+	#[cfg(native)]
 	pub fn auth(&self) -> crate::auth::AuthBuilder<'_> {
 		crate::auth::AuthBuilder::new(self)
 	}

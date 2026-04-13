@@ -540,7 +540,15 @@ pub(crate) fn installed_apps_impl(input: TokenStream) -> Result<TokenStream> {
 	// This replaces the __reinhardt_for_each_app #[macro_export] callback pattern
 	// that triggers macro_expanded_macro_exports_accessed_by_absolute_paths on Rust 1.94+.
 	let label_strings: Vec<String> = labels.iter().map(|l| l.to_string()).collect();
-	crate::macro_state::write_installed_apps(&label_strings);
+	if let Err(err) = crate::macro_state::write_installed_apps(&label_strings) {
+		return Err(syn::Error::new(
+			proc_macro2::Span::call_site(),
+			format!(
+				"failed to persist installed_apps! macro state: {err}. \
+				 Ensure the build directory is writable and try again."
+			),
+		));
+	}
 
 	// Generate enum variants for each app
 	// Convert labels to CamelCase for enum variants

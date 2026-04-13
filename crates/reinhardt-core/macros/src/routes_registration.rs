@@ -382,7 +382,10 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 	// This replaces the __reinhardt_for_each_app callback pattern that triggers
 	// macro_expanded_macro_exports_accessed_by_absolute_paths on Rust 1.94+.
 	// Fixes #3639.
-	let url_prelude_code = if standalone {
+	let url_prelude_code = if standalone || crate::macro_state::is_wasm_target() {
+		// Standalone mode: projects that don't use installed_apps!.
+		// WASM target: URL resolvers are native-only; skip reading the state file
+		// to avoid failures when installed_apps! hasn't written it for WASM builds.
 		quote! {}
 	} else {
 		let app_labels = match crate::macro_state::read_installed_apps() {
@@ -401,8 +404,19 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 		let app_idents: Vec<proc_macro2::Ident> = app_labels
 			.iter()
 			.filter(|s| !s.is_empty())
-			.map(|s| proc_macro2::Ident::new(s, proc_macro2::Span::call_site()))
-			.collect();
+			.map(|s| {
+				syn::parse_str::<syn::Ident>(s)
+					.map(Into::into)
+					.map_err(|_| {
+						syn::Error::new(
+							proc_macro2::Span::call_site(),
+							format!(
+								"Invalid installed app label `{s}`: expected a valid Rust identifier"
+							),
+						)
+					})
+			})
+			.collect::<Result<Vec<_>>>()?;
 
 		if app_idents.is_empty() {
 			quote! {

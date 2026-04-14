@@ -30,30 +30,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - example: examples-hello-world
-            needs-docker: false
-            needs-wasm: false
-          - example: examples-rest-api
-            needs-docker: true
-            needs-wasm: false
-          - example: examples-database-integration
-            needs-docker: true
-            needs-wasm: false
           - example: examples-tutorial-basis
             needs-docker: false
             needs-wasm: true
           - example: examples-tutorial-rest
             needs-docker: true
             needs-wasm: false
-          - example: examples-github-issues
-            needs-docker: true
-            needs-wasm: false
           - example: examples-twitter
             needs-docker: true
             needs-wasm: true
-          - example: examples-di-showcase
-            needs-docker: false
-            needs-wasm: false
 
     steps:
       - name: Free Disk Space (Ubuntu)

@@ -30,12 +30,10 @@ pub fn get_settings() -> ProjectSettings {
 
 	SettingsBuilder::new()
 		.profile(Profile::parse(&profile_str))
-		.add_source(
-			DefaultSource::new().with_value(
-				"core.base_dir",
-				json::Value::String(base_dir.to_string_lossy().to_string()),
-			),
-		)
+		.add_source(DefaultSource::new().with_value(
+			"core.base_dir",
+			json::Value::String(base_dir.to_string_lossy().to_string()),
+		))
 		.add_source(LowPriorityEnvSource::new().with_prefix("REINHARDT_"))
 		.add_source(TomlFileSource::new(settings_dir.join("base.toml")))
 		.add_source(TomlFileSource::new(

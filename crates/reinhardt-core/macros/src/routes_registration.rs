@@ -517,9 +517,12 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 						};
 					}
 
-					// Invoke __for_each_url_resolver to populate methods
+					// Invoke __for_each_url_resolver to populate methods.
+					// Pass the absolute path to `url_resolvers` as `$base`
+					// so that metadata macros resolve correctly at the call site.
 					crate::apps::#app::urls::url_resolvers::__for_each_url_resolver!(
-						#gen_method_macro, #app
+						#gen_method_macro, #app,
+						crate::apps::#app::urls::url_resolvers
 					);
 
 					// Accessor method on ResolvedUrls

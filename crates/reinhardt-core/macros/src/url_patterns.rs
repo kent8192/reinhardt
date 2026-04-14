@@ -3,13 +3,33 @@ use quote::quote;
 use syn::{ItemFn, parse2};
 
 /// Flatten a function body into a flat token stream for pattern scanning.
+///
+/// Recursively descends into `Group` tokens (braces, parentheses, brackets)
+/// so that `.endpoint()`, `.viewset()`, and `.mount()` calls inside control
+/// flow blocks (`if`, `match`, `for`, etc.) are detected.
 fn flatten_body(func: &ItemFn) -> Vec<proc_macro2::TokenTree> {
+	fn recurse(
+		tokens: impl IntoIterator<Item = proc_macro2::TokenTree>,
+	) -> Vec<proc_macro2::TokenTree> {
+		let mut result = Vec::new();
+		for tt in tokens {
+			match &tt {
+				proc_macro2::TokenTree::Group(group) => {
+					result.push(tt.clone());
+					result.extend(recurse(group.stream()));
+				}
+				_ => result.push(tt),
+			}
+		}
+		result
+	}
+
 	func.block
 		.stmts
 		.iter()
 		.flat_map(|stmt| {
 			let tokens: TokenStream = quote! { #stmt };
-			tokens.into_iter().collect::<Vec<_>>()
+			recurse(tokens)
 		})
 		.collect()
 }
@@ -196,47 +216,18 @@ fn build_resolver_reexport(path: &TokenStream) -> TokenStream {
 	}
 }
 
-/// Build a path to a URL resolver metadata macro from an endpoint path.
+/// Extract the metadata macro identifier from an endpoint path.
 ///
-/// Given `views::login`, generates:
-/// `super::views::__url_resolver_login::__url_resolver_meta_login`
-fn build_meta_reexport(path: &TokenStream) -> Option<TokenStream> {
+/// Given `views::login`, returns the identifier `__url_resolver_meta_login`.
+/// The caller is responsible for qualifying the path (via `$base` in the
+/// `__for_each_url_resolver` macro).
+fn build_meta_ident(path: &TokenStream) -> Option<syn::Ident> {
 	let parsed: syn::Path = syn::parse2(path.clone()).ok()?;
-
-	if parsed.segments.is_empty() {
-		return None;
-	}
-
-	let last_segment = &parsed.segments.last().unwrap().ident;
-	let resolver_mod = syn::Ident::new(
-		&format!("__url_resolver_{last_segment}"),
-		last_segment.span(),
-	);
-	let meta_macro = syn::Ident::new(
+	let last_segment = &parsed.segments.last()?.ident;
+	Some(syn::Ident::new(
 		&format!("__url_resolver_meta_{last_segment}"),
 		last_segment.span(),
-	);
-
-	let first_segment = parsed.segments.first().unwrap().ident.to_string();
-	let is_absolute =
-		first_segment == "crate" || first_segment == "super" || parsed.leading_colon.is_some();
-
-	let parent_segments: Vec<&syn::Ident> = parsed
-		.segments
-		.iter()
-		.take(parsed.segments.len() - 1)
-		.map(|s| &s.ident)
-		.collect();
-
-	if is_absolute {
-		Some(quote! {
-			#(#parent_segments ::)* #resolver_mod :: #meta_macro
-		})
-	} else {
-		Some(quote! {
-			super :: #(#parent_segments ::)* #resolver_mod :: #meta_macro
-		})
-	}
+	))
 }
 
 /// Build a re-export statement for a viewset's URL resolver bundle module.
@@ -344,10 +335,7 @@ pub(crate) fn url_patterns_impl(args: TokenStream, input: TokenStream) -> syn::R
 	let endpoint_re_exports = endpoint_paths.iter().map(build_resolver_reexport);
 	let viewset_re_exports = viewset_calls.iter().map(build_viewset_reexport);
 	let mount_re_exports = mount_calls.iter().map(build_mount_reexport);
-	let meta_paths: Vec<TokenStream> = endpoint_paths
-		.iter()
-		.filter_map(build_meta_reexport)
-		.collect();
+	let meta_idents: Vec<syn::Ident> = endpoint_paths.iter().filter_map(build_meta_ident).collect();
 
 	// Parse optional app label: #[url_patterns("users")]
 	let func_output = if !args.is_empty() {
@@ -390,11 +378,13 @@ pub(crate) fn url_patterns_impl(args: TokenStream, input: TokenStream) -> syn::R
 
 			/// Invoke a callback macro for each URL resolver in this app.
 			/// Used by the `#[routes]` macro to build per-app resolver structs.
+			/// `$base` must be the absolute path to this `url_resolvers` module
+			/// so that the metadata macros resolve at the call site.
 			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			macro_rules! __for_each_url_resolver {
-				($callback:ident, $app:ident) => {
+				($callback:ident, $app:ident, $base:path) => {
 					#(
-						#meta_paths ! ($callback, $app);
+						$base :: #meta_idents ! ($callback, $app);
 					)*
 				};
 			}
@@ -504,22 +494,27 @@ mod tests {
 		assert_eq!(result.to_string(), expected);
 	}
 
-	// --- Meta reexport tests (Issue #3526) ---
+	// --- Meta ident tests (Issue #3647) ---
 
 	#[test]
-	fn build_meta_reexport_relative_path() {
+	fn build_meta_ident_relative_path() {
 		let path: TokenStream = quote! { views::login };
-		let result = build_meta_reexport(&path).unwrap();
-		let expected = "super :: views :: __url_resolver_login :: __url_resolver_meta_login";
-		assert_eq!(result.to_string(), expected);
+		let result = build_meta_ident(&path).unwrap();
+		assert_eq!(result.to_string(), "__url_resolver_meta_login");
 	}
 
 	#[test]
-	fn build_meta_reexport_crate_path() {
+	fn build_meta_ident_crate_path() {
 		let path: TokenStream = quote! { crate::views::login };
-		let result = build_meta_reexport(&path).unwrap();
-		let expected = "crate :: views :: __url_resolver_login :: __url_resolver_meta_login";
-		assert_eq!(result.to_string(), expected);
+		let result = build_meta_ident(&path).unwrap();
+		assert_eq!(result.to_string(), "__url_resolver_meta_login");
+	}
+
+	#[test]
+	fn build_meta_ident_deeply_nested() {
+		let path: TokenStream = quote! { api::v1::views::login };
+		let result = build_meta_ident(&path).unwrap();
+		assert_eq!(result.to_string(), "__url_resolver_meta_login");
 	}
 
 	#[test]
@@ -540,12 +535,16 @@ mod tests {
 			"missing __for_each_url_resolver macro"
 		);
 		assert!(
+			output.contains("$base"),
+			"missing $base parameter in __for_each_url_resolver"
+		);
+		assert!(
 			output.contains("__url_resolver_meta_login"),
-			"missing login meta path"
+			"missing login meta ident"
 		);
 		assert!(
 			output.contains("__url_resolver_meta_register"),
-			"missing register meta path"
+			"missing register meta ident"
 		);
 	}
 
@@ -732,5 +731,75 @@ mod tests {
 		assert_eq!(extract_endpoint_paths(&func).len(), 1);
 		assert_eq!(extract_viewset_calls(&func).len(), 1);
 		assert_eq!(extract_mount_calls(&func).len(), 1);
+	}
+
+	// === Nested control flow extraction (Issue #3648) ===
+
+	#[test]
+	fn extract_endpoints_inside_if_else() {
+		let func: ItemFn = parse2(quote! {
+			pub fn url_patterns() -> ServerRouter {
+				if std::env::var("USE_VIEWSET").is_ok() {
+					ServerRouter::new()
+						.viewset("/snippets-viewset", views::viewset())
+				} else {
+					ServerRouter::new()
+						.endpoint(views::list)
+						.endpoint(views::create)
+						.endpoint(views::retrieve)
+				}
+			}
+		})
+		.unwrap();
+
+		let endpoints = extract_endpoint_paths(&func);
+		assert_eq!(endpoints.len(), 3);
+		assert_eq!(endpoints[0].to_string(), "views :: list");
+		assert_eq!(endpoints[1].to_string(), "views :: create");
+		assert_eq!(endpoints[2].to_string(), "views :: retrieve");
+
+		let viewsets = extract_viewset_calls(&func);
+		assert_eq!(viewsets.len(), 1);
+	}
+
+	#[test]
+	fn extract_endpoints_inside_match() {
+		let func: ItemFn = parse2(quote! {
+			pub fn url_patterns() -> ServerRouter {
+				match mode {
+					Mode::Full => {
+						ServerRouter::new()
+							.endpoint(views::list)
+							.endpoint(views::create)
+					}
+					Mode::Readonly => {
+						ServerRouter::new()
+							.endpoint(views::list)
+					}
+				}
+			}
+		})
+		.unwrap();
+
+		let endpoints = extract_endpoint_paths(&func);
+		assert_eq!(endpoints.len(), 3);
+	}
+
+	#[test]
+	fn extract_mounts_inside_control_flow() {
+		let func: ItemFn = parse2(quote! {
+			pub fn url_patterns() -> ServerRouter {
+				if enabled {
+					ServerRouter::new()
+						.mount("/api/", crate::apps::api::urls::url_patterns())
+				} else {
+					ServerRouter::new()
+				}
+			}
+		})
+		.unwrap();
+
+		let mounts = extract_mount_calls(&func);
+		assert_eq!(mounts.len(), 1);
 	}
 }

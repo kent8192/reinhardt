@@ -4,17 +4,17 @@
 //! These types are serializable and can be sent between the WASM client
 //! and the Rust server via server functions.
 
-#[cfg(server)]
+#[cfg(native)]
 use reinhardt::Validate;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // OpenAPI schema generation (server-side only)
-#[cfg(server)]
+#[cfg(native)]
 use reinhardt::rest::openapi::{Schema, ToSchema};
 
 /// User information (shared between client and server)
-#[cfg_attr(server, derive(Schema))]
+#[cfg_attr(native, derive(Schema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserInfo {
 	pub id: Uuid,
@@ -24,7 +24,7 @@ pub struct UserInfo {
 }
 
 /// Conversion from server-side User model to shared UserInfo
-#[cfg(server)]
+#[cfg(native)]
 impl From<crate::apps::auth::models::User> for UserInfo {
 	fn from(user: crate::apps::auth::models::User) -> Self {
 		UserInfo {
@@ -37,20 +37,20 @@ impl From<crate::apps::auth::models::User> for UserInfo {
 }
 
 /// Login request
-#[cfg_attr(server, derive(Schema))]
-#[cfg_attr(server, derive(Validate))]
+#[cfg_attr(native, derive(Schema))]
+#[cfg_attr(native, derive(Validate))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginRequest {
-	#[cfg_attr(server, validate(email(message = "Invalid email address")))]
+	#[cfg_attr(native, validate(email(message = "Invalid email address")))]
 	pub email: String,
 
-	#[cfg_attr(server, validate(length(min = 1, message = "Password is required")))]
+	#[cfg_attr(native, validate(length(min = 1, message = "Password is required")))]
 	pub password: String,
 }
 
 /// Register request
-#[cfg_attr(server, derive(Schema))]
-#[cfg_attr(server, derive(Validate))]
+#[cfg_attr(native, derive(Schema))]
+#[cfg_attr(native, derive(Validate))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterRequest {
 	#[cfg_attr(
@@ -63,7 +63,7 @@ pub struct RegisterRequest {
 	)]
 	pub username: String,
 
-	#[cfg_attr(server, validate(email(message = "Invalid email address")))]
+	#[cfg_attr(native, validate(email(message = "Invalid email address")))]
 	pub email: String,
 
 	#[cfg_attr(
@@ -96,7 +96,7 @@ impl RegisterRequest {
 ///
 /// Used for both client-side authentication state and server-side
 /// session validation in tests.
-#[cfg_attr(server, derive(Schema))]
+#[cfg_attr(native, derive(Schema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionData {
 	/// The authenticated user's ID

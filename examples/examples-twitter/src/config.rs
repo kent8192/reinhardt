@@ -1,12 +1,12 @@
 //! Configuration module for examples-twitter
 
-#[cfg(server)]
+#[cfg(native)]
 pub mod admin;
 pub mod apps;
-#[cfg(server)]
+#[cfg(native)]
 pub mod middleware;
-#[cfg(server)]
+#[cfg(native)]
 pub mod settings;
 pub mod urls;
-#[cfg(server)]
+#[cfg(native)]
 pub mod wasm;

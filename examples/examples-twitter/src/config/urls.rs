@@ -8,21 +8,21 @@
 //! `AdminDatabase` is lazily constructed from `DatabaseConnection` at first request.
 
 use reinhardt::UnifiedRouter;
-#[cfg(server)]
+#[cfg(native)]
 use reinhardt::admin::{admin_routes_with_di, admin_static_routes};
-#[cfg(server)]
+#[cfg(native)]
 use reinhardt::routes;
 
 // Import app URL modules
 use crate::apps::{auth, dm, profile, relationship, tweet};
-#[cfg(server)]
+#[cfg(native)]
 use crate::config::admin::configure_admin;
-#[cfg(server)]
+#[cfg(native)]
 use crate::config::middleware::{
 	create_cache_control_middleware, create_cors_middleware, create_security_middleware,
 	create_session_middleware, create_static_files_middleware,
 };
-#[cfg(server)]
+#[cfg(native)]
 use reinhardt::LoggingMiddleware;
 
 /// Build URL patterns for the application
@@ -48,10 +48,10 @@ use reinhardt::LoggingMiddleware;
 ///
 /// Each app's `routes()` function returns a `UnifiedRouter` with both
 /// server and client routes defined.
-#[cfg_attr(server, routes(standalone))]
+#[cfg_attr(native, routes)]
 pub fn routes() -> UnifiedRouter {
 	// Configure admin site (registration only, no DB needed yet)
-	#[cfg(server)]
+	#[cfg(native)]
 	let admin_site = {
 		let site = configure_admin();
 		std::sync::Arc::new(site)
@@ -65,9 +65,9 @@ pub fn routes() -> UnifiedRouter {
 		.mount_unified("/", relationship::urls::routes())
 		.mount_unified("/", dm::urls::routes());
 	// Mount admin panel routes and static assets with deferred DI registration (server-only)
-	#[cfg(server)]
+	#[cfg(native)]
 	let router = {
-		#[cfg(server)]
+		#[cfg(native)]
 		let (admin_router, admin_di) = admin_routes_with_di(admin_site);
 		#[cfg(not(server))]
 		let (admin_router, admin_di) = admin_routes_with_di(std::sync::Arc::new(
@@ -79,7 +79,7 @@ pub fn routes() -> UnifiedRouter {
 			.with_di_registrations(admin_di)
 	};
 	// Apply middleware stack (server-only)
-	#[cfg(server)]
+	#[cfg(native)]
 	let router = router
 		.with_middleware(LoggingMiddleware::new())
 		.with_middleware(create_security_middleware())

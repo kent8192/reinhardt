@@ -3,19 +3,19 @@
 //! These types are serializable and can be sent between the WASM client
 //! and the Rust server via server functions.
 
-#[cfg(server)]
+#[cfg(native)]
 use reinhardt::Validate;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // OpenAPI schema generation (server-side only)
-#[cfg(server)]
+#[cfg(native)]
 use reinhardt::rest::ToSchema;
-#[cfg(server)]
+#[cfg(native)]
 use reinhardt::rest::openapi::Schema;
 
 /// Profile response
-#[cfg_attr(server, derive(Schema))]
+#[cfg_attr(native, derive(Schema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileResponse {
 	pub user_id: Uuid,
@@ -26,7 +26,7 @@ pub struct ProfileResponse {
 }
 
 /// Conversion from server-side Profile model to shared ProfileResponse
-#[cfg(server)]
+#[cfg(native)]
 impl From<crate::apps::profile::models::Profile> for ProfileResponse {
 	fn from(profile: crate::apps::profile::models::Profile) -> Self {
 		ProfileResponse {
@@ -40,8 +40,8 @@ impl From<crate::apps::profile::models::Profile> for ProfileResponse {
 }
 
 /// Update profile request
-#[cfg_attr(server, derive(Schema))]
-#[cfg_attr(server, derive(Validate))]
+#[cfg_attr(native, derive(Schema))]
+#[cfg_attr(native, derive(Validate))]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UpdateProfileRequest {
 	#[cfg_attr(
@@ -50,7 +50,7 @@ pub struct UpdateProfileRequest {
 	)]
 	pub bio: Option<String>,
 
-	#[cfg_attr(server, validate(url(message = "Invalid avatar URL")))]
+	#[cfg_attr(native, validate(url(message = "Invalid avatar URL")))]
 	pub avatar_url: Option<String>,
 
 	#[cfg_attr(
@@ -59,6 +59,6 @@ pub struct UpdateProfileRequest {
 	)]
 	pub location: Option<String>,
 
-	#[cfg_attr(server, validate(url(message = "Invalid website URL")))]
+	#[cfg_attr(native, validate(url(message = "Invalid website URL")))]
 	pub website: Option<String>,
 }

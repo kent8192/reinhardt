@@ -1,17 +1,24 @@
 //! Tweet application module
 
-#[cfg(server)]
+#[cfg(native)]
+use reinhardt::app_config;
+
+#[cfg(native)]
 pub mod admin;
-#[cfg(server)]
+#[cfg(native)]
 pub mod models;
 pub mod shared;
 pub mod urls;
 
-#[cfg(client)]
+#[cfg(wasm)]
 pub mod client;
 
-#[cfg(server)]
+#[cfg(native)]
 pub mod server;
 
 #[cfg(test)]
 pub mod tests;
+
+#[cfg(native)]
+#[app_config(name = "tweet", label = "tweet", verbose_name = "Tweets")]
+pub struct TweetConfig;

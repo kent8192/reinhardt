@@ -4,15 +4,15 @@
 
 use reinhardt::UnifiedRouter;
 
-#[cfg(server)]
+#[cfg(native)]
 use reinhardt::pages::server_fn::ServerFnRouterExt;
 
-#[cfg(server)]
+#[cfg(native)]
 use crate::apps::dm::shared::server_fn::{
 	create_room, get_room, list_messages, list_rooms, mark_as_read, send_message,
 };
 
-#[cfg(client)]
+#[cfg(wasm)]
 use {crate::core::client::pages::dm_chat_page, reinhardt::ClientPath};
 
 /// Unified routes for dm application (client + server)
@@ -23,7 +23,7 @@ pub fn routes() -> UnifiedRouter {
 	UnifiedRouter::new()
 		// Server-side routes (server functions)
 		.server(|s| {
-			#[cfg(server)]
+			#[cfg(native)]
 			{
 				s.server_fn(create_room::marker)
 					.server_fn(list_rooms::marker)
@@ -32,19 +32,19 @@ pub fn routes() -> UnifiedRouter {
 					.server_fn(list_messages::marker)
 					.server_fn(mark_as_read::marker)
 			}
-			#[cfg(client)]
+			#[cfg(wasm)]
 			s
 		})
 		// Client-side routes (SPA)
 		.client(|c| {
-			#[cfg(client)]
+			#[cfg(wasm)]
 			{
 				c.route_path(
 					"/dm/{room_id}",
 					|ClientPath(room_id): ClientPath<String>| dm_chat_page(room_id),
 				)
 			}
-			#[cfg(server)]
+			#[cfg(native)]
 			c
 		})
 }

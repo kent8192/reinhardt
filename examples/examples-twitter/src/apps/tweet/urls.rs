@@ -4,13 +4,13 @@
 
 use reinhardt::UnifiedRouter;
 
-#[cfg(server)]
+#[cfg(native)]
 use reinhardt::pages::server_fn::ServerFnRouterExt;
 
-#[cfg(server)]
+#[cfg(native)]
 use crate::apps::tweet::shared::server_fn::{create_tweet, delete_tweet, list_tweets};
 
-#[cfg(client)]
+#[cfg(wasm)]
 use crate::core::client::pages::{home_page, timeline_page};
 
 /// Unified routes for tweet application (client + server)
@@ -18,23 +18,23 @@ pub fn routes() -> UnifiedRouter {
 	UnifiedRouter::new()
 		// Server-side routes (server functions)
 		.server(|s| {
-			#[cfg(server)]
+			#[cfg(native)]
 			{
 				s.server_fn(create_tweet::marker)
 					.server_fn(list_tweets::marker)
 					.server_fn(delete_tweet::marker)
 			}
-			#[cfg(client)]
+			#[cfg(wasm)]
 			s
 		})
 		// Client-side routes (SPA)
 		.client(|c| {
-			#[cfg(client)]
+			#[cfg(wasm)]
 			{
 				c.route("/", || home_page())
 					.route("/timeline", || timeline_page())
 			}
-			#[cfg(server)]
+			#[cfg(native)]
 			c
 		})
 }

@@ -4,13 +4,13 @@
 
 use reinhardt::UnifiedRouter;
 
-#[cfg(server)]
+#[cfg(native)]
 use reinhardt::pages::server_fn::ServerFnRouterExt;
 
-#[cfg(server)]
+#[cfg(native)]
 use crate::apps::profile::shared::server_fn::{fetch_profile, update_profile, update_profile_form};
 
-#[cfg(client)]
+#[cfg(wasm)]
 use {
 	crate::core::client::pages::{profile_edit_page, profile_page},
 	reinhardt::ClientPath,
@@ -22,18 +22,18 @@ pub fn routes() -> UnifiedRouter {
 	UnifiedRouter::new()
 		// Server-side routes (server functions)
 		.server(|s| {
-			#[cfg(server)]
+			#[cfg(native)]
 			{
 				s.server_fn(fetch_profile::marker)
 					.server_fn(update_profile::marker)
 					.server_fn(update_profile_form::marker)
 			}
-			#[cfg(client)]
+			#[cfg(wasm)]
 			s
 		})
 		// Client-side routes (SPA) with typed path parameters
 		.client(|c| {
-			#[cfg(client)]
+			#[cfg(wasm)]
 			{
 				c.route_path(
 					"/profile/{user_id}/edit",
@@ -44,7 +44,7 @@ pub fn routes() -> UnifiedRouter {
 					|ClientPath(user_id): ClientPath<Uuid>| profile_page(user_id),
 				)
 			}
-			#[cfg(server)]
+			#[cfg(native)]
 			c
 		})
 }

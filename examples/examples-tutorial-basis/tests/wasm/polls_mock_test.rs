@@ -11,7 +11,7 @@
 //!
 //! **Run with**: `cargo make wasm-test`
 
-#![cfg(client)]
+#![cfg(wasm)]
 
 use wasm_bindgen_test::*;
 

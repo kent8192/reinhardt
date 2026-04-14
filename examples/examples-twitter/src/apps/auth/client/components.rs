@@ -13,7 +13,7 @@ use reinhardt::pages::form;
 use reinhardt::pages::page;
 use reinhardt::pages::reactive::Signal;
 
-#[cfg(client)]
+#[cfg(wasm)]
 use {
 	crate::apps::auth::client::state::set_current_user,
 	crate::apps::auth::shared::server_fn::{login, register},
@@ -40,7 +40,7 @@ pub fn login_form() -> Page {
 
 		// Success callback: set current user before redirect
 		on_success: |user_info| {
-			#[cfg(client)]
+			#[cfg(wasm)]
 			{
 				set_current_user(Some(user_info));
 			}

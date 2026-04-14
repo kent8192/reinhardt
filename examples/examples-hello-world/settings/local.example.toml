@@ -1,5 +1,0 @@
-# Local development settings
-# Copy to local.toml: cp local.example.toml local.toml
-[core]
-debug = true
-secret_key = "local-development-secret-key"

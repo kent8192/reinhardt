@@ -7,40 +7,34 @@ use reinhardt::pages::server_fn::{ServerFnError, server_fn};
 use uuid::Uuid;
 
 // Server-only imports
-#[cfg(server)]
+#[cfg(native)]
 use {
+	crate::apps::auth::models::User,
 	crate::apps::profile::models::Profile,
+	reinhardt::AuthUser,
 	reinhardt::DatabaseConnection,
 	reinhardt::Validate,
 	reinhardt::db::orm::{FilterOperator, FilterValue, Model},
-	reinhardt::middleware::session::SessionData,
 };
 
 /// Internal helper for profile update logic
-///
-/// Validates the request, authenticates via session, fetches the profile,
-/// applies updates, and saves to the database. Returns the updated `Profile`.
-#[cfg(server)]
+#[cfg(native)]
 async fn update_profile_internal(
 	request: &UpdateProfileRequest,
 	db: &DatabaseConnection,
-	session: &SessionData,
+	user: &User,
 ) -> std::result::Result<Profile, ServerFnError> {
 	// Validate request
 	request
 		.validate()
 		.map_err(|e| ServerFnError::server(400, format!("Validation failed: {}", e)))?;
 
-	let user_id = session
-		.get::<Uuid>("user_id")
-		.ok_or_else(|| ServerFnError::server(401, "Not authenticated"))?;
-
 	// Find existing profile
 	let mut profile = Profile::objects()
 		.filter(
 			Profile::field_user_id(),
 			FilterOperator::Eq,
-			FilterValue::String(user_id.to_string()),
+			FilterValue::String(user.id().to_string()),
 		)
 		.first()
 		.await
@@ -95,9 +89,9 @@ pub async fn fetch_profile(
 pub async fn update_profile(
 	request: UpdateProfileRequest,
 	#[inject] db: DatabaseConnection,
-	#[inject] session: SessionData,
+	#[inject] AuthUser(user): AuthUser<User>,
 ) -> std::result::Result<ProfileResponse, ServerFnError> {
-	let profile = update_profile_internal(&request, &db, &session).await?;
+	let profile = update_profile_internal(&request, &db, &user).await?;
 	Ok(ProfileResponse::from(profile))
 }
 
@@ -115,7 +109,7 @@ pub async fn update_profile_form(
 	location: String,
 	website: String,
 	#[inject] db: DatabaseConnection,
-	#[inject] session: SessionData,
+	#[inject] AuthUser(user): AuthUser<User>,
 ) -> std::result::Result<(), ServerFnError> {
 	let request = UpdateProfileRequest {
 		avatar_url: if avatar_url.is_empty() {
@@ -136,6 +130,6 @@ pub async fn update_profile_form(
 		},
 	};
 
-	update_profile_internal(&request, &db, &session).await?;
+	update_profile_internal(&request, &db, &user).await?;
 	Ok(())
 }

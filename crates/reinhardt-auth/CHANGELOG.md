@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.15...reinhardt-auth@v0.1.0-rc.16) - 2026-04-14
+
+### Added
+
+- *(auth)* add SuperuserInit trait and SuperuserCreator registry
+- *(auth)* auto-register SuperuserCreator via inventory for #[user(full = true)] + #[model] types
+- *(auth)* add Guard<P>, Public, All, Any, Not runtime types
+- *(auth)* add guard!() proc macro with winnow parser
+- migrate UUID generation from v4 to v7 across entire codebase
+
+### Documentation
+
+- *(auth)* add deprecation notice to standalone createsuperuser binary
+
+### Fixed
+
+- *(docs)* resolve broken intra-doc links and incorrect test assertion
+- *(auth)* resolve clippy needless_borrow in Guard Injectable
+- *(middleware)* convert errors to responses in security-critical middleware
+- *(auth)* use DiError::Authentication for unauthenticated user errors
+- *(auth)* add is_staff and is_superuser fields to JWT Claims
+
+### Maintenance
+
+- upgrade workspace dependencies to latest versions
+
+### Other
+
+- resolve conflict with main in createsuperuser error message
+
+### Security
+
+- keep UUID v4 for security-sensitive tokens
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.14...reinhardt-auth@v0.1.0-rc.15) - 2026-03-29
 
 ### Added

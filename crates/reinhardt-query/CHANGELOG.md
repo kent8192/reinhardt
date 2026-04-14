@@ -5,6 +5,23 @@ All notable changes to `reinhardt-query` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query@v0.1.0-rc.15...reinhardt-query@v0.1.0-rc.16) - 2026-04-14
+
+### Added
+
+- migrate UUID generation from v4 to v7 across entire codebase
+
+### Fixed
+
+- *(query,core)* replace approx_constant test values to avoid clippy deny
+- *(query)* resolve clippy warnings in tests
+- *(query)* move impl blocks before test modules in backend files
+- *(query)* use as_str() to avoid ambiguous to_string() with Iden trait
+
+### Styling
+
+- apply rustfmt to clippy-fixed files
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query@v0.1.0-rc.14...reinhardt-query@v0.1.0-rc.15) - 2026-03-29
 
 ### Fixed

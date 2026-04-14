@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.15...reinhardt-middleware@v0.1.0-rc.16) - 2026-04-14
+
+### Added
+
+- *(middleware)* add JwtAuthMiddleware for stateless token-based auth
+- *(middleware)* add RemoteUserMiddleware and PersistentRemoteUserMiddleware
+- *(middleware)* add LoginRequiredMiddleware for unauthenticated redirect
+- *(middleware)* wire module declarations, re-exports, and feature flags
+- *(session)* add AsyncSessionBackend trait for pluggable async session storage ([[#3369](https://github.com/kent8192/reinhardt-web/issues/3369)](https://github.com/kent8192/reinhardt-web/issues/3369))
+- *(middleware)* add RedisSessionBackend behind session-redis feature
+- *(middleware)* add CookieSessionAuthMiddleware for cookie-based session auth
+- *(middleware)* add OriginGuardMiddleware for CSRF protection
+- migrate UUID generation from v4 to v7 across entire codebase
+
+### Changed
+
+- *(middleware)* address Copilot review on [[#3413](https://github.com/kent8192/reinhardt-web/issues/3413)](https://github.com/kent8192/reinhardt-web/issues/3413)
+
+### Documentation
+
+- *(middleware)* fix intra-doc link errors for feature-gated types
+
+### Fixed
+
+- *(http)* convert errors to responses within middleware chain
+- *(middleware)* ensure security headers on error responses from inner handlers
+- *(middleware)* convert errors to responses in security-critical middleware
+- *(middleware)* convert errors to responses in functional middleware
+- *(middleware)* resolve docs.rs build and feature gate issues
+- *(auth)* add is_staff and is_superuser fields to JWT Claims
+- *(middleware)* extract is_staff from JWT claims instead of hardcoding false
+
+### Security
+
+- *(middleware)* reject empty user_id as unauthenticated
+- keep UUID v4 for security-sensitive tokens
+
+### Styling
+
+- fix clippy warnings and format issues
+- *(middleware)* apply cargo make auto-fix formatting
+
+### Testing
+
+- *(middleware)* add integration tests for error response headers
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.14...reinhardt-middleware@v0.1.0-rc.15) - 2026-03-29
 
 ### Added

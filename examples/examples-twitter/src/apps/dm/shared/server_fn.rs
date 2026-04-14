@@ -39,9 +39,10 @@ pub async fn create_room(
 	participant_ids: Vec<Uuid>,
 	name: Option<String>,
 	#[inject] db: DatabaseConnection,
-	#[inject] reinhardt::AuthUser(current_user): reinhardt::AuthUser<crate::apps::auth::models::User>,
+	#[inject] reinhardt::AuthUser(current_user): reinhardt::AuthUser<
+		crate::apps::auth::models::User,
+	>,
 ) -> std::result::Result<RoomInfo, ServerFnError> {
-
 	// Validate participants
 	if participant_ids.is_empty() {
 		return Err(ServerFnError::application(
@@ -161,9 +162,10 @@ pub async fn create_room(
 #[server_fn]
 pub async fn list_rooms(
 	#[inject] db: DatabaseConnection,
-	#[inject] reinhardt::AuthUser(current_user): reinhardt::AuthUser<crate::apps::auth::models::User>,
+	#[inject] reinhardt::AuthUser(current_user): reinhardt::AuthUser<
+		crate::apps::auth::models::User,
+	>,
 ) -> std::result::Result<Vec<RoomInfo>, ServerFnError> {
-
 	// Get rooms the user is a member of
 	let rooms_accessor =
 		ManyToManyAccessor::<User, DMRoom>::new(&current_user, "rooms", db.clone());
@@ -237,9 +239,10 @@ pub async fn list_rooms(
 pub async fn get_room(
 	room_id: Uuid,
 	#[inject] db: DatabaseConnection,
-	#[inject] reinhardt::AuthUser(current_user): reinhardt::AuthUser<crate::apps::auth::models::User>,
+	#[inject] reinhardt::AuthUser(current_user): reinhardt::AuthUser<
+		crate::apps::auth::models::User,
+	>,
 ) -> std::result::Result<RoomInfo, ServerFnError> {
-
 	// Find the room
 	let room = DMRoom::objects()
 		.filter(
@@ -273,9 +276,10 @@ pub async fn send_message(
 	room_id: Uuid,
 	content: String,
 	#[inject] db: DatabaseConnection,
-	#[inject] reinhardt::AuthUser(current_user): reinhardt::AuthUser<crate::apps::auth::models::User>,
+	#[inject] reinhardt::AuthUser(current_user): reinhardt::AuthUser<
+		crate::apps::auth::models::User,
+	>,
 ) -> std::result::Result<MessageInfo, ServerFnError> {
-
 	// Validate content
 	if content.trim().is_empty() {
 		return Err(ServerFnError::application(
@@ -339,9 +343,10 @@ pub async fn list_messages(
 	limit: Option<i32>,
 	before: Option<Uuid>,
 	#[inject] db: DatabaseConnection,
-	#[inject] reinhardt::AuthUser(current_user): reinhardt::AuthUser<crate::apps::auth::models::User>,
+	#[inject] reinhardt::AuthUser(current_user): reinhardt::AuthUser<
+		crate::apps::auth::models::User,
+	>,
 ) -> std::result::Result<Vec<MessageInfo>, ServerFnError> {
-
 	// Find the room
 	let room = DMRoom::objects()
 		.filter(
@@ -435,9 +440,10 @@ pub async fn list_messages(
 pub async fn mark_as_read(
 	room_id: Uuid,
 	#[inject] db: DatabaseConnection,
-	#[inject] reinhardt::AuthUser(current_user): reinhardt::AuthUser<crate::apps::auth::models::User>,
+	#[inject] reinhardt::AuthUser(current_user): reinhardt::AuthUser<
+		crate::apps::auth::models::User,
+	>,
 ) -> std::result::Result<(), ServerFnError> {
-
 	// Find the room
 	let room = DMRoom::objects()
 		.filter(

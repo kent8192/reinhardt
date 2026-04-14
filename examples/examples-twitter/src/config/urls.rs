@@ -48,7 +48,7 @@ use reinhardt::LoggingMiddleware;
 ///
 /// Each app's `routes()` function returns a `UnifiedRouter` with both
 /// server and client routes defined.
-#[cfg_attr(server, routes(standalone))]
+#[cfg_attr(server, routes)]
 pub fn routes() -> UnifiedRouter {
 	// Configure admin site (registration only, no DB needed yet)
 	#[cfg(server)]

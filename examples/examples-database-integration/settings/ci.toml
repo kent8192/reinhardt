@@ -1,7 +1,0 @@
-# CI environment settings (committed, used by GitHub Actions)
-debug = false
-secret_key = "ci-testing-secret-key-not-for-production"
-
-[database]
-engine = "sqlite"
-name = ":memory:"

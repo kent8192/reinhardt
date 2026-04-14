@@ -168,7 +168,7 @@ pub fn polls_detail(question_id: i64) -> Page {
 				page!(|is_loading: bool, err: Option<String>| {
 					watch {
 						if ! is_loading &&err.is_none() {
-							#[cfg(client)]
+							#[cfg(wasm)]
 									{
 										if let Some(window) = web_sys::window() {
 											let pathname = window.location().pathname().ok();

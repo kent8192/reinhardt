@@ -7,37 +7,18 @@ use reinhardt::pages::server_fn::{ServerFnError, server_fn};
 use uuid::Uuid;
 
 // Server-only imports
-#[cfg(server)]
+#[cfg(native)]
 use {
 	crate::apps::auth::models::User,
 	crate::apps::dm::models::{DMMessage, DMRoom},
+	reinhardt::AuthUser,
 	reinhardt::DatabaseConnection,
 	reinhardt::db::orm::{Filter, FilterOperator, FilterValue, ManyToManyAccessor, Model},
-	reinhardt::middleware::session::SessionData,
 	std::collections::{HashMap, HashSet},
 };
 
-/// Helper to get current user from session
-#[cfg(server)]
-async fn get_current_user(session: &SessionData) -> Result<User, ServerFnError> {
-	let user_id = session
-		.get::<Uuid>("user_id")
-		.ok_or_else(|| ServerFnError::server(401, "Not authenticated"))?;
-
-	User::objects()
-		.filter(
-			User::field_id(),
-			FilterOperator::Eq,
-			FilterValue::String(user_id.to_string()),
-		)
-		.first()
-		.await
-		.map_err(|e| ServerFnError::server(500, format!("Database error: {}", e)))?
-		.ok_or_else(|| ServerFnError::server(404, "User not found"))
-}
-
 /// Helper to check if user is a member of a room
-#[cfg(server)]
+#[cfg(native)]
 async fn is_room_member(
 	room: &DMRoom,
 	user: &User,
@@ -58,9 +39,8 @@ pub async fn create_room(
 	participant_ids: Vec<Uuid>,
 	name: Option<String>,
 	#[inject] db: DatabaseConnection,
-	#[inject] session: SessionData,
+	#[inject] reinhardt::AuthUser(current_user): reinhardt::AuthUser<crate::apps::auth::models::User>,
 ) -> std::result::Result<RoomInfo, ServerFnError> {
-	let current_user = get_current_user(&session).await?;
 
 	// Validate participants
 	if participant_ids.is_empty() {
@@ -181,9 +161,8 @@ pub async fn create_room(
 #[server_fn]
 pub async fn list_rooms(
 	#[inject] db: DatabaseConnection,
-	#[inject] session: SessionData,
+	#[inject] reinhardt::AuthUser(current_user): reinhardt::AuthUser<crate::apps::auth::models::User>,
 ) -> std::result::Result<Vec<RoomInfo>, ServerFnError> {
-	let current_user = get_current_user(&session).await?;
 
 	// Get rooms the user is a member of
 	let rooms_accessor =
@@ -258,9 +237,8 @@ pub async fn list_rooms(
 pub async fn get_room(
 	room_id: Uuid,
 	#[inject] db: DatabaseConnection,
-	#[inject] session: SessionData,
+	#[inject] reinhardt::AuthUser(current_user): reinhardt::AuthUser<crate::apps::auth::models::User>,
 ) -> std::result::Result<RoomInfo, ServerFnError> {
-	let current_user = get_current_user(&session).await?;
 
 	// Find the room
 	let room = DMRoom::objects()
@@ -295,9 +273,8 @@ pub async fn send_message(
 	room_id: Uuid,
 	content: String,
 	#[inject] db: DatabaseConnection,
-	#[inject] session: SessionData,
+	#[inject] reinhardt::AuthUser(current_user): reinhardt::AuthUser<crate::apps::auth::models::User>,
 ) -> std::result::Result<MessageInfo, ServerFnError> {
-	let current_user = get_current_user(&session).await?;
 
 	// Validate content
 	if content.trim().is_empty() {
@@ -362,9 +339,8 @@ pub async fn list_messages(
 	limit: Option<i32>,
 	before: Option<Uuid>,
 	#[inject] db: DatabaseConnection,
-	#[inject] session: SessionData,
+	#[inject] reinhardt::AuthUser(current_user): reinhardt::AuthUser<crate::apps::auth::models::User>,
 ) -> std::result::Result<Vec<MessageInfo>, ServerFnError> {
-	let current_user = get_current_user(&session).await?;
 
 	// Find the room
 	let room = DMRoom::objects()
@@ -459,9 +435,8 @@ pub async fn list_messages(
 pub async fn mark_as_read(
 	room_id: Uuid,
 	#[inject] db: DatabaseConnection,
-	#[inject] session: SessionData,
+	#[inject] reinhardt::AuthUser(current_user): reinhardt::AuthUser<crate::apps::auth::models::User>,
 ) -> std::result::Result<(), ServerFnError> {
-	let current_user = get_current_user(&session).await?;
 
 	// Find the room
 	let room = DMRoom::objects()
@@ -514,7 +489,7 @@ pub async fn mark_as_read(
 }
 
 /// Helper to build RoomInfo from DMRoom and members
-#[cfg(server)]
+#[cfg(native)]
 async fn build_room_info(
 	room: &DMRoom,
 	members: &[User],
@@ -581,7 +556,7 @@ async fn build_room_info(
 }
 
 /// Helper to build RoomInfo using pre-fetched last message and unread count
-#[cfg(server)]
+#[cfg(native)]
 fn build_room_info_with_prefetched(
 	room: &DMRoom,
 	members: &[User],
@@ -613,7 +588,7 @@ fn build_room_info_with_prefetched(
 }
 
 /// Helper to build MessageInfo from DMMessage and sender
-#[cfg(server)]
+#[cfg(native)]
 fn build_message_info(message: &DMMessage, sender: &User) -> MessageInfo {
 	MessageInfo {
 		id: message.id(),
@@ -627,7 +602,7 @@ fn build_message_info(message: &DMMessage, sender: &User) -> MessageInfo {
 }
 
 /// Helper to truncate message for preview
-#[cfg(server)]
+#[cfg(native)]
 fn truncate_message(content: &str, max_len: usize) -> String {
 	if content.len() <= max_len {
 		content.to_string()

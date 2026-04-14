@@ -3,22 +3,22 @@
 //! The `routes` function defines all URL patterns for this project.
 
 use reinhardt::UnifiedRouter;
-#[cfg(server)]
+#[cfg(native)]
 use reinhardt::pages::server_fn::ServerFnRouterExt;
-#[cfg(server)]
+#[cfg(native)]
 use reinhardt::routes;
 
 // Import server_fn marker modules (snake_case + ::marker)
-#[cfg(server)]
+#[cfg(native)]
 use crate::server_fn::polls::{
 	get_question_detail, get_question_results, get_questions, get_vote_form_metadata, submit_vote,
 	vote,
 };
 
-#[cfg_attr(server, routes)]
+#[cfg_attr(native, routes)]
 pub fn routes() -> UnifiedRouter {
 	// Server: register server functions and mount polls routes
-	#[cfg(server)]
+	#[cfg(native)]
 	let router = UnifiedRouter::new()
 		.server(|s| {
 			s.server_fn(get_questions::marker)
@@ -31,7 +31,7 @@ pub fn routes() -> UnifiedRouter {
 		.mount("/polls/", crate::apps::polls::urls::routes());
 
 	// Client: empty router (polls routes are server-only)
-	#[cfg(client)]
+	#[cfg(wasm)]
 	let router = UnifiedRouter::new();
 
 	router

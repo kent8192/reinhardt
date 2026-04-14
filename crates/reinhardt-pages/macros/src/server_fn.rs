@@ -953,6 +953,21 @@ fn generate_server_handler(
 	// and a `use` item with the same name in the same module.
 	let marker_module_name = name.clone();
 
+	// MSW: Extract the Ok type from Result<T, ServerFnError> for MockableServerFn::Response
+	let response_type = extract_result_ok_type(return_type);
+
+	// MSW: Convert inject param names to string literals for INJECTED_PARAMS const
+	let inject_param_name_strs: Vec<String> = inject_params
+		.iter()
+		.map(|p| {
+			if let syn::Pat::Ident(pat_ident) = &*p.pat {
+				pat_ident.ident.to_string()
+			} else {
+				"_".to_string()
+			}
+		})
+		.collect();
+
 	quote! {
 		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 		/// Server-side handler function
@@ -1066,8 +1081,71 @@ fn generate_server_handler(
 					super::#static_wrapper_name
 				}
 			}
+
+			// MSW: Generate MockableServerFn impl (server-side) when msw feature is enabled
+			#[cfg(feature = "msw")]
+			mod __msw {
+				use ::serde::{Serialize, Deserialize};
+
+				/// Public Args struct for MSW type-safe mocking.
+				#[derive(Serialize, Deserialize)]
+				pub struct Args {
+					#(pub #regular_param_names: #regular_param_types),*
+				}
+			}
+
+			#[cfg(feature = "msw")]
+			pub use __msw::Args;
+
+			#[cfg(feature = "msw")]
+			impl #pages_crate::server_fn::MockableServerFn for marker {
+				type Args = Args;
+				type Response = #response_type;
+				const INJECTED_PARAMS: &'static [&'static str] = &[#(#inject_param_name_strs),*];
+			}
+		}
+
+		// MSW: WASM-side marker module with MockableServerFn (standalone, no ServerFnRegistration)
+		#[cfg(all(target_family = "wasm", target_os = "unknown", feature = "msw"))]
+		#vis mod #marker_module_name {
+			use ::serde::{Serialize, Deserialize};
+
+			#[doc = concat!("Marker struct for server function `", #name_str, "` (WASM MSW mock target)")]
+			pub struct marker;
+
+			/// Public Args struct for MSW type-safe mocking.
+			#[derive(Serialize, Deserialize)]
+			pub struct Args {
+				#(pub #regular_param_names: #regular_param_types),*
+			}
+
+			impl #pages_crate::server_fn::MockableServerFn for marker {
+				type Args = Args;
+				type Response = #response_type;
+				const PATH: &'static str = #endpoint;
+				const NAME: &'static str = #name_str;
+				const CODEC: &'static str = #codec;
+				const INJECTED_PARAMS: &'static [&'static str] = &[];
+			}
 		}
 	}
+}
+
+/// Extracts the first generic argument `T` from `Result<T, E>`.
+///
+/// Given `Result<User, ServerFnError>`, returns the token stream for `User`.
+/// Falls back to the full return type if it cannot be parsed as `Result<T, E>`.
+fn extract_result_ok_type(return_type: &syn::Type) -> proc_macro2::TokenStream {
+	if let syn::Type::Path(type_path) = return_type
+		&& let Some(segment) = type_path.path.segments.last()
+		&& segment.ident == "Result"
+		&& let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+		&& let Some(syn::GenericArgument::Type(ok_type)) = args.args.first()
+	{
+		return quote! { #ok_type };
+	}
+	// Fallback: use the full type
+	quote! { #return_type }
 }
 
 #[cfg(test)]

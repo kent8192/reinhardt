@@ -11,7 +11,7 @@ use super::router;
 use crate::apps::auth::client::state;
 
 pub use router::{init_global_router, with_router};
-pub use state::{get_current_user, init_auth_state, is_authenticated, set_current_user};
+pub use state::{clear_auth_state, get_current_username, is_authenticated, set_current_user};
 
 #[wasm_bindgen(start)]
 pub fn main() -> Result<(), JsValue> {
@@ -21,8 +21,7 @@ pub fn main() -> Result<(), JsValue> {
 	// Initialize hydration state BEFORE any component initialization
 	reinhardt::pages::hydration::init_hydration_state();
 
-	// Initialize global state
-	state::init_auth_state();
+	// Auth state is managed by the framework's AuthState
 
 	// Initialize router
 	router::init_global_router();

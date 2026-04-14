@@ -2,6 +2,7 @@
 //!
 //! This module provides rstest fixtures for authentication integration tests,
 //! including pre-configured session backends, mock users, and test data.
+#![allow(deprecated)] // TestUser is deprecated but still used by fixture functions
 
 use rstest::*;
 use uuid::Uuid;
@@ -27,6 +28,10 @@ pub use reinhardt_auth::{
 ///     assert_eq!(test_user.username, "testuser");
 /// }
 /// ```
+#[deprecated(
+	since = "0.1.0-rc.16",
+	note = "define your own user type with `#[user]` macro and use `ForceLoginUser` trait"
+)]
 #[derive(Clone, Debug)]
 pub struct TestUser {
 	/// Unique identifier for the test user.

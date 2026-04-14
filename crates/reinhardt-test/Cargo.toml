@@ -40,6 +40,8 @@ wasm = [
   "dep:regex",
 ]
 wasm-full = ["wasm", "reinhardt-pages/web-sys-full"]
+# MSW-style network-level request interception (requires wasm)
+msw = ["wasm", "reinhardt-pages/msw"]
 # Server function testing utilities
 server-fn-test = []
 # E2E browser testing via WebDriver (fantoccini)
@@ -105,6 +107,13 @@ web-sys = { version = "0.3.83", optional = true, features = [
   "HtmlDocument",
   "Location",
   "History",
+  "Headers",
+  "Request",
+  "RequestInit",
+  "RequestMode",
+  "Response",
+  "ResponseInit",
+  "console",
 ] }
 
 # Optional E2E testing dependencies (feature-gated)

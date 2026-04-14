@@ -259,6 +259,34 @@ impl MockSession {
 		}
 	}
 
+	/// Create an authenticated session from a [`SessionIdentity`](crate::auth::SessionIdentity).
+	///
+	/// Bridges the shared identity type to the server_fn test context.
+	/// Creates a stub `TestUser` internally to maintain `is_authenticated()` compatibility.
+	pub fn from_identity(identity: &crate::auth::SessionIdentity) -> Self {
+		let stub_user = TestUser {
+			id: uuid::Uuid::parse_str(&identity.user_id).unwrap_or(uuid::Uuid::nil()),
+			username: identity.user_id.clone(),
+			email: String::new(),
+			permissions: Vec::new(),
+			roles: Vec::new(),
+			is_authenticated: true,
+			attributes: HashMap::new(),
+		};
+		let mut session = Self::authenticated(stub_user);
+		session
+			.data
+			.insert("user_id".into(), serde_json::json!(identity.user_id));
+		session
+			.data
+			.insert("is_staff".into(), serde_json::json!(identity.is_staff));
+		session.data.insert(
+			"is_superuser".into(),
+			serde_json::json!(identity.is_superuser),
+		);
+		session
+	}
+
 	/// Set a custom session ID.
 	pub fn with_id(mut self, id: impl Into<String>) -> Self {
 		self.id = id.into();

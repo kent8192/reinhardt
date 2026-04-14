@@ -217,7 +217,7 @@ pub async fn delete(Path(snippet_id): Path<i64>) -> ViewResult<Response> {
 // ViewSet Implementation (Tutorial 6)
 // ============================================================================
 
-/// SnippetViewSet - ViewSet-based approach for managing snippets
+/// ViewSet-based approach for managing snippets (Tutorial 6)
 ///
 /// This demonstrates the ViewSet pattern from Tutorial 6, which provides:
 /// - Automatic CRUD operations (list, create, retrieve, update, delete)
@@ -227,28 +227,24 @@ pub async fn delete(Path(snippet_id): Path<i64>) -> ViewResult<Response> {
 ///
 /// Compare this implementation (~15 lines) with the function-based views above (~200 lines)
 /// for the same functionality!
-pub struct SnippetViewSet;
+///
+/// Features enabled:
+/// - Pagination: 10 items per page (max 100)
+/// - Filtering: by language and title fields
+/// - Ordering: by created_at and title fields
+#[reinhardt::viewset]
+pub fn viewset() -> reinhardt::ModelViewSet<Snippet, SnippetSerializer> {
+	use reinhardt::ModelViewSet;
+	use reinhardt::views::viewsets::{FilterConfig, OrderingConfig, PaginationConfig};
 
-impl SnippetViewSet {
-	/// Create a configured ModelViewSet for Snippet model
-	///
-	/// Features enabled:
-	/// - Pagination: 10 items per page (max 100)
-	/// - Filtering: by language and title fields
-	/// - Ordering: by created_at and title fields
-	pub fn viewset() -> reinhardt::ModelViewSet<Snippet, SnippetSerializer> {
-		use reinhardt::ModelViewSet;
-		use reinhardt::views::viewsets::{FilterConfig, OrderingConfig, PaginationConfig};
-
-		ModelViewSet::new("snippet")
-			.with_pagination(PaginationConfig::page_number(10, Some(100)))
-			.with_filters(
-				FilterConfig::new()
-					.with_filterable_fields(vec!["language".to_string(), "title".to_string()]),
-			)
-			.with_ordering(
-				OrderingConfig::new()
-					.with_ordering_fields(vec!["created_at".to_string(), "title".to_string()]),
-			)
-	}
+	ModelViewSet::new("snippet")
+		.with_pagination(PaginationConfig::page_number(10, Some(100)))
+		.with_filters(
+			FilterConfig::new()
+				.with_filterable_fields(vec!["language".to_string(), "title".to_string()]),
+		)
+		.with_ordering(
+			OrderingConfig::new()
+				.with_ordering_fields(vec!["created_at".to_string(), "title".to_string()]),
+		)
 }

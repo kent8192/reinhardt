@@ -27,6 +27,7 @@ use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
 // Re-export server function mocking from reinhardt-pages
+#[allow(deprecated)]
 pub use reinhardt_pages::testing::{
 	MockResponse, assert_server_fn_call_count, assert_server_fn_called,
 	assert_server_fn_called_with, assert_server_fn_not_called, clear_mocks, get_call_history,
@@ -304,6 +305,10 @@ impl MockCookies {
 ///
 /// // Later, when code calls fetch("/api/users"), it will receive the mocked response
 /// ```
+#[deprecated(
+	since = "0.1.0-rc.16",
+	note = "Use `MockServiceWorker` from `reinhardt_test::msw` instead. See issue #3283."
+)]
 #[derive(Debug, Clone, Default)]
 pub struct MockFetch {
 	responses: Rc<RefCell<HashMap<String, MockFetchResponse>>>,

@@ -1,9 +1,31 @@
-# Base settings
+# Base settings for examples-tutorial-basis
+[core]
 debug = false
 secret_key = "CHANGE_THIS_IN_PRODUCTION"
+allowed_hosts = []
+installed_apps = []
+templates = []
+static_url = "/static/"
+staticfiles_dirs = []
+media_url = "/media/"
 language_code = "en-us"
 time_zone = "UTC"
+use_i18n = true
+use_tz = true
+default_auto_field = "BigAutoField"
+admins = []
+managers = []
+middleware = []
+root_urlconf = ""
 
-[database]
+[core.security]
+secure_ssl_redirect = false
+secure_hsts_include_subdomains = false
+secure_hsts_preload = false
+session_cookie_secure = false
+csrf_cookie_secure = false
+append_slash = true
+
+[core.databases.default]
 engine = "sqlite"
 name = "db.sqlite3"

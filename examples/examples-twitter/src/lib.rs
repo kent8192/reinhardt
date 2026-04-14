@@ -7,7 +7,7 @@
 // ============================================================================
 // Server-only modules (non-WASM)
 // ============================================================================
-#[cfg(server)]
+#[cfg(native)]
 mod server_only {
 	// Re-export internal crates for macro-generated code
 	pub use reinhardt::core::async_trait;
@@ -16,7 +16,7 @@ mod server_only {
 	pub use reinhardt::reinhardt_di::params;
 	pub use reinhardt::reinhardt_http;
 }
-#[cfg(server)]
+#[cfg(native)]
 pub use server_only::*;
 
 // ============================================================================
@@ -28,21 +28,21 @@ pub mod apps;
 // Server-only modules
 // ============================================================================
 pub mod config;
-#[cfg(server)]
+#[cfg(native)]
 pub mod migrations;
 
 // ============================================================================
 // Client-only modules (WASM)
 // ============================================================================
-#[cfg(client)]
+#[cfg(wasm)]
 pub mod core;
 
 // ============================================================================
 // Re-exports for convenience
 // ============================================================================
-#[cfg(server)]
+#[cfg(native)]
 pub use config::settings::get_settings;
 
 // Test utilities (available for testing on server)
-#[cfg(server)]
+#[cfg(native)]
 pub mod test_utils;

@@ -78,6 +78,7 @@ proptest = { workspace = true, optional = true }
 # Optional dependencies for graphql feature
 async-graphql = { workspace = true, optional = true }
 
+
 # WebSocket and messaging
 tokio-tungstenite = "0.28.0"
 lapin = "3.7.2"
@@ -98,6 +99,11 @@ mockall = { workspace = true }
 
 reinhardt-urls = { workspace = true, features = ["routers"] }
 reinhardt-conf = { workspace = true, features = ["settings", "async"], optional = true }
+
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+reinhardt-auth = { workspace = true, features = ["jwt", "sessions"] }
+reinhardt-middleware = { workspace = true, features = ["sessions"] }
+totp-lite = { version = "2.0" }
 
 [build-dependencies]
 cfg_aliases = "0.2"

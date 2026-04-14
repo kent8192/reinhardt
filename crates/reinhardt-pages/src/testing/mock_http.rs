@@ -160,6 +160,10 @@ thread_local! {
 /// let user = UserInfo { username: "test".to_string(), ... };
 /// mock_server_fn("/api/server_fn/login", &user);
 /// ```
+#[deprecated(
+	since = "0.1.0-rc.16",
+	note = "Use `MockServiceWorker::handle_server_fn` from `reinhardt_test::msw` instead. See issue #3283."
+)]
 pub fn mock_server_fn<T: serde::Serialize>(path: &str, response: &T) {
 	MOCK_REGISTRY.with(|r| {
 		r.borrow_mut()
@@ -181,6 +185,10 @@ pub fn mock_server_fn<T: serde::Serialize>(path: &str, response: &T) {
 /// ```rust,ignore
 /// mock_server_fn_error("/api/server_fn/login", 401, "Invalid credentials");
 /// ```
+#[deprecated(
+	since = "0.1.0-rc.16",
+	note = "Use `MockServiceWorker` with `rest::post(...).respond(...)` from `reinhardt_test::msw` instead. See issue #3283."
+)]
 pub fn mock_server_fn_error(path: &str, status: u16, message: &str) {
 	MOCK_REGISTRY.with(|r| {
 		r.borrow_mut()
@@ -195,6 +203,10 @@ pub fn mock_server_fn_error(path: &str, status: u16, message: &str) {
 ///
 /// * `path` - The server function endpoint path
 /// * `response` - The custom MockResponse
+#[deprecated(
+	since = "0.1.0-rc.16",
+	note = "Use `MockServiceWorker::handle` from `reinhardt_test::msw` instead. See issue #3283."
+)]
 pub fn mock_server_fn_custom(path: &str, response: MockResponse) {
 	MOCK_REGISTRY.with(|r| {
 		r.borrow_mut().responses.insert(path.to_string(), response);
@@ -356,6 +368,7 @@ pub(crate) fn get_mock_response(path: &str) -> Option<MockResponse> {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
 	use super::*;
 	use serde::{Deserialize, Serialize};

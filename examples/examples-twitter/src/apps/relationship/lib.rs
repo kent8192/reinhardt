@@ -2,22 +2,22 @@
 //!
 //! User relationship models for examples-twitter
 
-#[cfg(server)]
+#[cfg(native)]
 use reinhardt::app_config;
 
 pub mod shared;
 pub mod urls;
 
-#[cfg(client)]
+#[cfg(wasm)]
 pub mod client;
 
-#[cfg(server)]
+#[cfg(native)]
 pub mod server;
 
 #[cfg(test)]
 pub mod tests;
 
-#[cfg(server)]
+#[cfg(native)]
 #[app_config(
 	name = "relationship",
 	label = "relationship",

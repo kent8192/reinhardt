@@ -313,6 +313,7 @@ macro_rules! authenticated_test_case {
             });
             {
                 let client = $case.client().await;
+                #[allow(deprecated)]
                 client.force_authenticate(Some($user.clone())).await;
             }
 

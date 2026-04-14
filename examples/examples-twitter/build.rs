@@ -35,14 +35,11 @@ fn main() {
 
 	// Declare custom cfg to avoid warnings in Rust 2024 edition
 	println!("cargo::rustc-check-cfg=cfg(with_reinhardt)");
-	println!("cargo::rustc-check-cfg=cfg(client)");
-	println!("cargo::rustc-check-cfg=cfg(server)");
+	println!("cargo::rustc-check-cfg=cfg(wasm)");
+	println!("cargo::rustc-check-cfg=cfg(native)");
 
 	cfg_aliases! {
-		// Platform aliases for simpler conditional compilation
-		// Use `#[cfg(client)]` instead of `#[cfg(all(target_family = "wasm", target_os = "unknown"))]`
-		client: { all(target_family = "wasm", target_os = "unknown") },
-		// Use `#[cfg(server)]` instead of `#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]`
-		server: { not(all(target_family = "wasm", target_os = "unknown")) },
+		wasm: { all(target_family = "wasm", target_os = "unknown") },
+		native: { not(all(target_family = "wasm", target_os = "unknown")) },
 	}
 }

@@ -177,6 +177,11 @@ pub mod ctor {
 	pub use ctor::*;
 }
 
+// Re-export paste for macro-generated code (Issue #3526: namespaced URL resolvers)
+#[cfg(native)]
+#[doc(hidden)]
+pub use paste::paste;
+
 #[cfg(all(feature = "database", native))]
 #[doc(hidden)]
 pub mod reinhardt_orm {
@@ -287,6 +292,8 @@ pub use reinhardt_macros::{api_view, delete, get, patch, post, put};
 pub use reinhardt_macros::routes;
 #[cfg(native)]
 pub use reinhardt_macros::url_patterns;
+#[cfg(native)]
+pub use reinhardt_macros::viewset;
 
 // Re-export admin attribute macro (requires admin feature)
 #[cfg(all(feature = "admin", native))]

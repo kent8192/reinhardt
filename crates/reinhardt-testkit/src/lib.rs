@@ -70,6 +70,8 @@ pub mod viewsets;
 #[cfg(feature = "testcontainers")]
 pub mod containers;
 
+/// Test authentication builder and utilities.
+pub mod auth;
 /// Server function testing utilities.
 pub mod server_fn;
 /// WebSocket testing client.

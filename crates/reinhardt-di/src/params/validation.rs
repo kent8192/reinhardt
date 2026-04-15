@@ -762,8 +762,8 @@ pub trait WithValidation: Sized {
 #[cfg(feature = "validation")]
 mod tests {
 	use super::*;
-	use crate::params::{Form, HasInner, ParamContext, ParamError, Path};
 	use crate::params::extract::FromRequest;
+	use crate::params::{Form, HasInner, ParamContext, ParamError, Path};
 	use bytes::Bytes;
 	use reinhardt_core::validators::{Validate, ValidationError, ValidationErrors};
 	use reinhardt_http::Request;

@@ -7,12 +7,12 @@
 ///
 /// Implemented by `Form<T>`, `Json<T>`, and `Query<T>`.
 pub trait HasInner {
-    /// The wrapped inner type.
-    type Inner;
+	/// The wrapped inner type.
+	type Inner;
 
-    /// Borrow the inner value.
-    fn inner_ref(&self) -> &Self::Inner;
+	/// Borrow the inner value.
+	fn inner_ref(&self) -> &Self::Inner;
 
-    /// Consume the extractor and return the inner value.
-    fn into_inner(self) -> Self::Inner;
+	/// Consume the extractor and return the inner value.
+	fn into_inner(self) -> Self::Inner;
 }

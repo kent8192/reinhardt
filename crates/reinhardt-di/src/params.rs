@@ -89,6 +89,7 @@ pub use validation::{
 // ParamErrorContext contains multiple String fields which make the enum large
 /// Errors that can occur during parameter extraction from HTTP requests.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ParamError {
 	/// A required parameter was not provided.
 	#[error("Missing required parameter: {0}")]

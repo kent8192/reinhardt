@@ -45,7 +45,7 @@ impl From<crate::apps::profile::models::Profile> for ProfileResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UpdateProfileRequest {
 	#[cfg_attr(
-		server,
+		native,
 		validate(length(max = 500, message = "Bio must be less than 500 characters"))
 	)]
 	pub bio: Option<String>,
@@ -54,7 +54,7 @@ pub struct UpdateProfileRequest {
 	pub avatar_url: Option<String>,
 
 	#[cfg_attr(
-		server,
+		native,
 		validate(length(max = 100, message = "Location must be less than 100 characters"))
 	)]
 	pub location: Option<String>,

@@ -72,7 +72,7 @@ impl From<crate::apps::tweet::models::Tweet> for TweetInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTweetRequest {
 	#[cfg_attr(
-		server,
+		native,
 		validate(length(
 			min = 1,
 			max = 280,

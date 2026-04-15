@@ -190,7 +190,8 @@ async fn test_admin_dashboard_shows_registered_models(
 	let request = make_staff_request();
 
 	// Act
-	let result = get_dashboard(site.clone(), request.clone()).await;
+	let auth_user = make_auth_user();
+	let result = get_dashboard(site.clone(), request.clone(), auth_user).await;
 
 	// Assert
 	let dashboard = result.expect("get_dashboard should succeed");

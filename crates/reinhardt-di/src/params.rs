@@ -42,6 +42,7 @@ pub mod cookie_named;
 pub(crate) mod cookie_util;
 pub mod extract;
 pub mod form;
+pub mod has_inner;
 pub mod header;
 pub mod header_named;
 pub mod json;
@@ -70,6 +71,7 @@ pub use cookie::{Cookie, CookieStruct};
 pub use cookie_named::{CookieName, CookieNamed, CsrfToken, SessionId};
 pub use extract::FromRequest;
 pub use form::Form;
+pub use has_inner::HasInner;
 pub use header::{Header, HeaderStruct};
 pub use header_named::{Authorization, ContentType, HeaderName, HeaderNamed};
 pub use json::Json;
@@ -120,6 +122,16 @@ pub enum ParamError {
 	#[cfg(feature = "validation")]
 	#[error("{}", .0.format_error())]
 	ValidationError(Box<ParamErrorContext>),
+
+	/// Struct-level validation failed after successful extraction.
+	///
+	/// Contains structured per-field errors from `Validate::validate()`.
+	/// Unlike `ValidationError` (which uses `ParamErrorContext` for single-field
+	/// constraint violations), this variant carries a full `ValidationErrors`
+	/// map for multi-field struct validation.
+	#[cfg(feature = "validation")]
+	#[error("Validation failed: {}", serde_json::to_string(.0).unwrap_or_default())]
+	ValidationFailed(Box<reinhardt_core::validators::ValidationErrors>),
 }
 
 impl ParamError {

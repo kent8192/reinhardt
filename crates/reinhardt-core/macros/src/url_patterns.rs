@@ -322,9 +322,35 @@ fn build_mount_reexport(call: &MountCall) -> TokenStream {
 
 /// Implementation of the `#[url_patterns]` attribute macro.
 ///
-/// Optionally accepts an app label string: `#[url_patterns("users")]`.
+/// Validates an app name identifier against the installed apps state file.
+///
+/// Returns `Ok(())` if the app is registered, the state file is unavailable,
+/// or the target is WASM. Returns a compile error if the app is not registered.
+fn validate_app_label(label: &str, span: proc_macro2::Span) -> syn::Result<()> {
+	if crate::macro_state::is_wasm_target() {
+		return Ok(());
+	}
+	if let Ok(installed) = crate::macro_state::read_installed_apps()
+		&& !installed.contains(&label.to_string())
+	{
+		return Err(syn::Error::new(
+			span,
+			format!(
+				"unknown app `{label}`. Registered apps: [{}]",
+				installed.join(", ")
+			),
+		));
+	}
+	Ok(())
+}
+
+/// Optionally accepts an app name identifier: `#[url_patterns(users)]`.
 /// When provided, the returned router is wrapped with `.with_namespace("users")`
 /// to enable per-app route name namespacing (Issue #3526).
+///
+/// The identifier is validated against the installed apps state file written by
+/// `installed_apps!`. If the state file is available and the identifier is not
+/// a registered app, a compile-time error is emitted (Issue #3668).
 pub(crate) fn url_patterns_impl(args: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
 	let func: ItemFn = parse2(input)?;
 
@@ -337,9 +363,14 @@ pub(crate) fn url_patterns_impl(args: TokenStream, input: TokenStream) -> syn::R
 	let mount_re_exports = mount_calls.iter().map(build_mount_reexport);
 	let meta_idents: Vec<syn::Ident> = endpoint_paths.iter().filter_map(build_meta_ident).collect();
 
-	// Parse optional app label: #[url_patterns("users")]
+	// Parse optional app label: #[url_patterns(users)]
 	let func_output = if !args.is_empty() {
-		let app_label: syn::LitStr = syn::parse2(args)?;
+		let app_label: syn::Ident = syn::parse2(args)?;
+		let app_label_str = app_label.to_string();
+
+		// Validate against installed apps state file (Issue #3668).
+		validate_app_label(&app_label_str, app_label.span())?;
+
 		let fn_vis = &func.vis;
 		let fn_attrs = &func.attrs;
 		let fn_sig = &func.sig;
@@ -350,7 +381,7 @@ pub(crate) fn url_patterns_impl(args: TokenStream, input: TokenStream) -> syn::R
 			#(#fn_attrs)*
 			#fn_vis #fn_sig {
 				let __router = (|| #fn_block)();
-				__router.with_namespace(#app_label)
+				__router.with_namespace(#app_label_str)
 			}
 		}
 	} else {
@@ -544,14 +575,14 @@ mod tests {
 
 		// Verify $base uses tt+ repetition (not :path) so it can be extended with ::
 		assert!(
-			normalized.contains("$($ base : tt) +"),
+			normalized.contains("$ ($ base : tt) +"),
 			"__for_each_url_resolver must use $($base:tt)+ (not $base:path) \
 			 to allow path extension with :: — got: {normalized}"
 		);
 
 		// Verify the macro body uses $($base)+ :: for path concatenation
 		assert!(
-			normalized.contains("$($ base) + ::"),
+			normalized.contains("$ ($ base) + ::"),
 			"__for_each_url_resolver body must use $($base)+ :: to extend the base path \
 			 — got: {normalized}"
 		);
@@ -622,7 +653,10 @@ mod tests {
 	}
 
 	#[test]
-	fn url_patterns_with_app_label_wraps_namespace() {
+	fn url_patterns_with_ident_app_label_wraps_namespace() {
+		// Write a temporary state file so validation passes in the test environment
+		let _ = crate::macro_state::write_installed_apps(&["users".to_string()]);
+
 		let input = quote! {
 			pub fn url_patterns() -> ServerRouter {
 				ServerRouter::new()
@@ -630,12 +664,49 @@ mod tests {
 			}
 		};
 
-		let result = url_patterns_impl(quote! { "users" }, input).unwrap();
+		let result = url_patterns_impl(quote! { users }, input).unwrap();
 		let output = result.to_string();
 
 		assert!(
 			output.contains("with_namespace"),
 			"missing with_namespace call"
+		);
+	}
+
+	#[test]
+	fn url_patterns_with_string_literal_errors() {
+		let input = quote! {
+			pub fn url_patterns() -> ServerRouter {
+				ServerRouter::new()
+					.endpoint(views::login)
+			}
+		};
+
+		let result = url_patterns_impl(quote! { "users" }, input);
+		assert!(
+			result.is_err(),
+			"string literal should be rejected, expected Ident"
+		);
+	}
+
+	#[test]
+	fn url_patterns_rejects_unknown_app_label() {
+		// Write a state file with known apps (not including "nonexistent")
+		let _ = crate::macro_state::write_installed_apps(&["myapp".to_string()]);
+
+		let input = quote! {
+			pub fn url_patterns() -> ServerRouter {
+				ServerRouter::new()
+					.endpoint(views::login)
+			}
+		};
+
+		let result = url_patterns_impl(quote! { nonexistent }, input);
+		assert!(result.is_err(), "unknown app should be rejected");
+		let err_msg = result.unwrap_err().to_string();
+		assert!(
+			err_msg.contains("unknown app `nonexistent`"),
+			"error should mention the unknown app name, got: {err_msg}"
 		);
 	}
 

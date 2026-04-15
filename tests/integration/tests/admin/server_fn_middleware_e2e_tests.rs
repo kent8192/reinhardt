@@ -260,8 +260,8 @@ async fn test_middleware_e2e_oversized_body_rejected(
 
 // ── Category 5E: Non-Staff / Inactive User via Real JWT ──
 
-/// Verifies that a JWT for a non-staff user is authenticated by the middleware
-/// but rejected by the admin handler (non-staff users cannot access admin).
+/// Verifies that a JWT for a non-staff user is rejected by `AdminAuthenticatedUser`
+/// injection with 401 (non-staff users cannot access admin).
 #[rstest]
 #[tokio::test]
 async fn test_middleware_e2e_non_staff_jwt_denied(
@@ -285,14 +285,14 @@ async fn test_middleware_e2e_non_staff_jwt_denied(
 
 	let status = response.status().as_u16();
 	assert!(
-		status == 403 || status == 500,
-		"Expected 403 or 500 for non-staff user, got {}",
+		status == 401,
+		"Expected 401 for non-staff user, got {}",
 		status
 	);
 }
 
-/// Verifies that a JWT for an inactive user is authenticated by the middleware
-/// but rejected by the admin handler (inactive users cannot access admin).
+/// Verifies that a JWT for an inactive user is rejected by `AdminAuthenticatedUser`
+/// injection with 401 (inactive users cannot access admin).
 #[rstest]
 #[tokio::test]
 async fn test_middleware_e2e_inactive_user_jwt_denied(
@@ -316,8 +316,8 @@ async fn test_middleware_e2e_inactive_user_jwt_denied(
 
 	let status = response.status().as_u16();
 	assert!(
-		status == 403 || status == 500,
-		"Expected 403 or 500 for inactive user, got {}",
+		status == 401,
+		"Expected 401 for inactive user, got {}",
 		status
 	);
 }

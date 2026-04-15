@@ -670,9 +670,9 @@ pub use reinhardt_urls::routers::{
 pub use reinhardt_urls::routers::Path as ClientPath;
 
 // Re-export URL resolver traits
+pub use reinhardt_urls::routers::ClientUrlResolver;
 #[cfg(native)]
 pub use reinhardt_urls::routers::resolver::UrlResolver;
-pub use reinhardt_urls::routers::ClientUrlResolver;
 
 // Re-export auth
 #[cfg(all(feature = "auth", native))]

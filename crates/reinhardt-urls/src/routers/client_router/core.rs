@@ -207,8 +207,7 @@ impl ClientRouter {
 	pub fn with_namespace(mut self, namespace: &str) -> Self {
 		let old = std::mem::take(&mut self.named_routes);
 		for (name, idx) in old {
-			self.named_routes
-				.insert(format!("{namespace}:{name}"), idx);
+			self.named_routes.insert(format!("{namespace}:{name}"), idx);
 		}
 		// Also update route names stored inside ClientRoute
 		for route in &mut self.routes {

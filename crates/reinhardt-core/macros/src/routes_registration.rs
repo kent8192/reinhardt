@@ -669,10 +669,14 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 						crate::pascal_case::to_pascal_case_with_suffix(&app.to_string(), "Urls");
 					let urls_struct =
 						proc_macro2::Ident::new(&urls_struct_name, proc_macro2::Span::call_site());
-					let client_urls_struct_name =
-						crate::pascal_case::to_pascal_case_with_suffix(&app.to_string(), "ClientUrls");
-					let client_urls_struct =
-						proc_macro2::Ident::new(&client_urls_struct_name, proc_macro2::Span::call_site());
+					let client_urls_struct_name = crate::pascal_case::to_pascal_case_with_suffix(
+						&app.to_string(),
+						"ClientUrls",
+					);
+					let client_urls_struct = proc_macro2::Ident::new(
+						&client_urls_struct_name,
+						proc_macro2::Span::call_site(),
+					);
 					quote! {
 						pub use super::#urls_struct;
 						#[cfg(feature = "client-router")]

@@ -54,7 +54,7 @@ pub struct LoginRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterRequest {
 	#[cfg_attr(
-		server,
+		native,
 		validate(length(
 			min = 3,
 			max = 150,
@@ -67,13 +67,13 @@ pub struct RegisterRequest {
 	pub email: String,
 
 	#[cfg_attr(
-		server,
+		native,
 		validate(length(min = 8, message = "Password must be at least 8 characters"))
 	)]
 	pub password: String,
 
 	#[cfg_attr(
-		server,
+		native,
 		validate(length(
 			min = 8,
 			message = "Password confirmation must be at least 8 characters"

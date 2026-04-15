@@ -6,7 +6,7 @@ use crate::apps::auth::shared::types::UserInfo;
 use reinhardt::pages::server_fn::{ServerFnError, server_fn};
 
 // Server-only imports
-#[cfg(server)]
+#[cfg(native)]
 use {
 	crate::apps::auth::models::User,
 	crate::apps::auth::shared::types::{LoginRequest, RegisterRequest},

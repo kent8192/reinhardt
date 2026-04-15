@@ -9,7 +9,7 @@ use reinhardt::pages::component::Page;
 use reinhardt::pages::page;
 use uuid::Uuid;
 
-#[cfg(client)]
+#[cfg(wasm)]
 use {
 	crate::apps::relationship::shared::server_fn::{
 		fetch_followers, fetch_following, follow_user, unfollow_user,
@@ -39,7 +39,7 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> Page {
 	// Clone signal for passing to page! macro
 	let is_following_signal = is_following.clone();
 
-	#[cfg(client)]
+	#[cfg(wasm)]
 	{
 		let toggle_follow = use_action(
 			move |(target_id, currently_following): (Uuid, bool)| async move {
@@ -141,7 +141,7 @@ pub fn follow_button(target_user_id: Uuid, is_following_initial: bool) -> Page {
 		)
 	}
 
-	#[cfg(server)]
+	#[cfg(native)]
 	{
 		// For SSR, render initial state without event handlers
 		let btn_class = if is_following_initial {
@@ -227,7 +227,7 @@ pub fn user_list(user_id: Uuid, list_type: UserListType) -> Page {
 	let loading = Signal::new(true);
 	let error = Signal::new(None::<String>);
 
-	#[cfg(client)]
+	#[cfg(wasm)]
 	{
 		let resource = create_resource(move || async move {
 			let result = match list_type {

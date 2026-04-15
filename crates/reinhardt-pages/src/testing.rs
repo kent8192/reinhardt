@@ -47,6 +47,7 @@ pub mod mock_fetch;
 pub mod mock_http;
 
 pub use mock_fetch::fetch_with_mock;
+#[allow(deprecated)]
 pub use mock_http::{
 	MockCall, MockResponse, assert_server_fn_call_count, assert_server_fn_called,
 	assert_server_fn_called_with, assert_server_fn_not_called, clear_mocks, get_call_history,

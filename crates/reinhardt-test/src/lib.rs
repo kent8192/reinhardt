@@ -71,6 +71,9 @@ pub mod fixtures;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
+#[cfg(feature = "msw")]
+pub mod msw;
+
 #[cfg(feature = "server-fn-test")]
 pub mod server_fn;
 
@@ -116,6 +119,9 @@ pub use reinhardt_testkit::{
 	extract_json, get_header, has_header, header_contains, header_equals, init_test_logging,
 	shutdown_test_server, spawn_test_server,
 };
+
+#[cfg(native)]
+pub use reinhardt_testkit::auth;
 
 #[cfg(all(native, feature = "messages"))]
 pub use reinhardt_testkit::{

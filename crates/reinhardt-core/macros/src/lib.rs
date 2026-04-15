@@ -28,9 +28,11 @@ mod injectable_common;
 mod injectable_fn;
 mod injectable_struct;
 mod installed_apps;
+mod macro_state;
 mod model_attribute;
 mod model_derive;
 mod orm_reflectable_derive;
+mod pascal_case;
 mod path_macro;
 mod permission_macro;
 mod permissions;
@@ -67,6 +69,7 @@ use receiver::receiver_impl;
 use routes::{delete_impl, get_impl, patch_impl, post_impl, put_impl};
 use routes_registration::routes_impl;
 mod url_patterns;
+mod viewset_macro;
 use schema::derive_schema_impl;
 use url_patterns::url_patterns_impl;
 use use_inject::use_inject_impl;
@@ -311,6 +314,15 @@ pub fn installed_apps(input: TokenStream) -> TokenStream {
 /// a DI context (`SingletonScope` + `InjectionContext`) and resolves each
 /// injected dependency before calling the function.
 ///
+/// # Arguments
+///
+/// - `#[routes]` — Default mode. Generates `ResolvedUrls` and `url_prelude`
+///   module with URL resolver traits from all installed apps. Requires
+///   `installed_apps!` to be present in the crate.
+/// - `#[routes(standalone)]` — Standalone mode. Generates `ResolvedUrls` only,
+///   without `url_prelude` module. Use this for projects that don't use
+///   `installed_apps!`.
+///
 /// # Notes
 ///
 /// - The function can have any name (e.g., `routes`, `app_routes`, `url_patterns`)
@@ -335,6 +347,28 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn url_patterns(args: TokenStream, input: TokenStream) -> TokenStream {
 	url_patterns_impl(args.into(), input.into())
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
+}
+
+/// Generate URL resolver traits for a ViewSet function.
+///
+/// When applied to a function returning a ViewSet (e.g., `ModelViewSet`), extracts
+/// the basename from the function body and generates `__url_resolver_{basename}_list`
+/// and `__url_resolver_{basename}_detail` modules.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// #[viewset]
+/// pub fn viewset() -> ModelViewSet<Snippet, SnippetSerializer> {
+///     ModelViewSet::new("snippet")
+/// }
+/// // Generates: __url_resolver_snippet_list, __url_resolver_snippet_detail
+/// ```
+#[proc_macro_attribute]
+pub fn viewset(args: TokenStream, input: TokenStream) -> TokenStream {
+	viewset_macro::viewset_macro_impl(args.into(), input.into())
 		.unwrap_or_else(|e| e.to_compile_error())
 		.into()
 }

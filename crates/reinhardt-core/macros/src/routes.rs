@@ -796,8 +796,12 @@ fn generate_url_resolver_tokens(
 	let method_ident = syn::Ident::new(name, Span::call_site());
 	let resolver_mod_ident =
 		syn::Ident::new(&format!("__url_resolver_{fn_name}"), Span::call_site());
+	let meta_macro_ident =
+		syn::Ident::new(&format!("__url_resolver_meta_{fn_name}"), Span::call_site());
 	let params = extract_url_params(path);
 	let doc_str = format!("Resolve URL for route `{}` (pattern: `{}`).", name, path);
+	let depr_note = format!("use namespaced URL resolvers instead: `urls.<app>().{name}()`");
+	let param_strs: Vec<&str> = params.iter().map(|s| s.as_str()).collect();
 
 	// Gate with raw platform check (not `native` alias) because this code
 	// expands in consuming crates that do not have cfg_aliases.
@@ -805,7 +809,19 @@ fn generate_url_resolver_tokens(
 		quote! {
 			#[doc(hidden)]
 			pub mod #resolver_mod_ident {
+				// Metadata macro for per-app resolver struct generation (Issue #3526).
+				// Consumed by __for_each_url_resolver! → __build_namespaced_resolvers!
 				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				macro_rules! #meta_macro_ident {
+					($callback:ident, $app:ident) => {
+						$callback!($app, #method_ident, #name, );
+					};
+				}
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				pub(crate) use #meta_macro_ident;
+
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				#[deprecated(since = "0.1.0-rc.16", note = #depr_note)]
 				#[doc = #doc_str]
 				pub trait #trait_ident: #reinhardt_crate::UrlResolver {
 					#[doc = #doc_str]
@@ -814,6 +830,7 @@ fn generate_url_resolver_tokens(
 					}
 				}
 				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				#[allow(deprecated)]
 				impl<T: #reinhardt_crate::UrlResolver> #trait_ident for T {}
 			}
 			#[doc(hidden)]
@@ -824,12 +841,22 @@ fn generate_url_resolver_tokens(
 			.iter()
 			.map(|p| syn::Ident::new(p, Span::call_site()))
 			.collect();
-		let param_strs: Vec<&str> = params.iter().map(|s| s.as_str()).collect();
 
 		quote! {
 			#[doc(hidden)]
 			pub mod #resolver_mod_ident {
+				// Metadata macro for per-app resolver struct generation (Issue #3526).
 				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				macro_rules! #meta_macro_ident {
+					($callback:ident, $app:ident) => {
+						$callback!($app, #method_ident, #name, #(#param_strs),* );
+					};
+				}
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				pub(crate) use #meta_macro_ident;
+
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				#[deprecated(since = "0.1.0-rc.16", note = #depr_note)]
 				#[doc = #doc_str]
 				pub trait #trait_ident: #reinhardt_crate::UrlResolver {
 					#[doc = #doc_str]
@@ -838,6 +865,7 @@ fn generate_url_resolver_tokens(
 					}
 				}
 				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				#[allow(deprecated)]
 				impl<T: #reinhardt_crate::UrlResolver> #trait_ident for T {}
 			}
 			#[doc(hidden)]

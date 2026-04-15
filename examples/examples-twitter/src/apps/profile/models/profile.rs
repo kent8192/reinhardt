@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // Test-only dependency for sqlx::FromRow (server-side only)
-#[cfg(all(test, server))]
+#[cfg(all(test, native))]
 use sqlx::FromRow;
 
 /// Profile model representing a user's profile information
@@ -17,7 +17,7 @@ use sqlx::FromRow;
 /// One-to-one relationship with User model via user_id foreign key.
 #[model(app_label = "profile", table_name = "profile_profile")]
 #[derive(Clone, Serialize, Deserialize)]
-#[cfg_attr(all(test, server), derive(FromRow))]
+#[cfg_attr(all(test, native), derive(FromRow))]
 pub struct Profile {
 	#[field(primary_key = true)]
 	pub id: Uuid,

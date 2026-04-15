@@ -282,6 +282,7 @@ bytes = { workspace = true }
 hyper = { workspace = true }
 linkme = { workspace = true, optional = true }
 ctor = { workspace = true, optional = true }
+paste = "1.0"
 
 # Parent crate dependencies (new module structure)
 reinhardt-apps = { workspace = true, optional = true }

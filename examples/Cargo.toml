@@ -1,14 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-	"examples-hello-world",
-	"examples-rest-api",
-	"examples-database-integration",
 	"examples-tutorial-basis",
 	"examples-tutorial-rest",
-	"examples-github-issues",
 	"examples-twitter",
-	"examples-di-showcase",
 ]
 
 # Note: Each example has a binary named "manage"

@@ -9,6 +9,8 @@ use reinhardt_pages::server_fn::ServerFnRequest;
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 
 #[cfg(server)]
+use super::admin_auth::AdminAuthenticatedUser;
+#[cfg(server)]
 use super::error::AdminAuth;
 #[cfg(server)]
 use super::security::{build_csrf_cookie, generate_csrf_token};
@@ -39,8 +41,11 @@ use super::security::{build_csrf_cookie, generate_csrf_token};
 pub async fn get_dashboard(
 	#[inject] site: Depends<AdminSite>,
 	#[inject] http_request: ServerFnRequest,
+	#[inject] AdminAuthenticatedUser(_user): AdminAuthenticatedUser,
 ) -> Result<DashboardResponse, ServerFnError> {
-	// Authentication and authorization check
+	// Authentication and authorization check (Fixes #3679)
+	// AdminAuthenticatedUser injection performs DB lookup to verify is_active and is_staff.
+	// AdminAuth::require_staff() provides the HTTP-level error response.
 	let auth = AdminAuth::from_request(&http_request);
 	auth.require_staff()?;
 

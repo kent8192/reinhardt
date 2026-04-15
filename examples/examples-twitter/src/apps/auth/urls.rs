@@ -4,13 +4,13 @@
 
 use reinhardt::UnifiedRouter;
 
-#[cfg(server)]
+#[cfg(native)]
 use reinhardt::pages::server_fn::ServerFnRouterExt;
 
-#[cfg(server)]
+#[cfg(native)]
 use crate::apps::auth::shared::server_fn::{current_user, login, logout, register};
 
-#[cfg(client)]
+#[cfg(wasm)]
 use crate::apps::auth::client::components::{login_form, register_form};
 
 /// Unified routes for auth application (client + server)
@@ -18,24 +18,24 @@ pub fn routes() -> UnifiedRouter {
 	UnifiedRouter::new()
 		// Server-side routes (server functions)
 		.server(|s| {
-			#[cfg(server)]
+			#[cfg(native)]
 			{
 				s.server_fn(login::marker)
 					.server_fn(register::marker)
 					.server_fn(logout::marker)
 					.server_fn(current_user::marker)
 			}
-			#[cfg(client)]
+			#[cfg(wasm)]
 			s
 		})
 		// Client-side routes (SPA)
 		.client(|c| {
-			#[cfg(client)]
+			#[cfg(wasm)]
 			{
 				c.route("/login", || login_form())
 					.route("/register", || register_form())
 			}
-			#[cfg(server)]
+			#[cfg(native)]
 			c
 		})
 }

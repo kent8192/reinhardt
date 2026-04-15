@@ -127,16 +127,19 @@ echo "Extracting PRs from commit range: $COMMIT_RANGE"
 
 PR_NUMBERS=()
 
+# Use --first-parent to follow only the main line of history,
+# avoiding traversal into merged branches' internal commits (Fixes #3534)
+
 # Merge commits: "Merge pull request #NNN from ..."
 while IFS= read -r num; do
   [ -n "$num" ] && PR_NUMBERS+=("$num")
-done < <(git -C "$REPO_ROOT" log "$COMMIT_RANGE" --merges --format="%s" 2>/dev/null \
+done < <(git -C "$REPO_ROOT" log "$COMMIT_RANGE" --first-parent --merges --format="%s" 2>/dev/null \
   | grep -oE '#[0-9]+' | grep -oE '[0-9]+' || true)
 
 # Squash commits: "feat(scope): description (#NNN)"
 while IFS= read -r num; do
   [ -n "$num" ] && PR_NUMBERS+=("$num")
-done < <(git -C "$REPO_ROOT" log "$COMMIT_RANGE" --no-merges --format="%s" 2>/dev/null \
+done < <(git -C "$REPO_ROOT" log "$COMMIT_RANGE" --first-parent --no-merges --format="%s" 2>/dev/null \
   | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' || true)
 
 # Deduplicate and sort

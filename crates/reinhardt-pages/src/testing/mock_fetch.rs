@@ -149,6 +149,7 @@ pub async fn fetch_with_mock(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
 	use super::*;
+	#[allow(deprecated)]
 	use crate::testing::mock_http::{
 		clear_mocks, get_call_history, mock_server_fn, mock_server_fn_error,
 	};

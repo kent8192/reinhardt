@@ -4,6 +4,7 @@
 //! routing, authentication, and rendering functionality.
 
 use crate::core::ModelAdmin;
+use crate::core::model_admin::AdminUser;
 use crate::server::admin_auth::{AdminLoginAuthenticator, AdminUserLoader};
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
@@ -206,9 +207,11 @@ impl AdminSite {
 	///
 	/// This determines which database table and model is used to load the
 	/// authenticated user in admin server functions. The type `U` must
-	/// implement both auth traits (`BaseUser`, `FullUser`) and the ORM
-	/// trait (`Model`), which is guaranteed for any type annotated with
-	/// both `#[model(...)]` and `#[user(full = true)]`.
+	/// implement `BaseUser`, `AdminUser`, and the ORM trait (`Model`).
+	/// Types annotated with `#[model(...)]` and `#[user(full = true)]`
+	/// satisfy this automatically via the blanket `impl<T: FullUser> AdminUser for T`.
+	/// Simpler user models that only implement `BaseUser` can manually
+	/// implement `AdminUser` to use admin authentication.
 	///
 	/// If this method is not called, [`AdminDefaultUser`] (table `auth_user`)
 	/// is used as the default.
@@ -226,7 +229,7 @@ impl AdminSite {
 	pub fn set_user_type<U>(&mut self) -> &mut Self
 	where
 		U: reinhardt_auth::BaseUser
-			+ reinhardt_auth::FullUser
+			+ AdminUser
 			+ reinhardt_db::orm::Model
 			+ Clone
 			+ Send

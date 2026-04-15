@@ -14,6 +14,8 @@ See README.md for project details.
 
 **Repository URL**: https://github.com/kent8192/reinhardt-web
 
+@instructions/DESIGN_PHILOSOPHY.md
+
 ---
 
 ## Tech Stack

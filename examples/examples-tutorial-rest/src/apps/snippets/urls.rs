@@ -9,11 +9,9 @@
 //! - USE_VIEWSET=1: ViewSet-based views
 
 use reinhardt::ServerRouter;
-use reinhardt::url_patterns;
 
 use super::views;
 
-#[url_patterns]
 pub fn url_patterns() -> ServerRouter {
 	// Check which approach to use
 	if std::env::var("USE_VIEWSET").is_ok() {

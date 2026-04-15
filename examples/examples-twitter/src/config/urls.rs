@@ -67,12 +67,7 @@ pub fn routes() -> UnifiedRouter {
 	// Mount admin panel routes and static assets with deferred DI registration (server-only)
 	#[cfg(native)]
 	let router = {
-		#[cfg(native)]
 		let (admin_router, admin_di) = admin_routes_with_di(admin_site);
-		#[cfg(not(server))]
-		let (admin_router, admin_di) = admin_routes_with_di(std::sync::Arc::new(
-			reinhardt::admin::AdminSite::new("Twitter Admin"),
-		));
 		router
 			.mount("/admin/", admin_router)
 			.mount("/static/admin/", admin_static_routes())

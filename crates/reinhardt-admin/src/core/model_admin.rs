@@ -14,6 +14,9 @@ use async_trait::async_trait;
 /// A blanket implementation is provided for all types implementing
 /// [`FullUser`](reinhardt_auth::FullUser), so [`DefaultUser`](reinhardt_auth::DefaultUser)
 /// and any custom user model with `FullUser` will automatically satisfy this trait.
+///
+/// For simpler user models that only implement `BaseUser` (without `FullUser`),
+/// this trait can be implemented manually to enable admin authentication.
 pub trait AdminUser: Send + Sync {
 	/// Whether the user account is active
 	fn is_active(&self) -> bool;

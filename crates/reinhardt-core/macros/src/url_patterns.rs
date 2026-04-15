@@ -382,9 +382,9 @@ pub(crate) fn url_patterns_impl(args: TokenStream, input: TokenStream) -> syn::R
 			/// so that the metadata macros resolve at the call site.
 			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			macro_rules! __for_each_url_resolver {
-				($callback:ident, $app:ident, $($base:tt)*) => {
+				($callback:ident, $app:ident, $($base:tt)+) => {
 					#(
-						$($base)* :: #meta_idents ! ($callback, $app);
+						$($base)+ :: #meta_idents ! ($callback, $app);
 					)*
 				};
 			}
@@ -517,6 +517,12 @@ mod tests {
 		assert_eq!(result.to_string(), "__url_resolver_meta_login");
 	}
 
+	/// Normalize whitespace in a token stream string for robust comparison.
+	/// Collapses all runs of whitespace to a single space.
+	fn normalize_ws(s: &str) -> String {
+		s.split_whitespace().collect::<Vec<_>>().join(" ")
+	}
+
 	#[test]
 	fn url_patterns_impl_generates_for_each_macro() {
 		let input = quote! {
@@ -528,34 +534,35 @@ mod tests {
 		};
 
 		let result = url_patterns_impl(quote! {}, input).unwrap();
-		let output = result.to_string();
+		let normalized = normalize_ws(&result.to_string());
 
 		// Verify __for_each_url_resolver macro is generated
 		assert!(
-			output.contains("__for_each_url_resolver"),
+			normalized.contains("__for_each_url_resolver"),
 			"missing __for_each_url_resolver macro"
 		);
 
-		// Verify $base uses tt repetition (not :path) so it can be extended with ::
+		// Verify $base uses tt+ repetition (not :path) so it can be extended with ::
 		assert!(
-			output.contains("$ ($ base : tt) *"),
-			"__for_each_url_resolver must use $($base:tt)* (not $base:path) \
-			 to allow path extension with ::"
+			normalized.contains("$($ base : tt) +"),
+			"__for_each_url_resolver must use $($base:tt)+ (not $base:path) \
+			 to allow path extension with :: — got: {normalized}"
 		);
 
-		// Verify the macro body uses $($base)* :: for path concatenation
+		// Verify the macro body uses $($base)+ :: for path concatenation
 		assert!(
-			output.contains("$ ($ base) * ::"),
-			"__for_each_url_resolver body must use $($base)* :: to extend the base path"
+			normalized.contains("$($ base) + ::"),
+			"__for_each_url_resolver body must use $($base)+ :: to extend the base path \
+			 — got: {normalized}"
 		);
 
 		// Verify meta idents for each endpoint are present
 		assert!(
-			output.contains("__url_resolver_meta_login"),
+			normalized.contains("__url_resolver_meta_login"),
 			"missing login meta ident"
 		);
 		assert!(
-			output.contains("__url_resolver_meta_register"),
+			normalized.contains("__url_resolver_meta_register"),
 			"missing register meta ident"
 		);
 	}
@@ -565,7 +572,7 @@ mod tests {
 	#[test]
 	fn for_each_url_resolver_macro_is_syntactically_valid() {
 		// The generated code must be parseable as valid Rust.
-		// Previously, $base:path was used instead of $($base:tt)*,
+		// Previously, $base:path was used instead of $($base:tt)+,
 		// which made the generated macro unparseable because :path
 		// fragments cannot be extended with :: in declarative macros.
 		let input = quote! {
@@ -605,10 +612,10 @@ mod tests {
 		};
 
 		let result = url_patterns_impl(quote! {}, input).unwrap();
-		let output = result.to_string();
+		let normalized = normalize_ws(&result.to_string());
 
 		assert!(
-			!output.contains("$ base : path"),
+			!normalized.contains("$ base : path"),
 			"__for_each_url_resolver must NOT use $base:path — \
 			 :path fragments cannot be extended with :: in declarative macros"
 		);

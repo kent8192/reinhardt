@@ -1,3 +1,5 @@
+use cfg_aliases::cfg_aliases;
+
 fn main() {
 	// Auto-detect: check if reinhardt workspace exists in parent
 	let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -32,4 +34,11 @@ fn main() {
 
 	// Declare custom cfg to avoid warnings in Rust 2024 edition
 	println!("cargo::rustc-check-cfg=cfg(with_reinhardt)");
+	println!("cargo::rustc-check-cfg=cfg(wasm)");
+	println!("cargo::rustc-check-cfg=cfg(native)");
+
+	cfg_aliases! {
+		wasm: { all(target_family = "wasm", target_os = "unknown") },
+		native: { not(all(target_family = "wasm", target_os = "unknown")) },
+	}
 }

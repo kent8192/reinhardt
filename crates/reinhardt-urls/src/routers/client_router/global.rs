@@ -15,7 +15,7 @@ static GLOBAL_CLIENT_REVERSER: OnceCell<StdRwLock<Option<Arc<ClientUrlReverser>>
 
 /// Register a [`ClientUrlReverser`] globally.
 ///
-/// Called by [`UnifiedRouter::register_globally()`] after extracting the
+/// Called by `UnifiedRouter::register_globally()` after extracting the
 /// reverser from the `ClientRouter`.
 pub fn register_client_reverser(reverser: ClientUrlReverser) {
 	let cell = GLOBAL_CLIENT_REVERSER.get_or_init(|| StdRwLock::new(None));

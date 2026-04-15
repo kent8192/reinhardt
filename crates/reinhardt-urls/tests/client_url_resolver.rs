@@ -1,3 +1,4 @@
+#![cfg(feature = "client-router")]
 //! Integration tests for client-side URL resolution.
 
 use rstest::*;

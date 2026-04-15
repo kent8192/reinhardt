@@ -682,23 +682,16 @@ fn url_patterns_client_impl(
 	let fn_sig = &func.sig;
 	let fn_block = &func.block;
 
-	// Rewrite named_route calls to prefix names with "app:"
-	// We let the user write .named_route("login", ...) and expand to
-	// .named_route("auth:login", ...)
-	// by wrapping the function body with a post-processing step.
-	//
-	// However, manipulating method chains in proc macros is fragile.
-	// Instead, we require the user to NOT prefix names — the metadata
-	// captures unqualified names, and the #[routes] macro generates
-	// the "app:" prefix in the per-app struct's resolve() method.
-	//
-	// For runtime registration, we emit the function unchanged —
-	// the route names in ClientRouter are unqualified, and
-	// to_reverser() extracts them as-is.
+	// Wrap the function body to apply `with_namespace("app")` to the
+	// returned `ClientRouter`. This prefixes all named route keys with
+	// "app:" so that `to_reverser()` produces names matching the
+	// "app:route" format used by per-app resolver structs.
 	let func_output = quote! {
 		#(#fn_attrs)*
-		#fn_vis #fn_sig
-		#fn_block
+		#fn_vis #fn_sig {
+			let __router = (|| #fn_block)();
+			__router.with_namespace(#app_str)
+		}
 	};
 
 	Ok(quote! {

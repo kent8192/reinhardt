@@ -198,6 +198,27 @@ impl ClientRouter {
 		self
 	}
 
+	/// Prefix all named route keys with `"namespace:"`.
+	///
+	/// This is the client-side equivalent of `ServerRouter::with_namespace()`.
+	/// Called by `#[url_patterns(client = true, app = "...")]` to ensure
+	/// registered names match the `"app:route"` format used by per-app
+	/// resolver structs.
+	pub fn with_namespace(mut self, namespace: &str) -> Self {
+		let old = std::mem::take(&mut self.named_routes);
+		for (name, idx) in old {
+			self.named_routes
+				.insert(format!("{namespace}:{name}"), idx);
+		}
+		// Also update route names stored inside ClientRoute
+		for route in &mut self.routes {
+			if let Some(ref old_name) = route.name {
+				route.name = Some(format!("{namespace}:{old_name}"));
+			}
+		}
+		self
+	}
+
 	/// Adds a route to the router.
 	pub fn route<F>(mut self, pattern: &str, component: F) -> Self
 	where

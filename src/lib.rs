@@ -295,9 +295,7 @@ pub use reinhardt_macros::url_patterns;
 #[cfg(native)]
 pub use reinhardt_macros::viewset;
 
-// Re-export client_routes proc macro for client-side route registration
-#[cfg(feature = "client-router")]
-pub use reinhardt_macros::client_routes;
+// client_routes! proc macro removed: superseded by #[url_patterns(client = true)]
 
 // Re-export admin attribute macro (requires admin feature)
 #[cfg(all(feature = "admin", native))]

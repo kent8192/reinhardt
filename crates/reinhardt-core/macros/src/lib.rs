@@ -17,7 +17,7 @@ use syn::{ItemFn, ItemStruct, parse_macro_input};
 mod action;
 mod admin;
 mod api_view;
-mod client_routes;
+// client_routes module removed: superseded by #[url_patterns(client = true)]
 mod app_config_attribute;
 mod app_config_derive;
 mod apply_update_attribute;
@@ -244,40 +244,6 @@ pub fn permission_required(args: TokenStream, input: TokenStream) -> TokenStream
 #[proc_macro]
 pub fn installed_apps(input: TokenStream) -> TokenStream {
 	installed_apps_impl(input.into())
-		.unwrap_or_else(|e| e.to_compile_error())
-		.into()
-}
-
-/// Define client-side routes with compile-time metadata for per-app URL
-/// resolver struct generation.
-///
-/// Generates both runtime `named_route()` registrations on the
-/// `ClientRouter` and compile-time metadata macros consumed by the
-/// `#[routes]` macro — mirroring the server-side pattern used by `#[get]`,
-/// `#[post]`, etc.
-///
-/// # Syntax
-///
-/// ```rust,ignore
-/// client_routes!(router_expr, app_label,
-///     "route_name": "/pattern/" => handler_expr,
-///     "route_name": "/pattern/{param}/" => handler_expr,
-/// )
-/// ```
-///
-/// # Example
-///
-/// ```rust,ignore
-/// .client(|c| {
-///     client_routes!(c, auth,
-///         "login_page": "/login/" => || login_page(),
-///         "user_detail": "/users/{id}/" => |ClientPath(id): ClientPath<Uuid>| user_page(id),
-///     )
-/// })
-/// ```
-#[proc_macro]
-pub fn client_routes(input: TokenStream) -> TokenStream {
-	client_routes::client_routes_impl(input.into())
 		.unwrap_or_else(|e| e.to_compile_error())
 		.into()
 }

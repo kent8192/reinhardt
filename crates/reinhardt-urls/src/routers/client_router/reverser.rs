@@ -6,8 +6,6 @@
 
 use std::collections::HashMap;
 
-use crate::routers::reverse::reverse_single_pass;
-
 /// Thread-safe reverse URL resolver for client-side routes.
 ///
 /// Extracted from [`ClientRouter`] via [`ClientRouter::to_reverser()`] to
@@ -47,16 +45,67 @@ impl ClientUrlReverser {
 
     /// Reverse a named route with the given parameters.
     ///
-    /// Returns `None` if the route name is not found.
-    /// Panics (via [`reverse_single_pass`]) if a parameter value contains
-    /// path separators or other injection characters.
+    /// Returns `None` if the route name is not found or if required
+    /// parameters are missing (i.e., unreplaced `{param}` placeholders remain).
+    ///
+    /// # Panics
+    ///
+    /// Panics if a parameter value contains path separators or other
+    /// injection characters.
     pub fn reverse(&self, name: &str, params: &[(&str, &str)]) -> Option<String> {
         let pattern = self.named_patterns.get(name)?;
         let param_map: HashMap<String, String> = params
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        Some(reverse_single_pass(pattern, &param_map))
+        let result = Self::substitute(pattern, &param_map);
+        // If any placeholder was not replaced, the params were incomplete
+        if result.contains('{') {
+            return None;
+        }
+        Some(result)
+    }
+
+    /// Substitute `{param}` placeholders in `pattern` with values from `params`.
+    ///
+    /// Validates parameter values against path-separator injection.
+    /// Unmatched placeholders are preserved verbatim.
+    fn substitute(pattern: &str, params: &HashMap<String, String>) -> String {
+        // Validate parameter values
+        for (name, value) in params {
+            if value.contains('/')
+                || value.contains('\\')
+                || value.contains('?')
+                || value.contains('#')
+                || value.contains('%')
+            {
+                panic!(
+                    "Invalid parameter value for '{}': contains dangerous characters \
+                     (path separators, query delimiters, or encoded sequences)",
+                    name
+                );
+            }
+        }
+
+        let mut result = String::with_capacity(pattern.len());
+        let mut chars = pattern.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '{' {
+                let param_name: String = chars.by_ref().take_while(|&c| c != '}').collect();
+                if let Some(value) = params.get(&param_name) {
+                    result.push_str(value);
+                } else {
+                    result.push('{');
+                    result.push_str(&param_name);
+                    result.push('}');
+                }
+            } else {
+                result.push(ch);
+            }
+        }
+
+        result
     }
 }
 
@@ -108,6 +157,15 @@ mod tests {
     fn test_reverse_unknown_route(reverser: ClientUrlReverser) {
         // Act
         let url = reverser.reverse("nonexistent", &[]);
+
+        // Assert
+        assert_eq!(url, None);
+    }
+
+    #[rstest]
+    fn test_reverse_missing_params_returns_none(reverser: ClientUrlReverser) {
+        // Act — route requires {id} but no params provided
+        let url = reverser.reverse("auth:user_detail", &[]);
 
         // Assert
         assert_eq!(url, None);

@@ -534,6 +534,54 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				}
 			}).collect();
 
+			// Generate per-app client URL resolver structs.
+			// These use runtime string-based resolution via ClientUrlResolver
+			// because client routes are defined inside closures where
+			// compile-time metadata cannot be placed at module scope.
+			let per_app_client_code: Vec<_> = app_idents.iter().map(|app| {
+				let client_urls_struct_name = crate::pascal_case::to_pascal_case_with_suffix(
+					&app.to_string(), "ClientUrls",
+				);
+				let client_urls_struct = proc_macro2::Ident::new(
+					&client_urls_struct_name, proc_macro2::Span::call_site(),
+				);
+				let accessor_method = proc_macro2::Ident::new(
+					&format!("{}_client", app), proc_macro2::Span::call_site(),
+				);
+				let app_str = app.to_string();
+
+				quote! {
+					/// Per-app client URL resolver.
+					///
+					/// Access via `ResolvedUrls::#accessor_method()`.
+					pub struct #client_urls_struct<'a> {
+						resolver: &'a ResolvedUrls,
+						app_label: &'static str,
+					}
+
+					impl #client_urls_struct<'_> {
+						/// Resolve a client-side URL by route name and parameters.
+						///
+						/// The route name is automatically prefixed with the app label
+						/// (e.g., `"login_page"` becomes `"auth:login_page"`).
+						pub fn resolve(&self, route_name: &str, params: &[(&str, &str)]) -> String {
+							let full_name = ::std::format!("{}:{}", self.app_label, route_name);
+							self.resolver.resolve_client_url(&full_name, params)
+						}
+					}
+
+					impl ResolvedUrls {
+						/// Access client URL resolver for the `#app` app.
+						pub fn #accessor_method(&self) -> #client_urls_struct<'_> {
+							#client_urls_struct {
+								resolver: self,
+								app_label: #app_str,
+							}
+						}
+					}
+				}
+			}).collect();
+
 			// Generate url_prelude re-exports
 			let prelude_exports: Vec<_> = app_idents
 				.iter()
@@ -542,8 +590,13 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 						crate::pascal_case::to_pascal_case_with_suffix(&app.to_string(), "Urls");
 					let urls_struct =
 						proc_macro2::Ident::new(&urls_struct_name, proc_macro2::Span::call_site());
+					let client_urls_struct_name =
+						crate::pascal_case::to_pascal_case_with_suffix(&app.to_string(), "ClientUrls");
+					let client_urls_struct =
+						proc_macro2::Ident::new(&client_urls_struct_name, proc_macro2::Span::call_site());
 					quote! {
 						pub use super::#urls_struct;
+						pub use super::#client_urls_struct;
 						// Deprecated flat trait re-exports (backward compatibility)
 						#[allow(deprecated)]
 						pub use crate::apps::#app::urls::url_resolvers::*;
@@ -559,15 +612,15 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 					concat!(env!("CARGO_MANIFEST_DIR"), "/target/reinhardt/.installed_apps")
 				);
 
-				// All per-app resolvers and url_prelude are native-only.
-				// Wrapped in a cfg-gated module because each block contains
-				// multiple items (struct, macro_rules, impl) that all need gating.
+				// Server-side per-app resolvers are native-only.
 				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				#[doc(hidden)]
 				mod __namespaced_resolvers {
 					pub use super::ResolvedUrls;
 
 					#(#per_app_code)*
+
+					#(#per_app_client_code)*
 
 					/// Prelude module re-exporting URL resolver types.
 					pub mod url_prelude {

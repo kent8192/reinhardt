@@ -1083,6 +1083,9 @@ fn generate_server_handler(
 			}
 
 			// MSW: Generate MockableServerFn impl (server-side) when msw feature is enabled
+			// allow(unexpected_cfgs): The `msw` feature is defined in the proc macro's
+			// origin crate, not necessarily in the crate where this macro is expanded.
+			#[allow(unexpected_cfgs)]
 			#[cfg(feature = "msw")]
 			mod __msw {
 				use ::serde::{Serialize, Deserialize};
@@ -1094,9 +1097,11 @@ fn generate_server_handler(
 				}
 			}
 
+			#[allow(unexpected_cfgs)]
 			#[cfg(feature = "msw")]
 			pub use __msw::Args;
 
+			#[allow(unexpected_cfgs)]
 			#[cfg(feature = "msw")]
 			impl #pages_crate::server_fn::MockableServerFn for marker {
 				type Args = Args;
@@ -1106,6 +1111,9 @@ fn generate_server_handler(
 		}
 
 		// MSW: WASM-side marker module with MockableServerFn (standalone, no ServerFnRegistration)
+		// allow(unexpected_cfgs): The `msw` feature is defined in the proc macro's
+		// origin crate, not necessarily in the crate where this macro is expanded.
+		#[allow(unexpected_cfgs)]
 		#[cfg(all(target_family = "wasm", target_os = "unknown", feature = "msw"))]
 		#vis mod #marker_module_name {
 			use ::serde::{Serialize, Deserialize};

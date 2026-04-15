@@ -18,3 +18,6 @@ mod model_attribute_derive_integration;
 
 #[path = "macros/receiver_macro_integration.rs"]
 mod receiver_macro_integration;
+
+#[path = "macros/repro_issue_3651.rs"]
+mod repro_issue_3651;

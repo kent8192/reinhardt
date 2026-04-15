@@ -675,7 +675,7 @@ pub use reinhardt_urls::routers::resolver::UrlResolver;
 #[allow(deprecated)] // CurrentUser is deprecated in favor of AuthUser
 pub use reinhardt_auth::{
 	AllowAny, AnonymousUser, AuthBackend, AuthInfo, AuthUser, BaseUser, CurrentUser, FullUser,
-	IsAdminUser, IsAuthenticated, PasswordHasher, Permission, PermissionsMixin, SimpleUser, User,
+	IsAdminUser, IsAuthenticated, PasswordHasher, Permission, PermissionsMixin, SimpleUser,
 	validate_auth_extractors,
 };
 
@@ -1098,7 +1098,6 @@ pub mod prelude {
 		PasswordHasher,
 		Permission,
 		SimpleUser,
-		User,
 		// User and group management
 		UserManager,
 	};

@@ -1,9 +1,11 @@
-//! Shared state file for cross-macro communication between `installed_apps!` and `#[routes]`.
+//! Shared state file for cross-macro communication between `installed_apps!`,
+//! `#[url_patterns]`, and `#[routes]`.
 //!
-//! Both proc macros expand within the same user crate, but cannot share data through
+//! These proc macros expand within the same user crate, but cannot share data through
 //! Rust's type system. This module provides file-based state sharing:
 //!
 //! - `installed_apps!` writes the list of app labels to a state file
+//! - `#[url_patterns]` reads that file to validate the app name identifier
 //! - `#[routes]` reads that file and generates `url_prelude` directly
 //!
 //! This eliminates the need for the `#[macro_export]` callback pattern that triggers

@@ -575,14 +575,14 @@ mod tests {
 
 		// Verify $base uses tt+ repetition (not :path) so it can be extended with ::
 		assert!(
-			normalized.contains("$($ base : tt) +"),
+			normalized.contains("$ ($ base : tt) +"),
 			"__for_each_url_resolver must use $($base:tt)+ (not $base:path) \
 			 to allow path extension with :: — got: {normalized}"
 		);
 
 		// Verify the macro body uses $($base)+ :: for path concatenation
 		assert!(
-			normalized.contains("$($ base) + ::"),
+			normalized.contains("$ ($ base) + ::"),
 			"__for_each_url_resolver body must use $($base)+ :: to extend the base path \
 			 — got: {normalized}"
 		);

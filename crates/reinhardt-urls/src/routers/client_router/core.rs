@@ -607,7 +607,7 @@ impl ClientRouter {
 
 	/// Extract a lightweight, thread-safe URL reverser.
 	///
-	/// The returned [`ClientUrlReverser`] contains only the
+	/// The returned `ClientUrlReverser` contains only the
 	/// named-route-to-pattern mapping and can be shared across threads
 	/// (unlike `ClientRouter` itself which holds reactive signals).
 	pub fn to_reverser(&self) -> super::reverser::ClientUrlReverser {

@@ -11,7 +11,6 @@ use uuid::Uuid;
 use {
 	crate::apps::auth::models::User,
 	crate::apps::dm::models::{DMMessage, DMRoom},
-	reinhardt::AuthUser,
 	reinhardt::DatabaseConnection,
 	reinhardt::db::orm::{Filter, FilterOperator, FilterValue, ManyToManyAccessor, Model},
 	std::collections::{HashMap, HashSet},

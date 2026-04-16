@@ -418,8 +418,9 @@ fn parse_url_patterns_args(args: TokenStream) -> syn::Result<UrlPatternsArgs> {
 		});
 	}
 
-	// Try parsing as a single string literal first (backward compatible)
-	if let Ok(lit) = syn::parse2::<syn::LitStr>(args.clone()) {
+	// Try parsing as a bare identifier (app label shorthand)
+	if let Ok(ident) = syn::parse2::<syn::Ident>(args.clone()) {
+		let lit = syn::LitStr::new(&ident.to_string(), ident.span());
 		return Ok(UrlPatternsArgs {
 			app_label: Some(lit),
 			client: false,
@@ -716,6 +717,7 @@ fn url_patterns_client_impl(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use serial_test::serial;
 
 	// === Endpoint extraction (existing tests) ===
 
@@ -945,6 +947,7 @@ mod tests {
 	}
 
 	#[test]
+	#[serial(installed_apps)]
 	fn url_patterns_with_ident_app_label_wraps_namespace() {
 		// Write a temporary state file so validation passes in the test environment
 		let _ = crate::macro_state::write_installed_apps(&["users".to_string()]);
@@ -982,6 +985,7 @@ mod tests {
 	}
 
 	#[test]
+	#[serial(installed_apps)]
 	fn url_patterns_rejects_unknown_app_label() {
 		// Write a state file with known apps (not including "nonexistent")
 		let _ = crate::macro_state::write_installed_apps(&["myapp".to_string()]);

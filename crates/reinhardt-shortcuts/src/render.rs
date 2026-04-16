@@ -145,19 +145,9 @@ pub fn render_html(html: impl Into<String>) -> Response {
 /// let escaped = escape_html("<script>alert('xss')</script>");
 /// assert_eq!(escaped, "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;");
 /// ```
+#[deprecated(note = "use `reinhardt_core::security::escape_html` instead")]
 pub fn escape_html(input: &str) -> String {
-	let mut output = String::with_capacity(input.len());
-	for ch in input.chars() {
-		match ch {
-			'&' => output.push_str("&amp;"),
-			'<' => output.push_str("&lt;"),
-			'>' => output.push_str("&gt;"),
-			'"' => output.push_str("&quot;"),
-			'\'' => output.push_str("&#x27;"),
-			_ => output.push(ch),
-		}
-	}
-	output
+	reinhardt_core::security::escape_html(input)
 }
 
 /// Render an HTML string with dynamic content escaped for XSS safety.

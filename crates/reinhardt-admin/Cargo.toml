@@ -126,11 +126,6 @@ toml = { workspace = true }
 wasm-bindgen-test = "0.3.56"
 reinhardt-test = { workspace = true, features = ["wasm"] }
 
-[lints.rust]
-# The `server_fn` proc macro generates `#[cfg(feature = "msw")]` in expanded code.
-# This crate doesn't define `msw` as a feature, so declare it as an expected cfg
-# value to suppress `unexpected_cfgs` warnings from macro expansion.
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("msw"))'] }
 
 [build-dependencies]
 cfg_aliases = "0.2"

@@ -1487,18 +1487,24 @@ mod tests {
 		let integer_field = TypedFieldType::IntegerField;
 		let boolean_field = TypedFieldType::BooleanField;
 		let date_field = TypedFieldType::DateField;
+		let file_field = TypedFieldType::FileField;
+		let image_field = TypedFieldType::ImageField;
 
 		// Act
 		let char_type = char_field.rust_type();
 		let integer_type = integer_field.rust_type();
 		let boolean_type = boolean_field.rust_type();
 		let date_type = date_field.rust_type();
+		let file_type = file_field.rust_type();
+		let image_type = image_field.rust_type();
 
 		// Assert
 		assert_eq!(char_type, "String");
 		assert_eq!(integer_type, "i64");
 		assert_eq!(boolean_type, "bool");
 		assert_eq!(date_type, "Option<chrono::NaiveDate>");
+		assert_eq!(file_type, "Option<web_sys::File>");
+		assert_eq!(image_type, "Option<web_sys::File>");
 	}
 
 	#[rstest]
@@ -1508,18 +1514,24 @@ mod tests {
 		let email_field = TypedFieldType::EmailField;
 		let password_field = TypedFieldType::PasswordField;
 		let boolean_field = TypedFieldType::BooleanField;
+		let file_field = TypedFieldType::FileField;
+		let image_field = TypedFieldType::ImageField;
 
 		// Act
 		let char_widget = char_field.default_widget();
 		let email_widget = email_field.default_widget();
 		let password_widget = password_field.default_widget();
 		let boolean_widget = boolean_field.default_widget();
+		let file_widget = file_field.default_widget();
+		let image_widget = image_field.default_widget();
 
 		// Assert
 		assert_eq!(char_widget, TypedWidget::TextInput);
 		assert_eq!(email_widget, TypedWidget::EmailInput);
 		assert_eq!(password_widget, TypedWidget::PasswordInput);
 		assert_eq!(boolean_widget, TypedWidget::CheckboxInput);
+		assert_eq!(file_widget, TypedWidget::FileInput);
+		assert_eq!(image_widget, TypedWidget::FileInput);
 	}
 
 	#[rstest]
@@ -1530,6 +1542,7 @@ mod tests {
 		let password_input = TypedWidget::PasswordInput;
 		let number_input = TypedWidget::NumberInput;
 		let date_input = TypedWidget::DateInput;
+		let file_input = TypedWidget::FileInput;
 
 		// Act
 		let text_type = text_input.html_type();
@@ -1537,6 +1550,7 @@ mod tests {
 		let password_type = password_input.html_type();
 		let number_type = number_input.html_type();
 		let date_type = date_input.html_type();
+		let file_type = file_input.html_type();
 
 		// Assert
 		assert_eq!(text_type, "text");
@@ -1544,6 +1558,7 @@ mod tests {
 		assert_eq!(password_type, "password");
 		assert_eq!(number_type, "number");
 		assert_eq!(date_type, "date");
+		assert_eq!(file_type, "file");
 	}
 
 	#[rstest]
@@ -1551,18 +1566,21 @@ mod tests {
 		// Arrange
 		let text_input = TypedWidget::TextInput;
 		let email_input = TypedWidget::EmailInput;
+		let file_input = TypedWidget::FileInput;
 		let textarea = TypedWidget::Textarea;
 		let select = TypedWidget::Select;
 
 		// Act
 		let text_is_input = text_input.is_input();
 		let email_is_input = email_input.is_input();
+		let file_is_input = file_input.is_input();
 		let textarea_is_input = textarea.is_input();
 		let select_is_input = select.is_input();
 
 		// Assert
 		assert!(text_is_input);
 		assert!(email_is_input);
+		assert!(file_is_input);
 		assert!(!textarea_is_input);
 		assert!(!select_is_input);
 	}
@@ -1573,16 +1591,19 @@ mod tests {
 		let text_input = TypedWidget::TextInput;
 		let textarea = TypedWidget::Textarea;
 		let select = TypedWidget::Select;
+		let file_input = TypedWidget::FileInput;
 
 		// Act
 		let text_tag = text_input.html_tag();
 		let textarea_tag = textarea.html_tag();
 		let select_tag = select.html_tag();
+		let file_tag = file_input.html_tag();
 
 		// Assert
 		assert_eq!(text_tag, "input");
 		assert_eq!(textarea_tag, "textarea");
 		assert_eq!(select_tag, "select");
+		assert_eq!(file_tag, "input");
 	}
 
 	#[rstest]

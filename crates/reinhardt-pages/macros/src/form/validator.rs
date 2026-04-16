@@ -3725,4 +3725,87 @@ mod tests {
 		assert!(result.is_ok());
 		assert_eq!(result.unwrap(), None);
 	}
+
+	#[rstest::rstest]
+	fn test_validate_file_field() {
+		// Arrange
+		let input = quote! {
+			name: UploadForm,
+			action: "/api/upload",
+
+			fields: {
+				document: FileField {},
+			},
+		};
+
+		// Act
+		let result = parse_and_validate(input);
+
+		// Assert
+		assert!(result.is_ok());
+		let typed = result.unwrap();
+		assert_eq!(typed.fields.len(), 1);
+		let field = typed.fields[0].as_field().unwrap();
+		assert!(matches!(field.field_type, TypedFieldType::FileField));
+		assert!(matches!(field.widget, TypedWidget::FileInput));
+	}
+
+	#[rstest::rstest]
+	fn test_validate_image_field() {
+		// Arrange
+		let input = quote! {
+			name: AvatarForm,
+			action: "/api/avatar",
+
+			fields: {
+				photo: ImageField {},
+			},
+		};
+
+		// Act
+		let result = parse_and_validate(input);
+
+		// Assert
+		assert!(result.is_ok());
+		let typed = result.unwrap();
+		assert_eq!(typed.fields.len(), 1);
+		let field = typed.fields[0].as_field().unwrap();
+		assert!(matches!(field.field_type, TypedFieldType::ImageField));
+		assert!(matches!(field.widget, TypedWidget::FileInput));
+	}
+
+	#[rstest::rstest]
+	fn test_validate_form_with_mixed_file_and_text_fields() {
+		// Arrange
+		let input = quote! {
+			name: ProfileForm,
+			action: "/api/profile",
+
+			fields: {
+				name: CharField { required },
+				avatar: ImageField {},
+				resume: FileField {},
+			},
+		};
+
+		// Act
+		let result = parse_and_validate(input);
+
+		// Assert
+		assert!(result.is_ok());
+		let typed = result.unwrap();
+		assert_eq!(typed.fields.len(), 3);
+		assert!(matches!(
+			typed.fields[0].as_field().unwrap().field_type,
+			TypedFieldType::CharField
+		));
+		assert!(matches!(
+			typed.fields[1].as_field().unwrap().field_type,
+			TypedFieldType::ImageField
+		));
+		assert!(matches!(
+			typed.fields[2].as_field().unwrap().field_type,
+			TypedFieldType::FileField
+		));
+	}
 }

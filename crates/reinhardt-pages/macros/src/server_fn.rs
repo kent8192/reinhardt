@@ -953,82 +953,81 @@ fn generate_server_handler(
 	// and a `use` item with the same name in the same module.
 	let marker_module_name = name.clone();
 
-	// MSW: Conditionally generate MockableServerFn impls at macro expansion time
-	// (not via emitted #[cfg]) to avoid check-cfg errors in destination crates.
-	// Fixes #3666
-	#[cfg(feature = "msw")]
-	let msw_server_side = {
-		// Extract the Ok type from Result<T, ServerFnError> for MockableServerFn::Response
-		let response_type = extract_result_ok_type(return_type);
+	// MSW: Check at proc-macro expansion time whether the consuming crate has
+	// the "msw" feature enabled. This avoids emitting #[cfg(feature = "msw")]
+	// in the generated code, which would trigger unexpected_cfgs warnings in
+	// crates that don't declare "msw" as a known feature. (Issue #3673)
+	let msw_enabled = std::env::var("CARGO_FEATURE_MSW").is_ok();
 
-		// Convert inject param names to string literals for INJECTED_PARAMS const
-		let inject_param_name_strs: Vec<String> = inject_params
-			.iter()
-			.map(|p| {
-				if let syn::Pat::Ident(pat_ident) = &*p.pat {
-					pat_ident.ident.to_string()
-				} else {
-					"_".to_string()
+	// MSW: Extract the Ok type from Result<T, ServerFnError> for MockableServerFn::Response
+	let response_type = extract_result_ok_type(return_type);
+
+	// Convert inject param names to string literals for INJECTED_PARAMS const
+	let inject_param_name_strs: Vec<String> = inject_params
+		.iter()
+		.map(|p| {
+			if let syn::Pat::Ident(pat_ident) = &*p.pat {
+				pat_ident.ident.to_string()
+			} else {
+				"_".to_string()
+			}
+		})
+		.collect();
+
+	// MSW: Generate server-side MockableServerFn tokens only when msw feature is enabled
+	let msw_server_tokens = if msw_enabled {
+		quote! {
+			mod __msw {
+				use ::serde::{Serialize, Deserialize};
+
+				/// Public Args struct for MSW type-safe mocking.
+				#[derive(Serialize, Deserialize)]
+				pub struct Args {
+					#(pub #regular_param_names: #regular_param_types),*
 				}
-			})
-			.collect();
-
-		quote! {
-		mod __msw {
-			use super::super::*;
-			use ::serde::{Serialize, Deserialize};
-
-			/// Public Args struct for MSW type-safe mocking.
-			#[derive(Serialize, Deserialize)]
-			pub struct Args {
-				#(pub #regular_param_names: #regular_param_types),*
 			}
-		}
 
-		pub use __msw::Args;
-
-		impl #pages_crate::server_fn::MockableServerFn for marker {
-			type Args = Args;
-			type Response = #response_type;
-			const INJECTED_PARAMS: &'static [&'static str] = &[#(#inject_param_name_strs),*];
-		}
-		}
-	};
-	#[cfg(not(feature = "msw"))]
-	let msw_server_side = quote! {};
-
-	#[cfg(feature = "msw")]
-	let msw_wasm_side = {
-		let response_type = extract_result_ok_type(return_type);
-
-		quote! {
-		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-		#vis mod #marker_module_name {
-			use super::*;
-			use ::serde::{Serialize, Deserialize};
-
-			#[doc = concat!("Marker struct for server function `", #name_str, "` (WASM MSW mock target)")]
-			pub struct marker;
-
-			/// Public Args struct for MSW type-safe mocking.
-			#[derive(Serialize, Deserialize)]
-			pub struct Args {
-				#(pub #regular_param_names: #regular_param_types),*
-			}
+			pub use __msw::Args;
 
 			impl #pages_crate::server_fn::MockableServerFn for marker {
 				type Args = Args;
 				type Response = #response_type;
-				const PATH: &'static str = #endpoint;
-				const NAME: &'static str = #name_str;
-				const CODEC: &'static str = #codec;
-				const INJECTED_PARAMS: &'static [&'static str] = &[];
+				const INJECTED_PARAMS: &'static [&'static str] = &[#(#inject_param_name_strs),*];
 			}
 		}
-		}
+	} else {
+		quote! {}
 	};
-	#[cfg(not(feature = "msw"))]
-	let msw_wasm_side = quote! {};
+
+	// MSW: Generate WASM-side marker module only when msw feature is enabled
+	let msw_wasm_tokens = if msw_enabled {
+		quote! {
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+			#vis mod #marker_module_name {
+				use ::serde::{Serialize, Deserialize};
+
+				#[doc = concat!("Marker struct for server function `", #name_str, "` (WASM MSW mock target)")]
+				pub struct marker;
+
+				/// Public Args struct for MSW type-safe mocking.
+				#[derive(Serialize, Deserialize)]
+				pub struct Args {
+					#(pub #regular_param_names: #regular_param_types),*
+				}
+
+				impl #pages_crate::server_fn::MockableServerFn for marker {
+					type Args = Args;
+					type Response = #response_type;
+					const PATH: &'static str = #endpoint;
+					const NAME: &'static str = #name_str;
+					const CODEC: &'static str = #codec;
+					const INJECTED_PARAMS: &'static [&'static str] = &[];
+				}
+			}
+		}
+	} else {
+		quote! {}
+	};
 
 	quote! {
 		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -1146,10 +1145,12 @@ fn generate_server_handler(
 				}
 			}
 
-			#msw_server_side
+			// MSW: server-side MockableServerFn (conditionally generated; Issue #3673)
+			#msw_server_tokens
 		}
 
-		#msw_wasm_side
+		// MSW: WASM-side marker module (conditionally generated; Issue #3673)
+		#msw_wasm_tokens
 	}
 }
 
@@ -1157,7 +1158,6 @@ fn generate_server_handler(
 ///
 /// Given `Result<User, ServerFnError>`, returns the token stream for `User`.
 /// Falls back to the full return type if it cannot be parsed as `Result<T, E>`.
-#[cfg(feature = "msw")]
 fn extract_result_ok_type(return_type: &syn::Type) -> proc_macro2::TokenStream {
 	if let syn::Type::Path(type_path) = return_type
 		&& let Some(segment) = type_path.path.segments.last()

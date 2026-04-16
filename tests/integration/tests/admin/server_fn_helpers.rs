@@ -345,7 +345,7 @@ impl ModelAdmin for AllPermissionsModelAdmin {
 }
 
 /// Builds the CREATE TABLE SQL for the standard `test_models` table using SeaQuery.
-fn build_test_models_create_table_sql() -> String {
+pub(super) fn build_test_models_create_table_sql() -> String {
 	Query::create_table()
 		.table(Alias::new("test_models"))
 		.if_not_exists()
@@ -376,7 +376,7 @@ fn build_test_models_create_table_sql() -> String {
 }
 
 /// Builds the TRUNCATE TABLE SQL for the standard `test_models` table using SeaQuery.
-fn build_test_models_truncate_sql() -> String {
+pub(super) fn build_test_models_truncate_sql() -> String {
 	Query::truncate_table()
 		.table(Alias::new("test_models"))
 		.restart_identity()
@@ -385,7 +385,7 @@ fn build_test_models_truncate_sql() -> String {
 }
 
 /// Creates the test_models table and truncates any leftover data.
-async fn setup_test_models_table(pool: &sqlx::PgPool) {
+pub(super) async fn setup_test_models_table(pool: &sqlx::PgPool) {
 	pool.execute(build_test_models_create_table_sql().as_str())
 		.await
 		.expect("Failed to create test_models table");
@@ -516,7 +516,7 @@ pub async fn view_only_context(
 /// into `AdminDefaultUser`. Every field in the struct must have a matching column.
 /// Note: `user_permissions` and `groups` use `TEXT` (not `TEXT[]`) because the ORM
 /// row-mapping uses JSON deserialization for `Vec<String>` fields.
-fn build_auth_user_create_table_sql() -> String {
+pub(super) fn build_auth_user_create_table_sql() -> String {
 	Query::create_table()
 		.table(Alias::new("auth_user"))
 		.if_not_exists()

@@ -15,6 +15,7 @@ proc-macro = true
 
 [features]
 default = []
+msw = []
 
 [dependencies]
 # DSL definitions (new canonical location)

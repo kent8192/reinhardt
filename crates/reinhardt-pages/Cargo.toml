@@ -15,7 +15,7 @@ default = []
 msgpack = ["dep:rmp-serde"]
 testing = []
 # Exposes MockableServerFn trait for MSW-style testing
-msw = []
+msw = ["reinhardt-pages-macros/msw"]
 pages-full = ["msgpack", "web-sys-full"]
 static = []
 urls = []

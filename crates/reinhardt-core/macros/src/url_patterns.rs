@@ -320,8 +320,198 @@ fn build_mount_reexport(call: &MountCall) -> TokenStream {
 	}
 }
 
-/// Implementation of the `#[url_patterns]` attribute macro.
+/// A named client route extracted from the function body.
 ///
+/// Example: `.named_route("login_page", "/login/", handler)`
+/// yields `ClientNamedRoute { name: "login_page", pattern: "/login/" }`.
+struct ClientNamedRoute {
+	name: String,
+	pattern: String,
+}
+
+/// Extract `.named_route(NAME, PATTERN, HANDLER)` calls from a function body.
+///
+/// Scans for the pattern `.named_route("name", "/pattern/", expr)` and
+/// extracts the route name and URL pattern strings.
+fn extract_named_route_calls(func: &ItemFn) -> Vec<ClientNamedRoute> {
+	let mut routes = Vec::new();
+	let body_tokens = flatten_body(func);
+
+	let mut i = 0;
+	while i < body_tokens.len() {
+		if i + 2 < body_tokens.len()
+			&& let proc_macro2::TokenTree::Punct(p) = &body_tokens[i]
+			&& p.as_char() == '.'
+			&& let proc_macro2::TokenTree::Ident(ident) = &body_tokens[i + 1]
+			&& (ident == "named_route"
+				|| ident == "named_route_path"
+				|| ident == "named_route_path2"
+				|| ident == "named_route_path3"
+				|| ident == "named_route_params"
+				|| ident == "named_route_result")
+			&& let proc_macro2::TokenTree::Group(group) = &body_tokens[i + 2]
+			&& group.delimiter() == proc_macro2::Delimiter::Parenthesis
+		{
+			// Parse the first two string literal arguments: name, pattern
+			let inner_tokens: Vec<proc_macro2::TokenTree> = group.stream().into_iter().collect();
+			if let Some(route) = parse_named_route_args(&inner_tokens) {
+				routes.push(route);
+			}
+			i += 3;
+			continue;
+		}
+		i += 1;
+	}
+	routes
+}
+
+/// Parse the arguments of a `named_route(name, pattern, ...)` call.
+///
+/// Extracts the first two string literals (name and pattern).
+fn parse_named_route_args(tokens: &[proc_macro2::TokenTree]) -> Option<ClientNamedRoute> {
+	let mut literals = Vec::new();
+	for tt in tokens {
+		if let proc_macro2::TokenTree::Literal(lit) = tt {
+			let lit_str = lit.to_string();
+			// Check if it's a string literal (starts and ends with ")
+			if lit_str.starts_with('"') && lit_str.ends_with('"') && lit_str.len() >= 2 {
+				literals.push(lit_str[1..lit_str.len() - 1].to_string());
+				if literals.len() == 2 {
+					break;
+				}
+			}
+		}
+	}
+
+	if literals.len() >= 2 {
+		Some(ClientNamedRoute {
+			name: literals[0].clone(),
+			pattern: literals[1].clone(),
+		})
+	} else {
+		None
+	}
+}
+
+/// Extract URL parameter names from a pattern string.
+///
+/// Given `/users/{id}/posts/{post_id}/`, returns `["id", "post_id"]`.
+fn extract_url_params(pattern: &str) -> Vec<String> {
+	let mut params = Vec::new();
+	let mut in_param = false;
+	let mut name = String::new();
+	for ch in pattern.chars() {
+		match ch {
+			'{' => {
+				in_param = true;
+				name.clear();
+			}
+			'}' => {
+				if in_param && !name.is_empty() {
+					// Strip type constraint (e.g., "{id:int}" → "id")
+					if let Some(pos) = name.find(':') {
+						name.truncate(pos);
+					}
+					params.push(name.clone());
+				}
+				in_param = false;
+			}
+			_ if in_param => name.push(ch),
+			_ => {}
+		}
+	}
+	params
+}
+
+/// Parsed arguments for `#[url_patterns]`.
+struct UrlPatternsArgs {
+	/// App label for namespacing (e.g., `"auth"`).
+	app_label: Option<syn::LitStr>,
+	/// Whether this is a client-side URL patterns function.
+	client: bool,
+}
+
+/// Parse `#[url_patterns]` arguments.
+///
+/// Supports:
+/// - `#[url_patterns]` — no args
+/// - `#[url_patterns("auth")]` — app label only (backward compatible)
+/// - `#[url_patterns(client = true, app = "auth")]` — client mode with app label
+fn parse_url_patterns_args(args: TokenStream) -> syn::Result<UrlPatternsArgs> {
+	if args.is_empty() {
+		return Ok(UrlPatternsArgs {
+			app_label: None,
+			client: false,
+		});
+	}
+
+	// Try parsing as a single string literal first (backward compatible)
+	if let Ok(lit) = syn::parse2::<syn::LitStr>(args.clone()) {
+		return Ok(UrlPatternsArgs {
+			app_label: Some(lit),
+			client: false,
+		});
+	}
+
+	// Parse as key-value pairs: client = true, app = "auth"
+	let meta_list: syn::punctuated::Punctuated<syn::Meta, syn::Token![,]> =
+		syn::parse::Parser::parse2(
+			syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+			args,
+		)?;
+
+	let mut client = false;
+	let mut app_label = None;
+
+	for meta in &meta_list {
+		match meta {
+			syn::Meta::NameValue(nv) if nv.path.is_ident("client") => {
+				if let syn::Expr::Lit(syn::ExprLit {
+					lit: syn::Lit::Bool(b),
+					..
+				}) = &nv.value
+				{
+					client = b.value;
+				} else {
+					return Err(syn::Error::new_spanned(
+						&nv.value,
+						"expected boolean value for `client`",
+					));
+				}
+			}
+			syn::Meta::NameValue(nv) if nv.path.is_ident("app") => {
+				if let syn::Expr::Lit(syn::ExprLit {
+					lit: syn::Lit::Str(s),
+					..
+				}) = &nv.value
+				{
+					app_label = Some(s.clone());
+				} else {
+					return Err(syn::Error::new_spanned(
+						&nv.value,
+						"expected string literal for `app`",
+					));
+				}
+			}
+			_ => {
+				return Err(syn::Error::new_spanned(
+					meta,
+					"unknown attribute, expected `client = true` or `app = \"name\"`",
+				));
+			}
+		}
+	}
+
+	if client && app_label.is_none() {
+		return Err(syn::Error::new(
+			proc_macro2::Span::call_site(),
+			"`app` is required when `client = true`",
+		));
+	}
+
+	Ok(UrlPatternsArgs { app_label, client })
+}
+
 /// Validates an app name identifier against the installed apps state file.
 ///
 /// Returns `Ok(())` if the app is registered, the state file is unavailable,
@@ -344,14 +534,39 @@ fn validate_app_label(label: &str, span: proc_macro2::Span) -> syn::Result<()> {
 	Ok(())
 }
 
-/// Optionally accepts an app name identifier: `#[url_patterns(users)]`.
-/// When provided, the returned router is wrapped with `.with_namespace("users")`
-/// to enable per-app route name namespacing (Issue #3526).
+/// Implementation of the `#[url_patterns]` attribute macro.
 ///
-/// The identifier is validated against the installed apps state file written by
+/// Supports two modes:
+///
+/// **Server mode** (default):
+/// - `#[url_patterns]` or `#[url_patterns("app_label")]`
+/// - Scans for `.endpoint()`, `.viewset()`, `.mount()` calls
+/// - Generates `url_resolvers` module with metadata macros
+///
+/// **Client mode:**
+/// - `#[url_patterns(client = true, app = "app_label")]`
+/// - Scans for `.named_route()` calls
+/// - Generates `client_url_resolvers` module with metadata macros
+/// - Prefixes route names with `"app:"` at runtime
+///
+/// The app label is validated against the installed apps state file written by
 /// `installed_apps!`. If the state file is available and the identifier is not
 /// a registered app, a compile-time error is emitted (Issue #3668).
 pub(crate) fn url_patterns_impl(args: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
+	let parsed_args = parse_url_patterns_args(args)?;
+
+	if parsed_args.client {
+		return url_patterns_client_impl(parsed_args, input);
+	}
+
+	url_patterns_server_impl(parsed_args, input)
+}
+
+/// Server-mode implementation (original behavior).
+fn url_patterns_server_impl(
+	parsed_args: UrlPatternsArgs,
+	input: TokenStream,
+) -> syn::Result<TokenStream> {
 	let func: ItemFn = parse2(input)?;
 
 	let endpoint_paths = extract_endpoint_paths(&func);
@@ -363,11 +578,8 @@ pub(crate) fn url_patterns_impl(args: TokenStream, input: TokenStream) -> syn::R
 	let mount_re_exports = mount_calls.iter().map(build_mount_reexport);
 	let meta_idents: Vec<syn::Ident> = endpoint_paths.iter().filter_map(build_meta_ident).collect();
 
-	// Parse optional app label: #[url_patterns(users)]
-	let func_output = if !args.is_empty() {
-		let app_label: syn::Ident = syn::parse2(args)?;
-		let app_label_str = app_label.to_string();
-
+	let func_output = if let Some(app_label) = &parsed_args.app_label {
+		let app_label_str = app_label.value();
 		// Validate against installed apps state file (Issue #3668).
 		validate_app_label(&app_label_str, app_label.span())?;
 
@@ -376,7 +588,6 @@ pub(crate) fn url_patterns_impl(args: TokenStream, input: TokenStream) -> syn::R
 		let fn_sig = &func.sig;
 		let fn_block = &func.block;
 
-		// Wrap the function to apply with_namespace
 		quote! {
 			#(#fn_attrs)*
 			#fn_vis #fn_sig {
@@ -385,7 +596,6 @@ pub(crate) fn url_patterns_impl(args: TokenStream, input: TokenStream) -> syn::R
 			}
 		}
 	} else {
-		// No app label — emit function unchanged (backward compatible)
 		quote! { #func }
 	};
 
@@ -421,6 +631,123 @@ pub(crate) fn url_patterns_impl(args: TokenStream, input: TokenStream) -> syn::R
 			}
 			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			pub(crate) use __for_each_url_resolver;
+		}
+	})
+}
+
+/// Client-mode implementation for `#[url_patterns(client = true, app = "...")]`.
+///
+/// Scans the function body for `.named_route()` calls and generates:
+/// 1. Runtime code that prefixes route names with `"app:"`
+/// 2. `client_url_resolvers` module with per-route metadata macros
+fn url_patterns_client_impl(
+	parsed_args: UrlPatternsArgs,
+	input: TokenStream,
+) -> syn::Result<TokenStream> {
+	let func: ItemFn = parse2(input)?;
+	let app_label = parsed_args
+		.app_label
+		.as_ref()
+		.expect("app_label required for client mode");
+	let app_str = app_label.value();
+
+	let named_routes = extract_named_route_calls(&func);
+
+	// Generate per-route metadata macros
+	let mut meta_macro_defs = Vec::new();
+	let mut meta_idents = Vec::new();
+
+	for route in &named_routes {
+		// Validate route name is a valid Rust identifier
+		if syn::parse_str::<syn::Ident>(&route.name).is_err() {
+			return Err(syn::Error::new(
+				proc_macro2::Span::call_site(),
+				format!(
+					"Client route name `{}` is not a valid Rust identifier. \
+					 Route names must be valid identifiers (no hyphens, dots, or leading digits).",
+					route.name
+				),
+			));
+		}
+
+		let method_ident = syn::Ident::new(&route.name, proc_macro2::Span::call_site());
+		let route_name_str = &route.name;
+		let meta_macro_ident = syn::Ident::new(
+			&format!("__client_url_resolver_meta_{}", route.name),
+			proc_macro2::Span::call_site(),
+		);
+
+		let params = extract_url_params(&route.pattern);
+		let param_strs: Vec<&str> = params.iter().map(|s| s.as_str()).collect();
+
+		let meta_def = if params.is_empty() {
+			quote! {
+				#[doc(hidden)]
+				macro_rules! #meta_macro_ident {
+					($callback:ident, $app:ident) => {
+						$callback!($app, #method_ident, #route_name_str, );
+					};
+				}
+				pub(crate) use #meta_macro_ident;
+			}
+		} else {
+			quote! {
+				#[doc(hidden)]
+				macro_rules! #meta_macro_ident {
+					($callback:ident, $app:ident) => {
+						$callback!($app, #method_ident, #route_name_str, #(#param_strs),* );
+					};
+				}
+				pub(crate) use #meta_macro_ident;
+			}
+		};
+
+		meta_macro_defs.push(meta_def);
+		meta_idents.push(meta_macro_ident);
+	}
+
+	// Wrap the function to prefix route names with "app:"
+	let fn_vis = &func.vis;
+	let fn_attrs = &func.attrs;
+	let fn_sig = &func.sig;
+	let fn_block = &func.block;
+
+	// Wrap the function body to apply `with_namespace("app")` to the
+	// returned `ClientRouter`. This prefixes all named route keys with
+	// "app:" so that `to_reverser()` produces names matching the
+	// "app:route" format used by per-app resolver structs.
+	let func_output = quote! {
+		#(#fn_attrs)*
+		#fn_vis #fn_sig {
+			let __router = (|| #fn_block)();
+			__router.with_namespace(#app_str)
+		}
+	};
+
+	Ok(quote! {
+		#func_output
+
+		#[doc(hidden)]
+		pub mod client_url_resolvers {
+			#(
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				#meta_macro_defs
+			)*
+
+			/// Invoke a callback macro for each client URL resolver in this app.
+			/// Used by the `#[routes]` macro to build per-app client resolver structs.
+			/// `$base` must be the absolute path to this `client_url_resolvers` module
+			/// so that the metadata macros resolve at the call site.
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+			macro_rules! __for_each_client_url_resolver {
+				($callback:ident, $app:ident, $($base:tt)+) => {
+					#(
+						$($base)+ :: #meta_idents ! ($callback, $app);
+					)*
+				};
+			}
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+			pub(crate) use __for_each_client_url_resolver;
 		}
 	})
 }

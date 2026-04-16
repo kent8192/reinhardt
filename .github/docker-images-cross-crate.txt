@@ -8,6 +8,12 @@ mysql:8.0
 
 # Cache/Key-Value Stores
 redis:7-alpine
+memcached:1.6-alpine
+grokzen/redis-cluster:7.0.10
+neohq/redis-cluster:latest
+
+# Databases (additional)
+cockroachdb/cockroach:v23.1.0
 
 # Message Queues
 rabbitmq:3-management-alpine

@@ -1,5 +1,10 @@
 # Docker images for Unit Tests
 # These images are cached to avoid Docker Hub rate limits
-# Required for redis-backend feature tests
 
+# Databases
+postgres:16-alpine
+postgres:17-alpine
+mysql:8.0
+
+# Cache/Key-Value Stores
 redis:7-alpine

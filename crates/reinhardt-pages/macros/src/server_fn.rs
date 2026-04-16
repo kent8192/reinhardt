@@ -953,11 +953,17 @@ fn generate_server_handler(
 	// and a `use` item with the same name in the same module.
 	let marker_module_name = name.clone();
 
-	// MSW: Check at proc-macro expansion time whether the consuming crate has
-	// the "msw" feature enabled. This avoids emitting #[cfg(feature = "msw")]
-	// in the generated code, which would trigger unexpected_cfgs warnings in
-	// crates that don't declare "msw" as a known feature. (Issue #3673)
-	let msw_enabled = std::env::var("CARGO_FEATURE_MSW").is_ok();
+	// MSW: Generate MockableServerFn impl only when BOTH conditions are met:
+	// 1. The macro crate was compiled with `msw` feature (compile-time guard)
+	// 2. The consuming crate has `msw` feature enabled (proc-macro expansion-time env var check)
+	//
+	// The compile-time guard (`cfg!`) avoids the MSW branch during proc-macro expansion
+	// when the macro crate is built without `msw`, preventing any possibility of
+	// env var leakage from the dependency graph. The env var check handles the
+	// case where the macro crate has `msw` but the consuming crate does not.
+	// This avoids emitting `#[cfg(feature = "msw")]` in generated code, which
+	// would trigger unexpected_cfgs warnings in consuming crates. (Issue #3673, #3700)
+	let msw_enabled = cfg!(feature = "msw") && std::env::var("CARGO_FEATURE_MSW").is_ok();
 
 	// MSW: Extract the Ok type from Result<T, ServerFnError> for MockableServerFn::Response
 	let response_type = extract_result_ok_type(return_type);

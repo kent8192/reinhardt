@@ -17,3 +17,6 @@ cockroachdb/cockroach:v23.1.0
 
 # Message Queues
 rabbitmq:3-management-alpine
+
+# Email Testing
+axllent/mailpit:latest

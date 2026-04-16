@@ -57,22 +57,25 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install cargo-semver-checks
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          # Get latest release tag via GitHub API (no gh CLI dependency)
-          LATEST_TAG=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
-            "https://api.github.com/repos/obi1kenobi/cargo-semver-checks/releases/latest" \
-            | jq -r '.tag_name')
-          # Auto-detect architecture for correct binary
+          VERSION="v0.47.0"
           ARCH=$(uname -m)
           if [ "$ARCH" = "aarch64" ]; then
             TARGET="aarch64-unknown-linux-musl"
+            EXPECTED_SHA256="ba8efb38ec41cbbd88c5972d5ac62a4478493fe37e79390b94fd1196ce8fbd52"
           else
             TARGET="x86_64-unknown-linux-musl"
+            EXPECTED_SHA256="daea6dfdebf9b15ce902a8af2fc6b9c2e86ddd49af17a9c5a656939289588f68"
           fi
           curl -fsSL -o /tmp/cargo-semver-checks.tar.gz \
-            "https://github.com/obi1kenobi/cargo-semver-checks/releases/download/${LATEST_TAG}/cargo-semver-checks-${TARGET}.tar.gz"
+            "https://github.com/obi1kenobi/cargo-semver-checks/releases/download/${VERSION}/cargo-semver-checks-${TARGET}.tar.gz"
+          ACTUAL_SHA256=$(sha256sum /tmp/cargo-semver-checks.tar.gz | awk '{print $1}')
+          if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+            echo "::error::SHA256 mismatch for cargo-semver-checks ${VERSION} (${TARGET})"
+            echo "  Expected: ${EXPECTED_SHA256}"
+            echo "  Actual:   ${ACTUAL_SHA256}"
+            exit 1
+          fi
           mkdir -p /tmp/csc
           tar xzf /tmp/cargo-semver-checks.tar.gz -C /tmp/csc/
           mv /tmp/csc/cargo-semver-checks ~/.cargo/bin/
@@ -156,3 +159,114 @@ jobs:
             --all-features \
             --release-type minor \
             --baseline-rev "${BASELINE_REV:-HEAD~1}"
+
+      # --- Public API Diff PR Comment ---
+      # Posts a human-readable public API diff as a PR comment.
+      # Uses if: always() to run even when semver-check steps are skipped
+      # (alpha phase) or fail.
+
+      - name: Install nightly toolchain for cargo-public-api
+        if: always()
+        run: rustup install nightly --profile minimal
+
+      - name: Install cargo-binstall
+        if: always()
+        run: curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+
+      - name: Install cargo-public-api
+        if: always()
+        continue-on-error: true
+        id: install-public-api
+        run: cargo binstall cargo-public-api@0.51.0 --no-confirm --locked
+
+      - name: Post public API diff comment
+        if: >-
+          always() &&
+          steps.install-public-api.outcome == 'success' &&
+          github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASELINE_REV: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          CRATES=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[]
+              | select(.targets[] | .kind[] == "lib")
+              | select(.name != "reinhardt-web" and .name != "reinhardt-pages")
+              | .name')
+
+          BODY_FILE=$(mktemp)
+          HAS_CHANGES=false
+          MARKER="<!-- public-api-diff -->"
+
+          for crate in $CRATES; do
+            echo "::group::Public API diff for $crate"
+            if ! DIFF_OUTPUT=$(cargo +nightly public-api diff "${BASELINE_REV}..HEAD" \
+              --package "$crate" --all-features -sss 2>&1); then
+              echo "::warning::Failed to generate API diff for $crate"
+              HAS_CHANGES=true
+              printf '<details>\n<summary><code>%s</code> — ⚠️ build failed</summary>\n\n```\n%s\n```\n\n</details>\n\n' \
+                "$crate" "$DIFF_OUTPUT" >> "$BODY_FILE"
+              echo "::endgroup::"
+              continue
+            fi
+            echo "::endgroup::"
+
+            if [ -z "$DIFF_OUTPUT" ]; then
+              continue
+            fi
+
+            HAS_CHANGES=true
+            ADDED=$(echo "$DIFF_OUTPUT" | grep -c '^+' || true)
+            REMOVED=$(echo "$DIFF_OUTPUT" | grep -c '^-' || true)
+            CHANGED=$(echo "$DIFF_OUTPUT" | grep -c '^~' || true)
+            SUMMARY_PARTS=""
+            [ "$ADDED" -gt 0 ] && SUMMARY_PARTS="${ADDED} added"
+            [ "$REMOVED" -gt 0 ] && SUMMARY_PARTS="${SUMMARY_PARTS:+${SUMMARY_PARTS}, }${REMOVED} removed"
+            [ "$CHANGED" -gt 0 ] && SUMMARY_PARTS="${SUMMARY_PARTS:+${SUMMARY_PARTS}, }${CHANGED} changed"
+
+            printf '<details>\n<summary><code>%s</code> — %s</summary>\n\n```\n%s\n```\n\n</details>\n\n' \
+              "$crate" "$SUMMARY_PARTS" "$DIFF_OUTPUT" >> "$BODY_FILE"
+          done
+
+          if [ "$HAS_CHANGES" = "false" ]; then
+            echo "No public API changes detected. Skipping comment."
+            rm -f "$BODY_FILE"
+            exit 0
+          fi
+
+          FULL_BODY_FILE=$(mktemp)
+          {
+            echo "$MARKER"
+            echo "## Public API Changes"
+            echo ""
+            cat "$BODY_FILE"
+            echo "---"
+            echo '*Generated by cargo-public-api • `-sss` (simplified)*'
+          } > "$FULL_BODY_FILE"
+          rm -f "$BODY_FILE"
+
+          EXISTING_ID=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            --paginate --jq ".[] | select(.body | startswith(\"${MARKER}\")) | .node_id" \
+            | head -1)
+
+          if [ -n "$EXISTING_ID" ]; then
+            gh api graphql \
+              -f id="$EXISTING_ID" \
+              -F "body=@${FULL_BODY_FILE}" \
+              -f query='
+                mutation($id: ID!, $body: String!) {
+                  updateIssueComment(input: {id: $id, body: $body}) {
+                    issueComment { id }
+                  }
+                }'
+            echo "Updated existing public API diff comment."
+          else
+            gh pr comment "$PR_NUMBER" --body-file "$FULL_BODY_FILE"
+            echo "Created new public API diff comment."
+          fi
+          rm -f "$FULL_BODY_FILE"

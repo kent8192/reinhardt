@@ -579,8 +579,9 @@ fn url_patterns_server_impl(
 	let meta_idents: Vec<syn::Ident> = endpoint_paths.iter().filter_map(build_meta_ident).collect();
 
 	let func_output = if let Some(app_label) = &parsed_args.app_label {
+		let app_label_str = app_label.value();
 		// Validate against installed apps state file (Issue #3668).
-		validate_app_label(&app_label.value(), app_label.span())?;
+		validate_app_label(&app_label_str, app_label.span())?;
 
 		let fn_vis = &func.vis;
 		let fn_attrs = &func.attrs;

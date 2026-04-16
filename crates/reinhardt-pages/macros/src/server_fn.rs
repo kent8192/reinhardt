@@ -962,7 +962,7 @@ fn generate_server_handler(
 	// MSW: Extract the Ok type from Result<T, ServerFnError> for MockableServerFn::Response
 	let response_type = extract_result_ok_type(return_type);
 
-	// MSW: Convert inject param names to string literals for INJECTED_PARAMS const
+	// Convert inject param names to string literals for INJECTED_PARAMS const
 	let inject_param_name_strs: Vec<String> = inject_params
 		.iter()
 		.map(|p| {
@@ -1129,6 +1129,8 @@ fn generate_server_handler(
 		// ```
 		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 		#vis mod #marker_module_name {
+			use super::*;
+
 			#[doc = concat!("Marker struct for server function `", #name_str, "` (use with `.server_fn()`)")]
 			pub struct marker;
 

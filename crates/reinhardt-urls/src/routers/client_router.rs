@@ -63,17 +63,21 @@
 
 mod core;
 mod error;
+mod global;
 mod handler;
 mod history;
 mod params;
 mod pattern;
+mod reverser;
 
 // Public re-exports
 pub use core::{ClientRoute, ClientRouteMatch, ClientRouter};
 pub use error::{PathError, RouterError};
+pub use global::{clear_client_reverser, get_client_reverser, register_client_reverser};
 pub use handler::RouteHandler;
 pub use history::{
 	HistoryState, NavigationType, current_path, go_back, go_forward, push_state, replace_state,
 };
 pub use params::{FromPath, ParamContext, Path, SingleFromPath};
 pub use pattern::ClientPathPattern;
+pub use reverser::ClientUrlReverser;

@@ -53,3 +53,35 @@ pub trait UrlResolver {
 	/// Implementations should panic if the route name is not registered.
 	fn resolve_url(&self, name: &str, params: &[(&str, &str)]) -> String;
 }
+
+/// Trait for resolving client-side (frontend) URLs by route name.
+///
+/// This is the client-side counterpart to [`UrlResolver`]. While `UrlResolver`
+/// resolves server-side API/backend routes, `ClientUrlResolver` resolves
+/// frontend routes registered via `ClientRouter`.
+///
+/// # Panics
+///
+/// Implementations should panic if the route name is not found, consistent
+/// with [`UrlResolver::resolve_url()`].
+///
+/// # Example
+///
+/// ```rust
+/// use reinhardt_urls::routers::resolver::ClientUrlResolver;
+///
+/// struct MyClientResolver;
+///
+/// impl ClientUrlResolver for MyClientResolver {
+///     fn resolve_client_url(&self, name: &str, params: &[(&str, &str)]) -> String {
+///         format!("/client/{}/", name)
+///     }
+/// }
+///
+/// let resolver = MyClientResolver;
+/// assert_eq!(resolver.resolve_client_url("home", &[]), "/client/home/");
+/// ```
+pub trait ClientUrlResolver {
+	/// Resolve a client-side URL by route name and parameters.
+	fn resolve_client_url(&self, name: &str, params: &[(&str, &str)]) -> String;
+}

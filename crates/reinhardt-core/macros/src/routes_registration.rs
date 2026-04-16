@@ -448,11 +448,14 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 					}
 
 					// Callback macro for __for_each_url_resolver to generate methods.
+					// Each arm imports UrlResolver trait to bring resolve_url() into
+					// scope. (Issue #3669)
 					macro_rules! #gen_method_macro {
 						// No params
 						($app_label:ident, $method:ident, $route_name:literal, ) => {
 							impl #urls_struct<'_> {
 								pub fn $method(&self) -> String {
+									use #reinhardt::UrlResolver as _;
 									self.resolver.resolve_url(
 										concat!(stringify!($app_label), ":", $route_name),
 										&[],
@@ -464,6 +467,7 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 						($app_label:ident, $method:ident, $route_name:literal, $p1:literal) => {
 							impl #urls_struct<'_> {
 								pub fn $method(&self, p1: &str) -> String {
+									use #reinhardt::UrlResolver as _;
 									self.resolver.resolve_url(
 										concat!(stringify!($app_label), ":", $route_name),
 										&[($p1, p1)],
@@ -475,6 +479,7 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 						($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal) => {
 							impl #urls_struct<'_> {
 								pub fn $method(&self, p1: &str, p2: &str) -> String {
+									use #reinhardt::UrlResolver as _;
 									self.resolver.resolve_url(
 										concat!(stringify!($app_label), ":", $route_name),
 										&[($p1, p1), ($p2, p2)],
@@ -486,6 +491,7 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 						($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal, $p3:literal) => {
 							impl #urls_struct<'_> {
 								pub fn $method(&self, p1: &str, p2: &str, p3: &str) -> String {
+									use #reinhardt::UrlResolver as _;
 									self.resolver.resolve_url(
 										concat!(stringify!($app_label), ":", $route_name),
 										&[($p1, p1), ($p2, p2), ($p3, p3)],
@@ -497,6 +503,7 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 						($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal, $p3:literal, $p4:literal) => {
 							impl #urls_struct<'_> {
 								pub fn $method(&self, p1: &str, p2: &str, p3: &str, p4: &str) -> String {
+									use #reinhardt::UrlResolver as _;
 									self.resolver.resolve_url(
 										concat!(stringify!($app_label), ":", $route_name),
 										&[($p1, p1), ($p2, p2), ($p3, p3), ($p4, p4)],
@@ -508,6 +515,7 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 						($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal, $p3:literal, $p4:literal, $p5:literal) => {
 							impl #urls_struct<'_> {
 								pub fn $method(&self, p1: &str, p2: &str, p3: &str, p4: &str, p5: &str) -> String {
+									use #reinhardt::UrlResolver as _;
 									self.resolver.resolve_url(
 										concat!(stringify!($app_label), ":", $route_name),
 										&[($p1, p1), ($p2, p2), ($p3, p3), ($p4, p4), ($p5, p5)],
@@ -534,6 +542,133 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				}
 			}).collect();
 
+			// Generate per-app client URL resolver structs.
+			// When #[url_patterns(client = true, app = "...")] is used,
+			// typed methods are generated via __for_each_client_url_resolver
+			// (same pattern as server-side). A fallback resolve() method is
+			// always available for runtime string-based resolution.
+			let per_app_client_code: Vec<_> = app_idents.iter().map(|app| {
+				let client_urls_struct_name = crate::pascal_case::to_pascal_case_with_suffix(
+					&app.to_string(), "ClientUrls",
+				);
+				let client_urls_struct = proc_macro2::Ident::new(
+					&client_urls_struct_name, proc_macro2::Span::call_site(),
+				);
+				let gen_client_method_macro = proc_macro2::Ident::new(
+					&format!("__gen_{}_client_method", app), proc_macro2::Span::call_site(),
+				);
+				let accessor_method = proc_macro2::Ident::new(
+					&format!("{}_client", app), proc_macro2::Span::call_site(),
+				);
+				let app_str = app.to_string();
+
+				quote! {
+					/// Per-app client URL resolver.
+					///
+					/// Access via `ResolvedUrls::#accessor_method()`.
+					pub struct #client_urls_struct<'a> {
+						resolver: &'a ResolvedUrls,
+					}
+
+					impl #client_urls_struct<'_> {
+						/// Resolve a client-side URL by route name and parameters.
+						///
+						/// Fallback for routes not covered by typed methods.
+						/// The route name is automatically prefixed with the app label.
+						pub fn resolve(&self, route_name: &str, params: &[(&str, &str)]) -> String {
+							let full_name = ::std::format!("{}:{}", #app_str, route_name);
+							self.resolver.resolve_client_url(&full_name, params)
+						}
+					}
+
+					// Callback macro for __for_each_client_url_resolver to generate
+					// typed methods (same pattern as server-side __gen_<app>_method).
+					macro_rules! #gen_client_method_macro {
+						// No params
+						($app_label:ident, $method:ident, $route_name:literal, ) => {
+							impl #client_urls_struct<'_> {
+								pub fn $method(&self) -> String {
+									self.resolver.resolve_client_url(
+										concat!(#app_str, ":", $route_name),
+										&[],
+									)
+								}
+							}
+						};
+						// 1 param
+						($app_label:ident, $method:ident, $route_name:literal, $p1:literal) => {
+							impl #client_urls_struct<'_> {
+								pub fn $method(&self, p1: &str) -> String {
+									self.resolver.resolve_client_url(
+										concat!(#app_str, ":", $route_name),
+										&[($p1, p1)],
+									)
+								}
+							}
+						};
+						// 2 params
+						($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal) => {
+							impl #client_urls_struct<'_> {
+								pub fn $method(&self, p1: &str, p2: &str) -> String {
+									self.resolver.resolve_client_url(
+										concat!(#app_str, ":", $route_name),
+										&[($p1, p1), ($p2, p2)],
+									)
+								}
+							}
+						};
+						// 3 params
+						($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal, $p3:literal) => {
+							impl #client_urls_struct<'_> {
+								pub fn $method(&self, p1: &str, p2: &str, p3: &str) -> String {
+									self.resolver.resolve_client_url(
+										concat!(#app_str, ":", $route_name),
+										&[($p1, p1), ($p2, p2), ($p3, p3)],
+									)
+								}
+							}
+						};
+						// 4 params
+						($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal, $p3:literal, $p4:literal) => {
+							impl #client_urls_struct<'_> {
+								pub fn $method(&self, p1: &str, p2: &str, p3: &str, p4: &str) -> String {
+									self.resolver.resolve_client_url(
+										concat!(#app_str, ":", $route_name),
+										&[($p1, p1), ($p2, p2), ($p3, p3), ($p4, p4)],
+									)
+								}
+							}
+						};
+						// 5 params
+						($app_label:ident, $method:ident, $route_name:literal, $p1:literal, $p2:literal, $p3:literal, $p4:literal, $p5:literal) => {
+							impl #client_urls_struct<'_> {
+								pub fn $method(&self, p1: &str, p2: &str, p3: &str, p4: &str, p5: &str) -> String {
+									self.resolver.resolve_client_url(
+										concat!(#app_str, ":", $route_name),
+										&[($p1, p1), ($p2, p2), ($p3, p3), ($p4, p4), ($p5, p5)],
+									)
+								}
+							}
+						};
+					}
+
+					// Invoke __for_each_client_url_resolver to populate typed methods.
+					// This is a no-op if the app has no client_url_resolvers module
+					// (i.e., does not use #[url_patterns(client = true)]).
+					crate::apps::#app::urls::client_url_resolvers::__for_each_client_url_resolver!(
+						#gen_client_method_macro, #app,
+						crate::apps::#app::urls::client_url_resolvers
+					);
+
+					// Accessor method on ResolvedUrls
+					impl ResolvedUrls {
+						pub fn #accessor_method(&self) -> #client_urls_struct<'_> {
+							#client_urls_struct { resolver: self }
+						}
+					}
+				}
+			}).collect();
+
 			// Generate url_prelude re-exports
 			let prelude_exports: Vec<_> = app_idents
 				.iter()
@@ -542,8 +677,18 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 						crate::pascal_case::to_pascal_case_with_suffix(&app.to_string(), "Urls");
 					let urls_struct =
 						proc_macro2::Ident::new(&urls_struct_name, proc_macro2::Span::call_site());
+					let client_urls_struct_name = crate::pascal_case::to_pascal_case_with_suffix(
+						&app.to_string(),
+						"ClientUrls",
+					);
+					let client_urls_struct = proc_macro2::Ident::new(
+						&client_urls_struct_name,
+						proc_macro2::Span::call_site(),
+					);
 					quote! {
 						pub use super::#urls_struct;
+						#[cfg(feature = "client-router")]
+						pub use super::super::__namespaced_client_resolvers::#client_urls_struct;
 						// Deprecated flat trait re-exports (backward compatibility)
 						#[allow(deprecated)]
 						pub use crate::apps::#app::urls::url_resolvers::*;
@@ -559,9 +704,7 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 					concat!(env!("CARGO_MANIFEST_DIR"), "/target/reinhardt/.installed_apps")
 				);
 
-				// All per-app resolvers and url_prelude are native-only.
-				// Wrapped in a cfg-gated module because each block contains
-				// multiple items (struct, macro_rules, impl) that all need gating.
+				// Server-side per-app resolvers are native-only.
 				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				#[doc(hidden)]
 				mod __namespaced_resolvers {
@@ -577,17 +720,31 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				}
 				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				pub use __namespaced_resolvers::*;
+
+				// Client-side per-app resolvers are cross-platform (native + WASM).
+				#[cfg(feature = "client-router")]
+				#[doc(hidden)]
+				mod __namespaced_client_resolvers {
+					pub use super::ResolvedUrls;
+
+					#(#per_app_client_code)*
+				}
+				#[cfg(feature = "client-router")]
+				pub use __namespaced_client_resolvers::*;
 			}
 		}
 	};
 
-	// Generate ResolvedUrls struct (native-only).
-	// Gate on `not(wasm)` using raw platform check because this code expands
-	// in consuming crates that do not have the `native` cfg alias.
+	// Generate ResolvedUrls struct.
+	// Native: holds both ServerRouter and ClientUrlReverser.
+	// WASM: holds only ClientUrlReverser.
+	// Gate using raw platform check because this code expands in consuming
+	// crates that do not have the `native` cfg alias.
 	let url_resolver_code = quote! {
 		#[doc(hidden)]
 		pub mod __url_resolver_support {
-			/// Type-safe URL resolver backed by the global `ServerRouter`.
+			/// Type-safe URL resolver backed by the global `ServerRouter`
+			/// and `ClientUrlReverser`.
 			///
 			/// Provides URL resolution methods via extension traits generated
 			/// by view macros. Import `url_prelude::*` to bring all resolver
@@ -595,6 +752,14 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			pub struct ResolvedUrls {
 				router: ::std::sync::Arc<#reinhardt::ServerRouter>,
+				#[cfg(feature = "client-router")]
+				client_reverser: ::std::sync::Arc<#reinhardt::ClientUrlReverser>,
+			}
+
+			/// WASM-only `ResolvedUrls` with client URL resolution only.
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+			pub struct ResolvedUrls {
+				client_reverser: ::std::sync::Arc<#reinhardt::ClientUrlReverser>,
 			}
 
 			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -606,6 +771,15 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				}
 			}
 
+			#[cfg(feature = "client-router")]
+			impl #reinhardt::ClientUrlResolver for ResolvedUrls {
+				fn resolve_client_url(&self, name: &str, params: &[(&str, &str)]) -> String {
+					self.client_reverser
+						.reverse(name, params)
+						.unwrap_or_else(|| panic!("Client route '{}' not found in router", name))
+				}
+			}
+
 			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			impl ResolvedUrls {
 				/// Create a `ResolvedUrls` from the globally registered router.
@@ -613,15 +787,63 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				/// # Panics
 				///
 				/// Panics if no global router has been registered via `#[routes]`.
+				#[cfg(feature = "client-router")]
+				pub fn from_global() -> Self {
+					let router = #reinhardt::get_router()
+						.expect("Global router not registered. Ensure the #[routes] function has been called.");
+					let client_reverser = #reinhardt::get_client_reverser()
+						.expect("Global client reverser not registered. Ensure the #[routes] function has been called.");
+					Self { router, client_reverser }
+				}
+
+				/// Create a `ResolvedUrls` from the globally registered router (without client router).
+				///
+				/// # Panics
+				///
+				/// Panics if no global router has been registered via `#[routes]`.
+				#[cfg(not(feature = "client-router"))]
 				pub fn from_global() -> Self {
 					let router = #reinhardt::get_router()
 						.expect("Global router not registered. Ensure the #[routes] function has been called.");
 					Self { router }
 				}
 
-				/// Create a `ResolvedUrls` from an explicit `ServerRouter`.
-				pub fn from_router(router: ::std::sync::Arc<#reinhardt::ServerRouter>) -> Self {
+				/// Create a `ResolvedUrls` from explicit router and client reverser.
+				#[cfg(feature = "client-router")]
+				pub fn from_router(
+					router: ::std::sync::Arc<#reinhardt::ServerRouter>,
+					client_reverser: ::std::sync::Arc<#reinhardt::ClientUrlReverser>,
+				) -> Self {
+					Self { router, client_reverser }
+				}
+
+				/// Create a `ResolvedUrls` from an explicit router (without client router).
+				#[cfg(not(feature = "client-router"))]
+				pub fn from_router(
+					router: ::std::sync::Arc<#reinhardt::ServerRouter>,
+				) -> Self {
 					Self { router }
+				}
+			}
+
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+			impl ResolvedUrls {
+				/// Create a `ResolvedUrls` from the globally registered client reverser.
+				///
+				/// # Panics
+				///
+				/// Panics if no global client reverser has been registered via `#[routes]`.
+				pub fn from_global() -> Self {
+					let client_reverser = #reinhardt::get_client_reverser()
+						.expect("Global client reverser not registered. Ensure the #[routes] function has been called.");
+					Self { client_reverser }
+				}
+
+				/// Create a `ResolvedUrls` from an explicit client reverser.
+				pub fn from_reverser(
+					client_reverser: ::std::sync::Arc<#reinhardt::ClientUrlReverser>,
+				) -> Self {
+					Self { client_reverser }
 				}
 			}
 

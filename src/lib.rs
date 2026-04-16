@@ -295,6 +295,8 @@ pub use reinhardt_macros::url_patterns;
 #[cfg(native)]
 pub use reinhardt_macros::viewset;
 
+// client_routes! proc macro removed: superseded by #[url_patterns(client = true)]
+
 // Re-export admin attribute macro (requires admin feature)
 #[cfg(all(feature = "admin", native))]
 pub use reinhardt_macros::admin;
@@ -659,14 +661,16 @@ pub use reinhardt_urls::routers::{
 // These types enable UnifiedRouter<V> with both .server() and .client() methods
 #[cfg(feature = "client-router")]
 pub use reinhardt_urls::routers::{
-	ClientPathPattern, ClientRoute, ClientRouteMatch, ClientRouter, FromPath, HistoryState,
-	NavigationType, ParamContext, SingleFromPath, UnifiedRouter,
+	ClientPathPattern, ClientRoute, ClientRouteMatch, ClientRouter, ClientUrlReverser, FromPath,
+	HistoryState, NavigationType, ParamContext, SingleFromPath, UnifiedRouter,
+	clear_client_reverser, get_client_reverser, register_client_reverser,
 };
 // Path extractor for client-side routing (separate from server-side Path from reinhardt-di)
 #[cfg(feature = "client-router")]
 pub use reinhardt_urls::routers::Path as ClientPath;
 
-// Re-export URL resolver trait (native only)
+// Re-export URL resolver traits
+pub use reinhardt_urls::routers::ClientUrlResolver;
 #[cfg(native)]
 pub use reinhardt_urls::routers::resolver::UrlResolver;
 

@@ -198,6 +198,26 @@ impl ClientRouter {
 		self
 	}
 
+	/// Prefix all named route keys with `"namespace:"`.
+	///
+	/// This is the client-side equivalent of `ServerRouter::with_namespace()`.
+	/// Called by `#[url_patterns(client = true, app = "...")]` to ensure
+	/// registered names match the `"app:route"` format used by per-app
+	/// resolver structs.
+	pub fn with_namespace(mut self, namespace: &str) -> Self {
+		let old = std::mem::take(&mut self.named_routes);
+		for (name, idx) in old {
+			self.named_routes.insert(format!("{namespace}:{name}"), idx);
+		}
+		// Also update route names stored inside ClientRoute
+		for route in &mut self.routes {
+			if let Some(ref old_name) = route.name {
+				route.name = Some(format!("{namespace}:{old_name}"));
+			}
+		}
+		self
+	}
+
 	/// Adds a route to the router.
 	pub fn route<F>(mut self, pattern: &str, component: F) -> Self
 	where
@@ -583,6 +603,23 @@ impl ClientRouter {
 	/// Checks if a route name exists.
 	pub fn has_route(&self, name: &str) -> bool {
 		self.named_routes.contains_key(name)
+	}
+
+	/// Extract a lightweight, thread-safe URL reverser.
+	///
+	/// The returned [`ClientUrlReverser`] contains only the
+	/// named-route-to-pattern mapping and can be shared across threads
+	/// (unlike `ClientRouter` itself which holds reactive signals).
+	pub fn to_reverser(&self) -> super::reverser::ClientUrlReverser {
+		let named_patterns = self
+			.named_routes
+			.iter()
+			.map(|(name, &idx)| {
+				let pattern = self.routes[idx].pattern.pattern().to_string();
+				(name.clone(), pattern)
+			})
+			.collect();
+		super::reverser::ClientUrlReverser::new(named_patterns)
 	}
 
 	/// Sets up a popstate event listener for browser back/forward navigation.

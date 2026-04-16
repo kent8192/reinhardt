@@ -289,7 +289,7 @@ pub use reinhardt_macros::{api_view, delete, get, patch, post, put};
 
 // Re-export routes attribute macro for URL pattern registration
 #[cfg(native)]
-pub use reinhardt_macros::export_endpoints;
+pub use reinhardt_macros::define_views;
 #[cfg(native)]
 pub use reinhardt_macros::routes;
 #[cfg(native)]

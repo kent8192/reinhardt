@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-http@v0.1.0-rc.15...reinhardt-http@v0.1.0-rc.16) - 2026-04-16
+
+### Changed
+
+- *(http)* remove dead should_stop_chain check in CCH
+
+### Documentation
+
+- *(http)* update ResponseCookies docs to reflect shared Extensions mechanism
+- *(http)* address Copilot review on [[#3417](https://github.com/kent8192/reinhardt-web/issues/3417)](https://github.com/kent8192/reinhardt-web/issues/3417)
+
+### Fixed
+
+- *(http)* convert errors to responses within middleware chain
+- *(middleware)* convert errors to responses in cross-crate middleware
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-http@v0.1.0-rc.14...reinhardt-http@v0.1.0-rc.15) - 2026-03-29
 
 ### Added

@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.1.0-rc.15...reinhardt-test@v0.1.0-rc.16) - 2026-04-16
+
+### Added
+
+- add CDP-based E2E browser testing infrastructure and WASM SPA fixes
+- *(test)* add MSW-style network interception module with core components
+
+### Changed
+
+- replace target_arch = "wasm32" with target_family/target_os best practice
+
+### Deprecated
+
+- *(test)* mark MockFetch and mock_server_fn as deprecated in favor of MSW
+
+### Fixed
+
+- *(test)* gate native-only dependencies for wasm32 target compilation
+- *(auth)* add is_staff and is_superuser fields to JWT Claims
+- *(ci)* apply rustfmt and fix collapsible_if clippy lint after main merge
+- *(ci)* add #[allow(deprecated)] to re-exports and tests using deprecated mock APIs
+- *(test)* address Copilot review feedback on MSW module
+- *(ci)* resolve clippy errors in MSW module for native builds
+- *(ci)* use backticks instead of intra-doc links for feature-gated types
+- *(testkit)* remove auth-testing feature, make auth unconditional on native targets
+- *(docs)* escape intra-doc link in TestUser deprecated note
+
+### Testing
+
+- *(test)* add WASM integration tests, rstest fixtures, and fix URL matching
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.1.0-rc.14...reinhardt-test@v0.1.0-rc.15) - 2026-03-29
 
 ### Maintenance

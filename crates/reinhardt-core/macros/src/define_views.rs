@@ -1,6 +1,6 @@
-//! `#[export_endpoints]` attribute macro for multi-file view modules.
+//! `define_views!` function-like proc macro for multi-file view modules.
 //!
-//! When applied to a view module that uses per-file endpoint organization,
+//! When used in a view module that uses per-file endpoint organization,
 //! this macro generates `pub use submod::*;` for each `pub mod` declaration.
 //! This re-exports endpoint functions and their `__url_resolver_*` modules
 //! so that `#[url_patterns]` can discover resolvers using the standard
@@ -10,12 +10,16 @@
 //!
 //! ```rust,ignore
 //! // views.rs
-//! #![reinhardt::export_endpoints]
+//! use reinhardt::define_views;
 //!
-//! pub mod login;
-//! pub mod register;
+//! define_views! {
+//!     pub mod login;
+//!     pub mod register;
+//! }
 //!
 //! // Generates:
+//! //   pub mod login;
+//! //   pub mod register;
 //! //   pub use login::*;
 //! //   pub use register::*;
 //! ```
@@ -24,20 +28,16 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Item, parse2};
 
-/// Implementation for the `#[export_endpoints]` attribute macro.
+/// Implementation for the `define_views!` proc macro.
 ///
-/// Scans the attributed module for `pub mod name;` declarations and appends
+/// Scans the macro input for `pub mod name;` declarations and appends
 /// `pub use name::*;` for each one. This brings endpoint functions and their
 /// generated `__url_resolver_*` modules into the parent module scope, enabling
 /// `#[url_patterns]` to resolve them with the standard path convention.
-pub(crate) fn export_endpoints_impl(
-	_args: TokenStream,
-	input: TokenStream,
-) -> syn::Result<TokenStream> {
+pub(crate) fn define_views_impl(input: TokenStream) -> syn::Result<TokenStream> {
 	let items: Vec<Item> = {
-		// Parse as a sequence of items (module body)
 		let file: syn::File = parse2(input.clone())
-			.map_err(|e| syn::Error::new(e.span(), format!("export_endpoints: {e}")))?;
+			.map_err(|e| syn::Error::new(e.span(), format!("define_views: {e}")))?;
 		file.items
 	};
 

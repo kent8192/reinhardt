@@ -294,6 +294,8 @@ pub use reinhardt_macros::routes;
 pub use reinhardt_macros::url_patterns;
 #[cfg(native)]
 pub use reinhardt_macros::viewset;
+#[cfg(native)]
+pub use reinhardt_macros::export_endpoints;
 
 // client_routes! proc macro removed: superseded by #[url_patterns(client = true)]
 

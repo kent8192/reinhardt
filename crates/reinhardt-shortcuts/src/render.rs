@@ -181,7 +181,7 @@ pub fn escape_html(input: &str) -> String {
 ///
 /// A `Response` with HTTP 200 status, HTML content-type, and the escaped content as body.
 pub fn render_html_safe(content: impl AsRef<str>) -> Response {
-	let escaped = escape_html(content.as_ref());
+	let escaped = reinhardt_core::security::escape_html(content.as_ref());
 
 	let mut response = Response::ok();
 	response.body = Bytes::from(escaped);
@@ -228,6 +228,7 @@ pub fn render_text(text: impl Into<String>) -> Response {
 mod tests {
 	use super::*;
 	use hyper::StatusCode;
+	use reinhardt_core::security::escape_html;
 	use rstest::rstest;
 	use serde_json::json;
 

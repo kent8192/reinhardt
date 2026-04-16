@@ -630,7 +630,7 @@ impl RabbitMQContainer {
 	pub async fn with_credentials(username: &str, password: &str) -> Self {
 		use testcontainers::core::IntoContainerPort;
 
-		let image = GenericImage::new("rabbitmq", "3.12-management-alpine")
+		let image = GenericImage::new("rabbitmq", "3-management-alpine")
 			.with_exposed_port(5672.tcp())      // AMQP port
 			.with_exposed_port(15672.tcp())     // Management UI port
 			.with_wait_for(WaitFor::message_on_stdout("Server startup complete"))

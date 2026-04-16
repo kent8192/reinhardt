@@ -41,6 +41,7 @@ rmp-serde = { workspace = true }
 prost = { workspace = true }
 serial_test = { workspace = true, optional = true }
 aquamarine = { workspace = true }
+paste = "1.0"
 sha2 = "0.10"
 hmac = "0.12"
 hex = "0.4"

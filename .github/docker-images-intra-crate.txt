@@ -7,6 +7,7 @@ postgres:17-alpine
 
 # Cache/Key-Value Stores
 redis:7-alpine
+memcached:1.6-alpine
 
 # Message Queues
 rabbitmq:3-management-alpine

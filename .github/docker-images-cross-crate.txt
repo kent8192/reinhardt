@@ -14,9 +14,13 @@ neohq/redis-cluster:latest
 
 # Databases (additional)
 cockroachdb/cockroach:v23.1.0
+mongo:7.0
 
 # Message Queues
 rabbitmq:3-management-alpine
 
 # Email Testing
 axllent/mailpit:latest
+
+# AWS Service Mock
+localstack/localstack:latest

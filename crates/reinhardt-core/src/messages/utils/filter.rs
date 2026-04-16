@@ -31,7 +31,10 @@ use crate::messages::message::Message;
 /// let warnings = filter_messages(&messages, |msg| msg.level == Level::Warning);
 /// assert_eq!(warnings.len(), 1);
 /// ```
-pub fn filter_messages(messages: &[Message], predicate: impl Fn(&Message) -> bool) -> Vec<Message> {
+pub fn filter_messages(
+	messages: &[Message],
+	mut predicate: impl FnMut(&Message) -> bool,
+) -> Vec<Message> {
 	messages
 		.iter()
 		.filter(|msg| predicate(msg))

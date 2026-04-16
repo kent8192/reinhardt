@@ -661,6 +661,7 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				#[doc(hidden)]
 				mod __namespaced_resolvers {
+					#![allow(unexpected_cfgs)]
 					pub use super::ResolvedUrls;
 
 					#(#per_app_code)*
@@ -675,15 +676,21 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				pub use __namespaced_resolvers::*;
 
 				// Client-side per-app resolvers are cross-platform (native + WASM).
-				#[cfg(feature = "client-router")]
 				#[doc(hidden)]
-				mod __namespaced_client_resolvers {
-					pub use super::ResolvedUrls;
+				mod __client_router_gate {
+					#![allow(unexpected_cfgs)]
 
-					#(#per_app_client_code)*
+					#[cfg(feature = "client-router")]
+					#[doc(hidden)]
+					pub mod __namespaced_client_resolvers {
+						pub use super::super::ResolvedUrls;
+
+						#(#per_app_client_code)*
+					}
+					#[cfg(feature = "client-router")]
+					pub use __namespaced_client_resolvers::*;
 				}
-				#[cfg(feature = "client-router")]
-				pub use __namespaced_client_resolvers::*;
+				pub use __client_router_gate::*;
 			}
 		}
 	};
@@ -696,6 +703,7 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 	let url_resolver_code = quote! {
 		#[doc(hidden)]
 		pub mod __url_resolver_support {
+			#![allow(unexpected_cfgs)]
 			/// Type-safe URL resolver backed by the global `ServerRouter`
 			/// and `ClientUrlReverser`.
 			///

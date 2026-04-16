@@ -9,7 +9,7 @@ on:
 permissions:
   contents: read
   id-token: write
-  pull-requests: read
+  pull-requests: write
   security-events: write
 
 concurrency:

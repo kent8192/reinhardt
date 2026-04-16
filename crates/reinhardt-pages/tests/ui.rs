@@ -38,4 +38,6 @@ fn test_server_fn_macro_ui() {
 	// Codec tests
 	t.pass("tests/ui/server_fn/codec_json.rs");
 	t.pass("tests/ui/server_fn/codec_url.rs");
+	// Fixes #3666: verify server_fn compiles without msw feature (no check-cfg errors)
+	t.pass("tests/ui/server_fn/no_msw_feature.rs");
 }

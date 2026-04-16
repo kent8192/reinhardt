@@ -136,7 +136,6 @@ pub mod pattern;
 #[cfg(native)]
 pub mod registration;
 /// URL resolver trait for type-safe URL generation.
-#[cfg(native)]
 pub mod resolver;
 /// URL reverse resolution (name-to-URL mapping).
 #[cfg(native)]
@@ -224,6 +223,8 @@ pub use unified_router::UnifiedRouter;
 // Client router re-exports
 #[cfg(feature = "client-router")]
 pub use client_router::{
-	ClientPathPattern, ClientRoute, ClientRouteMatch, ClientRouter, FromPath, HistoryState,
-	NavigationType, ParamContext, Path, RouteHandler, SingleFromPath,
+	ClientPathPattern, ClientRoute, ClientRouteMatch, ClientRouter, ClientUrlReverser, FromPath,
+	HistoryState, NavigationType, ParamContext, Path, RouteHandler, SingleFromPath,
+	clear_client_reverser, get_client_reverser, register_client_reverser,
 };
+pub use resolver::ClientUrlResolver;

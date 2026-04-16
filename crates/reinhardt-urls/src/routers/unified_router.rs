@@ -229,7 +229,9 @@ impl UnifiedRouter {
 	/// ```
 	pub fn register_globally(self) -> ClientRouter {
 		let (server, client) = self.into_parts();
+		let reverser = client.to_reverser();
 		crate::routers::register_router(server);
+		crate::routers::client_router::register_client_reverser(reverser);
 		client
 	}
 
@@ -641,8 +643,10 @@ impl UnifiedRouter {
 		self.client
 	}
 
-	/// Registers (no-op for server) and returns client router.
+	/// Registers client reverser globally and returns client router.
 	pub fn register_globally(self) -> ClientRouter {
+		let reverser = self.client.to_reverser();
+		crate::routers::client_router::register_client_reverser(reverser);
 		self.client
 	}
 

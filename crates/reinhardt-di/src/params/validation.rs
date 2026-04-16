@@ -100,80 +100,75 @@
 //! ```
 
 #[cfg(feature = "validation")]
-use reinhardt_core::validators::{ValidationResult, Validator};
+use reinhardt_core::validators::{Validate, ValidationResult, Validator};
 #[cfg(feature = "validation")]
 use std::fmt::{self, Debug};
 use std::ops::Deref;
 
-/// A validated wrapper for extracted parameters
+/// Wrapper extractor that auto-validates the inner value after extraction.
 ///
-/// This type wraps an extracted parameter and ensures validation is performed.
-/// It requires the `validation` feature to be enabled.
+/// `Validated<E>` extracts `E` from the request via `FromRequest`, then calls
+/// `Validate::validate()` on the inner value. If validation fails, the request
+/// is rejected with structured `ValidationErrors`.
+///
+/// Works with any extractor implementing `HasInner` where the inner type
+/// implements `Validate`: `Form<T>`, `Json<T>`, `Query<T>`.
 ///
 /// # Examples
 ///
 /// ```rust,no_run
-/// # use reinhardt_di::params::{Path, Validated};
-/// # use reinhardt_core::validators::MinLengthValidator;
-/// # #[tokio::main]
-/// # async fn main() {
-/// // async fn handler(id: Validated<Path<String>, MinLengthValidator>) {
-/// //     // id is guaranteed to meet the validation constraints
-/// //     let value = id.into_inner().0;
+/// # use reinhardt_di::params::{Validated, Form};
+/// # use reinhardt_core::validators::Validate;
+/// // In a server_fn handler:
+/// // async fn login(form: Validated<Form<LoginRequest>>) -> Result<(), String> {
+/// //     let login = form.into_inner().into_inner(); // already validated
+/// //     Ok(())
 /// // }
-/// # }
 /// ```
 #[cfg(feature = "validation")]
-pub struct Validated<T, V> {
-	inner: T,
-	_validator: std::marker::PhantomData<V>,
-}
+pub struct Validated<T>(T);
 
 #[cfg(feature = "validation")]
-impl<T, V> Validated<T, V> {
-	/// Create a new validated value
-	///
-	/// # Errors
-	///
-	/// Returns an error if validation fails
-	pub fn new<U>(inner: T, validator: &V) -> Result<Self, super::ParamError>
-	where
-		V: Validator<U>,
-		T: AsRef<U>,
-		U: ?Sized,
-	{
-		validator.validate(inner.as_ref()).map_err(|e| {
-			super::ParamError::ValidationError(Box::new(
-				super::ParamErrorContext::new(super::ParamType::Form, e.to_string())
-					.with_field("parameter"),
-			))
-		})?;
-
-		Ok(Self {
-			inner,
-			_validator: std::marker::PhantomData,
-		})
-	}
-
-	/// Unwrap the validated value
+impl<T> Validated<T> {
+	/// Unwrap and return the inner extractor.
 	pub fn into_inner(self) -> T {
-		self.inner
+		self.0
 	}
 }
 
 #[cfg(feature = "validation")]
-impl<T, V> Deref for Validated<T, V> {
+impl<T> Deref for Validated<T> {
 	type Target = T;
 
-	fn deref(&self) -> &Self::Target {
-		&self.inner
+	fn deref(&self) -> &T {
+		&self.0
 	}
 }
 
 #[cfg(feature = "validation")]
-impl<T: Debug, V> Debug for Validated<T, V> {
+impl<T: Debug> Debug for Validated<T> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		self.inner.fmt(f)
+		f.debug_tuple("Validated").field(&self.0).finish()
+	}
+}
+
+#[cfg(feature = "validation")]
+#[async_trait::async_trait]
+impl<E> super::extract::FromRequest for Validated<E>
+where
+	E: super::extract::FromRequest + super::has_inner::HasInner + Send,
+	E::Inner: Validate,
+{
+	async fn from_request(
+		req: &super::Request,
+		ctx: &super::ParamContext,
+	) -> super::ParamResult<Self> {
+		let extractor = E::from_request(req, ctx).await?;
+		extractor
+			.inner_ref()
+			.validate()
+			.map_err(|errors| super::ParamError::ValidationFailed(Box::new(errors)))?;
+		Ok(Validated(extractor))
 	}
 }
 
@@ -767,8 +762,119 @@ pub trait WithValidation: Sized {
 #[cfg(feature = "validation")]
 mod tests {
 	use super::*;
-	use crate::params::Path;
+	use crate::params::extract::FromRequest;
+	use crate::params::{Form, HasInner, ParamContext, ParamError, Path};
+	use bytes::Bytes;
+	use reinhardt_core::validators::{Validate, ValidationError, ValidationErrors};
+	use reinhardt_http::Request;
 	use rstest::rstest;
+
+	// Allow dead_code: fields are accessed via Deserialize derive, not directly in code
+	#[allow(dead_code)]
+	#[derive(Debug, serde::Deserialize)]
+	struct TestForm {
+		email: String,
+	}
+
+	impl Validate for TestForm {
+		fn validate(&self) -> Result<(), ValidationErrors> {
+			let mut errors = ValidationErrors::new();
+			if !self.email.contains('@') {
+				errors.add(
+					"email",
+					ValidationError::Custom("must contain @".to_string()),
+				);
+			}
+			if errors.is_empty() {
+				Ok(())
+			} else {
+				Err(errors)
+			}
+		}
+	}
+
+	fn make_form_request(body: &str) -> Request {
+		use hyper::{HeaderMap, Method, Version, header};
+		let mut headers = HeaderMap::new();
+		headers.insert(
+			header::CONTENT_TYPE,
+			"application/x-www-form-urlencoded".parse().unwrap(),
+		);
+		Request::builder()
+			.method(Method::POST)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(headers)
+			.body(Bytes::from(body.to_string()))
+			.build()
+			.unwrap()
+	}
+
+	#[rstest]
+	fn test_has_inner_form_valid_data() {
+		// Arrange
+		let form = Form(TestForm {
+			email: "user@example.com".to_string(),
+		});
+
+		// Act
+		let result = form.inner_ref().validate();
+
+		// Assert
+		assert!(result.is_ok());
+	}
+
+	#[rstest]
+	fn test_has_inner_form_invalid_data() {
+		// Arrange
+		let form = Form(TestForm {
+			email: "invalid".to_string(),
+		});
+
+		// Act
+		let result = form.inner_ref().validate();
+
+		// Assert
+		assert!(result.is_err());
+		let errors = result.unwrap_err();
+		assert!(errors.field_errors().contains_key("email"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_validated_form_extraction_valid() {
+		// Arrange
+		let req = make_form_request("email=user%40example.com");
+		let ctx = ParamContext::new();
+
+		// Act
+		let result = Validated::<Form<TestForm>>::from_request(&req, &ctx).await;
+
+		// Assert
+		assert!(result.is_ok());
+		let validated = result.unwrap();
+		assert_eq!(validated.into_inner().0.email, "user@example.com");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_validated_form_extraction_invalid() {
+		// Arrange
+		let req = make_form_request("email=invalid");
+		let ctx = ParamContext::new();
+
+		// Act
+		let result = Validated::<Form<TestForm>>::from_request(&req, &ctx).await;
+
+		// Assert
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(
+			matches!(err, ParamError::ValidationFailed(_)),
+			"expected ValidationFailed, got: {:?}",
+			err
+		);
+	}
 
 	#[rstest]
 	fn test_validation_constraints_builder() {

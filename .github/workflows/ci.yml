@@ -10,6 +10,7 @@ permissions:
   contents: read
   id-token: write
   pull-requests: read
+  issues: write
   security-events: write
 
 concurrency:

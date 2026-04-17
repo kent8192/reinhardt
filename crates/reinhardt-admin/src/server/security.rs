@@ -491,12 +491,7 @@ fn needs_html_escaping(s: &str) -> bool {
 
 /// Escapes HTML special characters in a string.
 fn escape_html(input: &str) -> String {
-	input
-		.replace('&', "&amp;")
-		.replace('<', "&lt;")
-		.replace('>', "&gt;")
-		.replace('"', "&quot;")
-		.replace('\'', "&#x27;")
+	reinhardt_core::security::escape_html(input)
 }
 
 // --- Admin authentication cookie ---

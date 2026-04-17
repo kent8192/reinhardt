@@ -45,6 +45,8 @@ pub use hsts::{HstsConfig, HstsMiddleware};
 pub use ip_filter::{IpFilterConfig, IpFilterMiddleware, IpFilterMode};
 pub use redirect::{RedirectValidationError, is_safe_redirect, validate_redirect_url};
 pub use resource_limits::{LimitExceeded, ResourceLimits};
+// re-exporting deprecated `escape_html_content` for backward compatibility
+#[allow(deprecated)]
 pub use xss::{
 	escape_css_selector, escape_html, escape_html_content, sanitize_html, strip_tags_safe,
 	validate_css_selector, validate_html_attr_name,

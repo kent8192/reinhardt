@@ -3449,3 +3449,83 @@ mod tests {
 		assert_eq!(btn.properties.len(), 0);
 	}
 }
+
+#[cfg(test)]
+mod scope_tests {
+	use super::*;
+	use crate::core::{ClientTrigger, ValidatorRule, ValidatorScope};
+	use rstest::*;
+
+	/// Wrapper that parses `[ ... ]` as a rules list via `parse_validator_rules`.
+	#[derive(Debug)]
+	struct ValidatorRulesWrapper(Vec<ValidatorRule>);
+
+	impl Parse for ValidatorRulesWrapper {
+		fn parse(input: ParseStream) -> Result<Self> {
+			parse_validator_rules(input).map(ValidatorRulesWrapper)
+		}
+	}
+
+	#[rstest]
+	#[case("[ |v| v.len() > 0 => \"err\" ]", ValidatorScope::Both)]
+	#[case("[ #[server] |v| v.len() > 0 => \"err\" ]", ValidatorScope::Server)]
+	#[case(
+		"[ #[client(on = submit)] |v| v.len() > 0 => \"err\" ]",
+		ValidatorScope::Client {
+			trigger: ClientTrigger::Submit,
+		}
+	)]
+	#[case(
+		"[ #[client(on = input)] |v| v.len() > 0 => \"err\" ]",
+		ValidatorScope::Client {
+			trigger: ClientTrigger::Input,
+		}
+	)]
+	#[case(
+		"[ #[client(on = blur)] |v| v.len() > 0 => \"err\" ]",
+		ValidatorScope::Client {
+			trigger: ClientTrigger::Blur,
+		}
+	)]
+	#[case(
+		"[ #[server] #[client(on = blur)] |v| v.len() > 0 => \"err\" ]",
+		ValidatorScope::ServerAndClient {
+			trigger: ClientTrigger::Blur,
+		}
+	)]
+	fn test_scope_parsing(#[case] input: &str, #[case] expected_scope: ValidatorScope) {
+		// Act
+		let wrapper: ValidatorRulesWrapper = syn::parse_str(input).unwrap();
+
+		// Assert
+		assert_eq!(wrapper.0.len(), 1);
+		assert_eq!(wrapper.0[0].scope, expected_scope);
+	}
+
+	#[rstest]
+	#[case(
+		"[ #[client(on = hover)] |v| v.len() > 0 => \"err\" ]",
+		"unknown trigger"
+	)]
+	#[case(
+		"[ #[unknown] |v| v.len() > 0 => \"err\" ]",
+		"unknown validator attribute"
+	)]
+	#[case(
+		"[ #[server] #[server] |v| v.len() > 0 => \"err\" ]",
+		"duplicate"
+	)]
+	fn test_scope_parsing_errors(#[case] input: &str, #[case] expected_fragment: &str) {
+		// Act
+		let result: Result<ValidatorRulesWrapper> = syn::parse_str(input);
+
+		// Assert
+		let err = result.expect_err("expected parse error");
+		assert!(
+			err.to_string().contains(expected_fragment),
+			"Expected error containing '{}', got: {}",
+			expected_fragment,
+			err
+		);
+	}
+}

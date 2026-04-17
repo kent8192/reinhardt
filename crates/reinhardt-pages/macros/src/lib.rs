@@ -842,13 +842,11 @@ pub fn head(input: TokenStream) -> TokenStream {
 ///
 ///     validators: {               // Optional server-side validators
 ///         field_name: [
-///             |v| !v.is_empty() => "Error message",
-///         ],
-///     },
-///
-///     client_validators: {        // Optional client-side validators
-///         field_name: [
-///             "value.length > 0" => "Error message",
+///             |v| !v.is_empty() => "Error message",                  // both (default)
+///             #[server]
+///             |v| !is_reserved(v) => "Reserved value",                // server only
+///             #[client(on = input)]
+///             |v| v.len() <= 100 => "Too long",                       // client only (on input)
 ///         ],
 ///     },
 /// }
@@ -1141,10 +1139,12 @@ pub fn head(input: TokenStream) -> TokenStream {
 ///     action: "/api/submit",
 ///     fields: { email: EmailField { required } },
 ///
-///     client_validators: {
+///     validators: {
 ///         email: [
-///             "value.length > 0" => "Email is required",
-///             "value.includes('@')" => "Invalid email format",
+///             #[client(on = input)]
+///             |v| !v.is_empty() => "Email is required",
+///             #[client(on = blur)]
+///             |v| v.contains('@') => "Invalid email format",
 ///         ],
 ///     },
 /// }
@@ -1186,11 +1186,9 @@ pub fn head(input: TokenStream) -> TokenStream {
 ///         username: [
 ///             |v| !v.trim().is_empty() => "Username is required",
 ///         ],
-///     },
-///
-///     client_validators: {
 ///         password: [
-///             "value.length >= 8" => "Password must be at least 8 characters",
+///             #[client(on = input)]
+///             |v| v.len() >= 8 => "Password must be at least 8 characters",
 ///         ],
 ///     },
 /// };

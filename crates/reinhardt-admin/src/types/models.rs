@@ -64,6 +64,67 @@ pub enum FieldType {
 	Hidden,
 }
 
+/// Rendering specification for a form field.
+///
+/// This type preserves the structural information needed to emit the
+/// correct HTML element (e.g., `<input>`, `<textarea>`, `<select>`),
+/// along with any choices required for `<select>` options. It is derived
+/// from `FieldType` via `From<&FieldType>`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data")]
+pub enum FormFieldSpec {
+	/// Plain `<input>` element with the given HTML `type` attribute.
+	Input {
+		/// Value for the HTML `type` attribute (e.g., "text", "email",
+		/// "number", "checkbox", "date", "datetime-local").
+		html_type: &'static str,
+	},
+	/// `<textarea>` element for multi-line text.
+	TextArea,
+	/// `<select>` dropdown with the given `(value, label)` choices.
+	Select {
+		/// Available choices as `(value, label)` pairs.
+		choices: Vec<(String, String)>,
+	},
+	/// `<select multiple>` dropdown with the given `(value, label)` choices.
+	MultiSelect {
+		/// Available choices as `(value, label)` pairs.
+		choices: Vec<(String, String)>,
+	},
+	/// `<input type="file">` for file uploads.
+	File,
+	/// `<input type="hidden">` for hidden values.
+	Hidden,
+}
+
+impl From<&FieldType> for FormFieldSpec {
+	fn from(field_type: &FieldType) -> Self {
+		match field_type {
+			FieldType::Text => FormFieldSpec::Input { html_type: "text" },
+			FieldType::Number => FormFieldSpec::Input {
+				html_type: "number",
+			},
+			FieldType::Boolean => FormFieldSpec::Input {
+				html_type: "checkbox",
+			},
+			FieldType::Email => FormFieldSpec::Input { html_type: "email" },
+			FieldType::Date => FormFieldSpec::Input { html_type: "date" },
+			FieldType::DateTime => FormFieldSpec::Input {
+				html_type: "datetime-local",
+			},
+			FieldType::TextArea => FormFieldSpec::TextArea,
+			FieldType::Select { choices } => FormFieldSpec::Select {
+				choices: choices.clone(),
+			},
+			FieldType::MultiSelect { choices } => FormFieldSpec::MultiSelect {
+				choices: choices.clone(),
+			},
+			FieldType::File => FormFieldSpec::File,
+			FieldType::Hidden => FormFieldSpec::Hidden,
+		}
+	}
+}
+
 /// Filter type for UI rendering
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "options")]

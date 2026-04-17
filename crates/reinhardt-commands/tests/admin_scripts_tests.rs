@@ -546,7 +546,11 @@ async fn test_startapp_workspace_mode() {
 
 	let cmd = StartAppCommand;
 	let result = cmd.execute(&ctx).await;
-	assert!(result.is_ok(), "Workspace app creation failed");
+	assert!(
+		result.is_ok(),
+		"Workspace app creation failed: {:?}",
+		result.err()
+	);
 
 	// Verify workspace member was added
 	let cargo_content = env.read_file("Cargo.toml");

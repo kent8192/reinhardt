@@ -840,10 +840,11 @@ mod tests {
 /// # Enum-Style Implementors
 ///
 /// `AppLabel` can also be implemented on enums where each variant maps
-/// to a different label. In that case, leave [`LABEL`](AppLabel::LABEL)
-/// at its default value `""` and override [`path`](AppLabel::path) to
-/// dispatch on `self`. The `installed_apps!` macro uses this pattern
-/// for the generated `InstalledApp` enum.
+/// to a different label. In that case, declare [`LABEL`](AppLabel::LABEL)
+/// as `""` explicitly (the trait intentionally has no default, so the
+/// compiler enforces that you make a choice) and override
+/// [`path`](AppLabel::path) to dispatch on `self`. The `installed_apps!`
+/// macro uses this pattern for the generated `InstalledApp` enum.
 ///
 /// ```
 /// use reinhardt_apps::apps::AppLabel;
@@ -855,6 +856,8 @@ mod tests {
 /// }
 ///
 /// impl AppLabel for MyApps {
+///     const LABEL: &'static str = "";
+///
 ///     fn path(&self) -> &'static str {
 ///         match self {
 ///             MyApps::Auth => "auth",

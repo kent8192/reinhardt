@@ -429,6 +429,16 @@ async fn create_workspace_app(
 	context.insert("camel_case_app_name", to_camel_case(app_name))?;
 	context.insert("is_restful", if !with_pages { "true" } else { "false" })?;
 	context.insert("with_pages", if with_pages { "true" } else { "false" })?;
+	// Workspace apps reference the parent project crate by name (for example
+	// `use my_project::config::apps::InstalledApp;`). Derive that name from
+	// the current directory (the workspace root), normalizing hyphens to
+	// underscores so the import is a valid Rust path. Falls back to
+	// `"project"` when the directory name is unavailable.
+	let project_crate_name = std::env::current_dir()
+		.ok()
+		.and_then(|p| p.file_name().map(|n| n.to_string_lossy().replace('-', "_")))
+		.unwrap_or_else(|| "project".to_string());
+	context.insert("project_crate_name", &project_crate_name)?;
 
 	// Determine template directory for workspace apps
 	let template_key = if with_pages { "pages" } else { "restful" };

@@ -348,12 +348,16 @@ impl BaseCommand for StartAppCommand {
 			// Update or create apps.rs to export the new app
 			update_apps_export(&app_name)?;
 
+			// Append to installed_apps! { ... } block (Issue #3670).
+			// Idempotent and silently skipped if src/config/apps.rs is
+			// missing (older project structure).
+			update_installed_apps_block(&app_name)?;
+
 			ctx.success(&format!(
 				"{} app '{}' created successfully in src/apps/{}!",
 				app_type, app_name, app_name
 			));
-			ctx.info("The app has been added to src/apps.rs");
-			ctx.info("Don't forget to add it to INSTALLED_APPS in your settings.rs");
+			ctx.info("The app has been added to src/apps.rs and src/config/apps.rs");
 		}
 
 		Ok(())
@@ -603,6 +607,108 @@ fn update_apps_export(app_name: &str) -> CommandResult<()> {
 	let formatted = prettyplease::unparse(&ast);
 	fs::write(&apps_file, formatted)
 		.map_err(|e| CommandError::ExecutionError(format!("Failed to write apps.rs: {}", e)))?;
+
+	Ok(())
+}
+
+/// Append a new app entry to the `installed_apps! { ... }` block in
+/// `src/config/apps.rs`.
+///
+/// Issue #3670: the typed `#[url_patterns(InstalledApp::<name>, ...)]`
+/// form requires the app's label to be registered via `installed_apps!`.
+/// This function is idempotent: if an entry with the same label already
+/// exists, it is left alone.
+///
+/// Silently succeeds if `src/config/apps.rs` does not exist (projects
+/// scaffolded before this change may not have it; users are expected to
+/// add it manually following the migration guide).
+fn update_installed_apps_block(app_name: &str) -> CommandResult<()> {
+	use std::fs;
+
+	let apps_file = PathBuf::from("src/config/apps.rs");
+	if !apps_file.exists() {
+		// Pre-#3670 projects don't have this file — skip silently. Users
+		// on an older project structure can still use the new macro
+		// syntax by manually creating the file per the migration guide.
+		return Ok(());
+	}
+
+	let src = fs::read_to_string(&apps_file).map_err(|e| {
+		CommandError::ExecutionError(format!(
+			"Failed to read {}: {}",
+			apps_file.display(),
+			e
+		))
+	})?;
+
+	// Idempotency: skip if the label is already present.
+	// We match `<name>:` since installed_apps! entries are of the form
+	// `<label>: "<path>"`.
+	let needle = format!("{}:", app_name);
+	if src.contains(&needle) {
+		return Ok(());
+	}
+
+	// Locate `installed_apps! { ... }` and append the entry before the
+	// closing `}`. A simple brace-walker suffices: we find the opening
+	// brace after `installed_apps!` and then the matching closing brace.
+	let Some(macro_start) = src.find("installed_apps!") else {
+		return Err(CommandError::ExecutionError(format!(
+			"{} does not contain `installed_apps! {{ ... }}`; cannot register new app",
+			apps_file.display()
+		)));
+	};
+
+	let Some(open_rel) = src[macro_start..].find('{') else {
+		return Err(CommandError::ExecutionError(format!(
+			"malformed installed_apps! block in {} (no opening brace)",
+			apps_file.display()
+		)));
+	};
+	let open_idx = macro_start + open_rel;
+
+	// Find matching closing brace.
+	let mut depth = 0usize;
+	let mut close_idx: Option<usize> = None;
+	for (i, ch) in src[open_idx..].char_indices() {
+		match ch {
+			'{' => depth += 1,
+			'}' => {
+				depth -= 1;
+				if depth == 0 {
+					close_idx = Some(open_idx + i);
+					break;
+				}
+			}
+			_ => {}
+		}
+	}
+	let Some(close_idx) = close_idx else {
+		return Err(CommandError::ExecutionError(format!(
+			"malformed installed_apps! block in {} (unmatched brace)",
+			apps_file.display()
+		)));
+	};
+
+	// Insert the new entry before the closing brace. Preserve existing
+	// trailing newline/indent style as best-effort.
+	let new_entry = format!("    {}: \"{}\",\n", app_name, app_name);
+	let mut out = String::with_capacity(src.len() + new_entry.len());
+	out.push_str(&src[..close_idx]);
+	// Ensure the content ends with a newline before we append.
+	if !out.ends_with('\n') {
+		out.push('\n');
+	}
+	out.push_str(&new_entry);
+	out.push_str(&src[close_idx..]);
+
+	fs::write(&apps_file, out).map_err(|e| {
+		CommandError::ExecutionError(format!(
+			"Failed to write {}: {}",
+			apps_file.display(),
+			e
+		))
+	})?;
 
 	Ok(())
 }

@@ -3756,3 +3756,40 @@ mod tests {
 		));
 	}
 }
+
+#[cfg(test)]
+mod scope_transform_tests {
+	use super::*;
+	use reinhardt_manouche::core::{ClientTrigger, ValidatorRule, ValidatorScope};
+	use rstest::*;
+
+	fn make_rule(scope: ValidatorScope) -> ValidatorRule {
+		ValidatorRule {
+			scope,
+			expr: syn::parse_str("|v| v.len() > 0").unwrap(),
+			message: syn::parse_str("\"error\"").unwrap(),
+			span: proc_macro2::Span::call_site(),
+		}
+	}
+
+	#[rstest]
+	#[case(ValidatorScope::Both)]
+	#[case(ValidatorScope::Server)]
+	#[case(ValidatorScope::Client {
+		trigger: ClientTrigger::Input,
+	})]
+	#[case(ValidatorScope::ServerAndClient {
+		trigger: ClientTrigger::Blur,
+	})]
+	fn test_scope_propagated_through_transform(#[case] scope: ValidatorScope) {
+		// Arrange
+		let rule = make_rule(scope.clone());
+
+		// Act
+		let typed = transform_validator_rule(&rule).unwrap();
+
+		// Assert
+		assert_eq!(typed.scope, scope);
+		assert_eq!(typed.message, "error");
+	}
+}

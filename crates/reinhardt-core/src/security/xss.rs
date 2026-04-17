@@ -286,6 +286,7 @@ pub fn strip_tags_safe(html: &str) -> String {
 /// let template = format!("<div>{}</div>", escape_html_content("User's <input>"));
 /// assert!(!template.contains("<input>"));
 /// ```
+#[deprecated(note = "use `escape_html` instead — identical implementation")]
 pub fn escape_html_content(input: &str) -> String {
 	escape_html(input)
 }

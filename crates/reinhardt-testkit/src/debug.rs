@@ -1,4 +1,4 @@
-use reinhardt_core::security::escape_html_content;
+use reinhardt_core::security::escape_html;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -362,19 +362,15 @@ impl DebugToolbar {
 			timing.cache_misses,
 			queries
 				.iter()
-				.map(|q| format!(
-					"<li>{} ({:?})</li>",
-					escape_html_content(&q.query),
-					q.duration
-				))
+				.map(|q| format!("<li>{} ({:?})</li>", escape_html(&q.query), q.duration))
 				.collect::<Vec<_>>()
 				.join("\n"),
 			panels
 				.iter()
 				.map(|(id, panel)| format!(
 					"<div class='panel' id='{}'><h3>{}</h3></div>",
-					escape_html_content(id),
-					escape_html_content(&panel.title)
+					escape_html(id),
+					escape_html(&panel.title)
 				))
 				.collect::<Vec<_>>()
 				.join("\n")
@@ -430,17 +426,14 @@ mod tests {
 	}
 
 	#[test]
-	fn test_escape_html_content() {
-		assert_eq!(escape_html_content("hello"), "hello");
+	fn test_escape_html() {
+		assert_eq!(escape_html("hello"), "hello");
 		assert_eq!(
-			escape_html_content("<script>alert('xss')</script>"),
+			escape_html("<script>alert('xss')</script>"),
 			"&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;"
 		);
-		assert_eq!(escape_html_content("a & b"), "a &amp; b");
-		assert_eq!(
-			escape_html_content(r#"key="value""#),
-			"key=&quot;value&quot;"
-		);
+		assert_eq!(escape_html("a & b"), "a &amp; b");
+		assert_eq!(escape_html(r#"key="value""#), "key=&quot;value&quot;");
 	}
 
 	#[tokio::test]

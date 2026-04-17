@@ -234,12 +234,8 @@ impl TestFixtures {
 	}
 
 	/// Generate random nonce string
+	#[deprecated(note = "use `random_state()` instead — identical implementation")]
 	pub(crate) fn random_nonce() -> String {
-		use rand::Rng;
-		rand::rng()
-			.sample_iter(&rand::distr::Alphanumeric)
-			.take(32)
-			.map(char::from)
-			.collect()
+		Self::random_state()
 	}
 }

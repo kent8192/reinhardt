@@ -145,19 +145,9 @@ pub fn render_html(html: impl Into<String>) -> Response {
 /// let escaped = escape_html("<script>alert('xss')</script>");
 /// assert_eq!(escaped, "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;");
 /// ```
+#[deprecated(note = "use `reinhardt_core::security::escape_html` instead")]
 pub fn escape_html(input: &str) -> String {
-	let mut output = String::with_capacity(input.len());
-	for ch in input.chars() {
-		match ch {
-			'&' => output.push_str("&amp;"),
-			'<' => output.push_str("&lt;"),
-			'>' => output.push_str("&gt;"),
-			'"' => output.push_str("&quot;"),
-			'\'' => output.push_str("&#x27;"),
-			_ => output.push(ch),
-		}
-	}
-	output
+	reinhardt_core::security::escape_html(input)
 }
 
 /// Render an HTML string with dynamic content escaped for XSS safety.
@@ -191,7 +181,7 @@ pub fn escape_html(input: &str) -> String {
 ///
 /// A `Response` with HTTP 200 status, HTML content-type, and the escaped content as body.
 pub fn render_html_safe(content: impl AsRef<str>) -> Response {
-	let escaped = escape_html(content.as_ref());
+	let escaped = reinhardt_core::security::escape_html(content.as_ref());
 
 	let mut response = Response::ok();
 	response.body = Bytes::from(escaped);
@@ -238,6 +228,7 @@ pub fn render_text(text: impl Into<String>) -> Response {
 mod tests {
 	use super::*;
 	use hyper::StatusCode;
+	use reinhardt_core::security::escape_html;
 	use rstest::rstest;
 	use serde_json::json;
 

@@ -150,12 +150,30 @@ jobs:
           # Build package selection args. Issue #2878
           # When run-all is true or no cargo-packages provided, use --workspace.
           # Otherwise, use -p flags to compile only affected packages + rdeps.
+          #
+          # `cargo test --lib -p <bin-only-pkg>` errors with "no library targets
+          # found" (see issue #3734), so filter out packages that lack a library
+          # target before building the -p list. `--workspace --lib` is itself
+          # tolerant of bin-only members and only tests the packages that do
+          # have a lib, so the fallback path is unaffected.
           PKG_ARGS=()
           if [[ "$RUN_ALL" != "true" && -n "$CARGO_PACKAGES" ]]; then
+            METADATA_JSON="$(cargo metadata --format-version 1 --no-deps)"
             while IFS= read -r pkg; do
               [[ -z "$pkg" ]] && continue
-              PKG_ARGS+=(-p "$pkg")
+              has_lib="$(jq -r --arg pkg "$pkg" \
+                '[.packages[] | select(.name==$pkg) | .targets[] | select(.kind | index("lib"))] | length > 0' \
+                <<< "$METADATA_JSON")"
+              if [[ "$has_lib" == "true" ]]; then
+                PKG_ARGS+=(-p "$pkg")
+              else
+                echo "Skipping bin-only package for --lib unit tests: $pkg"
+              fi
             done <<< "$CARGO_PACKAGES"
+            if [[ ${#PKG_ARGS[@]} -eq 0 ]]; then
+              echo "No affected packages expose a library target; nothing to test in this job."
+              exit 0
+            fi
           fi
           if [[ ${#PKG_ARGS[@]} -eq 0 ]]; then
             PKG_ARGS=(--workspace)

@@ -703,25 +703,17 @@ fn run_fmt(
 				Ok(result) => {
 					// Check if formatting was skipped
 					if let Some(reason) = &result.skipped {
-						use crate::ast_formatter::SkipReason;
-						match reason {
-							SkipReason::NoPageMacro => {
-								// Skip files without page! macros (no logging, no counting)
-								continue;
-							}
-							SkipReason::FileWideMarker | SkipReason::AllMacrosIgnored => {
-								// Log ignored files with reason
-								ignored_count += 1;
-								println!(
-									"{} {} {} ({})",
-									progress.bright_blue(),
-									"Ignored:".yellow(),
-									display_path(file_path),
-									reason
-								);
-								continue;
-							}
-						}
+						// All remaining SkipReason variants represent intentional
+						// ignore directives — log and count them.
+						ignored_count += 1;
+						println!(
+							"{} {} {} ({})",
+							progress.bright_blue(),
+							"Ignored:".yellow(),
+							display_path(file_path),
+							reason
+						);
+						continue;
 					}
 					result.content
 				}

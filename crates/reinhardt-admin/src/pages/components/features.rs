@@ -342,8 +342,8 @@ pub struct FormField {
 	pub name: String,
 	/// Field display label
 	pub label: String,
-	/// HTML input type (text, email, number, etc.)
-	pub field_type: String,
+	/// Rendering specification (input type, textarea, select, etc.)
+	pub spec: crate::types::FormFieldSpec,
 	/// Whether this field is required
 	pub required: bool,
 	/// Current field value (for edit forms)
@@ -450,12 +450,13 @@ fn detail_table(record: &std::collections::HashMap<String, String>) -> Page {
 ///
 /// ```ignore
 /// use reinhardt_admin::pages::components::features::{model_form, FormField};
+/// use reinhardt_admin::types::FormFieldSpec;
 ///
 /// let fields = vec![
 ///     FormField {
 ///         name: "username".to_string(),
 ///         label: "Username".to_string(),
-///         field_type: "text".to_string(),
+///         spec: FormFieldSpec::Input { html_type: "text" },
 ///         required: true,
 ///         value: "".to_string(),
 ///     },
@@ -545,18 +546,152 @@ fn form_group(field: &FormField) -> Page {
 	})()
 }
 
+/// Render `<option>` elements for a list of `(value, label)` choices,
+/// marking the option matching `current` as `selected`.
+fn render_options(choices: &[(String, String)], current: &str) -> Vec<Page> {
+	choices
+		.iter()
+		.map(|(value, label)| {
+			let value = value.clone();
+			let label = label.clone();
+			if value == current {
+				page!(|| {
+					option {
+						value: value,
+						selected: true,
+						{ label }
+					}
+				})()
+			} else {
+				page!(|| {
+					option {
+						value: value,
+						{ label }
+					}
+				})()
+			}
+		})
+		.collect()
+}
+
 /// Generates an input element for a form field
 fn form_element(field: &FormField, input_id: &str) -> Page {
-	let field_type = field.field_type.clone();
+	use crate::types::FormFieldSpec;
+
 	let input_id = input_id.to_string();
 	let name = field.name.clone();
 	let value = field.value.clone();
+	let required = field.required;
 
-	if field.required {
+	match &field.spec {
+		FormFieldSpec::Input { html_type } => {
+			let html_type = (*html_type).to_string();
+			render_input(html_type, input_id, name, value, required)
+		}
+		FormFieldSpec::File => {
+			render_input("file".to_string(), input_id, name, value, required)
+		}
+		FormFieldSpec::Hidden => {
+			render_input("hidden".to_string(), input_id, name, value, required)
+		}
+		FormFieldSpec::TextArea => {
+			if required {
+				page!(|| {
+					textarea {
+						class: "admin-input",
+						id: input_id,
+						name: name,
+						required: true,
+						autocomplete: "off",
+						{ value }
+					}
+				})()
+			} else {
+				page!(|| {
+					textarea {
+						class: "admin-input",
+						id: input_id,
+						name: name,
+						autocomplete: "off",
+						{ value }
+					}
+				})()
+			}
+		}
+		FormFieldSpec::Select { choices } => {
+			let options = render_options(choices, &value);
+			let options_container = page!(|| {
+				span {
+					{ options }
+				}
+			})();
+			if required {
+				page!(|| {
+					select {
+						class: "admin-select",
+						id: input_id,
+						name: name,
+						required: true,
+						{ options_container }
+					}
+				})()
+			} else {
+				page!(|| {
+					select {
+						class: "admin-select",
+						id: input_id,
+						name: name,
+						{ options_container }
+					}
+				})()
+			}
+		}
+		FormFieldSpec::MultiSelect { choices } => {
+			let options = render_options(choices, &value);
+			let options_container = page!(|| {
+				span {
+					{ options }
+				}
+			})();
+			if required {
+				page!(|| {
+					select {
+						class: "admin-select",
+						id: input_id,
+						name: name,
+						multiple: true,
+						required: true,
+						{ options_container }
+					}
+				})()
+			} else {
+				page!(|| {
+					select {
+						class: "admin-select",
+						id: input_id,
+						name: name,
+						multiple: true,
+						{ options_container }
+					}
+				})()
+			}
+		}
+	}
+}
+
+/// Render an `<input>` element with the given HTML `type`.
+fn render_input(
+	html_type: String,
+	input_id: String,
+	name: String,
+	value: String,
+	required: bool,
+) -> Page {
+	if required {
 		page!(|| {
 			input {
 				class: "admin-input",
-				type: field_type,
+				type: html_type,
 				id: input_id,
 				name: name,
 				value: value,
@@ -568,7 +703,7 @@ fn form_element(field: &FormField, input_id: &str) -> Page {
 		page!(|| {
 			input {
 				class: "admin-input",
-				type: field_type,
+				type: html_type,
 				id: input_id,
 				name: name,
 				value: value,

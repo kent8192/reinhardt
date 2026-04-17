@@ -11,7 +11,7 @@ use reinhardt_admin::pages::components::features::{
 	Column, FormField, ListViewData, dashboard, detail_view, list_view, model_form,
 };
 use reinhardt_admin::pages::components::login::login_form;
-use reinhardt_admin::types::ModelInfo;
+use reinhardt_admin::types::{FormFieldSpec, ModelInfo};
 use reinhardt_pages::Signal;
 use reinhardt_test::fixtures::wasm::*;
 use std::collections::HashMap;
@@ -128,7 +128,7 @@ fn test_model_form_create_mode() {
 	let fields = vec![FormField {
 		name: "username".to_string(),
 		label: "Username".to_string(),
-		field_type: "text".to_string(),
+		spec: FormFieldSpec::Input { html_type: "text" },
 		required: true,
 		value: String::new(),
 	}];
@@ -150,7 +150,7 @@ fn test_model_form_edit_mode() {
 	let fields = vec![FormField {
 		name: "username".to_string(),
 		label: "Username".to_string(),
-		field_type: "text".to_string(),
+		spec: FormFieldSpec::Input { html_type: "text" },
 		required: true,
 		value: "john_doe".to_string(),
 	}];

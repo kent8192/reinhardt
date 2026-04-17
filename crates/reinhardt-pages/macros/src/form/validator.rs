@@ -17,10 +17,9 @@ use std::collections::HashSet;
 use syn::{Error, Result};
 
 use reinhardt_manouche::core::{
-	ClientValidator, ClientValidatorRule, FormAction, FormCallbacks, FormDerived, FormFieldDef,
-	FormFieldEntry, FormFieldGroup, FormFieldProperty, FormMacro, FormMethod, FormSlots, FormState,
-	FormSubmitButtonDef, FormValidator, FormWatch, IconPosition, TypedChoicesConfig,
-	TypedClientValidator, TypedClientValidatorRule, TypedCustomAttr, TypedDerivedItem,
+	FormAction, FormCallbacks, FormDerived, FormFieldDef, FormFieldEntry, FormFieldGroup,
+	FormFieldProperty, FormMacro, FormMethod, FormSlots, FormState, FormSubmitButtonDef,
+	FormValidator, FormWatch, IconPosition, TypedChoicesConfig, TypedCustomAttr, TypedDerivedItem,
 	TypedFieldDisplay, TypedFieldStyling, TypedFieldType, TypedFieldValidation, TypedFormAction,
 	TypedFormCallbacks, TypedFormDerived, TypedFormFieldDef, TypedFormFieldEntry,
 	TypedFormFieldGroup, TypedFormMacro, TypedFormSlots, TypedFormState, TypedFormStyling,
@@ -159,11 +158,8 @@ pub(super) fn validate(ast: &FormMacro) -> Result<TypedFormMacro> {
 	// Transform fields
 	let fields = transform_fields(&ast.fields)?;
 
-	// Transform server-side validators
+	// Transform unified validators (scope filtering happens at codegen)
 	let validators = transform_validators(&ast.validators, &ast.fields)?;
-
-	// Transform client-side validators
-	let client_validators = transform_client_validators(&ast.client_validators, &ast.fields)?;
 
 	// The parser guarantees that `name` is Some after successful parsing.
 	let name = ast
@@ -186,7 +182,6 @@ pub(super) fn validate(ast: &FormMacro) -> Result<TypedFormMacro> {
 		slots,
 		fields,
 		validators,
-		client_validators,
 		span: ast.span,
 	})
 }
@@ -1311,7 +1306,7 @@ fn transform_validators(
 	Ok(result)
 }
 
-/// Transforms a validator rule.
+/// Transforms a validator rule, propagating its execution scope.
 ///
 /// Converts the closure expression to a regular expression for code generation.
 fn transform_validator_rule(rule: &ValidatorRule) -> Result<TypedValidatorRule> {
@@ -1319,56 +1314,8 @@ fn transform_validator_rule(rule: &ValidatorRule) -> Result<TypedValidatorRule> 
 	let condition: syn::Expr = (*rule.expr.body).clone();
 
 	Ok(TypedValidatorRule {
+		scope: rule.scope.clone(),
 		condition,
-		message: rule.message.value(),
-		span: rule.span,
-	})
-}
-
-/// Transforms client-side validators.
-fn transform_client_validators(
-	validators: &[ClientValidator],
-	fields: &[FormFieldEntry],
-) -> Result<Vec<TypedClientValidator>> {
-	validators
-		.iter()
-		.map(|v| transform_client_validator(v, fields))
-		.collect()
-}
-
-/// Transforms a single client-side validator.
-fn transform_client_validator(
-	validator: &ClientValidator,
-	fields: &[FormFieldEntry],
-) -> Result<TypedClientValidator> {
-	// Validate that field exists (including in groups)
-	if !field_exists(fields, &validator.field_name) {
-		return Err(Error::new(
-			validator.field_name.span(),
-			format!(
-				"client validator references unknown field: '{}'",
-				validator.field_name
-			),
-		));
-	}
-
-	let rules = validator
-		.rules
-		.iter()
-		.map(transform_client_validator_rule)
-		.collect::<Result<Vec<_>>>()?;
-
-	Ok(TypedClientValidator {
-		field_name: validator.field_name.clone(),
-		rules,
-		span: validator.span,
-	})
-}
-
-/// Transforms a client validator rule.
-fn transform_client_validator_rule(rule: &ClientValidatorRule) -> Result<TypedClientValidatorRule> {
-	Ok(TypedClientValidatorRule {
-		js_condition: rule.js_expr.value(),
 		message: rule.message.value(),
 		span: rule.span,
 	})

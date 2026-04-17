@@ -197,51 +197,16 @@ pub async fn mail_admins(
 	fail_silently: bool,
 	backend: &dyn EmailBackend,
 ) -> EmailResult<()> {
-	if settings.admins.is_empty() {
-		if fail_silently {
-			return Ok(());
-		} else {
-			return Err(crate::EmailError::MissingField("admins".to_string()));
-		}
-	}
-
-	let admin_emails: Vec<String> = settings
-		.admins
-		.iter()
-		.map(|(_, email)| email.clone())
-		.collect();
-
-	let subject_str = subject.into();
-	let final_subject = if !settings.subject_prefix.is_empty() {
-		format!("{} {}", settings.subject_prefix, subject_str)
-	} else {
-		subject_str
-	};
-
-	let from_email = if !settings.server_email.is_empty() {
-		settings.server_email.clone()
-	} else {
-		settings.from_email.clone()
-	};
-
-	let result = send_mail_with_backend(
-		final_subject,
+	send_to_role(
+		&settings.admins,
+		"admins",
+		settings,
+		subject,
 		message,
-		from_email,
-		admin_emails,
-		None,
+		fail_silently,
 		backend,
 	)
-	.await;
-
-	match result {
-		Ok(()) => Ok(()),
-		Err(e) if fail_silently && e.is_transient() => {
-			eprintln!("Email to admins failed (fail_silently=true): {}", e);
-			Ok(())
-		}
-		Err(e) => Err(e),
-	}
+	.await
 }
 /// Send an email to managers
 ///
@@ -286,19 +251,39 @@ pub async fn mail_managers(
 	fail_silently: bool,
 	backend: &dyn EmailBackend,
 ) -> EmailResult<()> {
-	if settings.managers.is_empty() {
+	send_to_role(
+		&settings.managers,
+		"managers",
+		settings,
+		subject,
+		message,
+		fail_silently,
+		backend,
+	)
+	.await
+}
+
+/// Internal helper that sends an email to a list of role recipients.
+///
+/// Shared implementation for [`mail_admins`] and [`mail_managers`].
+async fn send_to_role(
+	recipients: &[(String, String)],
+	role_name: &str,
+	settings: &EmailSettings,
+	subject: impl Into<String>,
+	message: impl Into<String>,
+	fail_silently: bool,
+	backend: &dyn EmailBackend,
+) -> EmailResult<()> {
+	if recipients.is_empty() {
 		if fail_silently {
 			return Ok(());
 		} else {
-			return Err(crate::EmailError::MissingField("managers".to_string()));
+			return Err(crate::EmailError::MissingField(role_name.to_string()));
 		}
 	}
 
-	let manager_emails: Vec<String> = settings
-		.managers
-		.iter()
-		.map(|(_, email)| email.clone())
-		.collect();
+	let emails: Vec<String> = recipients.iter().map(|(_, email)| email.clone()).collect();
 
 	let subject_str = subject.into();
 	let final_subject = if !settings.subject_prefix.is_empty() {
@@ -313,20 +298,13 @@ pub async fn mail_managers(
 		settings.from_email.clone()
 	};
 
-	let result = send_mail_with_backend(
-		final_subject,
-		message,
-		from_email,
-		manager_emails,
-		None,
-		backend,
-	)
-	.await;
+	let result =
+		send_mail_with_backend(final_subject, message, from_email, emails, None, backend).await;
 
 	match result {
 		Ok(()) => Ok(()),
 		Err(e) if fail_silently && e.is_transient() => {
-			eprintln!("Email to managers failed (fail_silently=true): {}", e);
+			eprintln!("Email to {} failed (fail_silently=true): {}", role_name, e);
 			Ok(())
 		}
 		Err(e) => Err(e),

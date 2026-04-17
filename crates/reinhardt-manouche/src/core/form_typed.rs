@@ -19,7 +19,7 @@
 //! | Properties | `TypedFieldValidation`, `TypedFieldDisplay`, `TypedFieldStyling` |
 //! | State | `TypedFormState`, `TypedFormCallbacks`, `TypedFormWatch` |
 //! | Customization | `TypedWrapper`, `TypedIcon`, `TypedCustomAttr`, `TypedFormSlots` |
-//! | Validation | `TypedFormValidator`, `TypedClientValidator` |
+//! | Validation | `TypedFormValidator` (with `ValidatorScope` per rule) |
 //!
 //! # Transformation Flow
 //!
@@ -32,6 +32,8 @@
 
 use proc_macro2::Span;
 use syn::{ExprClosure, Ident, Path};
+
+use super::form_node::ValidatorScope;
 
 #[cfg_attr(doc, aquamarine::aquamarine)]
 /// The top-level typed AST node representing a validated form! macro invocation.
@@ -112,10 +114,9 @@ pub struct TypedFormMacro {
 	pub slots: Option<TypedFormSlots>,
 	/// Validated field definitions (can include field groups)
 	pub fields: Vec<TypedFormFieldEntry>,
-	/// Validated server-side validators
+	/// Validated unified validators. Each rule carries a `ValidatorScope`
+	/// controlling whether it executes on server, client, or both.
 	pub validators: Vec<TypedFormValidator>,
-	/// Validated client-side validators
-	pub client_validators: Vec<TypedClientValidator>,
 	/// Span for error reporting
 	pub span: Span,
 }
@@ -1010,33 +1011,13 @@ pub struct TypedFormValidator {
 	pub span: Span,
 }
 
-/// A typed validation rule with condition expression and error message.
+/// A typed validation rule with condition expression, error message, and execution scope.
 #[derive(Debug)]
 pub struct TypedValidatorRule {
+	/// Execution scope propagated from `ValidatorRule`.
+	pub scope: ValidatorScope,
 	/// Validation condition expression (should evaluate to bool)
 	pub condition: syn::Expr,
-	/// Error message when validation fails
-	pub message: String,
-	/// Span for error reporting
-	pub span: Span,
-}
-
-/// Typed client-side validator.
-#[derive(Debug)]
-pub struct TypedClientValidator {
-	/// Field name to validate
-	pub field_name: Ident,
-	/// Validation rules
-	pub rules: Vec<TypedClientValidatorRule>,
-	/// Span for error reporting
-	pub span: Span,
-}
-
-/// A typed client-side validation rule.
-#[derive(Debug)]
-pub struct TypedClientValidatorRule {
-	/// JavaScript condition expression for validation
-	pub js_condition: String,
 	/// Error message when validation fails
 	pub message: String,
 	/// Span for error reporting
@@ -1312,7 +1293,6 @@ impl TypedFormMacro {
 			slots: None,
 			fields: Vec::new(),
 			validators: Vec::new(),
-			client_validators: Vec::new(),
 			span,
 		}
 	}

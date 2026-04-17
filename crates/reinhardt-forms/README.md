@@ -233,10 +233,10 @@ let mut form = form! {
             |v: &serde_json::Value| v.as_str().map_or(false, |s| s.len() >= 3)
                 => "Username must be at least 3 characters",
         ],
-    },
-    client_validators: {
         password: [
-            "value.length >= 8" => "Password must be at least 8 characters",
+            #[client(on = input)]
+            |v: &serde_json::Value| v.as_str().map_or(false, |s| s.len() >= 8)
+                => "Password must be at least 8 characters",
         ],
     },
 };

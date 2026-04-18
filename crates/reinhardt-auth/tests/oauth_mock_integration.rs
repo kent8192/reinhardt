@@ -56,8 +56,7 @@ impl MockEnv {
 
 		// Generate fresh RSA keypair for this test run.
 		let mut rng = rsa::rand_core::OsRng;
-		let private_key =
-			RsaPrivateKey::new(&mut rng, 2048).expect("failed to generate RSA key");
+		let private_key = RsaPrivateKey::new(&mut rng, 2048).expect("failed to generate RSA key");
 		let public_key = RsaPublicKey::from(&private_key);
 
 		let private_pem = private_key

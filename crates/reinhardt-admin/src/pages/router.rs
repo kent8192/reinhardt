@@ -437,14 +437,14 @@ fn create_view_component(model_name: String) -> Page {
 		FormField {
 			name: "name".to_string(),
 			label: "Name".to_string(),
-			spec: crate::types::FormFieldSpec::Input { html_type: "text" },
+			spec: crate::types::FormFieldSpec::Input { html_type: "text".to_string() },
 			required: true,
 			value: String::new(),
 		},
 		FormField {
 			name: "email".to_string(),
 			label: "Email".to_string(),
-			spec: crate::types::FormFieldSpec::Input { html_type: "email" },
+			spec: crate::types::FormFieldSpec::Input { html_type: "email".to_string() },
 			required: true,
 			value: String::new(),
 		},
@@ -520,14 +520,14 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 		FormField {
 			name: "name".to_string(),
 			label: "Name".to_string(),
-			spec: crate::types::FormFieldSpec::Input { html_type: "text" },
+			spec: crate::types::FormFieldSpec::Input { html_type: "text".to_string() },
 			required: true,
 			value: "Existing Value".to_string(),
 		},
 		FormField {
 			name: "email".to_string(),
 			label: "Email".to_string(),
-			spec: crate::types::FormFieldSpec::Input { html_type: "email" },
+			spec: crate::types::FormFieldSpec::Input { html_type: "email".to_string() },
 			required: true,
 			value: "user@example.com".to_string(),
 		},

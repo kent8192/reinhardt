@@ -77,7 +77,11 @@ pub enum FormFieldSpec {
 	Input {
 		/// Value for the HTML `type` attribute (e.g., "text", "email",
 		/// "number", "checkbox", "date", "datetime-local").
-		html_type: &'static str,
+		///
+		/// Owned `String` (not `&'static str`) so the variant can round-trip
+		/// through `serde` deserialization at API boundaries — borrowed
+		/// `'static` strings cannot be reconstructed from incoming JSON.
+		html_type: String,
 	},
 	/// `<textarea>` element for multi-line text.
 	TextArea,
@@ -100,17 +104,23 @@ pub enum FormFieldSpec {
 impl From<&FieldType> for FormFieldSpec {
 	fn from(field_type: &FieldType) -> Self {
 		match field_type {
-			FieldType::Text => FormFieldSpec::Input { html_type: "text" },
+			FieldType::Text => FormFieldSpec::Input {
+				html_type: "text".to_string(),
+			},
 			FieldType::Number => FormFieldSpec::Input {
-				html_type: "number",
+				html_type: "number".to_string(),
 			},
 			FieldType::Boolean => FormFieldSpec::Input {
-				html_type: "checkbox",
+				html_type: "checkbox".to_string(),
 			},
-			FieldType::Email => FormFieldSpec::Input { html_type: "email" },
-			FieldType::Date => FormFieldSpec::Input { html_type: "date" },
+			FieldType::Email => FormFieldSpec::Input {
+				html_type: "email".to_string(),
+			},
+			FieldType::Date => FormFieldSpec::Input {
+				html_type: "date".to_string(),
+			},
 			FieldType::DateTime => FormFieldSpec::Input {
-				html_type: "datetime-local",
+				html_type: "datetime-local".to_string(),
 			},
 			FieldType::TextArea => FormFieldSpec::TextArea,
 			FieldType::Select { choices } => FormFieldSpec::Select {

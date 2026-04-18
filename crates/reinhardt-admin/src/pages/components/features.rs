@@ -456,7 +456,7 @@ fn detail_table(record: &std::collections::HashMap<String, String>) -> Page {
 ///     FormField {
 ///         name: "username".to_string(),
 ///         label: "Username".to_string(),
-///         spec: FormFieldSpec::Input { html_type: "text" },
+///         spec: FormFieldSpec::Input { html_type: "text".to_string() },
 ///         required: true,
 ///         value: "".to_string(),
 ///     },
@@ -547,14 +547,19 @@ fn form_group(field: &FormField) -> Page {
 }
 
 /// Render `<option>` elements for a list of `(value, label)` choices,
-/// marking the option matching `current` as `selected`.
-fn render_options(choices: &[(String, String)], current: &str) -> Vec<Page> {
+/// marking each option whose value appears in `selected` as `selected`.
+///
+/// `selected` is a slice so that both single-select (`[current]`) and
+/// multi-select (`split` of the `FormField::value` string) can share the
+/// same renderer. See `parse_multi_value` for the multi-select wire format.
+fn render_option_elements(choices: &[(String, String)], selected: &[&str]) -> Vec<Page> {
 	choices
 		.iter()
 		.map(|(value, label)| {
 			let value = value.clone();
 			let label = label.clone();
-			if value == current {
+			let is_selected = selected.iter().any(|s| *s == value);
+			if is_selected {
 				page!(|| {
 					option {
 						value: value,
@@ -574,6 +579,13 @@ fn render_options(choices: &[(String, String)], current: &str) -> Vec<Page> {
 		.collect()
 }
 
+/// Multi-select wire format: `FormField::value` carries the selected values
+/// as a comma-separated list (e.g., `"read,write,delete"`). Empty entries
+/// are skipped so an empty value yields no selected options.
+fn parse_multi_value(raw: &str) -> Vec<&str> {
+	raw.split(',').map(str::trim).filter(|s| !s.is_empty()).collect()
+}
+
 /// Generates an input element for a form field
 fn form_element(field: &FormField, input_id: &str) -> Page {
 	use crate::types::FormFieldSpec;
@@ -585,8 +597,7 @@ fn form_element(field: &FormField, input_id: &str) -> Page {
 
 	match &field.spec {
 		FormFieldSpec::Input { html_type } => {
-			let html_type = (*html_type).to_string();
-			render_input(html_type, input_id, name, value, required)
+			render_input(html_type.clone(), input_id, name, value, required)
 		}
 		FormFieldSpec::File => {
 			render_input("file".to_string(), input_id, name, value, required)
@@ -619,12 +630,7 @@ fn form_element(field: &FormField, input_id: &str) -> Page {
 			}
 		}
 		FormFieldSpec::Select { choices } => {
-			let options = render_options(choices, &value);
-			let options_container = page!(|| {
-				span {
-					{ options }
-				}
-			})();
+			let options = render_option_elements(choices, &[value.as_str()]);
 			if required {
 				page!(|| {
 					select {
@@ -632,7 +638,7 @@ fn form_element(field: &FormField, input_id: &str) -> Page {
 						id: input_id,
 						name: name,
 						required: true,
-						{ options_container }
+						{ options }
 					}
 				})()
 			} else {
@@ -641,18 +647,14 @@ fn form_element(field: &FormField, input_id: &str) -> Page {
 						class: "admin-select",
 						id: input_id,
 						name: name,
-						{ options_container }
+						{ options }
 					}
 				})()
 			}
 		}
 		FormFieldSpec::MultiSelect { choices } => {
-			let options = render_options(choices, &value);
-			let options_container = page!(|| {
-				span {
-					{ options }
-				}
-			})();
+			let selected = parse_multi_value(&value);
+			let options = render_option_elements(choices, &selected);
 			if required {
 				page!(|| {
 					select {
@@ -661,7 +663,7 @@ fn form_element(field: &FormField, input_id: &str) -> Page {
 						name: name,
 						multiple: true,
 						required: true,
-						{ options_container }
+						{ options }
 					}
 				})()
 			} else {
@@ -671,7 +673,7 @@ fn form_element(field: &FormField, input_id: &str) -> Page {
 						id: input_id,
 						name: name,
 						multiple: true,
-						{ options_container }
+						{ options }
 					}
 				})()
 			}

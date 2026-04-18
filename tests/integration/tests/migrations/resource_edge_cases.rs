@@ -129,12 +129,13 @@ async fn test_connection_timeout_rolls_back_transaction(
 		}],
 	);
 
-	// Add another operation that will trigger timeout
+	// Long-running migration using pg_sleep to reliably exceed the wall-clock
+	// timeout wrapper below.
 	let long_running_migration = create_test_migration(
 		"testapp",
 		"0002_long_running",
 		vec![Operation::RunSQL {
-			sql: leak_str("SELECT pg_sleep(2)".to_string()), // Sleep longer than timeout
+			sql: leak_str("SELECT pg_sleep(5)".to_string()),
 			reverse_sql: Some(leak_str("SELECT 1".to_string())),
 		}],
 	);
@@ -159,21 +160,24 @@ async fn test_connection_timeout_rolls_back_transaction(
 
 	assert!(table_exists, "First table should exist");
 
-	// Apply second migration with long-running operation
-	// In a real scenario, this would test timeout, but for now we test that
-	// the executor handles long-running operations correctly
-	let result2 = executor.apply_migrations(&[long_running_migration]).await;
+	// Wrap the long-running migration in a 500ms timeout — pg_sleep(5) must
+	// exceed this wall-clock bound, producing a `tokio::time::error::Elapsed`.
+	let timeout_duration = std::time::Duration::from_millis(500);
+	let timed = tokio::time::timeout(
+		timeout_duration,
+		executor.apply_migrations(&[long_running_migration]),
+	)
+	.await;
 
-	// The long-running query should complete (pg_sleep with 2 seconds)
-	// Note: This tests that the migration system handles long operations,
-	// not that it times out (timeout behavior depends on database configuration)
+	// Assert: the timeout elapsed before the migration finished.
 	assert!(
-		result2.is_ok(),
-		"Long-running migration should complete: {:?}",
-		result2.err()
+		timed.is_err(),
+		"Long-running migration must exceed the wall-clock timeout (got Ok result)"
 	);
 
-	// Verify that the first migration's table still exists
+	// Verify that the first migration's table still exists after the timed-out
+	// operation (cleanup of the canceled transaction is handled by the pool
+	// when the future is dropped).
 	let table_still_exists = sqlx::query(
 		"SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'timeout_test_table')",
 	)

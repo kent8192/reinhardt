@@ -223,9 +223,9 @@ async fn test_model_relationships() {
 #[rstest]
 #[tokio::test]
 async fn test_model_graphql_integration(
-	#[future] graphql_schema_fixture: Schema<Query, Mutation, EmptySubscription>,
+	#[future] graphql_schema_fixture: (Schema<Query, Mutation, EmptySubscription>, Arc<PgPool>),
 ) {
-	let schema = graphql_schema_fixture.await;
+	let (schema, _pool) = graphql_schema_fixture.await;
 
 	// Test that we can query user-related types from the schema
 	let introspection_query = r#"

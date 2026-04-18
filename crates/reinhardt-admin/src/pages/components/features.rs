@@ -588,9 +588,7 @@ fn form_element(field: &FormField, input_id: &str) -> Page {
 			let html_type = (*html_type).to_string();
 			render_input(html_type, input_id, name, value, required)
 		}
-		FormFieldSpec::File => {
-			render_input("file".to_string(), input_id, name, value, required)
-		}
+		FormFieldSpec::File => render_input("file".to_string(), input_id, name, value, required),
 		FormFieldSpec::Hidden => {
 			render_input("hidden".to_string(), input_id, name, value, required)
 		}

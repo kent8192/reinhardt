@@ -5,15 +5,10 @@ use sha2::{Digest, Sha256};
 ///
 pub fn generate_token(length: usize) -> String {
 	use rand::Rng;
-	let mut rng = rand::rng();
-	(0..length)
-		.map(|_| {
-			let idx = rng.random_range(0..62);
-			"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-				.chars()
-				.nth(idx)
-				.unwrap()
-		})
+	rand::rng()
+		.sample_iter(&rand::distr::Alphanumeric)
+		.take(length)
+		.map(char::from)
 		.collect()
 }
 /// Hash a string with SHA256

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-rc.15...reinhardt-rest@v0.1.0-rc.16) - 2026-04-18
+
+### Added
+
+- *(core)* add AuthProtection enum and EndpointMetadata extension
+- *(rest)* integrate auth protection with OpenAPI security generation
+- migrate UUID generation from v4 to v7 across entire codebase
+
+### Changed
+
+- deduplicate utility functions across crates
+
+### Documentation
+
+- *(rest)* fix broken intra-doc link to OpenApiSettings
+
+### Fixed
+
+- *(middleware)* convert errors to responses in cross-crate middleware
+- resolve merge conflicts with main and fix CI failures
+
+### Maintenance
+
+- upgrade workspace dependencies to latest versions
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-rc.14...reinhardt-rest@v0.1.0-rc.15) - 2026-03-29
 
 ### Fixed

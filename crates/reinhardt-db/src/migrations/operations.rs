@@ -3649,19 +3649,21 @@ impl Operation {
 					table, source, format, options,
 				))
 			}
-			Operation::SetAutoIncrementValue {
-				table,
-				column,
-				value,
-			} => {
-				// Default to PostgreSQL syntax here; per-dialect rendering is
-				// produced via `to_sql(dialect)` when the executor selects the
-				// target backend.
-				OperationStatement::RawSql(Self::set_auto_increment_to_sql(
-					table,
-					column,
-					*value,
-					&SqlDialect::Postgres,
+			Operation::SetAutoIncrementValue { table, .. } => {
+				// `to_statement` has no dialect context, but `SetAutoIncrementValue`
+				// renders fundamentally different SQL per backend (PostgreSQL
+				// `setval`, MySQL `ALTER TABLE AUTO_INCREMENT`, SQLite
+				// `sqlite_sequence` upsert). Silently emitting PostgreSQL-only
+				// SQL here would break MySQL/SQLite migrations.
+				//
+				// Emit guaranteed-fail SQL that aborts execution with a visible
+				// diagnostic pointing callers at the dialect-aware `to_sql`
+				// path. Converting the signature to
+				// `Result<OperationStatement, MigrationError>` would cascade
+				// through dozens of call sites.
+				OperationStatement::RawSql(format!(
+					"SELECT 1/0 AS \"SetAutoIncrementValue on {} requires dialect-aware rendering; call Operation::to_sql(&dialect) instead of to_statement()\";",
+					table.replace('"', "\"\"")
 				))
 			}
 			Operation::CreateCompositePrimaryKey {

@@ -128,6 +128,7 @@ image = { workspace = true }
 url = { workspace = true }
 rust_decimal = { workspace = true }
 async-stream = "0.3"
+multer = "3.1"
 regex = { workspace = true }
 tracing = { workspace = true }
 trybuild = { workspace = true }

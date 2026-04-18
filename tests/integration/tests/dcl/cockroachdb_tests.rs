@@ -18,11 +18,127 @@
 
 use reinhardt_query::dcl::*;
 use reinhardt_test::fixtures::dcl::*;
+use reinhardt_test::fixtures::testcontainers::cockroachdb_container;
 use rstest::rstest;
+use serial_test::serial;
+use sqlx::Row;
 
-// NOTE: These tests would use testcontainers for real database testing
-// For now, we're creating the structure. Actual implementation would require
-// testcontainers setup and database connections.
+// ============================================================================
+// GRANT / REVOKE Integration Tests (executed against real CockroachDB)
+// ============================================================================
+
+/// GRANT SELECT on a table to a role and verify it appears in
+/// `information_schema.table_privileges`.
+#[rstest]
+#[tokio::test]
+#[serial(dcl_cockroach)]
+async fn test_grant_select_appears_in_information_schema() {
+	// Arrange: start CockroachDB, create a role and a target table.
+	let (_container, pool, _port, _url) = cockroachdb_container().await;
+	let role = test_role();
+	let table = dcl_test_table();
+
+	sqlx::query(&format!("CREATE ROLE {role}"))
+		.execute(pool.as_ref())
+		.await
+		.expect("CREATE ROLE");
+	sqlx::query(&format!(
+		"CREATE TABLE {table} (id INT PRIMARY KEY, name STRING)"
+	))
+	.execute(pool.as_ref())
+	.await
+	.expect("CREATE TABLE");
+
+	// Act: grant SELECT on the table to the role via a real DCL statement.
+	sqlx::query(&format!("GRANT SELECT ON TABLE {table} TO {role}"))
+		.execute(pool.as_ref())
+		.await
+		.expect("GRANT SELECT");
+
+	// Assert: the privilege is visible in information_schema.table_privileges.
+	let count: i64 = sqlx::query(
+		// Scope by table_schema to avoid cross-schema name collisions
+		// (unqualified CREATE TABLE lands in `public`).
+		"SELECT COUNT(*)::INT8 FROM information_schema.table_privileges
+		 WHERE grantee = $1 AND table_name = $2 AND table_schema = 'public'
+		   AND privilege_type = 'SELECT'",
+	)
+	.bind(&role)
+	.bind(&table)
+	.fetch_one(pool.as_ref())
+	.await
+	.expect("query information_schema")
+	.get::<i64, _>(0);
+	assert_eq!(count, 1, "GRANT SELECT must create one privilege row");
+
+	// Cleanup
+	let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {table}"))
+		.execute(pool.as_ref())
+		.await;
+	let _ = sqlx::query(&format!("DROP ROLE IF EXISTS {role}"))
+		.execute(pool.as_ref())
+		.await;
+}
+
+/// REVOKE a previously granted SELECT and verify it is removed from
+/// `information_schema.table_privileges`.
+#[rstest]
+#[tokio::test]
+#[serial(dcl_cockroach)]
+async fn test_revoke_select_removes_privilege() {
+	// Arrange
+	let (_container, pool, _port, _url) = cockroachdb_container().await;
+	let role = test_role();
+	let table = dcl_test_table();
+	sqlx::query(&format!("CREATE ROLE {role}"))
+		.execute(pool.as_ref())
+		.await
+		.expect("CREATE ROLE");
+	sqlx::query(&format!(
+		"CREATE TABLE {table} (id INT PRIMARY KEY, name STRING)"
+	))
+	.execute(pool.as_ref())
+	.await
+	.expect("CREATE TABLE");
+	sqlx::query(&format!("GRANT SELECT ON TABLE {table} TO {role}"))
+		.execute(pool.as_ref())
+		.await
+		.expect("GRANT SELECT");
+
+	// Act: revoke the privilege.
+	sqlx::query(&format!("REVOKE SELECT ON TABLE {table} FROM {role}"))
+		.execute(pool.as_ref())
+		.await
+		.expect("REVOKE SELECT");
+
+	// Assert: no SELECT privilege row remains for the role on the table.
+	let count: i64 = sqlx::query(
+		// Scope by table_schema to avoid cross-schema name collisions
+		// (unqualified CREATE TABLE lands in `public`).
+		"SELECT COUNT(*)::INT8 FROM information_schema.table_privileges
+		 WHERE grantee = $1 AND table_name = $2 AND table_schema = 'public'
+		   AND privilege_type = 'SELECT'",
+	)
+	.bind(&role)
+	.bind(&table)
+	.fetch_one(pool.as_ref())
+	.await
+	.expect("query information_schema")
+	.get::<i64, _>(0);
+	assert_eq!(count, 0, "REVOKE SELECT must remove all matching rows");
+
+	// Cleanup
+	let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {table}"))
+		.execute(pool.as_ref())
+		.await;
+	let _ = sqlx::query(&format!("DROP ROLE IF EXISTS {role}"))
+		.execute(pool.as_ref())
+		.await;
+}
+
+// ============================================================================
+// Remaining test stubs (require additional scaffolding; tracked separately)
+// ============================================================================
 
 // ============================================================================
 // Role Management Integration Tests (6 tests)

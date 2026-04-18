@@ -238,12 +238,38 @@ async fn test_least_privilege_principle_adherence(
 		"Migration user should not have CREATEDB privilege (not needed)"
 	);
 
-	// Test insufficient privilege: Attempt database-wide operation (should fail)
-	let create_db_result = sqlx::query("CREATE DATABASE test_db").execute(&*pool).await;
+	// Test insufficient privilege: attempt database-wide operation through a
+	// pool that is authenticated as `migration_user`. CREATE DATABASE requires
+	// the CREATEDB role attribute, which we explicitly did NOT grant, so
+	// PostgreSQL must reject it with error class 42 (permission denied / insufficient privilege).
+	let restricted_pool = sqlx::postgres::PgPoolOptions::new()
+		.max_connections(1)
+		.connect(&restricted_url)
+		.await
+		.expect("Failed to open pool as migration_user");
 
-	// Note: This test uses superuser connection, so it would succeed
-	// To properly test, we'd need to connect as migration_user
-	// For now, we verify the user doesn't have the privilege
+	let create_db_result = sqlx::query("CREATE DATABASE test_db_forbidden")
+		.execute(&restricted_pool)
+		.await;
+
+	assert!(
+		create_db_result.is_err(),
+		"migration_user must not be able to CREATE DATABASE"
+	);
+	let err = create_db_result.unwrap_err();
+	let db_err = err
+		.as_database_error()
+		.expect("Expected a database error from PostgreSQL");
+	// PostgreSQL SQLSTATE 42501 = insufficient_privilege. `CREATE DATABASE`
+	// without the CREATEDB role attribute is rejected with this specific code
+	// (not 0LP01 `invalid_grant_operation`, which applies to GRANT/REVOKE flow).
+	let code = db_err.code().unwrap_or_default().to_string();
+	assert_eq!(
+		code, "42501",
+		"Expected SQLSTATE 42501 (insufficient_privilege), got: {code}"
+	);
+
+	restricted_pool.close().await;
 
 	// Cleanup: Drop restricted user
 	sqlx::query("DROP USER IF EXISTS migration_user")

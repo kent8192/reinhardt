@@ -256,39 +256,34 @@ async fn test_circuit_breaker_maintains_closed_with_success(
 
 /// Test: GZip compresses text content when Accept-Encoding includes gzip
 ///
-/// Note: GZip middleware requires:
+/// GZip middleware requires:
 /// 1. Accept-Encoding: gzip header
 /// 2. Response body length >= min_length (default 1024)
 /// 3. Content-Type header matching compressible types (text/*)
-///
-/// Since our ConfigurableTestHandler doesn't set Content-Type, this test
-/// is skipped for now. A proper implementation would require a custom handler
-/// that sets the Content-Type header.
 #[cfg(feature = "compression")]
 #[rstest]
 #[tokio::test]
 #[serial(gzip)]
 async fn test_gzip_middleware_processes_request() {
-	// Setup: Create GZip middleware with default configuration
+	// Arrange: Create GZip middleware with default configuration and a
+	// handler that returns a compressible text/plain body of sufficient size.
 	let middleware = Arc::new(GZipMiddleware::new());
 
-	// Create handler that returns text content
-	// Note: GZip compression requires Content-Type header in the response
 	let text_body = "x".repeat(2000);
-	let handler = Arc::new(
-		ConfigurableTestHandler::always_success()
-			.with_body(Bytes::from(text_body))
-			.with_success_status(200),
-	);
+	let mut handler = ConfigurableTestHandler::always_success()
+		.with_body(Bytes::from(text_body))
+		.with_success_status(200);
+	handler.content_type = Some("text/plain".to_string());
+	let handler = Arc::new(handler);
 
-	// Execute: Send request with Accept-Encoding: gzip
 	let request = create_request_with_headers("GET", "/api/data", &[("Accept-Encoding", "gzip")]);
 
+	// Act
 	let response = middleware.process(request, handler).await.unwrap();
 
-	// Verify: Request passes through middleware successfully
-	// Note: Without Content-Type header, compression is not applied
+	// Assert: GZip middleware produced a compressed response
 	assert_status(&response, 200);
+	assert_header(&response, "Content-Encoding", "gzip");
 }
 
 // ============================================================================

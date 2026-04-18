@@ -29,6 +29,9 @@ rules:
     patterns:
       - pattern-regex: "(?im)^[ \\t]*//[/!]?[^\\n]*\\bmock(?:\\s*:(?!:)|\\s+impl(?:ementation)?\\b|ed(?:\\s+for\\s+now)?\\b)"
       - pattern-not-regex: "//[/!]"
+      # Exclude mockito/test-server setup comments: "// Mock: GET /path" — these document HTTP
+      # mock expectations in tests, not placeholder implementations.
+      - pattern-not-regex: "(?i)\\bmock\\s*:\\s*(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\\b"
     message: >-
       Mock implementation marker detected in production code. Mocks belong
       in tests only; replace with a real implementation before merging.
@@ -111,3 +114,10 @@ rules:
         # Systematic FP: proxy doc blocks mix /// and // for code examples,
         # making // let/fn lines indistinguishable from commented-out code at the regex level.
         - "**/reinhardt-urls/src/proxy/**"
+        # Systematic FP: main lib.rs facade file contains many // ```rust,no_run doc code blocks
+        # where each example line starts with "// let/use" — indistinguishable from dead code
+        # at the regex level without multi-line context (not available in generic mode).
+        - "src/lib.rs"
+        # Systematic FP: tutorial/example code intentionally uses commented code to show
+        # planned API usage patterns.
+        - "examples/**"

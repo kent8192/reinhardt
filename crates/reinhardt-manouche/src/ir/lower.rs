@@ -6,19 +6,19 @@ use crate::validator::TypedHeadMacro;
 use super::{ComponentIR, FormIR, HeadIR};
 
 /// Lowers a typed page AST to IR.
-#[allow(clippy::unimplemented)] // This variant is intentionally unimplemented: page lowering uses direct codegen path instead of IR pipeline
+#[allow(clippy::unimplemented)] // This function is intentionally unimplemented: page lowering uses direct codegen path instead of IR pipeline
 pub fn lower_page(_typed: &TypedPageMacro) -> ComponentIR {
 	unimplemented!("page lowering uses direct codegen path instead of IR pipeline")
 }
 
 /// Lowers a typed form AST to IR.
-#[allow(clippy::unimplemented)] // This variant is intentionally unimplemented: form lowering uses direct codegen path instead of IR pipeline
+#[allow(clippy::unimplemented)] // This function is intentionally unimplemented: form lowering uses direct codegen path instead of IR pipeline
 pub fn lower_form(_typed: &TypedFormMacro) -> FormIR {
 	unimplemented!("form lowering uses direct codegen path instead of IR pipeline")
 }
 
 /// Lowers a typed head AST to IR.
-#[allow(clippy::unimplemented)] // This variant is intentionally unimplemented: head lowering uses direct codegen path instead of IR pipeline
+#[allow(clippy::unimplemented)] // This function is intentionally unimplemented: head lowering uses direct codegen path instead of IR pipeline
 pub fn lower_head(_typed: &TypedHeadMacro) -> HeadIR {
 	unimplemented!("head lowering uses direct codegen path instead of IR pipeline")
 }

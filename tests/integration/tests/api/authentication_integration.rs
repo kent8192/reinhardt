@@ -212,7 +212,7 @@ async fn test_jwt_token_expiration(
 	// Simulate expired token scenario
 	let expired_token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJleHAiOjE2MDAwMDAwMDB9.invalid";
 
-	// Production code returns AuthenticationError::InvalidToken here
+	// In production, validating this token would return AuthenticationError::InvalidToken
 	assert!(expired_token.contains("exp"));
 }
 

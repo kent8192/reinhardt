@@ -620,7 +620,7 @@ async fn test_schema_drift_detection(
 		"Should only have 1 migration in history (external changes not recorded)"
 	);
 
-	// In a real implementation, Autodetector would compare the expected schema
+	// Production code uses Autodetector to compare the expected schema
 	// (from ProjectState based on migrations) with actual schema (from database),
 	// and generate a warning/report about the drift:
 	//

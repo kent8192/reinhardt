@@ -107,7 +107,7 @@ async fn test_remember_me_token_integration(
 		.expect("Failed to delete expired session");
 
 	// Simulate automatic login via remember_me token
-	// (In real implementation, this would check remember_me token from cookie)
+	// (production code would check the remember_me token from the cookie)
 	let mut new_session = Session::new(backend.clone());
 	new_session
 		.set("_auth_user_id", user_id.to_string())
@@ -362,7 +362,7 @@ async fn test_invalidate_all_sessions_on_password_change(
 	);
 
 	// Simulate password change - invalidate all sessions for this user
-	// In real implementation, this would be triggered by password change event
+	// (production code would trigger this from a password change event)
 	let sessions_to_delete = sqlx::query_scalar::<_, String>(
 		"SELECT session_key FROM sessions WHERE session_data::text LIKE $1",
 	)

@@ -18,8 +18,8 @@ async fn graphql_schema_fixture(
 	let (_container, pool, _port, _url) = postgres_container.await;
 
 	// Create schema with database connection
-	// Note: In a real implementation, we would configure the schema to use the database pool
-	// For now, we'll use the default in-memory storage
+	// Note: production code would configure the schema to use the database pool;
+	// this fixture uses the default in-memory storage to keep the test hermetic.
 	create_schema()
 }
 

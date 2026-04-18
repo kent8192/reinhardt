@@ -548,7 +548,7 @@ async fn test_server_fn_with_di() {
 	//     Ok(user)
 	// }
 
-	// For now, verify the concept with a simple example
+	// Verify the concept with a simple example
 	let codec = JsonCodec;
 	let request = ServerFnRequest {
 		id: 1,
@@ -617,12 +617,12 @@ async fn test_server_fn_csrf_injection(csrf_token: String) {
 	assert!(!csrf_token.is_empty());
 	assert!(csrf_token.starts_with("test-csrf-token"));
 
-	// In a real implementation, the server function client would:
+	// A production server function client would:
 	// 1. Get CSRF token from CsrfManager
 	// 2. Add X-CSRFToken header to the request
 	// 3. Send the request with both payload and CSRF token
 
-	// For now, verify the token format is valid
+	// Here we verify the token format is valid
 	assert!(csrf_token.len() > 10);
 
 	// Verify token can be used in header format (key: value)
@@ -665,7 +665,7 @@ async fn test_server_fn_di_with_multiple_params() {
 	//     Ok(Response::success())
 	// }
 
-	// For now, verify the request/response payload works
+	// Verify the request/response payload works
 	let codec = JsonCodec;
 
 	#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

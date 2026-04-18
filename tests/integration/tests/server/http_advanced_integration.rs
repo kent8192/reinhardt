@@ -116,7 +116,7 @@ impl Handler for MultipartHandler {
 			.unwrap_or("");
 
 		if content_type.starts_with("multipart/form-data") {
-			// For now, just confirm we received multipart data
+			// This handler simply confirms we received multipart data
 			let body = request.read_body()?;
 			let response_body = format!(
 				"Received multipart data: {} bytes, content-type: {}",

@@ -110,8 +110,8 @@ async fn user_model_fixture(
 ) -> (Schema<Query, Mutation, EmptySubscription>, User) {
 	let schema = graphql_schema_fixture.await;
 
-	// Get database pool from schema context (simplified - in real implementation
-	// we would extract it from schema data)
+	// Get database pool from schema context (simplified; production code
+	// would extract it from schema data)
 	let pool = get_pool_from_test_container().await;
 
 	// Create user using reinhardt-query (not raw SQL)
@@ -140,7 +140,7 @@ async fn post_model_fixture(
 
 /// Get database pool from test container (simplified implementation).
 ///
-/// In a real implementation, this would extract the pool from the schema
+/// Production code would extract the pool from the schema
 /// or use a shared test container fixture.
 // Allow: pool extraction is a placeholder for fixture pattern (permanently excluded)
 #[allow(clippy::unimplemented)]

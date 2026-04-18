@@ -1329,8 +1329,8 @@ async fn test_composite_primary_key_creation(
 	// ============================================================================
 
 	// Create OrderItems table with composite PK (order_id, line_number)
-	// Note: reinhardt doesn't have native Operation for composite PK yet,
-	// so we use RunSQL for now
+	// Note: reinhardt doesn't have a native Operation for composite PK yet,
+	// so this test uses RunSQL as a workaround
 	let create_order_items_migration = create_test_migration(
 		"commerce",
 		"0002_create_order_items",

@@ -241,9 +241,9 @@ async fn test_least_privilege_principle_adherence(
 	// Test insufficient privilege: Attempt database-wide operation (should fail)
 	let create_db_result = sqlx::query("CREATE DATABASE test_db").execute(&*pool).await;
 
-	// Note: This test uses superuser connection, so it would succeed
-	// To properly test, we'd need to connect as migration_user
-	// For now, we verify the user doesn't have the privilege
+	// Note: This test uses superuser connection, so it would succeed.
+	// Fully exercising the restriction would require connecting as
+	// migration_user; here we verify the user doesn't have the privilege.
 
 	// Cleanup: Drop restricted user
 	sqlx::query("DROP USER IF EXISTS migration_user")

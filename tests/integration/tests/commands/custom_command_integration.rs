@@ -247,7 +247,7 @@ async fn test_verbosity_levels_in_command(
 			let info_shown = ctx.verbosity() >= 1;
 			let debug_shown = ctx.verbosity() >= 3;
 
-			// These would control actual output in real implementation
+			// Production code would gate actual output on these flags
 			assert_eq!(info_shown, ctx.verbosity() >= 1);
 			assert_eq!(debug_shown, ctx.verbosity() >= 3);
 			Ok(())

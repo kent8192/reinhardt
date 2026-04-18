@@ -195,8 +195,8 @@ async fn test_self_follow_detection(#[future] twitter_db_pool: (PgPool, String))
 		.await
 		.expect("User creation should succeed");
 
-	// In a real implementation, following yourself should be prevented
-	// This test verifies the user ID can be compared
+	// Production code would prevent a user from following themselves.
+	// This test verifies the user ID can be compared.
 	let follower_id = user.id();
 	let target_id = user.id();
 

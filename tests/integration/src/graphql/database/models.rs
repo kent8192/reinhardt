@@ -86,9 +86,9 @@ async fn test_query_sql_construction() {
 #[rstest]
 #[tokio::test]
 async fn test_model_field_constraints() {
-	// Note: In a real implementation, we would access field metadata
-	// from the model definition. This test verifies our understanding
-	// of the field constraints defined in the model.
+	// Note: production code would access field metadata from the model
+	// definition. This test verifies our understanding of the field
+	// constraints defined in the model.
 
 	// User name field should have max_length = 255 (from #[field(max_length = 255)])
 	// This is a documentation/expectation test
@@ -179,7 +179,7 @@ async fn test_model_trait_implementation() {
 	// that the instance has the expected type
 	assert_eq!(user.id, 1);
 
-	// In a real implementation, we would also verify:
+	// Additional checks that production code would cover:
 	// - The model can be used with GraphQL type derivation
 	// - Fields are exposed correctly to GraphQL schema
 	// - Relationships are properly defined

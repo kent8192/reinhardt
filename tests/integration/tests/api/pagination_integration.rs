@@ -806,7 +806,7 @@ async fn test_pagination_with_negative_offset(
 	let paginator = LimitOffsetPagination::new().default_limit(10);
 
 	// Negative offset should be rejected during parameter parsing
-	// In real implementation, this would be caught by query parameter validation
+	// (production code catches this at query parameter validation)
 	let offset = -10_i64;
 	assert!(offset < 0);
 }

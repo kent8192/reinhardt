@@ -366,7 +366,7 @@ async fn filter_products(pool: Arc<AnyPool>, filters: &[(&str, &str)]) -> Vec<Pr
 
 	let mut query = sqlx::query_as::<_, (i32, String, String, String, f64, i32, bool)>(&query_str);
 
-	// Bind parameters (simplified - in real implementation would use proper binding)
+	// Bind parameters (simplified; production code uses structured binding)
 	// This is a mock implementation for testing purposes
 	let rows = sqlx::query(&query_str)
 		.fetch_all(pool.as_ref())

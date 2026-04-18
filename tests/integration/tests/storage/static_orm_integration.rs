@@ -336,8 +336,8 @@ impl StaticFileManager {
 		// Find files in storage not in database
 		let mut orphaned = Vec::new();
 
-		// NOTE: In a real implementation, this would scan the storage directory
-		// For this test, we'll just check if database files exist in storage
+		// NOTE: production code would scan the storage directory;
+		// this test just checks whether database files exist in storage.
 		for path in &db_paths {
 			if !self.storage.exists(path).await.unwrap_or(false) {
 				orphaned.push(path.clone());

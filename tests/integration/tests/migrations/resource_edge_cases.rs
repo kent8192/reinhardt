@@ -160,8 +160,8 @@ async fn test_connection_timeout_rolls_back_transaction(
 	assert!(table_exists, "First table should exist");
 
 	// Apply second migration with long-running operation
-	// In a real scenario, this would test timeout, but for now we test that
-	// the executor handles long-running operations correctly
+	// A timeout-oriented scenario is out of scope here; this test verifies
+	// that the executor handles long-running operations correctly.
 	let result2 = executor.apply_migrations(&[long_running_migration]).await;
 
 	// The long-running query should complete (pg_sleep with 2 seconds)

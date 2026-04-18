@@ -57,8 +57,11 @@ async fn test_grant_select_appears_in_information_schema() {
 
 	// Assert: the privilege is visible in information_schema.table_privileges.
 	let count: i64 = sqlx::query(
+		// Scope by table_schema to avoid cross-schema name collisions
+		// (unqualified CREATE TABLE lands in `public`).
 		"SELECT COUNT(*)::INT8 FROM information_schema.table_privileges
-		 WHERE grantee = $1 AND table_name = $2 AND privilege_type = 'SELECT'",
+		 WHERE grantee = $1 AND table_name = $2 AND table_schema = 'public'
+		   AND privilege_type = 'SELECT'",
 	)
 	.bind(&role)
 	.bind(&table)
@@ -110,8 +113,11 @@ async fn test_revoke_select_removes_privilege() {
 
 	// Assert: no SELECT privilege row remains for the role on the table.
 	let count: i64 = sqlx::query(
+		// Scope by table_schema to avoid cross-schema name collisions
+		// (unqualified CREATE TABLE lands in `public`).
 		"SELECT COUNT(*)::INT8 FROM information_schema.table_privileges
-		 WHERE grantee = $1 AND table_name = $2 AND privilege_type = 'SELECT'",
+		 WHERE grantee = $1 AND table_name = $2 AND table_schema = 'public'
+		   AND privilege_type = 'SELECT'",
 	)
 	.bind(&role)
 	.bind(&table)

@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.1.0-rc.15...reinhardt-conf@v0.1.0-rc.16) - 2026-04-18
+
+### Added
+
+- *(conf)* add OpenApiSettings fragment
+- migrate UUID generation from v4 to v7 across entire codebase
+- *(conf)* add per-test settings override for TestContainers integration
+
+### Changed
+
+- *(conf)* use #[settings(fragment = true)] macro for OpenApiSettings
+
+### Documentation
+
+- *(conf)* fix composable settings TOML structure and add serde defaults
+- *(conf)* fix unresolved SettingsFragment link in openapi module doc
+
+### Fixed
+
+- *(conf)* remove #[serde(flatten)] from SecuritySettings and fix TOML scoping
+- resolve CI clippy and format warnings
+- *(ci)* resolve remaining CI failures after main merge
+
+### Maintenance
+
+- upgrade workspace dependencies to latest versions
+
+### Styling
+
+- fix formatting in OpenApiSettings files
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.1.0-rc.14...reinhardt-conf@v0.1.0-rc.15) - 2026-03-29
 
 ### Maintenance

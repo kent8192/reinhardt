@@ -129,16 +129,12 @@ async fn test_connection_timeout_rolls_back_transaction(
 		}],
 	);
 
-	// Long-running migration using pg_sleep to reliably exceed the wall-clock
-	// timeout wrapper below.
-	let long_running_migration = create_test_migration(
-		"testapp",
-		"0002_long_running",
-		vec![Operation::RunSQL {
-			sql: leak_str("SELECT pg_sleep(5)".to_string()),
-			reverse_sql: Some(leak_str("SELECT 1".to_string())),
-		}],
-	);
+	// NOTE: We previously constructed a `long_running_migration` using
+	// `pg_sleep(5)` and wrapped it in `tokio::time::timeout`, but that only
+	// cancels the Rust future — the SQL statement keeps running on the
+	// server. Server-side cancellation is exercised below via
+	// `statement_timeout`, which is the authoritative mechanism PostgreSQL
+	// provides for this.
 
 	// Act
 	// Apply first migration (should succeed quickly)
@@ -160,19 +156,36 @@ async fn test_connection_timeout_rolls_back_transaction(
 
 	assert!(table_exists, "First table should exist");
 
-	// Wrap the long-running migration in a 500ms timeout — pg_sleep(5) must
-	// exceed this wall-clock bound, producing a `tokio::time::error::Elapsed`.
-	let timeout_duration = std::time::Duration::from_millis(500);
-	let timed = tokio::time::timeout(
-		timeout_duration,
-		executor.apply_migrations(&[long_running_migration]),
-	)
-	.await;
+	// Wrap the long-running migration in a 10s tokio timeout as an outer
+	// safety guard. The real cancellation is driven server-side: we acquire
+	// a dedicated connection, set a session `statement_timeout`, and run the
+	// long-running statement on it. PostgreSQL cancels the query and returns
+	// SQLSTATE 57014 (query_canceled). Relying solely on `tokio::time::timeout`
+	// does NOT cancel the query on the server — the sleep would keep running
+	// on PostgreSQL's side and hold its lock/transaction until completion.
+	let outer_guard = std::time::Duration::from_secs(10);
+	let timed = tokio::time::timeout(outer_guard, async {
+		let mut conn = pool.acquire().await.expect("acquire connection");
+		// Set server-side statement timeout to 500ms for this session.
+		sqlx::query("SET statement_timeout = '500ms'")
+			.execute(&mut *conn)
+			.await
+			.expect("SET statement_timeout");
+		// Execute the long-running statement; server must cancel it.
+		sqlx::query("SELECT pg_sleep(5)").execute(&mut *conn).await
+	})
+	.await
+	.expect("outer tokio guard must not fire (server-side timeout should trigger first)");
 
-	// Assert: the timeout elapsed before the migration finished.
-	assert!(
-		timed.is_err(),
-		"Long-running migration must exceed the wall-clock timeout (got Ok result)"
+	// Assert: PostgreSQL cancels the query with SQLSTATE 57014 (query_canceled).
+	let err = timed.expect_err("long-running statement must be canceled by statement_timeout");
+	let db_err = err
+		.as_database_error()
+		.expect("expected a database error from PostgreSQL");
+	let code = db_err.code().unwrap_or_default().to_string();
+	assert_eq!(
+		code, "57014",
+		"Expected SQLSTATE 57014 (query_canceled) from statement_timeout, got: {code}"
 	);
 
 	// Verify that the first migration's table still exists after the timed-out

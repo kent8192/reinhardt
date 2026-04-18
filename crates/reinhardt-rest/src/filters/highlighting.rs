@@ -136,11 +136,7 @@ impl HtmlHighlighter {
 	// Allow dead_code: utility method reserved for safe HTML output in highlight rendering
 	#[allow(dead_code)]
 	fn escape_html(&self, text: &str) -> String {
-		text.replace('&', "&amp;")
-			.replace('<', "&lt;")
-			.replace('>', "&gt;")
-			.replace('"', "&quot;")
-			.replace('\'', "&#39;")
+		reinhardt_core::security::escape_html(text)
 	}
 }
 

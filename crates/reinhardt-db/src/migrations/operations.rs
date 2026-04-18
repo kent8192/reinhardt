@@ -1121,9 +1121,10 @@ pub enum Operation {
 	///
 	/// # Backend Behavior
 	///
-	/// - **PostgreSQL / CockroachDB**: `ALTER SEQUENCE pg_get_serial_sequence(...) RESTART WITH {value}`
-	///   (resolves the sequence dynamically, honoring both default `SERIAL`
-	///   conventions and user-defined sequence names).
+	/// - **PostgreSQL / CockroachDB**: `SELECT setval(pg_get_serial_sequence('{table}', '{column}'), {value}, false)`
+	///   (resolves the sequence dynamically so both default `SERIAL` conventions
+	///   and user-defined sequence names work; `false` makes the NEXT generated
+	///   value equal `{value}`).
 	/// - **MySQL**: `ALTER TABLE {table} AUTO_INCREMENT = {value}`.
 	/// - **SQLite**: `INSERT OR REPLACE INTO sqlite_sequence(name, seq) VALUES (...)`
 	///   (robust against tables that have not yet inserted any rows, where a

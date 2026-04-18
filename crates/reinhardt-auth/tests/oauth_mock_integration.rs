@@ -117,7 +117,7 @@ impl MockEnv {
 	/// JSON body of a JWKS document whose key id matches `self.kid` but
 	/// whose modulus belongs to a *different* RSA keypair (used to
 	/// simulate signature validation failure).
-	async fn jwks_with_wrong_key(&self) -> serde_json::Value {
+	fn jwks_with_wrong_key(&self) -> serde_json::Value {
 		let mut rng = rsa::rand_core::OsRng;
 		let other = RsaPrivateKey::new(&mut rng, 2048).expect("failed to generate other key");
 		let pub_other = RsaPublicKey::from(&other);
@@ -164,13 +164,13 @@ fn test_provider(redirect_uri: String) -> ProviderConfig {
 }
 
 fn base_id_token(iss: &str, aud: &str) -> IdToken {
-	let now = Utc::now().timestamp();
+	let now = Utc::now();
 	IdToken {
 		sub: "user-42".to_string(),
 		iss: iss.to_string(),
 		aud: aud.to_string(),
-		exp: (Utc::now() + Duration::hours(1)).timestamp(),
-		iat: now,
+		exp: (now + Duration::hours(1)).timestamp(),
+		iat: now.timestamp(),
 		nonce: None,
 		email: Some("user@example.com".to_string()),
 		email_verified: Some(true),
@@ -424,7 +424,7 @@ async fn id_token_rejects_signature_when_jwks_key_mismatches(#[future] mock_env:
 	let audience = "test_client_id";
 	let claims = base_id_token(&env.issuer(), audience);
 	let jwt = env.sign_id_token(&claims);
-	let wrong_jwks = env.jwks_with_wrong_key().await;
+	let wrong_jwks = env.jwks_with_wrong_key();
 
 	Mock::given(method("GET"))
 		.and(path("/jwks.json"))

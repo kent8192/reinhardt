@@ -704,10 +704,19 @@ async fn test_e2e_get_list_fails_without_database_connection(
 		"Expected 4xx/5xx error status, got: {}",
 		response.status
 	);
+	// Body intentionally redacted by `security(macros)` (commit c451e02c8) to
+	// avoid leaking DI internals (type names, configuration hints) to clients.
+	// Verify the redacted contract: a generic `ServerFnError::Server` envelope
+	// with no DI type names echoed back. Tracks issue #3740.
 	let body = String::from_utf8_lossy(&response.body);
 	assert!(
-		body.contains("DatabaseConnection") || body.contains("injection"),
-		"Error body should mention DI failure, got: {}",
+		body.contains("\"Server\"") && body.contains("Internal server error"),
+		"Expected redacted ServerFnError::Server envelope, got: {}",
+		body
+	);
+	assert!(
+		!body.contains("DatabaseConnection"),
+		"DI type name leaked into client body (security regression): {}",
 		body
 	);
 }

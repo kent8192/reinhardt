@@ -102,33 +102,41 @@ impl Iden for Tables {
 
 /// Creates a test user in the database and returns it with the schema.
 ///
-/// This fixture demonstrates the pattern of wrapping generic database fixtures
-/// with specialized test data insertion.
+/// This fixture composes on `graphql_schema_fixture`, which owns the shared
+/// testcontainer-backed `PgPool`. The pool is returned alongside the schema
+/// and seeded user so dependent fixtures (e.g. `post_model_fixture`) can
+/// reuse the already-seeded user without duplicating insert logic.
 #[fixture]
 async fn user_model_fixture(
-	#[future] graphql_schema_fixture: Schema<Query, Mutation, EmptySubscription>,
-) -> (Schema<Query, Mutation, EmptySubscription>, User) {
-	let schema = graphql_schema_fixture.await;
-
-	// Get database pool from schema context (simplified - in real implementation
-	// we would extract it from schema data)
-	let pool = get_pool_from_test_container().await;
+	#[future] graphql_schema_fixture: (Schema<Query, Mutation, EmptySubscription>, Arc<PgPool>),
+) -> (
+	Schema<Query, Mutation, EmptySubscription>,
+	Arc<PgPool>,
+	User,
+) {
+	let (schema, pool) = graphql_schema_fixture.await;
 
 	// Create user using reinhardt-query (not raw SQL)
 	let user = create_test_user_with_query(&pool).await;
 
-	(schema, user)
+	(schema, pool, user)
 }
 
 /// Creates a test post with author relationship.
+///
+/// Composes on `user_model_fixture` so user seeding is not duplicated and
+/// the post is always anchored to the same user instance the test would
+/// observe through `user_model_fixture`.
 #[fixture]
 async fn post_model_fixture(
-	#[future] user_model_fixture: (Schema<Query, Mutation, EmptySubscription>, User),
+	#[future] user_model_fixture: (
+		Schema<Query, Mutation, EmptySubscription>,
+		Arc<PgPool>,
+		User,
+	),
 ) -> (Schema<Query, Mutation, EmptySubscription>, User, Post) {
-	let (schema, user) = user_model_fixture.await;
-	let pool = get_pool_from_test_container().await;
+	let (schema, pool, user) = user_model_fixture.await;
 
-	// Create post using reinhardt-query
 	let post = create_test_post_with_query(&pool, user.id).await;
 
 	(schema, user, post)
@@ -138,72 +146,64 @@ async fn post_model_fixture(
 // Helper Functions using reinhardt-query
 // ============================================================================
 
-/// Get database pool from test container (simplified implementation).
-///
-/// In a real implementation, this would extract the pool from the schema
-/// or use a shared test container fixture.
-// Allow: pool extraction is a placeholder for fixture pattern (permanently excluded)
-#[allow(clippy::unimplemented)]
-async fn get_pool_from_test_container() -> Arc<PgPool> {
-	use reinhardt_test::fixtures::postgres_container;
-	use rstest::*;
-
-	// This is a simplified implementation - in real tests we would
-	// use the actual postgres_container fixture
-	unimplemented!("Need to implement pool extraction from test container")
-}
-
 /// Create a test user in the database using reinhardt-query.
+///
+/// Returns the model populated with the actual `SERIAL` id assigned by
+/// Postgres via `RETURNING id`. Using a hard-coded id collides on the
+/// second insert and breaks any test that reads the row back by id.
 async fn create_test_user_with_query(pool: &PgPool) -> User {
-	// Use reinhardt-query to build SQL (not raw strings)
+	let name = "Test User";
+	let email = "test@example.com";
+
+	// Use reinhardt-query to build SQL (not raw strings); append `RETURNING id`
+	// so we can fetch the actual generated primary key.
 	let mut insert_stmt = Query::insert();
 	let insert_query = insert_stmt
 		.into_table(Tables::Users.into_iden())
 		.columns([User::name(), User::email(), User::is_active()])
-		.values(["Test User".into(), "test@example.com".into(), true.into()])
+		.values([name.into(), email.into(), true.into()])
 		.unwrap()
 		.to_string(PostgresQueryBuilder::new());
+	let insert_with_returning = format!("{insert_query} RETURNING id");
 
-	// Execute the query
-	sqlx::query(&insert_query)
-		.execute(pool)
+	let id: i32 = sqlx::query_scalar(&insert_with_returning)
+		.fetch_one(pool)
 		.await
 		.expect("Failed to create test user");
 
-	// Return model instance using Model::new()
-	User::new(1, "Test User".to_string(), "test@example.com".to_string())
+	User::new(id, name.to_string(), email.to_string())
 }
 
 /// Create a test post in the database using reinhardt-query.
+///
+/// Returns the model populated with the actual generated `SERIAL` id.
 async fn create_test_post_with_query(pool: &PgPool, author_id: i32) -> Post {
+	let title = "Test Post";
+	let content = "Test content";
+
 	let mut insert_stmt = Query::insert();
 	let insert_query = insert_stmt
 		.into_table(Tables::Posts.into_iden())
 		.columns([Post::title(), Post::content(), Post::author_id()])
-		.values(["Test Post".into(), "Test content".into(), author_id.into()])
+		.values([title.into(), content.into(), author_id.into()])
 		.unwrap()
 		.to_string(PostgresQueryBuilder::new());
+	let insert_with_returning = format!("{insert_query} RETURNING id");
 
-	sqlx::query(&insert_query)
-		.execute(pool)
+	let id: i32 = sqlx::query_scalar(&insert_with_returning)
+		.fetch_one(pool)
 		.await
 		.expect("Failed to create test post");
 
-	Post::new(
-		1,
-		"Test Post".to_string(),
-		"Test content".to_string(),
-		author_id,
-	)
+	Post::new(id, title.to_string(), content.to_string(), author_id)
 }
 
 /// Creates multiple test users for batch testing.
 #[fixture]
 async fn multiple_users_fixture(
-	#[future] graphql_schema_fixture: Schema<Query, Mutation, EmptySubscription>,
+	#[future] graphql_schema_fixture: (Schema<Query, Mutation, EmptySubscription>, Arc<PgPool>),
 ) -> (Schema<Query, Mutation, EmptySubscription>, Vec<User>) {
-	let schema = graphql_schema_fixture.await;
-	let pool = get_pool_from_test_container().await;
+	let (schema, pool) = graphql_schema_fixture.await;
 
 	let users = vec![
 		create_test_user_with_query(&pool).await,

@@ -408,9 +408,9 @@ fn create_view_component(model_name: String) -> Page {
 					.fields
 					.into_iter()
 					.map(|field_info| FormField {
+						spec: crate::types::FormFieldSpec::from(&field_info.field_type),
 						name: field_info.name,
 						label: field_info.label,
-						field_type: field_type_to_html_input_type(&field_info.field_type),
 						required: field_info.required,
 						value: String::new(),
 					})
@@ -437,14 +437,18 @@ fn create_view_component(model_name: String) -> Page {
 		FormField {
 			name: "name".to_string(),
 			label: "Name".to_string(),
-			field_type: "text".to_string(),
+			spec: crate::types::FormFieldSpec::Input {
+				html_type: "text".to_string(),
+			},
 			required: true,
 			value: String::new(),
 		},
 		FormField {
 			name: "email".to_string(),
 			label: "Email".to_string(),
-			field_type: "email".to_string(),
+			spec: crate::types::FormFieldSpec::Input {
+				html_type: "email".to_string(),
+			},
 			required: true,
 			value: String::new(),
 		},
@@ -490,9 +494,9 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 						};
 
 						FormField {
+							spec: crate::types::FormFieldSpec::from(&field_info.field_type),
 							name: field_info.name,
 							label: field_info.label,
-							field_type: field_type_to_html_input_type(&field_info.field_type),
 							required: field_info.required,
 							value,
 						}
@@ -520,14 +524,18 @@ fn edit_view_component(model_name: String, record_id: String) -> Page {
 		FormField {
 			name: "name".to_string(),
 			label: "Name".to_string(),
-			field_type: "text".to_string(),
+			spec: crate::types::FormFieldSpec::Input {
+				html_type: "text".to_string(),
+			},
 			required: true,
 			value: "Existing Value".to_string(),
 		},
 		FormField {
 			name: "email".to_string(),
 			label: "Email".to_string(),
-			field_type: "email".to_string(),
+			spec: crate::types::FormFieldSpec::Input {
+				html_type: "email".to_string(),
+			},
 			required: true,
 			value: "user@example.com".to_string(),
 		},
@@ -625,31 +633,6 @@ fn error_view(message: &str) -> Page {
 			{ dashboard_link }
 		}
 	})()
-}
-
-/// Convert FieldType to HTML input type string
-///
-/// Maps crate::types::FieldType to HTML input type attributes.
-#[cfg(client)]
-fn field_type_to_html_input_type(field_type: &crate::types::FieldType) -> String {
-	use crate::types::FieldType;
-
-	match field_type {
-		FieldType::Text => "text".to_string(),
-		// TextArea should render as <textarea>, not <input>; fall back to "text" for now
-		FieldType::TextArea => "text".to_string(),
-		FieldType::Number => "number".to_string(),
-		FieldType::Boolean => "checkbox".to_string(),
-		FieldType::Email => "email".to_string(),
-		FieldType::Date => "date".to_string(),
-		FieldType::DateTime => "datetime-local".to_string(),
-		// Select should render as <select>, not <input>; fall back to "text" for now
-		FieldType::Select { .. } => "text".to_string(),
-		// MultiSelect should render as <select multiple>, not <input>; fall back to "text" for now
-		FieldType::MultiSelect { .. } => "text".to_string(),
-		FieldType::File => "file".to_string(),
-		FieldType::Hidden => "hidden".to_string(),
-	}
 }
 
 /// Initialize the admin router

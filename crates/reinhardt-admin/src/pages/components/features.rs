@@ -342,8 +342,8 @@ pub struct FormField {
 	pub name: String,
 	/// Field display label
 	pub label: String,
-	/// HTML input type (text, email, number, etc.)
-	pub field_type: String,
+	/// Rendering specification (input type, textarea, select, etc.)
+	pub spec: crate::types::FormFieldSpec,
 	/// Whether this field is required
 	pub required: bool,
 	/// Current field value (for edit forms)
@@ -450,12 +450,13 @@ fn detail_table(record: &std::collections::HashMap<String, String>) -> Page {
 ///
 /// ```ignore
 /// use reinhardt_admin::pages::components::features::{model_form, FormField};
+/// use reinhardt_admin::types::FormFieldSpec;
 ///
 /// let fields = vec![
 ///     FormField {
 ///         name: "username".to_string(),
 ///         label: "Username".to_string(),
-///         field_type: "text".to_string(),
+///         spec: FormFieldSpec::Input { html_type: "text".to_string() },
 ///         required: true,
 ///         value: "".to_string(),
 ///     },
@@ -545,18 +546,155 @@ fn form_group(field: &FormField) -> Page {
 	})()
 }
 
+/// Render `<option>` elements for a list of `(value, label)` choices,
+/// marking each option whose value appears in `selected` as `selected`.
+///
+/// `selected` is a slice so that both single-select (`[current]`) and
+/// multi-select (`split` of the `FormField::value` string) can share the
+/// same renderer. See `parse_multi_value` for the multi-select wire format.
+fn render_option_elements(choices: &[(String, String)], selected: &[&str]) -> Vec<Page> {
+	choices
+		.iter()
+		.map(|(value, label)| {
+			let value = value.clone();
+			let label = label.clone();
+			let is_selected = selected.iter().any(|s| *s == value);
+			if is_selected {
+				page!(|| {
+					option {
+						value: value,
+						selected: true,
+						{ label }
+					}
+				})()
+			} else {
+				page!(|| {
+					option {
+						value: value,
+						{ label }
+					}
+				})()
+			}
+		})
+		.collect()
+}
+
+/// Multi-select wire format: `FormField::value` carries the selected values
+/// as a comma-separated list (e.g., `"read,write,delete"`). Empty entries
+/// are skipped so an empty value yields no selected options.
+fn parse_multi_value(raw: &str) -> Vec<&str> {
+	raw.split(',')
+		.map(str::trim)
+		.filter(|s| !s.is_empty())
+		.collect()
+}
+
 /// Generates an input element for a form field
 fn form_element(field: &FormField, input_id: &str) -> Page {
-	let field_type = field.field_type.clone();
+	use crate::types::FormFieldSpec;
+
 	let input_id = input_id.to_string();
 	let name = field.name.clone();
 	let value = field.value.clone();
+	let required = field.required;
 
-	if field.required {
+	match &field.spec {
+		FormFieldSpec::Input { html_type } => {
+			render_input(html_type.clone(), input_id, name, value, required)
+		}
+		FormFieldSpec::File => render_input("file".to_string(), input_id, name, value, required),
+		FormFieldSpec::Hidden => {
+			render_input("hidden".to_string(), input_id, name, value, required)
+		}
+		FormFieldSpec::TextArea => {
+			if required {
+				page!(|| {
+					textarea {
+						class: "admin-input",
+						id: input_id,
+						name: name,
+						required: true,
+						autocomplete: "off",
+						{ value }
+					}
+				})()
+			} else {
+				page!(|| {
+					textarea {
+						class: "admin-input",
+						id: input_id,
+						name: name,
+						autocomplete: "off",
+						{ value }
+					}
+				})()
+			}
+		}
+		FormFieldSpec::Select { choices } => {
+			let options = render_option_elements(choices, &[value.as_str()]);
+			if required {
+				page!(|| {
+					select {
+						class: "admin-select",
+						id: input_id,
+						name: name,
+						required: true,
+						{ options }
+					}
+				})()
+			} else {
+				page!(|| {
+					select {
+						class: "admin-select",
+						id: input_id,
+						name: name,
+						{ options }
+					}
+				})()
+			}
+		}
+		FormFieldSpec::MultiSelect { choices } => {
+			let selected = parse_multi_value(&value);
+			let options = render_option_elements(choices, &selected);
+			if required {
+				page!(|| {
+					select {
+						class: "admin-select",
+						id: input_id,
+						name: name,
+						multiple: true,
+						required: true,
+						{ options }
+					}
+				})()
+			} else {
+				page!(|| {
+					select {
+						class: "admin-select",
+						id: input_id,
+						name: name,
+						multiple: true,
+						{ options }
+					}
+				})()
+			}
+		}
+	}
+}
+
+/// Render an `<input>` element with the given HTML `type`.
+fn render_input(
+	html_type: String,
+	input_id: String,
+	name: String,
+	value: String,
+	required: bool,
+) -> Page {
+	if required {
 		page!(|| {
 			input {
 				class: "admin-input",
-				type: field_type,
+				type: html_type,
 				id: input_id,
 				name: name,
 				value: value,
@@ -568,7 +706,7 @@ fn form_element(field: &FormField, input_id: &str) -> Page {
 		page!(|| {
 			input {
 				class: "admin-input",
-				type: field_type,
+				type: html_type,
 				id: input_id,
 				name: name,
 				value: value,

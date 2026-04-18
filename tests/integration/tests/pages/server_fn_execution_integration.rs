@@ -650,15 +650,21 @@ async fn test_server_fn_csrf_injection(csrf_token: String) {
 	};
 
 	let codec = JsonCodec;
-	let encoded = codec.encode(&wire).expect("Failed to encode CSRF wire request");
+	let encoded = codec
+		.encode(&wire)
+		.expect("Failed to encode CSRF wire request");
 	let json_value: serde_json::Value =
 		serde_json::from_slice(&encoded).expect("encoded payload must be valid JSON");
-	assert_eq!(json_value["csrf_token"], serde_json::Value::String(csrf_token.clone()));
+	assert_eq!(
+		json_value["csrf_token"],
+		serde_json::Value::String(csrf_token.clone())
+	);
 	assert_eq!(json_value["args"]["id"], 42);
 	assert_eq!(json_value["args"]["name"], "authn");
 
-	let decoded: CsrfWireRequest =
-		codec.decode(&encoded).expect("Failed to decode CSRF wire request");
+	let decoded: CsrfWireRequest = codec
+		.decode(&encoded)
+		.expect("Failed to decode CSRF wire request");
 	assert_eq!(decoded, wire);
 
 	// Request can be attached to the X-CSRFToken HTTP header.
@@ -723,15 +729,15 @@ async fn test_server_fn_di_with_multiple_params() {
 		serde_json::from_slice(&encoded).expect("encoded payload must be valid JSON");
 	assert_eq!(json_value["user_id"], 1);
 	assert_eq!(json_value["action"], "update_profile");
-	assert_eq!(
-		json_value["metadata"],
-		serde_json::json!(["key1", "key2"])
-	);
+	assert_eq!(json_value["metadata"], serde_json::json!(["key1", "key2"]));
 
 	let decoded: ComplexRequest = codec.decode(&encoded).unwrap();
 	assert_eq!(decoded.user_id, 1);
 	assert_eq!(decoded.action, "update_profile");
-	assert_eq!(decoded.metadata, vec!["key1".to_string(), "key2".to_string()]);
+	assert_eq!(
+		decoded.metadata,
+		vec!["key1".to_string(), "key2".to_string()]
+	);
 	assert_eq!(decoded, request);
 
 	// DI parameter resolution tested in:

@@ -78,6 +78,6 @@ mod tests {
 		assert!(std::mem::size_of_val(&userinfo_client) > 0);
 	}
 
-	// Integration tests with mock server would go here
-	// For now, we rely on manual testing with real providers
+	// Integration tests with a mock server would go here.
+	// Currently, this flow is validated through manual testing with real providers.
 }

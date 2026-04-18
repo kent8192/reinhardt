@@ -179,6 +179,6 @@ mod tests {
 		assert_eq!(validator.config.issuer, "https://example.com");
 	}
 
-	// Integration tests with actual JWT tokens would require mock JWKS server
-	// For now, we rely on manual testing with real providers
+	// Integration tests with actual JWT tokens would require a mock JWKS server.
+	// Currently, this flow is validated through manual testing with real providers.
 }

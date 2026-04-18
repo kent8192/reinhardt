@@ -141,7 +141,10 @@ fn is_inject_attr(attr: &syn::Attribute) -> bool {
 /// Extract the inner type `T` from `Depends<T>`.
 ///
 /// Returns `Some(T)` if the type is `Depends<T>`, `None` otherwise.
-fn extract_depends_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
+/// A sibling copy lives in `crates/reinhardt-pages/macros/src/server_fn.rs`;
+/// the two proc-macro crates cannot share code directly, so keep both copies
+/// in sync.
+pub(crate) fn extract_depends_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
 	if let syn::Type::Path(type_path) = ty {
 		let last_segment = type_path.path.segments.last()?;
 		if last_segment.ident == "Depends"

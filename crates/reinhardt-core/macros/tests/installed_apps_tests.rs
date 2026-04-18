@@ -69,3 +69,16 @@ fn test_installed_apps_debug() {
 	let debug_str = format!("{:?}", app);
 	assert!(debug_str.contains("auth"));
 }
+
+#[test]
+fn installed_app_implements_app_label_trait() {
+	// Arrange
+	use reinhardt_apps::apps::AppLabel;
+	let app = InstalledApp::auth;
+
+	// Act
+	let label: &'static str = <InstalledApp as AppLabel>::path(&app);
+
+	// Assert
+	assert_eq!(label, "myproject.auth");
+}

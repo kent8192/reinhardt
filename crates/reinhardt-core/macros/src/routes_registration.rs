@@ -549,7 +549,7 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				.collect();
 
 			// Generate per-app client URL resolver structs.
-			// When #[url_patterns(client = true, app = "...")] is used,
+			// When #[url_patterns(InstalledApp::<variant>, mode = client)] is used,
 			// typed methods are generated via __for_each_client_url_resolver
 			// (same pattern as server-side). A fallback resolve() method is
 			// always available for runtime string-based resolution.
@@ -609,7 +609,8 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 
 						// Invoke __for_each_client_url_resolver to populate typed methods.
 						// This is a no-op if the app has no client_url_resolvers module
-						// (i.e., does not use #[url_patterns(client = true)]).
+						// (i.e., does not use #[url_patterns(..., mode = client)] or
+						// #[url_patterns(..., mode = unified)]).
 						crate::apps::#app::urls::client_url_resolvers::__for_each_client_url_resolver!(
 							#gen_client_method_macro, #app,
 							crate::apps::#app::urls::client_url_resolvers

@@ -253,9 +253,12 @@ pub use reinhardt_pages_macros::page;
 
 // Private re-exports used by macro-generated code. Not part of the public API.
 #[doc(hidden)]
-#[cfg(target_arch = "wasm32")]
 pub mod __private {
+	#[cfg(target_arch = "wasm32")]
 	pub use reqwest;
+
+	#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+	pub use tracing;
 }
 
 // Logging macros are automatically exported via #[macro_export]

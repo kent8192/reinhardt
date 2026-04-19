@@ -268,11 +268,5 @@ pub mod __private {
     pub use tracing;
 }
 
-#[doc(hidden)]
-#[cfg(not(target_arch = "wasm32"))]
-pub mod __private {
-	pub use tracing;
-}
-
 // Logging macros are automatically exported via #[macro_export]
 // Users can access them as: reinhardt_pages::debug_log!, reinhardt_pages::info_log!, etc.

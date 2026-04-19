@@ -1579,6 +1579,10 @@ pub struct DetectedChanges {
 	pub added_constraints: Vec<(String, String, ConstraintDefinition)>,
 	/// Constraints that were removed: (app_label, model_name, constraint_name)
 	pub removed_constraints: Vec<(String, String, String)>,
+	/// Composite primary keys added: (app_label, model_name, ConstraintDefinition)
+	pub added_composite_primary_keys: Vec<(String, String, ConstraintDefinition)>,
+	/// Auto-increment sequence resets: (app_label, model_name, column_name, value)
+	pub auto_increment_resets: Vec<(String, String, String, i64)>,
 	/// Model dependencies for ordering operations
 	/// Maps (app_label, model_name) -> `Vec<(dependent_app, dependent_model)>`
 	/// A model depends on another if it has ForeignKey or ManyToMany fields pointing to it
@@ -3729,6 +3733,8 @@ impl MigrationAutodetector {
 		self.detect_removed_indexes(&mut changes);
 		self.detect_added_constraints(&mut changes);
 		self.detect_removed_constraints(&mut changes);
+		self.detect_composite_pk_changes(&mut changes);
+		self.detect_auto_increment_resets(&mut changes);
 
 		// Detect ManyToMany intermediate tables
 		self.detect_created_many_to_many(&mut changes);
@@ -3755,6 +3761,10 @@ impl MigrationAutodetector {
 			.added_constraints
 			.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
 		changes.removed_constraints.sort();
+		changes
+			.added_composite_primary_keys
+			.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+		changes.auto_increment_resets.sort();
 		changes
 			.created_many_to_many
 			.sort_by(|a, b| (&a.0, &a.1, &a.2).cmp(&(&b.0, &b.1, &b.2)));
@@ -4429,6 +4439,74 @@ impl MigrationAutodetector {
 		}
 	}
 
+	/// Detect added composite primary keys (2+ columns).
+	///
+	/// A composite PK is represented as a `ConstraintDefinition` with
+	/// `constraint_type == "primary_key"` and `fields.len() >= 2`.
+	fn detect_composite_pk_changes(&self, changes: &mut DetectedChanges) {
+		for ((app_label, model_name), to_model) in &self.to_state.models {
+			let from_model = self.from_state.get_model(app_label, model_name);
+			for constraint in &to_model.constraints {
+				if constraint.constraint_type != "primary_key" || constraint.fields.len() < 2 {
+					continue;
+				}
+				let existed = from_model
+					.map(|m| {
+						m.constraints.iter().any(|c| {
+							c.constraint_type == "primary_key" && c.fields == constraint.fields
+						})
+					})
+					.unwrap_or(false);
+				if !existed {
+					changes.added_composite_primary_keys.push((
+						app_label.clone(),
+						model_name.clone(),
+						constraint.clone(),
+					));
+				}
+			}
+		}
+	}
+
+	/// Detect auto-increment sequence resets driven by `sequence_reset` model option.
+	///
+	/// When `ModelState.options["sequence_reset"]` is added or changed, emit a
+	/// `SetAutoIncrementValue` operation targeting the model's auto-increment column.
+	fn detect_auto_increment_resets(&self, changes: &mut DetectedChanges) {
+		for ((app_label, model_name), to_model) in &self.to_state.models {
+			let Some(value_str) = to_model.options.get("sequence_reset") else {
+				continue;
+			};
+			let from_value = self
+				.from_state
+				.get_model(app_label, model_name)
+				.and_then(|m| m.options.get("sequence_reset"))
+				.map(String::as_str);
+			if from_value == Some(value_str.as_str()) {
+				continue;
+			}
+			let Ok(value) = value_str.parse::<i64>() else {
+				continue;
+			};
+			let column = to_model
+				.fields
+				.iter()
+				.find(|(_, f)| {
+					f.params
+						.get("auto_increment")
+						.is_some_and(|v| v == "true")
+				})
+				.map(|(name, _)| name.clone())
+				.unwrap_or_else(|| "id".to_string());
+			changes.auto_increment_resets.push((
+				app_label.clone(),
+				model_name.clone(),
+				column,
+				value,
+			));
+		}
+	}
+
 	/// Generate intermediate table operation for ManyToMany field
 	///
 	/// Creates a through table for ManyToMany relationships with:
@@ -4764,6 +4842,28 @@ impl MigrationAutodetector {
 		// and handled in generate_migrations() using Operation::MoveModel variant.
 		// The MoveModel variant was added to the Operation enum to support this use case.
 
+		// Emit CreateCompositePrimaryKey for detected composite PK additions
+		for (app_label, model_name, constraint) in &changes.added_composite_primary_keys {
+			if let Some(model) = self.to_state.get_model(app_label, model_name) {
+				operations.push(super::Operation::CreateCompositePrimaryKey {
+					table: model.table_name.clone(),
+					columns: constraint.fields.clone(),
+					constraint_name: Some(constraint.name.clone()),
+				});
+			}
+		}
+
+		// Emit SetAutoIncrementValue for detected sequence resets
+		for (app_label, model_name, column, value) in &changes.auto_increment_resets {
+			if let Some(model) = self.to_state.get_model(app_label, model_name) {
+				operations.push(super::Operation::SetAutoIncrementValue {
+					table: model.table_name.clone(),
+					column: column.clone(),
+					value: *value,
+				});
+			}
+		}
+
 		// Sort operations by dependency to ensure correct execution order
 
 		self.sort_operations_by_dependency(operations)
@@ -4908,6 +5008,34 @@ impl MigrationAutodetector {
 					.or_default()
 					.push(super::Operation::DropTable {
 						name: model.table_name.clone(),
+					});
+			}
+		}
+
+		// Group composite primary key additions by app
+		for (app_label, model_name, constraint) in &changes.added_composite_primary_keys {
+			if let Some(model) = self.to_state.get_model(app_label, model_name) {
+				migrations_by_app
+					.entry(app_label.clone())
+					.or_default()
+					.push(super::Operation::CreateCompositePrimaryKey {
+						table: model.table_name.clone(),
+						columns: constraint.fields.clone(),
+						constraint_name: Some(constraint.name.clone()),
+					});
+			}
+		}
+
+		// Group auto-increment sequence resets by app
+		for (app_label, model_name, column, value) in &changes.auto_increment_resets {
+			if let Some(model) = self.to_state.get_model(app_label, model_name) {
+				migrations_by_app
+					.entry(app_label.clone())
+					.or_default()
+					.push(super::Operation::SetAutoIncrementValue {
+						table: model.table_name.clone(),
+						column: column.clone(),
+						value: *value,
 					});
 			}
 		}
@@ -6039,6 +6167,157 @@ mod tests {
 		assert!(
 			operations.is_empty(),
 			"struct-only rename with same table name and identical fields should produce no operations, got: {:?}",
+			operations
+		);
+	}
+
+	#[rstest]
+	fn detect_composite_pk_added_emits_create_composite_primary_key() {
+		// Arrange
+		let id_field =
+			FieldState::new("id", super::super::FieldType::Integer, false);
+		let tenant_id_field =
+			FieldState::new("tenant_id", super::super::FieldType::Integer, false);
+
+		let from_model = build_model_state(
+			"billing",
+			"Invoice",
+			vec![id_field.clone(), tenant_id_field.clone()],
+			Vec::new(),
+			Vec::new(),
+		);
+		let composite_pk = ConstraintDefinition {
+			name: "billing_invoice_pkey".to_string(),
+			constraint_type: "primary_key".to_string(),
+			fields: vec!["id".to_string(), "tenant_id".to_string()],
+			expression: None,
+			foreign_key_info: None,
+		};
+		let to_model = build_model_state(
+			"billing",
+			"Invoice",
+			vec![id_field, tenant_id_field],
+			Vec::new(),
+			vec![composite_pk],
+		);
+
+		let from_state =
+			build_project_state(vec![(("billing".to_string(), "Invoice".to_string()), from_model)]);
+		let to_state =
+			build_project_state(vec![(("billing".to_string(), "Invoice".to_string()), to_model)]);
+		let detector = MigrationAutodetector::new(from_state, to_state);
+
+		// Act
+		let operations = detector.generate_operations();
+
+		// Assert
+		assert_eq!(operations.len(), 1);
+		assert!(
+			matches!(
+				&operations[0],
+				super::super::Operation::CreateCompositePrimaryKey {
+					table,
+					columns,
+					..
+				} if table == "billing_invoice"
+					&& columns == &["id".to_string(), "tenant_id".to_string()]
+			),
+			"expected CreateCompositePrimaryKey, got: {:?}",
+			operations
+		);
+	}
+
+	#[rstest]
+	fn detect_composite_pk_unchanged_emits_no_operations() {
+		// Arrange — same composite PK in both states should produce no operations
+		let composite_pk = ConstraintDefinition {
+			name: "billing_invoice_pkey".to_string(),
+			constraint_type: "primary_key".to_string(),
+			fields: vec!["id".to_string(), "tenant_id".to_string()],
+			expression: None,
+			foreign_key_info: None,
+		};
+		let from_model = build_model_state(
+			"billing",
+			"Invoice",
+			vec![
+				FieldState::new("id", super::super::FieldType::Integer, false),
+				FieldState::new("tenant_id", super::super::FieldType::Integer, false),
+			],
+			Vec::new(),
+			vec![composite_pk.clone()],
+		);
+		let to_model = build_model_state(
+			"billing",
+			"Invoice",
+			vec![
+				FieldState::new("id", super::super::FieldType::Integer, false),
+				FieldState::new("tenant_id", super::super::FieldType::Integer, false),
+			],
+			Vec::new(),
+			vec![composite_pk],
+		);
+
+		let from_state =
+			build_project_state(vec![(("billing".to_string(), "Invoice".to_string()), from_model)]);
+		let to_state =
+			build_project_state(vec![(("billing".to_string(), "Invoice".to_string()), to_model)]);
+		let detector = MigrationAutodetector::new(from_state, to_state);
+
+		// Act
+		let operations = detector.generate_operations();
+
+		// Assert
+		assert!(
+			operations.is_empty(),
+			"unchanged composite PK should produce no operations, got: {:?}",
+			operations
+		);
+	}
+
+	#[rstest]
+	fn detect_sequence_reset_emits_set_auto_increment_value() {
+		// Arrange
+		let mut id_field = FieldState::new("id", super::super::FieldType::BigInteger, false);
+		id_field.params.insert("auto_increment".to_string(), "true".to_string());
+
+		let from_model = build_model_state(
+			"shop",
+			"Order",
+			vec![id_field.clone()],
+			Vec::new(),
+			Vec::new(),
+		);
+		let mut to_model = build_model_state(
+			"shop",
+			"Order",
+			vec![id_field],
+			Vec::new(),
+			Vec::new(),
+		);
+		to_model.options.insert("sequence_reset".to_string(), "1000".to_string());
+
+		let from_state =
+			build_project_state(vec![(("shop".to_string(), "Order".to_string()), from_model)]);
+		let to_state =
+			build_project_state(vec![(("shop".to_string(), "Order".to_string()), to_model)]);
+		let detector = MigrationAutodetector::new(from_state, to_state);
+
+		// Act
+		let operations = detector.generate_operations();
+
+		// Assert
+		assert_eq!(operations.len(), 1);
+		assert!(
+			matches!(
+				&operations[0],
+				super::super::Operation::SetAutoIncrementValue {
+					table,
+					column,
+					value,
+				} if table == "shop_order" && column == "id" && *value == 1000
+			),
+			"expected SetAutoIncrementValue, got: {:?}",
 			operations
 		);
 	}

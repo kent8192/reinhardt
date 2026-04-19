@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.15...reinhardt-commands@v0.1.0-rc.16) - 2026-04-19
+
+### Added
+
+- *(commands)* add createsuperuser as built-in management command
+- *(commands)* add requires_database() and auto-init ORM dispatch
+- *(auth)* auto-register SuperuserCreator via inventory for #[user(full = true)] + #[model] types
+- *(commands)* auto-build WASM when runserver --with-pages is used
+- *(urls)* [**breaking**] support async functions in #[routes] macro
+- *(commands)* add RunserverHook for concurrent service startup and pre-listen validation
+- *(commands)* reject reinhardt_ prefixed project and app names
+- *(macros)* [**breaking**] extend #[url_patterns] for viewset/mount, add #[viewset] macro, deprecate named variants
+- *(macros)* add #[export_endpoints] attribute for multi-file view modules
+- *(commands)* startapp appends entry to installed_apps! block
+
+### Changed
+
+- *(commands)* extract initialize_orm_database() shared function
+- *(commands)* simplify run_server() ORM block to DI-only
+
+### Fixed
+
+- *(commands)* remove bare DB connect from createsuperuser
+- *(commands)* integrate file-based fallback into makemigrations
+- *(admin)* resolve CI failures blocking release-plz PR [[#3236](https://github.com/kent8192/reinhardt-web/issues/3236)](https://github.com/kent8192/reinhardt-web/issues/3236)
+- *(test)* use recursive file count in collectstatic tests
+- *(test)* skip hidden files in collectstatic test helper
+- *(commands)* exit with error when --with-pages WASM build fails
+- *(commands)* ensure admin vendor assets are collected to STATIC_ROOT
+- *(commands)* resolve WASM artifact path relative to workspace root
+- *(tests)* fix makemigrations and admin create test regressions
+- *(commands)* address Copilot review feedback on RunserverHook
+- *(macros)* [**breaking**] replace `#[export_endpoints]` with `define_views!` for stable Rust support
+- *(ci)* resolve fmt and clippy violations
+- *(commands)* inject project_crate_name in workspace app context and update AppLabel doctest
+
+### Maintenance
+
+- upgrade workspace dependencies to latest versions
+- *(templates)* update scaffold to typed #[url_patterns]
+
+### Other
+
+- resolve conflict with main (deduplicate tests)
+- resolve conflict with main in createsuperuser error message
+- Detect workspace target_dir via cargo metadata in WASM builder
+- Validate project directory before running makemigrations
+
+### Styling
+
+- *(commands)* fix formatting in createsuperuser deprecation warning
+- apply cargo make auto-fix (clippy + fmt)
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.14...reinhardt-commands@v0.1.0-rc.15) - 2026-03-29
 
 ### Added

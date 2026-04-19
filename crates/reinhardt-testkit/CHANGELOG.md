@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-testkit@v0.1.0-rc.15...reinhardt-testkit@v0.1.0-rc.16) - 2026-04-19
+
+### Added
+
+- *(testkit)* add in-process test transport for APIClient via Handler trait
+- migrate UUID generation from v4 to v7 across entire codebase
+- *(testkit)* add with_test_di_context() for isolated parallel-safe test DI contexts
+- *(testkit)* add builder-based auth testing API
+
+### Deprecated
+
+- update deprecation since version from 0.2.0 to 0.1.0-rc.16
+
+### Fixed
+
+- *(admin)* add missing SingletonScope import and fix formatting
+- *(testkit)* use random portion of UUID v7 for unique suffix
+- *(testkit)* address review feedback and CI clippy failures
+- *(testkit)* update deprecated since to 0.1.0-rc.16 and suppress internal usage warnings
+- *(docs)* use backticks for feature-gated types in testkit auth docs
+- *(testkit)* align rabbitmq image tag to pre-pulled 3-management-alpine
+
+### Maintenance
+
+- upgrade workspace dependencies to latest versions
+- *(testkit)* add auth-testing feature with reinhardt-auth and reinhardt-middleware optional deps
+
+### Security
+
+- *(testkit)* remove sensitive values from cookie validation panic messages
+
+### Styling
+
+- *(testkit)* fix rustfmt formatting in di.rs
+- *(testkit)* format cookie value assertion in client.rs
+
+### Testing
+
+- *(di)* register test types in global registry for Depends resolution
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-testkit@v0.1.0-rc.14...reinhardt-testkit@v0.1.0-rc.15) - 2026-03-29
 
 ### Fixed

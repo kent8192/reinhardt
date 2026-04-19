@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.1.0-rc.15...reinhardt-macros@v0.1.0-rc.16) - 2026-04-19
+
+### Added
+
+- *(auth)* add SuperuserInit trait and SuperuserCreator registry
+- *(auth)* auto-register SuperuserCreator via inventory for #[user(full = true)] + #[model] types
+- *(core)* set task-local resolve context in request dispatch macros
+- *(urls)* [**breaking**] support async functions in #[routes] macro
+- *(commands)* add RunserverHook for concurrent service startup and pre-listen validation
+- *(urls)* add compile-time type-safe URL resolution via extension traits
+- migrate UUID generation from v4 to v7 across entire codebase
+- *(di)* [**breaking**] deprecate Injected<T> in favor of Depends<T> and remove auto-Clone
+- *(macros)* [**breaking**] extend #[url_patterns] for viewset/mount, add #[viewset] macro, deprecate named variants
+- *(macros)* accept typed identifier instead of string literal in `#[url_patterns]`
+- *(macros)* add #[export_endpoints] attribute for multi-file view modules
+- *(macros)* [**breaking**] typed #[url_patterns(InstalledApp::..., mode = ...)]
+- *(apps)* [**breaking**] require explicit LABEL on AppLabel implementors
+
+### Changed
+
+- *(conf)* extract validate() into SettingsValidation trait
+- *(di)* remove unnecessary Clone bound from Depends<T> and Injected<T>
+- *(macros)* simplify URL/routing macro internals
+- *(macros)* simplify url_patterns enum-type extraction and fix docs
+
+### Documentation
+
+- *(macros)* update #[url_patterns] docs to the typed syntax
+
+### Fixed
+
+- *(conf)* maintain backward compatibility for SettingsFragment trait
+- *(di)* [**breaking**] make DependencyRegistration const-compatible for Rust 2024 edition
+- *(di)* address Copilot review feedback on const-compatible DependencyRegistration
+- *(commands)* address Copilot review feedback on RunserverHook
+- *(urls)* address Copilot review on URL resolver macro generation
+- *(macros)* suppress unexpected_cfgs lint in macro-generated url-resolver code
+- *(macros)* remove url-resolver feature flag, gate on platform instead
+- *(macros)* use resolve_from_registry() in #[routes] for factory type compatibility
+- *(macros)* integrate standalone mode with namespaced URL resolvers
+- *(macros)* resolve merge conflict with main
+- *(macros)* move #[viewset] usage to module-level free function
+- *(macros)* address review — error propagation, WASM skip, ident validation
+- *(macros)* resolve url_patterns path resolution and nested endpoint detection
+- *(macros)* use tt repetition instead of path fragment in __for_each_url_resolver
+- *(macros)* address Copilot review — use tt+ and normalize test assertions
+- *(macros)* use tt+ pattern instead of path in for_each_url_resolver macro
+- *(urls)* add UrlResolver trait import to generated url_prelude methods
+- *(macros)* suppress unexpected_cfgs for client-router in #[routes] macro
+- *(ci)* resolve fmt and clippy violations
+
+### Styling
+
+- apply rustfmt formatting fixes
+- *(macros)* apply rustfmt to url_patterns tests
+- *(core)* fix formatting in reinhardt-core macros and lib
+- *(macros)* apply rustfmt formatting fixes
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.1.0-rc.14...reinhardt-macros@v0.1.0-rc.15) - 2026-03-29
 
 ### Added

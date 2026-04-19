@@ -1084,7 +1084,7 @@ mod tests {
 // KafkaContainer
 // ---------------------------------------------------------------------------
 
-/// A single-broker Kafka container using `bitnami/kafka:3.7` in KRaft mode.
+/// A single-broker Kafka container using `apache/kafka:3.8.1` in KRaft mode.
 ///
 /// # Example
 ///
@@ -1128,28 +1128,26 @@ impl KafkaContainer {
 
 		let host_port = reserve_free_port();
 
-		let image = GenericImage::new("bitnami/kafka", "3.9")
+		let image = GenericImage::new("apache/kafka", "3.8.1")
 			.with_exposed_port(9092.tcp())
 			.with_wait_for(WaitFor::message_on_stdout("Kafka Server started"))
-			.with_env_var("KAFKA_CFG_NODE_ID", "0")
-			.with_env_var("KAFKA_CFG_PROCESS_ROLES", "controller,broker")
+			.with_env_var("KAFKA_NODE_ID", "0")
+			.with_env_var("KAFKA_PROCESS_ROLES", "controller,broker")
 			.with_env_var(
-				"KAFKA_CFG_LISTENERS",
+				"KAFKA_LISTENERS",
 				"PLAINTEXT://:9092,CONTROLLER://:9093",
 			)
 			.with_env_var(
-				"KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP",
+				"KAFKA_LISTENER_SECURITY_PROTOCOL_MAP",
 				"CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
 			)
-			.with_env_var("KAFKA_CFG_CONTROLLER_QUORUM_VOTERS", "0@localhost:9093")
-			.with_env_var("KAFKA_CFG_CONTROLLER_LISTENER_NAMES", "CONTROLLER")
-			.with_env_var("KAFKA_CFG_INTER_BROKER_LISTENER_NAME", "PLAINTEXT")
-			// Required by Bitnami images for PLAINTEXT listeners.
-			.with_env_var("ALLOW_PLAINTEXT_LISTENER", "yes")
+			.with_env_var("KAFKA_CONTROLLER_QUORUM_VOTERS", "0@localhost:9093")
+			.with_env_var("KAFKA_CONTROLLER_LISTENER_NAMES", "CONTROLLER")
+			.with_env_var("KAFKA_INTER_BROKER_LISTENER_NAME", "PLAINTEXT")
 			// Advertise the externally reachable host:port so clients connect to
 			// the mapped host port (not the container-internal 9092).
 			.with_env_var(
-				"KAFKA_CFG_ADVERTISED_LISTENERS",
+				"KAFKA_ADVERTISED_LISTENERS",
 				format!("PLAINTEXT://localhost:{host_port}"),
 			)
 			.with_mapped_port(host_port, 9092.tcp());

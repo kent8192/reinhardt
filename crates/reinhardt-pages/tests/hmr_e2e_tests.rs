@@ -1,4 +1,4 @@
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg(all(not(target_arch = "wasm32"), feature = "hmr"))]
 //! HMR end-to-end tests.
 //!
 //! Success Criteria:

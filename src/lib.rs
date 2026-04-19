@@ -232,6 +232,8 @@ pub mod rest;
 pub mod server;
 #[cfg(all(feature = "shortcuts", native))]
 pub mod shortcuts;
+#[cfg(feature = "streaming")]
+pub mod streaming;
 #[cfg(all(feature = "tasks", native))]
 pub mod tasks;
 #[cfg(all(feature = "templates", native))]

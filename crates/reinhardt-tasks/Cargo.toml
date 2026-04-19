@@ -39,6 +39,9 @@ aws-sdk-sqs = { version = "1.76.0", optional = true }
 # RabbitMQ backend (optional)
 lapin = { version = "3.7.2", optional = true }
 
+# Kafka backend (optional)
+reinhardt-streaming = { workspace = true, optional = true, features = ["kafka"] }
+
 # Documentation
 aquamarine = { workspace = true }
 
@@ -63,5 +66,6 @@ redis-backend = ["redis"]
 database-backend = ["sqlx"]
 sqs-backend = ["aws-config", "aws-sdk-sqs"]
 rabbitmq-backend = ["lapin"]
-all-backends = ["redis-backend", "database-backend", "sqs-backend", "rabbitmq-backend"]
+kafka-backend = ["dep:reinhardt-streaming"]
+all-backends = ["redis-backend", "database-backend", "sqs-backend", "rabbitmq-backend", "kafka-backend"]
 full = ["all-backends"]

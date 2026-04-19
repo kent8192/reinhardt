@@ -14,6 +14,10 @@ pub mod sqs;
 #[cfg(feature = "rabbitmq-backend")]
 pub mod rabbitmq;
 
+/// Kafka-backed task queue implementation.
+#[cfg(feature = "kafka-backend")]
+pub mod kafka;
+
 pub use metadata_store::{InMemoryMetadataStore, MetadataStore, MetadataStoreError, TaskMetadata};
 
 #[cfg(feature = "redis-backend")]
@@ -27,3 +31,6 @@ pub use sqs::{SqsBackend, SqsConfig};
 
 #[cfg(feature = "rabbitmq-backend")]
 pub use rabbitmq::{RabbitMQBackend, RabbitMQConfig};
+
+#[cfg(feature = "kafka-backend")]
+pub use kafka::KafkaTaskBackend;

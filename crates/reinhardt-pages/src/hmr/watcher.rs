@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher, event::ModifyKind};
+use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
 
 use super::change_kind::ChangeKind;
@@ -44,11 +44,13 @@ impl FileWatcher {
 		let mut watcher = RecommendedWatcher::new(
 			move |res: Result<notify::Event, notify::Error>| {
 				if let Ok(event) = res {
-					// Only process create, modify, and remove events
+					// Only process create, modify, and remove events.
+					// Accept all EventKind::Modify(_) variants for consistent cross-platform
+					// detection (some backends emit renames or metadata events, not just Data).
 					let dominated_event = matches!(
 						event.kind,
 						notify::EventKind::Create(_)
-							| notify::EventKind::Modify(ModifyKind::Data(_))
+							| notify::EventKind::Modify(_)
 							| notify::EventKind::Remove(_)
 					);
 					if !dominated_event {

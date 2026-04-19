@@ -253,9 +253,19 @@ pub use reinhardt_pages_macros::page;
 
 // Private re-exports used by macro-generated code. Not part of the public API.
 #[doc(hidden)]
-#[cfg(target_arch = "wasm32")]
 pub mod __private {
-	pub use reqwest;
+    // `reqwest` is enabled for all wasm32 targets (including WASI, wasm32-unknown-unknown, etc.)
+    // because the HTTP client is needed on any wasm32 platform.
+    #[cfg(target_arch = "wasm32")]
+    pub use reqwest;
+
+    // `tracing` is enabled for all targets *except* browser wasm (wasm32-unknown-unknown).
+    // Browser wasm uses a different logging mechanism, so tracing is intentionally excluded there.
+    // The cfg condition `not(all(target_family = "wasm", target_os = "unknown"))` precisely
+    // targets browser wasm, which reports target_family = "wasm" and target_os = "unknown".
+    // This is intentionally different from the `reqwest` cfg above.
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+    pub use tracing;
 }
 
 // Logging macros are automatically exported via #[macro_export]

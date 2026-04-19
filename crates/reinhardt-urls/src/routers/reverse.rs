@@ -3,7 +3,6 @@
 ///
 /// This module provides both string-based (runtime) and type-safe (compile-time)
 /// URL reversal mechanisms.
-// use crate::path;
 use super::pattern::validate_reverse_param;
 use super::{PathPattern, Route};
 use aho_corasick::AhoCorasick;

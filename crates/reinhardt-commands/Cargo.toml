@@ -27,7 +27,7 @@ reqwest = { workspace = true, optional = true }
 reinhardt-pages = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["signal", "process", "fs"] }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 colored = { workspace = true }

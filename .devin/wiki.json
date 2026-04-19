@@ -9,7 +9,7 @@
       "author": "Architect"
     },
     {
-      "content": "The crates/ directory contains all workspace members. The examples/ directory contains 8 independent workspace projects: hello-world, rest-api, database-integration, tutorial-basis, tutorial-rest, twitter, github-issues, di-showcase. The docs/ directory contains comprehensive documentation.",
+      "content": "The crates/ directory contains all workspace members. The examples/ directory currently contains 3 workspace members: examples-tutorial-basis, examples-tutorial-rest, examples-twitter. The docs/ directory contains comprehensive documentation.",
       "author": "Maintainer"
     },
     {
@@ -21,7 +21,7 @@
       "author": "Maintainer"
     },
     {
-      "content": "URL Routing migration (breaking): (1) #[url_patterns] now requires typed enum syntax: #[url_patterns(InstalledApp::app_name, mode = server|client|unified)]. Function name changed: url_patterns() → server_url_patterns() / client_url_patterns() / unified_url_patterns(). (2) Namespaced URL resolver access: urls.user_list() (deprecated) → urls.users().list(). (3) ViewSet route names use get_basename() instead of prefix. (4) UrlPatternsRegistration.get_server_router field renamed to factory.",
+      "content": "URL Routing migration (breaking): (1) #[url_patterns] now requires typed enum syntax: #[url_patterns(InstalledApp::app_name, mode = server|client|unified)]. Recommended naming convention: use server_url_patterns() / client_url_patterns() / unified_url_patterns() instead of url_patterns(); the #[url_patterns] macro does not require a specific function name. (2) Namespaced URL resolver access: urls.user_list() (deprecated) → urls.users().list(). (3) ViewSet route names use get_basename() instead of prefix. (4) UrlPatternsRegistration.get_server_router field renamed to factory.",
       "author": "Architect"
     },
     {
@@ -65,7 +65,7 @@
     },
     {
       "title": "Core Foundation",
-      "purpose": "Document reinhardt-core (types, exceptions, validators, signals, use_endpoint! macro for multi-file view resolver re-export), reinhardt-http (request/response types), reinhardt-server (Hyper-based server with RunserverHook for concurrent startup and pre-listen validation), and reinhardt-macros including the new define_views! macro (replaces deprecated #[export_endpoints] attribute).",
+      "purpose": "Document reinhardt-core (types, exceptions, validators, signals, define_views! macro for multi-file view resolver re-export), reinhardt-http (request/response types), reinhardt-server (Hyper-based server with RunserverHook for concurrent startup and pre-listen validation), and reinhardt-macros including the new define_views! macro (replaces deprecated #[export_endpoints] attribute).",
       "parent": "Architecture Overview"
     },
     {
@@ -75,7 +75,7 @@
     },
     {
       "title": "URL Routing",
-      "purpose": "Document reinhardt-urls: Typed URL pattern matching with #[url_patterns(InstalledApp::Variant, mode = server|client|unified)] (string literal syntax removed). Generated function names: server_url_patterns()/client_url_patterns()/unified_url_patterns(). #[viewset] macro for ViewSet registration (ViewSet route names use get_basename()). #[routes] macro (supports async functions), per-app namespaced URL resolver structs (urls.app_name().route_name() instead of deprecated urls.app_name_route_name()). define_views! macro for multi-file view modules (replaces removed #[export_endpoints]). ClientUrlReverser for client-side type-safe URL resolution. URL resolution is always available on native targets — url-resolver feature flag removed.",
+      "purpose": "Document reinhardt-urls: Typed URL pattern matching with #[url_patterns(InstalledApp::Variant, mode = server|client|unified)] (string literal syntax removed). Conventional function naming examples: server_url_patterns()/client_url_patterns()/unified_url_patterns(), but #[url_patterns] does not require specific function names. #[viewset] macro for ViewSet registration (ViewSet route names use get_basename()). #[routes] macro (supports async functions), per-app namespaced URL resolver structs (urls.app_name().route_name() instead of deprecated urls.app_name_route_name()). define_views! macro for multi-file view modules (replaces removed #[export_endpoints]). ClientUrlReverser for client-side type-safe URL resolution. URL resolution is always available on native targets — url-resolver feature flag removed.",
       "parent": "Architecture Overview"
     },
     {
@@ -85,7 +85,7 @@
     },
     {
       "title": "Configuration",
-      "purpose": "Document reinhardt-conf: #[settings] macro for Settings struct definitions. SettingsFragment trait no longer has validate() — moved to SettingsValidation supertrait (import SettingsValidation where .validate() is called; external SettingsFragment impls must also impl SettingsValidation). Per-test settings override for TestContainers integration. DJANGO_SETTINGS_MODULE env var support.",
+      "purpose": "Document reinhardt-conf: #[settings] macro for Settings struct definitions. SettingsFragment trait defines validate(). Per-test settings override for TestContainers integration. REINHARDT_SETTINGS_MODULE env var support.",
       "parent": "Architecture Overview"
     },
     {
@@ -105,7 +105,7 @@
     },
     {
       "title": "Authentication System",
-      "purpose": "Document reinhardt-auth: Current API: AuthIdentity + BaseUser/FullUser + PermissionsMixin traits, #[user(hasher = ..., username_field = ..., full = ...)] derive macro. Deprecated (since 0.1.0-rc.16): User trait, DefaultUser struct. Authentication backends (JWT — JwtAuth methods now return Result<_, JwtError>, expired tokens rejected by default), Token, Session, OAuth2, Basic. Permission system (DjangoModelPermissions, object-level). #[user] attribute macro for auth trait generation. Social auth (GitHub, Google, Apple, Microsoft OIDC) is in develop/0.2.0.",
+      "purpose": "Document reinhardt-auth: Current API: AuthIdentity + BaseUser/FullUser + PermissionsMixin traits, #[user(hasher = ..., username_field = ..., full = ...)] attribute proc macro. Deprecated (since 0.1.0-rc.15): User trait, DefaultUser struct. Authentication backends (JWT — JwtAuth methods now return Result<_, JwtError>, expired tokens rejected by default), Token, Session, OAuth2, Basic. Permission system (DjangoModelPermissions, object-level). #[user] attribute macro for auth trait generation. Social auth (GitHub, Google, Apple, Microsoft OIDC) is in develop/0.2.0.",
       "parent": null
     },
     {
@@ -150,7 +150,7 @@
     },
     {
       "title": "Example Projects",
-      "purpose": "Document the 8 example projects in examples/ (each is an independent Cargo workspace): hello-world, rest-api, database-integration, tutorial-basis, tutorial-rest, twitter, github-issues, and di-showcase (demonstrates DI patterns with Depends<T>).",
+      "purpose": "Document the 3 example projects in examples/: tutorial-basis, tutorial-rest, and twitter.",
       "parent": null
     },
     {
@@ -167,6 +167,6 @@
       "title": "Migration Guide: rc.15 → rc.16",
       "purpose": "Step-by-step migration for the rc.16 breaking changes: (1) DI: replace Injected<T> with Depends<T>, change #[inject] Arc<T> to Depends<T>, add #[derive(Clone)] to #[injectable] types, update DependencyRegistration to fn pointer API. (2) URLs: update #[url_patterns] to typed InstalledApp::Variant syntax, rename url_patterns() to server/client/unified_url_patterns(), update URL resolver access to namespaced style, remove url-resolver feature from Cargo.toml. (3) Auth: replace User/DefaultUser with AuthIdentity/BaseUser/FullUser/#[user] macro, update JwtAuth error handling to JwtError. (4) Admin: replace admin_routes() with admin_routes_with_di(site), update ModelAdmin permission methods to &dyn AdminUser. (5) Conf: impl SettingsValidation for custom SettingsFragment types, migrate from Settings.installed_apps to installed_apps! macro. (6) Tasks: update TaskLock usage to LockToken pattern. (7) Forms: migrate client_validators to unified validators with #[client(on=...)] scope.",
       "parent": null
-    },
+    }
   ]
 }

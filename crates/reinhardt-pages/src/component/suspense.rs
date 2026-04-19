@@ -1,7 +1,7 @@
 //! Suspense boundary for lazy loading with resource-aware rendering.
 //!
 //! This module provides [`SuspenseBoundary`], a component that displays a fallback UI
-//! while one or more [`Resource`]s are in the [`ResourceState::Loading`] state. Once all
+//! while one or more [`Resource`]s are in the `ResourceState::Loading` state. Once all
 //! tracked resources have resolved, the actual content is rendered.
 //!
 //! ## Features

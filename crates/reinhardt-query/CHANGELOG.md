@@ -5,6 +5,42 @@ All notable changes to `reinhardt-query` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query@v0.1.0-rc.15...reinhardt-query@v0.1.0-rc.16) - 2026-04-19
+
+### Added
+
+- migrate UUID generation from v4 to v7 across entire codebase
+- *(query)* add nosql-redis feature flag and module scaffold
+- *(query/nosql)* implement RespCommand, core traits, and all Redis command builders
+
+### Changed
+
+- *(query)* rename SeaRc to SharedRc, deprecate old alias
+
+### Documentation
+
+- *(query/nosql)* fix misleading GT/LT typestate marker doc comments
+
+### Fixed
+
+- *(query,core)* replace approx_constant test values to avoid clippy deny
+- *(query)* resolve clippy warnings in tests
+- *(query)* move impl blocks before test modules in backend files
+- *(query)* use as_str() to avoid ambiguous to_string() with Iden trait
+- *(query/nosql)* elide redundant explicit lifetimes per clippy
+- *(query/tests)* loop until complete RESP frame is received
+- *(query/nosql)* rename ZAddBuilder gt/lt methods to only_if_greater/only_if_less
+
+### Styling
+
+- apply rustfmt to clippy-fixed files
+- *(pages)* apply rustfmt to merged files from main
+
+### Testing
+
+- *(query/nosql)* add trybuild compile-fail tests and integration test scaffold
+- *(query/nosql)* add connection retry to Redis integration tests
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query@v0.1.0-rc.14...reinhardt-query@v0.1.0-rc.15) - 2026-03-29
 
 ### Fixed

@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-streaming"
-version = "0.1.0-alpha"
+version = "0.1.0-alpha.1"
 description = "Backend-agnostic streaming abstraction with Kafka support"
 edition.workspace = true
 rust-version.workspace = true

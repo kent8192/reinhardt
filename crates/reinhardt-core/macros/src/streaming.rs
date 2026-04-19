@@ -6,6 +6,8 @@ use syn::{
     Token,
 };
 
+use crate::crate_paths::get_inventory_crate;
+
 // ─────────────────────────────────────────────────────────
 // #[producer] macro
 // ─────────────────────────────────────────────────────────
@@ -127,6 +129,7 @@ pub(crate) fn producer_impl(args: TokenStream, input: ItemFn) -> syn::Result<Tok
     let method_ident = syn::Ident::new(name, Span::call_site());
 
     let streaming_crate = quote! { ::reinhardt_streaming };
+    let inventory = get_inventory_crate();
 
     Ok(quote! {
         // Metadata module (consumed by streaming_routes! and #[routes])
@@ -163,6 +166,19 @@ pub(crate) fn producer_impl(args: TokenStream, input: ItemFn) -> syn::Result<Tok
                 }
             }
             __result
+        }
+
+        // Register handler metadata so `resolve_streaming_topic(name)` can
+        // find the corresponding topic at runtime.
+        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+        #inventory::submit! {
+            #streaming_crate::StreamingHandlerMetadata {
+                name: #name,
+                topic: #topic,
+                kind: #streaming_crate::StreamingHandlerKind::Producer,
+                group: ::core::option::Option::None,
+                module_path: ::core::module_path!(),
+            }
         }
     })
 }
@@ -218,6 +234,7 @@ impl Parse for ConsumerArgs {
 pub(crate) fn consumer_impl(args: TokenStream, input: ItemFn) -> syn::Result<TokenStream> {
     let args: ConsumerArgs = syn::parse2(args)?;
     let topic = &args.topic;
+    let group = &args.group;
     let name = &args.name;
 
     let fn_name = &input.sig.ident;
@@ -235,6 +252,9 @@ pub(crate) fn consumer_impl(args: TokenStream, input: ItemFn) -> syn::Result<Tok
         Span::call_site(),
     );
     let method_ident = syn::Ident::new(name, Span::call_site());
+
+    let streaming_crate = quote! { ::reinhardt_streaming };
+    let inventory = get_inventory_crate();
 
     Ok(quote! {
         // Metadata module (consumed by streaming_routes! and #[routes])
@@ -257,6 +277,19 @@ pub(crate) fn consumer_impl(args: TokenStream, input: ItemFn) -> syn::Result<Tok
         #(#fn_attrs)*
         #fn_vis #fn_sig {
             #fn_block
+        }
+
+        // Register handler metadata so `resolve_streaming_topic(name)` can
+        // find the corresponding topic at runtime.
+        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+        #inventory::submit! {
+            #streaming_crate::StreamingHandlerMetadata {
+                name: #name,
+                topic: #topic,
+                kind: #streaming_crate::StreamingHandlerKind::Consumer,
+                group: ::core::option::Option::Some(#group),
+                module_path: ::core::module_path!(),
+            }
         }
     })
 }

@@ -64,17 +64,7 @@ impl<T: Clone + 'static, E: Clone + 'static> ResourceTracker for Resource<T, E> 
 }
 
 /// A boxed resource tracker for dynamic dispatch over heterogeneous resources.
-struct BoxedTracker(Box<dyn ResourceTracker>);
-
-impl BoxedTracker {
-	fn new<R: ResourceTracker + 'static>(resource: R) -> Self {
-		Self(Box::new(resource))
-	}
-
-	fn is_loading(&self) -> bool {
-		self.0.is_loading()
-	}
-}
+type BoxedTracker = Box<dyn ResourceTracker>;
 
 /// Suspense boundary component for lazy loading.
 ///
@@ -148,7 +138,7 @@ impl SuspenseBoundary {
 		T: Clone + 'static,
 		E: Clone + 'static,
 	{
-		self.trackers.push(BoxedTracker::new(resource));
+		self.trackers.push(Box::new(resource) as BoxedTracker);
 		self
 	}
 
@@ -162,7 +152,7 @@ impl SuspenseBoundary {
 	///
 	/// * `tracker` - Any type implementing [`ResourceTracker`]
 	pub fn track_custom(mut self, tracker: impl ResourceTracker + 'static) -> Self {
-		self.trackers.push(BoxedTracker::new(tracker));
+		self.trackers.push(Box::new(tracker) as BoxedTracker);
 		self
 	}
 

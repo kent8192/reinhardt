@@ -23,3 +23,14 @@ pub mod set;
 pub mod zset;
 /// Transaction and scripting commands.
 pub mod transaction;
+
+pub use command::CommandStatementBuilder;
+pub use hash::HashCommand;
+pub use key::{IntoRedisKey, RedisKey};
+pub use list::ListCommand;
+pub use resp::RespCommand;
+pub use set::SetCommand;
+pub use string::StringCommand;
+pub use transaction::{ScriptCommand, Transaction};
+pub use value::ToRedisBytes;
+pub use zset::ZSetCommand;

@@ -1,0 +1,14 @@
+error[E0599]: `ZAddBuilder<ZAddGtMode>` is not an iterator
+ --> tests/compile_fail/zadd_gt_lt_conflict.rs:3:41
+  |
+3 |     let _ = ZSetCommand::zadd("z").gt().lt();
+  |                                         ^^ `ZAddBuilder<ZAddGtMode>` is not an iterator
+  |
+ ::: src/nosql/redis/zset.rs
+  |
+  | pub struct ZAddBuilder<M = ZAddNoMode> {
+  | -------------------------------------- doesn't satisfy `ZAddBuilder<ZAddGtMode>: Iterator`
+  |
+  = note: the following trait bounds were not satisfied:
+          `ZAddBuilder<ZAddGtMode>: Iterator`
+          which is required by `&mut ZAddBuilder<ZAddGtMode>: Iterator`

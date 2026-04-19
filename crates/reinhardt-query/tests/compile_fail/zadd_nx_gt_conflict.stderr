@@ -1,0 +1,14 @@
+error[E0599]: `ZAddBuilder<ZAddNxMode>` is not an iterator
+ --> tests/compile_fail/zadd_nx_gt_conflict.rs:3:41
+  |
+3 |     let _ = ZSetCommand::zadd("z").nx().gt();
+  |                                         ^^ `ZAddBuilder<ZAddNxMode>` is not an iterator
+  |
+ ::: src/nosql/redis/zset.rs
+  |
+  | pub struct ZAddBuilder<M = ZAddNoMode> {
+  | -------------------------------------- doesn't satisfy `ZAddBuilder<ZAddNxMode>: Iterator`
+  |
+  = note: the following trait bounds were not satisfied:
+          `ZAddBuilder<ZAddNxMode>: Iterator`
+          which is required by `&mut ZAddBuilder<ZAddNxMode>: Iterator`

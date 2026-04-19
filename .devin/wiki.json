@@ -1,7 +1,7 @@
 {
   "repo_notes": [
     {
-      "content": "Reinhardt is a polylithic batteries-included Rust web framework inspired by Django, Django REST Framework, and FastAPI. The framework is organized as a Cargo workspace with 70+ crates, allowing users to select only the components they need via feature flags. Current version: 0.1.0-rc.15 (next planned: 0.1.0-rc.16).",
+      "content": "Reinhardt is a polylithic batteries-included Rust web framework inspired by Django, Django REST Framework, and FastAPI. The framework is organized as a Cargo workspace with 70+ crates, allowing users to select only the components they need via feature flags.",
       "author": "Maintainer"
     },
     {
@@ -17,7 +17,7 @@
       "author": "Architect"
     },
     {
-      "content": "DI System migration (breaking, since rc.16 deprecation): (1) Injected<T>/OptionalInjected<T> deprecated → use Depends<T>. (2) #[inject] parameter type changed Arc<T> → Depends<T>. (3) #[injectable] no longer auto-derives Clone — add #[derive(Clone)] explicitly. (4) #[injectable] without explicit scope now registers with Request scope. (5) DependencyRegistration struct fields changed to fn pointers (const-compatible, Rust 2024). (6) Pseudo orphan rule: cannot register #[injectable_factory]/#[injectable] for reinhardt-managed types — use newtype wrapper. (7) Validated<T> extractor auto-calls Validate::validate() during extraction.",
+      "content": "DI System migration (breaking, deprecated as of rc.16): (1) Injected<T>/OptionalInjected<T> deprecated → use Depends<T>. (2) #[inject] parameter type changed Arc<T> → Depends<T>. (3) #[injectable] no longer auto-derives Clone — add #[derive(Clone)] explicitly. (4) #[injectable] without explicit scope now registers with Request scope. (5) DependencyRegistration struct fields changed to fn pointers (const-compatible, Rust 2024). (6) Pseudo orphan rule: cannot register #[injectable_factory]/#[injectable] for reinhardt-managed types — use newtype wrapper. (7) Validated<T> extractor auto-calls Validate::validate() during extraction.",
       "author": "Maintainer"
     },
     {
@@ -41,7 +41,7 @@
       "author": "Architect"
     },
     {
-      "content": "Configuration migration (breaking): (1) #[settings] macro introduced for Settings structs. SettingsFragment.validate() moved to SettingsValidation supertrait — import SettingsValidation where .validate() is called. External SettingsFragment implementors must also impl SettingsValidation. (2) Settings.installed_apps field, add_app(), and with_validated_apps() deprecated → use installed_apps! macro with ApplicationBuilder.",
+      "content": "Configuration migration (breaking): (1) #[settings] macro introduced for Settings structs. SettingsFragment.validate() moved to SettingsValidation supertrait — import SettingsValidation where .validate() is called. External SettingsFragment implementors must also impl SettingsValidation. (2) Settings.installed_apps field, add_app(), and with_validated_apps() are deprecated → use installed_apps! macro with ApplicationBuilder.",
       "author": "Maintainer"
     },
     {

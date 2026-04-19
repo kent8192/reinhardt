@@ -21,10 +21,10 @@ pub struct ZAddNxMode;
 /// Typestate marker: XX mode (can transition to GT/LT).
 #[derive(Debug)]
 pub struct ZAddXxMode;
-/// Typestate marker: GT mode (implies XX).
+/// Typestate marker: GT mode (update existing members only if new score is greater).
 #[derive(Debug)]
 pub struct ZAddGtMode;
-/// Typestate marker: LT mode (implies XX).
+/// Typestate marker: LT mode (update existing members only if new score is less).
 #[derive(Debug)]
 pub struct ZAddLtMode;
 

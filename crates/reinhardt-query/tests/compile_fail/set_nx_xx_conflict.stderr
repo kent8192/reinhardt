@@ -1,0 +1,13 @@
+error[E0599]: no method named `xx` found for struct `SetStatement<SetNx>` in the current scope
+ --> tests/compile_fail/set_nx_xx_conflict.rs:3:47
+  |
+3 |     let _ = StringCommand::set("k", "v").nx().xx();
+  |             ----------------------------      ^^
+  |             |
+  |             method `xx` is available on `SetStatement`
+  |
+help: there is a method `ex` with a similar name, but with different arguments
+ --> src/nosql/redis/string.rs
+  |
+  |     pub fn ex(self, secs: u64) -> SetStatement<Cond, HasSetExpiry> {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

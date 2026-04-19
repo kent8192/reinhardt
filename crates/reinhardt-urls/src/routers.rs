@@ -227,4 +227,10 @@ pub use client_router::{
 	HistoryState, NavigationType, ParamContext, Path, RouteHandler, SingleFromPath,
 	clear_client_reverser, get_client_reverser, register_client_reverser,
 };
-pub use resolver::ClientUrlResolver;
+pub use resolver::{ClientUrlResolver, WebSocketUrlResolver};
+
+// Re-export the canonical `StreamingTopicResolver` trait from
+// `reinhardt-streaming` so downstream users can keep importing it from
+// `reinhardt_urls::routers`.
+#[cfg(feature = "streaming")]
+pub use reinhardt_streaming::StreamingTopicResolver;

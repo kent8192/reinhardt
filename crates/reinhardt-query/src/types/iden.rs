@@ -9,24 +9,28 @@
 
 use std::fmt::Write;
 
-/// Thread-safe reference-counted pointer.
+/// Thread-safe or single-threaded reference-counted smart pointer.
 ///
-/// With the `thread-safe` feature enabled, this uses `Arc`.
-/// Otherwise, it uses `Rc` for lower overhead in single-threaded contexts.
+/// With the `thread-safe` feature enabled, this is [`Arc`](std::sync::Arc).
+/// Without it, this is [`Rc`](std::rc::Rc) for lower overhead in single-threaded contexts.
 #[cfg(feature = "thread-safe")]
-pub type SeaRc<T> = std::sync::Arc<T>;
+pub type SharedRc<T> = std::sync::Arc<T>;
 
-/// Reference-counted smart pointer for identifier storage.
+/// Reference-counted smart pointer.
 ///
-/// When the `thread-safe` feature is disabled, this uses `Rc` for lower overhead
-/// in single-threaded contexts.
+/// Without the `thread-safe` feature, this is [`Rc`](std::rc::Rc).
 #[cfg(not(feature = "thread-safe"))]
-pub type SeaRc<T> = std::rc::Rc<T>;
+pub type SharedRc<T> = std::rc::Rc<T>;
+
+/// Deprecated alias for [`SharedRc`].
+#[allow(deprecated)]
+#[deprecated(since = "0.1.0-rc.16", note = "use `SharedRc` instead")]
+pub type SeaRc<T> = SharedRc<T>;
 
 /// Type-erased identifier for heterogeneous collections.
 ///
 /// This allows storing different types implementing `Iden` in the same collection.
-pub type DynIden = SeaRc<dyn Iden>;
+pub type DynIden = SharedRc<dyn Iden>;
 
 /// Trait for SQL identifiers.
 ///
@@ -115,7 +119,7 @@ where
 	I: Iden + 'static,
 {
 	fn into_iden(self) -> DynIden {
-		SeaRc::new(self)
+		SharedRc::new(self)
 	}
 }
 
@@ -202,5 +206,11 @@ mod tests {
 	fn test_into_iden() {
 		let _dyn_iden: DynIden = TestTable::Table.into_iden();
 		let _dyn_iden2: DynIden = "column_name".into_iden();
+	}
+
+	#[rstest]
+	fn test_shared_rc_stores_value() {
+		let value: SharedRc<String> = SharedRc::new("hello".to_string());
+		assert_eq!(*value, "hello");
 	}
 }

@@ -1,0 +1,9 @@
+error[E0599]: no method named `only_if_less` found for struct `ZAddBuilder<ZAddGtMode>` in the current scope
+ --> tests/compile_fail/zadd_gt_lt_conflict.rs:3:54
+  |
+3 |     let _ = ZSetCommand::zadd("z").only_if_greater().only_if_less();
+  |                                                      ^^^^^^^^^^^^ method not found in `ZAddBuilder<ZAddGtMode>`
+  |
+  = note: the method was found for
+          - `ZAddBuilder`
+          - `ZAddBuilder<ZAddXxMode>`

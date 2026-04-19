@@ -1,0 +1,39 @@
+[package]
+name = "reinhardt-streaming"
+version = "0.1.0-alpha"
+description = "Backend-agnostic streaming abstraction with Kafka support"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+inventory = "0.3"
+
+# Kafka backend (optional)
+rskafka = { workspace = true, optional = true, features = ["rustls"] }
+chrono = { workspace = true, optional = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+# Workaround for KI-2 (rust-lang/cargo#4242, rust-lang/cargo#15151):
+# Path-only dev-dep (no version) is stripped from published manifest by cargo,
+# avoiding dev-dependency version resolution failure during `cargo publish`.
+# When upstream cargo resolves these issues, replace with `workspace = true`.
+reinhardt-testkit = { path = "../reinhardt-testkit", features = ["testcontainers"] }
+reinhardt-macros = { path = "../reinhardt-core/macros" }
+serde = { workspace = true, features = ["derive"] }
+
+[features]
+default = []
+kafka = ["dep:rskafka", "dep:chrono"]
+full = ["kafka"]

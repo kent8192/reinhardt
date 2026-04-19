@@ -1,0 +1,13 @@
+error[E0599]: no method named `px` found for struct `SetStatement<NoSetCondition, HasSetExpiry>` in the current scope
+ --> tests/compile_fail/set_double_expiry.rs:3:49
+  |
+3 |     let _ = StringCommand::set("k", "v").ex(60).px(100);
+  |             ----------------------------        ^^
+  |             |
+  |             method `px` is available on `SetStatement`
+  |
+help: there is a method `nx` with a similar name, but with different arguments
+ --> src/nosql/redis/string.rs
+  |
+  |     pub fn nx(self) -> SetStatement<SetNx, Exp> {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

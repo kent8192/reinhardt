@@ -538,8 +538,12 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 							crate::apps::#app::urls::url_resolvers
 						);
 
-						// Accessor method on ResolvedUrls
+						// Deprecated 2-level accessor (use urls.server().#app() instead)
 						impl ResolvedUrls {
+							#[deprecated(
+								since = "0.1.0-rc.16",
+								note = "use `urls.server().#app()` instead"
+							)]
 							pub fn #app(&self) -> #urls_struct<'_> {
 								#urls_struct { resolver: self }
 							}
@@ -616,8 +620,12 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 							crate::apps::#app::urls::client_url_resolvers
 						);
 
-						// Accessor method on ResolvedUrls
+						// Deprecated 2-level accessor (use urls.client().#app() instead)
 						impl ResolvedUrls {
+							#[deprecated(
+								since = "0.1.0-rc.16",
+								note = "use `urls.client().#app()` instead"
+							)]
 							pub fn #accessor_method(&self) -> #client_urls_struct<'_> {
 								#client_urls_struct { resolver: self }
 							}
@@ -653,6 +661,112 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				})
 				.collect();
 
+			// Generate per-app WS resolver structs (parallel to per_app_code for HTTP).
+			let per_app_ws_code: Vec<_> = app_idents
+				.iter()
+				.map(|app| {
+					let ws_urls_struct_name = crate::pascal_case::to_pascal_case_with_suffix(
+						&app.to_string(),
+						"WsUrls",
+					);
+					let ws_urls_struct = proc_macro2::Ident::new(
+						&ws_urls_struct_name,
+						proc_macro2::Span::call_site(),
+					);
+					let gen_ws_method_macro = proc_macro2::Ident::new(
+						&format!("__gen_{}_ws_method", app),
+						proc_macro2::Span::call_site(),
+					);
+
+					// Parallel to server_callback_arms but uses resolve_ws_url + WebSocketUrlResolver
+					let ws_callback_arms = gen_resolver_callback_arms(
+						&ws_urls_struct,
+						&quote! { resolve_ws_url },
+						&quote! { stringify!($app_label) },
+						&quote! { use #reinhardt::WebSocketUrlResolver as _; },
+					);
+
+					quote! {
+						/// Per-app WebSocket URL resolver.
+						///
+						/// Access via `WsUrls::#app()`.
+						pub struct #ws_urls_struct<'a> {
+							resolver: &'a ResolvedUrls,
+						}
+
+						macro_rules! #gen_ws_method_macro {
+							#ws_callback_arms
+						}
+
+						// Invoke __for_each_ws_url_resolver to populate methods.
+						// This is a no-op if the app has no ws_url_resolvers module.
+						crate::apps::#app::ws_urls::ws_url_resolvers::__for_each_ws_url_resolver!(
+							#gen_ws_method_macro, #app,
+							crate::apps::#app::ws_urls::ws_url_resolvers
+						);
+					}
+				})
+				.collect();
+
+			// ServerUrls gateway: urls.server().<app>().<handler>()
+			// Delegates to the existing XxxUrls structs (no new struct needed).
+			let server_app_accessors: Vec<_> = app_idents
+				.iter()
+				.map(|app| {
+					let urls_struct_name =
+						crate::pascal_case::to_pascal_case_with_suffix(&app.to_string(), "Urls");
+					let urls_struct = proc_macro2::Ident::new(
+						&urls_struct_name,
+						proc_macro2::Span::call_site(),
+					);
+					quote! {
+						pub fn #app(&self) -> #urls_struct<'_> {
+							#urls_struct { resolver: self.resolver }
+						}
+					}
+				})
+				.collect();
+
+			// ClientUrls gateway: urls.client().<app>().<handler>()
+			let client_app_accessors: Vec<_> = app_idents
+				.iter()
+				.map(|app| {
+					let client_urls_struct_name = crate::pascal_case::to_pascal_case_with_suffix(
+						&app.to_string(),
+						"ClientUrls",
+					);
+					let client_urls_struct = proc_macro2::Ident::new(
+						&client_urls_struct_name,
+						proc_macro2::Span::call_site(),
+					);
+					quote! {
+						pub fn #app(&self) -> #client_urls_struct<'_> {
+							#client_urls_struct { resolver: self.resolver }
+						}
+					}
+				})
+				.collect();
+
+			// WsUrls gateway: urls.ws().<app>().<handler>()
+			let ws_app_accessors: Vec<_> = app_idents
+				.iter()
+				.map(|app| {
+					let ws_urls_struct_name = crate::pascal_case::to_pascal_case_with_suffix(
+						&app.to_string(),
+						"WsUrls",
+					);
+					let ws_urls_struct = proc_macro2::Ident::new(
+						&ws_urls_struct_name,
+						proc_macro2::Span::call_site(),
+					);
+					quote! {
+						pub fn #app(&self) -> #ws_urls_struct<'_> {
+							#ws_urls_struct { resolver: self.resolver }
+						}
+					}
+				})
+				.collect();
+
 			quote! {
 				// Track state file for incremental compilation invalidation.
 				// When installed_apps! rewrites the file, the compiler re-expands #[routes].
@@ -665,10 +779,26 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				#[doc(hidden)]
 				mod __namespaced_resolvers {
-					#![allow(unexpected_cfgs)]
+					#![allow(unexpected_cfgs, deprecated)]
 					pub use super::ResolvedUrls;
 
 					#(#per_app_code)*
+
+					/// HTTP URL gateway. Access via `urls.server().<app>().<route>()`.
+					pub struct ServerUrls<'a> {
+						resolver: &'a ResolvedUrls,
+					}
+
+					impl ServerUrls<'_> {
+						#(#server_app_accessors)*
+					}
+
+					impl ResolvedUrls {
+						/// Access HTTP URL resolvers via `urls.server().<app>().<route>()`.
+						pub fn server(&self) -> ServerUrls<'_> {
+							ServerUrls { resolver: self }
+						}
+					}
 
 					/// Prelude module re-exporting URL resolver types.
 					pub mod url_prelude {
@@ -679,10 +809,53 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				pub use __namespaced_resolvers::*;
 
+				// WebSocket per-app resolver structs (native-only, parallel to HTTP resolvers).
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				#[doc(hidden)]
+				mod __namespaced_ws_resolvers {
+					#![allow(unexpected_cfgs, dead_code)]
+					pub use super::ResolvedUrls;
+
+					#(#per_app_ws_code)*
+
+					/// WebSocket URL gateway. Access via `urls.ws().<app>().<route>()`.
+					pub struct WsUrls<'a> {
+						resolver: &'a ResolvedUrls,
+					}
+
+					impl WsUrls<'_> {
+						#(#ws_app_accessors)*
+					}
+				}
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				pub use __namespaced_ws_resolvers::*;
+
+				// WebSocketUrlResolver stub impl: allows the type chain to compile.
+				// For actual WS URL resolution, call impl_ws_url_resolver!(ResolvedUrls)
+				// after importing reinhardt-websockets.
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				impl #reinhardt::WebSocketUrlResolver for ResolvedUrls {
+					fn resolve_ws_url(&self, _name: &str, _params: &[(&str, &str)]) -> String {
+						unimplemented!(
+							"WebSocket URL resolution requires reinhardt-websockets. \
+							 Call impl_ws_url_resolver!(ResolvedUrls) to enable it."
+						)
+					}
+				}
+
+				// Add urls.ws() accessor to ResolvedUrls
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				impl ResolvedUrls {
+					/// Access WebSocket URL resolvers via `urls.ws().<app>().<route>()`.
+					pub fn ws(&self) -> WsUrls<'_> {
+						WsUrls { resolver: self }
+					}
+				}
+
 				// Client-side per-app resolvers are cross-platform (native + WASM).
 				#[doc(hidden)]
 				mod __client_router_gate {
-					#![allow(unexpected_cfgs)]
+					#![allow(unexpected_cfgs, deprecated)]
 
 					#[cfg(feature = "client-router")]
 					#[doc(hidden)]
@@ -690,6 +863,22 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 						pub use super::super::ResolvedUrls;
 
 						#(#per_app_client_code)*
+
+						/// Client URL gateway. Access via `urls.client().<app>().<route>()`.
+						pub struct ClientUrls<'a> {
+							resolver: &'a ResolvedUrls,
+						}
+
+						impl ClientUrls<'_> {
+							#(#client_app_accessors)*
+						}
+
+						impl ResolvedUrls {
+							/// Access client URL resolvers via `urls.client().<app>().<route>()`.
+							pub fn client(&self) -> ClientUrls<'_> {
+								ClientUrls { resolver: self }
+							}
+						}
 					}
 					#[cfg(feature = "client-router")]
 					pub use __namespaced_client_resolvers::*;
@@ -788,6 +977,47 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 					router: ::std::sync::Arc<#reinhardt::ServerRouter>,
 				) -> Self {
 					Self { router }
+				}
+
+				/// Access streaming topic resolvers.
+				///
+				/// Extension traits generated by `#[producer]`/`#[consumer]` macros
+				/// add typed accessor methods on the returned `StreamingRef`. Bring
+				/// the app's streaming handlers into scope to access their methods.
+				///
+				/// # Example
+				///
+				/// ```rust,ignore
+				/// let urls = ResolvedUrls::from_global();
+				/// let topic = urls.streaming().topic_for("create_order"); // → "orders"
+				/// ```
+				#[cfg(feature = "streaming")]
+				pub fn streaming(&self) -> StreamingRef<'_> {
+					StreamingRef { _marker: ::core::marker::PhantomData }
+				}
+			}
+
+			/// Streaming resolver returned by `ResolvedUrls::streaming()`.
+			///
+			/// Extension traits from `#[producer]`/`#[consumer]` macros add per-handler
+			/// accessor methods that return the registered Kafka topic name.
+			#[cfg(all(not(all(target_family = "wasm", target_os = "unknown")), feature = "streaming"))]
+			pub struct StreamingRef<'a> {
+				_marker: ::core::marker::PhantomData<&'a ()>,
+			}
+
+			#[cfg(all(not(all(target_family = "wasm", target_os = "unknown")), feature = "streaming"))]
+			impl #reinhardt::streaming::StreamingTopicResolver for StreamingRef<'_> {
+				fn resolve_topic(&self, name: &str) -> &'static str {
+					#reinhardt::streaming::resolve_streaming_topic(name)
+				}
+			}
+
+			#[cfg(all(not(all(target_family = "wasm", target_os = "unknown")), feature = "streaming"))]
+			impl<'a> StreamingRef<'a> {
+				/// Resolve a topic name by handler name (runtime lookup).
+				pub fn topic_for(&self, name: &str) -> &'static str {
+					#reinhardt::streaming::resolve_streaming_topic(name)
 				}
 			}
 

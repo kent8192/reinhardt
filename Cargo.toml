@@ -110,6 +110,7 @@ static-files = ["reinhardt-utils/staticfiles"]
 storage = ["reinhardt-utils/storage"]
 shortcuts = ["reinhardt-shortcuts"]
 tasks = ["reinhardt-tasks"]
+streaming = ["dep:reinhardt-streaming", "reinhardt-streaming/kafka"]
 server = ["reinhardt-server"]
 commands = ["reinhardt-commands", "reinhardt-commands/migrations"]
 introspect = ["reinhardt-commands/introspect"]
@@ -304,6 +305,7 @@ reinhardt-forms = { workspace = true, optional = true }
 reinhardt-middleware = { workspace = true, optional = true }
 reinhardt-shortcuts = { workspace = true, optional = true }
 reinhardt-tasks = { workspace = true, optional = true }
+reinhardt-streaming = { workspace = true, optional = true }
 reinhardt-server = { workspace = true, optional = true }
 reinhardt-i18n = { workspace = true, optional = true }
 reinhardt-mail = { workspace = true, optional = true }
@@ -351,6 +353,7 @@ members = [
   "crates/reinhardt-testkit",
   "crates/reinhardt-test",
   "crates/reinhardt-tasks",
+  "crates/reinhardt-streaming",
   "crates/reinhardt-utils",
   "crates/reinhardt-rest",
   "crates/reinhardt-rest/openapi-macros",
@@ -433,6 +436,7 @@ reinhardt-forms = { path = "crates/reinhardt-forms", version = "0.1.0-rc.15" }
 reinhardt-testkit = { path = "crates/reinhardt-testkit", version = "0.1.0-rc.15" }
 reinhardt-test = { path = "crates/reinhardt-test", version = "0.1.0-rc.15" }
 reinhardt-tasks = { path = "crates/reinhardt-tasks", version = "0.1.0-rc.15" }
+reinhardt-streaming = { path = "crates/reinhardt-streaming", version = "0.1.0-alpha" }
 reinhardt-utils = { path = "crates/reinhardt-utils", version = "0.1.0-rc.15" }
 reinhardt-rest = { path = "crates/reinhardt-rest", version = "0.1.0-rc.15" }
 reinhardt-throttling = { path = "crates/reinhardt-throttling", version = "0.1.0-rc.15" }
@@ -471,6 +475,10 @@ reinhardt-openapi-macros = { path = "crates/reinhardt-rest/openapi-macros", vers
 
 # REST subcrates (continued)
 reinhardt-routers-macros = { path = "crates/reinhardt-urls/routers-macros", version = "0.1.0-rc.15" }
+
+# Streaming
+rskafka = { version = "0.5" }
+time = { version = "0.3" }
 
 # Web framework
 tokio = { version = "1.51.0", features = ["rt-multi-thread", "sync", "time", "macros", "net", "io-util"] }

@@ -43,7 +43,9 @@ pub use event::{EventCompletion, EventDef, EventOperation, EventSchedule};
 pub use function::{
 	FunctionBehavior, FunctionDef, FunctionLanguage, FunctionParameter, FunctionSecurity,
 };
-pub use iden::{DynIden, Iden, IdenStatic, IntoIden, SeaRc};
+pub use iden::{DynIden, Iden, IdenStatic, IntoIden, SharedRc};
+#[allow(deprecated)]
+pub use iden::SeaRc;
 pub use join::{ColumnPair, ColumnSpec, JoinExpr, JoinOn, JoinType};
 pub use maintenance::{
 	AnalyzeTable, CheckTableOption, OptimizeTableOption, RepairTableOption, VacuumOption,

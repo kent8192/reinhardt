@@ -41,10 +41,10 @@ struct ExtractorInfo {
 
 /// Information about `#[inject]` parameters
 #[derive(Clone)]
-struct InjectInfo {
-	pat: Box<Pat>,
-	ty: Box<Type>,
-	options: InjectOptions,
+pub(crate) struct InjectInfo {
+	pub(crate) pat: Box<Pat>,
+	pub(crate) ty: Box<Type>,
+	pub(crate) options: InjectOptions,
 }
 
 /// Validate a route path at compile time
@@ -153,7 +153,7 @@ fn extract_request_body_info(inputs: &Punctuated<FnArg, Token![,]>) -> Option<(S
 }
 
 /// Detect parameters with `#[inject]` attribute
-fn detect_inject_params(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<InjectInfo> {
+pub(crate) fn detect_inject_params(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<InjectInfo> {
 	let mut inject_params = Vec::new();
 
 	for input in inputs {
@@ -719,7 +719,7 @@ fn generate_view_type(
 ///
 /// `auth_login` → `ResolveAuthLogin`
 /// `cluster_retrieve` → `ResolveClusterRetrieve`
-fn to_resolver_trait_name(route_name: &str) -> String {
+pub(crate) fn to_resolver_trait_name(route_name: &str) -> String {
 	let mut result = String::from("Resolve");
 	for segment in route_name.split('_') {
 		let mut chars = segment.chars();
@@ -735,7 +735,7 @@ fn to_resolver_trait_name(route_name: &str) -> String {
 ///
 /// Handles both simple params `{id}` and typed params `{<int:id>}`.
 /// Skips wildcard `{*}` patterns.
-fn extract_url_params(path: &str) -> Vec<String> {
+pub(crate) fn extract_url_params(path: &str) -> Vec<String> {
 	let mut params = Vec::new();
 	let mut chars = path.chars().peekable();
 	while let Some(ch) = chars.next() {

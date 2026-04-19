@@ -11,6 +11,7 @@ fn main() {
 	println!("cargo::rustc-check-cfg=cfg(ssr)");
 	println!("cargo::rustc-check-cfg=cfg(csr)");
 	println!("cargo::rustc-check-cfg=cfg(hydrate)");
+	println!("cargo::rustc-check-cfg=cfg(hmr)");
 
 	cfg_aliases! {
 		// Platform aliases for simpler conditional compilation

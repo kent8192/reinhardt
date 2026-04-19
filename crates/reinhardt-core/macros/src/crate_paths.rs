@@ -699,6 +699,40 @@ pub(crate) fn get_inventory_crate() -> TokenStream {
 	quote!(::inventory)
 }
 
+/// Resolves the path to the `reinhardt_websockets` crate dynamically.
+pub(crate) fn get_reinhardt_websockets_crate() -> TokenStream {
+	use proc_macro_crate::{FoundCrate, crate_name};
+
+	match crate_name("reinhardt-websockets") {
+		Ok(FoundCrate::Itself) => return quote!(crate),
+		Ok(FoundCrate::Name(name)) => {
+			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+			return quote!(::#ident);
+		}
+		Err(_) => {}
+	}
+
+	match crate_name("reinhardt") {
+		Ok(FoundCrate::Itself) => return quote!(crate::reinhardt_websockets),
+		Ok(FoundCrate::Name(name)) => {
+			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+			return quote!(::#ident::reinhardt_websockets);
+		}
+		Err(_) => {}
+	}
+
+	match crate_name("reinhardt-web") {
+		Ok(FoundCrate::Itself) => return quote!(crate::reinhardt_websockets),
+		Ok(FoundCrate::Name(name)) => {
+			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+			return quote!(::#ident::reinhardt_websockets);
+		}
+		Err(_) => {}
+	}
+
+	quote!(::reinhardt_websockets)
+}
+
 /// Resolves the path to the `reinhardt_commands` crate dynamically.
 ///
 /// Used by the `#[hook]` macro to reference `RunserverHookRegistration`.

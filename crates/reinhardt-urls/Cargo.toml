@@ -42,6 +42,9 @@ serde_yaml = "0.9"
 aho-corasick = "1.1"
 inventory = "0.3"
 
+# Streaming support (optional)
+reinhardt-streaming = { workspace = true, optional = true }
+
 [features]
 default = ["routers", "routers-macros", "proxy"]
 
@@ -51,6 +54,7 @@ routers-macros = ["dep:reinhardt-routers-macros"]
 proxy = []
 database = []
 client-router = ["reinhardt-core/reactive", "routers"]
+streaming = ["dep:reinhardt-streaming"]
 urls-full = ["routers", "routers-macros", "proxy"]
 full = ["database", "unified-router"]
 unified-router = []

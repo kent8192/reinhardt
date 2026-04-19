@@ -1,0 +1,9 @@
+error[E0599]: no method named `only_if_greater` found for struct `ZAddBuilder<ZAddNxMode>` in the current scope
+ --> tests/compile_fail/zadd_nx_gt_conflict.rs:3:41
+  |
+3 |     let _ = ZSetCommand::zadd("z").nx().only_if_greater();
+  |                                         ^^^^^^^^^^^^^^^ method not found in `ZAddBuilder<ZAddNxMode>`
+  |
+  = note: the method was found for
+          - `ZAddBuilder`
+          - `ZAddBuilder<ZAddXxMode>`

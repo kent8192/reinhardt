@@ -112,6 +112,31 @@ fn extract_endpoint_paths(body_tokens: &[proc_macro2::TokenTree]) -> Vec<TokenSt
 	paths
 }
 
+/// Extract `.consumer(EXPR)` calls from flattened body tokens.
+///
+/// Parallel to `extract_endpoint_paths()` for WebSocket routes.
+/// Returns the factory function path expressions.
+fn extract_consumer_paths(body_tokens: &[proc_macro2::TokenTree]) -> Vec<TokenStream> {
+	let mut paths = Vec::new();
+	let mut i = 0;
+	while i < body_tokens.len() {
+		if i + 2 < body_tokens.len()
+			&& let proc_macro2::TokenTree::Punct(p) = &body_tokens[i]
+			&& p.as_char() == '.'
+			&& let proc_macro2::TokenTree::Ident(ident) = &body_tokens[i + 1]
+			&& ident == "consumer"
+			&& let proc_macro2::TokenTree::Group(group) = &body_tokens[i + 2]
+			&& group.delimiter() == proc_macro2::Delimiter::Parenthesis
+		{
+			paths.push(group.stream());
+			i += 3;
+			continue;
+		}
+		i += 1;
+	}
+	paths
+}
+
 /// A chained method call extracted from the function body.
 ///
 /// Used for both `.viewset(STR, EXPR)` and `.mount(STR, EXPR)` patterns,
@@ -441,6 +466,7 @@ enum UrlPatternsMode {
 	Server,
 	Client,
 	Unified,
+	Ws,
 }
 
 /// Parse `#[url_patterns]` arguments.
@@ -473,10 +499,13 @@ fn parse_url_patterns_args(args: TokenStream) -> syn::Result<UrlPatternsArgs> {
 			"server" => UrlPatternsMode::Server,
 			"client" => UrlPatternsMode::Client,
 			"unified" => UrlPatternsMode::Unified,
+			"ws" => UrlPatternsMode::Ws,
 			other => {
 				return Err(syn::Error::new(
 					mode_ident.span(),
-					format!("unknown mode `{other}`, expected `server`, `client`, or `unified`"),
+					format!(
+						"unknown mode `{other}`, expected `server`, `client`, `unified`, or `ws`"
+					),
 				));
 			}
 		};
@@ -656,6 +685,7 @@ pub(crate) fn url_patterns_impl(args: TokenStream, input: TokenStream) -> syn::R
 		UrlPatternsMode::Server => url_patterns_server_impl(parsed_args, input),
 		UrlPatternsMode::Client => url_patterns_client_impl(parsed_args, input),
 		UrlPatternsMode::Unified => url_patterns_unified_impl(parsed_args, input),
+		UrlPatternsMode::Ws => url_patterns_ws_impl(parsed_args, input),
 	}
 }
 
@@ -717,6 +747,95 @@ fn url_patterns_client_impl(
 	let func: ItemFn = parse2(input)?;
 	let body_tokens = flatten_body(&func);
 	let resolvers = build_client_resolvers(&body_tokens)?;
+	let (wrapper, trait_assertion) = build_wrapper_and_assertion(&func, &parsed_args.app_path)?;
+
+	Ok(quote! {
+		#wrapper
+		#trait_assertion
+		#resolvers
+	})
+}
+
+/// Build `ws_url_resolvers` module for WebSocket mode.
+/// Parallel to `build_server_resolvers()`, but uses `__ws_url_resolver_*` names.
+fn build_ws_resolvers(body_tokens: &[proc_macro2::TokenTree]) -> TokenStream {
+	let consumer_paths = extract_consumer_paths(body_tokens);
+	let re_exports: Vec<_> = consumer_paths
+		.iter()
+		.map(|path| {
+			let parsed: syn::Path = match syn::parse2(path.clone()) {
+				Ok(p) => p,
+				Err(_) => {
+					return syn::Error::new_spanned(
+						path,
+						"`.consumer(...)` argument must be a path to a handler function",
+					)
+					.to_compile_error();
+				}
+			};
+			if parsed.segments.is_empty() {
+				return quote! {};
+			}
+			let last_segment = &parsed.segments.last().unwrap().ident;
+			let resolver_mod = syn::Ident::new(
+				&format!("__ws_url_resolver_{last_segment}"),
+				last_segment.span(),
+			);
+			let first_segment = parsed.segments.first().unwrap().ident.to_string();
+			let is_absolute = first_segment == "crate"
+				|| first_segment == "super"
+				|| parsed.leading_colon.is_some();
+			let parent_segments: Vec<&syn::Ident> = parsed
+				.segments
+				.iter()
+				.take(parsed.segments.len() - 1)
+				.map(|s| &s.ident)
+				.collect();
+			if is_absolute {
+				quote! { pub use #(#parent_segments ::)* #resolver_mod::*; }
+			} else {
+				quote! { pub use super:: #(#parent_segments ::)* #resolver_mod::*; }
+			}
+		})
+		.collect();
+
+	let meta_idents: Vec<syn::Ident> = consumer_paths
+		.iter()
+		.filter_map(|path| {
+			let parsed: syn::Path = syn::parse2(path.clone()).ok()?;
+			let last = &parsed.segments.last()?.ident;
+			Some(syn::Ident::new(
+				&format!("__ws_url_resolver_meta_{last}"),
+				last.span(),
+			))
+		})
+		.collect();
+
+	let for_each_macro = gen_for_each_macro(
+		&syn::Ident::new("__for_each_ws_url_resolver", proc_macro2::Span::call_site()),
+		&meta_idents,
+	);
+
+	quote! {
+		#[doc(hidden)]
+		pub mod ws_url_resolvers {
+			#(
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				#re_exports
+			)*
+			#for_each_macro
+		}
+	}
+}
+
+/// WebSocket-mode implementation: emits `ws_url_resolvers` module.
+fn url_patterns_ws_impl(
+	parsed_args: UrlPatternsArgs,
+	input: TokenStream,
+) -> syn::Result<TokenStream> {
+	let func: ItemFn = parse2(input)?;
+	let body_tokens = flatten_body(&func);
+	let resolvers = build_ws_resolvers(&body_tokens);
 	let (wrapper, trait_assertion) = build_wrapper_and_assertion(&func, &parsed_args.app_path)?;
 
 	Ok(quote! {
@@ -1332,6 +1451,64 @@ mod tests {
 		let body_tokens = flatten_body(&func);
 		let endpoints = extract_endpoint_paths(&body_tokens);
 		assert_eq!(endpoints.len(), 3);
+	}
+
+	#[test]
+	fn parse_ws_mode() {
+		let args = quote! { InstalledApp::chat, mode = ws };
+		let parsed = parse_url_patterns_args(args).unwrap();
+		assert!(matches!(parsed.mode, UrlPatternsMode::Ws));
+	}
+
+	#[test]
+	fn extract_consumer_paths_basic() {
+		let func: ItemFn = parse2(quote! {
+			pub fn ws_url_patterns() -> WebSocketRouter {
+				WebSocketRouter::new()
+					.consumer(chat_ws)
+					.consumer(notif_ws)
+			}
+		})
+		.unwrap();
+		let body_tokens = flatten_body(&func);
+		let paths = extract_consumer_paths(&body_tokens);
+		assert_eq!(paths.len(), 2);
+		assert_eq!(paths[0].to_string(), "chat_ws");
+		assert_eq!(paths[1].to_string(), "notif_ws");
+	}
+
+	#[test]
+	fn ws_mode_generates_ws_url_resolvers_module() {
+		let args = quote! { InstalledApp::chat, mode = ws };
+		let input = quote! {
+			pub fn ws_url_patterns() -> WebSocketRouter {
+				WebSocketRouter::new()
+					.consumer(chat_ws)
+					.consumer(notif_ws)
+			}
+		};
+		let out = url_patterns_impl(args, input).unwrap();
+		let normalized = normalize_ws(&out.to_string());
+		assert!(
+			normalized.contains("pub mod ws_url_resolvers"),
+			"ws mode must emit ws_url_resolvers module"
+		);
+		assert!(
+			normalized.contains("__for_each_ws_url_resolver"),
+			"ws mode must emit __for_each_ws_url_resolver macro"
+		);
+		assert!(normalized.contains("__ws_url_resolver_meta_chat_ws"));
+		assert!(normalized.contains("__ws_url_resolver_meta_notif_ws"));
+	}
+
+	#[test]
+	fn reject_unknown_mode_now_includes_ws() {
+		let args = quote! { InstalledApp::auth, mode = foo };
+		let err = parse_url_patterns_args(args)
+			.err()
+			.expect("should return an Err")
+			.to_string();
+		assert!(err.contains("ws"), "error message should mention ws mode");
 	}
 
 	#[test]

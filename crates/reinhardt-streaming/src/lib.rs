@@ -36,14 +36,16 @@ pub use global::{global_producer, set_global_producer};
 
 pub mod macros;
 pub mod router;
-pub use router::{ConsumerFactory, StreamingHandlerKind, StreamingHandlerRegistration, StreamingRouter};
+pub use router::{
+	ConsumerFactory, StreamingHandlerKind, StreamingHandlerRegistration, StreamingRouter,
+};
 
 /// Type-safe streaming topic resolver trait.
 ///
 /// Mirrored from `reinhardt_urls::StreamingTopicResolver` to avoid requiring
 /// reinhardt-urls as a direct dependency of reinhardt-streaming.
 pub trait StreamingTopicResolver {
-    fn resolve_topic(&self, name: &str) -> &'static str;
+	fn resolve_topic(&self, name: &str) -> &'static str;
 }
 
 pub use backend::StreamingBackend;
@@ -56,11 +58,11 @@ pub use message::Message;
 /// Used by `ResolvedUrls::streaming()` to resolve topic names at runtime.
 #[derive(Debug)]
 pub struct StreamingHandlerMetadata {
-    pub name: &'static str,
-    pub topic: &'static str,
-    pub kind: StreamingHandlerKind,
-    pub group: Option<&'static str>,
-    pub module_path: &'static str,
+	pub name: &'static str,
+	pub topic: &'static str,
+	pub kind: StreamingHandlerKind,
+	pub group: Option<&'static str>,
+	pub module_path: &'static str,
 }
 
 inventory::collect!(StreamingHandlerMetadata);
@@ -74,10 +76,12 @@ inventory::collect!(StreamingHandlerMetadata);
 ///
 /// Panics if no handler with `name` is registered.
 pub fn resolve_streaming_topic(name: &str) -> &'static str {
-    for meta in inventory::iter::<StreamingHandlerMetadata> {
-        if meta.name == name {
-            return meta.topic;
-        }
-    }
-    panic!("Streaming handler `{name}` not registered. Ensure the function is annotated with `#[producer]` or `#[consumer]`.");
+	for meta in inventory::iter::<StreamingHandlerMetadata> {
+		if meta.name == name {
+			return meta.topic;
+		}
+	}
+	panic!(
+		"Streaming handler `{name}` not registered. Ensure the function is annotated with `#[producer]` or `#[consumer]`."
+	);
 }

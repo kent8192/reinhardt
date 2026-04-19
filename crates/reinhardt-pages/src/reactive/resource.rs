@@ -141,17 +141,17 @@ impl<T: Clone + 'static, E: Clone + 'static> Resource<T, E> {
 
 	/// Returns `true` if the resource is currently loading
 	pub fn is_loading(&self) -> bool {
-		self.get().is_loading()
+		self.state.with_untracked(|s| s.is_loading())
 	}
 
 	/// Returns `true` if the resource has successfully loaded
 	pub fn is_success(&self) -> bool {
-		self.get().is_success()
+		self.state.with_untracked(|s| s.is_success())
 	}
 
 	/// Returns `true` if the resource failed to load
 	pub fn is_error(&self) -> bool {
-		self.get().is_error()
+		self.state.with_untracked(|s| s.is_error())
 	}
 }
 

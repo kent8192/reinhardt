@@ -128,6 +128,24 @@ impl<T: 'static> Signal<T> {
 		self.value.borrow().clone()
 	}
 
+	/// Applies a function to the current value without cloning or tracking dependencies.
+	///
+	/// This is more efficient than `get_untracked` when you only need to inspect
+	/// the value and do not need an owned copy.
+	///
+	/// # Example
+	///
+	/// ```rust
+	/// use reinhardt_core::reactive::Signal;
+	///
+	/// let count = Signal::new(42);
+	/// let is_positive = count.with_untracked(|n| *n > 0);
+	/// assert!(is_positive);
+	/// ```
+	pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+		f(&self.value.borrow())
+	}
+
 	/// Set the signal to a new value
 	///
 	/// This notifies all dependent Effects and Memos that the signal has changed.

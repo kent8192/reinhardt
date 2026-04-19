@@ -44,11 +44,11 @@ mod rel;
 mod routes;
 mod routes_registration;
 mod schema;
-mod streaming;
-mod streaming_patterns;
 mod settings_compose;
 mod settings_fragment;
 pub(crate) mod settings_parser;
+mod streaming;
+mod streaming_patterns;
 mod use_inject;
 mod user_attribute;
 mod user_field_mapping;
@@ -167,10 +167,10 @@ pub fn delete(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn producer(args: TokenStream, input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as ItemFn);
-    streaming::producer_impl(args.into(), input)
-        .unwrap_or_else(|e| e.to_compile_error())
-        .into()
+	let input = parse_macro_input!(input as ItemFn);
+	streaming::producer_impl(args.into(), input)
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
 }
 
 /// Consumer handler decorator — receives messages from a Kafka topic.
@@ -191,10 +191,10 @@ pub fn producer(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn consumer(args: TokenStream, input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as ItemFn);
-    streaming::consumer_impl(args.into(), input)
-        .unwrap_or_else(|e| e.to_compile_error())
-        .into()
+	let input = parse_macro_input!(input as ItemFn);
+	streaming::consumer_impl(args.into(), input)
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
 }
 
 /// Streaming patterns attribute — generates typed per-app streaming URL accessors.
@@ -221,9 +221,9 @@ pub fn consumer(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - Each method returns the Kafka topic name as `&'static str`
 #[proc_macro_attribute]
 pub fn streaming_patterns(args: TokenStream, input: TokenStream) -> TokenStream {
-    streaming_patterns::streaming_patterns_impl(args.into(), input.into())
-        .unwrap_or_else(|e| e.to_compile_error())
-        .into()
+	streaming_patterns::streaming_patterns_impl(args.into(), input.into())
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
 }
 
 /// Permission required decorator

@@ -156,6 +156,8 @@ pub mod compression;
 pub mod connection;
 /// Django Channels-inspired consumer classes for message handling.
 pub mod consumers;
+/// Compile-time endpoint metadata and URL parameter substitution.
+pub mod endpoint;
 /// WebSocket upgrade handler and connection lifecycle.
 pub mod handler;
 /// Integration with reinhardt-pages for cookie/session-based auth.
@@ -178,8 +180,6 @@ pub mod redis_channel;
 pub mod room;
 /// URL-based WebSocket endpoint routing.
 pub mod routing;
-/// Compile-time endpoint metadata and URL parameter substitution.
-pub mod endpoint;
 /// Connection and message rate limiting.
 pub mod throttling;
 
@@ -204,6 +204,7 @@ pub use consumers::{
 	BroadcastConsumer, ConsumerChain, ConsumerContext, EchoConsumer, JsonConsumer,
 	WebSocketConsumer,
 };
+pub use endpoint::{WebSocketEndpointInfo, WebSocketEndpointMetadata, substitute_ws_params};
 pub use handler::WebSocketHandler;
 #[cfg(feature = "pages-integration")]
 pub use integration::pages::{PagesAuthUser, PagesAuthenticator};
@@ -228,7 +229,6 @@ pub use reconnection::{
 #[cfg(feature = "redis-channel")]
 pub use redis_channel::{RedisChannelLayer, RedisConfig};
 pub use room::{BroadcastResult, Room, RoomError, RoomManager, RoomResult};
-pub use endpoint::{WebSocketEndpointInfo, WebSocketEndpointMetadata, substitute_ws_params};
 pub use routing::{
 	RouteError, RouteResult, WebSocketRoute, WebSocketRouter, clear_websocket_router,
 	get_websocket_router, register_websocket_router, reverse_websocket_url,

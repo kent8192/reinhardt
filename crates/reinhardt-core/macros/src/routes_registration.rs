@@ -665,10 +665,8 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 			let per_app_ws_code: Vec<_> = app_idents
 				.iter()
 				.map(|app| {
-					let ws_urls_struct_name = crate::pascal_case::to_pascal_case_with_suffix(
-						&app.to_string(),
-						"WsUrls",
-					);
+					let ws_urls_struct_name =
+						crate::pascal_case::to_pascal_case_with_suffix(&app.to_string(), "WsUrls");
 					let ws_urls_struct = proc_macro2::Ident::new(
 						&ws_urls_struct_name,
 						proc_macro2::Span::call_site(),
@@ -715,10 +713,8 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				.map(|app| {
 					let urls_struct_name =
 						crate::pascal_case::to_pascal_case_with_suffix(&app.to_string(), "Urls");
-					let urls_struct = proc_macro2::Ident::new(
-						&urls_struct_name,
-						proc_macro2::Span::call_site(),
-					);
+					let urls_struct =
+						proc_macro2::Ident::new(&urls_struct_name, proc_macro2::Span::call_site());
 					quote! {
 						pub fn #app(&self) -> #urls_struct<'_> {
 							#urls_struct { resolver: self.resolver }
@@ -751,10 +747,8 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 			let ws_app_accessors: Vec<_> = app_idents
 				.iter()
 				.map(|app| {
-					let ws_urls_struct_name = crate::pascal_case::to_pascal_case_with_suffix(
-						&app.to_string(),
-						"WsUrls",
-					);
+					let ws_urls_struct_name =
+						crate::pascal_case::to_pascal_case_with_suffix(&app.to_string(), "WsUrls");
 					let ws_urls_struct = proc_macro2::Ident::new(
 						&ws_urls_struct_name,
 						proc_macro2::Span::call_site(),

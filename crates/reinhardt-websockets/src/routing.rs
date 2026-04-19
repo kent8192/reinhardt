@@ -5,6 +5,6 @@
 //! creating a circular dependency through `reinhardt-pages`.
 
 pub use reinhardt_core::ws::{
-    RouteError, RouteResult, WebSocketRoute, WebSocketRouter, clear_websocket_router,
-    get_websocket_router, register_websocket_router, reverse_websocket_url,
+	RouteError, RouteResult, WebSocketRoute, WebSocketRouter, clear_websocket_router,
+	get_websocket_router, register_websocket_router, reverse_websocket_url,
 };

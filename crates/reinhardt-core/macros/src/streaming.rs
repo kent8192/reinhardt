@@ -254,14 +254,3 @@ pub(crate) fn consumer_impl(args: TokenStream, input: ItemFn) -> syn::Result<Tok
     })
 }
 
-fn _to_pascal_case(s: &str) -> String {
-    s.split('_')
-        .map(|w| {
-            let mut chars = w.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
-            }
-        })
-        .collect()
-}

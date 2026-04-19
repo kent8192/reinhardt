@@ -1,5 +1,6 @@
 use reinhardt_streaming::{Message, StreamingError, streaming_routes};
 use reinhardt_macros::{consumer, producer};
+use rstest::rstest;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -17,9 +18,12 @@ pub async fn handle_order(_msg: Message<Order>) -> Result<(), StreamingError> {
     Ok(())
 }
 
-#[test]
+#[rstest]
 fn streaming_routes_macro_builds_router() {
+    // Arrange
+    // Act
     let router = streaming_routes![create_order, handle_order];
-    // Router is empty by default (handlers are discovered via inventory at runtime)
+
+    // Assert
     let _ = router;
 }

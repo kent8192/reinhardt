@@ -319,8 +319,8 @@ impl UnifiedRouter {
 
 	/// Mount streaming handlers (producers and consumers) on this router.
 	///
-	/// Consumer worker tasks are started when the server starts.
-	/// For now, registrations are stored for Phase 3 worker startup.
+	/// Registrations are stored on the router for Phase 3 worker startup.
+	/// Consumer worker startup is deferred to a later server startup phase.
 	#[cfg(feature = "streaming")]
 	pub fn mount_streaming(
 		mut self,

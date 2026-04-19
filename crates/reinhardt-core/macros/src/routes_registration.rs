@@ -800,7 +800,7 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				///
 				/// ```rust,ignore
 				/// let urls = ResolvedUrls::from_global();
-				/// let topic = urls.streaming().create_order(); // → "orders"
+				/// let topic = urls.streaming().topic_for("create_order"); // → "orders"
 				/// ```
 				#[cfg(feature = "streaming")]
 				pub fn streaming(&self) -> StreamingRef<'_> {

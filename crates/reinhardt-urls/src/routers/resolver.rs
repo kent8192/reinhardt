@@ -96,7 +96,7 @@ pub trait ClientUrlResolver {
 ///
 /// ```rust,ignore
 /// let urls = ResolvedUrls::from_global();
-/// let topic = urls.streaming().orders().create_order(); // → "orders"
+/// let topic = urls.streaming().topic_for("create_order"); // → "orders"
 /// ```
 pub trait StreamingTopicResolver {
 	/// Resolve the Kafka topic name for a streaming handler by its registered name.

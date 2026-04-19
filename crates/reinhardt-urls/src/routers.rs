@@ -228,3 +228,4 @@ pub use client_router::{
 	clear_client_reverser, get_client_reverser, register_client_reverser,
 };
 pub use resolver::ClientUrlResolver;
+pub use resolver::StreamingTopicResolver;

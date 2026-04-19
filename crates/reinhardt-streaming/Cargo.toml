@@ -19,7 +19,7 @@ uuid = { workspace = true }
 
 # Kafka backend (optional)
 rskafka = { workspace = true, optional = true, features = ["rustls"] }
-time = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
 
 # Task backend integration (optional)
 reinhardt-tasks = { workspace = true, optional = true }
@@ -30,6 +30,6 @@ tokio = { workspace = true, features = ["full"] }
 
 [features]
 default = []
-kafka = ["dep:rskafka", "dep:time"]
+kafka = ["dep:rskafka", "dep:chrono"]
 task-backend = ["dep:reinhardt-tasks"]
 full = ["kafka", "task-backend"]

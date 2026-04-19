@@ -675,6 +675,8 @@ pub use reinhardt_urls::routers::Path as ClientPath;
 pub use reinhardt_urls::routers::ClientUrlResolver;
 #[cfg(native)]
 pub use reinhardt_urls::routers::resolver::UrlResolver;
+#[cfg(native)]
+pub use reinhardt_urls::routers::resolver::WebSocketUrlResolver;
 
 // Re-export auth
 #[cfg(all(feature = "auth", native))]

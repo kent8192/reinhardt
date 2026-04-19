@@ -653,6 +653,73 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				})
 				.collect();
 
+			// Generate per-app WS resolver structs (parallel to per_app_code for HTTP).
+			let per_app_ws_code: Vec<_> = app_idents
+				.iter()
+				.map(|app| {
+					let ws_urls_struct_name = crate::pascal_case::to_pascal_case_with_suffix(
+						&app.to_string(),
+						"WsUrls",
+					);
+					let ws_urls_struct = proc_macro2::Ident::new(
+						&ws_urls_struct_name,
+						proc_macro2::Span::call_site(),
+					);
+					let gen_ws_method_macro = proc_macro2::Ident::new(
+						&format!("__gen_{}_ws_method", app),
+						proc_macro2::Span::call_site(),
+					);
+
+					// Parallel to server_callback_arms but uses resolve_ws_url + WebSocketUrlResolver
+					let ws_callback_arms = gen_resolver_callback_arms(
+						&ws_urls_struct,
+						&quote! { resolve_ws_url },
+						&quote! { stringify!($app_label) },
+						&quote! { use #reinhardt::WebSocketUrlResolver as _; },
+					);
+
+					quote! {
+						/// Per-app WebSocket URL resolver.
+						///
+						/// Access via `WsUrls::#app()`.
+						pub struct #ws_urls_struct<'a> {
+							resolver: &'a ResolvedUrls,
+						}
+
+						macro_rules! #gen_ws_method_macro {
+							#ws_callback_arms
+						}
+
+						// Invoke __for_each_ws_url_resolver to populate methods.
+						// This is a no-op if the app has no ws_url_resolvers module.
+						crate::apps::#app::ws_urls::ws_url_resolvers::__for_each_ws_url_resolver!(
+							#gen_ws_method_macro, #app,
+							crate::apps::#app::ws_urls::ws_url_resolvers
+						);
+					}
+				})
+				.collect();
+
+			// WsUrls gateway: urls.ws().<app>().<handler>()
+			let ws_app_accessors: Vec<_> = app_idents
+				.iter()
+				.map(|app| {
+					let ws_urls_struct_name = crate::pascal_case::to_pascal_case_with_suffix(
+						&app.to_string(),
+						"WsUrls",
+					);
+					let ws_urls_struct = proc_macro2::Ident::new(
+						&ws_urls_struct_name,
+						proc_macro2::Span::call_site(),
+					);
+					quote! {
+						pub fn #app(&self) -> #ws_urls_struct<'_> {
+							#ws_urls_struct { resolver: self.resolver }
+						}
+					}
+				})
+				.collect();
+
 			quote! {
 				// Track state file for incremental compilation invalidation.
 				// When installed_apps! rewrites the file, the compiler re-expands #[routes].
@@ -678,6 +745,49 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				}
 				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				pub use __namespaced_resolvers::*;
+
+				// WebSocket per-app resolver structs (native-only, parallel to HTTP resolvers).
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				#[doc(hidden)]
+				mod __namespaced_ws_resolvers {
+					#![allow(unexpected_cfgs, dead_code)]
+					pub use super::ResolvedUrls;
+
+					#(#per_app_ws_code)*
+
+					/// WebSocket URL gateway. Access via `urls.ws().<app>().<route>()`.
+					pub struct WsUrls<'a> {
+						resolver: &'a ResolvedUrls,
+					}
+
+					impl WsUrls<'_> {
+						#(#ws_app_accessors)*
+					}
+				}
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				pub use __namespaced_ws_resolvers::*;
+
+				// WebSocketUrlResolver stub impl: allows the type chain to compile.
+				// For actual WS URL resolution, call impl_ws_url_resolver!(ResolvedUrls)
+				// after importing reinhardt-websockets.
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				impl #reinhardt::WebSocketUrlResolver for ResolvedUrls {
+					fn resolve_ws_url(&self, _name: &str, _params: &[(&str, &str)]) -> String {
+						unimplemented!(
+							"WebSocket URL resolution requires reinhardt-websockets. \
+							 Call impl_ws_url_resolver!(ResolvedUrls) to enable it."
+						)
+					}
+				}
+
+				// Add urls.ws() accessor to ResolvedUrls
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				impl ResolvedUrls {
+					/// Access WebSocket URL resolvers via `urls.ws().<app>().<route>()`.
+					pub fn ws(&self) -> WsUrls<'_> {
+						WsUrls { resolver: self }
+					}
+				}
 
 				// Client-side per-app resolvers are cross-platform (native + WASM).
 				#[doc(hidden)]

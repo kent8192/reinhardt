@@ -172,7 +172,7 @@ impl HmrServer {
 		let mut watcher = match FileWatcher::new(config) {
 			Ok(w) => w,
 			Err(e) => {
-				eprintln!("[HMR] Failed to start file watcher: {}", e);
+				tracing::error!(error = %e, "[HMR] Failed to start file watcher");
 				return;
 			}
 		};

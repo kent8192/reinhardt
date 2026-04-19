@@ -287,9 +287,20 @@ pub mod macros {
 #[cfg(native)]
 pub use reinhardt_macros::{api_view, delete, get, patch, post, put};
 
-// Re-export routes attribute macro for URL pattern registration
+// Re-export `flatten_imports` and provide a deprecated `define_views!` shim for compatibility
 #[cfg(native)]
-pub use reinhardt_macros::define_views;
+pub use reinhardt_macros::flatten_imports;
+#[cfg(native)]
+#[deprecated(
+	since = "0.1.0-rc.16",
+	note = "use `flatten_imports!` instead. `define_views!` will be removed in a future version."
+)]
+#[macro_export]
+macro_rules! define_views {
+    ($($tt:tt)*) => {
+        $crate::flatten_imports!($($tt)*)
+    };
+}
 #[cfg(native)]
 pub use reinhardt_macros::routes;
 #[cfg(native)]

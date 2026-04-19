@@ -2,7 +2,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{
     FnArg, ItemFn, LitStr, Pat, PatType, Result, Token,
-    parse::{Parse, ParseStream, Parser},
+    parse::{Parse, ParseStream},
 };
 
 use crate::crate_paths::get_reinhardt_crate;
@@ -48,7 +48,7 @@ impl Parse for WebSocketArgs {
 
 impl WebSocketArgs {
     pub(crate) fn parse(args: TokenStream) -> Result<Self> {
-        <Self as Parse>::parse.parse2(args)
+        syn::parse2::<Self>(args)
     }
 }
 

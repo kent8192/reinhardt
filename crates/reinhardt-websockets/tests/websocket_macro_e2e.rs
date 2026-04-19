@@ -181,7 +181,11 @@ async fn test_e2e_url_resolution_then_connect() {
 
     // Connect to the actual server using the resolved URL path so that this
     // test actually exercises the resolver (not just the server root).
-    let connect_url = format!("{}{}", server_url, resolved);
+    let connect_url = format!(
+        "{}/{}",
+        server_url.trim_end_matches('/'),
+        resolved.trim_start_matches('/')
+    );
     let (mut ws, _) = connect_async(&connect_url).await.unwrap();
     ws.send(TMsg::Text("hello".into())).await.unwrap();
 

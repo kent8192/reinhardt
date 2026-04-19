@@ -22,9 +22,12 @@ use {
 ///
 /// Accepts `content` as a String parameter (form! macro passes individual field values).
 /// Internally constructs CreateTweetRequest for validation.
+/// `_csrf_token` is auto-appended by the `form!` macro for non-GET forms;
+/// CSRF is enforced by middleware. See #3825.
 #[server_fn]
 pub async fn create_tweet(
 	content: String,
+	_csrf_token: String,
 	#[inject] db: DatabaseConnection,
 	#[inject] AuthUser(user): AuthUser<User>,
 ) -> std::result::Result<TweetInfo, ServerFnError> {

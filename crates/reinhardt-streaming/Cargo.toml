@@ -29,6 +29,8 @@ tokio = { workspace = true, features = ["full"] }
 # avoiding dev-dependency version resolution failure during `cargo publish`.
 # When upstream cargo resolves these issues, replace with `workspace = true`.
 reinhardt-testkit = { path = "../reinhardt-testkit", features = ["testcontainers"] }
+reinhardt-macros = { path = "../reinhardt-core/macros" }
+serde = { workspace = true, features = ["derive"] }
 
 [features]
 default = []

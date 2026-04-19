@@ -44,6 +44,7 @@ mod rel;
 mod routes;
 mod routes_registration;
 mod schema;
+mod streaming;
 mod settings_compose;
 mod settings_fragment;
 pub(crate) mod settings_parser;
@@ -145,6 +146,53 @@ pub fn delete(args: TokenStream, input: TokenStream) -> TokenStream {
 	delete_impl(args.into(), input)
 		.unwrap_or_else(|e| e.to_compile_error())
 		.into()
+}
+
+/// Producer handler decorator — auto-publishes return value to a Kafka topic.
+///
+/// # Arguments
+///
+/// - `topic` — Kafka topic to publish to
+/// - `name` — identifier used in `ResolvedUrls::streaming().<app>().<name>()`
+///
+/// # Example
+///
+/// ```rust,ignore
+/// #[producer(topic = "orders", name = "create_order")]
+/// pub async fn create_order(cmd: CreateOrderCommand) -> Result<Order, StreamingError> {
+///     Ok(Order::from(cmd))
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn producer(args: TokenStream, input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ItemFn);
+    streaming::producer_impl(args.into(), input)
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
+}
+
+/// Consumer handler decorator — receives messages from a Kafka topic.
+///
+/// # Arguments
+///
+/// - `topic` — Kafka topic to consume from
+/// - `group` — Consumer group id
+/// - `name` — identifier used in `ResolvedUrls::streaming().<app>().<name>()`
+///
+/// # Example
+///
+/// ```rust,ignore
+/// #[consumer(topic = "orders", group = "order-processor", name = "handle_order")]
+/// pub async fn handle_order(msg: Message<Order>) -> Result<(), StreamingError> {
+///     Ok(())
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn consumer(args: TokenStream, input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ItemFn);
+    streaming::consumer_impl(args.into(), input)
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
 }
 
 /// Permission required decorator

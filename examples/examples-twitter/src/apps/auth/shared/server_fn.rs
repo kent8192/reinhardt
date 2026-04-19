@@ -68,9 +68,12 @@ pub async fn login(
 		return Err(ServerFnError::server(403, "User account is inactive"));
 	}
 
-	// Session fixation prevention: regenerate session ID
-	let old_id = session.id.clone();
-	session.id = Uuid::now_v7().to_string();
+	// Session fixation prevention: regenerate session ID. Using
+	// `SessionData::regenerate_id` keeps the middleware's `Set-Cookie` header
+	// in sync with the new ID via the request-scoped `ActiveSessionId` holder
+	// (#3827); raw `session.id = ...` would leave the cookie pointing at a
+	// stale store entry.
+	let old_id = session.regenerate_id();
 
 	// Persist user ID in session
 	session

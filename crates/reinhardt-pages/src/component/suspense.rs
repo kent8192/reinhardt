@@ -59,7 +59,7 @@ pub trait ResourceTracker {
 
 impl<T: Clone + 'static, E: Clone + 'static> ResourceTracker for Resource<T, E> {
 	fn is_loading(&self) -> bool {
-		self.get().is_loading()
+		self.is_loading()
 	}
 }
 

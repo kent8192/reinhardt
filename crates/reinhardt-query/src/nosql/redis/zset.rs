@@ -75,7 +75,11 @@ impl ZAddBuilder<ZAddNoMode> {
     }
 
     /// Set GT flag: only update if new score is greater.
-    pub fn gt(self) -> ZAddBuilder<ZAddGtMode> {
+    ///
+    /// Named `only_if_greater` (rather than `gt`) to avoid ambiguity with
+    /// `Iterator::gt`, whose blanket impl would otherwise take precedence on
+    /// typestates where GT is not a valid transition.
+    pub fn only_if_greater(self) -> ZAddBuilder<ZAddGtMode> {
         ZAddBuilder {
             mode: Some(ZAddMode::Gt),
             key: self.key,
@@ -86,7 +90,10 @@ impl ZAddBuilder<ZAddNoMode> {
     }
 
     /// Set LT flag: only update if new score is less.
-    pub fn lt(self) -> ZAddBuilder<ZAddLtMode> {
+    ///
+    /// Named `only_if_less` (rather than `lt`) to avoid ambiguity with
+    /// `Iterator::lt`.
+    pub fn only_if_less(self) -> ZAddBuilder<ZAddLtMode> {
         ZAddBuilder {
             mode: Some(ZAddMode::Lt),
             key: self.key,
@@ -99,7 +106,7 @@ impl ZAddBuilder<ZAddNoMode> {
 
 impl ZAddBuilder<ZAddXxMode> {
     /// Add GT flag alongside XX.
-    pub fn gt(self) -> ZAddBuilder<ZAddGtMode> {
+    pub fn only_if_greater(self) -> ZAddBuilder<ZAddGtMode> {
         ZAddBuilder {
             mode: Some(ZAddMode::XxGt),
             key: self.key,
@@ -110,7 +117,7 @@ impl ZAddBuilder<ZAddXxMode> {
     }
 
     /// Add LT flag alongside XX.
-    pub fn lt(self) -> ZAddBuilder<ZAddLtMode> {
+    pub fn only_if_less(self) -> ZAddBuilder<ZAddLtMode> {
         ZAddBuilder {
             mode: Some(ZAddMode::XxLt),
             key: self.key,
@@ -426,7 +433,7 @@ mod tests {
 
     #[rstest]
     fn test_zadd_xx_gt_ch() {
-        let cmd = ZSetCommand::zadd("z").xx().gt().ch().member(5.0, "a").build();
+        let cmd = ZSetCommand::zadd("z").xx().only_if_greater().ch().member(5.0, "a").build();
         assert_eq!(cmd.args(), &[
             b"ZADD".to_vec(), b"z".to_vec(),
             b"XX".to_vec(), b"GT".to_vec(), b"CH".to_vec(),
@@ -436,7 +443,7 @@ mod tests {
 
     #[rstest]
     fn test_zadd_gt_without_xx() {
-        let cmd = ZSetCommand::zadd("z").gt().member(3.0, "m").build();
+        let cmd = ZSetCommand::zadd("z").only_if_greater().member(3.0, "m").build();
         assert_eq!(cmd.args(), &[
             b"ZADD".to_vec(), b"z".to_vec(),
             b"GT".to_vec(), b"3".to_vec(), b"m".to_vec(),
@@ -470,7 +477,7 @@ mod tests {
 
     #[rstest]
     fn test_zadd_lt() {
-        let cmd = ZSetCommand::zadd("z").lt().member(1.0, "x").build();
+        let cmd = ZSetCommand::zadd("z").only_if_less().member(1.0, "x").build();
         assert_eq!(cmd.args(), &[
             b"ZADD".to_vec(), b"z".to_vec(),
             b"LT".to_vec(), b"1".to_vec(), b"x".to_vec(),

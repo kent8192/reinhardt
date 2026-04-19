@@ -1,14 +1,9 @@
-error[E0599]: `ZAddBuilder<ZAddGtMode>` is not an iterator
- --> tests/compile_fail/zadd_gt_lt_conflict.rs:3:41
+error[E0599]: no method named `only_if_less` found for struct `ZAddBuilder<ZAddGtMode>` in the current scope
+ --> tests/compile_fail/zadd_gt_lt_conflict.rs:3:54
   |
-3 |     let _ = ZSetCommand::zadd("z").gt().lt();
-  |                                         ^^ `ZAddBuilder<ZAddGtMode>` is not an iterator
+3 |     let _ = ZSetCommand::zadd("z").only_if_greater().only_if_less();
+  |                                                      ^^^^^^^^^^^^ method not found in `ZAddBuilder<ZAddGtMode>`
   |
- ::: src/nosql/redis/zset.rs
-  |
-  | pub struct ZAddBuilder<M = ZAddNoMode> {
-  | -------------------------------------- doesn't satisfy `ZAddBuilder<ZAddGtMode>: Iterator`
-  |
-  = note: the following trait bounds were not satisfied:
-          `ZAddBuilder<ZAddGtMode>: Iterator`
-          which is required by `&mut ZAddBuilder<ZAddGtMode>: Iterator`
+  = note: the method was found for
+          - `ZAddBuilder`
+          - `ZAddBuilder<ZAddXxMode>`

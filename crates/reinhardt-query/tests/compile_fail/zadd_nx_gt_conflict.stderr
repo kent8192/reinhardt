@@ -1,14 +1,9 @@
-error[E0599]: `ZAddBuilder<ZAddNxMode>` is not an iterator
+error[E0599]: no method named `only_if_greater` found for struct `ZAddBuilder<ZAddNxMode>` in the current scope
  --> tests/compile_fail/zadd_nx_gt_conflict.rs:3:41
   |
-3 |     let _ = ZSetCommand::zadd("z").nx().gt();
-  |                                         ^^ `ZAddBuilder<ZAddNxMode>` is not an iterator
+3 |     let _ = ZSetCommand::zadd("z").nx().only_if_greater();
+  |                                         ^^^^^^^^^^^^^^^ method not found in `ZAddBuilder<ZAddNxMode>`
   |
- ::: src/nosql/redis/zset.rs
-  |
-  | pub struct ZAddBuilder<M = ZAddNoMode> {
-  | -------------------------------------- doesn't satisfy `ZAddBuilder<ZAddNxMode>: Iterator`
-  |
-  = note: the following trait bounds were not satisfied:
-          `ZAddBuilder<ZAddNxMode>: Iterator`
-          which is required by `&mut ZAddBuilder<ZAddNxMode>: Iterator`
+  = note: the method was found for
+          - `ZAddBuilder`
+          - `ZAddBuilder<ZAddXxMode>`

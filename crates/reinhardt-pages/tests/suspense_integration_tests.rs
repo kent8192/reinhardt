@@ -261,12 +261,13 @@ fn empty_content_closure_returns_empty_page() {
 #[rstest]
 fn nested_boundaries_ssr_both_render_content() {
 	// Arrange
-	let inner = SuspenseBoundary::new()
+	// Pre-render inner boundary to HTML (Page is non-Clone).
+	let inner_html = SuspenseBoundary::new()
 		.fallback(|| Page::text("Inner loading"))
 		.track_custom(MockResource::loading())
-		.content(|| PageElement::new("p").child("inner content").into_page());
-
-	let inner_page = inner.render();
+		.content(|| PageElement::new("p").child("inner content").into_page())
+		.render()
+		.render_to_string();
 
 	let outer = SuspenseBoundary::new()
 		.fallback(|| Page::text("Outer loading"))
@@ -274,7 +275,7 @@ fn nested_boundaries_ssr_both_render_content() {
 		.content(move || {
 			PageElement::new("div")
 				.child("outer content")
-				.child(inner_page.clone())
+				.child(inner_html.clone())
 				.into_page()
 		});
 

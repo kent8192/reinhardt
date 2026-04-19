@@ -189,6 +189,9 @@ tempfile = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { workspace = true }
 proptest = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+bytes = { workspace = true }
 
 [lib]
 crate-type = ["rlib"]

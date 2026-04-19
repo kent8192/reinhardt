@@ -243,18 +243,32 @@ async fn test_hmr_server_multiple_clients_receive_broadcast() {
 
 	// Assert — both clients must receive the same message
 	let frame1 = tokio::time::timeout(Duration::from_secs(3), ws1.next())
-		.await.unwrap().unwrap().unwrap();
+		.await
+		.unwrap()
+		.unwrap()
+		.unwrap();
 	let frame2 = tokio::time::timeout(Duration::from_secs(3), ws2.next())
-		.await.unwrap().unwrap().unwrap();
+		.await
+		.unwrap()
+		.unwrap()
+		.unwrap();
 
-	let text1 = match frame1 { Message::Text(t) => t.to_string(), other => panic!("{other:?}") };
-	let text2 = match frame2 { Message::Text(t) => t.to_string(), other => panic!("{other:?}") };
+	let text1 = match frame1 {
+		Message::Text(t) => t.to_string(),
+		other => panic!("{other:?}"),
+	};
+	let text2 = match frame2 {
+		Message::Text(t) => t.to_string(),
+		other => panic!("{other:?}"),
+	};
 
 	assert_eq!(text1, text2);
 	let msg: HmrMessage = serde_json::from_str(&text1).unwrap();
 	assert_eq!(
 		msg,
-		HmrMessage::CssUpdate { path: "styles/shared.css".to_string() }
+		HmrMessage::CssUpdate {
+			path: "styles/shared.css".to_string()
+		}
 	);
 }
 
@@ -277,7 +291,10 @@ async fn test_hmr_server_port_conflict_returns_err() {
 	let result = server.start().await;
 
 	// Assert
-	assert!(result.is_err(), "should fail to bind an already-occupied port");
+	assert!(
+		result.is_err(),
+		"should fail to bind an already-occupied port"
+	);
 }
 
 #[rstest]
@@ -286,7 +303,10 @@ async fn test_hmr_server_disabled_binds_but_rejects_upgrade() {
 	// Arrange — disabled server binds on a random port
 	let config = HmrConfig::builder().enabled(false).ws_port(0).build();
 	let server = HmrServer::new(config);
-	let addr = server.start().await.expect("disabled server should still bind");
+	let addr = server
+		.start()
+		.await
+		.expect("disabled server should still bind");
 
 	// Assert — the address is valid
 	assert_ne!(addr.port(), 0);
@@ -294,14 +314,13 @@ async fn test_hmr_server_disabled_binds_but_rejects_upgrade() {
 	// because no acceptor task is running. The TCP connect may succeed briefly
 	// (OS backlog) but the WS handshake should not complete.
 	let url = loopback_ws_url(addr);
-	let result = tokio::time::timeout(
-		Duration::from_millis(500),
-		connect_async(url),
-	)
-	.await;
+	let result = tokio::time::timeout(Duration::from_millis(500), connect_async(url)).await;
 	// Either a timeout or a connection error is acceptable
 	let handshake_succeeded = matches!(result, Ok(Ok(_)));
-	assert!(!handshake_succeeded, "disabled server must not complete WS handshake");
+	assert!(
+		!handshake_succeeded,
+		"disabled server must not complete WS handshake"
+	);
 }
 
 // ---------------------------------------------------------------------------

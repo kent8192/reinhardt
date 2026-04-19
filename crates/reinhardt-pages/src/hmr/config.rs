@@ -225,11 +225,7 @@ mod tests {
 	#[rstest]
 	fn test_builder_watch_paths_bulk() {
 		// Arrange
-		let paths = vec![
-			PathBuf::from("a"),
-			PathBuf::from("b"),
-			PathBuf::from("c"),
-		];
+		let paths = vec![PathBuf::from("a"), PathBuf::from("b"), PathBuf::from("c")];
 
 		// Act
 		let config = HmrConfig::builder().watch_paths(paths.clone()).build();

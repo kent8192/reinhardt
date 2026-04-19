@@ -81,9 +81,12 @@ async fn test_e2e_hmr_ws_upgrade_and_connected_message() {
 
 	// Assert — first frame must be a Connected message
 	let text = recv_text(&mut ws).await;
-	let msg: HmrMessage = serde_json::from_str(&text)
-		.expect("Connected frame must be valid JSON");
-	assert_eq!(msg, HmrMessage::Connected, "first message must be Connected");
+	let msg: HmrMessage = serde_json::from_str(&text).expect("Connected frame must be valid JSON");
+	assert_eq!(
+		msg,
+		HmrMessage::Connected,
+		"first message must be Connected"
+	);
 }
 
 #[rstest]
@@ -147,7 +150,10 @@ fn test_e2e_hmr_script_tag_embeds_server_port() {
 		"port must appear as a JS variable assignment"
 	);
 	assert!(tag.starts_with("<script>"), "must be a <script> element");
-	assert!(tag.ends_with("</script>"), "must close the <script> element");
+	assert!(
+		tag.ends_with("</script>"),
+		"must close the <script> element"
+	);
 }
 
 #[rstest]
@@ -219,6 +225,8 @@ async fn test_e2e_hmr_three_concurrent_clients_receive_same_message() {
 	let msg: HmrMessage = serde_json::from_str(&t1).unwrap();
 	assert_eq!(
 		msg,
-		HmrMessage::CssUpdate { path: "global.css".to_string() }
+		HmrMessage::CssUpdate {
+			path: "global.css".to_string()
+		}
 	);
 }

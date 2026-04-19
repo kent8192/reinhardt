@@ -145,7 +145,9 @@ mod tests {
 	#[rstest]
 	fn test_css_update_empty_path() {
 		// Arrange
-		let msg = HmrMessage::CssUpdate { path: String::new() };
+		let msg = HmrMessage::CssUpdate {
+			path: String::new(),
+		};
 
 		// Act
 		let json = msg.to_json().unwrap();
@@ -174,7 +176,9 @@ mod tests {
 	#[rstest]
 	fn test_full_reload_empty_reason() {
 		// Arrange
-		let msg = HmrMessage::FullReload { reason: String::new() };
+		let msg = HmrMessage::FullReload {
+			reason: String::new(),
+		};
 
 		// Act
 		let json = msg.to_json().unwrap();
@@ -186,7 +190,9 @@ mod tests {
 
 	#[rstest]
 	fn test_hmr_message_clone_and_eq() {
-		let msg = HmrMessage::CssUpdate { path: "a.css".to_string() };
+		let msg = HmrMessage::CssUpdate {
+			path: "a.css".to_string(),
+		};
 		let cloned = msg.clone();
 		assert_eq!(msg, cloned);
 	}

@@ -175,10 +175,11 @@ mod tests {
 	#[rstest]
 	fn test_hmr_client_script_placeholder_appears_once() {
 		// The placeholder must appear exactly once so replacement is unambiguous
-		let count = HMR_CLIENT_SCRIPT
-			.matches("__HMR_WS_PORT__")
-			.count();
-		assert_eq!(count, 1, "__HMR_WS_PORT__ must appear exactly once in the template");
+		let count = HMR_CLIENT_SCRIPT.matches("__HMR_WS_PORT__").count();
+		assert_eq!(
+			count, 1,
+			"__HMR_WS_PORT__ must appear exactly once in the template"
+		);
 	}
 
 	#[rstest]

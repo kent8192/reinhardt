@@ -216,7 +216,10 @@ mod tests {
 		let event = tokio::time::timeout(Duration::from_secs(5), watcher.rx.recv()).await;
 
 		// Assert
-		assert!(event.is_ok(), "Should receive file change event within timeout");
+		assert!(
+			event.is_ok(),
+			"Should receive file change event within timeout"
+		);
 		if let Ok(Some(change)) = event {
 			assert_eq!(change.kind, ChangeKind::Rust);
 		}
@@ -240,7 +243,10 @@ mod tests {
 		let event = tokio::time::timeout(Duration::from_secs(5), watcher.rx.recv()).await;
 
 		// Assert
-		assert!(event.is_ok(), "Should receive file change event within timeout");
+		assert!(
+			event.is_ok(),
+			"Should receive file change event within timeout"
+		);
 		if let Ok(Some(change)) = event {
 			assert_eq!(change.kind, ChangeKind::Template);
 		}

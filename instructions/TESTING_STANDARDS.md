@@ -830,6 +830,102 @@ fn test_update_user(db_with_user: (Database, User)) {
 }
 ```
 
+### TI-7 (SHOULD): Direct Invocation for `#[server_fn]` Tests
+
+Tests that exercise functions annotated with `#[server_fn]` SHOULD call them
+**directly** as regular Rust functions, passing each `#[inject]` parameter
+as a positional argument from a test fixture, rather than constructing an
+HTTP request and routing it through `ServerRouter::handle()`.
+
+The `#[server_fn]` macro strips `#[inject]` attributes from the underlying
+function definition, so direct calls are just normal `async fn` invocations.
+Test fixtures can build the `DatabaseConnection`, `Depends<T>`, `AuthUser<U>`,
+session/store handles, etc. once and pass them in.
+
+**When to use direct invocation (default):**
+
+- Verifying business logic, validation, error mapping, persistence side
+  effects.
+- Asserting on the function's return value and any state it mutated.
+- Most happy-path and error-path test cases.
+
+**When HTTP routing is justified (special reason):**
+
+- The test's purpose is to verify the HTTP/DI/middleware pipeline itself —
+  e.g., DI resolution end-to-end (#3525), CSRF cookie-to-header validation
+  (#3049), middleware ordering, codec/serialisation, or full request
+  authentication flow.
+- WASM client-side mock tests (`mock_server_fn`, `MockableServerFn`) that
+  exercise the generated client RPC stub.
+
+If you keep an HTTP-routed test, document the rationale in the module
+header so future readers understand why the more verbose path is used.
+
+**Direct call (preferred):**
+
+```rust
+// Schematic — adapt types, imports, and fixture names to your project.
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use rstest::*;
+use serde_json::json;
+
+#[rstest]
+#[tokio::test]
+async fn test_create_record_persists_data(
+	#[future] server_fn_test_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+) {
+	// Arrange: fixture builds the DI inputs once
+	let (site, db) = server_fn_test_context.await;
+	let request = MutationRequest {
+		data: HashMap::from([("name".to_string(), json!("Alice"))]),
+	};
+
+	// Act: call the server_fn directly
+	let result = create_record("TestModel".to_string(), request, site, db).await;
+
+	// Assert
+	let response = result.expect("create_record should succeed");
+	assert!(response.id.is_some());
+}
+```
+
+**HTTP-routed (only when verifying the pipeline itself):**
+
+```rust
+//! Tests that exercise the full DI resolution pipeline by routing HTTP
+//! requests through `ServerRouter::handle()`. This ensures `#[inject]`
+//! parameters are resolved via `InjectionContext` rather than passed
+//! directly. Covers #3525.
+
+#[rstest]
+#[tokio::test]
+async fn test_login_via_http_pipeline(...) {
+	let request = make_request("/api/server_fn/login", json!({ ... }), None);
+	let response = router.handle(request).await.unwrap();
+	// ...
+}
+```
+
+**Why direct invocation by default:**
+
+- Avoids JSON/URL body construction, cookie/CSRF plumbing, and middleware
+  setup that the test does not actually verify.
+- Faster: no router resolution, no codec round-trip.
+- Failures point at the handler itself rather than at the routing layer.
+- Matches the convention already followed by the bulk of the admin
+  server_fn integration tests (`tests/integration/tests/admin/`).
+
+The framework already provides `ServerFnTestContext` (in
+`reinhardt-testkit::server_fn::context`) for tests that need richer
+fixtures (auth, transactions, mocked HTTP request, CSRF token). Prefer
+that helper over hand-rolled DI scaffolding.
+
+See: #3826 (convention), #3525 (HTTP-routed exception rationale),
+`tests/integration/tests/admin/` for representative direct call test
+examples.
+
 ---
 
 ## Infrastructure Testing

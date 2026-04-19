@@ -124,8 +124,8 @@ flowchart TD
     B -->|No| D{Non-breaking API addition?}
     D -->|Yes| E["SP-6: Issue + rc-addition label<br/>+ maintainer approval"]
     D -->|No| F{Breaking change?}
-    F -->|Yes| G{Critical bug / Security / Soundness?}
-    G -->|Yes| H["SP-3: API Change Proposal<br/>+ maintainer approval<br/>+ migration guide"]
+    F -->|Yes| G{"SP-3 condition met?<br/>(Critical / Security / Soundness<br/>/ Non-functional / Blocks feature)"}
+    G -->|Yes| H["SP-3: API Change Proposal<br/>+ maintainer approval<br/>+ migration guide<br/>+ SP-7 Discussion announcement"]
     G -->|No| I["NOT PERMITTED<br/>Direct to develop branch"]
     F -->|No| I
 ```
@@ -161,20 +161,34 @@ Breaking changes during RC are **strongly discouraged** and only permitted for:
 1. **Critical bugs** that cannot be fixed without an API change (e.g., data corruption, panics)
 2. **Security vulnerabilities** that require API modification (e.g., unsafe API surface)
 3. **Soundness issues** that make the existing API unsafe (e.g., memory safety violations)
+4. **Non-functional API** — the existing API does not behave as documented or expected, making it effectively unusable regardless of how it is called
+5. **API blocks new feature** — the current API design makes it impossible or unreasonably complex to add a required feature without restructuring the API
 
 A breaking change during RC triggers:
 - A new RC version (`rc.N+1`)
 - A stability timer reset (per SC-2)
 - A mandatory migration guide
+- An automatic announcement posted to the GitHub Discussion breaking change category (per SP-7)
 
 **Approval Process:**
 
 1. Create a GitHub issue using the API Change Proposal template (`.github/ISSUE_TEMPLATE/8-api_change.yml`)
-2. Label with `critical` and `rc-migration`
+2. Label with `breaking-change` and `rc-migration`
 3. Document the technical justification for why a non-breaking fix is impossible
 4. Obtain explicit maintainer approval before implementing
 5. Update all affected documentation and migration guides
 6. Include a migration guide in the PR description
+
+### SP-7 (MUST): Breaking Change Announcement
+
+When a pull request labeled `breaking-change` is merged into `main`, an announcement is automatically posted to the GitHub Discussion breaking change category.
+
+- **Trigger**: PR merge with the `breaking-change` label
+- **Destination**: GitHub Discussion — breaking change category
+- **Content**: PR title, migration summary, and link to the merged PR
+- **Who posts**: Automated (GitHub Actions workflow); no manual announcement required
+
+This ensures all breaking changes — including those permitted during RC under SP-3 — are visible to downstream users without relying on manual communication. The `breaking-change` label MUST be applied to every PR that introduces a breaking change, regardless of lifecycle phase.
 
 ### SP-4 (MUST): Deprecation Policy
 
@@ -528,6 +542,7 @@ During the RC phase:
 - Apply bug-fix-only policy during RC phase
 - Preserve backward compatibility when renaming APIs during RC (deprecation alias required)
 - Obtain explicit maintainer approval for any breaking change during RC
+- Apply `breaking-change` label to every PR that introduces a breaking change (triggers SP-7 Discussion announcement)
 - Use `#[deprecated]` with `since` and `note` fields for all deprecations
 - Keep APIs deprecated during RC until the next major version
 - Reset the 2-week stability timer on each new RC release
@@ -549,7 +564,9 @@ During the RC phase:
 - Add unapproved `feat:` commits during the RC phase (SP-6-approved additions may use `feat:`)
 - Rename public APIs during RC without a backward-compatible deprecation alias
 - Remove APIs deprecated during RC before the next major version
-- Apply breaking changes during RC without explicit maintainer approval
+- Apply breaking changes during RC without explicit maintainer approval (SP-3)
+- Apply breaking changes during RC for reasons other than SP-3 approved conditions (critical / security / soundness / non-functional / blocks feature)
+- Merge a breaking change PR without applying the `breaking-change` label (SP-7)
 - Transition to stable without meeting ALL SC-1 criteria
 - Skip the 2-week stability period
 - Publish stable release with open critical or high severity bugs

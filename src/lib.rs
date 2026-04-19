@@ -287,7 +287,7 @@ pub mod macros {
 #[cfg(native)]
 pub use reinhardt_macros::{api_view, delete, get, patch, post, put};
 
-// Re-export routes attribute macro for URL pattern registration
+// Re-export `flatten_imports` and provide a deprecated `define_views!` shim for compatibility
 #[cfg(native)]
 pub use reinhardt_macros::flatten_imports;
 #[cfg(native)]

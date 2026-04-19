@@ -149,7 +149,6 @@ pub(crate) fn producer_impl(args: TokenStream, input: ItemFn) -> syn::Result<Tok
         #(#fn_attrs)*
         #fn_vis #fn_sig {
             let __result = #inner_fn_name(#(#call_args),*).await;
-            #[cfg(feature = "streaming")]
             if let Ok(ref __payload) = __result {
                 if let Some(__producer) = #streaming_crate::global_producer() {
                     let _ = __producer.send(#topic, __payload).await;
